@@ -3475,8 +3475,10 @@ function openTicketDetail(id){
       var posX = (pt[idx] && pt[idx].x !== undefined) ? pt[idx].x : (idx===0?5:50);
       var posY = (pt[idx] && pt[idx].y !== undefined) ? pt[idx].y : (idx===0?75:50);
 
-      var fontSize0 = '28px', fontSize1 = '22px', fontSize2 = '52px';
-      var descSize  = '13px';
+      // 저장된 fs (없으면 기본값)
+      var storedFs = (pt[idx] && pt[idx].fs) ? pt[idx].fs : (idx===2?52:idx===1?22:28);
+      var fontSize0 = storedFs+'px', fontSize1 = storedFs+'px', fontSize2 = storedFs+'px';
+      var descSize  = Math.max(11, Math.round(storedFs*0.48))+'px';
 
       if (title || desc) {
         var textAlign = posX < 40 ? 'left' : (posX > 60 ? 'right' : 'center');
@@ -4883,7 +4885,7 @@ function rpEditRest(id) {
   _rpCroppedHero = r.photoHero || null;
   _rpDetailPhotos = (r.detailPhotos||[]).slice();
   rpRenderDetailPhotos();
-  _rpPhotoTexts = (r.photoTexts||[{},{},{}]).slice();
+  _rpPhotoTexts = (r.photoTexts||[{},{},{}]).map(function(p){ return p||{}; });
   while(_rpPhotoTexts.length<3) _rpPhotoTexts.push({});
   rpRenderTypo();
   var ci = document.getElementById('rpPhotoCardPreview');
@@ -7481,6 +7483,7 @@ function saveExtend() {
 // ════════════════════════════════════════════════
 var _rpPhotoTexts = [{},{},{}];
 var _rpDragTarget = -1;
+var _rpPinchTarget = -1;
 
 // 전역 드래그 핸들러 (한 번만 등록)
 document.addEventListener('mousemove', function(e){ if(_rpDragTarget>=0) rpDragMove(e.clientX, e.clientY); });
@@ -7525,32 +7528,40 @@ function rpRenderTypo() {
   if (!sec) return;
   sec.innerHTML = '';
   [0,1,2].forEach(function(i) {
-    var pt = _rpPhotoTexts[i] || {};
-    var x = pt.x !== undefined ? pt.x : (i===0?5:50);
-    var y = pt.y !== undefined ? pt.y : (i===0?75:50);
+    var pt    = _rpPhotoTexts[i] || {};
+    var x     = pt.x  !== undefined ? pt.x  : (i===0 ? 5  : 50);
+    var y     = pt.y  !== undefined ? pt.y  : (i===0 ? 75 : 50);
+    var fs    = pt.fs !== undefined ? pt.fs : (i===2 ? 32 : i===1 ? 16 : 20); // 실제 상세화면 기준 px
     var photo = _rpDetailPhotos[i] || '';
     var label = _rpPhotoLabels[i];
-    var ph = _rpPhotoPlaceholders[i];
+    var ph    = _rpPhotoPlaceholders[i];
+
+    // 미리보기 배율 (상세화면 100vh 기준 → 미리보기 너비로 스케일)
+    // 상세화면 = 100vw × 100vh (폰 화면 비율 약 9:19.5)
+    // 미리보기는 컨테이너 너비로 고정, 높이는 비율에 맞춤
+    var previewRatio = 19.5 / 9; // height / width
+    var scaleFactor  = 0.38;     // 미리보기 글씨를 실제의 38%로 표시
+    var previewFs    = Math.round(fs * scaleFactor);
+    var previewDescFs= Math.max(6, Math.round(previewFs * 0.55));
 
     var card = document.createElement('div');
-    card.style.cssText = 'background:#f8f7f5;border-radius:12px;overflow:hidden;';
+    card.style.cssText = 'background:#f8f7f5;border-radius:12px;overflow:hidden;margin-bottom:0;';
 
-    // 헤더
-    var header = '<div style="padding:12px 16px 10px;font-family:Montserrat,sans-serif;font-size:8px;font-weight:800;letter-spacing:.18em;color:#c8a96e;">PHOTO '+(i+1)+' — '+label+'</div>';
-
-    // 미리보기 영역 (드래그 가능)
-    var previewId = 'rpTypoPreview'+i;
-    var blockId   = 'rpTypoBlock'+i;
-    var bgStyle   = photo ? 'background:url('+photo+') center/cover no-repeat;' : 'background:#1a1a18;';
-    var preview = '<div id="'+previewId+'" style="position:relative;width:100%;height:180px;'+bgStyle+'touch-action:none;cursor:crosshair;user-select:none;">'
-      + '<div id="'+blockId+'" style="position:absolute;left:'+x+'%;top:'+y+'%;transform:translate(-50%,-50%);background:rgba(0,0,0,.45);padding:8px 12px;border-radius:6px;border:1px dashed rgba(255,255,255,.5);cursor:grab;max-width:80%;touch-action:none;">'
-      + '<div style="font-family:Noto Sans KR,sans-serif;font-size:11px;font-weight:700;color:#fff;white-space:nowrap;" id="rpTypoTPreview'+i+'">'+(pt.title||ph[0])+'</div>'
-      + '<div style="font-family:Noto Sans KR,sans-serif;font-size:9px;color:rgba(255,255,255,.7);white-space:nowrap;" id="rpTypoDPreview'+i+'">'+(pt.desc||ph[1])+'</div>'
-      + '</div>'
-      + (!photo?'<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;"><span style="font-size:11px;color:rgba(255,255,255,.3);">사진 추가 후 위치 조정</span></div>':'')
+    var header = '<div style="padding:12px 16px 8px;font-family:Montserrat,sans-serif;font-size:8px;font-weight:800;letter-spacing:.18em;color:#c8a96e;display:flex;align-items:center;justify-content:space-between;">'
+      + 'PHOTO '+(i+1)+' — '+label
+      + '<span style="font-family:Noto Sans KR,sans-serif;font-size:10px;font-weight:500;color:#bbb;letter-spacing:0;">핀치로 크기 · 드래그로 위치</span>'
       + '</div>';
 
-    // 텍스트 입력
+    var bgStyle  = photo ? 'background:url('+photo+') center/cover no-repeat;' : 'background:#1a1a18;';
+    // 비율 유지: padding-top trick (height = width * ratio)
+    var preview = '<div style="position:relative;width:100%;padding-top:'+(previewRatio*100)+'%;'+bgStyle+'touch-action:none;cursor:crosshair;overflow:hidden;" id="rpTypoPreview'+i+'">'
+      + '<div id="rpTypoBlock'+i+'" style="position:absolute;left:'+x+'%;top:'+y+'%;transform:translate(-50%,-50%);background:rgba(0,0,0,.45);padding:'+(previewFs*0.35)+'px '+(previewFs*0.55)+'px;border-radius:4px;border:1px dashed rgba(255,255,255,.5);cursor:grab;touch-action:none;white-space:nowrap;">'
+      +   '<div id="rpTypoTPreview'+i+'" style="font-family:Noto Sans KR,sans-serif;font-size:'+previewFs+'px;font-weight:700;color:#fff;line-height:1.2;">'+(pt.title||ph[0])+'</div>'
+      +   '<div id="rpTypoDPreview'+i+'" style="font-family:Noto Sans KR,sans-serif;font-size:'+previewDescFs+'px;color:rgba(255,255,255,.75);margin-top:2px;">'+(pt.desc||ph[1])+'</div>'
+      + '</div>'
+      + (!photo?'<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;"><span style="font-size:11px;color:rgba(255,255,255,.3);">사진을 추가하면 미리볼 수 있어요</span></div>':'')
+      + '</div>';
+
     var inputs = '<div style="padding:10px 16px 14px;display:flex;flex-direction:column;gap:8px;">'
       + '<input id="rpPhotoTitle'+i+'" type="text" value="'+(pt.title||'')+'" placeholder="'+ph[0]+'" style="width:100%;padding:10px 12px;border:1.5px solid #e8e5e0;border-radius:8px;font-family:Noto Sans KR,sans-serif;font-size:13px;font-weight:700;color:#111;background:#fff;outline:none;box-sizing:border-box;">'
       + '<input id="rpPhotoDesc'+i+'" type="text" value="'+(pt.desc||'')+'" placeholder="'+ph[1]+'" style="width:100%;padding:10px 12px;border:1.5px solid #e8e5e0;border-radius:8px;font-family:Noto Sans KR,sans-serif;font-size:12px;color:#555;background:#fff;outline:none;box-sizing:border-box;">'
@@ -7559,7 +7570,6 @@ function rpRenderTypo() {
     card.innerHTML = header + preview + inputs;
     sec.appendChild(card);
 
-    // 입력 → 미리보기 실시간 반영
     (function(idx) {
       setTimeout(function(){
         var ti = document.getElementById('rpPhotoTitle'+idx);
@@ -7569,19 +7579,58 @@ function rpRenderTypo() {
         if(ti && tp) ti.oninput = function(){ tp.textContent = ti.value || _rpPhotoPlaceholders[idx][0]; _rpPhotoTexts[idx].title = ti.value; };
         if(di && dp) di.oninput = function(){ dp.textContent = di.value || _rpPhotoPlaceholders[idx][1]; _rpPhotoTexts[idx].desc  = di.value; };
 
-        // 드래그
-        var wrap  = document.getElementById('rpTypoPreview'+idx);
         var block = document.getElementById('rpTypoBlock'+idx);
-        if (!wrap || !block) return;
+        if (!block) return;
+
+        // ── 드래그 ──
         var ox=0, oy=0;
-        function onStart(cx,cy){
+        function onDragStart(cx,cy){
+          if (_rpPinchTarget === idx) return;
           _rpDragTarget = idx;
           var br=block.getBoundingClientRect();
           ox=cx-br.left-br.width/2; oy=cy-br.top-br.height/2;
           block.style.cursor='grabbing';
         }
-        block.addEventListener('mousedown',function(e){e.preventDefault();onStart(e.clientX,e.clientY);});
-        block.addEventListener('touchstart',function(e){e.preventDefault();var t=e.touches[0];onStart(t.clientX,t.clientY);},{passive:false});
+        block.addEventListener('mousedown',function(e){e.preventDefault();onDragStart(e.clientX,e.clientY);});
+
+        // ── 핀치 줌 ──
+        var pinchDist0 = 0, pinchFs0 = 0;
+        block.addEventListener('touchstart',function(e){
+          e.preventDefault();
+          if (e.touches.length === 1) {
+            // 한 손가락 → 드래그
+            _rpPinchTarget = -1;
+            onDragStart(e.touches[0].clientX, e.touches[0].clientY);
+          } else if (e.touches.length === 2) {
+            // 두 손가락 → 핀치
+            _rpDragTarget = -1;
+            _rpPinchTarget = idx;
+            var dx = e.touches[0].clientX - e.touches[1].clientX;
+            var dy = e.touches[0].clientY - e.touches[1].clientY;
+            pinchDist0 = Math.sqrt(dx*dx+dy*dy);
+            pinchFs0   = _rpPhotoTexts[idx].fs || (idx===2?32:idx===1?16:20);
+          }
+        },{passive:false});
+
+        block.addEventListener('touchmove',function(e){
+          if (e.touches.length !== 2 || _rpPinchTarget !== idx) return;
+          e.preventDefault();
+          var dx = e.touches[0].clientX - e.touches[1].clientX;
+          var dy = e.touches[0].clientY - e.touches[1].clientY;
+          var dist = Math.sqrt(dx*dx+dy*dy);
+          var newFs = Math.max(12, Math.min(80, Math.round(pinchFs0 * dist / pinchDist0)));
+          _rpPhotoTexts[idx].fs = newFs;
+          var sf = 0.38;
+          var pfs = Math.round(newFs * sf);
+          var dfs = Math.max(6, Math.round(pfs * 0.55));
+          if(tp) tp.style.fontSize = pfs+'px';
+          if(dp) dp.style.fontSize = dfs+'px';
+        },{passive:false});
+
+        block.addEventListener('touchend',function(e){
+          if(_rpPinchTarget===idx && e.touches.length < 2) _rpPinchTarget=-1;
+          if(e.touches.length===0){ _rpDragTarget=-1; block.style.cursor='grab'; }
+        });
       },50);
     })(i);
   });
@@ -7594,8 +7643,9 @@ function rpGetPhotoTexts() {
     return {
       title: ti ? ti.value.trim() : (_rpPhotoTexts[i].title||''),
       desc:  di ? di.value.trim() : (_rpPhotoTexts[i].desc||''),
-      x: _rpPhotoTexts[i].x !== undefined ? _rpPhotoTexts[i].x : (i===0?5:50),
-      y: _rpPhotoTexts[i].y !== undefined ? _rpPhotoTexts[i].y : (i===0?75:50)
+      x:  _rpPhotoTexts[i].x  !== undefined ? _rpPhotoTexts[i].x  : (i===0?5:50),
+      y:  _rpPhotoTexts[i].y  !== undefined ? _rpPhotoTexts[i].y  : (i===0?75:50),
+      fs: _rpPhotoTexts[i].fs !== undefined ? _rpPhotoTexts[i].fs : (i===2?32:i===1?16:20)
     };
   });
 }
