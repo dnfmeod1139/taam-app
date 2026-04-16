@@ -12,7 +12,7 @@
 <noscript><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css"></noscript>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js" defer></script>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 
 <style>
 /* ═══════════════════════════════════════
@@ -2805,6 +2805,16 @@ window._googlePSvc = null;
     </div>
   </div>
 </div>
+<!-- CAROUSEL SAVE POPUP -->
+<div id="carouselSavePopup" onclick="if(event.target===this)this.style.display='none'" style="display:none;position:fixed;inset:0;z-index:800;background:rgba(0,0,0,.5);display:none;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:20px;padding:32px 28px 24px;width:min(300px,86vw);text-align:center;">
+    <div style="font-size:28px;margin-bottom:12px;">✓</div>
+    <div style="font-family:'Noto Sans KR',sans-serif;font-size:17px;font-weight:900;color:#1a1a18;margin-bottom:6px;">저장 완료</div>
+    <div id="carouselSaveMsg" style="font-family:'Noto Sans KR',sans-serif;font-size:13px;color:#888;margin-bottom:24px;">카드가 업데이트됐어요</div>
+    <button onclick="document.getElementById('carouselSavePopup').style.display='none'" style="width:100%;padding:14px;background:#1a1a18;border:none;border-radius:12px;font-family:Montserrat,sans-serif;font-size:11px;font-weight:800;letter-spacing:.12em;color:#fff;cursor:pointer;">확인</button>
+  </div>
+</div>
+
 <!-- CROP MODAL -->
 <div id="rpCropModal" class="rp-crop-modal">
   <div class="rp-crop-header">
@@ -4119,6 +4129,36 @@ function closeTicketDetail(){
 var _lsMap = null;
 var _lsMarker = null;
 
+// 타일 레이어 추가 (CartoDB Dark Matter → 실패 시 OSM + 다크 필터)
+function _addMapTiles(mapObj) {
+  var usedFallback = false;
+
+  var darkLayer = L.tileLayer(
+    'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+    { maxZoom:19, subdomains:'abcd', attribution:'' }
+  );
+  darkLayer.addTo(mapObj);
+
+  // 타일 3개 이상 실패 시 OSM + CSS 다크 필터로 전환
+  var failCount = 0;
+  darkLayer.on('tileerror', function() {
+    failCount++;
+    if (failCount >= 3 && !usedFallback) {
+      usedFallback = true;
+      mapObj.removeLayer(darkLayer);
+      var osmLayer = L.tileLayer(
+        'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        { maxZoom:19, subdomains:'abc', attribution:'' }
+      );
+      osmLayer.addTo(mapObj);
+      setTimeout(function(){
+        var pane = mapObj.getPane('tilePane');
+        if (pane) pane.style.filter = 'invert(1) hue-rotate(200deg) brightness(0.85) contrast(0.9)';
+      }, 50);
+    }
+  });
+}
+
 var _fullMap = null;
 function openFullMap() {
   var r = currentRest;
@@ -4134,6 +4174,7 @@ function openFullMap() {
   if (addrEl) addrEl.textContent = addr || '';
 
   setTimeout(function() {
+    if (typeof L === 'undefined') { console.warn('Leaflet not loaded'); return; }
     if (_fullMap) { _fullMap.remove(); _fullMap = null; }
 
     var defLat = lat || 35.6762, defLng = lng || 139.6503;
@@ -4147,9 +4188,7 @@ function openFullMap() {
       touchZoom: true
     }).setView([defLat, defLng], 16);
 
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-      maxZoom: 19, subdomains: 'abcd'
-    }).addTo(_fullMap);
+    _addMapTiles(_fullMap);
 
     // 마커
     var iconHtml = photo
@@ -4162,7 +4201,7 @@ function openFullMap() {
       icon: L.divIcon({ html: iconHtml, iconSize: photo?[52,52]:[30,38], iconAnchor: photo?[26,52]:[15,38], className:'' })
     }).addTo(_fullMap);
 
-    _fullMap.invalidateSize();
+    setTimeout(function(){ if(_fullMap) _fullMap.invalidateSize(); }, 200);
   }, 80);
 }
 
@@ -4217,6 +4256,7 @@ function openLocationSheet() {
     if (!mapEl) return;
 
     // 기존 지도 제거
+    if (typeof L === 'undefined') { console.warn('Leaflet not loaded'); return; }
     if (_lsMap) { _lsMap.remove(); _lsMap = null; _lsMarker = null; }
 
     var defLat = lat || 35.6762;
@@ -4232,10 +4272,7 @@ function openLocationSheet() {
       touchZoom: false
     }).setView([defLat, defLng], 16);
 
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-      maxZoom: 19,
-      subdomains: 'abcd'
-    }).addTo(_lsMap);
+    _addMapTiles(_lsMap);
 
     // 원형 사진 마커
     var markerHtml = photo
@@ -4255,8 +4292,8 @@ function openLocationSheet() {
     if (name) _lsMarker.bindTooltip(name, { permanent: false, direction: 'top', offset: [0, -58] });
 
     // 지도 크기 재계산
-    setTimeout(function(){ _lsMap.invalidateSize(); }, 100);
-  }, 80);
+    setTimeout(function(){ if(_lsMap) _lsMap.invalidateSize(); }, 300);
+  }, 200);
 }
 
 function closeLocationSheet() {
@@ -4463,10 +4500,7 @@ function initSheetMap() {
     touchZoom: false
   }).setView([defLat, defLng], 16);
 
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-    maxZoom: 19,
-    subdomains: 'abcd'
-  }).addTo(_sheetMap);
+  _addMapTiles(_sheetMap);
 
   // 마커
   var iconHtml = photo
@@ -6088,14 +6122,16 @@ function openRestPage(){
   closeAllAdminScreens();
   document.getElementById('adminScreen').style.display='none';
   rpResetForm();
+  // 신규 등록 → 버튼 "등록하기"
+  var submitBtn = document.querySelector('#restPage .rp-submit');
+  if (submitBtn) submitBtn.textContent = '등록하기';
   document.getElementById('restPage').style.display='flex';
 }
 function closeRestPage(){
   _rpEditId = null;
   var pageTitle = document.querySelector('#restPage .page-title');
   if (pageTitle) pageTitle.textContent = '레스토랑 등록';
-  var submitBtn = document.querySelector('#restPage .rp-submit');
-  if (submitBtn) submitBtn.textContent = '등록';
+  // 버튼 텍스트는 열 때 결정하므로 여기서 건드리지 않음
   document.getElementById('restPage').style.display='none';
   if(_currentRole==='admin') openPartnerAdmin(); else openAdmin();
 }
@@ -6783,6 +6819,11 @@ function finalSubmitRestaurant(){
 function openTU(){
   closeAllAdminScreens();
   document.getElementById('adminScreen').style.display='none';
+  // 신규 업로드 → 버튼 "업로드"
+  var submitBtn=document.getElementById('tcpSubmitBtn');
+  if(submitBtn){submitBtn.textContent=(_currentRole==='admin'?'업로드 신청 확인':'업로드');submitBtn.className='rcp-submit-btn';}
+  var tuSubmitBtn=document.getElementById('tuSubmitBtn');
+  if(tuSubmitBtn){tuSubmitBtn.textContent='업로드';}
   // 신규 업로드 시 항상 초기화
   tuResetPolicy();
   tuResetGradeOpen();
@@ -6799,10 +6840,7 @@ function closeTU(){
   _tuEditId=null;
   var pageTitle=document.querySelector('#tuScreen .page-title');
   if(pageTitle)pageTitle.textContent='티켓 업로드';
-  var submitBtn=document.getElementById('tcpSubmitBtn');
-  if(submitBtn){submitBtn.textContent=(_currentRole==='admin'?'업로드 신청 확인':'업로드');submitBtn.className='rcp-submit-btn';}
-  var tuSubmitBtn=document.getElementById('tuSubmitBtn');
-  if(tuSubmitBtn){tuSubmitBtn.textContent='업로드';}
+  // 버튼 텍스트는 열 때 결정하므로 여기서 건드리지 않음
   // 날짜/시간 초기화
   _tuSelectedDate = null; _tuSelectedTime = null;
   var dBtn = document.getElementById('tuDateBtn');
@@ -6965,8 +7003,6 @@ function finalUploadTicket(){
   renderTicketGenres();
   renderTicketList();
   document.getElementById('ticketConfirmPopup').style.display='none';
-  var submitBtn=document.getElementById('tcpSubmitBtn');
-  if(submitBtn){submitBtn.textContent='업로드';submitBtn.className='rcp-submit-btn';}
   var pageTitle=document.querySelector('#tuScreen .page-title');
   if(pageTitle)pageTitle.textContent='티켓 업로드';
   closeTU();
@@ -9849,109 +9885,270 @@ function carouselCardBgReset(id) {
 
 function renderCarouselAdmin() {
   var el = document.getElementById('carouselCardList');
-  if (!el) { showToast('⚠','오류','carouselCardList 없음'); return; }
-
-  // 카드 수 확인
+  if (!el) return;
   if (!_carouselCards || _carouselCards.length === 0) {
-    el.innerHTML = '';
-    var msg = document.createElement('div');
-    msg.style.cssText = 'padding:40px 20px;text-align:center;color:#aaa;font-family:Noto Sans KR,sans-serif;font-size:13px;';
-    msg.textContent = '카드가 없어요. 상단 + 버튼을 눌러 추가하세요.';
-    el.appendChild(msg);
+    el.innerHTML = '<div style="padding:40px 20px;text-align:center;color:#aaa;font-family:Noto Sans KR,sans-serif;font-size:13px;">카드가 없어요. 상단 + 버튼을 눌러 추가하세요.</div>';
     return;
   }
-
   el.innerHTML = '';
-
   _carouselCards.forEach(function(card, idx) {
     var hasBg = !!card.bg;
+    var cid = card.id;
+    // 기본 텍스트 설정값
+    if (!card.kwX) card.kwX = 50; if (!card.kwY) card.kwY = 62;
+    if (!card.kwFs) card.kwFs = 52; if (!card.kwFont) card.kwFont = 'Oswald';
+    if (!card.subX) card.subX = 50; if (!card.subY) card.subY = 78;
+    if (!card.subFs) card.subFs = 14; if (!card.subFont) card.subFont = 'Montserrat';
 
-    // ── 전체 카드 박스 ──
     var box = document.createElement('div');
-    box.style.cssText = 'background:#fff;border-radius:14px;border:1.5px solid #e0ddd8;margin-bottom:16px;overflow:hidden;';
+    box.style.cssText = 'background:#fff;border-radius:14px;border:1.5px solid #e0ddd8;margin-bottom:20px;overflow:hidden;';
 
-    // ── 헤더: 카드번호 + 삭제버튼 ──
+    // 헤더
     var hdr = document.createElement('div');
     hdr.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:12px 16px 0;';
-    var hdrL = document.createElement('div');
-    hdrL.style.cssText = 'font-family:Montserrat,sans-serif;font-size:9px;font-weight:800;letter-spacing:.2em;color:#aaa;';
-    hdrL.textContent = 'CARD ' + (idx + 1);
-    var delBtn = document.createElement('button');
-    delBtn.style.cssText = 'background:none;border:none;padding:4px 8px;font-family:Noto Sans KR,sans-serif;font-size:12px;color:#e74c3c;cursor:pointer;';
-    delBtn.textContent = '삭제';
-    delBtn.setAttribute('data-id', card.id);
-    delBtn.onclick = function() { carouselDeleteCard(parseInt(this.getAttribute('data-id'))); };
-    hdr.appendChild(hdrL);
-    hdr.appendChild(delBtn);
+    hdr.innerHTML = '<div style="font-family:Montserrat,sans-serif;font-size:9px;font-weight:800;letter-spacing:.2em;color:#aaa;">CARD '+(idx+1)+'</div>'
+      +'<button onclick="carouselDeleteCard('+cid+')" style="background:none;border:none;font-size:12px;color:#e74c3c;cursor:pointer;padding:4px 8px;">삭제</button>';
     box.appendChild(hdr);
 
-    // ── 사진 박스 (앱카드 실제 비율 16:10, 고정 너비로 환경 무관하게 동일하게 보임) ──
-    var photoWrap = document.createElement('div');
-    photoWrap.style.cssText = 'display:flex;justify-content:center;margin:10px 16px 0;';
+    // ── 미리보기 (드래그 가능한 텍스트) ──
+    var prevWrap = document.createElement('div');
+    // 홈 카드 실제 비율 계산 (100vw × 59.5vh)
+    var _vw = window.innerWidth;
+    var _vh = window.innerHeight;
+    var _prevW = _vw - 32; // 양측 16px 패딩 제외
+    var _cardH = _vh * 0.595; // 홈 카드 높이
+    var _prevH = Math.round(_cardH * (_prevW / _vw)); // 비율 유지
+    prevWrap.style.cssText = 'margin:10px 16px 0;position:relative;border-radius:10px;overflow:hidden;cursor:pointer;width:calc(100% - 0px);';
+    prevWrap.style.height = _prevH + 'px';
+    prevWrap.style.background = hasBg ? 'url('+card.bg+') center/cover no-repeat' : 'linear-gradient(160deg,#1a0a0d 0%,#0d0608 100%)';
+    prevWrap.setAttribute('data-id', cid);
 
-    var photoArea = document.createElement('div');
-    photoArea.style.cssText = 'width:100%;max-width:360px;aspect-ratio:16/10;border-radius:10px;overflow:hidden;cursor:pointer;position:relative;display:flex;align-items:center;justify-content:center;border:2px dashed '+(hasBg?'transparent':'#d0cdc8')+';';
-    if (hasBg) {
-      photoArea.style.backgroundImage = 'url(' + card.bg + ')';
-      photoArea.style.backgroundSize = 'cover';
-      photoArea.style.backgroundPosition = 'center';
-    } else {
-      photoArea.style.background = 'linear-gradient(135deg,#1a0a0d 0%,#0d0608 100%)';
-    }
-    photoArea.setAttribute('data-id', card.id);
-    photoArea.onclick = function() { carouselPickPhoto(parseInt(this.getAttribute('data-id'))); };
-    var photoTxt = document.createElement('div');
-    photoTxt.style.cssText = 'color:rgba(255,255,255,'+(hasBg?'.8':'.4')+');font-family:Montserrat,sans-serif;font-size:10px;font-weight:700;letter-spacing:.12em;text-align:center;';
-    photoTxt.innerHTML = '📷<br>' + (hasBg ? '사진 변경' : '사진 추가');
-    photoArea.appendChild(photoTxt);
-    photoWrap.appendChild(photoArea);
-    box.appendChild(photoWrap);
+    // 그라데이션 오버레이
+    var grad = document.createElement('div');
+    grad.style.cssText = 'position:absolute;inset:0;background:linear-gradient(to bottom,rgba(0,0,0,.15) 0%,rgba(0,0,0,0) 35%,rgba(0,0,0,.55) 62%,rgba(0,0,0,.92) 100%);pointer-events:none;';
+    prevWrap.appendChild(grad);
+
+    // 사진 추가 힌트
+    var photoPh = document.createElement('div');
+    photoPh.style.cssText = 'position:absolute;top:8px;right:8px;background:rgba(0,0,0,.4);border-radius:6px;padding:4px 8px;font-family:Montserrat,sans-serif;font-size:8px;font-weight:700;color:rgba(255,255,255,.6);cursor:pointer;z-index:5;';
+    photoPh.textContent = hasBg ? '📷 변경' : '📷 사진추가';
+    photoPh.onclick = function(e){ e.stopPropagation(); carouselPickPhoto(cid); };
+    prevWrap.appendChild(photoPh);
+
+    // 키워드 블록 (드래그)
+    var kwBlock = document.createElement('div');
+    kwBlock.id = 'cmc_prev_kw_'+cid;
+    kwBlock.style.cssText = 'position:absolute;cursor:grab;touch-action:none;user-select:none;padding:3px 6px;border:1px dashed rgba(255,200,100,.6);border-radius:4px;';
+    kwBlock.style.left = card.kwX+'%'; kwBlock.style.top = card.kwY+'%';
+    kwBlock.style.transform = 'translate(-50%,-50%)';
+    var kwTxt = document.createElement('div');
+    kwTxt.id = 'cmc_kwt_'+cid;
+    kwTxt.style.cssText = 'font-family:'+card.kwFont+',sans-serif;font-size:'+card.kwFs+'px;font-weight:700;color:#fff;line-height:1.1;text-transform:uppercase;white-space:pre;';
+    kwTxt.textContent = card.keyword || 'KEYWORD';
+    kwBlock.appendChild(kwTxt);
+    prevWrap.appendChild(kwBlock);
+
+    // 서브 블록 (드래그)
+    var subBlock = document.createElement('div');
+    subBlock.id = 'cmc_prev_sub_'+cid;
+    subBlock.style.cssText = 'position:absolute;cursor:grab;touch-action:none;user-select:none;padding:3px 6px;border:1px dashed rgba(100,180,255,.6);border-radius:4px;';
+    subBlock.style.left = card.subX+'%'; subBlock.style.top = card.subY+'%';
+    subBlock.style.transform = 'translate(-50%,-50%)';
+    var subTxt = document.createElement('div');
+    subTxt.id = 'cmc_subt_'+cid;
+    subTxt.style.cssText = 'font-family:'+card.subFont+',sans-serif;font-size:'+card.subFs+'px;font-weight:600;color:rgba(255,255,255,.85);white-space:pre;letter-spacing:.1em;';
+    subTxt.textContent = card.sub || 'Sub Text';
+    subBlock.appendChild(subTxt);
+    prevWrap.appendChild(subBlock);
+
+    box.appendChild(prevWrap);
 
     // 사진 제거 버튼
     if (hasBg) {
       var rmBtn = document.createElement('button');
-      rmBtn.style.cssText = 'display:block;width:calc(100% - 32px);margin:6px 16px 0;padding:7px;background:#f9f7f5;border:1px solid #e0ddd8;border-radius:8px;font-family:Noto Sans KR,sans-serif;font-size:11px;color:#aaa;cursor:pointer;';
+      rmBtn.style.cssText = 'display:block;width:calc(100% - 32px);margin:6px 16px 0;padding:6px;background:#f9f7f5;border:1px solid #e0ddd8;border-radius:8px;font-size:11px;color:#aaa;cursor:pointer;font-family:Noto Sans KR,sans-serif;';
       rmBtn.textContent = '사진 제거';
-      rmBtn.setAttribute('data-id', card.id);
-      rmBtn.onclick = function() { carouselCardBgReset(parseInt(this.getAttribute('data-id'))); };
+      rmBtn.onclick = function(){ carouselCardBgReset(cid); };
       box.appendChild(rmBtn);
     }
 
-    // ── 텍스트 입력 ──
+    // ── 편집 섹션 ──
     var fields = document.createElement('div');
-    fields.style.cssText = 'padding:12px 16px;display:flex;flex-direction:column;gap:8px;';
+    fields.style.cssText = 'padding:12px 16px 16px;display:flex;flex-direction:column;gap:12px;';
 
-    function addField(parent, labelText, inputId, value, placeholder) {
-      var row = document.createElement('div');
-      var lbl = document.createElement('div');
-      lbl.style.cssText = 'font-family:Noto Sans KR,sans-serif;font-size:10px;color:#999;margin-bottom:4px;';
-      lbl.textContent = labelText;
-      var inp = document.createElement('input');
-      inp.id = inputId;
-      inp.setAttribute('class', 'tu-input');
-      inp.style.cssText = 'font-size:14px;width:100%;box-sizing:border-box;';
-      inp.value = value || '';
-      inp.placeholder = placeholder || '';
-      row.appendChild(lbl);
-      row.appendChild(inp);
-      parent.appendChild(row);
-    }
-
-    addField(fields, '큰 글씨 (영문 대문자)', 'cmc_kw_'+card.id, card.keyword, 'LEGEND');
-    addField(fields, '서브 텍스트', 'cmc_sub_'+card.id, card.sub, 'Saito Takashi');
-    addField(fields, '뱃지 텍스트', 'cmc_badge_'+card.id, card.badge, 'EXCLUSIVE');
+    // KEYWORD 섹션
+    fields.innerHTML +=
+      '<div style="border:1px solid rgba(255,200,100,.3);border-radius:8px;padding:10px;">'
+       +'<div style="font-family:Montserrat,sans-serif;font-size:7px;font-weight:800;letter-spacing:.18em;color:#c8a96e;margin-bottom:8px;">KEYWORD</div>'
+       +'<textarea id="cmc_kw_'+cid+'" rows="2" placeholder="LEGEND" oninput="cmcUpdateText('+cid+',\'kw\')" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1.5px solid #e8e5e0;border-radius:8px;font-family:Noto Sans KR,sans-serif;font-size:14px;font-weight:700;color:#111;outline:none;resize:none;line-height:1.5;margin-bottom:8px;">'+(card.keyword||'')+'</textarea>'
+       // 폰트
+       +'<div style="display:flex;gap:4px;margin-bottom:6px;">'
+         +'<button onclick="cmcSetFont('+cid+',\'kw\',\'Oswald\')" id="cmcKwFont_Oswald_'+cid+'" style="flex:1;padding:4px;border-radius:6px;border:1.5px solid '+((card.kwFont||'Oswald')==='Oswald'?'#1a1a18':'#e0ddd8')+';background:'+((card.kwFont||'Oswald')==='Oswald'?'#1a1a18':'#fff')+';color:'+((card.kwFont||'Oswald')==='Oswald'?'#fff':'#888')+';font-family:Oswald,sans-serif;font-size:9px;cursor:pointer;">Oswald</button>'
+         +'<button onclick="cmcSetFont('+cid+',\'kw\',\'Montserrat\')" id="cmcKwFont_Montserrat_'+cid+'" style="flex:1;padding:4px;border-radius:6px;border:1.5px solid '+(card.kwFont==='Montserrat'?'#1a1a18':'#e0ddd8')+';background:'+(card.kwFont==='Montserrat'?'#1a1a18':'#fff')+';color:'+(card.kwFont==='Montserrat'?'#fff':'#888')+';font-family:Montserrat,sans-serif;font-size:9px;cursor:pointer;">Montserrat</button>'
+         +'<button onclick="cmcSetFont('+cid+',\'kw\',\'Noto Sans KR\')" id="cmcKwFont_NotoSansKR_'+cid+'" style="flex:1;padding:4px;border-radius:6px;border:1.5px solid '+(card.kwFont==='Noto Sans KR'?'#1a1a18':'#e0ddd8')+';background:'+(card.kwFont==='Noto Sans KR'?'#1a1a18':'#fff')+';color:'+(card.kwFont==='Noto Sans KR'?'#fff':'#888')+';font-family:Noto Sans KR,sans-serif;font-size:9px;cursor:pointer;">한글</button>'
+       +'</div>'
+       // 폰트 크기
+       +'<div style="display:flex;align-items:center;gap:8px;">'
+         +'<span style="font-size:9px;color:#aaa;font-family:Montserrat,sans-serif;white-space:nowrap;">SIZE</span>'
+         +'<button onclick="cmcFontSize('+cid+',\'kw\',-2)" style="width:28px;height:28px;border-radius:50%;background:#f0ede8;border:none;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;">−</button>'
+         +'<div id="cmcKwFs_'+cid+'" style="min-width:36px;text-align:center;font-family:Montserrat,sans-serif;font-size:12px;font-weight:700;color:#333;">'+(card.kwFs||52)+'</div>'
+         +'<button onclick="cmcFontSize('+cid+',\'kw\',2)" style="width:28px;height:28px;border-radius:50%;background:#1a1a18;border:none;font-size:16px;cursor:pointer;color:#fff;display:flex;align-items:center;justify-content:center;">+</button>'
+         +'<div style="flex:1;"></div>'
+         +'<button id="cmcKwCenterBtn_'+cid+'" onclick="cmcToggleCenter('+cid+',\'kw\')" style="padding:5px 10px;border-radius:20px;border:1.5px solid '+(card.kwCentered?'#1a1a18':'#e0ddd8')+';background:'+(card.kwCentered?'#1a1a18':'#fff')+';color:'+(card.kwCentered?'#fff':'#aaa')+';font-family:Montserrat,sans-serif;font-size:8px;font-weight:700;letter-spacing:.08em;cursor:pointer;white-space:nowrap;">⊝ 중앙</button>'
+       +'</div>'
+      +'</div>'
+      // SUB 섹션
+      +'<div style="border:1px solid rgba(100,180,255,.3);border-radius:8px;padding:10px;">'
+       +'<div style="font-family:Montserrat,sans-serif;font-size:7px;font-weight:800;letter-spacing:.18em;color:#6ab0ff;margin-bottom:8px;">SUB TEXT</div>'
+       +'<textarea id="cmc_sub_'+cid+'" rows="2" placeholder="Saito Takashi" oninput="cmcUpdateText('+cid+',\'sub\')" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1.5px solid #e8e5e0;border-radius:8px;font-family:Noto Sans KR,sans-serif;font-size:13px;color:#555;outline:none;resize:none;line-height:1.5;margin-bottom:8px;">'+(card.sub||'')+'</textarea>'
+       +'<div style="display:flex;gap:4px;margin-bottom:6px;">'
+         +'<button onclick="cmcSetFont('+cid+',\'sub\',\'Montserrat\')" id="cmcSubFont_Montserrat_'+cid+'" style="flex:1;padding:4px;border-radius:6px;border:1.5px solid '+((card.subFont||'Montserrat')==='Montserrat'?'#1a1a18':'#e0ddd8')+';background:'+((card.subFont||'Montserrat')==='Montserrat'?'#1a1a18':'#fff')+';color:'+((card.subFont||'Montserrat')==='Montserrat'?'#fff':'#888')+';font-family:Montserrat,sans-serif;font-size:9px;cursor:pointer;">Montserrat</button>'
+         +'<button onclick="cmcSetFont('+cid+',\'sub\',\'Oswald\')" id="cmcSubFont_Oswald_'+cid+'" style="flex:1;padding:4px;border-radius:6px;border:1.5px solid '+(card.subFont==='Oswald'?'#1a1a18':'#e0ddd8')+';background:'+(card.subFont==='Oswald'?'#1a1a18':'#fff')+';color:'+(card.subFont==='Oswald'?'#fff':'#888')+';font-family:Oswald,sans-serif;font-size:9px;cursor:pointer;">Oswald</button>'
+         +'<button onclick="cmcSetFont('+cid+',\'sub\',\'Noto Sans KR\')" id="cmcSubFont_NotoSansKR_'+cid+'" style="flex:1;padding:4px;border-radius:6px;border:1.5px solid '+(card.subFont==='Noto Sans KR'?'#1a1a18':'#e0ddd8')+';background:'+(card.subFont==='Noto Sans KR'?'#1a1a18':'#fff')+';color:'+(card.subFont==='Noto Sans KR'?'#fff':'#888')+';font-family:Noto Sans KR,sans-serif;font-size:9px;cursor:pointer;">한글</button>'
+       +'</div>'
+       +'<div style="display:flex;align-items:center;gap:8px;">'
+         +'<span style="font-size:9px;color:#aaa;font-family:Montserrat,sans-serif;white-space:nowrap;">SIZE</span>'
+         +'<button onclick="cmcFontSize('+cid+',\'sub\',-1)" style="width:28px;height:28px;border-radius:50%;background:#f0ede8;border:none;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;">−</button>'
+         +'<div id="cmcSubFs_'+cid+'" style="min-width:36px;text-align:center;font-family:Montserrat,sans-serif;font-size:12px;font-weight:700;color:#333;">'+(card.subFs||14)+'</div>'
+         +'<button onclick="cmcFontSize('+cid+',\'sub\',1)" style="width:28px;height:28px;border-radius:50%;background:#1a1a18;border:none;font-size:16px;cursor:pointer;color:#fff;display:flex;align-items:center;justify-content:center;">+</button>'
+         +'<div style="flex:1;"></div>'
+         +'<button id="cmcSubCenterBtn_'+cid+'" onclick="cmcToggleCenter('+cid+',\'sub\')" style="padding:5px 10px;border-radius:20px;border:1.5px solid '+(card.subCentered?'#1a1a18':'#e0ddd8')+';background:'+(card.subCentered?'#1a1a18':'#fff')+';color:'+(card.subCentered?'#fff':'#aaa')+';font-family:Montserrat,sans-serif;font-size:8px;font-weight:700;letter-spacing:.08em;cursor:pointer;white-space:nowrap;">⊝ 중앙</button>'
+       +'</div>'
+      +'</div>'
+      // 뱃지
+      +'<div>'
+       +'<div style="font-family:Noto Sans KR,sans-serif;font-size:10px;color:#999;margin-bottom:4px;">뱃지</div>'
+       +'<input id="cmc_badge_'+cid+'" class="tu-input" value="'+(card.badge||'')+'" placeholder="EXCLUSIVE" style="font-size:13px;width:100%;box-sizing:border-box;">'
+      +'</div>';
 
     // 저장 버튼
     var saveBtn = document.createElement('button');
-    saveBtn.style.cssText = 'width:100%;padding:13px;background:#1a1a18;border:none;border-radius:10px;font-family:Montserrat,sans-serif;font-size:11px;font-weight:800;letter-spacing:.1em;color:#fff;cursor:pointer;margin-top:4px;';
+    saveBtn.style.cssText = 'width:100%;padding:14px;background:#1a1a18;border:none;border-radius:10px;font-family:Montserrat,sans-serif;font-size:11px;font-weight:800;letter-spacing:.1em;color:#fff;cursor:pointer;';
     saveBtn.textContent = '저장';
-    saveBtn.setAttribute('data-id', card.id);
-    saveBtn.onclick = function() { carouselSaveCard(parseInt(this.getAttribute('data-id'))); };
+    saveBtn.onclick = function(){ carouselSaveCard(cid); };
     fields.appendChild(saveBtn);
-
     box.appendChild(fields);
     el.appendChild(box);
+
+    // ── 드래그 이벤트 바인딩 ──
+    setTimeout(function(){
+      [['cmc_prev_kw_'+cid,'kw'],['cmc_prev_sub_'+cid,'sub']].forEach(function(pair){
+        var blk = document.getElementById(pair[0]);
+        var key = pair[1];
+        if (!blk) return;
+        var pW = prevWrap;
+        var drag = false, ox=0, oy=0, bx=0, by=0;
+        function startDrag(cx,cy){
+          drag=true;
+          var r=pW.getBoundingClientRect();
+          ox=cx-r.left; oy=cy-r.top;
+          bx=parseFloat(blk.style.left); by=parseFloat(blk.style.top);
+          blk.style.cursor='grabbing';
+        }
+        function moveDrag(cx,cy){
+          if(!drag)return;
+          var r=pW.getBoundingClientRect();
+          var nx=(cx-r.left)/r.width*100;
+          var ny=(cy-r.top)/r.height*100;
+          nx=Math.max(0,Math.min(100,nx)); ny=Math.max(0,Math.min(100,ny));
+          // 중앙 고정 ON이면 X는 50% 고정
+          var c2=_carouselCards.find(function(x){return x.id===cid;});
+          if(c2 && ((key==='kw'&&c2.kwCentered)||(key==='sub'&&c2.subCentered))) nx=50;
+          blk.style.left=nx+'%'; blk.style.top=ny+'%';
+          if(c2){if(key==='kw'){c2.kwX=Math.round(nx*10)/10;c2.kwY=Math.round(ny*10)/10;}else{c2.subX=Math.round(nx*10)/10;c2.subY=Math.round(ny*10)/10;}}
+        }
+        function endDrag(){drag=false;blk.style.cursor='grab';}
+        blk.addEventListener('mousedown',function(e){e.preventDefault();startDrag(e.clientX,e.clientY);});
+        document.addEventListener('mousemove',function(e){moveDrag(e.clientX,e.clientY);});
+        document.addEventListener('mouseup',endDrag);
+        blk.addEventListener('touchstart',function(e){e.preventDefault();startDrag(e.touches[0].clientX,e.touches[0].clientY);},{passive:false});
+        document.addEventListener('touchmove',function(e){if(drag){e.preventDefault();moveDrag(e.touches[0].clientX,e.touches[0].clientY);}},{passive:false});
+        document.addEventListener('touchend',endDrag);
+      });
+    }, 100);
   });
+}
+
+// ── 앱카드 편집 헬퍼 ──
+function cmcUpdateText(id, key) {
+  var card = _carouselCards.find(function(c){return c.id===id;});
+  if (!card) return;
+  if (key==='kw') {
+    var v = document.getElementById('cmc_kw_'+id);
+    if (v) { card.keyword = v.value.toUpperCase(); v.value = card.keyword; }
+    var t = document.getElementById('cmc_kwt_'+id);
+    if (t) t.textContent = card.keyword || 'KEYWORD';
+  } else {
+    var v2 = document.getElementById('cmc_sub_'+id);
+    if (v2) { card.sub = v2.value; }
+    var t2 = document.getElementById('cmc_subt_'+id);
+    if (t2) t2.textContent = card.sub || 'Sub Text';
+  }
+}
+function cmcToggleCenter(id, key) {
+  var card = _carouselCards.find(function(c){ return c.id === id; });
+  if (!card) return;
+  var isKw = key === 'kw';
+  var flagKey = isKw ? 'kwCentered' : 'subCentered';
+  card[flagKey] = !card[flagKey];
+  var centered = card[flagKey];
+  // 버튼 상태 업데이트
+  var btnId = isKw ? 'cmcKwCenterBtn_'+id : 'cmcSubCenterBtn_'+id;
+  var btn = document.getElementById(btnId);
+  if (btn) {
+    btn.style.background = centered ? '#1a1a18' : '#fff';
+    btn.style.color = centered ? '#fff' : '#aaa';
+    btn.style.borderColor = centered ? '#1a1a18' : '#e0ddd8';
+  }
+  if (centered) {
+    // X를 50%로 고정
+    var xKey = isKw ? 'kwX' : 'subX';
+    card[xKey] = 50;
+    var blkId = isKw ? 'cmc_prev_kw_'+id : 'cmc_prev_sub_'+id;
+    var blk = document.getElementById(blkId);
+    if (blk) blk.style.left = '50%';
+  }
+}
+function cmcSetFont(id, key, font) {
+  var card = _carouselCards.find(function(c){return c.id===id;});
+  if (!card) return;
+  var safeFont = font.replace(/\s/g,'');
+  if (key==='kw') {
+    card.kwFont = font;
+    var t = document.getElementById('cmc_kwt_'+id);
+    if (t) t.style.fontFamily = font+',sans-serif';
+    ['Oswald','Montserrat','NotoSansKR'].forEach(function(f){
+      var btn = document.getElementById('cmcKwFont_'+f+'_'+id);
+      var match = font.replace(/\s/g,'')===f;
+      if(btn){btn.style.background=match?'#1a1a18':'#fff';btn.style.color=match?'#fff':'#888';btn.style.borderColor=match?'#1a1a18':'#e0ddd8';}
+    });
+  } else {
+    card.subFont = font;
+    var t2 = document.getElementById('cmc_subt_'+id);
+    if (t2) t2.style.fontFamily = font+',sans-serif';
+    ['Montserrat','Oswald','NotoSansKR'].forEach(function(f){
+      var btn2 = document.getElementById('cmcSubFont_'+f+'_'+id);
+      var match2 = font.replace(/\s/g,'')===f;
+      if(btn2){btn2.style.background=match2?'#1a1a18':'#fff';btn2.style.color=match2?'#fff':'#888';btn2.style.borderColor=match2?'#1a1a18':'#e0ddd8';}
+    });
+  }
+}
+function cmcFontSize(id, key, delta) {
+  var card = _carouselCards.find(function(c){return c.id===id;});
+  if (!card) return;
+  if (key==='kw') {
+    card.kwFs = Math.max(12, Math.min(100, (card.kwFs||52)+delta));
+    var t = document.getElementById('cmc_kwt_'+id);
+    if (t) t.style.fontSize = card.kwFs+'px';
+    var fs = document.getElementById('cmcKwFs_'+id);
+    if (fs) fs.textContent = card.kwFs;
+  } else {
+    card.subFs = Math.max(8, Math.min(40, (card.subFs||14)+delta));
+    var t2 = document.getElementById('cmc_subt_'+id);
+    if (t2) t2.style.fontSize = card.subFs+'px';
+    var fs2 = document.getElementById('cmcSubFs_'+id);
+    if (fs2) fs2.textContent = card.subFs;
+  }
 }
 
 function renderHomeCards() {
@@ -9961,23 +10158,41 @@ function renderHomeCards() {
   inner.style.width = (n * 100) + '%';
   inner.innerHTML = _carouselCards.map(function(card, idx) {
     var bgStyle = card.bg
-      ? 'background:url(\'' + card.bg + '\') center/cover no-repeat;'
+      ? "background:url('" + card.bg + "') center/cover no-repeat;"
       : 'background:linear-gradient(160deg,' + (card.color||'#1a0a0d') + ' 0%,#0d0608 100%);';
     var dotsHtml = _carouselCards.map(function(_,di){
       return '<div class="hcd' + (di===idx?' active':'') + '"></div>';
     }).join('');
     var isPlaceholder = card.placeholder && !card.bg;
-    return '<div class="hc-card" style="flex:0 0 ' + (100/n) + '%;height:100%;position:relative;overflow:hidden;">'
-      + '<div class="hc-bg" style="position:absolute;inset:0;' + bgStyle + '"></div>'
+    var kwX  = card.kwX  !== undefined ? card.kwX  : 50;
+    var kwY  = card.kwY  !== undefined ? card.kwY  : 65;
+    var kwFs = card.kwFs || 52;
+    var kwFont = card.kwFont || 'Oswald';
+    var subX  = card.subX  !== undefined ? card.subX  : 50;
+    var subY  = card.subY  !== undefined ? card.subY  : 78;
+    var subFs = card.subFs || 14;
+    var subFont = card.subFont || 'Montserrat';
+    var kwHtml  = (card.keyword||'COMING').replace(/\n/g,'<br>');
+    var subHtml = (card.sub||'').replace(/\n/g,'<br>');
+    var textBlocks = isPlaceholder
+      ? '<div style="position:absolute;bottom:20px;left:0;right:0;text-align:center;padding:0 28px;">'
+          + '<div style="font-family:Oswald,sans-serif;font-weight:700;font-size:clamp(52px,15vw,88px);color:rgba(255,255,255,.12);line-height:.92;text-transform:uppercase;margin-bottom:12px;">' + kwHtml + '</div>'
+          + '<div style="height:1px;background:rgba(255,255,255,.08);margin-bottom:14px;"></div>'
+          + '<div style="font-family:Montserrat,sans-serif;font-weight:800;font-size:10px;letter-spacing:.32em;text-transform:uppercase;color:rgba(255,255,255,.2);margin-bottom:10px;">SOON</div>'
+          + '<div style="font-family:Noto Sans KR,sans-serif;font-size:13px;font-weight:300;color:rgba(255,255,255,.3);line-height:1.75;">\uc0c8\ub85c\uc6b4 \ub808\uc2a4\ud1a0\ub791\uc774<br>\uacf3 \uacf5\uac1c\ub429\ub2c8\ub2e4</div>'
+        + '</div>'
+      : '<div style="position:absolute;left:'+kwX+'%;top:'+kwY+'%;transform:translate(-50%,-50%);text-align:center;white-space:nowrap;pointer-events:none;">'
+          + '<div style="font-family:'+kwFont+',sans-serif;font-weight:700;font-size:'+kwFs+'px;color:#fff;line-height:1.1;text-transform:uppercase;letter-spacing:-.01em;">' + kwHtml + '</div>'
+        + '</div>'
+        + (subHtml ? '<div style="position:absolute;left:'+subX+'%;top:'+subY+'%;transform:translate(-50%,-50%);text-align:center;white-space:nowrap;pointer-events:none;">'
+          + '<div style="font-family:'+subFont+',sans-serif;font-weight:600;font-size:'+subFs+'px;letter-spacing:.1em;color:rgba(255,255,255,.85);">' + subHtml + '</div>'
+        + '</div>' : '');
+    return '<div class="hc-card" style="flex:0 0 '+(100/n)+'%;height:100%;position:relative;overflow:hidden;">'
+      + '<div class="hc-bg" style="position:absolute;inset:0;'+bgStyle+'"></div>'
       + '<div class="hc-grad" style="position:absolute;inset:0;background:linear-gradient(to bottom,rgba(0,0,0,.15) 0%,rgba(0,0,0,0) 35%,rgba(0,0,0,.55) 62%,rgba(0,0,0,.92) 100%);"></div>'
-      + '<div class="hc-body" style="position:absolute;bottom:0;left:0;right:0;padding:0 28px 20px;text-align:center;">'
-        + '<div class="hc-keyword" style="font-family:\'Oswald\',sans-serif;font-weight:700;font-size:clamp(' + (isPlaceholder?'52px,15vw,88px':'62px,18vw,106px') + ');color:' + (isPlaceholder?'rgba(255,255,255,.12)':'#fff') + ';line-height:.92;letter-spacing:-.01em;text-transform:uppercase;margin-bottom:12px;">' + (card.keyword||'COMING') + '</div>'
-        + (isPlaceholder
-          ? '<div style="height:1px;background:rgba(255,255,255,.08);margin-bottom:14px;"></div><div style="font-family:\'Montserrat\',sans-serif;font-weight:800;font-size:10px;letter-spacing:.32em;text-transform:uppercase;color:rgba(255,255,255,.2);margin-bottom:10px;">SOON</div><div style="font-family:Noto Sans KR,sans-serif;font-size:13px;font-weight:300;color:rgba(255,255,255,.3);line-height:1.75;">새로운 레스토랑이<br>곧 공개됩니다</div>'
-          : '<div style="font-family:\'Montserrat\',sans-serif;font-weight:600;font-size:14px;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.85);">' + (card.sub||'') + '</div>')
-      + '</div>'
-      + (card.badge ? '<div class="hc-badge" style="position:absolute;top:54px;right:22px;background:rgba(0,0,0,.35);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,.15);border-radius:4px;padding:5px 12px;font-family:\'Montserrat\',sans-serif;font-size:6.5px;font-weight:800;letter-spacing:.26em;text-transform:uppercase;color:#fff;">' + card.badge + '</div>' : '')
-      + '<div class="hc-dot-wrap" style="position:absolute;bottom:78px;left:50%;transform:translateX(-50%);display:flex;gap:6px;z-index:10;">' + dotsHtml + '</div>'
+      + textBlocks
+      + (card.badge ? '<div class="hc-badge" style="position:absolute;top:54px;right:22px;background:rgba(0,0,0,.35);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,.15);border-radius:4px;padding:5px 12px;font-family:Montserrat,sans-serif;font-size:6.5px;font-weight:800;letter-spacing:.26em;text-transform:uppercase;color:#fff;">'+card.badge+'</div>' : '')
+      + '<div class="hc-dot-wrap" style="position:absolute;bottom:78px;left:50%;transform:translateX(-50%);display:flex;gap:6px;z-index:10;">'+dotsHtml+'</div>'
     + '</div>';
   }).join('');
   initHomeCarousel();
@@ -10008,7 +10223,11 @@ function carouselSaveCard(id) {
   card.placeholder = (!card.bg && (!card.keyword || card.keyword === 'COMING'));
   saveCarouselCards();
   renderHomeCards();
-  showToast('✓','저장','카드가 업데이트됐어요');
+  // 중앙 팝업
+  var popup = document.getElementById('carouselSavePopup');
+  var msg = document.getElementById('carouselSaveMsg');
+  if (msg) msg.textContent = (card.keyword||'카드') + ' 카드가 저장됐어요';
+  if (popup) { popup.style.display='flex'; }
 }
 function initHomeCarousel() {
   var track = document.getElementById('homeCardTrack');
