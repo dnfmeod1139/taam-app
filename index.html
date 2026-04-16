@@ -188,6 +188,8 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:Not
 #tkCalSheet{background:#fff;border-radius:24px 24px 0 0;width:100%;max-width:480px;padding:0 0 40px;animation:tkSlideUp .35s cubic-bezier(.22,1,.36,1);min-height:520px;}
 @keyframes tkSlideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
 @keyframes slideUpSheet{from{transform:translateY(100%)}to{transform:translateY(0)}}
+@keyframes tdSlideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
+@keyframes tdSlideInLeft{from{transform:translateX(-100%)}to{transform:translateX(0)}}
 .tk-cal-handle{width:36px;height:4px;background:#e0e0e0;border-radius:2px;margin:14px auto 0;}
 .tk-cal-header{display:flex;align-items:center;justify-content:center;padding:22px 16px 10px;position:relative;}
 .tk-cal-title{font-family:'Montserrat',sans-serif;font-size:18px;font-weight:700;color:#111;letter-spacing:.02em;text-align:center;flex:1;}
@@ -1297,11 +1299,6 @@ window._googlePSvc = null;
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg>
   </button>
 
-  <!-- 위치 버튼 (고정) -->
-  <button id="tdLocationBtn" onclick="openLocationSheet()" style="position:fixed;bottom:96px;right:20px;z-index:530;width:44px;height:44px;border-radius:50%;background:#fff;border:none;display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 2px 12px rgba(0,0,0,.18);">
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#5C0A14" stroke-width="2.2" stroke-linecap="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
-  </button>
-
   <!-- 사진 가로 슬라이더 -->
   <div id="tdPhotosWrap"></div>
 
@@ -1410,6 +1407,27 @@ window._googlePSvc = null;
   <!-- 하단 고정 구매하기 버튼 -->
   <div style="position:fixed;bottom:0;left:0;right:0;z-index:525;padding:10px 16px 36px;background:#000;">
     <button id="tdBuyBar" onclick="openTdConfirm()" style="width:100%;padding:18px;background:#5C0A14;border:none;border-radius:16px;font-family:Noto Sans KR,sans-serif;font-size:16px;font-weight:900;color:#fff;letter-spacing:.04em;cursor:pointer;box-shadow:0 4px 20px rgba(92,10,20,.4);">구매하기</button>
+  </div>
+</div>
+
+<!-- DESC EXPAND OVERLAY (body 최상단 — iOS fixed 버그 방지) -->
+<div id="tdDescOverlay" style="display:none;position:fixed;inset:0;z-index:700;pointer-events:all;">
+  <!-- 우측 배경: 사진 블러 -->
+  <div onclick="tdCollapseDesc()" style="position:absolute;inset:0;backdrop-filter:blur(5px);-webkit-backdrop-filter:blur(5px);background:rgba(0,0,0,.15);"></div>
+  <!-- 왼쪽 패널: 세로 풀화면, 가로 절반 고정 -->
+  <div id="tdDescSheet" style="position:absolute;top:0;left:0;bottom:0;width:55%;background:rgba(15,13,11,0.62);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);display:flex;flex-direction:column;animation:tdSlideInLeft .3s cubic-bezier(.22,1,.36,1);">
+    <!-- 상단 여백 (상태바 대응) -->
+    <div style="flex-shrink:0;height:52px;"></div>
+    <!-- 스크롤 콘텐츠 -->
+    <div style="flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:20px 20px 16px;">
+      <div style="font-family:Noto Sans KR,sans-serif;font-size:8px;font-weight:700;letter-spacing:.2em;color:#c8a96e;margin-bottom:12px;text-transform:uppercase;">Description</div>
+      <div id="tdDescContent" style="font-size:13px;color:rgba(255,255,255,.9);line-height:1.9;white-space:pre-wrap;"></div>
+    </div>
+    <!-- 닫기 -->
+    <button onclick="tdCollapseDesc()" style="flex-shrink:0;padding:16px 20px 40px;background:none;border:none;cursor:pointer;display:flex;align-items:center;gap:8px;">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.4)" stroke-width="2.2" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg>
+      <span style="font-family:Montserrat,sans-serif;font-size:8px;font-weight:700;letter-spacing:.18em;color:rgba(255,255,255,.3);">CLOSE</span>
+    </button>
   </div>
 </div>
 
@@ -2984,75 +3002,157 @@ var _confirmAgreed = false;
 var _toastTimer = null;
 
 // ════════════════════════════════════════════════
-// LOCALSTORAGE
+// INDEXEDDB  (localStorage 대체 — 용량 무제한)
 // ════════════════════════════════════════════════
-function saveRestaurants(){
-  try{
-    localStorage.setItem('excRests',JSON.stringify(restaurantDB));
-  }catch(e){
-    showToast('⚠','저장 실패','사진 용량이 너무 큽니다. 사진을 줄이거나 일부 삭제해주세요.');
-  }
-}
-function loadRestaurants(){
-  try{
-    var s=localStorage.getItem('excRests');
-    restaurantDB = s ? JSON.parse(s) : [];
-  }catch(e){ restaurantDB=[]; }
-}
-function saveTickets(){try{localStorage.setItem('excTickets',JSON.stringify(ticketDB));}catch(e){}}
-function loadTickets(){
-  try{
-    var s=localStorage.getItem('excTickets');
-    ticketDB = s ? JSON.parse(s) : [];
-    // 구 버전 티켓 마이그레이션 — homeSection 없으면 빈 배열로
-    ticketDB.forEach(function(t){
-      if(!Array.isArray(t.homeSection)) t.homeSection = [];
+var IDB = (function(){
+  var DB_NAME = 'taamDB', DB_VER = 1, STORE = 'kv', _db = null;
+
+  function open(){
+    return new Promise(function(res, rej){
+      if (_db) { res(_db); return; }
+      var req = indexedDB.open(DB_NAME, DB_VER);
+      req.onupgradeneeded = function(e){ e.target.result.createObjectStore(STORE); };
+      req.onsuccess  = function(e){ _db = e.target.result; res(_db); };
+      req.onerror    = function(e){ rej(e); };
     });
-  }catch(e){ ticketDB=[]; }
-}
+  }
+  function set(key, val){
+    return open().then(function(db){
+      return new Promise(function(res, rej){
+        var tx = db.transaction(STORE,'readwrite');
+        var req = tx.objectStore(STORE).put(val, key);
+        req.onsuccess = res; req.onerror = rej;
+      });
+    });
+  }
+  function get(key){
+    return open().then(function(db){
+      return new Promise(function(res, rej){
+        var tx = db.transaction(STORE,'readonly');
+        var req = tx.objectStore(STORE).get(key);
+        req.onsuccess = function(){ res(req.result); };
+        req.onerror = rej;
+      });
+    });
+  }
+  function del(key){
+    return open().then(function(db){
+      return new Promise(function(res, rej){
+        var tx = db.transaction(STORE,'readwrite');
+        var req = tx.objectStore(STORE).delete(key);
+        req.onsuccess = res; req.onerror = rej;
+      });
+    });
+  }
+  // 여러 키 일괄 삭제 (로그아웃용)
+  function delMany(keys){
+    return Promise.all(keys.map(function(k){ return del(k); }));
+  }
+  return { set:set, get:get, del:del, delMany:delMany, open:open };
+})();
+
 // ── 계정별 스토리지 키 ──
-// 공유: 레스토랑, 티켓, 회원목록, 어드민코드
-// 개인: 예치금, 구매내역 (전화번호 or 역할 기반 분리)
 function _userKey(base) {
   if (_currentRole === 'superadmin') return base + '_superadmin';
   var phone = _currentUserPhone;
   if (phone) return base + '_u' + phone.replace(/[^0-9]/g, '');
-  // 어드민(PIN)은 restId 기반
   if (_currentRole === 'admin' && _currentAdminRestId) return base + '_admin_r' + _currentAdminRestId;
   return base + '_guest';
 }
 
-function saveDeposit(){try{localStorage.setItem(_userKey('excDeposit'),JSON.stringify({data:depositData,balance:currentDepositBalance}));}catch(e){}}
-function loadDeposit(){
-  depositData={charge:[],use:[],refund:[]};
-  currentDepositBalance=0;
-  try{var s=localStorage.getItem(_userKey('excDeposit'));if(s){var d=JSON.parse(s);depositData=d.data||{charge:[],use:[],refund:[]};currentDepositBalance=d.balance||0;}}catch(e){}
+// ── 공유 데이터 (레스토랑·티켓·회원·코드) ──
+function saveRestaurants(){
+  IDB.set('excRests', JSON.stringify(restaurantDB)).catch(function(){
+    showToast('⚠','저장 실패','레스토랑 데이터 저장에 실패했어요');
+  });
 }
-function savePurchase(){try{localStorage.setItem(_userKey('excPurchase'),JSON.stringify(purchaseHistory));}catch(e){}}
-function loadPurchase(){
-  purchaseHistory=[];
-  try{var s=localStorage.getItem(_userKey('excPurchase'));if(s){purchaseHistory=JSON.parse(s)||[];}}catch(e){}
+function loadRestaurants(){
+  return IDB.get('excRests').then(function(s){
+    restaurantDB = s ? JSON.parse(s) : [];
+  }).catch(function(){ restaurantDB = []; });
 }
-function saveMembers(){try{localStorage.setItem('excMembers',JSON.stringify(memberDB));}catch(e){}}
-function loadMembers(){try{var s=localStorage.getItem('excMembers');if(s){memberDB=JSON.parse(s)||[];}}catch(e){}}
 
+function saveTickets(){ IDB.set('excTickets', JSON.stringify(ticketDB)).catch(function(){}); }
+function loadTickets(){
+  return IDB.get('excTickets').then(function(s){
+    ticketDB = s ? JSON.parse(s) : [];
+    ticketDB.forEach(function(t){ if(!Array.isArray(t.homeSection)) t.homeSection=[]; });
+  }).catch(function(){ ticketDB = []; });
+}
+
+function saveMembers(){ IDB.set('excMembers', JSON.stringify(memberDB)).catch(function(){}); }
+function loadMembers(){
+  return IDB.get('excMembers').then(function(s){
+    memberDB = s ? JSON.parse(s) : [];
+  }).catch(function(){ memberDB = []; });
+}
+
+function saveInviteCodes(){ IDB.set('excInviteCodes', JSON.stringify(inviteCodes)).catch(function(){}); }
+function loadInviteCodes(){
+  return IDB.get('excInviteCodes').then(function(s){
+    inviteCodes = s ? JSON.parse(s) : [];
+  }).catch(function(){ inviteCodes = []; });
+}
+
+function saveAdminCodes(){ IDB.set('excAdminCodes', JSON.stringify(adminCodes)).catch(function(){}); }
+function loadAdminCodes(){
+  return IDB.get('excAdminCodes').then(function(s){
+    if(s) adminCodes = JSON.parse(s) || [];
+    else adminCodes = [];
+  }).catch(function(){ adminCodes = []; });
+}
+
+// ── 역할/세션 ──
 function saveRole(){
-  try{localStorage.setItem('excRole',JSON.stringify({
+  IDB.set('excRole', JSON.stringify({
     role:_currentRole, restId:_currentAdminRestId,
     restName:_currentAdminRestName, phone:_currentUserPhone, name:_currentUserName
-  }));}catch(e){}
+  })).catch(function(){});
 }
 function loadRole(){
-  try{
-    var s=localStorage.getItem('excRole');
-    if(s){var d=JSON.parse(s);
-      _currentRole=d.role||'user';
-      _currentAdminRestId=d.restId||null;
-      _currentAdminRestName=d.restName||'';
-      _currentUserPhone=d.phone||'';
-      _currentUserName=d.name||'';
+  return IDB.get('excRole').then(function(s){
+    if(s){ var d=JSON.parse(s);
+      _currentRole=d.role||'user'; _currentAdminRestId=d.restId||null;
+      _currentAdminRestName=d.restName||''; _currentUserPhone=d.phone||''; _currentUserName=d.name||'';
     }
-  }catch(e){}
+  }).catch(function(){});
+}
+
+// ── 개인 데이터 ──
+function saveDeposit(){ IDB.set(_userKey('excDeposit'), JSON.stringify({data:depositData,balance:currentDepositBalance})).catch(function(){}); }
+function loadDeposit(){
+  depositData={charge:[],use:[],refund:[]}; currentDepositBalance=0;
+  return IDB.get(_userKey('excDeposit')).then(function(s){
+    if(s){ var d=JSON.parse(s); depositData=d.data||{charge:[],use:[],refund:[]}; currentDepositBalance=d.balance||0; }
+  }).catch(function(){});
+}
+
+function savePurchase(){ IDB.set(_userKey('excPurchase'), JSON.stringify(purchaseHistory)).catch(function(){}); }
+function loadPurchase(){
+  purchaseHistory=[];
+  return IDB.get(_userKey('excPurchase')).then(function(s){
+    if(s) purchaseHistory=JSON.parse(s)||[];
+  }).catch(function(){});
+}
+
+function saveCards(){ IDB.set(_userKey('excCards'), JSON.stringify(cardList)).catch(function(){}); }
+function loadCards(){
+  return IDB.get(_userKey('excCards')).then(function(s){
+    cardList = s ? JSON.parse(s)||[] : [];
+  }).catch(function(){ cardList=[]; });
+}
+
+function savePhoneVerified(){ IDB.set(_userKey('excPhoneVerif'), _phoneVerified?'1':'0').catch(function(){}); }
+function loadPhoneVerified(){
+  return IDB.get(_userKey('excPhoneVerif')).then(function(s){
+    _phoneVerified = (s==='1');
+  }).catch(function(){ _phoneVerified=false; });
+}
+
+// ── reloadUserData (비동기 버전) ──
+function reloadUserData(){
+  resetUserSessionData();
+  return Promise.all([loadDeposit(), loadPurchase(), loadCards(), loadPhoneVerified()]);
 }
 
 function detectAndSetRole(phone, name) {
@@ -3125,26 +3225,6 @@ function updatePendingBadge() {
 // ════════════════════════════════════════════════
 var _pendingInviteCode = null; // 입장 중인 초대코드 레코드
 
-function saveInviteCodes(){ try{ localStorage.setItem('excInviteCodes', JSON.stringify(inviteCodes)); }catch(e){} }
-function loadInviteCodes(){
-  try {
-    var s = localStorage.getItem('excInviteCodes');
-    if (s) {
-      var data = JSON.parse(s);
-      inviteCodes = data.map(function(item){
-        if (typeof item === 'string') return { code: item, used: false, memberName: '', memberId: null, usedAt: null };
-        return item;
-      });
-      // 샘플 코드가 없으면 추가
-      if (!inviteCodes.find(function(c){ return c.code === 'TAAM2025'; })) {
-        inviteCodes.unshift({ code: 'TAAM2025', used: false, memberName: '', memberId: null, usedAt: null, usedByPhone: '', usedByName: '' });
-        saveInviteCodes();
-      }
-    } else {
-      saveInviteCodes(); // 초기값 저장
-    }
-  } catch(e) { inviteCodes = []; }
-}
 
 function codeInputChange(input) {
   input.value = input.value.toUpperCase().replace(/[^A-Z0-9]/g,'');
@@ -3333,13 +3413,7 @@ function resetUserSessionData() {
 }
 
 // 계정 전환 시 해당 유저 데이터 로드
-function reloadUserData() {
-  resetUserSessionData();
-  loadDeposit();
-  loadPurchase();
-  loadCards();
-  loadPhoneVerified();
-}
+
 
 function checkSaPin() {
   if (_saPin === SA_PIN) {
@@ -3402,38 +3476,39 @@ function openMain(){
    'partnerAdminScreen','partnerTicketListScreen','partnerCalScreen','partnerRestScreen',
    'tcLockPopup','mshipScreen','extendPopup','memModal'
   ].forEach(function(id){var el=document.getElementById(id);if(el)el.style.display='none';});
-  loadRestaurants();
-  loadTickets();
-  loadMembers();
-  loadInviteCodes();
-  loadAdminCodes();
-  loadSplashSettings();
-  loadCarouselCards();
-  renderHomeCards();
-  // 개인 데이터는 계정 키 기준 로드 (reloadUserData에서 처리됨 - 미처리 시 여기서 보완)
-  loadDeposit();
-  loadPurchase();
-  loadCards();
-  // loadRole()은 각 진입 경로에서 직접 호출 (여기서 부르면 덮어씌워질 수 있음)
-  // 어드민/슈퍼어드민으로 재접속 시 유저 전용 데이터 초기화
-  if (_currentRole === 'admin' || _currentRole === 'superadmin') {
-    reloadUserData();
-  }
-  updateMpAdminBtn();
-  updatePendingBadge();
-  syncTuRestList();
-  // 기본: Home 탭 활성화, 홈 뷰 표시 (캐러셀은 Contents 탭에서만 렌더)
-  document.getElementById('homeView').style.display='flex';
-  document.getElementById('contentsView').style.display='none';
-  document.querySelectorAll('.gnb-btn').forEach(function(b){b.classList.remove('active');});
-  document.getElementById('gnbHome').classList.add('active');
-  renderHomeTickets();
-  document.getElementById('mainScreen').style.display='flex';
-  document.getElementById('mainGnb').style.display='flex';
-  // 홈에서는 붉은 glow orb 숨김
-  var o1=document.getElementById('cfGlowOrb'); if(o1) o1.style.opacity='0';
-  var o2=document.getElementById('cfGlowOrb2'); if(o2) o2.style.opacity='0';
-  // gnbAdmin removed
+  loadRole().then(function(){
+    return Promise.all([
+      loadRestaurants(),
+      loadTickets(),
+      loadMembers(),
+      loadInviteCodes(),
+      loadAdminCodes(),
+      loadSplashSettings(),
+      loadCarouselCards()
+    ]);
+  }).then(function(){
+    renderHomeCards();
+    return reloadUserData();
+  }).then(function(){
+    // 어드민/슈퍼어드민으로 재접속 시 유저 전용 데이터 초기화
+    if (_currentRole === 'admin' || _currentRole === 'superadmin') {
+      reloadUserData();
+    }
+    updateMpAdminBtn();
+    updatePendingBadge();
+    syncTuRestList();
+    // 기본: Home 탭 활성화, 홈 뷰 표시 (캐러셀은 Contents 탭에서만 렌더)
+    document.getElementById('homeView').style.display='flex';
+    document.getElementById('contentsView').style.display='none';
+    document.querySelectorAll('.gnb-btn').forEach(function(b){b.classList.remove('active');});
+    document.getElementById('gnbHome').classList.add('active');
+    renderHomeTickets();
+    document.getElementById('mainScreen').style.display='flex';
+    document.getElementById('mainGnb').style.display='flex';
+    // 홈에서는 붉은 glow orb 숨김
+    var o1=document.getElementById('cfGlowOrb'); if(o1) o1.style.opacity='0';
+    var o2=document.getElementById('cfGlowOrb2'); if(o2) o2.style.opacity='0';
+  }).catch(function(e){ console.error('Init error:', e); });
 }
 
 // ════════════════════════════════════════════════
@@ -3830,8 +3905,28 @@ function openTicketDetail(id){
       var dfs = (pt[idx] && pt[idx].dfs) ? pt[idx].dfs : Math.max(11, Math.round(fs*0.48));
       var tf  = (pt[idx] && pt[idx].titleFont) || 'Noto Sans KR';
       var df  = (pt[idx] && pt[idx].descFont)  || 'Noto Sans KR';
-      if (title) overlay += '<div style="position:absolute;left:'+tx+'%;top:'+ty+'%;transform:translate(-50%,-50%);width:max-content;max-width:90vw;padding:3px 8px;"><div style="font-family:'+tf+',sans-serif;font-size:'+fs+'px;font-weight:900;color:#fff;line-height:1.2;white-space:pre;">'+title+'</div></div>';
-      if (desc)  overlay += '<div style="position:absolute;left:'+dx+'%;top:'+dy+'%;transform:translate(-50%,-50%);width:max-content;max-width:90vw;padding:3px 8px;"><div style="font-family:'+df+',sans-serif;font-size:'+dfs+'px;color:rgba(255,255,255,.8);line-height:1.6;white-space:pre;">'+desc+'</div></div>';
+      var ta  = (pt[idx] && pt[idx].titleAlign) || 'left';
+      var da  = (pt[idx] && pt[idx].descAlign)  || 'left';
+      // 설명 첫 줄만 표시 (나머지는 더보기)
+      var descLines = desc ? desc.split('\n') : [];
+      var descFirst = descLines[0] || '';
+      var descFull  = desc || '';
+      var hasMore   = !!desc; // desc 있으면 항상 더보기 표시
+      if (title) overlay += '<div style="position:absolute;left:'+tx+'%;top:'+ty+'%;transform:translate(-50%,-50%);width:max-content;max-width:90vw;padding:3px 8px;text-align:'+ta+';"><div style="font-family:'+tf+',sans-serif;font-size:'+fs+'px;font-weight:900;color:#fff;line-height:1.2;white-space:pre;text-align:'+ta+';">'+title+'</div></div>';
+      if (desc) {
+        // 전체 desc를 data 속성으로 인코딩 (특수문자 안전하게)
+        var encFull = encodeURIComponent(descFull);
+        var encFont = encodeURIComponent(df);
+        overlay += '<div style="position:absolute;left:'+dx+'%;top:'+dy+'%;transform:translate(-50%,-50%);max-width:85vw;padding:3px 8px;text-align:'+da+';">'
+          + (hasMore
+            ? '<div onclick="tdExpandDesc(\''+encFull+'\',\''+encFont+'\','+dfs+',\''+da+'\')" style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;pointer-events:all;">'
+              + '<span style="font-family:'+df+',sans-serif;font-size:'+dfs+'px;color:rgba(255,255,255,.85);white-space:pre;">'+descFirst+'</span>'
+              + '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.7)" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>'
+              + '</div>'
+            : '<span style="font-family:'+df+',sans-serif;font-size:'+dfs+'px;color:rgba(255,255,255,.85);white-space:pre;">'+descFirst+'</span>'
+          )
+          + '</div>';
+      }
       var isLast = (idx === allPhotos.length - 1);
       var fadeOut = isLast
         ? '<div style="position:absolute;bottom:0;left:0;right:0;height:320px;background:linear-gradient(to bottom,transparent 0%,rgba(0,0,0,.85) 50%,#000 100%);pointer-events:none;"></div>'
@@ -3990,6 +4085,28 @@ function tdOpenGoogleMap() {
   if (url) window.open(url, '_blank');
 }
 
+function tdExpandDesc(encFull, encFont, dfs, da) {
+  var full = decodeURIComponent(encFull);
+  var font = decodeURIComponent(encFont);
+  var content = document.getElementById('tdDescContent');
+  if (content) {
+    content.style.fontFamily = font + ',sans-serif';
+    content.style.fontSize = dfs + 'px';
+    content.style.textAlign = da || 'left';
+    content.textContent = full;
+  }
+  var overlay = document.getElementById('tdDescOverlay');
+  if (overlay) {
+    overlay.style.display = 'block';
+    // 시트 애니메이션 리셋
+    var sheet = document.getElementById('tdDescSheet');
+    if (sheet) { sheet.style.animation='none'; void sheet.offsetWidth; sheet.style.animation='tdSlideUp .32s cubic-bezier(.22,1,.36,1)'; }
+  }
+}
+function tdCollapseDesc() {
+  var overlay = document.getElementById('tdDescOverlay');
+  if (overlay) overlay.style.display = 'none';
+}
 function closeTicketDetail(){
   document.getElementById('ticketDetailScreen').style.display='none';
   closeLocationSheet();
@@ -4607,11 +4724,16 @@ function doResetFinancialData() {
   purchaseHistory = [];
   window._tdPayAmount = 0;
 
-  // 모든 계정의 금융 localStorage 키 삭제
-  Object.keys(localStorage).forEach(function(k) {
-    if (k.startsWith('excDeposit') || k.startsWith('excPurchase')) {
-      localStorage.removeItem(k);
-    }
+  // 모든 계정의 금융 데이터 IDB 키 삭제
+  IDB.open().then(function(db){
+    var tx = db.transaction('kv','readwrite');
+    var store = tx.objectStore('kv');
+    var req = store.getAllKeys();
+    req.onsuccess = function(){
+      (req.result||[]).forEach(function(k){
+        if(k.startsWith('excDeposit')||k.startsWith('excPurchase')) store.delete(k);
+      });
+    };
   });
 
   saveDeposit();
@@ -5736,10 +5858,10 @@ function openCard(){
 // ════════════════════════════════════════════════
 // CARD MANAGEMENT
 // ════════════════════════════════════════════════
-function saveCards(){try{localStorage.setItem(_userKey('excCards'),JSON.stringify(cardList));}catch(e){}}
-function loadCards(){try{var s=localStorage.getItem(_userKey('excCards'));if(s){cardList=JSON.parse(s)||[];}else{cardList=[];}}catch(e){cardList=[];}}
-function savePhoneVerified(){try{localStorage.setItem(_userKey('excPhoneVerif'),_phoneVerified?'1':'0');}catch(e){}}
-function loadPhoneVerified(){try{var s=localStorage.getItem(_userKey('excPhoneVerif'));_phoneVerified=(s==='1');}catch(e){_phoneVerified=false;}}
+
+
+
+
 
 var cardList = []; // [{id, name, brand, number, expiry, holder, isPrimary}]
 var _activeCardId = null; // 현재 메뉴를 연 카드 ID
@@ -5972,6 +6094,8 @@ function closeRestPage(){
   _rpEditId = null;
   var pageTitle = document.querySelector('#restPage .page-title');
   if (pageTitle) pageTitle.textContent = '레스토랑 등록';
+  var submitBtn = document.querySelector('#restPage .rp-submit');
+  if (submitBtn) submitBtn.textContent = '등록';
   document.getElementById('restPage').style.display='none';
   if(_currentRole==='admin') openPartnerAdmin(); else openAdmin();
 }
@@ -6232,7 +6356,11 @@ function rpCropConfirm() {
     var url = canvas.toDataURL('image/jpeg', 0.95);
     _splashSettings.bg = url;
     applySplashSettings();
-    try { localStorage.setItem('splashSettings', JSON.stringify({ text1:_splashSettings.text1, text2:_splashSettings.text2 })); } catch(e) {}
+    IDB.set('splashSettings', JSON.stringify({
+      text1: _splashSettings.text1,
+      text2: _splashSettings.text2,
+      bg:    url
+    }));
     showToast('✓','적용 완료','시작화면 배경이 설정됐어요');
     return;
   }
@@ -6334,6 +6462,10 @@ function rpEditRest(id) {
   var pageTitle = document.querySelector('#restPage .page-title');
   if (pageTitle) pageTitle.textContent = '레스토랑 수정';
 
+  // 등록 버튼 → 수정하기
+  var submitBtn = document.querySelector('#restPage .rp-submit');
+  if (submitBtn) submitBtn.textContent = '수정하기';
+
   // 기본 정보 채우기
   document.getElementById('rpName').value = r.name || '';
   rpAddrClear();
@@ -6393,6 +6525,10 @@ function rpEditRest(id) {
   document.querySelectorAll('#rpRepurchaseGroup .rp-btn').forEach(function(b){
     b.classList.toggle('on', parseInt(b.getAttribute('data-val')||0) === (r.repurchaseDay||0));
   });
+
+  // 레스토랑 소개 복원
+  var riEl = document.getElementById('rpRestInfo');
+  if (riEl) riEl.value = r.restInfo || '';
 }
 
 
@@ -8656,7 +8792,7 @@ var _acSelectedMember = null;
 var _acSelectedRest = null;
 var _acCode = '';
 
-function saveAdminCodes(){ try{ localStorage.setItem('excAdminCodes', JSON.stringify(adminCodes)); }catch(e){} }
+
 function acAddTestMembers(){
   var testMembers = [
     {id:'test_001', name:'김테스트', phone:'010-1234-5678', grade:'일반'},
@@ -8673,7 +8809,7 @@ function acAddTestMembers(){
   showToast('✓','테스트 회원 추가','3명의 테스트 회원이 추가됐어요');
 }
 
-function loadAdminCodes(){ try{ var s=localStorage.getItem('excAdminCodes'); if(s) adminCodes=JSON.parse(s)||[]; }catch(e){ adminCodes=[]; } }
+
 
 function acSearchMember(q) {
   var dd = document.getElementById('acMemberDropdown');
@@ -9324,6 +9460,11 @@ function rpRenderTypo() {
             +'<button onclick="rpSetFont('+idx+',\'title\',\'Noto Sans KR\')" style="flex:1;padding:5px 2px;border-radius:6px;border:1.5px solid '+((!pt.titleFont||pt.titleFont==='Noto Sans KR')?'#1a1a18':'#e0ddd8')+';background:'+((!pt.titleFont||pt.titleFont==='Noto Sans KR')?'#1a1a18':'#fff')+';color:'+((!pt.titleFont||pt.titleFont==='Noto Sans KR')?'#fff':'#888')+';font-family:Noto Sans KR,sans-serif;font-size:9px;cursor:pointer;">한글</button>'
             +'<button onclick="rpSetFont('+idx+',\'title\',\'Montserrat\')" style="flex:1;padding:5px 2px;border-radius:6px;border:1.5px solid '+(pt.titleFont==='Montserrat'?'#1a1a18':'#e0ddd8')+';background:'+(pt.titleFont==='Montserrat'?'#1a1a18':'#fff')+';color:'+(pt.titleFont==='Montserrat'?'#fff':'#888')+';font-family:Montserrat,sans-serif;font-size:9px;cursor:pointer;">Montserrat</button>'
             +'<button onclick="rpSetFont('+idx+',\'title\',\'Oswald\')" style="flex:1;padding:5px 2px;border-radius:6px;border:1.5px solid '+(pt.titleFont==='Oswald'?'#1a1a18':'#e0ddd8')+';background:'+(pt.titleFont==='Oswald'?'#1a1a18':'#fff')+';color:'+(pt.titleFont==='Oswald'?'#fff':'#888')+';font-family:Oswald,sans-serif;font-size:9px;cursor:pointer;">Oswald</button>'
+          +'<div style="display:flex;gap:4px;margin-top:5px;">'
+            +'<button onclick="rpSetAlign('+idx+',\'title\',\'left\')" style="flex:1;padding:4px 2px;border-radius:6px;border:1.5px solid '+((pt.titleAlign==='left'||!pt.titleAlign)?'#1a1a18':'#e0ddd8')+';background:'+((pt.titleAlign==='left'||!pt.titleAlign)?'#1a1a18':'#fff')+';color:'+((pt.titleAlign==='left'||!pt.titleAlign)?'#fff':'#888')+';font-size:10px;font-family:Montserrat,sans-serif;font-weight:700;cursor:pointer;">L</button>'
+            +'<button onclick="rpSetAlign('+idx+',\'title\',\'center\')" style="flex:1;padding:4px 2px;border-radius:6px;border:1.5px solid '+((pt.titleAlign==='center')?'#1a1a18':'#e0ddd8')+';background:'+((pt.titleAlign==='center')?'#1a1a18':'#fff')+';color:'+((pt.titleAlign==='center')?'#fff':'#888')+';font-size:10px;font-family:Montserrat,sans-serif;font-weight:700;cursor:pointer;">C</button>'
+            +'<button onclick="rpSetAlign('+idx+',\'title\',\'right\')" style="flex:1;padding:4px 2px;border-radius:6px;border:1.5px solid '+((pt.titleAlign==='right')?'#1a1a18':'#e0ddd8')+';background:'+((pt.titleAlign==='right')?'#1a1a18':'#fff')+';color:'+((pt.titleAlign==='right')?'#fff':'#888')+';font-size:10px;font-family:Montserrat,sans-serif;font-weight:700;cursor:pointer;">R</button>'
+          +'</div>'
           +'</div>'
         +'</div>'
         +'<div style="border:1px solid rgba(100,180,255,.4);border-radius:8px;padding:8px;">'
@@ -9334,6 +9475,11 @@ function rpRenderTypo() {
             +'<button onclick="rpSetFont('+idx+',\'desc\',\'Noto Sans KR\')" style="flex:1;padding:5px 2px;border-radius:6px;border:1.5px solid '+((!pt.descFont||pt.descFont==='Noto Sans KR')?'#1a1a18':'#e0ddd8')+';background:'+((!pt.descFont||pt.descFont==='Noto Sans KR')?'#1a1a18':'#fff')+';color:'+((!pt.descFont||pt.descFont==='Noto Sans KR')?'#fff':'#888')+';font-family:Noto Sans KR,sans-serif;font-size:9px;cursor:pointer;">한글</button>'
             +'<button onclick="rpSetFont('+idx+',\'desc\',\'Montserrat\')" style="flex:1;padding:5px 2px;border-radius:6px;border:1.5px solid '+(pt.descFont==='Montserrat'?'#1a1a18':'#e0ddd8')+';background:'+(pt.descFont==='Montserrat'?'#1a1a18':'#fff')+';color:'+(pt.descFont==='Montserrat'?'#fff':'#888')+';font-family:Montserrat,sans-serif;font-size:9px;cursor:pointer;">Montserrat</button>'
             +'<button onclick="rpSetFont('+idx+',\'desc\',\'Oswald\')" style="flex:1;padding:5px 2px;border-radius:6px;border:1.5px solid '+(pt.descFont==='Oswald'?'#1a1a18':'#e0ddd8')+';background:'+(pt.descFont==='Oswald'?'#1a1a18':'#fff')+';color:'+(pt.descFont==='Oswald'?'#fff':'#888')+';font-family:Oswald,sans-serif;font-size:9px;cursor:pointer;">Oswald</button>'
+          +'<div style="display:flex;gap:4px;margin-top:5px;">'
+            +'<button onclick="rpSetAlign('+idx+',\'desc\',\'left\')" style="flex:1;padding:4px 2px;border-radius:6px;border:1.5px solid '+((pt.descAlign==='left'||!pt.descAlign)?'#1a1a18':'#e0ddd8')+';background:'+((pt.descAlign==='left'||!pt.descAlign)?'#1a1a18':'#fff')+';color:'+((pt.descAlign==='left'||!pt.descAlign)?'#fff':'#888')+';font-size:10px;font-family:Montserrat,sans-serif;font-weight:700;cursor:pointer;">L</button>'
+            +'<button onclick="rpSetAlign('+idx+',\'desc\',\'center\')" style="flex:1;padding:4px 2px;border-radius:6px;border:1.5px solid '+((pt.descAlign==='center')?'#1a1a18':'#e0ddd8')+';background:'+((pt.descAlign==='center')?'#1a1a18':'#fff')+';color:'+((pt.descAlign==='center')?'#fff':'#888')+';font-size:10px;font-family:Montserrat,sans-serif;font-weight:700;cursor:pointer;">C</button>'
+            +'<button onclick="rpSetAlign('+idx+',\'desc\',\'right\')" style="flex:1;padding:4px 2px;border-radius:6px;border:1.5px solid '+((pt.descAlign==='right')?'#1a1a18':'#e0ddd8')+';background:'+((pt.descAlign==='right')?'#1a1a18':'#fff')+';color:'+((pt.descAlign==='right')?'#fff':'#888')+';font-size:10px;font-family:Montserrat,sans-serif;font-weight:700;cursor:pointer;">R</button>'
+          +'</div>'
           +'</div>'
         +'</div>'
       +'</div>';
@@ -9517,6 +9663,26 @@ function rpSetFont(idx, target, fontName) {
 }
 
 
+function rpSetAlign(idx, target, align) {
+  if (!_rpPhotoTexts[idx]) _rpPhotoTexts[idx] = {};
+  var key = target === 'title' ? 'titleAlign' : 'descAlign';
+  _rpPhotoTexts[idx][key] = align;
+  // 미리보기 업데이트
+  var el = document.getElementById(target === 'title' ? 'rpTT'+idx : 'rpTD'+idx);
+  if (el) el.style.textAlign = align;
+  var blk = document.getElementById(target === 'title' ? 'rpTypoBlockT'+idx : 'rpTypoBlockD'+idx);
+  if (blk) blk.style.textAlign = align;
+  // 버튼 상태 업데이트
+  ['L','C','R'].forEach(function(a){
+    var btn = document.getElementById('rpAlign'+target+'_'+a+idx);
+    if (!btn) return;
+    var active = (a==='L'&&align==='left')||(a==='C'&&align==='center')||(a==='R'&&align==='right');
+    btn.style.background = active ? '#1a1a18' : '#fff';
+    btn.style.color = active ? '#fff' : '#888';
+    btn.style.borderColor = active ? '#1a1a18' : '#e0ddd8';
+  });
+}
+
 function rpGetPhotoTexts() {
   return [0,1,2].map(function(i){
     var ti = document.getElementById('rpPhotoTitle'+i);
@@ -9530,8 +9696,10 @@ function rpGetPhotoTexts() {
       dy: _rpPhotoTexts[i].dy !== undefined ? _rpPhotoTexts[i].dy : (i===0?87:58),
       fs:  _rpPhotoTexts[i].fs  !== undefined ? _rpPhotoTexts[i].fs  : [28,22,52][i],
       dfs: _rpPhotoTexts[i].dfs !== undefined ? _rpPhotoTexts[i].dfs : [14,11,25][i],
-      titleFont: _rpPhotoTexts[i].titleFont || 'Noto Sans KR',
-      descFont:  _rpPhotoTexts[i].descFont  || 'Noto Sans KR'
+      titleFont:  _rpPhotoTexts[i].titleFont  || 'Noto Sans KR',
+      descFont:   _rpPhotoTexts[i].descFont   || 'Noto Sans KR',
+      titleAlign: _rpPhotoTexts[i].titleAlign || 'left',
+      descAlign:  _rpPhotoTexts[i].descAlign  || 'left'
     };
   });
 }
@@ -9549,8 +9717,7 @@ var _carouselCards = /*CAROUSEL_DATA_START*/[
 ]/*CAROUSEL_DATA_END*/;
 
 function loadCarouselCards() {
-  try {
-    var s = localStorage.getItem('carouselCards');
+  return IDB.get('carouselCards').then(function(s) {
     if (s) {
       var parsed = JSON.parse(s);
       if (Array.isArray(parsed) && parsed.length > 0) {
@@ -9559,41 +9726,45 @@ function loadCarouselCards() {
         if (!fileHasBg || lsHasBg) _carouselCards = parsed;
       }
     }
-  } catch(e) {}
+  }).catch(function(){});
 }
 function saveCarouselCards() {
-  try { localStorage.setItem('carouselCards', JSON.stringify(_carouselCards)); } catch(e) {
-    showToast('⚠','저장 실패','카드 데이터 저장 실패 - 용량 초과');
-  }
+  IDB.set('carouselCards', JSON.stringify(_carouselCards)).catch(function(){
+    showToast('⚠','저장 실패','카드 데이터 저장 실패');
+  });
 }
 // 앱카드 bg는 Blob URL(메모리) 이므로 텍스트 데이터만 localStorage에 저장
 function saveCarouselCardsTextOnly() {
-  try {
-    var textOnly = _carouselCards.map(function(c) {
-      return { id:c.id, keyword:c.keyword, sub:c.sub, badge:c.badge, color:c.color, placeholder:c.placeholder };
-    });
-    localStorage.setItem('carouselCards', JSON.stringify(textOnly));
-  } catch(e) {}
+  var textOnly = _carouselCards.map(function(c) {
+    return { id:c.id, keyword:c.keyword, sub:c.sub, badge:c.badge, color:c.color, placeholder:c.placeholder };
+  });
+  IDB.set('carouselCards', JSON.stringify(textOnly)).catch(function(){});
 }
 
 function loadSplashSettings() {
-  try {
-    var s = localStorage.getItem('splashSettings');
+  return IDB.get('splashSettings').then(function(s) {
     if (s) {
       var parsed = JSON.parse(s);
-      // 텍스트만 복원 (bg는 blob URL이라 재시작 시 없음)
       if (parsed.text1) _splashSettings.text1 = parsed.text1;
       if (parsed.text2) _splashSettings.text2 = parsed.text2;
+      if (parsed.bg)    _splashSettings.bg    = parsed.bg;
     }
-  } catch(e) {}
-  applySplashSettings();
+    applySplashSettings();
+  }).catch(function(){ applySplashSettings(); });
 }
 function saveSplashSettings() {
   _splashSettings.text1 = document.getElementById('splashText1').value.trim() || 'Exclusive';
   _splashSettings.text2 = document.getElementById('splashText2').value.trim() || 'Experience';
-  try { localStorage.setItem('splashSettings', JSON.stringify({ text1:_splashSettings.text1, text2:_splashSettings.text2 })); } catch(e) {}
+  IDB.set('splashSettings', JSON.stringify({
+    text1: _splashSettings.text1,
+    text2: _splashSettings.text2,
+    bg:    _splashSettings.bg || ''
+  })).then(function(){
+    showToast('✓','저장 완료','시작화면이 업데이트되었습니다');
+  }).catch(function(){
+    showToast('⚠','저장 실패','저장에 실패했어요');
+  });
   applySplashSettings();
-  showToast('✓','저장 완료','시작화면이 업데이트되었습니다');
 }
 function applySplashSettings() {
   var l1 = document.getElementById('splashLine1');
@@ -9650,7 +9821,7 @@ function splashPhotoChange(input) {
 }
 function splashBgReset() {
   _splashSettings.bg = '';
-  try { localStorage.setItem('splashSettings', JSON.stringify({ text1:_splashSettings.text1, text2:_splashSettings.text2 })); } catch(e) {}
+  IDB.set('splashSettings', JSON.stringify({ text1:_splashSettings.text1, text2:_splashSettings.text2, bg:'' }));
   applySplashSettings();
   showToast('✓','초기화','기본 배경으로 변경됐어요');
 }
@@ -9904,24 +10075,23 @@ function showToast(icon,title,msg){
   },2500);
 }
 
-// 페이지 로드 즉시 저장된 스플래시 설정 적용 (코드 입력 전 스플래시 화면에 반영)
-(function() {
-  try {
-    var s = localStorage.getItem('splashSettings');
-    if (!s) return;
-    var parsed = JSON.parse(s);
-    var l1 = document.getElementById('splashLine1');
-    var l2 = document.getElementById('splashLine2');
+// 페이지 로드 즉시 저장된 스플래시 텍스트 적용 (IDB 비동기)
+IDB.get('splashSettings').then(function(s) {
+  if (!s) return;
+  var parsed = JSON.parse(s);
+  var l1 = document.getElementById('splashLine1');
+  var l2 = document.getElementById('splashLine2');
+  if (l1 && parsed.text1) l1.textContent = parsed.text1;
+  if (l2 && parsed.text2) l2.textContent = parsed.text2;
+  if (parsed.bg) {
     var bg = document.querySelector('.splash-bg');
-    if (l1 && parsed.text1) l1.textContent = parsed.text1;
-    if (l2 && parsed.text2) l2.textContent = parsed.text2;
-    if (bg && parsed.bg) {
+    if (bg) {
       bg.style.backgroundImage = "url('" + parsed.bg + "')";
       bg.style.backgroundSize = 'cover';
       bg.style.backgroundPosition = 'center top';
     }
-  } catch(e) {}
-})();
+  }
+}).catch(function(){});
 
 </script>
 </body>
