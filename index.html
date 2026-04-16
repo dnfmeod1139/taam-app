@@ -3464,11 +3464,21 @@ function adminDirectAccess(){
   if(splash) splash.style.display = 'none';
   document.getElementById('appWrapper').style.display = 'block';
   loadRole(); // PIN으로 설정된 역할 로드
-  openMain();
-  document.getElementById('homeView').style.display = 'none';
-  document.querySelectorAll('.gnb-btn').forEach(function(b){ b.classList.remove('active'); });
-  document.getElementById('gnbMy').classList.add('active');
-  openMyPage();
+
+  if (_currentRole === 'superadmin') {
+    // 슈퍼어드민 → 바로 관리자 페이지로
+    openMain();
+    document.getElementById('homeView').style.display = 'none';
+    document.querySelectorAll('.gnb-btn').forEach(function(b){ b.classList.remove('active'); });
+    openAdmin();
+  } else {
+    // 기타 → 마이페이지
+    openMain();
+    document.getElementById('homeView').style.display = 'none';
+    document.querySelectorAll('.gnb-btn').forEach(function(b){ b.classList.remove('active'); });
+    document.getElementById('gnbMy').classList.add('active');
+    openMyPage();
+  }
 }
 
 // ════════════════════════════════════════════════
@@ -3917,15 +3927,14 @@ function openTicketDetail(id){
       var df  = (pt[idx] && pt[idx].descFont)  || 'Noto Sans KR';
       var ta  = (pt[idx] && pt[idx].titleAlign) || 'left';
       var da  = (pt[idx] && pt[idx].descAlign)  || 'left';
-      // 설명 첫 줄만 표시 (나머지는 더보기)
       var descLines = desc ? desc.split('\n') : [];
       var descFirst = descLines[0] || '';
       var descFull  = desc || '';
-      var hasMore   = !!desc; // desc 있으면 항상 더보기 표시
+      var detail    = (pt[idx] && pt[idx].detail) || '';
+      var hasMore   = !!detail; // 추가설명 있을 때만 더보기 표시
       if (title) overlay += '<div style="position:absolute;left:'+tx+'%;top:'+ty+'%;transform:translate(-50%,-50%);width:max-content;max-width:90vw;padding:3px 8px;text-align:'+ta+';"><div style="font-family:'+tf+',sans-serif;font-size:'+fs+'px;font-weight:900;color:#fff;line-height:1.2;white-space:pre;text-align:'+ta+';">'+title+'</div></div>';
       if (desc) {
-        // 전체 desc를 data 속성으로 인코딩 (특수문자 안전하게)
-        var encFull = encodeURIComponent(descFull);
+        var encFull = encodeURIComponent(detail);  // 더보기에는 추가설명 표시
         var encFont = encodeURIComponent(df);
         overlay += '<div style="position:absolute;left:'+dx+'%;top:'+dy+'%;transform:translate(-50%,-50%);max-width:85vw;padding:3px 8px;text-align:'+da+';">'
           + (hasMore
@@ -6259,20 +6268,110 @@ function rpRenderDetailPhotos() {
   var list = document.getElementById('rpDetailPhotoList');
   if (!list) return;
   var html = _rpDetailPhotos.map(function(src, i) {
-    return '<div class="rp-detail-photo-slot" style="position:relative;">'
-      +'<img src="'+src+'" style="display:block;width:100%;height:100%;object-fit:cover;cursor:pointer;" onclick="rpRecroplDetail('+i+')" title="클릭하여 크롭 조정">'
-      +'<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.0);pointer-events:none;">'
+    return '<div class="rp-detail-photo-slot" data-idx="'+i+'" style="position:relative;touch-action:none;">'
+      +'<img src="'+src+'" style="display:block;width:100%;height:100%;object-fit:cover;" onclick="rpRecroplDetail('+i+')">'
+      +'<button class="rp-detail-photo-del" style="display:flex;" onclick="event.stopPropagation();rpRemoveDetailPhoto('+i+')">✕</button>'
+      +'<div style="position:absolute;bottom:0;left:0;right:0;height:18px;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.35);pointer-events:none;">'
+        +'<svg width="12" height="8" viewBox="0 0 12 8" fill="rgba(255,255,255,.6)"><rect y="0" width="12" height="1.5" rx=".75"/><rect y="3" width="12" height="1.5" rx=".75"/><rect y="6" width="12" height="1.5" rx=".75"/></svg>'
       +'</div>'
-      +'<button class="rp-detail-photo-del" style="display:flex;" onclick="rpRemoveDetailPhoto('+i+')">✕</button>'
-      +'<div style="position:absolute;bottom:4px;left:0;right:0;text-align:center;pointer-events:none;"><span style="font-size:9px;color:rgba(255,255,255,.7);background:rgba(0,0,0,.4);padding:1px 5px;border-radius:4px;">탭하여 조정</span></div>'
     +'</div>';
   }).join('');
   if (_rpDetailPhotos.length < _rpDetailPhotoMax) {
     html += '<div class="rp-detail-photo-add" onclick="rpPickDetailPhoto()"><div class="rp-detail-photo-add-icon">＋</div><div class="rp-detail-photo-add-label">ADD</div></div>';
   }
   list.innerHTML = html;
-  // 타이포 섹션 갱신 (사진 추가/삭제 시 미리보기 반영)
   rpRenderTypo();
+
+  // ── HTML5 드래그 (데스크탑) ──
+  var slots = list.querySelectorAll('.rp-detail-photo-slot');
+  var dragSrc = null;
+  slots.forEach(function(slot) {
+    slot.setAttribute('draggable','true');
+    slot.addEventListener('dragstart', function(e){ dragSrc=this; e.dataTransfer.effectAllowed='move'; setTimeout(function(){slot.style.opacity='0.35';},0); });
+    slot.addEventListener('dragend', function(){ this.style.opacity='1'; list.querySelectorAll('.rp-detail-photo-slot').forEach(function(s){s.style.outline='';}); });
+    slot.addEventListener('dragover', function(e){ e.preventDefault(); this.style.outline='2px solid #c8a96e'; });
+    slot.addEventListener('dragleave', function(){ this.style.outline=''; });
+    slot.addEventListener('drop', function(e){
+      e.preventDefault(); this.style.outline='';
+      if(dragSrc===this) return;
+      var fi=parseInt(dragSrc.getAttribute('data-idx')), ti=parseInt(this.getAttribute('data-idx'));
+      var mv=_rpDetailPhotos.splice(fi,1)[0]; _rpDetailPhotos.splice(ti,0,mv);
+      rpRenderDetailPhotos();
+    });
+  });
+
+  // ── 터치 드래그 (모바일) — 전역 리스너로 잔상 방지 ──
+  var _dpClone = null;
+  var _dpSrcSlot = null;
+  var _dpOrigIdx = -1;
+  var _dpTx0 = 0, _dpTy0 = 0;
+  var _dpCloneInitLeft = 0, _dpCloneInitTop = 0;
+
+  function dpCleanup() {
+    if (_dpClone && _dpClone.parentNode) _dpClone.parentNode.removeChild(_dpClone);
+    _dpClone = null;
+    if (_dpSrcSlot) _dpSrcSlot.style.opacity = '1';
+    _dpSrcSlot = null;
+    list.querySelectorAll('.rp-detail-photo-slot').forEach(function(s){ s.style.outline=''; });
+  }
+
+  slots.forEach(function(slot) {
+    slot.addEventListener('touchstart', function(e) {
+      if (e.target.classList.contains('rp-detail-photo-del')) return;
+      dpCleanup(); // 이전 잔상 강제 제거
+      _dpOrigIdx = parseInt(this.getAttribute('data-idx'));
+      _dpSrcSlot = this;
+      _dpTx0 = e.touches[0].clientX;
+      _dpTy0 = e.touches[0].clientY;
+      var r = this.getBoundingClientRect();
+      _dpCloneInitLeft = r.left;
+      _dpCloneInitTop  = r.top;
+      _dpClone = this.cloneNode(true);
+      _dpClone.style.cssText = 'position:fixed;left:'+r.left+'px;top:'+r.top+'px;width:'+r.width+'px;height:'+r.height+'px;opacity:.8;z-index:9999;border-radius:10px;overflow:hidden;pointer-events:none;box-shadow:0 8px 24px rgba(0,0,0,.4);transition:none;';
+      document.body.appendChild(_dpClone);
+      this.style.opacity = '0.25';
+    }, {passive:true});
+  });
+
+  // 전역 touchmove — 슬롯 밖으로 나가도 추적
+  var _dpMoveHandler = function(e) {
+    if (!_dpClone) return;
+    e.preventDefault();
+    var dx = e.touches[0].clientX - _dpTx0;
+    var dy = e.touches[0].clientY - _dpTy0;
+    _dpClone.style.left = (_dpCloneInitLeft + dx) + 'px';
+    _dpClone.style.top  = (_dpCloneInitTop  + dy) + 'px';
+    list.querySelectorAll('.rp-detail-photo-slot').forEach(function(s){ s.style.outline=''; });
+    var el = document.elementFromPoint(e.touches[0].clientX, e.touches[0].clientY);
+    var tgt = el && el.closest('.rp-detail-photo-slot');
+    if (tgt && tgt !== _dpSrcSlot) tgt.style.outline = '2px solid #c8a96e';
+  };
+
+  // 전역 touchend/touchcancel — 항상 cleanup
+  var _dpEndHandler = function(e) {
+    if (!_dpClone) return;
+    var ex = e.changedTouches[0].clientX, ey = e.changedTouches[0].clientY;
+    var el = document.elementFromPoint(ex, ey);
+    var tgt = el && el.closest('.rp-detail-photo-slot');
+    var targetIdx = tgt ? parseInt(tgt.getAttribute('data-idx')) : -1;
+    dpCleanup();
+    if (targetIdx >= 0 && targetIdx !== _dpOrigIdx) {
+      var mv = _rpDetailPhotos.splice(_dpOrigIdx, 1)[0];
+      _rpDetailPhotos.splice(targetIdx, 0, mv);
+      rpRenderDetailPhotos();
+    }
+    document.removeEventListener('touchmove', _dpMoveHandler);
+    document.removeEventListener('touchend', _dpEndHandler);
+    document.removeEventListener('touchcancel', _dpEndHandler);
+  };
+
+  slots.forEach(function(slot) {
+    slot.addEventListener('touchstart', function() {
+      document.addEventListener('touchmove', _dpMoveHandler, {passive:false});
+      document.addEventListener('touchend', _dpEndHandler);
+      document.addEventListener('touchcancel', _dpEndHandler);
+    }, {passive:true});
+  });
 }
 
 function rpRecroplDetail(idx) {
@@ -6535,6 +6634,7 @@ function rpEditRest(id) {
   _rpPhotoTexts = (r.photoTexts||[{},{},{}]).map(function(p){ return p||{}; });
   while(_rpPhotoTexts.length<3) _rpPhotoTexts.push({});
   rpRenderTypo();
+  // detail 복원은 rpRenderTypo 이후 DOM에서 처리됨 (pt.detail로 textarea 렌더됨)
   var ci = document.getElementById('rpPhotoCardPreview');
   var hi = document.getElementById('rpPhotoHeroPreview');
   var cp = document.getElementById('rpPhotoCardPh');
@@ -9502,6 +9602,12 @@ function rpRenderTypo() {
             +'<button onclick="rpSetAlign('+idx+',\'title\',\'right\')" style="flex:1;padding:4px 2px;border-radius:6px;border:1.5px solid '+((pt.titleAlign==='right')?'#1a1a18':'#e0ddd8')+';background:'+((pt.titleAlign==='right')?'#1a1a18':'#fff')+';color:'+((pt.titleAlign==='right')?'#fff':'#888')+';font-size:10px;font-family:Montserrat,sans-serif;font-weight:700;cursor:pointer;">R</button>'
           +'</div>'
           +'</div>'
+          +'<div style="display:flex;align-items:center;gap:8px;margin-top:6px;">'
+            +'<span style="font-size:9px;color:#aaa;font-family:Montserrat,sans-serif;">SIZE</span>'
+            +'<button onclick="rpSetFontSize('+idx+',\'title\',-2)" style="width:26px;height:26px;border-radius:50%;background:#f0ede8;border:none;font-size:14px;cursor:pointer;">−</button>'
+            +'<div id="rpTitleFs_'+idx+'" style="min-width:32px;text-align:center;font-family:Montserrat,sans-serif;font-size:11px;font-weight:700;color:#333;">'+(fs||28)+'</div>'
+            +'<button onclick="rpSetFontSize('+idx+',\'title\',2)" style="width:26px;height:26px;border-radius:50%;background:#1a1a18;border:none;font-size:14px;cursor:pointer;color:#fff;">+</button>'
+          +'</div>'
         +'</div>'
         +'<div style="border:1px solid rgba(100,180,255,.4);border-radius:8px;padding:8px;">'
           +'<div style="font-family:Montserrat,sans-serif;font-size:7px;font-weight:800;letter-spacing:.15em;color:#6ab0ff;margin-bottom:5px;">DESC</div>'
@@ -9517,6 +9623,20 @@ function rpRenderTypo() {
             +'<button onclick="rpSetAlign('+idx+',\'desc\',\'right\')" style="flex:1;padding:4px 2px;border-radius:6px;border:1.5px solid '+((pt.descAlign==='right')?'#1a1a18':'#e0ddd8')+';background:'+((pt.descAlign==='right')?'#1a1a18':'#fff')+';color:'+((pt.descAlign==='right')?'#fff':'#888')+';font-size:10px;font-family:Montserrat,sans-serif;font-weight:700;cursor:pointer;">R</button>'
           +'</div>'
           +'</div>'
+          +'<div style="display:flex;align-items:center;gap:8px;margin-top:6px;">'
+            +'<span style="font-size:9px;color:#aaa;font-family:Montserrat,sans-serif;">SIZE</span>'
+            +'<button onclick="rpSetFontSize('+idx+',\'desc\',-1)" style="width:26px;height:26px;border-radius:50%;background:#f0ede8;border:none;font-size:14px;cursor:pointer;">−</button>'
+            +'<div id="rpDescFs_'+idx+'" style="min-width:32px;text-align:center;font-family:Montserrat,sans-serif;font-size:11px;font-weight:700;color:#333;">'+(dfs||14)+'</div>'
+            +'<button onclick="rpSetFontSize('+idx+',\'desc\',1)" style="width:26px;height:26px;border-radius:50%;background:#1a1a18;border:none;font-size:14px;cursor:pointer;color:#fff;">+</button>'
+          +'</div>'
+        +'</div>'
+        +'<div style="border:1px solid #e8e5e0;border-radius:8px;padding:8px;background:#fafafa;">'
+          +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">'
+            +'<div style="font-family:Montserrat,sans-serif;font-size:7px;font-weight:800;letter-spacing:.15em;color:#999;">추가설명</div>'
+            +'<div style="font-family:Noto Sans KR,sans-serif;font-size:9px;color:#ccc;">더보기 탭 시 노출 · 사진에 미표시</div>'
+          +'</div>'
+          +'<textarea id="rpPhotoDetail'+idx+'" rows="4" placeholder="더보기를 탭하면 보여질 상세 내용 입력" '
+            +'style="width:100%;padding:8px 10px;border:1.5px solid #e8e5e0;border-radius:8px;font-family:Noto Sans KR,sans-serif;font-size:12px;color:#555;outline:none;box-sizing:border-box;resize:vertical;line-height:1.7;">'+(pt.detail||'')+'</textarea>'
         +'</div>'
       +'</div>';
 
@@ -9699,6 +9819,29 @@ function rpSetFont(idx, target, fontName) {
 }
 
 
+function rpSetFontSize(idx, target, delta) {
+  var defFs  = [28, 22, 52];
+  var defDFs = [14, 11, 25];
+  if (!_rpPhotoTexts[idx]) _rpPhotoTexts[idx] = {};
+  if (target === 'title') {
+    var cur = _rpPhotoTexts[idx].fs !== undefined ? _rpPhotoTexts[idx].fs : defFs[idx];
+    var nv = Math.max(8, Math.min(120, cur + delta));
+    _rpPhotoTexts[idx].fs = nv;
+    var tt = document.getElementById('rpTT'+idx);
+    if (tt) tt.style.fontSize = nv + 'px';
+    var el = document.getElementById('rpTitleFs_'+idx);
+    if (el) el.textContent = nv;
+  } else {
+    var curD = _rpPhotoTexts[idx].dfs !== undefined ? _rpPhotoTexts[idx].dfs : defDFs[idx];
+    var nd = Math.max(6, Math.min(60, curD + delta));
+    _rpPhotoTexts[idx].dfs = nd;
+    var td = document.getElementById('rpTD'+idx);
+    if (td) td.style.fontSize = nd + 'px';
+    var elD = document.getElementById('rpDescFs_'+idx);
+    if (elD) elD.textContent = nd;
+  }
+}
+
 function rpSetAlign(idx, target, align) {
   if (!_rpPhotoTexts[idx]) _rpPhotoTexts[idx] = {};
   var key = target === 'title' ? 'titleAlign' : 'descAlign';
@@ -9723,9 +9866,11 @@ function rpGetPhotoTexts() {
   return [0,1,2].map(function(i){
     var ti = document.getElementById('rpPhotoTitle'+i);
     var di = document.getElementById('rpPhotoDesc'+i);
+    var det = document.getElementById('rpPhotoDetail'+i);
     return {
       title: ti ? ti.value.trim() : (_rpPhotoTexts[i].title||''),
       desc:  di ? di.value.trim() : (_rpPhotoTexts[i].desc||''),
+      detail: det ? det.value.trim() : (_rpPhotoTexts[i].detail||''),
       tx: _rpPhotoTexts[i].tx !== undefined ? _rpPhotoTexts[i].tx : (i===0?10:50),
       ty: _rpPhotoTexts[i].ty !== undefined ? _rpPhotoTexts[i].ty : (i===0?75:45),
       dx: _rpPhotoTexts[i].dx !== undefined ? _rpPhotoTexts[i].dx : (i===0?10:50),
@@ -9918,9 +10063,13 @@ function renderCarouselAdmin() {
     var _prevW = _vw - 32; // 양측 16px 패딩 제외
     var _cardH = _vh * 0.595; // 홈 카드 높이
     var _prevH = Math.round(_cardH * (_prevW / _vw)); // 비율 유지
-    prevWrap.style.cssText = 'margin:10px 16px 0;position:relative;border-radius:10px;overflow:hidden;cursor:pointer;width:calc(100% - 0px);';
+    prevWrap.style.cssText = 'margin:10px 0 0;position:relative;border-radius:10px;overflow:hidden;cursor:pointer;width:100%;';
     prevWrap.style.height = _prevH + 'px';
     prevWrap.style.background = hasBg ? 'url('+card.bg+') center/cover no-repeat' : 'linear-gradient(160deg,#1a0a0d 0%,#0d0608 100%)';
+    // 전체 탭으로 사진 선택 (텍스트 블록 드래그가 아닐 때만)
+    prevWrap.addEventListener('click', function(e){
+      if (e.target === prevWrap || e.target === grad) carouselPickPhoto(cid);
+    });
     prevWrap.setAttribute('data-id', cid);
 
     // 그라데이션 오버레이
@@ -9928,12 +10077,7 @@ function renderCarouselAdmin() {
     grad.style.cssText = 'position:absolute;inset:0;background:linear-gradient(to bottom,rgba(0,0,0,.15) 0%,rgba(0,0,0,0) 35%,rgba(0,0,0,.55) 62%,rgba(0,0,0,.92) 100%);pointer-events:none;';
     prevWrap.appendChild(grad);
 
-    // 사진 추가 힌트
-    var photoPh = document.createElement('div');
-    photoPh.style.cssText = 'position:absolute;top:8px;right:8px;background:rgba(0,0,0,.4);border-radius:6px;padding:4px 8px;font-family:Montserrat,sans-serif;font-size:8px;font-weight:700;color:rgba(255,255,255,.6);cursor:pointer;z-index:5;';
-    photoPh.textContent = hasBg ? '📷 변경' : '📷 사진추가';
-    photoPh.onclick = function(e){ e.stopPropagation(); carouselPickPhoto(cid); };
-    prevWrap.appendChild(photoPh);
+    // 사진 없을 때 안내 없음 (클릭으로 선택)
 
     // 키워드 블록 (드래그)
     var kwBlock = document.createElement('div');
