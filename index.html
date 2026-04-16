@@ -3891,12 +3891,14 @@ function openTicketDetail(id){
   var _locked = tcIsLocked(t);
 
   if (_locked) {
-    // 완전 잠금 — 모든 등급 팝업
-    tcShowLockPopup(t, r);
-    return;
+    // 완전 잠금 — 슈퍼어드민만 통과
+    if (_currentRole !== 'superadmin') {
+      tcShowLockPopup(t, r);
+      return;
+    }
   }
-  if (_mOnly && (_grade !== 'M' || _currentRole === 'superadmin')) {
-    // M전용 오픈 상태 — M이 아니면 팝업 (슈퍼어드민은 테스트용으로 팝업 표시)
+  if (_mOnly && _grade !== 'M' && _currentRole !== 'superadmin') {
+    // M전용 오픈 상태 — M등급·슈퍼어드민 외 차단
     tcShowLockPopup(t, r);
     return;
   }
@@ -3917,12 +3919,12 @@ function openTicketDetail(id){
       var title = (pt[idx] && pt[idx].title) || '';
       var desc  = (pt[idx] && pt[idx].desc)  || '';
       var overlay = '';
-      var tx = (pt[idx] && pt[idx].tx !== undefined) ? pt[idx].tx : (idx===0?5:50);
-      var ty = (pt[idx] && pt[idx].ty !== undefined) ? pt[idx].ty : (idx===0?75:45);
-      var dx = (pt[idx] && pt[idx].dx !== undefined) ? pt[idx].dx : (idx===0?5:50);
-      var dy = (pt[idx] && pt[idx].dy !== undefined) ? pt[idx].dy : (idx===0?87:58);
-      var fs  = (pt[idx] && pt[idx].fs)  ? pt[idx].fs  : (idx===2?52:idx===1?22:28);
-      var dfs = (pt[idx] && pt[idx].dfs) ? pt[idx].dfs : Math.max(11, Math.round(fs*0.48));
+      var tx = (pt[idx] && pt[idx].tx !== undefined) ? pt[idx].tx : 2.5;
+      var ty = (pt[idx] && pt[idx].ty !== undefined) ? pt[idx].ty : 86;
+      var dx = (pt[idx] && pt[idx].dx !== undefined) ? pt[idx].dx : 2.6;
+      var dy = (pt[idx] && pt[idx].dy !== undefined) ? pt[idx].dy : 90;
+      var fs  = (pt[idx] && pt[idx].fs)  ? pt[idx].fs  : 28;
+      var dfs = (pt[idx] && pt[idx].dfs) ? pt[idx].dfs : 14;
       var tf  = (pt[idx] && pt[idx].titleFont) || 'Noto Sans KR';
       var df  = (pt[idx] && pt[idx].descFont)  || 'Noto Sans KR';
       var ta  = (pt[idx] && pt[idx].titleAlign) || 'left';
@@ -3936,7 +3938,7 @@ function openTicketDetail(id){
       if (desc) {
         var encFull = encodeURIComponent(detail);  // 더보기에는 추가설명 표시
         var encFont = encodeURIComponent(df);
-        overlay += '<div style="position:absolute;left:'+dx+'%;top:'+dy+'%;transform:translate(-50%,-50%);max-width:85vw;padding:3px 8px;text-align:'+da+';">'
+        overlay += '<div style="position:absolute;left:'+dx+'%;top:'+dy+'%;transform:translate(0,-50%);max-width:85vw;padding:3px 8px;text-align:'+da+';">'
           + (hasMore
             ? '<div onclick="tdExpandDesc(\''+encFull+'\',\''+encFont+'\','+dfs+',\''+da+'\')" style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;pointer-events:all;">'
               + '<span style="font-family:'+df+',sans-serif;font-size:'+dfs+'px;color:rgba(255,255,255,.85);white-space:pre;">'+descFirst+'</span>'
@@ -3951,7 +3953,8 @@ function openTicketDetail(id){
         ? '<div style="position:absolute;bottom:0;left:0;right:0;height:320px;background:linear-gradient(to bottom,transparent 0%,rgba(0,0,0,.85) 50%,#000 100%);pointer-events:none;"></div>'
         : '<div style="position:absolute;bottom:0;left:0;right:0;height:260px;background:linear-gradient(to bottom,transparent 0%,rgba(0,0,0,.7) 60%,#000 100%);pointer-events:none;"></div>';
       var fadeIn  = idx > 0 ? '<div style="position:absolute;top:0;left:0;right:0;height:180px;background:linear-gradient(to top,transparent 0%,rgba(0,0,0,.8) 70%,#000 100%);pointer-events:none;"></div>' : '';
-      return '<div style="position:relative;width:100%;height:100vh;background:url('+src+') center/cover no-repeat;">'
+      var _phH = window.innerHeight;  // 편집 미리보기와 동일한 기준
+      return '<div style="position:relative;width:100%;height:'+_phH+'px;background:url('+src+') center/cover no-repeat;">'
         + fadeIn + fadeOut
         + '<div style="position:absolute;inset:0;z-index:2;pointer-events:none;">' + overlay + '</div>'
         + '</div>';
@@ -4140,32 +4143,14 @@ var _lsMarker = null;
 
 // 타일 레이어 추가 (CartoDB Dark Matter → 실패 시 OSM + 다크 필터)
 function _addMapTiles(mapObj) {
-  var usedFallback = false;
-
-  var darkLayer = L.tileLayer(
-    'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
-    { maxZoom:19, subdomains:'abcd', attribution:'' }
-  );
-  darkLayer.addTo(mapObj);
-
-  // 타일 3개 이상 실패 시 OSM + CSS 다크 필터로 전환
-  var failCount = 0;
-  darkLayer.on('tileerror', function() {
-    failCount++;
-    if (failCount >= 3 && !usedFallback) {
-      usedFallback = true;
-      mapObj.removeLayer(darkLayer);
-      var osmLayer = L.tileLayer(
-        'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-        { maxZoom:19, subdomains:'abc', attribution:'' }
-      );
-      osmLayer.addTo(mapObj);
-      setTimeout(function(){
-        var pane = mapObj.getPane('tilePane');
-        if (pane) pane.style.filter = 'invert(1) hue-rotate(200deg) brightness(0.85) contrast(0.9)';
-      }, 50);
-    }
-  });
+  L.tileLayer(
+    'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    { maxZoom:19, subdomains:'abc', attribution:'' }
+  ).addTo(mapObj);
+  setTimeout(function(){
+    var pane = mapObj.getPane('tilePane');
+    if (pane) pane.style.filter = 'grayscale(1) brightness(0.85) contrast(1.1)';
+  }, 50);
 }
 
 var _fullMap = null;
@@ -4175,6 +4160,9 @@ function openFullMap() {
   var lng  = r ? (r.lng  || null) : null;
   var addr = r ? (r.address || '') : '';
   var photo = r ? (r.photoCard || r.photo || '') : '';
+
+  // 좌표 없으면 풀맵 열지 않음
+  if (!lat || !lng) return;
 
   var overlay = document.getElementById('fullMapOverlay');
   overlay.style.display = 'flex';
@@ -4266,10 +4254,15 @@ function openLocationSheet() {
 
     // 기존 지도 제거
     if (typeof L === 'undefined') { console.warn('Leaflet not loaded'); return; }
-    if (_lsMap) { _lsMap.remove(); _lsMap = null; _lsMarker = null; }
 
-    var defLat = lat || 35.6762;
-    var defLng = lng || 139.6503;
+    // 좌표 없으면 지도 숨김
+    var mapEl2 = document.getElementById('lsMap');
+    if (!lat || !lng) {
+      if (mapEl2) mapEl2.style.display = 'none';
+      return;
+    }
+    if (mapEl2) mapEl2.style.display = 'block';
+    if (_lsMap) { _lsMap.remove(); _lsMap = null; _lsMarker = null; }
 
     _lsMap = L.map('lsMap', {
       zoomControl: false,
@@ -4277,9 +4270,9 @@ function openLocationSheet() {
       scrollWheelZoom: false,
       doubleClickZoom: false,
       keyboard: false,
-      dragging: false,       // 드래그 비활성 (클릭으로 풀스크린)
+      dragging: false,
       touchZoom: false
-    }).setView([defLat, defLng], 16);
+    }).setView([lat, lng], 16);
 
     _addMapTiles(_lsMap);
 
@@ -4297,10 +4290,9 @@ function openLocationSheet() {
       className: ''
     });
 
-    _lsMarker = L.marker([defLat, defLng], { icon: icon }).addTo(_lsMap);
+    _lsMarker = L.marker([lat, lng], { icon: icon }).addTo(_lsMap);
     if (name) _lsMarker.bindTooltip(name, { permanent: false, direction: 'top', offset: [0, -58] });
 
-    // 지도 크기 재계산
     setTimeout(function(){ if(_lsMap) _lsMap.invalidateSize(); }, 300);
   }, 200);
 }
@@ -4493,12 +4485,25 @@ function initSheetMap() {
   var addrEl = document.getElementById('sheetMapAddr');
   if (addrEl) addrEl.textContent = addr || '주소 정보 없음';
 
-  // 지도
   var mapEl = document.getElementById('sheetMap');
-  if (!mapEl || typeof L === 'undefined') return;
+  if (!mapEl) return;
+
+  // 주소·좌표 없으면 지도 숨김
+  if (!addr && !lat && !lng) {
+    mapEl.style.display = 'none';
+    return;
+  }
+  mapEl.style.display = 'block';
+
+  if (typeof L === 'undefined') return;
   if (_sheetMap) { _sheetMap.remove(); _sheetMap = null; }
 
-  var defLat = lat || 35.6762, defLng = lng || 139.6503;
+  // 좌표 없으면 geocoding 불가 → 지도 숨김
+  if (!lat || !lng) {
+    mapEl.style.display = 'none';
+    return;
+  }
+
   _sheetMap = L.map('sheetMap', {
     zoomControl: false,
     attributionControl: false,
@@ -4507,18 +4512,17 @@ function initSheetMap() {
     keyboard: false,
     dragging: false,
     touchZoom: false
-  }).setView([defLat, defLng], 16);
+  }).setView([lat, lng], 16);
 
   _addMapTiles(_sheetMap);
 
-  // 마커
   var iconHtml = photo
     ? '<div style="width:46px;height:46px;border-radius:50%;overflow:hidden;border:3px solid #5C0A14;box-shadow:0 2px 10px rgba(0,0,0,.4);background:#fff;"><img src="' + photo + '" style="width:100%;height:100%;object-fit:cover;"></div>'
     : '<div style="width:36px;height:44px;display:flex;flex-direction:column;align-items:center;">'
       + '<div style="width:28px;height:28px;border-radius:50%;background:#5C0A14;border:2.5px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.4);"></div>'
       + '<div style="width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-top:8px solid #5C0A14;margin-top:-1px;"></div></div>';
 
-  L.marker([defLat, defLng], {
+  L.marker([lat, lng], {
     icon: L.divIcon({ html: iconHtml, iconSize: photo ? [46,46] : [36,44], iconAnchor: photo ? [23,46] : [18,44], className:'' })
   }).addTo(_sheetMap);
 
@@ -6150,14 +6154,16 @@ function rpResetForm() {
   _rpCroppedCard = null;
   _rpCroppedHero = null;
   _rpDetailPhotos = [];
+  _rpGallery = [];
+  _rpPhotoTexts = [{},{},{}];
   _rpAddressEn = ''; _rpLat = null; _rpLng = null; _rpPlaceId = '';
 
   // 자동완성 플래그 리셋
   var addrInp = document.getElementById('rpAddress');
   if (addrInp) addrInp._nominatimBound = false;
 
-  // 텍스트 입력 초기화
-  var fields = ['rpName','rpAddress','rpAddrDetail','rpCorkageAmt','rpCorkageBottles'];
+  // 텍스트 입력 초기화 (restInfo 포함)
+  var fields = ['rpName','rpAddress','rpAddrDetail','rpCorkageAmt','rpCorkageBottles','rpRestInfo'];
   fields.forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
 
   // 주소 선택 초기화
@@ -6171,9 +6177,11 @@ function rpResetForm() {
     document.querySelectorAll('#'+gid+' .rp-btn').forEach(function(b){ b.classList.remove('on'); });
   });
 
-  // 콜키지 기본값 (불가)
+  // 콜키지 기본값 (불가), 재구매 기본값 (제한없음)
   var noCorkage = document.querySelector('#rpCorkageGroup .rp-btn');
   if(noCorkage) noCorkage.classList.add('on');
+  var noRepurchase = document.querySelector('#rpRepurchaseGroup .rp-btn[data-val="0"]');
+  if(noRepurchase) noRepurchase.classList.add('on');
   var corkageWrap = document.getElementById('rpCorkageAmtWrap');
   if(corkageWrap) corkageWrap.style.display='none';
 
@@ -6187,6 +6195,8 @@ function rpResetForm() {
     if(ph) ph.style.display='flex';
   });
   rpRenderDetailPhotos();
+  rpRenderGallery();
+  rpRenderTypo();
 
   // 타이틀 초기화
   var pageTitle = document.querySelector('#restPage .page-title');
@@ -8313,7 +8323,7 @@ function _ticketCardHtml(t,r){
     h+='<div style="position:absolute;inset:0;background:rgba(0,0,0,.5);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);"></div>';
     h+='<div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-family:\'Montserrat\',sans-serif;font-size:12px;font-weight:900;letter-spacing:.18em;color:#fff;text-transform:uppercase;white-space:nowrap;border:1.5px solid rgba(255,255,255,.8);padding:4px 12px;border-radius:4px;">SOLD OUT</div>';
   }
-  // 잠금 오버레이 (등급별 우선공개)
+  // 잠금 오버레이 (등급별 우선공개) — 티켓 상태 기준으로 항상 표시
   var isLocked=(t.gradeOpen&&tcIsLocked(t));
   var isMOnly=(t.gradeOpen&&tcIsMOnly(t));
   if(isLocked || isMOnly){
@@ -9289,9 +9299,10 @@ function getCurrentUserGrade() {
     var el = document.getElementById('mpPhoneText');
     phone = el ? el.textContent.trim() : '';
   }
-  // 기본값이면 비회원
   if (!phone || phone === '010-0000-0000') return 'guest';
-  var m = memberDB.find(function(x){ return x.phone === phone; });
+  // 하이픈 제거 후 비교 (형식 불일치 방지)
+  var phoneNorm = phone.replace(/\D/g, '');
+  var m = memberDB.find(function(x){ return x.phone && x.phone.replace(/\D/g,'') === phoneNorm; });
   if (!m) return 'guest';
   return m.grade || 'T';
 }
@@ -9487,22 +9498,28 @@ function rpRenderTypo() {
   var sec = document.getElementById('rpTypoSection');
   if (!sec) return;
   sec.innerHTML = '';
+  _rpLocked = [true, true, true]; // 렌더 시 기본 고정 상태로 리셋
 
   var labels = ['쉐프 소개','레스토랑 & 코스','시그니처'];
   var phs    = [['레스토랑 이름','한 줄 설명'],['레스토랑을 정의한 한 문장','코스 설명'],['시그니처 단어','시그니처 설명']];
-  var defFs  = [28, 22, 52];
-  var defDFs = [14, 11, 25];
+  var defFs  = [28, 28, 28];
+  var defDFs = [14, 14, 14];
 
-  // 기준 컨테이너 크기 (실제 화면 비율)
-  var baseW = Math.round(window.innerWidth * 0.82);
-  var baseH = Math.round(baseW * (window.innerHeight / window.innerWidth));
+  // 티켓 화면과 동일한 좌표 기준: innerWidth × innerHeight
+  // rpViewport를 풀스크린 크기로 만들고 CSS scale로 축소 → % 좌표 완벽 일치
+  var _vw = window.innerWidth;
+  var _vh = window.innerHeight;
+  var _availW = _vw - 32; // 실제 사용 가능 너비 (16px 패딩 × 2)
+  var _scale = _availW / _vw;  // 축소 비율
+  var baseW = _vw;   // 좌표 기준: 티켓 화면과 동일
+  var baseH = _vh;  // window.innerHeight — 티켓 화면과 동일한 기준
 
   [0,1,2].forEach(function(idx) {
     var pt   = _rpPhotoTexts[idx] || {};
-    var tx   = pt.tx !== undefined ? pt.tx : (idx===0?10:50);
-    var ty   = pt.ty !== undefined ? pt.ty : (idx===0?75:45);
-    var dx   = pt.dx !== undefined ? pt.dx : (idx===0?10:50);
-    var dy   = pt.dy !== undefined ? pt.dy : (idx===0?87:58);
+    var tx   = pt.tx !== undefined ? pt.tx : 2.5;
+    var ty   = pt.ty !== undefined ? pt.ty : 86;
+    var dx   = pt.dx !== undefined ? pt.dx : 2.6;
+    var dy   = pt.dy !== undefined ? pt.dy : 90;
     var fs   = pt.fs  !== undefined ? pt.fs  : defFs[idx];
     var dfs  = pt.dfs !== undefined ? pt.dfs : defDFs[idx];
     var photo = _rpDetailPhotos[idx] || '';
@@ -9536,7 +9553,7 @@ function rpRenderTypo() {
       });
     });
     var gridSvg = '<svg id="rpGrid'+idx+'" xmlns="http://www.w3.org/2000/svg" '
-      +'style="display:none;position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:50;" '
+      +'style="display:block;position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:50;" '
       +'preserveAspectRatio="none">'
       +svgLines+dots+'</svg>';
 
@@ -9554,30 +9571,38 @@ function rpRenderTypo() {
       '<div style="padding:10px 14px 8px;display:flex;align-items:center;justify-content:space-between;">'
         +'<span style="font-family:Montserrat,sans-serif;font-size:8px;font-weight:800;letter-spacing:.18em;color:#c8a96e;">PHOTO '+(idx+1)+' — '+labels[idx]+'</span>'
         +'<div style="display:flex;align-items:center;gap:6px;">'
-          +'<span style="font-size:9px;color:#ccc;">✋드래그 🤏핀치줌</span>'
+          +'<label style="display:flex;align-items:center;gap:4px;cursor:pointer;" onclick="rpToggleLock('+idx+')">'
+            +'<div id="rpLockChk'+idx+'" style="width:14px;height:14px;border-radius:3px;border:1.5px solid #1a1a18;background:#1a1a18;display:flex;align-items:center;justify-content:center;">'
+            +'<svg width="8" height="8" viewBox="0 0 10 10" fill="none" stroke="#fff" stroke-width="2"><polyline points="1,5 4,8 9,2"/></svg>'
+            +'</div>'
+            +'<span style="font-family:Montserrat,sans-serif;font-size:8px;font-weight:700;color:#1a1a18;">위치고정</span>'
+          +'</label>'
           +'<button id="rpGridBtn'+idx+'" onclick="rpToggleGrid('+idx+')" '
-            +'style="padding:3px 8px;border-radius:5px;border:1px solid #ddd;background:#fff;'
-            +'font-family:Montserrat,sans-serif;font-size:8px;font-weight:700;color:#999;cursor:pointer;">GRID</button>'
+            +'style="padding:3px 8px;border-radius:5px;border:1px solid #ddd;background:#1a1a18;'
+            +'font-family:Montserrat,sans-serif;font-size:8px;font-weight:700;color:#c8a96e;cursor:pointer;">GRID ✓</button>'
         +'</div>'
       +'</div>'
-      // 뷰포트 (고정 크기, overflow hidden)
-      +'<div id="rpViewport'+idx+'" style="width:'+baseW+'px;height:'+baseH+'px;margin:0 auto;overflow:hidden;position:relative;">'
-        // 캔버스 (이미지 + 텍스트 + 그리드 전체가 scale 됨)
+      // 뷰포트: 풀사이즈(tiket 동일) CSS, scale로 화면에 맞게 축소 → % 좌표 완벽 일치
+      +'<div style="width:'+Math.round(_availW)+'px;height:'+Math.round(_vh*_scale)+'px;overflow:hidden;position:relative;margin:0 auto;">'
+      +'<div id="rpViewport'+idx+'" style="width:'+baseW+'px;height:'+baseH+'px;overflow:hidden;position:relative;transform:scale('+_scale+');transform-origin:top left;">'
+        // 캔버스
         +'<div id="rpCanvas'+idx+'" style="position:absolute;top:0;left:0;width:'+baseW+'px;height:'+baseH+'px;transform-origin:center center;transform:scale(1);'+bgCss+'">'
           +gridSvg
           // 제목 블록
           +'<div id="rpTypoBlockT'+idx+'" data-key="title" '
-            +'style="position:absolute;left:'+tx+'%;top:'+ty+'%;transform:translate(-50%,-50%);'
+            +'style="position:absolute;left:'+tx+'%;top:'+ty+'%;transform:translate(0,-50%);'
             +'width:max-content;padding:3px 8px;border-radius:4px;'
             +'border:1px dashed rgba(255,200,100,.8);cursor:grab;touch-action:none;user-select:none;">'
             +'<div id="rpTT'+idx+'" style="font-family:'+tFont+',sans-serif;font-size:'+fs+'px;font-weight:700;color:#fff;white-space:pre;">'+( pt.title||ph[0])+'</div>'
+            +'<div id="rpCoord_'+idx+'_t" style="font-family:Montserrat,sans-serif;font-size:8px;color:rgba(255,200,100,.9);margin-top:2px;pointer-events:none;">X:'+tx+' Y:'+ty+'</div>'
           +'</div>'
           // 설명 블록
           +'<div id="rpTypoBlockD'+idx+'" data-key="desc" '
-            +'style="position:absolute;left:'+dx+'%;top:'+dy+'%;transform:translate(-50%,-50%);'
+            +'style="position:absolute;left:'+dx+'%;top:'+dy+'%;transform:translate(0,-50%);'
             +'width:max-content;padding:3px 8px;border-radius:4px;'
             +'border:1px dashed rgba(100,180,255,.8);cursor:grab;touch-action:none;user-select:none;">'
             +'<div id="rpTD'+idx+'" style="font-family:'+dFont+',sans-serif;font-size:'+dfs+'px;color:rgba(255,255,255,.85);white-space:pre;">'+(pt.desc||ph[1])+'</div>'
+            +'<div id="rpCoord_'+idx+'_d" style="font-family:Montserrat,sans-serif;font-size:8px;color:rgba(100,180,255,.9);margin-top:2px;pointer-events:none;">X:'+dx+' Y:'+dy+'</div>'
           +'</div>'
           +(!photo?'<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;"><span style="font-size:11px;color:rgba(255,255,255,.3);">사진 추가 후 미리보기</span></div>':'')
           // 구매하기 버튼 위치 가이드
@@ -9585,6 +9610,7 @@ function rpRenderTypo() {
           +'<div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-family:Montserrat,sans-serif;font-size:9px;font-weight:700;letter-spacing:.08em;color:rgba(255,120,120,.9);white-space:nowrap;">구매하기 버튼 영역</div>'
           +'</div>'
         +'</div>'
+      +'</div>'
       +'</div>'
       // 입력 섹션
       +'<div style="padding:10px 14px 14px;display:flex;flex-direction:column;gap:10px;">'
@@ -9678,23 +9704,29 @@ function rpRenderTypo() {
           var sc = (cv ? cv.offsetWidth : baseW) / window.innerWidth;
 
           function startDrag(cx, cy) {
+            if (_rpLocked[i]) return; // 위치고정 상태면 드래그 차단
             dragging = true;
             _rpDragTarget = isTitle ? i : i+10;
             var br = bl.getBoundingClientRect();
-            ox = cx - br.left - br.width/2;
-            oy = cy - br.top  - br.height/2;
+            ox = cx - br.left;              // 왼쪽 끝 기준
+            oy = cy - br.top  - br.height/2;  // Y는 중앙 기준
             bl.style.cursor = 'grabbing';
           }
           function moveDrag(cx, cy) {
             if (!dragging) return;
             var cr = cv.getBoundingClientRect();
-            var px = Math.max(2, Math.min(98, (cx - ox - cr.left) / cr.width  * 100));
-            var py = Math.max(2, Math.min(98, (cy - oy - cr.top)  / cr.height * 100));
+            var vpLeft = cr.left;
+            var vpTop  = cr.top;
+            var px = Math.max(2, Math.min(98, (cx - ox - vpLeft) / (cr.width) * 100));
+            var py = Math.max(2, Math.min(98, (cy - oy - vpTop)  / (cr.height) * 100));
             bl.style.left = px+'%';
             bl.style.top  = py+'%';
             if (!_rpPhotoTexts[i]) _rpPhotoTexts[i] = {};
             _rpPhotoTexts[i][xKey] = Math.round(px*10)/10;
             _rpPhotoTexts[i][yKey] = Math.round(py*10)/10;
+            // 좌표 실시간 표시
+            var coordEl = document.getElementById('rpCoord_'+i+'_'+(isTitle?'t':'d'));
+            if (coordEl) coordEl.textContent = 'X:'+Math.round(px*10)/10+' Y:'+Math.round(py*10)/10;
           }
           function endDrag() {
             dragging = false;
@@ -9773,6 +9805,25 @@ function rpRenderTypo() {
 }
 
 
+// 포토별 위치고정 상태 (기본: true = 고정됨)
+var _rpLocked = [true, true, true];
+
+function rpToggleLock(idx) {
+  _rpLocked[idx] = !_rpLocked[idx];
+  var chk = document.getElementById('rpLockChk'+idx);
+  if (chk) {
+    chk.style.background = _rpLocked[idx] ? '#1a1a18' : '#fff';
+    chk.innerHTML = _rpLocked[idx]
+      ? '<svg width="8" height="8" viewBox="0 0 10 10" fill="none" stroke="#fff" stroke-width="2"><polyline points="1,5 4,8 9,2"/></svg>'
+      : '';
+  }
+  // 텍스트 블록 grab 커서 표시/숨김
+  ['rpTypoBlockT'+idx, 'rpTypoBlockD'+idx].forEach(function(id){
+    var el = document.getElementById(id);
+    if (el) el.style.cursor = _rpLocked[idx] ? 'default' : 'grab';
+  });
+}
+
 function rpToggleGrid(idx) {
   var grid = document.getElementById('rpGrid'+idx);
   var btn  = document.getElementById('rpGridBtn'+idx);
@@ -9820,8 +9871,8 @@ function rpSetFont(idx, target, fontName) {
 
 
 function rpSetFontSize(idx, target, delta) {
-  var defFs  = [28, 22, 52];
-  var defDFs = [14, 11, 25];
+  var defFs  = [28, 28, 28];
+  var defDFs = [14, 14, 14];
   if (!_rpPhotoTexts[idx]) _rpPhotoTexts[idx] = {};
   if (target === 'title') {
     var cur = _rpPhotoTexts[idx].fs !== undefined ? _rpPhotoTexts[idx].fs : defFs[idx];
@@ -9871,12 +9922,12 @@ function rpGetPhotoTexts() {
       title: ti ? ti.value.trim() : (_rpPhotoTexts[i].title||''),
       desc:  di ? di.value.trim() : (_rpPhotoTexts[i].desc||''),
       detail: det ? det.value.trim() : (_rpPhotoTexts[i].detail||''),
-      tx: _rpPhotoTexts[i].tx !== undefined ? _rpPhotoTexts[i].tx : (i===0?10:50),
-      ty: _rpPhotoTexts[i].ty !== undefined ? _rpPhotoTexts[i].ty : (i===0?75:45),
-      dx: _rpPhotoTexts[i].dx !== undefined ? _rpPhotoTexts[i].dx : (i===0?10:50),
-      dy: _rpPhotoTexts[i].dy !== undefined ? _rpPhotoTexts[i].dy : (i===0?87:58),
-      fs:  _rpPhotoTexts[i].fs  !== undefined ? _rpPhotoTexts[i].fs  : [28,22,52][i],
-      dfs: _rpPhotoTexts[i].dfs !== undefined ? _rpPhotoTexts[i].dfs : [14,11,25][i],
+      tx: _rpPhotoTexts[i].tx !== undefined ? _rpPhotoTexts[i].tx : 2.5,
+      ty: _rpPhotoTexts[i].ty !== undefined ? _rpPhotoTexts[i].ty : 86,
+      dx: _rpPhotoTexts[i].dx !== undefined ? _rpPhotoTexts[i].dx : 2.6,
+      dy: _rpPhotoTexts[i].dy !== undefined ? _rpPhotoTexts[i].dy : 90,
+      fs:  _rpPhotoTexts[i].fs  !== undefined ? _rpPhotoTexts[i].fs  : 28,
+      dfs: _rpPhotoTexts[i].dfs !== undefined ? _rpPhotoTexts[i].dfs : 14,
       titleFont:  _rpPhotoTexts[i].titleFont  || 'Noto Sans KR',
       descFont:   _rpPhotoTexts[i].descFont   || 'Noto Sans KR',
       titleAlign: _rpPhotoTexts[i].titleAlign || 'left',
