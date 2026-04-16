@@ -11,6 +11,8 @@
 <link rel="preload" as="style" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css" onload="this.onload=null;this.rel='stylesheet'">
 <noscript><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css"></noscript>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js" defer></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js" defer></script>
 
 <style>
 /* ═══════════════════════════════════════
@@ -185,6 +187,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:Not
 #tkCalOverlay{position:fixed;inset:0;z-index:700;background:rgba(0,0,0,.6);display:none;align-items:flex-end;justify-content:center;backdrop-filter:blur(3px);}
 #tkCalSheet{background:#fff;border-radius:24px 24px 0 0;width:100%;max-width:480px;padding:0 0 40px;animation:tkSlideUp .35s cubic-bezier(.22,1,.36,1);min-height:520px;}
 @keyframes tkSlideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
+@keyframes slideUpSheet{from{transform:translateY(100%)}to{transform:translateY(0)}}
 .tk-cal-handle{width:36px;height:4px;background:#e0e0e0;border-radius:2px;margin:14px auto 0;}
 .tk-cal-header{display:flex;align-items:center;justify-content:center;padding:22px 16px 10px;position:relative;}
 .tk-cal-title{font-family:'Montserrat',sans-serif;font-size:18px;font-weight:700;color:#111;letter-spacing:.02em;text-align:center;flex:1;}
@@ -1294,6 +1297,11 @@ window._googlePSvc = null;
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg>
   </button>
 
+  <!-- 위치 버튼 (고정) -->
+  <button id="tdLocationBtn" onclick="openLocationSheet()" style="position:fixed;bottom:96px;right:20px;z-index:530;width:44px;height:44px;border-radius:50%;background:#fff;border:none;display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 2px 12px rgba(0,0,0,.18);">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#5C0A14" stroke-width="2.2" stroke-linecap="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
+  </button>
+
   <!-- 사진 가로 슬라이더 -->
   <div id="tdPhotosWrap"></div>
 
@@ -1405,6 +1413,43 @@ window._googlePSvc = null;
   </div>
 </div>
 
+<!-- FULLSCREEN MAP OVERLAY -->
+<div id="fullMapOverlay" style="display:none;position:fixed;inset:0;z-index:950;background:#fff;flex-direction:column;">
+  <div id="fullMap" style="flex:1;width:100%;height:100%;"></div>
+  <button onclick="closeFullMap()" style="position:absolute;top:52px;left:16px;z-index:960;width:38px;height:38px;border-radius:50%;background:#fff;border:none;box-shadow:0 2px 10px rgba(0,0,0,.18);display:flex;align-items:center;justify-content:center;cursor:pointer;">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#333" stroke-width="2.5" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg>
+  </button>
+  <div id="fullMapAddr" style="position:absolute;bottom:40px;left:50%;transform:translateX(-50%);background:#fff;border-radius:12px;padding:10px 18px;box-shadow:0 2px 16px rgba(0,0,0,.15);font-family:'Noto Sans KR',sans-serif;font-size:12px;color:#333;white-space:nowrap;max-width:90vw;overflow:hidden;text-overflow:ellipsis;"></div>
+</div>
+
+<!-- LOCATION SHEET -->
+<div id="tdLocationSheet" onclick="if(event.target===this)closeLocationSheet()" style="display:none;position:fixed;inset:0;z-index:800;background:rgba(0,0,0,.55);align-items:flex-end;justify-content:center;">
+  <div style="width:100%;max-width:480px;height:88vh;background:#fff;border-radius:22px 22px 0 0;display:flex;flex-direction:column;overflow:hidden;animation:slideUpSheet .35s cubic-bezier(.22,1,.36,1);">
+    <!-- 핸들 + 닫기 -->
+    <div style="padding:14px 20px 0;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
+      <div style="width:36px;height:4px;background:#e0ddd8;border-radius:2px;"></div>
+      <div style="font-family:'Montserrat',sans-serif;font-size:9px;font-weight:800;letter-spacing:.2em;color:#aaa;">LOCATION</div>
+      <button onclick="closeLocationSheet()" style="width:28px;height:28px;border-radius:50%;border:none;background:#f0ede8;font-size:14px;color:#888;cursor:pointer;">✕</button>
+    </div>
+    <!-- 레스토랑명 + 주소 -->
+    <div style="padding:12px 20px 10px;flex-shrink:0;">
+      <div id="lsRestName" style="font-family:'Noto Sans KR',sans-serif;font-size:16px;font-weight:900;color:#111;margin-bottom:2px;"></div>
+      <div id="lsAddr" style="font-family:'Noto Sans KR',sans-serif;font-size:12px;color:#888;"></div>
+    </div>
+    <!-- 지도 (Leaflet) -->
+    <div id="lsMap" style="flex-shrink:0;height:260px;width:100%;background:#e8e4e0;position:relative;cursor:pointer;" onclick="openFullMap()"></div>
+    <!-- 스크롤 영역: 갤러리 -->
+    <div style="flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;">
+      <!-- 갤러리 섹션 -->
+      <div style="padding:16px 20px 8px;">
+        <div style="font-family:'Montserrat',sans-serif;font-size:8px;font-weight:800;letter-spacing:.2em;color:#aaa;margin-bottom:12px;">GALLERY</div>
+        <div id="lsGallery" style="display:grid;grid-template-columns:repeat(3,1fr);gap:3px;border-radius:10px;overflow:hidden;"></div>
+        <div id="lsGalleryEmpty" style="display:none;text-align:center;padding:30px 0;font-family:'Noto Sans KR',sans-serif;font-size:12px;color:#ccc;">등록된 사진이 없어요</div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- TD PURCHASE SHEET (구매하기 → 바텀시트) -->
 <div id="tdPurchaseSheet" onclick="if(event.target===this)document.getElementById('tdPurchaseSheet').style.display='none'">
   <div style="background:#fff;border-radius:24px 24px 0 0;width:100%;max-width:480px;height:82vh;display:flex;flex-direction:column;">
@@ -1417,7 +1462,7 @@ window._googlePSvc = null;
     <!-- 탭 -->
     <div style="display:flex;border-bottom:1px solid #f0ede8;margin:12px 0 0;flex-shrink:0;">
       <button id="sheetTab0" onclick="switchSheetTab(0)" style="flex:1;padding:12px 8px;border:none;background:none;font-family:Noto Sans KR,sans-serif;font-size:12px;font-weight:800;color:#1a1a18;border-bottom:2px solid #5C0A14;cursor:pointer;white-space:nowrap;">결제 내역 및 취소규정</button>
-      <button id="sheetTab1" onclick="switchSheetTab(1)" style="flex:1;padding:12px 8px;border:none;background:none;font-family:Noto Sans KR,sans-serif;font-size:12px;font-weight:700;color:#aaa;border-bottom:2px solid transparent;cursor:pointer;white-space:nowrap;">티켓 상세설명</button>
+      <button id="sheetTab1" onclick="switchSheetTab(1)" style="flex:1;padding:12px 8px;border:none;background:none;font-family:Noto Sans KR,sans-serif;font-size:12px;font-weight:700;color:#aaa;border-bottom:2px solid transparent;cursor:pointer;white-space:nowrap;">위치 및 상세설명</button>
     </div>
 
     <!-- 패널 0: 결제 내역 및 취소규정 -->
@@ -1453,10 +1498,25 @@ window._googlePSvc = null;
       <div id="tdConfirmPolicy" style="font-size:13px;color:#444;line-height:1.85;margin-bottom:20px;"></div>
     </div>
 
-    <!-- 패널 1: 티켓 상세설명 -->
-    <div id="sheetPanel1" style="display:none;flex:1;overflow-y:auto;padding:20px;">
-      <div style="font-family:'Montserrat',sans-serif;font-size:8px;font-weight:800;letter-spacing:.2em;color:#aaa;margin-bottom:12px;">TICKET DESCRIPTION</div>
-      <div id="tdSheetDesc" style="font-family:Noto Sans KR,sans-serif;font-size:14px;color:#333;line-height:1.9;white-space:pre-wrap;margin-bottom:24px;"></div>
+    <!-- 패널 1: 위치 및 상세설명 -->
+    <div id="sheetPanel1" style="display:none;flex:1;overflow-y:auto;">
+      <!-- 지도 -->
+      <div id="sheetMap" style="width:100%;height:200px;background:#e8e4e0;flex-shrink:0;position:relative;cursor:pointer;" onclick="openFullMap()">
+        <div style="position:absolute;bottom:8px;right:8px;z-index:10;background:rgba(255,255,255,.9);border-radius:6px;padding:4px 9px;font-family:'Montserrat',sans-serif;font-size:8px;font-weight:700;letter-spacing:.1em;color:#555;pointer-events:none;box-shadow:0 1px 6px rgba(0,0,0,.12);">전체보기 ↗</div>
+      </div>
+      <!-- 주소 + 복사 -->
+      <div style="padding:14px 20px;border-bottom:1px solid #f0ede8;display:flex;align-items:center;justify-content:space-between;gap:12px;">
+        <div style="flex:1;">
+          <div style="font-family:'Montserrat',sans-serif;font-size:8px;font-weight:800;letter-spacing:.18em;color:#aaa;margin-bottom:5px;">ADDRESS</div>
+          <div id="sheetMapAddr" style="font-family:'Noto Sans KR',sans-serif;font-size:13px;font-weight:600;color:#333;line-height:1.5;"></div>
+        </div>
+        <button onclick="sheetCopyAddr()" style="flex-shrink:0;padding:9px 14px;background:#f4f2ef;border:1px solid #e0ddd8;border-radius:8px;font-family:'Noto Sans KR',sans-serif;font-size:11px;font-weight:700;color:#555;cursor:pointer;white-space:nowrap;">복사</button>
+      </div>
+      <!-- 티켓 설명 -->
+      <div style="padding:18px 20px 24px;">
+        <div style="font-family:'Montserrat',sans-serif;font-size:8px;font-weight:800;letter-spacing:.2em;color:#aaa;margin-bottom:12px;">TICKET DESCRIPTION</div>
+        <div id="tdSheetDesc" style="font-family:Noto Sans KR,sans-serif;font-size:14px;color:#333;line-height:1.9;white-space:pre-wrap;"></div>
+      </div>
     </div>
 
     <!-- 결제하기 버튼 (고정 하단) -->
@@ -2221,6 +2281,18 @@ window._googlePSvc = null;
         <button class="rp-btn" onclick="rpSelect(this,'rpRepurchaseGroup')" data-val="90">90일</button>
         <button class="rp-btn on" onclick="rpSelect(this,'rpRepurchaseGroup')" data-val="0">제한없음</button>
       </div>
+    </div>
+    <!-- 갤러리 사진 업로드 (위치 시트에 표시됨) -->
+    <div class="rp-field">
+      <label class="rp-label">갤러리 <span style="color:#bbb;font-weight:400;">위치 시트에 표시</span></label>
+      <div style="font-family:'Noto Sans KR',sans-serif;font-size:11px;color:#aaa;margin-bottom:10px;">매장 분위기, 음식 사진을 추가하면 유저가 위치 확인 시 함께 볼 수 있어요</div>
+      <!-- 숨긴 파일 input -->
+      <input type="file" id="rpGalleryFile" accept="image/*" multiple style="display:none;" onchange="rpGalleryAdd(this)">
+      <!-- 갤러리 프리뷰 그리드 -->
+      <div id="rpGalleryGrid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:8px;"></div>
+      <button type="button" onclick="document.getElementById('rpGalleryFile').click()" style="width:100%;padding:11px;border:1.5px dashed #ddd;border-radius:10px;background:#fafafa;font-family:'Noto Sans KR',sans-serif;font-size:12px;color:#aaa;cursor:pointer;">
+        + 사진 추가
+      </button>
     </div>
     <button class="rp-submit" onclick="submitRestaurant()">등록</button>
   </div>
@@ -3920,9 +3992,174 @@ function tdOpenGoogleMap() {
 
 function closeTicketDetail(){
   document.getElementById('ticketDetailScreen').style.display='none';
+  closeLocationSheet();
   // GNB 복원
   var gnb = document.getElementById('mainGnb');
   if (gnb) gnb.style.display = 'flex';
+}
+
+// ── LOCATION SHEET ──
+var _lsMap = null;
+var _lsMarker = null;
+
+var _fullMap = null;
+function openFullMap() {
+  var r = currentRest;
+  var lat  = r ? (r.lat  || null) : null;
+  var lng  = r ? (r.lng  || null) : null;
+  var addr = r ? (r.address || '') : '';
+  var photo = r ? (r.photoCard || r.photo || '') : '';
+
+  var overlay = document.getElementById('fullMapOverlay');
+  overlay.style.display = 'flex';
+
+  var addrEl = document.getElementById('fullMapAddr');
+  if (addrEl) addrEl.textContent = addr || '';
+
+  setTimeout(function() {
+    if (_fullMap) { _fullMap.remove(); _fullMap = null; }
+
+    var defLat = lat || 35.6762, defLng = lng || 139.6503;
+    _fullMap = L.map('fullMap', {
+      zoomControl: false,
+      attributionControl: false,
+      scrollWheelZoom: true,
+      doubleClickZoom: true,
+      keyboard: false,
+      dragging: true,
+      touchZoom: true
+    }).setView([defLat, defLng], 16);
+
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+      maxZoom: 19, subdomains: 'abcd'
+    }).addTo(_fullMap);
+
+    // 마커
+    var iconHtml = photo
+      ? '<div style="width:52px;height:52px;border-radius:50%;overflow:hidden;border:3px solid #5C0A14;box-shadow:0 2px 12px rgba(0,0,0,.35);background:#fff;"><img src="' + photo + '" style="width:100%;height:100%;object-fit:cover;"></div>'
+      : '<div style="width:30px;height:38px;display:flex;flex-direction:column;align-items:center;">'
+        + '<div style="width:26px;height:26px;border-radius:50%;background:#5C0A14;border:2.5px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.35);"></div>'
+        + '<div style="width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-top:10px solid #5C0A14;margin-top:-1px;"></div></div>';
+
+    L.marker([defLat, defLng], {
+      icon: L.divIcon({ html: iconHtml, iconSize: photo?[52,52]:[30,38], iconAnchor: photo?[26,52]:[15,38], className:'' })
+    }).addTo(_fullMap);
+
+    _fullMap.invalidateSize();
+  }, 80);
+}
+
+function closeFullMap() {
+  document.getElementById('fullMapOverlay').style.display = 'none';
+  if (_fullMap) { _fullMap.remove(); _fullMap = null; }
+}
+
+function openLocationSheet() {
+  var r = currentRest;
+  var t = currentTicket;
+  if (!r && !t) return;
+
+  var name = r ? r.name : (t ? t.rest : '');
+  var addr = r ? (r.address || '') : '';
+  var lat  = r ? (r.lat || null) : null;
+  var lng  = r ? (r.lng || null) : null;
+  var photo = r ? (r.photoCard || r.photo || '') : '';
+  var gallery = r ? (r.gallery || []) : [];
+
+  document.getElementById('lsRestName').textContent = name;
+  document.getElementById('lsAddr').textContent = addr || '주소 정보 없음';
+
+  var sheet = document.getElementById('tdLocationSheet');
+  sheet.style.display = 'flex';
+
+  // 갤러리
+  var galleryEl = document.getElementById('lsGallery');
+  var galleryEmpty = document.getElementById('lsGalleryEmpty');
+  // detailPhotos + gallery 합쳐서 표시
+  var allPhotos = [];
+  if (r && r.detailPhotos && r.detailPhotos.length) allPhotos = allPhotos.concat(r.detailPhotos);
+  if (gallery.length) allPhotos = allPhotos.concat(gallery);
+
+  if (allPhotos.length > 0) {
+    galleryEl.style.display = 'grid';
+    galleryEmpty.style.display = 'none';
+    galleryEl.innerHTML = allPhotos.map(function(src, i) {
+      return '<div style="aspect-ratio:1;overflow:hidden;background:#f0ede8;cursor:pointer;" onclick="lsOpenPhoto(\'' + i + '\')">'
+        + '<img src="' + src + '" style="width:100%;height:100%;object-fit:cover;" loading="lazy">'
+        + '</div>';
+    }).join('');
+    window._lsAllPhotos = allPhotos;
+  } else {
+    galleryEl.style.display = 'none';
+    galleryEmpty.style.display = 'block';
+  }
+
+  // 지도 초기화 (Leaflet)
+  setTimeout(function() {
+    var mapEl = document.getElementById('lsMap');
+    if (!mapEl) return;
+
+    // 기존 지도 제거
+    if (_lsMap) { _lsMap.remove(); _lsMap = null; _lsMarker = null; }
+
+    var defLat = lat || 35.6762;
+    var defLng = lng || 139.6503;
+
+    _lsMap = L.map('lsMap', {
+      zoomControl: false,
+      attributionControl: false,
+      scrollWheelZoom: false,
+      doubleClickZoom: false,
+      keyboard: false,
+      dragging: false,       // 드래그 비활성 (클릭으로 풀스크린)
+      touchZoom: false
+    }).setView([defLat, defLng], 16);
+
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+      maxZoom: 19,
+      subdomains: 'abcd'
+    }).addTo(_lsMap);
+
+    // 원형 사진 마커
+    var markerHtml = photo
+      ? '<div style="width:54px;height:54px;border-radius:50%;overflow:hidden;border:3px solid #5C0A14;box-shadow:0 3px 12px rgba(0,0,0,.4);background:#fff;">'
+        + '<img src="' + photo + '" style="width:100%;height:100%;object-fit:cover;"></div>'
+      : '<div style="width:54px;height:54px;border-radius:50%;background:#5C0A14;border:3px solid #fff;box-shadow:0 3px 12px rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;">'
+        + '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg></div>';
+
+    var icon = L.divIcon({
+      html: markerHtml,
+      iconSize: [54, 54],
+      iconAnchor: [27, 54],
+      className: ''
+    });
+
+    _lsMarker = L.marker([defLat, defLng], { icon: icon }).addTo(_lsMap);
+    if (name) _lsMarker.bindTooltip(name, { permanent: false, direction: 'top', offset: [0, -58] });
+
+    // 지도 크기 재계산
+    setTimeout(function(){ _lsMap.invalidateSize(); }, 100);
+  }, 80);
+}
+
+function closeLocationSheet() {
+  var sheet = document.getElementById('tdLocationSheet');
+  if (sheet) sheet.style.display = 'none';
+}
+
+function lsOpenPhoto(idx) {
+  var photos = window._lsAllPhotos || [];
+  var src = photos[idx];
+  if (!src) return;
+  // 간단한 풀스크린 뷰어
+  var overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:900;background:rgba(0,0,0,.95);display:flex;align-items:center;justify-content:center;';
+  overlay.onclick = function(){ document.body.removeChild(overlay); };
+  var img = document.createElement('img');
+  img.src = src;
+  img.style.cssText = 'max-width:100%;max-height:100%;object-fit:contain;';
+  overlay.appendChild(img);
+  document.body.appendChild(overlay);
 }
 
 function tdToggleAccordion() {
@@ -4078,6 +4315,69 @@ function switchSheetTab(idx) {
   document.getElementById('sheetTab1').style.color       = idx===1 ? '#1a1a18' : '#aaa';
   document.getElementById('sheetTab1').style.fontWeight  = idx===1 ? '800' : '700';
   document.getElementById('sheetTab1').style.borderBottomColor = idx===1 ? '#5C0A14' : 'transparent';
+  if (idx === 1) initSheetMap();
+}
+
+var _sheetMap = null;
+function initSheetMap() {
+  var r = currentRest;
+  var addr = r ? (r.address || '') : '';
+  var lat  = r ? (r.lat  || null) : null;
+  var lng  = r ? (r.lng  || null) : null;
+  var photo = r ? (r.photoCard || r.photo || '') : '';
+
+  // 주소 세팅
+  var addrEl = document.getElementById('sheetMapAddr');
+  if (addrEl) addrEl.textContent = addr || '주소 정보 없음';
+
+  // 지도
+  var mapEl = document.getElementById('sheetMap');
+  if (!mapEl || typeof L === 'undefined') return;
+  if (_sheetMap) { _sheetMap.remove(); _sheetMap = null; }
+
+  var defLat = lat || 35.6762, defLng = lng || 139.6503;
+  _sheetMap = L.map('sheetMap', {
+    zoomControl: false,
+    attributionControl: false,
+    scrollWheelZoom: false,
+    doubleClickZoom: false,
+    keyboard: false,
+    dragging: false,
+    touchZoom: false
+  }).setView([defLat, defLng], 16);
+
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+    maxZoom: 19,
+    subdomains: 'abcd'
+  }).addTo(_sheetMap);
+
+  // 마커
+  var iconHtml = photo
+    ? '<div style="width:46px;height:46px;border-radius:50%;overflow:hidden;border:3px solid #5C0A14;box-shadow:0 2px 10px rgba(0,0,0,.4);background:#fff;"><img src="' + photo + '" style="width:100%;height:100%;object-fit:cover;"></div>'
+    : '<div style="width:36px;height:44px;display:flex;flex-direction:column;align-items:center;">'
+      + '<div style="width:28px;height:28px;border-radius:50%;background:#5C0A14;border:2.5px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.4);"></div>'
+      + '<div style="width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-top:8px solid #5C0A14;margin-top:-1px;"></div></div>';
+
+  L.marker([defLat, defLng], {
+    icon: L.divIcon({ html: iconHtml, iconSize: photo ? [46,46] : [36,44], iconAnchor: photo ? [23,46] : [18,44], className:'' })
+  }).addTo(_sheetMap);
+
+  setTimeout(function(){ _sheetMap.invalidateSize(); }, 80);
+}
+
+function sheetCopyAddr() {
+  var r = currentRest;
+  var addr = r ? (r.address || '') : '';
+  if (!addr) { showToast('⚠','주소 없음','등록된 주소가 없어요'); return; }
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(addr).then(function(){ showToast('✓','복사 완료','주소가 복사됐어요'); });
+  } else {
+    var ta = document.createElement('textarea');
+    ta.value = addr; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select(); document.execCommand('copy');
+    document.body.removeChild(ta);
+    showToast('✓','복사 완료','주소가 복사됐어요');
+  }
 }
 
 function sheetAdjPax(delta) {
@@ -5739,8 +6039,37 @@ var _rpCroppedCard = null;
 var _rpCroppedHero = null;
 var _rpDetailPhotos = []; // 최대 5장
 var _rpDetailPhotoMax = 5;
+var _rpGallery = []; // 갤러리 사진 (위치 시트용, 최대 9장)
 var _rpCarouselCropId = null; // 앱카드 크롭 시 대상 카드 id
 
+function rpGalleryAdd(input) {
+  if (!input.files || !input.files.length) return;
+  var remaining = 9 - _rpGallery.length;
+  if (remaining <= 0) { showToast('⚠','최대','갤러리는 최대 9장까지 추가 가능해요'); return; }
+  var files = Array.from(input.files).slice(0, remaining);
+  files.forEach(function(file) {
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      _rpGallery.push(e.target.result);
+      rpRenderGallery();
+    };
+    reader.readAsDataURL(file);
+  });
+}
+function rpRenderGallery() {
+  var grid = document.getElementById('rpGalleryGrid');
+  if (!grid) return;
+  grid.innerHTML = _rpGallery.map(function(src, i) {
+    return '<div style="position:relative;aspect-ratio:1;border-radius:8px;overflow:hidden;background:#f0ede8;">'
+      + '<img src="' + src + '" style="width:100%;height:100%;object-fit:cover;">'
+      + '<button onclick="rpGalleryRemove(' + i + ')" style="position:absolute;top:3px;right:3px;width:20px;height:20px;border-radius:50%;background:rgba(0,0,0,.55);border:none;color:#fff;font-size:11px;cursor:pointer;display:flex;align-items:center;justify-content:center;">✕</button>'
+      + '</div>';
+  }).join('');
+}
+function rpGalleryRemove(idx) {
+  _rpGallery.splice(idx, 1);
+  rpRenderGallery();
+}
 function rpPickDetailPhoto() {
   if (_rpDetailPhotos.length >= _rpDetailPhotoMax) {
     showToast('⚠','최대 5장','티켓 상세 사진은 최대 5장까지 등록 가능합니다'); return;
@@ -6033,6 +6362,8 @@ function rpEditRest(id) {
   _rpCroppedHero = r.photoHero || null;
   _rpDetailPhotos = (r.detailPhotos||[]).slice();
   rpRenderDetailPhotos();
+  _rpGallery = (r.gallery||[]).slice();
+  rpRenderGallery();
   _rpPhotoTexts = (r.photoTexts||[{},{},{}]).map(function(p){ return p||{}; });
   while(_rpPhotoTexts.length<3) _rpPhotoTexts.push({});
   rpRenderTypo();
@@ -6231,6 +6562,7 @@ function submitRestaurant(){
     photoCard:_rpCroppedCard||'',
     photoHero:_rpCroppedHero||'',
     detailPhotos:_rpDetailPhotos.slice(),
+    gallery:_rpGallery.slice(),
     photoTexts: rpGetPhotoTexts(),
     corkage:corkage,
     corkageAmt:corkageIsYes&&corkageRaw?parseInt(corkageRaw):0,
@@ -6288,7 +6620,8 @@ function finalSubmitRestaurant(){
   closeRestPage();
   showToast('✓','등록 완료','\''+_pendingRest.name+'\' 등록되었습니다');
   // 크롭 상태 초기화
-  _rpCroppedCard=null; _rpCroppedHero=null; _rpDetailPhotos=[];
+  _rpCroppedCard=null; _rpCroppedHero=null; _rpDetailPhotos=[]; _rpGallery=[];
+  rpRenderGallery();
   var riEl=document.getElementById('rpRestInfo'); if(riEl) riEl.value='';
   rpRenderDetailPhotos();
   _rpPhotoTexts=[{},{},{}]; rpRenderTypo();
