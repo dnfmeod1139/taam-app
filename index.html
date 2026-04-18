@@ -5286,12 +5286,38 @@ function switchSheetTab(idx) {
 }
 
 var _sheetMap = null;
+var _geocodeCache = {};
+
+function geocodeAddress(addr, cb){
+  if(_geocodeCache[addr]){
+    cb(_geocodeCache[addr]);
+    return;
+  }
+  var url = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(addr);
+  fetch(url, { headers: { 'Accept-Language': 'ko,ja,en' }})
+    .then(function(r){ return r.json(); })
+    .then(function(data){
+      if(data && data[0]){
+        var coords = { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+        _geocodeCache[addr] = coords;
+        cb(coords);
+      } else {
+        cb(null);
+      }
+    })
+    .catch(function(e){
+      console.warn('[geocode] 실패:', e);
+      cb(null);
+    });
+}
+
 function initSheetMap() {
   var r = currentRest;
   var addr = r ? (r.address || '') : '';
   var lat  = r ? (r.lat  || null) : null;
   var lng  = r ? (r.lng  || null) : null;
   var photo = r ? (r.photoCard || r.photo || '') : '';
+  var name = r ? (r.name || '') : '';
 
   // 주소 세팅
   var addrEl = document.getElementById('sheetMapAddr');
@@ -5300,45 +5326,119 @@ function initSheetMap() {
   var mapEl = document.getElementById('sheetMap');
   if (!mapEl) return;
 
-  // 주소·좌표 없으면 지도 숨김
+  console.log('[sheetMap] init · addr:', addr, '· lat:', lat, '· lng:', lng);
+
+  // 주소·좌표 모두 없으면 지도 숨김
   if (!addr && !lat && !lng) {
     mapEl.style.display = 'none';
     return;
   }
   mapEl.style.display = 'block';
 
-  if (typeof L === 'undefined') return;
-  if (_sheetMap) { _sheetMap.remove(); _sheetMap = null; }
+  // 좌표 있으면 Leaflet 렌더
+  if (lat && lng) {
+    renderSheetMapAt(lat, lng, photo);
+    return;
+  }
+  
+  // 좌표 없고 주소만 있으면 바로 iframe fallback (Geocoding API 이슈 회피)
+  if (addr) {
+    renderSheetMapIframe(addr, null, null);
+  }
+}
 
-  // 좌표 없으면 geocoding 불가 → 지도 숨김
-  if (!lat || !lng) {
+// 좌표로 Leaflet 지도 렌더
+function renderSheetMapAt(lat, lng, photo){
+  var mapEl = document.getElementById('sheetMap');
+  if (!mapEl) return;
+  
+  // 기존 정리
+  if (_sheetMap) { 
+    try { _sheetMap.remove(); } catch(e){}
+    _sheetMap = null; 
+  }
+  var existingIframe = mapEl.querySelector('iframe');
+  if(existingIframe) existingIframe.remove();
+  var loading = document.getElementById('sheetMapLoading');
+  if(loading) loading.remove();
+  
+  if (typeof L === 'undefined'){
+    console.warn('[sheetMap] Leaflet 없음 → iframe 사용');
+    renderSheetMapIframe(null, lat, lng);
+    return;
+  }
+  
+  try {
+    _sheetMap = L.map('sheetMap', {
+      zoomControl: false,
+      attributionControl: false,
+      scrollWheelZoom: false,
+      doubleClickZoom: false,
+      keyboard: false,
+      dragging: false,
+      touchZoom: false
+    }).setView([lat, lng], 16);
+
+    _addMapTiles(_sheetMap);
+
+    var iconHtml = photo
+      ? '<div style="width:46px;height:46px;border-radius:50%;overflow:hidden;border:3px solid #5C0A14;box-shadow:0 2px 10px rgba(0,0,0,.4);background:#fff;"><img src="' + photo + '" style="width:100%;height:100%;object-fit:cover;"></div>'
+      : '<div style="width:36px;height:44px;display:flex;flex-direction:column;align-items:center;">'
+        + '<div style="width:28px;height:28px;border-radius:50%;background:#5C0A14;border:2.5px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.4);"></div>'
+        + '<div style="width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-top:8px solid #5C0A14;margin-top:-1px;"></div></div>';
+
+    L.marker([lat, lng], {
+      icon: L.divIcon({ html: iconHtml, iconSize: photo ? [46,46] : [36,44], iconAnchor: photo ? [23,46] : [18,44], className:'' })
+    }).addTo(_sheetMap);
+
+    setTimeout(function(){ 
+      try { _sheetMap.invalidateSize(); } catch(e){}
+    }, 80);
+    console.log('[sheetMap] Leaflet 렌더링 완료');
+  } catch(e) {
+    console.warn('[sheetMap] Leaflet 실패:', e);
+    renderSheetMapIframe(null, lat, lng);
+  }
+}
+
+// iframe fallback 렌더
+function renderSheetMapIframe(addr, lat, lng){
+  var mapEl = document.getElementById('sheetMap');
+  if(!mapEl) return;
+  
+  // 기존 Leaflet 정리
+  if (_sheetMap) { 
+    try { _sheetMap.remove(); } catch(e){}
+    _sheetMap = null; 
+  }
+  // 기존 iframe, 로딩 등 정리
+  var existingIframe = mapEl.querySelector('iframe');
+  if(existingIframe) existingIframe.remove();
+  var loading = document.getElementById('sheetMapLoading');
+  if(loading) loading.remove();
+  
+  var iframeUrl;
+  if (lat && lng) {
+    var d = 0.003;
+    var bbox = (lng-d) + ',' + (lat-d) + ',' + (lng+d) + ',' + (lat+d);
+    iframeUrl = 'https://www.openstreetmap.org/export/embed.html?bbox=' + bbox + '&layer=mapnik&marker=' + lat + ',' + lng;
+  } else if (addr) {
+    iframeUrl = 'https://maps.google.com/maps?q=' + encodeURIComponent(addr) + '&t=&z=16&ie=UTF8&iwloc=&output=embed';
+  } else {
     mapEl.style.display = 'none';
     return;
   }
-
-  _sheetMap = L.map('sheetMap', {
-    zoomControl: false,
-    attributionControl: false,
-    scrollWheelZoom: false,
-    doubleClickZoom: false,
-    keyboard: false,
-    dragging: false,
-    touchZoom: false
-  }).setView([lat, lng], 16);
-
-  _addMapTiles(_sheetMap);
-
-  var iconHtml = photo
-    ? '<div style="width:46px;height:46px;border-radius:50%;overflow:hidden;border:3px solid #5C0A14;box-shadow:0 2px 10px rgba(0,0,0,.4);background:#fff;"><img src="' + photo + '" style="width:100%;height:100%;object-fit:cover;"></div>'
-    : '<div style="width:36px;height:44px;display:flex;flex-direction:column;align-items:center;">'
-      + '<div style="width:28px;height:28px;border-radius:50%;background:#5C0A14;border:2.5px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.4);"></div>'
-      + '<div style="width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-top:8px solid #5C0A14;margin-top:-1px;"></div></div>';
-
-  L.marker([lat, lng], {
-    icon: L.divIcon({ html: iconHtml, iconSize: photo ? [46,46] : [36,44], iconAnchor: photo ? [23,46] : [18,44], className:'' })
-  }).addTo(_sheetMap);
-
-  setTimeout(function(){ _sheetMap.invalidateSize(); }, 80);
+  
+  var iframe = document.createElement('iframe');
+  iframe.src = iframeUrl;
+  iframe.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;border:0;z-index:1;background:#fff;';
+  iframe.setAttribute('loading', 'lazy');
+  iframe.setAttribute('referrerpolicy', 'no-referrer-when-downgrade');
+  iframe.setAttribute('allowfullscreen', '');
+  mapEl.appendChild(iframe);
+  var labels = mapEl.querySelectorAll('div[style*="전체보기"]');
+  labels.forEach(function(lab){ lab.style.zIndex = '2'; });
+  console.log('[sheetMap] iframe fallback 사용:', iframeUrl);
 }
 
 function sheetCopyAddr() {
@@ -5398,6 +5498,106 @@ function refreshSheetSummary() {
 function openTdConfirm(){
   handleTicketAction();
 }
+
+// 우선공개 잠금 안내 모달
+function showTicketLockInfo(t, mode){
+  // 기존 모달 제거
+  var existing = document.getElementById('ticketLockModal');
+  if(existing) existing.remove();
+  
+  var title, msg, scheduleHtml = '';
+  
+  // 일정 정보 만들기
+  function fmtDateTime(d, time){
+    if(!d) return '미정';
+    var parts = d.split('.');
+    var dateStr = parts.length === 3 ? parseInt(parts[1]) + '월 ' + parseInt(parts[2]) + '일' : d;
+    return dateStr + (time ? ' · ' + time : '');
+  }
+  
+  var mOpen = t.mOpenDate ? fmtDateTime(t.mOpenDate, t.mOpenTime) : '';
+  var tOpen = '';
+  if(typeof tcGetTOpenDatetime === 'function'){
+    var tOpenDt = tcGetTOpenDatetime(t);
+    if(tOpenDt){
+      var y = tOpenDt.getFullYear();
+      var m = tOpenDt.getMonth()+1;
+      var dd = tOpenDt.getDate();
+      var hh = tOpenDt.getHours();
+      var mm = tOpenDt.getMinutes();
+      tOpen = m + '월 ' + dd + '일 · ' + (hh<10?'0':'') + hh + ':' + (mm<10?'0':'') + mm;
+    }
+  }
+  
+  if(mode === 'locked'){
+    title = '아직 공개 전 티켓';
+    msg = '이 티켓은 아직 판매가 시작되지 않았습니다.';
+    scheduleHtml = 
+      '<div style="background:#faf8f5;border-radius:12px;padding:16px;margin-top:16px;">' +
+        '<div style="font-family:Montserrat,sans-serif;font-size:8px;font-weight:800;letter-spacing:.22em;color:#888;margin-bottom:10px;">PURCHASE SCHEDULE</div>' +
+        (mOpen ? '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #ece7dc;">' +
+          '<div><span style="display:inline-block;background:#5C0A14;color:#fff;font-family:Montserrat,sans-serif;font-size:9px;font-weight:900;letter-spacing:.12em;padding:3px 8px;border-radius:3px;margin-right:8px;">MEMBERSHIP</span><span style="font-size:13px;color:#333;">멤버십 우선 구매</span></div>' +
+          '<div style="font-family:Noto Sans KR,sans-serif;font-size:13px;font-weight:700;color:#1a1a18;">' + mOpen + '</div>' +
+        '</div>' : '') +
+        (tOpen ? '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;">' +
+          '<div><span style="display:inline-block;background:#888;color:#fff;font-family:Montserrat,sans-serif;font-size:9px;font-weight:900;letter-spacing:.12em;padding:3px 8px;border-radius:3px;margin-right:8px;">GENERAL</span><span style="font-size:13px;color:#333;">일반 구매</span></div>' +
+          '<div style="font-family:Noto Sans KR,sans-serif;font-size:13px;font-weight:700;color:#1a1a18;">' + tOpen + '</div>' +
+        '</div>' : '') +
+      '</div>';
+  } else if(mode === 'monly'){
+    title = '멤버십 전용 기간';
+    msg = '현재 이 티켓은 멤버십 회원만 구매할 수 있습니다.';
+    scheduleHtml = 
+      '<div style="background:#faf8f5;border-radius:12px;padding:16px;margin-top:16px;">' +
+        '<div style="font-family:Montserrat,sans-serif;font-size:8px;font-weight:800;letter-spacing:.22em;color:#888;margin-bottom:10px;">GENERAL PURCHASE</div>' +
+        (tOpen ? '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;">' +
+          '<span style="font-size:13px;color:#555;">일반 구매 시작</span>' +
+          '<div style="font-family:Noto Sans KR,sans-serif;font-size:14px;font-weight:800;color:#5C0A14;">' + tOpen + '</div>' +
+        '</div>' : '<div style="padding:8px 0;font-size:13px;color:#888;">일반 공개 일정 미정</div>') +
+      '</div>';
+  }
+  
+  var modal = document.createElement('div');
+  modal.id = 'ticketLockModal';
+  modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:2147483646;background:rgba(0,0,0,.6);display:flex;align-items:flex-end;justify-content:center;';
+  modal.innerHTML = 
+    '<div style="background:#fff;border-radius:24px 24px 0 0;width:100%;max-width:480px;padding:24px 24px calc(32px + env(safe-area-inset-bottom)); box-shadow:0 -10px 40px rgba(0,0,0,.3);">' +
+      '<div style="width:36px;height:4px;background:#e0ddd8;border-radius:2px;margin:0 auto 18px;"></div>' +
+      '<div style="text-align:center;margin-bottom:8px;">' +
+        '<span style="display:inline-block;background:#5C0A14;color:#fff;font-family:Montserrat,sans-serif;font-size:9px;font-weight:900;letter-spacing:.22em;padding:4px 11px;border-radius:3px;">MEMBERS ONLY</span>' +
+      '</div>' +
+      '<div style="font-family:Noto Sans KR,sans-serif;font-size:18px;font-weight:800;color:#111;text-align:center;margin-bottom:8px;">' + title + '</div>' +
+      '<div style="font-family:Noto Sans KR,sans-serif;font-size:13px;color:#555;line-height:1.7;text-align:center;">' + msg + '</div>' +
+      scheduleHtml +
+      '<div style="display:flex;gap:8px;margin-top:20px;">' +
+        '<button id="tlmCloseBtn" style="flex:1;padding:14px;background:#f0ede8;color:#555;border:none;border-radius:10px;font-family:Noto Sans KR,sans-serif;font-size:14px;font-weight:700;cursor:pointer;touch-action:manipulation;">닫기</button>' +
+        '<button id="tlmMemberBtn" style="flex:1;padding:14px;background:#5C0A14;color:#fff;border:none;border-radius:10px;font-family:Noto Sans KR,sans-serif;font-size:14px;font-weight:700;cursor:pointer;touch-action:manipulation;">멤버십 안내</button>' +
+      '</div>' +
+    '</div>';
+  
+  document.body.appendChild(modal);
+  
+  var closeBtn = modal.querySelector('#tlmCloseBtn');
+  var memberBtn = modal.querySelector('#tlmMemberBtn');
+  
+  function close(){ if(modal.parentNode) modal.parentNode.removeChild(modal); }
+  closeBtn.onclick = close;
+  closeBtn.addEventListener('touchend', function(e){ e.preventDefault(); close(); }, {passive:false});
+  memberBtn.onclick = function(){
+    close();
+    alert('멤버십 안내 페이지 (추후 연결 예정)');
+  };
+  memberBtn.addEventListener('touchend', function(e){
+    e.preventDefault();
+    close();
+    alert('멤버십 안내 페이지 (추후 연결 예정)');
+  }, {passive:false});
+  
+  // 배경 클릭
+  modal.addEventListener('click', function(e){
+    if(e.target === modal) close();
+  });
+}
 var _tdConfirmAgreed = false;
 function tdConfirmToggle(){
   _tdConfirmAgreed = !_tdConfirmAgreed;
@@ -5418,8 +5618,22 @@ function handleTicketAction(){
   var t=currentTicket, r=currentRest;
   if(!t)return;
 
-  // 슈퍼어드민은 재구매 제한 없음
+  // 슈퍼어드민은 잠금 무시
   if (_currentRole !== 'superadmin') {
+    // 우선공개 잠금 체크 — M오픈 이전: 완전 잠금
+    if(typeof tcIsLocked === 'function' && tcIsLocked(t)){
+      showTicketLockInfo(t, 'locked');
+      return;
+    }
+    // M등급만 열려있음: 멤버십만 구매 가능
+    if(typeof tcIsMOnly === 'function' && tcIsMOnly(t)){
+      // 멤버십 등급 확인 (M 등급 사용자만 통과)
+      var userGrade = (typeof _currentUserGrade !== 'undefined') ? _currentUserGrade : null;
+      if(userGrade !== 'M' && userGrade !== 'MVP'){
+        showTicketLockInfo(t, 'monly');
+        return;
+      }
+    }
     if(t.typeClass==='std' && !checkRepurchaseLimit(t)) return;
   }
 
