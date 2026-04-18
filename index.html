@@ -963,6 +963,16 @@ input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none}
 #lineageModule .lge-mi-s{font-family:Montserrat,sans-serif;font-size:7px;font-weight:600;color:var(--ink3);letter-spacing:.18em;margin-top:2px;text-transform:uppercase;}
 #lineageModule .lge-mi.dim{opacity:.3;pointer-events:none;}
 
+/* 애니메이션 효과 토글 (패널 하단) */
+#lineageModule .lge-anim-toggle{display:flex;align-items:center;gap:12px;padding:14px 20px;border-top:1px solid var(--border);background:var(--cream);flex-shrink:0;}
+#lineageModule .lge-anim-label{flex:1;min-width:0;}
+#lineageModule .lge-anim-title{font-family:"Noto Sans KR",sans-serif;font-size:12px;font-weight:700;color:var(--ink);}
+#lineageModule .lge-anim-sub{font-family:Montserrat,sans-serif;font-size:7px;font-weight:600;color:var(--ink3);letter-spacing:.18em;margin-top:2px;text-transform:uppercase;}
+#lineageModule .lge-anim-switch{width:40px;height:22px;background:var(--ink);border-radius:11px;position:relative;cursor:pointer;transition:background .2s ease;flex-shrink:0;}
+#lineageModule .lge-anim-switch.off{background:#ccc;}
+#lineageModule .lge-anim-switch-dot{width:18px;height:18px;background:var(--gold);border-radius:50%;position:absolute;top:2px;left:20px;transition:left .22s cubic-bezier(.22,1,.36,1),background .2s ease;}
+#lineageModule .lge-anim-switch.off .lge-anim-switch-dot{left:2px;background:#fff;}
+
 /* 새 계보도 타일 — 슈퍼어드민에게만 또는 노드 있으면 모두에게 */
 .lge-new{display:none !important;}
 .lge-new.show-admin{display:flex !important;}
@@ -1679,6 +1689,8 @@ input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none}
 #lineageModule:not(.active) #map {
   display: none !important;
 }
+/* lineageHome에서 패널만 연 상태 — 계보 뷰어용 기본 햄버거는 숨김 (lhHamBtn이 대신) */
+#lineageModule.from-home #hamBtn { display: none !important; }
 
 </style>
 </head>
@@ -11635,6 +11647,16 @@ IDB.get('splashSettings').then(function(s) {
       <div style="color:var(--ink3);font-size:12px;margin-left:auto">›</div>
     </div>
   </div>
+  <!-- 애니메이션 효과 토글 -->
+  <div class="lge-anim-toggle">
+    <div class="lge-anim-label">
+      <div class="lge-anim-title">애니메이션 효과</div>
+      <div class="lge-anim-sub">Reveal Animation</div>
+    </div>
+    <div class="lge-anim-switch" id="lgeAnimSwitch" onclick="toggleLineageAnim()">
+      <div class="lge-anim-switch-dot"></div>
+    </div>
+  </div>
 </div>
 
 <div id="lo">
@@ -12415,8 +12437,6 @@ IDB.get('splashSettings').then(function(s) {
   <image id="pKhashira" href="" x="274" y="1554" width="52" height="52" clip-path="url(#cKhashira)" preserveAspectRatio="xMidYMid slice"/>
   <text x="300" y="1623" font-family="Noto Sans KR,sans-serif" font-size="10" font-weight="700" fill="#1a1a18" text-anchor="middle">🇰🇷 스시 하시라</text>
   <text x="300" y="1635" font-family="Oswald,sans-serif" font-size="8" fill="#999" text-anchor="middle">윤주환 쉐프</text>
-  <rect x="284" y="1642" width="32" height="14" rx="7" fill="#ecfdf5" stroke="#10b981" stroke-width="0.7"/>
-  <text x="300" y="1652" font-family="Montserrat,sans-serif" font-size="8" font-weight="700" fill="#10b981" text-anchor="middle">2024</text>
 </g>
 
 <!-- 19. 🇰🇷 파르나스 (300, 1705) 2023 - 아래로 이동 -->
@@ -12425,8 +12445,6 @@ IDB.get('splashSettings').then(function(s) {
   <image id="pKparnas" href="" x="274" y="1679" width="52" height="52" clip-path="url(#cKparnas)" preserveAspectRatio="xMidYMid slice"/>
   <text x="300" y="1748" font-family="Noto Sans KR,sans-serif" font-size="10" font-weight="700" fill="#1a1a18" text-anchor="middle">🇰🇷 파르나스</text>
   <text x="300" y="1760" font-family="Oswald,sans-serif" font-size="8" fill="#999" text-anchor="middle">히노츠키 쉐프</text>
-  <rect x="284" y="1767" width="32" height="14" rx="7" fill="#ecfdf5" stroke="#10b981" stroke-width="0.7"/>
-  <text x="300" y="1777" font-family="Montserrat,sans-serif" font-size="8" font-weight="700" fill="#10b981" text-anchor="middle">2023</text>
 </g>
 
 <!-- ═══ 디버그 그리드 ═══ -->
@@ -14769,7 +14787,40 @@ var map=null;
 // tileLayer removed
 var mLayer=null;
 function togglePanel(){var p=document.getElementById('panel'),b=document.getElementById('hamBtn'),d=document.getElementById('dim');var o=p.classList.contains('open');p.classList.toggle('open',!o);b.classList.toggle('open',!o);d.classList.toggle('show',!o);}
-function closePanel(){document.getElementById('panel').classList.remove('open');document.getElementById('hamBtn').classList.remove('open');document.getElementById('dim').classList.remove('show');}
+var _panelFromHome = false; // lineageHome에서 패널을 열었는지 추적
+function closePanel(){
+  document.getElementById('panel').classList.remove('open');
+  document.getElementById('hamBtn').classList.remove('open');
+  document.getElementById('dim').classList.remove('show');
+  // lineageHome에서 패널만 열었던 경우 → 슬라이드 아웃 후 모듈 비활성화해서 lineageHome 버튼들 정상 동작
+  if(_panelFromHome){
+    _panelFromHome = false;
+    setTimeout(function(){
+      var mod = document.getElementById('lineageModule');
+      if(!mod) return;
+      mod.classList.remove('active');
+      mod.classList.remove('from-home');
+    }, 450);
+  }
+}
+// lineageHome(Contents 탭 캐러셀)에서 햄버거 버튼 탭 → 모듈만 살짝 활성화 + 패널 오픈
+function openLineageHomePanel(){
+  var mod = document.getElementById('lineageModule');
+  if(!mod) return;
+  // 이전 LineageModule.close에서 panel/hamBtn/dim 에 박힌 인라인 display:none 해제
+  ['hamBtn','panel','dim'].forEach(function(id){
+    var el = document.getElementById(id);
+    if(el) el.style.display = '';
+  });
+  _panelFromHome = true;
+  mod.classList.add('active');
+  mod.classList.add('from-home');
+  // 패널 열기 (이미 열려있지 않은 경우)
+  var panel = document.getElementById('panel');
+  if(panel && !panel.classList.contains('open')){
+    togglePanel();
+  }
+}
 var animDone=false,animRunning=false;
 function openLineage(){closePanel();document.getElementById('lo').classList.add('show');animDone=false;animRunning=false;setTimeout(startAnim,350);}
 function closeLineage(){document.getElementById('lo').classList.remove('show');}
@@ -17704,6 +17755,8 @@ window.LineageModule = {
       });
       
       mod.classList.add('active');
+      mod.classList.remove('from-home'); // lineageHome 패널 모드 해제 (계보 뷰어 진입)
+      _panelFromHome = false; // 계보 진입 중이므로 플래그 리셋
       
       var gnb = document.getElementById('mainGnb');
       if(gnb) gnb.style.display = 'none';
@@ -17766,7 +17819,11 @@ window.LineageModule = {
     
     // 2. 모듈 비활성화
     var mod = document.getElementById('lineageModule');
-    if(mod) mod.classList.remove('active');
+    if(mod) {
+      mod.classList.remove('active');
+      mod.classList.remove('from-home'); // 플래그 깔끔하게 해제
+    }
+    _panelFromHome = false; // 전역 플래그도 리셋
     // FAB 숨김
     var fab = document.querySelector('.node-add-fab');
     if(fab) fab.style.display = 'none';
@@ -18141,13 +18198,16 @@ var LineageEditor = {
   <!-- 중앙 하단 붉은 글로우 -->
   <div id="lhGlow" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-30%);width:140vw;height:90vh;pointer-events:none;background:radial-gradient(ellipse at center,rgba(92,10,20,.75) 0%,rgba(92,10,20,.35) 25%,rgba(0,0,0,0) 60%);filter:blur(8px);z-index:1;"></div>
   
-  <!-- 상단 X 닫기 + 편집 버튼 (슈퍼 어드민만) -->
-  <div style="position:absolute;top:50px;left:0;right:0;display:flex;justify-content:space-between;align-items:center;padding:0 18px;z-index:20;">
-    <button onclick="closeLineageHome()" style="width:40px;height:40px;border-radius:50%;background:rgba(255,255,255,.08);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,.15);display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0;">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-    </button>
-    <button id="lhEditBtn" onclick="openCarouselEditor()" style="display:none;padding:8px 14px;border-radius:20px;background:rgba(200,169,110,.15);backdrop-filter:blur(8px);border:1px solid rgba(200,169,110,.4);color:#c8a96e;font-family:'Oswald',sans-serif;font-size:11px;font-weight:600;letter-spacing:.15em;cursor:pointer;text-transform:uppercase;">Edit</button>
-  </div>
+  <!-- 상단 버튼: 햄버거(좌) · Edit(중앙, 슈퍼 어드민만) · X 닫기(우) -->
+  <button id="lhHamBtn" onclick="openLineageHomePanel()" style="position:absolute;top:50px;left:18px;z-index:20;width:40px;height:40px;border-radius:50%;background:rgba(255,255,255,.08);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,.15);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;cursor:pointer;padding:0;">
+    <span style="display:block;width:16px;height:1.5px;background:#fff;border-radius:1px;"></span>
+    <span style="display:block;width:16px;height:1.5px;background:#fff;border-radius:1px;"></span>
+    <span style="display:block;width:16px;height:1.5px;background:#fff;border-radius:1px;"></span>
+  </button>
+  <button id="lhEditBtn" onclick="openCarouselEditor()" style="display:none;position:absolute;top:50px;left:50%;transform:translateX(-50%);z-index:20;padding:8px 14px;border-radius:20px;background:rgba(200,169,110,.15);backdrop-filter:blur(8px);border:1px solid rgba(200,169,110,.4);color:#c8a96e;font-family:'Oswald',sans-serif;font-size:11px;font-weight:600;letter-spacing:.15em;cursor:pointer;text-transform:uppercase;">Edit</button>
+  <button onclick="closeLineageHome()" style="position:absolute;top:50px;right:18px;z-index:20;width:40px;height:40px;border-radius:50%;background:rgba(255,255,255,.08);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,.15);display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0;">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+  </button>
   
   <!-- 캐러셀 트랙 -->
   <div id="lhCarousel" style="position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;z-index:5;">
@@ -20787,6 +20847,169 @@ function tapNodeSh(id){var r=DATA_Sh.find(function(d){return d.id===id;});if(r){
     document.addEventListener('DOMContentLoaded', initTiles);
   } else {
     setTimeout(initTiles, 100);
+  }
+})();
+
+// ═══════════════════════════════════════════════════════════
+// 계보도 애니메이션 효과 토글 (전역 설정 · IDB 영속)
+// ═══════════════════════════════════════════════════════════
+var _animPref = true;  // 기본값: ON
+
+function _updateAnimSwitchUI(){
+  var sw = document.getElementById('lgeAnimSwitch');
+  if(!sw) return;
+  if(_animPref) sw.classList.remove('off');
+  else sw.classList.add('off');
+}
+
+function loadAnimPref(){
+  if(typeof IDB === 'undefined'){ _updateAnimSwitchUI(); return; }
+  IDB.get('animPref').then(function(v){
+    if(v === 'off') _animPref = false;
+    else if(v === 'on') _animPref = true;
+    else {
+      // 처음 방문 — OS의 모션 축소 설정 존중
+      try {
+        if(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches){
+          _animPref = false;
+        }
+      } catch(e){}
+    }
+    _updateAnimSwitchUI();
+  }).catch(function(){ _updateAnimSwitchUI(); });
+}
+
+function saveAnimPref(){
+  if(typeof IDB === 'undefined') return;
+  IDB.set('animPref', _animPref ? 'on' : 'off').catch(function(){});
+}
+
+window.toggleLineageAnim = function(){
+  _animPref = !_animPref;
+  saveAnimPref();
+  _updateAnimSwitchUI();
+};
+
+// 도움 함수: 요소를 즉시 표시 (transition 제거)
+function _instaShow(id, opacity){
+  var el = document.getElementById(id);
+  if(!el) return;
+  el.style.transition = 'none';
+  el.style.opacity = (opacity !== undefined) ? String(opacity) : '1';
+}
+function _instaDrawPath(id, offsetVal){
+  var el = document.getElementById(id);
+  if(!el) return;
+  el.style.transition = 'none';
+  el.setAttribute('stroke-dashoffset', String(offsetVal !== undefined ? offsetVal : 0));
+  el.style.opacity = '1';
+}
+
+// ─── 헬퍼 함수 몽키패치 (_animPref=false 일 때 즉시 최종 상태로 표시) ───
+(function patchLineageAnimHelpers(){
+  // showEl 계열 (id, delay, cb) — 노드/텍스트를 opacity 1로
+  var showElFns = ['showEl','showElK','showElQ','showElS','showElU','showElJ','showElA','showElSh','showElNew9'];
+  showElFns.forEach(function(name){
+    var orig = window[name];
+    if(typeof orig !== 'function') return;
+    window[name] = function(id, delay, cb){
+      if(!_animPref){
+        _instaShow(id, 1);
+        if(typeof cb === 'function') cb();
+        return;
+      }
+      return orig(id, delay, cb);
+    };
+  });
+
+  // drawPipe 계열 (id, len, delay, cb) — 라인을 완성 상태로 (stroke-dashoffset=0)
+  var drawPipeFns = ['drawPipe','drawPipeK','drawPipeQ','drawPipeS','drawPipeU','drawPipeJ','drawPipeA','drawPipeSh','drawPipeNew9'];
+  drawPipeFns.forEach(function(name){
+    var orig = window[name];
+    if(typeof orig !== 'function') return;
+    window[name] = function(id, len, delay, cb){
+      if(!_animPref){
+        _instaDrawPath(id, 0);
+        if(typeof cb === 'function') cb();
+        return;
+      }
+      return orig(id, len, delay, cb);
+    };
+  });
+
+  // drawPipePartialK (id, total, drawn, delay, cb) — 부분 드로우
+  if(typeof window.drawPipePartialK === 'function'){
+    var origPartialK = window.drawPipePartialK;
+    window.drawPipePartialK = function(id, total, drawn, delay, cb){
+      if(!_animPref){
+        _instaDrawPath(id, total - drawn);
+        if(typeof cb === 'function') cb();
+        return;
+      }
+      return origPartialK(id, total, drawn, delay, cb);
+    };
+  }
+
+  // showDot 계열 (id) — 점을 각 계보별 최종 투명도로
+  // showDot=0.45, showDotK=0.55, showDotQ=0.45
+  var dotOpacity = { showDot: 0.45, showDotK: 0.55, showDotQ: 0.45 };
+  Object.keys(dotOpacity).forEach(function(name){
+    var orig = window[name];
+    if(typeof orig !== 'function') return;
+    var finalOp = dotOpacity[name];
+    window[name] = function(id){
+      if(!_animPref){
+        _instaShow(id, finalOp);
+        return;
+      }
+      return orig(id);
+    };
+  });
+
+  // triggerCustomAnim — 커스텀 노드 즉시 표시
+  if(typeof window.triggerCustomAnim === 'function'){
+    var origTrigger = window.triggerCustomAnim;
+    window.triggerCustomAnim = function(lineageId){
+      if(!_animPref){
+        var nodes = (typeof _customAnimQueue !== 'undefined') ? _customAnimQueue[lineageId] : null;
+        if(!nodes || nodes.length === 0) return;
+        delete _customAnimQueue[lineageId];
+        if(typeof _customAnimDone !== 'undefined') _customAnimDone[lineageId] = true;
+        nodes.forEach(function(node){
+          var lineEl = document.getElementById('lpCust_' + node.id);
+          var nodeEl = document.getElementById('nCust_' + node.id);
+          if(lineEl){
+            try {
+              var len = lineEl.getTotalLength();
+              if(len > 0){
+                lineEl.setAttribute('stroke-dasharray', len);
+                lineEl.setAttribute('stroke-dashoffset', '0');
+              }
+            } catch(e){}
+            lineEl.style.transition = 'none';
+            lineEl.classList.add('custom-shown');
+          }
+          if(nodeEl){
+            nodeEl.style.transition = 'none';
+            nodeEl.classList.add('custom-shown');
+          }
+        });
+        return;
+      }
+      return origTrigger(lineageId);
+    };
+  }
+})();
+
+// ─── 앱 시작 시 IDB에서 애니메이션 설정 로드 ───
+(function(){
+  function initAnim(){
+    if(typeof loadAnimPref === 'function') loadAnimPref();
+  }
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', initAnim);
+  } else {
+    setTimeout(initAnim, 150);
   }
 })();
 
