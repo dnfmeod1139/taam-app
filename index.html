@@ -5659,9 +5659,21 @@ function openTicketDetail(id){
         ? '<div style="position:absolute;bottom:0;left:0;right:0;height:320px;background:linear-gradient(to bottom,transparent 0%,rgba(0,0,0,.85) 50%,#000 100%);pointer-events:none;"></div>'
         : '<div style="position:absolute;bottom:0;left:0;right:0;height:260px;background:linear-gradient(to bottom,transparent 0%,rgba(0,0,0,.7) 60%,#000 100%);pointer-events:none;"></div>';
       var fadeIn  = idx > 0 ? '<div style="position:absolute;top:0;left:0;right:0;height:180px;background:linear-gradient(to top,transparent 0%,rgba(0,0,0,.8) 70%,#000 100%);pointer-events:none;"></div>' : '';
-      // 높이는 viewport 높이 사용 (편집 화면과 동일 비율 유지)
-      var _phH = window.innerHeight;
-      return '<div style="position:relative;width:100%;height:'+_phH+'px;background:url('+src+') center/cover no-repeat;">'
+      // ── 컨테이너 높이: 크롭 이미지의 실제 aspect 에 맞춤 ──
+      //   크롭 메타(outW/outH) 있으면 그 비율대로 + 100% 100% 스트레치 (aspect 일치로 왜곡 없음)
+      //   없으면(레거시) viewport 높이 + cover (기존 동작)
+      var _pmArr = (r && r.detailCropMeta) ? r.detailCropMeta : [];
+      var _pm = _pmArr[idx];
+      var _phW = window.innerWidth;
+      var _phH, _bgSize;
+      if (_pm && _pm.outW && _pm.outH) {
+        _phH = Math.round(_phW * _pm.outH / _pm.outW);
+        _bgSize = '100% 100%';
+      } else {
+        _phH = window.innerHeight;
+        _bgSize = 'cover';
+      }
+      return '<div style="position:relative;width:100%;height:'+_phH+'px;background:url('+src+') center/'+_bgSize+' no-repeat;">'
         + fadeIn + fadeOut
         + '<div style="position:absolute;inset:0;z-index:2;pointer-events:none;">' + overlay + '</div>'
         + '</div>';
@@ -8084,6 +8096,11 @@ function rpResetForm() {
   _rpCroppedCard = null;
   _rpCroppedHero = null;
   _rpDetailPhotos = [];
+  _rpDetailOrigs = [];
+  _rpDetailCropMeta = [];
+  _rpPendingOrigForCrop = null;
+  _rpDetailUploadQueue = [];
+  _rpDetailEditIdx = -1;
   _rpGallery = [];
   _rpPhotoTexts = [{},{},{}];
   _rpAddressEn = ''; _rpLat = null; _rpLng = null; _rpPlaceId = '';
@@ -8144,9 +8161,14 @@ function rpSelect(btn,groupId){
 var _rpCropper = null;
 var _rpCurrentCropTarget = 'card'; // 'card' | 'hero' | 'detail' | 'detail_edit' | 'splash' | 'carousel'
 var _rpDetailEditIdx = -1; // 상세사진 재크롭 시 해당 인덱스
+var _rpDetailCropW = 0;    // detail 크롭 시점의 viewport 가로 (프리뷰/상세화면 비율 일치용)
+var _rpDetailCropH = 0;    // detail 크롭 시점의 viewport 세로
 var _rpCroppedCard = null;
 var _rpCroppedHero = null;
-var _rpDetailPhotos = []; // 최대 5장
+var _rpDetailPhotos = []; // 최대 5장 (크롭된 결과 — 프리뷰/상세화면에 표시되는 이미지)
+var _rpDetailOrigs = [];  // 원본 이미지 (재크롭 시 사용 — 축소/위치 재조정 가능)
+var _rpDetailCropMeta = []; // 각 사진의 크롭 상태 {cropBoxData, canvasData} — 재크롭 시 이전 위치 복원용
+var _rpPendingOrigForCrop = null; // 지금 크롭 중인 사진의 원본 (detail 신규 추가 시 임시 보관)
 var _rpDetailPhotoMax = 5;
 var _rpGallery = []; // 갤러리 사진 (위치 시트용, 최대 9장)
 var _rpCarouselCropId = null; // 앱카드 크롭 시 대상 카드 id
@@ -8189,19 +8211,34 @@ function rpPickDetailPhoto() {
 
 function rpDetailPhotoChange(input) {
   if (!input.files || !input.files.length) return;
-  var files = Array.from(input.files).slice(0, 3 - _rpDetailPhotos.length);
-  if (files.length === 0) { showToast('⚠','최대 3장','상세 사진은 최대 3장까지 등록 가능합니다'); return; }
+  var remaining = _rpDetailPhotoMax - _rpDetailPhotos.length;
+  if (remaining <= 0) { showToast('⚠','최대 '+_rpDetailPhotoMax+'장','상세 사진은 최대 '+_rpDetailPhotoMax+'장까지 등록 가능합니다'); return; }
+  var files = Array.from(input.files).slice(0, remaining);
+  if (files.length === 0) return;
 
-  var loaded = 0;
-  files.forEach(function(file) {
-    var reader = new FileReader();
-    reader.onload = function(e) {
-      _rpDetailPhotos.push(e.target.result);
-      loaded++;
-      if (loaded === files.length) rpRenderDetailPhotos();
-    };
-    reader.readAsDataURL(file);
-  });
+  // ── 여러 파일을 순차적으로 크롭 모달에 태움 ──
+  //   파일 배열을 큐로 만들고, 크롭 완료될 때마다 다음 파일을 연다
+  _rpDetailUploadQueue = files.slice();
+  rpProcessNextDetailUpload();
+}
+
+// 대기 중인 detail 사진 업로드 파일 큐 (크롭을 순차 적용)
+var _rpDetailUploadQueue = [];
+
+function rpProcessNextDetailUpload() {
+  if (!_rpDetailUploadQueue || !_rpDetailUploadQueue.length) return;
+  if (_rpDetailPhotos.length >= _rpDetailPhotoMax) {
+    _rpDetailUploadQueue = [];
+    return;
+  }
+  var file = _rpDetailUploadQueue.shift();
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    _rpCurrentCropTarget = 'detail';  // 'detail' = 새로 추가, 'detail_edit' = 재크롭
+    _rpPendingOrigForCrop = e.target.result; // 신규 추가 시 원본 임시 보관 (Confirm에서 사용)
+    rpOpenCropModal(e.target.result);
+  };
+  reader.readAsDataURL(file);
 }
 
 function rpRenderDetailPhotos() {
@@ -8235,7 +8272,7 @@ function rpRenderDetailPhotos() {
       e.preventDefault(); this.style.outline='';
       if(dragSrc===this) return;
       var fi=parseInt(dragSrc.getAttribute('data-idx')), ti=parseInt(this.getAttribute('data-idx'));
-      var mv=_rpDetailPhotos.splice(fi,1)[0]; _rpDetailPhotos.splice(ti,0,mv);
+      rpReorderDetailArrays(fi, ti);
       rpRenderDetailPhotos();
     });
   });
@@ -8296,8 +8333,7 @@ function rpRenderDetailPhotos() {
     var targetIdx = tgt ? parseInt(tgt.getAttribute('data-idx')) : -1;
     dpCleanup();
     if (targetIdx >= 0 && targetIdx !== _dpOrigIdx) {
-      var mv = _rpDetailPhotos.splice(_dpOrigIdx, 1)[0];
-      _rpDetailPhotos.splice(targetIdx, 0, mv);
+      rpReorderDetailArrays(_dpOrigIdx, targetIdx);
       rpRenderDetailPhotos();
     }
     document.removeEventListener('touchmove', _dpMoveHandler);
@@ -8317,7 +8353,10 @@ function rpRenderDetailPhotos() {
 function rpRecroplDetail(idx) {
   _rpCurrentCropTarget = 'detail_edit';
   _rpDetailEditIdx = idx;
-  rpOpenCropModal(_rpDetailPhotos[idx]);
+  // 원본이 있으면 원본에서 재크롭 시작 (축소/위치 재조정 가능)
+  // 원본이 없으면 (예: 구버전 DB에서 로드된 사진) 잘린 이미지를 대신 사용
+  var srcImg = _rpDetailOrigs[idx] || _rpDetailPhotos[idx];
+  rpOpenCropModal(srcImg);
 }
 
 function rpAddDetailPhoto(dataUrl) {
@@ -8327,7 +8366,21 @@ function rpAddDetailPhoto(dataUrl) {
 
 function rpRemoveDetailPhoto(i) {
   _rpDetailPhotos.splice(i, 1);
+  if (_rpDetailOrigs.length > i)   _rpDetailOrigs.splice(i, 1);
+  if (_rpDetailCropMeta.length > i) _rpDetailCropMeta.splice(i, 1);
   rpRenderDetailPhotos();
+}
+
+// 3개 병렬 배열 (사진·원본·크롭메타) 을 한번에 재정렬
+function rpReorderDetailArrays(fromIdx, toIdx) {
+  function move(arr) {
+    if (!arr || fromIdx >= arr.length) return;
+    var v = arr.splice(fromIdx, 1)[0];
+    arr.splice(toIdx, 0, v);
+  }
+  move(_rpDetailPhotos);
+  move(_rpDetailOrigs);
+  move(_rpDetailCropMeta);
 }
 
 function rpPickPhoto(target) {
@@ -8364,9 +8417,27 @@ function rpOpenCropModal(src) {
     ratioText = '4 : 3'; descText = '홈 화면 앱카드에 표시되는 사진을 원하는 영역으로 크롭하세요';
     ratio = 4 / 3;
   } else {
+    // ── DETAIL: 프리뷰(PHOTO 1·2·3)와 실제 티켓 상세화면이 모두 innerWidth × innerHeight
+    //            cover/center 로 표시되므로 크롭도 동일 비율로 맞춘다 (WYSIWYG)
+    var _vw = window.innerWidth;
+    var _vh = window.innerHeight;
+    _rpDetailCropW = _vw;       // 저장: rpCropConfirm 에서 출력 사이즈 계산용
+    _rpDetailCropH = _vh;
+    ratio = _vw / _vh;
+
+    // 비율 뱃지: 간단히 약분해서 표시. 너무 복잡하면 근사값
+    var _gcd = function(a,b){ a=Math.round(a); b=Math.round(b); while(b){var t=b;b=a%b;a=t;} return a||1; };
+    var _g = _gcd(_vw, _vh);
+    var _rw = Math.round(_vw / _g), _rh = Math.round(_vh / _g);
+    if (_rw > 30 || _rh > 30) {
+      // 약분이 안 깔끔하면 9:X 형식
+      ratioText = '9 : ' + (9 * _vh / _vw).toFixed(1);
+    } else {
+      ratioText = _rw + ' : ' + _rh;
+    }
+
     badgeText = '상세페이지 규격'; titleText = '티켓 상세 사진 크롭';
-    ratioText = '2 : 3'; descText = '티켓 상세 페이지 전체화면에 표시되는 사진을 크롭하세요';
-    ratio = 2 / 3;
+    descText = '프리뷰·티켓 상세 화면과 동일한 영역으로 크롭하세요';
   }
 
   document.getElementById('rpCropStepBadge').textContent = badgeText;
@@ -8388,6 +8459,8 @@ function rpOpenCropModal(src) {
     var fillFull = (isSplash || isCarousel);
     _rpCropper = new Cropper(img, {
       aspectRatio: isCarousel ? NaN : ratio,
+      // viewMode 1 — 크롭 박스는 사진(캔버스) 바깥으로 벗어날 수 없음
+      //   사진을 축소해도 크롭 박스는 사진 내부에 머무름 (요청 반영)
       viewMode: 1,
       dragMode: 'move',
       autoCropArea: fillFull ? 0.9999 : 0.85,
@@ -8408,6 +8481,16 @@ function rpOpenCropModal(src) {
             width:  cd.width,
             height: cd.height
           });
+        } else if (_rpCurrentCropTarget === 'detail_edit') {
+          // 재크롭: 이전 크롭 위치/확대 상태 복원 (있으면)
+          var meta = _rpDetailCropMeta[_rpDetailEditIdx];
+          if (meta && meta.data) {
+            try {
+              // setData()는 원본 이미지 좌표계 기준의 크롭 영역을 복원한다
+              // → 사용자가 이전에 선택한 영역이 그대로 다시 표시됨 (+ 원본 바깥도 보임)
+              _rpCropper.setData(meta.data);
+            } catch(e) { /* 복원 실패 시 기본 동작 */ }
+          }
         }
       }
     });
@@ -8458,15 +8541,38 @@ function rpCropConfirm() {
   }
 
   // ── 기존 레스토랑 등록 경로 ──
-  var outW = isCard ? 600 : 400;
-  var outH = isCard ? 450 : 600;
+  var outW, outH;
+  if (isCard) {
+    // 앱카드: 4:3 고정
+    outW = 600; outH = 450;
+  } else {
+    // 상세(detail): 크롭 모달을 열 때 저장한 viewport 비율로 출력
+    //   → 프리뷰/티켓 상세화면에서 100% 100% 로 스트레치해도 왜곡 없음
+    var _cw = _rpDetailCropW || window.innerWidth;
+    var _ch = _rpDetailCropH || window.innerHeight;
+    // 긴 변 기준 1600px (품질 확보) → 용량·해상도 균형
+    outH = 1600;
+    outW = Math.max(1, Math.round(1600 * _cw / _ch));
+  }
   var canvas = _rpCropper.getCroppedCanvas({
     width: outW, height: outH,
+    // 이미지 바깥 영역(축소해서 남긴 여백)이 있을 때 그 영역을 어떤 색으로 채울지
+    // JPEG 는 투명 미지원이므로 명시적으로 지정. 검정 배경이 티켓 상세 화면 UI와 어울림
+    fillColor: '#000000',
     imageSmoothingEnabled: true,
     imageSmoothingQuality: 'high'
   });
   if (!canvas) { showToast('⚠','오류','사진을 다시 선택해주세요'); return; }
+  // 안전장치: 실제 생성된 canvas 의 정확한 dimension 을 저장해서 메타와 1:1 일치 보장
+  //   (Cropper 내부에서 반올림 등으로 요청값과 미세하게 다를 수 있음)
+  outW = canvas.width;
+  outH = canvas.height;
   var dataUrl = canvas.toDataURL('image/jpeg', 0.72);
+  // detail 전용: 재크롭 복원을 위한 크롭 데이터 캡처 (setData() 호환 포맷)
+  var _detailCropData = null;
+  if (target === 'detail' || target === 'detail_edit') {
+    try { _detailCropData = _rpCropper.getData(true); } catch(e) { _detailCropData = null; }
+  }
   rpCloseCropModal();
 
   if (isCard) {
@@ -8478,11 +8584,25 @@ function rpCropConfirm() {
       if(ph) ph.style.display = 'none';
     }, 50);
   } else if (target === 'detail') {
-    setTimeout(function(){ rpAddDetailPhoto(dataUrl); }, 50);
+    // 신규 추가: 원본과 크롭된 결과, 크롭 메타를 같은 인덱스에 push
+    var origForThis = _rpPendingOrigForCrop;
+    _rpPendingOrigForCrop = null;
+    setTimeout(function(){
+      _rpDetailPhotos.push(dataUrl);
+      _rpDetailOrigs.push(origForThis || dataUrl); // 원본 확보 실패 시 결과로 폴백
+      _rpDetailCropMeta.push({ data: _detailCropData, outW: outW, outH: outH });
+      rpRenderDetailPhotos();
+      // 업로드 큐에 남은 파일이 있으면 이어서 크롭
+      if (_rpDetailUploadQueue && _rpDetailUploadQueue.length) {
+        setTimeout(rpProcessNextDetailUpload, 120);
+      }
+    }, 50);
   } else if (target === 'detail_edit') {
     var editIdx = _rpDetailEditIdx;
     if (editIdx >= 0 && editIdx < _rpDetailPhotos.length) {
       _rpDetailPhotos[editIdx] = dataUrl;
+      // 원본은 그대로 유지 (_rpDetailOrigs[editIdx] 는 건드리지 않음)
+      _rpDetailCropMeta[editIdx] = { data: _detailCropData, outW: outW, outH: outH };
       setTimeout(function(){ rpRenderDetailPhotos(); }, 50);
     }
     _rpDetailEditIdx = -1;
@@ -8499,6 +8619,10 @@ function rpCropConfirm() {
 }
 
 function rpCropCancel() {
+  // 여러 사진을 순차 크롭 중이었다면, 취소 시 남은 큐를 비운다
+  // (사용자가 "취소"를 눌렀으면 이후 사진들도 취소로 간주)
+  _rpDetailUploadQueue = [];
+  _rpDetailEditIdx = -1;
   rpCloseCropModal();
 }
 
@@ -8568,6 +8692,16 @@ function rpEditRest(id) {
   _rpCroppedCard = r.photoCard || null;
   _rpCroppedHero = r.photoHero || null;
   _rpDetailPhotos = (r.detailPhotos||[]).slice();
+  // 원본·크롭 메타 복원 (구버전 DB엔 없음 → 배열 길이 맞춤)
+  _rpDetailOrigs    = (r.detailOrigs    || []).slice();
+  _rpDetailCropMeta = (r.detailCropMeta || []).slice();
+  // 길이 정합성: photos 길이에 맞춰 패딩 (없으면 null)
+  while (_rpDetailOrigs.length    < _rpDetailPhotos.length) _rpDetailOrigs.push(null);
+  while (_rpDetailCropMeta.length < _rpDetailPhotos.length) _rpDetailCropMeta.push(null);
+  // 원본이 없는 구버전 사진은 크롭된 결과를 원본으로 폴백 (재크롭은 제한되지만 크래시 방지)
+  for (var _i = 0; _i < _rpDetailPhotos.length; _i++) {
+    if (!_rpDetailOrigs[_i]) _rpDetailOrigs[_i] = _rpDetailPhotos[_i];
+  }
   rpRenderDetailPhotos();
   _rpGallery = (r.gallery||[]).slice();
   rpRenderGallery();
@@ -8774,6 +8908,8 @@ function submitRestaurant(){
     photoCard:_rpCroppedCard||'',
     photoHero:_rpCroppedHero||'',
     detailPhotos:_rpDetailPhotos.slice(),
+    detailOrigs:_rpDetailOrigs.slice(),
+    detailCropMeta:_rpDetailCropMeta.slice(),
     gallery:_rpGallery.slice(),
     photoTexts: rpGetPhotoTexts(),
     corkage:corkage,
@@ -11444,14 +11580,11 @@ function rpRenderTypo() {
   var defFs  = [28, 28, 28];
   var defDFs = [14, 14, 14];
 
-  // 티켓 화면과 동일한 좌표 기준: innerWidth × innerHeight
-  // rpViewport를 풀스크린 크기로 만들고 CSS scale로 축소 → % 좌표 완벽 일치
+  // 공통: 가로 사용 가능 폭과 뷰포트 기준
   var _vw = window.innerWidth;
   var _vh = window.innerHeight;
   var _availW = _vw - 32; // 실제 사용 가능 너비 (16px 패딩 × 2)
   var _scale = _availW / _vw;  // 축소 비율
-  var baseW = _vw;   // 좌표 기준: 티켓 화면과 동일
-  var baseH = _vh;  // window.innerHeight — 티켓 화면과 동일한 기준
 
   [0,1,2].forEach(function(idx) {
     var pt   = _rpPhotoTexts[idx] || {};
@@ -11463,6 +11596,20 @@ function rpRenderTypo() {
     var dfs  = pt.dfs !== undefined ? pt.dfs : defDFs[idx];
     var photo = _rpDetailPhotos[idx] || '';
     var ph    = phs[idx];
+
+    // ── 사진별 컨테이너 aspect 결정 ──
+    //   크롭 메타에 저장된 실제 출력 사이즈가 있으면 그걸 사용 → cover가 추가 크롭을 하지 않음
+    //   없으면 viewport 비율로 폴백 (구버전/미크롭 사진)
+    var meta = _rpDetailCropMeta[idx];
+    var baseW, baseH;
+    if (meta && meta.outW && meta.outH) {
+      // 크롭 이미지의 실제 aspect 를 캔버스에 반영
+      baseW = _vw;
+      baseH = Math.round(_vw * meta.outH / meta.outW);
+    } else {
+      baseW = _vw;
+      baseH = _vh;
+    }
     var tFont = pt.titleFont || 'Noto Sans KR';
     var dFont = pt.descFont  || 'Noto Sans KR';
 
@@ -11499,9 +11646,17 @@ function rpRenderTypo() {
     var card = document.createElement('div');
     card.style.cssText = 'background:#f8f7f5;border-radius:12px;overflow:hidden;margin-bottom:16px;';
 
-    var bgCss = photo
-      ? 'background-image:url('+photo+');background-size:cover;background-position:center;'
-      : 'background:#1a1a18;';
+    var hasExactAspect = !!(meta && meta.outW && meta.outH);
+    var bgCss;
+    if (!photo) {
+      bgCss = 'background:#1a1a18;';
+    } else if (hasExactAspect) {
+      // 크롭 메타가 있으면 컨테이너 aspect == 이미지 aspect → 100% 100% 로 정확 일치
+      bgCss = 'background-image:url('+photo+');background-size:100% 100%;background-position:center;background-repeat:no-repeat;';
+    } else {
+      // 레거시: 비율 정보 없음 → 기존 cover 유지
+      bgCss = 'background-image:url('+photo+');background-size:cover;background-position:center;';
+    }
 
     // 스케일(zoom) 상태 제거 — 사진 고정
 
@@ -11521,8 +11676,8 @@ function rpRenderTypo() {
             +'font-family:Montserrat,sans-serif;font-size:8px;font-weight:700;color:#c8a96e;cursor:pointer;">GRID ✓</button>'
         +'</div>'
       +'</div>'
-      // 뷰포트: 풀사이즈(tiket 동일) CSS, scale로 화면에 맞게 축소 → % 좌표 완벽 일치
-      +'<div style="width:'+Math.round(_availW)+'px;height:'+Math.round(_vh*_scale)+'px;overflow:hidden;position:relative;margin:0 auto;">'
+      // 뷰포트: 사진 aspect(baseW:baseH) 그대로 — 외부 래퍼 높이도 baseH*_scale 로 정확 일치
+      +'<div style="width:'+Math.round(_availW)+'px;height:'+Math.round(baseH*_scale)+'px;overflow:hidden;position:relative;margin:0 auto;">'
       +'<div id="rpViewport'+idx+'" style="width:'+baseW+'px;height:'+baseH+'px;overflow:hidden;position:relative;transform:scale('+_scale+');transform-origin:top left;">'
         // 캔버스
         +'<div id="rpCanvas'+idx+'" style="position:absolute;top:0;left:0;width:'+baseW+'px;height:'+baseH+'px;transform-origin:center center;transform:scale(1);'+bgCss+'">'
