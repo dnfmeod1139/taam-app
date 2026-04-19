@@ -8081,6 +8081,9 @@ function openRestPage(){
   var submitBtn = document.querySelector('#restPage .rp-submit');
   if (submitBtn) submitBtn.textContent = '등록하기';
   document.getElementById('restPage').style.display='flex';
+  // 스크롤 최상단으로 리셋 (이전 등록 위치 기억 방지)
+  var rpForm = document.querySelector('#restPage .rp-form');
+  if (rpForm) rpForm.scrollTop = 0;
 }
 function closeRestPage(){
   _rpEditId = null;
@@ -9011,6 +9014,9 @@ function openTU(){
     document.querySelectorAll('.tu-rest-item').forEach(function(i){ i.classList.remove('on'); });
   }
   document.getElementById('tuScreen').style.display='flex';
+  // 스크롤 최상단으로 리셋 (이전 업로드 위치 기억 방지)
+  var tuForm = document.querySelector('#tuScreen .tu-form');
+  if (tuForm) tuForm.scrollTop = 0;
 }
 function closeTU(){
   _tuEditId=null;
@@ -11231,7 +11237,17 @@ function partnerRequestDelete(id) {
   var t = ticketDB.find(function(x){ return String(x.id)===String(id); });
   if (!t) return;
   t.status = 'deleteRequest';
-  saveTickets(); renderPartnerTicketList(); updatePendingBadge();
+  saveTickets();
+  // 파트너 자신의 리스트 + pending 뱃지
+  renderPartnerTicketList();
+  updatePendingBadge();
+  // ★ 공개 화면(홈·티켓 페이지·캐러셀·관리자 리스트)에서도 즉시 숨기기
+  //   deleteRequest 상태는 이들 화면 필터에서 제외되지만, 기존에 렌더된 DOM은
+  //   re-render 해야 사라진다
+  renderCarousel();
+  renderHomeTickets();
+  renderTicketGenres();
+  renderTicketList();
   showToast('📨','삭제 신청','슈퍼 어드민에게 삭제 승인 요청을 보냈습니다');
 }
 
@@ -11360,7 +11376,14 @@ function rejectTicket(id) {
     ticketDB = ticketDB.filter(function(x){ return String(x.id)!==String(id); });
     showToast('✕','거절','업로드 요청이 거절되었습니다');
   }
-  saveTickets(); renderPendingApproval(); updatePendingBadge();
+  saveTickets();
+  // 공개 화면도 함께 갱신 — 삭제 반려 시 티켓 다시 보이게, 업로드 거절 시 완전 제거
+  renderCarousel();
+  renderHomeTickets();
+  renderTicketGenres();
+  renderTicketList();
+  renderPendingApproval();
+  updatePendingBadge();
 }
 
 function getCurrentUserGrade() {
