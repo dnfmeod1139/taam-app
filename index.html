@@ -6,13 +6,25 @@
 <title>Exclusive Experience</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Montserrat:wght@400;600;700;800&family=Oswald:wght@400;600;700&family=Noto+Sans+KR:wght@400;500;700&display=swap" onload="this.onload=null;this.rel='stylesheet'">
-<noscript><link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Montserrat:wght@400;600;700;800&family=Oswald:wght@400;600;700&family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet"></noscript>
+<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Montserrat:wght@400;600;700;800;900&family=Oswald:wght@400;600;700&family=Noto+Sans+KR:wght@400;500;700&display=swap" onload="this.onload=null;this.rel='stylesheet'">
+<noscript><link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Montserrat:wght@400;600;700;800;900&family=Oswald:wght@400;600;700&family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet"></noscript>
 <link rel="preload" as="style" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css" onload="this.onload=null;this.rel='stylesheet'">
 <noscript><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css"></noscript>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js" defer></script>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+
+<script>
+// 초기 깜빡임 차단 — localStorage 미러로 동기 체크 (IDB는 비동기라 늦음)
+// 인증된 세션이면 html 요소에 'auto-login' 클래스를 즉시 부여
+(function(){
+  try {
+    if(localStorage.getItem('authedSession') === '1'){
+      document.documentElement.classList.add('auto-login');
+    }
+  } catch(e){}
+})();
+</script>
 
 <style>
 /* ═══════════════════════════════════════
@@ -27,7 +39,8 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:Not
 .hcd.active{width:22px;border-radius:3px;background:rgba(200,169,110,.9);display:none;}
 
 /* ── SPLASH ── */
-.splash{position:fixed;inset:0;z-index:9000;background:#000;display:block}
+.splash{position:fixed;inset:0;z-index:9000;background:#000;display:block;transition:opacity .35s ease}
+.splash.fading{opacity:0;pointer-events:none}
 .splash-bg{position:absolute;inset:0;background:linear-gradient(160deg,#1a0508 0%,#0d0306 40%,#120208 100%)}
 .splash-ov{position:absolute;inset:0;background:linear-gradient(160deg,rgba(0,0,0,.45) 0%,rgba(0,0,0,.05) 45%,rgba(0,0,0,.65) 100%)}
 .splash-vi{position:absolute;inset:0;box-shadow:inset 0 0 130px rgba(0,0,0,.5);pointer-events:none}
@@ -51,7 +64,20 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:Not
 @keyframes fadeUp{from{opacity:0;transform:translateX(-50%) translateY(18px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
 
 /* ── APP WRAPPER ── */
-#appWrapper{display:block}
+#appWrapper{display:none}
+#appWrapper.ready{display:block}
+/* 부팅 중 절대 보이면 안 되는 전체화면 오버레이 */
+#appWrapper:not(.ready) #codeScreen,
+#appWrapper:not(.ready) #phoneScreen,
+#appWrapper:not(.ready) #adminScreen,
+#appWrapper:not(.ready) #partnerAdminScreen{display:none !important}
+/* 자동 로그인 경로 — 로그인 관련 전체화면을 절대 보이지 않게 강제 숨김
+   (스플래시가 사라진 후에도 openCode 호출 전까진 계속 숨김) */
+html.auto-login #codeScreen,
+html.auto-login #phoneScreen{display:none !important;visibility:hidden !important}
+/* 자동 로그인 경로 — 스플래시 하단의 enter code / 관리자 코드 버튼 숨김
+   (1.15초에 fade-up 애니로 등장하는데 자동 로그인 때는 필요 없음) */
+html.auto-login .splash .bottom-group{display:none !important}
 
 /* ── CODE SCREEN ── */
 .code-screen{position:fixed;inset:0;background:#fff;display:none;flex-direction:column;align-items:center;justify-content:center;z-index:8000;padding:0 32px}
@@ -1702,6 +1728,34 @@ window._googlePSvc = null;
 </script>
 <body>
 <script>
+// 로그아웃 함수 — 네이티브 confirm 대신 커스텀 팝업 사용 (Claude 앱 프리뷰 등 환경 호환)
+window.confirmLogout = function(){
+  // 이미 떠있으면 무시
+  if(document.getElementById('__logoutConfirmPopup')) return;
+  var overlay = document.createElement('div');
+  overlay.id = '__logoutConfirmPopup';
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:24px;box-sizing:border-box;';
+  overlay.innerHTML =
+    '<div style="background:#fff;border-radius:18px;width:100%;max-width:300px;padding:24px 20px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.3);">'
+    + '<div style="font-family:\'Noto Sans KR\',sans-serif;font-size:15px;font-weight:700;color:#1a1a18;margin-bottom:8px;">로그아웃</div>'
+    + '<div style="font-family:\'Noto Sans KR\',sans-serif;font-size:13px;color:#777;line-height:1.6;margin-bottom:22px;">로그아웃 하시겠습니까?</div>'
+    + '<button id="__logoutYes" style="width:100%;padding:13px;background:#9B1C1C;border:none;border-radius:10px;font-family:\'Noto Sans KR\',sans-serif;font-size:14px;font-weight:700;color:#fff;cursor:pointer;margin-bottom:8px;">로그아웃</button>'
+    + '<button id="__logoutNo" style="width:100%;padding:13px;background:#f0ede8;border:none;border-radius:10px;font-family:\'Noto Sans KR\',sans-serif;font-size:14px;font-weight:500;color:#555;cursor:pointer;">취소</button>'
+    + '</div>';
+  document.body.appendChild(overlay);
+  document.getElementById('__logoutNo').onclick = function(){ overlay.remove(); };
+  document.getElementById('__logoutYes').onclick = function(){
+    overlay.remove();
+    try {
+      if(typeof IDB !== 'undefined') IDB.del('excRole').catch(function(){});
+      if(typeof IDB !== 'undefined') IDB.del('authedSession').catch(function(){});
+    } catch(e){}
+    try { localStorage.removeItem('authedSession'); } catch(e){}
+    setTimeout(function(){ location.reload(); }, 150);
+  };
+};
+</script>
+<script>
 // ═══════════════════════════════════════════════════════
 // 🚨 긴급 복구 시스템 (앱 꼬임 방지)
 // ═══════════════════════════════════════════════════════
@@ -2902,6 +2956,18 @@ window.addEventListener('error', function(e){
         <div class="admin-arrow">›</div>
       </div>
     </div>
+
+    <!-- 로그아웃 -->
+    <div class="admin-section-label" style="color:#9B1C1C;">Account</div>
+    <div style="border-top:1px solid rgba(0,0,0,.08);">
+      <div class="admin-menu-item" onclick="confirmLogout()" style="color:#9B1C1C;">
+        <div>
+          <div class="admin-menu-text" style="color:#9B1C1C;">로그아웃</div>
+          <div class="admin-menu-sub">인증 세션을 종료하고 시작화면으로 이동합니다</div>
+        </div>
+        <div class="admin-arrow" style="color:#9B1C1C;">›</div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -3032,6 +3098,18 @@ window.addEventListener('error', function(e){
           <div class="admin-menu-sub">예치금·구매내역·충전내역만 삭제 (시스템 데이터 유지)</div>
         </div>
         <div class="admin-arrow" style="color:#c00;">›</div>
+      </div>
+    </div>
+
+    <!-- 로그아웃 -->
+    <div class="admin-section-label" style="color:#9B1C1C;">Account</div>
+    <div style="border-top:1px solid rgba(0,0,0,.08);">
+      <div class="admin-menu-item" onclick="confirmLogout()" style="color:#9B1C1C;">
+        <div>
+          <div class="admin-menu-text" style="color:#9B1C1C;">로그아웃</div>
+          <div class="admin-menu-sub">인증 세션을 종료하고 시작화면으로 이동합니다</div>
+        </div>
+        <div class="admin-arrow" style="color:#9B1C1C;">›</div>
       </div>
     </div>
   </div>
@@ -3957,6 +4035,21 @@ function saveRole(){
     restName:_currentAdminRestName, phone:_currentUserPhone, name:_currentUserName
   })).catch(function(){});
 }
+// 인증된 세션 표시 (자동 로그인 판별용)
+// localStorage에도 미러 저장 — 다음 앱 시작 시 <head>에서 동기 체크 (IDB는 비동기라 초기 렌더에 늦음)
+function markAuthedSession(){
+  IDB.set('authedSession', '1').catch(function(){});
+  try { localStorage.setItem('authedSession', '1'); } catch(e){}
+  document.documentElement.classList.add('auto-login');
+}
+function clearAuthedSession(){
+  IDB.del('authedSession').catch(function(){});
+  try { localStorage.removeItem('authedSession'); } catch(e){}
+  document.documentElement.classList.remove('auto-login');
+}
+function isAuthedSession(){
+  return IDB.get('authedSession').then(function(v){ return v === '1'; }).catch(function(){ return false; });
+}
 function loadRole(){
   return IDB.get('excRole').then(function(s){
     if(s){ var d=JSON.parse(s);
@@ -4151,6 +4244,7 @@ function vpVerify(){
     var verifiedPhone = (document.getElementById('vpPhone').value||'').trim();
     var verifiedName = (document.getElementById('vpName').value||'').trim();
     detectAndSetRole(verifiedPhone, verifiedName);
+    markAuthedSession(); // 자동 로그인 활성화
     reloadUserData();
     openMain();
   }
@@ -4165,6 +4259,7 @@ function skipPhone(){
   _currentAdminRestId = null;
   _currentAdminRestName = '';
   saveRole();
+  markAuthedSession(); // 자동 로그인 활성화
   openMain();
 }
 
@@ -4182,8 +4277,17 @@ function closeCode(){
 }
 
 function openCode(){
+  // 자동 로그인 숨김 해제 (수동 로그인 경로 — 코드 화면 보여야 함)
+  document.documentElement.classList.remove('auto-login');
   var splash = document.querySelector('.splash');
   if(splash) splash.style.display = 'none';
+  var wrap = document.getElementById('appWrapper');
+  if(wrap) wrap.classList.add('ready');
+  // 자동 로그인 부팅에서 강제 숨김을 해제 (인증 화면을 이제 보여야 함)
+  var cs = document.getElementById('codeScreen');
+  if(cs){ cs.removeAttribute('hidden'); cs.style.visibility=''; cs.style.removeProperty('display'); }
+  var ps = document.getElementById('phoneScreen');
+  if(ps){ ps.removeAttribute('hidden'); ps.style.visibility=''; ps.style.removeProperty('display'); }
   // 다른 화면 전부 숨기고 codeScreen만 표시
   var ws = ['phoneScreen','adminScreen','partnerAdminScreen','homeView','contentsView','ticketView'];
   ws.forEach(function(id){ var el=document.getElementById(id); if(el) el.style.display='none'; });
@@ -4270,6 +4374,7 @@ function checkSaPin() {
     _currentAdminRestName = '';
     reloadUserData();
     saveRole();
+    markAuthedSession(); // 자동 로그인 활성화
     updateMpAdminBtn();
     closeSuperAdminPin();
     adminDirectAccess();
@@ -4287,6 +4392,7 @@ function checkSaPin() {
       _currentAdminRestName = restaurantDB[0].name;
     }
     saveRole();
+    markAuthedSession(); // 자동 로그인 활성화
     updateMpAdminBtn();
     closeSuperAdminPin();
     adminDirectAccess();
@@ -4300,8 +4406,10 @@ function checkSaPin() {
 function adminDirectAccess(){
   var splash = document.querySelector('.splash');
   if(splash) splash.style.display = 'none';
-  document.getElementById('appWrapper').style.display = 'block';
+  var wrap = document.getElementById('appWrapper');
+  if(wrap){ wrap.classList.add('ready'); wrap.style.display = 'block'; }
   loadRole(); // PIN으로 설정된 역할 로드
+  // 참고: bootAutoLogin 경로에서도 이 함수가 호출되는데, 거기서 이미 ready 처리됨
 
   if (_currentRole === 'superadmin') {
     // 슈퍼어드민 → 바로 관리자 페이지로
@@ -6001,7 +6109,6 @@ function nsSync(){
   var allOn = Array.from(items).every(function(cb){ return cb.checked; });
   document.getElementById('ns-all').checked = allOn;
 }
-function confirmLogout(){ if(confirm('로그아웃 하시겠습니까?')){ document.getElementById('myPage').style.display='none'; } }
 function closePage(id){ document.getElementById(id).style.display='none'; }
 function openPage(id,fn){ document.getElementById(id).style.display='flex'; if(fn)fn(); }
 function openPaymentMethod(){
@@ -7162,10 +7269,16 @@ function closeAllAdminScreens(){
 function openAdmin(){
   closeAllAdminScreens();
   document.getElementById('adminScreen').style.display='flex';
+  // mainGnb가 하단에 떠서 로그아웃 버튼 가리는 것 방지
+  var gnb = document.getElementById('mainGnb');
+  if(gnb) gnb.style.display = 'none';
 }
 function closeAdmin(){
   closeAllAdminScreens();
   document.getElementById('adminScreen').style.display='none';
+  // 일반 화면으로 복귀할 때 mainGnb 복원
+  var gnb = document.getElementById('mainGnb');
+  if(gnb) gnb.style.display = 'flex';
 }
 function closeSubPage(id){
   var el=document.getElementById(id);
@@ -10144,10 +10257,16 @@ function openPartnerAdmin() {
   var restTag = document.getElementById('partnerRestTag');
   if (restTag) restTag.textContent = _currentAdminRestName || '레스토랑 미지정';
   document.getElementById('partnerAdminScreen').style.display = 'flex';
+  // mainGnb가 하단에 떠서 로그아웃 버튼 가리는 것 방지
+  var gnb = document.getElementById('mainGnb');
+  if(gnb) gnb.style.display = 'none';
 }
 
 function closePartnerAdmin() {
   document.getElementById('partnerAdminScreen').style.display = 'none';
+  // 일반 화면으로 복귀할 때 mainGnb 복원
+  var gnb = document.getElementById('mainGnb');
+  if(gnb) gnb.style.display = 'flex';
 }
 
 function openPartnerTU() {
@@ -21012,6 +21131,63 @@ function _instaDrawPath(id, offsetVal){
     setTimeout(initAnim, 150);
   }
 })();
+
+// ═══════════════════════════════════════════════════════════
+// 자동 로그인 + 로그아웃
+// ═══════════════════════════════════════════════════════════
+
+// 앱 시작 시 자동 로그인 체크
+// - 이전에 인증된 세션이 있으면: 스플래시 1.2초 보여준 뒤 메인으로 자동 이동
+// - 없으면: 스플래시 유지 → 유저가 "enter code" 버튼 눌러 수동 진입
+(function(){
+  function bootAutoLogin(){
+    // 동기로 이미 html.auto-login 클래스가 부여된 경우만 자동 로그인 진행
+    if(!document.documentElement.classList.contains('auto-login')) return;
+    if(typeof IDB === 'undefined') return;
+    // IDB로 이중 검증 (localStorage는 수동 삭제 가능)
+    IDB.get('authedSession').then(function(v){
+      if(v !== '1'){
+        // IDB엔 없는데 localStorage만 있는 경우 — 불일치 → 자동 로그인 취소
+        document.documentElement.classList.remove('auto-login');
+        try { localStorage.removeItem('authedSession'); } catch(e){}
+        return;
+      }
+      if(typeof loadRole !== 'function') return;
+      loadRole().then(function(){
+        setTimeout(function(){
+          var wrap = document.getElementById('appWrapper');
+          var splash = document.querySelector('.splash');
+          // 1. openMain 먼저 실행 (스플래시 뒤에서 홈 세팅)
+          if(_currentRole === 'superadmin' && typeof adminDirectAccess === 'function'){
+            adminDirectAccess();
+          } else if(typeof openMain === 'function'){
+            openMain();
+          }
+          // 2. 300ms 여유 (openMain 내부 비동기 chain 완료) → .ready 추가 → 스플래시 fade-out
+          setTimeout(function(){
+            if(wrap) wrap.classList.add('ready');
+            document.documentElement.classList.remove('auto-login');
+            if(splash){
+              splash.classList.add('fading');
+              setTimeout(function(){
+                splash.style.display = 'none';
+                splash.classList.remove('fading');
+              }, 400);
+            }
+          }, 300);
+        }, 1200);
+      }).catch(function(){});
+    }).catch(function(){});
+  }
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', bootAutoLogin);
+  } else {
+    setTimeout(bootAutoLogin, 50);
+  }
+})();
+
+// 실제 로그아웃 — 앞쪽 body 시작 script의 커스텀 팝업 버전을 사용
+// (여기서 덮어쓰지 않음 — 예전엔 confirm() 썼지만 환경 호환성 위해 위쪽 버전 유지)
 
 </script>
 
