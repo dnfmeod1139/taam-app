@@ -2272,6 +2272,58 @@ window._googlePSvc = null;
 <body>
 <script>
 // 로그아웃 함수 — 네이티브 confirm 대신 커스텀 팝업 사용 (Claude 앱 프리뷰 등 환경 호환)
+// ═══════════════════════════════════════════════════════════════
+// 데이터 내보내기 — 브라우저 IndexedDB 에 있는 모든 데이터를 JSON 파일로 다운로드
+// 이후 Claude 에게 이 JSON 파일을 주면 index.html 안에 박아넣어 주면,
+// GitHub → Vercel 에서도 다른 사람이 볼 수 있게 됨
+// ═══════════════════════════════════════════════════════════════
+window.exportAllData = function(){
+  try {
+    // IDB 에 저장된 모든 키 + 값을 읽어옴
+    var req = indexedDB.open('taamDB');
+    req.onsuccess = function(){
+      var db = req.result;
+      if (!db.objectStoreNames.contains('kv')) {
+        alert('데이터베이스가 비어있습니다. 티켓·레스토랑을 먼저 등록하세요.');
+        return;
+      }
+      var tx = db.transaction('kv', 'readonly');
+      var store = tx.objectStore('kv');
+      var all = store.getAll();
+      var keys = store.getAllKeys();
+      all.onsuccess = function(){
+        keys.onsuccess = function(){
+          var values = all.result;
+          var keyList = keys.result;
+          var dump = {};
+          for (var i = 0; i < keyList.length; i++) {
+            var v = values[i];
+            // JSON 문자열이면 파싱, 아니면 원본
+            try { dump[keyList[i]] = JSON.parse(v); }
+            catch(e) { dump[keyList[i]] = v; }
+          }
+          // 파일로 다운로드
+          var blob = new Blob([JSON.stringify(dump, null, 2)], {type:'application/json'});
+          var url = URL.createObjectURL(blob);
+          var a = document.createElement('a');
+          a.href = url;
+          var ts = new Date().toISOString().replace(/[:.]/g,'-').slice(0,19);
+          a.download = 'taam-data-' + ts + '.json';
+          document.body.appendChild(a);
+          a.click();
+          setTimeout(function(){ document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+          alert('데이터 내보내기 완료!\n\n파일이 다운로드 되었습니다.\nClaude 에게 이 파일을 업로드하고 "데이터 박아넣어줘" 라고 말하세요.');
+        };
+      };
+    };
+    req.onerror = function(){
+      alert('데이터베이스 열기 실패: ' + (req.error && req.error.message || 'unknown'));
+    };
+  } catch (e) {
+    alert('내보내기 오류: ' + e.message);
+  }
+};
+
 window.confirmLogout = function(){
   // 이미 떠있으면 무시
   if(document.getElementById('__logoutConfirmPopup')) return;
@@ -3700,6 +3752,18 @@ window.addEventListener('error', function(e){
           <div class="admin-menu-sub">예치금·구매내역·충전내역만 삭제 (시스템 데이터 유지)</div>
         </div>
         <div class="admin-arrow" style="color:#c00;">›</div>
+      </div>
+    </div>
+
+    <!-- 데이터 내보내기 (GitHub에 박아넣을 JSON 생성) -->
+    <div class="admin-section-label" style="color:#2a6a2a;">Data Export</div>
+    <div style="border-top:1px solid rgba(0,0,0,.08);">
+      <div class="admin-menu-item" onclick="exportAllData()" style="color:#2a6a2a;">
+        <div>
+          <div class="admin-menu-text" style="color:#2a6a2a;">데이터 내보내기</div>
+          <div class="admin-menu-sub">모든 레스토랑·티켓·회원 데이터를 JSON 파일로 다운로드</div>
+        </div>
+        <div class="admin-arrow" style="color:#2a6a2a;">›</div>
       </div>
     </div>
 
