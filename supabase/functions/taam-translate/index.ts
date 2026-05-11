@@ -36,7 +36,13 @@
 //   ANTHROPIC_API_KEY  (필수)
 // ════════════════════════════════════════════════════════════════
 
-import { corsHeaders } from "../_shared/cors.ts";
+// 🆕 CORS 헤더 인라인 (Web Editor 배포 호환 — _shared import 사용 X)
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+};
 
 const CLAUDE_MODEL = "claude-sonnet-4-5";
 const ANTHROPIC_VERSION = "2023-06-01";
