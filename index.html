@@ -11811,10 +11811,89 @@ function adgSelectUser(userId){
     '</div>';
   infoEl.style.display = 'block';
   document.getElementById('adgSearchResults').innerHTML = '';
+
+  // 🆕 2026.05.21: 회원의 통합 거래 내역 (충전·구매·환불) 표시
+  _adgLoadTransactions(userId, infoEl);
+
   // 다음 단계로 자동 포커스 이동
   setTimeout(function(){ document.getElementById('adgAmount').focus(); }, 100);
 }
 window.adgSelectUser = adgSelectUser;
+
+// 🆕 2026.05.21: 회원 통합 거래 내역 로드 + 표시
+//   deposit_transactions 테이블에서 충전/구매/환불/부여/차감 모두 한 번에 가져옴
+async function _adgLoadTransactions(userId, anchorEl){
+  if(!window.sb || !userId || !anchorEl) return;
+  try {
+    var res = await window.sb
+      .from('deposit_transactions')
+      .select('id, deposit_type, change_type, amount, balance_after, description, metadata, created_at')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(50);
+    if(res.error){
+      console.warn('[adg transactions] 조회 실패:', res.error.message);
+      return;
+    }
+    var txns = res.data || [];
+    var html = '<div style="margin-top:12px;background:#faf8f4;border:1px solid #e0ddd8;border-radius:10px;padding:12px 14px;">';
+    html += '<div style="font-size:11px;font-weight:800;color:#5d1622;letter-spacing:.1em;text-transform:uppercase;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;">';
+    html += '<span>📜 거래 내역 (최근 50건)</span>';
+    html += '<span style="font-size:10px;color:#888;font-weight:600;">' + txns.length + '건</span>';
+    html += '</div>';
+    if(txns.length === 0){
+      html += '<div style="font-size:11.5px;color:#999;padding:8px 0;text-align:center;">거래 내역 없음</div>';
+    } else {
+      html += '<div style="max-height:280px;overflow-y:auto;">';
+      txns.forEach(function(tx){
+        var type = tx.change_type || 'other';
+        var amt = tx.amount || 0;
+        var isPos = amt >= 0;
+        var typeLabel, typeColor;
+        switch(type){
+          case 'admin_grant':         typeLabel = '관리자 부여'; typeColor = '#5d1622'; break;
+          case 'admin_deduct':        typeLabel = '관리자 차감'; typeColor = '#c00';    break;
+          case 'user_charge':         typeLabel = '회원 충전';   typeColor = '#2a6a2a'; break;
+          case 'user_use':            typeLabel = '회원 사용';   typeColor = '#999';    break;
+          case 'ticket_purchase':     typeLabel = '티켓 구매';   typeColor = '#1a1a18'; break;
+          case 'ticket_refund':       typeLabel = '티켓 환불';   typeColor = '#2a6a2a'; break;
+          case 'membership_payment':  typeLabel = '멤버십 결제'; typeColor = '#5d1622'; break;
+          case 'membership_refund':   typeLabel = '멤버십 환불'; typeColor = '#2a6a2a'; break;
+          case 'reservation_payment': typeLabel = '예약 결제';   typeColor = '#1a1a18'; break;
+          case 'reservation_refund':  typeLabel = '예약 환불';   typeColor = '#2a6a2a'; break;
+          case 'refund':              typeLabel = '환불';        typeColor = '#2a6a2a'; break;
+          default:                    typeLabel = type;          typeColor = '#888';
+        }
+        var dt = tx.created_at ? new Date(tx.created_at) : null;
+        var dtStr = dt ? (dt.getMonth()+1) + '/' + dt.getDate() + ' ' + dt.getHours().toString().padStart(2,'0') + ':' + dt.getMinutes().toString().padStart(2,'0') : '-';
+        var depType = tx.deposit_type === 'membership' ? '멤' : '일';
+        html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;padding:8px 0;border-bottom:1px dashed #e8e4dc;font-size:11.5px;">';
+        html += '<div style="flex:1;min-width:0;">';
+        html += '<div style="font-weight:700;color:' + typeColor + ';font-size:11.5px;">[' + depType + '] ' + typeLabel + '</div>';
+        html += '<div style="color:#888;font-size:10.5px;margin-top:2px;word-break:break-all;">' + _escHtmlAdg(tx.description || '') + '</div>';
+        html += '<div style="color:#bbb;font-size:10px;margin-top:2px;">' + dtStr + '</div>';
+        html += '</div>';
+        html += '<div style="text-align:right;flex-shrink:0;">';
+        html += '<div style="font-weight:800;color:' + (isPos ? '#2a6a2a' : '#c00') + ';">' + (isPos ? '+' : '') + '₩' + amt.toLocaleString() + '</div>';
+        html += '<div style="font-size:10px;color:#aaa;margin-top:2px;">잔액 ₩' + (tx.balance_after||0).toLocaleString() + '</div>';
+        html += '</div>';
+        html += '</div>';
+      });
+      html += '</div>';
+    }
+    html += '</div>';
+
+    // 기존 infoEl 뒤에 거래 내역 박스 추가 (한 번만)
+    var prev = document.getElementById('adgTransactionsBox');
+    if(prev) prev.remove();
+    var box = document.createElement('div');
+    box.id = 'adgTransactionsBox';
+    box.innerHTML = html;
+    anchorEl.parentNode.insertBefore(box, anchorEl.nextSibling);
+  } catch(e){
+    console.warn('[adg transactions] 예외:', e);
+  }
+}
 
 async function adgSubmit(){
   if (!_adgIsSuperAdmin()){
@@ -14382,6 +14461,50 @@ function completePurchase(){
   saveDeposit();
   _refreshBalanceUI();
 
+  // 🆕 2026.05.21: deposit_transactions 테이블에도 기록 → 슈퍼어드민이 회원 거래 내역 조회 가능
+  //   회원 마이페이지의 purchaseHistory(IDB) + Supabase의 통합 거래 로그를 하나로 연동
+  //   슈퍼어드민이 회원 검색 시 충전/구매/환불 모든 흐름을 한눈에 볼 수 있도록.
+  (async function logTicketPurchaseToTransactions(){
+    try {
+      if(!window.sb) return;
+      var authRes = await window.sb.auth.getUser();
+      var user = authRes && authRes.data && authRes.data.user;
+      if(!user) return;
+      // 잔액 조회 (balance_after 정확 기록용)
+      var profRes = await window.sb.from('profiles')
+        .select('membership_deposit_balance, general_deposit_balance, deposit_balance')
+        .eq('id', user.id).single();
+      var memBal = (profRes.data && profRes.data.membership_deposit_balance) || 0;
+      var genBal = (profRes.data && profRes.data.general_deposit_balance) || 0;
+      var newBalance = (profRes.data && profRes.data.deposit_balance) || (memBal + genBal);
+      // 구매 종류 판별 (멤버십 우선 차감 / 또는 일반)
+      var depositType = (memBal >= paid) ? 'membership' : 'general';
+      var restName = currentRest ? currentRest.name : (t.rest || '레스토랑');
+      await window.sb.from('deposit_transactions').insert({
+        user_id: user.id,
+        deposit_type: depositType,
+        change_type: 'ticket_purchase',
+        amount: -paid,                                // 음수 (차감)
+        balance_after: newBalance - paid,
+        description: restName + ' 티켓 ' + pax + '인 구매',
+        metadata: {
+          purchase_id: purchaseId,
+          ticket_id: t.id,
+          restaurant_id: t.restId || null,
+          restaurant_name: restName,
+          ticket_type: t.type || '',
+          visit_date: t.date || null,
+          visit_time: t.time || null,
+          party_size: pax,
+          payment_id: window._lastPaymentId || null
+        }
+      });
+      console.log('✅ deposit_transactions 티켓 구매 기록 완료');
+    } catch(e){
+      console.warn('⚠ deposit_transactions 기록 실패 (구매는 정상 진행):', e.message);
+    }
+  })();
+
   // 좌석 차감 → 남은 좌석 0이면 자동 sold out
   var totalPax = parseInt(t.totalPax || t.assignedPax || 0);
   var usedPax  = purchaseHistory.filter(function(h){ return String(h.id)===String(t.id); })
@@ -15042,15 +15165,217 @@ function ticketHistRender(idx){
     var s = h.status || 'upcoming';
     var visitStr = h.visitDate ? ' · '+_thVisitPrefix+h.visitDate : '';
     var paxLabel = h.pax + (_thIsEn ? (h.pax===1?' guest':' guests') : (_thIsJa ? '名' : '인'));
+    // 🆕 2026.05.21: 방문 예정 (upcoming) 상태일 때만 취소 버튼 표시
+    var cancelBtn = '';
+    if(s === 'upcoming' && h.purchaseId){
+      var refundPreview = (typeof calculateTicketRefund === 'function')
+        ? calculateTicketRefund(h, r, new Date(), false)
+        : null;
+      var btnLabel = _thIsEn ? 'Request cancel' : (_thIsJa ? 'キャンセル申請' : '구매 취소 요청');
+      cancelBtn = '<button onclick="openCancelTicketModal(\''+h.purchaseId+'\')" '
+        + 'style="margin-top:10px;width:100%;padding:10px;background:#fff;border:1px solid #d4d4d4;border-radius:8px;font-family:var(--font-main);font-size:11.5px;font-weight:700;color:#5d1622;cursor:pointer;letter-spacing:.02em;">'
+        + btnLabel
+        + (refundPreview ? ' (환불 가능 ₩' + refundPreview.refundable.toLocaleString() + ')' : '')
+        + '</button>';
+    }
+    // 환불 상태 표시 (cancelled 일 때)
+    var refundInfo = '';
+    if(s === 'cancelled' && h.refundedAmount != null){
+      refundInfo = '<div style="margin-top:6px;font-size:11px;color:#2a6a2a;">↳ 환불됨: ₩'+ (h.refundedAmount||0).toLocaleString() +'</div>';
+      if(h.cancelReason) refundInfo += '<div style="margin-top:2px;font-size:10.5px;color:#999;">사유: '+ _escHtmlAdg(h.cancelReason) +'</div>';
+    }
     return '<div class="mp-sub-item">'
       +'<div class="mp-sub-item-head">'
         +'<div class="mp-sub-item-name">'+(r?r.name:_thUnknown)+'</div>'
         +'<div class="mp-sub-item-badge" style="'+badgeStyles[s]+'">'+badgeLabels[s]+'</div>'
       +'</div>'
       +'<div class="mp-sub-item-meta">'+paxLabel+' · ₩'+h.amt.toLocaleString()+visitStr+'</div>'
+      + refundInfo
+      + cancelBtn
     +'</div>';
   }).join('');
 }
+
+// 🆕 2026.05.21: 환불 가능 금액 계산 — TAAM 환불 정책
+//   정책:
+//     1. 구매 30분 이내 → 전액 환불 (대행비 포함)
+//     2. 30분~30일전 → 대행비 제외 환불 (식사비+주류 미니멈 환불)
+//     3. 29일~당일 → 환불 불가 (슈퍼어드민 예외 가능)
+//     4. 슈퍼어드민 → 정책 무시 전액 환불 가능
+function calculateTicketRefund(purchaseRecord, restaurant, currentTime, isSuperAdminOverride){
+  if(!purchaseRecord) return { refundable: 0, agencyHeld: 0, reason: '구매 정보 없음', policy: 'no_data' };
+
+  var pax = purchaseRecord.pax || 1;
+  var paidTotal = purchaseRecord.amt || 0;
+
+  // 슈퍼어드민 예외 — 전액 환불
+  if(isSuperAdminOverride){
+    return { refundable: paidTotal, agencyHeld: 0, reason: '슈퍼어드민 예외 환불', policy: 'super_admin' };
+  }
+
+  // 티켓 정보에서 대행비 추출 (현재 시점 ticketDB 기준)
+  var ticket = (typeof ticketDB !== 'undefined') ? ticketDB.find(function(x){ return String(x.id) === String(purchaseRecord.id); }) : null;
+  var agencyPerPax = ticket ? parseInt(ticket.agencyFee || 0) : 0;
+  var agencyTotal = agencyPerPax * pax;
+
+  // 구매 시점
+  var purchaseTime = purchaseRecord.date ? new Date(purchaseRecord.date) : null;
+  if(purchaseTime && !isNaN(purchaseTime.getTime())){
+    var minSincePurchase = (currentTime - purchaseTime) / 60000;
+    // 정책 1: 30분 이내 → 전액 환불
+    if(minSincePurchase <= 30){
+      return { refundable: paidTotal, agencyHeld: 0, reason: '구매 30분 이내 전액 환불', policy: 'within_30min' };
+    }
+  }
+
+  // 방문일까지 남은 일수 계산
+  var visitDate = null;
+  if(purchaseRecord.visitDate){
+    var parts = purchaseRecord.visitDate.split('.');
+    if(parts.length === 3) visitDate = new Date(parseInt(parts[0]), parseInt(parts[1])-1, parseInt(parts[2]));
+    else if(parts.length === 2) visitDate = new Date(currentTime.getFullYear(), parseInt(parts[0])-1, parseInt(parts[1]));
+  }
+  if(!visitDate || isNaN(visitDate.getTime())){
+    // 방문일 모르면 — 보수적으로 대행비 제외 환불 (정책 2 기본)
+    return { refundable: paidTotal - agencyTotal, agencyHeld: agencyTotal, reason: '대행비 제외 환불 (방문일 미확인)', policy: 'agency_excluded' };
+  }
+  var daysUntilVisit = (visitDate - currentTime) / (1000 * 60 * 60 * 24);
+
+  // 정책 2: 방문일 30일 전까지 — 대행비 제외 환불
+  if(daysUntilVisit >= 30){
+    return { refundable: paidTotal - agencyTotal, agencyHeld: agencyTotal, reason: '방문 ' + Math.ceil(daysUntilVisit) + '일 전 — 대행비 제외 환불', policy: 'agency_excluded' };
+  }
+
+  // 정책 3: 29일~당일 → 환불 불가
+  return { refundable: 0, agencyHeld: paidTotal, reason: '방문 ' + Math.max(0, Math.ceil(daysUntilVisit)) + '일 전 — 환불 불가 (슈퍼어드민 예외 가능)', policy: 'no_refund' };
+}
+window.calculateTicketRefund = calculateTicketRefund;
+
+// 🆕 2026.05.21: 티켓 취소 요청 모달 (환불 미리보기)
+function openCancelTicketModal(purchaseId){
+  var h = purchaseHistory.find(function(x){ return x.purchaseId === purchaseId; });
+  if(!h){ alert('구매 내역을 찾을 수 없습니다.'); return; }
+  var r = restaurantDB.find(function(x){ return String(x.id) === String(h.restId); });
+  var isSuper = (typeof _currentRole !== 'undefined' && (_currentRole === 'superadmin' || _currentRole === 'super_admin'));
+  var preview = calculateTicketRefund(h, r, new Date(), isSuper);
+
+  var msg = '[티켓 취소 요청]\n\n';
+  msg += '레스토랑: ' + (r ? r.name : '알 수 없음') + '\n';
+  msg += '인원: ' + h.pax + '인\n';
+  msg += '결제 금액: ₩' + (h.amt||0).toLocaleString() + '\n';
+  msg += '방문일: ' + (h.visitDate || '미지정') + '\n\n';
+  msg += '━━━━━━ 환불 정책 ━━━━━━\n';
+  msg += '· 구매 30분 이내: 전액 환불\n';
+  msg += '· 방문일 D-30 이전: 대행비 제외 환불\n';
+  msg += '· D-29 ~ 당일: 환불 불가 (슈퍼어드민 예외 가능)\n\n';
+  msg += '━━━━━━ 환불 미리보기 ━━━━━━\n';
+  msg += '환불 가능 금액: ₩' + preview.refundable.toLocaleString() + '\n';
+  if(preview.agencyHeld > 0) msg += '대행비 보유: ₩' + preview.agencyHeld.toLocaleString() + '\n';
+  msg += '사유: ' + preview.reason + '\n\n';
+  if(preview.refundable === 0 && !isSuper){
+    msg += '⚠ 현재 환불이 불가합니다.\n슈퍼어드민에게 문의해주세요.\n\n취소 요청만 진행하시겠습니까?';
+  } else {
+    msg += '취소를 진행하시겠습니까?';
+  }
+
+  if(!confirm(msg)) return;
+
+  // 취소 실행
+  cancelTicketPurchase(purchaseId, preview, isSuper);
+}
+window.openCancelTicketModal = openCancelTicketModal;
+
+// 🆕 2026.05.21: 티켓 취소 + 환불 처리 실행
+async function cancelTicketPurchase(purchaseId, refundCalc, isSuperAdminOverride){
+  var idx = purchaseHistory.findIndex(function(x){ return x.purchaseId === purchaseId; });
+  if(idx < 0) return;
+  var h = purchaseHistory[idx];
+  var r = restaurantDB.find(function(x){ return String(x.id) === String(h.restId); });
+
+  try {
+    // 1) 로컬 purchaseHistory 업데이트
+    h.status = 'cancelled';
+    h.cancelledAt = new Date().toISOString();
+    h.refundedAmount = refundCalc.refundable;
+    h.cancelReason = refundCalc.reason;
+    h.cancelledByRole = (typeof _currentRole !== 'undefined') ? _currentRole : 'user';
+    savePurchase();
+
+    // 2) Supabase tickets 테이블 업데이트
+    if(window.sb && h.purchaseId){
+      window.sb.from('tickets').update({
+        status: 'cancelled',
+        extra_data: Object.assign({}, h.extra_data || {}, {
+          cancelled_at: h.cancelledAt,
+          refunded_amount: h.refundedAmount,
+          cancel_reason: h.cancelReason,
+          cancelled_by_role: h.cancelledByRole
+        })
+      }).eq('purchase_id', h.purchaseId).then(function(res){
+        if(res.error) console.warn('[cancel] tickets update 실패:', res.error.message);
+      });
+    }
+
+    // 3) 환불 금액 만큼 예치금 복원 (general 우선)
+    if(refundCalc.refundable > 0 && window.sb){
+      var auth = await window.sb.auth.getUser();
+      var user = auth && auth.data && auth.data.user;
+      if(user){
+        var profRes = await window.sb.from('profiles')
+          .select('membership_deposit_balance, general_deposit_balance')
+          .eq('id', user.id).single();
+        var memBal = (profRes.data && profRes.data.membership_deposit_balance) || 0;
+        var genBal = (profRes.data && profRes.data.general_deposit_balance) || 0;
+        // 일반 예치금에 환불 (정책 — 사용처 분리)
+        var newGen = genBal + refundCalc.refundable;
+        var newTotal = memBal + newGen;
+        await window.sb.from('profiles').update({
+          general_deposit_balance: newGen
+        }).eq('id', user.id);
+
+        // deposit_transactions 환불 기록
+        await window.sb.from('deposit_transactions').insert({
+          user_id: user.id,
+          deposit_type: 'general',
+          change_type: 'ticket_refund',
+          amount: refundCalc.refundable,
+          balance_after: newTotal,
+          description: (r ? r.name : '티켓') + ' 취소 환불 — ' + refundCalc.reason,
+          metadata: {
+            purchase_id: purchaseId,
+            ticket_id: h.id,
+            policy: refundCalc.policy,
+            agency_held: refundCalc.agencyHeld || 0,
+            cancelled_by: isSuperAdminOverride ? 'super_admin' : 'user'
+          }
+        });
+
+        // 로컬 잔액 동기화
+        currentDepositBalance = newTotal;
+        depositData.refund = depositData.refund || [];
+        depositData.refund.push({
+          name: (r ? r.name : '티켓') + ' 취소 환불',
+          date: new Date().toLocaleString('ko-KR'),
+          amt: refundCalc.refundable,
+          purchaseId: purchaseId
+        });
+        saveDeposit();
+        if(typeof _refreshBalanceUI === 'function') _refreshBalanceUI();
+      }
+    }
+
+    showToast('✓','취소 완료', refundCalc.refundable > 0
+      ? '환불 ₩' + refundCalc.refundable.toLocaleString() + ' 처리됨'
+      : '취소 요청 완료 (환불 없음)');
+
+    // 화면 새로고침
+    if(typeof ticketHistRender === 'function') ticketHistRender(_ticketHistTabIdx || 0);
+  } catch(e){
+    console.error('[cancel] 실패:', e);
+    alert('취소 처리 중 오류:\n' + (e.message || String(e)));
+  }
+}
+window.cancelTicketPurchase = cancelTicketPurchase;
 
 // ════════════════════════════════════════════════
 // DEPOSIT MANAGEMENT (ADMIN)
