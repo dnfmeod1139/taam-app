@@ -6592,6 +6592,18 @@ window.addEventListener('error', function(e){
       </div>
     </div>
 
+    <!-- 🆕 2026.05.21: 가입 이메일 (읽기 전용) -->
+    <div>
+      <div class="pe-field-label">가입 이메일</div>
+      <div class="pe-field-locked">
+        <span id="peEmailDisplay" style="user-select:text;">—</span>
+        <span class="pe-lock-icon">🔒</span>
+      </div>
+      <div style="font-family:var(--font-main);font-size:11px;color:#888;margin-top:6px;line-height:1.5;">
+        로그인 시 사용하는 이메일입니다. 변경이 필요하시면 고객센터로 문의해주세요.
+      </div>
+    </div>
+
     <!-- 핸드폰 번호 -->
     <div>
       <div class="pe-field-label" data-i18n="mp_sub.pe_field_phone">핸드폰 번호</div>
@@ -14210,6 +14222,8 @@ function _showTdConfirmPopup(t, r, pax, meal, agency, wine, totalPay, after) {
   sh+='<div style="font-family:var(--font-main);font-size:12px;color:#aaa;margin-bottom:12px;">'+dateStr+' · '+td+' · '+pax+'인</div>';
   if(meal)   sh+='<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">식사비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">₩'+(meal*pax).toLocaleString()+'</span></div>';
   if(agency) sh+='<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">대행비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">₩'+(agency*pax).toLocaleString()+'</span></div>';
+  // 🆕 2026.05.21: 주류 미니멈 줄 누락 수정 — 합계엔 포함됐는데 리스트 미표시로 고객 혼동 유발하던 버그
+  if(wine)   sh+='<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">주류 미니멈 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">₩'+(wine*pax).toLocaleString()+'</span></div>';
   sh+='<div style="display:flex;justify-content:space-between;padding:8px 0;"><span style="font-size:14px;font-weight:800;color:#111;">합계</span><span style="font-size:18px;font-weight:900;color:#5C0A14;">₩'+totalPay.toLocaleString()+'</span></div>';
   var ps = document.getElementById('tdPaySummary'); if(ps) ps.innerHTML=sh;
   var bh='<div style="display:flex;justify-content:space-between;padding:6px 0;"><span style="font-size:12px;color:#aaa;">예치금 잔액</span><span style="font-size:13px;font-weight:700;">₩'+currentDepositBalance.toLocaleString()+'</span></div>';
@@ -14772,6 +14786,21 @@ function openProfileEdit(){
   // 핸드폰 표시
   var phone=document.getElementById('mpPhoneText').textContent||'';
   document.getElementById('pePhoneDisplay').value=phone;
+  // 🆕 2026.05.21: 가입 이메일 표시 (마이페이지에 이미 로드된 값 활용)
+  var emailFromMp = (document.getElementById('mpUserEmailText') && document.getElementById('mpUserEmailText').textContent) || '';
+  var peEmailEl = document.getElementById('peEmailDisplay');
+  if(peEmailEl){
+    peEmailEl.textContent = emailFromMp || '—';
+    // 폴백: Supabase Auth 에서 직접 조회 (마이페이지가 아직 로드 전이거나 비어있으면)
+    if((!emailFromMp || emailFromMp === '—') && window.sb){
+      try {
+        window.sb.auth.getUser().then(function(authRes){
+          var u = authRes && authRes.data && authRes.data.user;
+          if(u && u.email) peEmailEl.textContent = u.email;
+        }).catch(function(){});
+      } catch(e){}
+    }
+  }
   // 주소 초기화
   var skipCb=document.getElementById('peSkipAddr');
   skipCb.checked=false;
@@ -27906,17 +27935,20 @@ IDB.get('splashSettings').then(function(s) {
 <!-- ═══ 선 구조 (모두 검정 직각) ═══ -->
 
 <!-- [A] 메인 수직: 사이토 → 츠보미 → 아자부 → 슌지 → 코바야시 -->
-<!-- 🔧 FIX 2026.05.14 (v2): 히로시 이시카와를 (95, 770) 으로 재배치.
-     기존 파이프라인 제거 후, 메인 부모라인 (190 컬럼) 의 y=770 분기점에서
-     히로시 노드 우측 가장자리 (124, 770) 로 가로 연결. 길이 66. -->
-<path style="opacity:0" id="lpS_toIshikawa" fill="none" stroke="#1a1a18" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
-  stroke-dasharray="66" stroke-dashoffset="66"
-  d="M190,770 L124,770"/>
 
-<!-- 메인 수직 분기점(190,240) → 류스케 왼쪽(281,240) — 히로시 이동과 무관, 그대로 유지 -->
+<!-- 🆕 2026.05.21: 사이토 → 이시카와 (서브카운터, 2024) 재배치 — (80, 1160)
+     슌지 분기점 (190, 1040) → 직하 91 → y=1131 → 좌측 가로 81 → 이시카와 박스 우측 (109, 1131)
+     슌지(2023)가 그린 메인 수직 끝점(y=1040)에서 자연스럽게 분기. 총 길이 172. -->
+<path style="opacity:0" id="lpS_toIshikawa" fill="none" stroke="#1a1a18" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+  stroke-dasharray="172" stroke-dashoffset="172"
+  d="M190,1040 L190,1131 L109,1131"/>
+
+<!-- 🆕 2026.05.21: 사이토 → 류스케 (사이토 하나레, 2022) 재배치 — (300, 1090)
+     아자부 분기점 (190, 880) → 직하 210 → y=1090 → 우측 가로 81 → 류스케 박스 좌측 (271, 1090)
+     2018 츠보미가 그린 메인 수직 끝점(y=880)에서 자연스럽게 분기. 총 길이 291. -->
 <path style="opacity:0" id="lpS_ishikawaToRyusuke" fill="none" stroke="#1a1a18" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
-  stroke-dasharray="91" stroke-dashoffset="91"
-  d="M190,240 L281,240"/>
+  stroke-dasharray="291" stroke-dashoffset="291"
+  d="M190,880 L190,1090 L271,1090"/>
 
 <!-- 히로시 하단(190,269) → 아자부 상단(190,851) 메인 수직 -->
 <!-- 하지만 중간 y=400,560,720 노드 있는 가지들 건너야 함. 이들 x=190에 없으면 직통 OK -->
@@ -28004,20 +28036,20 @@ IDB.get('splashSettings').then(function(s) {
   <text x="190" y="157" font-family="Montserrat,sans-serif" font-size="7.5" font-weight="700" fill="#999" text-anchor="middle">2007 · 鮨さいとう</text>
 </g>
 
-<!-- 히로시 이시카와 (95, 770) — 🔧 FIX 2026.05.14 (v2): 메인 부모라인 좌측 분기 -->
+<!-- 히로시 이시카와 — 🆕 2026.05.21: 박스 중심 (80, 1160) 으로 이동, 2024 서브카운터 리뉴얼 시점에 맞춤 -->
 <g id="nSishikawa" class="nd" onclick="tapNodeS('ishikawa')" style="cursor:pointer;opacity:0;">
-  <g filter="url(#sdS)"><rect x="66" y="741" width="58" height="58" rx="13" fill="none" stroke="#1a1a18" stroke-width="2.5"/><rect x="69" y="744" width="52" height="52" rx="10" fill="#fff"/></g>
-  <image id="pSishikawa" href="" x="69" y="744" width="52" height="52" clip-path="url(#cSishikawa)" preserveAspectRatio="xMidYMid slice"/>
-  <text x="95" y="813" font-family="'Oswald','Noto Sans KR','Noto Sans JP',sans-serif" font-size="10" font-weight="700" fill="#1a1a18" text-anchor="middle">히로시 이시카와</text>
-  <text x="95" y="825" font-family="Oswald,sans-serif" font-size="7.5" fill="#999" text-anchor="middle">본점 사이드카운터</text>
+  <g filter="url(#sdS)"><rect x="51" y="1131" width="58" height="58" rx="13" fill="none" stroke="#1a1a18" stroke-width="2.5"/><rect x="54" y="1134" width="52" height="52" rx="10" fill="#fff"/></g>
+  <image id="pSishikawa" href="" x="54" y="1134" width="52" height="52" clip-path="url(#cSishikawa)" preserveAspectRatio="xMidYMid slice"/>
+  <text x="80" y="1203" font-family="'Oswald','Noto Sans KR','Noto Sans JP',sans-serif" font-size="10" font-weight="700" fill="#1a1a18" text-anchor="middle">히로시 이시카와</text>
+  <text x="80" y="1215" font-family="Oswald,sans-serif" font-size="7.5" fill="#999" text-anchor="middle">사이토 서브카운터 · 2024</text>
 </g>
 
-<!-- 류스케 (310, 240) 하나레 3110 -->
+<!-- 류스케 — 🆕 2026.05.21: 박스 중심 (300, 1090) 으로 이동, 2022 오픈 시점에 맞춤 -->
 <g id="nSryusuke" class="nd" onclick="tapNodeS('ryusuke')" style="cursor:pointer;opacity:0;">
-  <g filter="url(#sdS)"><rect x="281" y="211" width="58" height="58" rx="13" fill="none" stroke="#1a1a18" stroke-width="2.5"/><rect x="284" y="214" width="52" height="52" rx="10" fill="#fff"/></g>
-  <image id="pSryusuke" href="" x="284" y="214" width="52" height="52" clip-path="url(#cSryusuke)" preserveAspectRatio="xMidYMid slice"/>
-  <text x="310" y="283" font-family="'Oswald','Noto Sans KR','Noto Sans JP',sans-serif" font-size="10" font-weight="700" fill="#1a1a18" text-anchor="middle">류스케 누마오</text>
-  <text x="310" y="295" font-family="Oswald,sans-serif" font-size="7.5" fill="#999" text-anchor="middle">스시 사이토 하나레 · 2020</text>
+  <g filter="url(#sdS)"><rect x="271" y="1061" width="58" height="58" rx="13" fill="none" stroke="#1a1a18" stroke-width="2.5"/><rect x="274" y="1064" width="52" height="52" rx="10" fill="#fff"/></g>
+  <image id="pSryusuke" href="" x="274" y="1064" width="52" height="52" clip-path="url(#cSryusuke)" preserveAspectRatio="xMidYMid slice"/>
+  <text x="300" y="1133" font-family="'Oswald','Noto Sans KR','Noto Sans JP',sans-serif" font-size="10" font-weight="700" fill="#1a1a18" text-anchor="middle">류스케 누마오</text>
+  <text x="300" y="1145" font-family="Oswald,sans-serif" font-size="7.5" fill="#999" text-anchor="middle">스시 사이토 하나레 · 2022</text>
 </g>
 
 <!-- 타카하시 — +20 right (90, 400) 2017 — 좌측 트렁크 분기로 받음 -->
@@ -44241,7 +44273,7 @@ function toggleGrid() {
 //   lpS_toIshikawa: 160 → 66 (메인 수직 y=770 분기점에서 히로시 우측 124,770 까지)
 //   lpS_ishikawaToRyusuke: 91 (분기점 240→류스케, 변경 없음)
 //   lpS_ishikawaToTsubomi: 640 → 709 (사이토 하단 171→츠보미 위 880, 시작점 확장)
-var PIPES_S={lpS_leftTrunk:686,lpS_toTakahashi:26,lpS_toEndo:26,lpS_toTakeuchi:76,lpS_toJungdae:21,lpS_toIshikawa:66,lpS_ishikawaToRyusuke:91,lpS_ishikawaToTsubomi:709,lpS_tsubomiToAzabu:91,lpS_azabuToShunji:251,lpS_shunjiToKobayashi:251,lpS_rightTrunk:941,lpS_toHongkong:21,lpS_toTsubomi:21,lpS_toBangkok:21,lpS_toJuyoun:21};
+var PIPES_S={lpS_leftTrunk:686,lpS_toTakahashi:26,lpS_toEndo:26,lpS_toTakeuchi:76,lpS_toJungdae:21,lpS_toIshikawa:172,lpS_ishikawaToRyusuke:291,lpS_ishikawaToTsubomi:709,lpS_tsubomiToAzabu:91,lpS_azabuToShunji:251,lpS_shunjiToKobayashi:251,lpS_rightTrunk:941,lpS_toHongkong:21,lpS_toTsubomi:21,lpS_toBangkok:21,lpS_toJuyoun:21};
 var NODES_S_IDS=['nS0','nSishikawa','nSryusuke','nStakahashi','nShongkong','nSendo','nStsubomi','nSbangkok','nStakeuchi','nSjuyoun','nSazabu','nSjungdae','nShashiza','nSkobayashi'];
 var DATA_S=[
   {id:'saito',name:'사이토 타카시',en:'Saito Takashi',city:'도쿄 롯폰기',gen:0,diff:'극악',visited:false,lat:35.6654,lng:139.7362,open:'2007',desc:'齋藤孝司 · 鮨さいとう 시조'},
@@ -44322,65 +44354,72 @@ function resetAllS(){
 function startAnimS(){
   if(animRunningS)return;
   animRunningS=true;animDoneS=false;resetAllS();
-  
+
+  // 🆕 2026.05.21: 시간순 흐름으로 재구성
+  //   2007 사이토 → 2017 (타카하시·타케우치·홍콩) → 2018 (츠보미·엔도)
+  //   → 2019 방콕 → 2020 사이토주욘 → 2022 (아자부·정대·류스케 사이토하나레)
+  //   → 2023 슌지 → 2024 이시카와 (서브카운터 리뉴얼) → 2025 코바야시
+  //   이시카와·류스케는 (이전 사이토 바로 아래) 위치를 옮겨서 시간상 정확한 시점에 등장.
+
   showElS('nS0',0,function(){
-    // [1] 사이토 → 히로시 (본점 사이드) + 좌/우 트렁크
-    drawPipeS('lpS_toIshikawa', PIPES_S.lpS_toIshikawa, 0, function(){
-      showElS('nSishikawa', 0);
-      // 히로시 → 류스케 (가로)
-      drawPipeS('lpS_ishikawaToRyusuke', PIPES_S.lpS_ishikawaToRyusuke, 200);
-      showElS('nSryusuke', 600);
-      // 좌/우 트렁크 동시 (좌측은 새 lpS_leftTrunk)
-      drawPipeS('lpS_leftTrunk', PIPES_S.lpS_leftTrunk, 200);
-      drawPipeS('lpS_rightTrunk', PIPES_S.lpS_rightTrunk, 400);
+    // [1] 좌/우 트렁크만 (이시카와·류스케는 2022/2024 로 이동)
+    drawPipeS('lpS_leftTrunk', PIPES_S.lpS_leftTrunk, 0);
+    drawPipeS('lpS_rightTrunk', PIPES_S.lpS_rightTrunk, 200);
+
+    setTimeout(function(){
+      // [2] 2017: 타카하시 + 타케우치 + 홍콩
+      drawPipeS('lpS_toTakahashi', PIPES_S.lpS_toTakahashi, 0); showElS('nStakahashi', 200);
+      drawPipeS('lpS_toTakeuchi', PIPES_S.lpS_toTakeuchi, 100); showElS('nStakeuchi', 300);
+      drawPipeS('lpS_toHongkong', PIPES_S.lpS_toHongkong, 200); showElS('nShongkong', 400);
 
       setTimeout(function(){
-        // [2] 2017: 타카하시 (좌측 트렁크 분기) + 타케우치 (좌측 트렁크 분기, 같은 2017) + 홍콩
-        drawPipeS('lpS_toTakahashi', PIPES_S.lpS_toTakahashi, 0); showElS('nStakahashi', 200);
-        drawPipeS('lpS_toTakeuchi', PIPES_S.lpS_toTakeuchi, 100); showElS('nStakeuchi', 300);
-        drawPipeS('lpS_toHongkong', PIPES_S.lpS_toHongkong, 200); showElS('nShongkong', 400);
+        // [3] 2018 엔도 + 부모 라인 직하 + 츠보미
+        drawPipeS('lpS_toEndo', PIPES_S.lpS_toEndo, 0); showElS('nSendo', 200);
+        drawPipeS('lpS_ishikawaToTsubomi', PIPES_S.lpS_ishikawaToTsubomi, 100);
+        drawPipeS('lpS_toTsubomi', PIPES_S.lpS_toTsubomi, 300); showElS('nStsubomi', 500);
 
         setTimeout(function(){
-          // [3] 2018 엔도 (좌측 트렁크 분기) + 부모 라인 직하 + 츠보미 (우측 컬럼)
-          drawPipeS('lpS_toEndo', PIPES_S.lpS_toEndo, 0); showElS('nSendo', 200);
-          drawPipeS('lpS_ishikawaToTsubomi', PIPES_S.lpS_ishikawaToTsubomi, 100);
-          drawPipeS('lpS_toTsubomi', PIPES_S.lpS_toTsubomi, 300); showElS('nStsubomi', 500);
+          // [4] 2019: 방콕
+          drawPipeS('lpS_toBangkok', PIPES_S.lpS_toBangkok, 0); showElS('nSbangkok', 200);
 
           setTimeout(function(){
-            // [4] 2019: 방콕 (아래로 이동됨)
-            drawPipeS('lpS_toBangkok', PIPES_S.lpS_toBangkok, 0); showElS('nSbangkok', 200);
-
-            setTimeout(function(){
-            // [5] 사이토주욘 (정대는 [6] 으로 이동)
+            // [5] 2020 사이토주욘
             drawPipeS('lpS_toJuyoun', PIPES_S.lpS_toJuyoun, 100); showElS('nSjuyoun', 300);
 
             setTimeout(function(){
-              // [6] 2022 아자부 — 부모라인 끝점에서 좌측 분기
+              // [6] 2022 — 아자부 + 정대 + 류스케 (사이토 하나레)
               drawPipeS('lpS_tsubomiToAzabu', PIPES_S.lpS_tsubomiToAzabu, 0);
               showElS('nSazabu', 600);
-              // 정대 (아자부 옆)
               drawPipeS('lpS_toJungdae', PIPES_S.lpS_toJungdae, 300);
               showElS('nSjungdae', 700);
-              
+              // 🆕 2022 류스케 (사이토 하나레) — 메인 수직 아래로 직하 + 우측 가로
+              drawPipeS('lpS_ishikawaToRyusuke', PIPES_S.lpS_ishikawaToRyusuke, 800);
+              showElS('nSryusuke', 1100);
+
               setTimeout(function(){
-                // [6] 2023 슌지 (메인 수직)
+                // [7] 2023 슌지 (하시자)
                 drawPipeS('lpS_azabuToShunji', PIPES_S.lpS_azabuToShunji, 0);
                 showElS('nShashiza', 400);
-                
+
                 setTimeout(function(){
-                  // [7] 2025 코바야시 (메인 수직)
-                  drawPipeS('lpS_shunjiToKobayashi', PIPES_S.lpS_shunjiToKobayashi, 0);
-                  showElS('nSkobayashi', 400);
-                  
-                  setTimeout(function(){animDoneS=true;animRunningS=false; if(typeof triggerCustomAnim==="function") triggerCustomAnim("saito");},1500);
+                  // [8] 🆕 2024 이시카와 (서브카운터 리뉴얼)
+                  drawPipeS('lpS_toIshikawa', PIPES_S.lpS_toIshikawa, 0);
+                  showElS('nSishikawa', 400);
+
+                  setTimeout(function(){
+                    // [9] 2025 코바야시
+                    drawPipeS('lpS_shunjiToKobayashi', PIPES_S.lpS_shunjiToKobayashi, 0);
+                    showElS('nSkobayashi', 400);
+
+                    setTimeout(function(){animDoneS=true;animRunningS=false; if(typeof triggerCustomAnim==="function") triggerCustomAnim("saito");},1500);
+                  }, 1200);
                 }, 1200);
-              }, 1200);
+              }, 1500);
             }, 1500);
-            }, 1500);   /* close [5] 타케우치 setTimeout */
-          }, 1500);     /* close [4] 방콕 setTimeout (신규) */
-        }, 1500);       /* close [3] 부모라인+엔도+츠보미 setTimeout */
-      }, 1200);         /* close [2] 타카하시+홍콩 setTimeout */
-    });
+          }, 1500);
+        }, 1500);
+      }, 1200);
+    }, 800);
   });
 }
 function tapNodeS(id){var r=DATA_S.find(function(d){return d.id===id;});if(r){r=Object.assign({},r,{_lineageId:'saito'});openInfo(r);}}
