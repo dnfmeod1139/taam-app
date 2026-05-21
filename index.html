@@ -11620,12 +11620,14 @@ async function adgSearchUsers(){
   // SQL injection 방지: ilike 패턴 escape
   var q = qRaw.replace(/[%_]/g, '\\$&');
   try {
-    // 🆕 2026.05.21: 검색 범위 확장 — display_name + display_name_en + email + phone
-    //   + invite_codes 의 invitee_name 으로도 검색 (초대 시 어드민이 적은 이름)
+    // 🆕 2026.05.21: 검색 범위 확장 (graceful fallback)
+    //   1차: display_name + email + phone (안정적)
+    //   2차: display_name_en 시도 (컬럼 있으면)
+    //   3차: invite_codes 의 invitee_name 보조 검색
     var res = await window.sb
       .from('profiles')
-      .select('id, display_name, display_name_en, phone, email, membership_deposit_balance, general_deposit_balance, granted_membership_balance, granted_general_balance, charged_membership_balance, charged_general_balance, role')
-      .or('display_name.ilike.%' + q + '%,display_name_en.ilike.%' + q + '%,phone.ilike.%' + q + '%,email.ilike.%' + q + '%')
+      .select('id, display_name, phone, email, membership_deposit_balance, general_deposit_balance, granted_membership_balance, granted_general_balance, charged_membership_balance, charged_general_balance, role')
+      .or('display_name.ilike.%' + q + '%,phone.ilike.%' + q + '%,email.ilike.%' + q + '%')
       .limit(20);
 
     if (res.error) {
@@ -11633,6 +11635,24 @@ async function adgSearchUsers(){
       container.innerHTML = '<div style="padding:14px;color:#c00;font-size:11px;">검색 실패: ' + res.error.message + '</div>';
       return;
     }
+
+    // 🆕 display_name_en 컬럼 있으면 추가 검색 (graceful — 컬럼 없으면 무시)
+    try {
+      var enRes = await window.sb
+        .from('profiles')
+        .select('id, display_name, phone, email, membership_deposit_balance, general_deposit_balance, granted_membership_balance, granted_general_balance, charged_membership_balance, charged_general_balance, role')
+        .ilike('display_name_en', '%' + q + '%')
+        .limit(20);
+      if (enRes && enRes.data && !enRes.error) {
+        var existingIds0 = new Set((res.data || []).map(function(u){ return u.id; }));
+        enRes.data.forEach(function(u){
+          if (!existingIds0.has(u.id)) {
+            (res.data = res.data || []).push(u);
+            existingIds0.add(u.id);
+          }
+        });
+      }
+    } catch(e){ /* display_name_en 컬럼 없으면 무시 */ }
     var data = res.data || [];
 
     // 🆕 추가 검색: invite_codes 의 invitee_name 으로 매칭 (초대 시점의 이름)
