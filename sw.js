@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.49';  // 1.49 — 2026.05.23: 부제 letter-spacing 0.02em 제거 (하드코딩 부제와 자간 완전 동일) + toUpperCase 유지
-const STATIC_CACHE = 'taam-static-v1.49';
+const SW_VERSION = 'taam-sw-v1.49b';  // 1.49b — 2026.05.23: transform scale(0.85) 완전 제거 — 동적 노드 크기 100% 일정 (하드코딩과 동일 크기 보장)
+const STATIC_CACHE = 'taam-static-v1.49b';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
