@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.49c';  // 1.49c — 2026.05.23: 동적 노드 SVG text 가 하드코딩과 100% 동일 attribute (font-weight, dominant-baseline 명시 제거)
-const STATIC_CACHE = 'taam-static-v1.49c';
+const SW_VERSION = 'taam-sw-v1.50';  // 1.50 — 2026.05.23: 진짜 원인 — setLineageNodeTextStyles 가 하드코딩 노드 폰트를 Montserrat/Noto Sans KR 로 override. 동적 노드도 동일 적용
+const STATIC_CACHE = 'taam-static-v1.50';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);

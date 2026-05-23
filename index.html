@@ -41280,21 +41280,26 @@ function renderCustomNodeToSvg(layer, node, prefix, lineageId, idx){
   };
   var FONT = CUSTOM_FONT_MAP[lineageId] || { name: 10, sub: 8 };
 
+  // 🆕 v1.50 (2026.05.23): **진짜 원인 발견** — setLineageNodeTextStyles() (line 35542) 가
+  //   하드코딩 노드의 SVG text 를 통째로 override 하고 있었음. LINEAGE_RULES.md 의 Oswald/8/10 은
+  //   실제 적용 안 되고 있었고, 실제 적용 스타일은:
+  //     매장명: Noto Sans KR, sans-serif / 11 / 700
+  //     부제:   Montserrat, sans-serif / 9.5 / 800 / letter-spacing 0.5
+  //   동적 노드도 이 스타일로 정확히 매칭 → 시각적으로 100% 동일.
+  //   (CUSTOM_FONT_MAP 값들은 이제 무의미 — 호환성 위해 코드는 유지하되 미사용)
+
   // 텍스트: 매장명 (i18n — name_en / name_jp 폴백)
-  //   🆕 v1.47: 하드코딩 노드와 완전 동일 사양 보장 — class='nd-name' (CSS 추가 스타일 가능),
-  //             dominant-baseline='alphabetic' (브라우저 일관성), font-weight=700, fill=#1a1a18.
   var _nodeName = (typeof window.pickI18nField === 'function')
     ? (window.pickI18nField(node, 'name') || node.name || '')
     : (node.name || '');
   var text1 = document.createElementNS(SVG_NS, 'text');
   text1.setAttribute('x', cx);
   text1.setAttribute('y', cy + 43);
-  text1.setAttribute('font-family', "'Oswald','Noto Sans KR','Noto Sans JP',sans-serif");
-  text1.setAttribute('font-size', String(FONT.name));
+  text1.setAttribute('font-family', 'Noto Sans KR, sans-serif');  // 🆕 v1.50
+  text1.setAttribute('font-size', '11');                            // 🆕 v1.50: 11 (이전 10)
   text1.setAttribute('font-weight', '700');
   text1.setAttribute('fill', '#1a1a18');
   text1.setAttribute('text-anchor', 'middle');
-  // 🆕 v1.49c: dominant-baseline 명시 제거 (하드코딩과 완전 동일)
   text1.textContent = _nodeName;
   g.appendChild(text1);
 
@@ -41306,15 +41311,13 @@ function renderCustomNodeToSvg(layer, node, prefix, lineageId, idx){
     var text2 = document.createElementNS(SVG_NS, 'text');
     text2.setAttribute('x', cx);
     text2.setAttribute('y', cy + 55);
-    // 🔧 2026.05.22: 하드코딩 부제와 정확히 일치 — font-family "Oswald,sans-serif" + fill #999.
-    //   부제는 영문/한글/일문 혼용이라 sans-serif fallback 으로 한자/한글도 시스템 폰트로 렌더.
-    // 🆕 v1.49c: 하드코딩 부제 SVG 와 100% 동일 속성만 사용 — font-weight, dominant-baseline 명시 제거.
-    //   하드코딩 부제: <text font-family="Oswald,sans-serif" font-size="8" fill="#999" text-anchor="middle">
-    //   추가 attribute 가 있으면 일부 브라우저에서 default 와 미세하게 다르게 처리될 수 있음.
-    text2.setAttribute('font-family', "Oswald,sans-serif");
-    text2.setAttribute('font-size', String(FONT.sub));
+    // 🆕 v1.50: 하드코딩 부제 (setLineageNodeTextStyles 적용 후) 와 100% 동일 — Montserrat 800 9.5 letter-spacing 0.5
+    text2.setAttribute('font-family', 'Montserrat, sans-serif');
+    text2.setAttribute('font-size', '9.5');
+    text2.setAttribute('font-weight', '800');
     text2.setAttribute('fill', '#999');
     text2.setAttribute('text-anchor', 'middle');
+    text2.setAttribute('letter-spacing', '0.5');
     text2.textContent = String(_nodeSub).toUpperCase();
     g.appendChild(text2);
   }
