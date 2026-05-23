@@ -2,16 +2,85 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.1';   // 1.1 — iOS 호환 (icon/vibrate 제거)
+const SW_VERSION = 'taam-sw-v1.48';  // 1.48 — 2026.05.23: 동적 노드 첫 시작 시 안 보이게 — opacity:0 + pointer-events:none / path dashoffset=length 초기화 (애니메이션 트리거 시점에만 등장)
+const STATIC_CACHE = 'taam-static-v1.48';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
+  // 새 버전 install 즉시 활성화 (waiting 단계 건너뜀)
   self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
   console.log('[SW] activate', SW_VERSION);
-  event.waitUntil(self.clients.claim());
+  // 옛 SW가 만든 모든 캐시 삭제 (현재 SW의 STATIC_CACHE 제외)
+  event.waitUntil(
+    Promise.all([
+      caches.keys().then((keys) =>
+        Promise.all(keys.map((k) => {
+          if (k === STATIC_CACHE) return; // 현재 버전 캐시는 보존
+          console.log('[SW] delete old cache', k);
+          return caches.delete(k);
+        }))
+      ),
+      // 현재 열린 모든 탭의 SW를 즉시 새 버전으로 교체
+      self.clients.claim(),
+    ])
+  );
+});
+
+// 🆕 2026.05.21: fetch 핸들러 — 정적 리소스만 stale-while-revalidate 전략
+//   HTML/JSON/API 는 항상 네트워크 (캐시 안 함). 이미지/폰트/CSS 등은 캐시 우선 + 백그라운드 갱신.
+//   첫 로딩 후 두 번째부터 매우 빨라짐.
+self.addEventListener('fetch', (event) => {
+  const req = event.request;
+
+  // GET 요청만 캐싱 (POST 등은 항상 네트워크)
+  if (req.method !== 'GET') return;
+
+  const url = new URL(req.url);
+
+  // 같은 origin 만 SW 캐싱 (외부 CDN 도 추가 가능)
+  const isSameOrigin = url.origin === self.location.origin;
+  const isExternalCDN = (
+    url.hostname === 'fonts.googleapis.com' ||
+    url.hostname === 'fonts.gstatic.com' ||
+    url.hostname === 'cdnjs.cloudflare.com' ||
+    url.hostname === 'unpkg.com'
+  );
+
+  if (!isSameOrigin && !isExternalCDN) return;
+
+  // HTML / SW / manifest / API 는 캐싱 안 함 (항상 네트워크)
+  if (
+    url.pathname === '/' ||
+    url.pathname === '/index.html' ||
+    url.pathname === '/sw.js' ||
+    url.pathname === '/manifest.json' ||
+    url.pathname.startsWith('/api/') ||
+    url.pathname.startsWith('/supabase/')
+  ) return;
+
+  // 정적 리소스만 캐싱 (이미지·폰트·CSS·JS·JSON 데이터)
+  const isStatic = /\.(png|jpg|jpeg|gif|svg|webp|avif|ico|woff|woff2|ttf|otf|eot|css|js|json|html)$/i.test(url.pathname);
+  if (!isStatic) return;
+
+  event.respondWith(
+    caches.open(STATIC_CACHE).then(async (cache) => {
+      const cached = await cache.match(req);
+
+      // 백그라운드 갱신 (stale-while-revalidate)
+      const networkFetch = fetch(req).then((res) => {
+        if (res && res.status === 200 && res.type !== 'opaque') {
+          cache.put(req, res.clone()).catch(() => {});
+        }
+        return res;
+      }).catch(() => null);
+
+      // 캐시 있으면 즉시 반환, 없으면 네트워크 대기
+      return cached || networkFetch || new Response('', { status: 504 });
+    })
+  );
 });
 
 // ─── Push 이벤트 ───
