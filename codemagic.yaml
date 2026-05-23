@@ -1,0 +1,96 @@
+workflows:
+  ios-capacitor-workflow:
+    name: TAAM iOS TestFlight Build
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+
+    environment:
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.playtaam.app
+      vars:
+        XCODE_WORKSPACE: "ios/App/App.xcworkspace"
+        XCODE_SCHEME: "App"
+        # APP_STORE_APPLE_ID: 나중에 App Store Connect 에 앱 만들고 채움
+      node: v20.18.0
+      xcode: latest
+      cocoapods: default
+
+    cache:
+      cache_paths:
+        - $HOME/Library/Caches/CocoaPods
+        - node_modules
+
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+      cancel_previous_builds: true
+
+    scripts:
+      - name: Install npm dependencies
+        script: |
+          npm install
+
+      - name: Install Capacitor iOS platform
+        script: |
+          npm install @capacitor/ios
+
+      - name: Ensure www directory placeholder (Capacitor 요구)
+        script: |
+          mkdir -p www
+          if [ ! -f www/index.html ]; then
+            echo "<!DOCTYPE html><html><body>TAAM</body></html>" > www/index.html
+          fi
+
+      - name: Add or sync Capacitor iOS platform
+        script: |
+          if [ -d "ios" ]; then
+            npx cap sync ios
+          else
+            npx cap add ios
+          fi
+
+      - name: Install CocoaPods dependencies
+        script: |
+          cd ios/App
+          pod install
+
+      - name: Set up code signing
+        script: |
+          xcode-project use-profiles
+
+      - name: Increment build number (Codemagic 자동 — 매 빌드마다 +1)
+        script: |
+          cd $CM_BUILD_DIR/ios/App
+          agvtool new-version -all $(($BUILD_NUMBER + 1)) || true
+
+      - name: Build ipa for distribution
+        script: |
+          xcode-project build-ipa \
+            --workspace "$XCODE_WORKSPACE" \
+            --scheme "$XCODE_SCHEME"
+
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.app
+
+    publishing:
+      # 첫 빌드는 publishing 없이 빌드 자체 검증.
+      # App Store Connect API key 등록 후 아래 주석 해제:
+      #
+      # app_store_connect:
+      #   auth: integration
+      #   submit_to_testflight: true
+      #   beta_groups:
+      #     - "TAAM Internal Testers"
+
+      email:
+        recipients:
+          - dnfmeod1139@gmail.com
+        notify:
+          success: true
+          failure: true
