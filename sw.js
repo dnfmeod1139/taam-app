@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.48';  // 1.48 — 2026.05.23: 동적 노드 첫 시작 시 안 보이게 — opacity:0 + pointer-events:none / path dashoffset=length 초기화 (애니메이션 트리거 시점에만 등장)
-const STATIC_CACHE = 'taam-static-v1.48';
+const SW_VERSION = 'taam-sw-v1.49';  // 1.49 — 2026.05.23: 부제 letter-spacing 0.02em 제거 (하드코딩 부제와 자간 완전 동일) + toUpperCase 유지
+const STATIC_CACHE = 'taam-static-v1.49';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
