@@ -333,6 +333,12 @@ html.auto-login .splash .bottom-group{display:none !important}
 .gnb-btn.active .gnb-label{color:#fff}
 #ticketFilterBar::-webkit-scrollbar{display:none}
 #ticketFilterBar{-webkit-overflow-scrolling:touch;}
+/* 🆕 v1.51 (2026.05.24): 장르별 수평 스크롤 row — Netflix 스타일.
+   카드 고정 너비 80vw (max 320px) + 좌우 14px gap + 우측에 다음 카드 살짝 보임.
+   기존 카드 width:100% / margin 0 0 22px 를 row 안에서 override. */
+.tk-genre-row{-webkit-overflow-scrolling:touch;}
+.tk-genre-row::-webkit-scrollbar{display:none;height:0;}
+.tk-genre-row .tk-list-card{flex:0 0 auto !important;width:80vw !important;max-width:320px !important;margin:0 !important;}
 .tk-filter-btn{background:#1a1a1a;border:1.5px solid #2a2a2a;border-radius:20px;padding:7px 16px;font-family:var(--font-main);font-size:12px;font-weight:700;color:#ffffff;cursor:pointer;white-space:nowrap;flex-shrink:0;transition:all .15s}
 .tk-filter-btn:active,.tk-filter-btn.active{background:#2a2a2a;border-color:#444;color:#fff}
 .tk-filter-btn.selected{background:#fff;border-color:#fff;color:#000;}
@@ -3304,7 +3310,8 @@ input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none}
 
 /* 본문 (수직 스크롤) — 스크롤바 극소화 (실선처럼 또는 거의 안보이게) */
 .ndm-body{
-  flex:1 1 auto;overflow-y:auto;-webkit-overflow-scrolling:touch;
+  flex:1 1 auto;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;
+  /* 🆕 v1.51 (2026.05.24): overflow-x:hidden 명시 — 사이토 등 긴 텍스트/URL 노드 팝업 수평 스크롤 방지 */
   padding:0 0 12px;
   scrollbar-width:none;          /* Firefox: 기본 스크롤바 숨김 (실선 느낌) */
   scrollbar-color:rgba(92,10,20,.35) transparent;
@@ -3422,6 +3429,9 @@ input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none}
   font-size:13.5px;font-weight:400;
   color:#3a3835;line-height:1.75;
   white-space:pre-wrap;word-break:keep-all;
+  /* 🆕 v1.51 (2026.05.24): 긴 단어/URL 강제 줄바꿈 — 한국어 keep-all 유지 + 초과 시 anywhere */
+  overflow-wrap:anywhere;
+  max-width:100%;
 }
 .ndm-chapter-desc.empty,
 .ndm-chapter-title.empty{color:#aaa;font-style:italic;font-weight:400;}
@@ -21160,12 +21170,13 @@ function renderTicketGenres() {
         _gDisp = _gMapJa[genre] || genre;
       }
       html += '<div style="font-family:\'Oswald\',\'Noto Sans KR\',\'Noto Sans JP\',sans-serif;font-weight:700;font-size:17px;color:#fff;letter-spacing:.04em;margin-bottom:14px;">'+_gDisp+'</div>';
-      // 가로 한 개씩 (세로 스크롤 흐름)
+      // 🆕 v1.51 (2026.05.24): 장르별 수평 스크롤 row (Netflix 스타일). 전체 페이지는 수직 스크롤 유지.
+      html += '<div class="tk-genre-row" style="display:flex;gap:14px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:8px;margin:0 -16px;padding-left:16px;padding-right:16px;scrollbar-width:none;">';
       tickets.forEach(function(t) {
         var r = restaurantDB.find(function(x){ return String(x.id)===String(t.restId); });
         html += _ticketCardHtml(t, r);
       });
-      html += '</div>';
+      html += '</div></div>';
     }
     count++;
   });
@@ -29104,11 +29115,12 @@ IDB.get('splashSettings').then(function(s) {
 <!-- [A] 메인 수직: 사이토 → 츠보미 → 아자부 → 슌지 → 코바야시 -->
 
 <!-- 🆕 2026.05.21: 사이토 → 이시카와 (서브카운터, 2024) 재배치 — (80, 1160)
-     슌지 분기점 (190, 1040) → 직하 91 → y=1131 → 좌측 가로 81 → 이시카와 박스 우측 (109, 1131)
-     슌지(2023)가 그린 메인 수직 끝점(y=1040)에서 자연스럽게 분기. 총 길이 172. -->
+     🆕 2026.05.24 (v1.51): 끝점을 박스 우측 면 중앙 (109, 1160) 으로 조정 — 이전 y=1131 (박스 상단 코너) 에서 박스 중앙 y=1160 으로.
+     슌지 분기점 (190, 1040) → 직하 120 → y=1160 → 좌측 가로 81 → 이시카와 박스 우측 중앙 (109, 1160)
+     총 길이: 120 + 81 = 201. -->
 <path style="opacity:0" id="lpS_toIshikawa" fill="none" stroke="#1a1a18" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
-  stroke-dasharray="172" stroke-dashoffset="172"
-  d="M190,1040 L190,1131 L109,1131"/>
+  stroke-dasharray="201" stroke-dashoffset="201"
+  d="M190,1040 L190,1160 L109,1160"/>
 
 <!-- 🆕 2026.05.21: 사이토 → 류스케 (사이토 하나레, 2022) 재배치 — (300, 1090)
      아자부 분기점 (190, 880) → 직하 210 → y=1090 → 우측 가로 81 → 류스케 박스 좌측 (271, 1090)
@@ -40575,6 +40587,111 @@ async function applyGeometryOverrides(lineageId){
 }
 window.applyGeometryOverrides = applyGeometryOverrides;
 
+// ═══════════════════════════════════════════════════════════════
+// 🆕 v1.51 (2026.05.24): 슈퍼어드민이 계보도 타임라인 연도 라벨을 hide/show.
+// ───────────────────────────────────────────────────────────────
+// 저장: localStorage (`taam_hidden_years_<lineageId>` = JSON 배열). 같은 브라우저 영구 유지.
+// 사용법 (console 또는 슈퍼어드민 UI):
+//   hideTimelineYear('kanesaka', 2010);
+//   showTimelineYear('kanesaka', 2010);
+//   listHiddenYears('kanesaka');     // 현재 hide 된 연도 배열
+//   clearHiddenYears('kanesaka');    // 모두 복구
+// UI: 슈퍼어드민 모드에서 timeline 연도 text 를 클릭하면 confirm 후 hide.
+// ═══════════════════════════════════════════════════════════════
+
+function _hiddenYearsKey(lineageId){ return 'taam_hidden_years_' + (lineageId || 'unknown'); }
+function _getHiddenYears(lineageId){
+  try {
+    var s = localStorage.getItem(_hiddenYearsKey(lineageId));
+    if(!s) return [];
+    var arr = JSON.parse(s);
+    return Array.isArray(arr) ? arr : [];
+  } catch(e){ return []; }
+}
+function _setHiddenYears(lineageId, arr){
+  try { localStorage.setItem(_hiddenYearsKey(lineageId), JSON.stringify(arr || [])); } catch(e){}
+}
+
+window.applyHiddenTimelineYears = function(lineageId){
+  var svg = (typeof getLineageSvg === 'function') ? getLineageSvg(lineageId) : null;
+  if(!svg) return;
+  // 먼저 모든 timeline 연도 element 의 hide 상태 reset (이전 hide 해제 시 다시 보이게)
+  svg.querySelectorAll('[data-timeline-year]').forEach(function(el){
+    el.style.display = '';
+    el.removeAttribute('data-timeline-year');
+  });
+  // text 의 textContent 가 4-digit 연도 (2000~2099) 이고 x ≤ 50 (좌측 타임라인 영역) 인 것만 대상
+  var hideSet = {};
+  _getHiddenYears(lineageId).forEach(function(y){ hideSet[String(y)] = true; });
+  if(Object.keys(hideSet).length === 0) return;
+
+  svg.querySelectorAll('text').forEach(function(el){
+    var txt = (el.textContent || '').trim();
+    var x = parseFloat(el.getAttribute('x') || '0');
+    if(x > 50) return;                                  // 좌측 타임라인 영역만
+    if(!/^20\d{2}$/.test(txt)) return;                   // 4-digit 연도만
+    if(!hideSet[txt]) return;
+    el.style.display = 'none';
+    el.setAttribute('data-timeline-year', txt);
+    // 같은 y 의 circle (마커) 도 같이 hide
+    var cy = parseFloat(el.getAttribute('y') || '0');
+    svg.querySelectorAll('circle').forEach(function(c){
+      var ccx = parseFloat(c.getAttribute('cx') || '0');
+      var ccy = parseFloat(c.getAttribute('cy') || '0');
+      if(ccx > 20) return;                              // 좌측 마커만 (cx ~ 6)
+      if(Math.abs(ccy - (cy - 4)) > 6) return;          // text y 와 circle cy 차이 보통 4
+      c.style.display = 'none';
+      c.setAttribute('data-timeline-year', txt);
+    });
+  });
+};
+
+window.hideTimelineYear = function(lineageId, year){
+  var yStr = String(year);
+  var arr = _getHiddenYears(lineageId);
+  if(arr.indexOf(yStr) === -1) arr.push(yStr);
+  _setHiddenYears(lineageId, arr);
+  applyHiddenTimelineYears(lineageId);
+  console.log('[timeline] hide', lineageId, year, '→ 현재 hide 목록:', arr);
+};
+window.showTimelineYear = function(lineageId, year){
+  var yStr = String(year);
+  var arr = _getHiddenYears(lineageId).filter(function(y){ return y !== yStr; });
+  _setHiddenYears(lineageId, arr);
+  applyHiddenTimelineYears(lineageId);
+  console.log('[timeline] show', lineageId, year, '→ 현재 hide 목록:', arr);
+};
+window.listHiddenYears = function(lineageId){ return _getHiddenYears(lineageId); };
+window.clearHiddenYears = function(lineageId){
+  _setHiddenYears(lineageId, []);
+  applyHiddenTimelineYears(lineageId);
+  console.log('[timeline] clear', lineageId);
+};
+
+// 슈퍼어드민 클릭 핸들러 — 좌측 타임라인 연도 text 클릭 시 confirm + hide.
+//   capture phase 로 등록 → 다른 click 핸들러보다 먼저 잡힘.
+(function _installTimelineYearClickHandler(){
+  if(window._timelineYearClickHandlerInstalled) return;
+  window._timelineYearClickHandlerInstalled = true;
+  function _onClick(ev){
+    if(typeof _isSuperAdmin !== 'function' || !_isSuperAdmin()) return;
+    var el = ev.target;
+    if(!el || el.tagName !== 'text') return;
+    var txt = (el.textContent || '').trim();
+    if(!/^20\d{2}$/.test(txt)) return;
+    var x = parseFloat(el.getAttribute('x') || '999');
+    if(x > 50) return;  // 좌측 타임라인만
+    var lineageId = (typeof detectCurrentLineageId === 'function') ? detectCurrentLineageId() : null;
+    if(!lineageId) return;
+    ev.stopPropagation();
+    if(ev.preventDefault) ev.preventDefault();
+    if(confirm('계보도에서 ' + txt + ' 연도 라벨을 숨길까요?\n\n(같은 브라우저에서 영구 유지. 복구는 콘솔에서 showTimelineYear(\'' + lineageId + '\', ' + txt + '))')){
+      hideTimelineYear(lineageId, txt);
+    }
+  }
+  document.addEventListener('click', _onClick, true);
+})();
+
 // path d 속성에서 노드 가장자리에 닿는 점들 (cx,cy 의 ±35px 내) 을 (dx,dy) 만큼 이동
 function _updateConnectedPaths(svg, origCx, origCy, dx, dy, nodeId){
   var threshold = 35;  // 박스 크기 58/2 = 29 + 약간 여유
@@ -40857,6 +40974,10 @@ function renderCustomNodesForLineage(lineageId){
   //   (renderCustomNodesForLineage 가 lineage 표시 시 호출되는 메인 진입점이라 여기서 처리)
   if(typeof applyGeometryOverrides === 'function'){
     try { applyGeometryOverrides(lineageId); } catch(e){ console.warn('[geometry] override 실패:', e); }
+  }
+  // 🆕 v1.51 (2026.05.24): 슈퍼어드민이 hide 한 timeline 연도 라벨 적용
+  if(typeof applyHiddenTimelineYears === 'function'){
+    try { applyHiddenTimelineYears(lineageId); } catch(e){}
   }
 
   loadCustomNodes(lineageId, function(nodes){
@@ -46584,7 +46705,7 @@ function toggleGrid() {
 //   lpS_toIshikawa: 160 → 66 (메인 수직 y=770 분기점에서 히로시 우측 124,770 까지)
 //   lpS_ishikawaToRyusuke: 91 (분기점 240→류스케, 변경 없음)
 //   lpS_ishikawaToTsubomi: 640 → 709 (사이토 하단 171→츠보미 위 880, 시작점 확장)
-var PIPES_S={lpS_leftTrunk:686,lpS_toTakahashi:26,lpS_toEndo:26,lpS_toTakeuchi:76,lpS_toJungdae:21,lpS_toIshikawa:172,lpS_ishikawaToRyusuke:291,lpS_ishikawaToTsubomi:709,lpS_tsubomiToAzabu:91,lpS_azabuToShunji:251,lpS_shunjiToKobayashi:251,lpS_rightTrunk:941,lpS_toHongkong:21,lpS_toTsubomi:21,lpS_toBangkok:21,lpS_toJuyoun:21};
+var PIPES_S={lpS_leftTrunk:686,lpS_toTakahashi:26,lpS_toEndo:26,lpS_toTakeuchi:76,lpS_toJungdae:21,lpS_toIshikawa:201,lpS_ishikawaToRyusuke:291,lpS_ishikawaToTsubomi:709,lpS_tsubomiToAzabu:91,lpS_azabuToShunji:251,lpS_shunjiToKobayashi:251,lpS_rightTrunk:941,lpS_toHongkong:21,lpS_toTsubomi:21,lpS_toBangkok:21,lpS_toJuyoun:21};
 var NODES_S_IDS=['nS0','nSishikawa','nSryusuke','nStakahashi','nShongkong','nSendo','nStsubomi','nSbangkok','nStakeuchi','nSjuyoun','nSazabu','nSjungdae','nShashiza','nSkobayashi'];
 var DATA_S=[
   {id:'saito',name:'사이토 타카시',en:'Saito Takashi',city:'도쿄 롯폰기',gen:0,diff:'극악',visited:false,lat:35.6654,lng:139.7362,open:'2007',desc:'齋藤孝司 · 鮨さいとう 시조'},
