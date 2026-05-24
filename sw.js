@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.51';  // 1.51 — 2026.05.24: 사이토 노드 팝업 수직스크롤 / 사이토 서브카운터 path 면중앙 / 티켓 장르별 수평스크롤 / 슈퍼어드민 타임라인 연도 hide
-const STATIC_CACHE = 'taam-static-v1.51';
+const SW_VERSION = 'taam-sw-v1.52';  // 1.52 — 2026.05.25: 캐러셀 카드 클릭 활성화 + 티켓 상세 닫기 시 진입 view 복원 + 계보도관리 뒤로가기 → 슈퍼어드민 콘솔 복귀
+const STATIC_CACHE = 'taam-static-v1.52';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);

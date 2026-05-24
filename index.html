@@ -12216,7 +12216,13 @@ function renderCarousel(){
 
     var slide=document.createElement('div');
     slide.className='cf-slide';
-    slide.onclick=null;
+    // 🆕 v1.52 (2026.05.25): 카드 클릭 활성화 — 티켓 상세 화면 진입.
+    //   기존엔 slide.onclick=null + 버튼도 event.stopPropagation 만 → 카드 클릭 자체가 아무 작동 안 함.
+    (function(ticketId){
+      slide.onclick = function(){
+        if(typeof openTicketDetailFromCard === 'function') openTicketDetailFromCard(ticketId, false);
+      };
+    })(t.id);
 
     var bgHtml=photoUrl
       ?'<img class="cf-slide-bg" src="'+photoUrl+'" alt="" style="position:absolute;inset:0;object-fit:cover;width:100%;height:100%;">'
@@ -12226,7 +12232,8 @@ function renderCarousel(){
       '<div class="cf-slide-ov"></div>'+
       '<div class="cf-info">'+
         '<div class="cf-footer">'+
-          '<button class="cf-cta" style="background:#1a1a18;border-radius:6px;" onclick="event.stopPropagation();">상세보기</button>'+
+          // 🆕 v1.52: 상세보기 버튼도 정상 동작 — openTicketDetailFromCard 호출
+          '<button class="cf-cta" style="background:#1a1a18;border-radius:6px;" onclick="event.stopPropagation();openTicketDetailFromCard(\''+t.id+'\',false);">상세보기</button>'+
         '</div>'+
       '</div>'+
       '<label class="cf-upload-btn" title="사진 업로드" onclick="event.stopPropagation();">'+
@@ -13053,6 +13060,16 @@ function closeTicketDetail(){
   // GNB 복원
   var gnb = document.getElementById('mainGnb');
   if (gnb) gnb.style.display = 'flex';
+  // 🆕 v1.52 (2026.05.25): 진입 화면 복원 — currently active GNB tab 의 view 표시.
+  //   기존엔 ticketDetailScreen 만 숨기고 어떤 view 도 복원 안 해서 contentsView 에서 진입 후 닫으면 검정 화면.
+  try {
+    var activeTab = document.querySelector('.gnb-btn.active');
+    if(activeTab && typeof showView === 'function'){
+      var viewMap = { gnbHome:'home', gnbContents:'contents', gnbTicket:'ticket' };
+      var view = viewMap[activeTab.id];
+      if(view) showView(view);
+    }
+  } catch(e){ console.warn('[closeTicketDetail] view restore failed:', e); }
 }
 
 // ── LOCATION SHEET ──
@@ -43536,6 +43553,12 @@ function _syncDynamicSoloCards(){
 function closeLineageAdmin() {
   var screen = document.getElementById('lineageAdminScreen');
   if (screen) screen.style.display = 'none';
+  // 🆕 v1.52 (2026.05.25): 슈퍼어드민 콘솔 (adminScreen) 로 복귀.
+  //   기존엔 lineageAdminScreen 만 숨겨서 그 아래 옛 사진 cropper 등이 노출되는 버그.
+  //   슈퍼어드민이 lineageAdminScreen 들어가는 진입점이 openAdmin → 콘솔 메뉴 이므로 그쪽 복귀가 자연스러움.
+  try {
+    if(typeof openAdmin === 'function') openAdmin();
+  } catch(e){ console.warn('[closeLineageAdmin] openAdmin failed:', e); }
 }
 
 // editLineage는 stub 유지 (기존 호출 호환성)
