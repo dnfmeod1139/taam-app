@@ -45194,6 +45194,12 @@ var _carouselSlides = [
   }
 ];
 
+// 🆕 v1.52h 2026.05.25: 하드코딩 디폴트 14개 원본 보존 (deep copy).
+//   Supabase 에서 fetch 한 array 가 누락된 디폴트를 가지고 있어도 메모리에서 보충 가능.
+//   _taamEnsureCarouselDefaults() 가 이 원본을 참조해서 보충함.
+window._taamHardcodedDefaults = JSON.parse(JSON.stringify(_carouselSlides));
+window._taamDefaultLineageIds = ['sugita','kanesaka','kyubey','saito','umi','jiro','arai','sho','new9','new10','new11','new12','new13','new14'];
+
 var _carouselIdx = 0;          // 현재 중앙 인덱스
 var _carouselEditIdx = 0;      // 에디터에서 편집중인 인덱스
 var _carouselCroppper = null;
@@ -45214,13 +45220,27 @@ window._taamCarouselDefaults_v14 = [
     link: 'new14' }
 ];
 function _taamEnsureNewCarouselSlides() {
-  // 🛑 v1.52g 2026.05.25: 자동 보충 기능 비활성화 (DISABLED).
-  //   원인: 사용자가 캐러셀 편집기에서 시미즈 (new14) 슬라이드를 삭제하고 SAVE 해도
-  //   다음 로드 시 이 함수가 new14 가 없다고 판단해서 다시 추가 + Supabase 에
-  //   영구 저장까지 해버려 삭제가 무효화됨.
-  //   원래 목적 (2026.05.10 v14 마이그레이션) 은 이미 모든 활성 사용자에게 적용 완료됨.
-  //   신규 사용자는 hardcoded _carouselSlides 의 14개 디폴트를 그대로 받음.
-  return 0;
+  // 🆕 v1.52h 2026.05.25: 메모리 보충은 ON, Supabase 자동 저장은 OFF.
+  //   - Supabase 의 array 에서 디폴트 14개 중 누락된 게 있으면 메모리에서만 채워줌.
+  //   - 디폴트 14개 (시미즈 등) 가 사라지는 영구 손실 방지 → 항상 보임.
+  //   - Supabase 자동 저장은 안 하므로 사용자가 의도적으로 만든 슬라이드 (시마즈 등) 삭제 +
+  //     SAVE 한 결과는 영구 유지됨 (자동 부활 부메랑 없음).
+  //   - deleteCurrentCarouselSlide 가 디폴트 14개 삭제는 거부하므로 충돌 없음.
+  if (!Array.isArray(_carouselSlides)) return 0;
+  if (!Array.isArray(window._taamHardcodedDefaults)) return 0;
+  var existingIds = {};
+  _carouselSlides.forEach(function(s){ if (s && s.id) existingIds[s.id] = true; });
+  var added = 0;
+  window._taamHardcodedDefaults.forEach(function(def){
+    if (!existingIds[def.id]) {
+      _carouselSlides.push(JSON.parse(JSON.stringify(def)));
+      added++;
+    }
+  });
+  if (added > 0) {
+    console.log('🔄 디폴트 슬라이드 메모리 보충:', added, '개 (Supabase 자동 저장 안 함)');
+  }
+  return added;
 }
 
 function loadCarouselData(cb) {
@@ -45995,53 +46015,36 @@ function onCarouselCardTap(i) {
     }
   }
   
-  // 🔑 link 폴백: link 없으면 id 사용 (Supabase 옛 데이터 호환)
-  var linkTarget = (slide && slide.link) ? slide.link : (slide && slide.id ? slide.id : null);
-  // 알려진 트리 계보 ID 화이트리스트 — 그 외는 솔로로 처리해서 빈 lineage 모듈 사고 방지
-  // 🆕 v15 2026.05.10: new13 (난바), new14 (시미즈) 추가
-  var KNOWN_TREE_IDS = ['sugita','kanesaka','kyubey','saito','umi','jiro','arai','sho','new9','new10','new11','new12','new13','new14'];
-  var isKnownTree = (typeof linkTarget === 'string') && KNOWN_TREE_IDS.indexOf(linkTarget) !== -1;
-  var isSoloLink = (typeof linkTarget === 'string') && linkTarget.indexOf('solo_') === 0;
-  // 🆕 v1.52e 2026.05.25: promotional 슬라이드 (link='slot_*' / 알려지지 않은 link)
-  //   → openPromoCarousel(slide) 로 직접 라우팅. 기존엔 openSoloChef('solo_slot_mos...')
-  //   처럼 가짜 ID 로 빠져서 화면이 비거나 이전 캐시 (요시타케 등) 가 잔존했음.
-  //   사용자 보고: "13번째 시마즈를 누르면 12번째 요시타케로 연결된다" 의 진짜 원인.
-  var isPromoLink = (typeof linkTarget === 'string') && linkTarget.indexOf('slot_') === 0;
-  // 🆕 v1.52f 2026.05.25: 사용자가 캐러셀 편집기에서 슬라이드 제목 (t1) 을 기본값과
-  //   다르게 바꾼 경우 → 더 이상 원래 lineage 가 아니므로 promo 팝업으로 라우팅.
-  //   예) 14번 슬라이드 (default t1='SHIMIZU', link='new14') 의 t1 을 '시마즈' 로
-  //   변경했다면 link='new14' 가 시미즈 계보를 열어 어긋남.
-  var DEFAULT_T1_BY_LINK = {
-    sugita:'SUGITA', kanesaka:'KANESAKA', kyubey:'KYUBEY', saito:'SAITO',
-    umi:'UMI', jiro:'JIRO', arai:'ARAI', sho:'SHO',
-    new9:'KIYOTA', new10:'ARAKI', new11:'MITANI', new12:'YOSHITAKE',
-    new13:'NAMBA', new14:'SHIMIZU'
-  };
-  var customizedT1 = false;
-  if (isKnownTree && slide && typeof slide.t1 === 'string') {
-    var defaultT1 = DEFAULT_T1_BY_LINK[linkTarget];
-    if (defaultT1 && slide.t1.trim().toUpperCase() !== defaultT1.toUpperCase()) {
-      customizedT1 = true;
-    }
-  }
-  if (isPromoLink || customizedT1 || (linkTarget && !isKnownTree && !isSoloLink)) {
-    // promotional / placeholder / unknown → 풀스크린 promo 팝업으로 안전 폴백
-    if (typeof window.openPromoCarousel === 'function') {
-      window.openPromoCarousel(slide);
-      return;
-    }
-    // openPromoCarousel 없으면 toast 로 가장 안전한 폴백
-    if (typeof showComingSoonToast === 'function') showComingSoonToast();
+  // 🆕 v1.52h 2026.05.25: 라우팅 기준을 slide.id 로 단순화.
+  //   원칙: 하드코딩 디폴트 14개 (id ∈ DEFAULT_LINEAGE_IDS) → lineage 트리 모듈
+  //         그 외 모든 슬라이드 (사용자가 편집기로 추가한 것 — id='slot_*' 등) → promo 팝업만
+  //   사용자가 디폴트 슬라이드의 t1/사진만 한글로 바꿔도 lineage 는 정상 열림.
+  //   사용자가 추가한 슬라이드는 link 값이 무엇이든 (실수로 'new14' 라 적혀도) promo 팝업.
+  var DEFAULT_LINEAGE_IDS = window._taamDefaultLineageIds ||
+    ['sugita','kanesaka','kyubey','saito','umi','jiro','arai','sho','new9','new10','new11','new12','new13','new14'];
+  var sid = slide && slide.id;
+  var isDefaultLineage = sid && DEFAULT_LINEAGE_IDS.indexOf(sid) !== -1;
+
+  if (isDefaultLineage) {
+    // 디폴트 14개 → lineage 트리. link 가 디폴트 안에 있으면 그걸 사용, 아니면 id 자체로.
+    var lineageId = (slide.link && DEFAULT_LINEAGE_IDS.indexOf(slide.link) !== -1) ? slide.link : sid;
+    if (window.LineageModule) window.LineageModule.open(lineageId);
     return;
   }
-  if (isSoloLink) {
-    if(typeof openSoloChef === 'function') openSoloChef(linkTarget);
-  } else if (isKnownTree && window.LineageModule) {
-    window.LineageModule.open(linkTarget);
-  } else {
-    // 링크 없는 슬롯 (빈 슬롯)
-    showComingSoonToast();
+
+  // solo_* 링크 (단독 쉐프 매거진) — 기존 호환 유지
+  if (typeof slide.link === 'string' && slide.link.indexOf('solo_') === 0) {
+    if(typeof openSoloChef === 'function') openSoloChef(slide.link);
+    return;
   }
+
+  // 사용자 추가 슬라이드 (slot_* / 알려지지 않은 id / 빈 link) → promo 팝업 전용
+  if (typeof window.openPromoCarousel === 'function') {
+    window.openPromoCarousel(slide);
+    return;
+  }
+  // 최후 폴백
+  if (typeof showComingSoonToast === 'function') showComingSoonToast();
 }
 
 // 빈 슬롯 탭시 토스트
@@ -46414,10 +46417,23 @@ function deleteCurrentCarouselSlide() {
     return;
   }
   var s = _carouselSlides[_carouselEditIdx];
+  // 🆕 v1.52h 2026.05.25: 하드코딩 디폴트 14개 (sugita ~ new14) 는 삭제 거부.
+  //   디폴트는 lineage 트리가 하드코딩되어 있어 슬라이드를 지우면 트리 진입로가 사라짐.
+  //   사용자는 t1/사진/desc 만 편집 가능. 시미즈/요시타케 등 디폴트는 보호됨.
+  var PROTECTED_IDS = window._taamDefaultLineageIds ||
+    ['sugita','kanesaka','kyubey','saito','umi','jiro','arai','sho','new9','new10','new11','new12','new13','new14'];
+  if(s && s.id && PROTECTED_IDS.indexOf(s.id) !== -1){
+    alert('기본 계보 슬라이드 (' + (s.t1 || s.id) + ') 는 삭제할 수 없습니다.\n사진/제목/설명만 편집 가능합니다.\n\n사용자가 추가한 슬라이드만 삭제 가능합니다.');
+    return;
+  }
   var label = (s && s.t1) ? s.t1 : ('SLIDE ' + (_carouselEditIdx+1));
-  if(!confirm('"' + label + '" 슬라이드를 삭제할까요? (SAVE 누르기 전엔 되돌릴 수 있음 — 에디터 닫기로 취소)')) return;
+  if(!confirm('"' + label + '" 슬라이드를 삭제할까요?\n삭제하면 즉시 영구 반영됩니다.')) return;
   _carouselSlides.splice(_carouselEditIdx, 1);
   if(_carouselEditIdx >= _carouselSlides.length) _carouselEditIdx = _carouselSlides.length - 1;
+  // 🆕 v1.52h: 즉시 Supabase + IDB 영구 저장 (SAVE 안 눌러도 삭제 반영됨)
+  try {
+    if(typeof saveCarouselData === 'function') saveCarouselData();
+  } catch(e){ console.warn('[deleteCurrentCarouselSlide] save failed:', e); }
   renderSlideTabs();
   loadSlideToEditor(_carouselEditIdx);
 }

@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.52g';  // 1.52g — 2026.05.25: 캐러셀 슬라이드 삭제 무효화 fix — _taamEnsureNewCarouselSlides 가 매 로드 시 누락된 new13/new14 를 자동 부활 + Supabase 영구 저장하던 부메랑 로직 비활성화 (no-op). 신규 사용자는 hardcoded _carouselSlides 14개 디폴트로 충분.
-const STATIC_CACHE = 'taam-static-v1.52g';
+const SW_VERSION = 'taam-sw-v1.52h';  // 1.52h — 2026.05.25: 캐러셀 구조 재설계 — 하드코딩 14개 디폴트(시미즈 등) vs 사용자 추가 슬라이드 명확히 구분. 디폴트는 보호 (삭제 거부, 메모리 자동 보충), 사용자 슬라이드는 즉시 영구 삭제. 라우팅을 slide.id 기준으로 단순화 (디폴트=lineage, 그 외=promo 팝업).
+const STATIC_CACHE = 'taam-static-v1.52h';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
