@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.52l';  // 1.52l — 2026.05.25: 난바/시미즈 path-draw 애니메이션 — 검정 메인 라인 (path/line) 의 getTotalLength + stroke-dashoffset 으로 다른 계보처럼 실제 라인이 그려지게 함. 점선 NEW path 는 opacity fade. visible 처리 전에 reset 적용으로 깜빡임 방지.
-const STATIC_CACHE = 'taam-static-v1.52l';
+const SW_VERSION = 'taam-sw-v1.52m';  // 1.52m — 2026.05.25: promo 팝업 닫기 후 검정화면 fix — openPromoCarousel 이 진입 화면 (carouselEditor / contents / lineageHome / home / ticket) 을 popup.dataset.returnTo 에 저장 → closePromoCarousel 이 그 화면 명시적 복원 + 안전망으로 cfInner 비어있으면 renderCarousel 재호출. 캐러셀 에디트로 만든 슬라이드 닫기 후 캐러셀 리스트로 정확히 복귀.
+const STATIC_CACHE = 'taam-static-v1.52m';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);

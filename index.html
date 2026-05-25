@@ -5775,10 +5775,39 @@ window.addEventListener('error', function(e){
   </div>
 </div>
 <script>
+// 🆕 v1.52m 2026.05.25: 진입 화면 명시적 추적 + 닫기 시 강제 복원.
+//   기존엔 active GNB tab 만 보고 showView 호출 → 편집기에서 띄웠거나 GNB active 가
+//   없을 때 검정화면만 남았음. 캐러셀 리스트로 확실히 돌아가도록 다층 폴백 추가.
 window.openPromoCarousel = function(slide){
   if(!slide) return;
   var popup = document.getElementById('promoCarouselPopup');
   if(!popup) return;
+  // 진입 화면 추적 (닫을 때 복원에 사용)
+  var returnTo = null;
+  var ed = document.getElementById('carouselEditor');
+  if(ed && ed.style.display && ed.style.display !== 'none'){
+    returnTo = 'carouselEditor';
+  } else {
+    var contV = document.getElementById('contentsView');
+    if(contV && contV.style.display && contV.style.display !== 'none'){
+      returnTo = 'contents';
+    } else {
+      var lh = document.getElementById('lineageHome');
+      if(lh && lh.style.display && lh.style.display !== 'none'){
+        returnTo = 'lineageHome';
+      } else {
+        var activeTab = document.querySelector('.gnb-btn.active');
+        if(activeTab){
+          if(activeTab.id === 'gnbContents') returnTo = 'contents';
+          else if(activeTab.id === 'gnbHome') returnTo = 'home';
+          else if(activeTab.id === 'gnbTicket') returnTo = 'ticket';
+        }
+      }
+    }
+  }
+  // 기본값: contents (캐러셀이 보통 거기서 열림)
+  popup.dataset.returnTo = returnTo || 'contents';
+
   var img = document.getElementById('promoCarouselImg');
   if(img){
     if(slide.photo){ img.src = slide.photo; img.style.display = ''; }
@@ -5794,16 +5823,50 @@ window.openPromoCarousel = function(slide){
 };
 window.closePromoCarousel = function(){
   var popup = document.getElementById('promoCarouselPopup');
-  if(popup) popup.style.display = 'none';
-  // 진입 화면 자동 복원 — 현재 active GNB tab 의 view (보통 contents)
+  if(!popup) return;
+  popup.style.display = 'none';
+  var returnTo = popup.dataset.returnTo || 'contents';
+  popup.dataset.returnTo = '';
+
   try {
-    var activeTab = document.querySelector('.gnb-btn.active');
-    if(activeTab && typeof showView === 'function'){
-      var viewMap = { gnbHome:'home', gnbContents:'contents', gnbTicket:'ticket' };
-      var view = viewMap[activeTab.id];
-      if(view) showView(view);
+    if(returnTo === 'carouselEditor'){
+      // 편집기에서 띄운 경우 → 편집기 다시 표시 (편집기 자체는 display:flex 로 유지됐을 것)
+      var ed = document.getElementById('carouselEditor');
+      if(ed) ed.style.display = 'flex';
+      return;
     }
-  } catch(e){}
+    if(returnTo === 'lineageHome'){
+      var lh = document.getElementById('lineageHome');
+      if(lh) lh.style.display = 'block';
+      return;
+    }
+    if(returnTo === 'home' || returnTo === 'ticket'){
+      if(typeof showView === 'function') showView(returnTo);
+      var gnbA = document.getElementById('mainGnb');
+      if(gnbA) gnbA.style.display = 'flex';
+      return;
+    }
+    // 기본: 컨텐츠 페이지 캐러셀 리스트로 복귀
+    //   showView('contents') 가 contentsView 표시 + 캐러셀 렌더까지 처리.
+    //   그 위에 mainGnb / GNB Contents active 표시도 같이 복원.
+    var contV = document.getElementById('contentsView');
+    if(contV) contV.style.display = 'flex';
+    var gnb = document.getElementById('mainGnb');
+    if(gnb) gnb.style.display = 'flex';
+    document.querySelectorAll('.gnb-btn').forEach(function(b){ b.classList.remove('active'); });
+    var cBtn = document.getElementById('gnbContents');
+    if(cBtn) cBtn.classList.add('active');
+    if(typeof showView === 'function') showView('contents');
+    // 안전망: showView 의 setTimeout(60) 외에 한 번 더 renderCarousel 호출 보장
+    setTimeout(function(){
+      try {
+        var inner = document.getElementById('cfInner');
+        if(inner && inner.children.length === 0 && typeof renderCarousel === 'function'){
+          renderCarousel();
+        }
+      } catch(e){}
+    }, 120);
+  } catch(e){ console.warn('[closePromoCarousel] return failed:', e); }
 };
 </script>
 
