@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.52i';  // 1.52i — 2026.05.25: 일회성 캐러셀 cleanup — 슈퍼어드민 첫 로드 시 Supabase carousel_slides 를 디폴트 14개로 자동 리셋 (사용자 추가 슬라이드 전부 제거, 디폴트 사진은 보존). chefs 테이블은 건드리지 않음. localStorage flag 로 1회만 실행. 수동 호출: window._taamResetCarousel(true)
-const STATIC_CACHE = 'taam-static-v1.52i';
+const SW_VERSION = 'taam-sw-v1.52j';  // 1.52j — 2026.05.25: 슈퍼어드민 → 계보도관리 → 계보 본 후 닫기 → 다시 계보도관리 시 클릭 여러 번 해야 작동하던 멈춤 fix. LineageModule.close 의 fromAdmin 분기에서 adminScreen/mainGnb/myPage/admin sub-screen 잔재 명시적 정리 + lineageAdminScreen z-index 8500 강화 + loNew13/loNew14 hide 목록 추가.
+const STATIC_CACHE = 'taam-static-v1.52j';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
