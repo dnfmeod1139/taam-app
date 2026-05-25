@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.52';  // 1.52 — 2026.05.25: 캐러셀 카드 클릭 활성화 + 티켓 상세 닫기 시 진입 view 복원 + 계보도관리 뒤로가기 → 슈퍼어드민 콘솔 복귀
-const STATIC_CACHE = 'taam-static-v1.52';
+const SW_VERSION = 'taam-sw-v1.52b';  // 1.52b — 2026.05.25: 슈퍼어드민→마이페이지→홈 닫기 경로 / 요시타케 path 2개 위치 / LineageModule fromContents 진입 경로 + lineageAdminScreen pointer-events fix
+const STATIC_CACHE = 'taam-static-v1.52b';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);

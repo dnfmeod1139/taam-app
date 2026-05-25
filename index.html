@@ -18017,6 +18017,12 @@ function closeAdmin(){
   // 일반 화면으로 복귀할 때 mainGnb 복원
   var gnb = document.getElementById('mainGnb');
   if(gnb) gnb.style.display = 'flex';
+  // 🆕 v1.52 (2026.05.25): 슈퍼어드민 콘솔 닫기 → 마이페이지로 복귀.
+  //   기존엔 adminScreen 만 숨겨서 그 아래 살아있는 옛 화면 (사진 cropper 등) 이 노출되는 버그.
+  //   경로: 슈퍼어드민 콘솔 닫기 → 마이페이지 → (마이페이지 X) → 홈 (티켓 view) 으로 이어짐.
+  try {
+    if(typeof openMyPage === 'function') openMyPage();
+  } catch(e){ console.warn('[closeAdmin] openMyPage failed:', e); }
 }
 function closeSubPage(id){
   var el=document.getElementById(id);
@@ -31005,9 +31011,12 @@ IDB.get('splashSettings').then(function(s) {
         <path id="lpNew12_to_miyakawa" d="M 100 420 L 100 460" stroke="#1a1a18" stroke-width="1.5" fill="none" style="opacity:0"/>
         <path id="lpNew12_to_murayama" d="M 260 420 L 260 460" stroke="#1a1a18" stroke-width="1.5" fill="none" style="opacity:0"/>
 
-        <!-- 미야카와 → 신by / 무라야마 → 벳쇼 (레벨3) — 각 노드의 텍스트를 피해 옆으로 우회 -->
-        <path id="lpNew12_miya_shin" d="M 72 486 L 50 486 L 50 640 L 100 640" stroke="#1a1a18" stroke-width="1.5" fill="none" style="opacity:0"/>
-        <path id="lpNew12_mura_onseo" d="M 288 486 L 310 486 L 310 640 L 260 640" stroke="#1a1a18" stroke-width="1.5" fill="none" style="opacity:0"/>
+        <!-- 미야카와 → 신by / 무라야마 → 벳쇼 (레벨3) — 각 노드의 텍스트를 피해 옆으로 우회.
+             🆕 v1.52 (2026.05.25): 끝점을 노드 좌/우측 면 중앙으로 조정 (이전엔 상단 중앙으로 진입).
+               - 신 by 미야카와 (노드 6): 좌측 면 중앙 (74, 666)
+               - 무라야마 벳쇼 (노드 7): 우측 면 중앙 (286, 666) -->
+        <path id="lpNew12_miya_shin" d="M 72 486 L 50 486 L 50 666 L 74 666" stroke="#1a1a18" stroke-width="1.5" fill="none" style="opacity:0"/>
+        <path id="lpNew12_mura_onseo" d="M 288 486 L 310 486 L 310 666 L 286 666" stroke="#1a1a18" stroke-width="1.5" fill="none" style="opacity:0"/>
 
         <!-- 요시타케에서 레벨4(쿠루마/오야)까지 중앙 trunk -->
         <path id="lpNew12_y_down3" d="M 180 420 L 180 840" stroke="#1a1a18" stroke-width="1.5" fill="none" style="opacity:0"/>
@@ -42963,12 +42972,21 @@ window.LineageModule = {
         mod.dataset.fromHome = (disp && disp !== 'none') ? '1' : '0';
         lh.style.display = 'none';
       }
-      
+
       // 계보도 관리 페이지(lineageAdminScreen)에서 진입했는지 감지
       var lam = document.getElementById('lineageAdminScreen');
       if(lam) {
         var lamDisp = lam.style.display;
         mod.dataset.fromAdmin = (lamDisp && lamDisp !== 'none') ? '1' : '0';
+      }
+
+      // 🆕 v1.52 (2026.05.25): contentsView (컨텐츠 버튼 페이지) 에서 진입했는지 감지.
+      //   기존엔 fromHome/fromAdmin 만 감지 → contentsView 진입 시 close 의 else 분기로 떨어져
+      //   "어디로도 안 감 = 블랙스크린" 버그 발생.
+      var contV = document.getElementById('contentsView');
+      if(contV) {
+        var contDisp = contV.style.display;
+        mod.dataset.fromContents = (contDisp && contDisp !== 'none') ? '1' : '0';
       }
       
       // 🛡 노드 애니메이션 안전장치 — 컨테이너 안의 모든 노드/커스텀 노드/커스텀 선
@@ -43095,16 +43113,40 @@ window.LineageModule = {
     //    카드에서 들어왔으면 openLineageHome을 다시 호출해서 완전 복원
     var fromHome = mod && mod.dataset.fromHome === '1';
     var fromAdmin = mod && mod.dataset.fromAdmin === '1';
-    
+    // 🆕 v1.52 (2026.05.25): contentsView 진입 경로 인식
+    var fromContents = mod && mod.dataset.fromContents === '1';
+
     if(fromAdmin) {
       // 계보도 관리 페이지에서 들어온 경우: 관리 페이지 다시 열기 (커튼 뒤에서)
       if(mod) mod.dataset.fromAdmin = '0';
       setTimeout(function(){
         try {
           var lam = document.getElementById('lineageAdminScreen');
-          if(lam) lam.style.display = 'flex';
+          if(lam) {
+            lam.style.display = 'flex';
+            // 🆕 v1.52: pointer-events 강제 'auto' — 이전 hide 시 'none' 으로 set 된 거 복구.
+            //   이게 빠져서 화면은 보이는데 버튼 클릭 안 되는 "멈춤" 현상 발생.
+            lam.style.pointerEvents = 'auto';
+          }
         } catch(e) { console.error('[reopen lineageAdmin]', e); }
         // 도착지 표시 후 1프레임 뒤 커튼 페이드 아웃
+        requestAnimationFrame(function(){
+          try { _lineageTransitionEnd(); } catch(e){}
+        });
+      }, 50);
+    } else if(fromContents) {
+      // 🆕 v1.52: 컨텐츠 버튼 페이지 (contentsView) 에서 진입한 경우 → 컨텐츠 페이지 복귀
+      if(mod) mod.dataset.fromContents = '0';
+      setTimeout(function(){
+        try {
+          // GNB 의 Contents 탭 active 표시 + showView('contents') 호출 → contentsView 복원 + renderCarousel
+          var contentsBtn = document.getElementById('gnbContents');
+          if(contentsBtn){
+            document.querySelectorAll('.gnb-btn').forEach(function(b){ b.classList.remove('active'); });
+            contentsBtn.classList.add('active');
+          }
+          if(typeof showView === 'function') showView('contents');
+        } catch(e){ console.error('[reopen contentsView]', e); }
         requestAnimationFrame(function(){
           try { _lineageTransitionEnd(); } catch(e){}
         });
@@ -43130,10 +43172,21 @@ window.LineageModule = {
         });
       }
     } else {
-      // 그 외 케이스 — 즉시 커튼 종료
-      requestAnimationFrame(function(){
-        try { _lineageTransitionEnd(); } catch(e){}
-      });
+      // 🆕 v1.52: fallback — 어떤 flag 도 없으면 현재 active GNB tab 의 view 로 복귀.
+      //   기존엔 단순히 transition 종료만 → 블랙스크린.
+      setTimeout(function(){
+        try {
+          var activeTab = document.querySelector('.gnb-btn.active');
+          if(activeTab && typeof showView === 'function'){
+            var viewMap = { gnbHome:'home', gnbContents:'contents', gnbTicket:'ticket' };
+            var view = viewMap[activeTab.id];
+            if(view) showView(view);
+          }
+        } catch(e){}
+        requestAnimationFrame(function(){
+          try { _lineageTransitionEnd(); } catch(e){}
+        });
+      }, 50);
     }
   }
 };
