@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.52f';  // 1.52f — 2026.05.25: 캐러셀 t1 커스텀 변경 감지 → promo 팝업 라우팅 (시미즈 → 시마즈 변경된 슬라이드가 시미즈 계보로 연결되던 버그) + closeLineageAdmin 깜빡임·1~2초 멈춤 해결 (mainGnb 즉시 hide + adminScreen 선표시 + lineageAdminScreen 다음 frame 숨김)
-const STATIC_CACHE = 'taam-static-v1.52f';
+const SW_VERSION = 'taam-sw-v1.52g';  // 1.52g — 2026.05.25: 캐러셀 슬라이드 삭제 무효화 fix — _taamEnsureNewCarouselSlides 가 매 로드 시 누락된 new13/new14 를 자동 부활 + Supabase 영구 저장하던 부메랑 로직 비활성화 (no-op). 신규 사용자는 hardcoded _carouselSlides 14개 디폴트로 충분.
+const STATIC_CACHE = 'taam-static-v1.52g';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
