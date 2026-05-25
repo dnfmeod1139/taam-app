@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.52k';  // 1.52k — 2026.05.25: ① 스기타 계보 라인 그리기 속도 정상화 (3.375→2.0, 최소 1013→300ms — 약 2배 빨라짐). ② 난바(New13) / 시미즈(New14) 에 fade-in 애니메이션 추가 (라인 0.9s 페이드인 후 노드 0.48s 간격 stagger, 총 ~4.5초). 이전엔 정적으로 즉시 표시되어 다른 계보와 톤 불일치.
-const STATIC_CACHE = 'taam-static-v1.52k';
+const SW_VERSION = 'taam-sw-v1.52l';  // 1.52l — 2026.05.25: 난바/시미즈 path-draw 애니메이션 — 검정 메인 라인 (path/line) 의 getTotalLength + stroke-dashoffset 으로 다른 계보처럼 실제 라인이 그려지게 함. 점선 NEW path 는 opacity fade. visible 처리 전에 reset 적용으로 깜빡임 방지.
+const STATIC_CACHE = 'taam-static-v1.52l';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);

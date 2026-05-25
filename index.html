@@ -47450,21 +47450,28 @@ function openLineageNew(num){
   closeOtherLineages('loNew'+num);
   var el=document.getElementById('loNew'+num);
   if(!el) return;
+
+  // 🆕 v1.52l 2026.05.25: visible 처리 전 reset (path/노드 hide → 깜빡임 방지)
+  //   기존엔 컨테이너 visible 후 200ms 뒤 reset 적용해서 그 사이 path 가 한 순간 보였음.
+  if(num === 13 && typeof _resetLineageForAnim === 'function'){
+    _resetLineageForAnim('svgNew13', ['nNew13_1','nNew13_2','nNew13_6','nNew13_4','nNew13_5','nNew13_7','nNew13_3']);
+  } else if(num === 14 && typeof _resetLineageForAnim === 'function'){
+    _resetLineageForAnim('svgNew14', ['nNew14_1','nNew14_2','nNew14_4','nNew14_5','nNew14_6','nNew14_7','nNew14_3']);
+  }
+
   el.style.visibility='visible';
   el.style.opacity='1';
   el.style.pointerEvents='all';
   // 저장된 이름 로드
   loadNewLineageName(num);
-  
+
   // 슬롯별 하드코딩 애니메이션
   if(num === 9){
     resetAllNew9();
     animDoneNew9=false; animRunningNew9=false;
     setTimeout(startAnimNew9, 350);
   }
-  // 🆕 v1.52k 2026.05.25: 난바(13) / 시미즈(14) 도 fade-in 애니메이션 추가
-  //   기존엔 애니메이션 없이 정적으로 표시 → 다른 계보와 톤 불일치.
-  //   path id 가 없어 stroke-dasharray 적용 불가 → opacity fade + 노드 stagger 로 처리.
+  // 🆕 v1.52l 2026.05.25: 난바(13) / 시미즈(14) — 실제 라인이 그려지는 path-draw 애니메이션
   else if(num === 13){
     if(typeof startAnimNew13 === 'function') setTimeout(startAnimNew13, 200);
   }
@@ -47737,29 +47744,83 @@ function tapNodeNew14(id){
   if(r){r=Object.assign({},r,{_lineageId:'new14'});openInfo(r);}
 }
 
-// 🆕 v1.52k 2026.05.25: 난바 / 시미즈 fade-in 애니메이션.
-//   path 가 inline (id 없음) 이라 stroke-dasharray 대신 opacity fade 로 처리.
-//   순서: SVG 의 path/line/circle 한 번에 fade-in (~900ms) → 노드 g 들이 stagger fade-in (각 ~420ms).
-//   총 길이: ~4.5초 (다른 New10/11/12 ~5-6초 범위와 유사).
-function _animLineageFade(svgId, nodeIds, stagger){
+// 🆕 v1.52l 2026.05.25: 난바 / 시미즈 — 실제 라인이 그려지는 path-draw 애니메이션.
+//   접근: 검정 메인 라인 (stroke="#1a1a18") 의 path/line 각각 getTotalLength() 로 길이 계산 →
+//         stroke-dasharray = length, stroke-dashoffset = length 로 시작해서 0 으로 transition.
+//   점선 NEW path (stroke-dasharray="4 4") 는 opacity fade-in (점선 모양 보존 위해).
+//   타임라인 spine/circle/text (stroke="#e0ddd8") 는 영향 없음 — 항상 보임.
+//   순서: path 들이 80ms 간격 wave 로 그려지고, 그 진행 35% 시점부터 노드들이 stagger fade-in.
+//
+//   reset 함수와 anim 함수를 분리한 이유: openLineageNew 가 컨테이너를 visible 처리하기 전에
+//   reset 을 적용해야 첫 frame 부터 path/노드 가 안 보임 (깜빡임 방지).
+
+function _resetLineageForAnim(svgId, nodeIds){
   var svg = document.getElementById(svgId);
   if(!svg) return;
-  var lines = svg.querySelectorAll('path, line, circle');
-  // 1) reset (transition none + opacity 0)
-  lines.forEach(function(el){ el.style.transition = 'none'; el.style.opacity = '0'; });
+  // 노드 hide
   nodeIds.forEach(function(id){
     var el = document.getElementById(id);
     if(el){ el.style.transition = 'none'; el.style.opacity = '0'; }
   });
-  // 강제 reflow 후 페이드 시작
-  void svg.offsetWidth;
-  // 2) 라인 fade-in
-  lines.forEach(function(el){
-    el.style.transition = 'opacity .9s ease';
-    el.style.opacity = '1';
+  // 검정 메인 라인 path / line 만 reset
+  var paths = svg.querySelectorAll('path[stroke="#1a1a18"], line[stroke="#1a1a18"]');
+  paths.forEach(function(p){
+    var origDash = p.getAttribute('stroke-dasharray');
+    // 점선 path (예: "4 4") 식별 — attribute 에 있는 작은 값. inline style 은 영향 없음.
+    var isDashed = false;
+    if(origDash){
+      var parts = origDash.trim().split(/[\s,]+/);
+      if(parts.length === 2 && parseFloat(parts[0]) <= 10 && parseFloat(parts[1]) <= 10) isDashed = true;
+    }
+    if(isDashed){
+      p.style.transition = 'none';
+      p.style.opacity = '0';
+      p._taamIsDashed = true;
+    } else {
+      var len = 100;
+      try { if(typeof p.getTotalLength === 'function') len = p.getTotalLength(); } catch(e){}
+      if(!len || isNaN(len)) len = 100;
+      p._taamLen = len;
+      p._taamIsDashed = false;
+      p.style.transition = 'none';
+      p.style.strokeDasharray = len + ' ' + len;
+      p.style.strokeDashoffset = len;
+    }
   });
-  // 3) 노드 stagger fade-in (라인이 보이기 시작한 후 350ms 부터)
-  var startDelay = 350;
+}
+
+function _animLineageDraw(svgId, nodeIds){
+  var svg = document.getElementById(svgId);
+  if(!svg) return;
+  void svg.offsetWidth; // 강제 reflow 후 transition 적용
+
+  var paths = svg.querySelectorAll('path[stroke="#1a1a18"], line[stroke="#1a1a18"]');
+  var pathTotalDur = 0;
+  var WAVE_GAP = 80; // path 사이 wave 간격 (ms)
+  paths.forEach(function(p, i){
+    var startDelay = i * WAVE_GAP;
+    if(p._taamIsDashed){
+      // 점선 → opacity fade
+      setTimeout(function(){
+        p.style.transition = 'opacity .5s ease';
+        p.style.opacity = '1';
+      }, startDelay);
+      pathTotalDur = Math.max(pathTotalDur, startDelay + 500);
+    } else {
+      // 실선 → stroke-dashoffset draw (다른 계보와 동일한 2.0× 공식)
+      var len = p._taamLen || 100;
+      var dur = Math.max(Math.round(len * 2.0), 300);
+      setTimeout(function(){
+        p.style.transition = 'stroke-dashoffset ' + dur + 'ms cubic-bezier(.38,0,.12,1)';
+        p.style.strokeDashoffset = '0';
+      }, startDelay);
+      pathTotalDur = Math.max(pathTotalDur, startDelay + dur);
+    }
+  });
+
+  // 노드 stagger fade-in — path 진행 35% 시점부터
+  var nodeStartDelay = Math.round(pathTotalDur * 0.35);
+  var NODE_STAGGER = 380;
   nodeIds.forEach(function(id, i){
     setTimeout(function(){
       var el = document.getElementById(id);
@@ -47767,20 +47828,24 @@ function _animLineageFade(svgId, nodeIds, stagger){
         el.style.transition = 'opacity .42s ease';
         el.style.opacity = '1';
       }
-    }, startDelay + i * stagger);
+    }, nodeStartDelay + i * NODE_STAGGER);
   });
 }
 
+// 난바 노드 순서 (그려지는 시간순):
+//   본가 (n1) → 좌측 1세대 (슌스케 n2, 미나미 n6) → 우측 1세대 (코즈에 n5, 미우라 n4) →
+//   요츠야 (n7) → 손자 NEW (니시자키 n3)
 function startAnimNew13(){
-  // 1대 본가(n1) → 1세대 5명 좌→우 → 손자 NEW(n3)
   var nodes = ['nNew13_1', 'nNew13_2', 'nNew13_6', 'nNew13_4', 'nNew13_5', 'nNew13_7', 'nNew13_3'];
-  _animLineageFade('svgNew13', nodes, 480);
+  _animLineageDraw('svgNew13', nodes);
 }
 
+// 시미즈 노드 순서:
+//   본가 (n1) → 1세대 4명 좌→우 (마츠모토 n2, 다케 n4, 다카가키 n5, 토쿠 n6) →
+//   손자 NEW (호시야마 n7, 마사카츠 n3)
 function startAnimNew14(){
-  // 본가(n1) → 1세대 4명 좌→우 (n2, n4, n5, n6) → 손자 NEW 2명 (n7, n3)
   var nodes = ['nNew14_1', 'nNew14_2', 'nNew14_4', 'nNew14_5', 'nNew14_6', 'nNew14_7', 'nNew14_3'];
-  _animLineageFade('svgNew14', nodes, 480);
+  _animLineageDraw('svgNew14', nodes);
 }
 
 // 새 계보도 이름 저장/로드
