@@ -7334,7 +7334,7 @@ window.closePromoCarousel = function(){
 <!-- ADMIN SCREEN -->
 <div id="adminScreen" class="admin-screen" data-lang-lock="ko" style="display:none;">
   <div class="admin-header" style="position:relative;">
-    <button onclick="closeAdmin();openMyPage();" style="position:absolute;left:0;top:50%;transform:translateY(-50%);background:none;border:none;padding:8px;cursor:pointer;display:flex;align-items:center;">
+    <button onclick="closeAdmin();" style="position:absolute;left:0;top:50%;transform:translateY(-50%);background:none;border:none;padding:8px;cursor:pointer;display:flex;align-items:center;">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1a1a18" stroke-width="2.5" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg>
     </button>
     <div class="admin-title" data-i18n="my_page.title" style="text-align:center;width:100%;">마이페이지</div>
@@ -45999,12 +45999,24 @@ function onCarouselCardTap(i) {
   var KNOWN_TREE_IDS = ['sugita','kanesaka','kyubey','saito','umi','jiro','arai','sho','new9','new10','new11','new12','new13','new14'];
   var isKnownTree = (typeof linkTarget === 'string') && KNOWN_TREE_IDS.indexOf(linkTarget) !== -1;
   var isSoloLink = (typeof linkTarget === 'string') && linkTarget.indexOf('solo_') === 0;
-  if (linkTarget && (isSoloLink || (!isKnownTree && linkTarget))){
-    // 단독 쉐프 — 또는 트리 계보가 아닌 미지의 link (옛 빈 슬라이드 등) → 매거진으로 안전 폴백.
-    // LineageModule.open 의 트리 활성화 흐름을 완전히 우회.
-    var soloId = isSoloLink ? linkTarget : ('solo_' + linkTarget);
-    if(typeof openSoloChef === 'function') openSoloChef(soloId);
-  } else if (linkTarget && window.LineageModule) {
+  // 🆕 v1.52e 2026.05.25: promotional 슬라이드 (link='slot_*' / 알려지지 않은 link)
+  //   → openPromoCarousel(slide) 로 직접 라우팅. 기존엔 openSoloChef('solo_slot_mos...')
+  //   처럼 가짜 ID 로 빠져서 화면이 비거나 이전 캐시 (요시타케 등) 가 잔존했음.
+  //   사용자 보고: "13번째 시마즈를 누르면 12번째 요시타케로 연결된다" 의 진짜 원인.
+  var isPromoLink = (typeof linkTarget === 'string') && linkTarget.indexOf('slot_') === 0;
+  if (isPromoLink || (linkTarget && !isKnownTree && !isSoloLink)) {
+    // promotional / placeholder / unknown → 풀스크린 promo 팝업으로 안전 폴백
+    if (typeof window.openPromoCarousel === 'function') {
+      window.openPromoCarousel(slide);
+      return;
+    }
+    // openPromoCarousel 없으면 toast 로 가장 안전한 폴백
+    if (typeof showComingSoonToast === 'function') showComingSoonToast();
+    return;
+  }
+  if (isSoloLink) {
+    if(typeof openSoloChef === 'function') openSoloChef(linkTarget);
+  } else if (isKnownTree && window.LineageModule) {
     window.LineageModule.open(linkTarget);
   } else {
     // 링크 없는 슬롯 (빈 슬롯)

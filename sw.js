@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.52d';  // 1.52d — 2026.05.25: LineageModule.open 에 KNOWN_LINEAGES 화이트리스트 (slot_mos 같은 promotional 차단) + openMyPage 중복 호출 차단
-const STATIC_CACHE = 'taam-static-v1.52d';
+const SW_VERSION = 'taam-sw-v1.52e';  // 1.52e — 2026.05.25: onCarouselCardTap 에서 promotional 슬라이드 (slot_*) → openPromoCarousel 직접 라우팅 (요시타케 잘못 연결 해결) + adminScreen 뒤로가기 onclick 중복 openMyPage 제거 (깜빡임 해결)
+const STATIC_CACHE = 'taam-static-v1.52e';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
