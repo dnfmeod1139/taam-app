@@ -5760,6 +5760,53 @@ window.addEventListener('error', function(e){
   <div id="cfDots"></div>
 </div>
 
+<!-- 🆕 v1.52d (2026.05.25): promotional 캐러셀 풀스크린 팝업.
+     계보도 없는 광고/소개용 캐러셀 (link='slot_mos...' 등) 클릭 시 이 팝업을 띄움.
+     닫기 → 컨텐츠 페이지 복귀. -->
+<div id="promoCarouselPopup" style="display:none;position:fixed;inset:0;z-index:9000;background:rgba(0,0,0,.96);flex-direction:column;backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);">
+  <button onclick="closePromoCarousel()" aria-label="닫기" style="position:absolute;top:36px;right:20px;z-index:9001;width:40px;height:40px;border-radius:50%;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);color:#fff;cursor:pointer;font-size:18px;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+  </button>
+  <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:80px 24px 48px;color:#fff;overflow-y:auto;">
+    <img id="promoCarouselImg" style="max-width:100%;max-height:55vh;object-fit:cover;border-radius:14px;box-shadow:0 12px 48px rgba(0,0,0,.6);" alt="">
+    <div id="promoCarouselT1" style="font-family:'Oswald','Noto Sans KR','Noto Sans JP',sans-serif;font-size:30px;font-weight:700;letter-spacing:.04em;margin-top:32px;text-align:center;color:#fff;"></div>
+    <div id="promoCarouselT2" style="font-family:'Oswald','Noto Sans KR','Noto Sans JP',sans-serif;font-size:14px;font-weight:400;letter-spacing:.08em;margin-top:10px;text-align:center;color:#c8a96e;"></div>
+    <div id="promoCarouselDesc" style="font-family:var(--font-main);font-size:14px;line-height:1.7;margin-top:28px;max-width:520px;text-align:center;color:rgba(255,255,255,.78);white-space:pre-wrap;word-break:keep-all;overflow-wrap:anywhere;"></div>
+  </div>
+</div>
+<script>
+window.openPromoCarousel = function(slide){
+  if(!slide) return;
+  var popup = document.getElementById('promoCarouselPopup');
+  if(!popup) return;
+  var img = document.getElementById('promoCarouselImg');
+  if(img){
+    if(slide.photo){ img.src = slide.photo; img.style.display = ''; }
+    else { img.style.display = 'none'; }
+  }
+  var t1 = document.getElementById('promoCarouselT1');
+  if(t1) t1.textContent = slide.t1 || '';
+  var t2 = document.getElementById('promoCarouselT2');
+  if(t2) t2.textContent = slide.t2 || '';
+  var desc = document.getElementById('promoCarouselDesc');
+  if(desc) desc.textContent = slide.desc || slide.description || '';
+  popup.style.display = 'flex';
+};
+window.closePromoCarousel = function(){
+  var popup = document.getElementById('promoCarouselPopup');
+  if(popup) popup.style.display = 'none';
+  // 진입 화면 자동 복원 — 현재 active GNB tab 의 view (보통 contents)
+  try {
+    var activeTab = document.querySelector('.gnb-btn.active');
+    if(activeTab && typeof showView === 'function'){
+      var viewMap = { gnbHome:'home', gnbContents:'contents', gnbTicket:'ticket' };
+      var view = viewMap[activeTab.id];
+      if(view) showView(view);
+    }
+  } catch(e){}
+};
+</script>
+
 <!-- TICKET FILTER BAR (fixed, always on top) -->
 <!-- Step 4: 상단바 — 좌(햄버거) / 중(TAAM 로고) / 우(언어 + 알림) -->
 <div id="ticketFilterBar" style="position:fixed;top:0;left:0;right:0;background:#000;z-index:300;display:none;align-items:center;height:52px;border-bottom:1px solid #1a1a1a;padding:0 12px;">
@@ -18041,11 +18088,13 @@ function closeAdmin(){
   // 일반 화면으로 복귀할 때 mainGnb 복원
   var gnb = document.getElementById('mainGnb');
   if(gnb) gnb.style.display = 'flex';
-  // 🆕 v1.52 (2026.05.25): 슈퍼어드민 콘솔 닫기 → 마이페이지로 복귀.
-  //   기존엔 adminScreen 만 숨겨서 그 아래 살아있는 옛 화면 (사진 cropper 등) 이 노출되는 버그.
-  //   경로: 슈퍼어드민 콘솔 닫기 → 마이페이지 → (마이페이지 X) → 홈 (티켓 view) 으로 이어짐.
+  // 🆕 v1.52d (2026.05.25): openMyPage 중복 호출 차단 (이미 표시 중이면 skip).
+  //   기존엔 closeLineageAdmin → openAdmin → closeAdmin 체인에서 myPage 가 여러 번 열려
+  //   "Timer 'openMyPage' already exists" 경고 + 3~4초 멈춤 (무거운 init 중복 실행) 발생.
   try {
-    if(typeof openMyPage === 'function') openMyPage();
+    var myPageEl = document.getElementById('myPage');
+    var alreadyOpen = myPageEl && myPageEl.style.display && myPageEl.style.display !== 'none';
+    if(!alreadyOpen && typeof openMyPage === 'function') openMyPage();
   } catch(e){ console.warn('[closeAdmin] openMyPage failed:', e); }
 }
 function closeSubPage(id){
@@ -42949,9 +42998,29 @@ window.LineageModule = {
     try {
       // (커튼은 이탈 시에만 사용. 진입 시에는 노드 애니메이션 타이밍과 충돌 → 사용 X)
 
+      // 🆕 v1.52d (2026.05.25): lineageId 가 유효한 lineage 가 아니면 promo 팝업으로 처리.
+      //   슈퍼어드민이 만든 promotional 캐러셀 (link='slot_mos...' 같은 placeholder) 은
+      //   실제 계보도가 없으므로 LineageModule.open 처리 대신 캐러셀 카드 자체를
+      //   풀스크린 팝업 (사진 + t1 + t2 + desc) 로 띄움 → 옛 계보 잔존 표시 차단.
+      var KNOWN_LINEAGES = ['sugita','kanesaka','kyubey','saito','umi','jiro','arai','sho','new9','new10','new11','new12','new13','new14'];
+      if(typeof lineageId !== 'string' || (KNOWN_LINEAGES.indexOf(lineageId) === -1 && lineageId.indexOf('solo_') !== 0)){
+        // promotional 캐러셀 → 풀스크린 팝업
+        if(Array.isArray(window._carouselSlides) && typeof window.openPromoCarousel === 'function'){
+          var _matched = window._carouselSlides.find(function(s){ return s && (s.link === lineageId || s.id === lineageId); });
+          if(_matched){
+            console.log('[LineageModule.open] promotional 캐러셀 팝업:', lineageId);
+            window.openPromoCarousel(_matched);
+            return;
+          }
+        }
+        console.warn('[LineageModule.open] 알 수 없는 lineageId:', lineageId);
+        if(typeof showToast === 'function') showToast('ℹ','준비 중','이 캐러셀은 계보도 연결이 설정되지 않았습니다.');
+        return;
+      }
+
       var mod = document.getElementById('lineageModule');
       if(!mod) return;
-      
+
       // 이전 close에서 display:none 했던 요소들을 다시 원상태로
       ['hamBtn', 'panel', 'dim', 'lo', 'loK', 'loQ', 'loS', 'loU', 'loJ', 'loA', 'loSh', 'loNew9', 'loNew10', 'loNew11', 'loNew12', 'loNew13', 'loNew14', 'is', 'is2', 'map'].forEach(function(id){
         var el = document.getElementById(id);
