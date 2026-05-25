@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.52p';  // 1.52p — 2026.05.25: setTimeout 480ms 제거 → 옆 카드 클릭 시 이동(백그라운드)+콘텐츠 즉시 열기 병렬. 타이밍 충돌로 콘텐츠 안 열리던 케이스 차단. + onCarouselCardTap / _openCarouselSlideContent / openPromoCarousel 에 단계별 console.log 추가 (사용자가 콘솔에서 어디서 끊기는지 진단 가능).
-const STATIC_CACHE = 'taam-static-v1.52p';
+const SW_VERSION = 'taam-sw-v1.52q';  // 1.52q — 2026.05.25: 캐러셀 뒤로가기 시 "이상한 정사각형 캐러셀" fix — closePromoCarousel returnTo 우선순위를 z-index 순서대로 변경 (carouselEditor > lineageHome > contentsView). lh-card 계보 캐러셀에서 promo 띄웠는데 닫을 때 cf-slide 티켓 캐러셀이 보이던 잔재 버그. lineageHome 복귀 시 contentsView/homeView/ticketView 명시적 hide.
+const STATIC_CACHE = 'taam-static-v1.52q';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);

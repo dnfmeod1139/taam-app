@@ -5783,31 +5783,33 @@ window.openPromoCarousel = function(slide){
   if(!slide){ console.warn('[openPromoCarousel] no slide'); return; }
   var popup = document.getElementById('promoCarouselPopup');
   if(!popup){ console.warn('[openPromoCarousel] popup element #promoCarouselPopup not found in DOM'); return; }
-  // 진입 화면 추적 (닫을 때 복원에 사용)
+  // 🆕 v1.52q 2026.05.25: 진입 화면 우선순위 재정렬.
+  //   z-index 순서: carouselEditor (9500) > lineageHome (450) > contentsView (0).
+  //   lineageHome 이 표시 중이면 사용자가 보는 화면은 무조건 lineageHome — contentsView 가
+  //   잔존 display:flex 라도 그게 진입 화면이 아님.
+  //   기존엔 contentsView 먼저 체크 → lh-card 캐러셀에서 promo 띄웠는데 닫을 때 cf-slide
+  //   (티켓 캐러셀, 거의 정사각형) 가 보이는 "이상한 정사각형 캐러셀" 버그.
   var returnTo = null;
   var ed = document.getElementById('carouselEditor');
+  var lh = document.getElementById('lineageHome');
+  var contV = document.getElementById('contentsView');
   if(ed && ed.style.display && ed.style.display !== 'none'){
     returnTo = 'carouselEditor';
+  } else if(lh && lh.style.display && lh.style.display !== 'none'){
+    returnTo = 'lineageHome';
+  } else if(contV && contV.style.display && contV.style.display !== 'none'){
+    returnTo = 'contents';
   } else {
-    var contV = document.getElementById('contentsView');
-    if(contV && contV.style.display && contV.style.display !== 'none'){
-      returnTo = 'contents';
-    } else {
-      var lh = document.getElementById('lineageHome');
-      if(lh && lh.style.display && lh.style.display !== 'none'){
-        returnTo = 'lineageHome';
-      } else {
-        var activeTab = document.querySelector('.gnb-btn.active');
-        if(activeTab){
-          if(activeTab.id === 'gnbContents') returnTo = 'contents';
-          else if(activeTab.id === 'gnbHome') returnTo = 'home';
-          else if(activeTab.id === 'gnbTicket') returnTo = 'ticket';
-        }
-      }
+    var activeTab = document.querySelector('.gnb-btn.active');
+    if(activeTab){
+      if(activeTab.id === 'gnbContents') returnTo = 'contents';
+      else if(activeTab.id === 'gnbHome') returnTo = 'home';
+      else if(activeTab.id === 'gnbTicket') returnTo = 'ticket';
     }
   }
-  // 기본값: contents (캐러셀이 보통 거기서 열림)
-  popup.dataset.returnTo = returnTo || 'contents';
+  // 기본값: lineageHome (캐러셀 기본 진입 화면)
+  popup.dataset.returnTo = returnTo || 'lineageHome';
+  console.log('[openPromoCarousel] returnTo=', popup.dataset.returnTo);
 
   var img = document.getElementById('promoCarouselImg');
   if(img){
@@ -5838,8 +5840,16 @@ window.closePromoCarousel = function(){
       return;
     }
     if(returnTo === 'lineageHome'){
-      var lh = document.getElementById('lineageHome');
-      if(lh) lh.style.display = 'block';
+      // 🆕 v1.52q: lineageHome 복귀 시 cf-slide (티켓 캐러셀) 가 잠시 뒷쪽에 보이지 않도록
+      //   contentsView / homeView / ticketView 모두 명시적 hide.
+      var contVHide = document.getElementById('contentsView');
+      if(contVHide) contVHide.style.display = 'none';
+      var homeVHide = document.getElementById('homeView');
+      if(homeVHide) homeVHide.style.display = 'none';
+      var tickVHide = document.getElementById('ticketView');
+      if(tickVHide) tickVHide.style.display = 'none';
+      var lhEl = document.getElementById('lineageHome');
+      if(lhEl) lhEl.style.display = 'block';
       return;
     }
     if(returnTo === 'home' || returnTo === 'ticket'){
