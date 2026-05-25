@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.52b';  // 1.52b — 2026.05.25: 슈퍼어드민→마이페이지→홈 닫기 경로 / 요시타케 path 2개 위치 / LineageModule fromContents 진입 경로 + lineageAdminScreen pointer-events fix
-const STATIC_CACHE = 'taam-static-v1.52b';
+const SW_VERSION = 'taam-sw-v1.52c';  // 1.52c — 2026.05.25: cfInner/cfDots 정적 DOM 추가 + 3중 null 가드 → TypeError(null is not an object) crash 완전 차단
+const STATIC_CACHE = 'taam-static-v1.52c';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);

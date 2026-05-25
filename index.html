@@ -5750,7 +5750,15 @@ window.addEventListener('error', function(e){
   <div id="cfVignette"></div>
   <!-- Home: 비어있음 (향후 구성 예정) -->
   <div id="homeView" style="flex:1;display:none;flex-direction:column;"></div>
-<div id="contentsView" style="position:absolute;inset:0;display:none;"></div>
+<!-- 🆕 v1.52c (2026.05.25): cfInner + cfDots 정적 wrapper 추가.
+     이전엔 contentsView 가 완전 빈 div 라서 cfInner element 가 DOM 에 없음 →
+     renderCarousel / showView 가 document.getElementById('cfInner').children 호출 시
+     "TypeError: null is not an object (evaluating 'document.getElementById('cfInner').children')" 발생 →
+     이게 13번+ 캐러셀의 클릭 안 됨 / 검정화면 / 슈퍼어드민 멈춤의 진짜 원인이었음. -->
+<div id="contentsView" style="position:absolute;inset:0;display:none;">
+  <div id="cfInner"></div>
+  <div id="cfDots"></div>
+</div>
 
 <!-- TICKET FILTER BAR (fixed, always on top) -->
 <!-- Step 4: 상단바 — 좌(햄버거) / 중(TAAM 로고) / 우(언어 + 알림) -->
@@ -11495,8 +11503,14 @@ function showView(view){
     contV.style.display='flex';
     if(orb1) orb1.style.opacity='1';
     if(orb2) orb2.style.opacity='1';
+    // 🆕 v1.52c: cfInner 누락 시 즉석 생성 (이중 안전망)
+    if(contV && !document.getElementById('cfInner')){
+      contV.innerHTML = '<div id="cfInner"></div><div id="cfDots"></div>';
+    }
     setTimeout(function(){
-      if(document.getElementById('cfInner').children.length===0){
+      var _cfI = document.getElementById('cfInner');
+      if(!_cfI) return;  // 🆕 v1.52c: null 가드 (이전엔 그대로 .children 접근해서 crash)
+      if(_cfI.children.length===0){
         renderCarousel();
       } else {
         updateCarousel(true);
@@ -12190,6 +12204,15 @@ var cfDragging=false, cfStartX=0, cfCurX=0, cfOffsetX=0, cfBaseX=0;
 function renderCarousel(){
   var inner=document.getElementById('cfInner');
   var dots=document.getElementById('cfDots');
+  // 🆕 v1.52c: null 가드 — cfInner/cfDots 누락 시 contentsView 안에 즉석 생성
+  if(!inner || !dots){
+    var contV = document.getElementById('contentsView');
+    if(contV){
+      if(!inner){ contV.insertAdjacentHTML('beforeend', '<div id="cfInner"></div>'); inner = document.getElementById('cfInner'); }
+      if(!dots){ contV.insertAdjacentHTML('beforeend', '<div id="cfDots"></div>'); dots = document.getElementById('cfDots'); }
+    }
+    if(!inner || !dots){ console.warn('[renderCarousel] cfInner/cfDots 생성 실패'); return; }
+  }
   inner.innerHTML=''; dots.innerHTML='';
   cfCards=[]; cfBgUrls=[];
 
@@ -12289,8 +12312,9 @@ function renderCarousel(){
 
   cfIdx=0;
   cfOffsetX=0;
-  // 강제 reflow: 카드 크기 측정이 올바르게 되도록
-  void document.getElementById('cfInner').offsetHeight;
+  // 강제 reflow: 카드 크기 측정이 올바르게 되도록 (🆕 v1.52c: null 가드)
+  var _cfRe = document.getElementById('cfInner');
+  if(_cfRe) void _cfRe.offsetHeight;
   updateCarousel(true);
   initCarouselDrag();
 }
