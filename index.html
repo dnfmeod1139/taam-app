@@ -45839,7 +45839,10 @@ function updateCardPositions() {
     }
     var abs = Math.abs(offset);
     var sign = offset >= 0 ? 1 : -1;
-    if (abs < 0.0001) sign = 0;
+    // 🆕 v1.52o 2026.05.25: 메인 카드 epsilon 키움 (0.0001 → 0.05).
+    //   기존 epsilon 이 너무 작아 _carouselPos 가 14.02 같은 미세 오차여도 메인 카드에 rotY 가 적용됨.
+    //   사용자 보고: "SHIMIZU 가 가운데 와도 비스듬히 보임" 의 직접 원인.
+    if (abs < 0.05) { abs = 0; sign = 0; }
 
     // 좌우 간격 (vw) — abs 정수 키프레임: 0→0, 1→44, 2→72, 3+→95 를 부드럽게 보간
     var tx;
@@ -45867,6 +45870,8 @@ function updateCardPositions() {
 
     // 세로 오프셋 (원호 느낌)
     var ty = Math.min(abs, 3) * 10;
+    // 🆕 v1.52o: 메인 카드는 명시적으로 모든 transform 0 (rotY/ty/tx) 보장
+    if (abs === 0){ rotY = 0; ty = 0; tx = 0; tz = 0; scale = 1; }
 
     // 투명도: 1 → 0.75 → 0.35 → 0
     var opacity;
@@ -46135,18 +46140,31 @@ function attachCarouselSwipe() {
 }
 
 // ─── 카드 탭 액션 ───
+// 🆕 v1.52o 2026.05.25: 한 번 클릭으로 바로 열기 + 가운데 카드 클릭도 같은 함수.
+//   기존엔 옆 카드 클릭 → 이동만 → 사용자가 두 번째 클릭해야 열림 → "클릭 안 된다" 라고 인식.
+//   이제 옆 카드 클릭하면 이동 후 자동으로 콘텐츠가 열림.
 function onCarouselCardTap(i) {
   if (i !== _carouselIdx) {
-    // 중앙이 아니면 momentum 스프링으로 부드럽게 이동
+    // 옆 카드: 우선 가운데로 이동
     if (typeof _animateCarouselTo === 'function') _animateCarouselTo(i);
     else { _carouselIdx = i; updateCardPositions(); updateDots(); }
+    // 이동 애니메이션 완료 후 콘텐츠 자동 열기
+    setTimeout(function(){
+      var slide = _carouselSlides[i];
+      if(slide) _openCarouselSlideContent(slide, i);
+    }, 480);
     return;
   }
-  // 중앙 카드 탭 = 계보도 열기
+  // 가운데 카드 = 즉시 열기
   var slide = _carouselSlides[i];
-  
+  if(slide) _openCarouselSlideContent(slide, i);
+}
+
+// 카드 열기 — 노출 제어 → 디폴트 lineage vs 사용자 promo 분기
+function _openCarouselSlideContent(slide, i){
+  if(!slide) return;
   // 노출 제어 체크 (슈퍼어드민이 아니고 비공개면 모달)
-  if(slide && slide.id && typeof _isSuperAdmin === 'function' && !_isSuperAdmin()){
+  if(slide.id && typeof _isSuperAdmin === 'function' && !_isSuperAdmin()){
     var carSt = (_visibilitySettings && _visibilitySettings.carousel && _visibilitySettings.carousel[slide.id]) || 'public';
     if(carSt !== 'public'){
       if(typeof showVisibilityModal === 'function'){

@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.52n';  // 1.52n — 2026.05.25: ★진짜 원인★ — addNewCarouselSlide 가 link='solo_xxx' 로 슬라이드 만들어서 클릭 시 onCarouselCardTap 의 solo_ 분기 → openSoloChef (단독 쉐프 매거진, 데이터 없어 빈/검정) 로 빠지던 버그. ① 신규 슬라이드 link='' ② onCarouselCardTap solo_ 분기 제거 (디폴트 14개 외 무조건 promo) ③ DEL 시 토스트 + 컨텐츠 캐러셀 즉시 재렌더 (사용자가 결과 확인 가능).
-const STATIC_CACHE = 'taam-static-v1.52n';
+const SW_VERSION = 'taam-sw-v1.52o';  // 1.52o — 2026.05.25: ① 옆 카드 한 번 클릭으로 바로 열림 (이동 480ms 후 자동 콘텐츠 open). 기존엔 두 번 클릭 필요해서 "클릭 안 됨" 으로 인식. ② 메인 카드 강제 정면 — updateCardPositions epsilon 0.0001 → 0.05, abs===0 일 때 rotY/tx/ty/tz=0, scale=1 명시. SHIMIZU 가운데인데 비스듬한 문제 해결. ③ _openCarouselSlideContent 함수 분리 (가운데/옆 카드 공통 라우팅).
+const STATIC_CACHE = 'taam-static-v1.52o';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
