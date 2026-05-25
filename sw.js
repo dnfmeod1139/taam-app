@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.52h';  // 1.52h — 2026.05.25: 캐러셀 구조 재설계 — 하드코딩 14개 디폴트(시미즈 등) vs 사용자 추가 슬라이드 명확히 구분. 디폴트는 보호 (삭제 거부, 메모리 자동 보충), 사용자 슬라이드는 즉시 영구 삭제. 라우팅을 slide.id 기준으로 단순화 (디폴트=lineage, 그 외=promo 팝업).
-const STATIC_CACHE = 'taam-static-v1.52h';
+const SW_VERSION = 'taam-sw-v1.52i';  // 1.52i — 2026.05.25: 일회성 캐러셀 cleanup — 슈퍼어드민 첫 로드 시 Supabase carousel_slides 를 디폴트 14개로 자동 리셋 (사용자 추가 슬라이드 전부 제거, 디폴트 사진은 보존). chefs 테이블은 건드리지 않음. localStorage flag 로 1회만 실행. 수동 호출: window._taamResetCarousel(true)
+const STATIC_CACHE = 'taam-static-v1.52i';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);

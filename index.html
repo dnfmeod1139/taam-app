@@ -45259,6 +45259,16 @@ function loadCarouselData(cb) {
         _preloadCarouselPhotos();
         // 햄버거 패널 + 계보도 관리 리스트에 사진/제목 동기화 (하드코딩 + 동적 솔로 모두)
         try { if(typeof syncLineageAdminFromCarousel === 'function') syncLineageAdminFromCarousel(); } catch(e){}
+        // 🆕 v1.52i 2026.05.25: 슈퍼어드민이 첫 로드 시 자동 cleanup (디폴트 14개로 리셋).
+        //   localStorage flag 로 한 번만 실행. 일반 사용자는 영향 없음.
+        try {
+          if (typeof _isSuperAdmin === 'function' && _isSuperAdmin() &&
+              localStorage.getItem('taam_carousel_cleanup_v1') !== '1' &&
+              typeof window._taamResetCarousel === 'function') {
+            // 약간 지연 — 로드 완료 후 비동기 실행
+            setTimeout(function(){ window._taamResetCarousel(); }, 800);
+          }
+        } catch(e){ console.warn('[auto-cleanup] skip:', e); }
         if (cb) cb();
       } else {
         console.log('Supabase 캐러셀 비어있음 → IDB 폴백');
@@ -45460,6 +45470,58 @@ function triggerVenuesBatchTranslate() {
   console.log(msg);
 }
 window.triggerVenuesBatchTranslate = triggerVenuesBatchTranslate;
+
+// 🆕 v1.52i 2026.05.25: 일회성 cleanup — 캐러셀 리스트를 하드코딩 14개 디폴트로 리셋.
+//   슈퍼어드민이 첫 로드 시 자동 1회 실행 (localStorage flag 로 중복 방지).
+//   사용자가 캐러셀 편집기로 추가한 모든 슬라이드 제거. 디폴트 14개의 사진만 보존.
+//   ★ chefs 테이블 (계보도 트리 노드) 는 절대 건드리지 않음 — 캐러셀 슬라이드만 정리.
+//   콘솔에서도 수동 호출 가능: window._taamResetCarousel()
+window._taamResetCarousel = async function(force){
+  if (!window.sb) { console.warn('Supabase 없음'); return; }
+  if (!Array.isArray(window._taamHardcodedDefaults)) { console.warn('디폴트 원본 없음'); return; }
+  var flagKey = 'taam_carousel_cleanup_v1';
+  if (!force && localStorage.getItem(flagKey) === '1') {
+    console.log('캐러셀 cleanup 이미 적용됨 (force=true 로 재실행 가능)');
+    return;
+  }
+  try {
+    // 현재 Supabase 의 carousel_slides
+    var res = await window.sb.from('app_config').select('value').eq('key','carousel_slides').maybeSingle();
+    var current = (res && res.data && Array.isArray(res.data.value)) ? res.data.value : [];
+    // 디폴트 14개로 재구성 (사진은 기존 것 보존, 나머지는 디폴트 강제)
+    var cleaned = window._taamHardcodedDefaults.map(function(def){
+      var existing = null;
+      for (var k=0; k<current.length; k++){
+        if (current[k] && current[k].id === def.id) { existing = current[k]; break; }
+      }
+      var fresh = JSON.parse(JSON.stringify(def));
+      if (existing && existing.photo) fresh.photo = existing.photo; // 사진 보존
+      return fresh;
+    });
+    // Supabase 영구 저장
+    var up = await window.sb.from('app_config').upsert({
+      key: 'carousel_slides',
+      value: cleaned,
+      updated_at: new Date().toISOString()
+    });
+    if (up && up.error) {
+      console.warn('⚠ 캐러셀 cleanup Supabase 저장 실패:', up.error.message);
+      return;
+    }
+    // 로컬 반영
+    _carouselSlides = cleaned;
+    if (typeof IDB !== 'undefined') IDB.set('excCarouselSlides', JSON.stringify(_carouselSlides));
+    if (typeof renderCarousel === 'function') renderCarousel();
+    if (typeof syncLineageAdminFromCarousel === 'function') syncLineageAdminFromCarousel();
+    localStorage.setItem(flagKey, '1');
+    var removed = current.length - cleaned.length;
+    var msg = '✅ 캐러셀 cleanup 완료 — 디폴트 14개로 리셋 (사용자 슬라이드 ' + (removed>0?removed:0) + '개 제거)';
+    console.log(msg);
+    if (typeof showToast === 'function') showToast('✓', '캐러셀 정리 완료', '디폴트 14개로 리셋되었습니다');
+  } catch(e){
+    console.warn('⚠ 캐러셀 cleanup 실패:', e);
+  }
+};
 
 function saveCarouselData() {
   // 1) IDB 저장 (오프라인 대비)
