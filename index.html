@@ -46173,13 +46173,9 @@ function onCarouselCardTap(i) {
     return;
   }
 
-  // solo_* 링크 (단독 쉐프 매거진) — 기존 호환 유지
-  if (typeof slide.link === 'string' && slide.link.indexOf('solo_') === 0) {
-    if(typeof openSoloChef === 'function') openSoloChef(slide.link);
-    return;
-  }
-
-  // 사용자 추가 슬라이드 (slot_* / 알려지지 않은 id / 빈 link) → promo 팝업 전용
+  // 🆕 v1.52n 2026.05.25: 디폴트 14개가 아닌 모든 슬라이드 (사용자가 에디트로 추가한 slot_*,
+  //   link='solo_*' 등) → promo 팝업 전용. solo_ 분기 제거 — 단독 쉐프 매거진은 chefs 테이블
+  //   데이터 없이 호출되면 검정화면 결과만 줬음. promo 팝업이 더 적절한 종착지.
   if (typeof window.openPromoCarousel === 'function') {
     window.openPromoCarousel(slide);
     return;
@@ -46534,17 +46530,17 @@ function addNewCarouselSlide() {
   saveCurrentToSlide();
   var stamp = Date.now().toString(36);
   var newId = 'slot_' + stamp;
-  // ★ 신규 슬라이드는 기본적으로 단독 쉐프(solo) 모드.
-  //   link 가 비어있으면 매거진이 뜨지 않고 빈 lineage 화면(햄버거만 보임)에 갇히는 사고가 났음.
-  //   link 를 처음부터 solo_<id> 로 채워서 탭 즉시 매거진(sec1/sec2)이 뜨도록 보장한다.
-  var newLink = 'solo_' + stamp;
+  // 🆕 v1.52n 2026.05.25: 신규 슬라이드는 promo 팝업 전용 (사용자 요구 — 에디트 추가 슬라이드는 노드 팝업만).
+  //   기존엔 link='solo_xxx' 였는데 onCarouselCardTap 이 그걸 보고 openSoloChef 단독 쉐프 매거진을
+  //   띄웠고 닫기 시 검정화면이 되었음. link 를 빈 값으로 두면 promo 팝업으로 정확히 라우팅됨.
   _carouselSlides.push({
     id: newId,
     photo: null,
     t1: 'NEW SLIDE',
     t1Size: 28, t1X: 8, t1Y: 85, t1Color: '#ffffff', t1Weight: 600, t1Spacing: 4,
     t2: '', t2Size: 11, t2X: 8, t2Y: 91, t2Color: '#c8a96e', t2Weight: 400, t2Spacing: 2,
-    link: newLink
+    link: '',
+    desc: ''
   });
   _carouselEditIdx = _carouselSlides.length - 1;
   renderSlideTabs();
@@ -46569,14 +46565,26 @@ function deleteCurrentCarouselSlide() {
   }
   var label = (s && s.t1) ? s.t1 : ('SLIDE ' + (_carouselEditIdx+1));
   if(!confirm('"' + label + '" 슬라이드를 삭제할까요?\n삭제하면 즉시 영구 반영됩니다.')) return;
+  console.log('[deleteCurrentCarouselSlide] before:', _carouselSlides.length, 'idx:', _carouselEditIdx, 'id:', s.id);
   _carouselSlides.splice(_carouselEditIdx, 1);
   if(_carouselEditIdx >= _carouselSlides.length) _carouselEditIdx = _carouselSlides.length - 1;
   // 🆕 v1.52h: 즉시 Supabase + IDB 영구 저장 (SAVE 안 눌러도 삭제 반영됨)
   try {
     if(typeof saveCarouselData === 'function') saveCarouselData();
+    console.log('[deleteCurrentCarouselSlide] after save:', _carouselSlides.length);
   } catch(e){ console.warn('[deleteCurrentCarouselSlide] save failed:', e); }
   renderSlideTabs();
   loadSlideToEditor(_carouselEditIdx);
+  // 🆕 v1.52n: 사용자에게 결과 명시적으로 알림 (이전엔 silent 라 "안 됐다" 라고 느낌)
+  try {
+    if(typeof showToast === 'function'){
+      showToast('✓', '슬라이드 삭제 완료', '"' + label + '" 영구 삭제됨 — 새로고침해도 부활 안 함');
+    }
+  } catch(e){}
+  // 컨텐츠 페이지 캐러셀도 즉시 재렌더 — 편집기 닫지 않고도 반영 확인
+  try {
+    if(typeof renderCarousel === 'function') renderCarousel();
+  } catch(e){}
 }
 
 function generateSoloLink() {

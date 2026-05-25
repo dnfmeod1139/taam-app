@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.52m';  // 1.52m — 2026.05.25: promo 팝업 닫기 후 검정화면 fix — openPromoCarousel 이 진입 화면 (carouselEditor / contents / lineageHome / home / ticket) 을 popup.dataset.returnTo 에 저장 → closePromoCarousel 이 그 화면 명시적 복원 + 안전망으로 cfInner 비어있으면 renderCarousel 재호출. 캐러셀 에디트로 만든 슬라이드 닫기 후 캐러셀 리스트로 정확히 복귀.
-const STATIC_CACHE = 'taam-static-v1.52m';
+const SW_VERSION = 'taam-sw-v1.52n';  // 1.52n — 2026.05.25: ★진짜 원인★ — addNewCarouselSlide 가 link='solo_xxx' 로 슬라이드 만들어서 클릭 시 onCarouselCardTap 의 solo_ 분기 → openSoloChef (단독 쉐프 매거진, 데이터 없어 빈/검정) 로 빠지던 버그. ① 신규 슬라이드 link='' ② onCarouselCardTap solo_ 분기 제거 (디폴트 14개 외 무조건 promo) ③ DEL 시 토스트 + 컨텐츠 캐러셀 즉시 재렌더 (사용자가 결과 확인 가능).
+const STATIC_CACHE = 'taam-static-v1.52n';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
