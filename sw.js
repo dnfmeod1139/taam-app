@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.52o';  // 1.52o — 2026.05.25: ① 옆 카드 한 번 클릭으로 바로 열림 (이동 480ms 후 자동 콘텐츠 open). 기존엔 두 번 클릭 필요해서 "클릭 안 됨" 으로 인식. ② 메인 카드 강제 정면 — updateCardPositions epsilon 0.0001 → 0.05, abs===0 일 때 rotY/tx/ty/tz=0, scale=1 명시. SHIMIZU 가운데인데 비스듬한 문제 해결. ③ _openCarouselSlideContent 함수 분리 (가운데/옆 카드 공통 라우팅).
-const STATIC_CACHE = 'taam-static-v1.52o';
+const SW_VERSION = 'taam-sw-v1.52p';  // 1.52p — 2026.05.25: setTimeout 480ms 제거 → 옆 카드 클릭 시 이동(백그라운드)+콘텐츠 즉시 열기 병렬. 타이밍 충돌로 콘텐츠 안 열리던 케이스 차단. + onCarouselCardTap / _openCarouselSlideContent / openPromoCarousel 에 단계별 console.log 추가 (사용자가 콘솔에서 어디서 끊기는지 진단 가능).
+const STATIC_CACHE = 'taam-static-v1.52p';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);

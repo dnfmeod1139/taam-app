@@ -5779,9 +5779,10 @@ window.addEventListener('error', function(e){
 //   기존엔 active GNB tab 만 보고 showView 호출 → 편집기에서 띄웠거나 GNB active 가
 //   없을 때 검정화면만 남았음. 캐러셀 리스트로 확실히 돌아가도록 다층 폴백 추가.
 window.openPromoCarousel = function(slide){
-  if(!slide) return;
+  console.log('[openPromoCarousel] called with slide:', slide);
+  if(!slide){ console.warn('[openPromoCarousel] no slide'); return; }
   var popup = document.getElementById('promoCarouselPopup');
-  if(!popup) return;
+  if(!popup){ console.warn('[openPromoCarousel] popup element #promoCarouselPopup not found in DOM'); return; }
   // 진입 화면 추적 (닫을 때 복원에 사용)
   var returnTo = null;
   var ed = document.getElementById('carouselEditor');
@@ -5820,6 +5821,7 @@ window.openPromoCarousel = function(slide){
   var desc = document.getElementById('promoCarouselDesc');
   if(desc) desc.textContent = slide.desc || slide.description || '';
   popup.style.display = 'flex';
+  console.log('[openPromoCarousel] popup shown — display:', popup.style.display, 'z-index:', getComputedStyle(popup).zIndex);
 };
 window.closePromoCarousel = function(){
   var popup = document.getElementById('promoCarouselPopup');
@@ -46140,40 +46142,41 @@ function attachCarouselSwipe() {
 }
 
 // ─── 카드 탭 액션 ───
-// 🆕 v1.52o 2026.05.25: 한 번 클릭으로 바로 열기 + 가운데 카드 클릭도 같은 함수.
-//   기존엔 옆 카드 클릭 → 이동만 → 사용자가 두 번째 클릭해야 열림 → "클릭 안 된다" 라고 인식.
-//   이제 옆 카드 클릭하면 이동 후 자동으로 콘텐츠가 열림.
+// 🆕 v1.52p 2026.05.25: setTimeout 제거 → 옆 카드 클릭 시 이동 + 즉시 콘텐츠 열기 병렬.
+//   기존엔 480ms setTimeout 으로 콘텐츠 열기 지연 → 그 사이 사용자가 다른 동작/스와이프 하면
+//   타이밍 충돌로 콘텐츠 안 열리는 경우 발생. 이동은 백그라운드 애니메이션, 콘텐츠는 즉시 표시.
 function onCarouselCardTap(i) {
-  if (i !== _carouselIdx) {
-    // 옆 카드: 우선 가운데로 이동
-    if (typeof _animateCarouselTo === 'function') _animateCarouselTo(i);
-    else { _carouselIdx = i; updateCardPositions(); updateDots(); }
-    // 이동 애니메이션 완료 후 콘텐츠 자동 열기
-    setTimeout(function(){
-      var slide = _carouselSlides[i];
-      if(slide) _openCarouselSlideContent(slide, i);
-    }, 480);
+  console.log('[onCarouselCardTap] i=', i, '_carouselIdx=', _carouselIdx, 'slide=', _carouselSlides && _carouselSlides[i]);
+  var slide = _carouselSlides && _carouselSlides[i];
+  if(!slide){
+    console.warn('[onCarouselCardTap] slide is null/undefined at index', i);
     return;
   }
-  // 가운데 카드 = 즉시 열기
-  var slide = _carouselSlides[i];
-  if(slide) _openCarouselSlideContent(slide, i);
+  // 옆 카드면 가운데로 이동 (애니메이션은 백그라운드)
+  if (i !== _carouselIdx) {
+    if (typeof _animateCarouselTo === 'function') _animateCarouselTo(i);
+    else { _carouselIdx = i; updateCardPositions(); if(typeof updateDots === 'function') updateDots(); }
+  }
+  // 콘텐츠는 즉시 열기 (이동 애니메이션과 병렬)
+  _openCarouselSlideContent(slide, i);
 }
 
 // 카드 열기 — 노출 제어 → 디폴트 lineage vs 사용자 promo 분기
 function _openCarouselSlideContent(slide, i){
-  if(!slide) return;
+  console.log('[_openCarouselSlideContent] start', { id: slide && slide.id, t1: slide && slide.t1, link: slide && slide.link });
+  if(!slide){ console.warn('[_openCarouselSlideContent] no slide'); return; }
   // 노출 제어 체크 (슈퍼어드민이 아니고 비공개면 모달)
   if(slide.id && typeof _isSuperAdmin === 'function' && !_isSuperAdmin()){
     var carSt = (_visibilitySettings && _visibilitySettings.carousel && _visibilitySettings.carousel[slide.id]) || 'public';
     if(carSt !== 'public'){
+      console.log('[_openCarouselSlideContent] blocked by visibility', carSt);
       if(typeof showVisibilityModal === 'function'){
         showVisibilityModal(carSt, slide.t1 || slide.id);
         return;
       }
     }
   }
-  
+
   // 🆕 v1.52h 2026.05.25: 라우팅 기준을 slide.id 로 단순화.
   //   원칙: 하드코딩 디폴트 14개 (id ∈ DEFAULT_LINEAGE_IDS) → lineage 트리 모듈
   //         그 외 모든 슬라이드 (사용자가 편집기로 추가한 것 — id='slot_*' 등) → promo 팝업만
@@ -46183,10 +46186,12 @@ function _openCarouselSlideContent(slide, i){
     ['sugita','kanesaka','kyubey','saito','umi','jiro','arai','sho','new9','new10','new11','new12','new13','new14'];
   var sid = slide && slide.id;
   var isDefaultLineage = sid && DEFAULT_LINEAGE_IDS.indexOf(sid) !== -1;
+  console.log('[_openCarouselSlideContent] routing', { sid: sid, isDefaultLineage: isDefaultLineage });
 
   if (isDefaultLineage) {
     // 디폴트 14개 → lineage 트리. link 가 디폴트 안에 있으면 그걸 사용, 아니면 id 자체로.
     var lineageId = (slide.link && DEFAULT_LINEAGE_IDS.indexOf(slide.link) !== -1) ? slide.link : sid;
+    console.log('[_openCarouselSlideContent] → LineageModule.open', lineageId);
     if (window.LineageModule) window.LineageModule.open(lineageId);
     return;
   }
@@ -46195,9 +46200,11 @@ function _openCarouselSlideContent(slide, i){
   //   link='solo_*' 등) → promo 팝업 전용. solo_ 분기 제거 — 단독 쉐프 매거진은 chefs 테이블
   //   데이터 없이 호출되면 검정화면 결과만 줬음. promo 팝업이 더 적절한 종착지.
   if (typeof window.openPromoCarousel === 'function') {
+    console.log('[_openCarouselSlideContent] → openPromoCarousel');
     window.openPromoCarousel(slide);
     return;
   }
+  console.warn('[_openCarouselSlideContent] no openPromoCarousel — fallback to toast');
   // 최후 폴백
   if (typeof showComingSoonToast === 'function') showComingSoonToast();
 }
