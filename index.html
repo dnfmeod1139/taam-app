@@ -43697,14 +43697,32 @@ function _syncDynamicSoloCards(){
 }
 
 function closeLineageAdmin() {
-  var screen = document.getElementById('lineageAdminScreen');
-  if (screen) screen.style.display = 'none';
-  // 🆕 v1.52 (2026.05.25): 슈퍼어드민 콘솔 (adminScreen) 로 복귀.
-  //   기존엔 lineageAdminScreen 만 숨겨서 그 아래 옛 사진 cropper 등이 노출되는 버그.
-  //   슈퍼어드민이 lineageAdminScreen 들어가는 진입점이 openAdmin → 콘솔 메뉴 이므로 그쪽 복귀가 자연스러움.
-  try {
-    if(typeof openAdmin === 'function') openAdmin();
-  } catch(e){ console.warn('[closeLineageAdmin] openAdmin failed:', e); }
+  // 🆕 v1.52f 2026.05.25: 깜빡임 + 1~2초 멈춤 해결.
+  //   원인 1) lineageAdminScreen (z-index:8000) 가 display:none 되는 순간 그 아래
+  //         mainGnb (하단바) 가 잠깐 보이면서 openAdmin 이 다시 hide → 깜빡임.
+  //   원인 2) adminScreen 표시 + openAdmin 의 layout/paint 가 lineageAdminScreen
+  //         의 14개 사진 카드 GC 과 겹쳐 1~2초 멈춤.
+  //   처리: ① mainGnb 즉시 hide → 깜빡임 차단
+  //         ② adminScreen 을 먼저 표시 후 lineageAdminScreen 숨김 →
+  //            paint 가 한 번에 일어나고 GC 가 그 다음 frame 으로 밀려 체감 멈춤 제거.
+  var gnb = document.getElementById('mainGnb');
+  if(gnb) gnb.style.display = 'none';
+  var adminEl = document.getElementById('adminScreen');
+  if(adminEl){
+    // adminScreen 을 먼저 z-index:8001 로 lineageAdminScreen 위에 띄움 (사이 빈 화면 차단)
+    adminEl.style.zIndex = '8001';
+    adminEl.style.display = 'flex';
+  }
+  // 다음 frame 에서 lineageAdminScreen 숨김 + adminScreen z-index 원복
+  requestAnimationFrame(function(){
+    var screen = document.getElementById('lineageAdminScreen');
+    if (screen) screen.style.display = 'none';
+    if(adminEl) adminEl.style.zIndex = '';
+    // 슈퍼어드민 콘솔 진입 후처리 (openAdmin 의 closeAllAdminScreens 등 한 번만 수행)
+    try {
+      if(typeof closeAllAdminScreens === 'function') closeAllAdminScreens();
+    } catch(e){ console.warn('[closeLineageAdmin] closeAll failed:', e); }
+  });
 }
 
 // editLineage는 stub 유지 (기존 호출 호환성)
@@ -46004,7 +46022,24 @@ function onCarouselCardTap(i) {
   //   처럼 가짜 ID 로 빠져서 화면이 비거나 이전 캐시 (요시타케 등) 가 잔존했음.
   //   사용자 보고: "13번째 시마즈를 누르면 12번째 요시타케로 연결된다" 의 진짜 원인.
   var isPromoLink = (typeof linkTarget === 'string') && linkTarget.indexOf('slot_') === 0;
-  if (isPromoLink || (linkTarget && !isKnownTree && !isSoloLink)) {
+  // 🆕 v1.52f 2026.05.25: 사용자가 캐러셀 편집기에서 슬라이드 제목 (t1) 을 기본값과
+  //   다르게 바꾼 경우 → 더 이상 원래 lineage 가 아니므로 promo 팝업으로 라우팅.
+  //   예) 14번 슬라이드 (default t1='SHIMIZU', link='new14') 의 t1 을 '시마즈' 로
+  //   변경했다면 link='new14' 가 시미즈 계보를 열어 어긋남.
+  var DEFAULT_T1_BY_LINK = {
+    sugita:'SUGITA', kanesaka:'KANESAKA', kyubey:'KYUBEY', saito:'SAITO',
+    umi:'UMI', jiro:'JIRO', arai:'ARAI', sho:'SHO',
+    new9:'KIYOTA', new10:'ARAKI', new11:'MITANI', new12:'YOSHITAKE',
+    new13:'NAMBA', new14:'SHIMIZU'
+  };
+  var customizedT1 = false;
+  if (isKnownTree && slide && typeof slide.t1 === 'string') {
+    var defaultT1 = DEFAULT_T1_BY_LINK[linkTarget];
+    if (defaultT1 && slide.t1.trim().toUpperCase() !== defaultT1.toUpperCase()) {
+      customizedT1 = true;
+    }
+  }
+  if (isPromoLink || customizedT1 || (linkTarget && !isKnownTree && !isSoloLink)) {
     // promotional / placeholder / unknown → 풀스크린 promo 팝업으로 안전 폴백
     if (typeof window.openPromoCarousel === 'function') {
       window.openPromoCarousel(slide);

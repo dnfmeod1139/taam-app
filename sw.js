@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.52e';  // 1.52e — 2026.05.25: onCarouselCardTap 에서 promotional 슬라이드 (slot_*) → openPromoCarousel 직접 라우팅 (요시타케 잘못 연결 해결) + adminScreen 뒤로가기 onclick 중복 openMyPage 제거 (깜빡임 해결)
-const STATIC_CACHE = 'taam-static-v1.52e';
+const SW_VERSION = 'taam-sw-v1.52f';  // 1.52f — 2026.05.25: 캐러셀 t1 커스텀 변경 감지 → promo 팝업 라우팅 (시미즈 → 시마즈 변경된 슬라이드가 시미즈 계보로 연결되던 버그) + closeLineageAdmin 깜빡임·1~2초 멈춤 해결 (mainGnb 즉시 hide + adminScreen 선표시 + lineageAdminScreen 다음 frame 숨김)
+const STATIC_CACHE = 'taam-static-v1.52f';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
