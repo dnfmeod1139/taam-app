@@ -34382,7 +34382,9 @@ var PIPES={lp0:250,lp1:266,lp2:564,lp3:480,lp4:177,lp5:291,lp6:461};
 function resetPipe(id,len){var el=document.getElementById(id);if(!el)return;el.style.transition='none';el.setAttribute('stroke-dashoffset',len);}
 function drawPipe(id,len,delay,cb){
   var el=document.getElementById(id);if(!el){if(cb)cb();return;}
-  var dur=Math.max(Math.round(len*3.375),1013);
+  // 🆕 v1.52k 2026.05.25: 스기타 라인 그리기 속도를 다른 계보와 동일하게 (3.375 → 2.0, 최소 1013 → 300).
+  //   기존 사양은 픽셀당 1.7배, 최소값 기준 3.4배 느림 → 전체 ~13.5초 걸려 다른 계보 (~5-10초) 대비 답답.
+  var dur=Math.max(Math.round(len*2.0),300);
   setTimeout(function(){
     el.style.transition='stroke-dashoffset '+dur+'ms cubic-bezier(.38,0,.12,1)';
     el.setAttribute('stroke-dashoffset','0');
@@ -47460,6 +47462,15 @@ function openLineageNew(num){
     animDoneNew9=false; animRunningNew9=false;
     setTimeout(startAnimNew9, 350);
   }
+  // 🆕 v1.52k 2026.05.25: 난바(13) / 시미즈(14) 도 fade-in 애니메이션 추가
+  //   기존엔 애니메이션 없이 정적으로 표시 → 다른 계보와 톤 불일치.
+  //   path id 가 없어 stroke-dasharray 적용 불가 → opacity fade + 노드 stagger 로 처리.
+  else if(num === 13){
+    if(typeof startAnimNew13 === 'function') setTimeout(startAnimNew13, 200);
+  }
+  else if(num === 14){
+    if(typeof startAnimNew14 === 'function') setTimeout(startAnimNew14, 200);
+  }
 }
 function closeLineageNew(num){
   var el=document.getElementById('loNew'+num);
@@ -47724,6 +47735,52 @@ function tapNodeNew13(id){
 function tapNodeNew14(id){
   var r=(typeof DATA_New14 !== 'undefined' ? DATA_New14 : []).find(function(d){return d.id===id;});
   if(r){r=Object.assign({},r,{_lineageId:'new14'});openInfo(r);}
+}
+
+// 🆕 v1.52k 2026.05.25: 난바 / 시미즈 fade-in 애니메이션.
+//   path 가 inline (id 없음) 이라 stroke-dasharray 대신 opacity fade 로 처리.
+//   순서: SVG 의 path/line/circle 한 번에 fade-in (~900ms) → 노드 g 들이 stagger fade-in (각 ~420ms).
+//   총 길이: ~4.5초 (다른 New10/11/12 ~5-6초 범위와 유사).
+function _animLineageFade(svgId, nodeIds, stagger){
+  var svg = document.getElementById(svgId);
+  if(!svg) return;
+  var lines = svg.querySelectorAll('path, line, circle');
+  // 1) reset (transition none + opacity 0)
+  lines.forEach(function(el){ el.style.transition = 'none'; el.style.opacity = '0'; });
+  nodeIds.forEach(function(id){
+    var el = document.getElementById(id);
+    if(el){ el.style.transition = 'none'; el.style.opacity = '0'; }
+  });
+  // 강제 reflow 후 페이드 시작
+  void svg.offsetWidth;
+  // 2) 라인 fade-in
+  lines.forEach(function(el){
+    el.style.transition = 'opacity .9s ease';
+    el.style.opacity = '1';
+  });
+  // 3) 노드 stagger fade-in (라인이 보이기 시작한 후 350ms 부터)
+  var startDelay = 350;
+  nodeIds.forEach(function(id, i){
+    setTimeout(function(){
+      var el = document.getElementById(id);
+      if(el){
+        el.style.transition = 'opacity .42s ease';
+        el.style.opacity = '1';
+      }
+    }, startDelay + i * stagger);
+  });
+}
+
+function startAnimNew13(){
+  // 1대 본가(n1) → 1세대 5명 좌→우 → 손자 NEW(n3)
+  var nodes = ['nNew13_1', 'nNew13_2', 'nNew13_6', 'nNew13_4', 'nNew13_5', 'nNew13_7', 'nNew13_3'];
+  _animLineageFade('svgNew13', nodes, 480);
+}
+
+function startAnimNew14(){
+  // 본가(n1) → 1세대 4명 좌→우 (n2, n4, n5, n6) → 손자 NEW 2명 (n7, n3)
+  var nodes = ['nNew14_1', 'nNew14_2', 'nNew14_4', 'nNew14_5', 'nNew14_6', 'nNew14_7', 'nNew14_3'];
+  _animLineageFade('svgNew14', nodes, 480);
 }
 
 // 새 계보도 이름 저장/로드

@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.52j';  // 1.52j — 2026.05.25: 슈퍼어드민 → 계보도관리 → 계보 본 후 닫기 → 다시 계보도관리 시 클릭 여러 번 해야 작동하던 멈춤 fix. LineageModule.close 의 fromAdmin 분기에서 adminScreen/mainGnb/myPage/admin sub-screen 잔재 명시적 정리 + lineageAdminScreen z-index 8500 강화 + loNew13/loNew14 hide 목록 추가.
-const STATIC_CACHE = 'taam-static-v1.52j';
+const SW_VERSION = 'taam-sw-v1.52k';  // 1.52k — 2026.05.25: ① 스기타 계보 라인 그리기 속도 정상화 (3.375→2.0, 최소 1013→300ms — 약 2배 빨라짐). ② 난바(New13) / 시미즈(New14) 에 fade-in 애니메이션 추가 (라인 0.9s 페이드인 후 노드 0.48s 간격 stagger, 총 ~4.5초). 이전엔 정적으로 즉시 표시되어 다른 계보와 톤 불일치.
+const STATIC_CACHE = 'taam-static-v1.52k';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
