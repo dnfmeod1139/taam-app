@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.2';  // 1.53.2 — 2026.05.28: 노드 단위 AI 번역 (옵션 A Step 2). is2 편집 모달 푸터에 "🤖 번역" 버튼 추가. 클릭 시 aiTranslateNode 가 chefs row 의 한국어 필드 (name/sub_title/sec1_data.title-desc/sec2_data.title-desc) 를 모아 taamTranslate (Claude 4.5) 호출 → 결과를 name_en/jp, sub_en/jp, sec1_data.{title,desc}_en/jp, sec2_data.{title,desc}_en/jp 에 저장 + i18n_status='ai_draft'. 언어 토글 시 즉시 반영.
-const STATIC_CACHE = 'taam-static-v1.53.2';
+const SW_VERSION = 'taam-sw-v1.53.3';  // 1.53.3 — 2026.05.28: saveChefToSupabase 끝에 자동 번역 hook 추가 — 한국어 텍스트 6개 필드 (name/sub_title/sec1.title-desc/sec2.title-desc) 중 하나라도 변경 감지되면 백그라운드 aiTranslateNode 비동기 trigger. i18n_status='manual' 이면 skip (수동 번역본 보호). 사용자는 SAVE 한 번이면 KO 저장 + EN/JA 자동 갱신 — 잊을 일 없음.
+const STATIC_CACHE = 'taam-static-v1.53.3';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);

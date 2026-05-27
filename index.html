@@ -36176,8 +36176,10 @@ async function saveChefToSupabase(chefId, lineageId, info){
     // undefined 일 때 (사용자가 안 만진 필드 + curR 도 미로드 상태) DB 값이 wipe 되는 문제 방어.
     var existingRow = null;
     try {
+      // 🆕 v1.53.3 2026.05.28: name/sub_title/i18n_status_* 도 함께 select.
+      //   한국어 변경 감지 (diff) 후 자동 AI 번역 trigger 에 필요.
       var __sel = await window.sb.from('chefs')
-        .select('node_photo, sec1_data, sec2_data')
+        .select('name, sub_title, node_photo, sec1_data, sec2_data, i18n_status_en, i18n_status_jp')
         .eq('id', chefId).eq('lineage_id', lineageId || 'unknown').maybeSingle();
       if(!__sel.error && __sel.data) existingRow = __sel.data;
     } catch(__e){ /* 읽기 실패해도 계속 진행 */ }
@@ -36272,6 +36274,48 @@ async function saveChefToSupabase(chefId, lineageId, info){
     }
     
     console.log('✅ chef 저장 완료:', chefId, '(' + lineageId + ')');
+
+    // 🆕 v1.53.3 2026.05.28: 한국어 텍스트 변경 시 자동 EN/JA 번역 trigger.
+    //   diff 체크 — 6개 텍스트 필드 (name, sub_title, sec1.title/desc, sec2.title/desc) 중
+    //   하나라도 이전 값과 다르면 백그라운드에서 aiTranslateNode 비동기 호출.
+    //   ★ i18n_status='manual' (슈퍼어드민이 직접 EN/JA 수정) 이면 자동 번역 skip — 수동 번역본 보호.
+    //   ★ 응답을 await 안 함 → saveChefToSupabase 는 한국어 저장 즉시 반환, 번역은 백그라운드 진행.
+    try {
+      if(typeof window.aiTranslateNode === 'function'){
+        var _oldSec1 = (existingRow && existingRow.sec1_data && typeof existingRow.sec1_data === 'object') ? existingRow.sec1_data : {};
+        var _oldSec2 = (existingRow && existingRow.sec2_data && typeof existingRow.sec2_data === 'object') ? existingRow.sec2_data : {};
+        var _newSec1 = payload.sec1_data || {};
+        var _newSec2 = payload.sec2_data || {};
+        function _s(v){ return (v == null) ? '' : String(v); }
+        var _textChanged = (
+          _s(payload.name)        !== _s(existingRow && existingRow.name) ||
+          _s(payload.sub_title)   !== _s(existingRow && existingRow.sub_title) ||
+          _s(_newSec1.title)      !== _s(_oldSec1.title) ||
+          _s(_newSec1.desc)       !== _s(_oldSec1.desc) ||
+          _s(_newSec2.title)      !== _s(_oldSec2.title) ||
+          _s(_newSec2.desc)       !== _s(_oldSec2.desc)
+        );
+        var _isManual = existingRow && (
+          existingRow.i18n_status_en === 'manual' ||
+          existingRow.i18n_status_jp === 'manual'
+        );
+        if(_textChanged && !_isManual){
+          console.log('[saveChefToSupabase] 한국어 변경 감지 → 백그라운드 AI 번역 trigger');
+          // 비동기 호출 — 응답 기다리지 않음 (사용자는 SAVE 즉시 응답 받음)
+          setTimeout(function(){
+            try { window.aiTranslateNode(chefId, lineageId); } catch(__t){ console.warn('[auto-translate] failed:', __t); }
+          }, 150);
+        } else if(_isManual){
+          console.log('[saveChefToSupabase] i18n_status=manual — 자동 번역 skip (수동 번역본 보호)');
+          if(typeof showToast === 'function'){
+            showToast('ℹ','자동 번역 skip','수동 번역본 보호 (i18n_status=manual). 🤖 버튼으로 강제 번역 가능');
+          }
+        } else {
+          console.log('[saveChefToSupabase] 한국어 변경 없음 (좌표/사진만 변경 등) — 자동 번역 skip');
+        }
+      }
+    } catch(_e){ console.warn('[saveChefToSupabase] 자동 번역 hook 실패:', _e); }
+
     return true;
   } catch(e){
     console.error('❌ saveChefToSupabase 예외:', e);
