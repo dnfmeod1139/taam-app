@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.0';  // 1.53.0 — 2026.05.25: GNB 재구성 — Contents → Genealogy 라벨/아이콘 변경 (id=gnbContents 유지), Chat → Quest 로 교체 (gnbQuest, compass 아이콘, "퀘스트 — 곧 공개됩니다" 토스트). TAAM Atlas 햄버거 폴더 display:none (코드·venues 100% 유지, 추후 Quest 컨텐츠 재활용). Chat 화면 코드 보존.
-const STATIC_CACHE = 'taam-static-v1.53.0';
+const SW_VERSION = 'taam-sw-v1.53.1';  // 1.53.1 — 2026.05.25: lineageHome 좌상단 햄버거 버튼 (lhHamBtn) 도 영구 숨김 — Atlas 폴더가 v1.53.0 에서 숨겨졌고 캐러셀로 직접 진입 가능하므로 메뉴 자체 불필요. inline HTML style + openLineageHome 복구 코드 + closeCarouselEditor 복귀 코드 모두 'flex' → 'none' 으로 변경.
+const STATIC_CACHE = 'taam-static-v1.53.1';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
