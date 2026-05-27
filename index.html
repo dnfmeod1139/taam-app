@@ -6237,22 +6237,28 @@ window.closePromoCarousel = function(){
 </div>
 
 <div id="mainGnb" style="display:none;">
-    <!-- 순서 (좌→우): Ticket · Contents · Home · Chat · My Page -->
+    <!-- 🆕 v1.53.0 2026.05.25: GNB 재구성 — Contents → Genealogy, Chat → Quest.
+         Chat 은 진입 경로만 차단, openTaamChat() 등 코드 100% 유지 (슈퍼어드민 등 다른 경로 호출 대비).
+         Quest 는 곧 공개될 도장깨기 컨텐츠 (Atlas venues 데이터 재활용 예정).
+         순서 (좌→우): Ticket · Genealogy · Home · Quest · My Page -->
     <button class="gnb-btn active" id="gnbTicket" onclick="gnbGo('ticket',this)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9V7a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4z"/><path d="M13 5v2"/><path d="M13 11v2"/><path d="M13 17v2"/></svg>
       <span class="gnb-label">Ticket</span>
     </button>
+    <!-- ⚠️ id="gnbContents" 는 호환을 위해 유지 (다른 코드에서 참조). 라벨/SVG 만 Genealogy 로 변경. -->
     <button class="gnb-btn" id="gnbContents" onclick="openLineageHome(this)">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
-      <span class="gnb-label">Contents</span>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2.2"/><circle cx="6" cy="14" r="2"/><circle cx="18" cy="14" r="2"/><circle cx="6" cy="20.5" r="1.6"/><circle cx="18" cy="20.5" r="1.6"/><path d="M12 7.2v3M12 10.2L6 12M12 10.2L18 12M6 16v3M18 16v3"/></svg>
+      <span class="gnb-label">Genealogy</span>
     </button>
     <button class="gnb-btn" id="gnbHome" onclick="gnbGo('home',this)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9.5L12 3l9 6.5V20a1 1 0 01-1 1H5a1 1 0 01-1-1V9.5z"/><path d="M9 21V12h6v9"/></svg>
       <span class="gnb-label">Home</span>
     </button>
-    <button class="gnb-btn" id="gnbChat" onclick="gnbGo('chat',this)">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-      <span class="gnb-label">Chat</span>
+    <!-- 🆕 v1.53.0: Quest 버튼 (옛 gnbChat 자리). Chat 코드 자체는 유지, 진입만 차단.
+         아이콘: compass (탐험·도장깨기 정체성) -->
+    <button class="gnb-btn" id="gnbQuest" onclick="gnbGo('quest',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>
+      <span class="gnb-label">Quest</span>
     </button>
     <!-- 🔒 마켓 — 런칭 후 사용 예정, 우선 숨김 (코드 보존) -->
     <button class="gnb-btn" id="gnbMarket" onclick="gnbGo('market',this)" style="display:none;">
@@ -11598,6 +11604,21 @@ function gnbGo(tab, btn){
       return;
     }
     openTaamChat();
+    return;
+  }
+
+  // 🆕 v1.53.0 2026.05.25: Quest 탭 (옛 Chat 자리).
+  //   Quest 컨텐츠 (TAAM Atlas venues 재활용 도장깨기) 는 곧 공개 — 현재는 안내 토스트만.
+  //   슈퍼어드민도 동일 (구현 전) — 추후 분기 추가 예정.
+  if(tab==='quest'){
+    if(typeof showToast === 'function'){
+      showToast('🧭','TAAM Quest','곧 공개됩니다');
+    }
+    // active 복원: ticket 탭으로 복귀
+    document.querySelectorAll('.gnb-btn').forEach(function(b){b.classList.remove('active');});
+    var tkBtn3 = document.getElementById('gnbTicket');
+    if(tkBtn3) tkBtn3.classList.add('active');
+    showView('ticket');
     return;
   }
 }
@@ -27734,8 +27755,12 @@ IDB.get('splashSettings').then(function(s) {
       </div><!-- /cnt-folder-body genealogy -->
     </div><!-- /cnt-folder genealogy -->
 
-    <!-- ===== Folder 2: TAAM Atlas (어워드 지도 + 컬렉션/챌린지) ===== -->
-    <div class="cnt-folder" data-folder="atlas">
+    <!-- ===== Folder 2: TAAM Atlas (어워드 지도 + 컬렉션/챌린지) =====
+         🆕 v1.53.0 2026.05.25: 일시 숨김 (display:none).
+         이유: Atlas 의 venues 데이터 (733개) 는 곧 출시할 Quest 컨텐츠의 재료로 재활용됨.
+         사용자 사용 빈도가 낮을 것으로 판단 → 능동적인 Quest 시스템으로 전환.
+         ★ 데이터/코드/모듈 100% 유지 — display:none 한 줄로 진입만 차단. -->
+    <div class="cnt-folder" data-folder="atlas" style="display:none;">
       <div class="cnt-folder-head" onclick="toggleCntFolder('atlas')">
         <div class="cnt-folder-icon">🗾</div>
         <div class="cnt-folder-text">

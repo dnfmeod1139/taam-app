@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.52q';  // 1.52q — 2026.05.25: 캐러셀 뒤로가기 시 "이상한 정사각형 캐러셀" fix — closePromoCarousel returnTo 우선순위를 z-index 순서대로 변경 (carouselEditor > lineageHome > contentsView). lh-card 계보 캐러셀에서 promo 띄웠는데 닫을 때 cf-slide 티켓 캐러셀이 보이던 잔재 버그. lineageHome 복귀 시 contentsView/homeView/ticketView 명시적 hide.
-const STATIC_CACHE = 'taam-static-v1.52q';
+const SW_VERSION = 'taam-sw-v1.53.0';  // 1.53.0 — 2026.05.25: GNB 재구성 — Contents → Genealogy 라벨/아이콘 변경 (id=gnbContents 유지), Chat → Quest 로 교체 (gnbQuest, compass 아이콘, "퀘스트 — 곧 공개됩니다" 토스트). TAAM Atlas 햄버거 폴더 display:none (코드·venues 100% 유지, 추후 Quest 컨텐츠 재활용). Chat 화면 코드 보존.
+const STATIC_CACHE = 'taam-static-v1.53.0';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
