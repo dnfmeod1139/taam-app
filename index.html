@@ -23965,6 +23965,111 @@ async function taamTranslate(items, context){
 }
 window.taamTranslate = taamTranslate;
 
+// 🆕 v1.53.2 2026.05.28: 노드 단위 AI 번역 (KO → EN + JA).
+//   chefs 테이블 한 row 의 한국어 필드 (name, sub_title, sec1_data.title/desc, sec2_data.title/desc)
+//   를 모아서 taamTranslate 호출 → 결과를 _en/_jp 컬럼 및 sec1_data.title_en 등에 저장.
+//   호출 후 메인 페이지 언어 토글 (KO/EN/JA) 하면 즉시 반영됨.
+//   재호출 시 기존 _en/_jp 덮어씀 (수동 수정 후 덮어쓰면 손실 위험 → status 가 'manual' 이면 skip 옵션 추후).
+async function aiTranslateNode(chefId, lineageId){
+  if(!window.sb){ console.warn('[aiTranslateNode] Supabase 미초기화'); return false; }
+  if(!chefId || !lineageId){ console.warn('[aiTranslateNode] chefId/lineageId 누락:', chefId, lineageId); return false; }
+  if(typeof window.taamTranslate !== 'function'){ console.warn('[aiTranslateNode] taamTranslate 함수 없음'); return false; }
+
+  if(typeof showToast === 'function') showToast('🤖','AI 번역 시작','Claude 호출 중 (10-20초)...');
+  try {
+    // 1) 한국어 데이터 fetch
+    var sel = await window.sb.from('chefs')
+      .select('name, sub_title, sec1_data, sec2_data')
+      .eq('id', chefId).eq('lineage_id', lineageId).maybeSingle();
+    if(sel.error || !sel.data){
+      var emsg = (sel.error && sel.error.message) || '노드 row 없음';
+      if(typeof showToast === 'function') showToast('⚠','조회 실패', emsg);
+      return false;
+    }
+    var ko = sel.data;
+    var sec1 = (ko.sec1_data && typeof ko.sec1_data === 'object') ? ko.sec1_data : {};
+    var sec2 = (ko.sec2_data && typeof ko.sec2_data === 'object') ? ko.sec2_data : {};
+
+    // 2) 번역 items 준비 (빈 값은 skip)
+    var items = [];
+    if(ko.name)       items.push({id:'name',       value: ko.name});
+    if(ko.sub_title)  items.push({id:'sub',        value: ko.sub_title});
+    if(sec1.title)    items.push({id:'sec1_title', value: sec1.title});
+    if(sec1.desc)     items.push({id:'sec1_desc',  value: sec1.desc});
+    if(sec2.title)    items.push({id:'sec2_title', value: sec2.title});
+    if(sec2.desc)     items.push({id:'sec2_desc',  value: sec2.desc});
+    if(items.length === 0){
+      if(typeof showToast === 'function') showToast('ℹ','번역할 내용 없음','한국어 데이터가 모두 비어있습니다');
+      return false;
+    }
+
+    // 3) AI 호출
+    var ctx = '스시 미식 · ' + lineageId + ' 계보 · TAAM 플랫폼';
+    var r = await window.taamTranslate(items, ctx);
+    var tr = r && r.translations;
+    if(!tr){
+      if(typeof showToast === 'function') showToast('⚠','번역 결과 없음','다시 시도해주세요');
+      return false;
+    }
+
+    // 4) update payload 구성
+    var newSec1 = Object.assign({}, sec1);
+    var newSec2 = Object.assign({}, sec2);
+    if(tr.sec1_title){ newSec1.title_en = tr.sec1_title.en; newSec1.title_jp = tr.sec1_title.ja; }
+    if(tr.sec1_desc) { newSec1.desc_en  = tr.sec1_desc.en;  newSec1.desc_jp  = tr.sec1_desc.ja; }
+    if(tr.sec2_title){ newSec2.title_en = tr.sec2_title.en; newSec2.title_jp = tr.sec2_title.ja; }
+    if(tr.sec2_desc) { newSec2.desc_en  = tr.sec2_desc.en;  newSec2.desc_jp  = tr.sec2_desc.ja; }
+
+    var payload = {
+      sec1_data: newSec1,
+      sec2_data: newSec2,
+      i18n_status_en: 'ai_draft',
+      i18n_status_jp: 'ai_draft',
+      i18n_updated_at: new Date().toISOString()
+    };
+    if(tr.name){ payload.name_en = tr.name.en; payload.name_jp = tr.name.ja; }
+    if(tr.sub) { payload.sub_en  = tr.sub.en;  payload.sub_jp  = tr.sub.ja; }
+
+    // 5) DB update
+    var up = await window.sb.from('chefs').update(payload)
+      .eq('id', chefId).eq('lineage_id', lineageId);
+    if(up.error){
+      if(typeof showToast === 'function') showToast('⚠','저장 실패', up.error.message);
+      return false;
+    }
+
+    if(typeof showToast === 'function') showToast('✓','번역 완료', items.length + '개 필드 · EN+JA 저장됨');
+    console.log('[aiTranslateNode] success:', chefId, '/', lineageId, '/ fields:', items.length);
+    return true;
+  } catch(e){
+    console.error('[aiTranslateNode]', e);
+    if(typeof showToast === 'function') showToast('⚠','AI 번역 실패', (e && e.message) || String(e));
+    return false;
+  }
+}
+window.aiTranslateNode = aiTranslateNode;
+
+// 현재 열려있는 노드 (is2 모달의 curR) 를 번역. 편집 모달의 "🤖 번역" 버튼 onclick 핸들러.
+window.onClickTranslateNode = function(){
+  if(typeof curR === 'undefined' || !curR || !curR.id){
+    if(typeof showToast === 'function') showToast('⚠','노드 정보 없음','노드를 먼저 열어주세요');
+    return;
+  }
+  var lid = curR._lineageId || curR.lineage_id;
+  if(!lid){
+    if(typeof showToast === 'function') showToast('⚠','계보도 ID 누락','노드의 lineage_id 가 없습니다');
+    return;
+  }
+  // 사용자 한국어 편집 내용이 미저장이면 먼저 SAVE 안내
+  if(typeof confirm === 'function'){
+    var msg = '"' + (curR.name || curR.id) + '" 노드의 한국어 내용을 영어/일본어로 자동 번역합니다.\n' +
+              '• SAVE 안 한 변경사항이 있다면 먼저 저장하세요 (취소 후 SAVE → 다시 번역).\n' +
+              '• 기존 EN/JA 번역본은 덮어씀.\n\n진행할까요?';
+    if(!confirm(msg)) return;
+  }
+  aiTranslateNode(curR.id, lid);
+};
+
 // 페이지 내 모든 data-i18n 요소를 현재 언어에 맞게 갱신
 function applyI18n(root){
   root = root || document;
@@ -32176,6 +32281,8 @@ IDB.get('splashSettings').then(function(s) {
     <!-- 편집 모드 하단 버튼 -->
     <div class="is2-edit-foot">
       <button id="is2DeleteBtn" class="is2-edit-btn delete is2-delete-custom-only">삭제</button>
+      <!-- 🆕 v1.53.2 2026.05.28: AI 번역 버튼 — 현재 노드의 한국어를 EN+JA 로 자동 번역 후 chefs row update -->
+      <button id="is2TranslateBtn" class="is2-edit-btn ai-translate" onclick="onClickTranslateNode()" title="AI 가 현재 노드의 한국어를 영어/일본어로 자동 번역" style="background:linear-gradient(135deg,#5C0A14,#9c1b2e);color:#fff;border:1px solid rgba(200,169,110,.5);">🤖 번역</button>
       <button class="is2-edit-btn cancel" onclick="cancelEdit()">취소</button>
       <button class="is2-edit-btn save" onclick="saveEdit()">저장</button>
     </div>
