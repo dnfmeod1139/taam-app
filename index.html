@@ -7581,6 +7581,21 @@ window.closePromoCarousel = function(){
             </div>
             <div class="admin-arrow">›</div>
           </div>
+          <!-- 🆕 v1.53.4 2026.05.28: 계보도 노드 (chefs) 일괄 AI 번역 -->
+          <div class="admin-menu-item" onclick="window._taamTranslateAllChefs()">
+            <div>
+              <div class="admin-menu-text">🌳 계보도 노드 일괄 AI 번역</div>
+              <div class="admin-menu-sub">chefs 테이블 미번역 노드 (name_en 비어있는 것) 만 자동 번역. 노드당 ~15초 / ~$0.008</div>
+            </div>
+            <div class="admin-arrow">›</div>
+          </div>
+          <div class="admin-menu-item" onclick="window._taamTranslateAllChefs({dryRun:true})">
+            <div>
+              <div class="admin-menu-text">🔍 일괄 번역 대상 확인 (dry-run)</div>
+              <div class="admin-menu-sub">실제 호출 없이 번역 대상 노드만 카운트. 비용 추정용. 콘솔 + 토스트 확인</div>
+            </div>
+            <div class="admin-arrow">›</div>
+          </div>
           <div class="admin-menu-item" onclick="exportAllData()" style="color:#2a6a2a;">
             <div>
               <div class="admin-menu-text" data-i18n="admin.export_data" style="color:#2a6a2a;">데이터 내보내기</div>
@@ -23970,12 +23985,18 @@ window.taamTranslate = taamTranslate;
 //   를 모아서 taamTranslate 호출 → 결과를 _en/_jp 컬럼 및 sec1_data.title_en 등에 저장.
 //   호출 후 메인 페이지 언어 토글 (KO/EN/JA) 하면 즉시 반영됨.
 //   재호출 시 기존 _en/_jp 덮어씀 (수동 수정 후 덮어쓰면 손실 위험 → status 가 'manual' 이면 skip 옵션 추후).
-async function aiTranslateNode(chefId, lineageId){
+async function aiTranslateNode(chefId, lineageId, opts){
+  opts = opts || {};
+  var silent = !!opts.silent;
+  function _toast(){
+    if(silent || typeof showToast !== 'function') return;
+    showToast.apply(null, arguments);
+  }
   if(!window.sb){ console.warn('[aiTranslateNode] Supabase 미초기화'); return false; }
   if(!chefId || !lineageId){ console.warn('[aiTranslateNode] chefId/lineageId 누락:', chefId, lineageId); return false; }
   if(typeof window.taamTranslate !== 'function'){ console.warn('[aiTranslateNode] taamTranslate 함수 없음'); return false; }
 
-  if(typeof showToast === 'function') showToast('🤖','AI 번역 시작','Claude 호출 중 (10-20초)...');
+  _toast('🤖','AI 번역 시작','Claude 호출 중 (10-20초)...');
   try {
     // 1) 한국어 데이터 fetch
     var sel = await window.sb.from('chefs')
@@ -23983,7 +24004,7 @@ async function aiTranslateNode(chefId, lineageId){
       .eq('id', chefId).eq('lineage_id', lineageId).maybeSingle();
     if(sel.error || !sel.data){
       var emsg = (sel.error && sel.error.message) || '노드 row 없음';
-      if(typeof showToast === 'function') showToast('⚠','조회 실패', emsg);
+      _toast('⚠','조회 실패', emsg);
       return false;
     }
     var ko = sel.data;
@@ -23999,7 +24020,7 @@ async function aiTranslateNode(chefId, lineageId){
     if(sec2.title)    items.push({id:'sec2_title', value: sec2.title});
     if(sec2.desc)     items.push({id:'sec2_desc',  value: sec2.desc});
     if(items.length === 0){
-      if(typeof showToast === 'function') showToast('ℹ','번역할 내용 없음','한국어 데이터가 모두 비어있습니다');
+      _toast('ℹ','번역할 내용 없음','한국어 데이터가 모두 비어있습니다');
       return false;
     }
 
@@ -24008,7 +24029,7 @@ async function aiTranslateNode(chefId, lineageId){
     var r = await window.taamTranslate(items, ctx);
     var tr = r && r.translations;
     if(!tr){
-      if(typeof showToast === 'function') showToast('⚠','번역 결과 없음','다시 시도해주세요');
+      _toast('⚠','번역 결과 없음','다시 시도해주세요');
       return false;
     }
 
@@ -24034,16 +24055,16 @@ async function aiTranslateNode(chefId, lineageId){
     var up = await window.sb.from('chefs').update(payload)
       .eq('id', chefId).eq('lineage_id', lineageId);
     if(up.error){
-      if(typeof showToast === 'function') showToast('⚠','저장 실패', up.error.message);
+      _toast('⚠','저장 실패', up.error.message);
       return false;
     }
 
-    if(typeof showToast === 'function') showToast('✓','번역 완료', items.length + '개 필드 · EN+JA 저장됨');
+    _toast('✓','번역 완료', items.length + '개 필드 · EN+JA 저장됨');
     console.log('[aiTranslateNode] success:', chefId, '/', lineageId, '/ fields:', items.length);
     return true;
   } catch(e){
     console.error('[aiTranslateNode]', e);
-    if(typeof showToast === 'function') showToast('⚠','AI 번역 실패', (e && e.message) || String(e));
+    _toast('⚠','AI 번역 실패', (e && e.message) || String(e));
     return false;
   }
 }
@@ -24069,6 +24090,112 @@ window.onClickTranslateNode = function(){
   }
   aiTranslateNode(curR.id, lid);
 };
+
+// 🆕 v1.53.4 2026.05.28: chefs 테이블 전체 일괄 AI 번역.
+//   사용 예 (콘솔에서):
+//     window._taamTranslateAllChefs()                          → 미번역 노드만 (name_en 비어있는 것)
+//     window._taamTranslateAllChefs({ onlyMissing: false })    → 모든 노드 강제 재번역
+//     window._taamTranslateAllChefs({ lineage: 'sugita' })     → 특정 계보만
+//     window._taamTranslateAllChefs({ dryRun: true })          → 대상만 카운트
+//   순차 호출 (rate limit 보호) + manual 보호 + 진행 토스트.
+async function _taamTranslateAllChefs(opts){
+  opts = opts || {};
+  var onlyMissing = opts.onlyMissing !== false; // 기본 true
+  var lineageFilter = opts.lineage || null;
+  var dryRun = !!opts.dryRun;
+  var gapMs = opts.gapMs || 250; // 호출 간 간격
+
+  if(!window.sb || !window.aiTranslateNode){
+    console.warn('[일괄 번역] Supabase 또는 aiTranslateNode 미준비');
+    return null;
+  }
+
+  // 1. chefs 전체 조회
+  console.log('[일괄 번역] chefs 조회 시작...');
+  var q = window.sb.from('chefs').select('id, lineage_id, name, name_en, name_jp, i18n_status_en, i18n_status_jp');
+  if(lineageFilter) q = q.eq('lineage_id', lineageFilter);
+  var sel = await q;
+  if(sel.error){
+    console.error('[일괄 번역] 조회 실패:', sel.error);
+    if(typeof showToast === 'function') showToast('⚠','일괄 번역 실패','chefs 조회 에러: '+sel.error.message);
+    return null;
+  }
+  var rows = sel.data || [];
+  console.log('[일괄 번역] chefs 총', rows.length, '개');
+
+  // 2. 필터링
+  var targets = rows.filter(function(r){
+    if(!r.id || !r.lineage_id || r.lineage_id === 'unknown') return false;
+    // manual 보호 — 자동 번역 제외
+    if(r.i18n_status_en === 'manual' || r.i18n_status_jp === 'manual') return false;
+    if(!onlyMissing) return true;
+    // onlyMissing — name_en 비어있거나 status=pending 만 대상
+    var hasEn = r.name_en && String(r.name_en).trim() !== '';
+    var hasJp = r.name_jp && String(r.name_jp).trim() !== '';
+    if(hasEn && hasJp && r.i18n_status_en !== 'pending') return false;
+    return true;
+  });
+
+  var skipped = rows.length - targets.length;
+  console.log('[일괄 번역] 대상:', targets.length, '/ skip:', skipped, '(완료 또는 manual)');
+
+  if(dryRun){
+    console.log('[일괄 번역] dry-run 결과:');
+    targets.forEach(function(t, i){ console.log('  '+(i+1)+'.', t.lineage_id, '/', t.id, '·', t.name || ''); });
+    if(typeof showToast === 'function'){
+      showToast('ℹ','dry-run', targets.length+'개 대상 (콘솔 확인)');
+    }
+    return { dryRun: true, total: targets.length, skipped: skipped };
+  }
+
+  if(targets.length === 0){
+    if(typeof showToast === 'function') showToast('ℹ','일괄 번역','모든 노드가 이미 번역 완료 상태');
+    return { total: 0, ok: 0, fail: 0 };
+  }
+
+  // 3. confirm — 비용·시간 안내
+  var estCost = (targets.length * 0.008).toFixed(2);
+  var estMin = Math.ceil(targets.length * 15 / 60); // 노드당 ~15초
+  var ok2 = window.confirm(
+    '일괄 AI 번역 시작\n\n' +
+    '• 대상 노드: ' + targets.length + '개' + (lineageFilter ? ' (lineage: '+lineageFilter+')' : '') + '\n' +
+    '• 예상 시간: 약 ' + estMin + '분 (노드당 ~15초)\n' +
+    '• 예상 비용: 약 $' + estCost + ' (Claude 4.5)\n' +
+    '• Skip: ' + skipped + '개 (이미 번역 완료 또는 i18n_status=manual)\n\n' +
+    '진행할까요?'
+  );
+  if(!ok2){
+    console.log('[일괄 번역] 사용자 취소');
+    return null;
+  }
+
+  // 4. 순차 호출
+  if(typeof showToast === 'function') showToast('🤖','일괄 번역 시작', targets.length+'개 노드');
+  var ok = 0, fail = 0, t0 = Date.now();
+  for(var i=0; i<targets.length; i++){
+    var t = targets[i];
+    var prog = (i+1)+'/'+targets.length;
+    console.log('[일괄 번역] '+prog+' →', t.lineage_id, '/', t.id);
+    // 토스트는 5개마다 (시끄러움 방지)
+    if((i % 5 === 0 || i === targets.length-1) && typeof showToast === 'function'){
+      showToast('🤖','진행 중', prog+' · '+t.lineage_id+'/'+t.id);
+    }
+    try {
+      var r = await window.aiTranslateNode(t.id, t.lineage_id, { silent: true });
+      if(r) ok++; else fail++;
+    } catch(e){ console.error('[일괄 번역] 항목 실패:', t.id, e); fail++; }
+    if(i < targets.length - 1){
+      await new Promise(function(res){ setTimeout(res, gapMs); });
+    }
+  }
+  var elapsedSec = ((Date.now() - t0) / 1000).toFixed(1);
+  console.log('[일괄 번역] 완료 — ok:', ok, '/ fail:', fail, '/ 소요:', elapsedSec, '초');
+  if(typeof showToast === 'function'){
+    showToast('✓','일괄 번역 완료', ok+' 성공 / '+fail+' 실패 / '+elapsedSec+'초');
+  }
+  return { total: targets.length, ok: ok, fail: fail, elapsedSec: parseFloat(elapsedSec) };
+}
+window._taamTranslateAllChefs = _taamTranslateAllChefs;
 
 // 페이지 내 모든 data-i18n 요소를 현재 언어에 맞게 갱신
 function applyI18n(root){

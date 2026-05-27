@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.3';  // 1.53.3 — 2026.05.28: saveChefToSupabase 끝에 자동 번역 hook 추가 — 한국어 텍스트 6개 필드 (name/sub_title/sec1.title-desc/sec2.title-desc) 중 하나라도 변경 감지되면 백그라운드 aiTranslateNode 비동기 trigger. i18n_status='manual' 이면 skip (수동 번역본 보호). 사용자는 SAVE 한 번이면 KO 저장 + EN/JA 자동 갱신 — 잊을 일 없음.
-const STATIC_CACHE = 'taam-static-v1.53.3';
+const SW_VERSION = 'taam-sw-v1.53.4';  // 1.53.4 — 2026.05.28: 옵션 A Step 3 — chefs 테이블 일괄 AI 번역. window._taamTranslateAllChefs(opts) 함수 — onlyMissing/lineage/dryRun/gapMs 옵션 + manual 보호 + 순차 호출 (rate limit) + 5개마다 진행 토스트. aiTranslateNode 에 silent 옵션 추가 (일괄 모드 토스트 폭발 방지). 슈퍼어드민 마이페이지 데이터 input 섹션에 "🌳 계보도 노드 일괄 AI 번역" + "🔍 dry-run" 버튼 2개 추가.
+const STATIC_CACHE = 'taam-static-v1.53.4';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
