@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.4';  // 1.53.4 — 2026.05.28: 옵션 A Step 3 — chefs 테이블 일괄 AI 번역. window._taamTranslateAllChefs(opts) 함수 — onlyMissing/lineage/dryRun/gapMs 옵션 + manual 보호 + 순차 호출 (rate limit) + 5개마다 진행 토스트. aiTranslateNode 에 silent 옵션 추가 (일괄 모드 토스트 폭발 방지). 슈퍼어드민 마이페이지 데이터 input 섹션에 "🌳 계보도 노드 일괄 AI 번역" + "🔍 dry-run" 버튼 2개 추가.
-const STATIC_CACHE = 'taam-static-v1.53.4';
+const SW_VERSION = 'taam-sw-v1.53.5';  // 1.53.5 — 2026.05.28: GNB 홈 버튼 클릭 시 티켓 페이지 연결 강화 — gnbGo('home') 분기에서 ticket 버튼 active 동기화 + homeView/contentsView 명시적 hide + showView('ticket') 호출. 이전엔 SW 캐시로 옛 코드 (showView('home') → 빈 homeView) 가 남아 빈 화면이던 케이스 차단.
+const STATIC_CACHE = 'taam-static-v1.53.5';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
