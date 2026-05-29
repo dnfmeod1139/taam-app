@@ -12694,6 +12694,15 @@ function openTicketDetail(id){
   var t=ticketDB.find(function(x){return String(x.id)==String(id);});
   if(!t) return;
   if(t.status==='pending'||t.status==='deleteRequest') return; // 미승인 티켓 차단
+
+  // 🆕 v1.53.7 2026.05.28: 기한 만료 티켓 클릭 차단 (슈퍼어드민은 관리 위해 통과).
+  //   만료+매진이든 만료+미판매든 "마감" 으로 안내. 기한 안 지난 매진은 기존대로 상세 진입 허용
+  //   (상세 화면에서 구매 버튼만 비활성 — 사용자가 정보는 볼 수 있음).
+  if (_currentRole !== 'superadmin' && typeof _isTicketExpired === 'function' && _isTicketExpired(t)) {
+    if (typeof showToast === 'function') showToast('⏰','마감된 티켓','예약 기한이 지난 티켓입니다');
+    return;
+  }
+
   var r=restaurantDB.find(function(x){return String(x.id)===String(t.restId);});
 
   // 등급/잠금 상태 체크
@@ -21283,12 +21292,46 @@ function homeToggleActiveOnly() {
   renderHomeTickets();
 }
 
+// 🆕 v1.53.7 2026.05.28: 티켓 예약 기한 만료 판단.
+//   deadlineDate (전체 날짜) 우선, 없으면 t.date(월.일) + t.time 으로 올해 기준 계산.
+//   연말/연초 경계: 월.일이 6개월 이상 과거면 내년으로 해석 (식당 예약은 미래 지향).
+function _isTicketExpired(t){
+  if(!t) return false;
+  var deadline = null;
+  if(t.deadlineDate){
+    deadline = new Date(t.deadlineDate);
+  } else if(t.date){
+    var p = String(t.date).split('.');
+    if(p.length === 2){
+      var now = new Date();
+      var m = parseInt(p[0],10), d = parseInt(p[1],10);
+      if(!isNaN(m) && !isNaN(d)){
+        var hh = 23, mm = 59;
+        if(t.time && String(t.time).indexOf(':') >= 0){
+          var tp = String(t.time).split(':');
+          hh = parseInt(tp[0],10); if(isNaN(hh)) hh = 23;
+          mm = parseInt(tp[1],10); if(isNaN(mm)) mm = 59;
+        }
+        deadline = new Date(now.getFullYear(), m-1, d, hh, mm, 0);
+        // 6개월 이상 과거면 내년으로 해석 (연말/연초 경계)
+        var sixMonthsAgo = new Date(now.getTime() - 1000*60*60*24*180);
+        if(deadline < sixMonthsAgo){
+          deadline = new Date(now.getFullYear()+1, m-1, d, hh, mm, 0);
+        }
+      }
+    }
+  }
+  if(!deadline || isNaN(deadline.getTime())) return false;
+  return deadline.getTime() < Date.now();
+}
+window._isTicketExpired = _isTicketExpired;
+
 function _sortTickets(list) {
-  // 판매중 먼저, 매진 나중
+  // 🆕 v1.53.7: 판매중(활성) 먼저 → 매진 → 기한만료 순. 만료된 건 맨 뒤로.
   return list.slice().sort(function(a,b){
-    var aS = a.status==='soldout'?1:0;
-    var bS = b.status==='soldout'?1:0;
-    return aS - bS;
+    var aRank = (_isTicketExpired(a)?2:0) + (a.status==='soldout'?1:0);
+    var bRank = (_isTicketExpired(b)?2:0) + (b.status==='soldout'?1:0);
+    return aRank - bRank;
   });
 }
 
@@ -21332,7 +21375,7 @@ function renderTicketGenres() {
     // 🎫 쉐프별 필터 (노드 → TAAM 티켓 진입 시)
     if (_ticketFilterByRestId && String(t.restId) !== String(_ticketFilterByRestId)) return false;
     if (_tkGenre && t.ticketGenre !== _tkGenre) return false;
-    if (_tkActiveOnly && t.status === 'soldout') return false;
+    if (_tkActiveOnly && (t.status === 'soldout' || _isTicketExpired(t))) return false;
     if (_tkRegion) {
       var r = restaurantDB.find(function(x){ return String(x.id)===String(t.restId); });
       if (!r || r.region !== _tkRegion) return false;
@@ -24854,6 +24897,9 @@ function _ticketCardHtml(t,r){
   var photo=r?(r.photoHero||r.photoCard||r.photo||r.img||''):''; // 영상 우선이라 hero 우선
   var videoUrl = r ? (r.heroVideoUrl||'') : '';
   var isSoldOut=(t.status==='soldout');
+  // 🆕 v1.53.7 2026.05.28: 예약 기한 만료 판단. 만료+매진 → SOLD OUT, 만료+미판매 → 기한 만료.
+  var isExpired = (typeof _isTicketExpired === 'function') ? _isTicketExpired(t) : false;
+  var isDead = isSoldOut || isExpired; // 둘 중 하나면 비활성 (흐림 + 클릭 차단)
   var bg=photo?'background:url(\''+photo+'\') center/cover no-repeat;':'background:#1c1c1c;';
 
   // 인원 슬롯 표시
@@ -24914,7 +24960,7 @@ function _ticketCardHtml(t,r){
       // 1행: 지역 + 구역 인라인 (구역은 60% 크기)
       h+='<div style="line-height:1;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">';
       if (cityEn) {
-        h+='<span style="font-family:\'Oswald\',sans-serif;font-size:22px;font-weight:500;color:'+(isSoldOut?'rgba(255,255,255,.4)':'#fff')+';letter-spacing:.04em;text-transform:uppercase;">'+cityEn+'</span>';
+        h+='<span style="font-family:\'Oswald\',sans-serif;font-size:22px;font-weight:500;color:'+(isDead?'rgba(255,255,255,.4)':'#fff')+';letter-spacing:.04em;text-transform:uppercase;">'+cityEn+'</span>';
       }
       if (zoneEn) {
         h+='<span style="font-family:\'Oswald\',sans-serif;font-size:13px;font-weight:400;color:rgba(255,255,255,.7);letter-spacing:.06em;text-transform:uppercase;">'+zoneEn+'</span>';
@@ -24946,6 +24992,11 @@ function _ticketCardHtml(t,r){
   if(isSoldOut){
     h+='<div style="position:absolute;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);z-index:2;"></div>';
     h+='<div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-family:\'Montserrat\',sans-serif;font-size:13px;font-weight:900;letter-spacing:.2em;color:#fff;text-transform:uppercase;white-space:nowrap;border:1.5px solid rgba(255,255,255,.9);padding:5px 14px;border-radius:4px;z-index:3;">SOLD OUT</div>';
+  } else if(isExpired){
+    // 🆕 v1.53.7 2026.05.28: 기한 만료 오버레이 (매진 아닌데 날짜 지남)
+    var _expLabel = _cIsEn ? 'EXPIRED' : (_cIsJa ? '受付終了' : '기한 만료');
+    h+='<div style="position:absolute;inset:0;background:rgba(0,0,0,.62);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);z-index:2;"></div>';
+    h+='<div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-family:\'Montserrat\',\'Noto Sans KR\',\'Noto Sans JP\',sans-serif;font-size:12px;font-weight:900;letter-spacing:.18em;color:rgba(255,255,255,.82);text-transform:uppercase;white-space:nowrap;border:1.5px solid rgba(255,255,255,.45);padding:5px 14px;border-radius:4px;z-index:3;">'+_expLabel+'</div>';
   }
   // 잠금 오버레이
   var isLocked=(t.gradeOpen&&tcIsLocked(t));

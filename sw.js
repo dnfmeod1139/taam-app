@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.6';  // 1.53.6 — 2026.05.28: 예치금 부여 모달에 "💰 내 계좌에 바로 부여" 버튼 추가 — 슈퍼어드민이 검색 없이 본인 계좌에 예치금 부여 가능. adgSelectMyself() 가 본인 profile fetch → adgSelectUser 흐름 재사용. RLS 정책상 super_admin self-update 이미 허용되어 SQL 변경 불필요.
-const STATIC_CACHE = 'taam-static-v1.53.6';
+const SW_VERSION = 'taam-sw-v1.53.7';  // 1.53.7 — 2026.05.28: 티켓 기한 만료 처리 — _isTicketExpired(t) 헬퍼 (deadlineDate 우선, 없으면 date+time 올해 기준 + 연말경계 보정). 만료+매진=SOLD OUT, 만료+미판매="기한 만료/EXPIRED/受付終了" 오버레이 + 흐림. _sortTickets 만료 뒤로 정렬, _tkActiveOnly 필터에 만료 포함, openTicketDetail 만료 클릭 차단 (슈퍼어드민 제외).
+const STATIC_CACHE = 'taam-static-v1.53.7';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
