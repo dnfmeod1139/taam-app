@@ -12695,11 +12695,16 @@ function openTicketDetail(id){
   if(!t) return;
   if(t.status==='pending'||t.status==='deleteRequest') return; // 미승인 티켓 차단
 
-  // 🆕 v1.53.7 2026.05.28: 기한 만료 티켓 클릭 차단 (슈퍼어드민은 관리 위해 통과).
-  //   만료+매진이든 만료+미판매든 "마감" 으로 안내. 기한 안 지난 매진은 기존대로 상세 진입 허용
-  //   (상세 화면에서 구매 버튼만 비활성 — 사용자가 정보는 볼 수 있음).
-  if (_currentRole !== 'superadmin' && typeof _isTicketExpired === 'function' && _isTicketExpired(t)) {
-    if (typeof showToast === 'function') showToast('⏰','마감된 티켓','예약 기한이 지난 티켓입니다');
+  // 🆕 v1.53.8 2026.05.28: 판매 종료 티켓 (기한 만료 OR 매진) 클릭 차단 + 팝업 안내.
+  //   모든 사용자 (슈퍼어드민 포함) — 클릭하면 "판매가 끝난 티켓입니다" 팝업 후 차단.
+  //   슈퍼어드민 티켓 수정/삭제는 티켓 관리 화면(tuScreen)에서 별도 수행.
+  var _ticketExpired = (typeof _isTicketExpired === 'function') && _isTicketExpired(t);
+  if (_ticketExpired || t.status === 'soldout') {
+    var _deadMsg = (t.status === 'soldout')
+      ? '매진되어 판매가 끝난 티켓입니다'
+      : '예약 기한이 지나 판매가 끝난 티켓입니다';
+    if (typeof showToast === 'function') showToast('🔒','판매 종료', _deadMsg);
+    else alert('판매가 끝난 티켓입니다');
     return;
   }
 
@@ -24977,20 +24982,22 @@ function _ticketCardHtml(t,r){
   }
 
   // 사진 영역 — 16:10 비율 (글래스 케이스 안)
-  h+='<div style="aspect-ratio:16/10;'+bg+'overflow:hidden;position:relative;border-radius:14px;">';
+  // 🆕 v1.53.8 2026.05.28: isDead(매진/만료) 시 ★사진 레이어만★ 블러 — 배지 글씨는 선명 유지.
+  //   기존엔 backdrop-filter 오버레이가 배지까지 흐리게 만들어 상태 식별 불가했음.
+  h+='<div style="aspect-ratio:16/10;overflow:hidden;position:relative;border-radius:14px;background:#1c1c1c;">';
+  // 사진 레이어 (만료/매진이면 블러 + 어둡게. scale 로 블러 가장자리 빈틈 가림)
+  h+='<div style="position:absolute;inset:0;'+bg+(isDead?'filter:blur(5px) brightness(.5);transform:scale(1.08);':'')+'"></div>';
 
   // 카드 썸네일은 사진만 — 여러 영상 동시재생 시 정신없음 방지
   // 영상은 티켓 상세(풀화면) 진입 시에만 재생됨
 
-  // 매진 오버레이
+  // 매진 / 기한만료 배지 (블러 레이어 위 — 글씨 선명)
   if(isSoldOut){
-    h+='<div style="position:absolute;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);z-index:2;"></div>';
-    h+='<div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-family:\'Montserrat\',sans-serif;font-size:13px;font-weight:900;letter-spacing:.2em;color:#fff;text-transform:uppercase;white-space:nowrap;border:1.5px solid rgba(255,255,255,.9);padding:5px 14px;border-radius:4px;z-index:3;">SOLD OUT</div>';
+    h+='<div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-family:\'Montserrat\',sans-serif;font-size:14px;font-weight:900;letter-spacing:.2em;color:#fff;text-transform:uppercase;white-space:nowrap;border:1.5px solid rgba(255,255,255,.95);padding:7px 18px;border-radius:5px;z-index:4;background:rgba(0,0,0,.4);box-shadow:0 2px 14px rgba(0,0,0,.6);">SOLD OUT</div>';
   } else if(isExpired){
-    // 🆕 v1.53.7 2026.05.28: 기한 만료 오버레이 (매진 아닌데 날짜 지남)
+    // 🆕 v1.53.8: 기한 만료 배지 (날짜 지남, 매진 아님)
     var _expLabel = _cIsEn ? 'EXPIRED' : (_cIsJa ? '受付終了' : '기한 만료');
-    h+='<div style="position:absolute;inset:0;background:rgba(0,0,0,.62);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);z-index:2;"></div>';
-    h+='<div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-family:\'Montserrat\',\'Noto Sans KR\',\'Noto Sans JP\',sans-serif;font-size:12px;font-weight:900;letter-spacing:.18em;color:rgba(255,255,255,.82);text-transform:uppercase;white-space:nowrap;border:1.5px solid rgba(255,255,255,.45);padding:5px 14px;border-radius:4px;z-index:3;">'+_expLabel+'</div>';
+    h+='<div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-family:\'Montserrat\',\'Noto Sans KR\',\'Noto Sans JP\',sans-serif;font-size:14px;font-weight:900;letter-spacing:.18em;color:#fff;text-transform:uppercase;white-space:nowrap;border:1.5px solid rgba(255,255,255,.9);padding:7px 18px;border-radius:5px;z-index:4;background:rgba(0,0,0,.4);box-shadow:0 2px 14px rgba(0,0,0,.6);">'+_expLabel+'</div>';
   }
   // 잠금 오버레이
   var isLocked=(t.gradeOpen&&tcIsLocked(t));

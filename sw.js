@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.8';  // 1.53.8 — 2026.05.28: 티켓 만료 판단 버그 fix — t.date/deadlineDate 가 "MM.DD" 문자열이라 new Date("05.30")=Invalid Date 였음. t.date 직접 파싱(split '.')으로 변경 + 만료 기준을 방문일(t.date)로 통일 (deadlineDate 는 카운트다운용이라 미사용). 이제 EXPIRED/SOLD OUT 배지 + 클릭 차단 정상 작동.
-const STATIC_CACHE = 'taam-static-v1.53.8';
+const SW_VERSION = 'taam-sw-v1.53.9';  // 1.53.9 — 2026.05.28: 티켓 만료/매진 표시 개선 — ① 사진 레이어만 블러(filter:blur+scale), SOLD OUT/기한 만료 배지 글씨는 선명 유지 (기존 backdrop-filter 가 배지까지 흐리게 하던 문제). ② 클릭 차단을 모든 사용자(슈퍼어드민 포함)로 확대 — 만료/매진 클릭 시 "판매가 끝난 티켓입니다" 팝업 후 차단.
+const STATIC_CACHE = 'taam-static-v1.53.9';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
