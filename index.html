@@ -21292,36 +21292,30 @@ function homeToggleActiveOnly() {
   renderHomeTickets();
 }
 
-// 🆕 v1.53.7 2026.05.28: 티켓 예약 기한 만료 판단.
-//   deadlineDate (전체 날짜) 우선, 없으면 t.date(월.일) + t.time 으로 올해 기준 계산.
+// 🆕 v1.53.8 2026.05.28: 티켓 방문일(t.date) 기준 만료 판단.
+//   ★ t.date / t.deadlineDate 모두 "MM.DD" 문자열 (예: "05.30") 이므로
+//     new Date("05.30") 는 Invalid Date → 직접 파싱해야 함 (v1.53.7 버그 원인).
+//   ★ 만료 기준은 방문일(t.date) — deadlineDate 는 예약마감 카운트다운용 별개 값이라 사용 안 함.
 //   연말/연초 경계: 월.일이 6개월 이상 과거면 내년으로 해석 (식당 예약은 미래 지향).
 function _isTicketExpired(t){
-  if(!t) return false;
-  var deadline = null;
-  if(t.deadlineDate){
-    deadline = new Date(t.deadlineDate);
-  } else if(t.date){
-    var p = String(t.date).split('.');
-    if(p.length === 2){
-      var now = new Date();
-      var m = parseInt(p[0],10), d = parseInt(p[1],10);
-      if(!isNaN(m) && !isNaN(d)){
-        var hh = 23, mm = 59;
-        if(t.time && String(t.time).indexOf(':') >= 0){
-          var tp = String(t.time).split(':');
-          hh = parseInt(tp[0],10); if(isNaN(hh)) hh = 23;
-          mm = parseInt(tp[1],10); if(isNaN(mm)) mm = 59;
-        }
-        deadline = new Date(now.getFullYear(), m-1, d, hh, mm, 0);
-        // 6개월 이상 과거면 내년으로 해석 (연말/연초 경계)
-        var sixMonthsAgo = new Date(now.getTime() - 1000*60*60*24*180);
-        if(deadline < sixMonthsAgo){
-          deadline = new Date(now.getFullYear()+1, m-1, d, hh, mm, 0);
-        }
-      }
-    }
+  if(!t || !t.date) return false;
+  var p = String(t.date).split('.');
+  if(p.length !== 2) return false;
+  var m = parseInt(p[0],10), d = parseInt(p[1],10);
+  if(isNaN(m) || isNaN(d)) return false;
+  var now = new Date();
+  var hh = 23, mm = 59;
+  if(t.time && String(t.time).indexOf(':') >= 0){
+    var tp = String(t.time).split(':');
+    var _h = parseInt(tp[0],10); if(!isNaN(_h)) hh = _h;
+    var _m = parseInt(tp[1],10); if(!isNaN(_m)) mm = _m;
   }
-  if(!deadline || isNaN(deadline.getTime())) return false;
+  var deadline = new Date(now.getFullYear(), m-1, d, hh, mm, 0);
+  // 6개월 이상 과거면 내년으로 해석 (연말/연초 경계)
+  var sixMonthsAgo = new Date(now.getTime() - 1000*60*60*24*180);
+  if(deadline < sixMonthsAgo){
+    deadline = new Date(now.getFullYear()+1, m-1, d, hh, mm, 0);
+  }
   return deadline.getTime() < Date.now();
 }
 window._isTicketExpired = _isTicketExpired;
