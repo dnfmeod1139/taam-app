@@ -12076,6 +12076,42 @@ function adgSelectUser(userId){
 }
 window.adgSelectUser = adgSelectUser;
 
+// 🆕 v1.53.6 2026.05.28: 슈퍼어드민 본인 계좌 빠른 선택 — 검색 없이 자기 계좌에 예치금 부여.
+//   RLS 정책상 super_admin 은 자기 profile UPDATE + 자기 명의 transaction INSERT 모두 허용됨.
+//   본인 profile 을 fetch 해서 검색 결과 흐름(adgSelectUser)을 그대로 재사용.
+async function adgSelectMyself(){
+  if(!_adgIsSuperAdmin()){
+    if(typeof showToast === 'function') showToast('🔒','권한 부족','슈퍼어드민 전용 기능');
+    return;
+  }
+  if(!window.sb){ alert('Supabase 미연결'); return; }
+  try {
+    var authRes = await window.sb.auth.getUser();
+    var me = authRes && authRes.data && authRes.data.user;
+    if(!me || !me.id){
+      if(typeof showToast === 'function') showToast('⚠','로그인 필요','다시 로그인해주세요');
+      return;
+    }
+    var selRes = await window.sb
+      .from('profiles')
+      .select('id, display_name, display_name_en, phone, email, membership_deposit_balance, general_deposit_balance, granted_membership_balance, granted_general_balance, charged_membership_balance, charged_general_balance, role')
+      .eq('id', me.id)
+      .single();
+    if(selRes.error || !selRes.data){
+      if(typeof showToast === 'function') showToast('⚠','내 프로필 조회 실패', (selRes.error && selRes.error.message) || '프로필 없음');
+      return;
+    }
+    // 검색 결과 흐름 재사용 — _adgSearchResultsData 에 본인 단일 row 넣고 adgSelectUser 호출
+    window._adgSearchResultsData = [selRes.data];
+    adgSelectUser(me.id);
+    if(typeof showToast === 'function') showToast('✓','내 계좌 선택됨','② 금액 입력 후 부여하세요');
+  } catch(e){
+    console.error('[adgSelectMyself]', e);
+    if(typeof showToast === 'function') showToast('⚠','오류', (e && e.message) || String(e));
+  }
+}
+window.adgSelectMyself = adgSelectMyself;
+
 // 🆕 2026.05.21: 회원 통합 거래 내역 로드 + 표시
 //   deposit_transactions 테이블에서 충전/구매/환불/부여/차감 모두 한 번에 가져옴
 async function _adgLoadTransactions(userId, anchorEl){
@@ -32642,8 +32678,13 @@ IDB.get('splashSettings').then(function(s) {
     <!-- ═══ 탭 1: 부여 / 차감 작업 ═══ (탭 영역은 flex:1 + 자체 스크롤) -->
     <div id="adgTabAction" style="flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;min-height:0;">
 
+    <!-- 🆕 v1.53.6 2026.05.28: 슈퍼어드민 본인 계좌 빠른 선택 (검색 없이) -->
+    <button onclick="adgSelectMyself()" style="width:100%;padding:12px;margin-bottom:14px;background:linear-gradient(135deg,#5C0A14,#9c1b2e);color:#fff;border:1px solid rgba(200,169,110,.5);border-radius:8px;font-weight:700;cursor:pointer;font-size:12.5px;letter-spacing:.04em;display:flex;align-items:center;justify-content:center;gap:6px;">
+      💰 내 계좌에 바로 부여 (슈퍼어드민 본인)
+    </button>
+
     <!-- 1단계: 사용자 검색 -->
-    <div style="font-size:11px;color:#666;margin-bottom:8px;font-weight:700;letter-spacing:.05em;" data-i18n="admin.deposit_grant_search_label">① 사용자 검색</div>
+    <div style="font-size:11px;color:#666;margin-bottom:8px;font-weight:700;letter-spacing:.05em;" data-i18n="admin.deposit_grant_search_label">① 사용자 검색 (또는 위에서 본인 선택)</div>
     <div style="display:flex;gap:8px;margin-bottom:8px;">
       <input type="text" id="adgSearchInput" placeholder="이름·전화·이메일 (2자 이상)" onkeydown="if(event.key==='Enter')adgSearchUsers()" style="flex:1;padding:11px 13px;border:1.5px solid #e0ddd8;border-radius:8px;font-size:13px;outline:none;font-family:inherit;">
       <button onclick="adgSearchUsers()" style="padding:11px 18px;background:#1a1a18;color:#fff;border:none;border-radius:8px;font-weight:700;cursor:pointer;font-size:12px;letter-spacing:.05em;" data-i18n="admin.deposit_grant_search_btn">검색</button>
