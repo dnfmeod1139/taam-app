@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.9';  // 1.53.9 — 2026.05.28: 티켓 만료/매진 표시 개선 — ① 사진 레이어만 블러(filter:blur+scale), SOLD OUT/기한 만료 배지 글씨는 선명 유지 (기존 backdrop-filter 가 배지까지 흐리게 하던 문제). ② 클릭 차단을 모든 사용자(슈퍼어드민 포함)로 확대 — 만료/매진 클릭 시 "판매가 끝난 티켓입니다" 팝업 후 차단.
-const STATIC_CACHE = 'taam-static-v1.53.9';
+const SW_VERSION = 'taam-sw-v1.53.10';  // 1.53.10 — 2026.05.28: 티켓 상태 배지 영어 통일 (SOLD OUT / EXPIRED — 언어 무관) + 뚜렷한 흰색 → 연한 회색 톤 (color rgba(255,255,255,.6), border .3, 폰트 800).
+const STATIC_CACHE = 'taam-static-v1.53.10';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
