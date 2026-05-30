@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.13';  // 1.53.13 — 2026.05.28: 티켓 회원 접근 제어 Step 2/3 — 화이트(자격자만 보임)/블랙(차단) 리스트. ticket_access_lists 캐시 로드 + _ticketAccessOk 가드 (renderTicketGenres 필터 + openTicketDetail 차단). 슈퍼어드민/레스토랑 어드민 마이페이지에 "🎫 티켓 회원 접근 제어" 모달 — 티켓 선택 → 회원 검색·추가/제거. 추가 SQL: ticket_ids_with_allowlist RPC (회원 ID 비공개).
-const STATIC_CACHE = 'taam-static-v1.53.13';
+const SW_VERSION = 'taam-sw-v1.53.14';  // 1.53.14 — 2026.05.28: 티켓 화이트리스트 추가 시 자동 푸시 알림 — tamAddAccess 가 allow insert 후 send-push Edge Function 호출 (to:'uid:<userId>'). 메시지: "🎫 [매장] (날짜) 전용 티켓 — 지금 확인하세요". 블랙리스트는 알림 없음. push_subscriptions 없는 회원은 Edge Function 측 자동 skip.
+const STATIC_CACHE = 'taam-static-v1.53.14';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);

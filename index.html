@@ -12848,6 +12848,45 @@ async function tamAddAccess(userId, type){
       return;
     }
     if(typeof showToast === 'function') showToast('✓','추가 완료', (type==='allow'?'화이트':'블랙')+'리스트에 추가됨');
+
+    // 🆕 v1.53.14 2026.05.28: 화이트리스트 추가 시 자동 푸시 알림.
+    //   블랙리스트는 부정적 알림이라 보내지 않음.
+    //   send-push Edge Function 호출 — to:'uid:<userId>'.
+    //   push_subscriptions 없는 회원은 Edge Function 이 자동 skip.
+    if(type === 'allow'){
+      try {
+        var t = (ticketDB || []).find(function(x){ return String(x.id) === String(_tamSelectedTicketId); });
+        var r = t ? (restaurantDB || []).find(function(x){ return String(x.id) === String(t.restId); }) : null;
+        var restName = (r && r.name) || (t && t.rest) || '레스토랑';
+        var dateStr = '';
+        if(t && t.date){
+          var dp = String(t.date).split('.');
+          if(dp.length === 2) dateStr = parseInt(dp[0],10)+'/'+parseInt(dp[1],10);
+          if(t.time) dateStr += ' ' + t.time;
+        }
+        var bodyText = '🎫 ' + restName + (dateStr ? ' ('+dateStr+')' : '') + ' 전용 티켓 — 지금 확인하세요';
+        window.sb.functions.invoke('send-push', {
+          body: {
+            to: 'uid:' + userId,
+            payload: {
+              title: 'TAAM 전용 티켓 초대',
+              body: bodyText,
+              url: '/',
+              category: 'ticket_invite',
+              tag: 'taam-invite-' + _tamSelectedTicketId
+            }
+          }
+        }).then(function(pres){
+          if(pres && pres.error){
+            console.warn('[push] send-push error:', pres.error.message || pres.error);
+          } else {
+            console.log('[push] 전용 티켓 초대 알림 전송 →', userId);
+            if(typeof showToast === 'function') showToast('🔔','푸시 발송','초대 알림 전송됨 (구독 회원만 수신)');
+          }
+        }).catch(function(pe){ console.warn('[push] invoke 실패:', pe); });
+      } catch(_pe){ console.warn('[push] 준비 실패:', _pe); }
+    }
+
     // 다시 fetch 해서 패널 갱신
     tamSelectTicket(_tamSelectedTicketId);
     // 검색 결과도 새로고침
