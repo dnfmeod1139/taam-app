@@ -6658,6 +6658,24 @@ window.closePromoCarousel = function(){
       <span class="mp-phone-badge unverified" id="mpPhoneBadge" onclick="openPhoneVerify()" data-i18n="my_page.verify">인증하기</span>
     </div>
 
+    <!-- 🆕 v1.53.11 2026.05.28: 회원 가입일 / 종료일 표시 (profiles.created_at, profiles.member_until) -->
+    <div id="mpMembershipPeriod" style="margin:14px 28px 6px;padding:12px 14px;background:#fbf9f5;border:1px solid #ece8df;border-radius:10px;display:flex;align-items:center;justify-content:space-between;gap:12px;">
+      <div style="flex:1;min-width:0;">
+        <div style="font-family:var(--font-main);font-size:9.5px;font-weight:700;color:#999;letter-spacing:.12em;text-transform:uppercase;margin-bottom:4px;">회원 자격</div>
+        <div style="display:flex;gap:14px;flex-wrap:wrap;">
+          <div>
+            <div style="font-family:var(--font-main);font-size:9px;color:#aaa;letter-spacing:.05em;">가입일</div>
+            <div id="mpMemberJoinDate" style="font-family:'Oswald','Noto Sans KR','Noto Sans JP',sans-serif;font-size:13.5px;font-weight:600;color:#1a1a18;letter-spacing:.02em;">—</div>
+          </div>
+          <div>
+            <div style="font-family:var(--font-main);font-size:9px;color:#aaa;letter-spacing:.05em;">종료일</div>
+            <div id="mpMemberUntilDate" style="font-family:'Oswald','Noto Sans KR','Noto Sans JP',sans-serif;font-size:13.5px;font-weight:600;color:#5C0A14;letter-spacing:.02em;">—</div>
+          </div>
+        </div>
+        <div id="mpMemberPromoLabel" style="font-family:var(--font-main);font-size:9.5px;color:#c8a96e;font-weight:600;margin-top:5px;letter-spacing:.04em;display:none;">★ 프로모션 적용 (~2027.12.31)</div>
+      </div>
+    </div>
+
     <!-- Deposit -->
     <div class="mp-deposit-section-label" data-i18n="my_page.deposit_section">예치금</div>
     <div class="mp-deposit-block" style="margin-top:10px;">
@@ -7481,6 +7499,14 @@ window.closePromoCarousel = function(){
     <div style="border-top:1px solid rgba(0,0,0,.08);">
       <div class="admin-menu-item" onclick="openSubPage('memberListScreen')">
         <div><div class="admin-menu-text" data-i18n="admin.member_list">회원 목록</div></div>
+        <div class="admin-arrow">›</div>
+      </div>
+      <!-- 🆕 v1.53.11 2026.05.28: 회원 멤버십 만료일 관리 (profiles 기반) -->
+      <div class="admin-menu-item" onclick="openMembershipUntilMgmt()">
+        <div>
+          <div class="admin-menu-text">📅 회원 멤버십 만료일 관리</div>
+          <div class="admin-menu-sub">전체 가입자 가입일/종료일 확인 + 종료일 수정 (프로모션 기본 2027.12.31)</div>
+        </div>
         <div class="admin-arrow">›</div>
       </div>
       <div class="admin-menu-item" onclick="openSubPage('inviteCodeScreen')">
@@ -11764,8 +11790,9 @@ function _refreshMyPageUserName(){
         if(emailEl) emailEl.textContent = authEmail;
       }
       // 2차: profiles 테이블 fetch → 최신 값 적용
+      // 🆕 v1.53.11 2026.05.28: created_at, member_until 도 함께 fetch (회원 자격 기간 표시)
       window.sb.from('profiles')
-        .select('display_name, phone, email')
+        .select('display_name, phone, email, created_at, member_until')
         .eq('id', userId)
         .single()
         .then(function(profRes){
@@ -11784,12 +11811,46 @@ function _refreshMyPageUserName(){
               var emailEl2 = document.getElementById('mpUserEmailText');
               if(emailEl2) emailEl2.textContent = profRes.data.email;
             }
+            // 🆕 v1.53.11 2026.05.28: 회원 가입일 + 종료일 표시
+            try {
+              if(typeof _applyMembershipPeriodToUI === 'function'){
+                _applyMembershipPeriodToUI(profRes.data.created_at, profRes.data.member_until);
+              }
+            } catch(_pe){ console.warn('[membership period]', _pe); }
           }
         })
         .catch(function(e){ console.warn('[mpUserName] profile fetch 실패:', e && e.message); });
     });
   } catch(e) { console.warn('[mpUserName] auth.getUser 예외:', e); }
 }
+
+// 🆕 v1.53.11 2026.05.28: 회원 가입일/종료일 마이페이지 표시.
+//   - createdAt: profiles.created_at (ISO timestamp)
+//   - memberUntil: profiles.member_until (ISO timestamp)
+//   - 프로모션 기준: member_until 이 2027-12-31 23:59 (한국시간) 이면 라벨 표시
+function _applyMembershipPeriodToUI(createdAt, memberUntil){
+  function _fmt(iso){
+    if(!iso) return '—';
+    var d = new Date(iso);
+    if(isNaN(d.getTime())) return '—';
+    return d.getFullYear() + '.' + String(d.getMonth()+1).padStart(2,'0') + '.' + String(d.getDate()).padStart(2,'0');
+  }
+  var joinEl = document.getElementById('mpMemberJoinDate');
+  var untilEl = document.getElementById('mpMemberUntilDate');
+  var promoEl = document.getElementById('mpMemberPromoLabel');
+  if(joinEl)  joinEl.textContent  = _fmt(createdAt);
+  if(untilEl) untilEl.textContent = _fmt(memberUntil);
+  // 프로모션 라벨 — 종료일이 2027.12.31 이면 표시
+  if(promoEl){
+    var isPromo = false;
+    if(memberUntil){
+      var du = new Date(memberUntil);
+      isPromo = du.getFullYear() === 2027 && du.getMonth() === 11 && du.getDate() === 31;
+    }
+    promoEl.style.display = isPromo ? 'block' : 'none';
+  }
+}
+window._applyMembershipPeriodToUI = _applyMembershipPeriodToUI;
 
 // 🆕 사용자 이름을 마이페이지 + 관련 UI 에 일괄 적용
 function _applyUserNameToUI(name){
@@ -12395,6 +12456,159 @@ async function adminGrantDeposit(targetUserId, amount, depositType, description)
   return { newBalance: newBalance, previousBalance: currentBalance };
 }
 window.adminGrantDeposit = adminGrantDeposit;
+
+// ════════════════════════════════════════════════════════════════
+// 🆕 v1.53.11 2026.05.28: 회원 멤버십 만료일 관리 (슈퍼어드민 전용)
+// ────────────────────────────────────────────────────────────────
+// profiles.member_until 컬럼 — 회원 자격 종료일.
+// 프로모션: 2026-12-31 이전 가입 → 2027-12-31 (DB 트리거 자동 설정).
+// 슈퍼어드민이 개별 수정 가능. RLS "super_admin can update any profile balance"
+// 정책이 컬럼 제한 없이 update 허용 → member_until 도 super_admin 만 변경 가능.
+// ════════════════════════════════════════════════════════════════
+var _muAllProfiles = [];
+
+async function openMembershipUntilMgmt(){
+  if(typeof _isSuperAdmin === 'function' && !_isSuperAdmin()){
+    if(typeof showToast === 'function') showToast('🔒','권한 부족','슈퍼어드민 전용 기능');
+    return;
+  }
+  var modal = document.getElementById('membershipUntilMgmtModal');
+  if(!modal){ console.warn('[mu] modal not found'); return; }
+  modal.style.display = 'flex';
+  var sInp = document.getElementById('muSearchInput');
+  if(sInp) sInp.value = '';
+  var container = document.getElementById('muListContainer');
+  if(container) container.innerHTML = '<div style="text-align:center;color:#999;font-size:11px;padding:30px;">불러오는 중...</div>';
+  if(!window.sb){
+    if(container) container.innerHTML = '<div style="padding:20px;color:#c00;font-size:11px;">Supabase 미연결</div>';
+    return;
+  }
+  try {
+    var res = await window.sb.from('profiles')
+      .select('id, display_name, phone, email, created_at, member_until, role')
+      .order('created_at', { ascending: false })
+      .limit(500);
+    if(res.error){
+      if(container) container.innerHTML = '<div style="padding:20px;color:#c00;font-size:11px;">조회 실패: '+res.error.message+'</div>';
+      return;
+    }
+    _muAllProfiles = res.data || [];
+    renderMembershipUntilList();
+  } catch(e){
+    if(container) container.innerHTML = '<div style="padding:20px;color:#c00;font-size:11px;">오류: '+((e&&e.message)||String(e))+'</div>';
+  }
+}
+window.openMembershipUntilMgmt = openMembershipUntilMgmt;
+
+function closeMembershipUntilMgmt(){
+  var modal = document.getElementById('membershipUntilMgmtModal');
+  if(modal) modal.style.display = 'none';
+}
+window.closeMembershipUntilMgmt = closeMembershipUntilMgmt;
+
+function renderMembershipUntilList(){
+  var container = document.getElementById('muListContainer');
+  var stats = document.getElementById('muStatsLine');
+  if(!container) return;
+  var q = ((document.getElementById('muSearchInput')||{}).value || '').trim().toLowerCase();
+  var list = _muAllProfiles.filter(function(r){
+    if(!q) return true;
+    return (r.display_name && String(r.display_name).toLowerCase().indexOf(q)>=0)
+        || (r.phone && String(r.phone).toLowerCase().indexOf(q)>=0)
+        || (r.email && String(r.email).toLowerCase().indexOf(q)>=0);
+  });
+  var promoCnt = 0;
+  list.forEach(function(r){
+    if(r.member_until){
+      var du = new Date(r.member_until);
+      if(!isNaN(du.getTime()) && du.getFullYear()===2027 && du.getMonth()===11 && du.getDate()===31) promoCnt++;
+    }
+  });
+  if(stats) stats.textContent = '전체 ' + _muAllProfiles.length + '명 · 표시 ' + list.length + '명 · 프로모션 ' + promoCnt + '명';
+  if(list.length === 0){
+    container.innerHTML = '<div style="text-align:center;color:#999;font-size:11px;padding:30px;">결과 없음</div>';
+    return;
+  }
+  function _fmt(iso){
+    if(!iso) return '—';
+    var d = new Date(iso);
+    if(isNaN(d.getTime())) return '—';
+    return d.getFullYear()+'.'+String(d.getMonth()+1).padStart(2,'0')+'.'+String(d.getDate()).padStart(2,'0');
+  }
+  function _esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
+  function _isoForInput(iso){
+    if(!iso) return '';
+    var d = new Date(iso);
+    if(isNaN(d.getTime())) return '';
+    return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  }
+  container.innerHTML = list.map(function(r){
+    var isPromo = false;
+    if(r.member_until){
+      var du = new Date(r.member_until);
+      isPromo = !isNaN(du.getTime()) && du.getFullYear()===2027 && du.getMonth()===11 && du.getDate()===31;
+    }
+    var role = r.role || 'member';
+    var roleBg = '#999', roleLabel = '회원';
+    if(role==='super_admin'||role==='superadmin'){ roleBg='#9B1C1C'; roleLabel='슈퍼'; }
+    else if(role==='admin'){ roleBg='#d4a017'; roleLabel='관리자'; }
+    else if(role==='partner'){ roleBg='#2a6a2a'; roleLabel='파트너'; }
+    return '<div style="padding:14px;margin-bottom:10px;border:1px solid #ece8df;border-radius:10px;background:#fff;">'
+      + '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">'
+        + '<div style="font-size:14px;font-weight:800;color:#1a1a18;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+_esc(r.display_name||'(이름 없음)')+'</div>'
+        + '<div style="font-size:9px;font-weight:700;color:#fff;background:'+roleBg+';padding:3px 8px;border-radius:9px;letter-spacing:.05em;flex-shrink:0;">'+roleLabel+'</div>'
+      + '</div>'
+      + '<div style="font-size:11px;color:#666;margin-bottom:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+_esc(r.phone||r.email||'—')+'</div>'
+      + '<div style="display:flex;gap:14px;font-size:11.5px;color:#444;padding:8px 10px;background:#fbf9f5;border-radius:7px;flex-wrap:wrap;">'
+        + '<div><span style="color:#aaa;font-size:9.5px;letter-spacing:.05em;">가입일</span><br><b style="font-family:Oswald,sans-serif;color:#1a1a18;font-size:13px;">'+_fmt(r.created_at)+'</b></div>'
+        + '<div><span style="color:#aaa;font-size:9.5px;letter-spacing:.05em;">종료일</span><br><b style="font-family:Oswald,sans-serif;color:#5C0A14;font-size:13px;">'+_fmt(r.member_until)+'</b>'+(isPromo?' <span style="color:#c8a96e;font-size:9.5px;">★프로모션</span>':'')+'</div>'
+      + '</div>'
+      + '<div style="display:flex;gap:8px;margin-top:10px;align-items:center;">'
+        + '<input type="date" id="muDate_'+_esc(r.id)+'" value="'+_isoForInput(r.member_until)+'" style="flex:1;padding:8px 10px;border:1px solid #ddd;border-radius:6px;font-size:12px;font-family:inherit;">'
+        + '<button onclick="saveMemberUntil(\''+_esc(r.id)+'\')" style="padding:8px 14px;background:#1a1a18;color:#fff;border:none;border-radius:6px;font-weight:700;font-size:11.5px;cursor:pointer;letter-spacing:.04em;">변경</button>'
+      + '</div>'
+    + '</div>';
+  }).join('');
+}
+window.renderMembershipUntilList = renderMembershipUntilList;
+
+async function saveMemberUntil(userId){
+  if(!window.sb || !userId) return;
+  var inp = document.getElementById('muDate_'+userId);
+  if(!inp || !inp.value){
+    if(typeof showToast === 'function') showToast('⚠','날짜 누락','종료일을 선택해주세요');
+    return;
+  }
+  // 종료일 = 입력 날짜의 23:59:59 (한국시간 +09:00)
+  var newDate = inp.value + 'T23:59:59+09:00';
+  try {
+    var res = await window.sb.from('profiles')
+      .update({ member_until: newDate })
+      .eq('id', userId)
+      .select('member_until');
+    if(res.error){
+      if(typeof showToast === 'function') showToast('⚠','저장 실패', res.error.message);
+      return;
+    }
+    if(!res.data || res.data.length === 0){
+      if(typeof showToast === 'function') showToast('⚠','RLS 차단','변경된 row 0개 — is_super_admin() 정책 점검');
+      return;
+    }
+    // 로컬 캐시 갱신
+    for(var i=0; i<_muAllProfiles.length; i++){
+      if(_muAllProfiles[i].id === userId){
+        _muAllProfiles[i].member_until = res.data[0].member_until;
+        break;
+      }
+    }
+    if(typeof showToast === 'function') showToast('✓','종료일 변경 완료', inp.value);
+    renderMembershipUntilList();
+  } catch(e){
+    console.error('[saveMemberUntil]', e);
+    if(typeof showToast === 'function') showToast('⚠','오류', (e && e.message) || String(e));
+  }
+}
+window.saveMemberUntil = saveMemberUntil;
 
 // ════════════════════════════════════════════════
 // CAROUSEL
@@ -32705,6 +32919,28 @@ IDB.get('splashSettings').then(function(s) {
 <!-- ════════════════════════════════════════════════════════════════
      🆕 2026.05.15: 슈퍼어드민 — 회원/관리자 예치금 부여 / 차감 모달
      ════════════════════════════════════════════════════════════════ -->
+<!-- 🆕 v1.53.11 2026.05.28: 회원 멤버십 만료일 관리 모달 (슈퍼어드민 전용)
+     profiles.member_until 컬럼을 슈퍼어드민이 직접 수정. RLS 정책 "super_admin can update any profile balance" 가 모든 컬럼 update 허용. -->
+<div id="membershipUntilMgmtModal" style="display:none;position:fixed;inset:0;z-index:9100;background:rgba(0,0,0,.65);align-items:flex-end;justify-content:center;-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);" data-lang-lock="ko" onclick="if(event.target===this)closeMembershipUntilMgmt()">
+  <div style="background:#fff;border-radius:18px 18px 0 0;width:100%;max-width:560px;max-height:92vh;display:flex;flex-direction:column;box-sizing:border-box;">
+    <div style="padding:20px 22px 14px;border-bottom:1px solid #f0f0f0;display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-shrink:0;">
+      <div>
+        <div style="font-family:var(--font-main);font-size:9px;font-weight:800;letter-spacing:.22em;color:#9B1C1C;text-transform:uppercase;">Super Admin Only</div>
+        <div style="font-size:17px;font-weight:800;color:#1a1a18;margin-top:6px;">📅 회원 멤버십 만료일 관리</div>
+        <div style="font-size:11px;color:#999;margin-top:4px;">전체 가입자 가입일/종료일 확인 · 종료일 변경 (프로모션 기본 2027.12.31)</div>
+      </div>
+      <button onclick="closeMembershipUntilMgmt()" style="background:none;border:none;cursor:pointer;font-size:22px;color:#999;padding:4px 8px;">✕</button>
+    </div>
+    <div style="padding:12px 22px 4px;flex-shrink:0;">
+      <input type="text" id="muSearchInput" placeholder="이름·전화·이메일 검색" oninput="renderMembershipUntilList()" style="width:100%;padding:11px 13px;border:1.5px solid #e0ddd8;border-radius:8px;font-size:13px;outline:none;box-sizing:border-box;font-family:inherit;">
+      <div id="muStatsLine" style="font-size:10.5px;color:#999;margin-top:6px;padding:0 2px;">—</div>
+    </div>
+    <div id="muListContainer" style="flex:1;overflow-y:auto;padding:8px 22px 24px;min-height:0;-webkit-overflow-scrolling:touch;">
+      <div style="text-align:center;color:#999;font-size:11px;padding:30px;">불러오는 중...</div>
+    </div>
+  </div>
+</div>
+
 <div id="adminDepositGrantModal" style="position:fixed;inset:0;z-index:9000;background:rgba(0,0,0,.55);display:none;align-items:flex-end;justify-content:center;">
   <div style="background:#fff;width:100%;max-width:480px;border-radius:18px 18px 0 0;padding:24px 22px 36px;height:88vh;max-height:88vh;display:flex;flex-direction:column;-webkit-overflow-scrolling:touch;box-sizing:border-box;">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:22px;flex-shrink:0;">

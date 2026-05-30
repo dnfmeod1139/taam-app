@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.10';  // 1.53.10 — 2026.05.28: 티켓 상태 배지 영어 통일 (SOLD OUT / EXPIRED — 언어 무관) + 뚜렷한 흰색 → 연한 회색 톤 (color rgba(255,255,255,.6), border .3, 폰트 800).
-const STATIC_CACHE = 'taam-static-v1.53.10';
+const SW_VERSION = 'taam-sw-v1.53.11';  // 1.53.11 — 2026.05.28: 회원 멤버십 만료일 기능 — profiles.member_until 컬럼 + 트리거 (2026 가입 = 프로모션 2027.12.31, 그 외 가입+1년). 마이페이지에 가입일/종료일 표시 + 프로모션 라벨. 슈퍼어드민 마이페이지 메뉴에 "📅 회원 멤버십 만료일 관리" — 전체 가입자 검색·조회·종료일 수정 모달. RLS 정책으로 super_admin 만 수정 가능.
+const STATIC_CACHE = 'taam-static-v1.53.11';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
