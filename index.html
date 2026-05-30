@@ -25315,32 +25315,82 @@ function memCalcStats(m) {
   };
 }
 
-function renderMemberList() {
+// 🆕 v1.53.12 2026.05.28: 회원 목록 = Supabase profiles 기반 (실제 가입자).
+//   기존엔 memberDB (IDB 로컬) 기반이라 슈퍼어드민이 수동 추가한 회원만 표시 →
+//   실제 가입자가 안 보이는 문제. profiles 직접 fetch 로 전환.
+//   카드 클릭 시 멤버십 만료일 관리 모달로 안내.
+async function renderMemberList() {
   var el = document.getElementById('memberListContent');
   if (!el) return;
-  if (memberDB.length === 0) {
-    el.innerHTML = '<div class="sub-empty">등록된 회원 없음</div>';
+  if (!window.sb) {
+    el.innerHTML = '<div class="sub-empty">Supabase 미연결</div>';
     return;
   }
-  el.innerHTML = memberDB.map(function(m) {
-    var stats = memCalcStats(m);
-    var gradeCls = (m.grade || 'T').toLowerCase();
-    var gradeLabel = m.grade === 'M' ? 'M' : 'T';
-    return '<div class="mem-card" onclick="memOpenDetail(\''+m.id+'\')">'
-      +'<div class="mem-card-top">'
-        +'<div class="mem-name">'+m.name+'</div>'
-        +'<div class="mem-grade '+gradeCls+'">'+gradeLabel+'</div>'
-      +'</div>'
-      +'<div class="mem-phone">'+(m.phone||'—')+'</div>'
-      +'<div class="mem-stats">'
-        +'<div class="mem-stat"><div class="mem-stat-val">'+stats.purchaseCount+'</div><div class="mem-stat-key">구매</div></div>'
-        +'<div class="mem-stat"><div class="mem-stat-val">'+stats.cancelCount+'</div><div class="mem-stat-key">취소</div></div>'
-        +'<div class="mem-stat"><div class="mem-stat-val">'+Math.round(stats.purchaseAmt/10000)+'만</div><div class="mem-stat-key">결제</div></div>'
-        +'<div class="mem-stat"><div class="mem-stat-val">'+Math.round(stats.returnAmt/10000)+'만</div><div class="mem-stat-key">반환</div></div>'
-      +'</div>'
-    +'</div>';
-  }).join('');
+  el.innerHTML = '<div class="sub-empty">불러오는 중...</div>';
+  try {
+    var res = await window.sb.from('profiles')
+      .select('id, display_name, phone, email, created_at, member_until, role, membership_deposit_balance, general_deposit_balance')
+      .order('created_at', { ascending: false })
+      .limit(500);
+    if (res.error) {
+      el.innerHTML = '<div class="sub-empty">조회 실패: ' + res.error.message + '</div>';
+      return;
+    }
+    var rows = res.data || [];
+    if (rows.length === 0) {
+      el.innerHTML = '<div class="sub-empty">가입된 회원 없음</div>';
+      return;
+    }
+    function _fmt(iso){
+      if(!iso) return '—';
+      var d = new Date(iso);
+      if(isNaN(d.getTime())) return '—';
+      return d.getFullYear()+'.'+String(d.getMonth()+1).padStart(2,'0')+'.'+String(d.getDate()).padStart(2,'0');
+    }
+    function _esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
+
+    el.innerHTML = rows.map(function(m){
+      var role = m.role || 'member';
+      var gradeCls, gradeLabel;
+      if (role==='super_admin'||role==='superadmin'){ gradeCls='m'; gradeLabel='슈퍼'; }
+      else if (role==='admin'){ gradeCls='t'; gradeLabel='관리자'; }
+      else if (role==='partner'){ gradeCls='t'; gradeLabel='파트너'; }
+      else { gradeCls='t'; gradeLabel='회원'; }
+      var memBal = (m.membership_deposit_balance||0);
+      var genBal = (m.general_deposit_balance||0);
+      // 프로모션 체크 (종료일 = 2027.12.31)
+      var isPromo = false;
+      if(m.member_until){
+        var du = new Date(m.member_until);
+        isPromo = !isNaN(du.getTime()) && du.getFullYear()===2027 && du.getMonth()===11 && du.getDate()===31;
+      }
+      var untilHtml = _fmt(m.member_until) + (isPromo ? ' <span style="color:#c8a96e;font-size:8px;letter-spacing:.05em;">★</span>' : '');
+      return '<div class="mem-card" onclick="memOpenProfileQuick(\''+_esc(m.id)+'\',\''+_esc(m.display_name||'')+'\')">'
+        +'<div class="mem-card-top">'
+          +'<div class="mem-name">'+_esc(m.display_name||'(이름 없음)')+'</div>'
+          +'<div class="mem-grade '+gradeCls+'">'+gradeLabel+'</div>'
+        +'</div>'
+        +'<div class="mem-phone">'+_esc(m.phone||m.email||'—')+'</div>'
+        +'<div class="mem-stats">'
+          +'<div class="mem-stat"><div class="mem-stat-val" style="font-size:11px;font-family:Oswald,sans-serif;">'+_fmt(m.created_at)+'</div><div class="mem-stat-key">가입일</div></div>'
+          +'<div class="mem-stat"><div class="mem-stat-val" style="font-size:11px;font-family:Oswald,sans-serif;color:#5C0A14;">'+untilHtml+'</div><div class="mem-stat-key">종료일</div></div>'
+          +'<div class="mem-stat"><div class="mem-stat-val">₩'+Math.round(memBal/10000)+'만</div><div class="mem-stat-key">멤버십금</div></div>'
+          +'<div class="mem-stat"><div class="mem-stat-val">₩'+Math.round(genBal/10000)+'만</div><div class="mem-stat-key">일반금</div></div>'
+        +'</div>'
+      +'</div>';
+    }).join('');
+  } catch(e) {
+    el.innerHTML = '<div class="sub-empty">오류: ' + ((e&&e.message)||String(e)) + '</div>';
+  }
 }
+
+// 🆕 v1.53.12: profiles 기반 회원 카드 클릭 시 안내 토스트 + 멤버십 만료일 관리로 유도
+function memOpenProfileQuick(userId, name){
+  if(typeof showToast === 'function'){
+    showToast('ℹ', name || '회원 선택됨', '만료일 변경: 📅 회원 멤버십 만료일 관리 / 예치금: 💰 예치금 부여');
+  }
+}
+window.memOpenProfileQuick = memOpenProfileQuick;
 
 function memOpenAdd() {
   _memEditId = null;

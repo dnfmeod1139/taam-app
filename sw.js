@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.11';  // 1.53.11 — 2026.05.28: 회원 멤버십 만료일 기능 — profiles.member_until 컬럼 + 트리거 (2026 가입 = 프로모션 2027.12.31, 그 외 가입+1년). 마이페이지에 가입일/종료일 표시 + 프로모션 라벨. 슈퍼어드민 마이페이지 메뉴에 "📅 회원 멤버십 만료일 관리" — 전체 가입자 검색·조회·종료일 수정 모달. RLS 정책으로 super_admin 만 수정 가능.
-const STATIC_CACHE = 'taam-static-v1.53.11';
+const SW_VERSION = 'taam-sw-v1.53.12';  // 1.53.12 — 2026.05.28: 회원 목록(memberListScreen) 을 profiles 기반으로 전환 — 기존엔 memberDB(IDB 로컬)라 실제 Supabase 가입자가 안 보였음. 카드에 이름/전화/가입일/종료일+프로모션★/멤버십금/일반금 표시. 카드 클릭 시 만료일 관리·예치금 부여 메뉴 안내 토스트.
+const STATIC_CACHE = 'taam-static-v1.53.12';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
