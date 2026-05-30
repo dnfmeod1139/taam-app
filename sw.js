@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.12';  // 1.53.12 — 2026.05.28: 회원 목록(memberListScreen) 을 profiles 기반으로 전환 — 기존엔 memberDB(IDB 로컬)라 실제 Supabase 가입자가 안 보였음. 카드에 이름/전화/가입일/종료일+프로모션★/멤버십금/일반금 표시. 카드 클릭 시 만료일 관리·예치금 부여 메뉴 안내 토스트.
-const STATIC_CACHE = 'taam-static-v1.53.12';
+const SW_VERSION = 'taam-sw-v1.53.13';  // 1.53.13 — 2026.05.28: 티켓 회원 접근 제어 Step 2/3 — 화이트(자격자만 보임)/블랙(차단) 리스트. ticket_access_lists 캐시 로드 + _ticketAccessOk 가드 (renderTicketGenres 필터 + openTicketDetail 차단). 슈퍼어드민/레스토랑 어드민 마이페이지에 "🎫 티켓 회원 접근 제어" 모달 — 티켓 선택 → 회원 검색·추가/제거. 추가 SQL: ticket_ids_with_allowlist RPC (회원 ID 비공개).
+const STATIC_CACHE = 'taam-static-v1.53.13';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);

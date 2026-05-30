@@ -7509,6 +7509,14 @@ window.closePromoCarousel = function(){
         </div>
         <div class="admin-arrow">›</div>
       </div>
+      <!-- 🆕 v1.53.13 2026.05.28: 티켓 화이트/블랙리스트 관리 -->
+      <div class="admin-menu-item" onclick="openTicketAccessMgmt()">
+        <div>
+          <div class="admin-menu-text">🎫 티켓 회원 접근 제어 (전용/차단)</div>
+          <div class="admin-menu-sub">특정 회원만 구매 가능(화이트) / 특정 회원 차단(블랙) 명단 관리</div>
+        </div>
+        <div class="admin-arrow">›</div>
+      </div>
       <div class="admin-menu-item" onclick="openSubPage('inviteCodeScreen')">
         <div><div class="admin-menu-text" data-i18n="admin.member_invite">📧 회원 초대</div><div class="admin-menu-sub" data-i18n="admin.member_invite_sub">신규 회원 초대 코드 발급 · 발송</div></div>
         <div class="admin-arrow">›</div>
@@ -12610,6 +12618,271 @@ async function saveMemberUntil(userId){
 }
 window.saveMemberUntil = saveMemberUntil;
 
+// ════════════════════════════════════════════════════════════════
+// 🆕 v1.53.13 2026.05.28: 티켓 회원 접근 제어 (화이트/블랙리스트) — 관리 모달
+// ────────────────────────────────────────────────────────────────
+// 슈퍼어드민 + 레스토랑 어드민이 사용. ticket_access_lists 에 insert/delete.
+// RLS 가 can_manage_ticket_access(ticket_id) 으로 가드 (admin/partner 통과).
+// ════════════════════════════════════════════════════════════════
+var _tamSelectedTicketId = null;
+var _tamAccessRows = []; // [{user_id, access_type, display_name, phone, email}]
+
+function _tamIsManager(){
+  return _currentRole === 'superadmin' || _currentRole === 'admin' || _currentRole === 'partner';
+}
+
+function openTicketAccessMgmt(){
+  if(!_tamIsManager()){
+    if(typeof showToast === 'function') showToast('🔒','권한 부족','슈퍼어드민 또는 레스토랑 어드민 전용');
+    return;
+  }
+  var modal = document.getElementById('ticketAccessMgmtModal');
+  if(!modal) return;
+  modal.style.display = 'flex';
+  _tamSelectedTicketId = null;
+  document.getElementById('tamTicketSearch').value = '';
+  document.getElementById('tamAccessPanel').style.display = 'none';
+  tamRenderTicketList();
+}
+window.openTicketAccessMgmt = openTicketAccessMgmt;
+
+function closeTicketAccessMgmt(){
+  var modal = document.getElementById('ticketAccessMgmtModal');
+  if(modal) modal.style.display = 'none';
+  _tamSelectedTicketId = null;
+  _tamAccessRows = [];
+}
+window.closeTicketAccessMgmt = closeTicketAccessMgmt;
+
+function tamRenderTicketList(){
+  var listEl = document.getElementById('tamTicketList');
+  if(!listEl) return;
+  var q = ((document.getElementById('tamTicketSearch')||{}).value || '').trim().toLowerCase();
+  // 레스토랑 어드민은 본인 매장만 보임
+  var list = (ticketDB || []).filter(function(t){
+    if(t.status === 'hidden' || t.status === 'pending' || t.status === 'deleteRequest') return false;
+    if(_currentRole === 'admin' && _currentAdminRestId && String(t.restId) !== String(_currentAdminRestId)) return false;
+    if(!q) return true;
+    var r = (restaurantDB || []).find(function(x){ return String(x.id)===String(t.restId); });
+    var hay = ((r&&r.name)||'') + ' ' + (t.date||'') + ' ' + (t.time||'') + ' ' + (t.type||'') + ' ' + (t.rest||'');
+    return hay.toLowerCase().indexOf(q) >= 0;
+  }).slice(0, 50);
+  if(list.length === 0){
+    listEl.innerHTML = '<div style="text-align:center;color:#999;font-size:11px;padding:20px;">티켓 없음</div>';
+    return;
+  }
+  function _esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
+  listEl.innerHTML = list.map(function(t){
+    var r = (restaurantDB || []).find(function(x){ return String(x.id)===String(t.restId); });
+    var nm = (r && r.name) || t.rest || '(매장 없음)';
+    var dtm = (t.date||'—') + ' ' + (t.time||'');
+    var isSel = String(t.id) === String(_tamSelectedTicketId);
+    return '<div onclick="tamSelectTicket(\''+_esc(t.id)+'\')" style="padding:10px 12px;margin-bottom:6px;border:1.5px solid '+(isSel?'#5C0A14':'#e8e4df')+';border-radius:8px;cursor:pointer;background:'+(isSel?'#fdf6f6':'#fff')+';">'
+      + '<div style="font-size:12.5px;font-weight:700;color:#1a1a18;">'+_esc(nm)+'</div>'
+      + '<div style="font-size:10.5px;color:#888;margin-top:3px;font-family:Oswald,sans-serif;">'+_esc(dtm)+' · '+_esc(t.type||'')+'</div>'
+    + '</div>';
+  }).join('');
+}
+window.tamRenderTicketList = tamRenderTicketList;
+
+async function tamSelectTicket(ticketId){
+  _tamSelectedTicketId = ticketId;
+  tamRenderTicketList(); // 선택 강조 재렌더
+  var panel = document.getElementById('tamAccessPanel');
+  if(!panel) return;
+  panel.style.display = 'block';
+  panel.innerHTML = '<div style="text-align:center;color:#999;font-size:11px;padding:20px;">불러오는 중...</div>';
+  if(!window.sb){
+    panel.innerHTML = '<div style="color:#c00;font-size:11px;padding:20px;">Supabase 미연결</div>';
+    return;
+  }
+  try {
+    // ticket_access_lists 본인이 들어있지 않아도 어드민이라 전체 SELECT 허용 (RLS 정책)
+    var res = await window.sb.from('ticket_access_lists')
+      .select('user_id, access_type')
+      .eq('ticket_id', String(ticketId));
+    if(res.error){
+      panel.innerHTML = '<div style="color:#c00;font-size:11px;padding:20px;">조회 실패: '+res.error.message+'</div>';
+      return;
+    }
+    var rows = res.data || [];
+    // user_id 들 → profiles 정보 조인
+    var ids = Array.from(new Set(rows.map(function(r){ return r.user_id; })));
+    var profileMap = {};
+    if(ids.length > 0){
+      var pres = await window.sb.from('profiles')
+        .select('id, display_name, phone, email')
+        .in('id', ids);
+      if(!pres.error && pres.data){
+        pres.data.forEach(function(p){ profileMap[p.id] = p; });
+      }
+    }
+    _tamAccessRows = rows.map(function(r){
+      var p = profileMap[r.user_id] || {};
+      return {
+        user_id: r.user_id,
+        access_type: r.access_type,
+        display_name: p.display_name || '(이름 없음)',
+        phone: p.phone || '',
+        email: p.email || ''
+      };
+    });
+    tamRenderAccessPanel();
+  } catch(e){
+    panel.innerHTML = '<div style="color:#c00;font-size:11px;padding:20px;">오류: '+((e&&e.message)||String(e))+'</div>';
+  }
+}
+window.tamSelectTicket = tamSelectTicket;
+
+function tamRenderAccessPanel(){
+  var panel = document.getElementById('tamAccessPanel');
+  if(!panel) return;
+  function _esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
+  var allows = _tamAccessRows.filter(function(r){ return r.access_type === 'allow'; });
+  var blocks = _tamAccessRows.filter(function(r){ return r.access_type === 'block'; });
+
+  function _renderRows(list, type){
+    if(list.length === 0) return '<div style="color:#aaa;font-size:11px;padding:8px 0;">명단 비어있음</div>';
+    return list.map(function(r){
+      return '<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #f5f3f0;">'
+        + '<div style="flex:1;min-width:0;">'
+          + '<div style="font-size:12px;font-weight:700;color:#1a1a18;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+_esc(r.display_name)+'</div>'
+          + '<div style="font-size:10px;color:#888;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+_esc(r.phone||r.email||'—')+'</div>'
+        + '</div>'
+        + '<button onclick="tamRemoveAccess(\''+_esc(r.user_id)+'\',\''+type+'\')" style="background:none;border:1px solid #ddd;color:#999;border-radius:5px;padding:4px 9px;cursor:pointer;font-size:11px;">✕ 제거</button>'
+      + '</div>';
+    }).join('');
+  }
+
+  panel.innerHTML =
+      '<div style="margin-bottom:18px;">'
+        + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">'
+          + '<div style="font-size:11px;font-weight:700;color:#5C0A14;letter-spacing:.05em;">🎫 화이트리스트 (이 명단만 구매 가능)</div>'
+          + '<button onclick="tamOpenAddMember(\'allow\')" style="background:#5C0A14;color:#fff;border:none;border-radius:6px;padding:6px 12px;font-size:11px;font-weight:700;cursor:pointer;">+ 회원 추가</button>'
+        + '</div>'
+        + _renderRows(allows, 'allow')
+      + '</div>'
+      + '<div style="margin-bottom:18px;padding-top:14px;border-top:1px solid #f0f0f0;">'
+        + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">'
+          + '<div style="font-size:11px;font-weight:700;color:#666;letter-spacing:.05em;">🚫 블랙리스트 (이 명단 차단)</div>'
+          + '<button onclick="tamOpenAddMember(\'block\')" style="background:#1a1a18;color:#fff;border:none;border-radius:6px;padding:6px 12px;font-size:11px;font-weight:700;cursor:pointer;">+ 회원 추가</button>'
+        + '</div>'
+        + _renderRows(blocks, 'block')
+      + '</div>'
+      + '<div style="font-size:10.5px;color:#999;padding:8px 0;">★ 화이트리스트 적용 시 명단에 없는 회원은 티켓 자체가 안 보입니다. 어드민은 모두 보임.</div>'
+      + '<div id="tamAddMemberSection" style="display:none;margin-top:14px;padding-top:14px;border-top:1px dashed #ddd;"></div>';
+}
+window.tamRenderAccessPanel = tamRenderAccessPanel;
+
+function tamOpenAddMember(type){
+  var sec = document.getElementById('tamAddMemberSection');
+  if(!sec) return;
+  sec.style.display = 'block';
+  var label = type === 'allow' ? '화이트리스트' : '블랙리스트';
+  sec.innerHTML =
+      '<div style="font-size:11px;font-weight:700;color:#1a1a18;margin-bottom:6px;">'+label+'에 추가할 회원 검색</div>'
+    + '<input type="text" id="tamSearchInput" placeholder="이름·전화·이메일 (2자 이상)" oninput="tamSearchUsers(\''+type+'\')" style="width:100%;padding:10px 12px;border:1.5px solid #e0ddd8;border-radius:7px;font-size:12.5px;outline:none;box-sizing:border-box;font-family:inherit;">'
+    + '<div id="tamSearchResults" style="max-height:200px;overflow-y:auto;margin-top:8px;"></div>';
+  setTimeout(function(){ var el=document.getElementById('tamSearchInput'); if(el) el.focus(); }, 60);
+}
+window.tamOpenAddMember = tamOpenAddMember;
+
+async function tamSearchUsers(type){
+  var inp = document.getElementById('tamSearchInput');
+  var results = document.getElementById('tamSearchResults');
+  if(!inp || !results) return;
+  var q = (inp.value || '').trim();
+  if(q.length < 2){ results.innerHTML = ''; return; }
+  if(!window.sb) return;
+  results.innerHTML = '<div style="padding:8px;color:#999;font-size:11px;">검색 중...</div>';
+  try {
+    q = q.replace(/[%_]/g, '\\$&');
+    var res = await window.sb.from('profiles')
+      .select('id, display_name, phone, email, role')
+      .or('display_name.ilike.%'+q+'%,phone.ilike.%'+q+'%,email.ilike.%'+q+'%')
+      .limit(15);
+    if(res.error){
+      results.innerHTML = '<div style="padding:8px;color:#c00;font-size:11px;">검색 실패: '+res.error.message+'</div>';
+      return;
+    }
+    var rows = res.data || [];
+    if(rows.length === 0){
+      results.innerHTML = '<div style="padding:8px;color:#999;font-size:11px;">결과 없음</div>';
+      return;
+    }
+    var existingIds = {};
+    _tamAccessRows.forEach(function(r){ if(r.access_type === type) existingIds[r.user_id] = true; });
+    function _esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
+    results.innerHTML = rows.map(function(u){
+      var already = existingIds[u.id];
+      var disabled = already ? 'disabled' : '';
+      var label = already ? '이미 추가됨' : '+ '+(type==='allow'?'화이트':'블랙');
+      return '<div style="display:flex;align-items:center;gap:8px;padding:8px 6px;border-bottom:1px solid #f5f3f0;">'
+        + '<div style="flex:1;min-width:0;">'
+          + '<div style="font-size:12px;font-weight:700;color:#1a1a18;">'+_esc(u.display_name||'(이름 없음)')+'</div>'
+          + '<div style="font-size:10px;color:#888;">'+_esc(u.phone||u.email||'—')+'</div>'
+        + '</div>'
+        + '<button '+disabled+' onclick="tamAddAccess(\''+_esc(u.id)+'\',\''+type+'\')" style="background:'+(already?'#ccc':'#1a1a18')+';color:#fff;border:none;border-radius:5px;padding:5px 10px;font-size:10.5px;font-weight:700;cursor:'+(already?'default':'pointer')+';">'+label+'</button>'
+      + '</div>';
+    }).join('');
+  } catch(e){
+    results.innerHTML = '<div style="padding:8px;color:#c00;font-size:11px;">오류: '+((e&&e.message)||String(e))+'</div>';
+  }
+}
+window.tamSearchUsers = tamSearchUsers;
+
+async function tamAddAccess(userId, type){
+  if(!_tamSelectedTicketId || !userId) return;
+  if(!window.sb) return;
+  try {
+    var authRes = await window.sb.auth.getUser();
+    var addedBy = (authRes && authRes.data && authRes.data.user) ? authRes.data.user.id : null;
+    var res = await window.sb.from('ticket_access_lists').insert({
+      ticket_id: String(_tamSelectedTicketId),
+      user_id: userId,
+      access_type: type,
+      added_by: addedBy
+    }).select('user_id, access_type');
+    if(res.error){
+      if(typeof showToast === 'function') showToast('⚠','저장 실패', res.error.message);
+      return;
+    }
+    if(typeof showToast === 'function') showToast('✓','추가 완료', (type==='allow'?'화이트':'블랙')+'리스트에 추가됨');
+    // 다시 fetch 해서 패널 갱신
+    tamSelectTicket(_tamSelectedTicketId);
+    // 검색 결과도 새로고침
+    var inp = document.getElementById('tamSearchInput');
+    if(inp && inp.value.length >= 2) tamSearchUsers(type);
+  } catch(e){
+    console.error('[tamAddAccess]', e);
+    if(typeof showToast === 'function') showToast('⚠','오류', (e && e.message) || String(e));
+  }
+}
+window.tamAddAccess = tamAddAccess;
+
+async function tamRemoveAccess(userId, type){
+  if(!_tamSelectedTicketId || !userId) return;
+  if(!window.sb) return;
+  if(typeof confirm === 'function' && !confirm('명단에서 제거할까요?')) return;
+  try {
+    var res = await window.sb.from('ticket_access_lists')
+      .delete()
+      .eq('ticket_id', String(_tamSelectedTicketId))
+      .eq('user_id', userId)
+      .eq('access_type', type);
+    if(res.error){
+      if(typeof showToast === 'function') showToast('⚠','삭제 실패', res.error.message);
+      return;
+    }
+    if(typeof showToast === 'function') showToast('✓','제거 완료', (type==='allow'?'화이트':'블랙')+'리스트에서 제거됨');
+    tamSelectTicket(_tamSelectedTicketId);
+  } catch(e){
+    console.error('[tamRemoveAccess]', e);
+    if(typeof showToast === 'function') showToast('⚠','오류', (e && e.message) || String(e));
+  }
+}
+window.tamRemoveAccess = tamRemoveAccess;
+
 // ════════════════════════════════════════════════
 // CAROUSEL
 // ════════════════════════════════════════════════
@@ -12908,6 +13181,13 @@ function openTicketDetail(id){
   var t=ticketDB.find(function(x){return String(x.id)==String(id);});
   if(!t) return;
   if(t.status==='pending'||t.status==='deleteRequest') return; // 미승인 티켓 차단
+
+  // 🆕 v1.53.13 2026.05.28: 화이트/블랙리스트 가드 — 자격 미달 시 클릭 차단 + 안내.
+  //   클라이언트 필터 우회 (직접 URL/디버그) 대비 한 번 더 체크.
+  if (typeof _ticketAccessOk === 'function' && !_ticketAccessOk(t.id)) {
+    if (typeof showToast === 'function') showToast('🔒','초대 전용 티켓','구매 자격이 없는 티켓입니다');
+    return;
+  }
 
   // 🆕 v1.53.8 2026.05.28: 판매 종료 티켓 (기한 만료 OR 매진) 클릭 차단 + 팝업 안내.
   //   모든 사용자 (슈퍼어드민 포함) — 클릭하면 "판매가 끝난 티켓입니다" 팝업 후 차단.
@@ -21511,6 +21791,59 @@ function homeToggleActiveOnly() {
   renderHomeTickets();
 }
 
+// 🆕 v1.53.13 2026.05.28: 티켓 화이트/블랙리스트 가드 헬퍼.
+//   _talWhitelistIds: allow 명단이 존재하는 모든 ticket_id (RPC ticket_ids_with_allowlist 로 fetch)
+//   _talAllowedIds:   본인이 allow 에 들어있는 ticket_id
+//   _talBlockedIds:   본인이 block 에 들어있는 ticket_id
+//   _ticketAccessOk(tid) — 가드 로직: block 차단 + 화이트리스트 활성 시 자격 필수.
+//   슈퍼어드민/admin/partner 는 무조건 통과 (관리 목적).
+window._talBlockedIds   = window._talBlockedIds   || {};
+window._talAllowedIds   = window._talAllowedIds   || {};
+window._talWhitelistIds = window._talWhitelistIds || {};
+
+async function loadTicketAccessLists(){
+  if(!window.sb) return;
+  try {
+    var newBlocked = {}, newAllowed = {}, newWhite = {};
+    // 1) RPC — 화이트리스트 적용 중인 ticket_id 전체 (회원 ID 비공개)
+    try {
+      var rpc = await window.sb.rpc('ticket_ids_with_allowlist');
+      if(!rpc.error && Array.isArray(rpc.data)){
+        rpc.data.forEach(function(tid){ if(tid) newWhite[String(tid)] = true; });
+      }
+    } catch(_re){ console.warn('[tal] RPC 예외:', _re); }
+    // 2) 본인 항목 (RLS: 본인이 들어있는 access 행만 받음)
+    var res = await window.sb.from('ticket_access_lists').select('ticket_id, user_id, access_type');
+    if(!res.error && Array.isArray(res.data)){
+      res.data.forEach(function(r){
+        var tid = String(r.ticket_id);
+        if(r.access_type === 'block') newBlocked[tid] = true;
+        else if(r.access_type === 'allow') newAllowed[tid] = true;
+      });
+    }
+    window._talBlockedIds   = newBlocked;
+    window._talAllowedIds   = newAllowed;
+    window._talWhitelistIds = newWhite;
+    console.log('[tal] loaded — whitelist:', Object.keys(newWhite).length,
+                '| my allowed:', Object.keys(newAllowed).length,
+                '| my blocked:', Object.keys(newBlocked).length);
+  } catch(e){ console.warn('[tal] load exception:', e); }
+}
+window.loadTicketAccessLists = loadTicketAccessLists;
+
+function _ticketAccessOk(ticketId){
+  if(!ticketId) return true;
+  // 어드민 권한자는 모든 티켓 통과 (관리 목적)
+  if (_currentRole === 'superadmin' || _currentRole === 'admin' || _currentRole === 'partner') return true;
+  var tid = String(ticketId);
+  if (window._talBlockedIds && window._talBlockedIds[tid]) return false;
+  if (window._talWhitelistIds && window._talWhitelistIds[tid]){
+    return !!(window._talAllowedIds && window._talAllowedIds[tid]);
+  }
+  return true;
+}
+window._ticketAccessOk = _ticketAccessOk;
+
 // 🆕 v1.53.8 2026.05.28: 티켓 방문일(t.date) 기준 만료 판단.
 //   ★ t.date / t.deadlineDate 모두 "MM.DD" 문자열 (예: "05.30") 이므로
 //     new Date("05.30") 는 Invalid Date → 직접 파싱해야 함 (v1.53.7 버그 원인).
@@ -21589,6 +21922,8 @@ function renderTicketGenres() {
     if (_ticketFilterByRestId && String(t.restId) !== String(_ticketFilterByRestId)) return false;
     if (_tkGenre && t.ticketGenre !== _tkGenre) return false;
     if (_tkActiveOnly && (t.status === 'soldout' || _isTicketExpired(t))) return false;
+    // 🆕 v1.53.13: 화이트/블랙리스트 가드 — 자격 없는 회원에겐 카드 자체가 안 보임
+    if (typeof _ticketAccessOk === 'function' && !_ticketAccessOk(t.id)) return false;
     if (_tkRegion) {
       var r = restaurantDB.find(function(x){ return String(x.id)===String(t.restId); });
       if (!r || r.region !== _tkRegion) return false;
@@ -26427,6 +26762,8 @@ async function _refreshUserGrade() {
     } : null;
     console.log('[grade] refreshed:', window._currentUserGrade, '/ expires:', expires, '/ billingKey:', !!data.billing_key);
     _renderMshipScreenStatus();
+    // 🆕 v1.53.13: 등급 갱신 시 티켓 접근 제어 캐시도 같이 갱신 (로그인 후 첫 호출 시 fetch)
+    try { if(typeof loadTicketAccessLists === 'function') loadTicketAccessLists(); } catch(_te){}
     return window._currentUserGrade;
   } catch(e) {
     console.error('[_refreshUserGrade]', e);
@@ -32988,6 +33325,26 @@ IDB.get('splashSettings').then(function(s) {
     <div id="muListContainer" style="flex:1;overflow-y:auto;padding:8px 22px 24px;min-height:0;-webkit-overflow-scrolling:touch;">
       <div style="text-align:center;color:#999;font-size:11px;padding:30px;">불러오는 중...</div>
     </div>
+  </div>
+</div>
+
+<!-- 🆕 v1.53.13 2026.05.28: 티켓 회원 접근 제어 모달 (화이트/블랙리스트) -->
+<div id="ticketAccessMgmtModal" style="display:none;position:fixed;inset:0;z-index:9100;background:rgba(0,0,0,.65);align-items:flex-end;justify-content:center;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);" data-lang-lock="ko" onclick="if(event.target===this)closeTicketAccessMgmt()">
+  <div style="background:#fff;border-radius:18px 18px 0 0;width:100%;max-width:560px;max-height:92vh;display:flex;flex-direction:column;box-sizing:border-box;">
+    <div style="padding:20px 22px 14px;border-bottom:1px solid #f0f0f0;display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-shrink:0;">
+      <div>
+        <div style="font-family:var(--font-main);font-size:9px;font-weight:800;letter-spacing:.22em;color:#9B1C1C;text-transform:uppercase;">Super Admin / Restaurant Admin</div>
+        <div style="font-size:17px;font-weight:800;color:#1a1a18;margin-top:6px;">🎫 티켓 회원 접근 제어</div>
+        <div style="font-size:11px;color:#999;margin-top:4px;">화이트(이 명단만 구매) / 블랙(이 명단 차단). 한 티켓에 동시 적용 가능.</div>
+      </div>
+      <button onclick="closeTicketAccessMgmt()" style="background:none;border:none;cursor:pointer;font-size:22px;color:#999;padding:4px 8px;">✕</button>
+    </div>
+    <div style="padding:12px 22px 4px;flex-shrink:0;">
+      <div style="font-size:11px;color:#666;margin-bottom:8px;font-weight:700;letter-spacing:.05em;">① 티켓 선택</div>
+      <input type="text" id="tamTicketSearch" placeholder="티켓 검색 (매장명/날짜)" oninput="tamRenderTicketList()" style="width:100%;padding:11px 13px;border:1.5px solid #e0ddd8;border-radius:8px;font-size:13px;outline:none;box-sizing:border-box;font-family:inherit;">
+    </div>
+    <div id="tamTicketList" style="max-height:240px;overflow-y:auto;padding:8px 22px;flex-shrink:0;border-bottom:1px solid #f0f0f0;"></div>
+    <div id="tamAccessPanel" style="flex:1;overflow-y:auto;padding:14px 22px 24px;min-height:0;-webkit-overflow-scrolling:touch;display:none;"></div>
   </div>
 </div>
 
