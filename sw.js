@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.27';  // 1.53.27 — 2026.06.01: 예약 초대 발송 회원 검색 핫픽스 — onclick 에 JSON.stringify(JSON.stringify(...)) 이중 인코딩 사용 → HTML 속성 따옴표 깨짐 → 클릭 무력화. 캐시 객체(_riMemSearchCache)로 전환, onclick 에는 uid 만 전달. 진단 로그 + 에러 메시지 사용자 표시 + deleted_at 컬럼 없는 환경 대비 폴백.
-const STATIC_CACHE = 'taam-static-v1.53.27';
+const SW_VERSION = 'taam-sw-v1.53.28';  // 1.53.28 — 2026.06.01: 예약 초대 회원 검색 컬럼 핫픽스 — profiles.membership_grade 가 DB 에 없는 환경에서 400 Bad Request → 검색 실패. v1.53.23 grade 사건과 동일 패턴. 회원 검색 + 결제 팝업 잔액 조회 SELECT 절을 모두 select('*') 로 단순화 — 컬럼 누락에 영구 안전.
+const STATIC_CACHE = 'taam-static-v1.53.28';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);

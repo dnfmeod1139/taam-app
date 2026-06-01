@@ -21122,9 +21122,11 @@ async function riSearchMembers(q){
       var orParts = ['display_name.ilike.%'+q+'%', 'email.ilike.%'+qLower+'%'];
       if(qDigits.length >= 4) orParts.push('phone.ilike.%'+qDigits+'%');
 
-      // 1차: deleted_at IS NULL 필터 적용 (정상 활성 회원만)
+      // v1.53.28: 'membership_grade' 컬럼이 DB 에 없는 환경이 있어 select('*') 로 단순화.
+      //   v1.53.23 'grade' 사건과 동일 패턴 — 명시 컬럼 select 는 컬럼명 오타 시 400 으로 전체 실패.
+      //   profiles 한 row 페이로드 작아 비용 무시 가능.
       var r = await window.sb.from('profiles')
-        .select('id, display_name, email, phone, role, membership_grade')
+        .select('*')
         .or(orParts.join(','))
         .is('deleted_at', null)
         .limit(20);
@@ -21132,7 +21134,7 @@ async function riSearchMembers(q){
       if(r.error && /deleted_at/.test(r.error.message || '')){
         console.warn('[ri] deleted_at 컬럼 없음 — 필터 제거 후 재시도');
         r = await window.sb.from('profiles')
-          .select('id, display_name, email, phone, role, membership_grade')
+          .select('*')
           .or(orParts.join(','))
           .limit(20);
       }
@@ -21377,10 +21379,10 @@ async function openReservationInvitePayPopup(inviteId){
            + '<span style="font-size:13px;font-weight:700;color:#1a1a18;">'+row[1]+'</span></div>';
     }).join('');
 
-    // 예치금 잔액 표시
+    // 예치금 잔액 표시 (v1.53.28: 컬럼 누락 대비 select('*') 단순화)
     try {
       var me = await window.sb.from('profiles')
-        .select('membership_deposit_balance, general_deposit_balance, deposit_balance')
+        .select('*')
         .eq('id', u.id)
         .maybeSingle();
       var memBal = (me.data && me.data.membership_deposit_balance) || 0;
@@ -21471,7 +21473,7 @@ async function riConfirmPay(){
     var u = (await window.sb.auth.getUser()).data.user;
     // 1) 예치금 잔액 재확인 + 차감 (멤버십 → 일반 순서)
     var me = await window.sb.from('profiles')
-      .select('membership_deposit_balance, general_deposit_balance, deposit_balance')
+      .select('*')
       .eq('id', u.id).maybeSingle();
     if(me.error){ showToast('❌','잔액 조회 실패', me.error.message); return; }
     var memBal = (me.data && me.data.membership_deposit_balance) || 0;
