@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.43';  // 1.53.43 — 2026.06.01: 🔐 단일 기기 강제 로그인 (Realtime). active_sessions 테이블 + RLS + Realtime publication. 로그인 성공 시 device_id (localStorage UUID) + device_label (OS·브라우저·PWA) UPSERT → 이전 기기는 postgres_changes UPDATE 이벤트 수신 → 즉시 토스트('다른 기기에서 로그인됨') + 자동 signOut() + reload. 슈퍼어드민(super_admin) 만 면제 — admin/staff/member 는 단일 기기. 호출 위치: 신규 가입 직후 / 로그인 보안 검증 통과 / 세션 복원(loadDeposit).
-const STATIC_CACHE = 'taam-static-v1.53.43';
+const SW_VERSION = 'taam-sw-v1.53.44';  // 1.53.44 — 2026.06.01: 초대 결제 직후 받은 초대 페이지 자동 재렌더 — riConfirmPay 끝에 myInvitesPage 가 열려있으면 renderMyInvites() 즉시 호출 → '⌛ 대기중' 카드가 '✓ 결제 완료' 로 자동 전환 (뒤로가기/재진입 불필요). 티켓 구매 내역 페이지(ticketHistPage)도 열려있으면 활성 탭 자동 재렌더.
+const STATIC_CACHE = 'taam-static-v1.53.44';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
