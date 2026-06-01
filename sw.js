@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.15';  // 1.53.15 — 2026.05.28: 초대 링크를 공식 도메인(https://playtaam.com) 으로 고정 — icMakeInviteUrl 이 기존 location.origin 이라 관리자가 taam-app.vercel.app 에서 코드 생성하면 그 호스트가 링크에 박혔던 문제. 두 곳 함수 정의 모두 변경 (icCopyLink/발송 UI 등 사용처 자동 반영).
-const STATIC_CACHE = 'taam-static-v1.53.15';
+const SW_VERSION = 'taam-sw-v1.53.16';  // 1.53.16 — 2026.05.28: 회원 관리 3종 — ① memberListScreen "+ 회원 추가" 버튼 숨김 (회원 초대와 중복). ② 가입 시 display_name 폴백 (savedName 비어있으면 _pendingInviteCode.memberName 자동 사용 — "이형주" 같은 invite-only 회원 이름 보장). ③ 회원 카드 클릭 → 회원 관리 모달 (이름 수정 + soft-delete 탈퇴). renderMemberList/만료일 관리 모두 deleted_at IS NULL 필터.
+const STATIC_CACHE = 'taam-static-v1.53.16';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
