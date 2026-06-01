@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.32';  // 1.53.32 — 2026.06.01: notifications INSERT 호환성 보강 — 기존 테이블의 kind/message 컬럼이 NOT NULL 일 가능성 대비 둘 다 함께 채움. 진단 로그 강화 — [notif] 미확인 조회, [adg]/[ri] INSERT 결과를 콘솔에 객체 그대로 출력.
-const STATIC_CACHE = 'taam-static-v1.53.32';
+const SW_VERSION = 'taam-sw-v1.53.33';  // 1.53.33 — 2026.06.01: 초대 결제 완료 시 회원의 구매 내역에 자동 등록 — purchaseHistory.push + savePurchase. 마이페이지 → 티켓 구매 내역에 "📨 초대" 배지 + "상세설명 · 슈퍼어드민 초대로 구매" 표시. 일반 구매와 동일하게 방문예정/완료/취소 탭에 정상 표시.
+const STATIC_CACHE = 'taam-static-v1.53.33';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);

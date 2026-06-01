@@ -16694,12 +16694,24 @@ function ticketHistRender(idx){
         if(h.cancelReason) refundInfo += '<div style="margin-top:2px;font-size:10.5px;color:#999;">사유: '+ _escHtmlAdg(h.cancelReason) +'</div>';
       }
     }
+    // 🆕 v1.53.33 2026.06.01: 슈퍼어드민 초대로 구매한 티켓 표시
+    var restName = (r ? r.name : (h.restName || _thUnknown));
+    var inviteBadge = '';
+    var inviteDesc = '';
+    if(h.isInvited){
+      inviteBadge = '<div class="mp-sub-item-badge" style="background:#fff8e7;color:#9B6F00;border:1px solid #d4a017;margin-left:6px;">📨 초대</div>';
+      inviteDesc = '<div style="margin-top:6px;font-size:11px;color:#9B6F00;font-weight:600;">상세설명 · '+(h.inviteDesc || '슈퍼어드민 초대로 구매')+'</div>';
+    }
     return '<div class="mp-sub-item">'
       +'<div class="mp-sub-item-head">'
-        +'<div class="mp-sub-item-name">'+(r?r.name:_thUnknown)+'</div>'
-        +'<div class="mp-sub-item-badge" style="'+badgeStyles[displayS]+'">'+badgeLabels[displayS]+'</div>'
+        +'<div class="mp-sub-item-name">'+restName+'</div>'
+        +'<div style="display:flex;align-items:center;gap:0;">'
+        + '<div class="mp-sub-item-badge" style="'+badgeStyles[displayS]+'">'+badgeLabels[displayS]+'</div>'
+        + inviteBadge
+        + '</div>'
       +'</div>'
       +'<div class="mp-sub-item-meta">'+paxLabel+' · ₩'+h.amt.toLocaleString()+visitStr+'</div>'
+      + inviteDesc
       + refundInfo
       + cancelBtn
     +'</div>';
@@ -21826,7 +21838,42 @@ async function riConfirmPay(){
     }).eq('id', inv.id);
     if(inv2.error) console.warn('[riPay] 상태 갱신 실패:', inv2.error.message);
 
-    showToast('✓','예약 완료','초대 결제가 완료되었습니다');
+    // 🆕 v1.53.33 2026.06.01: 초대 결제도 일반 티켓처럼 구매 내역에 표시.
+    //   purchaseHistory 메모리에 push → savePurchase() 로 IDB + Supabase tickets 동기화.
+    //   isInvited:true / inviteDesc 로 UI 에서 "초대로 구매" 배지 표시.
+    try {
+      var now = new Date();
+      var purchaseId = 'INV-' + inv.id.slice(0,8) + '-' + now.getTime();
+      purchaseHistory.push({
+        id: 'inv-' + inv.id,                       // 가짜 ticket id (역추적용)
+        restId: inv.restaurant_id || '',
+        date: now.toISOString(),
+        visitDate: inv.visit_date || '',
+        pax: inv.pax || 1,
+        amt: inv.total_amount || 0,
+        status: 'upcoming',
+        depositReturn: null,
+        buyerPhone: '',
+        buyerName: '',
+        buyerRole: _currentRole || 'user',
+        purchaseId: purchaseId,
+        notifications: [],
+        paymentId: null,                            // 예치금 결제 — 카드 결제 ID 없음
+        // 🆕 초대 결제 메타
+        isInvited: true,
+        inviteId: inv.id,
+        inviteDesc: '슈퍼어드민 초대',
+        ticketGenre: inv.ticket_genre || '',
+        ticketType: inv.type_class === 'eve' ? 'Event' : 'Standard',
+        visitTime: inv.visit_time || '',
+        restName: inv.restaurant_name || ''        // restId 매칭 실패 시 폴백 표시
+      });
+      if (typeof savePurchase === 'function') {
+        savePurchase().catch(function(_e){ console.warn('[riPay] savePurchase 실패:', _e); });
+      }
+    } catch(_phe){ console.warn('[riPay] purchaseHistory push 실패:', _phe); }
+
+    showToast('✓','예약 완료','초대 결제가 완료되었습니다 (구매 내역에 표시)');
     riPayClose();
     // 마이페이지/예치금 갱신
     try { if(typeof loadDeposits === 'function') loadDeposits(); } catch(_){}
