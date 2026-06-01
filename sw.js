@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.40';  // 1.53.40 — 2026.06.01: 🔒 로그인 보안 검증 — isLogin 분기에서 OTP 인증만으로 메인 진입 가능했던 보안 구멍 차단. 검증 흐름: ① profiles row + deleted_at=null ② invite_codes 매칭 (RPC user_has_invite_match 우선, 폴백 클라이언트 조회) ③ admin/super_admin/staff 는 면제. 검증 실패 시 즉시 signOut() + 안내. 초대 코드 발급 이력 없는 이메일은 OTP 알아내도 절대 못 들어옴.
-const STATIC_CACHE = 'taam-static-v1.53.40';
+const SW_VERSION = 'taam-sw-v1.53.41';  // 1.53.41 — 2026.06.01: 초대 코드 자동 used 처리 — 우회 가입/consume-invite 실패로 used=false 남는 케이스 영구 해결. RPC consume_invite_by_self() — auth.uid() 기반, 본인 email/phone 매칭 invite_codes 자동 used=true + used_at/used_by_*/member_id 채움. _backfillProfileFromInvite 끝에서 호출 → 가입/로그인/세션복원 모든 경로에서 자동 보정. + 기존 미사용 row(구자호/유수봉 등) 일괄 보정 SQL.
+const STATIC_CACHE = 'taam-static-v1.53.41';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);

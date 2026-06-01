@@ -10261,6 +10261,24 @@ async function _backfillProfileFromInvite(user){
       try { if(typeof _refreshUserGrade === 'function') _refreshUserGrade(); } catch(_){}
     }
   } catch(e){ console.warn('[backfill] 예외:', e); }
+
+  // 🆕 v1.53.41 2026.06.01: 본인 매칭 invite_codes 의 used 자동 처리.
+  //   verify-invite 우회 / consume-invite 실패 케이스 모두 보정.
+  //   RPC consume_invite_by_self() — auth.uid() 기반, security definer.
+  //   멱등성: 이미 used=true 면 안 건드림 (return 0).
+  try {
+    var rpcRes = await window.sb.rpc('consume_invite_by_self');
+    if(rpcRes.error){
+      console.warn('[backfill consume] RPC 에러:', rpcRes.error.message);
+    } else {
+      var updated = (typeof rpcRes.data === 'number') ? rpcRes.data : 0;
+      if(updated > 0){
+        console.log('[backfill consume] ✅ ' + updated + '건 invite_codes used 자동 처리');
+      } else {
+        console.log('[backfill consume] 처리할 미사용 코드 없음 (정상)');
+      }
+    }
+  } catch(_ce){ console.warn('[backfill consume] 예외:', _ce); }
 }
 window._backfillProfileFromInvite = _backfillProfileFromInvite;
 
