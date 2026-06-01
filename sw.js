@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.25';  // 1.53.25 — 2026.06.01: 예약 초대 발송 레스토랑 UI 핫픽스 — 73개 풀리스트가 description 까지 깨져 렌더되던 문제 해결. 슈퍼어드민 검색 패턴(검색 입력란 + 결과 드롭다운 12개 + 선택 카드 + 변경 버튼) 으로 전환. 이름·장르·주소·지역·도시 매칭.
-const STATIC_CACHE = 'taam-static-v1.53.25';
+const SW_VERSION = 'taam-sw-v1.53.26';  // 1.53.26 — 2026.06.01: 예약 초대 발송 화면 스크롤 안 됨 핫픽스 — .tu-screen 은 flex-direction:column 기반인데 display:block 으로 열어 자식 .tu-form 의 flex:1 + overflow-y:auto 가 무력화 → 스크롤 컨테이너 높이 0. display:flex 로 변경.
+const STATIC_CACHE = 'taam-static-v1.53.26';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
