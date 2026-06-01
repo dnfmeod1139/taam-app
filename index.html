@@ -10125,6 +10125,70 @@ async function loadDeposit(){
       console.log('💰 예치금 잔액 로드됨');
     }
 
+    // 🆕 v1.53.30 2026.06.01: 슈퍼어드민이 부여한 예치금(admin_grant) 도 충전 내역에 머지
+    //   → 받은 회원의 예치금 내역 충전 탭에 "충전 (부여받음)" 으로 표시.
+    //   metadata.granted_by_name 이 있으면 같이 노출.
+    try {
+      var trxRes = await window.sb.from('deposit_transactions')
+        .select('id, created_at, amount, description, metadata, deposit_type')
+        .eq('user_id', user.id)
+        .eq('change_type', 'admin_grant')
+        .order('created_at', { ascending: true });
+      if (!trxRes.error && Array.isArray(trxRes.data)) {
+        // 중복 방지: 기존 depositData.charge 에 같은 trx id 있는지 check
+        var existingTrxIds = new Set((depositData.charge || []).map(function(c){ return c._trxId; }).filter(Boolean));
+        trxRes.data.forEach(function(r){
+          if (existingTrxIds.has(r.id)) return;
+          var who = (r.metadata && r.metadata.granted_by_name) || '';
+          var dispDate = '';
+          try {
+            var dt = new Date(r.created_at);
+            dispDate = dt.getFullYear()+'.'+String(dt.getMonth()+1).padStart(2,'0')+'.'+String(dt.getDate()).padStart(2,'0')
+                     + ' ' + String(dt.getHours()).padStart(2,'0')+':'+String(dt.getMinutes()).padStart(2,'0');
+          } catch(_){ dispDate = r.created_at; }
+          var typeLabel = r.deposit_type === 'membership' ? '멤버십' : '일반';
+          depositData.charge.push({
+            _trxId: r.id,
+            date: dispDate,
+            amt: r.amount || 0,
+            name: '충전 (부여받음 · ' + typeLabel + ')',
+            method: who ? '슈퍼어드민 ' + who : '슈퍼어드민 부여'
+          });
+        });
+        // 날짜순 정렬 (오래된 것 → 최신, 렌더는 reverse 사용)
+        depositData.charge.sort(function(a,b){ return (a.date||'').localeCompare(b.date||''); });
+      }
+    } catch(_te) { console.warn('[loadDeposit] admin_grant 머지 예외:', _te); }
+
+    // 🆕 v1.53.30: 미확인 알림 토스트 표시 + seen=true 처리
+    try {
+      var nres = await window.sb.from('notifications')
+        .select('id, type, title, body, url, payload, created_at')
+        .eq('user_id', user.id)
+        .eq('seen', false)
+        .order('created_at', { ascending: false })
+        .limit(10);
+      if (!nres.error && Array.isArray(nres.data) && nres.data.length > 0) {
+        // 토스트 표시 — 종류별로 아이콘 다르게
+        nres.data.forEach(function(n, idx){
+          setTimeout(function(){
+            var icon = n.type === 'deposit_grant' ? '💰' : (n.type === 'reservation_invite' ? '🎫' : '🔔');
+            if (typeof showToast === 'function') showToast(icon, n.title || '알림', n.body || '');
+          }, idx * 2200);
+        });
+        // 모두 seen=true 처리 (개별 view 가 아닌 자동 read)
+        var ids = nres.data.map(function(n){ return n.id; });
+        await window.sb.from('notifications').update({
+          seen: true,
+          seen_at: new Date().toISOString()
+        }).in('id', ids);
+        // 미확인 카운트 갱신
+        if (typeof updateUnseenNotifBadge === 'function') updateUnseenNotifBadge();
+      } else {
+        if (typeof updateUnseenNotifBadge === 'function') updateUnseenNotifBadge();
+      }
+    } catch(_ne) { console.warn('[loadDeposit] 미확인 알림 처리 예외:', _ne); }
+
     // 🆕 B-3a: 멤버십 등급/만료/예치금 잔액도 같이 로드 (_currentUserGrade 초기화)
     if (typeof _refreshUserGrade === 'function') {
       _refreshUserGrade().catch(function(e){
@@ -10135,6 +10199,35 @@ async function loadDeposit(){
     console.error('[loadDeposit] 예외:', e);
   }
 }
+
+// 🆕 v1.53.30 2026.06.01: 마이페이지 "알림 설정" 옆 미확인 알림 레드닷.
+//   notifications 테이블에 seen=false 가 있으면 빨간 점 표시 (현재 세션 + 신규 미확인).
+async function updateUnseenNotifBadge(){
+  try {
+    if(!window.sb) return;
+    var u = (await window.sb.auth.getUser()).data.user;
+    if(!u) return;
+    var r = await window.sb.from('notifications')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', u.id)
+      .eq('seen', false);
+    var cnt = (r && r.count) || 0;
+    // 마이페이지 "알림 설정" 행에 레드닷 부착
+    var notifRow = document.querySelector('.mp-row[onclick*="openNotifSettings"]');
+    if (notifRow) {
+      var existing = notifRow.querySelector('.mp-notif-reddot');
+      if (existing) existing.remove();
+      if (cnt > 0) {
+        var dot = document.createElement('span');
+        dot.className = 'mp-notif-reddot';
+        dot.style.cssText = 'display:inline-block;width:8px;height:8px;border-radius:50%;background:#e53935;margin-left:6px;vertical-align:middle;box-shadow:0 0 0 2px #fff;';
+        var label = notifRow.querySelector('.mp-row-label');
+        if (label) label.appendChild(dot);
+      }
+    }
+  } catch(e) { console.warn('[notif badge] 갱신 예외:', e); }
+}
+window.updateUnseenNotifBadge = updateUnseenNotifBadge;
 
 // ═══════════════════════════════════════════════════
 // 🎫 구매 티켓 (Supabase 연동)
@@ -12736,6 +12829,49 @@ async function adminGrantDeposit(targetUserId, amount, depositType, description)
   if (trxRes.error) {
     console.error('[adg] transaction insert 실패:', trxRes.error);
     // 잔액은 이미 변경됨 — 사용자에게 경고는 하되 실패로 처리하지 않음
+  }
+
+  // 🆕 v1.53.30 2026.06.01: 부여 시 받은 회원에게 인앱 알림 + 푸시 발송
+  //   notifications 테이블 INSERT → 회원 다음 접속 시 토스트 + 마이페이지 레드닷.
+  //   동시에 send-push Edge Function 호출 (구독한 회원은 즉시 푸시 수신).
+  if (amount > 0) {  // 차감은 알림 없음 — 부여 케이스만
+    try {
+      var typeLabel = depositType === 'membership' ? '멤버십' : '일반';
+      var notifTitle = '💰 예치금이 충전되었습니다';
+      var notifBody = typeLabel + ' 예치금 ₩' + amount.toLocaleString() + ' 부여받음 (' + (description || '슈퍼어드민') + ')';
+      var notifRes = await window.sb.from('notifications').insert({
+        user_id: targetUserId,
+        type: 'deposit_grant',
+        title: notifTitle,
+        body: notifBody,
+        url: '/?open_deposit_hist=1',
+        payload: {
+          amount: amount,
+          deposit_type: depositType,
+          balance_after: newBalance,
+          description: description || null,
+          granted_by: caller.id,
+          granted_by_name: caller.user_metadata && caller.user_metadata.display_name || null
+        }
+      });
+      if (notifRes.error) console.warn('[adg] notifications insert 실패:', notifRes.error.message);
+
+      // 푸시 (구독한 회원만 수신, 미구독 회원은 다음 접속 시 토스트)
+      try {
+        await window.sb.functions.invoke('send-push', {
+          body: {
+            to: 'uid:' + targetUserId,
+            payload: {
+              title: notifTitle,
+              body: notifBody,
+              url: '/?open_deposit_hist=1',
+              category: 'deposit_grant',
+              tag: 'taam-grant-' + Date.now()
+            }
+          }
+        });
+      } catch(_pe) { console.warn('[adg] push 발송 예외:', _pe); }
+    } catch(_ne) { console.warn('[adg] notifications 처리 예외:', _ne); }
   }
 
   return { newBalance: newBalance, previousBalance: currentBalance };
@@ -15930,10 +16066,14 @@ var _phoneVerified = false;
 var _pvStep = 1;
 
 function openMpCharge(){
-  updateChargeCardSection();
-  var p = document.getElementById('chargePage');
-  p.style.display='flex';
-  if(typeof applyI18n==='function') applyI18n(p);
+  // v1.53.30 2026.06.01: PortOne 테스트 단계 — 실결제 차단. 슈퍼어드민도 동일.
+  //   티켓 구매 시 예치금 사용은 가능 (이 차단은 충전만).
+  showToast('🚧','현재 준비중입니다','예치금 충전은 곧 오픈됩니다 (PortOne 정식 연동 후)');
+  return;
+  // updateChargeCardSection();
+  // var p = document.getElementById('chargePage');
+  // p.style.display='flex';
+  // if(typeof applyI18n==='function') applyI18n(p);
 }
 function openNotifSettings(){
   var p = document.getElementById('notifSettingsPage');
@@ -15948,10 +16088,13 @@ function openNotifSettings(){
 
 // [1] 카드 관리 페이지 열기
 async function openCardManagePage(){
-  var p = document.getElementById('cardManagePage');
-  p.style.display='flex';
-  if(typeof applyI18n==='function') applyI18n(p);
-  await loadMyCards();
+  // v1.53.30 2026.06.01: PortOne 테스트 단계 — 카드 등록/관리 차단.
+  showToast('🚧','현재 준비중입니다','결제 수단 관리는 곧 오픈됩니다 (PortOne 정식 연동 후)');
+  return;
+  // var p = document.getElementById('cardManagePage');
+  // p.style.display='flex';
+  // if(typeof applyI18n==='function') applyI18n(p);
+  // await loadMyCards();
 }
 
 // [2] 내 카드 목록 불러오기
@@ -21290,6 +21433,20 @@ async function riSubmit(){
     }
     var inviteId = ins.data && ins.data.id;
     console.log('[ri] 초대 발송 완료 id=', inviteId);
+
+    // 🆕 v1.53.30: 인앱 알림 INSERT (구독 안 한 회원도 다음 접속 시 토스트)
+    try {
+      var notifTitle = '🎫 TAAM 예약 초대 도착';
+      var notifBody = restName + ' · ' + _riDate + ' ' + _riTime + ' · ' + _riPax + '인 · ₩' + total.toLocaleString();
+      await window.sb.from('notifications').insert({
+        user_id: _riInvitee.id,
+        type: 'reservation_invite',
+        title: notifTitle,
+        body: notifBody,
+        url: '/?ri_pay=' + inviteId,
+        payload: { invite_id: inviteId, restaurant_name: restName, pax: _riPax, total_amount: total }
+      });
+    } catch(_ne) { console.warn('[ri] notifications INSERT 예외:', _ne); }
 
     // 푸시 알림 발송
     try {

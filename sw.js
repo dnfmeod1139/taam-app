@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.29';  // 1.53.29 — 2026.06.01: profiles 등급 컬럼 정규화 — 실제 컬럼명은 membership_tier (membership_grade/grade 둘 다 DB 에 없음). loadAllTicketsForAdmin 의 SELECT 절도 select('*') 단순화 (또 다른 400 시한폭탄). showBuyerInfo 등급 표시도 membership_tier 우선.
-const STATIC_CACHE = 'taam-static-v1.53.29';
+const SW_VERSION = 'taam-sw-v1.53.30';  // 1.53.30 — 2026.06.01: ① 결제수단/예치금 충전 "준비중" 차단 (PortOne 테스트 중 실결제 방지) ② 슈퍼어드민 예치금 부여 시 받은 회원에게 notifications INSERT + send-push + 토스트 알림 ③ 부여 내역이 회원의 예치금 충전 탭에 "충전 (부여받음)" 로 영구 표시 (admin_grant 머지) ④ 예약 초대 발송 시도 notifications INSERT ⑤ 앱 로드 시 미확인 알림 토스트 자동 표시 + seen=true 처리 + 마이페이지 알림 메뉴에 레드닷.
+const STATIC_CACHE = 'taam-static-v1.53.30';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
