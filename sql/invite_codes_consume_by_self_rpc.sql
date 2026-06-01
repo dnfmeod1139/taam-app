@@ -50,6 +50,7 @@ begin
   my_phone_digits := regexp_replace(my_phone_digits, '^0+', '');
 
   -- 본인 매칭 + 미사용 invite_codes 를 자동 used=true 처리
+  -- 🔧 member_id 는 text 타입이라 uuid 캐스팅 필요
   update public.invite_codes ic
   set
     used         = true,
@@ -57,7 +58,7 @@ begin
     used_by_email = coalesce(nullif(btrim(ic.used_by_email),''), nullif(my_email,'')),
     used_by_phone = coalesce(nullif(btrim(ic.used_by_phone),''), nullif(my_phone,'')),
     used_by_name  = coalesce(nullif(btrim(ic.used_by_name),''), nullif(my_name,''), ic.invitee_name),
-    member_id     = coalesce(ic.member_id, my_id)
+    member_id     = coalesce(nullif(btrim(ic.member_id),''), my_id::text)
   where ic.used = false
     and (
       (my_email <> '' and (
@@ -85,7 +86,8 @@ set
   used_by_email = coalesce(nullif(btrim(ic.used_by_email),''), p.email),
   used_by_phone = coalesce(nullif(btrim(ic.used_by_phone),''), p.phone),
   used_by_name  = coalesce(nullif(btrim(ic.used_by_name),''), nullif(btrim(p.display_name),''), ic.invitee_name),
-  member_id     = coalesce(ic.member_id, p.id)
+  -- 🔧 member_id 는 text 타입 — uuid 캐스팅 필요
+  member_id     = coalesce(nullif(btrim(ic.member_id),''), p.id::text)
 from public.profiles p
 where ic.used = false
   and p.deleted_at is null
