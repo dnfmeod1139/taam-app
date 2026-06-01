@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.42';  // 1.53.42 — 2026.06.01: 회원 초대 화면 발급 목록 탭 분리 — '📤 코드발송' (used=false, 카운트 노랑) / '✓ 가입완료' (used=true, 카운트 녹색) 두 탭. 각 탭에 미사용/사용 개수 배지(99+). 탭별 최신 발급 순 정렬. 빈 상태 메시지도 탭별로 분기.
-const STATIC_CACHE = 'taam-static-v1.53.42';
+const SW_VERSION = 'taam-sw-v1.53.43';  // 1.53.43 — 2026.06.01: 🔐 단일 기기 강제 로그인 (Realtime). active_sessions 테이블 + RLS + Realtime publication. 로그인 성공 시 device_id (localStorage UUID) + device_label (OS·브라우저·PWA) UPSERT → 이전 기기는 postgres_changes UPDATE 이벤트 수신 → 즉시 토스트('다른 기기에서 로그인됨') + 자동 signOut() + reload. 슈퍼어드민(super_admin) 만 면제 — admin/staff/member 는 단일 기기. 호출 위치: 신규 가입 직후 / 로그인 보안 검증 통과 / 세션 복원(loadDeposit).
+const STATIC_CACHE = 'taam-static-v1.53.43';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);

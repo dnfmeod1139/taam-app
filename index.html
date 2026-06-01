@@ -10175,6 +10175,138 @@ async function saveDeposit(){
 }
 
 // ════════════════════════════════════════════════════════════════
+// 🆕 v1.53.43 2026.06.01: 단일 기기 강제 로그인 (Realtime)
+//   슈퍼어드민(super_admin) 만 면제 — admin/staff/member 는 한 기기.
+//   새 기기에서 로그인 → active_sessions UPSERT → 이전 기기 Realtime 으로 강제 로그아웃.
+// ════════════════════════════════════════════════════════════════
+function _getDeviceId(){
+  var id = null;
+  try { id = localStorage.getItem('taam_device_id'); } catch(_){}
+  if(!id){
+    if(window.crypto && window.crypto.randomUUID){
+      id = window.crypto.randomUUID();
+    } else {
+      id = 'd-' + Date.now() + '-' + Math.random().toString(36).slice(2, 11);
+    }
+    try { localStorage.setItem('taam_device_id', id); } catch(_){}
+  }
+  return id;
+}
+
+function _getDeviceLabel(){
+  try {
+    var ua = navigator.userAgent;
+    var os = 'Unknown';
+    if(/iPhone|iPad|iPod/.test(ua)) os = 'iOS';
+    else if(/Android/.test(ua)) os = 'Android';
+    else if(/Mac OS X/.test(ua)) os = 'Mac';
+    else if(/Windows/.test(ua)) os = 'Windows';
+    else if(/Linux/.test(ua)) os = 'Linux';
+    var browser = '';
+    if(/Edg\//.test(ua)) browser = 'Edge';
+    else if(/Chrome\//.test(ua) && !/Edg\//.test(ua)) browser = 'Chrome';
+    else if(/Safari\//.test(ua) && !/Chrome\//.test(ua)) browser = 'Safari';
+    else if(/Firefox\//.test(ua)) browser = 'Firefox';
+    else browser = 'Browser';
+    var pwa = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ? ' · PWA' : '';
+    return os + ' · ' + browser + pwa;
+  } catch(_){ return 'Unknown'; }
+}
+
+var _activeSessionChannel = null;
+var _activeSessionMyDeviceId = null;
+var _activeSessionForceSignedOut = false;
+
+// 로그인 성공 후 호출 — active_sessions UPSERT + Realtime 구독
+async function _registerActiveSession(user, role){
+  if(!window.sb || !user || !user.id) return;
+  // 슈퍼어드민은 면제 (다중 기기 허용)
+  var rl = String(role || '').toLowerCase();
+  if(rl === 'super_admin' || rl === 'superadmin'){
+    console.log('[session] 슈퍼어드민 — 다중 기기 허용 (면제)');
+    return;
+  }
+
+  var deviceId = _getDeviceId();
+  var deviceLabel = _getDeviceLabel();
+  _activeSessionMyDeviceId = deviceId;
+
+  try {
+    var up = await window.sb.from('active_sessions').upsert({
+      user_id: user.id,
+      device_id: deviceId,
+      device_label: deviceLabel,
+      last_active: new Date().toISOString(),
+      signed_in_at: new Date().toISOString()
+    }, { onConflict: 'user_id' }).select();
+    if(up.error){
+      console.warn('[session] UPSERT 실패:', up.error.message);
+      return;
+    }
+    console.log('[session] ✅ 활성 세션 등록:', { device: deviceLabel, id: deviceId });
+  } catch(e){ console.warn('[session] UPSERT 예외:', e); return; }
+
+  _subscribeActiveSession(user.id, deviceId);
+}
+window._registerActiveSession = _registerActiveSession;
+
+function _subscribeActiveSession(userId, myDeviceId){
+  if(_activeSessionChannel){
+    try { window.sb.removeChannel(_activeSessionChannel); } catch(_){}
+    _activeSessionChannel = null;
+  }
+  try {
+    _activeSessionChannel = window.sb
+      .channel('active_session_' + userId)
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'active_sessions',
+        filter: 'user_id=eq.' + userId
+      }, function(payload){
+        var newDeviceId = payload && payload.new && payload.new.device_id;
+        if(newDeviceId && newDeviceId !== myDeviceId){
+          console.warn('[session] 🚫 다른 기기에서 로그인 — 강제 로그아웃');
+          _forceSignOutDueToOtherDevice(payload.new.device_label || '다른 기기');
+        }
+      })
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'active_sessions',
+        filter: 'user_id=eq.' + userId
+      }, function(payload){
+        var newDeviceId = payload && payload.new && payload.new.device_id;
+        if(newDeviceId && newDeviceId !== myDeviceId){
+          console.warn('[session] 🚫 다른 기기 신규 로그인 — 강제 로그아웃');
+          _forceSignOutDueToOtherDevice(payload.new.device_label || '다른 기기');
+        }
+      })
+      .subscribe(function(status){
+        console.log('[session] Realtime 구독 상태:', status);
+      });
+  } catch(e){ console.warn('[session] subscribe 예외:', e); }
+}
+
+async function _forceSignOutDueToOtherDevice(otherLabel){
+  if(_activeSessionForceSignedOut) return;
+  _activeSessionForceSignedOut = true;
+  try {
+    if(typeof showToast === 'function'){
+      showToast('🚫','다른 기기에서 로그인됨', otherLabel + ' 에서 로그인되어 이 기기는 로그아웃됩니다.');
+    }
+  } catch(_){}
+  setTimeout(async function(){
+    try { if(_activeSessionChannel) window.sb.removeChannel(_activeSessionChannel); } catch(_){}
+    _activeSessionChannel = null;
+    try { await window.sb.auth.signOut(); } catch(_){}
+    try { localStorage.removeItem('authedSession'); } catch(_){}
+    try { if(typeof IDB !== 'undefined' && IDB.set) IDB.set('authedSession', ''); } catch(_){}
+    setTimeout(function(){ location.reload(); }, 300);
+  }, 2500);
+}
+
+// ════════════════════════════════════════════════════════════════
 // 🆕 v1.53.39 2026.06.01: 가입 후 자동 이름/등급 백필
 //   verify-invite already_member 차단으로 _pendingInviteCode 가 없는 경로,
 //   또는 슈퍼어드민이 부여한 회원 등 — 어떤 경로로든 user.email/phone 매칭으로
@@ -10329,6 +10461,17 @@ async function loadDeposit(){
 
     // 🆕 v1.53.39: 앱 진입/세션 복원 시점에도 자동 백필 (이름/등급 비어있는 케이스)
     try { await _backfillProfileFromInvite(user); } catch(_){}
+
+    // 🆕 v1.53.43: 세션 복원 시에도 active_sessions 재등록 + Realtime 재구독
+    //   다른 기기에서 이미 로그인됐다면 이 호출이 row 를 덮어쓰고,
+    //   그 기기의 Realtime 구독이 즉시 강제 로그아웃 트리거. 양방향 정합성 유지.
+    try {
+      if(typeof _registerActiveSession === 'function'){
+        var roleRes = await window.sb.from('profiles').select('role').eq('id', user.id).maybeSingle();
+        var rrr = (roleRes && roleRes.data && roleRes.data.role) || 'member';
+        _registerActiveSession(user, rrr);
+      }
+    } catch(_){}
 
     // 🆕 v1.53.37 2026.06.01: deposit_transactions 의 모든 거래를 charge/use 에 머지.
     //   change_type 별 분류:
@@ -11442,6 +11585,21 @@ function _doProfileAndConsume(user, savedName, email, phone){
   //   user.email/phone 으로 invite_codes 매칭해서 이름/등급 자동 백필.
   try { _backfillProfileFromInvite(user); } catch(_){}
 
+  // 🆕 v1.53.43: 신규 가입 직후도 단일 기기 강제 시작
+  //   role 은 가입 직후엔 보통 'member' (admin/staff/super_admin 은 가입 후 별도 부여)
+  try {
+    if(typeof _registerActiveSession === 'function'){
+      // 가입 직후 profile.role 조회해서 정확한 면제 적용
+      setTimeout(async function(){
+        try {
+          var pr2 = await window.sb.from('profiles').select('role').eq('id', user.id).maybeSingle();
+          var rr = (pr2 && pr2.data && pr2.data.role) || 'member';
+          _registerActiveSession(user, rr);
+        } catch(_){}
+      }, 500);
+    }
+  } catch(_){}
+
   // 3) 가입 완료 후 메인 화면으로 (기존 흐름)
   if(typeof onSignupComplete === 'function') onSignupComplete();
   else if(typeof openMain === 'function') openMain();
@@ -11771,10 +11929,11 @@ function vpVerify(){
       var isSuper = SUPER_ADMIN_EMAILS.indexOf((loggedEmail || '').toLowerCase()) >= 0;
 
       if(isSuper){
-        console.log('✅ 슈퍼어드민 로그인 — 어드민 페이지로 직접 진입');
+        console.log('✅ 슈퍼어드민 로그인 — 어드민 페이지로 직접 진입 (다중 기기 허용)');
         _currentRole = 'superadmin';
         _currentAdminRestId = null;
         _currentAdminRestName = '';
+        // 🆕 v1.53.43: 슈퍼어드민은 _registerActiveSession 안 부름 = 면제
 
         // 🆕 2026.05.20: 슈퍼어드민 첫 가입 시 profiles row 명시적 생성/갱신
         //   (DB 트리거가 작동하지 않는 환경 대비 — 보험)
@@ -11900,6 +12059,13 @@ function vpVerify(){
           console.log('✅ 로그인 보안 검증 통과 — 메인 진입');
           try { localStorage.setItem('authedSession', '1'); } catch(e){}
           if(typeof IDB !== 'undefined' && IDB.set){ IDB.set('authedSession', '1').catch(function(){}); }
+
+          // 🆕 v1.53.43: 일반 회원 — 단일 기기 강제 (active_sessions 등록 + Realtime 구독)
+          try {
+            if(typeof _registerActiveSession === 'function'){
+              _registerActiveSession(loggedUser, (pr.data && pr.data.role) || 'member');
+            }
+          } catch(_){}
 
           if(typeof closeAllScreens === 'function'){
             setTimeout(function(){ closeAllScreens(); }, 400);
