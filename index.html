@@ -17457,8 +17457,8 @@ async function showBuyerInfo(idx) {
   var h = _dmGetItem(idx);
   if (!h) return;
 
-  // 🆕 v1.53.21 2026.05.28: _buyerProfile 비어있거나 핵심 필드(email/phone/display_name)
-  //   모두 없으면 즉시 재조회. deleted_at 필터도 무시 (탈퇴 회원 정보도 표시).
+  // v1.53.22 2026.05.28: 진단 강화 — fetch 결과 객체 그대로 출력 + h._userId 확인.
+  console.log('[buyerInfo] start. user_id=', h._userId, '| cached _buyerProfile=', h._buyerProfile);
   var p = h._buyerProfile || {};
   var needsRefetch = !p.id || (!p.email && !p.phone && !p.display_name);
   if (window.sb && h._userId && needsRefetch) {
@@ -17467,14 +17467,14 @@ async function showBuyerInfo(idx) {
         .select('id, display_name, phone, email, grade, membership_grade, role, created_at, member_until, deleted_at, membership_deposit_balance, general_deposit_balance, deposit_balance, granted_membership_balance, granted_general_balance, charged_membership_balance, charged_general_balance')
         .eq('id', h._userId)
         .maybeSingle();
+      console.log('[buyerInfo] profiles fetch result:', { error: pr && pr.error, data: pr && pr.data });
       if (!pr.error && pr.data) {
-        p = pr.data;
+        p = Object.assign({}, p, pr.data);
         h._buyerProfile = p;
-        console.log('[buyerInfo] profile re-fetch ✓', p.display_name || p.email || p.id);
       } else if (pr.error) {
         console.warn('[buyerInfo] re-fetch error:', pr.error.message);
       }
-    } catch(_pe) { console.warn('[buyerInfo] re-fetch 예외:', _pe); }
+    } catch(_pe) { console.warn('[buyerInfo] re-fetch exception:', _pe); }
   }
 
   // 🆕 v1.53.21: profile 에 여전히 이름/이메일 비어있으면 invite_codes 폴백.

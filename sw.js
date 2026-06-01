@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.21';  // 1.53.21 — 2026.05.28: 예치금 관리 구매자 정보 모달 보강 — showBuyerInfo 가 async 로 전환. _buyerProfile 비어있으면 즉시 profiles 재조회 (deleted_at 필터 없음 — 탈퇴 회원 정보도 표시). 그래도 이름/이메일/전화 없으면 invite_codes(used_by_*, invitee_*, member_id) 폴백 매칭. 이형주 같은 backfill 매칭 실패 회원도 모달에 이름·연락처·등급·가입일·예치금 표시.
-const STATIC_CACHE = 'taam-static-v1.53.21';
+const SW_VERSION = 'taam-sw-v1.53.22';  // 1.53.22 — 2026.05.28: 구매자 정보 모달 진단 강화 — showBuyerInfo 가 시작 시 user_id + 캐시된 _buyerProfile 출력, profiles fetch 응답 객체(error/data) 그대로 콘솔에 표시. Object.assign 으로 부분 머지 (기존 값 보존). 빈 모달 원인이 (a) fetch 실패인지, (b) user_id 가 잘못된 profile 가리키는지, (c) 다른 SyntaxError 가 render 끊는지 즉시 판별 가능.
+const STATIC_CACHE = 'taam-static-v1.53.22';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
