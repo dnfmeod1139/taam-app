@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.30';  // 1.53.30 — 2026.06.01: ① 결제수단/예치금 충전 "준비중" 차단 (PortOne 테스트 중 실결제 방지) ② 슈퍼어드민 예치금 부여 시 받은 회원에게 notifications INSERT + send-push + 토스트 알림 ③ 부여 내역이 회원의 예치금 충전 탭에 "충전 (부여받음)" 로 영구 표시 (admin_grant 머지) ④ 예약 초대 발송 시도 notifications INSERT ⑤ 앱 로드 시 미확인 알림 토스트 자동 표시 + seen=true 처리 + 마이페이지 알림 메뉴에 레드닷.
-const STATIC_CACHE = 'taam-static-v1.53.30';
+const SW_VERSION = 'taam-sw-v1.53.31';  // 1.53.31 — 2026.06.01: 슈퍼어드민 "📋 발송한 예약 초대 내역" 화면 추가 — 본인이 발송한 reservation_invites 전체 목록 + 통계(TOTAL/PAID/PENDING/CANCEL) + 결제 완료 금액/총 청구액 + 회원별 카드(이름·연락처·레스토랑·일정·인원·금액·상태·발송시각·결제시각).
+const STATIC_CACHE = 'taam-static-v1.53.31';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
