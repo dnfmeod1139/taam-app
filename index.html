@@ -10167,6 +10167,103 @@ async function saveDeposit(){
   }
 }
 
+// ════════════════════════════════════════════════════════════════
+// 🆕 v1.53.39 2026.06.01: 가입 후 자동 이름/등급 백필
+//   verify-invite already_member 차단으로 _pendingInviteCode 가 없는 경로,
+//   또는 슈퍼어드민이 부여한 회원 등 — 어떤 경로로든 user.email/phone 매칭으로
+//   invite_codes 의 invitee_name + invitee_tier 를 profiles 에 자동 적용.
+//
+// 멱등성: 이미 display_name 있으면 이름 skip. membership_tier 있으면 등급 skip.
+// 호출 시점: _doProfileAndConsume 끝 + loadDeposit 시작 (앱 진입 시마다 자동 보정)
+// ════════════════════════════════════════════════════════════════
+async function _backfillProfileFromInvite(user){
+  try {
+    if(!window.sb || !user || !user.id) return;
+    // 1) 현재 profile 의 이름/등급 확인 — 둘 다 있으면 skip
+    var pr = await window.sb.from('profiles')
+      .select('id, email, phone, display_name, membership_tier, membership_expires_at')
+      .eq('id', user.id)
+      .maybeSingle();
+    if(pr.error || !pr.data) return;
+    var p = pr.data;
+    var hasName = !!(p.display_name && String(p.display_name).trim());
+    var hasTier = !!p.membership_tier;
+    if(hasName && hasTier){
+      console.log('[backfill] skip — 이름/등급 모두 있음');
+      return;
+    }
+
+    // 2) email / phone 으로 invite_codes 매칭 — used_by_* 우선, 그 다음 invitee_*
+    var emailLower = (p.email || user.email || '').trim().toLowerCase();
+    var phoneDigits = (p.phone || user.phone || '').replace(/[^0-9]/g, '').replace(/^82/, '').replace(/^0+/, '');
+
+    var orParts = [];
+    if(emailLower){
+      orParts.push('used_by_email.ilike.' + emailLower);
+      orParts.push('invitee_email.ilike.' + emailLower);
+    }
+    if(phoneDigits.length >= 4){
+      // phone 컬럼은 '010-1234-5678' 같이 들어있을 수 있어 ilike % digits %
+      orParts.push('used_by_phone.ilike.%' + phoneDigits + '%');
+      orParts.push('invitee_phone.ilike.%' + phoneDigits + '%');
+    }
+    if(orParts.length === 0){
+      console.log('[backfill] skip — email/phone 모두 없음');
+      return;
+    }
+
+    var inv = await window.sb.from('invite_codes')
+      .select('code, invitee_name, invitee_tier, used, used_at, member_id')
+      .or(orParts.join(','))
+      .order('used_at', { ascending: false, nullsFirst: false })
+      .limit(5);
+    if(inv.error){
+      console.warn('[backfill] invite_codes 조회 에러:', inv.error.message);
+      return;
+    }
+    var rows = inv.data || [];
+    if(rows.length === 0){
+      console.log('[backfill] 매칭 invite_codes 없음');
+      return;
+    }
+
+    // 가장 최근 사용된 것 우선, 없으면 첫 매치
+    var match = rows.find(function(r){ return r.used === true; }) || rows[0];
+    var newName = (match.invitee_name && String(match.invitee_name).trim()) || '';
+    var newTier = (match.invitee_tier === 'M' || match.invitee_tier === 'T') ? match.invitee_tier : null;
+
+    var update = {};
+    if(!hasName && newName) update.display_name = newName;
+    if(!hasTier && newTier){
+      update.membership_tier = newTier;
+      if(newTier === 'M' && !p.membership_expires_at){
+        var ex = new Date(); ex.setDate(ex.getDate() + 365);
+        update.membership_expires_at = ex.toISOString();
+      }
+    }
+    if(Object.keys(update).length === 0){
+      console.log('[backfill] 채울 필드 없음 (매치된 코드에 이름·등급 비어있음)');
+      return;
+    }
+
+    var upd = await window.sb.from('profiles').update(update).eq('id', user.id).select();
+    if(upd.error){
+      console.warn('[backfill] update 실패:', upd.error.message);
+      return;
+    }
+    console.log('[backfill] ✅ 자동 적용:', update, '/ match code:', match.code);
+
+    // auth metadata + 캐시 동기화
+    if(update.display_name){
+      try { window.sb.auth.updateUser({ data: { display_name: update.display_name } }); } catch(_){}
+    }
+    if(update.membership_tier){
+      try { if(typeof _refreshUserGrade === 'function') _refreshUserGrade(); } catch(_){}
+    }
+  } catch(e){ console.warn('[backfill] 예외:', e); }
+}
+window._backfillProfileFromInvite = _backfillProfileFromInvite;
+
 // 예치금 로드 (balance는 Supabase, 내역은 IDB 임시)
 async function loadDeposit(){
   depositData = {charge:[], use:[], refund:[]};
@@ -10204,6 +10301,9 @@ async function loadDeposit(){
       currentDepositBalance = profile.deposit_balance;
       console.log('💰 예치금 잔액 로드됨');
     }
+
+    // 🆕 v1.53.39: 앱 진입/세션 복원 시점에도 자동 백필 (이름/등급 비어있는 케이스)
+    try { await _backfillProfileFromInvite(user); } catch(_){}
 
     // 🆕 v1.53.37 2026.06.01: deposit_transactions 의 모든 거래를 charge/use 에 머지.
     //   change_type 별 분류:
@@ -11313,6 +11413,10 @@ function _doProfileAndConsume(user, savedName, email, phone){
       console.warn('⚠ consume-invite 예외:', e);
     });
   }
+  // 🆕 v1.53.39 2026.06.01: _pendingInviteCode 없어도 (already_member 우회 경로 등)
+  //   user.email/phone 으로 invite_codes 매칭해서 이름/등급 자동 백필.
+  try { _backfillProfileFromInvite(user); } catch(_){}
+
   // 3) 가입 완료 후 메인 화면으로 (기존 흐름)
   if(typeof onSignupComplete === 'function') onSignupComplete();
   else if(typeof openMain === 'function') openMain();

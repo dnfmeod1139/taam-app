@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.38';  // 1.53.38 — 2026.06.01: M/T 등급 구조 완전 정비. ① invite_codes.invitee_tier 컬럼(M/T) ② 초대 발급 UI 에 M/T 선택 버튼 + 안내 ③ 가입 시 profiles.membership_tier 자동 설정 (M은 membership_expires_at 365일) ④ 마이페이지에 M/T 배지 표시 ⑤ 발급 목록 카드에 등급 배지 ⑥ 기존 _refreshUserGrade / 티켓 우선 공개 로직(tcIsLocked/tcIsMOnly) 그대로 작동.
-const STATIC_CACHE = 'taam-static-v1.53.38';
+const SW_VERSION = 'taam-sw-v1.53.39';  // 1.53.39 — 2026.06.01: 가입 후 자동 이름/등급 백필 — verify-invite already_member 차단 우회로 _pendingInviteCode 없이 로그인 경로 가입 시 display_name/membership_tier 비어있던 문제. _backfillProfileFromInvite(user) 신규 함수: user.email/phone 으로 invite_codes 매칭(used_by_* 또는 invitee_*) → 이름·등급 자동 적용. _doProfileAndConsume 끝 + loadDeposit 시작에서 호출 → 어떤 경로/세션에서든 자동 보정. 멱등성(이미 있으면 skip). + sql/profiles_backfill_from_invite.sql 기존 회원 일괄 보정.
+const STATIC_CACHE = 'taam-static-v1.53.39';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
