@@ -10615,13 +10615,26 @@ async function loadDeposit(){
         var shown = {};
         try { shown = JSON.parse(sessionStorage.getItem(shownKey) || '{}') || {}; } catch(_){}
         var newOnes = nres.data.filter(function(n){ return !shown[n.id]; });
+        // 🆕 v1.53.46: 토스트도 이모지 strip 한 깔끔한 텍스트로
+        function _toastStripLead(s){
+          return String(s||'').replace(/^[\s\u{1F000}-\u{1FFFF}\u{2300}-\u{27BF}\u{2190}-\u{21FF}\u{2700}-\u{27BF}]+/gu, '').trim();
+        }
+        function _toastStripAll(s){
+          return String(s||'').replace(/[\u{1F000}-\u{1FFFF}\u{2300}-\u{27BF}\u{2190}-\u{21FF}\u{2700}-\u{27BF}]/gu, '').replace(/\s{2,}/g,' ').trim();
+        }
+        function _typeLabelKo(type){
+          if(type === 'deposit_grant') return '예치금';
+          if(type === 'reservation_invite') return '예약 초대';
+          if(type === 'ticket_open') return '티켓 오픈';
+          if(type === 'invite_cancelled') return '초대 취소';
+          return '알림';
+        }
         newOnes.forEach(function(n, idx){
           setTimeout(function(){
-            var icon = n.type === 'deposit_grant' ? '💰'
-                      : (n.type === 'reservation_invite' ? '🎫'
-                      : (n.type === 'ticket_open' ? '📢'
-                      : (n.type === 'invite_cancelled' ? '❌' : '🔔')));
-            if (typeof showToast === 'function') showToast(icon, n.title || '알림', n.body || '');
+            var headerLabel = _typeLabelKo(n.type);
+            var cleanTitle = _toastStripLead(n.title || '') || headerLabel;
+            var cleanBody = _toastStripAll(n.body || '');
+            if (typeof showToast === 'function') showToast(headerLabel, cleanTitle, cleanBody);
           }, idx * 2200);
           shown[n.id] = Date.now();
         });
@@ -10703,23 +10716,62 @@ async function renderNotificationsList(){
       return;
     }
 
-    contentEl.innerHTML = rows.map(function(n){
-      var icon = n.type === 'deposit_grant' ? '💰'
-                : (n.type === 'reservation_invite' ? '🎫'
-                : (n.type === 'ticket_open' ? '📢'
-                : (n.type === 'invite_cancelled' ? '❌' : '🔔')));
-      var when = n.created_at ? new Date(n.created_at).toLocaleString('ko-KR', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }) : '';
-      var unseenStyle = !n.seen ? 'background:#fff8e7;border-left:3px solid #d4a017;' : 'background:#fff;border-left:3px solid transparent;';
+    // 🆕 v1.53.46 2026.06.01: 가시성·심플 디자인. 이모지 제거 + 좌측 컬러 띠 + 영문 타입 라벨.
+    function _typeMeta(type){
+      switch(type){
+        case 'deposit_grant':      return { label:'DEPOSIT',      color:'#5C0A14' };
+        case 'reservation_invite': return { label:'RESERVATION',  color:'#c8a96e' };
+        case 'ticket_open':        return { label:'TICKET OPEN',  color:'#1a1a18' };
+        case 'invite_cancelled':   return { label:'CANCELLED',    color:'#9B1C1C' };
+        default:                   return { label:'NOTICE',       color:'#888' };
+      }
+    }
+    // 제목/본문에서 선두 이모지·이모지 + 공백 제거 — '🎫 TAAM 예약 초대 도착' → 'TAAM 예약 초대 도착'
+    function _stripLeadEmoji(s){
+      return String(s||'').replace(/^[\s\u{1F000}-\u{1FFFF}\u{2300}-\u{27BF}\u{2190}-\u{21FF}\u{2700}-\u{27BF}]+/gu, '').trim();
+    }
+    // 본문 내부 이모지(예: '💰 멤버십 ...') 도 부드럽게 제거
+    function _stripAllEmoji(s){
+      return String(s||'').replace(/[\u{1F000}-\u{1FFFF}\u{2300}-\u{27BF}\u{2190}-\u{21FF}\u{2700}-\u{27BF}]/gu, '').replace(/\s{2,}/g,' ').trim();
+    }
+    var dateFmt = { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', hour12:false };
+
+    contentEl.innerHTML = '<div style="padding:14px 16px 24px;">' + rows.map(function(n){
+      var meta = _typeMeta(n.type);
+      var when = n.created_at ? new Date(n.created_at).toLocaleString('ko-KR', dateFmt).replace(/\./g, '/').replace(/ /g,'').replace(/^(\d+\/\d+)\/(\d+):(\d+)$/, '$1 $2:$3') : '';
+      // 위 replace 가 ko-KR 포맷 변환 — 환경별 차이 흡수 위해 fallback
+      try {
+        var dt = new Date(n.created_at);
+        when = String(dt.getMonth()+1).padStart(2,'0') + '/' + String(dt.getDate()).padStart(2,'0')
+             + ' ' + String(dt.getHours()).padStart(2,'0') + ':' + String(dt.getMinutes()).padStart(2,'0');
+      } catch(_){}
+
+      var cleanTitle = _stripLeadEmoji(n.title || '알림') || meta.label;
+      var cleanBody  = _stripAllEmoji(n.body || '');
       var clickAttr = n.url ? 'onclick="handleNotifClick(\''+_riEscHtml(n.url)+'\')" style="cursor:pointer;"' : '';
-      return '<div '+clickAttr+' style="padding:14px 18px;border-bottom:1px solid #f0ede8;'+unseenStyle+'">'
-           + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:6px;">'
-           +   '<div style="font-size:14px;font-weight:'+(n.seen?'600':'800')+';color:#1a1a18;line-height:1.4;">'+icon+' '+_riEscHtml(n.title || '알림')+'</div>'
-           +   '<div style="font-size:10.5px;color:#aaa;flex-shrink:0;white-space:nowrap;">'+when+'</div>'
+
+      // 카드 — 미확인은 좌측 띠가 색상 풀톤, 본 것은 옅음
+      var stripeColor = n.seen ? '#e8e4df' : meta.color;
+      var bgColor = '#fff';
+
+      return '<div '+clickAttr+' style="position:relative;background:'+bgColor+';border-radius:14px;margin-bottom:10px;overflow:hidden;border:1px solid #ece8df;">'
+           // 좌측 컬러 띠
+           + '<div style="position:absolute;left:0;top:0;bottom:0;width:4px;background:'+stripeColor+';"></div>'
+           + '<div style="padding:14px 18px 14px 22px;">'
+           //   상단 — 타입 라벨 + 시각
+           +   '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px;">'
+           +     '<span style="font-family:var(--font-main);font-size:9.5px;font-weight:800;letter-spacing:.18em;color:'+meta.color+';">'+meta.label+'</span>'
+           +     '<span style="font-family:var(--font-main);font-size:10.5px;color:#aaa;letter-spacing:.04em;white-space:nowrap;">'+_riEscHtml(when)+'</span>'
+           +   '</div>'
+           //   제목 — 굵게, 한 줄 또는 두 줄
+           +   '<div style="font-size:14.5px;font-weight:'+(n.seen?'700':'800')+';color:#1a1a18;line-height:1.45;margin-bottom:'+(cleanBody?'6px':'0')+';letter-spacing:-.005em;">'+_riEscHtml(cleanTitle)+'</div>'
+           //   본문 — 줄바꿈 보존 (pre-line)
+           +   (cleanBody ? '<div style="font-size:13px;color:#555;line-height:1.65;white-space:pre-line;letter-spacing:-.005em;">'+_riEscHtml(cleanBody)+'</div>' : '')
+           //   미확인 도트 (우측 하단 — 미니멀)
+           +   (!n.seen ? '<div style="position:absolute;top:14px;right:12px;width:7px;height:7px;border-radius:50%;background:'+meta.color+';box-shadow:0 0 0 3px '+meta.color+'18;"></div>' : '')
            + '</div>'
-           + (n.body ? '<div style="font-size:12.5px;color:#555;line-height:1.55;margin-top:4px;">'+_riEscHtml(n.body)+'</div>' : '')
-           + (!n.seen ? '<div style="margin-top:6px;font-size:10px;font-weight:800;letter-spacing:.1em;color:#9B6F00;">● 미확인</div>' : '')
            + '</div>';
-    }).join('');
+    }).join('') + '</div>';
 
     // 진입 시 모든 미확인 → seen=true 처리 (배지 사라짐)
     var unseenIds = rows.filter(function(n){ return !n.seen; }).map(function(n){ return n.id; });

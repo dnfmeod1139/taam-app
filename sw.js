@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.45';  // 1.53.45 — 2026.06.01: 📢 슈퍼어드민 티켓 오픈 알림 일괄 발송 — 신규 메뉴/화면(ticketBroadcastScreen). ① 티켓 검색·복수 선택 ② 회원 제외 검색·복수 선택 ③ 미리보기 자동 갱신 ④ 발송 대상 수 실시간(전체-제외) ⑤ 발송: notifications chunk INSERT(200/batch) + send-push 병렬(5/batch). 메시지 'YYYY년 M월 D일 레스토랑 (복수시 다중라인) 티켓이 오픈되었습니다'. 단일 티켓 → /?ticket=ID, 복수 → 홈. 알림 토스트/내역 아이콘 분기에 ticket_open(📢) / invite_cancelled(❌) 추가.
-const STATIC_CACHE = 'taam-static-v1.53.45';
+const SW_VERSION = 'taam-sw-v1.53.46';  // 1.53.46 — 2026.06.01: 알림 내역 + 토스트 디자인 리뉴얼. 이모지 strip(선두/내부), 카드형 라운드(margin), 좌측 4px 컬러 띠(타입별 — DEPOSIT 빨강/RESERVATION 골드/TICKET OPEN 검정/CANCELLED 빨강), 상단 영문 라벨 + 시각 MM/DD HH:mm, 굵은 제목, 본문 줄바꿈 보존(white-space:pre-line), 우측 상단 미확인 도트(7px+halo). 토스트도 _typeLabelKo + strip 처리로 깔끔한 한글 헤더.
+const STATIC_CACHE = 'taam-static-v1.53.46';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
