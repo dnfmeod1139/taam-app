@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.37';  // 1.53.37 — 2026.06.01: 사용 내역 통합 — loadDeposit 의 deposit_transactions 머지를 admin_grant 외 ticket_purchase/admin_deduct 까지 확장. amount 음수 → 절댓값 표시. _trxId 로 중복 방지. riConfirmPay 도 단순화: Supabase INSERT 후 loadDeposit() await → use 탭 자동 머지 + 사용 내역 페이지 열려있으면 자동 재렌더. 모든 계정/디바이스에 일관 적용.
-const STATIC_CACHE = 'taam-static-v1.53.37';
+const SW_VERSION = 'taam-sw-v1.53.38';  // 1.53.38 — 2026.06.01: M/T 등급 구조 완전 정비. ① invite_codes.invitee_tier 컬럼(M/T) ② 초대 발급 UI 에 M/T 선택 버튼 + 안내 ③ 가입 시 profiles.membership_tier 자동 설정 (M은 membership_expires_at 365일) ④ 마이페이지에 M/T 배지 표시 ⑤ 발급 목록 카드에 등급 배지 ⑥ 기존 _refreshUserGrade / 티켓 우선 공개 로직(tcIsLocked/tcIsMOnly) 그대로 작동.
+const STATIC_CACHE = 'taam-static-v1.53.38';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
