@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.35';  // 1.53.35 — 2026.06.01: "📨 초대받은 티켓" 메뉴 + 카운트 배지 + 홈 GNB 레드닷 — 마이페이지에 신메뉴, 미확인 초대 숫자 배지(99+), 새로 받은 초대는 NEW 배지. 받은 초대 페이지(myInvitesPage) 진입 시 invitee_seen=true 일괄 처리. 결제 대기는 결제 버튼, 완료/취소/만료는 상태만. 홈 GNB My 아이콘에 미확인 초대+알림 합산 레드닷.
-const STATIC_CACHE = 'taam-static-v1.53.35';
+const SW_VERSION = 'taam-sw-v1.53.36';  // 1.53.36 — 2026.06.01: 초대 결제 차감 + 사용 내역 기록 + 캔슬 기능 + 호스트 알림. ① riConfirmPay 잔액 차감 RLS 검증 + deposit_transactions INSERT(멤버십/일반 분리) + IDB depositData.use 즉시 push → 예치금 사용 내역 탭에 바로 반영. ② 받은 초대 카드에 '초대 취소' 버튼 → cancelMyInvite → status='cancelled' + cancelled_at. ③ 슈퍼어드민에게 인앱 알림(❌ 회원이 초대 취소) + 푸시 + 발송 내역에 '❌ 회원 취소' 라벨 + cancelled_at 시각 표시.
+const STATIC_CACHE = 'taam-static-v1.53.36';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
