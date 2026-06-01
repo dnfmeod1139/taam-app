@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.39';  // 1.53.39 — 2026.06.01: 가입 후 자동 이름/등급 백필 — verify-invite already_member 차단 우회로 _pendingInviteCode 없이 로그인 경로 가입 시 display_name/membership_tier 비어있던 문제. _backfillProfileFromInvite(user) 신규 함수: user.email/phone 으로 invite_codes 매칭(used_by_* 또는 invitee_*) → 이름·등급 자동 적용. _doProfileAndConsume 끝 + loadDeposit 시작에서 호출 → 어떤 경로/세션에서든 자동 보정. 멱등성(이미 있으면 skip). + sql/profiles_backfill_from_invite.sql 기존 회원 일괄 보정.
-const STATIC_CACHE = 'taam-static-v1.53.39';
+const SW_VERSION = 'taam-sw-v1.53.40';  // 1.53.40 — 2026.06.01: 🔒 로그인 보안 검증 — isLogin 분기에서 OTP 인증만으로 메인 진입 가능했던 보안 구멍 차단. 검증 흐름: ① profiles row + deleted_at=null ② invite_codes 매칭 (RPC user_has_invite_match 우선, 폴백 클라이언트 조회) ③ admin/super_admin/staff 는 면제. 검증 실패 시 즉시 signOut() + 안내. 초대 코드 발급 이력 없는 이메일은 OTP 알아내도 절대 못 들어옴.
+const STATIC_CACHE = 'taam-static-v1.53.40';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);

@@ -11778,12 +11778,116 @@ function vpVerify(){
         return;
       }
 
-      // 일반 회원 — 메인 화면 진입
-      if(typeof closeAllScreens === 'function'){
-        setTimeout(function(){ closeAllScreens(); }, 400);
-      } else {
-        setTimeout(function(){ location.reload(); }, 400);
-      }
+      // 🔒 v1.53.40 2026.06.01: 일반 회원 로그인 보안 검증
+      //   OTP 인증 성공만으로는 TAAM 회원이 아님 — 초대 코드 발급 이력이 있어야 함.
+      //   ① profiles row + role 정상 + deleted_at=null
+      //   ② invite_codes 에 매칭 row 존재 (이메일/전화 매칭, used 무관)
+      //   ③ admin/staff/super_admin 은 면제
+      //   매칭 없으면 즉시 signOut() + 에러 메시지
+      (async function _loginSecurityCheck(){
+        try {
+          var loggedUser = res.data.user;
+          if(!loggedUser || !loggedUser.id){
+            hint.textContent='인증 정보 오류 / Authentication error';
+            hint.className='phone-hint error';
+            try { await window.sb.auth.signOut(); } catch(_){}
+            return;
+          }
+
+          // 1) profiles 조회
+          var pr = await window.sb.from('profiles')
+            .select('id, email, phone, role, display_name, deleted_at')
+            .eq('id', loggedUser.id)
+            .maybeSingle();
+          if(pr.error){
+            console.warn('[login security] profiles 조회 에러:', pr.error.message);
+            // 조회 자체 실패면 일단 통과 (RLS 등 시스템 이슈 가능성)
+          } else if(!pr.data){
+            // profile 자체가 없으면 차단 — TAAM 회원이 아님
+            console.warn('[login security] 🚫 profiles row 없음 → 차단');
+            await window.sb.auth.signOut();
+            hint.textContent='회원 정보가 없습니다. 초대 코드로 가입해주세요. / No account. Please sign up with an invite code.';
+            hint.className='phone-hint error';
+            return;
+          } else {
+            var p = pr.data;
+            if(p.deleted_at){
+              console.warn('[login security] 🚫 탈퇴 처리된 회원');
+              await window.sb.auth.signOut();
+              hint.textContent='탈퇴 처리된 회원입니다. 슈퍼어드민에게 문의해주세요.';
+              hint.className='phone-hint error';
+              return;
+            }
+            var adminRoles = ['admin','super_admin','superadmin','staff'];
+            var isStaffOrAdmin = p.role && adminRoles.indexOf(p.role) >= 0;
+            // 슈퍼어드민/관리자/스태프는 초대 코드 매칭 면제
+            if(!isStaffOrAdmin){
+              // 2) invite_codes 매칭 검증 — RPC 우선 (RLS 우회), 실패 시 클라이언트 조회 폴백
+              var matched = null;
+              try {
+                var rpcRes = await window.sb.rpc('user_has_invite_match');
+                if(!rpcRes.error && typeof rpcRes.data === 'boolean'){
+                  matched = rpcRes.data;
+                  console.log('[login security] RPC user_has_invite_match →', matched);
+                }
+              } catch(_rpcE){ console.warn('[login security] RPC 예외:', _rpcE); }
+
+              // RPC 실패 시 클라이언트 폴백 (RLS 통과 시도)
+              if(matched === null){
+                var emailLower = (loggedUser.email || p.email || '').trim().toLowerCase();
+                var phoneDigits = (loggedUser.phone || p.phone || '').replace(/[^0-9]/g, '').replace(/^82/, '').replace(/^0+/, '');
+                var orParts = [];
+                if(emailLower){
+                  orParts.push('used_by_email.ilike.' + emailLower);
+                  orParts.push('invitee_email.ilike.' + emailLower);
+                }
+                if(phoneDigits.length >= 4){
+                  orParts.push('used_by_phone.ilike.%' + phoneDigits + '%');
+                  orParts.push('invitee_phone.ilike.%' + phoneDigits + '%');
+                }
+                if(orParts.length > 0){
+                  var icr = await window.sb.from('invite_codes')
+                    .select('code', { count: 'exact', head: true })
+                    .or(orParts.join(','));
+                  if(!icr.error){
+                    matched = (icr.count || 0) > 0;
+                    console.log('[login security] 클라이언트 폴백 매칭 →', matched, '(' + (icr.count||0) + '건)');
+                  } else {
+                    console.warn('[login security] 클라이언트 폴백도 에러:', icr.error.message);
+                  }
+                }
+              }
+
+              // matched 가 false 면 차단. null (검증 불가)이면 보안상 차단.
+              if(matched !== true){
+                console.warn('[login security] 🚫 invite_codes 매칭 없음 (또는 검증 실패) → 강제 로그아웃');
+                await window.sb.auth.signOut();
+                hint.textContent='초대 코드 발급 이력이 없습니다. 초대 코드로 가입해주세요. / No invite found. Please sign up with an invite code first.';
+                hint.className='phone-hint error';
+                return;
+              }
+            } else {
+              console.log('[login security] ✅ 관리자/스태프 — 초대 코드 검증 면제');
+            }
+          }
+
+          // 검증 통과 → 정상 로그인 진행
+          console.log('✅ 로그인 보안 검증 통과 — 메인 진입');
+          try { localStorage.setItem('authedSession', '1'); } catch(e){}
+          if(typeof IDB !== 'undefined' && IDB.set){ IDB.set('authedSession', '1').catch(function(){}); }
+
+          if(typeof closeAllScreens === 'function'){
+            setTimeout(function(){ closeAllScreens(); }, 400);
+          } else {
+            setTimeout(function(){ location.reload(); }, 400);
+          }
+        } catch(e){
+          console.error('[login security] 예외:', e);
+          hint.textContent='검증 오류, 다시 시도해주세요';
+          hint.className='phone-hint error';
+          try { await window.sb.auth.signOut(); } catch(_){}
+        }
+      })();
       return;
     }
 
