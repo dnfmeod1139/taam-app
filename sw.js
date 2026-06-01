@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.28';  // 1.53.28 — 2026.06.01: 예약 초대 회원 검색 컬럼 핫픽스 — profiles.membership_grade 가 DB 에 없는 환경에서 400 Bad Request → 검색 실패. v1.53.23 grade 사건과 동일 패턴. 회원 검색 + 결제 팝업 잔액 조회 SELECT 절을 모두 select('*') 로 단순화 — 컬럼 누락에 영구 안전.
-const STATIC_CACHE = 'taam-static-v1.53.28';
+const SW_VERSION = 'taam-sw-v1.53.29';  // 1.53.29 — 2026.06.01: profiles 등급 컬럼 정규화 — 실제 컬럼명은 membership_tier (membership_grade/grade 둘 다 DB 에 없음). loadAllTicketsForAdmin 의 SELECT 절도 select('*') 단순화 (또 다른 400 시한폭탄). showBuyerInfo 등급 표시도 membership_tier 우선.
+const STATIC_CACHE = 'taam-static-v1.53.29';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);

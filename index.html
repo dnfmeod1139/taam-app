@@ -17059,7 +17059,9 @@ async function _dmLoadSupabasePurchases(){
     var userIds = Array.from(new Set(tickets.map(function(t){ return t.user_id; }).filter(Boolean)));
     var profMap = {};
     if(userIds.length > 0){
-      var pres = await window.sb.from('profiles').select('id, display_name, phone, email, grade, membership_grade, role, created_at, membership_deposit_balance, general_deposit_balance, deposit_balance, granted_membership_balance, granted_general_balance, charged_membership_balance, charged_general_balance').in('id', userIds);
+      // v1.53.29: profiles 컬럼명 오타로 인한 400 에러 영구 차단 — select('*') 단순화.
+      //   실제 컬럼: membership_tier (membership_grade/grade 둘 다 없음). 폴백은 _ok() 에서 처리.
+      var pres = await window.sb.from('profiles').select('*').in('id', userIds);
       if(!pres.error && pres.data){ pres.data.forEach(function(p){ profMap[p.id] = p; }); }
     }
 
@@ -17723,7 +17725,10 @@ async function showBuyerInfo(idx) {
   var name  = _ok(p.display_name) ? p.display_name : (_ok(h.buyerName)  ? h.buyerName  : '');
   var phone = _ok(p.phone)        ? p.phone        : (_ok(h.buyerPhone) ? h.buyerPhone : '');
   var email = _ok(p.email)        ? p.email        : (_ok(h.buyerEmail) ? h.buyerEmail : '');
-  var grade = _ok(p.membership_grade) ? p.membership_grade : (_ok(p.grade) ? p.grade : '');
+  // v1.53.29: 실제 컬럼은 membership_tier. membership_grade/grade 도 호환 폴백.
+  var grade = _ok(p.membership_tier) ? p.membership_tier
+            : (_ok(p.membership_grade) ? p.membership_grade
+            : (_ok(p.grade) ? p.grade : ''));
   var role  = p.role || 'member';
   var joinedAt = p.created_at ? new Date(p.created_at).toLocaleDateString('ko-KR', {year:'numeric',month:'2-digit',day:'2-digit'}) : '';
 
@@ -21175,7 +21180,8 @@ async function riSearchMembers(q){
         resEl.innerHTML = rows.map(function(u){
           var nm = (u.display_name && String(u.display_name).trim()) || u._inviteeName || '(이름 없음)';
           var contact = u.email || u.phone || '–';
-          var gr = u.membership_grade || '';
+          // v1.53.29: 실제 컬럼명 우선
+          var gr = u.membership_tier || u.membership_grade || '';
           return '<div onclick="riPickMember(\''+u.id+'\')" style="padding:10px 12px;border-bottom:1px solid #ece8df;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;background:#fff;border-radius:8px;margin-bottom:4px;">'
                + '<div style="min-width:0;flex:1;"><div style="font-size:13px;font-weight:800;color:#1a1a18;">'+_riEscHtml(nm)+'</div>'
                + '<div style="font-size:11px;color:#777;margin-top:2px;">'+_riEscHtml(contact)+(gr?' · '+_riEscHtml(gr):'')+'</div></div>'
