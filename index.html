@@ -21089,32 +21089,65 @@ function riUpdateTotal(){
   document.getElementById('riTotalDisplay').textContent = '₩' + total.toLocaleString();
 }
 
-// 회원 검색 (adgSearchUsers 와 유사하지만 결과 클릭 시 _riInvitee 세팅)
+// v1.53.27: 회원 검색 — onclick 에 JSON 이중 인코딩 대신 캐시 객체 사용.
+//   진단 로그 + 에러 시 사용자에게 메시지 표시 + deleted_at 컬럼 안전 처리.
+var _riMemSearchCache = {};
+
+function _riEscHtml(s){
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+    return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];
+  });
+}
+
 async function riSearchMembers(q){
   q = (q || '').trim();
+  var resEl = document.getElementById('riMemberResults');
+  if(!resEl) return;
+  console.log('[ri] 회원 검색 입력 q=', q, ' len=', q.length);
   if(q.length < 2){
-    document.getElementById('riMemberResults').style.display='none';
+    resEl.style.display='none';
+    resEl.innerHTML='';
     return;
   }
   if(_riSearchTimer) clearTimeout(_riSearchTimer);
   _riSearchTimer = setTimeout(async function(){
     try {
-      if(!window.sb) return;
+      if(!window.sb){
+        resEl.innerHTML = '<div style="padding:14px;text-align:center;font-size:11px;color:#9B1C1C;">Supabase 클라이언트 미로딩</div>';
+        resEl.style.display='block';
+        return;
+      }
       var qLower = q.toLowerCase();
       var qDigits = q.replace(/[^0-9]/g,'');
       var orParts = ['display_name.ilike.%'+q+'%', 'email.ilike.%'+qLower+'%'];
       if(qDigits.length >= 4) orParts.push('phone.ilike.%'+qDigits+'%');
+
+      // 1차: deleted_at IS NULL 필터 적용 (정상 활성 회원만)
       var r = await window.sb.from('profiles')
-        .select('id, display_name, email, phone, role, membership_grade, member_until')
+        .select('id, display_name, email, phone, role, membership_grade')
         .or(orParts.join(','))
         .is('deleted_at', null)
         .limit(20);
-      if(r.error){ console.warn('[ri] 회원 검색 에러:', r.error.message); return; }
+      // deleted_at 컬럼이 없는 환경이면 한 번 더 시도 (필터 제거)
+      if(r.error && /deleted_at/.test(r.error.message || '')){
+        console.warn('[ri] deleted_at 컬럼 없음 — 필터 제거 후 재시도');
+        r = await window.sb.from('profiles')
+          .select('id, display_name, email, phone, role, membership_grade')
+          .or(orParts.join(','))
+          .limit(20);
+      }
+      console.log('[ri] profiles 검색 결과:', { error: r.error, count: (r.data||[]).length });
+      if(r.error){
+        resEl.innerHTML = '<div style="padding:14px;text-align:center;font-size:11px;color:#9B1C1C;">검색 에러: '+_riEscHtml(r.error.message)+'</div>';
+        resEl.style.display='block';
+        return;
+      }
       var rows = r.data || [];
-      // 초대명 폴백 (이름 비어있는 회원도 매칭)
+
+      // 초대명 폴백 (이름 비어있는 회원 매칭용)
       try {
         var inv = await window.sb.from('invite_codes')
-          .select('member_id, invitee_name, invitee_email, used_by_email')
+          .select('member_id, invitee_name')
           .ilike('invitee_name', '%'+q+'%')
           .limit(20);
         if(!inv.error && inv.data){
@@ -21123,42 +21156,51 @@ async function riSearchMembers(q){
             if(c.member_id) fillMap[c.member_id] = c.invitee_name;
           });
           rows.forEach(function(row){
-            if((!row.display_name || !row.display_name.trim()) && fillMap[row.id]){
+            if((!row.display_name || !String(row.display_name).trim()) && fillMap[row.id]){
               row._inviteeName = fillMap[row.id];
             }
           });
         }
-      } catch(_inE){}
-      var resEl = document.getElementById('riMemberResults');
+      } catch(_inE){ console.warn('[ri] invite_codes 폴백 예외:', _inE); }
+
+      // 캐시 저장 — onclick 에는 uid 만 넘김
+      _riMemSearchCache = {};
+      rows.forEach(function(u){ _riMemSearchCache[u.id] = u; });
+
       if(rows.length === 0){
         resEl.innerHTML = '<div style="padding:14px;text-align:center;font-size:12px;color:#999;">검색 결과 없음</div>';
       } else {
         resEl.innerHTML = rows.map(function(u){
-          var nm = (u.display_name && u.display_name.trim()) || u._inviteeName || '(이름 없음)';
+          var nm = (u.display_name && String(u.display_name).trim()) || u._inviteeName || '(이름 없음)';
           var contact = u.email || u.phone || '–';
           var gr = u.membership_grade || '';
-          return '<div onclick="riPickMember(\''+u.id+'\','+JSON.stringify(JSON.stringify({id:u.id,display_name:nm,email:u.email||'',phone:u.phone||'',membership_grade:gr,role:u.role||'member'}))+')" style="padding:10px 12px;border-bottom:1px solid #ece8df;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;">'
-               + '<div style="min-width:0;flex:1;"><div style="font-size:13px;font-weight:800;color:#1a1a18;">'+nm+'</div>'
-               + '<div style="font-size:11px;color:#777;margin-top:2px;">'+contact+(gr?' · '+gr:'')+'</div></div>'
-               + '<div style="font-size:10px;color:#c8a96e;font-weight:700;">선택 ›</div>'
+          return '<div onclick="riPickMember(\''+u.id+'\')" style="padding:10px 12px;border-bottom:1px solid #ece8df;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;background:#fff;border-radius:8px;margin-bottom:4px;">'
+               + '<div style="min-width:0;flex:1;"><div style="font-size:13px;font-weight:800;color:#1a1a18;">'+_riEscHtml(nm)+'</div>'
+               + '<div style="font-size:11px;color:#777;margin-top:2px;">'+_riEscHtml(contact)+(gr?' · '+_riEscHtml(gr):'')+'</div></div>'
+               + '<div style="font-size:10px;color:#c8a96e;font-weight:700;flex-shrink:0;">선택 ›</div>'
                + '</div>';
         }).join('');
       }
       resEl.style.display='block';
-    } catch(e){ console.warn('[ri] 검색 예외:', e); }
+    } catch(e){
+      console.error('[ri] 검색 예외:', e);
+      resEl.innerHTML = '<div style="padding:14px;text-align:center;font-size:11px;color:#9B1C1C;">예외: '+_riEscHtml(e.message || String(e))+'</div>';
+      resEl.style.display='block';
+    }
   }, 250);
 }
 
-function riPickMember(uid, jsonStr){
-  try {
-    var u = JSON.parse(JSON.parse(jsonStr));
-    _riInvitee = u;
-    document.getElementById('riSelMemName').textContent = u.display_name || '(이름 없음)';
-    document.getElementById('riSelMemContact').textContent = (u.email || '') + (u.phone ? ' · '+u.phone : '');
-    document.getElementById('riSelectedMember').style.display='block';
-    document.getElementById('riMemberResults').style.display='none';
-    document.getElementById('riMemberSearch').value = '';
-  } catch(e){ console.warn('[ri] pickMember 파싱 에러:', e); }
+function riPickMember(uid){
+  var u = _riMemSearchCache[uid];
+  if(!u){ console.warn('[ri] pickMember 캐시 누락 uid=', uid); return; }
+  _riInvitee = u;
+  var nm = (u.display_name && String(u.display_name).trim()) || u._inviteeName || '(이름 없음)';
+  document.getElementById('riSelMemName').textContent = nm;
+  document.getElementById('riSelMemContact').textContent = (u.email || '') + (u.phone ? ' · '+u.phone : '');
+  document.getElementById('riSelectedMember').style.display='block';
+  document.getElementById('riMemberResults').style.display='none';
+  document.getElementById('riMemberSearch').value = '';
+  console.log('[ri] 회원 선택 →', nm, uid);
 }
 
 function riClearSelectedMember(){

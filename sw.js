@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.26';  // 1.53.26 — 2026.06.01: 예약 초대 발송 화면 스크롤 안 됨 핫픽스 — .tu-screen 은 flex-direction:column 기반인데 display:block 으로 열어 자식 .tu-form 의 flex:1 + overflow-y:auto 가 무력화 → 스크롤 컨테이너 높이 0. display:flex 로 변경.
-const STATIC_CACHE = 'taam-static-v1.53.26';
+const SW_VERSION = 'taam-sw-v1.53.27';  // 1.53.27 — 2026.06.01: 예약 초대 발송 회원 검색 핫픽스 — onclick 에 JSON.stringify(JSON.stringify(...)) 이중 인코딩 사용 → HTML 속성 따옴표 깨짐 → 클릭 무력화. 캐시 객체(_riMemSearchCache)로 전환, onclick 에는 uid 만 전달. 진단 로그 + 에러 메시지 사용자 표시 + deleted_at 컬럼 없는 환경 대비 폴백.
+const STATIC_CACHE = 'taam-static-v1.53.27';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
