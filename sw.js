@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.18';  // 1.53.18 — 2026.05.28: 회원 목록/만료일 관리에서 deleted_at IS NULL strict 필터 제거 — 모든 회원 다 안 보이는 사고 대응. 탈퇴 회원은 "탈퇴" 배지 + opacity 0.45 로 시각 구분만. SQL: 모든 deleted_at 을 NULL 로 복구하는 진단/복구 쿼리 제공.
-const STATIC_CACHE = 'taam-static-v1.53.18';
+const SW_VERSION = 'taam-sw-v1.53.19';  // 1.53.19 — 2026.05.28: 예치금 부여 검색 카드/선택사용자/확인 다이얼로그에서 display_name 비어있으면 invite_codes.invitee_name 자동 폴백 — "이형주" 같은 backfill 매칭 실패 회원도 카드에 이름 표시. adgSearchUsers 끝에 emptyNameRows 의 email/phone 으로 invite_codes 추가 조회해 _inviteeName attach.
+const STATIC_CACHE = 'taam-static-v1.53.19';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);

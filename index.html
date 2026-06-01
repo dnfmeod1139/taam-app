@@ -12080,9 +12080,53 @@ async function adgSearchUsers(){
       return;
     }
 
+    // 🆕 v1.53.19 2026.05.28: display_name 비어있는 회원에 invite_codes.invitee_name 폴백 attach.
+    //   "이형주" 같은 invite-only 회원이 backfill 매칭 실패해도 카드에 이름 보이게.
+    try {
+      var emptyNameRows = data.filter(function(u){ return !u.display_name || !String(u.display_name).trim(); });
+      if (emptyNameRows.length > 0) {
+        var emKeys = [], phKeys = [];
+        emptyNameRows.forEach(function(u){
+          if(u.email) emKeys.push(String(u.email).trim().toLowerCase());
+          if(u.phone) phKeys.push(String(u.phone).replace(/[^0-9+]/g, ''));
+        });
+        emKeys = Array.from(new Set(emKeys));
+        phKeys = Array.from(new Set(phKeys));
+        var fbFilters = [];
+        emKeys.forEach(function(e){ fbFilters.push('used_by_email.ilike.' + e); fbFilters.push('invitee_email.ilike.' + e); });
+        phKeys.forEach(function(p){ fbFilters.push('used_by_phone.eq.' + p); fbFilters.push('invitee_phone.eq.' + p); });
+        if (fbFilters.length > 0) {
+          var inv2 = await window.sb.from('invite_codes')
+            .select('invitee_name, invitee_email, used_by_email, invitee_phone, used_by_phone')
+            .or(fbFilters.join(','))
+            .limit(50);
+          if (inv2 && inv2.data) {
+            emptyNameRows.forEach(function(u){
+              var pEm = String(u.email||'').trim().toLowerCase();
+              var pPh = String(u.phone||'').replace(/[^0-9+]/g, '');
+              for (var k=0; k<inv2.data.length; k++) {
+                var r = inv2.data[k];
+                var rUE = String(r.used_by_email||'').trim().toLowerCase();
+                var rIE = String(r.invitee_email||'').trim().toLowerCase();
+                var rUP = String(r.used_by_phone||'').replace(/[^0-9+]/g, '');
+                var rIP = String(r.invitee_phone||'').replace(/[^0-9+]/g, '');
+                if ((pEm && (pEm === rUE || pEm === rIE)) || (pPh && (pPh === rUP || pPh === rIP))) {
+                  if (r.invitee_name && String(r.invitee_name).trim()) {
+                    u._inviteeName = String(r.invitee_name).trim();
+                  }
+                  break;
+                }
+              }
+            });
+            console.log('[adg] invitee_name 폴백 적용:', emptyNameRows.filter(function(u){ return u._inviteeName; }).length, '/', emptyNameRows.length, '명');
+          }
+        }
+      }
+    } catch(_fe){ console.warn('[adg] invitee_name 폴백 실패:', _fe); }
+
     window._adgSearchResultsData = data;
     container.innerHTML = data.map(function(u){
-      var name = u.display_name || '(이름 없음)';
+      var name = u.display_name || u._inviteeName || '(이름 없음)';
       var phone = u.phone || '';
       var email = u.email || '';
       var memBal = u.membership_deposit_balance || 0;
@@ -12148,7 +12192,7 @@ function adgSelectUser(userId){
   infoEl.innerHTML =
     '<div style="background:#fff8e7;border:1.5px solid #d4a017;border-radius:10px;padding:14px 16px;">' +
       '<div style="font-size:10px;color:#999;margin-bottom:6px;letter-spacing:.1em;text-transform:uppercase;">선택된 사용자</div>' +
-      '<div style="font-size:15px;font-weight:800;color:#1a1a18;">' + _escHtmlAdg(u.display_name || '(이름 없음)') + '</div>' +
+      '<div style="font-size:15px;font-weight:800;color:#1a1a18;">' + _escHtmlAdg(u.display_name || u._inviteeName || '(이름 없음)') + '</div>' +
       '<div style="font-size:11px;color:#666;margin-top:5px;">' + _escHtmlAdg(u.phone || u.email || u.id) + '</div>' +
       '<div style="font-size:11px;color:#444;margin-top:12px;padding-top:10px;border-top:1px dashed #d4a017;line-height:1.7;">' +
         '<div><b style="color:#1a1a18;">멤버십 예치금</b> 합계 ₩' + (u.membership_deposit_balance||0).toLocaleString() + '</div>' +
@@ -12387,7 +12431,7 @@ async function adgSubmit(){
     '┌────────────────────────┐\n' +
     '│ 예치금 ' + actionText + ' 확인        │\n' +
     '└────────────────────────┘\n\n' +
-    '대상: ' + (_adgSelectedUser.display_name || '(이름 없음)') + '\n' +
+    '대상: ' + (_adgSelectedUser.display_name || _adgSelectedUser._inviteeName || '(이름 없음)') + '\n' +
     '구분: ' + typeText + ' 예치금\n' +
     '금액: ₩' + Math.abs(amount).toLocaleString() + ' ' + actionText + '\n' +
     '사유: ' + description + '\n\n' +
