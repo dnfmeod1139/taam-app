@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.14';  // 1.53.14 — 2026.05.28: 티켓 화이트리스트 추가 시 자동 푸시 알림 — tamAddAccess 가 allow insert 후 send-push Edge Function 호출 (to:'uid:<userId>'). 메시지: "🎫 [매장] (날짜) 전용 티켓 — 지금 확인하세요". 블랙리스트는 알림 없음. push_subscriptions 없는 회원은 Edge Function 측 자동 skip.
-const STATIC_CACHE = 'taam-static-v1.53.14';
+const SW_VERSION = 'taam-sw-v1.53.15';  // 1.53.15 — 2026.05.28: 초대 링크를 공식 도메인(https://playtaam.com) 으로 고정 — icMakeInviteUrl 이 기존 location.origin 이라 관리자가 taam-app.vercel.app 에서 코드 생성하면 그 호스트가 링크에 박혔던 문제. 두 곳 함수 정의 모두 변경 (icCopyLink/발송 UI 등 사용처 자동 반영).
+const STATIC_CACHE = 'taam-static-v1.53.15';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
