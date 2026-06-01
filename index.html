@@ -10183,40 +10183,80 @@ async function loadDeposit(){
       console.log('💰 예치금 잔액 로드됨');
     }
 
-    // 🆕 v1.53.30 2026.06.01: 슈퍼어드민이 부여한 예치금(admin_grant) 도 충전 내역에 머지
-    //   → 받은 회원의 예치금 내역 충전 탭에 "충전 (부여받음)" 으로 표시.
-    //   metadata.granted_by_name 이 있으면 같이 노출.
+    // 🆕 v1.53.37 2026.06.01: deposit_transactions 의 모든 거래를 charge/use 에 머지.
+    //   change_type 별 분류:
+    //     admin_grant      → charge 탭 "충전 (부여받음)"
+    //     ticket_purchase  → use   탭 "초대 결제" 등 (description 활용)
+    //     admin_deduct     → use   탭 "차감 (관리)"
+    //     ticket_refund    → refund 탭 (별도 처리는 추후)
+    //   중복 방지는 _trxId 로. 모든 디바이스/세션에서 일관 표시.
     try {
       var trxRes = await window.sb.from('deposit_transactions')
-        .select('id, created_at, amount, description, metadata, deposit_type')
+        .select('id, created_at, amount, description, metadata, deposit_type, change_type')
         .eq('user_id', user.id)
-        .eq('change_type', 'admin_grant')
+        .in('change_type', ['admin_grant', 'admin_deduct', 'ticket_purchase'])
         .order('created_at', { ascending: true });
       if (!trxRes.error && Array.isArray(trxRes.data)) {
-        // 중복 방지: 기존 depositData.charge 에 같은 trx id 있는지 check
-        var existingTrxIds = new Set((depositData.charge || []).map(function(c){ return c._trxId; }).filter(Boolean));
-        trxRes.data.forEach(function(r){
-          if (existingTrxIds.has(r.id)) return;
-          var who = (r.metadata && r.metadata.granted_by_name) || '';
-          var dispDate = '';
+        var existingChargeIds = new Set((depositData.charge || []).map(function(c){ return c._trxId; }).filter(Boolean));
+        var existingUseIds    = new Set((depositData.use    || []).map(function(c){ return c._trxId; }).filter(Boolean));
+        var fmtDate = function(iso){
           try {
-            var dt = new Date(r.created_at);
-            dispDate = dt.getFullYear()+'.'+String(dt.getMonth()+1).padStart(2,'0')+'.'+String(dt.getDate()).padStart(2,'0')
-                     + ' ' + String(dt.getHours()).padStart(2,'0')+':'+String(dt.getMinutes()).padStart(2,'0');
-          } catch(_){ dispDate = r.created_at; }
+            var dt = new Date(iso);
+            return dt.getFullYear()+'.'+String(dt.getMonth()+1).padStart(2,'0')+'.'+String(dt.getDate()).padStart(2,'0')
+                 + ' ' + String(dt.getHours()).padStart(2,'0')+':'+String(dt.getMinutes()).padStart(2,'0');
+          } catch(_){ return iso; }
+        };
+        var pushedCharge = 0, pushedUse = 0;
+        trxRes.data.forEach(function(r){
           var typeLabel = r.deposit_type === 'membership' ? '멤버십' : '일반';
-          depositData.charge.push({
-            _trxId: r.id,
-            date: dispDate,
-            amt: r.amount || 0,
-            name: '충전 (부여받음 · ' + typeLabel + ')',
-            method: who ? '슈퍼어드민 ' + who : '슈퍼어드민 부여'
-          });
+          var dispDate = fmtDate(r.created_at);
+
+          if (r.change_type === 'admin_grant') {
+            if (existingChargeIds.has(r.id)) return;
+            var who = (r.metadata && r.metadata.granted_by_name) || '';
+            depositData.charge.push({
+              _trxId: r.id,
+              date: dispDate,
+              amt: r.amount || 0,
+              name: '충전 (부여받음 · ' + typeLabel + ')',
+              method: who ? '슈퍼어드민 ' + who : '슈퍼어드민 부여'
+            });
+            pushedCharge++;
+          }
+          else if (r.change_type === 'ticket_purchase') {
+            if (existingUseIds.has(r.id)) return;
+            // amount 는 음수(-pay)로 저장됨 → 사용 내역에는 절댓값으로 표시
+            var amt = Math.abs(r.amount || 0);
+            var purchId = (r.metadata && (r.metadata.invite_id || r.metadata.purchase_id)) || '';
+            depositData.use.push({
+              _trxId: r.id,
+              date: dispDate,
+              amt: amt,
+              name: r.description || ('티켓 결제 · ' + typeLabel),
+              purchaseId: purchId ? String(purchId) : ''
+            });
+            pushedUse++;
+          }
+          else if (r.change_type === 'admin_deduct') {
+            if (existingUseIds.has(r.id)) return;
+            depositData.use.push({
+              _trxId: r.id,
+              date: dispDate,
+              amt: Math.abs(r.amount || 0),
+              name: '차감 (관리) · ' + typeLabel,
+              purchaseId: ''
+            });
+            pushedUse++;
+          }
         });
-        // 날짜순 정렬 (오래된 것 → 최신, 렌더는 reverse 사용)
+        // 날짜순 정렬
         depositData.charge.sort(function(a,b){ return (a.date||'').localeCompare(b.date||''); });
+        depositData.use.sort(function(a,b){ return (a.date||'').localeCompare(b.date||''); });
+        console.log('[loadDeposit] trx 머지:', { charge: pushedCharge, use: pushedUse });
+      } else if (trxRes.error) {
+        console.warn('[loadDeposit] trx 머지 에러:', trxRes.error.message);
       }
-    } catch(_te) { console.warn('[loadDeposit] admin_grant 머지 예외:', _te); }
+    } catch(_te) { console.warn('[loadDeposit] trx 머지 예외:', _te); }
 
     // 🆕 v1.53.34 2026.06.01: 미확인 알림 토스트 — 자동 seen 처리 제거.
     //   토스트는 표시하되 DB seen 은 그대로 유지 → 알림 내역 페이지 진입 시에만 seen=true.
@@ -22257,22 +22297,11 @@ async function riConfirmPay(){
       console.log('[riPay] deposit_transactions INSERT 완료');
     } catch(_te){ console.warn('[riPay] deposit_transactions 예외:', _te); }
 
-    // 🆕 v1.53.36: IDB depositData.use 에도 즉시 push — 현재 디바이스 사용 내역 탭에 바로 반영
-    try {
-      var now0 = new Date();
-      var dispDate = now0.getFullYear()+'.'+String(now0.getMonth()+1).padStart(2,'0')+'.'+String(now0.getDate()).padStart(2,'0')
-                   +' '+String(now0.getHours()).padStart(2,'0')+':'+String(now0.getMinutes()).padStart(2,'0');
-      depositData.use.push({
-        date: dispDate,
-        amt: pay,
-        name: '초대 결제 · ' + (inv.restaurant_name || '레스토랑'),
-        purchaseId: 'INV-' + inv.id.slice(0,8) + '-' + now0.getTime()
-      });
-      currentDepositBalance = totalBal - pay;
-      try { await IDB.set(_userKey('excDeposit'), JSON.stringify({ data: depositData, balance: currentDepositBalance })); } catch(_){}
-      // UI 의 예치금 잔액도 즉시 갱신
-      try { var bal = document.getElementById('mpBalance'); if(bal) bal.textContent = '₩ ' + currentDepositBalance.toLocaleString(); } catch(_){}
-    } catch(_de){ console.warn('[riPay] IDB use push 실패:', _de); }
+    // 🆕 v1.53.37: 결제 후 — Supabase deposit_transactions 가 truth source.
+    //   loadDeposit() 을 다시 호출해서 use 탭에 머지된 결과를 메모리에 반영 +
+    //   IDB 동기화. 사용 내역 페이지가 이미 열려있으면 자동 재렌더.
+    currentDepositBalance = totalBal - pay;
+    try { var bal = document.getElementById('mpBalance'); if(bal) bal.textContent = '₩ ' + currentDepositBalance.toLocaleString(); } catch(_){}
 
     // 2) reservation_invites 상태 갱신
     var inv2 = await window.sb.from('reservation_invites').update({
@@ -22316,10 +22345,26 @@ async function riConfirmPay(){
       }
     } catch(_phe){ console.warn('[riPay] purchaseHistory push 실패:', _phe); }
 
-    showToast('✓','예약 완료','초대 결제가 완료되었습니다 (구매 내역에 표시)');
+    showToast('✓','예약 완료','초대 결제가 완료되었습니다 (구매 내역 + 사용 내역 자동 반영)');
     riPayClose();
-    // 마이페이지/예치금 갱신
-    try { if(typeof loadDeposits === 'function') loadDeposits(); } catch(_){}
+    // 🆕 v1.53.37: loadDeposit 을 await — Supabase 의 ticket_purchase row 가 use 탭에 즉시 머지됨.
+    //   그 후 IDB 도 새 데이터로 갱신.
+    try { if(typeof loadDeposit === 'function') await loadDeposit(); } catch(_){}
+    // 마이페이지 잔액 다시 (loadDeposit 이 currentDepositBalance 갱신)
+    try { var bal2 = document.getElementById('mpBalance'); if(bal2) bal2.textContent = '₩ ' + currentDepositBalance.toLocaleString(); } catch(_){}
+    // 예치금 사용 내역 페이지가 열려있으면 다시 렌더 (사용내역 탭 = idx 1)
+    try {
+      var dhPage = document.getElementById('depositHistPage');
+      if (dhPage && dhPage.style.display !== 'none') {
+        var activeTab = dhPage.querySelector('.mp-dh-tab.active');
+        if (typeof dhTab === 'function') {
+          var tabs = dhPage.querySelectorAll('.mp-dh-tab');
+          var idx = Array.prototype.indexOf.call(tabs, activeTab);
+          if (idx < 0) idx = 1;  // 기본: 사용내역 탭
+          dhTab(idx, activeTab || tabs[idx]);
+        }
+      }
+    } catch(_){}
     try { if(typeof renderMyPage === 'function') renderMyPage(); } catch(_){}
     // 🆕 v1.53.35: 결제 완료 → 받은 초대 카운트 + 알림 레드닷 갱신
     try { if(typeof updateUnseenInvitesCount === 'function') updateUnseenInvitesCount(); } catch(_){}
