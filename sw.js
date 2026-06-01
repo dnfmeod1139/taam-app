@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.16';  // 1.53.16 — 2026.05.28: 회원 관리 3종 — ① memberListScreen "+ 회원 추가" 버튼 숨김 (회원 초대와 중복). ② 가입 시 display_name 폴백 (savedName 비어있으면 _pendingInviteCode.memberName 자동 사용 — "이형주" 같은 invite-only 회원 이름 보장). ③ 회원 카드 클릭 → 회원 관리 모달 (이름 수정 + soft-delete 탈퇴). renderMemberList/만료일 관리 모두 deleted_at IS NULL 필터.
-const STATIC_CACHE = 'taam-static-v1.53.16';
+const SW_VERSION = 'taam-sw-v1.53.17';  // 1.53.17 — 2026.05.28: 예치금 부여 사용자 검색 강화 — invite_codes 보조 검색에서 .eq('used',true) 제거 (consume-invite 미완료 케이스 포함) + email .eq() → .ilike() (대소문자/공백 흡수) + used_by + invitee 양쪽 이메일/휴대폰 모두 수집. profiles.display_name 백필 안 된 회원도 이름으로 검색 가능. 콘솔 디버그 로그 추가.
+const STATIC_CACHE = 'taam-static-v1.53.17';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
