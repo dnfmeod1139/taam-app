@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.19';  // 1.53.19 — 2026.05.28: 예치금 부여 검색 카드/선택사용자/확인 다이얼로그에서 display_name 비어있으면 invite_codes.invitee_name 자동 폴백 — "이형주" 같은 backfill 매칭 실패 회원도 카드에 이름 표시. adgSearchUsers 끝에 emptyNameRows 의 email/phone 으로 invite_codes 추가 조회해 _inviteeName attach.
-const STATIC_CACHE = 'taam-static-v1.53.19';
+const SW_VERSION = 'taam-sw-v1.53.20';  // 1.53.20 — 2026.05.28: 회원 초대 코드 used 보정 — ① 슈퍼어드민이 invite 카드 미사용 배지 옆 "✓ 사용 처리" 버튼으로 수동 토글 (icMarkUsed). 매칭 profile 자동 조회해 used_by_email/name 채움. ② SQL: 진단 + 일괄 자동 보정 (used=false 인데 매칭 profile 있는 invite 모두 used=true). consume-invite 실패해도 슈퍼어드민이 즉시 복구.
+const STATIC_CACHE = 'taam-static-v1.53.20';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);

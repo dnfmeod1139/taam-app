@@ -20975,6 +20975,13 @@ function renderInviteCodes(){
       ? '<span style="font-size:9px;font-weight:700;color:#E53935;background:#fdf0f0;padding:3px 8px;border-radius:10px;">사용됨'+(usedBy?' · '+usedBy:'')+'</span>'
       : '<span style="font-size:9px;font-weight:700;color:#22c55e;background:#f0fdf4;padding:3px 8px;border-radius:10px;">미사용</span>';
 
+    // 🆕 v1.53.20 2026.05.28: 슈퍼어드민이 미사용 코드를 수동으로 사용 처리 토글 가능.
+    //   consume-invite 가 어떤 이유로 실패해서 used 가 false 로 남았을 때 강제 보정용.
+    var manualUseBtn = '';
+    if (!used && typeof _isSuperAdmin === 'function' && _isSuperAdmin()) {
+      manualUseBtn = '<button onclick="event.stopPropagation();icMarkUsed(\''+code+'\')" title="수동으로 사용 처리" style="background:none;border:1px solid #ddd;color:#5C0A14;cursor:pointer;font-size:9.5px;font-weight:700;padding:3px 8px;border-radius:6px;letter-spacing:.04em;margin-left:6px;">✓ 사용 처리</button>';
+    }
+
     // 공유 버튼 (미사용 코드만)
     var shareBtns = '';
     if (!used) {
@@ -21000,6 +21007,7 @@ function renderInviteCodes(){
       + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">'
       + '<span style="font-family:var(--font-main);font-size:14px;font-weight:700;letter-spacing:.1em;color:'+(used?'#aaa':'#111')+';">'+code+'</span>'
       + badge
+      + manualUseBtn
       + '</div>'
       + (inviteeName ? '<div style="font-size:12px;color:#666;font-weight:500;">'+inviteeName+(inviteePhone?' · '+inviteePhone:'')+'</div>' : '')
       + '</div>'
@@ -21021,6 +21029,75 @@ function removeCode(code){
   }
   renderInviteCodes();
 }
+
+// 🆕 v1.53.20 2026.05.28: 슈퍼어드민이 invite_code 를 수동으로 사용 처리.
+//   consume-invite 호출 실패 등으로 used=false 로 남은 코드를 강제 보정.
+//   매칭되는 profiles 가 있으면 used_by_email/name 도 자동 채움.
+async function icMarkUsed(code){
+  if(typeof _isSuperAdmin !== 'function' || !_isSuperAdmin()){
+    if(typeof showToast === 'function') showToast('🔒','권한 부족','슈퍼어드민 전용');
+    return;
+  }
+  if(!window.sb || !code) return;
+  // 현재 invite row + 매칭 profile 조회 (이메일/번호 우선)
+  var inv = inviteCodes.find(function(c){ return (typeof c==='object'?c.code:c) === code; });
+  if(!inv){ if(typeof showToast==='function') showToast('⚠','코드 없음', code); return; }
+  if(typeof confirm === 'function' && !confirm('이 초대 코드를 사용 처리로 표시할까요?\n\n' + code + (inv.inviteeName?' · '+inv.inviteeName:''))) return;
+  try {
+    // 매칭 profile 찾기 (used_by_* 채우려고)
+    var byEmail = null, byPhone = null;
+    if(inv.inviteeEmail || inv.usedByEmail){
+      var em = (inv.usedByEmail || inv.inviteeEmail || '').trim().toLowerCase();
+      if(em){
+        var er = await window.sb.from('profiles').select('id, email, display_name').ilike('email', em).limit(1);
+        if(er && er.data && er.data[0]) byEmail = er.data[0];
+      }
+    }
+    if(!byEmail && (inv.inviteePhone || inv.usedByPhone)){
+      var ph = (inv.usedByPhone || inv.inviteePhone || '').replace(/[^0-9+]/g, '');
+      if(ph){
+        var pr = await window.sb.from('profiles').select('id, phone, display_name').eq('phone', ph).limit(1);
+        if(pr && pr.data && pr.data[0]) byPhone = pr.data[0];
+      }
+    }
+    var matched = byEmail || byPhone;
+    var payload = {
+      used: true,
+      used_at: new Date().toISOString()
+    };
+    if(!inv.usedByEmail && matched && matched.email) payload.used_by_email = matched.email;
+    if(!inv.usedByPhone && matched && matched.phone) payload.used_by_phone = matched.phone;
+    if(!inv.usedByName) payload.used_by_name = (matched && matched.display_name) || inv.inviteeName || '';
+
+    var res = await window.sb.from('invite_codes').update(payload).eq('code', code).select('used');
+    if(res.error){
+      if(typeof showToast==='function') showToast('⚠','저장 실패', res.error.message);
+      return;
+    }
+    if(!res.data || res.data.length === 0){
+      if(typeof showToast==='function') showToast('⚠','RLS 차단','변경된 row 0개');
+      return;
+    }
+    // 로컬 캐시 갱신
+    for(var i=0; i<inviteCodes.length; i++){
+      if(inviteCodes[i].code === code){
+        inviteCodes[i].used = true;
+        if(payload.used_by_email) inviteCodes[i].usedByEmail = payload.used_by_email;
+        if(payload.used_by_phone) inviteCodes[i].usedByPhone = payload.used_by_phone;
+        if(payload.used_by_name)  inviteCodes[i].usedByName  = payload.used_by_name;
+        inviteCodes[i].usedAt = payload.used_at;
+        break;
+      }
+    }
+    saveInviteCodes();
+    renderInviteCodes();
+    if(typeof showToast==='function') showToast('✓','사용 처리 완료', code + (matched ? ' → '+(matched.display_name||matched.email||matched.phone||'') : ''));
+  } catch(e){
+    console.error('[icMarkUsed]', e);
+    if(typeof showToast==='function') showToast('⚠','오류', (e&&e.message)||String(e));
+  }
+}
+window.icMarkUsed = icMarkUsed;
 
 // ════════════════════════════════════════════════
 // RESTAURANT & TICKET LIST
