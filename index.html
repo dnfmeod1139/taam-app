@@ -12517,9 +12517,9 @@ async function openMembershipUntilMgmt(){
     return;
   }
   try {
+    // 🆕 v1.53.18: deleted_at 필터 제거 — 안전망 (탈퇴 회원은 배지로 구분)
     var res = await window.sb.from('profiles')
       .select('id, display_name, phone, email, created_at, member_until, role, deleted_at')
-      .is('deleted_at', null)
       .order('created_at', { ascending: false })
       .limit(500);
     if(res.error){
@@ -25732,10 +25732,10 @@ async function renderMemberList() {
   }
   el.innerHTML = '<div class="sub-empty">불러오는 중...</div>';
   try {
-    // 🆕 v1.53.16 2026.05.28: deleted_at IS NULL — 탈퇴 회원 제외
+    // 🆕 v1.53.18 2026.05.28: deleted_at 필터 제거 — 탈퇴 회원도 표시하되 배지로 구분.
+    //   v1.53.16 의 strict 필터로 모든 회원이 안 보이는 사고 방지 (안전망).
     var res = await window.sb.from('profiles')
       .select('id, display_name, phone, email, created_at, member_until, role, membership_deposit_balance, general_deposit_balance, deleted_at')
-      .is('deleted_at', null)
       .order('created_at', { ascending: false })
       .limit(500);
     if (res.error) {
@@ -25762,6 +25762,9 @@ async function renderMemberList() {
       else if (role==='admin'){ gradeCls='t'; gradeLabel='관리자'; }
       else if (role==='partner'){ gradeCls='t'; gradeLabel='파트너'; }
       else { gradeCls='t'; gradeLabel='회원'; }
+      // 🆕 v1.53.18: 탈퇴 회원은 배지로 구분 + 카드 흐림
+      var isDeleted = !!m.deleted_at;
+      if(isDeleted){ gradeLabel = '탈퇴'; gradeCls = 'deleted'; }
       var memBal = (m.membership_deposit_balance||0);
       var genBal = (m.general_deposit_balance||0);
       // 프로모션 체크 (종료일 = 2027.12.31)
@@ -25771,7 +25774,7 @@ async function renderMemberList() {
         isPromo = !isNaN(du.getTime()) && du.getFullYear()===2027 && du.getMonth()===11 && du.getDate()===31;
       }
       var untilHtml = _fmt(m.member_until) + (isPromo ? ' <span style="color:#c8a96e;font-size:8px;letter-spacing:.05em;">★</span>' : '');
-      return '<div class="mem-card" onclick="memOpenProfileQuick(\''+_esc(m.id)+'\',\''+_esc(m.display_name||'')+'\')">'
+      return '<div class="mem-card" style="'+(isDeleted?'opacity:.45;':'')+'" onclick="memOpenProfileQuick(\''+_esc(m.id)+'\',\''+_esc(m.display_name||'')+'\')">'
         +'<div class="mem-card-top">'
           +'<div class="mem-name">'+_esc(m.display_name||'(이름 없음)')+'</div>'
           +'<div class="mem-grade '+gradeCls+'">'+gradeLabel+'</div>'

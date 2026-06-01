@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.17';  // 1.53.17 — 2026.05.28: 예치금 부여 사용자 검색 강화 — invite_codes 보조 검색에서 .eq('used',true) 제거 (consume-invite 미완료 케이스 포함) + email .eq() → .ilike() (대소문자/공백 흡수) + used_by + invitee 양쪽 이메일/휴대폰 모두 수집. profiles.display_name 백필 안 된 회원도 이름으로 검색 가능. 콘솔 디버그 로그 추가.
-const STATIC_CACHE = 'taam-static-v1.53.17';
+const SW_VERSION = 'taam-sw-v1.53.18';  // 1.53.18 — 2026.05.28: 회원 목록/만료일 관리에서 deleted_at IS NULL strict 필터 제거 — 모든 회원 다 안 보이는 사고 대응. 탈퇴 회원은 "탈퇴" 배지 + opacity 0.45 로 시각 구분만. SQL: 모든 deleted_at 을 NULL 로 복구하는 진단/복구 쿼리 제공.
+const STATIC_CACHE = 'taam-static-v1.53.18';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
