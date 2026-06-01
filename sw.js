@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.24';  // 1.53.24 — 2026.06.01: 예약 초대 발송 (신규) + 티켓 접근 제어 숨김. 슈퍼어드민 전용 "📨 예약 초대 발송" 메뉴 추가 — 특정 회원에게 레스토랑·일정·인원·금액 정보로 1:1 예약 초대. 푸시 알림 + 회원 측 결제 팝업(예치금 차감). reservation_invites 테이블 + RLS 신설. 티켓 회원 접근 제어 메뉴는 display:none (정상 동작 안 함 — 코드 보존).
-const STATIC_CACHE = 'taam-static-v1.53.24';
+const SW_VERSION = 'taam-sw-v1.53.25';  // 1.53.25 — 2026.06.01: 예약 초대 발송 레스토랑 UI 핫픽스 — 73개 풀리스트가 description 까지 깨져 렌더되던 문제 해결. 슈퍼어드민 검색 패턴(검색 입력란 + 결과 드롭다운 12개 + 선택 카드 + 변경 버튼) 으로 전환. 이름·장르·주소·지역·도시 매칭.
+const STATIC_CACHE = 'taam-static-v1.53.25';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);

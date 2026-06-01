@@ -20936,15 +20936,18 @@ function openReservationInviteScreen(){
   });
   document.getElementById('riPolicyExtraField').style.display='none';
 
-  // 레스토랑 목록 렌더 (티켓 업로드 화면과 동일 패턴)
+  // v1.53.25: 레스토랑 목록을 풀리스트 대신 검색 입력란 + 드롭다운 (티켓 업로드 슈퍼어드민 패턴)
   var listEl = document.getElementById('riRestList');
   if(listEl){
-    listEl.innerHTML = (restaurantDB || []).map(function(r){
-      return '<div class="tu-rest-item" data-id="'+r.id+'" onclick="riSelectRestaurant(this,\''+r.id+'\')">'
-           + '<div class="tu-rest-name">'+(r.name||'(이름없음)')+'</div>'
-           + '<div class="tu-rest-genre">'+(r.genre||'')+'</div>'
-           + '</div>';
-    }).join('');
+    listEl.innerHTML =
+      '<div style="position:relative;">' +
+        '<input type="text" id="riRestSearchInput" placeholder="가게명·장르·지역 검색…" autocomplete="off" ' +
+          'style="width:100%;box-sizing:border-box;padding:13px 14px 13px 40px;border:2px solid #e8e4df;border-radius:10px;background:#fff;font-size:13.5px;color:#1a1a18;outline:none;" ' +
+          'oninput="_riRestSearchOnInput(this.value)" />' +
+        '<span style="position:absolute;left:14px;top:50%;transform:translateY(-50%);font-size:14px;color:#aaa;pointer-events:none;">🔍</span>' +
+      '</div>' +
+      '<div id="riRestSearchResults" style="margin-top:8px;display:flex;flex-direction:column;gap:6px;max-height:280px;overflow-y:auto;"></div>' +
+      '<div id="riRestSelectedCard" style="margin-top:8px;display:none;"></div>';
   }
   document.getElementById('riScreen').style.display = 'block';
   window.scrollTo({ top:0, behavior:'instant' });
@@ -20954,10 +20957,65 @@ function closeReservationInviteScreen(){
   document.getElementById('riScreen').style.display = 'none';
 }
 
-function riSelectRestaurant(el, id){
-  _riRestId = id;
-  document.querySelectorAll('#riRestList .tu-rest-item').forEach(function(x){ x.classList.remove('on'); });
-  if(el) el.classList.add('on');
+// v1.53.25: 레스토랑 검색 (이름/장르/주소/지역/도시 매칭, 최대 12개)
+function _riRestSearchOnInput(q){
+  var resultsEl = document.getElementById('riRestSearchResults');
+  if(!resultsEl) return;
+  q = (q || '').trim().toLowerCase();
+  if(!q){ resultsEl.innerHTML = ''; return; }
+  var matches = (restaurantDB || []).filter(function(r){
+    var hay = ((r.name||'') + ' ' + (r.genre||'') + ' ' + (r.address||'') + ' ' + (r.region||'') + ' ' + (r.city||'')).toLowerCase();
+    return hay.indexOf(q) !== -1;
+  }).slice(0, 12);
+  if(matches.length === 0){
+    resultsEl.innerHTML = '<div style="padding:14px;text-align:center;font-size:12px;color:#999;background:#faf8f5;border-radius:10px;">검색 결과 없음</div>';
+    return;
+  }
+  resultsEl.innerHTML = matches.map(function(r){
+    var loc = [r.city, r.region].filter(Boolean).join(' ');
+    return '<div onclick="_riRestSelect(\''+r.id+'\')" style="padding:11px 14px;background:#fff;border:1.5px solid #e8e4df;border-radius:10px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;">'
+         + '<div style="min-width:0;flex:1;"><div style="font-size:13.5px;font-weight:700;color:#1a1a18;">'+(r.name||'(이름없음)')+'</div>'
+         + '<div style="font-size:11px;color:#888;margin-top:2px;">'+(r.genre||'')+(loc?' · '+loc:'')+'</div></div>'
+         + '<div style="font-size:10px;color:#c8a96e;font-weight:700;">선택 ›</div>'
+         + '</div>';
+  }).join('');
+}
+
+function _riRestSelect(rid){
+  var r = (restaurantDB || []).find(function(x){ return String(x.id) === String(rid); });
+  if(!r) return;
+  _riRestId = rid;
+  // 검색 + 결과 숨김, 선택 카드 표시
+  var inp = document.getElementById('riRestSearchInput');
+  if(inp){ inp.value = ''; inp.parentNode.style.display = 'none'; }
+  var res = document.getElementById('riRestSearchResults');
+  if(res){ res.innerHTML = ''; res.style.display = 'none'; }
+  _riRestRenderSelectedCard(r);
+}
+
+function _riRestRenderSelectedCard(r){
+  var card = document.getElementById('riRestSelectedCard');
+  if(!card) return;
+  var loc = [r.city, r.region].filter(Boolean).join(' ');
+  card.innerHTML = '<div style="padding:14px 16px;background:#1a1a18;border-radius:10px;display:flex;justify-content:space-between;align-items:center;gap:12px;">'
+                 + '<div style="min-width:0;flex:1;">'
+                 +   '<div style="font-size:9px;font-weight:800;letter-spacing:.18em;color:#c8a96e;margin-bottom:4px;">SELECTED</div>'
+                 +   '<div style="font-size:14px;font-weight:800;color:#fff;">'+(r.name||'(이름없음)')+'</div>'
+                 +   '<div style="font-size:11px;color:#ccc;margin-top:2px;">'+(r.genre||'')+(loc?' · '+loc:'')+'</div>'
+                 + '</div>'
+                 + '<button onclick="_riRestChange()" style="background:none;border:1px solid #c8a96e;border-radius:8px;padding:7px 11px;font-size:10.5px;font-weight:700;color:#c8a96e;cursor:pointer;flex-shrink:0;">변경</button>'
+                 + '</div>';
+  card.style.display = 'block';
+}
+
+function _riRestChange(){
+  _riRestId = null;
+  var card = document.getElementById('riRestSelectedCard');
+  if(card){ card.style.display = 'none'; card.innerHTML = ''; }
+  var inp = document.getElementById('riRestSearchInput');
+  if(inp){ inp.parentNode.style.display = 'block'; inp.focus(); }
+  var res = document.getElementById('riRestSearchResults');
+  if(res){ res.style.display = 'flex'; }
 }
 
 function riSelectType(el, type){
