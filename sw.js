@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.23';  // 1.53.23 — 2026.05.28: 구매자 정보 모달 빈칸 핫픽스 — showBuyerInfo 의 profiles SELECT 절에서 'grade' 컬럼 제거 (DB 에는 membership_grade 만 존재). 'grade' 가 들어가서 PostgREST 가 400 Bad Request 로 응답 → 전체 fetch 실패 → p 빈 채로 모달 렌더 → "(이름 미등록)" + "⚠ 연락처 등록 안됨". 이형주 같은 정상 회원의 구매자 정보도 이제 정상 표시.
-const STATIC_CACHE = 'taam-static-v1.53.23';
+const SW_VERSION = 'taam-sw-v1.53.24';  // 1.53.24 — 2026.06.01: 예약 초대 발송 (신규) + 티켓 접근 제어 숨김. 슈퍼어드민 전용 "📨 예약 초대 발송" 메뉴 추가 — 특정 회원에게 레스토랑·일정·인원·금액 정보로 1:1 예약 초대. 푸시 알림 + 회원 측 결제 팝업(예치금 차감). reservation_invites 테이블 + RLS 신설. 티켓 회원 접근 제어 메뉴는 display:none (정상 동작 안 함 — 코드 보존).
+const STATIC_CACHE = 'taam-static-v1.53.24';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);

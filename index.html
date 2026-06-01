@@ -7510,10 +7510,19 @@ window.closePromoCarousel = function(){
         <div class="admin-arrow">›</div>
       </div>
       <!-- 🆕 v1.53.13 2026.05.28: 티켓 화이트/블랙리스트 관리 -->
-      <div class="admin-menu-item" onclick="openTicketAccessMgmt()">
+      <!-- 🚫 v1.53.24 2026.06.01: 정상 동작 안 함 → 숨김 처리. 코드/모달은 보존(나중에 재활성화 가능) -->
+      <div class="admin-menu-item" onclick="openTicketAccessMgmt()" style="display:none;">
         <div>
           <div class="admin-menu-text">🎫 티켓 회원 접근 제어 (전용/차단)</div>
           <div class="admin-menu-sub">특정 회원만 구매 가능(화이트) / 특정 회원 차단(블랙) 명단 관리</div>
+        </div>
+        <div class="admin-arrow">›</div>
+      </div>
+      <!-- 🆕 v1.53.24 2026.06.01: 슈퍼어드민 전용 — 특정 회원에게 예약 초대 발송 -->
+      <div class="admin-menu-item" onclick="openReservationInviteScreen()">
+        <div>
+          <div class="admin-menu-text">📨 예약 초대 발송</div>
+          <div class="admin-menu-sub">특정 회원에게 레스토랑·일정·인원·금액 정보로 1:1 예약 초대 (푸시 + 결제 팝업)</div>
         </div>
         <div class="admin-arrow">›</div>
       </div>
@@ -8080,6 +8089,205 @@ window.closePromoCarousel = function(){
     </div>
 
     <button class="tu-submit" id="tuSubmitBtn" onclick="uploadTicket()">업로드</button>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════ -->
+<!-- 🆕 v1.53.24 2026.06.01: 예약 초대 발송 화면 (슈퍼어드민 전용)        -->
+<!-- 티켓 업로드 화면 구조 복제 — 홈페이지 연동/마감 카운트다운/등급별   -->
+<!-- 우선 공개 제외. 좌석 구성 → 단순 인원 입력. 취소 규정 위에 회원 검색 -->
+<!-- ════════════════════════════════════════════════════════════════ -->
+<div id="riScreen" class="tu-screen" data-lang-lock="ko" style="display:none;">
+  <div class="tu-header">
+    <button class="page-back" onclick="closeReservationInviteScreen()">←</button>
+    <div class="page-title">예약 초대 발송</div>
+  </div>
+  <div class="tu-form">
+    <div class="rp-field">
+      <label class="rp-label">레스토랑 선택</label>
+      <div class="tu-rest-list" id="riRestList"></div>
+    </div>
+    <div class="rp-field">
+      <label class="rp-label">티켓 유형</label>
+      <div class="tu-type-tabs">
+        <div class="tu-type-tab std on" onclick="riSelectType(this,'std')">Standard</div>
+        <div class="tu-type-tab eve" onclick="riSelectType(this,'eve')">Event</div>
+      </div>
+    </div>
+    <div class="rp-field">
+      <label class="rp-label">날짜</label>
+      <button class="tu-picker-btn" id="riDateBtn" onclick="riOpenCal()">
+        <span id="riDateBtnText">날짜를 선택하세요</span>
+        <span class="tu-picker-arrow">▾</span>
+      </button>
+    </div>
+    <div class="rp-field">
+      <label class="rp-label">시간</label>
+      <button class="tu-picker-btn" id="riTimeBtn" onclick="riOpenTimeWheel()">
+        <span id="riTimeBtnText">시간을 선택하세요</span>
+        <span class="tu-picker-arrow">▾</span>
+      </button>
+    </div>
+    <div class="rp-field">
+      <label class="rp-label">인원</label>
+      <div style="display:flex;align-items:center;gap:14px;padding:8px 0;">
+        <button class="tu-slot-btn" onclick="riAdjPax(-1)" style="width:36px;height:36px;font-size:18px;">−</button>
+        <div id="riPaxVal" style="font-family:var(--font-main);font-size:22px;font-weight:900;color:#111;min-width:42px;text-align:center;">1</div>
+        <span style="font-family:var(--font-main);font-size:13px;color:#888;">인</span>
+        <button class="tu-slot-btn" onclick="riAdjPax(1)" style="width:36px;height:36px;font-size:18px;">+</button>
+      </div>
+    </div>
+    <div class="rp-field">
+      <label class="rp-label">식사 예약금 (1인, 원)</label>
+      <div style="position:relative;">
+        <div style="position:absolute;left:14px;top:50%;transform:translateY(-50%);font-family:var(--font-main);font-size:15px;font-weight:600;color:#aaa;pointer-events:none;">₩</div>
+        <input class="tu-input" id="riMealAmt" type="text" inputmode="numeric" placeholder="220,000" oninput="tuFormatMoney(this);riUpdateTotal()" style="padding-left:30px;font-family:var(--font-main);font-size:17px;">
+      </div>
+    </div>
+    <div class="rp-field">
+      <label class="rp-label">대행비 (1인, 원)</label>
+      <div style="position:relative;">
+        <div style="position:absolute;left:14px;top:50%;transform:translateY(-50%);font-family:var(--font-main);font-size:15px;font-weight:600;color:#aaa;pointer-events:none;">₩</div>
+        <input class="tu-input" id="riAgencyFee" type="text" inputmode="numeric" placeholder="30,000" oninput="tuFormatMoney(this);riUpdateTotal()" style="padding-left:30px;font-family:var(--font-main);font-size:17px;">
+      </div>
+    </div>
+    <div class="rp-field">
+      <label class="rp-label">주류 미니멈 (1인, 원, 없으면 0)</label>
+      <div style="position:relative;">
+        <div style="position:absolute;left:14px;top:50%;transform:translateY(-50%);font-family:var(--font-main);font-size:15px;font-weight:600;color:#aaa;pointer-events:none;">₩</div>
+        <input class="tu-input" id="riWineMin" type="text" inputmode="numeric" placeholder="0" oninput="tuFormatMoney(this);riUpdateTotal()" style="padding-left:30px;font-family:var(--font-main);font-size:17px;">
+      </div>
+    </div>
+    <div class="rp-field">
+      <label class="rp-label">티켓 페이지 연동</label>
+      <div class="tu-tgenre-wrap" id="riTicketGenreWrap">
+        <button class="tu-tgenre-btn" onclick="riSelectTicketGenre('스시',this)">스시</button>
+        <button class="tu-tgenre-btn" onclick="riSelectTicketGenre('텐푸라',this)">텐푸라</button>
+        <button class="tu-tgenre-btn" onclick="riSelectTicketGenre('일본요리',this)">일본요리</button>
+        <button class="tu-tgenre-btn" onclick="riSelectTicketGenre('야키토리',this)">야키토리</button>
+        <button class="tu-tgenre-btn" onclick="riSelectTicketGenre('야키니쿠',this)">야키니쿠</button>
+        <button class="tu-tgenre-btn" onclick="riSelectTicketGenre('프렌치',this)">프렌치</button>
+        <button class="tu-tgenre-btn" onclick="riSelectTicketGenre('이탈리안',this)">이탈리안</button>
+        <button class="tu-tgenre-btn" onclick="riSelectTicketGenre('스페인요리',this)">스페인요리</button>
+        <button class="tu-tgenre-btn" onclick="riSelectTicketGenre('중식',this)">중식</button>
+        <button class="tu-tgenre-btn" onclick="riSelectTicketGenre('이노베이티브',this)">이노베이티브</button>
+        <button class="tu-tgenre-btn" onclick="riSelectTicketGenre('소고기',this)">소고기</button>
+        <button class="tu-tgenre-btn" onclick="riSelectTicketGenre('돼지고기',this)">돼지고기</button>
+        <button class="tu-tgenre-btn" onclick="riSelectTicketGenre('한식',this)">한식</button>
+      </div>
+    </div>
+
+    <!-- 티켓 상세 설명 -->
+    <div class="rp-field" style="margin-bottom:8px;">
+      <div class="tu-section-title">티켓 상세 설명</div>
+      <textarea id="riTicketDesc" placeholder="티켓에 대한 상세한 설명을 입력해주세요&#10;(코스 구성, 특이사항, 드레스코드 등)" rows="5" style="width:100%;padding:12px 14px;border:1.5px solid #e8e5e0;border-radius:12px;font-family:var(--font-main);font-size:13px;color:#111;background:#fff;outline:none;resize:vertical;line-height:1.7;box-sizing:border-box;"></textarea>
+    </div>
+
+    <!-- 🆕 회원 검색 — 취소 규정 바로 위 -->
+    <div class="rp-field">
+      <div class="tu-section-title">회원 선택 (초대 대상)</div>
+      <input class="tu-input" id="riMemberSearch" type="text" placeholder="이름·이메일·전화번호로 검색 (2자 이상)" oninput="riSearchMembers(this.value)" style="margin-bottom:8px;">
+      <div id="riMemberResults" style="display:none;max-height:300px;overflow-y:auto;background:#faf8f5;border-radius:12px;padding:6px;"></div>
+      <div id="riSelectedMember" style="display:none;margin-top:8px;padding:12px 14px;background:#fff8e7;border:1.5px solid #d4a017;border-radius:12px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+          <div style="min-width:0;flex:1;">
+            <div style="font-family:var(--font-main);font-size:9px;font-weight:800;letter-spacing:.15em;color:#9B6F00;margin-bottom:3px;">SELECTED MEMBER</div>
+            <div id="riSelMemName" style="font-size:14px;font-weight:800;color:#1a1a18;"></div>
+            <div id="riSelMemContact" style="font-size:11.5px;color:#666;margin-top:2px;"></div>
+          </div>
+          <button onclick="riClearSelectedMember()" style="background:none;border:1px solid #d4a017;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:700;color:#9B6F00;cursor:pointer;">변경</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 취소 규정 -->
+    <div class="rp-field">
+      <div class="tu-section-title">취소 규정</div>
+      <div style="background:#faf8f5;border-radius:12px;padding:4px 14px 8px;">
+        <div class="tu-policy-item" onclick="riTogglePolicyAll()" style="border-bottom:1px solid rgba(0,0,0,.07);padding:10px 0;">
+          <div class="tu-policy-chk" id="riPolicyAll"></div>
+          <div class="tu-policy-text" style="font-weight:800;color:#1a1a18;font-size:13px;">전체 선택</div>
+        </div>
+        <div class="tu-policy-item" onclick="riTogglePolicy('p1')">
+          <div class="tu-policy-chk" id="riPolicyP1"></div>
+          <div class="tu-policy-text"><strong>대행비 환불 불가</strong><br>티켓 금액 중 대행비는 어떠한 경우에도 환불되지 않습니다. 단, 티켓 구매 10분 이내 취소시에는 전액 환불, 이외에는 전면 불가합니다.</div>
+        </div>
+        <div class="tu-policy-item" onclick="riTogglePolicy('p2')">
+          <div class="tu-policy-chk" id="riPolicyP2"></div>
+          <div class="tu-policy-text"><strong>예약일 기준 환불</strong><br>해당 티켓은 예약일 30일 전까지인 <span id="riPolicyD30" style="color:#c8a96e;font-weight:700;">날짜 미지정</span>까지는 대행비 제외 100% 환불 가능하고, 이후부터는 환불 불가능한 티켓입니다.</div>
+        </div>
+        <div class="tu-policy-item" onclick="riTogglePolicy('p3')">
+          <div class="tu-policy-chk" id="riPolicyP3"></div>
+          <div class="tu-policy-text"><strong>양도·거래 금지</strong><br>본 티켓은 양도 및 거래가 불가능하고 본 회사의 동의 없이 개인 판매하는 것을 금지하고 있습니다.</div>
+        </div>
+        <div class="tu-policy-item" onclick="riTogglePolicy('extra')" style="border-bottom:none;">
+          <div class="tu-policy-chk" id="riPolicyExtra"></div>
+          <div class="tu-policy-text" style="flex:1;"><strong>기타 규정</strong>
+            <div id="riPolicyExtraField" style="display:none;">
+              <textarea class="tu-policy-extra-input" id="riPolicyExtraText" placeholder="기타 취소 규정을 직접 입력해주세요" onclick="event.stopPropagation()"></textarea>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 총액 요약 -->
+    <div style="margin:8px 0 14px;padding:14px 16px;background:#1a1a18;border-radius:12px;display:flex;justify-content:space-between;align-items:center;">
+      <div style="font-family:var(--font-main);font-size:10px;font-weight:800;letter-spacing:.18em;color:#c8a96e;">TOTAL (초대 결제 금액)</div>
+      <div id="riTotalDisplay" style="font-family:var(--font-main);font-size:18px;font-weight:900;color:#fff;">₩0</div>
+    </div>
+
+    <button class="tu-submit" id="riSubmitBtn" onclick="riSubmit()">초대 발송</button>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════ -->
+<!-- 🆕 v1.53.24 2026.06.01: 예약 초대 결제 팝업 (수신 회원이 결제)       -->
+<!-- 티켓 상세화면 tdPurchaseSheet 구조 복제 → 팝업 형태로 변환          -->
+<!-- ════════════════════════════════════════════════════════════════ -->
+<div id="riPayPopup" style="display:none;position:fixed;inset:0;z-index:960;background:rgba(0,0,0,.6);align-items:center;justify-content:center;padding:20px;box-sizing:border-box;" onclick="if(event.target===this)riPayClose()">
+  <div style="background:#fff;border-radius:20px;width:100%;max-width:400px;max-height:88vh;overflow-y:auto;-webkit-overflow-scrolling:touch;">
+    <!-- 헤더 -->
+    <div style="padding:20px 22px 0;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
+      <div>
+        <div style="font-family:var(--font-main);font-size:9px;font-weight:800;letter-spacing:.22em;color:#aaa;">RESERVATION INVITE</div>
+        <div id="riPayTitle" style="font-size:16px;font-weight:800;color:#1a1a18;margin-top:4px;">예약 초대가 도착했어요</div>
+      </div>
+      <button onclick="riPayClose()" style="width:30px;height:30px;border-radius:50%;border:none;background:#f0ede8;font-size:16px;color:#888;cursor:pointer;flex-shrink:0;">✕</button>
+    </div>
+
+    <div style="padding:18px 22px 0;">
+      <!-- 초대 상세 정보 -->
+      <div style="background:#faf8f5;border-radius:12px;padding:14px 16px;margin-bottom:14px;">
+        <div id="riPayRows"></div>
+      </div>
+
+      <!-- 예치금 -->
+      <div data-i18n="ticket.sheet_payment_detail" style="font-family:var(--font-main);font-size:8px;font-weight:800;letter-spacing:.2em;color:#aaa;margin-bottom:8px;">DEPOSIT</div>
+      <div id="riPayBalance" style="margin-bottom:14px;"></div>
+
+      <!-- 취소 규정 -->
+      <div style="font-family:var(--font-main);font-size:8px;font-weight:800;letter-spacing:.2em;color:#aaa;margin-bottom:8px;">CANCEL POLICY</div>
+      <div style="background:#faf8f5;border-radius:12px;padding:14px 16px;margin-bottom:14px;">
+        <label onclick="riPayToggleAgree()" style="display:flex;align-items:flex-start;gap:12px;cursor:pointer;">
+          <div id="riPayAgreeChk" style="width:20px;height:20px;min-width:20px;border-radius:50%;border:1.5px solid #ddd;background:#fff;margin-top:1px;display:flex;align-items:center;justify-content:center;transition:all .2s;"></div>
+          <span style="font-family:var(--font-main);font-size:12px;color:#555;line-height:1.6;">취소 규정을 확인하였으며, 예약 완료 후 취소 시 수수료가 발생할 수 있음에 동의합니다.</span>
+        </label>
+      </div>
+      <div id="riPayPolicy" style="font-size:13px;color:#444;line-height:1.85;margin-bottom:18px;"></div>
+
+      <!-- 티켓 상세설명 (있을 때만) -->
+      <div id="riPayDescWrap" style="display:none;margin-bottom:18px;">
+        <div style="font-family:var(--font-main);font-size:8px;font-weight:800;letter-spacing:.2em;color:#aaa;margin-bottom:8px;">DESCRIPTION</div>
+        <div id="riPayDesc" style="font-size:13px;color:#333;line-height:1.85;white-space:pre-wrap;"></div>
+      </div>
+    </div>
+
+    <!-- 결제 버튼 -->
+    <div style="padding:12px 22px 24px;">
+      <button id="riPayBtn" onclick="riConfirmPay()" style="width:100%;padding:17px;background:#5C0A14;border:none;border-radius:14px;font-family:var(--font-main);font-size:15px;font-weight:900;color:#fff;cursor:pointer;opacity:.4;pointer-events:none;letter-spacing:.04em;">결제 완료</button>
+      <button onclick="riPayClose()" style="width:100%;padding:11px;background:transparent;border:none;font-family:var(--font-main);font-size:10px;font-weight:600;letter-spacing:.18em;color:#bbb;cursor:pointer;margin-top:6px;">나중에</button>
+    </div>
   </div>
 </div>
 
@@ -20692,6 +20900,532 @@ function uploadTicket(){
 
   document.getElementById('ticketConfirmPopup').style.display='flex';
 }
+
+// ════════════════════════════════════════════════════════════════
+// 🆕 v1.53.24 2026.06.01: 예약 초대 발송 (슈퍼어드민 전용)
+// ════════════════════════════════════════════════════════════════
+var _riRestId = null, _riType = 'std', _riDate = null, _riTime = null;
+var _riPax = 1, _riTicketGenre = '', _riInvitee = null;
+var _riPolicy = { p1:false, p2:false, p3:false, extra:false };
+var _riSearchTimer = null;
+
+function openReservationInviteScreen(){
+  if(_currentRole !== 'superadmin'){
+    showToast('⚠','권한 없음','슈퍼어드민 전용 기능입니다');
+    return;
+  }
+  // 초기화
+  _riRestId = null; _riType = 'std'; _riDate = null; _riTime = null;
+  _riPax = 1; _riTicketGenre = ''; _riInvitee = null;
+  _riPolicy = { p1:false, p2:false, p3:false, extra:false };
+  ['riDateBtnText','riTimeBtnText'].forEach(function(id){
+    var el = document.getElementById(id);
+    if(el) el.textContent = (id==='riDateBtnText'?'날짜를':'시간을')+' 선택하세요';
+  });
+  ['riMealAmt','riAgencyFee','riWineMin','riTicketDesc','riMemberSearch','riPolicyExtraText'].forEach(function(id){
+    var el = document.getElementById(id); if(el) el.value='';
+  });
+  document.getElementById('riPaxVal').textContent = '1';
+  document.getElementById('riTotalDisplay').textContent = '₩0';
+  document.getElementById('riSelectedMember').style.display='none';
+  document.getElementById('riMemberResults').style.display='none';
+  document.querySelectorAll('#riTicketGenreWrap .tu-tgenre-btn').forEach(function(b){ b.classList.remove('on'); });
+  document.querySelectorAll('#riScreen .tu-type-tab').forEach(function(t){ t.classList.toggle('on', t.classList.contains('std')); });
+  ['riPolicyAll','riPolicyP1','riPolicyP2','riPolicyP3','riPolicyExtra'].forEach(function(id){
+    var el = document.getElementById(id); if(el) el.classList.remove('on');
+  });
+  document.getElementById('riPolicyExtraField').style.display='none';
+
+  // 레스토랑 목록 렌더 (티켓 업로드 화면과 동일 패턴)
+  var listEl = document.getElementById('riRestList');
+  if(listEl){
+    listEl.innerHTML = (restaurantDB || []).map(function(r){
+      return '<div class="tu-rest-item" data-id="'+r.id+'" onclick="riSelectRestaurant(this,\''+r.id+'\')">'
+           + '<div class="tu-rest-name">'+(r.name||'(이름없음)')+'</div>'
+           + '<div class="tu-rest-genre">'+(r.genre||'')+'</div>'
+           + '</div>';
+    }).join('');
+  }
+  document.getElementById('riScreen').style.display = 'block';
+  window.scrollTo({ top:0, behavior:'instant' });
+}
+
+function closeReservationInviteScreen(){
+  document.getElementById('riScreen').style.display = 'none';
+}
+
+function riSelectRestaurant(el, id){
+  _riRestId = id;
+  document.querySelectorAll('#riRestList .tu-rest-item').forEach(function(x){ x.classList.remove('on'); });
+  if(el) el.classList.add('on');
+}
+
+function riSelectType(el, type){
+  _riType = type;
+  document.querySelectorAll('#riScreen .tu-type-tab').forEach(function(t){ t.classList.remove('on'); });
+  if(el) el.classList.add('on');
+}
+
+function riSelectTicketGenre(genre, btn){
+  _riTicketGenre = genre;
+  document.querySelectorAll('#riTicketGenreWrap .tu-tgenre-btn').forEach(function(b){ b.classList.remove('on'); });
+  if(btn) btn.classList.add('on');
+}
+
+// 날짜/시간 — 기존 tuOpenCal/tuOpenTimeWheel 을 재활용 (콜백으로 _riDate/_riTime 세팅)
+function riOpenCal(){
+  // _tuSelectedDate 에 결과 들어옴 → 우리가 가로채서 _riDate 에 복사
+  var prevDate = _tuSelectedDate;
+  _tuSelectedDate = null;
+  tuOpenCal();
+  // tuOpenCal 은 모달 열기만 함 → 사용자가 선택하면 tuConfirmDate 가 호출됨
+  // 우리는 _tuSelectedDate 가 변하면 가져오기 위해 잠시 후 polling 또는 wrapping.
+  // 간단 우회: tuConfirmDate 직후 _riDate 동기화하는 patch 를 setInterval 로.
+  var _polling = setInterval(function(){
+    if(_tuSelectedDate && _tuSelectedDate !== prevDate){
+      _riDate = _tuSelectedDate;
+      document.getElementById('riDateBtnText').textContent = _tuSelectedDate;
+      _tuSelectedDate = prevDate;  // 원상복구
+      clearInterval(_polling);
+    }
+  }, 200);
+  setTimeout(function(){ clearInterval(_polling); }, 60000);
+}
+
+function riOpenTimeWheel(){
+  var prevTime = _tuSelectedTime;
+  _tuSelectedTime = null;
+  tuOpenTimeWheel();
+  var _polling = setInterval(function(){
+    if(_tuSelectedTime && _tuSelectedTime !== prevTime){
+      _riTime = _tuSelectedTime;
+      var t = _tuSelectedTime;
+      var disp = t;
+      if(t.includes(':')){
+        var tp = t.split(':'), h = parseInt(tp[0]);
+        disp = (h>12?h-12:(h===0?12:h))+':'+tp[1]+' '+(h>=12?'PM':'AM');
+      }
+      document.getElementById('riTimeBtnText').textContent = disp;
+      _tuSelectedTime = prevTime;
+      clearInterval(_polling);
+    }
+  }, 200);
+  setTimeout(function(){ clearInterval(_polling); }, 60000);
+}
+
+function riAdjPax(delta){
+  _riPax = Math.max(1, Math.min(20, _riPax + delta));
+  document.getElementById('riPaxVal').textContent = _riPax;
+  riUpdateTotal();
+}
+
+function riUpdateTotal(){
+  var meal = tuGetMoney('riMealAmt');
+  var agency = tuGetMoney('riAgencyFee');
+  var wine = tuGetMoney('riWineMin');
+  var total = (meal + agency + wine) * _riPax;
+  document.getElementById('riTotalDisplay').textContent = '₩' + total.toLocaleString();
+}
+
+// 회원 검색 (adgSearchUsers 와 유사하지만 결과 클릭 시 _riInvitee 세팅)
+async function riSearchMembers(q){
+  q = (q || '').trim();
+  if(q.length < 2){
+    document.getElementById('riMemberResults').style.display='none';
+    return;
+  }
+  if(_riSearchTimer) clearTimeout(_riSearchTimer);
+  _riSearchTimer = setTimeout(async function(){
+    try {
+      if(!window.sb) return;
+      var qLower = q.toLowerCase();
+      var qDigits = q.replace(/[^0-9]/g,'');
+      var orParts = ['display_name.ilike.%'+q+'%', 'email.ilike.%'+qLower+'%'];
+      if(qDigits.length >= 4) orParts.push('phone.ilike.%'+qDigits+'%');
+      var r = await window.sb.from('profiles')
+        .select('id, display_name, email, phone, role, membership_grade, member_until')
+        .or(orParts.join(','))
+        .is('deleted_at', null)
+        .limit(20);
+      if(r.error){ console.warn('[ri] 회원 검색 에러:', r.error.message); return; }
+      var rows = r.data || [];
+      // 초대명 폴백 (이름 비어있는 회원도 매칭)
+      try {
+        var inv = await window.sb.from('invite_codes')
+          .select('member_id, invitee_name, invitee_email, used_by_email')
+          .ilike('invitee_name', '%'+q+'%')
+          .limit(20);
+        if(!inv.error && inv.data){
+          var fillMap = {};
+          inv.data.forEach(function(c){
+            if(c.member_id) fillMap[c.member_id] = c.invitee_name;
+          });
+          rows.forEach(function(row){
+            if((!row.display_name || !row.display_name.trim()) && fillMap[row.id]){
+              row._inviteeName = fillMap[row.id];
+            }
+          });
+        }
+      } catch(_inE){}
+      var resEl = document.getElementById('riMemberResults');
+      if(rows.length === 0){
+        resEl.innerHTML = '<div style="padding:14px;text-align:center;font-size:12px;color:#999;">검색 결과 없음</div>';
+      } else {
+        resEl.innerHTML = rows.map(function(u){
+          var nm = (u.display_name && u.display_name.trim()) || u._inviteeName || '(이름 없음)';
+          var contact = u.email || u.phone || '–';
+          var gr = u.membership_grade || '';
+          return '<div onclick="riPickMember(\''+u.id+'\','+JSON.stringify(JSON.stringify({id:u.id,display_name:nm,email:u.email||'',phone:u.phone||'',membership_grade:gr,role:u.role||'member'}))+')" style="padding:10px 12px;border-bottom:1px solid #ece8df;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;">'
+               + '<div style="min-width:0;flex:1;"><div style="font-size:13px;font-weight:800;color:#1a1a18;">'+nm+'</div>'
+               + '<div style="font-size:11px;color:#777;margin-top:2px;">'+contact+(gr?' · '+gr:'')+'</div></div>'
+               + '<div style="font-size:10px;color:#c8a96e;font-weight:700;">선택 ›</div>'
+               + '</div>';
+        }).join('');
+      }
+      resEl.style.display='block';
+    } catch(e){ console.warn('[ri] 검색 예외:', e); }
+  }, 250);
+}
+
+function riPickMember(uid, jsonStr){
+  try {
+    var u = JSON.parse(JSON.parse(jsonStr));
+    _riInvitee = u;
+    document.getElementById('riSelMemName').textContent = u.display_name || '(이름 없음)';
+    document.getElementById('riSelMemContact').textContent = (u.email || '') + (u.phone ? ' · '+u.phone : '');
+    document.getElementById('riSelectedMember').style.display='block';
+    document.getElementById('riMemberResults').style.display='none';
+    document.getElementById('riMemberSearch').value = '';
+  } catch(e){ console.warn('[ri] pickMember 파싱 에러:', e); }
+}
+
+function riClearSelectedMember(){
+  _riInvitee = null;
+  document.getElementById('riSelectedMember').style.display='none';
+}
+
+function riTogglePolicy(k){
+  if(k === 'extra'){
+    _riPolicy.extra = !_riPolicy.extra;
+    document.getElementById('riPolicyExtra').classList.toggle('on', _riPolicy.extra);
+    document.getElementById('riPolicyExtraField').style.display = _riPolicy.extra ? 'block' : 'none';
+  } else {
+    _riPolicy[k] = !_riPolicy[k];
+    document.getElementById('riPolicy'+k.toUpperCase()).classList.toggle('on', _riPolicy[k]);
+  }
+  // 전체 선택 동기화
+  var allOn = _riPolicy.p1 && _riPolicy.p2 && _riPolicy.p3;
+  document.getElementById('riPolicyAll').classList.toggle('on', allOn);
+}
+
+function riTogglePolicyAll(){
+  var allOn = _riPolicy.p1 && _riPolicy.p2 && _riPolicy.p3;
+  var next = !allOn;
+  _riPolicy.p1 = _riPolicy.p2 = _riPolicy.p3 = next;
+  ['p1','p2','p3'].forEach(function(k){
+    document.getElementById('riPolicy'+k.toUpperCase()).classList.toggle('on', next);
+  });
+  document.getElementById('riPolicyAll').classList.toggle('on', next);
+}
+
+// 초대 발송 — DB INSERT + 푸시
+async function riSubmit(){
+  if(!_riRestId){ showToast('⚠','선택 필요','레스토랑을 선택해주세요'); return; }
+  if(!_riDate || !_riTime){ showToast('⚠','입력 필요','날짜와 시간을 선택해주세요'); return; }
+  if(!_riTicketGenre){ showToast('⚠','선택 필요','티켓 장르를 선택해주세요'); return; }
+  if(!_riInvitee || !_riInvitee.id){ showToast('⚠','선택 필요','초대받을 회원을 선택해주세요'); return; }
+  if(!_riPolicy.p1 || !_riPolicy.p2 || !_riPolicy.p3){
+    showToast('⚠','취소규정 필수','3개 항목 모두 확인 후 체크해주세요'); return;
+  }
+  var meal = tuGetMoney('riMealAmt');
+  var agency = tuGetMoney('riAgencyFee');
+  var wine = tuGetMoney('riWineMin');
+  if(meal <= 0){ showToast('⚠','입력 필요','식사 예약금을 입력해주세요'); return; }
+  var total = (meal + agency + wine) * _riPax;
+  var r = (restaurantDB || []).find(function(x){ return String(x.id) === String(_riRestId); });
+  var restName = r ? r.name : '';
+  var desc = (document.getElementById('riTicketDesc') || {value:''}).value.trim();
+  var extraText = _riPolicy.extra ? (document.getElementById('riPolicyExtraText') || {value:''}).value.trim() : '';
+
+  try {
+    var u = (await window.sb.auth.getUser()).data.user;
+    if(!u){ showToast('⚠','인증 필요','다시 로그인 해주세요'); return; }
+
+    var insertRow = {
+      host_user_id: u.id,
+      invitee_user_id: _riInvitee.id,
+      restaurant_id: String(_riRestId),
+      restaurant_name: restName,
+      ticket_genre: _riTicketGenre,
+      type_class: _riType,
+      visit_date: _riDate,
+      visit_time: _riTime,
+      pax: _riPax,
+      meal_fee: meal,
+      agency_fee: agency,
+      wine_min: wine,
+      total_amount: total,
+      ticket_desc: desc || null,
+      cancel_policy: { p1:_riPolicy.p1, p2:_riPolicy.p2, p3:_riPolicy.p3, extra:_riPolicy.extra, extraText:extraText },
+      status: 'sent'
+    };
+
+    var ins = await window.sb.from('reservation_invites').insert(insertRow).select().maybeSingle();
+    if(ins.error){
+      console.error('[ri] INSERT 실패:', ins.error);
+      showToast('❌','초대 발송 실패', ins.error.message || '데이터베이스 오류');
+      return;
+    }
+    var inviteId = ins.data && ins.data.id;
+    console.log('[ri] 초대 발송 완료 id=', inviteId);
+
+    // 푸시 알림 발송
+    try {
+      var dispDate = _riDate;
+      var dispTime = _riTime;
+      var pushBody = '🎫 ' + restName + ' · ' + dispDate + ' ' + dispTime + ' · ' + _riPax + '인 · ₩' + total.toLocaleString();
+      var pushRes = await window.sb.functions.invoke('send-push', {
+        body: {
+          to: 'uid:' + _riInvitee.id,
+          payload: {
+            title: 'TAAM 예약 초대 도착',
+            body: pushBody,
+            url: '/?ri_pay=' + inviteId,
+            category: 'reservation_invite',
+            tag: 'taam-ri-' + inviteId
+          }
+        }
+      });
+      if(pushRes && pushRes.error){
+        console.warn('[ri] 푸시 발송 에러:', pushRes.error);
+      } else {
+        console.log('[ri] 푸시 발송 OK →', _riInvitee.id);
+      }
+    } catch(pe){ console.warn('[ri] 푸시 발송 예외:', pe); }
+
+    showToast('✓','초대 발송 완료', (_riInvitee.display_name || '회원') + '에게 알림 발송 + 결제 팝업 대기');
+    closeReservationInviteScreen();
+  } catch(e){
+    console.error('[ri] submit 예외:', e);
+    showToast('❌','오류','['+e.name+'] '+e.message);
+  }
+}
+
+// ════════════════════════════════════════════════════════════════
+// 🆕 v1.53.24: 예약 초대 결제 팝업 (회원 측)
+// ════════════════════════════════════════════════════════════════
+var _riPayCurrent = null;  // 현재 열려있는 초대 row
+var _riPayAgreed = false;
+
+async function openReservationInvitePayPopup(inviteId){
+  try {
+    if(!window.sb || !inviteId) return;
+    var u = (await window.sb.auth.getUser()).data.user;
+    if(!u){ showToast('⚠','로그인 필요','다시 로그인 해주세요'); return; }
+    var r = await window.sb.from('reservation_invites')
+      .select('*')
+      .eq('id', inviteId)
+      .maybeSingle();
+    if(r.error || !r.data){
+      console.warn('[riPay] 조회 실패:', r.error);
+      showToast('⚠','초대 없음','만료되었거나 삭제된 초대입니다');
+      return;
+    }
+    var inv = r.data;
+    if(inv.invitee_user_id !== u.id){
+      showToast('⚠','권한 없음','본인에게 발송된 초대만 결제할 수 있어요');
+      return;
+    }
+    if(inv.status === 'paid'){
+      showToast('✓','이미 결제 완료','예약이 확정되었습니다');
+      return;
+    }
+    if(inv.status === 'cancelled' || inv.status === 'expired'){
+      showToast('⚠','만료/취소','이 초대는 더 이상 결제할 수 없습니다');
+      return;
+    }
+    _riPayCurrent = inv;
+    _riPayAgreed = false;
+
+    // 헤더
+    document.getElementById('riPayTitle').textContent = (inv.restaurant_name || '레스토랑') + ' 예약 초대';
+
+    // 상세 행
+    var visitDispTime = inv.visit_time || '';
+    if(visitDispTime.includes(':')){
+      var tp = visitDispTime.split(':'), h = parseInt(tp[0]);
+      visitDispTime = (h>12?h-12:(h===0?12:h))+':'+tp[1]+' '+(h>=12?'PM':'AM');
+    }
+    var rows = [
+      ['레스토랑', inv.restaurant_name || '–'],
+      ['유형', inv.type_class === 'eve' ? 'Event' : 'Standard'],
+      ['날짜', inv.visit_date || '–'],
+      ['시간', visitDispTime || '–'],
+      ['인원', inv.pax + '인'],
+      ['식사예약금', '₩'+((inv.meal_fee||0)*inv.pax).toLocaleString()],
+      ['대행비', '₩'+((inv.agency_fee||0)*inv.pax).toLocaleString()]
+    ];
+    if(inv.wine_min > 0) rows.push(['주류 미니멈', '₩'+(inv.wine_min*inv.pax).toLocaleString()]);
+    rows.push(['<strong>총 결제 금액</strong>', '<strong style="color:#5C0A14;">₩'+(inv.total_amount||0).toLocaleString()+'</strong>']);
+    document.getElementById('riPayRows').innerHTML = rows.map(function(row){
+      return '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid rgba(0,0,0,.05);">'
+           + '<span style="font-size:11.5px;color:#777;">'+row[0]+'</span>'
+           + '<span style="font-size:13px;font-weight:700;color:#1a1a18;">'+row[1]+'</span></div>';
+    }).join('');
+
+    // 예치금 잔액 표시
+    try {
+      var me = await window.sb.from('profiles')
+        .select('membership_deposit_balance, general_deposit_balance, deposit_balance')
+        .eq('id', u.id)
+        .maybeSingle();
+      var memBal = (me.data && me.data.membership_deposit_balance) || 0;
+      var genBal = (me.data && me.data.general_deposit_balance) || 0;
+      var totalBal = (me.data && me.data.deposit_balance != null) ? me.data.deposit_balance : (memBal + genBal);
+      var shortfall = (inv.total_amount || 0) - totalBal;
+      var balHtml = '<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:12px;"><span style="color:#777;">멤버십 예치금</span><span style="color:#5d1622;font-weight:700;">₩'+memBal.toLocaleString()+'</span></div>'
+                  + '<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:12px;"><span style="color:#777;">일반 예치금</span><span style="color:#2a6a2a;font-weight:700;">₩'+genBal.toLocaleString()+'</span></div>'
+                  + '<div style="display:flex;justify-content:space-between;padding:6px 0;font-size:12.5px;border-top:1px dashed #ddd;margin-top:4px;"><span style="color:#1a1a18;font-weight:800;">잔액 합계</span><span style="color:#1a1a18;font-weight:800;">₩'+totalBal.toLocaleString()+'</span></div>';
+      if(shortfall > 0){
+        balHtml += '<div style="margin-top:6px;padding:8px 10px;background:#fff5f5;border:1px solid #c33;border-radius:8px;font-size:11.5px;color:#9B1C1C;font-weight:700;text-align:center;">예치금 부족: ₩'+shortfall.toLocaleString()+' 추가 충전 필요</div>';
+        // 결제 차단
+        document.getElementById('riPayBtn').dataset.insufficient = '1';
+      } else {
+        delete document.getElementById('riPayBtn').dataset.insufficient;
+      }
+      document.getElementById('riPayBalance').innerHTML = balHtml;
+    } catch(_be){ console.warn('[riPay] 잔액 조회 실패:', _be); }
+
+    // 취소규정
+    var cp = inv.cancel_policy || {};
+    var policyText = '';
+    if(cp.p1) policyText += '• 대행비 환불 불가\n';
+    if(cp.p2) policyText += '• 예약일 30일 전 기준 환불 (대행비 제외)\n';
+    if(cp.p3) policyText += '• 양도·거래 금지\n';
+    if(cp.extra && cp.extraText) policyText += '• ' + cp.extraText + '\n';
+    document.getElementById('riPayPolicy').textContent = policyText || '취소 규정이 별도로 설정되지 않았습니다';
+
+    // 상세 설명
+    if(inv.ticket_desc && inv.ticket_desc.trim()){
+      document.getElementById('riPayDescWrap').style.display='block';
+      document.getElementById('riPayDesc').textContent = inv.ticket_desc;
+    } else {
+      document.getElementById('riPayDescWrap').style.display='none';
+    }
+
+    // 동의 체크 초기화
+    document.getElementById('riPayAgreeChk').classList.remove('on');
+    document.getElementById('riPayAgreeChk').style.background = '#fff';
+    document.getElementById('riPayAgreeChk').innerHTML = '';
+    riPayUpdateBtn();
+
+    document.getElementById('riPayPopup').style.display = 'flex';
+  } catch(e){
+    console.error('[riPay] open 예외:', e);
+    showToast('❌','오류','['+e.name+'] '+e.message);
+  }
+}
+
+function riPayClose(){
+  document.getElementById('riPayPopup').style.display = 'none';
+  _riPayCurrent = null;
+  _riPayAgreed = false;
+}
+
+function riPayToggleAgree(){
+  _riPayAgreed = !_riPayAgreed;
+  var chk = document.getElementById('riPayAgreeChk');
+  if(_riPayAgreed){
+    chk.style.background = '#5C0A14';
+    chk.style.borderColor = '#5C0A14';
+    chk.innerHTML = '<span style="color:#fff;font-size:13px;font-weight:900;">✓</span>';
+  } else {
+    chk.style.background = '#fff';
+    chk.style.borderColor = '#ddd';
+    chk.innerHTML = '';
+  }
+  riPayUpdateBtn();
+}
+
+function riPayUpdateBtn(){
+  var btn = document.getElementById('riPayBtn');
+  var insufficient = btn.dataset.insufficient === '1';
+  if(_riPayAgreed && !insufficient){
+    btn.style.opacity = '1';
+    btn.style.pointerEvents = 'auto';
+  } else {
+    btn.style.opacity = '.4';
+    btn.style.pointerEvents = 'none';
+  }
+}
+
+async function riConfirmPay(){
+  if(!_riPayCurrent) return;
+  if(!_riPayAgreed){ showToast('⚠','동의 필요','취소 규정에 동의해주세요'); return; }
+  var inv = _riPayCurrent;
+  try {
+    var u = (await window.sb.auth.getUser()).data.user;
+    // 1) 예치금 잔액 재확인 + 차감 (멤버십 → 일반 순서)
+    var me = await window.sb.from('profiles')
+      .select('membership_deposit_balance, general_deposit_balance, deposit_balance')
+      .eq('id', u.id).maybeSingle();
+    if(me.error){ showToast('❌','잔액 조회 실패', me.error.message); return; }
+    var memBal = (me.data && me.data.membership_deposit_balance) || 0;
+    var genBal = (me.data && me.data.general_deposit_balance) || 0;
+    var totalBal = (me.data && me.data.deposit_balance != null) ? me.data.deposit_balance : (memBal + genBal);
+    if(totalBal < inv.total_amount){
+      showToast('⚠','예치금 부족','잔액이 부족합니다');
+      return;
+    }
+    var pay = inv.total_amount;
+    var memUsed = Math.min(memBal, pay);
+    var genUsed = pay - memUsed;
+    var update = {
+      membership_deposit_balance: memBal - memUsed,
+      general_deposit_balance: genBal - genUsed,
+      deposit_balance: totalBal - pay
+    };
+    var upd = await window.sb.from('profiles').update(update).eq('id', u.id);
+    if(upd.error){ showToast('❌','예치금 차감 실패', upd.error.message); return; }
+
+    // 2) reservation_invites 상태 갱신
+    var inv2 = await window.sb.from('reservation_invites').update({
+      status: 'paid',
+      paid_at: new Date().toISOString()
+    }).eq('id', inv.id);
+    if(inv2.error) console.warn('[riPay] 상태 갱신 실패:', inv2.error.message);
+
+    showToast('✓','예약 완료','초대 결제가 완료되었습니다');
+    riPayClose();
+    // 마이페이지/예치금 갱신
+    try { if(typeof loadDeposits === 'function') loadDeposits(); } catch(_){}
+    try { if(typeof renderMyPage === 'function') renderMyPage(); } catch(_){}
+  } catch(e){
+    console.error('[riPay] confirm 예외:', e);
+    showToast('❌','오류','['+e.name+'] '+e.message);
+  }
+}
+
+// URL ?ri_pay=<id> 자동 오픈 (알림 클릭 라우팅)
+(function(){
+  try {
+    var params = new URLSearchParams(location.search);
+    var rid = params.get('ri_pay');
+    if(rid){
+      // 로그인 + 앱 준비 후 오픈
+      var tryOpen = function(){
+        if(window.sb && typeof openReservationInvitePayPopup === 'function'){
+          openReservationInvitePayPopup(rid);
+          // URL 파라미터 제거 (재실행 방지)
+          try { history.replaceState(null, '', location.pathname); } catch(_){}
+        } else {
+          setTimeout(tryOpen, 500);
+        }
+      };
+      setTimeout(tryOpen, 1500);
+    }
+  } catch(_e){}
+})();
 
 function finalUploadTicket(){
   try {
