@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.31';  // 1.53.31 — 2026.06.01: 슈퍼어드민 "📋 발송한 예약 초대 내역" 화면 추가 — 본인이 발송한 reservation_invites 전체 목록 + 통계(TOTAL/PAID/PENDING/CANCEL) + 결제 완료 금액/총 청구액 + 회원별 카드(이름·연락처·레스토랑·일정·인원·금액·상태·발송시각·결제시각).
-const STATIC_CACHE = 'taam-static-v1.53.31';
+const SW_VERSION = 'taam-sw-v1.53.32';  // 1.53.32 — 2026.06.01: notifications INSERT 호환성 보강 — 기존 테이블의 kind/message 컬럼이 NOT NULL 일 가능성 대비 둘 다 함께 채움. 진단 로그 강화 — [notif] 미확인 조회, [adg]/[ri] INSERT 결과를 콘솔에 객체 그대로 출력.
+const STATIC_CACHE = 'taam-static-v1.53.32';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);

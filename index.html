@@ -10184,12 +10184,14 @@ async function loadDeposit(){
 
     // 🆕 v1.53.30: 미확인 알림 토스트 표시 + seen=true 처리
     try {
+      console.log('[notif] 미확인 알림 조회 시작 user_id=', user.id);
       var nres = await window.sb.from('notifications')
         .select('id, type, title, body, url, payload, created_at')
         .eq('user_id', user.id)
         .eq('seen', false)
         .order('created_at', { ascending: false })
         .limit(10);
+      console.log('[notif] 조회 결과:', { error: nres.error, count: (nres.data||[]).length, data: nres.data });
       if (!nres.error && Array.isArray(nres.data) && nres.data.length > 0) {
         // 토스트 표시 — 종류별로 아이콘 다르게
         nres.data.forEach(function(n, idx){
@@ -12861,11 +12863,14 @@ async function adminGrantDeposit(targetUserId, amount, depositType, description)
       var typeLabel = depositType === 'membership' ? '멤버십' : '일반';
       var notifTitle = '💰 예치금이 충전되었습니다';
       var notifBody = typeLabel + ' 예치금 ₩' + amount.toLocaleString() + ' 부여받음 (' + (description || '슈퍼어드민') + ')';
+      // v1.53.32: 기존 notifications 테이블의 NOT NULL 컬럼(kind/message) 대비 — 둘 다 함께 채움
       var notifRes = await window.sb.from('notifications').insert({
         user_id: targetUserId,
         type: 'deposit_grant',
         title: notifTitle,
         body: notifBody,
+        message: notifBody,        // 호환
+        kind: 'deposit_grant',     // 호환
         url: '/?open_deposit_hist=1',
         payload: {
           amount: amount,
@@ -12875,7 +12880,8 @@ async function adminGrantDeposit(targetUserId, amount, depositType, description)
           granted_by: caller.id,
           granted_by_name: caller.user_metadata && caller.user_metadata.display_name || null
         }
-      });
+      }).select();
+      console.log('[adg] notifications INSERT 결과:', { error: notifRes.error, data: notifRes.data });
       if (notifRes.error) console.warn('[adg] notifications insert 실패:', notifRes.error.message);
 
       // 푸시 (구독한 회원만 수신, 미구독 회원은 다음 접속 시 토스트)
@@ -21460,14 +21466,19 @@ async function riSubmit(){
     try {
       var notifTitle = '🎫 TAAM 예약 초대 도착';
       var notifBody = restName + ' · ' + _riDate + ' ' + _riTime + ' · ' + _riPax + '인 · ₩' + total.toLocaleString();
-      await window.sb.from('notifications').insert({
+      // v1.53.32: 기존 notifications 테이블의 NOT NULL 컬럼(kind/message) 대비 — 둘 다 함께 채움
+      var nIns = await window.sb.from('notifications').insert({
         user_id: _riInvitee.id,
         type: 'reservation_invite',
         title: notifTitle,
         body: notifBody,
+        message: notifBody,             // 호환 (구버전 message 컬럼)
+        kind: 'reservation_invite',     // 호환 (구버전 kind 컬럼)
         url: '/?ri_pay=' + inviteId,
         payload: { invite_id: inviteId, restaurant_name: restName, pax: _riPax, total_amount: total }
-      });
+      }).select();
+      console.log('[ri] notifications INSERT 결과:', { error: nIns && nIns.error, data: nIns && nIns.data });
+      if(nIns && nIns.error) console.warn('[ri] notifications INSERT 실패:', nIns.error.message);
     } catch(_ne) { console.warn('[ri] notifications INSERT 예외:', _ne); }
 
     // 푸시 알림 발송
