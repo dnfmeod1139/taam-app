@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.33';  // 1.53.33 — 2026.06.01: 초대 결제 완료 시 회원의 구매 내역에 자동 등록 — purchaseHistory.push + savePurchase. 마이페이지 → 티켓 구매 내역에 "📨 초대" 배지 + "상세설명 · 슈퍼어드민 초대로 구매" 표시. 일반 구매와 동일하게 방문예정/완료/취소 탭에 정상 표시.
-const STATIC_CACHE = 'taam-static-v1.53.33';
+const SW_VERSION = 'taam-sw-v1.53.34';  // 1.53.34 — 2026.06.01: 알림 내역 페이지 신설 + 레드닷 유지 — 마이페이지에 "🔔 알림" 메뉴 추가 (알림 설정과 별도), notificationsListPage 화면 신설(전체 알림 시간 역순, 미확인 노란 강조), 자동 seen 처리 제거 → 알림 페이지 진입 시에만 seen=true 일괄 처리 → 레드닷 유지. sessionStorage 로 같은 세션 내 토스트 중복 방지. openMyPage 진입 시 자동 updateUnseenNotifBadge 호출. 알림 클릭 시 url 패턴별 라우팅(?ri_pay=, open_deposit_hist=).
+const STATIC_CACHE = 'taam-static-v1.53.34';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);

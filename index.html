@@ -6703,6 +6703,12 @@ window.closePromoCarousel = function(){
       <span class="mp-row-arrow">›</span>
     </div>
     <div class="mp-divider"></div>
+    <!-- 🆕 v1.53.34 2026.06.01: 알림 내역 (예치금 부여, 예약 초대, 푸시 등 통합) -->
+    <div class="mp-row" id="mpNotifListRow" onclick="openPage('notificationsListPage', renderNotificationsList)">
+      <span class="mp-row-label" id="mpNotifListLabel">알림<span id="mpNotifReddot" style="display:none;width:8px;height:8px;border-radius:50%;background:#e53935;margin-left:6px;vertical-align:middle;box-shadow:0 0 0 2px #fff;"></span></span>
+      <span class="mp-row-arrow">›</span>
+    </div>
+    <div class="mp-divider"></div>
     <div class="mp-row" onclick="openNotifSettings()">
       <span class="mp-row-label" data-i18n="my_page.notif_settings">알림 설정</span>
       <span class="mp-row-arrow">›</span>
@@ -7010,6 +7016,17 @@ window.closePromoCarousel = function(){
     </div>
 
   </div>
+</div>
+
+<!-- 🆕 v1.53.34 2026.06.01: 알림 내역 페이지 -->
+<div id="notificationsListPage" class="mp-subpage">
+  <div class="mp-sub-topbar">
+    <button class="mp-sub-back" onclick="closePage('notificationsListPage')">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+    </button>
+    <div class="mp-sub-title">알림</div>
+  </div>
+  <div class="mp-sub-scroll" id="notificationsListContent"></div>
 </div>
 
 <!-- Ticket History Sub-page -->
@@ -10182,7 +10199,9 @@ async function loadDeposit(){
       }
     } catch(_te) { console.warn('[loadDeposit] admin_grant 머지 예외:', _te); }
 
-    // 🆕 v1.53.30: 미확인 알림 토스트 표시 + seen=true 처리
+    // 🆕 v1.53.34 2026.06.01: 미확인 알림 토스트 — 자동 seen 처리 제거.
+    //   토스트는 표시하되 DB seen 은 그대로 유지 → 알림 내역 페이지 진입 시에만 seen=true.
+    //   sessionStorage 로 같은 세션 내 중복 토스트 방지 (마이페이지 여러 번 진입해도 1회만).
     try {
       console.log('[notif] 미확인 알림 조회 시작 user_id=', user.id);
       var nres = await window.sb.from('notifications')
@@ -10191,26 +10210,24 @@ async function loadDeposit(){
         .eq('seen', false)
         .order('created_at', { ascending: false })
         .limit(10);
-      console.log('[notif] 조회 결과:', { error: nres.error, count: (nres.data||[]).length, data: nres.data });
+      console.log('[notif] 조회 결과:', { error: nres.error, count: (nres.data||[]).length });
       if (!nres.error && Array.isArray(nres.data) && nres.data.length > 0) {
-        // 토스트 표시 — 종류별로 아이콘 다르게
-        nres.data.forEach(function(n, idx){
+        // sessionStorage 에 이미 토스트 보여준 id 들 가져오기
+        var shownKey = 'taam_notif_toasted';
+        var shown = {};
+        try { shown = JSON.parse(sessionStorage.getItem(shownKey) || '{}') || {}; } catch(_){}
+        var newOnes = nres.data.filter(function(n){ return !shown[n.id]; });
+        newOnes.forEach(function(n, idx){
           setTimeout(function(){
             var icon = n.type === 'deposit_grant' ? '💰' : (n.type === 'reservation_invite' ? '🎫' : '🔔');
             if (typeof showToast === 'function') showToast(icon, n.title || '알림', n.body || '');
           }, idx * 2200);
+          shown[n.id] = Date.now();
         });
-        // 모두 seen=true 처리 (개별 view 가 아닌 자동 read)
-        var ids = nres.data.map(function(n){ return n.id; });
-        await window.sb.from('notifications').update({
-          seen: true,
-          seen_at: new Date().toISOString()
-        }).in('id', ids);
-        // 미확인 카운트 갱신
-        if (typeof updateUnseenNotifBadge === 'function') updateUnseenNotifBadge();
-      } else {
-        if (typeof updateUnseenNotifBadge === 'function') updateUnseenNotifBadge();
+        try { sessionStorage.setItem(shownKey, JSON.stringify(shown)); } catch(_){}
       }
+      // 항상 레드닷 갱신 (seen=false 카운트로)
+      if (typeof updateUnseenNotifBadge === 'function') updateUnseenNotifBadge();
     } catch(_ne) { console.warn('[loadDeposit] 미확인 알림 처리 예외:', _ne); }
 
     // 🆕 B-3a: 멤버십 등급/만료/예치금 잔액도 같이 로드 (_currentUserGrade 초기화)
@@ -10224,34 +10241,127 @@ async function loadDeposit(){
   }
 }
 
-// 🆕 v1.53.30 2026.06.01: 마이페이지 "알림 설정" 옆 미확인 알림 레드닷.
-//   notifications 테이블에 seen=false 가 있으면 빨간 점 표시 (현재 세션 + 신규 미확인).
+// 🆕 v1.53.34 2026.06.01: 마이페이지 "알림" 메뉴 옆 미확인 알림 레드닷.
+//   #mpNotifReddot span 을 직접 토글 (HTML 에 미리 자리잡힘 — 깜빡임 방지).
 async function updateUnseenNotifBadge(){
   try {
     if(!window.sb) return;
     var u = (await window.sb.auth.getUser()).data.user;
-    if(!u) return;
+    if(!u){
+      var dot0 = document.getElementById('mpNotifReddot');
+      if(dot0) dot0.style.display = 'none';
+      return;
+    }
     var r = await window.sb.from('notifications')
       .select('id', { count: 'exact', head: true })
       .eq('user_id', u.id)
       .eq('seen', false);
     var cnt = (r && r.count) || 0;
-    // 마이페이지 "알림 설정" 행에 레드닷 부착
-    var notifRow = document.querySelector('.mp-row[onclick*="openNotifSettings"]');
-    if (notifRow) {
-      var existing = notifRow.querySelector('.mp-notif-reddot');
-      if (existing) existing.remove();
-      if (cnt > 0) {
-        var dot = document.createElement('span');
-        dot.className = 'mp-notif-reddot';
-        dot.style.cssText = 'display:inline-block;width:8px;height:8px;border-radius:50%;background:#e53935;margin-left:6px;vertical-align:middle;box-shadow:0 0 0 2px #fff;';
-        var label = notifRow.querySelector('.mp-row-label');
-        if (label) label.appendChild(dot);
-      }
+    var dot = document.getElementById('mpNotifReddot');
+    if(dot){
+      dot.style.display = cnt > 0 ? 'inline-block' : 'none';
     }
+    console.log('[notif badge] 미확인 카운트:', cnt);
   } catch(e) { console.warn('[notif badge] 갱신 예외:', e); }
 }
 window.updateUnseenNotifBadge = updateUnseenNotifBadge;
+
+// 🆕 v1.53.34 2026.06.01: 알림 내역 페이지 렌더.
+//   - 전체 알림 시간 역순 (최신이 위)
+//   - 미확인은 노란 좌측 보더 + 배경 강조
+//   - 진입 시 모든 seen=false 를 seen=true 로 일괄 처리 (레드닷 사라짐)
+//   - 클릭 시 url 있으면 이동 (예: 예약 초대 결제 팝업)
+async function renderNotificationsList(){
+  var contentEl = document.getElementById('notificationsListContent');
+  if(!contentEl) return;
+  contentEl.innerHTML = '<div style="text-align:center;padding:40px;color:#aaa;font-size:12px;">불러오는 중...</div>';
+  try {
+    if(!window.sb){
+      contentEl.innerHTML = '<div style="text-align:center;padding:40px;color:#c00;">Supabase 미연결</div>';
+      return;
+    }
+    var u = (await window.sb.auth.getUser()).data.user;
+    if(!u){
+      contentEl.innerHTML = '<div style="text-align:center;padding:40px;color:#c00;">로그인 필요</div>';
+      return;
+    }
+    var r = await window.sb.from('notifications')
+      .select('id, type, title, body, url, payload, seen, created_at')
+      .eq('user_id', u.id)
+      .order('created_at', { ascending: false })
+      .limit(100);
+    if(r.error){
+      contentEl.innerHTML = '<div style="text-align:center;padding:30px;color:#c00;font-size:12px;">로드 에러: '+_riEscHtml(r.error.message)+'</div>';
+      return;
+    }
+    var rows = r.data || [];
+    if(rows.length === 0){
+      contentEl.innerHTML = '<div style="text-align:center;padding:60px 20px;color:#aaa;font-size:13px;">받은 알림이 없어요</div>';
+      return;
+    }
+
+    contentEl.innerHTML = rows.map(function(n){
+      var icon = n.type === 'deposit_grant' ? '💰' : (n.type === 'reservation_invite' ? '🎫' : '🔔');
+      var when = n.created_at ? new Date(n.created_at).toLocaleString('ko-KR', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }) : '';
+      var unseenStyle = !n.seen ? 'background:#fff8e7;border-left:3px solid #d4a017;' : 'background:#fff;border-left:3px solid transparent;';
+      var clickAttr = n.url ? 'onclick="handleNotifClick(\''+_riEscHtml(n.url)+'\')" style="cursor:pointer;"' : '';
+      return '<div '+clickAttr+' style="padding:14px 18px;border-bottom:1px solid #f0ede8;'+unseenStyle+'">'
+           + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:6px;">'
+           +   '<div style="font-size:14px;font-weight:'+(n.seen?'600':'800')+';color:#1a1a18;line-height:1.4;">'+icon+' '+_riEscHtml(n.title || '알림')+'</div>'
+           +   '<div style="font-size:10.5px;color:#aaa;flex-shrink:0;white-space:nowrap;">'+when+'</div>'
+           + '</div>'
+           + (n.body ? '<div style="font-size:12.5px;color:#555;line-height:1.55;margin-top:4px;">'+_riEscHtml(n.body)+'</div>' : '')
+           + (!n.seen ? '<div style="margin-top:6px;font-size:10px;font-weight:800;letter-spacing:.1em;color:#9B6F00;">● 미확인</div>' : '')
+           + '</div>';
+    }).join('');
+
+    // 진입 시 모든 미확인 → seen=true 처리 (배지 사라짐)
+    var unseenIds = rows.filter(function(n){ return !n.seen; }).map(function(n){ return n.id; });
+    if(unseenIds.length > 0){
+      try {
+        await window.sb.from('notifications').update({
+          seen: true,
+          seen_at: new Date().toISOString()
+        }).in('id', unseenIds);
+        console.log('[notif] 알림 페이지 진입 → '+unseenIds.length+'건 seen=true 처리');
+      } catch(_ue) { console.warn('[notif] seen=true 일괄 처리 실패:', _ue); }
+      // 레드닷 갱신
+      if(typeof updateUnseenNotifBadge === 'function') updateUnseenNotifBadge();
+    }
+  } catch(e){
+    console.error('[notif list] 예외:', e);
+    contentEl.innerHTML = '<div style="text-align:center;padding:30px;color:#c00;font-size:11px;">예외: '+_riEscHtml(e.message || String(e))+'</div>';
+  }
+}
+window.renderNotificationsList = renderNotificationsList;
+
+// 알림 클릭 처리 — url 패턴별 분기
+function handleNotifClick(url){
+  if(!url) return;
+  // /?ri_pay=<id> → 예약 초대 결제 팝업 직접 오픈
+  try {
+    var m = url.match(/[?&]ri_pay=([^&]+)/);
+    if(m && m[1]){
+      // 알림 페이지 닫고 결제 팝업 열기
+      try { closePage('notificationsListPage'); } catch(_){}
+      if(typeof openReservationInvitePayPopup === 'function'){
+        setTimeout(function(){ openReservationInvitePayPopup(m[1]); }, 100);
+      }
+      return;
+    }
+    // /?open_deposit_hist=1 → 예치금 내역 페이지
+    if(/open_deposit_hist=1/.test(url)){
+      try { closePage('notificationsListPage'); } catch(_){}
+      setTimeout(function(){
+        if(typeof openPage === 'function' && typeof renderDepositHist === 'function'){
+          openPage('depositHistPage', renderDepositHist);
+        }
+      }, 100);
+      return;
+    }
+  } catch(_e){}
+}
+window.handleNotifClick = handleNotifClick;
 
 // ═══════════════════════════════════════════════════
 // 🎫 구매 티켓 (Supabase 연동)
@@ -12115,6 +12225,9 @@ function openMyPage(){
   //   진입 시 그 이름을 다시 가져와 #mpUserName / #peNameDisplay 에 반영하는
   //   코드가 누락되어 항상 초기값 "홍길동" 으로 보이던 문제 해결.
   _refreshMyPageUserName();
+
+  // 🆕 v1.53.34: 마이페이지 열 때마다 알림 레드닷 갱신
+  if(typeof updateUnseenNotifBadge === 'function') updateUnseenNotifBadge();
 }
 
 // 🆕 마이페이지 사용자 이름 + 이메일 갱신 (Supabase profiles 동기화)
