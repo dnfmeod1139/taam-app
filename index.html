@@ -6265,9 +6265,11 @@ window.closePromoCarousel = function(){
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z"/><circle cx="7" cy="7" r="1.2" fill="currentColor" stroke="none"/></svg>
       <span class="gnb-label">Market</span>
     </button>
-    <button class="gnb-btn" id="gnbMy" onclick="gnbGo('my',this)">
+    <button class="gnb-btn" id="gnbMy" onclick="gnbGo('my',this)" style="position:relative;">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
       <span class="gnb-label">My Page</span>
+      <!-- 🆕 v1.53.35 2026.06.01: 미확인 알림/초대 레드닷 -->
+      <span id="gnbMyReddot" style="display:none;position:absolute;top:6px;right:24%;width:8px;height:8px;border-radius:50%;background:#e53935;box-shadow:0 0 0 2px #fff;"></span>
     </button>
   </div>
 
@@ -6698,6 +6700,12 @@ window.closePromoCarousel = function(){
       <span class="mp-row-arrow">›</span>
     </div>
     <div class="mp-divider"></div>
+    <!-- 🆕 v1.53.35 2026.06.01: 슈퍼어드민에게 받은 예약 초대 (결제 대기 + 내역) -->
+    <div class="mp-row" id="mpMyInvitesRow" onclick="openPage('myInvitesPage', renderMyInvites)">
+      <span class="mp-row-label">📨 초대받은 티켓<span id="mpMyInvitesCount" style="display:none;padding:1px 7px;font-size:10px;font-weight:800;background:#e53935;color:#fff;border-radius:10px;margin-left:6px;min-width:14px;text-align:center;vertical-align:middle;">0</span></span>
+      <span class="mp-row-arrow">›</span>
+    </div>
+    <div class="mp-divider"></div>
     <div class="mp-row" onclick="openCardManagePage()">
       <span class="mp-row-label" data-i18n="my_page.card_mgmt">결제 수단 관리</span>
       <span class="mp-row-arrow">›</span>
@@ -7016,6 +7024,17 @@ window.closePromoCarousel = function(){
     </div>
 
   </div>
+</div>
+
+<!-- 🆕 v1.53.35 2026.06.01: 초대받은 티켓 페이지 -->
+<div id="myInvitesPage" class="mp-subpage">
+  <div class="mp-sub-topbar">
+    <button class="mp-sub-back" onclick="closePage('myInvitesPage')">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+    </button>
+    <div class="mp-sub-title">초대받은 티켓</div>
+  </div>
+  <div class="mp-sub-scroll" id="myInvitesContent"></div>
 </div>
 
 <!-- 🆕 v1.53.34 2026.06.01: 알림 내역 페이지 -->
@@ -10228,6 +10247,8 @@ async function loadDeposit(){
       }
       // 항상 레드닷 갱신 (seen=false 카운트로)
       if (typeof updateUnseenNotifBadge === 'function') updateUnseenNotifBadge();
+      // 🆕 v1.53.35: 받은 초대 카운트도 갱신 (홈 GNB 레드닷)
+      if (typeof updateUnseenInvitesCount === 'function') updateUnseenInvitesCount();
     } catch(_ne) { console.warn('[loadDeposit] 미확인 알림 처리 예외:', _ne); }
 
     // 🆕 B-3a: 멤버십 등급/만료/예치금 잔액도 같이 로드 (_currentUserGrade 초기화)
@@ -10334,6 +10355,164 @@ async function renderNotificationsList(){
   }
 }
 window.renderNotificationsList = renderNotificationsList;
+
+// ════════════════════════════════════════════════════════════════
+// 🆕 v1.53.35 2026.06.01: 받은 초대 (회원 측) — 마이페이지 진입
+//   reservation_invites WHERE invitee_user_id = me ORDER BY created_at DESC
+//   - 대기중(sent) → 결제 버튼 표시 (riOpen → 팝업)
+//   - 결제 완료/취소/만료 → 상태 표시만
+//   - 페이지 진입 시 모든 본인 row 의 invitee_seen=true 처리 → 카운트 사라짐
+// ════════════════════════════════════════════════════════════════
+async function renderMyInvites(){
+  var contentEl = document.getElementById('myInvitesContent');
+  if(!contentEl) return;
+  contentEl.innerHTML = '<div style="text-align:center;padding:40px;color:#aaa;font-size:12px;">불러오는 중...</div>';
+  try {
+    if(!window.sb){
+      contentEl.innerHTML = '<div style="text-align:center;padding:40px;color:#c00;">Supabase 미연결</div>';
+      return;
+    }
+    var u = (await window.sb.auth.getUser()).data.user;
+    if(!u){
+      contentEl.innerHTML = '<div style="text-align:center;padding:40px;color:#c00;">로그인 필요</div>';
+      return;
+    }
+    var r = await window.sb.from('reservation_invites')
+      .select('*')
+      .eq('invitee_user_id', u.id)
+      .order('created_at', { ascending: false })
+      .limit(100);
+    if(r.error){
+      contentEl.innerHTML = '<div style="text-align:center;padding:30px;color:#c00;font-size:12px;">로드 에러: '+_riEscHtml(r.error.message)+'</div>';
+      return;
+    }
+    var rows = r.data || [];
+    if(rows.length === 0){
+      contentEl.innerHTML = '<div style="text-align:center;padding:60px 20px;color:#aaa;font-size:13px;">받은 초대가 아직 없어요</div>';
+      // 미확인 카운트 갱신 (0개)
+      if(typeof updateUnseenInvitesCount === 'function') updateUnseenInvitesCount();
+      return;
+    }
+
+    // 통계 (간략)
+    var sentCnt = rows.filter(function(x){ return x.status === 'sent'; }).length;
+    var paidCnt = rows.filter(function(x){ return x.status === 'paid'; }).length;
+
+    var statsHtml = '<div style="display:flex;gap:8px;padding:14px 16px 6px;">'
+                  + '<div style="flex:1;background:#fff8e7;border:1.5px solid #d4a017;border-radius:10px;padding:11px 4px;text-align:center;">'
+                  +   '<div style="font-family:var(--font-main);font-size:8.5px;letter-spacing:.15em;color:#9B6F00;margin-bottom:3px;">PENDING</div>'
+                  +   '<div style="font-family:var(--font-main);font-size:17px;font-weight:900;color:#9B6F00;">'+sentCnt+'</div></div>'
+                  + '<div style="flex:1;background:#f0faf0;border:1.5px solid #2a7a2a;border-radius:10px;padding:11px 4px;text-align:center;">'
+                  +   '<div style="font-family:var(--font-main);font-size:8.5px;letter-spacing:.15em;color:#2a7a2a;margin-bottom:3px;">PAID</div>'
+                  +   '<div style="font-family:var(--font-main);font-size:17px;font-weight:900;color:#2a7a2a;">'+paidCnt+'</div></div>'
+                  + '</div>';
+
+    var cardsHtml = rows.map(function(inv){
+      var statusLabel, statusColor, statusBg, payBtn = '';
+      if(inv.status === 'paid'){ statusLabel = '✓ 결제 완료'; statusColor = '#2a7a2a'; statusBg = '#f0faf0'; }
+      else if(inv.status === 'cancelled'){ statusLabel = '✕ 취소됨'; statusColor = '#9B1C1C'; statusBg = '#fff5f5'; }
+      else if(inv.status === 'expired'){ statusLabel = '⏱ 만료'; statusColor = '#9B1C1C'; statusBg = '#fff5f5'; }
+      else {
+        statusLabel = '⌛ 대기중'; statusColor = '#9B6F00'; statusBg = '#fff8e7';
+        payBtn = '<button onclick="openReservationInvitePayPopup(\''+inv.id+'\')" style="width:100%;margin-top:10px;padding:12px;background:#5C0A14;border:none;border-radius:10px;font-family:var(--font-main);font-size:11.5px;font-weight:900;color:#fff;cursor:pointer;letter-spacing:.04em;">결제하기 · ₩'+(inv.total_amount||0).toLocaleString()+'</button>';
+      }
+
+      var sentAt = inv.created_at ? new Date(inv.created_at).toLocaleString('ko-KR', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) : '–';
+      var paidAt = inv.paid_at ? new Date(inv.paid_at).toLocaleString('ko-KR', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) : '';
+      var visitTime = inv.visit_time || '';
+      if(visitTime.includes(':')){
+        var tp = visitTime.split(':'), hh = parseInt(tp[0]);
+        visitTime = (hh>12?hh-12:(hh===0?12:hh))+':'+tp[1]+' '+(hh>=12?'PM':'AM');
+      }
+      var newBadge = !inv.invitee_seen ? '<span style="margin-left:6px;font-size:9px;font-weight:800;color:#fff;background:#e53935;border-radius:8px;padding:2px 6px;letter-spacing:.05em;">NEW</span>' : '';
+
+      return '<div style="background:#fff;border:1px solid #ece8df;border-radius:12px;padding:14px 16px;margin-bottom:10px;">'
+           + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:10px;">'
+           +   '<div style="min-width:0;flex:1;">'
+           +     '<div style="font-size:14px;font-weight:800;color:#1a1a18;">'+_riEscHtml(inv.restaurant_name||'레스토랑')+newBadge+'</div>'
+           +     '<div style="font-size:11px;color:#777;margin-top:2px;">'+_riEscHtml((inv.ticket_genre || '')+(inv.type_class === 'eve' ? ' · Event' : ' · Standard'))+'</div>'
+           +   '</div>'
+           +   '<div style="font-size:10px;font-weight:800;color:'+statusColor+';background:'+statusBg+';border:1px solid '+statusColor+';border-radius:6px;padding:3px 8px;flex-shrink:0;white-space:nowrap;">'+statusLabel+'</div>'
+           + '</div>'
+           + '<div style="display:flex;flex-direction:column;gap:5px;padding-top:10px;border-top:1px solid #f0ede8;">'
+           +   '<div style="display:flex;justify-content:space-between;font-size:11.5px;"><span style="color:#999;">방문일</span><span style="color:#1a1a18;font-weight:700;">'+_riEscHtml((inv.visit_date||'')+' '+visitTime)+'</span></div>'
+           +   '<div style="display:flex;justify-content:space-between;font-size:11.5px;"><span style="color:#999;">인원·금액</span><span style="color:#1a1a18;font-weight:700;">'+inv.pax+'인 · ₩'+(inv.total_amount||0).toLocaleString()+'</span></div>'
+           +   '<div style="display:flex;justify-content:space-between;font-size:10.5px;color:#aaa;margin-top:4px;flex-wrap:wrap;gap:6px;">'
+           +     '<span>📥 받은 시각 '+sentAt+'</span>'
+           +     (paidAt ? '<span style="color:#2a7a2a;">💳 '+paidAt+'</span>' : '')
+           +   '</div>'
+           + '</div>'
+           + payBtn
+           + '</div>';
+    }).join('');
+
+    contentEl.innerHTML = statsHtml + '<div style="padding:0 16px;">' + cardsHtml + '</div>';
+
+    // 진입 시 본인의 모든 invitee_seen=false → true 처리
+    var unseenIds = rows.filter(function(x){ return !x.invitee_seen; }).map(function(x){ return x.id; });
+    if(unseenIds.length > 0){
+      try {
+        await window.sb.from('reservation_invites').update({ invitee_seen: true }).in('id', unseenIds);
+        console.log('[myInvites] '+unseenIds.length+'건 invitee_seen=true 처리');
+      } catch(_ue) { console.warn('[myInvites] seen 처리 실패:', _ue); }
+      // 카운트 + 레드닷 갱신
+      if(typeof updateUnseenInvitesCount === 'function') updateUnseenInvitesCount();
+    }
+  } catch(e){
+    console.error('[myInvites] 예외:', e);
+    contentEl.innerHTML = '<div style="text-align:center;padding:30px;color:#c00;font-size:11px;">예외: '+_riEscHtml(e.message || String(e))+'</div>';
+  }
+}
+window.renderMyInvites = renderMyInvites;
+
+// 🆕 v1.53.35: 받은 초대 미확인 카운트 → 마이페이지 메뉴 옆 숫자 + 홈 GNB 레드닷
+async function updateUnseenInvitesCount(){
+  try {
+    if(!window.sb) return;
+    var u = (await window.sb.auth.getUser()).data.user;
+    if(!u){
+      var c0 = document.getElementById('mpMyInvitesCount');
+      if(c0) c0.style.display = 'none';
+      _updateGnbMyReddot(0, 0);
+      return;
+    }
+    var r = await window.sb.from('reservation_invites')
+      .select('id', { count: 'exact', head: true })
+      .eq('invitee_user_id', u.id)
+      .eq('invitee_seen', false);
+    var cnt = (r && r.count) || 0;
+    var elBadge = document.getElementById('mpMyInvitesCount');
+    if(elBadge){
+      if(cnt > 0){
+        elBadge.textContent = cnt > 99 ? '99+' : String(cnt);
+        elBadge.style.display = 'inline-block';
+      } else {
+        elBadge.style.display = 'none';
+      }
+    }
+    // 홈 GNB My 아이콘 레드닷 (받은 초대 + 미확인 알림 둘 다 고려)
+    var notifCnt = 0;
+    try {
+      var nr = await window.sb.from('notifications')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', u.id)
+        .eq('seen', false);
+      notifCnt = (nr && nr.count) || 0;
+    } catch(_){}
+    _updateGnbMyReddot(cnt, notifCnt);
+    console.log('[invites count] 미확인 초대:', cnt, '미확인 알림:', notifCnt);
+  } catch(e){ console.warn('[invites count] 예외:', e); }
+}
+window.updateUnseenInvitesCount = updateUnseenInvitesCount;
+
+// 홈 GNB My 아이콘 레드닷 표시 (받은 초대 + 알림 합산)
+function _updateGnbMyReddot(invitesCnt, notifCnt){
+  var dot = document.getElementById('gnbMyReddot');
+  if(!dot) return;
+  var total = (invitesCnt || 0) + (notifCnt || 0);
+  dot.style.display = total > 0 ? 'block' : 'none';
+}
+window._updateGnbMyReddot = _updateGnbMyReddot;
 
 // 알림 클릭 처리 — url 패턴별 분기
 function handleNotifClick(url){
@@ -12226,8 +12405,9 @@ function openMyPage(){
   //   코드가 누락되어 항상 초기값 "홍길동" 으로 보이던 문제 해결.
   _refreshMyPageUserName();
 
-  // 🆕 v1.53.34: 마이페이지 열 때마다 알림 레드닷 갱신
+  // 🆕 v1.53.34/35: 마이페이지 열 때마다 알림 + 받은 초대 카운트 갱신
   if(typeof updateUnseenNotifBadge === 'function') updateUnseenNotifBadge();
+  if(typeof updateUnseenInvitesCount === 'function') updateUnseenInvitesCount();
 }
 
 // 🆕 마이페이지 사용자 이름 + 이메일 갱신 (Supabase profiles 동기화)
@@ -21991,6 +22171,9 @@ async function riConfirmPay(){
     // 마이페이지/예치금 갱신
     try { if(typeof loadDeposits === 'function') loadDeposits(); } catch(_){}
     try { if(typeof renderMyPage === 'function') renderMyPage(); } catch(_){}
+    // 🆕 v1.53.35: 결제 완료 → 받은 초대 카운트 + 알림 레드닷 갱신
+    try { if(typeof updateUnseenInvitesCount === 'function') updateUnseenInvitesCount(); } catch(_){}
+    try { if(typeof updateUnseenNotifBadge === 'function') updateUnseenNotifBadge(); } catch(_){}
   } catch(e){
     console.error('[riPay] confirm 예외:', e);
     showToast('❌','오류','['+e.name+'] '+e.message);

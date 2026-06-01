@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.34';  // 1.53.34 — 2026.06.01: 알림 내역 페이지 신설 + 레드닷 유지 — 마이페이지에 "🔔 알림" 메뉴 추가 (알림 설정과 별도), notificationsListPage 화면 신설(전체 알림 시간 역순, 미확인 노란 강조), 자동 seen 처리 제거 → 알림 페이지 진입 시에만 seen=true 일괄 처리 → 레드닷 유지. sessionStorage 로 같은 세션 내 토스트 중복 방지. openMyPage 진입 시 자동 updateUnseenNotifBadge 호출. 알림 클릭 시 url 패턴별 라우팅(?ri_pay=, open_deposit_hist=).
-const STATIC_CACHE = 'taam-static-v1.53.34';
+const SW_VERSION = 'taam-sw-v1.53.35';  // 1.53.35 — 2026.06.01: "📨 초대받은 티켓" 메뉴 + 카운트 배지 + 홈 GNB 레드닷 — 마이페이지에 신메뉴, 미확인 초대 숫자 배지(99+), 새로 받은 초대는 NEW 배지. 받은 초대 페이지(myInvitesPage) 진입 시 invitee_seen=true 일괄 처리. 결제 대기는 결제 버튼, 완료/취소/만료는 상태만. 홈 GNB My 아이콘에 미확인 초대+알림 합산 레드닷.
+const STATIC_CACHE = 'taam-static-v1.53.35';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
