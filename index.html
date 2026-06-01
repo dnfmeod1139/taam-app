@@ -7574,6 +7574,14 @@ window.closePromoCarousel = function(){
         </div>
         <div class="admin-arrow">›</div>
       </div>
+      <!-- 🆕 v1.53.45 2026.06.01: 슈퍼어드민 티켓 오픈 알림 일괄 발송 -->
+      <div class="admin-menu-item" onclick="openTicketBroadcastScreen()">
+        <div>
+          <div class="admin-menu-text">📢 티켓 오픈 알림 발송</div>
+          <div class="admin-menu-sub">티켓 선택 + 회원 제외 + 푸시·인앱 동시 발송</div>
+        </div>
+        <div class="admin-arrow">›</div>
+      </div>
       <div class="admin-menu-item" onclick="openSubPage('inviteCodeScreen')">
         <div><div class="admin-menu-text" data-i18n="admin.member_invite">📧 회원 초대</div><div class="admin-menu-sub" data-i18n="admin.member_invite_sub">신규 회원 초대 코드 발급 · 발송</div></div>
         <div class="admin-arrow">›</div>
@@ -8350,6 +8358,47 @@ window.closePromoCarousel = function(){
   <div class="tu-form">
     <div id="sentInvitesStats"></div>
     <div id="sentInvitesList"></div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════ -->
+<!-- 🆕 v1.53.45 2026.06.01: 슈퍼어드민 티켓 오픈 알림 일괄 발송 화면     -->
+<!-- ════════════════════════════════════════════════════════════════ -->
+<div id="ticketBroadcastScreen" class="tu-screen" style="display:none;">
+  <div class="tu-header">
+    <button class="page-back" onclick="closeTicketBroadcastScreen()">←</button>
+    <div class="page-title">📢 티켓 오픈 알림</div>
+  </div>
+  <div class="tu-form">
+    <!-- 1. 티켓 선택 -->
+    <div class="rp-field">
+      <div class="tu-section-title">티켓 선택 (복수 가능) *</div>
+      <input class="tu-input" id="tbTicketSearch" type="text" placeholder="레스토랑·날짜·장르 검색 (2자 이상)" oninput="tbSearchTickets(this.value)" style="margin-bottom:8px;">
+      <div id="tbTicketResults" style="display:none;max-height:300px;overflow-y:auto;background:#faf8f5;border-radius:12px;padding:6px;margin-bottom:8px;"></div>
+      <div id="tbSelectedTickets"></div>
+    </div>
+
+    <!-- 2. 회원 제외 (선택) -->
+    <div class="rp-field">
+      <div class="tu-section-title">알림 제외 회원 (선택)</div>
+      <input class="tu-input" id="tbExcludeSearch" type="text" placeholder="이름·이메일·전화번호 검색 (2자 이상)" oninput="tbSearchExcludeMembers(this.value)" style="margin-bottom:8px;">
+      <div id="tbExcludeResults" style="display:none;max-height:240px;overflow-y:auto;background:#faf8f5;border-radius:12px;padding:6px;margin-bottom:8px;"></div>
+      <div id="tbExcludedMembers"></div>
+    </div>
+
+    <!-- 3. 미리보기 -->
+    <div class="rp-field">
+      <div class="tu-section-title">📨 알림 미리보기</div>
+      <div id="tbPreview" style="background:#1a1a18;color:#fff;border-radius:14px;padding:18px 20px;font-family:var(--font-main);font-size:14px;line-height:1.7;min-height:80px;white-space:pre-wrap;">티켓을 선택하면 알림 내용이 여기에 미리보입니다.</div>
+    </div>
+
+    <!-- 발송 대상 정보 -->
+    <div id="tbSendInfo" style="margin:8px 0 14px;padding:14px 16px;background:#fff8e7;border:1.5px solid #d4a017;border-radius:12px;display:flex;justify-content:space-between;align-items:center;">
+      <div style="font-family:var(--font-main);font-size:10px;font-weight:800;letter-spacing:.15em;color:#9B6F00;">발송 대상</div>
+      <div id="tbSendCount" style="font-family:var(--font-main);font-size:14px;font-weight:800;color:#1a1a18;">계산 중...</div>
+    </div>
+
+    <button class="tu-submit" id="tbSendBtn" onclick="tbSendBroadcast()" style="background:#5C0A14;">📢 알림 발송</button>
   </div>
 </div>
 
@@ -10568,7 +10617,10 @@ async function loadDeposit(){
         var newOnes = nres.data.filter(function(n){ return !shown[n.id]; });
         newOnes.forEach(function(n, idx){
           setTimeout(function(){
-            var icon = n.type === 'deposit_grant' ? '💰' : (n.type === 'reservation_invite' ? '🎫' : '🔔');
+            var icon = n.type === 'deposit_grant' ? '💰'
+                      : (n.type === 'reservation_invite' ? '🎫'
+                      : (n.type === 'ticket_open' ? '📢'
+                      : (n.type === 'invite_cancelled' ? '❌' : '🔔')));
             if (typeof showToast === 'function') showToast(icon, n.title || '알림', n.body || '');
           }, idx * 2200);
           shown[n.id] = Date.now();
@@ -10652,7 +10704,10 @@ async function renderNotificationsList(){
     }
 
     contentEl.innerHTML = rows.map(function(n){
-      var icon = n.type === 'deposit_grant' ? '💰' : (n.type === 'reservation_invite' ? '🎫' : '🔔');
+      var icon = n.type === 'deposit_grant' ? '💰'
+                : (n.type === 'reservation_invite' ? '🎫'
+                : (n.type === 'ticket_open' ? '📢'
+                : (n.type === 'invite_cancelled' ? '❌' : '🔔')));
       var when = n.created_at ? new Date(n.created_at).toLocaleString('ko-KR', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }) : '';
       var unseenStyle = !n.seen ? 'background:#fff8e7;border-left:3px solid #d4a017;' : 'background:#fff;border-left:3px solid transparent;';
       var clickAttr = n.url ? 'onclick="handleNotifClick(\''+_riEscHtml(n.url)+'\')" style="cursor:pointer;"' : '';
@@ -22534,6 +22589,351 @@ async function loadSentInvites(){
     document.getElementById('sentInvitesList').innerHTML = '<div style="text-align:center;padding:30px;color:#c00;font-size:11px;">예외: '+_riEscHtml(e.message || String(e))+'</div>';
   }
 }
+
+// ════════════════════════════════════════════════════════════════
+// 🆕 v1.53.45 2026.06.01: 슈퍼어드민 티켓 오픈 알림 일괄 발송
+//   ① 티켓 검색 + 복수 선택
+//   ② 회원 제외 검색 + 복수 선택
+//   ③ 미리보기 자동 갱신
+//   ④ 발송: profiles 전체 → 제외 회원 제거 → notifications INSERT + send-push
+// ════════════════════════════════════════════════════════════════
+var _tbSelectedTicketIds = {};       // { ticketId: ticketObj }
+var _tbExcludedMemberIds = {};       // { uid: profileObj }
+var _tbMemberSearchCache = {};       // 검색 결과 캐시 (uid → profile)
+var _tbTicketSearchTimer = null;
+var _tbMemberSearchTimer = null;
+var _tbAllActiveMembers = [];        // 발송 대상 전체 회원 캐시 (count 표시용)
+
+function openTicketBroadcastScreen(){
+  if(_currentRole !== 'superadmin'){
+    showToast('⚠','권한 없음','슈퍼어드민 전용 기능입니다');
+    return;
+  }
+  // 초기화
+  _tbSelectedTicketIds = {};
+  _tbExcludedMemberIds = {};
+  _tbMemberSearchCache = {};
+  document.getElementById('tbTicketSearch').value = '';
+  document.getElementById('tbExcludeSearch').value = '';
+  document.getElementById('tbTicketResults').style.display = 'none';
+  document.getElementById('tbTicketResults').innerHTML = '';
+  document.getElementById('tbExcludeResults').style.display = 'none';
+  document.getElementById('tbExcludeResults').innerHTML = '';
+  document.getElementById('tbSelectedTickets').innerHTML = '';
+  document.getElementById('tbExcludedMembers').innerHTML = '';
+  document.getElementById('tbPreview').textContent = '티켓을 선택하면 알림 내용이 여기에 미리보입니다.';
+  document.getElementById('tbSendCount').textContent = '계산 중...';
+
+  document.getElementById('ticketBroadcastScreen').style.display = 'flex';
+  // 활성 회원 수 미리 조회
+  tbLoadActiveMembersCount();
+}
+window.openTicketBroadcastScreen = openTicketBroadcastScreen;
+
+function closeTicketBroadcastScreen(){
+  document.getElementById('ticketBroadcastScreen').style.display = 'none';
+}
+window.closeTicketBroadcastScreen = closeTicketBroadcastScreen;
+
+// 활성 회원 수 조회 + 캐시
+async function tbLoadActiveMembersCount(){
+  try {
+    if(!window.sb) return;
+    var r = await window.sb.from('profiles')
+      .select('id, display_name, email, phone, role')
+      .is('deleted_at', null);
+    if(r.error){
+      console.warn('[broadcast] 회원 수 조회 에러:', r.error.message);
+      return;
+    }
+    _tbAllActiveMembers = r.data || [];
+    tbUpdateSendCount();
+  } catch(e){ console.warn('[broadcast] 회원 수 조회 예외:', e); }
+}
+
+function tbUpdateSendCount(){
+  var total = _tbAllActiveMembers.length;
+  var excluded = Object.keys(_tbExcludedMemberIds).length;
+  var sendCount = Math.max(0, total - excluded);
+  var html = '<span style="color:#1a1a18;font-weight:800;">' + sendCount + '명</span>'
+           + ' <span style="color:#888;font-weight:600;font-size:12px;">/ 전체 ' + total + '명' + (excluded > 0 ? ' · 제외 ' + excluded + '명' : '') + '</span>';
+  document.getElementById('tbSendCount').innerHTML = html;
+}
+
+// 티켓 검색
+function tbSearchTickets(q){
+  q = (q || '').trim().toLowerCase();
+  var resEl = document.getElementById('tbTicketResults');
+  if(q.length < 2){ resEl.style.display='none'; resEl.innerHTML=''; return; }
+  if(_tbTicketSearchTimer) clearTimeout(_tbTicketSearchTimer);
+  _tbTicketSearchTimer = setTimeout(function(){
+    var matches = (ticketDB || []).filter(function(t){
+      // 활성 티켓만 (지난 티켓 제외)
+      var rest = (restaurantDB || []).find(function(r){ return String(r.id) === String(t.restId); });
+      var restName = (rest && rest.name) || t.rest || '';
+      var hay = (restName + ' ' + (t.date || '') + ' ' + (t.ticketGenre || '') + ' ' + (t.type || '')).toLowerCase();
+      return hay.indexOf(q) !== -1;
+    }).slice(0, 30);
+    if(matches.length === 0){
+      resEl.innerHTML = '<div style="padding:14px;text-align:center;font-size:12px;color:#999;">검색 결과 없음</div>';
+    } else {
+      resEl.innerHTML = matches.map(function(t){
+        var rest = (restaurantDB || []).find(function(r){ return String(r.id) === String(t.restId); });
+        var restName = (rest && rest.name) || t.rest || '(레스토랑 없음)';
+        var isSelected = !!_tbSelectedTicketIds[t.id];
+        var label = (t.date || '') + (t.time ? ' ' + t.time : '') + ' · ' + restName + (t.ticketGenre ? ' · ' + t.ticketGenre : '');
+        return '<div onclick="tbToggleTicket(\''+t.id+'\')" style="padding:10px 12px;margin-bottom:4px;border-radius:8px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;background:'+(isSelected?'#1a1a18':'#fff')+';color:'+(isSelected?'#fff':'#1a1a18')+';">'
+             + '<div style="font-size:12.5px;font-weight:700;">'+_riEscHtml(label)+'</div>'
+             + '<div style="font-size:10px;font-weight:800;color:'+(isSelected?'#c8a96e':'#c8a96e')+';">'+(isSelected?'✓ 선택됨':'+ 선택')+'</div>'
+             + '</div>';
+      }).join('');
+    }
+    resEl.style.display='block';
+  }, 200);
+}
+window.tbSearchTickets = tbSearchTickets;
+
+function tbToggleTicket(tid){
+  var t = (ticketDB || []).find(function(x){ return String(x.id) === String(tid); });
+  if(!t) return;
+  if(_tbSelectedTicketIds[tid]) delete _tbSelectedTicketIds[tid];
+  else _tbSelectedTicketIds[tid] = t;
+  // 검색 결과 새로 그리기 위해 다시 검색 실행
+  var inp = document.getElementById('tbTicketSearch');
+  if(inp && inp.value.length >= 2) tbSearchTickets(inp.value);
+  tbRenderSelectedTickets();
+  tbUpdatePreview();
+}
+window.tbToggleTicket = tbToggleTicket;
+
+function tbRenderSelectedTickets(){
+  var el = document.getElementById('tbSelectedTickets');
+  var ids = Object.keys(_tbSelectedTicketIds);
+  if(ids.length === 0){ el.innerHTML = ''; return; }
+  el.innerHTML = '<div style="font-family:var(--font-main);font-size:9.5px;font-weight:800;letter-spacing:.15em;color:#9B6F00;margin-bottom:6px;">SELECTED (' + ids.length + ')</div>'
+               + ids.map(function(tid){
+                  var t = _tbSelectedTicketIds[tid];
+                  var rest = (restaurantDB || []).find(function(r){ return String(r.id) === String(t.restId); });
+                  var restName = (rest && rest.name) || t.rest || '';
+                  var label = (t.date || '') + (t.time ? ' ' + t.time : '') + ' · ' + restName;
+                  return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 11px;background:#fff8e7;border:1px solid #d4a017;border-radius:8px;margin-bottom:4px;gap:10px;">'
+                       + '<div style="font-size:12px;font-weight:700;color:#1a1a18;">'+_riEscHtml(label)+'</div>'
+                       + '<button onclick="tbToggleTicket(\''+tid+'\')" style="background:none;border:none;color:#9B1C1C;font-weight:800;cursor:pointer;font-size:14px;">✕</button>'
+                       + '</div>';
+                }).join('');
+}
+
+// 회원 검색 (제외용)
+function tbSearchExcludeMembers(q){
+  q = (q || '').trim();
+  var resEl = document.getElementById('tbExcludeResults');
+  if(q.length < 2){ resEl.style.display='none'; resEl.innerHTML=''; return; }
+  if(_tbMemberSearchTimer) clearTimeout(_tbMemberSearchTimer);
+  _tbMemberSearchTimer = setTimeout(async function(){
+    try {
+      if(!window.sb) return;
+      var qLower = q.toLowerCase();
+      var qDigits = q.replace(/[^0-9]/g,'');
+      var orParts = ['display_name.ilike.%'+q+'%', 'email.ilike.%'+qLower+'%'];
+      if(qDigits.length >= 4) orParts.push('phone.ilike.%'+qDigits+'%');
+      var r = await window.sb.from('profiles')
+        .select('id, display_name, email, phone, role')
+        .or(orParts.join(','))
+        .is('deleted_at', null)
+        .limit(20);
+      if(r.error){
+        resEl.innerHTML = '<div style="padding:14px;color:#9B1C1C;font-size:11px;text-align:center;">검색 에러: '+_riEscHtml(r.error.message)+'</div>';
+        resEl.style.display='block';
+        return;
+      }
+      var rows = r.data || [];
+      rows.forEach(function(u){ _tbMemberSearchCache[u.id] = u; });
+      if(rows.length === 0){
+        resEl.innerHTML = '<div style="padding:14px;text-align:center;font-size:12px;color:#999;">검색 결과 없음</div>';
+      } else {
+        resEl.innerHTML = rows.map(function(u){
+          var nm = (u.display_name && String(u.display_name).trim()) || '(이름 없음)';
+          var contact = u.email || u.phone || '–';
+          var isExcluded = !!_tbExcludedMemberIds[u.id];
+          return '<div onclick="tbToggleExcludeMember(\''+u.id+'\')" style="padding:10px 12px;margin-bottom:4px;border-radius:8px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;background:'+(isExcluded?'#9B1C1C':'#fff')+';color:'+(isExcluded?'#fff':'#1a1a18')+';">'
+               + '<div style="min-width:0;flex:1;"><div style="font-size:13px;font-weight:800;">'+_riEscHtml(nm)+'</div>'
+               + '<div style="font-size:11px;'+(isExcluded?'color:#ffccc4':'color:#777')+';margin-top:2px;">'+_riEscHtml(contact)+'</div></div>'
+               + '<div style="font-size:10px;font-weight:800;color:'+(isExcluded?'#fff':'#9B1C1C')+';">'+(isExcluded?'✓ 제외됨':'+ 제외')+'</div>'
+               + '</div>';
+        }).join('');
+      }
+      resEl.style.display='block';
+    } catch(e){ console.warn('[broadcast] 회원 검색 예외:', e); }
+  }, 200);
+}
+window.tbSearchExcludeMembers = tbSearchExcludeMembers;
+
+function tbToggleExcludeMember(uid){
+  var u = _tbMemberSearchCache[uid];
+  if(!u) return;
+  if(_tbExcludedMemberIds[uid]) delete _tbExcludedMemberIds[uid];
+  else _tbExcludedMemberIds[uid] = u;
+  // 검색 결과 다시 그리기
+  var inp = document.getElementById('tbExcludeSearch');
+  if(inp && inp.value.length >= 2) tbSearchExcludeMembers(inp.value);
+  tbRenderExcludedMembers();
+  tbUpdateSendCount();
+}
+window.tbToggleExcludeMember = tbToggleExcludeMember;
+
+function tbRenderExcludedMembers(){
+  var el = document.getElementById('tbExcludedMembers');
+  var ids = Object.keys(_tbExcludedMemberIds);
+  if(ids.length === 0){ el.innerHTML = ''; return; }
+  el.innerHTML = '<div style="font-family:var(--font-main);font-size:9.5px;font-weight:800;letter-spacing:.15em;color:#9B1C1C;margin-bottom:6px;">EXCLUDED (' + ids.length + ')</div>'
+               + ids.map(function(uid){
+                  var u = _tbExcludedMemberIds[uid];
+                  var nm = (u.display_name && String(u.display_name).trim()) || '(이름 없음)';
+                  var contact = u.email || u.phone || '–';
+                  return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 11px;background:#fff5f5;border:1px solid #c33;border-radius:8px;margin-bottom:4px;gap:10px;">'
+                       + '<div style="min-width:0;flex:1;"><div style="font-size:12.5px;font-weight:700;color:#1a1a18;">'+_riEscHtml(nm)+'</div><div style="font-size:10.5px;color:#777;">'+_riEscHtml(contact)+'</div></div>'
+                       + '<button onclick="tbToggleExcludeMember(\''+uid+'\')" style="background:none;border:none;color:#9B1C1C;font-weight:800;cursor:pointer;font-size:14px;">✕</button>'
+                       + '</div>';
+                }).join('');
+}
+
+// 메시지 형식: "YYYY년 MM월 DD일 레스토랑" (복수 줄) + "티켓이 오픈되었습니다"
+function tbBuildMessage(tickets){
+  if(!tickets || tickets.length === 0) return { title:'🎫 새 티켓 오픈', body:'', preview:'' };
+  function fmtLine(t){
+    var rest = (restaurantDB || []).find(function(r){ return String(r.id) === String(t.restId); });
+    var restName = (rest && rest.name) || t.rest || '(레스토랑)';
+    // t.date 는 'YYYY.MM.DD' 또는 'MM.DD' 형식
+    var d = (t.date || '').split('.');
+    var dispDate = '';
+    if(d.length === 3) dispDate = parseInt(d[0],10)+'년 '+parseInt(d[1],10)+'월 '+parseInt(d[2],10)+'일';
+    else if(d.length === 2){
+      var yr = new Date().getFullYear();
+      dispDate = yr+'년 '+parseInt(d[0],10)+'월 '+parseInt(d[1],10)+'일';
+    } else dispDate = t.date || '';
+    return dispDate + ' ' + restName;
+  }
+  var lines = tickets.map(fmtLine);
+  var preview = lines.join('\n') + '\n티켓이 오픈되었습니다';
+  var title = '🎫 새 티켓 오픈';
+  // 푸시 본문은 짧게: 첫 줄 + 외 N개 (복수일 때)
+  var body;
+  if(lines.length === 1){
+    body = lines[0] + ' 티켓이 오픈되었습니다';
+  } else {
+    body = lines[0] + ' 외 ' + (lines.length - 1) + '개 티켓이 오픈되었습니다';
+  }
+  return { title: title, body: body, preview: preview, lines: lines };
+}
+
+function tbUpdatePreview(){
+  var ticketIds = Object.keys(_tbSelectedTicketIds);
+  var tickets = ticketIds.map(function(id){ return _tbSelectedTicketIds[id]; });
+  if(tickets.length === 0){
+    document.getElementById('tbPreview').textContent = '티켓을 선택하면 알림 내용이 여기에 미리보입니다.';
+    return;
+  }
+  var msg = tbBuildMessage(tickets);
+  document.getElementById('tbPreview').textContent = msg.preview;
+}
+
+// 발송
+async function tbSendBroadcast(){
+  if(_currentRole !== 'superadmin'){ showToast('⚠','권한 없음','슈퍼어드민 전용'); return; }
+  var ticketIds = Object.keys(_tbSelectedTicketIds);
+  if(ticketIds.length === 0){ showToast('⚠','선택 필요','티켓을 1개 이상 선택해주세요'); return; }
+  var tickets = ticketIds.map(function(id){ return _tbSelectedTicketIds[id]; });
+  var msg = tbBuildMessage(tickets);
+
+  // 발송 대상 = 활성 회원 - 제외 회원
+  var targetIds = _tbAllActiveMembers
+    .filter(function(m){ return !_tbExcludedMemberIds[m.id]; })
+    .map(function(m){ return m.id; });
+  if(targetIds.length === 0){ showToast('⚠','대상 없음','발송할 회원이 없습니다'); return; }
+
+  if(!confirm('총 ' + targetIds.length + '명에게 알림을 발송합니다.\n\n제목: ' + msg.title + '\n본문: ' + msg.body + '\n\n발송하시겠습니까?')) return;
+
+  var btn = document.getElementById('tbSendBtn');
+  if(btn){ btn.disabled = true; btn.textContent = '발송 중...'; }
+
+  try {
+    var u = (await window.sb.auth.getUser()).data.user;
+    if(!u){ showToast('⚠','로그인 필요',''); return; }
+
+    // URL: 단일 티켓이면 /?ticket=ID, 복수면 홈
+    var targetUrl = (ticketIds.length === 1) ? ('/?ticket=' + ticketIds[0]) : '/';
+
+    // 1) notifications INSERT — 한 번에 (batch)
+    //   payload 에 전체 티켓 리스트 + lines (인앱 알림에서 전체 표시)
+    var notifRows = targetIds.map(function(uid){
+      return {
+        user_id: uid,
+        type: 'ticket_open',
+        kind: 'ticket_open',                  // 호환
+        title: msg.title,
+        body: msg.preview,                    // 인앱에는 전체 리스트
+        message: msg.preview,                 // 호환
+        url: targetUrl,
+        payload: {
+          ticket_ids: ticketIds,
+          lines: msg.lines,
+          broadcast_by: u.id,
+          broadcast_at: new Date().toISOString()
+        }
+      };
+    });
+
+    // chunk 단위로 INSERT (한 번에 500개 안전선)
+    var CHUNK = 200;
+    var insertedTotal = 0;
+    for(var i = 0; i < notifRows.length; i += CHUNK){
+      var chunk = notifRows.slice(i, i + CHUNK);
+      var ins = await window.sb.from('notifications').insert(chunk);
+      if(ins.error){
+        console.warn('[broadcast] notifications INSERT 에러 chunk ' + i + ':', ins.error.message);
+      } else {
+        insertedTotal += chunk.length;
+      }
+    }
+    console.log('[broadcast] notifications 인입:', insertedTotal + '/' + notifRows.length);
+
+    // 2) 푸시 발송 — 회원당 한 번씩 호출 (병렬 5개씩)
+    var pushSuccess = 0, pushFail = 0;
+    var PARALLEL = 5;
+    for(var j = 0; j < targetIds.length; j += PARALLEL){
+      var batch = targetIds.slice(j, j + PARALLEL);
+      await Promise.all(batch.map(function(uid){
+        return window.sb.functions.invoke('send-push', {
+          body: {
+            to: 'uid:' + uid,
+            payload: {
+              title: msg.title,
+              body: msg.body,
+              url: targetUrl,
+              category: 'ticket_open',
+              tag: 'taam-tkopen-' + Date.now()
+            }
+          }
+        }).then(function(pr){
+          if(pr && pr.error) pushFail++;
+          else pushSuccess++;
+        }).catch(function(){ pushFail++; });
+      }));
+    }
+    console.log('[broadcast] push 결과 success/fail:', pushSuccess + '/' + pushFail);
+
+    showToast('✓','발송 완료', insertedTotal + '명 인앱 알림 + 푸시 ' + pushSuccess + '건 전송');
+    closeTicketBroadcastScreen();
+  } catch(e){
+    console.error('[broadcast] 예외:', e);
+    showToast('❌','발송 실패','['+e.name+'] '+e.message);
+  } finally {
+    if(btn){ btn.disabled = false; btn.textContent = '📢 알림 발송'; }
+  }
+}
+window.tbSendBroadcast = tbSendBroadcast;
+
+// notifications 미확인 알림 토스트 — ticket_open 도 처리 (loadDeposit 의 토스트 아이콘 분기 보강은 향후)
 
 // ════════════════════════════════════════════════════════════════
 // 🆕 v1.53.24: 예약 초대 결제 팝업 (회원 측)
