@@ -8956,8 +8956,15 @@ window.closePromoCarousel = function(){
       </div>
     </div>
 
-    <!-- 발급 목록 -->
-    <div style="font-family:var(--font-main);font-size:9px;font-weight:800;letter-spacing:.2em;color:#888;margin-bottom:10px;">INVITED LIST</div>
+    <!-- 🆕 v1.53.42 2026.06.01: 발급 목록 — 코드발송(미사용) / 가입완료(사용) 탭 분리 -->
+    <div style="display:flex;gap:8px;margin-bottom:14px;padding:4px;background:#f5f3f0;border-radius:10px;">
+      <button id="icTabPending" onclick="icSelectListTab('pending')" style="flex:1;padding:10px 8px;border:none;background:#fff;border-radius:8px;font-family:var(--font-main);font-size:11px;font-weight:800;color:#1a1a18;cursor:pointer;letter-spacing:.06em;display:flex;align-items:center;justify-content:center;gap:6px;">
+        📤 코드발송 <span id="icPendingCount" style="display:inline-block;font-size:10px;font-weight:800;background:#9B6F00;color:#fff;border-radius:8px;padding:1px 7px;min-width:14px;text-align:center;">0</span>
+      </button>
+      <button id="icTabUsed" onclick="icSelectListTab('used')" style="flex:1;padding:10px 8px;border:none;background:transparent;border-radius:8px;font-family:var(--font-main);font-size:11px;font-weight:700;color:#888;cursor:pointer;letter-spacing:.06em;display:flex;align-items:center;justify-content:center;gap:6px;">
+        ✓ 가입완료 <span id="icUsedCount" style="display:inline-block;font-size:10px;font-weight:800;background:#2a7a2a;color:#fff;border-radius:8px;padding:1px 7px;min-width:14px;text-align:center;">0</span>
+      </button>
+    </div>
     <div id="icList"></div>
 
   </div>
@@ -23024,11 +23031,50 @@ var shareData = {
   }
 }
 
+// 🆕 v1.53.42 2026.06.01: 발급 목록 탭 ('pending' = 미사용 발송, 'used' = 가입완료)
+var _icListTab = 'pending';
+function icSelectListTab(tab){
+  if(tab !== 'pending' && tab !== 'used') return;
+  _icListTab = tab;
+  var pendingBtn = document.getElementById('icTabPending');
+  var usedBtn = document.getElementById('icTabUsed');
+  if(tab === 'pending'){
+    if(pendingBtn){ pendingBtn.style.background='#fff'; pendingBtn.style.color='#1a1a18'; pendingBtn.style.fontWeight='800'; }
+    if(usedBtn){ usedBtn.style.background='transparent'; usedBtn.style.color='#888'; usedBtn.style.fontWeight='700'; }
+  } else {
+    if(usedBtn){ usedBtn.style.background='#fff'; usedBtn.style.color='#1a1a18'; usedBtn.style.fontWeight='800'; }
+    if(pendingBtn){ pendingBtn.style.background='transparent'; pendingBtn.style.color='#888'; pendingBtn.style.fontWeight='700'; }
+  }
+  renderInviteCodes();
+}
+
 function renderInviteCodes(){
   var el=document.getElementById('icList');
   if(!el)return;
-  if(inviteCodes.length===0){el.innerHTML='<div class="sub-empty">발급된 코드 없음</div>';return;}
-  el.innerHTML=inviteCodes.map(function(item){
+
+  // 🆕 v1.53.42: 탭별 카운트 갱신
+  var pendingArr = inviteCodes.filter(function(c){ return !(typeof c==='object' ? c.used : false); });
+  var usedArr = inviteCodes.filter(function(c){ return !!(typeof c==='object' ? c.used : false); });
+  var pCntEl = document.getElementById('icPendingCount');
+  var uCntEl = document.getElementById('icUsedCount');
+  if(pCntEl) pCntEl.textContent = pendingArr.length > 99 ? '99+' : String(pendingArr.length);
+  if(uCntEl) uCntEl.textContent = usedArr.length > 99 ? '99+' : String(usedArr.length);
+
+  // 탭별 필터링 — 최신 발급 순(invitedAt 내림차순) 정렬
+  var visibleCodes = (_icListTab === 'used') ? usedArr : pendingArr;
+  visibleCodes = visibleCodes.slice().sort(function(a,b){
+    var ta = (typeof a==='object' && a.invitedAt) ? new Date(a.invitedAt).getTime() : 0;
+    var tb = (typeof b==='object' && b.invitedAt) ? new Date(b.invitedAt).getTime() : 0;
+    return tb - ta;
+  });
+
+  if(visibleCodes.length===0){
+    el.innerHTML = '<div class="sub-empty">'
+      + (_icListTab === 'used' ? '가입 완료된 회원이 아직 없어요' : '미사용 코드가 없어요')
+      + '</div>';
+    return;
+  }
+  el.innerHTML=visibleCodes.map(function(item){
     var code = typeof item==='object' ? item.code : item;
     var used = typeof item==='object' ? item.used : false;
     var inviteeName = (typeof item==='object' && (item.inviteeName || item.memberName)) || '';

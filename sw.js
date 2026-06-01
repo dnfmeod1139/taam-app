@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.41';  // 1.53.41 — 2026.06.01: 초대 코드 자동 used 처리 — 우회 가입/consume-invite 실패로 used=false 남는 케이스 영구 해결. RPC consume_invite_by_self() — auth.uid() 기반, 본인 email/phone 매칭 invite_codes 자동 used=true + used_at/used_by_*/member_id 채움. _backfillProfileFromInvite 끝에서 호출 → 가입/로그인/세션복원 모든 경로에서 자동 보정. + 기존 미사용 row(구자호/유수봉 등) 일괄 보정 SQL.
-const STATIC_CACHE = 'taam-static-v1.53.41';
+const SW_VERSION = 'taam-sw-v1.53.42';  // 1.53.42 — 2026.06.01: 회원 초대 화면 발급 목록 탭 분리 — '📤 코드발송' (used=false, 카운트 노랑) / '✓ 가입완료' (used=true, 카운트 녹색) 두 탭. 각 탭에 미사용/사용 개수 배지(99+). 탭별 최신 발급 순 정렬. 빈 상태 메시지도 탭별로 분기.
+const STATIC_CACHE = 'taam-static-v1.53.42';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
