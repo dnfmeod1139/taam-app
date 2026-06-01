@@ -17463,8 +17463,10 @@ async function showBuyerInfo(idx) {
   var needsRefetch = !p.id || (!p.email && !p.phone && !p.display_name);
   if (window.sb && h._userId && needsRefetch) {
     try {
+      // v1.53.23: grade 컬럼 제거 — DB 에 없음(membership_grade 만 존재). 400 Bad Request 차단.
+      //   안전을 위해 select('*') 로 단순화 — profiles 한 row 라 페이로드 작음.
       var pr = await window.sb.from('profiles')
-        .select('id, display_name, phone, email, grade, membership_grade, role, created_at, member_until, deleted_at, membership_deposit_balance, general_deposit_balance, deposit_balance, granted_membership_balance, granted_general_balance, charged_membership_balance, charged_general_balance')
+        .select('*')
         .eq('id', h._userId)
         .maybeSingle();
       console.log('[buyerInfo] profiles fetch result:', { error: pr && pr.error, data: pr && pr.data });

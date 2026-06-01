@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.53.22';  // 1.53.22 — 2026.05.28: 구매자 정보 모달 진단 강화 — showBuyerInfo 가 시작 시 user_id + 캐시된 _buyerProfile 출력, profiles fetch 응답 객체(error/data) 그대로 콘솔에 표시. Object.assign 으로 부분 머지 (기존 값 보존). 빈 모달 원인이 (a) fetch 실패인지, (b) user_id 가 잘못된 profile 가리키는지, (c) 다른 SyntaxError 가 render 끊는지 즉시 판별 가능.
-const STATIC_CACHE = 'taam-static-v1.53.22';
+const SW_VERSION = 'taam-sw-v1.53.23';  // 1.53.23 — 2026.05.28: 구매자 정보 모달 빈칸 핫픽스 — showBuyerInfo 의 profiles SELECT 절에서 'grade' 컬럼 제거 (DB 에는 membership_grade 만 존재). 'grade' 가 들어가서 PostgREST 가 400 Bad Request 로 응답 → 전체 fetch 실패 → p 빈 채로 모달 렌더 → "(이름 미등록)" + "⚠ 연락처 등록 안됨". 이형주 같은 정상 회원의 구매자 정보도 이제 정상 표시.
+const STATIC_CACHE = 'taam-static-v1.53.23';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
