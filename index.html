@@ -10567,12 +10567,21 @@ async function loadDeposit(){
             // amount 는 음수(-pay)로 저장됨 → 사용 내역에는 절댓값으로 표시
             var amt = Math.abs(r.amount || 0);
             var purchId = (r.metadata && (r.metadata.invite_id || r.metadata.purchase_id)) || '';
+            purchId = purchId ? String(purchId) : '';
+            // 🆕 중복 제거: 구매 직후 즉시 추가됐던 같은 구매(purchaseId)의 임시 로컬 엔트리(_trxId 없음)를 제거.
+            //   서버 deposit_transactions 가 권위 데이터 — 이게 머지되면 로컬 임시본은 버려서
+            //   같은 구매가 두 줄로 보이는(= '이중 결제' 오해) 문제를 막는다.
+            if (purchId) {
+              depositData.use = depositData.use.filter(function(u){
+                return !( !u._trxId && u.purchaseId && String(u.purchaseId) === purchId );
+              });
+            }
             depositData.use.push({
               _trxId: r.id,
               date: dispDate,
               amt: amt,
               name: r.description || ('티켓 결제 · ' + typeLabel),
-              purchaseId: purchId ? String(purchId) : ''
+              purchaseId: purchId
             });
             pushedUse++;
           }
@@ -19149,6 +19158,35 @@ function dhTab(idx,el){
     }
 
     var sorted = uses.slice().reverse();
+
+    // 🆕 같은 구매(purchaseId)는 한 줄로 통합:
+    //   - 구매 직후 임시 로컬 엔트리 + 서버 trx 엔트리 = 이중 표기 → 하나로
+    //   - 멤버십/일반 예치금 분할 차감(엔트리 2개)도 합산해 한 줄로
+    //   purchaseId 가 없는 항목(레거시·관리 차감)은 각각 그대로 표시.
+    (function consolidateByPurchase(){
+      var agg = {};   // purchaseId → { trxSum, localSum, hasTrx }
+      sorted.forEach(function(it){
+        var pid = it.purchaseId ? String(it.purchaseId) : '';
+        if(!pid) return;
+        if(!agg[pid]) agg[pid] = { trxSum:0, localSum:0, hasTrx:false };
+        if(it._trxId){ agg[pid].trxSum += (it.amt||0); agg[pid].hasTrx = true; }
+        else { agg[pid].localSum += (it.amt||0); }
+      });
+      var out = [], usedPid = {};
+      sorted.forEach(function(it){
+        var pid = it.purchaseId ? String(it.purchaseId) : '';
+        if(!pid){ out.push(it); return; }
+        var a = agg[pid];
+        if(a.hasTrx && !it._trxId) return;   // 서버 trx 가 있으면 로컬 임시본은 스킵
+        if(usedPid[pid]) return;             // 한 구매는 한 줄만
+        usedPid[pid] = true;
+        var rep = Object.assign({}, it);
+        rep.amt = a.hasTrx ? a.trxSum : a.localSum;   // 분할차감 합산 or 로컬 전액
+        out.push(rep);
+      });
+      sorted = out;
+    })();
+
     var groups = {};
     var dateOrder = [];
     sorted.forEach(function(item){
@@ -19226,8 +19264,10 @@ function dhTab(idx,el){
       var timeStr = '';
       var timeMatch = (item.date||'').match(/(\d{2}:\d{2})/);
       if(timeMatch) timeStr = timeMatch[1];
+      // 제목에서 '(멤버십 예치금)' / '(일반 예치금)' 꼬리표 제거 — 상세는 아래 칩으로 따로 표시
+      var displayName = (item.name||'사용').replace(/\s*\((?:멤버십|일반)\s*예치금\)\s*$/, '');
       return '<div style="display:flex;justify-content:space-between;align-items:center;padding:14px 20px;border-bottom:1px solid #f0ede8;">'
-        +'<div><div style="font-family:var(--font-main);font-size:14px;font-weight:700;color:#1a1a18;">'+(item.name||'사용')+'</div>'
+        +'<div><div style="font-family:var(--font-main);font-size:14px;font-weight:700;color:#1a1a18;">'+displayName+'</div>'
         +'<div style="display:flex;gap:6px;margin-top:3px;flex-wrap:wrap;">'
         +(ticketInfo ? '<span style="font-family:var(--font-main);font-size:11px;color:#888;background:#f0ede8;border-radius:4px;padding:1px 6px;">'+ticketInfo+'</span>' : '')
         +(timeStr ? '<span style="font-family:var(--font-main);font-size:11px;color:#aaa;">'+timeStr+'</span>' : '')
@@ -29061,8 +29101,11 @@ function tcalSelectDay(dateStr) {
 
 function tcalRenderDetail(dateStr) {
   var el = document.getElementById('tcalDetail');
+  // 캘린더 점(닷)과 동일 기준: hidden/pending 제외한 모든 티켓(판매중 + 매진) 표시.
+  //   기존엔 status==='active' 만 필터해서 '매진(soldout)' 날짜(빨간 점)를 누르면
+  //   상세가 비어 보이는(=등록된 티켓 없음) 버그가 있었음.
   var tickets = ticketDB.filter(function(t) {
-    return t.date === dateStr && t.status==='active';
+    return t.date === dateStr && t.status !== 'hidden' && t.status !== 'pending';
   });
 
   if (tickets.length === 0) {
