@@ -17605,6 +17605,32 @@ async function _prLoadVenueIndex(){
   return _prVenueIndex;
 }
 
+// 예약 매장 표시 정보 — 등록 레스토랑(restaurantDB) 우선, 큐레이션 폴백
+function _resvVenueName(id){
+  if(typeof restaurantDB !== 'undefined'){
+    var r = restaurantDB.find(function(x){ return String(x.id)===String(id); });
+    if(r) return r.name;
+  }
+  var v = (_prVenueIndex||{})[id];
+  return v ? (v.name_ko||v.name_en||id) : id;
+}
+function _resvVenueSub(id){
+  if(typeof restaurantDB !== 'undefined'){
+    var r = restaurantDB.find(function(x){ return String(x.id)===String(id); });
+    if(r) return [r.city, r.genre].filter(Boolean).join(' · ');
+  }
+  var v = (_prVenueIndex||{})[id];
+  return v ? [v.city, v.genre_main].filter(Boolean).join(' · ') : '';
+}
+function _resvVenuePhoto(id){
+  if(typeof restaurantDB !== 'undefined'){
+    var r = restaurantDB.find(function(x){ return String(x.id)===String(id); });
+    if(r) return r.photoHero || r.photo || '';
+  }
+  var v = (_prVenueIndex||{})[id];
+  return v ? (v.hero_photo_url||'') : '';
+}
+
 // 파트너 + 즐겨찾기 공통 로더 (요청 리스트/마이 리스트 공용)
 async function _prLoadPartners(){
   await _prLoadVenueIndex();
@@ -17641,11 +17667,10 @@ function _prRenderRequestQuota(){
 }
 
 function _prTicketCardHtml(p){
-  var v = (_prVenueIndex||{})[p.venue_id] || {};
-  var name = v.name_ko || v.name_en || p.venue_id;
-  var sub  = [v.city, v.genre_main].filter(Boolean).join(' · ');
+  var name = _resvVenueName(p.venue_id);
+  var sub  = _resvVenueSub(p.venue_id);
   var fav  = _prFavs[p.venue_id];
-  var photo = v.hero_photo_url || '';
+  var photo = _resvVenuePhoto(p.venue_id);
   var floor = p.min_spend_floor_per_person ? ('객단가 ₩' + Number(p.min_spend_floor_per_person).toLocaleString() + '~ / 인') : '';
   var bg = photo
     ? "background:linear-gradient(180deg,rgba(0,0,0,.15) 0%,rgba(0,0,0,.85) 100%),center/cover no-repeat url('"+photo+"');"
@@ -17726,9 +17751,8 @@ function _prRenderQuota(){
 function openPartnerDetail(vid){
   _prCurrent = vid;
   var p = _prPartners.find(function(x){ return x.venue_id === vid; }) || {};
-  var v = (_prVenueIndex||{})[vid] || {};
-  document.getElementById('prdName').textContent = v.name_ko || v.name_en || vid;
-  document.getElementById('prdSub').textContent  = [v.city, v.genre_main].filter(Boolean).join(' · ');
+  document.getElementById('prdName').textContent = _resvVenueName(vid);
+  document.getElementById('prdSub').textContent  = _resvVenueSub(vid);
 
   var conds = [];
   if(p.min_spend_floor_per_person) conds.push('객단가 최소 ₩' + Number(p.min_spend_floor_per_person).toLocaleString() + ' / 인');
@@ -17830,8 +17854,7 @@ async function renderReservationAdmin(){
       return;
     }
     sel.innerHTML = ids.map(function(vid){
-      var v = (_prVenueIndex||{})[vid] || {};
-      return '<option value="'+vid+'">'+(v.name_ko||v.name_en||vid)+'</option>';
+      return '<option value="'+vid+'">'+_resvVenueName(vid)+'</option>';
     }).join('');
     _raCurrent = ids[0];
     raSelectVenue();
@@ -17979,8 +18002,7 @@ function _rhRender(idx){
   c.innerHTML = list.map(_rhItemHtml).join('');
 }
 function _rhItemHtml(r){
-  var v = (_prVenueIndex||{})[r.venue_id] || {};
-  var name = v.name_ko || v.name_en || r.venue_id;
+  var name = _resvVenueName(r.venue_id);
   var dows = ['일','월','화','수','목','금','토'];
   var d = new Date(r.reserve_date + 'T00:00:00');
   var dateStr = (d.getMonth()+1)+'월 '+d.getDate()+'일('+dows[d.getDay()]+')' + (r.reserve_time ? ' '+String(r.reserve_time).slice(0,5) : '');
@@ -30107,34 +30129,29 @@ function acClearRest() {
   document.getElementById('acSelectedRest').innerHTML = '';
 }
 
-// 🆕 예약 매장(venue) 검색/선택 — admin_grants.venue_id 부여용
+// 🆕 예약 매장 검색/선택 — 등록된 레스토랑(restaurantDB) 기준. venue_id = restId.
 var _acSelectedVenue = null;
-async function acSearchVenue(q){
+function acSearchVenue(q){
   var dd = document.getElementById('acVenueDropdown');
   q = (q||'').trim();
   if(!q){ dd.classList.remove('open'); dd.innerHTML=''; return; }
-  if(typeof _prLoadVenueIndex === 'function') await _prLoadVenueIndex();
-  var idx = (typeof _prVenueIndex !== 'undefined' && _prVenueIndex) ? _prVenueIndex : {};
-  var ql = q.toLowerCase(), arr = [];
-  for(var k in idx){
-    var v = idx[k];
-    var nm = ((v.name_ko||'')+' '+(v.name_en||'')).toLowerCase();
-    if(nm.indexOf(ql) >= 0){ arr.push(v); if(arr.length >= 6) break; }
-  }
-  if(!arr.length){ dd.innerHTML = '<div class="ac-dropdown-item" style="color:#bbb;">검색 결과 없음</div>'; dd.classList.add('open'); return; }
-  dd.innerHTML = arr.map(function(v){
-    return '<div class="ac-dropdown-item" onclick="acSelectVenue(\''+v.venue_id+'\')"><div>'+(v.name_ko||v.name_en||v.venue_id)+'</div><div class="ac-dropdown-sub">'+[v.city,v.genre_main].filter(Boolean).join(' · ')+'</div></div>';
+  var results = (typeof restaurantDB !== 'undefined' ? restaurantDB : []).filter(function(r){
+    return r.name && r.name.includes(q);
+  }).slice(0,6);
+  if(!results.length){ dd.innerHTML = '<div class="ac-dropdown-item" style="color:#bbb;">검색 결과 없음</div>'; dd.classList.add('open'); return; }
+  dd.innerHTML = results.map(function(r){
+    return '<div class="ac-dropdown-item" onclick="acSelectVenue(\''+r.id+'\')"><div>'+r.name+'</div><div class="ac-dropdown-sub">'+(r.genre||'')+'</div></div>';
   }).join('');
   dd.classList.add('open');
 }
-function acSelectVenue(vid){
-  var v = (typeof _prVenueIndex !== 'undefined' && _prVenueIndex) ? _prVenueIndex[vid] : null;
-  if(!v) return;
-  _acSelectedVenue = { venue_id: vid, name: (v.name_ko||v.name_en||vid) };
+function acSelectVenue(id){
+  var r = (typeof restaurantDB !== 'undefined') ? restaurantDB.find(function(x){ return String(x.id)===String(id); }) : null;
+  if(!r) return;
+  _acSelectedVenue = { venue_id: String(r.id), name: r.name };
   document.getElementById('acVenueSearch').value = '';
   document.getElementById('acVenueDropdown').classList.remove('open');
   document.getElementById('acSelectedVenue').innerHTML =
-    '<div class="ac-selected-tag">'+_acSelectedVenue.name+'<button onclick="acClearVenue()">✕</button></div>';
+    '<div class="ac-selected-tag">'+r.name+'<button onclick="acClearVenue()">✕</button></div>';
 }
 function acClearVenue(){
   _acSelectedVenue = null;
