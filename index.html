@@ -9157,6 +9157,16 @@ window.closePromoCarousel = function(){
       <div id="acSelectedRest"></div>
     </div>
 
+    <!-- 🆕 예약 매장 (venue) — 예약요청 권한 (선택) -->
+    <div class="rp-field">
+      <label class="rp-label">예약 매장 <span style="font-size:10px;color:#aaa;font-weight:400;">예약요청 권한 · 선택</span></label>
+      <div class="ac-search-wrap">
+        <input class="ac-search-input" id="acVenueSearch" placeholder="예약 매장명 검색 (큐레이션)" oninput="acSearchVenue(this.value)" autocomplete="off">
+        <div class="ac-dropdown" id="acVenueDropdown"></div>
+      </div>
+      <div id="acSelectedVenue"></div>
+    </div>
+
     <!-- 관리자 코드 -->
     <div class="rp-field">
       <label class="rp-label">관리자 코드</label>
@@ -30052,6 +30062,40 @@ function acClearRest() {
   document.getElementById('acSelectedRest').innerHTML = '';
 }
 
+// 🆕 예약 매장(venue) 검색/선택 — admin_grants.venue_id 부여용
+var _acSelectedVenue = null;
+async function acSearchVenue(q){
+  var dd = document.getElementById('acVenueDropdown');
+  q = (q||'').trim();
+  if(!q){ dd.classList.remove('open'); dd.innerHTML=''; return; }
+  if(typeof _prLoadVenueIndex === 'function') await _prLoadVenueIndex();
+  var idx = (typeof _prVenueIndex !== 'undefined' && _prVenueIndex) ? _prVenueIndex : {};
+  var ql = q.toLowerCase(), arr = [];
+  for(var k in idx){
+    var v = idx[k];
+    var nm = ((v.name_ko||'')+' '+(v.name_en||'')).toLowerCase();
+    if(nm.indexOf(ql) >= 0){ arr.push(v); if(arr.length >= 6) break; }
+  }
+  if(!arr.length){ dd.innerHTML = '<div class="ac-dropdown-item" style="color:#bbb;">검색 결과 없음</div>'; dd.classList.add('open'); return; }
+  dd.innerHTML = arr.map(function(v){
+    return '<div class="ac-dropdown-item" onclick="acSelectVenue(\''+v.venue_id+'\')"><div>'+(v.name_ko||v.name_en||v.venue_id)+'</div><div class="ac-dropdown-sub">'+[v.city,v.genre_main].filter(Boolean).join(' · ')+'</div></div>';
+  }).join('');
+  dd.classList.add('open');
+}
+function acSelectVenue(vid){
+  var v = (typeof _prVenueIndex !== 'undefined' && _prVenueIndex) ? _prVenueIndex[vid] : null;
+  if(!v) return;
+  _acSelectedVenue = { venue_id: vid, name: (v.name_ko||v.name_en||vid) };
+  document.getElementById('acVenueSearch').value = '';
+  document.getElementById('acVenueDropdown').classList.remove('open');
+  document.getElementById('acSelectedVenue').innerHTML =
+    '<div class="ac-selected-tag">'+_acSelectedVenue.name+'<button onclick="acClearVenue()">✕</button></div>';
+}
+function acClearVenue(){
+  _acSelectedVenue = null;
+  document.getElementById('acSelectedVenue').innerHTML = '';
+}
+
 function acGenCode() {
   // 🆕 10자리 강력 비밀번호: 영문 대소문자 + 숫자 + 특수문자
   // 혼동 방지: 0/O/o / 1/I/l 제외
@@ -30097,23 +30141,25 @@ function acRegister() {
   renderAcList();
 
   // 🆕 서버 admin_grants 에도 기록 (권한 서버 강제 — 모든 기기/세션 일관)
-  (function(mId, rId, rName){
+  (function(mId, rId, rName, vId){
     if(window.sb && mId && rId){
-      window.sb.from('admin_grants').insert({ user_id: mId, rest_id: String(rId), label: rName })
+      window.sb.from('admin_grants').insert({ user_id: mId, rest_id: String(rId), venue_id: vId || null, label: rName })
         .then(function(res){
           if(res && res.error && !/duplicate|already exists|23505/i.test(res.error.message||'')){
             console.warn('admin_grants insert 실패:', res.error.message);
           }
         });
     }
-  })(_acSelectedMember.id, _acSelectedRest.id, _acSelectedRest.name);
+  })(_acSelectedMember.id, _acSelectedRest.id, _acSelectedRest.name, _acSelectedVenue ? _acSelectedVenue.venue_id : null);
 
   // 초기화
-  _acSelectedMember = null; _acSelectedRest = null; _acCode = '';
+  _acSelectedMember = null; _acSelectedRest = null; _acSelectedVenue = null; _acCode = '';
   document.getElementById('acSelectedMember').innerHTML = '';
   document.getElementById('acSelectedRest').innerHTML = '';
+  var _asv = document.getElementById('acSelectedVenue'); if(_asv) _asv.innerHTML = '';
   document.getElementById('acMemberSearch').value = '';
   document.getElementById('acRestSearch').value = '';
+  var _avs = document.getElementById('acVenueSearch'); if(_avs) _avs.value = '';
   document.getElementById('acCodeDisplay').textContent = '——';
   showToast('✓','등록 완료','관리자 코드가 등록되었습니다');
 }
