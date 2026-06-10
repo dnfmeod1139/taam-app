@@ -30585,12 +30585,52 @@ function renderPartnerRest() {
   if (!el) return;
   var r = restaurantDB.find(function(x){ return String(x.id)===String(_currentAdminRestId); });
   if (!r) { el.innerHTML='<div class="sub-empty">연동된 레스토랑 없음</div>'; return; }
+  function fld(label, id, val){
+    return '<div style="margin-bottom:14px;"><div style="font-size:11px;font-weight:700;color:#888;margin-bottom:5px;">'+label+'</div>'
+      + '<input id="'+id+'" value="'+(val||'').replace(/"/g,'&quot;')+'" style="width:100%;box-sizing:border-box;padding:11px 12px;border:1px solid #e0dcd4;border-radius:10px;font-size:14px;"></div>';
+  }
+  function area(label, id, val){
+    return '<div style="margin-bottom:14px;"><div style="font-size:11px;font-weight:700;color:#888;margin-bottom:5px;">'+label+'</div>'
+      + '<textarea id="'+id+'" rows="3" style="width:100%;box-sizing:border-box;padding:11px 12px;border:1px solid #e0dcd4;border-radius:10px;font-size:14px;resize:vertical;">'+(val||'')+'</textarea></div>';
+  }
   el.innerHTML = '<div style="padding:20px;">'
-    +(r.photoCard?'<img src="'+r.photoCard+'" style="width:100%;border-radius:12px;aspect-ratio:4/3;object-fit:cover;margin-bottom:16px;">':'')
-    +'<div style="font-family:\'Noto Sans KR\',sans-serif;font-size:20px;font-weight:800;color:#1a1a18;margin-bottom:4px;">'+r.name+'</div>'
-    +'<div style="font-family:var(--font-main);font-size:11px;color:#aaa;margin-bottom:16px;">'+(r.genre||'')+(r.address?' · '+r.address:'')+'</div>'
-    +(r.corkage?'<div style="background:#f7f5f2;border-radius:10px;padding:12px 14px;font-family:\'Noto Sans KR\',sans-serif;font-size:12px;color:#555;">콜키지: '+r.corkage+'</div>':'')
-    +'</div>';
+    + (r.photoCard?'<img src="'+r.photoCard+'" style="width:100%;border-radius:12px;aspect-ratio:4/3;object-fit:cover;margin-bottom:16px;">':'')
+    + fld('상호명','prfName',r.name)
+    + fld('장르','prfGenre',r.genre)
+    + fld('주소','prfAddr',r.address)
+    + fld('콜키지','prfCorkage',r.corkage)
+    + area('매장 안내','prfInfo',r.restInfo)
+    + '<button onclick="savePartnerRest()" style="width:100%;padding:14px;border:none;border-radius:12px;background:#1a1a18;color:#fff;font-family:var(--font-main);font-size:10px;font-weight:800;letter-spacing:.2em;cursor:pointer;">정보 저장</button>'
+    + '<div style="font-size:11px;color:#aaa;margin-top:10px;line-height:1.6;">사진·위치 등 일부 항목은 슈퍼어드민이 관리합니다.</div>'
+    + '</div>';
+}
+
+async function savePartnerRest() {
+  var r = restaurantDB.find(function(x){ return String(x.id)===String(_currentAdminRestId); });
+  if (!r) return;
+  function v(id){ var e=document.getElementById(id); return e ? e.value.trim() : ''; }
+  r.name = v('prfName') || r.name;
+  r.genre = v('prfGenre');
+  r.address = v('prfAddr');
+  r.corkage = v('prfCorkage');
+  r.restInfo = v('prfInfo');
+  // 로컬 백업
+  try{ IDB.set('excRests', JSON.stringify(restaurantDB)); }catch(e){}
+  // Supabase 타겟 업데이트 (본인 매장만)
+  var btn = document.querySelector('#partnerRestContent button');
+  if(btn){ btn.disabled = true; btn.textContent = '저장 중…'; }
+  var res = await window.sb.from('restaurants').update({
+    name: r.name, description: r.genre, address: r.address,
+    corkage: r.corkage, rest_info: r.restInfo
+  }).eq('id', r.id);
+  if(btn){ btn.disabled = false; btn.textContent = '정보 저장'; }
+  if(res.error){
+    var m = res.error.message || '';
+    var msg = /permission|denied|policy|rls/i.test(m) ? '권한이 없어요. 슈퍼어드민에게 문의하세요(RLS).' : m;
+    showToast('⚠','저장 실패', msg);
+    return;
+  }
+  showToast('✓','저장 완료','레스토랑 정보가 저장됐어요');
 }
 
 function renderPendingApproval() {
