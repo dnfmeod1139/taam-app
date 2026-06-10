@@ -24530,6 +24530,8 @@ function openSubPage(id){
     loadAdminCodes(); renderAcList();
     var banner = document.getElementById('acTestMemberBanner');
     if(banner) banner.style.display = memberDB.length===0 ? 'block' : 'none';
+    // 🆕 로컬 어드민 권한을 서버(admin_grants)로 자동 동기화 (슈퍼어드민)
+    if(typeof syncAdminGrantsToServer === 'function'){ setTimeout(syncAdminGrantsToServer, 200); }
   }
   if(id==='pendingApprovalScreen') renderPendingApproval();
   if(id==='partnerTicketListScreen') renderPartnerTicketList();
@@ -30094,6 +30096,18 @@ function acRegister() {
   saveAdminCodes();
   renderAcList();
 
+  // 🆕 서버 admin_grants 에도 기록 (권한 서버 강제 — 모든 기기/세션 일관)
+  (function(mId, rId, rName){
+    if(window.sb && mId && rId){
+      window.sb.from('admin_grants').insert({ user_id: mId, rest_id: String(rId), label: rName })
+        .then(function(res){
+          if(res && res.error && !/duplicate|already exists|23505/i.test(res.error.message||'')){
+            console.warn('admin_grants insert 실패:', res.error.message);
+          }
+        });
+    }
+  })(_acSelectedMember.id, _acSelectedRest.id, _acSelectedRest.name);
+
   // 초기화
   _acSelectedMember = null; _acSelectedRest = null; _acCode = '';
   document.getElementById('acSelectedMember').innerHTML = '';
@@ -30102,6 +30116,26 @@ function acRegister() {
   document.getElementById('acRestSearch').value = '';
   document.getElementById('acCodeDisplay').textContent = '——';
   showToast('✓','등록 완료','관리자 코드가 등록되었습니다');
+}
+
+// 🆕 로컬 adminCodes → 서버 admin_grants 일괄 동기화 (슈퍼어드민 1회)
+//   기존에 로컬(IDB)에만 있던 어드민 권한을 서버로 올림 → 티켓 승인 게이트가 작동하려면 필수.
+async function syncAdminGrantsToServer(){
+  if(typeof _isSuperAdmin === 'function' && !_isSuperAdmin()){ return; }
+  if(!window.sb) return;
+  loadAdminCodes();
+  var rows = (adminCodes||[]).map(function(a){
+    return { user_id: a.memberId, rest_id: a.restId ? String(a.restId) : null, label: a.restName||null };
+  }).filter(function(r){ return r.user_id && r.rest_id; });
+  if(rows.length === 0){ if(typeof showToast==='function') showToast('ℹ','동기화','로컬 어드민 코드가 없어요'); return; }
+  var ok = 0;
+  for(var i=0;i<rows.length;i++){
+    try{
+      var res = await window.sb.from('admin_grants').insert(rows[i]);
+      if(!res.error || /duplicate|already exists|23505/i.test(res.error.message||'')) ok++;
+    }catch(e){}
+  }
+  if(typeof showToast==='function') showToast('✓','동기화 완료', ok+'개 매장 권한을 서버에 반영했어요');
 }
 
 function acDeleteCode(id) {
