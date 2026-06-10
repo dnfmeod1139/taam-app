@@ -11415,6 +11415,31 @@ function detectAndSetRole(phone, name) {
   saveRole();
   updateMpAdminBtn();
   updatePendingBadge();
+  // 🆕 서버 admin_grants 확인 — 로컬 코드 없어도(다른 기기) 어드민 전환
+  if(typeof _applyServerAdminGrant === 'function') _applyServerAdminGrant();
+}
+
+// 🆕 서버 admin_grants 기반 어드민 전환 (cross-device)
+//   로컬 adminCodes 가 없어도, 슈퍼어드민이 부여한 서버 권한으로 어드민이 됨.
+async function _applyServerAdminGrant() {
+  try {
+    if (!window.sb) return;
+    if (_currentRole === 'superadmin') return;   // 슈퍼어드민은 그대로
+    var au = await window.sb.auth.getUser();
+    var uid = au && au.data && au.data.user && au.data.user.id;
+    if (!uid) return;
+    var res = await window.sb.from('admin_grants').select('rest_id, venue_id, label').eq('user_id', uid);
+    var rows = (res && res.data) || [];
+    var restGrant = rows.find(function(r){ return r.rest_id; });
+    if (restGrant) {
+      _currentRole = 'admin';
+      _currentAdminRestId = restGrant.rest_id;
+      _currentAdminRestName = restGrant.label || _currentAdminRestName || '';
+      saveRole();
+      updateMpAdminBtn();
+      updatePendingBadge();
+    }
+  } catch(e) { console.warn('[admin grant] 서버 확인 실패', e); }
 }
 
 function updateMpAdminBtn() {
@@ -30002,22 +30027,42 @@ function acAddTestMembers(){
 
 
 
-function acSearchMember(q) {
+var _acMemberResults = [];
+async function acSearchMember(q) {
   var dd = document.getElementById('acMemberDropdown');
-  q = q.trim();
+  q = (q||'').trim();
   if (!q) { dd.classList.remove('open'); dd.innerHTML=''; return; }
-  var results = memberDB.filter(function(m){
-    return m.name.includes(q) || (m.phone&&m.phone.includes(q));
-  }).slice(0,6);
+  dd.innerHTML = '<div class="ac-dropdown-item" style="color:#bbb;">검색 중…</div>'; dd.classList.add('open');
+  var results = [];
+  try {
+    if (window.sb) {
+      var qs = q.replace(/[(),%]/g, ' ').trim();
+      var res = await window.sb.from('profiles')
+        .select('id, display_name, email, phone')
+        .or('display_name.ilike.%'+qs+'%,email.ilike.%'+qs+'%,phone.ilike.%'+qs+'%')
+        .limit(8);
+      if (!res.error && res.data) {
+        results = res.data.map(function(p){
+          return { id: p.id, name: p.display_name || p.email || '(이름없음)', phone: p.phone || p.email || '' };
+        });
+      }
+    }
+  } catch(e) {}
+  // 폴백: 로컬 memberDB (Supabase 미연결/검색 0건)
+  if (results.length === 0) {
+    results = memberDB.filter(function(m){ return m.name && (m.name.includes(q) || (m.phone && m.phone.includes(q))); }).slice(0,6);
+  }
+  _acMemberResults = results;
   if (!results.length) { dd.innerHTML='<div class="ac-dropdown-item" style="color:#bbb;">검색 결과 없음</div>'; dd.classList.add('open'); return; }
   dd.innerHTML = results.map(function(m){
-    return '<div class="ac-dropdown-item" onclick="acSelectMember(\''+m.id+'\')"><div>'+m.name+'</div><div class="ac-dropdown-sub">'+(m.phone||'전화번호 없음')+'</div></div>';
+    return '<div class="ac-dropdown-item" onclick="acSelectMember(\''+m.id+'\')"><div>'+m.name+'</div><div class="ac-dropdown-sub">'+(m.phone||'연락처 없음')+'</div></div>';
   }).join('');
   dd.classList.add('open');
 }
 
 function acSelectMember(id) {
-  var m = memberDB.find(function(x){ return String(x.id)===String(id); });
+  var m = (_acMemberResults||[]).find(function(x){ return String(x.id)===String(id); })
+       || memberDB.find(function(x){ return String(x.id)===String(id); });
   if (!m) return;
   _acSelectedMember = m;
   document.getElementById('acMemberSearch').value = '';
