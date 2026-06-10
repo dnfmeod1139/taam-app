@@ -7117,10 +7117,14 @@ window.closePromoCarousel = function(){
     <div id="prdName" style="font-family:var(--font-main);font-size:20px;font-weight:800;color:#1a1a18;"></div>
     <div id="prdSub" style="font-size:12px;color:#999;margin-top:4px;"></div>
 
+    <div id="prdIntro" style="display:none;margin-top:16px;font-size:13.5px;color:#444;line-height:1.7;white-space:pre-wrap;"></div>
+
     <div style="margin-top:20px;padding:14px 16px;background:#f7f5f2;border-radius:12px;border:1px solid #ece7df;">
       <div style="font-size:10px;font-weight:800;letter-spacing:.14em;color:#aaa;text-transform:uppercase;margin-bottom:8px;">매장 조건</div>
       <ul id="prdConds" style="margin:0;padding-left:18px;font-size:13px;color:#444;line-height:1.9;"></ul>
     </div>
+
+    <div id="prdNotes" style="display:none;margin-top:14px;padding:12px 14px;background:#fff7ed;border:1px solid #f3e0c8;border-radius:10px;font-size:12.5px;color:#8a5a1a;line-height:1.7;white-space:pre-wrap;"></div>
 
     <div style="margin-top:22px;display:flex;flex-direction:column;gap:14px;">
       <div>
@@ -9814,6 +9818,10 @@ window.closePromoCarousel = function(){
         </div>
         <div><div style="font-size:11px;font-weight:700;color:#888;margin-bottom:7px;">받지 않는 요일</div>
           <div id="raCwRow" style="display:flex;gap:5px;"></div></div>
+        <div><div style="font-size:11px;font-weight:700;color:#888;margin-bottom:5px;">매장 소개 <span style="color:#aaa;font-weight:400;">회원에게 표시</span></div>
+          <textarea id="raIntro" rows="2" placeholder="예: 발효·숙성 테마의 컨템퍼러리 한식" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid #e0dcd4;border-radius:9px;font-size:13px;resize:vertical;"></textarea></div>
+        <div><div style="font-size:11px;font-weight:700;color:#888;margin-bottom:5px;">예약 안내·주의사항 <span style="color:#aaa;font-weight:400;">회원에게 표시</span></div>
+          <textarea id="raNotes" rows="2" placeholder="예: 노쇼 시 재방문 제한 / 알러지 사전 고지 / 어린이 동반 불가" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid #e0dcd4;border-radius:9px;font-size:13px;resize:vertical;"></textarea></div>
       </div>
       <button onclick="raSaveSettings()" style="margin-top:18px;width:100%;padding:13px;border:none;border-radius:10px;background:#1a1a18;color:#fff;font-family:var(--font-main);font-size:10px;font-weight:800;letter-spacing:.2em;cursor:pointer;">설정 저장</button>
     </div>
@@ -17770,6 +17778,11 @@ function openPartnerDetail(vid){
     : '';
   document.getElementById('prdDepositNote').textContent = dep;
 
+  var introEl = document.getElementById('prdIntro');
+  if(introEl){ if(p.intro){ introEl.textContent = p.intro; introEl.style.display='block'; } else { introEl.style.display='none'; } }
+  var notesEl = document.getElementById('prdNotes');
+  if(notesEl){ if(p.reservation_notes){ notesEl.textContent = '📌 ' + p.reservation_notes; notesEl.style.display='block'; } else { notesEl.style.display='none'; } }
+
   document.getElementById('prdDate').value  = '';
   document.getElementById('prdTime').value  = '';
   document.getElementById('prdParty').value = p.party_min || 2;
@@ -17878,6 +17891,8 @@ async function raLoadSettings(){
   _raSet('raLead',    p.min_lead_time_months || 0);
   _raSet('raPmin',    p.party_min || 1);
   _raSet('raPmax',    p.party_max || 8);
+  _raSet('raIntro',   p.intro || '');
+  _raSet('raNotes',   p.reservation_notes || '');
   var cw = p.closed_weekdays || [];
   for(var d=0; d<7; d++){
     var c = document.getElementById('raCw'+d);
@@ -17899,6 +17914,8 @@ async function raSaveSettings(){
     party_min: parseInt(_raGet('raPmin'))||1,
     party_max: parseInt(_raGet('raPmax'))||8,
     closed_weekdays: cw,
+    intro: _raGet('raIntro') || null,
+    reservation_notes: _raGet('raNotes') || null,
     updated_at: new Date().toISOString()
   };
   var res = await window.sb.from('venue_partners').upsert(row, { onConflict: 'venue_id' });
