@@ -7956,6 +7956,10 @@ window.closePromoCarousel = function(){
     <div class="rp-field">
       <label class="rp-label">레스토랑 정보</label>
       <textarea id="rpRestInfo" placeholder="레스토랑에 대한 소개, 분위기, 특징 등을 입력해주세요" rows="4" style="width:100%;padding:12px 14px;border:1.5px solid #e8e5e0;border-radius:12px;font-family:var(--font-main);font-size:13px;color:#111;background:#fff;outline:none;resize:vertical;line-height:1.7;box-sizing:border-box;"></textarea>
+      <label style="display:flex;align-items:flex-start;gap:10px;margin-top:16px;padding:12px 14px;background:#faf3f4;border:1.5px solid #e6cdd1;border-radius:12px;font-family:var(--font-main);font-size:13.5px;font-weight:700;color:#5C0A14;cursor:pointer;line-height:1.5;">
+        <input type="checkbox" id="rpResvPartner" style="width:18px;height:18px;margin-top:1px;flex-shrink:0;">
+        <span>예약 파트너십 레스토랑<br><span style="font-size:11px;font-weight:400;color:#a07a80;">체크 시 이 매장의 정보·사진이 예약 요청 리스트에 사용됩니다 (예약금·조건은 어드민이 설정)</span></span>
+      </label>
     </div>
     <div class="rp-field">
       <label class="rp-label">지도 화면 사진 <span style="font-family:var(--font-main);font-size:10px;font-weight:400;color:#bbb;">최대 3장</span></label>
@@ -17841,7 +17845,12 @@ function openPartnerDetail(vid){
   document.getElementById('prdConds').innerHTML = conds.map(function(c){ return '<li>'+c+'</li>'; }).join('');
 
   var introEl = document.getElementById('prdIntro');
-  if(introEl){ if(p.intro){ introEl.textContent = p.intro; introEl.style.display='block'; } else { introEl.style.display='none'; } }
+  if(introEl){
+    // 소개 = 레스토랑 등록 정보(restInfo) 우선, 없으면 예약설정 intro
+    var _rv = (typeof restaurantDB !== 'undefined') ? restaurantDB.find(function(x){ return String(x.id)===String(vid); }) : null;
+    var introTxt = (_rv && _rv.restInfo) || p.intro || '';
+    if(introTxt){ introEl.textContent = introTxt; introEl.style.display='block'; } else { introEl.style.display='none'; }
+  }
   var notesEl = document.getElementById('prdNotes');
   if(notesEl){ if(p.reservation_notes){ notesEl.textContent = '📌 ' + p.reservation_notes; notesEl.style.display='block'; } else { notesEl.style.display='none'; } }
 
@@ -21167,6 +21176,7 @@ function openRestPage(){
   closeAllAdminScreens();
   document.getElementById('adminScreen').style.display='none';
   rpResetForm();
+  var _rpcb = document.getElementById('rpResvPartner'); if(_rpcb) _rpcb.checked = false;
   // 신규 등록 → 버튼 "등록하기"
   var submitBtn = document.querySelector('#restPage .rp-submit');
   if (submitBtn) submitBtn.textContent = '등록하기';
@@ -22098,6 +22108,15 @@ function rpEditRest(id) {
   var r = restaurantDB.find(function(x){ return String(x.id) === String(id); });
   if (!r) return;
   _rpEditId = id;
+  // 🆕 예약 파트너십 체크박스 — 현재 venue_partners 상태 반영
+  (function(){
+    var cb = document.getElementById('rpResvPartner');
+    if(cb){ cb.checked = false; }
+    if(cb && window.sb){
+      window.sb.from('venue_partners').select('is_partner').eq('venue_id', String(id)).maybeSingle()
+        .then(function(res){ if(res && res.data){ cb.checked = (res.data.is_partner !== false); } }, function(){});
+    }
+  })();
 
   closeAllAdminScreens();
   document.getElementById('adminScreen').style.display = 'none';
@@ -22480,6 +22499,7 @@ function submitRestaurant(){
     corkageBottles:corkageBottles,
     repurchaseDay:repBtn?parseInt(repBtn.getAttribute('data-val')||0):0,
     restInfo: (document.getElementById('rpRestInfo')?document.getElementById('rpRestInfo').value.trim():''),
+    resvPartner: (document.getElementById('rpResvPartner') ? document.getElementById('rpResvPartner').checked : false),
     date:new Date().toISOString().slice(0,10)
   };
   // Show confirm popup
@@ -22544,6 +22564,21 @@ function finalSubmitRestaurant(){
     showToast('✓','등록 완료','\''+_pendingRest.name+'\' 등록되었습니다');
   }
   saveRestaurants();
+  // 🆕 예약 파트너 등록 — venue_partners 연동. 신규는 saveRestaurants 가 UUID 배정(비동기)하므로 폴링.
+  (function(prRef){
+    if(!prRef || !window.sb) return;
+    var tries = 0;
+    (function enroll(){
+      var rid = prRef.id;
+      if(rid && typeof rid === 'string' && rid.length === 36){
+        if(prRef.resvPartner){
+          window.sb.from('venue_partners').upsert({ venue_id: String(rid), is_partner: true }, { onConflict: 'venue_id' }).then(function(){}, function(){});
+        } else {
+          window.sb.from('venue_partners').update({ is_partner: false }).eq('venue_id', String(rid)).then(function(){}, function(){});
+        }
+      } else if(tries++ < 12){ setTimeout(enroll, 400); }
+    })();
+  })(_pendingRest);
   syncTuRestList();
   document.getElementById('restConfirmPopup').style.display='none';
 
