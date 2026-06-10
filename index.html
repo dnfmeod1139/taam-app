@@ -7138,7 +7138,7 @@ window.closePromoCarousel = function(){
         </div>
         <div style="flex:1;">
           <label style="font-size:11px;font-weight:700;color:#888;">인원</label>
-          <input id="prdParty" type="number" min="1" max="20" value="2" style="width:100%;box-sizing:border-box;margin-top:6px;padding:11px 12px;border:1px solid #e0dcd4;border-radius:10px;font-size:14px;">
+          <input id="prdParty" type="number" min="1" max="20" value="2" oninput="_prUpdateDepositPreview()" style="width:100%;box-sizing:border-box;margin-top:6px;padding:11px 12px;border:1px solid #e0dcd4;border-radius:10px;font-size:14px;">
         </div>
       </div>
       <div>
@@ -7623,6 +7623,10 @@ window.closePromoCarousel = function(){
       </div>
       <div class="admin-menu-item" onclick="openSubPage('reservationAdminScreen')">
         <div><div class="admin-menu-text">📅 예약 관리<span class="raBellDot" style="display:none;width:7px;height:7px;border-radius:50%;background:#E53935;margin-left:6px;vertical-align:middle;"></span></div><div class="admin-menu-sub">파트너 예약 요청 수락·거절</div></div>
+        <div class="admin-arrow">›</div>
+      </div>
+      <div class="admin-menu-item" onclick="openSubPage('feePolicyScreen')">
+        <div><div class="admin-menu-text">💱 예약 수수료 정책</div><div class="admin-menu-sub">매장별 중계 수수료 책정 (어드민 수정불가)</div></div>
         <div class="admin-arrow">›</div>
       </div>
     </div>
@@ -9782,6 +9786,33 @@ window.closePromoCarousel = function(){
   <div class="plc-sheet" id="productEditSheet"></div>
 </div>
 
+<!-- 🆕 예약 수수료 정책 (슈퍼어드민) -->
+<div id="feePolicyScreen" class="sub-screen" style="display:none;">
+  <div class="sub-header">
+    <button class="sub-back" onclick="closeSubPage('feePolicyScreen')">←</button>
+    <div class="sub-title">예약 수수료 정책</div>
+  </div>
+  <div style="flex:1;min-height:0;overflow-y:auto;background:#fff;padding:18px 16px 60px;">
+    <div style="font-size:12px;color:#888;margin-bottom:14px;">매장별 중계 수수료를 책정합니다. 회원이 예약금과 함께 부담하며, 어드민은 수정할 수 없습니다.</div>
+    <div style="position:relative;margin-bottom:10px;">
+      <input id="fpRestSearch" placeholder="매장 검색" oninput="fpSearchRest(this.value)" autocomplete="off" style="width:100%;box-sizing:border-box;padding:11px 12px;border:1px solid #e0dcd4;border-radius:10px;font-size:14px;">
+      <div class="ac-dropdown" id="fpRestDropdown"></div>
+    </div>
+    <div id="fpSelectedRest" style="margin-bottom:12px;"></div>
+    <div style="display:flex;gap:10px;margin-bottom:12px;">
+      <select id="fpFeeType" style="flex:1;padding:10px;border:1px solid #e0dcd4;border-radius:9px;background:#fff;font-size:13px;">
+        <option value="fixed">건당 정액(원)</option>
+        <option value="percent">예약금 대비 %</option>
+        <option value="per_person">인당(원)</option>
+      </select>
+      <input id="fpFeeValue" type="number" min="0" placeholder="값" style="flex:1;box-sizing:border-box;padding:10px;border:1px solid #e0dcd4;border-radius:9px;font-size:13px;">
+    </div>
+    <button onclick="fpSave()" style="width:100%;padding:13px;border:none;border-radius:10px;background:#5C0A14;color:#fff;font-family:var(--font-main);font-size:10px;font-weight:800;letter-spacing:.2em;cursor:pointer;">수수료 저장</button>
+    <div style="font-size:10px;font-weight:800;letter-spacing:.14em;color:#aaa;text-transform:uppercase;margin:24px 0 8px;">등록된 정책</div>
+    <div id="fpList"></div>
+  </div>
+</div>
+
 <!-- 🆕 예약 관리 (어드민) -->
 <div id="reservationAdminScreen" class="sub-screen" style="display:none;">
   <div class="sub-header">
@@ -9802,6 +9833,9 @@ window.closePromoCarousel = function(){
             <option value="request_open">요청 가능</option>
             <option value="daegwan_priority">대관 우선</option>
           </select></div>
+        <div><div style="font-size:11px;font-weight:700;color:#5C0A14;margin-bottom:5px;">고정 예약금 (보증금, 원/건)</div>
+          <input id="raDeposit" type="number" min="0" step="10000" placeholder="예: 300000" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid #d8b8be;border-radius:9px;font-size:13px;"></div>
+        <div id="raFeeInfo" style="font-size:12px;color:#777;background:#f7f5f2;border:1px solid #ece7df;border-radius:9px;padding:9px 11px;">중계 수수료: <b>불러오는 중…</b> <span style="color:#aaa;">· 슈퍼어드민 설정(수정 불가)</span></div>
         <div style="display:flex;gap:10px;">
           <div style="flex:1;"><div style="font-size:11px;font-weight:700;color:#888;margin-bottom:5px;">객단가 플로어(원/인)</div>
             <input id="raFloor" type="number" min="0" step="10000" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid #e0dcd4;border-radius:9px;font-size:13px;"></div>
@@ -17644,6 +17678,7 @@ function _resvVenuePhoto(id){
 }
 
 // 파트너 + 즐겨찾기 공통 로더 (요청 리스트/마이 리스트 공용)
+var _prFeePolicy = {};   // venue_id -> 수수료 정책
 async function _prLoadPartners(){
   await _prLoadVenueIndex();
   var pRes = await window.sb.from('venue_partners').select('*').eq('is_partner', true);
@@ -17651,6 +17686,34 @@ async function _prLoadPartners(){
   _prPartners = pRes.data || [];
   var fRes = await window.sb.from('favorites').select('venue_id');
   _prFavs = {}; (fRes.data||[]).forEach(function(f){ _prFavs[f.venue_id] = true; });
+  _prFeePolicy = {};
+  try{ var fp = await window.sb.from('reservation_fee_policy').select('*');
+       (fp.data||[]).forEach(function(x){ _prFeePolicy[x.venue_id] = x; }); }catch(e){}
+}
+
+// 수수료 클라이언트 계산 (서버 calc_broker_fee 미러)
+function _calcBrokerFee(venueId, deposit, party){
+  var p = _prFeePolicy[venueId];
+  if(!p || !p.fee_value) return 0;
+  if(p.fee_type === 'percent')    return Math.round((deposit||0) * p.fee_value / 100);
+  if(p.fee_type === 'per_person') return p.fee_value * (party||1);
+  return p.fee_value;
+}
+
+// 회원 상세 — 예약금/수수료/총액 미리보기 (인원에 따라 갱신)
+function _prUpdateDepositPreview(){
+  if(!_prCurrent) return;
+  var p = _prPartners.find(function(x){ return x.venue_id === _prCurrent; }) || {};
+  var party = parseInt((document.getElementById('prdParty')||{}).value) || 1;
+  var dep = p.fixed_deposit || 0;
+  var fee = _calcBrokerFee(_prCurrent, dep, party);
+  var total = dep + fee;
+  var el = document.getElementById('prdDepositNote');
+  if(!el) return;
+  if(total <= 0){ el.innerHTML = '<span style="color:#888;">예약금 없음</span>'; return; }
+  el.innerHTML = '확정 시 결제: 예약금 ₩' + dep.toLocaleString()
+    + (fee > 0 ? ' + 중계수수료 ₩' + fee.toLocaleString() : '')
+    + ' = <b>총 ₩' + total.toLocaleString() + '</b>';
 }
 
 // GNB '예약 요청' 화면 — 요청 가능 레스토랑 (티켓 스타일 카드)
@@ -17777,11 +17840,6 @@ function openPartnerDetail(vid){
   }
   document.getElementById('prdConds').innerHTML = conds.map(function(c){ return '<li>'+c+'</li>'; }).join('');
 
-  var dep = p.min_spend_floor_per_person
-    ? '확정 시 예치금 ₩' + Number(p.min_spend_floor_per_person).toLocaleString() + ' × 인원이 결제됩니다.'
-    : '';
-  document.getElementById('prdDepositNote').textContent = dep;
-
   var introEl = document.getElementById('prdIntro');
   if(introEl){ if(p.intro){ introEl.textContent = p.intro; introEl.style.display='block'; } else { introEl.style.display='none'; } }
   var notesEl = document.getElementById('prdNotes');
@@ -17792,6 +17850,7 @@ function openPartnerDetail(vid){
   document.getElementById('prdParty').value = p.party_min || 2;
   document.getElementById('prdMemo').value  = '';
   document.getElementById('prdAgree').checked = false;
+  _prUpdateDepositPreview();
 
   document.getElementById('partnerDetailPage').style.display = 'flex';
 }
@@ -17895,6 +17954,7 @@ async function raLoadSettings(){
   _raSet('raLead',    p.min_lead_time_months || 0);
   _raSet('raPmin',    p.party_min || 1);
   _raSet('raPmax',    p.party_max || 8);
+  _raSet('raDeposit', p.fixed_deposit || 0);
   _raSet('raIntro',   p.intro || '');
   _raSet('raNotes',   p.reservation_notes || '');
   var cw = p.closed_weekdays || [];
@@ -17902,7 +17962,67 @@ async function raLoadSettings(){
     var c = document.getElementById('raCw'+d);
     if(c){ c.checked = cw.indexOf(d) >= 0; c.dispatchEvent(new Event('change')); }
   }
+  // 중계 수수료 (슈퍼어드민 설정 — 읽기전용 표시)
+  var feeEl = document.getElementById('raFeeInfo');
+  if(feeEl){
+    try{
+      var fp = await window.sb.from('reservation_fee_policy').select('*').eq('venue_id', _raCurrent).maybeSingle();
+      feeEl.innerHTML = '중계 수수료: <b>'+_fmtBrokerFee(fp && fp.data)+'</b> <span style="color:#aaa;">· 슈퍼어드민 설정(수정 불가)</span>';
+    }catch(e){}
+  }
 }
+
+// 수수료 정책 → 사람이 읽는 문구
+function _fmtBrokerFee(policy){
+  if(!policy || !policy.fee_value) return '없음';
+  if(policy.fee_type === 'percent')    return '예약금의 ' + policy.fee_value + '%';
+  if(policy.fee_type === 'per_person') return '인당 ₩' + Number(policy.fee_value).toLocaleString();
+  return '건당 ₩' + Number(policy.fee_value).toLocaleString();
+}
+
+// ── 예약 수수료 정책 (슈퍼어드민) ──
+var _fpSelectedRest = null;
+function fpSearchRest(q){
+  var dd = document.getElementById('fpRestDropdown'); q = (q||'').trim();
+  if(!q){ dd.classList.remove('open'); dd.innerHTML=''; return; }
+  var results = (typeof restaurantDB !== 'undefined' ? restaurantDB : []).filter(function(r){ return r.name && r.name.includes(q); }).slice(0,6);
+  if(!results.length){ dd.innerHTML='<div class="ac-dropdown-item" style="color:#bbb;">검색 결과 없음</div>'; dd.classList.add('open'); return; }
+  dd.innerHTML = results.map(function(r){ return '<div class="ac-dropdown-item" onclick="fpSelectRest(\''+r.id+'\')"><div>'+r.name+'</div><div class="ac-dropdown-sub">'+(r.genre||'')+'</div></div>'; }).join('');
+  dd.classList.add('open');
+}
+function fpSelectRest(id){
+  var r = restaurantDB.find(function(x){ return String(x.id)===String(id); }); if(!r) return;
+  _fpSelectedRest = { id: String(r.id), name: r.name };
+  document.getElementById('fpRestSearch').value = '';
+  document.getElementById('fpRestDropdown').classList.remove('open');
+  document.getElementById('fpSelectedRest').innerHTML = '<div class="ac-selected-tag">'+r.name+'<button onclick="fpClearRest()">✕</button></div>';
+  window.sb.from('reservation_fee_policy').select('*').eq('venue_id', _fpSelectedRest.id).maybeSingle().then(function(res){
+    var p = res && res.data;
+    if(p){ document.getElementById('fpFeeType').value = p.fee_type; document.getElementById('fpFeeValue').value = p.fee_value; }
+    else { document.getElementById('fpFeeValue').value = ''; }
+  });
+}
+function fpClearRest(){ _fpSelectedRest = null; document.getElementById('fpSelectedRest').innerHTML = ''; }
+async function fpSave(){
+  if(!_fpSelectedRest){ showToast('⚠','선택 필요','매장을 선택하세요'); return; }
+  var row = { venue_id: _fpSelectedRest.id, fee_type: document.getElementById('fpFeeType').value, fee_value: parseInt(document.getElementById('fpFeeValue').value)||0, label: _fpSelectedRest.name, updated_at: new Date().toISOString() };
+  var res = await window.sb.from('reservation_fee_policy').upsert(row, { onConflict: 'venue_id' });
+  if(res.error){ showToast('⚠','저장 실패', res.error.message||''); return; }
+  showToast('✓','저장 완료','중계 수수료 정책이 저장됐어요');
+  renderFeePolicyList();
+}
+async function renderFeePolicyList(){
+  var el = document.getElementById('fpList'); if(!el) return;
+  el.innerHTML = '<div style="color:#bbb;font-size:13px;padding:12px;">불러오는 중…</div>';
+  var res = await window.sb.from('reservation_fee_policy').select('*').order('updated_at',{ascending:false});
+  if(res.error){ el.innerHTML='<div style="color:#c00;font-size:12px;">'+res.error.message+'</div>'; return; }
+  var rows = res.data || [];
+  if(!rows.length){ el.innerHTML='<div style="color:#bbb;font-size:13px;padding:12px;">등록된 정책 없음</div>'; return; }
+  el.innerHTML = rows.map(function(p){
+    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:12px 4px;border-bottom:1px solid #f0ede8;"><div style="font-weight:700;font-size:14px;color:#1a1a18;">'+(p.label || _resvVenueName(p.venue_id))+'</div><div style="font-size:13px;color:#5C0A14;font-weight:700;">'+_fmtBrokerFee(p)+'</div></div>';
+  }).join('');
+}
+function renderFeePolicy(){ fpClearRest(); var fv=document.getElementById('fpFeeValue'); if(fv) fv.value=''; renderFeePolicyList(); }
 
 async function raSaveSettings(){
   if(!_raCurrent) return;
@@ -17917,6 +18037,7 @@ async function raSaveSettings(){
     min_lead_time_months: parseInt(_raGet('raLead'))||0,
     party_min: parseInt(_raGet('raPmin'))||1,
     party_max: parseInt(_raGet('raPmax'))||8,
+    fixed_deposit: parseInt(_raGet('raDeposit'))||0,
     closed_weekdays: cw,
     intro: _raGet('raIntro') || null,
     reservation_notes: _raGet('raNotes') || null,
@@ -24597,6 +24718,7 @@ function openSubPage(id){
   if(id==='ticketListScreen') renderTicketList();
   if(id==='ticketCalScreen'){ setTimeout(tcalInit, 30); }
   if(id==='reservationAdminScreen'){ setTimeout(renderReservationAdmin, 30); }
+  if(id==='feePolicyScreen'){ setTimeout(renderFeePolicy, 30); }
   if(id==='depositMgmtScreen') dmMgmtTab(0,document.querySelector('#depositMgmtScreen .dm-tab'));
   if(id==='memberListScreen') renderMemberList();
   if(id==='producersMgmtScreen'){ loadProducersDB(function(){ renderProducersList(); }); }
