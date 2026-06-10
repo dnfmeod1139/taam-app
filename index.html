@@ -6706,7 +6706,7 @@ window.closePromoCarousel = function(){
     <div class="mp-divider"></div>
     <!-- 🆕 예약 요청 (파트너 레스토랑) -->
     <div class="mp-row" id="mpReserveRow" onclick="openPage('partnerReservePage', renderPartnerList)">
-      <span class="mp-row-label">📅 예약 요청 <span style="font-size:10px;color:#aaa;font-weight:600;">파트너 레스토랑</span></span>
+      <span class="mp-row-label">📅 예약 요청 <span style="font-size:10px;color:#aaa;font-weight:600;">파트너 레스토랑</span><span id="reserveBellDot" style="display:none;width:7px;height:7px;border-radius:50%;background:#E53935;margin-left:6px;vertical-align:middle;"></span></span>
       <span class="mp-row-arrow">›</span>
     </div>
     <div class="mp-divider"></div>
@@ -7472,7 +7472,7 @@ window.closePromoCarousel = function(){
         <div class="admin-arrow">›</div>
       </div>
       <div class="admin-menu-item" onclick="openSubPage('reservationAdminScreen')">
-        <div><div class="admin-menu-text">📅 예약 관리</div></div>
+        <div><div class="admin-menu-text">📅 예약 관리<span class="raBellDot" style="display:none;width:7px;height:7px;border-radius:50%;background:#E53935;margin-left:6px;vertical-align:middle;"></span></div></div>
         <div class="admin-arrow">›</div>
       </div>
     </div>
@@ -7585,7 +7585,7 @@ window.closePromoCarousel = function(){
         <div class="admin-arrow">›</div>
       </div>
       <div class="admin-menu-item" onclick="openSubPage('reservationAdminScreen')">
-        <div><div class="admin-menu-text">📅 예약 관리</div><div class="admin-menu-sub">파트너 예약 요청 수락·거절</div></div>
+        <div><div class="admin-menu-text">📅 예약 관리<span class="raBellDot" style="display:none;width:7px;height:7px;border-radius:50%;background:#E53935;margin-left:6px;vertical-align:middle;"></span></div><div class="admin-menu-sub">파트너 예약 요청 수락·거절</div></div>
         <div class="admin-arrow">›</div>
       </div>
     </div>
@@ -11342,7 +11342,8 @@ function loadPhoneVerified(){
 // ── reloadUserData (비동기 버전) ──
 function reloadUserData(){
   resetUserSessionData();
-  return Promise.all([loadDeposit(), loadPurchase(), loadCards(), loadPhoneVerified()]);
+  return Promise.all([loadDeposit(), loadPurchase(), loadCards(), loadPhoneVerified()])
+    .then(function(_r){ try{ _setupReservationRealtime(); }catch(e){} return _r; });
 }
 
 function detectAndSetRole(phone, name) {
@@ -17525,6 +17526,7 @@ async function _prLoadVenueIndex(){
 async function renderPartnerList(){
   var el = document.getElementById('prList');
   if(!el) return;
+  _resvShowMemberDot(false);   // 화면 진입 시 레드닷 클리어
   el.innerHTML = '<div style="padding:48px;text-align:center;color:#bbb;font-size:13px;">불러오는 중…</div>';
   await _prLoadVenueIndex();
   try{
@@ -17662,6 +17664,7 @@ function _raGet(id){ var e=document.getElementById(id); return e?e.value:''; }
 var _RA_DOWS = ['일','월','화','수','목','금','토'];
 
 async function renderReservationAdmin(){
+  _resvShowAdminDot(false);   // 화면 진입 시 레드닷 클리어
   var sel = document.getElementById('raVenueSel');
   // 휴무요일 체크박스 1회 생성
   var cwRow = document.getElementById('raCwRow');
@@ -17798,6 +17801,39 @@ async function raAct(id, action){
   }
   showToast('✓','완료', action==='confirm'?'수락했어요':action==='decline'?'거절했어요':action==='attended'?'방문 기록 완료':'노쇼 기록 완료');
   raLoadRequests();
+}
+
+// ══════════════════════════════════════════════════════════════
+// 예약 Realtime 레드닷 (회원: 내 요청 상태변경 / 어드민: 내 매장 신규요청)
+//   Realtime 은 RLS 를 존중 → 어드민은 자기 매장 INSERT 만 수신됨.
+// ══════════════════════════════════════════════════════════════
+var _resvRtChannel = null;
+function _resvShowMemberDot(on){ var d=document.getElementById('reserveBellDot'); if(d) d.style.display = on?'inline-block':'none'; }
+function _resvShowAdminDot(on){ var els=document.querySelectorAll('.raBellDot'); for(var i=0;i<els.length;i++){ els[i].style.display = on?'inline-block':'none'; } }
+
+async function _setupReservationRealtime(){
+  try{
+    if(!window.sb) return;
+    var au = await window.sb.auth.getUser();
+    var uid = au && au.data && au.data.user && au.data.user.id;
+    if(!uid) return;
+    if(_resvRtChannel){ try{ window.sb.removeChannel(_resvRtChannel); }catch(e){} _resvRtChannel=null; }
+    _resvRtChannel = window.sb.channel('resv_rt_'+uid)
+      .on('postgres_changes', { event:'UPDATE', schema:'public', table:'reservation_requests', filter:'user_id=eq.'+uid }, function(payload){
+        var s = payload && payload.new && payload.new.status;
+        if(s==='confirmed' || s==='declined'){
+          _resvShowMemberDot(true);
+          if(typeof showToast==='function') showToast(s==='confirmed'?'✓':'✕', s==='confirmed'?'예약 확정':'예약 거절', s==='confirmed'?'매장이 예약을 수락했어요.':'아쉽게도 거절됐어요.');
+        }
+      })
+      .on('postgres_changes', { event:'INSERT', schema:'public', table:'reservation_requests' }, function(payload){
+        var nu = payload && payload.new && payload.new.user_id;
+        if(nu === uid) return;   // 본인이 넣은 요청은 제외
+        _resvShowAdminDot(true);
+        if(typeof showToast==='function') showToast('🔔','새 예약 요청','매장에 새 예약 요청이 도착했어요.');
+      })
+      .subscribe();
+  }catch(e){ console.warn('[resv rt] 예외', e); }
 }
 function openPaymentMethod(){
   var page=document.getElementById('cardPage');
