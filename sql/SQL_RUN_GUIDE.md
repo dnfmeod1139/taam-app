@@ -1,0 +1,38 @@
+# TAAM — SQL 실행 가이드 (Supabase SQL Editor)
+
+⚠️ **이미 실행한 SQL은 다시 돌리지 마세요.** 아래는 "안 돌린 것"을 골라 순서대로 실행하기 위한 분류입니다.
+실행 위치: Supabase 대시보드 → SQL Editor → 붙여넣기 → Run.
+
+## 1️⃣ 스키마 / 컬럼 (가장 먼저 — 테이블·컬럼이 있어야 정책·데이터가 동작)
+- profiles_balance_columns.sql        (예치금 잔액 컬럼: membership/general)
+- push_subscriptions_schema.sql       (웹푸시 구독 테이블)
+- i18n_columns.sql / lineage_i18n_columns.sql / venues_i18n_columns.sql   (다국어 컬럼)
+- user_cards_corporate.sql            (법인카드 관련)
+- invite_codes_dedupe_constraint.sql  (초대코드 중복 방지 제약)
+
+## 2️⃣ 정책 / 권한 / RPC
+- admin_deposit_grant_policies.sql    (슈퍼어드민 예치금 부여 정책)
+- set_super_admin_dnfmeod.sql         (본인 계정 슈퍼어드민 지정)
+- tickets_admin_rls.sql               (★ 레스토랑 어드민이 자기 매장 구매 조회 — 캘린더용)
+   └ 실행 후, restaurant_admins 에 매핑 INSERT 필요 (파일 하단 주석 참고)
+- (기존) ticket_access_lists.sql / ticket_access_helpers.sql
+- (기존) invite_codes_*_rpc.sql / notifications.sql / reservation_invites*.sql / active_sessions.sql
+
+## 3️⃣ 데이터 보정 (필요할 때만 — 이미 돌렸을 가능성 높음)
+- deposit_split_granted_charged.sql / deposit_transactions_check_fix.sql
+- restore_missing_ticket_transactions.sql / sync_profiles_email_phone_from_auth.sql
+- taam_verified_insert.sql / chefs_geometry_sync.sql
+- fix_*.sql / restore_*.sql / delete_*.sql  (특정 매장·회원 핀포인트 수정 — 대상 확인 후)
+
+## 4️⃣ 진단용 (읽기 전용 — 안 돌려도 됨, 상태 점검할 때만)
+- diag_*.sql
+
+---
+## DB 마이그레이션 (supabase/migrations/) — 참고
+0001~0003 은 보통 Supabase CLI(`supabase db push`)로 적용합니다.
+이미 적용돼 있으면 건너뛰세요. SQL Editor로 수동 실행도 가능하나 중복 적용 주의.
+
+## 실행 원칙
+1) 스키마(1️⃣) → 정책(2️⃣) → 데이터(3️⃣) 순서
+2) 한 파일씩 실행하고 에러 메시지 확인
+3) "already exists" 류 에러 = 이미 적용된 것 (대부분 무해)
