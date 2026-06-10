@@ -37,6 +37,17 @@ create table if not exists public.venue_partners (
   updated_at                 timestamptz not null default now(),
   created_at                 timestamptz not null default now()
 );
+-- 기존 존재 대비 컬럼 보강
+alter table public.venue_partners add column if not exists is_partner                 boolean default true;
+alter table public.venue_partners add column if not exists channel                    text default 'request_open';
+alter table public.venue_partners add column if not exists min_alcohol_per_person     integer default 0;
+alter table public.venue_partners add column if not exists min_spend_floor_per_person integer default 0;
+alter table public.venue_partners add column if not exists min_lead_time_months       integer default 0;
+alter table public.venue_partners add column if not exists party_min                  integer default 1;
+alter table public.venue_partners add column if not exists party_max                  integer default 8;
+alter table public.venue_partners add column if not exists closed_weekdays            integer[] default '{}';
+alter table public.venue_partners add column if not exists updated_at                 timestamptz default now();
+alter table public.venue_partners add column if not exists created_at                 timestamptz default now();
 comment on table public.venue_partners is '예약 파트너 매장 설정. venue_id=정적 큐레이션 id(text).';
 
 
@@ -86,6 +97,23 @@ create table if not exists public.reservation_requests (
   visit_status        text check (visit_status in ('attended','no_show')),
   created_at          timestamptz not null default now()
 );
+-- ⚠ 기존에 reservation_requests 가 다른 스키마로 이미 존재할 수 있음 (이전 세션).
+--   create table if not exists 는 그 경우 건너뛰므로, 빠진 컬럼을 명시적으로 보강.
+alter table public.reservation_requests add column if not exists user_id             uuid;
+alter table public.reservation_requests add column if not exists venue_id            text;
+alter table public.reservation_requests add column if not exists reserve_date        date;
+alter table public.reservation_requests add column if not exists reserve_time        time;
+alter table public.reservation_requests add column if not exists party_size          integer;
+alter table public.reservation_requests add column if not exists member_memo         text;
+alter table public.reservation_requests add column if not exists conditions_accepted boolean default false;
+alter table public.reservation_requests add column if not exists status              text default 'pending';
+alter table public.reservation_requests add column if not exists handled_by          uuid;
+alter table public.reservation_requests add column if not exists handled_at          timestamptz;
+alter table public.reservation_requests add column if not exists deposit_status      text;
+alter table public.reservation_requests add column if not exists deposit_amount      integer;
+alter table public.reservation_requests add column if not exists visit_status        text;
+alter table public.reservation_requests add column if not exists created_at          timestamptz default now();
+
 create index if not exists idx_rr_user    on public.reservation_requests(user_id, created_at desc);
 create index if not exists idx_rr_venue   on public.reservation_requests(venue_id, status);
 create index if not exists idx_rr_pending on public.reservation_requests(user_id) where status = 'pending';
@@ -319,7 +347,13 @@ create trigger trg_rr_visit_status
 -- 10) Realtime 발행 (레드닷 알림용) — 이미 활성화돼 있으면 무해
 -- ═════════════════════════════════════════════════════════════
 -- 회원: 본인 요청 status UPDATE 감지 / 어드민: 매핑 매장 신규 pending 감지
-alter publication supabase_realtime add table public.reservation_requests;
+do $$
+begin
+  alter publication supabase_realtime add table public.reservation_requests;
+exception
+  when duplicate_object then null;   -- 이미 발행 중이면 무시
+  when undefined_object then null;   -- publication 미존재 환경이면 무시
+end $$;
 
 
 -- ═════════════════════════════════════════════════════════════
