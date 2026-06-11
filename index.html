@@ -17895,8 +17895,14 @@ async function renderReservationAdmin(){
       var vp = await window.sb.from('venue_partners').select('venue_id');
       ids = (vp.data||[]).map(function(x){ return x.venue_id; });
     } else {
-      var va = await window.sb.from('venue_admins').select('venue_id');
-      ids = (va.data||[]).map(function(x){ return x.venue_id; });
+      // 어드민: 부여받은 매장 = admin_grants (venue_id 우선, 없으면 rest_id) + 레거시 venue_admins
+      var ag = await window.sb.from('admin_grants').select('rest_id, venue_id');
+      (ag.data||[]).forEach(function(x){ var vid = x.venue_id || x.rest_id; if(vid) ids.push(String(vid)); });
+      try{
+        var va = await window.sb.from('venue_admins').select('venue_id');
+        (va.data||[]).forEach(function(x){ if(x.venue_id) ids.push(String(x.venue_id)); });
+      }catch(e){}
+      ids = ids.filter(function(v,i){ return ids.indexOf(v)===i; });   // 중복 제거
     }
     await _prLoadVenueIndex();
     _raVenues = ids;
@@ -30575,6 +30581,7 @@ async function renderPartnerRest() {
     vp = (res && res.data) || {};
   } catch(e){}
   _prsVenue = vp; _prsPhoto = null;
+  _prsHours = String(vp.reservation_hours||'').split(',').map(function(s){return s.trim();}).filter(Boolean);
 
   var photo = vp.request_photo || r.photoCard || r.photoHero || '';
   var dows = ['일','월','화','수','목','금','토'];
@@ -30582,7 +30589,7 @@ async function renderPartnerRest() {
   var on = (vp.is_partner !== false) && !!vp.venue_id;   // row 없으면 OFF
 
   function numIn(id, val, ph){
-    return '<input id="'+id+'" type="number" min="0" step="10000" value="'+(val||0)+'" placeholder="'+(ph||'')+'" oninput="prsPreview()" style="width:100%;box-sizing:border-box;padding:12px;border:1px solid #e0dcd4;border-radius:10px;font-size:15px;font-weight:600;text-align:right;">';
+    return '<input id="'+id+'" type="text" inputmode="numeric" value="'+(val ? Number(val).toLocaleString() : '')+'" placeholder="'+(ph||'')+'" oninput="_prsFmtNum(this)" style="width:100%;box-sizing:border-box;padding:12px;border:1px solid #e0dcd4;border-radius:10px;font-size:15px;font-weight:600;text-align:right;">';
   }
 
   el.innerHTML =
@@ -30617,9 +30624,17 @@ async function renderPartnerRest() {
     +   '<div style="flex:1;"><div style="font-size:11px;font-weight:700;color:#888;margin-bottom:5px;">주류</div>'+numIn('prsAlcohol', vp.deposit_alcohol, '예: 50000')+'</div>'
     + '</div>'
     + '<div id="prsDepositPreview" style="font-size:12.5px;color:#5C0A14;font-weight:700;margin-bottom:20px;"></div>'
-    // ── 예약 가능 시간 ──
+    // ── 예약 가능 시간 (아코디언 시간 선택) ──
     + '<div style="font-size:10px;font-weight:800;letter-spacing:.14em;color:#aaa;text-transform:uppercase;margin-bottom:8px;">예약 가능 시간</div>'
-    + '<input id="prsHours" value="'+String(vp.reservation_hours||'').replace(/"/g,'&quot;')+'" placeholder="예: 18:00 / 20:30 2부제 · 일요일 휴무" style="width:100%;box-sizing:border-box;padding:12px;border:1px solid #e0dcd4;border-radius:10px;font-size:14px;margin-bottom:14px;">'
+    + '<div style="border:1px solid #e0dcd4;border-radius:12px;overflow:hidden;margin-bottom:18px;">'
+    +   '<div onclick="prsToggleHours()" style="display:flex;justify-content:space-between;align-items:center;padding:13px 14px;cursor:pointer;background:#fff;">'
+    +     '<span id="prsHoursSummary" style="font-size:14px;color:#1a1a18;font-weight:600;">'+ (_prsHours.length ? _prsHours.join(' · ') : '<span style=\'color:#bbb;font-weight:400;\'>시간을 선택하세요</span>') +'</span>'
+    +     '<span id="prsHoursCaret" style="color:#aaa;font-size:13px;">▾</span>'
+    +   '</div>'
+    +   '<div id="prsHoursPanel" style="display:none;padding:12px 14px;border-top:1px solid #f0ede8;background:#fafafa;">'
+    +     '<div id="prsHoursChips" style="display:flex;flex-wrap:wrap;gap:7px;"></div>'
+    +   '</div>'
+    + '</div>'
     // ── 휴무 요일 ──
     + '<div style="font-size:11px;font-weight:700;color:#888;margin-bottom:7px;">받지 않는 요일</div>'
     + '<div style="display:flex;gap:5px;margin-bottom:18px;">'
@@ -30645,14 +30660,51 @@ function prsToggleUI(cb){
   if(knob)  knob.style.left = cb.checked ? '25px' : '3px';
 }
 
+function _prsNum(id){ var e=document.getElementById(id); return e ? (parseInt(String(e.value).replace(/[^0-9]/g,''))||0) : 0; }
+function _prsFmtNum(input){
+  var n = String(input.value).replace(/[^0-9]/g,'');
+  input.value = n ? Number(n).toLocaleString() : '';
+  prsPreview();
+}
 function prsPreview(){
-  var meal = parseInt((document.getElementById('prsMeal')||{}).value)||0;
-  var alc  = parseInt((document.getElementById('prsAlcohol')||{}).value)||0;
+  var meal = _prsNum('prsMeal');
+  var alc  = _prsNum('prsAlcohol');
   var per  = meal + alc;
   var el = document.getElementById('prsDepositPreview');
   if(el) el.textContent = per > 0
     ? '1인 ₩'+per.toLocaleString()+' · 2인 예약 시 ₩'+(per*2).toLocaleString()+' 결제'
     : '예약금 없이 요청만 받습니다';
+}
+
+var _prsHours = [];
+var _PRS_TIMES = ['11:30','12:00','12:30','13:00','13:30','17:00','17:30','18:00','18:30','19:00','19:30','20:00','20:30','21:00','21:30'];
+function prsToggleHours(){
+  var panel = document.getElementById('prsHoursPanel');
+  var caret = document.getElementById('prsHoursCaret');
+  if(!panel) return;
+  var open = (panel.style.display === 'none' || !panel.style.display);
+  panel.style.display = open ? 'block' : 'none';
+  if(caret) caret.textContent = open ? '▴' : '▾';
+  if(open) prsRenderHourChips();
+}
+function prsRenderHourChips(){
+  var box = document.getElementById('prsHoursChips');
+  if(!box) return;
+  var all = _PRS_TIMES.slice();
+  _prsHours.forEach(function(t){ if(all.indexOf(t)<0) all.push(t); });
+  all.sort();
+  box.innerHTML = all.map(function(t){
+    var on = _prsHours.indexOf(t) >= 0;
+    return '<button type="button" onclick="prsHourToggle(\''+t+'\')" style="padding:8px 13px;border-radius:20px;border:1.5px solid '+(on?'#5C0A14':'#e0dcd4')+';background:'+(on?'#5C0A14':'#fff')+';color:'+(on?'#fff':'#666')+';font-size:13px;font-weight:700;cursor:pointer;">'+t+'</button>';
+  }).join('');
+}
+function prsHourToggle(t){
+  var i = _prsHours.indexOf(t);
+  if(i>=0) _prsHours.splice(i,1); else _prsHours.push(t);
+  _prsHours.sort();
+  prsRenderHourChips();
+  var sum = document.getElementById('prsHoursSummary');
+  if(sum) sum.innerHTML = _prsHours.length ? _prsHours.join(' · ') : '<span style="color:#bbb;font-weight:400;">시간을 선택하세요</span>';
 }
 
 function prsPhotoPick(input){
@@ -30685,9 +30737,9 @@ async function prsSave(){
   var row = {
     venue_id: String(r.id),
     is_partner: !!(document.getElementById('prsOn')||{}).checked,
-    deposit_meal:    parseInt((document.getElementById('prsMeal')||{}).value)||0,
-    deposit_alcohol: parseInt((document.getElementById('prsAlcohol')||{}).value)||0,
-    reservation_hours: ((document.getElementById('prsHours')||{}).value||'').trim() || null,
+    deposit_meal:    _prsNum('prsMeal'),
+    deposit_alcohol: _prsNum('prsAlcohol'),
+    reservation_hours: (_prsHours.length ? _prsHours.join(', ') : null),
     closed_weekdays: cw,
     party_min: parseInt((document.getElementById('prsPmin')||{}).value)||1,
     party_max: parseInt((document.getElementById('prsPmax')||{}).value)||8,
