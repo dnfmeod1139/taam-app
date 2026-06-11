@@ -102,17 +102,18 @@ const APP_URL  = "https://taam-app.vercel.app";
 
 function money(n: number | null | undefined): string {
   const v = Number(n || 0);
-  return v > 0 ? v.toLocaleString("ko-KR") + "원" : "-";
+  return v > 0 ? "₩" + v.toLocaleString("ja-JP") : "-";
 }
 
-// "2026-06-15", "19:00:00" → "6/15 (일) 19:00"
-function fmtDate(date: string, time: string | null): string {
+// 날짜 포맷 — 요일 로케일만 다름 (ko: 카카오/푸시, ja: LINE)
+function fmtDate(date: string, time: string | null, lang: "ko" | "ja"): string {
   if (!date) return "-";
   const [y, m, d] = date.split("-").map(Number);
-  const dow = ["일", "월", "화", "수", "목", "금", "토"];
-  let s = `${m}/${d}`;
+  const dow = lang === "ja"
+    ? ["日", "月", "火", "水", "木", "金", "土"]
+    : ["일", "월", "화", "수", "목", "금", "토"];
   const wd = new Date(Date.UTC(y, (m || 1) - 1, d || 1)).getUTCDay();
-  s += ` (${dow[wd]})`;
+  let s = `${m}/${d} (${dow[wd]})`;
   if (time) s += " " + String(time).slice(0, 5);
   return s;
 }
@@ -130,7 +131,7 @@ function infoRow(icon: string, label: string, value: string): any {
   };
 }
 
-// 예약 요청 카드 (흰 배경 · 버건디 포인트)
+// 예약 요청 카드 (흰 배경 · 버건디 포인트 · 일본어)
 function reservationBubble(venue: string, date: string, party: string, deposit: string): any {
   return {
     type: "bubble", size: "kilo",
@@ -138,24 +139,24 @@ function reservationBubble(venue: string, date: string, party: string, deposit: 
       type: "box", layout: "vertical", paddingAll: "16px", backgroundColor: "#FFFFFF",
       contents: [
         { type: "text", text: "TAAM", size: "xs", color: BURGUNDY, weight: "bold" },
-        { type: "text", text: "새 예약 요청", size: "xl", color: "#1A1A1A", weight: "bold", margin: "sm" },
+        { type: "text", text: "新しい予約リクエスト", size: "lg", color: "#1A1A1A", weight: "bold", margin: "sm" },
         { type: "separator", margin: "md", color: BURGUNDY },
       ],
     },
     body: {
       type: "box", layout: "vertical", spacing: "md", paddingAll: "16px", paddingTop: "8px",
       contents: [
-        infoRow("🍽", "매장", venue),
-        infoRow("📅", "일시", date),
-        infoRow("👥", "인원", party),
-        infoRow("💰", "예약금", deposit),
+        infoRow("🍽", "店舗", venue),
+        infoRow("📅", "日時", date),
+        infoRow("👥", "人数", party),
+        infoRow("💰", "予約金", deposit),
       ],
     },
     footer: {
       type: "box", layout: "vertical", paddingAll: "12px",
       contents: [{
         type: "button", style: "primary", color: BURGUNDY, height: "sm",
-        action: { type: "uri", label: "앱에서 수락 / 거절", uri: APP_URL },
+        action: { type: "uri", label: "アプリで承認 / 辞退", uri: APP_URL },
       }],
     },
   };
@@ -211,8 +212,9 @@ Deno.serve(async (req) => {
     const vps = await sbGet(`venue_partners?venue_id=eq.${rr.venue_id}&select=notify_phone,notify_line_id`);
     const vp = vps[0] || {};
 
-    // 4) 메시지 구성 — 날짜를 "6/15 (일) 19:00" 형태로
-    const dateStr = fmtDate(rr.reserve_date, rr.reserve_time);
+    // 4) 메시지 구성 — 한국어(카카오/푸시) / 일본어(LINE) 날짜 분리
+    const dateStr   = fmtDate(rr.reserve_date, rr.reserve_time, "ko"); // 카카오·앱푸시용
+    const dateStrJa = fmtDate(rr.reserve_date, rr.reserve_time, "ja"); // LINE용
     const title = "새 예약 요청";
     const body  = `${venueName} · ${dateStr} · ${rr.party_size}명 — 앱에서 수락/거절해주세요`;
 
@@ -226,10 +228,10 @@ Deno.serve(async (req) => {
     });
     const lineResult = await sendLine(vp.notify_line_id || "", {
       venue: venueName,
-      date: dateStr,
-      party: `${rr.party_size}명`,
+      date: dateStrJa,
+      party: `${rr.party_size}名`,
       deposit: money(rr.deposit_amount),
-      alt: `[TAAM] ${title} — ${venueName} ${dateStr} ${rr.party_size}명`,
+      alt: `[TAAM] 新しい予約リクエスト — ${venueName} ${dateStrJa} ${rr.party_size}名`,
     });
 
     return json({ ok: true, admins: adminIds.length, push: pushOk, kakao: kakaoResult, line: lineResult });
