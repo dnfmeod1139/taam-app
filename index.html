@@ -29566,7 +29566,7 @@ async function memOpenProfileQuick(userId, name){
   if(body) body.innerHTML = '<div style="text-align:center;color:#999;font-size:11px;padding:30px;">불러오는 중...</div>';
   try {
     var res = await window.sb.from('profiles')
-      .select('id, display_name, phone, email, created_at, member_until, role, deleted_at')
+      .select('id, display_name, phone, email, created_at, member_until, role, deleted_at, membership_tier')
       .eq('id', userId)
       .single();
     if(res.error || !res.data){
@@ -29621,6 +29621,15 @@ function renderMemberManageModal(){
           + '<button onclick="mmmSaveName()" style="padding:10px 16px;background:#1a1a18;color:#fff;border:none;border-radius:7px;font-weight:700;font-size:12px;cursor:pointer;">저장</button>'
         + '</div>'
       + '</div>'
+      // 🆕 멤버십 등급 변경 (슈퍼어드민 전용)
+      + '<div style="padding:16px 0;border-bottom:1px solid #f0f0f0;">'
+        + '<div style="font-size:11px;font-weight:700;color:#1a1a18;margin-bottom:8px;">멤버십 등급</div>'
+        + '<div style="display:flex;gap:8px;">'
+          + '<button onclick="mmmSaveTier(\'M\')" style="flex:1;padding:11px;border-radius:8px;border:1.5px solid '+(u.membership_tier==='M'?'#5C0A14':'#e0ddd8')+';background:'+(u.membership_tier==='M'?'#5C0A14':'#fff')+';color:'+(u.membership_tier==='M'?'#fff':'#888')+';font-weight:800;font-size:13px;cursor:pointer;">M 등급</button>'
+          + '<button onclick="mmmSaveTier(\'T\')" style="flex:1;padding:11px;border-radius:8px;border:1.5px solid '+(u.membership_tier==='T'?'#1a1a18':'#e0ddd8')+';background:'+(u.membership_tier==='T'?'#1a1a18':'#fff')+';color:'+(u.membership_tier==='T'?'#fff':'#888')+';font-weight:800;font-size:13px;cursor:pointer;">T 등급</button>'
+        + '</div>'
+        + '<div style="font-size:10px;color:#aaa;margin-top:6px;">현재 등급: '+(u.membership_tier||'미설정')+'</div>'
+      + '</div>'
       // 탈퇴 처리
       + '<div style="padding:16px 0 8px;">'
         + '<div style="font-size:11px;font-weight:700;color:#9B1C1C;margin-bottom:8px;">회원 탈퇴 처리</div>'
@@ -29660,6 +29669,23 @@ async function mmmSaveName(){
   }
 }
 window.mmmSaveName = mmmSaveName;
+
+// 🆕 멤버십 등급(M/T) 변경 — 슈퍼어드민 전용
+async function mmmSaveTier(tier){
+  if(!_mmmCurrentUser || !window.sb) return;
+  if(!_isSuperAdmin || !_isSuperAdmin()){ if(typeof showToast==='function') showToast('🔒','권한 부족','슈퍼어드민 전용'); return; }
+  if(tier!=='M' && tier!=='T') return;
+  try{
+    var res = await window.sb.from('profiles').update({ membership_tier: tier }).eq('id', _mmmCurrentUser.id).select();
+    if(res.error){ if(typeof showToast==='function') showToast('⚠','저장 실패', res.error.message); return; }
+    if(!res.data || !res.data.length){ if(typeof showToast==='function') showToast('⚠','RLS 차단','변경 안 됨 — 권한 점검'); return; }
+    _mmmCurrentUser.membership_tier = tier;
+    renderMemberManageModal();
+    if(typeof showToast==='function') showToast('✓','등급 변경', tier+' 등급으로 변경되었습니다');
+    if(typeof renderMemberList==='function') renderMemberList();
+  }catch(e){ if(typeof showToast==='function') showToast('⚠','오류',(e&&e.message)||String(e)); }
+}
+window.mmmSaveTier = mmmSaveTier;
 
 async function mmmSoftDelete(){
   if(!_mmmCurrentUser || !window.sb) return;
