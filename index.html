@@ -17876,6 +17876,11 @@ async function submitReserveRequest(){
     return;
   }
   showToast('✓',t('resv.t_done_t','요청 완료'),t('resv.t_done_m','매장에 예약 요청을 보냈어요.'));
+  // 🆕 매장 어드민 3채널 알림 (앱푸시 + 알림톡 + LINE) — 실패해도 요청 흐름에 영향 없음
+  try {
+    var _newId = res.data && (res.data.id || (res.data[0] && res.data[0].id));
+    if(_newId){ window.sb.functions.invoke('notify-reservation', { body: { reservation_id: _newId } }).catch(function(){}); }
+  } catch(_e){}
   closePage('partnerDetailPage');
   if(typeof renderRequestList === 'function') renderRequestList();
 }
@@ -27029,6 +27034,8 @@ var TRANSLATIONS = {
       save:'저장', saving:'저장 중…', save_done:'저장 완료', save_fail:'저장 실패',
       saved_on:'예약 요청을 받습니다', saved_off:'예약 요청 노출이 꺼졌어요',
       no_rest:'연동된 레스토랑 없음',
+      notify_sect:'요청 알림', notify_push_hint:'앱 푸시는 자동 발송 · 아래는 추가 채널(선택)',
+      notify_phone:'카카오 알림톡 전화번호', notify_line:'LINE ID',
     },
   },
   en: {
@@ -27756,6 +27763,8 @@ var TRANSLATIONS = {
       save:'Save', saving:'Saving…', save_done:'Saved', save_fail:'Save failed',
       saved_on:'Now accepting reservation requests', saved_off:'Request visibility turned off',
       no_rest:'No linked restaurant',
+      notify_sect:'Request Alerts', notify_push_hint:'App push is automatic · optional extra channels below',
+      notify_phone:'KakaoTalk AlimTalk phone', notify_line:'LINE ID',
     },
   },
 };
@@ -28442,6 +28451,8 @@ TRANSLATIONS.ja = {
     save:'保存', saving:'保存中…', save_done:'保存完了', save_fail:'保存失敗',
     saved_on:'予約リクエストを受け付けます', saved_off:'リクエスト表示をオフにしました',
     no_rest:'連携されたレストランがありません',
+    notify_sect:'リクエスト通知', notify_push_hint:'アプリ通知は自動送信 · 以下は追加チャネル（任意）',
+    notify_phone:'カカオ アラームトーク電話番号', notify_line:'LINE ID',
   },
 };
 
@@ -30803,6 +30814,15 @@ async function renderPartnerRest() {
     +   '<div style="flex:1;"><div style="font-size:11px;font-weight:700;color:#888;margin-bottom:5px;">'+t('resvadm.pmin','최소 인원')+'</div><input id="prsPmin" type="number" min="1" max="50" value="'+(vp.party_min||1)+'" style="width:100%;box-sizing:border-box;padding:12px;border:1px solid #e0dcd4;border-radius:10px;font-size:15px;text-align:center;"></div>'
     +   '<div style="flex:1;"><div style="font-size:11px;font-weight:700;color:#888;margin-bottom:5px;">'+t('resvadm.pmax','최대 인원')+'</div><input id="prsPmax" type="number" min="1" max="50" value="'+(vp.party_max||8)+'" style="width:100%;box-sizing:border-box;padding:12px;border:1px solid #e0dcd4;border-radius:10px;font-size:15px;text-align:center;"></div>'
     + '</div>'
+    // ── 요청 알림 수신 (선택) ──
+    + '<div style="font-size:10px;font-weight:800;letter-spacing:.14em;color:#aaa;text-transform:uppercase;margin-bottom:8px;">'+t('resvadm.notify_sect','요청 알림')+'</div>'
+    + '<div style="font-size:10.5px;color:#aaa;margin-bottom:10px;">'+t('resvadm.notify_push_hint','앱 푸시는 자동 발송 · 아래는 추가 채널(선택)')+'</div>'
+    + '<div style="display:flex;flex-direction:column;gap:10px;margin-bottom:24px;">'
+    +   '<div><div style="font-size:11px;font-weight:700;color:#888;margin-bottom:5px;">'+t('resvadm.notify_phone','카카오 알림톡 전화번호')+'</div>'
+    +     '<input id="prsNotifyPhone" value="'+String(vp.notify_phone||'').replace(/"/g,'&quot;')+'" placeholder="010-0000-0000" inputmode="tel" style="width:100%;box-sizing:border-box;padding:12px;border:1px solid #e0dcd4;border-radius:10px;font-size:14px;"></div>'
+    +   '<div><div style="font-size:11px;font-weight:700;color:#888;margin-bottom:5px;">'+t('resvadm.notify_line','LINE ID')+'</div>'
+    +     '<input id="prsNotifyLine" value="'+String(vp.notify_line_id||'').replace(/"/g,'&quot;')+'" placeholder="U1234abcd…" style="width:100%;box-sizing:border-box;padding:12px;border:1px solid #e0dcd4;border-radius:10px;font-size:14px;"></div>'
+    + '</div>'
     + '<button id="prsSaveBtn" onclick="prsSave()" style="width:100%;padding:16px;border:none;border-radius:14px;background:#5C0A14;color:#fff;font-family:var(--font-main);font-size:11px;font-weight:800;letter-spacing:.2em;cursor:pointer;">'+t('resvadm.save','저장')+'</button>'
     + '</div>';
   prsPreview();
@@ -30898,6 +30918,8 @@ async function prsSave(){
     closed_weekdays: cw,
     party_min: parseInt((document.getElementById('prsPmin')||{}).value)||1,
     party_max: parseInt((document.getElementById('prsPmax')||{}).value)||8,
+    notify_phone:   ((document.getElementById('prsNotifyPhone')||{}).value||'').trim() || null,
+    notify_line_id: ((document.getElementById('prsNotifyLine')||{}).value||'').trim() || null,
     updated_at: new Date().toISOString()
   };
   if(_prsPhoto) row.request_photo = _prsPhoto;
