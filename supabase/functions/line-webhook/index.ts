@@ -35,27 +35,54 @@ async function verifySignature(body: string, signature: string): Promise<boolean
   } catch (_) { return false; }
 }
 
-// ── 답장 (replyToken 사용 — 무료) ──
-async function reply(replyToken: string, text: string): Promise<void> {
+const BURGUNDY = "#7B1E2B";
+
+// ── 연동 안내 카드 (흰 배경 · 버건디 포인트) ──
+function idBubble(userId: string): any {
+  return {
+    type: "bubble", size: "kilo",
+    header: {
+      type: "box", layout: "vertical", paddingAll: "16px", backgroundColor: "#FFFFFF",
+      contents: [
+        { type: "text", text: "TAAM", size: "xs", color: BURGUNDY, weight: "bold" },
+        { type: "text", text: "LINE 예약 알림 연동", size: "lg", color: "#1A1A1A", weight: "bold", margin: "sm" },
+        { type: "separator", margin: "md", color: BURGUNDY },
+      ],
+    },
+    body: {
+      type: "box", layout: "vertical", spacing: "md", paddingAll: "16px", paddingTop: "8px",
+      contents: [
+        { type: "text", text: "아래 연동 ID를 복사해", size: "sm", color: "#555555", wrap: true },
+        { type: "text", text: "앱 → 나의 레스토랑 → 'LINE ID' 에 붙여넣어 주세요.", size: "sm", color: "#555555", wrap: true },
+        {
+          type: "box", layout: "vertical", margin: "md", paddingAll: "12px",
+          backgroundColor: "#F7F2F3", cornerRadius: "8px",
+          contents: [
+            { type: "text", text: "연동 ID", size: "xxs", color: BURGUNDY, weight: "bold" },
+            { type: "text", text: userId, size: "sm", color: "#1A1A1A", weight: "bold", wrap: true, margin: "xs" },
+          ],
+        },
+        { type: "text", text: "등록되면 새 예약 요청이 여기로 도착합니다.", size: "xs", color: "#9A9A9A", wrap: true, margin: "md" },
+      ],
+    },
+  };
+}
+
+// ── 답장: 카드 + 복사용 ID(평문) 동시 발송 (replyToken — 무료) ──
+async function replyId(replyToken: string, userId: string): Promise<void> {
   try {
     await fetch("https://api.line.me/v2/bot/message/reply", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${TOKEN}` },
-      body: JSON.stringify({ replyToken, messages: [{ type: "text", text }] }),
+      body: JSON.stringify({
+        replyToken,
+        messages: [
+          { type: "flex", altText: "TAAM 예약 알림 연동 ID", contents: idBubble(userId) },
+          { type: "text", text: userId }, // 길게 눌러 복사하기 쉽게 평문도 함께
+        ],
+      }),
     });
   } catch (_) { /* noop */ }
-}
-
-function idMessage(userId: string): string {
-  return [
-    "✅ TAAM 예약 알림 연동용 ID입니다.",
-    "",
-    userId,
-    "",
-    "이 ID를 복사해서",
-    "앱 → 나의 레스토랑 → 'LINE ID' 에 붙여넣어 주세요.",
-    "그러면 새 예약 요청이 들어올 때 여기로 알림이 옵니다.",
-  ].join("\n");
 }
 
 Deno.serve(async (req) => {
@@ -76,7 +103,7 @@ Deno.serve(async (req) => {
     const replyToken = ev?.replyToken;
     if (!userId || !replyToken) continue;
     if (ev.type === "follow" || ev.type === "message") {
-      await reply(replyToken, idMessage(userId));
+      await replyId(replyToken, userId);
     }
   }
 

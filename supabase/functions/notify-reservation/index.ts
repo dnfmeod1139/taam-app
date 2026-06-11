@@ -96,8 +96,75 @@ async function sendKakao(phone: string, vars: Record<string, string>): Promise<s
   } catch (e) { return `fail(${(e as Error).message})`; }
 }
 
-// ── ③ LINE 푸시 (Messaging API) ──
-async function sendLine(lineUserId: string, text: string): Promise<string> {
+// ── ③ LINE 푸시 (Messaging API · Flex Message) ──
+const BURGUNDY = "#7B1E2B";
+const APP_URL  = "https://taam-app.vercel.app";
+
+function money(n: number | null | undefined): string {
+  const v = Number(n || 0);
+  return v > 0 ? v.toLocaleString("ko-KR") + "원" : "-";
+}
+
+// "2026-06-15", "19:00:00" → "6/15 (일) 19:00"
+function fmtDate(date: string, time: string | null): string {
+  if (!date) return "-";
+  const [y, m, d] = date.split("-").map(Number);
+  const dow = ["일", "월", "화", "수", "목", "금", "토"];
+  let s = `${m}/${d}`;
+  const wd = new Date(Date.UTC(y, (m || 1) - 1, d || 1)).getUTCDay();
+  s += ` (${dow[wd]})`;
+  if (time) s += " " + String(time).slice(0, 5);
+  return s;
+}
+
+// 카드 한 줄 (이모지 · 라벨 · 값)
+function infoRow(icon: string, label: string, value: string): any {
+  return {
+    type: "box", layout: "baseline", spacing: "sm",
+    contents: [
+      { type: "text", text: icon, flex: 0, size: "sm" },
+      { type: "text", text: label, color: "#9A9A9A", size: "sm", flex: 2 },
+      { type: "text", text: value, color: "#1A1A1A", size: "sm", weight: "bold",
+        flex: 6, wrap: true, align: "end" },
+    ],
+  };
+}
+
+// 예약 요청 카드 (흰 배경 · 버건디 포인트)
+function reservationBubble(venue: string, date: string, party: string, deposit: string): any {
+  return {
+    type: "bubble", size: "kilo",
+    header: {
+      type: "box", layout: "vertical", paddingAll: "16px", backgroundColor: "#FFFFFF",
+      contents: [
+        { type: "text", text: "TAAM", size: "xs", color: BURGUNDY, weight: "bold" },
+        { type: "text", text: "새 예약 요청", size: "xl", color: "#1A1A1A", weight: "bold", margin: "sm" },
+        { type: "separator", margin: "md", color: BURGUNDY },
+      ],
+    },
+    body: {
+      type: "box", layout: "vertical", spacing: "md", paddingAll: "16px", paddingTop: "8px",
+      contents: [
+        infoRow("🍽", "매장", venue),
+        infoRow("📅", "일시", date),
+        infoRow("👥", "인원", party),
+        infoRow("💰", "예약금", deposit),
+      ],
+    },
+    footer: {
+      type: "box", layout: "vertical", paddingAll: "12px",
+      contents: [{
+        type: "button", style: "primary", color: BURGUNDY, height: "sm",
+        action: { type: "uri", label: "앱에서 수락 / 거절", uri: APP_URL },
+      }],
+    },
+  };
+}
+
+async function sendLine(
+  lineUserId: string,
+  info: { venue: string; date: string; party: string; deposit: string; alt: string },
+): Promise<string> {
   const token = Deno.env.get("LINE_CHANNEL_ACCESS_TOKEN");
   if (!token) return "skip(미설정)";
   if (!lineUserId) return "skip(수신ID없음)";
@@ -105,7 +172,14 @@ async function sendLine(lineUserId: string, text: string): Promise<string> {
     const res = await fetch("https://api.line.me/v2/bot/message/push", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ to: lineUserId, messages: [{ type: "text", text }] }),
+      body: JSON.stringify({
+        to: lineUserId,
+        messages: [{
+          type: "flex",
+          altText: info.alt,
+          contents: reservationBubble(info.venue, info.date, info.party, info.deposit),
+        }],
+      }),
     });
     return res.ok ? "ok" : `fail(${res.status})`;
   } catch (e) { return `fail(${(e as Error).message})`; }
@@ -137,8 +211,8 @@ Deno.serve(async (req) => {
     const vps = await sbGet(`venue_partners?venue_id=eq.${rr.venue_id}&select=notify_phone,notify_line_id`);
     const vp = vps[0] || {};
 
-    // 4) 메시지 구성
-    const dateStr = `${rr.reserve_date}${rr.reserve_time ? " " + String(rr.reserve_time).slice(0, 5) : ""}`;
+    // 4) 메시지 구성 — 날짜를 "6/15 (일) 19:00" 형태로
+    const dateStr = fmtDate(rr.reserve_date, rr.reserve_time);
     const title = "새 예약 요청";
     const body  = `${venueName} · ${dateStr} · ${rr.party_size}명 — 앱에서 수락/거절해주세요`;
 
@@ -150,7 +224,13 @@ Deno.serve(async (req) => {
     const kakaoResult = await sendKakao(vp.notify_phone || "", {
       "#{shop}": venueName, "#{date}": dateStr, "#{party}": String(rr.party_size),
     });
-    const lineResult = await sendLine(vp.notify_line_id || "", `[TAAM] ${title}\n${body}`);
+    const lineResult = await sendLine(vp.notify_line_id || "", {
+      venue: venueName,
+      date: dateStr,
+      party: `${rr.party_size}명`,
+      deposit: money(rr.deposit_amount),
+      alt: `[TAAM] ${title} — ${venueName} ${dateStr} ${rr.party_size}명`,
+    });
 
     return json({ ok: true, admins: adminIds.length, push: pushOk, kakao: kakaoResult, line: lineResult });
   } catch (e) {
