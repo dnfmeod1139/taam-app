@@ -6842,6 +6842,12 @@ window.closePromoCarousel = function(){
       </div>
     </div>
 
+    <!-- 국적 -->
+    <div>
+      <div class="pe-field-label" data-i18n="mp_sub.pe_field_nationality">국적</div>
+      <input class="pe-input" id="peNationality" type="text" data-i18n-ph="mp_sub.pe_ph_nationality" placeholder="예: 대한민국 / 日本 / United States" style="width:100%;box-sizing:border-box;">
+    </div>
+
     <!-- 주소 -->
     <div>
       <!-- 생략 체크박스 -->
@@ -7154,6 +7160,11 @@ window.closePromoCarousel = function(){
       <div>
         <label data-i18n="resv.memo" style="font-size:11px;font-weight:700;color:#888;display:block;margin-bottom:6px;">메모 (선택)</label>
         <textarea id="prdMemo" rows="2" data-i18n-ph="resv.memo_ph" placeholder="예: 기념일, 조용한 자리" style="width:100%;box-sizing:border-box;padding:11px 12px;border:1px solid #e0dcd4;border-radius:10px;font-size:14px;resize:vertical;background:#fff;"></textarea>
+      </div>
+
+      <div>
+        <label data-i18n="resv.allergy" style="font-size:11px;font-weight:700;color:#888;display:block;margin-bottom:6px;">알러지 / 식이 (선택)</label>
+        <textarea id="prdAllergy" rows="2" data-i18n-ph="resv.allergy_ph" placeholder="예: 갑각류 알러지, 비건, 매운 음식 불가" style="width:100%;box-sizing:border-box;padding:11px 12px;border:1px solid #e0dcd4;border-radius:10px;font-size:14px;resize:vertical;background:#fff;"></textarea>
       </div>
 
       <label style="display:flex;gap:10px;align-items:flex-start;font-size:13px;color:#444;line-height:1.6;cursor:pointer;margin-top:2px;">
@@ -17888,6 +17899,7 @@ function openPartnerDetail(vid){
   document.getElementById('prdDate').value  = '';
   document.getElementById('prdTime').value  = '';
   document.getElementById('prdMemo').value  = '';
+  var _alg = document.getElementById('prdAllergy'); if(_alg) _alg.value = '';
   document.getElementById('prdAgree').checked = false;
   _prClosePartyAcc();
   _prBuildPartyChips(p.party_min, p.party_max);   // 인원 칩 구성 + 기본값 + 미리보기 갱신
@@ -17901,6 +17913,7 @@ async function submitReserveRequest(){
   var time  = document.getElementById('prdTime').value || null;
   var party = parseInt(document.getElementById('prdParty').value) || 0;
   var memo  = document.getElementById('prdMemo').value || null;
+  var allergy = (document.getElementById('prdAllergy') && document.getElementById('prdAllergy').value) || null;
   var agree = document.getElementById('prdAgree').checked;
   if(!date)  { showToast('⚠',t('resv.t_need_date_t','날짜 필요'),t('resv.t_need_date_m','희망 날짜를 선택하세요')); return; }
   if(!party) { showToast('⚠',t('resv.t_need_party_t','인원 필요'),t('resv.t_need_party_m','인원을 입력하세요')); return; }
@@ -17910,7 +17923,8 @@ async function submitReserveRequest(){
   btn.disabled = true; btn.textContent = t('resv.submitting','요청 중…');
   var res = await window.sb.rpc('create_reservation_request', {
     p_venue_id: _prCurrent, p_reserve_date: date, p_reserve_time: time,
-    p_party_size: party, p_member_memo: memo, p_conditions_accepted: true
+    p_party_size: party, p_member_memo: memo, p_conditions_accepted: true,
+    p_allergy: allergy
   });
   btn.disabled = false; btn.textContent = t('resv.submit','예약 요청 보내기');
 
@@ -18058,6 +18072,8 @@ async function raLoadRequests(){
   el.innerHTML = reqs.map(function(r){ return _raReqHtml(r, names[r.user_id]); }).join('');
 }
 
+function _raEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
 function _raReqHtml(r, name){
   var dows = t('resv.dows','일,월,화,수,목,금,토').split(',');
   var d = new Date(r.reserve_date + 'T00:00:00');
@@ -18076,12 +18092,94 @@ function _raReqHtml(r, name){
   var badge = r.status==='confirmed'
     ? '<span style="font-size:9px;background:#e8f5e9;color:#2a7a2a;padding:2px 8px;border-radius:10px;font-weight:800;">'+t('resvadm.confirmed','확정')+(r.deposit_status==='unpaid'?' · '+t('resvadm.unpaid_badge','예치금부족'):'')+'</span>'
     : '<span style="font-size:9px;background:#fff3e0;color:#b26a00;padding:2px 8px;border-radius:10px;font-weight:800;">'+t('resvadm.pending','대기')+'</span>';
+  // 알러지 강조 박스
+  var allergyHtml = r.allergy
+    ? '<div style="margin-top:8px;padding:8px 10px;background:#fff4f4;border:1px solid #f3d6d6;border-radius:8px;font-size:12px;color:#a32020;">⚠ '+t('resvadm.allergy','알러지/식이')+': '+_raEsc(r.allergy)+'</div>'
+    : '';
+  // 어드민 메모 초기값
+  var memoVal = _raEsc(r.admin_memo || '');
   return '<div style="border:1px solid #ece7df;border-radius:12px;padding:14px;margin-bottom:10px;">'
     + '<div style="display:flex;justify-content:space-between;align-items:center;"><div style="font-weight:700;font-size:14px;color:#1a1a18;">'+who+'</div>'+badge+'</div>'
     + '<div style="font-size:13px;color:#444;margin-top:6px;">'+dateStr+' · '+r.party_size+t('resv.people','명')+'</div>'
-    + (r.member_memo ? '<div style="font-size:12px;color:#888;margin-top:4px;">"'+r.member_memo+'"</div>' : '')
+    + (r.member_memo ? '<div style="font-size:12px;color:#888;margin-top:4px;">"'+_raEsc(r.member_memo)+'"</div>' : '')
+    + allergyHtml
+    // 요청자 정보 아코디언
+    + '<div onclick="raToggleInfo(\''+r.id+'\',\''+r.user_id+'\',\''+_raEsc(r.venue_id)+'\')" style="display:flex;align-items:center;justify-content:space-between;margin-top:10px;padding:9px 11px;background:#faf8f5;border:1px solid #ece7df;border-radius:8px;cursor:pointer;">'
+    +   '<span style="font-size:12px;font-weight:700;color:#5C0A14;">'+t('resvadm.requester_info','요청자 정보')+'</span>'
+    +   '<svg id="raChev_'+r.id+'" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#999" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="transition:transform .2s;"><polyline points="6 9 12 15 18 9"/></svg>'
+    + '</div>'
+    + '<div id="raInfo_'+r.id+'" data-loaded="0" style="display:none;margin-top:8px;padding:12px;background:#fff;border:1px solid #ece7df;border-radius:8px;">'
+    +   '<div id="raStat_'+r.id+'" style="font-size:12px;color:#666;">'+t('resv.loading','불러오는 중…')+'</div>'
+    +   '<div style="margin-top:12px;border-top:1px solid #f0ede8;padding-top:10px;">'
+    +     '<div style="font-size:11px;font-weight:700;color:#888;margin-bottom:6px;">'+t('resvadm.admin_memo','어드민 메모 (회원에게 안 보임)')+'</div>'
+    +     '<textarea id="raMemo_'+r.id+'" rows="2" data-i18n-ph="resvadm.admin_memo_ph" placeholder="예: 창가 선호, 갑각류 주의, 기념일 방문" style="width:100%;box-sizing:border-box;padding:9px 10px;border:1px solid #e0dcd4;border-radius:8px;font-size:13px;resize:vertical;">'+memoVal+'</textarea>'
+    +     '<button onclick="raSaveMemo(\''+r.id+'\')" style="margin-top:8px;padding:8px 14px;border:none;border-radius:8px;background:#1a1a18;color:#fff;font-size:11px;font-weight:700;cursor:pointer;">'+t('resvadm.memo_save','메모 저장')+'</button>'
+    +   '</div>'
+    + '</div>'
     + (actions ? '<div style="display:flex;gap:8px;margin-top:12px;">'+actions+'</div>' : '')
     + '</div>';
+}
+
+// 요청자 정보 아코디언 토글 + 최초 1회 로드
+function raToggleInfo(reqId, userId, venueId){
+  var box = document.getElementById('raInfo_'+reqId); if(!box) return;
+  var chev = document.getElementById('raChev_'+reqId);
+  var open = box.style.display === 'block';
+  box.style.display = open ? 'none' : 'block';
+  if(chev) chev.style.transform = open ? 'rotate(0deg)' : 'rotate(180deg)';
+  if(!open && box.dataset.loaded === '0'){ box.dataset.loaded = '1'; raLoadInfo(reqId, userId, venueId); }
+}
+
+async function raLoadInfo(reqId, userId, venueId){
+  var stat = document.getElementById('raStat_'+reqId); if(!stat) return;
+  try{
+    var res = await window.sb.rpc('get_requester_info', { p_user_id: userId, p_venue_id: venueId });
+    var info = (res.data && (Array.isArray(res.data)?res.data[0]:res.data)) || {};
+    var dows = t('resv.dows','일,월,화,수,목,금,토').split(',');
+    var lastStr = '';
+    if(info.last_visit){ var lv=new Date(info.last_visit+'T00:00:00'); lastStr=(lv.getMonth()+1)+'.'+lv.getDate()+' ('+dows[lv.getDay()]+')'; }
+    var tier = info.membership_tier ? (info.membership_tier+t('resvadm.tier_suffix','등급')) : '-';
+    var rows = ''
+      + '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">'
+      +   '<span style="font-size:11px;background:#f3efe8;color:#5C0A14;font-weight:700;padding:3px 9px;border-radius:12px;">'+t('resvadm.buy','구매')+' '+(info.purchase_count||0)+'</span>'
+      +   '<span style="font-size:11px;background:#f3efe8;color:#a32020;font-weight:700;padding:3px 9px;border-radius:12px;">'+t('resvadm.cancel','캔슬')+' '+(info.cancel_count||0)+'</span>'
+      +   '<span style="font-size:11px;background:#f3efe8;color:#444;font-weight:700;padding:3px 9px;border-radius:12px;">'+t('resvadm.tier','등급')+' '+_raEsc(info.membership_tier||'-')+'</span>'
+      + '</div>'
+      + '<div style="font-size:12px;color:#555;line-height:1.7;">'
+      +   '<div>'+t('resvadm.phone','전화')+': '+_raEsc(info.phone||'-')+'</div>'
+      +   '<div>'+t('resvadm.nationality','국적')+': '+_raEsc(info.nationality||'-')+'</div>'
+      +   '<div>'+t('resvadm.venue_visits','이 매장 방문')+': '+(info.venue_visits||0)+t('resv.people_visit','회')+(lastStr?' ('+t('resvadm.last_visit','지난 방문')+' '+lastStr+')':'')+'</div>'
+      + '</div>';
+    stat.innerHTML = rows;
+  }catch(e){ stat.innerHTML = '<span style="color:#c00;font-size:12px;">'+t('resv.load_fail','불러오기 실패')+'</span>'; return; }
+
+  // 이 매장 방문이력 (attended) — 어드민 메모 포함
+  try{
+    var h = await window.sb.from('reservation_requests')
+      .select('reserve_date, admin_memo')
+      .eq('user_id', userId).eq('venue_id', venueId).eq('visit_status','attended')
+      .order('reserve_date', { ascending: false }).limit(10);
+    var list = (h.data||[]);
+    if(list.length){
+      var dows2 = t('resv.dows','일,월,화,수,목,금,토').split(',');
+      var html = '<div style="margin-top:10px;border-top:1px solid #f0ede8;padding-top:8px;">'
+        + '<div style="font-size:11px;font-weight:700;color:#888;margin-bottom:5px;">'+t('resvadm.visit_history','방문 이력')+'</div>';
+      html += list.map(function(v){
+        var vd=new Date(v.reserve_date+'T00:00:00');
+        var ds=(vd.getMonth()+1)+'.'+vd.getDate()+' ('+dows2[vd.getDay()]+')';
+        return '<div style="font-size:12px;color:#555;padding:3px 0;">• '+ds+(v.admin_memo?' — <span style="color:#888;">'+_raEsc(v.admin_memo)+'</span>':'')+'</div>';
+      }).join('');
+      html += '</div>';
+      stat.insertAdjacentHTML('beforeend', html);
+    }
+  }catch(e){}
+}
+
+async function raSaveMemo(reqId){
+  var ta = document.getElementById('raMemo_'+reqId); if(!ta) return;
+  var res = await window.sb.rpc('set_reservation_admin_memo', { p_request_id: reqId, p_memo: ta.value || '' });
+  if(res.error){ showToast('⚠', t('resvadm.t_fail','처리 실패'), res.error.message||''); return; }
+  showToast('✓', t('resvadm.t_done','완료'), t('resvadm.memo_saved','메모를 저장했어요'));
 }
 
 async function raAct(id, action){
@@ -18094,6 +18192,28 @@ async function raAct(id, action){
     showToast('⚠', t('resvadm.t_fail','처리 실패'), msg); return;
   }
   showToast('✓', t('resvadm.t_done','완료'), action==='confirm'?t('resvadm.t_accepted','수락했어요'):action==='decline'?t('resvadm.t_declined','거절했어요'):action==='attended'?t('resvadm.t_visit','방문 기록 완료'):t('resvadm.t_noshow','노쇼 기록 완료'));
+
+  // 수락 시 요청 회원에게 푸시 알림 (확정 안내)
+  if(action==='confirm'){
+    var row = res.data && (Array.isArray(res.data)?res.data[0]:res.data);
+    if(row && row.user_id){
+      var dows = t('resv.dows','일,월,화,수,목,금,토').split(',');
+      var pd = row.reserve_date ? new Date(row.reserve_date+'T00:00:00') : null;
+      var pdStr = pd ? (pd.getMonth()+1)+'.'+pd.getDate()+' ('+dows[pd.getDay()]+')'+(row.reserve_time?' '+String(row.reserve_time).slice(0,5):'') : '';
+      try{
+        window.sb.functions.invoke('send-push', {
+          body: {
+            to: 'uid:'+row.user_id,
+            payload: {
+              title: t('resvadm.push_confirm_title','예약이 확정되었어요'),
+              body: _resvVenueName(row.venue_id) + (pdStr ? ' · '+pdStr : ''),
+              url: '/', category: 'reservation_result', tag: 'taam-resv-result'
+            }
+          }
+        });
+      }catch(e){}
+    }
+  }
   raLoadRequests();
 }
 
@@ -18211,6 +18331,19 @@ function openProfileEdit(){
       } catch(e){}
     }
   }
+  // 국적 로드 (profiles.nationality)
+  var natEl=document.getElementById('peNationality');
+  if(natEl && window.sb){
+    natEl.value='';
+    try{
+      window.sb.auth.getUser().then(function(ar){
+        var u=ar&&ar.data&&ar.data.user; if(!u) return;
+        window.sb.from('profiles').select('nationality').eq('id',u.id).maybeSingle().then(function(r){
+          if(r&&r.data&&r.data.nationality) natEl.value=r.data.nationality;
+        });
+      });
+    }catch(e){}
+  }
   // 주소 초기화
   var skipCb=document.getElementById('peSkipAddr');
   skipCb.checked=false;
@@ -18314,6 +18447,17 @@ function saveProfileEdit(){
   // 마이페이지 핸드폰 번호 반영
   var phone=document.getElementById('pePhoneDisplay').value;
   if(phone) document.getElementById('mpPhoneText').textContent=phone;
+  // 국적 저장 (profiles.nationality)
+  var natEl=document.getElementById('peNationality');
+  if(natEl && window.sb){
+    var natVal=(natEl.value||'').trim();
+    try{
+      window.sb.auth.getUser().then(function(ar){
+        var u=ar&&ar.data&&ar.data.user; if(!u) return;
+        window.sb.from('profiles').update({ nationality: natVal||null }).eq('id',u.id);
+      });
+    }catch(e){}
+  }
   closeProfileConfirm();
   closePage('profileEditPage');
   showToast('✓', (typeof t==='function'?t('toast.profile_save_title'):'변경 완료'), (typeof t==='function'?t('toast.profile_save_msg'):'회원정보가 저장되었습니다'));
@@ -26694,6 +26838,7 @@ var TRANSLATIONS = {
       pe_title:'회원정보 변경',
       pe_field_name:'이름',
       pe_field_phone:'핸드폰 번호',
+      pe_field_nationality:'국적', pe_ph_nationality:'예: 대한민국 / 日本 / United States',
       pe_btn_change:'변경',
       pe_skip_text:'입력 생략',
       pe_field_addr:'주소',
@@ -27046,6 +27191,7 @@ var TRANSLATIONS = {
       cond_hours:'예약 가능 시간', cond_deposit_pp:'예약금 1인', cond_meal:'식사', cond_alcohol:'주류',
       cond_party:'수용 인원', cond_closed:'휴무', closed_suffix:'요일',
       date:'희망 날짜', time:'희망 시간', party:'인원', memo:'메모 (선택)', memo_ph:'예: 기념일, 조용한 자리',
+      allergy:'알러지 / 식이 (선택)', allergy_ph:'예: 갑각류 알러지, 비건, 매운 음식 불가', people_visit:'회',
       agree:'위 매장 조건(예약금·시간 등)을 확인했고 동의합니다.',
       pay_preview:'확정 시 결제', fee:'중계수수료', total:'총', no_deposit:'예약금 없음',
       submit:'예약 요청 보내기', submitting:'요청 중…',
@@ -27088,6 +27234,12 @@ var TRANSLATIONS = {
       no_rest:'연동된 레스토랑 없음',
       notify_sect:'요청 알림', notify_push_hint:'앱 푸시는 자동 발송 · 아래는 추가 채널(선택)',
       notify_phone:'카카오 알림톡 전화번호', notify_line:'LINE ID',
+      allergy:'알러지/식이', requester_info:'요청자 정보',
+      admin_memo:'어드민 메모 (회원에게 안 보임)', admin_memo_ph:'예: 창가 선호, 갑각류 주의, 기념일 방문',
+      memo_save:'메모 저장', memo_saved:'메모를 저장했어요',
+      buy:'구매', cancel:'캔슬', tier:'등급', tier_suffix:'등급',
+      phone:'전화', nationality:'국적', venue_visits:'이 매장 방문', last_visit:'지난 방문',
+      visit_history:'방문 이력', push_confirm_title:'예약이 확정되었어요',
     },
   },
   en: {
@@ -27429,6 +27581,7 @@ var TRANSLATIONS = {
       pe_title:'Edit Profile',
       pe_field_name:'Name',
       pe_field_phone:'Phone Number',
+      pe_field_nationality:'Nationality', pe_ph_nationality:'e.g. Korea / Japan / United States',
       pe_btn_change:'Change',
       pe_skip_text:'Skip',
       pe_field_addr:'Address',
@@ -27775,6 +27928,7 @@ var TRANSLATIONS = {
       cond_hours:'Available times', cond_deposit_pp:'Deposit per person', cond_meal:'Meal', cond_alcohol:'Drinks',
       cond_party:'Party size', cond_closed:'Closed', closed_suffix:'',
       date:'Preferred date', time:'Preferred time', party:'Guests', memo:'Note (optional)', memo_ph:'e.g. Anniversary, quiet table',
+      allergy:'Allergy / Dietary (optional)', allergy_ph:'e.g. Shellfish allergy, vegan, no spicy', people_visit:'visit(s)',
       agree:'I have reviewed and agree to the venue conditions (deposit, hours, etc.).',
       pay_preview:'Charged on confirmation', fee:'Service fee', total:'Total', no_deposit:'No deposit',
       submit:'Send Request', submitting:'Sending…',
@@ -27817,6 +27971,12 @@ var TRANSLATIONS = {
       no_rest:'No linked restaurant',
       notify_sect:'Request Alerts', notify_push_hint:'App push is automatic · optional extra channels below',
       notify_phone:'KakaoTalk AlimTalk phone', notify_line:'LINE ID',
+      allergy:'Allergy/Dietary', requester_info:'Requester info',
+      admin_memo:'Admin memo (hidden from member)', admin_memo_ph:'e.g. Prefers window seat, shellfish allergy, anniversary',
+      memo_save:'Save memo', memo_saved:'Memo saved',
+      buy:'Purchases', cancel:'Cancels', tier:'Tier', tier_suffix:'',
+      phone:'Phone', nationality:'Nationality', venue_visits:'Visits here', last_visit:'last',
+      visit_history:'Visit history', push_confirm_title:'Your reservation is confirmed',
     },
   },
 };
@@ -27937,6 +28097,7 @@ TRANSLATIONS.ja = {
     pe_title:'プロフィール編集',
     pe_field_name:'お名前',
     pe_field_phone:'電話番号',
+    pe_field_nationality:'国籍', pe_ph_nationality:'例：韓国 / 日本 / アメリカ',
     pe_btn_change:'変更',
     pe_skip_text:'スキップ',
     pe_field_addr:'住所',
@@ -28463,6 +28624,7 @@ TRANSLATIONS.ja = {
     cond_hours:'予約可能時間', cond_deposit_pp:'予約金（1名）', cond_meal:'お食事', cond_alcohol:'お飲み物',
     cond_party:'人数', cond_closed:'定休', closed_suffix:'曜日',
     date:'希望日', time:'希望時間', party:'人数', memo:'メモ（任意）', memo_ph:'例：記念日、静かな席',
+    allergy:'アレルギー / 食事制限（任意）', allergy_ph:'例：甲殻類アレルギー、ビーガン、辛い料理不可', people_visit:'回',
     agree:'上記の店舗条件（予約金・時間など）を確認し、同意します。',
     pay_preview:'確定時のお支払い', fee:'仲介手数料', total:'合計', no_deposit:'予約金なし',
     submit:'リクエストを送信', submitting:'送信中…',
@@ -28505,6 +28667,12 @@ TRANSLATIONS.ja = {
     no_rest:'連携されたレストランがありません',
     notify_sect:'リクエスト通知', notify_push_hint:'アプリ通知は自動送信 · 以下は追加チャネル（任意）',
     notify_phone:'カカオ アラームトーク電話番号', notify_line:'LINE ID',
+    allergy:'アレルギー/食事', requester_info:'リクエスト者情報',
+    admin_memo:'管理者メモ（会員には非表示）', admin_memo_ph:'例：窓際希望、甲殻類注意、記念日来店',
+    memo_save:'メモを保存', memo_saved:'メモを保存しました',
+    buy:'購入', cancel:'キャンセル', tier:'等級', tier_suffix:'',
+    phone:'電話', nationality:'国籍', venue_visits:'当店来店', last_visit:'前回',
+    visit_history:'来店履歴', push_confirm_title:'予約が確定しました',
   },
 };
 
