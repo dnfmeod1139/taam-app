@@ -11069,23 +11069,39 @@ async function renderMyInvites(){
         var tp = visitTime.split(':'), hh = parseInt(tp[0]);
         visitTime = (hh>12?hh-12:(hh===0?12:hh))+':'+tp[1]+' '+(hh>=12?'PM':'AM');
       }
-      var newBadge = !inv.invitee_seen ? '<span style="margin-left:6px;font-size:9px;font-weight:800;color:#fff;background:#e53935;border-radius:8px;padding:2px 6px;letter-spacing:.05em;">NEW</span>' : '';
+      var newBadge = !inv.invitee_seen ? '<span style="margin-left:7px;font-size:9px;font-weight:800;color:#fff;background:#e53935;border-radius:8px;padding:2px 6px;letter-spacing:.05em;vertical-align:middle;">NEW</span>' : '';
+      // 방문 요일 (visit_date 가 파싱 가능할 때만 표시)
+      var weekday = '';
+      try {
+        var _vd = new Date(String(inv.visit_date||'').replace(/\./g,'-').replace(/-+$/,''));
+        if(!isNaN(_vd.getTime())) weekday = ' ('+['일','월','화','수','목','금','토'][_vd.getDay()]+')';
+      } catch(_we){ weekday = ''; }
 
-      return '<div style="background:#fff;border:1px solid #ece8df;border-radius:12px;padding:14px 16px;margin-bottom:10px;">'
-           + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:10px;">'
+      return '<div style="background:#fff;border:1px solid #ece8df;border-radius:14px;padding:16px 16px 14px;margin-bottom:11px;box-shadow:0 1px 3px rgba(0,0,0,.04);">'
+           // ── 헤더: 매장명(크게) + 상태배지 ──
+           + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">'
            +   '<div style="min-width:0;flex:1;">'
-           +     '<div style="font-size:14px;font-weight:800;color:#1a1a18;">'+_riEscHtml(inv.restaurant_name||'레스토랑')+newBadge+'</div>'
-           +     '<div style="font-size:11px;color:#777;margin-top:2px;">'+_riEscHtml((inv.ticket_genre || '')+(inv.type_class === 'eve' ? ' · Event' : ' · Standard'))+'</div>'
+           +     '<div style="font-size:19px;font-weight:800;line-height:1.2;color:#1a1a18;letter-spacing:-.01em;word-break:keep-all;">'+_riEscHtml(inv.restaurant_name||'레스토랑')+newBadge+'</div>'
+           +     '<div style="font-size:11px;color:#9a9a92;margin-top:4px;letter-spacing:.02em;">'+_riEscHtml((inv.ticket_genre || '')+(inv.type_class === 'eve' ? ' · Event' : ' · Standard'))+'</div>'
            +   '</div>'
-           +   '<div style="font-size:10px;font-weight:800;color:'+statusColor+';background:'+statusBg+';border:1px solid '+statusColor+';border-radius:6px;padding:3px 8px;flex-shrink:0;white-space:nowrap;">'+statusLabel+'</div>'
+           +   '<div style="font-size:10px;font-weight:800;color:'+statusColor+';background:'+statusBg+';border:1px solid '+statusColor+';border-radius:7px;padding:4px 9px;flex-shrink:0;white-space:nowrap;">'+statusLabel+'</div>'
            + '</div>'
-           + '<div style="display:flex;flex-direction:column;gap:5px;padding-top:10px;border-top:1px solid #f0ede8;">'
-           +   '<div style="display:flex;justify-content:space-between;font-size:11.5px;"><span style="color:#999;">방문일</span><span style="color:#1a1a18;font-weight:700;">'+_riEscHtml((inv.visit_date||'')+' '+visitTime)+'</span></div>'
-           +   '<div style="display:flex;justify-content:space-between;font-size:11.5px;"><span style="color:#999;">인원·금액</span><span style="color:#1a1a18;font-weight:700;">'+inv.pax+'인 · ₩'+(inv.total_amount||0).toLocaleString()+'</span></div>'
-           +   '<div style="display:flex;justify-content:space-between;font-size:10.5px;color:#aaa;margin-top:4px;flex-wrap:wrap;gap:6px;">'
-           +     '<span>📥 받은 시각 '+sentAt+'</span>'
-           +     (paidAt ? '<span style="color:#2a7a2a;">💳 '+paidAt+'</span>' : '')
+           // ── 방문 일시 강조 스트립 (한눈에: 날짜·시간 + 인원·금액) ──
+           + '<div style="display:flex;align-items:center;gap:11px;margin-top:13px;padding:11px 13px;background:#faf8f3;border:1px solid #f0ece1;border-radius:11px;">'
+           +   '<span style="font-size:18px;line-height:1;flex-shrink:0;">🗓️</span>'
+           +   '<div style="min-width:0;">'
+           +     '<div style="font-size:15.5px;font-weight:800;color:#1a1a18;line-height:1.25;">'+_riEscHtml((inv.visit_date||'')+weekday)+'</div>'
+           +     (visitTime ? '<div style="font-size:13px;font-weight:800;color:#5C0A14;margin-top:2px;letter-spacing:.02em;">'+_riEscHtml(visitTime)+'</div>' : '')
            +   '</div>'
+           +   '<div style="margin-left:auto;text-align:right;flex-shrink:0;">'
+           +     '<div style="font-size:9.5px;color:#a8a89e;letter-spacing:.03em;">인원·금액</div>'
+           +     '<div style="font-size:13px;font-weight:800;color:#1a1a18;margin-top:2px;white-space:nowrap;">'+inv.pax+'인 · ₩'+(inv.total_amount||0).toLocaleString()+'</div>'
+           +   '</div>'
+           + '</div>'
+           // ── 받은/결제 시각 ──
+           + '<div style="display:flex;justify-content:space-between;font-size:10.5px;color:#b3b3aa;margin-top:9px;flex-wrap:wrap;gap:6px;">'
+           +   '<span>📥 받은 시각 '+sentAt+'</span>'
+           +   (paidAt ? '<span style="color:#2a7a2a;">💳 '+paidAt+'</span>' : '')
            + '</div>'
            + payBtn
            + '</div>';
