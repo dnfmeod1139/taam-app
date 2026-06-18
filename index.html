@@ -32951,13 +32951,71 @@ function _onSwMessage(event){
 
 // 부팅 시 SW 등록 (DOMContentLoaded 후)
 (function(){
-  function boot(){ setTimeout(pushRegisterSW, 500); }
+  function boot(){
+    setTimeout(pushRegisterSW, 500);
+    // 🆕 이미 알림 허용된 기기는 부팅 시 DB 구독을 조용히 재동기화 (수동 '재구독' 불필요)
+    setTimeout(function(){ if(typeof pushAutoSyncOnBoot === 'function') pushAutoSyncOnBoot(); }, 2500);
+  }
   if(document.readyState === 'loading'){
     document.addEventListener('DOMContentLoaded', boot);
   } else {
     boot();
   }
 })();
+
+// 🆕 구독 저장 공통 — SECURITY DEFINER RPC(save_push_subscription) 우선 → RLS 우회.
+//   RPC 미배포 등으로 실패하면 기존 직접 upsert 로 폴백. 반환: { error, via }.
+async function _pushSaveSub(payload){
+  try {
+    var rpc = await window.sb.rpc('save_push_subscription', {
+      p_endpoint: payload.endpoint,
+      p_p256dh: payload.p256dh,
+      p_auth: payload.auth,
+      p_user_agent: payload.user_agent || null,
+      p_device_label: payload.device_label || null,
+      p_role: payload.role || null,
+      p_topics: payload.topics || []
+    });
+    if(!rpc.error) return { error: null, via: 'rpc' };
+    console.warn('[Push] RPC 저장 실패 → upsert 폴백:', rpc.error.message);
+    var up = await window.sb.from('push_subscriptions').upsert(payload, { onConflict: 'endpoint' });
+    return { error: up.error, via: 'upsert' };
+  } catch(e){ return { error: e }; }
+}
+window._pushSaveSub = _pushSaveSub;
+
+// 🆕 부팅 자동 재동기화 — 권한이 이미 'granted' 인 기기의 구독을 토스트 없이 DB 에 upsert.
+//   과거 RLS 등으로 push_subscriptions 저장이 실패했던 기기를, 사용자가 '재구독'을
+//   누르지 않아도 다음 앱 실행 시 자동 복구한다. (실패해도 조용히 — 결제/푸시 흐름 무관)
+async function pushAutoSyncOnBoot(){
+  try {
+    if (typeof isNativeApp === 'function' && isNativeApp()) return; // 네이티브는 별도 플로우
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+    if (!window.sb) return;
+    var ur = await window.sb.auth.getUser();
+    var u = ur && ur.data && ur.data.user;
+    if (!u) return;
+    if (!_swReg) await pushRegisterSW();
+    if (!_swReg) return;
+    var sub = await _swReg.pushManager.getSubscription();
+    if (!sub) {
+      if (!VAPID_PUBLIC_KEY || VAPID_PUBLIC_KEY.indexOf('REPLACE') >= 0) return;
+      try {
+        sub = await _swReg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: _urlB64ToUint8Array(VAPID_PUBLIC_KEY),
+        });
+      } catch(_se) { return; }
+    }
+    _pushSubscription = sub;
+    var payload = _subToPayload(sub);
+    payload.user_id = u.id;
+    var r = await _pushSaveSub(payload);
+    if (r.error) console.warn('[Push] boot auto-sync 실패:', r.error.message);
+    else console.log('[Push] boot auto-sync OK — 구독 DB 재저장 (' + r.via + ')');
+  } catch(e){ console.warn('[Push] boot auto-sync 예외:', e && e.message); }
+}
+window.pushAutoSyncOnBoot = pushAutoSyncOnBoot;
 
 // VAPID public key (base64url) → Uint8Array
 function _urlB64ToUint8Array(base64){
@@ -33132,12 +33190,12 @@ window.pushSubscribeIfNeeded = async function(){
       _err('로그인 필요','Supabase Auth 로그인 후 다시 시도');
     }
     payload.user_id = userRes.data.user.id;
-    var saveRes = await window.sb.from('push_subscriptions')
-      .upsert(payload, { onConflict: 'endpoint' });
+    // 🆕 RLS 우회 RPC 우선 저장 (실패 시 직접 upsert 폴백)
+    var saveRes = await _pushSaveSub(payload);
     if(saveRes.error){
       _err('DB 저장 실패', (saveRes.error.message||'').substring(0,80));
     }
-    console.log('[Push] 구독 저장 완료:', payload.endpoint.substring(0, 50) + '...');
+    console.log('[Push] 구독 저장 완료(' + (saveRes.via||'?') + '):', payload.endpoint.substring(0, 50) + '...');
     _ok('푸시 구독 완료','다른 기기에서도 알림 받을 수 있어요');
   }catch(e){
     // _err 가 throw 한 경우 위에서 잡혀서 다시 throw 됨
