@@ -24253,6 +24253,47 @@ async function riConfirmPay(){
     }).eq('id', inv.id);
     if(inv2.error) console.warn('[riPay] 상태 갱신 실패:', inv2.error.message);
 
+    // 2.5) 호스트(슈퍼어드민)에게 결제 완료 통지 — 인앱 알림 + 푸시
+    //   (cancelMyInvite 의 호스트 통지 패턴과 동일)
+    try {
+      var paidTitle = '💳 회원이 초대 결제를 완료했습니다';
+      var paidVisit = (inv.visit_date || '') + ' ' + (inv.visit_time || '');
+      var paidBody = (inv.restaurant_name || '') + ' · ' + paidVisit + ' · ' + (inv.pax||1) + '인 · ₩' + (inv.total_amount||0).toLocaleString();
+      if(inv.host_user_id){
+        await window.sb.from('notifications').insert({
+          user_id: inv.host_user_id,
+          type: 'invite_paid',
+          kind: 'invite_paid',
+          title: paidTitle,
+          body: paidBody,
+          message: paidBody,
+          url: '/?sent_invites=1',
+          payload: {
+            invite_id: inv.id,
+            paid_by: u.id,
+            restaurant_name: inv.restaurant_name,
+            total_amount: inv.total_amount,
+            visit_date: inv.visit_date
+          }
+        });
+        // 푸시 (호스트가 구독 안 했어도 Edge Function 이 자동 skip — 무해)
+        try {
+          await window.sb.functions.invoke('send-push', {
+            body: {
+              to: 'uid:' + inv.host_user_id,
+              payload: {
+                title: paidTitle,
+                body: paidBody,
+                url: '/',
+                category: 'invite_paid',
+                tag: 'taam-paid-' + inv.id
+              }
+            }
+          });
+        } catch(_ppe){ console.warn('[riPay] host 푸시 실패:', _ppe); }
+      }
+    } catch(_pne){ console.warn('[riPay] host 결제완료 통지 예외:', _pne); }
+
     // 🆕 v1.53.33 2026.06.01: 초대 결제도 일반 티켓처럼 구매 내역에 표시.
     //   purchaseHistory 메모리에 push → savePurchase() 로 IDB + Supabase tickets 동기화.
     //   isInvited:true / inviteDesc 로 UI 에서 "초대로 구매" 배지 표시.
