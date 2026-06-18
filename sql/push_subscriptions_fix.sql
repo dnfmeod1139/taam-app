@@ -55,13 +55,22 @@ begin
   end if;
 end $$;
 
--- 4) RLS + 본인 구독 CRUD 정책 (drop & recreate — 멱등)
+-- 4) RLS — 기존 정책 전부 제거 후 깨끗하게 재생성
+--    증상 에러: "new row violates row-level security policy (USING expression)"
+--    → 라이브 DB 에 이름 모를 구버전/제한 정책이 남아 INSERT 차단 중일 수 있으므로
+--      이름 불문 모든 정책을 동적으로 drop 한 뒤 올바른 본인-구독 CRUD 정책만 재생성.
 alter table public.push_subscriptions enable row level security;
 
-drop policy if exists "own_subs_select" on public.push_subscriptions;
-drop policy if exists "own_subs_insert" on public.push_subscriptions;
-drop policy if exists "own_subs_update" on public.push_subscriptions;
-drop policy if exists "own_subs_delete" on public.push_subscriptions;
+do $$
+declare pol record;
+begin
+  for pol in
+    select policyname from pg_policies
+    where schemaname = 'public' and tablename = 'push_subscriptions'
+  loop
+    execute format('drop policy if exists %I on public.push_subscriptions', pol.policyname);
+  end loop;
+end $$;
 
 create policy "own_subs_select" on public.push_subscriptions
   for select using (auth.uid() = user_id);
