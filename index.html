@@ -18673,6 +18673,29 @@ function ticketHistRender(idx){
   }).join('');
 }
 
+// 🆕 날짜 문자열 파서 — 'YYYY.MM.DD'(연도 포함) 와 'MM.DD'(레거시) 모두 Date 로.
+//   · 3-part: 저장된 연도 그대로 사용 (정확).
+//   · 2-part: 현재연도 기준. 단 명백히 과거(120일 초과)면 다음해로 롤포워드 →
+//     연말→연초로 넘어가는 예약을 "지난 예약"으로 오판하던 버그 방지.
+function _dParseDate(str){
+  if(!str) return null;
+  var p = String(str).trim().split('.').map(function(x){ return parseInt(x,10); });
+  if(p.length >= 3){
+    if(isNaN(p[0])||isNaN(p[1])||isNaN(p[2])) return null;
+    var dt = new Date(p[0], p[1]-1, p[2]);
+    return isNaN(dt.getTime()) ? null : dt;
+  }
+  if(p.length === 2){
+    if(isNaN(p[0])||isNaN(p[1])) return null;
+    var now = new Date();
+    var d = new Date(now.getFullYear(), p[0]-1, p[1]);
+    if((now - d) > 120*24*3600*1000) d = new Date(now.getFullYear()+1, p[0]-1, p[1]); // 롤포워드
+    return d;
+  }
+  return null;
+}
+window._dParseDate = _dParseDate;
+
 // 🆕 2026.05.21: 환불 가능 금액 계산 — TAAM 환불 정책
 //   정책:
 //     1. 구매 30분 이내 → 전액 환불 (대행비 포함)
@@ -18705,13 +18728,8 @@ function calculateTicketRefund(purchaseRecord, restaurant, currentTime, isSuperA
     }
   }
 
-  // 방문일까지 남은 일수 계산
-  var visitDate = null;
-  if(purchaseRecord.visitDate){
-    var parts = purchaseRecord.visitDate.split('.');
-    if(parts.length === 3) visitDate = new Date(parseInt(parts[0]), parseInt(parts[1])-1, parseInt(parts[2]));
-    else if(parts.length === 2) visitDate = new Date(currentTime.getFullYear(), parseInt(parts[0])-1, parseInt(parts[1]));
-  }
+  // 방문일까지 남은 일수 계산 (연도 포함/레거시 MM.DD 모두 공용 파서로)
+  var visitDate = purchaseRecord.visitDate ? _dParseDate(purchaseRecord.visitDate) : null;
   if(!visitDate || isNaN(visitDate.getTime())){
     // 방문일 모르면 — 보수적으로 대행비 제외 환불 (정책 2 기본)
     return { refundable: paidTotal - agencyTotal, agencyHeld: agencyTotal, reason: '대행비 제외 환불 (방문일 미확인)', policy: 'agency_excluded' };
@@ -18917,11 +18935,8 @@ var _dmCurrentPurchaseIdx = -1;
 var _dmPenaltyPct = 100;
 
 function parseDmDate(str){
-  if(!str) return null;
-  var p = str.split('.');
-  if(p.length === 3) return new Date(parseInt(p[0]), parseInt(p[1])-1, parseInt(p[2]));
-  if(p.length === 2) return new Date(2026, parseInt(p[0])-1, parseInt(p[1]));
-  return null;
+  // 연도 포함(YYYY.MM.DD) 우선, 레거시 MM.DD 는 롤포워드 — 공용 파서 사용
+  return _dParseDate(str);
 }
 
 // ── dm 팝업들이 올바른 아이템 참조하도록 ──
@@ -23513,6 +23528,14 @@ async function riSubmit(){
     var u = (await window.sb.auth.getUser()).data.user;
     if(!u){ showToast('⚠','인증 필요','다시 로그인 해주세요'); return; }
 
+    // 🆕 연도 보존: 캘린더가 MM.DD 만 주므로, 발송 시 연도 포함 'YYYY.MM.DD' 로 저장.
+    //   예약은 항상 미래 → 과거로 보이는 MM.DD 는 내년으로 롤포워드(_dParseDate)되어 정확.
+    var _riVisitDate = _riDate;
+    var _riVd = _dParseDate(_riDate);
+    if(_riVd){
+      _riVisitDate = _riVd.getFullYear() + '.' + String(_riVd.getMonth()+1).padStart(2,'0') + '.' + String(_riVd.getDate()).padStart(2,'0');
+    }
+
     var insertRow = {
       host_user_id: u.id,
       invitee_user_id: _riInvitee.id,
@@ -23520,7 +23543,7 @@ async function riSubmit(){
       restaurant_name: restName,
       ticket_genre: _riTicketGenre,
       type_class: _riType,
-      visit_date: _riDate,
+      visit_date: _riVisitDate,
       visit_time: _riTime,
       pax: _riPax,
       meal_fee: meal,
