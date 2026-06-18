@@ -6634,12 +6634,12 @@ window.closePromoCarousel = function(){
 </div>
 
 <!-- TD DONE POPUP -->
-<div id="tdDonePopup" style="display:none;position:fixed;inset:0;z-index:810;background:rgba(0,0,0,.5);align-items:center;justify-content:center;" onclick="if(event.target===this){this.style.display='none';closeTicketDetail();}">
+<div id="tdDonePopup" style="display:none;position:fixed;inset:0;z-index:810;background:rgba(0,0,0,.5);align-items:center;justify-content:center;" onclick="if(event.target===this){this.style.display='none';closeTicketDetail();if(typeof showRefundPolicyNotice==='function')showRefundPolicyNotice();}">
   <div style="background:#fff;border-radius:20px;padding:32px 28px;max-width:320px;width:calc(100% - 48px);text-align:center;">
     <div style="font-size:32px;margin-bottom:12px;">✓</div>
     <div data-i18n="ticket.done_title" style="font-family:var(--font-main);font-size:18px;font-weight:800;color:#111;margin-bottom:8px;">예약 완료</div>
     <div id="tdDoneMsg" style="font-family:var(--font-main);font-size:13px;color:#888;line-height:1.7;margin-bottom:24px;"></div>
-    <button onclick="document.getElementById('tdDonePopup').style.display='none';closeTicketDetail();" data-i18n="common.confirm" style="width:100%;padding:15px;background:#1a1a18;border:none;border-radius:12px;font-family:var(--font-main);font-size:10px;font-weight:800;letter-spacing:.2em;color:#fff;cursor:pointer;">확인</button>
+    <button onclick="document.getElementById('tdDonePopup').style.display='none';closeTicketDetail();if(typeof showRefundPolicyNotice==='function')showRefundPolicyNotice();" data-i18n="common.confirm" style="width:100%;padding:15px;background:#1a1a18;border:none;border-radius:12px;font-family:var(--font-main);font-size:10px;font-weight:800;letter-spacing:.2em;color:#fff;cursor:pointer;">확인</button>
   </div>
 </div>
 
@@ -18728,6 +18728,35 @@ function calculateTicketRefund(purchaseRecord, restaurant, currentTime, isSuperA
 }
 window.calculateTicketRefund = calculateTicketRefund;
 
+// 🆕 결제/구매 완료 직후 — 취소·환불 정책 안내 팝업.
+//   "구매 후 30분 이내 전액환불 → 이후 대행비 제외" (calculateTicketRefund 정책1·2)를
+//   30분 시계가 막 시작되는 시점(=완료 직후)에 1회 안내. 회원이 미리 참고하도록.
+function showRefundPolicyNotice(){
+  try {
+    var prev = document.getElementById('taamRefundNoticePopup');
+    if(prev) prev.remove();
+    var ov = document.createElement('div');
+    ov.id = 'taamRefundNoticePopup';
+    ov.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(20,18,16,.55);display:flex;align-items:center;justify-content:center;padding:28px;';
+    ov.innerHTML =
+        '<div style="background:#fff;border-radius:18px;max-width:340px;width:100%;padding:26px 24px 20px;box-shadow:0 12px 40px rgba(0,0,0,.25);font-family:var(--font-main);">'
+      +   '<div style="font-size:30px;text-align:center;line-height:1;margin-bottom:12px;">⏱️</div>'
+      +   '<div style="font-size:17px;font-weight:800;color:#1a1a18;text-align:center;margin-bottom:14px;">취소·환불 안내</div>'
+      +   '<div style="background:#faf8f3;border:1px solid #f0ece1;border-radius:12px;padding:14px 15px;">'
+      +     '<div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:10px;"><span style="color:#2a7a2a;font-weight:900;flex-shrink:0;line-height:1.4;">●</span><div style="font-size:13px;color:#333;line-height:1.55;"><b>결제 후 30분 이내</b> 취소 시 <b style="color:#2a7a2a;">전액 환불</b>됩니다.</div></div>'
+      +     '<div style="display:flex;gap:8px;align-items:flex-start;"><span style="color:#9B1C1C;font-weight:900;flex-shrink:0;line-height:1.4;">●</span><div style="font-size:13px;color:#333;line-height:1.55;"><b>30분이 지나면</b> 그때부터 <b style="color:#9B1C1C;">대행비는 환불에서 제외</b>됩니다.</div></div>'
+      +   '</div>'
+      +   '<div style="font-size:11.5px;color:#999;text-align:center;line-height:1.55;margin:12px 4px 16px;">예약 확정·운영을 위한 대행비 특성상 참고 부탁드립니다 🙏</div>'
+      +   '<button id="taamRefundNoticeOk" style="width:100%;padding:13px;background:#5C0A14;border:none;border-radius:12px;color:#fff;font-family:var(--font-main);font-size:14px;font-weight:800;cursor:pointer;letter-spacing:.02em;">확인했습니다</button>'
+      + '</div>';
+    document.body.appendChild(ov);
+    function _close(){ var p=document.getElementById('taamRefundNoticePopup'); if(p) p.remove(); }
+    ov.addEventListener('click', function(e){ if(e.target === ov) _close(); });
+    var okb = document.getElementById('taamRefundNoticeOk'); if(okb) okb.addEventListener('click', _close);
+  } catch(e){ console.warn('[refundNotice] 표시 예외:', e); }
+}
+window.showRefundPolicyNotice = showRefundPolicyNotice;
+
 // 🆕 2026.05.21: 티켓 취소 요청 모달 (환불 미리보기)
 function openCancelTicketModal(purchaseId){
   var h = purchaseHistory.find(function(x){ return x.purchaseId === purchaseId; });
@@ -18840,6 +18869,32 @@ async function cancelTicketPurchase(purchaseId, refundCalc, isSuperAdminOverride
         if(typeof _refreshBalanceUI === 'function') _refreshBalanceUI();
       }
     }
+
+    // 🆕 취소 발생 → 슈퍼어드민에게 푸시 통지 (구매/초대 티켓 공통)
+    //   send-push 는 role/all/topic scope 에서 호출자(취소한 회원) uid 를 자동 제외하므로
+    //   슈퍼어드민만 수신. role 문자열이 환경에 따라 'superadmin'/'super_admin' 둘 다 존재 → 양쪽 발송.
+    try {
+      var _cxTitle = h.isInvited ? '❌ 회원이 초대 티켓을 취소했습니다' : '❌ 회원이 티켓을 취소했습니다';
+      var _cxVisit = (h.visitDate || '') + (h.visitTime ? (' ' + h.visitTime) : '');
+      var _cxBody = (r ? r.name : (h.restName || '티켓')) + ' · ' + _cxVisit + ' · ' + (h.pax || 1) + '인 · ₩' + (h.amt || 0).toLocaleString()
+                  + (refundCalc.refundable > 0 ? (' · 환불 ₩' + refundCalc.refundable.toLocaleString()) : ' · 환불 없음');
+      ['superadmin','super_admin'].forEach(function(_rl){
+        try {
+          window.sb.functions.invoke('send-push', {
+            body: {
+              to: 'role:' + _rl,
+              payload: {
+                title: _cxTitle,
+                body: _cxBody,
+                url: '/',
+                category: 'ticket_cancelled',
+                tag: 'taam-tcancel-' + purchaseId
+              }
+            }
+          });
+        } catch(_pe){}
+      });
+    } catch(_ce){ console.warn('[cancel] 슈퍼어드민 푸시 예외:', _ce); }
 
     showToast('✓','취소 완료', refundCalc.refundable > 0
       ? '환불 ₩' + refundCalc.refundable.toLocaleString() + ' 처리됨'
@@ -24331,6 +24386,8 @@ async function riConfirmPay(){
 
     showToast('✓','예약 완료','초대 결제가 완료되었습니다 (구매 내역 + 사용 내역 자동 반영)');
     riPayClose();
+    // 🆕 결제 완료 직후 취소·환불 정책 안내 (30분 전액환불 시계 시작)
+    try { if(typeof showRefundPolicyNotice === 'function') showRefundPolicyNotice(); } catch(_rn){}
     // 🆕 v1.53.37: loadDeposit 을 await — Supabase 의 ticket_purchase row 가 use 탭에 즉시 머지됨.
     //   그 후 IDB 도 새 데이터로 갱신.
     try { if(typeof loadDeposit === 'function') await loadDeposit(); } catch(_){}
