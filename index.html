@@ -11048,62 +11048,69 @@ async function renderMyInvites(){
                   +   '<div style="font-family:var(--font-main);font-size:17px;font-weight:900;color:#2a7a2a;">'+paidCnt+'</div></div>'
                   + '</div>';
 
+    var _miF = "'Pretendard',-apple-system,BlinkMacSystemFont,'Noto Sans KR',sans-serif";
+    function _miDate(ds){
+      var d = (typeof _dParseDate==='function') ? _dParseDate(ds) : null;
+      if(!d || isNaN(d.getTime())) return ds || '–';
+      var w = ['일','월','화','수','목','금','토'][d.getDay()];
+      return (d.getMonth()+1)+'월 '+d.getDate()+'일 <span style="color:#9A9486;font-weight:700;">('+w+')</span>';
+    }
+    function _miTime(ts){
+      if(!ts) return '–';
+      var p = String(ts).split(':'); if(p.length<2) return ts;
+      var h = parseInt(p[0],10); if(isNaN(h)) return ts;
+      var ap = h<12 ? '오전' : '오후'; var h12 = h%12; if(h12===0) h12=12;
+      return ap+' '+h12+':'+p[1];
+    }
+    var _miChip = {
+      paid:      {bg:'#DDF1E6', bd:'#BFE6CF', dot:'#1E9E5A', tx:'#1E9E5A', label:'결제 완료'},
+      cancelled: {bg:'#F2EEEC', bd:'#E4DAD6', dot:'#A39690', tx:'#857069', label:'취소됨'},
+      expired:   {bg:'#F2EEEC', bd:'#E4DAD6', dot:'#A39690', tx:'#857069', label:'만료'},
+      pending:   {bg:'#FBF3F2', bd:'#EEDADA', dot:'#6A1A1A', tx:'#6A1A1A', label:'대기중'}
+    };
+
     var cardsHtml = rows.map(function(inv){
-      var statusLabel, statusColor, statusBg, payBtn = '';
-      if(inv.status === 'paid'){ statusLabel = '✓ 결제 완료'; statusColor = '#2a7a2a'; statusBg = '#f0faf0'; }
-      else if(inv.status === 'cancelled'){ statusLabel = '✕ 취소됨'; statusColor = '#9B1C1C'; statusBg = '#fff5f5'; }
-      else if(inv.status === 'expired'){ statusLabel = '⏱ 만료'; statusColor = '#9B1C1C'; statusBg = '#fff5f5'; }
-      else {
-        statusLabel = '⌛ 대기중'; statusColor = '#9B6F00'; statusBg = '#fff8e7';
-        // v1.53.36: 결제 + 취소 두 버튼 (취소가 좌측, 결제가 우측 강조)
-        payBtn = '<div style="display:flex;gap:8px;margin-top:10px;">'
-               + '<button onclick="cancelMyInvite(\''+inv.id+'\')" style="flex:1;padding:12px;background:#fff;border:1.5px solid #c33;border-radius:10px;font-family:var(--font-main);font-size:11.5px;font-weight:800;color:#9B1C1C;cursor:pointer;letter-spacing:.02em;">초대 취소</button>'
-               + '<button onclick="openReservationInvitePayPopup(\''+inv.id+'\')" style="flex:2;padding:12px;background:#5C0A14;border:none;border-radius:10px;font-family:var(--font-main);font-size:11.5px;font-weight:900;color:#fff;cursor:pointer;letter-spacing:.04em;">결제하기 · ₩'+(inv.total_amount||0).toLocaleString()+'</button>'
+      var st = (inv.status === 'paid' || inv.status === 'cancelled' || inv.status === 'expired') ? inv.status : 'pending';
+      var cs = _miChip[st];
+      var payBtn = '';
+      if(st === 'pending'){
+        payBtn = '<div style="display:flex;gap:10px;padding:16px;">'
+               + '<button onclick="cancelMyInvite(\''+inv.id+'\')" style="flex:1;height:50px;border-radius:14px;background:#fff;border:1.5px solid #E0D9CC;font-family:'+_miF+';font-size:14px;font-weight:700;color:#8C8475;cursor:pointer;">초대 취소</button>'
+               + '<button onclick="openReservationInvitePayPopup(\''+inv.id+'\')" style="flex:1.6;height:50px;border-radius:14px;background:#6A1A1A;border:none;font-family:'+_miF+';font-size:14px;font-weight:800;color:#fff;cursor:pointer;box-shadow:0 6px 16px rgba(106,26,26,.24);">결제하기 · ₩'+(inv.total_amount||0).toLocaleString()+'</button>'
                + '</div>';
       }
-
       var sentAt = inv.created_at ? new Date(inv.created_at).toLocaleString('ko-KR', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) : '–';
       var paidAt = inv.paid_at ? new Date(inv.paid_at).toLocaleString('ko-KR', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) : '';
-      var visitTime = inv.visit_time || '';
-      if(visitTime.includes(':')){
-        var tp = visitTime.split(':'), hh = parseInt(tp[0]);
-        visitTime = (hh>12?hh-12:(hh===0?12:hh))+':'+tp[1]+' '+(hh>=12?'PM':'AM');
-      }
-      var newBadge = !inv.invitee_seen ? '<span style="margin-left:7px;font-size:9px;font-weight:800;color:#fff;background:#e53935;border-radius:8px;padding:2px 6px;letter-spacing:.05em;vertical-align:middle;">NEW</span>' : '';
-      // 방문 요일 (visit_date 가 파싱 가능할 때만 표시)
-      var weekday = '';
-      try {
-        var _vd = new Date(String(inv.visit_date||'').replace(/\./g,'-').replace(/-+$/,''));
-        if(!isNaN(_vd.getTime())) weekday = ' ('+['일','월','화','수','목','금','토'][_vd.getDay()]+')';
-      } catch(_we){ weekday = ''; }
+      var newBadge = !inv.invitee_seen ? '<span style="margin-left:7px;font-size:9px;font-weight:800;color:#fff;background:#E53935;border-radius:8px;padding:2px 6px;letter-spacing:.05em;vertical-align:middle;">NEW</span>' : '';
+      var eyebrow = (inv.ticket_genre ? (_riEscHtml(inv.ticket_genre) + ' · ') : '') + (inv.type_class === 'eve' ? 'EVENT' : 'STANDARD');
 
-      return '<div style="background:#fff;border:1px solid #ece8df;border-radius:14px;padding:16px 16px 14px;margin-bottom:11px;box-shadow:0 1px 3px rgba(0,0,0,.04);">'
-           // ── 헤더: 매장명(크게) + 상태배지 ──
-           + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">'
-           +   '<div style="min-width:0;flex:1;">'
-           +     '<div style="font-size:19px;font-weight:800;line-height:1.2;color:#1a1a18;letter-spacing:-.01em;word-break:keep-all;">'+_riEscHtml(inv.restaurant_name||'레스토랑')+newBadge+'</div>'
-           +     '<div style="font-size:11px;color:#9a9a92;margin-top:4px;letter-spacing:.02em;">'+_riEscHtml((inv.ticket_genre || '')+(inv.type_class === 'eve' ? ' · Event' : ' · Standard'))+'</div>'
-           +   '</div>'
-           +   '<div style="font-size:10px;font-weight:800;color:'+statusColor+';background:'+statusBg+';border:1px solid '+statusColor+';border-radius:7px;padding:4px 9px;flex-shrink:0;white-space:nowrap;">'+statusLabel+'</div>'
+      return '<div style="background:#fff;border-radius:22px;box-shadow:0 4px 18px rgba(30,20,10,0.07);overflow:hidden;margin-bottom:16px;font-family:'+_miF+';color:#1A1A1A;">'
+           // top: eyebrow(genre) + status chip
+           + '<div style="padding:20px 20px 14px;display:flex;align-items:center;justify-content:space-between;gap:8px;">'
+           +   '<span style="font-size:11px;font-weight:800;letter-spacing:1px;color:#B4B0A8;text-transform:uppercase;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+eyebrow+newBadge+'</span>'
+           +   '<span style="display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 11px;border-radius:9px;background:'+cs.bg+';border:1px solid '+cs.bd+';flex-shrink:0;"><span style="width:6px;height:6px;border-radius:50%;background:'+cs.dot+';"></span><span style="font-size:12.5px;font-weight:800;color:'+cs.tx+';">'+cs.label+'</span></span>'
            + '</div>'
-           // ── 방문 일시 강조 스트립 (한눈에: 날짜·시간 + 인원·금액) ──
-           + '<div style="display:flex;align-items:center;gap:11px;margin-top:13px;padding:11px 13px;background:#faf8f3;border:1px solid #f0ece1;border-radius:11px;">'
-           +   '<span style="font-size:18px;line-height:1;flex-shrink:0;">🗓️</span>'
-           +   '<div style="min-width:0;">'
-           +     '<div style="font-size:15.5px;font-weight:800;color:#1a1a18;line-height:1.25;">'+_riEscHtml((inv.visit_date||'')+weekday)+'</div>'
-           +     (visitTime ? '<div style="font-size:13px;font-weight:800;color:#5C0A14;margin-top:2px;letter-spacing:.02em;">'+_riEscHtml(visitTime)+'</div>' : '')
-           +   '</div>'
-           +   '<div style="margin-left:auto;text-align:right;flex-shrink:0;">'
-           +     '<div style="font-size:9.5px;color:#a8a89e;letter-spacing:.03em;">인원·금액</div>'
-           +     '<div style="font-size:13px;font-weight:800;color:#1a1a18;margin-top:2px;white-space:nowrap;">'+inv.pax+'인 · ₩'+(inv.total_amount||0).toLocaleString()+'</div>'
-           +   '</div>'
+           // chapter 1 : 레스토랑 / 날짜 / 시간 / 인원
+           + '<div style="margin:0 16px;background:#F6F5F2;border-radius:16px;padding:2px 16px;">'
+           +   '<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 2px;gap:10px;"><span style="font-size:14px;font-weight:600;color:#9A9486;flex-shrink:0;">레스토랑</span><span style="font-size:19px;font-weight:800;letter-spacing:-0.4px;text-align:right;word-break:keep-all;">'+_riEscHtml(inv.restaurant_name||'레스토랑')+'</span></div>'
+           +   '<div style="height:1px;background:#E8E6DF;"></div>'
+           +   '<div style="display:flex;align-items:center;justify-content:space-between;padding:13px 2px;"><span style="font-size:14px;font-weight:600;color:#9A9486;">날짜</span><span style="font-size:17px;font-weight:800;letter-spacing:-0.3px;">'+_miDate(inv.visit_date)+'</span></div>'
+           +   '<div style="height:1px;background:#E8E6DF;"></div>'
+           +   '<div style="display:flex;align-items:center;justify-content:space-between;padding:13px 2px;"><span style="font-size:14px;font-weight:600;color:#9A9486;">시간</span><span style="font-size:17px;font-weight:800;letter-spacing:-0.3px;color:#6A1A1A;">'+_miTime(inv.visit_time)+'</span></div>'
+           +   '<div style="height:1px;background:#E8E6DF;"></div>'
+           +   '<div style="display:flex;align-items:center;justify-content:space-between;padding:13px 2px;"><span style="font-size:14px;font-weight:600;color:#9A9486;">인원</span><span style="font-size:17px;font-weight:800;letter-spacing:-0.3px;">'+(inv.pax||1)+'명</span></div>'
            + '</div>'
-           // ── 받은/결제 시각 ──
-           + '<div style="display:flex;justify-content:space-between;font-size:10.5px;color:#b3b3aa;margin-top:9px;flex-wrap:wrap;gap:6px;">'
-           +   '<span>📥 받은 시각 '+sentAt+'</span>'
-           +   (paidAt ? '<span style="color:#2a7a2a;">💳 '+paidAt+'</span>' : '')
+           // chapter 2 : 결제 금액
+           + '<div style="margin:12px 16px 0;padding:15px 18px;background:#FBF3F2;border:1px solid #EEDADA;border-radius:16px;display:flex;align-items:center;justify-content:space-between;">'
+           +   '<span style="font-size:15px;font-weight:700;color:#7A5050;">결제 금액</span>'
+           +   '<span style="font-size:22px;font-weight:800;color:#6A1A1A;letter-spacing:-0.5px;">₩'+(inv.total_amount||0).toLocaleString()+'</span>'
            + '</div>'
-           + payBtn
+           // 받은/결제 시각
+           + '<div style="display:flex;justify-content:space-between;padding:12px 18px 0;font-size:11px;color:#B4B0A8;font-weight:600;flex-wrap:wrap;gap:6px;">'
+           +   '<span>받은 시각 '+sentAt+'</span>'
+           +   (paidAt ? '<span style="color:#1E9E5A;">결제 '+paidAt+'</span>' : '')
+           + '</div>'
+           + (payBtn || '<div style="height:18px;"></div>')
            + '</div>';
     }).join('');
 
@@ -18609,67 +18616,105 @@ function ticketHistRender(idx){
   var _thUnknown = _thIsEn ? 'Unknown' : (_thIsJa ? '不明' : '알 수 없음');
   var _thVisitPrefix = _thIsEn ? 'Visit ' : (_thIsJa ? '来店 ' : '방문 ');
 
+  // 🆕 FRAME 1 디자인용 포맷 헬퍼 (렌더당 1회 정의)
+  var _thF = "'Pretendard',-apple-system,BlinkMacSystemFont,'Noto Sans KR',sans-serif";
+  function _thDate(ds){
+    var d = (typeof _dParseDate==='function') ? _dParseDate(ds) : null;
+    if(!d || isNaN(d.getTime())) return ds || '–';
+    var w = ['일','월','화','수','목','금','토'][d.getDay()];
+    return (d.getMonth()+1)+'월 '+d.getDate()+'일 <span style="color:#9A9486;font-weight:700;">('+w+')</span>';
+  }
+  function _thTime(ts){
+    if(!ts) return '–';
+    var p = String(ts).split(':'); if(p.length<2) return ts;
+    var h = parseInt(p[0],10); if(isNaN(h)) return ts;
+    var ap = h<12 ? '오전' : '오후'; var h12 = h%12; if(h12===0) h12=12;
+    return ap+' '+h12+':'+p[1];
+  }
+  function _thDday(ds){
+    var d = (typeof _dParseDate==='function') ? _dParseDate(ds) : null;
+    if(!d || isNaN(d.getTime())) return null;
+    var t0 = new Date(); t0.setHours(0,0,0,0); d.setHours(0,0,0,0);
+    var diff = Math.round((d - t0)/86400000);
+    return diff < 0 ? null : (diff===0 ? 'D-DAY' : 'D-'+diff);
+  }
+  // 상태별 칩 색 (FRAME 1 팔레트)
+  var chipStyle = {
+    upcoming:  {bg:'#EAF1FF', bd:'#D2E0FB', dot:'#2563EB', tx:'#1F5BD6'},
+    visited:   {bg:'#E8F0E8', bd:'#D4E5D4', dot:'#3A7A3A', tx:'#2F6A2F'},
+    cancelled: {bg:'#F2EEEC', bd:'#E4DAD6', dot:'#A39690', tx:'#857069'},
+    refunded:  {bg:'#DDF1E6', bd:'#BFE6CF', dot:'#1E9E5A', tx:'#1E9E5A'}
+  };
+
   list.innerHTML = filtered.map(function(h){
     var r = restaurantDB.find(function(x){ return String(x.id)===String(h.restId); });
     var s = h.status || 'upcoming';
-    var visitStr = h.visitDate ? ' · '+_thVisitPrefix+h.visitDate : '';
-    var paxLabel = h.pax + (_thIsEn ? (h.pax===1?' guest':' guests') : (_thIsJa ? '名' : '인'));
-    // 🆕 2026.05.21: 방문 예정 (upcoming) 상태일 때만 취소 버튼 표시
+    var paxLabel = h.pax + (_thIsEn ? (h.pax===1?' guest':' guests') : (_thIsJa ? '名' : '명'));
+    // 방문 예정일 때만 취소 버튼 (기능 그대로)
     var cancelBtn = '';
     if(s === 'upcoming' && h.purchaseId){
       var refundPreview = (typeof calculateTicketRefund === 'function')
-        ? calculateTicketRefund(h, r, new Date(), false)
-        : null;
+        ? calculateTicketRefund(h, r, new Date(), false) : null;
       var btnLabel = _thIsEn ? 'Request cancel' : (_thIsJa ? 'キャンセル申請' : '구매 취소 요청');
-      cancelBtn = '<button onclick="openCancelTicketModal(\''+h.purchaseId+'\')" '
-        + 'style="margin-top:10px;width:100%;padding:10px;background:#fff;border:1px solid #d4d4d4;border-radius:8px;font-family:var(--font-main);font-size:11.5px;font-weight:700;color:#5d1622;cursor:pointer;letter-spacing:.02em;">'
+      cancelBtn = '<div style="padding:16px;">'
+        + '<button onclick="openCancelTicketModal(\''+h.purchaseId+'\')" '
+        + 'style="width:100%;height:50px;border-radius:14px;border:1.5px solid #E0D9CC;background:#fff;color:#6A1A1A;font-family:'+_thF+';font-size:15px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;">'
         + btnLabel
-        + (refundPreview ? ' (환불 가능 ₩' + refundPreview.refundable.toLocaleString() + ')' : '')
-        + '</button>';
+        + (refundPreview ? ' <span style="color:#B49A9A;">·</span> <span style="font-weight:600;color:#8C8475;">환불 가능 ₩'+refundPreview.refundable.toLocaleString()+'</span>' : '')
+        + '</button></div>';
     }
-    // 환불 상태 표시 + 배지 분기 (cancelled vs refunded)
+    // 환불 상태 표시 + 배지 분기 (기능 그대로)
     var refundInfo = '';
     var displayS = s;
     if(s === 'cancelled'){
       var dr = h.depositReturn || null;
       var refundedAmt = (h.refundedAmount != null) ? h.refundedAmount : (dr ? (dr.returnAmt||0) : null);
       var isReturned = dr ? (dr.type === 'returned') : (h.refundedAmount > 0);
-      // 환불받은 경우 → 배지를 "환불 완료" 녹색으로
-      if(isReturned && refundedAmt > 0){
-        displayS = 'refunded';
-      }
+      if(isReturned && refundedAmt > 0){ displayS = 'refunded'; }
       if(refundedAmt != null){
-        refundInfo = '<div style="margin-top:6px;font-size:11.5px;font-weight:700;color:#2a7a2a;">↳ 환불 완료 · +₩'+ refundedAmt.toLocaleString() +'</div>';
+        refundInfo = '<div style="margin-top:6px;font-size:11.5px;font-weight:700;color:#1E9E5A;">↳ 환불 완료 · +₩'+ refundedAmt.toLocaleString() +'</div>';
         if(dr && dr.agencyHeld > 0){
-          refundInfo += '<div style="margin-top:2px;font-size:10.5px;color:#1B3A8F;">대행비 차감 ₩'+ dr.agencyHeld.toLocaleString() +' (정상 절차)</div>';
+          refundInfo += '<div style="margin-top:2px;font-size:10.5px;color:#1F5BD6;">대행비 차감 ₩'+ dr.agencyHeld.toLocaleString() +' (정상 절차)</div>';
         }
         if(dr && dr.penaltyAmt > 0 && (!dr.agencyHeld)){
-          refundInfo += '<div style="margin-top:2px;font-size:10.5px;color:#c00;">위약금 ₩'+ dr.penaltyAmt.toLocaleString() +' ('+ (dr.penaltyPct||0) +'%)</div>';
+          refundInfo += '<div style="margin-top:2px;font-size:10.5px;color:#B23A2E;">위약금 ₩'+ dr.penaltyAmt.toLocaleString() +' ('+ (dr.penaltyPct||0) +'%)</div>';
         }
         if(h.cancelReason) refundInfo += '<div style="margin-top:2px;font-size:10.5px;color:#999;">사유: '+ _escHtmlAdg(h.cancelReason) +'</div>';
       }
+      refundInfo = '<div style="padding:0 16px 14px;">'+refundInfo+'</div>';
     }
-    // 🆕 v1.53.33 2026.06.01: 슈퍼어드민 초대로 구매한 티켓 표시
     var restName = (r ? r.name : (h.restName || _thUnknown));
-    var inviteBadge = '';
-    var inviteDesc = '';
-    if(h.isInvited){
-      inviteBadge = '<div class="mp-sub-item-badge" style="background:#fff8e7;color:#9B6F00;border:1px solid #d4a017;margin-left:6px;">📨 초대</div>';
-      inviteDesc = '<div style="margin-top:6px;font-size:11px;color:#9B6F00;font-weight:600;">상세설명 · '+(h.inviteDesc || '슈퍼어드민 초대로 구매')+'</div>';
-    }
-    return '<div class="mp-sub-item">'
-      +'<div class="mp-sub-item-head">'
-        +'<div class="mp-sub-item-name">'+restName+'</div>'
-        +'<div style="display:flex;align-items:center;gap:0;">'
-        + '<div class="mp-sub-item-badge" style="'+badgeStyles[displayS]+'">'+badgeLabels[displayS]+'</div>'
-        + inviteBadge
-        + '</div>'
-      +'</div>'
-      +'<div class="mp-sub-item-meta">'+paxLabel+' · ₩'+h.amt.toLocaleString()+visitStr+'</div>'
-      + inviteDesc
+    var cs = chipStyle[displayS] || chipStyle.upcoming;
+    var statusChip = '<span style="display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 11px;border-radius:9px;background:'+cs.bg+';border:1px solid '+cs.bd+';"><span style="width:6px;height:6px;border-radius:50%;background:'+cs.dot+';"></span><span style="font-size:12.5px;font-weight:800;color:'+cs.tx+';">'+badgeLabels[displayS]+'</span></span>';
+    var dday = (s === 'upcoming') ? _thDday(h.visitDate) : null;
+    var ddayBadge = dday ? '<span style="display:inline-flex;align-items:center;height:28px;padding:0 9px;border-radius:9px;background:#2563EB;color:#fff;font-size:12px;font-weight:900;">'+dday+'</span>' : '';
+    var invitePill = h.isInvited ? '<span style="display:inline-flex;align-items:center;height:28px;padding:0 10px;border-radius:9px;background:#FBF3F2;border:1px solid #EEDADA;font-size:12px;font-weight:800;color:#6A1A1A;">초대</span>' : '';
+
+    return '<div style="background:#fff;border-radius:22px;box-shadow:0 4px 18px rgba(30,20,10,0.07);overflow:hidden;margin-bottom:16px;font-family:'+_thF+';color:#1A1A1A;">'
+      // top: eyebrow + status/dday chips
+      + '<div style="padding:20px 20px 14px;display:flex;align-items:center;justify-content:space-between;gap:8px;">'
+      +   '<span style="font-size:11px;font-weight:800;letter-spacing:1.2px;color:#B4B0A8;text-transform:uppercase;">RESTAURANT</span>'
+      +   '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;">'+invitePill+statusChip+ddayBadge+'</div>'
+      + '</div>'
+      // chapter 1 : 레스토랑 / 날짜 / 시간 / 인원
+      + '<div style="margin:0 16px;background:#F6F5F2;border-radius:16px;padding:2px 16px;">'
+      +   '<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 2px;"><span style="font-size:14px;font-weight:600;color:#9A9486;">레스토랑</span><span style="font-size:19px;font-weight:800;letter-spacing:-0.4px;">'+restName+'</span></div>'
+      +   '<div style="height:1px;background:#E8E6DF;"></div>'
+      +   '<div style="display:flex;align-items:center;justify-content:space-between;padding:13px 2px;"><span style="font-size:14px;font-weight:600;color:#9A9486;">날짜</span><span style="font-size:17px;font-weight:800;letter-spacing:-0.3px;">'+_thDate(h.visitDate)+'</span></div>'
+      +   '<div style="height:1px;background:#E8E6DF;"></div>'
+      +   '<div style="display:flex;align-items:center;justify-content:space-between;padding:13px 2px;"><span style="font-size:14px;font-weight:600;color:#9A9486;">시간</span><span style="font-size:17px;font-weight:800;letter-spacing:-0.3px;color:#6A1A1A;">'+_thTime(h.visitTime)+'</span></div>'
+      +   '<div style="height:1px;background:#E8E6DF;"></div>'
+      +   '<div style="display:flex;align-items:center;justify-content:space-between;padding:13px 2px;"><span style="font-size:14px;font-weight:600;color:#9A9486;">인원</span><span style="font-size:17px;font-weight:800;letter-spacing:-0.3px;">'+paxLabel+'</span></div>'
+      + '</div>'
+      // chapter 2 : 결제 금액
+      + '<div style="margin:12px 16px 0;padding:15px 18px;background:#FBF3F2;border:1px solid #EEDADA;border-radius:16px;display:flex;align-items:center;justify-content:space-between;">'
+      +   '<span style="font-size:15px;font-weight:700;color:#7A5050;">결제 금액</span>'
+      +   '<span style="font-size:22px;font-weight:800;color:#6A1A1A;letter-spacing:-0.5px;">₩'+(h.amt||0).toLocaleString()+'</span>'
+      + '</div>'
+      + (h.isInvited ? '<div style="padding:10px 18px 0;font-size:11.5px;color:#6A1A1A;font-weight:600;">상세설명 · '+(h.inviteDesc || '슈퍼어드민 초대로 구매')+'</div>' : '')
       + refundInfo
       + cancelBtn
-    +'</div>';
+      + '</div>';
   }).join('');
 }
 
@@ -18755,17 +18800,43 @@ function showRefundPolicyNotice(){
     if(prev) prev.remove();
     var ov = document.createElement('div');
     ov.id = 'taamRefundNoticePopup';
-    ov.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(20,18,16,.55);display:flex;align-items:center;justify-content:center;padding:28px;';
+    ov.style.cssText = 'position:fixed;inset:0;z-index:100000;background:linear-gradient(180deg,rgba(42,35,32,.97),rgba(21,17,15,.97));display:flex;align-items:center;justify-content:center;padding:24px;';
+    var _rf = "'Pretendard',-apple-system,BlinkMacSystemFont,'Noto Sans KR',sans-serif";
     ov.innerHTML =
-        '<div style="background:#fff;border-radius:18px;max-width:340px;width:100%;padding:26px 24px 20px;box-shadow:0 12px 40px rgba(0,0,0,.25);font-family:var(--font-main);">'
-      +   '<div style="font-size:30px;text-align:center;line-height:1;margin-bottom:12px;">⏱️</div>'
-      +   '<div style="font-size:17px;font-weight:800;color:#1a1a18;text-align:center;margin-bottom:14px;">취소·환불 안내</div>'
-      +   '<div style="background:#faf8f3;border:1px solid #f0ece1;border-radius:12px;padding:14px 15px;">'
-      +     '<div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:10px;"><span style="color:#2a7a2a;font-weight:900;flex-shrink:0;line-height:1.4;">●</span><div style="font-size:13px;color:#333;line-height:1.55;"><b>결제 후 30분 이내</b> 취소 시 <b style="color:#2a7a2a;">전액 환불</b>됩니다.</div></div>'
-      +     '<div style="display:flex;gap:8px;align-items:flex-start;"><span style="color:#9B1C1C;font-weight:900;flex-shrink:0;line-height:1.4;">●</span><div style="font-size:13px;color:#333;line-height:1.55;"><b>30분이 지나면</b> 그때부터 <b style="color:#9B1C1C;">대행비는 환불에서 제외</b>됩니다.</div></div>'
+        '<div style="width:100%;max-width:360px;background:#fff;border-radius:28px;padding:30px 24px 24px;box-shadow:0 24px 60px rgba(0,0,0,.4);font-family:'+_rf+';color:#1A1A1A;">'
+        // icon
+      +   '<div style="display:flex;justify-content:center;margin-bottom:18px;">'
+      +     '<div style="width:60px;height:60px;border-radius:20px;background:#FBF3F2;display:flex;align-items:center;justify-content:center;">'
+      +       '<svg width="30" height="30" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="13" r="8.2" stroke="#6A1A1A" stroke-width="2"></circle><path d="M12 9.2V13l2.6 1.6" stroke="#6A1A1A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path><path d="M9 3.4h6" stroke="#6A1A1A" stroke-width="2" stroke-linecap="round"></path></svg>'
+      +     '</div>'
       +   '</div>'
-      +   '<div style="font-size:11.5px;color:#999;text-align:center;line-height:1.55;margin:12px 4px 16px;">예약 확정·운영을 위한 대행비 특성상 참고 부탁드립니다 🙏</div>'
-      +   '<button id="taamRefundNoticeOk" style="width:100%;padding:13px;background:#5C0A14;border:none;border-radius:12px;color:#fff;font-family:var(--font-main);font-size:14px;font-weight:800;cursor:pointer;letter-spacing:.02em;">확인했습니다</button>'
+        // title
+      +   '<h2 style="margin:0 0 4px;text-align:center;font-size:22px;font-weight:800;letter-spacing:-0.5px;">취소·환불 안내</h2>'
+      +   '<p style="margin:0 0 22px;text-align:center;font-size:13.5px;font-weight:500;color:#9A938C;">결제 시점 기준으로 환불 금액이 달라져요</p>'
+        // timeline
+      +   '<div style="background:#F7F6F3;border-radius:18px;padding:6px 18px;">'
+      +     '<div style="display:flex;gap:14px;padding:16px 0;align-items:flex-start;">'
+      +       '<div style="flex:none;display:flex;flex-direction:column;align-items:center;padding-top:2px;">'
+      +         '<span style="width:11px;height:11px;border-radius:50%;background:#1E9E5A;box-shadow:0 0 0 4px #DDF1E6;"></span>'
+      +         '<span style="width:2px;flex:1;min-height:26px;background:#E4E2DB;margin-top:4px;"></span>'
+      +       '</div>'
+      +       '<div style="flex:1;padding-bottom:4px;">'
+      +         '<div style="font-size:13px;font-weight:800;color:#1E9E5A;margin-bottom:3px;">결제 후 30분 이내</div>'
+      +         '<div style="font-size:15px;font-weight:700;color:#26211D;line-height:1.4;">취소 시 <span style="color:#1E9E5A;">전액 환불</span>돼요</div>'
+      +       '</div>'
+      +     '</div>'
+      +     '<div style="display:flex;gap:14px;padding:0 0 18px;align-items:flex-start;">'
+      +       '<div style="flex:none;padding-top:2px;"><span style="display:block;width:11px;height:11px;border-radius:50%;background:#B23A2E;box-shadow:0 0 0 4px #F4E0DD;"></span></div>'
+      +       '<div style="flex:1;">'
+      +         '<div style="font-size:13px;font-weight:800;color:#B23A2E;margin-bottom:3px;">30분 경과 후</div>'
+      +         '<div style="font-size:15px;font-weight:700;color:#26211D;line-height:1.4;"><span style="color:#B23A2E;">대행비를 제외</span>하고 환불돼요</div>'
+      +       '</div>'
+      +     '</div>'
+      +   '</div>'
+        // note
+      +   '<p style="margin:16px 4px 22px;text-align:center;font-size:12.5px;font-weight:500;color:#A8A29A;line-height:1.5;">예약 확정·운영을 위한 대행비 특성상<br>너른 양해 부탁드려요</p>'
+        // button
+      +   '<button id="taamRefundNoticeOk" style="width:100%;height:54px;border-radius:15px;border:none;background:#6A1A1A;color:#fff;font-family:'+_rf+';font-size:16px;font-weight:800;cursor:pointer;box-shadow:0 6px 16px rgba(106,26,26,.28);">확인했습니다</button>'
       + '</div>';
     document.body.appendChild(ov);
     function _close(){ var p=document.getElementById('taamRefundNoticePopup'); if(p) p.remove(); }
