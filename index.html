@@ -30478,9 +30478,11 @@ function _tcalBookingMap(){
   function add(key, item){ if(!key) return; if(!map[key]) map[key]={pax:0,items:[]}; map[key].pax += (parseInt(item.pax)||0); map[key].items.push(item); }
   (_tcalPurchases||[]).forEach(function(h){
     if(h.status === 'cancelled') return;
+    // 🆕 초대유래 티켓(ticket_product_id='inv-…')은 초대(_tcalInvites)로 이미 카운트됨 → 중복 제거
+    if(String(h.id||'').indexOf('inv-') === 0) return;
     var rid = h.restId || h.restaurant_id;
     if(_tcalRestFilter && String(rid) !== String(_tcalRestFilter)) return;
-    add(_tcalDateKey(h.visitDate || h.reservation_date), {src:'ticket', name:(h.buyerName||h.buyer_name||''), pax:(h.pax||h.party_size||0), time:(h.visitTime||''), restId:rid, rest:(h.restName||h.restaurant_name||'')});
+    add(_tcalDateKey(h.visitDate || h.reservation_date), {src:'ticket', name:(h.buyerName||h.buyer_name||''), uid:(h._userId||h.userId||''), pax:(h.pax||h.party_size||0), time:(h.visitTime||''), restId:rid, rest:(h.restName||h.restaurant_name||'')});
   });
   (_tcalInvites||[]).forEach(function(inv){
     if(_tcalRestFilter && String(inv.restaurant_id) !== String(_tcalRestFilter)) return;
@@ -30512,8 +30514,8 @@ async function tcalShowInviteMember(uid){
   if(sheet) sheet.innerHTML = '<div style="padding:24px;text-align:center;color:#999;font-family:\'Noto Sans KR\',sans-serif;">불러오는 중…</div>';
   if(modal) modal.style.display='flex';
   try {
-    // 회원 기본 + 이용/예약/캔슬 통계 (티켓 + 초대 결제 기준)
-    var pr = await window.sb.from('profiles').select('display_name,email,phone').eq('id', uid).maybeSingle();
+    // 회원 전체 정보 + 이용/예약/캔슬 통계 (티켓 + 초대 결제 기준)
+    var pr = await window.sb.from('profiles').select('*').eq('id', uid).maybeSingle();
     var tk = await window.sb.from('tickets').select('status').eq('user_id', uid);
     var iv = await window.sb.from('reservation_invites').select('status').eq('invitee_user_id', uid);
     var p = (pr && pr.data) || {};
@@ -30527,15 +30529,27 @@ async function tcalShowInviteMember(uid){
     var usage   = usedT;                  // 이용 (방문 완료 티켓)
     var cancels = cancelT + cancelI;      // 캔슬
     function stat(n, lbl, c){ return '<div style="flex:1;text-align:center;"><div style="font-size:24px;font-weight:900;color:'+c+';">'+n+'</div><div style="font-size:11px;color:#9A9486;margin-top:2px;">'+lbl+'</div></div>'; }
+    function won(v){ return '₩'+((parseInt(v)||0).toLocaleString()); }
+    function kv(k, v){ return '<div style="display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid #E8E6DF;"><span style="font-size:12.5px;color:#9A9486;">'+k+'</span><span style="font-size:13px;font-weight:700;color:#1a1a18;text-align:right;">'+(v||'—')+'</span></div>'; }
+    var totalDep = (parseInt(p.membership_deposit_balance)||0) + (parseInt(p.general_deposit_balance)||0);
     if(sheet){
-      sheet.innerHTML = '<div style="padding:22px 20px;font-family:\'Noto Sans KR\',sans-serif;">'
+      sheet.innerHTML = '<div style="padding:22px 20px;font-family:\'Noto Sans KR\',sans-serif;max-height:80vh;overflow-y:auto;">'
         + '<div style="font-size:11px;font-weight:800;letter-spacing:1px;color:#B4B0A8;">회원 정보</div>'
         + '<div style="font-size:20px;font-weight:800;color:#1a1a18;margin-top:6px;">'+(p.display_name||'(이름 없음)')+'</div>'
         + '<div style="font-size:12.5px;color:#888;margin-top:4px;">'+(p.email||'')+(p.phone?(' · '+p.phone):'')+'</div>'
-        + '<div style="display:flex;margin-top:18px;background:#F6F5F2;border-radius:16px;padding:16px 8px;">'
+        // 예약 / 이용 / 캔슬
+        + '<div style="display:flex;margin-top:16px;background:#F6F5F2;border-radius:16px;padding:16px 8px;">'
         +   stat(booked, '예약', '#1A1A1A') + stat(usage, '이용', '#1E9E5A') + stat(cancels, '캔슬', '#B23A2E')
         + '</div>'
-        + '<button onclick="tcalCloseBuyer()" style="margin-top:18px;width:100%;height:48px;border:none;border-radius:13px;background:#1a1a18;color:#fff;font-family:inherit;font-size:14px;font-weight:800;cursor:pointer;">닫기</button>'
+        // 상세 정보
+        + '<div style="margin-top:16px;background:#fff;border:1px solid #ece8df;border-radius:14px;padding:4px 16px;">'
+        +   kv('멤버십 등급', p.membership_tier)
+        +   kv('멤버십 만료', p.membership_expires_at ? String(p.membership_expires_at).slice(0,10) : (p.member_until ? String(p.member_until).slice(0,10) : '—'))
+        +   kv('예치금(멤버십)', won(p.membership_deposit_balance))
+        +   kv('예치금(일반)', won(p.general_deposit_balance))
+        +   '<div style="display:flex;justify-content:space-between;padding:9px 0;"><span style="font-size:12.5px;color:#9A9486;">예치금 합계</span><span style="font-size:14px;font-weight:800;color:#6A1A1A;">'+won(totalDep)+'</span></div>'
+        + '</div>'
+        + '<button onclick="tcalCloseBuyer()" style="margin-top:16px;width:100%;height:48px;border:none;border-radius:13px;background:#1a1a18;color:#fff;font-family:inherit;font-size:14px;font-weight:800;cursor:pointer;">닫기</button>'
         + '</div>';
     }
   } catch(e){
@@ -30551,6 +30565,9 @@ function openInviteFromCalendar(){
   var fullDate = _tcalYear + '.' + _tcalSelectedDate;   // YYYY.MM.DD
   if(typeof openReservationInviteScreen !== 'function'){ showToast('⚠','오류','초대 발송 화면을 찾을 수 없어요'); return; }
   var _fab = document.getElementById('tcalInviteFab'); if(_fab) _fab.style.display='none';
+  // 🆕 캘린더를 먼저 닫아야 riScreen(display:flex)이 위로 올라옴 (안 그러면 뒤에 깔림)
+  if(typeof closeSubPage === 'function'){ try{ closeSubPage('ticketCalScreen'); }catch(_){ } }
+  var _sc = document.getElementById('ticketCalScreen'); if(_sc) _sc.style.display='none';
   openReservationInviteScreen();
   // 화면이 열린 뒤 날짜 프리필
   setTimeout(function(){
@@ -30781,11 +30798,11 @@ function tcalRenderDetail(dateStr) {
     if (_bk && _bk.items.length > 0) {
       _bk.items.forEach(function(it){
         var srcBadge = it.src === 'invite'
-          ? '<span style="font-size:9.5px;font-weight:800;color:#6A1A1A;background:#FBF3F2;border:1px solid #EEDADA;border-radius:6px;padding:1px 6px;">초대 결제완료</span>'
-          : '<span style="font-size:9.5px;font-weight:800;color:#1F5BD6;background:#EAF1FF;border:1px solid #D2E0FB;border-radius:6px;padding:1px 6px;">티켓</span>';
+          ? '<span style="font-size:9.5px;font-weight:800;color:#6A1A1A;background:#FBF3F2;border:1px solid #EEDADA;border-radius:6px;padding:1px 6px;">초대 발송</span>'
+          : '<span style="font-size:9.5px;font-weight:800;color:#1F5BD6;background:#EAF1FF;border:1px solid #D2E0FB;border-radius:6px;padding:1px 6px;">티켓 직접구매</span>';
         var tm = it.time ? (' · ' + it.time) : '';
         var nm = it.name ? (' · ' + it.name) : '';
-        var clickable = (it.src === 'invite' && it.uid);
+        var clickable = !!it.uid;
         var rowAttr = clickable
           ? ' onclick="tcalShowInviteMember(\'' + it.uid + '\')" style="display:flex;justify-content:space-between;align-items:center;padding:11px 15px;border-bottom:1px solid #f4f1ec;cursor:pointer;"'
           : ' style="display:flex;justify-content:space-between;align-items:center;padding:11px 15px;border-bottom:1px solid #f4f1ec;"';
