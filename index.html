@@ -24167,6 +24167,7 @@ window.tbSendBroadcast = tbSendBroadcast;
 // ════════════════════════════════════════════════════════════════
 var _riPayCurrent = null;  // 현재 열려있는 초대 row
 var _riPayAgreed = false;
+var _riPayBusy = false;    // 🆕 중복 결제 방지 플래그
 
 async function openReservationInvitePayPopup(inviteId){
   try {
@@ -24313,9 +24314,21 @@ function riPayUpdateBtn(){
 async function riConfirmPay(){
   if(!_riPayCurrent) return;
   if(!_riPayAgreed){ showToast('⚠','동의 필요','취소 규정에 동의해주세요'); return; }
+  // 🆕 중복 제출 방지 — 더블탭/재진입 시 결제가 2번 실행돼 예치금 2회 차감·티켓 2건 생성되던 버그 차단
+  if(_riPayBusy) return;
+  _riPayBusy = true;
+  var _payBtn = document.getElementById('riPayBtn');
+  if(_payBtn){ _payBtn.style.pointerEvents='none'; _payBtn.style.opacity='.5'; }
   var inv = _riPayCurrent;
   try {
     var u = (await window.sb.auth.getUser()).data.user;
+    // 🆕 중복 결제 방지 — 서버에서 현재 상태 재확인 (이미 결제/취소/만료면 중단)
+    var _stChk = await window.sb.from('reservation_invites').select('status').eq('id', inv.id).maybeSingle();
+    if(_stChk.data && _stChk.data.status !== 'sent'){
+      showToast('✓','이미 처리됨', _stChk.data.status === 'paid' ? '이미 결제 완료된 초대입니다' : '처리할 수 없는 초대입니다');
+      riPayClose();
+      return;
+    }
     // 1) 예치금 잔액 재확인 + 차감 (멤버십 → 일반 순서)
     var me = await window.sb.from('profiles')
       .select('*')
@@ -24523,6 +24536,11 @@ async function riConfirmPay(){
   } catch(e){
     console.error('[riPay] confirm 예외:', e);
     showToast('❌','오류','['+e.name+'] '+e.message);
+  } finally {
+    // 🆕 가드 해제 + 버튼 복구 (어떤 경로로 끝나든)
+    _riPayBusy = false;
+    var _rb = document.getElementById('riPayBtn');
+    if(_rb){ _rb.style.pointerEvents=''; _rb.style.opacity=''; }
   }
 }
 
