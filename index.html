@@ -9862,13 +9862,6 @@ window.closePromoCarousel = function(){
     <button class="sub-back" onclick="closeSubPage('ticketCalScreen')">←</button>
     <div class="sub-title">티켓 캘린더</div>
   </div>
-  <!-- 🆕 매장 필터 (슈퍼어드민) — 매장별 예약 점유 확인 -->
-  <div id="tcalRestFilterWrap" style="display:none;padding:10px 14px 6px;background:#f7f5f2;">
-    <select id="tcalRestFilter" onchange="tcalSetRest(this.value)" style="width:100%;padding:10px 12px;border:1px solid #e0ddd5;border-radius:10px;background:#fff;font-family:'Noto Sans KR',sans-serif;font-size:13px;font-weight:700;color:#1a1a18;-webkit-appearance:none;">
-      <option value="">전체 매장</option>
-    </select>
-    <div style="font-size:10.5px;color:#9a9486;margin:6px 2px 0;font-family:'Noto Sans KR',sans-serif;">날짜 우측 숫자 = 그날 예약 인원(초대결제+티켓판매). 날짜를 누르면 예약 현황이 보입니다.</div>
-  </div>
   <!-- 🆕 전체 스크롤 컨테이너 (캘린더+디테일 함께 스크롤) -->
   <div id="tcalScroll" style="flex:1 1 0;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;">
     <!-- 캘린더 -->
@@ -9889,8 +9882,6 @@ window.closePromoCarousel = function(){
       <div class="tcal-empty-day">날짜를 선택하세요</div>
     </div>
   </div>
-  <!-- 🆕 선택한 날짜로 초대 발송 FAB -->
-  <button id="tcalInviteFab" onclick="openInviteFromCalendar()" style="display:none;position:fixed;right:18px;bottom:22px;z-index:640;height:52px;padding:0 22px;border:none;border-radius:26px;background:#6A1A1A;color:#fff;font-family:'Noto Sans KR',sans-serif;font-size:14px;font-weight:800;box-shadow:0 8px 22px rgba(106,26,26,.35);cursor:pointer;">초대 발송</button>
   <!-- 구매자 상세 모달 -->
   <div class="tcal-buyer-modal" id="tcalBuyerModal" onclick="if(event.target===this)tcalCloseBuyer()">
     <div class="tcal-buyer-sheet" id="tcalBuyerSheet"></div>
@@ -9898,9 +9889,16 @@ window.closePromoCarousel = function(){
   <!-- 🆕 수기 예약 입력 모달 -->
   <div id="tcalManualModal" style="display:none;position:fixed;inset:0;z-index:980;background:rgba(20,18,16,.55);align-items:center;justify-content:center;padding:24px;" onclick="if(event.target===this)tcalCloseManual()">
     <div style="width:100%;max-width:360px;background:#fff;border-radius:22px;padding:24px 22px;box-shadow:0 24px 60px rgba(0,0,0,.4);font-family:'Noto Sans KR',sans-serif;">
-      <div style="font-size:18px;font-weight:800;color:#1a1a18;">수기 예약 추가</div>
+      <div style="font-size:18px;font-weight:800;color:#1a1a18;">수동 예약 추가</div>
       <div id="tcalManualCtx" style="font-size:12px;color:#9a9486;margin-top:4px;"></div>
       <div style="margin-top:16px;">
+        <label style="font-size:12px;font-weight:700;color:#6b6b6b;">티켓 유형</label>
+        <select id="tcalManualType" style="width:100%;box-sizing:border-box;margin-top:5px;padding:12px;border:1px solid #e0ddd5;border-radius:10px;font-size:14px;font-weight:700;background:#fff;-webkit-appearance:none;">
+          <option value="오프라인">오프라인</option>
+          <option value="초대">초대</option>
+        </select>
+      </div>
+      <div style="margin-top:12px;">
         <label style="font-size:12px;font-weight:700;color:#6b6b6b;">이름</label>
         <input id="tcalManualName" type="text" placeholder="예약자 이름" style="width:100%;box-sizing:border-box;margin-top:5px;padding:12px;border:1px solid #e0ddd5;border-radius:10px;font-size:14px;">
       </div>
@@ -9919,6 +9917,27 @@ window.closePromoCarousel = function(){
       <div style="display:flex;gap:10px;margin-top:18px;">
         <button onclick="tcalCloseManual()" style="flex:1;height:48px;border:1px solid #e0ddd5;border-radius:12px;background:#fff;font-family:inherit;font-size:14px;font-weight:700;color:#888;cursor:pointer;">취소</button>
         <button onclick="tcalManualSave()" style="flex:1.6;height:48px;border:none;border-radius:12px;background:#6A1A1A;color:#fff;font-family:inherit;font-size:14px;font-weight:800;cursor:pointer;">저장</button>
+      </div>
+    </div>
+  </div>
+  <!-- 🆕 일정(매장) 등록 모달 -->
+  <div id="tcalSchedModal" style="display:none;position:fixed;inset:0;z-index:980;background:rgba(20,18,16,.55);align-items:center;justify-content:center;padding:24px;" onclick="if(event.target===this)tcalCloseSchedule()">
+    <div style="width:100%;max-width:360px;background:#fff;border-radius:22px;padding:24px 22px;box-shadow:0 24px 60px rgba(0,0,0,.4);font-family:'Noto Sans KR',sans-serif;">
+      <div style="font-size:18px;font-weight:800;color:#1a1a18;">일정 등록</div>
+      <div style="font-size:12px;color:#9a9486;margin-top:4px;">선택한 날짜에 매장·정원·시간을 등록합니다.</div>
+      <div style="margin-top:16px;">
+        <label style="font-size:12px;font-weight:700;color:#6b6b6b;">매장</label>
+        <select id="tcalSchedRest" style="width:100%;box-sizing:border-box;margin-top:5px;padding:12px;border:1px solid #e0ddd5;border-radius:10px;font-size:14px;font-weight:700;background:#fff;-webkit-appearance:none;"><option value="">매장 선택…</option></select>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:12px;">
+        <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#6b6b6b;">정원</label>
+          <input id="tcalSchedCap" type="number" inputmode="numeric" min="0" placeholder="0" style="width:100%;box-sizing:border-box;margin-top:5px;padding:12px;border:1px solid #e0ddd5;border-radius:10px;font-size:14px;font-weight:800;"></div>
+        <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#6b6b6b;">시간</label>
+          <input id="tcalSchedTime" type="text" placeholder="예: 18:00" style="width:100%;box-sizing:border-box;margin-top:5px;padding:12px;border:1px solid #e0ddd5;border-radius:10px;font-size:14px;font-weight:700;"></div>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:18px;">
+        <button onclick="tcalCloseSchedule()" style="flex:1;height:48px;border:1px solid #e0ddd5;border-radius:12px;background:#fff;font-family:inherit;font-size:14px;font-weight:700;color:#888;cursor:pointer;">취소</button>
+        <button onclick="tcalSaveSchedule()" style="flex:1.6;height:48px;border:none;border-radius:12px;background:#1a1a18;color:#fff;font-family:inherit;font-size:14px;font-weight:800;cursor:pointer;">등록</button>
       </div>
     </div>
   </div>
@@ -30526,44 +30545,55 @@ function _tcalDateKey(ds){
   return d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate();
 }
 
-// 🆕 날짜별 예약 점유 맵: { 'YYYY-M-D': {pax, items:[{src,name,pax,time,restId,rest}]} }
-//    매장 필터(_tcalRestFilter) 적용. 티켓 판매(_tcalPurchases) + 초대 결제(_tcalInvites) 합산.
-function _tcalBookingMap(){
-  var map = {};
-  function add(key, item){ if(!key) return; if(!map[key]) map[key]={pax:0,items:[]}; map[key].pax += (parseInt(item.pax)||0); map[key].items.push(item); }
+// 🆕 v2: 그 날짜의 매장별 그룹 → [{restId, restName, time, capacity, entries:[...]}]
+//    entries: {type:'app'|'invite'|'manual', name, pax, uid, amount, agency, time, memo, mid, ttype}
+function _tcalDayGroups(dateKey){
+  var groups = {};
+  function gr(restId, restName){
+    restId = String(restId||'');
+    if(!groups[restId]) groups[restId] = {restId:restId, restName:'', time:'', capacity:null, entries:[]};
+    if(restName && !groups[restId].restName) groups[restId].restName = restName;
+    return groups[restId];
+  }
+  // 앱 업로드 티켓 상품(ticketDB) — 업로드 시 자동으로 카드 생성(정원=총좌석, 시간)
+  (typeof _tcalScopedTickets==='function' ? _tcalScopedTickets() : []).forEach(function(t){
+    if(t.status==='hidden' || t.status==='pending') return;
+    if(_tcalDateKey(t.date) !== dateKey) return;
+    var g = gr(t.restId, _tcalRestName(t.restId));
+    var seats = parseInt(t.assignedPax || t.totalPax || 0) || 0;
+    if(g.capacity == null && seats > 0) g.capacity = seats;
+    if(!g.time && t.time) g.time = t.time;
+  });
+  // 일정/정원 (수동 등록한 일정 — 정원/시간 덮어쓰기)
+  (_tcalCapRows||[]).forEach(function(c){
+    if(_tcalDateKey(String(c.ymd).replace(/-/g,'.')) !== dateKey) return;
+    var g = gr(c.venue_id, c.venue_name); g.capacity = parseInt(c.seats)||0; if(c.stime) g.time = c.stime;
+  });
+  // 앱 구매 티켓 (초대유래 'inv-' 제외 → 중복 방지)
   (_tcalPurchases||[]).forEach(function(h){
     if(h.status === 'cancelled') return;
-    // 🆕 초대유래 티켓(ticket_product_id='inv-…')은 초대(_tcalInvites)로 이미 카운트됨 → 중복 제거
     if(String(h.id||'').indexOf('inv-') === 0) return;
-    var rid = h.restId || h.restaurant_id;
-    if(_tcalRestFilter && String(rid) !== String(_tcalRestFilter)) return;
-    add(_tcalDateKey(h.visitDate || h.reservation_date), {src:'ticket', name:(h.buyerName||h.buyer_name||''), uid:(h._userId||h.userId||''), pax:(h.pax||h.party_size||0), time:(h.visitTime||''), amount:(parseInt(h.amt)||0), agency:0, restId:rid, rest:(h.rest||h.restName||h.restaurant_name||'')});
+    if(_tcalDateKey(h.visitDate || h.reservation_date) !== dateKey) return;
+    gr(h.restId||h.restaurant_id, h.rest||h.restName||h.restaurant_name).entries.push({type:'app', name:(h.buyerName||''), uid:(h._userId||''), pax:(h.pax||1), amount:(parseInt(h.amt)||0), agency:0, time:(h.visitTime||'')});
   });
+  // 초대 결제
   (_tcalInvites||[]).forEach(function(inv){
-    if(_tcalRestFilter && String(inv.restaurant_id) !== String(_tcalRestFilter)) return;
-    add(_tcalDateKey(inv.visit_date), {src:'invite', name:(inv._inviteeName||''), uid:(inv.invitee_user_id||''), pax:(inv.pax||0), time:(inv.visit_time||''), amount:(parseInt(inv.total_amount)||0), agency:(parseInt(inv.agency_fee)||0), restId:inv.restaurant_id, rest:(inv.restaurant_name||'')});
+    if(_tcalDateKey(inv.visit_date) !== dateKey) return;
+    gr(inv.restaurant_id, inv.restaurant_name).entries.push({type:'invite', name:(inv._inviteeName||''), uid:(inv.invitee_user_id||''), pax:(inv.pax||1), amount:(parseInt(inv.total_amount)||0), agency:(parseInt(inv.agency_fee)||0), time:(inv.visit_time||'')});
   });
+  // 수동 (유형: 초대/오프라인)
   (_tcalManual||[]).forEach(function(m){
-    if(_tcalRestFilter && String(m.venue_id) !== String(_tcalRestFilter)) return;
-    add(_tcalDateKey(String(m.ymd).replace(/-/g,'.')), {src:'manual', name:(m.name||''), memo:(m.memo||''), mid:m.id, pax:(m.pax||0), amount:(parseInt(m.amount)||0), agency:0, restId:m.venue_id, rest:''});
+    if(_tcalDateKey(String(m.ymd).replace(/-/g,'.')) !== dateKey) return;
+    gr(m.venue_id, m.venue_name).entries.push({type:'manual', ttype:(m.ttype||'오프라인'), name:(m.name||''), pax:(m.pax||1), amount:(parseInt(m.amount)||0), agency:0, memo:(m.memo||''), mid:m.id});
   });
-  return map;
+  Object.keys(groups).forEach(function(k){ if(!groups[k].restName) groups[k].restName = _tcalRestName(k); });
+  return Object.keys(groups).map(function(k){ return groups[k]; }).sort(function(a,b){ return String(a.restName).localeCompare(String(b.restName)); });
 }
-
-// 🆕 매장 필터 select 채우기 (예약이 있는 매장만)
-function _tcalFillRestFilter(){
-  var sel = document.getElementById('tcalRestFilter');
-  if(!sel) return;
-  var seen = {}, opts = [];
-  function push(id, name){ id=String(id||''); if(!id||seen[id])return; seen[id]=1; opts.push({id:id, name:(name||id)}); }
-  (_tcalPurchases||[]).forEach(function(h){ push(h.restId||h.restaurant_id, h.rest||h.restName||h.restaurant_name); });
-  (_tcalInvites||[]).forEach(function(inv){ push(inv.restaurant_id, inv.restaurant_name); });
-  opts.sort(function(a,b){ return a.name.localeCompare(b.name); });
-  sel.innerHTML = '<option value="">전체 매장</option>' + opts.map(function(o){
-    return '<option value="'+o.id+'"'+(o.id===_tcalRestFilter?' selected':'')+'>'+(o.name)+'</option>';
-  }).join('');
+// 🆕 그 날짜 총 인원 (캘린더 셀 배지)
+function _tcalDayTotalPax(dateKey){
+  return _tcalDayGroups(dateKey).reduce(function(s,g){ return s + g.entries.reduce(function(p,e){ return p+(e.pax||0); },0); }, 0);
 }
-function tcalSetRest(v){ _tcalRestFilter = v||''; tcalRender(); if(_tcalSelectedDate) tcalRenderDetail(_tcalSelectedDate); }
+var _tcalCapRows = [];   // 🆕 daegwan_capacity 행 (정원/시간/매장명)
 
 // 🆕 초대 결제 회원 클릭 → 회원 정보 (구매자 시트 재사용)
 async function tcalShowInviteMember(uid){
@@ -30619,11 +30649,10 @@ async function tcalShowInviteMember(uid){
 window.tcalShowInviteMember = tcalShowInviteMember;
 
 // 🆕 캘린더 선택 날짜로 '예약 초대 발송' 진입 (날짜 자동 채움 → 날짜 선택 단계 생략)
-function openInviteFromCalendar(){
+function openInviteFromCalendar(restId){
   if(!_tcalSelectedDate){ showToast('⚠','날짜 선택','먼저 캘린더에서 날짜를 누르세요'); return; }
   var fullDate = _tcalYear + '.' + _tcalSelectedDate;   // YYYY.MM.DD
   if(typeof openReservationInviteScreen !== 'function'){ showToast('⚠','오류','초대 발송 화면을 찾을 수 없어요'); return; }
-  var _fab = document.getElementById('tcalInviteFab'); if(_fab) _fab.style.display='none';
   // 🆕 캘린더를 먼저 닫아야 riScreen(display:flex)이 위로 올라옴 (안 그러면 뒤에 깔림)
   if(typeof closeSubPage === 'function'){ try{ closeSubPage('ticketCalScreen'); }catch(_){ } }
   var _sc = document.getElementById('ticketCalScreen'); if(_sc) _sc.style.display='none';
@@ -30642,47 +30671,77 @@ function openInviteFromCalendar(){
 window.openInviteFromCalendar = openInviteFromCalendar;
 
 // 🆕 매장×날짜 좌석 정원 (수동 저장) — 남은 좌석 = 정원 − (초대결제+티켓판매 인원)
-var _tcalCapacity = {};   // 'restId|YYYY-M-D' → seats
-function _tcalCapKey(restId, dateKey){ return String(restId)+'|'+dateKey; }
 async function tcalLoadCapacity(){
-  _tcalCapacity = {};
+  _tcalCapRows = [];
   try {
     if(!window.sb) return;
-    var r = await window.sb.from('daegwan_capacity').select('venue_id,ymd,seats');
-    if(!r.error && Array.isArray(r.data)){
-      r.data.forEach(function(c){
-        var d = (typeof _dParseDate==='function') ? _dParseDate(String(c.ymd).replace(/-/g,'.')) : null;
-        if(d) _tcalCapacity[_tcalCapKey(c.venue_id, d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate())] = parseInt(c.seats)||0;
-      });
-    }
+    var r = await window.sb.from('daegwan_capacity').select('venue_id,ymd,seats,stime,venue_name');
+    if(!r.error && Array.isArray(r.data)) _tcalCapRows = r.data;
   } catch(e){ console.warn('[tcal] capacity 로드 실패:', e); }
 }
-async function tcalSaveCapacity(){
-  if(!_tcalRestFilter){ showToast('⚠','매장 선택','먼저 상단에서 매장을 선택하세요'); return; }
-  if(!_tcalSelectedDate){ showToast('⚠','날짜 선택','캘린더에서 날짜를 선택하세요'); return; }
-  var inp = document.getElementById('tcalCapInput');
-  var seats = Math.max(0, parseInt(inp && inp.value) || 0);
+// 선택 날짜 → 'YYYY-MM-DD'
+function _tcalYMD(){
   var day = parseInt(_tcalSelectedDate.split('.')[1], 10);
-  var ymd = _tcalYear + '-' + String(_tcalMonth+1).padStart(2,'0') + '-' + String(day).padStart(2,'0');
+  return _tcalYear + '-' + String(_tcalMonth+1).padStart(2,'0') + '-' + String(day).padStart(2,'0');
+}
+
+// 🆕 매장 카드별 정원 저장
+async function tcalSaveCapacity(restId){
+  if(!restId || !_tcalSelectedDate){ showToast('⚠','선택 필요','매장·날짜 확인'); return; }
+  var inp = document.getElementById('tcalCap_' + restId);
+  var seats = Math.max(0, parseInt(inp && inp.value) || 0);
   try {
     var u = (await window.sb.auth.getUser()).data.user;
     var r = await window.sb.from('daegwan_capacity')
-      .upsert({ venue_id:String(_tcalRestFilter), ymd:ymd, seats:seats, updated_by:(u&&u.id)||null, updated_at:new Date().toISOString() }, { onConflict:'venue_id,ymd' });
+      .upsert({ venue_id:String(restId), ymd:_tcalYMD(), seats:seats, venue_name:_tcalRestName(restId), updated_by:(u&&u.id)||null, updated_at:new Date().toISOString() }, { onConflict:'venue_id,ymd' });
     if(r.error){ showToast('❌','저장 실패', (r.error.message||'').substring(0,80)); return; }
-    _tcalCapacity[_tcalCapKey(_tcalRestFilter, _tcalYear+'-'+(_tcalMonth+1)+'-'+day)] = seats;
-    showToast('✓','저장 완료', '총 좌석 ' + seats + '석');
-    tcalRender(); tcalRenderDetail(_tcalSelectedDate);
+    showToast('✓','저장 완료', '정원 ' + seats + '석');
+    await tcalLoadCapacity(); tcalRender(); tcalRenderDetail(_tcalSelectedDate);
   } catch(e){ showToast('❌','오류', (e.message||'').substring(0,80)); }
 }
 window.tcalSaveCapacity = tcalSaveCapacity;
 
-// 🆕 수기 예약 — 앱 초대 불가 상황에 이름/인원/메모만 기재 (인원은 점유 카운팅에 합산)
-function tcalOpenManual(){
-  if(!_tcalRestFilter){ showToast('⚠','매장 선택','먼저 상단에서 매장을 선택하세요'); return; }
-  if(!_tcalSelectedDate){ showToast('⚠','날짜 선택','캘린더에서 날짜를 선택하세요'); return; }
+// 🆕 일정(매장) 등록 — 매장 + 정원 + 시간
+var _tcalSchedRest = '';
+function tcalOpenSchedule(){
+  if(!_tcalSelectedDate){ showToast('⚠','날짜 선택','캘린더에서 날짜를 누르세요'); return; }
+  _tcalSchedRest = '';
+  var sel = document.getElementById('tcalSchedRest');
+  if(sel){
+    var opts = (typeof restaurantDB!=='undefined'?restaurantDB:[]).slice().sort(function(a,b){ return String(a.name||'').localeCompare(String(b.name||'')); });
+    sel.innerHTML = '<option value="">매장 선택…</option>' + opts.map(function(r){ return '<option value="'+r.id+'">'+(r.name||r.id)+'</option>'; }).join('');
+  }
+  var c = document.getElementById('tcalSchedCap'); if(c) c.value='';
+  var t = document.getElementById('tcalSchedTime'); if(t) t.value='';
+  var m = document.getElementById('tcalSchedModal'); if(m) m.style.display='flex';
+}
+function tcalCloseSchedule(){ var m=document.getElementById('tcalSchedModal'); if(m) m.style.display='none'; }
+window.tcalOpenSchedule = tcalOpenSchedule; window.tcalCloseSchedule = tcalCloseSchedule;
+async function tcalSaveSchedule(){
+  var rid = (document.getElementById('tcalSchedRest')||{}).value || '';
+  if(!rid){ showToast('⚠','매장 선택','매장을 선택하세요'); return; }
+  var seats = Math.max(0, parseInt((document.getElementById('tcalSchedCap')||{}).value) || 0);
+  var time = (document.getElementById('tcalSchedTime')||{}).value || '';
+  try {
+    var u = (await window.sb.auth.getUser()).data.user;
+    var r = await window.sb.from('daegwan_capacity')
+      .upsert({ venue_id:String(rid), ymd:_tcalYMD(), seats:seats, stime:time.trim(), venue_name:_tcalRestName(rid), updated_by:(u&&u.id)||null, updated_at:new Date().toISOString() }, { onConflict:'venue_id,ymd' });
+    if(r.error){ showToast('❌','저장 실패', (r.error.message||'').substring(0,80)); return; }
+    showToast('✓','일정 등록', _tcalRestName(rid) + ' · 정원 ' + seats);
+    tcalCloseSchedule();
+    await tcalLoadCapacity(); tcalRender(); tcalRenderDetail(_tcalSelectedDate);
+  } catch(e){ showToast('❌','오류', (e.message||'').substring(0,80)); }
+}
+window.tcalSaveSchedule = tcalSaveSchedule;
+
+// 🆕 수동 추가 — 유형(초대/오프라인) · 이름 · 인원 · 받은금액 · 메모
+var _tcalManualRest = '';
+function tcalOpenManual(restId){
+  if(!restId || !_tcalSelectedDate){ showToast('⚠','선택 필요','매장·날짜 확인'); return; }
+  _tcalManualRest = String(restId);
   var ctx = document.getElementById('tcalManualCtx');
-  var restName = (typeof _resvVenueName==='function') ? _resvVenueName(_tcalRestFilter) : _tcalRestFilter;
-  if(ctx) ctx.textContent = restName + ' · ' + _tcalYear + '.' + _tcalSelectedDate;
+  if(ctx) ctx.textContent = _tcalRestName(restId) + ' · ' + (_tcalMonth+1) + '월 ' + parseInt(_tcalSelectedDate.split('.')[1],10) + '일';
+  var ty = document.getElementById('tcalManualType'); if(ty) ty.value='오프라인';
   var nm = document.getElementById('tcalManualName'); if(nm) nm.value='';
   var px = document.getElementById('tcalManualPax'); if(px) px.value='1';
   var am = document.getElementById('tcalManualAmount'); if(am) am.value='0';
@@ -30693,20 +30752,19 @@ function tcalCloseManual(){ var m=document.getElementById('tcalManualModal'); if
 window.tcalOpenManual = tcalOpenManual; window.tcalCloseManual = tcalCloseManual;
 
 async function tcalManualSave(){
-  if(!_tcalRestFilter || !_tcalSelectedDate){ showToast('⚠','선택 필요','매장·날짜를 먼저 선택하세요'); return; }
+  if(!_tcalManualRest || !_tcalSelectedDate){ showToast('⚠','선택 필요','매장·날짜를 먼저 선택하세요'); return; }
+  var ttype = (document.getElementById('tcalManualType')||{}).value || '오프라인';
   var name = (document.getElementById('tcalManualName')||{}).value || '';
   var pax  = Math.max(1, parseInt((document.getElementById('tcalManualPax')||{}).value) || 1);
   var amount = Math.max(0, parseInt((document.getElementById('tcalManualAmount')||{}).value) || 0);
   var memo = (document.getElementById('tcalManualMemo')||{}).value || '';
-  var day = parseInt(_tcalSelectedDate.split('.')[1], 10);
-  var ymd = _tcalYear + '-' + String(_tcalMonth+1).padStart(2,'0') + '-' + String(day).padStart(2,'0');
   try {
     var u = (await window.sb.auth.getUser()).data.user;
     var r = await window.sb.from('daegwan_manual').insert({
-      venue_id:String(_tcalRestFilter), ymd:ymd, name:name.trim(), pax:pax, amount:amount, memo:memo.trim(), created_by:(u&&u.id)||null
+      venue_id:String(_tcalManualRest), ymd:_tcalYMD(), ttype:ttype, name:name.trim(), pax:pax, amount:amount, memo:memo.trim(), venue_name:_tcalRestName(_tcalManualRest), created_by:(u&&u.id)||null
     });
     if(r.error){ showToast('❌','저장 실패', (r.error.message||'').substring(0,80)); return; }
-    showToast('✓','추가 완료', (name.trim()||'수기 예약') + ' · ' + pax + '명');
+    showToast('✓','추가 완료', (name.trim()||'수동') + ' · ' + pax + '명');
     tcalCloseManual();
     await tcalLoadManual();
     tcalRender(); tcalRenderDetail(_tcalSelectedDate);
@@ -30716,7 +30774,7 @@ window.tcalManualSave = tcalManualSave;
 
 async function tcalManualDelete(id){
   if(!id || !window.sb) return;
-  if(!confirm('이 수기 예약을 삭제할까요?')) return;
+  if(!confirm('이 수동 예약을 삭제할까요?')) return;
   try {
     var r = await window.sb.from('daegwan_manual').delete().eq('id', id);
     if(r.error){ showToast('❌','삭제 실패', (r.error.message||'').substring(0,80)); return; }
@@ -30766,15 +30824,10 @@ function tcalInit() {
   _tcalMonth = now.getMonth();
   _tcalSelectedDate = null;
   var _d = document.getElementById('tcalDetail');
-  if(_d) _d.innerHTML = '<div class="tcal-empty-day">구매기록 불러오는 중…</div>';
-  _tcalRestFilter = '';
-  // 슈퍼어드민만 매장 필터 노출
-  var _rf = document.getElementById('tcalRestFilterWrap');
-  if(_rf) _rf.style.display = (typeof _isSuperAdmin === 'function' && _isSuperAdmin()) ? 'block' : 'none';
+  if(_d) _d.innerHTML = '<div class="tcal-empty-day">불러오는 중…</div>';
   tcalRender();
-  // 구매기록 + 초대결제 비동기 로드 → 완료 후 캘린더(점유)·상세 재렌더
+  // 데이터 로드 → 완료 후 캘린더·상세 재렌더
   Promise.all([tcalLoadPurchases(), tcalLoadInvites(), tcalLoadCapacity(), tcalLoadManual()]).then(function(){
-    _tcalFillRestFilter();
     tcalRender();
     if(_tcalSelectedDate){
       tcalRenderDetail(_tcalSelectedDate);
@@ -30791,7 +30844,6 @@ function tcalMove(dir) {
   if (_tcalMonth < 0)  { _tcalMonth = 11; _tcalYear--; }
   _tcalSelectedDate = null;
   document.getElementById('tcalDetail').innerHTML = '<div class="tcal-empty-day">날짜를 선택하세요</div>';
-  var _fab = document.getElementById('tcalInviteFab'); if(_fab) _fab.style.display='none';
   tcalRender();
 }
 
@@ -30818,9 +30870,6 @@ function tcalRender() {
     else ticketMap[key].active = true;
   });
 
-  // 🆕 날짜별 예약 점유(인원) — 티켓판매 + 초대결제 합산, 매장필터 적용
-  var bmap = _tcalBookingMap();
-
   var html = '';
   // 빈 셀
   for (var i = 0; i < firstDay; i++) {
@@ -30839,10 +30888,10 @@ function tcalRender() {
     if (info.active) dots += '<div class="tcal-dot green"></div>';
     if (info.soldout) dots += '<div class="tcal-dot red"></div>';
 
-    // 🆕 예약 인원 배지 (그날 예약된 총 인원 = 더블부킹 점유 표시)
-    var bk = bmap[_tcalYear + '-' + (_tcalMonth + 1) + '-' + d];
-    var paxBadge = (bk && bk.pax > 0)
-      ? '<div style="position:absolute;top:3px;right:3px;min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:#6A1A1A;color:#fff;font-size:9px;font-weight:800;line-height:16px;text-align:center;">' + bk.pax + '</div>'
+    // 🆕 그날 총 예약 인원 배지
+    var _tot = _tcalDayTotalPax(_tcalYear + '-' + (_tcalMonth + 1) + '-' + d);
+    var paxBadge = (_tot > 0)
+      ? '<div style="position:absolute;top:3px;right:3px;min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:#6A1A1A;color:#fff;font-size:9px;font-weight:800;line-height:16px;text-align:center;">' + _tot + '</div>'
       : '';
 
     html += '<div class="' + cls + '" style="position:relative;" onclick="tcalSelectDay(\'' + dateStr + '\')">';
@@ -30859,154 +30908,78 @@ function tcalSelectDay(dateStr) {
   _tcalSelectedDate = dateStr;
   tcalRender(); // 선택 하이라이트 갱신
   tcalRenderDetail(dateStr);
-  // 🆕 날짜 선택 시 '이 날짜로 초대 발송' FAB 노출 (슈퍼어드민)
-  var fab = document.getElementById('tcalInviteFab');
-  if(fab) fab.style.display = (typeof _isSuperAdmin === 'function' && _isSuperAdmin()) ? 'block' : 'none';
 }
 
 function tcalRenderDetail(dateStr) {
   var el = document.getElementById('tcalDetail');
-  _tcalBuyerMap = {};   // 이 날짜 렌더마다 구매자 lookup 초기화
-  // 캘린더 점(닷)과 동일 기준: hidden/pending 제외한 모든 티켓(판매중 + 매진) 표시.
-  //   기존엔 status==='active' 만 필터해서 '매진(soldout)' 날짜(빨간 점)를 누르면
-  //   상세가 비어 보이는(=등록된 티켓 없음) 버그가 있었음.
-  var tickets = _tcalScopedTickets().filter(function(t) {
-    return t.date === dateStr && t.status !== 'hidden' && t.status !== 'pending';
-  });
-
-  // 🆕 그날 예약 점유(초대 결제 + 티켓 판매) — 더블부킹 방지용 현황
+  if(!el) return;
   var _day = parseInt((dateStr.split('.')[1]) || '0', 10);
-  var _dayKey = _tcalYear + '-' + (_tcalMonth + 1) + '-' + _day;
-  var _bk = _tcalBookingMap()[_dayKey];
-  var bookedPax = _bk ? _bk.pax : 0;
-  var hasFilter = !!_tcalRestFilter;
-  var occHtml = '';
+  var dateKey = _tcalYear + '-' + (_tcalMonth + 1) + '-' + _day;
+  var _wd = ['일','월','화','수','목','금','토'];
+  var dateLabel = (_tcalMonth+1) + '월 ' + _day + '일 (' + _wd[new Date(_tcalYear,_tcalMonth,_day).getDay()] + ')';
+  var isSuper = (typeof _isSuperAdmin === 'function' && _isSuperAdmin());
+  var groups = _tcalDayGroups(dateKey);
 
-  // 매장 선택 시: 빈 날짜에도 패널. 전체매장: 예약 있을 때만.
-  if (hasFilter || (_bk && _bk.items.length > 0)) {
-    var cap = hasFilter ? _tcalCapacity[_tcalCapKey(_tcalRestFilter, _dayKey)] : undefined;
-    var remain = (cap != null) ? Math.max(0, cap - bookedPax) : null;
-    var _wd = ['일','월','화','수','목','금','토'];
-    var dateLabel = (_tcalMonth+1) + '월 ' + _day + '일 (' + _wd[new Date(_tcalYear,_tcalMonth,_day).getDay()] + ')';
+  var html = '<div style="padding:12px 14px 4px;display:flex;justify-content:space-between;align-items:center;font-family:\'Noto Sans KR\',sans-serif;">'
+    + '<div style="font-size:15px;font-weight:800;color:#1a1a18;">' + dateLabel + '</div>'
+    + (isSuper ? '<button onclick="tcalOpenSchedule()" style="height:34px;padding:0 14px;border:none;border-radius:9px;background:#1a1a18;color:#fff;font-size:12px;font-weight:800;font-family:inherit;cursor:pointer;">＋ 일정 등록</button>' : '')
+    + '</div>';
 
-    occHtml = '<div style="margin:10px 12px 4px;background:#fff;border:1px solid #ece8df;border-radius:16px;overflow:hidden;font-family:\'Noto Sans KR\',sans-serif;">';
-    // 매장명 + 일정/시간(날짜)
-    occHtml += '<div style="padding:16px 16px 12px;border-bottom:1px solid #f0ece1;">'
-      + '<div style="font-size:18px;font-weight:800;color:#1a1a18;word-break:keep-all;">' + (hasFilter ? _tcalRestName(_tcalRestFilter) : '전체 매장') + '</div>'
-      + '<div style="font-size:12.5px;color:#9A9486;margin-top:3px;">' + dateLabel + '</div>'
-      + '</div>';
-    // 총 좌석 / 잔여 좌석
-    if (hasFilter) {
-      occHtml += '<div style="display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid #f0ece1;background:#faf8f3;">'
-        + '<div style="flex:1;"><div style="font-size:11px;color:#9A9486;">총 좌석</div>'
-        +   '<div style="display:flex;align-items:center;gap:6px;margin-top:4px;"><input id="tcalCapInput" type="number" inputmode="numeric" min="0" value="' + (cap!=null?cap:'') + '" placeholder="0" style="width:56px;padding:6px;border:1px solid #e0ddd5;border-radius:8px;font-size:15px;font-weight:800;text-align:center;font-family:\'Noto Sans KR\',sans-serif;">'
-        +     '<button onclick="tcalSaveCapacity()" style="height:32px;padding:0 12px;border:none;border-radius:8px;background:#6A1A1A;color:#fff;font-size:12px;font-weight:800;font-family:\'Noto Sans KR\',sans-serif;cursor:pointer;">저장</button></div></div>'
-        + '<div style="text-align:right;"><div style="font-size:11px;color:#9A9486;">잔여 좌석</div>'
-        +   (remain!=null ? '<div style="font-size:24px;font-weight:900;color:'+(remain===0?'#B23A2E':'#1E9E5A')+';line-height:1.1;margin-top:2px;">'+remain+'</div>' : '<div style="font-size:12.5px;color:#c9c4ba;margin-top:5px;">정원 미설정</div>')
-        + '</div></div>';
+  if(groups.length === 0){
+    html += '<div class="tcal-empty-day">등록된 일정·예약이 없어요' + (isSuper ? '<br><span style="font-size:11px;color:#bbb;">＋ 일정 등록으로 매장·정원을 추가하세요</span>' : '') + '</div>';
+    el.innerHTML = html; el.scrollTop = 0; return;
+  }
+
+  groups.forEach(function(g){
+    var booked = g.entries.reduce(function(p,e){ return p + (e.pax||0); }, 0);
+    var remain = (g.capacity != null) ? Math.max(0, g.capacity - booked) : null;
+    html += '<div style="margin:8px 12px;background:#fff;border:1px solid #ece8df;border-radius:16px;overflow:hidden;font-family:\'Noto Sans KR\',sans-serif;">';
+    // 헤더: 매장명 / 시간 / 정원·잔여
+    html += '<div style="padding:15px 16px 12px;border-bottom:1px solid #f0ece1;">'
+      + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">'
+      +   '<div style="min-width:0;"><div style="font-size:17px;font-weight:800;color:#1a1a18;word-break:keep-all;">' + g.restName + '</div>'
+      +     '<div style="font-size:12px;color:#9A9486;margin-top:2px;">시간 ' + (g.time || '—') + '</div></div>'
+      +   '<div style="text-align:right;flex-shrink:0;"><div style="font-size:10.5px;color:#9A9486;">정원 ' + (g.capacity!=null?g.capacity:'-') + ' · 예약 ' + booked + '</div>'
+      +     (remain!=null ? '<div style="font-size:22px;font-weight:900;color:'+(remain===0?'#B23A2E':'#1E9E5A')+';line-height:1.1;">잔여 '+remain+'</div>' : '<div style="font-size:11px;color:#c9c4ba;margin-top:3px;">정원 미설정</div>')
+      +   '</div></div>';
+    if(isSuper){
+      html += '<div style="display:flex;align-items:center;gap:6px;margin-top:10px;"><span style="font-size:11px;color:#9A9486;">정원</span>'
+        + '<input id="tcalCap_' + g.restId + '" type="number" min="0" value="' + (g.capacity!=null?g.capacity:'') + '" placeholder="0" style="width:54px;padding:5px;border:1px solid #e0ddd5;border-radius:7px;font-size:13px;font-weight:800;text-align:center;font-family:inherit;">'
+        + '<button onclick="tcalSaveCapacity(\'' + g.restId + '\')" style="height:28px;padding:0 10px;border:none;border-radius:7px;background:#6A1A1A;color:#fff;font-size:11px;font-weight:800;cursor:pointer;">저장</button></div>';
     }
-    // 상세 내역
-    occHtml += '<div style="display:flex;justify-content:space-between;align-items:center;padding:13px 16px 4px;"><span style="font-size:12px;font-weight:800;color:#6A1A1A;letter-spacing:.03em;">상세 내역</span><span style="font-size:11.5px;font-weight:700;color:#9A9486;">' + (_bk?_bk.items.length:0) + '건 · 총 ' + bookedPax + '명</span></div>';
-    if (_bk && _bk.items.length > 0) {
-      _bk.items.forEach(function(it){
-        var badge = it.src === 'invite'
-          ? '<span style="font-size:9.5px;font-weight:800;color:#6A1A1A;background:#FBF3F2;border:1px solid #EEDADA;border-radius:6px;padding:1px 6px;">초대</span>'
-          : (it.src === 'manual'
-            ? '<span style="font-size:9.5px;font-weight:800;color:#7A6A60;background:#F0ECE6;border:1px solid #E0D9CC;border-radius:6px;padding:1px 6px;">수기</span>'
-            : '<span style="font-size:9.5px;font-weight:800;color:#1F5BD6;background:#EAF1FF;border:1px solid #D2E0FB;border-radius:6px;padding:1px 6px;">티켓 구매</span>');
-        var clickable = !!it.uid;
-        var nameStr = it.name || (it.src==='manual' ? '(이름없음)' : '(회원)');
-        var nameHtml = clickable
-          ? '<span onclick="tcalShowInviteMember(\''+it.uid+'\')" style="font-weight:700;color:#1a1a18;cursor:pointer;text-decoration:underline;">'+nameStr+'</span>'
-          : '<span style="font-weight:700;color:#1a1a18;">'+nameStr+'</span>';
-        var amtStr = '₩' + (it.amount||0).toLocaleString() + (it.agency>0 ? ' <span style="color:#9A9486;font-weight:600;">(대행비 ₩'+it.agency.toLocaleString()+')</span>' : '');
-        var delBtn = (it.src==='manual') ? '<span onclick="event.stopPropagation();tcalManualDelete(\''+it.mid+'\')" style="cursor:pointer;color:#c33;font-size:17px;font-weight:700;line-height:1;padding:2px 4px;">×</span>' : '';
-        occHtml += '<div style="padding:11px 16px;border-top:1px solid #f4f1ec;">'
+    html += '</div>';
+    // 내역
+    if(g.entries.length === 0){
+      html += '<div style="padding:12px 16px;font-size:12px;color:#c9c4ba;">예약 없음</div>';
+    } else {
+      g.entries.forEach(function(e){
+        var label = e.type==='invite' ? '초대' : (e.type==='app' ? '앱구매' : (e.ttype||'오프라인'));
+        var col = e.type==='invite' ? ['#6A1A1A','#FBF3F2','#EEDADA'] : (e.type==='app' ? ['#1F5BD6','#EAF1FF','#D2E0FB'] : ['#7A6A60','#F0ECE6','#E0D9CC']);
+        var badge = '<span style="font-size:9.5px;font-weight:800;color:'+col[0]+';background:'+col[1]+';border:1px solid '+col[2]+';border-radius:6px;padding:1px 6px;">'+label+'</span>';
+        var clickable = (e.type !== 'manual' && e.uid);
+        var nm = e.name || (e.type==='manual' ? '(이름없음)' : '(회원)');
+        var nmH = clickable
+          ? '<span onclick="tcalShowInviteMember(\''+e.uid+'\')" style="font-weight:700;color:#1a1a18;cursor:pointer;text-decoration:underline;">'+nm+'</span>'
+          : '<span style="font-weight:700;color:#1a1a18;">'+nm+'</span>';
+        var amt = (e.amount ? ('₩'+e.amount.toLocaleString()) : '') + (e.agency>0 ? ' <span style="color:#9A9486;font-weight:600;">(대행비 ₩'+e.agency.toLocaleString()+')</span>' : '');
+        var del = (e.type==='manual') ? '<span onclick="tcalManualDelete(\''+e.mid+'\')" style="cursor:pointer;color:#c33;font-size:17px;font-weight:700;line-height:1;padding:2px 4px;">×</span>' : '';
+        html += '<div style="padding:10px 16px;border-top:1px solid #f4f1ec;">'
           + '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">'
-          +   '<div style="min-width:0;font-size:12.5px;">' + badge + ' ' + nameHtml + (it.time?' <span style="color:#9a9486;font-size:11.5px;">· '+it.time+'</span>':'') + '</div>'
-          +   '<div style="flex-shrink:0;display:flex;align-items:center;gap:8px;"><span style="font-size:13px;font-weight:800;color:#6A1A1A;">'+it.pax+'명</span>'+delBtn+'</div>'
+          +   '<div style="min-width:0;font-size:12.5px;">' + badge + ' ' + nmH + (e.time?' <span style="color:#9a9486;font-size:11px;">· '+e.time+'</span>':'') + '</div>'
+          +   '<div style="flex-shrink:0;display:flex;align-items:center;gap:8px;"><span style="font-size:13px;font-weight:800;color:#6A1A1A;">'+e.pax+'명</span>'+del+'</div>'
           + '</div>'
-          + '<div style="font-size:12px;color:#666;margin-top:3px;">' + amtStr + (it.memo?' <span style="color:#9a9486;">· '+_escHtmlAdg(it.memo)+'</span>':'') + '</div>'
+          + ((amt||e.memo) ? '<div style="font-size:11.5px;color:#666;margin-top:2px;">'+amt+(e.memo?' <span style="color:#9a9486;">· '+_escHtmlAdg(e.memo)+'</span>':'')+'</div>' : '')
           + '</div>';
       });
-    } else {
-      occHtml += '<div style="padding:12px 16px;font-size:12px;color:#c9c4ba;">아직 예약 없음</div>';
     }
-    // 추가 버튼 (수동 기재)
-    if (hasFilter) {
-      occHtml += '<div style="padding:14px 16px;border-top:1px solid #f0ece1;"><button onclick="tcalOpenManual()" style="width:100%;height:46px;border:1.5px dashed #c9a96e;border-radius:12px;background:#fff;color:#6A1A1A;font-family:\'Noto Sans KR\',sans-serif;font-size:13.5px;font-weight:800;cursor:pointer;">＋ 수동 예약 추가</button></div>';
+    // 액션: 수동 추가 / 초대 발송
+    if(isSuper){
+      html += '<div style="display:flex;gap:8px;padding:12px 16px;border-top:1px solid #f0ece1;">'
+        + '<button onclick="tcalOpenManual(\''+g.restId+'\')" style="flex:1;height:42px;border:1.5px dashed #c9a96e;border-radius:11px;background:#fff;color:#6A1A1A;font-size:12.5px;font-weight:800;font-family:\'Noto Sans KR\',sans-serif;cursor:pointer;">＋ 수동 추가</button>'
+        + '<button onclick="openInviteFromCalendar(\''+g.restId+'\')" style="flex:1;height:42px;border:none;border-radius:11px;background:#6A1A1A;color:#fff;font-size:12.5px;font-weight:800;font-family:\'Noto Sans KR\',sans-serif;cursor:pointer;">초대 발송</button>'
+        + '</div>';
     }
-    occHtml += '</div>';
-  }
-
-  if (tickets.length === 0) {
-    el.innerHTML = occHtml || ('<div class="tcal-empty-day">' + dateStr + ' — 예약/티켓 없음</div>');
-    return;
-  }
-
-  var html = occHtml + '<div class="tcal-detail-header">' + dateStr + ' 티켓 현황</div>';
-
-  tickets.forEach(function(t) {
-    var r = restaurantDB.find(function(x) { return String(x.id) === String(t.restId); });
-    var name = r ? r.name : (t.rest || '—');
-
-    // 구매 내역 집계 (서버 전체 구매기록에서 이 티켓 상품 + 취소건 제외)
-    var buys = _tcalPurchases.filter(function(h) {
-      return String(h.id) === String(t.id) && h.status !== 'cancelled';
-    });
-    var usedPax = buys.reduce(function(acc, h) { return acc + (parseInt(h.pax) || 0); }, 0);
-    var totalSeats = parseInt(t.assignedPax || t.totalPax || 0);
-    var remaining = Math.max(0, totalSeats - usedPax);
-
-    // 슬롯 구성
-    var slotStr = '';
-    if (t.slots) {
-      var sp = [];
-      if (t.slots.s1 > 0) sp.push('1인×' + t.slots.s1);
-      if (t.slots.s2 > 0) sp.push('2인×' + t.slots.s2);
-      if (t.slots.s4 > 0) sp.push('4인×' + t.slots.s4);
-      slotStr = sp.join(' / ');
-    }
-
-    var statusLabel = t.status === 'soldout' ? 'SOLD OUT' : 'ON SALE';
-    var statusCls = t.status === 'soldout' ? 'sold' : 'active';
-
-    html += '<div class="tcal-ticket-card">';
-    html += '<div class="tcal-ticket-top">';
-    html += '<div class="tcal-ticket-name">' + name + '</div>';
-    html += '<div class="tcal-ticket-meta">';
-    html += '<div class="tcal-ticket-kv"><div class="tcal-ticket-key">DATE</div><div class="tcal-ticket-val">' + t.date + '</div></div>';
-    html += '<div class="tcal-ticket-kv"><div class="tcal-ticket-key">TIME</div><div class="tcal-ticket-val">' + (t.time || '—') + '</div></div>';
-    html += '<div class="tcal-ticket-kv"><div class="tcal-ticket-key">총 좌석</div><div class="tcal-ticket-val">' + totalSeats + '석</div></div>';
-    html += '<div class="tcal-ticket-kv"><div class="tcal-ticket-key">잔여 좌석</div><div class="tcal-ticket-val ' + (remaining === 0 ? 'sold' : '') + '">' + remaining + '석</div></div>';
-    if (slotStr) html += '<div class="tcal-ticket-kv" style="grid-column:span 2"><div class="tcal-ticket-key">좌석 구성</div><div class="tcal-ticket-val" style="font-size:13px;">' + slotStr + '</div></div>';
-    html += '<div class="tcal-ticket-kv" style="grid-column:span 2"><div class="tcal-ticket-key">상태</div><div class="tcal-ticket-val ' + statusCls + '">' + statusLabel + '</div></div>';
-    html += '</div></div>';
-
-    // 구매자 리스트
-    html += '<div class="tcal-buyer-list">';
-    if (buys.length === 0) {
-      html += '<div style="padding:12px 16px;font-family:\'Noto Sans KR\',sans-serif;font-size:12px;color:#bbb;">구매자 없음</div>';
-    } else {
-      buys.forEach(function(h, idx) {
-        var buyDate = h.date ? new Date(h.date).toLocaleDateString('ko-KR', {month:'2-digit',day:'2-digit'}) : '—';
-        var amt = h.amt ? '₩' + parseInt(h.amt).toLocaleString() : '—';
-        // 구매자 이름: 프로필명 → 전화 → ID 순 폴백
-        var memberName = (h.buyerName || h.memberName || h.buyerPhone || h._userId || h.userId || ('구매자 #' + (idx + 1)));
-        var _bkey = String(h.purchaseId || (t.id + '_' + idx)).replace(/'/g, '');
-        _tcalBuyerMap[_bkey] = h;
-        html += '<div class="tcal-buyer-item" onclick="tcalShowBuyer(\'' + _bkey + '\')">';
-        html += '<div class="tcal-buyer-left">';
-        html += '<div class="tcal-buyer-name">' + memberName + '</div>';
-        html += '<div class="tcal-buyer-meta">' + buyDate + ' 구매 · ' + amt + '</div>';
-        html += '</div>';
-        html += '<div style="display:flex;align-items:center;gap:8px;">';
-        html += '<div class="tcal-buyer-pax">' + h.pax + '인</div>';
-        html += '<div class="tcal-buyer-arrow">›</div>';
-        html += '</div></div>';
-      });
-    }
-    html += '</div></div>';
+    html += '</div>';
   });
 
   el.innerHTML = html;
