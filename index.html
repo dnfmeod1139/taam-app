@@ -17893,13 +17893,43 @@ function _resvPartnerRow(id){
   var b = (typeof _pmRows !== 'undefined' && _pmRows) || [];
   return b.find(function(x){ return String(x.venue_id)===String(id); }) || null;
 }
+// 🆕 언어 분기 (ko/en/ja) — 데이터 필드 name_ko/name_en/name_jp 선택
+function _resvLang(){ var l = window._tkCurrentLang || 'ko'; return (l==='en'||l==='ja') ? l : 'ko'; }
+function _resvLocalizedName(v){
+  var l = _resvLang();
+  if(l==='ja') return v.name_jp || v.name_ko || v.name_en || '';
+  if(l==='en') return v.name_en || v.name_ko || v.name_jp || '';
+  return v.name_ko || v.name_en || v.name_jp || '';   // ko (한글 없으면 영문 폴백)
+}
+// 장르 라벨 i18n (genre_main 영문 키 → ko/ja). en 은 원문(영문) 사용.
+var _RESV_GENRE_I18N = {
+  'Sushi':{ko:'스시',ja:'寿司'}, 'Tempura':{ko:'텐푸라',ja:'天ぷら'}, 'Unagi':{ko:'장어',ja:'うなぎ'},
+  'Yakitori/Poultry':{ko:'야키토리',ja:'焼き鳥'}, 'Yakitori':{ko:'야키토리',ja:'焼き鳥'},
+  'Yakiniku/Meat dishes':{ko:'야키니쿠',ja:'焼肉'}, 'Yakiniku':{ko:'야키니쿠',ja:'焼肉'},
+  'Kaiseki':{ko:'카이세키',ja:'懐石'}, 'Japanese Cuisine':{ko:'일본요리',ja:'日本料理'}, 'Japanese':{ko:'일본요리',ja:'日本料理'},
+  'Soba':{ko:'소바',ja:'蕎麦'}, 'Udon':{ko:'우동',ja:'うどん'}, 'Ramen':{ko:'라멘',ja:'ラーメン'},
+  'Tonkatsu/Fried foods':{ko:'돈카츠',ja:'とんかつ'},
+  'French':{ko:'프렌치',ja:'フレンチ'}, 'Italian':{ko:'이탈리안',ja:'イタリアン'}, 'Spanish':{ko:'스페인',ja:'スペイン料理'},
+  'Chinese Cuisine':{ko:'중식',ja:'中華'}, 'Chinese':{ko:'중식',ja:'中華'},
+  'Korean Innovative':{ko:'한식 이노베이티브',ja:'韓国イノベーティブ'}, 'Korean Traditional':{ko:'한식',ja:'韓国料理'},
+  'Innovative':{ko:'이노베이티브',ja:'イノベーティブ'}, 'Creative cuisine':{ko:'창작요리',ja:'創作料理'},
+  'Seafood':{ko:'해산물',ja:'魚介'}, 'Vegan':{ko:'비건',ja:'ヴィーガン'}
+};
+function _resvGenreLabel(g){
+  if(!g) return '';
+  var l=_resvLang(), m=_RESV_GENRE_I18N[g];
+  if(!m) return g;
+  if(l==='ja') return m.ja||g;
+  if(l==='en') return g;
+  return m.ko||g;
+}
 function _resvVenueName(id){
   if(typeof restaurantDB !== 'undefined'){
     var r = restaurantDB.find(function(x){ return String(x.id)===String(id); });
     if(r) return r.name;
   }
   var v = (_prVenueIndex||{})[id];
-  if(v) return v.name_ko||v.name_en||id;
+  if(v) return _resvLocalizedName(v) || id;
   var pr = _resvPartnerRow(id);                 // 직접입력 매장
   if(pr && pr.custom_name) return pr.custom_name;
   return id;
@@ -17910,7 +17940,10 @@ function _resvVenueSub(id){
     if(r) return [r.city, r.genre].filter(Boolean).join(' · ');
   }
   var v = (_prVenueIndex||{})[id];
-  if(v) return [v.city, v.genre_main].filter(Boolean).join(' · ');
+  if(v){
+    var city = (_resvLang()==='ko' ? (v.city_ko||v.city) : v.city) || '';
+    return [city, _resvGenreLabel(v.genre_main)].filter(Boolean).join(' · ');
+  }
   var pr = _resvPartnerRow(id);                 // 직접입력 매장
   return (pr && pr.custom_sub) ? pr.custom_sub : '';
 }
@@ -18060,10 +18093,37 @@ async function renderPartnerRoster(){
   var list = _prPartners.slice().sort(function(a,b){
     var fa=(_prFavs[a.venue_id]?1:0), fb=(_prFavs[b.venue_id]?1:0);
     if(fa!==fb) return fb-fa;
-    return _resvVenueName(a.venue_id).localeCompare(_resvVenueName(b.venue_id),'ko');
+    return _resvVenueName(a.venue_id).localeCompare(_resvVenueName(b.venue_id), _resvLang());
   });
-  el.innerHTML = '<div style="font-size:11px;color:rgba(255,255,255,.4);padding:4px 2px 10px;">'+t('resv.partner_count','제휴 매장')+' '+list.length+'</div>'
-    + list.map(_prRosterRowHtml).join('');
+  // 🆕 장르별 그룹화
+  var groups = {};
+  list.forEach(function(p){
+    var v = (_prVenueIndex||{})[p.venue_id];
+    var g = (v && v.genre_main) ? v.genre_main : '__other';
+    (groups[g] = groups[g] || []).push(p);
+  });
+  var order = ['Sushi','Tempura','Unagi','Yakitori/Poultry','Yakitori','Yakiniku/Meat dishes','Yakiniku',
+    'Kaiseki','Japanese Cuisine','Japanese','Soba','Udon','Ramen','Tonkatsu/Fried foods',
+    'French','Italian','Spanish','Chinese Cuisine','Chinese',
+    'Korean Innovative','Korean Traditional','Innovative','Creative cuisine','Seafood','Vegan'];
+  var keys = Object.keys(groups).sort(function(a,b){
+    if(a==='__other') return 1; if(b==='__other') return -1;
+    var ia=order.indexOf(a), ib=order.indexOf(b);
+    if(ia<0) ia=900; if(ib<0) ib=900;
+    if(ia!==ib) return ia-ib;
+    return groups[b].length - groups[a].length;
+  });
+  var html = '<div style="font-size:11px;color:rgba(255,255,255,.4);padding:4px 2px 12px;">'+t('resv.partner_count','제휴 매장')+' '+list.length+'</div>';
+  keys.forEach(function(g){
+    var label = (g==='__other') ? t('resv.genre_other','기타') : _resvGenreLabel(g);
+    html += '<div style="display:flex;align-items:center;gap:10px;margin:18px 2px 10px;">'
+          + '<span style="font-family:var(--font-main);font-size:12.5px;font-weight:800;letter-spacing:.06em;color:#c8a96e;">'+label+'</span>'
+          + '<span style="font-size:10px;color:rgba(255,255,255,.3);">'+groups[g].length+'</span>'
+          + '<span style="flex:1;height:1px;background:rgba(200,169,110,.18);"></span>'
+          + '</div>';
+    html += groups[g].map(_prRosterRowHtml).join('');
+  });
+  el.innerHTML = html;
 }
 
 function _prRosterRowHtml(p){
@@ -28119,7 +28179,7 @@ var TRANSLATIONS = {
     resv: {
       title:'예약 요청', subtitle:'파트너 레스토랑에 예약을 요청하세요. 매장이 직접 수락합니다.',
       in_progress:'진행 중', loading:'불러오는 중…', load_fail:'불러오기 실패',
-      tab_request:'요청 가능 리스트', tab_partner:'탐 파트너십 레스토랑 리스트', partner_count:'제휴 매장',
+      tab_request:'요청 가능 리스트', tab_partner:'탐 파트너십 레스토랑 리스트', partner_count:'제휴 매장', genre_other:'기타',
       empty_list:'아직 예약 가능한 파트너 레스토랑이 없어요.',
       deposit:'예약금', pp:' / 인', people:'명', dows:'일,월,화,수,목,금,토',
       detail_title:'예약 요청하기', conds_title:'매장 조건',
@@ -28857,7 +28917,7 @@ var TRANSLATIONS = {
     resv: {
       title:'Reservation Request', subtitle:'Request a reservation at partner restaurants. The venue accepts directly.',
       in_progress:'In progress', loading:'Loading…', load_fail:'Failed to load',
-      tab_request:'Requestable', tab_partner:'TAAM Partner Restaurants', partner_count:'Partner venues',
+      tab_request:'Requestable', tab_partner:'TAAM Partner Restaurants', partner_count:'Partner venues', genre_other:'Other',
       empty_list:'No partner restaurants available yet.',
       deposit:'Deposit', pp:' / person', people:' guests', dows:'Sun,Mon,Tue,Wed,Thu,Fri,Sat',
       detail_title:'Request Reservation', conds_title:'Venue Conditions',
@@ -29554,7 +29614,7 @@ TRANSLATIONS.ja = {
   resv: {
     title:'予約リクエスト', subtitle:'パートナーレストランに予約をリクエスト。店舗が直接承認します。',
     in_progress:'進行中', loading:'読み込み中…', load_fail:'読み込み失敗',
-    tab_request:'リクエスト可能', tab_partner:'TAAMパートナー店舗', partner_count:'提携店舗',
+    tab_request:'リクエスト可能', tab_partner:'TAAMパートナー店舗', partner_count:'提携店舗', genre_other:'その他',
     empty_list:'予約可能なパートナー店舗はまだありません。',
     deposit:'予約金', pp:' / 名', people:'名', dows:'日,月,火,水,木,金,土',
     detail_title:'予約をリクエスト', conds_title:'店舗条件',
@@ -30018,6 +30078,12 @@ function tkPickLang(code) {
       if(_tkWheelMode === 'pax' && typeof tkOpenPaxWheel === 'function') tkOpenPaxWheel();
       else if(_tkWheelMode === 'time' && typeof tkOpenTimeWheel === 'function') tkOpenTimeWheel();
     }
+  }
+  // 🆕 예약 요청 화면(요청 가능 / 파트너십) 열려있으면 매장명·장르 다시 그리기
+  var _rqV = document.getElementById('requestView');
+  if(_rqV && _rqV.style.display !== 'none'){
+    if(typeof renderRequestList === 'function') renderRequestList();
+    if(typeof _reqTab !== 'undefined' && _reqTab === 'partner' && typeof renderPartnerRoster === 'function') renderPartnerRoster();
   }
   var msg;
   if (code === 'en') msg = t('toast.lang_changed_msg_en');
