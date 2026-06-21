@@ -16,6 +16,9 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="TAAM">
+<!-- 🆕 홈 화면 아이콘: iOS(apple-touch-icon) + 일반 favicon. Android/PWA 는 manifest.json icons 사용 -->
+<link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Oswald:wght@300;400;500;600;700&family=Noto+Sans+KR:wght@400;500;700;900&family=Noto+Sans+JP:wght@400;500;700;900&display=swap" onload="this.onload=null;this.rel='stylesheet'">
@@ -6113,7 +6116,13 @@ window.closePromoCarousel = function(){
       <div data-i18n="resv.subtitle" style="font-size:12px;color:rgba(255,255,255,.55);margin-top:4px;">파트너 레스토랑에 예약을 요청하세요. 매장이 직접 수락합니다.</div>
       <div id="requestQuota" style="display:inline-block;margin-top:12px;font-family:var(--font-main);font-size:11px;font-weight:700;color:#c8a96e;background:rgba(200,169,110,.12);border:1px solid rgba(200,169,110,.3);border-radius:20px;padding:5px 12px;">진행 중 - / 2</div>
     </div>
+    <!-- 🆕 탭: 요청 / 파트너십 리스트 -->
+    <div style="display:flex;gap:8px;padding:14px 22px 2px;">
+      <button id="reqTabRequest" onclick="switchRequestTab('request')" style="flex:1;padding:10px 0;border-radius:12px;border:1px solid rgba(200,169,110,.55);background:rgba(200,169,110,.95);color:#1a1410;font-family:var(--font-main);font-size:13px;font-weight:800;cursor:pointer;transition:all .15s;"><span data-i18n="resv.tab_request">요청</span></button>
+      <button id="reqTabPartner" onclick="switchRequestTab('partner')" style="flex:1;padding:10px 0;border-radius:12px;border:1px solid rgba(255,255,255,.14);background:transparent;color:rgba(255,255,255,.65);font-family:var(--font-main);font-size:13px;font-weight:800;cursor:pointer;transition:all .15s;"><span data-i18n="resv.tab_partner">파트너십</span></button>
+    </div>
     <div id="requestList" style="padding:16px 18px 0;"></div>
+    <div id="partnerRosterList" style="padding:8px 18px 0;display:none;"></div>
   </div>
 </div>
 
@@ -7626,6 +7635,14 @@ window.closePromoCarousel = function(){
         </div>
         <div class="admin-arrow">›</div>
       </div>
+      <!-- 🆕 파트너십 관리 — 예약 요청 파트너 매장 CRUD -->
+      <div class="admin-menu-item" onclick="openSubPage('partnerMgmtScreen')">
+        <div>
+          <div class="admin-menu-text">🤝 파트너십 관리</div>
+          <div class="admin-menu-sub">예약 요청 파트너 매장 추가 · 수정 · 삭제</div>
+        </div>
+        <div class="admin-arrow">›</div>
+      </div>
     </div>
 
     <!-- ════════ 2. Ticket Management ════════ -->
@@ -8946,6 +8963,67 @@ window.closePromoCarousel = function(){
   </div>
   <div class="sub-content" id="restListContent"></div>
 </div>
+
+<!-- 🆕 파트너십 관리 (슈퍼어드민) — 예약 요청 파트너 매장 추가/수정/삭제 -->
+<div id="partnerMgmtScreen" class="sub-screen" data-lang-lock="ko" style="display:none;flex-direction:column;">
+  <div class="sub-header">
+    <button class="sub-back" onclick="closeSubPage('partnerMgmtScreen')">←</button>
+    <div class="sub-title">파트너십 관리</div>
+  </div>
+  <div style="padding:12px 18px;background:#f7f5f2;border-bottom:1px solid rgba(0,0,0,.05);">
+    <button onclick="pmOpenAdd()" style="width:100%;box-sizing:border-box;padding:13px;border:none;border-radius:11px;background:#5C0A14;color:#fff;font-family:var(--font-main);font-size:13px;font-weight:800;letter-spacing:.06em;cursor:pointer;">+ 파트너 매장 추가</button>
+    <div id="pmCount" style="margin-top:8px;font-size:11px;color:#888;font-weight:700;letter-spacing:.06em;text-transform:uppercase;"></div>
+  </div>
+  <div class="sub-content" id="pmListContent"></div>
+</div>
+
+<!-- 파트너 추가: 큐레이션 카탈로그 검색 오버레이 -->
+<div id="pmAddOverlay" class="sub-screen" data-lang-lock="ko" style="display:none;flex-direction:column;z-index:400;">
+  <div class="sub-header">
+    <button class="sub-back" onclick="pmCloseAdd()">←</button>
+    <div class="sub-title">매장 추가</div>
+  </div>
+  <div style="padding:12px 18px 6px;background:#f7f5f2;border-bottom:1px solid rgba(0,0,0,.05);">
+    <div style="position:relative;">
+      <input type="text" id="pmAddSearch" placeholder="가게명 검색 (한/영/일)" oninput="pmRenderAddResults()"
+        style="width:100%;box-sizing:border-box;padding:11px 14px 11px 38px;border:1.5px solid #e0ddd6;border-radius:10px;background:#fff;font-size:13.5px;font-family:var(--font-main);color:#1a1a18;outline:none;" />
+      <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);font-size:14px;color:#aaa;pointer-events:none;">🔍</span>
+    </div>
+    <div id="pmAddHint" style="margin-top:6px;font-size:11px;color:#888;font-weight:700;">검색해서 큐레이션 매장을 파트너로 추가하세요</div>
+  </div>
+  <div class="sub-content" id="pmAddResults"></div>
+</div>
+
+<!-- 파트너 수정 모달 -->
+<div id="pmEditModal" onclick="if(event.target===this)pmCloseEdit()" style="display:none;position:fixed;inset:0;z-index:500;background:rgba(0,0,0,.45);align-items:flex-end;justify-content:center;">
+  <div style="background:#fff;width:100%;max-width:520px;border-radius:20px 20px 0 0;padding:20px 20px 28px;max-height:88vh;overflow-y:auto;-webkit-overflow-scrolling:touch;">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px;">
+      <div id="pmEditName" style="font-size:18px;font-weight:800;color:#1a1a18;"></div>
+      <button onclick="pmCloseEdit()" style="background:none;border:none;font-size:20px;color:#bbb;cursor:pointer;line-height:1;">✕</button>
+    </div>
+    <div id="pmEditSub" style="font-size:11.5px;color:#999;margin-bottom:18px;"></div>
+    <!-- 노출 토글 -->
+    <label style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px;background:#faf3f4;border:1.5px solid #e6cdd1;border-radius:14px;cursor:pointer;margin-bottom:18px;">
+      <span style="font-size:14px;font-weight:800;color:#5C0A14;">예약 요청 받기 (노출)</span>
+      <input type="checkbox" id="pmEditOn" style="width:20px;height:20px;accent-color:#5C0A14;">
+    </label>
+    <!-- 예약금 -->
+    <div style="font-size:10px;font-weight:800;letter-spacing:.14em;color:#aaa;text-transform:uppercase;margin-bottom:8px;">예약금 (1인 기준)</div>
+    <div style="display:flex;gap:10px;margin-bottom:18px;">
+      <div style="flex:1;"><div style="font-size:11px;font-weight:700;color:#888;margin-bottom:5px;">식사비</div><input id="pmEditMeal" type="text" inputmode="numeric" oninput="_pmFmtNum(this)" placeholder="250,000" style="width:100%;box-sizing:border-box;padding:12px;border:1px solid #e0dcd4;border-radius:10px;font-size:15px;font-weight:600;text-align:right;"></div>
+      <div style="flex:1;"><div style="font-size:11px;font-weight:700;color:#888;margin-bottom:5px;">주류</div><input id="pmEditAlcohol" type="text" inputmode="numeric" oninput="_pmFmtNum(this)" placeholder="50,000" style="width:100%;box-sizing:border-box;padding:12px;border:1px solid #e0dcd4;border-radius:10px;font-size:15px;font-weight:600;text-align:right;"></div>
+    </div>
+    <!-- 인원 -->
+    <div style="display:flex;gap:10px;margin-bottom:18px;">
+      <div style="flex:1;"><div style="font-size:11px;font-weight:700;color:#888;margin-bottom:5px;">최소 인원</div><input id="pmEditPmin" type="number" min="1" max="50" style="width:100%;box-sizing:border-box;padding:12px;border:1px solid #e0dcd4;border-radius:10px;font-size:15px;text-align:center;"></div>
+      <div style="flex:1;"><div style="font-size:11px;font-weight:700;color:#888;margin-bottom:5px;">최대 인원</div><input id="pmEditPmax" type="number" min="1" max="50" style="width:100%;box-sizing:border-box;padding:12px;border:1px solid #e0dcd4;border-radius:10px;font-size:15px;text-align:center;"></div>
+      <div style="flex:1;"><div style="font-size:11px;font-weight:700;color:#888;margin-bottom:5px;">리드타임(개월)</div><input id="pmEditLead" type="number" min="0" max="24" style="width:100%;box-sizing:border-box;padding:12px;border:1px solid #e0dcd4;border-radius:10px;font-size:15px;text-align:center;"></div>
+    </div>
+    <button onclick="pmSaveEdit()" style="width:100%;padding:15px;border:none;border-radius:13px;background:#5C0A14;color:#fff;font-family:var(--font-main);font-size:11px;font-weight:800;letter-spacing:.2em;cursor:pointer;margin-bottom:10px;">저장</button>
+    <button onclick="pmDelete()" style="width:100%;padding:13px;border:1px solid #e0c4c4;border-radius:13px;background:#fff;color:#B23A2E;font-size:13px;font-weight:800;cursor:pointer;">파트너 삭제</button>
+  </div>
+</div>
+
 <div id="ticketListScreen" class="sub-screen" data-lang-lock="ko" style="display:none;"><div class="sub-header"><button class="sub-back" onclick="closeSubPage('ticketListScreen')">←</button><div class="sub-title">티켓 리스트</div></div><div class="sub-content" id="ticketListContent"></div></div>
 <div id="depositMgmtScreen" class="sub-screen" data-lang-lock="ko" style="display:none;flex-direction:column;">
   <div class="sub-header">
@@ -13127,7 +13205,7 @@ function openMain(){
    'notifSettingsPage','profileEditPage','profileConfirmOverlay',
    'cardMenuSheet','setPrimaryModal','deleteCardModal','cardDonePopup',
    'ticketDetailScreen','tdPurchaseSheet','tdConfirmPopup','tdDonePopup','restConfirmPopup','ticketConfirmPopup',
-   'restListScreen','ticketListScreen','depositMgmtScreen','inviteCodeScreen',
+   'restListScreen','ticketListScreen','depositMgmtScreen','inviteCodeScreen','partnerMgmtScreen',
    'memberListScreen','ticketCalScreen','adminCodeScreen','pendingApprovalScreen',
    'partnerAdminScreen','partnerTicketListScreen','partnerCalScreen','partnerRestScreen',
    'tcLockPopup','mshipScreen','extendPopup','memModal'
@@ -13325,6 +13403,7 @@ function showView(view){
     if(resvV) resvV.style.display='block';
     if(orb1) orb1.style.opacity='0';
     if(orb2) orb2.style.opacity='0';
+    if(typeof switchRequestTab === 'function') switchRequestTab('request');
     if(typeof renderRequestList === 'function') renderRequestList();
   } else if(view==='contents'){
     homeV.style.display='none';
@@ -17849,6 +17928,262 @@ async function renderRequestList(){
   el.innerHTML = _prPartners.map(_prTicketCardHtml).join('');
 }
 
+// 🆕 예약 요청 화면 탭 전환 (요청 / 파트너십 리스트)
+var _reqTab = 'request';
+function switchRequestTab(tab){
+  _reqTab = tab;
+  var bR = document.getElementById('reqTabRequest');
+  var bP = document.getElementById('reqTabPartner');
+  var lR = document.getElementById('requestList');
+  var lP = document.getElementById('partnerRosterList');
+  var quota = document.getElementById('requestQuota');
+  var on  = 'rgba(200,169,110,.95)', onBorder='rgba(200,169,110,.55)', onText='#1a1410';
+  var off = 'transparent', offBorder='rgba(255,255,255,.14)', offText='rgba(255,255,255,.65)';
+  if(bR){ bR.style.background = tab==='request'?on:off; bR.style.borderColor = tab==='request'?onBorder:offBorder; bR.style.color = tab==='request'?onText:offText; }
+  if(bP){ bP.style.background = tab==='partner'?on:off; bP.style.borderColor = tab==='partner'?onBorder:offBorder; bP.style.color = tab==='partner'?onText:offText; }
+  if(lR) lR.style.display = tab==='request'?'block':'none';
+  if(lP) lP.style.display = tab==='partner'?'block':'none';
+  if(quota) quota.style.display = tab==='request'?'inline-block':'none';
+  if(tab==='partner') renderPartnerRoster();
+}
+
+// 🆕 파트너십 리스트 — 제휴 매장 디렉토리 (다크 테마 리스트)
+async function renderPartnerRoster(){
+  var el = document.getElementById('partnerRosterList');
+  if(!el) return;
+  if(!_prPartners.length){
+    el.innerHTML = '<div style="padding:36px;text-align:center;color:rgba(255,255,255,.4);font-size:13px;">'+t('resv.loading','불러오는 중…')+'</div>';
+    try{ await _prLoadPartners(); }
+    catch(e){ el.innerHTML = '<div style="padding:36px;text-align:center;color:#e88;font-size:13px;">'+t('resv.load_fail','불러오기 실패')+'</div>'; return; }
+  }
+  if(_prPartners.length === 0){
+    el.innerHTML = '<div style="padding:36px;text-align:center;color:rgba(255,255,255,.4);font-size:13px;">'+t('resv.empty_list','아직 등록된 파트너 레스토랑이 없어요.')+'</div>';
+    return;
+  }
+  // 즐겨찾기 우선 → 이름순
+  var list = _prPartners.slice().sort(function(a,b){
+    var fa=(_prFavs[a.venue_id]?1:0), fb=(_prFavs[b.venue_id]?1:0);
+    if(fa!==fb) return fb-fa;
+    return _resvVenueName(a.venue_id).localeCompare(_resvVenueName(b.venue_id),'ko');
+  });
+  el.innerHTML = '<div style="font-size:11px;color:rgba(255,255,255,.4);padding:4px 2px 10px;">'+t('resv.partner_count','제휴 매장')+' '+list.length+'</div>'
+    + list.map(_prRosterRowHtml).join('');
+}
+
+function _prRosterRowHtml(p){
+  var name = _resvVenueName(p.venue_id);
+  var sub  = _resvVenueSub(p.venue_id);
+  var fav  = _prFavs[p.venue_id];
+  var photo = _resvVenuePhoto(p.venue_id);
+  var thumb = photo
+    ? '<div style="width:52px;height:52px;border-radius:10px;flex-shrink:0;background:center/cover no-repeat url(\''+photo+'\');"></div>'
+    : '<div style="width:52px;height:52px;border-radius:10px;flex-shrink:0;background:linear-gradient(135deg,#2a2320,#15110f);display:flex;align-items:center;justify-content:center;font-size:20px;">🍽</div>';
+  return '<div onclick="openPartnerDetail(\''+p.venue_id+'\')" style="display:flex;gap:12px;align-items:center;padding:11px 12px;margin-bottom:8px;border-radius:14px;border:1px solid rgba(255,255,255,.07);background:#16120f;cursor:pointer;">'
+    + thumb
+    + '<div style="flex:1;min-width:0;">'
+    +   '<div style="font-family:var(--font-main);font-weight:800;font-size:14.5px;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+name+'</div>'
+    +   (sub ? '<div style="font-size:11px;color:rgba(255,255,255,.5);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+sub+'</div>' : '')
+    + '</div>'
+    + '<button onclick="event.stopPropagation();togglePartnerFav(\''+p.venue_id+'\');renderPartnerRoster();" style="background:none;border:none;font-size:20px;line-height:1;cursor:pointer;color:'+(fav?'#c8a96e':'rgba(255,255,255,.25)')+';padding:6px;flex-shrink:0;">★</button>'
+    + '</div>';
+}
+
+// ════════════════════════════════════════════════
+// 파트너십 관리 (슈퍼어드민) — venue_partners CRUD
+//   큐레이션 카탈로그(venues/_index.json, 슬러그)에서 검색→추가,
+//   목록에서 노출 토글/예약금·인원 수정/삭제. SQL 불필요.
+// ════════════════════════════════════════════════
+var _pmRows = [];   // 전체 venue_partners rows (is_partner 무관)
+var _pmEditId = null;
+
+async function pmLoad(){
+  var el = document.getElementById('pmListContent');
+  if(el) el.innerHTML = '<div class="sub-empty">불러오는 중…</div>';
+  await _prLoadVenueIndex();
+  try{
+    var res = await window.sb.from('venue_partners').select('*').order('updated_at', { ascending:false });
+    if(res.error) throw res.error;
+    _pmRows = res.data || [];
+  }catch(e){
+    if(el) el.innerHTML = '<div class="sub-empty" style="color:#B23A2E;">불러오기 실패<br><span style="font-size:11px;color:#999;">'+(e.message||'')+'</span></div>';
+    return;
+  }
+  renderPmList();
+}
+
+function renderPmList(){
+  var el = document.getElementById('pmListContent');
+  if(!el) return;
+  var cnt = document.getElementById('pmCount');
+  var onN = _pmRows.filter(function(p){ return p.is_partner !== false; }).length;
+  if(cnt) cnt.textContent = '전체 '+_pmRows.length+'곳 · 노출 '+onN+'곳';
+  if(_pmRows.length === 0){
+    el.innerHTML = '<div class="sub-empty">등록된 파트너 매장이 없습니다.<br><span style="font-size:11px;color:#999;">위 “+ 파트너 매장 추가”로 등록하세요.</span></div>';
+    return;
+  }
+  // 노출 우선 → 이름순
+  var list = _pmRows.slice().sort(function(a,b){
+    var oa=(a.is_partner!==false?1:0), ob=(b.is_partner!==false?1:0);
+    if(oa!==ob) return ob-oa;
+    return _resvVenueName(a.venue_id).localeCompare(_resvVenueName(b.venue_id),'ko');
+  });
+  el.innerHTML = list.map(_pmRowHtml).join('');
+}
+
+function _pmRowHtml(p){
+  var name = _resvVenueName(p.venue_id);
+  var sub  = _resvVenueSub(p.venue_id);
+  var photo = _resvVenuePhoto(p.venue_id);
+  var on = (p.is_partner !== false);
+  var thumb = photo
+    ? '<div style="width:48px;height:48px;border-radius:9px;flex-shrink:0;background:#f0ede8 center/cover no-repeat url(\''+photo+'\');"></div>'
+    : '<div style="width:48px;height:48px;border-radius:9px;flex-shrink:0;background:#f0ede8;display:flex;align-items:center;justify-content:center;font-size:18px;color:#c8a96e;">🍽</div>';
+  return '<div style="display:flex;gap:12px;align-items:center;padding:13px 16px;border-bottom:1px solid #f0ede8;">'
+    + thumb
+    + '<div onclick="pmOpenEdit(\''+p.venue_id+'\')" style="flex:1;min-width:0;cursor:pointer;">'
+    +   '<div style="font-family:var(--font-main);font-weight:700;font-size:14px;color:#1a1a18;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+name+'</div>'
+    +   '<div style="font-size:11px;color:#999;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+(sub||p.venue_id)+'</div>'
+    + '</div>'
+    + '<span onclick="pmToggle(\''+p.venue_id+'\')" style="flex-shrink:0;font-size:10px;font-weight:800;letter-spacing:.06em;padding:5px 10px;border-radius:20px;cursor:pointer;'+(on?'background:#e7f6ee;color:#1E9E5A;':'background:#f0eeea;color:#aaa;')+'">'+(on?'노출':'숨김')+'</span>'
+    + '<button onclick="pmOpenEdit(\''+p.venue_id+'\')" style="flex-shrink:0;background:none;border:none;color:#bbb;font-size:18px;cursor:pointer;padding:4px;">›</button>'
+    + '</div>';
+}
+
+// ── 추가: 큐레이션 카탈로그 검색 ──
+function pmOpenAdd(){
+  var ov = document.getElementById('pmAddOverlay');
+  if(ov) ov.style.display = 'flex';
+  var s = document.getElementById('pmAddSearch');
+  if(s){ s.value=''; }
+  pmRenderAddResults();
+  if(s) setTimeout(function(){ s.focus(); }, 60);
+}
+function pmCloseAdd(){
+  var ov = document.getElementById('pmAddOverlay');
+  if(ov) ov.style.display = 'none';
+}
+function pmRenderAddResults(){
+  var el = document.getElementById('pmAddResults');
+  if(!el) return;
+  var q = (document.getElementById('pmAddSearch')||{}).value || '';
+  q = q.trim().toLowerCase();
+  var added = {}; _pmRows.forEach(function(p){ added[p.venue_id]=true; });
+  var idx = _prVenueIndex || {};
+  var out = [];
+  for(var vid in idx){
+    if(added[vid]) continue;   // 이미 추가된 매장 제외
+    var v = idx[vid];
+    var blob = [v.name_ko,v.name_en,v.name_jp,v.city_ko,v.city,v.genre_main,vid].filter(Boolean).join(' ').toLowerCase();
+    if(q && blob.indexOf(q) < 0) continue;
+    out.push(v);
+    if(out.length >= 60) break;
+  }
+  if(!q){
+    document.getElementById('pmAddHint').textContent = '검색해서 큐레이션 매장을 파트너로 추가하세요';
+  } else {
+    document.getElementById('pmAddHint').textContent = out.length + '곳 검색됨';
+  }
+  if(out.length === 0){
+    el.innerHTML = '<div class="sub-empty">'+(q?'검색 결과가 없습니다.':'가게명을 입력하세요.')+'</div>';
+    return;
+  }
+  el.innerHTML = out.map(function(v){
+    var nm = v.name_ko || v.name_en || v.venue_id;
+    var sb = [v.city_ko||v.city, v.genre_main].filter(Boolean).join(' · ');
+    var ph = v.hero_photo_url || '';
+    var thumb = ph
+      ? '<div style="width:46px;height:46px;border-radius:9px;flex-shrink:0;background:#f0ede8 center/cover no-repeat url(\''+ph+'\');"></div>'
+      : '<div style="width:46px;height:46px;border-radius:9px;flex-shrink:0;background:#f0ede8;display:flex;align-items:center;justify-content:center;font-size:17px;color:#c8a96e;">🍽</div>';
+    return '<div onclick="pmAddVenue(\''+v.venue_id+'\')" style="display:flex;gap:12px;align-items:center;padding:12px 16px;border-bottom:1px solid #f0ede8;cursor:pointer;">'
+      + thumb
+      + '<div style="flex:1;min-width:0;">'
+      +   '<div style="font-family:var(--font-main);font-weight:700;font-size:14px;color:#1a1a18;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+nm+'</div>'
+      +   '<div style="font-size:11px;color:#999;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+(sb||v.venue_id)+'</div>'
+      + '</div>'
+      + '<span style="flex-shrink:0;font-size:12px;font-weight:800;color:#5C0A14;">+ 추가</span>'
+      + '</div>';
+  }).join('');
+}
+async function pmAddVenue(vid){
+  try{
+    var res = await window.sb.from('venue_partners').upsert(
+      { venue_id: vid, is_partner: true, channel: 'request_open', updated_at: new Date().toISOString() },
+      { onConflict: 'venue_id' });
+    if(res.error) throw res.error;
+    showToast('✓','파트너 추가됨', _resvVenueName(vid));
+    pmCloseAdd();
+    await pmLoad();
+  }catch(e){ showToast('⚠','추가 실패', e.message||''); }
+}
+
+// ── 수정 / 삭제 ──
+function _pmFmtNum(input){ var n=String(input.value).replace(/[^0-9]/g,''); input.value = n?Number(n).toLocaleString():''; }
+function _pmNum(id){ var e=document.getElementById(id); return e?(parseInt(String(e.value).replace(/[^0-9]/g,''))||0):0; }
+
+function pmOpenEdit(vid){
+  var p = _pmRows.find(function(x){ return x.venue_id===vid; });
+  if(!p) return;
+  _pmEditId = vid;
+  document.getElementById('pmEditName').textContent = _resvVenueName(vid);
+  document.getElementById('pmEditSub').textContent  = _resvVenueSub(vid) || vid;
+  document.getElementById('pmEditOn').checked = (p.is_partner !== false);
+  document.getElementById('pmEditMeal').value    = p.deposit_meal ? Number(p.deposit_meal).toLocaleString() : '';
+  document.getElementById('pmEditAlcohol').value = p.deposit_alcohol ? Number(p.deposit_alcohol).toLocaleString() : '';
+  document.getElementById('pmEditPmin').value = p.party_min || 1;
+  document.getElementById('pmEditPmax').value = p.party_max || 8;
+  document.getElementById('pmEditLead').value = p.min_lead_time_months || 0;
+  document.getElementById('pmEditModal').style.display = 'flex';
+}
+function pmCloseEdit(){
+  var m = document.getElementById('pmEditModal');
+  if(m) m.style.display = 'none';
+  _pmEditId = null;
+}
+async function pmSaveEdit(){
+  if(!_pmEditId) return;
+  var row = {
+    venue_id: _pmEditId,
+    is_partner: !!(document.getElementById('pmEditOn')||{}).checked,
+    deposit_meal:    _pmNum('pmEditMeal'),
+    deposit_alcohol: _pmNum('pmEditAlcohol'),
+    party_min: parseInt((document.getElementById('pmEditPmin')||{}).value)||1,
+    party_max: parseInt((document.getElementById('pmEditPmax')||{}).value)||8,
+    min_lead_time_months: parseInt((document.getElementById('pmEditLead')||{}).value)||0,
+    updated_at: new Date().toISOString()
+  };
+  try{
+    var res = await window.sb.from('venue_partners').upsert(row, { onConflict: 'venue_id' });
+    if(res.error) throw res.error;
+    showToast('✓','저장 완료', row.is_partner ? '노출 중' : '숨김 처리됨');
+    pmCloseEdit();
+    await pmLoad();
+  }catch(e){ showToast('⚠','저장 실패', e.message||''); }
+}
+async function pmToggle(vid){
+  var p = _pmRows.find(function(x){ return x.venue_id===vid; });
+  if(!p) return;
+  var next = (p.is_partner === false);   // 숨김→노출 / 노출→숨김
+  try{
+    var res = await window.sb.from('venue_partners')
+      .update({ is_partner: next, updated_at: new Date().toISOString() }).eq('venue_id', vid);
+    if(res.error) throw res.error;
+    p.is_partner = next;
+    renderPmList();
+  }catch(e){ showToast('⚠','변경 실패', e.message||''); }
+}
+async function pmDelete(){
+  if(!_pmEditId) return;
+  var nm = _resvVenueName(_pmEditId);
+  if(!confirm('“'+nm+'”을(를) 파트너 목록에서 완전히 삭제할까요?\n(예약 요청 화면에서 사라집니다)')) return;
+  try{
+    var res = await window.sb.from('venue_partners').delete().eq('venue_id', _pmEditId);
+    if(res.error) throw res.error;
+    showToast('✓','삭제됨', nm);
+    pmCloseEdit();
+    await pmLoad();
+  }catch(e){ showToast('⚠','삭제 실패', e.message||''); }
+}
+
 function _prRenderRequestQuota(){
   if(!window.sb) return;
   window.sb.rpc('my_reservation_quota').then(function(res){
@@ -21180,7 +21515,7 @@ function closeAllAdminScreens(){
     'memberListScreen','inviteCodeScreen','adminCodeScreen','pendingApprovalScreen',
     'partnerAdminScreen','partnerTicketListScreen','partnerCalScreen','partnerRestScreen',
     'depositMgmtScreen','depositHistScreen',
-    'restListScreen','restConfirmPopup',
+    'restListScreen','restConfirmPopup','partnerMgmtScreen',
     'splashMgmtScreen','carouselMgmtScreen','visibilityMgmtScreen'];
   ids.forEach(function(id){
     var el=document.getElementById(id);
@@ -25170,6 +25505,7 @@ function openSubPage(id){
   if(id==='productsMgmtScreen'){ loadProductsDB(function(){ loadProducersDB(function(){ renderProductsList(); }); }); }
   if(id==='inviteCodeScreen'){ loadInviteCodes().then(function(){ renderInviteCodes(); }); }
   if(id==='taamRestaurantsMgmtScreen'){ if(typeof taamRestListLoad==='function') taamRestListLoad(); }
+  if(id==='partnerMgmtScreen'){ if(typeof pmLoad==='function') pmLoad(); }
   if(typeof _onOpenSubPage === 'function') _onOpenSubPage(id);
   if(id==='adminCodeScreen') {
     loadAdminCodes(); renderAcList();
@@ -27469,6 +27805,7 @@ var TRANSLATIONS = {
     resv: {
       title:'예약 요청', subtitle:'파트너 레스토랑에 예약을 요청하세요. 매장이 직접 수락합니다.',
       in_progress:'진행 중', loading:'불러오는 중…', load_fail:'불러오기 실패',
+      tab_request:'요청', tab_partner:'파트너십', partner_count:'제휴 매장',
       empty_list:'아직 예약 가능한 파트너 레스토랑이 없어요.',
       deposit:'예약금', pp:' / 인', people:'명', dows:'일,월,화,수,목,금,토',
       detail_title:'예약 요청하기', conds_title:'매장 조건',
@@ -28206,6 +28543,7 @@ var TRANSLATIONS = {
     resv: {
       title:'Reservation Request', subtitle:'Request a reservation at partner restaurants. The venue accepts directly.',
       in_progress:'In progress', loading:'Loading…', load_fail:'Failed to load',
+      tab_request:'Request', tab_partner:'Partners', partner_count:'Partner venues',
       empty_list:'No partner restaurants available yet.',
       deposit:'Deposit', pp:' / person', people:' guests', dows:'Sun,Mon,Tue,Wed,Thu,Fri,Sat',
       detail_title:'Request Reservation', conds_title:'Venue Conditions',
@@ -28902,6 +29240,7 @@ TRANSLATIONS.ja = {
   resv: {
     title:'予約リクエスト', subtitle:'パートナーレストランに予約をリクエスト。店舗が直接承認します。',
     in_progress:'進行中', loading:'読み込み中…', load_fail:'読み込み失敗',
+    tab_request:'リクエスト', tab_partner:'パートナー', partner_count:'提携店舗',
     empty_list:'予約可能なパートナー店舗はまだありません。',
     deposit:'予約金', pp:' / 名', people:'名', dows:'日,月,火,水,木,金,土',
     detail_title:'予約をリクエスト', conds_title:'店舗条件',
