@@ -9003,6 +9003,7 @@ window.closePromoCarousel = function(){
       <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);font-size:14px;color:#aaa;pointer-events:none;">🔍</span>
     </div>
     <div id="pmAddHint" style="margin-top:6px;font-size:11px;color:#888;font-weight:700;">검색해서 큐레이션 매장을 파트너로 추가하세요</div>
+    <button onclick="pmOpenManual()" style="margin-top:8px;width:100%;box-sizing:border-box;padding:10px;border:1.5px dashed #c8a96e;border-radius:10px;background:#fffdf8;color:#5C0A14;font-family:var(--font-main);font-size:12.5px;font-weight:800;cursor:pointer;">＋ 목록에 없는 매장 직접 입력</button>
   </div>
   <div class="sub-content" id="pmAddResults"></div>
 </div>
@@ -9034,6 +9035,31 @@ window.closePromoCarousel = function(){
     </div>
     <button onclick="pmSaveEdit()" style="width:100%;padding:15px;border:none;border-radius:13px;background:#5C0A14;color:#fff;font-family:var(--font-main);font-size:11px;font-weight:800;letter-spacing:.2em;cursor:pointer;margin-bottom:10px;">저장</button>
     <button onclick="pmDelete()" style="width:100%;padding:13px;border:1px solid #e0c4c4;border-radius:13px;background:#fff;color:#B23A2E;font-size:13px;font-weight:800;cursor:pointer;">파트너 삭제</button>
+  </div>
+</div>
+
+<!-- 파트너 직접 입력 모달 (큐레이션에 없는 매장) -->
+<div id="pmManualModal" onclick="if(event.target===this)pmCloseManual()" style="display:none;position:fixed;inset:0;z-index:720;background:rgba(0,0,0,.45);align-items:flex-end;justify-content:center;">
+  <div style="background:#fff;width:100%;max-width:520px;border-radius:20px 20px 0 0;padding:20px 20px 28px;max-height:88vh;overflow-y:auto;-webkit-overflow-scrolling:touch;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+      <div style="font-size:18px;font-weight:800;color:#1a1a18;">매장 직접 입력</div>
+      <button onclick="pmCloseManual()" style="background:none;border:none;font-size:20px;color:#bbb;cursor:pointer;line-height:1;">✕</button>
+    </div>
+    <div style="font-size:11.5px;color:#999;margin-bottom:18px;">큐레이션 목록에 없는 매장을 파트너로 직접 등록합니다.</div>
+    <div style="font-size:10px;font-weight:800;letter-spacing:.14em;color:#aaa;text-transform:uppercase;margin-bottom:6px;">매장명 *</div>
+    <input id="pmManName" type="text" placeholder="예: 스시 OOO" style="width:100%;box-sizing:border-box;padding:12px;border:1px solid #e0dcd4;border-radius:10px;font-size:15px;font-weight:600;margin-bottom:14px;">
+    <div style="font-size:10px;font-weight:800;letter-spacing:.14em;color:#aaa;text-transform:uppercase;margin-bottom:6px;">지역 · 장르 (선택)</div>
+    <input id="pmManSub" type="text" placeholder="예: 도쿄 · 스시" style="width:100%;box-sizing:border-box;padding:12px;border:1px solid #e0dcd4;border-radius:10px;font-size:14px;margin-bottom:14px;">
+    <div style="font-size:10px;font-weight:800;letter-spacing:.14em;color:#aaa;text-transform:uppercase;margin-bottom:6px;">사진 (선택)</div>
+    <div id="pmManPhotoBox" onclick="document.getElementById('pmManPhotoFile').click()" style="width:100%;aspect-ratio:16/9;border-radius:12px;border:1.5px dashed #d8d0c8;background:#f7f5f2 center/cover no-repeat;display:flex;align-items:center;justify-content:center;cursor:pointer;margin-bottom:18px;">
+      <span style="font-size:12px;color:#b0a89e;">탭해서 사진 업로드</span>
+    </div>
+    <input type="file" id="pmManPhotoFile" accept="image/*" style="display:none;" onchange="pmManPhotoPick(this)">
+    <label style="display:flex;justify-content:space-between;align-items:center;padding:13px 15px;background:#faf3f4;border:1.5px solid #e6cdd1;border-radius:12px;cursor:pointer;margin-bottom:18px;">
+      <span style="font-size:13.5px;font-weight:800;color:#5C0A14;">바로 노출하기</span>
+      <input type="checkbox" id="pmManOn" checked style="width:20px;height:20px;accent-color:#5C0A14;">
+    </label>
+    <button onclick="pmManualSave()" style="width:100%;padding:15px;border:none;border-radius:13px;background:#5C0A14;color:#fff;font-family:var(--font-main);font-size:11px;font-weight:800;letter-spacing:.2em;cursor:pointer;">추가</button>
   </div>
 </div>
 
@@ -17815,13 +17841,24 @@ async function _prLoadVenueIndex(){
 }
 
 // 예약 매장 표시 정보 — 등록 레스토랑(restaurantDB) 우선, 큐레이션 폴백
+// 파트너 row 조회 (회원 _prPartners / 어드민 _pmRows 공용) — 직접입력(custom) 매장 표시용
+function _resvPartnerRow(id){
+  var a = (typeof _prPartners !== 'undefined' && _prPartners) || [];
+  var hit = a.find(function(x){ return String(x.venue_id)===String(id); });
+  if(hit) return hit;
+  var b = (typeof _pmRows !== 'undefined' && _pmRows) || [];
+  return b.find(function(x){ return String(x.venue_id)===String(id); }) || null;
+}
 function _resvVenueName(id){
   if(typeof restaurantDB !== 'undefined'){
     var r = restaurantDB.find(function(x){ return String(x.id)===String(id); });
     if(r) return r.name;
   }
   var v = (_prVenueIndex||{})[id];
-  return v ? (v.name_ko||v.name_en||id) : id;
+  if(v) return v.name_ko||v.name_en||id;
+  var pr = _resvPartnerRow(id);                 // 직접입력 매장
+  if(pr && pr.custom_name) return pr.custom_name;
+  return id;
 }
 function _resvVenueSub(id){
   if(typeof restaurantDB !== 'undefined'){
@@ -17829,7 +17866,9 @@ function _resvVenueSub(id){
     if(r) return [r.city, r.genre].filter(Boolean).join(' · ');
   }
   var v = (_prVenueIndex||{})[id];
-  return v ? [v.city, v.genre_main].filter(Boolean).join(' · ') : '';
+  if(v) return [v.city, v.genre_main].filter(Boolean).join(' · ');
+  var pr = _resvPartnerRow(id);                 // 직접입력 매장
+  return (pr && pr.custom_sub) ? pr.custom_sub : '';
 }
 function _resvVenuePhoto(id){
   // 요청 전용 사진(어드민 업로드) 우선 → 등록 사진 → 큐레이션
@@ -18170,6 +18209,69 @@ async function pmAddVenue(vid, rowEl){
     _pmAddHintUpdate();
     return;
   }catch(e){ showToast('⚠','추가 실패', e.message||''); }
+}
+
+// ── 직접 입력으로 새 매장 추가 (큐레이션에 없는 매장) ──
+var _pmManPhoto = null;
+function pmOpenManual(){
+  _pmManPhoto = null;
+  var n=document.getElementById('pmManName'); if(n) n.value='';
+  var s=document.getElementById('pmManSub'); if(s) s.value='';
+  var on=document.getElementById('pmManOn'); if(on) on.checked=true;
+  var box=document.getElementById('pmManPhotoBox');
+  if(box){ box.style.backgroundImage=''; box.innerHTML='<span style="font-size:12px;color:#b0a89e;">탭해서 사진 업로드</span>'; }
+  var m=document.getElementById('pmManualModal'); if(m) m.style.display='flex';
+  if(n) setTimeout(function(){ n.focus(); }, 60);
+}
+function pmCloseManual(){
+  var m=document.getElementById('pmManualModal'); if(m) m.style.display='none';
+}
+function pmManPhotoPick(input){
+  var f = input.files && input.files[0];
+  if(!f) return;
+  var reader = new FileReader();
+  reader.onload = function(e){
+    var img = new Image();
+    img.onload = function(){
+      var max=1200, w=img.width, h=img.height;
+      if(w>max||h>max){ var s=max/Math.max(w,h); w=Math.round(w*s); h=Math.round(h*s); }
+      var cv=document.createElement('canvas'); cv.width=w; cv.height=h;
+      cv.getContext('2d').drawImage(img,0,0,w,h);
+      _pmManPhoto = cv.toDataURL('image/jpeg', 0.82);
+      var box=document.getElementById('pmManPhotoBox');
+      if(box){ box.style.backgroundImage='url('+_pmManPhoto+')'; box.innerHTML=''; }
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(f);
+  input.value='';
+}
+async function pmManualSave(){
+  var name = ((document.getElementById('pmManName')||{}).value||'').trim();
+  if(!name){ showToast('⚠','매장명을 입력하세요',''); return; }
+  var sub = ((document.getElementById('pmManSub')||{}).value||'').trim();
+  var on  = !!(document.getElementById('pmManOn')||{}).checked;
+  // 슬러그 생성: manual- + 시간 + 난수 (충돌 방지)
+  var slug = 'manual-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,6);
+  var row = {
+    venue_id: slug, is_partner: on, channel: 'request_open',
+    custom_name: name, custom_sub: sub || null,
+    updated_at: new Date().toISOString()
+  };
+  if(_pmManPhoto) row.request_photo = _pmManPhoto;
+  try{
+    var res = await window.sb.from('venue_partners').insert(row);
+    if(res.error) throw res.error;
+    showToast('✓','매장 추가됨', name);
+    pmCloseManual();
+    pmCloseAdd();
+    await pmLoad();
+  }catch(e){
+    // custom_name/custom_sub 컬럼 미존재 시 안내
+    var msg = e.message||'';
+    if(/custom_name|custom_sub|column/i.test(msg)) msg = 'DB에 custom 컬럼이 없습니다. sql/venue_partners_custom_columns.sql 을 먼저 실행하세요.';
+    showToast('⚠','추가 실패', msg);
+  }
 }
 
 // ── 수정 / 삭제 ──
