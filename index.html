@@ -6116,7 +6116,13 @@ window.closePromoCarousel = function(){
       <div data-i18n="resv.subtitle" style="font-size:12px;color:rgba(255,255,255,.55);margin-top:4px;">파트너 레스토랑에 예약을 요청하세요. 매장이 직접 수락합니다.</div>
       <div id="requestQuota" style="display:inline-block;margin-top:12px;font-family:var(--font-main);font-size:11px;font-weight:700;color:#c8a96e;background:rgba(200,169,110,.12);border:1px solid rgba(200,169,110,.3);border-radius:20px;padding:5px 12px;">진행 중 - / 2</div>
     </div>
+    <!-- 🆕 탭: 요청 / 파트너십 리스트 -->
+    <div style="display:flex;gap:8px;padding:14px 22px 2px;">
+      <button id="reqTabRequest" onclick="switchRequestTab('request')" style="flex:1;padding:10px 0;border-radius:12px;border:1px solid rgba(200,169,110,.55);background:rgba(200,169,110,.95);color:#1a1410;font-family:var(--font-main);font-size:13px;font-weight:800;cursor:pointer;transition:all .15s;"><span data-i18n="resv.tab_request">요청</span></button>
+      <button id="reqTabPartner" onclick="switchRequestTab('partner')" style="flex:1;padding:10px 0;border-radius:12px;border:1px solid rgba(255,255,255,.14);background:transparent;color:rgba(255,255,255,.65);font-family:var(--font-main);font-size:13px;font-weight:800;cursor:pointer;transition:all .15s;"><span data-i18n="resv.tab_partner">파트너십</span></button>
+    </div>
     <div id="requestList" style="padding:16px 18px 0;"></div>
+    <div id="partnerRosterList" style="padding:8px 18px 0;display:none;"></div>
   </div>
 </div>
 
@@ -13328,6 +13334,7 @@ function showView(view){
     if(resvV) resvV.style.display='block';
     if(orb1) orb1.style.opacity='0';
     if(orb2) orb2.style.opacity='0';
+    if(typeof switchRequestTab === 'function') switchRequestTab('request');
     if(typeof renderRequestList === 'function') renderRequestList();
   } else if(view==='contents'){
     homeV.style.display='none';
@@ -17850,6 +17857,66 @@ async function renderRequestList(){
   }
   _prPartners.sort(function(a,b){ return (_prFavs[b.venue_id]?1:0) - (_prFavs[a.venue_id]?1:0); });
   el.innerHTML = _prPartners.map(_prTicketCardHtml).join('');
+}
+
+// 🆕 예약 요청 화면 탭 전환 (요청 / 파트너십 리스트)
+var _reqTab = 'request';
+function switchRequestTab(tab){
+  _reqTab = tab;
+  var bR = document.getElementById('reqTabRequest');
+  var bP = document.getElementById('reqTabPartner');
+  var lR = document.getElementById('requestList');
+  var lP = document.getElementById('partnerRosterList');
+  var quota = document.getElementById('requestQuota');
+  var on  = 'rgba(200,169,110,.95)', onBorder='rgba(200,169,110,.55)', onText='#1a1410';
+  var off = 'transparent', offBorder='rgba(255,255,255,.14)', offText='rgba(255,255,255,.65)';
+  if(bR){ bR.style.background = tab==='request'?on:off; bR.style.borderColor = tab==='request'?onBorder:offBorder; bR.style.color = tab==='request'?onText:offText; }
+  if(bP){ bP.style.background = tab==='partner'?on:off; bP.style.borderColor = tab==='partner'?onBorder:offBorder; bP.style.color = tab==='partner'?onText:offText; }
+  if(lR) lR.style.display = tab==='request'?'block':'none';
+  if(lP) lP.style.display = tab==='partner'?'block':'none';
+  if(quota) quota.style.display = tab==='request'?'inline-block':'none';
+  if(tab==='partner') renderPartnerRoster();
+}
+
+// 🆕 파트너십 리스트 — 제휴 매장 디렉토리 (다크 테마 리스트)
+async function renderPartnerRoster(){
+  var el = document.getElementById('partnerRosterList');
+  if(!el) return;
+  if(!_prPartners.length){
+    el.innerHTML = '<div style="padding:36px;text-align:center;color:rgba(255,255,255,.4);font-size:13px;">'+t('resv.loading','불러오는 중…')+'</div>';
+    try{ await _prLoadPartners(); }
+    catch(e){ el.innerHTML = '<div style="padding:36px;text-align:center;color:#e88;font-size:13px;">'+t('resv.load_fail','불러오기 실패')+'</div>'; return; }
+  }
+  if(_prPartners.length === 0){
+    el.innerHTML = '<div style="padding:36px;text-align:center;color:rgba(255,255,255,.4);font-size:13px;">'+t('resv.empty_list','아직 등록된 파트너 레스토랑이 없어요.')+'</div>';
+    return;
+  }
+  // 즐겨찾기 우선 → 이름순
+  var list = _prPartners.slice().sort(function(a,b){
+    var fa=(_prFavs[a.venue_id]?1:0), fb=(_prFavs[b.venue_id]?1:0);
+    if(fa!==fb) return fb-fa;
+    return _resvVenueName(a.venue_id).localeCompare(_resvVenueName(b.venue_id),'ko');
+  });
+  el.innerHTML = '<div style="font-size:11px;color:rgba(255,255,255,.4);padding:4px 2px 10px;">'+t('resv.partner_count','제휴 매장')+' '+list.length+'</div>'
+    + list.map(_prRosterRowHtml).join('');
+}
+
+function _prRosterRowHtml(p){
+  var name = _resvVenueName(p.venue_id);
+  var sub  = _resvVenueSub(p.venue_id);
+  var fav  = _prFavs[p.venue_id];
+  var photo = _resvVenuePhoto(p.venue_id);
+  var thumb = photo
+    ? '<div style="width:52px;height:52px;border-radius:10px;flex-shrink:0;background:center/cover no-repeat url(\''+photo+'\');"></div>'
+    : '<div style="width:52px;height:52px;border-radius:10px;flex-shrink:0;background:linear-gradient(135deg,#2a2320,#15110f);display:flex;align-items:center;justify-content:center;font-size:20px;">🍽</div>';
+  return '<div onclick="openPartnerDetail(\''+p.venue_id+'\')" style="display:flex;gap:12px;align-items:center;padding:11px 12px;margin-bottom:8px;border-radius:14px;border:1px solid rgba(255,255,255,.07);background:#16120f;cursor:pointer;">'
+    + thumb
+    + '<div style="flex:1;min-width:0;">'
+    +   '<div style="font-family:var(--font-main);font-weight:800;font-size:14.5px;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+name+'</div>'
+    +   (sub ? '<div style="font-size:11px;color:rgba(255,255,255,.5);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+sub+'</div>' : '')
+    + '</div>'
+    + '<button onclick="event.stopPropagation();togglePartnerFav(\''+p.venue_id+'\');renderPartnerRoster();" style="background:none;border:none;font-size:20px;line-height:1;cursor:pointer;color:'+(fav?'#c8a96e':'rgba(255,255,255,.25)')+';padding:6px;flex-shrink:0;">★</button>'
+    + '</div>';
 }
 
 function _prRenderRequestQuota(){
@@ -27472,6 +27539,7 @@ var TRANSLATIONS = {
     resv: {
       title:'예약 요청', subtitle:'파트너 레스토랑에 예약을 요청하세요. 매장이 직접 수락합니다.',
       in_progress:'진행 중', loading:'불러오는 중…', load_fail:'불러오기 실패',
+      tab_request:'요청', tab_partner:'파트너십', partner_count:'제휴 매장',
       empty_list:'아직 예약 가능한 파트너 레스토랑이 없어요.',
       deposit:'예약금', pp:' / 인', people:'명', dows:'일,월,화,수,목,금,토',
       detail_title:'예약 요청하기', conds_title:'매장 조건',
@@ -28209,6 +28277,7 @@ var TRANSLATIONS = {
     resv: {
       title:'Reservation Request', subtitle:'Request a reservation at partner restaurants. The venue accepts directly.',
       in_progress:'In progress', loading:'Loading…', load_fail:'Failed to load',
+      tab_request:'Request', tab_partner:'Partners', partner_count:'Partner venues',
       empty_list:'No partner restaurants available yet.',
       deposit:'Deposit', pp:' / person', people:' guests', dows:'Sun,Mon,Tue,Wed,Thu,Fri,Sat',
       detail_title:'Request Reservation', conds_title:'Venue Conditions',
@@ -28905,6 +28974,7 @@ TRANSLATIONS.ja = {
   resv: {
     title:'予約リクエスト', subtitle:'パートナーレストランに予約をリクエスト。店舗が直接承認します。',
     in_progress:'進行中', loading:'読み込み中…', load_fail:'読み込み失敗',
+    tab_request:'リクエスト', tab_partner:'パートナー', partner_count:'提携店舗',
     empty_list:'予約可能なパートナー店舗はまだありません。',
     deposit:'予約金', pp:' / 名', people:'名', dows:'日,月,火,水,木,金,土',
     detail_title:'予約をリクエスト', conds_title:'店舗条件',
