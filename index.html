@@ -18050,9 +18050,13 @@ function _pmRowHtml(p){
 }
 
 // ── 추가: 큐레이션 카탈로그 검색 ──
+var _pmExisting = {};   // 오버레이 열 때 이미 파트너인 매장 (제외용)
+var _pmSession  = {};   // 이번 세션에 추가한 매장 (✓ 표시용)
 function pmOpenAdd(){
   var ov = document.getElementById('pmAddOverlay');
   if(ov) ov.style.display = 'flex';
+  _pmExisting = {}; _pmRows.forEach(function(p){ _pmExisting[p.venue_id]=true; });
+  _pmSession = {};
   var s = document.getElementById('pmAddSearch');
   if(s){ s.value=''; }
   pmRenderAddResults();
@@ -18061,28 +18065,33 @@ function pmOpenAdd(){
 function pmCloseAdd(){
   var ov = document.getElementById('pmAddOverlay');
   if(ov) ov.style.display = 'none';
+  // 뒤로가기 시 추가분 반영 (각 탭마다 이미 저장됨 — 목록만 갱신)
+  if(Object.keys(_pmSession).length) pmLoad();
+}
+function _pmAddHintUpdate(found){
+  var el = document.getElementById('pmAddHint');
+  if(!el) return;
+  var n = Object.keys(_pmSession).length;
+  if(n) el.innerHTML = '✓ '+n+'곳 추가됨 · 여러 개 선택 후 <b>← 뒤로가기</b>하면 저장됩니다';
+  else if(found != null) el.textContent = found + '곳 검색됨';
+  else el.textContent = '검색해서 큐레이션 매장을 파트너로 추가하세요 (여러 개 선택 가능)';
 }
 function pmRenderAddResults(){
   var el = document.getElementById('pmAddResults');
   if(!el) return;
   var q = (document.getElementById('pmAddSearch')||{}).value || '';
   q = q.trim().toLowerCase();
-  var added = {}; _pmRows.forEach(function(p){ added[p.venue_id]=true; });
   var idx = _prVenueIndex || {};
   var out = [];
   for(var vid in idx){
-    if(added[vid]) continue;   // 이미 추가된 매장 제외
+    if(_pmExisting[vid]) continue;   // 이미(세션 전부터) 파트너인 매장 제외
     var v = idx[vid];
     var blob = [v.name_ko,v.name_en,v.name_jp,v.city_ko,v.city,v.genre_main,vid].filter(Boolean).join(' ').toLowerCase();
     if(q && blob.indexOf(q) < 0) continue;
     out.push(v);
     if(out.length >= 60) break;
   }
-  if(!q){
-    document.getElementById('pmAddHint').textContent = '검색해서 큐레이션 매장을 파트너로 추가하세요';
-  } else {
-    document.getElementById('pmAddHint').textContent = out.length + '곳 검색됨';
-  }
+  _pmAddHintUpdate(q ? out.length : null);
   if(out.length === 0){
     el.innerHTML = '<div class="sub-empty">'+(q?'검색 결과가 없습니다.':'가게명을 입력하세요.')+'</div>';
     return;
@@ -18091,28 +18100,40 @@ function pmRenderAddResults(){
     var nm = v.name_ko || v.name_en || v.venue_id;
     var sb = [v.city_ko||v.city, v.genre_main].filter(Boolean).join(' · ');
     var ph = v.hero_photo_url || '';
+    var done = !!_pmSession[v.venue_id];
     var thumb = ph
       ? '<div style="width:46px;height:46px;border-radius:9px;flex-shrink:0;background:#f0ede8 center/cover no-repeat url(\''+ph+'\');"></div>'
       : '<div style="width:46px;height:46px;border-radius:9px;flex-shrink:0;background:#f0ede8;display:flex;align-items:center;justify-content:center;font-size:17px;color:#c8a96e;">🍽</div>';
-    return '<div onclick="pmAddVenue(\''+v.venue_id+'\')" style="display:flex;gap:12px;align-items:center;padding:12px 16px;border-bottom:1px solid #f0ede8;cursor:pointer;">'
+    var tag = done
+      ? '<span class="pmAddTag" style="flex-shrink:0;font-size:12px;font-weight:800;color:#1E9E5A;">✓ 추가됨</span>'
+      : '<span class="pmAddTag" style="flex-shrink:0;font-size:12px;font-weight:800;color:#5C0A14;">+ 추가</span>';
+    return '<div data-vid="'+v.venue_id+'"'+(done?'':' onclick="pmAddVenue(\''+v.venue_id+'\',this)"')+' style="display:flex;gap:12px;align-items:center;padding:12px 16px;border-bottom:1px solid #f0ede8;cursor:'+(done?'default':'pointer')+';'+(done?'background:#f4faf6;':'')+'">'
       + thumb
       + '<div style="flex:1;min-width:0;">'
       +   '<div style="font-family:var(--font-main);font-weight:700;font-size:14px;color:#1a1a18;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+nm+'</div>'
       +   '<div style="font-size:11px;color:#999;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+(sb||v.venue_id)+'</div>'
       + '</div>'
-      + '<span style="flex-shrink:0;font-size:12px;font-weight:800;color:#5C0A14;">+ 추가</span>'
+      + tag
       + '</div>';
   }).join('');
 }
-async function pmAddVenue(vid){
+async function pmAddVenue(vid, rowEl){
+  // 즉시 DB 저장 (뒤로 가도 유지). 화면은 유지하고 ✓ 표시만 갱신 → 복수 선택.
   try{
     var res = await window.sb.from('venue_partners').upsert(
       { venue_id: vid, is_partner: true, channel: 'request_open', updated_at: new Date().toISOString() },
       { onConflict: 'venue_id' });
     if(res.error) throw res.error;
-    showToast('✓','파트너 추가됨', _resvVenueName(vid));
-    pmCloseAdd();
-    await pmLoad();
+    _pmSession[vid] = true;
+    if(rowEl){
+      rowEl.onclick = null;
+      rowEl.style.cursor = 'default';
+      rowEl.style.background = '#f4faf6';
+      var tag = rowEl.querySelector('.pmAddTag');
+      if(tag){ tag.textContent = '✓ 추가됨'; tag.style.color = '#1E9E5A'; }
+    }
+    _pmAddHintUpdate();
+    return;
   }catch(e){ showToast('⚠','추가 실패', e.message||''); }
 }
 
