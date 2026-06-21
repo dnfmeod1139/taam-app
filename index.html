@@ -7144,7 +7144,10 @@ window.closePromoCarousel = function(){
 
     <div id="prdNotes" style="display:none;margin-top:14px;padding:12px 14px;background:#fff7ed;border:1px solid #f3e0c8;border-radius:10px;font-size:12.5px;color:#8a5a1a;line-height:1.7;white-space:pre-wrap;"></div>
 
-    <div style="margin-top:22px;display:flex;flex-direction:column;gap:13px;">
+    <!-- 요청 OFF 매장 안내 (request_enabled=false) -->
+    <div id="prdNoRequest" style="display:none;margin-top:20px;padding:18px 16px;background:#f4f2ef;border:1px solid #e6e1d8;border-radius:12px;text-align:center;font-size:13px;color:#888;line-height:1.7;">현재 예약 요청을 받지 않는 매장입니다.</div>
+
+    <div id="prdRequestForm" style="margin-top:22px;display:flex;flex-direction:column;gap:13px;">
       <div style="display:flex;gap:10px;">
         <div style="flex:1;">
           <label data-i18n="resv.date" style="font-size:11px;font-weight:700;color:#888;display:block;margin-bottom:6px;">희망 날짜</label>
@@ -9016,10 +9019,15 @@ window.closePromoCarousel = function(){
       <button onclick="pmCloseEdit()" style="background:none;border:none;font-size:20px;color:#bbb;cursor:pointer;line-height:1;">✕</button>
     </div>
     <div id="pmEditSub" style="font-size:11.5px;color:#999;margin-bottom:18px;"></div>
-    <!-- 노출 토글 -->
-    <label style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px;background:#faf3f4;border:1.5px solid #e6cdd1;border-radius:14px;cursor:pointer;margin-bottom:18px;">
-      <span style="font-size:14px;font-weight:800;color:#5C0A14;">예약 요청 받기 (노출)</span>
+    <!-- 노출 토글 (파트너 리스트에 보임) -->
+    <label style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px;background:#faf3f4;border:1.5px solid #e6cdd1;border-radius:14px;cursor:pointer;margin-bottom:10px;">
+      <span><span style="font-size:14px;font-weight:800;color:#5C0A14;">파트너 리스트 노출</span><br><span style="font-size:10.5px;color:#a07a80;">회원의 ‘탐 파트너십 리스트’에 표시</span></span>
       <input type="checkbox" id="pmEditOn" style="width:20px;height:20px;accent-color:#5C0A14;">
+    </label>
+    <!-- 요청 받기 토글 (예약 요청 가능 여부) -->
+    <label style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px;background:#eef7f1;border:1.5px solid #cfe7d8;border-radius:14px;cursor:pointer;margin-bottom:18px;">
+      <span><span style="font-size:14px;font-weight:800;color:#1E7A45;">예약 요청 받기</span><br><span style="font-size:10.5px;color:#6a9a7e;">ON: ‘요청’ 탭에 노출·요청 가능 / OFF: 리스트만</span></span>
+      <input type="checkbox" id="pmEditReq" style="width:20px;height:20px;accent-color:#1E9E5A;">
     </label>
     <!-- 예약금 -->
     <div style="font-size:10px;font-weight:800;letter-spacing:.14em;color:#aaa;text-transform:uppercase;margin-bottom:8px;">예약금 (1인 기준)</div>
@@ -17971,12 +17979,14 @@ async function renderRequestList(){
   el.innerHTML = '<div style="padding:48px;text-align:center;color:rgba(255,255,255,.4);font-size:13px;">'+t('resv.loading','불러오는 중…')+'</div>';
   try{ await _prLoadPartners(); }
   catch(e){ el.innerHTML = '<div style="padding:48px;text-align:center;color:#e88;font-size:13px;">'+t('resv.load_fail','불러오기 실패')+'<br><span style="font-size:11px;opacity:.6;">'+(e.message||'')+'</span></div>'; return; }
-  if(_prPartners.length === 0){
-    el.innerHTML = '<div style="padding:48px;text-align:center;color:rgba(255,255,255,.4);font-size:13px;">'+t('resv.empty_list','아직 예약 가능한 파트너 레스토랑이 없어요.')+'</div>';
+  // 🆕 요청 탭 = request_enabled=true 매장만 (요청 가능한 곳)
+  var reqList = _prPartners.filter(function(p){ return p.request_enabled === true; });
+  if(reqList.length === 0){
+    el.innerHTML = '<div style="padding:48px;text-align:center;color:rgba(255,255,255,.4);font-size:13px;">'+t('resv.empty_list','아직 요청 가능한 매장이 없어요.')+'</div>';
     return;
   }
-  _prPartners.sort(function(a,b){ return (_prFavs[b.venue_id]?1:0) - (_prFavs[a.venue_id]?1:0); });
-  el.innerHTML = _prPartners.map(_prTicketCardHtml).join('');
+  reqList.sort(function(a,b){ return (_prFavs[b.venue_id]?1:0) - (_prFavs[a.venue_id]?1:0); });
+  el.innerHTML = reqList.map(_prTicketCardHtml).join('');
 }
 
 // 🆕 예약 요청 화면 탭 전환 (요청 / 파트너십 리스트)
@@ -18109,18 +18119,32 @@ function _pmRowHtml(p){
   var sub  = _resvVenueSub(p.venue_id);
   var photo = _resvVenuePhoto(p.venue_id);
   var on = (p.is_partner !== false);
+  var reqOn = (p.request_enabled === true);
   var thumb = photo
     ? '<div style="width:48px;height:48px;border-radius:9px;flex-shrink:0;background:#f0ede8 center/cover no-repeat url(\''+photo+'\');"></div>'
     : '<div style="width:48px;height:48px;border-radius:9px;flex-shrink:0;background:#f0ede8;display:flex;align-items:center;justify-content:center;font-size:18px;color:#c8a96e;">🍽</div>';
-  return '<div style="display:flex;gap:12px;align-items:center;padding:13px 16px;border-bottom:1px solid #f0ede8;">'
+  return '<div style="display:flex;gap:8px;align-items:center;padding:13px 16px;border-bottom:1px solid #f0ede8;">'
     + thumb
     + '<div onclick="pmOpenEdit(\''+p.venue_id+'\')" style="flex:1;min-width:0;cursor:pointer;">'
     +   '<div style="font-family:var(--font-main);font-weight:700;font-size:14px;color:#1a1a18;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+name+'</div>'
     +   '<div style="font-size:11px;color:#999;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+(sub||p.venue_id)+'</div>'
     + '</div>'
-    + '<span onclick="pmToggle(\''+p.venue_id+'\')" style="flex-shrink:0;font-size:10px;font-weight:800;letter-spacing:.06em;padding:5px 10px;border-radius:20px;cursor:pointer;'+(on?'background:#e7f6ee;color:#1E9E5A;':'background:#f0eeea;color:#aaa;')+'">'+(on?'노출':'숨김')+'</span>'
-    + '<button onclick="pmOpenEdit(\''+p.venue_id+'\')" style="flex-shrink:0;background:none;border:none;color:#bbb;font-size:18px;cursor:pointer;padding:4px;">›</button>'
+    + '<span onclick="pmToggleReq(\''+p.venue_id+'\')" title="예약 요청 받기" style="flex-shrink:0;font-size:9.5px;font-weight:800;letter-spacing:.04em;padding:5px 8px;border-radius:20px;cursor:pointer;'+(reqOn?'background:#e6f4ec;color:#1E9E5A;border:1px solid #bfe3cd;':'background:#f3f1ee;color:#bbb;border:1px solid #e6e1d8;')+'">'+(reqOn?'요청ON':'요청OFF')+'</span>'
+    + '<span onclick="pmToggle(\''+p.venue_id+'\')" title="파트너 리스트 노출" style="flex-shrink:0;font-size:9.5px;font-weight:800;letter-spacing:.04em;padding:5px 8px;border-radius:20px;cursor:pointer;'+(on?'background:#e7f6ee;color:#1E9E5A;':'background:#f0eeea;color:#aaa;')+'">'+(on?'노출':'숨김')+'</span>'
+    + '<button onclick="pmOpenEdit(\''+p.venue_id+'\')" style="flex-shrink:0;background:none;border:none;color:#bbb;font-size:18px;cursor:pointer;padding:2px;">›</button>'
     + '</div>';
+}
+async function pmToggleReq(vid){
+  var p = _pmRows.find(function(x){ return x.venue_id===vid; });
+  if(!p) return;
+  var next = (p.request_enabled !== true);
+  try{
+    var res = await window.sb.from('venue_partners')
+      .update({ request_enabled: next, updated_at: new Date().toISOString() }).eq('venue_id', vid);
+    if(res.error) throw res.error;
+    p.request_enabled = next;
+    renderPmList();
+  }catch(e){ showToast('⚠','변경 실패', e.message||''); }
 }
 
 // ── 추가: 큐레이션 카탈로그 검색 ──
@@ -18285,6 +18309,7 @@ function pmOpenEdit(vid){
   document.getElementById('pmEditName').textContent = _resvVenueName(vid);
   document.getElementById('pmEditSub').textContent  = _resvVenueSub(vid) || vid;
   document.getElementById('pmEditOn').checked = (p.is_partner !== false);
+  var _reqcb = document.getElementById('pmEditReq'); if(_reqcb) _reqcb.checked = (p.request_enabled === true);
   document.getElementById('pmEditMeal').value    = p.deposit_meal ? Number(p.deposit_meal).toLocaleString() : '';
   document.getElementById('pmEditAlcohol').value = p.deposit_alcohol ? Number(p.deposit_alcohol).toLocaleString() : '';
   document.getElementById('pmEditPmin').value = p.party_min || 1;
@@ -18302,6 +18327,7 @@ async function pmSaveEdit(){
   var row = {
     venue_id: _pmEditId,
     is_partner: !!(document.getElementById('pmEditOn')||{}).checked,
+    request_enabled: !!(document.getElementById('pmEditReq')||{}).checked,
     deposit_meal:    _pmNum('pmEditMeal'),
     deposit_alcohol: _pmNum('pmEditAlcohol'),
     party_min: parseInt((document.getElementById('pmEditPmin')||{}).value)||1,
@@ -18478,6 +18504,15 @@ function openPartnerDetail(vid){
   _prClosePartyAcc();
   _prBuildPartyChips(p.party_min, p.party_max);   // 인원 칩 구성 + 기본값 + 미리보기 갱신
 
+  // 🆕 요청 ON/OFF: request_enabled=false 면 요청 폼 숨기고 안내만
+  var _reqOn = (p.request_enabled === true);
+  var _form = document.getElementById('prdRequestForm');
+  var _sbtn = document.getElementById('prdSubmitBtn');
+  var _noreq = document.getElementById('prdNoRequest');
+  if(_form)  _form.style.display  = _reqOn ? 'flex' : 'none';
+  if(_sbtn)  _sbtn.style.display  = _reqOn ? 'block' : 'none';
+  if(_noreq) _noreq.style.display = _reqOn ? 'none' : 'block';
+
   document.getElementById('partnerDetailPage').style.display = 'flex';
 }
 
@@ -18508,6 +18543,7 @@ async function submitReserveRequest(){
             : m.indexOf('LEAD_TIME')          >= 0 ? t('resv.err_lead','더 일찍 요청해야 합니다.')
             : m.indexOf('PARTY_SIZE')         >= 0 ? t('resv.err_party','수용 인원 범위를 벗어났어요.')
             : m.indexOf('CLOSED')             >= 0 ? t('resv.err_closed','그 날짜는 휴무일이에요.')
+            : m.indexOf('REQUEST_DISABLED')   >= 0 ? t('resv.err_reqoff','현재 예약 요청을 받지 않는 매장이에요.')
             : m.indexOf('NOT_A_PARTNER')      >= 0 ? t('resv.err_partner','예약 가능한 매장이 아니에요.')
             : m.indexOf('CONDITIONS')         >= 0 ? t('resv.err_cond','매장 조건 동의가 필요해요.')
             : m.indexOf('ANNUAL')             >= 0 ? t('resv.err_annual','올해 요청 한도에 도달했어요.')
