@@ -6118,7 +6118,7 @@ window.closePromoCarousel = function(){
     </div>
     <!-- 🆕 탭: 요청 / 탐 파트너십 레스토랑 리스트 -->
     <div style="display:flex;gap:8px;padding:12px 22px 12px;">
-      <button id="reqTabRequest" onclick="switchRequestTab('request')" style="flex:1;height:44px;display:flex;align-items:center;justify-content:center;text-align:center;border-radius:12px;border:1px solid rgba(200,169,110,.55);background:rgba(200,169,110,.95);color:#1a1410;font-family:var(--font-main);font-size:12.5px;font-weight:800;line-height:1.15;cursor:pointer;transition:all .15s;"><span data-i18n="resv.tab_request">요청</span></button>
+      <button id="reqTabRequest" onclick="switchRequestTab('request')" style="flex:1;height:44px;display:flex;align-items:center;justify-content:center;text-align:center;border-radius:12px;border:1px solid rgba(200,169,110,.55);background:rgba(200,169,110,.95);color:#1a1410;font-family:var(--font-main);font-size:10.5px;font-weight:800;line-height:1.15;cursor:pointer;transition:all .15s;"><span data-i18n="resv.tab_request">요청 가능 리스트</span></button>
       <button id="reqTabPartner" onclick="switchRequestTab('partner')" style="flex:1;height:44px;display:flex;align-items:center;justify-content:center;text-align:center;border-radius:12px;border:1px solid rgba(255,255,255,.14);background:transparent;color:rgba(255,255,255,.65);font-family:var(--font-main);font-size:10.5px;font-weight:800;line-height:1.15;cursor:pointer;transition:all .15s;"><span data-i18n="resv.tab_partner">탐 파트너십 레스토랑 리스트</span></button>
     </div>
   </div>
@@ -7136,6 +7136,9 @@ window.closePromoCarousel = function(){
     <div id="prdSub" style="font-size:12px;color:#999;margin-top:4px;"></div>
 
     <div id="prdIntro" style="display:none;margin-top:16px;font-size:13.5px;color:#444;line-height:1.7;white-space:pre-wrap;"></div>
+
+    <!-- 🆕 큐레이션 상세 정보 (소개·주소·타베로그·지도·인스타) -->
+    <div id="prdInfo" style="display:none;margin-top:16px;"></div>
 
     <div style="margin-top:20px;padding:14px 16px;background:#f7f5f2;border-radius:12px;border:1px solid #ece7df;">
       <div style="font-size:10px;font-weight:800;letter-spacing:.14em;color:#aaa;text-transform:uppercase;margin-bottom:8px;" data-i18n="resv.conds_title">매장 조건</div>
@@ -18496,6 +18499,9 @@ function openPartnerDetail(vid){
   var notesEl = document.getElementById('prdNotes');
   if(notesEl){ if(p.reservation_notes){ notesEl.textContent = '📌 ' + p.reservation_notes; notesEl.style.display='block'; } else { notesEl.style.display='none'; } }
 
+  // 🆕 큐레이션 상세 정보 (타베로그/지도/인스타/주소/소개)
+  _prRenderVenueInfo(vid);
+
   document.getElementById('prdDate').value  = '';
   document.getElementById('prdTime').value  = '';
   document.getElementById('prdMemo').value  = '';
@@ -18514,6 +18520,57 @@ function openPartnerDetail(vid){
   if(_noreq) _noreq.style.display = _reqOn ? 'none' : 'block';
 
   document.getElementById('partnerDetailPage').style.display = 'flex';
+}
+
+// 🆕 큐레이션 상세 정보 (타베로그·지도·인스타·주소·소개) — TAAM Atlas/_index.json 기반
+function _prRenderVenueInfo(vid){
+  var el = document.getElementById('prdInfo');
+  if(!el) return;
+  var v = (_prVenueIndex||{})[vid] || {};
+  function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  var html = '';
+  // 소개 (큐레이션 한 줄/요약)
+  var desc = v.style_summary_ko || v.holistic_signature_ko || '';
+  if(desc){
+    html += '<div style="font-size:13px;color:#444;line-height:1.7;white-space:pre-wrap;margin-bottom:14px;">'+esc(desc)+'</div>';
+  }
+  // 정보 행 (장르 · 주소 · 전화)
+  var rows = [];
+  var genre = v.genre_main || (v.genre_sub && v.genre_sub[0]);
+  if(genre) rows.push(['장르', esc(genre)]);
+  var addr = v.address_kr || v.address_jp || [v.city_ko||v.city, v.neighborhood_ko].filter(Boolean).join(' ');
+  if(addr) rows.push(['주소', esc(addr)]);
+  if(v.phone) rows.push(['전화', '<a href="tel:'+esc(v.phone)+'" style="color:#5C0A14;text-decoration:none;">'+esc(v.phone)+'</a>']);
+  if(rows.length){
+    html += '<div style="border:1px solid #ece7df;border-radius:12px;overflow:hidden;margin-bottom:12px;">';
+    rows.forEach(function(r,i){
+      html += '<div style="display:flex;gap:10px;padding:11px 14px;'+(i?'border-top:1px solid #f0ede8;':'')+'background:#fff;">'
+            + '<div style="flex-shrink:0;width:44px;font-size:11px;font-weight:800;color:#aaa;">'+r[0]+'</div>'
+            + '<div style="flex:1;font-size:13px;color:#333;line-height:1.5;">'+r[1]+'</div>'
+            + '</div>';
+    });
+    html += '</div>';
+  }
+  // 외부 링크 버튼 (타베로그 / 지도 / 인스타그램)
+  var links = [];
+  if(v.tabelog_url) links.push(['🍽 타베로그', v.tabelog_url, '#ff6f00']);
+  if(v.naver_map_url) links.push(['🗺 지도', v.naver_map_url, '#1E9E5A']);
+  else if(v.lat && v.lng) links.push(['🗺 지도', 'https://www.google.com/maps/search/?api=1&query='+v.lat+','+v.lng, '#1E9E5A']);
+  if(v.instagram_url) links.push(['📷 인스타그램', v.instagram_url, '#C13584']);
+  if(links.length){
+    html += '<div style="display:flex;flex-wrap:wrap;gap:8px;">';
+    links.forEach(function(l){
+      html += '<a href="'+esc(l[1])+'" target="_blank" rel="noopener" style="flex:1;min-width:46%;box-sizing:border-box;text-align:center;padding:11px 8px;border-radius:10px;border:1.5px solid '+l[2]+'33;background:'+l[2]+'0d;color:'+l[2]+';font-size:12.5px;font-weight:800;text-decoration:none;">'+l[0]+'</a>';
+    });
+    html += '</div>';
+  }
+  if(html){
+    el.innerHTML = '<div style="font-size:10px;font-weight:800;letter-spacing:.14em;color:#aaa;text-transform:uppercase;margin-bottom:8px;">상세 정보</div>' + html;
+    el.style.display = 'block';
+  } else {
+    el.innerHTML = '';
+    el.style.display = 'none';
+  }
 }
 
 async function submitReserveRequest(){
@@ -27999,7 +28056,7 @@ var TRANSLATIONS = {
     resv: {
       title:'예약 요청', subtitle:'파트너 레스토랑에 예약을 요청하세요. 매장이 직접 수락합니다.',
       in_progress:'진행 중', loading:'불러오는 중…', load_fail:'불러오기 실패',
-      tab_request:'요청', tab_partner:'탐 파트너십 레스토랑 리스트', partner_count:'제휴 매장',
+      tab_request:'요청 가능 리스트', tab_partner:'탐 파트너십 레스토랑 리스트', partner_count:'제휴 매장',
       empty_list:'아직 예약 가능한 파트너 레스토랑이 없어요.',
       deposit:'예약금', pp:' / 인', people:'명', dows:'일,월,화,수,목,금,토',
       detail_title:'예약 요청하기', conds_title:'매장 조건',
@@ -28737,7 +28794,7 @@ var TRANSLATIONS = {
     resv: {
       title:'Reservation Request', subtitle:'Request a reservation at partner restaurants. The venue accepts directly.',
       in_progress:'In progress', loading:'Loading…', load_fail:'Failed to load',
-      tab_request:'Request', tab_partner:'TAAM Partner Restaurants', partner_count:'Partner venues',
+      tab_request:'Requestable', tab_partner:'TAAM Partner Restaurants', partner_count:'Partner venues',
       empty_list:'No partner restaurants available yet.',
       deposit:'Deposit', pp:' / person', people:' guests', dows:'Sun,Mon,Tue,Wed,Thu,Fri,Sat',
       detail_title:'Request Reservation', conds_title:'Venue Conditions',
@@ -29434,7 +29491,7 @@ TRANSLATIONS.ja = {
   resv: {
     title:'予約リクエスト', subtitle:'パートナーレストランに予約をリクエスト。店舗が直接承認します。',
     in_progress:'進行中', loading:'読み込み中…', load_fail:'読み込み失敗',
-    tab_request:'リクエスト', tab_partner:'TAAMパートナー店舗', partner_count:'提携店舗',
+    tab_request:'リクエスト可能', tab_partner:'TAAMパートナー店舗', partner_count:'提携店舗',
     empty_list:'予約可能なパートナー店舗はまだありません。',
     deposit:'予約金', pp:' / 名', people:'名', dows:'日,月,火,水,木,金,土',
     detail_title:'予約をリクエスト', conds_title:'店舗条件',
