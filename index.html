@@ -9895,6 +9895,29 @@ window.closePromoCarousel = function(){
   <div class="tcal-buyer-modal" id="tcalBuyerModal" onclick="if(event.target===this)tcalCloseBuyer()">
     <div class="tcal-buyer-sheet" id="tcalBuyerSheet"></div>
   </div>
+  <!-- 🆕 수기 예약 입력 모달 -->
+  <div id="tcalManualModal" style="display:none;position:fixed;inset:0;z-index:980;background:rgba(20,18,16,.55);align-items:center;justify-content:center;padding:24px;" onclick="if(event.target===this)tcalCloseManual()">
+    <div style="width:100%;max-width:360px;background:#fff;border-radius:22px;padding:24px 22px;box-shadow:0 24px 60px rgba(0,0,0,.4);font-family:'Noto Sans KR',sans-serif;">
+      <div style="font-size:18px;font-weight:800;color:#1a1a18;">수기 예약 추가</div>
+      <div id="tcalManualCtx" style="font-size:12px;color:#9a9486;margin-top:4px;"></div>
+      <div style="margin-top:16px;">
+        <label style="font-size:12px;font-weight:700;color:#6b6b6b;">이름</label>
+        <input id="tcalManualName" type="text" placeholder="예약자 이름" style="width:100%;box-sizing:border-box;margin-top:5px;padding:12px;border:1px solid #e0ddd5;border-radius:10px;font-size:14px;">
+      </div>
+      <div style="margin-top:12px;">
+        <label style="font-size:12px;font-weight:700;color:#6b6b6b;">인원</label>
+        <input id="tcalManualPax" type="number" inputmode="numeric" min="1" value="1" style="width:100%;box-sizing:border-box;margin-top:5px;padding:12px;border:1px solid #e0ddd5;border-radius:10px;font-size:14px;font-weight:800;">
+      </div>
+      <div style="margin-top:12px;">
+        <label style="font-size:12px;font-weight:700;color:#6b6b6b;">메모 (선택)</label>
+        <textarea id="tcalManualMemo" rows="2" placeholder="비고" style="width:100%;box-sizing:border-box;margin-top:5px;padding:12px;border:1px solid #e0ddd5;border-radius:10px;font-size:13px;resize:none;"></textarea>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:18px;">
+        <button onclick="tcalCloseManual()" style="flex:1;height:48px;border:1px solid #e0ddd5;border-radius:12px;background:#fff;font-family:inherit;font-size:14px;font-weight:700;color:#888;cursor:pointer;">취소</button>
+        <button onclick="tcalManualSave()" style="flex:1.6;height:48px;border:none;border-radius:12px;background:#6A1A1A;color:#fff;font-family:inherit;font-size:14px;font-weight:800;cursor:pointer;">저장</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- TOAST -->
@@ -30445,7 +30468,18 @@ var _tcalYear, _tcalMonth, _tcalSelectedDate = null;
 var _tcalPurchases = [];   // 역할별 전체 구매기록 (슈퍼어드민=전체 회원 / 어드민=본인 매장)
 var _tcalBuyerMap = {};    // 구매자 상세 모달용 lookup (onclick 에 객체 직렬화 대신 키 전달)
 var _tcalInvites = [];     // 🆕 초대 결제(paid) 예약 — 역구조 판매 점유 반영
+var _tcalManual = [];      // 🆕 수기 예약 (앱 초대 불가 상황에 이름/인원/메모만 기재)
 var _tcalRestFilter = '';  // 🆕 매장 필터 (''=전체) — 더블부킹 방지용 매장별 점유 확인
+
+// 🆕 수기 예약 로드 (daegwan_manual)
+async function tcalLoadManual(){
+  _tcalManual = [];
+  try {
+    if(!window.sb) return;
+    var r = await window.sb.from('daegwan_manual').select('id,venue_id,ymd,name,pax,memo');
+    if(!r.error && Array.isArray(r.data)) _tcalManual = r.data;
+  } catch(e){ console.warn('[tcal] manual 로드 실패:', e); }
+}
 
 // 🆕 초대 결제(paid) 로드 — 역구조(초대→결제)로 팔린 예약도 캘린더 점유에 반영
 async function tcalLoadInvites(){
@@ -30487,6 +30521,10 @@ function _tcalBookingMap(){
   (_tcalInvites||[]).forEach(function(inv){
     if(_tcalRestFilter && String(inv.restaurant_id) !== String(_tcalRestFilter)) return;
     add(_tcalDateKey(inv.visit_date), {src:'invite', name:'', uid:(inv.invitee_user_id||''), pax:(inv.pax||0), time:(inv.visit_time||''), restId:inv.restaurant_id, rest:(inv.restaurant_name||'')});
+  });
+  (_tcalManual||[]).forEach(function(m){
+    if(_tcalRestFilter && String(m.venue_id) !== String(_tcalRestFilter)) return;
+    add(_tcalDateKey(String(m.ymd).replace(/-/g,'.')), {src:'manual', name:(m.name||''), memo:(m.memo||''), mid:m.id, pax:(m.pax||0), restId:m.venue_id, rest:''});
   });
   return map;
 }
@@ -30617,6 +30655,55 @@ async function tcalSaveCapacity(){
 }
 window.tcalSaveCapacity = tcalSaveCapacity;
 
+// 🆕 수기 예약 — 앱 초대 불가 상황에 이름/인원/메모만 기재 (인원은 점유 카운팅에 합산)
+function tcalOpenManual(){
+  if(!_tcalRestFilter){ showToast('⚠','매장 선택','먼저 상단에서 매장을 선택하세요'); return; }
+  if(!_tcalSelectedDate){ showToast('⚠','날짜 선택','캘린더에서 날짜를 선택하세요'); return; }
+  var ctx = document.getElementById('tcalManualCtx');
+  var restName = (typeof _resvVenueName==='function') ? _resvVenueName(_tcalRestFilter) : _tcalRestFilter;
+  if(ctx) ctx.textContent = restName + ' · ' + _tcalYear + '.' + _tcalSelectedDate;
+  var nm = document.getElementById('tcalManualName'); if(nm) nm.value='';
+  var px = document.getElementById('tcalManualPax'); if(px) px.value='1';
+  var mm = document.getElementById('tcalManualMemo'); if(mm) mm.value='';
+  var modal = document.getElementById('tcalManualModal'); if(modal) modal.style.display='flex';
+}
+function tcalCloseManual(){ var m=document.getElementById('tcalManualModal'); if(m) m.style.display='none'; }
+window.tcalOpenManual = tcalOpenManual; window.tcalCloseManual = tcalCloseManual;
+
+async function tcalManualSave(){
+  if(!_tcalRestFilter || !_tcalSelectedDate){ showToast('⚠','선택 필요','매장·날짜를 먼저 선택하세요'); return; }
+  var name = (document.getElementById('tcalManualName')||{}).value || '';
+  var pax  = Math.max(1, parseInt((document.getElementById('tcalManualPax')||{}).value) || 1);
+  var memo = (document.getElementById('tcalManualMemo')||{}).value || '';
+  var day = parseInt(_tcalSelectedDate.split('.')[1], 10);
+  var ymd = _tcalYear + '-' + String(_tcalMonth+1).padStart(2,'0') + '-' + String(day).padStart(2,'0');
+  try {
+    var u = (await window.sb.auth.getUser()).data.user;
+    var r = await window.sb.from('daegwan_manual').insert({
+      venue_id:String(_tcalRestFilter), ymd:ymd, name:name.trim(), pax:pax, memo:memo.trim(), created_by:(u&&u.id)||null
+    });
+    if(r.error){ showToast('❌','저장 실패', (r.error.message||'').substring(0,80)); return; }
+    showToast('✓','추가 완료', (name.trim()||'수기 예약') + ' · ' + pax + '명');
+    tcalCloseManual();
+    await tcalLoadManual();
+    tcalRender(); tcalRenderDetail(_tcalSelectedDate);
+  } catch(e){ showToast('❌','오류', (e.message||'').substring(0,80)); }
+}
+window.tcalManualSave = tcalManualSave;
+
+async function tcalManualDelete(id){
+  if(!id || !window.sb) return;
+  if(!confirm('이 수기 예약을 삭제할까요?')) return;
+  try {
+    var r = await window.sb.from('daegwan_manual').delete().eq('id', id);
+    if(r.error){ showToast('❌','삭제 실패', (r.error.message||'').substring(0,80)); return; }
+    showToast('✓','삭제 완료','');
+    await tcalLoadManual();
+    tcalRender(); if(_tcalSelectedDate) tcalRenderDetail(_tcalSelectedDate);
+  } catch(e){ showToast('❌','오류', (e.message||'').substring(0,80)); }
+}
+window.tcalManualDelete = tcalManualDelete;
+
 
 // 역할별로 볼 수 있는 티켓 상품(ticketDB) 범위
 //   - 슈퍼어드민: 전체 티켓
@@ -30663,7 +30750,7 @@ function tcalInit() {
   if(_rf) _rf.style.display = (typeof _isSuperAdmin === 'function' && _isSuperAdmin()) ? 'block' : 'none';
   tcalRender();
   // 구매기록 + 초대결제 비동기 로드 → 완료 후 캘린더(점유)·상세 재렌더
-  Promise.all([tcalLoadPurchases(), tcalLoadInvites(), tcalLoadCapacity()]).then(function(){
+  Promise.all([tcalLoadPurchases(), tcalLoadInvites(), tcalLoadCapacity(), tcalLoadManual()]).then(function(){
     _tcalFillRestFilter();
     tcalRender();
     if(_tcalSelectedDate){
@@ -30797,6 +30884,14 @@ function tcalRenderDetail(dateStr) {
       + capRow;
     if (_bk && _bk.items.length > 0) {
       _bk.items.forEach(function(it){
+        if (it.src === 'manual') {
+          occHtml += '<div style="display:flex;justify-content:space-between;align-items:center;padding:11px 15px;border-bottom:1px solid #f4f1ec;">'
+            + '<div style="min-width:0;font-size:12.5px;color:#333;"><span style="font-size:9.5px;font-weight:800;color:#7A6A60;background:#F0ECE6;border:1px solid #E0D9CC;border-radius:6px;padding:1px 6px;">수기</span> <span style="font-weight:700;">' + ((it.name||'(이름없음)')) + '</span>' + (it.memo ? ' <span style="color:#9a9486;">· ' + _escHtmlAdg(it.memo) + '</span>' : '') + '</div>'
+            + '<div style="flex-shrink:0;display:flex;align-items:center;gap:10px;"><span style="font-size:13px;font-weight:800;color:#6A1A1A;">' + it.pax + '명</span>'
+            +   '<span onclick="event.stopPropagation();tcalManualDelete(\'' + it.mid + '\')" style="cursor:pointer;color:#c33;font-size:17px;font-weight:700;line-height:1;padding:2px 4px;">×</span>'
+            + '</div></div>';
+          return;
+        }
         var srcBadge = it.src === 'invite'
           ? '<span style="font-size:9.5px;font-weight:800;color:#6A1A1A;background:#FBF3F2;border:1px solid #EEDADA;border-radius:6px;padding:1px 6px;">초대 발송</span>'
           : '<span style="font-size:9.5px;font-weight:800;color:#1F5BD6;background:#EAF1FF;border:1px solid #D2E0FB;border-radius:6px;padding:1px 6px;">티켓 직접구매</span>';
@@ -30813,6 +30908,10 @@ function tcalRenderDetail(dateStr) {
       });
     } else {
       occHtml += '<div style="padding:14px 15px;font-size:12px;color:#c9c4ba;">아직 예약 없음</div>';
+    }
+    // 🆕 수기 예약 추가 (매장 선택 시) — 앱 초대 불가 상황에 이름/인원/메모 기재
+    if (hasFilter) {
+      occHtml += '<div style="padding:12px 15px;border-top:1px solid #f0ece1;"><button onclick="tcalOpenManual()" style="width:100%;height:42px;border:1.5px dashed #d8cfc0;border-radius:11px;background:#fff;color:#6A1A1A;font-family:\'Noto Sans KR\',sans-serif;font-size:13px;font-weight:800;cursor:pointer;">＋ 수기 예약 추가</button></div>';
     }
     occHtml += '</div>';
   }
