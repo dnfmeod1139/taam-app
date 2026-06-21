@@ -8975,6 +8975,16 @@ window.closePromoCarousel = function(){
   </div>
   <div style="padding:12px 18px;background:#f7f5f2;border-bottom:1px solid rgba(0,0,0,.05);">
     <button onclick="pmOpenAdd()" style="width:100%;box-sizing:border-box;padding:13px;border:none;border-radius:11px;background:#5C0A14;color:#fff;font-family:var(--font-main);font-size:13px;font-weight:800;letter-spacing:.06em;cursor:pointer;">+ 파트너 매장 추가</button>
+    <div style="position:relative;margin-top:10px;">
+      <input type="text" id="pmListSearch" placeholder="등록된 매장 검색 (이름·지역)" oninput="renderPmList()"
+        style="width:100%;box-sizing:border-box;padding:10px 12px 10px 34px;border:1.5px solid #e0ddd6;border-radius:10px;background:#fff;font-size:13px;font-family:var(--font-main);color:#1a1a18;outline:none;" />
+      <span style="position:absolute;left:11px;top:50%;transform:translateY(-50%);font-size:13px;color:#aaa;pointer-events:none;">🔍</span>
+    </div>
+    <div style="margin-top:8px;display:flex;gap:6px;">
+      <button id="pmFilterAll" onclick="pmSetFilter('all')" style="flex:1;padding:7px 0;border-radius:8px;border:1px solid #5C0A14;background:#5C0A14;color:#fff;font-size:11px;font-weight:800;cursor:pointer;">전체</button>
+      <button id="pmFilterOn" onclick="pmSetFilter('on')" style="flex:1;padding:7px 0;border-radius:8px;border:1px solid #d8cfc7;background:#fff;color:#666;font-size:11px;font-weight:800;cursor:pointer;">노출</button>
+      <button id="pmFilterOff" onclick="pmSetFilter('off')" style="flex:1;padding:7px 0;border-radius:8px;border:1px solid #d8cfc7;background:#fff;color:#666;font-size:11px;font-weight:800;cursor:pointer;">숨김</button>
+    </div>
     <div id="pmCount" style="margin-top:8px;font-size:11px;color:#888;font-weight:700;letter-spacing:.06em;text-transform:uppercase;"></div>
   </div>
   <div class="sub-content" id="pmListContent"></div>
@@ -17999,6 +18009,7 @@ var _pmEditId = null;
 async function pmLoad(){
   var el = document.getElementById('pmListContent');
   if(el) el.innerHTML = '<div class="sub-empty">불러오는 중…</div>';
+  var sEl = document.getElementById('pmListSearch'); if(sEl) sEl.value = '';
   await _prLoadVenueIndex();
   try{
     var res = await window.sb.from('venue_partners').select('*').order('updated_at', { ascending:false });
@@ -18008,25 +18019,49 @@ async function pmLoad(){
     if(el) el.innerHTML = '<div class="sub-empty" style="color:#B23A2E;">불러오기 실패<br><span style="font-size:11px;color:#999;">'+(e.message||'')+'</span></div>';
     return;
   }
-  renderPmList();
+  if(typeof pmSetFilter === 'function') pmSetFilter('all'); else renderPmList();
 }
 
+var _pmFilter = 'all';   // all | on | off
+function pmSetFilter(f){
+  _pmFilter = f;
+  [['all','pmFilterAll'],['on','pmFilterOn'],['off','pmFilterOff']].forEach(function(p){
+    var b = document.getElementById(p[1]); if(!b) return;
+    var sel = (p[0]===f);
+    b.style.background = sel?'#5C0A14':'#fff';
+    b.style.color = sel?'#fff':'#666';
+    b.style.borderColor = sel?'#5C0A14':'#d8cfc7';
+  });
+  renderPmList();
+}
 function renderPmList(){
   var el = document.getElementById('pmListContent');
   if(!el) return;
   var cnt = document.getElementById('pmCount');
   var onN = _pmRows.filter(function(p){ return p.is_partner !== false; }).length;
-  if(cnt) cnt.textContent = '전체 '+_pmRows.length+'곳 · 노출 '+onN+'곳';
+  if(cnt) cnt.textContent = '전체 '+_pmRows.length+'곳 · 노출 '+onN+'곳 · 숨김 '+(_pmRows.length-onN)+'곳';
   if(_pmRows.length === 0){
     el.innerHTML = '<div class="sub-empty">등록된 파트너 매장이 없습니다.<br><span style="font-size:11px;color:#999;">위 “+ 파트너 매장 추가”로 등록하세요.</span></div>';
     return;
   }
+  var q = ((document.getElementById('pmListSearch')||{}).value || '').trim().toLowerCase();
   // 노출 우선 → 이름순
   var list = _pmRows.slice().sort(function(a,b){
     var oa=(a.is_partner!==false?1:0), ob=(b.is_partner!==false?1:0);
     if(oa!==ob) return ob-oa;
     return _resvVenueName(a.venue_id).localeCompare(_resvVenueName(b.venue_id),'ko');
   });
+  // 노출/숨김 필터
+  if(_pmFilter==='on')  list = list.filter(function(p){ return p.is_partner!==false; });
+  if(_pmFilter==='off') list = list.filter(function(p){ return p.is_partner===false; });
+  // 검색 필터
+  if(q) list = list.filter(function(p){
+    return (_resvVenueName(p.venue_id)+' '+_resvVenueSub(p.venue_id)+' '+p.venue_id).toLowerCase().indexOf(q) >= 0;
+  });
+  if(list.length === 0){
+    el.innerHTML = '<div class="sub-empty">조건에 맞는 매장이 없습니다.</div>';
+    return;
+  }
   el.innerHTML = list.map(_pmRowHtml).join('');
 }
 
