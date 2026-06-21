@@ -13,10 +13,13 @@ create table if not exists public.daegwan_manual (
   ymd         date not null,
   name        text,
   pax         integer not null default 1,
+  amount      integer not null default 0,   -- 받은 금액(원)
   memo        text,
   created_by  uuid references auth.users(id),
   created_at  timestamptz not null default now()
 );
+-- 기존 테이블 보강 (이미 만든 경우 amount 컬럼 추가)
+alter table public.daegwan_manual add column if not exists amount integer not null default 0;
 
 comment on table public.daegwan_manual is
   '티켓 캘린더 수기 예약(앱 초대 불가 상황). pax 가 점유 인원 카운팅에 합산.';
