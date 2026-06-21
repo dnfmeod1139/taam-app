@@ -17851,6 +17851,36 @@ async function _prLoadVenueIndex(){
   return _prVenueIndex;
 }
 
+// 🆕 어워드 역인덱스 (venue_id → [{label,color}]). _award_index.json 기반.
+var _prAwardIndex = null;
+async function _prLoadAwardIndex(){
+  if(_prAwardIndex) return _prAwardIndex;
+  try{
+    var r = await fetch('venues/_award_index.json');
+    var d = await r.json();
+    var map = {};
+    function add(vid,label,color){ if(!map[vid]) map[vid]=[]; if(!map[vid].some(function(x){return x.label===label;})) map[vid].push({label:label,color:color}); }
+    var tb = d.tabelog_award_2026 || {};
+    (tb.gold||[]).forEach(function(vid){   add(vid,'🥇 Tabelog Gold 2026','#B8860B'); });
+    (tb.silver||[]).forEach(function(vid){ add(vid,'🥈 Tabelog Silver 2026','#7A7A7A'); });
+    (tb.bronze||[]).forEach(function(vid){ add(vid,'🥉 Tabelog Bronze 2026','#A0522D'); });
+    var ex = d.extra_awards || {};
+    (ex.chefs_gold||[]).forEach(function(vid){     add(vid,"Chef's Gold",'#B8860B'); });
+    (ex.best_new_entry||[]).forEach(function(vid){ add(vid,'Best New Entry','#5C0A14'); });
+    (ex.best_regional||[]).forEach(function(vid){  add(vid,'Best Regional','#5C0A14'); });
+    var mk = d.michelin_kr_2025 || {};
+    (mk.three_star||[]).forEach(function(vid){ add(vid,'미쉐린 ★★★','#C8102E'); });
+    (mk.two_star||[]).forEach(function(vid){   add(vid,'미쉐린 ★★','#C8102E'); });
+    (mk.one_star||[]).forEach(function(vid){   add(vid,'미쉐린 ★','#C8102E'); });
+    (mk.bib_gourmand||[]).forEach(function(vid){ add(vid,'미쉐린 빕 구르망','#C8102E'); });
+    (mk.plate||[]).forEach(function(vid){      add(vid,'미쉐린 플레이트','#C8102E'); });
+    var tv = d.taam_verified || {};
+    ['jp','kr'].forEach(function(k){ (tv[k]||[]).forEach(function(vid){ add(vid,'TAAM Verified','#1E9E5A'); }); });
+    _prAwardIndex = map;
+  }catch(e){ _prAwardIndex = {}; }
+  return _prAwardIndex;
+}
+
 // 예약 매장 표시 정보 — 등록 레스토랑(restaurantDB) 우선, 큐레이션 폴백
 // 파트너 row 조회 (회원 _prPartners / 어드민 _pmRows 공용) — 직접입력(custom) 매장 표시용
 function _resvPartnerRow(id){
@@ -17897,6 +17927,7 @@ function _resvVenuePhoto(id){
 var _prFeePolicy = {};   // venue_id -> 수수료 정책
 async function _prLoadPartners(){
   await _prLoadVenueIndex();
+  _prLoadAwardIndex();   // 어워드 역인덱스 (비동기 — 상세 진입 전 준비)
   var pRes = await window.sb.from('venue_partners').select('*').eq('is_partner', true);
   if(pRes.error) throw pRes.error;
   _prPartners = pRes.data || [];
@@ -18529,6 +18560,15 @@ function _prRenderVenueInfo(vid){
   var v = (_prVenueIndex||{})[vid] || {};
   function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
   var html = '';
+  // 🆕 어워드 배지 (타베로그 골드/실버/브론즈 · 미쉐린 · TAAM Verified)
+  var awards = (_prAwardIndex||{})[vid] || [];
+  if(awards.length){
+    html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;">'
+      + awards.map(function(a){
+          return '<span style="font-size:11px;font-weight:800;padding:5px 10px;border-radius:20px;color:'+a.color+';background:'+a.color+'14;border:1px solid '+a.color+'33;">'+esc(a.label)+'</span>';
+        }).join('')
+      + '</div>';
+  }
   // 소개 (큐레이션 한 줄/요약)
   var desc = v.style_summary_ko || v.holistic_signature_ko || '';
   if(desc){
