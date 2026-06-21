@@ -7132,13 +7132,14 @@ window.closePromoCarousel = function(){
     <div class="mp-sub-title" data-i18n="resv.detail_title">예약 요청하기</div>
   </div>
   <div class="mp-sub-scroll" style="padding:20px 18px 120px;">
-    <div id="prdName" style="font-family:var(--font-main);font-size:20px;font-weight:800;color:#1a1a18;"></div>
-    <div id="prdSub" style="font-size:12px;color:#999;margin-top:4px;"></div>
+    <div id="prdHero" style="display:none;width:100%;aspect-ratio:16/9;border-radius:16px;background:#e8e3da center/cover no-repeat;margin-bottom:16px;box-shadow:0 6px 22px rgba(0,0,0,.10);"></div>
+    <div id="prdName" style="font-family:'Cormorant Garamond',var(--font-main);font-size:25px;font-weight:700;color:#1a1a18;letter-spacing:.01em;line-height:1.15;"></div>
+    <div id="prdSub" style="font-size:11.5px;color:#a99; letter-spacing:.04em;margin-top:5px;font-weight:600;"></div>
 
     <div id="prdIntro" style="display:none;margin-top:16px;font-size:13.5px;color:#444;line-height:1.7;white-space:pre-wrap;"></div>
 
-    <!-- 🆕 큐레이션 상세 정보 (소개·주소·타베로그·지도·인스타) -->
-    <div id="prdInfo" style="display:none;margin-top:16px;"></div>
+    <!-- 🆕 큐레이션 상세 정보 (어워드·소개·주소·타베로그·지도·인스타) -->
+    <div id="prdInfo" style="display:none;margin-top:18px;"></div>
 
     <div style="margin-top:20px;padding:14px 16px;background:#f7f5f2;border-radius:12px;border:1px solid #ece7df;">
       <div style="font-size:10px;font-weight:800;letter-spacing:.14em;color:#aaa;text-transform:uppercase;margin-bottom:8px;" data-i18n="resv.conds_title">매장 조건</div>
@@ -9061,6 +9062,8 @@ window.closePromoCarousel = function(){
     <input id="pmManName" type="text" placeholder="예: 스시 OOO" style="width:100%;box-sizing:border-box;padding:12px;border:1px solid #e0dcd4;border-radius:10px;font-size:15px;font-weight:600;margin-bottom:14px;">
     <div style="font-size:10px;font-weight:800;letter-spacing:.14em;color:#aaa;text-transform:uppercase;margin-bottom:6px;">지역 · 장르 (선택)</div>
     <input id="pmManSub" type="text" placeholder="예: 도쿄 · 스시" style="width:100%;box-sizing:border-box;padding:12px;border:1px solid #e0dcd4;border-radius:10px;font-size:14px;margin-bottom:14px;">
+    <div style="font-size:10px;font-weight:800;letter-spacing:.14em;color:#aaa;text-transform:uppercase;margin-bottom:6px;">타베로그 / 외부 링크 (선택)</div>
+    <input id="pmManTabelog" type="url" inputmode="url" placeholder="https://tabelog.com/..." style="width:100%;box-sizing:border-box;padding:12px;border:1px solid #e0dcd4;border-radius:10px;font-size:13.5px;margin-bottom:14px;">
     <div style="font-size:10px;font-weight:800;letter-spacing:.14em;color:#aaa;text-transform:uppercase;margin-bottom:6px;">사진 (선택)</div>
     <div id="pmManPhotoBox" onclick="document.getElementById('pmManPhotoFile').click()" style="width:100%;aspect-ratio:16/9;border-radius:12px;border:1.5px dashed #d8d0c8;background:#f7f5f2 center/cover no-repeat;display:flex;align-items:center;justify-content:center;cursor:pointer;margin-bottom:18px;">
       <span style="font-size:12px;color:#b0a89e;">탭해서 사진 업로드</span>
@@ -18275,6 +18278,7 @@ function pmOpenManual(){
   _pmManPhoto = null;
   var n=document.getElementById('pmManName'); if(n) n.value='';
   var s=document.getElementById('pmManSub'); if(s) s.value='';
+  var tb=document.getElementById('pmManTabelog'); if(tb) tb.value='';
   var on=document.getElementById('pmManOn'); if(on) on.checked=true;
   var box=document.getElementById('pmManPhotoBox');
   if(box){ box.style.backgroundImage=''; box.innerHTML='<span style="font-size:12px;color:#b0a89e;">탭해서 사진 업로드</span>'; }
@@ -18308,12 +18312,13 @@ async function pmManualSave(){
   var name = ((document.getElementById('pmManName')||{}).value||'').trim();
   if(!name){ showToast('⚠','매장명을 입력하세요',''); return; }
   var sub = ((document.getElementById('pmManSub')||{}).value||'').trim();
+  var tabelog = ((document.getElementById('pmManTabelog')||{}).value||'').trim();
   var on  = !!(document.getElementById('pmManOn')||{}).checked;
   // 슬러그 생성: manual- + 시간 + 난수 (충돌 방지)
   var slug = 'manual-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,6);
   var row = {
     venue_id: slug, is_partner: on, channel: 'request_open',
-    custom_name: name, custom_sub: sub || null,
+    custom_name: name, custom_sub: sub || null, custom_tabelog: tabelog || null,
     updated_at: new Date().toISOString()
   };
   if(_pmManPhoto) row.request_photo = _pmManPhoto;
@@ -18504,6 +18509,9 @@ function openPartnerDetail(vid){
   var p = _prPartners.find(function(x){ return x.venue_id === vid; }) || {};
   document.getElementById('prdName').textContent = _resvVenueName(vid);
   document.getElementById('prdSub').textContent  = _resvVenueSub(vid);
+  var _hero = document.getElementById('prdHero');
+  var _hp = _resvVenuePhoto(vid);
+  if(_hero){ if(_hp){ _hero.style.backgroundImage = 'url("'+_hp+'")'; _hero.style.display='block'; } else { _hero.style.display='none'; } }
 
   var conds = [];
   if(p.reservation_hours) conds.push(t('resv.cond_hours','예약 가능 시간') + ': ' + p.reservation_hours);
@@ -18553,64 +18561,79 @@ function openPartnerDetail(vid){
   document.getElementById('partnerDetailPage').style.display = 'flex';
 }
 
-// 🆕 큐레이션 상세 정보 (타베로그·지도·인스타·주소·소개) — TAAM Atlas/_index.json 기반
+// 🆕 매장 상세 정보 (어워드·소개·타베로그·지도·인스타·주소) — 큐레이션 + 직접입력 공용
 function _prRenderVenueInfo(vid){
   var el = document.getElementById('prdInfo');
   if(!el) return;
-  var v = (_prVenueIndex||{})[vid] || {};
+  var v  = (_prVenueIndex||{})[vid] || {};
+  var pr = _resvPartnerRow(vid) || {};
   function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  var awards  = (_prAwardIndex||{})[vid] || [];
+  var desc    = v.style_summary_ko || v.holistic_signature_ko || '';
+  var genre   = v.genre_main || (v.genre_sub && v.genre_sub[0]) || '';
+  var addr    = v.address_kr || v.address_jp || [v.city_ko||v.city, v.neighborhood_ko].filter(Boolean).join(' ');
+  var phone   = v.phone || '';
+  var tabelog = v.tabelog_url || pr.custom_tabelog || '';   // 직접입력 매장은 custom_tabelog
+  var mapUrl  = v.naver_map_url || ((v.lat && v.lng) ? 'https://www.google.com/maps/search/?api=1&query='+v.lat+','+v.lng : '');
+  var insta   = v.instagram_url || '';
+
   var html = '';
-  // 🆕 어워드 배지 (타베로그 골드/실버/브론즈 · 미쉐린 · TAAM Verified)
-  var awards = (_prAwardIndex||{})[vid] || [];
+
+  // 어워드 배지 — 채워진 펄, 등급별 색
   if(awards.length){
-    html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;">'
+    html += '<div style="display:flex;flex-wrap:wrap;gap:7px;margin-bottom:16px;">'
       + awards.map(function(a){
-          return '<span style="font-size:11px;font-weight:800;padding:5px 10px;border-radius:20px;color:'+a.color+';background:'+a.color+'14;border:1px solid '+a.color+'33;">'+esc(a.label)+'</span>';
-        }).join('')
-      + '</div>';
+          return '<span style="display:inline-flex;align-items:center;font-size:11px;font-weight:800;letter-spacing:.02em;padding:6px 12px;border-radius:30px;color:#fff;background:linear-gradient(135deg,'+a.color+','+a.color+'cc);box-shadow:0 2px 8px '+a.color+'40;">'+esc(a.label)+'</span>';
+        }).join('') + '</div>';
   }
-  // 소개 (큐레이션 한 줄/요약)
-  var desc = v.style_summary_ko || v.holistic_signature_ko || '';
+
+  // 소개 — 골드 라인 인용 스타일
   if(desc){
-    html += '<div style="font-size:13px;color:#444;line-height:1.7;white-space:pre-wrap;margin-bottom:14px;">'+esc(desc)+'</div>';
+    html += '<div style="padding:1px 0 1px 14px;border-left:2px solid #c8a96e;font-size:13.5px;color:#3a3a38;line-height:1.75;white-space:pre-wrap;margin-bottom:18px;">'+esc(desc)+'</div>';
   }
-  // 정보 행 (장르 · 주소 · 전화)
+
+  // 타베로그 — 강조 버튼 (버건디)
+  if(tabelog){
+    html += '<a href="'+esc(tabelog)+'" target="_blank" rel="noopener" style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-radius:13px;background:linear-gradient(135deg,#3a1414,#5C0A14);color:#fff;text-decoration:none;margin-bottom:10px;box-shadow:0 4px 14px rgba(92,10,20,.22);">'
+      + '<span style="display:flex;flex-direction:column;gap:2px;">'
+      +   '<span style="font-size:9px;font-weight:800;letter-spacing:.2em;opacity:.6;text-transform:uppercase;">Tabelog</span>'
+      +   '<span style="font-size:14px;font-weight:800;">타베로그에서 보기</span>'
+      + '</span>'
+      + '<span style="font-size:18px;opacity:.85;">→</span>'
+      + '</a>';
+  }
+
+  // 정보 카드 — 아이콘 + 값
   var rows = [];
-  var genre = v.genre_main || (v.genre_sub && v.genre_sub[0]);
-  if(genre) rows.push(['장르', esc(genre)]);
-  var addr = v.address_kr || v.address_jp || [v.city_ko||v.city, v.neighborhood_ko].filter(Boolean).join(' ');
-  if(addr) rows.push(['주소', esc(addr)]);
-  if(v.phone) rows.push(['전화', '<a href="tel:'+esc(v.phone)+'" style="color:#5C0A14;text-decoration:none;">'+esc(v.phone)+'</a>']);
+  if(genre) rows.push(['🍽', esc(genre)]);
+  if(addr)  rows.push(['📍', esc(addr)]);
+  if(phone) rows.push(['☎', '<a href="tel:'+esc(phone)+'" style="color:#5C0A14;text-decoration:none;font-weight:600;">'+esc(phone)+'</a>']);
   if(rows.length){
-    html += '<div style="border:1px solid #ece7df;border-radius:12px;overflow:hidden;margin-bottom:12px;">';
+    html += '<div style="border:1px solid #ece7df;border-radius:13px;overflow:hidden;background:#fff;margin-bottom:10px;">';
     rows.forEach(function(r,i){
-      html += '<div style="display:flex;gap:10px;padding:11px 14px;'+(i?'border-top:1px solid #f0ede8;':'')+'background:#fff;">'
-            + '<div style="flex-shrink:0;width:44px;font-size:11px;font-weight:800;color:#aaa;">'+r[0]+'</div>'
-            + '<div style="flex:1;font-size:13px;color:#333;line-height:1.5;">'+r[1]+'</div>'
+      html += '<div style="display:flex;gap:11px;align-items:flex-start;padding:12px 15px;'+(i?'border-top:1px solid #f3f0ea;':'')+'">'
+            + '<span style="flex-shrink:0;width:18px;text-align:center;font-size:13px;opacity:.55;">'+r[0]+'</span>'
+            + '<span style="flex:1;font-size:13px;color:#333;line-height:1.55;">'+r[1]+'</span>'
             + '</div>';
     });
     html += '</div>';
   }
-  // 외부 링크 버튼 (타베로그 / 지도 / 인스타그램)
+
+  // 보조 링크 — 지도 / 인스타
   var links = [];
-  if(v.tabelog_url) links.push(['🍽 타베로그', v.tabelog_url, '#ff6f00']);
-  if(v.naver_map_url) links.push(['🗺 지도', v.naver_map_url, '#1E9E5A']);
-  else if(v.lat && v.lng) links.push(['🗺 지도', 'https://www.google.com/maps/search/?api=1&query='+v.lat+','+v.lng, '#1E9E5A']);
-  if(v.instagram_url) links.push(['📷 인스타그램', v.instagram_url, '#C13584']);
+  if(mapUrl) links.push(['🗺','지도', mapUrl]);
+  if(insta)  links.push(['📷','인스타그램', insta]);
   if(links.length){
-    html += '<div style="display:flex;flex-wrap:wrap;gap:8px;">';
+    html += '<div style="display:flex;gap:8px;">';
     links.forEach(function(l){
-      html += '<a href="'+esc(l[1])+'" target="_blank" rel="noopener" style="flex:1;min-width:46%;box-sizing:border-box;text-align:center;padding:11px 8px;border-radius:10px;border:1.5px solid '+l[2]+'33;background:'+l[2]+'0d;color:'+l[2]+';font-size:12.5px;font-weight:800;text-decoration:none;">'+l[0]+'</a>';
+      html += '<a href="'+esc(l[2])+'" target="_blank" rel="noopener" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:11px;border-radius:11px;border:1px solid #e2ddd4;background:#fff;color:#5a5a55;font-size:12.5px;font-weight:700;text-decoration:none;"><span>'+l[0]+'</span>'+l[1]+'</a>';
     });
     html += '</div>';
   }
-  if(html){
-    el.innerHTML = '<div style="font-size:10px;font-weight:800;letter-spacing:.14em;color:#aaa;text-transform:uppercase;margin-bottom:8px;">상세 정보</div>' + html;
-    el.style.display = 'block';
-  } else {
-    el.innerHTML = '';
-    el.style.display = 'none';
-  }
+
+  if(html){ el.innerHTML = html; el.style.display = 'block'; }
+  else    { el.innerHTML = ''; el.style.display = 'none'; }
 }
 
 async function submitReserveRequest(){
