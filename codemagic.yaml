@@ -41,10 +41,11 @@ workflows:
           rm -rf node_modules
           npm install --omit=dev --no-audit --no-fund --loglevel verbose
 
-      - name: STEP C — verify cap binary
+      - name: STEP C — verify Capacitor CLI (node 직접 실행)
         script: |
-          ls -la node_modules/.bin/cap
-          ./node_modules/.bin/cap --version
+          # .bin/cap 심볼릭링크(셔뱅 #!/usr/bin/env node)는 nvm 환경서 node 못 찾아 실패.
+          # node 로 직접 호출하면 우회됨.
+          node ./node_modules/@capacitor/cli/bin/capacitor --version
 
       - name: Ensure www directory placeholder (Capacitor 요구)
         script: |
@@ -56,11 +57,12 @@ workflows:
       - name: Add or sync Capacitor iOS platform
         script: |
           set -ex
-          # npx 우회 — 로컬 cap 바이너리 직접 호출
+          # node 로 capacitor 직접 실행 (.bin/cap 셔뱅 node 미발견 문제 우회)
+          CAP="node ./node_modules/@capacitor/cli/bin/capacitor"
           if [ ! -d "ios" ]; then
-            ./node_modules/.bin/cap add ios
+            $CAP add ios
           fi
-          ./node_modules/.bin/cap sync ios
+          $CAP sync ios
 
       - name: Install CocoaPods dependencies
         script: |
