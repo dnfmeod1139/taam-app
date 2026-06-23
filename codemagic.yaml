@@ -64,8 +64,11 @@ workflows:
 
       - name: Install CocoaPods dependencies
         script: |
+          set -o pipefail
           cd ios/App
-          pod install
+          # --repo-update: 스펙 저장소 최신화(흔한 'spec not found' 회피)
+          # 로그를 파일로도 저장 → 실패 시 artifacts(pod-debug.txt) 다운로드
+          pod install --repo-update 2>&1 | tee "$CM_BUILD_DIR/pod-debug.txt"
 
       - name: Set up code signing (인증서·프로파일 자동 생성 후 적용)
         script: |
@@ -93,6 +96,7 @@ workflows:
       - /tmp/xcodebuild_logs/*.log
       - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.app
       - $HOME/.npm/_logs/*.log
+      - pod-debug.txt
 
     publishing:
       # App Store Connect API 키(integration: TAAM ASC)로 TestFlight 업로드.
