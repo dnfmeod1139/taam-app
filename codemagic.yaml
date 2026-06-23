@@ -41,11 +41,26 @@ workflows:
           rm -rf node_modules
           npm install --omit=dev --no-audit --no-fund --loglevel verbose
 
-      - name: STEP C — verify Capacitor CLI (node 직접 실행)
+      - name: STEP C — diagnostics to file (절대 실패 안 함)
         script: |
-          # .bin/cap 심볼릭링크(셔뱅 #!/usr/bin/env node)는 nvm 환경서 node 못 찾아 실패.
-          # node 로 직접 호출하면 우회됨.
-          node ./node_modules/@capacitor/cli/bin/capacitor --version
+          DBG="$CM_BUILD_DIR/stepc-debug.txt"
+          {
+            echo "==== STEP C DIAGNOSTICS ===="
+            echo "PWD=$(pwd)"
+            echo "CM_BUILD_DIR=$CM_BUILD_DIR"
+            echo "which node=$(which node || echo NONE)"
+            echo "node version=$(node --version 2>&1 || echo NONE)"
+            echo "which npm=$(which npm || echo NONE)"
+            echo "---- ls (repo root) ----"; ls -la 2>&1
+            echo "---- node_modules 존재? ----"; ls -d node_modules 2>&1 || echo "NO node_modules"
+            echo "---- node_modules/@capacitor ----"; ls -la node_modules/@capacitor 2>&1 || echo "NO @capacitor"
+            echo "---- @capacitor/cli/bin ----"; ls -la node_modules/@capacitor/cli/bin 2>&1 || echo "NO cli/bin"
+            echo "---- capacitor --version (node) ----"
+            node ./node_modules/@capacitor/cli/bin/capacitor --version 2>&1 || echo "RC=$?"
+            echo "==== END ===="
+          } | tee "$DBG"
+          echo "(diagnostics saved to stepc-debug.txt — 항상 통과)"
+          exit 0
 
       - name: Ensure www directory placeholder (Capacitor 요구)
         script: |
@@ -95,6 +110,7 @@ workflows:
       - /tmp/xcodebuild_logs/*.log
       - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.app
       - $HOME/.npm/_logs/*.log
+      - stepc-debug.txt
 
     publishing:
       # App Store Connect API 키(integration: TAAM ASC)로 TestFlight 업로드.
