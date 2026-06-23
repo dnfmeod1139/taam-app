@@ -20,7 +20,6 @@ workflows:
     cache:
       cache_paths:
         - $HOME/Library/Caches/CocoaPods
-        - node_modules
 
     triggering:
       events:
@@ -31,13 +30,17 @@ workflows:
       cancel_previous_builds: true
 
     scripts:
-      - name: Install npm dependencies
+      - name: Install npm dependencies (clean)
         script: |
+          set -ex
+          node --version
+          npm --version
+          rm -rf node_modules
           npm install
-
-      - name: Install Capacitor CLI + iOS platform
-        script: |
           npm install @capacitor/cli @capacitor/ios
+          echo "── cap 바이너리 확인 ──"
+          ls -la node_modules/.bin/cap
+          ./node_modules/.bin/cap --version
 
       - name: Ensure www directory placeholder (Capacitor 요구)
         script: |
@@ -49,14 +52,11 @@ workflows:
       - name: Add or sync Capacitor iOS platform
         script: |
           set -ex
-          node --version
-          # 로컬 @capacitor/cli 를 패키지명으로 명시 + --no-install
-          # (npx 가 'cap' 패키지를 npm 에서 받으려다 CI 에서 즉시 실패하는 문제 회피)
-          if [ -d "ios" ]; then
-            npx --no-install @capacitor/cli sync ios
-          else
-            npx --no-install @capacitor/cli add ios
+          # npx 우회 — 로컬 cap 바이너리 직접 호출
+          if [ ! -d "ios" ]; then
+            ./node_modules/.bin/cap add ios
           fi
+          ./node_modules/.bin/cap sync ios
 
       - name: Install CocoaPods dependencies
         script: |
