@@ -8,6 +8,9 @@ workflows:
       app_store_connect: TAAM ASC
 
     environment:
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.playtaam.app
       vars:
         BUNDLE_ID: "com.playtaam.app"
         XCODE_PROJECT: "ios/App/App.xcodeproj"
@@ -66,13 +69,15 @@ workflows:
 
       - name: Set up code signing (인증서·프로파일 자동 생성 후 적용)
         script: |
+          set -o pipefail
+          DBG="$CM_BUILD_DIR/signing-debug.txt"
           # App Store 배포용 인증서 + 프로비저닝 프로파일을 없으면 생성(--create)하여 내려받음
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
-            --type IOS_APP_STORE \
-            --create
+            --type IOS_APP_STORE --create 2>&1 | tee "$DBG"
           keychain initialize
-          keychain add-certificates
-          xcode-project use-profiles
+          keychain add-certificates 2>&1 | tee -a "$DBG"
+          # use-profiles 출력에 '어느 타깃에 어떤 프로파일 적용' 이 나옴 (실패 시 진단)
+          xcode-project use-profiles 2>&1 | tee -a "$DBG"
 
       - name: Increment build number (Codemagic 자동 — 매 빌드마다 +1)
         script: |
@@ -100,6 +105,7 @@ workflows:
       - $HOME/.npm/_logs/*.log
       - build-errors.txt
       - build-debug.txt
+      - signing-debug.txt
 
     publishing:
       # App Store Connect API 키(integration: TAAM ASC)로 TestFlight 업로드.
