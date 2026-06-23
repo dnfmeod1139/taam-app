@@ -81,16 +81,25 @@ workflows:
 
       - name: Build ipa for distribution
         script: |
+          set -o pipefail
           # SPM 프로젝트 — workspace 없음. .xcodeproj 로 빌드.
+          RC=0
           xcode-project build-ipa \
             --project "$XCODE_PROJECT" \
-            --scheme "$XCODE_SCHEME"
+            --scheme "$XCODE_SCHEME" 2>&1 | tee "$CM_BUILD_DIR/build-debug.txt" || RC=$?
+          # 실패 시 에러 줄만 뽑아 작은 파일로 (artifacts: build-errors.txt)
+          grep -iE "error:|fatal|\*\* BUILD|Provisioning|No profile|code ?sign|Signing|requires|not found" \
+            "$CM_BUILD_DIR/build-debug.txt" | tail -80 > "$CM_BUILD_DIR/build-errors.txt" || true
+          echo "==== build-errors.txt ===="; cat "$CM_BUILD_DIR/build-errors.txt"
+          exit $RC
 
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
       - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.app
       - $HOME/.npm/_logs/*.log
+      - build-errors.txt
+      - build-debug.txt
 
     publishing:
       # App Store Connect API 키(integration: TAAM ASC)로 TestFlight 업로드.
