@@ -65,10 +65,15 @@ workflows:
       - name: Install CocoaPods dependencies
         script: |
           set -o pipefail
+          DBG="$CM_BUILD_DIR/pod-debug.txt"
+          { echo "PWD=$(pwd)";
+            echo "--- ls (root) ---"; ls -la;
+            echo "--- ls ios ---"; ls -la ios 2>&1 || echo "NO ios";
+            echo "--- ls ios/App ---"; ls -la ios/App 2>&1 || echo "NO ios/App";
+            echo "--- pod --version ---"; pod --version 2>&1 || echo "no pod";
+          } 2>&1 | tee "$DBG" || true
           cd ios/App
-          # --repo-update: 스펙 저장소 최신화(흔한 'spec not found' 회피)
-          # 로그를 파일로도 저장 → 실패 시 artifacts(pod-debug.txt) 다운로드
-          pod install --repo-update 2>&1 | tee "$CM_BUILD_DIR/pod-debug.txt"
+          pod install --repo-update 2>&1 | tee -a "$DBG"
 
       - name: Set up code signing (인증서·프로파일 자동 생성 후 적용)
         script: |
