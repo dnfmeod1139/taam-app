@@ -10,12 +10,11 @@ workflows:
     environment:
       vars:
         BUNDLE_ID: "com.playtaam.app"
-        XCODE_WORKSPACE: "ios/App/App.xcworkspace"
+        XCODE_PROJECT: "ios/App/App.xcodeproj"
         XCODE_SCHEME: "App"
         APP_STORE_APPLE_ID: "6783459650"
       node: 22
       xcode: latest
-      cocoapods: default
 
     cache:
       cache_paths:
@@ -62,18 +61,8 @@ workflows:
           fi
           $CAP sync ios
 
-      - name: Install CocoaPods dependencies
-        script: |
-          set -o pipefail
-          DBG="$CM_BUILD_DIR/pod-debug.txt"
-          { echo "PWD=$(pwd)";
-            echo "--- ls (root) ---"; ls -la;
-            echo "--- ls ios ---"; ls -la ios 2>&1 || echo "NO ios";
-            echo "--- ls ios/App ---"; ls -la ios/App 2>&1 || echo "NO ios/App";
-            echo "--- pod --version ---"; pod --version 2>&1 || echo "no pod";
-          } 2>&1 | tee "$DBG" || true
-          cd ios/App
-          pod install --repo-update 2>&1 | tee -a "$DBG"
+      # ⚠ 이 프로젝트는 Swift Package Manager(SPM) 기반(CapApp-SPM, Podfile 없음).
+      # → pod install 불필요. SPM 의존성은 xcodebuild 가 빌드 시 자동 해결.
 
       - name: Set up code signing (인증서·프로파일 자동 생성 후 적용)
         script: |
@@ -92,8 +81,9 @@ workflows:
 
       - name: Build ipa for distribution
         script: |
+          # SPM 프로젝트 — workspace 없음. .xcodeproj 로 빌드.
           xcode-project build-ipa \
-            --workspace "$XCODE_WORKSPACE" \
+            --project "$XCODE_PROJECT" \
             --scheme "$XCODE_SCHEME"
 
     artifacts:
@@ -101,7 +91,6 @@ workflows:
       - /tmp/xcodebuild_logs/*.log
       - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.app
       - $HOME/.npm/_logs/*.log
-      - pod-debug.txt
 
     publishing:
       # App Store Connect API 키(integration: TAAM ASC)로 TestFlight 업로드.
