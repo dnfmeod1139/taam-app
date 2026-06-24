@@ -52400,8 +52400,22 @@ function _taamEnsureNewCarouselSlides() {
 
 function loadCarouselData(cb) {
   if (window.sb) {
-    window.sb.from('app_config').select('value').eq('key','carousel_slides').maybeSingle().then(function(res){
+    window.sb.from('app_config').select('value, updated_at').eq('key','carousel_slides').maybeSingle().then(function(res){
       if (!res.error && res.data && res.data.value && Array.isArray(res.data.value) && res.data.value.length) {
+        // 🆕 롤백 방지: 로컬에서 더 최근에 저장한 편집이 있으면 옛 Supabase 값으로 덮지 않음.
+        //   (Supabase 저장이 실패/지연됐을 때 방금 편집한 게 옛것으로 되돌아오던 버그 수정)
+        var _localTs = null;
+        try { _localTs = localStorage.getItem('taam_carousel_saved_at'); } catch(e){}
+        var _remoteTs = (res.data.updated_at || '');
+        if (_localTs && _remoteTs && _remoteTs < _localTs) {
+          console.log('⏭ 로컬 캐러셀이 더 최신 — Supabase 옛값 무시, IDB 편집본 유지');
+          // IDB(편집본) 로드 후, Supabase 복구 1회 재시도
+          _origLoadCarouselData(function(){
+            try { saveCarouselData(); } catch(e){}
+            if (cb) cb();
+          });
+          return;
+        }
         _carouselSlides = res.data.value;
         // 🔑 link 자동 보정 (옛 데이터에 link 없으면 id로 채움)
         _carouselSlides.forEach(function(s){
@@ -52679,6 +52693,9 @@ window._taamResetCarousel = async function(force){
 };
 
 function saveCarouselData() {
+  // 🆕 로컬 저장 시각 기록 (Supabase 옛값이 새 편집을 덮어쓰지 못하게 — 롤백 방지)
+  var _csTs = new Date().toISOString();
+  try { localStorage.setItem('taam_carousel_saved_at', _csTs); } catch(e){}
   // 1) IDB 저장 (오프라인 대비)
   if (typeof IDB !== 'undefined') {
     IDB.set('excCarouselSlides', JSON.stringify(_carouselSlides));
@@ -52688,7 +52705,7 @@ function saveCarouselData() {
     window.sb.from('app_config').upsert({
       key: 'carousel_slides',
       value: _carouselSlides,
-      updated_at: new Date().toISOString()
+      updated_at: _csTs
     }).then(function(res){
       if (res.error) console.warn('⚠ Supabase 캐러셀 저장 실패:', res.error.message);
       else console.log('✅ Supabase 캐러셀 동기화 완료');
