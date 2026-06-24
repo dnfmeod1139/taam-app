@@ -1,10 +1,10 @@
 -- ═══════════════════════════════════════════════════════════════
--- TAAM — 파트너십 후보 일괄 추가: Tabelog Award 2026 Gold + Silver (2026-06-22)
+-- TAAM — 파트너십 후보 일괄 추가: Tabelog Award 2026 Gold+Silver+Bronze (2026-06-24)
 -- ═══════════════════════════════════════════════════════════════
--- 출처: venues/_award_index.json → tabelog_award_2026.gold(36) + .silver(160)
--- 합집합 196곳. venue_id = /venues/{id}.json 슬러그(모두 인덱스 존재).
+-- 출처: venues/_award_index.json → tabelog_award_2026.gold(36)+silver(160)+bronze(213)
+-- 합집합 409곳. venue_id = /venues/{id}.json 슬러그(모두 인덱스 존재).
 --
--- ⚠️ 방침: '무조건 파트너 노출' 이 아니라 → is_partner=false (숨김) 상태로 추가.
+-- ⚠️ 방침: '무조건 노출' 이 아니라 → is_partner=false (숨김) 상태로 추가.
 --   · 회원 예약요청 화면에는 안 보임. 관리 화면(🤝 파트너십 관리)에 '숨김'으로 등록됨.
 --   · 슈퍼어드민이 거기서 원하는 매장만 '노출' 토글 → 회원에게 공개.
 --   · on conflict do nothing: 이미 등록된(이미 노출 켠) 매장은 건드리지 않음.
@@ -210,7 +210,220 @@ from (values
   ('yanagiya-gifu'),  -- [silver] 야나기야
   ('yoda-kanagawa'),  -- [silver] YODA
   ('yoichi-sagra-yoichi'),  -- [silver] Yoichi Sagra
-  ('yoroniku-azabudai-hills-tokyo')   -- [silver] Yoroniku Azabudai Hills
+  ('yoroniku-azabudai-hills-tokyo'),  -- [silver] Yoroniku Azabudai Hills
+  ('4000-chinese-restaurant-tokyo-b'),  -- [bronze] 4000 Chinese Restaurant
+  ('akakichi-matsuyama-b'),  -- [bronze] Akakichi
+  ('amaki-nagoya-b'),  -- [bronze] Amaki
+  ('ara-ki-tokyo-b'),  -- [bronze] Ara Ki
+  ('aragawa-kobe-b'),  -- [bronze] Aragawa
+  ('araki-hokkaido-b'),  -- [bronze] Araki
+  ('arata-osaka-b'),  -- [bronze] Arata
+  ('arima-sapporo-b'),  -- [bronze] Arima
+  ('asago-fukuoka-b'),  -- [bronze] Asago
+  ('aube-osaka-b'),  -- [bronze] AUBE
+  ('awajishima-nobu-awaji-b'),  -- [bronze] Awajishima Nobu
+  ('azabu-juban-hatano-yoshiki-tokyo-b'),  -- [bronze] Azabu Juban Hatano Yoshiki
+  ('caravan-saga-b'),  -- [bronze] Caravan
+  ('daibon-osaka-b'),  -- [bronze] Daibon
+  ('daimon-takaoka-b'),  -- [bronze] Daimon
+  ('edo-machi-sugimoto-toba-b'),  -- [bronze] Edo Machi Sugimoto
+  ('edomae-shinsaku-tokyo-b'),  -- [bronze] Edomae Shinsaku
+  ('eiki-tokyo-b'),  -- [bronze] Eiki
+  ('en-okayama-b'),  -- [bronze] En
+  ('eragon-hyogo-b'),  -- [bronze] Eragon
+  ('fujii-osaka-b'),  -- [bronze] Fujii
+  ('fujisawa-nagoya-b'),  -- [bronze] Fujisawa
+  ('fukamachi-tokyo-b'),  -- [bronze] Fukamachi
+  ('fukunaga-shiga-b'),  -- [bronze] Fukunaga
+  ('gahojin-fukuoka-b'),  -- [bronze] Gahojin
+  ('ginza-sushi-kanesaka-hon-ten-tokyo-b'),  -- [bronze] Ginza Sushi Kanesaka Hon Ten
+  ('goichi-higobashi-osaka-b'),  -- [bronze] Goichi Higobashi
+  ('gyusen-saga-b'),  -- [bronze] Gyusen
+  ('hama-gen-nagoya-b'),  -- [bronze] Hama Gen
+  ('hasunomi-okayama-b'),  -- [bronze] Hasunomi
+  ('hatsunezushi-tokyo-b'),  -- [bronze] Hatsunezushi
+  ('hidetaka-sapporo-b'),  -- [bronze] Hidetaka
+  ('higebozu-hokkaido-b'),  -- [bronze] Higebozu
+  ('hijikata-nagoya-b'),  -- [bronze] Hijikata
+  ('hinotori-osaka-b'),  -- [bronze] Hinotori
+  ('hiro-gifu-b'),  -- [bronze] hiro
+  ('hiro-nagoya-nagoya-b'),  -- [bronze] HIRO NAGOYA
+  ('hitotsu-miyazaki-b'),  -- [bronze] Hitotsu
+  ('hitsujiya-yamagata-b'),  -- [bronze] Hitsujiya
+  ('ichikawa-tokyo-b'),  -- [bronze] Ichikawa
+  ('ichimatsu-osaka-b'),  -- [bronze] Ichimatsu
+  ('ichiunagi-shizuoka-b'),  -- [bronze] Ichiunagi
+  ('imaishihanten-suzuka-fukuoka-b'),  -- [bronze] IMAISHIHANTEN SUZUKA
+  ('ino-matsuyama-b'),  -- [bronze] Ino
+  ('ishimaru-saitama-b'),  -- [bronze] Ishimaru
+  ('isshinzushi-koyo-miyazaki-b'),  -- [bronze] Isshinzushi Koyo
+  ('ito-fukushima-b'),  -- [bronze] Ito
+  ('ito-oita-b'),  -- [bronze] Ito
+  ('jambo-hanare-tokyo-b'),  -- [bronze] Jambo Hanare
+  ('jinsei-osaka-b'),  -- [bronze] Jinsei
+  ('jiyu-san-tokyo-b'),  -- [bronze] Jiyu San
+  ('jo-tokyo-b'),  -- [bronze] JO
+  ('jotaki-tokyo-b'),  -- [bronze] JOTAKI
+  ('kaikatei-gifu-b'),  -- [bronze] Kaikatei
+  ('karyu-tokyo-b'),  -- [bronze] Karyu
+  ('kibatani-kanazawa-b'),  -- [bronze] Kibatani
+  ('kinryusan-tokyo-b'),  -- [bronze] Kinryusan
+  ('kioicho-mitani-tokyo-b'),  -- [bronze] 키오이초 미타니
+  ('kitchen-ribbon-nagoya-b'),  -- [bronze] Kitchen Ribbon
+  ('kiyota-hanare-tokyo-b'),  -- [bronze] Kiyota Hanare
+  ('kiyota-tokyo-b'),  -- [bronze] Kiyota
+  ('kizaki-tokyo-b'),  -- [bronze] Kizaki
+  ('kobanzushi-tanagura-tanagura-b'),  -- [bronze] Kobanzushi Tanagura
+  ('kohane-shizuoka-b'),  -- [bronze] Kohane
+  ('koho-tokyo-b'),  -- [bronze] Koho
+  ('koizumi-ishikawa-b'),  -- [bronze] Koizumi
+  ('koki-tokyo-b'),  -- [bronze] Koki
+  ('komatsu-yasuke-kanazawa-b'),  -- [bronze] Komatsu Yasuke
+  ('kondo-tokyo-b'),  -- [bronze] Kondo
+  ('kotan-fukuoka-b'),  -- [bronze] Kotan
+  ('koto-fukuoka-b'),  -- [bronze] Koto
+  ('kuishinbo-yamanaka-kyoto-b'),  -- [bronze] Kuishinbo YAMANAKA
+  ('kuromori-miyagi-b'),  -- [bronze] KUROMORI
+  ('kurosaki-tokyo-b'),  -- [bronze] Kurosaki
+  ('kuruma-gunma-b'),  -- [bronze] Kuruma
+  ('kyo-seika-kyoto-b'),  -- [bronze] Kyo Seika
+  ('kyoboshi-kyoto-b'),  -- [bronze] Kyoboshi
+  ('kyogokuzushi-shiga-b'),  -- [bronze] Kyogokuzushi
+  ('kyu-akita-b'),  -- [bronze] Kyu
+  ('maekawa-ishikawa-b'),  -- [bronze] Maekawa
+  ('manger-osaka-b'),  -- [bronze] MANGER
+  ('manzan-chiba-b'),  -- [bronze] Manzan
+  ('masachan-osaka-b'),  -- [bronze] Masachan
+  ('masuda-tokyo-b'),  -- [bronze] Masuda
+  ('masuki-hiroshima-b'),  -- [bronze] MASUKI
+  ('matsuishi-miyagi-b'),  -- [bronze] Matsuishi
+  ('matsuka-nagano-b'),  -- [bronze] Matsuka
+  ('matsumoto-kobe-b'),  -- [bronze] Matsumoto
+  ('matsuura-tokyo-b'),  -- [bronze] Matsuura
+  ('meizan-kimiya-kagoshima-b'),  -- [bronze] Meizan Kimiya
+  ('mikasa-kanagawa-b'),  -- [bronze] Mikasa
+  ('mikawa-akita-b'),  -- [bronze] Mikawa
+  ('mikawa-zezankyo-tokyo-b'),  -- [bronze] Mikawa Zezankyo
+  ('mimuro-kumamoto-b'),  -- [bronze] Mimuro
+  ('minato-sapporo-b'),  -- [bronze] Minato
+  ('miyamoto-shizuoka-b'),  -- [bronze] Miyamoto
+  ('mizukami-tokyo-b'),  -- [bronze] Mizukami
+  ('mizuki-gifu-b'),  -- [bronze] Mizuki
+  ('moe-es-tokyo-b'),  -- [bronze] Moe es
+  ('muen-nagano-b'),  -- [bronze] Muen
+  ('murakami-kumamoto-b'),  -- [bronze] Murakami
+  ('musashino-saitama-b'),  -- [bronze] Musashino
+  ('mutsuki-nagoya-b'),  -- [bronze] Mutsuki
+  ('nakahara-tokyo-b'),  -- [bronze] NAKAHARA
+  ('nakajo-kanagawa-b'),  -- [bronze] Nakajo
+  ('nanachome-tokyo-b'),  -- [bronze] Nanachome
+  ('narikura-tokyo-b'),  -- [bronze] Narikura
+  ('nikawa-mie-b'),  -- [bronze] Nikawa
+  ('nikutoieba-matsuda-nara-honten-nara-b'),  -- [bronze] Nikutoieba Matsuda Nara Honten
+  ('nikuya-setsugekka-nagoya-nagoya-b'),  -- [bronze] Nikuya Setsugekka Nagoya
+  ('noguchi-osaka-b'),  -- [bronze] Noguchi
+  ('oga-osaka-b'),  -- [bronze] Oga
+  ('ohata-osaka-b'),  -- [bronze] Ohata
+  ('okagesan-miyagi-b'),  -- [bronze] Okagesan
+  ('omino-tokyo-b'),  -- [bronze] Omino
+  ('onza-shiga-b'),  -- [bronze] Onza
+  ('osamu-fukuoka-b'),  -- [bronze] Osamu
+  ('osamuchan-osaka-b'),  -- [bronze] Osamuchan
+  ('otomezushi-kanazawa-b'),  -- [bronze] Otomezushi
+  ('pome-osaka-b'),  -- [bronze] Pome
+  ('ramen-feel-tokyo-b'),  -- [bronze] Ramen FeeL
+  ('ranmaru-tokyo-b'),  -- [bronze] Ranmaru
+  ('ribatei-kanagawa-b'),  -- [bronze] Ribatei
+  ('rin-shizuoka-b'),  -- [bronze] Rin
+  ('roan-matsuda-sasayama-sasayama-b'),  -- [bronze] Roan Matsuda Sasayama
+  ('saeki-hanten-tokyo-b'),  -- [bronze] Saeki Hanten
+  ('saeki-tokyo-b'),  -- [bronze] Saeki
+  ('sakurabito-hyogo-b'),  -- [bronze] Sakurabito
+  ('sato-briand-honten-tokyo-b'),  -- [bronze] SATO Briand Honten
+  ('sato-briand-nigo-tokyo-b'),  -- [bronze] SATO Briand Nigo
+  ('seiryuen-tokyo-b'),  -- [bronze] Seiryuen
+  ('sen-kanagawa-b'),  -- [bronze] Sen
+  ('sen-miyazaki-b'),  -- [bronze] Sen
+  ('sense-tokyo-b'),  -- [bronze] SENSE
+  ('setsugekka-tanaka-satoru-nagoya-b'),  -- [bronze] Setsugekka Tanaka Satoru
+  ('shima-tokyo-b'),  -- [bronze] Shima
+  ('shimbashi-shimizu-tokyo-b'),  -- [bronze] Shimbashi Shimizu
+  ('shinois-tokyo-b'),  -- [bronze] ShinoiS
+  ('shizuku-osaka-b'),  -- [bronze] Shizuku
+  ('shoshinan-akita-b'),  -- [bronze] Shoshinan
+  ('shota-sapporo-b'),  -- [bronze] Shota
+  ('shutei-tanaka-tokyo-b'),  -- [bronze] Shutei Tanaka
+  ('soshi-hiroshima-b'),  -- [bronze] Soshi
+  ('steak-house-baron-kumamoto-b'),  -- [bronze] STEAK HOUSE Baron
+  ('sudo-haruyoshi-fukuoka-b'),  -- [bronze] Sudo Haruyoshi
+  ('sugaya-tokyo-b'),  -- [bronze] Sugaya
+  ('sushi-ao-tokyo-b'),  -- [bronze] 스시 아오
+  ('sushi-chiba-takaoka-tokyo-b'),  -- [bronze] Sushi Chiba Takaoka
+  ('sushi-fujinaga-tokyo-b'),  -- [bronze] Sushi Fujinaga
+  ('sushi-gyoten-fukuoka-b'),  -- [bronze] Sushi Gyoten
+  ('sushi-hashiguchi-tokyo-b'),  -- [bronze] Sushi Hashiguchi
+  ('sushi-josuke-kobe-b'),  -- [bronze] Sushi Josuke
+  ('sushi-karashima-fukuoka-b'),  -- [bronze] Sushi Karashima
+  ('sushi-kizuna-osaka-b'),  -- [bronze] Sushi Kizuna
+  ('sushi-nakamura-kumamoto-b'),  -- [bronze] Sushi Nakamura
+  ('sushi-riku-tokyo-b'),  -- [bronze] sushi riku
+  ('sushi-sohei-sapporo-b'),  -- [bronze] Sushi Sohei
+  ('sushi-suzuki-tokyo-b'),  -- [bronze] Sushi Suzuki
+  ('sushi-taito-yatsushiro-b'),  -- [bronze] Sushi Taito
+  ('sushi-takaoka-chiba-b'),  -- [bronze] Sushi Takaoka
+  ('sushi-yasumitsu-tokyo-b'),  -- [bronze] Sushi Yasumitsu
+  ('sushi-yuuki-tokyo-b'),  -- [bronze] Sushi Yuuki
+  ('sushikin-sapporo-b'),  -- [bronze] Sushikin
+  ('sushinokura-sapporo-b'),  -- [bronze] Sushinokura
+  ('sushisai-wakichi-sapporo-b'),  -- [bronze] Sushisai Wakichi
+  ('sushisho-akita-b'),  -- [bronze] Sushisho
+  ('sushisho-saito-tokyo-b'),  -- [bronze] Sushisho Saito
+  ('sushishunbi-nishikawa-nagoya-b'),  -- [bronze] Sushishunbi Nishikawa
+  ('suzaki-shokuryohinten-kagawa-b'),  -- [bronze] Suzaki Shokuryohinten
+  ('tada-osaka-b'),  -- [bronze] Tada
+  ('takahashi-kentaro-osaka-b'),  -- [bronze] Takahashi Kentaro
+  ('takarazushibunten-akita-b'),  -- [bronze] Takarazushibunten
+  ('takumi-shingo-tokyo-b'),  -- [bronze] Takumi Shingo
+  ('tamawarai-tokyo-b'),  -- [bronze] Tamawarai
+  ('taniguchi-hyogo-b'),  -- [bronze] Taniguchi
+  ('tashiro-aichi-b'),  -- [bronze] Tashiro
+  ('teruzushi-kitakyushu-b'),  -- [bronze] TERUZUSHI
+  ('tokiwa-sushi-niigata-ten-niigata-b'),  -- [bronze] Tokiwa Sushi Niigata Ten
+  ('tokyo-nikushabuya-subin-tokyo-b'),  -- [bronze] Tokyo Nikushabuya Subin
+  ('tokyo-nikushabuya-tokyo-b'),  -- [bronze] Tokyo Nikushabuya
+  ('tokyoen-tokyo-b'),  -- [bronze] Tokyoen
+  ('tomidokoro-tokyo-b'),  -- [bronze] Tomidokoro
+  ('tomono-osaka-b'),  -- [bronze] TOMONO
+  ('torila-fukuoka-b'),  -- [bronze] torila
+  ('torisaki-kyoto-b'),  -- [bronze] Torisaki
+  ('torishige-shizuoka-b'),  -- [bronze] Torishige
+  ('torisho-ishii-hina-tokyo-b'),  -- [bronze] Torisho Ishii Hina
+  ('torisho-tokyo-b'),  -- [bronze] Torisho
+  ('toyonaga-osaka-b'),  -- [bronze] Toyonaga
+  ('tsubasa-fukuoka-b'),  -- [bronze] Tsubasa
+  ('tsuchiya-osaka-b'),  -- [bronze] Tsuchiya
+  ('tsugumian-tokyo-b'),  -- [bronze] Tsugumian
+  ('tsunechan-osaka-b'),  -- [bronze] Tsunechan
+  ('tsuruhachi-kumamoto-b'),  -- [bronze] Tsuruhachi
+  ('tsushima-tokyo-b'),  -- [bronze] Tsushima
+  ('ueda-aichi-nagoya-b'),  -- [bronze] Ueda (Aichi)
+  ('ueda-hyogo-kobe-b'),  -- [bronze] Ueda (Hyogo)
+  ('uramatsu-tokyo-b'),  -- [bronze] Uramatsu
+  ('ushigoro-s-ginza-tokyo-b'),  -- [bronze] USHIGORO S. GINZA
+  ('vesta-tokyo-b'),  -- [bronze] Vesta
+  ('wadakin-matsusaka-b'),  -- [bronze] Wadakin
+  ('wagyu-lab-k-hiroshima-b'),  -- [bronze] Wagyu lab K
+  ('woniku-osaka-b'),  -- [bronze] Woniku
+  ('yamamoto-hiroshima-b'),  -- [bronze] Yamamoto
+  ('yamanomi-nagano-b'),  -- [bronze] Yamanomi
+  ('yamasei-nagano-b'),  -- [bronze] Yamasei
+  ('yamato-tokyo-b'),  -- [bronze] Yamato
+  ('yassan-kyoto-b'),  -- [bronze] Yassan
+  ('yoroniku-tokyo-b'),  -- [bronze] Yoroniku
+  ('yoshida-fukuoka-b'),  -- [bronze] Yoshida
+  ('yoshitake-tokyo-b'),  -- [bronze] Yoshitake
+  ('yuji-tokyo-b'),  -- [bronze] Yuji
+  ('zaisho-fukuoka-b')   -- [bronze] Zaisho
 ) as t(vid)
 on conflict (venue_id) do nothing;
 
@@ -219,5 +432,5 @@ declare n_total int; n_on int;
 begin
   select count(*) into n_total from public.venue_partners;
   select count(*) into n_on    from public.venue_partners where is_partner = true;
-  raise notice '✅ Gold+Silver 후보 추가 완료 — 전체 %곳 / 노출(ON) %곳. 관리 화면에서 노출 토글하세요.', n_total, n_on;
+  raise notice '✅ Gold+Silver+Bronze 후보 추가 완료 — 전체 %곳 / 노출(ON) %곳. 관리 화면에서 노출 토글하세요.', n_total, n_on;
 end $$;
