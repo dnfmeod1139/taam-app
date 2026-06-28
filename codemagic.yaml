@@ -144,3 +144,99 @@ workflows:
         notify:
           success: true
           failure: true
+
+  # ════════════════════════════════════════════════════════════════
+  # ANDROID (Google Play) — 서명 AAB 빌드. ⚠ Codemagic UI 에 keystore 업로드 필요
+  #   Code signing identities → Android keystores → reference 이름: taam_keystore
+  # ════════════════════════════════════════════════════════════════
+  android-capacitor-workflow:
+    name: TAAM Android Play Build
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+
+    environment:
+      android_signing:
+        - taam_keystore        # ⚠ Codemagic 에 업로드한 keystore reference 이름
+      vars:
+        PACKAGE_NAME: "com.playtaam.app"
+      node: 22
+
+    # ⚠ keystore 업로드 전엔 실패하므로 자동 트리거 없음 — 준비 후 'Start new build'로 수동 실행.
+    #   (안정화되면 위 ios 처럼 triggering 추가 가능)
+
+    scripts:
+      - name: npm install (prod only)
+        script: |
+          set -ex
+          node --version
+          rm -rf node_modules
+          npm install --omit=dev
+
+      - name: Ensure www placeholder + Add Capacitor Android
+        script: |
+          set -ex
+          mkdir -p www
+          [ -f www/index.html ] || echo "<!DOCTYPE html><html><body>TAAM</body></html>" > www/index.html
+          CAP="node ./node_modules/@capacitor/cli/bin/capacitor"
+          [ -d android ] || $CAP add android
+          $CAP sync android
+
+      - name: 네이티브 앱 아이콘 생성 (TAAM — android)
+        script: |
+          set -e
+          npm install --no-save @capacitor/assets@^3
+          npx capacitor-assets generate --android \
+            --iconBackgroundColor '#000000' \
+            --iconBackgroundColorDark '#000000'
+
+      - name: 릴리스 서명 설정 (build.gradle 주입)
+        script: |
+          set -ex
+          # Codemagic 가 keystore 를 내려주고 CM_KEYSTORE_* 환경변수를 채움.
+          BG="android/app/build.gradle"
+          python3 - "$BG" <<'PY'
+          import sys, re
+          p = sys.argv[1]; s = open(p).read()
+          if 'signingConfigs' not in s:
+              sign = (
+                '\n    signingConfigs {\n'
+                '        release {\n'
+                '            storeFile file(System.getenv("CM_KEYSTORE_PATH"))\n'
+                '            storePassword System.getenv("CM_KEYSTORE_PASSWORD")\n'
+                '            keyAlias System.getenv("CM_KEY_ALIAS")\n'
+                '            keyPassword System.getenv("CM_KEY_PASSWORD")\n'
+                '        }\n    }\n'
+              )
+              s = re.sub(r'android\s*\{', lambda m: m.group(0) + sign, s, count=1)
+          # release buildType 에 signingConfig 연결
+          if 'signingConfig signingConfigs.release' not in s:
+              s = re.sub(r'(buildTypes\s*\{\s*release\s*\{)',
+                         r'\1\n            signingConfig signingConfigs.release', s, count=1)
+          open(p,'w').write(s)
+          print("✅ build.gradle 서명 설정 주입 완료")
+          PY
+          grep -n "signingConfig" "$BG" || true
+
+      - name: Build AAB (release)
+        script: |
+          set -o pipefail
+          cd android
+          ./gradlew bundleRelease 2>&1 | tee "$CM_BUILD_DIR/android-build.txt"
+
+    artifacts:
+      - android/app/build/outputs/**/*.aab
+      - android/app/build/outputs/**/*.apk
+      - android/app/build/outputs/**/mapping.txt
+      - android-build.txt
+
+    publishing:
+      # ⚠ Google Play 자동 업로드 — 서비스계정(GCLOUD_SERVICE_ACCOUNT_CREDENTIALS) 준비 후 주석 해제
+      # google_play:
+      #   credentials: $GCLOUD_SERVICE_ACCOUNT_CREDENTIALS
+      #   track: internal
+      email:
+        recipients:
+          - dnfmeod1139@gmail.com
+        notify:
+          success: true
+          failure: true
