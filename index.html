@@ -7670,6 +7670,10 @@ window.closePromoCarousel = function(){
         <div><div class="admin-menu-text" data-i18n="admin.ticket_calendar">티켓 캘린더</div></div>
         <div class="admin-arrow">›</div>
       </div>
+      <div class="admin-menu-item" onclick="openSubPage('ticketHistoryScreen')">
+        <div><div class="admin-menu-text">📜 전체 티켓 구매내역</div><div class="admin-menu-sub">구매·취소·환불 전체 이력</div></div>
+        <div class="admin-arrow">›</div>
+      </div>
       <div class="admin-menu-item" onclick="openSubPage('reservationAdminScreen')">
         <div><div class="admin-menu-text">📅 예약 관리<span class="raBellDot" style="display:none;width:7px;height:7px;border-radius:50%;background:#E53935;margin-left:6px;vertical-align:middle;"></span></div><div class="admin-menu-sub">파트너 예약 요청 수락·거절</div></div>
         <div class="admin-arrow">›</div>
@@ -10087,6 +10091,39 @@ window.closePromoCarousel = function(){
     </div>
   </div>
 </div>
+
+<!-- ════════ 전체 티켓 구매내역 (슈퍼어드민) ════════ -->
+<div id="ticketHistoryScreen" class="sub-screen" data-lang-lock="ko" style="display:none;">
+  <div class="sub-header">
+    <button class="sub-back" onclick="closeSubPage('ticketHistoryScreen')">←</button>
+    <div class="sub-title">전체 티켓 구매내역</div>
+  </div>
+  <div class="sub-content" style="padding:0;">
+    <!-- 요약 통계 -->
+    <div id="thxStats" style="display:flex;gap:8px;padding:14px 16px 6px;font-family:'Noto Sans KR',sans-serif;"></div>
+    <!-- 필터 + 검색 -->
+    <div style="position:sticky;top:0;z-index:5;background:#f7f5f2;padding:6px 16px 10px;border-bottom:1px solid rgba(0,0,0,.06);">
+      <div style="display:flex;gap:6px;">
+        <button class="thx-filter thx-filter-on" data-thxf="all"    onclick="thxSetFilter('all',this)">전체</button>
+        <button class="thx-filter"               data-thxf="active" onclick="thxSetFilter('active',this)">구매</button>
+        <button class="thx-filter"               data-thxf="used"   onclick="thxSetFilter('used',this)">사용</button>
+        <button class="thx-filter"               data-thxf="cancelled" onclick="thxSetFilter('cancelled',this)">취소</button>
+      </div>
+      <input id="thxSearch" type="text" placeholder="구매자·레스토랑·전화 검색…" oninput="thxRender()"
+        style="width:100%;box-sizing:border-box;margin-top:8px;padding:11px 13px;border:1px solid #e0ddd5;border-radius:10px;font-size:13px;font-family:inherit;background:#fff;">
+    </div>
+    <!-- 리스트 -->
+    <div id="thxList" style="padding:10px 14px 100px;font-family:'Noto Sans KR',sans-serif;">
+      <div style="text-align:center;color:#9a9486;padding:40px 0;font-size:13px;">불러오는 중…</div>
+    </div>
+  </div>
+</div>
+<style>
+  .thx-filter{flex:1;padding:8px 0;border:1px solid #e0ddd5;border-radius:9px;background:#fff;color:#8a8478;font-family:'Noto Sans KR',sans-serif;font-size:12.5px;font-weight:700;cursor:pointer;}
+  .thx-filter-on{background:#1a1a18;color:#fff;border-color:#1a1a18;}
+  .thx-card{background:#fff;border:1px solid rgba(0,0,0,.06);border-radius:14px;padding:13px 14px;margin-bottom:9px;box-shadow:0 1px 3px rgba(0,0,0,.03);}
+  .thx-badge{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:800;}
+</style>
 
 <!-- TOAST -->
 <div id="toastBanner">
@@ -13273,7 +13310,7 @@ function openMain(){
    'cardMenuSheet','setPrimaryModal','deleteCardModal','cardDonePopup',
    'ticketDetailScreen','tdPurchaseSheet','tdConfirmPopup','tdDonePopup','restConfirmPopup','ticketConfirmPopup',
    'restListScreen','ticketListScreen','depositMgmtScreen','inviteCodeScreen','partnerMgmtScreen',
-   'memberListScreen','ticketCalScreen','adminCodeScreen','pendingApprovalScreen',
+   'memberListScreen','ticketCalScreen','ticketHistoryScreen','adminCodeScreen','pendingApprovalScreen',
    'partnerAdminScreen','partnerTicketListScreen','partnerCalScreen','partnerRestScreen',
    'tcLockPopup','mshipScreen','extendPopup','memModal'
   ].forEach(function(id){var el=document.getElementById(id);if(el)el.style.display='none';});
@@ -17485,6 +17522,29 @@ function completePurchase(){
     // 🆕 본인 다른 기기에도 푸시 발송 (PC + 폰 동기화)
     if(typeof notifPushSelf === 'function') notifPushSelf('🎫', '티켓 예약 완료', msg2, 'ticket');
   }
+  // 🆕 구매 발생 → 슈퍼어드민에게 푸시 통지 (취소 알림과 동일 패턴)
+  //   send-push 가 호출자(구매한 회원)를 자동 제외하므로 슈퍼어드민만 수신.
+  //   role 문자열 환경별 차이('superadmin'/'super_admin') → 양쪽 발송.
+  try {
+    var _pxRest = currentRest ? currentRest.name : (t.rest || '티켓');
+    var _pxBody = _pxRest + ' · ' + t.date + ' ' + t.time + ' · ' + pax + '인 · ₩' + (paid||0).toLocaleString();
+    ['superadmin','super_admin'].forEach(function(_rl){
+      try {
+        window.sb.functions.invoke('send-push', {
+          body: {
+            to: 'role:' + _rl,
+            payload: {
+              title: '🎫 회원이 티켓을 구매했습니다',
+              body: _pxBody,
+              url: '/',
+              category: 'ticket_purchased',
+              tag: 'taam-tpurchase-' + purchaseId
+            }
+          }
+        });
+      } catch(_pe){}
+    });
+  } catch(_ce){ console.warn('[purchase] 슈퍼어드민 푸시 예외:', _ce); }
 }
 
 function closeDonePopup(){
@@ -20243,6 +20303,136 @@ async function _dmLoadSupabasePurchases(){
   }
 }
 
+// ════════════════════════════════════════════════════════════════
+// 🆕 2026.06.29: 슈퍼어드민 — 전체 티켓 구매내역 화면
+//   구매·사용·취소(환불) 전체 이력을 한 화면에서 조회. _dmLoadSupabasePurchases 재사용.
+// ════════════════════════════════════════════════════════════════
+var _thxAll = [];          // 로드된 전체 구매기록
+var _thxFilter = 'all';    // all | active | used | cancelled
+
+function _thxFmtDateTime(s){
+  if(!s) return '';
+  try {
+    var d = new Date(s);
+    if(isNaN(d.getTime())) return String(s).slice(0,16).replace('T',' ');
+    var p = function(n){ return (n<10?'0':'')+n; };
+    return d.getFullYear()+'.'+p(d.getMonth()+1)+'.'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes());
+  } catch(_){ return String(s).slice(0,16).replace('T',' '); }
+}
+
+function _thxStatusMeta(h){
+  var st = h.status || 'active';
+  if(st === 'cancelled') return { label:'취소', bg:'#FCE8E6', fg:'#C5221F' };
+  if(st === 'used')      return { label:'사용완료', bg:'#E8F0FE', fg:'#1A56C4' };
+  if(st === 'completed') return { label:'처리됨', bg:'#EFEDE8', fg:'#6b6b6b' };
+  return { label:'구매', bg:'#E6F4EA', fg:'#137333' };  // active
+}
+
+async function renderTicketHistory(){
+  var listEl = document.getElementById('thxList');
+  if(listEl) listEl.innerHTML = '<div style="text-align:center;color:#9a9486;padding:40px 0;font-size:13px;">불러오는 중…</div>';
+  try {
+    _thxAll = await _dmLoadSupabasePurchases();
+  } catch(e){
+    _thxAll = [];
+    console.warn('[thx] 로드 실패:', e);
+  }
+  // 구매일시(created_at) 최신순
+  _thxAll.sort(function(a,b){ return String(b.date||'').localeCompare(String(a.date||'')); });
+  thxRender();
+}
+
+function thxSetFilter(f, btn){
+  _thxFilter = f;
+  var btns = document.querySelectorAll('#ticketHistoryScreen .thx-filter');
+  for(var i=0;i<btns.length;i++) btns[i].classList.remove('thx-filter-on');
+  if(btn) btn.classList.add('thx-filter-on');
+  thxRender();
+}
+
+function thxRender(){
+  var listEl = document.getElementById('thxList');
+  if(!listEl) return;
+  var q = (document.getElementById('thxSearch')||{}).value || '';
+  q = q.trim().toLowerCase();
+
+  // 통계 (전체 기준)
+  var nAll = _thxAll.length;
+  var nActive = 0, nUsed = 0, nCancel = 0;
+  _thxAll.forEach(function(h){
+    var st = h.status || 'active';
+    if(st==='cancelled') nCancel++;
+    else if(st==='used') nUsed++;
+    else nActive++;
+  });
+  var statsEl = document.getElementById('thxStats');
+  if(statsEl){
+    function _stat(num, lab, col){
+      return '<div style="flex:1;background:#fff;border:1px solid rgba(0,0,0,.06);border-radius:12px;padding:9px 6px;text-align:center;">'
+        + '<div style="font-size:18px;font-weight:800;color:'+col+';">'+num+'</div>'
+        + '<div style="font-size:11px;color:#9a9486;margin-top:1px;">'+lab+'</div></div>';
+    }
+    statsEl.innerHTML = _stat(nAll,'전체','#1a1a18') + _stat(nActive,'구매','#137333') + _stat(nUsed,'사용','#1A56C4') + _stat(nCancel,'취소','#C5221F');
+  }
+
+  // 필터
+  var rows = _thxAll.filter(function(h){
+    var st = h.status || 'active';
+    if(_thxFilter==='active' && !(st==='active')) return false;
+    if(_thxFilter==='used' && st!=='used') return false;
+    if(_thxFilter==='cancelled' && st!=='cancelled') return false;
+    if(q){
+      var hay = ((h.buyerName||'')+' '+(h.rest||'')+' '+(h.buyerPhone||'')+' '+(h.buyerEmail||'')).toLowerCase();
+      if(hay.indexOf(q) < 0) return false;
+    }
+    return true;
+  });
+
+  if(rows.length === 0){
+    listEl.innerHTML = '<div style="text-align:center;color:#9a9486;padding:40px 0;font-size:13px;">'
+      + (nAll===0 ? '구매내역이 없습니다.' : '조건에 맞는 내역이 없습니다.') + '</div>';
+    return;
+  }
+
+  var html = rows.map(function(h){
+    var sm = _thxStatusMeta(h);
+    var buyer = h.buyerName || '(이름 없음)';
+    var phone = h.buyerPhone ? '<span style="color:#b5afa2;"> · '+h.buyerPhone+'</span>' : '';
+    var typeTag = h.ticket_type ? '<span style="font-size:11px;color:#9a8a55;font-weight:700;"> · '+h.ticket_type+'</span>' : '';
+    var visit = h.visitDate ? '<span style="color:#6b6b6b;">방문 '+h.visitDate+'</span> · ' : '';
+    // 취소건 환불 정보
+    var refundLine = '';
+    if(h.status==='cancelled' && h.depositReturn){
+      var dr = h.depositReturn;
+      var parts = [];
+      if(dr.type==='returned' || dr.returnAmt>0) parts.push('환불 ₩'+(dr.returnAmt||0).toLocaleString());
+      if(dr.penaltyAmt>0) parts.push('위약금 ₩'+(dr.penaltyAmt||0).toLocaleString()+(dr.penaltyPct?' ('+dr.penaltyPct+'%)':''));
+      if(dr.type==='nonrefundable' && !parts.length) parts.push('환불불가');
+      var dateStr = dr.date ? '<span style="color:#b5afa2;"> · '+dr.date+'</span>' : '';
+      if(parts.length){
+        refundLine = '<div style="margin-top:8px;padding-top:8px;border-top:1px dashed rgba(0,0,0,.08);font-size:12px;color:#C5221F;font-weight:700;">↩︎ '
+          + parts.join(' · ') + dateStr + '</div>';
+      }
+    }
+    return '<div class="thx-card">'
+      + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">'
+        + '<div style="min-width:0;flex:1;">'
+          + '<div style="font-size:15px;font-weight:800;color:#1a1a18;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+(h.rest||'(매장 미상)')+typeTag+'</div>'
+          + '<div style="font-size:12.5px;color:#6b6b6b;margin-top:3px;">'+buyer+phone+'</div>'
+        + '</div>'
+        + '<span class="thx-badge" style="background:'+sm.bg+';color:'+sm.fg+';">'+sm.label+'</span>'
+      + '</div>'
+      + '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:9px;font-size:12.5px;">'
+        + '<div style="color:#9a9486;">'+visit+(h.pax||1)+'인</div>'
+        + '<div style="font-weight:800;color:#1a1a18;">₩'+(h.amt||0).toLocaleString()+'</div>'
+      + '</div>'
+      + '<div style="font-size:11.5px;color:#b5afa2;margin-top:5px;">구매 '+_thxFmtDateTime(h.date)+'</div>'
+      + refundLine
+    + '</div>';
+  }).join('');
+  listEl.innerHTML = html;
+}
+
 function loadAllUsersPurchases(){
   // 🆕 2026.05.22: IDB(레거시) + Supabase(현재) 동시 조회 → 병합
   var idbPromise = IDB.getAllKeys().then(function(keys){
@@ -21909,7 +22099,7 @@ registeredCard=null;
 // ADMIN
 // ════════════════════════════════════════════════
 function closeAllAdminScreens(){
-  var ids=['restPage','tuScreen','ticketListScreen','ticketCalScreen',
+  var ids=['restPage','tuScreen','ticketListScreen','ticketCalScreen','ticketHistoryScreen',
     'memberListScreen','inviteCodeScreen','adminCodeScreen','pendingApprovalScreen',
     'partnerAdminScreen','partnerTicketListScreen','partnerCalScreen','partnerRestScreen',
     'depositMgmtScreen','depositHistScreen',
@@ -25895,6 +26085,7 @@ function openSubPage(id){
   }
   if(id==='ticketListScreen') renderTicketList();
   if(id==='ticketCalScreen'){ setTimeout(tcalInit, 30); }
+  if(id==='ticketHistoryScreen'){ setTimeout(function(){ if(typeof renderTicketHistory==='function') renderTicketHistory(); }, 30); }
   if(id==='reservationAdminScreen'){ setTimeout(renderReservationAdmin, 30); }
   if(id==='feePolicyScreen'){ setTimeout(renderFeePolicy, 30); }
   if(id==='depositMgmtScreen') dmMgmtTab(0,document.querySelector('#depositMgmtScreen .dm-tab'));
