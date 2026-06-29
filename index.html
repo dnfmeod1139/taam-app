@@ -23213,11 +23213,16 @@ function rpCropConfirm() {
     var url = canvas.toDataURL('image/jpeg', 0.95);
     _splashSettings.bg = url;
     applySplashSettings();
+    // 🆕 로컬 저장 시각 기록 (Supabase 옛값이 새 편집을 덮어쓰지 못하게 — 롤백 방지)
+    var _sts = new Date().toISOString();
+    try { localStorage.setItem('taam_splash_saved_at', _sts); } catch(e){}
     IDB.set('splashSettings', JSON.stringify({
       text1: _splashSettings.text1,
       text2: _splashSettings.text2,
       bg:    url
     }));
+    // 🆕 Supabase 동기화 → 모든 회원·모든 기기에 시작화면 배경 공유
+    if (typeof _splashSaveRemote === 'function') _splashSaveRemote(_sts);
     showToast('✓','적용 완료','시작화면 배경이 설정됐어요');
     return;
   }
@@ -33844,7 +33849,8 @@ function rpGetPhotoTexts() {
 // ══════════════════════════════════════════════
 var _splashSettings = /*SPLASH_DATA_START*/{ text1:'Exclusive', text2:'Experience', bg:'' }/*SPLASH_DATA_END*/;
 
-function loadSplashSettings() {
+// 🆕 IDB(로컬) 폴백 로더 — Supabase 비어있거나 실패 시
+function _loadSplashFromIDB() {
   return IDB.get('splashSettings').then(function(s) {
     if (s) {
       var parsed = JSON.parse(s);
@@ -33855,9 +33861,61 @@ function loadSplashSettings() {
     applySplashSettings();
   }).catch(function(){ applySplashSettings(); });
 }
+// 🆕 Supabase app_config 동기화 (캐러셀과 동일 패턴) — 모든 회원·기기 공유
+function _splashSaveRemote(ts) {
+  if (!window.sb) return;
+  window.sb.from('app_config').upsert({
+    key: 'splash_settings',
+    value: {
+      text1: _splashSettings.text1,
+      text2: _splashSettings.text2,
+      bg:    _splashSettings.bg || ''
+    },
+    updated_at: ts
+  }).then(function(res){
+    if (res.error) console.warn('⚠ Supabase 시작화면 저장 실패:', res.error.message);
+    else console.log('✅ Supabase 시작화면 동기화 완료');
+  });
+}
+function loadSplashSettings() {
+  // 1) Supabase 우선 (디바이스 간 공유) — 없거나 실패하면 IDB 폴백
+  if (window.sb) {
+    return window.sb.from('app_config').select('value, updated_at').eq('key','splash_settings').maybeSingle().then(function(res){
+      if (!res.error && res.data && res.data.value) {
+        var v = res.data.value;
+        // 🆕 롤백 방지: 로컬에서 더 최근에 저장한 편집이 있으면 옛 Supabase 값으로 덮지 않음
+        var _localTs = null;
+        try { _localTs = localStorage.getItem('taam_splash_saved_at'); } catch(e){}
+        var _remoteTs = (res.data.updated_at || '');
+        if (_localTs && _remoteTs && _remoteTs < _localTs) {
+          console.log('⏭ 로컬 시작화면이 더 최신 — Supabase 옛값 무시, IDB 유지 후 복구 재시도');
+          return _loadSplashFromIDB().then(function(){ try { _splashSaveRemote(_localTs); } catch(e){} });
+        }
+        if (v.text1) _splashSettings.text1 = v.text1;
+        if (v.text2) _splashSettings.text2 = v.text2;
+        if (typeof v.bg === 'string') _splashSettings.bg = v.bg;
+        if (typeof IDB !== 'undefined') IDB.set('splashSettings', JSON.stringify({
+          text1: _splashSettings.text1, text2: _splashSettings.text2, bg: _splashSettings.bg || ''
+        }));
+        console.log('✅ Supabase 시작화면 로드');
+        applySplashSettings();
+        return;
+      }
+      // 원격 비어있음 → IDB 폴백
+      return _loadSplashFromIDB();
+    }).catch(function(e){
+      console.warn('⚠ Supabase 시작화면 로드 실패, IDB 폴백:', e);
+      return _loadSplashFromIDB();
+    });
+  }
+  return _loadSplashFromIDB();
+}
 function saveSplashSettings() {
   _splashSettings.text1 = document.getElementById('splashText1').value.trim() || 'Exclusive';
   _splashSettings.text2 = document.getElementById('splashText2').value.trim() || 'Experience';
+  // 🆕 로컬 저장 시각 기록 (롤백 방지)
+  var _ts = new Date().toISOString();
+  try { localStorage.setItem('taam_splash_saved_at', _ts); } catch(e){}
   IDB.set('splashSettings', JSON.stringify({
     text1: _splashSettings.text1,
     text2: _splashSettings.text2,
@@ -33867,6 +33925,8 @@ function saveSplashSettings() {
   }).catch(function(){
     showToast('⚠','저장 실패','저장에 실패했어요');
   });
+  // 🆕 Supabase 동기화 → 모든 회원·기기 공유
+  _splashSaveRemote(_ts);
   applySplashSettings();
 }
 function applySplashSettings() {
