@@ -6958,6 +6958,10 @@ window.closePromoCarousel = function(){
       <button type="button" onclick="pushTest()" data-i18n="notif_settings.btn_test" style="flex:1;padding:9px;border:1px solid #c8a96e;background:#fff;color:#5C0A14;border-radius:10px;font-family:var(--font-main);font-size:11px;font-weight:600;cursor:pointer;">🔔 테스트 발송</button>
       <button type="button" onclick="pushSubscribeIfNeeded().then(function(){if(typeof notifPermSync==='function')notifPermSync();}).catch(function(e){alert('재구독 실패: '+(e.message||e))})" data-i18n="notif_settings.btn_resub" style="flex:1;padding:9px;border:1px solid #ddd;background:#fff;color:#555;border-radius:10px;font-family:var(--font-main);font-size:11px;font-weight:600;cursor:pointer;">🔄 재구독</button>
     </div>
+    <!-- 🆕 구매 알림 미리보기 (실제 구매 알림 문구 그대로 본인 기기로 발송) -->
+    <div id="nsPurchasePreviewRow" style="padding:0 16px 10px;background:#faf8f5;border-bottom:1px solid rgba(0,0,0,.05);display:none;">
+      <button type="button" onclick="pushTestPurchase()" style="width:100%;padding:9px;border:1px solid #c8a96e;background:#fff;color:#5C0A14;border-radius:10px;font-family:var(--font-main);font-size:11px;font-weight:600;cursor:pointer;">🎫 구매 알림 미리보기 (실제 문구 그대로)</button>
+    </div>
 
     <!-- 전체 알림 -->
     <div class="ns-row master">
@@ -17630,6 +17634,13 @@ function openNotifSettings(){
   if(typeof applyI18n==='function') applyI18n(p);
   // 🆕 OS 푸시 권한 버튼 상태 동기화
   if(typeof notifPermSync === 'function') setTimeout(notifPermSync, 30);
+  // 🆕 구매 알림 미리보기 버튼은 슈퍼어드민에게만 노출
+  var _ppRow = document.getElementById('nsPurchasePreviewRow');
+  if(_ppRow){
+    var _isSuper = (typeof _isSuperAdmin === 'function') ? _isSuperAdmin()
+      : (typeof _currentRole !== 'undefined' && _currentRole === 'superadmin');
+    _ppRow.style.display = _isSuper ? 'block' : 'none';
+  }
 }
 // ════════════════════════════════════════════════
 // 💳 결제 수단 관리 (빌링키 방식)
@@ -34645,6 +34656,36 @@ window.pushTest = async function(){
     if(res.summary.ok > 0){
       msg += '\n\n앱 백그라운드로 보내고 10초내 알림 도착해야 정상';
     }
+    alert(msg);
+  } else {
+    alert('Edge Function 응답 없음 — Supabase Dashboard → Edge Functions → send-push → Logs 확인');
+  }
+};
+
+// 🆕 구매 알림 미리보기 — 실제 구매 알림과 동일한 문구를 본인 기기로 발송 (슈퍼어드민 화면 확인용)
+window.pushTestPurchase = async function(){
+  if(typeof pushSend !== 'function'){ alert('pushSend 함수 미정의'); return; }
+  // 실제 completePurchase() 의 구매 알림과 동일한 형태(예시 데이터)
+  var sample = '스시 사이토 · 2026-07-15 18:00 · 2인 · ₩300,000';
+  var res = await pushSend('user', {
+    title: '🎫 회원이 티켓을 구매했습니다',
+    body: sample,
+    url: '/',
+    category: 'ticket_purchased',
+    tag: 'taam-tpurchase-preview'
+  });
+  if(res && res.summary){
+    var msg = '구매 알림 미리보기 발송\n\n시도: '+res.summary.attempted+'\n성공: '+res.summary.ok+'\n실패: '+res.summary.failed;
+    if(res.summary.failed > 0 && res.details){
+      var errs = res.details.filter(function(d){ return d && d.ok === false; });
+      if(errs.length){
+        msg += '\n\n=== 실패 상세 ===';
+        errs.slice(0, 3).forEach(function(d, i){
+          msg += '\n['+(i+1)+'] '+(d.error || d.reason || 'unknown error').substring(0, 200);
+        });
+      }
+    }
+    if(res.summary.ok > 0){ msg += '\n\n앱 백그라운드로 보내고 10초내 알림 도착해야 정상'; }
     alert(msg);
   } else {
     alert('Edge Function 응답 없음 — Supabase Dashboard → Edge Functions → send-push → Logs 확인');
