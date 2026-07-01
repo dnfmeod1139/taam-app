@@ -5231,8 +5231,12 @@ body > .ticket-modal .ticket-modal-box {
 .taam-detail-name .sub { letter-spacing: 0.03em; }
 
 </style>
-<!-- 패치 138: Google Maps JS API + Places library 로드 (일본 매장 자동완성 위해) -->
-<script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBi9x9sWGx4nrGQv1uxEQseVnmMUXYUDrc&libraries=places&language=ko&loading=async" async defer></script>
+<!-- 패치 138 → 보안/비용 조치(2026-07): Google Maps JS 를 전역 로드하지 않고
+     '주소 자동완성'(슈퍼어드민 매장 등록) 최초 사용 시에만 지연 로드한다.
+     · 회원(일반)은 Maps JS 를 아예 로드하지 않음 → API 키 노출·Places 과금 표면 최소화
+     · 지도 '표시'는 무료 Maps Embed iframe 이라 이 변경과 무관(그대로 동작)
+     지연 로더: _rpEnsureMapsLoaded() (아래 스크립트) -->
+
 </head>
 <script>
 // 주소 자동완성 — Google Places (패치 138 마이그레이션. 이전: Nominatim/OSM)
@@ -23549,6 +23553,20 @@ function _rpHasGooglePlaces(){
   return !!(window.google && google.maps && google.maps.places && google.maps.places.AutocompleteSuggestion);
 }
 
+// 🆕 보안/비용: Google Maps JS 지연 로더. 주소 자동완성 최초 사용 시에만 스크립트 주입.
+//   (전역 <script> 제거 → 회원은 로드 안 함. 중복 주입 방지 플래그.)
+var _rpMapsLoading = false;
+function _rpEnsureMapsLoaded(){
+  if (_rpHasGooglePlaces()) return;   // 이미 로드됨
+  if (_rpMapsLoading) return;         // 로딩 진행 중
+  _rpMapsLoading = true;
+  var s = document.createElement('script');
+  s.src = 'https://maps.googleapis.com/maps/api/js?key=AIzaSyBi9x9sWGx4nrGQv1uxEQseVnmMUXYUDrc&libraries=places&language=ko&loading=async';
+  s.async = true; s.defer = true;
+  s.onerror = function(){ _rpMapsLoading = false; };
+  document.head.appendChild(s);
+}
+
 async function rpAddrInput(q) {
   var dd = document.getElementById('rpAddrDropdown');
   if (!dd) return;
@@ -23565,6 +23583,7 @@ async function rpAddrInput(q) {
 
   _rpAddrTimer = setTimeout(async function() {
     if (!_rpHasGooglePlaces()) {
+      _rpEnsureMapsLoaded();   // 🆕 최초 사용 시 지연 로드 트리거
       dd.innerHTML = '<div style="padding:11px 14px;font-size:12px;color:#bbb;">Google Maps 로드 중... 잠시 후 다시 입력</div>';
       dd.style.display = 'block';
       return;
