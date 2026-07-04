@@ -8982,6 +8982,15 @@ window.closePromoCarousel = function(){
       <div id="adpopUrlHint" style="font-size:11px;color:#b5afa2;margin-top:6px;">유튜브에 업로드한 영상 주소를 붙여넣으세요. 썸네일은 자동으로 가져옵니다.</div>
     </div>
     <div class="rp-field">
+      <label class="rp-label">썸네일 방식</label>
+      <div style="display:flex;gap:6px;">
+        <button type="button" id="adpopModeAuto" onclick="adpopSetMode('auto')" style="flex:1;padding:10px 0;border:1px solid #1a1a18;border-radius:10px;background:#1a1a18;color:#fff;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer;">유튜브 자동</button>
+        <button type="button" id="adpopModeCustom" onclick="adpopSetMode('custom')" style="flex:1;padding:10px 0;border:1px solid #e0ddd5;border-radius:10px;background:#fff;color:#8a8478;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer;">직접 업로드</button>
+      </div>
+      <input type="file" id="adpopThumbFile" accept="image/*" style="display:none;" onchange="adpopThumbChange(this)">
+      <button type="button" id="adpopUploadBtn" onclick="document.getElementById('adpopThumbFile').click()" style="display:none;width:100%;margin-top:8px;padding:11px;border:1px solid #c8a96e;border-radius:10px;background:#fff;color:#5C0A14;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer;">🖼 썸네일 이미지 선택 (16:9 권장)</button>
+    </div>
+    <div class="rp-field">
       <label class="rp-label">썸네일 미리보기</label>
       <div id="adpopPrevBox" style="width:100%;aspect-ratio:16/9;border-radius:14px;border:2px dashed #e0ddd8;background:#f4f1ec;display:flex;align-items:center;justify-content:center;overflow:hidden;position:relative;">
         <div id="adpopPrevEmpty" style="font-size:12px;color:#b5afa2;">링크를 입력하면 썸네일이 표시됩니다</div>
@@ -34458,17 +34467,63 @@ function _adpopSetThumb(imgEl, vid){
   imgEl.src = 'https://img.youtube.com/vi/'+vid+'/maxresdefault.jpg';
 }
 // ── 관리 화면 (슈퍼어드민) ──
+var _adpopMode = 'auto';        // 'auto'(유튜브 썸네일) | 'custom'(직접 업로드)
+var _adpopCustomThumb = '';     // 직접 업로드 이미지 (dataURL)
+function adpopSetMode(m){
+  _adpopMode = (m === 'custom') ? 'custom' : 'auto';
+  var a = document.getElementById('adpopModeAuto');
+  var c = document.getElementById('adpopModeCustom');
+  function _on(btn){ if(btn){ btn.style.background='#1a1a18'; btn.style.color='#fff'; btn.style.borderColor='#1a1a18'; } }
+  function _off(btn){ if(btn){ btn.style.background='#fff'; btn.style.color='#8a8478'; btn.style.borderColor='#e0ddd5'; } }
+  if(_adpopMode === 'custom'){ _on(c); _off(a); } else { _on(a); _off(c); }
+  var up = document.getElementById('adpopUploadBtn');
+  if(up) up.style.display = (_adpopMode === 'custom') ? 'block' : 'none';
+  adpopPreview();
+}
+function adpopThumbChange(input){
+  var file = input && input.files && input.files[0];
+  if(!file) return;
+  var reader = new FileReader();
+  reader.onload = function(e){
+    var img = new Image();
+    img.onload = function(){
+      // 가로 1280 이하로 축소 + JPEG 압축 (app_config 용량 절약)
+      var w = img.width, h = img.height, maxW = 1280;
+      if(w > maxW){ h = Math.round(h * maxW / w); w = maxW; }
+      var cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+      cv.getContext('2d').drawImage(img, 0, 0, w, h);
+      _adpopCustomThumb = cv.toDataURL('image/jpeg', 0.85);
+      adpopPreview();
+      showToast('✓','이미지 선택 완료','저장을 눌러야 반영됩니다');
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+  input.value = '';
+}
 function adpopPreview(){
-  var url = (document.getElementById('adpopUrlInput')||{}).value || '';
-  var vid = _adpopExtractVid(url);
   var img = document.getElementById('adpopPrevImg');
   var empty = document.getElementById('adpopPrevEmpty');
   if(!img) return;
+  img.onerror = null;
+  if(_adpopMode === 'custom'){
+    if(_adpopCustomThumb){
+      img.src = _adpopCustomThumb;
+      img.style.display='block'; if(empty) empty.style.display='none';
+    } else {
+      img.style.display='none'; img.removeAttribute('src');
+      if(empty){ empty.textContent = '썸네일 이미지를 업로드하세요'; empty.style.display='block'; }
+    }
+    return;
+  }
+  var url = (document.getElementById('adpopUrlInput')||{}).value || '';
+  var vid = _adpopExtractVid(url);
   if(vid){
     _adpopSetThumb(img, vid);
     img.style.display='block'; if(empty) empty.style.display='none';
   } else {
-    img.style.display='none'; img.removeAttribute('src'); if(empty) empty.style.display='block';
+    img.style.display='none'; img.removeAttribute('src');
+    if(empty){ empty.textContent = '링크를 입력하면 썸네일이 표시됩니다'; empty.style.display='block'; }
   }
 }
 async function adpopLoadAdmin(){
@@ -34478,7 +34533,8 @@ async function adpopLoadAdmin(){
     var v = (res && res.data && res.data.value) || null;
     var inp = document.getElementById('adpopUrlInput'); if(inp) inp.value = (v && v.url) || '';
     var chk = document.getElementById('adpopEnabledChk'); if(chk) chk.checked = !!(v && v.enabled);
-    adpopPreview();
+    _adpopCustomThumb = (v && v.customThumb) || '';
+    adpopSetMode((v && v.thumbMode) === 'custom' ? 'custom' : 'auto');   // 내부에서 adpopPreview 호출
     if(st) st.textContent = v
       ? ('마지막 저장: ' + (res.data.updated_at ? new Date(res.data.updated_at).toLocaleString('ko-KR') : '–'))
       : '아직 설정된 광고가 없습니다';
@@ -34489,9 +34545,12 @@ async function adpopSave(){
   var enabled = !!((document.getElementById('adpopEnabledChk')||{}).checked);
   var vid = _adpopExtractVid(url);
   if(enabled && !vid){ showToast('⚠','링크 확인','유효한 유튜브 링크를 입력해주세요'); return; }
+  if(enabled && _adpopMode === 'custom' && !_adpopCustomThumb){ showToast('⚠','썸네일 필요','직접 업로드 방식은 이미지를 선택해주세요'); return; }
   if(!window.sb){ showToast('⚠','오류','네트워크 상태를 확인해주세요'); return; }
   var res = await window.sb.from('app_config').upsert({
-    key:'ad_popup', value:{ enabled:enabled, url:url, vid:vid }, updated_at:new Date().toISOString()
+    key:'ad_popup',
+    value:{ enabled:enabled, url:url, vid:vid, thumbMode:_adpopMode, customThumb:(_adpopMode==='custom' ? _adpopCustomThumb : '') },
+    updated_at:new Date().toISOString()
   });
   if(res.error){ showToast('❌','저장 실패', res.error.message||''); return; }
   showToast('✓','저장 완료', enabled ? '앱 시작 시 광고 팝업이 노출됩니다' : '팝업 노출이 꺼졌습니다');
@@ -34517,7 +34576,12 @@ async function _adpopCheckShow(){
     var v = (res && res.data && res.data.value) || null;
     if(!v || !v.enabled || !v.vid) return;
     _adpopCurVid = v.vid;
-    _adpopSetThumb(document.getElementById('adPopupThumb'), v.vid);
+    var _thImg = document.getElementById('adPopupThumb');
+    if(v.thumbMode === 'custom' && v.customThumb){
+      if(_thImg){ _thImg.onerror = null; _thImg.src = v.customThumb; }   // 직접 업로드 썸네일
+    } else {
+      _adpopSetThumb(_thImg, v.vid);                                     // 유튜브 자동 썸네일
+    }
     var chk = document.getElementById('adPopupHideChk'); if(chk) chk.checked = false;
     var pop = document.getElementById('adPopup');
     if(pop){ pop.style.display='flex'; _adpopShownSession = true; }
