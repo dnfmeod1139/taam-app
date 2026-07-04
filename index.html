@@ -7800,6 +7800,10 @@ window.closePromoCarousel = function(){
         <div><div class="admin-menu-text" data-i18n="admin.splash_edit">시작화면 편집</div><div class="admin-menu-sub" data-i18n="admin.splash_edit_sub">배경사진 · 텍스트 변경</div></div>
         <div class="admin-arrow">›</div>
       </div>
+      <div class="admin-menu-item" onclick="openSubPage('adPopupMgmtScreen')">
+        <div><div class="admin-menu-text">📺 광고 팝업 관리</div><div class="admin-menu-sub">앱 시작 시 유튜브 영상 팝업 — 링크 · 노출 설정</div></div>
+        <div class="admin-arrow">›</div>
+      </div>
       <!-- 🆕 2026.05.20: 관리자 코드(PIN) 비밀번호 변경 메뉴 숨김 — 일반 회원과 동일하게 이메일+비밀번호 로그인 사용
            코드/모달은 보존 (안전한 롤백용). 진입 경로만 차단.
       <div class="admin-menu-item" onclick="openAdminPwdModal()">
@@ -8962,6 +8966,41 @@ window.closePromoCarousel = function(){
       <input class="tu-input" id="splashText2" type="text" placeholder="Experience" value="Experience" oninput="document.getElementById('splashPreviewLine2').textContent=this.value||'Experience'">
     </div>
     <button class="tu-submit" onclick="saveSplashSettings()" style="margin-top:4px;">저장</button>
+  </div>
+</div>
+
+<!-- 🆕 광고 팝업 관리 (슈퍼어드민) — 유튜브 영상 링크 · 노출 ON/OFF -->
+<div id="adPopupMgmtScreen" class="sub-screen" data-lang-lock="ko" style="display:none;">
+  <div class="sub-header">
+    <button class="sub-back" onclick="closeSubPage('adPopupMgmtScreen')">←</button>
+    <div class="sub-title">광고 팝업 관리</div>
+  </div>
+  <div class="sub-content" style="padding:20px 16px;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;font-family:'Noto Sans KR',sans-serif;">
+    <div class="rp-field">
+      <label class="rp-label">유튜브 영상 링크</label>
+      <input class="tu-input" id="adpopUrlInput" type="url" placeholder="https://youtu.be/… 또는 https://www.youtube.com/watch?v=…" oninput="adpopPreview()">
+      <div id="adpopUrlHint" style="font-size:11px;color:#b5afa2;margin-top:6px;">유튜브에 업로드한 영상 주소를 붙여넣으세요. 썸네일은 자동으로 가져옵니다.</div>
+    </div>
+    <div class="rp-field">
+      <label class="rp-label">썸네일 미리보기</label>
+      <div id="adpopPrevBox" style="width:100%;aspect-ratio:16/9;border-radius:14px;border:2px dashed #e0ddd8;background:#f4f1ec;display:flex;align-items:center;justify-content:center;overflow:hidden;position:relative;">
+        <div id="adpopPrevEmpty" style="font-size:12px;color:#b5afa2;">링크를 입력하면 썸네일이 표시됩니다</div>
+        <img id="adpopPrevImg" alt="" style="display:none;width:100%;height:100%;object-fit:cover;">
+      </div>
+    </div>
+    <div class="rp-field" style="display:flex;align-items:center;justify-content:space-between;background:#faf8f5;border-radius:12px;padding:14px 16px;">
+      <div>
+        <div style="font-size:13.5px;font-weight:800;color:#1a1a18;">팝업 노출</div>
+        <div style="font-size:11px;color:#9a9486;margin-top:2px;">켜면 회원이 앱 시작 시 광고 팝업을 봅니다</div>
+      </div>
+      <label class="ns-toggle">
+        <input type="checkbox" id="adpopEnabledChk">
+        <div class="ns-toggle-track"></div>
+        <div class="ns-toggle-thumb"></div>
+      </label>
+    </div>
+    <button class="tu-submit" onclick="adpopSave()" style="margin-top:4px;">저장</button>
+    <div id="adpopStatus" style="font-size:11.5px;color:#9a9486;margin-top:10px;text-align:center;"></div>
   </div>
 </div>
 
@@ -10188,6 +10227,34 @@ window.closePromoCarousel = function(){
       <button onclick="unretGoDeposit()" style="flex:1.7;height:48px;border:none;border-radius:12px;background:#5C0A14;color:#fff;font-family:inherit;font-size:13.5px;font-weight:800;cursor:pointer;">예치금 반환하러 가기 →</button>
     </div>
   </div>
+</div>
+
+<!-- 📺 앱 시작 광고 팝업 (유튜브 썸네일 → 풀화면 재생) -->
+<div id="adPopup" style="display:none;position:fixed;inset:0;z-index:988;background:rgba(20,18,16,.62);align-items:center;justify-content:center;font-family:'Noto Sans KR',sans-serif;" onclick="if(event.target===this)adpopClose()">
+  <div style="width:70vw;max-width:70vh;max-height:70vh;background:#fff;border-radius:20px;overflow:hidden;box-shadow:0 26px 70px rgba(0,0,0,.5);display:flex;flex-direction:column;">
+    <!-- 썸네일 (클릭 → 풀화면 재생) -->
+    <div onclick="adpopPlay()" style="position:relative;width:100%;aspect-ratio:16/9;background:#000;cursor:pointer;flex-shrink:1;min-height:0;">
+      <img id="adPopupThumb" alt="" style="width:100%;height:100%;object-fit:cover;display:block;">
+      <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;">
+        <div style="width:58px;height:58px;border-radius:50%;background:rgba(92,10,20,.88);display:flex;align-items:center;justify-content:center;box-shadow:0 6px 20px rgba(0,0,0,.4);">
+          <div style="width:0;height:0;border-top:11px solid transparent;border-bottom:11px solid transparent;border-left:18px solid #fff;margin-left:4px;"></div>
+        </div>
+      </div>
+    </div>
+    <!-- 하단 바: 오늘 다시 보지 않기 + 닫기 -->
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 14px;background:#fff;">
+      <label style="display:flex;align-items:center;gap:7px;font-size:12px;color:#6b6b6b;cursor:pointer;user-select:none;">
+        <input type="checkbox" id="adPopupHideChk" style="width:16px;height:16px;accent-color:#5C0A14;">
+        오늘 다시 보지 않기
+      </label>
+      <button onclick="adpopClose()" style="padding:9px 18px;border:1px solid #e0ddd5;border-radius:10px;background:#fff;font-family:inherit;font-size:12.5px;font-weight:700;color:#555;cursor:pointer;">닫기</button>
+    </div>
+  </div>
+</div>
+<!-- 📺 풀화면 영상 오버레이 -->
+<div id="adVideoOverlay" style="display:none;position:fixed;inset:0;z-index:1200;background:#000;">
+  <iframe id="adVideoFrame" src="" title="TAAM" style="width:100%;height:100%;border:0;" allow="autoplay; encrypted-media; fullscreen; picture-in-picture" allowfullscreen></iframe>
+  <button onclick="adpopCloseVideo()" style="position:absolute;top:calc(env(safe-area-inset-top, 0px) + 14px);right:16px;width:40px;height:40px;border:none;border-radius:50%;background:rgba(255,255,255,.16);color:#fff;font-size:19px;cursor:pointer;backdrop-filter:blur(4px);">✕</button>
 </div>
 
 <!-- TOAST -->
@@ -13390,7 +13457,7 @@ function openMain(){
    'notifSettingsPage','profileEditPage','profileConfirmOverlay',
    'cardMenuSheet','setPrimaryModal','deleteCardModal','cardDonePopup',
    'ticketDetailScreen','tdPurchaseSheet','tdConfirmPopup','tdDonePopup','restConfirmPopup','ticketConfirmPopup',
-   'restListScreen','ticketListScreen','depositMgmtScreen','inviteCodeScreen','partnerMgmtScreen',
+   'restListScreen','ticketListScreen','depositMgmtScreen','inviteCodeScreen','partnerMgmtScreen','adPopupMgmtScreen',
    'memberListScreen','ticketCalScreen','ticketHistoryScreen','adminCodeScreen','pendingApprovalScreen',
    'partnerAdminScreen','partnerTicketListScreen','partnerCalScreen','partnerRestScreen',
    'tcLockPopup','mshipScreen','extendPopup','memModal'
@@ -22478,7 +22545,7 @@ function closeAllAdminScreens(){
     'partnerAdminScreen','partnerTicketListScreen','partnerCalScreen','partnerRestScreen',
     'depositMgmtScreen','depositHistScreen',
     'restListScreen','restConfirmPopup','partnerMgmtScreen',
-    'splashMgmtScreen','carouselMgmtScreen','visibilityMgmtScreen'];
+    'splashMgmtScreen','carouselMgmtScreen','visibilityMgmtScreen','adPopupMgmtScreen'];
   ids.forEach(function(id){
     var el=document.getElementById(id);
     if(el) el.style.display='none';
@@ -26506,6 +26573,7 @@ function openSubPage(id){
   if(id==='partnerTicketListScreen') renderPartnerTicketList();
   if(id==='partnerRestScreen') renderPartnerRest();
   // App Design
+  if(id==='adPopupMgmtScreen'){ if(typeof adpopLoadAdmin==='function') adpopLoadAdmin(); }
   if(id==='splashMgmtScreen') {
     document.getElementById('splashText1').value = _splashSettings.text1 || 'Exclusive';
     document.getElementById('splashText2').value = _splashSettings.text2 || 'Experience';
@@ -34373,6 +34441,109 @@ function applySplashSettings() {
     }
   }
 }
+// ════════════════════════════════════════════════════════════════
+// 🆕 2026.07: 앱 시작 광고 팝업 (유튜브) — 슈퍼어드민 설정 + 회원 노출
+//   저장: app_config key='ad_popup' value={enabled,url,vid} (새 SQL 불필요)
+//   회원: 로그인 후 메인 진입 시 70% 팝업 → 썸네일 클릭 → 풀화면 재생
+//   '오늘 다시 보지 않기' = localStorage(taam_adpop_hide_ymd) 기기별
+// ════════════════════════════════════════════════════════════════
+function _adpopExtractVid(url){
+  if(!url) return '';
+  var m = String(url).match(/(?:youtube\.com\/(?:watch\?(?:[^#]*&)?v=|shorts\/|embed\/|live\/)|youtu\.be\/)([A-Za-z0-9_-]{6,20})/);
+  return m ? m[1] : '';
+}
+function _adpopSetThumb(imgEl, vid){
+  if(!imgEl || !vid) return;
+  imgEl.onerror = function(){ this.onerror=null; this.src='https://img.youtube.com/vi/'+vid+'/hqdefault.jpg'; };
+  imgEl.src = 'https://img.youtube.com/vi/'+vid+'/maxresdefault.jpg';
+}
+// ── 관리 화면 (슈퍼어드민) ──
+function adpopPreview(){
+  var url = (document.getElementById('adpopUrlInput')||{}).value || '';
+  var vid = _adpopExtractVid(url);
+  var img = document.getElementById('adpopPrevImg');
+  var empty = document.getElementById('adpopPrevEmpty');
+  if(!img) return;
+  if(vid){
+    _adpopSetThumb(img, vid);
+    img.style.display='block'; if(empty) empty.style.display='none';
+  } else {
+    img.style.display='none'; img.removeAttribute('src'); if(empty) empty.style.display='block';
+  }
+}
+async function adpopLoadAdmin(){
+  var st = document.getElementById('adpopStatus');
+  try {
+    var res = await window.sb.from('app_config').select('value, updated_at').eq('key','ad_popup').maybeSingle();
+    var v = (res && res.data && res.data.value) || null;
+    var inp = document.getElementById('adpopUrlInput'); if(inp) inp.value = (v && v.url) || '';
+    var chk = document.getElementById('adpopEnabledChk'); if(chk) chk.checked = !!(v && v.enabled);
+    adpopPreview();
+    if(st) st.textContent = v
+      ? ('마지막 저장: ' + (res.data.updated_at ? new Date(res.data.updated_at).toLocaleString('ko-KR') : '–'))
+      : '아직 설정된 광고가 없습니다';
+  } catch(e){ if(st) st.textContent = '로드 실패: '+(e.message||e); }
+}
+async function adpopSave(){
+  var url = ((document.getElementById('adpopUrlInput')||{}).value || '').trim();
+  var enabled = !!((document.getElementById('adpopEnabledChk')||{}).checked);
+  var vid = _adpopExtractVid(url);
+  if(enabled && !vid){ showToast('⚠','링크 확인','유효한 유튜브 링크를 입력해주세요'); return; }
+  if(!window.sb){ showToast('⚠','오류','네트워크 상태를 확인해주세요'); return; }
+  var res = await window.sb.from('app_config').upsert({
+    key:'ad_popup', value:{ enabled:enabled, url:url, vid:vid }, updated_at:new Date().toISOString()
+  });
+  if(res.error){ showToast('❌','저장 실패', res.error.message||''); return; }
+  showToast('✓','저장 완료', enabled ? '앱 시작 시 광고 팝업이 노출됩니다' : '팝업 노출이 꺼졌습니다');
+  var st = document.getElementById('adpopStatus'); if(st) st.textContent = '마지막 저장: ' + new Date().toLocaleString('ko-KR');
+}
+// ── 회원측 노출 ──
+var _adpopCurVid = '';
+var _adpopShownSession = false;
+function _adpopYmd(){ var n=new Date(); return n.getFullYear()+'-'+(n.getMonth()+1)+'-'+n.getDate(); }
+async function _adpopCheckShow(){
+  try {
+    if(_adpopShownSession) return;
+    if(!window.sb) return;
+    var hid=null; try{ hid=localStorage.getItem('taam_adpop_hide_ymd'); }catch(e){}
+    if(hid === _adpopYmd()) return;   // '오늘 다시 보지 않기' 체크한 날
+    var s = await window.sb.auth.getSession();
+    if(!s || !s.data || !s.data.session){
+      // 아직 로그인 전(스플래시/로그인 화면) — 자동로그인 완료 후 1회 재시도
+      if(!_adpopCheckShow._retried){ _adpopCheckShow._retried = true; setTimeout(_adpopCheckShow, 8000); }
+      return;
+    }
+    var res = await window.sb.from('app_config').select('value').eq('key','ad_popup').maybeSingle();
+    var v = (res && res.data && res.data.value) || null;
+    if(!v || !v.enabled || !v.vid) return;
+    _adpopCurVid = v.vid;
+    _adpopSetThumb(document.getElementById('adPopupThumb'), v.vid);
+    var chk = document.getElementById('adPopupHideChk'); if(chk) chk.checked = false;
+    var pop = document.getElementById('adPopup');
+    if(pop){ pop.style.display='flex'; _adpopShownSession = true; }
+  } catch(e){ console.warn('[adpop] 예외:', e); }
+}
+function adpopClose(){
+  var chk = document.getElementById('adPopupHideChk');
+  if(chk && chk.checked){ try{ localStorage.setItem('taam_adpop_hide_ymd', _adpopYmd()); }catch(e){} }
+  var pop = document.getElementById('adPopup'); if(pop) pop.style.display='none';
+}
+function adpopPlay(){
+  if(!_adpopCurVid) return;
+  var f = document.getElementById('adVideoFrame');
+  if(f) f.src = 'https://www.youtube.com/embed/'+_adpopCurVid+'?autoplay=1&playsinline=1&rel=0';
+  var ov = document.getElementById('adVideoOverlay'); if(ov) ov.style.display='block';
+}
+function adpopCloseVideo(){
+  var ov = document.getElementById('adVideoOverlay'); if(ov) ov.style.display='none';
+  var f = document.getElementById('adVideoFrame'); if(f) f.src = '';   // 재생 정지
+}
+(function(){
+  function _adpopRun(){ setTimeout(_adpopCheckShow, 3500); }
+  if(document.readyState === 'loading'){ document.addEventListener('DOMContentLoaded', _adpopRun); }
+  else { _adpopRun(); }
+})();
+
 function splashPickPhoto() {
   var f = document.getElementById('splashPhotoFile');
   if (f) { f.value = ''; f.click(); }
