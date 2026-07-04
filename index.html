@@ -10133,6 +10133,45 @@ window.closePromoCarousel = function(){
   .thx-badge{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:800;}
 </style>
 
+<!-- ⏰ 슈퍼어드민 — 예약 시간 변경 입력 모달 -->
+<div id="dmTimeChangeModal" style="display:none;position:fixed;inset:0;z-index:990;background:rgba(20,18,16,.55);align-items:center;justify-content:center;padding:24px;" onclick="if(event.target===this)dmCloseTimeChange()">
+  <div style="width:100%;max-width:340px;background:#fff;border-radius:22px;padding:24px 22px;box-shadow:0 24px 60px rgba(0,0,0,.4);font-family:'Noto Sans KR',sans-serif;">
+    <div style="font-size:18px;font-weight:800;color:#1a1a18;">예약 시간 변경</div>
+    <div id="dmTimeChangeCtx" style="font-size:12px;color:#9a9486;margin-top:4px;"></div>
+    <div style="margin-top:16px;">
+      <label style="font-size:12px;font-weight:700;color:#6b6b6b;">새 예약 시간</label>
+      <input id="dmTimeChangeInput" type="time" style="width:100%;box-sizing:border-box;margin-top:5px;padding:12px;border:1px solid #e0ddd5;border-radius:10px;font-size:16px;font-weight:800;">
+    </div>
+    <div style="font-size:11.5px;color:#b5afa2;margin-top:10px;line-height:1.5;">변경하면 고객에게 알림이 가고, 고객이 확인을 누르면 다시 알림을 받습니다.</div>
+    <div style="display:flex;gap:10px;margin-top:18px;">
+      <button onclick="dmCloseTimeChange()" style="flex:1;height:48px;border:1px solid #e0ddd5;border-radius:12px;background:#fff;font-family:inherit;font-size:14px;font-weight:700;color:#888;cursor:pointer;">취소</button>
+      <button onclick="dmSaveTimeChange()" style="flex:1.6;height:48px;border:none;border-radius:12px;background:#5C0A14;color:#fff;font-family:inherit;font-size:14px;font-weight:800;cursor:pointer;">변경 및 알림</button>
+    </div>
+  </div>
+</div>
+
+<!-- ⏰ 고객 — 시간 변경 확인 팝업 -->
+<div id="timeChangePopup" style="display:none;position:fixed;inset:0;z-index:995;background:rgba(20,18,16,.6);align-items:center;justify-content:center;padding:28px;font-family:'Noto Sans KR',sans-serif;">
+  <div style="width:100%;max-width:330px;background:#fff;border-radius:24px;padding:28px 24px;box-shadow:0 24px 60px rgba(0,0,0,.45);text-align:center;">
+    <div style="font-size:40px;">⏰</div>
+    <div style="font-size:19px;font-weight:800;color:#1a1a18;margin-top:8px;">예약 시간이 변경되었습니다</div>
+    <div id="tchgPopupRest" style="font-size:13px;color:#8a8478;margin-top:6px;"></div>
+    <div style="display:flex;align-items:center;justify-content:center;gap:14px;margin:20px 0;">
+      <div style="text-align:center;">
+        <div style="font-size:11px;color:#b5afa2;">기존</div>
+        <div id="tchgPopupFrom" style="font-size:20px;font-weight:800;color:#9a9486;text-decoration:line-through;"></div>
+      </div>
+      <div style="font-size:22px;color:#5C0A14;">→</div>
+      <div style="text-align:center;">
+        <div style="font-size:11px;color:#5C0A14;font-weight:700;">변경</div>
+        <div id="tchgPopupTo" style="font-size:22px;font-weight:800;color:#5C0A14;"></div>
+      </div>
+    </div>
+    <div style="font-size:12px;color:#8a8478;line-height:1.6;">아래 <b>확인</b>을 누르면 변경된 시간을 확인한 것으로 처리되고, 담당자에게 전달됩니다.</div>
+    <button onclick="confirmTimeChange()" style="width:100%;height:52px;margin-top:20px;border:none;border-radius:14px;background:#5C0A14;color:#fff;font-family:inherit;font-size:15px;font-weight:800;cursor:pointer;">확인</button>
+  </div>
+</div>
+
 <!-- TOAST -->
 <div id="toastBanner">
   <div class="toast-icon" id="toastIcon"></div>
@@ -11531,6 +11570,17 @@ function handleNotifClick(url){
       }, 100);
       return;
     }
+    // 🆕 /?tchg=<purchaseId> → 예약 시간 변경 확인 팝업
+    var mt = url.match(/[?&]tchg=([^&]+)/);
+    if(mt && mt[1]){
+      try { closePage('notificationsListPage'); } catch(_){}
+      var _tpid = decodeURIComponent(mt[1]);
+      setTimeout(function(){
+        var _tp = (Array.isArray(purchaseHistory)?purchaseHistory:[]).find(function(x){ return x.purchaseId===_tpid; });
+        if(_tp && typeof showTimeChangePopup==='function') showTimeChangePopup(_tp);
+      }, 150);
+      return;
+    }
   } catch(_e){}
 }
 window.handleNotifClick = handleNotifClick;
@@ -11647,8 +11697,10 @@ async function loadPurchase(){
     purchaseHistory = (rows || []).map(r => ({
       id: r.ticket_product_id || '',
       restId: r.restaurant_id || '',
+      rest: r.restaurant_name || '',
       date: r.created_at,
       visitDate: r.reservation_date || '',
+      visitTime: r.visit_time || '',
       pax: r.party_size || 0,
       amt: r.price || 0,
       status: r.status === 'active' ? 'upcoming'
@@ -11661,6 +11713,8 @@ async function loadPurchase(){
       buyerRole: (r.extra_data && r.extra_data.buyerRole) || 'user',
       purchaseId: r.purchase_id || '',
       notifications: (r.extra_data && r.extra_data.notifications) || null,
+      extra_data: r.extra_data || {},
+      _userId: r.user_id,
       _srcKey: _userKey('excPurchase'),
     }));
 
@@ -19897,6 +19951,116 @@ function _dmGetItem(idx){
   return (Array.isArray(purchaseHistory) && purchaseHistory[idx]) || null;
 }
 
+// ════════════════════════════════════════════════════════════════
+// 🆕 2026.07: 결제 완료 티켓 '예약 시간 변경' + 고객↔슈퍼어드민 확인 푸시
+//   흐름: 슈퍼어드민이 시간 변경 → 고객 푸시/벨 → 고객 앱 팝업 확인
+//         → extra_data.time_change.status='confirmed' → 슈퍼어드민 확인 푸시
+//   저장: tickets.visit_time + tickets.extra_data.time_change (새 SQL 불필요)
+// ════════════════════════════════════════════════════════════════
+var _dmTimeChangeIdx = -1;
+function dmChangeTime(idx){
+  var h = _dmGetItem(idx);
+  if(!h){ showToast('⚠','오류','대상을 찾을 수 없어요'); return; }
+  if(!h._supabase || !h.purchaseId){ showToast('⚠','변경 불가','이 티켓은 시간 변경을 지원하지 않아요 (구버전 데이터)'); return; }
+  if(h.status && h.status !== 'active' && h.status !== 'upcoming'){ showToast('⚠','변경 불가','방문예정 티켓만 시간 변경할 수 있어요'); return; }
+  _dmTimeChangeIdx = idx;
+  var ctx = document.getElementById('dmTimeChangeCtx');
+  if(ctx) ctx.textContent = (h.rest||'') + ' · 방문 ' + (h.visitDate||'') + ' · 현재 ' + (h.visitTime || '시간 미설정');
+  var inp = document.getElementById('dmTimeChangeInput');
+  if(inp) inp.value = /^\d{1,2}:\d{2}$/.test(h.visitTime||'') ? h.visitTime : '';
+  var m = document.getElementById('dmTimeChangeModal'); if(m) m.style.display='flex';
+}
+function dmCloseTimeChange(){ var m=document.getElementById('dmTimeChangeModal'); if(m) m.style.display='none'; _dmTimeChangeIdx=-1; }
+async function dmSaveTimeChange(){
+  var h = _dmGetItem(_dmTimeChangeIdx);
+  if(!h){ dmCloseTimeChange(); return; }
+  var inp = document.getElementById('dmTimeChangeInput');
+  var newTime = inp ? (inp.value||'').trim() : '';
+  if(!/^\d{1,2}:\d{2}$/.test(newTime)){ showToast('⚠','시간 확인','HH:MM 형식으로 입력해주세요'); return; }
+  var oldTime = h.visitTime || '';
+  if(newTime === oldTime){ showToast('ℹ','변경 없음','기존 시간과 같아요'); return; }
+  if(!window.sb){ showToast('⚠','오류','네트워크 상태를 확인해주세요'); return; }
+  var _admU=null;
+  try{ var _gu=await window.sb.auth.getUser(); _admU=(_gu&&_gu.data&&_gu.data.user)?_gu.data.user.id:null; }catch(e){}
+  var nowIso = new Date().toISOString();
+  var tc = { from: oldTime, to: newTime, status:'pending', requested_at: nowIso, requested_by: _admU, confirmed_at: null };
+  var newExtra = Object.assign({}, h.extra_data||{}, { time_change: tc });
+  var upd = await window.sb.from('tickets').update({ visit_time: newTime, extra_data: newExtra }).eq('purchase_id', h.purchaseId).select();
+  if(upd.error){ showToast('❌','저장 실패', upd.error.message||'RLS 확인 필요'); return; }
+  if(!upd.data || upd.data.length===0){ showToast('❌','저장 실패','대상 티켓을 찾지 못했어요 (purchase_id)'); return; }
+  // 로컬 반영
+  h.visitTime = newTime; h.extra_data = newExtra;
+  // 고객 인앱 알림(벨) + 푸시
+  var body = (h.rest||'예약') + ' · 방문 ' + (h.visitDate||'') + ' · 시간 ' + (oldTime||'미정') + ' → ' + newTime;
+  try {
+    await window.sb.from('notifications').insert({
+      user_id: h._userId, type:'time_change', kind:'time_change',
+      title:'⏰ 예약 시간이 변경되었습니다', body: body, message: body,
+      url:'/?tchg='+h.purchaseId,
+      payload:{ purchase_id:h.purchaseId, from:oldTime, to:newTime }
+    });
+  } catch(_ne){ console.warn('[tchg] 고객 알림 insert 예외:', _ne); }
+  try {
+    await window.sb.functions.invoke('send-push', {
+      body:{ to:'uid:'+h._userId, payload:{ title:'⏰ 예약 시간이 변경되었습니다', body: body, url:'/?tchg='+h.purchaseId, category:'ticket_time_changed', tag:'taam-tchg-'+h.purchaseId } }
+    });
+  } catch(_pe){ console.warn('[tchg] 고객 push 예외:', _pe); }
+  dmCloseTimeChange();
+  showToast('✓','시간 변경 완료','고객에게 알림을 보냈어요 (→ '+newTime+')');
+}
+
+// ── 고객측: 시간 변경 확인 팝업 ──
+var _tchgCurrentPurchaseId = null;
+function showTimeChangePopup(purchase){
+  if(!purchase || !purchase.extra_data || !purchase.extra_data.time_change) return;
+  var tc = purchase.extra_data.time_change;
+  if(tc.status !== 'pending') return;
+  _tchgCurrentPurchaseId = purchase.purchaseId;
+  var restEl=document.getElementById('tchgPopupRest');
+  if(restEl){
+    var rn = purchase.rest || '';
+    if(!rn && typeof restaurantDB!=='undefined'){ var rr=restaurantDB.find(function(x){return String(x.id)===String(purchase.restId);}); rn = rr?rr.name:''; }
+    restEl.textContent = rn + (purchase.visitDate?(' · 방문 '+purchase.visitDate):'');
+  }
+  var f=document.getElementById('tchgPopupFrom'); if(f) f.textContent = tc.from || '미정';
+  var to=document.getElementById('tchgPopupTo'); if(to) to.textContent = tc.to || '';
+  var m=document.getElementById('timeChangePopup'); if(m) m.style.display='flex';
+}
+async function confirmTimeChange(){
+  var pid = _tchgCurrentPurchaseId;
+  var m=document.getElementById('timeChangePopup'); if(m) m.style.display='none';
+  if(!pid || !window.sb){ _tchgCurrentPurchaseId=null; return; }
+  var purchase = (Array.isArray(purchaseHistory)?purchaseHistory:[]).find(function(p){ return p.purchaseId===pid; });
+  var tc = (purchase && purchase.extra_data && purchase.extra_data.time_change) || {};
+  var fromT = tc.from||''; var toT = tc.to||'';
+  var nowIso = new Date().toISOString();
+  var newExtra = Object.assign({}, (purchase&&purchase.extra_data)||{}, { time_change: Object.assign({}, tc, { status:'confirmed', confirmed_at: nowIso }) });
+  try {
+    var upd = await window.sb.from('tickets').update({ extra_data: newExtra }).eq('purchase_id', pid).select();
+    if(upd.error) console.warn('[tchg] confirm update 실패:', upd.error.message);
+    if(purchase) purchase.extra_data = newExtra;
+  } catch(e){ console.warn('[tchg] confirm 예외:', e); }
+  var body = ((purchase&&purchase.rest)?purchase.rest:'예약') + ' · 시간 ' + (fromT||'미정') + ' → ' + (toT||'') + ' · 고객 확인 완료';
+  // 슈퍼어드민 푸시 (양쪽 role)
+  try {
+    ['superadmin','super_admin'].forEach(function(_rl){
+      try { window.sb.functions.invoke('send-push', { body:{ to:'role:'+_rl, payload:{ title:'✅ 고객이 시간 변경을 확인했습니다', body: body, url:'/', category:'ticket_time_confirmed', tag:'taam-tchgack-'+pid } } }); } catch(_e){}
+    });
+  } catch(_pe){}
+  // 요청한 슈퍼어드민 벨 인박스 (uid 알 때)
+  try {
+    if(tc && tc.requested_by){
+      await window.sb.from('notifications').insert({
+        user_id: tc.requested_by, type:'time_change_ack', kind:'time_change_ack',
+        title:'✅ 고객이 시간 변경을 확인했습니다', body: body, message: body,
+        url:'/', payload:{ purchase_id: pid, from: fromT, to: toT }
+      });
+    }
+  } catch(_ne){}
+  showToast('✓','확인 완료','변경된 시간이 확인되었습니다');
+  _tchgCurrentPurchaseId = null;
+}
+
 // ── 슈퍼어드민이 반환/환불불가 처리시 BUYER(실제 구매자)의 IDB에 반영 ──
 //    - h._srcKey 에 원본 유저의 purchase 키가 있음 ("excPurchase_u010xxxx" 등)
 //    - 그 유저의 purchase 리스트에서 purchaseId 로 매칭해서 depositReturn 업데이트
@@ -20193,7 +20357,7 @@ async function _dmLoadSupabasePurchases(){
     // 1) 모든 티켓 (슈퍼어드민 RLS 허용)
     var tres = await window.sb
       .from('tickets')
-      .select('id, user_id, restaurant_id, restaurant_name, party_size, price, status, purchase_id, ticket_product_id, ticket_type, reservation_date, created_at, extra_data')
+      .select('id, user_id, restaurant_id, restaurant_name, party_size, price, status, purchase_id, ticket_product_id, ticket_type, reservation_date, visit_time, created_at, extra_data')
       .order('created_at', { ascending: false })
       .limit(2000);
     if(tres.error){ console.warn('[dm supabase] tickets 조회 실패:', tres.error.message); return []; }
@@ -20245,6 +20409,7 @@ async function _dmLoadSupabasePurchases(){
         rest: t.restaurant_name,
         date: t.created_at,
         visitDate: _fmtVisitDate(t.reservation_date),
+        visitTime: t.visit_time || '',
         pax: t.party_size || 1,
         amt: t.price || 0,
         status: t.status || 'active',
@@ -20639,7 +20804,8 @@ function renderDmMgmtList(idx){
       actionsHtml = '<div class="dm-actions">'
         +'<button class="dm-btn-return" onclick="openDmPopup('+globalIdx+',\'return\')">반환</button>'
         +'<button class="dm-btn-penalty" onclick="openDmPopup('+globalIdx+',\'penalty\')">환불불가</button>'
-        +'</div>';
+        +'</div>'
+        +'<button onclick="dmChangeTime('+globalIdx+')" style="width:100%;margin-top:8px;padding:10px;border:1px solid #c8a96e;border-radius:10px;background:#fff;color:#5C0A14;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;">⏰ 예약 시간 변경</button>';
     } else if(idx === 1){
       // 반환완료 — 큰 금액 영역에서 이미 반환액+상세 표시. 여기엔 처리일자만.
       var dr = h.depositReturn;
@@ -56585,6 +56751,18 @@ window.computeTicketNotifications = function(ticket, restName){
 // ─── 앱 열릴 때 "놓친/도래한 알림" 체크 → 토스트로 안내 ───
 // 네이티브 앱 포팅 전 임시 대안.
 window.checkPendingNotifications = function(){
+  // 🆕 시간 변경 확인 팝업 — 알림설정과 무관하게 항상(필수 확인). pending 건 1개 표시.
+  try {
+    if(Array.isArray(purchaseHistory)){
+      for(var _pi=0; _pi<purchaseHistory.length; _pi++){
+        var _pp = purchaseHistory[_pi];
+        if(_pp && _pp.status!=='cancelled' && _pp.extra_data && _pp.extra_data.time_change
+           && _pp.extra_data.time_change.status==='pending'){
+          if(typeof showTimeChangePopup==='function'){ showTimeChangePopup(_pp); break; }
+        }
+      }
+    }
+  } catch(_te){ console.warn('[tchg] pending 검사 예외:', _te); }
   if(!_notifPrefs.all) return;
   if(typeof purchaseHistory === 'undefined' || !purchaseHistory) return;
   var now = Date.now();
