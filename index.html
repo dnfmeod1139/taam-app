@@ -11623,7 +11623,7 @@ async function savePurchase(){
         restaurant_id: String(h.restId || ''),
         restaurant_name: (function(){
           var r = restaurantDB.find(function(x){ return String(x.id) === String(h.restId); });
-          return r ? r.name : '';
+          return r ? r.name : (h.restName || h.rest || '');   // 🆕 초대 결제 등 restId 미매칭 폴백
         })(),
         ticket_product_id: String(h.id || ''),
         ticket_type: (function(){
@@ -11632,6 +11632,7 @@ async function savePurchase(){
         })(),
         reservation_date: h.visitDate || null,
         visit_time: (function(){
+          if (h.visitTime) return h.visitTime;   // 🆕 초대 결제 등 h 에 직접 시간 보유 시 우선
           var t = ticketDB.find(function(x){ return String(x.id) === String(h.id); });
           return t ? (t.time || '') : '';
         })(),
@@ -19958,11 +19959,15 @@ function _dmGetItem(idx){
 //   저장: tickets.visit_time + tickets.extra_data.time_change (새 SQL 불필요)
 // ════════════════════════════════════════════════════════════════
 var _dmTimeChangeIdx = -1;
+var _tchgMode = 'dm';           // 'dm'(구매 관리) | 'invite'(발송한 초대 내역)
+var _sentInvitesRows = [];      // loadSentInvites 가 채움
+var _siTimeChangeCtx = null;    // { inv, ticket } — invite 모드 컨텍스트
 function dmChangeTime(idx){
   var h = _dmGetItem(idx);
   if(!h){ showToast('⚠','오류','대상을 찾을 수 없어요'); return; }
   if(!h._supabase || !h.purchaseId){ showToast('⚠','변경 불가','이 티켓은 시간 변경을 지원하지 않아요 (구버전 데이터)'); return; }
   if(h.status && h.status !== 'active' && h.status !== 'upcoming'){ showToast('⚠','변경 불가','방문예정 티켓만 시간 변경할 수 있어요'); return; }
+  _tchgMode = 'dm';
   _dmTimeChangeIdx = idx;
   var ctx = document.getElementById('dmTimeChangeCtx');
   if(ctx) ctx.textContent = (h.rest||'') + ' · 방문 ' + (h.visitDate||'') + ' · 현재 ' + (h.visitTime || '시간 미설정');
@@ -19970,8 +19975,83 @@ function dmChangeTime(idx){
   if(inp) inp.value = /^\d{1,2}:\d{2}$/.test(h.visitTime||'') ? h.visitTime : '';
   var m = document.getElementById('dmTimeChangeModal'); if(m) m.style.display='flex';
 }
-function dmCloseTimeChange(){ var m=document.getElementById('dmTimeChangeModal'); if(m) m.style.display='none'; _dmTimeChangeIdx=-1; }
+function dmCloseTimeChange(){ var m=document.getElementById('dmTimeChangeModal'); if(m) m.style.display='none'; _dmTimeChangeIdx=-1; _siTimeChangeCtx=null; _tchgMode='dm'; }
+
+// ── 발송한 예약 초대 내역 → 결제 완료 초대의 시간 변경 ──
+//   초대 결제 시 tickets.purchase_id = 'INV-<초대ID 8자리>-<ts>' 로 저장됨 → LIKE 로 역추적
+async function siChangeTime(invId){
+  var inv = (_sentInvitesRows||[]).find(function(x){ return x.id === invId; });
+  if(!inv){ showToast('⚠','오류','초대 정보를 찾을 수 없어요'); return; }
+  if(inv.status !== 'paid'){ showToast('⚠','변경 불가','결제 완료된 초대만 시간 변경할 수 있어요'); return; }
+  // 연결된 티켓 조회 (구매자 uid + INV- 프리픽스)
+  var ticket = null;
+  try {
+    var tq = await window.sb.from('tickets')
+      .select('purchase_id, visit_time, extra_data, status, restaurant_name, reservation_date, user_id')
+      .eq('user_id', inv.invitee_user_id)
+      .like('purchase_id', 'INV-' + String(inv.id).slice(0,8) + '-%')
+      .order('created_at', { ascending:false })
+      .limit(1);
+    if(!tq.error && tq.data && tq.data.length) ticket = tq.data[0];
+  } catch(e){ console.warn('[siTchg] 티켓 조회 예외:', e); }
+  if(ticket && ticket.status === 'cancelled'){ showToast('⚠','변경 불가','취소된 티켓입니다'); return; }
+  _tchgMode = 'invite';
+  _siTimeChangeCtx = { inv: inv, ticket: ticket };
+  var curTime = (ticket && ticket.visit_time) || inv.visit_time || '';
+  var ctx = document.getElementById('dmTimeChangeCtx');
+  if(ctx) ctx.textContent = (inv.restaurant_name||'') + ' · 방문 ' + (inv.visit_date||'') + ' · 현재 ' + (curTime || '시간 미설정')
+    + (ticket ? '' : ' · ⚠ 티켓 미연결(초대만 변경)');
+  var inp = document.getElementById('dmTimeChangeInput');
+  if(inp) inp.value = /^\d{1,2}:\d{2}$/.test(curTime) ? curTime : '';
+  var m = document.getElementById('dmTimeChangeModal'); if(m) m.style.display='flex';
+}
+async function siSaveTimeChange(){
+  var c = _siTimeChangeCtx;
+  if(!c || !c.inv){ dmCloseTimeChange(); return; }
+  var inv = c.inv, ticket = c.ticket;
+  var inp = document.getElementById('dmTimeChangeInput');
+  var newTime = inp ? (inp.value||'').trim() : '';
+  if(!/^\d{1,2}:\d{2}$/.test(newTime)){ showToast('⚠','시간 확인','HH:MM 형식으로 입력해주세요'); return; }
+  var oldTime = (ticket && ticket.visit_time) || inv.visit_time || '';
+  if(newTime === oldTime){ showToast('ℹ','변경 없음','기존 시간과 같아요'); return; }
+  if(!window.sb){ showToast('⚠','오류','네트워크 상태를 확인해주세요'); return; }
+  var _admU=null;
+  try{ var _gu=await window.sb.auth.getUser(); _admU=(_gu&&_gu.data&&_gu.data.user)?_gu.data.user.id:null; }catch(e){}
+  var nowIso = new Date().toISOString();
+  // 1) 연결된 티켓 갱신 (있을 때) — 고객 확인 팝업/추적의 근거
+  var pid = ticket ? ticket.purchase_id : null;
+  if(ticket){
+    var tc = { from: oldTime, to: newTime, status:'pending', requested_at: nowIso, requested_by: _admU, confirmed_at: null };
+    var newExtra = Object.assign({}, ticket.extra_data||{}, { time_change: tc });
+    var upd = await window.sb.from('tickets').update({ visit_time:newTime, extra_data:newExtra }).eq('purchase_id', pid).select();
+    if(upd.error){ showToast('❌','저장 실패', upd.error.message||'RLS 확인 필요'); return; }
+  }
+  // 2) 초대 레코드도 새 시간으로 동기화 (발송 내역 표시 일관성)
+  try {
+    var iu = await window.sb.from('reservation_invites').update({ visit_time: newTime }).eq('id', inv.id);
+    if(iu.error) console.warn('[siTchg] 초대 시간 갱신 실패:', iu.error.message);
+  } catch(_ie){}
+  // 3) 고객 벨 알림 + 푸시
+  var body = (inv.restaurant_name||'예약') + ' · 방문 ' + (inv.visit_date||'') + ' · 시간 ' + (oldTime||'미정') + ' → ' + newTime;
+  var nurl = pid ? ('/?tchg='+pid) : '/';
+  try {
+    await window.sb.from('notifications').insert({
+      user_id: inv.invitee_user_id, type:'time_change', kind:'time_change',
+      title:'⏰ 예약 시간이 변경되었습니다', body: body, message: body,
+      url: nurl, payload:{ purchase_id: pid, invite_id: inv.id, from: oldTime, to: newTime }
+    });
+  } catch(_ne){ console.warn('[siTchg] 고객 알림 insert 예외:', _ne); }
+  try {
+    await window.sb.functions.invoke('send-push', {
+      body:{ to:'uid:'+inv.invitee_user_id, payload:{ title:'⏰ 예약 시간이 변경되었습니다', body: body, url: nurl, category:'ticket_time_changed', tag:'taam-tchg-'+(pid||inv.id) } }
+    });
+  } catch(_pe){ console.warn('[siTchg] 고객 push 예외:', _pe); }
+  dmCloseTimeChange();
+  showToast('✓','시간 변경 완료', ticket ? '고객에게 알림을 보냈어요 (→ '+newTime+')' : '초대 시간 변경 + 알림 발송 (티켓 미연결 — 확인 추적 불가)');
+  try { if(typeof loadSentInvites === 'function') loadSentInvites(); } catch(_){}
+}
 async function dmSaveTimeChange(){
+  if(_tchgMode === 'invite') return siSaveTimeChange();   // 🆕 발송한 초대 내역 경로
   var h = _dmGetItem(_dmTimeChangeIdx);
   if(!h){ dmCloseTimeChange(); return; }
   var inp = document.getElementById('dmTimeChangeInput');
@@ -24912,6 +24992,7 @@ async function loadSentInvites(){
       return;
     }
     var rows = r.data || [];
+    _sentInvitesRows = rows;   // 🆕 시간 변경 등 후속 액션용 보관
 
     // invitee profiles 일괄 조회
     var inviteeIds = Array.from(new Set(rows.map(function(x){ return x.invitee_user_id; }).filter(Boolean)));
@@ -24991,6 +25072,10 @@ async function loadSentInvites(){
            +     (cancelledAt ? '<span style="color:#9B1C1C;">❌ '+cancelledAt+'</span>' : '')
            +   '</div>'
            + '</div>'
+           // 🆕 결제 완료 건만 — 예약 시간 변경 (고객 확인 푸시 플로우 연동)
+           + (inv.status === 'paid'
+              ? '<button onclick="siChangeTime(\''+inv.id+'\')" style="width:100%;margin-top:10px;padding:10px;border:1px solid #c8a96e;border-radius:10px;background:#fff;color:#5C0A14;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer;">⏰ 예약 시간 변경</button>'
+              : '')
            + '</div>';
     }).join('');
   } catch(e) {
