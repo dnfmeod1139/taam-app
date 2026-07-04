@@ -10061,11 +10061,14 @@ window.closePromoCarousel = function(){
       </div>
       <div style="margin-top:12px;">
         <label style="font-size:12px;font-weight:700;color:#6b6b6b;">인원</label>
-        <input id="tcalManualPax" type="number" inputmode="numeric" min="1" value="1" style="width:100%;box-sizing:border-box;margin-top:5px;padding:12px;border:1px solid #e0ddd5;border-radius:10px;font-size:14px;font-weight:800;">
+        <select id="tcalManualPax" style="width:100%;box-sizing:border-box;margin-top:5px;padding:12px;border:1px solid #e0ddd5;border-radius:10px;font-size:14px;font-weight:800;background:#fff;-webkit-appearance:none;">
+          <option value="1">1명</option><option value="2">2명</option><option value="3">3명</option><option value="4">4명</option><option value="5">5명</option>
+          <option value="6">6명</option><option value="7">7명</option><option value="8">8명</option><option value="9">9명</option><option value="10">10명</option>
+        </select>
       </div>
       <div style="margin-top:12px;">
         <label style="font-size:12px;font-weight:700;color:#6b6b6b;">받은 금액 (원)</label>
-        <input id="tcalManualAmount" type="number" inputmode="numeric" min="0" value="0" style="width:100%;box-sizing:border-box;margin-top:5px;padding:12px;border:1px solid #e0ddd5;border-radius:10px;font-size:14px;font-weight:800;">
+        <input id="tcalManualAmount" type="text" inputmode="numeric" value="0" oninput="tcalAmtInput(this)" style="width:100%;box-sizing:border-box;margin-top:5px;padding:12px;border:1px solid #e0ddd5;border-radius:10px;font-size:14px;font-weight:800;">
       </div>
       <div style="margin-top:12px;">
         <label style="font-size:12px;font-weight:700;color:#6b6b6b;">메모 (선택)</label>
@@ -31971,12 +31974,21 @@ function tcalOpenManual(restId){
 function tcalCloseManual(){ var m=document.getElementById('tcalManualModal'); if(m) m.style.display='none'; }
 window.tcalOpenManual = tcalOpenManual; window.tcalCloseManual = tcalCloseManual;
 
+// 🆕 받은 금액 입력 — 숫자만 남기고 천단위 콤마 자동 표시
+function tcalAmtInput(el){
+  if(!el) return;
+  var digits = String(el.value||'').replace(/[^0-9]/g, '');
+  el.value = digits ? parseInt(digits, 10).toLocaleString() : '';
+}
+window.tcalAmtInput = tcalAmtInput;
+
 async function tcalManualSave(){
   if(!_tcalManualRest || !_tcalSelectedDate){ showToast('⚠','선택 필요','매장·날짜를 먼저 선택하세요'); return; }
   var ttype = (document.getElementById('tcalManualType')||{}).value || '오프라인';
   var name = (document.getElementById('tcalManualName')||{}).value || '';
   var pax  = Math.max(1, parseInt((document.getElementById('tcalManualPax')||{}).value) || 1);
-  var amount = Math.max(0, parseInt((document.getElementById('tcalManualAmount')||{}).value) || 0);
+  // 콤마 표시(1,000) 제거 후 숫자 파싱
+  var amount = Math.max(0, parseInt(String((document.getElementById('tcalManualAmount')||{}).value||'').replace(/[^0-9]/g,'')) || 0);
   var memo = (document.getElementById('tcalManualMemo')||{}).value || '';
   try {
     var u = (await window.sb.auth.getUser()).data.user;
