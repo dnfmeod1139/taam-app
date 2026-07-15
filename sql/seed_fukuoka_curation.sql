@@ -5,8 +5,10 @@
 -- 장르 매핑: 스시야→스시 / 일식·캇포→가이세키 / 야키니쿠→야키니쿠 / 프렌치·이탈리안→양식
 --            / 야키토리→야키토리 / 우나기→우나기 / 기타→일본요리 (필요시 편집화면에서 조정)
 
-INSERT INTO public.restaurants (name, name_local, region, genre, naver_map_url, country_en, super_admin_only, verified_by_taam, source_type)
-SELECT v.name, v.jp, '후쿠오카', v.genre, v.url, 'Japan', true, false, 'manual'
+-- ⚠️ restaurants 테이블엔 지도URL 컬럼이 없어 v.url 은 삽입 안 함(보존만).
+--    나중에 map_url 컬럼 추가하면 v.url 로 UPDATE 가능.
+INSERT INTO public.restaurants (name, name_local, region, genre, country_en, super_admin_only, verified_by_taam, source_type)
+SELECT v.name, v.jp, '후쿠오카', v.genre, 'Japan', true, false, 'manual'
 FROM (VALUES
   -- 스시 (12)
   ('스시사카이','鮨 さかい','스시','https://maps.app.goo.gl/JYuoF4gUSSiJx8do7'),
