@@ -9967,20 +9967,10 @@ window.closePromoCarousel = function(){
         <option value="부산">부산</option>
         <option value="제주">제주</option>
       </select>
-      <select id="taamRestStatusFilter" onchange="taamRestListLoad()">
-        <option value="">모든 상태</option>
-        <option value="needs_note">한 줄 평 미작성</option>
-        <option value="needs_vibe">분위기 태그 미작성</option>
-        <option value="needs_sig">시그니처 미작성</option>
-        <option value="curated">큐레이션 완료</option>
-        <option value="super_admin">🔒 슈퍼어드민 전용 (내가 넣은 것)</option>
-      </select>
-      <select id="taamRestDifficultyFilter" onchange="taamRestListLoad()">
-        <option value="">모든 예약 난이도</option>
-        <option value="easy">가능 (easy)</option>
-        <option value="hard">어려움 (hard)</option>
-        <option value="insider_only">단골 (insider_only)</option>
-      </select>
+      <label class="taam-mgmt-sa-check" style="display:inline-flex;align-items:center;gap:7px;padding:9px 14px;border:1px solid #6b3fa0;border-radius:10px;background:#241a30;color:#e0b3ff;font-size:13px;font-weight:700;cursor:pointer;user-select:none;">
+        <input type="checkbox" id="taamRestSuperAdminChk" onchange="taamRestListLoad()" style="accent-color:#a56bff;width:16px;height:16px;">
+        🔒 슈퍼어드민 전용만
+      </label>
       <select id="taamRestGenreFilter" onchange="taamRestListLoad()">
         <option value="">전체 장르</option>
         <option value="스시">스시</option>
@@ -58802,8 +58792,7 @@ async function taamSendMessage() {
 
     var search = (document.getElementById('taamRestSearchInput')||{}).value || '';
     var region = (document.getElementById('taamRestRegionFilter')||{}).value || '';
-    var status = (document.getElementById('taamRestStatusFilter')||{}).value || '';
-    var diff   = (document.getElementById('taamRestDifficultyFilter')||{}).value || '';
+    var superAdminOnly = !!((document.getElementById('taamRestSuperAdminChk')||{}).checked);
     var genre  = (document.getElementById('taamRestGenreFilter')||{}).value || '';
 
     countEl.textContent = '로딩 중...';
@@ -58818,18 +58807,13 @@ async function taamSendMessage() {
 
       if (region) query = query.eq('region', region);
       if (genre)  query = query.eq('genre', genre);
-      if (diff)   query = query.eq('reservation_difficulty', diff);
+      if (superAdminOnly) query = query.eq('super_admin_only', true);
 
       if (search) {
         var s = search.trim().replace(/[%_]/g,'');
         if (s) query = query.or('name.ilike.%'+s+'%,name_local.ilike.%'+s+'%');
       }
 
-      if (status === 'needs_note')  query = query.is('concierge_note', null);
-      if (status === 'needs_vibe')  query = query.or('vibe_tags.is.null,vibe_tags.eq.{}');
-      if (status === 'needs_sig')   query = query.or('signature_keywords.is.null,signature_keywords.eq.{}');
-      if (status === 'curated')     query = query.not('concierge_note','is',null);
-      if (status === 'super_admin') query = query.eq('super_admin_only', true);
 
       query = query
         .order('trust_score', { ascending: false, nullsFirst: false })
