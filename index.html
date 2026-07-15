@@ -9971,20 +9971,45 @@ window.closePromoCarousel = function(){
         <input type="checkbox" id="taamRestSuperAdminChk" onchange="taamRestListLoad()" style="accent-color:#a56bff;width:16px;height:16px;">
         🔒 슈퍼어드민 전용만
       </label>
-      <select id="taamRestGenreFilter" onchange="taamRestListLoad()">
-        <option value="">전체 장르</option>
-        <option value="스시">스시</option>
-        <option value="가이세키">가이세키</option>
-        <option value="야키니쿠">야키니쿠</option>
-        <option value="라멘">라멘</option>
-        <option value="이자카야">이자카야</option>
-        <option value="텐푸라">텐푸라</option>
-        <option value="우나기">우나기</option>
-        <option value="소바">소바</option>
-        <option value="우동">우동</option>
-        <option value="한식">한식</option>
+      <select id="taamRestGroupFilter" onchange="taamRestOnGroupChange()">
+        <option value="">전체 대분류</option>
+        <option value="일식">일식</option>
+        <option value="면류">면류</option>
         <option value="중식">중식</option>
-        <option value="양식">양식</option>
+        <option value="양식">양식·바</option>
+        <option value="한식">한식</option>
+      </select>
+      <select id="taamRestGenreFilter" onchange="taamRestListLoad()">
+        <option value="">전체 세부 장르</option>
+        <optgroup label="일식">
+          <option value="스시">스시</option>
+          <option value="이나리스시">이나리스시</option>
+          <option value="가이세키">가이세키</option>
+          <option value="텐푸라">텐푸라</option>
+          <option value="야키토리">야키토리</option>
+          <option value="야키니쿠">야키니쿠</option>
+          <option value="우나기">우나기</option>
+          <option value="샤브샤브">샤브샤브</option>
+          <option value="쿠시아게">쿠시아게</option>
+          <option value="이자카야">이자카야</option>
+          <option value="해산물">해산물</option>
+          <option value="일식">일본요리(기타)</option>
+        </optgroup>
+        <optgroup label="면류">
+          <option value="라멘">라멘</option>
+          <option value="우동">우동</option>
+          <option value="소바">소바</option>
+        </optgroup>
+        <optgroup label="중식">
+          <option value="중식">중식</option>
+        </optgroup>
+        <optgroup label="양식·바">
+          <option value="양식">양식</option>
+          <option value="와인바">와인바</option>
+        </optgroup>
+        <optgroup label="한식">
+          <option value="한식">한식</option>
+        </optgroup>
       </select>
     </div>
     <div class="taam-mgmt-action-row">
@@ -58779,6 +58804,22 @@ async function taamSendMessage() {
   };
 
   // 가게 list 로드
+  // 🍱 큐레이션 장르 2단계(대분류→세부) — 대분류 필터는 이 매핑의 세부값들로 조회
+  //    (기존 데이터 변형/영문 변형까지 넉넉히 포함)
+  var TAAM_GENRE_GROUPS = {
+    '일식': ['스시','이나리스시','가이세키','텐푸라','야키토리','야키니쿠','우나기','샤브샤브','쿠시아게','이자카야','해산물','일식','일본요리'],
+    '면류': ['라멘','우동','소바'],
+    '중식': ['중식','중화'],
+    '양식': ['양식','와인바'],
+    '한식': ['한식']
+  };
+  // 대분류 바꾸면 세부 초기화 후 재조회
+  window.taamRestOnGroupChange = function(){
+    var g = document.getElementById('taamRestGenreFilter');
+    if (g) g.value = '';
+    if (typeof taamRestListLoad === 'function') taamRestListLoad();
+  };
+
   window.taamRestListLoad = async function(){
     var listEl  = document.getElementById('taamRestList');
     var countEl = document.getElementById('taamRestListCount');
@@ -58793,6 +58834,7 @@ async function taamSendMessage() {
     var search = (document.getElementById('taamRestSearchInput')||{}).value || '';
     var region = (document.getElementById('taamRestRegionFilter')||{}).value || '';
     var superAdminOnly = !!((document.getElementById('taamRestSuperAdminChk')||{}).checked);
+    var group  = (document.getElementById('taamRestGroupFilter')||{}).value || '';
     var genre  = (document.getElementById('taamRestGenreFilter')||{}).value || '';
 
     countEl.textContent = '로딩 중...';
@@ -58806,6 +58848,7 @@ async function taamSendMessage() {
       , { count: 'exact' });
 
       if (region) query = query.eq('region', region);
+      if (group && TAAM_GENRE_GROUPS[group]) query = query.in('genre', TAAM_GENRE_GROUPS[group]);
       if (genre)  query = query.eq('genre', genre);
       if (superAdminOnly) query = query.eq('super_admin_only', true);
 
