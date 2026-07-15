@@ -10616,7 +10616,8 @@ function loadRestaurants(){
       .or('source_type.is.null,source_type.eq.manual,source_type.eq.taam_personal')
       .then(function(res){
       if(res.error) throw res.error;
-      restaurantDB = (res.data||[]).map(function(r){
+      // 🔒 슈퍼어드민 전용(super_admin_only) 은 회원 리스트에서 제외 (컬럼 없어도 안전: undefined → 유지)
+      restaurantDB = (res.data||[]).filter(function(r){ return r.super_admin_only !== true; }).map(function(r){
 return {
           id: r.id,
           name: r.name,
@@ -58811,7 +58812,7 @@ async function taamSendMessage() {
       var query = window.sb.from('restaurants').select(
         'id,name,name_local,region,district,genre,photo_card,photo_hero,' +
         'reservation_difficulty,concierge_note,vibe_tags,signature_keywords,' +
-        'trust_score,list_features,verified_by_taam,google_rating,google_review_count'
+        'trust_score,list_features,verified_by_taam,google_rating,google_review_count,super_admin_only'
       , { count: 'exact' });
 
       if (region) query = query.eq('region', region);
@@ -58860,6 +58861,7 @@ async function taamSendMessage() {
         if (!r.vibe_tags || r.vibe_tags.length === 0) badges.push('<span class="taam-mgmt-badge needs">분위기 X</span>');
         if (r.concierge_note && r.vibe_tags && r.vibe_tags.length > 0) badges.push('<span class="taam-mgmt-badge ok">큐레이션 ✓</span>');
         if (r.verified_by_taam) badges.push('<span class="taam-mgmt-badge verified">VERIFIED</span>');
+        if (r.super_admin_only) badges.push('<span class="taam-mgmt-badge" style="background:#3a2350;color:#e0b3ff;border:1px solid #6b3fa0;">🔒 슈퍼어드민</span>');
         if (r.list_features && r.list_features.length){
           for (var i=0;i<r.list_features.length;i++){
             var lf = r.list_features[i];
@@ -58878,6 +58880,10 @@ async function taamSendMessage() {
         // 체크박스/카메라 버튼은 자체 stopPropagation으로 행 클릭과 분리
         var verifyClass = r.verified_by_taam ? 'taam-verify-toggle on' : 'taam-verify-toggle';
         var verifyTitle = r.verified_by_taam ? 'TAAM Verified — 클릭하여 해제' : 'TAAM Verified — 클릭하여 등록';
+        // 🔒 슈퍼어드민 전용 토글 (verified 토글과 동일 스타일, 자물쇠 아이콘)
+        var saOn = !!r.super_admin_only;
+        var saClass = saOn ? 'taam-verify-toggle on' : 'taam-verify-toggle';
+        var saTitle = saOn ? '슈퍼어드민 전용(회원 비공개) — 클릭하여 회원 공개' : '클릭하여 슈퍼어드민 전용(회원 비공개)으로';
         return '<div class="taam-mgmt-row" data-id="'+rid+'" onclick="taamRestRowClick(\''+rid+'\', event)">' +
           '<input type="checkbox" class="row-check" onclick="taamRestRowCheckToggle(\''+rid+'\', this, event)">' +
           '<div class="taam-mgmt-thumb-wrap">' +
@@ -58890,6 +58896,10 @@ async function taamSendMessage() {
             '<div class="taam-mgmt-meta">'+esc(meta1)+' · trust '+esc(trust)+' '+esc(rating)+esc(reviews)+'</div>' +
             '<div class="taam-mgmt-meta">'+badges.join('')+'</div>' +
           '</div>' +
+          // 🔒 슈퍼어드민 전용 토글 — 체크 시 super_admin_only=true (회원 지도·리스트에서 숨김)
+          '<button type="button" class="'+saClass+'" title="'+saTitle+'" onclick="taamToggleSuperAdmin(\''+rid+'\', this, event)">' +
+            '<span class="verify-ico">🔒</span>' +
+          '</button>' +
           // 🆕 TAAM Verified 토글 — 체크 시 verified_by_taam=true + source_type='taam_verified' (레스토랑 리스트에서 제외 + Atlas 표시)
           '<button type="button" class="'+verifyClass+'" title="'+verifyTitle+'" onclick="taamToggleVerified(\''+rid+'\', this, event)">' +
             '<span class="verify-ico">✓</span>' +
@@ -59036,6 +59046,38 @@ async function taamSendMessage() {
     } catch(e){
       console.error('[taamToggleVerified]', e);
       btn.classList.toggle('on', wasOn);
+      if (typeof showToast === 'function') showToast('⚠','업데이트 실패', e.message || '다시 시도');
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
+  // 🔒 슈퍼어드민 전용 토글 — super_admin_only 플래그 on/off (회원 지도·리스트에서 숨김/공개)
+  window.taamToggleSuperAdmin = async function(rid, btn, evt){
+    if (evt) evt.stopPropagation();
+    if (!window.sb){
+      if (typeof showToast === 'function') showToast('⚠','Supabase 연결 없음','로그인 후 다시 시도');
+      return;
+    }
+    btn.disabled = true;
+    var wasOn = btn.classList.contains('on');
+    var newVal = !wasOn;
+    btn.classList.toggle('on', newVal);  // Optimistic UI
+    try {
+      var patch = { super_admin_only: newVal };
+      // 슈퍼어드민 전용으로 돌리면 지도(회원)에서도 내림 → verified 도 해제
+      if (newVal) patch.verified_by_taam = false;
+      var upd = await window.sb.from('restaurants').update(patch).eq('id', rid).select();
+      if (upd.error) throw upd.error;
+      if (typeof _atlasState !== 'undefined') _atlasState.loaded = false;  // 지도 캐시 무효화
+      if (typeof showToast === 'function'){
+        showToast(newVal ? '🔒' : '🔓',
+          newVal ? '슈퍼어드민 전용' : '회원 공개 가능',
+          newVal ? '회원 화면(지도·리스트)에서 숨김' : '이제 회원 리스트/지도에 노출 가능');
+      }
+    } catch(e){
+      console.error('[taamToggleSuperAdmin]', e);
+      btn.classList.toggle('on', wasOn);  // 롤백
       if (typeof showToast === 'function') showToast('⚠','업데이트 실패', e.message || '다시 시도');
     } finally {
       btn.disabled = false;
