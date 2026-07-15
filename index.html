@@ -41167,7 +41167,8 @@ async function _atlasMergeVerifiedFromDb(){
   try{
     var res = await window.sb.from('restaurants')
       .select('id,name,name_local,region,district,country_en,city_en,genre,genre_en,lat,lng,photo_card,photo_hero,verified_by_taam,source_type,address')
-      .eq('verified_by_taam', true);
+      .eq('verified_by_taam', true)
+      .eq('super_admin_only', false);  // 🔒 슈퍼어드민 전용은 verified여도 지도(회원) 노출 안 함(찜만 저장, 나중에 🔒풀면 공개)
     if(res.error){ console.warn('[Atlas] DB verified load failed:', res.error.message); return; }
     var rows = res.data || [];
 
@@ -59044,7 +59045,7 @@ async function taamSendMessage() {
     try {
       // 현재 source_type 조회 (보존 여부 결정용)
       var cur = await window.sb.from('restaurants')
-        .select('source_type, verified_by_taam').eq('id', rid).maybeSingle();
+        .select('source_type, verified_by_taam, super_admin_only').eq('id', rid).maybeSingle();
       if (cur.error) throw cur.error;
       var curSource = (cur.data && cur.data.source_type) || null;
       var patch = { verified_by_taam: newVal, last_verified_at: new Date().toISOString() };
@@ -59069,7 +59070,7 @@ async function taamSendMessage() {
       if (typeof showToast === 'function'){
         showToast(newVal ? '✓' : '○',
           newVal ? 'TAAM Verified 등록' : 'Verified 해제',
-          newVal ? '지도에도 표시됩니다' : '레스토랑 리스트에 복귀');
+          newVal ? ((cur.data && cur.data.super_admin_only) ? '찜 저장됨 (🔒 풀면 지도 공개)' : '지도에도 표시됩니다') : '레스토랑 리스트에 복귀');
       }
       // restaurants 캐시(IDB)는 다음 페이지 로드 때 갱신됨
     } catch(e){
@@ -59094,8 +59095,8 @@ async function taamSendMessage() {
     btn.classList.toggle('on', newVal);  // Optimistic UI
     try {
       var patch = { super_admin_only: newVal };
-      // 슈퍼어드민 전용으로 돌리면 지도(회원)에서도 내림 → verified 도 해제
-      if (newVal) patch.verified_by_taam = false;
+      // ✓ Verified 와 공존 허용 — 슈퍼어드민 전용이어도 Verified(찜)로 저장 가능.
+      //   지도엔 super_admin_only=false 인 것만 노출되므로, 찜해둬도 지금은 안 뜸(나중에 🔒풀면 공개).
       var upd = await window.sb.from('restaurants').update(patch).eq('id', rid).select();
       if (upd.error) throw upd.error;
       if (typeof _atlasState !== 'undefined') _atlasState.loaded = false;  // 지도 캐시 무효화
