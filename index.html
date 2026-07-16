@@ -25287,6 +25287,7 @@ async function riSubmit(){
     } catch(_ne) { console.warn('[ri] notifications INSERT 예외:', _ne); }
 
     // 푸시 알림 발송
+    var _riPushResult = 'unknown';
     try {
       var dispDate = _riDate;
       var dispTime = _riTime;
@@ -25303,14 +25304,34 @@ async function riSubmit(){
           }
         }
       });
+      // 🆕 2026.07: 푸시 결과를 실제로 확인해서 표시 — 기존엔 구독 없는 회원에게
+      //   skip 돼도 무조건 '발송 완료'로 보여 회원이 못 받는 걸 알 수 없었음.
+      var _sum = pushRes && pushRes.data && pushRes.data.summary;
       if(pushRes && pushRes.error){
         console.warn('[ri] 푸시 발송 에러:', pushRes.error);
+        _riPushResult = 'error';
+      } else if(_sum && (_sum.attempted|0) === 0){
+        _riPushResult = 'nosub';   // 이 회원은 푸시 구독(알림 허용) 없음
+      } else if(_sum && (_sum.ok|0) > 0){
+        _riPushResult = 'ok';
+      } else if(_sum){
+        _riPushResult = 'fail';
       } else {
-        console.log('[ri] 푸시 발송 OK →', _riInvitee.id);
+        _riPushResult = 'unknown';
       }
-    } catch(pe){ console.warn('[ri] 푸시 발송 예외:', pe); }
+      console.log('[ri] 푸시 결과:', _riPushResult, _sum);
+    } catch(pe){ console.warn('[ri] 푸시 발송 예외:', pe); _riPushResult = 'error'; }
 
-    showToast('✓','초대 발송 완료', (_riInvitee.display_name || '회원') + '에게 알림 발송 + 결제 팝업 대기');
+    var _riWho = _riInvitee.display_name || '회원';
+    if(_riPushResult === 'ok'){
+      showToast('✓','초대 발송 완료', _riWho + '에게 푸시 전송됨 + 결제 팝업 대기');
+    } else if(_riPushResult === 'nosub'){
+      showToast('⚠','초대는 발송됨 — 푸시 미수신', _riWho + '은(는) 앱 알림을 켜지 않아 푸시가 안 갑니다. 앱 접속 시 벨(🔔) 알림으로 확인돼요.');
+    } else if(_riPushResult === 'fail' || _riPushResult === 'error'){
+      showToast('⚠','초대는 발송됨 — 푸시 실패', '벨 알림은 저장됨. 알림 설정 > 상태 확인으로 점검해주세요.');
+    } else {
+      showToast('✓','초대 발송 완료', _riWho + '에게 알림 발송 + 결제 팝업 대기');
+    }
     closeReservationInviteScreen();
   } catch(e){
     console.error('[ri] submit 예외:', e);
