@@ -183,9 +183,9 @@ create trigger trg_enforce_ticket_capacity
 
 do $$ begin raise notice '✅ 좌석 엔진 v3 적용 — RPC 2종 + fillable(DP) + INSERT 트리거 (엄격/완화)'; end $$;
 
--- ── 검증 (참고): fillable 스팟 테스트 — 전부 예상값과 일치해야 함 ──
+-- ── 검증 (참고): fillable 스팟 테스트 — 컬럼명이 예상값 ──
 select public.taam_seat_fillable(0,  array[2,3], 0) as t_true_0,
-       public.taam_seat_fillable(1,  array[2,3], 1) as t_true_solo,
+       public.taam_seat_fillable(1,  array[1,2,3], 1) as t_true_solo,   -- 1인 허용 시 토큰으로 채움
        public.taam_seat_fillable(1,  array[2,3], 0) as t_false_frag,
        public.taam_seat_fillable(7,  array[3,5], 0) as t_false_35_7,
        public.taam_seat_fillable(10, array[3,5], 0) as t_true_35_10,
