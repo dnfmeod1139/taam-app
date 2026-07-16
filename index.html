@@ -15357,6 +15357,22 @@ function initCarouselDrag(){
 // TICKET DETAIL
 // ════════════════════════════════════════════════
 var _tdMinPax=1, _tdMaxPax=10, _tdPax=1;
+// 🆕 2026.07: 좌석 유형(slots s1/s2/s4) 기반 허용 인원 — 2인석만 있는 티켓에 1인 판매되던 버그 차단
+var _tdAllowedPax = [];   // 예: [2] = 2인석만, [1,2,4], [] = slots 미설정(구버전 → min~max 자유)
+function _tdCalcAllowedPax(t){
+  var a = [];
+  try { [1,2,4].forEach(function(n){ if(t && t.slots && parseInt(t.slots['s'+n]) > 0) a.push(n); }); } catch(_e){}
+  return a;
+}
+function _tdStepPax(cur, delta){
+  // 허용 목록이 있으면 그 안에서만 이동 (1→2→4), 없으면 null(기존 ±1 로직)
+  if(_tdAllowedPax && _tdAllowedPax.length){
+    var i = _tdAllowedPax.indexOf(cur); if(i < 0) i = 0;
+    i = Math.max(0, Math.min(_tdAllowedPax.length-1, i + (delta>0?1:(delta<0?-1:0))));
+    return _tdAllowedPax[i];
+  }
+  return null;
+}
 var _agreeState={agreeAll:false,agree2:false,agree3:false};
 
 function openTicketDetail(el) {
@@ -15547,7 +15563,10 @@ function openTicketDetail(id){
 
   var minP=parseInt(t.minPax||t.totalPax||1), maxP=parseInt(t.maxPax||t.totalPax||10);
   _tdMinPax=minP;_tdMaxPax=maxP;_tdPax=minP;
-  document.getElementById('tdPaxNum').textContent=minP;
+  // 🆕 좌석 유형 제한 — slots 설정 티켓은 해당 인원(1/2/4)만 선택 가능
+  _tdAllowedPax = _tdCalcAllowedPax(t);
+  if(_tdAllowedPax.length){ _tdPax = _tdAllowedPax[0]; }
+  document.getElementById('tdPaxNum').textContent=_tdPax;
   var seatEl = document.getElementById('tdSeat'); if(seatEl) seatEl.textContent=(minP!==maxP?minP+'-'+maxP:maxP)+'인석';
   var rangeEl = document.getElementById('tdPaxRange'); if(rangeEl) rangeEl.textContent=minP+'–'+maxP+'인';
 
@@ -16462,7 +16481,8 @@ function updateBuyBar() {
 }
 
 function adjustPax(delta){
-  _tdPax=Math.max(_tdMinPax,Math.min(_tdMaxPax,_tdPax+delta));
+  var _sp = _tdStepPax(_tdPax, delta);   // 🆕 좌석 유형 제한 시 1→2→4 단위 이동
+  _tdPax = (_sp !== null) ? _sp : Math.max(_tdMinPax,Math.min(_tdMaxPax,_tdPax+delta));
   document.getElementById('tdPaxNum').textContent=_tdPax;
   renderPriceRows();
   updateBuyBar();
@@ -16740,7 +16760,8 @@ function sheetAdjPax(delta) {
   if (!t) return;
   var min = t.minPax || 1;
   var max = t.maxPax || (t.totalPax || 99);
-  _tdPax = Math.max(min, Math.min(max, _tdPax + delta));
+  var _sp = _tdStepPax(_tdPax, delta);   // 🆕 좌석 유형 제한 시 1→2→4 단위 이동
+  _tdPax = (_sp !== null) ? _sp : Math.max(min, Math.min(max, _tdPax + delta));
   var el = document.getElementById('sheetPaxNum');
   if (el) el.textContent = _tdPax;
   // 예약 요약 + 잔액 업데이트
@@ -17465,12 +17486,55 @@ function setConfirmAgree(val){
 function toggleConfirmAgree(){setConfirmAgree(!_confirmAgreed2);}
 
 function confirmReservation(){ completePurchase(); }
-function completePurchase(){
+async function completePurchase(){
   document.getElementById('tdConfirmPopup').style.display='none';
   document.getElementById('tdPurchaseSheet').style.display='none';
   var t=currentTicket;
   var icon,title,desc;
   var pax=_tdPax;
+  // 🆕 2026.07: 전 회원 합산 잔여좌석 + 좌석 유형 서버 검증 — 오버셀/유형위반 차단.
+  //   버그1: 매진 판정이 '본인' 내역만 합산 → 4석 티켓 6석 판매.
+  //   버그2: 좌석 유형 미검증 → 2인석×2 티켓에 1인 판매.
+  //   RPC(taam_ticket_sold_slots, ticket_capacity_guard.sql) 미설치 시 기존 동작 유지.
+  var _capTotal = parseInt(t.totalPax || t.assignedPax || 0);
+  var _allowed = _tdCalcAllowedPax(t);
+  // ① 좌석 유형 검증 (클라이언트) — slots 설정 티켓은 1/2/4인석 중 설정된 인원만
+  if (_allowed.length && _allowed.indexOf(pax) < 0) {
+    showToast('⚠','인원 확인','이 티켓은 '+_allowed.join('·')+'인석만 구매할 수 있어요');
+    return;
+  }
+  if ((_capTotal > 0 || _allowed.length > 0) && window.sb) {
+    var _soldAll = -1, _soldSlotCnt = -1;
+    try {
+      var _sres = await window.sb.rpc('taam_ticket_sold_slots', { p_ticket_id: String(t.id) });
+      var _sd = (!_sres.error && _sres.data) ? _sres.data : null;
+      if (_sd) {
+        var _st = parseInt(_sd.total, 10); if(!isNaN(_st)) _soldAll = _st;
+        var _sc = parseInt(_sd['s'+pax], 10); if(!isNaN(_sc)) _soldSlotCnt = _sc;
+      }
+    } catch(_se){}
+    // ② 총 정원 초과 차단
+    if (_capTotal > 0 && _soldAll >= 0 && (_soldAll + pax) > _capTotal) {
+      var _left = Math.max(0, _capTotal - _soldAll);
+      if (_left <= 0) {
+        t.status = 'soldout';
+        try { saveTickets(); } catch(_){}
+        try { if (typeof renderTickets === 'function') renderTickets(); } catch(_){}
+        showToast('⚠','매진','죄송합니다 — 남은 좌석이 없습니다');
+      } else {
+        showToast('⚠','잔여 좌석 부족','남은 좌석 '+_left+'석입니다. 인원을 줄여 다시 시도해주세요');
+      }
+      return;   // 결제/차감 진행 안 함
+    }
+    // ③ 해당 인원석 슬롯 소진 차단 (예: 2인석 2개 → 2인 구매 2건이면 마감)
+    if (_allowed.length && _soldSlotCnt >= 0) {
+      var _slotCap = parseInt(t.slots && t.slots['s'+pax]) || 0;
+      if (_slotCap > 0 && _soldSlotCnt >= _slotCap) {
+        showToast('⚠','좌석 매진', pax+'인석은 모두 판매되었습니다');
+        return;
+      }
+    }
+  }
   var meal=parseInt(t.mealFee||t.mealAmt||0),agency=parseInt(t.agencyFee||0),wine=parseInt(t.wineMin||0);
   var now=new Date();
   // 🆕 2026.05.21: PG 결제 금액 스냅샷 (saveToSupabase 가 곧 0으로 초기화하므로 먼저 캡쳐)
@@ -17739,13 +17803,24 @@ function completePurchase(){
   })();
 
   // 좌석 차감 → 남은 좌석 0이면 자동 sold out
-  var totalPax = parseInt(t.totalPax || t.assignedPax || 0);
-  var usedPax  = purchaseHistory.filter(function(h){ return String(h.id)===String(t.id); })
+  // 🆕 2026.07: 전 회원 합산(RPC) 기준 판정 — 본인 내역만 세던 버그 수정.
+  //   RPC 미설치/응답 전 폴백: 본인 내역 합산(기존 동작). max() 로 보수적 판정.
+  (async function(){
+    var totalPax = parseInt(t.totalPax || t.assignedPax || 0);
+    if (totalPax <= 0) return;
+    var ownPax = purchaseHistory.filter(function(h){ return String(h.id)===String(t.id); })
                    .reduce(function(s,h){ return s+(h.pax||0); }, 0);
-  if (totalPax > 0 && usedPax >= totalPax) {
-    t.status = 'soldout';
-    saveTickets();
-  }
+    var rpcPax = -1;
+    try {
+      var _r = await window.sb.rpc('taam_ticket_sold_pax', { p_ticket_id: String(t.id) });
+      if (!_r.error && _r.data != null) rpcPax = parseInt(_r.data, 10);
+    } catch(_e){}
+    var usedPax = Math.max(ownPax, rpcPax);
+    if (usedPax >= totalPax) {
+      t.status = 'soldout';
+      saveTickets();
+    }
+  })();
 
   var isEnDm = (window._tkCurrentLang === 'en');
   var isJaDm = (window._tkCurrentLang === 'ja');
@@ -26749,9 +26824,11 @@ function renderRestList(){
 function renderTicketList(){
   var el=document.getElementById('ticketListContent');if(!el)return;
   if(ticketDB.length===0){el.innerHTML='<div class="sub-empty">등록된 티켓 없음</div>';return;}
-  // 정렬: 판매중 먼저, 매진 나중
+  // 정렬: 판매중 먼저, 매진 나중 · 🆕 같은 상태끼리는 연·월·일 순
   var sorted=ticketDB.slice().sort(function(a,b){
-    return (a.status==='soldout'?1:0)-(b.status==='soldout'?1:0);
+    var _r=(a.status==='soldout'?1:0)-(b.status==='soldout'?1:0);
+    if(_r) return _r;
+    return (typeof _tkDateKey==='function') ? (_tkDateKey(a)-_tkDateKey(b)) : 0;
   });
   el.innerHTML=sorted.map(function(t){
     var r=restaurantDB.find(function(x){return String(x.id)===String(t.restId);});
@@ -27624,12 +27701,28 @@ function _isTicketExpired(t){
 }
 window._isTicketExpired = _isTicketExpired;
 
+// 🆕 2026.07: 연도 포함 날짜 정렬 키 (YYYYMMDD) — 2026.10 이 2027.02 보다 앞에 오도록.
+//   dateYear 미저장 구버전 티켓은 만료 판정과 동일한 180일 규칙으로 연도 추정.
+function _tkDateKey(t){
+  var p = String((t && t.date) || '').split('.');
+  if(p.length !== 2) return 99999999;   // 날짜 없는 티켓은 맨 뒤
+  var m = parseInt(p[0],10) || 0, d = parseInt(p[1],10) || 0;
+  var y = parseInt(t.dateYear, 10);
+  if(isNaN(y) || y < 2020 || y > 2100){
+    var now = new Date();
+    y = now.getFullYear();
+    var dt = new Date(y, m-1, d, 23, 59);
+    if(dt < new Date(now.getTime() - 1000*60*60*24*180)) y++;
+  }
+  return y*10000 + m*100 + d;
+}
 function _sortTickets(list) {
-  // 🆕 v1.53.7: 판매중(활성) 먼저 → 매진 → 기한만료 순. 만료된 건 맨 뒤로.
+  // v1.53.7: 판매중(활성) 먼저 → 매진 → 기한만료 순. 만료된 건 맨 뒤로.
+  // 🆕 2026.07: 같은 상태끼리는 연·월·일 순 (가까운 방문일이 앞)
   return list.slice().sort(function(a,b){
     var aRank = (_isTicketExpired(a)?2:0) + (a.status==='soldout'?1:0);
     var bRank = (_isTicketExpired(b)?2:0) + (b.status==='soldout'?1:0);
-    return aRank - bRank;
+    return (aRank - bRank) || (_tkDateKey(a) - _tkDateKey(b));
   });
 }
 
