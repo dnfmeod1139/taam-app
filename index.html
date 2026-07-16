@@ -44392,7 +44392,15 @@ async function saveTicketProductToSupabase(ticket){
       rest_id: ticket.restId || null,
       rest_name: ticket.rest || null,
       status: ticket.status || 'active',
-      date: ticket.date || null,
+      // 🆕 2026.07: 연도 보존 — dateYear 있으면 'YYYY.MM.DD' 로 저장.
+      //   (컬럼 매핑에 dateYear 가 빠져 서버에 연도가 유실 → 다른 회원들에게만
+      //    2027 티켓이 만료로 보이던 버그. 로드 시 다시 분리하므로 하위호환 유지)
+      date: (function(){
+        var _d = ticket.date || null;
+        var _y = parseInt(ticket.dateYear, 10);
+        if(_d && !isNaN(_y) && _y >= 2020 && _y <= 2100 && String(_d).split('.').length === 2) return _y + '.' + _d;
+        return _d;
+      })(),
       time: ticket.time || null,
       total_pax: parseInt(ticket.totalPax) || null,
       slots: ticket.slots || null,
@@ -44503,12 +44511,20 @@ async function loadAllTicketProductsFromSupabase(){
     
     // DB row → ticketDB 형식으로 변환
     var tickets = res.data.map(function(row){
+      // 🆕 2026.07: date 컬럼 'YYYY.MM.DD' → 연도(dateYear) 분리, 메모리는 기존 MM.DD 유지
+      var _rp = String(row.date || '').split('.');
+      var _dYear = null, _dMMDD = row.date;
+      if(_rp.length === 3){
+        var _py = parseInt(_rp[0], 10);
+        if(!isNaN(_py) && _py >= 2020 && _py <= 2100){ _dYear = _py; _dMMDD = _rp[1] + '.' + _rp[2]; }
+      }
       return {
         id: row.id,
         restId: row.rest_id,
         rest: row.rest_name,
         status: row.status,
-        date: row.date,
+        date: _dMMDD,
+        dateYear: _dYear,
         time: row.time,
         totalPax: row.total_pax ? String(row.total_pax) : '',
         slots: row.slots || { s1:0, s2:0, s4:0 },
