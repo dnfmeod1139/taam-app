@@ -8167,7 +8167,33 @@ window.closePromoCarousel = function(){
     </div>
     <div class="rp-field">
       <label class="rp-label">좌석 구성</label>
-      <div class="tu-slot-section">
+      <!-- 🆕 2026.07: 좌석 구성 방식 — 고정(1·2·4인석) / 자유(허용 인원 직접 선택) -->
+      <div style="display:flex;gap:6px;margin-bottom:10px;">
+        <button type="button" id="tuSeatModeSlot" onclick="tuSetSeatMode('slot')" style="flex:1;padding:10px 0;border:1px solid #1a1a18;border-radius:10px;background:#1a1a18;color:#fff;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;">고정 구성 (1·2·4인석)</button>
+        <button type="button" id="tuSeatModeFlex" onclick="tuSetSeatMode('flex')" style="flex:1;padding:10px 0;border:1px solid #e0ddd5;border-radius:10px;background:#fff;color:#8a8478;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;">자유 구성 (인원 풀)</button>
+      </div>
+      <!-- 자유 구성 패널 -->
+      <div id="tuFlexPanel" style="display:none;background:#faf8f5;border:1px solid #ece8df;border-radius:12px;padding:14px;">
+        <div style="font-size:12px;font-weight:700;color:#6b6b6b;">구매 허용 인원 <span style="font-weight:400;color:#b5afa2;">(선택한 인원수로만 구매 가능)</span></div>
+        <div id="tuFlexChips" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;"></div>
+        <div id="tuFlexSoloRow" style="display:none;align-items:center;justify-content:space-between;margin-top:14px;">
+          <div>
+            <div style="font-size:12.5px;font-weight:700;color:#1a1a18;">1인 구매 허용 팀 수</div>
+            <div style="font-size:11px;color:#9a9486;">이 수만큼만 1인 구매 가능 (운영 부담 방지)</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <button type="button" class="tu-slot-btn" onclick="tuFlexSoloChange(-1)">−</button>
+            <div id="tuFlexSoloVal" style="font-size:16px;font-weight:800;min-width:20px;text-align:center;">1</div>
+            <button type="button" class="tu-slot-btn" onclick="tuFlexSoloChange(1)">+</button>
+          </div>
+        </div>
+        <label style="display:flex;align-items:flex-start;gap:8px;margin-top:14px;cursor:pointer;">
+          <input type="checkbox" id="tuFlexLastSingle" checked onchange="tuFlexRender()" style="width:16px;height:16px;accent-color:#5C0A14;margin-top:1px;">
+          <span style="font-size:12px;color:#6b6b6b;line-height:1.5;"><b style="color:#1a1a18;">마지막 1석 남으면 1인 판매 허용</b><br>잔여석이 딱 1석일 때 예외적으로 1인 구매를 받아 완판 (홀수 잔여 방지)</span>
+        </label>
+        <div id="tuFlexSummary" style="margin-top:12px;padding-top:10px;border-top:1px dashed #e0ddd5;font-size:11.5px;color:#8a8478;"></div>
+      </div>
+      <div class="tu-slot-section" id="tuSlotPanel">
         <!-- 1인석 -->
         <div class="tu-slot-row">
           <div class="tu-slot-left">
@@ -15361,7 +15387,13 @@ var _tdMinPax=1, _tdMaxPax=10, _tdPax=1;
 var _tdAllowedPax = [];   // 예: [2] = 2인석만, [1,2,4], [] = slots 미설정(구버전 → min~max 자유)
 function _tdCalcAllowedPax(t){
   var a = [];
-  try { [1,2,4].forEach(function(n){ if(t && t.slots && parseInt(t.slots['s'+n]) > 0) a.push(n); }); } catch(_e){}
+  try {
+    // 🆕 자유 구성(flex): 업로드에서 선택한 허용 인원 칩 그대로 (예: 짝수만 [2,4,6,8,10])
+    if(t && t.slots && t.slots.mode === 'flex' && Array.isArray(t.slots.allowed) && t.slots.allowed.length){
+      return t.slots.allowed.slice().sort(function(x,y){ return x - y; });
+    }
+    [1,2,4].forEach(function(n){ if(t && t.slots && parseInt(t.slots['s'+n]) > 0) a.push(n); });
+  } catch(_e){}
   return a;
 }
 function _tdStepPax(cur, delta){
@@ -15563,10 +15595,38 @@ function openTicketDetail(id){
 
   var minP=parseInt(t.minPax||t.totalPax||1), maxP=parseInt(t.maxPax||t.totalPax||10);
   _tdMinPax=minP;_tdMaxPax=maxP;_tdPax=minP;
-  // 🆕 좌석 유형 제한 — slots 설정 티켓은 해당 인원(1/2/4)만 선택 가능
+  // 🆕 좌석 유형 제한 — slots 설정 티켓은 해당 인원(1/2/4 또는 flex 허용 인원)만 선택 가능
   _tdAllowedPax = _tdCalcAllowedPax(t);
   if(_tdAllowedPax.length){ _tdPax = _tdAllowedPax[0]; }
   document.getElementById('tdPaxNum').textContent=_tdPax;
+  // 🆕 자유 구성: 서버 판매현황으로 선택지 동적 조정 (잔여 초과 인원·1인 마감 제거, 마지막 1석 예외)
+  if(t.slots && t.slots.mode === 'flex' && window.sb){
+    (function(_t){
+      window.sb.rpc('taam_ticket_sold_slots', { p_ticket_id: String(_t.id) }).then(function(_r){
+        if(currentTicket !== _t) return;   // 그 사이 다른 티켓 열림
+        var d = (!_r.error && _r.data) || null; if(!d) return;
+        var cap = parseInt(_t.totalPax) || 0;
+        var remain = Math.max(0, cap - (parseInt(d.total) || 0));
+        var soloSold = parseInt(d.s1) || 0;
+        var soloCap = parseInt(_t.slots.solo) || 0;
+        var lastOk = !!_t.slots.lastSingle && remain === 1;
+        var next = _tdCalcAllowedPax(_t).filter(function(n){
+          if(cap > 0 && n > remain) return false;                          // 잔여보다 큰 인원 제외
+          if(n === 1 && !(soloSold < soloCap || lastOk)) return false;     // 1인 마감
+          return true;
+        });
+        if(!next.length && lastOk) next = [1];                             // 잔여 1석 예외 판매
+        if(next.length){
+          _tdAllowedPax = next;
+          if(_tdAllowedPax.indexOf(_tdPax) < 0){
+            _tdPax = _tdAllowedPax[0];
+            var pn = document.getElementById('tdPaxNum'); if(pn) pn.textContent = _tdPax;
+            if(typeof renderPriceRows === 'function') try{ renderPriceRows(); }catch(_e){}
+          }
+        }
+      }).catch(function(){});
+    })(t);
+  }
   var seatEl = document.getElementById('tdSeat'); if(seatEl) seatEl.textContent=(minP!==maxP?minP+'-'+maxP:maxP)+'인석';
   var rangeEl = document.getElementById('tdPaxRange'); if(rangeEl) rangeEl.textContent=minP+'–'+maxP+'인';
 
@@ -17498,10 +17558,15 @@ async function completePurchase(){
   //   RPC(taam_ticket_sold_slots, ticket_capacity_guard.sql) 미설치 시 기존 동작 유지.
   var _capTotal = parseInt(t.totalPax || t.assignedPax || 0);
   var _allowed = _tdCalcAllowedPax(t);
-  // ① 좌석 유형 검증 (클라이언트) — slots 설정 티켓은 1/2/4인석 중 설정된 인원만
+  var _isFlex = !!(t.slots && t.slots.mode === 'flex');
+  // ① 좌석 유형/허용 인원 검증 (클라이언트)
   if (_allowed.length && _allowed.indexOf(pax) < 0) {
-    showToast('⚠','인원 확인','이 티켓은 '+_allowed.join('·')+'인석만 구매할 수 있어요');
-    return;
+    // flex + '마지막 1석 1인 허용' 후보는 서버 잔여 확인으로 넘김
+    var _lastSingleCand = _isFlex && pax === 1 && !!t.slots.lastSingle;
+    if (!_lastSingleCand) {
+      showToast('⚠','인원 확인','이 티켓은 '+_allowed.join('·')+'인 구매만 가능해요');
+      return;
+    }
   }
   if ((_capTotal > 0 || _allowed.length > 0) && window.sb) {
     var _soldAll = -1, _soldSlotCnt = -1;
@@ -17526,11 +17591,23 @@ async function completePurchase(){
       }
       return;   // 결제/차감 진행 안 함
     }
-    // ③ 해당 인원석 슬롯 소진 차단 (예: 2인석 2개 → 2인 구매 2건이면 마감)
-    if (_allowed.length && _soldSlotCnt >= 0) {
+    // ③ 해당 인원석 슬롯 소진 차단 (고정 구성: 2인석 2개 → 2인 구매 2건이면 마감)
+    if (!_isFlex && _allowed.length && _soldSlotCnt >= 0) {
       var _slotCap = parseInt(t.slots && t.slots['s'+pax]) || 0;
       if (_slotCap > 0 && _soldSlotCnt >= _slotCap) {
         showToast('⚠','좌석 매진', pax+'인석은 모두 판매되었습니다');
+        return;
+      }
+    }
+    // ④ 🆕 자유 구성: 1인 팀 수 제한 + '마지막 1석 1인 허용' 예외
+    if (_isFlex && _soldAll >= 0 && pax === 1) {
+      var _remainF  = _capTotal - _soldAll;
+      var _soloCapF = parseInt(t.slots.solo) || 0;
+      var _soloSoldF = (_soldSlotCnt >= 0) ? _soldSlotCnt : 0;   // s1 = 1인 구매 건수
+      var _lastOkF = !!t.slots.lastSingle && _remainF === 1;
+      if (!(_soloSoldF < _soloCapF || _lastOkF)) {
+        showToast('⚠','1인 구매 마감','이 티켓의 1인 구매는 마감되었습니다'
+          + (t.slots.lastSingle ? ' (잔여 1석이 되면 다시 열려요)' : ''));
         return;
       }
     }
@@ -24545,6 +24622,13 @@ function openTU(){
   // 신규 업로드 시 항상 초기화
   tuResetPolicy();
   tuResetGradeOpen();
+  // 🆕 좌석 구성 모드 초기화 (기본: 고정 구성)
+  if(!_tuEditId){
+    _tuFlexAllowed = [2,3,4,5,6,7,8];
+    _tuFlexSolo = 1;
+    var _lsC = document.getElementById('tuFlexLastSingle'); if(_lsC) _lsC.checked = true;
+    tuSetSeatMode('slot');
+  }
   // 🆕 v10 2026.05.10: 슈퍼어드민 신규 업로드 시 _selectedRestId 리셋 → 검색창 깨끗한 상태로
   // (어드민은 syncTuRestList 가 강제 단일 매장으로 자동 세팅하므로 영향 X)
   if (_currentRole !== 'admin' && !_tuEditId) {
@@ -24782,8 +24866,15 @@ function uploadTicket(){
   var total=parseInt(document.getElementById('tuTotalPax').value||0);
   var assigned = _tuSlots.s1*1 + _tuSlots.s2*2 + _tuSlots.s4*4;
   if(total<=0){showToast('⚠','입력 필요','총 좌석 수를 입력해주세요');return;}
-  if(assigned===0){showToast('⚠','입력 필요','좌석 구성을 설정해주세요');return;}
-  if(assigned>total){showToast('⚠','초과','좌석 배정('+assigned+'석)이 총 좌석 수('+total+'석)를 초과했어요');return;}
+  if(_tuSeatMode === 'flex'){
+    // 🆕 자유 구성: 허용 인원 필수 + 총 좌석 이내 인원만
+    var _fa = _tuFlexAllowed.filter(function(n){ return n <= total; });
+    if(_fa.length === 0){showToast('⚠','입력 필요','구매 허용 인원을 1개 이상 선택해주세요 (총 좌석 이내)');return;}
+    assigned = total;   // 자유 구성은 전 좌석이 판매 대상
+  } else {
+    if(assigned===0){showToast('⚠','입력 필요','좌석 구성을 설정해주세요');return;}
+    if(assigned>total){showToast('⚠','초과','좌석 배정('+assigned+'석)이 총 좌석 수('+total+'석)를 초과했어요');return;}
+  }
 
   // 🆕 2026.05.22: 취소규정 3개 항목 모두 체크 필수
   //   p1(대행비 환불불가) / p2(예약일 기준 환불) / p3(양도금지) 모두 동의해야 업로드 가능.
@@ -24811,9 +24902,15 @@ function uploadTicket(){
   var isEve = _selectedType === 'eve';
   var typeLabel = isEve ? 'Event' : 'Standard';
   var minP=1, maxP=4;
-  if(_tuSlots.s4>0) maxP=4;
-  else if(_tuSlots.s2>0) maxP=2;
-  else maxP=1;
+  if(_tuSeatMode === 'flex'){
+    // 🆕 자유 구성: 허용 인원의 최소/최대
+    var _faMM = _tuFlexAllowed.filter(function(n){ return n <= total; });
+    minP = _faMM[0] || 1; maxP = _faMM[_faMM.length-1] || total;
+  } else {
+    if(_tuSlots.s4>0) maxP=4;
+    else if(_tuSlots.s2>0) maxP=2;
+    else maxP=1;
+  }
 
   _pendingTicket={
     id:Date.now(),restId:_selectedRestId,rest:r?r.name:'',
@@ -24824,7 +24921,13 @@ function uploadTicket(){
     uploaderRestId: _currentAdminRestId||null,
     date:date,dateYear:(_tuSelectedDateYear||null),time:time,
     totalPax:String(total),minPax:String(minP),maxPax:String(maxP),
-    slots:{ s1:_tuSlots.s1, s2:_tuSlots.s2, s4:_tuSlots.s4 },
+    // 🆕 자유 구성: slots 에 mode/allowed/solo/lastSingle 저장 (서버 트리거·로더 공유)
+    slots:(_tuSeatMode === 'flex'
+      ? { mode:'flex',
+          allowed:_tuFlexAllowed.filter(function(n){ return n <= total; }),
+          solo:(_tuFlexAllowed.indexOf(1) >= 0 ? _tuFlexSolo : 0),
+          lastSingle:!!((document.getElementById('tuFlexLastSingle')||{}).checked) }
+      : { s1:_tuSlots.s1, s2:_tuSlots.s2, s4:_tuSlots.s4 }),
     assignedPax:assigned,
     mealFee:meal,agencyFee:agency,wineMin:wine,
     price: meal + agency + wine,
@@ -26856,11 +26959,17 @@ function renderTicketList(){
     var isSold=t.status==='soldout';
     var slots='';
     if(t.slots){
-      var sp=[];
-      if(t.slots.s1>0)sp.push('1인×'+t.slots.s1);
-      if(t.slots.s2>0)sp.push('2인×'+t.slots.s2);
-      if(t.slots.s4>0)sp.push('4인×'+t.slots.s4);
-      if(sp.length)slots=' · '+sp.join(' ');
+      if(t.slots.mode==='flex'){
+        slots=' · 자유석 (허용 '+((t.slots.allowed||[]).join('·')||'-')+'인'
+          +((parseInt(t.slots.solo)||0)>0?' · 1인 '+t.slots.solo+'팀':'')
+          +(t.slots.lastSingle?' · 막석1인':'')+')';
+      } else {
+        var sp=[];
+        if(t.slots.s1>0)sp.push('1인×'+t.slots.s1);
+        if(t.slots.s2>0)sp.push('2인×'+t.slots.s2);
+        if(t.slots.s4>0)sp.push('4인×'+t.slots.s4);
+        if(sp.length)slots=' · '+sp.join(' ');
+      }
     }
     // 우선공개 잠금 상태 배지
     var lockBadge = '';
@@ -26950,7 +27059,17 @@ function tuEditTicket(id){
   // 좌석
   tuResetSlots();
   document.getElementById('tuTotalPax').value=t.totalPax||'';
-  if(t.slots){
+  // 🆕 자유 구성 티켓 복원
+  if(t.slots && t.slots.mode === 'flex'){
+    _tuFlexAllowed = (Array.isArray(t.slots.allowed) && t.slots.allowed.length) ? t.slots.allowed.slice() : [2,3,4,5,6,7,8];
+    _tuFlexSolo = parseInt(t.slots.solo) || 0;
+    var _lsChk = document.getElementById('tuFlexLastSingle');
+    if(_lsChk) _lsChk.checked = !!t.slots.lastSingle;
+    tuSetSeatMode('flex');
+  } else {
+    tuSetSeatMode('slot');
+  }
+  if(t.slots && t.slots.mode !== 'flex'){
     _tuSlots={s1:t.slots.s1||0,s2:t.slots.s2||0,s4:t.slots.s4||0};
     ['s1','s2','s4'].forEach(function(k){
       var el=document.getElementById('tuSlot_'+k);
@@ -27187,6 +27306,59 @@ function tuOpenTimeWheel() {
 var _tuSlots = { s1: 0, s2: 0, s4: 0 };
 var _tuSlotSeats = { s1: 1, s2: 2, s4: 4 }; // 슬롯별 좌석 수
 
+// ── 🆕 2026.07: 자유 구성(인원 풀) 모드 ──
+//   총 좌석에서 인원수만큼 자유 차감. 허용 인원(칩)으로만 구매 가능.
+//   1인은 팀 수 제한(solo) + '마지막 1석 1인 판매'(lastSingle) 옵션.
+var _tuSeatMode = 'slot';                    // 'slot'(고정 1·2·4인석) | 'flex'(자유)
+var _tuFlexAllowed = [2,3,4,5,6,7,8];        // 허용 인원 (칩 선택)
+var _tuFlexSolo = 1;                         // 1인 허용 팀 수
+function tuSetSeatMode(m){
+  _tuSeatMode = (m === 'flex') ? 'flex' : 'slot';
+  var sBtn = document.getElementById('tuSeatModeSlot');
+  var fBtn = document.getElementById('tuSeatModeFlex');
+  function _on(b){ if(b){ b.style.background='#1a1a18'; b.style.color='#fff'; b.style.borderColor='#1a1a18'; } }
+  function _off(b){ if(b){ b.style.background='#fff'; b.style.color='#8a8478'; b.style.borderColor='#e0ddd5'; } }
+  if(_tuSeatMode === 'flex'){ _on(fBtn); _off(sBtn); } else { _on(sBtn); _off(fBtn); }
+  var fp = document.getElementById('tuFlexPanel'); if(fp) fp.style.display = (_tuSeatMode==='flex')?'block':'none';
+  var sp = document.getElementById('tuSlotPanel'); if(sp) sp.style.display = (_tuSeatMode==='flex')?'none':'block';
+  var er = document.getElementById('tuSlotError'); if(er && _tuSeatMode==='flex') er.textContent='';
+  if(_tuSeatMode === 'flex') tuFlexRender();
+}
+function tuFlexToggleChip(n){
+  var i = _tuFlexAllowed.indexOf(n);
+  if(i >= 0) _tuFlexAllowed.splice(i, 1); else _tuFlexAllowed.push(n);
+  _tuFlexAllowed.sort(function(a,b){ return a-b; });
+  tuFlexRender();
+}
+function tuFlexSoloChange(d){
+  _tuFlexSolo = Math.max(0, Math.min(9, _tuFlexSolo + d));
+  tuFlexRender();
+}
+function tuFlexRender(){
+  var box = document.getElementById('tuFlexChips');
+  if(box){
+    var html = '';
+    for(var n=1; n<=10; n++){
+      var on = _tuFlexAllowed.indexOf(n) >= 0;
+      html += '<button type="button" onclick="tuFlexToggleChip('+n+')" style="width:44px;padding:9px 0;border-radius:9px;font-family:inherit;font-size:12.5px;font-weight:800;cursor:pointer;'
+        + (on ? 'border:1px solid #5C0A14;background:#5C0A14;color:#fff;' : 'border:1px solid #e0ddd5;background:#fff;color:#b5afa2;')
+        + '">'+n+'</button>';
+    }
+    box.innerHTML = html;
+  }
+  var sr = document.getElementById('tuFlexSoloRow');
+  if(sr) sr.style.display = (_tuFlexAllowed.indexOf(1) >= 0) ? 'flex' : 'none';
+  var sv = document.getElementById('tuFlexSoloVal'); if(sv) sv.textContent = _tuFlexSolo;
+  var sum = document.getElementById('tuFlexSummary');
+  if(sum){
+    var total = parseInt((document.getElementById('tuTotalPax')||{}).value || 0);
+    var ls = (document.getElementById('tuFlexLastSingle')||{}).checked;
+    sum.innerHTML = '총 <b>'+(total||'–')+'석</b> · 허용 인원 <b>'+(_tuFlexAllowed.join('·')||'없음')+'</b>'
+      + (_tuFlexAllowed.indexOf(1)>=0 ? ' · 1인 <b>'+_tuFlexSolo+'팀</b>' : '')
+      + (ls ? ' · 잔여 1석 시 1인 허용' : '');
+  }
+}
+
 function tuSlotChange(type, delta) {
   var newVal = (_tuSlots[type] || 0) + delta;
   if (newVal < 0) return;
@@ -27204,6 +27376,7 @@ function tuSlotChange(type, delta) {
 }
 
 function tuUpdateSlotSummary() {
+  if(typeof _tuSeatMode !== 'undefined' && _tuSeatMode === 'flex' && typeof tuFlexRender === 'function') tuFlexRender();   // 🆕 flex 요약 동기화
   var total = parseInt(document.getElementById('tuTotalPax').value || 0);
   var assigned = _tuSlots.s1 * 1 + _tuSlots.s2 * 2 + _tuSlots.s4 * 4;
   var sumVal = document.getElementById('tuSlotSumVal');

@@ -77,7 +77,36 @@ begin
     end if;
   end if;
 
-  -- ② 좌석 유형 (slots 설정된 티켓만): 유형 위반 + 해당 인원석 슬롯 소진 차단
+  -- ②-A 🆕 자유 구성(flex): 허용 인원 + 1인 팀 수 제한 + '마지막 1석 1인' 예외
+  if (v_slots->>'mode') = 'flex' then
+    v_cap  := coalesce(v_cap, 0);
+    v_sold := coalesce(v_sold, 0);
+    -- 허용 인원 검사 (allowed 배열에 없는 인원은 거부 — 단 마지막 1석 1인 예외)
+    if not (coalesce(v_slots->'allowed', '[]'::jsonb) @> to_jsonb(coalesce(new.party_size, 0))) then
+      if not ( coalesce(new.party_size, 0) = 1
+               and coalesce((v_slots->>'lastSingle')::boolean, false)
+               and (v_cap - v_sold) = 1 ) then
+        raise exception 'INVALID_PARTY_SIZE: %인 구매는 허용되지 않습니다', new.party_size
+          using errcode = 'P0001';
+      end if;
+    end if;
+    -- 1인 팀 수 제한 (solo) — 잔여 1석 예외 허용
+    if coalesce(new.party_size, 0) = 1 then
+      select count(*) into v_sold_cnt
+        from public.tickets
+       where ticket_product_id = new.ticket_product_id
+         and party_size = 1
+         and coalesce(status, '') <> 'cancelled';
+      if not ( v_sold_cnt < coalesce((v_slots->>'solo')::int, 0)
+               or ( coalesce((v_slots->>'lastSingle')::boolean, false)
+                    and (v_cap - v_sold) = 1 ) ) then
+        raise exception 'SOLO_LIMIT: 1인 구매 한도 소진' using errcode = 'P0001';
+      end if;
+    end if;
+    return new;   -- flex 는 고정 슬롯 검사 미적용 (총 정원은 ① 에서 이미 검사)
+  end if;
+
+  -- ② 좌석 유형 (고정 slots 설정된 티켓만): 유형 위반 + 해당 인원석 슬롯 소진 차단
   v_has_slot := coalesce((v_slots->>'s1')::int,0) > 0
              or coalesce((v_slots->>'s2')::int,0) > 0
              or coalesce((v_slots->>'s4')::int,0) > 0;
