@@ -24474,7 +24474,7 @@ function closeTU(){
   if(pageTitle)pageTitle.textContent='티켓 업로드';
   // 버튼 텍스트는 열 때 결정하므로 여기서 건드리지 않음
   // 날짜/시간 초기화
-  _tuSelectedDate = null; _tuSelectedTime = null;
+  _tuSelectedDate = null; _tuSelectedTime = null; _tuSelectedDateYear = null;
   var dBtn = document.getElementById('tuDateBtn');
   var tBtn = document.getElementById('tuTimeBtn');
   var dTxt = document.getElementById('tuDateBtnText');
@@ -24728,7 +24728,7 @@ function uploadTicket(){
     type:typeLabel,typeClass:_selectedType,
     uploadedBy: _currentRole==='admin' ? (_currentAdminRestId||'admin') : 'superadmin',
     uploaderRestId: _currentAdminRestId||null,
-    date:date,time:time,
+    date:date,dateYear:(_tuSelectedDateYear||null),time:time,
     totalPax:String(total),minPax:String(minP),maxPax:String(maxP),
     slots:{ s1:_tuSlots.s1, s2:_tuSlots.s2, s4:_tuSlots.s4 },
     assignedPax:assigned,
@@ -26819,6 +26819,7 @@ function tuEditTicket(id){
 
   // 날짜
   _tuSelectedDate=t.date||null;
+  _tuSelectedDateYear=t.dateYear||null;   // 🆕 편집 시 기존 연도 복원 (재선택 안 해도 유지)
   var dTxt=document.getElementById('tuDateBtnText');
   var dBtn=document.getElementById('tuDateBtn');
   if(t.date){if(dTxt)dTxt.textContent=t.date;if(dBtn)dBtn.classList.add('selected');}
@@ -27050,6 +27051,7 @@ function tkGenreConfirm(){
 var _tkCalYear, _tkCalMonth, _tkSelDate = null;
 var _tkCalMode = 'filter'; // 'filter' | 'upload'
 var _tuSelectedDate = null; // 업로드용 선택 날짜 (MM.DD 형식)
+var _tuSelectedDateYear = null; // 🆕 선택 연도 (예: 2027) — 만료 판정 정확화용 (MM.DD 는 하위호환 유지)
 var _tuSelectedTime = null; // 업로드용 선택 시간 (HH:MM 형식)
 var _tkWheelCallerMode = 'ticket'; // 'ticket' | 'upload'
 
@@ -27587,8 +27589,14 @@ function _isTicketExpired(t){
     var _h = parseInt(tp[0],10); if(!isNaN(_h)) hh = _h;
     var _m = parseInt(tp[1],10); if(!isNaN(_m)) mm = _m;
   }
+  // 🆕 2026.07: 업로드 시 저장된 연도(dateYear)가 있으면 그대로 사용 — 추정 불필요.
+  //   (2027.01.25 티켓이 '180일 추정' 때문에 2026으로 해석돼 만료 처리되던 버그 수정)
+  var _yr = parseInt(t.dateYear, 10);
+  if(!isNaN(_yr) && _yr >= 2020 && _yr <= 2100){
+    return new Date(_yr, m-1, d, hh, mm, 0).getTime() < Date.now();
+  }
   var deadline = new Date(now.getFullYear(), m-1, d, hh, mm, 0);
-  // 6개월 이상 과거면 내년으로 해석 (연말/연초 경계)
+  // (연도 미저장 구버전 티켓 폴백) 6개월 이상 과거면 내년으로 해석 (연말/연초 경계)
   var sixMonthsAgo = new Date(now.getTime() - 1000*60*60*24*180);
   if(deadline < sixMonthsAgo){
     deadline = new Date(now.getFullYear()+1, m-1, d, hh, mm, 0);
@@ -28149,6 +28157,7 @@ function tkCalConfirm(){
 
   if (_tkCalMode === 'upload') {
     _tuSelectedDate = dateStr;
+    _tuSelectedDateYear = _tkSelDate.getFullYear();   // 🆕 연도 보존 (2027 티켓이 2026으로 인식되던 버그)
     var txt = document.getElementById('tuDateBtnText');
     if (txt) txt.textContent = label;
     var btn = document.getElementById('tuDateBtn');
