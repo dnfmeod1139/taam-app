@@ -27152,6 +27152,7 @@ var _tuSelectedTime = null; // 업로드용 선택 시간 (HH:MM 형식)
 var _tkWheelCallerMode = 'ticket'; // 'ticket' | 'upload'
 
 function tuOpenCal() {
+  window._tkFilterSelDateBak = _tkSelDate;   // 🆕 필터 선택일 백업 (닫을 때 복원)
   _tkCalMode = 'upload';
   tkOpenCal();
 }
@@ -28076,6 +28077,7 @@ function tuToggleGradeOpen() {
 }
 
 function tuPickDeadlineDate() {
+  window._tkFilterSelDateBak = _tkSelDate;   // 🆕 필터 선택일 백업
   _tkCalMode = 'deadlineDate';
   tkOpenCal();
 }
@@ -28084,6 +28086,7 @@ function tuPickDeadlineTime() {
   tkOpenTimeWheel();
 }
 function tuPickMOpenDate() {
+  window._tkFilterSelDateBak = _tkSelDate;   // 🆕 필터 선택일 백업
   _tkCalMode = 'mOpenDate';
   tkOpenCal();
 }
@@ -28172,6 +28175,13 @@ function tkCalOverlayClick(e){
 
 function tkCloseCal(){
   document.getElementById('tkCalOverlay').style.display = 'none';
+  // 🆕 2026.07: 업로드/초대/마감 등 비-필터 모드로 열렸던 캘린더가
+  //   메인 필터 선택일(_tkSelDate)을 오염시키지 않게 이전 값 복원.
+  //   (공유 캘린더의 tkSelectDate 가 _tkSelDate 를 직접 바꾸기 때문)
+  if (_tkCalMode !== 'filter') {
+    _tkSelDate = (typeof window._tkFilterSelDateBak !== 'undefined') ? window._tkFilterSelDateBak : null;
+    _tkCalMode = 'filter';
+  }
 }
 
 function tkCalMove(dir){
@@ -28275,20 +28285,20 @@ function tkCalConfirm(){
     var btn = document.getElementById('tuDateBtn');
     if (btn) btn.classList.add('selected');
     tuUpdatePolicyD30();
-    _tkCalMode = 'filter'; tkCloseCal(); return;
+    tkCloseCal(); return;   // 🆕 mode 리셋+필터 선택일 복원은 tkCloseCal 이 처리
   }
   if (_tkCalMode === 'deadlineDate') {
     _tuDeadlineDate = dateStr;
     var b = document.getElementById('tuDeadlineDateBtn');
     if (b) { b.textContent = label; b.classList.add('selected'); }
-    _tkCalMode = 'filter'; tkCloseCal(); return;
+    tkCloseCal(); return;
   }
   if (_tkCalMode === 'mOpenDate') {
     _tuMOpenDate = dateStr;
     var b2 = document.getElementById('tuMOpenDateBtn');
     if (b2) { b2.textContent = label; b2.classList.add('selected'); }
     tuUpdateTOpenPreview();
-    _tkCalMode = 'filter'; tkCloseCal(); return;
+    tkCloseCal(); return;
   }
   var dateBtn = document.getElementById('tkBtnDate');
   if(dateBtn){
@@ -31292,6 +31302,8 @@ function tkWheelOverlayClick(e){
 }
 function tkCloseWheel(){
   document.getElementById('tkWheelOverlay').style.display='none';
+  // 🆕 확정 없이 닫아도 호출 모드 잔류 방지 (다음 필터 시간 선택이 업로드로 오인되지 않게)
+  _tkWheelCallerMode = 'ticket';
 }
 
 function tkIdxToY(idx){ return TKW_CENTER - TKW_H/2 - idx*TKW_H; }
@@ -31430,7 +31442,9 @@ function tkWheelConfirm(){
     var hIdx=he?he._curIdx:0, mIdx=me?me._curIdx:0;
     var hourVal=11+hIdx;
     var timeVal=String(hourVal).padStart(2,'0')+':'+['00','15','30','45'][Math.min(mIdx,3)];
-    _tkTime=timeVal;
+    // 🆕 2026.07: _tkTime(메인 필터 전역)은 필터 모드에서만 설정.
+    //   업로드/초대/마감 모드에서도 무조건 대입돼 초대 발송 후 메인 필터에
+    //   시간이 자동 적용되던 버그 수정.
     if (_tkWheelCallerMode === 'upload') {
       _tuSelectedTime = timeVal;
       var txt = document.getElementById('tuTimeBtnText');
@@ -31450,6 +31464,7 @@ function tkWheelConfirm(){
       tuUpdateTOpenPreview();
       _tkWheelCallerMode = 'ticket';
     } else {
+      _tkTime = timeVal;   // 필터 모드에서만 메인 필터 시간 반영
       var btn=document.getElementById('tkBtnTime');
       if(btn){ btn.textContent=_tkTime+' ▾'; btn.classList.add('selected'); }
       // 🆕 pill / accordion 라벨 동기화 + 즉시 렌더 (필터 변경)
