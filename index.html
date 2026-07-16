@@ -17777,14 +17777,16 @@ function completePurchase(){
   //   role 문자열 환경별 차이('superadmin'/'super_admin') → 양쪽 발송.
   try {
     var _pxRest = currentRest ? currentRest.name : (t.rest || '티켓');
-    var _pxBody = _pxRest + ' · ' + t.date + ' ' + t.time + ' · ' + pax + '인 · ₩' + (paid||0).toLocaleString();
+    // 🆕 구매자 이름 포함 — "누가 · 어디 · 며칠 · 몇 명" 이 알림에서 바로 보이게
+    var _pxWho = (typeof _currentUserName !== 'undefined' && _currentUserName) ? _currentUserName : '회원';
+    var _pxBody = _pxWho + '님 · ' + _pxRest + ' · ' + t.date + ' ' + t.time + ' · ' + pax + '인 · ₩' + (paid||0).toLocaleString();
     ['superadmin','super_admin'].forEach(function(_rl){
       try {
         window.sb.functions.invoke('send-push', {
           body: {
             to: 'role:' + _rl,
             payload: {
-              title: '🎫 회원이 티켓을 구매했습니다',
+              title: '🎫 ' + _pxWho + '님이 티켓을 구매했습니다',
               body: _pxBody,
               url: '/',
               category: 'ticket_purchased',
@@ -20851,6 +20853,16 @@ async function _dmLoadSupabasePurchases(){
 // ════════════════════════════════════════════════════════════════
 var _thxAll = [];          // 로드된 전체 구매기록
 var _thxFilter = 'all';    // all | active | used | cancelled
+var _thxRows = [];         // 현재 렌더된 필터 결과 (카드 클릭 → 구매자 상세)
+
+// 🆕 카드 클릭 → 예치금 관리와 동일한 구매자 상세 모달 재사용
+//   showBuyerInfo 는 _dmGetItem(idx) 로 조회하므로 _dmRenderedItems 를 현재 목록으로 지정
+function thxOpenBuyer(i){
+  var h = (_thxRows || [])[i];
+  if(!h) return;
+  _dmRenderedItems = _thxRows;
+  if(typeof showBuyerInfo === 'function') showBuyerInfo(i);
+}
 
 function _thxFmtDateTime(s){
   if(!s) return '';
@@ -20936,7 +20948,8 @@ function thxRender(){
     return;
   }
 
-  var html = rows.map(function(h){
+  _thxRows = rows;   // 🆕 카드 클릭 → 구매자 상세 모달용 보관
+  var html = rows.map(function(h, _ti){
     var sm = _thxStatusMeta(h);
     var buyer = h.buyerName || '(이름 없음)';
     var phone = h.buyerPhone ? '<span style="color:#b5afa2;"> · '+h.buyerPhone+'</span>' : '';
@@ -20956,7 +20969,7 @@ function thxRender(){
           + parts.join(' · ') + dateStr + '</div>';
       }
     }
-    return '<div class="thx-card">'
+    return '<div class="thx-card" onclick="thxOpenBuyer('+_ti+')" style="cursor:pointer;">'
       + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">'
         + '<div style="min-width:0;flex:1;">'
           + '<div style="font-size:15px;font-weight:800;color:#1a1a18;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+(h.rest||'(매장 미상)')+typeTag+'</div>'
