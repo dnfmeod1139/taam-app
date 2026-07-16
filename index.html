@@ -8422,6 +8422,14 @@ window.closePromoCarousel = function(){
     <div class="page-title">예약 초대 발송</div>
   </div>
   <div class="tu-form">
+    <!-- 🆕 2026.07: 판매 티켓과 연결 — 연결하면 그 티켓의 좌석 재고에서 차감/카운팅 -->
+    <div class="rp-field">
+      <label class="rp-label">🎫 판매 티켓과 연결 <span style="color:#bbb;font-weight:400;">(선택 — 연결 시 해당 티켓 좌석에서 차감)</span></label>
+      <select id="riLinkTicket" onchange="riLinkTicketChange()" class="tu-input" style="width:100%;box-sizing:border-box;background:#fff;-webkit-appearance:none;font-weight:700;">
+        <option value="">연결 안 함 (별도 판매 — 좌석 카운팅 제외)</option>
+      </select>
+      <div id="riLinkInfo" style="display:none;margin-top:8px;padding:10px 12px;border-radius:9px;background:#faf8f5;border:1px solid #ece8df;font-size:11.5px;color:#6b6b6b;line-height:1.6;"></div>
+    </div>
     <div class="rp-field">
       <label class="rp-label">레스토랑 선택</label>
       <div class="tu-rest-list" id="riRestList"></div>
@@ -25061,6 +25069,8 @@ function openReservationInviteScreen(){
   // 초기화
   _riRestId = null; _riType = 'std'; _riDate = null; _riTime = null;
   _riPax = 1; _riTicketGenre = ''; _riInvitee = null;
+  _riLinkTicketId = null;   // 🆕 판매 티켓 연결
+  if(typeof riPopulateLinkTickets === 'function') riPopulateLinkTickets();
   _riPolicy = { p1:false, p2:false, p3:false, extra:false };
   ['riDateBtnText','riTimeBtnText'].forEach(function(id){
     var el = document.getElementById(id);
@@ -25379,6 +25389,62 @@ function riTogglePolicyAll(){
   document.getElementById('riPolicyAll').classList.toggle('on', next);
 }
 
+// ── 🆕 2026.07: 판매 티켓과 연결 — 초대도 티켓 좌석 재고에서 차감/카운팅 ──
+var _riLinkTicketId = null;
+function riPopulateLinkTickets(){
+  var sel = document.getElementById('riLinkTicket');
+  if(!sel) return;
+  var html = '<option value="">연결 안 함 (별도 판매 — 좌석 카운팅 제외)</option>';
+  (ticketDB || []).forEach(function(t){
+    if(t.status === 'soldout') return;
+    if(typeof _isTicketExpired === 'function' && _isTicketExpired(t)) return;
+    var r = (restaurantDB || []).find(function(x){ return String(x.id) === String(t.restId); });
+    var nm = (r && r.name) || t.rest || '매장';
+    html += '<option value="'+String(t.id)+'">'+nm+' · '+(t.dateYear ? t.dateYear+'.' : '')+t.date+' '+(t.time||'')+' · 총 '+(t.totalPax||'-')+'석</option>';
+  });
+  sel.innerHTML = html;
+  sel.value = '';
+  var info = document.getElementById('riLinkInfo'); if(info){ info.style.display='none'; info.innerHTML=''; }
+}
+function riLinkTicketChange(){
+  var sel = document.getElementById('riLinkTicket');
+  var info = document.getElementById('riLinkInfo');
+  _riLinkTicketId = (sel && sel.value) ? sel.value : null;
+  if(!_riLinkTicketId){ if(info){ info.style.display='none'; } return; }
+  var t = (ticketDB || []).find(function(x){ return String(x.id) === String(_riLinkTicketId); });
+  if(!t){ _riLinkTicketId = null; if(info){ info.style.display='none'; } return; }
+  // 매장/일시/유형/장르/가격을 티켓 기준으로 자동 채움
+  _riRestId = t.restId;
+  _riDate = t.date; _riTime = t.time || null;
+  _riType = t.typeClass || 'std';
+  _riTicketGenre = t.ticketGenre || _riTicketGenre;
+  var dBtn = document.getElementById('riDateBtnText'); if(dBtn) dBtn.textContent = t.date;
+  var tBtn = document.getElementById('riTimeBtnText'); if(tBtn) tBtn.textContent = t.time || '시간을 선택하세요';
+  ['riMealAmt','riAgencyFee','riWineMin'].forEach(function(id, i){
+    var v = [t.mealFee, t.agencyFee, t.wineMin][i] || 0;
+    var el = document.getElementById(id); if(el) el.value = v ? Number(v).toLocaleString() : '';
+  });
+  if(typeof riUpdateTotal === 'function') try{ riUpdateTotal(); }catch(_e){}
+  var r = (restaurantDB || []).find(function(x){ return String(x.id) === String(t.restId); });
+  if(info){
+    info.style.display = 'block';
+    info.innerHTML = '🎫 <b>'+((r&&r.name)||t.rest||'매장')+'</b> 티켓과 연결됨 — 매장·일시·가격 자동 적용.<br>이 초대가 결제되면 <b>해당 티켓 좌석에서 차감</b>되고 좌석 규칙(정원·1인 한도)이 적용됩니다.<br><span id="riLinkRemain" style="color:#9a9486;">잔여석 확인 중…</span>';
+    // 잔여석 실시간 표시
+    if(window.sb){
+      window.sb.rpc('taam_ticket_sold_slots', { p_ticket_id: String(t.id) }).then(function(_r2){
+        var d = (!_r2.error && _r2.data) || null;
+        var span = document.getElementById('riLinkRemain');
+        if(span && d){
+          var cap = parseInt(t.totalPax) || 0;
+          var remain = Math.max(0, cap - (parseInt(d.total)||0));
+          span.innerHTML = '현재 잔여 <b style="color:#5C0A14;">'+remain+'석</b> / 총 '+cap+'석'
+            + ((parseInt(t.slots && t.slots.solo)||0) > 0 ? ' · 1인 '+(parseInt(d.s1)||0)+'/'+t.slots.solo+'팀 사용' : '');
+        }
+      }).catch(function(){});
+    }
+  }
+}
+
 // 초대 발송 — DB INSERT + 푸시
 async function riSubmit(){
   if(!_riRestId){ showToast('⚠','선택 필요','레스토랑을 선택해주세요'); return; }
@@ -25397,6 +25463,36 @@ async function riSubmit(){
   var restName = r ? r.name : '';
   var desc = (document.getElementById('riTicketDesc') || {value:''}).value.trim();
   var extraText = _riPolicy.extra ? (document.getElementById('riPolicyExtraText') || {value:''}).value.trim() : '';
+
+  // 🆕 판매 티켓 연결 시: 좌석 엔진으로 발송 전 잔여/규칙 검증 (결제 시점 트리거가 최종 강제)
+  var _lnkT = null;
+  if(_riLinkTicketId){
+    _lnkT = (ticketDB || []).find(function(x){ return String(x.id) === String(_riLinkTicketId); });
+    if(!_lnkT){ showToast('⚠','연결 오류','연결한 티켓을 찾을 수 없어요 — 연결을 다시 선택해주세요'); return; }
+    if(window.sb){
+      try {
+        var _lr = await window.sb.rpc('taam_ticket_sold_slots', { p_ticket_id: String(_lnkT.id) });
+        var _ld = (!_lr.error && _lr.data) || null;
+        if(_ld){
+          var _lcap = parseInt(_lnkT.totalPax) || 0;
+          var _lrem = Math.max(0, _lcap - (parseInt(_ld.total)||0));
+          if(_lcap > 0 && _riPax > _lrem){
+            showToast('⚠','좌석 부족','연결한 티켓 잔여 '+_lrem+'석 — '+_riPax+'인 초대를 보낼 수 없어요');
+            return;
+          }
+          // 자유 구성 티켓이면 좌석 엔진 규칙(허용 인원·1인 한도·조각)까지 검사
+          if(_lnkT.slots && _lnkT.slots.mode === 'flex' && typeof _tseAvailableSizes === 'function'){
+            var _lav = _tseAvailableSizes(_lnkT, _lrem, parseInt(_ld.s1)||0);
+            if(_lav.indexOf(_riPax) < 0){
+              var _lwhy = (typeof _tseBlockReason === 'function') ? _tseBlockReason(_lnkT, _riPax, _lrem, parseInt(_ld.s1)||0) : null;
+              showToast('⚠','초대 불가', (_lwhy || '이 인원으로는 좌석 규칙상 판매할 수 없어요') + (_lav.length ? ' (가능: '+_lav.join('·')+'인)' : ''));
+              return;
+            }
+          }
+        }
+      } catch(_le){ console.warn('[ri] 연결 티켓 검증 예외:', _le); }
+    }
+  }
 
   try {
     var u = (await window.sb.auth.getUser()).data.user;
@@ -25426,6 +25522,8 @@ async function riSubmit(){
       total_amount: total,
       ticket_desc: desc || null,
       cancel_policy: { p1:_riPolicy.p1, p2:_riPolicy.p2, p3:_riPolicy.p3, extra:_riPolicy.extra, extraText:extraText },
+      // 🆕 판매 티켓 연결 — 결제 시 이 티켓 좌석에서 차감 (컬럼: invite_ticket_link.sql)
+      ticket_product_id: (_lnkT ? String(_lnkT.id) : null),
       status: 'sent'
     };
 
@@ -26158,6 +26256,28 @@ async function riConfirmPay(){
       riPayClose();
       return;
     }
+    // 🆕 2026.07: 판매 티켓 연결 초대 — 예치금 차감 전 좌석 재검증
+    //   (돈이 먼저 빠지고 서버 트리거가 티켓 INSERT 를 거부하는 사고 방지)
+    if(inv.ticket_product_id && window.sb){
+      try {
+        var _pcT = (ticketDB || []).find(function(x){ return String(x.id) === String(inv.ticket_product_id); });
+        var _pcR = await window.sb.rpc('taam_ticket_sold_slots', { p_ticket_id: String(inv.ticket_product_id) });
+        var _pcD = (!_pcR.error && _pcR.data) || null;
+        if(_pcD){
+          var _pcCap = _pcT ? (parseInt(_pcT.totalPax) || 0) : 0;
+          var _pcRem = _pcCap > 0 ? Math.max(0, _pcCap - (parseInt(_pcD.total) || 0)) : 9999;
+          var _pcOk = (_pcCap === 0) || (inv.pax <= _pcRem);
+          if(_pcOk && _pcT && _pcT.slots && _pcT.slots.mode === 'flex' && typeof _tseAvailableSizes === 'function'){
+            _pcOk = _tseAvailableSizes(_pcT, _pcRem, parseInt(_pcD.s1) || 0).indexOf(inv.pax) >= 0;
+          }
+          if(!_pcOk){
+            showToast('⚠','결제 불가','연결된 티켓의 좌석이 부족하거나 판매 규칙상 마감되었습니다. 초대한 관리자에게 문의해주세요.');
+            riPayClose();
+            return;
+          }
+        }
+      } catch(_pce){ console.warn('[riPay] 연결 티켓 좌석 검증 예외:', _pce); }
+    }
     // 1) 예치금 잔액 재확인 + 차감 (멤버십 → 일반 순서)
     var me = await window.sb.from('profiles')
       .select('*')
@@ -26292,7 +26412,8 @@ async function riConfirmPay(){
       var now = new Date();
       var purchaseId = 'INV-' + inv.id.slice(0,8) + '-' + now.getTime();
       purchaseHistory.push({
-        id: 'inv-' + inv.id,                       // 가짜 ticket id (역추적용)
+        // 🆕 판매 티켓 연결 시 실제 티켓 상품 ID 로 기록 → 좌석 카운팅/트리거에 포함됨
+        id: (inv.ticket_product_id ? String(inv.ticket_product_id) : 'inv-' + inv.id),
         restId: inv.restaurant_id || '',
         date: now.toISOString(),
         visitDate: inv.visit_date || '',
