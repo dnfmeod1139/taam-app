@@ -57,6 +57,9 @@ having count(*) > 1;
 -- ═══════════════════════════════════════════════════════════════
 -- security definer 로 auth 스키마 접근 (Service Role Key 없이도 호출 가능)
 -- Edge Function 에서 supabase.rpc('email_exists_in_auth', {...}) 호출
+-- ⚠ 2026.07 동기화: fix_email_exists_confirmed_only.sql 과 동일 정의 유지.
+--   (과거 이 파일의 구버전 정의가 '미인증 유령 계정'까지 가입으로 판정해
+--    fix 를 원복시키던 재발 원인이었음 — 인증 완료 계정만 판정하도록 통일)
 create or replace function public.email_exists_in_auth(email_to_check text)
 returns boolean
 language sql
@@ -67,11 +70,12 @@ as $$
   select exists (
     select 1 from auth.users
     where lower(email) = lower(email_to_check)
+      and email_confirmed_at is not null   -- 인증 완료된 사용자만 (OTP 발송 유령 제외)
   );
 $$;
 
 comment on function public.email_exists_in_auth(text) is
-  'auth.users 에 해당 이메일이 이미 등록되어 있는지 검사. verify-invite Edge Function 에서 사용.';
+  '인증 완료(email_confirmed_at IS NOT NULL) 계정만 "이미 가입"으로 판정. verify-invite Edge Function 에서 사용.';
 
 -- 익명/일반 사용자는 호출 불가 — Service Role 만 허용
 revoke execute on function public.email_exists_in_auth(text) from public;

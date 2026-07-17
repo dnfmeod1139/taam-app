@@ -98,25 +98,16 @@ serve(async (req) => {
 
     // ── 4) welcome 모드 — 여기서 종료, 추가 정보 반환 ──
     if (mode === 'welcome') {
-      // 🆕 2026.05.20: 초대 대상자가 이미 가입된 경우 사전 안내
-      //   RPC email_exists_in_auth() 로 auth.users 조회 (효율적)
-      const inviteeEmailForCheck = (row.invitee_email || '').trim().toLowerCase();
-      if (inviteeEmailForCheck) {
-        const { data: emailTaken } = await supabase.rpc('email_exists_in_auth', {
-          email_to_check: inviteeEmailForCheck,
-        });
-        if (emailTaken === true) {
-          return new Response(
-            JSON.stringify({
-              ok: false,
-              error: '이미 가입된 이메일입니다. 로그인을 이용해주세요.',
-              already_member: true,
-            }),
-            { status: 200, headers: { ...cors, 'Content-Type': 'application/json' } }
-          );
-        }
-      }
-
+      // 🔧 2026.07: '이미 가입' 사전 차단 제거.
+      //   원인 1) signInWithOtp(shouldCreateUser:true) 가 OTP "발송 시점"에 미인증
+      //     유령 계정을 만들어, 가입을 완료 못 한 사람이 재시도하면 자기 유령에게
+      //     막혔음 ("이미 가입된 회원입니다" 반복 발생 버그).
+      //   원인 2) OTP 를 입력한 순간 계정이 '인증 완료'가 되므로, 어떤 판정을 써도
+      //     중단-재개 가입자를 기존 회원과 구분할 수 없음.
+      //   → welcome 단계는 코드 유효성(존재/미사용/미만료)만 본다.
+      //     · 진짜 기존 회원의 옛 코드 재입력은 위 used=true 검사가 이미 차단.
+      //     · 기존 회원이 새 코드를 받은 경우: 플로우가 OTP 로그인→코드 소진으로
+      //       자연 수렴 (부작용 없음).
       return new Response(
         JSON.stringify({
           ok: true,
@@ -132,14 +123,27 @@ serve(async (req) => {
     const inviteePhone = (row.invitee_phone || '').trim();
     const inviteeEmail = (row.invitee_email || '').trim().toLowerCase();
 
-    // 🆕 2026.05.20: 가입 검증 단계에서도 이미 가입된 이메일 차단
-    //   (welcome 모드 통과 후 OTP 인증 시 한 번 더 검증 — race condition 방지)
+    // 🔧 2026.07: 가입 검증 단계 '이미 가입' 체크 — 본인 제외(self-exclusion)로 수정.
+    //   이 단계는 OTP 인증 "직후"에 호출되므로 호출자 본인의 계정이 방금 인증 완료
+    //   상태가 됨 → 종전 검사(email_exists_in_auth)는 자기 자신을 '이미 가입'으로
+    //   차단해 이메일 가입이 마지막 단계에서 실패하던 버그.
+    //   → 호출자 JWT 의 user id 를 제외하고, '다른' 인증완료 계정이 그 이메일을
+    //     쓰는 경우만 차단 (email_exists_in_auth_other RPC).
     if (email) {
       try {
-        const { data: emailTaken } = await supabase.rpc('email_exists_in_auth', {
+        let callerId: string | null = null;
+        try {
+          const jwt = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
+          if (jwt) {
+            const { data: caller } = await supabase.auth.getUser(jwt);
+            callerId = caller?.user?.id || null;
+          }
+        } catch (_) { /* JWT 없음/무효 — callerId null 로 진행 */ }
+        const { data: takenByOther } = await supabase.rpc('email_exists_in_auth_other', {
           email_to_check: email,
+          exclude_id: callerId,
         });
-        if (emailTaken === true) {
+        if (takenByOther === true) {
           return new Response(
             JSON.stringify({
               ok: false,
@@ -151,7 +155,7 @@ serve(async (req) => {
         }
       } catch (e) {
         // RPC 실패는 치명적이지 않음 (이름+이메일 매칭으로 fall-through)
-        console.warn('email_exists_in_auth check skipped:', (e as Error).message);
+        console.warn('email_exists_in_auth_other check skipped:', (e as Error).message);
       }
     }
 
