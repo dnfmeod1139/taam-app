@@ -167,6 +167,7 @@ workflows:
       vars:
         PACKAGE_NAME: "com.playtaam.app"
       node: 22
+      java: 21          # ⚠ Capacitor 8 안드로이드 = JDK 21 필수 (미지정 시 invalid source release: 21)
 
     # ⚠ keystore 업로드 전엔 실패하므로 자동 트리거 없음 — 준비 후 'Start new build'로 수동 실행.
     #   (안정화되면 위 ios 처럼 triggering 추가 가능)
@@ -196,14 +197,19 @@ workflows:
             --iconBackgroundColor '#000000' \
             --iconBackgroundColorDark '#000000'
 
-      - name: Java 21 선택 (Capacitor 8 안드로이드 요구)
+      - name: Java 버전 확인 (21 이어야 함)
         script: |
           set -e
-          # 기본 JDK 가 낮아 'invalid source release: 21' 로 컴파일 실패 → JDK 21 로 전환
-          JH=$(/usr/libexec/java_home -v 21)
-          echo "선택된 JAVA_HOME: $JH"
-          "$JH/bin/java" -version
-          echo "JAVA_HOME=$JH" >> $CM_ENV
+          echo "JAVA_HOME=$JAVA_HOME"
+          java -version
+          # 설치된 전체 JVM 목록 (진단용)
+          /usr/libexec/java_home -V || true
+          # 21 미만이면 명확히 실패 (environment.java: 21 미적용 감지)
+          V=$(java -version 2>&1 | head -1 | sed -E 's/.*"([0-9]+).*/\1/')
+          if [ "$V" -lt 21 ]; then
+            echo "❌ Java $V — environment.java: 21 이 적용되지 않음"
+            exit 1
+          fi
 
       - name: Keystore 복원 (base64 env → 파일)
         script: |
@@ -249,6 +255,7 @@ workflows:
       - name: Build AAB (release)
         script: |
           set -o pipefail
+          java -version   # gradle 이 쓰는 JVM 확인 (21 이어야 함)
           cd android
           ./gradlew bundleRelease 2>&1 | tee "$CM_BUILD_DIR/android-build.txt"
 
