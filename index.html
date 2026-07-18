@@ -5265,6 +5265,26 @@ var PORTONE_CHANNEL_KEY = PG_CHANNELS.card_main;
 //   · 포트원 연동은 그대로 유지 (심사 통과 후 전환)
 // ═══════════════════════════════════════════
 var TOSS_CLIENT_KEY = 'test_ck_Gv6LjeKD8a2gQjkXWZ0M3wYxAdXy';
+// 🆕 해외결제 다중 MID 키 라우팅 — MID2(USD)/MID3(JPY) 계약 완료 후 키 발급되면 채우기.
+//   키가 비어있으면 해당 통화 결제 시 준비중 안내 (KRW 는 항상 동작).
+var TOSS_KEYS = {
+  KRW: TOSS_CLIENT_KEY,   // MID1 playtauif6 — 국내 (카드·이체·가상계좌·카카오·네이버)
+  USD: null,              // MID2 — 해외카드 USD 승인 · KRW 정산 (⚠ 키 발급 시 'test_ck_...' 입력)
+  JPY: null,              // MID3 — 해외카드 JPY 승인 · KRW 정산 (⚠ 키 발급 시 입력)
+  BILLING: null           // MID4 bill_ — 정기결제 전용 (⚠ 키 발급 시 입력, 미발급 동안 KRW 키 사용)
+};
+// 회원 국가 → 결제 통화 (KR→KRW, JP→JPY, 그 외→USD)
+function _tossCurrencyForUser(){
+  try {
+    var c = (window._tkCurrentLang === 'ja') ? 'JP'
+          : (window._tkCurrentLang === 'en') ? 'EN' : 'KR';
+    // 프로필 국적이 있으면 우선 (KR/JP/기타)
+    if (typeof _currentUserCountry !== 'undefined' && _currentUserCountry) c = _currentUserCountry;
+    if (c === 'KR') return 'KRW';
+    if (c === 'JP' || c === 'JA') return 'JPY';
+    return 'USD';
+  } catch(_e){ return 'KRW'; }
+}
 var _tossSdkLoading = false;
 function _tossEnsureSdk(cb){
   if (window.TossPayments) { if(cb) cb(); return; }
@@ -5276,13 +5296,20 @@ function _tossEnsureSdk(cb){
   s.onerror = function(){ _tossSdkLoading = false; if(typeof showToast==='function') showToast('⚠','로드 실패','결제 모듈을 불러오지 못했어요'); };
   document.head.appendChild(s);
 }
-async function _tossPaymentsCtx(){
+async function _tossPaymentsCtx(currency){
   var res = await window.sb.auth.getUser();
   var u = res && res.data && res.data.user;
   if (!u) { showToast('⚠','로그인 필요','로그인 후 이용해주세요'); return null; }
-  var tp = TossPayments(TOSS_CLIENT_KEY);
+  // 🆕 통화별 MID 키 라우팅 (해외결제) — 미지정 시 KRW
+  var cur = currency || 'KRW';
+  var key = TOSS_KEYS[cur];
+  if (!key) {
+    showToast('🌏','해외 결제 준비중', cur + ' 결제는 해외 상점 계약 완료 후 오픈됩니다 — 우선 KRW 로 진행해주세요');
+    return null;
+  }
+  var tp = TossPayments(key);
   // SDK v2: payment() 단수 (v1 은 없음) — payments() 호출 시 'not a function' 오류
-  return { pay: tp.payment({ customerKey: u.id }), user: u };
+  return { pay: tp.payment({ customerKey: u.id }), user: u, currency: cur };
 }
 // ── 단건 결제창: 예치금 충전 ──
 function tossOpenCharge(){ var m = document.getElementById('tossChargeModal'); if(m) m.style.display='flex'; }
@@ -5298,11 +5325,15 @@ async function tossRequestCharge(){
   tossCloseCharge();
   _tossEnsureSdk(async function(){
     try {
-      var ctx = await _tossPaymentsCtx(); if(!ctx) return;
+      // 🆕 해외결제 라우팅: 회원 국가별 통화(KR→KRW/JP→JPY/기타→USD).
+      //   해외 MID 키 미발급 동안은 KRW 폴백. 키 발급 후 통화별 금액 프리셋 교체 예정.
+      var _cur = _tossCurrencyForUser();
+      if (!TOSS_KEYS[_cur]) _cur = 'KRW';
+      var ctx = await _tossPaymentsCtx(_cur); if(!ctx) return;
       var oid = 'taamdep_' + Date.now() + '_' + Math.floor(Math.random()*100000);
       await ctx.pay.requestPayment({
         method: 'CARD',
-        amount: { currency: 'KRW', value: amt },
+        amount: { currency: ctx.currency, value: amt },
         orderId: oid,
         orderName: 'TAAM 예치금 충전',
         successUrl: location.origin + '/?toss_pay=success',
@@ -5319,10 +5350,11 @@ async function tossRequestCharge(){
   });
 }
 // ── 빌링(정기결제) 창: 결제 수단 등록 — 카드사 심사 요건 ──
+//   MID4(bill_) 전용 키 발급 시 TOSS_KEYS.BILLING 사용, 미발급 동안 KRW 키로 테스트
 function tossOpenBilling(){
   _tossEnsureSdk(async function(){
     try {
-      var ctx = await _tossPaymentsCtx(); if(!ctx) return;
+      var ctx = await _tossPaymentsCtx(TOSS_KEYS.BILLING ? 'BILLING' : 'KRW'); if(!ctx) return;
       await ctx.pay.requestBillingAuth({
         method: 'CARD',
         successUrl: location.origin + '/?toss_billing=success',
