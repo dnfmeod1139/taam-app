@@ -5311,6 +5311,22 @@ async function _tossPaymentsCtx(currency){
   // SDK v2: payment() 단수 (v1 은 없음) — payments() 호출 시 'not a function' 오류
   return { pay: tp.payment({ customerKey: u.id }), user: u, currency: cur };
 }
+// ── 🆕 결제창 닫힘 후 뷰포트/스크롤 복원 ──
+//   iOS 에서 토스 카드입력 시트(iframe+키보드)가 body 를 스크롤/고정시킨 뒤
+//   취소·닫기 시 원복하지 않아 화면 배치가 밀려 보이던 문제 수정.
+function _tossRestoreViewport(){
+  setTimeout(function(){
+    try {
+      var bs = document.body.style;
+      if (bs.position === 'fixed') { bs.position=''; bs.top=''; bs.left=''; bs.right=''; bs.width=''; }
+      bs.overflow = '';
+      document.documentElement.style.overflow = '';
+      window.scrollTo(0, 0);
+      document.documentElement.scrollTop = 0;
+      document.body.scrollTop = 0;
+    } catch(_e){}
+  }, 350);
+}
 // ── 단건 결제창: 예치금 충전 ──
 function tossOpenCharge(){ var m = document.getElementById('tossChargeModal'); if(m) m.style.display='flex'; }
 function tossCloseCharge(){ var m = document.getElementById('tossChargeModal'); if(m) m.style.display='none'; }
@@ -5342,7 +5358,9 @@ async function tossRequestCharge(){
         customerName: (typeof _currentUserName !== 'undefined' && _currentUserName) || undefined,
         card: { useEscrow: false, flowMode: 'DEFAULT', useCardPoint: false, useAppCardOnly: false }
       });
+      _tossRestoreViewport();
     } catch(e){
+      _tossRestoreViewport();   // 취소/오류로 닫혀도 화면 배치 복원
       if (e && e.code === 'USER_CANCEL') return;
       console.warn('[toss] 결제창 예외:', e);
       showToast('⚠','결제창 오류', (e && e.message) || '');
@@ -5362,7 +5380,9 @@ function tossOpenBilling(){
         customerEmail: ctx.user.email || undefined,
         customerName: (typeof _currentUserName !== 'undefined' && _currentUserName) || undefined
       });
+      _tossRestoreViewport();
     } catch(e){
+      _tossRestoreViewport();   // 취소/오류로 닫혀도 화면 배치 복원
       if (e && e.code === 'USER_CANCEL') return;
       console.warn('[toss] 빌링창 예외:', e);
       showToast('⚠','카드 등록 오류', (e && e.message) || '');
@@ -5389,6 +5409,10 @@ function tossOpenBilling(){
     try { history.replaceState(null, '', location.pathname); } catch(_he){}
   } catch(_e){}
 })();
+// bfcache 복귀(결제 페이지에서 뒤로가기 등)에도 배치 복원
+window.addEventListener('pageshow', function(ev){
+  if (ev && ev.persisted && typeof _tossRestoreViewport === 'function') _tossRestoreViewport();
+});
 
 window._googlePlacesReady = false;
 window._googleACSvc = null;
