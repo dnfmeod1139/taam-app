@@ -155,8 +155,15 @@ workflows:
     max_build_duration: 60
 
     environment:
-      android_signing:
-        - taam_keystore        # ⚠ Codemagic 에 업로드한 keystore reference 이름
+      # ⚠ 플랜 B: Personal Account 에 Code signing identities 메뉴가 없어
+      #   keystore 를 base64 환경변수로 주입 (iOS 인증서와 동일 패턴).
+      #   Codemagic 앱 Settings → Environment variables 에 그룹 'android_keystore' 로 등록:
+      #     KEYSTORE_B64          = openssl base64 -A -in taam-release.keystore (Secure ✓)
+      #     CM_KEYSTORE_PASSWORD  = keystore 비밀번호 (Secure ✓)
+      #     CM_KEY_ALIAS          = taam
+      #     CM_KEY_PASSWORD       = 키 비밀번호 (Secure ✓)
+      groups:
+        - android_keystore
       vars:
         PACKAGE_NAME: "com.playtaam.app"
       node: 22
@@ -189,10 +196,23 @@ workflows:
             --iconBackgroundColor '#000000' \
             --iconBackgroundColorDark '#000000'
 
+      - name: Keystore 복원 (base64 env → 파일)
+        script: |
+          set -e
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "❌ KEYSTORE_B64 환경변수가 없습니다 — Codemagic 앱 Settings → Environment variables 에 android_keystore 그룹으로 등록하세요"
+            exit 1
+          fi
+          KS="$CM_BUILD_DIR/taam-release.keystore"
+          printf '%s' "$KEYSTORE_B64" | openssl base64 -d -A > "$KS"
+          echo "keystore bytes=$(wc -c < "$KS")"
+          # 이후 스텝(gradle)에서 쓰도록 경로 export
+          echo "CM_KEYSTORE_PATH=$KS" >> $CM_ENV
+
       - name: 릴리스 서명 설정 (build.gradle 주입)
         script: |
           set -ex
-          # Codemagic 가 keystore 를 내려주고 CM_KEYSTORE_* 환경변수를 채움.
+          # CM_KEYSTORE_PATH(위 스텝) + CM_KEYSTORE_PASSWORD/CM_KEY_ALIAS/CM_KEY_PASSWORD(env 그룹) 사용.
           BG="android/app/build.gradle"
           python3 - "$BG" <<'PY'
           import sys, re
