@@ -5257,6 +5257,106 @@ var PG_CHANNELS = {
 // 호환성: 기존 코드의 PORTONE_CHANNEL_KEY 유지
 var PORTONE_CHANNEL_KEY = PG_CHANNELS.card_main;
 
+// ═══════════════════════════════════════════
+// 🆕 2026.07: 토스페이먼츠 연동 (PG 전환 준비 — 카드사 심사용 테스트 연동)
+//   · TOSS_CLIENT_KEY: 테스트 클라이언트 키(공개용, 브라우저 노출 안전). 실키 발급 시 교체.
+//   · 단건 결제창 = 예치금 충전(tossOpenCharge) / 빌링창 = 결제 수단 등록(openCardManagePage)
+//   · 실제 승인(confirm)은 시크릿 키 필요 → 정식 전환 시 Edge Function 추가 예정.
+//   · 포트원 연동은 그대로 유지 (심사 통과 후 전환)
+// ═══════════════════════════════════════════
+var TOSS_CLIENT_KEY = 'test_ck_Gv6LjeKD8a2gQjkXWZ0M3wYxAdXy';
+var _tossSdkLoading = false;
+function _tossEnsureSdk(cb){
+  if (window.TossPayments) { if(cb) cb(); return; }
+  if (_tossSdkLoading) { setTimeout(function(){ _tossEnsureSdk(cb); }, 300); return; }
+  _tossSdkLoading = true;
+  var s = document.createElement('script');
+  s.src = 'https://js.tosspayments.com/v2/standard';
+  s.onload = function(){ _tossSdkLoading = false; if(cb) cb(); };
+  s.onerror = function(){ _tossSdkLoading = false; if(typeof showToast==='function') showToast('⚠','로드 실패','결제 모듈을 불러오지 못했어요'); };
+  document.head.appendChild(s);
+}
+async function _tossPaymentsCtx(){
+  var res = await window.sb.auth.getUser();
+  var u = res && res.data && res.data.user;
+  if (!u) { showToast('⚠','로그인 필요','로그인 후 이용해주세요'); return null; }
+  var tp = TossPayments(TOSS_CLIENT_KEY);
+  return { pay: tp.payments({ customerKey: u.id }), user: u };
+}
+// ── 단건 결제창: 예치금 충전 ──
+function tossOpenCharge(){ var m = document.getElementById('tossChargeModal'); if(m) m.style.display='flex'; }
+function tossCloseCharge(){ var m = document.getElementById('tossChargeModal'); if(m) m.style.display='none'; }
+function tossChargeAmt(v){
+  var el = document.getElementById('tossChargeCustom');
+  if(el) el.value = v ? Number(v).toLocaleString() : '';
+}
+async function tossRequestCharge(){
+  var raw = String((document.getElementById('tossChargeCustom')||{}).value||'').replace(/[^0-9]/g,'');
+  var amt = parseInt(raw) || 0;
+  if (amt < 1000) { showToast('⚠','금액 확인','1,000원 이상 입력해주세요'); return; }
+  tossCloseCharge();
+  _tossEnsureSdk(async function(){
+    try {
+      var ctx = await _tossPaymentsCtx(); if(!ctx) return;
+      var oid = 'taamdep_' + Date.now() + '_' + Math.floor(Math.random()*100000);
+      await ctx.pay.requestPayment({
+        method: 'CARD',
+        amount: { currency: 'KRW', value: amt },
+        orderId: oid,
+        orderName: 'TAAM 예치금 충전',
+        successUrl: location.origin + '/?toss_pay=success',
+        failUrl: location.origin + '/?toss_pay=fail',
+        customerEmail: ctx.user.email || undefined,
+        customerName: (typeof _currentUserName !== 'undefined' && _currentUserName) || undefined,
+        card: { useEscrow: false, flowMode: 'DEFAULT', useCardPoint: false, useAppCardOnly: false }
+      });
+    } catch(e){
+      if (e && e.code === 'USER_CANCEL') return;
+      console.warn('[toss] 결제창 예외:', e);
+      showToast('⚠','결제창 오류', (e && e.message) || '');
+    }
+  });
+}
+// ── 빌링(정기결제) 창: 결제 수단 등록 — 카드사 심사 요건 ──
+function tossOpenBilling(){
+  _tossEnsureSdk(async function(){
+    try {
+      var ctx = await _tossPaymentsCtx(); if(!ctx) return;
+      await ctx.pay.requestBillingAuth({
+        method: 'CARD',
+        successUrl: location.origin + '/?toss_billing=success',
+        failUrl: location.origin + '/?toss_billing=fail',
+        customerEmail: ctx.user.email || undefined,
+        customerName: (typeof _currentUserName !== 'undefined' && _currentUserName) || undefined
+      });
+    } catch(e){
+      if (e && e.code === 'USER_CANCEL') return;
+      console.warn('[toss] 빌링창 예외:', e);
+      showToast('⚠','카드 등록 오류', (e && e.message) || '');
+    }
+  });
+}
+// ── 결제창 리다이렉트 복귀 처리 (테스트 단계: 안내만 — 실승인/충전은 정식 전환 시) ──
+(function(){
+  try {
+    var q = location.search || '';
+    var m = q.match(/[?&]toss_(pay|billing)=(success|fail)/);
+    if (!m) return;
+    var kind = m[1], ok = (m[2] === 'success');
+    setTimeout(function(){
+      if (typeof showToast !== 'function') return;
+      if (kind === 'pay') {
+        showToast(ok?'✓':'⚠', ok?'결제 요청 성공 (테스트)':'결제 미완료',
+          ok?'토스 결제창 연동 확인 완료 — 실제 충전 반영은 정식 오픈 후입니다':'결제가 완료되지 않았습니다');
+      } else {
+        showToast(ok?'✓':'⚠', ok?'카드 등록 요청 성공 (테스트)':'카드 등록 미완료',
+          ok?'빌링 결제창 연동 확인 완료 — 실제 등록 반영은 정식 오픈 후입니다':'카드 등록이 완료되지 않았습니다');
+      }
+    }, 1500);
+    try { history.replaceState(null, '', location.pathname); } catch(_he){}
+  } catch(_e){}
+})();
+
 window._googlePlacesReady = false;
 window._googleACSvc = null;
 window._googlePSvc = null;
@@ -6734,6 +6834,12 @@ window.closePromoCarousel = function(){
     <div class="mp-divider-full"></div>
 
     <!-- Menu -->
+    <!-- 🆕 2026.07: 토스 결제창 진입 (예치금 충전 — 테스트 연동, 카드사 심사용) -->
+    <div class="mp-row" onclick="tossOpenCharge()">
+      <span class="mp-row-label">💳 예치금 충전 <span style="font-size:9px;color:#c8a96e;font-weight:800;letter-spacing:.08em;">BETA</span></span>
+      <span class="mp-row-arrow">›</span>
+    </div>
+    <div class="mp-divider"></div>
     <!-- 🆕 2026.07: 아코디언 제거 — 내역 4종 평면 나열 (전 역할 공통) -->
     <div class="mp-row" onclick="openPage('depositHistPage', renderDepositHist)">
       <span class="mp-row-label" data-i18n="my_page.deposit_hist">예치금 사용 내역</span>
@@ -10385,6 +10491,25 @@ window.closePromoCarousel = function(){
     </div>
   </div>
 </div>
+<!-- 💳 토스 예치금 충전 모달 (테스트 연동 — 카드사 심사용 단건 결제창 진입점) -->
+<div id="tossChargeModal" style="display:none;position:fixed;inset:0;z-index:990;background:rgba(20,18,16,.55);align-items:center;justify-content:center;padding:24px;font-family:'Noto Sans KR',sans-serif;" onclick="if(event.target===this)tossCloseCharge()">
+  <div style="width:100%;max-width:340px;background:#fff;border-radius:22px;padding:24px 22px;box-shadow:0 24px 60px rgba(0,0,0,.4);">
+    <div style="font-size:18px;font-weight:800;color:#1a1a18;">예치금 충전</div>
+    <div style="font-size:12px;color:#9a9486;margin-top:4px;">토스페이먼츠 결제창으로 충전합니다 <b style="color:#c8a96e;">(테스트 연동 — 실결제 없음)</b></div>
+    <div style="display:flex;gap:8px;margin-top:16px;">
+      <button onclick="tossChargeAmt(100000)" style="flex:1;padding:11px 0;border:1px solid #e0ddd5;border-radius:10px;background:#fff;font-family:inherit;font-size:12.5px;font-weight:700;color:#1a1a18;cursor:pointer;">10만</button>
+      <button onclick="tossChargeAmt(500000)" style="flex:1;padding:11px 0;border:1px solid #e0ddd5;border-radius:10px;background:#fff;font-family:inherit;font-size:12.5px;font-weight:700;color:#1a1a18;cursor:pointer;">50만</button>
+      <button onclick="tossChargeAmt(1000000)" style="flex:1;padding:11px 0;border:1px solid #e0ddd5;border-radius:10px;background:#fff;font-family:inherit;font-size:12.5px;font-weight:700;color:#1a1a18;cursor:pointer;">100만</button>
+    </div>
+    <input id="tossChargeCustom" type="text" inputmode="numeric" placeholder="직접 입력 (원)" oninput="tcalAmtInput(this)"
+      style="width:100%;box-sizing:border-box;margin-top:10px;padding:13px;border:1px solid #e0ddd5;border-radius:10px;font-size:15px;font-weight:800;font-family:inherit;">
+    <div style="display:flex;gap:10px;margin-top:18px;">
+      <button onclick="tossCloseCharge()" style="flex:1;height:48px;border:1px solid #e0ddd5;border-radius:12px;background:#fff;font-family:inherit;font-size:14px;font-weight:700;color:#888;cursor:pointer;">취소</button>
+      <button onclick="tossRequestCharge()" style="flex:1.6;height:48px;border:none;border-radius:12px;background:#0064FF;color:#fff;font-family:inherit;font-size:14px;font-weight:800;cursor:pointer;">결제창 열기</button>
+    </div>
+  </div>
+</div>
+
 <!-- 📺 풀화면 영상 오버레이 -->
 <div id="adVideoOverlay" style="display:none;position:fixed;inset:0;z-index:1200;background:#000;">
   <iframe id="adVideoFrame" src="" title="TAAM" style="width:100%;height:100%;border:0;" allow="autoplay; encrypted-media; fullscreen; picture-in-picture" allowfullscreen></iframe>
@@ -18181,8 +18306,9 @@ function openNotifSettings(){
 
 // [1] 카드 관리 페이지 열기
 async function openCardManagePage(){
-  // v1.53.30 2026.06.01: PortOne 테스트 단계 — 카드 등록/관리 차단.
-  showToast('🚧','현재 준비중입니다','결제 수단 관리는 곧 오픈됩니다 (PortOne 정식 연동 후)');
+  // 🆕 2026.07: 토스페이먼츠 빌링(정기결제) 카드 등록 창 — 카드사 심사 요건.
+  //   (구 PortOne 카드관리 페이지 코드는 아래 주석으로 보존)
+  tossOpenBilling();
   return;
   // var p = document.getElementById('cardManagePage');
   // p.style.display='flex';
