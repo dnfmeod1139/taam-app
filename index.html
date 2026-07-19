@@ -5344,7 +5344,23 @@ function _tossRestoreViewportOnce(){
 function _tossRestoreViewport(){
   _tossRestoreViewportOnce();
   setTimeout(_tossRestoreViewportOnce, 350);
-  setTimeout(function(){ _tossRestoreViewportOnce(); window._tossPending = false; }, 750);
+  setTimeout(function(){ _tossRestoreViewportOnce(); _tossClearTrip(); }, 750);
+  setTimeout(_tossRestoreViewportOnce, 1200);   // PWA reload 후 늦은 안정화 대비
+}
+// ── 결제창 왕복 표시 ──
+//   PWA(standalone)에서는 결제창→복귀 시 앱이 reload 되어 window 변수가 날아가므로
+//   reload 를 견디는 sessionStorage 에도 표시. 취소-닫기(파라미터 없는 복귀)까지 커버.
+function _tossMarkTrip(){
+  window._tossPending = true;
+  try { sessionStorage.setItem('toss_trip', '1'); } catch(_e){}
+}
+function _tossClearTrip(){
+  window._tossPending = false;
+  try { sessionStorage.removeItem('toss_trip'); } catch(_e){}
+}
+function _tossHasTrip(){
+  if (window._tossPending) return true;
+  try { return sessionStorage.getItem('toss_trip') === '1'; } catch(_e){ return false; }
 }
 // ── 단건 결제창: 예치금 충전 ──
 function tossOpenCharge(){ var m = document.getElementById('tossChargeModal'); if(m) m.style.display='flex'; }
@@ -5366,7 +5382,7 @@ async function tossRequestCharge(){
       if (!TOSS_KEYS[_cur]) _cur = 'KRW';
       var ctx = await _tossPaymentsCtx(_cur); if(!ctx) return;
       var oid = 'taamdep_' + Date.now() + '_' + Math.floor(Math.random()*100000);
-      window._tossPending = true;   // 결제창 왕복 표시 — 복귀 시 뷰포트 복원 트리거
+      _tossMarkTrip();   // 결제창 왕복 표시 — 복귀 시 뷰포트 복원 트리거 (reload 견딤)
       await ctx.pay.requestPayment({
         method: 'CARD',
         amount: { currency: ctx.currency, value: amt },
@@ -5393,7 +5409,7 @@ function tossOpenBilling(){
   _tossEnsureSdk(async function(){
     try {
       var ctx = await _tossPaymentsCtx(TOSS_KEYS.BILLING ? 'BILLING' : 'KRW'); if(!ctx) return;
-      window._tossPending = true;   // 카드등록 창 왕복 표시 — 복귀 시 뷰포트 복원 트리거
+      _tossMarkTrip();   // 카드등록 창 왕복 표시 — 복귀 시 뷰포트 복원 트리거 (reload 견딤)
       await ctx.pay.requestBillingAuth({
         method: 'CARD',
         successUrl: location.origin + '/?toss_billing=success',
@@ -5432,18 +5448,32 @@ function tossOpenBilling(){
     try { history.replaceState(null, '', location.pathname); } catch(_he){}
   } catch(_e){}
 })();
-// bfcache 복귀(결제 페이지에서 뒤로가기 등)에도 배치 복원
+// 결제창 왕복 후 복귀 — 어떤 경로(리다이렉트 reload · bfcache · 취소닫기 · 앱복귀)로도 복원.
+//   PWA reload 를 견디는 _tossHasTrip()(sessionStorage) 로 판별.
 window.addEventListener('pageshow', function(ev){
-  // persisted(bfcache) 여부와 무관하게, 토스 결제 왕복 흔적이 있으면 복원.
   if (typeof _tossRestoreViewport !== 'function') return;
-  if ((ev && ev.persisted) || window._tossPending) _tossRestoreViewport();
+  if ((ev && ev.persisted) || _tossHasTrip()) _tossRestoreViewport();
 });
-// 결제창(외부/인앱 브라우저)에서 앱으로 되돌아올 때(가시성 복귀)도 복원
-document.addEventListener('visibilitychange', function(){
-  if (document.visibilityState === 'visible' && window._tossPending && typeof _tossRestoreViewport === 'function') {
+// 앱이 처음 로드될 때(리다이렉트/취소로 PWA 가 새로 뜬 경우) 흔적 있으면 복원
+window.addEventListener('DOMContentLoaded', function(){
+  if (typeof _tossHasTrip === 'function' && _tossHasTrip() && typeof _tossRestoreViewport === 'function') {
     _tossRestoreViewport();
   }
 });
+// 결제창(외부/인앱 브라우저)에서 앱으로 되돌아올 때(가시성 복귀)도 복원
+document.addEventListener('visibilitychange', function(){
+  if (document.visibilityState === 'visible' && typeof _tossHasTrip==='function' && _tossHasTrip() && typeof _tossRestoreViewport === 'function') {
+    _tossRestoreViewport();
+  }
+});
+// 비주얼 뷰포트가 다시 커지는 순간(키보드/결제시트 닫힘) 직접 감지해 복원
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', function(){
+    if (typeof _tossHasTrip==='function' && _tossHasTrip() && typeof _tossRestoreViewportOnce==='function') {
+      _tossRestoreViewportOnce();
+    }
+  });
+}
 
 window._googlePlacesReady = false;
 window._googleACSvc = null;
