@@ -9282,6 +9282,22 @@ window.closePromoCarousel = function(){
       <button id="pqrOpenBtn" onclick="window.open(_pqrUrls[_pqrCur],'_blank')" style="margin-top:16px;width:100%;padding:12px;border:1px solid #c8a96e;border-radius:11px;background:#fff;color:#5C0A14;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer;">페이지 미리보기 열기 ↗</button>
     </div>
     <div style="font-size:11.5px;color:#b5afa2;margin-top:14px;line-height:1.8;text-align:center;">레스토랑에 보여주거나, 이미지를 길게 눌러 저장해<br>명함·인쇄물에 붙여 사용하세요.</div>
+
+    <!-- 🆕 레스토랑 전용 QR — 셰프별 개인화 조건 페이지 + 열람 기록 -->
+    <div style="margin-top:30px;border-top:1px solid #e5e0d6;padding-top:24px;">
+      <div style="font-size:14px;font-weight:800;color:#1a1a18;">🏷 레스토랑 전용 QR</div>
+      <div style="font-size:11px;color:#9a9486;margin-top:5px;line-height:1.8;">셰프별 전용 링크입니다. 열면 셰프 이름으로 개인화된 <b>제안 조건 페이지</b>가 뜨고,<br>누가 언제 열어봤는지 아래에 기록됩니다.</div>
+      <div style="margin-top:14px;background:#fff;border:1px solid rgba(0,0,0,.07);border-radius:14px;padding:14px;">
+        <input type="text" id="pqrNewRest" placeholder="레스토랑명 (예: 鮨 さいとう)" style="width:100%;box-sizing:border-box;padding:11px 12px;border:1.5px solid #e0ddd6;border-radius:10px;background:#fff;font-size:13px;font-family:inherit;color:#1a1a18;outline:none;">
+        <input type="text" id="pqrNewChef" placeholder="셰프명 (예: 齋藤 — 비워도 됨)" style="width:100%;box-sizing:border-box;margin-top:8px;padding:11px 12px;border:1.5px solid #e0ddd6;border-radius:10px;background:#fff;font-size:13px;font-family:inherit;color:#1a1a18;outline:none;">
+        <div style="display:flex;gap:6px;margin-top:8px;">
+          <button id="pqrNewLangJa" onclick="pqrRestSetLang('ja')" style="flex:1;padding:9px 0;border:1px solid #1a1a18;border-radius:9px;background:#1a1a18;color:#fff;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;">🇯🇵 일본어</button>
+          <button id="pqrNewLangEn" onclick="pqrRestSetLang('en')" style="flex:1;padding:9px 0;border:1px solid #e0ddd5;border-radius:9px;background:#fff;color:#8a8478;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;">🇬🇧 영어</button>
+        </div>
+        <button onclick="pqrRestAdd()" style="margin-top:10px;width:100%;padding:12px;border:none;border-radius:11px;background:#5C0A14;color:#fff;font-family:inherit;font-size:13px;font-weight:800;letter-spacing:.04em;cursor:pointer;">+ 전용 QR 생성</button>
+      </div>
+      <div id="pqrRestList" style="margin-top:14px;"></div>
+    </div>
   </div>
 </div>
 
@@ -27312,6 +27328,7 @@ function openSubPage(id){
   if(id==='inviteCodeScreen'){ loadInviteCodes().then(function(){ renderInviteCodes(); }); }
   if(id==='taamRestaurantsMgmtScreen'){ if(typeof taamRestListLoad==='function') taamRestListLoad(); }
   if(id==='partnerMgmtScreen'){ if(typeof pmLoad==='function') pmLoad(); }
+  if(id==='partnerQrScreen'){ if(typeof pqrRestLoad==='function') pqrRestLoad(); }
   if(typeof _onOpenSubPage === 'function') _onOpenSubPage(id);
   if(id==='adminCodeScreen') {
     loadAdminCodes(); renderAcList();
@@ -35570,6 +35587,152 @@ function pqrTab(which){
   if(lb) lb.textContent = (_pqrCur === 'en') ? '영어 제안 페이지 (Partner Introduction)' : '일본어 제안 페이지 (パートナーのご案内)';
   var u = document.getElementById('pqrUrl');
   if(u) u.textContent = _pqrUrls[_pqrCur].replace('https://','');
+}
+
+/* ═══════ 🆕 레스토랑 전용 QR (개인화 조건 페이지 + 열람 기록) ═══════ */
+var _pqrRestLang = 'ja';        // 새 코드 생성 언어
+var _pqrRestRows = [];          // partner_qr_codes 캐시
+var _pqrRestViews = {};         // code → {cnt, last}
+
+function pqrRestSetLang(l){
+  _pqrRestLang = (l === 'en') ? 'en' : 'ja';
+  var ja = document.getElementById('pqrNewLangJa');
+  var en = document.getElementById('pqrNewLangEn');
+  function _on(b){ if(b){ b.style.background='#1a1a18'; b.style.color='#fff'; b.style.borderColor='#1a1a18'; } }
+  function _off(b){ if(b){ b.style.background='#fff'; b.style.color='#8a8478'; b.style.borderColor='#e0ddd5'; } }
+  if(_pqrRestLang === 'en'){ _on(en); _off(ja); } else { _on(ja); _off(en); }
+}
+
+// 헷갈리는 문자(0/O/1/I) 제외 8자리 코드
+function _pqrGenCode(){
+  var chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+  var out = '';
+  for(var i=0;i<8;i++) out += chars.charAt(Math.floor(Math.random()*chars.length));
+  return out;
+}
+function _pqrRestUrl(code){ return 'https://taam-app.vercel.app/partner/?c=' + code; }
+// QR 이미지 (인쇄용은 '크게' 버튼 → 1000px PNG 새 탭)
+function _pqrQrImg(code, size){
+  return 'https://api.qrserver.com/v1/create-qr-code/?size=' + size + 'x' + size + '&margin=2&data=' + encodeURIComponent(_pqrRestUrl(code));
+}
+
+function pqrRestAdd(){
+  var rest = (document.getElementById('pqrNewRest').value || '').trim();
+  var chef = (document.getElementById('pqrNewChef').value || '').trim();
+  if(!rest){ showToast('!','입력 필요','레스토랑명을 입력해주세요'); return; }
+  if(!window.sb){ showToast('!','오류','서버 연결이 없습니다'); return; }
+  var row = { code:_pqrGenCode(), restaurant_name:rest, chef_name:chef || null, lang:_pqrRestLang, active:true };
+  window.sb.from('partner_qr_codes').insert(row).then(function(res){
+    if(res.error){
+      // 코드 충돌(극히 드묾) 시 1회 재시도
+      if((res.error.message||'').indexOf('duplicate') >= 0){ row.code = _pqrGenCode(); return window.sb.from('partner_qr_codes').insert(row); }
+      showToast('!','저장 실패', res.error.message);
+      return null;
+    }
+    return res;
+  }).then(function(res){
+    if(res && !res.error){
+      document.getElementById('pqrNewRest').value = '';
+      document.getElementById('pqrNewChef').value = '';
+      showToast('✓','생성 완료', rest + ' 전용 QR이 만들어졌어요');
+      pqrRestLoad();
+    } else if(res && res.error){
+      showToast('!','저장 실패', res.error.message);
+    }
+  });
+}
+
+function pqrRestLoad(){
+  if(!window.sb) return;
+  var box = document.getElementById('pqrRestList');
+  window.sb.from('partner_qr_codes').select('*').order('created_at', {ascending:false}).then(function(res){
+    if(res.error){ if(box) box.innerHTML = '<div style="font-size:11px;color:#b5afa2;text-align:center;padding:10px;">목록을 불러오지 못했어요 (SQL 실행 필요할 수 있음)</div>'; return; }
+    _pqrRestRows = res.data || [];
+    // 열람 기록 집계
+    return window.sb.from('partner_qr_views').select('code, viewed_at').order('viewed_at', {ascending:false}).then(function(vr){
+      _pqrRestViews = {};
+      (vr.data || []).forEach(function(v){
+        if(!_pqrRestViews[v.code]) _pqrRestViews[v.code] = { cnt:0, last:v.viewed_at };
+        _pqrRestViews[v.code].cnt++;
+      });
+      pqrRestRender();
+    });
+  });
+}
+
+function _pqrFmtDate(iso){
+  try {
+    var d = new Date(iso);
+    return (d.getMonth()+1) + '/' + d.getDate() + ' ' + ('0'+d.getHours()).slice(-2) + ':' + ('0'+d.getMinutes()).slice(-2);
+  } catch(e){ return ''; }
+}
+
+function pqrRestRender(){
+  var box = document.getElementById('pqrRestList');
+  if(!box) return;
+  if(_pqrRestRows.length === 0){
+    box.innerHTML = '<div style="font-size:11px;color:#b5afa2;text-align:center;padding:6px;">아직 발급된 전용 QR이 없어요</div>';
+    return;
+  }
+  var html = '';
+  _pqrRestRows.forEach(function(r, i){
+    var v = _pqrRestViews[r.code];
+    var viewTxt = v ? ('👁 열람 ' + v.cnt + '회 · 최근 ' + _pqrFmtDate(v.last)) : '미열람';
+    var viewColor = v ? '#2e7d32' : '#b5afa2';
+    var langTxt = (r.lang === 'en') ? '🇬🇧 영어' : '🇯🇵 일본어';
+    var dim = r.active ? '' : 'opacity:.45;';
+    html += '<div style="background:#fff;border:1px solid rgba(0,0,0,.07);border-radius:14px;padding:14px;margin-bottom:10px;' + dim + '">'
+      + '<div style="display:flex;gap:12px;align-items:flex-start;">'
+      +   '<img src="' + _pqrQrImg(r.code, 160) + '" alt="QR" style="width:76px;height:76px;border:1px solid #eee;border-radius:8px;flex-shrink:0;">'
+      +   '<div style="flex:1;min-width:0;">'
+      +     '<div style="font-size:13.5px;font-weight:800;color:#1a1a18;">' + escapeHtml(r.restaurant_name) + (r.active ? '' : ' <span style="font-size:10px;color:#b5afa2;">(비활성)</span>') + '</div>'
+      +     '<div style="font-size:11px;color:#8a8478;margin-top:2px;">' + (r.chef_name ? escapeHtml(r.chef_name) + ' 셰프 · ' : '') + langTxt + '</div>'
+      +     '<div style="font-size:10.5px;color:#9a9486;margin-top:3px;word-break:break-all;">taam-app.vercel.app/partner/?c=' + r.code + '</div>'
+      +     '<div style="font-size:11px;font-weight:700;color:' + viewColor + ';margin-top:5px;">' + viewTxt + '</div>'
+      +   '</div>'
+      + '</div>'
+      + '<div style="display:flex;gap:6px;margin-top:11px;">'
+      +   '<button onclick="pqrRestCopy(\'' + r.code + '\')" style="flex:1;padding:9px 0;border:1px solid #c8a96e;border-radius:9px;background:#fff;color:#5C0A14;font-family:inherit;font-size:11px;font-weight:700;cursor:pointer;">🔗 링크 복사</button>'
+      +   '<button onclick="window.open(_pqrQrImg(\'' + r.code + '\',1000),\'_blank\')" style="flex:1;padding:9px 0;border:1px solid #c8a96e;border-radius:9px;background:#fff;color:#5C0A14;font-family:inherit;font-size:11px;font-weight:700;cursor:pointer;">🖨 QR 크게</button>'
+      +   '<button onclick="window.open(_pqrRestUrl(\'' + r.code + '\')+\'&preview=1\',\'_blank\')" style="flex:1;padding:9px 0;border:1px solid #e0ddd5;border-radius:9px;background:#fff;color:#8a8478;font-family:inherit;font-size:11px;font-weight:700;cursor:pointer;">미리보기</button>'
+      + '</div>'
+      + '<div style="display:flex;gap:6px;margin-top:6px;">'
+      +   '<button onclick="pqrRestToggle(' + i + ')" style="flex:1;padding:8px 0;border:1px solid #e0ddd5;border-radius:9px;background:#fff;color:#8a8478;font-family:inherit;font-size:11px;font-weight:700;cursor:pointer;">' + (r.active ? '⏸ 비활성화' : '▶ 다시 활성화') + '</button>'
+      +   '<button onclick="pqrRestDelete(' + i + ')" style="flex:1;padding:8px 0;border:1px solid #e8d5d5;border-radius:9px;background:#fff;color:#b05555;font-family:inherit;font-size:11px;font-weight:700;cursor:pointer;">삭제</button>'
+      + '</div>'
+      + '</div>';
+  });
+  box.innerHTML = html;
+}
+
+function pqrRestCopy(code){
+  var url = _pqrRestUrl(code);
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(url).then(function(){ showToast('✓','복사됨', url); });
+  } else {
+    var ta = document.createElement('textarea'); ta.value = url; document.body.appendChild(ta);
+    ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+    showToast('✓','복사됨', url);
+  }
+}
+
+function pqrRestToggle(i){
+  var r = _pqrRestRows[i]; if(!r || !window.sb) return;
+  window.sb.from('partner_qr_codes').update({active: !r.active}).eq('code', r.code).then(function(res){
+    if(res.error){ showToast('!','실패', res.error.message); return; }
+    showToast('✓', r.active ? '비활성화' : '활성화', r.restaurant_name + ' QR ' + (r.active ? '링크가 잠겼어요' : '링크가 다시 열렸어요'));
+    pqrRestLoad();
+  });
+}
+
+function pqrRestDelete(i){
+  var r = _pqrRestRows[i]; if(!r || !window.sb) return;
+  if(!confirm('「' + r.restaurant_name + '」 전용 QR을 삭제할까요?\n열람 기록도 함께 삭제되며, 인쇄된 QR은 더 이상 열리지 않습니다.')) return;
+  window.sb.from('partner_qr_codes').delete().eq('code', r.code).then(function(res){
+    if(res.error){ showToast('!','삭제 실패', res.error.message); return; }
+    showToast('✓','삭제 완료', r.restaurant_name);
+    pqrRestLoad();
+  });
 }
 
 function splashPickPhoto() {
