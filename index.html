@@ -5314,18 +5314,37 @@ async function _tossPaymentsCtx(currency){
 // ── 🆕 결제창 닫힘 후 뷰포트/스크롤 복원 ──
 //   iOS 에서 토스 카드입력 시트(iframe+키보드)가 body 를 스크롤/고정시킨 뒤
 //   취소·닫기 시 원복하지 않아 화면 배치가 밀려 보이던 문제 수정.
+function _tossRestoreViewportOnce(){
+  try {
+    // ① 남아있는 포커스(키보드) 해제 — iOS 비주얼 뷰포트 축소 원인 제거
+    if (document.activeElement && typeof document.activeElement.blur === 'function') {
+      document.activeElement.blur();
+    }
+    // ② body 스크롤락(position:fixed) 잔재 초기화
+    var bs = document.body.style;
+    if (bs.position === 'fixed') { bs.position=''; bs.top=''; bs.left=''; bs.right=''; }
+    bs.width=''; bs.height=''; bs.overflow='';
+    document.documentElement.style.overflow = '';
+    window.scrollTo(0, 0);
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+    // ③ 비주얼 뷰포트 높이 재계산 강제 — 아주 살짝 높이를 흔들어 리플로우 유발.
+    //   (position:fixed 하단 요소인 GNB 가 축소된 뷰포트에 붙어 위로 뜨고
+    //    아래에 검정 공백이 남던 문제의 핵심 수정)
+    var de = document.documentElement;
+    de.style.height = '100.02%';
+    void de.offsetHeight;            // reflow 강제
+    de.style.height = '';
+    void de.offsetHeight;
+    // ④ 뷰포트 크기에 반응하는 리스너(캐러셀 등) 재계산
+    try { window.dispatchEvent(new Event('resize')); } catch(_re){}
+  } catch(_e){}
+}
+// 뷰포트가 늦게 안정화되는 경우까지 커버 (0 / 350 / 750ms 3회)
 function _tossRestoreViewport(){
-  setTimeout(function(){
-    try {
-      var bs = document.body.style;
-      if (bs.position === 'fixed') { bs.position=''; bs.top=''; bs.left=''; bs.right=''; bs.width=''; }
-      bs.overflow = '';
-      document.documentElement.style.overflow = '';
-      window.scrollTo(0, 0);
-      document.documentElement.scrollTop = 0;
-      document.body.scrollTop = 0;
-    } catch(_e){}
-  }, 350);
+  _tossRestoreViewportOnce();
+  setTimeout(_tossRestoreViewportOnce, 350);
+  setTimeout(function(){ _tossRestoreViewportOnce(); window._tossPending = false; }, 750);
 }
 // ── 단건 결제창: 예치금 충전 ──
 function tossOpenCharge(){ var m = document.getElementById('tossChargeModal'); if(m) m.style.display='flex'; }
@@ -5347,6 +5366,7 @@ async function tossRequestCharge(){
       if (!TOSS_KEYS[_cur]) _cur = 'KRW';
       var ctx = await _tossPaymentsCtx(_cur); if(!ctx) return;
       var oid = 'taamdep_' + Date.now() + '_' + Math.floor(Math.random()*100000);
+      window._tossPending = true;   // 결제창 왕복 표시 — 복귀 시 뷰포트 복원 트리거
       await ctx.pay.requestPayment({
         method: 'CARD',
         amount: { currency: ctx.currency, value: amt },
@@ -5373,6 +5393,7 @@ function tossOpenBilling(){
   _tossEnsureSdk(async function(){
     try {
       var ctx = await _tossPaymentsCtx(TOSS_KEYS.BILLING ? 'BILLING' : 'KRW'); if(!ctx) return;
+      window._tossPending = true;   // 카드등록 창 왕복 표시 — 복귀 시 뷰포트 복원 트리거
       await ctx.pay.requestBillingAuth({
         method: 'CARD',
         successUrl: location.origin + '/?toss_billing=success',
@@ -5396,6 +5417,8 @@ function tossOpenBilling(){
     var m = q.match(/[?&]toss_(pay|billing)=(success|fail)/);
     if (!m) return;
     var kind = m[1], ok = (m[2] === 'success');
+    // 결제창(리다이렉트) 복귀 즉시 뷰포트 복원 — 하단 검정 공백/GNB 밀림 방지
+    if (typeof _tossRestoreViewport === 'function') _tossRestoreViewport();
     setTimeout(function(){
       if (typeof showToast !== 'function') return;
       if (kind === 'pay') {
@@ -5411,7 +5434,15 @@ function tossOpenBilling(){
 })();
 // bfcache 복귀(결제 페이지에서 뒤로가기 등)에도 배치 복원
 window.addEventListener('pageshow', function(ev){
-  if (ev && ev.persisted && typeof _tossRestoreViewport === 'function') _tossRestoreViewport();
+  // persisted(bfcache) 여부와 무관하게, 토스 결제 왕복 흔적이 있으면 복원.
+  if (typeof _tossRestoreViewport !== 'function') return;
+  if ((ev && ev.persisted) || window._tossPending) _tossRestoreViewport();
+});
+// 결제창(외부/인앱 브라우저)에서 앱으로 되돌아올 때(가시성 복귀)도 복원
+document.addEventListener('visibilitychange', function(){
+  if (document.visibilityState === 'visible' && window._tossPending && typeof _tossRestoreViewport === 'function') {
+    _tossRestoreViewport();
+  }
 });
 
 window._googlePlacesReady = false;
