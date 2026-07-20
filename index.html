@@ -9397,8 +9397,8 @@ window.closePromoCarousel = function(){
     <div style="margin-top:30px;border-top:1px solid #e5e0d6;padding-top:22px;">
       <div style="font-size:14px;font-weight:800;color:#1a1a18;">🖼 파트너 로고</div>
       <div style="font-size:11px;color:#9a9486;margin-top:5px;line-height:1.8;">모든 전용 페이지 하단 <b>「함께하는 파트너」</b> 영역에 노출됩니다.<br>JPG·PNG 로고 이미지를 올리면 자동으로 표시됩니다 (추가한 순서대로).</div>
-      <input type="file" id="pqrLogoFile" accept="image/*" style="display:none;" onchange="pqrLogoUpload(this)">
-      <button onclick="document.getElementById('pqrLogoFile').click()" style="margin-top:12px;width:100%;padding:12px;border:1px solid #c8a96e;border-radius:11px;background:#fff;color:#5C0A14;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer;">+ 로고 이미지 추가</button>
+      <input type="file" id="pqrLogoFile" accept="image/*" multiple style="display:none;" onchange="pqrLogoUpload(this)">
+      <button onclick="document.getElementById('pqrLogoFile').click()" style="margin-top:12px;width:100%;padding:12px;border:1px solid #c8a96e;border-radius:11px;background:#fff;color:#5C0A14;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer;">+ 로고 이미지 추가 (여러 장 선택 가능)</button>
       <div id="pqrLogoList" style="margin-top:12px;display:flex;flex-wrap:wrap;gap:10px;"></div>
     </div>
   </div>
@@ -36025,20 +36025,30 @@ function pqrLogoRender(){
   box.innerHTML = html;
 }
 function pqrLogoUpload(input){
-  var file = input.files && input.files[0];
+  var files = input.files ? Array.prototype.slice.call(input.files) : [];
   input.value = '';
-  if(!file) return;
+  if(!files.length) return;
   if(!window.sb){ showToast('!','오류','서버 연결이 없습니다'); return; }
-  showToast('⏳','업로드 중','로고 이미지를 올리고 있어요…');
-  uploadImageToStorage(file, 'partner-logos').then(function(url){
-    if(!url){ showToast('!','업로드 실패','이미지 업로드에 실패했어요 (partner-logos 버킷 필요)'); return; }
-    var nextOrder = _pqrLogos.length ? (Math.max.apply(null, _pqrLogos.map(function(g){ return g.sort_order||0; })) + 1) : 0;
-    window.sb.from('partner_logos').insert({ image_url:url, sort_order:nextOrder }).then(function(res){
-      if(res.error){ showToast('!','저장 실패', res.error.message); return; }
-      showToast('✓','추가 완료','파트너 로고가 등록됐어요');
+  showToast('⏳','업로드 중', files.length + '장을 올리고 있어요…');
+  var baseOrder = _pqrLogos.length ? (Math.max.apply(null, _pqrLogos.map(function(g){ return g.sort_order||0; })) + 1) : 0;
+  var ok = 0;
+  // 순차 업로드 (순서 보존)
+  function next(i){
+    if(i >= files.length){
+      showToast(ok ? '✓' : '!', ok ? '추가 완료' : '업로드 실패',
+        ok ? (ok + ' / ' + files.length + '장 등록됐어요') : '이미지 업로드에 실패했어요 (partner-logos 버킷 필요)');
       pqrLogoLoad();
-    });
-  });
+      return;
+    }
+    uploadImageToStorage(files[i], 'partner-logos').then(function(url){
+      if(!url){ next(i+1); return; }
+      window.sb.from('partner_logos').insert({ image_url:url, sort_order: baseOrder + i }).then(function(res){
+        if(!res.error) ok++;
+        next(i+1);
+      });
+    }, function(){ next(i+1); });
+  }
+  next(0);
 }
 function pqrLogoDelete(i){
   var g = _pqrLogos[i]; if(!g || !window.sb) return;
