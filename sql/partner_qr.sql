@@ -66,6 +66,12 @@ create policy "superadmin manages partner logos"
 on public.partner_logos for all to authenticated
 using ( public.is_super_admin(auth.uid()) ) with check ( public.is_super_admin(auth.uid()) );
 
+-- 🆕 파트너 로고는 공개 노출용 → anon/authenticated 읽기 허용 (랜딩 페이지 직접 조회)
+drop policy if exists "partner logos public read" on public.partner_logos;
+create policy "partner logos public read"
+on public.partner_logos for select to public
+using ( true );
+
 -- ── 5) Storage 버킷 (public) + 정책 ──
 insert into storage.buckets (id, name, public)
 values ('partner-logos', 'partner-logos', true)

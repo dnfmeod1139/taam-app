@@ -153,15 +153,6 @@
     </div>
   </section>
 
-  <!-- 함께하는 파트너 (로고) -->
-  <section id="partnersSec" style="display:none;">
-    <div class="wrap">
-      <div class="lbl">PARTNERS</div>
-      <h2 id="partnersTitle"></h2>
-      <div class="plogos" id="partnersGrid"></div>
-    </div>
-  </section>
-
   <!-- 연락처 -->
   <section id="contactSec">
     <div class="wrap">
@@ -169,6 +160,15 @@
       <h2 id="contactTitle"></h2>
       <p class="lead" id="contactLead" style="text-align:center;"></p>
       <div class="contact" id="contactBox"></div>
+    </div>
+  </section>
+
+  <!-- 함께하는 파트너 (로고) — 맨 하단 -->
+  <section id="partnersSec" style="display:none;">
+    <div class="wrap">
+      <div class="lbl">PARTNERS</div>
+      <h2 id="partnersTitle"></h2>
+      <div class="plogos" id="partnersGrid"></div>
     </div>
   </section>
 
@@ -293,8 +293,40 @@
 
   function $(id){ return document.getElementById(id); }
   var _last = { lang:'ja', data:null };
+  var _logosCache = null;   // partner_logos 직접 조회 결과(url 배열)
 
   function esc(s){ return (s||'').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  // 파트너 로고 렌더 — 직접 조회 캐시 우선, 없으면 RPC 반환값(_last.data.logos) 폴백
+  function renderPartners(lang){
+    var T = TXT[lang] || TXT.ja;
+    var logos = _logosCache;
+    if(!logos) logos = (_last.data && _last.data.logos) || [];
+    if(logos && logos.length){
+      $('partnersTitle').textContent = T.partnersTitle;
+      $('partnersGrid').innerHTML = logos.map(function(u){
+        return '<div class="cell"><img src="' + esc(u) + '" alt="partner"></div>';
+      }).join('');
+      $('partnersSec').style.display = '';
+    } else {
+      $('partnersSec').style.display = 'none';
+    }
+  }
+
+  // 로고를 테이블에서 직접 공개 조회 (RPC 버전과 무관하게 확실히 표시)
+  function loadLogos(){
+    fetch(SUPABASE_URL + '/rest/v1/partner_logos?select=image_url,sort_order&order=sort_order.asc', {
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SUPABASE_KEY }
+    })
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(rows){
+      if(Array.isArray(rows)){
+        _logosCache = rows.map(function(x){ return x && x.image_url; }).filter(Boolean);
+        renderPartners(_last.lang);
+      }
+    })
+    .catch(function(){ /* 실패 시 RPC 폴백 유지 */ });
+  }
 
   function render(lang, data){
     if(!TXT[lang]) lang = 'ja';
@@ -344,17 +376,8 @@
     }
     $('termsRows').innerHTML = rows;
 
-    // 파트너 로고
-    var logos = data.logos || [];
-    if(logos.length){
-      $('partnersTitle').textContent = T.partnersTitle;
-      $('partnersGrid').innerHTML = logos.map(function(u){
-        return '<div class="cell"><img src="' + esc(u) + '" alt="partner"></div>';
-      }).join('');
-      $('partnersSec').style.display = '';
-    } else {
-      $('partnersSec').style.display = 'none';
-    }
+    // 파트너 로고 — 직접 읽은 캐시 우선, 없으면 RPC 반환값 폴백
+    renderPartners(lang);
 
     // 연락처 (이메일 항상, 라인은 링크 설정 시)
     $('contactTitle').textContent = T.contactTitle;
@@ -435,6 +458,7 @@
   }
 
   showGate(TXT.ja.loading);
+  loadLogos();   // 로고는 페이지 코드와 독립적으로 직접 조회 → 확실히 하단에 표시
 
   if(generic){
     // 기본 QR — 이름·매장·금액 없이 기본 메시지만 (열람 기록 안 남김)
