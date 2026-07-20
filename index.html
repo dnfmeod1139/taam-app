@@ -9401,6 +9401,13 @@ window.closePromoCarousel = function(){
       <button onclick="document.getElementById('pqrLogoFile').click()" style="margin-top:12px;width:100%;padding:12px;border:1px solid #c8a96e;border-radius:11px;background:#fff;color:#5C0A14;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer;">+ 로고 이미지 추가 (여러 장 선택 가능)</button>
       <div id="pqrLogoList" style="margin-top:12px;display:flex;flex-wrap:wrap;gap:10px;"></div>
     </div>
+
+    <!-- 파트너십 승인 내역 -->
+    <div style="margin-top:30px;border-top:1px solid #e5e0d6;padding-top:22px;">
+      <div style="font-size:14px;font-weight:800;color:#1a1a18;">🤝 파트너십 승인 내역</div>
+      <div style="font-size:11px;color:#9a9486;margin-top:5px;line-height:1.8;">파트너가 문서에서 <b>'파트너십 승인'</b>을 누른 기록입니다.</div>
+      <div id="pqrAgreeList" style="margin-top:12px;"></div>
+    </div>
   </div>
 </div>
 
@@ -27560,7 +27567,7 @@ function openSubPage(id){
   if(id==='inviteCodeScreen'){ loadInviteCodes().then(function(){ renderInviteCodes(); }); }
   if(id==='taamRestaurantsMgmtScreen'){ if(typeof taamRestListLoad==='function') taamRestListLoad(); }
   if(id==='partnerMgmtScreen'){ if(typeof pmLoad==='function') pmLoad(); }
-  if(id==='partnerQrScreen'){ if(typeof pqrRestLoad==='function') pqrRestLoad(); if(typeof pqrLogoLoad==='function') pqrLogoLoad(); }
+  if(id==='partnerQrScreen'){ if(typeof pqrRestLoad==='function') pqrRestLoad(); if(typeof pqrLogoLoad==='function') pqrLogoLoad(); if(typeof pqrAgreeLoad==='function') pqrAgreeLoad(); }
   if(typeof _onOpenSubPage === 'function') _onOpenSubPage(id);
   if(id==='adminCodeScreen') {
     loadAdminCodes(); renderAcList();
@@ -36058,6 +36065,28 @@ function pqrLogoDelete(i){
     if(typeof deleteImageFromStorage === 'function') deleteImageFromStorage(g.image_url, 'partner-logos');
     showToast('✓','삭제 완료','');
     pqrLogoLoad();
+  });
+}
+
+/* ═══════ 🆕 파트너십 승인 내역 (파트너가 문서에서 승인한 기록) ═══════ */
+function pqrAgreeLoad(){
+  if(!window.sb) return;
+  var box = document.getElementById('pqrAgreeList');
+  window.sb.from('partner_agreements').select('*').order('agreed_at', {ascending:false}).then(function(res){
+    if(res.error){ if(box) box.innerHTML = '<div style="font-size:11px;color:#b5afa2;padding:4px;">불러오지 못했어요 (SQL 실행 필요할 수 있음)</div>'; return; }
+    var rows = res.data || [];
+    if(!rows.length){ box.innerHTML = '<div style="font-size:11px;color:#b5afa2;padding:4px;">아직 승인한 파트너가 없어요</div>'; return; }
+    var html = '';
+    rows.forEach(function(r){
+      var dt = '';
+      try { var d = new Date(r.agreed_at); dt = d.getFullYear()+'.'+('0'+(d.getMonth()+1)).slice(-2)+'.'+('0'+d.getDate()).slice(-2)+' '+('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2); } catch(e){}
+      html += '<div style="background:#fff;border:1px solid rgba(0,0,0,.07);border-radius:12px;padding:12px 14px;margin-bottom:8px;">'
+        + '<div style="font-size:13.5px;font-weight:800;color:#1a1a18;">' + escapeHtml(r.restaurant_name || '(매장명 미기재)') + '</div>'
+        + '<div style="font-size:11.5px;color:#8a8478;margin-top:2px;">' + (r.chef_name ? escapeHtml(r.chef_name)+' 셰프 · ' : '') + '서명: ' + escapeHtml(r.signer_name || '') + '</div>'
+        + '<div style="font-size:11px;color:#9a9486;margin-top:4px;">✔ 승인 ' + dt + (r.code ? ' · 코드 ' + escapeHtml(r.code) : ' · 기본 QR') + '</div>'
+        + '</div>';
+    });
+    box.innerHTML = html;
   });
 }
 
