@@ -7870,13 +7870,31 @@ window.closePromoCarousel = function(){
     <button class="admin-close-btn" onclick="closeAdmin()" aria-label="Close">✕</button>
   </div>
   <div class="admin-scroll">
-    <!-- ════════ 0. Quick Access (자주 쓰는 항목 바로가기) ════════ -->
+    <!-- ════════ 0. Quick Access (자주 쓰는 항목 바로가기 — 슈퍼어드민 편집 가능) ════════ -->
     <div style="padding:14px 16px 4px;">
-      <div style="font-size:10px;letter-spacing:.18em;color:#9a9486;font-weight:800;">QUICK ACCESS</div>
-      <div style="display:flex;gap:8px;margin-top:9px;flex-wrap:wrap;">
-        <button onclick="openSubPage('ticketCalScreen')" style="flex:1;min-width:0;padding:11px 4px;border:1px solid #e0ddd5;border-radius:11px;background:#fff;font-family:'Noto Sans KR',sans-serif;font-size:11.5px;font-weight:700;color:#1a1a18;cursor:pointer;white-space:nowrap;">📆 티켓 캘린더</button>
-        <button onclick="openSubPage('depositMgmtScreen')" style="flex:1;min-width:0;padding:11px 4px;border:1px solid #e0ddd5;border-radius:11px;background:#fff;font-family:'Noto Sans KR',sans-serif;font-size:11.5px;font-weight:700;color:#1a1a18;cursor:pointer;white-space:nowrap;">💰 예치금 관리</button>
-        <button onclick="openReservationInviteScreen()" style="flex:1;min-width:0;padding:11px 4px;border:1px solid #e0ddd5;border-radius:11px;background:#fff;font-family:'Noto Sans KR',sans-serif;font-size:11.5px;font-weight:700;color:#1a1a18;cursor:pointer;white-space:nowrap;">📨 티켓 초대</button>
+      <div style="display:flex;align-items:center;justify-content:space-between;">
+        <div style="font-size:10px;letter-spacing:.18em;color:#9a9486;font-weight:800;">QUICK ACCESS</div>
+        <button id="qaEditBtn" onclick="qaOpenEdit()" style="display:none;border:none;background:none;color:#9a9486;font-size:11px;font-weight:800;cursor:pointer;padding:2px 4px;">✎ 편집</button>
+      </div>
+      <div id="quickAccessRow" style="display:flex;gap:8px;margin-top:9px;flex-wrap:wrap;"></div>
+    </div>
+
+    <!-- Quick Access 편집 모달 (슈퍼어드민) -->
+    <div id="qaEditModal" style="display:none;position:fixed;inset:0;z-index:6000;background:rgba(0,0,0,.45);align-items:flex-end;justify-content:center;">
+      <div style="background:#fff;width:100%;max-width:480px;border-radius:20px 20px 0 0;max-height:84vh;display:flex;flex-direction:column;font-family:'Noto Sans KR',sans-serif;">
+        <div style="padding:16px 18px;border-bottom:1px solid #eee;display:flex;align-items:center;justify-content:space-between;">
+          <div style="font-size:15px;font-weight:800;color:#1a1a18;">Quick Access 편집</div>
+          <button onclick="qaCloseEdit()" style="border:none;background:none;font-size:20px;color:#999;cursor:pointer;">✕</button>
+        </div>
+        <div style="padding:14px 18px;overflow-y:auto;-webkit-overflow-scrolling:touch;">
+          <div style="font-size:11px;font-weight:800;color:#9a9486;letter-spacing:.08em;margin-bottom:8px;">표시 중 · 순서 변경/제거</div>
+          <div id="qaSelList"></div>
+          <div style="font-size:11px;font-weight:800;color:#9a9486;letter-spacing:.08em;margin:20px 0 8px;">추가 가능</div>
+          <div id="qaAvailList"></div>
+        </div>
+        <div style="padding:12px 18px calc(14px + env(safe-area-inset-bottom));border-top:1px solid #eee;">
+          <button onclick="qaSave()" style="width:100%;padding:13px;border:none;border-radius:12px;background:#5C0A14;color:#fff;font-size:14px;font-weight:800;cursor:pointer;font-family:inherit;">저장</button>
+        </div>
       </div>
     </div>
 
@@ -23221,6 +23239,135 @@ function openAdmin(){
   // mainGnb가 하단에 떠서 로그아웃 버튼 가리는 것 방지
   var gnb = document.getElementById('mainGnb');
   if(gnb) gnb.style.display = 'none';
+  if(typeof qaLoad === 'function') qaLoad();
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   🆕 2026.07: Quick Access 편집 (슈퍼어드민) — 하드코딩 대신 app_config 저장
+   · 카탈로그(선택 가능한 목적지)는 코드에 정의, 선택/순서는 서버(app_config)에 저장
+   · 기기 간 동기화 + 매번 코드 수정 불필요
+   ═══════════════════════════════════════════════════════════════ */
+// 선택 가능한 바로가기 목록. screen: openSubPage 대상 / fn: 전역 함수명
+var QA_CATALOG = [
+  { id:'ticketCalScreen',      icon:'📆', label:'티켓 캘린더',    screen:'ticketCalScreen' },
+  { id:'depositMgmtScreen',    icon:'💰', label:'예치금 관리',    screen:'depositMgmtScreen' },
+  { id:'invite',               icon:'📨', label:'티켓 초대',      fn:'openReservationInviteScreen' },
+  { id:'ticketListScreen',     icon:'🎫', label:'티켓 리스트',    screen:'ticketListScreen' },
+  { id:'ticketHistoryScreen',  icon:'📜', label:'전체 구매내역',  screen:'ticketHistoryScreen' },
+  { id:'memberListScreen',     icon:'👥', label:'회원 목록',      screen:'memberListScreen' },
+  { id:'reservationAdmin',     icon:'📋', label:'예약 관리',      screen:'reservationAdminScreen' },
+  { id:'partnerQrScreen',      icon:'🏷', label:'파트너 QR',      screen:'partnerQrScreen' },
+  { id:'partnerMgmtScreen',    icon:'🤝', label:'파트너십 관리',  screen:'partnerMgmtScreen' },
+  { id:'ticketUpload',         icon:'⬆️', label:'티켓 업로드',    fn:'openTU' },
+  { id:'depositGrant',         icon:'💳', label:'예치금 부여',    fn:'openAdminDepositGrant' },
+  { id:'restListScreen',       icon:'🍽', label:'레스토랑 리스트', screen:'restListScreen' },
+  { id:'adPopupMgmtScreen',    icon:'📢', label:'광고 팝업',      screen:'adPopupMgmtScreen' },
+  { id:'membershipUntil',      icon:'📅', label:'멤버십 만료일',  fn:'openMembershipUntilMgmt' }
+];
+var QA_DEFAULT = ['ticketCalScreen','depositMgmtScreen','invite'];
+var _qaConfig = QA_DEFAULT.slice();   // 현재 선택된 id 순서
+var _qaEditDraft = [];                // 편집 중 임시본
+var _qaLoaded = false;
+
+function _qaCat(id){ for(var i=0;i<QA_CATALOG.length;i++){ if(QA_CATALOG[i].id===id) return QA_CATALOG[i]; } return null; }
+
+function qaLoad(){
+  // 편집 버튼은 슈퍼어드민에게만
+  var eb = document.getElementById('qaEditBtn');
+  if(eb) eb.style.display = (typeof _currentRole!=='undefined' && _currentRole==='superadmin') ? 'block' : 'none';
+  if(!window.sb){ renderQuickAccess(); return; }
+  window.sb.from('app_config').select('value').eq('key','quick_access').maybeSingle().then(function(res){
+    var v = res && res.data && res.data.value;
+    if(v && Array.isArray(v.items) && v.items.length){
+      // 카탈로그에 존재하는 id만 통과
+      _qaConfig = v.items.filter(function(id){ return !!_qaCat(id); });
+      if(!_qaConfig.length) _qaConfig = QA_DEFAULT.slice();
+    } else {
+      _qaConfig = QA_DEFAULT.slice();
+    }
+    _qaLoaded = true;
+    renderQuickAccess();
+  }, function(){ renderQuickAccess(); });
+}
+
+function renderQuickAccess(){
+  var row = document.getElementById('quickAccessRow');
+  if(!row) return;
+  var html = '';
+  _qaConfig.forEach(function(id){
+    var c = _qaCat(id); if(!c) return;
+    html += '<button onclick="qaRun(\'' + id + '\')" style="flex:1 1 90px;min-width:88px;padding:11px 4px;border:1px solid #e0ddd5;border-radius:11px;background:#fff;font-family:\'Noto Sans KR\',sans-serif;font-size:11.5px;font-weight:700;color:#1a1a18;cursor:pointer;white-space:nowrap;">' + c.icon + ' ' + c.label + '</button>';
+  });
+  if(!html) html = '<div style="font-size:11px;color:#b5afa2;padding:4px;">표시할 항목이 없습니다 — ✎ 편집에서 추가하세요</div>';
+  row.innerHTML = html;
+}
+
+function qaRun(id){
+  var c = _qaCat(id); if(!c) return;
+  if(c.screen && typeof openSubPage==='function') openSubPage(c.screen);
+  else if(c.fn && typeof window[c.fn]==='function') window[c.fn]();
+  else showToast('⚠','오류','해당 화면을 찾을 수 없어요');
+}
+
+// ── 편집 모달 ──
+function qaOpenEdit(){
+  _qaEditDraft = _qaConfig.slice();
+  qaRenderEdit();
+  var m = document.getElementById('qaEditModal'); if(m) m.style.display='flex';
+}
+function qaCloseEdit(){ var m=document.getElementById('qaEditModal'); if(m) m.style.display='none'; }
+
+function qaRenderEdit(){
+  var sel = document.getElementById('qaSelList');
+  var avail = document.getElementById('qaAvailList');
+  if(sel){
+    if(_qaEditDraft.length===0){
+      sel.innerHTML = '<div style="font-size:12px;color:#b5afa2;padding:6px 2px;">아래에서 항목을 추가하세요</div>';
+    } else {
+      var sh = '';
+      _qaEditDraft.forEach(function(id, i){
+        var c = _qaCat(id); if(!c) return;
+        sh += '<div style="display:flex;align-items:center;gap:8px;background:#faf8f5;border:1px solid #eee;border-radius:11px;padding:10px 12px;margin-bottom:7px;">'
+          + '<div style="flex:1;font-size:13px;font-weight:700;color:#1a1a18;">' + c.icon + ' ' + c.label + '</div>'
+          + '<button onclick="qaMove(' + i + ',-1)" ' + (i===0?'disabled':'') + ' style="width:30px;height:30px;border:1px solid #e0ddd5;border-radius:8px;background:#fff;font-size:14px;color:' + (i===0?'#ccc':'#666') + ';cursor:pointer;">↑</button>'
+          + '<button onclick="qaMove(' + i + ',1)" ' + (i===_qaEditDraft.length-1?'disabled':'') + ' style="width:30px;height:30px;border:1px solid #e0ddd5;border-radius:8px;background:#fff;font-size:14px;color:' + (i===_qaEditDraft.length-1?'#ccc':'#666') + ';cursor:pointer;">↓</button>'
+          + '<button onclick="qaRemove(\'' + id + '\')" style="width:30px;height:30px;border:1px solid #e8d5d5;border-radius:8px;background:#fff;font-size:14px;color:#b05555;cursor:pointer;">✕</button>'
+          + '</div>';
+      });
+      sel.innerHTML = sh;
+    }
+  }
+  if(avail){
+    var ah = '';
+    QA_CATALOG.forEach(function(c){
+      if(_qaEditDraft.indexOf(c.id) !== -1) return;   // 이미 선택된 건 제외
+      ah += '<div style="display:flex;align-items:center;gap:8px;border:1px solid #eee;border-radius:11px;padding:10px 12px;margin-bottom:7px;">'
+        + '<div style="flex:1;font-size:13px;font-weight:700;color:#555;">' + c.icon + ' ' + c.label + '</div>'
+        + '<button onclick="qaAdd(\'' + c.id + '\')" style="padding:6px 14px;border:none;border-radius:8px;background:#1a1a18;color:#fff;font-size:12px;font-weight:700;cursor:pointer;">+ 추가</button>'
+        + '</div>';
+    });
+    if(!ah) ah = '<div style="font-size:12px;color:#b5afa2;padding:6px 2px;">추가 가능한 항목을 모두 넣었습니다</div>';
+    avail.innerHTML = ah;
+  }
+}
+function qaAdd(id){ if(_qaEditDraft.indexOf(id)===-1) _qaEditDraft.push(id); qaRenderEdit(); }
+function qaRemove(id){ _qaEditDraft = _qaEditDraft.filter(function(x){ return x!==id; }); qaRenderEdit(); }
+function qaMove(i, dir){
+  var j = i + dir;
+  if(j<0 || j>=_qaEditDraft.length) return;
+  var t = _qaEditDraft[i]; _qaEditDraft[i]=_qaEditDraft[j]; _qaEditDraft[j]=t;
+  qaRenderEdit();
+}
+function qaSave(){
+  if(!window.sb){ showToast('⚠','오류','네트워크 상태를 확인해주세요'); return; }
+  var items = _qaEditDraft.slice();
+  window.sb.from('app_config').upsert({ key:'quick_access', value:{ items:items }, updated_at:new Date().toISOString() }).then(function(res){
+    if(res.error){ showToast('❌','저장 실패', res.error.message||''); return; }
+    _qaConfig = items;
+    renderQuickAccess();
+    qaCloseEdit();
+    showToast('✓','저장 완료','Quick Access가 업데이트됐어요');
+  });
 }
 
 // 🆕 Test 섹션 아코디언 토글 (슈퍼 어드민 마이페이지 — 마켓·탐 데이터 입력·Dev/Test·Data Export)
