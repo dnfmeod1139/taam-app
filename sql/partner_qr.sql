@@ -1,31 +1,33 @@
 -- ═══════════════════════════════════════════════════════════════
--- TAAM — 레스토랑 전용 파트너 QR (개인화 제안 페이지 + 열람 기록)
--- Supabase SQL Editor 에서 1회 실행 (idempotent)
--- 작성일: 2026-07-19
+-- TAAM — 레스토랑 전용 파트너 QR (개인화 제안·조건 페이지 + 열람 기록)
+-- Supabase SQL Editor 에서 실행 (idempotent — 여러 번 실행해도 안전)
+-- 작성일: 2026-07-19  /  v2: 2026-07-20 (가격 조건 + 파트너 로고)
 -- 구조:
---   · partner_qr_codes  — 레스토랑별 고유 코드 (슈퍼어드민이 발급)
---   · partner_qr_views  — QR 열람 기록 (누가 언제 열었는지)
---   · partner_qr_lookup(code) — 랜딩 페이지용 RPC (anon 호출 가능):
---       코드 검증 + 열람 기록 + 레스토랑/셰프/언어 반환
--- 접근 제어:
---   · 테이블 직접 접근은 슈퍼어드민(is_super_admin)만 (RLS)
---   · 외부(북릿 QR 스캔)는 RPC 를 통해서만 — 유효 코드 1건의
---     이름/언어만 노출되고 목록 조회는 불가능
+--   · partner_qr_codes  — 레스토랑별 고유 코드 + 협의 조건(식사/주류/기타)
+--   · partner_qr_views  — QR 열람 기록
+--   · partner_logos     — 전용 페이지 하단 「함께하는 파트너」 로고
+--   · partner_qr_lookup(code) — 랜딩 페이지용 RPC (anon):
+--       코드 검증 + 열람 기록 + 레스토랑/셰프/언어/조건/로고 반환
+--   · Storage 버킷 'partner-logos' (public) — 로고 이미지 저장
 -- ═══════════════════════════════════════════════════════════════
 
 -- ── 1) 코드 테이블 ──
 create table if not exists public.partner_qr_codes (
-  code            text primary key,                 -- 예: 'X7K2MQ4A'
+  code            text primary key,
   restaurant_name text not null,
   chef_name       text,
-  lang            text not null default 'ja',       -- 'ja' | 'en'
-  active          boolean not null default true,    -- false = 링크 비활성화
+  lang            text not null default 'ja',       -- 'ja' | 'en' | 'ko'
+  active          boolean not null default true,
   created_at      timestamptz not null default now()
 );
+-- v2: 협의 조건 컬럼 (자유 기재 — 예: '¥30,000 / 1인')
+alter table public.partner_qr_codes add column if not exists meal_price     text;
+alter table public.partner_qr_codes add column if not exists beverage_price text;
+alter table public.partner_qr_codes add column if not exists extra_note     text;
 comment on table public.partner_qr_codes is
-  '레스토랑 전용 파트너 제안 QR 코드. taam-app.vercel.app/partner/?c=<code> 로 개인화 페이지 오픈.';
+  '레스토랑 전용 파트너 제안 QR. taam-app.vercel.app/partner/?c=<code> 로 개인화 페이지 오픈.';
 
--- ── 2) 열람 기록 테이블 ──
+-- ── 2) 열람 기록 ──
 create table if not exists public.partner_qr_views (
   id         bigint generated always as identity primary key,
   code       text not null references public.partner_qr_codes(code) on delete cascade,
@@ -33,29 +35,58 @@ create table if not exists public.partner_qr_views (
   user_agent text
 );
 create index if not exists idx_partner_qr_views_code on public.partner_qr_views(code, viewed_at desc);
-comment on table public.partner_qr_views is '파트너 QR 열람 기록 — 셰프가 언제 열어봤는지 팔로업용.';
 
--- ── 3) RLS — 슈퍼어드민만 직접 접근 ──
+-- ── 3) 파트너 로고 ──
+create table if not exists public.partner_logos (
+  id         bigint generated always as identity primary key,
+  image_url  text not null,
+  name       text,
+  sort_order int  not null default 0,
+  created_at timestamptz not null default now()
+);
+comment on table public.partner_logos is '전용 페이지 하단 「함께하는 파트너」 로고 목록.';
+
+-- ── 4) RLS ──
 alter table public.partner_qr_codes enable row level security;
 alter table public.partner_qr_views enable row level security;
+alter table public.partner_logos    enable row level security;
 
 drop policy if exists "superadmin manages partner qr codes" on public.partner_qr_codes;
 create policy "superadmin manages partner qr codes"
-on public.partner_qr_codes
-for all
-to authenticated
-using ( public.is_super_admin(auth.uid()) )
-with check ( public.is_super_admin(auth.uid()) );
+on public.partner_qr_codes for all to authenticated
+using ( public.is_super_admin(auth.uid()) ) with check ( public.is_super_admin(auth.uid()) );
 
 drop policy if exists "superadmin reads partner qr views" on public.partner_qr_views;
 create policy "superadmin reads partner qr views"
-on public.partner_qr_views
-for select
-to authenticated
+on public.partner_qr_views for select to authenticated
 using ( public.is_super_admin(auth.uid()) );
 
--- ── 4) 랜딩 페이지용 RPC — 코드 검증 + 열람 기록 ──
--- p_log=false 면 기록 없이 조회만 (슈퍼어드민 미리보기용)
+drop policy if exists "superadmin manages partner logos" on public.partner_logos;
+create policy "superadmin manages partner logos"
+on public.partner_logos for all to authenticated
+using ( public.is_super_admin(auth.uid()) ) with check ( public.is_super_admin(auth.uid()) );
+
+-- ── 5) Storage 버킷 (public) + 정책 ──
+insert into storage.buckets (id, name, public)
+values ('partner-logos', 'partner-logos', true)
+on conflict (id) do update set public = true;
+
+drop policy if exists "partner logos public read" on storage.objects;
+create policy "partner logos public read"
+on storage.objects for select to public
+using ( bucket_id = 'partner-logos' );
+
+drop policy if exists "partner logos superadmin write" on storage.objects;
+create policy "partner logos superadmin write"
+on storage.objects for insert to authenticated
+with check ( bucket_id = 'partner-logos' and public.is_super_admin(auth.uid()) );
+
+drop policy if exists "partner logos superadmin delete" on storage.objects;
+create policy "partner logos superadmin delete"
+on storage.objects for delete to authenticated
+using ( bucket_id = 'partner-logos' and public.is_super_admin(auth.uid()) );
+
+-- ── 6) 랜딩 페이지용 RPC — 코드 검증 + 열람 기록 + 조건/로고 반환 ──
 create or replace function public.partner_qr_lookup(p_code text, p_ua text default null, p_log boolean default true)
 returns json
 language plpgsql
@@ -81,16 +112,22 @@ begin
   return json_build_object(
     'ok', true,
     'restaurant_name', r.restaurant_name,
-    'chef_name', coalesce(r.chef_name, ''),
-    'lang', r.lang
+    'chef_name',       coalesce(r.chef_name, ''),
+    'lang',            r.lang,
+    'meal_price',      coalesce(r.meal_price, ''),
+    'beverage_price',  coalesce(r.beverage_price, ''),
+    'extra_note',      coalesce(r.extra_note, ''),
+    'logos', coalesce(
+      (select json_agg(image_url order by sort_order, id) from public.partner_logos),
+      '[]'::json)
   );
 end;
 $$;
 comment on function public.partner_qr_lookup(text, text, boolean) is
-  '파트너 QR 랜딩 페이지 검증용. 유효 코드면 레스토랑/셰프/언어 반환 + 열람 기록.';
+  '파트너 QR 랜딩 검증용. 유효 코드면 레스토랑/셰프/언어/조건/로고 반환 + 열람 기록.';
 
 revoke execute on function public.partner_qr_lookup(text, text, boolean) from public;
-grant execute on function public.partner_qr_lookup(text, text, boolean) to anon;
-grant execute on function public.partner_qr_lookup(text, text, boolean) to authenticated;
+grant  execute on function public.partner_qr_lookup(text, text, boolean) to anon;
+grant  execute on function public.partner_qr_lookup(text, text, boolean) to authenticated;
 
-do $$ begin raise notice '✅ 파트너 전용 QR 테이블 + RPC 설치 완료'; end $$;
+do $$ begin raise notice '✅ 파트너 전용 QR v2 — 조건 컬럼 + 로고 테이블/버킷 + RPC 설치 완료'; end $$;
