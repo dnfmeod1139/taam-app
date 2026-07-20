@@ -61,10 +61,12 @@
   .plogos .cell img{max-height:44px;max-width:120px;width:auto;object-fit:contain;filter:grayscale(100%);opacity:.85;}
   /* ── contact ── */
   .contact{margin-top:28px;display:flex;flex-direction:column;gap:12px;align-items:center;}
-  .contact a{display:inline-flex;align-items:center;gap:10px;text-decoration:none;color:var(--ink);
-    border:1px solid var(--line);background:#fff;border-radius:999px;padding:12px 24px;font-size:13px;font-weight:600;letter-spacing:.03em;min-width:240px;justify-content:center;}
-  .contact a .ic{font-size:15px;}
+  .contact a, .contact button.cbtn{display:inline-flex;align-items:center;gap:10px;text-decoration:none;color:var(--ink);
+    border:1px solid var(--line);background:#fff;border-radius:999px;padding:12px 24px;font-size:13px;font-weight:600;letter-spacing:.03em;min-width:240px;justify-content:center;
+    font-family:inherit;cursor:pointer;}
+  .contact a .ic, .contact button.cbtn .ic{font-size:15px;}
   .contact a.line{border-color:#06C755;color:#06934C;}
+  .contact .chint{font-size:10.5px;color:#b5afa2;letter-spacing:.05em;margin-top:-4px;}
   /* ── footer ── */
   footer{padding:64px 0 90px;text-align:center;border-top:1px solid var(--line);}
   footer .brand{font-family:'Shippori Mincho',serif;font-size:12px;letter-spacing:.5em;color:var(--bd);font-weight:600;text-indent:.5em;}
@@ -358,7 +360,9 @@
     $('contactTitle').textContent = T.contactTitle;
     $('contactLead').textContent = T.contactLead;
     var cbox = '';
-    cbox += '<a href="mailto:' + esc(CONTACT_EMAIL) + '"><span class="ic">✉️</span>' + esc(CONTACT_EMAIL) + '</a>';
+    // 메일은 앱을 열지 않고 '탭하면 복사'만
+    cbox += '<button type="button" class="cbtn" onclick="copyEmail(this)"><span class="ic">✉️</span><span class="ce-txt">' + esc(CONTACT_EMAIL) + '</span></button>';
+    cbox += '<div class="chint">' + (lang==='ja'?'タップでコピー':(lang==='ko'?'탭하면 복사됩니다':'Tap to copy')) + '</div>';
     if(CONTACT_LINE){
       cbox += '<a class="line" href="' + esc(CONTACT_LINE) + '" target="_blank" rel="noopener"><span class="ic">💬</span>LINE · ' + esc(CONTACT_LINE_ID) + '</a>';
     }
@@ -378,6 +382,25 @@
       if(b) b.className = (l === lang) ? 'on' : '';
     });
   }
+  // 메일 주소 복사 (메일 앱 안 열림)
+  window.copyEmail = function(btn){
+    var txtEl = btn.querySelector('.ce-txt');
+    var orig = txtEl ? txtEl.textContent : CONTACT_EMAIL;
+    function done(){
+      if(!txtEl) return;
+      var doneMsg = (_last.lang==='ja') ? 'コピーしました' : (_last.lang==='ko') ? '복사됨!' : 'Copied!';
+      txtEl.textContent = doneMsg;
+      setTimeout(function(){ txtEl.textContent = orig; }, 1400);
+    }
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(CONTACT_EMAIL).then(done, done);
+    } else {
+      var ta = document.createElement('textarea'); ta.value = CONTACT_EMAIL;
+      ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta);
+      ta.select(); try{ document.execCommand('copy'); }catch(_e){} document.body.removeChild(ta);
+      done();
+    }
+  };
   window.pvSetLang = function(l){ if(_last.data) render(l, _last.data); };
   window.pvClose = function(){
     window.close();
