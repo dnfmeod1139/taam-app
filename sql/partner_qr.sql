@@ -148,4 +148,43 @@ revoke execute on function public.partner_qr_lookup(text, text, boolean) from pu
 grant  execute on function public.partner_qr_lookup(text, text, boolean) to anon;
 grant  execute on function public.partner_qr_lookup(text, text, boolean) to authenticated;
 
-do $$ begin raise notice '✅ 파트너 전용 QR v2 — 조건 컬럼 + 로고 테이블/버킷 + RPC 설치 완료'; end $$;
+-- ── 7) 파트너십 승인 (파트너가 문서에서 '승인' 시 저장 + 증서) ──
+create table if not exists public.partner_agreements (
+  id              bigint generated always as identity primary key,
+  code            text,
+  restaurant_name text,
+  chef_name       text,
+  signer_name     text not null,
+  agreed_at       timestamptz not null default now(),
+  user_agent      text
+);
+alter table public.partner_agreements enable row level security;
+
+drop policy if exists "superadmin reads partner agreements" on public.partner_agreements;
+create policy "superadmin reads partner agreements"
+on public.partner_agreements for select to authenticated
+using ( public.is_super_admin(auth.uid()) );
+
+-- anon 은 RPC 로만 승인 기록 (직접 insert 불가)
+create or replace function public.partner_agree(p_code text, p_restaurant text, p_chef text, p_name text, p_ua text default null)
+returns json
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare new_id bigint; ts timestamptz;
+begin
+  if coalesce(trim(p_name),'') = '' then
+    return json_build_object('ok', false, 'error', 'name required');
+  end if;
+  insert into public.partner_agreements(code, restaurant_name, chef_name, signer_name, user_agent)
+  values (nullif(trim(p_code),''), nullif(trim(p_restaurant),''), nullif(trim(p_chef),''), trim(p_name), left(coalesce(p_ua,''),400))
+  returning id, agreed_at into new_id, ts;
+  return json_build_object('ok', true, 'id', new_id, 'agreed_at', ts);
+end;
+$$;
+revoke execute on function public.partner_agree(text,text,text,text,text) from public;
+grant  execute on function public.partner_agree(text,text,text,text,text) to anon;
+grant  execute on function public.partner_agree(text,text,text,text,text) to authenticated;
+
+do $$ begin raise notice '✅ 파트너 전용 QR v2 — 조건·로고·GENERIC·승인 설치 완료'; end $$;
