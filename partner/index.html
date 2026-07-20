@@ -18,6 +18,9 @@
   body.ko{font-family:'Noto Sans KR',sans-serif;letter-spacing:.01em;word-break:keep-all;overflow-wrap:break-word;}
   /* 문장이 어중간하게 잘리지 않게 — 브라우저가 가독성 좋게 줄바꿈 배분 */
   .lead, .terms p, .qual .d, .hero .sub{text-wrap:pretty;}
+  /* 문장을 하나씩 딱딱 떨어지게 (각 문장 = 한 블록) */
+  .lead .ln, .terms p .ln{display:block;}
+  .lead .ln + .ln, .terms p .ln + .ln{margin-top:8px;}
   body.ko .serif, body.ko .hero .to, body.ko h2, body.ko .terms h3,
   body.ko .hero .brand, body.ko footer .brand{font-family:'Noto Sans KR',sans-serif;}
   body.ko .hero .to, body.ko h2{font-weight:700;}
@@ -397,6 +400,16 @@
 
   function esc(s){ return (s||'').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
+  // 문장 단위 블록화 — 각 문장을 한 줄(block)로 떨어뜨려 가독성 향상.
+  //   문장 경계: 。(일본어) / .!?+공백(영·한). <b> 태그는 경계가 태그 밖에 있어 안전.
+  function sb(html){
+    if(!html) return '';
+    var marked = html.replace(/。/g, '。').replace(/([.!?])(\s+)/g, '$1');
+    var parts = marked.split('').map(function(s){ return s.trim(); }).filter(function(s){ return s.length; });
+    if(parts.length <= 1) return html;
+    return parts.map(function(s){ return '<span class="ln">' + s + '</span>'; }).join('');
+  }
+
   // 파트너 로고 렌더 — 직접 조회 캐시 우선, 없으면 RPC 반환값(_last.data.logos) 폴백
   function renderPartners(lang){
     var T = TXT[lang] || TXT.ja;
@@ -448,7 +461,7 @@
     $('heroSub').innerHTML = T.heroSub;
 
     $('aboutTitle').textContent = T.aboutTitle;
-    $('aboutBody').innerHTML = T.aboutBody;
+    $('aboutBody').innerHTML = sb(T.aboutBody);
 
     $('memTitle').textContent = T.memTitle;
     $('memLead').textContent = T.memLead;
@@ -466,11 +479,11 @@
     }
     // 주류 — 항상 표준 문구(필수 주문 인지 + 협의 + 평균), 기재값 있으면 함께 표시
     var bevVal = data.beverage_price ? '<div class="val">' + esc(data.beverage_price) + '</div>' : '';
-    rows += '<div class="row"><h3><span>—</span>' + T.bevH + '</h3>' + bevVal + '<p>' + T.bevP + '</p></div>';
-    // 표준 조건
-    rows += '<div class="row"><h3><span>—</span>' + T.payH + '</h3><p>' + T.payP + '</p></div>';
-    rows += '<div class="row"><h3><span>—</span>' + T.cancelH + '</h3><p>' + T.cancelP + '</p></div>';
-    rows += '<div class="row"><h3><span>—</span>' + T.privateH + '</h3><p>' + T.privateP + '</p></div>';
+    rows += '<div class="row"><h3><span>—</span>' + T.bevH + '</h3>' + bevVal + '<p>' + sb(T.bevP) + '</p></div>';
+    // 표준 조건 — 문장 단위로 줄바꿈(sb)
+    rows += '<div class="row"><h3><span>—</span>' + T.payH + '</h3><p>' + sb(T.payP) + '</p></div>';
+    rows += '<div class="row"><h3><span>—</span>' + T.cancelH + '</h3><p>' + sb(T.cancelP) + '</p></div>';
+    rows += '<div class="row"><h3><span>—</span>' + T.privateH + '</h3><p>' + sb(T.privateP) + '</p></div>';
     if(data.extra_note){
       rows += '<div class="row"><h3><span>—</span>' + esc(T.noteLabel) + '</h3><p>' + esc(data.extra_note).replace(/\n/g,'<br>') + '</p></div>';
     }
