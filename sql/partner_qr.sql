@@ -96,6 +96,18 @@ as $$
 declare
   r public.partner_qr_codes%rowtype;
 begin
+  -- 기본(GENERIC) QR — 이름·매장·금액 없이 로고만 (기본 전달 메시지용)
+  if upper(trim(coalesce(p_code,''))) = 'GENERIC' then
+    return json_build_object(
+      'ok', true, 'generic', true,
+      'restaurant_name','', 'chef_name','', 'lang','',
+      'meal_price','', 'beverage_price','', 'extra_note','',
+      'logos', coalesce(
+        (select json_agg(image_url order by sort_order, id) from public.partner_logos),
+        '[]'::json)
+    );
+  end if;
+
   select * into r
   from public.partner_qr_codes
   where code = upper(trim(p_code)) and active = true;
