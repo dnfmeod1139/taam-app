@@ -158,8 +158,10 @@ create table if not exists public.partner_agreements (
   agreed_at       timestamptz not null default now(),
   user_agent      text
 );
--- 🆕 서명 이미지(손글씨 캔버스 PNG data URL)
+-- 서명 이미지(손글씨 캔버스 PNG data URL)
 alter table public.partner_agreements add column if not exists signature_data text;
+-- 승인 시 파트너가 확인한 최소 주류 주문 금액
+alter table public.partner_agreements add column if not exists agreed_min text;
 alter table public.partner_agreements enable row level security;
 
 drop policy if exists "superadmin reads partner agreements" on public.partner_agreements;
@@ -168,9 +170,10 @@ on public.partner_agreements for select to authenticated
 using ( public.is_super_admin(auth.uid()) );
 
 -- anon 은 RPC 로만 승인 기록 (직접 insert 불가)
--- 서명 파라미터(p_signature) 추가 → 구 5-인자 버전은 제거 후 재생성
+-- p_min(최소 주류 금액) 추가 → 구 5·6-인자 버전 제거 후 재생성
 drop function if exists public.partner_agree(text,text,text,text,text);
-create or replace function public.partner_agree(p_code text, p_restaurant text, p_chef text, p_name text, p_ua text default null, p_signature text default null)
+drop function if exists public.partner_agree(text,text,text,text,text,text);
+create or replace function public.partner_agree(p_code text, p_restaurant text, p_chef text, p_name text, p_ua text default null, p_signature text default null, p_min text default null)
 returns json
 language plpgsql
 security definer
@@ -181,14 +184,40 @@ begin
   if coalesce(trim(p_name),'') = '' then
     return json_build_object('ok', false, 'error', 'name required');
   end if;
-  insert into public.partner_agreements(code, restaurant_name, chef_name, signer_name, user_agent, signature_data)
-  values (nullif(trim(p_code),''), nullif(trim(p_restaurant),''), nullif(trim(p_chef),''), trim(p_name), left(coalesce(p_ua,''),400), p_signature)
+  insert into public.partner_agreements(code, restaurant_name, chef_name, signer_name, user_agent, signature_data, agreed_min)
+  values (nullif(trim(p_code),''), nullif(trim(p_restaurant),''), nullif(trim(p_chef),''), trim(p_name), left(coalesce(p_ua,''),400), p_signature, nullif(trim(p_min),''))
   returning id, agreed_at into new_id, ts;
   return json_build_object('ok', true, 'id', new_id, 'agreed_at', ts);
 end;
 $$;
-revoke execute on function public.partner_agree(text,text,text,text,text,text) from public;
-grant  execute on function public.partner_agree(text,text,text,text,text,text) to anon;
-grant  execute on function public.partner_agree(text,text,text,text,text,text) to authenticated;
+revoke execute on function public.partner_agree(text,text,text,text,text,text,text) from public;
+grant  execute on function public.partner_agree(text,text,text,text,text,text,text) to anon;
+grant  execute on function public.partner_agree(text,text,text,text,text,text,text) to authenticated;
 
-do $$ begin raise notice '✅ 파트너 전용 QR v2 — 조건·로고·GENERIC·승인 설치 완료'; end $$;
+-- 완성된 증서 웹 조회 (양측이 링크로 한 장씩 나눠 갖기) — anon 허용, id 로만 단건 조회
+create or replace function public.partner_agreement_get(p_id bigint)
+returns json
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select coalesce(
+    (select json_build_object(
+        'ok', true,
+        'restaurant_name', coalesce(restaurant_name,''),
+        'chef_name', coalesce(chef_name,''),
+        'signer_name', coalesce(signer_name,''),
+        'agreed_at', agreed_at,
+        'signature_data', signature_data,
+        'agreed_min', coalesce(agreed_min,'')
+      )
+      from public.partner_agreements where id = p_id),
+    json_build_object('ok', false)
+  );
+$$;
+revoke execute on function public.partner_agreement_get(bigint) from public;
+grant  execute on function public.partner_agreement_get(bigint) to anon;
+grant  execute on function public.partner_agreement_get(bigint) to authenticated;
+
+do $$ begin raise notice '✅ 파트너 QR — 승인(최소금액)·서명·증서 웹 조회 설치 완료'; end $$;

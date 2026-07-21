@@ -79,6 +79,15 @@
   #agModal .sheet{background:var(--bg);width:100%;max-width:560px;max-height:92vh;overflow-y:auto;-webkit-overflow-scrolling:touch;border-radius:20px 20px 0 0;padding:22px 24px calc(28px + env(safe-area-inset-bottom));}
   .agf label:not(.agchk){display:block;font-size:11px;color:var(--sub);margin:14px 0 5px;letter-spacing:.04em;}
   .agf input[type=text]{width:100%;box-sizing:border-box;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:#fff;font-size:14px;font-family:inherit;color:var(--ink);outline:none;}
+  .agrow{display:flex;gap:10px;}
+  .agrow .agcol{flex:1;min-width:0;}
+  .agrow .agcol label{margin-top:14px;}
+  .ag-done{text-align:center;font-size:14px;font-weight:800;color:var(--bd);margin-bottom:14px;letter-spacing:.02em;}
+  .cert-actions{display:flex;gap:8px;margin-top:16px;}
+  .cert-actions .agbtn{margin-top:0;flex:1;}
+  .cert-linkbtn{flex:1;padding:15px;border:1px solid var(--line);border-radius:12px;background:#fff;color:var(--ink);font-size:12.5px;font-weight:700;cursor:pointer;font-family:inherit;}
+  .token .tk-min{font-size:12px;color:var(--sub);margin-top:9px;letter-spacing:.02em;}
+  .token .tk-min b{color:var(--bd);font-weight:700;}
   .agchk{display:flex;gap:9px;align-items:flex-start;margin-top:16px;font-size:12.5px;color:var(--ink);line-height:1.7;cursor:pointer;}
   .agchk input{margin-top:3px;width:18px;height:18px;flex-shrink:0;}
   .agdis{font-size:11px;color:var(--sub);line-height:1.9;margin-top:14px;background:#fff;border:1px solid var(--line);border-radius:10px;padding:12px 14px;}
@@ -235,9 +244,12 @@
       <h2 style="text-align:left;margin:0;font-size:18px;letter-spacing:.06em;" id="agTitle"></h2>
       <p id="agIntro" style="margin-top:10px;font-size:12.5px;color:var(--sub);line-height:1.9;"></p>
       <div class="agf">
-        <label id="agLblName"></label><input type="text" id="agName">
-        <label id="agLblRest"></label><input type="text" id="agRest">
-        <label id="agLblChef"></label><input type="text" id="agChef">
+        <div class="agrow">
+          <div class="agcol"><label id="agLblName"></label><input type="text" id="agName"></div>
+          <div class="agcol"><label id="agLblRest"></label><input type="text" id="agRest"></div>
+        </div>
+        <input type="hidden" id="agChef">
+        <label id="agLblMin"></label><input type="text" id="agMin">
         <label class="agchk"><input type="checkbox" id="agAgree"><span id="agAgreeTxt"></span></label>
         <label id="agLblSign"></label>
         <div class="sigpad-wrap">
@@ -250,24 +262,25 @@
       <button class="agbtn" id="agSubmitBtn" onclick="agSubmit()"></button>
     </div>
     <div id="agCert" style="display:none;">
-      <div class="token">
-        <div class="tk-brand">T A A M</div>
-        <div class="tk-hr"></div>
-        <div class="tk-lbl">IN PARTNERSHIP WITH</div>
-        <div class="tk-rest" id="certRest"></div>
-        <div class="tk-chef" id="certChef"></div>
-        <div class="tk-since"><span class="dot">◦</span>SINCE <span id="certSince"></span><span class="dot">◦</span></div>
-        <div class="tk-sign" id="certSignBlock" style="display:none;">
-          <img id="certSigImg" alt="signature">
-          <div class="tk-signname" id="certSigName"></div>
-        </div>
-        <div class="tk-seal">承</div>
-        <div class="tk-msg" id="certMsg"></div>
-        <div class="tk-dis" id="certDis"></div>
+      <div class="ag-done" id="agDoneMsg"></div>
+      <div class="token" id="agCertToken"></div>
+      <div class="cert-actions">
+        <button class="agbtn" id="certShareBtn" onclick="certShare()"></button>
+        <button class="cert-linkbtn" id="certCopyBtn" onclick="certCopyLink()"></button>
       </div>
-      <p id="certShare" style="font-size:11px;color:var(--sub);margin-top:14px;line-height:1.8;text-align:center;"></p>
-      <button class="agbtn" style="background:#1a1a18;" onclick="agClose()" id="certClose"></button>
+      <p id="certShareNote" style="font-size:11px;color:var(--sub);margin-top:12px;line-height:1.8;text-align:center;"></p>
+      <div id="certLink" style="font-size:10.5px;color:#b5afa2;text-align:center;margin-top:6px;word-break:break-all;"></div>
+      <button class="agbtn" style="background:#1a1a18;margin-top:10px;" onclick="agClose()" id="certClose"></button>
     </div>
+  </div>
+</div>
+
+<!-- 완성된 증표 단독 페이지 (?cert=<id>) — 양측이 링크로 각자 보관 -->
+<div id="certPage" style="display:none;min-height:100vh;padding:44px 16px 60px;">
+  <div class="token" id="certPageToken" style="max-width:440px;margin:0 auto;"></div>
+  <p id="certPageNote" style="max-width:440px;margin:16px auto 0;font-size:11px;color:var(--sub);text-align:center;line-height:1.8;"></p>
+  <div style="text-align:center;margin-top:14px;">
+    <button class="cert-linkbtn" style="max-width:280px;" id="certPageShareBtn" onclick="certPageShare()"></button>
   </div>
 </div>
 
@@ -329,6 +342,10 @@
         dateY:'年', dateM:'月', dateD:'日',
         certRep:'代表 : Woo', certSealLb:'承認印', certSealMark:'承認', certHanko:'OFFICIAL', certMainSuffix:'提携',
         tokenMsg:'このご縁に、心より感謝いたします。共に、末永く。',
+        minLabel:'お飲み物 最低注文（お一人様）', minPh:'例：¥10,000',
+        done:'パートナーシップが成立しました 🎉', shareBtn:'📤 証を保存・共有',
+        copyBtn:'🔗 リンクをコピー', copied:'コピーしました',
+        shareNote:'両者がこのリンクで、それぞれ証を保管・共有できます。',
         share:'この画面を保存・共有してください（日本: LINE ／ 海外: Web）。',
         errName:'お名前をご入力ください', errAgree:'同意にチェックしてください', close:'閉じる'
       }
@@ -380,6 +397,10 @@
         dateY:'', dateM:'.', dateD:'',
         certRep:'Founder : Woo', certSealLb:'SEAL', certSealMark:'OK', certHanko:'OFFICIAL', certMainSuffix:'Partnership',
         tokenMsg:'Thank you for this partnership. We’ll carry it with care, together.',
+        minLabel:'Min. beverage order (per guest)', minPh:'e.g. $180',
+        done:'Partnership confirmed 🎉', shareBtn:'📤 Save · Share token',
+        copyBtn:'🔗 Copy link', copied:'Copied',
+        shareNote:'Both sides can keep and share their token via this link.',
         share:'Please save or share this screen (Web).',
         errName:'Please enter your name', errAgree:'Please check the agreement box', close:'Close'
       }
@@ -431,6 +452,10 @@
         dateY:'년', dateM:'월', dateD:'일',
         certRep:'대표 : Woo', certSealLb:'승인인', certSealMark:'승인', certHanko:'OFFICIAL', certMainSuffix:'제휴',
         tokenMsg:'함께해 주셔서 감사합니다. 이 인연, 소중히 이어가겠습니다.',
+        minLabel:'최소 주류 주문 (1인)', minPh:'예: 250,000원',
+        done:'파트너십이 확정되었습니다 🎉', shareBtn:'📤 증표 저장 · 공유',
+        copyBtn:'🔗 링크 복사', copied:'복사됨',
+        shareNote:'이 링크로 양측이 각자 증표를 보관·공유할 수 있어요.',
         share:'이 화면을 캡처해 보관·공유하세요. (한국: 카카오톡 · 일본: LINE · 해외: 웹)',
         errName:'성함을 입력해주세요', errAgree:'동의에 체크해주세요', close:'닫기'
       }
@@ -591,7 +616,8 @@
     $('agIntro').textContent = T.intro;
     $('agLblName').textContent = T.name;
     $('agLblRest').textContent = T.rest;
-    $('agLblChef').textContent = T.chef;
+    $('agLblMin').textContent = T.minLabel;
+    $('agMin').setAttribute('placeholder', T.minPh || '');
     $('agAgreeTxt').textContent = T.agree;
     $('agLblSign').textContent = T.sign;
     $('agSigPh').textContent = T.sigPlaceholder;
@@ -601,6 +627,7 @@
     var d = _last.data || {};
     $('agRest').value = d.restaurant_name || '';
     $('agChef').value = d.chef_name || '';
+    $('agMin').value = d.beverage_price || '';   // QR에 기재된 최소금액 있으면 채움
     $('agName').value = ''; $('agAgree').checked = false;
     $('agModal').style.display = 'flex';
     var sheet = document.querySelector('#agModal .sheet'); if(sheet) sheet.scrollTop = 0;
@@ -662,6 +689,29 @@
   };
   function sigDataUrl(){ return _sig.dirty ? _sig.canvas.toDataURL('image/png') : ''; }
   window.agClose = function(){ $('agModal').style.display = 'none'; };
+
+  // 증표 마크업 빌더 (모달 완료 화면 + 단독 증서 페이지 공용)
+  function tokenHTML(lang, d){
+    var T = (TXT[lang] || TXT.ja).ag;
+    var chefLine = d.chef ? ('with Chef ' + esc(d.chef)) : (d.name ? ('with ' + esc(d.name)) : '');
+    var minLine = d.min ? '<div class="tk-min">' + esc(T.minLabel) + ' · <b>' + esc(d.min) + '</b></div>' : '';
+    var sig = d.signature ? '<div class="tk-sign"><img src="' + esc(d.signature) + '" alt="signature"><div class="tk-signname">' + esc(d.name || d.chef || '') + '</div></div>' : '';
+    return '<div class="tk-brand">T A A M</div>'
+      + '<div class="tk-hr"></div>'
+      + '<div class="tk-lbl">IN PARTNERSHIP WITH</div>'
+      + '<div class="tk-rest">' + esc(d.restaurant || '—') + '</div>'
+      + (chefLine ? '<div class="tk-chef">' + chefLine + '</div>' : '')
+      + minLine
+      + '<div class="tk-since"><span class="dot">◦</span>SINCE ' + esc(d.since || '') + '<span class="dot">◦</span></div>'
+      + sig
+      + '<div class="tk-seal">承</div>'
+      + '<div class="tk-msg">' + sb(T.tokenMsg) + '</div>'
+      + '<div class="tk-dis">' + esc(T.disclaimer) + '</div>';
+  }
+  function _sinceStr(iso){ var d = iso ? new Date(iso) : new Date(); return d.getFullYear() + '.' + ('0'+(d.getMonth()+1)).slice(-2); }
+  function _certUrl(id){ return location.origin + location.pathname + '?cert=' + id; }
+  var _certShareUrl = '';
+
   window.agSubmit = function(){
     var T = (TXT[_last.lang] || TXT.ja).ag;
     var name = ($('agName').value || '').trim();
@@ -671,36 +721,83 @@
     if(!sig){ alert(T.errSign); return; }
     var rest = ($('agRest').value || '').trim();
     var chef = ($('agChef').value || '').trim();
+    var min = ($('agMin').value || '').trim();
     var btn = $('agSubmitBtn'); btn.disabled = true; btn.textContent = T.submitting;
     var params = new URLSearchParams(location.search);
     var code = (params.get('c') || '').trim();
     fetch(SUPABASE_URL + '/rest/v1/rpc/partner_agree', {
       method:'POST',
       headers:{ 'apikey':SUPABASE_KEY, 'Authorization':'Bearer '+SUPABASE_KEY, 'Content-Type':'application/json' },
-      body: JSON.stringify({ p_code:code, p_restaurant:rest, p_chef:chef, p_name:name, p_ua:navigator.userAgent, p_signature:sig })
+      body: JSON.stringify({ p_code:code, p_restaurant:rest, p_chef:chef, p_name:name, p_ua:navigator.userAgent, p_signature:sig, p_min:min })
     })
     .then(function(r){ return r.json(); })
-    .then(function(res){ btn.disabled=false; btn.textContent=T.submit; agRenderCert(name, rest, chef, (res && res.agreed_at) || null, sig); })
-    .catch(function(){ btn.disabled=false; btn.textContent=T.submit; agRenderCert(name, rest, chef, null, sig); });
+    .then(function(res){
+      btn.disabled=false; btn.textContent=T.submit;
+      agShowCert({ restaurant:rest, chef:chef, name:name, min:min, signature:sig, iso:(res && res.agreed_at) || null, id:(res && res.id) || null });
+    })
+    .catch(function(){ btn.disabled=false; btn.textContent=T.submit; agShowCert({ restaurant:rest, chef:chef, name:name, min:min, signature:sig, iso:null, id:null }); });
   };
-  function agRenderCert(name, rest, chef, iso, sigUrl){
-    var T = (TXT[_last.lang] || TXT.ja).ag;
-    var d = iso ? new Date(iso) : new Date();
-    var since = d.getFullYear() + '.' + ('0'+(d.getMonth()+1)).slice(-2);
-    $('certRest').textContent = rest || '—';
-    // 파트너 측 서명자/셰프 — 있으면 표시
-    var who = chef ? ('with Chef ' + chef) : (name ? ('with ' + name) : '');
-    $('certChef').textContent = who;
-    $('certSince').textContent = since;
-    // 손글씨 서명 표시
-    if(sigUrl){ $('certSigImg').src = sigUrl; $('certSigName').textContent = name || chef || ''; $('certSignBlock').style.display = ''; }
-    else { $('certSignBlock').style.display = 'none'; }
-    $('certMsg').innerHTML = sb(T.tokenMsg);
-    $('certDis').textContent = T.disclaimer;
-    $('certShare').textContent = T.share;
+
+  function agShowCert(d){
+    var lang = _last.lang, T = (TXT[lang] || TXT.ja).ag;
+    $('agCertToken').innerHTML = tokenHTML(lang, { restaurant:d.restaurant, chef:d.chef, name:d.name, min:d.min, signature:d.signature, since:_sinceStr(d.iso) });
+    $('agDoneMsg').textContent = T.done;
+    $('certShareBtn').textContent = T.shareBtn;
+    $('certCopyBtn').textContent = T.copyBtn;
+    $('certShareNote').textContent = d.id ? T.shareNote : '';
+    _certShareUrl = d.id ? _certUrl(d.id) : '';
+    $('certLink').textContent = _certShareUrl ? _certShareUrl.replace(/^https?:\/\//,'') : '';
+    // id 가 없으면(저장 실패) 공유/복사 숨김
+    var hasUrl = !!_certShareUrl;
+    $('certShareBtn').style.display = hasUrl ? '' : 'none';
+    $('certCopyBtn').style.display = hasUrl ? '' : 'none';
     $('certClose').textContent = T.close;
     $('agForm').style.display = 'none'; $('agCert').style.display = '';
     var sheet = document.querySelector('#agModal .sheet'); if(sheet) sheet.scrollTop = 0;
+  }
+  window.certShare = function(){
+    var T = (TXT[_last.lang] || TXT.ja).ag;
+    if(!_certShareUrl) return;
+    if(navigator.share){
+      navigator.share({ title:'TAAM Partnership', text:T.done, url:_certShareUrl }).catch(function(){});
+    } else { certCopyLink(); }
+  };
+  window.certCopyLink = function(){
+    var T = (TXT[_last.lang] || TXT.ja).ag;
+    if(!_certShareUrl) return;
+    var btn = $('certCopyBtn'), orig = btn.textContent;
+    function done(){ btn.textContent = '✓ ' + T.copied; setTimeout(function(){ btn.textContent = orig; }, 1400); }
+    if(navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(_certShareUrl).then(done, done); }
+    else { var ta=document.createElement('textarea'); ta.value=_certShareUrl; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select(); try{document.execCommand('copy');}catch(_e){} document.body.removeChild(ta); done(); }
+  };
+  window.certPageShare = function(){
+    var url = location.href;
+    if(navigator.share){ navigator.share({ title:'TAAM Partnership', url:url }).catch(function(){}); }
+    else if(navigator.clipboard){ navigator.clipboard.writeText(url); var b=$('certPageShareBtn'); var o=b.textContent; b.textContent='✓'; setTimeout(function(){b.textContent=o;},1400); }
+  };
+  // ?cert=<id> — 완성된 증표 단독 조회 (양측이 각자 보관)
+  function renderCertPage(id){
+    var lang = _browserLang();
+    fetch(SUPABASE_URL + '/rest/v1/rpc/partner_agreement_get', {
+      method:'POST',
+      headers:{ 'apikey':SUPABASE_KEY, 'Authorization':'Bearer '+SUPABASE_KEY, 'Content-Type':'application/json' },
+      body: JSON.stringify({ p_id: parseInt(id,10) || 0 })
+    })
+    .then(function(r){ return r.json(); })
+    .then(function(a){
+      if(!a || !a.ok){ showGate(TXT.ja.invalid + '<br><br>' + TXT.en.invalid); return; }
+      var T = (TXT[lang] || TXT.ja).ag;
+      document.body.className = (lang==='en'?'en':(lang==='ko'?'ko':''));
+      $('certPageToken').innerHTML = tokenHTML(lang, {
+        restaurant:a.restaurant_name, chef:a.chef_name, name:a.signer_name,
+        min:a.agreed_min, signature:a.signature_data, since:_sinceStr(a.agreed_at)
+      });
+      $('certPageNote').textContent = T.shareNote;
+      $('certPageShareBtn').textContent = T.shareBtn;
+      $('gate').style.display = 'none';
+      $('certPage').style.display = 'block';
+    })
+    .catch(function(){ showGate('통신 오류 / Error'); });
   }
   window.pvSetLang = function(l){ if(_last.data) render(l, _last.data); };
   window.pvClose = function(){
@@ -736,6 +833,11 @@
   }
 
   showGate(TXT.ja.loading);
+
+  // ?cert=<id> — 완성된 증표 단독 조회 (제안서 문서 대신 증표만 표시)
+  var certId = params.get('cert');
+  if(certId){ renderCertPage(certId); return; }
+
   loadLogos();   // 로고는 페이지 코드와 독립적으로 직접 조회 → 확실히 하단에 표시
 
   if(generic){
