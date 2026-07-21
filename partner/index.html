@@ -118,6 +118,15 @@
   body.en .tk-tbrand{font-family:'Oswald',sans-serif;}
   .tk-seal{width:48px;height:48px;margin-top:8px;border-radius:50%;border:1.5px solid var(--bd);color:var(--bd);display:flex;align-items:center;justify-content:center;font-family:'Shippori Mincho',serif;font-size:19px;transform:rotate(-7deg);opacity:.85;}
   .tk-role{font-size:9px;letter-spacing:.14em;color:var(--gold);font-weight:700;margin-top:10px;border-top:1px solid #ddd3bf;padding-top:6px;width:100%;}
+  /* 협의 조건 상세 (숨김 → 클릭 시 펼침) */
+  .tk-detwrap{text-align:center;margin-top:16px;}
+  .tk-dettoggle{border:none;background:none;color:var(--bd);font-size:11px;font-weight:700;letter-spacing:.06em;cursor:pointer;font-family:inherit;padding:4px 8px;}
+  .tk-dettoggle .ar{font-size:9px;}
+  .tk-detbody{margin-top:10px;background:#fff;border:1px solid #e3dac7;border-radius:10px;padding:12px 14px;text-align:left;}
+  .tk-drow{display:flex;justify-content:space-between;align-items:baseline;gap:12px;font-size:12px;padding:4px 0;}
+  .tk-drow .k{color:var(--sub);}
+  .tk-drow .v{font-family:'Shippori Mincho','Nanum Myeongjo',serif;font-weight:700;color:var(--bd);white-space:nowrap;}
+  .tk-dnote{font-size:10px;color:#a89f8e;margin:2px 0 6px;}
   .tk-dis{font-size:10px;color:#b0a795;line-height:1.75;margin-top:16px;border-top:1px solid #eee5d4;padding-top:12px;text-align:center;}
   /* 가로(폰 회전) — 좌: 파트너+서명 / 중앙: 브랜드 / 우: TAAM+도장 */
   @media (orientation: landscape){
@@ -263,6 +272,7 @@
           <div class="agcol"><label id="agLblRest"></label><input type="text" id="agRest"></div>
         </div>
         <input type="hidden" id="agChef">
+        <label id="agLblMeal"></label><input type="text" id="agMeal">
         <label id="agLblMin"></label><input type="text" id="agMin">
         <label class="agchk"><input type="checkbox" id="agAgree"><span id="agAgreeTxt"></span></label>
         <label id="agLblSign"></label>
@@ -357,6 +367,8 @@
         certRep:'代表 : Woo', certSealLb:'承認印', certSealMark:'承認', certHanko:'OFFICIAL', certMainSuffix:'提携',
         tokenMsg:'このご縁に、心より感謝いたします。共に、末永く。',
         minLabel:'お飲み物 最低注文（お一人様）', minPh:'例：¥10,000',
+        mealLabel:'お食事代', mealPh:'例：¥30,000', detailToggle:'協議条件を見る',
+        seasonNote:'季節により金額は変動する場合があります', minSuffix:'〜',
         done:'パートナーシップが成立しました 🎉', shareBtn:'📤 証を保存・共有',
         copyBtn:'🔗 リンクをコピー', copied:'コピーしました',
         shareNote:'両者がこのリンクで、それぞれ証を保管・共有できます。',
@@ -412,6 +424,8 @@
         certRep:'Founder : Woo', certSealLb:'SEAL', certSealMark:'OK', certHanko:'OFFICIAL', certMainSuffix:'Partnership',
         tokenMsg:'Thank you for this partnership. We’ll carry it with care, together.',
         minLabel:'Min. beverage order (per guest)', minPh:'e.g. $180',
+        mealLabel:'Dining fee', mealPh:'e.g. $300', detailToggle:'View agreed terms',
+        seasonNote:'Prices may vary by season', minSuffix:'or more',
         done:'Partnership confirmed 🎉', shareBtn:'📤 Save · Share token',
         copyBtn:'🔗 Copy link', copied:'Copied',
         shareNote:'Both sides can keep and share their token via this link.',
@@ -467,6 +481,8 @@
         certRep:'대표 : Woo', certSealLb:'승인인', certSealMark:'승인', certHanko:'OFFICIAL', certMainSuffix:'제휴',
         tokenMsg:'함께해 주셔서 감사합니다. 이 인연, 소중히 이어가겠습니다.',
         minLabel:'최소 주류 주문 (1인)', minPh:'예: 250,000원',
+        mealLabel:'식사 비용', mealPh:'예: 300,000원', detailToggle:'협의 조건 보기',
+        seasonNote:'계절에 따라 금액은 달라질 수 있습니다', minSuffix:'이상',
         done:'파트너십이 확정되었습니다 🎉', shareBtn:'📤 증표 저장 · 공유',
         copyBtn:'🔗 링크 복사', copied:'복사됨',
         shareNote:'이 링크로 양측이 각자 증표를 보관·공유할 수 있어요.',
@@ -630,6 +646,8 @@
     $('agIntro').textContent = T.intro;
     $('agLblName').textContent = T.name;
     $('agLblRest').textContent = T.rest;
+    $('agLblMeal').textContent = T.mealLabel;
+    $('agMeal').setAttribute('placeholder', T.mealPh || '');
     $('agLblMin').textContent = T.minLabel;
     $('agMin').setAttribute('placeholder', T.minPh || '');
     $('agAgreeTxt').textContent = T.agree;
@@ -641,7 +659,8 @@
     var d = _last.data || {};
     $('agRest').value = d.restaurant_name || '';
     $('agChef').value = d.chef_name || '';
-    $('agMin').value = d.beverage_price || '';   // QR에 기재된 최소금액 있으면 채움
+    $('agMeal').value = d.meal_price || '';       // QR 기재 식사비 있으면 채움
+    $('agMin').value = d.beverage_price || '';    // QR 기재 최소금액 있으면 채움
     $('agName').value = ''; $('agAgree').checked = false;
     $('agModal').style.display = 'flex';
     var sheet = document.querySelector('#agModal .sheet'); if(sheet) sheet.scrollTop = 0;
@@ -734,8 +753,32 @@
       +     '</div>'
       +   '</div>'
       + '</div>'
+      + _tokenDetail(T, d)
       + '<div class="tk-dis">' + esc(T.disclaimer) + '</div>';
   }
+  // 협의 조건 상세 (평소 숨김 → '협의 조건 보기' 클릭 시 펼침)
+  function _tokenDetail(T, d){
+    if(!d.meal && !d.min) return '';
+    var rows = '';
+    if(d.meal){
+      rows += '<div class="tk-drow"><span class="k">' + esc(T.mealLabel) + '</span><span class="v">' + esc(d.meal) + '</span></div>'
+            + '<div class="tk-dnote">(' + esc(T.seasonNote) + ')</div>';
+    }
+    if(d.min){
+      rows += '<div class="tk-drow"><span class="k">' + esc(T.minLabel) + '</span><span class="v">' + esc(d.min) + ' ' + esc(T.minSuffix) + '</span></div>';
+    }
+    return '<div class="tk-detwrap">'
+      + '<button type="button" class="tk-dettoggle" onclick="tokDetail(this)">' + esc(T.detailToggle) + ' <span class="ar">▾</span></button>'
+      + '<div class="tk-detbody" style="display:none;">' + rows + '</div>'
+      + '</div>';
+  }
+  window.tokDetail = function(btn){
+    var body = btn.parentNode.querySelector('.tk-detbody');
+    var ar = btn.querySelector('.ar');
+    var open = body.style.display !== 'none';
+    body.style.display = open ? 'none' : 'block';
+    if(ar) ar.textContent = open ? '▾' : '▴';
+  };
   function _sinceStr(iso){ var d = iso ? new Date(iso) : new Date(); return d.getFullYear() + '.' + ('0'+(d.getMonth()+1)).slice(-2); }
   function _certUrl(id){ return location.origin + location.pathname + '?cert=' + id; }
   var _certShareUrl = '';
@@ -749,6 +792,7 @@
     if(!sig){ alert(T.errSign); return; }
     var rest = ($('agRest').value || '').trim();
     var chef = ($('agChef').value || '').trim();
+    var meal = ($('agMeal').value || '').trim();
     var min = ($('agMin').value || '').trim();
     var btn = $('agSubmitBtn'); btn.disabled = true; btn.textContent = T.submitting;
     var params = new URLSearchParams(location.search);
@@ -756,19 +800,19 @@
     fetch(SUPABASE_URL + '/rest/v1/rpc/partner_agree', {
       method:'POST',
       headers:{ 'apikey':SUPABASE_KEY, 'Authorization':'Bearer '+SUPABASE_KEY, 'Content-Type':'application/json' },
-      body: JSON.stringify({ p_code:code, p_restaurant:rest, p_chef:chef, p_name:name, p_ua:navigator.userAgent, p_signature:sig, p_min:min })
+      body: JSON.stringify({ p_code:code, p_restaurant:rest, p_chef:chef, p_name:name, p_ua:navigator.userAgent, p_signature:sig, p_min:min, p_meal:meal })
     })
     .then(function(r){ return r.json(); })
     .then(function(res){
       btn.disabled=false; btn.textContent=T.submit;
-      agShowCert({ restaurant:rest, chef:chef, name:name, min:min, signature:sig, iso:(res && res.agreed_at) || null, id:(res && res.id) || null });
+      agShowCert({ restaurant:rest, chef:chef, name:name, meal:meal, min:min, signature:sig, iso:(res && res.agreed_at) || null, id:(res && res.id) || null });
     })
-    .catch(function(){ btn.disabled=false; btn.textContent=T.submit; agShowCert({ restaurant:rest, chef:chef, name:name, min:min, signature:sig, iso:null, id:null }); });
+    .catch(function(){ btn.disabled=false; btn.textContent=T.submit; agShowCert({ restaurant:rest, chef:chef, name:name, meal:meal, min:min, signature:sig, iso:null, id:null }); });
   };
 
   function agShowCert(d){
     var lang = _last.lang, T = (TXT[lang] || TXT.ja).ag;
-    $('agCertToken').innerHTML = tokenHTML(lang, { restaurant:d.restaurant, chef:d.chef, name:d.name, min:d.min, signature:d.signature, since:_sinceStr(d.iso) });
+    $('agCertToken').innerHTML = tokenHTML(lang, { restaurant:d.restaurant, chef:d.chef, name:d.name, meal:d.meal, min:d.min, signature:d.signature, since:_sinceStr(d.iso) });
     $('agDoneMsg').textContent = T.done;
     $('certShareBtn').textContent = T.shareBtn;
     $('certCopyBtn').textContent = T.copyBtn;
@@ -818,7 +862,7 @@
       document.body.className = (lang==='en'?'en':(lang==='ko'?'ko':''));
       $('certPageToken').innerHTML = tokenHTML(lang, {
         restaurant:a.restaurant_name, chef:a.chef_name, name:a.signer_name,
-        min:a.agreed_min, signature:a.signature_data, since:_sinceStr(a.agreed_at)
+        meal:a.agreed_meal, min:a.agreed_min, signature:a.signature_data, since:_sinceStr(a.agreed_at)
       });
       $('certPageNote').textContent = T.shareNote;
       $('certPageShareBtn').textContent = T.shareBtn;
