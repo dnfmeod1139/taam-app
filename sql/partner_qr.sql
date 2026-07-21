@@ -158,6 +158,8 @@ create table if not exists public.partner_agreements (
   agreed_at       timestamptz not null default now(),
   user_agent      text
 );
+-- 🆕 서명 이미지(손글씨 캔버스 PNG data URL)
+alter table public.partner_agreements add column if not exists signature_data text;
 alter table public.partner_agreements enable row level security;
 
 drop policy if exists "superadmin reads partner agreements" on public.partner_agreements;
@@ -166,7 +168,9 @@ on public.partner_agreements for select to authenticated
 using ( public.is_super_admin(auth.uid()) );
 
 -- anon 은 RPC 로만 승인 기록 (직접 insert 불가)
-create or replace function public.partner_agree(p_code text, p_restaurant text, p_chef text, p_name text, p_ua text default null)
+-- 서명 파라미터(p_signature) 추가 → 구 5-인자 버전은 제거 후 재생성
+drop function if exists public.partner_agree(text,text,text,text,text);
+create or replace function public.partner_agree(p_code text, p_restaurant text, p_chef text, p_name text, p_ua text default null, p_signature text default null)
 returns json
 language plpgsql
 security definer
@@ -177,14 +181,14 @@ begin
   if coalesce(trim(p_name),'') = '' then
     return json_build_object('ok', false, 'error', 'name required');
   end if;
-  insert into public.partner_agreements(code, restaurant_name, chef_name, signer_name, user_agent)
-  values (nullif(trim(p_code),''), nullif(trim(p_restaurant),''), nullif(trim(p_chef),''), trim(p_name), left(coalesce(p_ua,''),400))
+  insert into public.partner_agreements(code, restaurant_name, chef_name, signer_name, user_agent, signature_data)
+  values (nullif(trim(p_code),''), nullif(trim(p_restaurant),''), nullif(trim(p_chef),''), trim(p_name), left(coalesce(p_ua,''),400), p_signature)
   returning id, agreed_at into new_id, ts;
   return json_build_object('ok', true, 'id', new_id, 'agreed_at', ts);
 end;
 $$;
-revoke execute on function public.partner_agree(text,text,text,text,text) from public;
-grant  execute on function public.partner_agree(text,text,text,text,text) to anon;
-grant  execute on function public.partner_agree(text,text,text,text,text) to authenticated;
+revoke execute on function public.partner_agree(text,text,text,text,text,text) from public;
+grant  execute on function public.partner_agree(text,text,text,text,text,text) to anon;
+grant  execute on function public.partner_agree(text,text,text,text,text,text) to authenticated;
 
 do $$ begin raise notice '✅ 파트너 전용 QR v2 — 조건·로고·GENERIC·승인 설치 완료'; end $$;

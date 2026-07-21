@@ -84,6 +84,15 @@
   .agdis{font-size:11px;color:var(--sub);line-height:1.9;margin-top:14px;background:#fff;border:1px solid var(--line);border-radius:10px;padding:12px 14px;}
   .agbtn{width:100%;margin-top:18px;padding:15px;border:none;border-radius:12px;background:var(--bd);color:#fff;font-size:14px;font-weight:800;cursor:pointer;font-family:inherit;}
   .agx{float:right;border:none;background:none;font-size:20px;color:#999;cursor:pointer;line-height:1;}
+  /* 서명 패드 */
+  .sigpad-wrap{position:relative;margin-top:6px;}
+  .sigpad{width:100%;height:160px;border:1px solid var(--line);border-radius:12px;background:#fff;display:block;touch-action:none;cursor:crosshair;}
+  .sigph{position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);text-align:center;color:#cbc3b4;font-size:13px;pointer-events:none;letter-spacing:.04em;}
+  .sigclear{position:absolute;top:9px;right:11px;border:1px solid var(--line);background:rgba(255,255,255,.92);color:#8a8478;font-size:11px;font-weight:700;padding:5px 11px;border-radius:8px;cursor:pointer;font-family:inherit;}
+  /* 증표 속 서명 */
+  .token .tk-sign{margin-top:20px;}
+  .token .tk-sign img{max-width:200px;max-height:70px;width:auto;display:block;margin:0 auto;}
+  .token .tk-signname{font-size:10.5px;color:var(--sub);letter-spacing:.1em;border-top:1px solid #ddd3bf;max-width:210px;margin:0 auto;padding-top:6px;}
   /* ── 파트너십 증표 (미니멀) ── */
   .token{position:relative;background:linear-gradient(#fbfaf7,#f5f0e7);border:1px solid #e3dac7;border-radius:16px;padding:42px 30px 30px;text-align:center;box-shadow:0 12px 34px rgba(90,60,30,.13);}
   .token .tk-brand{font-family:'Shippori Mincho',serif;font-size:14px;letter-spacing:.55em;text-indent:.55em;color:var(--bd);font-weight:600;}
@@ -230,7 +239,12 @@
         <label id="agLblRest"></label><input type="text" id="agRest">
         <label id="agLblChef"></label><input type="text" id="agChef">
         <label class="agchk"><input type="checkbox" id="agAgree"><span id="agAgreeTxt"></span></label>
-        <label id="agLblSign"></label><input type="text" id="agSign">
+        <label id="agLblSign"></label>
+        <div class="sigpad-wrap">
+          <canvas id="agSigCanvas" class="sigpad"></canvas>
+          <div class="sigph" id="agSigPh"></div>
+          <button type="button" class="sigclear" id="agSigClear" onclick="sigClear()"></button>
+        </div>
       </div>
       <div class="agdis" id="agDis"></div>
       <button class="agbtn" id="agSubmitBtn" onclick="agSubmit()"></button>
@@ -243,6 +257,10 @@
         <div class="tk-rest" id="certRest"></div>
         <div class="tk-chef" id="certChef"></div>
         <div class="tk-since"><span class="dot">◦</span>SINCE <span id="certSince"></span><span class="dot">◦</span></div>
+        <div class="tk-sign" id="certSignBlock" style="display:none;">
+          <img id="certSigImg" alt="signature">
+          <div class="tk-signname" id="certSigName"></div>
+        </div>
         <div class="tk-seal">承</div>
         <div class="tk-msg" id="certMsg"></div>
         <div class="tk-dis" id="certDis"></div>
@@ -302,7 +320,7 @@
         intro: '上記にご賛同いただけましたら、以下をご記入ください。TAAM 公式スタンプ入りの承認証をお渡しします。',
         name:'お名前', rest:'店名', chef:'シェフ名',
         agree:'上記条件に同意し、TAAM とパートナーシップを結びます。',
-        sign:'サイン（お名前を入力）',
+        sign:'サイン（画面に手書き）', sigPlaceholder:'ここに指・Apple Pencil でご署名ください', sigClear:'消す', errSign:'ご署名をお願いいたします',
         disclaimer:'本証書に法的拘束力はなく、相互協議のうえ、いつでもパートナーシップを解除できます。',
         submit:'承認して証書を受け取る', submitting:'処理中…',
         certTitle:'提携承認証',
@@ -353,7 +371,7 @@
         intro: 'If you agree with the above, please fill in below. You’ll receive a TAAM-stamped certificate to keep and share.',
         name:'Your name', rest:'Restaurant', chef:'Chef',
         agree:'I agree to the terms above and enter into a partnership with TAAM.',
-        sign:'Signature (type your name)',
+        sign:'Signature (draw on screen)', sigPlaceholder:'Sign here with finger or Apple Pencil', sigClear:'Clear', errSign:'Please add your signature',
         disclaimer:'This certificate is not legally binding; either party may end the partnership at any time by mutual agreement.',
         submit:'Approve & get certificate', submitting:'Processing…',
         certTitle:'CERTIFICATE',
@@ -404,7 +422,7 @@
         intro: '위 제안에 동의하시면 아래를 작성해 주세요. TAAM 공식 스탬프가 찍힌 승인 증서를 함께 나눠 갖습니다.',
         name:'성함', rest:'레스토랑명', chef:'셰프명',
         agree:'위 조건에 동의하며 TAAM과 파트너십을 맺습니다.',
-        sign:'서명 (성함 입력)',
+        sign:'서명 (화면에 직접)', sigPlaceholder:'손가락·Apple Pencil로 여기에 서명해 주세요', sigClear:'지우기', errSign:'서명을 해주세요',
         disclaimer:'본 증서는 법적 구속력이 없으며, 상호 협의 시 언제든지 파트너십을 해제할 수 있습니다.',
         submit:'승인하고 증서 받기', submitting:'처리 중…',
         certTitle:'파트너십 승인증',
@@ -576,37 +594,96 @@
     $('agLblChef').textContent = T.chef;
     $('agAgreeTxt').textContent = T.agree;
     $('agLblSign').textContent = T.sign;
+    $('agSigPh').textContent = T.sigPlaceholder;
+    $('agSigClear').textContent = T.sigClear;
     $('agDis').textContent = T.disclaimer;
     $('agSubmitBtn').textContent = T.submit;
     var d = _last.data || {};
     $('agRest').value = d.restaurant_name || '';
     $('agChef').value = d.chef_name || '';
-    $('agName').value = ''; $('agSign').value = ''; $('agAgree').checked = false;
+    $('agName').value = ''; $('agAgree').checked = false;
     $('agModal').style.display = 'flex';
     var sheet = document.querySelector('#agModal .sheet'); if(sheet) sheet.scrollTop = 0;
+    requestAnimationFrame(function(){ sigInit(); });   // 레이아웃 확정 후 캔버스 초기화
   };
+
+  // ── 서명 패드 (포인터 이벤트 · 저지연 · Apple Pencil coalesced) ──
+  var _sig = { canvas:null, ctx:null, drawing:false, last:null, mid:null, dirty:false, bound:false };
+  function sigInit(){
+    var c = document.getElementById('agSigCanvas'); if(!c) return;
+    _sig.canvas = c;
+    var r = c.getBoundingClientRect();
+    var dpr = window.devicePixelRatio || 1;
+    c.width = Math.max(1, Math.round(r.width * dpr));
+    c.height = Math.max(1, Math.round(r.height * dpr));
+    var ctx = c.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.lineWidth = 2.4; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#1a1a18';
+    ctx.clearRect(0, 0, r.width, r.height);
+    _sig.ctx = ctx; _sig.dirty = false;
+    var ph = document.getElementById('agSigPh'); if(ph) ph.style.display = '';
+    if(!_sig.bound){
+      _sig.bound = true;
+      c.addEventListener('pointerdown', sigDown);
+      c.addEventListener('pointermove', sigMove);
+      window.addEventListener('pointerup', sigUp);
+      c.addEventListener('pointercancel', sigUp);
+    }
+  }
+  function _sigPt(e){ var r = _sig.canvas.getBoundingClientRect(); return { x:e.clientX - r.left, y:e.clientY - r.top }; }
+  function sigDown(e){
+    e.preventDefault(); _sig.drawing = true;
+    _sig.last = _sigPt(e); _sig.mid = null;
+    var ph = document.getElementById('agSigPh'); if(ph) ph.style.display = 'none';
+    try { _sig.canvas.setPointerCapture(e.pointerId); } catch(_e){}
+  }
+  function sigMove(e){
+    if(!_sig.drawing) return; e.preventDefault();
+    var evs = (typeof e.getCoalescedEvents === 'function') ? e.getCoalescedEvents() : null;
+    if(evs && evs.length){ for(var i=0;i<evs.length;i++) _sigStroke(_sigPt(evs[i])); }
+    else _sigStroke(_sigPt(e));
+  }
+  function _sigStroke(p){
+    var ctx = _sig.ctx, a = _sig.last;
+    var mid = { x:(a.x+p.x)/2, y:(a.y+p.y)/2 };
+    ctx.beginPath();
+    ctx.moveTo(_sig.mid ? _sig.mid.x : a.x, _sig.mid ? _sig.mid.y : a.y);
+    ctx.quadraticCurveTo(a.x, a.y, mid.x, mid.y);
+    ctx.stroke();
+    _sig.last = p; _sig.mid = mid; _sig.dirty = true;
+  }
+  function sigUp(){ _sig.drawing = false; }
+  window.sigClear = function(){
+    if(!_sig.ctx || !_sig.canvas) return;
+    var r = _sig.canvas.getBoundingClientRect();
+    _sig.ctx.clearRect(0, 0, r.width, r.height);
+    _sig.dirty = false;
+    var ph = document.getElementById('agSigPh'); if(ph) ph.style.display = '';
+  };
+  function sigDataUrl(){ return _sig.dirty ? _sig.canvas.toDataURL('image/png') : ''; }
   window.agClose = function(){ $('agModal').style.display = 'none'; };
   window.agSubmit = function(){
     var T = (TXT[_last.lang] || TXT.ja).ag;
     var name = ($('agName').value || '').trim();
     if(!name){ alert(T.errName); return; }
     if(!$('agAgree').checked){ alert(T.errAgree); return; }
+    var sig = sigDataUrl();
+    if(!sig){ alert(T.errSign); return; }
     var rest = ($('agRest').value || '').trim();
     var chef = ($('agChef').value || '').trim();
-    var sign = ($('agSign').value || '').trim();
     var btn = $('agSubmitBtn'); btn.disabled = true; btn.textContent = T.submitting;
     var params = new URLSearchParams(location.search);
     var code = (params.get('c') || '').trim();
     fetch(SUPABASE_URL + '/rest/v1/rpc/partner_agree', {
       method:'POST',
       headers:{ 'apikey':SUPABASE_KEY, 'Authorization':'Bearer '+SUPABASE_KEY, 'Content-Type':'application/json' },
-      body: JSON.stringify({ p_code:code, p_restaurant:rest, p_chef:chef, p_name:(sign||name), p_ua:navigator.userAgent })
+      body: JSON.stringify({ p_code:code, p_restaurant:rest, p_chef:chef, p_name:name, p_ua:navigator.userAgent, p_signature:sig })
     })
     .then(function(r){ return r.json(); })
-    .then(function(res){ btn.disabled=false; btn.textContent=T.submit; agRenderCert(name, rest, chef, (res && res.agreed_at) || null); })
-    .catch(function(){ btn.disabled=false; btn.textContent=T.submit; agRenderCert(name, rest, chef, null); });
+    .then(function(res){ btn.disabled=false; btn.textContent=T.submit; agRenderCert(name, rest, chef, (res && res.agreed_at) || null, sig); })
+    .catch(function(){ btn.disabled=false; btn.textContent=T.submit; agRenderCert(name, rest, chef, null, sig); });
   };
-  function agRenderCert(name, rest, chef, iso){
+  function agRenderCert(name, rest, chef, iso, sigUrl){
     var T = (TXT[_last.lang] || TXT.ja).ag;
     var d = iso ? new Date(iso) : new Date();
     var since = d.getFullYear() + '.' + ('0'+(d.getMonth()+1)).slice(-2);
@@ -615,6 +692,9 @@
     var who = chef ? ('with Chef ' + chef) : (name ? ('with ' + name) : '');
     $('certChef').textContent = who;
     $('certSince').textContent = since;
+    // 손글씨 서명 표시
+    if(sigUrl){ $('certSigImg').src = sigUrl; $('certSigName').textContent = name || chef || ''; $('certSignBlock').style.display = ''; }
+    else { $('certSignBlock').style.display = 'none'; }
     $('certMsg').innerHTML = sb(T.tokenMsg);
     $('certDis').textContent = T.disclaimer;
     $('certShare').textContent = T.share;
