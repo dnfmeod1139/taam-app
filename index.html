@@ -12203,18 +12203,45 @@ async function savePurchase(){
       //   거부(매진 경합 패자)된 건은 자동 전액 환불 + 기록 제거 + 슈퍼어드민 통지.
       //   (기존 배치 insert 는 한 건 거부 시 전체 실패 + 돈만 빠진 상태로 침묵)
       for (const row of toInsert) {
-        const { error: insErr } = await window.sb.from('tickets').insert(row);
-        if (!insErr) continue;
-        console.error('[savePurchase] insert 실패:', row.purchase_id, insErr.message);
-        var _isCapErr = /TICKET_SOLD_OUT|SLOT_SOLD_OUT|INVALID_PARTY_SIZE|SOLO_LIMIT|FRAGMENT_BLOCKED/.test(insErr.message || '');
-        if (_isCapErr) {
-          await _tkCapacityAutoRefund(row, user, insErr.message);
-        } else {
-          var __now = Date.now();
-          if (!window._tkSaveErrToast || (__now - window._tkSaveErrToast) > 3000) {
-            window._tkSaveErrToast = __now;
-            if (typeof showToast === 'function') showToast('⚠','티켓 저장 실패','네트워크 확인 후 앱을 다시 열어주세요 (기록은 보존됨)');
+        var _ok = false, _lastErr = null;
+        // 🆕 2026.07: 일시적(네트워크/락) 실패에 재시도 3회 — 랜덤 저장 실패로
+        //   슈퍼어드민에 구매가 안 뜨던 문제 + 랜덤 에러 토스트 해소.
+        for (var _try = 0; _try < 3 && !_ok; _try++) {
+          if (_try > 0) await new Promise(function(rz){ setTimeout(rz, 400 * _try); });
+          var _ins = await window.sb.from('tickets').insert(row);
+          if (!_ins.error) { _ok = true; break; }
+          _lastErr = _ins.error;
+          var _em = _ins.error.message || '';
+          // ① 좌석 매진 거부 → 자동 전액 환불(정상 처리) — 재시도 안 함
+          if (/TICKET_SOLD_OUT|SLOT_SOLD_OUT|INVALID_PARTY_SIZE|SOLO_LIMIT|FRAGMENT_BLOCKED/.test(_em)) {
+            await _tkCapacityAutoRefund(row, user, _em);
+            _ok = true; break;
           }
+          // ② 이미 저장됨(중복) → 성공 취급 (동시 저장 경합 시 에러 방지)
+          if (_ins.error.code === '23505' || /duplicate|already exists|unique constraint/i.test(_em)) {
+            _ok = true; break;
+          }
+          // ③ 그 외(일시적) → 잠시 후 재시도
+          console.warn('[savePurchase] insert 재시도 ' + (_try+1) + '/3:', row.purchase_id, _em);
+        }
+        if (!_ok) {
+          console.error('[savePurchase] insert 최종 실패:', row.purchase_id, _lastErr && _lastErr.message);
+          // 기록은 IDB 에 보존됨 → 잠시 후 자동 재동기화(최대 3회)로 자가 복구
+          if ((window._tkResyncCount || 0) < 3 && !window._tkResyncScheduled) {
+            window._tkResyncScheduled = true;
+            setTimeout(function(){
+              window._tkResyncScheduled = false;
+              window._tkResyncCount = (window._tkResyncCount || 0) + 1;
+              try { savePurchase(); } catch(_e){}
+            }, 5000);
+          }
+          var __now = Date.now();
+          if (!window._tkSaveErrToast || (__now - window._tkSaveErrToast) > 8000) {
+            window._tkSaveErrToast = __now;
+            if (typeof showToast === 'function') showToast('⏳','저장 재시도 중','잠시 후 자동으로 다시 저장됩니다 · 기록은 안전하게 보존됐어요');
+          }
+        } else {
+          window._tkResyncCount = 0;   // 성공 시 카운터 리셋
         }
       }
       console.log('🎫 티켓 Supabase 저장 시도:', toInsert.length + '건');
@@ -12278,12 +12305,13 @@ async function _tkCapacityAutoRefund(row, user, errMsg){
 
 async function loadPurchase(){
   purchaseHistory = [];
+  var _idbBackup = [];   // 🆕 Supabase 로 덮어쓰기 전 IDB 원본 보관 (미동기화 복구용)
 
   try {
     // IDB 백업 먼저 로드
     const s = await IDB.get(_userKey('excPurchase')).catch(function(){ return null; });
     if(s){
-      try { purchaseHistory = JSON.parse(s) || []; } catch(e){ purchaseHistory = []; }
+      try { _idbBackup = JSON.parse(s) || []; purchaseHistory = _idbBackup.slice(); } catch(e){ purchaseHistory = []; }
     }
 
     // Supabase에서 진짜 데이터 로드 (우선)
@@ -12330,6 +12358,21 @@ async function loadPurchase(){
     }));
 
     console.log('🎫 티켓 Supabase 로드:', purchaseHistory.length + '건');
+
+    // 🆕 2026.07: IDB 에만 있고 Supabase 에 없는 구매(동기화 누락분) 복구.
+    //   구매는 로컬 완료됐지만 DB 저장이 실패해 슈퍼어드민에 안 뜨던 건을
+    //   메모리에 다시 병합 + 잠시 후 자동 재저장(savePurchase 재시도)으로 자가 복구.
+    try {
+      var _dbIds = new Set(purchaseHistory.map(function(x){ return x.purchaseId; }).filter(Boolean));
+      var _missing = _idbBackup.filter(function(x){
+        return x && x.purchaseId && !_dbIds.has(x.purchaseId) && x.status !== 'cancelled';
+      });
+      if (_missing.length) {
+        console.warn('[loadPurchase] Supabase 미동기화 구매 ' + _missing.length + '건 복구·재저장 예약');
+        purchaseHistory = purchaseHistory.concat(_missing);
+        setTimeout(function(){ try { if(typeof savePurchase==='function') savePurchase(); } catch(_e){} }, 2500);
+      }
+    } catch(_me){ console.warn('[loadPurchase] 미동기화 복구 예외:', _me); }
   } catch(e){
     console.error('[loadPurchase] 예외:', e);
   }
@@ -18181,9 +18224,11 @@ async function completePurchase(){
             console.log('✅ 서버 검증 & 저장 성공:', result.body);
           } else {
             console.error('❌ 서버 검증 실패:', result.status, result.body);
-            // 심각한 에러 (금액 불일치 등) → 사용자에게 알림
-            if (result.status === 400 && result.body && result.body.error) {
-              alert('결제 기록 저장 중 문제가 발생했습니다:\n' + result.body.error +
+            // 🆕 카드(PortOne) 결제의 금액 위조 등 심각 오류만 사용자 알림.
+            //   예치금 결제·서버 검증 미배포 등은 로컬 저장(savePurchase)으로 이미 처리되므로
+            //   랜덤 알림을 띄우지 않음 (구매·알림은 정상 진행됨).
+            if (_snapUsedPortone && result.status === 400 && result.body && result.body.error) {
+              alert('카드 결제 검증 중 문제가 발생했습니다:\n' + result.body.error +
                     '\n\n관리자에게 문의해주세요.\n결제 ID: ' + (_snapPaymentId || 'N/A'));
             }
           }
@@ -20602,6 +20647,34 @@ function openCancelTicketModal(purchaseId){
 window.openCancelTicketModal = openCancelTicketModal;
 
 // 🆕 2026.05.21: 티켓 취소 + 환불 처리 실행
+// 🆕 취소로 좌석이 비면 매진(soldout)이던 티켓을 판매중(active)으로 복귀.
+//   전 회원 합산 RPC(taam_ticket_sold_pax) 기준 — 취소 반영 후 잔여석이 생기면 재개방.
+async function _tkMaybeReopen(h){
+  try {
+    if(!h) return;
+    var t = ticketDB.find(function(x){ return String(x.id) === String(h.id); });
+    if(!t || t.status !== 'soldout') return;   // 매진 상태였던 것만 대상
+    var totalPax = parseInt(t.totalPax || t.assignedPax || 0);
+    if(totalPax <= 0) return;
+    var rpcPax = -1;
+    if(window.sb){
+      try {
+        var _r = await window.sb.rpc('taam_ticket_sold_pax', { p_ticket_id: String(t.id) });
+        if(!_r.error && _r.data != null) rpcPax = parseInt(_r.data, 10);
+      } catch(_e){}
+    }
+    // RPC 실패 시 폴백: 로컬 미취소 구매 합산 (방금 취소분은 이미 cancelled 로 제외됨)
+    var localPax = purchaseHistory.filter(function(x){ return String(x.id) === String(t.id) && x.status !== 'cancelled'; })
+                     .reduce(function(s,x){ return s + (x.pax || 0); }, 0);
+    var usedPax = (rpcPax >= 0) ? rpcPax : localPax;
+    if(usedPax < totalPax){
+      t.status = 'active';                 // 판매중 복귀
+      try { saveTickets(); } catch(_){}    // IDB + Supabase(ticket_products) 반영 → 전 회원에게 판매중
+      try { if(typeof renderTickets === 'function') renderTickets(); } catch(_){}
+    }
+  } catch(e){ console.warn('[cancel] 좌석 재개방 예외:', e); }
+}
+
 async function cancelTicketPurchase(purchaseId, refundCalc, isSuperAdminOverride){
   var idx = purchaseHistory.findIndex(function(x){ return x.purchaseId === purchaseId; });
   if(idx < 0) return;
@@ -20617,20 +20690,24 @@ async function cancelTicketPurchase(purchaseId, refundCalc, isSuperAdminOverride
     h.cancelledByRole = (typeof _currentRole !== 'undefined') ? _currentRole : 'user';
     savePurchase();
 
-    // 2) Supabase tickets 테이블 업데이트
+    // 2) Supabase tickets 테이블 업데이트 (await — 이후 좌석 재계산이 취소분을 반영하도록)
     if(window.sb && h.purchaseId){
-      window.sb.from('tickets').update({
-        status: 'cancelled',
-        extra_data: Object.assign({}, h.extra_data || {}, {
-          cancelled_at: h.cancelledAt,
-          refunded_amount: h.refundedAmount,
-          cancel_reason: h.cancelReason,
-          cancelled_by_role: h.cancelledByRole
-        })
-      }).eq('purchase_id', h.purchaseId).then(function(res){
-        if(res.error) console.warn('[cancel] tickets update 실패:', res.error.message);
-      });
+      try {
+        var _uRes = await window.sb.from('tickets').update({
+          status: 'cancelled',
+          extra_data: Object.assign({}, h.extra_data || {}, {
+            cancelled_at: h.cancelledAt,
+            refunded_amount: h.refundedAmount,
+            cancel_reason: h.cancelReason,
+            cancelled_by_role: h.cancelledByRole
+          })
+        }).eq('purchase_id', h.purchaseId);
+        if(_uRes.error) console.warn('[cancel] tickets update 실패:', _uRes.error.message);
+      } catch(_ue){ console.warn('[cancel] tickets update 예외:', _ue); }
     }
+
+    // 🆕 2026.07: 좌석 해제 → 매진이었던 티켓을 실시간으로 판매중(active) 복귀
+    await _tkMaybeReopen(h);
 
     // 3) 환불 금액 만큼 예치금 복원 (general 우선)
     if(refundCalc.refundable > 0 && window.sb){
