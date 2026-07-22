@@ -12259,8 +12259,24 @@ async function _tkCapacityAutoRefund(row, user, errMsg){
     // 1) 로컬 구매기록 제거 (메모리 + IDB) — 서버에 행이 없으므로 기록도 없어야 정합
     purchaseHistory = purchaseHistory.filter(function(h){ return h.purchaseId !== row.purchase_id; });
     try { await IDB.set(_userKey('excPurchase'), JSON.stringify(purchaseHistory)); } catch(_ie){}
-    // 2) 예치금 전액 복원 (멤버십 버킷으로 — 총액 기준 동일) + 거래 기록
-    if (amt > 0) {
+    // 🛡 2026.07 팬텀 환불 방지: 서버에 실제 예치금 차감(ticket_purchase)이 있었고
+    //   아직 환불되지 않은 경우에만 환불 크레딧. (로컬-only 재동기화가 좌석초과로 거부될 때,
+    //   서버엔 차감이 없어 환불하면 잔액이 부풀려지던 버그 — 실제 차감분만 환불)
+    var _wasCharged = false, _alreadyRefunded = false;
+    try {
+      var _chk = await window.sb.from('deposit_transactions').select('id')
+        .eq('user_id', user.id).eq('change_type', 'ticket_purchase')
+        .filter('metadata->>purchase_id', 'eq', row.purchase_id);
+      _wasCharged = !!(_chk && _chk.data && _chk.data.length > 0);
+      var _ref = await window.sb.from('deposit_transactions').select('id')
+        .eq('user_id', user.id).eq('change_type', 'ticket_refund')
+        .filter('metadata->>purchase_id', 'eq', row.purchase_id);
+      _alreadyRefunded = !!(_ref && _ref.data && _ref.data.length > 0);
+    } catch(_ce){}
+    var _doRefund = (amt > 0 && _wasCharged && !_alreadyRefunded);
+
+    // 2) 실제 차감분이 있을 때만 예치금 복원 + 거래 기록
+    if (_doRefund) {
       var me = await window.sb.from('profiles').select('*').eq('id', user.id).maybeSingle();
       if (!me.error && me.data) {
         var _mem = (me.data.membership_deposit_balance || 0) + amt;
@@ -12279,27 +12295,26 @@ async function _tkCapacityAutoRefund(row, user, errMsg){
         try { var _bal = document.getElementById('mpBalance'); if(_bal) _bal.textContent = '₩ ' + currentDepositBalance.toLocaleString(); } catch(_be){}
       }
     }
-    // 3) 회원 안내
-    if (typeof showToast === 'function') {
+    // 3) 회원 안내 — 실제 환불이 발생한 경우만 (차감 없던 재동기화 정리는 조용히)
+    if (_doRefund && typeof showToast === 'function') {
       showToast('⚠','매진 — 자동 환불', (row.restaurant_name || '티켓') + ' 좌석이 방금 마감되어 결제가 취소되고 ₩' + amt.toLocaleString() + ' 전액 환불되었습니다', { category:'ticket', native:true });
     }
-    // 4) 슈퍼어드민 통지 (초대 결제였으면 초대 상태 점검 필요 표시)
-    try {
-      var _isInv = String(row.purchase_id || '').indexOf('INV-') === 0;
-      var _pxB = (row.restaurant_name || '') + ' · ' + (row.party_size || 0) + '인 · ₩' + amt.toLocaleString()
-        + ' — 좌석 초과로 결제 거부·자동 환불됨' + (_isInv ? ' (초대 결제 — 초대 상태 확인 필요)' : '');
-      ['superadmin','super_admin'].forEach(function(_rl){
-        try {
-          window.sb.functions.invoke('send-push', { body: { to: 'role:' + _rl, payload: {
-            title: '⚠ 매진 경합 자동 환불', body: _pxB, url: '/', category: 'capacity_refund', tag: 'taam-caprf-' + row.purchase_id } } });
-        } catch(_e2){}
-      });
-    } catch(_pe){}
-  } catch(e){
-    console.warn('[capRefund] 자동 환불 실패:', e);
-    if (typeof showToast === 'function') {
-      showToast('⚠','환불 확인 필요','매진으로 결제가 취소되었으나 자동 환불 처리에 실패했습니다. 고객센터(support@playtaam.com)로 문의해주세요');
+    // 4) 슈퍼어드민 통지 — 실제 환불 발생분만 (팬텀/재동기화 정리는 통지 안 함)
+    if (_doRefund) {
+      try {
+        var _isInv = String(row.purchase_id || '').indexOf('INV-') === 0;
+        var _pxB = (row.restaurant_name || '') + ' · ' + (row.party_size || 0) + '인 · ₩' + amt.toLocaleString()
+          + ' — 좌석 초과로 결제 거부·자동 환불됨' + (_isInv ? ' (초대 결제 — 초대 상태 확인 필요)' : '');
+        ['superadmin','super_admin'].forEach(function(_rl){
+          try {
+            window.sb.functions.invoke('send-push', { body: { to: 'role:' + _rl, payload: {
+              title: '⚠ 매진 경합 자동 환불', body: _pxB, url: '/', category: 'capacity_refund', tag: 'taam-caprf-' + row.purchase_id } } });
+          } catch(_e2){}
+        });
+      } catch(_pe){}
     }
+  } catch(e){
+    console.warn('[capRefund] 자동 환불 처리 예외:', e);
   }
 }
 
