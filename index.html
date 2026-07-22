@@ -9586,6 +9586,10 @@ window.closePromoCarousel = function(){
           <span style="font-family:var(--font-main);font-size:13px;color:#555;">대행비</span>
           <span id="dmReturnAgencyAmt" style="font-family:var(--font-main);font-size:15px;font-weight:700;color:#9B1C1C;"></span>
         </div>
+        <div id="dmExtraRow" style="display:none;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #f0ede8;">
+          <span style="font-family:var(--font-main);font-size:13px;color:#555;">추가 차감</span>
+          <span id="dmReturnExtraAmt" style="font-family:var(--font-main);font-size:15px;font-weight:700;color:#9B1C1C;"></span>
+        </div>
         <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;">
           <span style="font-family:var(--font-main);font-size:14px;font-weight:800;color:#1a1a18;">반환 금액</span>
           <span id="dmPopupReturnAmt" style="font-family:var(--font-main);font-size:20px;font-weight:900;color:#2a7a2a;"></span>
@@ -9603,7 +9607,20 @@ window.closePromoCarousel = function(){
         </div>
       </div>
 
-      <button class="dm-popup-confirm" style="background:#1a1a18;" onclick="dmConfirmReturn()">반환 완료 처리</button>
+      <!-- 🆕 추가 차감 (사유 메모 필수 → 회원에게 명시) -->
+      <div style="background:#fff6f4;border:1px solid #f0d9d3;border-radius:10px;padding:12px 14px;margin:6px 0 14px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+          <span style="font-family:var(--font-main);font-size:12px;font-weight:800;color:#9B1C1C;">추가 차감 (선택)</span>
+          <div style="display:flex;align-items:center;gap:4px;">
+            <span style="color:#9B1C1C;font-weight:700;">&#8361;</span>
+            <input id="dmExtraDeductInput" type="number" min="0" inputmode="numeric" placeholder="0" oninput="dmOnExtraDeduct()" style="width:120px;box-sizing:border-box;text-align:right;border:1px solid #e6cfc8;border-radius:8px;padding:8px 10px;font-family:var(--font-main);font-size:14px;font-weight:700;color:#1a1a18;outline:none;">
+          </div>
+        </div>
+        <div style="font-size:11px;color:#b98c82;margin-top:7px;line-height:1.6;">대행비 외에 추가로 차감할 금액이 있으면 입력하세요.<br><b>사유 메모는 필수</b>이며, 회원에게 그대로 안내됩니다.</div>
+        <textarea id="dmExtraNote" rows="2" oninput="dmOnExtraDeduct()" placeholder="추가 차감 사유 (예: 매장 기물 파손 배상, 노쇼 페널티 등) — 필수" style="width:100%;box-sizing:border-box;margin-top:9px;padding:10px 12px;border:1px solid #e6cfc8;border-radius:8px;font-family:var(--font-main);font-size:13px;color:#111;resize:vertical;outline:none;line-height:1.6;display:none;"></textarea>
+      </div>
+
+      <button id="dmReturnConfirmBtn" class="dm-popup-confirm" style="background:#1a1a18;" onclick="dmConfirmReturn()">반환 완료 처리</button>
       <button class="dm-popup-cancel" onclick="showDmPenaltySection()">환불 불가로 변경</button>
     </div>
     <!-- 환불불가 섹션 -->
@@ -20994,6 +21011,8 @@ function _dmPersistBuyerChanges(h, refundToAdd, refundNote){
             penaltyAmt: dr.penaltyAmt || 0,
             penaltyPct: dr.penaltyPct || 0,
             agencyHeld: dr.agencyHeld || 0,
+            extraDeduct: dr.extraDeduct || 0,
+            extraNote: dr.extraNote || '',
             note: dr.note || refundNote || ''
           }
         });
@@ -21017,9 +21036,13 @@ function _dmPersistBuyerChanges(h, refundToAdd, refundNote){
             general_deposit_balance: newGen
           }).eq('id', userId);
 
-          // description: 정상 반환은 "반환 완료"만 (대행비 차감 별도 강조하지 않음 — 정상 절차)
+          // description: 정상 반환은 "반환 완료" (대행비 차감은 정상 절차라 강조 안 함).
+          //   🆕 단, 추가 차감이 있으면 사유를 반드시 명시 → 회원 예치금 내역에 그대로 노출.
+          var _extraDesc = (dr.extraDeduct > 0)
+            ? ' — 추가 차감 ₩' + dr.extraDeduct.toLocaleString() + ' (사유: ' + (dr.extraNote || '') + ')'
+            : '';
           var _dtDesc = dr.type === 'returned'
-            ? ((h.rest || '티켓') + ' 반환 완료')
+            ? ((h.rest || '티켓') + ' 반환 완료' + _extraDesc)
             : ((h.rest || '티켓') + ' 환불 처리 — ' + refundNote);
           await window.sb.from('deposit_transactions').insert({
             user_id: userId,
@@ -21035,6 +21058,8 @@ function _dmPersistBuyerChanges(h, refundToAdd, refundNote){
               penalty_amt: dr.penaltyAmt || 0,
               penalty_pct: dr.penaltyPct || 0,
               agency_held: dr.agencyHeld || 0,
+              extra_deduct: dr.extraDeduct || 0,              // 🆕 추가 차감 금액
+              extra_note: dr.extraNote || '',                 // 🆕 추가 차감 사유
               return_amt: dr.returnAmt || refundToAdd,
               note: dr.note || refundNote,
               processed_by: 'super_admin',
@@ -21832,13 +21857,42 @@ function renderDmMgmtList(idx){
 // ── DM 팝업 ──
 var _dmPenaltyDirectAmt = null;
 var _dmAgencyExclude = true;
+var _dmExtraDeduct = 0;                 // 🆕 추가 차감 금액
 var _dmPenaltyExceptionRefund = false; // 예외 환불 (기본 미체크)
 var _dmPenaltyAgencyExclude = false;   // 대행비 제외 환불 (기본 미체크)
+
+// 🆕 추가 차감 입력 처리 — 금액/사유 갱신 + 반환 버튼 활성 제어
+function dmOnExtraDeduct(){
+  var inp = document.getElementById('dmExtraDeductInput');
+  var v = Math.max(0, parseInt((inp && inp.value) || '0', 10) || 0);
+  _dmExtraDeduct = v;
+  // 사유 메모: 금액이 있을 때만 노출 + 필수
+  var noteEl = document.getElementById('dmExtraNote');
+  if(noteEl) noteEl.style.display = v > 0 ? 'block' : 'none';
+  dmUpdateAgencyUI();
+  _dmUpdateReturnBtn();
+}
+// 추가 차감이 있는데 사유 메모가 비면 반환 버튼 잠금
+function _dmUpdateReturnBtn(){
+  var btn = document.getElementById('dmReturnConfirmBtn');
+  if(!btn) return;
+  var noteEl = document.getElementById('dmExtraNote');
+  var note = (noteEl && noteEl.value || '').trim();
+  var lock = (_dmExtraDeduct > 0 && !note);
+  btn.disabled = lock;
+  btn.style.opacity = lock ? '.45' : '1';
+  btn.style.cursor = lock ? 'not-allowed' : 'pointer';
+}
 
 function openDmPopup(idx, mode){
   _dmCurrentPurchaseIdx = idx;
   _dmPenaltyPct = 100;
   _dmAgencyExclude = true; // 기본 체크
+  // 🆕 추가 차감 초기화
+  _dmExtraDeduct = 0;
+  var _exIn = document.getElementById('dmExtraDeductInput'); if(_exIn) _exIn.value = '';
+  var _exNo = document.getElementById('dmExtraNote'); if(_exNo){ _exNo.value = ''; _exNo.style.display = 'none'; }
+  var _exRow = document.getElementById('dmExtraRow'); if(_exRow) _exRow.style.display = 'none';
   var h = _dmGetItem(idx);
   var r = restaurantDB.find(function(x){ return String(x.id)===String(h.restId); });
   var rName = r ? r.name : (h.rest || '알 수 없음');
@@ -21855,6 +21909,7 @@ function openDmPopup(idx, mode){
 
   // 대행비 체크박스 UI 초기화
   dmUpdateAgencyUI();
+  _dmUpdateReturnBtn();   // 🆕 추가 차감 버튼 잠금 상태 초기화
 
   // 위약금 비율 초기화
   _dmPenaltyDirectAmt = null;
@@ -21884,8 +21939,10 @@ function dmUpdateAgencyUI(){
   var h = _dmGetItem(_dmCurrentPurchaseIdx);
   if(!h) return;
   var agencyFee = window._dmAgencyFee || 0;
+  var extra = _dmExtraDeduct || 0;
   var totalAmt = h.amt;
-  var returnAmt = _dmAgencyExclude ? Math.max(0, totalAmt - agencyFee) : totalAmt;
+  var afterAgency = _dmAgencyExclude ? Math.max(0, totalAmt - agencyFee) : totalAmt;
+  var returnAmt = Math.max(0, afterAgency - extra);
 
   // 예약금 표시
   var totalEl = document.getElementById('dmReturnTotalAmt');
@@ -21896,6 +21953,12 @@ function dmUpdateAgencyUI(){
   var agAmt = document.getElementById('dmReturnAgencyAmt');
   if(agRow2) agRow2.style.display = agencyFee > 0 ? 'flex' : 'none';
   if(agAmt) agAmt.textContent = agencyFee > 0 ? '-₩'+agencyFee.toLocaleString() : '₩0';
+
+  // 🆕 추가 차감 행 표시
+  var exRow = document.getElementById('dmExtraRow');
+  var exAmt = document.getElementById('dmReturnExtraAmt');
+  if(exRow) exRow.style.display = extra > 0 ? 'flex' : 'none';
+  if(exAmt) exAmt.textContent = '-₩'+extra.toLocaleString();
 
   // 반환 금액
   var retEl = document.getElementById('dmPopupReturnAmt');
@@ -22269,32 +22332,44 @@ function dmConfirmReturn(){
   var h = _dmGetItem(_dmCurrentPurchaseIdx);
   if(!h) return;
   var agencyFee = (_dmAgencyExclude && window._dmAgencyFee > 0) ? window._dmAgencyFee : 0;
-  var returnAmt = Math.max(0, h.amt - agencyFee);
+  // 🆕 추가 차감 + 사유 메모 (금액 있으면 메모 필수 → 회원에게 명시)
+  var extra = _dmExtraDeduct || 0;
+  var extraNote = (document.getElementById('dmExtraNote') && document.getElementById('dmExtraNote').value || '').trim();
+  if(extra > 0 && !extraNote){
+    showToast('!','사유 메모 필수','추가 차감 사유를 입력해야 반환할 수 있어요');
+    var _en = document.getElementById('dmExtraNote'); if(_en){ _en.focus(); }
+    return;
+  }
+  var returnAmt = Math.max(0, h.amt - agencyFee - extra);
+  var extraTxt = extra > 0 ? ' · 추가 차감 ₩'+extra.toLocaleString()+' (사유: '+extraNote+')' : '';
   // 🔧 2026.05.22 FIX: 반환 버튼은 무조건 type='returned' (반환완료 탭으로 분류).
-  //   대행비 공제 정보는 agencyHeld 필드로만 보존. 환불불가 탭은 환불불가 버튼 전용.
   h.depositReturn = {
     type: 'returned',
     returnAmt: returnAmt,
     agencyHeld: agencyFee,                     // 대행비 차감 금액 (정상 절차 — 표시용)
+    extraDeduct: extra,                        // 🆕 추가 차감 금액
+    extraNote: extraNote || '',                // 🆕 추가 차감 사유
     penaltyAmt: 0,                              // 위약금 없음 (정상 반환)
     penaltyPct: 0,
     date: dmGetTodayStr(),
-    note: '정상 반환' + (agencyFee > 0 ? ' (대행비 ₩'+agencyFee.toLocaleString()+' 차감)' : '')
+    note: '정상 반환' + (agencyFee > 0 ? ' (대행비 ₩'+agencyFee.toLocaleString()+' 차감)' : '') + extraTxt
   };
+  // 🆕 회원(구매자) 거래내역에 남길 사유 — 추가 차감 사유를 반드시 명시
+  var buyerNote = '예치금 반환' + (agencyFee > 0 ? ' · 대행비 차감' : '')
+                + (extra > 0 ? ' · 추가 차감 ₩'+extra.toLocaleString()+' (사유: '+extraNote+')' : '');
   // 버이어(실제 구매자)의 IDB 에 반영 + 버이어 예치금에 환불액 크레딧
-  _dmPersistBuyerChanges(h, returnAmt, '반환 완료 처리').then(function(){
+  _dmPersistBuyerChanges(h, returnAmt, buyerNote).then(function(){
     closeDmPopup();
-    // 집계 재로드 후 리렌더 (버이어 저장소 변경이 반영되도록)
     loadAllUsersPurchases().then(function(){ renderDmMgmtList(_dmCurrentTab); });
     var _rfIsEn = (window._tkCurrentLang==='en');
     var _rfTitle = (typeof t==='function') ? t('toast.refund_done_title') : '반환 완료';
     var _rfMsg = _rfIsEn ? ('Deposit ₩'+returnAmt.toLocaleString()+' refunded') : ('예치금 ₩'+returnAmt.toLocaleString()+' 반환 처리되었습니다');
     showToast('✓', _rfTitle, _rfMsg, { category:'refund', native:true });
-    // 🆕 본인 다른 기기 + 환불받는 buyer 의 모든 기기에 푸시
-    if(typeof pushSend === 'function' && h && h.buyerPhone){
-      var refundMsg = (currentRest && currentRest.name ? currentRest.name : '레스토랑') + ' 예치금 ₩' + returnAmt.toLocaleString() + ' 반환되었습니다';
-      // buyer 의 user_id 를 phone 으로부터 찾아야 정확 — 일단 본인 다른 기기에만 발송
-      if(typeof notifPushSelf === 'function') notifPushSelf('💸', '예치금 반환 완료', refundMsg, 'refund');
+    // 🆕 환불받는 회원에게 푸시 — 추가 차감 사유 명시
+    if(typeof notifPushSelf === 'function'){
+      var refundMsg = (currentRest && currentRest.name ? currentRest.name : '레스토랑') + ' 예치금 ₩' + returnAmt.toLocaleString() + ' 반환'
+                    + (extra > 0 ? ' (추가 차감 ₩'+extra.toLocaleString()+': '+extraNote+')' : '');
+      notifPushSelf('💸', '예치금 반환 완료', refundMsg, 'refund');
     }
   });
 }
