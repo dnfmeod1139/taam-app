@@ -20470,6 +20470,10 @@ function ticketHistRender(idx){
         if(dr && dr.penaltyAmt > 0 && (!dr.agencyHeld)){
           refundInfo += '<div style="margin-top:2px;font-size:10.5px;color:#B23A2E;">위약금 ₩'+ dr.penaltyAmt.toLocaleString() +' ('+ (dr.penaltyPct||0) +'%)</div>';
         }
+        // 🆕 추가 차감 — 금액 + 사유(슈퍼어드민 기록에도 명시)
+        if(dr && dr.extraDeduct > 0){
+          refundInfo += '<div style="margin-top:2px;font-size:10.5px;color:#B23A2E;font-weight:700;">추가 차감 ₩'+ dr.extraDeduct.toLocaleString() + (dr.extraNote ? ' · 사유: '+ _escHtmlAdg(dr.extraNote) : '') +'</div>';
+        }
         if(h.cancelReason) refundInfo += '<div style="margin-top:2px;font-size:10.5px;color:#999;">사유: '+ _escHtmlAdg(h.cancelReason) +'</div>';
       }
       refundInfo = '<div style="padding:0 16px 14px;">'+refundInfo+'</div>';
@@ -21531,6 +21535,8 @@ async function _dmLoadSupabasePurchases(){
           penaltyAmt: meta.penalty_amt || Math.max(0, penaltyAmt),
           penaltyPct: meta.penalty_pct || (t.price > 0 ? Math.round(penaltyAmt / t.price * 100) : 0),
           agencyHeld: meta.agency_held || 0,
+          extraDeduct: meta.extra_deduct || 0,     // 🆕 추가 차감 금액
+          extraNote: meta.extra_note || '',        // 🆕 추가 차감 사유
           note: meta.note || refund.description || ''
         };
       } else if(extraDr && extraDr.type){
@@ -21543,6 +21549,8 @@ async function _dmLoadSupabasePurchases(){
           penaltyAmt: extraDr.penaltyAmt || 0,
           penaltyPct: extraDr.penaltyPct || 0,
           agencyHeld: extraDr.agencyHeld || 0,
+          extraDeduct: extraDr.extraDeduct || 0,   // 🆕 추가 차감 금액
+          extraNote: extraDr.extraNote || '',      // 🆕 추가 차감 사유
           note: extraDr.note || '',
           _fromExtraData: true   // 디버그용
         };
@@ -21903,10 +21911,11 @@ function renderDmMgmtList(idx){
         +'</div>'
         +'<button onclick="dmChangeTime('+globalIdx+')" style="width:100%;margin-top:8px;padding:10px;border:1px solid #c8a96e;border-radius:10px;background:#fff;color:#5C0A14;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;">⏰ 예약 시간 변경</button>';
     } else if(idx === 1){
-      // 반환완료 — 큰 금액 영역에서 이미 반환액+상세 표시. 여기엔 처리일자만.
+      // 반환완료 — 큰 금액 영역에서 이미 반환액+상세 표시. 여기엔 처리일자 + 추가차감 사유.
       var dr = h.depositReturn;
       resultHtml = '<div class="dm-result-box dm-result-returned">'
         +'✓ '+dr.date+' 반환 완료'
+        + (dr.extraDeduct > 0 ? '<br><span style="color:#B23A2E;font-weight:700;">추가 차감 ₩'+dr.extraDeduct.toLocaleString()+(dr.extraNote?' · 사유: '+escapeHtml(dr.extraNote):'')+'</span>' : '')
         +'</div>';
     } else {
       // 환불불가 — 슈퍼어드민이 "환불불가" 버튼으로 처리한 건만 (penalty type)
@@ -22783,24 +22792,27 @@ function dhTab(idx,el){
           var penaltyAmt = m.penalty_amt || 0;
           var agencyHeld = m.agency_held || 0;
           var penaltyPct = m.penalty_pct || 0;
+          var extraDeduct = m.extra_deduct || 0;   // 🆕 추가 차감 금액
+          var extraNote = m.extra_note || '';       // 🆕 추가 차감 사유
           var dt = r.created_at ? new Date(r.created_at) : null;
           var dateStr = dt ? (dt.getMonth()+1)+'월 '+dt.getDate()+'일 '+String(dt.getHours()).padStart(2,'0')+':'+String(dt.getMinutes()).padStart(2,'0') : '';
 
           // 🆕 tickets 에서 방문예정일/원가 가져오기
           var ticketInfo = ticketMap[m.purchase_id] || {};
           var visitStr = _fmtVisit(ticketInfo.reservation_date);
-          var origPrice = ticketInfo.price || (returnAmt + penaltyAmt + agencyHeld);   // 폴백
+          var origPrice = ticketInfo.price || (returnAmt + penaltyAmt + agencyHeld + extraDeduct);   // 폴백
           var restName = ticketInfo.restaurant_name || m.restaurant_name || '';
 
-          // 제목: "타카미츠 반환 완료" (description 사용 — 슈퍼어드민 배지 제거)
-          var title = r.description || (rtype === 'returned' ? (restName ? restName+' 반환 완료' : '티켓 반환 완료') : (restName ? restName+' 환불 처리' : '티켓 환불 처리'));
+          // 제목: "타카미츠 반환 완료" — 추가 차감 문구는 제목에서 제거(아래 상세로 분리)
+          var _baseDesc = (r.description || '').replace(/\s*—\s*추가\s*차감[\s\S]*$/, '').trim();
+          var title = _baseDesc || (rtype === 'returned' ? (restName ? restName+' 반환 완료' : '티켓 반환 완료') : (restName ? restName+' 환불 처리' : '티켓 환불 처리'));
 
           // 메인 카드 — 제목 + (방문예정일) + 반환시점
           var visitBadge = visitStr ? ' <span style="font-family:var(--font-main);font-size:11.5px;font-weight:600;color:#888;">('+visitStr+' 방문예정)</span>' : '';
           var card = '<div style="padding:14px 20px;border-bottom:1px solid #f0ede8;background:#fff;">'
             + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">'
             +   '<div style="flex:1;min-width:0;">'
-            +     '<div style="font-family:var(--font-main);font-size:14px;font-weight:700;color:#1a1a18;">'+_escHtmlAdg(title)+visitBadge+'</div>'
+            +     '<div style="font-family:var(--font-main);font-size:14px;font-weight:700;color:#1a1a18;line-height:1.5;word-break:keep-all;overflow-wrap:break-word;">'+_escHtmlAdg(title)+visitBadge+'</div>'
             +     '<div style="font-family:var(--font-main);font-size:11px;color:#aaa;margin-top:4px;">반환시점 · '+dateStr+'</div>'
             +   '</div>'
             + '</div>'
@@ -22808,7 +22820,7 @@ function dhTab(idx,el){
 
           // 🆕 반환 상세 내역 — "본 티켓 가격 − 대행비/위약금 = 최종 반환 금액" 표 형식
           var breakdown = '';
-          if(returnAmt > 0 || agencyHeld > 0 || (rtype === 'penalty' && penaltyAmt > 0)){
+          if(returnAmt > 0 || agencyHeld > 0 || extraDeduct > 0 || (rtype === 'penalty' && penaltyAmt > 0)){
             var lines = '';
             // 1) 본 티켓 가격
             lines += '<div style="display:flex;justify-content:space-between;padding:3px 0;">'
@@ -22821,6 +22833,16 @@ function dhTab(idx,el){
                      + '<span style="color:#1B3A8F;">− 대행비 <span style="font-size:10.5px;color:#999;font-weight:600;">(정상 절차)</span></span>'
                      + '<span style="color:#1B3A8F;font-weight:700;">-₩'+agencyHeld.toLocaleString()+'</span>'
                      + '</div>';
+            }
+            // 2-2) 🆕 추가 차감 (별도 색 + 사유 자동 줄바꿈으로 분리)
+            if(extraDeduct > 0){
+              lines += '<div style="display:flex;justify-content:space-between;padding:3px 0;">'
+                     + '<span style="color:#C0392B;font-weight:700;">− 추가 차감</span>'
+                     + '<span style="color:#C0392B;font-weight:800;">-₩'+extraDeduct.toLocaleString()+'</span>'
+                     + '</div>';
+              if(extraNote){
+                lines += '<div style="color:#C0392B;font-size:11px;line-height:1.65;padding:1px 0 4px;word-break:keep-all;overflow-wrap:break-word;">사유 · '+_escHtmlAdg(extraNote)+'</div>';
+              }
             }
             // 3) 위약금 (있으면)
             if(rtype === 'penalty' && penaltyAmt > 0){
