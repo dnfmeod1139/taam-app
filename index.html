@@ -12378,12 +12378,22 @@ async function loadPurchase(){
     //   구매는 로컬 완료됐지만 DB 저장이 실패해 슈퍼어드민에 안 뜨던 건을
     //   메모리에 다시 병합 + 잠시 후 자동 재저장(savePurchase 재시도)으로 자가 복구.
     try {
+      // 🛡 서버에 예치금 차감(ticket_purchase)이 실제로 기록된 purchase_id 만 복구 대상.
+      //   (차감 없이 티켓만 되살리면 '결제 안 된 유령 티켓'이 생기던 문제 방지)
+      var _chargedIds = new Set();
+      try {
+        var _ct = await window.sb.from('deposit_transactions')
+          .select('metadata').eq('user_id', user.id).eq('change_type', 'ticket_purchase');
+        (_ct.data || []).forEach(function(r){ var p = r.metadata && r.metadata.purchase_id; if(p) _chargedIds.add(p); });
+      } catch(_ce){}
+
       var _dbIds = new Set(purchaseHistory.map(function(x){ return x.purchaseId; }).filter(Boolean));
       var _missing = _idbBackup.filter(function(x){
-        return x && x.purchaseId && !_dbIds.has(x.purchaseId) && x.status !== 'cancelled';
+        return x && x.purchaseId && !_dbIds.has(x.purchaseId) && x.status !== 'cancelled'
+               && _chargedIds.has(x.purchaseId);   // 서버에 차감이 있는 것만
       });
       if (_missing.length) {
-        console.warn('[loadPurchase] Supabase 미동기화 구매 ' + _missing.length + '건 복구·재저장 예약');
+        console.warn('[loadPurchase] 결제됐지만 미저장된 티켓 ' + _missing.length + '건 복구·재저장 예약');
         purchaseHistory = purchaseHistory.concat(_missing);
         setTimeout(function(){ try { if(typeof savePurchase==='function') savePurchase(); } catch(_e){} }, 2500);
       }
