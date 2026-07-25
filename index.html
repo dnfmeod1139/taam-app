@@ -12194,6 +12194,7 @@ async function savePurchase(){
           buyerRole: h.buyerRole || 'user',
           notifications: h.notifications || null,
           depositReturn: h.depositReturn || null,
+          agencyFee: h.agencyFee || 0,               // 🆕 대행비 스냅샷 보존
         },
         created_at: h.date || new Date().toISOString(),
       }));
@@ -12367,6 +12368,7 @@ async function loadPurchase(){
       buyerRole: (r.extra_data && r.extra_data.buyerRole) || 'user',
       purchaseId: r.purchase_id || '',
       notifications: (r.extra_data && r.extra_data.notifications) || null,
+      agencyFee: (r.extra_data && r.extra_data.agencyFee) || 0,   // 🆕 대행비 스냅샷 복원
       extra_data: r.extra_data || {},
       _userId: r.user_id,
       _srcKey: _userKey('excPurchase'),
@@ -18167,6 +18169,7 @@ async function completePurchase(){
    purchaseHistory.push({
     id:t.id, restId:t.restId, date:now.toISOString(), visitDate:t.date,
     pax:pax, amt:paid, status:'upcoming', depositReturn:null,
+    agencyFee: parseInt(t.agencyFee||0),            // 🆕 대행비 스냅샷(1인) — 티켓 수정/삭제돼도 반환 시 폴백
     buyerPhone:_currentUserPhone||'', buyerName:_currentUserName||'',
     buyerRole: _currentRole || 'user',              // 구매자 역할 기록 (진단/필터용)
     purchaseId:purchaseId, notifications:_notifSchedule,
@@ -21507,6 +21510,7 @@ async function _dmLoadSupabasePurchases(){
         buyerEmail: p.email || '',
         purchaseId: t.purchase_id,
         ticket_type: t.ticket_type,
+        agencyFee: (t.extra_data && t.extra_data.agencyFee) || 0,   // 🆕 대행비 스냅샷 폴백(슈퍼어드민)
         extra_data: t.extra_data || {},
         _srcKey: 'supabase_tickets',
         _userId: t.user_id,
@@ -22008,9 +22012,12 @@ function openDmPopup(idx, mode){
   var r = restaurantDB.find(function(x){ return String(x.id)===String(h.restId); });
   var rName = r ? r.name : (h.rest || '알 수 없음');
 
-  // 티켓 DB에서 대행비 조회
+  // 티켓 DB에서 대행비 조회 (없으면 구매 시 스냅샷 h.agencyFee 폴백 → 티켓 수정/삭제돼도 유지)
   var ticket = ticketDB.find(function(t){ return String(t.id)===String(h.id); });
-  var agencyFee = ticket ? (parseInt(ticket.agencyFee||0) * (h.pax||1)) : 0;
+  var _agPerPax = (ticket && parseInt(ticket.agencyFee||0) > 0)
+    ? parseInt(ticket.agencyFee||0)
+    : parseInt(h.agencyFee||0);
+  var agencyFee = (parseInt(_agPerPax||0)) * (h.pax||1);
   window._dmAgencyFee = agencyFee;
 
   document.getElementById('dmPopupLabel').textContent = mode==='return' ? '반환 완료 처리' : '환불 불가 처리';
