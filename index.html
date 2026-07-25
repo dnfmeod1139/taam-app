@@ -9560,6 +9560,14 @@ window.closePromoCarousel = function(){
     <div class="dm-tab" onclick="dmMgmtTab(1,this)">반환완료</div>
     <div class="dm-tab" onclick="dmMgmtTab(2,this)">환불불가</div>
   </div>
+  <!-- 🆕 레스토랑명·구매자명 검색 (세 탭 공통) -->
+  <div style="padding:10px 16px 2px;">
+    <div style="position:relative;">
+      <input type="text" id="dmSearchInput" placeholder="레스토랑명 · 구매자명 검색" oninput="dmSearch(this.value)"
+        style="width:100%;box-sizing:border-box;padding:10px 34px 10px 12px;border:1.5px solid #e0ddd6;border-radius:10px;background:#fff;font-size:13px;font-family:var(--font-main);color:#1a1a18;outline:none;">
+      <span style="position:absolute;right:11px;top:50%;transform:translateY(-50%);font-size:13px;color:#aaa;pointer-events:none;">🔍</span>
+    </div>
+  </div>
   <div class="dm-summary" id="dmMgmtSummary"></div>
   <div class="dm-list" id="dmMgmtList"></div>
 </div>
@@ -21535,6 +21543,7 @@ async function _dmLoadSupabasePurchases(){
         h.depositReturn = {
           type: rtype,
           date: refund.created_at ? refund.created_at.slice(0,10).replace(/-/g, '.') : '',
+          _ts: refund.created_at || '',                  // 🆕 정렬용 전체 타임스탬프
           returnAmt: refundAmt,
           penaltyAmt: meta.penalty_amt || Math.max(0, penaltyAmt),
           penaltyPct: meta.penalty_pct || (t.price > 0 ? Math.round(penaltyAmt / t.price * 100) : 0),
@@ -21806,6 +21815,9 @@ function dmMgmtTab(idx, el){
   });
 }
 
+var _dmSearchQuery = '';
+function dmSearch(v){ _dmSearchQuery = v || ''; if(typeof renderDmMgmtList==='function') renderDmMgmtList(_dmCurrentTab); }
+
 function getDmItems(idx){
   var now = new Date();
   // ── 1차 소스: 집계된 전 유저 구매내역 ──
@@ -21820,22 +21832,39 @@ function getDmItems(idx){
     src = Array.isArray(purchaseHistory) ? purchaseHistory : [];
   }
 
+  // 🆕 검색: 레스토랑명 + 구매자명 (세 탭 공통)
+  var _q = (_dmSearchQuery || '').trim().toLowerCase();
+  function _dmMatch(h){
+    if(!_q) return true;
+    var r = restaurantDB.find(function(x){ return String(x.id)===String(h.restId); });
+    var rn = (r ? r.name : (h.rest || h.restName || '')).toLowerCase();
+    var bn = (h.buyerName || '').toLowerCase();
+    return rn.indexOf(_q) !== -1 || bn.indexOf(_q) !== -1;
+  }
+
+  var out;
   if(idx === 0){ // 반환예정: 판매된 티켓 전체 (취소/이미 처리된 것 제외)
-    return src.filter(function(h){
+    out = src.filter(function(h){
       if(!h) return false;
       if(h.status === 'cancelled') return false;
       if(h.depositReturn) return false;
-      return true;
+      return _dmMatch(h);
     });
   } else if(idx === 1){ // 반환완료
-    return src.filter(function(h){
-      return h && h.depositReturn && h.depositReturn.type === 'returned';
-    });
+    out = src.filter(function(h){ return h && h.depositReturn && h.depositReturn.type === 'returned' && _dmMatch(h); });
   } else { // 환불불가
-    return src.filter(function(h){
-      return h && h.depositReturn && h.depositReturn.type === 'penalty';
+    out = src.filter(function(h){ return h && h.depositReturn && h.depositReturn.type === 'penalty' && _dmMatch(h); });
+  }
+
+  // 🆕 정렬: 반환완료/환불불가 = 내가 '반환(처리)한 날짜' 최신순 (방문/구매일 아님)
+  if(idx === 1 || idx === 2){
+    out.sort(function(a,b){
+      var da = (a.depositReturn && (a.depositReturn._ts || a.depositReturn.date)) || '';
+      var db = (b.depositReturn && (b.depositReturn._ts || b.depositReturn.date)) || '';
+      return String(db).localeCompare(String(da));   // 최신 먼저
     });
   }
+  return out;
 }
 
 function renderDmMgmtList(idx){
@@ -22470,6 +22499,8 @@ function dmConfirmReturn(){
     penaltyAmt: 0,                              // 위약금 없음 (정상 반환)
     penaltyPct: 0,
     date: dmGetTodayStr(),
+    _ts: new Date().toISOString(),             // 🆕 정렬용 전체 타임스탬프
+
     note: '정상 반환' + (agencyFee > 0 ? ' (대행비 ₩'+agencyFee.toLocaleString()+' 차감)' : '') + extraTxt
   };
   // 🆕 회원(구매자) 거래내역에 남길 사유 — 추가 차감 사유를 반드시 명시
@@ -22523,6 +22554,7 @@ function dmConfirmPenalty(){
     penaltyAmt: penaltyAmt,
     penaltyPct: usedPct,
     date: dmGetTodayStr(),
+    _ts: new Date().toISOString(),             // 🆕 정렬용 전체 타임스탬프
     note: note,
     // 대행비만 공제한 경우에는 agencyOnly 플래그 (UI에서 "대행비 차감" 파란색으로 표시)
     agencyOnly: (_dmPenaltyAgencyExclude && agencyFee > 0) === true
@@ -27767,7 +27799,11 @@ function openSubPage(id){
   if(id==='ticketHistoryScreen'){ setTimeout(function(){ if(typeof renderTicketHistory==='function') renderTicketHistory(); }, 30); }
   if(id==='reservationAdminScreen'){ setTimeout(renderReservationAdmin, 30); }
   if(id==='feePolicyScreen'){ setTimeout(renderFeePolicy, 30); }
-  if(id==='depositMgmtScreen') dmMgmtTab(0,document.querySelector('#depositMgmtScreen .dm-tab'));
+  if(id==='depositMgmtScreen'){
+    _dmSearchQuery = '';
+    var _dss = document.getElementById('dmSearchInput'); if(_dss) _dss.value = '';
+    dmMgmtTab(0,document.querySelector('#depositMgmtScreen .dm-tab'));
+  }
   if(id==='memberListScreen') renderMemberList();
   if(id==='producersMgmtScreen'){ loadProducersDB(function(){ renderProducersList(); }); }
   if(id==='productsMgmtScreen'){ loadProductsDB(function(){ loadProducersDB(function(){ renderProductsList(); }); }); }
