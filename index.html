@@ -5273,6 +5273,19 @@ var TOSS_KEYS = {
   JPY: null,              // MID3 — 해외카드 JPY 승인 · KRW 정산 (⚠ 키 발급 시 입력)
   BILLING: null           // MID4 bill_ — 정기결제 전용 (⚠ 키 발급 시 입력, 미발급 동안 KRW 키 사용)
 };
+// ═══════════════════════════════════════════
+// 🆕 2026.07 결제 정책 전환(임시 · 롤백 대비)
+//   · PAY_MODE_TOSS = true  → 티켓 부족분 = 토스 카드 결제창 / 예치금 충전 = 계좌이체 안내(수동 반영)
+//   · PAY_MODE_TOSS = false → 기존 시스템으로 즉시 롤백 (포트원 카드 · 토스 충전 모달)
+//   기존 로직은 지우지 않고 플래그 뒤에 보존 (3차 백업). 토스 정식 확정 후 롤백 = 이 값만 false.
+// ═══════════════════════════════════════════
+var PAY_MODE_TOSS = true;
+// 예치금 충전 계좌이체 안내에 표시할 실제 계좌 (계좌 변경 시 여기만 수정)
+var DEPOSIT_BANK_INFO = {
+  bank:    '하나은행',
+  account: '247-910033-65204',   // 복사 시 숫자만 복사됨 (_depCopyAccount)
+  holder:  '주식회사 쓰리피프틴'
+};
 // 회원 국가 → 결제 통화 (KR→KRW, JP→JPY, 그 외→USD)
 function _tossCurrencyForUser(){
   try {
@@ -5425,6 +5438,84 @@ function tossOpenBilling(){
       showToast('⚠','카드 등록 오류', (e && e.message) || '');
     }
   });
+}
+// ── 🆕 티켓 부족분 카드 결제 (토스 단건 결제창) ──
+//   예치금 부족 시 부족분을 토스 카드 결제창으로 연결. 범위 = 결제창 연동(보이게)까지,
+//   실제 승인/차감 반영은 시크릿키 Edge Function 정식 전환 시. PAY_MODE_TOSS=false 면 미사용.
+async function tossPayTicketShortage(shortage){
+  var amt = Math.round(shortage||0);
+  if (amt < 100) { showToast('⚠','금액 확인','결제 금액이 올바르지 않습니다'); return; }
+  // 남아있는 결제 안내 팝업 정리
+  ['cardPayPopup','noCardPopup'].forEach(function(id){ var p=document.getElementById(id); if(p) p.remove(); });
+  var restName = (typeof currentRest!=='undefined' && currentRest && currentRest.name) ? currentRest.name
+               : (typeof currentTicket!=='undefined' && currentTicket && currentTicket.rest) ? currentTicket.rest : '티켓';
+  var orderName = (restName + ' — 티켓 구매').slice(0,40);
+  _tossEnsureSdk(async function(){
+    try {
+      var _cur = _tossCurrencyForUser();
+      if (!TOSS_KEYS[_cur]) _cur = 'KRW';
+      var ctx = await _tossPaymentsCtx(_cur); if(!ctx) return;
+      var oid = 'taamtkt_' + Date.now() + '_' + Math.floor(Math.random()*100000);
+      _tossMarkTrip();   // 결제창 왕복 표시 — 복귀 시 뷰포트 복원 트리거 (reload 견딤)
+      await ctx.pay.requestPayment({
+        method: 'CARD',
+        amount: { currency: ctx.currency, value: amt },
+        orderId: oid,
+        orderName: orderName,
+        successUrl: location.origin + '/?toss_pay=success',
+        failUrl: location.origin + '/?toss_pay=fail',
+        customerEmail: ctx.user.email || undefined,
+        customerName: (typeof _currentUserName !== 'undefined' && _currentUserName) || undefined,
+        card: { useEscrow: false, flowMode: 'DEFAULT', useCardPoint: false, useAppCardOnly: false }
+      });
+      _tossRestoreViewport();
+    } catch(e){
+      _tossRestoreViewport();   // 취소/오류로 닫혀도 화면 배치 복원
+      if (e && e.code === 'USER_CANCEL') return;
+      console.warn('[toss] 티켓 결제창 예외:', e);
+      showToast('⚠','결제창 오류', (e && e.message) || '');
+    }
+  });
+}
+// ── 🆕 예치금 충전 = 계좌이체 안내 (수동 반영) ──
+//   정책상 예치금 충전은 카드가 아닌 계좌이체로만. 입금 후 슈퍼어드민이 예치금에 수동 반영.
+//   계좌 정보는 상단 DEPOSIT_BANK_INFO 에서 관리. PAY_MODE_TOSS=false 면 미사용(구 충전 모달로 복귀).
+function showDepositBankInfo(){
+  var b = (typeof DEPOSIT_BANK_INFO!=='undefined' && DEPOSIT_BANK_INFO) || {};
+  var old = document.getElementById('depBankInfoPopup'); if(old) old.remove();
+  var el = document.createElement('div');
+  el.id = 'depBankInfoPopup';
+  el.style.cssText = 'position:fixed;inset:0;z-index:970;background:rgba(0,0,0,.65);display:flex;align-items:center;justify-content:center;padding:24px;box-sizing:border-box;';
+  el.innerHTML =
+    '<div style="background:#fff;border-radius:20px;width:100%;max-width:340px;padding:28px 24px;text-align:center;font-family:var(--font-main);">'
+    + '<div style="font-size:30px;margin-bottom:10px;">🏦</div>'
+    + '<div style="font-size:16px;font-weight:800;color:#1a1a18;margin-bottom:6px;">예치금 충전 안내</div>'
+    + '<div style="font-size:12px;color:#888;line-height:1.7;margin-bottom:18px;">아래 계좌로 입금해 주시면<br>확인 후 예치금에 반영해 드립니다.</div>'
+    + '<div style="background:#faf8f4;border:1px solid #eee5d8;border-radius:14px;padding:14px 16px;text-align:left;margin-bottom:16px;">'
+      + '<div style="display:flex;justify-content:space-between;padding:5px 0;"><span style="font-size:12px;color:#aaa;">은행</span><span style="font-size:13px;font-weight:700;color:#1a1a18;">'+(b.bank||'-')+'</span></div>'
+      + '<div style="display:flex;justify-content:space-between;padding:5px 0;"><span style="font-size:12px;color:#aaa;">계좌번호</span><span style="font-size:13px;font-weight:800;color:#5C0A14;">'+(b.account||'-')+'</span></div>'
+      + '<div style="display:flex;justify-content:space-between;padding:5px 0;"><span style="font-size:12px;color:#aaa;">예금주</span><span style="font-size:13px;font-weight:700;color:#1a1a18;">'+(b.holder||'-')+'</span></div>'
+    + '</div>'
+    + '<div style="font-size:11px;color:#b5ad9e;line-height:1.7;margin-bottom:20px;">입금자명은 <b>회원 성함</b>으로 부탁드립니다.<br>영업일 기준 확인 후 반영됩니다.</div>'
+    + '<button onclick="_depCopyAccount()" style="width:100%;padding:13px;background:#1a1a18;border:none;border-radius:12px;font-size:13px;font-weight:800;color:#fff;cursor:pointer;margin-bottom:9px;">계좌번호 복사</button>'
+    + '<button onclick="var p=document.getElementById(\'depBankInfoPopup\');if(p)p.remove();" style="width:100%;padding:11px;background:transparent;border:none;font-size:10px;font-weight:600;letter-spacing:.18em;color:#bbb;cursor:pointer;">닫기</button>'
+    + '</div>';
+  document.body.appendChild(el);
+}
+function _depCopyAccount(){
+  try {
+    var b = (typeof DEPOSIT_BANK_INFO!=='undefined' && DEPOSIT_BANK_INFO) || {};
+    var txt = String(b.account||'').replace(/[^0-9]/g,'');   // 숫자만 복사 (은행앱 붙여넣기 편의)
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(txt).then(
+        function(){ showToast('✓','복사됨','계좌번호가 복사되었습니다'); },
+        function(){ showToast('⚠','복사 실패', txt); });
+    } else {
+      var ta=document.createElement('textarea'); ta.value=txt; document.body.appendChild(ta); ta.select();
+      try{ document.execCommand('copy'); showToast('✓','복사됨','계좌번호가 복사되었습니다'); }catch(_e){ showToast('⚠','복사 실패', txt); }
+      document.body.removeChild(ta);
+    }
+  } catch(_e){}
 }
 // ── 결제창 리다이렉트 복귀 처리 (테스트 단계: 안내만 — 실승인/충전은 정식 전환 시) ──
 (function(){
@@ -18008,6 +18099,13 @@ function payWithPortOne(amount, orderName, callback) {
   }
 }
 function doCardCharge(shortage) {
+  // 🆕 2026.07 토스 전환(임시): 티켓 부족분 카드 결제를 토스 결제창으로.
+  //   PAY_MODE_TOSS=false 로 두면 아래 기존 포트원 로직으로 즉시 롤백 (코드 보존).
+  if (typeof PAY_MODE_TOSS !== 'undefined' && PAY_MODE_TOSS) {
+    tossPayTicketShortage(Math.round(shortage));
+    return;
+  }
+  // ── (구) 포트원 카드 결제 — 롤백용 보존 ──
   // 결제 금액 정수화 & 검증
   var payAmount = Math.round(shortage);
   if (payAmount <= 0) {
@@ -18558,6 +18656,12 @@ var _phoneVerified = false;
 var _pvStep = 1;
 
 function openMpCharge(){
+  // 🆕 2026.07 결제 정책: 예치금 충전은 계좌이체 안내(수동 반영)로.
+  //   PAY_MODE_TOSS=false 로 두면 아래 토스 충전 모달/구 포트원 페이지로 롤백 (코드 보존).
+  if (typeof PAY_MODE_TOSS !== 'undefined' && PAY_MODE_TOSS) {
+    showDepositBankInfo();
+    return;
+  }
   // 🆕 2026.07: 토스페이먼츠 충전 모달로 연결 (잔액 카드 '충전하기' 버튼)
   //   구 PortOne 충전 페이지 코드는 아래 주석 보존.
   tossOpenCharge();
