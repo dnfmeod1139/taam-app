@@ -11774,8 +11774,21 @@ async function loadDeposit(){
           shown[n.id] = Date.now();
         });
         try { sessionStorage.setItem(shownKey, JSON.stringify(shown)); } catch(_){}
+        // 🆕 2026.07: 토스트로 노출한 알림은 즉시 seen 처리.
+        //   기존엔 알림 내역 페이지에 들어가야만 seen → 토스트만 보면 다음 접속마다
+        //   같은 알림(티켓 발매 등)이 계속 새 알림처럼 재-토스트되고 레드닷도 안 사라지던 문제.
+        //   토스트 노출 = 확인으로 인정 → 다음 접속 재-토스트/레드닷 방지 (새 알림은 계속 정상 표시).
+        var _toastedIds = newOnes.map(function(n){ return n.id; });
+        if (_toastedIds.length > 0) {
+          try {
+            await window.sb.from('notifications')
+              .update({ seen: true, seen_at: new Date().toISOString() })
+              .in('id', _toastedIds);
+            console.log('[notif] 토스트 노출 → '+_toastedIds.length+'건 seen=true 처리');
+          } catch(_se){ console.warn('[notif] 토스트 seen 처리 실패:', _se); }
+        }
       }
-      // 항상 레드닷 갱신 (seen=false 카운트로)
+      // 항상 레드닷 갱신 (seen=false 카운트로 — 위 seen 처리 반영됨)
       if (typeof updateUnseenNotifBadge === 'function') updateUnseenNotifBadge();
       // 🆕 v1.53.35: 받은 초대 카운트도 갱신 (홈 GNB 레드닷)
       if (typeof updateUnseenInvitesCount === 'function') updateUnseenInvitesCount();
