@@ -1464,6 +1464,7 @@ html.auto-login .splash .bottom-group{display:none !important}
 .toast-icon{font-size:26px;flex-shrink:0}
 .toast-title{font-size:16px;font-weight:700;color:#1a1a18;margin-bottom:3px}
 .toast-msg{font-size:13px;color:#888}
+.toast-hint{display:none;margin-top:6px;font-size:11px;font-weight:700;color:#5C0A14;letter-spacing:-.01em;line-height:1.4}
 .toast-close{margin-left:auto;flex-shrink:0;background:none;border:none;cursor:pointer;padding:4px;color:#bbb;font-size:20px;line-height:1;display:flex;align-items:center;}
 
 /* ── 오프라인 동기화 대기 배지 (2026.05.10 v6) ──
@@ -10821,6 +10822,7 @@ window.closePromoCarousel = function(){
   <div class="toast-body">
     <div class="toast-title" id="toastTitle"></div>
     <div class="toast-msg" id="toastMsg"></div>
+    <div class="toast-hint" id="toastHint"></div>
   </div>
   <button class="toast-close" onclick="closeToast()">✕</button>
 </div>
@@ -36633,6 +36635,23 @@ function showToast(icon,title,msg,opts){
   el.style.cursor = opts.onTap ? 'pointer' : '';
   el.style.pointerEvents = opts.onTap ? 'auto' : '';
   el.onclick = null;
+  // 🆕 탭 안내 힌트 — 탭 가능한 토스트에만 노출 (탭해야 확인됨을 명시)
+  var _hintEl = document.getElementById('toastHint');
+  if (_hintEl) {
+    if (opts.onTap) {
+      var _hint = opts.tapHint;
+      if (!_hint) {
+        var _lg = window._tkCurrentLang;
+        _hint = (_lg === 'en') ? '👆 Tap to confirm — otherwise shown again next time'
+              : (_lg === 'ja') ? '👆 タップで確認 — 未タップなら次回も表示されます'
+              : '👆 탭해야 확인 완료 — 안 누르면 다음에 또 떠요';
+      }
+      _hintEl.textContent = _hint;
+      _hintEl.style.display = 'block';
+    } else {
+      _hintEl.style.display = 'none';
+    }
+  }
   if (opts.onTap) {
     el.onclick = function(ev){
       // ✕ 닫기 버튼 탭은 closeToast 가 담당 — 읽음 처리 제외
@@ -36642,10 +36661,12 @@ function showToast(icon,title,msg,opts){
     };
   }
   if(_toastTimer)clearTimeout(_toastTimer);
+  // 🆕 탭 가능한 토스트는 탭할 시간을 주기 위해 노출을 길게 (6s), 일반 토스트는 2.5s
+  var _toastDur = opts.onTap ? 6000 : 2500;
   _toastTimer=setTimeout(function(){
     el.classList.remove('show');
     setTimeout(function(){ el.style.display='none'; },380);
-  },2500);
+  },_toastDur);
 
   // 🆕 알림 로그에 기록 (system 카테고리는 기본 OFF — 설정에서 켜진 카테고리만 기록)
   if (opts.persist !== false && category !== 'system'){
