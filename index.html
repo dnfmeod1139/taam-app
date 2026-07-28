@@ -11820,6 +11820,9 @@ async function updateUnseenNotifBadge(){
     if(dot){
       dot.style.display = cnt > 0 ? 'inline-block' : 'none';
     }
+    // 🆕 2026.07: 서버 미확인 알림 수를 종 버튼 빨간점에도 반영 (통합 알림)
+    window._notifServerUnseen = cnt;
+    if (typeof _notifBellDotSync === 'function') _notifBellDotSync();
     console.log('[notif badge] 미확인 카운트:', cnt);
   } catch(e) { console.warn('[notif badge] 갱신 예외:', e); }
 }
@@ -32339,11 +32342,39 @@ function tkPickLang(code) {
 }
 
 // Step 4: 알림
-function tkOpenNotice() {
+async function tkOpenNotice() {
   document.getElementById('tkNoticeOverlay').style.display = 'flex';
-  // 🆕 동적 알림 로그 렌더 + 읽음 처리
+  // ① 로컬 로그로 즉시 첫 페인트 + 로컬 읽음 처리
   if(typeof _notifRenderList === 'function') _notifRenderList();
   if(typeof _notifMarkAllRead === 'function') _notifMarkAllRead();
+  // ② 🆕 2026.07: 서버 알림(notifications)도 불러와 통합 렌더 + 종 버튼으로 확인 = seen 처리
+  try {
+    if (window.sb) {
+      var u = (await window.sb.auth.getUser()).data.user;
+      if (u) {
+        var r = await window.sb.from('notifications')
+          .select('id, type, title, body, url, created_at, seen')
+          .eq('user_id', u.id)
+          .order('created_at', { ascending:false })
+          .limit(50);
+        if (!r.error && Array.isArray(r.data)) {
+          window._notifServerCache = r.data;   // 로컬 '모두 지우기' 후에도 서버 알림 유지용
+          if (typeof _notifRenderMerged === 'function') _notifRenderMerged(r.data);
+          // 미확인 서버 알림 seen 처리 (종 버튼 확인 = 읽음) → 빨간점 제거
+          var unseen = r.data.filter(function(n){ return !n.seen; }).map(function(n){ return n.id; });
+          if (unseen.length) {
+            try {
+              await window.sb.from('notifications')
+                .update({ seen:true, seen_at:new Date().toISOString() })
+                .in('id', unseen);
+            } catch(_ue){}
+          }
+          window._notifServerUnseen = 0;
+          if (typeof _notifBellDotSync === 'function') _notifBellDotSync();
+        }
+      }
+    }
+  } catch(e){ console.warn('[bell] 서버 알림 로드 예외:', e); }
 }
 
 function tkCloseNotice() {
@@ -36756,10 +36787,46 @@ function _notifLogAdd(entry){
 function _notifBellDotSync(){
   var dot = document.getElementById('tkBellDot');
   if(!dot) return;
-  dot.style.display = (_notifUnreadCount > 0) ? 'block' : 'none';
+  // 🆕 2026.07: 로컬 미읽음 + 서버 미확인(notifications) 둘 중 하나라도 있으면 점 표시
+  var srv = window._notifServerUnseen || 0;
+  dot.style.display = ((_notifUnreadCount > 0) || (srv > 0)) ? 'block' : 'none';
 }
 
+// 로컬 알림 로그만 렌더 (즉시 첫 페인트용)
 function _notifRenderList(){
+  var items = (_notifLog||[]).map(function(n){
+    return { icon:n.icon||'🔔', title:n.title||'', msg:n.msg||'', time:n.time||0 };
+  });
+  _notifRenderItems(items);
+}
+// 🆕 2026.07: 로컬 로그 + 서버 알림(notifications) 통합 렌더 (종 버튼에서 다 보이게)
+function _notifRenderMerged(serverRows){
+  var items = (_notifLog||[]).map(function(n){
+    return { icon:n.icon||'🔔', title:n.title||'', msg:n.msg||'', time:n.time||0 };
+  });
+  function _srvIcon(type){
+    if(type==='deposit_grant') return '💰';
+    if(type==='reservation_invite') return '📨';
+    if(type==='ticket_open') return '🎫';
+    if(type==='invite_cancelled') return '✕';
+    return '🔔';
+  }
+  function _srvStrip(s){
+    return String(s||'').replace(/[\u{1F000}-\u{1FFFF}\u{2300}-\u{27BF}\u{2190}-\u{21FF}\u{2700}-\u{27BF}]/gu,'').replace(/\s{2,}/g,' ').trim();
+  }
+  (serverRows||[]).forEach(function(n){
+    var _tt = _srvStrip(n.title) || '알림';
+    items.push({
+      icon: _srvIcon(n.type),
+      title: _tt,
+      msg: _srvStrip(n.body||''),
+      time: n.created_at ? new Date(n.created_at).getTime() : 0
+    });
+  });
+  _notifRenderItems(items);
+}
+// 정규화된 알림 항목 배열을 시트에 렌더 (시간 역순 + '모두 지우기')
+function _notifRenderItems(items){
   var listEl = document.getElementById('tkNoticeList');
   if(!listEl) return;
   // 🆕 i18n: 모든 라벨을 t() 통해 가져옴
@@ -36769,14 +36836,15 @@ function _notifRenderList(){
   var tHour    = (typeof t === 'function') ? t('notif_sheet.time_hour')  : '시간 전';
   var tDay     = (typeof t === 'function') ? t('notif_sheet.time_day')   : '일 전';
   var tClear   = (typeof t === 'function') ? t('notif_sheet.clear_all')  : '모두 지우기';
-  if(!_notifLog.length){
+  items = (items||[]).slice().sort(function(a,b){ return (b.time||0)-(a.time||0); });
+  if(!items.length){
     listEl.innerHTML = '<div style="font-family:\'Noto Sans KR\',sans-serif;font-size:13px;color:rgba(255,255,255,.4);text-align:center;padding:40px 0;">'+_notifEsc(tEmpty)+'</div>';
     return;
   }
-  var html = _notifLog.map(function(n, idx){
+  var now = Date.now();
+  var html = items.map(function(n){
     var dt = new Date(n.time);
-    var now = Date.now();
-    var diff = now - n.time;
+    var diff = now - (n.time||0);
     var timeStr;
     if(diff < 60000) timeStr = tJust;
     else if(diff < 3600000) timeStr = Math.floor(diff/60000) + ' ' + tMin;
@@ -36787,12 +36855,12 @@ function _notifRenderList(){
       +'<div style="font-size:18px;flex-shrink:0;width:24px;text-align:center;">'+(n.icon||'🔔')+'</div>'
       +'<div style="flex:1;min-width:0;">'
         +'<div style="font-family:\'Noto Sans KR\',sans-serif;font-size:13px;font-weight:700;color:rgba(255,255,255,.95);margin-bottom:3px;">'+_notifEsc(n.title||'')+'</div>'
-        +'<div style="font-family:\'Noto Sans KR\',sans-serif;font-size:12px;color:rgba(255,255,255,.6);line-height:1.5;word-break:keep-all;">'+_notifEsc(n.msg||'')+'</div>'
+        +'<div style="font-family:\'Noto Sans KR\',sans-serif;font-size:12px;color:rgba(255,255,255,.6);line-height:1.5;word-break:keep-all;white-space:pre-line;">'+_notifEsc(n.msg||'')+'</div>'
       +'</div>'
       +'<div style="font-family:var(--font-main);font-size:9px;color:rgba(255,255,255,.35);flex-shrink:0;letter-spacing:.05em;align-self:flex-start;padding-top:3px;">'+_notifEsc(timeStr)+'</div>'
     +'</div>';
   }).join('');
-  // 하단에 "모두 지우기" 버튼
+  // 하단에 "모두 지우기" 버튼 (로컬 로그만 비움 — 서버 기록은 유지)
   html += '<div style="text-align:center;padding:16px 0 8px;">'
     +'<button onclick="_notifClearAll()" style="background:none;border:1px solid rgba(255,255,255,.15);color:rgba(255,255,255,.5);font-family:\'Noto Sans KR\',sans-serif;font-size:11px;padding:8px 18px;border-radius:14px;cursor:pointer;">'+_notifEsc(tClear)+'</button>'
   +'</div>';
@@ -36814,7 +36882,9 @@ window._notifClearAll = function(){
   _notifUnreadCount = 0;
   _notifBellDotSync();
   _notifLogSave();
-  _notifRenderList();
+  // 🆕 로컬 로그만 비우고 서버 알림(캐시)은 그대로 유지 렌더
+  if (window._notifServerCache && typeof _notifRenderMerged === 'function') _notifRenderMerged(window._notifServerCache);
+  else if (typeof _notifRenderList === 'function') _notifRenderList();
 };
 
 // OS 네이티브 알림 발사 (Notification API)
