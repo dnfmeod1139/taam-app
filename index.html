@@ -14162,7 +14162,8 @@ function _getSaCred(type){
 
 function adminDirectAccess(){
   var splash = document.querySelector('.splash');
-  if(splash) splash.style.display = 'none';
+  // 🆕 스플래시 인트로(5초 유지) 중이면 여기서 숨기지 않음 — _splashHold 타이머/스킵이 닫음
+  if(splash && !window._splashHolding) splash.style.display = 'none';
   var wrap = document.getElementById('appWrapper');
   if(wrap){ wrap.classList.add('ready'); wrap.style.display = 'block'; }
   loadRole(); // PIN으로 설정된 역할 로드
@@ -36657,38 +36658,47 @@ async function splashVideoChange(input) {
     }
   }
 }
-// 🆕 2026.07: 스플래시 인트로 — 최소 3초 노출 후 done() 호출, 스킵 버튼으로 즉시 진입 가능.
-//   done: 스플래시를 실제로 닫는 콜백 (fade-out 등). 어느 부팅 경로든 이 게이트로 통일.
-function _splashIntro(done){
-  // 스플래시가 이미 스킵/숨김(세션 내 새로고침 등)이면 3초 대기 없이 즉시 진입 — 빈화면 방지
-  var _sp = document.querySelector('.splash');
-  var _hidden = document.documentElement.classList.contains('splash-skip')
-             || !_sp || _sp.style.display === 'none'
-             || (window.getComputedStyle && getComputedStyle(_sp).display === 'none');
-  if (_hidden) { try { done(); } catch(e){} return; }
-  var MIN = 3000;
+// 🆕 2026.07: 스플래시 인트로 컨트롤러 — 자동 로그인 부팅 시 N초 유지 + 스킵.
+//   window._splashHolding=true 동안엔 adminDirectAccess 등이 스플래시를 못 숨김(먼저 실행 필수).
+//   시간 만료 또는 스킵 버튼 → _splashCloseNow() 로 fade-out.
+function _splashCloseNow(){
+  if (window._splashClosed) return;
+  window._splashClosed = true;
+  window._splashHolding = false;
+  if (window._splashHoldTimer){ clearTimeout(window._splashHoldTimer); window._splashHoldTimer = null; }
+  var sp = document.querySelector('.splash');
   var skip = document.getElementById('splashSkipBtn');
   var vid = document.getElementById('splashVideo');
-  // 동영상이면 처음부터 재생
-  try { if (vid && vid.style.display !== 'none') { vid.currentTime = 0; var _p = vid.play(); if(_p&&_p.catch) _p.catch(function(){}); } } catch(e){}
-  if (skip) skip.style.display = 'flex';
-  var fired = false;
-  function finish(){
-    if (fired) return; fired = true;
-    if (window._splashIntroTimer) { clearTimeout(window._splashIntroTimer); window._splashIntroTimer = null; }
-    if (skip) skip.style.display = 'none';
-    try { if (vid) vid.pause(); } catch(e){}
-    try { done(); } catch(_e){}
+  if (skip) skip.style.display = 'none';
+  try { if (vid) vid.pause(); } catch(e){}
+  var wrap = document.getElementById('appWrapper');
+  if (wrap) wrap.classList.add('ready');
+  if (sp){
+    sp.classList.add('fading');
+    setTimeout(function(){ sp.style.display = 'none'; sp.classList.remove('fading'); }, 400);
   }
-  window._splashSkipFn = finish;   // 스킵 버튼(splashSkip)이 호출
+}
+function _splashHold(seconds){
+  window._splashClosed = false;
+  var sp = document.querySelector('.splash');
+  // 이미 스킵/숨김(세션 내 새로고침 등)이면 유지 안 함 — 빈화면 방지
+  var hidden = document.documentElement.classList.contains('splash-skip')
+            || !sp || sp.style.display === 'none'
+            || (window.getComputedStyle && getComputedStyle(sp).display === 'none');
+  if (hidden) { window._splashClosed = true; return; }
+  window._splashHolding = true;   // ← adminDirectAccess 등이 이 동안 스플래시 못 숨김
+  // 동영상이면 처음부터 재생 + 스킵 버튼 노출
+  var vid = document.getElementById('splashVideo');
+  try { if (vid && vid.style.display !== 'none') { vid.currentTime = 0; var _p = vid.play(); if(_p&&_p.catch) _p.catch(function(){}); } } catch(e){}
+  var skip = document.getElementById('splashSkipBtn'); if (skip) skip.style.display = 'flex';
+  var MIN = (seconds || 5) * 1000;
   var started = window._splashStart || Date.now();
   var wait = Math.max(0, MIN - (Date.now() - started));
-  window._splashIntroTimer = setTimeout(finish, wait);
+  if (window._splashHoldTimer) clearTimeout(window._splashHoldTimer);
+  window._splashHoldTimer = setTimeout(_splashCloseNow, wait);
 }
-// 스킵 버튼 → 인트로 즉시 종료
-function splashSkip(){
-  if (typeof window._splashSkipFn === 'function') window._splashSkipFn();
-}
+// 스킵 버튼 → 즉시 종료
+function splashSkip(){ _splashCloseNow(); }
 window.splashSkip = splashSkip;
 function splashBgReset() {
   _splashSettings.bg = '';
@@ -59173,33 +59183,29 @@ function _instaDrawPath(id, offsetVal){
         try { localStorage.removeItem('authedSession'); } catch(e){}
         return;
       }
+      // 🆕 스플래시 5초 유지를 '가능한 한 일찍' 시작 — loadRole/Supabase 인증 콜백 등 다른 경로가
+      //   adminDirectAccess 로 스플래시를 먼저 숨기지 못하게 holding 플래그를 즉시 세팅.
+      if (typeof _splashHold === 'function') _splashHold(5);
       if(typeof loadRole !== 'function') return;
       loadRole().then(function(){
         // 🆕 스플래시 미디어(사진/동영상) 캐시 즉시 반영 — 인트로 동안 배경 보이게
         try { if (typeof _loadSplashFromIDB === 'function') _loadSplashFromIDB(); } catch(e){}
         setTimeout(function(){
           var wrap = document.getElementById('appWrapper');
-          var splash = document.querySelector('.splash');
-          // 1. openMain 먼저 실행 (스플래시 뒤에서 홈 세팅)
+          // 스플래시 뒤에서 홈/관리자 화면 세팅 (스플래시는 _splashHold 가 5초 유지 후 닫음)
           if(_currentRole === 'superadmin' && typeof adminDirectAccess === 'function'){
             adminDirectAccess();
           } else if(typeof openMain === 'function'){
             openMain();
           }
-          // 2. 🆕 스플래시 최소 3초 인트로(+스킵) 후 → .ready 추가 → 스플래시 fade-out
-          var _fadeSplash = function(){
-            if(wrap) wrap.classList.add('ready');
-            document.documentElement.classList.remove('auto-login');
-            if(splash){
-              splash.classList.add('fading');
-              setTimeout(function(){
-                splash.style.display = 'none';
-                splash.classList.remove('fading');
-              }, 400);
-            }
-          };
-          if (typeof _splashIntro === 'function') _splashIntro(_fadeSplash);
-          else setTimeout(_fadeSplash, 300);
+          if(wrap) wrap.classList.add('ready');
+          document.documentElement.classList.remove('auto-login');
+          // 스플래시 닫힘은 _splashHold(5초) 타이머 또는 스킵 버튼(splashSkip)이 담당.
+          // _splashHold 가 동작 못하는 예외(함수 부재)엔 안전하게 닫기.
+          if (typeof _splashHold !== 'function') {
+            var splash = document.querySelector('.splash');
+            if(splash){ splash.classList.add('fading'); setTimeout(function(){ splash.style.display='none'; splash.classList.remove('fading'); }, 400); }
+          }
         }, 300);
       }).catch(function(){});
     }).catch(function(){});
