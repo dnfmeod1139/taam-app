@@ -36673,9 +36673,17 @@ function _splashCloseNow(){
   try { if (vid) vid.pause(); } catch(e){}
   var wrap = document.getElementById('appWrapper');
   if (wrap) wrap.classList.add('ready');
+  // 🆕 auto-login 클래스는 스플래시가 완전히 사라진 뒤 제거 — 유지/페이드 중 로그인 버튼 노출 방지.
+  //   (유지 중에 미리 제거하면 하단 로그인 버튼(.bottom-group)이 스플래시 위에 떠버림)
   if (sp){
     sp.classList.add('fading');
-    setTimeout(function(){ sp.style.display = 'none'; sp.classList.remove('fading'); }, 400);
+    setTimeout(function(){
+      sp.style.display = 'none';
+      sp.classList.remove('fading');
+      document.documentElement.classList.remove('auto-login');
+    }, 400);
+  } else {
+    document.documentElement.classList.remove('auto-login');
   }
 }
 function _splashHold(seconds){
@@ -36691,11 +36699,12 @@ function _splashHold(seconds){
   var vid = document.getElementById('splashVideo');
   try { if (vid && vid.style.display !== 'none') { vid.currentTime = 0; var _p = vid.play(); if(_p&&_p.catch) _p.catch(function(){}); } } catch(e){}
   var skip = document.getElementById('splashSkipBtn'); if (skip) skip.style.display = 'flex';
-  var MIN = (seconds || 5) * 1000;
-  var started = window._splashStart || Date.now();
-  var wait = Math.max(0, MIN - (Date.now() - started));
+  // 🆕 스플래시가 렌더된 뒤(_splashHold 호출 시점)부터 꽉 채워 유지.
+  //   _splashStart(파싱 시작)부터 재면 대용량 HTML 파싱 시간이 유지시간을 잡아먹어
+  //   실제론 1~2초도 안 보이던 버그 → 호출 시점부터 온전히 N초 유지.
+  var MS = (seconds || 5) * 1000;
   if (window._splashHoldTimer) clearTimeout(window._splashHoldTimer);
-  window._splashHoldTimer = setTimeout(_splashCloseNow, wait);
+  window._splashHoldTimer = setTimeout(_splashCloseNow, MS);
 }
 // 스킵 버튼 → 즉시 종료
 function splashSkip(){ _splashCloseNow(); }
@@ -59199,10 +59208,10 @@ function _instaDrawPath(id, offsetVal){
             openMain();
           }
           if(wrap) wrap.classList.add('ready');
-          document.documentElement.classList.remove('auto-login');
-          // 스플래시 닫힘은 _splashHold(5초) 타이머 또는 스킵 버튼(splashSkip)이 담당.
-          // _splashHold 가 동작 못하는 예외(함수 부재)엔 안전하게 닫기.
+          // auto-login 클래스 제거 + 스플래시 닫힘은 _splashHold(5초) 타이머 / 스킵 버튼(_splashCloseNow)이 담당.
+          // (여기서 auto-login 을 제거하면 유지 중 로그인 버튼이 노출되므로 제거하지 않음)
           if (typeof _splashHold !== 'function') {
+            document.documentElement.classList.remove('auto-login');
             var splash = document.querySelector('.splash');
             if(splash){ splash.classList.add('fading'); setTimeout(function(){ splash.style.display='none'; splash.classList.remove('fading'); }, 400); }
           }
