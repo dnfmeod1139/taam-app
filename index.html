@@ -24851,10 +24851,21 @@ function rpCropConfirm() {
 
   // ── 시작화면: 메모리에만 보관 (localStorage 저장 없음) ──
   if (isSplash) {
-    var canvas = _rpCropper.getCroppedCanvas();
+    var _srcCanvas = _rpCropper.getCroppedCanvas();
     rpCloseCropModal();
-    if (!canvas) { showToast('⚠','오류','사진을 다시 선택해주세요'); return; }
-    var url = canvas.toDataURL('image/jpeg', 0.95);
+    if (!_srcCanvas) { showToast('⚠','오류','사진을 다시 선택해주세요'); return; }
+    // 🆕 축소 + 압축 (app_config 용량 절약 → 모든 회원·기기 동기화 안정화).
+    //   스플래시는 배경 이미지라 긴 변 1280px 이하면 충분. 원본 그대로면 수 MB → 원격 저장 실패/과부하로
+    //   회원 기기에 공유가 안 되던 원인. (ad_popup·carousel 과 동일 패턴)
+    var _sw = _srcCanvas.width, _sh = _srcCanvas.height, _smax = 1280;
+    var _slong = Math.max(_sw, _sh);
+    if (_slong > _smax) {
+      var _sr = _smax / _slong;
+      _sw = Math.round(_sw * _sr); _sh = Math.round(_sh * _sr);
+    }
+    var _scv = document.createElement('canvas'); _scv.width = _sw; _scv.height = _sh;
+    _scv.getContext('2d').drawImage(_srcCanvas, 0, 0, _sw, _sh);
+    var url = _scv.toDataURL('image/jpeg', 0.82);
     _splashSettings.bg = url;
     applySplashSettings();
     // 🆕 로컬 저장 시각 기록 (Supabase 옛값이 새 편집을 덮어쓰지 못하게 — 롤백 방지)
@@ -36536,9 +36547,13 @@ function splashPhotoChange(input) {
 }
 function splashBgReset() {
   _splashSettings.bg = '';
+  // 🆕 초기화 시각 기록(롤백 방지) + 원격 동기화 → 모든 회원 기기에서도 기본 배경으로
+  var _ts = new Date().toISOString();
+  try { localStorage.setItem('taam_splash_saved_at', _ts); } catch(e){}
   IDB.set('splashSettings', JSON.stringify({ text1:_splashSettings.text1, text2:_splashSettings.text2, bg:'' }));
   applySplashSettings();
-  showToast('✓','초기화','기본 배경으로 변경됐어요');
+  if (typeof _splashSaveRemote === 'function') _splashSaveRemote(_ts);
+  showToast('✓','초기화','기본 배경으로 변경됐어요 (모든 회원 반영)');
 }
 
 function exportAppFile() {
