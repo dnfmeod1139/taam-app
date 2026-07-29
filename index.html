@@ -83,6 +83,8 @@ window._sa_p = ['w','o','o','1','4','7','8','5','2','!'];
 // 초기 깜빡임 차단 — localStorage 미러로 동기 체크 (IDB는 비동기라 늦음)
 // 인증된 세션이면 html 요소에 'auto-login' 클래스를 즉시 부여
 (function(){
+  // 🆕 2026.07: 스플래시 노출 시작 시각 — 최소 3초 인트로 계산용
+  try { window._splashStart = Date.now(); } catch(e){}
   try {
     // 🆕 로그아웃 직후 진입 (?logout=1) — 모든 플래그 강제 정리 + URL 청소
     // → splash-skip 미부여 → splash 화면 그대로 노출
@@ -168,6 +170,11 @@ html.splash-skip .splash{display:none !important}
 @keyframes splashPulse{0%,80%,100%{opacity:.25;transform:scale(.8)}40%{opacity:1;transform:scale(1.2)}}
 /* auto-login 부팅에선 인증 끝날 때까지 .bottom-group 도 안 보이지만 로더는 계속 노출 */
 .splash-bg{position:absolute;inset:0;background:linear-gradient(160deg,#1a0508 0%,#0d0306 40%,#120208 100%)}
+/* 🆕 스플래시 배경 동영상 — 화면 꽉 채움(cover) */
+.splash-media-video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center top;background:#000}
+/* 🆕 스킵 버튼 — 우측 상단, 반투명 필 */
+.splash-skip-btn{position:absolute;top:calc(env(safe-area-inset-top,0px) + 16px);right:16px;z-index:9;background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.25);color:rgba(255,255,255,.9);font-family:var(--font-main);font-size:11px;font-weight:700;letter-spacing:.16em;padding:8px 14px;border-radius:20px;cursor:pointer;-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);display:flex;align-items:center;gap:4px}
+.splash-skip-btn:active{background:rgba(0,0,0,.55)}
 .splash-ov{position:absolute;inset:0;background:linear-gradient(160deg,rgba(0,0,0,.45) 0%,rgba(0,0,0,.05) 45%,rgba(0,0,0,.65) 100%)}
 .splash-vi{position:absolute;inset:0;box-shadow:inset 0 0 130px rgba(0,0,0,.5);pointer-events:none}
 .text-block{position:absolute;right:0;top:calc(50% - 38px);transform:translateY(-50%);text-align:right;padding-right:21px}
@@ -5770,8 +5777,12 @@ window.addEventListener('error', function(e){
 <!-- SPLASH -->
 <div class="splash">
   <div class="splash-bg"></div>
+  <!-- 🆕 2026.07: 스플래시 배경 동영상 (무음·자동재생·루프) — mediaType='video' 일 때만 표시 -->
+  <video id="splashVideo" class="splash-media-video" muted playsinline loop preload="auto" style="display:none;"></video>
   <div class="splash-ov"></div>
   <div class="splash-vi"></div>
+  <!-- 🆕 2026.07: 스킵 버튼 (우측 상단) — 3초 인트로 동안 표시, 누르면 즉시 진입 -->
+  <button id="splashSkipBtn" class="splash-skip-btn" onclick="splashSkip()" style="display:none;">SKIP ›</button>
   <div class="text-block">
     <span class="text-line exclusive" id="splashLine1">Exclusive</span>
     <span class="text-line experience" id="splashLine2">Experience</span>
@@ -9360,23 +9371,30 @@ window.closePromoCarousel = function(){
     <div class="sub-title">시작화면 편집</div>
   </div>
   <input type="file" id="splashPhotoFile" accept="image/*" style="display:none;" onchange="splashPhotoChange(this)">
+  <input type="file" id="splashVideoFile" accept="video/*" style="display:none;" onchange="splashVideoChange(this)">
   <div class="sub-content" style="padding:20px 16px;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;">
     <div class="rp-field">
-      <label class="rp-label">배경 사진 <span style="color:#bbb;font-weight:400;">9 : 16</span></label>
+      <label class="rp-label">배경 사진 / 동영상 <span style="color:#bbb;font-weight:400;">9 : 16 · 동영상은 무음</span></label>
       <!-- 고정 폰 비율 컨테이너: 최대 220px 너비, 9:16 비율 고정 -->
       <div style="display:flex;justify-content:center;">
         <div id="splashBgPreviewBox" onclick="splashPickPhoto()" style="width:min(220px,60vw);aspect-ratio:9/16;border-radius:14px;border:2px dashed #e0ddd8;background:linear-gradient(160deg,#1a0508 0%,#0d0306 40%,#120208 100%);background-size:cover;background-position:center top;display:flex;align-items:center;justify-content:center;cursor:pointer;overflow:hidden;position:relative;">
-          <div id="splashBgEmpty" style="display:flex;flex-direction:column;align-items:center;gap:8px;">
+          <video id="splashPreviewVideo" muted playsinline loop preload="auto" style="display:none;position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center top;background:#000;"></video>
+          <div id="splashBgEmpty" style="display:flex;flex-direction:column;align-items:center;gap:8px;position:relative;z-index:1;">
             <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.35)" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
             <div style="font-family:var(--font-main);font-size:8px;font-weight:700;letter-spacing:.16em;color:rgba(255,255,255,.3);">TAP TO ADD PHOTO</div>
           </div>
-          <div style="position:absolute;bottom:16px;left:0;right:0;text-align:left;padding:0 14px;pointer-events:none;">
+          <div style="position:absolute;bottom:16px;left:0;right:0;text-align:left;padding:0 14px;pointer-events:none;z-index:2;">
             <div id="splashPreviewLine1" style="font-family:'Cormorant Garamond',serif;font-weight:700;font-size:18px;color:#fff;letter-spacing:.04em;line-height:1.1;text-shadow:0 2px 8px rgba(0,0,0,.7);">Exclusive</div>
             <div id="splashPreviewLine2" style="font-family:'Cormorant Garamond',serif;font-weight:400;font-size:14px;color:rgba(255,255,255,.85);letter-spacing:.06em;text-shadow:0 2px 8px rgba(0,0,0,.6);">Experience</div>
           </div>
         </div>
       </div>
-      <button onclick="splashBgReset()" style="margin-top:8px;width:100%;padding:10px;border:1px solid #e8e5e0;border-radius:10px;background:#fff;font-family:var(--font-main);font-size:12px;color:#aaa;cursor:pointer;">사진 제거 (기본 배경으로)</button>
+      <div style="display:flex;gap:8px;margin-top:8px;">
+        <button onclick="splashPickPhoto()" style="flex:1;padding:10px;border:1px solid #e8e5e0;border-radius:10px;background:#fff;font-family:var(--font-main);font-size:12px;color:#555;cursor:pointer;">사진 올리기</button>
+        <button onclick="splashPickVideo()" style="flex:1;padding:10px;border:1px solid #e8e5e0;border-radius:10px;background:#fff;font-family:var(--font-main);font-size:12px;color:#555;cursor:pointer;">동영상 올리기</button>
+      </div>
+      <div id="splashUploadHint" style="display:none;margin-top:6px;font-family:'Noto Sans KR',sans-serif;font-size:11px;color:#5C0A14;text-align:center;">업로드 중…</div>
+      <button onclick="splashBgReset()" style="margin-top:8px;width:100%;padding:10px;border:1px solid #e8e5e0;border-radius:10px;background:#fff;font-family:var(--font-main);font-size:12px;color:#aaa;cursor:pointer;">사진/동영상 제거 (기본 배경으로)</button>
     </div>
     <div class="rp-field">
       <label class="rp-label">첫 번째 줄</label>
@@ -24867,6 +24885,8 @@ function rpCropConfirm() {
     _scv.getContext('2d').drawImage(_srcCanvas, 0, 0, _sw, _sh);
     var url = _scv.toDataURL('image/jpeg', 0.82);
     _splashSettings.bg = url;
+    _splashSettings.mediaType = 'image';   // 🆕 사진 선택 → 동영상 해제
+    _splashSettings.mediaUrl = '';
     applySplashSettings();
     // 🆕 로컬 저장 시각 기록 (Supabase 옛값이 새 편집을 덮어쓰지 못하게 — 롤백 방지)
     var _sts = new Date().toISOString();
@@ -24874,7 +24894,9 @@ function rpCropConfirm() {
     IDB.set('splashSettings', JSON.stringify({
       text1: _splashSettings.text1,
       text2: _splashSettings.text2,
-      bg:    url
+      bg:    url,
+      mediaType: 'image',
+      mediaUrl: ''
     }));
     // 🆕 Supabase 동기화 → 모든 회원·모든 기기에 시작화면 배경 공유
     if (typeof _splashSaveRemote === 'function') _splashSaveRemote(_sts);
@@ -35919,7 +35941,7 @@ function rpGetPhotoTexts() {
 // ══════════════════════════════════════════════
 // SPLASH SETTINGS
 // ══════════════════════════════════════════════
-var _splashSettings = /*SPLASH_DATA_START*/{ text1:'Exclusive', text2:'Experience', bg:'' }/*SPLASH_DATA_END*/;
+var _splashSettings = /*SPLASH_DATA_START*/{ text1:'Exclusive', text2:'Experience', bg:'', mediaType:'image', mediaUrl:'' }/*SPLASH_DATA_END*/;
 
 // 🆕 IDB(로컬) 폴백 로더 — Supabase 비어있거나 실패 시
 function _loadSplashFromIDB() {
@@ -35928,7 +35950,9 @@ function _loadSplashFromIDB() {
       var parsed = JSON.parse(s);
       if (parsed.text1) _splashSettings.text1 = parsed.text1;
       if (parsed.text2) _splashSettings.text2 = parsed.text2;
-      if (parsed.bg)    _splashSettings.bg    = parsed.bg;
+      if (typeof parsed.bg === 'string')        _splashSettings.bg        = parsed.bg;
+      if (typeof parsed.mediaType === 'string') _splashSettings.mediaType = parsed.mediaType;
+      if (typeof parsed.mediaUrl === 'string')  _splashSettings.mediaUrl  = parsed.mediaUrl;
     }
     applySplashSettings();
   }).catch(function(){ applySplashSettings(); });
@@ -35941,7 +35965,9 @@ function _splashSaveRemote(ts) {
     value: {
       text1: _splashSettings.text1,
       text2: _splashSettings.text2,
-      bg:    _splashSettings.bg || ''
+      bg:    _splashSettings.bg || '',
+      mediaType: _splashSettings.mediaType || 'image',   // 🆕 'image' | 'video'
+      mediaUrl:  _splashSettings.mediaUrl || ''          // 🆕 동영상 Storage URL
     },
     updated_at: ts
   }).then(function(res){
@@ -35966,8 +35992,11 @@ function loadSplashSettings() {
         if (v.text1) _splashSettings.text1 = v.text1;
         if (v.text2) _splashSettings.text2 = v.text2;
         if (typeof v.bg === 'string') _splashSettings.bg = v.bg;
+        _splashSettings.mediaType = (v.mediaType === 'video') ? 'video' : 'image';   // 🆕
+        _splashSettings.mediaUrl  = (typeof v.mediaUrl === 'string') ? v.mediaUrl : '';  // 🆕
         if (typeof IDB !== 'undefined') IDB.set('splashSettings', JSON.stringify({
-          text1: _splashSettings.text1, text2: _splashSettings.text2, bg: _splashSettings.bg || ''
+          text1: _splashSettings.text1, text2: _splashSettings.text2, bg: _splashSettings.bg || '',
+          mediaType: _splashSettings.mediaType, mediaUrl: _splashSettings.mediaUrl
         }));
         console.log('✅ Supabase 시작화면 로드');
         applySplashSettings();
@@ -35991,7 +36020,9 @@ function saveSplashSettings() {
   IDB.set('splashSettings', JSON.stringify({
     text1: _splashSettings.text1,
     text2: _splashSettings.text2,
-    bg:    _splashSettings.bg || ''
+    bg:    _splashSettings.bg || '',
+    mediaType: _splashSettings.mediaType || 'image',
+    mediaUrl:  _splashSettings.mediaUrl || ''
   })).then(function(){
     showToast('✓','저장 완료','시작화면이 업데이트되었습니다');
   }).catch(function(){
@@ -36024,32 +36055,61 @@ function applySplashSettings() {
   var p2 = document.getElementById('splashPreviewLine2');
   if (p1) p1.textContent = t1;
   if (p2) p2.textContent = t2;
+  // 🆕 미디어 종류 판별 (동영상 / 사진)
+  var _isVid = (_splashSettings.mediaType === 'video' && _splashSettings.mediaUrl);
+  var vidEl = document.getElementById('splashVideo');
   // 실제 스플래시 배경
-  if (bg) {
-    if (_splashSettings.bg) {
-      bg.style.backgroundImage = "url('" + _splashSettings.bg + "')";
-      bg.style.backgroundSize = 'cover';
-      bg.style.backgroundPosition = 'center top';
-    } else {
-      bg.style.backgroundImage = '';
-      bg.style.background = 'linear-gradient(160deg,#1a0508 0%,#0d0306 40%,#120208 100%)';
+  if (_isVid) {
+    // 동영상: video 요소 표시 + 재생, bg 는 검정
+    if (vidEl) {
+      if (vidEl.getAttribute('src') !== _splashSettings.mediaUrl) vidEl.setAttribute('src', _splashSettings.mediaUrl);
+      vidEl.muted = true;              // 소리 없음 (요구사항)
+      vidEl.style.display = 'block';
+      var _pp = vidEl.play(); if (_pp && _pp.catch) _pp.catch(function(){});
+    }
+    if (bg) { bg.style.backgroundImage = ''; bg.style.background = '#000'; }
+  } else {
+    if (vidEl) { try { vidEl.pause(); } catch(e){} vidEl.style.display = 'none'; vidEl.removeAttribute('src'); }
+    if (bg) {
+      if (_splashSettings.bg) {
+        bg.style.backgroundImage = "url('" + _splashSettings.bg + "')";
+        bg.style.backgroundSize = 'cover';
+        bg.style.backgroundPosition = 'center top';
+      } else {
+        bg.style.backgroundImage = '';
+        bg.style.background = 'linear-gradient(160deg,#1a0508 0%,#0d0306 40%,#120208 100%)';
+      }
     }
   }
-  // 편집 화면 사진 미리보기 (background-image 직접 설정)
+  // 편집 화면 미리보기 (사진=배경이미지 / 동영상=video)
   var previewBox = document.getElementById('splashBgPreviewBox');
   var empty = document.getElementById('splashBgEmpty');
+  var pvVid = document.getElementById('splashPreviewVideo');
   if (previewBox) {
-    if (_splashSettings.bg) {
-      previewBox.style.backgroundImage = "url('" + _splashSettings.bg + "')";
-      previewBox.style.backgroundSize = 'cover';
-      previewBox.style.backgroundPosition = 'center top';
+    if (_isVid) {
+      previewBox.style.backgroundImage = '';
+      previewBox.style.background = '#000';
       previewBox.style.borderStyle = 'solid';
       if (empty) empty.style.display = 'none';
+      if (pvVid) {
+        if (pvVid.getAttribute('src') !== _splashSettings.mediaUrl) pvVid.setAttribute('src', _splashSettings.mediaUrl);
+        pvVid.muted = true; pvVid.style.display = 'block';
+        var _pv = pvVid.play(); if (_pv && _pv.catch) _pv.catch(function(){});
+      }
     } else {
-      previewBox.style.backgroundImage = '';
-      previewBox.style.background = 'linear-gradient(160deg,#1a0508 0%,#0d0306 40%,#120208 100%)';
-      previewBox.style.borderStyle = 'dashed';
-      if (empty) empty.style.display = 'flex';
+      if (pvVid) { try { pvVid.pause(); } catch(e){} pvVid.style.display = 'none'; pvVid.removeAttribute('src'); }
+      if (_splashSettings.bg) {
+        previewBox.style.backgroundImage = "url('" + _splashSettings.bg + "')";
+        previewBox.style.backgroundSize = 'cover';
+        previewBox.style.backgroundPosition = 'center top';
+        previewBox.style.borderStyle = 'solid';
+        if (empty) empty.style.display = 'none';
+      } else {
+        previewBox.style.backgroundImage = '';
+        previewBox.style.background = 'linear-gradient(160deg,#1a0508 0%,#0d0306 40%,#120208 100%)';
+        previewBox.style.borderStyle = 'dashed';
+        if (empty) empty.style.display = 'flex';
+      }
     }
   }
 }
@@ -36545,12 +36605,99 @@ function splashPhotoChange(input) {
   reader.onload = function(e) { rpOpenCropModal(e.target.result); };
   reader.readAsDataURL(file);
 }
+// 🆕 2026.07: 스플래시 동영상 업로드 (무음) — Supabase Storage(splash-media) 에 올리고 URL 저장
+function splashPickVideo() {
+  var f = document.getElementById('splashVideoFile');
+  if (f) { f.value = ''; f.click(); }
+}
+async function splashVideoChange(input) {
+  var file = input.files[0]; if (!file) return;
+  input.value = '';
+  if (!window.sb) { showToast('⚠','오류','서버 연결이 필요해요'); return; }
+  // 용량 가이드 — 스플래시는 짧은 클립 권장 (모든 회원이 부팅마다 로드)
+  var MAXMB = 20;
+  if (file.size > MAXMB * 1024 * 1024) {
+    showToast('⚠','파일이 큽니다', MAXMB + 'MB 이하의 짧은 동영상을 사용해주세요');
+    return;
+  }
+  var hint = document.getElementById('splashUploadHint');
+  if (hint) { hint.style.display = 'block'; hint.textContent = '업로드 중… (0%)'; }
+  try {
+    var ext = (file.name.split('.').pop() || 'mp4').toLowerCase().replace(/[^a-z0-9]/g,'') || 'mp4';
+    var path = 'splash_' + Date.now() + '.' + ext;
+    var up = await window.sb.storage.from('splash-media').upload(path, file, {
+      cacheControl: '3600', upsert: true, contentType: file.type || 'video/mp4'
+    });
+    if (up.error) throw up.error;
+    var pub = window.sb.storage.from('splash-media').getPublicUrl(path);
+    var url = pub && pub.data && pub.data.publicUrl;
+    if (!url) throw new Error('URL 생성 실패');
+    // 상태 반영: 동영상 모드
+    _splashSettings.mediaType = 'video';
+    _splashSettings.mediaUrl = url;
+    _splashSettings.bg = '';   // 사진 비움 (동영상 우선)
+    applySplashSettings();
+    var _ts = new Date().toISOString();
+    try { localStorage.setItem('taam_splash_saved_at', _ts); } catch(e){}
+    IDB.set('splashSettings', JSON.stringify({
+      text1: _splashSettings.text1, text2: _splashSettings.text2,
+      bg: '', mediaType: 'video', mediaUrl: url
+    }));
+    if (typeof _splashSaveRemote === 'function') _splashSaveRemote(_ts);
+    if (hint) hint.style.display = 'none';
+    showToast('✓','적용 완료','시작화면 동영상이 설정됐어요 (무음)');
+  } catch(e) {
+    if (hint) hint.style.display = 'none';
+    console.warn('[splash] 동영상 업로드 실패:', e);
+    var _m = (e && e.message) || '';
+    if (/bucket|not found|404/i.test(_m)) {
+      showToast('⚠','버킷 없음','splash-media 버킷 SQL을 먼저 실행해주세요');
+    } else {
+      showToast('⚠','업로드 실패', _m || '잠시 후 다시 시도해주세요');
+    }
+  }
+}
+// 🆕 2026.07: 스플래시 인트로 — 최소 3초 노출 후 done() 호출, 스킵 버튼으로 즉시 진입 가능.
+//   done: 스플래시를 실제로 닫는 콜백 (fade-out 등). 어느 부팅 경로든 이 게이트로 통일.
+function _splashIntro(done){
+  // 스플래시가 이미 스킵/숨김(세션 내 새로고침 등)이면 3초 대기 없이 즉시 진입 — 빈화면 방지
+  var _sp = document.querySelector('.splash');
+  var _hidden = document.documentElement.classList.contains('splash-skip')
+             || !_sp || _sp.style.display === 'none'
+             || (window.getComputedStyle && getComputedStyle(_sp).display === 'none');
+  if (_hidden) { try { done(); } catch(e){} return; }
+  var MIN = 3000;
+  var skip = document.getElementById('splashSkipBtn');
+  var vid = document.getElementById('splashVideo');
+  // 동영상이면 처음부터 재생
+  try { if (vid && vid.style.display !== 'none') { vid.currentTime = 0; var _p = vid.play(); if(_p&&_p.catch) _p.catch(function(){}); } } catch(e){}
+  if (skip) skip.style.display = 'flex';
+  var fired = false;
+  function finish(){
+    if (fired) return; fired = true;
+    if (window._splashIntroTimer) { clearTimeout(window._splashIntroTimer); window._splashIntroTimer = null; }
+    if (skip) skip.style.display = 'none';
+    try { if (vid) vid.pause(); } catch(e){}
+    try { done(); } catch(_e){}
+  }
+  window._splashSkipFn = finish;   // 스킵 버튼(splashSkip)이 호출
+  var started = window._splashStart || Date.now();
+  var wait = Math.max(0, MIN - (Date.now() - started));
+  window._splashIntroTimer = setTimeout(finish, wait);
+}
+// 스킵 버튼 → 인트로 즉시 종료
+function splashSkip(){
+  if (typeof window._splashSkipFn === 'function') window._splashSkipFn();
+}
+window.splashSkip = splashSkip;
 function splashBgReset() {
   _splashSettings.bg = '';
+  _splashSettings.mediaType = 'image';   // 🆕 동영상도 해제
+  _splashSettings.mediaUrl = '';
   // 🆕 초기화 시각 기록(롤백 방지) + 원격 동기화 → 모든 회원 기기에서도 기본 배경으로
   var _ts = new Date().toISOString();
   try { localStorage.setItem('taam_splash_saved_at', _ts); } catch(e){}
-  IDB.set('splashSettings', JSON.stringify({ text1:_splashSettings.text1, text2:_splashSettings.text2, bg:'' }));
+  IDB.set('splashSettings', JSON.stringify({ text1:_splashSettings.text1, text2:_splashSettings.text2, bg:'', mediaType:'image', mediaUrl:'' }));
   applySplashSettings();
   if (typeof _splashSaveRemote === 'function') _splashSaveRemote(_ts);
   showToast('✓','초기화','기본 배경으로 변경됐어요 (모든 회원 반영)');
@@ -59028,6 +59175,8 @@ function _instaDrawPath(id, offsetVal){
       }
       if(typeof loadRole !== 'function') return;
       loadRole().then(function(){
+        // 🆕 스플래시 미디어(사진/동영상) 캐시 즉시 반영 — 인트로 동안 배경 보이게
+        try { if (typeof _loadSplashFromIDB === 'function') _loadSplashFromIDB(); } catch(e){}
         setTimeout(function(){
           var wrap = document.getElementById('appWrapper');
           var splash = document.querySelector('.splash');
@@ -59037,8 +59186,8 @@ function _instaDrawPath(id, offsetVal){
           } else if(typeof openMain === 'function'){
             openMain();
           }
-          // 2. 300ms 여유 (openMain 내부 비동기 chain 완료) → .ready 추가 → 스플래시 fade-out
-          setTimeout(function(){
+          // 2. 🆕 스플래시 최소 3초 인트로(+스킵) 후 → .ready 추가 → 스플래시 fade-out
+          var _fadeSplash = function(){
             if(wrap) wrap.classList.add('ready');
             document.documentElement.classList.remove('auto-login');
             if(splash){
@@ -59048,8 +59197,10 @@ function _instaDrawPath(id, offsetVal){
                 splash.classList.remove('fading');
               }, 400);
             }
-          }, 300);
-        }, 1200);
+          };
+          if (typeof _splashIntro === 'function') _splashIntro(_fadeSplash);
+          else setTimeout(_fadeSplash, 300);
+        }, 300);
       }).catch(function(){});
     }).catch(function(){});
   }
