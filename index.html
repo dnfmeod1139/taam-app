@@ -112,8 +112,12 @@ window._sa_p = ['w','o','o','1','4','7','8','5','2','!'];
   try {
     var _h = (window.location && window.location.hostname) || '';
     var _isLocal = (_h === 'localhost' || _h === '127.0.0.1' || _h === '[::1]' || _h === '::1' || _h === '');
-    if(_isLocal){
-      // 로컬: skip 클래스 부여 안 함 → 항상 스플래시 표시
+    // 🆕 네이티브 앱: WKWebView 는 sessionStorage 를 앱 재실행에도 유지 → splash-skip 이 계속 붙어
+    //   인트로/스킵이 사라짐. 네이티브에선 매 실행이 콜드스타트이므로 splash-skip 부여 안 함(항상 인트로 노출).
+    var _isNativeApp = false;
+    try { _isNativeApp = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()); } catch(e){}
+    if(_isLocal || _isNativeApp){
+      // 로컬/네이티브: skip 클래스 부여 안 함 → 항상 스플래시 표시
       sessionStorage.setItem('splashShownThisSession', '1');
     } else if(sessionStorage.getItem('splashShownThisSession') === '1'){
       document.documentElement.classList.add('splash-skip');
@@ -133,7 +137,11 @@ window._sa_p = ['w','o','o','1','4','7','8','5','2','!'];
   try {
     if(!(window.Capacitor && window.Capacitor.getPlatform && window.Capacitor.getPlatform() !== 'web')) return;
     var _hideNativeSplash = function(){
-      try { var SS = window.Capacitor.Plugins && window.Capacitor.Plugins.SplashScreen; if(SS && SS.hide) SS.hide(); } catch(e){}
+      try {
+        var SS = (window.Capacitor.Plugins && window.Capacitor.Plugins.SplashScreen) ||
+                 (window.Capacitor.registerPlugin && window.Capacitor.registerPlugin('SplashScreen'));
+        if(SS && SS.hide) SS.hide();
+      } catch(e){}
     };
     if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _hideNativeSplash);
     else _hideNativeSplash();
