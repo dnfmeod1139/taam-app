@@ -70,6 +70,42 @@ workflows:
           /usr/libexec/PlistBuddy -c "Set :ITSAppUsesNonExemptEncryption false" "$PL" 2>/dev/null \
             || /usr/libexec/PlistBuddy -c "Add :ITSAppUsesNonExemptEncryption bool false" "$PL"
 
+      - name: 소셜 로그인 네이티브 설정 (구글 URL scheme + Apple Sign In entitlement)
+        script: |
+          set -ex
+          PL="ios/App/App/Info.plist"
+          # 1) 구글 iOS reversed client id URL scheme (@capgo/capacitor-social-login 구글 로그인 복귀용)
+          GSCHEME="com.googleusercontent.apps.248142320623-v6i8b0j85vh8stq6nleij217cm7osiq4"
+          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes array" "$PL" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0 dict" "$PL" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes array" "$PL" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string $GSCHEME" "$PL" 2>/dev/null \
+            || /usr/libexec/PlistBuddy -c "Set :CFBundleURLTypes:0:CFBundleURLSchemes:0 $GSCHEME" "$PL"
+          # 2) Sign in with Apple entitlement 파일 생성
+          cat > ios/App/App/App.entitlements <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>com.apple.developer.applesignin</key>
+            <array><string>Default</string></array>
+          </dict>
+          </plist>
+          PLIST
+          # 3) pbxproj 에 CODE_SIGN_ENTITLEMENTS 연결 (xcodeproj gem)
+          gem list -i xcodeproj >/dev/null 2>&1 || gem install xcodeproj --no-document
+          cat > /tmp/set_ent.rb <<'RUBY'
+          require 'xcodeproj'
+          proj = Xcodeproj::Project.open('ios/App/App.xcodeproj')
+          t = proj.targets.find { |x| x.name == 'App' }
+          raise 'App target not found' unless t
+          t.build_configurations.each { |c| c.build_settings['CODE_SIGN_ENTITLEMENTS'] = 'App/App.entitlements' }
+          proj.save
+          puts 'CODE_SIGN_ENTITLEMENTS set for App target'
+          RUBY
+          ruby /tmp/set_ent.rb
+          echo "==== Info.plist URL types ===="; /usr/libexec/PlistBuddy -c "Print :CFBundleURLTypes" "$PL" || true
+
       - name: 네이티브 앱 아이콘 생성 (TAAM — assets/icon.png 1024)
         script: |
           set -e

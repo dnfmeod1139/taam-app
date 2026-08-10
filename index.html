@@ -13360,8 +13360,7 @@ function applyPhoneScreenByCountry(country) {
   if (socialBox) {
     var _flagOn = (typeof USE_SOCIAL_LOGIN !== 'undefined' && USE_SOCIAL_LOGIN);
     var _isNative = _socialIsNative();
-    var _nativeReady = !!(window.Capacitor && window.Capacitor.Plugins &&
-      (window.Capacitor.Plugins.GoogleAuth || window.Capacitor.Plugins.SignInWithApple));
+    var _nativeReady = !!(window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.SocialLogin);
     var showSocial = (!isKR) && _flagOn && (!_isNative || _nativeReady);
     socialBox.style.display = showSocial ? 'block' : 'none';
   }
@@ -13444,29 +13443,38 @@ function _socialLoginWeb(provider){
     if(res && res.error){ _socialHint('로그인 시작 실패: ' + res.error.message, true); }
   }).catch(function(e){ _socialHint('로그인 오류 / Login error', true); });
 }
+// 소셜 클라이언트 ID (공개값 — 시크릿 아님). @capgo/capacitor-social-login initialize 용.
+var SOCIAL_GOOGLE_WEB_CLIENT_ID = '248142320623-qhjtrcrt3b5mit5o6mlidbs69pgjt3l7.apps.googleusercontent.com';
+var SOCIAL_GOOGLE_IOS_CLIENT_ID = '248142320623-v6i8b0j85vh8stq6nleij217cm7osiq4.apps.googleusercontent.com';
+var SOCIAL_APPLE_SERVICES_ID    = 'com.playtaam.app.signin';
+var _socialInited = false;
+function _ensureSocialInit(){
+  var SL = (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.SocialLogin) || null;
+  if(!SL) return Promise.reject(new Error('SocialLogin 미탑재'));
+  if(_socialInited) return Promise.resolve(SL);
+  return Promise.resolve(SL.initialize({
+    google: {
+      iOSClientId: SOCIAL_GOOGLE_IOS_CLIENT_ID,
+      iOSServerClientId: SOCIAL_GOOGLE_WEB_CLIENT_ID,
+      webClientId: SOCIAL_GOOGLE_WEB_CLIENT_ID
+    },
+    apple: { clientId: SOCIAL_APPLE_SERVICES_ID }
+  })).then(function(){ _socialInited = true; return SL; });
+}
+// 네이티브: @capgo/capacitor-social-login 으로 id_token 획득 → signInWithIdToken (리다이렉트 없음)
 function _socialLoginNative(provider){
-  var Plugins = (window.Capacitor && window.Capacitor.Plugins) || {};
+  var SL = (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.SocialLogin) || null;
+  if(!SL){ _socialHint('소셜 로그인 모듈 미탑재 — 앱 업데이트 필요 / Update the app', true); return; }
   _socialHint((provider === 'apple' ? 'Apple' : 'Google') + ' 로그인 중... / Signing in...');
-  try {
-    if(provider === 'google'){
-      var GoogleAuth = Plugins.GoogleAuth;
-      if(!GoogleAuth){ _socialHint('구글 로그인 모듈 미탑재 — 앱 업데이트 필요 / Update the app', true); return; }
-      Promise.resolve(GoogleAuth.signIn()).then(function(gu){
-        var idToken = gu && ((gu.authentication && gu.authentication.idToken) || gu.idToken);
-        if(!idToken){ _socialHint('구글 토큰 획득 실패 / No Google token', true); return; }
-        return window.sb.auth.signInWithIdToken({ provider: 'google', token: idToken });
-      }).then(_handleNativeIdTokenResult).catch(function(e){ _socialHint('구글 로그인 취소/실패 / Google cancelled', true); });
-    } else if(provider === 'apple'){
-      var SignInWithApple = Plugins.SignInWithApple;
-      if(!SignInWithApple){ _socialHint('애플 로그인 모듈 미탑재 — 앱 업데이트 필요 / Update the app', true); return; }
-      Promise.resolve(SignInWithApple.authorize({ scopes: 'email name' })).then(function(resp){
-        var idToken = resp && resp.response && resp.response.identityToken;
-        if(!idToken){ _socialHint('애플 토큰 획득 실패 / No Apple token', true); return; }
-        // ⚠️ Supabase Apple provider 설정에 따라 nonce 가 필요할 수 있음(가이드 참고)
-        return window.sb.auth.signInWithIdToken({ provider: 'apple', token: idToken });
-      }).then(_handleNativeIdTokenResult).catch(function(e){ _socialHint('애플 로그인 취소/실패 / Apple cancelled', true); });
-    }
-  } catch(e){ _socialHint('네이티브 로그인 오류 / Native error', true); }
+  var scopes = (provider === 'apple') ? ['email', 'name'] : ['email', 'profile'];
+  _ensureSocialInit().then(function(){
+    return SL.login({ provider: provider, options: { scopes: scopes } });
+  }).then(function(res){
+    var idToken = res && res.result && res.result.idToken;
+    if(!idToken){ _socialHint('토큰 획득 실패 / No token', true); return null; }
+    return window.sb.auth.signInWithIdToken({ provider: provider, token: idToken });
+  }).then(function(r){ if(r) _handleNativeIdTokenResult(r); })
+    .catch(function(e){ _socialHint((provider === 'apple' ? 'Apple' : 'Google') + ' 로그인 취소/실패: ' + ((e && e.message) || ''), true); });
 }
 function _handleNativeIdTokenResult(res){
   if(!res){ return; }
