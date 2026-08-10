@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.54.0';  // 1.54.0 — 2026.07: 결제/알림 통합·마이페이지 재정리·시작화면 동영상+3초 인트로+스킵. 버전 상향으로 전 PWA 클라이언트 캐시 강제 갱신(옛 캐시 삭제 + 새 코드 로드).
-const STATIC_CACHE = 'taam-static-v1.54.0';
+const SW_VERSION = 'taam-sw-v1.55.0';  // 1.55.0 — 2026.08: 소셜 로그인(구글·애플)·인증화면 언어화·스크롤/버튼순서 픽스. 버전 상향으로 전 클라이언트(네이티브 앱 포함) 캐시 강제 갱신(옛 캐시 삭제 + 새 코드 로드).
+const STATIC_CACHE = 'taam-static-v1.55.0';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
@@ -15,17 +15,19 @@ self.addEventListener('activate', (event) => {
   console.log('[SW] activate', SW_VERSION);
   // 옛 SW가 만든 모든 캐시 삭제 (현재 SW의 STATIC_CACHE 제외)
   event.waitUntil(
-    Promise.all([
-      caches.keys().then((keys) =>
-        Promise.all(keys.map((k) => {
-          if (k === STATIC_CACHE) return; // 현재 버전 캐시는 보존
-          console.log('[SW] delete old cache', k);
-          return caches.delete(k);
-        }))
-      ),
+    (async () => {
+      // 옛 SW가 만든 모든 캐시 삭제 (현재 STATIC_CACHE 제외)
+      const keys = await caches.keys();
+      await Promise.all(keys.map((k) => (k === STATIC_CACHE ? null : caches.delete(k))));
       // 현재 열린 모든 탭의 SW를 즉시 새 버전으로 교체
-      self.clients.claim(),
-    ])
+      await self.clients.claim();
+      // 🆕 v1.55.0: 새 버전 활성화 시 열린 창 자동 새로고침 —
+      //   네이티브 앱/설치형 PWA 가 "완전 종료 후 재실행"만으로 최신 코드를 받도록 (수동 하드리프레시 불가 대응).
+      try {
+        const wins = await self.clients.matchAll({ type: 'window' });
+        for (const w of wins) { try { await w.navigate(w.url); } catch (e) {} }
+      } catch (e) {}
+    })()
   );
 });
 
