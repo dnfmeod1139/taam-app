@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.55.1';  // 1.55.1 — 2026.08: v1.55.0 의 activate 자동 새로고침 제거(스플래시/스킵 인트로가 사라지던 부작용). 캐시 갱신은 유지.
-const STATIC_CACHE = 'taam-static-v1.55.1';
+const SW_VERSION = 'taam-sw-v1.55.2';  // 1.55.2 — 2026.08: 자동 새로고침 재도입(네이티브 앱에 최신 index.html 강제 반영). index.html 의 "네이티브 splash-skip 미부여" 수정과 함께라 인트로/스킵 안 사라짐.
+const STATIC_CACHE = 'taam-static-v1.55.2';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
@@ -21,9 +21,14 @@ self.addEventListener('activate', (event) => {
       await Promise.all(keys.map((k) => (k === STATIC_CACHE ? null : caches.delete(k))));
       // 현재 열린 모든 탭의 SW를 즉시 새 버전으로 교체
       await self.clients.claim();
-      // ⚠️ v1.55.0 의 자동 새로고침(clients.navigate)은 제거함 —
-      //   리로드가 sessionStorage 를 유지시켜 splash-skip 이 붙고 → 스플래시/스킵 인트로가 사라지는 부작용.
-      //   index.html 은 SW 에서 network-only 라 콜드 스타트마다 최신을 받으므로 강제 리로드 불필요.
+      // 🆕 v1.55.2: 새 버전 활성화 시 열린 창 자동 새로고침 — 네이티브 앱/설치형 PWA 가
+      //   재실행만으로 최신 index.html 을 받도록(하드리프레시 불가 대응).
+      //   ※ v1.55.0 때 이게 splash-skip 을 유발했으나, index.html 에 "네이티브는 splash-skip 미부여"
+      //     수정을 넣어서 이제 리로드해도 인트로/스킵이 사라지지 않음.
+      try {
+        const wins = await self.clients.matchAll({ type: 'window' });
+        for (const w of wins) { try { await w.navigate(w.url); } catch (e) {} }
+      } catch (e) {}
     })()
   );
 });
