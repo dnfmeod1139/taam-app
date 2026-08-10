@@ -13360,7 +13360,7 @@ function applyPhoneScreenByCountry(country) {
   if (socialBox) {
     var _flagOn = (typeof USE_SOCIAL_LOGIN !== 'undefined' && USE_SOCIAL_LOGIN);
     var _isNative = _socialIsNative();
-    var _nativeReady = !!(window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.SocialLogin);
+    var _nativeReady = _socialNativeReady();
     var showSocial = (!isKR) && _flagOn && (!_isNative || _nativeReady);
     socialBox.style.display = showSocial ? 'block' : 'none';
   }
@@ -13396,6 +13396,20 @@ function _applyPhoneScreenAuto() {
 // ════════════════════════════════════════════════════════════════
 function _socialIsNative(){
   return !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+}
+// SocialLogin 플러그인 프록시 획득 — 원격 웹(server.url) 로드라 Plugins.SocialLogin 이 없을 수 있어
+// registerPlugin 으로 네이티브 프록시 생성(서드파티 플러그인 대응).
+function _getSocialPlugin(){
+  if(!window.Capacitor) return null;
+  if(window.Capacitor.Plugins && window.Capacitor.Plugins.SocialLogin) return window.Capacitor.Plugins.SocialLogin;
+  if(window.Capacitor.registerPlugin){ try { return window.Capacitor.registerPlugin('SocialLogin'); } catch(e){} }
+  return null;
+}
+// 네이티브에 SocialLogin 이 실제 설치됐는지 — isPluginAvailable 우선(원격 웹에서도 정확).
+function _socialNativeReady(){
+  if(!window.Capacitor) return false;
+  try { if(window.Capacitor.isPluginAvailable) return !!window.Capacitor.isPluginAvailable('SocialLogin'); } catch(e){}
+  return !!(window.Capacitor.Plugins && window.Capacitor.Plugins.SocialLogin);
 }
 function _socialHint(msg, isError){
   try {
@@ -13449,7 +13463,7 @@ var SOCIAL_GOOGLE_IOS_CLIENT_ID = '248142320623-v6i8b0j85vh8stq6nleij217cm7osiq4
 var SOCIAL_APPLE_SERVICES_ID    = 'com.playtaam.app.signin';
 var _socialInited = false;
 function _ensureSocialInit(){
-  var SL = (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.SocialLogin) || null;
+  var SL = _getSocialPlugin();
   if(!SL) return Promise.reject(new Error('SocialLogin 미탑재'));
   if(_socialInited) return Promise.resolve(SL);
   return Promise.resolve(SL.initialize({
@@ -13463,7 +13477,7 @@ function _ensureSocialInit(){
 }
 // 네이티브: @capgo/capacitor-social-login 으로 id_token 획득 → signInWithIdToken (리다이렉트 없음)
 function _socialLoginNative(provider){
-  var SL = (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.SocialLogin) || null;
+  var SL = _getSocialPlugin();
   if(!SL){ _socialHint('소셜 로그인 모듈 미탑재 — 앱 업데이트 필요 / Update the app', true); return; }
   _socialHint((provider === 'apple' ? 'Apple' : 'Google') + ' 로그인 중... / Signing in...');
   var scopes = (provider === 'apple') ? ['email', 'name'] : ['email', 'profile'];
