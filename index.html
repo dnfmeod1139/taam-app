@@ -6064,6 +6064,25 @@ window.addEventListener('error', function(e){
       </div>
 
       <button class="phone-verify-btn" onclick="vpVerify()" data-i18n="auth.vp_confirm_btn">확인</button>
+
+      <!-- 🌐 소셜 로그인(구글·애플) — USE_SOCIAL_LOGIN + 해외(EN) 회원일 때만 표시.
+           기본 display:none. applyPhoneScreenByCountry() 가 켜고/끈다. -->
+      <div id="vpSocialBox" style="display:none;margin-top:18px;">
+        <div style="display:flex;align-items:center;gap:10px;margin:2px 0 14px;">
+          <div style="flex:1;height:1px;background:#e5e5e5;"></div>
+          <span style="font-size:11px;color:#aaa;font-family:var(--font-main);" data-i18n="auth.social_or">or</span>
+          <div style="flex:1;height:1px;background:#e5e5e5;"></div>
+        </div>
+        <button type="button" onclick="socialLogin('google')" style="width:100%;height:48px;margin-bottom:10px;border:1.5px solid #ddd;border-radius:10px;background:#fff;color:#333;font-size:14px;font-family:var(--font-main);font-weight:600;display:flex;align-items:center;justify-content:center;gap:10px;cursor:pointer;">
+          <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.71-1.57 2.68-3.88 2.68-6.62z"/><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.8.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.96v2.33A9 9 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.97 10.72a5.4 5.4 0 0 1 0-3.44V4.95H.96a9 9 0 0 0 0 8.1l3.01-2.33z"/><path fill="#EA4335" d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.58C13.46.9 11.43 0 9 0A9 9 0 0 0 .96 4.95l3.01 2.33C4.68 5.16 6.66 3.58 9 3.58z"/></svg>
+          <span data-i18n="auth.social_google">Continue with Google</span>
+        </button>
+        <button type="button" onclick="socialLogin('apple')" style="width:100%;height:48px;border:1.5px solid #000;border-radius:10px;background:#000;color:#fff;font-size:14px;font-family:var(--font-main);font-weight:600;display:flex;align-items:center;justify-content:center;gap:10px;cursor:pointer;">
+          <svg width="16" height="18" viewBox="0 0 16 18" aria-hidden="true"><path fill="#fff" d="M13.36 9.56c-.02-2.16 1.76-3.2 1.84-3.25-1-1.47-2.56-1.67-3.12-1.69-1.33-.13-2.59.78-3.26.78-.67 0-1.71-.76-2.81-.74-1.45.02-2.78.84-3.53 2.13-1.5 2.61-.38 6.47 1.08 8.59.71 1.04 1.56 2.2 2.68 2.16 1.07-.04 1.48-.69 2.78-.69 1.29 0 1.66.69 2.79.67 1.15-.02 1.88-1.05 2.59-2.09.81-1.2 1.15-2.36 1.17-2.42-.03-.01-2.24-.86-2.26-3.4zM11.2 3.22c.59-.72.99-1.71.88-2.71-.85.03-1.89.57-2.5 1.28-.55.63-1.03 1.65-.9 2.62.95.07 1.92-.48 2.52-1.19z"/></svg>
+          <span data-i18n="auth.social_apple">Continue with Apple</span>
+        </button>
+        <div id="vpSocialHint" class="phone-hint" style="margin-top:10px;"></div>
+      </div>
     </div>
   </div>
   <!-- 🆕 2026.05.20: skip 버튼 + 팝업 완전 제거 (보안)
@@ -12677,6 +12696,15 @@ var _pendingInviteCode = null; // 입장 중인 초대코드 레코드
 //   openCode() = signup 모드, openLogin() = login 모드.
 var _authMode = 'signup';
 
+// ═══════════════════════════════════════════
+// 🌐 소셜 로그인(구글·애플 OAuth) 스위치 (2026-08)
+// ═══════════════════════════════════════════
+// 해외(EN) 인증화면에만 노출. 국내(KR)는 통합 본인확인 유지(불변).
+// 버튼 실제 노출 조건: 웹=항상 / 네이티브=플러그인 탑재 시만 (applyPhoneScreenByCountry 참고).
+// 클라이언트엔 시크릿 없음 — 구글 secret·애플 .p8 은 전부 Supabase 대시보드.
+// 켜는 법: Supabase provider 활성+키 → (앱)네이티브 플러그인 재빌드 → 아래 true.
+var USE_SOCIAL_LOGIN = true;   // 구글 웹 ON. 애플/네이티브는 준비되면 자동 노출.
+
 
 function codeInputChange(input) {
   if(input._composing) return; // 한글 IME 조합 중엔 건너뜀
@@ -13325,6 +13353,19 @@ function applyPhoneScreenByCountry(country) {
     if (phoneSub) phoneSub.textContent = '이메일로 인증해주세요';
   }
   
+  // 🌐 소셜 로그인 박스: 해외(EN) + 플래그 ON + "실제 동작 가능한 환경"일 때만 노출
+  //   웹 = 항상 가능. 네이티브 = 플러그인(GoogleAuth/SignInWithApple) 탑재 시만.
+  //   → 재빌드 안 된 현재 앱엔 안 떠서 "안 되는 버튼" 노출 방지.
+  var socialBox = document.getElementById('vpSocialBox');
+  if (socialBox) {
+    var _flagOn = (typeof USE_SOCIAL_LOGIN !== 'undefined' && USE_SOCIAL_LOGIN);
+    var _isNative = _socialIsNative();
+    var _nativeReady = !!(window.Capacitor && window.Capacitor.Plugins &&
+      (window.Capacitor.Plugins.GoogleAuth || window.Capacitor.Plugins.SignInWithApple));
+    var showSocial = (!isKR) && _flagOn && (!_isNative || _nativeReady);
+    socialBox.style.display = showSocial ? 'block' : 'none';
+  }
+
   console.log('[phoneScreen] country mode:', isKR ? 'KR' : 'EN');
 }
 
@@ -13343,6 +13384,179 @@ function _applyPhoneScreenAuto() {
 // 끝 — 4개 함수 모두 정의됨
 // 검증: typeof startKoreanIdentityVerify, vpKoreanVerify, applyPhoneScreenByCountry, _applyPhoneScreenAuto
 // 모두 "function" 나와야 정상
+// ════════════════════════════════════════════════════════════════
+
+// ════════════════════════════════════════════════════════════════
+// 🌐 소셜 로그인 (구글·애플 OAuth) — 2026-08
+// ────────────────────────────────────────────────────────────────
+// USE_SOCIAL_LOGIN=false 면 버튼 숨김 + 함수 비활성(가드).
+// 웹  : signInWithOAuth → provider 리다이렉트 → 복귀 시 _socialReturnCheck 후처리
+// 네이티브: 네이티브 SDK로 id_token → signInWithIdToken → 즉시 후처리
+//         (구글이 임베디드 웹뷰 OAuth 차단하므로 앱은 네이티브 방식 필수)
+// 초대코드/이름/동의는 리다이렉트로 유실 → localStorage(taam_pending_social)에 보존.
+// ════════════════════════════════════════════════════════════════
+function _socialIsNative(){
+  return !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+}
+function _socialHint(msg, isError){
+  try {
+    var el = document.getElementById('vpSocialHint');
+    if(el){ el.textContent = msg || ''; el.className = 'phone-hint' + (isError ? ' error' : ''); }
+  } catch(e){}
+  if(isError){ try { if(typeof showToast === 'function') showToast('⚠', '', msg); } catch(e){} }
+  if(isError) console.warn('[social]', msg); else console.log('[social]', msg);
+}
+function _persistSocialCtx(isLogin){
+  try {
+    var nameEl = document.getElementById('vpName');
+    var mkEl = document.getElementById('vpAgreeMarketing');
+    var ctx = {
+      mode: isLogin ? 'login' : 'signup',
+      name: (nameEl && nameEl.value || '').trim(),
+      marketing: !!(mkEl && mkEl.checked),
+      invite: (typeof _pendingInviteCode !== 'undefined' && _pendingInviteCode) ? _pendingInviteCode : null,
+      ts: Date.now()
+    };
+    localStorage.setItem('taam_pending_social', JSON.stringify(ctx));
+  } catch(e){}
+}
+function socialLogin(provider){
+  if(typeof USE_SOCIAL_LOGIN === 'undefined' || !USE_SOCIAL_LOGIN){ _socialHint('준비 중입니다 / Coming soon', true); return; }
+  if(!window.sb){ _socialHint('서버 연결 오류 / Server error', true); return; }
+  var isLogin = (typeof _authMode !== 'undefined' && _authMode === 'login');
+  if(!isLogin){
+    if(typeof vpCheckAgreements === 'function' && !vpCheckAgreements()){
+      _socialHint('필수 약관에 모두 동의해주세요 / Please agree to the required terms', true);
+      return;
+    }
+  }
+  _persistSocialCtx(isLogin);
+  if(_socialIsNative()) _socialLoginNative(provider);
+  else _socialLoginWeb(provider);
+}
+function _socialLoginWeb(provider){
+  _socialHint((provider === 'apple' ? 'Apple' : 'Google') + ' 로그인 중... / Signing in...');
+  window.sb.auth.signInWithOAuth({
+    provider: provider,
+    options: { redirectTo: location.origin + location.pathname }
+  }).then(function(res){
+    if(res && res.error){ _socialHint('로그인 시작 실패: ' + res.error.message, true); }
+  }).catch(function(e){ _socialHint('로그인 오류 / Login error', true); });
+}
+function _socialLoginNative(provider){
+  var Plugins = (window.Capacitor && window.Capacitor.Plugins) || {};
+  _socialHint((provider === 'apple' ? 'Apple' : 'Google') + ' 로그인 중... / Signing in...');
+  try {
+    if(provider === 'google'){
+      var GoogleAuth = Plugins.GoogleAuth;
+      if(!GoogleAuth){ _socialHint('구글 로그인 모듈 미탑재 — 앱 업데이트 필요 / Update the app', true); return; }
+      Promise.resolve(GoogleAuth.signIn()).then(function(gu){
+        var idToken = gu && ((gu.authentication && gu.authentication.idToken) || gu.idToken);
+        if(!idToken){ _socialHint('구글 토큰 획득 실패 / No Google token', true); return; }
+        return window.sb.auth.signInWithIdToken({ provider: 'google', token: idToken });
+      }).then(_handleNativeIdTokenResult).catch(function(e){ _socialHint('구글 로그인 취소/실패 / Google cancelled', true); });
+    } else if(provider === 'apple'){
+      var SignInWithApple = Plugins.SignInWithApple;
+      if(!SignInWithApple){ _socialHint('애플 로그인 모듈 미탑재 — 앱 업데이트 필요 / Update the app', true); return; }
+      Promise.resolve(SignInWithApple.authorize({ scopes: 'email name' })).then(function(resp){
+        var idToken = resp && resp.response && resp.response.identityToken;
+        if(!idToken){ _socialHint('애플 토큰 획득 실패 / No Apple token', true); return; }
+        // ⚠️ Supabase Apple provider 설정에 따라 nonce 가 필요할 수 있음(가이드 참고)
+        return window.sb.auth.signInWithIdToken({ provider: 'apple', token: idToken });
+      }).then(_handleNativeIdTokenResult).catch(function(e){ _socialHint('애플 로그인 취소/실패 / Apple cancelled', true); });
+    }
+  } catch(e){ _socialHint('네이티브 로그인 오류 / Native error', true); }
+}
+function _handleNativeIdTokenResult(res){
+  if(!res){ return; }
+  if(res.error){ _socialHint('로그인 실패: ' + (res.error.message || ''), true); return; }
+  var user = res.data && res.data.user;
+  if(!user){ _socialHint('세션 생성 실패 / Session error', true); return; }
+  _finishSocialAuth(user);
+}
+var _socialFinishing = false;
+function _socialReturnCheck(){
+  if(typeof USE_SOCIAL_LOGIN === 'undefined' || !USE_SOCIAL_LOGIN) return;
+  var raw = null;
+  try { raw = localStorage.getItem('taam_pending_social'); } catch(e){}
+  if(!raw) return;
+  if(!window.sb) return;
+  window.sb.auth.getSession().then(function(r){
+    var s = r && r.data && r.data.session;
+    if(s && s.user){ _finishSocialAuth(s.user); }
+  }).catch(function(){});
+  try {
+    window.sb.auth.onAuthStateChange(function(evt, session){
+      if((evt === 'SIGNED_IN' || evt === 'INITIAL_SESSION') && session && session.user){
+        var still = null; try { still = localStorage.getItem('taam_pending_social'); } catch(e){}
+        if(still) _finishSocialAuth(session.user);
+      }
+    });
+  } catch(e){}
+}
+function _finishSocialAuth(user){
+  if(_socialFinishing) return;
+  _socialFinishing = true;
+  var ctx = {};
+  try { ctx = JSON.parse(localStorage.getItem('taam_pending_social') || '{}'); } catch(e){}
+  try { localStorage.removeItem('taam_pending_social'); } catch(e){}
+  if(ctx.invite){ try { _pendingInviteCode = ctx.invite; } catch(e){} }
+  try { var mk = document.getElementById('vpAgreeMarketing'); if(mk && typeof ctx.marketing === 'boolean') mk.checked = ctx.marketing; } catch(e){}
+  var email = (user.email || '').trim();
+  var name = ctx.name || '';
+  if(ctx.mode === 'login'){ _socialLoginSecurity(user); return; }
+  if(_pendingInviteCode && _pendingInviteCode.code){
+    window.sb.functions.invoke('verify-invite', {
+      body: { code: _pendingInviteCode.code, name: name, phone: '', email: email, country: (_pendingInviteCode.country || 'EN') }
+    }).then(function(vr){
+      if(vr.error || !vr.data || !vr.data.ok){
+        if(vr.data && vr.data.already_member === true){ _socialLoginSecurity(user); return; }
+        _socialHint((vr.data && vr.data.error) || '초대 정보가 일치하지 않습니다 / Invite mismatch', true);
+        try { window.sb.auth.signOut(); } catch(e){}
+        _socialFinishing = false;
+        return;
+      }
+      _doProfileAndConsume(user, name, email, '');
+    }).catch(function(e){ _socialHint('서버 오류, 다시 시도해주세요 / Server error', true); _socialFinishing = false; });
+    return;
+  }
+  _socialLoginSecurity(user);
+}
+function _socialLoginSecurity(user){
+  (async function(){
+    try {
+      if(!user || !user.id){ _socialFail(user, '인증 정보 오류 / Auth error'); return; }
+      var pr = await window.sb.from('profiles').select('id,email,phone,role,deleted_at').eq('id', user.id).maybeSingle();
+      var role = 'member';
+      if(pr && pr.error){
+        // 조회 실패는 시스템 이슈일 수 있어 통과 (이메일 경로와 동일 방침)
+      } else if(!pr || !pr.data){
+        _socialFail(user, '회원 정보가 없습니다. 초대 코드로 가입해주세요. / No account. Please sign up with an invite code.'); return;
+      } else {
+        role = pr.data.role || 'member';
+        if(pr.data.deleted_at){ _socialFail(user, '탈퇴 처리된 회원입니다. / Withdrawn account.'); return; }
+        var adminRoles = ['admin','super_admin','superadmin','staff'];
+        var isStaff = pr.data.role && adminRoles.indexOf(pr.data.role) >= 0;
+        if(!isStaff){
+          var matched = null;
+          try { var rpc = await window.sb.rpc('user_has_invite_match'); if(!rpc.error && typeof rpc.data === 'boolean') matched = rpc.data; } catch(_){}
+          if(matched !== true){ _socialFail(user, '초대 코드 발급 이력이 없습니다. / No invite found. Please sign up first.'); return; }
+        }
+      }
+      try { localStorage.setItem('authedSession', '1'); } catch(e){}
+      if(typeof IDB !== 'undefined' && IDB.set){ IDB.set('authedSession', '1').catch(function(){}); }
+      try { if(typeof _registerActiveSession === 'function') _registerActiveSession(user, role); } catch(_){}
+      _socialHint('✅ 로그인 완료 / Signed in');
+      setTimeout(function(){ if(typeof closeAllScreens === 'function') closeAllScreens(); else location.reload(); }, 400);
+    } catch(e){ _socialFail(user, '검증 오류, 다시 시도해주세요 / Verification error'); }
+  })();
+}
+function _socialFail(user, msg){
+  _socialHint(msg, true);
+  try { window.sb.auth.signOut(); } catch(e){}
+  _socialFinishing = false;
+}
+document.addEventListener('DOMContentLoaded', function(){ try { _socialReturnCheck(); } catch(e){} });
 // ════════════════════════════════════════════════════════════════
 
 function vpVerify(){
@@ -29897,6 +30111,9 @@ var TRANSLATIONS = {
       vp_send_btn:'인증번호 요청',
       vp_ph_code:'인증번호 입력',
       vp_confirm_btn:'확인',
+      social_or:'또는',
+      social_google:'Google로 계속하기',
+      social_apple:'Apple로 계속하기',
       // 약관 동의
       agree_all:'전체 동의',
       agree_terms:'[필수] 이용약관 동의',
@@ -30651,6 +30868,9 @@ var TRANSLATIONS = {
       vp_send_btn:'Send Verification Code',
       vp_ph_code:'Enter verification code',
       vp_confirm_btn:'Confirm',
+      social_or:'or',
+      social_google:'Continue with Google',
+      social_apple:'Continue with Apple',
       agree_all:'Agree to All',
       agree_terms:'[Required] Terms of Service',
       agree_privacy:'[Required] Privacy Policy',
@@ -31581,6 +31801,9 @@ TRANSLATIONS.ja = {
     vp_send_btn:'認証コードを送信',
     vp_ph_code:'認証コードを入力',
     vp_confirm_btn:'確認',
+    social_or:'または',
+    social_google:'Googleで続ける',
+    social_apple:'Appleで続ける',
     agree_all:'すべて同意',
     agree_terms:'[必須] 利用規約',
     agree_privacy:'[必須] 個人情報の取扱い',
