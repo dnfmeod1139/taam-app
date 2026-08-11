@@ -5671,6 +5671,114 @@ window.exportAllData = function(){
   }
 };
 
+// ══════════════════════════════════════════════════════════════
+// 🆕 2026.08: 인앱 계정 삭제 (App Store 5.1.1(v) / Google Play 데이터 삭제 정책 필수)
+//   ① 잔액·예정 예약 확인 → ② 안내 + 2단계 확인(문구 입력) → ③ 서버 처리 → ④ 로그아웃
+//   서버는 profiles.deleted_at 소프트 삭제 (기존 로그인 차단 로직 재사용) + 개인정보 마스킹.
+// ══════════════════════════════════════════════════════════════
+window.openAccountDelete = async function(){
+  if(document.getElementById('__acctDelPopup')) return;
+  if(!window.sb){ if(typeof showToast==='function') showToast('⚠','오류','서버 연결이 필요합니다'); return; }
+
+  // ① 현재 상태 조회 (잔액 / 다가오는 예약)
+  var bal = 0, upcoming = 0, uid = null;
+  try {
+    var u = (await window.sb.auth.getUser()).data.user;
+    if(!u){ if(typeof showToast==='function') showToast('⚠','로그인 필요','다시 로그인 해주세요'); return; }
+    uid = u.id;
+    var pr = await window.sb.from('profiles')
+      .select('membership_deposit_balance, general_deposit_balance').eq('id', uid).maybeSingle();
+    if(pr && pr.data) bal = (pr.data.membership_deposit_balance||0) + (pr.data.general_deposit_balance||0);
+    var tk = await window.sb.from('tickets').select('id,status,reservation_date').eq('user_id', uid);
+    if(tk && Array.isArray(tk.data)){
+      var today = new Date(); today.setHours(0,0,0,0);
+      upcoming = tk.data.filter(function(r){
+        if(String(r.status||'') === 'cancelled') return false;
+        var d = (typeof _dParseDate==='function') ? _dParseDate(String(r.reservation_date||'').replace(/-/g,'.')) : null;
+        return d && d >= today;
+      }).length;
+    }
+  } catch(e){ console.warn('[acctDel] 상태 조회 예외:', e); }
+
+  var warnHtml = '';
+  if(bal > 0 || upcoming > 0){
+    warnHtml = '<div style="background:#fdf4f4;border:1px solid #f0d6d6;border-radius:12px;padding:13px 15px;margin-bottom:16px;text-align:left;">'
+      + '<div style="font-size:12px;font-weight:800;color:#9B1C1C;margin-bottom:7px;">삭제 전 확인해주세요</div>'
+      + (bal > 0 ? '<div style="font-size:12.5px;color:#6b6b6b;line-height:1.7;">· 남은 예치금 <b style="color:#9B1C1C;">₩'+bal.toLocaleString()+'</b> 이 소멸됩니다</div>' : '')
+      + (upcoming > 0 ? '<div style="font-size:12.5px;color:#6b6b6b;line-height:1.7;">· 예정된 예약 <b style="color:#9B1C1C;">'+upcoming+'건</b> 이 있습니다</div>' : '')
+      + '<div style="font-size:11.5px;color:#9a9486;margin-top:7px;line-height:1.6;">환불·예약 정리가 필요하시면 삭제 전 문의해주세요.</div>'
+      + '</div>';
+  }
+
+  var overlay = document.createElement('div');
+  overlay.id = '__acctDelPopup';
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:22px;box-sizing:border-box;overflow-y:auto;';
+  overlay.onclick = function(ev){ if(ev.target===overlay) overlay.remove(); };
+  overlay.innerHTML =
+    '<div style="background:#fff;border-radius:20px;width:100%;max-width:340px;padding:26px 22px 20px;box-shadow:0 20px 60px rgba(0,0,0,.3);font-family:\'Noto Sans KR\',sans-serif;">'
+    + '<div style="text-align:center;font-size:17px;font-weight:800;color:#1a1a18;margin-bottom:6px;">계정 삭제</div>'
+    + '<div style="text-align:center;font-size:12.5px;color:#777;line-height:1.7;margin-bottom:16px;">계정과 회원 정보가 삭제되며<br>되돌릴 수 없습니다.</div>'
+    + warnHtml
+    + '<div style="background:#faf8f5;border-radius:12px;padding:13px 15px;margin-bottom:16px;text-align:left;">'
+      + '<div style="font-size:11.5px;color:#6b6b6b;line-height:1.8;">· 회원 정보·예치금·구매 내역 이용이 중단됩니다<br>· 관련 법령상 보관 의무가 있는 거래 기록은 법정 기간 동안 분리 보관됩니다<br>· 동일 정보로 재가입하려면 새 초대가 필요합니다</div>'
+    + '</div>'
+    + '<div style="font-size:12px;color:#6b6b6b;margin-bottom:6px;">계속하려면 <b style="color:#9B1C1C;">계정 삭제</b> 를 입력해주세요</div>'
+    + '<input id="__acctDelConfirmInput" type="text" placeholder="계정 삭제" autocomplete="off" style="width:100%;box-sizing:border-box;padding:12px 13px;border:1.5px solid #e0ddd5;border-radius:10px;font-size:14px;font-family:inherit;outline:none;margin-bottom:16px;">'
+    + '<button id="__acctDelYes" disabled style="width:100%;padding:14px;background:#ddd;border:none;border-radius:11px;font-family:inherit;font-size:14px;font-weight:800;color:#fff;cursor:not-allowed;margin-bottom:8px;">계정 삭제</button>'
+    + '<button id="__acctDelNo" style="width:100%;padding:13px;background:#f0ede8;border:none;border-radius:11px;font-family:inherit;font-size:14px;font-weight:600;color:#555;cursor:pointer;">취소</button>'
+    + '</div>';
+  document.body.appendChild(overlay);
+
+  var inp = document.getElementById('__acctDelConfirmInput');
+  var yes = document.getElementById('__acctDelYes');
+  document.getElementById('__acctDelNo').onclick = function(){ overlay.remove(); };
+  inp.oninput = function(){
+    var ok = inp.value.trim() === '계정 삭제';
+    yes.disabled = !ok;
+    yes.style.background = ok ? '#9B1C1C' : '#ddd';
+    yes.style.cursor = ok ? 'pointer' : 'not-allowed';
+  };
+  yes.onclick = async function(){
+    if(yes.disabled) return;
+    yes.disabled = true; yes.textContent = '삭제 중...'; yes.style.background = '#bbb';
+    try {
+      var r = await window.sb.rpc('taam_delete_my_account');
+      if(r.error) throw r.error;
+      if(r.data && r.data.ok === false) throw new Error(r.data.error || '삭제 실패');
+      overlay.remove();
+      if(typeof showToast==='function') showToast('✓','계정 삭제 완료','그동안 이용해주셔서 감사합니다');
+      setTimeout(function(){ if(typeof _acctDelSignOut==='function') _acctDelSignOut(); }, 900);
+    } catch(e){
+      console.error('[acctDel] 실패:', e);
+      yes.disabled = false; yes.textContent = '계정 삭제'; yes.style.background = '#9B1C1C';
+      if(typeof showToast==='function') showToast('❌','삭제 실패', (e.message||'').substring(0,70) || '잠시 후 다시 시도해주세요');
+    }
+  };
+};
+
+// 삭제 후 완전 로그아웃 (세션·캐시·SW 정리 — 로그아웃 흐름과 동일)
+window._acctDelSignOut = function(){
+  try {
+    if(typeof IDB !== 'undefined'){ IDB.del('excRole').catch(function(){}); IDB.del('authedSession').catch(function(){}); }
+  } catch(e){}
+  try { localStorage.removeItem('authedSession'); } catch(e){}
+  try { sessionStorage.removeItem('splashShownThisSession'); } catch(e){}
+  var done = function(){
+    var clearCaches = (typeof caches !== 'undefined' && caches.keys)
+      ? caches.keys().then(function(keys){ return Promise.all(keys.map(function(k){ return caches.delete(k); })); }).catch(function(){})
+      : Promise.resolve();
+    var unregSW = (navigator.serviceWorker && navigator.serviceWorker.getRegistrations)
+      ? navigator.serviceWorker.getRegistrations().then(function(regs){ return Promise.all(regs.map(function(r){ return r.unregister().catch(function(){}); })); }).catch(function(){})
+      : Promise.resolve();
+    Promise.all([clearCaches, unregSW]).finally(function(){
+      setTimeout(function(){ location.replace(location.pathname + '?logout=1&_=' + Date.now()); }, 100);
+    });
+  };
+  if(window.sb && window.sb.auth && typeof window.sb.auth.signOut === 'function'){
+    window.sb.auth.signOut().then(done).catch(done);
+  } else { done(); }
+};
+
 window.confirmLogout = function(){
   // 이미 떠있으면 무시
   if(document.getElementById('__logoutConfirmPopup')) return;
@@ -7167,6 +7275,12 @@ window.closePromoCarousel = function(){
       <div class="mp-row" style="padding-left:28px;" onclick="openMemberNameEnModal()">
         <span class="mp-row-label" data-i18n="my_page.name_en">영문 이름 등록</span>
         <span class="mp-row-arrow" id="mpNameEnStatusArrow">›</span>
+      </div>
+      <div class="mp-divider"></div>
+      <!-- 🆕 2026.08: 인앱 계정 삭제 (App Store Guideline 5.1.1(v) / Google Play 필수) -->
+      <div class="mp-row" style="padding-left:28px;" onclick="openAccountDelete()">
+        <span class="mp-row-label" style="color:#9B1C1C;" data-i18n="my_page.delete_account">계정 삭제</span>
+        <span class="mp-row-arrow">›</span>
       </div>
     </div>
 
@@ -30359,6 +30473,7 @@ var TRANSLATIONS = {
       notif_list:'알림 내역',
       pwd_change:'비밀번호 설정/변경',
       name_en:'영문 이름 등록',
+      delete_account:'계정 삭제',
       super_admin:'Super Admin',
       admin:'어드민 페이지',
       group_history:'내역',
@@ -31127,6 +31242,7 @@ var TRANSLATIONS = {
       notif_list:'Notifications',
       pwd_change:'Set / Change Password',
       name_en:'Register English Name',
+      delete_account:'Delete Account',
       super_admin:'Super Admin',
       admin:'Admin',
       group_history:'History',
@@ -31877,6 +31993,7 @@ TRANSLATIONS.ja = {
     notif_list:'通知履歴',
     pwd_change:'パスワード設定・変更',
     name_en:'英文名の登録',
+    delete_account:'アカウント削除',
     super_admin:'Super Admin',
     admin:'管理ページ',
     group_history:'履歴',
