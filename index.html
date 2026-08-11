@@ -18639,7 +18639,7 @@ async function completePurchase(){
   try {
     if(typeof computeTicketNotifications === 'function'){
       _notifSchedule = computeTicketNotifications(
-        { visitDate: t.date, visitTime: t.time, restName: (currentRest?currentRest.name:t.rest) },
+        { visitDate: (typeof _tkFullDate==='function'?_tkFullDate(t):t.date), visitTime: t.time, restName: (currentRest?currentRest.name:t.rest) },
         (currentRest?currentRest.name:t.rest)
       );
     }
@@ -18650,7 +18650,7 @@ async function completePurchase(){
   //   구매 당시에 미리 박아두면 집계 누락/순서 꼬임에도 안전하게 역추적 가능.
   var _purchaseSrcKey = _userKey('excPurchase');
    purchaseHistory.push({
-    id:t.id, restId:t.restId, date:now.toISOString(), visitDate:t.date,
+    id:t.id, restId:t.restId, date:now.toISOString(), visitDate:(typeof _tkFullDate==='function'?_tkFullDate(t):t.date),
     pax:pax, amt:paid, status:'upcoming', depositReturn:null,
     agencyFee: parseInt(t.agencyFee||0),            // 🆕 대행비 스냅샷(1인) — 티켓 수정/삭제돼도 반환 시 폴백
     buyerPhone:_currentUserPhone||'', buyerName:_currentUserName||'',
@@ -26681,10 +26681,16 @@ function riLinkTicketChange(){
   if(!t){ _riLinkTicketId = null; if(info){ info.style.display='none'; } return; }
   // 매장/일시/유형/장르/가격을 티켓 기준으로 자동 채움
   _riRestId = t.restId;
-  _riDate = t.date; _riTime = t.time || null;
+  // 🆕 2026.08: 연도 포함 날짜로 연결 — 2027년 티켓 초대의 방문일이 2026으로 저장되던 문제 수정
+  _riDate = (typeof _tkFullDate==='function') ? _tkFullDate(t) : t.date;
+  _riTime = t.time || null;
   _riType = t.typeClass || 'std';
   _riTicketGenre = t.ticketGenre || _riTicketGenre;
-  var dBtn = document.getElementById('riDateBtnText'); if(dBtn) dBtn.textContent = t.date;
+  var dBtn = document.getElementById('riDateBtnText');
+  if(dBtn){
+    var _fd = (typeof _dParseDate==='function') ? _dParseDate(_riDate) : null;
+    dBtn.textContent = _fd ? (_fd.getFullYear()+'년 '+(_fd.getMonth()+1)+'월 '+_fd.getDate()+'일') : t.date;
+  }
   var tBtn = document.getElementById('riTimeBtnText'); if(tBtn) tBtn.textContent = t.time || '시간을 선택하세요';
   ['riMealAmt','riAgencyFee','riWineMin'].forEach(function(id, i){
     var v = [t.mealFee, t.agencyFee, t.wineMin][i] || 0;
@@ -27260,14 +27266,12 @@ function tbBuildMessage(tickets){
   function fmtLine(t){
     var rest = (restaurantDB || []).find(function(r){ return String(r.id) === String(t.restId); });
     var restName = (rest && rest.name) || t.rest || '(레스토랑)';
-    // t.date 는 'YYYY.MM.DD' 또는 'MM.DD' 형식
-    var d = (t.date || '').split('.');
+    // 🆕 2026.08: 연도는 티켓의 dateYear(없으면 롤포워드 추정) 기준 — 2027년 티켓이
+    //   현재 연도(2026)로 잘못 표기되던 버그 수정. _tkFullDate 가 'YYYY.M.DD' 보장.
+    var d = ((typeof _tkFullDate==='function' ? _tkFullDate(t) : (t.date||'')) || '').split('.');
     var dispDate = '';
     if(d.length === 3) dispDate = parseInt(d[0],10)+'년 '+parseInt(d[1],10)+'월 '+parseInt(d[2],10)+'일';
-    else if(d.length === 2){
-      var yr = new Date().getFullYear();
-      dispDate = yr+'년 '+parseInt(d[0],10)+'월 '+parseInt(d[1],10)+'일';
-    } else dispDate = t.date || '';
+    else dispDate = t.date || '';
     return dispDate + ' ' + restName;
   }
   var lines = tickets.map(fmtLine);
@@ -29471,6 +29475,23 @@ window._isTicketExpired = _isTicketExpired;
 
 // 🆕 2026.07: 연도 포함 날짜 정렬 키 (YYYYMMDD) — 2026.10 이 2027.02 보다 앞에 오도록.
 //   dateYear 미저장 구버전 티켓은 만료 판정과 동일한 180일 규칙으로 연도 추정.
+// 🆕 2026.08: 티켓의 '연도 포함' 날짜 문자열 — dateYear 있으면 'YYYY.M.DD', 없으면 롤포워드 추정.
+//   푸시 문구·초대 연결·캘린더 매핑·구매 방문일 등 연도가 필요한 모든 곳의 공용 소스.
+function _tkFullDate(t){
+  var ds = String((t && t.date) || '');
+  var p = ds.split('.');
+  if(p.length !== 2) return ds;                       // 이미 연도 포함이거나 형식 외
+  var y = parseInt(t && t.dateYear, 10);
+  if(isNaN(y) || y < 2020 || y > 2100){
+    var now = new Date();
+    y = now.getFullYear();
+    var dt = new Date(y, parseInt(p[0],10)-1, parseInt(p[1],10), 23, 59);
+    if(dt < new Date(now.getTime() - 1000*60*60*24*120)) y++;   // 120일 이상 과거면 내년
+  }
+  return y + '.' + ds;
+}
+window._tkFullDate = _tkFullDate;
+
 function _tkDateKey(t){
   var p = String((t && t.date) || '').split('.');
   if(p.length !== 2) return 99999999;   // 날짜 없는 티켓은 맨 뒤
@@ -34034,7 +34055,7 @@ function _tcalDayGroups(dateKey){
   // 앱 업로드 티켓 상품(ticketDB) — 업로드 시 자동으로 카드 생성(정원=총좌석, 시간)
   (typeof _tcalScopedTickets==='function' ? _tcalScopedTickets() : []).forEach(function(t){
     if(t.status==='hidden' || t.status==='pending') return;
-    if(_tcalDateKey(t.date) !== dateKey) return;
+    if(_tcalDateKey((typeof _tkFullDate==='function')?_tkFullDate(t):t.date) !== dateKey) return;   // 🆕 연도 포함 매핑
     var g = gr(t.restId, _tcalRestName(t.restId));
     var seats = parseInt(t.assignedPax || t.totalPax || 0) || 0;
     if(g.capacity == null && seats > 0) g.capacity = seats;
@@ -34231,7 +34252,7 @@ function tcalOpenManual(restId){
     (typeof _tcalScopedTickets==='function' ? _tcalScopedTickets() : []).forEach(function(t){
       if(t.status==='hidden' || t.status==='pending') return;
       if(String(t.restId) !== String(restId)) return;
-      if(_tcalDateKey(t.date) !== _dk) return;
+      if(_tcalDateKey((typeof _tkFullDate==='function')?_tkFullDate(t):t.date) !== _dk) return;   // 🆕 연도 포함 매핑
       var _lbl = (t.time||'시간미정') + ' · 정원 ' + (t.assignedPax||t.totalPax||'-') + (t.type ? ' · '+t.type : '');
       _opts += '<option value="'+String(t.id)+'">'+_lbl+'</option>';
     });
