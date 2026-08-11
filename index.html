@@ -7945,6 +7945,12 @@ window.closePromoCarousel = function(){
         <div><div class="admin-menu-text" data-i18n="partner.approved_cal">승인된 티켓 캘린더</div></div>
         <div class="admin-arrow">›</div>
       </div>
+      <!-- 🆕 2026.08: 파트너 어드민 — 자기 매장 티켓 캘린더에서 수동 추가·초대 발송 (좌석 연동) -->
+      <div class="admin-menu-item" onclick="openSubPage('ticketCalScreen')">
+        <div><div class="admin-menu-text">📆 <span data-i18n="partner.ticket_cal_manage">티켓 캘린더 (수동·초대)</span></div>
+          <div class="admin-menu-sub" data-i18n="partner.ticket_cal_manage_sub">내 매장 일정에 수동 예약 추가·예약 초대 발송 — 본 티켓 좌석과 자동 연동</div></div>
+        <div class="admin-arrow">›</div>
+      </div>
       <div class="admin-menu-item" onclick="openSubPage('reservationAdminScreen')">
         <div><div class="admin-menu-text">📅 <span data-i18n="resvadm.menu">예약 관리</span><span class="raBellDot" style="display:none;width:7px;height:7px;border-radius:50%;background:#E53935;margin-left:6px;vertical-align:middle;"></span></div></div>
         <div class="admin-arrow">›</div>
@@ -10702,6 +10708,13 @@ window.closePromoCarousel = function(){
           <option value="초대">초대</option>
         </select>
       </div>
+      <!-- 🆕 2026.08: 본(판매) 티켓 연결 — 연결 시 그 티켓 좌석에서 실제 차감 (서버 트리거 검증) -->
+      <div style="margin-top:12px;">
+        <label style="font-size:12px;font-weight:700;color:#6b6b6b;">본 티켓 연결 <span style="color:#b3aa98;font-weight:500;">(연결 시 좌석 차감)</span></label>
+        <select id="tcalManualLink" style="width:100%;box-sizing:border-box;margin-top:5px;padding:12px;border:1px solid #e0ddd5;border-radius:10px;font-size:13px;font-weight:700;background:#fff;-webkit-appearance:none;">
+          <option value="">연결 안 함 (기록만)</option>
+        </select>
+      </div>
       <div style="margin-top:12px;">
         <label style="font-size:12px;font-weight:700;color:#6b6b6b;">이름</label>
         <input id="tcalManualName" type="text" placeholder="예약자 이름" style="width:100%;box-sizing:border-box;margin-top:5px;padding:12px;border:1px solid #e0ddd5;border-radius:10px;font-size:14px;">
@@ -12162,6 +12175,15 @@ window.renderMyInvites = renderMyInvites;
 //   - reservation_invites.status='cancelled' + cancelled_at
 //   - cancelled_by_invitee_user_id 도 metadata 에 기록 (호스트가 누가 취소했는지 확인 가능)
 //   - 호스트(슈퍼어드민)에게 notifications INSERT + send-push
+// 🆕 2026.08 A안: 초대 좌석 홀드 해제 (SECURITY DEFINER RPC — invitee/host/어드민/슈퍼어드민 허용)
+async function _riReleaseHold(inviteId){
+  if(!inviteId || !window.sb) return;
+  var r = await window.sb.rpc('taam_release_invite_hold', { p_invite_id: String(inviteId) });
+  if (r.error) { console.warn('[hold] 해제 RPC 오류:', r.error.message); return; }
+  console.log('[hold] 해제:', r.data);
+}
+window._riReleaseHold = _riReleaseHold;
+
 async function cancelMyInvite(inviteId){
   if(!inviteId) return;
   if(!confirm('이 초대를 취소하시겠습니까?\n\n취소 후에는 결제할 수 없으며, 슈퍼어드민에게 자동 통지됩니다.')) return;
@@ -12184,6 +12206,11 @@ async function cancelMyInvite(inviteId){
     if(upd.error){ console.error('[cancel]', upd.error); showToast('❌','취소 실패', upd.error.message); return; }
     if(!upd.data || upd.data.length === 0){ showToast('❌','권한 오류','RLS 차단 가능성'); return; }
     console.log('[cancel] 초대 취소 OK:', inviteId);
+
+    // 🆕 2026.08 A안: 연결 초대의 좌석 홀드 해제 → 본 티켓 잔여석 즉시 복구
+    if (inv.ticket_product_id && typeof _riReleaseHold === 'function') {
+      try { await _riReleaseHold(inviteId); } catch(_rh){ console.warn('[cancel] 홀드 해제 실패:', _rh); }
+    }
 
     // 3) 호스트(슈퍼어드민)에게 인앱 알림 + 푸시
     try {
@@ -12542,7 +12569,8 @@ async function loadPurchase(){
     }
 
     // tickets 테이블 행을 purchaseHistory 형식으로 변환
-    purchaseHistory = (rows || []).map(r => ({
+    // 🆕 2026.08: 운영용 행(초대 좌석 홀드 INVH- / 캘린더 수동 연동 MAN-)은 개인 구매내역에서 제외
+    purchaseHistory = (rows || []).filter(r => !(r.extra_data && (r.extra_data.inviteHold || r.extra_data.manualEntry))).map(r => ({
       id: r.ticket_product_id || '',
       restId: r.restaurant_id || '',
       rest: r.restaurant_name || '',
@@ -21878,7 +21906,7 @@ async function _dmLoadSupabasePurchases(){
     // 1) 모든 티켓 (슈퍼어드민 RLS 허용)
     var tres = await window.sb
       .from('tickets')
-      .select('id, user_id, restaurant_id, restaurant_name, party_size, price, status, purchase_id, ticket_product_id, ticket_type, reservation_date, visit_time, created_at, extra_data')
+      .select('id, user_id, restaurant_id, restaurant_name, party_size, price, status, purchase_id, ticket_product_id, ticket_type, reservation_date, visit_time, created_at, extra_data, buyer_name')
       .order('created_at', { ascending: false })
       .limit(2000);
     if(tres.error){ console.warn('[dm supabase] tickets 조회 실패:', tres.error.message); return []; }
@@ -21935,7 +21963,8 @@ async function _dmLoadSupabasePurchases(){
         amt: t.price || 0,
         status: t.status || 'active',
         buyerPhone: p.phone || '',
-        buyerName: p.display_name || p.email || '',
+        // 🆕 2026.08: 수동 연동/초대 홀드 행은 입력된 예약자명 우선 (user_id=관리자라 프로필명 오표시 방지)
+        buyerName: ((t.extra_data && (t.extra_data.manualEntry || t.extra_data.inviteHold)) ? (t.buyer_name || '') : '') || p.display_name || p.email || '',
         buyerEmail: p.email || '',
         purchaseId: t.purchase_id,
         ticket_type: t.ticket_type,
@@ -22252,6 +22281,10 @@ function getDmItems(idx){
   } else {
     src = Array.isArray(purchaseHistory) ? purchaseHistory : [];
   }
+  // 🆕 2026.08: 운영용 행(캘린더 수동 연동 MAN- / 초대 좌석 홀드 INVH-)은 예치금 반환 대상 아님 — 제외
+  src = src.filter(function(h){
+    return !(h.extra_data && (h.extra_data.manualEntry || h.extra_data.inviteHold));
+  });
 
   // 🆕 검색: 레스토랑명 + 구매자명 (세 탭 공통)
   var _q = (_dmSearchQuery || '').trim().toLowerCase();
@@ -26245,8 +26278,9 @@ var _riPolicy = { p1:false, p2:false, p3:false, extra:false };
 var _riSearchTimer = null;
 
 function openReservationInviteScreen(){
-  if(_currentRole !== 'superadmin'){
-    showToast('⚠','권한 없음','슈퍼어드민 전용 기능입니다');
+  // 🆕 2026.08: 파트너 어드민도 허용 — 단, 자기 매장으로만 발송 가능(아래 검색·선택 제한 + 서버 RLS)
+  if(_currentRole !== 'superadmin' && !(_currentRole === 'admin' && _currentAdminRestId)){
+    showToast('⚠','권한 없음','슈퍼어드민/파트너 어드민 전용 기능입니다');
     return;
   }
   // 초기화
@@ -26275,7 +26309,14 @@ function openReservationInviteScreen(){
 
   // v1.53.25: 레스토랑 목록을 풀리스트 대신 검색 입력란 + 드롭다운 (티켓 업로드 슈퍼어드민 패턴)
   var listEl = document.getElementById('riRestList');
-  if(listEl){
+  // 🆕 2026.08: 파트너 어드민 — 매장 검색 없이 자기 매장으로 고정
+  if(listEl && _currentRole === 'admin' && _currentAdminRestId){
+    var _agRest = (restaurantDB||[]).find(function(r){ return String(r.id)===String(_currentAdminRestId); });
+    var _agName = (_agRest && _agRest.name) || _currentAdminRestName || '내 매장';
+    _riRestId = String(_currentAdminRestId);
+    listEl.innerHTML = '<div style="padding:13px 14px;border:2px solid #1a1a18;border-radius:10px;background:#faf8f4;font-size:13.5px;font-weight:800;color:#1a1a18;">'+_agName+' <span style="font-size:11px;color:#999;font-weight:600;">(내 매장 고정)</span></div>';
+  }
+  else if(listEl){
     listEl.innerHTML =
       '<div style="position:relative;">' +
         '<input type="text" id="riRestSearchInput" placeholder="가게명·장르·지역 검색…" autocomplete="off" ' +
@@ -26579,6 +26620,8 @@ function riPopulateLinkTickets(){
   if(!sel) return;
   var html = '<option value="">연결 안 함 (별도 판매 — 좌석 카운팅 제외)</option>';
   (ticketDB || []).forEach(function(t){
+    // 🆕 2026.08: 파트너 어드민은 자기 매장 티켓만 연결 가능
+    if(_currentRole === 'admin' && _currentAdminRestId && String(t.restId) !== String(_currentAdminRestId)) return;
     if(t.status === 'soldout') return;
     if(typeof _isTicketExpired === 'function' && _isTicketExpired(t)) return;
     var r = (restaurantDB || []).find(function(x){ return String(x.id) === String(t.restId); });
@@ -26718,6 +26761,43 @@ async function riSubmit(){
     }
     var inviteId = ins.data && ins.data.id;
     console.log('[ri] 초대 발송 완료 id=', inviteId);
+
+    // 🆕 2026.08 A안: 판매 티켓 연결 초대는 발송 즉시 좌석 홀드(INVH- 행) 생성.
+    //   서버 좌석 트리거가 홀드 INSERT 를 검증 → 잔여석 없으면 발송 자체를 롤백.
+    //   결제(riPay)·초대 취소(cancelMyInvite) 시 taam_release_invite_hold RPC 로 해제.
+    if (_lnkT && inviteId) {
+      var _holdRow = {
+        user_id: u.id,
+        restaurant_id: String(_riRestId),
+        restaurant_name: restName,
+        ticket_product_id: String(_lnkT.id),
+        ticket_type: _lnkT.type || '',
+        reservation_date: _riVisitDate,
+        visit_time: _riTime || '',
+        party_size: _riPax,
+        price: total || 0,
+        status: 'hold',
+        purchase_id: 'INVH-' + String(inviteId).slice(0,8) + '-' + Date.now(),
+        buyer_name: (_riInvitee && (_riInvitee.display_name || _riInvitee.name)) || '초대 대기',
+        buyer_phone: '',
+        extra_data: { inviteHold: true, inviteId: String(inviteId) },
+        created_at: new Date().toISOString()
+      };
+      var _hIns = await window.sb.from('tickets').insert(_holdRow);
+      if (_hIns.error) {
+        console.error('[ri] 좌석 홀드 실패 → 초대 롤백:', _hIns.error);
+        try { await window.sb.from('reservation_invites').delete().eq('id', inviteId); } catch(_rb){}
+        var _hm = String(_hIns.error.message || '');
+        if (_hm.indexOf('TICKET_SOLD_OUT') >= 0) {
+          showToast('⚠','좌석 부족','연결 티켓 잔여석이 없어 초대를 보낼 수 없어요');
+        } else {
+          showToast('❌','초대 발송 실패','좌석 홀드 오류: ' + _hm.substring(0,60));
+        }
+        return;
+      }
+      console.log('[ri] 좌석 홀드 생성:', _holdRow.purchase_id);
+      try { if (typeof renderTickets === 'function') renderTickets(); } catch(_rt){}
+    }
 
     // 🆕 v1.53.30: 인앱 알림 INSERT (구독 안 한 회원도 다음 접속 시 토스트)
     try {
@@ -27591,6 +27671,11 @@ async function riConfirmPay(){
     // 🆕 v1.53.33 2026.06.01: 초대 결제도 일반 티켓처럼 구매 내역에 표시.
     //   purchaseHistory 메모리에 push → savePurchase() 로 IDB + Supabase tickets 동기화.
     //   isInvited:true / inviteDesc 로 UI 에서 "초대로 구매" 배지 표시.
+    // 🆕 2026.08 A안: 연결 초대는 결제 확정 순간 좌석 홀드(INVH-)를 먼저 해제 —
+    //   이어지는 실 티켓 INSERT 가 좌석 트리거를 통과하도록 (홀드+실티켓 이중 카운트 방지)
+    if (inv.ticket_product_id && typeof _riReleaseHold === 'function') {
+      try { await _riReleaseHold(inv.id); } catch(_rh){ console.warn('[riPay] 홀드 해제 실패(계속 진행):', _rh); }
+    }
     try {
       var now = new Date();
       var purchaseId = 'INV-' + inv.id.slice(0,8) + '-' + now.getTime();
@@ -30540,6 +30625,8 @@ var TRANSLATIONS = {
       ticket_upload_req_sub:'슈퍼 어드민 승인 후 게시',
       approved_tickets:'승인된 티켓 리스트',
       approved_cal:'승인된 티켓 캘린더',
+      ticket_cal_manage:'티켓 캘린더 (수동·초대)',
+      ticket_cal_manage_sub:'내 매장 일정에 수동 예약 추가·예약 초대 발송 — 본 티켓 좌석과 자동 연동',
       my_restaurant:'나의 레스토랑',
     },
     // 🆕 도메인 용어 (사용자 확정 2026-05-11)
@@ -31298,6 +31385,8 @@ var TRANSLATIONS = {
       ticket_upload_req_sub:'Published after super admin approval',
       approved_tickets:'Approved Tickets',
       approved_cal:'Approved Ticket Calendar',
+      ticket_cal_manage:'Ticket Calendar (Manual · Invite)',
+      ticket_cal_manage_sub:'Add manual bookings & send invites for your venue — synced with ticket seats',
       my_restaurant:'My Restaurant',
     },
     // 🆕 도메인 용어 (사용자 확정 2026-05-11)
@@ -32047,6 +32136,8 @@ TRANSLATIONS.ja = {
     ticket_upload_req_sub:'スーパーアドミン承認後に公開',
     approved_tickets:'承認済みチケット一覧',
     approved_cal:'承認済みチケットカレンダー',
+    ticket_cal_manage:'チケットカレンダー（手動・招待）',
+    ticket_cal_manage_sub:'自店舗の日程に手動予約・招待送信 — チケット座席と自動連動',
     my_restaurant:'マイレストラン',
   },
   info_menu: { contact:'Contact Us', about:'About Us', faq:'FAQ' },
@@ -33906,7 +33997,7 @@ function _tcalDayGroups(dateKey){
     if(h.status === 'cancelled') return;
     if(String(h.id||'').indexOf('inv-') === 0) return;
     if(_tcalDateKey(h.visitDate || h.reservation_date) !== dateKey) return;
-    gr(h.restId||h.restaurant_id, h.rest||h.restName||h.restaurant_name).entries.push({type:'app', name:(h.buyerName||''), uid:(h._userId||''), pax:(h.pax||1), amount:(parseInt(h.amt)||0), agency:0, time:(h.visitTime||'')});
+    gr(h.restId||h.restaurant_id, h.rest||h.restName||h.restaurant_name).entries.push({type:'app', pid:(h.purchaseId||''), name:(h.buyerName||''), uid:(h._userId||''), pax:(h.pax||1), amount:(parseInt(h.amt)||0), agency:0, time:(h.visitTime||'')});
   });
   // 초대 결제
   (_tcalInvites||[]).forEach(function(inv){
@@ -34078,6 +34169,22 @@ function tcalOpenManual(restId){
   var px = document.getElementById('tcalManualPax'); if(px) px.value='1';
   var am = document.getElementById('tcalManualAmount'); if(am) am.value='0';
   var mm = document.getElementById('tcalManualMemo'); if(mm) mm.value='';
+  // 🆕 2026.08: 본 티켓 연결 옵션 — 이 매장·이 날짜의 판매 티켓만 나열
+  var lk = document.getElementById('tcalManualLink');
+  if(lk){
+    var _day = parseInt(_tcalSelectedDate.split('.')[1],10);
+    var _dk = _tcalYear + '-' + (_tcalMonth + 1) + '-' + _day;
+    var _opts = '<option value="">연결 안 함 (기록만)</option>';
+    (typeof _tcalScopedTickets==='function' ? _tcalScopedTickets() : []).forEach(function(t){
+      if(t.status==='hidden' || t.status==='pending') return;
+      if(String(t.restId) !== String(restId)) return;
+      if(_tcalDateKey(t.date) !== _dk) return;
+      var _lbl = (t.time||'시간미정') + ' · 정원 ' + (t.assignedPax||t.totalPax||'-') + (t.type ? ' · '+t.type : '');
+      _opts += '<option value="'+String(t.id)+'">'+_lbl+'</option>';
+    });
+    lk.innerHTML = _opts;
+    lk.value = '';
+  }
   var modal = document.getElementById('tcalManualModal'); if(modal) modal.style.display='flex';
 }
 function tcalCloseManual(){ var m=document.getElementById('tcalManualModal'); if(m) m.style.display='none'; }
@@ -34099,8 +34206,44 @@ async function tcalManualSave(){
   // 콤마 표시(1,000) 제거 후 숫자 파싱
   var amount = Math.max(0, parseInt(String((document.getElementById('tcalManualAmount')||{}).value||'').replace(/[^0-9]/g,'')) || 0);
   var memo = (document.getElementById('tcalManualMemo')||{}).value || '';
+  var linkId = (document.getElementById('tcalManualLink')||{}).value || '';
   try {
     var u = (await window.sb.auth.getUser()).data.user;
+    // 🆕 2026.08: 본 티켓 연결 → tickets 에 MAN- 행 INSERT (좌석 트리거 검증 + 실제 카운팅 차감).
+    //   취소는 캘린더 상세의 × → tcalCancelLinkedRow (status='cancelled' → 좌석 자동 복구).
+    if (linkId) {
+      var _lt = (ticketDB||[]).find(function(x){ return String(x.id)===String(linkId); });
+      var _vd = _tcalYear + '.' + String(_tcalMonth+1).padStart(2,'0') + '.' + String(parseInt(_tcalSelectedDate.split('.')[1],10)).padStart(2,'0');
+      var _mr = await window.sb.from('tickets').insert({
+        user_id: (u&&u.id)||null,
+        restaurant_id: String(_tcalManualRest),
+        restaurant_name: _tcalRestName(_tcalManualRest),
+        ticket_product_id: String(linkId),
+        ticket_type: (_lt && _lt.type) || '',
+        reservation_date: _vd,
+        visit_time: (_lt && _lt.time) || '',
+        party_size: pax,
+        price: amount,
+        status: 'manual',
+        purchase_id: 'MAN-' + Date.now(),
+        buyer_name: name.trim() || '수동 예약',
+        buyer_phone: '',
+        extra_data: { manualEntry:true, ttype:ttype, memo:memo.trim(), by:(u&&u.id)||null },
+        created_at: new Date().toISOString()
+      });
+      if (_mr.error) {
+        var _mm2 = String(_mr.error.message||'');
+        if (_mm2.indexOf('TICKET_SOLD_OUT') >= 0) showToast('⚠','잔여석 부족','이 티켓엔 '+pax+'명 자리가 없어요');
+        else showToast('❌','저장 실패', _mm2.substring(0,80));
+        return;
+      }
+      showToast('✓','추가 완료 (좌석 차감)', (name.trim()||'수동') + ' · ' + pax + '명');
+      tcalCloseManual();
+      try { await tcalLoadPurchases(); } catch(_e){}
+      tcalRender(); tcalRenderDetail(_tcalSelectedDate);
+      try { if (typeof renderTickets === 'function') renderTickets(); } catch(_rt){}
+      return;
+    }
     var r = await window.sb.from('daegwan_manual').insert({
       venue_id:String(_tcalManualRest), ymd:_tcalYMD(), ttype:ttype, name:name.trim(), pax:pax, amount:amount, memo:memo.trim(), venue_name:_tcalRestName(_tcalManualRest), created_by:(u&&u.id)||null
     });
@@ -34125,6 +34268,23 @@ async function tcalManualDelete(id){
   } catch(e){ showToast('❌','오류', (e.message||'').substring(0,80)); }
 }
 window.tcalManualDelete = tcalManualDelete;
+
+// 🆕 2026.08: 좌석 연동 행(MAN- 수동 / INVH- 초대 홀드) 취소 → status='cancelled' → 본 티켓 잔여석 즉시 복구
+async function tcalCancelLinkedRow(pid){
+  if(!pid || !window.sb) return;
+  var _kind = pid.indexOf('INVH-')===0 ? '초대 좌석 홀드' : '수동 예약(좌석 연동)';
+  if(!confirm(_kind+' 을(를) 취소할까요?\n\n본 티켓 잔여석이 즉시 복구됩니다.')) return;
+  try {
+    var r = await window.sb.from('tickets').update({ status:'cancelled' }).eq('purchase_id', pid).select();
+    if(r.error){ showToast('❌','취소 실패', (r.error.message||'').substring(0,80)); return; }
+    if(!r.data || r.data.length===0){ showToast('❌','권한 오류','본인이 만든 항목만 취소할 수 있어요'); return; }
+    showToast('✓','취소 완료','좌석이 복구되었습니다');
+    try { await tcalLoadPurchases(); } catch(_e){}
+    tcalRender(); if(_tcalSelectedDate) tcalRenderDetail(_tcalSelectedDate);
+    try { if (typeof renderTickets === 'function') renderTickets(); } catch(_rt){}
+  } catch(e){ showToast('❌','오류', (e.message||'').substring(0,80)); }
+}
+window.tcalCancelLinkedRow = tcalCancelLinkedRow;
 
 
 // 역할별로 볼 수 있는 티켓 상품(ticketDB) 범위
@@ -34294,8 +34454,13 @@ function tcalRenderDetail(dateStr) {
       html += '<div style="padding:12px 16px;font-size:12px;color:#c9c4ba;">예약 없음</div>';
     } else {
       g.entries.forEach(function(e){
-        var label = e.type==='invite' ? '초대' : (e.type==='app' ? '앱구매' : (e.ttype||'오프라인'));
-        var col = e.type==='invite' ? ['#6A1A1A','#FBF3F2','#EEDADA'] : (e.type==='app' ? ['#1F5BD6','#EAF1FF','#D2E0FB'] : ['#7A6A60','#F0ECE6','#E0D9CC']);
+        // 🆕 2026.08: 좌석 연동 행 구분 — MAN-(수동·연동) / INVH-(초대 좌석 홀드)
+        var _isMan = (e.pid||'').indexOf('MAN-') === 0;
+        var _isHold = (e.pid||'').indexOf('INVH-') === 0;
+        var label = _isMan ? '수동·연동' : (_isHold ? '초대홀드' : (e.type==='invite' ? '초대' : (e.type==='app' ? '앱구매' : (e.ttype||'오프라인'))));
+        var col = _isMan ? ['#7A6A60','#F0ECE6','#E0D9CC']
+                : (_isHold ? ['#B07A1E','#FBF4E5','#EDDFC2']
+                : (e.type==='invite' ? ['#6A1A1A','#FBF3F2','#EEDADA'] : (e.type==='app' ? ['#1F5BD6','#EAF1FF','#D2E0FB'] : ['#7A6A60','#F0ECE6','#E0D9CC'])));
         var badge = '<span style="font-size:9.5px;font-weight:800;color:'+col[0]+';background:'+col[1]+';border:1px solid '+col[2]+';border-radius:6px;padding:1px 6px;">'+label+'</span>';
         var clickable = (e.type !== 'manual' && e.uid);
         var nm = e.name || (e.type==='manual' ? '(이름없음)' : '(회원)');
@@ -34303,7 +34468,8 @@ function tcalRenderDetail(dateStr) {
           ? '<span onclick="tcalShowInviteMember(\''+e.uid+'\')" style="font-weight:700;color:#1a1a18;cursor:pointer;text-decoration:underline;">'+nm+'</span>'
           : '<span style="font-weight:700;color:#1a1a18;">'+nm+'</span>';
         var amt = (e.amount ? ('₩'+e.amount.toLocaleString()) : '') + (e.agency>0 ? ' <span style="color:#9A9486;font-weight:600;">(대행비 ₩'+e.agency.toLocaleString()+')</span>' : '');
-        var del = (e.type==='manual') ? '<span onclick="tcalManualDelete(\''+e.mid+'\')" style="cursor:pointer;color:#c33;font-size:17px;font-weight:700;line-height:1;padding:2px 4px;">×</span>' : '';
+        var del = (e.type==='manual') ? '<span onclick="tcalManualDelete(\''+e.mid+'\')" style="cursor:pointer;color:#c33;font-size:17px;font-weight:700;line-height:1;padding:2px 4px;">×</span>'
+                : ((_isMan||_isHold) && (isSuper || _currentRole==='admin') ? '<span onclick="tcalCancelLinkedRow(\''+e.pid+'\')" style="cursor:pointer;color:#c33;font-size:17px;font-weight:700;line-height:1;padding:2px 4px;">×</span>' : '');
         html += '<div style="padding:10px 16px;border-top:1px solid #f4f1ec;">'
           + '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">'
           +   '<div style="min-width:0;font-size:12.5px;">' + badge + ' ' + nmH + (e.time?' <span style="color:#9a9486;font-size:11px;">· '+e.time+'</span>':'') + '</div>'
@@ -34313,8 +34479,8 @@ function tcalRenderDetail(dateStr) {
           + '</div>';
       });
     }
-    // 액션: 수동 추가 / 초대 발송
-    if(isSuper){
+    // 액션: 수동 추가 / 초대 발송 — 🆕 2026.08 파트너 어드민도 자기 매장 그룹에서 사용 가능
+    if(isSuper || _currentRole==='admin'){
       html += '<div style="display:flex;gap:8px;padding:12px 16px;border-top:1px solid #f0ece1;">'
         + '<button onclick="tcalOpenManual(\''+g.restId+'\')" style="flex:1;height:42px;border:1.5px dashed #c9a96e;border-radius:11px;background:#fff;color:#6A1A1A;font-size:12.5px;font-weight:800;font-family:\'Noto Sans KR\',sans-serif;cursor:pointer;">＋ 수동 추가</button>'
         + '<button onclick="openInviteFromCalendar(\''+g.restId+'\')" style="flex:1;height:42px;border:none;border-radius:11px;background:#6A1A1A;color:#fff;font-size:12.5px;font-weight:800;font-family:\'Noto Sans KR\',sans-serif;cursor:pointer;">초대 발송</button>'
