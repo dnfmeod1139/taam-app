@@ -27513,11 +27513,24 @@ async function riConfirmPay(){
   try {
     var u = (await window.sb.auth.getUser()).data.user;
     // 🆕 중복 결제 방지 — 서버에서 현재 상태 재확인 (이미 결제/취소/만료면 중단)
-    var _stChk = await window.sb.from('reservation_invites').select('status').eq('id', inv.id).maybeSingle();
+    var _stChk = await window.sb.from('reservation_invites').select('status, created_at').eq('id', inv.id).maybeSingle();
     if(_stChk.data && _stChk.data.status !== 'sent'){
-      showToast('✓','이미 처리됨', _stChk.data.status === 'paid' ? '이미 결제 완료된 초대입니다' : '처리할 수 없는 초대입니다');
+      showToast('✓','이미 처리됨', _stChk.data.status === 'paid' ? '이미 결제 완료된 초대입니다'
+        : (_stChk.data.status === 'expired' ? '48시간이 지나 만료된 초대입니다' : '처리할 수 없는 초대입니다'));
       riPayClose();
       return;
+    }
+    // 🆕 2026.08: 48시간 자동 만료 — 서버 스윕(cron) 전이라도 클라이언트에서 이중 가드.
+    //   연결 초대가 발송 후 48시간 경과면 결제 차단 + expired 처리 + 좌석 홀드 해제.
+    if(inv.ticket_product_id && _stChk.data && _stChk.data.created_at){
+      var _ageMs = Date.now() - new Date(_stChk.data.created_at).getTime();
+      if(_ageMs > 48*3600*1000){
+        try { await window.sb.from('reservation_invites').update({ status:'expired' }).eq('id', inv.id); } catch(_ex){}
+        try { if(typeof _riReleaseHold === 'function') await _riReleaseHold(inv.id); } catch(_rh){}
+        showToast('⚠','초대 만료','발송 후 48시간이 지나 만료된 초대입니다');
+        riPayClose();
+        return;
+      }
     }
     // 🆕 2026.07: 판매 티켓 연결 초대 — 예치금 차감 전 좌석 재검증
     //   (돈이 먼저 빠지고 서버 트리거가 티켓 INSERT 를 거부하는 사고 방지)
