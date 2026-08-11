@@ -6969,7 +6969,7 @@ window.closePromoCarousel = function(){
       <div style="height:1px;background:#f0ede8;margin:14px 0;"></div>
       <!-- 인원 조절 -->
       <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;">
-        <span data-i18n="ticket.sheet_pax_label" style="font-family:var(--font-main);font-size:14px;font-weight:700;color:#111;">인원</span>
+        <span style="display:flex;align-items:center;gap:8px;"><span data-i18n="ticket.sheet_pax_label" style="font-family:var(--font-main);font-size:14px;font-weight:700;color:#111;">인원</span><span id="sheetRemainBadge" style="display:none;font-family:var(--font-main);font-size:10px;font-weight:800;letter-spacing:.04em;padding:3px 8px;border-radius:10px;"></span></span>
         <div style="display:flex;align-items:center;gap:14px;">
           <button onclick="sheetAdjPax(-1)" style="width:32px;height:32px;border-radius:50%;background:#f0ede8;border:none;font-size:20px;font-weight:300;color:#555;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1;">−</button>
           <span id="sheetPaxNum" style="font-family:var(--font-main);font-size:18px;font-weight:900;color:#111;min-width:24px;text-align:center;"></span>
@@ -18025,6 +18025,37 @@ function handleTicketAction(){
   // 인원 표시
   var spn = document.getElementById('sheetPaxNum');
   if(spn) spn.textContent = _tdPax;
+
+  // 🆕 2026.08: 잔여석 배지 — 회원에겐 재고 전체를 노출하지 않는 규칙:
+  //   잔여 ≥4 → "잔여 4석 이상" / 3~1 → 실제 숫자(희소 강조) / 0 → 매진
+  (function(_t){
+    var bd = document.getElementById('sheetRemainBadge');
+    if(!bd || !window.sb || !_t) return;
+    bd.style.display='none';
+    var cap = parseInt(_t.assignedPax || _t.totalPax) || 0;
+    if(cap <= 0) return;   // 정원 미설정 티켓은 표시 안 함
+    window.sb.rpc('taam_ticket_sold_slots', { p_ticket_id: String(_t.id) }).then(function(r){
+      if(currentTicket !== _t) return;   // 그 사이 다른 티켓 열림
+      var d = (!r.error && r.data) || null; if(!d) return;
+      var remain = Math.max(0, cap - (parseInt(d.total)||0));
+      var lang = window._tkCurrentLang;
+      var txt, fg, bg;
+      if(remain <= 0){
+        txt = (lang==='en') ? 'Sold out' : (lang==='ja') ? '満席' : '매진';
+        fg='#fff'; bg='#9B1C1C';
+      } else if(remain >= 4){
+        txt = (lang==='en') ? '4+ seats left' : (lang==='ja') ? '残り4席以上' : '잔여 4석 이상';
+        fg='#1E7A46'; bg='#EAF6EE';
+      } else {
+        txt = (lang==='en') ? ('Only '+remain+' left') : (lang==='ja') ? ('残り'+remain+'席') : ('잔여 '+remain+'석');
+        fg='#fff'; bg='#5C0A14';
+      }
+      bd.textContent = txt;
+      bd.style.color = fg;
+      bd.style.background = bg;
+      bd.style.display = 'inline-block';
+    }).catch(function(){});
+  })(t);
 
   // 예약 요약 + 잔액
   refreshSheetSummary();
