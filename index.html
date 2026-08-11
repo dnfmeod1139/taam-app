@@ -1088,6 +1088,10 @@ html.auto-login .splash .bottom-group{display:none !important}
 .tu-delay-num{display:flex;align-items:center;gap:8px;flex:1;background:#f7f5f2;border-radius:10px;padding:8px 12px;}
 .tu-delay-val{font-family:var(--font-main);font-size:18px;font-weight:700;color:#1a1a18;min-width:30px;text-align:center;}
 .tu-delay-unit-btn{padding:9px 14px;border-radius:8px;border:1.5px solid #e0ddd8;background:#fff;font-family:var(--font-main);font-size:9px;font-weight:800;letter-spacing:.1em;color:#888;cursor:pointer;}
+/* 🆕 2026.08: 티켓 이용 등급 제한 선택 버튼 */
+.tu-tier-btn{flex:1 1 0;min-width:72px;padding:11px 8px;border-radius:10px;border:1.5px solid #e0ddd8;background:#fff;font-family:var(--font-main);font-size:12px;font-weight:800;color:#888;cursor:pointer;transition:.15s;}
+.tu-tier-btn.on{background:#1a1a18;border-color:#1a1a18;color:#fff;}
+.tu-tier-btn.on[data-tier="M"]{background:#5d1622;border-color:#5d1622;}
 .tu-delay-unit-btn.on{border-color:#1a1a18;background:#1a1a18;color:#fff;}
 /* 멤버십 소개 화면 */
 .mship-screen{position:fixed;inset:0;z-index:900;background:#0e0c09;display:none;flex-direction:column;}
@@ -8764,6 +8768,19 @@ window.closePromoCarousel = function(){
       </div>
     </div>
 
+    <!-- 🆕 2026.08: 티켓 이용 등급 제한 (M/T/A) — 위 '우선 공개'(시간차)와 독립 -->
+    <div class="rp-field">
+      <div class="tu-section-title">티켓 이용 등급</div>
+      <div style="font-family:var(--font-main);font-size:11px;color:#888;margin-bottom:10px;">선택한 등급 이상만 상세 열람·구매 가능 (M &gt; T &gt; A)</div>
+      <div style="display:flex;gap:6px;">
+        <button type="button" class="tu-tier-btn on" data-tier="" id="tuMinTierAll" onclick="tuSetMinTier('')">전체 공개</button>
+        <button type="button" class="tu-tier-btn" data-tier="A" id="tuMinTierA" onclick="tuSetMinTier('A')">A 이상</button>
+        <button type="button" class="tu-tier-btn" data-tier="T" id="tuMinTierT" onclick="tuSetMinTier('T')">T 이상</button>
+        <button type="button" class="tu-tier-btn" data-tier="M" id="tuMinTierM" onclick="tuSetMinTier('M')">M 전용</button>
+      </div>
+      <div id="tuMinTierHint" style="font-family:var(--font-main);font-size:11px;color:#c8a96e;margin-top:10px;">모든 회원이 이용할 수 있습니다</div>
+    </div>
+
     <!-- 취소 규정 -->
     <div class="rp-field">
       <!-- 티켓 상세 설명 -->
@@ -9906,6 +9923,11 @@ window.closePromoCarousel = function(){
         <button type="button" id="icTierT" class="ic-tier-btn active" onclick="icSelectTier('T')" style="flex:1;padding:13px 10px;background:#1a1a18;color:#fff;border:1.5px solid #1a1a18;border-radius:10px;font-family:var(--font-main);font-size:13px;font-weight:700;cursor:pointer;text-align:left;">
           <span style="display:block;font-size:14px;font-weight:900;">T 등급</span>
           <span style="display:block;font-size:10px;color:#ccc;margin-top:3px;font-weight:500;">티켓 · 일반 공개 이후 접근</span>
+        </button>
+        <!-- 🆕 2026.08: A 등급 (무료 일반회원) -->
+        <button type="button" id="icTierA" class="ic-tier-btn" onclick="icSelectTier('A')" style="flex:1;padding:13px 10px;background:#fff;color:#1a1a18;border:1.5px solid #ddd;border-radius:10px;font-family:var(--font-main);font-size:13px;font-weight:700;cursor:pointer;text-align:left;">
+          <span style="display:block;font-size:14px;font-weight:900;color:#5b6b7a;">A 등급</span>
+          <span style="display:block;font-size:10px;color:#888;margin-top:3px;font-weight:500;">일반 · 무료 가입 · A 티켓만</span>
         </button>
       </div>
       <div style="font-size:10.5px;color:#9B6F00;background:#fff8e7;border-radius:8px;padding:8px 11px;margin-bottom:14px;line-height:1.5;">
@@ -11261,7 +11283,7 @@ function _inviteToSupabase(c){
     invitee_name: c.inviteeName || c.memberName || '',
     invitee_phone: c.inviteePhone || '',
     invitee_email: c.inviteeEmail || '',  // 🆕
-    invitee_tier: (c.inviteeTier === 'M' || c.inviteeTier === 'T') ? c.inviteeTier : 'T',  // 🆕 v1.53.38: M/T 등급
+    invitee_tier: (c.inviteeTier === 'M' || c.inviteeTier === 'T' || c.inviteeTier === 'A') ? c.inviteeTier : 'T',  // 🆕 2026.08: M/T/A 등급
     invite_message: c.inviteMessage || '',
     invited_by: c.invitedBy || '',
     invited_at: c.invitedAt || null,
@@ -11628,7 +11650,7 @@ async function _backfillProfileFromInvite(user){
     // 가장 최근 사용된 것 우선, 없으면 첫 매치
     var match = rows.find(function(r){ return r.used === true; }) || rows[0];
     var newName = (match.invitee_name && String(match.invitee_name).trim()) || '';
-    var newTier = (match.invitee_tier === 'M' || match.invitee_tier === 'T') ? match.invitee_tier : null;
+    var newTier = (match.invitee_tier === 'M' || match.invitee_tier === 'T' || match.invitee_tier === 'A') ? match.invitee_tier : null;   // 🆕 2026.08: A 등급 포함
 
     var update = {};
     if(!hasName && newName) update.display_name = newName;
@@ -13128,7 +13150,7 @@ function _doProfileAndConsume(user, savedName, email, phone){
   //   T 등급은 별도 만료 없음 (단, member_until 은 이미 기본값 트리거가 설정).
   try {
     var tierFromInvite = (_pendingInviteCode && (_pendingInviteCode.inviteeTier || _pendingInviteCode.invitee_tier)) || 'T';
-    if(tierFromInvite !== 'M' && tierFromInvite !== 'T') tierFromInvite = 'T';
+    if(tierFromInvite !== 'M' && tierFromInvite !== 'T' && tierFromInvite !== 'A') tierFromInvite = 'T';   // 🆕 2026.08: A 등급 허용
     var tierUpdate = { membership_tier: tierFromInvite };
     if(tierFromInvite === 'M'){
       var expDate = new Date();
@@ -16482,6 +16504,11 @@ function openTicketDetail(id){
     tcShowLockPopup(t, r);
     return;
   }
+  // 🆕 2026.08: 티켓 이용 등급 제한(minTier) — 등급 미달이면 안내 후 차단
+  if (typeof _tkTierAllowed === 'function' && !_tkTierAllowed(t)) {
+    showTierLockPopup(t);
+    return;
+  }
   // M등급이거나 전체 오픈 → 상세 화면으로 진입
 
   currentTicket=t; currentRest=r;
@@ -17972,6 +17999,11 @@ function handleTicketAction(){
         showTicketLockInfo(t, 'monly');
         return;
       }
+    }
+    // 🆕 2026.08: 티켓 이용 등급 제한(minTier) — 구매 직전 재검증
+    if(typeof _tkTierAllowed === 'function' && !_tkTierAllowed(t)){
+      showTierLockPopup(t);
+      return;
     }
     if(t.typeClass==='std' && !checkRepurchaseLimit(t)) return;
   }
@@ -26269,6 +26301,7 @@ function uploadTicket(){
     deadlineDate: _tuDeadlineDate,
     deadlineTime: _tuDeadlineTime,
     gradeOpen: _tuGradeOpen,
+    minTier: _tuMinTier || '',          // 🆕 2026.08: 티켓 이용 등급 제한
     mOpenDate: _tuMOpenDate,
     mOpenTime: _tuMOpenTime,
     tOpenDelay: _tuDelay,
@@ -27908,17 +27941,26 @@ var _icTier = 'T';     // 🆕 v1.53.38: 기본 T 등급 (안전 — M은 명시
 
 // 🆕 v1.53.38: 초대 발급 시 등급 선택 (M / T)
 function icSelectTier(tier){
-  if(tier !== 'M' && tier !== 'T') return;
+  // 🆕 2026.08: A 등급(무료 일반회원) 추가 — M / T / A
+  if(tier !== 'M' && tier !== 'T' && tier !== 'A') return;
   _icTier = tier;
-  var mBtn = document.getElementById('icTierM');
-  var tBtn = document.getElementById('icTierT');
-  if(tier === 'M'){
-    if(mBtn){ mBtn.style.background='#5d1622'; mBtn.style.color='#fff'; mBtn.style.borderColor='#5d1622'; mBtn.classList.add('active'); }
-    if(tBtn){ tBtn.style.background='#fff'; tBtn.style.color='#1a1a18'; tBtn.style.borderColor='#ddd'; tBtn.classList.remove('active'); }
-  } else {
-    if(tBtn){ tBtn.style.background='#1a1a18'; tBtn.style.color='#fff'; tBtn.style.borderColor='#1a1a18'; tBtn.classList.add('active'); }
-    if(mBtn){ mBtn.style.background='#fff'; mBtn.style.color='#1a1a18'; mBtn.style.borderColor='#ddd'; mBtn.classList.remove('active'); }
-  }
+  var ON = { M:'#5d1622', T:'#1a1a18', A:'#5b6b7a' };
+  ['M','T','A'].forEach(function(k){
+    var b = document.getElementById('icTier'+k);
+    if(!b) return;
+    if(k === tier){
+      b.style.background = ON[k]; b.style.color = '#fff'; b.style.borderColor = ON[k];
+      b.classList.add('active');
+    } else {
+      b.style.background = '#fff'; b.style.color = '#1a1a18'; b.style.borderColor = '#ddd';
+      b.classList.remove('active');
+    }
+    // 내부 설명 텍스트 대비 보정
+    var sub = b.querySelectorAll('span')[1];
+    if(sub) sub.style.color = (k === tier) ? 'rgba(255,255,255,.75)' : '#888';
+    var ttl = b.querySelectorAll('span')[0];
+    if(ttl) ttl.style.color = (k === tier) ? '#fff' : (k==='M'?'#5d1622':(k==='A'?'#5b6b7a':'#1a1a18'));
+  });
 }
 
 function icSelectCountry(country){
@@ -28231,9 +28273,9 @@ function renderInviteCodes(){
       ? '<span style="font-size:9px;font-weight:700;color:#E53935;background:#fdf0f0;padding:3px 8px;border-radius:10px;">사용됨'+(usedBy?' · '+usedBy:'')+'</span>'
       : '<span style="font-size:9px;font-weight:700;color:#22c55e;background:#f0fdf4;padding:3px 8px;border-radius:10px;">미사용</span>';
     // 🆕 v1.53.38: M/T 등급 배지
-    var tierBadge = inviteeTier === 'M'
-      ? '<span style="font-size:9px;font-weight:800;color:#fff;background:#5d1622;padding:3px 8px;border-radius:10px;letter-spacing:.05em;">M 등급</span>'
-      : '<span style="font-size:9px;font-weight:800;color:#fff;background:#1a1a18;padding:3px 8px;border-radius:10px;letter-spacing:.05em;">T 등급</span>';
+    var _tbBg = inviteeTier === 'M' ? '#5d1622' : (inviteeTier === 'A' ? '#5b6b7a' : '#1a1a18');
+    var _tbTx = (inviteeTier === 'M' || inviteeTier === 'A') ? inviteeTier : 'T';
+    var tierBadge = '<span style="font-size:9px;font-weight:800;color:#fff;background:'+_tbBg+';padding:3px 8px;border-radius:10px;letter-spacing:.05em;">'+_tbTx+' 등급</span>';
 
     // 🆕 v1.53.20 2026.05.28: 슈퍼어드민이 미사용 코드를 수동으로 사용 처리 토글 가능.
     //   consume-invite 가 어떤 이유로 실패해서 used 가 false 로 남았을 때 강제 보정용.
@@ -28499,6 +28541,13 @@ function renderTicketList(){
     }
     // 우선공개 잠금 상태 배지
     var lockBadge = '';
+    // 🆕 2026.08: 티켓 이용 등급 제한 배지 (전체공개면 미표시)
+    if (t.minTier === 'M' || t.minTier === 'T' || t.minTier === 'A') {
+      var _mtC = t.minTier === 'M' ? ['#5d1622','#fbf1f3','#eecdd4']
+               : (t.minTier === 'T' ? ['#1a1a18','#f2f1ef','#ddd'] : ['#5b6b7a','#eef2f5','#cdd8e0']);
+      lockBadge += ' <span style="font-size:8px;font-weight:800;color:'+_mtC[0]+';background:'+_mtC[1]+';border:1px solid '+_mtC[2]+';border-radius:3px;padding:2px 5px;">'
+        + (t.minTier === 'M' ? 'M 전용' : t.minTier + ' 이상') + '</span>';
+    }
     if (t.gradeOpen) {
       if (tcIsLocked(t)) {
         lockBadge = ' <span style="font-size:8px;font-weight:800;color:#e74c3c;background:#fdf0f0;border:1px solid #f5c6c6;border-radius:3px;padding:2px 5px;">🔒 LOCKED</span>';
@@ -28682,6 +28731,8 @@ function tuEditTicket(id){
     tuUpdatePolicyD30();
   }
 
+  // 🆕 2026.08: 티켓 이용 등급 제한 복원
+  if(typeof tuSetMinTier === 'function') tuSetMinTier(t.minTier || '');
   // 우선공개 설정 복원
   _tuGradeOpen = !!t.gradeOpen;
   _tuMOpenDate = t.mOpenDate || null;
@@ -29796,6 +29847,8 @@ function renderPolicyClauses(t) {
 }
 
 function tuResetGradeOpen() {
+  // 🆕 2026.08: 신규 업로드 시 등급 제한도 전체 공개로 초기화
+  if(typeof tuSetMinTier === 'function') tuSetMinTier('');
   _tuGradeOpen = false; _tuMOpenDate = null; _tuMOpenTime = null;
   _tuDelay = 24; _tuDelayUnit = 'hour';
   var sw = document.getElementById('tuGradeOpenSwitch');
@@ -29843,6 +29896,25 @@ var _tuCountdown = false;
 var _tuDeadlineDate = null;
 var _tuDeadlineTime = null;
 var _tuGradeOpen = false;
+// 🆕 2026.08: 티켓 이용 등급 제한 ('' | 'A' | 'T' | 'M')
+var _tuMinTier = '';
+function tuSetMinTier(tier){
+  tier = (tier === 'A' || tier === 'T' || tier === 'M') ? tier : '';
+  _tuMinTier = tier;
+  var map = { '':'tuMinTierAll', 'A':'tuMinTierA', 'T':'tuMinTierT', 'M':'tuMinTierM' };
+  Object.keys(map).forEach(function(k){
+    var b = document.getElementById(map[k]);
+    if(b) b.classList.toggle('on', k === tier);
+  });
+  var hint = document.getElementById('tuMinTierHint');
+  if(hint){
+    hint.textContent = tier === 'M' ? 'M 등급 회원만 이용할 수 있습니다'
+      : tier === 'T' ? 'T · M 등급 회원이 이용할 수 있습니다'
+      : tier === 'A' ? 'A · T · M 등급 회원이 이용할 수 있습니다'
+      : '모든 회원이 이용할 수 있습니다';
+  }
+}
+window.tuSetMinTier = tuSetMinTier;
 var _tuMOpenDate = null;
 var _tuMOpenTime = null;
 var _tuDelay = 24;
@@ -33461,6 +33533,16 @@ function _ticketCardHtml(t,r){
   } else if(isExpired){
     h+='<div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-family:\'Montserrat\',sans-serif;font-size:13px;font-weight:800;letter-spacing:.18em;color:rgba(255,255,255,.6);text-transform:uppercase;white-space:nowrap;border:1px solid rgba(255,255,255,.3);padding:6px 16px;border-radius:5px;z-index:4;background:rgba(0,0,0,.38);box-shadow:0 2px 12px rgba(0,0,0,.5);">EXPIRED</div>';
   }
+  // 🆕 2026.08: 티켓 이용 등급 배지 — 목록엔 보이되 등급 미달임을 미리 알림
+  if (t.minTier === 'M' || t.minTier === 'T' || t.minTier === 'A') {
+    var _mtLbl = (t.minTier === 'M') ? 'M ONLY' : (t.minTier + '+');
+    var _mtLocked = (typeof _tkTierAllowed === 'function') && !_tkTierAllowed(t);
+    h+='<div style="position:absolute;top:10px;left:10px;z-index:5;display:flex;align-items:center;gap:4px;'
+      + 'font-family:\'Montserrat\',sans-serif;font-size:9px;font-weight:800;letter-spacing:.12em;'
+      + 'padding:4px 8px;border-radius:4px;background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,'+(_mtLocked?'.45':'.22')+');'
+      + 'color:'+(_mtLocked?'#e8c98a':'rgba(255,255,255,.75)')+';backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);">'
+      + (_mtLocked?'🔒 ':'') + _mtLbl + '</div>';
+  }
   // 잠금 오버레이
   var isLocked=(t.gradeOpen&&tcIsLocked(t));
   var isMOnly=(t.gradeOpen&&tcIsMOnly(t));
@@ -34666,6 +34748,62 @@ function tcGetTOpenDatetime(t) {
   return new Date(mOpen.getTime() + ms);
 }
 
+// ══════════════════════════════════════════════════════════════
+// 🆕 2026.08: 티켓별 이용 등급 제한 (minTier) — M > T > A 위계
+//   minTier: '' (전체 공개) | 'A' | 'T' | 'M'
+//   · 티켓은 목록에 모두 보이되, 등급 미달이면 상세 진입·구매 시 안내 후 차단.
+//   · 기존 '등급별 우선 공개'(gradeOpen 시간차)와는 독립된 별개 축 — 둘 다 적용됨.
+// ══════════════════════════════════════════════════════════════
+var TIER_RANK = { M:3, T:2, A:1 };
+function _tierRank(g){ return TIER_RANK[String(g||'').toUpperCase()] || 0; }
+function _tierLabel(g){
+  var k = String(g||'').toUpperCase();
+  return k === 'M' ? 'M 등급' : (k === 'T' ? 'T 등급' : (k === 'A' ? 'A 등급' : '전체 공개'));
+}
+// 현재 사용자 등급 ('M'|'T'|'A'|null). 슈퍼어드민·파트너 어드민은 운영상 최상위로 취급.
+function _tkUserTier(){
+  if (typeof _currentRole !== 'undefined' && (_currentRole === 'superadmin' || _currentRole === 'admin')) return 'M';
+  var g = window._currentUserGrade;
+  if (g === 'M' || g === 'T' || g === 'A') return g;
+  return null;
+}
+window._tkUserTier = _tkUserTier;
+// 이 티켓을 현재 사용자가 이용할 수 있는가 (등급 제한 기준)
+function _tkTierAllowed(t){
+  var need = String((t && t.minTier) || '').toUpperCase();
+  if (!need || !TIER_RANK[need]) return true;                                   // 전체 공개
+  if (typeof _currentRole !== 'undefined' && _currentRole === 'superadmin') return true;
+  return _tierRank(_tkUserTier()) >= _tierRank(need);
+}
+window._tkTierAllowed = _tkTierAllowed;
+
+// 등급 미달 안내 팝업 — "이 티켓은 M 등급 회원만 이용할 수 있습니다"
+function showTierLockPopup(t){
+  var need = String((t && t.minTier) || '').toUpperCase();
+  if(!TIER_RANK[need]) return;
+  var mine = _tkUserTier();
+  var allowTxt = need === 'M' ? 'M 등급' : (need === 'T' ? 'T · M 등급' : 'A · T · M 등급');
+  var mineTxt = mine ? _tierLabel(mine) : '등급 없음';
+  var old = document.getElementById('tierLockModal'); if(old) old.remove();
+  var el = document.createElement('div');
+  el.id = 'tierLockModal';
+  el.style.cssText = 'position:fixed;inset:0;z-index:985;background:rgba(0,0,0,.65);display:flex;align-items:center;justify-content:center;padding:24px;box-sizing:border-box;';
+  el.onclick = function(ev){ if(ev.target === el) el.remove(); };
+  el.innerHTML =
+    '<div style="background:#fff;border-radius:20px;width:100%;max-width:330px;padding:30px 24px 22px;text-align:center;font-family:var(--font-main);">'
+    + '<div style="width:54px;height:54px;margin:0 auto 14px;border-radius:50%;background:#faf6ef;border:1.5px solid #e8dcc4;display:flex;align-items:center;justify-content:center;font-size:24px;">🔒</div>'
+    + '<div style="font-size:17px;font-weight:800;color:#1a1a18;margin-bottom:8px;">' + allowTxt + ' 전용 티켓</div>'
+    + '<div style="font-size:13px;color:#777;line-height:1.75;margin-bottom:18px;">이 티켓은 <b style="color:#5C0A14;">' + allowTxt + '</b> 회원만<br>이용하실 수 있습니다.</div>'
+    + '<div style="background:#faf8f5;border-radius:12px;padding:12px 14px;margin-bottom:20px;display:flex;justify-content:space-between;align-items:center;">'
+      + '<span style="font-size:11.5px;color:#9a9486;">회원님의 등급</span>'
+      + '<span style="font-size:13px;font-weight:800;color:#1a1a18;">' + mineTxt + '</span>'
+    + '</div>'
+    + '<button onclick="document.getElementById(\'tierLockModal\').remove()" style="width:100%;padding:14px;background:#1a1a18;border:none;border-radius:12px;font-size:10px;font-weight:800;letter-spacing:.2em;color:#fff;cursor:pointer;">확인</button>'
+    + '</div>';
+  document.body.appendChild(el);
+}
+window.showTierLockPopup = showTierLockPopup;
+
 function tcIsLocked(t) {
   // 완전 잠금 = M오픈 시간도 아직 안 지남
   if (!t.gradeOpen || !t.mOpenDate || !t.mOpenTime) return false;
@@ -35570,7 +35708,7 @@ async function _refreshUserGrade() {
     var tier = data.membership_tier;
     var expires = data.membership_expires_at;
     var isActive = tier === 'M' && expires && new Date(expires) > new Date();
-    window._currentUserGrade = isActive ? 'M' : (tier === 'T' ? 'T' : null);
+    window._currentUserGrade = isActive ? 'M' : (tier === 'T' ? 'T' : (tier === 'A' ? 'A' : null));   // 🆕 2026.08: A 등급(무료·만료 없음)
     window._mshipExpiresAt = isActive ? expires : null;
     window._mshipDepositBal = data.membership_deposit_balance || 0;
     window._genDepositBal = data.general_deposit_balance || 0;
@@ -47019,6 +47157,7 @@ async function saveTicketProductToSupabase(ticket){
       ticket_desc: ticket.ticketDesc || null,
       cancel_policy: ticket.cancelPolicy || null,
       grade_open: ticket.gradeOpen || false,
+      min_tier: ticket.minTier || null,          // 🆕 2026.08: 티켓 이용 등급 제한
       m_open_date: ticket.mOpenDate || null,
       m_open_time: ticket.mOpenTime || null,
       t_open_delay: ticket.tOpenDelay || null,
@@ -47143,6 +47282,7 @@ async function loadAllTicketProductsFromSupabase(){
         ticketDesc: row.ticket_desc,
         cancelPolicy: row.cancel_policy || {},
         gradeOpen: row.grade_open || false,
+        minTier: row.min_tier || '',               // 🆕 2026.08: 티켓 이용 등급 제한
         mOpenDate: row.m_open_date,
         mOpenTime: row.m_open_time,
         tOpenDelay: row.t_open_delay,
