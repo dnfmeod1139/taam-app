@@ -10711,9 +10711,10 @@ window.closePromoCarousel = function(){
       <!-- 🆕 2026.08: 본(판매) 티켓 연결 — 연결 시 그 티켓 좌석에서 실제 차감 (서버 트리거 검증) -->
       <div style="margin-top:12px;">
         <label style="font-size:12px;font-weight:700;color:#6b6b6b;">본 티켓 연결 <span style="color:#b3aa98;font-weight:500;">(연결 시 좌석 차감)</span></label>
-        <select id="tcalManualLink" style="width:100%;box-sizing:border-box;margin-top:5px;padding:12px;border:1px solid #e0ddd5;border-radius:10px;font-size:13px;font-weight:700;background:#fff;-webkit-appearance:none;">
+        <select id="tcalManualLink" onchange="tcalManualLinkChange()" style="width:100%;box-sizing:border-box;margin-top:5px;padding:12px;border:1px solid #e0ddd5;border-radius:10px;font-size:13px;font-weight:700;background:#fff;-webkit-appearance:none;">
           <option value="">연결 안 함 (기록만)</option>
         </select>
+        <div id="tcalManualLinkInfo" style="display:none;margin-top:6px;font-size:12px;font-weight:700;color:#6A1A1A;"></div>
       </div>
       <div style="margin-top:12px;">
         <label style="font-size:12px;font-weight:700;color:#6b6b6b;">이름</label>
@@ -10721,7 +10722,7 @@ window.closePromoCarousel = function(){
       </div>
       <div style="margin-top:12px;">
         <label style="font-size:12px;font-weight:700;color:#6b6b6b;">인원</label>
-        <select id="tcalManualPax" style="width:100%;box-sizing:border-box;margin-top:5px;padding:12px;border:1px solid #e0ddd5;border-radius:10px;font-size:14px;font-weight:800;background:#fff;-webkit-appearance:none;">
+        <select id="tcalManualPax" onchange="if(typeof tcalManualLinkChange==='function')tcalManualLinkChange()" style="width:100%;box-sizing:border-box;margin-top:5px;padding:12px;border:1px solid #e0ddd5;border-radius:10px;font-size:14px;font-weight:800;background:#fff;-webkit-appearance:none;">
           <option value="1">1명</option><option value="2">2명</option><option value="3">3명</option><option value="4">4명</option><option value="5">5명</option>
           <option value="6">6명</option><option value="7">7명</option><option value="8">8명</option><option value="9">9명</option><option value="10">10명</option>
         </select>
@@ -34197,9 +34198,51 @@ function tcalOpenManual(restId){
     });
     lk.innerHTML = _opts;
     lk.value = '';
+    var _lkInfo = document.getElementById('tcalManualLinkInfo');
+    if(_lkInfo){ _lkInfo.style.display='none'; _lkInfo.textContent=''; }
+    // 🆕 각 연결 후보 티켓의 잔여석을 서버 RPC 로 조회해 옵션 라벨에 표시 ("… · 잔여 3석")
+    if(window.sb){
+      Array.prototype.forEach.call(lk.options, function(op){
+        if(!op.value) return;
+        var _t = (ticketDB||[]).find(function(x){ return String(x.id)===String(op.value); });
+        var _cap = _t ? (parseInt(_t.assignedPax||_t.totalPax)||0) : 0;
+        window.sb.rpc('taam_ticket_sold_slots', { p_ticket_id: String(op.value) }).then(function(r){
+          var d = (!r.error && r.data) || null;
+          if(!d) return;
+          var _rem = _cap > 0 ? Math.max(0, _cap - (parseInt(d.total)||0)) : null;
+          if(_rem !== null) op.textContent = op.textContent + ' · 잔여 ' + _rem + '석';
+        });
+      });
+    }
   }
   var modal = document.getElementById('tcalManualModal'); if(modal) modal.style.display='flex';
 }
+// 🆕 2026.08: 연결 티켓 선택 시 잔여석 실시간 표시 (초대 발송의 riLinkRemain 과 동일 패턴)
+async function tcalManualLinkChange(){
+  var lk = document.getElementById('tcalManualLink');
+  var info = document.getElementById('tcalManualLinkInfo');
+  if(!info) return;
+  var id = (lk && lk.value) || '';
+  if(!id){ info.style.display='none'; info.textContent=''; return; }
+  info.style.display='block';
+  info.style.color='#9a9486';
+  info.textContent='잔여석 확인 중…';
+  try {
+    var t = (ticketDB||[]).find(function(x){ return String(x.id)===String(id); });
+    var cap = t ? (parseInt(t.assignedPax||t.totalPax)||0) : 0;
+    var r = await window.sb.rpc('taam_ticket_sold_slots', { p_ticket_id: String(id) });
+    var d = (!r.error && r.data) || null;
+    if(!d){ info.textContent='잔여석 확인 실패 — 저장 시 서버가 다시 검증합니다'; return; }
+    var sold = parseInt(d.total)||0;
+    var rem = cap > 0 ? Math.max(0, cap - sold) : null;
+    var pax = parseInt((document.getElementById('tcalManualPax')||{}).value)||1;
+    if(rem === null){ info.textContent='정원 미설정 티켓 — 제한 없이 추가됩니다'; return; }
+    if(rem <= 0){ info.style.color='#B23A2E'; info.textContent='⚠ 매진 — 잔여 0석 / 정원 '+cap+' (저장 시 거부됩니다)'; }
+    else if(pax > rem){ info.style.color='#B23A2E'; info.textContent='⚠ 잔여 '+rem+'석 / 정원 '+cap+' — 현재 인원('+pax+'명)은 초과'; }
+    else { info.style.color='#1E9E5A'; info.textContent='잔여 '+rem+'석 / 정원 '+cap+' (판매 '+sold+'명)'; }
+  } catch(e){ info.textContent='잔여석 확인 실패 — 저장 시 서버가 다시 검증합니다'; }
+}
+window.tcalManualLinkChange = tcalManualLinkChange;
 function tcalCloseManual(){ var m=document.getElementById('tcalManualModal'); if(m) m.style.display='none'; }
 window.tcalOpenManual = tcalOpenManual; window.tcalCloseManual = tcalCloseManual;
 
