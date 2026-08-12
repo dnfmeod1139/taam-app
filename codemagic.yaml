@@ -292,23 +292,35 @@ workflows:
       # 🆕 2026.08: Android 매니페스트 권한 보강
       #   WebView 의 geolocation('내 위치' 지도) 은 매니페스트 권한이 없으면 무조건 실패한다.
       #   카메라는 file input 촬영 옵션용. (Capacitor 기본 매니페스트엔 INTERNET 만 있음)
+      #   ⚠ macOS 의 BSD sed 는 치환문의 \n 을 줄바꿈으로 해석하지 않아 XML 이 깨짐 → python3 로 처리.
       - name: AndroidManifest 권한 주입 (위치·카메라)
         script: |
           set -ex
-          MF="android/app/src/main/AndroidManifest.xml"
-          add_perm() {
-            grep -q "android.permission.$1" "$MF" || \
-              sed -i '' "s#<application#<uses-permission android:name=\"android.permission.$1\"/>\n    <application#" "$MF"
-          }
-          add_perm ACCESS_COARSE_LOCATION
-          add_perm ACCESS_FINE_LOCATION
-          add_perm CAMERA
-          # 하드웨어는 선택 사항으로 (없는 기기에서도 설치 가능해야 함)
-          grep -q 'android.hardware.camera' "$MF" || \
-            sed -i '' 's#<application#<uses-feature android:name="android.hardware.camera" android:required="false"/>\n    <application#' "$MF"
-          grep -q 'android.hardware.location' "$MF" || \
-            sed -i '' 's#<application#<uses-feature android:name="android.hardware.location" android:required="false"/>\n    <application#' "$MF"
-          echo "==== AndroidManifest ===="; cat "$MF"
+          python3 - <<'PY'
+          import re, sys
+          mf = 'android/app/src/main/AndroidManifest.xml'
+          src = open(mf, encoding='utf-8').read()
+          perms = ['ACCESS_COARSE_LOCATION', 'ACCESS_FINE_LOCATION', 'CAMERA']
+          feats = ['android.hardware.camera', 'android.hardware.location']
+          add = []
+          for p in perms:
+              if 'android.permission.' + p not in src:
+                  add.append('    <uses-permission android:name="android.permission.%s"/>' % p)
+          for f in feats:
+              if f not in src:
+                  add.append('    <uses-feature android:name="%s" android:required="false"/>' % f)
+          if add:
+              i = src.find('<application')
+              if i < 0:
+                  sys.exit('AndroidManifest: <application> tag not found')
+              ls = src.rfind('\n', 0, i) + 1          # <application 줄의 시작
+              src = src[:ls] + '\n'.join(add) + '\n' + src[ls:]
+              open(mf, 'w', encoding='utf-8').write(src)
+              print('added:', len(add))
+          else:
+              print('already present — no change')
+          PY
+          echo "==== AndroidManifest ===="; cat android/app/src/main/AndroidManifest.xml
 
       - name: Java 버전 확인 (21 이어야 함)
         script: |
