@@ -293,13 +293,28 @@ workflows:
       #   WebView 의 geolocation('내 위치' 지도) 은 매니페스트 권한이 없으면 무조건 실패한다.
       #   카메라는 file input 촬영 옵션용. (Capacitor 기본 매니페스트엔 INTERNET 만 있음)
       #   ⚠ macOS 의 BSD sed 는 치환문의 \n 을 줄바꿈으로 해석하지 않아 XML 이 깨짐 → python3 로 처리.
-      - name: AndroidManifest 권한 주입 (위치·카메라)
+      # 권한 주입 + 광고 ID(AD_ID) 권한 제거.
+      #   TAAM 은 광고를 게재하지 않으므로 Play 콘솔 "광고 ID 사용" 선언을 '아니요' 로 한다.
+      #   그런데 play-services / firebase 계열 SDK 가 자기 매니페스트에
+      #   com.google.android.gms.permission.AD_ID 를 갖고 있어 병합 시 앱에 딸려 들어온다.
+      #   → 선언(아니요)과 번들(권한 있음)이 불일치 → Play 가 "광고 ID 선언이 불완전함" 으로 제출 차단.
+      #   tools:node="remove" 로 병합 단계에서 명시적으로 제거해 일치시킨다.
+      - name: AndroidManifest 권한 주입 (위치·카메라) + AD_ID 제거
         script: |
           set -ex
           python3 - <<'PY'
           import re, sys
           mf = 'android/app/src/main/AndroidManifest.xml'
           src = open(mf, encoding='utf-8').read()
+          orig = src
+
+          # tools 네임스페이스 보장 (node="remove" 지시자에 필요)
+          if 'xmlns:tools=' not in src:
+              m = re.search(r'<manifest\b', src)
+              if not m:
+                  sys.exit('AndroidManifest: <manifest> tag not found')
+              src = src[:m.end()] + ' xmlns:tools="http://schemas.android.com/tools"' + src[m.end():]
+
           perms = ['ACCESS_COARSE_LOCATION', 'ACCESS_FINE_LOCATION', 'CAMERA']
           feats = ['android.hardware.camera', 'android.hardware.location']
           add = []
@@ -309,18 +324,25 @@ workflows:
           for f in feats:
               if f not in src:
                   add.append('    <uses-feature android:name="%s" android:required="false"/>' % f)
+          if 'com.google.android.gms.permission.AD_ID' not in src:
+              add.append('    <uses-permission android:name="com.google.android.gms.permission.AD_ID"'
+                         ' tools:node="remove"/>')
+
           if add:
               i = src.find('<application')
               if i < 0:
                   sys.exit('AndroidManifest: <application> tag not found')
               ls = src.rfind('\n', 0, i) + 1          # <application 줄의 시작
               src = src[:ls] + '\n'.join(add) + '\n' + src[ls:]
+
+          if src != orig:
               open(mf, 'w', encoding='utf-8').write(src)
-              print('added:', len(add))
+              print('updated — added lines:', len(add))
           else:
               print('already present — no change')
           PY
           echo "==== AndroidManifest ===="; cat android/app/src/main/AndroidManifest.xml
+          python3 -c "import xml.dom.minidom,sys; xml.dom.minidom.parse('android/app/src/main/AndroidManifest.xml'); print('✅ XML 파싱 OK')"
 
       # 🆕 2026.08: versionCode 자동 증가 (Play 는 같은 versionCode 재업로드를 거부)
       #   Capacitor 가 생성하는 build.gradle 은 항상 versionCode 1 → 두 번째 업로드부터 실패.
@@ -405,6 +427,24 @@ workflows:
           java -version   # gradle 이 쓰는 JVM 확인 (21 이어야 함)
           cd android
           ./gradlew bundleRelease 2>&1 | tee "$CM_BUILD_DIR/android-build.txt"
+
+      # 병합 결과에 AD_ID 가 정말 없는지 확인 — 남아 있으면 Play 가 제출을 막으므로
+      # 업로드 전에 여기서 실패시키는 편이 낫다.
+      - name: AD_ID 권한 제거 검증
+        script: |
+          set -e
+          MERGED=$(find android/app/build/intermediates -name AndroidManifest.xml -path '*merged_manifest*' 2>/dev/null | head -1)
+          if [ -z "$MERGED" ]; then
+            echo "⚠️  병합 매니페스트를 찾지 못함 — 검증 건너뜀 (빌드는 정상)"
+            exit 0
+          fi
+          echo "검사 대상: $MERGED"
+          if grep -q "com.google.android.gms.permission.AD_ID" "$MERGED"; then
+            echo "❌ 병합 매니페스트에 AD_ID 권한이 남아 있습니다 — Play 광고 ID 선언(아니요)과 충돌합니다"
+            grep -n "uses-permission" "$MERGED"
+            exit 1
+          fi
+          echo "✅ AD_ID 권한 없음 — Play 광고 ID 선언 '아니요' 와 일치"
 
     artifacts:
       - android/app/build/outputs/**/*.aab
