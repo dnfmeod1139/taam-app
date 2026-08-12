@@ -322,6 +322,28 @@ workflows:
           PY
           echo "==== AndroidManifest ===="; cat android/app/src/main/AndroidManifest.xml
 
+      # 🆕 2026.08: versionCode 자동 증가 (Play 는 같은 versionCode 재업로드를 거부)
+      #   Capacitor 가 생성하는 build.gradle 은 항상 versionCode 1 → 두 번째 업로드부터 실패.
+      #   Codemagic BUILD_NUMBER(앱 단위 단조 증가)에 여유 오프셋(1000)을 더해 항상 커지게 한다.
+      #   versionName 은 표시용 — 필요 시 VERSION_NAME 환경변수로 덮어쓸 수 있게.
+      - name: versionCode / versionName 주입
+        script: |
+          set -ex
+          python3 - <<'PY'
+          import os, re, sys
+          gr = 'android/app/build.gradle'
+          src = open(gr, encoding='utf-8').read()
+          vc = 1000 + int(os.environ.get('BUILD_NUMBER', '0') or 0)
+          vn = os.environ.get('VERSION_NAME', '') or '1.0.%d' % vc
+          new, n1 = re.subn(r'versionCode\s+\d+', 'versionCode %d' % vc, src, count=1)
+          new, n2 = re.subn(r'versionName\s+"[^"]*"', 'versionName "%s"' % vn, new, count=1)
+          if not n1 or not n2:
+              sys.exit('build.gradle: versionCode/versionName pattern not found')
+          open(gr, 'w', encoding='utf-8').write(new)
+          print('versionCode =', vc, '/ versionName =', vn)
+          PY
+          grep -nE "versionCode|versionName" android/app/build.gradle
+
       - name: Java 버전 확인 (21 이어야 함)
         script: |
           set -e
