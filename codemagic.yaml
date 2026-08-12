@@ -73,6 +73,30 @@ workflows:
           fi
           $CAP sync ios
 
+      # 🆕 2026.08: iPhone 전용 (iPad 미지원)
+      #   Capacitor 기본값은 "1,2"(iPhone+iPad) 라 iPad 겸용 앱이 된다. 그러면
+      #   ① App Store 제출에 iPad 스크린샷(2048×2732)이 필수가 되고
+      #   ② 심사자가 iPad 에서 열어보므로 대화면 레이아웃 문제로 리젝될 수 있다.
+      #   TAAM 은 모바일 세로 기준 UI 이므로 iPhone 전용으로 제한한다.
+      #   (추후 iPad 대응 시 이 스텝만 제거하면 원복)
+      - name: iPhone 전용 설정 (TARGETED_DEVICE_FAMILY=1)
+        script: |
+          set -ex
+          python3 - <<'PY'
+          import re, sys
+          p = 'ios/App/App.xcodeproj/project.pbxproj'
+          src = open(p, encoding='utf-8').read()
+          # "1,2" / 1,2 / "1" 등 어떤 표기든 1 로 통일
+          new, n = re.subn(r'TARGETED_DEVICE_FAMILY = "?[0-9,]+"?;',
+                           'TARGETED_DEVICE_FAMILY = "1";', src)
+          if not n:
+              sys.exit('project.pbxproj: TARGETED_DEVICE_FAMILY 항목을 찾지 못했습니다')
+          if new != src:
+              open(p, 'w', encoding='utf-8').write(new)
+          print('TARGETED_DEVICE_FAMILY 설정 =', n, '곳')
+          PY
+          grep -n "TARGETED_DEVICE_FAMILY" ios/App/App.xcodeproj/project.pbxproj
+
       - name: 수출규정 자동 면제 (ITSAppUsesNonExemptEncryption=NO)
         script: |
           # HTTPS 표준 암호화만 사용 → 비면제 암호화 없음. TestFlight 수출규정 질문 자동 회피.
