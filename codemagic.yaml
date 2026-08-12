@@ -80,6 +80,52 @@ workflows:
           /usr/libexec/PlistBuddy -c "Set :ITSAppUsesNonExemptEncryption false" "$PL" 2>/dev/null \
             || /usr/libexec/PlistBuddy -c "Add :ITSAppUsesNonExemptEncryption bool false" "$PL"
 
+      # 🆕 2026.08: iOS 권한 사용 목적 문자열 (필수)
+      #   문자열이 없으면 해당 기능을 처음 쓰는 순간 앱이 즉시 종료됨 → 심사 확정 리젝.
+      #   · 사진/카메라 : 프로필·레스토랑·시작화면 이미지 업로드 (index.html file input 21곳)
+      #   · 위치        : 아틀라스 지도 '내 위치' (navigator.geolocation)
+      - name: 권한 사용 목적 문자열 주입 (사진·카메라·위치)
+        script: |
+          set -ex
+          PL="ios/App/App/Info.plist"
+          setstr() {
+            /usr/libexec/PlistBuddy -c "Set :$1 $2" "$PL" 2>/dev/null \
+              || /usr/libexec/PlistBuddy -c "Add :$1 string $2" "$PL"
+          }
+          setstr NSPhotoLibraryUsageDescription "프로필·레스토랑 사진을 등록하기 위해 사진 보관함에 접근합니다."
+          setstr NSPhotoLibraryAddUsageDescription "선택하신 이미지를 저장하기 위해 사진 보관함에 접근합니다."
+          setstr NSCameraUsageDescription "사진을 직접 촬영해 등록하기 위해 카메라를 사용합니다."
+          setstr NSLocationWhenInUseUsageDescription "지도에서 내 위치 기준으로 가까운 레스토랑을 보여주기 위해 위치를 사용합니다."
+          setstr NSMicrophoneUsageDescription "동영상 촬영 시 소리를 함께 녹음하기 위해 마이크를 사용합니다."
+          echo "==== Usage descriptions ===="
+          for K in NSPhotoLibraryUsageDescription NSPhotoLibraryAddUsageDescription NSCameraUsageDescription NSLocationWhenInUseUsageDescription NSMicrophoneUsageDescription; do
+            printf "%s = " "$K"; /usr/libexec/PlistBuddy -c "Print :$K" "$PL"
+          done
+
+      # 🆕 2026.08: 개인정보 매니페스트 (Apple — 2024.05 이후 업로드 시 경고/반려 대상)
+      #   Required Reason API 사유 선언: UserDefaults(CA92.1 = 앱 자체 설정 저장).
+      #   추적 없음(NSPrivacyTracking=false).
+      - name: PrivacyInfo.xcprivacy 생성 (개인정보 매니페스트)
+        script: |
+          set -ex
+          PRIV="ios/App/App/PrivacyInfo.xcprivacy"
+          python3 -c "
+          import plistlib
+          data = {
+            'NSPrivacyTracking': False,
+            'NSPrivacyTrackingDomains': [],
+            'NSPrivacyCollectedDataTypes': [],
+            'NSPrivacyAccessedAPITypes': [
+              {'NSPrivacyAccessedAPIType': 'NSPrivacyAccessedAPICategoryUserDefaults',
+               'NSPrivacyAccessedAPITypeReasons': ['CA92.1']}
+            ]
+          }
+          open('$PRIV','wb').write(plistlib.dumps(data))
+          print('PrivacyInfo.xcprivacy written')
+          "
+          plutil -lint "$PRIV"
+          ls -la "$PRIV"
+
       - name: 소셜 로그인 네이티브 설정 (구글 URL scheme + Apple Sign In entitlement)
         script: |
           set -ex
@@ -242,6 +288,27 @@ workflows:
           npx capacitor-assets generate --android \
             --iconBackgroundColor '#000000' \
             --iconBackgroundColorDark '#000000'
+
+      # 🆕 2026.08: Android 매니페스트 권한 보강
+      #   WebView 의 geolocation('내 위치' 지도) 은 매니페스트 권한이 없으면 무조건 실패한다.
+      #   카메라는 file input 촬영 옵션용. (Capacitor 기본 매니페스트엔 INTERNET 만 있음)
+      - name: AndroidManifest 권한 주입 (위치·카메라)
+        script: |
+          set -ex
+          MF="android/app/src/main/AndroidManifest.xml"
+          add_perm() {
+            grep -q "android.permission.$1" "$MF" || \
+              sed -i '' "s#<application#<uses-permission android:name=\"android.permission.$1\"/>\n    <application#" "$MF"
+          }
+          add_perm ACCESS_COARSE_LOCATION
+          add_perm ACCESS_FINE_LOCATION
+          add_perm CAMERA
+          # 하드웨어는 선택 사항으로 (없는 기기에서도 설치 가능해야 함)
+          grep -q 'android.hardware.camera' "$MF" || \
+            sed -i '' 's#<application#<uses-feature android:name="android.hardware.camera" android:required="false"/>\n    <application#' "$MF"
+          grep -q 'android.hardware.location' "$MF" || \
+            sed -i '' 's#<application#<uses-feature android:name="android.hardware.location" android:required="false"/>\n    <application#' "$MF"
+          echo "==== AndroidManifest ===="; cat "$MF"
 
       - name: Java 버전 확인 (21 이어야 함)
         script: |
