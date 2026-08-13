@@ -5326,6 +5326,22 @@ var TOSS_KEYS = {
 //   기존 로직은 지우지 않고 플래그 뒤에 보존 (3차 백업). 토스 정식 확정 후 롤백 = 이 값만 false.
 // ═══════════════════════════════════════════
 var PAY_MODE_TOSS = true;
+// ═══════════════════════════════════════════
+// 🆕 2026.08 카드 결제 잠금 (출시 1차 — 예치금 전용 운영)
+//   토스 V2 는 ① 결제창 인증(클라이언트) → ② 서버 승인 confirm(시크릿 키) 2단계다.
+//   현재 ②(승인 Edge Function)가 없어, 결제창만 띄우면 회원은 카드 인증을 마쳐도
+//   실제 승인이 일어나지 않고 미승인 건으로 자동 취소된다. → 금전 사고 위험.
+//   그래서 서버 승인 로직이 붙기 전까지 카드 경로를 막고 예치금(계좌이체)으로만 운영한다.
+//
+//   · CARD_PAY_LIVE = false → 티켓 부족분 = 예치금 충전 안내 / 결제수단 등록 = 준비중 안내
+//   · CARD_PAY_LIVE = true  → 토스 카드 결제창·빌링창 오픈 (⚠ toss-confirm 배포 후에만)
+//
+//   ⚠️ 이 값을 true 로 바꾸기 전에 반드시 갖춰야 할 것:
+//      1) payment_orders 테이블 (주문번호·회원·용도·기대금액·상태) — 금액 위변조 방지
+//      2) Edge Function toss-confirm — 시크릿 키로 승인 API 호출 + 금액 대조 + 멱등 처리
+//      3) ?toss_pay=success 복귀 핸들러 — 승인 요청 → 티켓 확정/예치금 적립
+// ═══════════════════════════════════════════
+var CARD_PAY_LIVE = false;
 // 예치금 충전 계좌이체 안내에 표시할 실제 계좌 (계좌 변경 시 여기만 수정)
 var DEPOSIT_BANK_INFO = {
   bank:    '하나은행',
@@ -5563,6 +5579,37 @@ function _depCopyAccount(){
     }
   } catch(_e){}
 }
+// ── 🆕 2026.08: 예치금 부족 안내 (CARD_PAY_LIVE=false 동안 카드 결제창 대체) ──
+//   부족 금액을 명시하고 계좌이체로 유도. 카드 승인 로직 완성 후 이 경로는 자동으로 안 쓰인다.
+function showDepositShortageGuide(shortage){
+  var b = (typeof DEPOSIT_BANK_INFO!=='undefined' && DEPOSIT_BANK_INFO) || {};
+  var amt = Math.max(0, Math.round(shortage||0));
+  var old = document.getElementById('depBankInfoPopup'); if(old) old.remove();
+  var el = document.createElement('div');
+  el.id = 'depBankInfoPopup';
+  el.style.cssText = 'position:fixed;inset:0;z-index:970;background:rgba(0,0,0,.65);display:flex;align-items:center;justify-content:center;padding:24px;box-sizing:border-box;';
+  el.innerHTML =
+    '<div style="background:#fff;border-radius:20px;width:100%;max-width:340px;padding:28px 24px;text-align:center;font-family:var(--font-main);">'
+    + '<div style="font-size:30px;margin-bottom:10px;">💰</div>'
+    + '<div style="font-size:16px;font-weight:800;color:#1a1a18;margin-bottom:6px;">예치금이 부족합니다</div>'
+    + (amt > 0
+        ? '<div style="background:#fdf5f6;border:1px solid #f0dde0;border-radius:12px;padding:12px;margin:14px 0 16px;">'
+          + '<div style="font-size:11px;color:#b08b90;letter-spacing:.06em;margin-bottom:4px;">부족 금액</div>'
+          + '<div style="font-size:21px;font-weight:800;color:#5C0A14;">₩' + amt.toLocaleString() + '</div>'
+          + '</div>'
+        : '<div style="height:8px;"></div>')
+    + '<div style="font-size:12px;color:#888;line-height:1.7;margin-bottom:18px;">아래 계좌로 입금해 주시면<br>확인 후 예치금에 반영해 드립니다.</div>'
+    + '<div style="background:#faf8f4;border:1px solid #eee5d8;border-radius:14px;padding:14px 16px;text-align:left;margin-bottom:16px;">'
+      + '<div style="display:flex;justify-content:space-between;padding:5px 0;"><span style="font-size:12px;color:#aaa;">은행</span><span style="font-size:13px;font-weight:700;color:#1a1a18;">'+(b.bank||'-')+'</span></div>'
+      + '<div style="display:flex;justify-content:space-between;padding:5px 0;"><span style="font-size:12px;color:#aaa;">계좌번호</span><span style="font-size:13px;font-weight:800;color:#5C0A14;">'+(b.account||'-')+'</span></div>'
+      + '<div style="display:flex;justify-content:space-between;padding:5px 0;"><span style="font-size:12px;color:#aaa;">예금주</span><span style="font-size:13px;font-weight:700;color:#1a1a18;">'+(b.holder||'-')+'</span></div>'
+    + '</div>'
+    + '<div style="font-size:11px;color:#b5ad9e;line-height:1.7;margin-bottom:20px;">입금자명은 <b>회원 성함</b>으로 부탁드립니다.<br>반영 후 다시 구매를 진행해 주세요.</div>'
+    + '<button onclick="_depCopyAccount()" style="width:100%;padding:13px;background:#1a1a18;border:none;border-radius:12px;font-size:13px;font-weight:800;color:#fff;cursor:pointer;margin-bottom:9px;">계좌번호 복사</button>'
+    + '<button onclick="var p=document.getElementById(\'depBankInfoPopup\');if(p)p.remove();" style="width:100%;padding:11px;background:transparent;border:none;font-size:10px;font-weight:600;letter-spacing:.18em;color:#bbb;cursor:pointer;">닫기</button>'
+    + '</div>';
+  document.body.appendChild(el);
+}
 // ── 결제창 리다이렉트 복귀 처리 (테스트 단계: 안내만 — 실승인/충전은 정식 전환 시) ──
 (function(){
   try {
@@ -5574,12 +5621,14 @@ function _depCopyAccount(){
     if (typeof _tossRestoreViewport === 'function') _tossRestoreViewport();
     setTimeout(function(){
       if (typeof showToast !== 'function') return;
+      // 🆕 2026.08: CARD_PAY_LIVE=false 동안 카드 경로가 막혀 있어 이 핸들러는 원칙적으로 안 탄다.
+      //   (구버전 캐시·직접 URL 진입 등 예외 상황 대비) 회원에게 "결제 완료"로 오인될 문구는 쓰지 않는다.
       if (kind === 'pay') {
-        showToast(ok?'✓':'⚠', ok?'결제 요청 성공 (테스트)':'결제 미완료',
-          ok?'토스 결제창 연동 확인 완료 — 실제 충전 반영은 정식 오픈 후입니다':'결제가 완료되지 않았습니다');
+        showToast('⚠','결제가 반영되지 않았습니다',
+          '현재는 예치금(계좌이체)으로만 이용하실 수 있습니다 — 출금된 금액이 있다면 문의해 주세요');
       } else {
-        showToast(ok?'✓':'⚠', ok?'카드 등록 요청 성공 (테스트)':'카드 등록 미완료',
-          ok?'빌링 결제창 연동 확인 완료 — 실제 등록 반영은 정식 오픈 후입니다':'카드 등록이 완료되지 않았습니다');
+        showToast('⚠','카드 등록이 반영되지 않았습니다',
+          '결제 수단 관리는 준비 중입니다');
       }
     }, 1500);
     try { history.replaceState(null, '', location.pathname); } catch(_he){}
@@ -18625,6 +18674,12 @@ function doCardCharge(shortage) {
   // 🆕 2026.07 토스 전환(임시): 티켓 부족분 카드 결제를 토스 결제창으로.
   //   PAY_MODE_TOSS=false 로 두면 아래 기존 포트원 로직으로 즉시 롤백 (코드 보존).
   if (typeof PAY_MODE_TOSS !== 'undefined' && PAY_MODE_TOSS) {
+    // 🆕 2026.08: 서버 승인(toss-confirm) 미배포 동안 카드 결제창을 열지 않는다.
+    //   결제창만 띄우면 인증은 되지만 승인이 안 돼 자동 취소 → 회원은 결제된 줄 안다.
+    if (typeof CARD_PAY_LIVE === 'undefined' || !CARD_PAY_LIVE) {
+      showDepositShortageGuide(Math.round(shortage));
+      return;
+    }
     tossPayTicketShortage(Math.round(shortage));
     return;
   }
@@ -19216,6 +19271,14 @@ function openNotifSettings(){
 async function openCardManagePage(){
   // 🆕 2026.07: 토스페이먼츠 빌링(정기결제) 카드 등록 창 — 카드사 심사 요건.
   //   (구 PortOne 카드관리 페이지 코드는 아래 주석으로 보존)
+  // 🆕 2026.08: 빌링키 발급도 서버(시크릿 키)에서 authKey 를 교환해야 완성된다.
+  //   그 로직 전까지는 카드만 등록되고 실제로는 쓸 수 없으므로 창을 열지 않는다.
+  if (typeof CARD_PAY_LIVE === 'undefined' || !CARD_PAY_LIVE) {
+    if (typeof showToast === 'function') {
+      showToast('💳','결제 수단 관리 준비 중','현재는 예치금(계좌이체)으로만 이용하실 수 있습니다', { });
+    }
+    return;
+  }
   tossOpenBilling();
   return;
   // var p = document.getElementById('cardManagePage');
