@@ -8752,6 +8752,28 @@ window.closePromoCarousel = function(){
             </div>
             <div class="admin-arrow">›</div>
           </div>
+          <!-- 🆕 2026.08: 레스토랑·티켓 일괄 번역 -->
+          <div class="admin-menu-item" onclick="taamTranslateRestaurants({dryRun:true})">
+            <div>
+              <div class="admin-menu-text">🔍 레스토랑·티켓 번역 대상 확인</div>
+              <div class="admin-menu-sub">실제 번역 없이 대상 건수·예상 시간·비용만 확인 (dry-run)</div>
+            </div>
+            <div class="admin-arrow">›</div>
+          </div>
+          <div class="admin-menu-item" onclick="taamTranslateRestaurants()">
+            <div>
+              <div class="admin-menu-text">🍽 레스토랑 일괄 AI 번역</div>
+              <div class="admin-menu-sub">이름·설명·주소 KO → EN/JA. 미번역만 대상. 일본어는 검수 후 노출</div>
+            </div>
+            <div class="admin-arrow">›</div>
+          </div>
+          <div class="admin-menu-item" onclick="taamTranslateTickets()">
+            <div>
+              <div class="admin-menu-text">🎫 티켓 설명 일괄 AI 번역</div>
+              <div class="admin-menu-sub">티켓 상세 설명 KO → EN/JA. 미번역만 대상</div>
+            </div>
+            <div class="admin-arrow">›</div>
+          </div>
           <!-- 🆕 2026.08: 해외 통화(환율·해외 대행비) 설정 -->
           <div class="admin-menu-item" onclick="fxOpenSettings()">
             <div>
@@ -17140,7 +17162,10 @@ function openTicketDetail(id){
 
   // 티켓 상세 설명
   var tdDesc = document.getElementById('tdTicketDesc');
-  if (tdDesc) tdDesc.textContent = t.ticketDesc || '';
+  // 🆕 2026.08: 티켓 설명 다국어 (번역 없으면 한글 폴백)
+  if (tdDesc) tdDesc.textContent = (typeof window.pickI18nField === 'function')
+    ? (window.pickI18nField(t, 'ticket_desc') || t.ticketDesc || '')
+    : (t.ticketDesc || '');
 
   // 레스토랑 주소 미니맵
   var addr = r ? (r.address||'') : '';
@@ -18523,7 +18548,10 @@ function handleTicketAction(){
 
   // 티켓 상세 설명
   var sheetDesc = document.getElementById('tdSheetDesc');
-  if(sheetDesc) sheetDesc.textContent = t.ticketDesc || '';
+  // 🆕 2026.08: 티켓 설명 다국어 (번역 없으면 한글 폴백)
+  if(sheetDesc) sheetDesc.textContent = (typeof window.pickI18nField === 'function')
+    ? (window.pickI18nField(t, 'ticket_desc') || t.ticketDesc || '')
+    : (t.ticketDesc || '');
 
   // 인원 표시
   var spn = document.getElementById('sheetPaxNum');
@@ -33082,12 +33110,18 @@ function pickI18nField(row, base){
     if (Array.isArray(x)) return x.length === 0 ? undefined : x;
     return x;
   }
+  // 🆕 2026.08: 일본어 검수 게이트.
+  //   i18n_jp_approved 컬럼이 있고 아직 false 면 일본어를 쓰지 않고 한글로 폴백한다.
+  //   일본 매장은 원래 표기가 따로 있어 AI 음차가 틀릴 수 있어서다.
+  //   컬럼이 없는 테이블(chefs 등)은 undefined → 게이트 미적용, 기존 동작 유지.
+  var jpBlocked = (row.i18n_jp_approved === false);
   var preferred;
   if (lang === 'en') preferred = v(base+'_en');
-  else if (lang === 'ja') preferred = v(base+'_jp') || v(base+'_ja');
+  else if (lang === 'ja') preferred = jpBlocked ? undefined : (v(base+'_jp') || v(base+'_ja'));
   else preferred = v(base) || v(base+'_ko');
   if (preferred !== undefined) return preferred;
   // 폴백 체인: KO > EN > base (어떤 언어든 채워진 것)
+  if (jpBlocked) return v(base) || v(base+'_ko') || v(base+'_en') || '';
   return v(base) || v(base+'_ko') || v(base+'_en') || v(base+'_jp') || v(base+'_ja') || '';
 }
 window.pickI18nField = pickI18nField;
@@ -33116,6 +33150,94 @@ async function taamTranslate(items, context){
   return data;
 }
 window.taamTranslate = taamTranslate;
+
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026.08: 레스토랑 · 티켓 일괄 AI 번역 (KO → EN + JA)
+//
+//   표시 계층(pickI18nField)은 이미 _en/_jp 를 읽도록 되어 있다.
+//   여기서 컬럼을 채우면 언어 전환 시 바로 반영된다.
+//   번역이 없으면 한글로 폴백하므로, 돌리기 전에도 동작은 지금과 같다.
+//
+//   일본어는 i18n_jp_approved=false 로 저장되어 화면에 나오지 않는다.
+//   슈퍼어드민이 검수 후 승인해야 노출된다 (일본 매장 표기 오류 방지).
+// ═══════════════════════════════════════════════════════════════
+async function _i18nBatch(cfg){
+  // cfg: { table, label, idCol, fields:[{ko, en, jp, ctx}], dryRun }
+  if (!window.sb) { showToast('⚠','오류','서버 연결이 없습니다'); return; }
+  var cols = ['id'];
+  cfg.fields.forEach(function(f){ cols.push(f.ko, f.en, f.jp); });
+  var res = await window.sb.from(cfg.table).select(cols.join(', '));
+  if (res.error) { showToast('⚠','조회 실패', res.error.message); return; }
+  var rows = res.data || [];
+
+  // 대상 = 한글 원문이 있는데 영문이 비어 있는 행
+  var targets = rows.filter(function(r){
+    return cfg.fields.some(function(f){
+      var ko = (r[f.ko] || '').toString().trim();
+      var en = (r[f.en] || '').toString().trim();
+      return ko !== '' && en === '';
+    });
+  });
+
+  if (cfg.dryRun) {
+    showToast('🔍', cfg.label + ' 번역 대상',
+      '전체 ' + rows.length + '건 중 ' + targets.length + '건 미번역\n예상 시간 약 ' +
+      Math.ceil(targets.length * 15 / 60) + '분 · 비용 약 $' + (targets.length * 0.008).toFixed(2));
+    console.log('[i18n] ' + cfg.table + ' 대상', targets.map(function(r){ return r.id; }));
+    return;
+  }
+  if (targets.length === 0) { showToast('✓', cfg.label, '미번역 항목이 없습니다'); return; }
+
+  showToast('⏳', cfg.label + ' 번역 시작', targets.length + '건 — 완료까지 몇 분 걸립니다');
+  var done = 0, fail = 0;
+  for (var i = 0; i < targets.length; i++) {
+    var r = targets[i];
+    var items = [];
+    cfg.fields.forEach(function(f){
+      var ko = (r[f.ko] || '').toString().trim();
+      if (ko) items.push({ id: f.ko, value: ko });
+    });
+    if (items.length === 0) continue;
+    try {
+      var tr = await window.taamTranslate(items, cfg.ctx || '');
+      var payload = { i18n_status_en: 'ai_draft', i18n_status_jp: 'ai_draft' };
+      cfg.fields.forEach(function(f){
+        var v = tr && tr[f.ko];
+        if (!v) return;
+        if (v.en) payload[f.en] = v.en;
+        if (v.ja) payload[f.jp] = v.ja;
+      });
+      var up = await window.sb.from(cfg.table).update(payload).eq('id', r.id);
+      if (up.error) { fail++; console.warn('[i18n] 저장 실패', r.id, up.error.message); }
+      else done++;
+    } catch(e) { fail++; console.warn('[i18n] 번역 실패', r.id, e && e.message); }
+    if ((i+1) % 5 === 0) showToast('⏳', cfg.label, (i+1) + ' / ' + targets.length + ' 진행 중…');
+  }
+  showToast(fail ? '⚠' : '✓', cfg.label + ' 번역 완료',
+    '성공 ' + done + '건' + (fail ? ' · 실패 ' + fail + '건 (콘솔 확인)' : '') +
+    '\n일본어는 검수 후 노출됩니다');
+}
+
+function taamTranslateRestaurants(opts){
+  return _i18nBatch({
+    table: 'restaurants', label: '레스토랑', dryRun: !!(opts && opts.dryRun),
+    ctx: '한국·일본 프리미엄 다이닝 레스토랑 정보. 고유명사는 현지 통용 표기를 우선하고, 억지 의역을 피할 것.',
+    fields: [
+      { ko:'name',        en:'name_en',        jp:'name_jp' },
+      { ko:'description', en:'description_en', jp:'description_jp' },
+      { ko:'address',     en:'address_en',     jp:'address_jp' }
+    ]
+  });
+}
+function taamTranslateTickets(opts){
+  return _i18nBatch({
+    table: 'ticket_products', label: '티켓 설명', dryRun: !!(opts && opts.dryRun),
+    ctx: '레스토랑 예약 티켓 상세 설명. 코스 구성·드레스코드·유의사항 등. 정중한 안내 문체 유지.',
+    fields: [ { ko:'ticket_desc', en:'ticket_desc_en', jp:'ticket_desc_jp' } ]
+  });
+}
+window.taamTranslateRestaurants = taamTranslateRestaurants;
+window.taamTranslateTickets = taamTranslateTickets;
 
 // 🆕 v1.53.2 2026.05.28: 노드 단위 AI 번역 (KO → EN + JA).
 //   chefs 테이블 한 row 의 한국어 필드 (name, sub_title, sec1_data.title/desc, sec2_data.title/desc)
@@ -47803,6 +47925,8 @@ async function saveTicketProductToSupabase(ticket){
       uploaded_by: ticket.uploadedBy || null,
       uploader_rest_id: ticket.uploaderRestId || null,
       ticket_desc: ticket.ticketDesc || null,
+      // 🆕 2026.08: 원문이 바뀌면 번역을 pending 으로 되돌려 자동 재번역되게 한다
+      i18n_status_en: 'pending', i18n_status_jp: 'pending',
       cancel_policy: ticket.cancelPolicy || null,
       grade_open: ticket.gradeOpen || false,
       min_tier: ticket.minTier || null,          // 🆕 2026.08: 티켓 이용 등급 제한
@@ -47929,6 +48053,8 @@ async function loadAllTicketProductsFromSupabase(){
         uploadedBy: row.uploaded_by,
         uploaderRestId: row.uploader_rest_id,
         ticketDesc: row.ticket_desc,
+        ticket_desc: row.ticket_desc, ticket_desc_en: row.ticket_desc_en, ticket_desc_jp: row.ticket_desc_jp,
+        i18n_jp_approved: row.i18n_jp_approved,   // 🆕 pickI18nField 게이트용
         cancelPolicy: row.cancel_policy || {},
         gradeOpen: row.grade_open || false,
         minTier: row.min_tier || '',               // 🆕 2026.08: 티켓 이용 등급 제한
