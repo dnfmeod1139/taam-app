@@ -66,9 +66,42 @@
   window.SUPABASE_URL = SUPABASE_URL;
   window.SUPABASE_ANON_KEY = SUPABASE_KEY;
 
-  window.sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-
-  window.sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  // 🆕 2026.08: Supabase SDK 로드 실패 방어.
+  //   supabase 전역은 unpkg CDN 에서 온다. CDN 이 느리거나 막히면 여기서
+  //   ReferenceError 가 나면서 이 스크립트 블록 전체가 죽고, window.sb 가
+  //   만들어지지 않아 앱이 검은 화면에서 멈춘다.
+  //   (서비스워커 버전이 바뀌면 캐시가 비워져 CDN 을 다시 받으므로 노출 구간이 있다)
+  //   → 폴백 CDN 으로 한 번 더 시도하고, 그래도 실패하면 사용자에게 알린다.
+  function _initSb(){
+    if (typeof supabase === 'undefined' || !supabase || !supabase.createClient) return false;
+    window.sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+    return true;
+  }
+  function _sbFailNotice(){
+    try {
+      var el = document.createElement('div');
+      el.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#000;color:#f5f3ef;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px;text-align:center;font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR",sans-serif;';
+      el.innerHTML =
+          '<div style="font-size:34px;margin-bottom:14px;">📡</div>'
+        + '<div style="font-size:15px;font-weight:700;margin-bottom:8px;">연결에 실패했습니다</div>'
+        + '<div style="font-size:12.5px;line-height:1.8;color:rgba(245,243,239,.6);margin-bottom:24px;">'
+        + '네트워크 상태를 확인한 뒤 다시 시도해 주세요.<br>Please check your connection and try again.</div>'
+        + '<button onclick="location.reload()" style="padding:13px 30px;background:#5C0A14;border:none;border-radius:11px;color:#fff;font-size:13px;font-weight:700;cursor:pointer;">다시 시도 / Retry</button>';
+      document.body.appendChild(el);
+    } catch(e){}
+  }
+  if (!_initSb()) {
+    console.warn('[boot] Supabase SDK 미로드 — 폴백 CDN 재시도');
+    var _fb = document.createElement('script');
+    _fb.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
+    _fb.onload  = function(){
+      if (_initSb()) { console.warn('[boot] 폴백 CDN 성공 — 새로고침'); location.reload(); }
+      else _sbFailNotice();
+    };
+    _fb.onerror = function(){ _sbFailNotice(); };
+    document.head.appendChild(_fb);
+    return;   // sb 없이 아래 코드를 실행하면 연쇄 오류가 난다
+  }
 
 // 🔒 슈퍼어드민 비밀번호 (난독화 저장)
 // ⚠️ 본인 비밀번호 문자를 하나씩 배열로!
