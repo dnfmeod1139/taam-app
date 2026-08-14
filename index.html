@@ -264,6 +264,8 @@ html.auto-login .splash .bottom-group{display:none !important}
 .auth-lang.dark button.on{color:#c8a96e;background:rgba(200,169,110,.13)}
 .auth-lang.light button{color:#c2bcb2}
 .auth-lang.light button.on{color:#5C0A14;background:rgba(92,10,20,.07)}
+/* 🆕 2026.08: 해외 회원 USD 병기 — 원화 옆에 작게 */
+.fx-usd{display:inline-block;margin-left:6px;font-family:var(--font-main);font-size:.82em;font-weight:600;color:#9a9486;letter-spacing:.01em;white-space:nowrap}
 .code-title{font-weight:700;font-size:22px;color:#f5f3ef;margin-bottom:8px}
 .code-sub{font-weight:300;font-size:12px;color:rgba(255,255,255,.55);margin-bottom:24px}
 .code-inputs{display:flex;gap:10px;margin-bottom:16px;justify-content:center}
@@ -5366,6 +5368,181 @@ var DEPOSIT_BANK_INFO = {
   account: '247-910033-65204',   // 복사 시 숫자만 복사됨 (_depCopyAccount)
   holder:  '주식회사 쓰리피프틴'
 };
+// ═══════════════════════════════════════════
+// 🆕 2026.08: 해외 회원 통화 표시 (FX)
+//
+//   원장은 원화 단일이다. 저장·차감·환불 모두 KRW 기준이고,
+//   해외 회원 화면에만 USD 를 병기한다. 통화를 이중으로 두지 않는다.
+//
+//   · 식사비 · 주류 미니멈 → 참고 환산값 (매장 몫이라 마진 없음)
+//   · 대행비              → 해외 요율. 원화 ÷ 1,000 = USD 정액 (₩100,000 → $100)
+//                           환율과 무관하게 고정되므로 회원에게 가격이 예측 가능하다.
+//   · 적용 환율            → 매매기준율 × (1 - 마진%). 마진이 환율 변동·송금 수수료를 흡수.
+//
+//   설정은 app_config.fx_settings 에서 읽는다 (sql/fx_overseas_pricing.sql).
+//   enabled=false 로 두면 전 회원 원화만 표시 — 즉시 롤백 스위치.
+// ═══════════════════════════════════════════
+var FX = {
+  base_rate:      1410,   // 은행 매매기준율 (슈퍼어드민 갱신)
+  margin_pct:     3.5,    // 당사 마진
+  agency_divisor: 1000,   // 대행비: 원화 ÷ 1000 = USD
+  step_usd:       5,      // 식사비·주류비 USD 올림 단위
+  enabled:        true,
+  loaded:         false
+};
+
+// 적용 환율 (KRW per 1 USD). 기준율보다 낮게 잡혀 우리에게 유리한 방향.
+function fxRate(){
+  var b = parseFloat(FX.base_rate) || 0;
+  var m = parseFloat(FX.margin_pct) || 0;
+  var r = b * (1 - m / 100);
+  return r > 0 ? r : 0;
+}
+
+// 해외 회원 판정 — 화면 언어가 한국어가 아니면 해외로 본다.
+//   (국적 컬럼이 비어있는 회원이 많아 언어를 기준으로 삼는 게 실무상 정확하다)
+function fxIsOverseas(){
+  if (!FX.enabled) return false;
+  if (fxRate() <= 0) return false;
+  var l = window._tkCurrentLang || 'ko';
+  return l !== 'ko';
+}
+
+// 원화 → USD (올림). step 을 주면 그 단위로 올림.
+function fxUsd(krw, step){
+  var r = fxRate();
+  if (r <= 0) return null;
+  var v = (parseInt(krw, 10) || 0) / r;
+  var s = parseFloat(step) || 1;
+  return Math.ceil(v / s) * s;
+}
+
+// 티켓 1인 해외 대행비(USD) — 티켓별 예외가 있으면 그 값, 없으면 원화 ÷ 1,000
+function fxAgencyUsd(t){
+  var ov = t && (t.overseasAgencyUsd != null ? t.overseasAgencyUsd : null);
+  if (ov != null && String(ov) !== '' && parseInt(ov, 10) > 0) return parseInt(ov, 10);
+  var krw = parseInt((t && (t.agencyFee || t.agency_fee)) || 0, 10) || 0;
+  var d = parseFloat(FX.agency_divisor) || 1000;
+  return Math.round(krw / d);
+}
+
+// 해외 대행비를 원화로 환산 (실제 차감액 계산용)
+function fxAgencyKrw(t){
+  return Math.round(fxAgencyUsd(t) * fxRate());
+}
+
+// 표시 문자열. 한국어면 원화만, 그 외에는 USD 병기.
+//   opts.usd      : USD 를 직접 지정 (대행비처럼 환산이 아닌 정액일 때)
+//   opts.exact    : true 면 '≈' 를 붙이지 않는다 (정액 요율)
+//   opts.step     : 올림 단위 (기본 FX.step_usd)
+//   opts.usdOnly  : true 면 USD 만 반환
+function fxMoney(krw, opts){
+  opts = opts || {};
+  var n = parseInt(krw, 10) || 0;
+  var won = '₩' + n.toLocaleString();
+  if (!fxIsOverseas()) return won;
+  var usd = (opts.usd != null) ? parseInt(opts.usd, 10)
+                               : fxUsd(n, opts.step != null ? opts.step : FX.step_usd);
+  if (usd == null) return won;
+  var mark = opts.exact ? '$' : '≈ $';
+  var us = mark + usd.toLocaleString();
+  if (opts.usdOnly) return us;
+  return won + ' <span class="fx-usd">' + us + '</span>';
+}
+
+// ── 슈퍼어드민: 환율/해외요율 설정 화면 ──
+function fxOpenSettings(){
+  var old = document.getElementById('fxSettingsPopup'); if(old) old.remove();
+  var el = document.createElement('div');
+  el.id = 'fxSettingsPopup';
+  el.style.cssText = 'position:fixed;inset:0;z-index:9200;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:20px;box-sizing:border-box;overflow-y:auto;';
+  el.innerHTML =
+    '<div style="background:#fff;border-radius:18px;width:100%;max-width:400px;padding:24px 22px;font-family:var(--font-main);" data-lang-lock="ko">'
+    + '<div style="font-size:16px;font-weight:800;color:#1a1a18;margin-bottom:4px;">💱 해외 통화 · 환율 설정</div>'
+    + '<div style="font-size:11px;color:#9a9486;line-height:1.7;margin-bottom:16px;">해외 회원(언어가 한국어가 아닌 회원) 화면의 USD 표시에 사용됩니다.<br>정산·차감은 원화 기준 그대로입니다.</div>'
+    + '<label style="display:block;font-size:11px;font-weight:700;color:#888;margin-bottom:5px;">은행 매매기준율 (KRW / 1 USD)</label>'
+    + '<input id="fxBase" type="text" inputmode="decimal" value="'+FX.base_rate+'" style="width:100%;box-sizing:border-box;padding:11px 12px;border:1px solid #e0dcd4;border-radius:10px;font-size:15px;font-weight:700;margin-bottom:4px;">'
+    + '<div style="font-size:10.5px;color:#b5afa2;margin-bottom:13px;">※ <b>송금 받으실 때</b> 환율을 넣으면 더 정확합니다. 시장 환율이 <b>내리면 즉시 낮추고</b>, 오를 때는 그대로 두면 됩니다.</div>'
+    + '<label style="display:block;font-size:11px;font-weight:700;color:#888;margin-bottom:5px;">당사 마진 (%)</label>'
+    + '<input id="fxMargin" type="text" inputmode="decimal" value="'+FX.margin_pct+'" style="width:100%;box-sizing:border-box;padding:11px 12px;border:1px solid #e0dcd4;border-radius:10px;font-size:15px;font-weight:700;margin-bottom:4px;">'
+    + '<div style="font-size:10.5px;color:#b5afa2;margin-bottom:13px;">환율 변동·해외 송금 수수료를 흡수합니다. 카드사 실효 수수료가 1.5~2% 수준입니다.</div>'
+    + '<div id="fxPreview" style="background:#faf8f4;border:1px solid #eee5d8;border-radius:12px;padding:13px 15px;margin-bottom:15px;"></div>'
+    + '<label style="display:flex;align-items:center;gap:9px;font-size:12.5px;color:#1a1a18;margin-bottom:18px;cursor:pointer;">'
+      + '<input id="fxEnabled" type="checkbox" '+(FX.enabled?'checked':'')+' style="width:17px;height:17px;">'
+      + '<span>해외 회원에게 USD 표시 <span style="color:#b5afa2;">(끄면 전 회원 원화만)</span></span>'
+    + '</label>'
+    + '<button onclick="fxSaveSettings()" style="width:100%;padding:13px;background:#1a1a18;border:none;border-radius:12px;font-size:13px;font-weight:800;color:#fff;cursor:pointer;margin-bottom:8px;">저장</button>'
+    + '<button onclick="var p=document.getElementById(\'fxSettingsPopup\');if(p)p.remove();" style="width:100%;padding:11px;background:transparent;border:none;font-size:10px;font-weight:600;letter-spacing:.18em;color:#bbb;cursor:pointer;">닫기</button>'
+    + '</div>';
+  document.body.appendChild(el);
+  ['fxBase','fxMargin'].forEach(function(id){
+    var i = document.getElementById(id); if(i) i.addEventListener('input', fxRenderPreview);
+  });
+  fxRenderPreview();
+}
+function fxRenderPreview(){
+  var box = document.getElementById('fxPreview'); if(!box) return;
+  var b = parseFloat((document.getElementById('fxBase')||{}).value) || 0;
+  var m = parseFloat((document.getElementById('fxMargin')||{}).value) || 0;
+  var r = b * (1 - m/100);
+  function ex(krw, step){ return r>0 ? ('$' + (Math.ceil(krw/r/step)*step).toLocaleString()) : '—'; }
+  box.innerHTML =
+      '<div style="display:flex;justify-content:space-between;padding:3px 0;"><span style="font-size:11.5px;color:#9a9486;">적용 환율</span><span style="font-size:14px;font-weight:800;color:#5C0A14;">'+(r>0?r.toFixed(2):'—')+'</span></div>'
+    + '<div style="height:1px;background:#eee5d8;margin:8px 0;"></div>'
+    + '<div style="font-size:10.5px;color:#b5afa2;margin-bottom:5px;">미리보기 ($5 올림)</div>'
+    + '<div style="display:flex;justify-content:space-between;padding:2px 0;"><span style="font-size:11.5px;color:#777;">식사비 ₩270,000</span><span style="font-size:12px;font-weight:700;">'+ex(270000,5)+'</span></div>'
+    + '<div style="display:flex;justify-content:space-between;padding:2px 0;"><span style="font-size:11.5px;color:#777;">식사비 ₩650,000</span><span style="font-size:12px;font-weight:700;">'+ex(650000,5)+'</span></div>'
+    + '<div style="height:1px;background:#eee5d8;margin:8px 0;"></div>'
+    + '<div style="font-size:10.5px;color:#b5afa2;margin-bottom:5px;">해외 대행비 (원화 ÷ '+(FX.agency_divisor||1000).toLocaleString()+' · 환율 무관)</div>'
+    + '<div style="display:flex;justify-content:space-between;padding:2px 0;"><span style="font-size:11.5px;color:#777;">₩50,000 / ₩100,000 / ₩150,000</span><span style="font-size:12px;font-weight:700;">$50 / $100 / $150</span></div>';
+}
+function fxSaveSettings(){
+  var b = parseFloat((document.getElementById('fxBase')||{}).value);
+  var m = parseFloat((document.getElementById('fxMargin')||{}).value);
+  var en = !!(document.getElementById('fxEnabled')||{}).checked;
+  if (!(b > 0)) { showToast('⚠','확인','기준율을 올바르게 입력해주세요'); return; }
+  if (!(m >= 0 && m < 100)) { showToast('⚠','확인','마진은 0 이상 100 미만이어야 합니다'); return; }
+  if (!window.sb) { showToast('⚠','오류','서버 연결이 없습니다'); return; }
+  var value = { base_rate:b, margin_pct:m, agency_divisor:(FX.agency_divisor||1000), step_usd:(FX.step_usd||5), enabled:en };
+  window.sb.from('app_config').upsert({ key:'fx_settings', value:value, updated_at:new Date().toISOString() }).then(function(res){
+    if (res.error) { showToast('⚠','저장 실패', res.error.message); return; }
+    FX.base_rate=b; FX.margin_pct=m; FX.enabled=en;
+    var p=document.getElementById('fxSettingsPopup'); if(p) p.remove();
+    showToast('✓','저장 완료','적용 환율 ' + (b*(1-m/100)).toFixed(2));
+  });
+}
+window.fxOpenSettings = fxOpenSettings; window.fxSaveSettings = fxSaveSettings;
+
+// 결제 상세 총액의 USD — 항목별 표시값의 합과 정확히 일치시킨다.
+//   (총액을 따로 환산하면 반올림 때문에 항목 합과 1~2달러 어긋나 보인다)
+function _fxTotalUsd(t, pax, meal, wine){
+  var n = parseInt(pax,10) || 1;
+  var m = fxUsd((parseInt(meal,10)||0) * n, FX.step_usd);
+  var w = fxUsd((parseInt(wine,10)||0) * n, FX.step_usd);
+  if (m == null || w == null) return null;
+  return m + (fxAgencyUsd(t) * n) + w;
+}
+
+// app_config 에서 설정 로드 (로그인 전에도 호출 — 비로그인 화면 가격 표시용)
+function loadFxSettings(){
+  if (!window.sb) return Promise.resolve();
+  return window.sb.from('app_config').select('value').eq('key', 'fx_settings').maybeSingle()
+    .then(function(res){
+      var v = res && res.data && res.data.value;
+      if (v && typeof v === 'object') {
+        if (v.base_rate      != null) FX.base_rate      = parseFloat(v.base_rate);
+        if (v.margin_pct     != null) FX.margin_pct     = parseFloat(v.margin_pct);
+        if (v.agency_divisor != null) FX.agency_divisor = parseFloat(v.agency_divisor);
+        if (v.step_usd       != null) FX.step_usd       = parseFloat(v.step_usd);
+        if (v.enabled        != null) FX.enabled        = !!v.enabled;
+      }
+      FX.loaded = true;
+    })
+    .catch(function(e){ console.warn('[fx] 설정 로드 실패 — 기본값 사용:', e && e.message); });
+}
+window.fxMoney = fxMoney; window.fxUsd = fxUsd; window.fxIsOverseas = fxIsOverseas;
+window.fxAgencyUsd = fxAgencyUsd; window.fxAgencyKrw = fxAgencyKrw; window.fxRate = fxRate;
+
 // 회원 국가 → 결제 통화 (KR→KRW, JP→JPY, 그 외→USD)
 function _tossCurrencyForUser(){
   try {
@@ -8499,6 +8676,14 @@ window.closePromoCarousel = function(){
             </div>
             <div class="admin-arrow">›</div>
           </div>
+          <!-- 🆕 2026.08: 해외 통화(환율·해외 대행비) 설정 -->
+          <div class="admin-menu-item" onclick="fxOpenSettings()">
+            <div>
+              <div class="admin-menu-text">💱 해외 통화 · 환율 설정</div>
+              <div class="admin-menu-sub">적용 환율(기준율 × 마진) · 해외 대행비 규칙. 해외 회원 화면의 USD 표시에 사용</div>
+            </div>
+            <div class="admin-arrow">›</div>
+          </div>
           <!-- 🆕 v1.53.4 2026.05.28: 계보도 노드 (chefs) 일괄 AI 번역 -->
           <div class="admin-menu-item" onclick="window._taamTranslateAllChefs()">
             <div>
@@ -8839,8 +9024,18 @@ window.closePromoCarousel = function(){
       <label class="rp-label">대행비 (1인, 원)</label>
       <div style="position:relative;">
         <div style="position:absolute;left:14px;top:50%;transform:translateY(-50%);font-family:var(--font-main);font-size:15px;font-weight:600;color:#aaa;pointer-events:none;">₩</div>
-        <input class="tu-input" id="tuAgencyFee" type="text" inputmode="numeric" placeholder="30,000" oninput="tuFormatMoney(this)" style="padding-left:30px;font-family:var(--font-main);font-size:17px;">
+        <input class="tu-input" id="tuAgencyFee" type="text" inputmode="numeric" placeholder="30,000" oninput="tuFormatMoney(this);if(typeof tuOvsPreview==='function')tuOvsPreview();" style="padding-left:30px;font-family:var(--font-main);font-size:17px;">
       </div>
+      <!-- 🆕 2026.08: 해외 대행비 — 비워두면 원화 ÷ 1,000 자동 (₩100,000 → $100) -->
+      <div id="tuOvsRow" style="margin-top:9px;display:flex;align-items:center;gap:8px;">
+        <span style="font-size:11px;color:#9a9486;white-space:nowrap;">해외 대행비</span>
+        <div style="position:relative;flex:1;">
+          <div style="position:absolute;left:12px;top:50%;transform:translateY(-50%);font-family:var(--font-main);font-size:13px;font-weight:600;color:#aaa;pointer-events:none;">$</div>
+          <input class="tu-input" id="tuOverseasAgencyUsd" type="text" inputmode="numeric" placeholder="자동" oninput="tuOvsPreview()" style="padding-left:26px;height:40px;font-family:var(--font-main);font-size:14px;">
+        </div>
+        <span id="tuOvsHint" style="font-size:11px;color:#c8a96e;white-space:nowrap;min-width:74px;text-align:right;"></span>
+      </div>
+      <div style="font-size:10.5px;color:#b5afa2;margin-top:5px;line-height:1.6;">비워두면 <b>원화 ÷ 1,000</b> 으로 자동 계산됩니다 (₩100,000 → $100).<br>특정 티켓만 다르게 받을 때만 입력하세요.</div>
     </div>
     <div class="rp-field">
       <label class="rp-label">주류 미니멈 (1인, 원, 없으면 0)</label>
@@ -17030,7 +17225,11 @@ if (heroVidEl) {
                 + (parseInt(t.wineMin||0)||0);
   var priceEl = document.getElementById('tdGridPrice');
   var _perUnit = _tdIsEn ? ' / guest' : (_tdIsJa ? ' / お一人様' : ' / 인');
-  if (priceEl) priceEl.textContent = perPerson > 0 ? '₩'+perPerson.toLocaleString()+_perUnit : '';
+  if (priceEl) {
+    // 🆕 2026.08: 해외 회원은 USD 병기 (innerHTML — fxMoney 가 span 을 포함)
+    if (perPerson > 0) priceEl.innerHTML = fxMoney(perPerson) + _perUnit;
+    else priceEl.textContent = '';
+  }
 
   // [4] 레스토랑 버튼 — 이름 + 장르
   var rnEl = document.getElementById('tdGridRestName');
@@ -18040,13 +18239,13 @@ function refreshSheetSummary() {
   var h='';
   h+='<div style="font-family:var(--font-main);font-size:17px;font-weight:800;color:#111;margin-bottom:4px;">'+(r?r.name:t.rest)+'</div>';
   h+='<div style="font-family:var(--font-main);font-size:12px;color:#aaa;margin-bottom:10px;">'+dateStr+' · '+td+'</div>';
-  if(meal)   h+='<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">식사비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">₩'+(meal*pax).toLocaleString()+'</span></div>';
-  if(agency) h+='<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">대행비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">₩'+(agency*pax).toLocaleString()+'</span></div>';
-  if(wine)   h+='<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">주류 미니멈 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">₩'+(wine*pax).toLocaleString()+'</span></div>';
-  h+='<div style="display:flex;justify-content:space-between;padding:9px 0;"><span style="font-size:14px;font-weight:800;color:#111;">합계</span><span style="font-size:20px;font-weight:900;color:#5C0A14;">₩'+totalPay.toLocaleString()+'</span></div>';
+  if(meal)   h+='<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">식사비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxMoney(meal*pax)+'</span></div>';
+  if(agency) h+='<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">대행비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxMoney(agency*pax,{usd:fxAgencyUsd(t)*pax,exact:true})+'</span></div>';
+  if(wine)   h+='<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">주류 미니멈 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxMoney(wine*pax)+'</span></div>';
+  h+='<div style="display:flex;justify-content:space-between;padding:9px 0;"><span style="font-size:14px;font-weight:800;color:#111;">합계</span><span style="font-size:20px;font-weight:900;color:#5C0A14;">'+fxMoney(totalPay,{usd:_fxTotalUsd(t,pax,meal,wine),exact:true})+'</span></div>';
   var cr=document.getElementById('tdConfirmRows'); if(cr) cr.innerHTML=h;
   var after=currentDepositBalance-totalPay;
-  var bh='<div style="display:flex;justify-content:space-between;padding:6px 0;"><span style="font-size:12px;color:#aaa;">예치금 잔액</span><span style="font-size:13px;font-weight:700;">₩'+currentDepositBalance.toLocaleString()+'</span></div>';
+  var bh='<div style="display:flex;justify-content:space-between;padding:6px 0;"><span style="font-size:12px;color:#aaa;">예치금 잔액</span><span style="font-size:13px;font-weight:700;">'+fxMoney(currentDepositBalance)+'</span></div>';
   if(after<0) bh+='<div style="display:flex;justify-content:space-between;padding:6px 0;"><span style="font-size:12px;color:#aaa;">추가 결제 필요</span><span style="font-size:13px;font-weight:700;color:#c00;">₩'+Math.abs(after).toLocaleString()+'</span></div>';
   else bh+='<div style="display:flex;justify-content:space-between;padding:6px 0;"><span style="font-size:12px;color:#aaa;">결제 후 잔액</span><span style="font-size:13px;font-weight:700;">₩'+after.toLocaleString()+'</span></div>';
   var bal=document.getElementById('tdConfirmBalance'); if(bal) bal.innerHTML=bh;
@@ -18222,16 +18421,16 @@ function handleTicketAction(){
   var h='';
   h+='<div style="font-family:var(--font-main);font-size:17px;font-weight:800;color:#111;margin-bottom:4px;">'+(r?r.name:t.rest)+'</div>';
   h+='<div style="font-family:var(--font-main);font-size:12px;color:#aaa;margin-bottom:16px;">'+dateStr+' · '+td+' · '+pax+'인</div>';
-  if(meal)   h+='<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">식사비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">₩'+(meal*pax).toLocaleString()+'</span></div>';
-  if(agency) h+='<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">대행비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">₩'+(agency*pax).toLocaleString()+'</span></div>';
-  if(wine)   h+='<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">주류 미니멈 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">₩'+(wine*pax).toLocaleString()+'</span></div>';
-  h+='<div style="display:flex;justify-content:space-between;padding:10px 0;"><span style="font-size:14px;font-weight:800;color:#111;">합계</span><span style="font-size:20px;font-weight:900;color:#5C0A14;">₩'+totalPay.toLocaleString()+'</span></div>';
+  if(meal)   h+='<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">식사비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxMoney(meal*pax)+'</span></div>';
+  if(agency) h+='<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">대행비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxMoney(agency*pax,{usd:fxAgencyUsd(t)*pax,exact:true})+'</span></div>';
+  if(wine)   h+='<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">주류 미니멈 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxMoney(wine*pax)+'</span></div>';
+  h+='<div style="display:flex;justify-content:space-between;padding:10px 0;"><span style="font-size:14px;font-weight:800;color:#111;">합계</span><span style="font-size:20px;font-weight:900;color:#5C0A14;">'+fxMoney(totalPay,{usd:_fxTotalUsd(t,pax,meal,wine),exact:true})+'</span></div>';
   var cr=document.getElementById('tdConfirmRows'); if(cr) cr.innerHTML=h;
 
   // 예치금 / 추가 결제
   var after = currentDepositBalance - totalPay;
   var bh='';
-  bh+='<div style="display:flex;justify-content:space-between;padding:6px 0;"><span style="font-size:12px;color:#aaa;">예치금 잔액</span><span style="font-size:13px;font-weight:700;">₩'+currentDepositBalance.toLocaleString()+'</span></div>';
+  bh+='<div style="display:flex;justify-content:space-between;padding:6px 0;"><span style="font-size:12px;color:#aaa;">예치금 잔액</span><span style="font-size:13px;font-weight:700;">'+fxMoney(currentDepositBalance)+'</span></div>';
   if(after<0){
     bh+='<div style="display:flex;justify-content:space-between;padding:6px 0;"><span style="font-size:12px;color:#aaa;">추가 결제 필요</span><span style="font-size:13px;font-weight:700;color:#c00;">₩'+Math.abs(after).toLocaleString()+'</span></div>';
   } else {
@@ -18768,13 +18967,13 @@ function _showTdConfirmPopup(t, r, pax, meal, agency, wine, totalPay, after) {
   var sh='';
   sh+='<div style="font-family:var(--font-main);font-size:16px;font-weight:800;color:#111;margin-bottom:4px;">'+(r?r.name:t.rest)+'</div>';
   sh+='<div style="font-family:var(--font-main);font-size:12px;color:#aaa;margin-bottom:12px;">'+dateStr+' · '+td+' · '+pax+'인</div>';
-  if(meal)   sh+='<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">식사비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">₩'+(meal*pax).toLocaleString()+'</span></div>';
-  if(agency) sh+='<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">대행비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">₩'+(agency*pax).toLocaleString()+'</span></div>';
+  if(meal)   sh+='<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">식사비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxMoney(meal*pax)+'</span></div>';
+  if(agency) sh+='<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">대행비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxMoney(agency*pax,{usd:fxAgencyUsd(t)*pax,exact:true})+'</span></div>';
   // 🆕 2026.05.21: 주류 미니멈 줄 누락 수정 — 합계엔 포함됐는데 리스트 미표시로 고객 혼동 유발하던 버그
-  if(wine)   sh+='<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">주류 미니멈 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">₩'+(wine*pax).toLocaleString()+'</span></div>';
-  sh+='<div style="display:flex;justify-content:space-between;padding:8px 0;"><span style="font-size:14px;font-weight:800;color:#111;">합계</span><span style="font-size:18px;font-weight:900;color:#5C0A14;">₩'+totalPay.toLocaleString()+'</span></div>';
+  if(wine)   sh+='<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">주류 미니멈 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxMoney(wine*pax)+'</span></div>';
+  sh+='<div style="display:flex;justify-content:space-between;padding:8px 0;"><span style="font-size:14px;font-weight:800;color:#111;">합계</span><span style="font-size:18px;font-weight:900;color:#5C0A14;">'+fxMoney(totalPay,{usd:_fxTotalUsd(t,pax,meal,wine),exact:true})+'</span></div>';
   var ps = document.getElementById('tdPaySummary'); if(ps) ps.innerHTML=sh;
-  var bh='<div style="display:flex;justify-content:space-between;padding:6px 0;"><span style="font-size:12px;color:#aaa;">예치금 잔액</span><span style="font-size:13px;font-weight:700;">₩'+currentDepositBalance.toLocaleString()+'</span></div>';
+  var bh='<div style="display:flex;justify-content:space-between;padding:6px 0;"><span style="font-size:12px;color:#aaa;">예치금 잔액</span><span style="font-size:13px;font-weight:700;">'+fxMoney(currentDepositBalance)+'</span></div>';
   bh+='<div style="display:flex;justify-content:space-between;padding:6px 0;"><span style="font-size:12px;color:#aaa;">결제 후 잔액</span><span style="font-size:13px;font-weight:700;">₩'+after.toLocaleString()+'</span></div>';
   var pb = document.getElementById('tdPayBalance'); if(pb) pb.innerHTML=bh;
   var pop = document.getElementById('tdConfirmPopup');
@@ -26252,9 +26451,11 @@ function closeTU(){
   tuResetSlots();
   document.getElementById('tuTotalPax').value = '';
   // 금액 초기화
-  ['tuMealAmt','tuAgencyFee','tuWineMin'].forEach(function(id){
+  ['tuMealAmt','tuAgencyFee','tuWineMin','tuOverseasAgencyUsd'].forEach(function(id){
     var el = document.getElementById(id); if(el) el.value = '';
   });
+  // 🆕 해외 대행비 미리보기도 초기화
+  var _ovHint = document.getElementById('tuOvsHint'); if(_ovHint) _ovHint.textContent = '';
   // 🆕 2026.08: 티켓 상세 설명 초기화 — 이전 업로드 내용이 다음 업로드에 남던 문제
   var _tuDescEl = document.getElementById('tuTicketDesc');
   if(_tuDescEl) _tuDescEl.value = '';
@@ -26527,6 +26728,7 @@ function uploadTicket(){
       : { s1:_tuSlots.s1, s2:_tuSlots.s2, s4:_tuSlots.s4 }),
     assignedPax:assigned,
     mealFee:meal,agencyFee:agency,wineMin:wine,
+    overseasAgencyUsd:(function(){ var v=(document.getElementById('tuOverseasAgencyUsd')||{}).value||''; v=String(v).replace(/[^0-9]/g,''); return v ? parseInt(v,10) : null; })(),   // 🆕 해외 대행비 예외(USD)
     price: meal + agency + wine,
     isEvent: isEve,
     homeSection: _tuHomeSections.slice(),
@@ -28912,6 +29114,10 @@ function tuEditTicket(id){
   var wm=document.getElementById('tuWineMin');
   if(ma)ma.value=fmt(t.mealFee);
   if(af)af.value=fmt(t.agencyFee);
+  // 🆕 해외 대행비 예외 — 없으면 빈칸(자동)
+  var _ov=document.getElementById('tuOverseasAgencyUsd');
+  if(_ov) _ov.value = (t.overseasAgencyUsd != null && t.overseasAgencyUsd !== '') ? String(t.overseasAgencyUsd) : '';
+  if(typeof tuOvsPreview==='function') setTimeout(tuOvsPreview, 0);
   if(wm)wm.value=fmt(t.wineMin);
 
   // 티켓페이지 장르
@@ -29284,6 +29490,20 @@ function tuGetMoney(id) {
   var el = document.getElementById(id);
   if (!el) return 0;
   return parseInt(el.value.replace(/,/g, '') || '0', 10);
+}
+
+// 🆕 2026.08: 해외 대행비 미리보기 — 비워두면 원화 ÷ 1,000 자동값을 안내
+function tuOvsPreview(){
+  var el   = document.getElementById('tuOverseasAgencyUsd');
+  var hint = document.getElementById('tuOvsHint');
+  if (!hint) return;
+  if (el) el.value = el.value.replace(/[^0-9]/g, '');
+  var manual = el && el.value ? parseInt(el.value, 10) : 0;
+  if (manual > 0) { hint.textContent = '지정 $' + manual.toLocaleString(); return; }
+  var krw = tuGetMoney('tuAgencyFee');
+  var d   = (typeof FX !== 'undefined' && parseFloat(FX.agency_divisor)) || 1000;
+  var auto = Math.round(krw / d);
+  hint.textContent = krw > 0 ? ('자동 $' + auto.toLocaleString()) : '';
 }
 
 // ── 홈 연동 섹션 ──
@@ -33120,6 +33340,8 @@ function authLangSync(){
 (function(){
   function boot(){
     try{ applyI18n(); }catch(e){}
+    // 🆕 2026.08: 환율/해외요율 설정 로드 (로그인 전에도 가격 표시가 필요)
+    try{ if(typeof loadFxSettings === 'function') loadFxSettings(); }catch(e){}
     // 🆕 pill 라벨도 부팅 시 현재 언어에 맞게 동기화
     try{ if(typeof tkPillSyncAll === 'function') tkPillSyncAll(); }catch(e){}
     // 🆕 언어 토글 라벨도 KO/EN/JA 정확히 표시
@@ -47453,6 +47675,7 @@ async function saveTicketProductToSupabase(ticket){
       assigned_pax: ticket.assignedPax || null,
       meal_fee: ticket.mealFee || 0,
       agency_fee: ticket.agencyFee || 0,
+      overseas_agency_usd: (ticket.overseasAgencyUsd === '' || ticket.overseasAgencyUsd == null) ? null : parseInt(ticket.overseasAgencyUsd,10),
       wine_min: ticket.wineMin || 0,
       price: ticket.price || 0,
       ticket_type: ticket.type || null,
@@ -47578,6 +47801,7 @@ async function loadAllTicketProductsFromSupabase(){
         assignedPax: row.assigned_pax || 0,
         mealFee: row.meal_fee || 0,
         agencyFee: row.agency_fee || 0,
+      overseasAgencyUsd: (row.overseas_agency_usd == null ? null : parseInt(row.overseas_agency_usd,10)),   // 🆕 해외 대행비 예외(USD)
         wineMin: row.wine_min || 0,
         price: row.price || 0,
         type: row.ticket_type,
