@@ -33472,6 +33472,9 @@ function tkPickLang(code) {
   if(typeof notifPermSync === 'function') notifPermSync();         // 권한 상태 표시
   if(typeof renderTicketGenres === 'function') renderTicketGenres(); // 티켓 리스트 카드 (장르 헤더 + 카드 내부)
   if(typeof applySplashSettings === 'function') applySplashSettings(); // 시작화면 텍스트 (DB i18n)
+  // 🆕 2026.08: 계보도 노드 이름 — 언어 변경 시 재적용 (기존엔 누락돼 항상 한글로 남아 있었다)
+  if(typeof relocalizeChefNames === 'function') relocalizeChefNames();
+  if(typeof renderCarousel === 'function') { try { renderCarousel(); } catch(_ce){} }   // 계보도 홈 캐러셀
   if(typeof tkRenderCal === 'function') {                          // 캘린더 타이틀 (열려있을 때)
     var calOv = document.getElementById('tkCalOverlay');
     if(calOv && calOv.style.display === 'flex') tkRenderCal();
@@ -47208,6 +47211,36 @@ function syncLineageChefName(chefId, chefNameValue){
 // 🆕 2026.05.21: DATA는 스기타(sugita) 데이터셋. lineageId 명시로 cache key 일치시킴
 //   누락 시 _chefInfoCache 의 복합키(`sugita:chefId`)와 미스매치되어 항상 cache miss → IDB 폴백 → null → 무시
 //   결과적으로 사용자 수정값이 SVG에 안 반영되어 "복구된 것처럼" 보이는 버그의 한 원인이었음
+// 🆕 2026.08: 계보도 노드 이름 언어 선택.
+//   ko/en/ja 중 현재 언어 값을 고르되, 비어 있으면 한글로 폴백한다.
+//   (번역 전 노드는 지금까지와 똑같이 한글로 보인다 — 위험 없음)
+function _chefPickName(ko, en, jp){
+  var l = window._tkCurrentLang || 'ko';
+  function ok(v){ return (typeof v === 'string' && v.trim() !== '') ? v : null; }
+  if (l === 'en') return ok(en) || ok(ko) || ok(jp) || '';
+  if (l === 'ja') return ok(jp) || ok(ko) || ok(en) || '';
+  return ok(ko) || ok(en) || ok(jp) || '';
+}
+// 🆕 2026.08: 언어를 바꿨을 때 이미 로드된 캐시로 노드 이름만 다시 계산해 반영.
+//   DB 를 다시 조회하지 않으므로 즉시 반영된다.
+function relocalizeChefNames(){
+  try {
+    if (typeof _chefInfoCache === 'undefined' || !_chefInfoCache) return;
+    Object.keys(_chefInfoCache).forEach(function(k){
+      var info = _chefInfoCache[k];
+      if (!info || info._nameKo === undefined) return;   // 원문 미보관(구 캐시)이면 건너뜀
+      info.name = _chefPickName(info._nameKo, info._nameEn, info._nameJp);
+      info.sub  = _chefPickName(info._subKo,  info._subEn,  info._subJp);
+      var sep = k.indexOf(':');
+      var lineageId = sep >= 0 ? k.substring(0, sep) : (info._lineageId || '');
+      var chefId    = sep >= 0 ? k.substring(sep + 1) : k;
+      if (typeof applyNodeUpdateToSvg === 'function') applyNodeUpdateToSvg(chefId, info, lineageId);
+    });
+    if (typeof applyAllLineageChefNames === 'function') applyAllLineageChefNames();
+  } catch(e){ console.warn('[lineage] 언어 재적용 실패:', e && e.message); }
+}
+window._chefPickName = _chefPickName; window.relocalizeChefNames = relocalizeChefNames;
+
 function applyAllLineageChefNames(){
   try {
     if(typeof DATA === 'undefined' || !Array.isArray(DATA)) return;
@@ -47641,6 +47674,8 @@ async function loadAllChefsFromSupabase(){
     // 메인 SVG 노드 표시에는 sec_data 불필요. 카드 상세 진입 시 loadChefInfo가 단건 보강.
     var res = await window.sb.from('chefs').select(
       'id, lineage_id, name, sub_title, node_photo, node_border_color, node_hidden, node_hidden_show_info, ' +
+      // 🆕 2026.08: 번역 컬럼을 SELECT 에서 빠뜨려, 번역이 있어도 트리에 항상 한글이 나오던 문제 수정
+      'name_en, name_jp, sub_en, sub_jp, ' +
       'linked_rest_id, reserve_url, ticket_status, ticket_url, updated_at'
     );
     if(res.error){
@@ -47657,8 +47692,11 @@ async function loadAllChefsFromSupabase(){
     res.data.forEach(function(row){
       var info = {
         _lineageId: row.lineage_id,  // 🆕 캐시 키 생성용
-        name: row.name,
-        sub: row.sub_title,
+        // 🆕 2026.08: 언어 변경 시 재선택할 수 있도록 원문 3종을 모두 보관
+        _nameKo: row.name,      _nameEn: row.name_en, _nameJp: row.name_jp,
+        _subKo:  row.sub_title, _subEn:  row.sub_en,  _subJp:  row.sub_jp,
+        name: _chefPickName(row.name, row.name_en, row.name_jp),
+        sub:  _chefPickName(row.sub_title, row.sub_en, row.sub_jp),
         nodePhoto: row.node_photo,
         nodeBorderColor: row.node_border_color,
         nodeHidden: !!row.node_hidden,
