@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.56.1';  // 1.55.2 — 2026.08: 자동 새로고침 재도입(네이티브 앱에 최신 index.html 강제 반영). index.html 의 "네이티브 splash-skip 미부여" 수정과 함께라 인트로/스킵 안 사라짐.
-const STATIC_CACHE = 'taam-static-v1.56.1';
+const SW_VERSION = 'taam-sw-v1.57.0';  // 1.55.2 — 2026.08: 자동 새로고침 재도입(네이티브 앱에 최신 index.html 강제 반영). index.html 의 "네이티브 splash-skip 미부여" 수정과 함께라 인트로/스킵 안 사라짐.
+const STATIC_CACHE = 'taam-static-v1.57.0';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
@@ -33,6 +33,40 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+// 🆕 2026.08: 앱 셸 전략 상수/헬퍼
+const HTML_TIMEOUT_MS = 3000;   // 이 시간 안에 네트워크가 응답 못 하면 캐시로 먼저 렌더
+
+function isAppShell(url) {
+  return url.pathname === '/' || url.pathname === '/index.html';
+}
+
+async function handleAppShell(req) {
+  const cache = await caches.open(STATIC_CACHE);
+
+  // 네트워크 시도 — 성공하면 캐시를 갱신해 다음 실행이 최신을 쓰게 한다.
+  const network = fetch(req).then((res) => {
+    if (res && res.status === 200) {
+      cache.put(req, res.clone()).catch(() => {});
+    }
+    return res;
+  });
+  // 네트워크 실패가 unhandled rejection 이 되지 않도록 흡수 (아래에서 별도 처리)
+  const networkSafe = network.catch(() => null);
+
+  const cached = await cache.match(req);
+
+  // 캐시가 없으면(최초 실행) 네트워크를 끝까지 기다린다.
+  if (!cached) {
+    const res = await networkSafe;
+    return res || new Response('', { status: 504 });
+  }
+
+  // 캐시가 있으면 네트워크를 상한까지만 기다리고, 늦으면 캐시로 즉시 렌더.
+  const timeout = new Promise((resolve) => setTimeout(() => resolve(null), HTML_TIMEOUT_MS));
+  const fresh = await Promise.race([networkSafe, timeout]);
+  return fresh || cached;
+}
+
 // 🆕 2026.05.21: fetch 핸들러 — 정적 리소스만 stale-while-revalidate 전략
 //   HTML/JSON/API 는 항상 네트워크 (캐시 안 함). 이미지/폰트/CSS 등은 캐시 우선 + 백그라운드 갱신.
 //   첫 로딩 후 두 번째부터 매우 빨라짐.
@@ -55,15 +89,26 @@ self.addEventListener('fetch', (event) => {
 
   if (!isSameOrigin && !isExternalCDN) return;
 
-  // HTML / SW / manifest / API 는 캐싱 안 함 (항상 네트워크)
+  // SW / manifest / API 는 항상 네트워크 (캐싱 안 함)
   if (
-    url.pathname === '/' ||
-    url.pathname === '/index.html' ||
     url.pathname === '/sw.js' ||
     url.pathname === '/manifest.json' ||
     url.pathname.startsWith('/api/') ||
     url.pathname.startsWith('/supabase/')
   ) return;
+
+  // 🆕 2026.08: 앱 셸(index.html) — 네트워크 우선 + 타임아웃 시 캐시 폴백
+  //   기존에는 HTML 을 캐싱에서 제외해 매 실행마다 약 1MB(gzip)를 새로 받았다.
+  //   Wi-Fi 에서는 티가 안 나지만 셀룰러에서는 그대로 대기 시간이 된다.
+  //   최신 코드 반영이라는 기존 의도는 유지하되(네트워크를 먼저 시도),
+  //   느린 회선에서 무한정 기다리지 않도록 상한을 둔다.
+  //   · 네트워크가 HTML_TIMEOUT_MS 안에 응답 → 그대로 사용 + 캐시 갱신 (평소 동작 그대로)
+  //   · 시간 초과/실패 → 직전 캐시로 즉시 렌더, 네트워크 응답은 도착하는 대로 캐시에 반영
+  //   · 캐시도 없으면(최초 실행) 네트워크를 끝까지 기다린다
+  if (isAppShell(url)) {
+    event.respondWith(handleAppShell(req));
+    return;
+  }
 
   // 정적 리소스만 캐싱 (이미지·폰트·CSS·JS·JSON 데이터)
   const isStatic = /\.(png|jpg|jpeg|gif|svg|webp|avif|ico|woff|woff2|ttf|otf|eot|css|js|json|html)$/i.test(url.pathname);
