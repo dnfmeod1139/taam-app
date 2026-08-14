@@ -21,13 +21,20 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<!-- 🆕 2026.08 셀룰러 초기 로딩 개선: 외부 스크립트 도메인 미리 연결.
+     기존에는 폰트에만 preconnect 가 걸려 있어, cdnjs/unpkg 는 스크립트를 만난 시점에야
+     DNS→TCP→TLS 를 시작했다. 셀룰러 RTT(100~300ms)에서 이 왕복이 그대로 지연이 된다. -->
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="preconnect" href="https://unpkg.com" crossorigin>
 <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Oswald:wght@300;400;500;600;700&family=Noto+Sans+KR:wght@400;500;700;900&family=Noto+Sans+JP:wght@400;500;700;900&display=swap" onload="this.onload=null;this.rel='stylesheet'">
 <noscript><link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Oswald:wght@300;400;500;600;700&family=Noto+Sans+KR:wght@400;500;700;900&family=Noto+Sans+JP:wght@400;500;700;900&display=swap" rel="stylesheet"></noscript>
 <link rel="preload" as="style" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css" onload="this.onload=null;this.rel='stylesheet'">
 <noscript><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css"></noscript>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js" defer></script>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<!-- 🆕 2026.08: defer — Leaflet 은 지도 화면(아틀라스/레스토랑 위치)에서만 쓰이고
+     모든 호출이 함수 내부라 초기 렌더를 막을 이유가 없다. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js" defer></script>
 
 <!-- ═════════ Supabase 연결 ═════════ -->
 <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
@@ -4762,7 +4769,9 @@ body > .ticket-modal .ticket-modal-box {
 }
 
 </style>
-<script src="https://cdn.portone.io/v2/browser-sdk.js"></script>
+<!-- 🆕 2026.08: defer — 포트원 SDK 는 현재 결제 경로에서 쓰이지 않고(토스 전환),
+     남은 호출도 전부 함수 내부다. 초기 블로킹만 제거하고 코드는 보존. -->
+<script src="https://cdn.portone.io/v2/browser-sdk.js" defer></script>
 <style>
 /* ── 핀 (사진 동그라미) ────────────────────────────── */
 .taam-pin-wrapper { background: transparent !important; border: none !important; overflow: visible !important; }
@@ -9744,10 +9753,17 @@ window.closePromoCarousel = function(){
 
     <!-- 파트너 로고 관리 -->
     <div style="margin-top:30px;border-top:1px solid #e5e0d6;padding-top:22px;">
-      <div style="font-size:14px;font-weight:800;color:#1a1a18;">🖼 파트너 로고</div>
+      <!-- 🆕 2026.08: 편집 모드 도입. 평소엔 로고만 보이고, [편집] 을 눌렀을 때만
+           추가 버튼과 삭제(✕) 배지가 나타난다. (기존에는 ✕ 가 항상 떠 있어 목록이 어수선했음) -->
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+        <div style="font-size:14px;font-weight:800;color:#1a1a18;">🖼 파트너 로고 <span id="pqrLogoCount" style="font-size:11px;font-weight:600;color:#b5afa2;"></span></div>
+        <button id="pqrLogoEditBtn" onclick="pqrLogoToggleEdit()" style="flex-shrink:0;padding:7px 14px;border:1px solid #d8d2c6;border-radius:9px;background:#fff;color:#6a635a;font-family:inherit;font-size:11.5px;font-weight:700;cursor:pointer;">편집</button>
+      </div>
       <div style="font-size:11px;color:#9a9486;margin-top:5px;line-height:1.8;">모든 전용 페이지 하단 <b>「함께하는 파트너」</b> 영역에 노출됩니다.<br>JPG·PNG 로고 이미지를 올리면 자동으로 표시됩니다 (추가한 순서대로).</div>
       <input type="file" id="pqrLogoFile" accept="image/*" multiple style="display:none;" onchange="pqrLogoUpload(this)">
-      <button onclick="document.getElementById('pqrLogoFile').click()" style="margin-top:12px;width:100%;padding:12px;border:1px solid #c8a96e;border-radius:11px;background:#fff;color:#5C0A14;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer;">+ 로고 이미지 추가 (여러 장 선택 가능)</button>
+      <div id="pqrLogoAddWrap" style="display:none;">
+        <button onclick="document.getElementById('pqrLogoFile').click()" style="margin-top:12px;width:100%;padding:12px;border:1px solid #c8a96e;border-radius:11px;background:#fff;color:#5C0A14;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer;">+ 로고 이미지 추가 (여러 장 선택 가능)</button>
+      </div>
       <div id="pqrLogoList" style="margin-top:12px;display:flex;flex-wrap:wrap;gap:10px;"></div>
     </div>
 
@@ -37438,20 +37454,41 @@ function pqrLogoLoad(){
     pqrLogoRender();
   });
 }
+// 🆕 2026.08: 편집 모드 — 평소엔 로고만, [편집] 중에만 추가/삭제 노출
+var _pqrLogoEdit = false;
+function pqrLogoToggleEdit(){
+  _pqrLogoEdit = !_pqrLogoEdit;
+  var btn  = document.getElementById('pqrLogoEditBtn');
+  var wrap = document.getElementById('pqrLogoAddWrap');
+  if(btn){
+    btn.textContent = _pqrLogoEdit ? '완료' : '편집';
+    btn.style.background = _pqrLogoEdit ? '#1a1a18' : '#fff';
+    btn.style.color      = _pqrLogoEdit ? '#fff'    : '#6a635a';
+    btn.style.borderColor= _pqrLogoEdit ? '#1a1a18' : '#d8d2c6';
+  }
+  if(wrap) wrap.style.display = _pqrLogoEdit ? 'block' : 'none';
+  pqrLogoRender();
+}
 function pqrLogoRender(){
   var box = document.getElementById('pqrLogoList');
   if(!box) return;
+  var cnt = document.getElementById('pqrLogoCount');
+  if(cnt) cnt.textContent = _pqrLogos.length ? ('· ' + _pqrLogos.length) : '';
   if(_pqrLogos.length === 0){
-    box.innerHTML = '<div style="font-size:11px;color:#b5afa2;padding:4px;">아직 등록된 파트너 로고가 없어요</div>';
+    box.innerHTML = '<div style="font-size:11px;color:#b5afa2;padding:4px;">아직 등록된 파트너 로고가 없어요'
+      + (_pqrLogoEdit ? '' : ' — [편집] 을 눌러 추가하세요') + '</div>';
     return;
   }
   var html = '';
   _pqrLogos.forEach(function(g, i){
     html += '<div style="position:relative;width:84px;">'
       + '<div style="width:84px;height:84px;border:1px solid #e5e0d6;border-radius:12px;background:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;">'
-      +   '<img src="' + g.image_url + '" alt="logo" style="max-width:100%;max-height:100%;object-fit:contain;">'
+      +   '<img src="' + g.image_url + '" alt="logo" loading="lazy" style="max-width:100%;max-height:100%;object-fit:contain;">'
       + '</div>'
-      + '<button onclick="pqrLogoDelete(' + i + ')" style="position:absolute;top:-7px;right:-7px;width:22px;height:22px;border:none;border-radius:50%;background:#b05555;color:#fff;font-size:12px;font-weight:800;cursor:pointer;line-height:1;box-shadow:0 1px 4px rgba(0,0,0,.25);">✕</button>'
+      // 삭제 배지는 편집 모드에서만
+      + (_pqrLogoEdit
+          ? '<button onclick="pqrLogoDelete(' + i + ')" style="position:absolute;top:-7px;right:-7px;width:22px;height:22px;border:none;border-radius:50%;background:#b05555;color:#fff;font-size:12px;font-weight:800;cursor:pointer;line-height:1;box-shadow:0 1px 4px rgba(0,0,0,.25);">✕</button>'
+          : '')
       + '</div>';
   });
   box.innerHTML = html;
