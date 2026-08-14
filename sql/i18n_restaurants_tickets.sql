@@ -58,3 +58,51 @@ select '티켓',
 from public.ticket_products;
 
 do $$ begin raise notice '✅ 레스토랑·티켓 다국어 컬럼 준비 완료 — 앱에서 일괄 번역을 실행하세요'; end $$;
+
+-- ═══════════════════════════════════════════════════════════════
+-- ── 4) venue_partners (예약 요청 화면의 파트너십 매장) ──
+--   매장명·소개·유의사항·영업시간이 모두 한글이라 해외 회원에게 그대로 노출된다.
+--   PK 가 venue_id(text) 이므로 러너도 idCol:'venue_id' 로 동작한다.
+-- ═══════════════════════════════════════════════════════════════
+alter table public.venue_partners
+  add column if not exists custom_name_en       text,
+  add column if not exists custom_name_jp       text,
+  add column if not exists custom_sub_en        text,
+  add column if not exists custom_sub_jp        text,
+  add column if not exists custom_genre_en      text,
+  add column if not exists custom_genre_jp      text,
+  add column if not exists custom_address_en    text,
+  add column if not exists custom_address_jp    text,
+  add column if not exists custom_desc_en       text,
+  add column if not exists custom_desc_jp       text,
+  add column if not exists intro_en             text,
+  add column if not exists intro_jp             text,
+  add column if not exists reservation_notes_en text,
+  add column if not exists reservation_notes_jp text,
+  add column if not exists reservation_hours_en text,
+  add column if not exists reservation_hours_jp text,
+  add column if not exists i18n_status_en       text    default 'pending',
+  add column if not exists i18n_status_jp       text    default 'pending',
+  add column if not exists i18n_jp_approved     boolean default false;
+
+-- ── 5) 최종 번역 대상 현황 (회원 노출분만) ──
+select '레스토랑 (회원 노출)' as "대상",
+       count(*)                                          as "전체",
+       count(*) filter (where coalesce(name_en,'') = '')  as "미번역"
+from public.restaurants
+where super_admin_only is null or super_admin_only = false
+union all
+select '티켓 (설명 있음)',
+       count(*) filter (where coalesce(ticket_desc,'') <> ''),
+       count(*) filter (where coalesce(ticket_desc,'') <> '' and coalesce(ticket_desc_en,'') = '')
+from public.ticket_products
+union all
+select '파트너십 매장',
+       count(*),
+       count(*) filter (where
+         (coalesce(custom_name,'') <> '' and coalesce(custom_name_en,'') = '') or
+         (coalesce(intro,'')       <> '' and coalesce(intro_en,'')       = '') or
+         (coalesce(reservation_notes,'') <> '' and coalesce(reservation_notes_en,'') = ''))
+from public.venue_partners;
+
+do $$ begin raise notice '✅ 파트너십 매장 다국어 컬럼까지 준비 완료'; end $$;

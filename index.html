@@ -8753,7 +8753,7 @@ window.closePromoCarousel = function(){
             <div class="admin-arrow">›</div>
           </div>
           <!-- 🆕 2026.08: 레스토랑·티켓 일괄 번역 -->
-          <div class="admin-menu-item" onclick="taamTranslateRestaurants({dryRun:true})">
+          <div class="admin-menu-item" onclick="taamTranslateRestaurants({dryRun:true});taamTranslateTickets({dryRun:true});taamTranslatePartners({dryRun:true})">
             <div>
               <div class="admin-menu-text">🔍 레스토랑·티켓 번역 대상 확인</div>
               <div class="admin-menu-sub">실제 번역 없이 대상 건수·예상 시간·비용만 확인 (dry-run)</div>
@@ -8771,6 +8771,13 @@ window.closePromoCarousel = function(){
             <div>
               <div class="admin-menu-text">🎫 티켓 설명 일괄 AI 번역</div>
               <div class="admin-menu-sub">티켓 상세 설명 KO → EN/JA. 미번역만 대상</div>
+            </div>
+            <div class="admin-arrow">›</div>
+          </div>
+          <div class="admin-menu-item" onclick="taamTranslatePartners()">
+            <div>
+              <div class="admin-menu-text">🤝 파트너십 매장 일괄 AI 번역</div>
+              <div class="admin-menu-sub">예약요청 화면의 매장명·소개·유의사항·영업시간 KO → EN/JA</div>
             </div>
             <div class="admin-arrow">›</div>
           </div>
@@ -33164,9 +33171,13 @@ window.taamTranslate = taamTranslate;
 async function _i18nBatch(cfg){
   // cfg: { table, label, idCol, fields:[{ko, en, jp, ctx}], dryRun }
   if (!window.sb) { showToast('⚠','오류','서버 연결이 없습니다'); return; }
-  var cols = ['id'];
+  var idCol = cfg.idCol || 'id';
+  var cols = [idCol];
   cfg.fields.forEach(function(f){ cols.push(f.ko, f.en, f.jp); });
-  var res = await window.sb.from(cfg.table).select(cols.join(', '));
+  var q = window.sb.from(cfg.table).select(cols.join(', '));
+  // 🆕 회원에게 안 보이는 행은 번역하지 않는다 (시간·비용 절약)
+  if (cfg.filter) q = cfg.filter(q);
+  var res = await q;
   if (res.error) { showToast('⚠','조회 실패', res.error.message); return; }
   var rows = res.data || [];
 
@@ -33183,7 +33194,7 @@ async function _i18nBatch(cfg){
     showToast('🔍', cfg.label + ' 번역 대상',
       '전체 ' + rows.length + '건 중 ' + targets.length + '건 미번역\n예상 시간 약 ' +
       Math.ceil(targets.length * 15 / 60) + '분 · 비용 약 $' + (targets.length * 0.008).toFixed(2));
-    console.log('[i18n] ' + cfg.table + ' 대상', targets.map(function(r){ return r.id; }));
+    console.log('[i18n] ' + cfg.table + ' 대상', targets.map(function(r){ return r[idCol]; }));
     return;
   }
   if (targets.length === 0) { showToast('✓', cfg.label, '미번역 항목이 없습니다'); return; }
@@ -33207,10 +33218,10 @@ async function _i18nBatch(cfg){
         if (v.en) payload[f.en] = v.en;
         if (v.ja) payload[f.jp] = v.ja;
       });
-      var up = await window.sb.from(cfg.table).update(payload).eq('id', r.id);
-      if (up.error) { fail++; console.warn('[i18n] 저장 실패', r.id, up.error.message); }
+      var up = await window.sb.from(cfg.table).update(payload).eq(idCol, r[idCol]);
+      if (up.error) { fail++; console.warn('[i18n] 저장 실패', r[idCol], up.error.message); }
       else done++;
-    } catch(e) { fail++; console.warn('[i18n] 번역 실패', r.id, e && e.message); }
+    } catch(e) { fail++; console.warn('[i18n] 번역 실패', r[idCol], e && e.message); }
     if ((i+1) % 5 === 0) showToast('⏳', cfg.label, (i+1) + ' / ' + targets.length + ' 진행 중…');
   }
   showToast(fail ? '⚠' : '✓', cfg.label + ' 번역 완료',
@@ -33221,6 +33232,8 @@ async function _i18nBatch(cfg){
 function taamTranslateRestaurants(opts){
   return _i18nBatch({
     table: 'restaurants', label: '레스토랑', dryRun: !!(opts && opts.dryRun),
+    // 슈퍼어드민 전용 매장은 회원에게 노출되지 않으므로 번역 대상에서 제외
+    filter: function(q){ return q.or('super_admin_only.is.null,super_admin_only.eq.false'); },
     ctx: '한국·일본 프리미엄 다이닝 레스토랑 정보. 고유명사는 현지 통용 표기를 우선하고, 억지 의역을 피할 것.',
     fields: [
       { ko:'name',        en:'name_en',        jp:'name_jp' },
@@ -33236,6 +33249,24 @@ function taamTranslateTickets(opts){
     fields: [ { ko:'ticket_desc', en:'ticket_desc_en', jp:'ticket_desc_jp' } ]
   });
 }
+function taamTranslatePartners(opts){
+  return _i18nBatch({
+    table: 'venue_partners', label: '파트너십 매장', idCol: 'venue_id',
+    dryRun: !!(opts && opts.dryRun),
+    ctx: '레스토랑 파트너십 정보. 예약 유의사항·소개문·영업시간 안내. 정중한 안내 문체 유지, 고유명사는 현지 통용 표기 우선.',
+    fields: [
+      { ko:'custom_name',       en:'custom_name_en',       jp:'custom_name_jp' },
+      { ko:'custom_sub',        en:'custom_sub_en',        jp:'custom_sub_jp' },
+      { ko:'custom_genre',      en:'custom_genre_en',      jp:'custom_genre_jp' },
+      { ko:'custom_address',    en:'custom_address_en',    jp:'custom_address_jp' },
+      { ko:'custom_desc',       en:'custom_desc_en',       jp:'custom_desc_jp' },
+      { ko:'intro',             en:'intro_en',             jp:'intro_jp' },
+      { ko:'reservation_notes', en:'reservation_notes_en', jp:'reservation_notes_jp' },
+      { ko:'reservation_hours', en:'reservation_hours_en', jp:'reservation_hours_jp' }
+    ]
+  });
+}
+window.taamTranslatePartners = taamTranslatePartners;
 window.taamTranslateRestaurants = taamTranslateRestaurants;
 window.taamTranslateTickets = taamTranslateTickets;
 
