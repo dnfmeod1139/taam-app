@@ -5450,6 +5450,81 @@ function fxMoney(krw, opts){
   return won + ' <span class="fx-usd">' + us + '</span>';
 }
 
+// ── 🆕 2026.08: 환율 자동 점검 (슈퍼어드민 전용) ──
+//   설정값(base_rate)과 실제 시장 환율을 비교해 조치가 필요할 때만 알린다.
+//   기준선은 설정값에서 자동으로 계산되므로 따로 변동폭을 정할 필요가 없다.
+//
+//     시장 < 적용환율        → 🔴 손실 발생 중 (청구 달러가 정가에 못 미침)
+//     시장 < 설정값          → 🟡 마진 축소
+//     시장 > 설정값 × 1.05   → 🔵 이익 중이나 회원 체감가가 5% 이상 벌어짐
+//
+//   하루 1회만 조회한다 (localStorage 로 중복 방지). 조회 실패는 조용히 넘어간다.
+var FX_CHECK_KEY = 'fxLastCheck';
+function fxIsSuper(){
+  try {
+    if (typeof _isSuperAdmin === 'function') return _isSuperAdmin();
+    return (typeof _currentRole !== 'undefined' && _currentRole === 'superadmin');
+  } catch(e){ return false; }
+}
+function fxCheckRate(force){
+  if (!fxIsSuper()) return;
+  if (!FX.enabled) return;
+  var today = new Date().toISOString().slice(0,10);
+  if (!force) {
+    try { if (localStorage.getItem(FX_CHECK_KEY) === today) return; } catch(e){}
+  }
+  // ECB 기반 무료 환율 (키 불필요 · CORS 허용). 실패해도 앱 동작에는 영향 없음.
+  fetch('https://api.frankfurter.app/latest?from=USD&to=KRW')
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(j){
+      var mkt = j && j.rates && j.rates.KRW;
+      if (!mkt) return;
+      try { localStorage.setItem(FX_CHECK_KEY, today); } catch(e){}
+      var base    = parseFloat(FX.base_rate) || 0;
+      var applied = fxRate();
+      if (base <= 0 || applied <= 0) return;
+      var level = null, title = '', msg = '';
+      if (mkt < applied) {
+        level = 'danger';
+        title = '🔴 환율 하락 — 손실 발생 중';
+        msg = '시장 ' + mkt.toFixed(1) + ' < 적용환율 ' + applied.toFixed(1)
+            + '\n해외 청구액이 원화 정가에 못 미칩니다. 기준 환율을 낮춰주세요.';
+      } else if (mkt < base) {
+        level = 'warn';
+        title = '🟡 환율 하락 — 마진 축소';
+        msg = '시장 ' + mkt.toFixed(1) + ' < 설정 ' + base.toFixed(1)
+            + '\n아직 손실은 아니지만 마진이 줄고 있습니다. (손익분기 ' + applied.toFixed(1) + ')';
+      } else if (mkt > base * 1.05) {
+        level = 'info';
+        title = '🔵 환율 상승 — 회원 체감가 확대';
+        msg = '시장 ' + mkt.toFixed(1) + ' > 설정 ' + base.toFixed(1)
+            + ' (+' + Math.round((mkt/base-1)*100) + '%)\n이익 구간이지만 해외 회원이 느끼는 가격이 시장 대비 벌어졌습니다.';
+      }
+      if (!level) return;
+      // 화면 알림 — 탭하면 설정 화면으로
+      if (typeof showToast === 'function') {
+        showToast(level==='danger'?'🔴':(level==='warn'?'🟡':'🔵'), title, msg,
+          { onTap: function(){ if(typeof fxOpenSettings==='function') fxOpenSettings(); },
+            tapHint: '탭하면 환율 설정으로 이동' });
+      }
+      // 인앱 알림함에도 남긴다 (앱을 나중에 열어도 확인 가능)
+      try {
+        if (window.sb) {
+          window.sb.auth.getUser().then(function(ar){
+            var u = ar && ar.data && ar.data.user; if(!u) return;
+            window.sb.from('notifications').insert({
+              user_id: u.id, type: 'fx_alert', kind: 'fx_alert',
+              title: title, body: msg, message: msg,
+              payload: { market: mkt, base: base, applied: applied, level: level }
+            });
+          });
+        }
+      } catch(e){}
+    })
+    .catch(function(){ /* 조회 실패는 무시 */ });
+}
+window.fxCheckRate = fxCheckRate;
+
 // ── 슈퍼어드민: 환율/해외요율 설정 화면 ──
 function fxOpenSettings(){
   var old = document.getElementById('fxSettingsPopup'); if(old) old.remove();
@@ -5472,6 +5547,7 @@ function fxOpenSettings(){
       + '<span>해외 회원에게 USD 표시 <span style="color:#b5afa2;">(끄면 전 회원 원화만)</span></span>'
     + '</label>'
     + '<button onclick="fxSaveSettings()" style="width:100%;padding:13px;background:#1a1a18;border:none;border-radius:12px;font-size:13px;font-weight:800;color:#fff;cursor:pointer;margin-bottom:8px;">저장</button>'
+    + '<button onclick="fxCheckRate(true)" style="width:100%;padding:11px;background:#fff;border:1px solid #d8d2c6;border-radius:12px;font-size:12px;font-weight:700;color:#6a635a;cursor:pointer;margin-bottom:8px;">지금 시장 환율과 비교</button>'
     + '<button onclick="var p=document.getElementById(\'fxSettingsPopup\');if(p)p.remove();" style="width:100%;padding:11px;background:transparent;border:none;font-size:10px;font-weight:600;letter-spacing:.18em;color:#bbb;cursor:pointer;">닫기</button>'
     + '</div>';
   document.body.appendChild(el);
@@ -13114,6 +13190,9 @@ async function _applyServerAdminGrant() {
       updatePendingBadge();
     }
   } catch(e) { console.warn('[admin grant] 서버 확인 실패', e); }
+  // 🆕 2026.08: 권한 확정 후 환율 자동 점검 (슈퍼어드민만 · 하루 1회)
+  //   설정값 대비 시장 환율이 어긋났을 때만 알린다. 평소엔 아무 일도 일어나지 않는다.
+  try { if (typeof fxCheckRate === 'function') setTimeout(function(){ fxCheckRate(); }, 2500); } catch(e){}
 }
 
 function updateMpAdminBtn() {
