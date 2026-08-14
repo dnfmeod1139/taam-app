@@ -7352,23 +7352,26 @@ window.closePromoCarousel = function(){
 <div id="phoneVerifyPopup" onclick="if(event.target===this)closePhoneVerify()">
   <div class="pv-sheet" id="pvSheet">
     <button class="pv-close-btn" onclick="closePhoneVerify()">✕</button>
-    <div class="pv-title" data-i18n="mp_sub.pv_title">본인 인증</div>
-    <div class="pv-sub">PHONE VERIFICATION</div>
+    <div class="pv-title" data-i18n="mp_sub.pv_title">휴대폰 번호 등록</div>
+    <div class="pv-sub">PHONE NUMBER</div>
 
     <!-- 번호 입력 -->
     <div data-i18n="mp_sub.pv_label_phone" style="font-family:var(--font-main);font-size:8px;font-weight:700;letter-spacing:.2em;text-transform:uppercase;color:#aaa;margin-bottom:8px;">핸드폰 번호</div>
     <div style="display:flex;gap:10px;align-items:flex-end;margin-bottom:6px;">
       <input class="pv-input" id="pvPhoneInput" type="tel" inputmode="numeric" data-i18n-ph="mp_sub.pv_ph_phone" placeholder="010-0000-0000" maxlength="13" oninput="formatPhoneInput(this)" style="flex:1;margin-bottom:0;">
-      <button onclick="pvSendCode()" id="pvSendBtn" data-i18n="mp_sub.pv_btn_send" style="flex-shrink:0;padding:12px 14px;background:#1a1a18;border:none;border-radius:6px;font-family:var(--font-main);font-size:8px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#fff;cursor:pointer;white-space:nowrap;">발송</button>
+      <!-- 🆕 2026.08: SMS 인증 미제공 — 발송 버튼 숨김 (요소는 기존 코드 호환 위해 유지) -->
+      <button onclick="pvSendCode()" id="pvSendBtn" data-i18n="mp_sub.pv_btn_send" style="display:none;">발송</button>
     </div>
-    <div class="pv-hint" id="pvHint1" style="margin-bottom:20px;"></div>
+    <div class="pv-hint" id="pvHint1" style="margin-bottom:14px;"></div>
 
-    <!-- 인증번호 입력 -->
-    <div data-i18n="mp_sub.pv_label_code" style="font-family:var(--font-main);font-size:8px;font-weight:700;letter-spacing:.2em;text-transform:uppercase;color:#aaa;margin-bottom:8px;">인증번호</div>
-    <input class="pv-input" id="pvCodeInput" type="tel" inputmode="numeric" maxlength="6" data-i18n-ph="mp_sub.pv_ph_code" placeholder="6자리 입력" style="margin-bottom:6px;">
-    <div class="pv-hint" id="pvHint2" style="margin-bottom:24px;"></div>
+    <!-- 인증번호 입력 — 🆕 2026.08: 미사용(숨김). 인증 도입 시 다시 노출 -->
+    <div data-i18n="mp_sub.pv_label_code" style="display:none;">인증번호</div>
+    <input class="pv-input" id="pvCodeInput" type="tel" inputmode="numeric" maxlength="6" data-i18n-ph="mp_sub.pv_ph_code" placeholder="6자리 입력" style="display:none;">
+    <div class="pv-hint" id="pvHint2" style="display:none;"></div>
 
-    <button class="pv-btn" onclick="pvVerifyCode()" data-i18n="mp_sub.pv_btn_confirm">확인</button>
+    <div style="font-size:11px;color:#b5ad9e;line-height:1.7;margin-bottom:20px;" data-i18n="mp_sub.pv_notice">예약 확정 안내가 이 번호로 발송됩니다.<br>정확히 입력해 주세요.</div>
+
+    <button class="pv-btn" onclick="pvSavePhone()" data-i18n="mp_sub.pv_btn_confirm">등록</button>
   </div>
 </div>
 
@@ -11117,8 +11120,8 @@ window.onerror = function(msg, src, line, col, err) {
 // ════════════════════════════════════════════════
 // DATA
 // ════════════════════════════════════════════════
-var VALID_CODE = '112211';
-var VALID_PHONE = '000000';
+// 🆕 2026.08: 개발 초기 하드코딩 값(VALID_CODE '112211' / VALID_PHONE '000000') 제거.
+//   어디에서도 참조하지 않는 죽은 코드였고, 실서비스에 테스트 값이 남아 있을 이유가 없다.
 
 // ════ 앱 데이터 저장소 (localStorage 연동) ════
 // restaurantDB: { id, name, address, genre, photo }
@@ -21002,40 +21005,66 @@ function formatPhoneInput(el){
   else if(v.length<=7) el.value=v.slice(0,3)+'-'+v.slice(3);
   else el.value=v.slice(0,3)+'-'+v.slice(3,7)+'-'+v.slice(7,11);
 }
-function pvSendCode(){
-  var ph=document.getElementById('pvPhoneInput').value.replace(/-/g,'');
-  if(ph.length<10){ document.getElementById('pvHint1').textContent=(typeof t==='function')?t('mp_sub.pv_msg_invalid_phone'):'올바른 번호를 입력해주세요'; return; }
-  document.getElementById('pvHint1').textContent=((typeof t==='function')?t('mp_sub.pv_msg_sent'):'인증번호가 발송되었습니다')+' (테스트: 000000)';
-  document.getElementById('pvHint1').style.color='#3a7a3a';
-  var sb=document.getElementById('pvSendBtn');
-  sb.setAttribute('data-i18n','mp_sub.pv_btn_resend');
-  sb.textContent=(typeof t==='function')?t('mp_sub.pv_btn_resend'):'재발송';
-  document.getElementById('pvCodeInput').focus();
-}
-function pvVerifyCode(){
-  var code=document.getElementById('pvCodeInput').value.trim();
-  var ph=document.getElementById('pvPhoneInput').value.replace(/-/g,'');
-  if(ph.length<10){ document.getElementById('pvHint1').textContent=(typeof t==='function')?t('mp_sub.pv_msg_invalid_phone'):'번호를 먼저 입력하고 발송해주세요'; document.getElementById('pvHint1').style.color='#9B1C1C'; return; }
-  if(!code){ document.getElementById('pvHint2').textContent=(typeof t==='function')?t('mp_sub.pv_msg_enter_code'):'인증번호를 입력해주세요'; document.getElementById('pvHint2').style.color='#9B1C1C'; return; }
-  if(code==='000000'){
-    _phoneVerified=true;
+// 🆕 2026.08: SMS 인증 미제공 — 발송 버튼은 숨겨져 있고 이 함수는 호출되지 않는다.
+//   (구버전 캐시에서 호출될 수 있어 안전하게 남겨둠. 가짜 인증번호 안내는 제거)
+function pvSendCode(){ if(typeof pvSavePhone==='function') pvSavePhone(); }
+// 🆕 2026.08: 휴대폰 "인증" → "등록" 으로 전환.
+//   기존 구현은 인증번호를 실제로 발송하지 않고 '000000' 하드코딩으로 통과시켰다.
+//   인증하지 않은 것을 인증했다고 표시하는 문제가 있어, 실제 동작대로 '번호 등록'으로 바꾼다.
+//   · 형식 검증(010 + 11자리)만 수행하고 profiles.phone 에 저장한다.
+//   · 기존 구현은 서버 저장조차 하지 않아 새로고침하면 번호가 사라졌다 — 함께 수정.
+//   ※ 라온 간편인증(CI 수신) 도입 시 이 자리에서 인증 결과의 번호를 채우고
+//     배지를 '인증됨'으로 되돌리면 된다.
+function pvSavePhone(){
+  var hint = document.getElementById('pvHint1');
+  var raw  = String((document.getElementById('pvPhoneInput')||{}).value||'');
+  var ph   = raw.replace(/[^0-9]/g,'');
+  function _err(msg){
+    if(hint){ hint.textContent = msg; hint.style.color = '#9B1C1C'; }
+  }
+  if (ph.length !== 11 || ph.slice(0,3) !== '010') {
+    _err((typeof t==='function') ? t('mp_sub.pv_msg_invalid_phone') : '010으로 시작하는 11자리를 입력해주세요');
+    return;
+  }
+  var pretty = ph.slice(0,3) + '-' + ph.slice(3,7) + '-' + ph.slice(7);
+
+  var _apply = function(){
+    _phoneVerified = true;              // 배지 상태 플래그 (등록됨)
     savePhoneVerified();
     closePhoneVerify();
-    var ph=document.getElementById('pvPhoneInput').value;
-    var badge=document.getElementById('mpPhoneBadge');
-    badge.setAttribute('data-i18n','my_page.verified');
-    badge.textContent=(typeof t==='function')?t('my_page.verified'):'인증완료';
-    badge.className='mp-phone-badge verified';badge.onclick=null;
-    document.getElementById('mpPhoneText').textContent=ph;
-    // 편집 페이지에서 호출된 경우 편집 입력란도 업데이트
-    var pePhone=document.getElementById('pePhoneDisplay');
-    if(pePhone) pePhone.value=ph;
-    window._phoneVerifyCalledFrom=null;
-    showToast('✓', (typeof t==='function'?t('toast.verify_done_title'):'인증 완료'), (typeof t==='function'?t('toast.verify_done_msg'):'본인 인증이 완료되었습니다'));
+    var badge = document.getElementById('mpPhoneBadge');
+    if (badge) {
+      badge.setAttribute('data-i18n','my_page.verified');
+      badge.textContent = (typeof t==='function') ? t('my_page.verified') : '등록됨';
+      badge.className = 'mp-phone-badge verified';
+      badge.onclick = null;
+    }
+    var txt = document.getElementById('mpPhoneText');
+    if (txt) txt.textContent = pretty;
+    var pePhone = document.getElementById('pePhoneDisplay');   // 편집 페이지에서 호출된 경우
+    if (pePhone) pePhone.value = pretty;
+    if (typeof _currentUserPhone !== 'undefined') _currentUserPhone = pretty;
+    window._phoneVerifyCalledFrom = null;
+    showToast('✓', (typeof t==='function'?t('toast.verify_done_title'):'등록 완료'),
+                   (typeof t==='function'?t('toast.verify_done_msg'):'휴대폰 번호가 등록되었습니다'));
+  };
+
+  // profiles.phone 저장 — 실패해도 화면은 반영하되 저장 실패를 알린다.
+  if (window.sb) {
+    window.sb.auth.getUser().then(function(ar){
+      var u = ar && ar.data && ar.data.user;
+      if (!u) { _apply(); return; }
+      window.sb.from('profiles').update({ phone: pretty }).eq('id', u.id).then(function(r){
+        if (r && r.error) {
+          console.warn('[phone] 저장 실패:', r.error);
+          showToast('⚠','저장 실패','휴대폰 번호를 저장하지 못했습니다 — 잠시 후 다시 시도해주세요');
+          return;
+        }
+        _apply();
+      });
+    }).catch(function(){ _apply(); });
   } else {
-    document.getElementById('pvHint2').textContent=(typeof t==='function')?t('mp_sub.pv_msg_wrong_code'):'인증번호가 올바르지 않습니다';
-    document.getElementById('pvHint2').style.color='#9B1C1C';
-    document.getElementById('pvCodeInput').value='';
+    _apply();
   }
 }
 
@@ -30525,8 +30554,8 @@ var TRANSLATIONS = {
       menu_profile:'프로필 편집',
       account:'Account',
       edit_info:'회원정보 변경',
-      verify:'인증하기',
-      verified:'인증 완료',
+      verify:'번호 등록',
+      verified:'등록됨',
       deposit_section:'예치금',
       deposit_hist:'예치금 내역',
       ticket_hist:'티켓 구매 내역',
@@ -30776,15 +30805,16 @@ var TRANSLATIONS = {
     // 🆕 마이페이지 하위 화면들
     mp_sub: {
       // 핸드폰 인증 팝업
-      pv_title:'본인 인증',
+      pv_title:'휴대폰 번호 등록',
       pv_label_phone:'핸드폰 번호',
       pv_ph_phone:'010-0000-0000',
       pv_btn_send:'발송',
       pv_btn_resend:'재발송',
       pv_label_code:'인증번호',
       pv_ph_code:'6자리 입력',
-      pv_btn_confirm:'확인',
-      pv_msg_invalid_phone:'번호를 먼저 입력하고 발송해주세요',
+      pv_btn_confirm:'등록',
+      pv_msg_invalid_phone:'010으로 시작하는 11자리를 입력해주세요',
+      pv_notice:'예약 확정 안내가 이 번호로 발송됩니다.<br>정확히 입력해 주세요.',
       pv_msg_enter_code:'인증번호를 입력해주세요',
       pv_msg_wrong_code:'인증번호가 올바르지 않습니다',
       pv_msg_sent:'인증번호가 발송되었습니다',
@@ -31133,7 +31163,7 @@ var TRANSLATIONS = {
       // 예약·환불
       refund_done_title:'반환 완료',
       profile_save_title:'변경 완료', profile_save_msg:'회원정보가 저장되었습니다',
-      verify_done_title:'인증 완료', verify_done_msg:'본인 인증이 완료되었습니다',
+      verify_done_title:'등록 완료', verify_done_msg:'휴대폰 번호가 등록되었습니다',
       // 갤러리/업로드
       max_gallery_title:'최대', max_gallery_msg:'갤러리는 최대 9장까지 추가 가능해요',
       upload_done_title:'업로드 완료',
@@ -31294,8 +31324,8 @@ var TRANSLATIONS = {
       menu_profile:'Edit Profile',
       account:'Account',
       edit_info:'Edit Profile',
-      verify:'Verify',
-      verified:'Verified',
+      verify:'Add Number',
+      verified:'Registered',
       deposit_section:'Deposit',
       deposit_hist:'Deposit History',
       ticket_hist:'Ticket Purchase History',
@@ -31537,15 +31567,16 @@ var TRANSLATIONS = {
     // 🆕 My Page sub-screens
     mp_sub: {
       // Phone verification popup
-      pv_title:'Identity Verification',
+      pv_title:'Register Phone Number',
       pv_label_phone:'Phone Number',
       pv_ph_phone:'010-0000-0000',
       pv_btn_send:'Send',
       pv_btn_resend:'Resend',
       pv_label_code:'Verification Code',
       pv_ph_code:'Enter 6 digits',
-      pv_btn_confirm:'Confirm',
-      pv_msg_invalid_phone:'Please enter your number first',
+      pv_btn_confirm:'Register',
+      pv_msg_invalid_phone:'Enter an 11-digit number starting with 010',
+      pv_notice:'Reservation confirmations are sent to this number.<br>Please enter it correctly.',
       pv_msg_enter_code:'Please enter the verification code',
       pv_msg_wrong_code:'The verification code is incorrect',
       pv_msg_sent:'Verification code sent',
@@ -31889,7 +31920,7 @@ var TRANSLATIONS = {
       card_primary_done_title:'Primary Card', card_primary_done_msg:'Primary card updated',
       refund_done_title:'Refund Complete',
       profile_save_title:'Saved', profile_save_msg:'Your profile has been saved',
-      verify_done_title:'Verified', verify_done_msg:'Identity verification complete',
+      verify_done_title:'Registered', verify_done_msg:'Your phone number has been saved',
       max_gallery_title:'Maximum', max_gallery_msg:'Up to 9 photos in the gallery',
       upload_done_title:'Upload Complete',
       remove_done_title:'Removed',
@@ -32045,7 +32076,7 @@ TRANSLATIONS.ja = {
     menu_profile:'プロフィール編集',
     account:'Account',
     edit_info:'プロフィール編集',
-    verify:'認証',
+    verify:'番号登録',
     verified:'認証済み',
     deposit_section:'デポジット',
     deposit_hist:'デポジット履歴',
@@ -32063,15 +32094,16 @@ TRANSLATIONS.ja = {
     group_settings:'設定',
   },
   mp_sub: {
-    pv_title:'本人認証',
+    pv_title:'携帯番号の登録',
     pv_label_phone:'電話番号',
     pv_ph_phone:'010-0000-0000',
     pv_btn_send:'送信',
     pv_btn_resend:'再送',
     pv_label_code:'認証コード',
     pv_ph_code:'6桁を入力',
-    pv_btn_confirm:'確認',
-    pv_msg_invalid_phone:'番号を先に入力して送信してください',
+    pv_btn_confirm:'登録',
+    pv_msg_invalid_phone:'010で始まる11桁を入力してください',
+    pv_notice:'予約確定のご案内はこの番号に送信されます。<br>正確にご入力ください。',
     pv_msg_enter_code:'認証コードを入力してください',
     pv_msg_wrong_code:'認証コードが正しくありません',
     pv_msg_sent:'認証コードを送信しました',
@@ -32603,7 +32635,7 @@ TRANSLATIONS.ja = {
     card_primary_done_title:'メインカード', card_primary_done_msg:'メインカードを変更しました',
     refund_done_title:'返金完了',
     profile_save_title:'保存完了', profile_save_msg:'プロフィールを保存しました',
-    verify_done_title:'認証完了', verify_done_msg:'本人認証が完了しました',
+    verify_done_title:'登録完了', verify_done_msg:'携帯番号が登録されました',
     max_gallery_title:'上限', max_gallery_msg:'ギャラリーは最大9枚まで追加できます',
     upload_done_title:'アップロード完了',
     remove_done_title:'削除',
