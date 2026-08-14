@@ -66,13 +66,47 @@
   window.SUPABASE_URL = SUPABASE_URL;
   window.SUPABASE_ANON_KEY = SUPABASE_KEY;
 
-  window.sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  // 🆕 2026.08: Supabase SDK 로드 실패 방어.
+  //   supabase 전역은 unpkg CDN 에서 온다. CDN 이 느리거나 막히면 여기서
+  //   ReferenceError 가 나면서 이 스크립트 블록 전체가 죽고, window.sb 가
+  //   만들어지지 않아 앱이 검은 화면에서 멈춘다.
+  //   (서비스워커 버전이 바뀌면 캐시가 비워져 CDN 을 다시 받으므로 노출 구간이 있다)
+  //   → 폴백 CDN 으로 한 번 더 시도하고, 그래도 실패하면 사용자에게 알린다.
+  function _initSb(){
+    if (typeof supabase === 'undefined' || !supabase || !supabase.createClient) return false;
+    window.sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+    return true;
+  }
+  function _sbFailNotice(){
+    try {
+      var el = document.createElement('div');
+      el.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#000;color:#f5f3ef;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px;text-align:center;font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR",sans-serif;';
+      el.innerHTML =
+          '<div style="font-size:34px;margin-bottom:14px;">📡</div>'
+        + '<div style="font-size:15px;font-weight:700;margin-bottom:8px;">연결에 실패했습니다</div>'
+        + '<div style="font-size:12.5px;line-height:1.8;color:rgba(245,243,239,.6);margin-bottom:24px;">'
+        + '네트워크 상태를 확인한 뒤 다시 시도해 주세요.<br>Please check your connection and try again.</div>'
+        + '<button onclick="location.reload()" style="padding:13px 30px;background:#5C0A14;border:none;border-radius:11px;color:#fff;font-size:13px;font-weight:700;cursor:pointer;">다시 시도 / Retry</button>';
+      document.body.appendChild(el);
+    } catch(e){}
+  }
+  if (!_initSb()) {
+    console.warn('[boot] Supabase SDK 미로드 — 폴백 CDN 재시도');
+    var _fb = document.createElement('script');
+    _fb.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
+    _fb.onload  = function(){
+      if (_initSb()) { console.warn('[boot] 폴백 CDN 성공 — 새로고침'); location.reload(); }
+      else _sbFailNotice();
+    };
+    _fb.onerror = function(){ _sbFailNotice(); };
+    document.head.appendChild(_fb);
+    return;   // sb 없이 아래 코드를 실행하면 연쇄 오류가 난다
+  }
 
-  window.sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-
-// 🔒 슈퍼어드민 비밀번호 (난독화 저장)
-// ⚠️ 본인 비밀번호 문자를 하나씩 배열로!
-window._sa_p = ['w','o','o','1','4','7','8','5','2','!'];
+// 🔒 슈퍼어드민 Supabase 비밀번호는 이 파일에 두지 않는다.
+//   index.html 은 taam-app.vercel.app 에서 그대로 서빙되는 공개 파일이라,
+//   문자를 배열로 쪼개도 소스 보기 한 번이면 그대로 읽힌다(난독화가 아니다).
+//   → _getSaCred('p') 가 기기별 localStorage 에서 읽고, 없으면 1회 입력받는다.
 
   window.sb.from('restaurants').select('*', { count: 'exact', head: true })
     .then(function(res){
@@ -14966,13 +15000,17 @@ function _getSaCred(type){
     return p1 + '@' + p2;
   }
   if(type === 'p'){
-    // 비밀번호: window._sa_p 배열에서 복원
-    var raw = window._sa_p || [];
-    if(raw.length === 0){
-      console.error('⚠ 관리자 인증 초기화 필요');
-      return '';
-    }
-    return raw.join('');
+    // 🔒 비밀번호는 배포 파일에 넣지 않는다 (공개 URL 로 그대로 노출된다).
+    //   이 기기에 저장된 값을 쓰고, 없으면 한 번만 입력받아 저장한다.
+    //   여기까지 오는 경로는 슈퍼어드민 PIN 통과 후뿐이라 일반 회원에게는 안 뜬다.
+    try {
+      var pw = localStorage.getItem('taamSaPw');
+      if (pw) return pw;
+      pw = window.prompt('슈퍼어드민 Supabase 비밀번호\n(이 기기에만 저장됩니다)');
+      if (pw) { localStorage.setItem('taamSaPw', pw); return pw; }
+    } catch(e){}
+    console.warn('⚠ 슈퍼어드민 비밀번호 미입력 — Supabase Auth 로그인 생략');
+    return '';
   }
   return '';
 }
@@ -20698,7 +20736,20 @@ function _prRenderVenueInfo(vid){
 
   var awards  = (_prAwardIndex||{})[vid] || [];
   // 큐레이션(v) 우선 → 직접입력(pr.custom_*) 폴백 — 동일 포맷
-  var desc    = v.style_summary_ko || v.holistic_signature_ko || pr.custom_desc || '';
+  // 🆕 2026.08 소개문 다국어.
+  //   큐레이션 카탈로그(venues/_index.json)의 요약은 한글 컬럼(_ko)만 있다.
+  //   해외 회원에게 한글을 그대로 노출하지 않도록, 번역본이 있는 파트너 소개문을
+  //   우선 쓰고, 번역본이 없으면 소개 블록 자체를 생략한다.
+  //   (파트너 관리 화면에서 소개를 입력해두면 일괄 번역이 _en/_jp 를 채운다)
+  var _txLang = window._tkCurrentLang || 'ko';
+  var desc;
+  if (_txLang === 'ko') {
+    desc = v.style_summary_ko || v.holistic_signature_ko || pr.custom_desc || '';
+  } else {
+    var _dTr = (typeof pickI18nField === 'function') ? pickI18nField(pr, 'custom_desc') : '';
+    // pickI18nField 는 번역이 없으면 한글로 폴백하므로 원문과 같으면 "번역 없음"으로 본다
+    desc = (_dTr && _dTr !== (pr.custom_desc || '')) ? _dTr : '';
+  }
   var genre   = v.genre_main ? _resvGenreLabel(v.genre_main) : (pr.custom_genre || '');
   var addr    = v.address_kr || v.address_jp || [v.city_ko||v.city, v.neighborhood_ko].filter(Boolean).join(' ') || pr.custom_address || '';
   var phone   = v.phone || pr.custom_phone || '';
@@ -20726,7 +20777,7 @@ function _prRenderVenueInfo(vid){
     html += '<a href="'+esc(tabelog)+'" target="_blank" rel="noopener" style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-radius:13px;background:linear-gradient(135deg,#3a1414,#5C0A14);color:#fff;text-decoration:none;margin-bottom:10px;box-shadow:0 4px 14px rgba(92,10,20,.22);">'
       + '<span style="display:flex;flex-direction:column;gap:2px;">'
       +   '<span style="font-size:9px;font-weight:800;letter-spacing:.2em;opacity:.6;text-transform:uppercase;">Tabelog</span>'
-      +   '<span style="font-size:14px;font-weight:800;">타베로그에서 보기</span>'
+      +   '<span style="font-size:14px;font-weight:800;">'+t('resv.view_tabelog','타베로그에서 보기')+'</span>'
       + '</span>'
       + '<span style="font-size:18px;opacity:.85;">→</span>'
       + '</a>';
@@ -20750,8 +20801,8 @@ function _prRenderVenueInfo(vid){
 
   // 보조 링크 — 지도 / 인스타
   var links = [];
-  if(mapUrl) links.push(['🗺','지도', mapUrl]);
-  if(insta)  links.push(['📷','인스타그램', insta]);
+  if(mapUrl) links.push(['🗺', t('resv.map','지도'), mapUrl]);
+  if(insta)  links.push(['📷', t('resv.instagram','인스타그램'), insta]);
   if(links.length){
     html += '<div style="display:flex;gap:8px;">';
     links.forEach(function(l){
@@ -30378,36 +30429,38 @@ function tuUpdatePolicyD30() {
   el.textContent = d30 || '날짜 미지정';
 }
 
-function buildPolicyClauses(t) {
+// ⚠ 인자 이름을 tk 로 둔다 — 여기서 전역 t(key) 를 쓰기 때문에 t 로 받으면 가려진다.
+function buildPolicyClauses(tk) {
   // 배열로 반환 [{num, text}]
   var clauses = [];
-  var cp = t.cancelPolicy;
+  var cp = tk.cancelPolicy;
   if (!cp) return clauses;
+  // 🆕 2026.08: 취소 규정도 언어 전환 대상 — 하드코딩 한글을 t() 로 교체
   if (cp.p1) clauses.push({
     num:'CLAUSE 01',
-    text:'티켓 금액 중 대행비는 어떠한 경우에도 환불되지 않습니다. 단, 티켓 구매 10분 이내 취소시에는 전액 환불, 이외에는 전면 불가합니다.'
+    text: t('policy.p1')
   });
   if (cp.p2) {
-    var d30 = tuCalcD30(t.date) || '';
+    var d30 = tuCalcD30(tk.date) || '';
     clauses.push({
       num:'CLAUSE 02',
-      text:'해당 티켓은 예약일 30일 전까지인 <strong>'+d30+'</strong>까지는 대행비 제외 100% 환불 가능하고, 이후부터는 환불 불가능한 티켓입니다.'
+      text: t('policy.p2_a')+'<strong>'+d30+'</strong>'+t('policy.p2_b')
     });
   }
   if (cp.p3) clauses.push({
     num:'CLAUSE 03',
-    text:'본 티켓은 양도 및 거래가 불가능하고 본 회사의 동의 없이 개인 판매하는 것을 금지하고 있습니다.'
+    text: t('policy.p3')
   });
   if (cp.extra && cp.extraText) clauses.push({
-    num:'기타',
+    num: t('policy.etc'),
     text: cp.extraText.replace(/\n/g,'<br>')
   });
   return clauses;
 }
 
-function renderPolicyClauses(t) {
-  var clauses = buildPolicyClauses(t);
-  if (!clauses.length) return '<div style="color:#bbb;font-size:12px;">취소 규정이 설정되지 않았습니다.</div>';
+function renderPolicyClauses(tk) {
+  var clauses = buildPolicyClauses(tk);
+  if (!clauses.length) return '<div style="color:#bbb;font-size:12px;">'+t('policy.none')+'</div>';
   return clauses.map(function(c){
     return '<div class="policy-clause"><div class="policy-clause-num">'+c.num+'</div>'+c.text+'</div>';
   }).join('');
@@ -31472,6 +31525,15 @@ var TRANSLATIONS = {
       discount:'할인',
       vat:'부가세',
     },
+    // 🆕 티켓 취소 규정 — 티켓 상세/구매 화면의 CLAUSE 블록
+    policy: {
+      none:'취소 규정이 설정되지 않았습니다.',
+      etc:'기타',
+      p1:'티켓 금액 중 대행비는 어떠한 경우에도 환불되지 않습니다. 단, 티켓 구매 10분 이내 취소시에는 전액 환불, 이외에는 전면 불가합니다.',
+      p2_a:'해당 티켓은 예약일 30일 전까지인 ',
+      p2_b:'까지는 대행비 제외 100% 환불 가능하고, 이후부터는 환불 불가능한 티켓입니다.',
+      p3:'본 티켓은 양도 및 거래가 불가능하고 본 회사의 동의 없이 개인 판매하는 것을 금지하고 있습니다.',
+    },
     deposit: {
       title:'예치금',
       balance:'예치금 잔액',
@@ -32239,6 +32301,14 @@ var TRANSLATIONS = {
       discount:'Discount',
       vat:'VAT',
     },
+    policy: {
+      none:'No cancellation policy has been set for this ticket.',
+      etc:'Other',
+      p1:'The reservation service fee is non-refundable under any circumstances. A full refund is available only if the ticket is cancelled within 10 minutes of purchase; no refund is possible thereafter.',
+      p2_a:'This ticket is 100% refundable excluding the reservation service fee until ',
+      p2_b:', which is 30 days before the reservation date. No refund is possible after that date.',
+      p3:'This ticket may not be transferred or resold. Private resale without our consent is prohibited.',
+    },
     deposit: {
       title:'Deposit',
       balance:'Deposit Balance',
@@ -32398,6 +32468,14 @@ TRANSLATIONS.ja = {
     g_beef:'牛肉', g_pork:'豚肉',
   },
   lang_sheet: { label:'LANGUAGE' },
+  policy: {
+    none:'このチケットにはキャンセル規定が設定されていません。',
+    etc:'その他',
+    p1:'チケット代金のうち予約代行手数料は、いかなる場合も返金されません。購入から10分以内のキャンセルに限り全額返金、それ以降は返金不可となります。',
+    p2_a:'このチケットは予約日の30日前にあたる ',
+    p2_b:' までは予約代行手数料を除き100%返金可能で、それ以降は返金不可となります。',
+    p3:'本チケットの譲渡・転売はできません。当社の同意なく個人間で販売することを禁止しています。',
+  },
   notif_sheet: {
     title:'NOTIFICATIONS',
     empty:'新しい通知はありません',
@@ -33094,6 +33172,12 @@ function t(key, fallback){
   }
   var found = lookup(TRANSLATIONS[lang] || {});
   if(found !== undefined) return found;
+  // 🆕 일본어 사전은 부분 사전이라 빠진 키가 많다. 한국어로 떨어뜨리기 전에 영어를 먼저 본다
+  //   — 해외 회원에게는 한글보다 영어가 훨씬 낫다.
+  if(lang === 'ja'){
+    var enFound = lookup(TRANSLATIONS.en || {});
+    if(enFound !== undefined) return enFound;
+  }
   // 한국어 fallback
   if(lang !== 'ko'){
     var koFound = lookup(TRANSLATIONS.ko || {});
@@ -33168,9 +33252,18 @@ window.taamTranslate = taamTranslate;
 //   일본어는 i18n_jp_approved=false 로 저장되어 화면에 나오지 않는다.
 //   슈퍼어드민이 검수 후 승인해야 노출된다 (일본 매장 표기 오류 방지).
 // ═══════════════════════════════════════════════════════════════
+// 🆕 중복 실행 가드 — 계보도 러너와 같은 이유.
+//   진행 토스트는 5건마다 뜨는데 건당 10초가 넘어 "멈춘 것처럼" 보인다.
+//   그 사이 다시 누르면 같은 행을 두 번 번역해 API 비용만 두 배가 된다.
+var _i18nBatchRunning = null;   // 실행 중인 label
+
 async function _i18nBatch(cfg){
   // cfg: { table, label, idCol, fields:[{ko, en, jp, ctx}], dryRun }
   if (!window.sb) { showToast('⚠','오류','서버 연결이 없습니다'); return; }
+  if (!cfg.dryRun && _i18nBatchRunning) {
+    showToast('⏳','이미 진행 중입니다', _i18nBatchRunning + ' 번역이 끝난 뒤 실행해주세요');
+    return;
+  }
   var idCol = cfg.idCol || 'id';
   var cols = [idCol, 'i18n_status_en'];   // 🆕 행 단위 완료 표시
   cfg.fields.forEach(function(f){ cols.push(f.ko, f.en, f.jp); });
@@ -33207,7 +33300,10 @@ async function _i18nBatch(cfg){
   if (targets.length === 0) { showToast('✓', cfg.label, '미번역 항목이 없습니다'); return; }
 
   showToast('⏳', cfg.label + ' 번역 시작', targets.length + '건 — 완료까지 몇 분 걸립니다');
+  _i18nBatchRunning = cfg.label;
+  _taamTxBarShow(cfg.label + ' 번역', 0, targets.length);
   var done = 0, fail = 0;
+  try {
   for (var i = 0; i < targets.length; i++) {
     var r = targets[i];
     var items = [];
@@ -33238,8 +33334,10 @@ async function _i18nBatch(cfg){
       if (up.error) { fail++; console.warn('[i18n] 저장 실패', r[idCol], up.error.message); }
       else done++;
     } catch(e) { fail++; console.warn('[i18n] 번역 실패', r[idCol], e && e.message); }
-    if ((i+1) % 5 === 0) showToast('⏳', cfg.label, (i+1) + ' / ' + targets.length + ' 진행 중…');
+    _taamTxBarShow(cfg.label + ' 번역', i+1, targets.length, done, fail);
   }
+  } finally { _i18nBatchRunning = null; }
+  _taamTxBarDone(done, fail, '—');
   showToast(fail ? '⚠' : '✓', cfg.label + ' 번역 완료',
     '성공 ' + done + '건' + (fail ? ' · 실패 ' + fail + '건 (콘솔 확인)' : '') +
     '\n일본어는 검수 후 노출됩니다');
@@ -33340,12 +33438,22 @@ async function aiTranslateNode(chefId, lineageId, opts){
     }
 
     // 4) update payload 구성
+    //   🆕 실제로 받아온 번역이 하나도 없으면 완료 표시(ai_draft)를 찍지 않는다.
+    //   찍어버리면 그 노드는 영영 한글로 남는데 대상 목록에서는 빠진다.
+    var got = 0;
     var newSec1 = Object.assign({}, sec1);
     var newSec2 = Object.assign({}, sec2);
-    if(tr.sec1_title){ newSec1.title_en = tr.sec1_title.en; newSec1.title_jp = tr.sec1_title.ja; }
-    if(tr.sec1_desc) { newSec1.desc_en  = tr.sec1_desc.en;  newSec1.desc_jp  = tr.sec1_desc.ja; }
-    if(tr.sec2_title){ newSec2.title_en = tr.sec2_title.en; newSec2.title_jp = tr.sec2_title.ja; }
-    if(tr.sec2_desc) { newSec2.desc_en  = tr.sec2_desc.en;  newSec2.desc_jp  = tr.sec2_desc.ja; }
+    if(tr.sec1_title){ newSec1.title_en = tr.sec1_title.en; newSec1.title_jp = tr.sec1_title.ja; got++; }
+    if(tr.sec1_desc) { newSec1.desc_en  = tr.sec1_desc.en;  newSec1.desc_jp  = tr.sec1_desc.ja;  got++; }
+    if(tr.sec2_title){ newSec2.title_en = tr.sec2_title.en; newSec2.title_jp = tr.sec2_title.ja; got++; }
+    if(tr.sec2_desc) { newSec2.desc_en  = tr.sec2_desc.en;  newSec2.desc_jp  = tr.sec2_desc.ja;  got++; }
+    if(tr.name) got++;
+    if(tr.sub)  got++;
+    if(got === 0){
+      console.warn('[aiTranslateNode] 번역 결과에 쓸 수 있는 항목이 없음 —', chefId, tr);
+      _toast('⚠','번역 결과 없음','다시 시도해주세요');
+      return false;
+    }
 
     var payload = {
       sec1_data: newSec1,
@@ -33404,6 +33512,12 @@ window.onClickTranslateNode = function(){
 //     window._taamTranslateAllChefs({ lineage: 'sugita' })     → 특정 계보만
 //     window._taamTranslateAllChefs({ dryRun: true })          → 대상만 카운트
 //   순차 호출 (rate limit 보호) + manual 보호 + 진행 토스트.
+// 🆕 2026.08: 중복 실행 가드.
+//   토스트는 5개마다 뜨는데 노드당 10~20초라 1분 넘게 아무 표시가 없을 수 있다.
+//   그 사이 버튼을 다시 누르면 루프가 하나 더 돌아 같은 노드를 두 번 번역했다
+//   (API 비용 2배 + 같은 row 를 동시에 update). 진행 상태를 전역에 두고 막는다.
+var _taamChefsTx = null;   // { running, done, total } 진행 중일 때만 객체
+
 async function _taamTranslateAllChefs(opts){
   opts = opts || {};
   var onlyMissing = opts.onlyMissing !== false; // 기본 true
@@ -33413,6 +33527,13 @@ async function _taamTranslateAllChefs(opts){
 
   if(!window.sb || !window.aiTranslateNode){
     console.warn('[일괄 번역] Supabase 또는 aiTranslateNode 미준비');
+    return null;
+  }
+
+  if(!dryRun && _taamChefsTx && _taamChefsTx.running){
+    var p = _taamChefsTx.done + '/' + _taamChefsTx.total;
+    console.warn('[일괄 번역] 이미 진행 중 —', p);
+    if(typeof showToast === 'function') showToast('⏳','이미 진행 중입니다', p + ' 처리 중 · 완료될 때까지 기다려주세요');
     return null;
   }
 
@@ -33435,11 +33556,14 @@ async function _taamTranslateAllChefs(opts){
     // manual 보호 — 자동 번역 제외
     if(r.i18n_status_en === 'manual' || r.i18n_status_jp === 'manual') return false;
     if(!onlyMissing) return true;
-    // onlyMissing — name_en 비어있거나 status=pending 만 대상
-    var hasEn = r.name_en && String(r.name_en).trim() !== '';
-    var hasJp = r.name_jp && String(r.name_jp).trim() !== '';
-    if(hasEn && hasJp && r.i18n_status_en !== 'pending') return false;
-    return true;
+    // 🆕 2026.08 수정: 판정 기준을 "행 단위 상태" 하나로 통일한다.
+    //   예전에는 name_en / name_jp 가 둘 다 채워져야 완료로 봤다. 그런데 AI 가
+    //   이름을 못 돌려주는 노드(로마자 표기가 애매한 경우 등)가 있으면 그 행은
+    //   sec1/sec2 가 다 번역돼도 영원히 대상으로 남아 매번 다시 처리됐다.
+    //   → i18n_status_en 이 pending/빈값일 때만 대상. 원문을 고치면 저장 시
+    //     status 가 pending 으로 돌아가 자동으로 재번역된다.
+    var st = (r.i18n_status_en == null ? '' : String(r.i18n_status_en).trim());
+    return st === '' || st === 'pending';
   });
 
   var skipped = rows.length - targets.length;
@@ -33477,33 +33601,692 @@ async function _taamTranslateAllChefs(opts){
 
   // 4. 순차 호출
   if(typeof showToast === 'function') showToast('🤖','일괄 번역 시작', targets.length+'개 노드');
+  _taamChefsTx = { running: true, done: 0, total: targets.length };
+  _taamTxBarShow('계보도 번역', 0, targets.length);
   var ok = 0, fail = 0, t0 = Date.now();
-  for(var i=0; i<targets.length; i++){
-    var t = targets[i];
-    var prog = (i+1)+'/'+targets.length;
-    console.log('[일괄 번역] '+prog+' →', t.lineage_id, '/', t.id);
-    // 토스트는 5개마다 (시끄러움 방지)
-    if((i % 5 === 0 || i === targets.length-1) && typeof showToast === 'function'){
-      showToast('🤖','진행 중', prog+' · '+t.lineage_id+'/'+t.id);
+  try {
+    for(var i=0; i<targets.length; i++){
+      var t = targets[i];
+      var prog = (i+1)+'/'+targets.length;
+      console.log('[일괄 번역] '+prog+' →', t.lineage_id, '/', t.id);
+      try {
+        var r = await window.aiTranslateNode(t.id, t.lineage_id, { silent: true });
+        if(r) ok++; else fail++;
+      } catch(e){ console.error('[일괄 번역] 항목 실패:', t.id, e); fail++; }
+      _taamChefsTx.done = i+1;
+      // 사라지는 토스트 대신 항상 떠 있는 진행 바를 갱신한다 (노드당 10~20초라
+      // 토스트만으로는 "돌고 있는지" 알 수 없어 중복 실행을 유발했다)
+      _taamTxBarShow('계보도 번역', i+1, targets.length, ok, fail);
+      if(i < targets.length - 1){
+        await new Promise(function(res){ setTimeout(res, gapMs); });
+      }
     }
-    try {
-      var r = await window.aiTranslateNode(t.id, t.lineage_id, { silent: true });
-      if(r) ok++; else fail++;
-    } catch(e){ console.error('[일괄 번역] 항목 실패:', t.id, e); fail++; }
-    if(i < targets.length - 1){
-      await new Promise(function(res){ setTimeout(res, gapMs); });
-    }
+  } finally {
+    _taamChefsTx = null;
   }
   var elapsedSec = ((Date.now() - t0) / 1000).toFixed(1);
   console.log('[일괄 번역] 완료 — ok:', ok, '/ fail:', fail, '/ 소요:', elapsedSec, '초');
+  _taamTxBarDone(ok, fail, elapsedSec);
   if(typeof showToast === 'function'){
     showToast('✓','일괄 번역 완료', ok+' 성공 / '+fail+' 실패 / '+elapsedSec+'초');
   }
   return { total: targets.length, ok: ok, fail: fail, elapsedSec: parseFloat(elapsedSec) };
 }
+
+// ─── 일괄 번역 진행 바 (슈퍼어드민 전용, 화면 하단 고정) ───
+//   토스트는 몇 초 뒤 사라져서 장시간 작업의 상태 표시로는 부적합하다.
+function _taamTxBarEl(){
+  var el = document.getElementById('taamTxBar');
+  if (el) return el;
+  el = document.createElement('div');
+  el.id = 'taamTxBar';
+  el.setAttribute('data-lang-lock','ko');
+  el.style.cssText = 'position:fixed;left:12px;right:12px;bottom:14px;z-index:99999;'
+    + 'background:rgba(20,16,14,.96);color:#fff;border:1px solid rgba(200,169,110,.35);'
+    + 'border-radius:12px;padding:10px 14px;font-size:12px;font-family:var(--font-main);'
+    + 'box-shadow:0 8px 28px rgba(0,0,0,.4);display:flex;align-items:center;gap:10px;';
+  el.innerHTML = '<span id="taamTxBarTxt" style="flex:1;"></span>'
+    + '<span id="taamTxBarPct" style="font-weight:800;color:#c8a96e;"></span>';
+  document.body.appendChild(el);
+  return el;
+}
+function _taamTxBarShow(label, done, total, ok, fail){
+  try{
+    var el = _taamTxBarEl();
+    el.style.display = 'flex';
+    var pct = total ? Math.round(done*100/total) : 0;
+    document.getElementById('taamTxBarTxt').textContent =
+      label + ' ' + done + '/' + total
+      + (typeof ok === 'number' ? '  (성공 '+ok+' · 실패 '+fail+')' : '')
+      + ' — 창을 닫지 마세요';
+    document.getElementById('taamTxBarPct').textContent = pct + '%';
+  }catch(e){}
+}
+function _taamTxBarDone(ok, fail, sec){
+  try{
+    var el = document.getElementById('taamTxBar');
+    if(!el) return;
+    document.getElementById('taamTxBarTxt').textContent = '번역 완료 — 성공 '+ok+' · 실패 '+fail+' · '+sec+'초';
+    document.getElementById('taamTxBarPct').textContent = '100%';
+    setTimeout(function(){ if(el) el.style.display = 'none'; }, 8000);
+  }catch(e){}
+}
 window._taamTranslateAllChefs = _taamTranslateAllChefs;
 
 // 페이지 내 모든 data-i18n 요소를 현재 언어에 맞게 갱신
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026.08: 런타임 한글 스윕 (TX 레이어)
+//
+// 왜 필요한가
+//   이 앱은 화면 대부분을 JS 문자열로 조립해 innerHTML 로 밀어 넣는다.
+//   data-i18n / applyI18n() 은 "이미 문서에 있는 정적 마크업"만 잡을 수 있어서,
+//   동적으로 만들어진 한글(취소규정 CLAUSE, 타베로그·지도 버튼, 각종 토스트 …)은
+//   언어를 바꿔도 그대로 한글로 남았다.
+//   호출부 수백 곳을 t() 로 바꾸는 건 회귀 위험이 크고 오래 걸린다.
+//   대신 "그려진 뒤 텍스트 노드를 훑어 사전에 있는 문구를 치환"하는 레이어를 둔다.
+//
+// 안전장치
+//   · 현재 언어가 ko 면 즉시 return — 국내 회원에게는 비용이 0이다.
+//   · data-lang-lock="ko" (슈퍼어드민 화면) 과 data-no-tx 하위는 절대 건드리지 않는다.
+//   · 정확히 일치하는 문구를 먼저 본다. 그다음 "5자 이상" 문구만 부분 치환한다
+//     — 짧은 낱말을 부분 치환하면 회원 이름·매장명 안에서 오작동한다.
+//   · 치환은 텍스트 노드 값과 placeholder 만 바꾼다. DOM 구조는 손대지 않으므로
+//     MutationObserver 가 자기 자신을 다시 깨우지 않는다.
+// ═══════════════════════════════════════════════════════════════
+
+// KO : [EN, JA]
+var TX_MAP = {
+  // ── 공통 상태·동작 ──
+  '불러오는 중...':['Loading...','読み込み中...'],
+  '불러오는 중…':['Loading…','読み込み中…'],
+  '로딩 중...':['Loading...','読み込み中...'],
+  '처리 중...':['Processing...','処理中...'],
+  '저장 중...':['Saving...','保存中...'],
+  '확인 중...':['Checking...','確認中...'],
+  '검색 중...':['Searching...','検索中...'],
+  '업로드 중…':['Uploading…','アップロード中…'],
+  '요청 중…':['Sending…','送信中…'],
+  '진행 중':['In progress','進行中'],
+  '준비 중입니다':['Coming soon','準備中です'],
+  '준비 중':['Coming soon','準備中'],
+  '곧 공개됩니다':['Coming soon','近日公開'],
+  '곧 공개될 예정입니다.<br>조금만 기다려주세요.':['Coming soon.<br>Thank you for your patience.','近日公開予定です。<br>今しばらくお待ちください。'],
+  '다시 시도해주세요':['Please try again','もう一度お試しください'],
+  '오류가 발생했습니다.':['Something went wrong.','エラーが発生しました。'],
+  '오류가 발생했어요':['Something went wrong','エラーが発生しました'],
+  '알 수 없는 오류':['Unknown error','不明なエラー'],
+  '서버 연결 오류':['Server connection error','サーバー接続エラー'],
+  '서버 연결이 필요해요':['A server connection is required','サーバー接続が必要です'],
+  '서버 오류, 다시 시도해주세요':['Server error. Please try again','サーバーエラー。もう一度お試しください'],
+  '서버 오류':['Server error','サーバーエラー'],
+  '권한 없음':['No permission','権限がありません'],
+  '권한이 없어요':['You do not have permission','権限がありません'],
+  '권한 오류':['Permission error','権限エラー'],
+  '입력 오류':['Invalid input','入力エラー'],
+  '입력 필요':['Input required','入力が必要です'],
+  '선택 필요':['Selection required','選択が必要です'],
+  '변경 완료':['Updated','変更しました'],
+  '저장 완료':['Saved','保存しました'],
+  '삭제 완료':['Deleted','削除しました'],
+  '추가 완료':['Added','追加しました'],
+  '취소 완료':['Cancelled','キャンセルしました'],
+  '등록 완료':['Registered','登録しました'],
+  '복사 완료':['Copied','コピーしました'],
+  '생성 완료':['Created','作成しました'],
+  '완료':['Done','完了'],
+  '실패':['Failed','失敗'],
+  '없음':['None','なし'],
+  '전체':['All','すべて'],
+  '기타':['Other','その他'],
+  '미지정':['Not set','未設定'],
+  '미정':['TBD','未定'],
+  '알 수 없음':['Unknown','不明'],
+  '결과 없음':['No results','該当なし'],
+  '검색 결과 없음':['No results found','検索結果がありません'],
+  '검색 결과가 없습니다.':['No results found.','検索結果がありません。'],
+  '조건에 맞는 매장이 없습니다.':['No restaurants match your filters.','条件に合う店舗がありません。'],
+
+  // ── 인증 · 로그인 · 가입 ──
+  '로그인':['Sign in','ログイン'],
+  '로그인 중...':['Signing in...','ログイン中...'],
+  '로그인 필요':['Sign-in required','ログインが必要です'],
+  '로그인이 필요합니다.':['Please sign in.','ログインしてください。'],
+  '로그인 실패:':['Sign-in failed:','ログイン失敗:'],
+  '로그인 오류:':['Sign-in error:','ログインエラー:'],
+  '이메일 또는 비밀번호가 올바르지 않습니다':['Incorrect email or password','メールアドレスまたはパスワードが正しくありません'],
+  '이메일을 입력해주세요':['Please enter your email','メールアドレスを入力してください'],
+  '비밀번호를 입력해주세요':['Please enter your password','パスワードを入力してください'],
+  '비밀번호가 올바르지 않습니다':['Incorrect password','パスワードが正しくありません'],
+  '비밀번호가 일치하지 않습니다':['Passwords do not match','パスワードが一致しません'],
+  '비밀번호 확인이 일치하지 않습니다':['Password confirmation does not match','確認用パスワードが一致しません'],
+  '현재 비밀번호가 일치하지 않습니다':['Current password is incorrect','現在のパスワードが正しくありません'],
+  '새 비밀번호가 일치하지 않습니다':['New passwords do not match','新しいパスワードが一致しません'],
+  '비밀번호 조건을 충족하지 않습니다':['Password does not meet the requirements','パスワードの条件を満たしていません'],
+  '비밀번호 변경 완료':['Password changed','パスワードを変更しました'],
+  '비밀번호 저장 완료':['Password saved','パスワードを保存しました'],
+  '비밀번호가 저장되었습니다':['Your password has been saved','パスワードを保存しました'],
+  '다음 로그인 시 새 비밀번호 사용':['Use your new password from the next sign-in','次回のログインから新しいパスワードをご利用ください'],
+  '다음 로그인부터 이메일+비밀번호로 빠르게 로그인할 수 있습니다':['From your next visit you can sign in quickly with email and password','次回からメールアドレスとパスワードで素早くログインできます'],
+  '이름을 입력해주세요':['Please enter your name','お名前を入力してください'],
+  '휴대폰 번호를 입력해주세요':['Please enter your mobile number','携帯電話番号を入力してください'],
+  '휴대폰 번호를 정확히 입력해주세요':['Please enter a valid mobile number','正しい携帯電話番号を入力してください'],
+  '휴대폰 번호를 먼저 입력해주세요':['Please enter your mobile number first','先に携帯電話番号を入力してください'],
+  '이메일을 먼저 입력해주세요':['Please enter your email first','先にメールアドレスを入力してください'],
+  '인증번호를 입력해주세요':['Please enter the verification code','認証番号を入力してください'],
+  '인증번호가 올바르지 않습니다':['Incorrect verification code','認証番号が正しくありません'],
+  '인증번호 발송 중...':['Sending verification code...','認証番号を送信中...'],
+  '인증번호를 SMS로 발송했습니다':['Verification code sent by SMS','認証番号をSMSで送信しました'],
+  '인증 확인 중...':['Verifying...','確認中...'],
+  '인증 오류':['Verification error','認証エラー'],
+  '인증 처리 실패':['Verification failed','認証に失敗しました'],
+  '인증 완료':['Verified','認証完了'],
+  '인증완료':['Verified','認証済み'],
+  '인증하기':['Verify','認証する'],
+  '본인인증창을 여는 중...':['Opening identity verification...','本人確認画面を開いています...'],
+  '본인인증 실패':['Identity verification failed','本人確認に失敗しました'],
+  '본인 확인이 필요합니다':['Identity verification required','本人確認が必要です'],
+  '발송 실패:':['Send failed:','送信失敗:'],
+  '발송 오류':['Send error','送信エラー'],
+  '재전송':['Resend','再送信'],
+  '초대되지 않은 번호입니다. 초대코드로 먼저 가입해주세요.':['This number has not been invited. Please sign up with an invite code first.','招待されていない番号です。先に招待コードで登録してください。'],
+  '필수 약관에 모두 동의해주세요':['Please agree to all required terms','必須の規約すべてに同意してください'],
+  '약관 문서를 불러올 수 없습니다.':['Could not load the terms document.','規約を読み込めませんでした。'],
+  '탈퇴 처리된 회원입니다. 슈퍼어드민에게 문의해주세요.':['This account has been withdrawn. Please contact the administrator.','退会済みのアカウントです。管理者にお問い合わせください。'],
+  '초대 정보가 일치하지 않습니다':['Invitation details do not match','招待情報が一致しません'],
+  '검증 오류, 다시 시도해주세요':['Verification error. Please try again','検証エラー。もう一度お試しください'],
+  '이미 가입된 회원':['Already a member','登録済みの会員です'],
+  '로그인 화면으로 이동해주세요. 비밀번호 또는 OTP 로 로그인 가능합니다.':['Please go to the sign-in screen. You can sign in with a password or OTP.','ログイン画面へお進みください。パスワードまたはOTPでログインできます。'],
+  'TAAM 컨시어지에 초대되셨어요':['You have been invited to the TAAM concierge','TAAMコンシェルジュに招待されました'],
+  'TAAM 컨시어지에 오신 것을 환영합니다':['Welcome to the TAAM concierge','TAAMコンシェルジュへようこそ'],
+  '초대장 확인됨':['Invitation confirmed','招待状を確認しました'],
+  '다른 기기에서 로그인됨':['Signed in on another device','別の端末でログインされました'],
+  '영문 이름을 입력해주세요':['Please enter your name in English','英字でお名前を入力してください'],
+  '영문 알파벳, 공백, 하이픈만 입력 가능합니다':['Only letters, spaces and hyphens are allowed','英字・スペース・ハイフンのみ入力できます'],
+  '영문 이름이 등록되었습니다':['Your English name has been saved','英字のお名前を登録しました'],
+
+  // ── 알림 · 초대 ──
+  '알림':['Notifications','お知らせ'],
+  '받은 알림이 없어요':['No notifications yet','お知らせはまだありません'],
+  '받은 초대가 아직 없어요':['No invitations yet','招待はまだありません'],
+  '예약 초대':['Reservation invite','予約招待'],
+  '티켓 오픈':['Ticket open','チケット公開'],
+  '초대 취소':['Cancel invitation','招待を取り消す'],
+  '초대 취소 완료':['Invitation cancelled','招待を取り消しました'],
+  '초대 정보 없음':['Invitation not found','招待情報がありません'],
+  '본인 받은 초대만 취소 가능':['You can only cancel invitations addressed to you','ご自身宛の招待のみ取り消せます'],
+  '상태 변경 불가':['Status cannot be changed','ステータスを変更できません'],
+  '취소 실패':['Cancellation failed','キャンセルに失敗しました'],
+  '결제 완료':['Paid','決済完了'],
+  '취소됨':['Cancelled','キャンセル済み'],
+  '만료':['Expired','期限切れ'],
+  '대기중':['Pending','保留中'],
+  '기기 푸시 알림':['Device push notifications','端末のプッシュ通知'],
+  '이 브라우저는 알림을 지원하지 않습니다':['This browser does not support notifications','このブラウザは通知に対応していません'],
+  '미지원':['Not supported','非対応'],
+  '백그라운드에서도 알림을 받을 수 있어요':['You will receive notifications even in the background','バックグラウンドでも通知を受け取れます'],
+  '허용 완료':['Allowed','許可しました'],
+  '허용하기':['Allow','許可する'],
+  '다시 시도':['Try again','再試行'],
+  '브라우저/iOS 설정에서 알림 권한 허용 필요':['Allow notification permission in your browser or iOS settings','ブラウザまたはiOSの設定で通知を許可してください'],
+  '앱이 백그라운드일 때도 알림을 받으려면 권한 허용 필요':['Allow permission to receive notifications while the app is in the background','バックグラウンドでも通知を受け取るには許可が必要です'],
+  '알림 허용됨':['Notifications allowed','通知が許可されました'],
+  '알림 차단됨':['Notifications blocked','通知がブロックされています'],
+  '브라우저 설정에서 권한 변경 필요':['Change the permission in your browser settings','ブラウザの設定で権限を変更してください'],
+  '이 브라우저는 알림 미지원':['This browser does not support notifications','このブラウザは通知に非対応です'],
+  '지원 안 됨':['Not supported','非対応'],
+
+  // ── 티켓 · 구매 ──
+  '레스토랑':['Restaurant','レストラン'],
+  '장르':['Genre','ジャンル'],
+  '콜키지':['Corkage','持ち込み料'],
+  '불가':['Not allowed','不可'],
+  '재구매 제한':['Repurchase limit','再購入制限'],
+  '제한없음':['No limit','制限なし'],
+  '식사비':['Meal price','食事代'],
+  '대행비':['Service fee','予約代行手数料'],
+  '주류 미니멈':['Beverage minimum','ドリンク最低料金'],
+  '합계':['Total','合計'],
+  '추가 결제 필요':['Additional payment required','追加決済が必要'],
+  '결제 후 잔액':['Balance after payment','決済後の残高'],
+  '예치금 잔액':['Deposit balance','デポジット残高'],
+  '예치금':['Deposit','デポジット'],
+  '결제수단':['Payment method','支払い方法'],
+  '결제 수단':['Payment method','支払い方法'],
+  '결제 수단을 선택해주세요':['Please choose a payment method','支払い方法を選択してください'],
+  '결제 금액':['Payment amount','決済金額'],
+  '금액 선택':['Choose an amount','金額を選択'],
+  '금액을 선택해주세요':['Please choose an amount','金額を選択してください'],
+  '금액 오류':['Invalid amount','金額エラー'],
+  '금액 불일치':['Amount mismatch','金額が一致しません'],
+  '충전 금액이 올바르지 않습니다':['The charge amount is not valid','チャージ金額が正しくありません'],
+  '결제 금액이 올바르지 않습니다.':['The payment amount is not valid.','決済金額が正しくありません。'],
+  '결제하기':['Pay','決済する'],
+  '결제 중...':['Processing payment...','決済処理中...'],
+  '결제 실패':['Payment failed','決済に失敗しました'],
+  '구매하기':['Purchase','購入する'],
+  '인당 코스 (식사) 비용 방문후 · 예치금 반환':['Per-person course (meal) cost — returned from your deposit after the visit','1名あたりのコース（食事）代金 — 来店後にデポジットから精算'],
+  '예약 대행 수수료 (환불 불가)':['Reservation service fee (non-refundable)','予約代行手数料（返金不可）'],
+  '인원당 최소 주류 주문 금액':['Minimum beverage spend per guest','1名あたりの最低ドリンク注文金額'],
+  '초대 전용 티켓':['Invitation-only ticket','招待限定チケット'],
+  '구매 자격이 없는 티켓입니다':['You are not eligible to purchase this ticket','このチケットは購入対象外です'],
+  '판매 종료':['Sales closed','販売終了'],
+  '판매가 끝난 티켓입니다':['Sales for this ticket have ended','このチケットは販売を終了しました'],
+  '판매중':['On sale','販売中'],
+  '매진':['Sold out','完売'],
+  '좌석 매진':['Seats sold out','座席完売'],
+  '죄송합니다 — 남은 좌석이 없습니다':['Sorry — there are no seats left','申し訳ありません — 残席がありません'],
+  '잔여 좌석 부족':['Not enough seats left','残席が不足しています'],
+  // 값과 섞여 그려지는 조각들 — 부분 치환으로 잡는다
+  '남은 좌석':['Seats left','残席'],
+  '석입니다. 인원을 줄여 다시 시도해주세요':[' seats remain. Please reduce your party size and try again','席です。人数を減らして再度お試しください'],
+  '인석만 구매할 수 있어요':[' guests only','名様のみ購入いただけます'],
+  '인석은 모두 판매되었습니다':[' -guest seats are sold out','名様席は完売しました'],
+  '좌석이 부족합니다 (잔여':['Not enough seats (remaining ','座席が不足しています（残り'],
+  '이 티켓은':['This ticket is for ','このチケットは'],
+  '인 구매만 가능해요':[' guests only','名様のみ購入可能です'],
+  '이 초대를 취소하시겠습니까?':['Cancel this invitation?','この招待をキャンセルしますか？'],
+  '취소 후에는 결제할 수 없으며, 슈퍼어드민에게 자동 통지됩니다.':['After cancelling you will not be able to pay, and the administrator is notified automatically.','キャンセル後は決済できなくなり、管理者に自動で通知されます。'],
+  '이미 처리된 초대입니다':['This invitation has already been processed','この招待はすでに処理済みです'],
+  '이미 처리된 요청이에요':['This request has already been processed','このリクエストはすでに処理済みです'],
+  '인원 확인':['Check party size','人数の確認'],
+  '예약 불가':['Reservation unavailable','予約できません'],
+  '1인 예약이 마감되었습니다':['Single-guest reservations are closed','1名様の予約は締め切りました'],
+  '이 인원으로 예약하면 남는 좌석을 채울 수 없어 예약이 불가합니다':['This party size would leave seats that cannot be filled, so it is not available','この人数では埋められない席が残るため予約できません'],
+  '이 티켓은 아직 판매가 시작되지 않았습니다.':['Sales for this ticket have not started yet.','このチケットはまだ販売を開始していません。'],
+  '현재 이 티켓은 멤버십 회원만 구매할 수 있습니다.':['This ticket is currently available to membership members only.','現在このチケットはメンバーシップ会員のみ購入できます。'],
+  '티켓 예약 완료':['Ticket reserved','チケット予約完了'],
+  '등록된 설명이 없습니다':['No description available','説明はありません'],
+  '등록된 사진이 없습니다':['No photos available','写真はありません'],
+  '사진 없음':['No photo','写真なし'],
+  '메뉴 보기':['View menu','メニューを見る'],
+  '메뉴 내리기':['Hide menu','メニューを閉じる'],
+  '주소':['Address','住所'],
+  '주소 없음':['No address','住所なし'],
+  '주소가 없습니다':['No address available','住所がありません'],
+  '주소 정보 없음':['No address information','住所情報がありません'],
+  '주소 정보가 없습니다':['No address information available','住所情報がありません'],
+  '등록된 주소가 없어요':['No address has been registered','住所が登録されていません'],
+  '주소가 복사되었습니다':['Address copied','住所をコピーしました'],
+  '주소가 복사됐어요':['Address copied','住所をコピーしました'],
+  '주소가 클립보드에 복사되었습니다':['Address copied to clipboard','住所をクリップボードにコピーしました'],
+  '주소를 찾을 수 없습니다':['Address not found','住所が見つかりません'],
+  '위치 검색 중...':['Searching location...','位置を検索中...'],
+  '가게 정보가 없습니다':['No restaurant information','店舗情報がありません'],
+  '길안내':['Directions','経路案内'],
+  '취소 규정이 설정되지 않았습니다.':['No cancellation policy has been set for this ticket.','このチケットにはキャンセル規定が設定されていません。'],
+  '구매 내역을 찾을 수 없습니다.':['Purchase record not found.','購入履歴が見つかりません。'],
+  '방문 예정 내역이 없어요':['No upcoming visits','来店予定はありません'],
+  '방문 완료 내역이 없어요':['No past visits','来店履歴はありません'],
+  '취소 내역이 없어요':['No cancellations','キャンセル履歴はありません'],
+  '시간 미설정':['Time not set','時間未設定'],
+  '변경 불가':['Cannot be changed','変更できません'],
+  '대상을 찾을 수 없어요':['Target not found','対象が見つかりません'],
+  '방문예정 티켓만 시간 변경할 수 있어요':['Only upcoming tickets can have their time changed','来店予定のチケットのみ時間を変更できます'],
+  '결제 완료된 초대만 시간 변경할 수 있어요':['Only paid invitations can have their time changed','決済済みの招待のみ時間を変更できます'],
+  '초대 정보를 찾을 수 없어요':['Invitation not found','招待情報が見つかりません'],
+  '취소를 진행하시겠습니까?':['Do you want to proceed with the cancellation?','キャンセルを進めますか？'],
+  '환불 정책':['Refund policy','返金ポリシー'],
+  '환불 미리보기':['Refund preview','返金プレビュー'],
+  '환불 가능 금액':['Refundable amount','返金可能額'],
+  '대행비 보유':['Service fee retained','予約代行手数料の留保'],
+  '사유:':['Reason:','理由:'],
+  '인원:':['Guests:','人数:'],
+  '방문일:':['Visit date:','来店日:'],
+  '구매 30분 이내: 전액 환불':['Within 30 minutes of purchase: full refund','購入から30分以内：全額返金'],
+  '방문일 D-30 이전: 대행비 제외 환불':['Before D-30 of the visit date: refund excluding the service fee','来店日のD-30以前：予約代行手数料を除き返金'],
+  'D-29 ~ 당일: 환불 불가 (슈퍼어드민 예외 가능)':['D-29 to the visit date: non-refundable (exceptions at the administrator’s discretion)','D-29〜当日：返金不可（管理者の判断による例外あり）'],
+
+  // ── 카드 · 예치금 ──
+  '카드':['Card','カード'],
+  '등록된 카드가 없습니다.':['No cards registered.','登録されたカードがありません。'],
+  '아래 버튼으로 첫 카드를 등록해보세요.':['Add your first card with the button below.','下のボタンから最初のカードを登録してください。'],
+  '카드 목록을 불러올 수 없습니다.':['Could not load your cards.','カード一覧を読み込めませんでした。'],
+  '잠시 후 다시 시도해주세요.':['Please try again in a moment.','しばらくしてからもう一度お試しください。'],
+  '새 카드 등록':['Add a new card','新しいカードを登録'],
+  '카드 등록 실패:':['Card registration failed:','カード登録に失敗:'],
+  '카드 등록에 실패했습니다. 다시 시도해주세요.':['Card registration failed. Please try again.','カード登録に失敗しました。もう一度お試しください。'],
+  '카드가 등록되었습니다!':['Your card has been registered.','カードを登録しました。'],
+  '카드가 등록되었습니다':['Your card has been registered','カードを登録しました'],
+  '이 카드를 삭제하시겠습니까?':['Delete this card?','このカードを削除しますか？'],
+  '삭제 실패:':['Delete failed:','削除に失敗:'],
+  '삭제 중 오류가 발생했습니다.':['An error occurred while deleting.','削除中にエラーが発生しました。'],
+  '설정 실패:':['Setting failed:','設定に失敗:'],
+  '주카드 설정':['Primary card','メインカード設定'],
+  '주카드가 변경되었습니다':['Your primary card has been changed','メインカードを変更しました'],
+  '카드번호를 확인해주세요':['Please check the card number','カード番号をご確認ください'],
+  '만료일을 확인해주세요':['Please check the expiry date','有効期限をご確認ください'],
+  'CVC를 확인해주세요':['Please check the CVC','CVCをご確認ください'],
+  '카드 소유자 이름을 입력해주세요':['Please enter the cardholder name','カード名義人を入力してください'],
+  '결제 수단 관리 준비 중':['Payment method management is coming soon','支払い方法の管理は準備中です'],
+  '현재는 예치금(계좌이체)으로만 이용하실 수 있습니다':['Currently only deposit (bank transfer) is available','現在はデポジット（銀行振込）のみご利用いただけます'],
+  '로그인이 만료되었습니다. 다시 로그인해주세요.':['Your session has expired. Please sign in again.','セッションの有効期限が切れました。再度ログインしてください。'],
+
+  // ── 예약 요청 · 파트너 ──
+  '지도':['Map','地図'],
+  '인스타그램':['Instagram','Instagram'],
+  '타베로그에서 보기':['View on Tabelog','食べログで見る'],
+  '예약 요청 보내기':['Send reservation request','予約リクエストを送る'],
+  '희망 날짜를 선택하세요':['Please choose your preferred date','希望日を選択してください'],
+  '날짜 필요':['Date required','日付が必要です'],
+  '인원 필요':['Party size required','人数が必要です'],
+  '인원을 입력하세요':['Please enter the number of guests','人数を入力してください'],
+  '동의 필요':['Agreement required','同意が必要です'],
+  '매장 조건에 동의해 주세요':['Please agree to the restaurant’s conditions','店舗の条件に同意してください'],
+  '요청 완료':['Request sent','リクエスト送信完了'],
+  '요청 불가':['Request unavailable','リクエストできません'],
+  '진행 중인 요청이 2건입니다.':['You already have 2 requests in progress.','進行中のリクエストが2件あります。'],
+  '대기 중인 요청이 없어요':['No pending requests','保留中のリクエストはありません'],
+  '요청 내역이 없어요':['No request history','リクエスト履歴はありません'],
+  '승인된 예약이 없어요':['No confirmed reservations','確定した予約はありません'],
+  '아직 요청 가능한 매장이 없어요.':['No restaurants are open for requests yet.','リクエスト可能な店舗はまだありません。'],
+  '아직 등록된 파트너 레스토랑이 없어요.':['No partner restaurants have been registered yet.','提携レストランはまだ登録されていません。'],
+  '아직 예약 가능한 파트너 레스토랑이 없어요.':['No partner restaurants are available for reservation yet.','予約可能な提携レストランはまだありません。'],
+  '예약 가능 시간':['Available times','予約可能時間'],
+  '예약금 1인':['Deposit per guest','1名あたりの予約金'],
+  '수용 인원':['Capacity','収容人数'],
+  '휴무':['Closed','定休日'],
+  '예약금 없음':['No deposit','予約金なし'],
+  '예약금':['Deposit','予約金'],
+  '확정 시 결제':['Charged on confirmation','確定時に決済'],
+  '제휴 매장':['Partner restaurants','提携店舗'],
+  '예약 확정':['Reservation confirmed','予約確定'],
+  '예약 거절':['Reservation declined','予約が拒否されました'],
+  '매장이 예약을 수락했어요.':['The restaurant has accepted your reservation.','店舗が予約を受け付けました。'],
+  '아쉽게도 거절됐어요.':['Unfortunately it was declined.','残念ながら拒否されました。'],
+  '불러오기 실패':['Failed to load','読み込みに失敗しました'],
+
+  // ── 마이페이지 · 회원 정보 ──
+  '회원정보가 저장되었습니다':['Your profile has been saved','会員情報を保存しました'],
+  '휴대폰 번호가 등록되었습니다':['Your mobile number has been registered','携帯電話番号を登録しました'],
+  '휴대폰 번호를 저장하지 못했습니다 — 잠시 후 다시 시도해주세요':['Could not save your mobile number — please try again shortly','携帯電話番号を保存できませんでした — しばらくしてからお試しください'],
+  '010으로 시작하는 11자리를 입력해주세요':['Please enter an 11-digit number starting with 010','010で始まる11桁を入力してください'],
+  '등록됨':['Registered','登録済み'],
+  '등록 & 변경':['Register / change','登録・変更'],
+  '등록하기':['Register','登録する'],
+  '주소를 검색해주세요':['Please search for an address','住所を検索してください'],
+  '주소를 직접 입력해주세요':['Enter the address manually','住所を直接入力してください'],
+  'M 등급':['M Tier','Mランク'],
+  'T 등급':['T Tier','Tランク'],
+  'M 등급 가입하기':['Join M Tier','Mランクに加入'],
+  'M 등급으로 전환되었습니다':['You are now an M Tier member','Mランクに切り替わりました'],
+  '멤버십 가입 완료':['Membership activated','メンバーシップ登録完了'],
+  'T 등급 준비 중':['T Tier coming soon','Tランクは準備中'],
+  'T 등급 가입은 준비 중입니다.':['T Tier membership is coming soon.','Tランクへの加入は準備中です。'],
+  '결제 흐름이 곧 추가될 예정입니다':['The payment flow will be added soon','決済フローは近日追加予定です'],
+  '갱신하기 (1년 연장)':['Renew (extend 1 year)','更新する（1年延長）'],
+  '만료일:':['Expires:','有効期限:'],
+  'M 등급 회원만 이용할 수 있습니다':['Available to M Tier members only','Mランク会員のみご利用いただけます'],
+  '티켓은 멤버십 순으로 순차 오픈됩니다':['Tickets open in membership tier order','チケットはメンバーシップ順に公開されます'],
+  '일반 회원':['General member','一般会員'],
+  '해당 화면을 찾을 수 없어요':['That screen could not be found','その画面が見つかりません'],
+  '자주 묻는 질문':['Frequently asked questions','よくある質問'],
+  '모든 필터가 해제되었습니다':['All filters cleared','すべてのフィルターを解除しました'],
+  '필터 초기화':['Reset filters','フィルターをリセット'],
+  '날짜 선택':['Select date','日付を選択'],
+  '시간 선택':['Select time','時間を選択'],
+  '인원 선택':['Select party size','人数を選択'],
+  '날짜 미지정':['Date not set','日付未指定'],
+  '사진을 업로드하세요':['Upload a photo','写真をアップロードしてください'],
+  '사진이 업로드되었습니다':['Photo uploaded','写真をアップロードしました'],
+  '탭해서 사진 업로드':['Tap to upload a photo','タップして写真をアップロード'],
+  '저장 재시도 중':['Retrying save','保存を再試行中'],
+  '잠시 후 자동으로 다시 저장됩니다 · 기록은 안전하게 보존됐어요':['It will be saved again automatically in a moment — your record is safe','まもなく自動的に再保存されます — 記録は安全に保存されています'],
+  '매진 — 자동 환불':['Sold out — automatic refund','完売 — 自動返金'],
+
+  // ── 콘텐츠 · 계보도 · 아틀라스 ──
+  '셰프':['Chef','シェフ'],
+  '셰프:':['Chef:','シェフ:'],
+  '평점':['Rating','評価'],
+  '가격대':['Price range','価格帯'],
+  '예약':['Reservation','予約'],
+  '거리':['Distance','距離'],
+  '소개':['About','紹介'],
+  '정보':['Details','情報'],
+  '지역':['Region','エリア'],
+  '동네':['Neighbourhood','エリア'],
+  '역':['Station','駅'],
+  '생년':['Born','生年'],
+  '창업':['Founded','創業'],
+  '창업지':['Founded in','創業地'],
+  '최초 셀렉션':['First selection','初選出'],
+  '기타 라멘':['Other ramen','その他ラーメン'],
+  '닫기':['Close','閉じる'],
+  'Tabelog 보기':['View on Tabelog','食べログで見る'],
+  '전체 보기':['View all','すべて見る'],
+  '전체 보기 · All':['View all','すべて見る'],
+  '데이터 불러오는 중…':['Loading data…','データを読み込み中…'],
+  '계보를 찾을 수 없습니다.':['Lineage not found.','系譜が見つかりません。'],
+  '데이터를 불러올 수 없습니다.':['Could not load the data.','データを読み込めませんでした。'],
+  '조건에 맞는 가게가 없습니다.':['No restaurants match your filters.','条件に合う店舗がありません。'],
+  '데이터 로드 실패':['Failed to load data','データの読み込みに失敗しました'],
+  '가게 정보를 복사했습니다':['Restaurant details copied','店舗情報をコピーしました'],
+  '탐이 가게를 찾는 중...':['TAAM is looking for restaurants...','TAAMが店舗を探しています...'],
+  '방문 인증하기':['Verify your visit','来店を認証する'],
+  '개척 완료':['Visited','制覇済み'],
+  '자동 체크인 완료':['Checked in automatically','自動チェックイン完了'],
+  '체크인을 해제하시겠습니까?':['Undo this check-in?','チェックインを解除しますか？'],
+  '위치 확인 실패':['Could not determine your location','位置情報を取得できませんでした'],
+  '위치 오류':['Location error','位置情報エラー'],
+  '위치 활성화 완료':['Location enabled','位置情報を有効にしました'],
+  '내 위치가 지도에 표시됩니다':['Your location is shown on the map','現在地が地図に表示されます'],
+  '이 브라우저는 위치 미지원':['This browser does not support location','このブラウザは位置情報に非対応です'],
+  '지원 안됨':['Not supported','非対応'],
+  '권한 변경 필요':['Permission change required','権限の変更が必要です'],
+  '브라우저/OS 설정에서 직접 변경해주세요':['Please change it in your browser or OS settings','ブラウザまたはOSの設定で変更してください'],
+  '확인 실패':['Check failed','確認に失敗しました'],
+  '사진만 업로드 가능합니다.':['Only images can be uploaded.','画像のみアップロードできます。'],
+  '노드를 찾을 수 없습니다.':['Node not found.','ノードが見つかりません。'],
+
+  // ── 장르 ──
+  '스시':['Sushi','寿司'],
+  '카이세키':['Kaiseki','懐石'],
+  '텐푸라':['Tempura','天ぷら'],
+  '장어':['Unagi','うなぎ'],
+  '야키 (구이)':['Yakimono (grilled)','焼き物'],
+  '라멘 / 면류':['Ramen / Noodles','ラーメン・麺類'],
+  '프렌치':['French','フレンチ'],
+  '이탈리안':['Italian','イタリアン'],
+  '스페인':['Spanish','スパニッシュ'],
+  '중식':['Chinese','中華'],
+  '이노베이티브':['Innovative','イノベーティブ'],
+  '야키토리':['Yakitori','焼鳥'],
+  '야키니쿠':['Yakiniku','焼肉'],
+  '일본요리':['Japanese cuisine','日本料理'],
+  '소고기':['Beef','牛肉'],
+  '돼지고기':['Pork','豚肉'],
+
+  // ── 지역 (일본) ──
+  '도쿄':['Tokyo','東京'],
+  '교토':['Kyoto','京都'],
+  '오사카':['Osaka','大阪'],
+  '나고야':['Nagoya','名古屋'],
+  '홋카이도':['Hokkaido','北海道'],
+  '북큐슈':['North Kyushu','北九州'],
+  '남큐슈':['South Kyushu','南九州'],
+  '칸토 북부':['North Kanto','北関東'],
+  '시즈오카':['Shizuoka','静岡'],
+  '호쿠리쿠':['Hokuriku','北陸'],
+  '카나가와':['Kanagawa','神奈川'],
+  '세토우치':['Setouchi','瀬戸内'],
+  '도호쿠':['Tohoku','東北'],
+  '니가타':['Niigata','新潟'],
+  '신슈':['Shinshu','信州'],
+  '칸사이 외곽':['Greater Kansai','関西近郊'],
+  '미에':['Mie','三重'],
+  '아이치(나고야)':['Aichi (Nagoya)','愛知（名古屋）'],
+  '서일본':['West Japan','西日本'],
+  '동일본':['East Japan','東日本'],
+  '긴자':['Ginza','銀座'],
+  '롯폰기·아자부':['Roppongi / Azabu','六本木・麻布'],
+  '아카사카·아오야마':['Akasaka / Aoyama','赤坂・青山'],
+  '에비스·히로오·메구로':['Ebisu / Hiroo / Meguro','恵比寿・広尾・目黒'],
+  '니혼바시':['Nihonbashi','日本橋'],
+  '신주쿠·요츠야':['Shinjuku / Yotsuya','新宿・四谷'],
+  '카구라자카':['Kagurazaka','神楽坂'],
+  '시부야·다이칸야마':['Shibuya / Daikanyama','渋谷・代官山'],
+  '그외 도쿄':['Other Tokyo','その他東京'],
+  // ── 지역 (한국) ──
+  '서울':['Seoul','ソウル'],
+  '부산':['Busan','釜山'],
+  '인천':['Incheon','仁川'],
+  '제주':['Jeju','済州'],
+  '한국':['Korea','韓国'],
+  '일본':['Japan','日本'],
+  '전액 환불되었습니다':['You have been fully refunded','全額返金されました'],
+  '티켓':['Ticket','チケット'],
+};
+
+var _txCache = { lang:null, exact:null, subs:null };
+var _TX_KO_RE = /[가-힣]/;
+var _TX_SKIP_TAG = { SCRIPT:1, STYLE:1, TEXTAREA:1, NOSCRIPT:1, CODE:1, PRE:1 };
+var TX_SKIP_SEL = '[data-lang-lock="ko"],[data-no-tx]';
+
+function _txBuild(){
+  var lang = window._tkCurrentLang || 'ko';
+  if (_txCache.lang === lang) return _txCache;
+  var idx = (lang === 'ja') ? 1 : 0;
+  var exact = {}, subs = [];
+  if (lang !== 'ko') {
+    for (var ko in TX_MAP) {
+      if (!Object.prototype.hasOwnProperty.call(TX_MAP, ko)) continue;
+      var pair = TX_MAP[ko];
+      var val = pair && pair[idx];
+      if (typeof val !== 'string' || val === '') continue;
+      exact[ko] = val;
+      // 숫자·변수와 이어 붙는 조각까지 잡으려면 부분 치환이 필요하다.
+      //   ('남은 좌석 ' + n + '석입니다' 처럼 문장이 값과 섞여 한 노드로 그려진다)
+      // 다만 짧은 낱말을 부분 치환하면 회원 이름·매장명 안에서 오작동한다.
+      //   → 한글 5자 이상이거나, 공백이 들어간 어구(= 낱말이 아니라 문구)만 허용.
+      var koLen = (ko.match(/[가-힣]/g) || []).length;
+      if (koLen >= 5 || /\s/.test(ko)) subs.push([ko, val]);
+    }
+    subs.sort(function(a,b){ return b[0].length - a[0].length; });
+  }
+  _txCache = { lang:lang, exact:exact, subs:subs };
+  return _txCache;
+}
+
+// 문자열 하나를 현재 언어로 치환. 사전에 없으면 원문 그대로 돌려준다.
+function txText(s){
+  if (typeof s !== 'string' || !s) return s;
+  var c = _txBuild();
+  if (c.lang === 'ko') return s;
+  if (!_TX_KO_RE.test(s)) return s;
+  var trimmed = s.trim();
+  var hit = c.exact[trimmed];
+  if (hit !== undefined) return s.replace(trimmed, hit);
+  var out = s;
+  for (var i=0; i<c.subs.length; i++){
+    if (out.indexOf(c.subs[i][0]) >= 0) out = out.split(c.subs[i][0]).join(c.subs[i][1]);
+  }
+  return out;
+}
+window.txText = txText;
+
+function _txSkip(el){
+  if (!el || el.nodeType !== 1) return false;
+  return !!(el.closest && el.closest(TX_SKIP_SEL));
+}
+
+// 되돌리기 기록 — [노드, 'text'|'ph', 한글원문, 치환결과]
+//   언어를 EN → KO 로 되돌리거나 EN → JA 로 바꿀 때 원문이 없으면 복구가 불가능하다.
+//   (치환 결과에는 한글이 없어 txText 가 두 번째부터 아무 일도 못 한다)
+//   그래서 바꾼 자리를 기억해 두고, 언어가 바뀌면 먼저 한글로 되돌린 뒤 다시 훑는다.
+var _txDone = [];
+var _txLastLang = null;      // 마지막으로 훑은 언어 — 바뀐 순간에만 전체 복원 후 재적용
+var TX_DONE_MAX = 20000;
+function txRestoreAll(){
+  var list = _txDone; _txDone = [];
+  for (var i=0; i<list.length; i++){
+    var rec = list[i], node = rec[0];
+    try{
+      if (!node) continue;
+      if (rec[1] === 'ph'){
+        if (node.getAttribute && node.getAttribute('placeholder') === rec[3]) node.setAttribute('placeholder', rec[2]);
+      } else {
+        if (node.nodeValue === rec[3]) node.nodeValue = rec[2];
+      }
+    }catch(e){}
+  }
+}
+window.txRestoreAll = txRestoreAll;
+
+// root 하위의 텍스트 노드·placeholder 를 현재 언어로 훑는다.
+function txSweep(root){
+  var c = _txBuild();
+  if (c.lang === 'ko') return;
+  try{
+    root = root || document.body;
+    if (!root) return;
+    if (root.nodeType === 3) root = root.parentNode;
+    if (!root || root.nodeType !== 1) return;
+    if (_txSkip(root)) return;
+
+    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null, false);
+    var n, targets = [];
+    while ((n = walker.nextNode())) {
+      if (!_TX_KO_RE.test(n.nodeValue)) continue;
+      var p = n.parentNode;
+      if (!p || p.nodeType !== 1) continue;
+      if (_TX_SKIP_TAG[p.tagName]) continue;
+      if (_txSkip(p)) continue;
+      targets.push(n);
+    }
+    for (var i=0; i<targets.length; i++){
+      var v = targets[i].nodeValue, nv = txText(v);
+      if (nv !== v) {
+        targets[i].nodeValue = nv;
+        if (_txDone.length < TX_DONE_MAX) _txDone.push([targets[i], 'text', v, nv]);
+      }
+    }
+
+    // placeholder 는 텍스트 노드가 아니라 속성이라 따로 처리
+    var phs = root.querySelectorAll ? root.querySelectorAll('[placeholder]') : [];
+    for (var j=0; j<phs.length; j++){
+      var el = phs[j];
+      if (_txSkip(el)) continue;
+      var ph = el.getAttribute('placeholder');
+      if (!ph || !_TX_KO_RE.test(ph)) continue;
+      // data-i18n-ph 가 붙은 요소는 applyI18n 이 이미 처리한다
+      if (el.hasAttribute('data-i18n-ph')) continue;
+      var nph = txText(ph);
+      if (nph !== ph) {
+        el.setAttribute('placeholder', nph);
+        if (_txDone.length < TX_DONE_MAX) _txDone.push([el, 'ph', ph, nph]);
+      }
+    }
+  }catch(e){ /* 번역 실패가 화면을 막으면 안 된다 */ }
+}
+window.txSweep = txSweep;
+
+// 새로 그려지는 DOM 을 따라간다. 텍스트 값만 바꾸므로 자기 자신을 다시 깨우지 않는다.
+var _txObserver = null, _txPending = [], _txRafId = 0;
+function _txFlush(){
+  _txRafId = 0;
+  var list = _txPending; _txPending = [];
+  for (var i=0; i<list.length; i++) txSweep(list[i]);
+}
+function txStartObserver(){
+  if (_txObserver || typeof MutationObserver === 'undefined' || !document.body) return;
+  _txObserver = new MutationObserver(function(muts){
+    if ((window._tkCurrentLang || 'ko') === 'ko') return;
+    for (var i=0; i<muts.length; i++){
+      var added = muts[i].addedNodes;
+      for (var j=0; j<added.length; j++){
+        var nd = added[j];
+        if (nd.nodeType === 1) _txPending.push(nd);
+        else if (nd.nodeType === 3 && _TX_KO_RE.test(nd.nodeValue||'')) _txPending.push(nd.parentNode);
+      }
+    }
+    if (_txPending.length && !_txRafId) {
+      _txRafId = (window.requestAnimationFrame || function(f){ return setTimeout(f,16); })(_txFlush);
+    }
+  });
+  _txObserver.observe(document.body, { childList:true, subtree:true });
+}
+window.txStartObserver = txStartObserver;
+
+
 function applyI18n(root){
   root = root || document;
   // 🆕 슈퍼어드민 영역은 한국어 잠금 — data-lang-lock="ko" 하위는 항상 한국어로 강제
@@ -33552,6 +34335,22 @@ function applyI18n(root){
     // 🆕 로그인 전 화면 언어 버튼 활성 상태도 함께 동기화
     if(typeof authLangSync === 'function') authLangSync();
   }catch(e){ /* graceful */ }
+  // 🆕 2026.08: data-i18n 이 못 잡는 "JS 로 조립된 한글"을 텍스트 노드 단위로 훑는다.
+  //   applyI18n 은 언어 전환·부팅 시 호출되므로 여기 걸어두면 두 시점 모두 커버된다.
+  //   순서가 중요하다 — 언어가 바뀐 호출이면 먼저 한글로 되돌린 뒤 새 언어로 다시 훑는다.
+  //   (applyI18n 은 부분 갱신용으로 root 를 받아 자주 불린다. 그때 전체 복원하면
+  //    root 밖이 한글로 남아버리므로, 복원은 "언어가 실제로 바뀐 순간"에만 한다.)
+  try{
+    var _txNowLang = window._tkCurrentLang || 'ko';
+    if (_txLastLang !== _txNowLang) {
+      _txLastLang = _txNowLang;
+      txRestoreAll();
+      txSweep(document.body);
+    } else {
+      txSweep((!root || root === document) ? document.body : root);
+    }
+  }catch(e){}
+  try{ txStartObserver(); }catch(e){}
 }
 
 // 🆕 2026.08: 로그인 전 화면(초대코드·본인인증/로그인) 전용 언어 전환.
@@ -38323,6 +39122,10 @@ function _toastAutoMap(s){
   // 부분 매칭: "₩1,000 충전되었습니다" → "₩1,000 charged"
   if (s.indexOf('충전되었습니다') >= 0) return s.replace('충전되었습니다', (lang==='ja'?'チャージ完了':'charged'));
   if (s.indexOf(' 반환 처리되었습니다') >= 0) return s.replace(' 반환 처리되었습니다', (lang==='ja'?' を返金しました':' refunded'));
+  // 🆕 2026.08: 토스트 전용 표 다음에 공용 TX 사전을 한 번 더 태운다.
+  //   토스트는 알림 로그(_notifLogAdd)에도 그대로 저장되므로, 화면 스윕에 맡기지 않고
+  //   여기서 문자열 단계에서 바꿔야 로그까지 번역된 상태로 남는다.
+  if (typeof window.txText === 'function') return window.txText(s);
   return s;
 }
 window._toastAutoMap = _toastAutoMap;
