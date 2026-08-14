@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <!-- 🆕 2026.05.20: HTML 캐시 무효화 — 코드 업데이트 후 새 버전 즉시 반영 보장
      index.html 은 단일 큰 파일이라 캐시 잔존 시 옛 UI 가 노출됨. 항상 fresh 다운로드. -->
-<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Cache-Control" content="no-cache, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>Exclusive Experience</title>
@@ -255,6 +255,15 @@ html.auto-login .splash .bottom-group{display:none !important}
 .code-screen{position:fixed;inset:0;background:#000;display:none;flex-direction:column;align-items:center;justify-content:center;z-index:8000;padding:0 32px;opacity:0;transition:opacity .35s ease}
 .code-screen.shown{opacity:1}
 .code-back{position:absolute;top:52px;left:24px;background:none;border:none;cursor:pointer;color:rgba(255,255,255,.7);font-size:22px;padding:8px}
+/* 🆕 2026.08: 로그인 전 화면(초대코드·인증) 언어 전환.
+   메인 앱의 언어 시트(tkLangOverlay, z-index 855)는 이 화면들(z-index 8000+) 뒤에 깔려
+   보이지 않으므로, 화면에 직접 붙는 경량 전환 버튼을 둔다. 해외 회원 진입 대응. */
+.auth-lang{position:absolute;top:52px;right:16px;display:flex;gap:2px;z-index:20}
+.auth-lang button{background:none;border:none;font-family:var(--font-main);font-size:10px;font-weight:700;letter-spacing:.08em;padding:6px 7px;cursor:pointer;border-radius:6px;transition:color .15s,background .15s}
+.auth-lang.dark button{color:rgba(255,255,255,.38)}
+.auth-lang.dark button.on{color:#c8a96e;background:rgba(200,169,110,.13)}
+.auth-lang.light button{color:#c2bcb2}
+.auth-lang.light button.on{color:#5C0A14;background:rgba(92,10,20,.07)}
 .code-title{font-weight:700;font-size:22px;color:#f5f3ef;margin-bottom:8px}
 .code-sub{font-weight:300;font-size:12px;color:rgba(255,255,255,.55);margin-bottom:24px}
 .code-inputs{display:flex;gap:10px;margin-bottom:16px;justify-content:center}
@@ -6159,6 +6168,7 @@ window.addEventListener('error', function(e){
 <!-- CODE SCREEN -->
 <div id="codeScreen" class="code-screen" style="display:none;">
   <button class="code-back" onclick="closeCode()" style="position:absolute;top:52px;left:20px;">&#8592;</button>
+  <div class="auth-lang dark" id="authLangCode"><button type="button" data-lang="ko" onclick="authPickLang('ko')">KO</button><button type="button" data-lang="ja" onclick="authPickLang('ja')">JA</button><button type="button" data-lang="en" onclick="authPickLang('en')">EN</button></div>
   <div style="width:100%;max-width:320px;display:flex;flex-direction:column;align-items:center;text-align:center;">
   <div class="code-title" data-i18n="auth.code_title">초대 코드</div>
   <div class="code-sub" data-i18n="auth.code_sub">초대 코드를 입력해주세요</div>
@@ -6183,6 +6193,7 @@ window.addEventListener('error', function(e){
 <div id="phoneScreen" class="phone-screen" style="display:none;">
   <!-- 🆕 2026.05.20: 뒤로가기 버튼 — 로그인 모드에서 codeScreen 으로 복귀 -->
   <button id="vpBackBtn" onclick="backToCodeFromLogin()" style="display:none;position:absolute;top:52px;left:20px;background:none;border:none;font-size:22px;color:#111;cursor:pointer;padding:8px 12px;z-index:10;line-height:1;">←</button>
+  <div class="auth-lang light" id="authLangPhone"><button type="button" data-lang="ko" onclick="authPickLang('ko')">KO</button><button type="button" data-lang="ja" onclick="authPickLang('ja')">JA</button><button type="button" data-lang="en" onclick="authPickLang('en')">EN</button></div>
   <div style="min-height:100%;flex:none;display:flex;align-items:center;justify-content:center;width:100%;box-sizing:border-box;padding:calc(env(safe-area-inset-top, 0px) + 56px) 0 calc(env(safe-area-inset-bottom, 0px) + 44px);">
     <div class="phone-inner">
       <div class="phone-title" id="vpTitle" data-i18n="auth.vp_title">본인 인증</div>
@@ -6191,16 +6202,16 @@ window.addEventListener('error', function(e){
       <!-- 🆕 2026.05.20: 로그인 모드 전용 — 휴대폰 / 이메일 / 비밀번호 인증 방법 선택 토글
            기본 숨김 (signup 흐름엔 영향 없음). openLogin() 에서 display:flex 로 노출. -->
       <div id="vpLoginMethodToggle" style="display:none;gap:6px;margin-bottom:14px;background:#f5f3ef;padding:4px;border-radius:10px;">
-        <button type="button" id="vpLoginMethodPassword" onclick="vpSwitchLoginMethod('password')" style="flex:1;height:38px;border:none;border-radius:7px;background:#5C0A14;color:#fff;font-family:var(--font-main);font-size:11px;font-weight:600;letter-spacing:.02em;cursor:pointer;">비밀번호</button>
-        <button type="button" id="vpLoginMethodEmail" onclick="vpSwitchLoginMethod('email')" style="flex:1;height:38px;border:none;border-radius:7px;background:transparent;color:#666;font-family:var(--font-main);font-size:11px;font-weight:600;letter-spacing:.02em;cursor:pointer;">이메일 OTP</button>
-        <button type="button" id="vpLoginMethodPhone" onclick="vpSwitchLoginMethod('phone')" style="flex:1;height:38px;border:none;border-radius:7px;background:transparent;color:#666;font-family:var(--font-main);font-size:11px;font-weight:600;letter-spacing:.02em;cursor:pointer;">SMS</button>
+        <button type="button" id="vpLoginMethodPassword" data-i18n="auth.login_method_password" onclick="vpSwitchLoginMethod('password')" style="flex:1;height:38px;border:none;border-radius:7px;background:#5C0A14;color:#fff;font-family:var(--font-main);font-size:11px;font-weight:600;letter-spacing:.02em;cursor:pointer;">비밀번호</button>
+        <button type="button" id="vpLoginMethodEmail" data-i18n="auth.login_method_email" onclick="vpSwitchLoginMethod('email')" style="flex:1;height:38px;border:none;border-radius:7px;background:transparent;color:#666;font-family:var(--font-main);font-size:11px;font-weight:600;letter-spacing:.02em;cursor:pointer;">이메일 OTP</button>
+        <button type="button" id="vpLoginMethodPhone" data-i18n="auth.login_method_sms" onclick="vpSwitchLoginMethod('phone')" style="flex:1;height:38px;border:none;border-radius:7px;background:transparent;color:#666;font-family:var(--font-main);font-size:11px;font-weight:600;letter-spacing:.02em;cursor:pointer;">SMS</button>
       </div>
 
       <!-- 🆕 비밀번호 로그인 모드 — 이메일 + 비밀번호 입력 -->
       <div id="vpPasswordRow" style="margin-bottom:10px;display:none;">
-        <input class="phone-num-input" id="vpLoginEmail" type="email" autocomplete="email" placeholder="이메일 주소" style="width:100%;border:1.5px solid #ddd;border-radius:10px;height:48px;padding:0 14px;font-size:14px;font-family:var(--font-main);box-sizing:border-box;outline:none;margin-bottom:8px;">
+        <input class="phone-num-input" id="vpLoginEmail" type="email" autocomplete="email" data-i18n-ph="auth.ph_login_email" placeholder="이메일 주소" style="width:100%;border:1.5px solid #ddd;border-radius:10px;height:48px;padding:0 14px;font-size:14px;font-family:var(--font-main);box-sizing:border-box;outline:none;margin-bottom:8px;">
         <div style="position:relative;display:flex;align-items:center;">
-          <input class="phone-num-input" id="vpLoginPassword" type="password" autocomplete="current-password" placeholder="비밀번호" style="flex:1;border:1.5px solid #ddd;border-radius:10px;height:48px;padding:0 38px 0 14px;font-size:14px;font-family:var(--font-main);box-sizing:border-box;outline:none;" onkeydown="if(event.key==='Enter')vpPasswordLogin()">
+          <input class="phone-num-input" id="vpLoginPassword" type="password" autocomplete="current-password" data-i18n-ph="auth.ph_login_password" placeholder="비밀번호" style="flex:1;border:1.5px solid #ddd;border-radius:10px;height:48px;padding:0 38px 0 14px;font-size:14px;font-family:var(--font-main);box-sizing:border-box;outline:none;" onkeydown="if(event.key==='Enter')vpPasswordLogin()">
           <button type="button" onclick="_vpToggleLoginPwdShow(this)" style="position:absolute;right:6px;width:32px;height:32px;background:none;border:none;color:#888;cursor:pointer;font-size:14px;">👁</button>
         </div>
       </div>
@@ -30613,6 +30624,12 @@ var TRANSLATIONS = {
       code_sub:'초대 코드를 입력해주세요',
       code_submit:'입장하기',
       code_error:'유효하지 않은 초대코드입니다',
+      // 로그인 방법 토글 · 비밀번호 로그인 (해외 회원 대비 다국어)
+      login_method_password:'비밀번호',
+      login_method_email:'이메일 OTP',
+      login_method_sms:'SMS',
+      ph_login_email:'이메일 주소',
+      ph_login_password:'비밀번호',
       // 본인 인증 (가입)
       vp_title:'본인 인증',
       vp_sub:'초대 받으신 정보로 인증해주세요',
@@ -31381,6 +31398,11 @@ var TRANSLATIONS = {
       code_sub:'Please enter your invite code',
       code_submit:'Enter',
       code_error:'Invalid invite code',
+      login_method_password:'Password',
+      login_method_email:'Email OTP',
+      login_method_sms:'SMS',
+      ph_login_email:'Email address',
+      ph_login_password:'Password',
       vp_title:'Identity Verification',
       vp_sub:'Please verify with the information you were invited with',
       vp_ph_name:'Full Name',
@@ -32325,6 +32347,11 @@ TRANSLATIONS.ja = {
     code_sub:'招待コードを入力してください',
     code_submit:'入場',
     code_error:'無効な招待コードです',
+    login_method_password:'パスワード',
+    login_method_email:'メールOTP',
+    login_method_sms:'SMS',
+    ph_login_email:'メールアドレス',
+    ph_login_password:'パスワード',
     vp_title:'本人認証',
     vp_sub:'招待時の情報で認証してください',
     vp_ph_name:'氏名 (本名)',
@@ -33054,7 +33081,39 @@ function applyI18n(root){
     });
     // 문서 lang 속성도 같이
     if(document.documentElement) document.documentElement.lang = (window._tkCurrentLang || 'ko');
+    // 🆕 로그인 전 화면 언어 버튼 활성 상태도 함께 동기화
+    if(typeof authLangSync === 'function') authLangSync();
   }catch(e){ /* graceful */ }
+}
+
+// 🆕 2026.08: 로그인 전 화면(초대코드·본인인증/로그인) 전용 언어 전환.
+//   메인 앱 언어 시트는 z-index 가 낮아 이 화면들 뒤에 가려지므로 화면에 직접 버튼을 둔다.
+//   선택 즉시 applyI18n() 으로 화면 전체를 다시 그리고, 메인 앱 라벨(KO/JA/EN)도 맞춰둔다.
+function authPickLang(code){
+  if(!code) return;
+  try{
+    _tkCurrentLang = code;
+    window._tkCurrentLang = code;
+    localStorage.setItem('tkLang', code);
+  }catch(e){}
+  try{ if(typeof applyI18n === 'function') applyI18n(); }catch(e){}
+  try{
+    var lbl = document.getElementById('tkLangCurrent');
+    var L = (typeof TK_LANGS !== 'undefined') ? TK_LANGS.find(function(x){ return x.code === code; }) : null;
+    if(lbl && L) lbl.textContent = L.short;
+  }catch(e){}
+  authLangSync();
+}
+function authLangSync(){
+  var cur = window._tkCurrentLang || 'ko';
+  ['authLangCode','authLangPhone'].forEach(function(id){
+    var box = document.getElementById(id);
+    if(!box) return;
+    var btns = box.querySelectorAll('button');
+    for(var i=0;i<btns.length;i++){
+      btns[i].className = (btns[i].getAttribute('data-lang') === cur) ? 'on' : '';
+    }
+  });
 }
 
 // 부팅 시 1회 적용
