@@ -103,9 +103,10 @@
     return;   // sb 없이 아래 코드를 실행하면 연쇄 오류가 난다
   }
 
-// 🔒 슈퍼어드민 비밀번호 (난독화 저장)
-// ⚠️ 본인 비밀번호 문자를 하나씩 배열로!
-window._sa_p = ['w','o','o','1','4','7','8','5','2','!'];
+// 🔒 슈퍼어드민 Supabase 비밀번호는 이 파일에 두지 않는다.
+//   index.html 은 taam-app.vercel.app 에서 그대로 서빙되는 공개 파일이라,
+//   문자를 배열로 쪼개도 소스 보기 한 번이면 그대로 읽힌다(난독화가 아니다).
+//   → _getSaCred('p') 가 기기별 localStorage 에서 읽고, 없으면 1회 입력받는다.
 
   window.sb.from('restaurants').select('*', { count: 'exact', head: true })
     .then(function(res){
@@ -14999,13 +15000,17 @@ function _getSaCred(type){
     return p1 + '@' + p2;
   }
   if(type === 'p'){
-    // 비밀번호: window._sa_p 배열에서 복원
-    var raw = window._sa_p || [];
-    if(raw.length === 0){
-      console.error('⚠ 관리자 인증 초기화 필요');
-      return '';
-    }
-    return raw.join('');
+    // 🔒 비밀번호는 배포 파일에 넣지 않는다 (공개 URL 로 그대로 노출된다).
+    //   이 기기에 저장된 값을 쓰고, 없으면 한 번만 입력받아 저장한다.
+    //   여기까지 오는 경로는 슈퍼어드민 PIN 통과 후뿐이라 일반 회원에게는 안 뜬다.
+    try {
+      var pw = localStorage.getItem('taamSaPw');
+      if (pw) return pw;
+      pw = window.prompt('슈퍼어드민 Supabase 비밀번호\n(이 기기에만 저장됩니다)');
+      if (pw) { localStorage.setItem('taamSaPw', pw); return pw; }
+    } catch(e){}
+    console.warn('⚠ 슈퍼어드민 비밀번호 미입력 — Supabase Auth 로그인 생략');
+    return '';
   }
   return '';
 }
