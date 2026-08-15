@@ -5757,12 +5757,14 @@ function tossChargeAmt(v){
   var el = document.getElementById('tossChargeCustom');
   if(el) el.value = v ? Number(v).toLocaleString() : '';
 }
+// ⚠ 예치금 카드 충전은 운영 정책상 쓰지 않는다 (충전 = 법인계좌 이체 → 수동 반영).
+//   openMpCharge() 가 PAY_MODE_TOSS=true 인 동안 showDepositBankInfo() 로 가므로
+//   이 함수는 도달하지 않는다. PAY_MODE_TOSS=false 롤백용으로만 남겨둔다.
+//   → 서버 승인(payment_orders / toss-confirm)도 여기에는 붙이지 않는다.
 async function tossRequestCharge(){
   var raw = String((document.getElementById('tossChargeCustom')||{}).value||'').replace(/[^0-9]/g,'');
   var amt = parseInt(raw) || 0;
   if (amt < 1000) { showToast('⚠','금액 확인','1,000원 이상 입력해주세요'); return; }
-  // payment_orders RLS 의 상한과 같은 값 — 여기서 먼저 걸러 오류 메시지를 친절하게 준다
-  if (amt > 10000000) { showToast('⚠','금액 확인','1회 충전 한도는 1,000만원입니다'); return; }
   tossCloseCharge();
   _tossEnsureSdk(async function(){
     try {
@@ -5772,22 +5774,6 @@ async function tossRequestCharge(){
       if (!TOSS_KEYS[_cur]) _cur = 'KRW';
       var ctx = await _tossPaymentsCtx(_cur); if(!ctx) return;
       var oid = 'taamdep_' + Date.now() + '_' + Math.floor(Math.random()*100000);
-      // 🆕 2026.08: 결제창을 열기 **전에** 주문을 서버에 박아둔다.
-      //   승인(toss-confirm)은 브라우저가 보낸 금액이 아니라 이 행의 amount 를 신뢰한다.
-      //   이게 없으면 회원이 ₩1,000 결제하고 ₩1,000,000 적립받는 위변조가 가능하다.
-      var _ord = await window.sb.from('payment_orders').insert({
-        order_id: oid,
-        user_id: ctx.user.id,
-        purpose: 'deposit_charge',
-        amount: amt,
-        currency: ctx.currency,
-        status: 'pending'
-      });
-      if (_ord.error) {
-        console.warn('[toss] 주문 생성 실패:', _ord.error);
-        showToast('⚠','결제 준비 실패','잠시 후 다시 시도해주세요');
-        return;
-      }
       _tossMarkTrip();   // 결제창 왕복 표시 — 복귀 시 뷰포트 복원 트리거 (reload 견딤)
       await ctx.pay.requestPayment({
         method: 'CARD',
@@ -5835,6 +5821,12 @@ function tossOpenBilling(){
 // ── 🆕 티켓 부족분 카드 결제 (토스 단건 결제창) ──
 //   예치금 부족 시 부족분을 토스 카드 결제창으로 연결. 범위 = 결제창 연동(보이게)까지,
 //   실제 승인/차감 반영은 시크릿키 Edge Function 정식 전환 시. PAY_MODE_TOSS=false 면 미사용.
+// ── 티켓 부족분 카드 결제 ──
+//   ⚠ 여기서 넘어오는 shortage 는 브라우저가 계산한 값(window._pendingShortage)이다.
+//     그대로 결제 금액으로 쓰면 회원이 ₩500,000 짜리 티켓을 ₩1,000 만 내고 살 수 있다.
+//     → CARD_PAY_LIVE 를 켜기 전에 Edge Function toss-order 가 티켓 가격과
+//       예치금 잔액을 서버에서 다시 계산해 payment_orders 를 만들어야 한다.
+//       (docs/TOSS_GOLIVE.md "티켓 부족분 카드 결제" 참고)
 async function tossPayTicketShortage(shortage){
   var amt = Math.round(shortage||0);
   if (amt < 100) { showToast('⚠','금액 확인','결제 금액이 올바르지 않습니다'); return; }
