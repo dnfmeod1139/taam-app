@@ -37055,6 +37055,54 @@ async function tcalSaveCapacity(restId){
 }
 window.tcalSaveCapacity = tcalSaveCapacity;
 
+// 🆕 2026.08: 일정 삭제 — daegwan_capacity 행 제거.
+//   ⚠ 예약이 하나라도 남아 있으면 막는다. 정원 정의만 지우면 좌석 상한이 사라져
+//     이미 자리를 잡은 예약 위로 초과 판매가 될 수 있다 (이중예약 위험).
+//   ⚠ 앱에 업로드된 티켓 상품(ticketDB)에서 자동 생성된 일정은 여기서 지우지 않는다.
+//     그건 티켓 자체라서 티켓 관리에서 다뤄야 한다 — 캘린더에서 지우면 티켓만 유령으로 남는다.
+async function tcalDeleteSchedule(restId){
+  if(!restId || !_tcalSelectedDate){ showToast('⚠','선택 필요','매장·날짜 확인'); return; }
+  if(!(typeof _isSuperAdmin === 'function' && _isSuperAdmin())){
+    showToast('⚠','권한 없음','슈퍼어드민만 일정을 삭제할 수 있어요'); return;
+  }
+  var _day = parseInt(_tcalSelectedDate.split('.')[1], 10);
+  var dateKey = _tcalYear + '-' + (_tcalMonth + 1) + '-' + _day;
+  var g = (_tcalDayGroups(dateKey) || []).filter(function(x){ return String(x.restId) === String(restId); })[0];
+
+  // ① 예약이 남아 있으면 삭제 금지
+  if(g && g.entries && g.entries.length > 0){
+    var booked = g.entries.reduce(function(p,e){ return p + (e.pax||0); }, 0);
+    alert('예약 ' + g.entries.length + '건(' + booked + '명)이 남아 있어 일정을 삭제할 수 없습니다.\n\n'
+        + '각 예약의 × 로 먼저 취소한 뒤 다시 시도하세요.\n'
+        + '(앱 구매·초대 건은 구매 취소 절차로 처리해야 합니다)');
+    return;
+  }
+
+  // ② 티켓 상품에서 온 일정인지 확인 — daegwan_capacity 행이 없으면 그쪽이다
+  var ymd = _tcalYMD();
+  var hasCapRow = (_tcalCapRows || []).some(function(c){
+    return String(c.venue_id) === String(restId)
+        && _tcalDateKey(String(c.ymd).replace(/-/g,'.')) === dateKey;
+  });
+  if(!hasCapRow){
+    alert('이 일정은 앱에 업로드된 티켓 상품에서 자동으로 만들어진 것이라 캘린더에서 삭제할 수 없습니다.\n\n'
+        + '티켓 관리에서 해당 티켓을 수정하거나 삭제해주세요.');
+    return;
+  }
+
+  if(!confirm(_tcalRestName(restId) + ' · ' + _tcalSelectedDate + ' 일정을 삭제할까요?\n\n정원·시간 설정이 지워집니다.')) return;
+
+  try {
+    var r = await window.sb.from('daegwan_capacity')
+      .delete().eq('venue_id', String(restId)).eq('ymd', ymd).select();
+    if(r.error){ showToast('❌','삭제 실패', (r.error.message||'').substring(0,80)); return; }
+    if(!r.data || r.data.length === 0){ showToast('⚠','대상 없음','이미 삭제되었거나 권한이 없어요'); return; }
+    showToast('✓','일정 삭제','일정이 삭제되었습니다');
+    await tcalLoadCapacity(); tcalRender(); tcalRenderDetail(_tcalSelectedDate);
+  } catch(e){ showToast('❌','오류', (e.message||'').substring(0,80)); }
+}
+window.tcalDeleteSchedule = tcalDeleteSchedule;
+
 // 🆕 일정(매장) 등록 — 매장 + 정원 + 시간
 var _tcalSchedRest = '';
 function tcalOpenSchedule(){
@@ -37419,7 +37467,10 @@ function tcalRenderDetail(dateStr) {
     if(isSuper){
       html += '<div style="display:flex;align-items:center;gap:6px;margin-top:10px;"><span style="font-size:11px;color:#9A9486;">정원</span>'
         + '<input id="tcalCap_' + g.restId + '" type="number" min="0" value="' + (g.capacity!=null?g.capacity:'') + '" placeholder="0" style="width:54px;padding:5px;border:1px solid #e0ddd5;border-radius:7px;font-size:13px;font-weight:800;text-align:center;font-family:inherit;">'
-        + '<button onclick="tcalSaveCapacity(\'' + g.restId + '\')" style="height:28px;padding:0 10px;border:none;border-radius:7px;background:#6A1A1A;color:#fff;font-size:11px;font-weight:800;cursor:pointer;">저장</button></div>';
+        + '<button onclick="tcalSaveCapacity(\'' + g.restId + '\')" style="height:28px;padding:0 10px;border:none;border-radius:7px;background:#6A1A1A;color:#fff;font-size:11px;font-weight:800;cursor:pointer;">저장</button>'
+        // 🆕 2026.08: 일정 삭제 — 예약이 남아 있으면 함수 안에서 막는다
+        + '<button onclick="tcalDeleteSchedule(\'' + g.restId + '\')" style="height:28px;padding:0 10px;margin-left:auto;border:1px solid #E4D6D6;border-radius:7px;background:#fff;color:#B23A2E;font-size:11px;font-weight:800;cursor:pointer;">일정 삭제</button>'
+        + '</div>';
     }
     html += '</div>';
     // 내역
