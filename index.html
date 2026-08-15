@@ -23848,7 +23848,42 @@ function renderDmMgmtList(idx){
 
   // 🆕 카드환불 탭은 '아직 카드로 환불해야 할 금액'(pending 합계)을 크게 보여준다
   var totalAmt, summaryAmtColor, summaryLabel, countLabel;
-  if(idx === 3){
+  var breakdownHtml = '';   // 🆕 요약 아래 차감 명목 분해
+  if(idx === 1){
+    // 🆕 2026.08: 반환완료 요약이 티켓가(h.amt) 합계를 '반환 완료 금액'으로 보여줬다.
+    //   대행비·추가차감이 빠진 실제 반환액과 어긋난다 (표시 ₩3,600,000 / 실제 ₩2,800,000).
+    //   → 큰 숫자는 '실제 반환 합계', 아래에 티켓 총액과 차감 명목을 나눠 보여준다.
+    //   총 차감은 (티켓 총액 − 실제 반환) 으로 잡는다 — 항상 성립하고 누락이 없다.
+    //   그 안에서 대행비·추가차감을 빼고 남은 것은 위약금·기타로 묶는다.
+    var _sTicket = 0, _sReturn = 0, _sAgency = 0, _sExtra = 0;
+    items.forEach(function(h){
+      var dr = h.depositReturn || {};
+      _sTicket += (parseInt(h.amt) || 0);
+      _sReturn += (parseInt(dr.returnAmt) || 0);
+      _sAgency += (parseInt(dr.agencyHeld) || 0);
+      _sExtra  += (parseInt(dr.extraDeduct) || 0);
+    });
+    var _sCut = Math.max(0, _sTicket - _sReturn);              // 총 차감
+    var _sEtc = Math.max(0, _sCut - _sAgency - _sExtra);       // 위약금·기타
+    totalAmt = _sReturn;
+    summaryAmtColor = '#2a6a2a';
+    summaryLabel = '실제 반환 금액';
+    countLabel = items.length + '건';
+
+    function _bdRow(label, amount, color, strong){
+      return '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:3px 0;">'
+        + '<span style="font-size:11.5px;color:#9a9486;'+(strong?'font-weight:800;color:#6b6b6b;':'')+'">'+label+'</span>'
+        + '<span style="font-size:12.5px;font-weight:'+(strong?'800':'700')+';color:'+color+';">₩'+amount.toLocaleString()+'</span>'
+        + '</div>';
+    }
+    breakdownHtml = '<div style="margin-top:10px;padding-top:9px;border-top:1px solid #ece8df;">'
+      + _bdRow('티켓 총액', _sTicket, '#1a1a18', true)
+      + _bdRow('총 차감', _sCut, '#B23A2E', true)
+      + (_sAgency > 0 ? _bdRow('　└ 대행비 수취', _sAgency, '#1F5BD6') : '')
+      + (_sExtra  > 0 ? _bdRow('　└ 추가 차감', _sExtra, '#B23A2E') : '')
+      + (_sEtc    > 0 ? _bdRow('　└ 위약금·기타', _sEtc, '#B23A2E') : '')
+      + '</div>';
+  } else if(idx === 3){
     var _pend = items.filter(function(h){
       return h.extra_data.card_refund_pending.status !== 'done';
     });
@@ -23867,6 +23902,7 @@ function renderDmMgmtList(idx){
     +'<div class="dm-summary-label">'+summaryLabel+'</div>'
     +'<div class="dm-summary-amt" style="color:'+summaryAmtColor+';">₩'+totalAmt.toLocaleString()+'</div>'
     +'<div class="dm-summary-count">'+(idx===3?'':'총 ')+countLabel+'</div>'
+    + breakdownHtml
     +'</div>';
 
   if(items.length === 0){
@@ -23989,7 +24025,11 @@ function renderDmMgmtList(idx){
         var agencyHeld1 = dr1.agencyHeld || (dr1.agencyOnly ? (dr1.penaltyAmt||0) : 0);
         details1 = ['티켓가 ₩'+(h.amt||0).toLocaleString()];
         if(agencyHeld1 > 0) details1.push('대행비 ₩'+agencyHeld1.toLocaleString());
+        if(dr1.extraDeduct > 0) details1.push('추가차감 ₩'+dr1.extraDeduct.toLocaleString());
         if(dr1.penaltyAmt > 0 && agencyHeld1 === 0) details1.push('위약금 ₩'+dr1.penaltyAmt.toLocaleString()+' ('+dr1.penaltyPct+'%)');
+        // 🆕 차감 합계 = 티켓가 − 실제 반환액 (명목이 빠져도 총액은 항상 맞는다)
+        var _cut1 = Math.max(0, (parseInt(h.amt)||0) - (parseInt(dr1.returnAmt)||0));
+        if(_cut1 > 0) details1.push('<b style="color:#B23A2E;">차감 합계 ₩'+_cut1.toLocaleString()+'</b>');
       }
       amtHtml = '<div class="dm-item-amt" style="color:#2a6a2a;">₩'+(dr1.returnAmt||0).toLocaleString()+'</div>'
               + '<div style="font-size:11px;color:#888;margin-top:4px;line-height:1.6;letter-spacing:.02em;">'+details1.join(' &nbsp;·&nbsp; ')+'</div>';
