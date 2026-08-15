@@ -10504,7 +10504,7 @@ window.closePromoCarousel = function(){
   <div class="dm-tabs">
     <div class="dm-tab active" onclick="dmMgmtTab(0,this)">반환예정</div>
     <div class="dm-tab" onclick="dmMgmtTab(1,this)">반환완료</div>
-    <div class="dm-tab" onclick="dmMgmtTab(2,this)">환불불가</div>
+    <div class="dm-tab" onclick="dmMgmtTab(2,this)">환불</div>
     <div class="dm-tab" onclick="dmMgmtTab(3,this)">카드환불</div>
   </div>
   <!-- 🆕 레스토랑명·구매자명 검색 (세 탭 공통) -->
@@ -10576,9 +10576,9 @@ window.closePromoCarousel = function(){
       </div>
 
       <button id="dmReturnConfirmBtn" class="dm-popup-confirm" style="background:#1a1a18;" onclick="dmConfirmReturn()">반환 완료 처리</button>
-      <button class="dm-popup-cancel" onclick="showDmPenaltySection()">환불 불가로 변경</button>
+      <button class="dm-popup-cancel" onclick="showDmPenaltySection()">환불 처리로 변경 →</button>
     </div>
-    <!-- 환불불가 섹션 -->
+    <!-- 환불 처리 섹션 -->
     <div id="dmPopupPenaltySection" style="display:none;">
       <div class="dm-popup-sep"></div>
       <div class="dm-popup-section-label">위약금 비율 선택</div>
@@ -10608,8 +10608,8 @@ window.closePromoCarousel = function(){
         </div>
       </div>
       <div class="dm-popup-sep"></div>
-      <div class="dm-popup-section-label">사유 메모</div>
-      <textarea class="dm-popup-note" id="dmPopupNote" rows="3" placeholder="예: 방문 당일 노쇼, 2일 전 취소 등"></textarea>
+      <div class="dm-popup-section-label">사유 <span style="color:#B23A2E;">(필수)</span></div>
+      <textarea class="dm-popup-note" id="dmPopupNote" rows="3" placeholder="왜 이렇게 처리했는지 적어주세요 — 파트너 어드민도 보는 기록입니다"></textarea>
 
       <!-- 예외 환불 / 대행비 제외 체크박스 -->
       <div style="background:#faf8f5;border-radius:12px;padding:12px 14px;margin:10px 0;display:flex;flex-direction:column;gap:10px;">
@@ -10632,7 +10632,7 @@ window.closePromoCarousel = function(){
       </div>
       <div id="dmPenaltyFinalPreview" style="font-size:12px;color:#555;margin-bottom:12px;padding:0 2px;"></div>
 
-      <button class="dm-popup-confirm" style="background:#9B1C1C;" onclick="dmConfirmPenalty()">환불 불가 처리</button>
+      <button class="dm-popup-confirm" style="background:#9B1C1C;" onclick="dmConfirmPenalty()">환불 처리</button>
       <button class="dm-popup-cancel" onclick="showDmReturnSection()">← 반환 완료로 변경</button>
     </div>
   </div>
@@ -23118,7 +23118,7 @@ function _dmPersistBuyerChanges(h, refundToAdd, refundNote){
             change_type: 'ticket_refund',
             amount: 0,
             balance_after: curTotal,
-            description: (h.rest || '티켓') + ' 환불 불가 처리 — ' + refundNote,
+            description: (h.rest || '티켓') + ' 환불 없음 처리 — ' + refundNote,
             metadata: {
               purchase_id: purchaseId,
               ticket_id: h.id,
@@ -23849,8 +23849,8 @@ function renderDmMgmtList(idx){
   // 🆕 카드환불 탭은 '아직 카드로 환불해야 할 금액'(pending 합계)을 크게 보여준다
   var totalAmt, summaryAmtColor, summaryLabel, countLabel;
   var breakdownHtml = '';   // 🆕 요약 아래 차감 명목 분해
-  if(idx === 1){
-    // 🆕 2026.08: 반환완료 요약이 티켓가(h.amt) 합계를 '반환 완료 금액'으로 보여줬다.
+  if(idx === 1 || idx === 2){
+    // 🆕 2026.08: 반환완료·환불 요약이 티켓가(h.amt) 합계를 반환액으로 보여줬다.
     //   대행비·추가차감이 빠진 실제 반환액과 어긋난다 (표시 ₩3,600,000 / 실제 ₩2,800,000).
     //   → 큰 숫자는 '실제 반환 합계', 아래에 티켓 총액과 차감 명목을 나눠 보여준다.
     //   총 차감은 (티켓 총액 − 실제 반환) 으로 잡는다 — 항상 성립하고 누락이 없다.
@@ -23866,8 +23866,8 @@ function renderDmMgmtList(idx){
     var _sCut = Math.max(0, _sTicket - _sReturn);              // 총 차감
     var _sEtc = Math.max(0, _sCut - _sAgency - _sExtra);       // 위약금·기타
     totalAmt = _sReturn;
-    summaryAmtColor = '#2a6a2a';
-    summaryLabel = '실제 반환 금액';
+    summaryAmtColor = _sReturn > 0 ? '#2a6a2a' : '#9B1C1C';
+    summaryLabel = (idx === 1) ? '실제 반환 금액' : '실제 환불 금액';
     countLabel = items.length + '건';
 
     function _bdRow(label, amount, color, strong){
@@ -23894,7 +23894,7 @@ function renderDmMgmtList(idx){
   } else {
     totalAmt = items.reduce(function(s,h){ return s+(h.amt||0); },0);
     summaryAmtColor = idx===2?'#9B1C1C':'#1a1a18';
-    summaryLabel = idx===0?'반환 예정 금액':idx===1?'반환 완료 금액':'환불 불가 금액';
+    summaryLabel = idx===0?'반환 예정 금액':'환불 금액';
     countLabel = items.length + '건';
   }
 
@@ -23906,7 +23906,7 @@ function renderDmMgmtList(idx){
     +'</div>';
 
   if(items.length === 0){
-    var empties = ['방문 완료 후 반환 대기 중인 건이 없어요','반환 완료된 내역이 없어요','환불 불가 처리된 내역이 없어요','카드 환불이 필요한 건이 없어요'];
+    var empties = ['방문 완료 후 반환 대기 중인 건이 없어요','반환 완료된 내역이 없어요','환불 처리된 내역이 없어요','카드 환불이 필요한 건이 없어요'];
     // ── 슈퍼어드민 진단 정보 (반환예정 탭이 비어 있을 때만) ──
     //   구매는 했는데 리스트에 안 뜨면 여기서 왜 비었는지 확인 가능.
     var diag = '';
@@ -23959,7 +23959,7 @@ function renderDmMgmtList(idx){
     if(idx === 0){
       actionsHtml = '<div class="dm-actions">'
         +'<button class="dm-btn-return" onclick="openDmPopup('+globalIdx+',\'return\')">반환</button>'
-        +'<button class="dm-btn-penalty" onclick="openDmPopup('+globalIdx+',\'penalty\')">환불불가</button>'
+        +'<button class="dm-btn-penalty" onclick="openDmPopup('+globalIdx+',\'penalty\')">환불 처리</button>'
         +'</div>'
         +'<button onclick="dmChangeTime('+globalIdx+')" style="width:100%;margin-top:8px;padding:10px;border:1px solid #c8a96e;border-radius:10px;background:#fff;color:#5C0A14;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;">⏰ 예약 시간 변경</button>';
     } else if(idx === 1){
@@ -23996,15 +23996,35 @@ function renderDmMgmtList(idx){
         + (_crp3.reason ? ('<br><span style="opacity:.75;">' + escapeHtml(String(_crp3.reason)) + '</span>') : '')
         + '</div>';
     } else {
-      // 환불불가 — 슈퍼어드민이 "환불불가" 버튼으로 처리한 건만 (penalty type)
+      // 🆕 2026.08: 환불 탭 — 라벨을 '저장된 위약금 %' 가 아니라 '실제 금액' 에서 만든다.
+      //   예전에는 슈퍼어드민이 전액 환불해줘도 type='penalty' 로 저장돼
+      //   "전액 환불 불가 · 위약금 100% · 부분반환 ₩1,200,000" 처럼 사실과 정반대로 나왔다.
+      //   파트너 어드민이 보면 전혀 이해할 수 없는 표기라서, 숫자로 판정한다.
       var dr = h.depositReturn;
-      var penLabel = dr.penaltyPct===100?'전액 환불 불가':'위약금 '+dr.penaltyPct+'% (₩'+(dr.penaltyAmt||0).toLocaleString()+')';
-      var retLabel = dr.returnAmt>0?' · 부분반환 ₩'+dr.returnAmt.toLocaleString():'';
-      resultHtml = '<div class="dm-result-box dm-result-penalty">'
-        +'✕ '+dr.date+' 환불 불가 처리<br>'
-        +penLabel+retLabel
-        +(dr.note?'<br><span style="opacity:.7;">'+dr.note+'</span>':'')
-        +'</div>';
+      var _tk = parseInt(h.amt) || 0;
+      var _rt = parseInt(dr.returnAmt) || 0;
+      var _ct = Math.max(0, _tk - _rt);                                  // 실제 차감액
+      var _pc = (_tk > 0) ? Math.round(_ct / _tk * 100) : 0;
+      var _head, _cls;
+      if(_tk > 0 && _rt >= _tk){
+        _head = '✓ ' + (dr.date||'') + ' 전액 환불 · ₩' + _rt.toLocaleString();
+        _cls  = 'dm-result-returned';
+      } else if(_rt > 0){
+        _head = '◐ ' + (dr.date||'') + ' 부분 환불 · ₩' + _rt.toLocaleString()
+              + '<br><span style="color:#B23A2E;font-weight:700;">차감 ₩' + _ct.toLocaleString() + ' (' + _pc + '%)</span>';
+        _cls  = 'dm-result-penalty';
+      } else {
+        _head = '✕ ' + (dr.date||'') + ' 환불 없음 · 전액 차감 ₩' + _ct.toLocaleString();
+        _cls  = 'dm-result-penalty';
+      }
+      if(dr.agencyOnly && dr.agencyHeld > 0){
+        _head += '<br><span style="color:#1F5BD6;">대행비 ₩' + dr.agencyHeld.toLocaleString() + ' 공제 (정상 절차)</span>';
+      }
+      resultHtml = '<div class="dm-result-box '+_cls+'">'
+        + _head
+        + (dr.note ? '<br><span style="opacity:.75;">사유: '+escapeHtml(String(dr.note))+'</span>'
+                   : '<br><span style="color:#B23A2E;opacity:.8;">사유 미기재</span>')
+        + '</div>';
     }
 
     // 🆕 2026.05.22: 탭별 큰 금액 표시 분기
@@ -24034,12 +24054,20 @@ function renderDmMgmtList(idx){
       amtHtml = '<div class="dm-item-amt" style="color:#2a6a2a;">₩'+(dr1.returnAmt||0).toLocaleString()+'</div>'
               + '<div style="font-size:11px;color:#888;margin-top:4px;line-height:1.6;letter-spacing:.02em;">'+details1.join(' &nbsp;·&nbsp; ')+'</div>';
     } else if(idx === 2){
+      // 🆕 2026.08: 큰 숫자는 '실제 환불액'. 예전엔 차감액(-₩)을 크게 보여줘서
+      //   전액 환불한 건이 -₩0 으로 뜨는 등 의미가 뒤집혀 있었다.
       var dr2 = h.depositReturn || {};
-      var deducted = dr2.penaltyAmt || (h.amt - (dr2.returnAmt||0));
-      var details2 = ['티켓가 ₩'+(h.amt||0).toLocaleString()];
-      if(dr2.returnAmt > 0) details2.push('부분환불 ₩'+dr2.returnAmt.toLocaleString());
-      if(dr2.penaltyPct) details2.push('위약 ' + dr2.penaltyPct + '%');
-      amtHtml = '<div class="dm-item-amt" style="color:#9B1C1C;">-₩'+deducted.toLocaleString()+'</div>'
+      var _tk2 = parseInt(h.amt) || 0;
+      var _rt2 = parseInt(dr2.returnAmt) || 0;
+      var _ct2 = Math.max(0, _tk2 - _rt2);
+      var details2 = ['티켓가 ₩'+_tk2.toLocaleString()];
+      if(_ct2 > 0){
+        details2.push('차감 ₩'+_ct2.toLocaleString() + (_tk2>0 ? ' ('+Math.round(_ct2/_tk2*100)+'%)' : ''));
+        if(dr2.agencyOnly && dr2.agencyHeld > 0) details2.push('대행비 공제');
+      } else {
+        details2.push('<b style="color:#2a6a2a;">전액 환불</b>');
+      }
+      amtHtml = '<div class="dm-item-amt" style="color:'+(_rt2>0?'#2a6a2a':'#9B1C1C')+';">₩'+_rt2.toLocaleString()+'</div>'
               + '<div style="font-size:11px;color:#888;margin-top:4px;line-height:1.6;letter-spacing:.02em;">'+details2.join(' &nbsp;·&nbsp; ')+'</div>';
     } else {
       amtHtml = '<div class="dm-item-amt">₩'+(h.amt||0).toLocaleString()+'</div>';
@@ -24368,7 +24396,7 @@ function showDmReturnSection(){
 function showDmPenaltySection(){
   document.getElementById('dmPopupReturnSection').style.display = 'none';
   document.getElementById('dmPopupPenaltySection').style.display = 'block';
-  document.getElementById('dmPopupLabel').textContent = '환불 불가 처리';
+  document.getElementById('dmPopupLabel').textContent = '환불 처리';
 }
 
 function dmSelectPct(el, pct){
@@ -24702,15 +24730,23 @@ function dmConfirmPenalty(){
   var note = document.getElementById('dmPopupNote').value.trim();
   var penaltyAmt, returnAmt, usedPct, toastMsg;
 
+  // 🆕 2026.08: 사유는 필수. 이 기록은 슈퍼어드민뿐 아니라 파트너 어드민도 본다.
+  //   "왜 전액 환불했는지 / 왜 얼마를 뗐는지" 가 없으면 나중에 아무도 설명할 수 없다.
+  if(!note){
+    alert('사유를 입력해주세요.\n\n'
+        + '전액 환불이면 그 사유를, 차감이 있으면 얼마를 왜 뗐는지 적어주세요.\n'
+        + '이 내용은 파트너 어드민 화면에도 그대로 표시됩니다.');
+    var _nEl = document.getElementById('dmPopupNote'); if(_nEl) _nEl.focus();
+    return;
+  }
+
   if(_dmPenaltyExceptionRefund){
     penaltyAmt = 0; returnAmt = h.amt; usedPct = 0;
-    note = note || '예외 전액 환불';
-    toastMsg = '예외 처리: 전액 ₩'+h.amt.toLocaleString()+' 반환';
+    toastMsg = '전액 ₩'+h.amt.toLocaleString()+' 환불 처리';
   } else if(_dmPenaltyAgencyExclude && agencyFee > 0){
     penaltyAmt = agencyFee; returnAmt = Math.max(0, h.amt - agencyFee);
     usedPct = Math.round(agencyFee / h.amt * 100);
-    note = note || '대행비 ₩'+agencyFee.toLocaleString()+' 제외 환불';
-    toastMsg = '대행비 제외 ₩'+returnAmt.toLocaleString()+' 반환';
+    toastMsg = '대행비 제외 ₩'+returnAmt.toLocaleString()+' 환불';
   } else {
     penaltyAmt = (_dmPenaltyDirectAmt !== null)
       ? Math.min(_dmPenaltyDirectAmt, h.amt)
@@ -24729,14 +24765,19 @@ function dmConfirmPenalty(){
     _ts: new Date().toISOString(),             // 🆕 정렬용 전체 타임스탬프
     note: note,
     // 대행비만 공제한 경우에는 agencyOnly 플래그 (UI에서 "대행비 차감" 파란색으로 표시)
-    agencyOnly: (_dmPenaltyAgencyExclude && agencyFee > 0) === true
+    agencyOnly: (_dmPenaltyAgencyExclude && agencyFee > 0) === true,
+    // 🆕 대행비 공제분을 따로 남긴다 — 화면이 '대행비 ₩X 공제(정상 절차)'로 구분해 보여준다
+    agencyHeld: (_dmPenaltyAgencyExclude && agencyFee > 0) ? agencyFee : 0,
+    // 🆕 실제 결과를 그대로 기록 — 나중에 저장된 %가 아니라 이 값으로 판정한다
+    fullRefund: (returnAmt >= (parseInt(h.amt)||0) && (parseInt(h.amt)||0) > 0)
   };
   // 버이어 저장소에 반영 (부분 반환액이 있으면 버이어 예치금에 크레딧)
-  var refundNote = note || ('부분 반환 (위약금 '+usedPct+'%)');
-  _dmPersistBuyerChanges(h, returnAmt, refundNote).then(function(){
+  _dmPersistBuyerChanges(h, returnAmt, note).then(function(){
     closeDmPopup();
     loadAllUsersPurchases().then(function(){ renderDmMgmtList(_dmCurrentTab); });
-    showToast('✕','환불 불가 처리', toastMsg);
+    // 결과에 맞는 문구로 알린다 (전액 환불을 '환불 불가'로 알리던 문제)
+    var _ok = returnAmt > 0;
+    showToast(_ok ? '✓' : '✕', _ok ? '환불 처리 완료' : '환불 없음 처리', toastMsg);
   });
 }
 
