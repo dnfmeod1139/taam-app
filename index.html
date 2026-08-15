@@ -11900,6 +11900,18 @@ function loadRestaurants(){
 return {
           id: r.id,
           name: r.name,
+          // 🆕 2026.08: select('*') 로 가져와놓고 여기서 번역 컬럼을 버리고 있었다.
+          //   그래서 restaurants.name_en 이 채워져도 티켓 카드는 늘 한글이었다.
+          //   pickI18nField(r,'name') 이 읽을 수 있도록 그대로 실어 보낸다.
+          name_en: r.name_en || '',
+          name_jp: r.name_jp || '',
+          description_en: r.description_en || '',
+          description_jp: r.description_jp || '',
+          address_en: r.address_en || '',
+          address_jp: r.address_jp || '',
+          genre_jp: r.genre_jp || '',
+          // 일본어 검수 게이트 — false 면 화면에서 일본어 대신 한글로 폴백한다
+          i18n_jp_approved: r.i18n_jp_approved,
           address: r.address || '',
           genre: r.description || '',
           region: r.region || '',
@@ -34270,6 +34282,30 @@ var TX_MAP = {
   '잠시 후 자동으로 다시 저장됩니다 · 기록은 안전하게 보존됐어요':['It will be saved again automatically in a moment — your record is safe','まもなく自動的に再保存されます — 記録は安全に保存されています'],
   '매진 — 자동 환불':['Sold out — automatic refund','完売 — 自動返金'],
 
+  // ── 계보도 이름 (트리 헤더·투어 타이틀) ──
+  '스기타 계보':['Sugita Lineage','すぎた系譜'],
+  '카네사카 계보':['Kanesaka Lineage','かねさか系譜'],
+  '큐베이 계보':['Kyubey Lineage','久兵衛系譜'],
+  '사이토 계보':['Saito Lineage','齋藤系譜'],
+  '우미 계보':['Umi Lineage','海系譜'],
+  '지로 계보':['Jiro Lineage','次郎系譜'],
+  '아라이 계보':['Arai Lineage','あら輝系譜'],
+  '스시 쇼 계보':['Sushisho Lineage','すし匠系譜'],
+  '기요타 계보':['Kiyota Lineage','清田系譜'],
+  '아라키 계보':['Araki Lineage','荒木系譜'],
+  '미타니 계보':['Mitani Lineage','三谷系譜'],
+  '요시타케 계보':['Yoshitake Lineage','よしたけ系譜'],
+  '스시 난바 계보':['Sushi Namba Lineage','すし難波系譜'],
+  '신바시 시미즈 계보':['Shimbashi Shimizu Lineage','新橋しみづ系譜'],
+
+  // ── 셰프 카드 버튼 ──
+  '레스토랑 정보':['Restaurant info','店舗情報'],
+  '예약 가능 링크':['Booking link','予約リンク'],
+  '레스토랑 정보 없음':['No restaurant info','店舗情報がありません'],
+  '해당 매장의 레스토랑 정보와 예약 가능 정보입니다.':['Restaurant details and booking information.','店舗情報と予約に関する情報です。'],
+  '예약 사이트가 없을 경우 클릭이 되지 않을 수 있습니다.':['The button may be inactive if no booking site exists.','予約サイトがない場合はボタンが反応しないことがあります。'],
+  'TAAM 티켓':['TAAM Ticket','TAAMチケット'],
+
   // ── 콘텐츠 · 계보도 · 아틀라스 ──
   '셰프':['Chef','シェフ'],
   '셰프:':['Chef:','シェフ:'],
@@ -48437,7 +48473,13 @@ function relocalizeChefNames(){
     if (typeof _chefInfoCache === 'undefined' || !_chefInfoCache) return;
     Object.keys(_chefInfoCache).forEach(function(k){
       var info = _chefInfoCache[k];
-      if (!info || info._nameKo === undefined) return;   // 원문 미보관(구 캐시)이면 건너뜀
+      if (!info) return;
+      // 🆕 섹션 제목·본문도 함께 재선택 (원문을 보관한 경우만)
+      if (info._s1TitleKo !== undefined) info.sec1Title = _chefPickName(info._s1TitleKo, info._s1TitleEn, info._s1TitleJp);
+      if (info._s1DescKo  !== undefined) info.sec1Desc  = _chefPickName(info._s1DescKo,  info._s1DescEn,  info._s1DescJp);
+      if (info._s2TitleKo !== undefined) info.sec2Title = _chefPickName(info._s2TitleKo, info._s2TitleEn, info._s2TitleJp);
+      if (info._s2DescKo  !== undefined) info.sec2Desc  = _chefPickName(info._s2DescKo,  info._s2DescEn,  info._s2DescJp);
+      if (info._nameKo === undefined) return;   // 이름 원문 미보관(구 캐시)이면 SVG 갱신은 건너뜀
       info.name = _chefPickName(info._nameKo, info._nameEn, info._nameJp);
       info.sub  = _chefPickName(info._subKo,  info._subEn,  info._subJp);
       var sep = k.indexOf(':');
@@ -48923,7 +48965,14 @@ async function loadAllChefsFromSupabase(){
         info.sec1NameFs = s1.nameFs; info.sec1CaptionFs = s1.captionFs;
         info.sec1BgX = s1.bgX; info.sec1BgY = s1.bgY; info.sec1BgScale = s1.bgScale;
         info.sec1Filter = s1.filter;
-        info.sec1Media = s1.media; info.sec1Title = s1.title; info.sec1Desc = s1.desc;
+        info.sec1Media = s1.media;
+        // 🆕 2026.08: 이름은 번역됐는데 본문만 한글로 남던 문제.
+        //   sec1_data 안의 title_en/desc_en/title_jp/desc_jp 를 안 읽고 한글만 꺼내고 있었다.
+        //   언어 변경 시 재선택할 수 있도록 원문 3종도 함께 보관한다.
+        info._s1TitleKo = s1.title; info._s1TitleEn = s1.title_en; info._s1TitleJp = s1.title_jp;
+        info._s1DescKo  = s1.desc;  info._s1DescEn  = s1.desc_en;  info._s1DescJp  = s1.desc_jp;
+        info.sec1Title = _chefPickName(s1.title, s1.title_en, s1.title_jp);
+        info.sec1Desc  = _chefPickName(s1.desc,  s1.desc_en,  s1.desc_jp);
       }
       
       if(row.sec2_data){
@@ -48933,7 +48982,11 @@ async function loadAllChefsFromSupabase(){
         info.sec2SigFs = s2.sigFs; info.sec2CaptionFs = s2.captionFs;
         info.sec2BgX = s2.bgX; info.sec2BgY = s2.bgY; info.sec2BgScale = s2.bgScale;
         info.sec2Filter = s2.filter;
-        info.sec2Media = s2.media; info.sec2Title = s2.title; info.sec2Desc = s2.desc;
+        info.sec2Media = s2.media;
+        info._s2TitleKo = s2.title; info._s2TitleEn = s2.title_en; info._s2TitleJp = s2.title_jp;
+        info._s2DescKo  = s2.desc;  info._s2DescEn  = s2.desc_en;  info._s2DescJp  = s2.desc_jp;
+        info.sec2Title = _chefPickName(s2.title, s2.title_en, s2.title_jp);
+        info.sec2Desc  = _chefPickName(s2.desc,  s2.desc_en,  s2.desc_jp);
         info.sec2LayoutMode = s2.layoutMode; info.sec2Layout = s2.layout; info.sec2Medias = s2.medias;
       }
       
@@ -51319,13 +51372,23 @@ function _ensureSecData(chefId, info, cacheKey, cb, lineageId){
         info.sec1NameFs = s1.nameFs; info.sec1CaptionFs = s1.captionFs;
         info.sec1BgX = s1.bgX; info.sec1BgY = s1.bgY; info.sec1BgScale = s1.bgScale;
         info.sec1Filter = s1.filter;
-        info.sec1Media = s1.media; info.sec1Title = s1.title; info.sec1Desc = s1.desc;
+        info.sec1Media = s1.media;
+        // 🆕 2026.08: sec_data 안의 title_en/desc_en/title_jp/desc_jp 를 안 읽어
+        //   이름은 번역됐는데 본문만 한글로 남았다. 원문 3종도 보관해 언어 변경 시 재선택한다.
+        info._s1TitleKo = s1.title; info._s1TitleEn = s1.title_en; info._s1TitleJp = s1.title_jp;
+        info._s1DescKo  = s1.desc;  info._s1DescEn  = s1.desc_en;  info._s1DescJp  = s1.desc_jp;
+        info.sec1Title = _chefPickName(s1.title, s1.title_en, s1.title_jp);
+        info.sec1Desc  = _chefPickName(s1.desc,  s1.desc_en,  s1.desc_jp);
         info.sec2BoxAX = s2.boxAX; info.sec2BoxAY = s2.boxAY; info.sec2BoxAAlign = s2.boxAAlign;
         info.sec2BoxBX = s2.boxBX; info.sec2BoxBY = s2.boxBY; info.sec2BoxBAlign = s2.boxBAlign;
         info.sec2SigFs = s2.sigFs; info.sec2CaptionFs = s2.captionFs;
         info.sec2BgX = s2.bgX; info.sec2BgY = s2.bgY; info.sec2BgScale = s2.bgScale;
         info.sec2Filter = s2.filter;
-        info.sec2Media = s2.media; info.sec2Title = s2.title; info.sec2Desc = s2.desc;
+        info.sec2Media = s2.media;
+        info._s2TitleKo = s2.title; info._s2TitleEn = s2.title_en; info._s2TitleJp = s2.title_jp;
+        info._s2DescKo  = s2.desc;  info._s2DescEn  = s2.desc_en;  info._s2DescJp  = s2.desc_jp;
+        info.sec2Title = _chefPickName(s2.title, s2.title_en, s2.title_jp);
+        info.sec2Desc  = _chefPickName(s2.desc,  s2.desc_en,  s2.desc_jp);
         info.sec2LayoutMode = s2.layoutMode; info.sec2Layout = s2.layout; info.sec2Medias = s2.medias;
         info.sec2Hidden = !!s2.hidden;  // 🆕 v1.46: 시그니처 미노출 플래그 복원
       }
@@ -51374,13 +51437,23 @@ function prefetchSecDataForLineage(lineageId){
           info.sec1NameFs = s1.nameFs; info.sec1CaptionFs = s1.captionFs;
           info.sec1BgX = s1.bgX; info.sec1BgY = s1.bgY; info.sec1BgScale = s1.bgScale;
           info.sec1Filter = s1.filter;
-          info.sec1Media = s1.media; info.sec1Title = s1.title; info.sec1Desc = s1.desc;
+          info.sec1Media = s1.media;
+          // 🆕 2026.08: sec_data 안의 title_en/desc_en/title_jp/desc_jp 를 안 읽어
+          //   이름은 번역됐는데 본문만 한글로 남았다. 원문 3종도 보관해 언어 변경 시 재선택한다.
+          info._s1TitleKo = s1.title; info._s1TitleEn = s1.title_en; info._s1TitleJp = s1.title_jp;
+          info._s1DescKo  = s1.desc;  info._s1DescEn  = s1.desc_en;  info._s1DescJp  = s1.desc_jp;
+          info.sec1Title = _chefPickName(s1.title, s1.title_en, s1.title_jp);
+          info.sec1Desc  = _chefPickName(s1.desc,  s1.desc_en,  s1.desc_jp);
           info.sec2BoxAX = s2.boxAX; info.sec2BoxAY = s2.boxAY; info.sec2BoxAAlign = s2.boxAAlign;
           info.sec2BoxBX = s2.boxBX; info.sec2BoxBY = s2.boxBY; info.sec2BoxBAlign = s2.boxBAlign;
           info.sec2SigFs = s2.sigFs; info.sec2CaptionFs = s2.captionFs;
           info.sec2BgX = s2.bgX; info.sec2BgY = s2.bgY; info.sec2BgScale = s2.bgScale;
           info.sec2Filter = s2.filter;
-          info.sec2Media = s2.media; info.sec2Title = s2.title; info.sec2Desc = s2.desc;
+          info.sec2Media = s2.media;
+          info._s2TitleKo = s2.title; info._s2TitleEn = s2.title_en; info._s2TitleJp = s2.title_jp;
+          info._s2DescKo  = s2.desc;  info._s2DescEn  = s2.desc_en;  info._s2DescJp  = s2.desc_jp;
+          info.sec2Title = _chefPickName(s2.title, s2.title_en, s2.title_jp);
+          info.sec2Desc  = _chefPickName(s2.desc,  s2.desc_en,  s2.desc_jp);
           info.sec2LayoutMode = s2.layoutMode; info.sec2Layout = s2.layout; info.sec2Medias = s2.medias;
           info.sec2Hidden = !!s2.hidden;  // 🆕 v1.46: 시그니처 미노출 플래그 복원 (프리페치)
           info._secLoaded = true;
