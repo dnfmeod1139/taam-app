@@ -33584,23 +33584,47 @@ async function aiTranslateNode(chefId, lineageId, opts){
     var sec2 = (ko.sec2_data && typeof ko.sec2_data === 'object') ? ko.sec2_data : {};
 
     // 2) 번역 items 준비 (빈 값은 skip)
-    var items = [];
-    if(ko.name)       items.push({id:'name',       value: ko.name});
-    if(ko.sub_title)  items.push({id:'sub',        value: ko.sub_title});
-    if(sec1.title)    items.push({id:'sec1_title', value: sec1.title});
-    if(sec1.desc)     items.push({id:'sec1_desc',  value: sec1.desc});
-    if(sec2.title)    items.push({id:'sec2_title', value: sec2.title});
-    if(sec2.desc)     items.push({id:'sec2_desc',  value: sec2.desc});
-    if(items.length === 0){
+    //   🆕 2026.08: 한 번에 6개 항목(이름·부제·섹션2개 제목/본문)을 EN+JA 두 벌로 뽑으면
+    //   본문이 긴 노드는 출력이 커져 생성에만 100초를 넘긴다. 그러면 통째로 실패해서
+    //   짧은 이름조차 저장되지 않는다.
+    //   → 짧은 것(이름·부제·제목)과 긴 것(본문)을 나눠 호출한다.
+    //     각 호출의 출력이 작아져 빨라지고, 하나가 실패해도 나머지는 저장된다.
+    var groups = [];
+    var shortItems = [];
+    if(ko.name)      shortItems.push({id:'name',       value: ko.name});
+    if(ko.sub_title) shortItems.push({id:'sub',        value: ko.sub_title});
+    if(sec1.title)   shortItems.push({id:'sec1_title', value: sec1.title});
+    if(sec2.title)   shortItems.push({id:'sec2_title', value: sec2.title});
+    if(shortItems.length) groups.push(shortItems);
+    if(sec1.desc) groups.push([{id:'sec1_desc', value: sec1.desc}]);
+    if(sec2.desc) groups.push([{id:'sec2_desc', value: sec2.desc}]);
+
+    if(groups.length === 0){
       _toast('ℹ','번역할 내용 없음','한국어 데이터가 모두 비어있습니다');
       return false;
     }
 
-    // 3) AI 호출
+    // 3) AI 호출 — 그룹별로 순차 호출 후 결과를 합친다.
+    //   한 그룹이 실패해도 나머지 그룹의 결과는 살린다 (부분 저장).
     var ctx = '스시 미식 · ' + lineageId + ' 계보 · TAAM 플랫폼';
-    var r = await window.taamTranslate(items, ctx);
-    var tr = r && r.translations;
-    if(!tr){
+    var tr = {};
+    var okGroups = 0;
+    for (var gi = 0; gi < groups.length; gi++){
+      try {
+        var r = await window.taamTranslate(groups[gi], ctx);
+        var part = r && r.translations;
+        if(part){
+          Object.keys(part).forEach(function(k){ tr[k] = part[k]; });
+          okGroups++;
+        } else {
+          console.warn('[aiTranslateNode] 그룹', gi, '결과 없음', chefId);
+        }
+      } catch(ge){
+        // 이 그룹만 실패 — 나머지는 계속 진행한다
+        console.warn('[aiTranslateNode] 그룹', gi, '실패', chefId, ge && ge.message);
+      }
+    }
+    if(okGroups === 0){
       _toast('⚠','번역 결과 없음','다시 시도해주세요');
       return false;
     }
@@ -33623,11 +33647,16 @@ async function aiTranslateNode(chefId, lineageId, opts){
       return false;
     }
 
+    // 🆕 일부 그룹만 성공했으면 완료로 표시하지 않는다.
+    //   받아온 건 저장하되 status 는 pending 으로 남겨, 다음 실행에서 나머지를 채운다.
+    //   (완료로 찍어버리면 못 받은 필드가 영영 한글로 남는다)
+    var _allDone = (okGroups === groups.length);
+    if(!_allDone) console.warn('[aiTranslateNode] 부분 성공 —', okGroups + '/' + groups.length, chefId, '→ pending 유지');
     var payload = {
       sec1_data: newSec1,
       sec2_data: newSec2,
-      i18n_status_en: 'ai_draft',
-      i18n_status_jp: 'ai_draft',
+      i18n_status_en: _allDone ? 'ai_draft' : 'pending',
+      i18n_status_jp: _allDone ? 'ai_draft' : 'pending',
       i18n_updated_at: new Date().toISOString()
     };
     if(tr.name){ payload.name_en = tr.name.en; payload.name_jp = tr.name.ja; }
@@ -33797,9 +33826,11 @@ async function _taamTranslateAllChefs(opts){
     }
   } catch(_we){ console.warn('[일괄 번역] Wake Lock 미지원/거부:', _we && _we.message); }
 
-  // 🆕 동시 실행 3개. 노드당 10~20초라 순차로는 117개에 30분이 걸렸고,
-  //   그 사이 탭이 잠들 확률이 그만큼 높았다. 셋씩 돌리면 1/3로 줄어든다.
-  var CONCURRENCY = opts.concurrency || 3;
+  // 🆕 동시 실행. 순차로는 노드당 10~20초라 100개에 30분이 걸렸다.
+  //   ⚠ 3으로 올렸더니 서버 쪽 재시도와 겹쳐 순간 호출이 몰렸고, Anthropic 429 가
+  //     늘면서 재시도가 길어져 Edge Function 이 504 Gateway Timeout 을 맞았다.
+  //     2 가 속도와 안정성의 균형점이다 (30분 → 15분).
+  var CONCURRENCY = opts.concurrency || 2;
   var _next = 0;
   async function _worker(){
     while (true) {
