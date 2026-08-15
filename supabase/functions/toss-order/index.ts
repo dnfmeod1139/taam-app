@@ -51,6 +51,9 @@ serve(async (req) => {
     const ticketId = String(body.ticketId || '').trim();
     const pax = parseInt(String(body.pax || '0'), 10) || 0;
     const currency = String(body.currency || 'KRW').toUpperCase();
+    // 🆕 결제하기 시점에 잡아둔 좌석 홀드. 있으면 좌석 재검증을 건너뛴다 —
+    //   자기 홀드가 잔여석에 잡혀 있어 "매진" 으로 잘못 거절되기 때문이다.
+    const holdPurchaseId = String(body.holdPurchaseId || '').trim();
 
     if (!ticketId || pax <= 0) return json({ ok: false, error: 'missing_params' });
     if (currency !== 'KRW') {
@@ -121,7 +124,22 @@ serve(async (req) => {
     const slots = (ticket.slots && typeof ticket.slots === 'object')
       ? ticket.slots as Record<string, unknown> : {};
 
-    if (capTotal > 0) {
+    // 홀드가 본인 것이고 살아 있으면 좌석은 이미 확보된 상태다.
+    let hasValidHold = false;
+    if (holdPurchaseId) {
+      const { data: hold } = await admin
+        .from('tickets')
+        .select('purchase_id, party_size, user_id, status')
+        .eq('purchase_id', holdPurchaseId)
+        .maybeSingle();
+      hasValidHold = !!(hold && hold.user_id === user.id && hold.status === 'hold'
+                        && Number(hold.party_size) === pax);
+      if (!hasValidHold) {
+        console.warn('[toss-order] 홀드 무효 — 좌석 재검증으로 진행', holdPurchaseId);
+      }
+    }
+
+    if (capTotal > 0 && !hasValidHold) {
       const { data: sold, error: sErr } = await admin
         .rpc('taam_ticket_sold_slots', { p_ticket_id: String(ticketId) });
 
@@ -179,6 +197,9 @@ serve(async (req) => {
         total,
         balance_at_order: balance,
         meal_fee: meal, agency_fee: agency, wine_min: wine,
+        // 승인 후 이 홀드를 실제 구매로 전환한다
+        hold_purchase_id: holdPurchaseId || null,
+        deposit_used: Math.max(0, total - shortage),
       },
     });
 
