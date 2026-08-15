@@ -76,22 +76,67 @@ serve(async (req) => {
     if (userErr || !user) return json({ ok: false, error: 'unauthorized' }, 401);
 
     // ── ① 티켓 조회 ──
-    const { data: ticket, error: tErr } = await admin
-      .from('ticket_products')
-      // ⚠ 컬럼명은 restaurant_id 가 아니라 rest_id 다. 틀리면 SELECT 자체가 실패해
-      //   ticket_lookup_failed 로 떨어진다 (실제로 그렇게 막혔다).
-      .select('id, rest_id, rest_name, meal_fee, agency_fee, wine_min, total_pax, slots, min_tier, status, type_class')
-      .eq('id', ticketId)
-      .maybeSingle();
+    //   ⚠ 컬럼명은 restaurant_id 가 아니라 rest_id 다. 틀리면 SELECT 자체가 실패해
+    //     ticket_lookup_failed 로 떨어진다 (실제로 그렇게 막혔다).
+    //   auto_soldout 은 "좌석이 차서 자동으로 걸린 매진"과 "슈퍼어드민 수동 매진"을
+    //   구분하는 플래그다. 컬럼이 없는 환경도 있으므로 실패하면 없이 다시 조회한다.
+    const BASE_COLS = 'id, rest_id, rest_name, meal_fee, agency_fee, wine_min, total_pax, slots, min_tier, status, type_class';
+    // deno-lint-ignore no-explicit-any
+    let ticket: any = null;
+    // deno-lint-ignore no-explicit-any
+    let tErr: any = null;
+    {
+      const r1 = await admin.from('ticket_products')
+        .select(BASE_COLS + ', auto_soldout').eq('id', ticketId).maybeSingle();
+      if (r1.error) {
+        console.warn('[toss-order] auto_soldout 컬럼 없음 — 기본 컬럼으로 재조회', r1.error.message);
+        const r2 = await admin.from('ticket_products')
+          .select(BASE_COLS).eq('id', ticketId).maybeSingle();
+        ticket = r2.data;
+        tErr = r2.error;
+      } else {
+        ticket = r1.data;
+      }
+    }
 
     if (tErr) {
       console.error('[toss-order] 티켓 조회 실패', tErr);
       return json({ ok: false, error: 'ticket_lookup_failed', detail: String(tErr.message || tErr).slice(0, 300) });
     }
     if (!ticket) return json({ ok: false, error: 'ticket_not_found' });
-    if (ticket.status === 'soldout') return json({ ok: false, error: 'sold_out' });
     if (ticket.status === 'closed' || ticket.status === 'expired') {
       return json({ ok: false, error: 'sales_closed' });
+    }
+
+    // ── 🆕 본인 좌석 홀드 확인 (매진 판정보다 먼저) ──
+    //   "결제하기" 시점에 잡은 홀드는 그 자체로 좌석을 점유하므로, 마지막 1석을
+    //   잡으면 자동 매진이 걸린다. 그 상태에서 매진을 먼저 보고 거절하면
+    //   "자기 홀드 때문에 자기 결제가 거절되는" 자기차단이 된다 (정원 1석 티켓은 100% 발생).
+    //   → 홀드를 먼저 확인하고, 홀드가 유효하면 '자동 매진'은 통과시킨다.
+    //   ⚠ 단, 슈퍼어드민 수동 매진(auto_soldout=false)은 홀드가 있어도 절대 통과시키지 않는다.
+    //     수동 매진은 웹/메신저/캘린더 등 외부 예약이 이미 잡혔다는 뜻이라 뚫으면 이중예약이 된다.
+    let hasValidHold = false;
+    if (holdPurchaseId) {
+      const { data: hold } = await admin
+        .from('tickets')
+        .select('purchase_id, party_size, user_id, status')
+        .eq('purchase_id', holdPurchaseId)
+        .maybeSingle();
+      hasValidHold = !!(hold && hold.user_id === user.id && hold.status === 'hold'
+                        && Number(hold.party_size) === pax);
+      if (!hasValidHold) {
+        console.warn('[toss-order] 홀드 무효 — 좌석 재검증으로 진행', holdPurchaseId);
+      }
+    }
+
+    if (ticket.status === 'soldout') {
+      // auto_soldout 이 명시적으로 false = 수동 매진 → 무조건 거절.
+      // 컬럼이 없거나(undefined) true = 좌석이 차서 걸린 자동 매진 → 본인 홀드가 있으면 통과.
+      const isManualSoldout = ticket.auto_soldout === false;
+      if (isManualSoldout || !hasValidHold) {
+        return json({ ok: false, error: 'sold_out', manual: isManualSoldout });
+      }
+      console.log('[toss-order] 자동 매진이지만 본인 홀드 보유 — 통과', holdPurchaseId);
     }
 
     // ── ② 이용 등급 검증 ──
@@ -124,21 +169,7 @@ serve(async (req) => {
     const slots = (ticket.slots && typeof ticket.slots === 'object')
       ? ticket.slots as Record<string, unknown> : {};
 
-    // 홀드가 본인 것이고 살아 있으면 좌석은 이미 확보된 상태다.
-    let hasValidHold = false;
-    if (holdPurchaseId) {
-      const { data: hold } = await admin
-        .from('tickets')
-        .select('purchase_id, party_size, user_id, status')
-        .eq('purchase_id', holdPurchaseId)
-        .maybeSingle();
-      hasValidHold = !!(hold && hold.user_id === user.id && hold.status === 'hold'
-                        && Number(hold.party_size) === pax);
-      if (!hasValidHold) {
-        console.warn('[toss-order] 홀드 무효 — 좌석 재검증으로 진행', holdPurchaseId);
-      }
-    }
-
+    // 홀드가 본인 것이고 살아 있으면 좌석은 이미 확보된 상태다 (hasValidHold 는 위에서 판정).
     if (capTotal > 0 && !hasValidHold) {
       const { data: sold, error: sErr } = await admin
         .rpc('taam_ticket_sold_slots', { p_ticket_id: String(ticketId) });
