@@ -230,12 +230,15 @@ const MAX_ATTEMPTS = 3;
 //   먼저 끊어 504 Gateway Timeout 이 났다. 재시도가 없던 때보다 더 나빠진 것이다.
 //   → 전체 예산 안에서만 재시도하고, 남은 시간이 부족하면 즉시 포기해 정상 응답을 돌려준다.
 //     클라이언트는 그 노드를 pending 으로 남겨두므로 다음 실행에서 자연스럽게 다시 시도된다.
-//   ⚠ 처음에 55s/30s 로 잡았다가 정상 요청까지 죽였다. 계보도 노드 한 건은
-//     이름·부제·섹션 2개 본문을 EN+JA 두 벌로 뽑으므로 출력이 2,000~3,000 토큰이고,
-//     생성에만 40~60초가 걸린다. 30초 상한은 "느린 게 아니라 원래 그만큼 걸리는" 요청을
-//     전부 잘라냈다 (Response: {"status":0,"detail":"The signal has been aborted"}).
-const TOTAL_BUDGET_MS = 110_000;    // 함수 전체
-const ATTEMPT_TIMEOUT_MS = 100_000; // 호출 1회
+//   ⚠ 상한을 55s/30s → 110s/100s 로 두 번 올렸지만 둘 다 정상 요청을 죽였다.
+//     본문 하나(sec1_desc)만 EN+JA 로 뽑아도 100초를 넘긴다
+//     (Response: {"status":0,"detail":"The signal has been aborted"}).
+//     애초에 원래 코드에는 상한이 없었고 그래서 60% 가 성공했다. 실패하던 40% 는
+//     상한 때문이 아니라 max_tokens 잘림이었고 그건 따로 고쳤다.
+//     → 상한은 "무한정 매달리는 것"만 막는 안전망으로 충분히 크게 둔다.
+//       Supabase Edge Function 자체 한도(wall clock)가 최종 방어선이다.
+const TOTAL_BUDGET_MS = 250_000;    // 함수 전체
+const ATTEMPT_TIMEOUT_MS = 240_000; // 호출 1회 — 안전망일 뿐, 평소엔 걸리지 않는다
 
 type ClaudeOk = {
   ok: true; translations: unknown; usage: unknown; attempts: number;
