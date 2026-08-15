@@ -5364,14 +5364,22 @@ var PORTONE_CHANNEL_KEY = PG_CHANNELS.card_main;
 //   · 실제 승인(confirm)은 시크릿 키 필요 → 정식 전환 시 Edge Function 추가 예정.
 //   · 포트원 연동은 그대로 유지 (심사 통과 후 전환)
 // ═══════════════════════════════════════════
-var TOSS_CLIENT_KEY = 'test_ck_Gv6LjeKD8a2gQjkXWZ0M3wYxAdXy';
+// 🆕 2026.08: 실키 전환. MID playtauif6 (국내 KRW) 의 "API 개별 연동 키".
+//   ⚠ live_gck_ (결제위젯 전용) 가 아니라 live_ck_ 여야 한다 —
+//     이 코드는 .payment() → requestPayment() 개별연동 결제창을 쓴다.
+//   클라이언트 키는 브라우저에 노출되는 게 정상인 공개 키다 (시크릿 키와 혼동 금지).
+var TOSS_CLIENT_KEY = 'live_ck_BX7zk2yd8ydNoLGwKnoBrx9POLqK';
 // 🆕 해외결제 다중 MID 키 라우팅 — MID2(USD)/MID3(JPY) 계약 완료 후 키 발급되면 채우기.
 //   키가 비어있으면 해당 통화 결제 시 준비중 안내 (KRW 는 항상 동작).
 var TOSS_KEYS = {
   KRW: TOSS_CLIENT_KEY,   // MID1 playtauif6 — 국내 (카드·이체·가상계좌·카카오·네이버)
-  USD: null,              // MID2 — 해외카드 USD 승인 · KRW 정산 (⚠ 키 발급 시 'test_ck_...' 입력)
-  JPY: null,              // MID3 — 해외카드 JPY 승인 · KRW 정산 (⚠ 키 발급 시 입력)
-  BILLING: null           // MID4 bill_ — 정기결제 전용 (⚠ 키 발급 시 입력, 미발급 동안 KRW 키 사용)
+  // ⚠ 아래 셋은 MID 는 개설됐지만(playtaamusd / playtaamjpy / bill_taam315)
+  //   의도적으로 비워둔다. 원장은 원화 단일이고 해외 회원 화면의 USD 는 표시용이라,
+  //   외화 MID 로 승인받으면 정산·환불 금액이 원장과 어긋난다.
+  //   해외 통화 결제와 정기결제는 별도 설계 후 연다 (docs/TOSS_GOLIVE.md 참고).
+  USD: null,              // MID playtaamusd — 해외카드 USD 승인 · KRW 정산
+  JPY: null,              // MID playtaamjpy — 해외카드 JPY 승인 · KRW 정산
+  BILLING: null           // MID bill_taam315 — 정기결제(빌링) 전용
 };
 // ═══════════════════════════════════════════
 // 🆕 2026.07 결제 정책 전환(임시 · 롤백 대비)
@@ -5396,6 +5404,60 @@ var PAY_MODE_TOSS = true;
 //      3) ?toss_pay=success 복귀 핸들러 — 승인 요청 → 티켓 확정/예치금 적립
 // ═══════════════════════════════════════════
 var CARD_PAY_LIVE = false;
+// 🆕 2026.08: 검증용 개별 스위치.
+//   전역 플래그를 켜면 검증도 하기 전에 전 회원에게 카드 결제가 열린다.
+//   실결제 1건을 먼저 확인해야 하므로, 슈퍼어드민이 자기 기기에서만 열 수 있게 한다.
+//     콘솔에서  localStorage.setItem('taamCardPayTest','1')  → 이 기기만 카드 결제 활성
+//               localStorage.removeItem('taamCardPayTest')   → 원상복구
+//   검증이 끝나면 CARD_PAY_LIVE = true 로 바꿔 전 회원에게 연다.
+function cardPayEnabled(){
+  if (CARD_PAY_LIVE) return true;
+  try {
+    if (localStorage.getItem('taamCardPayTest') !== '1') return false;
+  } catch(e){ return false; }
+  var role = (typeof _currentRole !== 'undefined') ? _currentRole : '';
+  return role === 'superadmin';
+}
+window.cardPayEnabled = cardPayEnabled;
+
+// 🆕 검증 스위치 토글 — PWA 에서는 콘솔을 쓸 수 없어 화면에서 켜고 끈다.
+//   localStorage 는 기기별이므로 테스트하려는 기기에서 각각 켜야 한다.
+function toggleCardPayTest(){
+  var role = (typeof _currentRole !== 'undefined') ? _currentRole : '';
+  if (role !== 'superadmin') {
+    if (typeof showToast === 'function') showToast('⚠','권한 없음','슈퍼어드민 전용 기능입니다');
+    return;
+  }
+  var on = false;
+  try {
+    on = localStorage.getItem('taamCardPayTest') === '1';
+    if (on) localStorage.removeItem('taamCardPayTest');
+    else    localStorage.setItem('taamCardPayTest', '1');
+    on = !on;
+  } catch(e){
+    if (typeof showToast === 'function') showToast('⚠','저장 실패','이 브라우저에서 localStorage 를 쓸 수 없습니다');
+    return;
+  }
+  cardPayTestSync();
+  if (typeof showToast === 'function') {
+    showToast(on ? '💳' : '🔒', on ? '카드 결제 테스트 ON' : '카드 결제 테스트 OFF',
+      on ? '이 기기에서만 카드 결제창이 열립니다 — 실제 결제됩니다'
+         : '이 기기에서 카드 결제가 다시 잠겼습니다');
+  }
+}
+window.toggleCardPayTest = toggleCardPayTest;
+
+// 메뉴 라벨에 현재 상태를 표시한다
+function cardPayTestSync(){
+  try {
+    var on = localStorage.getItem('taamCardPayTest') === '1';
+    var lbl = document.getElementById('cardPayTestLabel');
+    var sub = document.getElementById('cardPayTestSub');
+    if (lbl) lbl.textContent = on ? '💳 카드 결제 테스트 (이 기기) — 켜짐' : '💳 카드 결제 테스트 (이 기기) — 꺼짐';
+    if (sub) sub.style.color = on ? '#B23A2E' : '';
+  } catch(e){}
+}
+window.cardPayTestSync = cardPayTestSync;
 // 예치금 충전 계좌이체 안내에 표시할 실제 계좌 (계좌 변경 시 여기만 수정)
 var DEPOSIT_BANK_INFO = {
   bank:    '하나은행',
@@ -5749,6 +5811,10 @@ function tossChargeAmt(v){
   var el = document.getElementById('tossChargeCustom');
   if(el) el.value = v ? Number(v).toLocaleString() : '';
 }
+// ⚠ 예치금 카드 충전은 운영 정책상 쓰지 않는다 (충전 = 법인계좌 이체 → 수동 반영).
+//   openMpCharge() 가 PAY_MODE_TOSS=true 인 동안 showDepositBankInfo() 로 가므로
+//   이 함수는 도달하지 않는다. PAY_MODE_TOSS=false 롤백용으로만 남겨둔다.
+//   → 서버 승인(payment_orders / toss-confirm)도 여기에는 붙이지 않는다.
 async function tossRequestCharge(){
   var raw = String((document.getElementById('tossChargeCustom')||{}).value||'').replace(/[^0-9]/g,'');
   var amt = parseInt(raw) || 0;
@@ -5809,20 +5875,85 @@ function tossOpenBilling(){
 // ── 🆕 티켓 부족분 카드 결제 (토스 단건 결제창) ──
 //   예치금 부족 시 부족분을 토스 카드 결제창으로 연결. 범위 = 결제창 연동(보이게)까지,
 //   실제 승인/차감 반영은 시크릿키 Edge Function 정식 전환 시. PAY_MODE_TOSS=false 면 미사용.
+// ── 티켓 부족분 카드 결제 ──
+//   ⚠ 인자로 받은 shortage 는 브라우저가 계산한 값(window._pendingShortage)이라 쓰지 않는다.
+//     그대로 결제 금액으로 쓰면 DevTools 로 값을 바꿔 ₩500,000 짜리 티켓을 ₩1,000 에 살 수 있다.
+//     Edge Function toss-order 가 티켓 가격·예치금 잔액을 서버에서 다시 계산해
+//     주문을 만들고, 여기서는 그 orderId / amount 로만 결제창을 연다.
+//     (인자는 결제창 열기 전 화면 표시용으로만 남긴다)
 async function tossPayTicketShortage(shortage){
-  var amt = Math.round(shortage||0);
-  if (amt < 100) { showToast('⚠','금액 확인','결제 금액이 올바르지 않습니다'); return; }
+  var t = (typeof currentTicket !== 'undefined') ? currentTicket : null;
+  var pax = (typeof _tdPax !== 'undefined') ? _tdPax : 0;
+  if (!t || !t.id || !pax) { showToast('⚠','오류','티켓 정보를 찾을 수 없습니다'); return; }
+  if (!window.sb) { showToast('⚠','오류','서버 연결이 없습니다'); return; }
+
   // 남아있는 결제 안내 팝업 정리
   ['cardPayPopup','noCardPopup'].forEach(function(id){ var p=document.getElementById(id); if(p) p.remove(); });
   var restName = (typeof currentRest!=='undefined' && currentRest && currentRest.name) ? currentRest.name
-               : (typeof currentTicket!=='undefined' && currentTicket && currentTicket.rest) ? currentTicket.rest : '티켓';
+               : (t.rest || '티켓');
   var orderName = (restName + ' — 티켓 구매').slice(0,40);
+
+  // ── 서버에서 주문 생성 (금액은 서버가 정한다) ──
+  var ord;
+  try {
+    var _r = await window.sb.functions.invoke('toss-order', {
+      // 🆕 결제하기 시점에 잡아둔 홀드를 함께 넘긴다.
+      //   서버는 이 홀드가 본인 것이면 좌석 재검증을 건너뛴다 (자기 홀드 때문에
+      //   "매진"으로 잘못 거절되는 것을 막는다).
+      body: { ticketId: String(t.id), pax: pax, currency: 'KRW',
+              holdPurchaseId: window._tkSeatHoldId || null }
+    });
+    if (_r && _r.error) throw _r.error;
+    ord = _r && _r.data;
+  } catch(e){
+    console.warn('[toss-order] 호출 실패:', e);
+    // 🆕 잡아둔 좌석을 즉시 반납한다. 안 그러면 5분간 좌석이 묶여
+    //   재시도할 때마다 자기 홀드에 막혀 계속 매진으로 보인다.
+    try { if (typeof _tkReleaseSeatHold === 'function') await _tkReleaseSeatHold(); } catch(_re){}
+    showToast('⚠','결제 준비 실패','잠시 후 다시 시도해주세요');
+    return;
+  }
+
+  if (!ord || !ord.ok) {
+    var _c = (ord && ord.error) || 'unknown';
+    var _msg = {
+      sold_out:          '죄송합니다 — 남은 좌석이 없습니다',
+      not_enough_seats:  '남은 좌석 ' + (ord && ord.left) + '석입니다. 인원을 줄여 다시 시도해주세요',
+      slot_sold_out:     pax + '인석은 모두 판매되었습니다',
+      tier_not_allowed:  '이 티켓은 ' + ((ord && ord.required) || '') + ' 등급 회원만 이용할 수 있습니다',
+      sales_closed:      '판매가 끝난 티켓입니다',
+      ticket_not_found:  '티켓 정보를 찾을 수 없습니다',
+      price_not_set:     '티켓 가격이 설정되지 않았습니다',
+      currency_not_open: '해외 통화 결제는 준비 중입니다'
+    }[_c] || '결제를 시작할 수 없습니다';
+    // 🆕 거절됐으면 좌석을 붙잡고 있을 이유가 없다 — 즉시 반납.
+    //   (반납 안 하면 내 홀드가 5분간 좌석을 먹어 재시도마다 또 '매진'이 된다)
+    try { if (typeof _tkReleaseSeatHold === 'function') await _tkReleaseSeatHold(); } catch(_re){}
+    showToast('⚠','결제 불가', _msg);
+    console.warn('[toss-order] 거절:', _c, ord);
+    try { if (typeof renderTicketList === 'function') renderTicketList(); } catch(_le){}
+    return;
+  }
+
+  // 예치금만으로 충분하면 카드 결제 자체가 필요 없다
+  //   (홀드는 유지한다 — 이어서 예치금으로 결제할 것이므로 좌석을 놓치면 안 된다)
+  if (!ord.needPayment) {
+    showToast('ℹ','카드 결제 불필요','예치금으로 결제할 수 있습니다 — 다시 시도해주세요');
+    return;
+  }
+
+  var amt = parseInt(ord.amount, 10) || 0;
+  if (amt < 100) {
+    try { if (typeof _tkReleaseSeatHold === 'function') await _tkReleaseSeatHold(); } catch(_re){}
+    showToast('⚠','금액 확인','결제 금액이 올바르지 않습니다'); return;
+  }
+
   _tossEnsureSdk(async function(){
     try {
-      var _cur = _tossCurrencyForUser();
-      if (!TOSS_KEYS[_cur]) _cur = 'KRW';
+      var _cur = String(ord.currency || 'KRW');
+      if (!TOSS_KEYS[_cur]) { showToast('⚠','결제 불가','해당 통화 결제는 준비 중입니다'); return; }
       var ctx = await _tossPaymentsCtx(_cur); if(!ctx) return;
-      var oid = 'taamtkt_' + Date.now() + '_' + Math.floor(Math.random()*100000);
+      var oid = ord.orderId;
       _tossMarkTrip();   // 결제창 왕복 표시 — 복귀 시 뷰포트 복원 트리거 (reload 견딤)
       await ctx.pay.requestPayment({
         method: 'CARD',
@@ -5915,28 +6046,123 @@ function showDepositShortageGuide(shortage){
     + '</div>';
   document.body.appendChild(el);
 }
-// ── 결제창 리다이렉트 복귀 처리 (테스트 단계: 안내만 — 실승인/충전은 정식 전환 시) ──
+// ── 🆕 2026.08: 토스 승인 요청 (Edge Function toss-confirm) ──
+//   토스 V2 는 ① 결제창 인증(브라우저) → ② 서버 승인(시크릿 키) 2단계다.
+//   ②를 호출하지 않으면 회원이 카드 인증을 마쳐도 미승인 건으로 자동 취소된다.
+//   금액은 서버(payment_orders.amount)가 기준이며, 여기서 보내는 amount 는 대조용이다.
+async function _tossConfirmPayment(paymentKey, orderId, amount){
+  if (!window.sb) return;
+  if (typeof showToast === 'function') showToast('⏳','결제 확인 중','잠시만 기다려주세요');
+
+  // 리다이렉트 직후에는 세션 복원이 아직 안 끝났을 수 있다 — 최대 5초 대기
+  var u = null;
+  for (var i = 0; i < 10; i++) {
+    try { var r = await window.sb.auth.getUser(); u = r && r.data && r.data.user; } catch(_e){}
+    if (u) break;
+    await new Promise(function(res){ setTimeout(res, 500); });
+  }
+  if (!u) {
+    showToast('⚠','로그인이 필요합니다','다시 로그인하시면 결제가 자동으로 확인됩니다');
+    return;
+  }
+
+  try {
+    var res = await window.sb.functions.invoke('toss-confirm', {
+      body: { paymentKey: paymentKey, orderId: orderId, amount: amount }
+    });
+    if (res && res.error) throw res.error;
+    var d = res && res.data;
+
+    if (d && d.ok) {
+      // 🆕 카드 결제 = 티켓 직접 구매. 서버가 예치금 차감·좌석 확정까지 끝냈으므로
+      //   여기서는 DB 에서 최신 상태만 다시 읽어 화면에 반영한다 (재구매 없음).
+      showToast('✅', d.already ? '이미 처리된 결제입니다' : '결제 완료',
+        d.already ? '이 결제는 이미 처리되었습니다' : '티켓 구매가 완료되었습니다', { category: 'ticket' });
+      try { if (typeof loadDeposit === 'function') loadDeposit(); } catch(_le){}
+      try { if (typeof loadPurchase === 'function') await loadPurchase(); } catch(_pe){}
+      try { if (typeof ticketHistRender === 'function') ticketHistRender(0); } catch(_re){}
+      try { if (typeof renderTicketList === 'function') renderTicketList(); } catch(_re2){}
+      try { if (typeof _refreshUserGrade === 'function') _refreshUserGrade(); } catch(_ge){}
+      return;
+    }
+
+    var code = (d && d.error) || 'unknown';
+    if (code === 'order_not_found' || code === 'order_forbidden') {
+      // 이 앱이 만든 주문이 아니다 (구버전 캐시·직접 URL 진입 등)
+      showToast('⚠','결제가 반영되지 않았습니다',
+        '주문 정보를 찾을 수 없습니다 — 출금된 금액이 있다면 문의해 주세요');
+    } else if (code === 'seat_lost') {
+      // 결제 중 좌석이 만료돼 구매를 못 했다. 서버가 카드 결제를 취소했다.
+      showToast('⚠', d.refunded ? '좌석이 매진되어 결제가 취소되었습니다' : '좌석이 매진되었습니다',
+        d.refunded ? '결제하신 금액은 전액 환불됩니다' : '결제 취소 처리 중입니다 — 출금 시 문의해 주세요');
+    } else if (code === 'credit_failed') {
+      showToast('⚠','결제는 완료되었습니다',
+        '반영이 지연되고 있어요 — 잠시 후 확인되지 않으면 문의해 주세요');
+    } else if (code === 'amount_mismatch' || code === 'amount_mismatch_toss') {
+      showToast('⚠','금액이 일치하지 않습니다','결제가 취소되었습니다 — 다시 시도해주세요');
+    } else {
+      showToast('⚠','결제 승인 실패',
+        (d && d.reason) || '결제가 완료되지 않았습니다 — 출금된 금액이 있다면 문의해 주세요');
+    }
+    console.warn('[toss-confirm] 실패:', code, d);
+  } catch(e) {
+    console.warn('[toss-confirm] 예외:', e);
+    showToast('⚠','결제 확인 실패','네트워크 확인 후 마이페이지에서 잔액을 확인해주세요');
+  }
+}
+
+// ── 결제창 리다이렉트 복귀 처리 ──
 (function(){
   try {
     var q = location.search || '';
     var m = q.match(/[?&]toss_(pay|billing)=(success|fail)/);
     if (!m) return;
     var kind = m[1], ok = (m[2] === 'success');
+    // 쿼리를 지우기 전에 승인에 필요한 값을 먼저 챙긴다
+    var _pk = '', _oid = '', _amt = 0, _failMsg = '';
+    try {
+      var _qs = new URLSearchParams(q);
+      _pk  = _qs.get('paymentKey') || '';
+      _oid = _qs.get('orderId') || '';
+      _amt = parseInt(_qs.get('amount') || '0', 10) || 0;
+      _failMsg = _qs.get('message') || '';
+    } catch(_qe){}
     // 결제창(리다이렉트) 복귀 즉시 뷰포트 복원 — 하단 검정 공백/GNB 밀림 방지
     if (typeof _tossRestoreViewport === 'function') _tossRestoreViewport();
-    setTimeout(function(){
-      if (typeof showToast !== 'function') return;
-      // 🆕 2026.08: CARD_PAY_LIVE=false 동안 카드 경로가 막혀 있어 이 핸들러는 원칙적으로 안 탄다.
-      //   (구버전 캐시·직접 URL 진입 등 예외 상황 대비) 회원에게 "결제 완료"로 오인될 문구는 쓰지 않는다.
-      if (kind === 'pay') {
-        showToast('⚠','결제가 반영되지 않았습니다',
-          '현재는 예치금(계좌이체)으로만 이용하실 수 있습니다 — 출금된 금액이 있다면 문의해 주세요');
-      } else {
-        showToast('⚠','카드 등록이 반영되지 않았습니다',
-          '결제 수단 관리는 준비 중입니다');
-      }
-    }, 1500);
     try { history.replaceState(null, '', location.pathname); } catch(_he){}
+
+    // ⚠ 여기서 cardPayEnabled() 로 막으면 안 된다.
+    //   결제창에서 돌아올 때 iOS PWA 는 앱을 새로 로드한다. 그 시점엔 아직 역할이
+    //   복원되기 전이라 superadmin 판정이 실패하고, 이미 결제된 건의 승인을 건너뛰었다.
+    //   (실제로 폰에서 '결제가 반영되지 않았습니다' 만 뜨고 승인이 안 됐다)
+    //   스위치는 "결제창을 여는 것"을 막으라고 둔 것이지, "이미 낸 돈의 승인"을 막으면
+    //   회원 돈이 미승인으로 자동 취소된다. 승인은 주문의 실재 여부로만 판단한다
+    //   — 서버가 주문 소유자·금액을 다시 검증하므로 여기서 더 막을 이유가 없다.
+
+    // 빌링(결제수단 등록)은 아직 서버 처리가 없다 — 1차 범위는 예치금 충전
+    if (kind === 'billing') {
+      setTimeout(function(){
+        if (typeof showToast === 'function') showToast('⚠','카드 등록이 반영되지 않았습니다','결제 수단 관리는 준비 중입니다');
+      }, 1500);
+      return;
+    }
+
+    if (!ok) {
+      setTimeout(function(){
+        if (typeof showToast === 'function') showToast('⚠','결제가 취소되었습니다', _failMsg || '다시 시도해주세요');
+      }, 1200);
+      return;
+    }
+
+    if (!_pk || !_oid) {
+      setTimeout(function(){
+        if (typeof showToast === 'function') showToast('⚠','결제 정보가 없습니다','마이페이지에서 잔액을 확인해주세요');
+      }, 1200);
+      return;
+    }
+
+    // 승인 — 앱 부팅이 어느 정도 끝난 뒤 실행
+    setTimeout(function(){ _tossConfirmPayment(_pk, _oid, _amt); }, 1200);
   } catch(_e){}
 })();
 // 결제창 왕복 후 복귀 — 어떤 경로(리다이렉트 reload · bfcache · 취소닫기 · 앱복귀)로도 복원.
@@ -7478,11 +7704,11 @@ window.closePromoCarousel = function(){
 </div>
 
 <!-- TD CONFIRM POPUP (결제하기 → 중앙 팝업) -->
-<div id="tdConfirmPopup" onclick="if(event.target===this)document.getElementById('tdConfirmPopup').style.display='none'">
+<div id="tdConfirmPopup" onclick="if(event.target===this)closeTdConfirmPopup()">
   <div style="background:#fff;border-radius:20px;width:calc(100% - 48px);max-width:360px;padding:28px 24px;box-sizing:border-box;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
       <div data-i18n="ticket.confirm_header" style="font-family:var(--font-main);font-size:9px;font-weight:800;letter-spacing:.24em;color:#aaa;">CONFIRM PAYMENT</div>
-      <button onclick="document.getElementById('tdConfirmPopup').style.display='none'" style="width:28px;height:28px;border-radius:50%;border:none;background:#f0ede8;font-size:16px;color:#888;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;">✕</button>
+      <button onclick="closeTdConfirmPopup()" style="width:28px;height:28px;border-radius:50%;border:none;background:#f0ede8;font-size:16px;color:#888;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;">✕</button>
     </div>
 
     <!-- 최종 결제 요약 -->
@@ -7493,7 +7719,7 @@ window.closePromoCarousel = function(){
 
     <!-- 최종 결제 버튼 -->
     <button onclick="confirmReservation()" data-i18n="ticket.confirm_pay_btn" style="width:100%;padding:17px;background:#5C0A14;border:none;border-radius:14px;font-family:var(--font-main);font-size:15px;font-weight:900;color:#fff;cursor:pointer;letter-spacing:.04em;">결제 완료</button>
-    <button onclick="document.getElementById('tdConfirmPopup').style.display='none'" data-i18n="common.cancel" style="width:100%;padding:12px;background:transparent;border:none;font-family:var(--font-main);font-size:10px;font-weight:600;letter-spacing:.18em;color:#bbb;cursor:pointer;margin-top:8px;">취소</button>
+    <button onclick="closeTdConfirmPopup()" data-i18n="common.cancel" style="width:100%;padding:12px;background:transparent;border:none;font-family:var(--font-main);font-size:10px;font-weight:600;letter-spacing:.18em;color:#bbb;cursor:pointer;margin-top:8px;">취소</button>
   </div>
 </div>
 
@@ -7978,7 +8204,7 @@ window.closePromoCarousel = function(){
   <div class="mp-dh-tabs" style="flex-shrink:0;">
     <div class="mp-dh-tab active" onclick="ticketHistTab(0,this)" data-i18n="mp_sub.th_tab_upcoming">방문 예정</div>
     <div class="mp-dh-tab" onclick="ticketHistTab(1,this)" data-i18n="mp_sub.th_tab_completed">방문 완료</div>
-    <div class="mp-dh-tab" onclick="ticketHistTab(2,this)" data-i18n="mp_sub.th_tab_cancelled">취소</div>
+    <div class="mp-dh-tab" onclick="ticketHistTab(2,this)" data-i18n="mp_sub.th_tab_cancelled_refund">취소·환불</div>
   </div>
   <div class="mp-sub-scroll" id="ticketHistList"></div>
 </div>
@@ -8835,6 +9061,16 @@ window.closePromoCarousel = function(){
             <div>
               <div class="admin-menu-text">🔍 일괄 번역 대상 확인 (dry-run)</div>
               <div class="admin-menu-sub">실제 호출 없이 번역 대상 노드만 카운트. 비용 추정용. 콘솔 + 토스트 확인</div>
+            </div>
+            <div class="admin-arrow">›</div>
+          </div>
+          <!-- 🆕 2026.08: 카드 결제 검증 스위치 (기기별).
+               localStorage 는 기기마다 별개라 PC 콘솔에서 켜도 폰 PWA 에는 적용되지 않는다.
+               PWA 는 주소창·콘솔이 없으므로 여기서 켤 수 있게 한다. -->
+          <div class="admin-menu-item" onclick="toggleCardPayTest()">
+            <div>
+              <div class="admin-menu-text" id="cardPayTestLabel">💳 카드 결제 테스트 (이 기기)</div>
+              <div class="admin-menu-sub" id="cardPayTestSub">CARD_PAY_LIVE 가 꺼져 있어도 이 기기에서만 카드 결제창을 연다. 슈퍼어드민 전용 · 검증 끝나면 반드시 끄세요</div>
             </div>
             <div class="admin-arrow">›</div>
           </div>
@@ -10269,6 +10505,7 @@ window.closePromoCarousel = function(){
     <div class="dm-tab active" onclick="dmMgmtTab(0,this)">반환예정</div>
     <div class="dm-tab" onclick="dmMgmtTab(1,this)">반환완료</div>
     <div class="dm-tab" onclick="dmMgmtTab(2,this)">환불불가</div>
+    <div class="dm-tab" onclick="dmMgmtTab(3,this)">카드환불</div>
   </div>
   <!-- 🆕 레스토랑명·구매자명 검색 (세 탭 공통) -->
   <div style="padding:10px 16px 2px;">
@@ -11499,6 +11736,7 @@ var _currentAdminRestId = null;
 var _currentAdminRestName = '';
 var _currentUserPhone = '';
 var _currentUserName = '';
+var _currentUserEmail = '';   // 🆕 로그인 계정 이메일 (재구매 제한 면제 판정 등에 사용)
 var inviteCodes = [
   {
     code: 'TAAM2025',
@@ -11641,7 +11879,7 @@ function _userKey(base) {
 // ── 공유 데이터 (레스토랑·티켓·회원·코드) ──
 function saveRestaurants(){
   // 1. 항상 IDB에도 백업 (오프라인 대비)
-  IDB.set('excRests', JSON.stringify(restaurantDB)).catch(function(){});
+  _idbSafeSet('excRests', restaurantDB, '레스토랑');
   
   // 2. Supabase DB에 동기화
   if(!window.sb) return Promise.resolve();
@@ -11703,7 +11941,7 @@ var payload = {
             }
           });
           // IDB도 갱신
-          if (typeof IDB !== 'undefined') IDB.set('excTickets', JSON.stringify(ticketDB)).catch(function(){});
+          if (typeof IDB !== 'undefined') _idbSafeSet('excTickets', ticketDB, '티켓');
         }
       }
     });
@@ -11712,7 +11950,7 @@ var payload = {
   return Promise.all(ops).then(function(){
     console.log('✅ 레스토랑 DB 동기화 완료:', restaurantDB.length, '개');
     // id 교체된 최신 상태로 IDB 다시 저장
-    IDB.set('excRests', JSON.stringify(restaurantDB)).catch(function(){});
+    _idbSafeSet('excRests', restaurantDB, '레스토랑');
   }).catch(function(e){
     console.warn('⚠️ DB 동기화 중 일부 실패:', e.message);
   });
@@ -11733,6 +11971,18 @@ function loadRestaurants(){
 return {
           id: r.id,
           name: r.name,
+          // 🆕 2026.08: select('*') 로 가져와놓고 여기서 번역 컬럼을 버리고 있었다.
+          //   그래서 restaurants.name_en 이 채워져도 티켓 카드는 늘 한글이었다.
+          //   pickI18nField(r,'name') 이 읽을 수 있도록 그대로 실어 보낸다.
+          name_en: r.name_en || '',
+          name_jp: r.name_jp || '',
+          description_en: r.description_en || '',
+          description_jp: r.description_jp || '',
+          address_en: r.address_en || '',
+          address_jp: r.address_jp || '',
+          genre_jp: r.genre_jp || '',
+          // 일본어 검수 게이트 — false 면 화면에서 일본어 대신 한글로 폴백한다
+          i18n_jp_approved: r.i18n_jp_approved,
           address: r.address || '',
           genre: r.description || '',
           region: r.region || '',
@@ -11760,7 +12010,7 @@ return {
         };
       });
       console.log('✅ 레스토랑 DB에서 로드:', restaurantDB.length, '개');
-      IDB.set('excRests', JSON.stringify(restaurantDB)).catch(function(){});
+      _idbSafeSet('excRests', restaurantDB, '레스토랑');
     }).catch(function(e){
       console.warn('⚠️ DB 로드 실패, IDB 백업 사용:', e.message);
       return IDB.get('excRests').then(function(s){
@@ -11774,13 +12024,55 @@ return {
 }
 
 
-function saveTickets(){
-  // 1. IDB 저장 (기존)
-  IDB.set('excTickets', JSON.stringify(ticketDB)).catch(function(){});
-  
-  // 2. 🆕 Supabase 병렬 저장 (각 티켓 upsert)
+// 🛡 2026.08: 빈 값이 기존 백업을 덮어쓰지 못하게 막는 IDB 저장 래퍼.
+//   로딩 실패·세션 복원 중·역할 미확정 등으로 메모리 배열이 비어 있을 때 save* 가 돌면
+//   IDB 백업이 [] 로 덮여 "데이터가 통째로 사라진 것"처럼 보였다.
+//   → 새 값이 비었는데 저장된 값이 비어있지 않으면 저장을 건너뛴다.
+//     (실제 삭제는 각 도메인의 삭제 경로에서 명시적으로 일어난다)
+function _idbSafeSet(key, val, label){
+  try{
+    var isEmpty = (val == null)
+      || (Array.isArray(val) && val.length === 0)
+      || (typeof val === 'object' && !Array.isArray(val) && Object.keys(val).length === 0);
+    if(!isEmpty) return IDB.set(key, JSON.stringify(val)).catch(function(){});
+    return IDB.get(key).then(function(s){
+      var prevLen = 0;
+      try{
+        var p = s ? JSON.parse(s) : null;
+        prevLen = Array.isArray(p) ? p.length
+                : (p && typeof p === 'object' ? Object.keys(p).length : 0);
+      }catch(e){}
+      if(prevLen > 0){
+        console.warn('[idbSafe] ' + (label||key) + ' — 메모리가 비어 저장 생략 (보존 ' + prevLen + '건)');
+        return;
+      }
+      return IDB.set(key, JSON.stringify(val)).catch(function(){});
+    }).catch(function(){});
+  }catch(e){ return Promise.resolve(); }
+}
+window._idbSafeSet = _idbSafeSet;
+
+// onlyIds: 실제로 바뀐 티켓 id(들). 주면 그 티켓만 서버에 저장한다.
+function saveTickets(onlyIds){
+  // 1. IDB 저장 — 빈 배열로 백업을 날리지 않는다
+  _idbSafeSet('excTickets', ticketDB, '티켓');
+
+  // 2. Supabase 저장
+  //   ⚠ ticketDB 는 loadTickets() 가 IDB(로컬)에서만 읽어온다. 그래서 로컬이 낡아 있으면
+  //     여기서 전체를 upsert 할 때 낡은 값이 서버의 최신 티켓을 덮어써
+  //     날짜·상태가 과거로 되돌아간다 (티켓이 전량 만료로 보이던 사고의 경로).
+  //   → ① 비어 있으면 아무것도 밀지 않는다  ② 바뀐 티켓만 지정해 저장할 수 있게 한다.
   if(typeof saveTicketProductToSupabase === 'function' && window.sb){
-    ticketDB.forEach(function(t){
+    if(!Array.isArray(ticketDB) || ticketDB.length === 0){
+      console.warn('[saveTickets] ticketDB 가 비어 있어 서버 저장을 건너뜀');
+      return;
+    }
+    var _target = ticketDB;
+    if(onlyIds){
+      var _ids = (Array.isArray(onlyIds) ? onlyIds : [onlyIds]).map(String);
+      _target = ticketDB.filter(function(t){ return _ids.indexOf(String(t.id)) >= 0; });
+    }
+    _target.forEach(function(t){
       saveTicketProductToSupabase(t).catch(function(e){
         console.warn('⚠ ticket Supabase 저장 실패 (IDB는 성공):', t.id, e);
       });
@@ -11794,7 +12086,7 @@ function loadTickets(){
   }).catch(function(){ ticketDB = []; });
 }
 
-function saveMembers(){ IDB.set('excMembers', JSON.stringify(memberDB)).catch(function(){}); }
+function saveMembers(){ _idbSafeSet('excMembers', memberDB, '회원'); }
 function loadMembers(){
   return IDB.get('excMembers').then(function(s){
     memberDB = s ? JSON.parse(s) : [];
@@ -11848,7 +12140,10 @@ function _inviteFromSupabase(r){
 
 function saveInviteCodes(){
   // 1. IDB 백업
-  IDB.set('excInviteCodes', JSON.stringify(inviteCodes)).catch(function(){});
+  //   ⚠ loadInviteCodes() 는 슈퍼어드민이 아니면 inviteCodes=[] 로 비운다.
+  //     역할이 확정되기 전에 저장이 돌면 초대 발송 내역 백업이 통째로 날아가므로
+  //     빈 배열은 저장하지 않는다.
+  _idbSafeSet('excInviteCodes', inviteCodes, '초대코드');
   // 2. Supabase 동기화는 개별 add/update 시점에 함 (saveInviteCodes는 IDB만)
 }
 
@@ -11866,8 +12161,8 @@ function loadInviteCodes(){
       if(res.error) throw res.error;
       inviteCodes = (res.data || []).map(_inviteFromSupabase);
       console.log('[invite] Supabase 로드:', inviteCodes.length, '개');
-      // IDB에도 미러
-      IDB.set('excInviteCodes', JSON.stringify(inviteCodes)).catch(function(){});
+      // IDB에도 미러 (서버가 0건이면 기존 백업을 지우지 않는다)
+      _idbSafeSet('excInviteCodes', inviteCodes, '초대코드');
     }).catch(function(e){
       console.warn('[invite] Supabase 실패, IDB 폴백:', e.message);
       // 2순위: IDB 폴백
@@ -11882,7 +12177,7 @@ function loadInviteCodes(){
   }).catch(function(){ inviteCodes = []; });
 }
 
-function saveAdminCodes(){ IDB.set('excAdminCodes', JSON.stringify(adminCodes)).catch(function(){}); }
+function saveAdminCodes(){ _idbSafeSet('excAdminCodes', adminCodes, '어드민코드'); }
 function loadAdminCodes(){
   return IDB.get('excAdminCodes').then(function(s){
     if(s) adminCodes = JSON.parse(s) || [];
@@ -11894,7 +12189,7 @@ function loadAdminCodes(){
 var producersDB = [];
 var _editingProducer = null;
 
-function saveProducersDB(){ return IDB.set('excProducers', JSON.stringify(producersDB)).catch(function(){}); }
+function saveProducersDB(){ return _idbSafeSet('excProducers', producersDB, '생산자'); }
 function loadProducersDB(cb){
   return IDB.get('excProducers').then(function(s){
     producersDB = s ? JSON.parse(s) : [];
@@ -11907,7 +12202,7 @@ var productsDB = [];
 var _productsFilter = { type:'all' };
 var _editingProduct = null;
 
-function saveProductsDB(){ return IDB.set('excProducts', JSON.stringify(productsDB)).catch(function(){}); }
+function saveProductsDB(){ return _idbSafeSet('excProducts', productsDB, '상품'); }
 function loadProductsDB(cb){
   return IDB.get('excProducts').then(function(s){
     productsDB = s ? JSON.parse(s) : [];
@@ -11956,8 +12251,37 @@ function loadRole(){
 // 예치금 저장 (balance만 Supabase 업데이트, 내역은 IDB 유지 임시)
 async function saveDeposit(){
   try {
+    // 🛡 2026.08: 아직 안 불러온 상태(내역 0건 · 잔액 0)를 백업 위에 덮어쓰지 않는다.
+    //   로딩 중이거나 역할 미확정으로 _userKey 가 다른 키를 가리키는 순간에 저장이 돌면
+    //   예치금 내역·잔액이 통째로 0 으로 덮여 "예치금이 사라진 것"처럼 보였다.
+    var _dkey = _userKey('excDeposit');
+    var _dCount = 0;
+    try {
+      Object.keys(depositData || {}).forEach(function(k){
+        if(Array.isArray(depositData[k])) _dCount += depositData[k].length;
+      });
+    } catch(_ce){}
+    if(_dCount === 0 && !(currentDepositBalance > 0)){
+      var _prevOk = false;
+      try {
+        var _ps = await IDB.get(_dkey);
+        var _pd = _ps ? JSON.parse(_ps) : null;
+        if(_pd){
+          var _pc = 0;
+          Object.keys((_pd.data)||{}).forEach(function(k){
+            if(Array.isArray(_pd.data[k])) _pc += _pd.data[k].length;
+          });
+          _prevOk = (_pc > 0) || ((_pd.balance || 0) > 0);
+        }
+      } catch(_pe){}
+      if(_prevOk){
+        console.warn('[saveDeposit] 내역 0건·잔액 0 — 백업 덮어쓰기 생략');
+        return;   // 서버 잔액도 0 으로 밀지 않는다
+      }
+    }
+
     // 내역은 일단 IndexedDB에 백업 (나중에 purchases 테이블로 이관 예정)
-    await IDB.set(_userKey('excDeposit'), JSON.stringify({data:depositData,balance:currentDepositBalance}))
+    await IDB.set(_dkey, JSON.stringify({data:depositData,balance:currentDepositBalance}))
       .catch(function(e){ console.warn('[saveDeposit IDB backup] failed', e); });
 
     // 잔액만 Supabase에 저장
@@ -12906,8 +13230,25 @@ window.handleNotifClick = handleNotifClick;
 
 async function savePurchase(){
   try {
+    // 🛡 2026.08: 빈 배열로 백업을 덮어쓰지 않는다 (구매내역 유실 방지).
+    //   loadPurchase() 는 시작하자마자 purchaseHistory=[] 로 비운다. 그 사이(로딩 중·
+    //   로그인 복원 중·역할 미확정으로 _userKey 가 다른 키를 가리키는 중)에 savePurchase 가
+    //   한 번이라도 돌면 빈 배열이 IDB 백업을 덮어써 기록이 통째로 사라진다.
+    //   → 메모리가 비었는데 백업엔 데이터가 있으면 저장을 건너뛴다. 지우려면 실제 취소 경로를 쓴다.
+    var _pkey = _userKey('excPurchase');
+    if (!Array.isArray(purchaseHistory) || purchaseHistory.length === 0) {
+      var _prev = null;
+      try { _prev = await IDB.get(_pkey); } catch(_ge){}
+      var _prevLen = 0;
+      try { _prevLen = (JSON.parse(_prev || '[]') || []).length; } catch(_pe){}
+      if (_prevLen > 0) {
+        console.warn('[savePurchase] 메모리가 비어 있어 백업 덮어쓰기를 건너뜀 (보존 ' + _prevLen + '건)');
+        return;   // Supabase 동기화도 하지 않는다 — 넣을 게 없다
+      }
+    }
+
     // IDB 백업 (안전장치)
-    await IDB.set(_userKey('excPurchase'), JSON.stringify(purchaseHistory))
+    await IDB.set(_pkey, JSON.stringify(purchaseHistory))
       .catch(function(e){ console.warn('[savePurchase IDB backup] failed', e); });
 
     // Supabase 동기화: 메모리의 purchaseHistory와 DB의 tickets 비교
@@ -13026,6 +13367,15 @@ async function savePurchase(){
 //   전액 환불(예치금 복원) + 구매기록 제거 + 회원 안내 + 슈퍼어드민 통지.
 async function _tkCapacityAutoRefund(row, user, errMsg){
   var amt = parseInt(row.price) || 0;
+  // 🆕 2026.08: 카드 결제분은 예치금에 적립하지 않는다 (이중 환불 방지).
+  //   예치금으로 낸 부분만 예치금 환원하고, 카드 부분은 토스 승인취소로 환불(서버 toss-confirm
+  //   이 좌석 상실 시 이미 처리) — 여기서 적립하면 카드+예치금 이중 환불이 된다.
+  var _rex = (row && row.extra_data) || {};
+  var _rCardPaid = parseInt(_rex.cardPaid || 0) || 0;
+  var _rDepUsed = parseInt(_rex.depositUsed || 0) || 0;
+  var _rIsCard = (_rCardPaid > 0) || (_rex.paidBy === 'card+deposit');
+  var _rCardRefund = _rIsCard ? Math.max(0, amt - Math.min(amt, _rDepUsed)) : 0;
+  if(_rIsCard) amt = Math.min(amt, _rDepUsed);   // 예치금 환원분으로 제한
   try {
     // 1) 로컬 구매기록 제거 (메모리 + IDB) — 서버에 행이 없으므로 기록도 없어야 정합
     purchaseHistory = purchaseHistory.filter(function(h){ return h.purchaseId !== row.purchase_id; });
@@ -13090,14 +13440,18 @@ async function _tkCapacityAutoRefund(row, user, errMsg){
 }
 
 async function loadPurchase(){
-  purchaseHistory = [];
-  var _idbBackup = [];   // 🆕 Supabase 로 덮어쓰기 전 IDB 원본 보관 (미동기화 복구용)
+  // 🛡 2026.08: 로딩 중에 purchaseHistory 를 비워두지 않는다.
+  //   예전에는 함수 진입 즉시 [] 로 비워, 로드가 끝나기 전에 화면이 그려지거나
+  //   savePurchase 가 돌면 "구매내역이 사라진 것처럼" 보이고 그 빈 상태가 저장되기까지 했다.
+  //   → 로컬 변수에 모아서 마지막에 한 번만 교체한다 (실패하면 기존 값을 유지).
+  var _idbBackup = [];   // Supabase 로 덮어쓰기 전 IDB 원본 보관 (미동기화 복구용)
 
   try {
     // IDB 백업 먼저 로드
     const s = await IDB.get(_userKey('excPurchase')).catch(function(){ return null; });
     if(s){
-      try { _idbBackup = JSON.parse(s) || []; purchaseHistory = _idbBackup.slice(); } catch(e){ purchaseHistory = []; }
+      try { _idbBackup = JSON.parse(s) || []; } catch(e){ _idbBackup = []; }
+      if(_idbBackup.length) purchaseHistory = _idbBackup.slice();
     }
 
     // Supabase에서 진짜 데이터 로드 (우선)
@@ -13115,6 +13469,15 @@ async function loadPurchase(){
 
     if(error){
       console.error('[loadPurchase] Supabase 조회 실패:', error);
+      return;
+    }
+
+    // 🛡 2026.08: 서버가 0건인데 로컬 백업엔 기록이 있으면 덮어쓰지 않는다.
+    //   취소된 티켓도 status='cancelled' 로 남으므로 정상적으로 0건이 되는 경우는
+    //   "한 번도 구매한 적 없음" 뿐이다. 세션/RLS 일시 문제로 0건이 온 것을
+    //   "구매내역 없음"으로 확정해버리면 화면에서 기록이 통째로 사라진다.
+    if((!rows || rows.length === 0) && _idbBackup.length > 0){
+      console.warn('[loadPurchase] 서버 0건 · 로컬 ' + _idbBackup.length + '건 → 로컬 유지(덮어쓰기 보류)');
       return;
     }
 
@@ -13177,7 +13540,7 @@ async function loadPurchase(){
 }
 
 
-function saveCards(){ IDB.set(_userKey('excCards'), JSON.stringify(cardList)).catch(function(){}); }
+function saveCards(){ _idbSafeSet(_userKey('excCards'), cardList, '결제수단'); }
 function loadCards(){
   return IDB.get(_userKey('excCards')).then(function(s){
     cardList = s ? JSON.parse(s)||[] : [];
@@ -15022,6 +15385,7 @@ function adminDirectAccess(){
   var wrap = document.getElementById('appWrapper');
   if(wrap){ wrap.classList.add('ready'); wrap.style.display = 'block'; }
   loadRole(); // PIN으로 설정된 역할 로드
+  try{ if(typeof cardPayTestSync === 'function') cardPayTestSync(); }catch(e){}
   // 참고: bootAutoLogin 경로에서도 이 함수가 호출되는데, 거기서 이미 ready 처리됨
 
   if (_currentRole === 'superadmin') {
@@ -15370,6 +15734,7 @@ function _refreshMyPageUserName(){
       // 🆕 2026.05.21: 가입 이메일 즉시 표시 (auth.user.email 사용)
       var authEmail = user.email || '';
       if(authEmail){
+        _currentUserEmail = authEmail;   // 🆕 재구매 제한 면제 판정에 사용
         var emailEl = document.getElementById('mpUserEmailText');
         if(emailEl) emailEl.textContent = authEmail;
       }
@@ -15392,6 +15757,7 @@ function _refreshMyPageUserName(){
             }
             // 🆕 profiles.email 이 있으면 그것 사용 (auth.email 폴백)
             if(profRes.data.email){
+              _currentUserEmail = profRes.data.email;   // 🆕 재구매 제한 면제 판정에 사용
               var emailEl2 = document.getElementById('mpUserEmailText');
               if(emailEl2) emailEl2.textContent = profRes.data.email;
             }
@@ -18386,7 +18752,10 @@ function refreshSheetSummary() {
   var td=t.time||'–';
   if(t.time&&t.time.includes(':')){var tp=t.time.split(':'),h=parseInt(tp[0]);td=(h>12?h-12:(h===0?12:h))+':'+tp[1]+' '+(h>=12?'PM':'AM');}
   var h='';
-  h+='<div style="font-family:var(--font-main);font-size:17px;font-weight:800;color:#111;margin-bottom:4px;">'+(r?r.name:t.rest)+'</div>';
+  // 🆕 2026.08: 매장명도 번역본 우선 (restaurants.name_en / name_jp)
+  var _sheetName = (r && typeof window.pickI18nField === 'function') ? window.pickI18nField(r, 'name') : '';
+  if(!_sheetName) _sheetName = r ? r.name : t.rest;
+  h+='<div style="font-family:var(--font-main);font-size:17px;font-weight:800;color:#111;margin-bottom:4px;">'+_sheetName+'</div>';
   h+='<div style="font-family:var(--font-main);font-size:12px;color:#aaa;margin-bottom:10px;">'+dateStr+' · '+td+'</div>';
   if(meal)   h+='<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">식사비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxMoney(meal*pax)+'</span></div>';
   if(agency) h+='<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">대행비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxMoney(agency*pax,{usd:fxAgencyUsd(t)*pax,exact:true})+'</span></div>';
@@ -18568,7 +18937,10 @@ function handleTicketAction(){
 
   // 예약 요약
   var h='';
-  h+='<div style="font-family:var(--font-main);font-size:17px;font-weight:800;color:#111;margin-bottom:4px;">'+(r?r.name:t.rest)+'</div>';
+  // 🆕 2026.08: 매장명도 번역본 우선 (restaurants.name_en / name_jp)
+  var _sheetName = (r && typeof window.pickI18nField === 'function') ? window.pickI18nField(r, 'name') : '';
+  if(!_sheetName) _sheetName = r ? r.name : t.rest;
+  h+='<div style="font-family:var(--font-main);font-size:17px;font-weight:800;color:#111;margin-bottom:4px;">'+_sheetName+'</div>';
   h+='<div style="font-family:var(--font-main);font-size:12px;color:#aaa;margin-bottom:16px;">'+dateStr+' · '+td+' · '+pax+'인</div>';
   if(meal)   h+='<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">식사비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxMoney(meal*pax)+'</span></div>';
   if(agency) h+='<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">대행비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxMoney(agency*pax,{usd:fxAgencyUsd(t)*pax,exact:true})+'</span></div>';
@@ -18613,7 +18985,10 @@ function handleTicketAction(){
     window.sb.rpc('taam_ticket_sold_slots', { p_ticket_id: String(_t.id) }).then(function(r){
       if(currentTicket !== _t) return;   // 그 사이 다른 티켓 열림
       var d = (!r.error && r.data) || null; if(!d) return;
-      var remain = Math.max(0, cap - (parseInt(d.total)||0));
+      // 🆕 내가 잡은 홀드는 이 합계에 포함돼 있다 — 빼야 내 화면에 '매진'으로 보이지 않는다.
+      var _sold = parseInt(d.total)||0;
+      if (window._tkSeatHoldId) _sold = Math.max(0, _sold - (parseInt(window._tkSeatHoldPax||0)||0));
+      var remain = Math.max(0, cap - _sold);
       var lang = window._tkCurrentLang;
       var txt, fg, bg;
       if(remain <= 0){
@@ -18645,8 +19020,87 @@ function handleTicketAction(){
   if(typeof applyI18n==='function') applyI18n(sheet);
 }
 
+// ═══════════════════════════════════════════════════════════
+// 🆕 2026.08: 좌석 홀드 — "결제하기" 를 누른 순간 인원수만큼 좌석을 잡는다.
+//
+//   왜 필요한가
+//     예치금 결제는 0.5초면 끝나지만 카드는 결제창에서 1~3분이 걸린다.
+//     그 사이 예치금 회원이 좌석을 가져가면 카드 회원은 돈을 내고도 자리가 없다.
+//     그래서 결제 수단과 무관하게 "결제하기" 시점에 좌석을 선점한다 —
+//     0.001초라도 먼저 누른 사람이 가져간다.
+//
+//   어떻게
+//     기존 초대 홀드(INVH-)와 같은 방식이다. tickets 에 status='hold' 행을 넣으면
+//     enforce_ticket_capacity 트리거가 원자적으로 검증하고 잔여석에 즉시 반영된다.
+//     purchase_id 에 최종 구매 ID 를 미리 넣어두므로, 결제가 끝나면 같은 행을
+//     status='active' 로 바꾸기만 하면 된다 — 좌석이 한 순간도 비지 않는다.
+//     완료되지 않은 홀드는 5분 뒤 자동 해제된다 (sql/seat_hold_5min.sql).
+// ═══════════════════════════════════════════════════════════
+window._tkSeatHoldId = null;   // 현재 잡고 있는 홀드의 purchase_id
+// 🆕 그 홀드가 잡은 인원수. 좌석 조회(taam_ticket_sold_slots)는 hold 행도 점유로 세므로,
+//   "내 홀드"는 잔여석 계산에서 빼야 한다. 안 그러면 마지막 좌석을 잡은 본인이
+//   자기 홀드 때문에 매진으로 거절된다(자기차단) — 정원 1석 티켓은 100% 발생.
+window._tkSeatHoldPax = 0;
+
+async function _tkAcquireSeatHold(t, r, pax){
+  if (!window.sb) return { ok:false, reason:'서버 연결이 없습니다' };
+  var res = await window.sb.auth.getUser();
+  var u = res && res.data && res.data.user;
+  if (!u) return { ok:false, reason:'로그인이 필요합니다' };
+
+  // 최종 구매 ID 를 여기서 확정한다 (completePurchase 가 같은 값을 쓴다)
+  var purchaseId = 'PAYH-' + String(t.id) + '_' + Date.now();
+  var row = {
+    user_id: u.id,
+    restaurant_id: String(t.restId || (r && r.id) || ''),
+    restaurant_name: (r && r.name) || t.rest || '',
+    ticket_product_id: String(t.id),
+    ticket_type: t.type || '',
+    reservation_date: (typeof _tkFullDate === 'function' ? _tkFullDate(t) : t.date) || null,
+    visit_time: t.time || '',
+    party_size: pax,
+    price: 0,                     // 결제 확정 시 실제 금액으로 갱신
+    status: 'hold',
+    purchase_id: purchaseId,
+    buyer_name: (typeof _currentUserName !== 'undefined' && _currentUserName) || '',
+    buyer_phone: (typeof _currentUserPhone !== 'undefined' && _currentUserPhone) || '',
+    extra_data: { seatHold: true, heldAt: new Date().toISOString() },
+    created_at: new Date().toISOString()
+  };
+
+  var ins = await window.sb.from('tickets').insert(row);
+  if (ins.error) {
+    var m = String(ins.error.message || '');
+    // 좌석 트리거가 거부 = 방금 다른 회원이 먼저 가져갔다
+    if (/TICKET_SOLD_OUT/.test(m))      return { ok:false, soldOut:true, reason:'방금 매진되었습니다' };
+    if (/SLOT_SOLD_OUT/.test(m))        return { ok:false, soldOut:true, reason:pax + '인석이 모두 판매되었습니다' };
+    if (/INVALID_PARTY_SIZE|SOLO_LIMIT|FRAGMENT_BLOCKED/.test(m))
+      return { ok:false, soldOut:true, reason:'이 인원으로는 구매할 수 없습니다' };
+    console.warn('[seatHold] 실패:', ins.error);
+    return { ok:false, reason:'좌석 확보에 실패했습니다 — 잠시 후 다시 시도해주세요' };
+  }
+  window._tkSeatHoldId = purchaseId;
+  window._tkSeatHoldPax = pax;          // 잔여석 계산에서 내 홀드를 빼기 위해 기록
+  console.log('[seatHold] 확보:', purchaseId, pax + '석');
+  return { ok:true, purchaseId: purchaseId };
+}
+
+// 결제를 끝내지 않고 빠져나갈 때 즉시 반납한다 (5분 만료를 기다리지 않는다)
+async function _tkReleaseSeatHold(){
+  var pid = window._tkSeatHoldId;
+  if (!pid || !window.sb) return;
+  window._tkSeatHoldId = null;
+  window._tkSeatHoldPax = 0;
+  try {
+    await window.sb.rpc('taam_release_seat_hold', { p_purchase_id: pid });
+    console.log('[seatHold] 반납:', pid);
+  } catch(e){ console.warn('[seatHold] 반납 실패(5분 뒤 자동 해제):', e && e.message); }
+}
+window._tkAcquireSeatHold = _tkAcquireSeatHold;
+window._tkReleaseSeatHold = _tkReleaseSeatHold;
+
 // 결제하기 → 중앙 팝업
-function openTdPayPopup() {
+async function openTdPayPopup() {
   var t = currentTicket, r = currentRest;
   if (!t) return;
   var pax    = _tdPax;
@@ -18656,6 +19110,17 @@ function openTdPayPopup() {
   var totalPay = (meal+agency+wine)*pax;
   window._tdPayAmount = totalPay; // completePurchase에서 재사용
   var after = currentDepositBalance - totalPay;
+
+  // 🆕 좌석 먼저 잡는다. 예치금·카드 구분 없이 여기서 선점한다.
+  //   이미 잡아둔 홀드가 있으면(팝업 재진입) 다시 잡지 않는다.
+  if (!window._tkSeatHoldId) {
+    var _hold = await _tkAcquireSeatHold(t, r, pax);
+    if (!_hold.ok) {
+      showToast(_hold.soldOut ? '⚠' : '❌', _hold.soldOut ? '좌석 확보 실패' : '오류', _hold.reason);
+      if (_hold.soldOut && typeof renderTicketList === 'function') { try { renderTicketList(); } catch(e){} }
+      return;
+    }
+  }
 
   // 잔액 부족 시 카드 결제 분기
   if (after < 0) {
@@ -18698,7 +19163,19 @@ function noCardGoCharge(){
   openPage('cardPage', renderCardPage);
 }
 function noCardCancel(){ var el=document.getElementById('noCardPopup'); if(el) el.remove(); }
-function cardPayCancel(){ var el=document.getElementById('cardPayPopup'); if(el) el.remove(); }
+// 🆕 확인 팝업을 결제 없이 닫으면 잡아둔 좌석을 즉시 돌려준다
+function closeTdConfirmPopup(){
+  var p = document.getElementById('tdConfirmPopup');
+  if (p) p.style.display = 'none';
+  if (typeof _tkReleaseSeatHold === 'function') _tkReleaseSeatHold();
+}
+window.closeTdConfirmPopup = closeTdConfirmPopup;
+
+function cardPayCancel(){
+  var el=document.getElementById('cardPayPopup'); if(el) el.remove();
+  // 🆕 결제를 포기했으니 잡아둔 좌석을 즉시 돌려준다 (5분 만료를 기다리지 않는다)
+  if (typeof _tkReleaseSeatHold === 'function') _tkReleaseSeatHold();
+}
 function showNoCardPopup(shortage) {
   window._pendingShortage = shortage;
   var old = document.getElementById('noCardPopup'); if(old) old.remove();
@@ -18724,14 +19201,22 @@ function showCardPayPopup(shortage, totalPay) {
   var el = document.createElement('div');
   el.id = 'cardPayPopup';
   el.style.cssText = 'position:fixed;inset:0;z-index:960;background:rgba(0,0,0,.65);display:flex;align-items:center;justify-content:center;padding:24px;box-sizing:border-box;';
+  // 🆕 예치금 일부 + 카드 나머지 = 티켓 직접 구매. 어떻게 나뉘는지 명확히 보여준다.
+  var _depUse = Math.max(0, (totalPay || 0) - shortage);
+  var _split = (_depUse > 0)
+    ? '<div style="background:#faf8f4;border:1px solid #eee5d8;border-radius:12px;padding:12px 14px;margin:4px 0 18px;text-align:left;">'
+        + '<div style="display:flex;justify-content:space-between;padding:4px 0;"><span style="font-size:12px;color:#888;">티켓 금액</span><span style="font-size:13px;font-weight:700;">₩'+(totalPay||0).toLocaleString()+'</span></div>'
+        + '<div style="display:flex;justify-content:space-between;padding:4px 0;"><span style="font-size:12px;color:#888;">예치금 사용</span><span style="font-size:13px;font-weight:700;color:#2a6a2a;">-₩'+_depUse.toLocaleString()+'</span></div>'
+        + '<div style="display:flex;justify-content:space-between;padding:6px 0 0;border-top:1px solid #eee5d8;margin-top:4px;"><span style="font-size:12px;font-weight:800;color:#1a1a18;">카드 결제</span><span style="font-size:15px;font-weight:900;color:#5C0A14;">₩'+shortage.toLocaleString()+'</span></div>'
+      + '</div>'
+    : '<div style="background:#fdf5f6;border:1px solid #f0dde0;border-radius:12px;padding:12px;margin:4px 0 18px;"><div style="font-size:11px;color:#b08b90;margin-bottom:4px;">카드 결제 금액</div><div style="font-size:21px;font-weight:800;color:#5C0A14;">₩'+shortage.toLocaleString()+'</div></div>';
   el.innerHTML =
-    '<div style="background:#fff;border-radius:20px;width:100%;max-width:320px;padding:28px 24px;text-align:center;">'
+    '<div style="background:#fff;border-radius:20px;width:100%;max-width:340px;padding:28px 24px;text-align:center;">'
     + '<div style="font-size:32px;margin-bottom:12px;">💳</div>'
-    + '<div style="font-family:var(--font-main);font-size:16px;font-weight:800;color:#1a1a18;margin-bottom:8px;">예치금이 부족합니다</div>'
-    + '<div style="font-family:var(--font-main);font-size:13px;color:#555;line-height:1.7;margin-bottom:4px;">등록 카드 <b>'+cardNum+'</b>로<br>부족분 <b style=\"color:#5C0A14;\">₩'+shortage.toLocaleString()+'</b>을 결제합니다.</div>'
-    + '<div style="font-family:var(--font-main);font-size:11px;color:#aaa;margin-bottom:24px;">등록된 카드로 더욱 빠르고 간편하게<br>결제가 진행됩니다.</div>'
-    + '<button onclick="doCardCharge(window._pendingShortage)" style="width:100%;padding:14px;background:#5C0A14;border:none;border-radius:12px;font-family:var(--font-main);font-size:14px;font-weight:800;color:#fff;cursor:pointer;margin-bottom:10px;">카드로 결제하기</button>'
-    + '<button onclick="cardPayCancel()" style="width:100%;padding:12px;background:transparent;border:none;font-family:var(--font-main);font-size:10px;font-weight:600;letter-spacing:.18em;color:#bbb;cursor:pointer;">취소</button>'
+    + '<div style="font-family:var(--font-main);font-size:16px;font-weight:800;color:#1a1a18;margin-bottom:8px;">'+(_depUse>0?'예치금이 부족합니다':'카드로 결제합니다')+'</div>'
+    + _split
+    + '<button onclick="doCardCharge(window._pendingShortage)" style="width:100%;padding:14px;background:#5C0A14;border:none;border-radius:12px;font-family:var(--font-main);font-size:14px;font-weight:800;color:#fff;cursor:pointer;margin-bottom:10px;">카드로 결제하고 티켓 구매</button>'
+    + '<button onclick="cardPayCancel()" style="width:100%;padding:12px;background:transparent;border:none;font-family:var(--font-main);font-size:11px;font-weight:600;color:#aaa;cursor:pointer;">취소</button>'
     + '</div>';
   document.body.appendChild(el);
 }
@@ -19057,7 +19542,7 @@ function doCardCharge(shortage) {
   if (typeof PAY_MODE_TOSS !== 'undefined' && PAY_MODE_TOSS) {
     // 🆕 2026.08: 서버 승인(toss-confirm) 미배포 동안 카드 결제창을 열지 않는다.
     //   결제창만 띄우면 인증은 되지만 승인이 안 돼 자동 취소 → 회원은 결제된 줄 안다.
-    if (typeof CARD_PAY_LIVE === 'undefined' || !CARD_PAY_LIVE) {
+    if (typeof cardPayEnabled !== 'function' || !cardPayEnabled()) {
       showDepositShortageGuide(Math.round(shortage));
       return;
     }
@@ -19170,6 +19655,13 @@ async function completePurchase(){
       if (_sd) {
         var _st = parseInt(_sd.total, 10); if(!isNaN(_st)) _soldAll = _st;
         var _sc = parseInt(_sd['s'+pax], 10); if(!isNaN(_sc)) _soldSlotCnt = _sc;
+        // 🆕 내 홀드는 이미 이 합계에 포함돼 있다 — 빼지 않으면 내 좌석을 두 번 세어
+        //   "본인이 잡은 마지막 좌석 때문에 본인이 매진으로 거절"된다.
+        if (window._tkSeatHoldId) {
+          var _myHold = parseInt(window._tkSeatHoldPax || 0) || 0;
+          if (_soldAll >= 0 && _myHold > 0) _soldAll = Math.max(0, _soldAll - _myHold);
+          if (_soldSlotCnt >= 0 && _myHold === pax) _soldSlotCnt = Math.max(0, _soldSlotCnt - 1);
+        }
       }
     } catch(_se){}
     // ② 총 정원 초과 차단
@@ -19215,7 +19707,9 @@ async function completePurchase(){
   var paid = (window._tdPayAmount > 0) ? window._tdPayAmount : (meal+agency+wine)*pax;
   currentDepositBalance-=paid;
   window._tdPayAmount = 0; // 초기화
-  var purchaseId = t.id + '_' + now.getTime();
+  // 🆕 결제하기 시점에 잡아둔 홀드의 purchase_id 를 그대로 쓴다.
+  //   같은 행을 status='active' 로 바꾸는 것이므로 좌석이 비지 않는다.
+  var purchaseId = window._tkSeatHoldId || (t.id + '_' + now.getTime());
   // 알림 일정 생성 (네이티브 앱 포팅 시 이 데이터로 로컬 알림 스케줄링)
   var _notifSchedule = [];
   try {
@@ -19230,6 +19724,25 @@ async function completePurchase(){
   //   이유: 슈퍼어드민이 반환/환불불가 처리할 때 이 값으로 BUYER 의 IDB 키를 찾는데,
   //   종래에는 loadAllUsersPurchases() 집계 시점에만 주입됐다.
   //   구매 당시에 미리 박아두면 집계 누락/순서 꼬임에도 안전하게 역추적 가능.
+  // 🆕 홀드 행을 실제 구매로 전환. saveToSupabase 는 purchase_id 가 이미 있으면
+  //   INSERT 를 건너뛰므로, 여기서 상태·금액만 갱신하면 된다.
+  if (window._tkSeatHoldId) {
+    var _hid = window._tkSeatHoldId;
+    window._tkSeatHoldId = null;          // 전환했으므로 더는 반납 대상이 아니다
+    window._tkSeatHoldPax = 0;
+    (async function(){
+      try {
+        var _up = await window.sb.from('tickets')
+          .update({ status: 'active', price: paid,
+                    buyer_name: _currentUserName || '', buyer_phone: _currentUserPhone || '' })
+          .eq('purchase_id', _hid).eq('status', 'hold').select('purchase_id');
+        if (_up.error) console.warn('[seatHold] 구매 전환 실패:', _up.error.message);
+        else if (!_up.data || !_up.data.length) console.warn('[seatHold] 전환할 홀드 없음(이미 만료?):', _hid);
+        else console.log('[seatHold] 구매 전환 완료:', _hid);
+      } catch(e){ console.warn('[seatHold] 전환 예외:', e && e.message); }
+    })();
+  }
+
   var _purchaseSrcKey = _userKey('excPurchase');
    purchaseHistory.push({
     id:t.id, restId:t.restId, date:now.toISOString(), visitDate:(typeof _tkFullDate==='function'?_tkFullDate(t):t.date),
@@ -19552,7 +20065,35 @@ function closeDonePopup(){
   closeTicketDetail();
 }
 
+// 🆕 2026.08: 재구매 제한 면제 계정
+//   앱 심사 중 심사위원이 테스트 계정으로 같은 매장을 반복 구매해 보는데,
+//   레스토랑별 재구매 제한(repurchaseDay)에 걸려 테스트가 막힌다.
+//   → 테스트 계정과 슈퍼어드민만 면제한다. 일반 회원 정책은 그대로 유지.
+var TAAM_REPURCHASE_EXEMPT_EMAILS = ['ripe0315@naver.com'];
+
+function _tkRepurchaseExempt(){
+  try {
+    // ① 슈퍼어드민 (환경에 따라 두 표기가 모두 존재)
+    if (typeof _currentRole !== 'undefined'
+        && (_currentRole === 'superadmin' || _currentRole === 'super_admin')) return true;
+    // ② 면제 이메일 — 로그인 시 저장한 값 우선, 없으면 마이페이지에 표시된 값으로 폴백
+    var em = (typeof _currentUserEmail !== 'undefined' ? (_currentUserEmail || '') : '').trim().toLowerCase();
+    if (!em) {
+      var _el = document.getElementById('mpUserEmailText');
+      em = ((_el && _el.textContent) || '').trim().toLowerCase();
+    }
+    if (!em) return false;
+    return TAAM_REPURCHASE_EXEMPT_EMAILS.indexOf(em) >= 0;
+  } catch(e){ return false; }
+}
+window._tkRepurchaseExempt = _tkRepurchaseExempt;
+
 function checkRepurchaseLimit(t){
+  // 면제 계정은 재구매 제한을 적용하지 않는다 (심사용 테스트 계정 · 슈퍼어드민)
+  if (_tkRepurchaseExempt()) {
+    console.log('[repurchase] 면제 계정 — 재구매 제한 통과');
+    return true;
+  }
   var r=restaurantDB.find(function(x){return String(x.id)===String(t.restId);});
   if(!r||!r.repurchaseDay||r.repurchaseDay===0)return true;
 
@@ -19654,7 +20195,8 @@ async function openCardManagePage(){
   //   (구 PortOne 카드관리 페이지 코드는 아래 주석으로 보존)
   // 🆕 2026.08: 빌링키 발급도 서버(시크릿 키)에서 authKey 를 교환해야 완성된다.
   //   그 로직 전까지는 카드만 등록되고 실제로는 쓸 수 없으므로 창을 열지 않는다.
-  if (typeof CARD_PAY_LIVE === 'undefined' || !CARD_PAY_LIVE) {
+  // 빌링은 검증 스위치로도 열지 않는다 — authKey 교환 서버 로직이 아직 없다
+  if (!CARD_PAY_LIVE) {
     if (typeof showToast === 'function') {
       showToast('💳','결제 수단 관리 준비 중','현재는 예치금(계좌이체)으로만 이용하실 수 있습니다', { });
     }
@@ -20022,7 +20564,9 @@ function _resvGenreLabel(g){
 function _resvVenueName(id){
   if(typeof restaurantDB !== 'undefined'){
     var r = restaurantDB.find(function(x){ return String(x.id)===String(id); });
-    if(r) return r.name;
+    // 🆕 2026.08: 여기서 r.name(한글)을 그대로 돌려주는 바람에, 번역이 있어도
+    //   예약 요청 화면은 늘 한글이었다 (아래 큐레이션 인덱스까지 가지도 못했다).
+    if(r) return (typeof window.pickI18nField === 'function' && window.pickI18nField(r, 'name')) || r.name;
   }
   var v = (_prVenueIndex||{})[id];
   if(v) return _resvLocalizedName(v) || id;
@@ -20033,7 +20577,13 @@ function _resvVenueName(id){
 function _resvVenueSub(id){
   if(typeof restaurantDB !== 'undefined'){
     var r = restaurantDB.find(function(x){ return String(x.id)===String(id); });
-    if(r) return [r.city, r.genre].filter(Boolean).join(' · ');
+    if(r){
+      // 🆕 한글 외 언어에서는 영문 도시·장르를 우선한다
+      var _ko = (_resvLang() === 'ko');
+      var _c = _ko ? (r.city || r.cityEn) : (r.cityEn || r.city);
+      var _g = _ko ? r.genre : (r.genreEn || r.genre);
+      return [_c, _g].filter(Boolean).join(' · ');
+    }
   }
   var v = (_prVenueIndex||{})[id];
   if(v){
@@ -21476,6 +22026,32 @@ function ticketHistTab(idx, el){
   ticketHistRender(idx);
 }
 
+// 🆕 2026.08: 결제·환불 상세 분해 — 예치금/카드 분리 표시용 (회원·슈퍼어드민 공통)
+//   카드 부분결제(예치금 부족분을 카드로 낸 건)는 취소 시 환불 경로가 둘로 갈린다:
+//     · 예치금으로 낸 부분 → 앱이 즉시 예치금으로 환원 (자동)
+//     · 카드로 낸 부분     → 토스 승인취소 (슈퍼어드민이 처리 → 진행상황을 여기서 표시)
+//   이 함수는 tickets.extra_data 에 저장된 cardPaid/depositUsed/card_refund_pending 을
+//   화면이 쓰기 좋은 형태로 정리한다. 예치금 전용 구매면 isCard=false 로 기존 표시 유지.
+function _tkPayBreakdown(h){
+  var ex = (h && h.extra_data) || {};
+  var cardPaid = parseInt(ex.cardPaid || 0) || 0;
+  var depositUsed = parseInt(ex.depositUsed || 0) || 0;
+  var crp = ex.card_refund_pending || null;
+  return {
+    isCard: (cardPaid > 0) || (ex.paidBy === 'card+deposit'),
+    cardPaid: cardPaid,
+    depositUsed: depositUsed,
+    // 취소 시 예치금으로 돌아간 금액 (없으면 화면에서 재계산)
+    depositRefund: (h && h.depositRefund != null) ? (parseInt(h.depositRefund)||0)
+                 : (ex.deposit_refund != null ? (parseInt(ex.deposit_refund)||0) : null),
+    cardRefund: crp ? (parseInt(crp.amount)||0) : 0,
+    cardRefundStatus: crp ? String(crp.status || 'pending') : null,
+    cardRefundedAt: crp ? (crp.refunded_at || null) : null,
+    orderId: ex.order_id || (crp && crp.order_id) || null
+  };
+}
+window._tkPayBreakdown = _tkPayBreakdown;
+
 function ticketHistRender(idx){
   var list = document.getElementById('ticketHistList');
   if(!list) return;
@@ -21514,17 +22090,17 @@ function ticketHistRender(idx){
     cancelled:'background:#f5e8e8;color:#9B1C1C;',
     refunded: 'background:#e8f7e8;color:#2a7a2a;'    // 🆕 환불 완료 (녹색)
   };
-  var badgeLabels;
-  if (_thTfn) {
-    badgeLabels = {
-      upcoming:  _thTfn('mp_sub.th_tab_upcoming'),
-      visited:   _thTfn('mp_sub.th_tab_completed'),
-      cancelled: _thTfn('mp_sub.th_tab_cancelled'),
-      refunded:  _thTfn('mp_sub.th_tab_refunded') || '환불 완료'
-    };
-  } else {
-    badgeLabels = { upcoming:'방문 예정', visited:'방문 완료', cancelled:'취소', refunded:'환불 완료' };
-  }
+  // ⚠ t(key) 는 사전에 키가 없으면 '키 문자열' 을 그대로 돌려준다 (|| 폴백이 안 먹는다).
+  //   실제로 배지에 'mp_sub.th_tab_refunded' 가 그대로 노출됐다 → 폴백을 2번째 인자로 넘긴다.
+  function _thT(key, fb){ return _thTfn ? _thTfn(key, fb) : fb; }
+  var badgeLabels = {
+    upcoming:  _thT('mp_sub.th_tab_upcoming',  '방문 예정'),
+    visited:   _thT('mp_sub.th_tab_completed', '방문 완료'),
+    cancelled: _thT('mp_sub.th_tab_cancelled', '취소'),
+    refunded:  _thT('mp_sub.th_badge_refunded',  '환불 완료'),
+    // 🆕 예치금은 돌려줬지만 카드 환불이 아직 진행 중인 상태 (부분 완료)
+    refunding: _thT('mp_sub.th_badge_refunding', '환불 진행 중')
+  };
   var _thUnknown = _thIsEn ? 'Unknown' : (_thIsJa ? '不明' : '알 수 없음');
   var _thVisitPrefix = _thIsEn ? 'Visit ' : (_thIsJa ? '来店 ' : '방문 ');
 
@@ -21543,6 +22119,14 @@ function ticketHistRender(idx){
     var ap = h<12 ? '오전' : '오후'; var h12 = h%12; if(h12===0) h12=12;
     return ap+' '+h12+':'+p[1];
   }
+  // 🆕 카드 환불 완료 시각 표기 (ISO → '8월 15일')
+  function _thShortDT(iso){
+    try {
+      var d = new Date(iso);
+      if(isNaN(d.getTime())) return '';
+      return (d.getMonth()+1)+'월 '+d.getDate()+'일';
+    } catch(e){ return ''; }
+  }
   function _thDday(ds){
     var d = (typeof _dParseDate==='function') ? _dParseDate(ds) : null;
     if(!d || isNaN(d.getTime())) return null;
@@ -21555,12 +22139,56 @@ function ticketHistRender(idx){
     upcoming:  {bg:'#EAF1FF', bd:'#D2E0FB', dot:'#2563EB', tx:'#1F5BD6'},
     visited:   {bg:'#E8F0E8', bd:'#D4E5D4', dot:'#3A7A3A', tx:'#2F6A2F'},
     cancelled: {bg:'#F2EEEC', bd:'#E4DAD6', dot:'#A39690', tx:'#857069'},
-    refunded:  {bg:'#DDF1E6', bd:'#BFE6CF', dot:'#1E9E5A', tx:'#1E9E5A'}
+    refunded:  {bg:'#DDF1E6', bd:'#BFE6CF', dot:'#1E9E5A', tx:'#1E9E5A'},
+    refunding: {bg:'#FFF6E8', bd:'#F2E0BC', dot:'#D08A16', tx:'#9A6B12'}   // 🆕 카드 환불 진행 중
   };
 
-  list.innerHTML = filtered.map(function(h){
+  // 🆕 2026.08: 취소 탭 맨 위에 '내가 돌려받은 돈' 요약 — 환불 내역을 한눈에 찾을 수 있게.
+  //   예치금으로 돌아온 금액과 카드로 환불되는 금액을 나눠서 보여주고,
+  //   카드 환불이 아직 처리 중이면 그 금액도 따로 표시한다.
+  var _histHeader = '';
+  if(idx === 2){
+    var _sDep = 0, _sCard = 0, _sCardWait = 0;
+    filtered.forEach(function(x){
+      var b = _tkPayBreakdown(x);
+      var ra = (x.refundedAmount != null) ? x.refundedAmount
+             : ((x.extra_data && x.extra_data.refunded_amount != null) ? (parseInt(x.extra_data.refunded_amount)||0) : 0);
+      var d = (b.depositRefund != null) ? b.depositRefund : (b.isCard ? Math.min(ra, b.depositUsed) : ra);
+      _sDep += (d || 0);
+      _sCard += b.cardRefund;
+      if(b.cardRefund > 0 && b.cardRefundStatus !== 'done') _sCardWait += b.cardRefund;
+    });
+    var _sTotal = _sDep + _sCard;
+    if(_sTotal > 0){
+      _histHeader = '<div style="background:#fff;border-radius:20px;box-shadow:0 4px 18px rgba(30,20,10,0.07);padding:18px 20px;margin-bottom:16px;font-family:'+_thF+';">'
+        + '<div style="font-size:11px;font-weight:800;letter-spacing:1.1px;color:#B4B0A8;">REFUND SUMMARY</div>'
+        + '<div style="margin-top:8px;display:flex;align-items:baseline;justify-content:space-between;">'
+        +   '<span style="font-size:14px;font-weight:700;color:#7A7268;">환불 총액</span>'
+        +   '<span style="font-size:24px;font-weight:800;color:#1E9E5A;letter-spacing:-0.5px;">₩'+_sTotal.toLocaleString()+'</span>'
+        + '</div>'
+        + '<div style="height:1px;background:#EFEDE7;margin:12px 0 9px;"></div>'
+        + '<div style="display:flex;align-items:center;justify-content:space-between;padding:3px 0;">'
+        +   '<span style="font-size:13px;font-weight:600;color:#9A9486;">예치금으로 환불</span>'
+        +   '<span style="font-size:14.5px;font-weight:700;color:#26211D;">₩'+_sDep.toLocaleString()+'</span>'
+        + '</div>'
+        + (_sCard > 0
+            ? ('<div style="display:flex;align-items:center;justify-content:space-between;padding:3px 0;">'
+               +   '<span style="font-size:13px;font-weight:600;color:#9A9486;">카드로 환불</span>'
+               +   '<span style="font-size:14.5px;font-weight:700;color:#26211D;">₩'+_sCard.toLocaleString()+'</span>'
+               + '</div>'
+               + (_sCardWait > 0
+                   ? ('<div style="margin-top:8px;padding:8px 11px;border-radius:9px;background:#FFF6E8;border:1px solid #F2E0BC;font-size:11.5px;font-weight:700;color:#9A6B12;">'
+                      + '카드 환불 진행 중 ₩'+_sCardWait.toLocaleString()+' · 완료되면 알림을 보내드려요</div>')
+                   : ''))
+            : '')
+        + '</div>';
+    }
+  }
+
+  list.innerHTML = _histHeader + filtered.map(function(h){
     var r = restaurantDB.find(function(x){ return String(x.id)===String(h.restId); });
     var s = h.status || 'upcoming';
+    var bd = _tkPayBreakdown(h);   // 🆕 예치금/카드 결제 구성
     var paxLabel = h.pax + (_thIsEn ? (h.pax===1?' guest':' guests') : (_thIsJa ? '名' : '명'));
     // 방문 예정일 때만 취소 버튼 (기능 그대로)
     var cancelBtn = '';
@@ -21580,11 +22208,40 @@ function ticketHistRender(idx){
     var displayS = s;
     if(s === 'cancelled'){
       var dr = h.depositReturn || null;
-      var refundedAmt = (h.refundedAmount != null) ? h.refundedAmount : (dr ? (dr.returnAmt||0) : null);
-      var isReturned = dr ? (dr.type === 'returned') : (h.refundedAmount > 0);
+      // 🆕 앱을 새로고침하면 h.refundedAmount(메모리 값)가 사라진다 —
+      //   취소 시 tickets.extra_data 에 남긴 값을 폴백으로 읽어 상세가 유지되게 한다.
+      var _exRef = (h.extra_data && h.extra_data.refunded_amount != null)
+                 ? (parseInt(h.extra_data.refunded_amount) || 0) : null;
+      var refundedAmt = (h.refundedAmount != null) ? h.refundedAmount
+                      : (dr ? (dr.returnAmt||0) : _exRef);
+      var isReturned = dr ? (dr.type === 'returned') : (refundedAmt > 0);
       if(isReturned && refundedAmt > 0){ displayS = 'refunded'; }
+      // 🆕 카드 환불이 아직 안 끝났으면 '환불 완료' 가 아니라 '환불 진행 중' 이다.
+      //   (예치금은 즉시 환원되지만 카드는 슈퍼어드민이 토스에서 처리한 뒤에 끝난다)
+      if(bd.cardRefund > 0 && bd.cardRefundStatus !== 'done') displayS = 'refunding';
       if(refundedAmt != null){
-        refundInfo = '<div style="margin-top:6px;font-size:11.5px;font-weight:700;color:#1E9E5A;">↳ 환불 완료 · +₩'+ refundedAmt.toLocaleString() +'</div>';
+        if(bd.isCard){
+          // 🆕 카드 부분결제 취소 — 예치금 환원분과 카드 환불분을 나눠서 보여준다.
+          //   카드로 낸 돈은 예치금으로 돌려주지 않고 카드사로 승인취소된다 (이중환불 방지).
+          var _dRef = (bd.depositRefund != null) ? bd.depositRefund : Math.min(refundedAmt, bd.depositUsed);
+          var _cRef = bd.cardRefund || Math.max(0, refundedAmt - _dRef);
+          if(_dRef > 0){
+            refundInfo = '<div style="margin-top:6px;font-size:11.5px;font-weight:700;color:#1E9E5A;">↳ 예치금 환불 완료 · +₩'+ _dRef.toLocaleString() +'</div>';
+          }
+          if(_cRef > 0){
+            var _cDone = (bd.cardRefundStatus === 'done');
+            refundInfo += '<div style="margin-top:7px;padding:10px 12px;border-radius:11px;background:'+(_cDone?'#EAF6EE':'#FFF6E8')+';border:1px solid '+(_cDone?'#CDE9D8':'#F2E0BC')+';">'
+              + '<div style="font-size:11.5px;font-weight:800;color:'+(_cDone?'#1E7A46':'#9A6B12')+';">💳 카드 환불 ₩'+_cRef.toLocaleString()+' · '+(_cDone?'환불 완료':'환불 진행 중')+'</div>'
+              + '<div style="margin-top:3px;font-size:10.5px;color:#8C8475;line-height:1.55;">'
+              +   (_cDone
+                    ? ('카드사로 승인취소되었습니다'+(bd.cardRefundedAt ? (' · '+_thShortDT(bd.cardRefundedAt)) : '')+'<br>카드사 반영은 영업일 기준 3~5일 소요될 수 있어요')
+                    : '카드로 결제하신 금액은 카드사로 환불됩니다<br>확인 후 순차 처리되며, 완료되면 알림을 보내드려요')
+              + '</div>'
+              + '</div>';
+          }
+        } else {
+          refundInfo = '<div style="margin-top:6px;font-size:11.5px;font-weight:700;color:#1E9E5A;">↳ 환불 완료 · +₩'+ refundedAmt.toLocaleString() +'</div>';
+        }
         if(dr && dr.agencyHeld > 0){
           refundInfo += '<div style="margin-top:2px;font-size:10.5px;color:#1F5BD6;">대행비 차감 ₩'+ dr.agencyHeld.toLocaleString() +' (정상 절차)</div>';
         }
@@ -21622,10 +22279,23 @@ function ticketHistRender(idx){
       +   '<div style="height:1px;background:#E8E6DF;"></div>'
       +   '<div style="display:flex;align-items:center;justify-content:space-between;padding:13px 2px;"><span style="font-size:14px;font-weight:600;color:#9A9486;">인원</span><span style="font-size:17px;font-weight:800;letter-spacing:-0.3px;">'+paxLabel+'</span></div>'
       + '</div>'
-      // chapter 2 : 결제 금액
-      + '<div style="margin:12px 16px 0;padding:15px 18px;background:#FBF3F2;border:1px solid #EEDADA;border-radius:16px;display:flex;align-items:center;justify-content:space-between;">'
-      +   '<span style="font-size:15px;font-weight:700;color:#7A5050;">결제 금액</span>'
-      +   '<span style="font-size:22px;font-weight:800;color:#6A1A1A;letter-spacing:-0.5px;">₩'+(h.amt||0).toLocaleString()+'</span>'
+      // chapter 2 : 결제 금액 (+ 🆕 예치금/카드 결제 구성)
+      + '<div style="margin:12px 16px 0;padding:15px 18px;background:#FBF3F2;border:1px solid #EEDADA;border-radius:16px;">'
+      +   '<div style="display:flex;align-items:center;justify-content:space-between;">'
+      +     '<span style="font-size:15px;font-weight:700;color:#7A5050;">결제 금액</span>'
+      +     '<span style="font-size:22px;font-weight:800;color:#6A1A1A;letter-spacing:-0.5px;">₩'+(h.amt||0).toLocaleString()+'</span>'
+      +   '</div>'
+      +   (bd.isCard
+            ? ('<div style="height:1px;background:#EEDADA;margin:12px 0 9px;"></div>'
+               + '<div style="display:flex;align-items:center;justify-content:space-between;padding:3px 0;">'
+               +   '<span style="font-size:13px;font-weight:600;color:#A08484;">예치금 사용</span>'
+               +   '<span style="font-size:14.5px;font-weight:700;color:#7A5050;">₩'+bd.depositUsed.toLocaleString()+'</span>'
+               + '</div>'
+               + '<div style="display:flex;align-items:center;justify-content:space-between;padding:3px 0;">'
+               +   '<span style="font-size:13px;font-weight:600;color:#A08484;">카드 결제</span>'
+               +   '<span style="font-size:14.5px;font-weight:700;color:#7A5050;">₩'+bd.cardPaid.toLocaleString()+'</span>'
+               + '</div>')
+            : '')
       + '</div>'
       + (h.isInvited ? '<div style="padding:10px 18px 0;font-size:11.5px;color:#6A1A1A;font-weight:600;">상세설명 · '+(h.inviteDesc || '슈퍼어드민 초대로 구매')+'</div>' : '')
       + refundInfo
@@ -21697,13 +22367,13 @@ function calculateTicketRefund(purchaseRecord, restaurant, currentTime, isSuperA
   }
   var daysUntilVisit = (visitDate - currentTime) / (1000 * 60 * 60 * 24);
 
-  // 정책 2: 방문일 30일 전까지 — 대행비 제외 환불
-  if(daysUntilVisit >= 30){
-    return { refundable: paidTotal - agencyTotal, agencyHeld: agencyTotal, reason: '방문 ' + Math.ceil(daysUntilVisit) + '일 전 — 대행비 제외 환불', policy: 'agency_excluded' };
+  // 정책 2: 방문 D-31 이상(31일 이상 남음) — 대행비 제외 환불 (약관 제3조 2)
+  if(daysUntilVisit >= 31){
+    return { refundable: paidTotal - agencyTotal, agencyHeld: agencyTotal, reason: '방문 ' + Math.floor(daysUntilVisit) + '일 전 — 대행비 제외 환불', policy: 'agency_excluded' };
   }
 
-  // 정책 3: 29일~당일 → 환불 불가
-  return { refundable: 0, agencyHeld: paidTotal, reason: '방문 ' + Math.max(0, Math.ceil(daysUntilVisit)) + '일 전 — 환불 불가 (슈퍼어드민 예외 가능)', policy: 'no_refund' };
+  // 정책 3: D-30 이하(방문 30일 이내) → 환불 불가 (약관 제3조 2)
+  return { refundable: 0, agencyHeld: paidTotal, reason: '방문 ' + Math.max(0, Math.floor(daysUntilVisit)) + '일 전 — 환불 불가 (슈퍼어드민 예외 가능)', policy: 'no_refund' };
 }
 window.calculateTicketRefund = calculateTicketRefund;
 
@@ -21777,11 +22447,20 @@ function openCancelTicketModal(purchaseId){
   msg += '방문일: ' + (h.visitDate || '미지정') + '\n\n';
   msg += '━━━━━━ 환불 정책 ━━━━━━\n';
   msg += '· 구매 30분 이내: 전액 환불\n';
-  msg += '· 방문일 D-30 이전: 대행비 제외 환불\n';
-  msg += '· D-29 ~ 당일: 환불 불가 (슈퍼어드민 예외 가능)\n\n';
+  msg += '· 방문일 D-31 이상: 대행비 제외 환불\n';
+  msg += '· D-30 ~ 당일: 환불 불가 (슈퍼어드민 예외 가능)\n\n';
   msg += '━━━━━━ 환불 미리보기 ━━━━━━\n';
   msg += '환불 가능 금액: ₩' + preview.refundable.toLocaleString() + '\n';
   if(preview.agencyHeld > 0) msg += '대행비 보유: ₩' + preview.agencyHeld.toLocaleString() + '\n';
+  // 🆕 카드 결제분은 카드로, 예치금 결제분은 예치금으로 나뉘어 환불됨을 안내
+  var _pex = h.extra_data || {};
+  var _pIsCard = ((parseInt(_pex.cardPaid || 0) || 0) > 0) || (_pex.paidBy === 'card+deposit');
+  if(_pIsCard && preview.refundable > 0){
+    var _pDep = Math.min(preview.refundable, parseInt(_pex.depositUsed || 0) || 0);
+    var _pCard = Math.max(0, preview.refundable - _pDep);
+    if(_pDep > 0) msg += ' └ 예치금 환불: ₩' + _pDep.toLocaleString() + '\n';
+    if(_pCard > 0) msg += ' └ 카드 환불(영업일 기준): ₩' + _pCard.toLocaleString() + '\n';
+  }
   msg += '사유: ' + preview.reason + '\n\n';
   if(preview.refundable === 0 && !isSuper){
     msg += '⚠ 현재 환불이 불가합니다.\n슈퍼어드민에게 문의해주세요.\n\n취소 요청만 진행하시겠습니까?';
@@ -21819,7 +22498,9 @@ async function _tkMaybeReopen(h){
     var usedPax = (rpcPax >= 0) ? rpcPax : localPax;
     if(usedPax < totalPax){
       t.status = 'active';                 // 판매중 복귀
-      try { saveTickets(); } catch(_){}    // IDB + Supabase(ticket_products) 반영 → 전 회원에게 판매중
+      // ⚠ 바뀐 티켓 하나만 서버에 저장한다. 전체를 밀면 로컬(IDB)의 낡은 값이
+      //   서버의 최신 티켓들을 덮어써 날짜·상태가 되돌아간다.
+      try { saveTickets(t.id); } catch(_){}
       try { if(typeof renderTickets === 'function') renderTickets(); } catch(_){}
     }
   } catch(e){ console.warn('[cancel] 좌석 재개방 예외:', e); }
@@ -21831,11 +22512,33 @@ async function cancelTicketPurchase(purchaseId, refundCalc, isSuperAdminOverride
   var h = purchaseHistory[idx];
   var r = restaurantDB.find(function(x){ return String(x.id) === String(h.restId); });
 
+  // 🆕 2026.08: 카드/예치금 결제분 분리 (이중 환불 방지)
+  //   카드로 결제한 금액은 실제 카드로 환불(토스 승인취소)해야 하므로 예치금에 적립하지 않는다.
+  //   예치금에 적립하면서 토스에서도 카드 환불을 하면 회원에게 금액이 이중으로 쌓인다.
+  //   → '예치금으로 낸 부분'만 예치금으로 환원하고, '카드로 낸 부분'은 카드 환불 대기로 남겨
+  //     슈퍼어드민에게 통지한다(토스에서 카드로 환불). 예치금 우선 배분:
+  //       예치금 환원 = min(환불가능액, 예치금 사용분)  ·  카드 환불 = 나머지
+  var _ex0 = h.extra_data || {};
+  var _cardPaidTotal = parseInt(_ex0.cardPaid || 0) || 0;
+  var _depositUsedTotal = parseInt(_ex0.depositUsed || 0) || 0;
+  var _isCardPurchase = (_cardPaidTotal > 0) || (_ex0.paidBy === 'card+deposit');
+  var _refundable = refundCalc.refundable || 0;
+  var _depositRefund, _cardRefund;
+  if(_isCardPurchase){
+    _depositRefund = Math.min(_refundable, _depositUsedTotal);   // 예치금으로 낸 부분만 예치금 환원
+    _cardRefund = Math.max(0, _refundable - _depositRefund);     // 나머지는 카드 환불(토스) 대상
+  } else {
+    _depositRefund = _refundable;   // 예치금 전용 구매 — 전액 예치금 환원
+    _cardRefund = 0;
+  }
+
   try {
     // 1) 로컬 purchaseHistory 업데이트
     h.status = 'cancelled';
     h.cancelledAt = new Date().toISOString();
-    h.refundedAmount = refundCalc.refundable;
+    h.refundedAmount = refundCalc.refundable;   // 회원이 돌려받는 총액(예치금+카드)
+    h.depositRefund = _depositRefund;           // 그 중 예치금 환원분
+    h.cardRefundPending = _cardRefund;          // 그 중 카드 환불(토스) 대기분
     h.cancelReason = refundCalc.reason;
     h.cancelledByRole = (typeof _currentRole !== 'undefined') ? _currentRole : 'user';
     savePurchase();
@@ -21843,24 +22546,38 @@ async function cancelTicketPurchase(purchaseId, refundCalc, isSuperAdminOverride
     // 2) Supabase tickets 테이블 업데이트 (await — 이후 좌석 재계산이 취소분을 반영하도록)
     if(window.sb && h.purchaseId){
       try {
+        var _cxExtra = Object.assign({}, h.extra_data || {}, {
+          cancelled_at: h.cancelledAt,
+          refunded_amount: h.refundedAmount,
+          deposit_refund: _depositRefund,
+          cancel_reason: h.cancelReason,
+          cancelled_by_role: h.cancelledByRole
+        });
+        // 카드로 낸 부분이 있으면 '카드 환불 대기'를 티켓 행에 남긴다 (예치금엔 적립 안 함).
+        //   슈퍼어드민이 토스에서 카드 환불 처리 후 status 를 done 으로 바꾸면 된다.
+        if(_cardRefund > 0){
+          _cxExtra.card_refund_pending = {
+            amount: _cardRefund,
+            order_id: _ex0.order_id || null,
+            reason: refundCalc.reason,
+            requested_at: h.cancelledAt,
+            status: 'pending'
+          };
+        }
         var _uRes = await window.sb.from('tickets').update({
           status: 'cancelled',
-          extra_data: Object.assign({}, h.extra_data || {}, {
-            cancelled_at: h.cancelledAt,
-            refunded_amount: h.refundedAmount,
-            cancel_reason: h.cancelReason,
-            cancelled_by_role: h.cancelledByRole
-          })
+          extra_data: _cxExtra
         }).eq('purchase_id', h.purchaseId);
         if(_uRes.error) console.warn('[cancel] tickets update 실패:', _uRes.error.message);
+        else h.extra_data = _cxExtra;
       } catch(_ue){ console.warn('[cancel] tickets update 예외:', _ue); }
     }
 
     // 🆕 2026.07: 좌석 해제 → 매진이었던 티켓을 실시간으로 판매중(active) 복귀
     await _tkMaybeReopen(h);
 
-    // 3) 환불 금액 만큼 예치금 복원 (general 우선)
-    if(refundCalc.refundable > 0 && window.sb){
+    // 3) 예치금으로 낸 부분만 예치금 복원 (general 우선). 카드로 낸 부분은 여기서 적립하지 않는다.
+    if(_depositRefund > 0 && window.sb){
       var auth = await window.sb.auth.getUser();
       var user = auth && auth.data && auth.data.user;
       if(user){
@@ -21870,25 +22587,32 @@ async function cancelTicketPurchase(purchaseId, refundCalc, isSuperAdminOverride
         var memBal = (profRes.data && profRes.data.membership_deposit_balance) || 0;
         var genBal = (profRes.data && profRes.data.general_deposit_balance) || 0;
         // 일반 예치금에 환불 (정책 — 사용처 분리)
-        var newGen = genBal + refundCalc.refundable;
+        var newGen = genBal + _depositRefund;
         var newTotal = memBal + newGen;
         await window.sb.from('profiles').update({
           general_deposit_balance: newGen
         }).eq('id', user.id);
 
-        // deposit_transactions 환불 기록
+        // deposit_transactions 환불 기록 (예치금 환원분만)
         await window.sb.from('deposit_transactions').insert({
           user_id: user.id,
           deposit_type: 'general',
           change_type: 'ticket_refund',
-          amount: refundCalc.refundable,
+          amount: _depositRefund,
           balance_after: newTotal,
-          description: (r ? r.name : '티켓') + ' 취소 환불 — ' + refundCalc.reason,
+          description: (r ? r.name : '티켓') + ' 취소 환불(예치금) — ' + refundCalc.reason,
           metadata: {
             purchase_id: purchaseId,
             ticket_id: h.id,
             policy: refundCalc.policy,
             agency_held: refundCalc.agencyHeld || 0,
+            deposit_refund: _depositRefund,
+            card_refund_pending: _cardRefund,
+            paid_by: _isCardPurchase ? 'card+deposit' : 'deposit',
+            // 🆕 분류 키 — 위약금(penalty)이 아니라 '구매 취소 환불' 임을 명시한다.
+            //   이게 없으면 슈퍼어드민 화면이 (티켓가 − 예치금환원)을 위약금으로 잘못 계산한다.
+            refund_type: 'returned',
+            cancel_refund: true,
             cancelled_by: isSuperAdminOverride ? 'super_admin' : 'user'
           }
         });
@@ -21897,9 +22621,9 @@ async function cancelTicketPurchase(purchaseId, refundCalc, isSuperAdminOverride
         currentDepositBalance = newTotal;
         depositData.refund = depositData.refund || [];
         depositData.refund.push({
-          name: (r ? r.name : '티켓') + ' 취소 환불',
+          name: (r ? r.name : '티켓') + ' 취소 환불(예치금)',
           date: new Date().toLocaleString('ko-KR'),
-          amt: refundCalc.refundable,
+          amt: _depositRefund,
           purchaseId: purchaseId
         });
         saveDeposit();
@@ -21911,10 +22635,16 @@ async function cancelTicketPurchase(purchaseId, refundCalc, isSuperAdminOverride
     //   send-push 는 role/all/topic scope 에서 호출자(취소한 회원) uid 를 자동 제외하므로
     //   슈퍼어드민만 수신. role 문자열이 환경에 따라 'superadmin'/'super_admin' 둘 다 존재 → 양쪽 발송.
     try {
-      var _cxTitle = h.isInvited ? '❌ 회원이 초대 티켓을 취소했습니다' : '❌ 회원이 티켓을 취소했습니다';
+      // 카드 환불 대기가 있으면 제목에 🔴 를 붙여 슈퍼어드민이 토스에서 카드 환불하도록 강조
+      var _cxTitle = (_cardRefund > 0 ? '🔴 카드 환불 필요 — ' : '')
+                   + (h.isInvited ? '회원이 초대 티켓을 취소했습니다' : '회원이 티켓을 취소했습니다');
       var _cxVisit = (h.visitDate || '') + (h.visitTime ? (' ' + h.visitTime) : '');
       var _cxBody = (r ? r.name : (h.restName || '티켓')) + ' · ' + _cxVisit + ' · ' + (h.pax || 1) + '인 · ₩' + (h.amt || 0).toLocaleString()
-                  + (refundCalc.refundable > 0 ? (' · 환불 ₩' + refundCalc.refundable.toLocaleString()) : ' · 환불 없음');
+                  + (_depositRefund > 0 ? (' · 예치금환불 ₩' + _depositRefund.toLocaleString()) : '')
+                  + (_cardRefund > 0
+                       ? ('\n💳 카드 환불 필요: ₩' + _cardRefund.toLocaleString()
+                          + ' (토스에서 승인취소' + (_ex0.order_id ? (' · 주문 ' + _ex0.order_id) : '') + ')')
+                       : (_depositRefund > 0 ? '' : ' · 환불 없음'));
       ['superadmin','super_admin'].forEach(function(_rl){
         try {
           window.sb.functions.invoke('send-push', {
@@ -21924,7 +22654,7 @@ async function cancelTicketPurchase(purchaseId, refundCalc, isSuperAdminOverride
                 title: _cxTitle,
                 body: _cxBody,
                 url: '/',
-                category: 'ticket_cancelled',
+                category: _cardRefund > 0 ? 'ticket_cancelled_card_refund' : 'ticket_cancelled',
                 tag: 'taam-tcancel-' + purchaseId
               }
             }
@@ -21933,9 +22663,18 @@ async function cancelTicketPurchase(purchaseId, refundCalc, isSuperAdminOverride
       });
     } catch(_ce){ console.warn('[cancel] 슈퍼어드민 푸시 예외:', _ce); }
 
-    showToast('✓','취소 완료', refundCalc.refundable > 0
-      ? '환불 ₩' + refundCalc.refundable.toLocaleString() + ' 처리됨'
-      : '취소 요청 완료 (환불 없음)');
+    // 회원 안내: 예치금 환원분과 카드 환불 예정분을 분리해 보여준다
+    var _cxMsg;
+    if(_cardRefund > 0 && _depositRefund > 0){
+      _cxMsg = '예치금 ₩' + _depositRefund.toLocaleString() + ' 환불 · 카드 ₩' + _cardRefund.toLocaleString() + ' 환불 예정';
+    } else if(_cardRefund > 0){
+      _cxMsg = '카드 ₩' + _cardRefund.toLocaleString() + ' 환불 예정 (영업일 기준 처리)';
+    } else if(_depositRefund > 0){
+      _cxMsg = '예치금 ₩' + _depositRefund.toLocaleString() + ' 환불 처리됨';
+    } else {
+      _cxMsg = '취소 요청 완료 (환불 없음)';
+    }
+    showToast('✓','취소 완료', _cxMsg);
 
     // 화면 새로고침
     if(typeof ticketHistRender === 'function') ticketHistRender(_ticketHistTabIdx || 0);
@@ -22184,6 +22923,14 @@ function _dmPersistBuyerChanges(h, refundToAdd, refundNote){
         var purchaseId = h.purchaseId;
         var dr = h.depositReturn || {};
 
+        // 🆕 2026.08: 카드/예치금 분리 (이중 환불 방지) — 슈퍼어드민 반환 처리도 동일 규칙.
+        //   카드로 낸 부분은 예치금에 적립하지 않고 카드 환불(토스) 대상으로만 남긴다.
+        var _sae = h.extra_data || {};
+        var _saIsCard = ((parseInt(_sae.cardPaid || 0) || 0) > 0) || (_sae.paidBy === 'card+deposit');
+        var _saDepUsed = parseInt(_sae.depositUsed || 0) || 0;
+        var _depCredit = _saIsCard ? Math.min(refundToAdd, _saDepUsed) : refundToAdd;
+        var _saCardRefund = _saIsCard ? Math.max(0, refundToAdd - _depCredit) : 0;
+
         // 🛡 2026.05.22: 중복 환불 가드 — 이미 ticket_refund row 가 있는지 확인
         //   회원이 이미 본인 마이페이지에서 취소(환불)받았는데 슈퍼어드민이 또 처리하면
         //   잔액이 중복 크레딧됨. 사전 차단.
@@ -22243,6 +22990,16 @@ function _dmPersistBuyerChanges(h, refundToAdd, refundNote){
             note: dr.note || refundNote || ''
           }
         });
+        // 카드로 낸 부분이 있으면 '카드 환불 대기'로 남긴다 (예치금엔 적립 안 함)
+        if(_saCardRefund > 0){
+          newExtra.card_refund_pending = {
+            amount: _saCardRefund,
+            order_id: _sae.order_id || null,
+            reason: dr.note || refundNote || dr.type || '슈퍼어드민 반환',
+            requested_at: new Date().toISOString(),
+            status: 'pending'
+          };
+        }
         await window.sb.from('tickets').update({
           status: ticketStatus,
           extra_data: newExtra
@@ -22256,8 +23013,9 @@ function _dmPersistBuyerChanges(h, refundToAdd, refundNote){
         var genBal = (profRes.data && profRes.data.general_deposit_balance) || 0;
 
         if (refundToAdd > 0 && userId) {
-          // 환불액 > 0: 일반 예치금에 크레딧
-          var newGen = genBal + refundToAdd;
+          // 예치금으로 낸 부분만 일반 예치금에 크레딧 (카드 부분은 토스에서 카드로 환불).
+          //   카드 전액 결제분이면 _depCredit=0 이라 예치금 잔액은 그대로, 카드 환불만 대기로 남는다.
+          var newGen = genBal + _depCredit;
           var newTotal = memBal + newGen;
           await window.sb.from('profiles').update({
             general_deposit_balance: newGen
@@ -22268,14 +23026,15 @@ function _dmPersistBuyerChanges(h, refundToAdd, refundNote){
           var _extraDesc = (dr.extraDeduct > 0)
             ? ' — 추가 차감 ₩' + dr.extraDeduct.toLocaleString() + ' (사유: ' + (dr.extraNote || '') + ')'
             : '';
+          var _cardDesc = (_saCardRefund > 0) ? (' · 카드 ₩' + _saCardRefund.toLocaleString() + ' 별도 환불(토스)') : '';
           var _dtDesc = dr.type === 'returned'
-            ? ((h.rest || '티켓') + ' 반환 완료' + _extraDesc)
-            : ((h.rest || '티켓') + ' 환불 처리 — ' + refundNote);
+            ? ((h.rest || '티켓') + ' 반환 완료(예치금)' + _extraDesc + _cardDesc)
+            : ((h.rest || '티켓') + ' 환불 처리(예치금) — ' + refundNote + _cardDesc);
           await window.sb.from('deposit_transactions').insert({
             user_id: userId,
             deposit_type: 'general',
             change_type: 'ticket_refund',
-            amount: refundToAdd,
+            amount: _depCredit,
             balance_after: newTotal,
             description: _dtDesc,
             metadata: {
@@ -22288,6 +23047,9 @@ function _dmPersistBuyerChanges(h, refundToAdd, refundNote){
               extra_deduct: dr.extraDeduct || 0,              // 🆕 추가 차감 금액
               extra_note: dr.extraNote || '',                 // 🆕 추가 차감 사유
               return_amt: dr.returnAmt || refundToAdd,
+              deposit_refund: _depCredit,                     // 🆕 예치금 환원분
+              card_refund_pending: _saCardRefund,             // 🆕 카드 환불(토스) 대기분
+              paid_by: _saIsCard ? 'card+deposit' : 'deposit',
               note: dr.note || refundNote,
               processed_by: 'super_admin',
               processed_at: new Date().toISOString()
@@ -22644,24 +23406,39 @@ async function _dmLoadSupabasePurchases(){
 
       if(refund){
         var meta = refund.metadata || {};
-        var refundAmt = Math.abs(refund.amount || 0);
-        var penaltyAmt = (t.price || 0) - refundAmt;
+        var refundAmt = Math.abs(refund.amount || 0);   // 예치금으로 돌아간 금액
+        // 🆕 2026.08: 카드 부분결제 취소는 '예치금 환원분' 만 deposit_transactions 에 남는다.
+        //   카드로 환불되는 금액(card_refund_pending)을 빼먹으면 그만큼이 위약금으로 잘못 잡힌다
+        //   (₩3,000 티켓의 카드분 ₩2,000 이 '위약금 67%' 로 표시되던 문제).
+        var _crpM = (t.extra_data && t.extra_data.card_refund_pending) || null;
+        var cardRefundAmt = _crpM ? (parseInt(_crpM.amount) || 0)
+                          : (parseInt(meta.card_refund_pending || 0) || 0);
+        var totalRefund = refundAmt + cardRefundAmt;     // 회원이 실제로 돌려받는 총액
+        var penaltyAmt = Math.max(0, (t.price || 0) - totalRefund);
         var rtype = meta.refund_type;
         if(!rtype){
-          // 레거시 데이터 추론: agency_held 있고 penalty_pct 없으면 반환완료
-          rtype = (meta.agency_held && !meta.penalty_pct) ? 'returned' : 'penalty';
+          // 회원/슈퍼어드민의 '구매 취소' 환불은 refund_type 을 남기지 않는다 — 위약금이 아니다.
+          //   실제로 돌아간 돈이 있으면 반환완료로 분류한다.
+          rtype = (totalRefund > 0) ? 'returned'
+                : ((meta.agency_held && !meta.penalty_pct) ? 'returned' : 'penalty');
         }
         h.depositReturn = {
           type: rtype,
           date: refund.created_at ? refund.created_at.slice(0,10).replace(/-/g, '.') : '',
           _ts: refund.created_at || '',                  // 🆕 정렬용 전체 타임스탬프
-          returnAmt: refundAmt,
-          penaltyAmt: meta.penalty_amt || Math.max(0, penaltyAmt),
+          returnAmt: totalRefund,                        // 예치금 + 카드 (돌려받는 총액)
+          depositRefund: refundAmt,                      // 🆕 그 중 예치금 환원분
+          cardRefund: cardRefundAmt,                     // 🆕 그 중 카드 환불분
+          cardRefundDone: !!(_crpM && _crpM.status === 'done'),
+          penaltyAmt: meta.penalty_amt || penaltyAmt,
           penaltyPct: meta.penalty_pct || (t.price > 0 ? Math.round(penaltyAmt / t.price * 100) : 0),
           agencyHeld: meta.agency_held || 0,
           extraDeduct: meta.extra_deduct || 0,     // 🆕 추가 차감 금액
           extraNote: meta.extra_note || '',        // 🆕 추가 차감 사유
-          note: meta.note || refund.description || ''
+          note: meta.note || refund.description || '',
+          // 🆕 구매 취소로 인한 환불 (방문 후 예치금 '반환' 과 구분해서 표시).
+          //   신규 데이터는 cancel_refund 플래그로, 과거 데이터는 상태로 판별한다.
+          isCancelRefund: !!meta.cancel_refund || (t.status === 'cancelled' && !meta.refund_type)
         };
       } else if(extraDr && extraDr.type){
         // ⚠ 폴백: ticket_refund row 가 없는데 tickets.extra_data 에 처리 기록이 있는 경우
@@ -22898,9 +23675,17 @@ function loadAllUsersPurchases(){
     window.__dmDiagIdbCount = idbList.length;
     return _dmAllPurchases;
   }).catch(function(e){
+    // 🛡 2026.08: 집계 실패를 "데이터 없음" 으로 만들지 않는다.
+    //   예전에는 여기서 _dmAllPurchases=[] 로 비워, 네트워크·RLS 일시 오류가
+    //   슈퍼어드민 화면에서 "모든 회원 데이터가 사라진 것" 처럼 보였다.
+    //   → 직전 집계를 그대로 유지하고 실패 사실만 알린다.
     console.warn('loadAllUsersPurchases failed', e);
-    _dmAllPurchases = [];
-    return _dmAllPurchases;
+    window.__dmDiagLoadError = String((e && e.message) || e || '').slice(0, 200);
+    if (typeof showToast === 'function') {
+      showToast('⚠','집계 실패','회원 구매내역을 불러오지 못했어요 — 이전 데이터를 표시합니다');
+    }
+    if (!Array.isArray(_dmAllPurchases)) _dmAllPurchases = [];
+    return _dmAllPurchases;   // 비우지 않는다
   });
 }
 
@@ -22967,6 +23752,23 @@ function getDmItems(idx){
     });
   } else if(idx === 1){ // 반환완료
     out = src.filter(function(h){ return h && h.depositReturn && h.depositReturn.type === 'returned' && _dmMatch(h); });
+  } else if(idx === 3){
+    // 🆕 카드환불: 카드로 결제된 부분이 있어 토스에서 승인취소가 필요한 건.
+    //   회원이 취소한 티켓은 반환예정/반환완료/환불불가 어디에도 안 잡히므로
+    //   (반환예정은 cancelled 제외, 나머지는 depositReturn 필요) 여기서 모아 본다.
+    //   미처리(pending)를 위로 올려 놓치지 않게 한다.
+    out = src.filter(function(h){
+      var crp = h && h.extra_data && h.extra_data.card_refund_pending;
+      return !!(crp && (parseInt(crp.amount)||0) > 0) && _dmMatch(h);
+    });
+    out.sort(function(a,b){
+      var pa = (a.extra_data.card_refund_pending.status === 'done') ? 1 : 0;
+      var pb = (b.extra_data.card_refund_pending.status === 'done') ? 1 : 0;
+      if(pa !== pb) return pa - pb;                     // pending 먼저
+      var ra = a.extra_data.card_refund_pending.requested_at || '';
+      var rb = b.extra_data.card_refund_pending.requested_at || '';
+      return String(rb).localeCompare(String(ra));      // 최신 먼저
+    });
   } else { // 환불불가
     out = src.filter(function(h){ return h && h.depositReturn && h.depositReturn.type === 'penalty' && _dmMatch(h); });
   }
@@ -22990,19 +23792,31 @@ function renderDmMgmtList(idx){
   var list = document.getElementById('dmMgmtList');
   if(!summary || !list) return;
 
-  var totalAmt = items.reduce(function(s,h){ return s+(h.amt||0); },0);
-  var summaryAmtColor = idx===2?'#9B1C1C':'#1a1a18';
-  var summaryLabel = idx===0?'반환 예정 금액':idx===1?'반환 완료 금액':'환불 불가 금액';
-  var countLabel = items.length + '건';
+  // 🆕 카드환불 탭은 '아직 카드로 환불해야 할 금액'(pending 합계)을 크게 보여준다
+  var totalAmt, summaryAmtColor, summaryLabel, countLabel;
+  if(idx === 3){
+    var _pend = items.filter(function(h){
+      return h.extra_data.card_refund_pending.status !== 'done';
+    });
+    totalAmt = _pend.reduce(function(s,h){ return s + (parseInt(h.extra_data.card_refund_pending.amount)||0); }, 0);
+    summaryAmtColor = _pend.length ? '#B23A2E' : '#1E7A46';
+    summaryLabel = '카드 환불 필요 금액';
+    countLabel = '미처리 ' + _pend.length + '건 / 전체 ' + items.length + '건';
+  } else {
+    totalAmt = items.reduce(function(s,h){ return s+(h.amt||0); },0);
+    summaryAmtColor = idx===2?'#9B1C1C':'#1a1a18';
+    summaryLabel = idx===0?'반환 예정 금액':idx===1?'반환 완료 금액':'환불 불가 금액';
+    countLabel = items.length + '건';
+  }
 
   summary.innerHTML = '<div class="dm-summary-left">'
     +'<div class="dm-summary-label">'+summaryLabel+'</div>'
     +'<div class="dm-summary-amt" style="color:'+summaryAmtColor+';">₩'+totalAmt.toLocaleString()+'</div>'
-    +'<div class="dm-summary-count">총 '+countLabel+'</div>'
+    +'<div class="dm-summary-count">'+(idx===3?'':'총 ')+countLabel+'</div>'
     +'</div>';
 
   if(items.length === 0){
-    var empties = ['방문 완료 후 반환 대기 중인 건이 없어요','반환 완료된 내역이 없어요','환불 불가 처리된 내역이 없어요'];
+    var empties = ['방문 완료 후 반환 대기 중인 건이 없어요','반환 완료된 내역이 없어요','환불 불가 처리된 내역이 없어요','카드 환불이 필요한 건이 없어요'];
     // ── 슈퍼어드민 진단 정보 (반환예정 탭이 비어 있을 때만) ──
     //   구매는 했는데 리스트에 안 뜨면 여기서 왜 비었는지 확인 가능.
     var diag = '';
@@ -23061,10 +23875,36 @@ function renderDmMgmtList(idx){
     } else if(idx === 1){
       // 반환완료 — 큰 금액 영역에서 이미 반환액+상세 표시. 여기엔 처리일자 + 추가차감 사유.
       var dr = h.depositReturn;
-      resultHtml = '<div class="dm-result-box dm-result-returned">'
-        +'✓ '+dr.date+' 반환 완료'
-        + (dr.extraDeduct > 0 ? '<br><span style="color:#B23A2E;font-weight:700;">추가 차감 ₩'+dr.extraDeduct.toLocaleString()+(dr.extraNote?' · 사유: '+escapeHtml(dr.extraNote):'')+'</span>' : '')
-        +'</div>';
+      if(dr.isCancelRefund || dr.cardRefund > 0){
+        // 🆕 구매 취소 환불 — 방문 후 '예치금 반환' 과 다른 건이므로 문구를 구분하고,
+        //   예치금 환원분과 카드 환불분을 실제 금액 그대로 보여준다 (위약금 아님).
+        resultHtml = '<div class="dm-result-box dm-result-returned">'
+          + '✓ ' + (dr.date||'') + ' 구매 취소 환불 ₩' + (dr.returnAmt||0).toLocaleString()
+          + '<br><span style="opacity:.85;">예치금 ₩' + (dr.depositRefund||0).toLocaleString()
+          + (dr.cardRefund > 0
+              ? (' &nbsp;·&nbsp; 카드 ₩' + dr.cardRefund.toLocaleString() + (dr.cardRefundDone ? ' (환불완료)' : ' (환불대기)'))
+              : '')
+          + '</span>'
+          + (dr.penaltyAmt > 0
+              ? ('<br><span style="color:#B23A2E;font-weight:700;">미환불 ₩' + dr.penaltyAmt.toLocaleString()
+                 + (dr.agencyHeld > 0 ? ' (대행비)' : '') + '</span>')
+              : '')
+          + '</div>';
+      } else {
+        resultHtml = '<div class="dm-result-box dm-result-returned">'
+          +'✓ '+dr.date+' 반환 완료'
+          + (dr.extraDeduct > 0 ? '<br><span style="color:#B23A2E;font-weight:700;">추가 차감 ₩'+dr.extraDeduct.toLocaleString()+(dr.extraNote?' · 사유: '+escapeHtml(dr.extraNote):'')+'</span>' : '')
+          +'</div>';
+      }
+    } else if(idx === 3){
+      // 🆕 카드환불 탭 — 취소 사유/시점만 간단히. 처리 UI 는 아래 cardBox 가 담당한다.
+      //   (회원 취소 건은 depositReturn 이 없으므로 아래 '환불불가' 분기로 가면 안 된다)
+      var _crp3 = h.extra_data.card_refund_pending || {};
+      resultHtml = '<div class="dm-result-box" style="background:#F7F6F3;color:#6A6258;">'
+        + (h.status === 'cancelled' ? '취소됨' : '처리됨')
+        + (_crp3.requested_at ? (' · ' + _thxFmtDateTime(_crp3.requested_at)) : '')
+        + (_crp3.reason ? ('<br><span style="opacity:.75;">' + escapeHtml(String(_crp3.reason)) + '</span>') : '')
+        + '</div>';
     } else {
       // 환불불가 — 슈퍼어드민이 "환불불가" 버튼으로 처리한 건만 (penalty type)
       var dr = h.depositReturn;
@@ -23084,10 +23924,19 @@ function renderDmMgmtList(idx){
     var amtHtml;
     if(idx === 1){
       var dr1 = h.depositReturn || {};
-      var agencyHeld1 = dr1.agencyHeld || (dr1.agencyOnly ? (dr1.penaltyAmt||0) : 0);
-      var details1 = ['티켓가 ₩'+(h.amt||0).toLocaleString()];
-      if(agencyHeld1 > 0) details1.push('대행비 ₩'+agencyHeld1.toLocaleString());
-      if(dr1.penaltyAmt > 0 && agencyHeld1 === 0) details1.push('위약금 ₩'+dr1.penaltyAmt.toLocaleString()+' ('+dr1.penaltyPct+'%)');
+      var details1;
+      if(dr1.isCancelRefund || dr1.cardRefund > 0){
+        // 🆕 구매 취소 환불 — 결제수단별 실제 환불 내역 (위약금 개념 아님)
+        details1 = ['티켓가 ₩'+(h.amt||0).toLocaleString(),
+                    '예치금 환불 ₩'+(dr1.depositRefund||0).toLocaleString()];
+        if(dr1.cardRefund > 0) details1.push('카드 환불 ₩'+dr1.cardRefund.toLocaleString());
+        if(dr1.penaltyAmt > 0) details1.push('미환불 ₩'+dr1.penaltyAmt.toLocaleString());
+      } else {
+        var agencyHeld1 = dr1.agencyHeld || (dr1.agencyOnly ? (dr1.penaltyAmt||0) : 0);
+        details1 = ['티켓가 ₩'+(h.amt||0).toLocaleString()];
+        if(agencyHeld1 > 0) details1.push('대행비 ₩'+agencyHeld1.toLocaleString());
+        if(dr1.penaltyAmt > 0 && agencyHeld1 === 0) details1.push('위약금 ₩'+dr1.penaltyAmt.toLocaleString()+' ('+dr1.penaltyPct+'%)');
+      }
       amtHtml = '<div class="dm-item-amt" style="color:#2a6a2a;">₩'+(dr1.returnAmt||0).toLocaleString()+'</div>'
               + '<div style="font-size:11px;color:#888;margin-top:4px;line-height:1.6;letter-spacing:.02em;">'+details1.join(' &nbsp;·&nbsp; ')+'</div>';
     } else if(idx === 2){
@@ -23102,16 +23951,130 @@ function renderDmMgmtList(idx){
       amtHtml = '<div class="dm-item-amt">₩'+(h.amt||0).toLocaleString()+'</div>';
     }
 
+    // 🆕 2026.08: 카드 부분결제 상세 + 카드 환불 처리 (슈퍼어드민 전용)
+    //   카드로 낸 돈은 앱이 자동 환불할 수 없다 (토스 상점관리자에서 승인취소).
+    //   여기에 "얼마를 카드로 환불해야 하는지" 와 처리 버튼을 노출한다.
+    var cardBox = '';
+    var bdm = _tkPayBreakdown(h);
+    if(bdm.isCard){
+      cardBox = '<div style="margin-top:10px;padding:11px 13px;border-radius:10px;background:#F7F6F3;border:1px solid #E8E6DF;">'
+        + '<div style="font-size:11px;font-weight:800;color:#6A6258;letter-spacing:.03em;">결제 구성</div>'
+        + '<div style="margin-top:5px;font-size:11.5px;color:#555;line-height:1.7;">'
+        +   '예치금 ₩'+bdm.depositUsed.toLocaleString()+' &nbsp;·&nbsp; 카드 ₩'+bdm.cardPaid.toLocaleString()
+        +   (bdm.orderId ? ('<br><span style="color:#999;">주문 '+escapeHtml(String(bdm.orderId))+'</span>') : '')
+        + '</div>';
+      if(bdm.cardRefund > 0){
+        var _cdone = (bdm.cardRefundStatus === 'done');
+        cardBox += '<div style="margin-top:8px;padding:9px 11px;border-radius:9px;background:'+(_cdone?'#EAF6EE':'#FFF1E6')+';border:1px solid '+(_cdone?'#CDE9D8':'#F3D9C2')+';">'
+          + '<div style="font-size:11.5px;font-weight:800;color:'+(_cdone?'#1E7A46':'#B23A2E')+';">'
+          +   (_cdone ? '✓ 카드 환불 완료 ₩' : '🔴 카드 환불 필요 ₩') + bdm.cardRefund.toLocaleString()
+          + '</div>'
+          + (_cdone
+              ? '<div style="margin-top:3px;font-size:10.5px;color:#6A8A76;">회원에게 완료 알림 발송됨</div>'
+              : ('<div style="margin-top:3px;font-size:10.5px;color:#8C7A70;line-height:1.5;">토스 상점관리자에서 승인취소한 뒤 아래 버튼을 누르세요 (회원에게 알림 발송)</div>'
+                 + '<button onclick="tkMarkCardRefundDone(\''+h.purchaseId+'\')" style="width:100%;margin-top:8px;padding:9px;border:none;border-radius:8px;background:#5C0A14;color:#fff;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;">카드 환불 완료 처리</button>'))
+          + '</div>';
+      }
+      cardBox += '</div>';
+    }
+
     return '<div class="dm-item">'
       +'<div class="dm-item-head"><div class="dm-item-name">'+rName+visitStatus+'</div>'
       +'<button onclick="showBuyerInfo('+globalIdx+')" style="flex-shrink:0;padding:4px 10px;background:#f0ede8;border:none;border-radius:6px;font-family:var(--font-main);font-size:11px;font-weight:700;color:#555;cursor:pointer;">구매자</button>'
       +'</div>'
       +'<div class="dm-item-meta">'+meta+'</div>'
       +amtHtml
+      +cardBox
       +actionsHtml+resultHtml
       +'</div>';
   }).join('');
 }
+
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026.08: 카드 환불 완료 처리 (슈퍼어드민)
+//   카드로 결제된 금액은 앱이 예치금으로 돌려주지 않는다 (이중환불 방지).
+//   실제 환불은 토스 상점관리자에서 승인취소로 이뤄지므로, 앱에는
+//   extra_data.card_refund_pending = {amount, status:'pending'} 만 남는다.
+//   이 함수가 그 상태를 'done' 으로 바꾸고 회원에게 인앱 알림 + 푸시를 보낸다
+//   → 회원이 "카드 환불이 처리됐다" 는 사실을 앱에서 확인할 수 있다.
+// ═══════════════════════════════════════════════════════════════
+async function tkMarkCardRefundDone(purchaseId){
+  if(!purchaseId || !window.sb) return;
+  var isSuper = (typeof _currentRole !== 'undefined' && (_currentRole === 'superadmin' || _currentRole === 'super_admin'));
+  if(!isSuper){ showToast('⚠','권한 없음','슈퍼어드민만 처리할 수 있습니다'); return; }
+
+  try {
+    var row = await window.sb.from('tickets')
+      .select('purchase_id, user_id, restaurant_name, extra_data')
+      .eq('purchase_id', purchaseId).maybeSingle();
+    if(row.error || !row.data){ showToast('⚠','조회 실패','티켓을 찾을 수 없습니다'); return; }
+
+    var ex  = row.data.extra_data || {};
+    var crp = ex.card_refund_pending || null;
+    if(!crp){ showToast('ⓘ','대상 아님','카드 환불 대기 건이 아닙니다'); return; }
+    if(String(crp.status) === 'done'){ showToast('ⓘ','이미 처리됨','이미 카드 환불 완료로 기록되어 있습니다'); return; }
+
+    var amt = parseInt(crp.amount || 0) || 0;
+    if(!confirm('토스에서 카드 ₩' + amt.toLocaleString() + ' 승인취소를 완료하셨나요?\n\n'
+              + (crp.order_id ? ('주문번호: ' + crp.order_id + '\n\n') : '')
+              + '확인을 누르면 회원에게 "카드 환불 완료" 알림이 발송됩니다.')) return;
+
+    var _admU = null;
+    try { var _gu = await window.sb.auth.getUser(); _admU = (_gu && _gu.data && _gu.data.user) ? _gu.data.user.id : null; } catch(e){}
+    var nowIso = new Date().toISOString();
+    var newExtra = Object.assign({}, ex, {
+      card_refund_pending: Object.assign({}, crp, {
+        status: 'done', refunded_at: nowIso, done_by: _admU
+      })
+    });
+
+    var up = await window.sb.from('tickets')
+      .update({ extra_data: newExtra }).eq('purchase_id', purchaseId).select('purchase_id');
+    if(up.error || !up.data || !up.data.length){
+      showToast('⚠','저장 실패', (up.error && up.error.message) || '대상 티켓을 찾지 못했어요');
+      return;
+    }
+
+    // ── 회원에게 알림 (벨 + 푸시) ──
+    var rest = row.data.restaurant_name || '티켓';
+    var nbody = rest + ' 카드 결제분 ₩' + amt.toLocaleString() + ' 환불이 완료되었습니다.\n'
+              + '카드사 반영은 영업일 기준 3~5일 소요될 수 있습니다.';
+    try {
+      await window.sb.from('notifications').insert({
+        user_id: row.data.user_id,
+        type: 'card_refund_done', kind: 'card_refund_done',
+        title: '💳 카드 환불이 완료되었습니다',
+        body: nbody, message: nbody,
+        url: '/?open_ticket_hist=1',
+        payload: { purchase_id: purchaseId, amount: amt, order_id: crp.order_id || null, refunded_at: nowIso }
+      });
+    } catch(_ne){ console.warn('[cardRefund] 회원 알림 insert 예외:', _ne); }
+    try {
+      await window.sb.functions.invoke('send-push', {
+        body: { to: 'uid:' + row.data.user_id, payload: {
+          title: '💳 카드 환불이 완료되었습니다',
+          body: rest + ' · ₩' + amt.toLocaleString() + ' 환불 완료',
+          url: '/', category: 'card_refund_done', tag: 'taam-crf-' + purchaseId } }
+      });
+    } catch(_pe){ console.warn('[cardRefund] 회원 push 예외:', _pe); }
+
+    // ── 로컬 반영 + 화면 갱신 ──
+    try {
+      var _l = (purchaseHistory || []).find(function(x){ return x.purchaseId === purchaseId; });
+      if(_l) _l.extra_data = newExtra;
+      var _a = (_dmAllPurchases || []).find(function(x){ return x.purchaseId === purchaseId; });
+      if(_a) _a.extra_data = newExtra;
+    } catch(_le){}
+
+    showToast('✓','카드 환불 완료','회원에게 알림을 보냈습니다');
+    try { if(typeof renderDmMgmtList === 'function') renderDmMgmtList(_dmCurrentTab || 0); } catch(_re){}
+    try { if(typeof ticketHistRender === 'function') ticketHistRender(_ticketHistTabIdx || 0); } catch(_re2){}
+  } catch(e){
+    console.error('[cardRefund] 처리 실패:', e);
+    alert('카드 환불 완료 처리 중 오류:\n' + (e.message || String(e)));
+  }
+}
+window.tkMarkCardRefundDone = tkMarkCardRefundDone;
 
 // ── DM 팝업 ──
 var _dmPenaltyDirectAmt = null;
@@ -26020,7 +26983,7 @@ async function rpDeleteRest(id) {
 
   // 2. DB 삭제 성공한 경우에만 메모리/IDB/UI 정리
   restaurantDB = restaurantDB.filter(function(r){ return String(r.id) !== String(id); });
-  if (typeof IDB !== 'undefined') IDB.set('excRests', JSON.stringify(restaurantDB)).catch(function(){});
+  if (typeof IDB !== 'undefined') _idbSafeSet('excRests', restaurantDB, '레스토랑');
   if (typeof syncTuRestList === 'function') syncTuRestList();
   if (typeof renderRestList === 'function') renderRestList();
   showToast('🗑','삭제 완료', (target.name || '레스토랑') + ' 삭제됨');
@@ -29184,6 +30147,12 @@ function tuToggleSoldout(id){
   if(!t)return;
   t.status=(t.status==='soldout')?'active':'soldout';
   saveTickets();
+  // 🆕 수동 토글은 auto_soldout=false 로 명시 — 좌석 자동 동기화 트리거가
+  //   어드민이 손댄 매진/판매를 멋대로 되돌리지 못하게 보호한다.
+  if(window.sb){
+    window.sb.from('ticket_products').update({ auto_soldout:false }).eq('id', String(id))
+      .then(function(){}, function(e){ console.warn('[soldout] auto flag 갱신 실패', e); });
+  }
   renderTicketList();
   renderCarousel();
   renderHomeTickets();
@@ -31266,6 +32235,9 @@ var TRANSLATIONS = {
       th_tab_upcoming:'방문 예정',
       th_tab_completed:'방문 완료',
       th_tab_cancelled:'취소',
+      th_tab_cancelled_refund:'취소·환불',
+      th_badge_refunded:'환불 완료',
+      th_badge_refunding:'환불 진행 중',
       th_empty_upcoming:'예정된 방문이 없어요',
       th_empty_completed:'완료된 방문이 없어요',
       th_empty_cancelled:'취소된 티켓이 없어요',
@@ -32042,6 +33014,9 @@ var TRANSLATIONS = {
       th_tab_upcoming:'Upcoming',
       th_tab_completed:'Completed',
       th_tab_cancelled:'Cancelled',
+      th_tab_cancelled_refund:'Cancelled · Refunds',
+      th_badge_refunded:'Refunded',
+      th_badge_refunding:'Refund in progress',
       th_empty_upcoming:'No upcoming visits',
       th_empty_completed:'No completed visits',
       th_empty_cancelled:'No cancelled tickets',
@@ -32581,6 +33556,9 @@ TRANSLATIONS.ja = {
     th_tab_upcoming:'来店予定',
     th_tab_completed:'来店完了',
     th_tab_cancelled:'キャンセル',
+    th_tab_cancelled_refund:'キャンセル・返金',
+    th_badge_refunded:'返金完了',
+    th_badge_refunding:'返金手続き中',
     th_empty_upcoming:'来店予定はありません',
     th_empty_completed:'来店完了はありません',
     th_empty_cancelled:'キャンセルしたチケットはありません',
@@ -33267,6 +34245,8 @@ async function _i18nBatch(cfg){
   var idCol = cfg.idCol || 'id';
   var cols = [idCol, 'i18n_status_en'];   // 🆕 행 단위 완료 표시
   cfg.fields.forEach(function(f){ cols.push(f.ko, f.en, f.jp); });
+  // 🆕 문맥 생성에 필요한 추가 컬럼 (예: 국가 — 일본 매장인지 한국 매장인지)
+  if (Array.isArray(cfg.extraCols)) cfg.extraCols.forEach(function(c){ cols.push(c); });
   var q = window.sb.from(cfg.table).select(cols.join(', '));
   // 🆕 회원에게 안 보이는 행은 번역하지 않는다 (시간·비용 절약)
   if (cfg.filter) q = cfg.filter(q);
@@ -33313,7 +34293,10 @@ async function _i18nBatch(cfg){
     });
     if (items.length === 0) continue;
     try {
-      var _res = await window.taamTranslate(items, cfg.ctx || '');
+      // 🆕 ctx 를 행별로 만들 수 있게 한다. 매장 국적을 알려주지 않으면
+      //   AI 가 일본 매장 상호까지 카타카나로 음차한다 (松川 → マツカワ).
+      var _ctx = (typeof cfg.ctx === 'function') ? cfg.ctx(r) : (cfg.ctx || '');
+      var _res = await window.taamTranslate(items, _ctx);
       // ⚠ 응답은 { translations: { <id>: {en, ja} } } 형태다.
       //   예전에 _res 를 직접 읽어 매핑이 전부 실패했고, 번역 없이 완료 표시만 저장됐다.
       var tr = _res && _res.translations;
@@ -33348,7 +34331,18 @@ function taamTranslateRestaurants(opts){
     table: 'restaurants', label: '레스토랑', dryRun: !!(opts && opts.dryRun),
     // 슈퍼어드민 전용 매장은 회원에게 노출되지 않으므로 번역 대상에서 제외
     filter: function(q){ return q.or('super_admin_only.is.null,super_admin_only.eq.false'); },
-    ctx: '한국·일본 프리미엄 다이닝 레스토랑 정보. 고유명사는 현지 통용 표기를 우선하고, 억지 의역을 피할 것.',
+    extraCols: ['country_en', 'city_en', 'region'],
+    // 🆕 매장 국적을 문맥에 실어 보낸다. 이게 없으면 일본 매장 상호도 카타카나로 음차된다.
+    ctx: function(r){
+      var country = (r.country_en || r.region || '').toString();
+      var isJP = /japan|jp|일본/i.test(country);
+      var isKR = /korea|kr|한국/i.test(country);
+      var where = [r.country_en, r.city_en].filter(Boolean).join(' · ');
+      var head = '한국·일본 프리미엄 다이닝 레스토랑 정보' + (where ? ' (' + where + ')' : '');
+      if (isJP) return head + '. ⚠ 이 매장은 **일본 매장**이다. 상호는 실제 일본어 표기(한자·히라가나)를 복원할 것. 카타카나 음차 금지.';
+      if (isKR) return head + '. 이 매장은 한국 매장이다. 일본어는 카타카나 음차가 맞다.';
+      return head + '. 고유명사는 현지 통용 표기를 우선하고, 억지 의역을 피할 것.';
+    },
     fields: [
       { ko:'name',        en:'name_en',        jp:'name_jp' },
       { ko:'description', en:'description_en', jp:'description_jp' },
@@ -33416,23 +34410,47 @@ async function aiTranslateNode(chefId, lineageId, opts){
     var sec2 = (ko.sec2_data && typeof ko.sec2_data === 'object') ? ko.sec2_data : {};
 
     // 2) 번역 items 준비 (빈 값은 skip)
-    var items = [];
-    if(ko.name)       items.push({id:'name',       value: ko.name});
-    if(ko.sub_title)  items.push({id:'sub',        value: ko.sub_title});
-    if(sec1.title)    items.push({id:'sec1_title', value: sec1.title});
-    if(sec1.desc)     items.push({id:'sec1_desc',  value: sec1.desc});
-    if(sec2.title)    items.push({id:'sec2_title', value: sec2.title});
-    if(sec2.desc)     items.push({id:'sec2_desc',  value: sec2.desc});
-    if(items.length === 0){
+    //   🆕 2026.08: 한 번에 6개 항목(이름·부제·섹션2개 제목/본문)을 EN+JA 두 벌로 뽑으면
+    //   본문이 긴 노드는 출력이 커져 생성에만 100초를 넘긴다. 그러면 통째로 실패해서
+    //   짧은 이름조차 저장되지 않는다.
+    //   → 짧은 것(이름·부제·제목)과 긴 것(본문)을 나눠 호출한다.
+    //     각 호출의 출력이 작아져 빨라지고, 하나가 실패해도 나머지는 저장된다.
+    var groups = [];
+    var shortItems = [];
+    if(ko.name)      shortItems.push({id:'name',       value: ko.name});
+    if(ko.sub_title) shortItems.push({id:'sub',        value: ko.sub_title});
+    if(sec1.title)   shortItems.push({id:'sec1_title', value: sec1.title});
+    if(sec2.title)   shortItems.push({id:'sec2_title', value: sec2.title});
+    if(shortItems.length) groups.push(shortItems);
+    if(sec1.desc) groups.push([{id:'sec1_desc', value: sec1.desc}]);
+    if(sec2.desc) groups.push([{id:'sec2_desc', value: sec2.desc}]);
+
+    if(groups.length === 0){
       _toast('ℹ','번역할 내용 없음','한국어 데이터가 모두 비어있습니다');
       return false;
     }
 
-    // 3) AI 호출
+    // 3) AI 호출 — 그룹별로 순차 호출 후 결과를 합친다.
+    //   한 그룹이 실패해도 나머지 그룹의 결과는 살린다 (부분 저장).
     var ctx = '스시 미식 · ' + lineageId + ' 계보 · TAAM 플랫폼';
-    var r = await window.taamTranslate(items, ctx);
-    var tr = r && r.translations;
-    if(!tr){
+    var tr = {};
+    var okGroups = 0;
+    for (var gi = 0; gi < groups.length; gi++){
+      try {
+        var r = await window.taamTranslate(groups[gi], ctx);
+        var part = r && r.translations;
+        if(part){
+          Object.keys(part).forEach(function(k){ tr[k] = part[k]; });
+          okGroups++;
+        } else {
+          console.warn('[aiTranslateNode] 그룹', gi, '결과 없음', chefId);
+        }
+      } catch(ge){
+        // 이 그룹만 실패 — 나머지는 계속 진행한다
+        console.warn('[aiTranslateNode] 그룹', gi, '실패', chefId, ge && ge.message);
+      }
+    }
+    if(okGroups === 0){
       _toast('⚠','번역 결과 없음','다시 시도해주세요');
       return false;
     }
@@ -33455,11 +34473,16 @@ async function aiTranslateNode(chefId, lineageId, opts){
       return false;
     }
 
+    // 🆕 일부 그룹만 성공했으면 완료로 표시하지 않는다.
+    //   받아온 건 저장하되 status 는 pending 으로 남겨, 다음 실행에서 나머지를 채운다.
+    //   (완료로 찍어버리면 못 받은 필드가 영영 한글로 남는다)
+    var _allDone = (okGroups === groups.length);
+    if(!_allDone) console.warn('[aiTranslateNode] 부분 성공 —', okGroups + '/' + groups.length, chefId, '→ pending 유지');
     var payload = {
       sec1_data: newSec1,
       sec2_data: newSec2,
-      i18n_status_en: 'ai_draft',
-      i18n_status_jp: 'ai_draft',
+      i18n_status_en: _allDone ? 'ai_draft' : 'pending',
+      i18n_status_jp: _allDone ? 'ai_draft' : 'pending',
       i18n_updated_at: new Date().toISOString()
     };
     if(tr.name){ payload.name_en = tr.name.en; payload.name_jp = tr.name.ja; }
@@ -33473,8 +34496,9 @@ async function aiTranslateNode(chefId, lineageId, opts){
       return false;
     }
 
-    _toast('✓','번역 완료', items.length + '개 필드 · EN+JA 저장됨');
-    console.log('[aiTranslateNode] success:', chefId, '/', lineageId, '/ fields:', items.length);
+    _toast('✓','번역 완료', got + '개 필드 · EN+JA 저장됨');
+    console.log('[aiTranslateNode] success:', chefId, '/', lineageId,
+      '/ fields:', got, '/ groups:', okGroups + '/' + groups.length);
     return true;
   } catch(e){
     console.error('[aiTranslateNode]', e);
@@ -33517,6 +34541,19 @@ window.onClickTranslateNode = function(){
 //   그 사이 버튼을 다시 누르면 루프가 하나 더 돌아 같은 노드를 두 번 번역했다
 //   (API 비용 2배 + 같은 row 를 동시에 update). 진행 상태를 전역에 두고 막는다.
 var _taamChefsTx = null;   // { running, done, total } 진행 중일 때만 객체
+
+// 🆕 Wake Lock 재획득 — 탭을 벗어났다 돌아오면 브라우저가 락을 풀어버린다.
+//   작업이 아직 돌고 있으면 다시 잡아준다.
+var _taamWakeLock = null;
+async function _taamReacquireWake(){
+  if (document.visibilityState !== 'visible') return;
+  if (!_taamChefsTx || !_taamChefsTx.running) return;
+  try {
+    if (navigator.wakeLock && navigator.wakeLock.request) {
+      _taamWakeLock = await navigator.wakeLock.request('screen');
+    }
+  } catch(e){}
+}
 
 async function _taamTranslateAllChefs(opts){
   opts = opts || {};
@@ -33604,25 +34641,51 @@ async function _taamTranslateAllChefs(opts){
   _taamChefsTx = { running: true, done: 0, total: targets.length };
   _taamTxBarShow('계보도 번역', 0, targets.length);
   var ok = 0, fail = 0, t0 = Date.now();
+
+  // 🆕 화면이 꺼지면 탭이 잠들어 루프가 그대로 멈춘다 (실제로 두 번 멈췄다).
+  //   Wake Lock 으로 작업 동안 화면을 깨워둔다. 미지원 브라우저면 조용히 넘어간다.
+  var _wake = null;
   try {
-    for(var i=0; i<targets.length; i++){
-      var t = targets[i];
-      var prog = (i+1)+'/'+targets.length;
-      console.log('[일괄 번역] '+prog+' →', t.lineage_id, '/', t.id);
+    if (navigator.wakeLock && navigator.wakeLock.request) {
+      _wake = await navigator.wakeLock.request('screen');
+      // 탭을 잠깐 벗어났다 돌아오면 Wake Lock 이 해제돼 있다 — 다시 잡는다
+      document.addEventListener('visibilitychange', _taamReacquireWake);
+    }
+  } catch(_we){ console.warn('[일괄 번역] Wake Lock 미지원/거부:', _we && _we.message); }
+
+  // 🆕 동시 실행. 순차로는 노드당 10~20초라 100개에 30분이 걸렸다.
+  //   ⚠ 3으로 올렸더니 서버 쪽 재시도와 겹쳐 순간 호출이 몰렸고, Anthropic 429 가
+  //     늘면서 재시도가 길어져 Edge Function 이 504 Gateway Timeout 을 맞았다.
+  //     2 가 속도와 안정성의 균형점이다 (30분 → 15분).
+  var CONCURRENCY = opts.concurrency || 2;
+  var _next = 0;
+  async function _worker(){
+    while (true) {
+      var idx = _next++;
+      if (idx >= targets.length) return;
+      var t = targets[idx];
+      console.log('[일괄 번역] '+(idx+1)+'/'+targets.length+' →', t.lineage_id, '/', t.id);
       try {
         var r = await window.aiTranslateNode(t.id, t.lineage_id, { silent: true });
         if(r) ok++; else fail++;
       } catch(e){ console.error('[일괄 번역] 항목 실패:', t.id, e); fail++; }
-      _taamChefsTx.done = i+1;
+      _taamChefsTx.done = ok + fail;
       // 사라지는 토스트 대신 항상 떠 있는 진행 바를 갱신한다 (노드당 10~20초라
       // 토스트만으로는 "돌고 있는지" 알 수 없어 중복 실행을 유발했다)
-      _taamTxBarShow('계보도 번역', i+1, targets.length, ok, fail);
-      if(i < targets.length - 1){
-        await new Promise(function(res){ setTimeout(res, gapMs); });
-      }
+      _taamTxBarShow('계보도 번역', ok + fail, targets.length, ok, fail);
+      if (gapMs > 0) await new Promise(function(res){ setTimeout(res, gapMs); });
     }
+  }
+
+  try {
+    var _pool = [];
+    for (var w = 0; w < Math.min(CONCURRENCY, targets.length); w++) _pool.push(_worker());
+    await Promise.all(_pool);
   } finally {
     _taamChefsTx = null;
+    try { document.removeEventListener('visibilitychange', _taamReacquireWake); } catch(_e){}
+    try { if (_wake) await _wake.release(); } catch(_e){}
+    _taamWakeLock = null;
   }
   var elapsedSec = ((Date.now() - t0) / 1000).toFixed(1);
   console.log('[일괄 번역] 완료 — ok:', ok, '/ fail:', fail, '/ 소요:', elapsedSec, '초');
@@ -33845,6 +34908,11 @@ var TX_MAP = {
   '식사비':['Meal price','食事代'],
   '대행비':['Service fee','予約代行手数料'],
   '주류 미니멈':['Beverage minimum','ドリンク最低料金'],
+  // 세 글자짜리는 부분 치환 대상에서 빠지므로, 값과 붙는 형태를 따로 넣는다
+  // ('식사비 ×1인' → 'Meal price ×1'. 뒤의 ×1인 은 TX_RE 가 처리)
+  '식사비 ×':['Meal price ×','食事代 ×'],
+  '대행비 ×':['Service fee ×','予約代行手数料 ×'],
+  '주류 미니멈 ×':['Beverage minimum ×','ドリンク最低料金 ×'],
   '합계':['Total','合計'],
   '추가 결제 필요':['Additional payment required','追加決済が必要'],
   '결제 후 잔액':['Balance after payment','決済後の残高'],
@@ -34033,6 +35101,59 @@ var TX_MAP = {
   '잠시 후 자동으로 다시 저장됩니다 · 기록은 안전하게 보존됐어요':['It will be saved again automatically in a moment — your record is safe','まもなく自動的に再保存されます — 記録は安全に保存されています'],
   '매진 — 자동 환불':['Sold out — automatic refund','完売 — 自動返金'],
 
+  // ── 예치금 부족 · 계좌 안내 팝업 ──
+  '예치금이 부족합니다':['Insufficient deposit','デポジットが不足しています'],
+  '부족 금액':['Amount short','不足額'],
+  '부족분을 카드로 결제합니다.':['The shortfall will be charged to your card.','不足分をカードで決済します。'],
+  '카드로 결제하기':['Pay by card','カードで支払う'],
+  '카드로 결제하고 티켓 구매':['Pay by card & buy ticket','カードで支払ってチケット購入'],
+  '카드로 결제합니다':['Pay by card','カードで支払います'],
+  '티켓 금액':['Ticket price','チケット料金'],
+  '예치금 사용':['Deposit used','デポジット利用'],
+  '카드 결제':['Card payment','カード決済'],
+  '카드 결제 금액':['Card payment','カード決済額'],
+  '티켓 구매가 완료되었습니다':['Your ticket has been purchased','チケットを購入しました'],
+  '이 결제는 이미 처리되었습니다':['This payment has already been processed','この決済はすでに処理済みです'],
+  '좌석이 매진되어 결제가 취소되었습니다':['Sold out — payment cancelled','完売のため決済をキャンセルしました'],
+  '결제하신 금액은 전액 환불됩니다':['You will be fully refunded','お支払い金額は全額返金されます'],
+  '아래 계좌로 입금해 주시면':['Transfer to the account below','下記口座へお振り込みいただければ'],
+  '확인 후 예치금에 반영해 드립니다.':['and we will credit your deposit once confirmed.','確認後デポジットに反映いたします。'],
+  '은행':['Bank','銀行'],
+  '계좌번호':['Account number','口座番号'],
+  '예금주':['Account holder','口座名義'],
+  '하나은행':['Hana Bank','ハナ銀行'],
+  '주식회사 쓰리피프틴':['threefifteen co. ltd','株式会社スリーフィフティーン'],
+  '입금자명은':['Please make the transfer under','振込名義は'],
+  '회원 성함':['your registered name','会員ご本人のお名前'],
+  '으로 부탁드립니다.':['.','でお願いいたします。'],
+  '반영 후 다시 구매를 진행해 주세요.':['Please complete your purchase again once it is credited.','反映後、再度ご購入をお進めください。'],
+  '영업일 기준 확인 후 반영됩니다.':['Credited after confirmation on business days.','営業日ベースで確認後に反映されます。'],
+  '계좌번호 복사':['Copy account number','口座番号をコピー'],
+
+  // ── 계보도 이름 (트리 헤더·투어 타이틀) ──
+  '스기타 계보':['Sugita Lineage','すぎた系譜'],
+  '카네사카 계보':['Kanesaka Lineage','かねさか系譜'],
+  '큐베이 계보':['Kyubey Lineage','久兵衛系譜'],
+  '사이토 계보':['Saito Lineage','齋藤系譜'],
+  '우미 계보':['Umi Lineage','海系譜'],
+  '지로 계보':['Jiro Lineage','次郎系譜'],
+  '아라이 계보':['Arai Lineage','あら輝系譜'],
+  '스시 쇼 계보':['Sushisho Lineage','すし匠系譜'],
+  '기요타 계보':['Kiyota Lineage','清田系譜'],
+  '아라키 계보':['Araki Lineage','荒木系譜'],
+  '미타니 계보':['Mitani Lineage','三谷系譜'],
+  '요시타케 계보':['Yoshitake Lineage','よしたけ系譜'],
+  '스시 난바 계보':['Sushi Namba Lineage','すし難波系譜'],
+  '신바시 시미즈 계보':['Shimbashi Shimizu Lineage','新橋しみづ系譜'],
+
+  // ── 셰프 카드 버튼 ──
+  '레스토랑 정보':['Restaurant info','店舗情報'],
+  '예약 가능 링크':['Booking link','予約リンク'],
+  '레스토랑 정보 없음':['No restaurant info','店舗情報がありません'],
+  '해당 매장의 레스토랑 정보와 예약 가능 정보입니다.':['Restaurant details and booking information.','店舗情報と予約に関する情報です。'],
+  '예약 사이트가 없을 경우 클릭이 되지 않을 수 있습니다.':['The button may be inactive if no booking site exists.','予約サイトがない場合はボタンが反応しないことがあります。'],
+  'TAAM 티켓':['TAAM Ticket','TAAMチケット'],
+
   // ── 콘텐츠 · 계보도 · 아틀라스 ──
   '셰프':['Chef','シェフ'],
   '셰프:':['Chef:','シェフ:'],
@@ -34136,6 +35257,39 @@ var TX_MAP = {
   '티켓':['Ticket','チケット'],
 };
 
+// 🆕 숫자와 붙어 나오는 패턴 — 사전(문자열 일치)으로는 잡을 수 없다.
+//   '식사비 ×1인' · '11월 19일' 처럼 값이 중간에 끼어 매번 문자열이 달라지기 때문이다.
+//   [정규식, [EN 치환, JA 치환]] — 순서가 중요하다 (인석 → 인 순서로 좁은 것부터).
+var _TX_MONTHS_EN = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+var TX_RE = [
+  // ×1인 → ×1  (수량 표기라 단위를 붙이면 오히려 어색하다)
+  [/×\s*(\d+)\s*인석?/g, ['×$1', '×$1']],
+  // 2인석 → 2-seat
+  [/(\d+)\s*인석/g, ['$1-seat', '$1名席']],
+  // 4인 → 4 guests  (뒤에 한글이 이어지면 '인원·인테리어' 같은 단어이므로 제외)
+  [/(\d+)\s*인(?![가-힣])/g, ['$1 guests', '$1名']],
+  // 3석 → 3 seats
+  [/(\d+)\s*석(?![가-힣])/g, ['$1 seats', '$1席']],
+  // 30일 전 → 30 days before
+  [/(\d+)\s*일\s*전(?![가-힣])/g, ['$1 days before', '$1日前']],
+];
+// 날짜는 월 이름이 필요해 별도 처리
+//   연도가 붙은 형태(2026년 9월 3일)를 먼저 잡는다. 안 그러면 '2026년 Sep 3' 처럼
+//   연도만 한글로 남는다 (실제로 취소규정에서 그렇게 나왔다).
+function _txDate(s, lang){
+  var out = s.replace(/(\d{4})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일/g, function(_m, y, mo, d){
+    if (lang === 'ja') return y + '年' + parseInt(mo, 10) + '月' + parseInt(d, 10) + '日';
+    return (_TX_MONTHS_EN[parseInt(mo, 10) - 1] || mo) + ' ' + parseInt(d, 10) + ', ' + y;
+  });
+  out = out.replace(/(\d{1,2})\s*월\s*(\d{1,2})\s*일/g, function(_m, mo, d){
+    if (lang === 'ja') return parseInt(mo, 10) + '月' + parseInt(d, 10) + '日';
+    return (_TX_MONTHS_EN[parseInt(mo, 10) - 1] || mo) + ' ' + parseInt(d, 10);
+  });
+  // 연도만 남은 경우 (2026년 → 2026)
+  out = out.replace(/(\d{4})\s*년(?![가-힣])/g, lang === 'ja' ? '$1年' : '$1');
+  return out;
+}
+
 var _txCache = { lang:null, exact:null, subs:null };
 var _TX_KO_RE = /[가-힣]/;
 var _TX_SKIP_TAG = { SCRIPT:1, STYLE:1, TEXTAREA:1, NOSCRIPT:1, CODE:1, PRE:1 };
@@ -34179,6 +35333,12 @@ function txText(s){
   for (var i=0; i<c.subs.length; i++){
     if (out.indexOf(c.subs[i][0]) >= 0) out = out.split(c.subs[i][0]).join(c.subs[i][1]);
   }
+  // 숫자와 붙은 패턴 (×1인 · 2인석 · 11월 19일 …)
+  var ri = (c.lang === 'ja') ? 1 : 0;
+  for (var j=0; j<TX_RE.length; j++){
+    out = out.replace(TX_RE[j][0], TX_RE[j][1][ri]);
+  }
+  out = _txDate(out, c.lang);
   return out;
 }
 window.txText = txText;
@@ -34308,7 +35468,9 @@ function applyI18n(root){
     root.querySelectorAll('[data-i18n]').forEach(function(el){
       var key = el.getAttribute('data-i18n');
       var val = isLocked(el) ? lookupKo(key) : t(key);
-      if(val && val !== key) el.textContent = val;
+      // 🆕 빈 문자열도 정당한 번역이다 (예: ticket.sheet_pax_unit 은 EN 에서 '').
+      //   val 이 falsy 라고 건너뛰면 한글 원문('인')이 그대로 남는다.
+      if(val !== undefined && val !== null && val !== key) el.textContent = val;
     });
     root.querySelectorAll('[data-i18n-html]').forEach(function(el){
       var key = el.getAttribute('data-i18n-html');
@@ -39199,7 +40361,9 @@ function showToast(icon,title,msg,opts){
   }
   if(_toastTimer)clearTimeout(_toastTimer);
   // 🆕 탭 가능한 토스트는 탭할 시간을 주기 위해 노출을 길게 (6s), 일반 토스트는 2.5s
-  var _toastDur = opts.onTap ? 6000 : 2500;
+  //   🆕 오류·경고 토스트는 2.5초로는 읽을 수 없다 (실제로 문구를 놓쳐 원인 파악이 늦어졌다).
+  var _isWarn = (icon === '⚠' || icon === '❌' || icon === '🚫');
+  var _toastDur = opts.onTap ? 6000 : (_isWarn ? 7000 : 2500);
   _toastTimer=setTimeout(function(){
     el.classList.remove('show');
     setTimeout(function(){ el.style.display='none'; },380);
@@ -48200,7 +49364,13 @@ function relocalizeChefNames(){
     if (typeof _chefInfoCache === 'undefined' || !_chefInfoCache) return;
     Object.keys(_chefInfoCache).forEach(function(k){
       var info = _chefInfoCache[k];
-      if (!info || info._nameKo === undefined) return;   // 원문 미보관(구 캐시)이면 건너뜀
+      if (!info) return;
+      // 🆕 섹션 제목·본문도 함께 재선택 (원문을 보관한 경우만)
+      if (info._s1TitleKo !== undefined) info.sec1Title = _chefPickName(info._s1TitleKo, info._s1TitleEn, info._s1TitleJp);
+      if (info._s1DescKo  !== undefined) info.sec1Desc  = _chefPickName(info._s1DescKo,  info._s1DescEn,  info._s1DescJp);
+      if (info._s2TitleKo !== undefined) info.sec2Title = _chefPickName(info._s2TitleKo, info._s2TitleEn, info._s2TitleJp);
+      if (info._s2DescKo  !== undefined) info.sec2Desc  = _chefPickName(info._s2DescKo,  info._s2DescEn,  info._s2DescJp);
+      if (info._nameKo === undefined) return;   // 이름 원문 미보관(구 캐시)이면 SVG 갱신은 건너뜀
       info.name = _chefPickName(info._nameKo, info._nameEn, info._nameJp);
       info.sub  = _chefPickName(info._subKo,  info._subEn,  info._subJp);
       var sep = k.indexOf(':');
@@ -48686,7 +49856,14 @@ async function loadAllChefsFromSupabase(){
         info.sec1NameFs = s1.nameFs; info.sec1CaptionFs = s1.captionFs;
         info.sec1BgX = s1.bgX; info.sec1BgY = s1.bgY; info.sec1BgScale = s1.bgScale;
         info.sec1Filter = s1.filter;
-        info.sec1Media = s1.media; info.sec1Title = s1.title; info.sec1Desc = s1.desc;
+        info.sec1Media = s1.media;
+        // 🆕 2026.08: 이름은 번역됐는데 본문만 한글로 남던 문제.
+        //   sec1_data 안의 title_en/desc_en/title_jp/desc_jp 를 안 읽고 한글만 꺼내고 있었다.
+        //   언어 변경 시 재선택할 수 있도록 원문 3종도 함께 보관한다.
+        info._s1TitleKo = s1.title; info._s1TitleEn = s1.title_en; info._s1TitleJp = s1.title_jp;
+        info._s1DescKo  = s1.desc;  info._s1DescEn  = s1.desc_en;  info._s1DescJp  = s1.desc_jp;
+        info.sec1Title = _chefPickName(s1.title, s1.title_en, s1.title_jp);
+        info.sec1Desc  = _chefPickName(s1.desc,  s1.desc_en,  s1.desc_jp);
       }
       
       if(row.sec2_data){
@@ -48696,7 +49873,11 @@ async function loadAllChefsFromSupabase(){
         info.sec2SigFs = s2.sigFs; info.sec2CaptionFs = s2.captionFs;
         info.sec2BgX = s2.bgX; info.sec2BgY = s2.bgY; info.sec2BgScale = s2.bgScale;
         info.sec2Filter = s2.filter;
-        info.sec2Media = s2.media; info.sec2Title = s2.title; info.sec2Desc = s2.desc;
+        info.sec2Media = s2.media;
+        info._s2TitleKo = s2.title; info._s2TitleEn = s2.title_en; info._s2TitleJp = s2.title_jp;
+        info._s2DescKo  = s2.desc;  info._s2DescEn  = s2.desc_en;  info._s2DescJp  = s2.desc_jp;
+        info.sec2Title = _chefPickName(s2.title, s2.title_en, s2.title_jp);
+        info.sec2Desc  = _chefPickName(s2.desc,  s2.desc_en,  s2.desc_jp);
         info.sec2LayoutMode = s2.layoutMode; info.sec2Layout = s2.layout; info.sec2Medias = s2.medias;
       }
       
@@ -51082,13 +52263,23 @@ function _ensureSecData(chefId, info, cacheKey, cb, lineageId){
         info.sec1NameFs = s1.nameFs; info.sec1CaptionFs = s1.captionFs;
         info.sec1BgX = s1.bgX; info.sec1BgY = s1.bgY; info.sec1BgScale = s1.bgScale;
         info.sec1Filter = s1.filter;
-        info.sec1Media = s1.media; info.sec1Title = s1.title; info.sec1Desc = s1.desc;
+        info.sec1Media = s1.media;
+        // 🆕 2026.08: sec_data 안의 title_en/desc_en/title_jp/desc_jp 를 안 읽어
+        //   이름은 번역됐는데 본문만 한글로 남았다. 원문 3종도 보관해 언어 변경 시 재선택한다.
+        info._s1TitleKo = s1.title; info._s1TitleEn = s1.title_en; info._s1TitleJp = s1.title_jp;
+        info._s1DescKo  = s1.desc;  info._s1DescEn  = s1.desc_en;  info._s1DescJp  = s1.desc_jp;
+        info.sec1Title = _chefPickName(s1.title, s1.title_en, s1.title_jp);
+        info.sec1Desc  = _chefPickName(s1.desc,  s1.desc_en,  s1.desc_jp);
         info.sec2BoxAX = s2.boxAX; info.sec2BoxAY = s2.boxAY; info.sec2BoxAAlign = s2.boxAAlign;
         info.sec2BoxBX = s2.boxBX; info.sec2BoxBY = s2.boxBY; info.sec2BoxBAlign = s2.boxBAlign;
         info.sec2SigFs = s2.sigFs; info.sec2CaptionFs = s2.captionFs;
         info.sec2BgX = s2.bgX; info.sec2BgY = s2.bgY; info.sec2BgScale = s2.bgScale;
         info.sec2Filter = s2.filter;
-        info.sec2Media = s2.media; info.sec2Title = s2.title; info.sec2Desc = s2.desc;
+        info.sec2Media = s2.media;
+        info._s2TitleKo = s2.title; info._s2TitleEn = s2.title_en; info._s2TitleJp = s2.title_jp;
+        info._s2DescKo  = s2.desc;  info._s2DescEn  = s2.desc_en;  info._s2DescJp  = s2.desc_jp;
+        info.sec2Title = _chefPickName(s2.title, s2.title_en, s2.title_jp);
+        info.sec2Desc  = _chefPickName(s2.desc,  s2.desc_en,  s2.desc_jp);
         info.sec2LayoutMode = s2.layoutMode; info.sec2Layout = s2.layout; info.sec2Medias = s2.medias;
         info.sec2Hidden = !!s2.hidden;  // 🆕 v1.46: 시그니처 미노출 플래그 복원
       }
@@ -51137,13 +52328,23 @@ function prefetchSecDataForLineage(lineageId){
           info.sec1NameFs = s1.nameFs; info.sec1CaptionFs = s1.captionFs;
           info.sec1BgX = s1.bgX; info.sec1BgY = s1.bgY; info.sec1BgScale = s1.bgScale;
           info.sec1Filter = s1.filter;
-          info.sec1Media = s1.media; info.sec1Title = s1.title; info.sec1Desc = s1.desc;
+          info.sec1Media = s1.media;
+          // 🆕 2026.08: sec_data 안의 title_en/desc_en/title_jp/desc_jp 를 안 읽어
+          //   이름은 번역됐는데 본문만 한글로 남았다. 원문 3종도 보관해 언어 변경 시 재선택한다.
+          info._s1TitleKo = s1.title; info._s1TitleEn = s1.title_en; info._s1TitleJp = s1.title_jp;
+          info._s1DescKo  = s1.desc;  info._s1DescEn  = s1.desc_en;  info._s1DescJp  = s1.desc_jp;
+          info.sec1Title = _chefPickName(s1.title, s1.title_en, s1.title_jp);
+          info.sec1Desc  = _chefPickName(s1.desc,  s1.desc_en,  s1.desc_jp);
           info.sec2BoxAX = s2.boxAX; info.sec2BoxAY = s2.boxAY; info.sec2BoxAAlign = s2.boxAAlign;
           info.sec2BoxBX = s2.boxBX; info.sec2BoxBY = s2.boxBY; info.sec2BoxBAlign = s2.boxBAlign;
           info.sec2SigFs = s2.sigFs; info.sec2CaptionFs = s2.captionFs;
           info.sec2BgX = s2.bgX; info.sec2BgY = s2.bgY; info.sec2BgScale = s2.bgScale;
           info.sec2Filter = s2.filter;
-          info.sec2Media = s2.media; info.sec2Title = s2.title; info.sec2Desc = s2.desc;
+          info.sec2Media = s2.media;
+          info._s2TitleKo = s2.title; info._s2TitleEn = s2.title_en; info._s2TitleJp = s2.title_jp;
+          info._s2DescKo  = s2.desc;  info._s2DescEn  = s2.desc_en;  info._s2DescJp  = s2.desc_jp;
+          info.sec2Title = _chefPickName(s2.title, s2.title_en, s2.title_jp);
+          info.sec2Desc  = _chefPickName(s2.desc,  s2.desc_en,  s2.desc_jp);
           info.sec2LayoutMode = s2.layoutMode; info.sec2Layout = s2.layout; info.sec2Medias = s2.medias;
           info.sec2Hidden = !!s2.hidden;  // 🆕 v1.46: 시그니처 미노출 플래그 복원 (프리페치)
           info._secLoaded = true;
@@ -52726,7 +53927,7 @@ function applyPhotoToIconDiv(divEl, photoSrc){
       ticketDB = tickets;
       // IDB에도 백업 (오프라인 접속 대비) — 🛡 IDB 미정의 시 skip
       if (typeof IDB !== 'undefined' && IDB && typeof IDB.set === 'function') {
-        IDB.set('excTickets', JSON.stringify(ticketDB)).catch(function(){});
+        _idbSafeSet('excTickets', ticketDB, '티켓');   // 서버가 0건이면 백업 유지
       }
       
       // UI 리렌더

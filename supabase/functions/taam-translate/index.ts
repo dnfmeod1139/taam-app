@@ -47,7 +47,12 @@ const corsHeaders = {
 const CLAUDE_MODEL = "claude-sonnet-4-5";
 const ANTHROPIC_VERSION = "2023-06-01";
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
-const CLAUDE_MAX_OUTPUT_TOKENS = 4_096;
+// ⚠ 이 값이 작으면 응답이 문장 중간에서 잘리고, 잘린 JSON 은 파싱이 안 된다.
+//   계보도 노드는 이름·부제·2개 섹션 제목/본문을 EN+JA 두 벌로 받으므로 4096 으로는 부족했다.
+//   (로그: `JSON 파싱 실패: { "translations": { "name": { "en": "Sushi Noaya", "ja": "スシノア…`)
+//   재시도해도 같은 길이에서 또 잘리니 재시도로는 해결되지 않는다.
+//   max_tokens 는 상한일 뿐 실제 출력 길이만큼만 과금·소요되므로 넉넉히 잡는다.
+const CLAUDE_MAX_OUTPUT_TOKENS = 16_384;
 
 // ── 도메인 용어 가이드 (system prompt 에 삽입) ──────────────────
 const DOMAIN_GUIDE = `
@@ -179,60 +184,27 @@ Deno.serve(async (req) => {
       "위 항목을 JSON 으로만 번역해. 코드블록(```)은 쓰지 마. translations 객체 하나만.",
     ].join("\n");
 
-    // ── Claude API 호출 ──
-    const claudeRes = await fetch(ANTHROPIC_API_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "anthropic-version": ANTHROPIC_VERSION,
-        "x-api-key": apiKey,
-      },
-      body: JSON.stringify({
-        model: CLAUDE_MODEL,
-        max_tokens: CLAUDE_MAX_OUTPUT_TOKENS,
-        system: DOMAIN_GUIDE,
-        messages: [{ role: "user", content: userPrompt }],
-      }),
-    });
-
-    if (!claudeRes.ok) {
-      const errText = await claudeRes.text();
-      console.error("Claude API error:", claudeRes.status, errText);
+    // ── Claude API 호출 (재시도 포함) ──
+    //   🆕 2026.08: 예전에는 첫 호출이 실패하면 그대로 500 을 반환했다.
+    //   Anthropic 은 트래픽에 따라 429(rate limit) · 529(overloaded) 를 수시로 돌려주는데,
+    //   재시도가 없으니 일괄 번역에서 40% 가 실패하고 그 노드는 계속 미번역으로 남았다.
+    //   재시도할 가치가 있는 상태코드에 지수 백오프를 걸고, 응답이 JSON 이 아니면
+    //   한 번 더 물어본다 (모델이 코드블록이나 설명을 덧붙이는 경우).
+    const claude = await callClaudeWithRetry(apiKey, userPrompt);
+    if (!claude.ok) {
+      console.error("Claude 호출 최종 실패:", claude.status, claude.detail);
       return jsonResp(
-        { error: `Claude API ${claudeRes.status}`, detail: errText },
-        500,
+        { error: claude.error, status: claude.status, detail: claude.detail, attempts: claude.attempts },
+        claude.status === 429 || claude.status === 529 ? 503 : 500,
       );
     }
-
-    const claudeData = await claudeRes.json();
-    const text = claudeData?.content?.[0]?.text ?? "";
-
-    // ── JSON 파싱 (코드블록 제거 후) ──
-    let parsed: any;
-    try {
-      const cleaned = text
-        .replace(/^```(?:json)?\s*/i, "")
-        .replace(/\s*```\s*$/i, "")
-        .trim();
-      parsed = JSON.parse(cleaned);
-    } catch (e) {
-      console.error("JSON parse failed:", text);
-      return jsonResp(
-        {
-          error: "Claude 응답 JSON 파싱 실패",
-          raw: text.slice(0, 2000),
-        },
-        500,
-      );
-    }
-
-    const translations = parsed.translations ?? parsed;
 
     return jsonResp({
-      translations,
+      translations: claude.translations,
       model: CLAUDE_MODEL,
-      token_usage: claudeData.usage ?? null,
+      token_usage: claude.usage ?? null,
       target_langs: targetLangs,
+      attempts: claude.attempts,
     }, 200);
   } catch (e) {
     console.error("taam-translate error:", e);
@@ -245,4 +217,159 @@ function jsonResp(body: unknown, status: number) {
     status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
+}
+
+// ── Claude 호출 + 재시도 ────────────────────────────────────────
+//   재시도 대상: 429(rate limit) · 529(overloaded) · 5xx · 네트워크 오류 · JSON 파싱 실패
+//   재시도 안 함: 400(잘못된 요청) · 401/403(키 문제) — 다시 불러도 같은 결과다
+const RETRY_STATUS = new Set([408, 409, 429, 500, 502, 503, 504, 529]);
+const MAX_ATTEMPTS = 3;
+
+// ⏱ 시간 예산 — Edge Function 게이트웨이가 응답을 기다려주는 시간 안에 반드시 끝내야 한다.
+//   재시도를 넣었더니 (4회 × Anthropic 15~20초 + 백오프 7초 = 최대 87초) 게이트웨이가
+//   먼저 끊어 504 Gateway Timeout 이 났다. 재시도가 없던 때보다 더 나빠진 것이다.
+//   → 전체 예산 안에서만 재시도하고, 남은 시간이 부족하면 즉시 포기해 정상 응답을 돌려준다.
+//     클라이언트는 그 노드를 pending 으로 남겨두므로 다음 실행에서 자연스럽게 다시 시도된다.
+//   ⚠ 상한을 55s/30s → 110s/100s 로 두 번 올렸지만 둘 다 정상 요청을 죽였다.
+//     본문 하나(sec1_desc)만 EN+JA 로 뽑아도 100초를 넘긴다
+//     (Response: {"status":0,"detail":"The signal has been aborted"}).
+//     애초에 원래 코드에는 상한이 없었고 그래서 60% 가 성공했다. 실패하던 40% 는
+//     상한 때문이 아니라 max_tokens 잘림이었고 그건 따로 고쳤다.
+//     → 상한은 "무한정 매달리는 것"만 막는 안전망으로 충분히 크게 둔다.
+//       Supabase Edge Function 자체 한도(wall clock)가 최종 방어선이다.
+const TOTAL_BUDGET_MS = 250_000;    // 함수 전체
+const ATTEMPT_TIMEOUT_MS = 240_000; // 호출 1회 — 안전망일 뿐, 평소엔 걸리지 않는다
+
+type ClaudeOk = {
+  ok: true; translations: unknown; usage: unknown; attempts: number;
+};
+type ClaudeFail = {
+  ok: false; error: string; status: number; detail: string; attempts: number;
+};
+
+async function callClaudeWithRetry(
+  apiKey: string,
+  userPrompt: string,
+): Promise<ClaudeOk | ClaudeFail> {
+  let lastStatus = 0;
+  let lastDetail = "";
+  const startedAt = Date.now();
+  const remaining = () => TOTAL_BUDGET_MS - (Date.now() - startedAt);
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    if (attempt > 1) {
+      // 0.5s → 1.5s (+ 지터). 동시에 여러 건이 돌 때 같은 순간에 몰리지 않게 흔든다.
+      const wait = Math.pow(2, attempt - 2) * 500 + Math.floor(Math.random() * 400);
+      // 남은 예산이 "대기 + 최소 한 번의 호출" 을 감당 못 하면 더 시도하지 않는다.
+      if (remaining() < wait + 8_000) {
+        console.warn(`[taam-translate] 시간 예산 소진 — 재시도 중단 (남은 ${remaining()}ms)`);
+        break;
+      }
+      console.warn(`[taam-translate] 재시도 ${attempt}/${MAX_ATTEMPTS} — ${wait}ms 대기 (직전: ${lastStatus} ${lastDetail.slice(0, 120)})`);
+      await new Promise((r) => setTimeout(r, wait));
+    }
+
+    // 한 번의 호출이 통째로 매달려 게이트웨이 타임아웃을 유발하지 않도록 상한을 둔다
+    const ctrl = new AbortController();
+    const budget = Math.max(5_000, Math.min(ATTEMPT_TIMEOUT_MS, remaining() - 1_000));
+    const timer = setTimeout(() => ctrl.abort(), budget);
+
+    let res: Response;
+    try {
+      res = await fetch(ANTHROPIC_API_URL, {
+        method: "POST",
+        signal: ctrl.signal,
+        headers: {
+          "Content-Type": "application/json",
+          "anthropic-version": ANTHROPIC_VERSION,
+          "x-api-key": apiKey,
+        },
+        body: JSON.stringify({
+          model: CLAUDE_MODEL,
+          max_tokens: CLAUDE_MAX_OUTPUT_TOKENS,
+          system: DOMAIN_GUIDE,
+          messages: [{ role: "user", content: userPrompt }],
+        }),
+      });
+    } catch (e) {
+      lastStatus = 0;
+      lastDetail = String((e as Error)?.message ?? e);
+      clearTimeout(timer);
+      // 상한에 걸려 끊긴 것이라면 다시 불러도 같은 시간이 걸려 또 끊긴다.
+      // 재시도는 시간만 태우므로 즉시 포기한다 (네트워크 오류만 재시도한다).
+      if (ctrl.signal.aborted) {
+        console.error("[taam-translate] 호출 상한 초과 —", ATTEMPT_TIMEOUT_MS, "ms");
+        break;
+      }
+      continue;
+    }
+    clearTimeout(timer);
+
+    if (!res.ok) {
+      lastStatus = res.status;
+      lastDetail = await res.text().catch(() => "");
+      if (RETRY_STATUS.has(res.status)) continue;
+      // 400/401/403 등은 다시 불러도 같으므로 즉시 포기
+      return {
+        ok: false, error: `Claude API ${res.status}`,
+        status: res.status, detail: lastDetail.slice(0, 500), attempts: attempt,
+      };
+    }
+
+    const data = await res.json().catch(() => null);
+    const text = data?.content?.[0]?.text ?? "";
+    const truncated = data?.stop_reason === "max_tokens";
+    const parsed = extractJson(text);
+
+    if (parsed === null) {
+      lastStatus = 200;
+      if (truncated) {
+        // 출력이 max_tokens 에 걸려 잘렸다. 같은 설정으로 다시 물어도 같은 자리에서
+        // 또 잘리므로 재시도는 낭비다. CLAUDE_MAX_OUTPUT_TOKENS 를 올려야 한다.
+        lastDetail = `출력이 max_tokens(${CLAUDE_MAX_OUTPUT_TOKENS})에 걸려 잘렸습니다. 상한을 올려야 합니다. 앞부분: ` + String(text).slice(0, 200);
+        console.error("[taam-translate] 출력 잘림 — max_tokens 상향 필요", CLAUDE_MAX_OUTPUT_TOKENS);
+        break;
+      }
+      // 모델이 코드블록·설명을 덧붙인 경우 — 다시 물어보면 고쳐질 수 있다
+      lastDetail = "JSON 파싱 실패: " + String(text).slice(0, 300);
+      console.warn("[taam-translate] JSON 파싱 실패 — 재시도 예정");
+      continue;
+    }
+
+    return {
+      ok: true,
+      translations: (parsed as Record<string, unknown>).translations ?? parsed,
+      usage: data?.usage ?? null,
+      attempts: attempt,
+    };
+  }
+
+  return {
+    ok: false,
+    error: lastStatus === 200 ? "Claude 응답 JSON 파싱 실패" : `Claude API ${lastStatus}`,
+    status: lastStatus || 503,
+    detail: lastDetail.slice(0, 500),
+    attempts: MAX_ATTEMPTS,
+  };
+}
+
+// 코드블록·앞뒤 설명이 섞여 있어도 JSON 객체를 뽑아낸다. 실패하면 null.
+function extractJson(text: string): unknown | null {
+  if (!text) return null;
+  const cleaned = String(text)
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```\s*$/i, "")
+    .trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch (_e) { /* 아래에서 한 번 더 시도 */ }
+  // 설명이 앞뒤로 붙은 경우 — 첫 '{' 부터 마지막 '}' 까지만 떼어 본다
+  const s = cleaned.indexOf("{");
+  const e = cleaned.lastIndexOf("}");
+  if (s >= 0 && e > s) {
+    try {
+      return JSON.parse(cleaned.slice(s, e + 1));
+    } catch (_e2) { /* 포기 */ }
+  }
+  return null;
 }
