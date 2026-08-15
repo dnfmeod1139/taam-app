@@ -5364,14 +5364,22 @@ var PORTONE_CHANNEL_KEY = PG_CHANNELS.card_main;
 //   · 실제 승인(confirm)은 시크릿 키 필요 → 정식 전환 시 Edge Function 추가 예정.
 //   · 포트원 연동은 그대로 유지 (심사 통과 후 전환)
 // ═══════════════════════════════════════════
-var TOSS_CLIENT_KEY = 'test_ck_Gv6LjeKD8a2gQjkXWZ0M3wYxAdXy';
+// 🆕 2026.08: 실키 전환. MID playtauif6 (국내 KRW) 의 "API 개별 연동 키".
+//   ⚠ live_gck_ (결제위젯 전용) 가 아니라 live_ck_ 여야 한다 —
+//     이 코드는 .payment() → requestPayment() 개별연동 결제창을 쓴다.
+//   클라이언트 키는 브라우저에 노출되는 게 정상인 공개 키다 (시크릿 키와 혼동 금지).
+var TOSS_CLIENT_KEY = 'live_ck_BX7zk2yd8ydNoLGwKnoBrx9POLqK';
 // 🆕 해외결제 다중 MID 키 라우팅 — MID2(USD)/MID3(JPY) 계약 완료 후 키 발급되면 채우기.
 //   키가 비어있으면 해당 통화 결제 시 준비중 안내 (KRW 는 항상 동작).
 var TOSS_KEYS = {
   KRW: TOSS_CLIENT_KEY,   // MID1 playtauif6 — 국내 (카드·이체·가상계좌·카카오·네이버)
-  USD: null,              // MID2 — 해외카드 USD 승인 · KRW 정산 (⚠ 키 발급 시 'test_ck_...' 입력)
-  JPY: null,              // MID3 — 해외카드 JPY 승인 · KRW 정산 (⚠ 키 발급 시 입력)
-  BILLING: null           // MID4 bill_ — 정기결제 전용 (⚠ 키 발급 시 입력, 미발급 동안 KRW 키 사용)
+  // ⚠ 아래 셋은 MID 는 개설됐지만(playtaamusd / playtaamjpy / bill_taam315)
+  //   의도적으로 비워둔다. 원장은 원화 단일이고 해외 회원 화면의 USD 는 표시용이라,
+  //   외화 MID 로 승인받으면 정산·환불 금액이 원장과 어긋난다.
+  //   해외 통화 결제와 정기결제는 별도 설계 후 연다 (docs/TOSS_GOLIVE.md 참고).
+  USD: null,              // MID playtaamusd — 해외카드 USD 승인 · KRW 정산
+  JPY: null,              // MID playtaamjpy — 해외카드 JPY 승인 · KRW 정산
+  BILLING: null           // MID bill_taam315 — 정기결제(빌링) 전용
 };
 // ═══════════════════════════════════════════
 // 🆕 2026.07 결제 정책 전환(임시 · 롤백 대비)
@@ -5396,6 +5404,21 @@ var PAY_MODE_TOSS = true;
 //      3) ?toss_pay=success 복귀 핸들러 — 승인 요청 → 티켓 확정/예치금 적립
 // ═══════════════════════════════════════════
 var CARD_PAY_LIVE = false;
+// 🆕 2026.08: 검증용 개별 스위치.
+//   전역 플래그를 켜면 검증도 하기 전에 전 회원에게 카드 결제가 열린다.
+//   실결제 1건을 먼저 확인해야 하므로, 슈퍼어드민이 자기 기기에서만 열 수 있게 한다.
+//     콘솔에서  localStorage.setItem('taamCardPayTest','1')  → 이 기기만 카드 결제 활성
+//               localStorage.removeItem('taamCardPayTest')   → 원상복구
+//   검증이 끝나면 CARD_PAY_LIVE = true 로 바꿔 전 회원에게 연다.
+function cardPayEnabled(){
+  if (CARD_PAY_LIVE) return true;
+  try {
+    if (localStorage.getItem('taamCardPayTest') !== '1') return false;
+  } catch(e){ return false; }
+  var role = (typeof _currentRole !== 'undefined') ? _currentRole : '';
+  return role === 'superadmin';
+}
+window.cardPayEnabled = cardPayEnabled;
 // 예치금 충전 계좌이체 안내에 표시할 실제 계좌 (계좌 변경 시 여기만 수정)
 var DEPOSIT_BANK_INFO = {
   bank:    '하나은행',
@@ -5749,6 +5772,10 @@ function tossChargeAmt(v){
   var el = document.getElementById('tossChargeCustom');
   if(el) el.value = v ? Number(v).toLocaleString() : '';
 }
+// ⚠ 예치금 카드 충전은 운영 정책상 쓰지 않는다 (충전 = 법인계좌 이체 → 수동 반영).
+//   openMpCharge() 가 PAY_MODE_TOSS=true 인 동안 showDepositBankInfo() 로 가므로
+//   이 함수는 도달하지 않는다. PAY_MODE_TOSS=false 롤백용으로만 남겨둔다.
+//   → 서버 승인(payment_orders / toss-confirm)도 여기에는 붙이지 않는다.
 async function tossRequestCharge(){
   var raw = String((document.getElementById('tossChargeCustom')||{}).value||'').replace(/[^0-9]/g,'');
   var amt = parseInt(raw) || 0;
@@ -5809,20 +5836,70 @@ function tossOpenBilling(){
 // ── 🆕 티켓 부족분 카드 결제 (토스 단건 결제창) ──
 //   예치금 부족 시 부족분을 토스 카드 결제창으로 연결. 범위 = 결제창 연동(보이게)까지,
 //   실제 승인/차감 반영은 시크릿키 Edge Function 정식 전환 시. PAY_MODE_TOSS=false 면 미사용.
+// ── 티켓 부족분 카드 결제 ──
+//   ⚠ 인자로 받은 shortage 는 브라우저가 계산한 값(window._pendingShortage)이라 쓰지 않는다.
+//     그대로 결제 금액으로 쓰면 DevTools 로 값을 바꿔 ₩500,000 짜리 티켓을 ₩1,000 에 살 수 있다.
+//     Edge Function toss-order 가 티켓 가격·예치금 잔액을 서버에서 다시 계산해
+//     주문을 만들고, 여기서는 그 orderId / amount 로만 결제창을 연다.
+//     (인자는 결제창 열기 전 화면 표시용으로만 남긴다)
 async function tossPayTicketShortage(shortage){
-  var amt = Math.round(shortage||0);
-  if (amt < 100) { showToast('⚠','금액 확인','결제 금액이 올바르지 않습니다'); return; }
+  var t = (typeof currentTicket !== 'undefined') ? currentTicket : null;
+  var pax = (typeof _tdPax !== 'undefined') ? _tdPax : 0;
+  if (!t || !t.id || !pax) { showToast('⚠','오류','티켓 정보를 찾을 수 없습니다'); return; }
+  if (!window.sb) { showToast('⚠','오류','서버 연결이 없습니다'); return; }
+
   // 남아있는 결제 안내 팝업 정리
   ['cardPayPopup','noCardPopup'].forEach(function(id){ var p=document.getElementById(id); if(p) p.remove(); });
   var restName = (typeof currentRest!=='undefined' && currentRest && currentRest.name) ? currentRest.name
-               : (typeof currentTicket!=='undefined' && currentTicket && currentTicket.rest) ? currentTicket.rest : '티켓';
+               : (t.rest || '티켓');
   var orderName = (restName + ' — 티켓 구매').slice(0,40);
+
+  // ── 서버에서 주문 생성 (금액은 서버가 정한다) ──
+  var ord;
+  try {
+    var _r = await window.sb.functions.invoke('toss-order', {
+      body: { ticketId: String(t.id), pax: pax, currency: 'KRW' }
+    });
+    if (_r && _r.error) throw _r.error;
+    ord = _r && _r.data;
+  } catch(e){
+    console.warn('[toss-order] 호출 실패:', e);
+    showToast('⚠','결제 준비 실패','잠시 후 다시 시도해주세요');
+    return;
+  }
+
+  if (!ord || !ord.ok) {
+    var _c = (ord && ord.error) || 'unknown';
+    var _msg = {
+      sold_out:          '죄송합니다 — 남은 좌석이 없습니다',
+      not_enough_seats:  '남은 좌석 ' + (ord && ord.left) + '석입니다. 인원을 줄여 다시 시도해주세요',
+      slot_sold_out:     pax + '인석은 모두 판매되었습니다',
+      tier_not_allowed:  '이 티켓은 ' + ((ord && ord.required) || '') + ' 등급 회원만 이용할 수 있습니다',
+      sales_closed:      '판매가 끝난 티켓입니다',
+      ticket_not_found:  '티켓 정보를 찾을 수 없습니다',
+      price_not_set:     '티켓 가격이 설정되지 않았습니다',
+      currency_not_open: '해외 통화 결제는 준비 중입니다'
+    }[_c] || '결제를 시작할 수 없습니다';
+    showToast('⚠','결제 불가', _msg);
+    console.warn('[toss-order] 거절:', _c, ord);
+    return;
+  }
+
+  // 예치금만으로 충분하면 카드 결제 자체가 필요 없다
+  if (!ord.needPayment) {
+    showToast('ℹ','카드 결제 불필요','예치금으로 결제할 수 있습니다 — 다시 시도해주세요');
+    return;
+  }
+
+  var amt = parseInt(ord.amount, 10) || 0;
+  if (amt < 100) { showToast('⚠','금액 확인','결제 금액이 올바르지 않습니다'); return; }
+
   _tossEnsureSdk(async function(){
     try {
-      var _cur = _tossCurrencyForUser();
-      if (!TOSS_KEYS[_cur]) _cur = 'KRW';
+      var _cur = String(ord.currency || 'KRW');
+      if (!TOSS_KEYS[_cur]) { showToast('⚠','결제 불가','해당 통화 결제는 준비 중입니다'); return; }
       var ctx = await _tossPaymentsCtx(_cur); if(!ctx) return;
-      var oid = 'taamtkt_' + Date.now() + '_' + Math.floor(Math.random()*100000);
+      var oid = ord.orderId;
       _tossMarkTrip();   // 결제창 왕복 표시 — 복귀 시 뷰포트 복원 트리거 (reload 견딤)
       await ctx.pay.requestPayment({
         method: 'CARD',
@@ -5915,28 +5992,118 @@ function showDepositShortageGuide(shortage){
     + '</div>';
   document.body.appendChild(el);
 }
-// ── 결제창 리다이렉트 복귀 처리 (테스트 단계: 안내만 — 실승인/충전은 정식 전환 시) ──
+// ── 🆕 2026.08: 토스 승인 요청 (Edge Function toss-confirm) ──
+//   토스 V2 는 ① 결제창 인증(브라우저) → ② 서버 승인(시크릿 키) 2단계다.
+//   ②를 호출하지 않으면 회원이 카드 인증을 마쳐도 미승인 건으로 자동 취소된다.
+//   금액은 서버(payment_orders.amount)가 기준이며, 여기서 보내는 amount 는 대조용이다.
+async function _tossConfirmPayment(paymentKey, orderId, amount){
+  if (!window.sb) return;
+  if (typeof showToast === 'function') showToast('⏳','결제 확인 중','잠시만 기다려주세요');
+
+  // 리다이렉트 직후에는 세션 복원이 아직 안 끝났을 수 있다 — 최대 5초 대기
+  var u = null;
+  for (var i = 0; i < 10; i++) {
+    try { var r = await window.sb.auth.getUser(); u = r && r.data && r.data.user; } catch(_e){}
+    if (u) break;
+    await new Promise(function(res){ setTimeout(res, 500); });
+  }
+  if (!u) {
+    showToast('⚠','로그인이 필요합니다','다시 로그인하시면 결제가 자동으로 확인됩니다');
+    return;
+  }
+
+  try {
+    var res = await window.sb.functions.invoke('toss-confirm', {
+      body: { paymentKey: paymentKey, orderId: orderId, amount: amount }
+    });
+    if (res && res.error) throw res.error;
+    var d = res && res.data;
+
+    if (d && d.ok) {
+      var _amt = Number(d.amount || amount) || 0;
+      showToast('✅', d.already ? '이미 처리된 결제입니다' : '충전 완료',
+        '₩' + _amt.toLocaleString() + ' 예치금에 반영되었습니다', { category: 'charge' });
+      if (typeof loadDeposit === 'function') { try { loadDeposit(); } catch(_le){} }
+      return;
+    }
+
+    var code = (d && d.error) || 'unknown';
+    if (code === 'credit_failed') {
+      // 승인은 됐는데 적립이 실패한 상태 — 돈은 받았으므로 "실패"라고 말하면 안 된다.
+      showToast('⚠','결제는 완료되었습니다',
+        '예치금 반영이 지연되고 있어요 — 잠시 후 확인되지 않으면 문의해 주세요');
+    } else if (code === 'amount_mismatch' || code === 'amount_mismatch_toss') {
+      showToast('⚠','금액이 일치하지 않습니다','결제가 취소되었습니다 — 다시 시도해주세요');
+    } else {
+      showToast('⚠','결제 승인 실패',
+        (d && d.reason) || '결제가 완료되지 않았습니다 — 출금된 금액이 있다면 문의해 주세요');
+    }
+    console.warn('[toss-confirm] 실패:', code, d);
+  } catch(e) {
+    console.warn('[toss-confirm] 예외:', e);
+    showToast('⚠','결제 확인 실패','네트워크 확인 후 마이페이지에서 잔액을 확인해주세요');
+  }
+}
+
+// ── 결제창 리다이렉트 복귀 처리 ──
 (function(){
   try {
     var q = location.search || '';
     var m = q.match(/[?&]toss_(pay|billing)=(success|fail)/);
     if (!m) return;
     var kind = m[1], ok = (m[2] === 'success');
+    // 쿼리를 지우기 전에 승인에 필요한 값을 먼저 챙긴다
+    var _pk = '', _oid = '', _amt = 0, _failMsg = '';
+    try {
+      var _qs = new URLSearchParams(q);
+      _pk  = _qs.get('paymentKey') || '';
+      _oid = _qs.get('orderId') || '';
+      _amt = parseInt(_qs.get('amount') || '0', 10) || 0;
+      _failMsg = _qs.get('message') || '';
+    } catch(_qe){}
     // 결제창(리다이렉트) 복귀 즉시 뷰포트 복원 — 하단 검정 공백/GNB 밀림 방지
     if (typeof _tossRestoreViewport === 'function') _tossRestoreViewport();
-    setTimeout(function(){
-      if (typeof showToast !== 'function') return;
-      // 🆕 2026.08: CARD_PAY_LIVE=false 동안 카드 경로가 막혀 있어 이 핸들러는 원칙적으로 안 탄다.
-      //   (구버전 캐시·직접 URL 진입 등 예외 상황 대비) 회원에게 "결제 완료"로 오인될 문구는 쓰지 않는다.
-      if (kind === 'pay') {
-        showToast('⚠','결제가 반영되지 않았습니다',
-          '현재는 예치금(계좌이체)으로만 이용하실 수 있습니다 — 출금된 금액이 있다면 문의해 주세요');
-      } else {
-        showToast('⚠','카드 등록이 반영되지 않았습니다',
-          '결제 수단 관리는 준비 중입니다');
-      }
-    }, 1500);
     try { history.replaceState(null, '', location.pathname); } catch(_he){}
+
+    // 카드 경로가 잠겨 있는 동안에는 승인을 시도하지 않는다.
+    //   (구버전 캐시·직접 URL 진입 대비) "결제 완료"로 오인될 문구를 쓰지 않는다.
+    if (typeof cardPayEnabled !== 'function' || !cardPayEnabled()) {
+      setTimeout(function(){
+        if (typeof showToast !== 'function') return;
+        if (kind === 'pay') {
+          showToast('⚠','결제가 반영되지 않았습니다',
+            '현재는 예치금(계좌이체)으로만 이용하실 수 있습니다 — 출금된 금액이 있다면 문의해 주세요');
+        } else {
+          showToast('⚠','카드 등록이 반영되지 않았습니다','결제 수단 관리는 준비 중입니다');
+        }
+      }, 1500);
+      return;
+    }
+
+    // 빌링(결제수단 등록)은 아직 서버 처리가 없다 — 1차 범위는 예치금 충전
+    if (kind === 'billing') {
+      setTimeout(function(){
+        if (typeof showToast === 'function') showToast('⚠','카드 등록이 반영되지 않았습니다','결제 수단 관리는 준비 중입니다');
+      }, 1500);
+      return;
+    }
+
+    if (!ok) {
+      setTimeout(function(){
+        if (typeof showToast === 'function') showToast('⚠','결제가 취소되었습니다', _failMsg || '다시 시도해주세요');
+      }, 1200);
+      return;
+    }
+
+    if (!_pk || !_oid) {
+      setTimeout(function(){
+        if (typeof showToast === 'function') showToast('⚠','결제 정보가 없습니다','마이페이지에서 잔액을 확인해주세요');
+      }, 1200);
+      return;
+    }
+
+    // 승인 — 앱 부팅이 어느 정도 끝난 뒤 실행
+    setTimeout(function(){ _tossConfirmPayment(_pk, _oid, _amt); }, 1200);
   } catch(_e){}
 })();
 // 결제창 왕복 후 복귀 — 어떤 경로(리다이렉트 reload · bfcache · 취소닫기 · 앱복귀)로도 복원.
@@ -19057,7 +19224,7 @@ function doCardCharge(shortage) {
   if (typeof PAY_MODE_TOSS !== 'undefined' && PAY_MODE_TOSS) {
     // 🆕 2026.08: 서버 승인(toss-confirm) 미배포 동안 카드 결제창을 열지 않는다.
     //   결제창만 띄우면 인증은 되지만 승인이 안 돼 자동 취소 → 회원은 결제된 줄 안다.
-    if (typeof CARD_PAY_LIVE === 'undefined' || !CARD_PAY_LIVE) {
+    if (typeof cardPayEnabled !== 'function' || !cardPayEnabled()) {
       showDepositShortageGuide(Math.round(shortage));
       return;
     }
@@ -19654,7 +19821,8 @@ async function openCardManagePage(){
   //   (구 PortOne 카드관리 페이지 코드는 아래 주석으로 보존)
   // 🆕 2026.08: 빌링키 발급도 서버(시크릿 키)에서 authKey 를 교환해야 완성된다.
   //   그 로직 전까지는 카드만 등록되고 실제로는 쓸 수 없으므로 창을 열지 않는다.
-  if (typeof CARD_PAY_LIVE === 'undefined' || !CARD_PAY_LIVE) {
+  // 빌링은 검증 스위치로도 열지 않는다 — authKey 교환 서버 로직이 아직 없다
+  if (!CARD_PAY_LIVE) {
     if (typeof showToast === 'function') {
       showToast('💳','결제 수단 관리 준비 중','현재는 예치금(계좌이체)으로만 이용하실 수 있습니다', { });
     }
@@ -33518,6 +33686,19 @@ window.onClickTranslateNode = function(){
 //   (API 비용 2배 + 같은 row 를 동시에 update). 진행 상태를 전역에 두고 막는다.
 var _taamChefsTx = null;   // { running, done, total } 진행 중일 때만 객체
 
+// 🆕 Wake Lock 재획득 — 탭을 벗어났다 돌아오면 브라우저가 락을 풀어버린다.
+//   작업이 아직 돌고 있으면 다시 잡아준다.
+var _taamWakeLock = null;
+async function _taamReacquireWake(){
+  if (document.visibilityState !== 'visible') return;
+  if (!_taamChefsTx || !_taamChefsTx.running) return;
+  try {
+    if (navigator.wakeLock && navigator.wakeLock.request) {
+      _taamWakeLock = await navigator.wakeLock.request('screen');
+    }
+  } catch(e){}
+}
+
 async function _taamTranslateAllChefs(opts){
   opts = opts || {};
   var onlyMissing = opts.onlyMissing !== false; // 기본 true
@@ -33604,25 +33785,49 @@ async function _taamTranslateAllChefs(opts){
   _taamChefsTx = { running: true, done: 0, total: targets.length };
   _taamTxBarShow('계보도 번역', 0, targets.length);
   var ok = 0, fail = 0, t0 = Date.now();
+
+  // 🆕 화면이 꺼지면 탭이 잠들어 루프가 그대로 멈춘다 (실제로 두 번 멈췄다).
+  //   Wake Lock 으로 작업 동안 화면을 깨워둔다. 미지원 브라우저면 조용히 넘어간다.
+  var _wake = null;
   try {
-    for(var i=0; i<targets.length; i++){
-      var t = targets[i];
-      var prog = (i+1)+'/'+targets.length;
-      console.log('[일괄 번역] '+prog+' →', t.lineage_id, '/', t.id);
+    if (navigator.wakeLock && navigator.wakeLock.request) {
+      _wake = await navigator.wakeLock.request('screen');
+      // 탭을 잠깐 벗어났다 돌아오면 Wake Lock 이 해제돼 있다 — 다시 잡는다
+      document.addEventListener('visibilitychange', _taamReacquireWake);
+    }
+  } catch(_we){ console.warn('[일괄 번역] Wake Lock 미지원/거부:', _we && _we.message); }
+
+  // 🆕 동시 실행 3개. 노드당 10~20초라 순차로는 117개에 30분이 걸렸고,
+  //   그 사이 탭이 잠들 확률이 그만큼 높았다. 셋씩 돌리면 1/3로 줄어든다.
+  var CONCURRENCY = opts.concurrency || 3;
+  var _next = 0;
+  async function _worker(){
+    while (true) {
+      var idx = _next++;
+      if (idx >= targets.length) return;
+      var t = targets[idx];
+      console.log('[일괄 번역] '+(idx+1)+'/'+targets.length+' →', t.lineage_id, '/', t.id);
       try {
         var r = await window.aiTranslateNode(t.id, t.lineage_id, { silent: true });
         if(r) ok++; else fail++;
       } catch(e){ console.error('[일괄 번역] 항목 실패:', t.id, e); fail++; }
-      _taamChefsTx.done = i+1;
+      _taamChefsTx.done = ok + fail;
       // 사라지는 토스트 대신 항상 떠 있는 진행 바를 갱신한다 (노드당 10~20초라
       // 토스트만으로는 "돌고 있는지" 알 수 없어 중복 실행을 유발했다)
-      _taamTxBarShow('계보도 번역', i+1, targets.length, ok, fail);
-      if(i < targets.length - 1){
-        await new Promise(function(res){ setTimeout(res, gapMs); });
-      }
+      _taamTxBarShow('계보도 번역', ok + fail, targets.length, ok, fail);
+      if (gapMs > 0) await new Promise(function(res){ setTimeout(res, gapMs); });
     }
+  }
+
+  try {
+    var _pool = [];
+    for (var w = 0; w < Math.min(CONCURRENCY, targets.length); w++) _pool.push(_worker());
+    await Promise.all(_pool);
   } finally {
     _taamChefsTx = null;
+    try { document.removeEventListener('visibilitychange', _taamReacquireWake); } catch(_e){}
+    try { if (_wake) await _wake.release(); } catch(_e){}
+    _taamWakeLock = null;
   }
   var elapsedSec = ((Date.now() - t0) / 1000).toFixed(1);
   console.log('[일괄 번역] 완료 — ok:', ok, '/ fail:', fail, '/ 소요:', elapsedSec, '초');
