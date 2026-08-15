@@ -5404,6 +5404,21 @@ var PAY_MODE_TOSS = true;
 //      3) ?toss_pay=success 복귀 핸들러 — 승인 요청 → 티켓 확정/예치금 적립
 // ═══════════════════════════════════════════
 var CARD_PAY_LIVE = false;
+// 🆕 2026.08: 검증용 개별 스위치.
+//   전역 플래그를 켜면 검증도 하기 전에 전 회원에게 카드 결제가 열린다.
+//   실결제 1건을 먼저 확인해야 하므로, 슈퍼어드민이 자기 기기에서만 열 수 있게 한다.
+//     콘솔에서  localStorage.setItem('taamCardPayTest','1')  → 이 기기만 카드 결제 활성
+//               localStorage.removeItem('taamCardPayTest')   → 원상복구
+//   검증이 끝나면 CARD_PAY_LIVE = true 로 바꿔 전 회원에게 연다.
+function cardPayEnabled(){
+  if (CARD_PAY_LIVE) return true;
+  try {
+    if (localStorage.getItem('taamCardPayTest') !== '1') return false;
+  } catch(e){ return false; }
+  var role = (typeof _currentRole !== 'undefined') ? _currentRole : '';
+  return role === 'superadmin';
+}
+window.cardPayEnabled = cardPayEnabled;
 // 예치금 충전 계좌이체 안내에 표시할 실제 계좌 (계좌 변경 시 여기만 수정)
 var DEPOSIT_BANK_INFO = {
   bank:    '하나은행',
@@ -6052,7 +6067,7 @@ async function _tossConfirmPayment(paymentKey, orderId, amount){
 
     // 카드 경로가 잠겨 있는 동안에는 승인을 시도하지 않는다.
     //   (구버전 캐시·직접 URL 진입 대비) "결제 완료"로 오인될 문구를 쓰지 않는다.
-    if (typeof CARD_PAY_LIVE !== 'undefined' && !CARD_PAY_LIVE) {
+    if (typeof cardPayEnabled !== 'function' || !cardPayEnabled()) {
       setTimeout(function(){
         if (typeof showToast !== 'function') return;
         if (kind === 'pay') {
@@ -19209,7 +19224,7 @@ function doCardCharge(shortage) {
   if (typeof PAY_MODE_TOSS !== 'undefined' && PAY_MODE_TOSS) {
     // 🆕 2026.08: 서버 승인(toss-confirm) 미배포 동안 카드 결제창을 열지 않는다.
     //   결제창만 띄우면 인증은 되지만 승인이 안 돼 자동 취소 → 회원은 결제된 줄 안다.
-    if (typeof CARD_PAY_LIVE === 'undefined' || !CARD_PAY_LIVE) {
+    if (typeof cardPayEnabled !== 'function' || !cardPayEnabled()) {
       showDepositShortageGuide(Math.round(shortage));
       return;
     }
@@ -19806,7 +19821,8 @@ async function openCardManagePage(){
   //   (구 PortOne 카드관리 페이지 코드는 아래 주석으로 보존)
   // 🆕 2026.08: 빌링키 발급도 서버(시크릿 키)에서 authKey 를 교환해야 완성된다.
   //   그 로직 전까지는 카드만 등록되고 실제로는 쓸 수 없으므로 창을 열지 않는다.
-  if (typeof CARD_PAY_LIVE === 'undefined' || !CARD_PAY_LIVE) {
+  // 빌링은 검증 스위치로도 열지 않는다 — authKey 교환 서버 로직이 아직 없다
+  if (!CARD_PAY_LIVE) {
     if (typeof showToast === 'function') {
       showToast('💳','결제 수단 관리 준비 중','현재는 예치금(계좌이체)으로만 이용하실 수 있습니다', { });
     }
@@ -33670,6 +33686,19 @@ window.onClickTranslateNode = function(){
 //   (API 비용 2배 + 같은 row 를 동시에 update). 진행 상태를 전역에 두고 막는다.
 var _taamChefsTx = null;   // { running, done, total } 진행 중일 때만 객체
 
+// 🆕 Wake Lock 재획득 — 탭을 벗어났다 돌아오면 브라우저가 락을 풀어버린다.
+//   작업이 아직 돌고 있으면 다시 잡아준다.
+var _taamWakeLock = null;
+async function _taamReacquireWake(){
+  if (document.visibilityState !== 'visible') return;
+  if (!_taamChefsTx || !_taamChefsTx.running) return;
+  try {
+    if (navigator.wakeLock && navigator.wakeLock.request) {
+      _taamWakeLock = await navigator.wakeLock.request('screen');
+    }
+  } catch(e){}
+}
+
 async function _taamTranslateAllChefs(opts){
   opts = opts || {};
   var onlyMissing = opts.onlyMissing !== false; // 기본 true
@@ -33756,25 +33785,49 @@ async function _taamTranslateAllChefs(opts){
   _taamChefsTx = { running: true, done: 0, total: targets.length };
   _taamTxBarShow('계보도 번역', 0, targets.length);
   var ok = 0, fail = 0, t0 = Date.now();
+
+  // 🆕 화면이 꺼지면 탭이 잠들어 루프가 그대로 멈춘다 (실제로 두 번 멈췄다).
+  //   Wake Lock 으로 작업 동안 화면을 깨워둔다. 미지원 브라우저면 조용히 넘어간다.
+  var _wake = null;
   try {
-    for(var i=0; i<targets.length; i++){
-      var t = targets[i];
-      var prog = (i+1)+'/'+targets.length;
-      console.log('[일괄 번역] '+prog+' →', t.lineage_id, '/', t.id);
+    if (navigator.wakeLock && navigator.wakeLock.request) {
+      _wake = await navigator.wakeLock.request('screen');
+      // 탭을 잠깐 벗어났다 돌아오면 Wake Lock 이 해제돼 있다 — 다시 잡는다
+      document.addEventListener('visibilitychange', _taamReacquireWake);
+    }
+  } catch(_we){ console.warn('[일괄 번역] Wake Lock 미지원/거부:', _we && _we.message); }
+
+  // 🆕 동시 실행 3개. 노드당 10~20초라 순차로는 117개에 30분이 걸렸고,
+  //   그 사이 탭이 잠들 확률이 그만큼 높았다. 셋씩 돌리면 1/3로 줄어든다.
+  var CONCURRENCY = opts.concurrency || 3;
+  var _next = 0;
+  async function _worker(){
+    while (true) {
+      var idx = _next++;
+      if (idx >= targets.length) return;
+      var t = targets[idx];
+      console.log('[일괄 번역] '+(idx+1)+'/'+targets.length+' →', t.lineage_id, '/', t.id);
       try {
         var r = await window.aiTranslateNode(t.id, t.lineage_id, { silent: true });
         if(r) ok++; else fail++;
       } catch(e){ console.error('[일괄 번역] 항목 실패:', t.id, e); fail++; }
-      _taamChefsTx.done = i+1;
+      _taamChefsTx.done = ok + fail;
       // 사라지는 토스트 대신 항상 떠 있는 진행 바를 갱신한다 (노드당 10~20초라
       // 토스트만으로는 "돌고 있는지" 알 수 없어 중복 실행을 유발했다)
-      _taamTxBarShow('계보도 번역', i+1, targets.length, ok, fail);
-      if(i < targets.length - 1){
-        await new Promise(function(res){ setTimeout(res, gapMs); });
-      }
+      _taamTxBarShow('계보도 번역', ok + fail, targets.length, ok, fail);
+      if (gapMs > 0) await new Promise(function(res){ setTimeout(res, gapMs); });
     }
+  }
+
+  try {
+    var _pool = [];
+    for (var w = 0; w < Math.min(CONCURRENCY, targets.length); w++) _pool.push(_worker());
+    await Promise.all(_pool);
   } finally {
     _taamChefsTx = null;
+    try { document.removeEventListener('visibilitychange', _taamReacquireWake); } catch(_e){}
+    try { if (_wake) await _wake.release(); } catch(_e){}
+    _taamWakeLock = null;
   }
   var elapsedSec = ((Date.now() - t0) / 1000).toFixed(1);
   console.log('[일괄 번역] 완료 — ok:', ok, '/ fail:', fail, '/ 소요:', elapsedSec, '초');
