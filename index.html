@@ -11857,12 +11857,27 @@ function _seedWaitCapped(ms){
   ]).catch(function(){});
 }
 
+// 🆕 2026.08: 시드에서 excRests(사진 77장·12MB)·excTickets 를 뺐다 (20.1MB → 8.1MB).
+//   둘 다 이제 Supabase 를 1순위로 읽으므로 시드에 둘 이유가 없었고, 오히려 옛 사진·
+//   옛 티켓이 첫 화면에 뜨는 사고의 원인이었다.
+//   ⚠ 그래서 "이미 시드했는지" 판정을 excRests 로 할 수 없다 — 전용 플래그를 쓴다.
+//     (플래그가 없어도 캐러셀 데이터가 있으면 구버전에서 시드된 사용자로 보고 건너뛴다)
+var __SEED_FLAG = 'seedDone_v2';
+
 var __SEEDING_DONE = (function(){
-  return IDB.get('excRests').then(function(existing){
-    // 이미 데이터가 있으면 (기존 사용자) 시드 건너뜀 — 외부 파일 fetch 도 건너뜀
-    if (existing) return;
-    // 🆕 2026.05.21: 처음 방문자만 외부 seed-data.json (20MB) 백그라운드 fetch
-    return fetch('/seed-data.json').then(function(res){
+  return IDB.get(__SEED_FLAG).then(function(done){
+    if (done) return;                         // 이미 시드 완료
+    return IDB.get('carouselCards').then(function(legacy){
+      // 구버전에서 이미 시드된 사용자 → 다시 받지 않고 플래그만 남긴다
+      if (legacy) return IDB.set(__SEED_FLAG, '1').catch(function(){});
+      return _seedFetchAndStore();
+    });
+  }).catch(function(e){ console.warn('seed failed:', e); });
+})();
+
+function _seedFetchAndStore(){
+  // 처음 방문자만 외부 seed-data.json 백그라운드 fetch
+  return fetch('/seed-data.json').then(function(res){
       if (!res.ok) throw new Error('seed-data.json fetch ' + res.status);
       return res.json();
     }).then(function(seedData){
@@ -11873,10 +11888,12 @@ var __SEEDING_DONE = (function(){
         var str = (typeof v === 'string') ? v : JSON.stringify(v);
         return IDB.set(k, str).catch(function(){});
       });
-      return Promise.all(ops);
+      return Promise.all(ops).then(function(){
+        // 완료 표시 — 다음 실행부터는 fetch 자체를 건너뛴다
+        return IDB.set(__SEED_FLAG, '1').catch(function(){});
+      });
     });
-  }).catch(function(e){ console.warn('seed failed:', e); });
-})();
+}
 
 
 // ── 계정별 스토리지 키 ──
