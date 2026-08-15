@@ -218,7 +218,15 @@ function jsonResp(body: unknown, status: number) {
 //   재시도 대상: 429(rate limit) · 529(overloaded) · 5xx · 네트워크 오류 · JSON 파싱 실패
 //   재시도 안 함: 400(잘못된 요청) · 401/403(키 문제) — 다시 불러도 같은 결과다
 const RETRY_STATUS = new Set([408, 409, 429, 500, 502, 503, 504, 529]);
-const MAX_ATTEMPTS = 4;
+const MAX_ATTEMPTS = 3;
+
+// ⏱ 시간 예산 — Edge Function 게이트웨이가 응답을 기다려주는 시간 안에 반드시 끝내야 한다.
+//   재시도를 넣었더니 (4회 × Anthropic 15~20초 + 백오프 7초 = 최대 87초) 게이트웨이가
+//   먼저 끊어 504 Gateway Timeout 이 났다. 재시도가 없던 때보다 더 나빠진 것이다.
+//   → 전체 예산 안에서만 재시도하고, 남은 시간이 부족하면 즉시 포기해 정상 응답을 돌려준다.
+//     클라이언트는 그 노드를 pending 으로 남겨두므로 다음 실행에서 자연스럽게 다시 시도된다.
+const TOTAL_BUDGET_MS = 50_000;   // 함수 전체
+const ATTEMPT_TIMEOUT_MS = 22_000; // 호출 1회
 
 type ClaudeOk = {
   ok: true; translations: unknown; usage: unknown; attempts: number;
@@ -233,19 +241,32 @@ async function callClaudeWithRetry(
 ): Promise<ClaudeOk | ClaudeFail> {
   let lastStatus = 0;
   let lastDetail = "";
+  const startedAt = Date.now();
+  const remaining = () => TOTAL_BUDGET_MS - (Date.now() - startedAt);
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     if (attempt > 1) {
-      // 1s → 2s → 4s (+ 지터). 동시에 여러 건이 돌 때 같은 순간에 몰리지 않게 흔든다.
-      const wait = Math.pow(2, attempt - 2) * 1000 + Math.floor(Math.random() * 400);
+      // 0.5s → 1.5s (+ 지터). 동시에 여러 건이 돌 때 같은 순간에 몰리지 않게 흔든다.
+      const wait = Math.pow(2, attempt - 2) * 500 + Math.floor(Math.random() * 400);
+      // 남은 예산이 "대기 + 최소 한 번의 호출" 을 감당 못 하면 더 시도하지 않는다.
+      if (remaining() < wait + 8_000) {
+        console.warn(`[taam-translate] 시간 예산 소진 — 재시도 중단 (남은 ${remaining()}ms)`);
+        break;
+      }
       console.warn(`[taam-translate] 재시도 ${attempt}/${MAX_ATTEMPTS} — ${wait}ms 대기 (직전: ${lastStatus} ${lastDetail.slice(0, 120)})`);
       await new Promise((r) => setTimeout(r, wait));
     }
+
+    // 한 번의 호출이 통째로 매달려 게이트웨이 타임아웃을 유발하지 않도록 상한을 둔다
+    const ctrl = new AbortController();
+    const budget = Math.max(5_000, Math.min(ATTEMPT_TIMEOUT_MS, remaining() - 1_000));
+    const timer = setTimeout(() => ctrl.abort(), budget);
 
     let res: Response;
     try {
       res = await fetch(ANTHROPIC_API_URL, {
         method: "POST",
+        signal: ctrl.signal,
         headers: {
           "Content-Type": "application/json",
           "anthropic-version": ANTHROPIC_VERSION,
@@ -259,10 +280,12 @@ async function callClaudeWithRetry(
         }),
       });
     } catch (e) {
-      // 네트워크 오류 — 재시도 가치가 있다
+      // 네트워크 오류 · 타임아웃 — 재시도 가치가 있다
       lastStatus = 0;
       lastDetail = String((e as Error)?.message ?? e);
       continue;
+    } finally {
+      clearTimeout(timer);
     }
 
     if (!res.ok) {
