@@ -11857,12 +11857,27 @@ function _seedWaitCapped(ms){
   ]).catch(function(){});
 }
 
+// 🆕 2026.08: 시드에서 excRests(사진 77장·12MB)·excTickets 를 뺐다 (20.1MB → 8.1MB).
+//   둘 다 이제 Supabase 를 1순위로 읽으므로 시드에 둘 이유가 없었고, 오히려 옛 사진·
+//   옛 티켓이 첫 화면에 뜨는 사고의 원인이었다.
+//   ⚠ 그래서 "이미 시드했는지" 판정을 excRests 로 할 수 없다 — 전용 플래그를 쓴다.
+//     (플래그가 없어도 캐러셀 데이터가 있으면 구버전에서 시드된 사용자로 보고 건너뛴다)
+var __SEED_FLAG = 'seedDone_v2';
+
 var __SEEDING_DONE = (function(){
-  return IDB.get('excRests').then(function(existing){
-    // 이미 데이터가 있으면 (기존 사용자) 시드 건너뜀 — 외부 파일 fetch 도 건너뜀
-    if (existing) return;
-    // 🆕 2026.05.21: 처음 방문자만 외부 seed-data.json (20MB) 백그라운드 fetch
-    return fetch('/seed-data.json').then(function(res){
+  return IDB.get(__SEED_FLAG).then(function(done){
+    if (done) return;                         // 이미 시드 완료
+    return IDB.get('carouselCards').then(function(legacy){
+      // 구버전에서 이미 시드된 사용자 → 다시 받지 않고 플래그만 남긴다
+      if (legacy) return IDB.set(__SEED_FLAG, '1').catch(function(){});
+      return _seedFetchAndStore();
+    });
+  }).catch(function(e){ console.warn('seed failed:', e); });
+})();
+
+function _seedFetchAndStore(){
+  // 처음 방문자만 외부 seed-data.json 백그라운드 fetch
+  return fetch('/seed-data.json').then(function(res){
       if (!res.ok) throw new Error('seed-data.json fetch ' + res.status);
       return res.json();
     }).then(function(seedData){
@@ -11873,10 +11888,12 @@ var __SEEDING_DONE = (function(){
         var str = (typeof v === 'string') ? v : JSON.stringify(v);
         return IDB.set(k, str).catch(function(){});
       });
-      return Promise.all(ops);
+      return Promise.all(ops).then(function(){
+        // 완료 표시 — 다음 실행부터는 fetch 자체를 건너뛴다
+        return IDB.set(__SEED_FLAG, '1').catch(function(){});
+      });
     });
-  }).catch(function(e){ console.warn('seed failed:', e); });
-})();
+}
 
 
 // ── 계정별 스토리지 키 ──
@@ -37038,6 +37055,54 @@ async function tcalSaveCapacity(restId){
 }
 window.tcalSaveCapacity = tcalSaveCapacity;
 
+// 🆕 2026.08: 일정 삭제 — daegwan_capacity 행 제거.
+//   ⚠ 예약이 하나라도 남아 있으면 막는다. 정원 정의만 지우면 좌석 상한이 사라져
+//     이미 자리를 잡은 예약 위로 초과 판매가 될 수 있다 (이중예약 위험).
+//   ⚠ 앱에 업로드된 티켓 상품(ticketDB)에서 자동 생성된 일정은 여기서 지우지 않는다.
+//     그건 티켓 자체라서 티켓 관리에서 다뤄야 한다 — 캘린더에서 지우면 티켓만 유령으로 남는다.
+async function tcalDeleteSchedule(restId){
+  if(!restId || !_tcalSelectedDate){ showToast('⚠','선택 필요','매장·날짜 확인'); return; }
+  if(!(typeof _isSuperAdmin === 'function' && _isSuperAdmin())){
+    showToast('⚠','권한 없음','슈퍼어드민만 일정을 삭제할 수 있어요'); return;
+  }
+  var _day = parseInt(_tcalSelectedDate.split('.')[1], 10);
+  var dateKey = _tcalYear + '-' + (_tcalMonth + 1) + '-' + _day;
+  var g = (_tcalDayGroups(dateKey) || []).filter(function(x){ return String(x.restId) === String(restId); })[0];
+
+  // ① 예약이 남아 있으면 삭제 금지
+  if(g && g.entries && g.entries.length > 0){
+    var booked = g.entries.reduce(function(p,e){ return p + (e.pax||0); }, 0);
+    alert('예약 ' + g.entries.length + '건(' + booked + '명)이 남아 있어 일정을 삭제할 수 없습니다.\n\n'
+        + '각 예약의 × 로 먼저 취소한 뒤 다시 시도하세요.\n'
+        + '(앱 구매·초대 건은 구매 취소 절차로 처리해야 합니다)');
+    return;
+  }
+
+  // ② 티켓 상품에서 온 일정인지 확인 — daegwan_capacity 행이 없으면 그쪽이다
+  var ymd = _tcalYMD();
+  var hasCapRow = (_tcalCapRows || []).some(function(c){
+    return String(c.venue_id) === String(restId)
+        && _tcalDateKey(String(c.ymd).replace(/-/g,'.')) === dateKey;
+  });
+  if(!hasCapRow){
+    alert('이 일정은 앱에 업로드된 티켓 상품에서 자동으로 만들어진 것이라 캘린더에서 삭제할 수 없습니다.\n\n'
+        + '티켓 관리에서 해당 티켓을 수정하거나 삭제해주세요.');
+    return;
+  }
+
+  if(!confirm(_tcalRestName(restId) + ' · ' + _tcalSelectedDate + ' 일정을 삭제할까요?\n\n정원·시간 설정이 지워집니다.')) return;
+
+  try {
+    var r = await window.sb.from('daegwan_capacity')
+      .delete().eq('venue_id', String(restId)).eq('ymd', ymd).select();
+    if(r.error){ showToast('❌','삭제 실패', (r.error.message||'').substring(0,80)); return; }
+    if(!r.data || r.data.length === 0){ showToast('⚠','대상 없음','이미 삭제되었거나 권한이 없어요'); return; }
+    showToast('✓','일정 삭제','일정이 삭제되었습니다');
+    await tcalLoadCapacity(); tcalRender(); tcalRenderDetail(_tcalSelectedDate);
+  } catch(e){ showToast('❌','오류', (e.message||'').substring(0,80)); }
+}
+window.tcalDeleteSchedule = tcalDeleteSchedule;
+
 // 🆕 일정(매장) 등록 — 매장 + 정원 + 시간
 var _tcalSchedRest = '';
 function tcalOpenSchedule(){
@@ -37402,7 +37467,10 @@ function tcalRenderDetail(dateStr) {
     if(isSuper){
       html += '<div style="display:flex;align-items:center;gap:6px;margin-top:10px;"><span style="font-size:11px;color:#9A9486;">정원</span>'
         + '<input id="tcalCap_' + g.restId + '" type="number" min="0" value="' + (g.capacity!=null?g.capacity:'') + '" placeholder="0" style="width:54px;padding:5px;border:1px solid #e0ddd5;border-radius:7px;font-size:13px;font-weight:800;text-align:center;font-family:inherit;">'
-        + '<button onclick="tcalSaveCapacity(\'' + g.restId + '\')" style="height:28px;padding:0 10px;border:none;border-radius:7px;background:#6A1A1A;color:#fff;font-size:11px;font-weight:800;cursor:pointer;">저장</button></div>';
+        + '<button onclick="tcalSaveCapacity(\'' + g.restId + '\')" style="height:28px;padding:0 10px;border:none;border-radius:7px;background:#6A1A1A;color:#fff;font-size:11px;font-weight:800;cursor:pointer;">저장</button>'
+        // 🆕 2026.08: 일정 삭제 — 예약이 남아 있으면 함수 안에서 막는다
+        + '<button onclick="tcalDeleteSchedule(\'' + g.restId + '\')" style="height:28px;padding:0 10px;margin-left:auto;border:1px solid #E4D6D6;border-radius:7px;background:#fff;color:#B23A2E;font-size:11px;font-weight:800;cursor:pointer;">일정 삭제</button>'
+        + '</div>';
     }
     html += '</div>';
     // 내역
@@ -59111,16 +59179,13 @@ function loadCarouselData(cb) {
         _preloadCarouselPhotos();
         // 햄버거 패널 + 계보도 관리 리스트에 사진/제목 동기화 (하드코딩 + 동적 솔로 모두)
         try { if(typeof syncLineageAdminFromCarousel === 'function') syncLineageAdminFromCarousel(); } catch(e){}
-        // 🆕 v1.52i 2026.05.25: 슈퍼어드민이 첫 로드 시 자동 cleanup (디폴트 14개로 리셋).
-        //   localStorage flag 로 한 번만 실행. 일반 사용자는 영향 없음.
-        try {
-          if (typeof _isSuperAdmin === 'function' && _isSuperAdmin() &&
-              localStorage.getItem('taam_carousel_cleanup_v1') !== '1' &&
-              typeof window._taamResetCarousel === 'function') {
-            // 약간 지연 — 로드 완료 후 비동기 실행
-            setTimeout(function(){ window._taamResetCarousel(); }, 800);
-          }
-        } catch(e){ console.warn('[auto-cleanup] skip:', e); }
+        // ❌ 제거됨 (2026.08) — v1.52i(2026.05.25) 의 일회성 마이그레이션 자동 실행.
+        //   "한 번만" 의 근거가 localStorage 플래그였는데, 시크릿창·새 기기·브라우저
+        //   데이터 삭제 후에는 플래그가 없어 매번 다시 돌았다. 그때마다 캐러셀을
+        //   하드코딩 디폴트 14개로 되돌려 Supabase 에 upsert 했고, 그 사이 추가한
+        //   슬라이드는 영구 삭제됐다 (사진만 id 가 같은 것에 한해 보존).
+        //   마이그레이션은 이미 3개월 전에 끝났으므로 자동 실행을 없앤다.
+        //   필요하면 콘솔에서 수동 호출: window._taamResetCarousel(true)
         if (cb) cb();
       } else {
         console.log('Supabase 캐러셀 비어있음 → IDB 폴백');
