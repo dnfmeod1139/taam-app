@@ -18565,7 +18565,10 @@ function refreshSheetSummary() {
   var td=t.time||'–';
   if(t.time&&t.time.includes(':')){var tp=t.time.split(':'),h=parseInt(tp[0]);td=(h>12?h-12:(h===0?12:h))+':'+tp[1]+' '+(h>=12?'PM':'AM');}
   var h='';
-  h+='<div style="font-family:var(--font-main);font-size:17px;font-weight:800;color:#111;margin-bottom:4px;">'+(r?r.name:t.rest)+'</div>';
+  // 🆕 2026.08: 매장명도 번역본 우선 (restaurants.name_en / name_jp)
+  var _sheetName = (r && typeof window.pickI18nField === 'function') ? window.pickI18nField(r, 'name') : '';
+  if(!_sheetName) _sheetName = r ? r.name : t.rest;
+  h+='<div style="font-family:var(--font-main);font-size:17px;font-weight:800;color:#111;margin-bottom:4px;">'+_sheetName+'</div>';
   h+='<div style="font-family:var(--font-main);font-size:12px;color:#aaa;margin-bottom:10px;">'+dateStr+' · '+td+'</div>';
   if(meal)   h+='<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">식사비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxMoney(meal*pax)+'</span></div>';
   if(agency) h+='<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">대행비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxMoney(agency*pax,{usd:fxAgencyUsd(t)*pax,exact:true})+'</span></div>';
@@ -18747,7 +18750,10 @@ function handleTicketAction(){
 
   // 예약 요약
   var h='';
-  h+='<div style="font-family:var(--font-main);font-size:17px;font-weight:800;color:#111;margin-bottom:4px;">'+(r?r.name:t.rest)+'</div>';
+  // 🆕 2026.08: 매장명도 번역본 우선 (restaurants.name_en / name_jp)
+  var _sheetName = (r && typeof window.pickI18nField === 'function') ? window.pickI18nField(r, 'name') : '';
+  if(!_sheetName) _sheetName = r ? r.name : t.rest;
+  h+='<div style="font-family:var(--font-main);font-size:17px;font-weight:800;color:#111;margin-bottom:4px;">'+_sheetName+'</div>';
   h+='<div style="font-family:var(--font-main);font-size:12px;color:#aaa;margin-bottom:16px;">'+dateStr+' · '+td+' · '+pax+'인</div>';
   if(meal)   h+='<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">식사비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxMoney(meal*pax)+'</span></div>';
   if(agency) h+='<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">대행비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxMoney(agency*pax,{usd:fxAgencyUsd(t)*pax,exact:true})+'</span></div>';
@@ -34094,6 +34100,11 @@ var TX_MAP = {
   '식사비':['Meal price','食事代'],
   '대행비':['Service fee','予約代行手数料'],
   '주류 미니멈':['Beverage minimum','ドリンク最低料金'],
+  // 세 글자짜리는 부분 치환 대상에서 빠지므로, 값과 붙는 형태를 따로 넣는다
+  // ('식사비 ×1인' → 'Meal price ×1'. 뒤의 ×1인 은 TX_RE 가 처리)
+  '식사비 ×':['Meal price ×','食事代 ×'],
+  '대행비 ×':['Service fee ×','予約代行手数料 ×'],
+  '주류 미니멈 ×':['Beverage minimum ×','ドリンク最低料金 ×'],
   '합계':['Total','合計'],
   '추가 결제 필요':['Additional payment required','追加決済が必要'],
   '결제 후 잔액':['Balance after payment','決済後の残高'],
@@ -34409,6 +34420,31 @@ var TX_MAP = {
   '티켓':['Ticket','チケット'],
 };
 
+// 🆕 숫자와 붙어 나오는 패턴 — 사전(문자열 일치)으로는 잡을 수 없다.
+//   '식사비 ×1인' · '11월 19일' 처럼 값이 중간에 끼어 매번 문자열이 달라지기 때문이다.
+//   [정규식, [EN 치환, JA 치환]] — 순서가 중요하다 (인석 → 인 순서로 좁은 것부터).
+var _TX_MONTHS_EN = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+var TX_RE = [
+  // ×1인 → ×1  (수량 표기라 단위를 붙이면 오히려 어색하다)
+  [/×\s*(\d+)\s*인석?/g, ['×$1', '×$1']],
+  // 2인석 → 2-seat
+  [/(\d+)\s*인석/g, ['$1-seat', '$1名席']],
+  // 4인 → 4 guests  (뒤에 한글이 이어지면 '인원·인테리어' 같은 단어이므로 제외)
+  [/(\d+)\s*인(?![가-힣])/g, ['$1 guests', '$1名']],
+  // 3석 → 3 seats
+  [/(\d+)\s*석(?![가-힣])/g, ['$1 seats', '$1席']],
+  // 30일 전 → 30 days before
+  [/(\d+)\s*일\s*전(?![가-힣])/g, ['$1 days before', '$1日前']],
+];
+// 날짜는 월 이름이 필요해 별도 처리
+function _txDate(s, lang){
+  return s.replace(/(\d{1,2})\s*월\s*(\d{1,2})\s*일/g, function(_m, mo, d){
+    var mi = parseInt(mo, 10) - 1;
+    if (lang === 'ja') return mo + '月' + d + '日';
+    return (_TX_MONTHS_EN[mi] || mo) + ' ' + parseInt(d, 10);
+  });
+}
+
 var _txCache = { lang:null, exact:null, subs:null };
 var _TX_KO_RE = /[가-힣]/;
 var _TX_SKIP_TAG = { SCRIPT:1, STYLE:1, TEXTAREA:1, NOSCRIPT:1, CODE:1, PRE:1 };
@@ -34452,6 +34488,12 @@ function txText(s){
   for (var i=0; i<c.subs.length; i++){
     if (out.indexOf(c.subs[i][0]) >= 0) out = out.split(c.subs[i][0]).join(c.subs[i][1]);
   }
+  // 숫자와 붙은 패턴 (×1인 · 2인석 · 11월 19일 …)
+  var ri = (c.lang === 'ja') ? 1 : 0;
+  for (var j=0; j<TX_RE.length; j++){
+    out = out.replace(TX_RE[j][0], TX_RE[j][1][ri]);
+  }
+  out = _txDate(out, c.lang);
   return out;
 }
 window.txText = txText;
@@ -34581,7 +34623,9 @@ function applyI18n(root){
     root.querySelectorAll('[data-i18n]').forEach(function(el){
       var key = el.getAttribute('data-i18n');
       var val = isLocked(el) ? lookupKo(key) : t(key);
-      if(val && val !== key) el.textContent = val;
+      // 🆕 빈 문자열도 정당한 번역이다 (예: ticket.sheet_pax_unit 은 EN 에서 '').
+      //   val 이 falsy 라고 건너뛰면 한글 원문('인')이 그대로 남는다.
+      if(val !== undefined && val !== null && val !== key) el.textContent = val;
     });
     root.querySelectorAll('[data-i18n-html]').forEach(function(el){
       var key = el.getAttribute('data-i18n-html');
