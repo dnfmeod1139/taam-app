@@ -10505,6 +10505,7 @@ window.closePromoCarousel = function(){
     <div class="dm-tab active" onclick="dmMgmtTab(0,this)">반환예정</div>
     <div class="dm-tab" onclick="dmMgmtTab(1,this)">반환완료</div>
     <div class="dm-tab" onclick="dmMgmtTab(2,this)">환불불가</div>
+    <div class="dm-tab" onclick="dmMgmtTab(3,this)">카드환불</div>
   </div>
   <!-- 🆕 레스토랑명·구매자명 검색 (세 탭 공통) -->
   <div style="padding:10px 16px 2px;">
@@ -21890,6 +21891,32 @@ function ticketHistTab(idx, el){
   ticketHistRender(idx);
 }
 
+// 🆕 2026.08: 결제·환불 상세 분해 — 예치금/카드 분리 표시용 (회원·슈퍼어드민 공통)
+//   카드 부분결제(예치금 부족분을 카드로 낸 건)는 취소 시 환불 경로가 둘로 갈린다:
+//     · 예치금으로 낸 부분 → 앱이 즉시 예치금으로 환원 (자동)
+//     · 카드로 낸 부분     → 토스 승인취소 (슈퍼어드민이 처리 → 진행상황을 여기서 표시)
+//   이 함수는 tickets.extra_data 에 저장된 cardPaid/depositUsed/card_refund_pending 을
+//   화면이 쓰기 좋은 형태로 정리한다. 예치금 전용 구매면 isCard=false 로 기존 표시 유지.
+function _tkPayBreakdown(h){
+  var ex = (h && h.extra_data) || {};
+  var cardPaid = parseInt(ex.cardPaid || 0) || 0;
+  var depositUsed = parseInt(ex.depositUsed || 0) || 0;
+  var crp = ex.card_refund_pending || null;
+  return {
+    isCard: (cardPaid > 0) || (ex.paidBy === 'card+deposit'),
+    cardPaid: cardPaid,
+    depositUsed: depositUsed,
+    // 취소 시 예치금으로 돌아간 금액 (없으면 화면에서 재계산)
+    depositRefund: (h && h.depositRefund != null) ? (parseInt(h.depositRefund)||0)
+                 : (ex.deposit_refund != null ? (parseInt(ex.deposit_refund)||0) : null),
+    cardRefund: crp ? (parseInt(crp.amount)||0) : 0,
+    cardRefundStatus: crp ? String(crp.status || 'pending') : null,
+    cardRefundedAt: crp ? (crp.refunded_at || null) : null,
+    orderId: ex.order_id || (crp && crp.order_id) || null
+  };
+}
+window._tkPayBreakdown = _tkPayBreakdown;
+
 function ticketHistRender(idx){
   var list = document.getElementById('ticketHistList');
   if(!list) return;
@@ -21957,6 +21984,14 @@ function ticketHistRender(idx){
     var ap = h<12 ? '오전' : '오후'; var h12 = h%12; if(h12===0) h12=12;
     return ap+' '+h12+':'+p[1];
   }
+  // 🆕 카드 환불 완료 시각 표기 (ISO → '8월 15일')
+  function _thShortDT(iso){
+    try {
+      var d = new Date(iso);
+      if(isNaN(d.getTime())) return '';
+      return (d.getMonth()+1)+'월 '+d.getDate()+'일';
+    } catch(e){ return ''; }
+  }
   function _thDday(ds){
     var d = (typeof _dParseDate==='function') ? _dParseDate(ds) : null;
     if(!d || isNaN(d.getTime())) return null;
@@ -21975,6 +22010,7 @@ function ticketHistRender(idx){
   list.innerHTML = filtered.map(function(h){
     var r = restaurantDB.find(function(x){ return String(x.id)===String(h.restId); });
     var s = h.status || 'upcoming';
+    var bd = _tkPayBreakdown(h);   // 🆕 예치금/카드 결제 구성
     var paxLabel = h.pax + (_thIsEn ? (h.pax===1?' guest':' guests') : (_thIsJa ? '名' : '명'));
     // 방문 예정일 때만 취소 버튼 (기능 그대로)
     var cancelBtn = '';
@@ -21994,11 +22030,37 @@ function ticketHistRender(idx){
     var displayS = s;
     if(s === 'cancelled'){
       var dr = h.depositReturn || null;
-      var refundedAmt = (h.refundedAmount != null) ? h.refundedAmount : (dr ? (dr.returnAmt||0) : null);
-      var isReturned = dr ? (dr.type === 'returned') : (h.refundedAmount > 0);
+      // 🆕 앱을 새로고침하면 h.refundedAmount(메모리 값)가 사라진다 —
+      //   취소 시 tickets.extra_data 에 남긴 값을 폴백으로 읽어 상세가 유지되게 한다.
+      var _exRef = (h.extra_data && h.extra_data.refunded_amount != null)
+                 ? (parseInt(h.extra_data.refunded_amount) || 0) : null;
+      var refundedAmt = (h.refundedAmount != null) ? h.refundedAmount
+                      : (dr ? (dr.returnAmt||0) : _exRef);
+      var isReturned = dr ? (dr.type === 'returned') : (refundedAmt > 0);
       if(isReturned && refundedAmt > 0){ displayS = 'refunded'; }
       if(refundedAmt != null){
-        refundInfo = '<div style="margin-top:6px;font-size:11.5px;font-weight:700;color:#1E9E5A;">↳ 환불 완료 · +₩'+ refundedAmt.toLocaleString() +'</div>';
+        if(bd.isCard){
+          // 🆕 카드 부분결제 취소 — 예치금 환원분과 카드 환불분을 나눠서 보여준다.
+          //   카드로 낸 돈은 예치금으로 돌려주지 않고 카드사로 승인취소된다 (이중환불 방지).
+          var _dRef = (bd.depositRefund != null) ? bd.depositRefund : Math.min(refundedAmt, bd.depositUsed);
+          var _cRef = bd.cardRefund || Math.max(0, refundedAmt - _dRef);
+          if(_dRef > 0){
+            refundInfo = '<div style="margin-top:6px;font-size:11.5px;font-weight:700;color:#1E9E5A;">↳ 예치금 환불 완료 · +₩'+ _dRef.toLocaleString() +'</div>';
+          }
+          if(_cRef > 0){
+            var _cDone = (bd.cardRefundStatus === 'done');
+            refundInfo += '<div style="margin-top:7px;padding:10px 12px;border-radius:11px;background:'+(_cDone?'#EAF6EE':'#FFF6E8')+';border:1px solid '+(_cDone?'#CDE9D8':'#F2E0BC')+';">'
+              + '<div style="font-size:11.5px;font-weight:800;color:'+(_cDone?'#1E7A46':'#9A6B12')+';">💳 카드 환불 ₩'+_cRef.toLocaleString()+' · '+(_cDone?'환불 완료':'처리 중')+'</div>'
+              + '<div style="margin-top:3px;font-size:10.5px;color:#8C8475;line-height:1.55;">'
+              +   (_cDone
+                    ? ('카드사로 승인취소되었습니다'+(bd.cardRefundedAt ? (' · '+_thShortDT(bd.cardRefundedAt)) : '')+'<br>카드사 반영은 영업일 기준 3~5일 소요될 수 있어요')
+                    : '카드로 결제하신 금액은 카드사로 환불됩니다<br>확인 후 순차 처리되며, 완료되면 알림을 보내드려요')
+              + '</div>'
+              + '</div>';
+          }
+        } else {
+          refundInfo = '<div style="margin-top:6px;font-size:11.5px;font-weight:700;color:#1E9E5A;">↳ 환불 완료 · +₩'+ refundedAmt.toLocaleString() +'</div>';
+        }
         if(dr && dr.agencyHeld > 0){
           refundInfo += '<div style="margin-top:2px;font-size:10.5px;color:#1F5BD6;">대행비 차감 ₩'+ dr.agencyHeld.toLocaleString() +' (정상 절차)</div>';
         }
@@ -22036,10 +22098,23 @@ function ticketHistRender(idx){
       +   '<div style="height:1px;background:#E8E6DF;"></div>'
       +   '<div style="display:flex;align-items:center;justify-content:space-between;padding:13px 2px;"><span style="font-size:14px;font-weight:600;color:#9A9486;">인원</span><span style="font-size:17px;font-weight:800;letter-spacing:-0.3px;">'+paxLabel+'</span></div>'
       + '</div>'
-      // chapter 2 : 결제 금액
-      + '<div style="margin:12px 16px 0;padding:15px 18px;background:#FBF3F2;border:1px solid #EEDADA;border-radius:16px;display:flex;align-items:center;justify-content:space-between;">'
-      +   '<span style="font-size:15px;font-weight:700;color:#7A5050;">결제 금액</span>'
-      +   '<span style="font-size:22px;font-weight:800;color:#6A1A1A;letter-spacing:-0.5px;">₩'+(h.amt||0).toLocaleString()+'</span>'
+      // chapter 2 : 결제 금액 (+ 🆕 예치금/카드 결제 구성)
+      + '<div style="margin:12px 16px 0;padding:15px 18px;background:#FBF3F2;border:1px solid #EEDADA;border-radius:16px;">'
+      +   '<div style="display:flex;align-items:center;justify-content:space-between;">'
+      +     '<span style="font-size:15px;font-weight:700;color:#7A5050;">결제 금액</span>'
+      +     '<span style="font-size:22px;font-weight:800;color:#6A1A1A;letter-spacing:-0.5px;">₩'+(h.amt||0).toLocaleString()+'</span>'
+      +   '</div>'
+      +   (bd.isCard
+            ? ('<div style="height:1px;background:#EEDADA;margin:12px 0 9px;"></div>'
+               + '<div style="display:flex;align-items:center;justify-content:space-between;padding:3px 0;">'
+               +   '<span style="font-size:13px;font-weight:600;color:#A08484;">예치금 사용</span>'
+               +   '<span style="font-size:14.5px;font-weight:700;color:#7A5050;">₩'+bd.depositUsed.toLocaleString()+'</span>'
+               + '</div>'
+               + '<div style="display:flex;align-items:center;justify-content:space-between;padding:3px 0;">'
+               +   '<span style="font-size:13px;font-weight:600;color:#A08484;">카드 결제</span>'
+               +   '<span style="font-size:14.5px;font-weight:700;color:#7A5050;">₩'+bd.cardPaid.toLocaleString()+'</span>'
+               + '</div>')
+            : '')
       + '</div>'
       + (h.isInvited ? '<div style="padding:10px 18px 0;font-size:11.5px;color:#6A1A1A;font-weight:600;">상세설명 · '+(h.inviteDesc || '슈퍼어드민 초대로 구매')+'</div>' : '')
       + refundInfo
@@ -23467,6 +23542,23 @@ function getDmItems(idx){
     });
   } else if(idx === 1){ // 반환완료
     out = src.filter(function(h){ return h && h.depositReturn && h.depositReturn.type === 'returned' && _dmMatch(h); });
+  } else if(idx === 3){
+    // 🆕 카드환불: 카드로 결제된 부분이 있어 토스에서 승인취소가 필요한 건.
+    //   회원이 취소한 티켓은 반환예정/반환완료/환불불가 어디에도 안 잡히므로
+    //   (반환예정은 cancelled 제외, 나머지는 depositReturn 필요) 여기서 모아 본다.
+    //   미처리(pending)를 위로 올려 놓치지 않게 한다.
+    out = src.filter(function(h){
+      var crp = h && h.extra_data && h.extra_data.card_refund_pending;
+      return !!(crp && (parseInt(crp.amount)||0) > 0) && _dmMatch(h);
+    });
+    out.sort(function(a,b){
+      var pa = (a.extra_data.card_refund_pending.status === 'done') ? 1 : 0;
+      var pb = (b.extra_data.card_refund_pending.status === 'done') ? 1 : 0;
+      if(pa !== pb) return pa - pb;                     // pending 먼저
+      var ra = a.extra_data.card_refund_pending.requested_at || '';
+      var rb = b.extra_data.card_refund_pending.requested_at || '';
+      return String(rb).localeCompare(String(ra));      // 최신 먼저
+    });
   } else { // 환불불가
     out = src.filter(function(h){ return h && h.depositReturn && h.depositReturn.type === 'penalty' && _dmMatch(h); });
   }
@@ -23490,19 +23582,31 @@ function renderDmMgmtList(idx){
   var list = document.getElementById('dmMgmtList');
   if(!summary || !list) return;
 
-  var totalAmt = items.reduce(function(s,h){ return s+(h.amt||0); },0);
-  var summaryAmtColor = idx===2?'#9B1C1C':'#1a1a18';
-  var summaryLabel = idx===0?'반환 예정 금액':idx===1?'반환 완료 금액':'환불 불가 금액';
-  var countLabel = items.length + '건';
+  // 🆕 카드환불 탭은 '아직 카드로 환불해야 할 금액'(pending 합계)을 크게 보여준다
+  var totalAmt, summaryAmtColor, summaryLabel, countLabel;
+  if(idx === 3){
+    var _pend = items.filter(function(h){
+      return h.extra_data.card_refund_pending.status !== 'done';
+    });
+    totalAmt = _pend.reduce(function(s,h){ return s + (parseInt(h.extra_data.card_refund_pending.amount)||0); }, 0);
+    summaryAmtColor = _pend.length ? '#B23A2E' : '#1E7A46';
+    summaryLabel = '카드 환불 필요 금액';
+    countLabel = '미처리 ' + _pend.length + '건 / 전체 ' + items.length + '건';
+  } else {
+    totalAmt = items.reduce(function(s,h){ return s+(h.amt||0); },0);
+    summaryAmtColor = idx===2?'#9B1C1C':'#1a1a18';
+    summaryLabel = idx===0?'반환 예정 금액':idx===1?'반환 완료 금액':'환불 불가 금액';
+    countLabel = items.length + '건';
+  }
 
   summary.innerHTML = '<div class="dm-summary-left">'
     +'<div class="dm-summary-label">'+summaryLabel+'</div>'
     +'<div class="dm-summary-amt" style="color:'+summaryAmtColor+';">₩'+totalAmt.toLocaleString()+'</div>'
-    +'<div class="dm-summary-count">총 '+countLabel+'</div>'
+    +'<div class="dm-summary-count">'+(idx===3?'':'총 ')+countLabel+'</div>'
     +'</div>';
 
   if(items.length === 0){
-    var empties = ['방문 완료 후 반환 대기 중인 건이 없어요','반환 완료된 내역이 없어요','환불 불가 처리된 내역이 없어요'];
+    var empties = ['방문 완료 후 반환 대기 중인 건이 없어요','반환 완료된 내역이 없어요','환불 불가 처리된 내역이 없어요','카드 환불이 필요한 건이 없어요'];
     // ── 슈퍼어드민 진단 정보 (반환예정 탭이 비어 있을 때만) ──
     //   구매는 했는데 리스트에 안 뜨면 여기서 왜 비었는지 확인 가능.
     var diag = '';
@@ -23565,6 +23669,15 @@ function renderDmMgmtList(idx){
         +'✓ '+dr.date+' 반환 완료'
         + (dr.extraDeduct > 0 ? '<br><span style="color:#B23A2E;font-weight:700;">추가 차감 ₩'+dr.extraDeduct.toLocaleString()+(dr.extraNote?' · 사유: '+escapeHtml(dr.extraNote):'')+'</span>' : '')
         +'</div>';
+    } else if(idx === 3){
+      // 🆕 카드환불 탭 — 취소 사유/시점만 간단히. 처리 UI 는 아래 cardBox 가 담당한다.
+      //   (회원 취소 건은 depositReturn 이 없으므로 아래 '환불불가' 분기로 가면 안 된다)
+      var _crp3 = h.extra_data.card_refund_pending || {};
+      resultHtml = '<div class="dm-result-box" style="background:#F7F6F3;color:#6A6258;">'
+        + (h.status === 'cancelled' ? '취소됨' : '처리됨')
+        + (_crp3.requested_at ? (' · ' + _thxFmtDateTime(_crp3.requested_at)) : '')
+        + (_crp3.reason ? ('<br><span style="opacity:.75;">' + escapeHtml(String(_crp3.reason)) + '</span>') : '')
+        + '</div>';
     } else {
       // 환불불가 — 슈퍼어드민이 "환불불가" 버튼으로 처리한 건만 (penalty type)
       var dr = h.depositReturn;
@@ -23602,16 +23715,130 @@ function renderDmMgmtList(idx){
       amtHtml = '<div class="dm-item-amt">₩'+(h.amt||0).toLocaleString()+'</div>';
     }
 
+    // 🆕 2026.08: 카드 부분결제 상세 + 카드 환불 처리 (슈퍼어드민 전용)
+    //   카드로 낸 돈은 앱이 자동 환불할 수 없다 (토스 상점관리자에서 승인취소).
+    //   여기에 "얼마를 카드로 환불해야 하는지" 와 처리 버튼을 노출한다.
+    var cardBox = '';
+    var bdm = _tkPayBreakdown(h);
+    if(bdm.isCard){
+      cardBox = '<div style="margin-top:10px;padding:11px 13px;border-radius:10px;background:#F7F6F3;border:1px solid #E8E6DF;">'
+        + '<div style="font-size:11px;font-weight:800;color:#6A6258;letter-spacing:.03em;">결제 구성</div>'
+        + '<div style="margin-top:5px;font-size:11.5px;color:#555;line-height:1.7;">'
+        +   '예치금 ₩'+bdm.depositUsed.toLocaleString()+' &nbsp;·&nbsp; 카드 ₩'+bdm.cardPaid.toLocaleString()
+        +   (bdm.orderId ? ('<br><span style="color:#999;">주문 '+escapeHtml(String(bdm.orderId))+'</span>') : '')
+        + '</div>';
+      if(bdm.cardRefund > 0){
+        var _cdone = (bdm.cardRefundStatus === 'done');
+        cardBox += '<div style="margin-top:8px;padding:9px 11px;border-radius:9px;background:'+(_cdone?'#EAF6EE':'#FFF1E6')+';border:1px solid '+(_cdone?'#CDE9D8':'#F3D9C2')+';">'
+          + '<div style="font-size:11.5px;font-weight:800;color:'+(_cdone?'#1E7A46':'#B23A2E')+';">'
+          +   (_cdone ? '✓ 카드 환불 완료 ₩' : '🔴 카드 환불 필요 ₩') + bdm.cardRefund.toLocaleString()
+          + '</div>'
+          + (_cdone
+              ? '<div style="margin-top:3px;font-size:10.5px;color:#6A8A76;">회원에게 완료 알림 발송됨</div>'
+              : ('<div style="margin-top:3px;font-size:10.5px;color:#8C7A70;line-height:1.5;">토스 상점관리자에서 승인취소한 뒤 아래 버튼을 누르세요 (회원에게 알림 발송)</div>'
+                 + '<button onclick="tkMarkCardRefundDone(\''+h.purchaseId+'\')" style="width:100%;margin-top:8px;padding:9px;border:none;border-radius:8px;background:#5C0A14;color:#fff;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;">카드 환불 완료 처리</button>'))
+          + '</div>';
+      }
+      cardBox += '</div>';
+    }
+
     return '<div class="dm-item">'
       +'<div class="dm-item-head"><div class="dm-item-name">'+rName+visitStatus+'</div>'
       +'<button onclick="showBuyerInfo('+globalIdx+')" style="flex-shrink:0;padding:4px 10px;background:#f0ede8;border:none;border-radius:6px;font-family:var(--font-main);font-size:11px;font-weight:700;color:#555;cursor:pointer;">구매자</button>'
       +'</div>'
       +'<div class="dm-item-meta">'+meta+'</div>'
       +amtHtml
+      +cardBox
       +actionsHtml+resultHtml
       +'</div>';
   }).join('');
 }
+
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026.08: 카드 환불 완료 처리 (슈퍼어드민)
+//   카드로 결제된 금액은 앱이 예치금으로 돌려주지 않는다 (이중환불 방지).
+//   실제 환불은 토스 상점관리자에서 승인취소로 이뤄지므로, 앱에는
+//   extra_data.card_refund_pending = {amount, status:'pending'} 만 남는다.
+//   이 함수가 그 상태를 'done' 으로 바꾸고 회원에게 인앱 알림 + 푸시를 보낸다
+//   → 회원이 "카드 환불이 처리됐다" 는 사실을 앱에서 확인할 수 있다.
+// ═══════════════════════════════════════════════════════════════
+async function tkMarkCardRefundDone(purchaseId){
+  if(!purchaseId || !window.sb) return;
+  var isSuper = (typeof _currentRole !== 'undefined' && (_currentRole === 'superadmin' || _currentRole === 'super_admin'));
+  if(!isSuper){ showToast('⚠','권한 없음','슈퍼어드민만 처리할 수 있습니다'); return; }
+
+  try {
+    var row = await window.sb.from('tickets')
+      .select('purchase_id, user_id, restaurant_name, extra_data')
+      .eq('purchase_id', purchaseId).maybeSingle();
+    if(row.error || !row.data){ showToast('⚠','조회 실패','티켓을 찾을 수 없습니다'); return; }
+
+    var ex  = row.data.extra_data || {};
+    var crp = ex.card_refund_pending || null;
+    if(!crp){ showToast('ⓘ','대상 아님','카드 환불 대기 건이 아닙니다'); return; }
+    if(String(crp.status) === 'done'){ showToast('ⓘ','이미 처리됨','이미 카드 환불 완료로 기록되어 있습니다'); return; }
+
+    var amt = parseInt(crp.amount || 0) || 0;
+    if(!confirm('토스에서 카드 ₩' + amt.toLocaleString() + ' 승인취소를 완료하셨나요?\n\n'
+              + (crp.order_id ? ('주문번호: ' + crp.order_id + '\n\n') : '')
+              + '확인을 누르면 회원에게 "카드 환불 완료" 알림이 발송됩니다.')) return;
+
+    var _admU = null;
+    try { var _gu = await window.sb.auth.getUser(); _admU = (_gu && _gu.data && _gu.data.user) ? _gu.data.user.id : null; } catch(e){}
+    var nowIso = new Date().toISOString();
+    var newExtra = Object.assign({}, ex, {
+      card_refund_pending: Object.assign({}, crp, {
+        status: 'done', refunded_at: nowIso, done_by: _admU
+      })
+    });
+
+    var up = await window.sb.from('tickets')
+      .update({ extra_data: newExtra }).eq('purchase_id', purchaseId).select('purchase_id');
+    if(up.error || !up.data || !up.data.length){
+      showToast('⚠','저장 실패', (up.error && up.error.message) || '대상 티켓을 찾지 못했어요');
+      return;
+    }
+
+    // ── 회원에게 알림 (벨 + 푸시) ──
+    var rest = row.data.restaurant_name || '티켓';
+    var nbody = rest + ' 카드 결제분 ₩' + amt.toLocaleString() + ' 환불이 완료되었습니다.\n'
+              + '카드사 반영은 영업일 기준 3~5일 소요될 수 있습니다.';
+    try {
+      await window.sb.from('notifications').insert({
+        user_id: row.data.user_id,
+        type: 'card_refund_done', kind: 'card_refund_done',
+        title: '💳 카드 환불이 완료되었습니다',
+        body: nbody, message: nbody,
+        url: '/?open_ticket_hist=1',
+        payload: { purchase_id: purchaseId, amount: amt, order_id: crp.order_id || null, refunded_at: nowIso }
+      });
+    } catch(_ne){ console.warn('[cardRefund] 회원 알림 insert 예외:', _ne); }
+    try {
+      await window.sb.functions.invoke('send-push', {
+        body: { to: 'uid:' + row.data.user_id, payload: {
+          title: '💳 카드 환불이 완료되었습니다',
+          body: rest + ' · ₩' + amt.toLocaleString() + ' 환불 완료',
+          url: '/', category: 'card_refund_done', tag: 'taam-crf-' + purchaseId } }
+      });
+    } catch(_pe){ console.warn('[cardRefund] 회원 push 예외:', _pe); }
+
+    // ── 로컬 반영 + 화면 갱신 ──
+    try {
+      var _l = (purchaseHistory || []).find(function(x){ return x.purchaseId === purchaseId; });
+      if(_l) _l.extra_data = newExtra;
+      var _a = (_dmAllPurchases || []).find(function(x){ return x.purchaseId === purchaseId; });
+      if(_a) _a.extra_data = newExtra;
+    } catch(_le){}
+
+    showToast('✓','카드 환불 완료','회원에게 알림을 보냈습니다');
+    try { if(typeof renderDmMgmtList === 'function') renderDmMgmtList(_dmCurrentTab || 0); } catch(_re){}
+    try { if(typeof ticketHistRender === 'function') ticketHistRender(_ticketHistTabIdx || 0); } catch(_re2){}
+  } catch(e){
+    console.error('[cardRefund] 처리 실패:', e);
+    alert('카드 환불 완료 처리 중 오류:\n' + (e.message || String(e)));
+  }
+}
+window.tkMarkCardRefundDone = tkMarkCardRefundDone;
 
 // ── DM 팝업 ──
 var _dmPenaltyDirectAmt = null;
