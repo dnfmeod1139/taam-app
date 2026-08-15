@@ -5907,6 +5907,9 @@ async function tossPayTicketShortage(shortage){
     ord = _r && _r.data;
   } catch(e){
     console.warn('[toss-order] 호출 실패:', e);
+    // 🆕 잡아둔 좌석을 즉시 반납한다. 안 그러면 5분간 좌석이 묶여
+    //   재시도할 때마다 자기 홀드에 막혀 계속 매진으로 보인다.
+    try { if (typeof _tkReleaseSeatHold === 'function') await _tkReleaseSeatHold(); } catch(_re){}
     showToast('⚠','결제 준비 실패','잠시 후 다시 시도해주세요');
     return;
   }
@@ -5923,19 +5926,27 @@ async function tossPayTicketShortage(shortage){
       price_not_set:     '티켓 가격이 설정되지 않았습니다',
       currency_not_open: '해외 통화 결제는 준비 중입니다'
     }[_c] || '결제를 시작할 수 없습니다';
+    // 🆕 거절됐으면 좌석을 붙잡고 있을 이유가 없다 — 즉시 반납.
+    //   (반납 안 하면 내 홀드가 5분간 좌석을 먹어 재시도마다 또 '매진'이 된다)
+    try { if (typeof _tkReleaseSeatHold === 'function') await _tkReleaseSeatHold(); } catch(_re){}
     showToast('⚠','결제 불가', _msg);
     console.warn('[toss-order] 거절:', _c, ord);
+    try { if (typeof renderTicketList === 'function') renderTicketList(); } catch(_le){}
     return;
   }
 
   // 예치금만으로 충분하면 카드 결제 자체가 필요 없다
+  //   (홀드는 유지한다 — 이어서 예치금으로 결제할 것이므로 좌석을 놓치면 안 된다)
   if (!ord.needPayment) {
     showToast('ℹ','카드 결제 불필요','예치금으로 결제할 수 있습니다 — 다시 시도해주세요');
     return;
   }
 
   var amt = parseInt(ord.amount, 10) || 0;
-  if (amt < 100) { showToast('⚠','금액 확인','결제 금액이 올바르지 않습니다'); return; }
+  if (amt < 100) {
+    try { if (typeof _tkReleaseSeatHold === 'function') await _tkReleaseSeatHold(); } catch(_re){}
+    showToast('⚠','금액 확인','결제 금액이 올바르지 않습니다'); return;
+  }
 
   _tossEnsureSdk(async function(){
     try {
@@ -18866,7 +18877,10 @@ function handleTicketAction(){
     window.sb.rpc('taam_ticket_sold_slots', { p_ticket_id: String(_t.id) }).then(function(r){
       if(currentTicket !== _t) return;   // 그 사이 다른 티켓 열림
       var d = (!r.error && r.data) || null; if(!d) return;
-      var remain = Math.max(0, cap - (parseInt(d.total)||0));
+      // 🆕 내가 잡은 홀드는 이 합계에 포함돼 있다 — 빼야 내 화면에 '매진'으로 보이지 않는다.
+      var _sold = parseInt(d.total)||0;
+      if (window._tkSeatHoldId) _sold = Math.max(0, _sold - (parseInt(window._tkSeatHoldPax||0)||0));
+      var remain = Math.max(0, cap - _sold);
       var lang = window._tkCurrentLang;
       var txt, fg, bg;
       if(remain <= 0){
@@ -18915,6 +18929,10 @@ function handleTicketAction(){
 //     완료되지 않은 홀드는 5분 뒤 자동 해제된다 (sql/seat_hold_5min.sql).
 // ═══════════════════════════════════════════════════════════
 window._tkSeatHoldId = null;   // 현재 잡고 있는 홀드의 purchase_id
+// 🆕 그 홀드가 잡은 인원수. 좌석 조회(taam_ticket_sold_slots)는 hold 행도 점유로 세므로,
+//   "내 홀드"는 잔여석 계산에서 빼야 한다. 안 그러면 마지막 좌석을 잡은 본인이
+//   자기 홀드 때문에 매진으로 거절된다(자기차단) — 정원 1석 티켓은 100% 발생.
+window._tkSeatHoldPax = 0;
 
 async function _tkAcquireSeatHold(t, r, pax){
   if (!window.sb) return { ok:false, reason:'서버 연결이 없습니다' };
@@ -18954,6 +18972,7 @@ async function _tkAcquireSeatHold(t, r, pax){
     return { ok:false, reason:'좌석 확보에 실패했습니다 — 잠시 후 다시 시도해주세요' };
   }
   window._tkSeatHoldId = purchaseId;
+  window._tkSeatHoldPax = pax;          // 잔여석 계산에서 내 홀드를 빼기 위해 기록
   console.log('[seatHold] 확보:', purchaseId, pax + '석');
   return { ok:true, purchaseId: purchaseId };
 }
@@ -18963,6 +18982,7 @@ async function _tkReleaseSeatHold(){
   var pid = window._tkSeatHoldId;
   if (!pid || !window.sb) return;
   window._tkSeatHoldId = null;
+  window._tkSeatHoldPax = 0;
   try {
     await window.sb.rpc('taam_release_seat_hold', { p_purchase_id: pid });
     console.log('[seatHold] 반납:', pid);
@@ -19527,6 +19547,13 @@ async function completePurchase(){
       if (_sd) {
         var _st = parseInt(_sd.total, 10); if(!isNaN(_st)) _soldAll = _st;
         var _sc = parseInt(_sd['s'+pax], 10); if(!isNaN(_sc)) _soldSlotCnt = _sc;
+        // 🆕 내 홀드는 이미 이 합계에 포함돼 있다 — 빼지 않으면 내 좌석을 두 번 세어
+        //   "본인이 잡은 마지막 좌석 때문에 본인이 매진으로 거절"된다.
+        if (window._tkSeatHoldId) {
+          var _myHold = parseInt(window._tkSeatHoldPax || 0) || 0;
+          if (_soldAll >= 0 && _myHold > 0) _soldAll = Math.max(0, _soldAll - _myHold);
+          if (_soldSlotCnt >= 0 && _myHold === pax) _soldSlotCnt = Math.max(0, _soldSlotCnt - 1);
+        }
       }
     } catch(_se){}
     // ② 총 정원 초과 차단
@@ -19594,6 +19621,7 @@ async function completePurchase(){
   if (window._tkSeatHoldId) {
     var _hid = window._tkSeatHoldId;
     window._tkSeatHoldId = null;          // 전환했으므로 더는 반납 대상이 아니다
+    window._tkSeatHoldPax = 0;
     (async function(){
       try {
         var _up = await window.sb.from('tickets')
