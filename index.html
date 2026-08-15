@@ -11736,6 +11736,7 @@ var _currentAdminRestId = null;
 var _currentAdminRestName = '';
 var _currentUserPhone = '';
 var _currentUserName = '';
+var _currentUserEmail = '';   // 🆕 로그인 계정 이메일 (재구매 제한 면제 판정 등에 사용)
 var inviteCodes = [
   {
     code: 'TAAM2025',
@@ -15629,6 +15630,7 @@ function _refreshMyPageUserName(){
       // 🆕 2026.05.21: 가입 이메일 즉시 표시 (auth.user.email 사용)
       var authEmail = user.email || '';
       if(authEmail){
+        _currentUserEmail = authEmail;   // 🆕 재구매 제한 면제 판정에 사용
         var emailEl = document.getElementById('mpUserEmailText');
         if(emailEl) emailEl.textContent = authEmail;
       }
@@ -15651,6 +15653,7 @@ function _refreshMyPageUserName(){
             }
             // 🆕 profiles.email 이 있으면 그것 사용 (auth.email 폴백)
             if(profRes.data.email){
+              _currentUserEmail = profRes.data.email;   // 🆕 재구매 제한 면제 판정에 사용
               var emailEl2 = document.getElementById('mpUserEmailText');
               if(emailEl2) emailEl2.textContent = profRes.data.email;
             }
@@ -19958,7 +19961,35 @@ function closeDonePopup(){
   closeTicketDetail();
 }
 
+// 🆕 2026.08: 재구매 제한 면제 계정
+//   앱 심사 중 심사위원이 테스트 계정으로 같은 매장을 반복 구매해 보는데,
+//   레스토랑별 재구매 제한(repurchaseDay)에 걸려 테스트가 막힌다.
+//   → 테스트 계정과 슈퍼어드민만 면제한다. 일반 회원 정책은 그대로 유지.
+var TAAM_REPURCHASE_EXEMPT_EMAILS = ['ripe0315@naver.com'];
+
+function _tkRepurchaseExempt(){
+  try {
+    // ① 슈퍼어드민 (환경에 따라 두 표기가 모두 존재)
+    if (typeof _currentRole !== 'undefined'
+        && (_currentRole === 'superadmin' || _currentRole === 'super_admin')) return true;
+    // ② 면제 이메일 — 로그인 시 저장한 값 우선, 없으면 마이페이지에 표시된 값으로 폴백
+    var em = (typeof _currentUserEmail !== 'undefined' ? (_currentUserEmail || '') : '').trim().toLowerCase();
+    if (!em) {
+      var _el = document.getElementById('mpUserEmailText');
+      em = ((_el && _el.textContent) || '').trim().toLowerCase();
+    }
+    if (!em) return false;
+    return TAAM_REPURCHASE_EXEMPT_EMAILS.indexOf(em) >= 0;
+  } catch(e){ return false; }
+}
+window._tkRepurchaseExempt = _tkRepurchaseExempt;
+
 function checkRepurchaseLimit(t){
+  // 면제 계정은 재구매 제한을 적용하지 않는다 (심사용 테스트 계정 · 슈퍼어드민)
+  if (_tkRepurchaseExempt()) {
+    console.log('[repurchase] 면제 계정 — 재구매 제한 통과');
+    return true;
+  }
   var r=restaurantDB.find(function(x){return String(x.id)===String(t.restId);});
   if(!r||!r.repurchaseDay||r.repurchaseDay===0)return true;
 
