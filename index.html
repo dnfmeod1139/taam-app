@@ -5753,6 +5753,8 @@ async function tossRequestCharge(){
   var raw = String((document.getElementById('tossChargeCustom')||{}).value||'').replace(/[^0-9]/g,'');
   var amt = parseInt(raw) || 0;
   if (amt < 1000) { showToast('⚠','금액 확인','1,000원 이상 입력해주세요'); return; }
+  // payment_orders RLS 의 상한과 같은 값 — 여기서 먼저 걸러 오류 메시지를 친절하게 준다
+  if (amt > 10000000) { showToast('⚠','금액 확인','1회 충전 한도는 1,000만원입니다'); return; }
   tossCloseCharge();
   _tossEnsureSdk(async function(){
     try {
@@ -5762,6 +5764,22 @@ async function tossRequestCharge(){
       if (!TOSS_KEYS[_cur]) _cur = 'KRW';
       var ctx = await _tossPaymentsCtx(_cur); if(!ctx) return;
       var oid = 'taamdep_' + Date.now() + '_' + Math.floor(Math.random()*100000);
+      // 🆕 2026.08: 결제창을 열기 **전에** 주문을 서버에 박아둔다.
+      //   승인(toss-confirm)은 브라우저가 보낸 금액이 아니라 이 행의 amount 를 신뢰한다.
+      //   이게 없으면 회원이 ₩1,000 결제하고 ₩1,000,000 적립받는 위변조가 가능하다.
+      var _ord = await window.sb.from('payment_orders').insert({
+        order_id: oid,
+        user_id: ctx.user.id,
+        purpose: 'deposit_charge',
+        amount: amt,
+        currency: ctx.currency,
+        status: 'pending'
+      });
+      if (_ord.error) {
+        console.warn('[toss] 주문 생성 실패:', _ord.error);
+        showToast('⚠','결제 준비 실패','잠시 후 다시 시도해주세요');
+        return;
+      }
       _tossMarkTrip();   // 결제창 왕복 표시 — 복귀 시 뷰포트 복원 트리거 (reload 견딤)
       await ctx.pay.requestPayment({
         method: 'CARD',
@@ -5915,28 +5933,118 @@ function showDepositShortageGuide(shortage){
     + '</div>';
   document.body.appendChild(el);
 }
-// ── 결제창 리다이렉트 복귀 처리 (테스트 단계: 안내만 — 실승인/충전은 정식 전환 시) ──
+// ── 🆕 2026.08: 토스 승인 요청 (Edge Function toss-confirm) ──
+//   토스 V2 는 ① 결제창 인증(브라우저) → ② 서버 승인(시크릿 키) 2단계다.
+//   ②를 호출하지 않으면 회원이 카드 인증을 마쳐도 미승인 건으로 자동 취소된다.
+//   금액은 서버(payment_orders.amount)가 기준이며, 여기서 보내는 amount 는 대조용이다.
+async function _tossConfirmPayment(paymentKey, orderId, amount){
+  if (!window.sb) return;
+  if (typeof showToast === 'function') showToast('⏳','결제 확인 중','잠시만 기다려주세요');
+
+  // 리다이렉트 직후에는 세션 복원이 아직 안 끝났을 수 있다 — 최대 5초 대기
+  var u = null;
+  for (var i = 0; i < 10; i++) {
+    try { var r = await window.sb.auth.getUser(); u = r && r.data && r.data.user; } catch(_e){}
+    if (u) break;
+    await new Promise(function(res){ setTimeout(res, 500); });
+  }
+  if (!u) {
+    showToast('⚠','로그인이 필요합니다','다시 로그인하시면 결제가 자동으로 확인됩니다');
+    return;
+  }
+
+  try {
+    var res = await window.sb.functions.invoke('toss-confirm', {
+      body: { paymentKey: paymentKey, orderId: orderId, amount: amount }
+    });
+    if (res && res.error) throw res.error;
+    var d = res && res.data;
+
+    if (d && d.ok) {
+      var _amt = Number(d.amount || amount) || 0;
+      showToast('✅', d.already ? '이미 처리된 결제입니다' : '충전 완료',
+        '₩' + _amt.toLocaleString() + ' 예치금에 반영되었습니다', { category: 'charge' });
+      if (typeof loadDeposit === 'function') { try { loadDeposit(); } catch(_le){} }
+      return;
+    }
+
+    var code = (d && d.error) || 'unknown';
+    if (code === 'credit_failed') {
+      // 승인은 됐는데 적립이 실패한 상태 — 돈은 받았으므로 "실패"라고 말하면 안 된다.
+      showToast('⚠','결제는 완료되었습니다',
+        '예치금 반영이 지연되고 있어요 — 잠시 후 확인되지 않으면 문의해 주세요');
+    } else if (code === 'amount_mismatch' || code === 'amount_mismatch_toss') {
+      showToast('⚠','금액이 일치하지 않습니다','결제가 취소되었습니다 — 다시 시도해주세요');
+    } else {
+      showToast('⚠','결제 승인 실패',
+        (d && d.reason) || '결제가 완료되지 않았습니다 — 출금된 금액이 있다면 문의해 주세요');
+    }
+    console.warn('[toss-confirm] 실패:', code, d);
+  } catch(e) {
+    console.warn('[toss-confirm] 예외:', e);
+    showToast('⚠','결제 확인 실패','네트워크 확인 후 마이페이지에서 잔액을 확인해주세요');
+  }
+}
+
+// ── 결제창 리다이렉트 복귀 처리 ──
 (function(){
   try {
     var q = location.search || '';
     var m = q.match(/[?&]toss_(pay|billing)=(success|fail)/);
     if (!m) return;
     var kind = m[1], ok = (m[2] === 'success');
+    // 쿼리를 지우기 전에 승인에 필요한 값을 먼저 챙긴다
+    var _pk = '', _oid = '', _amt = 0, _failMsg = '';
+    try {
+      var _qs = new URLSearchParams(q);
+      _pk  = _qs.get('paymentKey') || '';
+      _oid = _qs.get('orderId') || '';
+      _amt = parseInt(_qs.get('amount') || '0', 10) || 0;
+      _failMsg = _qs.get('message') || '';
+    } catch(_qe){}
     // 결제창(리다이렉트) 복귀 즉시 뷰포트 복원 — 하단 검정 공백/GNB 밀림 방지
     if (typeof _tossRestoreViewport === 'function') _tossRestoreViewport();
-    setTimeout(function(){
-      if (typeof showToast !== 'function') return;
-      // 🆕 2026.08: CARD_PAY_LIVE=false 동안 카드 경로가 막혀 있어 이 핸들러는 원칙적으로 안 탄다.
-      //   (구버전 캐시·직접 URL 진입 등 예외 상황 대비) 회원에게 "결제 완료"로 오인될 문구는 쓰지 않는다.
-      if (kind === 'pay') {
-        showToast('⚠','결제가 반영되지 않았습니다',
-          '현재는 예치금(계좌이체)으로만 이용하실 수 있습니다 — 출금된 금액이 있다면 문의해 주세요');
-      } else {
-        showToast('⚠','카드 등록이 반영되지 않았습니다',
-          '결제 수단 관리는 준비 중입니다');
-      }
-    }, 1500);
     try { history.replaceState(null, '', location.pathname); } catch(_he){}
+
+    // 카드 경로가 잠겨 있는 동안에는 승인을 시도하지 않는다.
+    //   (구버전 캐시·직접 URL 진입 대비) "결제 완료"로 오인될 문구를 쓰지 않는다.
+    if (typeof CARD_PAY_LIVE !== 'undefined' && !CARD_PAY_LIVE) {
+      setTimeout(function(){
+        if (typeof showToast !== 'function') return;
+        if (kind === 'pay') {
+          showToast('⚠','결제가 반영되지 않았습니다',
+            '현재는 예치금(계좌이체)으로만 이용하실 수 있습니다 — 출금된 금액이 있다면 문의해 주세요');
+        } else {
+          showToast('⚠','카드 등록이 반영되지 않았습니다','결제 수단 관리는 준비 중입니다');
+        }
+      }, 1500);
+      return;
+    }
+
+    // 빌링(결제수단 등록)은 아직 서버 처리가 없다 — 1차 범위는 예치금 충전
+    if (kind === 'billing') {
+      setTimeout(function(){
+        if (typeof showToast === 'function') showToast('⚠','카드 등록이 반영되지 않았습니다','결제 수단 관리는 준비 중입니다');
+      }, 1500);
+      return;
+    }
+
+    if (!ok) {
+      setTimeout(function(){
+        if (typeof showToast === 'function') showToast('⚠','결제가 취소되었습니다', _failMsg || '다시 시도해주세요');
+      }, 1200);
+      return;
+    }
+
+    if (!_pk || !_oid) {
+      setTimeout(function(){
+        if (typeof showToast === 'function') showToast('⚠','결제 정보가 없습니다','마이페이지에서 잔액을 확인해주세요');
+      }, 1200);
+      return;
+    }
+
+    // 승인 — 앱 부팅이 어느 정도 끝난 뒤 실행
+    setTimeout(function(){ _tossConfirmPayment(_pk, _oid, _amt); }, 1200);
   } catch(_e){}
 })();
 // 결제창 왕복 후 복귀 — 어떤 경로(리다이렉트 reload · bfcache · 취소닫기 · 앱복귀)로도 복원.
