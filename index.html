@@ -8204,7 +8204,7 @@ window.closePromoCarousel = function(){
   <div class="mp-dh-tabs" style="flex-shrink:0;">
     <div class="mp-dh-tab active" onclick="ticketHistTab(0,this)" data-i18n="mp_sub.th_tab_upcoming">방문 예정</div>
     <div class="mp-dh-tab" onclick="ticketHistTab(1,this)" data-i18n="mp_sub.th_tab_completed">방문 완료</div>
-    <div class="mp-dh-tab" onclick="ticketHistTab(2,this)" data-i18n="mp_sub.th_tab_cancelled">취소</div>
+    <div class="mp-dh-tab" onclick="ticketHistTab(2,this)" data-i18n="mp_sub.th_tab_cancelled_refund">취소·환불</div>
   </div>
   <div class="mp-sub-scroll" id="ticketHistList"></div>
 </div>
@@ -22007,7 +22007,49 @@ function ticketHistRender(idx){
     refunded:  {bg:'#DDF1E6', bd:'#BFE6CF', dot:'#1E9E5A', tx:'#1E9E5A'}
   };
 
-  list.innerHTML = filtered.map(function(h){
+  // 🆕 2026.08: 취소 탭 맨 위에 '내가 돌려받은 돈' 요약 — 환불 내역을 한눈에 찾을 수 있게.
+  //   예치금으로 돌아온 금액과 카드로 환불되는 금액을 나눠서 보여주고,
+  //   카드 환불이 아직 처리 중이면 그 금액도 따로 표시한다.
+  var _histHeader = '';
+  if(idx === 2){
+    var _sDep = 0, _sCard = 0, _sCardWait = 0;
+    filtered.forEach(function(x){
+      var b = _tkPayBreakdown(x);
+      var ra = (x.refundedAmount != null) ? x.refundedAmount
+             : ((x.extra_data && x.extra_data.refunded_amount != null) ? (parseInt(x.extra_data.refunded_amount)||0) : 0);
+      var d = (b.depositRefund != null) ? b.depositRefund : (b.isCard ? Math.min(ra, b.depositUsed) : ra);
+      _sDep += (d || 0);
+      _sCard += b.cardRefund;
+      if(b.cardRefund > 0 && b.cardRefundStatus !== 'done') _sCardWait += b.cardRefund;
+    });
+    var _sTotal = _sDep + _sCard;
+    if(_sTotal > 0){
+      _histHeader = '<div style="background:#fff;border-radius:20px;box-shadow:0 4px 18px rgba(30,20,10,0.07);padding:18px 20px;margin-bottom:16px;font-family:'+_thF+';">'
+        + '<div style="font-size:11px;font-weight:800;letter-spacing:1.1px;color:#B4B0A8;">REFUND SUMMARY</div>'
+        + '<div style="margin-top:8px;display:flex;align-items:baseline;justify-content:space-between;">'
+        +   '<span style="font-size:14px;font-weight:700;color:#7A7268;">환불 총액</span>'
+        +   '<span style="font-size:24px;font-weight:800;color:#1E9E5A;letter-spacing:-0.5px;">₩'+_sTotal.toLocaleString()+'</span>'
+        + '</div>'
+        + '<div style="height:1px;background:#EFEDE7;margin:12px 0 9px;"></div>'
+        + '<div style="display:flex;align-items:center;justify-content:space-between;padding:3px 0;">'
+        +   '<span style="font-size:13px;font-weight:600;color:#9A9486;">예치금으로 환불</span>'
+        +   '<span style="font-size:14.5px;font-weight:700;color:#26211D;">₩'+_sDep.toLocaleString()+'</span>'
+        + '</div>'
+        + (_sCard > 0
+            ? ('<div style="display:flex;align-items:center;justify-content:space-between;padding:3px 0;">'
+               +   '<span style="font-size:13px;font-weight:600;color:#9A9486;">카드로 환불</span>'
+               +   '<span style="font-size:14.5px;font-weight:700;color:#26211D;">₩'+_sCard.toLocaleString()+'</span>'
+               + '</div>'
+               + (_sCardWait > 0
+                   ? ('<div style="margin-top:8px;padding:8px 11px;border-radius:9px;background:#FFF6E8;border:1px solid #F2E0BC;font-size:11.5px;font-weight:700;color:#9A6B12;">'
+                      + '처리 중 ₩'+_sCardWait.toLocaleString()+' · 완료되면 알림을 보내드려요</div>')
+                   : ''))
+            : '')
+        + '</div>';
+    }
+  }
+
+  list.innerHTML = _histHeader + filtered.map(function(h){
     var r = restaurantDB.find(function(x){ return String(x.id)===String(h.restId); });
     var s = h.status || 'upcoming';
     var bd = _tkPayBreakdown(h);   // 🆕 예치금/카드 결제 구성
@@ -22426,6 +22468,10 @@ async function cancelTicketPurchase(purchaseId, refundCalc, isSuperAdminOverride
             deposit_refund: _depositRefund,
             card_refund_pending: _cardRefund,
             paid_by: _isCardPurchase ? 'card+deposit' : 'deposit',
+            // 🆕 분류 키 — 위약금(penalty)이 아니라 '구매 취소 환불' 임을 명시한다.
+            //   이게 없으면 슈퍼어드민 화면이 (티켓가 − 예치금환원)을 위약금으로 잘못 계산한다.
+            refund_type: 'returned',
+            cancel_refund: true,
             cancelled_by: isSuperAdminOverride ? 'super_admin' : 'user'
           }
         });
@@ -23219,24 +23265,39 @@ async function _dmLoadSupabasePurchases(){
 
       if(refund){
         var meta = refund.metadata || {};
-        var refundAmt = Math.abs(refund.amount || 0);
-        var penaltyAmt = (t.price || 0) - refundAmt;
+        var refundAmt = Math.abs(refund.amount || 0);   // 예치금으로 돌아간 금액
+        // 🆕 2026.08: 카드 부분결제 취소는 '예치금 환원분' 만 deposit_transactions 에 남는다.
+        //   카드로 환불되는 금액(card_refund_pending)을 빼먹으면 그만큼이 위약금으로 잘못 잡힌다
+        //   (₩3,000 티켓의 카드분 ₩2,000 이 '위약금 67%' 로 표시되던 문제).
+        var _crpM = (t.extra_data && t.extra_data.card_refund_pending) || null;
+        var cardRefundAmt = _crpM ? (parseInt(_crpM.amount) || 0)
+                          : (parseInt(meta.card_refund_pending || 0) || 0);
+        var totalRefund = refundAmt + cardRefundAmt;     // 회원이 실제로 돌려받는 총액
+        var penaltyAmt = Math.max(0, (t.price || 0) - totalRefund);
         var rtype = meta.refund_type;
         if(!rtype){
-          // 레거시 데이터 추론: agency_held 있고 penalty_pct 없으면 반환완료
-          rtype = (meta.agency_held && !meta.penalty_pct) ? 'returned' : 'penalty';
+          // 회원/슈퍼어드민의 '구매 취소' 환불은 refund_type 을 남기지 않는다 — 위약금이 아니다.
+          //   실제로 돌아간 돈이 있으면 반환완료로 분류한다.
+          rtype = (totalRefund > 0) ? 'returned'
+                : ((meta.agency_held && !meta.penalty_pct) ? 'returned' : 'penalty');
         }
         h.depositReturn = {
           type: rtype,
           date: refund.created_at ? refund.created_at.slice(0,10).replace(/-/g, '.') : '',
           _ts: refund.created_at || '',                  // 🆕 정렬용 전체 타임스탬프
-          returnAmt: refundAmt,
-          penaltyAmt: meta.penalty_amt || Math.max(0, penaltyAmt),
+          returnAmt: totalRefund,                        // 예치금 + 카드 (돌려받는 총액)
+          depositRefund: refundAmt,                      // 🆕 그 중 예치금 환원분
+          cardRefund: cardRefundAmt,                     // 🆕 그 중 카드 환불분
+          cardRefundDone: !!(_crpM && _crpM.status === 'done'),
+          penaltyAmt: meta.penalty_amt || penaltyAmt,
           penaltyPct: meta.penalty_pct || (t.price > 0 ? Math.round(penaltyAmt / t.price * 100) : 0),
           agencyHeld: meta.agency_held || 0,
           extraDeduct: meta.extra_deduct || 0,     // 🆕 추가 차감 금액
           extraNote: meta.extra_note || '',        // 🆕 추가 차감 사유
-          note: meta.note || refund.description || ''
+          note: meta.note || refund.description || '',
+          // 🆕 구매 취소로 인한 환불 (방문 후 예치금 '반환' 과 구분해서 표시).
+          //   신규 데이터는 cancel_refund 플래그로, 과거 데이터는 상태로 판별한다.
+          isCancelRefund: !!meta.cancel_refund || (t.status === 'cancelled' && !meta.refund_type)
         };
       } else if(extraDr && extraDr.type){
         // ⚠ 폴백: ticket_refund row 가 없는데 tickets.extra_data 에 처리 기록이 있는 경우
@@ -23665,10 +23726,27 @@ function renderDmMgmtList(idx){
     } else if(idx === 1){
       // 반환완료 — 큰 금액 영역에서 이미 반환액+상세 표시. 여기엔 처리일자 + 추가차감 사유.
       var dr = h.depositReturn;
-      resultHtml = '<div class="dm-result-box dm-result-returned">'
-        +'✓ '+dr.date+' 반환 완료'
-        + (dr.extraDeduct > 0 ? '<br><span style="color:#B23A2E;font-weight:700;">추가 차감 ₩'+dr.extraDeduct.toLocaleString()+(dr.extraNote?' · 사유: '+escapeHtml(dr.extraNote):'')+'</span>' : '')
-        +'</div>';
+      if(dr.isCancelRefund || dr.cardRefund > 0){
+        // 🆕 구매 취소 환불 — 방문 후 '예치금 반환' 과 다른 건이므로 문구를 구분하고,
+        //   예치금 환원분과 카드 환불분을 실제 금액 그대로 보여준다 (위약금 아님).
+        resultHtml = '<div class="dm-result-box dm-result-returned">'
+          + '✓ ' + (dr.date||'') + ' 구매 취소 환불 ₩' + (dr.returnAmt||0).toLocaleString()
+          + '<br><span style="opacity:.85;">예치금 ₩' + (dr.depositRefund||0).toLocaleString()
+          + (dr.cardRefund > 0
+              ? (' &nbsp;·&nbsp; 카드 ₩' + dr.cardRefund.toLocaleString() + (dr.cardRefundDone ? ' (환불완료)' : ' (환불대기)'))
+              : '')
+          + '</span>'
+          + (dr.penaltyAmt > 0
+              ? ('<br><span style="color:#B23A2E;font-weight:700;">미환불 ₩' + dr.penaltyAmt.toLocaleString()
+                 + (dr.agencyHeld > 0 ? ' (대행비)' : '') + '</span>')
+              : '')
+          + '</div>';
+      } else {
+        resultHtml = '<div class="dm-result-box dm-result-returned">'
+          +'✓ '+dr.date+' 반환 완료'
+          + (dr.extraDeduct > 0 ? '<br><span style="color:#B23A2E;font-weight:700;">추가 차감 ₩'+dr.extraDeduct.toLocaleString()+(dr.extraNote?' · 사유: '+escapeHtml(dr.extraNote):'')+'</span>' : '')
+          +'</div>';
+      }
     } else if(idx === 3){
       // 🆕 카드환불 탭 — 취소 사유/시점만 간단히. 처리 UI 는 아래 cardBox 가 담당한다.
       //   (회원 취소 건은 depositReturn 이 없으므로 아래 '환불불가' 분기로 가면 안 된다)
@@ -23697,10 +23775,19 @@ function renderDmMgmtList(idx){
     var amtHtml;
     if(idx === 1){
       var dr1 = h.depositReturn || {};
-      var agencyHeld1 = dr1.agencyHeld || (dr1.agencyOnly ? (dr1.penaltyAmt||0) : 0);
-      var details1 = ['티켓가 ₩'+(h.amt||0).toLocaleString()];
-      if(agencyHeld1 > 0) details1.push('대행비 ₩'+agencyHeld1.toLocaleString());
-      if(dr1.penaltyAmt > 0 && agencyHeld1 === 0) details1.push('위약금 ₩'+dr1.penaltyAmt.toLocaleString()+' ('+dr1.penaltyPct+'%)');
+      var details1;
+      if(dr1.isCancelRefund || dr1.cardRefund > 0){
+        // 🆕 구매 취소 환불 — 결제수단별 실제 환불 내역 (위약금 개념 아님)
+        details1 = ['티켓가 ₩'+(h.amt||0).toLocaleString(),
+                    '예치금 환불 ₩'+(dr1.depositRefund||0).toLocaleString()];
+        if(dr1.cardRefund > 0) details1.push('카드 환불 ₩'+dr1.cardRefund.toLocaleString());
+        if(dr1.penaltyAmt > 0) details1.push('미환불 ₩'+dr1.penaltyAmt.toLocaleString());
+      } else {
+        var agencyHeld1 = dr1.agencyHeld || (dr1.agencyOnly ? (dr1.penaltyAmt||0) : 0);
+        details1 = ['티켓가 ₩'+(h.amt||0).toLocaleString()];
+        if(agencyHeld1 > 0) details1.push('대행비 ₩'+agencyHeld1.toLocaleString());
+        if(dr1.penaltyAmt > 0 && agencyHeld1 === 0) details1.push('위약금 ₩'+dr1.penaltyAmt.toLocaleString()+' ('+dr1.penaltyPct+'%)');
+      }
       amtHtml = '<div class="dm-item-amt" style="color:#2a6a2a;">₩'+(dr1.returnAmt||0).toLocaleString()+'</div>'
               + '<div style="font-size:11px;color:#888;margin-top:4px;line-height:1.6;letter-spacing:.02em;">'+details1.join(' &nbsp;·&nbsp; ')+'</div>';
     } else if(idx === 2){
@@ -31999,6 +32086,7 @@ var TRANSLATIONS = {
       th_tab_upcoming:'방문 예정',
       th_tab_completed:'방문 완료',
       th_tab_cancelled:'취소',
+      th_tab_cancelled_refund:'취소·환불',
       th_empty_upcoming:'예정된 방문이 없어요',
       th_empty_completed:'완료된 방문이 없어요',
       th_empty_cancelled:'취소된 티켓이 없어요',
@@ -32775,6 +32863,7 @@ var TRANSLATIONS = {
       th_tab_upcoming:'Upcoming',
       th_tab_completed:'Completed',
       th_tab_cancelled:'Cancelled',
+      th_tab_cancelled_refund:'Cancelled · Refunds',
       th_empty_upcoming:'No upcoming visits',
       th_empty_completed:'No completed visits',
       th_empty_cancelled:'No cancelled tickets',
@@ -33314,6 +33403,7 @@ TRANSLATIONS.ja = {
     th_tab_upcoming:'来店予定',
     th_tab_completed:'来店完了',
     th_tab_cancelled:'キャンセル',
+    th_tab_cancelled_refund:'キャンセル・返金',
     th_empty_upcoming:'来店予定はありません',
     th_empty_completed:'来店完了はありません',
     th_empty_cancelled:'キャンセルしたチケットはありません',
