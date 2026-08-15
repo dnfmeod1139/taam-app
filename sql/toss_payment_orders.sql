@@ -23,8 +23,15 @@ create table if not exists public.payment_orders (
   order_id     text primary key,                    -- 토스 orderId (클라이언트가 생성)
   user_id      uuid not null references auth.users(id) on delete cascade,
   purpose      text not null default 'deposit_charge',  -- deposit_charge | ticket_topup | membership
-  amount       bigint not null check (amount > 0),  -- 기대 금액 (원화 최소단위)
+  amount       bigint not null check (amount > 0),  -- 토스가 승인할 금액 (currency 기준)
   currency     text not null default 'KRW',
+  -- 🆕 해외 결제 대비 (USD/JPY MID 승인 후 사용).
+  --   원장은 원화 단일이므로 "승인 금액(amount·currency)" 과 "적립 금액(settle_krw)" 을
+  --   한 주문 안에 각각 고정해 둔다. 주문 생성 시점의 적용환율을 fx_rate 에 얼려두면
+  --   나중에 환율이 움직여도 이 주문의 두 숫자는 변하지 않아 정산·환불이 어긋나지 않는다.
+  --   KRW 결제면 settle_krw = amount, fx_rate = null.
+  settle_krw   bigint,                              -- 실제 예치금에 적립할 원화 금액
+  fx_rate      numeric(12,4),                       -- 적용환율 = 매매기준율 × (1 - 마진%)
   status       text not null default 'pending',     -- pending | paid | failed | canceled
   payment_key  text,                                -- 토스 paymentKey (승인 후 기록)
   method       text,                                -- 카드 / 계좌이체 …
@@ -57,7 +64,11 @@ create index if not exists payment_orders_user_created_idx
 comment on table public.payment_orders is
   '토스 결제 주문 원장. 결제창 열기 전에 pending 으로 만들고, toss-confirm 이 승인 후 paid 로 바꾼다';
 comment on column public.payment_orders.amount is
-  '기대 금액. 승인 시 토스가 돌려준 금액과 반드시 일치해야 하며, 예치금 적립도 이 값으로 한다';
+  '토스가 승인할 금액(currency 기준). 승인 시 토스가 돌려준 금액과 반드시 일치해야 한다';
+comment on column public.payment_orders.settle_krw is
+  '예치금에 적립할 원화 금액. KRW 결제면 amount 와 같고, 외화 결제면 주문 시점 적용환율로 환산한 값';
+comment on column public.payment_orders.fx_rate is
+  '주문 생성 시점의 적용환율(매매기준율 × (1 - 마진%)). 외화 결제만 채워진다';
 
 -- ── updated_at 자동 갱신 ──
 create or replace function public.touch_payment_orders_updated_at()
@@ -92,8 +103,19 @@ create policy payment_orders_insert_own on public.payment_orders
     and payment_key is null
     and approved_at is null
     -- 충전 금액 상·하한. 오타로 ₩1 이나 ₩10억이 들어가는 것을 막는다.
-    and amount between 1000 and 10000000
+    --   외화는 단위가 달라 별도 범위를 쓴다 (USD/JPY MID 승인 후 사용).
+    and (
+      (currency = 'KRW'  and amount between 1000 and 10000000)
+      or (currency = 'USD' and amount between 1 and 10000)
+      or (currency = 'JPY' and amount between 100 and 1500000)
+    )
   );
+
+-- ⚠ settle_krw / fx_rate 는 RLS 로 지킬 수 없다 (브라우저가 값을 정하기 때문).
+--   외화 결제를 열 때 toss-confirm 이 app_config.fx_settings 를 읽어
+--   settle_krw 를 **서버에서 다시 계산해 덮어쓰고**, 그 값으로만 적립해야 한다.
+--   클라이언트가 넣는 값은 화면 표시용 참고치로만 취급한다.
+--   (이걸 빠뜨리면 $1 결제하고 ₩10,000,000 적립받는 위변조가 가능하다)
 
 -- UPDATE / DELETE 정책은 일부러 만들지 않는다 (= 회원은 수정·삭제 불가)
 
