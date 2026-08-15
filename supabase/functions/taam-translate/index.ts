@@ -179,60 +179,27 @@ Deno.serve(async (req) => {
       "위 항목을 JSON 으로만 번역해. 코드블록(```)은 쓰지 마. translations 객체 하나만.",
     ].join("\n");
 
-    // ── Claude API 호출 ──
-    const claudeRes = await fetch(ANTHROPIC_API_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "anthropic-version": ANTHROPIC_VERSION,
-        "x-api-key": apiKey,
-      },
-      body: JSON.stringify({
-        model: CLAUDE_MODEL,
-        max_tokens: CLAUDE_MAX_OUTPUT_TOKENS,
-        system: DOMAIN_GUIDE,
-        messages: [{ role: "user", content: userPrompt }],
-      }),
-    });
-
-    if (!claudeRes.ok) {
-      const errText = await claudeRes.text();
-      console.error("Claude API error:", claudeRes.status, errText);
+    // ── Claude API 호출 (재시도 포함) ──
+    //   🆕 2026.08: 예전에는 첫 호출이 실패하면 그대로 500 을 반환했다.
+    //   Anthropic 은 트래픽에 따라 429(rate limit) · 529(overloaded) 를 수시로 돌려주는데,
+    //   재시도가 없으니 일괄 번역에서 40% 가 실패하고 그 노드는 계속 미번역으로 남았다.
+    //   재시도할 가치가 있는 상태코드에 지수 백오프를 걸고, 응답이 JSON 이 아니면
+    //   한 번 더 물어본다 (모델이 코드블록이나 설명을 덧붙이는 경우).
+    const claude = await callClaudeWithRetry(apiKey, userPrompt);
+    if (!claude.ok) {
+      console.error("Claude 호출 최종 실패:", claude.status, claude.detail);
       return jsonResp(
-        { error: `Claude API ${claudeRes.status}`, detail: errText },
-        500,
+        { error: claude.error, status: claude.status, detail: claude.detail, attempts: claude.attempts },
+        claude.status === 429 || claude.status === 529 ? 503 : 500,
       );
     }
-
-    const claudeData = await claudeRes.json();
-    const text = claudeData?.content?.[0]?.text ?? "";
-
-    // ── JSON 파싱 (코드블록 제거 후) ──
-    let parsed: any;
-    try {
-      const cleaned = text
-        .replace(/^```(?:json)?\s*/i, "")
-        .replace(/\s*```\s*$/i, "")
-        .trim();
-      parsed = JSON.parse(cleaned);
-    } catch (e) {
-      console.error("JSON parse failed:", text);
-      return jsonResp(
-        {
-          error: "Claude 응답 JSON 파싱 실패",
-          raw: text.slice(0, 2000),
-        },
-        500,
-      );
-    }
-
-    const translations = parsed.translations ?? parsed;
 
     return jsonResp({
-      translations,
+      translations: claude.translations,
       model: CLAUDE_MODEL,
-      token_usage: claudeData.usage ?? null,
+      token_usage: claude.usage ?? null,
       target_langs: targetLangs,
+      attempts: claude.attempts,
     }, 200);
   } catch (e) {
     console.error("taam-translate error:", e);
@@ -245,4 +212,116 @@ function jsonResp(body: unknown, status: number) {
     status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
+}
+
+// ── Claude 호출 + 재시도 ────────────────────────────────────────
+//   재시도 대상: 429(rate limit) · 529(overloaded) · 5xx · 네트워크 오류 · JSON 파싱 실패
+//   재시도 안 함: 400(잘못된 요청) · 401/403(키 문제) — 다시 불러도 같은 결과다
+const RETRY_STATUS = new Set([408, 409, 429, 500, 502, 503, 504, 529]);
+const MAX_ATTEMPTS = 4;
+
+type ClaudeOk = {
+  ok: true; translations: unknown; usage: unknown; attempts: number;
+};
+type ClaudeFail = {
+  ok: false; error: string; status: number; detail: string; attempts: number;
+};
+
+async function callClaudeWithRetry(
+  apiKey: string,
+  userPrompt: string,
+): Promise<ClaudeOk | ClaudeFail> {
+  let lastStatus = 0;
+  let lastDetail = "";
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    if (attempt > 1) {
+      // 1s → 2s → 4s (+ 지터). 동시에 여러 건이 돌 때 같은 순간에 몰리지 않게 흔든다.
+      const wait = Math.pow(2, attempt - 2) * 1000 + Math.floor(Math.random() * 400);
+      console.warn(`[taam-translate] 재시도 ${attempt}/${MAX_ATTEMPTS} — ${wait}ms 대기 (직전: ${lastStatus} ${lastDetail.slice(0, 120)})`);
+      await new Promise((r) => setTimeout(r, wait));
+    }
+
+    let res: Response;
+    try {
+      res = await fetch(ANTHROPIC_API_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "anthropic-version": ANTHROPIC_VERSION,
+          "x-api-key": apiKey,
+        },
+        body: JSON.stringify({
+          model: CLAUDE_MODEL,
+          max_tokens: CLAUDE_MAX_OUTPUT_TOKENS,
+          system: DOMAIN_GUIDE,
+          messages: [{ role: "user", content: userPrompt }],
+        }),
+      });
+    } catch (e) {
+      // 네트워크 오류 — 재시도 가치가 있다
+      lastStatus = 0;
+      lastDetail = String((e as Error)?.message ?? e);
+      continue;
+    }
+
+    if (!res.ok) {
+      lastStatus = res.status;
+      lastDetail = await res.text().catch(() => "");
+      if (RETRY_STATUS.has(res.status)) continue;
+      // 400/401/403 등은 다시 불러도 같으므로 즉시 포기
+      return {
+        ok: false, error: `Claude API ${res.status}`,
+        status: res.status, detail: lastDetail.slice(0, 500), attempts: attempt,
+      };
+    }
+
+    const data = await res.json().catch(() => null);
+    const text = data?.content?.[0]?.text ?? "";
+    const parsed = extractJson(text);
+
+    if (parsed === null) {
+      // 모델이 코드블록·설명을 덧붙였거나 출력이 잘렸다. 다시 물어본다.
+      lastStatus = 200;
+      lastDetail = "JSON 파싱 실패: " + String(text).slice(0, 300);
+      console.warn("[taam-translate] JSON 파싱 실패 — 재시도 예정");
+      continue;
+    }
+
+    return {
+      ok: true,
+      translations: (parsed as Record<string, unknown>).translations ?? parsed,
+      usage: data?.usage ?? null,
+      attempts: attempt,
+    };
+  }
+
+  return {
+    ok: false,
+    error: lastStatus === 200 ? "Claude 응답 JSON 파싱 실패" : `Claude API ${lastStatus}`,
+    status: lastStatus || 503,
+    detail: lastDetail.slice(0, 500),
+    attempts: MAX_ATTEMPTS,
+  };
+}
+
+// 코드블록·앞뒤 설명이 섞여 있어도 JSON 객체를 뽑아낸다. 실패하면 null.
+function extractJson(text: string): unknown | null {
+  if (!text) return null;
+  const cleaned = String(text)
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```\s*$/i, "")
+    .trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch (_e) { /* 아래에서 한 번 더 시도 */ }
+  // 설명이 앞뒤로 붙은 경우 — 첫 '{' 부터 마지막 '}' 까지만 떼어 본다
+  const s = cleaned.indexOf("{");
+  const e = cleaned.lastIndexOf("}");
+  if (s >= 0 && e > s) {
+    try {
+      return JSON.parse(cleaned.slice(s, e + 1));
+    } catch (_e2) { /* 포기 */ }
+  }
+  return null;
 }
