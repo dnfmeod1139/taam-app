@@ -13263,6 +13263,15 @@ async function savePurchase(){
 //   전액 환불(예치금 복원) + 구매기록 제거 + 회원 안내 + 슈퍼어드민 통지.
 async function _tkCapacityAutoRefund(row, user, errMsg){
   var amt = parseInt(row.price) || 0;
+  // 🆕 2026.08: 카드 결제분은 예치금에 적립하지 않는다 (이중 환불 방지).
+  //   예치금으로 낸 부분만 예치금 환원하고, 카드 부분은 토스 승인취소로 환불(서버 toss-confirm
+  //   이 좌석 상실 시 이미 처리) — 여기서 적립하면 카드+예치금 이중 환불이 된다.
+  var _rex = (row && row.extra_data) || {};
+  var _rCardPaid = parseInt(_rex.cardPaid || 0) || 0;
+  var _rDepUsed = parseInt(_rex.depositUsed || 0) || 0;
+  var _rIsCard = (_rCardPaid > 0) || (_rex.paidBy === 'card+deposit');
+  var _rCardRefund = _rIsCard ? Math.max(0, amt - Math.min(amt, _rDepUsed)) : 0;
+  if(_rIsCard) amt = Math.min(amt, _rDepUsed);   // 예치금 환원분으로 제한
   try {
     // 1) 로컬 구매기록 제거 (메모리 + IDB) — 서버에 행이 없으므로 기록도 없어야 정합
     purchaseHistory = purchaseHistory.filter(function(h){ return h.purchaseId !== row.purchase_id; });
@@ -22074,13 +22083,13 @@ function calculateTicketRefund(purchaseRecord, restaurant, currentTime, isSuperA
   }
   var daysUntilVisit = (visitDate - currentTime) / (1000 * 60 * 60 * 24);
 
-  // 정책 2: 방문일 30일 전까지 — 대행비 제외 환불
-  if(daysUntilVisit >= 30){
-    return { refundable: paidTotal - agencyTotal, agencyHeld: agencyTotal, reason: '방문 ' + Math.ceil(daysUntilVisit) + '일 전 — 대행비 제외 환불', policy: 'agency_excluded' };
+  // 정책 2: 방문 D-31 이상(31일 이상 남음) — 대행비 제외 환불 (약관 제3조 2)
+  if(daysUntilVisit >= 31){
+    return { refundable: paidTotal - agencyTotal, agencyHeld: agencyTotal, reason: '방문 ' + Math.floor(daysUntilVisit) + '일 전 — 대행비 제외 환불', policy: 'agency_excluded' };
   }
 
-  // 정책 3: 29일~당일 → 환불 불가
-  return { refundable: 0, agencyHeld: paidTotal, reason: '방문 ' + Math.max(0, Math.ceil(daysUntilVisit)) + '일 전 — 환불 불가 (슈퍼어드민 예외 가능)', policy: 'no_refund' };
+  // 정책 3: D-30 이하(방문 30일 이내) → 환불 불가 (약관 제3조 2)
+  return { refundable: 0, agencyHeld: paidTotal, reason: '방문 ' + Math.max(0, Math.floor(daysUntilVisit)) + '일 전 — 환불 불가 (슈퍼어드민 예외 가능)', policy: 'no_refund' };
 }
 window.calculateTicketRefund = calculateTicketRefund;
 
@@ -22154,11 +22163,20 @@ function openCancelTicketModal(purchaseId){
   msg += '방문일: ' + (h.visitDate || '미지정') + '\n\n';
   msg += '━━━━━━ 환불 정책 ━━━━━━\n';
   msg += '· 구매 30분 이내: 전액 환불\n';
-  msg += '· 방문일 D-30 이전: 대행비 제외 환불\n';
-  msg += '· D-29 ~ 당일: 환불 불가 (슈퍼어드민 예외 가능)\n\n';
+  msg += '· 방문일 D-31 이상: 대행비 제외 환불\n';
+  msg += '· D-30 ~ 당일: 환불 불가 (슈퍼어드민 예외 가능)\n\n';
   msg += '━━━━━━ 환불 미리보기 ━━━━━━\n';
   msg += '환불 가능 금액: ₩' + preview.refundable.toLocaleString() + '\n';
   if(preview.agencyHeld > 0) msg += '대행비 보유: ₩' + preview.agencyHeld.toLocaleString() + '\n';
+  // 🆕 카드 결제분은 카드로, 예치금 결제분은 예치금으로 나뉘어 환불됨을 안내
+  var _pex = h.extra_data || {};
+  var _pIsCard = ((parseInt(_pex.cardPaid || 0) || 0) > 0) || (_pex.paidBy === 'card+deposit');
+  if(_pIsCard && preview.refundable > 0){
+    var _pDep = Math.min(preview.refundable, parseInt(_pex.depositUsed || 0) || 0);
+    var _pCard = Math.max(0, preview.refundable - _pDep);
+    if(_pDep > 0) msg += ' └ 예치금 환불: ₩' + _pDep.toLocaleString() + '\n';
+    if(_pCard > 0) msg += ' └ 카드 환불(영업일 기준): ₩' + _pCard.toLocaleString() + '\n';
+  }
   msg += '사유: ' + preview.reason + '\n\n';
   if(preview.refundable === 0 && !isSuper){
     msg += '⚠ 현재 환불이 불가합니다.\n슈퍼어드민에게 문의해주세요.\n\n취소 요청만 진행하시겠습니까?';
@@ -22208,11 +22226,33 @@ async function cancelTicketPurchase(purchaseId, refundCalc, isSuperAdminOverride
   var h = purchaseHistory[idx];
   var r = restaurantDB.find(function(x){ return String(x.id) === String(h.restId); });
 
+  // 🆕 2026.08: 카드/예치금 결제분 분리 (이중 환불 방지)
+  //   카드로 결제한 금액은 실제 카드로 환불(토스 승인취소)해야 하므로 예치금에 적립하지 않는다.
+  //   예치금에 적립하면서 토스에서도 카드 환불을 하면 회원에게 금액이 이중으로 쌓인다.
+  //   → '예치금으로 낸 부분'만 예치금으로 환원하고, '카드로 낸 부분'은 카드 환불 대기로 남겨
+  //     슈퍼어드민에게 통지한다(토스에서 카드로 환불). 예치금 우선 배분:
+  //       예치금 환원 = min(환불가능액, 예치금 사용분)  ·  카드 환불 = 나머지
+  var _ex0 = h.extra_data || {};
+  var _cardPaidTotal = parseInt(_ex0.cardPaid || 0) || 0;
+  var _depositUsedTotal = parseInt(_ex0.depositUsed || 0) || 0;
+  var _isCardPurchase = (_cardPaidTotal > 0) || (_ex0.paidBy === 'card+deposit');
+  var _refundable = refundCalc.refundable || 0;
+  var _depositRefund, _cardRefund;
+  if(_isCardPurchase){
+    _depositRefund = Math.min(_refundable, _depositUsedTotal);   // 예치금으로 낸 부분만 예치금 환원
+    _cardRefund = Math.max(0, _refundable - _depositRefund);     // 나머지는 카드 환불(토스) 대상
+  } else {
+    _depositRefund = _refundable;   // 예치금 전용 구매 — 전액 예치금 환원
+    _cardRefund = 0;
+  }
+
   try {
     // 1) 로컬 purchaseHistory 업데이트
     h.status = 'cancelled';
     h.cancelledAt = new Date().toISOString();
-    h.refundedAmount = refundCalc.refundable;
+    h.refundedAmount = refundCalc.refundable;   // 회원이 돌려받는 총액(예치금+카드)
+    h.depositRefund = _depositRefund;           // 그 중 예치금 환원분
+    h.cardRefundPending = _cardRefund;          // 그 중 카드 환불(토스) 대기분
     h.cancelReason = refundCalc.reason;
     h.cancelledByRole = (typeof _currentRole !== 'undefined') ? _currentRole : 'user';
     savePurchase();
@@ -22220,24 +22260,38 @@ async function cancelTicketPurchase(purchaseId, refundCalc, isSuperAdminOverride
     // 2) Supabase tickets 테이블 업데이트 (await — 이후 좌석 재계산이 취소분을 반영하도록)
     if(window.sb && h.purchaseId){
       try {
+        var _cxExtra = Object.assign({}, h.extra_data || {}, {
+          cancelled_at: h.cancelledAt,
+          refunded_amount: h.refundedAmount,
+          deposit_refund: _depositRefund,
+          cancel_reason: h.cancelReason,
+          cancelled_by_role: h.cancelledByRole
+        });
+        // 카드로 낸 부분이 있으면 '카드 환불 대기'를 티켓 행에 남긴다 (예치금엔 적립 안 함).
+        //   슈퍼어드민이 토스에서 카드 환불 처리 후 status 를 done 으로 바꾸면 된다.
+        if(_cardRefund > 0){
+          _cxExtra.card_refund_pending = {
+            amount: _cardRefund,
+            order_id: _ex0.order_id || null,
+            reason: refundCalc.reason,
+            requested_at: h.cancelledAt,
+            status: 'pending'
+          };
+        }
         var _uRes = await window.sb.from('tickets').update({
           status: 'cancelled',
-          extra_data: Object.assign({}, h.extra_data || {}, {
-            cancelled_at: h.cancelledAt,
-            refunded_amount: h.refundedAmount,
-            cancel_reason: h.cancelReason,
-            cancelled_by_role: h.cancelledByRole
-          })
+          extra_data: _cxExtra
         }).eq('purchase_id', h.purchaseId);
         if(_uRes.error) console.warn('[cancel] tickets update 실패:', _uRes.error.message);
+        else h.extra_data = _cxExtra;
       } catch(_ue){ console.warn('[cancel] tickets update 예외:', _ue); }
     }
 
     // 🆕 2026.07: 좌석 해제 → 매진이었던 티켓을 실시간으로 판매중(active) 복귀
     await _tkMaybeReopen(h);
 
-    // 3) 환불 금액 만큼 예치금 복원 (general 우선)
-    if(refundCalc.refundable > 0 && window.sb){
+    // 3) 예치금으로 낸 부분만 예치금 복원 (general 우선). 카드로 낸 부분은 여기서 적립하지 않는다.
+    if(_depositRefund > 0 && window.sb){
       var auth = await window.sb.auth.getUser();
       var user = auth && auth.data && auth.data.user;
       if(user){
@@ -22247,25 +22301,28 @@ async function cancelTicketPurchase(purchaseId, refundCalc, isSuperAdminOverride
         var memBal = (profRes.data && profRes.data.membership_deposit_balance) || 0;
         var genBal = (profRes.data && profRes.data.general_deposit_balance) || 0;
         // 일반 예치금에 환불 (정책 — 사용처 분리)
-        var newGen = genBal + refundCalc.refundable;
+        var newGen = genBal + _depositRefund;
         var newTotal = memBal + newGen;
         await window.sb.from('profiles').update({
           general_deposit_balance: newGen
         }).eq('id', user.id);
 
-        // deposit_transactions 환불 기록
+        // deposit_transactions 환불 기록 (예치금 환원분만)
         await window.sb.from('deposit_transactions').insert({
           user_id: user.id,
           deposit_type: 'general',
           change_type: 'ticket_refund',
-          amount: refundCalc.refundable,
+          amount: _depositRefund,
           balance_after: newTotal,
-          description: (r ? r.name : '티켓') + ' 취소 환불 — ' + refundCalc.reason,
+          description: (r ? r.name : '티켓') + ' 취소 환불(예치금) — ' + refundCalc.reason,
           metadata: {
             purchase_id: purchaseId,
             ticket_id: h.id,
             policy: refundCalc.policy,
             agency_held: refundCalc.agencyHeld || 0,
+            deposit_refund: _depositRefund,
+            card_refund_pending: _cardRefund,
+            paid_by: _isCardPurchase ? 'card+deposit' : 'deposit',
             cancelled_by: isSuperAdminOverride ? 'super_admin' : 'user'
           }
         });
@@ -22274,9 +22331,9 @@ async function cancelTicketPurchase(purchaseId, refundCalc, isSuperAdminOverride
         currentDepositBalance = newTotal;
         depositData.refund = depositData.refund || [];
         depositData.refund.push({
-          name: (r ? r.name : '티켓') + ' 취소 환불',
+          name: (r ? r.name : '티켓') + ' 취소 환불(예치금)',
           date: new Date().toLocaleString('ko-KR'),
-          amt: refundCalc.refundable,
+          amt: _depositRefund,
           purchaseId: purchaseId
         });
         saveDeposit();
@@ -22288,10 +22345,16 @@ async function cancelTicketPurchase(purchaseId, refundCalc, isSuperAdminOverride
     //   send-push 는 role/all/topic scope 에서 호출자(취소한 회원) uid 를 자동 제외하므로
     //   슈퍼어드민만 수신. role 문자열이 환경에 따라 'superadmin'/'super_admin' 둘 다 존재 → 양쪽 발송.
     try {
-      var _cxTitle = h.isInvited ? '❌ 회원이 초대 티켓을 취소했습니다' : '❌ 회원이 티켓을 취소했습니다';
+      // 카드 환불 대기가 있으면 제목에 🔴 를 붙여 슈퍼어드민이 토스에서 카드 환불하도록 강조
+      var _cxTitle = (_cardRefund > 0 ? '🔴 카드 환불 필요 — ' : '')
+                   + (h.isInvited ? '회원이 초대 티켓을 취소했습니다' : '회원이 티켓을 취소했습니다');
       var _cxVisit = (h.visitDate || '') + (h.visitTime ? (' ' + h.visitTime) : '');
       var _cxBody = (r ? r.name : (h.restName || '티켓')) + ' · ' + _cxVisit + ' · ' + (h.pax || 1) + '인 · ₩' + (h.amt || 0).toLocaleString()
-                  + (refundCalc.refundable > 0 ? (' · 환불 ₩' + refundCalc.refundable.toLocaleString()) : ' · 환불 없음');
+                  + (_depositRefund > 0 ? (' · 예치금환불 ₩' + _depositRefund.toLocaleString()) : '')
+                  + (_cardRefund > 0
+                       ? ('\n💳 카드 환불 필요: ₩' + _cardRefund.toLocaleString()
+                          + ' (토스에서 승인취소' + (_ex0.order_id ? (' · 주문 ' + _ex0.order_id) : '') + ')')
+                       : (_depositRefund > 0 ? '' : ' · 환불 없음'));
       ['superadmin','super_admin'].forEach(function(_rl){
         try {
           window.sb.functions.invoke('send-push', {
@@ -22301,7 +22364,7 @@ async function cancelTicketPurchase(purchaseId, refundCalc, isSuperAdminOverride
                 title: _cxTitle,
                 body: _cxBody,
                 url: '/',
-                category: 'ticket_cancelled',
+                category: _cardRefund > 0 ? 'ticket_cancelled_card_refund' : 'ticket_cancelled',
                 tag: 'taam-tcancel-' + purchaseId
               }
             }
@@ -22310,9 +22373,18 @@ async function cancelTicketPurchase(purchaseId, refundCalc, isSuperAdminOverride
       });
     } catch(_ce){ console.warn('[cancel] 슈퍼어드민 푸시 예외:', _ce); }
 
-    showToast('✓','취소 완료', refundCalc.refundable > 0
-      ? '환불 ₩' + refundCalc.refundable.toLocaleString() + ' 처리됨'
-      : '취소 요청 완료 (환불 없음)');
+    // 회원 안내: 예치금 환원분과 카드 환불 예정분을 분리해 보여준다
+    var _cxMsg;
+    if(_cardRefund > 0 && _depositRefund > 0){
+      _cxMsg = '예치금 ₩' + _depositRefund.toLocaleString() + ' 환불 · 카드 ₩' + _cardRefund.toLocaleString() + ' 환불 예정';
+    } else if(_cardRefund > 0){
+      _cxMsg = '카드 ₩' + _cardRefund.toLocaleString() + ' 환불 예정 (영업일 기준 처리)';
+    } else if(_depositRefund > 0){
+      _cxMsg = '예치금 ₩' + _depositRefund.toLocaleString() + ' 환불 처리됨';
+    } else {
+      _cxMsg = '취소 요청 완료 (환불 없음)';
+    }
+    showToast('✓','취소 완료', _cxMsg);
 
     // 화면 새로고침
     if(typeof ticketHistRender === 'function') ticketHistRender(_ticketHistTabIdx || 0);
@@ -22561,6 +22633,14 @@ function _dmPersistBuyerChanges(h, refundToAdd, refundNote){
         var purchaseId = h.purchaseId;
         var dr = h.depositReturn || {};
 
+        // 🆕 2026.08: 카드/예치금 분리 (이중 환불 방지) — 슈퍼어드민 반환 처리도 동일 규칙.
+        //   카드로 낸 부분은 예치금에 적립하지 않고 카드 환불(토스) 대상으로만 남긴다.
+        var _sae = h.extra_data || {};
+        var _saIsCard = ((parseInt(_sae.cardPaid || 0) || 0) > 0) || (_sae.paidBy === 'card+deposit');
+        var _saDepUsed = parseInt(_sae.depositUsed || 0) || 0;
+        var _depCredit = _saIsCard ? Math.min(refundToAdd, _saDepUsed) : refundToAdd;
+        var _saCardRefund = _saIsCard ? Math.max(0, refundToAdd - _depCredit) : 0;
+
         // 🛡 2026.05.22: 중복 환불 가드 — 이미 ticket_refund row 가 있는지 확인
         //   회원이 이미 본인 마이페이지에서 취소(환불)받았는데 슈퍼어드민이 또 처리하면
         //   잔액이 중복 크레딧됨. 사전 차단.
@@ -22620,6 +22700,16 @@ function _dmPersistBuyerChanges(h, refundToAdd, refundNote){
             note: dr.note || refundNote || ''
           }
         });
+        // 카드로 낸 부분이 있으면 '카드 환불 대기'로 남긴다 (예치금엔 적립 안 함)
+        if(_saCardRefund > 0){
+          newExtra.card_refund_pending = {
+            amount: _saCardRefund,
+            order_id: _sae.order_id || null,
+            reason: dr.note || refundNote || dr.type || '슈퍼어드민 반환',
+            requested_at: new Date().toISOString(),
+            status: 'pending'
+          };
+        }
         await window.sb.from('tickets').update({
           status: ticketStatus,
           extra_data: newExtra
@@ -22633,8 +22723,9 @@ function _dmPersistBuyerChanges(h, refundToAdd, refundNote){
         var genBal = (profRes.data && profRes.data.general_deposit_balance) || 0;
 
         if (refundToAdd > 0 && userId) {
-          // 환불액 > 0: 일반 예치금에 크레딧
-          var newGen = genBal + refundToAdd;
+          // 예치금으로 낸 부분만 일반 예치금에 크레딧 (카드 부분은 토스에서 카드로 환불).
+          //   카드 전액 결제분이면 _depCredit=0 이라 예치금 잔액은 그대로, 카드 환불만 대기로 남는다.
+          var newGen = genBal + _depCredit;
           var newTotal = memBal + newGen;
           await window.sb.from('profiles').update({
             general_deposit_balance: newGen
@@ -22645,14 +22736,15 @@ function _dmPersistBuyerChanges(h, refundToAdd, refundNote){
           var _extraDesc = (dr.extraDeduct > 0)
             ? ' — 추가 차감 ₩' + dr.extraDeduct.toLocaleString() + ' (사유: ' + (dr.extraNote || '') + ')'
             : '';
+          var _cardDesc = (_saCardRefund > 0) ? (' · 카드 ₩' + _saCardRefund.toLocaleString() + ' 별도 환불(토스)') : '';
           var _dtDesc = dr.type === 'returned'
-            ? ((h.rest || '티켓') + ' 반환 완료' + _extraDesc)
-            : ((h.rest || '티켓') + ' 환불 처리 — ' + refundNote);
+            ? ((h.rest || '티켓') + ' 반환 완료(예치금)' + _extraDesc + _cardDesc)
+            : ((h.rest || '티켓') + ' 환불 처리(예치금) — ' + refundNote + _cardDesc);
           await window.sb.from('deposit_transactions').insert({
             user_id: userId,
             deposit_type: 'general',
             change_type: 'ticket_refund',
-            amount: refundToAdd,
+            amount: _depCredit,
             balance_after: newTotal,
             description: _dtDesc,
             metadata: {
@@ -22665,6 +22757,9 @@ function _dmPersistBuyerChanges(h, refundToAdd, refundNote){
               extra_deduct: dr.extraDeduct || 0,              // 🆕 추가 차감 금액
               extra_note: dr.extraNote || '',                 // 🆕 추가 차감 사유
               return_amt: dr.returnAmt || refundToAdd,
+              deposit_refund: _depCredit,                     // 🆕 예치금 환원분
+              card_refund_pending: _saCardRefund,             // 🆕 카드 환불(토스) 대기분
+              paid_by: _saIsCard ? 'card+deposit' : 'deposit',
               note: dr.note || refundNote,
               processed_by: 'super_admin',
               processed_at: new Date().toISOString()
