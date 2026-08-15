@@ -305,7 +305,11 @@ async function creditDeposit(
   const { error: trxErr } = await admin.from('deposit_transactions').insert({
     user_id: userId,
     deposit_type: 'general',
-    change_type: 'charge',
+    // ⚠ 'charge' 가 아니라 'user_charge' 다. deposit_transactions_change_type_check 가
+    //   허용하는 값 목록에 'charge' 는 없어서 23514(check_violation)로 INSERT 가 거부됐다.
+    //   결제는 승인됐는데 적립만 실패해 fail_reason=credit_failed:transaction_insert_failed
+    //   가 남았다. 앱의 다른 충전 경로도 전부 'user_charge' 를 쓴다.
+    change_type: 'user_charge',
     amount: amount,
     balance_after: after,
     description: '카드 결제 · 토스페이먼츠',
@@ -321,7 +325,8 @@ async function creditDeposit(
   if (trxErr) {
     // 잔액은 이미 올랐는데 거래기록이 없다 = 정합성 깨짐. 잔액을 되돌린다.
     await admin.from('profiles').update({ general_deposit_balance: before }).eq('id', userId);
-    return { ok: false, error: 'transaction_insert_failed' };
+    console.error('[toss-confirm] deposit_transactions INSERT 실패', trxErr);
+    return { ok: false, error: 'transaction_insert_failed:' + String(trxErr.message || trxErr).slice(0, 200) };
   }
 
   return { ok: true, balance: after };
