@@ -20208,7 +20208,9 @@ function _resvGenreLabel(g){
 function _resvVenueName(id){
   if(typeof restaurantDB !== 'undefined'){
     var r = restaurantDB.find(function(x){ return String(x.id)===String(id); });
-    if(r) return r.name;
+    // 🆕 2026.08: 여기서 r.name(한글)을 그대로 돌려주는 바람에, 번역이 있어도
+    //   예약 요청 화면은 늘 한글이었다 (아래 큐레이션 인덱스까지 가지도 못했다).
+    if(r) return (typeof window.pickI18nField === 'function' && window.pickI18nField(r, 'name')) || r.name;
   }
   var v = (_prVenueIndex||{})[id];
   if(v) return _resvLocalizedName(v) || id;
@@ -20219,7 +20221,13 @@ function _resvVenueName(id){
 function _resvVenueSub(id){
   if(typeof restaurantDB !== 'undefined'){
     var r = restaurantDB.find(function(x){ return String(x.id)===String(id); });
-    if(r) return [r.city, r.genre].filter(Boolean).join(' · ');
+    if(r){
+      // 🆕 한글 외 언어에서는 영문 도시·장르를 우선한다
+      var _ko = (_resvLang() === 'ko');
+      var _c = _ko ? (r.city || r.cityEn) : (r.cityEn || r.city);
+      var _g = _ko ? r.genre : (r.genreEn || r.genre);
+      return [_c, _g].filter(Boolean).join(' · ');
+    }
   }
   var v = (_prVenueIndex||{})[id];
   if(v){
