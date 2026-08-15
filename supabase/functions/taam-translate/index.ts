@@ -230,8 +230,12 @@ const MAX_ATTEMPTS = 3;
 //   먼저 끊어 504 Gateway Timeout 이 났다. 재시도가 없던 때보다 더 나빠진 것이다.
 //   → 전체 예산 안에서만 재시도하고, 남은 시간이 부족하면 즉시 포기해 정상 응답을 돌려준다.
 //     클라이언트는 그 노드를 pending 으로 남겨두므로 다음 실행에서 자연스럽게 다시 시도된다.
-const TOTAL_BUDGET_MS = 55_000;    // 함수 전체
-const ATTEMPT_TIMEOUT_MS = 30_000; // 호출 1회 (긴 본문은 생성에 시간이 걸린다)
+//   ⚠ 처음에 55s/30s 로 잡았다가 정상 요청까지 죽였다. 계보도 노드 한 건은
+//     이름·부제·섹션 2개 본문을 EN+JA 두 벌로 뽑으므로 출력이 2,000~3,000 토큰이고,
+//     생성에만 40~60초가 걸린다. 30초 상한은 "느린 게 아니라 원래 그만큼 걸리는" 요청을
+//     전부 잘라냈다 (Response: {"status":0,"detail":"The signal has been aborted"}).
+const TOTAL_BUDGET_MS = 110_000;    // 함수 전체
+const ATTEMPT_TIMEOUT_MS = 100_000; // 호출 1회
 
 type ClaudeOk = {
   ok: true; translations: unknown; usage: unknown; attempts: number;
@@ -285,13 +289,18 @@ async function callClaudeWithRetry(
         }),
       });
     } catch (e) {
-      // 네트워크 오류 · 타임아웃 — 재시도 가치가 있다
       lastStatus = 0;
       lastDetail = String((e as Error)?.message ?? e);
-      continue;
-    } finally {
       clearTimeout(timer);
+      // 상한에 걸려 끊긴 것이라면 다시 불러도 같은 시간이 걸려 또 끊긴다.
+      // 재시도는 시간만 태우므로 즉시 포기한다 (네트워크 오류만 재시도한다).
+      if (ctrl.signal.aborted) {
+        console.error("[taam-translate] 호출 상한 초과 —", ATTEMPT_TIMEOUT_MS, "ms");
+        break;
+      }
+      continue;
     }
+    clearTimeout(timer);
 
     if (!res.ok) {
       lastStatus = res.status;
