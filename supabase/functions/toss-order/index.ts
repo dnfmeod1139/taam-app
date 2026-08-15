@@ -75,13 +75,15 @@ serve(async (req) => {
     // ── ① 티켓 조회 ──
     const { data: ticket, error: tErr } = await admin
       .from('ticket_products')
-      .select('id, restaurant_id, meal_fee, agency_fee, wine_min, total_pax, slots, min_tier, status, type_class')
+      // ⚠ 컬럼명은 restaurant_id 가 아니라 rest_id 다. 틀리면 SELECT 자체가 실패해
+      //   ticket_lookup_failed 로 떨어진다 (실제로 그렇게 막혔다).
+      .select('id, rest_id, rest_name, meal_fee, agency_fee, wine_min, total_pax, slots, min_tier, status, type_class')
       .eq('id', ticketId)
       .maybeSingle();
 
     if (tErr) {
       console.error('[toss-order] 티켓 조회 실패', tErr);
-      return json({ ok: false, error: 'ticket_lookup_failed' });
+      return json({ ok: false, error: 'ticket_lookup_failed', detail: String(tErr.message || tErr).slice(0, 300) });
     }
     if (!ticket) return json({ ok: false, error: 'ticket_not_found' });
     if (ticket.status === 'soldout') return json({ ok: false, error: 'sold_out' });
@@ -171,7 +173,8 @@ serve(async (req) => {
       status: 'pending',
       metadata: {
         ticket_id: ticketId,
-        restaurant_id: ticket.restaurant_id || null,
+        restaurant_id: ticket.rest_id || null,
+        restaurant_name: ticket.rest_name || null,
         pax,
         total,
         balance_at_order: balance,
