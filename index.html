@@ -20208,7 +20208,9 @@ function _resvGenreLabel(g){
 function _resvVenueName(id){
   if(typeof restaurantDB !== 'undefined'){
     var r = restaurantDB.find(function(x){ return String(x.id)===String(id); });
-    if(r) return r.name;
+    // 🆕 2026.08: 여기서 r.name(한글)을 그대로 돌려주는 바람에, 번역이 있어도
+    //   예약 요청 화면은 늘 한글이었다 (아래 큐레이션 인덱스까지 가지도 못했다).
+    if(r) return (typeof window.pickI18nField === 'function' && window.pickI18nField(r, 'name')) || r.name;
   }
   var v = (_prVenueIndex||{})[id];
   if(v) return _resvLocalizedName(v) || id;
@@ -20219,7 +20221,13 @@ function _resvVenueName(id){
 function _resvVenueSub(id){
   if(typeof restaurantDB !== 'undefined'){
     var r = restaurantDB.find(function(x){ return String(x.id)===String(id); });
-    if(r) return [r.city, r.genre].filter(Boolean).join(' · ');
+    if(r){
+      // 🆕 한글 외 언어에서는 영문 도시·장르를 우선한다
+      var _ko = (_resvLang() === 'ko');
+      var _c = _ko ? (r.city || r.cityEn) : (r.cityEn || r.city);
+      var _g = _ko ? r.genre : (r.genreEn || r.genre);
+      return [_c, _g].filter(Boolean).join(' · ');
+    }
   }
   var v = (_prVenueIndex||{})[id];
   if(v){
@@ -33453,6 +33461,8 @@ async function _i18nBatch(cfg){
   var idCol = cfg.idCol || 'id';
   var cols = [idCol, 'i18n_status_en'];   // 🆕 행 단위 완료 표시
   cfg.fields.forEach(function(f){ cols.push(f.ko, f.en, f.jp); });
+  // 🆕 문맥 생성에 필요한 추가 컬럼 (예: 국가 — 일본 매장인지 한국 매장인지)
+  if (Array.isArray(cfg.extraCols)) cfg.extraCols.forEach(function(c){ cols.push(c); });
   var q = window.sb.from(cfg.table).select(cols.join(', '));
   // 🆕 회원에게 안 보이는 행은 번역하지 않는다 (시간·비용 절약)
   if (cfg.filter) q = cfg.filter(q);
@@ -33499,7 +33509,10 @@ async function _i18nBatch(cfg){
     });
     if (items.length === 0) continue;
     try {
-      var _res = await window.taamTranslate(items, cfg.ctx || '');
+      // 🆕 ctx 를 행별로 만들 수 있게 한다. 매장 국적을 알려주지 않으면
+      //   AI 가 일본 매장 상호까지 카타카나로 음차한다 (松川 → マツカワ).
+      var _ctx = (typeof cfg.ctx === 'function') ? cfg.ctx(r) : (cfg.ctx || '');
+      var _res = await window.taamTranslate(items, _ctx);
       // ⚠ 응답은 { translations: { <id>: {en, ja} } } 형태다.
       //   예전에 _res 를 직접 읽어 매핑이 전부 실패했고, 번역 없이 완료 표시만 저장됐다.
       var tr = _res && _res.translations;
@@ -33534,7 +33547,18 @@ function taamTranslateRestaurants(opts){
     table: 'restaurants', label: '레스토랑', dryRun: !!(opts && opts.dryRun),
     // 슈퍼어드민 전용 매장은 회원에게 노출되지 않으므로 번역 대상에서 제외
     filter: function(q){ return q.or('super_admin_only.is.null,super_admin_only.eq.false'); },
-    ctx: '한국·일본 프리미엄 다이닝 레스토랑 정보. 고유명사는 현지 통용 표기를 우선하고, 억지 의역을 피할 것.',
+    extraCols: ['country_en', 'city_en', 'region'],
+    // 🆕 매장 국적을 문맥에 실어 보낸다. 이게 없으면 일본 매장 상호도 카타카나로 음차된다.
+    ctx: function(r){
+      var country = (r.country_en || r.region || '').toString();
+      var isJP = /japan|jp|일본/i.test(country);
+      var isKR = /korea|kr|한국/i.test(country);
+      var where = [r.country_en, r.city_en].filter(Boolean).join(' · ');
+      var head = '한국·일본 프리미엄 다이닝 레스토랑 정보' + (where ? ' (' + where + ')' : '');
+      if (isJP) return head + '. ⚠ 이 매장은 **일본 매장**이다. 상호는 실제 일본어 표기(한자·히라가나)를 복원할 것. 카타카나 음차 금지.';
+      if (isKR) return head + '. 이 매장은 한국 매장이다. 일본어는 카타카나 음차가 맞다.';
+      return head + '. 고유명사는 현지 통용 표기를 우선하고, 억지 의역을 피할 것.';
+    },
     fields: [
       { ko:'name',        en:'name_en',        jp:'name_jp' },
       { ko:'description', en:'description_en', jp:'description_jp' },
