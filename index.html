@@ -33797,9 +33797,11 @@ async function _taamTranslateAllChefs(opts){
     }
   } catch(_we){ console.warn('[일괄 번역] Wake Lock 미지원/거부:', _we && _we.message); }
 
-  // 🆕 동시 실행 3개. 노드당 10~20초라 순차로는 117개에 30분이 걸렸고,
-  //   그 사이 탭이 잠들 확률이 그만큼 높았다. 셋씩 돌리면 1/3로 줄어든다.
-  var CONCURRENCY = opts.concurrency || 3;
+  // 🆕 동시 실행. 순차로는 노드당 10~20초라 100개에 30분이 걸렸다.
+  //   ⚠ 3으로 올렸더니 서버 쪽 재시도와 겹쳐 순간 호출이 몰렸고, Anthropic 429 가
+  //     늘면서 재시도가 길어져 Edge Function 이 504 Gateway Timeout 을 맞았다.
+  //     2 가 속도와 안정성의 균형점이다 (30분 → 15분).
+  var CONCURRENCY = opts.concurrency || 2;
   var _next = 0;
   async function _worker(){
     while (true) {
