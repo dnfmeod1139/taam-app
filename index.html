@@ -5419,6 +5419,45 @@ function cardPayEnabled(){
   return role === 'superadmin';
 }
 window.cardPayEnabled = cardPayEnabled;
+
+// 🆕 검증 스위치 토글 — PWA 에서는 콘솔을 쓸 수 없어 화면에서 켜고 끈다.
+//   localStorage 는 기기별이므로 테스트하려는 기기에서 각각 켜야 한다.
+function toggleCardPayTest(){
+  var role = (typeof _currentRole !== 'undefined') ? _currentRole : '';
+  if (role !== 'superadmin') {
+    if (typeof showToast === 'function') showToast('⚠','권한 없음','슈퍼어드민 전용 기능입니다');
+    return;
+  }
+  var on = false;
+  try {
+    on = localStorage.getItem('taamCardPayTest') === '1';
+    if (on) localStorage.removeItem('taamCardPayTest');
+    else    localStorage.setItem('taamCardPayTest', '1');
+    on = !on;
+  } catch(e){
+    if (typeof showToast === 'function') showToast('⚠','저장 실패','이 브라우저에서 localStorage 를 쓸 수 없습니다');
+    return;
+  }
+  cardPayTestSync();
+  if (typeof showToast === 'function') {
+    showToast(on ? '💳' : '🔒', on ? '카드 결제 테스트 ON' : '카드 결제 테스트 OFF',
+      on ? '이 기기에서만 카드 결제창이 열립니다 — 실제 결제됩니다'
+         : '이 기기에서 카드 결제가 다시 잠겼습니다');
+  }
+}
+window.toggleCardPayTest = toggleCardPayTest;
+
+// 메뉴 라벨에 현재 상태를 표시한다
+function cardPayTestSync(){
+  try {
+    var on = localStorage.getItem('taamCardPayTest') === '1';
+    var lbl = document.getElementById('cardPayTestLabel');
+    var sub = document.getElementById('cardPayTestSub');
+    if (lbl) lbl.textContent = on ? '💳 카드 결제 테스트 (이 기기) — 켜짐' : '💳 카드 결제 테스트 (이 기기) — 꺼짐';
+    if (sub) sub.style.color = on ? '#B23A2E' : '';
+  } catch(e){}
+}
+window.cardPayTestSync = cardPayTestSync;
 // 예치금 충전 계좌이체 안내에 표시할 실제 계좌 (계좌 변경 시 여기만 수정)
 var DEPOSIT_BANK_INFO = {
   bank:    '하나은행',
@@ -9002,6 +9041,16 @@ window.closePromoCarousel = function(){
             <div>
               <div class="admin-menu-text">🔍 일괄 번역 대상 확인 (dry-run)</div>
               <div class="admin-menu-sub">실제 호출 없이 번역 대상 노드만 카운트. 비용 추정용. 콘솔 + 토스트 확인</div>
+            </div>
+            <div class="admin-arrow">›</div>
+          </div>
+          <!-- 🆕 2026.08: 카드 결제 검증 스위치 (기기별).
+               localStorage 는 기기마다 별개라 PC 콘솔에서 켜도 폰 PWA 에는 적용되지 않는다.
+               PWA 는 주소창·콘솔이 없으므로 여기서 켤 수 있게 한다. -->
+          <div class="admin-menu-item" onclick="toggleCardPayTest()">
+            <div>
+              <div class="admin-menu-text" id="cardPayTestLabel">💳 카드 결제 테스트 (이 기기)</div>
+              <div class="admin-menu-sub" id="cardPayTestSub">CARD_PAY_LIVE 가 꺼져 있어도 이 기기에서만 카드 결제창을 연다. 슈퍼어드민 전용 · 검증 끝나면 반드시 끄세요</div>
             </div>
             <div class="admin-arrow">›</div>
           </div>
@@ -15201,6 +15250,7 @@ function adminDirectAccess(){
   var wrap = document.getElementById('appWrapper');
   if(wrap){ wrap.classList.add('ready'); wrap.style.display = 'block'; }
   loadRole(); // PIN으로 설정된 역할 로드
+  try{ if(typeof cardPayTestSync === 'function') cardPayTestSync(); }catch(e){}
   // 참고: bootAutoLogin 경로에서도 이 함수가 호출되는데, 거기서 이미 ready 처리됨
 
   if (_currentRole === 'superadmin') {
@@ -34317,6 +34367,25 @@ var TX_MAP = {
   '잠시 후 자동으로 다시 저장됩니다 · 기록은 안전하게 보존됐어요':['It will be saved again automatically in a moment — your record is safe','まもなく自動的に再保存されます — 記録は安全に保存されています'],
   '매진 — 자동 환불':['Sold out — automatic refund','完売 — 自動返金'],
 
+  // ── 예치금 부족 · 계좌 안내 팝업 ──
+  '예치금이 부족합니다':['Insufficient deposit','デポジットが不足しています'],
+  '부족 금액':['Amount short','不足額'],
+  '부족분을 카드로 결제합니다.':['The shortfall will be charged to your card.','不足分をカードで決済します。'],
+  '카드로 결제하기':['Pay by card','カードで支払う'],
+  '아래 계좌로 입금해 주시면':['Transfer to the account below','下記口座へお振り込みいただければ'],
+  '확인 후 예치금에 반영해 드립니다.':['and we will credit your deposit once confirmed.','確認後デポジットに反映いたします。'],
+  '은행':['Bank','銀行'],
+  '계좌번호':['Account number','口座番号'],
+  '예금주':['Account holder','口座名義'],
+  '하나은행':['Hana Bank','ハナ銀行'],
+  '주식회사 쓰리피프틴':['threefifteen co. ltd','株式会社スリーフィフティーン'],
+  '입금자명은':['Please make the transfer under','振込名義は'],
+  '회원 성함':['your registered name','会員ご本人のお名前'],
+  '으로 부탁드립니다.':['.','でお願いいたします。'],
+  '반영 후 다시 구매를 진행해 주세요.':['Please complete your purchase again once it is credited.','反映後、再度ご購入をお進めください。'],
+  '영업일 기준 확인 후 반영됩니다.':['Credited after confirmation on business days.','営業日ベースで確認後に反映されます。'],
+  '계좌번호 복사':['Copy account number','口座番号をコピー'],
+
   // ── 계보도 이름 (트리 헤더·투어 타이틀) ──
   '스기타 계보':['Sugita Lineage','すぎた系譜'],
   '카네사카 계보':['Kanesaka Lineage','かねさか系譜'],
@@ -34461,12 +34530,20 @@ var TX_RE = [
   [/(\d+)\s*일\s*전(?![가-힣])/g, ['$1 days before', '$1日前']],
 ];
 // 날짜는 월 이름이 필요해 별도 처리
+//   연도가 붙은 형태(2026년 9월 3일)를 먼저 잡는다. 안 그러면 '2026년 Sep 3' 처럼
+//   연도만 한글로 남는다 (실제로 취소규정에서 그렇게 나왔다).
 function _txDate(s, lang){
-  return s.replace(/(\d{1,2})\s*월\s*(\d{1,2})\s*일/g, function(_m, mo, d){
-    var mi = parseInt(mo, 10) - 1;
-    if (lang === 'ja') return mo + '月' + d + '日';
-    return (_TX_MONTHS_EN[mi] || mo) + ' ' + parseInt(d, 10);
+  var out = s.replace(/(\d{4})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일/g, function(_m, y, mo, d){
+    if (lang === 'ja') return y + '年' + parseInt(mo, 10) + '月' + parseInt(d, 10) + '日';
+    return (_TX_MONTHS_EN[parseInt(mo, 10) - 1] || mo) + ' ' + parseInt(d, 10) + ', ' + y;
   });
+  out = out.replace(/(\d{1,2})\s*월\s*(\d{1,2})\s*일/g, function(_m, mo, d){
+    if (lang === 'ja') return parseInt(mo, 10) + '月' + parseInt(d, 10) + '日';
+    return (_TX_MONTHS_EN[parseInt(mo, 10) - 1] || mo) + ' ' + parseInt(d, 10);
+  });
+  // 연도만 남은 경우 (2026년 → 2026)
+  out = out.replace(/(\d{4})\s*년(?![가-힣])/g, lang === 'ja' ? '$1年' : '$1');
+  return out;
 }
 
 var _txCache = { lang:null, exact:null, subs:null };
