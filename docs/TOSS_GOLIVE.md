@@ -54,19 +54,37 @@ Supabase Dashboard → Project Settings → Edge Functions → Secrets → Add n
 
 ⚠ 시크릿 키는 코드·커밋·채팅 어디에도 넣지 않는다. 여기에만 있어야 한다.
 
-## 3. Edge Function 배포
+## 3. Edge Function 배포 (두 개)
 
-`supabase/functions/toss-confirm/index.ts`
-
-CLI:
 ```bash
+supabase functions deploy toss-order   --project-ref edfsmzbcixfnqabrsvut
 supabase functions deploy toss-confirm --project-ref edfsmzbcixfnqabrsvut
 ```
 
-CLI 가 없으면 Dashboard → Edge Functions → Create function → 이름 `toss-confirm`
-→ 파일 내용 붙여넣기 → Deploy.
+CLI 가 없으면 Dashboard → Edge Functions → Create function → 이름 입력
+→ 파일 내용 붙여넣기 → Deploy. 두 개 다 해야 한다.
 
-이 함수가 지키는 것:
+### toss-order — 결제 금액을 서버가 정한다
+
+예전에는 결제 금액이 브라우저가 계산한 `window._pendingShortage` 였다.
+DevTools 로 그 값을 바꾸면 **₩500,000 짜리 티켓을 ₩1,000 에 살 수 있었다.**
+`payment_orders` 를 브라우저가 INSERT 하는 구조로는 막을 수 없다 — 회원이 금액을 정하기 때문이다.
+
+```
+POST toss-order { ticketId, pax, currency }
+  ① ticket_products 조회 · 판매 상태 확인
+  ② 이용 등급(min_tier) 검증        ← profiles.membership_tier + expires_at
+  ③ 좌석 검증                        ← taam_ticket_sold_slots RPC (총 정원 · 인원석 슬롯)
+  ④ total = (meal_fee + agency_fee + wine_min) × pax     ← 서버 계산
+  ⑤ shortage = max(0, total - 예치금 잔액)                ← 서버 조회
+  ⑥ payment_orders 생성 (service_role)
+  → { orderId, amount }
+```
+
+브라우저는 이 `orderId` / `amount` 로만 결제창을 연다.
+`payment_orders` 에 회원 INSERT 정책이 없으므로 다른 경로로는 주문을 만들 수 없다.
+
+### toss-confirm 이 지키는 것
 
 | 항목 | 방법 |
 |---|---|
@@ -97,7 +115,10 @@ var TOSS_CLIENT_KEY = 'live_ck_...';
 ## 5. 실결제 검증 후 플래그 해제
 
 `CARD_PAY_LIVE = false` 인 상태로 배포한 뒤, 슈퍼어드민 계정에서 한 번만 임시로
-`true` 로 바꿔 **₩1,000 실결제 1건**을 끝까지 돌린다.
+`true` 로 바꿔 **실결제 1건**을 끝까지 돌린다.
+
+검증용 티켓을 하나 만들어 두면 좋다 — 식사비 ₩1,000 / 대행비 ₩0 / 주류 ₩0,
+예치금 잔액 0 인 계정으로 1인 구매하면 부족분이 ₩1,000 이 된다.
 
 확인할 것:
 
@@ -116,7 +137,9 @@ select general_deposit_balance, charged_general_balance, granted_general_balance
 from public.profiles where id = auth.uid();
 ```
 
-- 성공 토스트 `충전 완료 · ₩1,000 예치금에 반영되었습니다` 확인
+- 성공 토스트 `충전 완료 · ₩1,000 예치금에 반영되었습니다` 확인 후 티켓 구매까지 완료되는지 확인
+- **금액 위변조 시도** — 결제 전 콘솔에서 `window._pendingShortage = 1` 로 바꿔도
+  실제 결제 금액이 서버가 계산한 금액 그대로인지 확인 (이게 toss-order 의 존재 이유다)
 - **복귀 페이지를 새로고침**해서 두 번 적립되지 않는지 확인 (`이미 처리된 결제입니다` 가 떠야 정상)
 - 토스 상점관리자에서 승인 건이 `DONE` 인지 확인
 - 확인 후 토스 상점관리자에서 **결제 취소**로 ₩1,000 환불
@@ -127,34 +150,6 @@ from public.profiles where id = auth.uid();
 ---
 
 ## 미구현 (다음 단계)
-
-- 🔴 **`toss-order` Edge Function — 이게 없으면 카드를 켤 수 없다**
-
-  지금 결제 금액은 브라우저가 계산한 `window._pendingShortage` 를 그대로 쓴다.
-  DevTools 로 이 값을 바꾸면 **₩500,000 짜리 티켓을 ₩1,000 만 내고 살 수 있다.**
-  `payment_orders` 를 브라우저가 만드는 구조로는 막을 수 없다 — 회원이 금액을 정하기 때문이다.
-
-  필요한 것: 주문 생성을 서버로 옮긴다.
-
-  ```
-  POST toss-order  { ticket_id, party_size, currency }
-    ① ticket_products 에서 meal_fee / agency_fee / wine_min 을 서버가 직접 읽는다
-    ② total   = (meal_fee + agency_fee + wine_min) × party_size   ← 서버 계산
-    ③ balance = profiles 의 예치금 잔액                            ← 서버 조회
-    ④ shortage = max(0, total - balance)
-    ⑤ payment_orders 에 { purpose:'ticket_topup', amount: shortage } 생성 (service_role)
-    → orderId 반환
-  ```
-
-  그다음 `tossPayTicketShortage()` 는 이 orderId 와 amount 로만 결제창을 연다.
-  `payment_orders` 의 회원 INSERT 정책은 그때 제거한다 (서버만 만들도록).
-
-  ⚠ 좌석 수·등급 제한·재구매 제한 같은 구매 자격도 ②에서 같이 검증해야 한다.
-  안 그러면 살 수 없는 티켓에 대해 결제부터 되고 나서 실패한다.
-
-- **승인 후 티켓 확정 처리** — `toss-confirm` 이 `ticket_topup` 을 아직 처리하지 않는다.
-  권장: 부족분을 예치금에 적립하고, 기존 예치금 차감 구매 로직이 그대로 이어받게 한다.
-  티켓 로직을 건드리지 않아 회귀 위험이 없고, 구매가 실패해도 예치금으로 남아 회수 가능하다.
 
 - **해외 통화 결제 (USD / JPY)** — MID 는 개설됐지만 토스 승인 대기 중이라 키를 넣지 않았다.
   승인되면 아래만 하면 된다. **원장 구조는 바꾸지 않는다.**

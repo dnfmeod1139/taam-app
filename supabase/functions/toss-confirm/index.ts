@@ -183,7 +183,11 @@ serve(async (req) => {
     }
 
     // ── 용도별 처리 ──
-    if (order.purpose === 'deposit_charge') {
+    //   ticket_topup 도 적립 방식은 같다. 부족분을 예치금에 넣어주면
+    //   기존 "예치금 차감 구매" 로직이 그대로 이어받는다.
+    //   티켓 확정 로직을 서버로 옮기지 않으므로 회귀 위험이 없고,
+    //   구매가 실패해도 돈은 예치금으로 남아 회수할 수 있다.
+    if (order.purpose === 'deposit_charge' || order.purpose === 'ticket_topup') {
       // 원장은 원화 단일이다. KRW 결제면 승인 금액이 곧 적립 금액이고,
       // 외화 결제면 서버가 다시 계산한 원화 환산액을 적립한다.
       //   ⚠ order.settle_krw 는 브라우저가 넣은 값이라 신뢰하지 않는다.
@@ -221,6 +225,8 @@ serve(async (req) => {
       return json({
         ok: true, orderId, amount: expected, currency: order.currency,
         creditedKrw: creditKrw, purpose: order.purpose, balance: credited.balance,
+        // 티켓 결제면 어느 티켓·몇 명이었는지 돌려준다 (복귀 후 구매 이어가기용)
+        ticket: order.purpose === 'ticket_topup' ? (order.metadata || null) : null,
       });
     }
 
@@ -302,7 +308,7 @@ async function creditDeposit(
     change_type: 'charge',
     amount: amount,
     balance_after: after,
-    description: '카드 충전 · 토스페이먼츠',
+    description: '카드 결제 · 토스페이먼츠',
     metadata: {
       order_id: orderId,
       payment_key: toss.paymentKey || null,
