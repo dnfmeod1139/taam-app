@@ -11879,7 +11879,7 @@ function _userKey(base) {
 // ── 공유 데이터 (레스토랑·티켓·회원·코드) ──
 function saveRestaurants(){
   // 1. 항상 IDB에도 백업 (오프라인 대비)
-  IDB.set('excRests', JSON.stringify(restaurantDB)).catch(function(){});
+  _idbSafeSet('excRests', restaurantDB, '레스토랑');
   
   // 2. Supabase DB에 동기화
   if(!window.sb) return Promise.resolve();
@@ -11941,7 +11941,7 @@ var payload = {
             }
           });
           // IDB도 갱신
-          if (typeof IDB !== 'undefined') IDB.set('excTickets', JSON.stringify(ticketDB)).catch(function(){});
+          if (typeof IDB !== 'undefined') _idbSafeSet('excTickets', ticketDB, '티켓');
         }
       }
     });
@@ -11950,7 +11950,7 @@ var payload = {
   return Promise.all(ops).then(function(){
     console.log('✅ 레스토랑 DB 동기화 완료:', restaurantDB.length, '개');
     // id 교체된 최신 상태로 IDB 다시 저장
-    IDB.set('excRests', JSON.stringify(restaurantDB)).catch(function(){});
+    _idbSafeSet('excRests', restaurantDB, '레스토랑');
   }).catch(function(e){
     console.warn('⚠️ DB 동기화 중 일부 실패:', e.message);
   });
@@ -12010,7 +12010,7 @@ return {
         };
       });
       console.log('✅ 레스토랑 DB에서 로드:', restaurantDB.length, '개');
-      IDB.set('excRests', JSON.stringify(restaurantDB)).catch(function(){});
+      _idbSafeSet('excRests', restaurantDB, '레스토랑');
     }).catch(function(e){
       console.warn('⚠️ DB 로드 실패, IDB 백업 사용:', e.message);
       return IDB.get('excRests').then(function(s){
@@ -12024,13 +12024,55 @@ return {
 }
 
 
-function saveTickets(){
-  // 1. IDB 저장 (기존)
-  IDB.set('excTickets', JSON.stringify(ticketDB)).catch(function(){});
-  
-  // 2. 🆕 Supabase 병렬 저장 (각 티켓 upsert)
+// 🛡 2026.08: 빈 값이 기존 백업을 덮어쓰지 못하게 막는 IDB 저장 래퍼.
+//   로딩 실패·세션 복원 중·역할 미확정 등으로 메모리 배열이 비어 있을 때 save* 가 돌면
+//   IDB 백업이 [] 로 덮여 "데이터가 통째로 사라진 것"처럼 보였다.
+//   → 새 값이 비었는데 저장된 값이 비어있지 않으면 저장을 건너뛴다.
+//     (실제 삭제는 각 도메인의 삭제 경로에서 명시적으로 일어난다)
+function _idbSafeSet(key, val, label){
+  try{
+    var isEmpty = (val == null)
+      || (Array.isArray(val) && val.length === 0)
+      || (typeof val === 'object' && !Array.isArray(val) && Object.keys(val).length === 0);
+    if(!isEmpty) return IDB.set(key, JSON.stringify(val)).catch(function(){});
+    return IDB.get(key).then(function(s){
+      var prevLen = 0;
+      try{
+        var p = s ? JSON.parse(s) : null;
+        prevLen = Array.isArray(p) ? p.length
+                : (p && typeof p === 'object' ? Object.keys(p).length : 0);
+      }catch(e){}
+      if(prevLen > 0){
+        console.warn('[idbSafe] ' + (label||key) + ' — 메모리가 비어 저장 생략 (보존 ' + prevLen + '건)');
+        return;
+      }
+      return IDB.set(key, JSON.stringify(val)).catch(function(){});
+    }).catch(function(){});
+  }catch(e){ return Promise.resolve(); }
+}
+window._idbSafeSet = _idbSafeSet;
+
+// onlyIds: 실제로 바뀐 티켓 id(들). 주면 그 티켓만 서버에 저장한다.
+function saveTickets(onlyIds){
+  // 1. IDB 저장 — 빈 배열로 백업을 날리지 않는다
+  _idbSafeSet('excTickets', ticketDB, '티켓');
+
+  // 2. Supabase 저장
+  //   ⚠ ticketDB 는 loadTickets() 가 IDB(로컬)에서만 읽어온다. 그래서 로컬이 낡아 있으면
+  //     여기서 전체를 upsert 할 때 낡은 값이 서버의 최신 티켓을 덮어써
+  //     날짜·상태가 과거로 되돌아간다 (티켓이 전량 만료로 보이던 사고의 경로).
+  //   → ① 비어 있으면 아무것도 밀지 않는다  ② 바뀐 티켓만 지정해 저장할 수 있게 한다.
   if(typeof saveTicketProductToSupabase === 'function' && window.sb){
-    ticketDB.forEach(function(t){
+    if(!Array.isArray(ticketDB) || ticketDB.length === 0){
+      console.warn('[saveTickets] ticketDB 가 비어 있어 서버 저장을 건너뜀');
+      return;
+    }
+    var _target = ticketDB;
+    if(onlyIds){
+      var _ids = (Array.isArray(onlyIds) ? onlyIds : [onlyIds]).map(String);
+      _target = ticketDB.filter(function(t){ return _ids.indexOf(String(t.id)) >= 0; });
+    }
+    _target.forEach(function(t){
       saveTicketProductToSupabase(t).catch(function(e){
         console.warn('⚠ ticket Supabase 저장 실패 (IDB는 성공):', t.id, e);
       });
@@ -12044,7 +12086,7 @@ function loadTickets(){
   }).catch(function(){ ticketDB = []; });
 }
 
-function saveMembers(){ IDB.set('excMembers', JSON.stringify(memberDB)).catch(function(){}); }
+function saveMembers(){ _idbSafeSet('excMembers', memberDB, '회원'); }
 function loadMembers(){
   return IDB.get('excMembers').then(function(s){
     memberDB = s ? JSON.parse(s) : [];
@@ -12098,7 +12140,10 @@ function _inviteFromSupabase(r){
 
 function saveInviteCodes(){
   // 1. IDB 백업
-  IDB.set('excInviteCodes', JSON.stringify(inviteCodes)).catch(function(){});
+  //   ⚠ loadInviteCodes() 는 슈퍼어드민이 아니면 inviteCodes=[] 로 비운다.
+  //     역할이 확정되기 전에 저장이 돌면 초대 발송 내역 백업이 통째로 날아가므로
+  //     빈 배열은 저장하지 않는다.
+  _idbSafeSet('excInviteCodes', inviteCodes, '초대코드');
   // 2. Supabase 동기화는 개별 add/update 시점에 함 (saveInviteCodes는 IDB만)
 }
 
@@ -12116,8 +12161,8 @@ function loadInviteCodes(){
       if(res.error) throw res.error;
       inviteCodes = (res.data || []).map(_inviteFromSupabase);
       console.log('[invite] Supabase 로드:', inviteCodes.length, '개');
-      // IDB에도 미러
-      IDB.set('excInviteCodes', JSON.stringify(inviteCodes)).catch(function(){});
+      // IDB에도 미러 (서버가 0건이면 기존 백업을 지우지 않는다)
+      _idbSafeSet('excInviteCodes', inviteCodes, '초대코드');
     }).catch(function(e){
       console.warn('[invite] Supabase 실패, IDB 폴백:', e.message);
       // 2순위: IDB 폴백
@@ -12132,7 +12177,7 @@ function loadInviteCodes(){
   }).catch(function(){ inviteCodes = []; });
 }
 
-function saveAdminCodes(){ IDB.set('excAdminCodes', JSON.stringify(adminCodes)).catch(function(){}); }
+function saveAdminCodes(){ _idbSafeSet('excAdminCodes', adminCodes, '어드민코드'); }
 function loadAdminCodes(){
   return IDB.get('excAdminCodes').then(function(s){
     if(s) adminCodes = JSON.parse(s) || [];
@@ -12144,7 +12189,7 @@ function loadAdminCodes(){
 var producersDB = [];
 var _editingProducer = null;
 
-function saveProducersDB(){ return IDB.set('excProducers', JSON.stringify(producersDB)).catch(function(){}); }
+function saveProducersDB(){ return _idbSafeSet('excProducers', producersDB, '생산자'); }
 function loadProducersDB(cb){
   return IDB.get('excProducers').then(function(s){
     producersDB = s ? JSON.parse(s) : [];
@@ -12157,7 +12202,7 @@ var productsDB = [];
 var _productsFilter = { type:'all' };
 var _editingProduct = null;
 
-function saveProductsDB(){ return IDB.set('excProducts', JSON.stringify(productsDB)).catch(function(){}); }
+function saveProductsDB(){ return _idbSafeSet('excProducts', productsDB, '상품'); }
 function loadProductsDB(cb){
   return IDB.get('excProducts').then(function(s){
     productsDB = s ? JSON.parse(s) : [];
@@ -12206,8 +12251,37 @@ function loadRole(){
 // 예치금 저장 (balance만 Supabase 업데이트, 내역은 IDB 유지 임시)
 async function saveDeposit(){
   try {
+    // 🛡 2026.08: 아직 안 불러온 상태(내역 0건 · 잔액 0)를 백업 위에 덮어쓰지 않는다.
+    //   로딩 중이거나 역할 미확정으로 _userKey 가 다른 키를 가리키는 순간에 저장이 돌면
+    //   예치금 내역·잔액이 통째로 0 으로 덮여 "예치금이 사라진 것"처럼 보였다.
+    var _dkey = _userKey('excDeposit');
+    var _dCount = 0;
+    try {
+      Object.keys(depositData || {}).forEach(function(k){
+        if(Array.isArray(depositData[k])) _dCount += depositData[k].length;
+      });
+    } catch(_ce){}
+    if(_dCount === 0 && !(currentDepositBalance > 0)){
+      var _prevOk = false;
+      try {
+        var _ps = await IDB.get(_dkey);
+        var _pd = _ps ? JSON.parse(_ps) : null;
+        if(_pd){
+          var _pc = 0;
+          Object.keys((_pd.data)||{}).forEach(function(k){
+            if(Array.isArray(_pd.data[k])) _pc += _pd.data[k].length;
+          });
+          _prevOk = (_pc > 0) || ((_pd.balance || 0) > 0);
+        }
+      } catch(_pe){}
+      if(_prevOk){
+        console.warn('[saveDeposit] 내역 0건·잔액 0 — 백업 덮어쓰기 생략');
+        return;   // 서버 잔액도 0 으로 밀지 않는다
+      }
+    }
+
     // 내역은 일단 IndexedDB에 백업 (나중에 purchases 테이블로 이관 예정)
-    await IDB.set(_userKey('excDeposit'), JSON.stringify({data:depositData,balance:currentDepositBalance}))
+    await IDB.set(_dkey, JSON.stringify({data:depositData,balance:currentDepositBalance}))
       .catch(function(e){ console.warn('[saveDeposit IDB backup] failed', e); });
 
     // 잔액만 Supabase에 저장
@@ -13466,7 +13540,7 @@ async function loadPurchase(){
 }
 
 
-function saveCards(){ IDB.set(_userKey('excCards'), JSON.stringify(cardList)).catch(function(){}); }
+function saveCards(){ _idbSafeSet(_userKey('excCards'), cardList, '결제수단'); }
 function loadCards(){
   return IDB.get(_userKey('excCards')).then(function(s){
     cardList = s ? JSON.parse(s)||[] : [];
@@ -22424,7 +22498,9 @@ async function _tkMaybeReopen(h){
     var usedPax = (rpcPax >= 0) ? rpcPax : localPax;
     if(usedPax < totalPax){
       t.status = 'active';                 // 판매중 복귀
-      try { saveTickets(); } catch(_){}    // IDB + Supabase(ticket_products) 반영 → 전 회원에게 판매중
+      // ⚠ 바뀐 티켓 하나만 서버에 저장한다. 전체를 밀면 로컬(IDB)의 낡은 값이
+      //   서버의 최신 티켓들을 덮어써 날짜·상태가 되돌아간다.
+      try { saveTickets(t.id); } catch(_){}
       try { if(typeof renderTickets === 'function') renderTickets(); } catch(_){}
     }
   } catch(e){ console.warn('[cancel] 좌석 재개방 예외:', e); }
@@ -26907,7 +26983,7 @@ async function rpDeleteRest(id) {
 
   // 2. DB 삭제 성공한 경우에만 메모리/IDB/UI 정리
   restaurantDB = restaurantDB.filter(function(r){ return String(r.id) !== String(id); });
-  if (typeof IDB !== 'undefined') IDB.set('excRests', JSON.stringify(restaurantDB)).catch(function(){});
+  if (typeof IDB !== 'undefined') _idbSafeSet('excRests', restaurantDB, '레스토랑');
   if (typeof syncTuRestList === 'function') syncTuRestList();
   if (typeof renderRestList === 'function') renderRestList();
   showToast('🗑','삭제 완료', (target.name || '레스토랑') + ' 삭제됨');
@@ -53851,7 +53927,7 @@ function applyPhotoToIconDiv(divEl, photoSrc){
       ticketDB = tickets;
       // IDB에도 백업 (오프라인 접속 대비) — 🛡 IDB 미정의 시 skip
       if (typeof IDB !== 'undefined' && IDB && typeof IDB.set === 'function') {
-        IDB.set('excTickets', JSON.stringify(ticketDB)).catch(function(){});
+        _idbSafeSet('excTickets', ticketDB, '티켓');   // 서버가 0건이면 백업 유지
       }
       
       // UI 리렌더
