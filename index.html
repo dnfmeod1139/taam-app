@@ -6067,7 +6067,11 @@ async function _tossConfirmPayment(paymentKey, orderId, amount){
     }
 
     var code = (d && d.error) || 'unknown';
-    if (code === 'credit_failed') {
+    if (code === 'order_not_found' || code === 'order_forbidden') {
+      // 이 앱이 만든 주문이 아니다 (구버전 캐시·직접 URL 진입 등)
+      showToast('⚠','결제가 반영되지 않았습니다',
+        '주문 정보를 찾을 수 없습니다 — 출금된 금액이 있다면 문의해 주세요');
+    } else if (code === 'credit_failed') {
       // 승인은 됐는데 적립이 실패한 상태 — 돈은 받았으므로 "실패"라고 말하면 안 된다.
       showToast('⚠','결제는 완료되었습니다',
         '예치금 반영이 지연되고 있어요 — 잠시 후 확인되지 않으면 문의해 주세요');
@@ -6104,20 +6108,13 @@ async function _tossConfirmPayment(paymentKey, orderId, amount){
     if (typeof _tossRestoreViewport === 'function') _tossRestoreViewport();
     try { history.replaceState(null, '', location.pathname); } catch(_he){}
 
-    // 카드 경로가 잠겨 있는 동안에는 승인을 시도하지 않는다.
-    //   (구버전 캐시·직접 URL 진입 대비) "결제 완료"로 오인될 문구를 쓰지 않는다.
-    if (typeof cardPayEnabled !== 'function' || !cardPayEnabled()) {
-      setTimeout(function(){
-        if (typeof showToast !== 'function') return;
-        if (kind === 'pay') {
-          showToast('⚠','결제가 반영되지 않았습니다',
-            '현재는 예치금(계좌이체)으로만 이용하실 수 있습니다 — 출금된 금액이 있다면 문의해 주세요');
-        } else {
-          showToast('⚠','카드 등록이 반영되지 않았습니다','결제 수단 관리는 준비 중입니다');
-        }
-      }, 1500);
-      return;
-    }
+    // ⚠ 여기서 cardPayEnabled() 로 막으면 안 된다.
+    //   결제창에서 돌아올 때 iOS PWA 는 앱을 새로 로드한다. 그 시점엔 아직 역할이
+    //   복원되기 전이라 superadmin 판정이 실패하고, 이미 결제된 건의 승인을 건너뛰었다.
+    //   (실제로 폰에서 '결제가 반영되지 않았습니다' 만 뜨고 승인이 안 됐다)
+    //   스위치는 "결제창을 여는 것"을 막으라고 둔 것이지, "이미 낸 돈의 승인"을 막으면
+    //   회원 돈이 미승인으로 자동 취소된다. 승인은 주문의 실재 여부로만 판단한다
+    //   — 서버가 주문 소유자·금액을 다시 검증하므로 여기서 더 막을 이유가 없다.
 
     // 빌링(결제수단 등록)은 아직 서버 처리가 없다 — 1차 범위는 예치금 충전
     if (kind === 'billing') {
@@ -39617,7 +39614,9 @@ function showToast(icon,title,msg,opts){
   }
   if(_toastTimer)clearTimeout(_toastTimer);
   // 🆕 탭 가능한 토스트는 탭할 시간을 주기 위해 노출을 길게 (6s), 일반 토스트는 2.5s
-  var _toastDur = opts.onTap ? 6000 : 2500;
+  //   🆕 오류·경고 토스트는 2.5초로는 읽을 수 없다 (실제로 문구를 놓쳐 원인 파악이 늦어졌다).
+  var _isWarn = (icon === '⚠' || icon === '❌' || icon === '🚫');
+  var _toastDur = opts.onTap ? 6000 : (_isWarn ? 7000 : 2500);
   _toastTimer=setTimeout(function(){
     el.classList.remove('show');
     setTimeout(function(){ el.style.display='none'; },380);
