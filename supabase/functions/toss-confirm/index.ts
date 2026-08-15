@@ -182,55 +182,66 @@ serve(async (req) => {
       return json({ ok: true, already: true, orderId, amount: expected, purpose: order.purpose });
     }
 
-    // ── 용도별 처리 ──
-    //   ticket_topup 도 적립 방식은 같다. 부족분을 예치금에 넣어주면
-    //   기존 "예치금 차감 구매" 로직이 그대로 이어받는다.
-    //   티켓 확정 로직을 서버로 옮기지 않으므로 회귀 위험이 없고,
-    //   구매가 실패해도 돈은 예치금으로 남아 회수할 수 있다.
-    if (order.purpose === 'deposit_charge' || order.purpose === 'ticket_topup') {
-      // 원장은 원화 단일이다. KRW 결제면 승인 금액이 곧 적립 금액이고,
-      // 외화 결제면 서버가 다시 계산한 원화 환산액을 적립한다.
-      //   ⚠ order.settle_krw 는 브라우저가 넣은 값이라 신뢰하지 않는다.
-      //     (그대로 믿으면 $1 결제하고 ₩10,000,000 적립받는 위변조가 가능하다)
-      let creditKrw = expected;
-      if (order.currency !== 'KRW') {
-        const converted = await convertToKrw(admin, expected, order.currency);
-        if (!converted.ok) {
-          await admin.from('payment_orders')
-            .update({ fail_reason: 'fx_unavailable:' + converted.error })
-            .eq('order_id', orderId);
-          console.error('[toss-confirm] 환율 조회 실패 — 수동 보정 필요', orderId, converted.error);
-          return json({ ok: false, error: 'credit_failed', paid: true, orderId });
+    // ── 티켓 부족분 카드 결제 → 티켓 직접 구매 ──
+    //   정책: 카드로 들어온 돈은 예치금을 거치지 않고 그 자리에서 티켓을 산다.
+    //   총액 = 예치금 사용분(deposit_used) + 카드 결제분(shortage).
+    //   좌석은 "결제하기" 시점에 이미 홀드로 잡혀 있으므로, 여기서는 그 홀드를
+    //   실제 구매(status='active')로 전환하기만 하면 된다 — 좌석이 비지 않는다.
+    if (order.purpose === 'ticket_topup') {
+      const meta = (order.metadata || {}) as Record<string, unknown>;
+      const total = Number(meta.total || 0);
+      const depositUsed = Math.max(0, Number(meta.deposit_used || 0));
+      const holdId = String(meta.hold_purchase_id || '');
+      const cardPaid = expected;   // 카드로 실제 승인된 금액
+
+      // ① 예치금 사용분 차감 (있으면). 결제 진행 중 잔액이 줄었을 수 있으니
+      //   실제 잔액을 다시 읽어 그만큼만 뺀다 (음수 방지 · 회원 불리 방지).
+      let deductedDeposit = 0;
+      if (depositUsed > 0) {
+        const ded = await deductDeposit(admin, user.id, depositUsed, {
+          purchase_id: holdId, ticket_id: meta.ticket_id, restaurant_name: meta.restaurant_name,
+          party_size: meta.pax, order_id: orderId,
+        });
+        deductedDeposit = ded.deducted;
+        if (ded.deducted < depositUsed) {
+          console.warn('[toss-confirm] 예치금 부족(결제 중 변동) — 뺀 금액', ded.deducted, '/', depositUsed, orderId);
         }
-        creditKrw = converted.krw;
-        await admin.from('payment_orders')
-          .update({ settle_krw: creditKrw, fx_rate: converted.rate })
-          .eq('order_id', orderId);
-      } else {
-        await admin.from('payment_orders')
-          .update({ settle_krw: creditKrw })
-          .eq('order_id', orderId);
       }
 
-      const credited = await creditDeposit(admin, user.id, creditKrw, orderId, toss);
-      if (!credited.ok) {
-        // 승인은 됐는데 적립에 실패한 상태. 돈은 받았으므로 주문을 되돌리지 않고
-        // 흔적을 남겨 슈퍼어드민이 수동 보정할 수 있게 한다.
+      // ② 좌석 홀드를 실제 구매로 전환
+      const conv = await convertHoldToActive(admin, user.id, holdId, order, total, cardPaid, deductedDeposit);
+
+      if (!conv.ok) {
+        // 좌석이 사라졌다(홀드 만료 등). 돈을 그냥 삼킬 수 없으므로:
+        //   차감한 예치금을 되돌리고 · 카드 결제를 취소하고 · 회원에게 알린다.
+        if (deductedDeposit > 0) {
+          await refundDeposit(admin, user.id, deductedDeposit, orderId).catch(() => {});
+        }
+        const canceled = await cancelTossPayment(secretKey, paymentKey, '좌석 만료로 구매 불가');
         await admin.from('payment_orders')
-          .update({ fail_reason: 'credit_failed:' + credited.error })
+          .update({ status: canceled ? 'canceled' : 'paid',
+                    fail_reason: 'seat_lost' + (canceled ? '_refunded' : '_refund_failed') })
           .eq('order_id', orderId);
-        console.error('[toss-confirm] 승인 성공 · 적립 실패 — 수동 보정 필요', orderId, credited.error);
-        return json({ ok: false, error: 'credit_failed', paid: true, orderId });
+        console.error('[toss-confirm] 승인 후 좌석 상실', orderId, conv.reason, 'card_cancel=', canceled);
+        return json({ ok: false, error: 'seat_lost', refunded: canceled, orderId });
       }
+
       return json({
-        ok: true, orderId, amount: expected, currency: order.currency,
-        creditedKrw: creditKrw, purpose: order.purpose, balance: credited.balance,
-        // 티켓 결제면 어느 티켓·몇 명이었는지 돌려준다 (복귀 후 구매 이어가기용)
-        ticket: order.purpose === 'ticket_topup' ? (order.metadata || null) : null,
+        ok: true, orderId, amount: expected, purpose: 'ticket_topup',
+        total, depositUsed: deductedDeposit, cardPaid,
+        purchaseId: conv.purchaseId,
+        ticket: meta,
       });
     }
 
-    // 그 외 용도는 아직 서버 처리가 없다 (1차 범위는 예치금 충전).
+    // deposit_charge (예치금 카드 충전) 는 현재 정책에서 쓰지 않는다.
+    //   예치금 충전은 계좌이체 전용. 남겨두되 도달하면 안내만 한다.
+    if (order.purpose === 'deposit_charge') {
+      await admin.from('payment_orders')
+        .update({ fail_reason: 'deposit_charge_disabled' }).eq('order_id', orderId);
+      return json({ ok: false, error: 'deposit_charge_disabled', paid: true, orderId });
+    }
+
     return json({ ok: true, orderId, amount: expected, purpose: order.purpose });
 
   } catch (e) {
@@ -239,90 +250,143 @@ serve(async (req) => {
   }
 });
 
-// ── 외화 → 원화 환산 (서버 단독 계산) ──
-//   app_config.fx_settings 가 유일한 기준이다. 브라우저가 보낸 환율은 쓰지 않는다.
-//   적용환율 = 매매기준율 × (1 - 마진%) — 마진이 환율 변동과 토스 정산 환율 차이를 흡수한다.
-async function convertToKrw(
+// ── 예치금 차감 (멤버십 먼저, 부족분 일반) ──
+//   클라이언트 completePurchase 의 차감 로직을 그대로 미러링한다.
+//   main 컬럼(membership/general/deposit_balance)을 직접 갱신하고,
+//   deposit_transactions INSERT 는 split 트리거가 charged_* 를 맞추게 한다.
+async function deductDeposit(
   admin: ReturnType<typeof createClient>,
-  amount: number,
-  currency: string,
-): Promise<{ ok: true; krw: number; rate: number } | { ok: false; error: string }> {
-  const { data, error } = await admin
-    .from('app_config')
-    .select('value')
-    .eq('key', 'fx_settings')
-    .maybeSingle();
+  userId: string,
+  want: number,
+  meta: Record<string, unknown>,
+): Promise<{ deducted: number }> {
+  const { data: prof } = await admin.from('profiles')
+    .select('membership_deposit_balance, general_deposit_balance, deposit_balance')
+    .eq('id', userId).maybeSingle();
+  if (!prof) return { deducted: 0 };
 
-  if (error || !data?.value) return { ok: false, error: 'fx_settings_missing' };
+  const mem = Number(prof.membership_deposit_balance || 0);
+  const gen = Number(prof.general_deposit_balance || 0);
+  const totalBal = Number(prof.deposit_balance ?? (mem + gen));
+  const deduct = Math.min(want, totalBal);
+  if (deduct <= 0) return { deducted: 0 };
 
-  const cfg = data.value as Record<string, unknown>;
-  const base = Number(cfg.base_rate || 0);
-  const margin = Number(cfg.margin_pct || 0);
-  if (!(base > 0)) return { ok: false, error: 'fx_base_rate_invalid' };
+  const fromMem = Math.min(mem, deduct);
+  const fromGen = deduct - fromMem;
+  const newMem = mem - fromMem;
+  const newGen = gen - fromGen;
 
-  // 지금은 USD 기준율만 관리한다. JPY 를 열 때 fx_settings 에 통화별 기준율을
-  // 추가하고 여기서 분기해야 한다 — 그 전까지는 명시적으로 거부한다.
-  if (currency !== 'USD') return { ok: false, error: 'currency_not_supported:' + currency };
+  await admin.from('profiles').update({
+    membership_deposit_balance: newMem,
+    general_deposit_balance: newGen,
+    deposit_balance: totalBal - deduct,
+  }).eq('id', userId);
 
-  const rate = base * (1 - margin / 100);
-  if (!(rate > 0)) return { ok: false, error: 'fx_rate_invalid' };
-
-  return { ok: true, krw: Math.round(amount * rate), rate: Number(rate.toFixed(4)) };
+  const rows: Record<string, unknown>[] = [];
+  let after = totalBal;
+  if (fromMem > 0) {
+    after -= fromMem;
+    rows.push({ user_id: userId, deposit_type: 'membership', change_type: 'ticket_purchase',
+      amount: -fromMem, balance_after: after,
+      description: (meta.restaurant_name || '티켓') + ' 카드결제 · 멤버십 예치금 차감',
+      metadata: { ...meta, portion: 'membership' } });
+  }
+  if (fromGen > 0) {
+    after -= fromGen;
+    rows.push({ user_id: userId, deposit_type: 'general', change_type: 'ticket_purchase',
+      amount: -fromGen, balance_after: after,
+      description: (meta.restaurant_name || '티켓') + ' 카드결제 · 일반 예치금 차감',
+      metadata: { ...meta, portion: 'general' } });
+  }
+  if (rows.length) await admin.from('deposit_transactions').insert(rows);
+  return { deducted: deduct };
 }
 
-// ── 예치금 적립 ──
-//   기존 구조를 그대로 따른다:
-//     ① profiles.general_deposit_balance 를 더한다 (합계 컬럼)
-//     ② deposit_transactions 에 change_type='charge' 한 줄 넣는다
-//        → trg_sync_split_balance 트리거가 charged_general_balance 를 맞춘다
-async function creditDeposit(
+// 좌석 상실 시 차감한 예치금을 되돌린다 (일반 예치금으로 환원)
+async function refundDeposit(
   admin: ReturnType<typeof createClient>,
   userId: string,
   amount: number,
   orderId: string,
-  toss: Record<string, unknown>,
-): Promise<{ ok: true; balance: number } | { ok: false; error: string }> {
-  const { data: prof, error: profErr } = await admin
-    .from('profiles')
-    .select('general_deposit_balance')
-    .eq('id', userId)
-    .maybeSingle();
-
-  if (profErr || !prof) {
-    return { ok: false, error: 'profile_not_found' };
-  }
-
-  const before = Number(prof.general_deposit_balance || 0);
-  const after = before + amount;
-
-  const { error: balErr } = await admin
-    .from('profiles')
-    .update({ general_deposit_balance: after })
-    .eq('id', userId);
-
-  if (balErr) return { ok: false, error: 'balance_update_failed' };
-
-  const { error: trxErr } = await admin.from('deposit_transactions').insert({
-    user_id: userId,
-    deposit_type: 'general',
-    change_type: 'charge',
-    amount: amount,
-    balance_after: after,
-    description: '카드 결제 · 토스페이먼츠',
-    metadata: {
-      order_id: orderId,
-      payment_key: toss.paymentKey || null,
-      method: toss.method || null,
-      approved_at: toss.approvedAt || null,
-      receipt_url: (toss.receipt as Record<string, unknown> | undefined)?.url || null,
-    },
+): Promise<void> {
+  const { data: prof } = await admin.from('profiles')
+    .select('general_deposit_balance, deposit_balance').eq('id', userId).maybeSingle();
+  if (!prof) return;
+  const gen = Number(prof.general_deposit_balance || 0) + amount;
+  const bal = Number(prof.deposit_balance || 0) + amount;
+  await admin.from('profiles').update({ general_deposit_balance: gen, deposit_balance: bal }).eq('id', userId);
+  await admin.from('deposit_transactions').insert({
+    user_id: userId, deposit_type: 'general', change_type: 'ticket_refund',
+    amount: amount, balance_after: bal,
+    description: '좌석 만료 취소 · 예치금 환원', metadata: { order_id: orderId },
   });
+}
 
-  if (trxErr) {
-    // 잔액은 이미 올랐는데 거래기록이 없다 = 정합성 깨짐. 잔액을 되돌린다.
-    await admin.from('profiles').update({ general_deposit_balance: before }).eq('id', userId);
-    return { ok: false, error: 'transaction_insert_failed' };
+// 좌석 홀드 → 실제 구매. 홀드가 있으면 UPDATE, 없으면(만료) 새로 INSERT 하며
+//   좌석 트리거가 재검증한다. 트리거가 거부하면 좌석이 없는 것이다.
+async function convertHoldToActive(
+  admin: ReturnType<typeof createClient>,
+  userId: string,
+  holdId: string,
+  order: Record<string, unknown>,
+  total: number,
+  cardPaid: number,
+  depositUsed: number,
+): Promise<{ ok: true; purchaseId: string } | { ok: false; reason: string }> {
+  const meta = (order.metadata || {}) as Record<string, unknown>;
+  const extra = {
+    seatHold: false, cardPaid, depositUsed,
+    buyerRole: 'user',
+    agencyFee: Number(meta.agency_fee || 0),
+    paidBy: 'card+deposit', order_id: order.order_id,
+  };
+
+  if (holdId) {
+    const { data: up } = await admin.from('tickets')
+      .update({ status: 'active', price: total, extra_data: extra })
+      .eq('purchase_id', holdId).eq('user_id', userId).eq('status', 'hold')
+      .select('purchase_id');
+    if (up && up.length) return { ok: true, purchaseId: holdId };
+    // 홀드가 이미 만료/취소됨 → 아래에서 새로 INSERT 시도
   }
 
-  return { ok: true, balance: after };
+  // 홀드 없음(만료) → 좌석 트리거로 재검증하며 INSERT
+  const pid = holdId || ('PAYC-' + String(meta.ticket_id || '') + '_' + Date.now());
+  const { error: insErr } = await admin.from('tickets').insert({
+    user_id: userId,
+    restaurant_id: String(meta.restaurant_id || ''),
+    restaurant_name: meta.restaurant_name || '',
+    ticket_product_id: String(meta.ticket_id || ''),
+    reservation_date: null,
+    party_size: Number(meta.pax || 0),
+    price: total,
+    status: 'active',
+    purchase_id: pid,
+    extra_data: extra,
+    created_at: new Date().toISOString(),
+  });
+  if (insErr) {
+    return { ok: false, reason: String(insErr.message || insErr).slice(0, 200) };
+  }
+  return { ok: true, purchaseId: pid };
+}
+
+// 토스 결제 취소 (좌석 상실 시 환불)
+async function cancelTossPayment(secretKey: string, paymentKey: string, reason: string): Promise<boolean> {
+  try {
+    const basic = btoa(`${secretKey}:`);
+    const res = await fetch(`https://api.tosspayments.com/v1/payments/${paymentKey}/cancel`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Basic ${basic}`,
+        'Content-Type': 'application/json',
+        'Idempotency-Key': `taam-cancel-${paymentKey}`,
+      },
+      body: JSON.stringify({ cancelReason: reason }),
+    });
+    return res.ok;
+  } catch (e) {
+    console.error('[toss-confirm] 결제 취소 실패', e);
+    return false;
+  }
 }
