@@ -21955,17 +21955,17 @@ function ticketHistRender(idx){
     cancelled:'background:#f5e8e8;color:#9B1C1C;',
     refunded: 'background:#e8f7e8;color:#2a7a2a;'    // 🆕 환불 완료 (녹색)
   };
-  var badgeLabels;
-  if (_thTfn) {
-    badgeLabels = {
-      upcoming:  _thTfn('mp_sub.th_tab_upcoming'),
-      visited:   _thTfn('mp_sub.th_tab_completed'),
-      cancelled: _thTfn('mp_sub.th_tab_cancelled'),
-      refunded:  _thTfn('mp_sub.th_tab_refunded') || '환불 완료'
-    };
-  } else {
-    badgeLabels = { upcoming:'방문 예정', visited:'방문 완료', cancelled:'취소', refunded:'환불 완료' };
-  }
+  // ⚠ t(key) 는 사전에 키가 없으면 '키 문자열' 을 그대로 돌려준다 (|| 폴백이 안 먹는다).
+  //   실제로 배지에 'mp_sub.th_tab_refunded' 가 그대로 노출됐다 → 폴백을 2번째 인자로 넘긴다.
+  function _thT(key, fb){ return _thTfn ? _thTfn(key, fb) : fb; }
+  var badgeLabels = {
+    upcoming:  _thT('mp_sub.th_tab_upcoming',  '방문 예정'),
+    visited:   _thT('mp_sub.th_tab_completed', '방문 완료'),
+    cancelled: _thT('mp_sub.th_tab_cancelled', '취소'),
+    refunded:  _thT('mp_sub.th_badge_refunded',  '환불 완료'),
+    // 🆕 예치금은 돌려줬지만 카드 환불이 아직 진행 중인 상태 (부분 완료)
+    refunding: _thT('mp_sub.th_badge_refunding', '환불 진행 중')
+  };
   var _thUnknown = _thIsEn ? 'Unknown' : (_thIsJa ? '不明' : '알 수 없음');
   var _thVisitPrefix = _thIsEn ? 'Visit ' : (_thIsJa ? '来店 ' : '방문 ');
 
@@ -22004,7 +22004,8 @@ function ticketHistRender(idx){
     upcoming:  {bg:'#EAF1FF', bd:'#D2E0FB', dot:'#2563EB', tx:'#1F5BD6'},
     visited:   {bg:'#E8F0E8', bd:'#D4E5D4', dot:'#3A7A3A', tx:'#2F6A2F'},
     cancelled: {bg:'#F2EEEC', bd:'#E4DAD6', dot:'#A39690', tx:'#857069'},
-    refunded:  {bg:'#DDF1E6', bd:'#BFE6CF', dot:'#1E9E5A', tx:'#1E9E5A'}
+    refunded:  {bg:'#DDF1E6', bd:'#BFE6CF', dot:'#1E9E5A', tx:'#1E9E5A'},
+    refunding: {bg:'#FFF6E8', bd:'#F2E0BC', dot:'#D08A16', tx:'#9A6B12'}   // 🆕 카드 환불 진행 중
   };
 
   // 🆕 2026.08: 취소 탭 맨 위에 '내가 돌려받은 돈' 요약 — 환불 내역을 한눈에 찾을 수 있게.
@@ -22042,7 +22043,7 @@ function ticketHistRender(idx){
                + '</div>'
                + (_sCardWait > 0
                    ? ('<div style="margin-top:8px;padding:8px 11px;border-radius:9px;background:#FFF6E8;border:1px solid #F2E0BC;font-size:11.5px;font-weight:700;color:#9A6B12;">'
-                      + '처리 중 ₩'+_sCardWait.toLocaleString()+' · 완료되면 알림을 보내드려요</div>')
+                      + '카드 환불 진행 중 ₩'+_sCardWait.toLocaleString()+' · 완료되면 알림을 보내드려요</div>')
                    : ''))
             : '')
         + '</div>';
@@ -22080,6 +22081,9 @@ function ticketHistRender(idx){
                       : (dr ? (dr.returnAmt||0) : _exRef);
       var isReturned = dr ? (dr.type === 'returned') : (refundedAmt > 0);
       if(isReturned && refundedAmt > 0){ displayS = 'refunded'; }
+      // 🆕 카드 환불이 아직 안 끝났으면 '환불 완료' 가 아니라 '환불 진행 중' 이다.
+      //   (예치금은 즉시 환원되지만 카드는 슈퍼어드민이 토스에서 처리한 뒤에 끝난다)
+      if(bd.cardRefund > 0 && bd.cardRefundStatus !== 'done') displayS = 'refunding';
       if(refundedAmt != null){
         if(bd.isCard){
           // 🆕 카드 부분결제 취소 — 예치금 환원분과 카드 환불분을 나눠서 보여준다.
@@ -22092,7 +22096,7 @@ function ticketHistRender(idx){
           if(_cRef > 0){
             var _cDone = (bd.cardRefundStatus === 'done');
             refundInfo += '<div style="margin-top:7px;padding:10px 12px;border-radius:11px;background:'+(_cDone?'#EAF6EE':'#FFF6E8')+';border:1px solid '+(_cDone?'#CDE9D8':'#F2E0BC')+';">'
-              + '<div style="font-size:11.5px;font-weight:800;color:'+(_cDone?'#1E7A46':'#9A6B12')+';">💳 카드 환불 ₩'+_cRef.toLocaleString()+' · '+(_cDone?'환불 완료':'처리 중')+'</div>'
+              + '<div style="font-size:11.5px;font-weight:800;color:'+(_cDone?'#1E7A46':'#9A6B12')+';">💳 카드 환불 ₩'+_cRef.toLocaleString()+' · '+(_cDone?'환불 완료':'환불 진행 중')+'</div>'
               + '<div style="margin-top:3px;font-size:10.5px;color:#8C8475;line-height:1.55;">'
               +   (_cDone
                     ? ('카드사로 승인취소되었습니다'+(bd.cardRefundedAt ? (' · '+_thShortDT(bd.cardRefundedAt)) : '')+'<br>카드사 반영은 영업일 기준 3~5일 소요될 수 있어요')
@@ -32087,6 +32091,8 @@ var TRANSLATIONS = {
       th_tab_completed:'방문 완료',
       th_tab_cancelled:'취소',
       th_tab_cancelled_refund:'취소·환불',
+      th_badge_refunded:'환불 완료',
+      th_badge_refunding:'환불 진행 중',
       th_empty_upcoming:'예정된 방문이 없어요',
       th_empty_completed:'완료된 방문이 없어요',
       th_empty_cancelled:'취소된 티켓이 없어요',
@@ -32864,6 +32870,8 @@ var TRANSLATIONS = {
       th_tab_completed:'Completed',
       th_tab_cancelled:'Cancelled',
       th_tab_cancelled_refund:'Cancelled · Refunds',
+      th_badge_refunded:'Refunded',
+      th_badge_refunding:'Refund in progress',
       th_empty_upcoming:'No upcoming visits',
       th_empty_completed:'No completed visits',
       th_empty_cancelled:'No cancelled tickets',
@@ -33404,6 +33412,8 @@ TRANSLATIONS.ja = {
     th_tab_completed:'来店完了',
     th_tab_cancelled:'キャンセル',
     th_tab_cancelled_refund:'キャンセル・返金',
+    th_badge_refunded:'返金完了',
+    th_badge_refunding:'返金手続き中',
     th_empty_upcoming:'来店予定はありません',
     th_empty_completed:'来店完了はありません',
     th_empty_cancelled:'キャンセルしたチケットはありません',
