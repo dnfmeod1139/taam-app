@@ -5822,25 +5822,69 @@ function tossOpenBilling(){
 //   예치금 부족 시 부족분을 토스 카드 결제창으로 연결. 범위 = 결제창 연동(보이게)까지,
 //   실제 승인/차감 반영은 시크릿키 Edge Function 정식 전환 시. PAY_MODE_TOSS=false 면 미사용.
 // ── 티켓 부족분 카드 결제 ──
-//   ⚠ 여기서 넘어오는 shortage 는 브라우저가 계산한 값(window._pendingShortage)이다.
-//     그대로 결제 금액으로 쓰면 회원이 ₩500,000 짜리 티켓을 ₩1,000 만 내고 살 수 있다.
-//     → CARD_PAY_LIVE 를 켜기 전에 Edge Function toss-order 가 티켓 가격과
-//       예치금 잔액을 서버에서 다시 계산해 payment_orders 를 만들어야 한다.
-//       (docs/TOSS_GOLIVE.md "티켓 부족분 카드 결제" 참고)
+//   ⚠ 인자로 받은 shortage 는 브라우저가 계산한 값(window._pendingShortage)이라 쓰지 않는다.
+//     그대로 결제 금액으로 쓰면 DevTools 로 값을 바꿔 ₩500,000 짜리 티켓을 ₩1,000 에 살 수 있다.
+//     Edge Function toss-order 가 티켓 가격·예치금 잔액을 서버에서 다시 계산해
+//     주문을 만들고, 여기서는 그 orderId / amount 로만 결제창을 연다.
+//     (인자는 결제창 열기 전 화면 표시용으로만 남긴다)
 async function tossPayTicketShortage(shortage){
-  var amt = Math.round(shortage||0);
-  if (amt < 100) { showToast('⚠','금액 확인','결제 금액이 올바르지 않습니다'); return; }
+  var t = (typeof currentTicket !== 'undefined') ? currentTicket : null;
+  var pax = (typeof _tdPax !== 'undefined') ? _tdPax : 0;
+  if (!t || !t.id || !pax) { showToast('⚠','오류','티켓 정보를 찾을 수 없습니다'); return; }
+  if (!window.sb) { showToast('⚠','오류','서버 연결이 없습니다'); return; }
+
   // 남아있는 결제 안내 팝업 정리
   ['cardPayPopup','noCardPopup'].forEach(function(id){ var p=document.getElementById(id); if(p) p.remove(); });
   var restName = (typeof currentRest!=='undefined' && currentRest && currentRest.name) ? currentRest.name
-               : (typeof currentTicket!=='undefined' && currentTicket && currentTicket.rest) ? currentTicket.rest : '티켓';
+               : (t.rest || '티켓');
   var orderName = (restName + ' — 티켓 구매').slice(0,40);
+
+  // ── 서버에서 주문 생성 (금액은 서버가 정한다) ──
+  var ord;
+  try {
+    var _r = await window.sb.functions.invoke('toss-order', {
+      body: { ticketId: String(t.id), pax: pax, currency: 'KRW' }
+    });
+    if (_r && _r.error) throw _r.error;
+    ord = _r && _r.data;
+  } catch(e){
+    console.warn('[toss-order] 호출 실패:', e);
+    showToast('⚠','결제 준비 실패','잠시 후 다시 시도해주세요');
+    return;
+  }
+
+  if (!ord || !ord.ok) {
+    var _c = (ord && ord.error) || 'unknown';
+    var _msg = {
+      sold_out:          '죄송합니다 — 남은 좌석이 없습니다',
+      not_enough_seats:  '남은 좌석 ' + (ord && ord.left) + '석입니다. 인원을 줄여 다시 시도해주세요',
+      slot_sold_out:     pax + '인석은 모두 판매되었습니다',
+      tier_not_allowed:  '이 티켓은 ' + ((ord && ord.required) || '') + ' 등급 회원만 이용할 수 있습니다',
+      sales_closed:      '판매가 끝난 티켓입니다',
+      ticket_not_found:  '티켓 정보를 찾을 수 없습니다',
+      price_not_set:     '티켓 가격이 설정되지 않았습니다',
+      currency_not_open: '해외 통화 결제는 준비 중입니다'
+    }[_c] || '결제를 시작할 수 없습니다';
+    showToast('⚠','결제 불가', _msg);
+    console.warn('[toss-order] 거절:', _c, ord);
+    return;
+  }
+
+  // 예치금만으로 충분하면 카드 결제 자체가 필요 없다
+  if (!ord.needPayment) {
+    showToast('ℹ','카드 결제 불필요','예치금으로 결제할 수 있습니다 — 다시 시도해주세요');
+    return;
+  }
+
+  var amt = parseInt(ord.amount, 10) || 0;
+  if (amt < 100) { showToast('⚠','금액 확인','결제 금액이 올바르지 않습니다'); return; }
+
   _tossEnsureSdk(async function(){
     try {
-      var _cur = _tossCurrencyForUser();
-      if (!TOSS_KEYS[_cur]) _cur = 'KRW';
+      var _cur = String(ord.currency || 'KRW');
+      if (!TOSS_KEYS[_cur]) { showToast('⚠','결제 불가','해당 통화 결제는 준비 중입니다'); return; }
       var ctx = await _tossPaymentsCtx(_cur); if(!ctx) return;
-      var oid = 'taamtkt_' + Date.now() + '_' + Math.floor(Math.random()*100000);
+      var oid = ord.orderId;
       _tossMarkTrip();   // 결제창 왕복 표시 — 복귀 시 뷰포트 복원 트리거 (reload 견딤)
       await ctx.pay.requestPayment({
         method: 'CARD',

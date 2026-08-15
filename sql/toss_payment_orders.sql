@@ -10,8 +10,9 @@
 --   브라우저가 보낸 금액을 그대로 믿으면, 회원이 ₩1,000 을 결제하고
 --   ₩1,000,000 을 적립받는 위변조가 가능하다.
 --
---   그래서 결제창을 열기 **전에** 여기 한 행을 박아두고,
---   confirm 할 때 이 행의 amount 와 대조한다. 적립도 이 행의 amount 로 한다.
+--   그래서 결제창을 열기 **전에** toss-order 가 티켓 가격과 예치금 잔액을 서버에서
+--   다시 계산해 여기 한 행을 박아두고, confirm 할 때 이 행의 amount 와 대조한다.
+--   적립도 이 행의 amount 로 한다. 브라우저는 orderId 만 받아 결제창을 연다.
 --
 -- 멱등성
 --   결제창 복귀는 새로고침·뒤로가기로 여러 번 일어날 수 있다.
@@ -20,7 +21,7 @@
 -- ═══════════════════════════════════════════════════════════════
 
 create table if not exists public.payment_orders (
-  order_id     text primary key,                    -- 토스 orderId (클라이언트가 생성)
+  order_id     text primary key,                    -- 토스 orderId (toss-order 가 생성)
   user_id      uuid not null references auth.users(id) on delete cascade,
   purpose      text not null default 'deposit_charge',  -- deposit_charge | ticket_topup | membership
   amount       bigint not null check (amount > 0),  -- 토스가 승인할 금액 (currency 기준)
@@ -84,10 +85,10 @@ before update on public.payment_orders
 for each row execute function public.touch_payment_orders_updated_at();
 
 -- ═══════════════════════════════════════════════════════════════
--- RLS — 회원은 "자기 주문을 pending 으로 만들고 조회"만 할 수 있다.
---   상태 변경(paid 로 바꾸기)과 예치금 적립은 service_role 을 쓰는
---   Edge Function 만 한다. service_role 은 RLS 를 우회하므로 별도 정책이 없다.
---   → 브라우저에서는 어떤 방법으로도 스스로 결제를 완료 처리할 수 없다.
+-- RLS — 회원은 "자기 주문 조회"만 할 수 있다.
+--   주문 생성(toss-order) · 상태 변경 · 예치금 적립은 전부 service_role 을 쓰는
+--   Edge Function 이 한다. service_role 은 RLS 를 우회하므로 별도 정책이 없다.
+--   → 브라우저는 결제 금액을 정할 수도, 스스로 결제를 완료 처리할 수도 없다.
 -- ═══════════════════════════════════════════════════════════════
 alter table public.payment_orders enable row level security;
 
@@ -95,29 +96,19 @@ drop policy if exists payment_orders_select_own on public.payment_orders;
 create policy payment_orders_select_own on public.payment_orders
   for select using (auth.uid() = user_id);
 
+-- ⚠ INSERT 정책은 일부러 만들지 않는다.
+--   주문은 Edge Function toss-order 가 service_role 로만 만든다.
+--   브라우저가 주문을 만들 수 있으면 금액을 스스로 정할 수 있게 되는데,
+--   그건 결제 금액을 브라우저가 정하던 예전 구조와 똑같아진다.
+--   (기존에 이 정책이 있었다면 아래에서 제거된다)
 drop policy if exists payment_orders_insert_own on public.payment_orders;
-create policy payment_orders_insert_own on public.payment_orders
-  for insert with check (
-    auth.uid() = user_id
-    and status = 'pending'
-    and payment_key is null
-    and approved_at is null
-    -- 충전 금액 상·하한. 오타로 ₩1 이나 ₩10억이 들어가는 것을 막는다.
-    --   외화는 단위가 달라 별도 범위를 쓴다 (USD/JPY MID 승인 후 사용).
-    and (
-      (currency = 'KRW'  and amount between 1000 and 10000000)
-      or (currency = 'USD' and amount between 1 and 10000)
-      or (currency = 'JPY' and amount between 100 and 1500000)
-    )
-  );
 
--- ⚠ settle_krw / fx_rate 는 RLS 로 지킬 수 없다 (브라우저가 값을 정하기 때문).
+-- UPDATE / DELETE 정책도 만들지 않는다 (= 회원은 수정·삭제 불가).
+-- service_role 은 RLS 를 우회하므로 Edge Function 만 전 권한을 갖는다.
+
+-- ⚠ settle_krw / fx_rate 도 마찬가지로 서버가 정한다.
 --   외화 결제를 열 때 toss-confirm 이 app_config.fx_settings 를 읽어
---   settle_krw 를 **서버에서 다시 계산해 덮어쓰고**, 그 값으로만 적립해야 한다.
---   클라이언트가 넣는 값은 화면 표시용 참고치로만 취급한다.
---   (이걸 빠뜨리면 $1 결제하고 ₩10,000,000 적립받는 위변조가 가능하다)
-
--- UPDATE / DELETE 정책은 일부러 만들지 않는다 (= 회원은 수정·삭제 불가)
+--   settle_krw 를 서버에서 계산하고, 그 값으로만 적립한다.
 
 -- ── 확인 ──
 select
@@ -130,4 +121,4 @@ from pg_policies
 where schemaname = 'public' and tablename = 'payment_orders'
 order by policyname;
 
-do $$ begin raise notice '✅ payment_orders 준비 완료 — 다음: Edge Function toss-confirm 배포 + TOSS_SECRET_KEY 시크릿 등록'; end $$;
+do $$ begin raise notice '✅ payment_orders 준비 완료 — 다음: Edge Function toss-order · toss-confirm 배포 + TOSS_SECRET_KEY 시크릿 등록'; end $$;
