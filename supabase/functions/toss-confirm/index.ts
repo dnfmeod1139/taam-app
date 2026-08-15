@@ -184,7 +184,31 @@ serve(async (req) => {
 
     // ── 용도별 처리 ──
     if (order.purpose === 'deposit_charge') {
-      const credited = await creditDeposit(admin, user.id, expected, orderId, toss);
+      // 원장은 원화 단일이다. KRW 결제면 승인 금액이 곧 적립 금액이고,
+      // 외화 결제면 서버가 다시 계산한 원화 환산액을 적립한다.
+      //   ⚠ order.settle_krw 는 브라우저가 넣은 값이라 신뢰하지 않는다.
+      //     (그대로 믿으면 $1 결제하고 ₩10,000,000 적립받는 위변조가 가능하다)
+      let creditKrw = expected;
+      if (order.currency !== 'KRW') {
+        const converted = await convertToKrw(admin, expected, order.currency);
+        if (!converted.ok) {
+          await admin.from('payment_orders')
+            .update({ fail_reason: 'fx_unavailable:' + converted.error })
+            .eq('order_id', orderId);
+          console.error('[toss-confirm] 환율 조회 실패 — 수동 보정 필요', orderId, converted.error);
+          return json({ ok: false, error: 'credit_failed', paid: true, orderId });
+        }
+        creditKrw = converted.krw;
+        await admin.from('payment_orders')
+          .update({ settle_krw: creditKrw, fx_rate: converted.rate })
+          .eq('order_id', orderId);
+      } else {
+        await admin.from('payment_orders')
+          .update({ settle_krw: creditKrw })
+          .eq('order_id', orderId);
+      }
+
+      const credited = await creditDeposit(admin, user.id, creditKrw, orderId, toss);
       if (!credited.ok) {
         // 승인은 됐는데 적립에 실패한 상태. 돈은 받았으므로 주문을 되돌리지 않고
         // 흔적을 남겨 슈퍼어드민이 수동 보정할 수 있게 한다.
@@ -194,7 +218,10 @@ serve(async (req) => {
         console.error('[toss-confirm] 승인 성공 · 적립 실패 — 수동 보정 필요', orderId, credited.error);
         return json({ ok: false, error: 'credit_failed', paid: true, orderId });
       }
-      return json({ ok: true, orderId, amount: expected, purpose: order.purpose, balance: credited.balance });
+      return json({
+        ok: true, orderId, amount: expected, currency: order.currency,
+        creditedKrw: creditKrw, purpose: order.purpose, balance: credited.balance,
+      });
     }
 
     // 그 외 용도는 아직 서버 처리가 없다 (1차 범위는 예치금 충전).
@@ -205,6 +232,37 @@ serve(async (req) => {
     return json({ ok: false, error: 'exception', detail: String(e).slice(0, 300) });
   }
 });
+
+// ── 외화 → 원화 환산 (서버 단독 계산) ──
+//   app_config.fx_settings 가 유일한 기준이다. 브라우저가 보낸 환율은 쓰지 않는다.
+//   적용환율 = 매매기준율 × (1 - 마진%) — 마진이 환율 변동과 토스 정산 환율 차이를 흡수한다.
+async function convertToKrw(
+  admin: ReturnType<typeof createClient>,
+  amount: number,
+  currency: string,
+): Promise<{ ok: true; krw: number; rate: number } | { ok: false; error: string }> {
+  const { data, error } = await admin
+    .from('app_config')
+    .select('value')
+    .eq('key', 'fx_settings')
+    .maybeSingle();
+
+  if (error || !data?.value) return { ok: false, error: 'fx_settings_missing' };
+
+  const cfg = data.value as Record<string, unknown>;
+  const base = Number(cfg.base_rate || 0);
+  const margin = Number(cfg.margin_pct || 0);
+  if (!(base > 0)) return { ok: false, error: 'fx_base_rate_invalid' };
+
+  // 지금은 USD 기준율만 관리한다. JPY 를 열 때 fx_settings 에 통화별 기준율을
+  // 추가하고 여기서 분기해야 한다 — 그 전까지는 명시적으로 거부한다.
+  if (currency !== 'USD') return { ok: false, error: 'currency_not_supported:' + currency };
+
+  const rate = base * (1 - margin / 100);
+  if (!(rate > 0)) return { ok: false, error: 'fx_rate_invalid' };
+
+  return { ok: true, krw: Math.round(amount * rate), rate: Number(rate.toFixed(4)) };
+}
 
 // ── 예치금 적립 ──
 //   기존 구조를 그대로 따른다:
