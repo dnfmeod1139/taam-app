@@ -11578,8 +11578,8 @@ window.closePromoCarousel = function(){
     <div style="position:sticky;top:0;z-index:5;background:#f7f5f2;padding:6px 16px 10px;border-bottom:1px solid rgba(0,0,0,.06);">
       <div style="display:flex;gap:6px;">
         <button class="thx-filter thx-filter-on" data-thxf="all"    onclick="thxSetFilter('all',this)">전체</button>
-        <button class="thx-filter"               data-thxf="active" onclick="thxSetFilter('active',this)">구매</button>
-        <button class="thx-filter"               data-thxf="used"   onclick="thxSetFilter('used',this)">사용</button>
+        <button class="thx-filter"               data-thxf="active" onclick="thxSetFilter('active',this)">사용예정</button>
+        <button class="thx-filter"               data-thxf="used"   onclick="thxSetFilter('used',this)">사용완료</button>
         <button class="thx-filter"               data-thxf="cancelled" onclick="thxSetFilter('cancelled',this)">취소</button>
       </div>
       <input id="thxSearch" type="text" placeholder="구매자·레스토랑·전화 검색…" oninput="thxRender()"
@@ -24060,7 +24060,7 @@ function _thxStatusMeta(h){
   if(st === 'cancelled') return { label:'취소', bg:'#FCE8E6', fg:'#C5221F' };
   if(st === 'used')      return { label:'사용완료', bg:'#E8F0FE', fg:'#1A56C4' };
   if(st === 'completed') return { label:'처리됨', bg:'#EFEDE8', fg:'#6b6b6b' };
-  return { label:'구매', bg:'#E6F4EA', fg:'#137333' };  // active
+  return { label:'사용예정', bg:'#E6F4EA', fg:'#137333' };  // active
 }
 
 async function renderTicketHistory(){
@@ -24072,9 +24072,44 @@ async function renderTicketHistory(){
     _thxAll = [];
     console.warn('[thx] 로드 실패:', e);
   }
+  // 🆕 2026.08: '결제 전 취소'(좌석 홀드 만료·결제창에서 이탈 등)는 목록에서 뺀다.
+  //   결제가 일어나지 않았으니 구매내역이 아니고, 실제 취소·환불 건을 파묻는다.
+  //   (취소 46건 중 대부분이 ₩0 홀드 잔여였다)
+  _thxAll = _thxAll.filter(function(h){ return !_thxIsUnpaidCancel(h); });
   // 구매일시(created_at) 최신순
   _thxAll.sort(function(a,b){ return String(b.date||'').localeCompare(String(a.date||'')); });
   thxRender();
+}
+
+// 회원이 실제로 지불한 금액 — 예치금 + 카드. 구형 데이터는 티켓가로 폴백.
+function _thxPaidTotal(h){
+  var ex = h.extra_data || {};
+  var paid = (parseInt(ex.depositUsed || 0) || 0) + (parseInt(ex.cardPaid || 0) || 0);
+  if(paid > 0) return paid;
+  return parseInt(h.amt || 0) || 0;
+}
+
+// '결제 없이 취소된 행' 판정 — 보수적으로, 돈이 오간 흔적이 하나도 없을 때만 true.
+//   판정이 틀리면 진짜 취소건이 사라지므로 의심스러우면 남기는 쪽을 택한다.
+function _thxIsUnpaidCancel(h){
+  if((h.status || '') !== 'cancelled') return false;
+  if(_thxPaidTotal(h) > 0) return false;
+  var dr = h.depositReturn;
+  if(dr && ((dr.returnAmt || 0) > 0 || (dr.penaltyAmt || 0) > 0)) return false;
+  return true;
+}
+
+// 취소가 '구매 30분 이내'였는지 — 환불 거래 시각과 구매 시각의 차이로 판정.
+//   30분 이내는 정책상 전액환불(위약금 없음)이다 (calculateTicketRefund policy 'within_30min').
+//   두 시각 중 하나라도 없으면 판정 불가 → null 을 돌려주고 화면에서 '시점 불명'으로 표시한다.
+function _thxCancelGraceMin(h){
+  var dr = h.depositReturn;
+  if(!dr || !h.date) return null;
+  var ts = dr._ts || '';
+  if(!ts) return null;
+  var t0 = new Date(h.date), t1 = new Date(ts);
+  if(isNaN(t0.getTime()) || isNaN(t1.getTime())) return null;
+  return (t1 - t0) / 60000;
 }
 
 function thxSetFilter(f, btn){
@@ -24107,7 +24142,7 @@ function thxRender(){
         + '<div style="font-size:18px;font-weight:800;color:'+col+';">'+num+'</div>'
         + '<div style="font-size:11px;color:#9a9486;margin-top:1px;">'+lab+'</div></div>';
     }
-    statsEl.innerHTML = _stat(nAll,'전체','#1a1a18') + _stat(nActive,'구매','#137333') + _stat(nUsed,'사용','#1A56C4') + _stat(nCancel,'취소','#C5221F');
+    statsEl.innerHTML = _stat(nAll,'전체','#1a1a18') + _stat(nActive,'사용예정','#137333') + _stat(nUsed,'사용완료','#1A56C4') + _stat(nCancel,'취소','#C5221F');
   }
 
   // 필터
@@ -24137,17 +24172,32 @@ function thxRender(){
     var typeTag = h.ticket_type ? '<span style="font-size:11px;color:#9a8a55;font-weight:700;"> · '+h.ticket_type+'</span>' : '';
     var visit = h.visitDate ? '<span style="color:#6b6b6b;">방문 '+h.visitDate+'</span> · ' : '';
     // 취소건 환불 정보
+    //   🆕 2026.08: '30분 이내 전액환불' 과 '30분 경과 후 위약금 발생' 을 한눈에 구분한다.
+    //     둘을 섞어 보여주면 위약금이 정상 부과된 건인지 판단할 수 없었다.
     var refundLine = '';
     if(h.status==='cancelled' && h.depositReturn){
       var dr = h.depositReturn;
+      var _gm = _thxCancelGraceMin(h);
       var parts = [];
       if(dr.type==='returned' || dr.returnAmt>0) parts.push('환불 ₩'+(dr.returnAmt||0).toLocaleString());
       if(dr.penaltyAmt>0) parts.push('위약금 ₩'+(dr.penaltyAmt||0).toLocaleString()+(dr.penaltyPct?' ('+dr.penaltyPct+'%)':''));
       if(dr.type==='nonrefundable' && !parts.length) parts.push('환불불가');
       var dateStr = dr.date ? '<span style="color:#b5afa2;"> · '+dr.date+'</span>' : '';
-      if(parts.length){
-        refundLine = '<div style="margin-top:8px;padding-top:8px;border-top:1px dashed rgba(0,0,0,.08);font-size:12px;color:#C5221F;font-weight:700;">↩︎ '
-          + parts.join(' · ') + dateStr + '</div>';
+      // 앞머리 태그 — 위약금 판단의 근거가 되는 '언제 취소했나'
+      var headTag, headBg, headFg;
+      if(_gm === null){
+        headTag = '취소 시점 불명'; headBg = '#EFEDE8'; headFg = '#6b6b6b';
+      } else if(_gm <= 30){
+        headTag = '30분 이내 취소'; headBg = '#E6F4EA'; headFg = '#137333';
+      } else {
+        headTag = '30분 경과 후 취소'; headBg = '#FCE8E6'; headFg = '#C5221F';
+      }
+      if(_gm !== null && _gm > 30 && !(dr.penaltyAmt>0)) parts.push('위약금 없음');
+      if(parts.length || _gm !== null){
+        refundLine = '<div style="margin-top:8px;padding-top:8px;border-top:1px dashed rgba(0,0,0,.08);font-size:12px;">'
+          + '<span style="display:inline-block;padding:1px 7px;border-radius:999px;font-size:10.5px;font-weight:800;background:'+headBg+';color:'+headFg+';">'+headTag+'</span>'
+          + (parts.length ? '<span style="color:#C5221F;font-weight:700;"> ↩︎ '+parts.join(' · ')+'</span>' : '')
+          + dateStr + '</div>';
       }
     }
     return '<div class="thx-card" onclick="thxOpenBuyer('+_ti+')" style="cursor:pointer;">'
