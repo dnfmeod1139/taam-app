@@ -37139,6 +37139,7 @@ function memDelete(id) {
 // 티켓 캘린더
 // ════════════════════════════════════════════════
 var _tcalYear, _tcalMonth, _tcalSelectedDate = null;
+var _tcalLoadFailed = false;   // 🆕 소스 로드 실패 여부 — 화면에 '데이터 없음' 과 구분해 알린다
 var _tcalPurchases = [];   // 역할별 전체 구매기록 (슈퍼어드민=전체 회원 / 어드민=본인 매장)
 var _tcalBuyerMap = {};    // 구매자 상세 모달용 lookup (onclick 에 객체 직렬화 대신 키 전달)
 var _tcalInvites = [];     // 🆕 초대 결제(paid) 예약 — 역구조 판매 점유 반영
@@ -37147,17 +37148,20 @@ var _tcalRestFilter = '';  // 🆕 매장 필터 (''=전체) — 더블부킹 �
 
 // 🆕 수기 예약 로드 (daegwan_manual)
 async function tcalLoadManual(){
-  _tcalManual = [];
   try {
     if(!window.sb) return;
     var r = await window.sb.from('daegwan_manual').select('id,venue_id,ymd,name,pax,amount,memo');
-    if(!r.error && Array.isArray(r.data)) _tcalManual = r.data;
-  } catch(e){ console.warn('[tcal] manual 로드 실패:', e); }
+    if(r.error) throw r.error;
+    if(Array.isArray(r.data)) _tcalManual = r.data;    // 성공했을 때만 교체
+  } catch(e){
+    console.warn('[tcal] manual 로드 실패 — 직전 값 유지:', e && e.message);
+    if(!Array.isArray(_tcalManual)) _tcalManual = [];
+    _tcalLoadFailed = true;
+  }
 }
 
 // 🆕 초대 결제(paid) 로드 — 역구조(초대→결제)로 팔린 예약도 캘린더 점유에 반영 (금액·회원명 포함)
 async function tcalLoadInvites(){
-  _tcalInvites = [];
   try {
     if(!window.sb) return;
     var r = await window.sb.from('reservation_invites')
@@ -37176,7 +37180,11 @@ async function tcalLoadInvites(){
         _tcalInvites.forEach(function(x){ x._inviteeName = nm[x.invitee_user_id] || ''; });
       }
     }
-  } catch(e){ console.warn('[tcal] invites 로드 실패:', e); }
+  } catch(e){
+    console.warn('[tcal] invites 로드 실패 — 직전 값 유지:', e && e.message);
+    if(!Array.isArray(_tcalInvites)) _tcalInvites = [];
+    _tcalLoadFailed = true;
+  }
 }
 
 // 🆕 매장 id → 매장명 (구매/초대/restaurantDB 에서 탐색)
@@ -37323,12 +37331,19 @@ window.openInviteFromCalendar = openInviteFromCalendar;
 
 // 🆕 매장×날짜 좌석 정원 (수동 저장) — 남은 좌석 = 정원 − (초대결제+티켓판매 인원)
 async function tcalLoadCapacity(){
-  _tcalCapRows = [];
+  // 🛡 2026.08: 로드 실패를 '일정 없음' 으로 만들지 않는다.
+  //   예전에는 진입 즉시 [] 로 비우고 실패하면 그대로 뒀다. 통신이 나쁘면
+  //   등록해둔 일정이 통째로 사라진 것처럼 보였다(DB 는 멀쩡).
   try {
     if(!window.sb) return;
     var r = await window.sb.from('daegwan_capacity').select('venue_id,ymd,seats,stime,venue_name');
-    if(!r.error && Array.isArray(r.data)) _tcalCapRows = r.data;
-  } catch(e){ console.warn('[tcal] capacity 로드 실패:', e); }
+    if(r.error) throw r.error;
+    if(Array.isArray(r.data)) _tcalCapRows = r.data;   // 성공했을 때만 교체
+  } catch(e){
+    console.warn('[tcal] capacity 로드 실패 — 직전 값 유지:', e && e.message);
+    if(!Array.isArray(_tcalCapRows)) _tcalCapRows = [];
+    _tcalLoadFailed = true;
+  }
 }
 // 선택 날짜 → 'YYYY-MM-DD'
 function _tcalYMD(){
@@ -37632,8 +37647,10 @@ async function tcalLoadPurchases(){
       });
     }
   } catch(e){
-    console.warn('[tcal] 구매기록 로드 실패:', e);
-    _tcalPurchases = [];
+    // 🛡 실패를 '구매 없음' 으로 만들지 않는다 — 직전 값을 유지한다
+    console.warn('[tcal] 구매기록 로드 실패 — 직전 값 유지:', e && e.message);
+    if(!Array.isArray(_tcalPurchases)) _tcalPurchases = [];
+    _tcalLoadFailed = true;
   }
 }
 
@@ -37646,7 +37663,13 @@ function tcalInit() {
   if(_d) _d.innerHTML = '<div class="tcal-empty-day">불러오는 중…</div>';
   tcalRender();
   // 데이터 로드 → 완료 후 캘린더·상세 재렌더
+  _tcalLoadFailed = false;   // 이번 로드의 실패 여부를 새로 집계한다
   Promise.all([tcalLoadPurchases(), tcalLoadInvites(), tcalLoadCapacity(), tcalLoadManual()]).then(function(){
+    // 🆕 일부 소스가 실패했으면 '데이터가 없는 것' 과 구분해서 알린다.
+    //   통신 불량으로 일정·예약이 사라진 것처럼 보이던 상황에서, 원인을 바로 알 수 있게 한다.
+    if(_tcalLoadFailed && typeof showToast === 'function'){
+      showToast('⚠','일부 데이터를 못 불러왔어요','통신 상태를 확인하고 새로고침해주세요 — 저장된 내용은 그대로입니다');
+    }
     tcalRender();
     if(_tcalSelectedDate){
       tcalRenderDetail(_tcalSelectedDate);
