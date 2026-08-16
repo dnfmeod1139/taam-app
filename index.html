@@ -20703,15 +20703,29 @@ var _prPartners   = [];     // venue_partners rows
 var _prFavs       = {};     // venue_id -> true
 var _prCurrent    = null;   // 현재 상세 venue_id
 
+// 🆕 2026.08: 큐레이션 인덱스(0.8MB)에 타임아웃을 건다.
+//   통신이 나쁘면 fetch 가 끝나지 않아 파트너 목록이 '불러오는 중…' 에서 영영 멈췄다.
+//   이 인덱스는 이름·장르 '표시용' 이라 없어도 목록은 뜬다 (이름은 restaurantDB 로 폴백).
 async function _prLoadVenueIndex(){
   if(_prVenueIndex) return _prVenueIndex;
   try{
-    var r = await fetch('venues/_index.json');
+    var _opt, _to = null;
+    if(typeof AbortController !== 'undefined'){
+      var _ctl = new AbortController();
+      _opt = { signal: _ctl.signal };
+      _to = setTimeout(function(){ try{ _ctl.abort(); }catch(_){} }, 8000);
+    }
+    var r = await fetch('venues/_index.json', _opt);
+    if(_to) clearTimeout(_to);
+    if(!r.ok) throw new Error('HTTP ' + r.status);
     var d = await r.json();
     var map = {};
     (d.venues||[]).forEach(function(v){ map[v.venue_id]=v; });
     _prVenueIndex = map;
-  }catch(e){ _prVenueIndex = {}; }
+  }catch(e){
+    console.warn('[resv] 큐레이션 인덱스 로드 실패 — 이름/장르 없이 진행:', e && e.message);
+    _prVenueIndex = {};   // 실패도 캐시한다 — 화면 열 때마다 다시 멈추지 않게
+  }
   return _prVenueIndex;
 }
 
@@ -20720,7 +20734,15 @@ var _prAwardIndex = null;
 async function _prLoadAwardIndex(){
   if(_prAwardIndex) return _prAwardIndex;
   try{
-    var r = await fetch('venues/_award_index.json');
+    // 🆕 통신 불량 시 매달리지 않도록 타임아웃 (어워드 배지는 없어도 화면이 성립한다)
+    var _o, _t = null;
+    if(typeof AbortController !== 'undefined'){
+      var _c = new AbortController(); _o = { signal:_c.signal };
+      _t = setTimeout(function(){ try{ _c.abort(); }catch(_){} }, 8000);
+    }
+    var r = await fetch('venues/_award_index.json', _o);
+    if(_t) clearTimeout(_t);
+    if(!r.ok) throw new Error('HTTP ' + r.status);
     var d = await r.json();
     var map = {};
     function add(vid,label,color){ if(!map[vid]) map[vid]=[]; if(!map[vid].some(function(x){return x.label===label;})) map[vid].push({label:label,color:color}); }
@@ -20832,8 +20854,23 @@ function _resvVenuePhoto(id){
 // 파트너 + 즐겨찾기 공통 로더 (요청 리스트/마이 리스트 공용)
 var _prFeePolicy = {};   // venue_id -> 수수료 정책
 async function _prLoadPartners(){
-  await _prLoadVenueIndex();
-  _prLoadAwardIndex();   // 어워드 역인덱스 (비동기 — 상세 진입 전 준비)
+  // 🆕 2026.08: 인덱스(0.8MB)를 끝까지 기다리지 않는다.
+  //   통신이 느리면 목록 자체가 '불러오는 중…' 에서 멈춰버렸다. 최대 3초만 기다리고
+  //   진행한다 — 늦게 도착하면 아래에서 목록을 한 번 다시 그려 이름·장르를 채운다.
+  var _idxPromise = _prLoadVenueIndex();
+  await Promise.race([ _idxPromise, new Promise(function(rs){ setTimeout(rs, 3000); }) ]);
+  _idxPromise.then(function(){
+    // 늦게 도착한 경우에만 다시 그린다 (열려 있는 화면 기준)
+    try{
+      var rv = document.getElementById('requestView');
+      if(rv && rv.style.display !== 'none'){
+        if(typeof _reqTab !== 'undefined' && _reqTab === 'partner'){
+          if(typeof renderPartnerRoster === 'function') renderPartnerRoster();
+        } else if(typeof renderRequestList === 'function') renderRequestList();
+      }
+    }catch(_e){}
+  }).catch(function(){});
+  try{ _prLoadAwardIndex(); }catch(_ae){}   // 어워드 역인덱스 (비동기 — 상세 진입 전 준비)
   var pRes = await window.sb.from('venue_partners').select('*').eq('is_partner', true);
   if(pRes.error) throw pRes.error;
   _prPartners = pRes.data || [];
@@ -37102,6 +37139,7 @@ function memDelete(id) {
 // 티켓 캘린더
 // ════════════════════════════════════════════════
 var _tcalYear, _tcalMonth, _tcalSelectedDate = null;
+var _tcalLoadFailed = false;   // 🆕 소스 로드 실패 여부 — 화면에 '데이터 없음' 과 구분해 알린다
 var _tcalPurchases = [];   // 역할별 전체 구매기록 (슈퍼어드민=전체 회원 / 어드민=본인 매장)
 var _tcalBuyerMap = {};    // 구매자 상세 모달용 lookup (onclick 에 객체 직렬화 대신 키 전달)
 var _tcalInvites = [];     // 🆕 초대 결제(paid) 예약 — 역구조 판매 점유 반영
@@ -37110,17 +37148,20 @@ var _tcalRestFilter = '';  // 🆕 매장 필터 (''=전체) — 더블부킹 �
 
 // 🆕 수기 예약 로드 (daegwan_manual)
 async function tcalLoadManual(){
-  _tcalManual = [];
   try {
     if(!window.sb) return;
     var r = await window.sb.from('daegwan_manual').select('id,venue_id,ymd,name,pax,amount,memo');
-    if(!r.error && Array.isArray(r.data)) _tcalManual = r.data;
-  } catch(e){ console.warn('[tcal] manual 로드 실패:', e); }
+    if(r.error) throw r.error;
+    if(Array.isArray(r.data)) _tcalManual = r.data;    // 성공했을 때만 교체
+  } catch(e){
+    console.warn('[tcal] manual 로드 실패 — 직전 값 유지:', e && e.message);
+    if(!Array.isArray(_tcalManual)) _tcalManual = [];
+    _tcalLoadFailed = true;
+  }
 }
 
 // 🆕 초대 결제(paid) 로드 — 역구조(초대→결제)로 팔린 예약도 캘린더 점유에 반영 (금액·회원명 포함)
 async function tcalLoadInvites(){
-  _tcalInvites = [];
   try {
     if(!window.sb) return;
     var r = await window.sb.from('reservation_invites')
@@ -37139,7 +37180,11 @@ async function tcalLoadInvites(){
         _tcalInvites.forEach(function(x){ x._inviteeName = nm[x.invitee_user_id] || ''; });
       }
     }
-  } catch(e){ console.warn('[tcal] invites 로드 실패:', e); }
+  } catch(e){
+    console.warn('[tcal] invites 로드 실패 — 직전 값 유지:', e && e.message);
+    if(!Array.isArray(_tcalInvites)) _tcalInvites = [];
+    _tcalLoadFailed = true;
+  }
 }
 
 // 🆕 매장 id → 매장명 (구매/초대/restaurantDB 에서 탐색)
@@ -37286,12 +37331,19 @@ window.openInviteFromCalendar = openInviteFromCalendar;
 
 // 🆕 매장×날짜 좌석 정원 (수동 저장) — 남은 좌석 = 정원 − (초대결제+티켓판매 인원)
 async function tcalLoadCapacity(){
-  _tcalCapRows = [];
+  // 🛡 2026.08: 로드 실패를 '일정 없음' 으로 만들지 않는다.
+  //   예전에는 진입 즉시 [] 로 비우고 실패하면 그대로 뒀다. 통신이 나쁘면
+  //   등록해둔 일정이 통째로 사라진 것처럼 보였다(DB 는 멀쩡).
   try {
     if(!window.sb) return;
     var r = await window.sb.from('daegwan_capacity').select('venue_id,ymd,seats,stime,venue_name');
-    if(!r.error && Array.isArray(r.data)) _tcalCapRows = r.data;
-  } catch(e){ console.warn('[tcal] capacity 로드 실패:', e); }
+    if(r.error) throw r.error;
+    if(Array.isArray(r.data)) _tcalCapRows = r.data;   // 성공했을 때만 교체
+  } catch(e){
+    console.warn('[tcal] capacity 로드 실패 — 직전 값 유지:', e && e.message);
+    if(!Array.isArray(_tcalCapRows)) _tcalCapRows = [];
+    _tcalLoadFailed = true;
+  }
 }
 // 선택 날짜 → 'YYYY-MM-DD'
 function _tcalYMD(){
@@ -37595,8 +37647,10 @@ async function tcalLoadPurchases(){
       });
     }
   } catch(e){
-    console.warn('[tcal] 구매기록 로드 실패:', e);
-    _tcalPurchases = [];
+    // 🛡 실패를 '구매 없음' 으로 만들지 않는다 — 직전 값을 유지한다
+    console.warn('[tcal] 구매기록 로드 실패 — 직전 값 유지:', e && e.message);
+    if(!Array.isArray(_tcalPurchases)) _tcalPurchases = [];
+    _tcalLoadFailed = true;
   }
 }
 
@@ -37609,7 +37663,13 @@ function tcalInit() {
   if(_d) _d.innerHTML = '<div class="tcal-empty-day">불러오는 중…</div>';
   tcalRender();
   // 데이터 로드 → 완료 후 캘린더·상세 재렌더
+  _tcalLoadFailed = false;   // 이번 로드의 실패 여부를 새로 집계한다
   Promise.all([tcalLoadPurchases(), tcalLoadInvites(), tcalLoadCapacity(), tcalLoadManual()]).then(function(){
+    // 🆕 일부 소스가 실패했으면 '데이터가 없는 것' 과 구분해서 알린다.
+    //   통신 불량으로 일정·예약이 사라진 것처럼 보이던 상황에서, 원인을 바로 알 수 있게 한다.
+    if(_tcalLoadFailed && typeof showToast === 'function'){
+      showToast('⚠','일부 데이터를 못 불러왔어요','통신 상태를 확인하고 새로고침해주세요 — 저장된 내용은 그대로입니다');
+    }
     tcalRender();
     if(_tcalSelectedDate){
       tcalRenderDetail(_tcalSelectedDate);
