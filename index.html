@@ -12641,6 +12641,7 @@ async function loadDeposit(){
     const { data: { user } } = await window.sb.auth.getUser();
     if(!user){
       console.warn('[loadDeposit] 로그인 안됨, 로컬 값 사용');
+      try{ if(localStorage.getItem('authedSession') === '1' && typeof _tkSessionLost === 'function') _tkSessionLost('로그인이 만료되었습니다.'); }catch(_se){}
       return;
     }
 
@@ -13527,6 +13528,13 @@ async function loadPurchase(){
     const { data: { user } } = await window.sb.auth.getUser();
     if(!user){
       console.warn('[loadPurchase] 로그인 안됨, 로컬 값 사용');
+      // 🆕 '로그인했었는데 세션이 사라진' 경우에만 로그인으로 되돌린다.
+      //   (로그인 전 부팅 단계에서도 이 경로를 지나므로 플래그로 구분한다)
+      try{
+        if(localStorage.getItem('authedSession') === '1' && typeof _tkSessionLost === 'function'){
+          _tkSessionLost('로그인이 만료되었습니다.');
+        }
+      }catch(_se){}
       return;
     }
 
@@ -20706,6 +20714,85 @@ var _prCurrent    = null;   // 현재 상세 venue_id
 // 🆕 2026.08: 큐레이션 인덱스(0.8MB)에 타임아웃을 건다.
 //   통신이 나쁘면 fetch 가 끝나지 않아 파트너 목록이 '불러오는 중…' 에서 영영 멈췄다.
 //   이 인덱스는 이름·장르 '표시용' 이라 없어도 목록은 뜬다 (이름은 restaurantDB 로 폴백).
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026.08: 로그인이 끊긴 상태를 화면에 명확히 알린다.
+//   단일 기기 정책(다른 기기에서 로그인 → 이 기기 강제 로그아웃) 때문에 세션이
+//   끊기면 Supabase 조회가 전부 실패해 목록이 '그냥 빈 화면' 으로 남았다.
+//   회원은 원인을 알 수 없어 "데이터가 사라졌다" 로 오해한다 — 실제로는 그대로 있다.
+// ═══════════════════════════════════════════════════════════════
+//   ⚠ 이 앱은 로그인 없이는 입장 자체가 불가능한 구조다. 그러므로 앱 안에서
+//     세션이 끊긴 상태는 '정상적으로 머물 수 있는 상태' 가 아니다.
+//     화면마다 안내를 붙이는 건 증상 처리이고, 근본은 로그인 화면으로 되돌리는 것이다.
+//     아래 _tkEnsureSession / 전역 SIGNED_OUT 감시가 그 역할을 한다.
+var _tkSessionGuardDone = false;
+
+// 토큰 만료는 먼저 갱신을 시도한다 — 일시적 만료로 로그아웃시키지 않기 위해서다.
+async function _tkEnsureSession(){
+  if(!window.sb) return false;
+  try{
+    var r = await window.sb.auth.getUser();
+    if(r && r.data && r.data.user) return true;
+  }catch(e){}
+  try{
+    var rr = await window.sb.auth.refreshSession();
+    if(rr && rr.data && rr.data.user){ console.log('[session] 토큰 갱신 성공'); return true; }
+  }catch(e){}
+  return false;
+}
+window._tkEnsureSession = _tkEnsureSession;
+
+// 세션이 끊겼다 → 앱에 머무르지 않고 로그인 화면으로 되돌린다.
+function _tkSessionLost(reason){
+  if(_tkSessionGuardDone) return;
+  if(window._activeSessionForceSignedOut) return;   // 단일기기 강제 로그아웃은 자체 흐름이 있다
+  _tkSessionGuardDone = true;
+  try{ showToast('🔒','로그인이 필요합니다', (reason||'') + ' 저장된 내용은 그대로입니다 — 다시 로그인해 주세요'); }catch(e){}
+  try{ localStorage.removeItem('authedSession'); }catch(e){}
+  try{ if(typeof IDB !== 'undefined' && IDB.set) IDB.set('authedSession',''); }catch(e){}
+  setTimeout(function(){ try{ location.reload(); }catch(e){} }, 1800);
+}
+window._tkSessionLost = _tkSessionLost;
+
+// 전역 인증 감시 — 기존 리스너는 소셜 로그인 완료만 처리하고 SIGNED_OUT 은 아무도 듣지 않았다.
+(function(){
+  function attach(){
+    if(!window.sb || !window.sb.auth || !window.sb.auth.onAuthStateChange) return false;
+    try{
+      window.sb.auth.onAuthStateChange(function(evt, session){
+        if(evt === 'SIGNED_OUT') _tkSessionLost('세션이 종료되었습니다.');
+      });
+      return true;
+    }catch(e){ return false; }
+  }
+  if(!attach()){
+    var n = 0;
+    var iv = setInterval(function(){ if(attach() || ++n > 20) clearInterval(iv); }, 500);
+  }
+})();
+
+async function _tkAuthed(){
+  return await _tkEnsureSession();
+}
+
+function _tkLoginNoticeHtml(dark){
+  var c = dark
+    ? { t:'#fff', s:'rgba(255,255,255,.55)', bg:'rgba(255,255,255,.06)', bd:'rgba(255,255,255,.16)' }
+    : { t:'#1a1a18', s:'#9a9486', bg:'#faf8f5', bd:'#ece7df' };
+  return '<div style="margin:24px 2px;padding:30px 22px;border-radius:16px;background:'+c.bg+';border:1px solid '+c.bd+';text-align:center;font-family:\'Noto Sans KR\',sans-serif;">'
+    + '<div style="font-size:26px;margin-bottom:10px;">🔒</div>'
+    + '<div style="font-size:15px;font-weight:800;color:'+c.t+';margin-bottom:7px;">로그인이 필요합니다</div>'
+    + '<div style="font-size:12.5px;color:'+c.s+';line-height:1.65;">다른 기기에서 로그인하면 이 기기는 자동으로 로그아웃됩니다.<br><b style="color:'+c.t+';opacity:.8;">저장된 내용은 그대로 있으니</b> 다시 로그인해 주세요.</div>'
+    + '<button onclick="_tkGoLogin()" style="margin-top:18px;padding:13px 28px;border:none;border-radius:11px;background:#5C0A14;color:#fff;font-family:var(--font-main);font-size:13px;font-weight:800;cursor:pointer;">로그인하기</button>'
+    + '</div>';
+}
+window._tkLoginNoticeHtml = _tkLoginNoticeHtml;
+
+function _tkGoLogin(){
+  try{ if(typeof openLogin === 'function'){ openLogin(); return; } }catch(e){}
+  try{ location.reload(); }catch(e){}
+}
+window._tkGoLogin = _tkGoLogin;
+
 async function _prLoadVenueIndex(){
   if(_prVenueIndex) return _prVenueIndex;
   try{
@@ -20857,19 +20944,30 @@ async function _prLoadPartners(){
   // 🆕 2026.08: 인덱스(0.8MB)를 끝까지 기다리지 않는다.
   //   통신이 느리면 목록 자체가 '불러오는 중…' 에서 멈춰버렸다. 최대 3초만 기다리고
   //   진행한다 — 늦게 도착하면 아래에서 목록을 한 번 다시 그려 이름·장르를 채운다.
+  var _idxAlready = !!_prVenueIndex;                 // 이미 있으면 다시 그릴 이유가 없다
   var _idxPromise = _prLoadVenueIndex();
-  await Promise.race([ _idxPromise, new Promise(function(rs){ setTimeout(rs, 3000); }) ]);
-  _idxPromise.then(function(){
-    // 늦게 도착한 경우에만 다시 그린다 (열려 있는 화면 기준)
-    try{
-      var rv = document.getElementById('requestView');
-      if(rv && rv.style.display !== 'none'){
+  if(!_idxAlready){
+    await Promise.race([ _idxPromise, new Promise(function(rs){ setTimeout(rs, 3000); }) ]);
+  }
+  // ⚠ 인덱스가 늦게 도착했을 때만, 그리고 목록이 이미 채워진 뒤에만 다시 그린다.
+  //   이 가드가 없으면 무한 재귀가 된다:
+  //     renderPartnerRoster → (목록 비어있음) → _prLoadPartners → then 즉시 발동
+  //     → renderPartnerRoster → 목록 여전히 비어있음(DB 조회 중) → _prLoadPartners → …
+  //   그래서 _prPartners 가 실제로 찬 경우에만 재렌더하고, 중복 예약도 막는다.
+  if(!_idxAlready && !window._prIdxRerenderPending){
+    window._prIdxRerenderPending = true;
+    _idxPromise.then(function(){
+      window._prIdxRerenderPending = false;
+      try{
+        var rv = document.getElementById('requestView');
+        if(!rv || rv.style.display === 'none') return;
+        if(!_prPartners || _prPartners.length === 0) return;   // ← 재귀 차단
         if(typeof _reqTab !== 'undefined' && _reqTab === 'partner'){
           if(typeof renderPartnerRoster === 'function') renderPartnerRoster();
         } else if(typeof renderRequestList === 'function') renderRequestList();
-      }
-    }catch(_e){}
-  }).catch(function(){});
+      }catch(_e){}
+    }).catch(function(){ window._prIdxRerenderPending = false; });
+  }
   try{ _prLoadAwardIndex(); }catch(_ae){}   // 어워드 역인덱스 (비동기 — 상세 진입 전 준비)
   var pRes = await window.sb.from('venue_partners').select('*').eq('is_partner', true);
   if(pRes.error) throw pRes.error;
@@ -20953,6 +21051,8 @@ function _prUpdateDepositPreview(){
 async function renderRequestList(){
   var el = document.getElementById('requestList');
   if(!el) return;
+  // 🆕 로그인이 끊겼으면 빈 목록 대신 이유를 보여준다
+  if(!(await _tkAuthed())){ el.innerHTML = _tkLoginNoticeHtml(true); return; }
   el.innerHTML = '<div style="padding:48px;text-align:center;color:rgba(255,255,255,.4);font-size:13px;">'+t('resv.loading','불러오는 중…')+'</div>';
   try{ await _prLoadPartners(); }
   catch(e){ el.innerHTML = '<div style="padding:48px;text-align:center;color:#e88;font-size:13px;">'+t('resv.load_fail','불러오기 실패')+'<br><span style="font-size:11px;opacity:.6;">'+(e.message||'')+'</span></div>'; return; }
@@ -20987,6 +21087,8 @@ function switchRequestTab(tab){
 async function renderPartnerRoster(){
   var el = document.getElementById('partnerRosterList');
   if(!el) return;
+  // 🆕 로그인이 끊겼으면 빈 목록 대신 이유를 보여준다
+  if(!(await _tkAuthed())){ el.innerHTML = _tkLoginNoticeHtml(true); return; }
   if(!_prPartners.length){
     el.innerHTML = '<div style="padding:36px;text-align:center;color:rgba(255,255,255,.4);font-size:13px;">'+t('resv.loading','불러오는 중…')+'</div>';
     try{ await _prLoadPartners(); }
@@ -22315,6 +22417,14 @@ window._tkPayBreakdown = _tkPayBreakdown;
 function ticketHistRender(idx){
   var list = document.getElementById('ticketHistList');
   if(!list) return;
+  // 🆕 2026.08: 로그인이 끊긴 상태면 '내역 없음' 대신 이유를 보여준다.
+  //   세션이 끊기면 loadPurchase 가 서버 조회를 못 해 목록이 비는데,
+  //   그걸 "구매내역이 사라졌다" 로 오해하게 된다.
+  try{
+    _tkAuthed().then(function(ok){
+      if(!ok && list) list.innerHTML = _tkLoginNoticeHtml(false);
+    });
+  }catch(_e){}
 
   // idx: 0=방문예정, 1=방문완료, 2=취소
   var statusMap = ['upcoming','visited','cancelled'];
