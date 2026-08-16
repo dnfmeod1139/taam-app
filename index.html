@@ -20857,19 +20857,30 @@ async function _prLoadPartners(){
   // 🆕 2026.08: 인덱스(0.8MB)를 끝까지 기다리지 않는다.
   //   통신이 느리면 목록 자체가 '불러오는 중…' 에서 멈춰버렸다. 최대 3초만 기다리고
   //   진행한다 — 늦게 도착하면 아래에서 목록을 한 번 다시 그려 이름·장르를 채운다.
+  var _idxAlready = !!_prVenueIndex;                 // 이미 있으면 다시 그릴 이유가 없다
   var _idxPromise = _prLoadVenueIndex();
-  await Promise.race([ _idxPromise, new Promise(function(rs){ setTimeout(rs, 3000); }) ]);
-  _idxPromise.then(function(){
-    // 늦게 도착한 경우에만 다시 그린다 (열려 있는 화면 기준)
-    try{
-      var rv = document.getElementById('requestView');
-      if(rv && rv.style.display !== 'none'){
+  if(!_idxAlready){
+    await Promise.race([ _idxPromise, new Promise(function(rs){ setTimeout(rs, 3000); }) ]);
+  }
+  // ⚠ 인덱스가 늦게 도착했을 때만, 그리고 목록이 이미 채워진 뒤에만 다시 그린다.
+  //   이 가드가 없으면 무한 재귀가 된다:
+  //     renderPartnerRoster → (목록 비어있음) → _prLoadPartners → then 즉시 발동
+  //     → renderPartnerRoster → 목록 여전히 비어있음(DB 조회 중) → _prLoadPartners → …
+  //   그래서 _prPartners 가 실제로 찬 경우에만 재렌더하고, 중복 예약도 막는다.
+  if(!_idxAlready && !window._prIdxRerenderPending){
+    window._prIdxRerenderPending = true;
+    _idxPromise.then(function(){
+      window._prIdxRerenderPending = false;
+      try{
+        var rv = document.getElementById('requestView');
+        if(!rv || rv.style.display === 'none') return;
+        if(!_prPartners || _prPartners.length === 0) return;   // ← 재귀 차단
         if(typeof _reqTab !== 'undefined' && _reqTab === 'partner'){
           if(typeof renderPartnerRoster === 'function') renderPartnerRoster();
         } else if(typeof renderRequestList === 'function') renderRequestList();
-      }
-    }catch(_e){}
-  }).catch(function(){});
+      }catch(_e){}
+    }).catch(function(){ window._prIdxRerenderPending = false; });
+  }
   try{ _prLoadAwardIndex(); }catch(_ae){}   // 어워드 역인덱스 (비동기 — 상세 진입 전 준비)
   var pRes = await window.sb.from('venue_partners').select('*').eq('is_partner', true);
   if(pRes.error) throw pRes.error;
