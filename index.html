@@ -20703,15 +20703,29 @@ var _prPartners   = [];     // venue_partners rows
 var _prFavs       = {};     // venue_id -> true
 var _prCurrent    = null;   // 현재 상세 venue_id
 
+// 🆕 2026.08: 큐레이션 인덱스(0.8MB)에 타임아웃을 건다.
+//   통신이 나쁘면 fetch 가 끝나지 않아 파트너 목록이 '불러오는 중…' 에서 영영 멈췄다.
+//   이 인덱스는 이름·장르 '표시용' 이라 없어도 목록은 뜬다 (이름은 restaurantDB 로 폴백).
 async function _prLoadVenueIndex(){
   if(_prVenueIndex) return _prVenueIndex;
   try{
-    var r = await fetch('venues/_index.json');
+    var _opt, _to = null;
+    if(typeof AbortController !== 'undefined'){
+      var _ctl = new AbortController();
+      _opt = { signal: _ctl.signal };
+      _to = setTimeout(function(){ try{ _ctl.abort(); }catch(_){} }, 8000);
+    }
+    var r = await fetch('venues/_index.json', _opt);
+    if(_to) clearTimeout(_to);
+    if(!r.ok) throw new Error('HTTP ' + r.status);
     var d = await r.json();
     var map = {};
     (d.venues||[]).forEach(function(v){ map[v.venue_id]=v; });
     _prVenueIndex = map;
-  }catch(e){ _prVenueIndex = {}; }
+  }catch(e){
+    console.warn('[resv] 큐레이션 인덱스 로드 실패 — 이름/장르 없이 진행:', e && e.message);
+    _prVenueIndex = {};   // 실패도 캐시한다 — 화면 열 때마다 다시 멈추지 않게
+  }
   return _prVenueIndex;
 }
 
@@ -20720,7 +20734,15 @@ var _prAwardIndex = null;
 async function _prLoadAwardIndex(){
   if(_prAwardIndex) return _prAwardIndex;
   try{
-    var r = await fetch('venues/_award_index.json');
+    // 🆕 통신 불량 시 매달리지 않도록 타임아웃 (어워드 배지는 없어도 화면이 성립한다)
+    var _o, _t = null;
+    if(typeof AbortController !== 'undefined'){
+      var _c = new AbortController(); _o = { signal:_c.signal };
+      _t = setTimeout(function(){ try{ _c.abort(); }catch(_){} }, 8000);
+    }
+    var r = await fetch('venues/_award_index.json', _o);
+    if(_t) clearTimeout(_t);
+    if(!r.ok) throw new Error('HTTP ' + r.status);
     var d = await r.json();
     var map = {};
     function add(vid,label,color){ if(!map[vid]) map[vid]=[]; if(!map[vid].some(function(x){return x.label===label;})) map[vid].push({label:label,color:color}); }
@@ -20832,8 +20854,23 @@ function _resvVenuePhoto(id){
 // 파트너 + 즐겨찾기 공통 로더 (요청 리스트/마이 리스트 공용)
 var _prFeePolicy = {};   // venue_id -> 수수료 정책
 async function _prLoadPartners(){
-  await _prLoadVenueIndex();
-  _prLoadAwardIndex();   // 어워드 역인덱스 (비동기 — 상세 진입 전 준비)
+  // 🆕 2026.08: 인덱스(0.8MB)를 끝까지 기다리지 않는다.
+  //   통신이 느리면 목록 자체가 '불러오는 중…' 에서 멈춰버렸다. 최대 3초만 기다리고
+  //   진행한다 — 늦게 도착하면 아래에서 목록을 한 번 다시 그려 이름·장르를 채운다.
+  var _idxPromise = _prLoadVenueIndex();
+  await Promise.race([ _idxPromise, new Promise(function(rs){ setTimeout(rs, 3000); }) ]);
+  _idxPromise.then(function(){
+    // 늦게 도착한 경우에만 다시 그린다 (열려 있는 화면 기준)
+    try{
+      var rv = document.getElementById('requestView');
+      if(rv && rv.style.display !== 'none'){
+        if(typeof _reqTab !== 'undefined' && _reqTab === 'partner'){
+          if(typeof renderPartnerRoster === 'function') renderPartnerRoster();
+        } else if(typeof renderRequestList === 'function') renderRequestList();
+      }
+    }catch(_e){}
+  }).catch(function(){});
+  try{ _prLoadAwardIndex(); }catch(_ae){}   // 어워드 역인덱스 (비동기 — 상세 진입 전 준비)
   var pRes = await window.sb.from('venue_partners').select('*').eq('is_partner', true);
   if(pRes.error) throw pRes.error;
   _prPartners = pRes.data || [];
