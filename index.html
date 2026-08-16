@@ -32833,6 +32833,11 @@ var TRANSLATIONS = {
       t_b3_title:'3) 예치금 사용',
       t_b3_detail:'앱 내 전 콘텐츠 동일 사용 가능',
       cta_m:'M 등급 가입하기',
+      // 🆕 2026.08: M 등급 가입 문의 안내 팝업
+      inq_line1:'M등급 문의는',
+      inq_line2:'으로 문의 주세요',
+      inq_copy:'이메일 주소 복사',
+      inq_copied:'복사되었습니다',
       cta_t:'T 등급 가입하기',
       notice_title:'공통 유의사항',
       notice_1:'본 멤버십은 양도 및 대여 불가',
@@ -33623,6 +33628,10 @@ var TRANSLATIONS = {
       t_b3_title:'3) Deposit Usage',
       t_b3_detail:'Usable for all in-app content',
       cta_m:'Join M Tier',
+      inq_line1:'For M Tier enquiries,',
+      inq_line2:'please get in touch at the address above.',
+      inq_copy:'Copy email address',
+      inq_copied:'Copied',
       cta_t:'Join T Tier',
       notice_title:'Common Notices',
       notice_1:'Membership is non-transferable and non-rentable',
@@ -34481,6 +34490,10 @@ TRANSLATIONS.ja = {
     t_b3_title:'3) デポジット利用',
     t_b3_detail:'アプリ内全コンテンツで利用可能',
     cta_m:'M グレードに登録',
+    inq_line1:'Mグレードのお問い合わせは',
+    inq_line2:'までご連絡ください。',
+    inq_copy:'メールアドレスをコピー',
+    inq_copied:'コピーしました',
     cta_t:'T グレードに登録',
     notice_title:'共通注意事項',
     notice_1:'本メンバーシップは譲渡・貸与不可',
@@ -39052,8 +39065,60 @@ function _renderMshipScreenStatus() {
 }
 
 // 가입 모달 열기
+// 🆕 2026.08: M 등급 가입 문의 안내 팝업.
+//   결제 바텀시트를 바로 띄우지 않고, 담당자 이메일로 안내한다.
+//   (연회비 규모가 커서 개별 확인 후 진행하는 편이 맞다)
+function openMshipInquiry(){
+  var prev = document.getElementById('mshipInquiryPopup');
+  if(prev) prev.remove();
+  var EMAIL = 'dnfmeod@playtaam.com';
+  var _f = "'Pretendard',-apple-system,BlinkMacSystemFont,'Noto Sans KR',sans-serif";
+  var ov = document.createElement('div');
+  ov.id = 'mshipInquiryPopup';
+  ov.style.cssText = 'position:fixed;inset:0;z-index:100001;background:rgba(0,0,0,.62);display:flex;align-items:center;justify-content:center;padding:24px;box-sizing:border-box;';
+  ov.innerHTML =
+      '<div style="width:100%;max-width:340px;background:#fff;border-radius:22px;padding:30px 24px 22px;box-shadow:0 24px 60px rgba(0,0,0,.4);font-family:'+_f+';color:#1A1A1A;text-align:center;">'
+    +   '<div style="font-family:var(--font-main);font-size:10px;font-weight:800;letter-spacing:.24em;color:#B4B0A8;margin-bottom:14px;">MEMBERSHIP</div>'
+    +   '<div style="font-size:17px;font-weight:800;letter-spacing:-0.3px;line-height:1.5;">'
+    +     t('membership.inq_line1','M등급 문의는') + '</div>'
+    +   '<div style="margin:14px 0;padding:14px 12px;background:#FBF3F2;border:1px solid #EEDADA;border-radius:13px;">'
+    +     '<a href="mailto:'+EMAIL+'" style="font-size:16px;font-weight:800;color:#5C0A14;text-decoration:none;word-break:break-all;">'+EMAIL+'</a>'
+    +   '</div>'
+    +   '<div style="font-size:15px;font-weight:700;color:#3a3a38;line-height:1.5;">'
+    +     t('membership.inq_line2','으로 문의 주세요') + '</div>'
+    +   '<button id="mshipInqCopy" style="width:100%;margin-top:22px;height:50px;border:1px solid #E0D9CC;border-radius:13px;background:#fff;color:#5C0A14;font-family:'+_f+';font-size:14px;font-weight:800;cursor:pointer;">'
+    +     t('membership.inq_copy','이메일 주소 복사') + '</button>'
+    +   '<button id="mshipInqClose" style="width:100%;margin-top:9px;height:50px;border:none;border-radius:13px;background:#1a1a18;color:#fff;font-family:'+_f+';font-size:14px;font-weight:800;cursor:pointer;">'
+    +     t('common.confirm','확인') + '</button>'
+    + '</div>';
+  document.body.appendChild(ov);
+  function _close(){ var p = document.getElementById('mshipInquiryPopup'); if(p) p.remove(); }
+  ov.addEventListener('click', function(e){ if(e.target === ov) _close(); });
+  var cb = document.getElementById('mshipInqClose'); if(cb) cb.addEventListener('click', _close);
+  var cp = document.getElementById('mshipInqCopy');
+  if(cp) cp.addEventListener('click', function(){
+    try {
+      if(navigator.clipboard && navigator.clipboard.writeText){
+        navigator.clipboard.writeText(EMAIL).then(function(){
+          if(typeof showToast === 'function') showToast('✓', t('membership.inq_copied','복사되었습니다'), EMAIL);
+        }).catch(function(){});
+      } else {
+        var ta = document.createElement('textarea');
+        ta.value = EMAIL; document.body.appendChild(ta); ta.select();
+        try { document.execCommand('copy'); } catch(_){}
+        document.body.removeChild(ta);
+        if(typeof showToast === 'function') showToast('✓', t('membership.inq_copied','복사되었습니다'), EMAIL);
+      }
+    } catch(_e){}
+  });
+}
+window.openMshipInquiry = openMshipInquiry;
+
 function openMembershipPay(grade) {
   grade = grade || 'M';
+  // 🆕 2026.08: M 등급도 결제 바텀시트 대신 문의 안내로 연결한다.
+  //   (기존 결제 흐름 코드는 그대로 보존 — 다시 열 때 이 분기만 제거하면 된다)
+  if(grade === 'M'){ openMshipInquiry(); return; }
   // T 등급 결제 흐름은 별도 가격/모달 구성이 필요함. 임시로 안내 토스트만 노출.
   if(grade === 'T'){
     if(typeof showToast === 'function'){
