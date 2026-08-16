@@ -292,12 +292,18 @@ html.auto-login .splash .bottom-group{display:none !important}
 /* 🆕 2026.08: 로그인 전 화면(초대코드·인증) 언어 전환.
    메인 앱의 언어 시트(tkLangOverlay, z-index 855)는 이 화면들(z-index 8000+) 뒤에 깔려
    보이지 않으므로, 화면에 직접 붙는 경량 전환 버튼을 둔다. 해외 회원 진입 대응. */
-.auth-lang{position:absolute;top:52px;right:16px;display:flex;gap:2px;z-index:20}
+/* 🆕 2026.08: 언어 선택이 너무 옅어(흰색 38%) 배경 사진 위에서 거의 안 보였다.
+   크기는 그대로 두고 대비만 올린다 — 글자를 밝게 + 얇은 테두리로 '누르는 것'임을 표시. */
+.auth-lang{position:absolute;top:52px;right:16px;display:flex;gap:2px;z-index:20;
+  padding:2px;border-radius:9px}
+.auth-lang.dark{background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.22);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+.auth-lang.light{background:rgba(255,255,255,.72);border:1px solid rgba(0,0,0,.10)}
 .auth-lang button{background:none;border:none;font-family:var(--font-main);font-size:10px;font-weight:700;letter-spacing:.08em;padding:6px 7px;cursor:pointer;border-radius:6px;transition:color .15s,background .15s}
-.auth-lang.dark button{color:rgba(255,255,255,.38)}
-.auth-lang.dark button.on{color:#c8a96e;background:rgba(200,169,110,.13)}
-.auth-lang.light button{color:#c2bcb2}
-.auth-lang.light button.on{color:#5C0A14;background:rgba(92,10,20,.07)}
+.auth-lang.dark button{color:rgba(255,255,255,.78)}
+.auth-lang.dark button.on{color:#1a1a18;background:#c8a96e}
+.auth-lang.light button{color:#6b655c}
+.auth-lang.light button.on{color:#fff;background:#5C0A14}
 /* 🆕 2026.08: 해외 회원 USD 병기 — 원화 옆에 작게 */
 .fx-usd{display:inline-block;margin-left:6px;font-family:var(--font-main);font-size:.82em;font-weight:600;color:#9a9486;letter-spacing:.01em;white-space:nowrap}
 .code-title{font-weight:700;font-size:22px;color:#f5f3ef;margin-bottom:8px}
@@ -20655,12 +20661,38 @@ function nsSync(){
   document.getElementById('ns-all').checked = allOn;
 }
 function closePage(id){ document.getElementById(id).style.display='none'; }
+// 🆕 2026.08: 어떤 페이지를 무슨 함수로 그렸는지 기억해둔다.
+//   언어를 바꿔도 '이미 열려 있는 화면' 은 다시 그려지지 않아, JS 로 조립된 내용이
+//   옛 언어로 남았다. 앱을 껐다 켜면 전부 새로 그려져서 "재시작해야 바뀐다" 로 보였다.
+window._tkOpenPageFns = window._tkOpenPageFns || {};
+
 function openPage(id,fn){
   var p = document.getElementById(id);
   p.style.display='flex';
   if(typeof applyI18n==='function') applyI18n(p);
-  if(fn)fn();
+  if(fn){ window._tkOpenPageFns[id] = fn; fn(); }
 }
+
+// 언어 전환 직후 호출 — 지금 화면에 떠 있는 페이지를 그린 함수를 다시 돌린다.
+function _tkRelocalizeOpenScreens(){
+  try{
+    Object.keys(window._tkOpenPageFns || {}).forEach(function(id){
+      var el = document.getElementById(id);
+      if(!el) return;
+      var vis = el.style.display && el.style.display !== 'none';
+      if(!vis) return;
+      try { window._tkOpenPageFns[id](); } catch(_e){}
+    });
+  }catch(e){}
+  // 티켓 목록·마이페이지처럼 openPage 를 거치지 않는 화면도 함께 갱신
+  try{
+    var tl = document.getElementById('ticketListScreen');
+    if(tl && tl.style.display && tl.style.display !== 'none'
+       && typeof renderTicketList === 'function') renderTicketList();
+  }catch(e){}
+  try{ if(typeof _refreshBalanceUI === 'function') _refreshBalanceUI(); }catch(e){}
+}
+window._tkRelocalizeOpenScreens = _tkRelocalizeOpenScreens;
 
 // ══════════════════════════════════════════════════════════════
 // 예약 요청 (파트너 레스토랑) — 회원 화면  [Phase 1]
@@ -32252,6 +32284,9 @@ var TRANSLATIONS = {
       code_sub:'초대 코드를 입력해주세요',
       code_submit:'입장하기',
       code_error:'유효하지 않은 초대코드입니다',
+      // 🆕 2026.08: 사전에 없어 EN/JA 에서도 한글이 그대로 남던 항목
+      already_member:'이미 회원이신가요?',
+      login_link:'로그인',
       // 로그인 방법 토글 · 비밀번호 로그인 (해외 회원 대비 다국어)
       login_method_password:'비밀번호',
       login_method_email:'이메일 OTP',
@@ -33038,6 +33073,8 @@ var TRANSLATIONS = {
       code_sub:'Please enter your invite code',
       code_submit:'Enter',
       code_error:'Invalid invite code',
+      already_member:'Already a member?',
+      login_link:'Sign in',
       login_method_password:'Password',
       login_method_email:'Email OTP',
       login_method_sms:'SMS',
@@ -34009,6 +34046,8 @@ TRANSLATIONS.ja = {
     code_sub:'招待コードを入力してください',
     code_submit:'入場',
     code_error:'無効な招待コードです',
+    already_member:'すでに会員の方は',
+    login_link:'ログイン',
     login_method_password:'パスワード',
     login_method_email:'メールOTP',
     login_method_sms:'SMS',
@@ -35798,6 +35837,7 @@ function authPickLang(code){
     localStorage.setItem('tkLang', code);
   }catch(e){}
   try{ if(typeof applyI18n === 'function') applyI18n(); }catch(e){}
+  try{ if(typeof _tkRelocalizeOpenScreens === 'function') _tkRelocalizeOpenScreens(); }catch(e){}
   try{
     var lbl = document.getElementById('tkLangCurrent');
     var L = (typeof TK_LANGS !== 'undefined') ? TK_LANGS.find(function(x){ return x.code === code; }) : null;
@@ -35895,6 +35935,8 @@ function tkPickLang(code) {
     if(typeof renderRequestList === 'function') renderRequestList();
     if(typeof _reqTab !== 'undefined' && _reqTab === 'partner' && typeof renderPartnerRoster === 'function') renderPartnerRoster();
   }
+  // 🆕 이미 열려 있는 화면(마이페이지 하위 목록 등)도 새 언어로 다시 그린다
+  if(typeof _tkRelocalizeOpenScreens === 'function') _tkRelocalizeOpenScreens();
   var msg;
   if (code === 'en') msg = t('toast.lang_changed_msg_en');
   else if (code === 'ja') msg = t('toast.lang_changed_msg_ja');
