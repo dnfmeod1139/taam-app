@@ -14122,6 +14122,11 @@ function _doProfileAndConsume(user, savedName, email, phone){
     var tierFromInvite = (_pendingInviteCode && (_pendingInviteCode.inviteeTier || _pendingInviteCode.invitee_tier)) || 'T';
     if(tierFromInvite !== 'M' && tierFromInvite !== 'T' && tierFromInvite !== 'A') tierFromInvite = 'T';   // 🆕 2026.08: A 등급 허용
     var tierUpdate = { membership_tier: tierFromInvite };
+    // 🆕 2026.08: 초대코드의 국가를 회원 레코드에도 기록한다.
+    //   이전에는 country 가 invite_codes 에만 있어 회원 목록에서 국내/해외를
+    //   전혀 구분할 수 없었다. 값이 이상하면 KR 로 떨어뜨린다 (국내가 기본).
+    var _ctryFromInvite = (_pendingInviteCode && _pendingInviteCode.country) || 'KR';
+    tierUpdate.country = (_ctryFromInvite === 'EN') ? 'EN' : 'KR';
     if(tierFromInvite === 'M'){
       var expDate = new Date();
       expDate.setDate(expDate.getDate() + 365);
@@ -37083,7 +37088,7 @@ async function renderMemberList() {
     // 🆕 v1.53.18 2026.05.28: deleted_at 필터 제거 — 탈퇴 회원도 표시하되 배지로 구분.
     //   v1.53.16 의 strict 필터로 모든 회원이 안 보이는 사고 방지 (안전망).
     var res = await window.sb.from('profiles')
-      .select('id, display_name, phone, email, created_at, member_until, role, membership_deposit_balance, general_deposit_balance, deleted_at')
+      .select('id, display_name, phone, email, created_at, member_until, role, membership_deposit_balance, general_deposit_balance, deleted_at, country')
       .order('created_at', { ascending: false })
       .limit(500);
     if (res.error) {
@@ -37122,12 +37127,19 @@ async function renderMemberList() {
         isPromo = !isNaN(du.getTime()) && du.getFullYear()===2027 && du.getMonth()===11 && du.getDate()===31;
       }
       var untilHtml = _fmt(m.member_until) + (isPromo ? ' <span style="color:#c8a96e;font-size:8px;letter-spacing:.05em;">★</span>' : '');
+      // 🆕 2026.08: 국내/해외 구분 배지. country 컬럼 도입 전 회원은 값이 없을 수 있어
+      //   'EN' 이 명시된 경우만 해외로 보고 나머지는 국내로 취급한다 (현 회원은 전원 국내).
+      var isOverseas = (m.country === 'EN');
+      var ctryHtml = '<span style="display:inline-block;margin-left:6px;padding:1px 5px;border-radius:4px;'
+        + 'font-size:8.5px;font-weight:800;letter-spacing:.04em;vertical-align:1px;'
+        + (isOverseas ? 'background:#eef2f6;color:#5b6b7a;' : 'background:#f6eef0;color:#5C0A14;')
+        + '">' + (isOverseas ? '해외' : '국내') + '</span>';
       return '<div class="mem-card" style="'+(isDeleted?'opacity:.45;':'')+'" onclick="memOpenProfileQuick(\''+_esc(m.id)+'\',\''+_esc(m.display_name||'')+'\')">'
         +'<div class="mem-card-top">'
           +'<div class="mem-name">'+_esc(m.display_name||'(이름 없음)')+'</div>'
           +'<div class="mem-grade '+gradeCls+'">'+gradeLabel+'</div>'
         +'</div>'
-        +'<div class="mem-phone">'+_esc(m.phone||m.email||'—')+'</div>'
+        +'<div class="mem-phone">'+_esc(m.phone||m.email||'—')+ctryHtml+'</div>'
         +'<div class="mem-stats">'
           +'<div class="mem-stat"><div class="mem-stat-val" style="font-size:11px;font-family:Oswald,sans-serif;">'+_fmt(m.created_at)+'</div><div class="mem-stat-key">가입일</div></div>'
           +'<div class="mem-stat"><div class="mem-stat-val" style="font-size:11px;font-family:Oswald,sans-serif;color:#5C0A14;">'+untilHtml+'</div><div class="mem-stat-key">종료일</div></div>'
@@ -37156,7 +37168,7 @@ async function memOpenProfileQuick(userId, name){
   if(body) body.innerHTML = '<div style="text-align:center;color:#999;font-size:11px;padding:30px;">불러오는 중...</div>';
   try {
     var res = await window.sb.from('profiles')
-      .select('id, display_name, phone, email, created_at, member_until, role, deleted_at, membership_tier')
+      .select('id, display_name, phone, email, created_at, member_until, role, deleted_at, membership_tier, country')
       .eq('id', userId)
       .single();
     if(res.error || !res.data){
@@ -37220,6 +37232,16 @@ function renderMemberManageModal(){
         + '</div>'
         + '<div style="font-size:10px;color:#aaa;margin-top:6px;">현재 등급: '+(u.membership_tier||'미설정')+'</div>'
       + '</div>'
+      // 🆕 2026.08: 국내/해외 구분 — 회원 목록·통계에서 쓰고, 잘못 분류된 회원을 여기서 고친다.
+      //   초대코드의 country 는 '가입 경로'라 실제 거주국과 다를 수 있어 수동 교정이 필요하다.
+      + '<div style="padding:16px 0;border-bottom:1px solid #f0f0f0;">'
+        + '<div style="font-size:11px;font-weight:700;color:#1a1a18;margin-bottom:8px;">국가 구분</div>'
+        + '<div style="display:flex;gap:8px;">'
+          + '<button onclick="mmmSaveCountry(\'KR\')" style="flex:1;padding:11px;border-radius:8px;border:1.5px solid '+(u.country!=='EN'?'#5C0A14':'#e0ddd8')+';background:'+(u.country!=='EN'?'#5C0A14':'#fff')+';color:'+(u.country!=='EN'?'#fff':'#888')+';font-weight:800;font-size:13px;cursor:pointer;">🇰🇷 국내</button>'
+          + '<button onclick="mmmSaveCountry(\'EN\')" style="flex:1;padding:11px;border-radius:8px;border:1.5px solid '+(u.country==='EN'?'#1a1a18':'#e0ddd8')+';background:'+(u.country==='EN'?'#1a1a18':'#fff')+';color:'+(u.country==='EN'?'#fff':'#888')+';font-weight:800;font-size:13px;cursor:pointer;">🌍 해외</button>'
+        + '</div>'
+        + '<div style="font-size:10px;color:#aaa;margin-top:6px;">현재: '+(u.country==='EN'?'해외':(u.country==='KR'?'국내':'미설정 (국내로 취급)'))+'</div>'
+      + '</div>'
       // 탈퇴 처리
       + '<div style="padding:16px 0 8px;">'
         + '<div style="font-size:11px;font-weight:700;color:#9B1C1C;margin-bottom:8px;">회원 탈퇴 처리</div>'
@@ -37276,6 +37298,33 @@ async function mmmSaveTier(tier){
   }catch(e){ if(typeof showToast==='function') showToast('⚠','오류',(e&&e.message)||String(e)); }
 }
 window.mmmSaveTier = mmmSaveTier;
+
+// 🆕 2026.08: 국내/해외 구분 변경 — 슈퍼어드민 전용
+//   'country' 컬럼이 아직 없는 환경(마이그레이션 미실행)에서는 저장이 실패한다.
+//   그 경우 조용히 넘어가지 않고 실행해야 할 SQL 을 알려준다.
+async function mmmSaveCountry(c){
+  if(!_mmmCurrentUser || !window.sb) return;
+  if(!_isSuperAdmin || !_isSuperAdmin()){ if(typeof showToast==='function') showToast('🔒','권한 부족','슈퍼어드민 전용'); return; }
+  if(c!=='KR' && c!=='EN') return;
+  try{
+    var res = await window.sb.from('profiles').update({ country: c }).eq('id', _mmmCurrentUser.id).select();
+    if(res.error){
+      var m = String(res.error.message||'');
+      if(/column .*country|does not exist/i.test(m)){
+        if(typeof showToast==='function') showToast('⚠','컬럼 없음','sql/profiles_country.sql 을 먼저 실행해주세요');
+      } else {
+        if(typeof showToast==='function') showToast('⚠','저장 실패', m);
+      }
+      return;
+    }
+    if(!res.data || !res.data.length){ if(typeof showToast==='function') showToast('⚠','RLS 차단','변경 안 됨 — 권한 점검'); return; }
+    _mmmCurrentUser.country = c;
+    renderMemberManageModal();
+    if(typeof showToast==='function') showToast('✓','국가 변경', (c==='KR'?'국내':'해외')+' 회원으로 변경되었습니다');
+    if(typeof renderMemberList==='function') renderMemberList();
+  }catch(e){ if(typeof showToast==='function') showToast('⚠','오류',(e&&e.message)||String(e)); }
+}
+window.mmmSaveCountry = mmmSaveCountry;
 
 async function mmmSoftDelete(){
   if(!_mmmCurrentUser || !window.sb) return;
