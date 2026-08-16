@@ -5358,8 +5358,8 @@ var PG_CHANNELS = {
   card_main:    'channel-key-ab7ba37e-63a3-4912-a321-c54f1466a764',  // 메인 카드 (이니시스 → 라이브 키 받으면 교체)
   billing_key:  'channel-key-ab7ba37e-63a3-4912-a321-c54f1466a764',  // 빌링키 (갤럭시아 → 교체)
   kakao:        'channel-key-ab7ba37e-63a3-4912-a321-c54f1466a764',  // 카카오페이 → 교체
-  global:       'channel-key-ab7ba37e-63a3-4912-a321-c54f1466a764',  // 페이먼트월 (해외) → 교체
-  identity:     'channel-key-ab7ba37e-63a3-4912-a321-c54f1466a764'   // 다날 본인인증 → 교체
+  global:       'channel-key-ab7ba37e-63a3-4912-a321-c54f1466a764'   // 페이먼트월 (해외) → 교체
+  // 🗑 2026.08: identity(다날 본인인증) 제거 — 국내 가입은 휴대폰 SMS OTP 로 전환됨
 };
 
 // 호환성: 기존 코드의 PORTONE_CHANNEL_KEY 유지
@@ -14220,164 +14220,16 @@ function vpCheckAgreements(){
 }
 
 // ════════════════════════════════════════════════════════════════
-// PHASE B-2 통합본: 다날 본인인증 + UI 분기 (4개 함수)
-// 위치: index.html의 function vpVerify(){ 위쪽에 통째로 붙여넣기
+// 🗑 2026.08: 다날 본인인증(PortOne) 경로 제거
+//   국내 가입은 휴대폰 SMS OTP(taam-sms-hook → Solapi)로 전환됐다.
+//   startKoreanIdentityVerify() / vpKoreanVerify() 는 #200 이후 어디서도
+//   호출되지 않았고, 호출됐더라도 동작하지 않았다 —
+//     · verify-identity-and-auth Edge Function 이 배포된 적 없음
+//     · PG_CHANNELS.identity 가 플레이스홀더 키 그대로였음
+//     · 성공 콜백이 _doProfileAndConsume() 을 부르지 않아 초대코드
+//       사용처리(consume-invite)·이름·등급 저장이 전부 누락됐음
+//   되살릴 코드가 아니므로 남겨두지 않는다. 필요하면 git 이력에서 찾는다.
 // ════════════════════════════════════════════════════════════════
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 1/4: 다날 본인인증 → Edge Function 검증 → 자동 로그인
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-function startKoreanIdentityVerify(mode, inviteCode, name, callback) {
-  if (typeof PortOne === 'undefined' || !PortOne || typeof PortOne.requestIdentityVerification !== 'function') {
-    if (callback) callback(false, '본인인증 모듈 로드 실패. 새로고침해주세요.');
-    return;
-  }
-
-  if (typeof PG_CHANNELS === 'undefined' || !PG_CHANNELS.identity) {
-    if (callback) callback(false, '본인인증 채널 미설정');
-    return;
-  }
-
-  var identityVerificationId = 'iv-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
-
-  console.log('🆔 본인인증 요청:', { mode: mode, identityVerificationId: identityVerificationId });
-
-  PortOne.requestIdentityVerification({
-    storeId: PORTONE_STORE_ID,
-    identityVerificationId: identityVerificationId,
-    channelKey: PG_CHANNELS.identity
-  }).then(function(res){
-    if (res && res.code != null) {
-      console.warn('본인인증 취소/실패:', res.code, res.message);
-      if (callback) callback(false, res.message || '본인인증이 취소되었습니다');
-      return;
-    }
-
-    console.log('✅ 본인인증 완료:', res);
-
-    if (!window.sb) {
-      if (callback) callback(false, '서버 연결 오류');
-      return;
-    }
-
-    window.sb.functions.invoke('verify-identity-and-auth', {
-      body: {
-        identityVerificationId: identityVerificationId,
-        inviteCode: inviteCode,
-        name: name,
-        mode: mode
-      }
-    }).then(function(invokeRes){
-      if (invokeRes.error) {
-        console.error('Edge Function 에러:', invokeRes.error);
-        var msg = (invokeRes.error.message) || '인증 처리 실패';
-        if (callback) callback(false, msg);
-        return;
-      }
-
-      var data = invokeRes.data || {};
-      if (!data.success) {
-        if (callback) callback(false, data.error || '인증 실패');
-        return;
-      }
-
-      window.sb.auth.verifyOtp({
-        email: data.email,
-        token_hash: data.hashedToken,
-        type: 'magiclink'
-      }).then(function(otpRes){
-        if (otpRes.error) {
-          console.error('세션 발급 실패:', otpRes.error);
-          if (callback) callback(false, '로그인 처리 실패: ' + otpRes.error.message);
-          return;
-        }
-
-        console.log('✅ 한국 회원 로그인 성공:', otpRes.data.user.id);
-        if (callback) callback(true, {
-          userId: otpRes.data.user.id,
-          email: data.email,
-          verifiedInfo: data.verifiedInfo
-        });
-      }).catch(function(e){
-        console.error('verifyOtp 예외:', e);
-        if (callback) callback(false, '세션 발급 실패');
-      });
-
-    }).catch(function(e){
-      console.error('invoke 예외:', e);
-      if (callback) callback(false, '인증 서버 호출 실패');
-    });
-
-  }).catch(function(e){
-    console.error('본인인증 예외:', e);
-    if (callback) callback(false, '본인인증 처리 중 오류');
-  });
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 2/4: 한국 회원 가입/로그인 트리거 (phoneScreen에서 호출)
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-function vpKoreanVerify() {
-  var hint = document.getElementById('vpHint');
-  var btn = document.querySelector('.phone-verify-btn');
-  
-  if (typeof vpCheckAgreements === 'function' && !vpCheckAgreements()) {
-    if (hint) {
-      hint.textContent = '필수 약관에 모두 동의해주세요';
-      hint.className = 'phone-hint error';
-    }
-    return;
-  }
-
-  var name = '';
-  var nameEl = document.getElementById('vpName');
-  if (nameEl) name = (nameEl.value || '').trim();
-
-  var inviteCode = '';
-  if (typeof _pendingInviteCode !== 'undefined' && _pendingInviteCode) {
-    inviteCode = _pendingInviteCode.code;
-  }
-
-  var mode = inviteCode ? 'signup' : 'login';
-
-  if (mode === 'signup' && !name) {
-    if (hint) {
-      hint.textContent = '이름을 입력해주세요';
-      hint.className = 'phone-hint error';
-    }
-    return;
-  }
-
-  if (btn) btn.disabled = true;
-  if (hint) {
-    hint.textContent = '본인인증창을 여는 중...';
-    hint.className = 'phone-hint';
-  }
-
-  startKoreanIdentityVerify(mode, inviteCode, name, function(success, result){
-    if (btn) btn.disabled = false;
-
-    if (!success) {
-      if (hint) {
-        hint.textContent = result || '본인인증 실패';
-        hint.className = 'phone-hint error';
-      }
-      return;
-    }
-
-    if (hint) {
-      hint.textContent = '✅ 인증 완료';
-      hint.className = 'phone-hint';
-    }
-
-    console.log('✅ 가입/로그인 완료, 메인으로 이동');
-
-    setTimeout(function(){
-      if (typeof closeAllScreens === 'function') closeAllScreens();
-      else location.reload();
-    }, 600);
-  });
-}
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // 3/4: phoneScreen UI 분기 (KR=휴대폰 SMS OTP / EN=이메일 OTP)
@@ -14391,8 +14243,7 @@ function vpKoreanVerify() {
 //   이미 완성돼 있고, taam-sms-hook 으로 실제 문자가 나가므로 그 경로를 살린다.
 //   → 인증 후 vpVerify() 가 verify-invite 로 이름·번호를 대조하므로
 //     "초대한 사람 = 가입한 사람" 이 서버에서 보장된다.
-//   ※ vpKoreanVerify()/startKoreanIdentityVerify() 는 호출되지 않지만
-//     다날 채널키 발급 후 되살릴 수 있게 코드는 남겨둔다.
+//   ※ 다날 본인인증 경로(vpKoreanVerify/startKoreanIdentityVerify)는 제거됐다.
 function applyPhoneScreenByCountry(country) {
   var isKR = (country === 'KR');
 
@@ -14452,9 +14303,8 @@ function _applyPhoneScreenAuto() {
 }
 
 // ════════════════════════════════════════════════════════════════
-// 끝 — 4개 함수 모두 정의됨
-// 검증: typeof startKoreanIdentityVerify, vpKoreanVerify, applyPhoneScreenByCountry, _applyPhoneScreenAuto
-// 모두 "function" 나와야 정상
+// 끝 — 검증: typeof applyPhoneScreenByCountry, _applyPhoneScreenAuto
+// 둘 다 "function" 나와야 정상
 // ════════════════════════════════════════════════════════════════
 
 // ════════════════════════════════════════════════════════════════
