@@ -20706,6 +20706,39 @@ var _prCurrent    = null;   // 현재 상세 venue_id
 // 🆕 2026.08: 큐레이션 인덱스(0.8MB)에 타임아웃을 건다.
 //   통신이 나쁘면 fetch 가 끝나지 않아 파트너 목록이 '불러오는 중…' 에서 영영 멈췄다.
 //   이 인덱스는 이름·장르 '표시용' 이라 없어도 목록은 뜬다 (이름은 restaurantDB 로 폴백).
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026.08: 로그인이 끊긴 상태를 화면에 명확히 알린다.
+//   단일 기기 정책(다른 기기에서 로그인 → 이 기기 강제 로그아웃) 때문에 세션이
+//   끊기면 Supabase 조회가 전부 실패해 목록이 '그냥 빈 화면' 으로 남았다.
+//   회원은 원인을 알 수 없어 "데이터가 사라졌다" 로 오해한다 — 실제로는 그대로 있다.
+// ═══════════════════════════════════════════════════════════════
+async function _tkAuthed(){
+  try{
+    if(!window.sb) return false;
+    var r = await window.sb.auth.getUser();
+    return !!(r && r.data && r.data.user);
+  }catch(e){ return false; }
+}
+
+function _tkLoginNoticeHtml(dark){
+  var c = dark
+    ? { t:'#fff', s:'rgba(255,255,255,.55)', bg:'rgba(255,255,255,.06)', bd:'rgba(255,255,255,.16)' }
+    : { t:'#1a1a18', s:'#9a9486', bg:'#faf8f5', bd:'#ece7df' };
+  return '<div style="margin:24px 2px;padding:30px 22px;border-radius:16px;background:'+c.bg+';border:1px solid '+c.bd+';text-align:center;font-family:\'Noto Sans KR\',sans-serif;">'
+    + '<div style="font-size:26px;margin-bottom:10px;">🔒</div>'
+    + '<div style="font-size:15px;font-weight:800;color:'+c.t+';margin-bottom:7px;">로그인이 필요합니다</div>'
+    + '<div style="font-size:12.5px;color:'+c.s+';line-height:1.65;">다른 기기에서 로그인하면 이 기기는 자동으로 로그아웃됩니다.<br><b style="color:'+c.t+';opacity:.8;">저장된 내용은 그대로 있으니</b> 다시 로그인해 주세요.</div>'
+    + '<button onclick="_tkGoLogin()" style="margin-top:18px;padding:13px 28px;border:none;border-radius:11px;background:#5C0A14;color:#fff;font-family:var(--font-main);font-size:13px;font-weight:800;cursor:pointer;">로그인하기</button>'
+    + '</div>';
+}
+window._tkLoginNoticeHtml = _tkLoginNoticeHtml;
+
+function _tkGoLogin(){
+  try{ if(typeof openLogin === 'function'){ openLogin(); return; } }catch(e){}
+  try{ location.reload(); }catch(e){}
+}
+window._tkGoLogin = _tkGoLogin;
+
 async function _prLoadVenueIndex(){
   if(_prVenueIndex) return _prVenueIndex;
   try{
@@ -20964,6 +20997,8 @@ function _prUpdateDepositPreview(){
 async function renderRequestList(){
   var el = document.getElementById('requestList');
   if(!el) return;
+  // 🆕 로그인이 끊겼으면 빈 목록 대신 이유를 보여준다
+  if(!(await _tkAuthed())){ el.innerHTML = _tkLoginNoticeHtml(true); return; }
   el.innerHTML = '<div style="padding:48px;text-align:center;color:rgba(255,255,255,.4);font-size:13px;">'+t('resv.loading','불러오는 중…')+'</div>';
   try{ await _prLoadPartners(); }
   catch(e){ el.innerHTML = '<div style="padding:48px;text-align:center;color:#e88;font-size:13px;">'+t('resv.load_fail','불러오기 실패')+'<br><span style="font-size:11px;opacity:.6;">'+(e.message||'')+'</span></div>'; return; }
@@ -20998,6 +21033,8 @@ function switchRequestTab(tab){
 async function renderPartnerRoster(){
   var el = document.getElementById('partnerRosterList');
   if(!el) return;
+  // 🆕 로그인이 끊겼으면 빈 목록 대신 이유를 보여준다
+  if(!(await _tkAuthed())){ el.innerHTML = _tkLoginNoticeHtml(true); return; }
   if(!_prPartners.length){
     el.innerHTML = '<div style="padding:36px;text-align:center;color:rgba(255,255,255,.4);font-size:13px;">'+t('resv.loading','불러오는 중…')+'</div>';
     try{ await _prLoadPartners(); }
@@ -22326,6 +22363,14 @@ window._tkPayBreakdown = _tkPayBreakdown;
 function ticketHistRender(idx){
   var list = document.getElementById('ticketHistList');
   if(!list) return;
+  // 🆕 2026.08: 로그인이 끊긴 상태면 '내역 없음' 대신 이유를 보여준다.
+  //   세션이 끊기면 loadPurchase 가 서버 조회를 못 해 목록이 비는데,
+  //   그걸 "구매내역이 사라졌다" 로 오해하게 된다.
+  try{
+    _tkAuthed().then(function(ok){
+      if(!ok && list) list.innerHTML = _tkLoginNoticeHtml(false);
+    });
+  }catch(_e){}
 
   // idx: 0=방문예정, 1=방문완료, 2=취소
   var statusMap = ['upcoming','visited','cancelled'];
