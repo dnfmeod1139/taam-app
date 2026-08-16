@@ -20661,12 +20661,38 @@ function nsSync(){
   document.getElementById('ns-all').checked = allOn;
 }
 function closePage(id){ document.getElementById(id).style.display='none'; }
+// 🆕 2026.08: 어떤 페이지를 무슨 함수로 그렸는지 기억해둔다.
+//   언어를 바꿔도 '이미 열려 있는 화면' 은 다시 그려지지 않아, JS 로 조립된 내용이
+//   옛 언어로 남았다. 앱을 껐다 켜면 전부 새로 그려져서 "재시작해야 바뀐다" 로 보였다.
+window._tkOpenPageFns = window._tkOpenPageFns || {};
+
 function openPage(id,fn){
   var p = document.getElementById(id);
   p.style.display='flex';
   if(typeof applyI18n==='function') applyI18n(p);
-  if(fn)fn();
+  if(fn){ window._tkOpenPageFns[id] = fn; fn(); }
 }
+
+// 언어 전환 직후 호출 — 지금 화면에 떠 있는 페이지를 그린 함수를 다시 돌린다.
+function _tkRelocalizeOpenScreens(){
+  try{
+    Object.keys(window._tkOpenPageFns || {}).forEach(function(id){
+      var el = document.getElementById(id);
+      if(!el) return;
+      var vis = el.style.display && el.style.display !== 'none';
+      if(!vis) return;
+      try { window._tkOpenPageFns[id](); } catch(_e){}
+    });
+  }catch(e){}
+  // 티켓 목록·마이페이지처럼 openPage 를 거치지 않는 화면도 함께 갱신
+  try{
+    var tl = document.getElementById('ticketListScreen');
+    if(tl && tl.style.display && tl.style.display !== 'none'
+       && typeof renderTicketList === 'function') renderTicketList();
+  }catch(e){}
+  try{ if(typeof _refreshBalanceUI === 'function') _refreshBalanceUI(); }catch(e){}
+}
+window._tkRelocalizeOpenScreens = _tkRelocalizeOpenScreens;
 
 // ══════════════════════════════════════════════════════════════
 // 예약 요청 (파트너 레스토랑) — 회원 화면  [Phase 1]
@@ -35811,6 +35837,7 @@ function authPickLang(code){
     localStorage.setItem('tkLang', code);
   }catch(e){}
   try{ if(typeof applyI18n === 'function') applyI18n(); }catch(e){}
+  try{ if(typeof _tkRelocalizeOpenScreens === 'function') _tkRelocalizeOpenScreens(); }catch(e){}
   try{
     var lbl = document.getElementById('tkLangCurrent');
     var L = (typeof TK_LANGS !== 'undefined') ? TK_LANGS.find(function(x){ return x.code === code; }) : null;
@@ -35908,6 +35935,8 @@ function tkPickLang(code) {
     if(typeof renderRequestList === 'function') renderRequestList();
     if(typeof _reqTab !== 'undefined' && _reqTab === 'partner' && typeof renderPartnerRoster === 'function') renderPartnerRoster();
   }
+  // 🆕 이미 열려 있는 화면(마이페이지 하위 목록 등)도 새 언어로 다시 그린다
+  if(typeof _tkRelocalizeOpenScreens === 'function') _tkRelocalizeOpenScreens();
   var msg;
   if (code === 'en') msg = t('toast.lang_changed_msg_en');
   else if (code === 'ja') msg = t('toast.lang_changed_msg_ja');
