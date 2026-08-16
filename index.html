@@ -14375,27 +14375,41 @@ function vpKoreanVerify() {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 3/4: phoneScreen UI 분기 (KR=다날 / EN=이메일 OTP)
+// 3/4: phoneScreen UI 분기 (KR=휴대폰 SMS OTP / EN=이메일 OTP)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 🆕 2026.08: 국내(KR) 가입을 다날 본인인증 → 휴대폰 SMS OTP 로 전환.
+//   이전 구현은 vpKoreanVerify() → verify-identity-and-auth 를 불렀는데
+//   그 Edge Function 이 배포돼 있지 않아 국내 가입이 아예 진행되지 않았다.
+//   게다가 성공 콜백에서 _doProfileAndConsume() 을 호출하지 않아
+//   초대코드 사용처리(consume-invite)·이름·등급 저장도 전부 빠져 있었다.
+//   vpSend()/vpVerify() 의 KR 분기(signInWithOtp{phone} / verifyOtp{type:'sms'})는
+//   이미 완성돼 있고, taam-sms-hook 으로 실제 문자가 나가므로 그 경로를 살린다.
+//   → 인증 후 vpVerify() 가 verify-invite 로 이름·번호를 대조하므로
+//     "초대한 사람 = 가입한 사람" 이 서버에서 보장된다.
+//   ※ vpKoreanVerify()/startKoreanIdentityVerify() 는 호출되지 않지만
+//     다날 채널키 발급 후 되살릴 수 있게 코드는 남겨둔다.
 function applyPhoneScreenByCountry(country) {
   var isKR = (country === 'KR');
-  
+
   var emailRow = document.getElementById('vpEmail');
+  var phoneRow = document.getElementById('vpPhoneRow');
   var codeRow = document.getElementById('vpCode');
   var sendBtn = document.querySelector('.phone-send-btn');
   var verifyBtn = document.querySelector('.phone-verify-btn');
   var phoneSub = document.querySelector('.phone-sub');
 
   if (isKR) {
+    if (phoneRow) phoneRow.style.display = '';
     if (emailRow) emailRow.parentElement.style.display = 'none';
-    if (codeRow) codeRow.parentElement.style.display = 'none';
-    if (sendBtn) sendBtn.style.display = 'none';
+    if (codeRow) codeRow.parentElement.style.display = '';
+    if (sendBtn) sendBtn.style.display = '';
     if (verifyBtn) {
-      verifyBtn.textContent = t('auth.vp_phone_verify_btn');
-      verifyBtn.setAttribute('onclick', 'vpKoreanVerify()');
+      verifyBtn.textContent = t('auth.vp_confirm_btn');
+      verifyBtn.setAttribute('onclick', 'vpVerify()');
     }
     if (phoneSub) phoneSub.textContent = t('auth.vp_sub_phone');
   } else {
+    if (phoneRow) phoneRow.style.display = 'none';
     if (emailRow) emailRow.parentElement.style.display = '';
     if (codeRow) codeRow.parentElement.style.display = '';
     if (sendBtn) sendBtn.style.display = '';
@@ -32550,8 +32564,8 @@ var TRANSLATIONS = {
       menu_profile:'프로필 편집',
       account:'Account',
       edit_info:'회원정보 변경',
-      verify:'번호 등록',
-      verified:'등록됨',
+      verify:'인증하기',
+      verified:'인증됨',
       deposit_section:'예치금',
       deposit_hist:'예치금 내역',
       ticket_hist:'티켓 구매 내역',
@@ -32820,7 +32834,7 @@ var TRANSLATIONS = {
     // 🆕 마이페이지 하위 화면들
     mp_sub: {
       // 핸드폰 인증 팝업
-      pv_title:'휴대폰 번호 등록',
+      pv_title:'휴대폰 번호 인증',
       pv_label_phone:'핸드폰 번호',
       pv_ph_phone:'010-0000-0000',
       pv_btn_send:'발송',
@@ -33364,8 +33378,8 @@ var TRANSLATIONS = {
       menu_profile:'Edit Profile',
       account:'Account',
       edit_info:'Edit Profile',
-      verify:'Add Number',
-      verified:'Registered',
+      verify:'Verify',
+      verified:'Verified',
       deposit_section:'Deposit',
       deposit_hist:'Deposit History',
       ticket_hist:'Ticket Purchase History',
@@ -33623,7 +33637,7 @@ var TRANSLATIONS = {
     // 🆕 My Page sub-screens
     mp_sub: {
       // Phone verification popup
-      pv_title:'Register Phone Number',
+      pv_title:'Verify Phone Number',
       pv_label_phone:'Phone Number',
       pv_ph_phone:'010-0000-0000',
       pv_btn_send:'Send',
@@ -34162,7 +34176,7 @@ TRANSLATIONS.ja = {
     menu_profile:'プロフィール編集',
     account:'Account',
     edit_info:'プロフィール編集',
-    verify:'番号登録',
+    verify:'認証する',
     verified:'認証済み',
     deposit_section:'デポジット',
     deposit_hist:'デポジット履歴',
@@ -34180,7 +34194,7 @@ TRANSLATIONS.ja = {
     group_settings:'設定',
   },
   mp_sub: {
-    pv_title:'携帯番号の登録',
+    pv_title:'携帯番号の認証',
     pv_label_phone:'電話番号',
     pv_ph_phone:'010-0000-0000',
     pv_btn_send:'送信',
