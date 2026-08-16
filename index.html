@@ -21143,7 +21143,7 @@ function _prRosterRowHtml(p){
   var thumb = photo
     ? '<div style="width:52px;height:52px;border-radius:10px;flex-shrink:0;background:center/cover no-repeat url(\''+photo+'\');"></div>'
     : '<div style="width:52px;height:52px;border-radius:10px;flex-shrink:0;background:linear-gradient(135deg,#2a2320,#15110f);display:flex;align-items:center;justify-content:center;font-size:20px;">🍽</div>';
-  return '<div onclick="openPartnerDetail(\''+p.venue_id+'\')" style="display:flex;gap:12px;align-items:center;padding:11px 12px;margin-bottom:8px;border-radius:14px;border:1px solid rgba(255,255,255,.07);background:#16120f;cursor:pointer;">'
+  return '<div onclick="openPartnerDetail(\''+p.venue_id+'\', true)" style="display:flex;gap:12px;align-items:center;padding:11px 12px;margin-bottom:8px;border-radius:14px;border:1px solid rgba(255,255,255,.07);background:#16120f;cursor:pointer;">'
     + thumb
     + '<div style="flex:1;min-width:0;">'
     +   '<div style="font-family:var(--font-main);font-weight:800;font-size:14.5px;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+name+'</div>'
@@ -21581,8 +21581,12 @@ function _prRenderQuota(){
   });
 }
 
-function openPartnerDetail(vid){
+// fromRoster=true → '탐 파트너십 레스토랑 리스트' 에서 들어온 경우.
+//   이 목록은 제휴 매장을 소개하는 카탈로그이지 요청 창구가 아니다.
+//   예약 요청 양식은 '요청 가능 리스트' 로 들어왔을 때만 노출한다.
+function openPartnerDetail(vid, fromRoster){
   _prCurrent = vid;
+  window._prFromRoster = !!fromRoster;
   var p = _prPartners.find(function(x){ return x.venue_id === vid; }) || {};
   document.getElementById('prdName').textContent = _resvVenueName(vid);
   document.getElementById('prdSub').textContent  = _resvVenueSub(vid);
@@ -21627,13 +21631,18 @@ function openPartnerDetail(vid){
   _prBuildPartyChips(p.party_min, p.party_max);   // 인원 칩 구성 + 기본값 + 미리보기 갱신
 
   // 🆕 요청 ON/OFF: request_enabled=false 면 요청 폼 숨기고 안내만
-  var _reqOn = (p.request_enabled === true);
+  //   🆕 2026.08: 파트너십 리스트(카탈로그)에서 들어온 경우에도 양식을 숨긴다.
+  //     요청은 '요청 가능 리스트' 에서만 받는다.
+  var _canReq = (p.request_enabled === true);      // 매장 자체가 요청을 받는가
+  var _reqOn  = _canReq && !fromRoster;            // 이 화면에서 양식을 띄울 것인가
   var _form = document.getElementById('prdRequestForm');
   var _sbtn = document.getElementById('prdSubmitBtn');
   var _noreq = document.getElementById('prdNoRequest');
   if(_form)  _form.style.display  = _reqOn ? 'flex' : 'none';
   if(_sbtn)  _sbtn.style.display  = _reqOn ? 'block' : 'none';
-  if(_noreq) _noreq.style.display = _reqOn ? 'none' : 'block';
+  // '요청을 받지 않는 매장' 안내는 요청 리스트에서 들어왔을 때만 의미가 있다.
+  //   카탈로그(파트너십 리스트)에서 들어온 경우엔 사실이 아니므로 안내도 숨긴다.
+  if(_noreq) _noreq.style.display = (!fromRoster && !_canReq) ? 'block' : 'none';
 
   document.getElementById('partnerDetailPage').style.display = 'flex';
 }
