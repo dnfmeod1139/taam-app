@@ -19227,7 +19227,7 @@ function _tkStopHoldCountdown(){
 function _tkTickHoldCountdown(){
   var left = Math.max(0, Math.ceil((_tkHoldDeadline - Date.now())/1000));
   var txt = Math.floor(left/60) + ':' + String(left%60).padStart(2,'0');
-  ['tdHoldTimer','cardHoldTimer'].forEach(function(id){
+  ['tdHoldTimer','cardHoldTimer','noCardHoldTimer'].forEach(function(id){
     var el = document.getElementById(id);
     if(el){ el.textContent = txt; el.style.color = (left <= 60) ? '#B23A2E' : '#6A1A1A'; }
   });
@@ -19293,6 +19293,8 @@ async function openTdPayPopup() {
 }
 
 function goPortOneCharge(){
+  // 외부 결제창으로 나간다 — 카운트다운만 멈춘다 (홀드는 유지, 서버 5분 스윕이 최후 정리)
+  if (typeof _tkStopHoldCountdown === 'function') _tkStopHoldCountdown();
   // 팝업 닫기
   var el = document.getElementById('noCardPopup'); if(el) el.remove();
   // 시트 숨기기
@@ -19317,7 +19319,12 @@ function noCardGoCharge(){
   // 결제수단 등록 화면으로 이동
   openPage('cardPage', renderCardPage);
 }
-function noCardCancel(){ var el=document.getElementById('noCardPopup'); if(el) el.remove(); }
+function noCardCancel(){
+  var el=document.getElementById('noCardPopup'); if(el) el.remove();
+  // 🆕 결제를 포기했으니 잡아둔 좌석을 즉시 돌려준다 (예전엔 팝업만 닫고 좌석이 묶여 있었다)
+  if (typeof _tkStopHoldCountdown === 'function') _tkStopHoldCountdown();
+  if (typeof _tkReleaseSeatHold === 'function') _tkReleaseSeatHold();
+}
 // 🆕 확인 팝업을 결제 없이 닫으면 잡아둔 좌석을 즉시 돌려준다
 function closeTdConfirmPopup(){
   var p = document.getElementById('tdConfirmPopup');
@@ -19343,11 +19350,14 @@ function showNoCardPopup(shortage) {
     '<div style="background:#fff;border-radius:20px;width:100%;max-width:320px;padding:28px 24px;text-align:center;">'
     + '<div style="font-size:32px;margin-bottom:12px;">💳</div>'
     + '<div style="font-family:var(--font-main);font-size:16px;font-weight:800;color:#1a1a18;margin-bottom:8px;">예치금이 부족합니다</div>'
+    // 🆕 좌석 홀드 남은 시간 (카드 미등록 경로에도 동일 적용)
+    + (window._tkSeatHoldId ? _tkHoldBannerHtml('noCardHoldTimer') : '')
     + '<div style="font-family:var(--font-main);font-size:13px;color:#777;line-height:1.7;margin-bottom:6px;">부족 금액 <b style=\"color:#5C0A14;\">₩'+shortage.toLocaleString()+'</b></div>'
-    + '<div style="font-family:var(--font-main);font-size:12px;color:#aaa;line-height:1.7;margin-bottom:24px;">부족분을 카드로 결제합니다.</div>'
+    + '<div style="font-size:13px;font-weight:700;color:#1a1a18;line-height:1.55;margin:10px 0 20px;">부족한 금액 <b style="color:#5C0A14;">₩'+shortage.toLocaleString()+'</b> 을<br>카드로 결제하시겠습니까?</div>'
     + '<button onclick="goPortOneCharge()" style="width:100%;padding:14px;background:#5C0A14;border:none;border-radius:12px;font-family:var(--font-main);font-size:14px;font-weight:800;color:#fff;cursor:pointer;margin-bottom:10px;">카드로 결제하기</button>'    + '<button onclick="noCardCancel()" style="width:100%;padding:12px;background:transparent;border:none;font-family:var(--font-main);font-size:10px;font-weight:600;letter-spacing:.18em;color:#bbb;cursor:pointer;">취소</button>'
     + '</div>';
   document.body.appendChild(el);
+  _tkStartHoldCountdown();
 }
 
 function showCardPayPopup(shortage, totalPay) {
