@@ -12647,6 +12647,38 @@ function _subscribeActiveSession(userId, myDeviceId){
   } catch(e){ console.warn('[session] subscribe 예외:', e); }
 }
 
+// 🆕 2026.08: 앱 부팅 / 세션 복원용 — '실제 로그인 행위'가 아니다.
+//   여기서 무조건 UPSERT 하면 규칙이 깨진다.
+//   Realtime 은 앱이 열려 있을 때만 이벤트를 받으므로, 강제 로그아웃 시점에
+//   꺼져 있던 기기는 그 사실을 모른다. 그 기기가 나중에 앱을 열면서 UPSERT 하면
+//   소유권을 되찾아 최신 로그인 기기를 쫓아낸다 — 두 기기를 번갈아 열면 핑퐁이 되고,
+//   결과가 '마지막 로그인' 이 아니라 '마지막으로 앱을 연 기기' 가 된다.
+//   → 서버의 현재 소유자를 먼저 읽고, 내 기기가 아니면 이 기기가 물러난다.
+async function _resumeActiveSession(user, role){
+  if(!window.sb || !user || !user.id) return;
+  var rl = String(role || '').toLowerCase();
+  if(rl === 'super_admin' || rl === 'superadmin') return;   // 슈퍼어드민 면제
+
+  var deviceId = _getDeviceId();
+  try {
+    var r = await window.sb.from('active_sessions')
+      .select('device_id, device_label').eq('user_id', user.id).maybeSingle();
+    // 조회 실패(네트워크·RLS)면 아무것도 하지 않는다.
+    //   여기서 로그아웃시키면 일시적 오류로 멀쩡한 회원이 튕긴다.
+    if(r.error){ console.warn('[session] 활성 세션 조회 실패:', r.error.message); return; }
+
+    var row = r.data;
+    if(row && row.device_id && row.device_id !== deviceId){
+      console.warn('[session] 🚫 다른 기기가 활성 세션 보유 — 이 기기 로그아웃');
+      _forceSignOutDueToOtherDevice(row.device_label || '다른 기기');
+      return;
+    }
+    // 기록이 없거나 내 기기다 → 갱신 + Realtime 재구독
+    await _registerActiveSession(user, role);
+  } catch(e){ console.warn('[session] resume 예외:', e); }
+}
+window._resumeActiveSession = _resumeActiveSession;
+
 async function _forceSignOutDueToOtherDevice(otherLabel){
   if(_activeSessionForceSignedOut) return;
   _activeSessionForceSignedOut = true;
@@ -12822,14 +12854,15 @@ async function loadDeposit(){
     // 🆕 v1.53.39: 앱 진입/세션 복원 시점에도 자동 백필 (이름/등급 비어있는 케이스)
     try { await _backfillProfileFromInvite(user); } catch(_){}
 
-    // 🆕 v1.53.43: 세션 복원 시에도 active_sessions 재등록 + Realtime 재구독
-    //   다른 기기에서 이미 로그인됐다면 이 호출이 row 를 덮어쓰고,
-    //   그 기기의 Realtime 구독이 즉시 강제 로그아웃 트리거. 양방향 정합성 유지.
+    // 🆕 2026.08: 세션 복원은 '로그인' 이 아니다 — 소유권을 빼앗지 않는다.
+    //   종전에는 여기서 무조건 UPSERT 해서, 강제 로그아웃 당시 꺼져 있던 기기가
+    //   앱을 여는 순간 최신 기기를 쫓아냈다 (핑퐁). _resumeActiveSession 은
+    //   현재 소유자를 먼저 확인하고, 내 기기가 아니면 이 기기가 물러난다.
     try {
-      if(typeof _registerActiveSession === 'function'){
+      if(typeof _resumeActiveSession === 'function'){
         var roleRes = await window.sb.from('profiles').select('role').eq('id', user.id).maybeSingle();
         var rrr = (roleRes && roleRes.data && roleRes.data.role) || 'member';
-        _registerActiveSession(user, rrr);
+        _resumeActiveSession(user, rrr);
       }
     } catch(_){}
 
@@ -15241,6 +15274,15 @@ async function vpPasswordLogin(){
       return;
     }
     // 일반 회원
+    // 🆕 2026.08: 단일 기기 강제 — 이 경로에만 등록 호출이 빠져 있었다.
+    //   가입 직후 비밀번호 설정을 권하므로 재방문 회원 상당수가 여기로 들어온다.
+    //   빠져 있는 동안 비밀번호로 로그인하면 이전 기기가 풀리지 않았다.
+    try {
+      if(typeof _registerActiveSession === 'function'){
+        var _pw = await window.sb.from('profiles').select('role').eq('id', res.data.user.id).maybeSingle();
+        await _registerActiveSession(res.data.user, (_pw && _pw.data && _pw.data.role) || 'member');
+      }
+    } catch(_se){ console.warn('[session] 비밀번호 로그인 등록 실패:', _se); }
     setTimeout(function(){
       if(typeof closeAllScreens === 'function') closeAllScreens();
       else location.reload();
