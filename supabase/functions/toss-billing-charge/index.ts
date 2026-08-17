@@ -19,7 +19,8 @@
 //   · 좌석 상실 대응   — 승인 후 좌석이 없으면 예치금 환원 + 카드 승인취소
 //
 // 필요한 시크릿
-//   TOSS_SECRET_KEY = live_sk_...   ⚠ 코드·커밋에 절대 넣지 말 것
+//   TOSS_BILLING_SECRET_KEY = live_sk_...  ← 자동결제 MID(bill_taam315) 시크릿
+//   (없으면 TOSS_SECRET_KEY 로 폴백)     ⚠ 코드·커밋에 절대 넣지 말 것
 // ════════════════════════════════════════════════════════════
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
@@ -42,9 +43,13 @@ serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
 
   try {
-    const secretKey = Deno.env.get('TOSS_SECRET_KEY');
+    // 🆕 2026.08: 빌링은 자동결제 MID(bill_taam315) 전용 키를 쓴다.
+    //   토스는 MID 별로 키가 다르다 — 일반결제 MID(playtauif6) 키로 빌링 API 를 부르면
+    //   "자동결제 계약이 없다" 로 거절된다. 실제로 그렇게 막혔다.
+    //   두 MID 의 시크릿이 같은 환경도 있으므로 TOSS_SECRET_KEY 로 폴백한다.
+    const secretKey = Deno.env.get('TOSS_BILLING_SECRET_KEY') || Deno.env.get('TOSS_SECRET_KEY');
     if (!secretKey) {
-      console.error('[toss-billing-charge] TOSS_SECRET_KEY 미설정');
+      console.error('[toss-billing-charge] TOSS_BILLING_SECRET_KEY / TOSS_SECRET_KEY 둘 다 미설정');
       return json({ ok: false, error: 'server_not_configured' });
     }
 
