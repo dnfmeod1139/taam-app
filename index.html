@@ -12673,11 +12673,103 @@ async function _resumeActiveSession(user, role){
       _forceSignOutDueToOtherDevice(row.device_label || '다른 기기');
       return;
     }
-    // 기록이 없거나 내 기기다 → 갱신 + Realtime 재구독
+    // 기록이 없거나 내 기기다 → 갱신 + Realtime 재구독 + 워치독
+    //   여기서는 signOut({scope:'others'}) 를 하지 않는다 — 부팅은 로그인이 아니라,
+    //   그랬다간 방금 로그인한 최신 기기를 죽이게 된다.
     await _registerActiveSession(user, role);
+    _startSessionWatchdog(user.id);
   } catch(e){ console.warn('[session] resume 예외:', e); }
 }
 window._resumeActiveSession = _resumeActiveSession;
+
+// ════════════════════════════════════════════════════════════════
+// 🆕 2026.08: 단일 기기 강제 — 클라이언트 협조에 의존하지 않는 계층 추가
+//
+// 종전 구조의 한계
+//   강제 로그아웃은 '이전 기기가 Realtime 이벤트를 받고 스스로 signOut' 하는
+//   방식이었다. 즉 이전 기기가 협조해야만 성립한다. 그래서 이런 경우 뚫린다.
+//     · Realtime 구독이 끊기거나 실패했을 때
+//     · 브라우저가 백그라운드에서 소켓을 스로틀할 때
+//     · 오프라인이었다가 나중에 온라인이 됐을 때
+//     · DevTools 로 구독/로그아웃 코드를 무력화했을 때
+//     · access token 만 복사해 다른 브라우저에 심었을 때
+//
+// 그래서 두 겹을 더 둔다.
+//   ① 서버측 세션 폐기 — 로그인 직후 signOut({scope:'others'}) 로 다른 기기의
+//      refresh token 을 서버에서 무효화한다. 이전 기기는 협조하지 않아도
+//      access token 만료 후 갱신에 실패해 되살아나지 못한다.
+//   ② 소유권 워치독 — Realtime 을 믿지 않고 주기적/이벤트 기반으로 다시 확인한다.
+//      (화면 복귀 · 온라인 복귀 · 주기 폴링)
+// ════════════════════════════════════════════════════════════════
+
+// 모든 '실제 로그인' 경로의 단일 진입점. 새 로그인 경로를 만들면 이것만 부르면 된다.
+async function _claimDeviceSession(user, role){
+  if(!window.sb || !user || !user.id) return;
+  var rl = String(role || '').toLowerCase();
+  if(rl === 'super_admin' || rl === 'superadmin'){
+    console.log('[session] 슈퍼어드민 — 다중 기기 허용 (면제)');
+    return;
+  }
+  // ① 다른 기기 세션을 서버에서 폐기한다.
+  //   현재 기기 세션은 유지되고 나머지만 무효화된다(scope:'others').
+  //   실패해도 아래 UPSERT/Realtime 은 그대로 진행한다 — 방어가 한 겹 줄 뿐이다.
+  try {
+    if(window.sb.auth && typeof window.sb.auth.signOut === 'function'){
+      var so = await window.sb.auth.signOut({ scope: 'others' });
+      if(so && so.error) console.warn('[session] 타 기기 세션 폐기 실패:', so.error.message);
+      else console.log('[session] ✅ 타 기기 세션 서버 폐기 완료');
+    }
+  } catch(e){ console.warn('[session] signOut(others) 예외:', e); }
+
+  await _registerActiveSession(user, role);
+  _startSessionWatchdog(user.id);
+}
+window._claimDeviceSession = _claimDeviceSession;
+
+// ── 소유권 재확인 ──
+//   Realtime 을 못 받은 채로 계속 쓰는 상황을 잡는다. 조회 실패는 무시한다
+//   (네트워크 오류로 멀쩡한 회원을 튕기지 않기 위해).
+var _sessionWatchdogTimer = null;
+var _sessionWatchdogUserId = null;
+var _sessionWatchdogBound = false;
+
+async function _verifyDeviceOwnership(){
+  if(!window.sb || !_sessionWatchdogUserId || _activeSessionForceSignedOut) return;
+  try {
+    var r = await window.sb.from('active_sessions')
+      .select('device_id, device_label').eq('user_id', _sessionWatchdogUserId).maybeSingle();
+    if(r.error) return;                     // 조회 실패 → 현상 유지
+    var row = r.data;
+    if(!row) return;                        // 기록 없음 → 판단 불가, 유지
+    var mine = _activeSessionMyDeviceId || _getDeviceId();
+    if(row.device_id && row.device_id !== mine){
+      console.warn('[session] 🚫 워치독: 소유권이 다른 기기로 넘어감 — 로그아웃');
+      _forceSignOutDueToOtherDevice(row.device_label || '다른 기기');
+    }
+  } catch(_){}
+}
+window._verifyDeviceOwnership = _verifyDeviceOwnership;
+
+function _startSessionWatchdog(userId){
+  _sessionWatchdogUserId = userId;
+  if(_sessionWatchdogTimer) clearInterval(_sessionWatchdogTimer);
+  // 화면이 보이는 동안만 확인한다 — 숨어 있으면 어차피 쓰지 못한다.
+  _sessionWatchdogTimer = setInterval(function(){
+    if(document.visibilityState === 'visible') _verifyDeviceOwnership();
+  }, 60000);
+
+  if(_sessionWatchdogBound) return;
+  _sessionWatchdogBound = true;
+  // 화면 복귀 — 백그라운드에서 소켓이 죽어 있었을 수 있다
+  document.addEventListener('visibilitychange', function(){
+    if(document.visibilityState === 'visible') _verifyDeviceOwnership();
+  });
+  // 온라인 복귀 — 오프라인 동안 다른 기기가 로그인했을 수 있다
+  window.addEventListener('online', function(){ _verifyDeviceOwnership(); });
+  // 창 포커스 — 같은 기기 다른 브라우저에서 로그인한 경우
+  window.addEventListener('focus', function(){ _verifyDeviceOwnership(); });
+}
+window._startSessionWatchdog = _startSessionWatchdog;
 
 async function _forceSignOutDueToOtherDevice(otherLabel){
   if(_activeSessionForceSignedOut) return;
@@ -14360,7 +14452,7 @@ function _doProfileAndConsume(user, savedName, email, phone){
         try {
           var pr2 = await window.sb.from('profiles').select('role').eq('id', user.id).maybeSingle();
           var rr = (pr2 && pr2.data && pr2.data.role) || 'member';
-          _registerActiveSession(user, rr);
+          _claimDeviceSession(user, rr);
         } catch(_){}
       }, 500);
     }
@@ -14681,7 +14773,7 @@ function _socialLoginSecurity(user){
       }
       try { localStorage.setItem('authedSession', '1'); } catch(e){}
       if(typeof IDB !== 'undefined' && IDB.set){ IDB.set('authedSession', '1').catch(function(){}); }
-      try { if(typeof _registerActiveSession === 'function') _registerActiveSession(user, role); } catch(_){}
+      try { if(typeof _claimDeviceSession === 'function') await _claimDeviceSession(user, role); } catch(_){}
       _socialHint('✅ 로그인 완료 / Signed in');
       setTimeout(function(){ if(typeof closeAllScreens === 'function') closeAllScreens(); else location.reload(); }, 400);
     } catch(e){ _socialFail(user, '검증 오류, 다시 시도해주세요 / Verification error'); }
@@ -14901,8 +14993,8 @@ function vpVerify(){
 
           // 🆕 v1.53.43: 일반 회원 — 단일 기기 강제 (active_sessions 등록 + Realtime 구독)
           try {
-            if(typeof _registerActiveSession === 'function'){
-              _registerActiveSession(loggedUser, (pr.data && pr.data.role) || 'member');
+            if(typeof _claimDeviceSession === 'function'){
+              await _claimDeviceSession(loggedUser, (pr.data && pr.data.role) || 'member');
             }
           } catch(_){}
 
@@ -15278,9 +15370,9 @@ async function vpPasswordLogin(){
     //   가입 직후 비밀번호 설정을 권하므로 재방문 회원 상당수가 여기로 들어온다.
     //   빠져 있는 동안 비밀번호로 로그인하면 이전 기기가 풀리지 않았다.
     try {
-      if(typeof _registerActiveSession === 'function'){
+      if(typeof _claimDeviceSession === 'function'){
         var _pw = await window.sb.from('profiles').select('role').eq('id', res.data.user.id).maybeSingle();
-        await _registerActiveSession(res.data.user, (_pw && _pw.data && _pw.data.role) || 'member');
+        await _claimDeviceSession(res.data.user, (_pw && _pw.data && _pw.data.role) || 'member');
       }
     } catch(_se){ console.warn('[session] 비밀번호 로그인 등록 실패:', _se); }
     setTimeout(function(){
