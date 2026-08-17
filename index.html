@@ -5889,7 +5889,10 @@ function tossOpenBilling(){
 //     Edge Function toss-order 가 티켓 가격·예치금 잔액을 서버에서 다시 계산해
 //     주문을 만들고, 여기서는 그 orderId / amount 로만 결제창을 연다.
 //     (인자는 결제창 열기 전 화면 표시용으로만 남긴다)
-async function tossPayTicketShortage(shortage){
+//   🆕 2026.08: useSavedCard=true 면 결제창을 열지 않고 등록된 카드(빌링키)로
+//     서버가 바로 승인한다. 주문 생성(toss-order)은 두 경로가 똑같이 쓴다 —
+//     금액을 서버가 정한다는 원칙이 결제 수단에 따라 달라지면 안 된다.
+async function tossPayTicketShortage(shortage, useSavedCard){
   var t = (typeof currentTicket !== 'undefined') ? currentTicket : null;
   var pax = (typeof _tdPax !== 'undefined') ? _tdPax : 0;
   if (!t || !t.id || !pax) { showToast('⚠','오류','티켓 정보를 찾을 수 없습니다'); return; }
@@ -5956,6 +5959,12 @@ async function tossPayTicketShortage(shortage){
     showToast('⚠','금액 확인','결제 금액이 올바르지 않습니다'); return;
   }
 
+  // 🆕 등록된 카드로 즉시 결제 — 결제창·리다이렉트 없이 서버가 승인까지 끝낸다.
+  if (useSavedCard) {
+    await _tossChargeSavedCard(ord.orderId, orderName);
+    return;
+  }
+
   _tossEnsureSdk(async function(){
     try {
       var _cur = String(ord.currency || 'KRW');
@@ -5983,6 +5992,57 @@ async function tossPayTicketShortage(shortage){
     }
   });
 }
+// ── 🆕 2026.08: 등록된 카드로 즉시 결제 (Edge Function toss-billing-charge) ──
+//   결과 처리는 _tossConfirmPayment 와 같은 규칙이다 — 회원 입장에서 결제 수단만
+//   다를 뿐 같은 구매이므로, 성공·실패 안내가 달라지면 안 된다.
+async function _tossChargeSavedCard(orderId, orderName){
+  if (!window.sb) return;
+  if (typeof showToast === 'function') showToast('⏳','결제 중','잠시만 기다려주세요');
+  try {
+    var res = await window.sb.functions.invoke('toss-billing-charge', {
+      body: { orderId: orderId, orderName: orderName }
+    });
+    if (res && res.error) throw res.error;
+    var d = res && res.data;
+
+    if (d && d.ok) {
+      showToast('✅', d.already ? '이미 처리된 결제입니다' : '결제 완료',
+        d.already ? '이 결제는 이미 처리되었습니다' : '티켓 구매가 완료되었습니다', { category: 'ticket' });
+      try { if (typeof _tkStopHoldCountdown === 'function') _tkStopHoldCountdown(); } catch(_se){}
+      try { window._tkSeatHoldId = null; } catch(_he){}
+      try { if (typeof closeTicketDetail === 'function') closeTicketDetail(); } catch(_ce){}
+      try { if (typeof loadDeposit === 'function') loadDeposit(); } catch(_le){}
+      try { if (typeof loadPurchase === 'function') await loadPurchase(); } catch(_pe){}
+      try { if (typeof renderTicketList === 'function') renderTicketList(); } catch(_re){}
+      try { if (typeof _refreshUserGrade === 'function') _refreshUserGrade(); } catch(_ge){}
+      return;
+    }
+
+    var code = (d && d.error) || 'unknown';
+    if (code === 'no_billing_key') {
+      showToast('⚠','등록된 카드가 없습니다','결제 수단을 먼저 등록해주세요');
+    } else if (code === 'seat_lost') {
+      showToast('⚠', d.refunded ? '좌석이 매진되어 결제가 취소되었습니다' : '좌석이 매진되었습니다',
+        d.refunded ? '결제하신 금액은 전액 환불됩니다' : '결제 취소 처리 중입니다 — 출금 시 문의해 주세요');
+    } else if (code === 'charge_failed') {
+      // 한도 초과·유효기간 만료 등 카드사 사유. 토스가 준 문구를 그대로 보여준다.
+      showToast('⚠','결제 실패', (d && d.reason) || '카드사에서 승인이 거절되었습니다');
+    } else if (code === 'amount_mismatch_toss') {
+      showToast('⚠','금액이 일치하지 않습니다','결제가 취소되었습니다 — 다시 시도해주세요');
+    } else {
+      showToast('⚠','결제 실패', (d && d.reason) || '다시 시도해주세요');
+    }
+    console.warn('[toss-billing-charge] 실패:', code, d);
+    // 실패했으면 좌석을 붙잡고 있을 이유가 없다 — 재시도 시 자기 홀드에 막히지 않게 반납한다
+    if (code !== 'seat_lost') {
+      try { if (typeof _tkReleaseSeatHold === 'function') await _tkReleaseSeatHold(); } catch(_re2){}
+    }
+  } catch(e) {
+    console.warn('[toss-billing-charge] 예외:', e);
+    showToast('⚠','결제 실패','네트워크 확인 후 마이페이지에서 구매내역을 확인해주세요');
+  }
+}
+
 // ── 🆕 예치금 충전 = 계좌이체 안내 (수동 반영) ──
 //   정책상 예치금 충전은 카드가 아닌 계좌이체로만. 입금 후 슈퍼어드민이 예치금에 수동 반영.
 //   계좌 정보는 상단 DEPOSIT_BANK_INFO 에서 관리. PAY_MODE_TOSS=false 면 미사용(구 충전 모달로 복귀).
@@ -6119,6 +6179,85 @@ async function _tossConfirmPayment(paymentKey, orderId, amount){
   }
 }
 
+// ── 🆕 2026.08: 카드 등록 완료 (Edge Function toss-billing-issue) ──
+//   토스 빌링은 ① 브라우저 인증 → authKey / ② 서버가 시크릿 키로 빌링키 교환 2단계다.
+//   ②를 호출하지 않으면 카드 정보를 다 입력해도 저장되는 게 없다.
+async function _tossIssueBillingKey(customerKey, authKey){
+  if (!window.sb) return;
+  if (typeof showToast === 'function') showToast('⏳','카드 등록 중','잠시만 기다려주세요');
+
+  // 리다이렉트 직후에는 세션 복원이 아직 안 끝났을 수 있다 — 최대 5초 대기
+  var u = null;
+  for (var i = 0; i < 10; i++) {
+    try { var r = await window.sb.auth.getUser(); u = r && r.data && r.data.user; } catch(_e){}
+    if (u) break;
+    await new Promise(function(res){ setTimeout(res, 500); });
+  }
+  if (!u) {
+    showToast('⚠','로그인이 필요합니다','다시 로그인 후 카드를 등록해주세요');
+    return;
+  }
+
+  try {
+    var res = await window.sb.functions.invoke('toss-billing-issue', {
+      body: { customerKey: customerKey, authKey: authKey }
+    });
+    if (res && res.error) throw res.error;
+    var d = res && res.data;
+
+    if (d && d.ok) {
+      var _label = (d.cardCompany || '카드') + (d.cardNumber ? ' ' + d.cardNumber : '');
+      showToast('✅','카드 등록 완료', _label);
+      try { if (typeof _taamLoadDefaultCard === 'function') await _taamLoadDefaultCard(); } catch(_ce){}
+      try { if (typeof loadMyCards === 'function') await loadMyCards(); } catch(_le){}
+      return;
+    }
+
+    var code = (d && d.error) || 'unknown';
+    if (code === 'customer_mismatch') {
+      showToast('⚠','카드 등록 실패','다른 계정의 등록 정보입니다 — 다시 시도해주세요');
+    } else if (code === 'save_failed') {
+      // 토스에는 발급됐는데 우리 DB 저장이 실패했다. 조용히 성공 처리하면
+      // "등록했는데 목록에 없다"가 되므로 그대로 알린다.
+      showToast('⚠','카드 저장 실패','다시 등록해주세요 — 반복되면 문의해 주세요');
+    } else {
+      showToast('⚠','카드 등록 실패', (d && d.reason) || '다시 시도해주세요');
+    }
+    console.warn('[toss-billing-issue] 실패:', code, d);
+  } catch(e) {
+    console.warn('[toss-billing-issue] 예외:', e);
+    showToast('⚠','카드 등록 실패','네트워크 확인 후 다시 시도해주세요');
+  }
+}
+
+// ── 🆕 2026.08: 기본 결제수단 캐시 ──
+//   결제 팝업에서 "등록된 카드로 결제" 를 보여줄지 판단하는 데 쓴다.
+//   조회 실패 시 이전 값을 지우지 않는다 — 조용히 비면 카드가 사라진 것처럼 보인다.
+window._taamDefaultCard = null;
+async function _taamLoadDefaultCard(){
+  if (!window.sb) return null;
+  try {
+    var r = await window.sb.auth.getUser();
+    if (!(r && r.data && r.data.user)) return window._taamDefaultCard;
+    var res = await window.sb.from('billing_keys')
+      .select('id, card_company, card_number, is_default')
+      .is('deleted_at', null)
+      .order('is_default', { ascending: false })
+      .order('created_at', { ascending: false })
+      .limit(1);
+    if (res.error) {
+      console.warn('[billing] 카드 조회 실패:', res.error.message);
+      return window._taamDefaultCard;
+    }
+    window._taamDefaultCard = (res.data && res.data[0]) || null;
+    return window._taamDefaultCard;
+  } catch(e){
+    console.warn('[billing] 카드 조회 예외:', e);
+    return window._taamDefaultCard;
+  }
+}
+window._taamLoadDefaultCard = _taamLoadDefaultCard;
+
 // ── 결제창 리다이렉트 복귀 처리 ──
 (function(){
   try {
@@ -6127,13 +6266,17 @@ async function _tossConfirmPayment(paymentKey, orderId, amount){
     if (!m) return;
     var kind = m[1], ok = (m[2] === 'success');
     // 쿼리를 지우기 전에 승인에 필요한 값을 먼저 챙긴다
-    var _pk = '', _oid = '', _amt = 0, _failMsg = '';
+    var _pk = '', _oid = '', _amt = 0, _failMsg = '', _ck = '', _ak = '';
     try {
       var _qs = new URLSearchParams(q);
       _pk  = _qs.get('paymentKey') || '';
       _oid = _qs.get('orderId') || '';
       _amt = parseInt(_qs.get('amount') || '0', 10) || 0;
       _failMsg = _qs.get('message') || '';
+      // 🆕 2026.08: 빌링(카드 등록) 복귀 — 토스는 customerKey + authKey 만 돌려준다.
+      //   authKey 는 짧게 만료되므로 여기서 챙겨 곧바로 서버에서 빌링키로 교환한다.
+      _ck  = _qs.get('customerKey') || '';
+      _ak  = _qs.get('authKey') || '';
     } catch(_qe){}
     // 결제창(리다이렉트) 복귀 즉시 뷰포트 복원 — 하단 검정 공백/GNB 밀림 방지
     if (typeof _tossRestoreViewport === 'function') _tossRestoreViewport();
@@ -6147,11 +6290,22 @@ async function _tossConfirmPayment(paymentKey, orderId, amount){
     //   회원 돈이 미승인으로 자동 취소된다. 승인은 주문의 실재 여부로만 판단한다
     //   — 서버가 주문 소유자·금액을 다시 검증하므로 여기서 더 막을 이유가 없다.
 
-    // 빌링(결제수단 등록)은 아직 서버 처리가 없다 — 1차 범위는 예치금 충전
+    // 🆕 2026.08: 빌링(결제수단 등록) 복귀 — authKey 를 서버에서 빌링키로 교환한다.
+    //   이 교환을 안 하면 회원이 카드 정보를 다 입력해도 저장되는 게 없다.
     if (kind === 'billing') {
-      setTimeout(function(){
-        if (typeof showToast === 'function') showToast('⚠','카드 등록이 반영되지 않았습니다','결제 수단 관리는 준비 중입니다');
-      }, 1500);
+      if (!ok) {
+        setTimeout(function(){
+          if (typeof showToast === 'function') showToast('⚠','카드 등록이 취소되었습니다', _failMsg || '');
+        }, 1200);
+        return;
+      }
+      if (!_ck || !_ak) {
+        setTimeout(function(){
+          if (typeof showToast === 'function') showToast('⚠','카드 등록 정보가 없습니다','다시 시도해주세요');
+        }, 1200);
+        return;
+      }
+      setTimeout(function(){ _tossIssueBillingKey(_ck, _ak); }, 1200);
       return;
     }
 
@@ -19168,6 +19322,9 @@ async function openTdPayPopup() {
 
   // 잔액 부족 시 카드 결제 분기
   if (after < 0) {
+    // 🆕 2026.08: 등록된 카드(빌링키)를 팝업 직전에 읽는다.
+    //   다른 기기에서 등록·삭제했을 수 있어 캐시만 믿으면 없는 카드를 권하게 된다.
+    try { if (typeof _taamLoadDefaultCard === 'function') await _taamLoadDefaultCard(); } catch(_bc){}
     var hasCard = cardList && cardList.length > 0;
     if (!hasCard) {
       showNoCardPopup(Math.abs(after));
@@ -19197,6 +19354,31 @@ function goPortOneCharge(){
     return;
   }
   doCardCharge(shortage);
+}
+
+// 🆕 2026.08: 등록된 카드로 결제 — 결제창을 열지 않으므로 홀드 카운트다운을 유지한다.
+//   (외부 결제창으로 나가지 않으니 화면을 떠나지 않는다)
+function goSavedCardCharge(){
+  var el = document.getElementById('noCardPopup'); if(el) el.remove();
+  var el2 = document.getElementById('cardPayPopup'); if(el2) el2.remove();
+  var shortage = window._pendingShortage || 0;
+  if(shortage <= 0){ showToast('!','오류','결제 금액이 올바르지 않습니다'); return; }
+  doCardCharge(shortage, true);
+}
+window.goSavedCardCharge = goSavedCardCharge;
+
+// 등록된 기본 카드 표시용 라벨 (없으면 빈 문자열)
+function _savedCardLabel(){
+  var c = window._taamDefaultCard;
+  if(!c) return '';
+  return ((c.card_company || '카드') + ' ' + (c.card_number || '')).trim();
+}
+
+// 결제 팝업에 넣을 '등록된 카드로 결제' 버튼 HTML (카드가 없으면 빈 문자열)
+function _savedCardBtnHtml(){
+  if(!window._taamDefaultCard) return '';
+  return '<button onclick="goSavedCardCharge()" style="width:100%;padding:14px;background:#1a1a18;border:none;border-radius:12px;font-family:var(--font-main);font-size:14px;font-weight:800;color:#fff;cursor:pointer;margin-bottom:10px;">'
+    + '등록된 카드로 결제<div style="font-size:10.5px;font-weight:600;opacity:.7;margin-top:3px;letter-spacing:.02em;">' + _savedCardLabel() + '</div></button>';
 }
 
 function noCardGoCharge(){
@@ -19246,6 +19428,7 @@ function showNoCardPopup(shortage) {
       + t('ticket.ask_card','부족한 금액 {amt} 을<br>카드로 결제하시겠습니까?')
           .replace('{amt}', '<b style="color:#5C0A14;">₩'+shortage.toLocaleString()+'</b>')
       + '</div>'
+    + _savedCardBtnHtml()
     + '<button onclick="goPortOneCharge()" style="width:100%;padding:14px;background:#5C0A14;border:none;border-radius:12px;font-family:var(--font-main);font-size:14px;font-weight:800;color:#fff;cursor:pointer;margin-bottom:10px;">카드로 결제하기</button>'    + '<button onclick="noCardCancel()" style="width:100%;padding:12px;background:transparent;border:none;font-family:var(--font-main);font-size:10px;font-weight:600;letter-spacing:.18em;color:#bbb;cursor:pointer;">'+t('common.cancel','취소')+'</button>'
     + '</div>';
   document.body.appendChild(el);
@@ -19280,6 +19463,7 @@ function showCardPayPopup(shortage, totalPay) {
       + t('ticket.ask_card','부족한 금액 {amt} 을<br>카드로 결제하시겠습니까?')
           .replace('{amt}', '<b style="color:#5C0A14;">₩'+shortage.toLocaleString()+'</b>')
       + '</div>'
+    + _savedCardBtnHtml()
     + '<button onclick="doCardCharge(window._pendingShortage)" style="width:100%;padding:14px;background:#5C0A14;border:none;border-radius:12px;font-family:var(--font-main);font-size:14px;font-weight:800;color:#fff;cursor:pointer;margin-bottom:10px;">카드로 결제하고 티켓 구매</button>'
     + '<button onclick="cardPayCancel()" style="width:100%;padding:12px;background:transparent;border:none;font-family:var(--font-main);font-size:11px;font-weight:600;color:#aaa;cursor:pointer;">'+t('common.cancel','취소')+'</button>'
     + '</div>';
@@ -19602,7 +19786,7 @@ function payWithPortOne(amount, orderName, callback) {
     _doPay(null, null, null);
   }
 }
-function doCardCharge(shortage) {
+function doCardCharge(shortage, useSavedCard) {
   // 🆕 외부 결제창으로 나가므로 화면상 카운트다운은 멈춘다.
   //   좌석 홀드 자체는 유지된다 — 결제를 마치고 돌아오면 이 홀드가 구매로 전환되고,
   //   못 돌아오면 서버의 5분 만료 스윕(taam_expire_seat_holds)이 반납한다.
@@ -19616,7 +19800,7 @@ function doCardCharge(shortage) {
       showDepositShortageGuide(Math.round(shortage));
       return;
     }
-    tossPayTicketShortage(Math.round(shortage));
+    tossPayTicketShortage(Math.round(shortage), !!useSavedCard);
     return;
   }
   // ── (구) 포트원 카드 결제 — 롤백용 보존 ──
@@ -20274,21 +20458,19 @@ function openNotifSettings(){
 async function openCardManagePage(){
   // 🆕 2026.07: 토스페이먼츠 빌링(정기결제) 카드 등록 창 — 카드사 심사 요건.
   //   (구 PortOne 카드관리 페이지 코드는 아래 주석으로 보존)
-  // 🆕 2026.08: 빌링키 발급도 서버(시크릿 키)에서 authKey 를 교환해야 완성된다.
-  //   그 로직 전까지는 카드만 등록되고 실제로는 쓸 수 없으므로 창을 열지 않는다.
-  // 빌링은 검증 스위치로도 열지 않는다 — authKey 교환 서버 로직이 아직 없다
-  if (!CARD_PAY_LIVE) {
+  // 🆕 2026.08: authKey → 빌링키 교환 서버 로직(toss-billing-issue)이 붙어
+  //   실제 등록·결제가 된다. 전역 스위치가 꺼져 있어도 검증 스위치로는 열린다.
+  if (typeof cardPayEnabled === 'function' && !cardPayEnabled()) {
     if (typeof showToast === 'function') {
       showToast('💳','결제 수단 관리 준비 중','현재는 예치금(계좌이체)으로만 이용하실 수 있습니다', { });
     }
     return;
   }
-  tossOpenBilling();
-  return;
-  // var p = document.getElementById('cardManagePage');
-  // p.style.display='flex';
-  // if(typeof applyI18n==='function') applyI18n(p);
-  // await loadMyCards();
+  var p = document.getElementById('cardManagePage');
+  if (!p) { tossOpenBilling(); return; }   // 페이지가 없으면 등록창만 연다 (구버전 캐시 대비)
+  p.style.display = 'flex';
+  if (typeof applyI18n === 'function') applyI18n(p);
+  await loadMyCards();
 }
 
 // [2] 내 카드 목록 불러오기
@@ -20361,124 +20543,29 @@ function escapeHtml(str){
     .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
-// [3] 새 카드 등록 (포트원 빌링키 발급)
+// [3] 새 카드 등록 — 토스 빌링 인증창
+//   🆕 2026.08: 포트원 빌링키 발급 → 토스로 교체.
+//   구현이 두 군데로 나뉘어 있었다: 여기서 PortOne.requestIssueBillingKey() 를 부르고
+//   save-billing-key Edge Function 에 넘겼는데, 그 함수는 배포된 적이 없다.
+//   포트원 채널키도 플레이스홀더라 어느 쪽이든 동작하지 않았다.
+//   이제 tossOpenBilling() → 복귀 시 toss-billing-issue 가 authKey 를 빌링키로 교환한다.
 async function addNewCard(){
+  var btn = document.getElementById('cmAddBtn');
+  var originalText = btn ? btn.innerHTML : '';
   try {
-    // 사용자 정보 조회
-    const { data: { user } } = await window.sb.auth.getUser();
-    if(!user){
-      alert('로그인이 필요합니다.');
+    var r = await window.sb.auth.getUser();
+    if (!(r && r.data && r.data.user)) {
+      if (typeof showToast === 'function') showToast('⚠','로그인 필요','로그인 후 이용해주세요');
       return;
     }
-
-    const { data: profile, error: profileError } = await window.sb
-      .from('profiles')
-      .select('display_name, phone')
-      .eq('id', user.id)
-      .single();
-
-    if(profileError) console.warn('프로필 조회 에러:', profileError.message);
-
-    const userName = (profile && profile.display_name) || '고객';
-    const userPhone = (profile && profile.phone) || '';
-    const userEmail = user.email || '';
-
-    if(!userPhone){
-      alert('카드 등록을 위해 먼저 본인인증(전화번호 등록)을 해주세요.\n마이페이지에서 전화번호를 등록할 수 있습니다.');
-      return;
-    }
-
-
-    if(!userPhone){
-      alert('카드 등록을 위해 먼저 본인인증(전화번호 등록)을 해주세요.\n마이페이지에서 전화번호를 등록할 수 있습니다.');
-      return;
-    }
-
-
-    // 버튼 상태 변경
-    const btn = document.getElementById('cmAddBtn');
-    const originalText = btn.innerHTML;
-    btn.disabled = true;
-    btn.innerHTML = '<span>처리 중...</span>';
-
-    console.log('🔑 빌링키 발급 시작');
-
-    // 포트원 빌링키 발급 창 열기
-    const issueResponse = await PortOne.requestIssueBillingKey({
-      storeId: PORTONE_STORE_ID,
-      channelKey: PORTONE_CHANNEL_KEY,
-      billingKeyMethod: 'CARD',
-      issueId: 'billing-' + Date.now(),
-      issueName: 'Taam 정기결제 카드',
-        customer: (function(){
-        var c = { customerId: user.id, fullName: userName };
-        if(userEmail) c.email = userEmail;
-        if(userPhone) c.phoneNumber = userPhone;
-        return c;
-      })(),
-    });
-
-    btn.disabled = false;
-    btn.innerHTML = originalText;
-
-    console.log('빌링키 발급 응답:', issueResponse);
-
-    if(issueResponse.code != null){
-      console.error('빌링키 발급 실패:', issueResponse);
-      alert('카드 등록 실패: ' + (issueResponse.message || '알 수 없는 오류'));
-      return;
-    }
-
-    const billingKey = issueResponse.billingKey;
-    if(!billingKey){
-      alert('카드 등록에 실패했습니다. 다시 시도해주세요.');
-      return;
-    }
-
-    console.log('빌링키 획득됨');
-
-    const { data: { session } } = await window.sb.auth.getSession();
-    if(!session){
-      alert('로그인이 만료되었습니다. 다시 로그인해주세요.');
-      return;
-    }
-
-    console.log('Edge Function 호출: save-billing-key');
-
-    const res = await fetch(
-      'https://edfsmzbcixfnqabrsvut.supabase.co/functions/v1/save-billing-key',
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer ' + session.access_token,
-        },
-        body: JSON.stringify({
-          billingKey: billingKey,
-          setAsDefault: false,
-        }),
-      }
-    );
-
-    const result = await res.json();
-    console.log('save-billing-key 응답 받음');
-
-    if(!res.ok || !result.success){
-      alert('카드 저장 실패: ' + (result.error || '서버 오류'));
-      return;
-    }
-
-    alert('카드가 등록되었습니다!');
-    await loadMyCards();
-
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span>카드 등록창 여는 중...</span>'; }
+    // 토스 빌링 인증창 — 카드 정보는 토스가 받고, 우리는 마스킹 번호만 돌려받는다
+    tossOpenBilling();
   } catch(e){
-    console.error('addNewCard 예외:', e);
-    alert('카드 등록 중 오류가 발생했습니다.\n' + e.message);
-    const btn = document.getElementById('cmAddBtn');
-    if(btn){
-      btn.disabled = false;
-      btn.innerHTML = '<span style="font-size:20px;line-height:1;">+</span><span>새 카드 등록</span>';
-    }
+    console.warn('[card] 등록창 열기 실패:', e);
+    if (typeof showToast === 'function') showToast('⚠','카드 등록 오류',(e && e.message) || '');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = originalText; }
   }
 }
 
