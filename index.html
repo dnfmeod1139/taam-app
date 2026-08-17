@@ -12576,13 +12576,34 @@ var _activeSessionChannel = null;
 var _activeSessionMyDeviceId = null;
 var _activeSessionForceSignedOut = false;
 
+// 🆕 2026.08: 단일 기기 강제 면제 판정.
+//   슈퍼어드민 외에 '심사·데모 계정' 도 면제해야 한다. Apple 은 iPad 와 iPhone
+//   두 기기로 심사하는데, 데모 계정 하나로 오가면 서로 쫓아내 리뷰어에게는
+//   "로그인이 자꾸 풀리는 앱" 이 된다 (Guideline 2.1 리젝 사유).
+//   심사용 계정에 super_admin 을 주면 어드민 전체가 열리므로, 권한과 분리된
+//   플래그(profiles.single_device_exempt)를 따로 본다.
+//   ⚠ 이 플래그는 심사·데모 계정에만 켠다. 일반 회원에게 켜면 규칙이 무너진다.
+async function _isSingleDeviceExempt(user, role){
+  var rl = String(role || '').toLowerCase();
+  if(rl === 'super_admin' || rl === 'superadmin') return true;
+  if(!window.sb || !user || !user.id) return false;
+  try {
+    var r = await window.sb.from('profiles')
+      .select('single_device_exempt').eq('id', user.id).maybeSingle();
+    // 컬럼이 없는 환경(마이그레이션 미실행)이면 조용히 면제 아님으로 본다.
+    //   여기서 면제로 처리하면 규칙 자체가 꺼져버린다 — 안전한 쪽으로 떨어뜨린다.
+    if(r.error) return false;
+    return !!(r.data && r.data.single_device_exempt);
+  } catch(_){ return false; }
+}
+window._isSingleDeviceExempt = _isSingleDeviceExempt;
+
 // 로그인 성공 후 호출 — active_sessions UPSERT + Realtime 구독
 async function _registerActiveSession(user, role){
   if(!window.sb || !user || !user.id) return;
-  // 슈퍼어드민은 면제 (다중 기기 허용)
-  var rl = String(role || '').toLowerCase();
-  if(rl === 'super_admin' || rl === 'superadmin'){
-    console.log('[session] 슈퍼어드민 — 다중 기기 허용 (면제)');
+  // 면제 계정(슈퍼어드민 · 심사/데모)은 다중 기기 허용
+  if(await _isSingleDeviceExempt(user, role)){
+    console.log('[session] 단일 기기 면제 계정 — 다중 기기 허용');
     return;
   }
 
@@ -12656,8 +12677,7 @@ function _subscribeActiveSession(userId, myDeviceId){
 //   → 서버의 현재 소유자를 먼저 읽고, 내 기기가 아니면 이 기기가 물러난다.
 async function _resumeActiveSession(user, role){
   if(!window.sb || !user || !user.id) return;
-  var rl = String(role || '').toLowerCase();
-  if(rl === 'super_admin' || rl === 'superadmin') return;   // 슈퍼어드민 면제
+  if(await _isSingleDeviceExempt(user, role)) return;   // 슈퍼어드민 · 심사/데모 면제
 
   var deviceId = _getDeviceId();
   try {
@@ -12705,9 +12725,10 @@ window._resumeActiveSession = _resumeActiveSession;
 // 모든 '실제 로그인' 경로의 단일 진입점. 새 로그인 경로를 만들면 이것만 부르면 된다.
 async function _claimDeviceSession(user, role){
   if(!window.sb || !user || !user.id) return;
-  var rl = String(role || '').toLowerCase();
-  if(rl === 'super_admin' || rl === 'superadmin'){
-    console.log('[session] 슈퍼어드민 — 다중 기기 허용 (면제)');
+  // 면제 계정은 여기서 끝낸다 — signOut({scope:'others'}) 까지 건너뛰어야
+  //   심사자가 다른 기기에서 열어둔 세션이 죽지 않는다.
+  if(await _isSingleDeviceExempt(user, role)){
+    console.log('[session] 단일 기기 면제 계정 — 타 기기 폐기 생략');
     return;
   }
   // ① 다른 기기 세션을 서버에서 폐기한다.
@@ -37293,7 +37314,7 @@ async function memOpenProfileQuick(userId, name){
   if(body) body.innerHTML = '<div style="text-align:center;color:#999;font-size:11px;padding:30px;">불러오는 중...</div>';
   try {
     var res = await window.sb.from('profiles')
-      .select('id, display_name, phone, email, created_at, member_until, role, deleted_at, membership_tier, country')
+      .select('id, display_name, phone, email, created_at, member_until, role, deleted_at, membership_tier, country, single_device_exempt')
       .eq('id', userId)
       .single();
     if(res.error || !res.data){
@@ -37366,6 +37387,15 @@ function renderMemberManageModal(){
           + '<button onclick="mmmSaveCountry(\'EN\')" style="flex:1;padding:11px;border-radius:8px;border:1.5px solid '+(u.country==='EN'?'#1a1a18':'#e0ddd8')+';background:'+(u.country==='EN'?'#1a1a18':'#fff')+';color:'+(u.country==='EN'?'#fff':'#888')+';font-weight:800;font-size:13px;cursor:pointer;">🌍 해외</button>'
         + '</div>'
         + '<div style="font-size:10px;color:#aaa;margin-top:6px;">현재: '+(u.country==='EN'?'해외':(u.country==='KR'?'국내':'미설정 (국내로 취급)'))+'</div>'
+      + '</div>'
+      // 🆕 2026.08: 단일 기기 로그인 면제 — 앱 심사·데모 계정 전용
+      + '<div style="padding:16px 0;border-bottom:1px solid #f0f0f0;">'
+        + '<div style="font-size:11px;font-weight:700;color:#1a1a18;margin-bottom:8px;">단일 기기 로그인 면제</div>'
+        + '<div style="font-size:10.5px;color:#888;margin-bottom:10px;line-height:1.55;">앱 심사·데모 계정 전용. 켜면 이 회원은 여러 기기에서 동시에 로그인할 수 있습니다. <b style="color:#9B1C1C;">일반 회원에게는 켜지 마세요</b> — 계정 공유를 막는 규칙이 무너집니다.</div>'
+        + '<div style="display:flex;gap:8px;">'
+          + '<button onclick="mmmSaveDeviceExempt(false)" style="flex:1;padding:11px;border-radius:8px;border:1.5px solid '+(!u.single_device_exempt?'#1a1a18':'#e0ddd8')+';background:'+(!u.single_device_exempt?'#1a1a18':'#fff')+';color:'+(!u.single_device_exempt?'#fff':'#888')+';font-weight:800;font-size:13px;cursor:pointer;">단일 기기 (기본)</button>'
+          + '<button onclick="mmmSaveDeviceExempt(true)" style="flex:1;padding:11px;border-radius:8px;border:1.5px solid '+(u.single_device_exempt?'#9B1C1C':'#e0ddd8')+';background:'+(u.single_device_exempt?'#9B1C1C':'#fff')+';color:'+(u.single_device_exempt?'#fff':'#888')+';font-weight:800;font-size:13px;cursor:pointer;">면제 (심사용)</button>'
+        + '</div>'
       + '</div>'
       // 탈퇴 처리
       + '<div style="padding:16px 0 8px;">'
@@ -37450,6 +37480,33 @@ async function mmmSaveCountry(c){
   }catch(e){ if(typeof showToast==='function') showToast('⚠','오류',(e&&e.message)||String(e)); }
 }
 window.mmmSaveCountry = mmmSaveCountry;
+
+// 🆕 2026.08: 단일 기기 로그인 면제 토글 — 슈퍼어드민 전용
+//   심사가 끝나면 반드시 되돌린다. 켜둔 채로 두면 그 계정은 계정 공유가 가능해진다.
+async function mmmSaveDeviceExempt(on){
+  if(!_mmmCurrentUser || !window.sb) return;
+  if(!_isSuperAdmin || !_isSuperAdmin()){ if(typeof showToast==='function') showToast('🔒','권한 부족','슈퍼어드민 전용'); return; }
+  try{
+    var res = await window.sb.from('profiles').update({ single_device_exempt: !!on }).eq('id', _mmmCurrentUser.id).select();
+    if(res.error){
+      var m = String(res.error.message||'');
+      if(/column .*single_device_exempt|does not exist/i.test(m)){
+        if(typeof showToast==='function') showToast('⚠','컬럼 없음','sql/single_device_exempt.sql 을 먼저 실행해주세요');
+      } else {
+        if(typeof showToast==='function') showToast('⚠','저장 실패', m);
+      }
+      return;
+    }
+    if(!res.data || !res.data.length){ if(typeof showToast==='function') showToast('⚠','RLS 차단','변경 안 됨 — 권한 점검'); return; }
+    _mmmCurrentUser.single_device_exempt = !!on;
+    renderMemberManageModal();
+    if(typeof showToast==='function'){
+      showToast(on?'⚠':'✓', on?'면제 적용':'단일 기기 복원',
+        on?'이 회원은 여러 기기에서 로그인할 수 있습니다 — 심사 후 되돌리세요':'이 회원은 한 기기에서만 로그인됩니다');
+    }
+  }catch(e){ if(typeof showToast==='function') showToast('⚠','오류',(e&&e.message)||String(e)); }
+}
+window.mmmSaveDeviceExempt = mmmSaveDeviceExempt;
 
 async function mmmSoftDelete(){
   if(!_mmmCurrentUser || !window.sb) return;
