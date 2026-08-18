@@ -550,7 +550,7 @@ html.auto-login .splash .bottom-group{display:none !important}
 #pcalDetail .pd-specs{margin-top:22px;border-top:1px solid #232326}
 #pcalDetail .pd-spec{display:flex;gap:16px;padding:11px 0;border-bottom:1px solid #1a1a1d;align-items:flex-start}
 #pcalDetail .pd-spec b{flex:none;width:44px;font-weight:400;font-size:11.5px;color:#6f6a65;letter-spacing:.08em}
-#pcalDetail .pd-spec span{flex:1;font-size:12.5px;color:#ded9d3;line-height:1.6}
+#pcalDetail .pd-spec span{flex:1;font-size:12.5px;color:#ded9d3;line-height:1.6;min-height:1.6em}
 #pcalDetail .pd-desc{margin-top:20px;font-size:12.5px;line-height:1.95;color:#a9a39c;white-space:pre-wrap}
 #pcalDetail .pd-bar{position:fixed;left:0;right:0;bottom:0;z-index:7;display:flex;align-items:center;
   gap:14px;padding:14px 24px calc(16px + env(safe-area-inset-bottom));
@@ -37997,8 +37997,9 @@ function _pcalDetailHtml(t, r, dead, expired){
     if(zone) metaBits.push(_pcalEsc(zone));
   }
   if(t.ticketGenre) metaBits.push(_pcalEsc(t.ticketGenre));
+  // 좌석 수는 노출하지 않는다 — 재고를 그대로 보여주는 셈이라 '카운터석' 으로만 쓴다
   var cap = parseInt(t.assignedPax || t.totalPax) || 0;
-  if(cap) metaBits.push('카운터 ' + cap + '석');
+  if(cap) metaBits.push('카운터석');
 
   var photo = _pcalPhoto(t) || (r ? (r.photoHero || r.photoCard || r.photo || '') : '');
 
@@ -38012,29 +38013,22 @@ function _pcalDetailHtml(t, r, dead, expired){
   h += '<div class="pd-name">' + _pcalEsc(name) + '</div>';
   if(metaBits.length) h += '<div class="pd-meta">' + metaBits.join(' · ') + '</div>';
 
-  // ── 스펙 — 값이 있는 줄만 ──
-  var rows = [];
-  if(cap) rows.push(['형태', '카운터 ' + cap + '석']);
-  var course = t.type || t.ticketGenre || '';
-  if(course) rows.push(['코스', _pcalEsc(course)]);
-
+  // ── 스펙 ──
+  //   형태 · 코스 · 동행은 전용 필드가 아직 없다. 있는 값으로 지어내면(정원 → '카운터 6석',
+  //   슬롯 → '1인·2인') 실제와 어긋나므로 **빈 줄로 둔다.** 티켓 등록에 필드를 만들면 채운다.
+  //   주류만 실데이터(레스토랑 콜키지 · 주류 미니멈)라 그대로 쓴다.
+  var rows = [['형태', ''], ['코스', '']];
   var drink = [];
   if(r && r.corkage) drink.push(_pcalEsc(r.corkage));
   if(t.wineMin) drink.push('주류 미니멈 ' + (typeof fxMoney === 'function' ? fxMoney(parseInt(t.wineMin)) : '₩' + parseInt(t.wineMin).toLocaleString()));
-  if(drink.length) rows.push(['주류', drink.join(' · ')]);
+  rows.push(['주류', drink.join(' · ')]);
+  rows.push(['동행', '']);
 
-  var pax = (typeof _tdAllowedPax !== 'undefined' && _tdAllowedPax && _tdAllowedPax.length)
-    ? _tdAllowedPax.map(function(n){ return n + '인'; }).join(' · ')
-    : ((t.minPax && t.maxPax && t.minPax !== t.maxPax) ? (t.minPax + '–' + t.maxPax + '인') : (t.totalPax ? t.totalPax + '인' : ''));
-  if(pax) rows.push(['동행', pax]);
-
-  if(rows.length){
-    h += '<div class="pd-specs">';
-    rows.forEach(function(row){
-      h += '<div class="pd-spec"><b>' + row[0] + '</b><span>' + row[1] + '</span></div>';
-    });
-    h += '</div>';
-  }
+  h += '<div class="pd-specs">';
+  rows.forEach(function(row){
+    h += '<div class="pd-spec"><b>' + row[0] + '</b><span>' + row[1] + '</span></div>';
+  });
+  h += '</div>';
 
   var desc = (typeof window.pickI18nField === 'function')
     ? (window.pickI18nField(t, 'ticket_desc') || t.ticketDesc || '')
@@ -38054,7 +38048,7 @@ function _pcalDetailHtml(t, r, dead, expired){
   if(dead){
     h += '<button class="pd-cta off">' + (t.status === 'soldout' ? '마감' : '기한 만료') + '</button>';
   } else {
-    h += '<button class="pd-cta" onclick="pcalRequestSeat()">참가 신청</button>';
+    h += '<button class="pd-cta" onclick="pcalRequestSeat()">구매하기</button>';
   }
   h += '</div>';
 
