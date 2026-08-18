@@ -6253,7 +6253,10 @@ function _tossMarkTrip(){
 }
 function _tossClearTrip(){
   window._tossPending = false;
-  try { sessionStorage.removeItem('toss_trip'); } catch(_e){}
+  try {
+    sessionStorage.removeItem('toss_trip');
+    sessionStorage.removeItem('vp_reloaded');   // 다음 왕복에서 다시 쓸 수 있게
+  } catch(_e){}
 }
 function _tossHasTrip(){
   if (window._tossPending) return true;
@@ -6566,7 +6569,8 @@ function showDepositShortageGuide(shortage){
 //   ②를 호출하지 않으면 회원이 카드 인증을 마쳐도 미승인 건으로 자동 취소된다.
 //   금액은 서버(payment_orders.amount)가 기준이며, 여기서 보내는 amount 는 대조용이다.
 async function _tossConfirmPayment(paymentKey, orderId, amount){
-  if (!window.sb) return;
+  window._tossConfirmRunning = true;   // 승인 중에는 뷰포트 가드가 reload 하지 않는다
+  if (!window.sb) { window._tossConfirmRunning = false; return; }
   if (typeof showToast === 'function') showToast('⏳','결제 확인 중','잠시만 기다려주세요');
 
   // 리다이렉트 직후에는 세션 복원이 아직 안 끝났을 수 있다 — 최대 5초 대기
@@ -6623,6 +6627,8 @@ async function _tossConfirmPayment(paymentKey, orderId, amount){
   } catch(e) {
     console.warn('[toss-confirm] 예외:', e);
     showToast('⚠','결제 확인 실패','네트워크 확인 후 마이페이지에서 잔액을 확인해주세요');
+  } finally {
+    window._tossConfirmRunning = false;   // 승인이 끝나야 뷰포트 가드가 다시 움직인다
   }
 }
 
@@ -6806,15 +6812,45 @@ if (window.visualViewport) {
 //   뷰포트에 붙어 있으면) 그 자리에서 복원한다. trip 플래그가 이미 지워졌거나,
 //   결제 외의 경로(외부 링크·앱 전환)로 같은 증상이 나도 잡힌다.
 //   조건을 만족할 때만 도니 평소에는 아무 일도 하지 않는다.
-function _gnbBottomGuard(){
+//   ⚠️ 실기기에서 위 방법(리플로우·display 토글)만으로는 안 풀리는 경우가 확인됐다.
+//   iOS 는 결제창을 닫고 돌아왔을 때 레이아웃 뷰포트가 줄어든 채로 굳는 일이 있고,
+//   그러면 position:fixed 하단 요소가 화면 중간에 붙고 아래에 검은 띠가 남는다.
+//   자바스크립트로 레이아웃 뷰포트를 되돌릴 방법이 없으므로, 마지막 수단으로
+//   화면을 다시 그린다(reload). 다만 아무 때나 돌리면 안 되므로 조건을 좁힌다.
+//     · 결제창 왕복 흔적이 있을 때만 (_tossHasTrip)
+//     · 승인 대기 중이 아닐 때만 (취소하고 돌아온 경우 — 잃을 상태가 없다)
+//     · 한 번만 (세션 플래그로 무한 새로고침 차단)
+function _vpGapPx(){
   try {
     var gnb = document.getElementById('mainGnb');
-    if (!gnb) return;
-    if (getComputedStyle(gnb).display === 'none') return;
-    var gap = window.innerHeight - gnb.getBoundingClientRect().bottom;
-    if (gap > 6 && typeof _tossRestoreViewportOnce === 'function') {
-      _tossRestoreViewportOnce();
-    }
+    if (!gnb || getComputedStyle(gnb).display === 'none') return 0;
+    return window.innerHeight - gnb.getBoundingClientRect().bottom;
+  } catch(_e){ return 0; }
+}
+function _tossPayPending(){
+  try {
+    if (window._tossConfirmRunning) return true;
+    var q = String(location.search || '') + String(location.hash || '');
+    return /paymentKey|authKey|customerKey/i.test(q);
+  } catch(_e){ return true; }   // 판단이 안 되면 안전하게 '대기 중' 으로 본다
+}
+function _gnbBottomGuard(){
+  try {
+    var gap = _vpGapPx();
+    if (gap <= 6) return;
+    if (typeof _tossRestoreViewportOnce === 'function') _tossRestoreViewportOnce();
+    // 복원이 먹었는지 확인 후, 여전히 어긋나 있으면 마지막 수단
+    setTimeout(function(){
+      try {
+        if (_vpGapPx() <= 6) return;
+        if (typeof _tossHasTrip === 'function' && !_tossHasTrip()) return;
+        if (_tossPayPending()) return;
+        if (sessionStorage.getItem('vp_reloaded') === '1') return;
+        sessionStorage.setItem('vp_reloaded', '1');
+        console.warn('[vp] 레이아웃 뷰포트 복원 실패 — 화면을 다시 그립니다');
+        location.reload();
+      } catch(_e){}
+    }, 900);
   } catch(_e){}
 }
 window._gnbBottomGuard = _gnbBottomGuard;
@@ -38158,7 +38194,7 @@ function _pcalMonthListHtml(byDate){
   keys.forEach(function(k){ total += (byDate[k] || []).length; });
 
   var h = '<div class="pcal-mlist"><div class="sec">'
-        + _magMonLabel(_pcalM) + ' &nbsp;·&nbsp; ' + total + ' SEATS</div>';
+        + _magMonLabel(_pcalM) + ' &nbsp;·&nbsp; ' + total + (total === 1 ? ' SEAT' : ' SEATS') + '</div>';
 
   keys.forEach(function(key){
     var d  = key % 100;
@@ -38237,18 +38273,14 @@ window.pcalPickYear = pcalPickYear;
 
 // ── 날짜 바텀시트 ──
 function pcalOpenDay(y, m, d){
-  // 🆕 아래에 그 달 목록이 이미 펼쳐져 있으면 시트를 새로 열지 않고 그 날짜로 스크롤한다.
-  //   목록이 다 보이는데 또 시트를 얹으면 같은 내용을 두 번 보여주는 꼴이다.
+  // 아래 목록에서 그 날짜 줄을 금색으로 짚어 준다 (시트와 함께 — 시트가 주(主))
   var key = y*10000 + m*100 + d;
   var sec = document.getElementById('pcalDay' + key);
   if(sec){
-    try { sec.scrollIntoView({ block:'center', behavior:'smooth' }); } catch(e){ sec.scrollIntoView(); }
     sec.classList.remove('hl');
     void sec.offsetWidth;
     sec.classList.add('hl');
     setTimeout(function(){ sec.classList.remove('hl'); }, 1600);
-    _pcalSelKey = key;
-    return;
   }
 
   // 🧪 매거진뷰: 시트가 이미 떠 있으면 그 안에서 내용만 바꾼다 (시트를 겹쳐 쌓지 않는다)
@@ -38564,7 +38596,12 @@ function magRender(){
   var h = '';
   h += hero.photo ? '<img src="' + _pcalEsc(hero.photo) + '" alt="">' : '';
   h += '<div class="mag-shade"></div>';
-  h += '<div class="mag-top"><div class="ic">☰</div><div class="logo">TAAM</div><div class="ic" style="text-align:right;">KO</div></div>';
+  var _lang = (window._tkCurrentLang || 'ko').toUpperCase();
+  h += '<div class="mag-top">'
+     + '<div class="ic" onclick="magMenu()">☰</div>'
+     + '<div class="logo">TAAM</div>'
+     + '<div class="ic" style="text-align:right;" onclick="magLang()">' + _lang + '</div>'
+     + '</div>';
   h += '<div class="mag-arrow l' + (mi > 0 ? '' : ' off') + '" onclick="magStep(-1)">‹</div>';
   h += '<div class="mag-arrow r' + (mi >= 0 && mi < months.length-1 ? '' : ' off') + '" onclick="magStep(1)">›</div>';
 
@@ -38658,6 +38695,28 @@ function magBindSwipe(){
   });
 }
 
+// 상단 ☰ — 슈퍼어드민은 어드민, 회원은 마이페이지
+function magMenu(){
+  if(typeof _isSuperAdmin === 'function' && _isSuperAdmin() && typeof openAdmin === 'function'){
+    openAdmin(); return;
+  }
+  if(typeof openMyPage === 'function') openMyPage();
+}
+window.magMenu = magMenu;
+
+// 상단 언어 — KO → EN → JA 순환
+function magLang(){
+  var order = ['ko','en','ja'];
+  var cur = window._tkCurrentLang || 'ko';
+  var next = order[(order.indexOf(cur) + 1) % order.length];
+  if(typeof authPickLang === 'function') authPickLang(next);
+  else { try{ window._tkCurrentLang = next; localStorage.setItem('tkLang', next); }catch(e){} }
+  magRender();
+  if(typeof pcalRenderAll === 'function') pcalRenderAll();
+  if(typeof showToast === 'function') showToast('🌐','LANGUAGE', next.toUpperCase());
+}
+window.magLang = magLang;
+
 // 아래로 밀면 시트가 올라온다 — 스크롤이 당김 영역으로 넘어가는 순간 열고 되돌린다
 var _magScrollBound = false;
 function magBindScroll(){
@@ -38704,7 +38763,7 @@ function magShowCalendar(){
   var cnt = document.getElementById('magSheetCnt');
   if(t) t.textContent = _magMonLabel(_pcalM) + ' ' + _pcalY;
   if(sub) sub.textContent = '';
-  if(cnt) cnt.textContent = seats.length ? seats.length + ' SEATS' : '';
+  if(cnt) cnt.textContent = seats.length ? (seats.length + (seats.length === 1 ? ' SEAT' : ' SEATS')) : '';
   // 히어로는 뒤에 이미 깔려 있으니 시트 안에서는 그리지 않는다
   renderPhotoCalInto('magSheetBody', true);
 }
@@ -38728,7 +38787,7 @@ function magOpenDay(y, m, d){
   var cnt = document.getElementById('magSheetCnt');
   if(t) t.textContent = _magMonShort(m) + ' ' + d;
   if(sub) sub.textContent = _pcalDowName(dt);
-  if(cnt) cnt.textContent = list.length + ' SEATS';
+  if(cnt) cnt.textContent = list.length + (list.length === 1 ? ' SEAT' : ' SEATS');
 
   var h = '<div style="padding:4px 20px 0;">';
   list.forEach(function(tk){
