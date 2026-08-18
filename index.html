@@ -529,84 +529,123 @@ html.auto-login .splash .bottom-group{display:none !important}
 .pcal-item .go{font-size:15px;color:#57544f;margin-top:5px}
 
 /* 자리 상세 (사진 캘린더 전용) — 기존 티켓 상세는 그대로 두고 별도 화면으로 둔다.
-   「참가 신청」은 기존 글래스모피즘 구매 시트를 그대로 부른다 (handleTicketAction). */
-#pcalDetail{position:fixed;inset:0;z-index:560;display:none;background:#0B0305;color:#f2ede7;
-  overflow-y:auto;-webkit-overflow-scrolling:touch;word-break:keep-all}
+   결제는 기존 코드를 그대로 부른다 (openTdPayPopup).
+
+   색은 전부 변수로 뺐다. 아래 팔레트 클래스 하나만 갈아 끼우면 화면 전체가 바뀐다.
+   기본값은 「절제」 — 브랜드 색은 그대로 두되 강조를 하나로 줄인 것. */
+#pcalDetail{
+  --d-bg:#0B0305;              /* 배경 */
+  --d-heroend:#0B0305;         /* 히어로가 녹아드는 끝색 (배경과 같아야 경계가 안 보인다) */
+  --d-txt:#F2EDE7;             /* 본문 */
+  --d-strong:#FFFFFF;          /* 제목·금액 */
+  --d-sub:#8D8781;             /* 보조 */
+  --d-faint:#5F5B57;           /* 비활성 탭 */
+  --d-line:rgba(255,255,255,.10);
+  --d-when:#C8A96E;            /* 날짜 한 줄 — 유일한 색 강조 */
+  --d-tabline:#FFFFFF;         /* 선택된 탭 밑줄 */
+  --d-panel:rgba(255,255,255,.055);
+  --d-panelline:rgba(255,255,255,.13);
+  --d-chip:rgba(255,255,255,.10);
+  --d-chiptxt:#F5F2EE;
+  --d-check:#FFFFFF;           /* 동의 체크 */
+  --d-checkmark:#0B0305;
+  --d-warn:#E0705F;            /* 추가 결제 필요 */
+  --d-cta:#5C0A14;             /* 결제 버튼 */
+  --d-ctatxt:#FFFFFF;
+  --d-mapbg:#1B1E22;
+  position:fixed;inset:0;z-index:560;display:none;overflow-y:auto;
+  -webkit-overflow-scrolling:touch;word-break:keep-all;
+  background:var(--d-bg);color:var(--d-txt)}
+
+/* ── 팔레트 ──────────────────────────────────────────────────
+   ① 절제(기본) — 브랜드 그대로. 금색은 날짜 한 줄에만, 합계는 흰색.
+   ② 잉크        — 붉은기를 뺀 순수 무채. 색은 결제 버튼 하나뿐.
+   ③ 본          — 금색·버건디까지 뺀 흑백. 버튼만 흰 판에 검은 글씨.
+   구성·글자 크기·동작은 셋 다 완전히 같다. 바뀌는 건 색뿐. */
+#pcalDetail.pal-ink{
+  --d-bg:#0E0E10; --d-heroend:#0E0E10;
+  --d-txt:#EDEDEF; --d-strong:#FFFFFF; --d-sub:#94949A; --d-faint:#5A5A60;
+  --d-line:rgba(255,255,255,.09);
+  --d-when:#B9B9C0; --d-tabline:#FFFFFF;
+  --d-panel:rgba(255,255,255,.048); --d-panelline:rgba(255,255,255,.10);
+  --d-chip:rgba(255,255,255,.09); --d-chiptxt:#EDEDEF;
+  --d-check:#FFFFFF; --d-checkmark:#0E0E10;
+  --d-warn:#D97A6B; --d-mapbg:#191A1D}
+#pcalDetail.pal-bone{
+  --d-bg:#0C0B0A; --d-heroend:#0C0B0A;
+  --d-txt:#EFEDE9; --d-strong:#FFFFFF; --d-sub:#8C8880; --d-faint:#57544F;
+  --d-line:rgba(255,255,255,.09);
+  --d-when:#C3BEB6; --d-tabline:#FFFFFF;
+  --d-panel:rgba(255,255,255,.05); --d-panelline:rgba(255,255,255,.11);
+  --d-chip:rgba(255,255,255,.09); --d-chiptxt:#EFEDE9;
+  --d-check:#FFFFFF; --d-checkmark:#0C0B0A;
+  --d-warn:#CF8375;
+  --d-cta:#EFEDE9; --d-ctatxt:#12100F; --d-mapbg:#1A1917}
+
 #pcalDetail .pd-top{position:fixed;top:0;left:0;right:0;z-index:6;display:flex;align-items:center;
   justify-content:space-between;padding:16px 18px;background:linear-gradient(rgba(0,0,0,.65),rgba(0,0,0,0))}
-#pcalDetail .pd-top .ic{font-size:20px;color:#ded9d3;cursor:pointer;line-height:1;width:28px}
+#pcalDetail .pd-top .ic{font-size:20px;color:var(--d-txt);cursor:pointer;line-height:1;width:28px}
 #pcalDetail .pd-top .logo{font-family:'Nanum Myeongjo','Hiragino Mincho ProN',serif;
-  letter-spacing:.42em;font-size:13px;font-weight:600;padding-left:.42em;color:#f2ede7}
+  letter-spacing:.42em;font-size:13px;font-weight:600;padding-left:.42em;color:var(--d-txt)}
 #pcalDetail .pd-hero{position:relative;height:38vh;min-height:250px;max-height:360px;overflow:hidden;background:#141014}
 #pcalDetail .pd-hero img{width:100%;height:100%;object-fit:cover;filter:saturate(.9) contrast(1.04)}
 #pcalDetail .pd-hero .sh{position:absolute;inset:0;
-  background:linear-gradient(180deg,rgba(0,0,0,.5) 0%,rgba(0,0,0,0) 38%,rgba(0,0,0,.25) 70%,#0B0305 100%)}
+  background:linear-gradient(180deg,rgba(0,0,0,.5) 0%,rgba(0,0,0,0) 38%,rgba(0,0,0,.25) 70%,var(--d-heroend) 100%)}
 #pcalDetail .pd-body{padding:4px 24px calc(120px + env(safe-area-inset-bottom))}
 #pcalDetail .pd-when{font-family:'Oswald','Noto Sans KR',sans-serif;font-size:12px;font-weight:500;
-  letter-spacing:.1em;color:var(--pc-gold,#C8A96E)}
+  letter-spacing:.1em;color:var(--d-when)}
 #pcalDetail .pd-name{font-family:'Nanum Myeongjo','Hiragino Mincho ProN',serif;font-size:31px;
-  line-height:1.18;margin-top:9px;color:#fff}
-#pcalDetail .pd-meta{margin-top:9px;font-size:11.5px;color:#8d8781;letter-spacing:.03em}
+  line-height:1.18;margin-top:9px;color:var(--d-strong)}
+#pcalDetail .pd-meta{margin-top:9px;font-size:11.5px;color:var(--d-sub);letter-spacing:.03em}
 /* 탭 — 바텀시트를 없애고 매장명 바로 아래로 올렸다. 구매하기를 한 번 더 누를 일이 없다. */
-#pcalDetail .pd-tabs{display:flex;border-bottom:1px solid #232326;margin-top:20px}
+#pcalDetail .pd-tabs{display:flex;border-bottom:1px solid var(--d-line);margin-top:20px}
 #pcalDetail .pd-tabs>div{flex:1;text-align:center;padding:11px 2px;font-size:10px;font-weight:600;
-  color:#5f5b57;border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap;
+  color:var(--d-faint);border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap;
   letter-spacing:-.02em;cursor:pointer}
-#pcalDetail .pd-tabs>div.on{color:#fff;font-weight:800;border-bottom-color:var(--pc-gold,#C8A96E)}
+#pcalDetail .pd-tabs>div.on{color:var(--d-strong);font-weight:800;border-bottom-color:var(--d-tabline)}
 /* 내용 판 — 글라스모피즘 */
-#pcalDetail .pd-panel{margin-top:16px;padding:16px;border:1px solid rgba(255,255,255,.13);
-  border-radius:18px;background:rgba(255,255,255,.055);
-  backdrop-filter:blur(26px) saturate(150%);-webkit-backdrop-filter:blur(26px) saturate(150%)}
-#pcalDetail .pd-kick{font-size:7.5px;font-weight:800;letter-spacing:.2em;color:#8d8781;margin:2px 0 10px}
-#pcalDetail .pd-row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.10)}
-#pcalDetail .pd-row .l{font-size:11.5px;color:#8d8781}
-#pcalDetail .pd-row .v{font-size:11.5px;font-weight:700;color:#f5f2ee}
+#pcalDetail .pd-panel{margin-top:16px;padding:16px;border:1px solid var(--d-panelline);
+  border-radius:18px;background:var(--d-panel);
+  backdrop-filter:blur(26px) saturate(140%);-webkit-backdrop-filter:blur(26px) saturate(140%)}
+#pcalDetail .pd-kick{font-size:7.5px;font-weight:800;letter-spacing:.2em;color:var(--d-sub);margin:2px 0 10px}
+#pcalDetail .pd-row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--d-line)}
+#pcalDetail .pd-row .l{font-size:11.5px;color:var(--d-sub)}
+#pcalDetail .pd-row .v{font-size:11.5px;font-weight:700;color:var(--d-txt)}
 #pcalDetail .pd-sum{display:flex;justify-content:space-between;align-items:baseline;padding:11px 0 4px}
-#pcalDetail .pd-sum .l{font-size:13px;font-weight:800;color:#f5f2ee}
-#pcalDetail .pd-sum .v{font-size:19px;font-weight:900;color:#E4C88E}
-#pcalDetail .pd-hr{height:1px;background:rgba(255,255,255,.10);margin:10px 0}
+#pcalDetail .pd-sum .l{font-size:13px;font-weight:800;color:var(--d-txt)}
+#pcalDetail .pd-sum .v{font-size:19px;font-weight:900;color:var(--d-strong)}
+#pcalDetail .pd-hr{height:1px;background:var(--d-line);margin:10px 0}
 #pcalDetail .pd-stepper{display:flex;align-items:center;gap:11px}
 #pcalDetail .pd-stepper button{width:28px;height:28px;border-radius:50%;border:none;cursor:pointer;
-  background:rgba(255,255,255,.10);color:#f5f2ee;font-size:16px;line-height:1;
+  background:var(--d-chip);color:var(--d-chiptxt);font-size:16px;line-height:1;
   display:flex;align-items:center;justify-content:center}
-#pcalDetail .pd-agree{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);
+#pcalDetail .pd-agree{background:var(--d-panel);border:1px solid var(--d-panelline);
   border-radius:12px;padding:12px 13px;display:flex;gap:10px;align-items:flex-start;cursor:pointer}
 #pcalDetail .pd-agree .box{width:18px;height:18px;min-width:18px;border-radius:50%;
-  border:1.5px solid #8d8781;display:flex;align-items:center;justify-content:center;transition:all .18s}
-#pcalDetail .pd-agree.on .box{background:#C8A96E;border-color:#C8A96E}
-#pcalDetail .pd-agree span{font-size:11px;color:#a9a39c;line-height:1.6}
+  border:1.5px solid var(--d-sub);display:flex;align-items:center;justify-content:center;transition:all .18s}
+#pcalDetail .pd-agree.on .box{background:var(--d-check);border-color:var(--d-check)}
+#pcalDetail .pd-agree span{font-size:11px;color:var(--d-sub);line-height:1.6}
 #pcalDetail .pd-flash{animation:pdFlash .9s ease}
-@keyframes pdFlash{0%,100%{box-shadow:none}30%,70%{box-shadow:0 0 0 2px rgba(200,169,110,.85)}}
-#pcalDetail .pd-text{font-size:11.5px;color:#a9a39c;line-height:1.95;white-space:pre-wrap}
-#pcalDetail .pd-map{height:190px;border-radius:12px;overflow:hidden;background:#1b1e22;
-  border:1px solid rgba(255,255,255,.10)}
+@keyframes pdFlash{0%,100%{box-shadow:none}30%,70%{box-shadow:0 0 0 2px rgba(255,255,255,.6)}}
+#pcalDetail .pd-text{font-size:11.5px;color:var(--d-sub);line-height:1.95;white-space:pre-wrap}
+#pcalDetail .pd-map{height:190px;border-radius:12px;overflow:hidden;background:var(--d-mapbg);
+  border:1px solid var(--d-line)}
 #pcalDetail .pd-mapbtns{display:flex;gap:7px;margin-top:10px}
 #pcalDetail .pd-mapbtns button{flex:1;padding:10px 0;border:none;border-radius:9px;cursor:pointer;
   font-family:var(--font-main);font-size:11px;font-weight:700}
 #pcalDetail .pd-gal{display:grid;grid-template-columns:repeat(3,1fr);gap:3px;border-radius:10px;overflow:hidden}
 #pcalDetail .pd-gal div{aspect-ratio:1;background-size:cover;background-position:center;cursor:pointer}
-
-/* A안 — 유리판을 걷어내고 상세와 한 몸으로. 어드민 메뉴에서 기기별로 B↔A 를 바꿔 본다.
-   판만 사라질 뿐 내용·동작은 완전히 같다. */
-#pcalDetail.skin-black .pd-panel{background:transparent;border:none;border-radius:0;
-  padding:16px 0 0;backdrop-filter:none;-webkit-backdrop-filter:none}
-#pcalDetail.skin-black .pd-row{border-bottom-color:#232326}
-#pcalDetail.skin-black .pd-hr{background:#232326}
-#pcalDetail.skin-black .pd-agree{background:#141014;border-color:#232326}
-#pcalDetail.skin-black .pd-stepper button{background:#1c1a1d;color:#ded9d3}
-#pcalDetail.skin-black .pd-map{border-color:#232326}
-#pcalDetail.skin-black .pd-sum .v{color:#C8A96E}
 #pcalDetail .pd-bar{position:fixed;left:0;right:0;bottom:0;z-index:7;display:flex;align-items:center;
   gap:14px;padding:14px 24px calc(16px + env(safe-area-inset-bottom));
-  background:linear-gradient(rgba(11,3,5,0),rgba(11,3,5,.94) 34%);border-top:1px solid rgba(255,255,255,.06)}
-#pcalDetail .pd-price{font-family:'Oswald','Noto Sans KR',sans-serif;font-size:21px;font-weight:500;color:#fff}
-#pcalDetail .pd-price small{font-size:11px;color:#8d8781;margin-left:5px;letter-spacing:.06em}
+  background:linear-gradient(transparent,var(--d-bg) 34%);border-top:1px solid var(--d-line)}
+#pcalDetail .pd-price{font-family:'Oswald','Noto Sans KR',sans-serif;font-size:21px;font-weight:500;color:var(--d-strong)}
+#pcalDetail .pd-price small{font-size:11px;color:var(--d-sub);margin-left:5px;letter-spacing:.06em}
 #pcalDetail .pd-cta{margin-left:auto;flex:none;border:none;cursor:pointer;
-  background:#5C0A14;border-radius:10px;padding:13px 22px;color:#fff;
+  background:var(--d-cta);border-radius:10px;padding:13px 22px;color:var(--d-ctatxt);
   font-family:'Oswald','Noto Sans KR',sans-serif;font-size:12px;font-weight:700;letter-spacing:.1em;
   transition:opacity .18s}
 #pcalDetail .pd-cta.wait{opacity:.42}
-#pcalDetail .pd-cta.off{background:#262326;color:#6f6a65;cursor:default;opacity:1}
+#pcalDetail .pd-cta.off{background:var(--d-chip);color:var(--d-faint);cursor:default;opacity:1}
 
 /* 슈퍼어드민 편집 */
 .pcal-adm-row{display:flex;gap:12px;align-items:center;padding:12px 0;border-bottom:1px solid rgba(0,0,0,.07)}
@@ -9561,8 +9600,8 @@ window.closePromoCarousel = function(){
           </div>
           <div class="admin-menu-item" onclick="togglePdSkin()">
             <div>
-              <div class="admin-menu-text" id="pdSkinLabel">🎨 자리 상세 판 (이 기기)</div>
-              <div class="admin-menu-sub">캘린더에서 들어가는 자리 상세의 내용 판을 B(글라스모피즘) ↔ A(검정)로 바꿔 본다. 내용·동작은 완전히 같다</div>
+              <div class="admin-menu-text" id="pdSkinLabel">🎨 자리 상세 팔레트 (이 기기)</div>
+              <div class="admin-menu-sub" id="pdSkinSub">절제 · 잉크 · 본 세 가지를 눌러 돌린다. 색만 바뀌고 구성·동작은 완전히 같다</div>
             </div>
             <div class="admin-arrow">›</div>
           </div>
@@ -38119,42 +38158,53 @@ function _pcalDetailHtml(t, r, dead, expired){
   return h;
 }
 
-// ── 판 색 (B 글라스 ↔ A 검정) — 기기별로 바꿔 보는 스위치 ──
-//   실기기에서 둘을 나란히 보려면 기기에서 켜고 꺼야 한다. localStorage 라 기기마다 별개.
-function pcalSkin(){
-  try { return (localStorage.getItem('taamPdSkin') === 'black') ? 'black' : 'glass'; }
-  catch(e){ return 'glass'; }
+// ── 팔레트 (기기별 스위치) ──────────────────────────────────
+//   색만 바뀐다. 구성·글자 크기·동작은 셋 다 완전히 같다.
+//   화면에서 나란히 봐야 정해지므로 기기에서 눌러 돌린다 (localStorage 라 기기마다 별개).
+var PD_PALETTES = [
+  { key:'',         name:'① 절제', desc:'브랜드 그대로 — 금색은 날짜 한 줄에만' },
+  { key:'pal-ink',  name:'② 잉크', desc:'붉은기를 뺀 순수 무채 — 색은 결제 버튼 하나' },
+  { key:'pal-bone', name:'③ 본',   desc:'흑백만 — 버튼도 흰 판에 검은 글씨' }
+];
+
+function pcalPalIdx(){
+  try {
+    var i = parseInt(localStorage.getItem('taamPdPal'), 10);
+    return (i >= 0 && i < PD_PALETTES.length) ? i : 0;
+  } catch(e){ return 0; }
 }
-window.pcalSkin = pcalSkin;
+window.pcalPalIdx = pcalPalIdx;
 
 function pcalApplySkin(){
   var scr = document.getElementById('pcalDetail');
-  if(scr) scr.classList.toggle('skin-black', pcalSkin() === 'black');
+  if(!scr) return;
+  PD_PALETTES.forEach(function(p){ if(p.key) scr.classList.remove(p.key); });
+  var cur = PD_PALETTES[pcalPalIdx()];
+  if(cur && cur.key) scr.classList.add(cur.key);
 }
 window.pcalApplySkin = pcalApplySkin;
 
 function togglePdSkin(){
-  var next = (pcalSkin() === 'black') ? 'glass' : 'black';
-  try { localStorage.setItem('taamPdSkin', next); }
+  var next = (pcalPalIdx() + 1) % PD_PALETTES.length;
+  try { localStorage.setItem('taamPdPal', String(next)); }
   catch(e){
     if(typeof showToast === 'function') showToast('⚠','저장 실패','이 브라우저에서 localStorage 를 쓸 수 없습니다');
     return;
   }
   pcalApplySkin();
   pdSkinSync();
-  if(typeof showToast === 'function'){
-    showToast('🎨','자리 상세 판',
-      next === 'black' ? 'A · 검정 — 상세와 한 몸' : 'B · 글라스모피즘 — 유리판 위에');
-  }
+  var p = PD_PALETTES[next];
+  if(typeof showToast === 'function') showToast('🎨', '팔레트 ' + p.name, p.desc);
 }
 window.togglePdSkin = togglePdSkin;
 
 function pdSkinSync(){
   try {
+    var p = PD_PALETTES[pcalPalIdx()];
     var lbl = document.getElementById('pdSkinLabel');
-    if(lbl) lbl.textContent = (pcalSkin() === 'black')
-      ? '🎨 자리 상세 판 (이 기기) — A · 검정'
-      : '🎨 자리 상세 판 (이 기기) — B · 글라스모피즘';
+    if(lbl) lbl.textContent = '🎨 자리 상세 팔레트 (이 기기) — ' + p.name;
+    var sub = document.getElementById('pdSkinSub');
+    if(sub) sub.textContent = p.desc + ' · 누를 때마다 다음 팔레트로';
   } catch(e){}
 }
 window.pdSkinSync = pdSkinSync;
