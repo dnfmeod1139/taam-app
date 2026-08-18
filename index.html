@@ -552,15 +552,31 @@ html.auto-login .splash .bottom-group{display:none !important}
 #magView .mag-top .ic{font-size:12px;color:#DED9D3;letter-spacing:.08em;width:34px}
 #magView .mag-issue{position:absolute;top:64px;left:24px;right:24px;z-index:4;
   font-family:'Oswald',sans-serif;font-size:9.5px;letter-spacing:.34em;color:rgba(255,255,255,.62)}
-#magView .mag-txt{position:absolute;left:24px;right:24px;bottom:196px;z-index:4}
+#magView .mag-txt{position:absolute;left:24px;right:24px;bottom:150px;z-index:4}
 #magView .mag-mon{font-family:'Nanum Myeongjo','Hiragino Mincho ProN',serif;
-  font-size:74px;line-height:.9;letter-spacing:.01em;color:#fff}
+  font-size:66px;line-height:.9;letter-spacing:.01em;color:#fff}
 #magView .mag-mon small{font-family:'Oswald',sans-serif;display:block;font-size:12px;
-  letter-spacing:.36em;color:rgba(255,255,255,.66);margin-bottom:12px}
-#magView .mag-line{margin-top:18px;font-size:13.5px;color:#E4DFD9;letter-spacing:.02em;line-height:1.7}
-#magView .mag-count{margin-top:10px;font-family:'Oswald',sans-serif;font-size:10.5px;
-  letter-spacing:.2em;color:rgba(255,255,255,.5)}
-#magView .mag-credit{margin-top:14px;font-size:10px;color:rgba(255,255,255,.34);letter-spacing:.08em}
+  letter-spacing:.36em;color:rgba(255,255,255,.66);margin-bottom:10px}
+#magView .mag-line{margin-top:16px;font-size:13.5px;color:#E4DFD9;letter-spacing:.02em;line-height:1.7}
+/* 그 달에 열린 매장 — 잡지 목차처럼 크기·들여쓰기를 어긋나게 쌓는다.
+   무작위가 아니라 정해진 리듬이다. 매번 달라지면 화면이 불안해진다. */
+#magView .mag-list{margin-top:20px}
+#magView .mag-item{display:flex;align-items:baseline;gap:9px;margin-bottom:5px}
+#magView .mag-item .nm{font-family:'Nanum Myeongjo','Hiragino Mincho ProN',serif;
+  color:#fff;line-height:1.14;text-shadow:0 1px 14px rgba(0,0,0,.55)}
+#magView .mag-item .zn{font-family:'Oswald',sans-serif;font-size:8.5px;letter-spacing:.2em;
+  color:rgba(255,255,255,.5);white-space:nowrap;text-shadow:0 1px 8px rgba(0,0,0,.6)}
+#magView .mag-more{margin-top:9px;font-family:'Oswald',sans-serif;font-size:9.5px;
+  letter-spacing:.2em;color:rgba(255,255,255,.42)}
+/* 월 넘기기 — 화면 양옆 */
+#magView .mag-arrow{position:absolute;top:46%;z-index:5;width:38px;height:38px;border-radius:50%;
+  border:1px solid rgba(255,255,255,.16);background:rgba(0,0,0,.22);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,.82);
+  font-size:16px;cursor:pointer;transition:opacity .2s}
+#magView .mag-arrow.l{left:12px}
+#magView .mag-arrow.r{right:12px}
+#magView .mag-arrow.off{opacity:.18;pointer-events:none}
 /* 아래로 밀거나 눌러서 캘린더 */
 /* GNB(하단 고정) 위로 띄운다 — 안 그러면 버튼이 GNB 에 가려 안 눌린다.
    버튼은 작게. 표지의 주인은 사진이라 버튼이 화면을 가로지르면 안 된다. */
@@ -38418,17 +38434,27 @@ function magRender(){
   var byDate = _pcalByDate();
   _pcalInitMonth(byDate);
   var hero = _pcalHeroFor(_pcalY, _pcalM, byDate);
+  var months = _magMonths(byDate);
+  var mi = months.indexOf(_pcalY*100 + _pcalM);
 
-  // 표지에는 사진과 월·지역만 남긴다.
+  // 표지에는 사진과 월, 그리고 그 달 매장 목록만 남긴다.
   //   ISSUE 번호 · SEATS OPEN · 사진 크레딧은 뺐다 — 표지에 글자가 늘수록
   //   사진이 죽고 잡지가 아니라 안내문이 된다.
   var h = '';
   h += hero.photo ? '<img src="' + _pcalEsc(hero.photo) + '" alt="">' : '';
   h += '<div class="mag-shade"></div>';
   h += '<div class="mag-top"><div class="ic">☰</div><div class="logo">TAAM</div><div class="ic" style="text-align:right;">KO</div></div>';
+  h += '<div class="mag-arrow l' + (mi > 0 ? '' : ' off') + '" onclick="magStep(-1)">‹</div>';
+  h += '<div class="mag-arrow r' + (mi >= 0 && mi < months.length-1 ? '' : ' off') + '" onclick="magStep(1)">›</div>';
+
   h += '<div class="mag-txt">';
   h += '<div class="mag-mon"><small>' + _pcalY + '</small>' + _pcalM + '月</div>';
-  if(hero.regions) h += '<div class="mag-line">' + _pcalEsc(hero.regions) + '</div>';
+  var rests = _magEditorial(byDate);
+  if(rests.length){
+    h += _magListHtml(rests);
+  } else if(hero.regions){
+    h += '<div class="mag-line">' + _pcalEsc(hero.regions) + '</div>';
+  }
   h += '</div>';
   h += '<div class="mag-cue">'
      + '<button onclick="magOpenSheet()">스케줄</button>'
@@ -38439,8 +38465,112 @@ function magRender(){
   if(heroEl) heroEl.innerHTML = h;
   v.style.display = 'block';
   magBindScroll();
+  magBindSwipe();
 }
 window.magRender = magRender;
+
+// 표지에 쓸 매장 목록 — 그 달에 열린 자리의 매장을 날짜순으로, 중복 없이
+function _magEditorial(byDate){
+  var list = _pcalMonthTickets(_pcalY, _pcalM, byDate);
+  if(typeof _tkDateKey === 'function'){
+    list = list.slice().sort(function(a,b){ return _tkDateKey(a) - _tkDateKey(b); });
+  }
+  var seen = {}, out = [];
+  list.forEach(function(t){
+    var key = String(t.restId || t.rest || '');
+    if(!key || seen[key]) return;
+    seen[key] = 1;
+    var r = _pcalRest(t);
+    out.push({
+      name: _pcalRestName(t),
+      zone: (r && (r.zoneEn || r.cityEn || r.region)) || ''
+    });
+  });
+  return out;
+}
+
+// 크기·들여쓰기·투명도를 정해진 리듬으로 어긋나게 쌓는다.
+//   무작위(Math.random)를 쓰면 다시 그릴 때마다 배치가 흔들려 화면이 불안해진다.
+//   그래서 순서에 따라 고정된 패턴을 쓴다 — 눈에는 불규칙해 보이되 항상 같다.
+var _MAG_SZ  = [30, 17, 24, 15, 27, 19, 22];
+var _MAG_IND = [0, 28, 10, 40, 4, 32, 16];
+var _MAG_OP  = [1, .70, .90, .60, .95, .66, .80];
+function _magListHtml(rests){
+  var cap = 6;
+  var shown = rests.slice(0, cap);
+  var h = '<div class="mag-list">';
+  shown.forEach(function(o, i){
+    var sz  = _MAG_SZ[i % _MAG_SZ.length];
+    var ind = _MAG_IND[i % _MAG_IND.length];
+    var op  = _MAG_OP[i % _MAG_OP.length];
+    h += '<div class="mag-item" style="margin-left:' + ind + 'px;opacity:' + op + ';">'
+       + '<span class="nm" style="font-size:' + sz + 'px;">' + _pcalEsc(o.name) + '</span>'
+       + (o.zone ? '<span class="zn">' + _pcalEsc(o.zone) + '</span>' : '')
+       + '</div>';
+  });
+  if(rests.length > cap){
+    h += '<div class="mag-more">+ ' + (rests.length - cap) + ' MORE</div>';
+  }
+  h += '</div>';
+  return h;
+}
+
+// ── 월 넘기기 ──
+//   자리가 있는 달만 오간다. 빈 달 표지를 계속 넘기게 하면 매거진이 아니라 달력이 된다.
+function _magMonths(byDate){
+  var seen = {};
+  Object.keys(byDate).forEach(function(k){
+    var kk = parseInt(k, 10);
+    seen[Math.floor(kk/10000)*100 + Math.floor((kk%10000)/100)] = 1;
+  });
+  if(_pcalY) seen[_pcalY*100 + _pcalM] = 1;
+  return Object.keys(seen).map(Number).sort(function(a,b){ return a - b; });
+}
+
+function magStep(dir){
+  var byDate = _pcalByDate();
+  var months = _magMonths(byDate);
+  var i = months.indexOf(_pcalY*100 + _pcalM);
+  var n = i + dir;
+  if(i < 0 || n < 0 || n >= months.length) return;
+  _pcalY = Math.floor(months[n] / 100);
+  _pcalM = months[n] % 100;
+  _pcalSelKey = null;
+  _pcalYearOpen = false;
+  magRender();
+  // 시트가 열려 있으면 캘린더도 같은 달로 맞춘다
+  var s = document.getElementById('magSheet');
+  if(s && s.classList.contains('open')) magShowCalendar();
+}
+window.magStep = magStep;
+
+// 좌우로 밀어도 월이 넘어간다 (세로 제스처는 시트 열기라 축을 갈라 쓴다)
+var _magSwipeBound = false;
+function magBindSwipe(){
+  if(_magSwipeBound) return;
+  var el = document.getElementById('magHero');
+  if(!el) return;
+  _magSwipeBound = true;
+  var x0 = null, y0 = null, axis = null;
+  el.addEventListener('touchstart', function(e){
+    var t = e.touches[0]; x0 = t.clientX; y0 = t.clientY; axis = null;
+  }, { passive:true });
+  el.addEventListener('touchmove', function(e){
+    if(x0 === null) return;
+    var t = e.touches[0];
+    if(axis === null){
+      var dx = Math.abs(t.clientX - x0), dy = Math.abs(t.clientY - y0);
+      if(dx > 8 || dy > 8) axis = (dx > dy) ? 'x' : 'y';
+    }
+  }, { passive:true });
+  el.addEventListener('touchend', function(e){
+    if(x0 === null) return;
+    var t = e.changedTouches[0];
+    var dx = t.clientX - x0;
+    if(axis === 'x' && Math.abs(dx) > 56) magStep(dx < 0 ? 1 : -1);
+    x0 = null; y0 = null; axis = null;
+  });
+}
 
 // 아래로 밀면 시트가 올라온다 — 스크롤이 당김 영역으로 넘어가는 순간 열고 되돌린다
 var _magScrollBound = false;
