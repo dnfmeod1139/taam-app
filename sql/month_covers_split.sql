@@ -14,7 +14,8 @@
 
 alter table public.month_covers
   add column if not exists cover_layout text default 'single',
-  add column if not exists cover_photos jsonb default '[]'::jsonb;
+  add column if not exists cover_photos jsonb default '[]'::jsonb,
+  add column if not exists cover_focus  jsonb default '[]'::jsonb;
 
 comment on column public.month_covers.cover_layout is
   '표지 컷 레이아웃 키. single(1컷) / two(2분할) / three(3분할) / multi(다분할). 실제 컷 모양은 index.html 의 MAG_LAYOUTS 가 갖는다.';
@@ -22,12 +23,15 @@ comment on column public.month_covers.cover_layout is
 comment on column public.month_covers.cover_photos is
   '컷별 사진 URL 배열. 예: ["https://…/a.jpg","https://…/b.jpg"]. 컷 수보다 모자라면 앞의 것으로 채우고, photo_url 을 마지막 폴백으로 쓴다.';
 
+comment on column public.month_covers.cover_focus is
+  '컷별 사진 포커스 좌표 배열. 예: [{"x":50,"y":35}]. 사진에서 어느 지점을 컷 가운데에 둘지 정한다(object-position). 없으면 50/50(가운데).';
+
 -- ── 확인 ──────────────────────────────────────────────────────
 select column_name, data_type, column_default
   from information_schema.columns
  where table_schema = 'public'
    and table_name   = 'month_covers'
-   and column_name in ('photo_url','cover_layout','cover_photos')
+   and column_name in ('photo_url','cover_layout','cover_photos','cover_focus')
  order by column_name;
 
 do $$ begin raise notice '✅ 표지 분할 컷 컬럼 준비 완료'; end $$;
