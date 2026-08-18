@@ -586,7 +586,24 @@ html.auto-login .splash .bottom-group{display:none !important}
   justify-content:space-between;padding:18px 20px}
 #magView .mag-top .logo{font-family:'Nanum Myeongjo','Hiragino Mincho ProN',serif;
   letter-spacing:.44em;font-size:13px;font-weight:600;padding-left:.44em;color:#F2EDE7}
-#magView .mag-top .ic{font-size:12px;color:#DED9D3;letter-spacing:.08em;width:34px}
+#magView .mag-top .ic{font-size:12px;color:#DED9D3;letter-spacing:.08em;width:34px;cursor:pointer}
+/* 언어 — 눌러서 셋을 펼치고 하나를 고른다 (돌려 쓰면 원하는 언어까지 여러 번 눌러야 한다) */
+#magView .mag-lang{position:relative;width:34px;flex:none;text-align:right}
+#magView .mag-lang .cur{font-family:'Oswald',sans-serif;font-size:12px;letter-spacing:.08em;
+  color:#DED9D3;cursor:pointer;display:inline-flex;align-items:center;gap:4px}
+#magView .mag-lang .cur i{font-style:normal;font-size:8px;color:rgba(255,255,255,.5);
+  transition:transform .18s ease}
+#magView .mag-lang.open .cur i{transform:rotate(180deg)}
+#magView .mag-langbox{display:none;position:absolute;top:calc(100% + 8px);right:0;z-index:12;
+  background:rgba(14,14,16,.96);border:1px solid rgba(255,255,255,.14);border-radius:6px;
+  overflow:hidden;min-width:64px;box-shadow:0 12px 30px rgba(0,0,0,.6);
+  backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px)}
+#magView .mag-lang.open .mag-langbox{display:block}
+#magView .mag-langbox div{font-family:'Oswald',sans-serif;font-size:11px;letter-spacing:.16em;
+  color:#8D8781;padding:10px 14px;cursor:pointer;text-align:left;
+  border-bottom:1px solid rgba(255,255,255,.07)}
+#magView .mag-langbox div:last-child{border-bottom:none}
+#magView .mag-langbox div.on{color:#fff;background:rgba(255,255,255,.06)}
 #magView .mag-issue{position:absolute;top:64px;left:24px;right:24px;z-index:4;
   font-family:'Oswald',sans-serif;font-size:9.5px;letter-spacing:.34em;color:rgba(255,255,255,.62)}
 /* 표지 글자는 월 하나뿐. 그 옆에 스케줄 버튼(버건디)이 붙는다.
@@ -38596,11 +38613,19 @@ function magRender(){
   var h = '';
   h += hero.photo ? '<img src="' + _pcalEsc(hero.photo) + '" alt="">' : '';
   h += '<div class="mag-shade"></div>';
-  var _lang = (window._tkCurrentLang || 'ko').toUpperCase();
+  var _lang = (window._tkCurrentLang || 'ko');
   h += '<div class="mag-top">'
      + '<div class="ic" onclick="magMenu()">☰</div>'
      + '<div class="logo">TAAM</div>'
-     + '<div class="ic" style="text-align:right;" onclick="magLang()">' + _lang + '</div>'
+     + '<div class="mag-lang' + (_magLangOpen ? ' open' : '') + '">'
+     +   '<span class="cur" onclick="magLangToggle(event)">' + _lang.toUpperCase() + '<i>▾</i></span>'
+     +   '<div class="mag-langbox">'
+     +     ['ko','en','ja'].map(function(c){
+             return '<div class="' + (c === _lang ? 'on' : '') + '" onclick="magLangPick(\'' + c + '\')">'
+                  + c.toUpperCase() + '</div>';
+           }).join('')
+     +   '</div>'
+     + '</div>'
      + '</div>';
   h += '<div class="mag-arrow l' + (mi > 0 ? '' : ' off') + '" onclick="magStep(-1)">‹</div>';
   h += '<div class="mag-arrow r' + (mi >= 0 && mi < months.length-1 ? '' : ' off') + '" onclick="magStep(1)">›</div>';
@@ -38704,18 +38729,33 @@ function magMenu(){
 }
 window.magMenu = magMenu;
 
-// 상단 언어 — KO → EN → JA 순환
-function magLang(){
-  var order = ['ko','en','ja'];
-  var cur = window._tkCurrentLang || 'ko';
-  var next = order[(order.indexOf(cur) + 1) % order.length];
-  if(typeof authPickLang === 'function') authPickLang(next);
-  else { try{ window._tkCurrentLang = next; localStorage.setItem('tkLang', next); }catch(e){} }
+// 상단 언어 — 눌러서 셋을 펼치고 하나를 고른다
+var _magLangOpen = false;
+function magLangToggle(ev){
+  if(ev && ev.stopPropagation) ev.stopPropagation();
+  _magLangOpen = !_magLangOpen;
+  magRender();
+}
+window.magLangToggle = magLangToggle;
+
+function magLangPick(code){
+  _magLangOpen = false;
+  if(!code) { magRender(); return; }
+  if(typeof authPickLang === 'function') authPickLang(code);
+  else { try{ window._tkCurrentLang = code; localStorage.setItem('tkLang', code); }catch(e){} }
   magRender();
   if(typeof pcalRenderAll === 'function') pcalRenderAll();
-  if(typeof showToast === 'function') showToast('🌐','LANGUAGE', next.toUpperCase());
 }
-window.magLang = magLang;
+window.magLangPick = magLangPick;
+
+// 바깥을 누르면 닫힌다
+document.addEventListener('click', function(ev){
+  if(!_magLangOpen) return;
+  var box = document.querySelector('#magView .mag-lang');
+  if(box && box.contains(ev.target)) return;
+  _magLangOpen = false;
+  if(typeof magRender === 'function') magRender();
+}, true);
 
 // 아래로 밀면 시트가 올라온다 — 스크롤이 당김 영역으로 넘어가는 순간 열고 되돌린다
 var _magScrollBound = false;
