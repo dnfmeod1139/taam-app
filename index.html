@@ -38023,7 +38023,6 @@ function renderPhotoCalInto(hostId, skipHero){
     h += '<div class="pc-txt">';
     h += '<div class="pc-mon"><small>' + _pcalY + '</small>' + _magMonLabel(_pcalM) + '</div>';
     if(hero.regions) h += '<div class="pc-line">' + _pcalEsc(hero.regions) + '</div>';
-    if(hero.credit)  h += '<div class="pc-credit">' + _pcalEsc(hero.credit) + '</div>';
     h += '</div></div>';
   }
 
@@ -39151,10 +39150,26 @@ function _pcalAdmLoadDraft(){
 // 다시 그리기 전에 입력창에 친 값을 잃지 않게 draft 로 옮긴다
 function _pcalAdmSyncInputs(){
   var r = document.getElementById('pcalAdmRegions');
-  var c = document.getElementById('pcalAdmCredit');
   if(r) _pcalAdmDraft.regions = r.value;
-  if(c) _pcalAdmDraft.photo_credit = c.value;
 }
+
+// 연도 이동 — 월은 유지한 채 해를 넘긴다
+function pcalAdmYear(delta){
+  _pcalAdmSyncInputs();
+  _pcalAdmY += delta;
+  _pcalAdmLoadDraft();
+  pcalAdminRender();
+}
+window.pcalAdmYear = pcalAdmYear;
+
+// 월 직접 선택
+function pcalAdmGo(m){
+  _pcalAdmSyncInputs();
+  _pcalAdmM = m;
+  _pcalAdmLoadDraft();
+  pcalAdminRender();
+}
+window.pcalAdmGo = pcalAdmGo;
 
 function pcalAdmMove(delta){
   _pcalAdmSyncInputs();
@@ -39175,14 +39190,32 @@ function pcalAdminRender(){
 
   var h = '';
 
-  // ── 월 이동 ──
-  h += '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">'
-     + '<button class="pcal-adm-btn" onclick="pcalAdmMove(-1)">‹</button>'
+  // ── 연·월 선택 ──
+  //   어느 달이든 한 번에 간다. 한 칸씩 넘기면 내년 달로 가는 데만 열 번 넘게 눌러야 한다.
+  //   표지를 이미 올린 달은 점으로 표시해, 어디가 비었는지 한눈에 보이게 한다.
+  h += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">'
+     + '<button class="pcal-adm-btn" onclick="pcalAdmYear(-1)">‹</button>'
      + '<div style="font-family:var(--font-main);font-size:17px;font-weight:800;color:#1a1a18;">'
-     + _pcalAdmY + '년 ' + _pcalAdmM + '월</div>'
-     + '<button class="pcal-adm-btn" onclick="pcalAdmMove(1)">›</button>'
-     + '<div style="margin-left:auto;font-size:11px;color:#8a8580;">자리 ' + list.length + '건</div>'
+     + _pcalAdmY + '년</div>'
+     + '<button class="pcal-adm-btn" onclick="pcalAdmYear(1)">›</button>'
+     + '<div style="margin-left:auto;font-size:11px;color:#8a8580;">이 달 자리 ' + list.length + '건</div>'
      + '</div>';
+
+  h += '<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin-bottom:18px;">';
+  for(var mm=1; mm<=12; mm++){
+    var cov  = (_pcalCovers && _pcalCovers[_pcalAdmY + '-' + mm]) || null;
+    var done = !!(cov && cov.photo_url);
+    var on   = (mm === _pcalAdmM);
+    h += '<button onclick="pcalAdmGo(' + mm + ')" style="position:relative;padding:9px 0;border-radius:8px;cursor:pointer;'
+       + 'font-family:var(--font-main);font-size:11px;font-weight:700;'
+       + (on ? 'background:#5C0A14;border:1px solid #5C0A14;color:#fff;'
+             : 'background:#fff;border:1px solid #d8d3cc;color:#5C0A14;')
+       + '">' + mm + '월'
+       + (done ? '<span style="position:absolute;top:5px;right:6px;width:5px;height:5px;border-radius:50%;background:'
+                 + (on ? '#E4C88E' : '#2a8a4a') + ';"></span>' : '')
+       + '</button>';
+  }
+  h += '</div>';
 
   // ── 히어로 ──
   h += '<div style="font-family:var(--font-main);font-size:12px;font-weight:800;letter-spacing:.1em;color:#5C0A14;margin:4px 0 10px;">월별 히어로</div>';
@@ -39200,8 +39233,7 @@ function pcalAdminRender(){
      + '</div>';
   h += '<div style="margin-bottom:9px;"><div style="font-size:11px;color:#8a8580;margin-bottom:5px;">지역 (예: 도쿄 · 오사카 · 교토)</div>'
      + '<input id="pcalAdmRegions" class="pcal-adm-inp" type="text" value="' + _pcalEsc(_pcalAdmDraft.regions) + '" placeholder="비워두면 그 달 티켓 지역으로 자동 표시"></div>';
-  h += '<div style="margin-bottom:12px;"><div style="font-size:11px;color:#8a8580;margin-bottom:5px;">사진 크레딧 (선택)</div>'
-     + '<input id="pcalAdmCredit" class="pcal-adm-inp" type="text" value="' + _pcalEsc(_pcalAdmDraft.photo_credit) + '" placeholder="Photography · 이름"></div>';
+
   h += '<button class="pcal-adm-btn dark" style="width:100%;padding:12px;font-size:12px;" onclick="pcalAdmSaveCover()">이 달 표지 저장</button>';
 
   // ── 날짜 타일 ──
@@ -39253,11 +39285,12 @@ async function pcalAdmSaveCover(){
     return;
   }
   _pcalAdmSyncInputs();
+  //   photo_credit 는 화면에서 쓰지 않으므로 보내지 않는다.
+  //   upsert 는 보낸 컬럼만 갱신하므로 기존 값이 지워지지도 않는다.
   var payload = {
     year: _pcalAdmY, month: _pcalAdmM,
-    photo_url:    _pcalAdmDraft.photo_url    || null,
-    regions:      _pcalAdmDraft.regions      || null,
-    photo_credit: _pcalAdmDraft.photo_credit || null,
+    photo_url: _pcalAdmDraft.photo_url || null,
+    regions:   _pcalAdmDraft.regions   || null,
     updated_at: new Date().toISOString()
   };
   try {
@@ -39279,7 +39312,7 @@ async function pcalAdmSaveCover(){
   if(!_pcalCovers) _pcalCovers = {};
   _pcalCovers[_pcalAdmY + '-' + _pcalAdmM] = {
     year:_pcalAdmY, month:_pcalAdmM,
-    photo_url: payload.photo_url, regions: payload.regions, photo_credit: payload.photo_credit
+    photo_url: payload.photo_url, regions: payload.regions
   };
   if(typeof showToast === 'function') showToast('✅','표지 저장', _pcalAdmY + '년 ' + _pcalAdmM + '월');
   pcalRenderAll();
