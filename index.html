@@ -504,6 +504,37 @@ html.auto-login .splash .bottom-group{display:none !important}
 .pcal-d.today .n{color:var(--pc-gold)}
 .pcal-note{padding:16px 22px 0;font-size:11px;color:#5f5b57;letter-spacing:.04em;line-height:1.7}
 
+/* 이 달의 자리 — 캘린더 아래에 전부 펼쳐 둔다.
+   날짜를 하나씩 눌러봐야 뭐가 있는지 아는 건 캘린더의 고질적인 약점이라,
+   기본값을 「다 보이는 상태」로 둔다. 타일을 누르면 그 날짜로 스크롤만 한다.
+   매진·기한만료는 흑백으로 눕히고, 남아 있는 자리만 색을 갖는다. */
+.pcal-mlist{padding:26px 14px 0}
+.pcal-mlist .sec{font-family:'Oswald',sans-serif;font-size:9px;letter-spacing:.26em;
+  color:#5f5b57;padding:0 8px 12px;border-bottom:1px solid var(--pc-line)}
+.pcal-daysec{padding:0 8px;margin-top:16px;border-radius:10px;scroll-margin-top:80px}
+.pcal-daysec .dh{display:flex;align-items:baseline;gap:9px;padding:4px 0 6px}
+.pcal-daysec .dh .d{font-family:'Bodoni Moda',Didot,serif;font-weight:500;font-size:20px;color:#f2ede7}
+.pcal-daysec .dh .w{font-family:'Oswald',sans-serif;font-size:9px;letter-spacing:.2em;color:#6f6a65}
+.pcal-daysec .dh .n{margin-left:auto;font-family:'Oswald',sans-serif;font-size:9px;
+  letter-spacing:.16em;color:#6f6a65}
+.pcal-daysec.hl{animation:pcalHl 1.5s ease}
+@keyframes pcalHl{0%,100%{box-shadow:none}22%,62%{box-shadow:0 0 0 1.5px rgba(200,169,110,.75)}}
+.pcal-row{display:flex;gap:12px;align-items:center;padding:10px 0;
+  border-top:1px solid #17171a;cursor:pointer}
+.pcal-row .ph{width:52px;height:52px;flex:none;border-radius:4px;overflow:hidden;background:#1c1c1c}
+.pcal-row .ph img{width:100%;height:100%;object-fit:cover;filter:saturate(.9) contrast(1.04)}
+.pcal-row .m{flex:1;min-width:0}
+.pcal-row .nm{font-size:14px;color:#f2ede7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pcal-row .sub{font-size:10.5px;color:#8d8781;margin-top:4px;letter-spacing:.03em}
+.pcal-row .st{flex:none;font-size:10.5px;color:var(--pc-gold);letter-spacing:.05em;text-align:right}
+.pcal-row .go{flex:none;font-size:15px;color:#57544f}
+/* 매진·기한만료 — 흑백으로 눕힌다 */
+.pcal-row.dead .ph img{filter:grayscale(1) brightness(.55)}
+.pcal-row.dead .nm{color:#6f6a65}
+.pcal-row.dead .sub{color:#4a4744}
+.pcal-row.dead .st{color:#57544f}
+.pcal-row.dead .go{color:#3a3835}
+
 /* 날짜 바텀시트 */
 #pcalSheet{position:fixed;inset:0;z-index:640;display:none}
 #pcalSheet .pc-dim{position:absolute;inset:0;background:rgba(0,0,0,.66)}
@@ -38056,6 +38087,9 @@ function renderPhotoCalInto(hostId, skipHero){
 
   if(_pcalMonthTickets(_pcalY, _pcalM, byDate).length === 0){
     h += '<div class="pcal-note">이 달은 아직 열린 자리가 없습니다. 위 월 스트립에서 다른 달을 보세요.</div>';
+  } else {
+    // ── 이 달의 자리 — 캘린더 아래에 전부 펼쳐 둔다 ──
+    h += _pcalMonthListHtml(byDate);
   }
 
   host.innerHTML = h;
@@ -38073,6 +38107,58 @@ function renderPhotoCalInto(hostId, skipHero){
   }
   _center();
   setTimeout(_center, 380);
+}
+
+// 이 달의 자리를 날짜별로 전부 펼친다.
+//   매진·기한만료는 흑백으로 눕히고, 남아 있는 자리만 색을 갖는다.
+//   자리가 하나도 안 남은 날은 접어서(_pcalDeadDayOpen) 화면을 잡아먹지 않게 한다.
+function _pcalMonthListHtml(byDate){
+  var lo = _pcalY*10000 + _pcalM*100, hi = lo + 99;
+  var keys = Object.keys(byDate).map(Number)
+    .filter(function(k){ return k >= lo && k <= hi; })
+    .sort(function(a,b){ return a - b; });
+  if(!keys.length) return '';
+
+  var h = '<div class="pcal-mlist"><div class="sec">'
+        + _magMonLabel(_pcalM) + ' &nbsp;·&nbsp; ' + keys.length + ' DAYS</div>';
+
+  keys.forEach(function(key){
+    var d  = key % 100;
+    var dt = new Date(_pcalY, _pcalM - 1, d);
+    var list = byDate[key] || [];
+    if(typeof _sortTickets === 'function') list = _sortTickets(list);
+    var alive = list.filter(function(t){
+      return t.status !== 'soldout' && !(typeof _isTicketExpired === 'function' && _isTicketExpired(t));
+    }).length;
+
+    h += '<div class="pcal-daysec" id="pcalDay' + key + '">';
+    h += '<div class="dh"><span class="d">' + d + '</span>'
+       + '<span class="w">' + _pcalWkNames()[dt.getDay()] + '</span>'
+       + '<span class="n">' + (alive ? alive + ' OPEN' : 'CLOSED') + '</span></div>';
+
+    list.forEach(function(t){
+      var r = _pcalRest(t);
+      var dead = (t.status === 'soldout') ||
+                 (typeof _isTicketExpired === 'function' && _isTicketExpired(t));
+      var ph = _pcalPhoto(t);
+      var bits = [];
+      if(r && (r.zoneEn || r.cityEn)) bits.push(_pcalEsc(r.zoneEn || r.cityEn));
+      if(t.time) bits.push(_pcalEsc(t.time));
+      if(t.ticketGenre) bits.push(_pcalEsc(t.ticketGenre));
+
+      h += '<div class="pcal-row' + (dead ? ' dead' : '') + '" '
+         + 'onclick="pcalGoTicket(\'' + _pcalEsc(String(t.id)) + '\')">';
+      h += '<div class="ph">' + (ph ? '<img src="' + _pcalEsc(ph) + '" alt="" loading="lazy">' : '') + '</div>';
+      h += '<div class="m"><div class="nm">' + _pcalEsc(_pcalRestName(t)) + '</div>'
+         + '<div class="sub">' + bits.join(' · ') + '</div></div>';
+      h += '<div class="st">' + (dead ? (t.status === 'soldout' ? '마감' : '기한 만료') : '자리 있음') + '</div>';
+      h += '<div class="go">›</div>';
+      h += '</div>';
+    });
+    h += '</div>';
+  });
+  h += '</div>';
+  return h;
 }
 
 function pcalRenderAll(){
@@ -38114,6 +38200,20 @@ window.pcalPickYear = pcalPickYear;
 
 // ── 날짜 바텀시트 ──
 function pcalOpenDay(y, m, d){
+  // 🆕 아래에 그 달 목록이 이미 펼쳐져 있으면 시트를 새로 열지 않고 그 날짜로 스크롤한다.
+  //   목록이 다 보이는데 또 시트를 얹으면 같은 내용을 두 번 보여주는 꼴이다.
+  var key = y*10000 + m*100 + d;
+  var sec = document.getElementById('pcalDay' + key);
+  if(sec){
+    try { sec.scrollIntoView({ block:'center', behavior:'smooth' }); } catch(e){ sec.scrollIntoView(); }
+    sec.classList.remove('hl');
+    void sec.offsetWidth;
+    sec.classList.add('hl');
+    setTimeout(function(){ sec.classList.remove('hl'); }, 1600);
+    _pcalSelKey = key;
+    return;
+  }
+
   // 🧪 매거진뷰: 시트가 이미 떠 있으면 그 안에서 내용만 바꾼다 (시트를 겹쳐 쌓지 않는다)
   var _mgs = document.getElementById('magSheet');
   if(_mgs && _mgs.classList.contains('open') && typeof magOpenDay === 'function'){
