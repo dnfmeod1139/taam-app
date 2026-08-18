@@ -435,10 +435,13 @@ html.auto-login .splash .bottom-group{display:none !important}
    플래그(newHomeEnabled) 뒤에서만 붙는다. 기존 GNB/홈 스타일은 건드리지 않음.
    사진은 전부 Supabase (month_covers.photo_url · ticket_products.tile_photo ·
    restaurants 사진) 에서 URL 로만 온다 — index.html 에 이미지를 박지 않는다. */
+/* GNB 는 검정. 버건디는 「참가 신청」 같은 행동 버튼에만 남겨야 색이 산다. */
 #mainGnb.gnb-flat{bottom:0;left:0;transform:none;width:100%;max-width:none;border-radius:0;
   height:auto;padding:6px 6px calc(6px + env(safe-area-inset-bottom));
-  box-shadow:0 -6px 24px rgba(0,0,0,.5)}
+  background:#000;border-top:1px solid rgba(255,255,255,.07);
+  box-shadow:0 -6px 24px rgba(0,0,0,.6)}
 #mainGnb.gnb-flat .gnb-btn{border-radius:12px}
+#mainGnb.gnb-flat .gnb-btn.active{background:rgba(255,255,255,.08)}
 
 .pcal{--pc-gold:#C8A96E;--pc-line:#232326;--pc-sub:#8d8781;color:#f2ede7;word-break:keep-all}
 .pcal-hero{position:relative;height:46vh;min-height:300px;max-height:420px;overflow:hidden;background:#0B0305}
@@ -453,17 +456,34 @@ html.auto-login .splash .bottom-group{display:none !important}
 .pcal-hero .pc-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
   font-family:'Oswald',sans-serif;font-size:11px;letter-spacing:.28em;color:rgba(255,255,255,.28)}
 
-.pcal-ybar{display:flex;align-items:center;gap:10px;padding:12px 22px 0}
+.pcal-ybar{display:flex;align-items:center;gap:10px;padding:12px 22px 0;position:relative}
 .pcal-ybar .pc-yr{font-family:'Oswald',sans-serif;font-size:12.5px;letter-spacing:.16em;color:#f2ede7;
-  border:1px solid #2e2e33;border-radius:2px;padding:4px 10px}
+  border:1px solid #2e2e33;border-radius:2px;padding:4px 10px;cursor:pointer;
+  display:flex;align-items:center;gap:7px;user-select:none;-webkit-user-select:none}
+.pcal-ybar .pc-yr i{font-style:normal;font-size:9px;color:#6d6963;transition:transform .18s ease}
+.pcal-ybar.open .pc-yr i{transform:rotate(180deg)}
 .pcal-ybar .pc-hint{font-size:10px;color:#5f5b57;letter-spacing:.06em}
-.pcal-mstrip{display:flex;gap:20px;padding:10px 22px;overflow-x:auto;font-size:13px;color:#5f5b57;
-  border-bottom:1px solid var(--pc-line);letter-spacing:.06em;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+/* 연도 아코디언 — 등록된 티켓이 있는 연도만 나온다 */
+.pcal-yrlist{display:none;position:absolute;top:calc(100% + 6px);left:22px;z-index:12;
+  background:rgba(14,14,16,.97);border:1px solid #2e2e33;border-radius:4px;overflow:hidden;
+  box-shadow:0 12px 30px rgba(0,0,0,.6);min-width:96px}
+.pcal-ybar.open .pcal-yrlist{display:block}
+.pcal-yrlist div{font-family:'Oswald',sans-serif;font-size:12.5px;letter-spacing:.16em;
+  color:#8d8781;padding:9px 14px;cursor:pointer;border-bottom:1px solid #1c1c1f}
+.pcal-yrlist div:last-child{border-bottom:none}
+.pcal-yrlist div.on{color:var(--pc-gold)}
+
+/* 월 스트립 — 수평 전용. touch-action:pan-x 로 세로 스와이프가 여기서 먹지 않게 한다
+   (기존엔 세로로도 끌려서 화면이 흔들렸다) */
+.pcal-mstrip{display:flex;flex-wrap:nowrap;gap:20px;padding:10px 22px 0;
+  overflow-x:auto;overflow-y:hidden;font-size:13px;color:#5f5b57;
+  border-bottom:1px solid var(--pc-line);letter-spacing:.06em;scrollbar-width:none;
+  -webkit-overflow-scrolling:touch;touch-action:pan-x;overscroll-behavior-x:contain}
 .pcal-mstrip::-webkit-scrollbar{display:none}
-.pcal-mstrip>div{flex:none;cursor:pointer;padding-bottom:2px}
-.pcal-mstrip .on{color:#f2ede7;position:relative}
-.pcal-mstrip .on::after{content:"";position:absolute;left:0;right:0;bottom:-11px;height:1px;background:#f2ede7}
-.pcal-mstrip .ydiv{color:var(--pc-gold);font-size:10.5px;letter-spacing:.14em;align-self:center;cursor:default}
+.pcal-mstrip>div{flex:none;cursor:pointer;padding-bottom:10px;position:relative;white-space:nowrap}
+.pcal-mstrip>div.empty{color:#38363a}
+.pcal-mstrip .on{color:#f2ede7}
+.pcal-mstrip .on::after{content:"";position:absolute;left:0;right:0;bottom:0;height:1px;background:#f2ede7}
 
 .pcal-cal{padding:12px 12px 0}
 .pcal-wk{display:grid;grid-template-columns:repeat(7,1fr);font-size:9.5px;color:#5f5b57;
@@ -488,7 +508,8 @@ html.auto-login .splash .bottom-group{display:none !important}
 #pcalSheet .pc-bs{position:absolute;left:0;right:0;bottom:0;background:rgba(17,17,19,.92);
   backdrop-filter:blur(22px) saturate(140%);-webkit-backdrop-filter:blur(22px) saturate(140%);
   border-top:1px solid rgba(255,255,255,.10);border-radius:20px 20px 0 0;
-  padding:10px 20px calc(26px + env(safe-area-inset-bottom));max-height:76vh;overflow-y:auto;
+  padding:10px 20px calc(26px + env(safe-area-inset-bottom));
+  min-height:48vh;max-height:82vh;overflow-y:auto;
   box-shadow:0 -20px 50px rgba(0,0,0,.66);color:#f2ede7}
 #pcalSheet .pc-grab{width:36px;height:3px;background:#3a3a3e;border-radius:2px;margin:0 auto 16px}
 #pcalSheet .pc-h{display:flex;align-items:baseline;gap:9px;padding-bottom:12px;border-bottom:1px solid #232326}
@@ -506,6 +527,86 @@ html.auto-login .splash .bottom-group{display:none !important}
 .pcal-item .st{font-size:10.5px;color:var(--pc-gold);letter-spacing:.05em}
 .pcal-item .st.full{color:#57544f}
 .pcal-item .go{font-size:15px;color:#57544f;margin-top:5px}
+
+/* 자리 상세 (사진 캘린더 전용) — 기존 티켓 상세는 그대로 두고 별도 화면으로 둔다.
+   「참가 신청」은 기존 글래스모피즘 구매 시트를 그대로 부른다 (handleTicketAction). */
+#pcalDetail{position:fixed;inset:0;z-index:560;display:none;background:#0B0305;color:#f2ede7;
+  overflow-y:auto;-webkit-overflow-scrolling:touch;word-break:keep-all}
+#pcalDetail .pd-top{position:fixed;top:0;left:0;right:0;z-index:6;display:flex;align-items:center;
+  justify-content:space-between;padding:16px 18px;background:linear-gradient(rgba(0,0,0,.65),rgba(0,0,0,0))}
+#pcalDetail .pd-top .ic{font-size:20px;color:#ded9d3;cursor:pointer;line-height:1;width:28px}
+#pcalDetail .pd-top .logo{font-family:'Nanum Myeongjo','Hiragino Mincho ProN',serif;
+  letter-spacing:.42em;font-size:13px;font-weight:600;padding-left:.42em;color:#f2ede7}
+#pcalDetail .pd-hero{position:relative;height:38vh;min-height:250px;max-height:360px;overflow:hidden;background:#141014}
+#pcalDetail .pd-hero img{width:100%;height:100%;object-fit:cover;filter:saturate(.9) contrast(1.04)}
+#pcalDetail .pd-hero .sh{position:absolute;inset:0;
+  background:linear-gradient(180deg,rgba(0,0,0,.5) 0%,rgba(0,0,0,0) 38%,rgba(0,0,0,.25) 70%,#0B0305 100%)}
+#pcalDetail .pd-body{padding:4px 24px calc(120px + env(safe-area-inset-bottom))}
+#pcalDetail .pd-when{font-family:'Oswald','Noto Sans KR',sans-serif;font-size:12px;font-weight:500;
+  letter-spacing:.1em;color:var(--pc-gold,#C8A96E)}
+#pcalDetail .pd-name{font-family:'Nanum Myeongjo','Hiragino Mincho ProN',serif;font-size:31px;
+  line-height:1.18;margin-top:9px;color:#fff}
+#pcalDetail .pd-meta{margin-top:9px;font-size:11.5px;color:#8d8781;letter-spacing:.03em}
+/* 탭 — 바텀시트를 없애고 매장명 바로 아래로 올렸다. 구매하기를 한 번 더 누를 일이 없다. */
+#pcalDetail .pd-tabs{display:flex;border-bottom:1px solid #232326;margin-top:20px}
+#pcalDetail .pd-tabs>div{flex:1;text-align:center;padding:11px 2px;font-size:10px;font-weight:600;
+  color:#5f5b57;border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap;
+  letter-spacing:-.02em;cursor:pointer}
+#pcalDetail .pd-tabs>div.on{color:#fff;font-weight:800;border-bottom-color:var(--pc-gold,#C8A96E)}
+/* 내용 판 — 글라스모피즘 */
+#pcalDetail .pd-panel{margin-top:16px;padding:16px;border:1px solid rgba(255,255,255,.13);
+  border-radius:18px;background:rgba(255,255,255,.055);
+  backdrop-filter:blur(26px) saturate(150%);-webkit-backdrop-filter:blur(26px) saturate(150%)}
+#pcalDetail .pd-kick{font-size:7.5px;font-weight:800;letter-spacing:.2em;color:#8d8781;margin:2px 0 10px}
+#pcalDetail .pd-row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.10)}
+#pcalDetail .pd-row .l{font-size:11.5px;color:#8d8781}
+#pcalDetail .pd-row .v{font-size:11.5px;font-weight:700;color:#f5f2ee}
+#pcalDetail .pd-sum{display:flex;justify-content:space-between;align-items:baseline;padding:11px 0 4px}
+#pcalDetail .pd-sum .l{font-size:13px;font-weight:800;color:#f5f2ee}
+#pcalDetail .pd-sum .v{font-size:19px;font-weight:900;color:#E4C88E}
+#pcalDetail .pd-hr{height:1px;background:rgba(255,255,255,.10);margin:10px 0}
+#pcalDetail .pd-stepper{display:flex;align-items:center;gap:11px}
+#pcalDetail .pd-stepper button{width:28px;height:28px;border-radius:50%;border:none;cursor:pointer;
+  background:rgba(255,255,255,.10);color:#f5f2ee;font-size:16px;line-height:1;
+  display:flex;align-items:center;justify-content:center}
+#pcalDetail .pd-agree{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);
+  border-radius:12px;padding:12px 13px;display:flex;gap:10px;align-items:flex-start;cursor:pointer}
+#pcalDetail .pd-agree .box{width:18px;height:18px;min-width:18px;border-radius:50%;
+  border:1.5px solid #8d8781;display:flex;align-items:center;justify-content:center;transition:all .18s}
+#pcalDetail .pd-agree.on .box{background:#C8A96E;border-color:#C8A96E}
+#pcalDetail .pd-agree span{font-size:11px;color:#a9a39c;line-height:1.6}
+#pcalDetail .pd-flash{animation:pdFlash .9s ease}
+@keyframes pdFlash{0%,100%{box-shadow:none}30%,70%{box-shadow:0 0 0 2px rgba(200,169,110,.85)}}
+#pcalDetail .pd-text{font-size:11.5px;color:#a9a39c;line-height:1.95;white-space:pre-wrap}
+#pcalDetail .pd-map{height:190px;border-radius:12px;overflow:hidden;background:#1b1e22;
+  border:1px solid rgba(255,255,255,.10)}
+#pcalDetail .pd-mapbtns{display:flex;gap:7px;margin-top:10px}
+#pcalDetail .pd-mapbtns button{flex:1;padding:10px 0;border:none;border-radius:9px;cursor:pointer;
+  font-family:var(--font-main);font-size:11px;font-weight:700}
+#pcalDetail .pd-gal{display:grid;grid-template-columns:repeat(3,1fr);gap:3px;border-radius:10px;overflow:hidden}
+#pcalDetail .pd-gal div{aspect-ratio:1;background-size:cover;background-position:center;cursor:pointer}
+
+/* A안 — 유리판을 걷어내고 상세와 한 몸으로. 어드민 메뉴에서 기기별로 B↔A 를 바꿔 본다.
+   판만 사라질 뿐 내용·동작은 완전히 같다. */
+#pcalDetail.skin-black .pd-panel{background:transparent;border:none;border-radius:0;
+  padding:16px 0 0;backdrop-filter:none;-webkit-backdrop-filter:none}
+#pcalDetail.skin-black .pd-row{border-bottom-color:#232326}
+#pcalDetail.skin-black .pd-hr{background:#232326}
+#pcalDetail.skin-black .pd-agree{background:#141014;border-color:#232326}
+#pcalDetail.skin-black .pd-stepper button{background:#1c1a1d;color:#ded9d3}
+#pcalDetail.skin-black .pd-map{border-color:#232326}
+#pcalDetail.skin-black .pd-sum .v{color:#C8A96E}
+#pcalDetail .pd-bar{position:fixed;left:0;right:0;bottom:0;z-index:7;display:flex;align-items:center;
+  gap:14px;padding:14px 24px calc(16px + env(safe-area-inset-bottom));
+  background:linear-gradient(rgba(11,3,5,0),rgba(11,3,5,.94) 34%);border-top:1px solid rgba(255,255,255,.06)}
+#pcalDetail .pd-price{font-family:'Oswald','Noto Sans KR',sans-serif;font-size:21px;font-weight:500;color:#fff}
+#pcalDetail .pd-price small{font-size:11px;color:#8d8781;margin-left:5px;letter-spacing:.06em}
+#pcalDetail .pd-cta{margin-left:auto;flex:none;border:none;cursor:pointer;
+  background:#5C0A14;border-radius:10px;padding:13px 22px;color:#fff;
+  font-family:'Oswald','Noto Sans KR',sans-serif;font-size:12px;font-weight:700;letter-spacing:.1em;
+  transition:opacity .18s}
+#pcalDetail .pd-cta.wait{opacity:.42}
+#pcalDetail .pd-cta.off{background:#262326;color:#6f6a65;cursor:default;opacity:1}
 
 /* 슈퍼어드민 편집 */
 .pcal-adm-row{display:flex;gap:12px;align-items:center;padding:12px 0;border-bottom:1px solid rgba(0,0,0,.07)}
@@ -7717,6 +7818,15 @@ window.closePromoCarousel = function(){
   <div class="pc-bs" id="pcalSheetBody"></div>
 </div>
 
+<div id="pcalDetail">
+  <div class="pd-top">
+    <div class="ic" onclick="pcalCloseTicket()">‹</div>
+    <div class="logo">TAAM</div>
+    <div class="ic"></div>
+  </div>
+  <div id="pcalDetailInner"></div>
+</div>
+
 <div id="pcalAdminPage" class="restpage" style="display:none;">
   <div class="rp-header">
     <button class="page-back" onclick="pcalAdminClose()">←</button>
@@ -9446,6 +9556,13 @@ window.closePromoCarousel = function(){
             <div>
               <div class="admin-menu-text" id="newHomeLabel">📅 사진 캘린더 (이 기기)</div>
               <div class="admin-menu-sub" id="newHomeSub">NEW_HOME_LIVE 가 꺼져 있어도 이 기기에서만 새 첫 화면(사진 타일 캘린더)을 연다. 슈퍼어드민 전용</div>
+            </div>
+            <div class="admin-arrow">›</div>
+          </div>
+          <div class="admin-menu-item" onclick="togglePdSkin()">
+            <div>
+              <div class="admin-menu-text" id="pdSkinLabel">🎨 자리 상세 판 (이 기기)</div>
+              <div class="admin-menu-sub">캘린더에서 들어가는 자리 상세의 내용 판을 B(글라스모피즘) ↔ A(검정)로 바꿔 본다. 내용·동작은 완전히 같다</div>
             </div>
             <div class="admin-arrow">›</div>
           </div>
@@ -15855,6 +15972,7 @@ function adminDirectAccess(){
   loadRole(); // PIN으로 설정된 역할 로드
   try{ if(typeof cardPayTestSync === 'function') cardPayTestSync(); }catch(e){}
   try{ if(typeof newHomeSync === 'function') newHomeSync(); }catch(e){}
+  try{ if(typeof pdSkinSync === 'function') pdSkinSync(); }catch(e){}
   try{ if(typeof pcalApplyGnb === 'function') pcalApplyGnb(); }catch(e){}
   // 참고: bootAutoLogin 경로에서도 이 함수가 호출되는데, 거기서 이미 ready 처리됨
 
@@ -15888,7 +16006,7 @@ function openMain(){
    'memberListScreen','ticketCalScreen','ticketHistoryScreen','adminCodeScreen','pendingApprovalScreen',
    'partnerAdminScreen','partnerTicketListScreen','partnerCalScreen','partnerRestScreen',
    'tcLockPopup','mshipScreen','extendPopup','memModal',
-   'pcalAdminPage','pcalPickModal','pcalSheet'
+   'pcalAdminPage','pcalPickModal','pcalSheet','pcalDetail'
   ].forEach(function(id){var el=document.getElementById(id);if(el)el.style.display='none';});
   loadRole().then(function(){
     return _seedWaitCapped(2500); // 시드는 최대 2.5초만 기다린다 (나머지는 백그라운드)
@@ -15978,7 +16096,7 @@ function gnbGo(tab, btn){
     var _rlm = document.getElementById('ramenLineageModule');
     if(_rlm){ _rlm.classList.remove('active'); }
     // 5) 다른 모달도 같이 닫기 (티켓 상세, 룰 시트, 위치 시트, 매장 정보)
-    ['ticketDetailScreen','tdRestInfoScreen','tdRulesSheet','tdLocationSheet','tdPurchaseSheet','tdConfirmPopup','tdDonePopup','fullMapOverlay','pcalSheet'].forEach(function(id){
+    ['ticketDetailScreen','tdRestInfoScreen','tdRulesSheet','tdLocationSheet','tdPurchaseSheet','tdConfirmPopup','tdDonePopup','fullMapOverlay','pcalSheet','pcalDetail'].forEach(function(id){
       var el = document.getElementById(id);
       if(el && el.style.display !== 'none'){ el.style.display = 'none'; }
     });
@@ -18509,6 +18627,9 @@ function tdCollapseDesc() {
 // (영상 있으면 3초 지연, 없으면 즉시)
 
 function closeTicketDetail(){
+  // 🆕 2026.08 사진 캘린더: 새 「자리 상세」에서 들어온 경우도 같이 닫는다
+  //   (구매 완료 팝업이 이 함수를 부르므로, 안 닫으면 결제 후 상세가 남는다)
+  try { var _pd = document.getElementById('pcalDetail'); if(_pd) _pd.style.display = 'none'; } catch(e){}
   // 🆕 2026.08: 결제를 끝내지 않고 상세를 닫으면 잡아둔 좌석을 즉시 돌려준다.
   //   취소 버튼을 누르지 않고 뒤로가기·바깥 탭으로 빠져나가는 경로가 실제로 많았고,
   //   그때마다 다음 회원에게 5분 내내 '매진' 으로 보였다.
@@ -37466,6 +37587,7 @@ function renderHomeTickets(){
 var _pcalY = null, _pcalM = null;   // 보고 있는 연·월
 var _pcalCovers = null;             // 'YYYY-M' → month_covers row (null = 아직 안 읽음)
 var _pcalSelKey = null;             // 선택된 날짜 YYYYMMDD
+var _pcalYearOpen = false;          // 연도 아코디언 펼침 여부
 
 function _pcalEsc(s){
   return String(s == null ? '' : s)
@@ -37571,21 +37693,14 @@ function _pcalMonthTickets(y, m, byDate){
   return out;
 }
 
-// 월 스트립 — 이번 달 기준 앞 2 · 뒤 11 개월. 선택 월이 벗어나면 창을 늘린다.
-function _pcalMonths(){
-  var now = new Date();
-  var start = now.getFullYear()*12 + now.getMonth() - 2;
-  var end   = start + 13;
-  var sel   = _pcalY*12 + (_pcalM - 1);
-  if(sel < start) start = sel;
-  if(sel > end)   end   = sel;
-  var out = [], prevY = null;
-  for(var i=start; i<=end; i++){
-    var y = Math.floor(i/12), m = (i%12) + 1;
-    out.push({ y:y, m:m, divider:(prevY !== null && y !== prevY) });
-    prevY = y;
-  }
-  return out;
+// 고를 수 있는 연도 — 티켓이 실제로 등록된 연도 + 올해. 2027 까지만 등록했으면 2027 까지만 나온다.
+function _pcalYears(byDate){
+  byDate = byDate || _pcalByDate();
+  var seen = {};
+  Object.keys(byDate).forEach(function(k){ seen[Math.floor(parseInt(k,10)/10000)] = 1; });
+  seen[new Date().getFullYear()] = 1;
+  if(_pcalY) seen[_pcalY] = 1;
+  return Object.keys(seen).map(Number).sort(function(a,b){ return a - b; });
 }
 
 // 첫 진입 기본 월 — 이번 달. 이번 달에 자리가 없으면 가장 가까운 다음 달.
@@ -37661,15 +37776,22 @@ function renderPhotoCalInto(hostId){
   if(hero.credit)  h += '<div class="pc-credit">' + _pcalEsc(hero.credit) + '</div>';
   h += '</div></div>';
 
-  // ── 연도 + 월 스트립 ──
-  h += '<div class="pcal-ybar"><div class="pc-yr">' + _pcalY + '</div>'
-     + '<div class="pc-hint">연도 · 월 전환</div></div>';
-  h += '<div class="pcal-mstrip">';
-  _pcalMonths().forEach(function(o){
-    if(o.divider) h += '<div class="ydiv">' + o.y + '</div>';
-    var on = (o.y === _pcalY && o.m === _pcalM) ? ' on' : '';
-    h += '<div class="' + on.trim() + '" onclick="pcalGo(' + o.y + ',' + o.m + ')">' + o.m + '月</div>';
+  // ── 연도 아코디언 + 월 스트립 (월은 선택 연도의 1~12月, 수평 스크롤 전용) ──
+  h += '<div class="pcal-ybar' + (_pcalYearOpen ? ' open' : '') + '">'
+     + '<div class="pc-yr" onclick="pcalYearToggle(event)">' + _pcalY + '<i>▾</i></div>'
+     + '<div class="pc-hint">연도 · 월 전환</div>'
+     + '<div class="pcal-yrlist">';
+  _pcalYears(byDate).forEach(function(y){
+    h += '<div class="' + (y === _pcalY ? 'on' : '') + '" onclick="pcalPickYear(' + y + ')">' + y + '</div>';
   });
+  h += '</div></div>';
+
+  h += '<div class="pcal-mstrip">';
+  for(var mm=1; mm<=12; mm++){
+    var has = _pcalMonthTickets(_pcalY, mm, byDate).length > 0;
+    var cls = (mm === _pcalM ? 'on' : (has ? '' : 'empty'));
+    h += '<div class="' + cls + '" data-m="' + mm + '" onclick="pcalGo(' + _pcalY + ',' + mm + ')">' + mm + '月</div>';
+  }
   h += '</div>';
 
   // ── 캘린더 ──
@@ -37721,6 +37843,15 @@ function renderPhotoCalInto(hostId){
   }
 
   host.innerHTML = h;
+
+  // 선택된 달이 스트립 밖에 있으면 가운데로 끌어온다
+  try {
+    var strip = host.querySelector('.pcal-mstrip');
+    var onEl  = strip && strip.querySelector('.on');
+    if(strip && onEl){
+      strip.scrollLeft = Math.max(0, onEl.offsetLeft - (strip.clientWidth/2) + (onEl.offsetWidth/2));
+    }
+  } catch(e){}
 }
 
 function pcalRenderAll(){
@@ -37731,10 +37862,32 @@ function pcalRenderAll(){
 window.pcalRenderAll = pcalRenderAll;
 
 function pcalGo(y, m){
-  _pcalY = y; _pcalM = m; _pcalSelKey = null;
+  _pcalY = y; _pcalM = m; _pcalSelKey = null; _pcalYearOpen = false;
   pcalRenderAll();
 }
 window.pcalGo = pcalGo;
+
+function pcalYearToggle(ev){
+  if(ev && ev.stopPropagation) ev.stopPropagation();
+  _pcalYearOpen = !_pcalYearOpen;
+  pcalRenderAll();
+}
+window.pcalYearToggle = pcalYearToggle;
+
+// 연도를 바꾸면 그 해에서 자리가 있는 첫 달로 간다 (빈 달을 먼저 보여주지 않는다)
+function pcalPickYear(y){
+  var byDate = _pcalByDate();
+  _pcalY = y;
+  _pcalYearOpen = false;
+  _pcalSelKey = null;
+  if(_pcalMonthTickets(y, _pcalM, byDate).length === 0){
+    for(var m=1; m<=12; m++){
+      if(_pcalMonthTickets(y, m, byDate).length > 0){ _pcalM = m; break; }
+    }
+  }
+  pcalRenderAll();
+}
+window.pcalPickYear = pcalPickYear;
 
 // ── 날짜 바텀시트 ──
 function pcalOpenDay(y, m, d){
@@ -37795,9 +37948,443 @@ window.pcalCloseSheet = pcalCloseSheet;
 
 function pcalGoTicket(id){
   pcalCloseSheet();
+  // 플래그 켜진 기기는 새 「자리 상세」로, 아니면 기존 티켓 상세로
+  if(typeof newHomeEnabled === 'function' && newHomeEnabled()){
+    pcalOpenTicket(id);
+    return;
+  }
   if(typeof openTicketDetail === 'function') openTicketDetail(id);
 }
 window.pcalGoTicket = pcalGoTicket;
+
+// ══════════════════════════════════════════════════════════════
+// 🆕 2026.08 자리 상세 (사진 캘린더 전용)
+//
+//   기존 `ticketDetailScreen` 은 한 줄도 건드리지 않는다. 플래그를 끄면 그대로 쓰인다.
+//   여기서 새로 하는 건 「보여주는 방식」뿐이고, **구매는 기존 것을 그대로 부른다** —
+//   `currentTicket`/`currentRest`/`_tdPax` 를 기존 상세와 똑같이 세팅한 뒤
+//   `handleTicketAction()` 을 호출하면 글래스모피즘 구매 시트(tdPurchaseSheet)가
+//   그대로 열린다. 금전 로직·좌석 홀드·취소 규정은 손대지 않았다.
+//
+//   화면에 쓰는 값은 전부 이미 있는 필드에서 온다. 없는 항목은 줄 자체를 그린다.
+//     형태 ← totalPax(좌석 수) · 코스 ← ticket_type/장르 · 주류 ← corkage/wineMin
+//     동행 ← slots 로 계산한 허용 인원
+// ══════════════════════════════════════════════════════════════
+function pcalOpenTicket(id){
+  var t = ticketDB.find(function(x){ return String(x.id) === String(id); });
+  if(!t) return;
+  if(t.status === 'pending' || t.status === 'deleteRequest') return;
+
+  // 기존 상세와 같은 가드 (자격 · 판매 종료 · 잠금 · 등급)
+  if(typeof _ticketAccessOk === 'function' && !_ticketAccessOk(t.id)){
+    if(typeof showToast === 'function') showToast('🔒','초대 전용','참가 자격이 없는 자리입니다');
+    return;
+  }
+  var r = restaurantDB.find(function(x){ return String(x.id) === String(t.restId); }) || null;
+  var expired = (typeof _isTicketExpired === 'function') && _isTicketExpired(t);
+  var dead = expired || t.status === 'soldout';
+  if(!dead){
+    if(typeof tcIsLocked === 'function' && tcIsLocked(t) && _currentRole !== 'superadmin'){
+      if(typeof tcShowLockPopup === 'function') tcShowLockPopup(t, r);
+      return;
+    }
+    if(typeof tcIsMOnly === 'function' && tcIsMOnly(t) && _currentRole !== 'superadmin'){
+      var g = (typeof getCurrentUserGrade === 'function') ? getCurrentUserGrade() : null;
+      if(g !== 'M'){ if(typeof tcShowLockPopup === 'function') tcShowLockPopup(t, r); return; }
+    }
+    if(typeof _tkTierAllowed === 'function' && !_tkTierAllowed(t)){
+      if(typeof showTierLockPopup === 'function') showTierLockPopup(t);
+      return;
+    }
+  }
+
+  // 구매 경로가 읽는 전역 — 기존 상세와 동일하게 세팅
+  currentTicket = t; currentRest = r;
+  var minP = parseInt(t.minPax || t.totalPax || 1), maxP = parseInt(t.maxPax || t.totalPax || 10);
+  _tdMinPax = minP; _tdMaxPax = maxP; _tdPax = minP;
+  if(typeof _tdCalcAllowedPax === 'function'){
+    _tdAllowedPax = _tdCalcAllowedPax(t);
+    if(_tdAllowedPax.length) _tdPax = _tdAllowedPax[0];
+  }
+
+  _tdConfirmAgreed = false;   // 티켓을 새로 열면 동의는 항상 처음부터
+
+  var inner = document.getElementById('pcalDetailInner');
+  if(inner) inner.innerHTML = _pcalDetailHtml(t, r, dead, expired);
+  pcalApplySkin();
+  var scr = document.getElementById('pcalDetail');
+  if(scr){ scr.style.display = 'block'; scr.scrollTop = 0; }
+  if(!dead) pcalRefreshPay();
+
+  // 잔여석 배지 — 회원에겐 재고 전체를 노출하지 않는다 (기존 구매 시트와 같은 규칙)
+  (function(_t){
+    var bd = document.getElementById('pdRemainBadge');
+    if(!bd || !window.sb || !_t) return;
+    var cap = parseInt(_t.assignedPax || _t.totalPax) || 0;
+    if(cap <= 0) return;
+    window.sb.rpc('taam_ticket_sold_slots', { p_ticket_id: String(_t.id) }).then(function(res){
+      if(currentTicket !== _t) return;
+      var d = (!res.error && res.data) || null; if(!d) return;
+      var sold = parseInt(d.total) || 0;
+      if(window._tkSeatHoldId) sold = Math.max(0, sold - (parseInt(window._tkSeatHoldPax || 0) || 0));
+      var remain = Math.max(0, cap - sold);
+      var txt, fg, bg;
+      if(remain <= 0){ txt = '매진'; fg = '#fff'; bg = '#9B1C1C'; }
+      else if(remain >= 4){ txt = '잔여 4석 이상'; fg = '#9FD9B4'; bg = 'rgba(30,122,70,.22)'; }
+      else { txt = '잔여 ' + remain + '석'; fg = '#fff'; bg = '#5C0A14'; }
+      bd.textContent = txt; bd.style.color = fg; bd.style.background = bg;
+      bd.style.display = 'inline-block';
+    }).catch(function(){});
+  })(t);
+}
+window.pcalOpenTicket = pcalOpenTicket;
+
+function pcalCloseTicket(){
+  var scr = document.getElementById('pcalDetail');
+  if(scr) scr.style.display = 'none';
+  if(_pdMap){ try{ _pdMap.remove(); }catch(e){} _pdMap = null; _pdMarker = null; }
+  // 결제를 끝내지 않고 나가면 잡아둔 좌석을 즉시 돌려준다 (기존 상세와 동일)
+  if(typeof _tkReleaseHoldOnLeave === 'function'){ try{ _tkReleaseHoldOnLeave(); }catch(e){} }
+}
+window.pcalCloseTicket = pcalCloseTicket;
+
+function _pcalDetailHtml(t, r, dead, expired){
+  var lang = window._tkCurrentLang;
+
+  // 날짜 — '8월 22일 (토) 12:00'
+  var full = (typeof _tkFullDate === 'function') ? _tkFullDate(t) : '';
+  var fp = String(full).split('.');
+  var whenTxt = '';
+  if(fp.length === 3){
+    var yy = parseInt(fp[0],10), mo = parseInt(fp[1],10), dd = parseInt(fp[2],10);
+    var dow = ['일','월','화','수','목','금','토'][new Date(yy, mo-1, dd).getDay()];
+    if(lang === 'en'){
+      var mn = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      whenTxt = mn[mo-1] + ' ' + dd;
+    } else if(lang === 'ja'){
+      whenTxt = mo + '月' + dd + '日';
+    } else {
+      whenTxt = mo + '월 ' + dd + '일 (' + dow + ')';
+    }
+  }
+  if(t.time) whenTxt += (whenTxt ? '  ' : '') + t.time;
+
+  // 매장명 · 지역 · 장르 · 좌석
+  var name = _pcalRestName(t);
+  var metaBits = [];
+  if(r){
+    var zone = r.zoneEn || r.cityEn || r.region || '';
+    if(zone) metaBits.push(_pcalEsc(zone));
+  }
+  if(t.ticketGenre) metaBits.push(_pcalEsc(t.ticketGenre));
+  // 좌석 수는 노출하지 않는다 — 재고를 그대로 보여주는 셈이라 '카운터석' 으로만 쓴다
+  var cap = parseInt(t.assignedPax || t.totalPax) || 0;
+  if(cap) metaBits.push('카운터석');
+
+  var photo = _pcalPhoto(t) || (r ? (r.photoHero || r.photoCard || r.photo || '') : '');
+
+  var h = '';
+  h += '<div class="pd-hero">';
+  h += photo ? '<img src="' + _pcalEsc(photo) + '" alt="">' : '';
+  h += '<div class="sh"></div></div>';
+
+  h += '<div class="pd-body">';
+  if(whenTxt) h += '<div class="pd-when">' + _pcalEsc(whenTxt) + '</div>';
+  h += '<div class="pd-name">' + _pcalEsc(name) + '</div>';
+  if(metaBits.length) h += '<div class="pd-meta">' + metaBits.join(' · ') + '</div>';
+
+  // ── 탭 3개 — 바텀시트를 없애고 여기로 올렸다 ──
+  h += '<div class="pd-tabs">';
+  ['결제내역 및 취소규정','지도','티켓 조건 및 레스토랑 정보'].forEach(function(nm, i){
+    h += '<div class="' + (i === 0 ? 'on' : '') + '" data-tab="' + i + '" onclick="pcalTab(' + i + ')">' + nm + '</div>';
+  });
+  h += '</div>';
+
+  h += '<div class="pd-panel" id="pdPanel0">' + _pcalPayPanel(t, r, dead) + '</div>';
+  h += '<div class="pd-panel" id="pdPanel1" style="display:none;">' + _pcalMapPanel(t, r) + '</div>';
+  h += '<div class="pd-panel" id="pdPanel2" style="display:none;">' + _pcalInfoPanel(t, r) + '</div>';
+  h += '</div>';
+
+  // ── 하단 고정 바 — 합계 + 결제하기 ──
+  //   탭을 옮겨 다녀도 결제 버튼이 늘 손 닿는 곳에 있어야 해서 고정한다.
+  h += '<div class="pd-bar">';
+  h += '<div class="pd-price" id="pdBarTotal"></div>';
+  if(dead){
+    h += '<button class="pd-cta off">' + (t.status === 'soldout' ? '마감' : '기한 만료') + '</button>';
+  } else {
+    h += '<button class="pd-cta wait" id="pdPayBtn" onclick="pcalPay()">결제하기</button>';
+  }
+  h += '</div>';
+
+  return h;
+}
+
+// ── 판 색 (B 글라스 ↔ A 검정) — 기기별로 바꿔 보는 스위치 ──
+//   실기기에서 둘을 나란히 보려면 기기에서 켜고 꺼야 한다. localStorage 라 기기마다 별개.
+function pcalSkin(){
+  try { return (localStorage.getItem('taamPdSkin') === 'black') ? 'black' : 'glass'; }
+  catch(e){ return 'glass'; }
+}
+window.pcalSkin = pcalSkin;
+
+function pcalApplySkin(){
+  var scr = document.getElementById('pcalDetail');
+  if(scr) scr.classList.toggle('skin-black', pcalSkin() === 'black');
+}
+window.pcalApplySkin = pcalApplySkin;
+
+function togglePdSkin(){
+  var next = (pcalSkin() === 'black') ? 'glass' : 'black';
+  try { localStorage.setItem('taamPdSkin', next); }
+  catch(e){
+    if(typeof showToast === 'function') showToast('⚠','저장 실패','이 브라우저에서 localStorage 를 쓸 수 없습니다');
+    return;
+  }
+  pcalApplySkin();
+  pdSkinSync();
+  if(typeof showToast === 'function'){
+    showToast('🎨','자리 상세 판',
+      next === 'black' ? 'A · 검정 — 상세와 한 몸' : 'B · 글라스모피즘 — 유리판 위에');
+  }
+}
+window.togglePdSkin = togglePdSkin;
+
+function pdSkinSync(){
+  try {
+    var lbl = document.getElementById('pdSkinLabel');
+    if(lbl) lbl.textContent = (pcalSkin() === 'black')
+      ? '🎨 자리 상세 판 (이 기기) — A · 검정'
+      : '🎨 자리 상세 판 (이 기기) — B · 글라스모피즘';
+  } catch(e){}
+}
+window.pdSkinSync = pdSkinSync;
+
+// ── 탭 전환 ──
+function pcalTab(i){
+  var scr = document.getElementById('pcalDetail');
+  if(!scr) return;
+  var tabs = scr.querySelectorAll('.pd-tabs > div');
+  for(var k=0; k<tabs.length; k++) tabs[k].classList.toggle('on', k === i);
+  for(var p=0; p<3; p++){
+    var el = document.getElementById('pdPanel' + p);
+    if(el) el.style.display = (p === i) ? 'block' : 'none';
+  }
+  if(i === 1) pcalInitMap();
+}
+window.pcalTab = pcalTab;
+
+// ── 탭 1 · 결제내역 및 취소규정 ──
+//   금액 계산·좌석 홀드·결제는 기존 코드를 그대로 쓴다 (openTdPayPopup).
+//   여기서 새로 만드는 건 어두운 톤의 표시뿐이다.
+function _pcalPayPanel(t, r, dead){
+  var h = '';
+  h += '<div class="pd-kick">PAYMENT DETAIL</div>';
+  h += '<div id="pdPayRows"></div>';
+  h += '<div class="pd-hr"></div>';
+  h += '<div style="display:flex;align-items:center;justify-content:space-between;padding:2px 0 10px;">'
+     + '<span style="display:flex;align-items:center;gap:8px;">'
+     + '<span style="font-size:12.5px;font-weight:700;color:#f5f2ee;">인원</span>'
+     + '<span id="pdRemainBadge" style="display:none;font-size:9.5px;font-weight:800;padding:3px 8px;border-radius:10px;"></span>'
+     + '</span>'
+     + '<span class="pd-stepper">'
+     + '<button onclick="pcalAdjPax(-1)">−</button>'
+     + '<span id="pdPaxNum" style="font-size:16px;font-weight:900;color:#f5f2ee;min-width:20px;text-align:center;"></span>'
+     + '<span style="font-size:11px;color:#8d8781;">인</span>'
+     + '<button onclick="pcalAdjPax(1)">+</button>'
+     + '</span></div>';
+  h += '<div class="pd-hr"></div>';
+  h += '<div id="pdBalance"></div>';
+  h += '<div class="pd-kick" style="margin-top:14px;">CANCEL POLICY</div>';
+  if(!dead){
+    h += '<div class="pd-agree" id="pdAgree" onclick="pcalAgreeToggle()">'
+       + '<div class="box" id="pdAgreeBox"></div>'
+       + '<span>취소 규정을 확인하였으며, 예약 완료 후 취소 시 수수료가 발생할 수 있음에 동의합니다.</span>'
+       + '</div>';
+  }
+  h += '<div class="pd-text" id="pdPolicy" style="margin-top:12px;"></div>';
+  return h;
+}
+
+// ── 탭 2 · 지도 ──
+function _pcalMapPanel(t, r){
+  var name = _pcalRestName(t);
+  var addr = (r && typeof window.pickI18nField === 'function') ? window.pickI18nField(r, 'address') : '';
+  if(!addr) addr = (r && r.address) || '';
+  var h = '';
+  h += '<div class="pd-kick">LOCATION</div>';
+  h += '<div style="font-size:13px;font-weight:800;color:#f5f2ee;">' + _pcalEsc(name) + '</div>';
+  h += '<div style="font-size:11px;color:#8d8781;margin:3px 0 11px;">' + (_pcalEsc(addr) || '주소 정보 없음') + '</div>';
+  h += '<div class="pd-map" id="pdMap"></div>';
+  h += '<div class="pd-mapbtns">'
+     + '<button style="background:#5C0A14;color:#fff;" onclick="pcalCopyAddr()">주소 복사</button>'
+     + '<button style="background:rgba(255,255,255,.10);color:#f5f2ee;" onclick="fullMapOpenDirections()">길안내</button>'
+     + '</div>';
+
+  var photos = [];
+  if(r && Array.isArray(r.detailPhotos)) photos = photos.concat(r.detailPhotos);
+  if(r && Array.isArray(r.gallery)) photos = photos.concat(r.gallery);
+  if(photos.length){
+    window._lsAllPhotos = photos;   // 기존 사진 뷰어(lsOpenPhoto)가 읽는 배열
+    h += '<div class="pd-kick" style="margin-top:16px;">GALLERY</div><div class="pd-gal">';
+    photos.slice(0,9).forEach(function(src, i){
+      h += '<div style="background-image:url(\'' + _pcalEsc(src) + '\');" onclick="lsOpenPhoto(' + i + ')"></div>';
+    });
+    h += '</div>';
+  }
+  return h;
+}
+
+// ── 탭 3 · 티켓 조건 및 레스토랑 정보 ──
+function _pcalInfoPanel(t, r){
+  var h = '';
+  var desc = (typeof window.pickI18nField === 'function')
+    ? (window.pickI18nField(t, 'ticket_desc') || t.ticketDesc || '')
+    : (t.ticketDesc || '');
+  h += '<div class="pd-kick">TICKET CONDITION</div>';
+  h += '<div class="pd-text">' + (_pcalEsc(desc) || '등록된 안내가 없습니다') + '</div>';
+
+  var info = '';
+  if(r && typeof window.pickI18nField === 'function') info = window.pickI18nField(r, 'rest_info') || '';
+  if(!info) info = (r && r.restInfo) || '';
+  var drink = [];
+  if(r && r.corkage) drink.push(_pcalEsc(r.corkage));
+  if(t.wineMin) drink.push('주류 미니멈 ' + (typeof fxMoney === 'function' ? fxMoney(parseInt(t.wineMin)) : '₩' + parseInt(t.wineMin).toLocaleString()));
+
+  if(info || drink.length){
+    h += '<div class="pd-hr" style="margin:16px 0;"></div>';
+    h += '<div class="pd-kick">RESTAURANT</div>';
+    if(drink.length) h += '<div class="pd-text" style="margin-bottom:10px;">주류 · ' + drink.join(' · ') + '</div>';
+    if(info) h += '<div class="pd-text">' + _pcalEsc(info) + '</div>';
+  }
+  return h;
+}
+
+// 금액·잔액·취소규정·하단 합계를 한 번에 갱신 (인원이 바뀔 때마다)
+function pcalRefreshPay(){
+  var t = currentTicket, r = currentRest;
+  if(!t) return;
+  var pax    = _tdPax;
+  var meal   = parseInt(t.mealFee || t.mealAmt || 0) || 0;
+  var agency = parseInt(t.agencyFee || 0) || 0;
+  var wine   = parseInt(t.wineMin || 0) || 0;
+  var total  = (meal + agency + wine) * pax;
+  var money  = function(v, opt){ return (typeof fxMoney === 'function') ? fxMoney(v, opt) : ('₩' + v.toLocaleString()); };
+
+  var h = '';
+  if(meal)   h += '<div class="pd-row"><span class="l">식사비 ×' + pax + '인</span><span class="v">' + money(meal*pax) + '</span></div>';
+  if(agency) h += '<div class="pd-row"><span class="l">대행비 ×' + pax + '인</span><span class="v">'
+                + money(agency*pax, {usd:(typeof fxAgencyUsd==='function'?fxAgencyUsd(t)*pax:0), exact:true}) + '</span></div>';
+  if(wine)   h += '<div class="pd-row"><span class="l">주류 미니멈 ×' + pax + '인</span><span class="v">' + money(wine*pax) + '</span></div>';
+  h += '<div class="pd-sum"><span class="l">합계</span><span class="v">'
+     + money(total, {usd:(typeof _fxTotalUsd==='function'?_fxTotalUsd(t,pax,meal,wine):0), exact:true}) + '</span></div>';
+  var rows = document.getElementById('pdPayRows'); if(rows) rows.innerHTML = h;
+
+  var after = (typeof currentDepositBalance !== 'undefined' ? currentDepositBalance : 0) - total;
+  var bh = '<div class="pd-row" style="border-bottom:none;"><span class="l">예치금 잔액</span><span class="v">'
+         + money(typeof currentDepositBalance !== 'undefined' ? currentDepositBalance : 0) + '</span></div>';
+  bh += (after < 0)
+    ? '<div class="pd-row" style="border-bottom:none;"><span class="l">추가 결제 필요</span><span class="v" style="color:#E0705F;">₩' + Math.abs(after).toLocaleString() + '</span></div>'
+    : '<div class="pd-row" style="border-bottom:none;"><span class="l">결제 후 잔액</span><span class="v">₩' + after.toLocaleString() + '</span></div>';
+  var bal = document.getElementById('pdBalance'); if(bal) bal.innerHTML = bh;
+
+  var pn = document.getElementById('pdPaxNum'); if(pn) pn.textContent = _tdPax;
+
+  var pol = document.getElementById('pdPolicy');
+  if(pol) pol.innerHTML = (typeof renderPolicyClauses === 'function') ? renderPolicyClauses(t) : '';
+
+  var bar = document.getElementById('pdBarTotal');
+  if(bar) bar.innerHTML = money(total) + '<small>' + (pax > 1 ? '· ' + pax + '인' : '/ 인') + '</small>';
+}
+window.pcalRefreshPay = pcalRefreshPay;
+
+function pcalAdjPax(delta){
+  var t = currentTicket;
+  if(!t) return;
+  var min = t.minPax || 1;
+  var max = t.maxPax || (t.totalPax || 99);
+  var sp = (typeof _tdStepPax === 'function') ? _tdStepPax(_tdPax, delta) : null;
+  _tdPax = (sp !== null) ? sp : Math.max(min, Math.min(max, _tdPax + delta));
+  pcalRefreshPay();
+}
+window.pcalAdjPax = pcalAdjPax;
+
+function pcalAgreeToggle(){
+  _tdConfirmAgreed = !_tdConfirmAgreed;
+  var wrap = document.getElementById('pdAgree');
+  var box  = document.getElementById('pdAgreeBox');
+  var btn  = document.getElementById('pdPayBtn');
+  if(wrap) wrap.classList.toggle('on', _tdConfirmAgreed);
+  if(box)  box.innerHTML = _tdConfirmAgreed
+    ? '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#0B0305" stroke-width="3.2" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>'
+    : '';
+  if(btn) btn.classList.toggle('wait', !_tdConfirmAgreed);
+}
+window.pcalAgreeToggle = pcalAgreeToggle;
+
+// 결제 — 동의 전이면 첫 탭으로 데려가서 체크박스를 짚어준다 (다른 탭에서 눌렀을 때 먹통처럼 보이지 않게)
+function pcalPay(){
+  if(!_tdConfirmAgreed){
+    pcalTab(0);
+    var wrap = document.getElementById('pdAgree');
+    if(wrap){
+      wrap.scrollIntoView({ block:'center', behavior:'smooth' });
+      wrap.classList.remove('pd-flash');
+      void wrap.offsetWidth;
+      wrap.classList.add('pd-flash');
+      setTimeout(function(){ wrap.classList.remove('pd-flash'); }, 1000);
+    }
+    if(typeof showToast === 'function') showToast('📄','취소 규정','동의하셔야 결제할 수 있습니다');
+    return;
+  }
+  if(typeof openTdPayPopup === 'function') openTdPayPopup();
+}
+window.pcalPay = pcalPay;
+
+function pcalCopyAddr(){
+  var r = currentRest;
+  var addr = (r && typeof window.pickI18nField === 'function') ? window.pickI18nField(r, 'address') : '';
+  if(!addr) addr = (r && r.address) || '';
+  if(!addr){ if(typeof showToast === 'function') showToast('⚠','주소','주소가 없습니다'); return; }
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(addr).then(function(){
+      if(typeof showToast === 'function') showToast('✓','복사됨','주소가 클립보드에 복사되었습니다');
+    }).catch(function(){ if(typeof _legacyCopy === 'function') _legacyCopy(addr); });
+  } else if(typeof _legacyCopy === 'function'){ _legacyCopy(addr); }
+}
+window.pcalCopyAddr = pcalCopyAddr;
+
+// 지도 — 기존 위치 시트와 같은 방식(Leaflet + 원형 사진 마커)
+var _pdMap = null, _pdMarker = null;
+function pcalInitMap(){
+  var r = currentRest;
+  var el = document.getElementById('pdMap');
+  if(!el) return;
+  var lat = r ? r.lat : null, lng = r ? r.lng : null;
+  if(!lat || !lng || typeof L === 'undefined'){
+    el.style.display = 'none';
+    return;
+  }
+  el.style.display = 'block';
+  setTimeout(function(){
+    try {
+      if(_pdMap){ _pdMap.remove(); _pdMap = null; _pdMarker = null; }
+      _pdMap = L.map('pdMap', {
+        zoomControl:false, attributionControl:false, scrollWheelZoom:false,
+        doubleClickZoom:false, keyboard:false, dragging:false, touchZoom:false
+      }).setView([lat, lng], 16);
+      if(typeof _addMapTiles === 'function') _addMapTiles(_pdMap);
+      var photo = r ? (r.photoCard || r.photo || '') : '';
+      var markerHtml = photo
+        ? '<div style="width:48px;height:48px;border-radius:50%;overflow:hidden;border:3px solid #5C0A14;box-shadow:0 3px 12px rgba(0,0,0,.4);background:#fff;"><img src="' + photo + '" style="width:100%;height:100%;object-fit:cover;"></div>'
+        : '<div style="width:48px;height:48px;border-radius:50%;background:#5C0A14;border:3px solid #fff;box-shadow:0 3px 12px rgba(0,0,0,.4);"></div>';
+      _pdMarker = L.marker([lat, lng], {
+        icon: L.divIcon({ html: markerHtml, iconSize:[48,48], iconAnchor:[24,48], className:'' })
+      }).addTo(_pdMap);
+      setTimeout(function(){ if(_pdMap) _pdMap.invalidateSize(); }, 250);
+    } catch(e){ console.warn('[pcal] 지도 초기화 실패', e); }
+  }, 120);
+}
+window.pcalInitMap = pcalInitMap;
 
 // ── GNB 를 하단에 붙이고 Quest → Cast 로 바꾼다 (플래그 뒤에서만) ──
 function pcalApplyGnb(){
