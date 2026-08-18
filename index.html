@@ -8055,10 +8055,9 @@ window.closePromoCarousel = function(){
          Chat 은 진입 경로만 차단, openTaamChat() 등 코드 100% 유지 (슈퍼어드민 등 다른 경로 호출 대비).
          Quest 는 곧 공개될 도장깨기 컨텐츠 (Atlas venues 데이터 재활용 예정).
          순서 (좌→우): Ticket · Genealogy · Home · Quest · My Page -->
-    <button class="gnb-btn active" id="gnbTicket" onclick="gnbGo('ticket',this)">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9V7a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4z"/><path d="M13 5v2"/><path d="M13 11v2"/><path d="M13 17v2"/></svg>
-      <span class="gnb-label">Ticket</span>
-    </button>
+    <!-- 🆕 2026.08: Ticket 버튼 제거 — 일정은 Home(사진 캘린더)이 대신한다.
+         id="gnbTicket" 을 찾던 코드는 전부 null 가드가 있어 그대로 둬도 안전하지만,
+         '되돌아갈 탭' 으로 쓰이던 자리는 Home 으로 바꿨다 (아래 참조). -->
     <!-- ⚠️ id="gnbContents" 는 호환을 위해 유지 (다른 코드에서 참조). 라벨/SVG 만 Genealogy 로 변경. -->
     <button class="gnb-btn" id="gnbContents" onclick="openLineageHome(this)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2.2"/><circle cx="6" cy="14" r="2"/><circle cx="18" cy="14" r="2"/><circle cx="6" cy="20.5" r="1.6"/><circle cx="18" cy="20.5" r="1.6"/><path d="M12 7.2v3M12 10.2L6 12M12 10.2L18 12M6 16v3M18 16v3"/></svg>
@@ -16298,12 +16297,13 @@ function adminDirectAccess(){
     document.querySelectorAll('.gnb-btn').forEach(function(b){ b.classList.remove('active'); });
     openAdmin();
   } else {
-    // 🆕 일반 사용자/어드민 → 티켓 화면으로 진입 (Ticket = 새 primary 랜딩)
+    // 🆕 2026.08: 첫 화면은 Home (사진 캘린더 꺼져 있으면 openMain 안에서 Ticket 으로 폴백)
     openMain();
     document.querySelectorAll('.gnb-btn').forEach(function(b){ b.classList.remove('active'); });
-    var tkBtnL = document.getElementById('gnbTicket');
-    if (tkBtnL) tkBtnL.classList.add('active');
-    if (typeof showView === 'function') showView('ticket');
+    var _nhOn = (typeof newHomeEnabled === 'function') && newHomeEnabled();
+    var _lb = document.getElementById('gnbHome');
+    if (_lb) _lb.classList.add('active');
+    if (typeof showView === 'function') showView(_nhOn ? 'home' : 'ticket');
   }
 }
 
@@ -16344,20 +16344,28 @@ function openMain(){
     updateMpAdminBtn();
     updatePendingBadge();
     syncTuRestList();
-    // 로그인 직후 첫 화면 = 티켓 페이지 (Ticket = 새 primary 랜딩)
-    document.getElementById('homeView').style.display='none';
+    // 🆕 2026.08: 로그인 직후 첫 화면 = Home.
+    //   단, 사진 캘린더가 꺼져 있으면 homeView 는 빈 화면이라 그대로 들어가면 검은 화면이 된다.
+    //   그래서 플래그가 꺼진 경우에는 예전처럼 Ticket 으로 들어간다 — 회원 화면은 바뀌지 않는다.
+    var _newHomeOn = (typeof newHomeEnabled === 'function') && newHomeEnabled();
     document.getElementById('contentsView').style.display='none';
     document.querySelectorAll('.gnb-btn').forEach(function(b){b.classList.remove('active');});
-    var _firstTk = document.getElementById('gnbTicket');
-    if(_firstTk) _firstTk.classList.add('active');
+    var _firstBtn = document.getElementById('gnbHome');
+    if(_firstBtn) _firstBtn.classList.add('active');
     var ticketV = document.getElementById('ticketView');
-    if (ticketV) ticketV.style.display = 'block';
+    if (_newHomeOn) {
+      if (ticketV) ticketV.style.display = 'none';
+      if (typeof showView === 'function') showView('home');
+    } else {
+      document.getElementById('homeView').style.display='none';
+      if (ticketV) ticketV.style.display = 'block';
+    }
     var ticketBar = document.getElementById('ticketFilterBar');
-    if (ticketBar) ticketBar.style.display = 'flex';
+    if (ticketBar) ticketBar.style.display = _newHomeOn ? 'none' : 'flex';
     var pillBarL = document.getElementById('tkPillBar');
-    if (pillBarL) pillBarL.style.display = 'flex';
+    if (pillBarL) pillBarL.style.display = _newHomeOn ? 'none' : 'flex';
     var pillResetL = document.getElementById('tkPillResetFloat');
-    if (pillResetL) pillResetL.style.display = 'block';
+    if (pillResetL) pillResetL.style.display = _newHomeOn ? 'none' : 'block';
     var activeBar = document.getElementById('tkActiveBar');
     if (activeBar) activeBar.style.display = 'none'; // Step 2: 통합 상단바로 이동됨
     if (typeof tkPillSyncAll === 'function') tkPillSyncAll();
@@ -16426,7 +16434,7 @@ function gnbGo(tab, btn){
     showToast('🛒','Market','준비 중입니다');
     // 이전 탭으로 active 복원 방지용 — ticket 유지 (Ticket = 새 primary)
     document.querySelectorAll('.gnb-btn').forEach(function(b){b.classList.remove('active');});
-    var tkB = document.getElementById('gnbTicket'); if(tkB) tkB.classList.add('active');
+    var tkB = document.getElementById('gnbHome'); if(tkB) tkB.classList.add('active');
     showView('ticket');
     return;
   }
@@ -16443,7 +16451,7 @@ function gnbGo(tab, btn){
     //   ticket 버튼 active 로 동기화 (홈 버튼 active 인데 ticket 화면 나오는 불일치 방지).
     //   ticketView/필터바를 명시적으로 보이게 해서 빈 화면 방지.
     document.querySelectorAll('.gnb-btn').forEach(function(b){b.classList.remove('active');});
-    var _tkBtnHome = document.getElementById('gnbTicket');
+    var _tkBtnHome = document.getElementById('gnbHome');
     if(_tkBtnHome) _tkBtnHome.classList.add('active');
     // 다른 view 명시적 hide
     var _homeV = document.getElementById('homeView'); if(_homeV) _homeV.style.display='none';
@@ -16473,7 +16481,7 @@ function gnbGo(tab, btn){
     if(typeof newHomeEnabled === 'function' && newHomeEnabled()){
       if(typeof showToast === 'function') showToast('✎','Request','준비 중입니다');
       document.querySelectorAll('.gnb-btn').forEach(function(b){b.classList.remove('active');});
-      var _rqBack = document.getElementById('gnbTicket');
+      var _rqBack = document.getElementById('gnbHome');
       if(_rqBack) _rqBack.classList.add('active');
       showView('ticket');
       return;
@@ -16490,7 +16498,7 @@ function gnbGo(tab, btn){
       }
       // active 복원: ticket 탭으로 복귀 (Ticket = 새 primary)
       document.querySelectorAll('.gnb-btn').forEach(function(b){b.classList.remove('active');});
-      var tkBtn2 = document.getElementById('gnbTicket');
+      var tkBtn2 = document.getElementById('gnbHome');
       if(tkBtn2) tkBtn2.classList.add('active');
       showView('ticket');
       return;
@@ -16510,7 +16518,7 @@ function gnbGo(tab, btn){
     }
     // active 복원: ticket 탭으로 복귀
     document.querySelectorAll('.gnb-btn').forEach(function(b){b.classList.remove('active');});
-    var tkBtn3 = document.getElementById('gnbTicket');
+    var tkBtn3 = document.getElementById('gnbHome');
     if(tkBtn3) tkBtn3.classList.add('active');
     showView('ticket');
     return;
@@ -16612,7 +16620,7 @@ function closeMyPageToHome(){
   openMain();
   document.querySelectorAll('.gnb-btn').forEach(function(b){ b.classList.remove('active'); });
   // Ticket이 새 primary 랜딩
-  var tkBtnCmp = document.getElementById('gnbTicket');
+  var tkBtnCmp = document.getElementById('gnbHome');
   if(tkBtnCmp) tkBtnCmp.classList.add('active');
   if (typeof showView === 'function') showView('ticket');
 }
@@ -50285,7 +50293,7 @@ function navigateToHome(){
   if(gnb) gnb.style.display = 'flex';
   // 6) 티켓 탭 활성 + 티켓 뷰 표시 (Ticket이 새 primary 랜딩)
   setTimeout(function(){
-    var tkBtn = document.getElementById('gnbTicket');
+    var tkBtn = document.getElementById('gnbHome');
     if(tkBtn && typeof gnbGo === 'function'){
       gnbGo('ticket', tkBtn);
     } else if(typeof showView === 'function'){
@@ -54839,7 +54847,7 @@ function gotoInternalTicketPage(chef){
         if(gnb) gnb.style.display = 'flex';
 
         // 🎫 Ticket 뷰로 전환 — Ticket이 새 primary 랜딩 (gnbTicket 활성)
-        var tkBtnFlt = document.getElementById('gnbTicket');
+        var tkBtnFlt = document.getElementById('gnbHome');
         document.querySelectorAll('.gnb-btn').forEach(function(b){ b.classList.remove('active'); });
         if(tkBtnFlt) tkBtnFlt.classList.add('active');
         if(typeof showView === 'function') showView('ticket');
@@ -63143,7 +63151,7 @@ function closeLineageHome() {
   if (lh) lh.style.display = 'none';
   // Ticket 탭으로 복귀 (Ticket = 새 primary 랜딩)
   document.querySelectorAll('.gnb-btn').forEach(function(b){ b.classList.remove('active'); });
-  var tkBtnCl = document.getElementById('gnbTicket');
+  var tkBtnCl = document.getElementById('gnbHome');
   if (tkBtnCl) tkBtnCl.classList.add('active');
   if (typeof showView === 'function') showView('ticket');
 }
@@ -67008,7 +67016,7 @@ function closeTaamChat() {
   if (gnb) gnb.style.display = 'flex';
   document.querySelectorAll('.gnb-btn').forEach(function(b){b.classList.remove('active');});
   // Ticket이 새 primary 랜딩
-  var tkBtnTm = document.getElementById('gnbTicket');
+  var tkBtnTm = document.getElementById('gnbHome');
   if (tkBtnTm) tkBtnTm.classList.add('active');
 }
 
