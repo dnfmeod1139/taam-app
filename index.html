@@ -552,11 +552,17 @@ html.auto-login .splash .bottom-group{display:none !important}
 #magView .mag-top .ic{font-size:12px;color:#DED9D3;letter-spacing:.08em;width:34px}
 #magView .mag-issue{position:absolute;top:64px;left:24px;right:24px;z-index:4;
   font-family:'Oswald',sans-serif;font-size:9.5px;letter-spacing:.34em;color:rgba(255,255,255,.62)}
-#magView .mag-txt{position:absolute;left:24px;right:24px;bottom:150px;z-index:4}
+/* 화면을 좌우로 꽉 쓴다 — 표제는 가장자리까지 가고, 연도는 반대쪽 끝에 붙는다.
+   가운데를 가는 선이 이어 주면서 한 줄이 화면 폭을 다 쓴다 (잡지 표제 방식). */
+#magView .mag-txt{position:absolute;left:20px;right:20px;bottom:150px;z-index:4}
+#magView .mag-head{display:flex;align-items:baseline;gap:14px}
 #magView .mag-mon{font-family:'Nanum Myeongjo','Hiragino Mincho ProN',serif;
-  font-size:66px;line-height:.9;letter-spacing:.01em;color:#fff}
-#magView .mag-mon small{font-family:'Oswald',sans-serif;display:block;font-size:12px;
-  letter-spacing:.36em;color:rgba(255,255,255,.66);margin-bottom:10px}
+  font-size:15.5vw;line-height:.92;letter-spacing:-.02em;color:#fff;flex:none;
+  text-shadow:0 2px 22px rgba(0,0,0,.45)}
+#magView .mag-rule{flex:1;height:1px;background:rgba(255,255,255,.3);
+  transform:translateY(-14px);min-width:20px}
+#magView .mag-yr{flex:none;font-family:'Oswald',sans-serif;font-size:12px;letter-spacing:.3em;
+  color:rgba(255,255,255,.7);transform:translateY(-14px)}
 #magView .mag-line{margin-top:16px;font-size:13.5px;color:#E4DFD9;letter-spacing:.02em;line-height:1.7}
 /* 그 달에 열린 매장 — 잡지 목차처럼 크기·들여쓰기를 어긋나게 쌓는다.
    무작위가 아니라 정해진 리듬이다. 매번 달라지면 화면이 불안해진다. */
@@ -38448,7 +38454,11 @@ function magRender(){
   h += '<div class="mag-arrow r' + (mi >= 0 && mi < months.length-1 ? '' : ' off') + '" onclick="magStep(1)">›</div>';
 
   h += '<div class="mag-txt">';
-  h += '<div class="mag-mon"><small>' + _pcalY + '</small>' + _pcalM + '月</div>';
+  h += '<div class="mag-head">'
+     + '<div class="mag-mon">' + _magMonLabel(_pcalM) + '</div>'
+     + '<div class="mag-rule"></div>'
+     + '<div class="mag-yr">' + _pcalY + '</div>'
+     + '</div>';
   var rests = _magEditorial(byDate);
   if(rests.length){
     h += _magListHtml(rests);
@@ -38468,6 +38478,19 @@ function magRender(){
   magBindSwipe();
 }
 window.magRender = magRender;
+
+// 표제에 쓸 월 표기.
+//   'ko' 8월 (기본) · 'en' AUGUST · 'ja' 8月
+//   콘솔/테스트에서 window.MAG_MON_STYLE 로 바꿔 비교할 수 있다.
+var MAG_MON_STYLE = 'ko';
+var _MAG_EN = ['JANUARY','FEBRUARY','MARCH','APRIL','MAY','JUNE',
+               'JULY','AUGUST','SEPTEMBER','OCTOBER','NOVEMBER','DECEMBER'];
+function _magMonLabel(m){
+  var st = window.MAG_MON_STYLE || MAG_MON_STYLE;
+  if(st === 'en') return _MAG_EN[m-1] || String(m);
+  if(st === 'ja') return m + '月';
+  return m + '월';
+}
 
 // 표지에 쓸 매장 목록 — 그 달에 열린 자리의 매장을 날짜순으로, 중복 없이
 function _magEditorial(byDate){
