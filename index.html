@@ -430,6 +430,100 @@ html.auto-login .splash .bottom-group{display:none !important}
 .gnb-btn svg{width:20px;height:20px;stroke:rgba(255,255,255,.45);fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;transition:stroke .2s;flex-shrink:0}
 .gnb-btn.active svg{stroke:#fff}
 .gnb-label{font-family:var(--font-main);font-size:8.4px;font-weight:1000;letter-spacing:.06em;color:rgba(255,255,255,.4);transition:color .2s;white-space:nowrap}
+
+/* ── 🆕 2026.08 사진 캘린더 (새 첫 화면) ──────────────────────────
+   플래그(newHomeEnabled) 뒤에서만 붙는다. 기존 GNB/홈 스타일은 건드리지 않음.
+   사진은 전부 Supabase (month_covers.photo_url · ticket_products.tile_photo ·
+   restaurants 사진) 에서 URL 로만 온다 — index.html 에 이미지를 박지 않는다. */
+#mainGnb.gnb-flat{bottom:0;left:0;transform:none;width:100%;max-width:none;border-radius:0;
+  height:auto;padding:6px 6px calc(6px + env(safe-area-inset-bottom));
+  box-shadow:0 -6px 24px rgba(0,0,0,.5)}
+#mainGnb.gnb-flat .gnb-btn{border-radius:12px}
+
+.pcal{--pc-gold:#C8A96E;--pc-line:#232326;--pc-sub:#8d8781;color:#f2ede7;word-break:keep-all}
+.pcal-hero{position:relative;height:46vh;min-height:300px;max-height:420px;overflow:hidden;background:#0B0305}
+.pcal-hero img{width:100%;height:100%;object-fit:cover;filter:saturate(.88) contrast(1.06)}
+.pcal-hero .pc-shade{position:absolute;inset:0;
+  background:linear-gradient(180deg,rgba(0,0,0,.6) 0%,rgba(0,0,0,0) 30%,rgba(0,0,0,.33) 62%,#0B0305 100%)}
+.pcal-hero .pc-txt{position:absolute;left:22px;right:22px;bottom:20px}
+.pcal-hero .pc-mon{font-family:'Nanum Myeongjo','Hiragino Mincho ProN',serif;font-size:58px;line-height:.92;letter-spacing:.02em;color:#fff}
+.pcal-hero .pc-mon small{font-family:'Oswald',sans-serif;font-size:12px;color:#b8b2ab;letter-spacing:.32em;display:block;margin-bottom:9px}
+.pcal-hero .pc-line{margin-top:13px;font-size:13px;color:#ded9d3;letter-spacing:.02em}
+.pcal-hero .pc-credit{margin-top:6px;font-size:10px;color:rgba(255,255,255,.42);letter-spacing:.08em}
+.pcal-hero .pc-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  font-family:'Oswald',sans-serif;font-size:11px;letter-spacing:.28em;color:rgba(255,255,255,.28)}
+
+.pcal-ybar{display:flex;align-items:center;gap:10px;padding:12px 22px 0}
+.pcal-ybar .pc-yr{font-family:'Oswald',sans-serif;font-size:12.5px;letter-spacing:.16em;color:#f2ede7;
+  border:1px solid #2e2e33;border-radius:2px;padding:4px 10px}
+.pcal-ybar .pc-hint{font-size:10px;color:#5f5b57;letter-spacing:.06em}
+.pcal-mstrip{display:flex;gap:20px;padding:10px 22px;overflow-x:auto;font-size:13px;color:#5f5b57;
+  border-bottom:1px solid var(--pc-line);letter-spacing:.06em;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.pcal-mstrip::-webkit-scrollbar{display:none}
+.pcal-mstrip>div{flex:none;cursor:pointer;padding-bottom:2px}
+.pcal-mstrip .on{color:#f2ede7;position:relative}
+.pcal-mstrip .on::after{content:"";position:absolute;left:0;right:0;bottom:-11px;height:1px;background:#f2ede7}
+.pcal-mstrip .ydiv{color:var(--pc-gold);font-size:10.5px;letter-spacing:.14em;align-self:center;cursor:default}
+
+.pcal-cal{padding:12px 12px 0}
+.pcal-wk{display:grid;grid-template-columns:repeat(7,1fr);font-size:9.5px;color:#5f5b57;
+  letter-spacing:.1em;text-align:center;padding-bottom:9px}
+.pcal-days{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+.pcal-d{aspect-ratio:1;border-radius:4px;font-size:12px;color:#46443f;padding:5px 0 0 6px;
+  position:relative;overflow:hidden}
+.pcal-d.ev{color:#fff;cursor:pointer}
+.pcal-d.ev img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0;
+  filter:saturate(.88) contrast(1.06)}
+.pcal-d.ev .n{position:relative;z-index:3;font-weight:500;text-shadow:0 1px 5px rgba(0,0,0,.85)}
+.pcal-d.ev::after{content:"";position:absolute;inset:0;border-radius:4px;z-index:2;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.08), inset 0 -26px 22px -18px rgba(0,0,0,.8)}
+.pcal-d.ev.dead img{filter:grayscale(.85) brightness(.45)}
+.pcal-d.sel::after{box-shadow:inset 0 0 0 1.5px var(--pc-gold), inset 0 -26px 22px -18px rgba(0,0,0,.8)}
+.pcal-d.today .n{color:var(--pc-gold)}
+.pcal-note{padding:16px 22px 0;font-size:11px;color:#5f5b57;letter-spacing:.04em;line-height:1.7}
+
+/* 날짜 바텀시트 */
+#pcalSheet{position:fixed;inset:0;z-index:640;display:none}
+#pcalSheet .pc-dim{position:absolute;inset:0;background:rgba(0,0,0,.66)}
+#pcalSheet .pc-bs{position:absolute;left:0;right:0;bottom:0;background:rgba(17,17,19,.92);
+  backdrop-filter:blur(22px) saturate(140%);-webkit-backdrop-filter:blur(22px) saturate(140%);
+  border-top:1px solid rgba(255,255,255,.10);border-radius:20px 20px 0 0;
+  padding:10px 20px calc(26px + env(safe-area-inset-bottom));max-height:76vh;overflow-y:auto;
+  box-shadow:0 -20px 50px rgba(0,0,0,.66);color:#f2ede7}
+#pcalSheet .pc-grab{width:36px;height:3px;background:#3a3a3e;border-radius:2px;margin:0 auto 16px}
+#pcalSheet .pc-h{display:flex;align-items:baseline;gap:9px;padding-bottom:12px;border-bottom:1px solid #232326}
+#pcalSheet .pc-h .num{font-family:'Nanum Myeongjo','Hiragino Mincho ProN',serif;font-size:27px}
+#pcalSheet .pc-h .dw{font-size:11px;color:#8d8781}
+#pcalSheet .pc-h .cnt{margin-left:auto;font-size:10.5px;color:#8d8781;letter-spacing:.08em}
+.pcal-item{display:flex;gap:12px;padding:12px 0;border-bottom:1px solid #1a1a1d;align-items:center;cursor:pointer}
+.pcal-item:last-child{border-bottom:none}
+.pcal-item .ph{width:54px;height:54px;flex:none;border-radius:3px;overflow:hidden;background:#1c1c1c}
+.pcal-item .ph img{width:100%;height:100%;object-fit:cover}
+.pcal-item .m{flex:1;min-width:0}
+.pcal-item .nm{font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pcal-item .sub{font-size:10.5px;color:#8d8781;margin-top:4px;letter-spacing:.03em}
+.pcal-item .rt{text-align:right;flex:none}
+.pcal-item .st{font-size:10.5px;color:var(--pc-gold);letter-spacing:.05em}
+.pcal-item .st.full{color:#57544f}
+.pcal-item .go{font-size:15px;color:#57544f;margin-top:5px}
+
+/* 슈퍼어드민 편집 */
+.pcal-adm-row{display:flex;gap:12px;align-items:center;padding:12px 0;border-bottom:1px solid rgba(0,0,0,.07)}
+.pcal-adm-row .th{width:56px;height:56px;flex:none;border-radius:6px;overflow:hidden;background:#e9e5df}
+.pcal-adm-row .th img{width:100%;height:100%;object-fit:cover}
+.pcal-adm-btn{padding:7px 11px;border:1px solid #d8d3cc;border-radius:8px;background:#fff;
+  font-family:var(--font-main);font-size:10.5px;font-weight:700;color:#5C0A14;cursor:pointer;white-space:nowrap}
+.pcal-adm-btn.dark{background:#5C0A14;border-color:#5C0A14;color:#fff}
+.pcal-adm-inp{width:100%;padding:10px 12px;border:1px solid #d8d3cc;border-radius:8px;
+  font-family:var(--font-main);font-size:13px;background:#fff;color:#1a1a18}
+#pcalPickModal{position:fixed;inset:0;z-index:680;display:none;background:rgba(0,0,0,.62)}
+#pcalPickModal .pc-box{position:absolute;left:0;right:0;bottom:0;top:12%;background:#f7f5f2;
+  border-radius:18px 18px 0 0;display:flex;flex-direction:column;overflow:hidden}
+#pcalPickGrid{flex:1;overflow-y:auto;padding:14px;display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+#pcalPickGrid .pk{aspect-ratio:1;border-radius:8px;overflow:hidden;background:#e9e5df;cursor:pointer;position:relative}
+#pcalPickGrid .pk img{width:100%;height:100%;object-fit:cover}
+#pcalPickGrid .pk span{position:absolute;left:0;right:0;bottom:0;padding:4px 5px;font-size:9px;
+  background:linear-gradient(rgba(0,0,0,0),rgba(0,0,0,.75));color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .gnb-btn.active .gnb-label{color:#fff}
 #ticketFilterBar::-webkit-scrollbar{display:none}
 #ticketFilterBar{-webkit-overflow-scrolling:touch;}
@@ -5470,6 +5564,69 @@ function cardPayTestSync(){
   } catch(e){}
 }
 window.cardPayTestSync = cardPayTestSync;
+
+// ═══════════════════════════════════════════
+// 🆕 2026.08 사진 캘린더 (새 첫 화면) — 안전 스위치
+//   날짜 칸 자체가 그 날 요리 사진이 되는 새 첫 화면. 심사 중에도 웹 배포가 곧
+//   앱 반영(server.url = taam-app.vercel.app)이라, 켜는 순간 심사자에게도 보인다.
+//   그래서 CARD_PAY_LIVE 와 똑같은 3중 안전장치를 쓴다.
+//
+//     1) NEW_HOME_LIVE = false        → 전 회원에게 닫힘 (기본)
+//     2) localStorage.taamNewHome='1' → 그 기기에서만 열림. 그것도 슈퍼어드민만
+//     3) 기존 홈/티켓 코드는 한 줄도 지우지 않음 → 롤백 = 이 플래그 false
+//
+//   검증이 끝나면 NEW_HOME_LIVE = true 로 바꿔 전 회원에게 연다.
+// ═══════════════════════════════════════════
+var NEW_HOME_LIVE = false;
+function newHomeEnabled(){
+  if (NEW_HOME_LIVE) return true;
+  try {
+    if (localStorage.getItem('taamNewHome') !== '1') return false;
+  } catch(e){ return false; }
+  var role = (typeof _currentRole !== 'undefined') ? _currentRole : '';
+  return role === 'superadmin';
+}
+window.newHomeEnabled = newHomeEnabled;
+
+// 검증 스위치 토글 — PWA 는 콘솔이 없어 어드민 메뉴에서 켜고 끈다 (기기별)
+function toggleNewHome(){
+  var role = (typeof _currentRole !== 'undefined') ? _currentRole : '';
+  if (role !== 'superadmin') {
+    if (typeof showToast === 'function') showToast('⚠','권한 없음','슈퍼어드민 전용 기능입니다');
+    return;
+  }
+  var on = false;
+  try {
+    on = localStorage.getItem('taamNewHome') === '1';
+    if (on) localStorage.removeItem('taamNewHome');
+    else    localStorage.setItem('taamNewHome', '1');
+    on = !on;
+  } catch(e){
+    if (typeof showToast === 'function') showToast('⚠','저장 실패','이 브라우저에서 localStorage 를 쓸 수 없습니다');
+    return;
+  }
+  newHomeSync();
+  try { if (typeof pcalApplyGnb === 'function') pcalApplyGnb(); } catch(e){}
+  try { if (typeof pcalRenderAll === 'function') pcalRenderAll(); } catch(e){}
+  if (typeof showToast === 'function') {
+    showToast(on ? '📅' : '🔒', on ? '사진 캘린더 ON' : '사진 캘린더 OFF',
+      on ? '이 기기에서만 새 첫 화면이 보입니다'
+         : '이 기기도 기존 화면으로 되돌렸습니다');
+  }
+}
+window.toggleNewHome = toggleNewHome;
+
+function newHomeSync(){
+  try {
+    var on = localStorage.getItem('taamNewHome') === '1';
+    var lbl = document.getElementById('newHomeLabel');
+    var sub = document.getElementById('newHomeSub');
+    if (lbl) lbl.textContent = on ? '📅 사진 캘린더 (이 기기) — 켜짐' : '📅 사진 캘린더 (이 기기) — 꺼짐';
+    if (sub) sub.style.color = on ? '#B23A2E' : '';
+  } catch(e){}
+}
+window.newHomeSync = newHomeSync;
+
 // 예치금 충전 계좌이체 안내에 표시할 실제 계좌 (계좌 변경 시 여기만 수정)
 var DEPOSIT_BANK_INFO = {
   bank:    '하나은행',
@@ -6989,8 +7146,12 @@ window.addEventListener('error', function(e){
   <div id="cfGlowOrb" style="opacity:0"></div>
   <div class="main-ov"></div>
   <div id="cfVignette"></div>
-  <!-- Home: 비어있음 (향후 구성 예정) -->
-  <div id="homeView" style="flex:1;display:none;flex-direction:column;"></div>
+  <!-- Home: 비어있음 (향후 구성 예정)
+       🆕 2026.08: 사진 캘린더 컨테이너만 추가. 플래그 꺼져 있으면 빈 div 그대로 —
+       홈은 앞으로 팝업·이벤트 광고 자리로 쓰고, 지금은 일정 탭과 같은 캘린더를 보여준다. -->
+  <div id="homeView" style="flex:1;display:none;flex-direction:column;overflow-y:auto;-webkit-overflow-scrolling:touch;">
+    <div id="pcalHome" class="pcal" style="display:none;padding-bottom:120px;"></div>
+  </div>
 <!-- 🆕 v1.52c (2026.05.25): cfInner + cfDots 정적 wrapper 추가.
      이전엔 contentsView 가 완전 빈 div 라서 cfInner element 가 DOM 에 없음 →
      renderCarousel / showView 가 document.getElementById('cfInner').children 호출 시
@@ -7371,12 +7532,14 @@ window.closePromoCarousel = function(){
   <!-- 배경 레이어 — 그라디언트 + 미세 사진 (글래스 케이스가 살아나도록) -->
   <div style="position:absolute;inset:0;background:radial-gradient(circle at 80% 0%, rgba(58,20,28,.55) 0%, rgba(0,0,0,1) 60%);pointer-events:none;z-index:0;"></div>
   <div id="ticketViewBgPhoto" style="position:absolute;top:-80px;right:-80px;width:280px;height:280px;background-image:url('https://images.unsplash.com/photo-1579584425555-c3ce17fd4351?w=400');background-size:cover;background-position:center;filter:blur(60px) brightness(.5);border-radius:50%;opacity:.55;pointer-events:none;z-index:0;"></div>
-  <div style="position:relative;z-index:1;padding-top:138px;padding-bottom:100px;">
+  <div id="ticketViewInner" style="position:relative;z-index:1;padding-top:138px;padding-bottom:100px;">
     <!-- 🎫 쉐프 필터 배지 (플로팅) — pill 바 (top 52~98) 아래 위치 -->
     <div id="ticketFilterBadge" onclick="clearTicketFilter()" style="display:none;position:fixed;top:106px;left:50%;transform:translateX(-50%);z-index:999;padding:8px 16px;background:rgba(200,169,110,0.95);color:#1a0f05;border-radius:20px;font-family:var(--font-main);font-size:12px;font-weight:800;letter-spacing:.02em;box-shadow:0 4px 16px rgba(0,0,0,0.5);cursor:pointer;align-items:center;gap:8px;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);">
       <span id="ticketFilterBadgeName"></span>
       <span style="opacity:.55;font-size:11px;">✕</span>
     </div>
+    <!-- 🆕 2026.08: 사진 캘린더 (일정 탭). 플래그 꺼져 있으면 렌더 자체를 안 한다. -->
+    <div id="pcalTicket" class="pcal" style="display:none;margin:0 0 28px;"></div>
     <div id="ticketGenreSections"></div>
 
     <!-- 🆕 2026.05.18: 약관 / 정책 — 홈(티켓) 스크롤 최하단 글래스모피즘 프레임
@@ -7546,6 +7709,36 @@ window.closePromoCarousel = function(){
       <span id="gnbMyReddot" style="display:none;position:absolute;top:6px;right:24%;width:8px;height:8px;border-radius:50%;background:#e53935;box-shadow:0 0 0 2px #fff;"></span>
     </button>
   </div>
+
+<!-- ══════ 🆕 2026.08 사진 캘린더 — 날짜 바텀시트 / 슈퍼어드민 편집 / 사진 고르기 ══════
+     사진은 전부 Supabase 에서 URL 로만 온다. index.html 에는 이미지 데이터를 넣지 않는다. -->
+<div id="pcalSheet" onclick="if(event.target===this||event.target.className==='pc-dim')pcalCloseSheet()">
+  <div class="pc-dim"></div>
+  <div class="pc-bs" id="pcalSheetBody"></div>
+</div>
+
+<div id="pcalAdminPage" class="restpage" style="display:none;">
+  <div class="rp-header">
+    <button class="page-back" onclick="pcalAdminClose()">←</button>
+    <div class="page-title">사진 캘린더 관리</div>
+  </div>
+  <div style="flex:1;overflow-y:auto;padding:16px 18px 60px;">
+    <div id="pcalAdminBody"></div>
+  </div>
+</div>
+
+<div id="pcalPickModal" onclick="if(event.target===this)pcalPickClose()">
+  <div class="pc-box">
+    <div style="display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid #e6e2dc;">
+      <div style="font-family:var(--font-main);font-size:14px;font-weight:800;color:#1a1a18;">레스토랑 등록 사진에서 고르기</div>
+      <button onclick="pcalPickClose()" style="margin-left:auto;width:28px;height:28px;border-radius:50%;border:none;background:#e9e5df;font-size:15px;color:#777;cursor:pointer;">✕</button>
+    </div>
+    <div style="padding:10px 16px 0;">
+      <input id="pcalPickSearch" class="pcal-adm-inp" type="text" placeholder="레스토랑 이름으로 찾기" oninput="pcalPickRender(this.value)">
+    </div>
+    <div id="pcalPickGrid"></div>
+  </div>
+</div>
 
 
 <!-- 지도 바텀시트 -->
@@ -9244,6 +9437,22 @@ window.closePromoCarousel = function(){
             <div>
               <div class="admin-menu-text" id="cardPayTestLabel">💳 카드 결제 테스트 (이 기기)</div>
               <div class="admin-menu-sub" id="cardPayTestSub">CARD_PAY_LIVE 가 꺼져 있어도 이 기기에서만 카드 결제창을 연다. 슈퍼어드민 전용 · 검증 끝나면 반드시 끄세요</div>
+            </div>
+            <div class="admin-arrow">›</div>
+          </div>
+          <!-- 🆕 2026.08: 사진 캘린더 (새 첫 화면) — 기기별 검증 스위치 + 편집 화면.
+               카드 결제 테스트와 같은 구조. 켜도 이 기기·슈퍼어드민에게만 보인다. -->
+          <div class="admin-menu-item" onclick="toggleNewHome()">
+            <div>
+              <div class="admin-menu-text" id="newHomeLabel">📅 사진 캘린더 (이 기기)</div>
+              <div class="admin-menu-sub" id="newHomeSub">NEW_HOME_LIVE 가 꺼져 있어도 이 기기에서만 새 첫 화면(사진 타일 캘린더)을 연다. 슈퍼어드민 전용</div>
+            </div>
+            <div class="admin-arrow">›</div>
+          </div>
+          <div class="admin-menu-item" onclick="pcalAdminOpen()">
+            <div>
+              <div class="admin-menu-text">🖼 사진 캘린더 편집</div>
+              <div class="admin-menu-sub">월별 히어로 사진·지역 문구 + 날짜별 타일 사진. 레스토랑 등록 사진에서 고르거나 새로 올린다</div>
             </div>
             <div class="admin-arrow">›</div>
           </div>
@@ -15645,6 +15854,8 @@ function adminDirectAccess(){
   if(wrap){ wrap.classList.add('ready'); wrap.style.display = 'block'; }
   loadRole(); // PIN으로 설정된 역할 로드
   try{ if(typeof cardPayTestSync === 'function') cardPayTestSync(); }catch(e){}
+  try{ if(typeof newHomeSync === 'function') newHomeSync(); }catch(e){}
+  try{ if(typeof pcalApplyGnb === 'function') pcalApplyGnb(); }catch(e){}
   // 참고: bootAutoLogin 경로에서도 이 함수가 호출되는데, 거기서 이미 ready 처리됨
 
   if (_currentRole === 'superadmin') {
@@ -15676,7 +15887,8 @@ function openMain(){
    'restListScreen','ticketListScreen','depositMgmtScreen','inviteCodeScreen','partnerMgmtScreen','adPopupMgmtScreen','partnerQrScreen',
    'memberListScreen','ticketCalScreen','ticketHistoryScreen','adminCodeScreen','pendingApprovalScreen',
    'partnerAdminScreen','partnerTicketListScreen','partnerCalScreen','partnerRestScreen',
-   'tcLockPopup','mshipScreen','extendPopup','memModal'
+   'tcLockPopup','mshipScreen','extendPopup','memModal',
+   'pcalAdminPage','pcalPickModal','pcalSheet'
   ].forEach(function(id){var el=document.getElementById(id);if(el)el.style.display='none';});
   loadRole().then(function(){
     return _seedWaitCapped(2500); // 시드는 최대 2.5초만 기다린다 (나머지는 백그라운드)
@@ -15722,6 +15934,14 @@ function openMain(){
     // 홈에서는 붉은 glow orb 숨김
     var o1=document.getElementById('cfGlowOrb'); if(o1) o1.style.opacity='0';
     var o2=document.getElementById('cfGlowOrb2'); if(o2) o2.style.opacity='0';
+    // 🆕 2026.08 사진 캘린더 — 플래그 켜진 기기만. 상단 필터바를 접고 캘린더를 그린다.
+    if(typeof newHomeEnabled === 'function' && newHomeEnabled()){
+      if (ticketBar)  ticketBar.style.display  = 'none';
+      if (pillBarL)   pillBarL.style.display   = 'none';
+      if (pillResetL) pillResetL.style.display = 'none';
+      if(typeof pcalApplyGnb === 'function') pcalApplyGnb();
+      if(typeof pcalRenderAll === 'function') pcalRenderAll();
+    }
   }).catch(function(e){ console.error('Init error:', e); });
 }
 
@@ -15758,7 +15978,7 @@ function gnbGo(tab, btn){
     var _rlm = document.getElementById('ramenLineageModule');
     if(_rlm){ _rlm.classList.remove('active'); }
     // 5) 다른 모달도 같이 닫기 (티켓 상세, 룰 시트, 위치 시트, 매장 정보)
-    ['ticketDetailScreen','tdRestInfoScreen','tdRulesSheet','tdLocationSheet','tdPurchaseSheet','tdConfirmPopup','tdDonePopup','fullMapOverlay'].forEach(function(id){
+    ['ticketDetailScreen','tdRestInfoScreen','tdRulesSheet','tdLocationSheet','tdPurchaseSheet','tdConfirmPopup','tdDonePopup','fullMapOverlay','pcalSheet'].forEach(function(id){
       var el = document.getElementById(id);
       if(el && el.style.display !== 'none'){ el.style.display = 'none'; }
     });
@@ -15779,6 +15999,13 @@ function gnbGo(tab, btn){
   }
 
   if(tab==='home'){
+    // 🆕 2026.08 사진 캘린더: 홈을 다시 홈답게. 플래그 켜진 기기에서만 homeView 로 간다.
+    //   (플래그 꺼져 있으면 아래 기존 "홈 = 티켓 통합" 경로가 그대로 돈다 — 롤백 안전)
+    if(typeof newHomeEnabled === 'function' && newHomeEnabled()){
+      var _tkV = document.getElementById('ticketView'); if(_tkV) _tkV.style.display='none';
+      showView('home');
+      return;
+    }
     // 🆕 v1.53.5 2026.05.28: 홈 = 티켓 통합. 홈 버튼 클릭 시 ticket 화면 표시 +
     //   ticket 버튼 active 로 동기화 (홈 버튼 active 인데 ticket 화면 나오는 불일치 방지).
     //   ticketView/필터바를 명시적으로 보이게 해서 빈 화면 방지.
@@ -15808,6 +16035,16 @@ function gnbGo(tab, btn){
   }
 
   if(tab==='request'){
+    // 🆕 2026.08 사진 캘린더 개편: Request 는 새 화면으로 다시 만드는 중 — 플래그 켜진
+    //   기기에서만 "준비 중" 으로 막는다. 회원 화면(플래그 꺼짐)은 기존 그대로.
+    if(typeof newHomeEnabled === 'function' && newHomeEnabled()){
+      if(typeof showToast === 'function') showToast('✎','Request','준비 중입니다');
+      document.querySelectorAll('.gnb-btn').forEach(function(b){b.classList.remove('active');});
+      var _rqBack = document.getElementById('gnbTicket');
+      if(_rqBack) _rqBack.classList.add('active');
+      showView('ticket');
+      return;
+    }
     showView('request');
     return;
   }
@@ -15834,7 +16071,9 @@ function gnbGo(tab, btn){
   //   슈퍼어드민도 동일 (구현 전) — 추후 분기 추가 예정.
   if(tab==='quest'){
     if(typeof showToast === 'function'){
-      showToast('🧭','TAAM Quest','곧 공개됩니다');
+      // 🆕 2026.08: 새 첫 화면에서는 Quest 자리를 Cast 로 쓴다 (라벨은 pcalApplyGnb 가 바꿈)
+      var _qOn = (typeof newHomeEnabled === 'function') && newHomeEnabled();
+      showToast('🧭', _qOn ? 'TAAM Cast' : 'TAAM Quest', _qOn ? '준비 중입니다' : '곧 공개됩니다');
     }
     // active 복원: ticket 탭으로 복귀
     document.querySelectorAll('.gnb-btn').forEach(function(b){b.classList.remove('active');});
@@ -15903,11 +16142,25 @@ function showView(view){
     // pill 라벨 동기화
     if(typeof tkPillSyncAll === 'function') tkPillSyncAll();
     setTimeout(function(){ renderTicketGenres(); }, 60);
+    // 🆕 2026.08 사진 캘린더 — 플래그 켜진 기기에서만. 켜지면 상단 필터/pill 바는 접는다
+    //   (히어로가 화면 맨 위부터 시작해야 해서). 플래그 끄면 이 줄들은 전부 무시된다.
+    if(typeof newHomeEnabled === 'function' && newHomeEnabled()){
+      if(tickBar)   tickBar.style.display='none';
+      if(pillBar)   pillBar.style.display='none';
+      if(pillReset) pillReset.style.display='none';
+      if(typeof pcalApplyGnb === 'function') pcalApplyGnb();
+      if(typeof pcalRenderAll === 'function') pcalRenderAll();
+    }
   } else {
     homeV.style.display='flex';
     contV.style.display='none';
     if(orb1) orb1.style.opacity='0';
     if(orb2) orb2.style.opacity='0';
+    // 🆕 2026.08: 홈도 같은 캘린더 (앞으로 팝업·이벤트 자리로 갈라질 예정)
+    if(typeof newHomeEnabled === 'function' && newHomeEnabled()){
+      if(typeof pcalApplyGnb === 'function') pcalApplyGnb();
+      if(typeof pcalRenderAll === 'function') pcalRenderAll();
+    }
   }
 }
 
@@ -37195,6 +37448,685 @@ function renderHomeTickets(){
 }
 // 옛 홈 렌더 함수는 제거됨. 카운트다운 엔진은 별도로 시작.
 
+// ══════════════════════════════════════════════════════════════
+// 🆕 2026.08 사진 캘린더 (새 첫 화면)
+//
+//   날짜 칸 자체가 그 날 요리 사진이다. 사진이 있는 칸 = 그 날 자리가 있다는 뜻.
+//   일정(Ticket) 탭과 홈 탭 두 곳에 같은 캘린더를 그린다. 홈은 앞으로 팝업·이벤트
+//   광고 자리로 갈라질 예정이라 컨테이너를 따로 뒀다.
+//
+//   ⚠️ 사진은 단 한 장도 이 파일에 넣지 않는다. 전부 Supabase 에서 URL 로만 온다.
+//        · 월별 히어로  → month_covers.photo_url
+//        · 날짜 타일    → ticket_products.tile_photo (없으면 레스토랑 등록 사진 폴백)
+//        · 고르는 원본  → restaurants 의 photo_hero / photo_card / detail_photos
+//      예전에 base64 를 박아 index.html 이 25MB 까지 부푼 적이 있다. 반복하지 않는다.
+//
+//   month_covers 테이블이 아직 없어도(=SQL 미실행) 조용히 폴백만 하고 죽지 않는다.
+// ══════════════════════════════════════════════════════════════
+var _pcalY = null, _pcalM = null;   // 보고 있는 연·월
+var _pcalCovers = null;             // 'YYYY-M' → month_covers row (null = 아직 안 읽음)
+var _pcalSelKey = null;             // 선택된 날짜 YYYYMMDD
+
+function _pcalEsc(s){
+  return String(s == null ? '' : s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+// 요일 라벨 (일 시작)
+function _pcalWkNames(){
+  var lang = window._tkCurrentLang;
+  if(lang === 'en') return ['SUN','MON','TUE','WED','THU','FRI','SAT'];
+  if(lang === 'ja') return ['日','月','火','水','木','金','土'];
+  return ['일','월','화','수','목','금','토'];
+}
+function _pcalDowName(dt){
+  var lang = window._tkCurrentLang;
+  if(lang === 'en') return ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][dt.getDay()];
+  if(lang === 'ja') return ['日曜日','月曜日','火曜日','水曜日','木曜日','金曜日','土曜日'][dt.getDay()];
+  return ['일요일','월요일','화요일','수요일','목요일','금요일','토요일'][dt.getDay()];
+}
+
+// 회원에게 보여도 되는 티켓만 (renderTicketGenres 와 같은 가드)
+function _pcalVisibleTickets(){
+  if(typeof ticketDB === 'undefined' || !ticketDB) return [];
+  return ticketDB.filter(function(t){
+    if(!t || !t.date) return false;
+    var st = t.status || '';
+    if(st === 'hidden' || st === 'pending' || st === 'deleteRequest') return false;
+    if(typeof _ticketAccessOk === 'function' && !_ticketAccessOk(t.id)) return false;
+    return true;
+  });
+}
+
+// YYYYMMDD → [ticket, ...]
+function _pcalByDate(){
+  var map = {};
+  _pcalVisibleTickets().forEach(function(t){
+    var k = (typeof _tkDateKey === 'function') ? _tkDateKey(t) : 0;
+    if(!k || k === 99999999) return;
+    if(!map[k]) map[k] = [];
+    map[k].push(t);
+  });
+  return map;
+}
+
+function _pcalRest(t){
+  if(typeof restaurantDB === 'undefined' || !restaurantDB) return null;
+  return restaurantDB.find(function(x){ return String(x.id) === String(t.restId); }) || null;
+}
+
+// 타일 사진 — 티켓 전용 지정이 우선, 없으면 레스토랑 등록 사진
+function _pcalPhoto(t){
+  if(!t) return '';
+  if(t.tilePhoto) return t.tilePhoto;
+  var r = _pcalRest(t);
+  if(!r) return '';
+  return r.photoHero || r.photoCard || r.photo || r.img || '';
+}
+
+function _pcalRestName(t){
+  var r = _pcalRest(t);
+  if(r && typeof window.pickI18nField === 'function'){
+    var n = window.pickI18nField(r, 'name');
+    if(n) return n;
+  }
+  return (r && r.name) || t.rest || '';
+}
+
+// 그 달의 히어로 (월별 표지 → 없으면 그 달 타일 중 첫 장)
+function _pcalHeroFor(y, m, byDate){
+  var cov = (_pcalCovers && _pcalCovers[y + '-' + m]) || null;
+  var photo  = cov && cov.photo_url ? cov.photo_url : '';
+  var regions = cov && cov.regions ? cov.regions : '';
+  var credit  = cov && cov.photo_credit ? cov.photo_credit : '';
+
+  var days = _pcalMonthTickets(y, m, byDate);
+  if(!photo){
+    for(var i=0; i<days.length; i++){
+      var p = _pcalPhoto(days[i]);
+      if(p){ photo = p; break; }
+    }
+  }
+  if(!regions){
+    var seen = {}, arr = [];
+    days.forEach(function(t){
+      var r = _pcalRest(t);
+      var nm = r ? (r.region || r.cityEn || '') : '';
+      if(nm && !seen[nm]){ seen[nm] = 1; arr.push(nm); }
+    });
+    regions = arr.slice(0,4).join(' · ');
+  }
+  return { photo: photo, regions: regions, credit: credit };
+}
+
+function _pcalMonthTickets(y, m, byDate){
+  byDate = byDate || _pcalByDate();
+  var lo = y*10000 + m*100, hi = lo + 99;
+  var out = [];
+  Object.keys(byDate).forEach(function(k){
+    var kk = parseInt(k,10);
+    if(kk >= lo && kk <= hi) out = out.concat(byDate[k]);
+  });
+  return out;
+}
+
+// 월 스트립 — 이번 달 기준 앞 2 · 뒤 11 개월. 선택 월이 벗어나면 창을 늘린다.
+function _pcalMonths(){
+  var now = new Date();
+  var start = now.getFullYear()*12 + now.getMonth() - 2;
+  var end   = start + 13;
+  var sel   = _pcalY*12 + (_pcalM - 1);
+  if(sel < start) start = sel;
+  if(sel > end)   end   = sel;
+  var out = [], prevY = null;
+  for(var i=start; i<=end; i++){
+    var y = Math.floor(i/12), m = (i%12) + 1;
+    out.push({ y:y, m:m, divider:(prevY !== null && y !== prevY) });
+    prevY = y;
+  }
+  return out;
+}
+
+// 첫 진입 기본 월 — 이번 달. 이번 달에 자리가 없으면 가장 가까운 다음 달.
+function _pcalInitMonth(byDate){
+  if(_pcalY && _pcalM) return;
+  var now = new Date();
+  _pcalY = now.getFullYear(); _pcalM = now.getMonth() + 1;
+  if(_pcalMonthTickets(_pcalY, _pcalM, byDate).length > 0) return;
+  var todayKey = _pcalY*10000 + _pcalM*100;
+  var best = null;
+  Object.keys(byDate).forEach(function(k){
+    var kk = parseInt(k,10);
+    if(kk >= todayKey && (best === null || kk < best)) best = kk;
+  });
+  if(best !== null){
+    _pcalY = Math.floor(best/10000);
+    _pcalM = Math.floor((best%10000)/100);
+  }
+}
+
+async function pcalLoadCovers(){
+  var out = {};
+  try {
+    if(!window.sb){ _pcalCovers = out; return out; }
+    var res = await window.sb.from('month_covers').select('*');
+    if(res.error){
+      // 테이블 미생성(SQL 미실행) 포함 — 조용히 폴백
+      console.warn('ℹ️ month_covers 로드 생략:', res.error.message);
+      _pcalCovers = out; return out;
+    }
+    (res.data || []).forEach(function(row){ out[row.year + '-' + row.month] = row; });
+  } catch(e){
+    console.warn('ℹ️ month_covers 예외:', e && e.message);
+  }
+  _pcalCovers = out;
+  return out;
+}
+window.pcalLoadCovers = pcalLoadCovers;
+
+function renderPhotoCalInto(hostId){
+  var host = document.getElementById(hostId);
+  if(!host) return;
+  if(typeof newHomeEnabled !== 'function' || !newHomeEnabled()){
+    host.style.display = 'none';
+    host.innerHTML = '';
+    return;
+  }
+  host.style.display = 'block';
+
+  // 표지는 한 번만 읽는다. 읽고 나면 다시 그린다 (재진입 방지 위해 먼저 {} 로 채움)
+  if(_pcalCovers === null){
+    _pcalCovers = {};
+    pcalLoadCovers().then(function(){ pcalRenderAll(); }).catch(function(){});
+  }
+
+  var byDate = _pcalByDate();
+  _pcalInitMonth(byDate);
+
+  var hero = _pcalHeroFor(_pcalY, _pcalM, byDate);
+  var h = '';
+
+  // ── 히어로 ──
+  h += '<div class="pcal-hero">';
+  if(hero.photo){
+    h += '<img src="' + _pcalEsc(hero.photo) + '" alt="">';
+  } else {
+    h += '<div class="pc-empty">PHOTO NOT SET</div>';
+  }
+  h += '<div class="pc-shade"></div>';
+  h += '<div class="pc-txt">';
+  h += '<div class="pc-mon"><small>' + _pcalY + '</small>' + _pcalM + '月</div>';
+  if(hero.regions) h += '<div class="pc-line">' + _pcalEsc(hero.regions) + '</div>';
+  if(hero.credit)  h += '<div class="pc-credit">' + _pcalEsc(hero.credit) + '</div>';
+  h += '</div></div>';
+
+  // ── 연도 + 월 스트립 ──
+  h += '<div class="pcal-ybar"><div class="pc-yr">' + _pcalY + '</div>'
+     + '<div class="pc-hint">연도 · 월 전환</div></div>';
+  h += '<div class="pcal-mstrip">';
+  _pcalMonths().forEach(function(o){
+    if(o.divider) h += '<div class="ydiv">' + o.y + '</div>';
+    var on = (o.y === _pcalY && o.m === _pcalM) ? ' on' : '';
+    h += '<div class="' + on.trim() + '" onclick="pcalGo(' + o.y + ',' + o.m + ')">' + o.m + '月</div>';
+  });
+  h += '</div>';
+
+  // ── 캘린더 ──
+  h += '<div class="pcal-cal"><div class="pcal-wk">';
+  _pcalWkNames().forEach(function(w){ h += '<div>' + w + '</div>'; });
+  h += '</div><div class="pcal-days">';
+
+  var first = new Date(_pcalY, _pcalM - 1, 1);
+  var lead  = first.getDay();
+  var last  = new Date(_pcalY, _pcalM, 0).getDate();
+  var now2  = new Date();
+  var todayKey = now2.getFullYear()*10000 + (now2.getMonth()+1)*100 + now2.getDate();
+
+  for(var i=0; i<lead; i++) h += '<div class="pcal-d"></div>';
+  for(var d=1; d<=last; d++){
+    var key = _pcalY*10000 + _pcalM*100 + d;
+    var list = byDate[key] || [];
+    var cls = 'pcal-d';
+    if(key === todayKey) cls += ' today';
+    if(list.length){
+      // 그 날 대표 사진 — 판매중인 티켓 우선
+      var pick = null;
+      for(var j=0; j<list.length; j++){
+        var alive = (list[j].status !== 'soldout') &&
+                    !(typeof _isTicketExpired === 'function' && _isTicketExpired(list[j]));
+        if(alive && _pcalPhoto(list[j])){ pick = list[j]; break; }
+      }
+      var anyAlive = !!pick;
+      if(!pick){ for(var j2=0; j2<list.length; j2++){ if(_pcalPhoto(list[j2])){ pick = list[j2]; break; } } }
+      var ph = pick ? _pcalPhoto(pick) : '';
+      if(ph){
+        cls += ' ev' + (anyAlive ? '' : ' dead');
+        if(_pcalSelKey === key) cls += ' sel';
+        h += '<div class="' + cls + '" onclick="pcalOpenDay(' + _pcalY + ',' + _pcalM + ',' + d + ')">'
+           + '<img src="' + _pcalEsc(ph) + '" alt=""><span class="n">' + d + '</span></div>';
+        continue;
+      }
+      // 사진이 아직 없는 날 — 숫자만 금색으로 (자리는 있다는 뜻)
+      h += '<div class="' + cls + '" style="color:#C8A96E;cursor:pointer;" '
+         + 'onclick="pcalOpenDay(' + _pcalY + ',' + _pcalM + ',' + d + ')">' + d + '</div>';
+      continue;
+    }
+    h += '<div class="' + cls + '">' + d + '</div>';
+  }
+  h += '</div></div>';
+
+  if(_pcalMonthTickets(_pcalY, _pcalM, byDate).length === 0){
+    h += '<div class="pcal-note">이 달은 아직 열린 자리가 없습니다. 위 월 스트립에서 다른 달을 보세요.</div>';
+  }
+
+  host.innerHTML = h;
+}
+
+function pcalRenderAll(){
+  ['pcalTicket','pcalHome'].forEach(function(id){
+    try { renderPhotoCalInto(id); } catch(e){ console.warn('[pcal] 렌더 실패', id, e); }
+  });
+}
+window.pcalRenderAll = pcalRenderAll;
+
+function pcalGo(y, m){
+  _pcalY = y; _pcalM = m; _pcalSelKey = null;
+  pcalRenderAll();
+}
+window.pcalGo = pcalGo;
+
+// ── 날짜 바텀시트 ──
+function pcalOpenDay(y, m, d){
+  var byDate = _pcalByDate();
+  var key = y*10000 + m*100 + d;
+  var list = byDate[key] || [];
+  if(!list.length) return;
+  _pcalSelKey = key;
+  pcalRenderAll();
+
+  if(typeof _sortTickets === 'function') list = _sortTickets(list);
+
+  var dt = new Date(y, m-1, d);
+  var h = '<div class="pc-grab"></div>';
+  h += '<div class="pc-h"><div class="num">' + d + '</div>'
+     + '<div class="dw">' + _pcalDowName(dt) + '</div>'
+     + '<div class="cnt">' + list.length + '곳</div></div>';
+
+  list.forEach(function(t){
+    var r = _pcalRest(t);
+    var dead = (t.status === 'soldout') ||
+               (typeof _isTicketExpired === 'function' && _isTicketExpired(t));
+    var ph = _pcalPhoto(t);
+    var bits = [];
+    if(r && (r.zoneEn || r.cityEn)) bits.push(_pcalEsc(r.zoneEn || r.cityEn));
+    if(t.time) bits.push(_pcalEsc(t.time));
+    if(t.slots){
+      var sp = [];
+      if(t.slots.s1 > 0) sp.push('1인×' + t.slots.s1);
+      if(t.slots.s2 > 0) sp.push('2인×' + t.slots.s2);
+      if(t.slots.s4 > 0) sp.push('4인×' + t.slots.s4);
+      if(sp.length) bits.push(sp.join(' '));
+    }
+    if(t.ticketGenre) bits.push(_pcalEsc(t.ticketGenre));
+
+    h += '<div class="pcal-item" onclick="pcalGoTicket(\'' + _pcalEsc(String(t.id)) + '\')">';
+    h += '<div class="ph">' + (ph ? '<img src="' + _pcalEsc(ph) + '" alt="">' : '') + '</div>';
+    h += '<div class="m"><div class="nm">' + _pcalEsc(_pcalRestName(t)) + '</div>'
+       + '<div class="sub">' + bits.join(' · ') + '</div></div>';
+    h += '<div class="rt"><div class="st' + (dead ? ' full' : '') + '">'
+       + (dead ? (t.status === 'soldout' ? '마감' : '기한 만료') : '자리 있음')
+       + '</div><div class="go">›</div></div>';
+    h += '</div>';
+  });
+
+  var body = document.getElementById('pcalSheetBody');
+  if(body) body.innerHTML = h;
+  var sheet = document.getElementById('pcalSheet');
+  if(sheet) sheet.style.display = 'block';
+}
+window.pcalOpenDay = pcalOpenDay;
+
+function pcalCloseSheet(){
+  var sheet = document.getElementById('pcalSheet');
+  if(sheet) sheet.style.display = 'none';
+}
+window.pcalCloseSheet = pcalCloseSheet;
+
+function pcalGoTicket(id){
+  pcalCloseSheet();
+  if(typeof openTicketDetail === 'function') openTicketDetail(id);
+}
+window.pcalGoTicket = pcalGoTicket;
+
+// ── GNB 를 하단에 붙이고 Quest → Cast 로 바꾼다 (플래그 뒤에서만) ──
+function pcalApplyGnb(){
+  try {
+    var on  = (typeof newHomeEnabled === 'function') && newHomeEnabled();
+    var gnb = document.getElementById('mainGnb');
+    if(gnb) gnb.classList.toggle('gnb-flat', on);
+    var qb = document.getElementById('gnbQuest');
+    if(qb){
+      var lb = qb.querySelector('.gnb-label');
+      if(lb) lb.textContent = on ? 'Cast' : 'Quest';
+    }
+    // 일정 탭: 캘린더가 히어로부터 시작하므로 상단 필터바 높이만큼의 여백을 없앤다
+    var inner = document.getElementById('ticketViewInner');
+    if(inner) inner.style.paddingTop = on ? '0' : '138px';
+  } catch(e){}
+}
+window.pcalApplyGnb = pcalApplyGnb;
+
+// ══════════════════════════════════════════════════════════════
+// 🆕 2026.08 사진 캘린더 — 슈퍼어드민 편집
+//   히어로(월별 표지)와 날짜 타일 사진을 여기서 전부 갈아 끼운다.
+//   사진 소스는 두 갈래뿐이다.
+//     ① 레스토랑 등록 때 이미 쓴 사진 고르기 → URL 만 저장 (업로드 없음, 가장 가벼움)
+//     ② 새 파일 올리기 → Supabase Storage 'taam-photos' 로 업로드 후 URL 저장
+//   어느 쪽이든 index.html 에는 URL 문자열만 남는다.
+// ══════════════════════════════════════════════════════════════
+var _pcalAdmY = null, _pcalAdmM = null;
+var _pcalAdmDraft = { photo_url:'', regions:'', photo_credit:'' };
+var _pcalPickTarget = null;
+var _pcalAdmBusy = false;
+
+function pcalAdminOpen(){
+  if(typeof _isSuperAdmin === 'function' && !_isSuperAdmin()){
+    if(typeof showToast === 'function') showToast('🔒','권한 부족','슈퍼어드민 전용');
+    return;
+  }
+  var now = new Date();
+  if(!_pcalAdmY){ _pcalAdmY = _pcalY || now.getFullYear(); _pcalAdmM = _pcalM || (now.getMonth()+1); }
+  var pg = document.getElementById('pcalAdminPage');
+  if(pg) pg.style.display = 'flex';
+  if(_pcalCovers === null){
+    pcalLoadCovers().then(function(){ _pcalAdmLoadDraft(); pcalAdminRender(); });
+  } else {
+    _pcalAdmLoadDraft();
+    pcalAdminRender();
+  }
+}
+window.pcalAdminOpen = pcalAdminOpen;
+
+function pcalAdminClose(){
+  var pg = document.getElementById('pcalAdminPage');
+  if(pg) pg.style.display = 'none';
+  pcalRenderAll();
+}
+window.pcalAdminClose = pcalAdminClose;
+
+function _pcalAdmLoadDraft(){
+  var cov = (_pcalCovers && _pcalCovers[_pcalAdmY + '-' + _pcalAdmM]) || null;
+  _pcalAdmDraft = {
+    photo_url:    cov && cov.photo_url    ? cov.photo_url    : '',
+    regions:      cov && cov.regions      ? cov.regions      : '',
+    photo_credit: cov && cov.photo_credit ? cov.photo_credit : ''
+  };
+}
+
+// 다시 그리기 전에 입력창에 친 값을 잃지 않게 draft 로 옮긴다
+function _pcalAdmSyncInputs(){
+  var r = document.getElementById('pcalAdmRegions');
+  var c = document.getElementById('pcalAdmCredit');
+  if(r) _pcalAdmDraft.regions = r.value;
+  if(c) _pcalAdmDraft.photo_credit = c.value;
+}
+
+function pcalAdmMove(delta){
+  _pcalAdmSyncInputs();
+  var i = _pcalAdmY*12 + (_pcalAdmM-1) + delta;
+  _pcalAdmY = Math.floor(i/12);
+  _pcalAdmM = (i%12) + 1;
+  _pcalAdmLoadDraft();
+  pcalAdminRender();
+}
+window.pcalAdmMove = pcalAdmMove;
+
+function pcalAdminRender(){
+  var body = document.getElementById('pcalAdminBody');
+  if(!body) return;
+  var byDate = _pcalByDate();
+  var list = _pcalMonthTickets(_pcalAdmY, _pcalAdmM, byDate);
+  if(typeof _sortTickets === 'function') list = _sortTickets(list);
+
+  var h = '';
+
+  // ── 월 이동 ──
+  h += '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">'
+     + '<button class="pcal-adm-btn" onclick="pcalAdmMove(-1)">‹</button>'
+     + '<div style="font-family:var(--font-main);font-size:17px;font-weight:800;color:#1a1a18;">'
+     + _pcalAdmY + '년 ' + _pcalAdmM + '월</div>'
+     + '<button class="pcal-adm-btn" onclick="pcalAdmMove(1)">›</button>'
+     + '<div style="margin-left:auto;font-size:11px;color:#8a8580;">자리 ' + list.length + '건</div>'
+     + '</div>';
+
+  // ── 히어로 ──
+  h += '<div style="font-family:var(--font-main);font-size:12px;font-weight:800;letter-spacing:.1em;color:#5C0A14;margin:4px 0 10px;">월별 히어로</div>';
+  h += '<div style="border-radius:12px;overflow:hidden;background:#e9e5df;aspect-ratio:16/10;margin-bottom:10px;">';
+  if(_pcalAdmDraft.photo_url){
+    h += '<img src="' + _pcalEsc(_pcalAdmDraft.photo_url) + '" style="width:100%;height:100%;object-fit:cover;">';
+  } else {
+    h += '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:11px;letter-spacing:.2em;color:#a8a29a;">PHOTO NOT SET</div>';
+  }
+  h += '</div>';
+  h += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">'
+     + '<button class="pcal-adm-btn" onclick="pcalPickOpen(\'hero\')">레스토랑 사진에서 고르기</button>'
+     + '<button class="pcal-adm-btn" onclick="pcalAdmUpload(\'hero\')">새 사진 올리기</button>'
+     + (_pcalAdmDraft.photo_url ? '<button class="pcal-adm-btn" onclick="pcalAdmSetHero(\'\')">사진 비우기</button>' : '')
+     + '</div>';
+  h += '<div style="margin-bottom:9px;"><div style="font-size:11px;color:#8a8580;margin-bottom:5px;">지역 (예: 도쿄 · 오사카 · 교토)</div>'
+     + '<input id="pcalAdmRegions" class="pcal-adm-inp" type="text" value="' + _pcalEsc(_pcalAdmDraft.regions) + '" placeholder="비워두면 그 달 티켓 지역으로 자동 표시"></div>';
+  h += '<div style="margin-bottom:12px;"><div style="font-size:11px;color:#8a8580;margin-bottom:5px;">사진 크레딧 (선택)</div>'
+     + '<input id="pcalAdmCredit" class="pcal-adm-inp" type="text" value="' + _pcalEsc(_pcalAdmDraft.photo_credit) + '" placeholder="Photography · 이름"></div>';
+  h += '<button class="pcal-adm-btn dark" style="width:100%;padding:12px;font-size:12px;" onclick="pcalAdmSaveCover()">이 달 표지 저장</button>';
+
+  // ── 날짜 타일 ──
+  h += '<div style="font-family:var(--font-main);font-size:12px;font-weight:800;letter-spacing:.1em;color:#5C0A14;margin:26px 0 4px;">날짜 타일 사진</div>';
+  h += '<div style="font-size:11px;color:#8a8580;line-height:1.7;margin-bottom:8px;">'
+     + '지정하지 않으면 그 레스토랑의 등록 사진이 자동으로 쓰인다. 타일은 <b>요리 단품 클로즈업</b>이 가장 좋다 — 실내 전경·인물컷은 히어로에서만.</div>';
+
+  if(!list.length){
+    h += '<div style="padding:22px 0;text-align:center;font-size:12px;color:#a8a29a;">이 달에 등록된 티켓이 없습니다</div>';
+  } else {
+    list.forEach(function(t){
+      var ph = _pcalPhoto(t);
+      var own = !!t.tilePhoto;
+      h += '<div class="pcal-adm-row">';
+      h += '<div class="th">' + (ph ? '<img src="' + _pcalEsc(ph) + '">' : '') + '</div>';
+      h += '<div style="flex:1;min-width:0;">'
+         + '<div style="font-family:var(--font-main);font-size:13px;font-weight:700;color:#1a1a18;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'
+         + _pcalEsc(_pcalRestName(t)) + '</div>'
+         + '<div style="font-size:10.5px;color:#8a8580;margin-top:3px;">' + _pcalEsc(t.date || '') + ' · ' + _pcalEsc(t.time || '')
+         + ' · ' + (own ? '타일 지정됨' : '레스토랑 사진 사용 중') + '</div>'
+         + '</div>';
+      h += '<div style="display:flex;flex-wrap:wrap;gap:5px;justify-content:flex-end;max-width:112px;">'
+         + '<button class="pcal-adm-btn" onclick="pcalPickOpen(\'tile\',\'' + _pcalEsc(String(t.id)) + '\')">고르기</button>'
+         + '<button class="pcal-adm-btn" onclick="pcalAdmUpload(\'tile\',\'' + _pcalEsc(String(t.id)) + '\')">올리기</button>'
+         + (own ? '<button class="pcal-adm-btn" onclick="pcalAdmSetTile(\'' + _pcalEsc(String(t.id)) + '\',\'\')">되돌리기</button>' : '')
+         + '</div>';
+      h += '</div>';
+    });
+  }
+
+  body.innerHTML = h;
+}
+window.pcalAdminRender = pcalAdminRender;
+
+function pcalAdmSetHero(url){
+  _pcalAdmSyncInputs();
+  _pcalAdmDraft.photo_url = url || '';
+  pcalAdminRender();
+}
+window.pcalAdmSetHero = pcalAdmSetHero;
+
+async function pcalAdmSaveCover(){
+  if(typeof _isSuperAdmin === 'function' && !_isSuperAdmin()){
+    if(typeof showToast === 'function') showToast('🔒','권한 부족','슈퍼어드민 전용');
+    return;
+  }
+  if(!window.sb){
+    if(typeof showToast === 'function') showToast('⚠','저장 불가','Supabase 미연결');
+    return;
+  }
+  _pcalAdmSyncInputs();
+  var payload = {
+    year: _pcalAdmY, month: _pcalAdmM,
+    photo_url:    _pcalAdmDraft.photo_url    || null,
+    regions:      _pcalAdmDraft.regions      || null,
+    photo_credit: _pcalAdmDraft.photo_credit || null,
+    updated_at: new Date().toISOString()
+  };
+  try {
+    var u = await window.sb.auth.getUser();
+    if(u && u.data && u.data.user) payload.updated_by = u.data.user.id;
+  } catch(e){}
+
+  var res = await window.sb.from('month_covers').upsert(payload, { onConflict: 'year,month' });
+  if(res.error){
+    console.warn('⚠ month_covers 저장 실패:', res.error.message);
+    if(typeof showToast === 'function'){
+      var hint = /does not exist|relation/i.test(res.error.message || '')
+        ? 'sql/photo_calendar.sql 을 Supabase SQL Editor 에서 먼저 실행하세요'
+        : (res.error.message || '').slice(0,60);
+      showToast('⚠','표지 저장 실패', hint);
+    }
+    return;
+  }
+  if(!_pcalCovers) _pcalCovers = {};
+  _pcalCovers[_pcalAdmY + '-' + _pcalAdmM] = {
+    year:_pcalAdmY, month:_pcalAdmM,
+    photo_url: payload.photo_url, regions: payload.regions, photo_credit: payload.photo_credit
+  };
+  if(typeof showToast === 'function') showToast('✅','표지 저장', _pcalAdmY + '년 ' + _pcalAdmM + '월');
+  pcalRenderAll();
+}
+window.pcalAdmSaveCover = pcalAdmSaveCover;
+
+async function pcalAdmSetTile(ticketId, url){
+  if(typeof _isSuperAdmin === 'function' && !_isSuperAdmin()){
+    if(typeof showToast === 'function') showToast('🔒','권한 부족','슈퍼어드민 전용');
+    return;
+  }
+  if(!window.sb) return;
+  var res = await window.sb.from('ticket_products').update({ tile_photo: url || null }).eq('id', String(ticketId));
+  if(res.error){
+    console.warn('⚠ tile_photo 저장 실패:', res.error.message);
+    if(typeof showToast === 'function'){
+      var hint = /column|does not exist|schema cache/i.test(res.error.message || '')
+        ? 'sql/photo_calendar.sql 을 Supabase SQL Editor 에서 먼저 실행하세요'
+        : (res.error.message || '').slice(0,60);
+      showToast('⚠','타일 저장 실패', hint);
+    }
+    return;
+  }
+  var t = ticketDB.find(function(x){ return String(x.id) === String(ticketId); });
+  if(t) t.tilePhoto = url || '';
+  if(typeof showToast === 'function') showToast('✅','타일 사진', url ? '지정했습니다' : '레스토랑 사진으로 되돌렸습니다');
+  pcalAdminRender();
+  pcalRenderAll();
+}
+window.pcalAdmSetTile = pcalAdmSetTile;
+
+// ── 새 사진 올리기 (Supabase Storage 'taam-photos') ──
+function pcalAdmUpload(kind, ticketId){
+  if(_pcalAdmBusy) return;
+  var inp = document.createElement('input');
+  inp.type = 'file';
+  inp.accept = 'image/*';
+  inp.onchange = async function(){
+    var f = inp.files && inp.files[0];
+    if(!f) return;
+    if(typeof uploadImageToStorage !== 'function'){
+      if(typeof showToast === 'function') showToast('⚠','업로드 불가','업로드 함수 없음');
+      return;
+    }
+    _pcalAdmBusy = true;
+    if(typeof showToast === 'function') showToast('⏳','업로드 중','잠시만요');
+    var url = null;
+    try { url = await uploadImageToStorage(f, 'taam-photos'); } catch(e){ console.warn(e); }
+    _pcalAdmBusy = false;
+    if(!url){
+      if(typeof showToast === 'function') showToast('⚠','업로드 실패','taam-photos 버킷·권한을 확인하세요 (sql/photo_calendar.sql)');
+      return;
+    }
+    if(kind === 'hero') pcalAdmSetHero(url);
+    else pcalAdmSetTile(ticketId, url);
+  };
+  inp.click();
+}
+window.pcalAdmUpload = pcalAdmUpload;
+
+// ── 레스토랑 등록 사진에서 고르기 ──
+function _pcalAllRestPhotos(){
+  var out = [], seen = {};
+  if(typeof restaurantDB === 'undefined' || !restaurantDB) return out;
+  restaurantDB.forEach(function(r){
+    var cand = [r.photoHero, r.photoCard, r.photo, r.img];
+    if(Array.isArray(r.detailPhotos)) cand = cand.concat(r.detailPhotos);
+    cand.forEach(function(p){
+      if(!p || typeof p !== 'string') return;
+      if(seen[p]) return;
+      seen[p] = 1;
+      out.push({ url: p, name: r.name || '' });
+    });
+  });
+  return out;
+}
+
+function pcalPickOpen(kind, ticketId){
+  _pcalPickTarget = { kind: kind, id: ticketId || null };
+  if(kind === 'hero') _pcalAdmSyncInputs();
+  var m = document.getElementById('pcalPickModal');
+  if(m) m.style.display = 'block';
+  var s = document.getElementById('pcalPickSearch');
+  if(s) s.value = '';
+  pcalPickRender('');
+}
+window.pcalPickOpen = pcalPickOpen;
+
+var _pcalPickList = [];   // 화면에 뿌린 순서 — onclick 은 URL 대신 인덱스를 넘긴다
+                          // (URL 에 따옴표가 섞이면 onclick 문자열이 깨지므로)
+function pcalPickRender(q){
+  var grid = document.getElementById('pcalPickGrid');
+  if(!grid) return;
+  var kw = String(q || '').trim().toLowerCase();
+  var all = _pcalAllRestPhotos().filter(function(o){
+    return !kw || (o.name || '').toLowerCase().indexOf(kw) >= 0;
+  });
+  if(!all.length){
+    _pcalPickList = [];
+    grid.innerHTML = '<div style="grid-column:1/-1;padding:30px 0;text-align:center;font-size:12px;color:#a8a29a;">사진이 없습니다</div>';
+    return;
+  }
+  _pcalPickList = all.slice(0, 300);
+  var h = '';
+  _pcalPickList.forEach(function(o, i){
+    h += '<div class="pk" onclick="pcalPickChoose(' + i + ')">'
+       + '<img src="' + _pcalEsc(o.url) + '" loading="lazy">'
+       + '<span>' + _pcalEsc(o.name) + '</span></div>';
+  });
+  if(all.length > 300) h += '<div style="grid-column:1/-1;padding:10px 0;text-align:center;font-size:11px;color:#a8a29a;">' + all.length + '장 중 300장만 표시 — 이름으로 찾으세요</div>';
+  grid.innerHTML = h;
+}
+window.pcalPickRender = pcalPickRender;
+
+function pcalPickChoose(idx){
+  var o = _pcalPickList[idx];
+  var tg = _pcalPickTarget;
+  pcalPickClose();
+  if(!tg || !o) return;
+  if(tg.kind === 'hero') pcalAdmSetHero(o.url);
+  else pcalAdmSetTile(tg.id, o.url);
+}
+window.pcalPickChoose = pcalPickChoose;
+
+function pcalPickClose(){
+  var m = document.getElementById('pcalPickModal');
+  if(m) m.style.display = 'none';
+  _pcalPickTarget = null;
+}
+window.pcalPickClose = pcalPickClose;
+
 // ════════════════════════════════════════════════
 // 회원 목록
 // ════════════════════════════════════════════════
@@ -51135,6 +52067,7 @@ async function loadAllTicketProductsFromSupabase(){
         typeClass: row.type_class,
         ticketGenre: row.ticket_genre,
         homeSection: row.home_section || [],
+        tilePhoto: row.tile_photo || '',   // 🆕 2026.08 사진 캘린더 타일 (컬럼 없으면 빈 값)
         isEvent: row.is_event || false,
         uploadedBy: row.uploaded_by,
         uploaderRestId: row.uploader_rest_id,
@@ -54992,7 +55925,9 @@ function applyPhotoToIconDiv(divEl, photoSrc){
       if(typeof renderTicketList === 'function') renderTicketList();
       if(typeof renderPendingApproval === 'function') renderPendingApproval();
       if(typeof updatePendingBadge === 'function') updatePendingBadge();
-      
+      // 🆕 2026.08 사진 캘린더 — 티켓이 들어와야 날짜 타일이 채워진다
+      if(typeof pcalRenderAll === 'function') pcalRenderAll();
+
       console.log('✅ Supabase 티켓 프리로드 완료:', tickets.length, '개');
     } catch(e){
       console.warn('⚠ preloadTicketsFromSupabase 예외:', e);
