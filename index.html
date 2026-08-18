@@ -585,6 +585,17 @@ html.auto-login .splash .bottom-group{display:none !important}
   font-family:var(--font-main);font-size:11px;font-weight:700}
 #pcalDetail .pd-gal{display:grid;grid-template-columns:repeat(3,1fr);gap:3px;border-radius:10px;overflow:hidden}
 #pcalDetail .pd-gal div{aspect-ratio:1;background-size:cover;background-position:center;cursor:pointer}
+
+/* A안 — 유리판을 걷어내고 상세와 한 몸으로. 어드민 메뉴에서 기기별로 B↔A 를 바꿔 본다.
+   판만 사라질 뿐 내용·동작은 완전히 같다. */
+#pcalDetail.skin-black .pd-panel{background:transparent;border:none;border-radius:0;
+  padding:16px 0 0;backdrop-filter:none;-webkit-backdrop-filter:none}
+#pcalDetail.skin-black .pd-row{border-bottom-color:#232326}
+#pcalDetail.skin-black .pd-hr{background:#232326}
+#pcalDetail.skin-black .pd-agree{background:#141014;border-color:#232326}
+#pcalDetail.skin-black .pd-stepper button{background:#1c1a1d;color:#ded9d3}
+#pcalDetail.skin-black .pd-map{border-color:#232326}
+#pcalDetail.skin-black .pd-sum .v{color:#C8A96E}
 #pcalDetail .pd-bar{position:fixed;left:0;right:0;bottom:0;z-index:7;display:flex;align-items:center;
   gap:14px;padding:14px 24px calc(16px + env(safe-area-inset-bottom));
   background:linear-gradient(rgba(11,3,5,0),rgba(11,3,5,.94) 34%);border-top:1px solid rgba(255,255,255,.06)}
@@ -9548,6 +9559,13 @@ window.closePromoCarousel = function(){
             </div>
             <div class="admin-arrow">›</div>
           </div>
+          <div class="admin-menu-item" onclick="togglePdSkin()">
+            <div>
+              <div class="admin-menu-text" id="pdSkinLabel">🎨 자리 상세 판 (이 기기)</div>
+              <div class="admin-menu-sub">캘린더에서 들어가는 자리 상세의 내용 판을 B(글라스모피즘) ↔ A(검정)로 바꿔 본다. 내용·동작은 완전히 같다</div>
+            </div>
+            <div class="admin-arrow">›</div>
+          </div>
           <div class="admin-menu-item" onclick="pcalAdminOpen()">
             <div>
               <div class="admin-menu-text">🖼 사진 캘린더 편집</div>
@@ -15954,6 +15972,7 @@ function adminDirectAccess(){
   loadRole(); // PIN으로 설정된 역할 로드
   try{ if(typeof cardPayTestSync === 'function') cardPayTestSync(); }catch(e){}
   try{ if(typeof newHomeSync === 'function') newHomeSync(); }catch(e){}
+  try{ if(typeof pdSkinSync === 'function') pdSkinSync(); }catch(e){}
   try{ if(typeof pcalApplyGnb === 'function') pcalApplyGnb(); }catch(e){}
   // 참고: bootAutoLogin 경로에서도 이 함수가 호출되는데, 거기서 이미 ready 처리됨
 
@@ -37992,6 +38011,7 @@ function pcalOpenTicket(id){
 
   var inner = document.getElementById('pcalDetailInner');
   if(inner) inner.innerHTML = _pcalDetailHtml(t, r, dead, expired);
+  pcalApplySkin();
   var scr = document.getElementById('pcalDetail');
   if(scr){ scr.style.display = 'block'; scr.scrollTop = 0; }
   if(!dead) pcalRefreshPay();
@@ -38098,6 +38118,46 @@ function _pcalDetailHtml(t, r, dead, expired){
 
   return h;
 }
+
+// ── 판 색 (B 글라스 ↔ A 검정) — 기기별로 바꿔 보는 스위치 ──
+//   실기기에서 둘을 나란히 보려면 기기에서 켜고 꺼야 한다. localStorage 라 기기마다 별개.
+function pcalSkin(){
+  try { return (localStorage.getItem('taamPdSkin') === 'black') ? 'black' : 'glass'; }
+  catch(e){ return 'glass'; }
+}
+window.pcalSkin = pcalSkin;
+
+function pcalApplySkin(){
+  var scr = document.getElementById('pcalDetail');
+  if(scr) scr.classList.toggle('skin-black', pcalSkin() === 'black');
+}
+window.pcalApplySkin = pcalApplySkin;
+
+function togglePdSkin(){
+  var next = (pcalSkin() === 'black') ? 'glass' : 'black';
+  try { localStorage.setItem('taamPdSkin', next); }
+  catch(e){
+    if(typeof showToast === 'function') showToast('⚠','저장 실패','이 브라우저에서 localStorage 를 쓸 수 없습니다');
+    return;
+  }
+  pcalApplySkin();
+  pdSkinSync();
+  if(typeof showToast === 'function'){
+    showToast('🎨','자리 상세 판',
+      next === 'black' ? 'A · 검정 — 상세와 한 몸' : 'B · 글라스모피즘 — 유리판 위에');
+  }
+}
+window.togglePdSkin = togglePdSkin;
+
+function pdSkinSync(){
+  try {
+    var lbl = document.getElementById('pdSkinLabel');
+    if(lbl) lbl.textContent = (pcalSkin() === 'black')
+      ? '🎨 자리 상세 판 (이 기기) — A · 검정'
+      : '🎨 자리 상세 판 (이 기기) — B · 글라스모피즘';
+  } catch(e){}
+}
+window.pdSkinSync = pdSkinSync;
 
 // ── 탭 전환 ──
 function pcalTab(i){
@@ -38271,6 +38331,7 @@ function pcalPay(){
       wrap.classList.remove('pd-flash');
       void wrap.offsetWidth;
       wrap.classList.add('pd-flash');
+      setTimeout(function(){ wrap.classList.remove('pd-flash'); }, 1000);
     }
     if(typeof showToast === 'function') showToast('📄','취소 규정','동의하셔야 결제할 수 있습니다');
     return;
