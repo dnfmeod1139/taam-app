@@ -39776,7 +39776,26 @@ async function pcalAdmSaveCover(){
   _pcalAdmSyncInputs();
   //   photo_credit 는 화면에서 쓰지 않으므로 보내지 않는다.
   //   upsert 는 보낸 컬럼만 갱신하므로 기존 값이 지워지지도 않는다.
-  var cuts = (_pcalAdmDraft.cuts || []).filter(function(x){ return !!x; });
+  var L = magLayout(_pcalAdmDraft.layout);
+  var rawCuts = (_pcalAdmDraft.cuts || []).slice(0, L.n);
+  var cuts = rawCuts.filter(function(x){ return !!x; });
+
+  // 🔧 사진이 하나도 없으면 저장하지 않는다.
+  //   예전엔 그대로 저장돼서 cover_layout 만 들어가고 사진은 비는 행이 만들어졌다.
+  //   화면에서는 "저장됐다" 고 하는데 표지는 그대로라, 편집이 안 먹는 것처럼 보였다.
+  if(!cuts.length){
+    if(typeof showToast === 'function'){
+      showToast('⚠','사진을 먼저 지정하세요','컷에 사진이 없어 저장하지 않았습니다');
+    }
+    return;
+  }
+  // 일부 컷이 비었으면 저장은 하되 분명히 알린다 (빈 컷은 앞 사진으로 채워진다)
+  var emptyIdx = [];
+  for(var ei=0; ei<L.n; ei++){ if(!rawCuts[ei]) emptyIdx.push(ei+1); }
+  if(emptyIdx.length && typeof showToast === 'function'){
+    showToast('⚠','빈 컷이 있습니다', emptyIdx.join('·') + '번 컷은 앞 사진으로 채워집니다');
+  }
+
   var payload = {
     year: _pcalAdmY, month: _pcalAdmM,
     photo_url: _pcalAdmDraft.photo_url || cuts[0] || null,
@@ -39893,7 +39912,10 @@ function pcalAdmUpload(kind, ticketId){
     try { url = await uploadImageToStorage(f, 'taam-photos'); } catch(e){ console.warn(e); }
     _pcalAdmBusy = false;
     if(!url){
-      if(typeof showToast === 'function') showToast('⚠','업로드 실패','taam-photos 버킷·권한을 확인하세요 (sql/photo_calendar.sql)');
+      if(typeof showToast === 'function'){
+        showToast('⚠','사진 업로드 실패','저장 안 됨 — 콘솔의 Storage 오류를 확인하세요 (taam-photos 버킷·권한)');
+      }
+      console.warn('⚠ 표지 사진 업로드 실패 — uploadImageToStorage 가 null 을 돌려줬습니다. 위 Storage 오류 참고.');
       return;
     }
     if(kind === 'hero') pcalAdmSetHero(url);
@@ -39943,7 +39965,9 @@ function pcalPickRender(q){
   });
   if(!all.length){
     _pcalPickList = [];
-    grid.innerHTML = '<div style="grid-column:1/-1;padding:30px 0;text-align:center;font-size:12px;color:#a8a29a;">사진이 없습니다</div>';
+    grid.innerHTML = '<div style="grid-column:1/-1;padding:30px 0;text-align:center;font-size:12px;color:#a8a29a;line-height:1.8;">'
+      + '고를 수 있는 사진이 없습니다<br>'
+      + '<span style="font-size:11px;color:#c0b8ad;">레스토랑 등록 사진이 아직 안 불러와졌거나 등록된 사진이 없습니다.<br>「새 사진 올리기」를 쓰세요.</span></div>';
     return;
   }
   _pcalPickList = all.slice(0, 300);
