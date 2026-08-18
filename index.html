@@ -19,6 +19,35 @@
 <!-- 🆕 홈 화면 아이콘: iOS(apple-touch-icon) + 일반 favicon. Android/PWA 는 manifest.json icons 사용 -->
 <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+<!-- 🆕 2026.08 폰트 잔상(FOUT) 제거 ───────────────────────────────
+     예전엔 display=swap 이라 시스템 폰트로 먼저 그린 뒤 웹폰트가 오면 갈아 끼웠다.
+     그 갈아 끼우는 순간이 "글자가 바뀌는" 잔상이었다.
+       · display=block  — 준비될 때까지 글자를 아예 안 그린다 (엉뚱한 폰트가 안 보임)
+       · 아래 게이트     — 준비될 때까지 화면 자체를 덮는다 (빈 글자도 안 보임)
+     둘 다 상한이 있다. 폰트가 늦거나 실패해도 화면은 반드시 뜬다.
+       JS 가 돌면 document.fonts.ready 또는 1.2초
+       JS 가 죽어도 CSS 애니메이션이 2초 뒤 강제로 보여준다
+     서비스워커가 fonts.gstatic.com 을 캐시하므로 두 번째 실행부터는 거의 즉시다. -->
+<style>
+  html:not(.fonts-ready) body{opacity:0;animation:tkFontGate 0s 2s forwards}
+  @keyframes tkFontGate{to{opacity:1}}
+  html.fonts-ready body{opacity:1}
+</style>
+<script>
+(function(){
+  var shown = false;
+  function show(){
+    if(shown) return; shown = true;
+    try { document.documentElement.classList.add('fonts-ready'); } catch(e){}
+  }
+  try {
+    if (document.fonts && document.fonts.ready && typeof document.fonts.ready.then === 'function') {
+      document.fonts.ready.then(show).catch(show);
+    }
+  } catch(e){}
+  setTimeout(show, 1200);   // 폰트가 늦어도 1.2초 뒤에는 무조건 보여준다
+})();
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <!-- 🆕 2026.08 셀룰러 초기 로딩 개선: 외부 스크립트 도메인 미리 연결.
@@ -26,8 +55,8 @@
      DNS→TCP→TLS 를 시작했다. 셀룰러 RTT(100~300ms)에서 이 왕복이 그대로 지연이 된다. -->
 <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
 <link rel="preconnect" href="https://unpkg.com" crossorigin>
-<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Oswald:wght@300;400;500;600;700&family=Noto+Sans+KR:wght@400;500;700;900&family=Noto+Sans+JP:wght@400;500;700;900&display=swap" onload="this.onload=null;this.rel='stylesheet'">
-<noscript><link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Oswald:wght@300;400;500;600;700&family=Noto+Sans+KR:wght@400;500;700;900&family=Noto+Sans+JP:wght@400;500;700;900&display=swap" rel="stylesheet"></noscript>
+<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Oswald:wght@300;400;500;600;700&family=Noto+Sans+KR:wght@400;500;700;900&family=Noto+Sans+JP:wght@400;500;700;900&display=block" onload="this.onload=null;this.rel='stylesheet'">
+<noscript><link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Oswald:wght@300;400;500;600;700&family=Noto+Sans+KR:wght@400;500;700;900&family=Noto+Sans+JP:wght@400;500;700;900&display=block" rel="stylesheet"></noscript>
 <link rel="preload" as="style" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css" onload="this.onload=null;this.rel='stylesheet'">
 <noscript><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css"></noscript>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js" defer></script>
