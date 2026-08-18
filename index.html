@@ -38418,35 +38418,29 @@ window.pcalCloseTicket = pcalCloseTicket;
 function _pcalDetailHtml(t, r, dead, expired){
   var lang = window._tkCurrentLang;
 
-  // 날짜 — '8월 22일 (토) 12:00'
+  // 날짜 — 달력·목록과 같은 영문 표기로 맞춘다: 'AUG 21 FRI · 12:00 PM'
+  //   목록에서 'AUG 21 · 12:00 PM' 을 보고 눌렀는데 상세만 한글이면
+  //   같은 자리인지 한 박자 늦게 알아챈다.
   var full = (typeof _tkFullDate === 'function') ? _tkFullDate(t) : '';
   var fp = String(full).split('.');
   var whenTxt = '';
   if(fp.length === 3){
     var yy = parseInt(fp[0],10), mo = parseInt(fp[1],10), dd = parseInt(fp[2],10);
-    var dow = ['일','월','화','수','목','금','토'][new Date(yy, mo-1, dd).getDay()];
-    if(lang === 'en'){
-      var mn = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-      whenTxt = mn[mo-1] + ' ' + dd;
-    } else if(lang === 'ja'){
-      whenTxt = mo + '月' + dd + '日';
-    } else {
-      whenTxt = mo + '월 ' + dd + '일 (' + dow + ')';
-    }
+    whenTxt = _magMonShort(mo) + ' ' + dd + ' ' + _pcalWkNames()[new Date(yy, mo-1, dd).getDay()];
   }
-  if(t.time) whenTxt += (whenTxt ? '  ' : '') + t.time;
+  if(t.time) whenTxt += (whenTxt ? ' · ' : '') + _pcalTime12(t.time);
 
   // 매장명 · 지역 · 장르 · 좌석
   var name = _pcalRestName(t);
+  // 목록과 같은 순서·형식으로 — '스시, NISHIAZABU'
+  //   좌석 형태(카운터석)는 여기서 빼고 세 번째 탭으로 내린다. 이름 아래 줄은 짧을수록 읽힌다.
   var metaBits = [];
+  if(t.ticketGenre) metaBits.push(_pcalEsc(t.ticketGenre));
   if(r){
     var zone = r.zoneEn || r.cityEn || r.region || '';
     if(zone) metaBits.push(_pcalEsc(zone));
   }
-  if(t.ticketGenre) metaBits.push(_pcalEsc(t.ticketGenre));
-  // 좌석 수는 노출하지 않는다 — 재고를 그대로 보여주는 셈이라 '카운터석' 으로만 쓴다
   var cap = parseInt(t.assignedPax || t.totalPax) || 0;
-  if(cap) metaBits.push('카운터석');
 
   var photo = _pcalPhoto(t) || (r ? (r.photoHero || r.photoCard || r.photo || '') : '');
 
@@ -38458,7 +38452,7 @@ function _pcalDetailHtml(t, r, dead, expired){
   h += '<div class="pd-body">';
   if(whenTxt) h += '<div class="pd-when">' + _pcalEsc(whenTxt) + '</div>';
   h += '<div class="pd-name">' + _pcalEsc(name) + '</div>';
-  if(metaBits.length) h += '<div class="pd-meta">' + metaBits.join(' · ') + '</div>';
+  if(metaBits.length) h += '<div class="pd-meta">' + metaBits.join(', ') + '</div>';
 
   // ── 탭 3개 — 바텀시트를 없애고 여기로 올렸다 ──
   h += '<div class="pd-tabs">';
@@ -38805,9 +38799,9 @@ function magBindDrag(){
 //   색만 바뀐다. 구성·글자 크기·동작은 셋 다 완전히 같다.
 //   화면에서 나란히 봐야 정해지므로 기기에서 눌러 돌린다 (localStorage 라 기기마다 별개).
 var PD_PALETTES = [
-  { key:'',         name:'① 절제', desc:'브랜드 그대로 — 금색은 날짜 한 줄에만' },
-  { key:'pal-ink',  name:'② 잉크', desc:'붉은기를 뺀 순수 무채 — 색은 결제 버튼 하나' },
-  { key:'pal-bone', name:'③ 본',   desc:'흑백만 — 버튼도 흰 판에 검은 글씨' }
+  { key:'pal-ink',  name:'① 잉크', desc:'붉은기를 뺀 순수 무채 — 색은 결제 버튼 하나 (기본)' },
+  { key:'pal-bone', name:'② 본',   desc:'흑백만 — 버튼도 흰 판에 검은 글씨' },
+  { key:'',         name:'③ 절제', desc:'브랜드 그대로 — 배경에 붉은기가 남는다' }
 ];
 
 function pcalPalIdx(){
@@ -38943,9 +38937,19 @@ function _pcalInfoPanel(t, r){
   if(r && r.corkage) drink.push(_pcalEsc(r.corkage));
   if(t.wineMin) drink.push('주류 미니멈 ' + (typeof fxMoney === 'function' ? fxMoney(parseInt(t.wineMin)) : '₩' + parseInt(t.wineMin).toLocaleString()));
 
-  if(info || drink.length){
+  // 좌석 형태 — 이름 아래 줄에서 내려온 것. 좌석 수는 노출하지 않는다(재고 노출)
+  var seat = (parseInt(t.assignedPax || t.totalPax) || 0) ? '카운터석' : '';
+  var pax  = (typeof _pcalPaxLabel === 'function') ? _pcalPaxLabel(t) : '';
+
+  if(info || drink.length || seat || pax){
     h += '<div class="pd-hr" style="margin:16px 0;"></div>';
     h += '<div class="pd-kick">RESTAURANT</div>';
+    if(seat || pax){
+      var line = [];
+      if(seat) line.push(seat);
+      if(pax)  line.push(pax + '인');
+      h += '<div class="pd-text" style="margin-bottom:10px;">좌석 · ' + line.join(' · ') + '</div>';
+    }
     if(drink.length) h += '<div class="pd-text" style="margin-bottom:10px;">주류 · ' + drink.join(' · ') + '</div>';
     if(info) h += '<div class="pd-text">' + _pcalEsc(info) + '</div>';
   }
