@@ -39370,8 +39370,12 @@ function pcalAdminOpen(){
     if(typeof showToast === 'function') showToast('🔒','권한 부족','슈퍼어드민 전용');
     return;
   }
+  // 🔧 지금 캘린더에서 보고 있는 달로 맞춘다.
+  //   예전엔 처음 연 달에 고정돼서, 11월을 보다가 편집을 열어도 8월이 열렸다.
+  //   그 상태로 고치면 "편집한 게 적용 안 된다" 로 보인다 — 실제로는 다른 달을 고친 것이다.
   var now = new Date();
-  if(!_pcalAdmY){ _pcalAdmY = _pcalY || now.getFullYear(); _pcalAdmM = _pcalM || (now.getMonth()+1); }
+  _pcalAdmY = _pcalY || now.getFullYear();
+  _pcalAdmM = _pcalM || (now.getMonth() + 1);
   var pg = document.getElementById('pcalAdminPage');
   if(pg) pg.style.display = 'flex';
   if(_pcalCovers === null){
@@ -39477,15 +39481,22 @@ function pcalAdminRender(){
 
   // ── 히어로 ──
   h += '<div style="font-family:var(--font-main);font-size:12px;font-weight:800;letter-spacing:.1em;color:#5C0A14;margin:4px 0 10px;">월별 히어로</div>';
-  // 미리보기 — 실제 표지와 같은 컷으로 보여 준다
+  // 미리보기 — 실제 표지와 같은 세로 비율(폰 화면). 컷을 직접 끌어 보여줄 면을 잡는다.
   var _L = magLayout(_pcalAdmDraft.layout);
-  h += '<div style="position:relative;border-radius:12px;overflow:hidden;background:#e9e5df;aspect-ratio:16/10;margin-bottom:10px;">';
-  if((_pcalAdmDraft.cuts || []).some(function(x){ return !!x; })){
+  var _hasAny = (_pcalAdmDraft.cuts || []).some(function(x){ return !!x; });
+  h += '<div id="pcalAdmPreview" style="position:relative;border-radius:14px;overflow:hidden;'
+     + 'background:#0E0E10;width:min(58vw,220px);aspect-ratio:9/16;margin:0 auto 6px;'
+     + 'box-shadow:0 8px 26px rgba(0,0,0,.18);">';
+  if(_hasAny){
     h += _magCutsHtml(_pcalAdmDraft.cuts, _pcalAdmDraft.layout, _pcalAdmDraft.focus);
   } else {
-    h += '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:11px;letter-spacing:.2em;color:#a8a29a;">PHOTO NOT SET</div>';
+    h += '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:11px;letter-spacing:.2em;color:#5f5b57;">PHOTO NOT SET</div>';
   }
   h += '</div>';
+  if(_hasAny){
+    h += '<div style="font-size:10.5px;color:#8a8580;text-align:center;margin-bottom:14px;">'
+       + '미리보기에서 컷을 끌면 보여줄 면이 바뀝니다' + (_L.n > 1 ? ' (컷마다 따로)' : '') + '</div>';
+  }
 
   // 컷 나누기
   h += '<div style="font-size:11px;color:#8a8580;margin-bottom:6px;">컷 나누기</div>';
@@ -39575,8 +39586,64 @@ function pcalAdminRender(){
   }
 
   body.innerHTML = h;
+  _pcalBindPreviewDrag();
 }
 window.pcalAdminRender = pcalAdminRender;
+
+// 미리보기 안의 컷을 직접 끌어 보여줄 면을 잡는다.
+//   clip-path 는 마우스/터치 판정에도 적용되므로, 누른 지점이 속한 컷이 정확히 잡힌다.
+//   1컷일 때는 <img> 하나뿐이라 미리보기 전체가 대상이다.
+function _pcalBindPreviewDrag(){
+  var prev = document.getElementById('pcalAdmPreview');
+  if(!prev) return;
+  var targets = prev.querySelectorAll('.cutwrap > .cut');
+  if(!targets.length){
+    var im = prev.querySelector('img');
+    if(im) targets = [prev];   // 1컷 — 미리보기 자체
+  }
+  Array.prototype.forEach.call(targets, function(el, idx){
+    el.style.cursor = 'move';
+    el.style.touchAction = 'none';
+    el.addEventListener('pointerdown', function(ev){ _pcalPrevDown(ev, el, idx, prev); });
+  });
+}
+
+var _pcalPrevDrag = null;
+function _pcalPrevDown(ev, el, idx, prev){
+  ev.preventDefault();
+  var img = el.querySelector('img') || prev.querySelector('img');
+  if(!img) return;
+  var f = _pcalFxEnsure(idx);
+  _pcalPrevDrag = { idx: idx, img: img, el: el, prev: prev,
+                    x0: ev.clientX, y0: ev.clientY, fx: f.x, fy: f.y };
+  try { el.setPointerCapture(ev.pointerId); } catch(e){}
+}
+function _pcalPrevMove(ev){
+  var d = _pcalPrevDrag;
+  if(!d) return;
+  var r = d.prev.getBoundingClientRect();
+  // 끄는 방향과 사진이 움직이는 방향을 맞춘다 — 오른쪽으로 끌면 사진도 오른쪽으로 간다
+  var nx = d.fx - ((ev.clientX - d.x0) / r.width) * 100;
+  var ny = d.fy - ((ev.clientY - d.y0) / r.height) * 100;
+  var f = _pcalFxEnsure(d.idx);
+  f.x = Math.round(Math.max(0, Math.min(100, nx)));
+  f.y = Math.round(Math.max(0, Math.min(100, ny)));
+  d.img.style.objectPosition = f.x + '% ' + f.y + '%';
+  if(f.z > 1.001){
+    d.img.style.transform = 'scale(' + f.z + ')';
+    d.img.style.transformOrigin = f.x + '% ' + f.y + '%';
+  }
+  // 아래 컷별 보정 박스도 같이 움직인다
+  var box = document.querySelector('.pcal-fx .box[data-ci="' + d.idx + '"]');
+  if(box) _pcalFxApply(box, f);
+}
+function _pcalPrevUp(){
+  if(!_pcalPrevDrag) return;
+  _pcalPrevDrag = null;
+}
+document.addEventListener('pointermove', _pcalPrevMove, { passive:false });
+document.addEventListener('pointerup', _pcalPrevUp);
+document.addEventListener('pointercancel', _pcalPrevUp);
 
 function pcalAdmSetHero(url){
   _pcalAdmSyncInputs();
@@ -39748,15 +39815,36 @@ async function pcalAdmSaveCover(){
     }
     return;
   }
+  // 🔧 저장했다고 믿지 말고 DB 에서 되읽어 확인한다.
+  //   RLS·정책·컬럼 문제로 write 가 조용히 반영되지 않으면 "편집했는데 안 바뀐다" 가 된다.
+  //   되읽은 값을 그대로 캐시에 넣으므로, 화면에 보이는 것은 항상 DB 에 있는 것이다.
+  var vf = await window.sb.from('month_covers').select('*')
+             .eq('year', _pcalAdmY).eq('month', _pcalAdmM).maybeSingle();
+
+  if(vf.error || !vf.data){
+    console.warn('⚠ 표지 저장 확인 실패:', vf.error && vf.error.message);
+    if(typeof showToast === 'function'){
+      showToast('⚠','저장이 반영되지 않았습니다',
+        (vf.error && vf.error.message) ? String(vf.error.message).slice(0,60) : '권한(RLS) 또는 정책을 확인하세요');
+    }
+    return;
+  }
+
   if(!_pcalCovers) _pcalCovers = {};
-  _pcalCovers[_pcalAdmY + '-' + _pcalAdmM] = {
-    year:_pcalAdmY, month:_pcalAdmM,
-    photo_url: payload.photo_url, regions: payload.regions,
-    cover_layout: payload.cover_layout || 'single',
-    cover_photos: payload.cover_photos || [],
-    cover_focus:  payload.cover_focus  || []
-  };
-  if(typeof showToast === 'function') showToast('✅','표지 저장', _pcalAdmY + '년 ' + _pcalAdmM + '월');
+  _pcalCovers[_pcalAdmY + '-' + _pcalAdmM] = vf.data;
+
+  var savedUrl = vf.data.photo_url || '';
+  var wantUrl  = payload.photo_url || '';
+  if(wantUrl && savedUrl !== wantUrl){
+    if(typeof showToast === 'function'){
+      showToast('⚠','일부만 저장되었습니다','DB 값이 방금 고른 사진과 다릅니다 — 콘솔을 확인하세요');
+    }
+    console.warn('⚠ 표지 불일치 — 보낸 값:', wantUrl, '/ DB 값:', savedUrl);
+  } else if(typeof showToast === 'function'){
+    showToast('✅','표지 저장됨', _pcalAdmY + '년 ' + _pcalAdmM + '월 · DB 확인 완료');
+  }
+  _pcalAdmLoadDraft();
+  pcalAdminRender();
   pcalRenderAll();
 }
 window.pcalAdmSaveCover = pcalAdmSaveCover;
