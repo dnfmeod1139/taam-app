@@ -508,30 +508,34 @@ html.auto-login .splash .bottom-group{display:none !important}
    날짜를 하나씩 눌러봐야 뭐가 있는지 아는 건 캘린더의 고질적인 약점이라,
    기본값을 「다 보이는 상태」로 둔다. 타일을 누르면 그 날짜로 스크롤만 한다.
    매진·기한만료는 흑백으로 눕히고, 남아 있는 자리만 색을 갖는다. */
-/* 이 달의 자리 — 표처럼 한 줄에 하나.
-   사진은 위 캘린더가 이미 보여 주니 여기서는 반복하지 않는다.
-   날짜 · 매장명 · 지역/시간 · 상태만 남겨 훑기만 해도 읽히게 한다.
+/* 이 달의 자리 — 테이블올 방식의 3줄 블록.
+     매장명(크게) / 장르, 지역(작게) / 시간 for 인원(강조)
+   사진은 위 캘린더가 이미 보여 주니 목록에서는 쓰지 않는다.
+   날짜는 왼쪽 칸에 고정하고 같은 날 두 번째 줄부터는 비운다.
    매진·만료는 회색으로 눕히고, 남아 있는 자리만 금색으로 뜬다. */
 .pcal-mlist{padding:18px 16px 0}
 .pcal-mlist .sec{font-family:'Oswald',sans-serif;font-size:8.5px;letter-spacing:.24em;
-  color:#5f5b57;padding:0 0 9px;border-bottom:1px solid var(--pc-line)}
-.pcal-lrow{display:flex;align-items:center;gap:10px;padding:10px 2px;
-  border-bottom:1px solid #16161a;cursor:pointer;scroll-margin-top:70px;border-radius:6px}
-.pcal-lrow .dt{width:42px;flex:none;display:flex;align-items:baseline;gap:5px}
-.pcal-lrow .dt .dd{font-family:'Bodoni Moda',Didot,serif;font-weight:500;font-size:15px;color:#f2ede7}
-.pcal-lrow .dt .dw{font-family:'Oswald',sans-serif;font-size:7.5px;letter-spacing:.14em;color:#57544f}
+  color:#5f5b57;padding:0 0 10px;border-bottom:1px solid var(--pc-line)}
+.pcal-lrow{display:flex;gap:12px;padding:12px 2px;border-bottom:1px solid #16161a;
+  cursor:pointer;scroll-margin-top:70px;border-radius:6px}
+.pcal-lrow .dt{width:40px;flex:none;padding-top:1px}
+.pcal-lrow .dt .dd{display:block;font-family:'Bodoni Moda',Didot,serif;font-weight:500;
+  font-size:19px;line-height:1;color:#f2ede7}
+.pcal-lrow .dt .dw{display:block;margin-top:3px;font-family:'Oswald',sans-serif;
+  font-size:7.5px;letter-spacing:.14em;color:#57544f}
 .pcal-lrow.cont .dt{opacity:0}
-.pcal-lrow .nm{flex:1;min-width:0;font-size:13px;color:#f2ede7;
+.pcal-lrow .bd{flex:1;min-width:0}
+.pcal-lrow .nm{font-size:14.5px;color:#f2ede7;line-height:1.25;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.pcal-lrow .mt{flex:none;font-family:'Oswald',sans-serif;font-size:9px;letter-spacing:.06em;
-  color:#6f6a65;white-space:nowrap}
-.pcal-lrow .st{flex:none;font-size:9.5px;color:var(--pc-gold);letter-spacing:.03em;white-space:nowrap}
-.pcal-lrow .go{flex:none;font-size:12px;color:#46443f;line-height:1}
+.pcal-lrow .sb{margin-top:3px;font-size:10.5px;color:#7b7671;letter-spacing:.01em;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pcal-lrow .tm{margin-top:5px;font-family:'Oswald','Noto Sans KR',sans-serif;font-size:11px;
+  letter-spacing:.04em;color:var(--pc-gold)}
+.pcal-lrow.dead{opacity:.5}
 .pcal-lrow.dead .dt .dd{color:#57544f}
-.pcal-lrow.dead .nm{color:#6f6a65}
-.pcal-lrow.dead .mt{color:#46443f}
-.pcal-lrow.dead .st{color:#4f4c48}
-.pcal-lrow.dead .go{color:#332f2d}
+.pcal-lrow.dead .nm{color:#7b7671}
+.pcal-lrow.dead .sb{color:#4a4744}
+.pcal-lrow.dead .tm{color:#57544f}
 .pcal-lrow.hl{animation:pcalHl 1.5s ease}
 @keyframes pcalHl{0%,100%{box-shadow:none}22%,62%{box-shadow:0 0 0 1.5px rgba(200,169,110,.75)}}
 
@@ -38112,6 +38116,37 @@ function renderPhotoCalInto(hostId, skipHero){
 // 이 달의 자리를 날짜별로 전부 펼친다.
 //   매진·기한만료는 흑백으로 눕히고, 남아 있는 자리만 색을 갖는다.
 //   자리가 하나도 안 남은 날은 접어서(_pcalDeadDayOpen) 화면을 잡아먹지 않게 한다.
+// 인원 표기 — 테이블올의 'for 1 ~ 4' 형식
+function _pcalPaxLabel(t){
+  var a = [];
+  try {
+    if(t.slots && t.slots.mode === 'flex' && Array.isArray(t.slots.allowed) && t.slots.allowed.length){
+      a = t.slots.allowed.slice();
+    } else if(t.slots){
+      [1,2,4].forEach(function(n){ if(parseInt(t.slots['s'+n], 10) > 0) a.push(n); });
+    }
+  } catch(e){}
+  if(a.length){
+    a.sort(function(x,y){ return x - y; });
+    return (a.length > 1) ? (a[0] + ' ~ ' + a[a.length-1]) : String(a[0]);
+  }
+  var mn = parseInt(t.minPax, 10), mx = parseInt(t.maxPax, 10);
+  if(mn && mx && mn !== mx) return mn + ' ~ ' + mx;
+  if(mx) return String(mx);
+  return '';
+}
+
+// 12시간제 (AM/PM) — 달력이 전부 영문이라 시간도 같은 표기로 맞춘다
+function _pcalTime12(s){
+  if(!s || String(s).indexOf(':') < 0) return _pcalEsc(s || '');
+  var p = String(s).split(':');
+  var hh = parseInt(p[0], 10);
+  if(isNaN(hh)) return _pcalEsc(s);
+  var ap = (hh >= 12) ? 'PM' : 'AM';
+  var h12 = (hh > 12) ? hh - 12 : (hh === 0 ? 12 : hh);
+  return h12 + ':' + p[1] + ' ' + ap;
+}
+
 function _pcalMonthListHtml(byDate){
   var lo = _pcalY*10000 + _pcalM*100, hi = lo + 99;
   var keys = Object.keys(byDate).map(Number)
@@ -38136,21 +38171,28 @@ function _pcalMonthListHtml(byDate){
       var r = _pcalRest(t);
       var dead = (t.status === 'soldout') ||
                  (typeof _isTicketExpired === 'function' && _isTicketExpired(t));
-      var meta = [];
-      if(r && (r.zoneEn || r.cityEn)) meta.push(_pcalEsc(r.zoneEn || r.cityEn));
-      if(t.time) meta.push(_pcalEsc(t.time));
 
-      // 같은 날 두 번째 줄부터는 날짜를 비운다 (표처럼 읽히게)
+      // 2행: 장르, 지역
+      var sub = [];
+      if(t.ticketGenre) sub.push(_pcalEsc(t.ticketGenre));
+      if(r && (r.zoneEn || r.cityEn)) sub.push(_pcalEsc(r.zoneEn || r.cityEn));
+
+      // 3행: 시간 for 인원
+      var pax = _pcalPaxLabel(t);
+      var tline = dead
+        ? (t.status === 'soldout' ? '마감' : '기한 만료')
+        : (_pcalTime12(t.time) + (pax ? ' for ' + pax : ''));
+
       h += '<div class="pcal-lrow' + (dead ? ' dead' : '') + (idx ? ' cont' : '') + '"'
          + (idx === 0 ? ' id="pcalDay' + key + '"' : '')
          + ' onclick="pcalGoTicket(\'' + _pcalEsc(String(t.id)) + '\')">';
       h += '<div class="dt"><span class="dd">' + d + '</span>'
          + '<span class="dw">' + wk[dt.getDay()] + '</span></div>';
+      h += '<div class="bd">';
       h += '<div class="nm">' + _pcalEsc(_pcalRestName(t)) + '</div>';
-      if(meta.length) h += '<div class="mt">' + meta.join(' · ') + '</div>';
-      h += '<div class="st">' + (dead ? (t.status === 'soldout' ? '마감' : '만료') : '자리 있음') + '</div>';
-      h += '<div class="go">\u203a</div>';
-      h += '</div>';
+      if(sub.length) h += '<div class="sb">' + sub.join(', ') + '</div>';
+      h += '<div class="tm">' + tline + '</div>';
+      h += '</div></div>';
     });
   });
   h += '</div>';
