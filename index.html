@@ -435,10 +435,13 @@ html.auto-login .splash .bottom-group{display:none !important}
    플래그(newHomeEnabled) 뒤에서만 붙는다. 기존 GNB/홈 스타일은 건드리지 않음.
    사진은 전부 Supabase (month_covers.photo_url · ticket_products.tile_photo ·
    restaurants 사진) 에서 URL 로만 온다 — index.html 에 이미지를 박지 않는다. */
+/* GNB 는 검정. 버건디는 「참가 신청」 같은 행동 버튼에만 남겨야 색이 산다. */
 #mainGnb.gnb-flat{bottom:0;left:0;transform:none;width:100%;max-width:none;border-radius:0;
   height:auto;padding:6px 6px calc(6px + env(safe-area-inset-bottom));
-  box-shadow:0 -6px 24px rgba(0,0,0,.5)}
+  background:#000;border-top:1px solid rgba(255,255,255,.07);
+  box-shadow:0 -6px 24px rgba(0,0,0,.6)}
 #mainGnb.gnb-flat .gnb-btn{border-radius:12px}
+#mainGnb.gnb-flat .gnb-btn.active{background:rgba(255,255,255,.08)}
 
 .pcal{--pc-gold:#C8A96E;--pc-line:#232326;--pc-sub:#8d8781;color:#f2ede7;word-break:keep-all}
 .pcal-hero{position:relative;height:46vh;min-height:300px;max-height:420px;overflow:hidden;background:#0B0305}
@@ -453,17 +456,34 @@ html.auto-login .splash .bottom-group{display:none !important}
 .pcal-hero .pc-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
   font-family:'Oswald',sans-serif;font-size:11px;letter-spacing:.28em;color:rgba(255,255,255,.28)}
 
-.pcal-ybar{display:flex;align-items:center;gap:10px;padding:12px 22px 0}
+.pcal-ybar{display:flex;align-items:center;gap:10px;padding:12px 22px 0;position:relative}
 .pcal-ybar .pc-yr{font-family:'Oswald',sans-serif;font-size:12.5px;letter-spacing:.16em;color:#f2ede7;
-  border:1px solid #2e2e33;border-radius:2px;padding:4px 10px}
+  border:1px solid #2e2e33;border-radius:2px;padding:4px 10px;cursor:pointer;
+  display:flex;align-items:center;gap:7px;user-select:none;-webkit-user-select:none}
+.pcal-ybar .pc-yr i{font-style:normal;font-size:9px;color:#6d6963;transition:transform .18s ease}
+.pcal-ybar.open .pc-yr i{transform:rotate(180deg)}
 .pcal-ybar .pc-hint{font-size:10px;color:#5f5b57;letter-spacing:.06em}
-.pcal-mstrip{display:flex;gap:20px;padding:10px 22px;overflow-x:auto;font-size:13px;color:#5f5b57;
-  border-bottom:1px solid var(--pc-line);letter-spacing:.06em;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+/* 연도 아코디언 — 등록된 티켓이 있는 연도만 나온다 */
+.pcal-yrlist{display:none;position:absolute;top:calc(100% + 6px);left:22px;z-index:12;
+  background:rgba(14,14,16,.97);border:1px solid #2e2e33;border-radius:4px;overflow:hidden;
+  box-shadow:0 12px 30px rgba(0,0,0,.6);min-width:96px}
+.pcal-ybar.open .pcal-yrlist{display:block}
+.pcal-yrlist div{font-family:'Oswald',sans-serif;font-size:12.5px;letter-spacing:.16em;
+  color:#8d8781;padding:9px 14px;cursor:pointer;border-bottom:1px solid #1c1c1f}
+.pcal-yrlist div:last-child{border-bottom:none}
+.pcal-yrlist div.on{color:var(--pc-gold)}
+
+/* 월 스트립 — 수평 전용. touch-action:pan-x 로 세로 스와이프가 여기서 먹지 않게 한다
+   (기존엔 세로로도 끌려서 화면이 흔들렸다) */
+.pcal-mstrip{display:flex;flex-wrap:nowrap;gap:20px;padding:10px 22px 0;
+  overflow-x:auto;overflow-y:hidden;font-size:13px;color:#5f5b57;
+  border-bottom:1px solid var(--pc-line);letter-spacing:.06em;scrollbar-width:none;
+  -webkit-overflow-scrolling:touch;touch-action:pan-x;overscroll-behavior-x:contain}
 .pcal-mstrip::-webkit-scrollbar{display:none}
-.pcal-mstrip>div{flex:none;cursor:pointer;padding-bottom:2px}
-.pcal-mstrip .on{color:#f2ede7;position:relative}
-.pcal-mstrip .on::after{content:"";position:absolute;left:0;right:0;bottom:-11px;height:1px;background:#f2ede7}
-.pcal-mstrip .ydiv{color:var(--pc-gold);font-size:10.5px;letter-spacing:.14em;align-self:center;cursor:default}
+.pcal-mstrip>div{flex:none;cursor:pointer;padding-bottom:10px;position:relative;white-space:nowrap}
+.pcal-mstrip>div.empty{color:#38363a}
+.pcal-mstrip .on{color:#f2ede7}
+.pcal-mstrip .on::after{content:"";position:absolute;left:0;right:0;bottom:0;height:1px;background:#f2ede7}
 
 .pcal-cal{padding:12px 12px 0}
 .pcal-wk{display:grid;grid-template-columns:repeat(7,1fr);font-size:9.5px;color:#5f5b57;
@@ -488,7 +508,8 @@ html.auto-login .splash .bottom-group{display:none !important}
 #pcalSheet .pc-bs{position:absolute;left:0;right:0;bottom:0;background:rgba(17,17,19,.92);
   backdrop-filter:blur(22px) saturate(140%);-webkit-backdrop-filter:blur(22px) saturate(140%);
   border-top:1px solid rgba(255,255,255,.10);border-radius:20px 20px 0 0;
-  padding:10px 20px calc(26px + env(safe-area-inset-bottom));max-height:76vh;overflow-y:auto;
+  padding:10px 20px calc(26px + env(safe-area-inset-bottom));
+  min-height:48vh;max-height:82vh;overflow-y:auto;
   box-shadow:0 -20px 50px rgba(0,0,0,.66);color:#f2ede7}
 #pcalSheet .pc-grab{width:36px;height:3px;background:#3a3a3e;border-radius:2px;margin:0 auto 16px}
 #pcalSheet .pc-h{display:flex;align-items:baseline;gap:9px;padding-bottom:12px;border-bottom:1px solid #232326}
@@ -506,6 +527,40 @@ html.auto-login .splash .bottom-group{display:none !important}
 .pcal-item .st{font-size:10.5px;color:var(--pc-gold);letter-spacing:.05em}
 .pcal-item .st.full{color:#57544f}
 .pcal-item .go{font-size:15px;color:#57544f;margin-top:5px}
+
+/* 자리 상세 (사진 캘린더 전용) — 기존 티켓 상세는 그대로 두고 별도 화면으로 둔다.
+   「참가 신청」은 기존 글래스모피즘 구매 시트를 그대로 부른다 (handleTicketAction). */
+#pcalDetail{position:fixed;inset:0;z-index:560;display:none;background:#0B0305;color:#f2ede7;
+  overflow-y:auto;-webkit-overflow-scrolling:touch;word-break:keep-all}
+#pcalDetail .pd-top{position:fixed;top:0;left:0;right:0;z-index:6;display:flex;align-items:center;
+  justify-content:space-between;padding:16px 18px;background:linear-gradient(rgba(0,0,0,.65),rgba(0,0,0,0))}
+#pcalDetail .pd-top .ic{font-size:20px;color:#ded9d3;cursor:pointer;line-height:1;width:28px}
+#pcalDetail .pd-top .logo{font-family:'Nanum Myeongjo','Hiragino Mincho ProN',serif;
+  letter-spacing:.42em;font-size:13px;font-weight:600;padding-left:.42em;color:#f2ede7}
+#pcalDetail .pd-hero{position:relative;height:38vh;min-height:250px;max-height:360px;overflow:hidden;background:#141014}
+#pcalDetail .pd-hero img{width:100%;height:100%;object-fit:cover;filter:saturate(.9) contrast(1.04)}
+#pcalDetail .pd-hero .sh{position:absolute;inset:0;
+  background:linear-gradient(180deg,rgba(0,0,0,.5) 0%,rgba(0,0,0,0) 38%,rgba(0,0,0,.25) 70%,#0B0305 100%)}
+#pcalDetail .pd-body{padding:4px 24px calc(120px + env(safe-area-inset-bottom))}
+#pcalDetail .pd-when{font-family:'Oswald','Noto Sans KR',sans-serif;font-size:12px;font-weight:500;
+  letter-spacing:.1em;color:var(--pc-gold,#C8A96E)}
+#pcalDetail .pd-name{font-family:'Nanum Myeongjo','Hiragino Mincho ProN',serif;font-size:31px;
+  line-height:1.18;margin-top:9px;color:#fff}
+#pcalDetail .pd-meta{margin-top:9px;font-size:11.5px;color:#8d8781;letter-spacing:.03em}
+#pcalDetail .pd-specs{margin-top:22px;border-top:1px solid #232326}
+#pcalDetail .pd-spec{display:flex;gap:16px;padding:11px 0;border-bottom:1px solid #1a1a1d;align-items:flex-start}
+#pcalDetail .pd-spec b{flex:none;width:44px;font-weight:400;font-size:11.5px;color:#6f6a65;letter-spacing:.08em}
+#pcalDetail .pd-spec span{flex:1;font-size:12.5px;color:#ded9d3;line-height:1.6}
+#pcalDetail .pd-desc{margin-top:20px;font-size:12.5px;line-height:1.95;color:#a9a39c;white-space:pre-wrap}
+#pcalDetail .pd-bar{position:fixed;left:0;right:0;bottom:0;z-index:7;display:flex;align-items:center;
+  gap:14px;padding:14px 24px calc(16px + env(safe-area-inset-bottom));
+  background:linear-gradient(rgba(11,3,5,0),rgba(11,3,5,.94) 34%);border-top:1px solid rgba(255,255,255,.06)}
+#pcalDetail .pd-price{font-family:'Oswald','Noto Sans KR',sans-serif;font-size:21px;font-weight:500;color:#fff}
+#pcalDetail .pd-price small{font-size:11px;color:#8d8781;margin-left:5px;letter-spacing:.06em}
+#pcalDetail .pd-cta{margin-left:auto;flex:none;border:none;cursor:pointer;
+  background:#5C0A14;border-radius:10px;padding:13px 22px;color:#fff;
+  font-family:'Oswald','Noto Sans KR',sans-serif;font-size:12px;font-weight:700;letter-spacing:.1em}
+#pcalDetail .pd-cta.off{background:#262326;color:#6f6a65;cursor:default}
 
 /* 슈퍼어드민 편집 */
 .pcal-adm-row{display:flex;gap:12px;align-items:center;padding:12px 0;border-bottom:1px solid rgba(0,0,0,.07)}
@@ -7715,6 +7770,15 @@ window.closePromoCarousel = function(){
 <div id="pcalSheet" onclick="if(event.target===this||event.target.className==='pc-dim')pcalCloseSheet()">
   <div class="pc-dim"></div>
   <div class="pc-bs" id="pcalSheetBody"></div>
+</div>
+
+<div id="pcalDetail">
+  <div class="pd-top">
+    <div class="ic" onclick="pcalCloseTicket()">‹</div>
+    <div class="logo">TAAM</div>
+    <div class="ic"></div>
+  </div>
+  <div id="pcalDetailInner"></div>
 </div>
 
 <div id="pcalAdminPage" class="restpage" style="display:none;">
@@ -15888,7 +15952,7 @@ function openMain(){
    'memberListScreen','ticketCalScreen','ticketHistoryScreen','adminCodeScreen','pendingApprovalScreen',
    'partnerAdminScreen','partnerTicketListScreen','partnerCalScreen','partnerRestScreen',
    'tcLockPopup','mshipScreen','extendPopup','memModal',
-   'pcalAdminPage','pcalPickModal','pcalSheet'
+   'pcalAdminPage','pcalPickModal','pcalSheet','pcalDetail'
   ].forEach(function(id){var el=document.getElementById(id);if(el)el.style.display='none';});
   loadRole().then(function(){
     return _seedWaitCapped(2500); // 시드는 최대 2.5초만 기다린다 (나머지는 백그라운드)
@@ -15978,7 +16042,7 @@ function gnbGo(tab, btn){
     var _rlm = document.getElementById('ramenLineageModule');
     if(_rlm){ _rlm.classList.remove('active'); }
     // 5) 다른 모달도 같이 닫기 (티켓 상세, 룰 시트, 위치 시트, 매장 정보)
-    ['ticketDetailScreen','tdRestInfoScreen','tdRulesSheet','tdLocationSheet','tdPurchaseSheet','tdConfirmPopup','tdDonePopup','fullMapOverlay','pcalSheet'].forEach(function(id){
+    ['ticketDetailScreen','tdRestInfoScreen','tdRulesSheet','tdLocationSheet','tdPurchaseSheet','tdConfirmPopup','tdDonePopup','fullMapOverlay','pcalSheet','pcalDetail'].forEach(function(id){
       var el = document.getElementById(id);
       if(el && el.style.display !== 'none'){ el.style.display = 'none'; }
     });
@@ -18509,6 +18573,9 @@ function tdCollapseDesc() {
 // (영상 있으면 3초 지연, 없으면 즉시)
 
 function closeTicketDetail(){
+  // 🆕 2026.08 사진 캘린더: 새 「자리 상세」에서 들어온 경우도 같이 닫는다
+  //   (구매 완료 팝업이 이 함수를 부르므로, 안 닫으면 결제 후 상세가 남는다)
+  try { var _pd = document.getElementById('pcalDetail'); if(_pd) _pd.style.display = 'none'; } catch(e){}
   // 🆕 2026.08: 결제를 끝내지 않고 상세를 닫으면 잡아둔 좌석을 즉시 돌려준다.
   //   취소 버튼을 누르지 않고 뒤로가기·바깥 탭으로 빠져나가는 경로가 실제로 많았고,
   //   그때마다 다음 회원에게 5분 내내 '매진' 으로 보였다.
@@ -37466,6 +37533,7 @@ function renderHomeTickets(){
 var _pcalY = null, _pcalM = null;   // 보고 있는 연·월
 var _pcalCovers = null;             // 'YYYY-M' → month_covers row (null = 아직 안 읽음)
 var _pcalSelKey = null;             // 선택된 날짜 YYYYMMDD
+var _pcalYearOpen = false;          // 연도 아코디언 펼침 여부
 
 function _pcalEsc(s){
   return String(s == null ? '' : s)
@@ -37571,21 +37639,14 @@ function _pcalMonthTickets(y, m, byDate){
   return out;
 }
 
-// 월 스트립 — 이번 달 기준 앞 2 · 뒤 11 개월. 선택 월이 벗어나면 창을 늘린다.
-function _pcalMonths(){
-  var now = new Date();
-  var start = now.getFullYear()*12 + now.getMonth() - 2;
-  var end   = start + 13;
-  var sel   = _pcalY*12 + (_pcalM - 1);
-  if(sel < start) start = sel;
-  if(sel > end)   end   = sel;
-  var out = [], prevY = null;
-  for(var i=start; i<=end; i++){
-    var y = Math.floor(i/12), m = (i%12) + 1;
-    out.push({ y:y, m:m, divider:(prevY !== null && y !== prevY) });
-    prevY = y;
-  }
-  return out;
+// 고를 수 있는 연도 — 티켓이 실제로 등록된 연도 + 올해. 2027 까지만 등록했으면 2027 까지만 나온다.
+function _pcalYears(byDate){
+  byDate = byDate || _pcalByDate();
+  var seen = {};
+  Object.keys(byDate).forEach(function(k){ seen[Math.floor(parseInt(k,10)/10000)] = 1; });
+  seen[new Date().getFullYear()] = 1;
+  if(_pcalY) seen[_pcalY] = 1;
+  return Object.keys(seen).map(Number).sort(function(a,b){ return a - b; });
 }
 
 // 첫 진입 기본 월 — 이번 달. 이번 달에 자리가 없으면 가장 가까운 다음 달.
@@ -37661,15 +37722,22 @@ function renderPhotoCalInto(hostId){
   if(hero.credit)  h += '<div class="pc-credit">' + _pcalEsc(hero.credit) + '</div>';
   h += '</div></div>';
 
-  // ── 연도 + 월 스트립 ──
-  h += '<div class="pcal-ybar"><div class="pc-yr">' + _pcalY + '</div>'
-     + '<div class="pc-hint">연도 · 월 전환</div></div>';
-  h += '<div class="pcal-mstrip">';
-  _pcalMonths().forEach(function(o){
-    if(o.divider) h += '<div class="ydiv">' + o.y + '</div>';
-    var on = (o.y === _pcalY && o.m === _pcalM) ? ' on' : '';
-    h += '<div class="' + on.trim() + '" onclick="pcalGo(' + o.y + ',' + o.m + ')">' + o.m + '月</div>';
+  // ── 연도 아코디언 + 월 스트립 (월은 선택 연도의 1~12月, 수평 스크롤 전용) ──
+  h += '<div class="pcal-ybar' + (_pcalYearOpen ? ' open' : '') + '">'
+     + '<div class="pc-yr" onclick="pcalYearToggle(event)">' + _pcalY + '<i>▾</i></div>'
+     + '<div class="pc-hint">연도 · 월 전환</div>'
+     + '<div class="pcal-yrlist">';
+  _pcalYears(byDate).forEach(function(y){
+    h += '<div class="' + (y === _pcalY ? 'on' : '') + '" onclick="pcalPickYear(' + y + ')">' + y + '</div>';
   });
+  h += '</div></div>';
+
+  h += '<div class="pcal-mstrip">';
+  for(var mm=1; mm<=12; mm++){
+    var has = _pcalMonthTickets(_pcalY, mm, byDate).length > 0;
+    var cls = (mm === _pcalM ? 'on' : (has ? '' : 'empty'));
+    h += '<div class="' + cls + '" data-m="' + mm + '" onclick="pcalGo(' + _pcalY + ',' + mm + ')">' + mm + '月</div>';
+  }
   h += '</div>';
 
   // ── 캘린더 ──
@@ -37721,6 +37789,15 @@ function renderPhotoCalInto(hostId){
   }
 
   host.innerHTML = h;
+
+  // 선택된 달이 스트립 밖에 있으면 가운데로 끌어온다
+  try {
+    var strip = host.querySelector('.pcal-mstrip');
+    var onEl  = strip && strip.querySelector('.on');
+    if(strip && onEl){
+      strip.scrollLeft = Math.max(0, onEl.offsetLeft - (strip.clientWidth/2) + (onEl.offsetWidth/2));
+    }
+  } catch(e){}
 }
 
 function pcalRenderAll(){
@@ -37731,10 +37808,32 @@ function pcalRenderAll(){
 window.pcalRenderAll = pcalRenderAll;
 
 function pcalGo(y, m){
-  _pcalY = y; _pcalM = m; _pcalSelKey = null;
+  _pcalY = y; _pcalM = m; _pcalSelKey = null; _pcalYearOpen = false;
   pcalRenderAll();
 }
 window.pcalGo = pcalGo;
+
+function pcalYearToggle(ev){
+  if(ev && ev.stopPropagation) ev.stopPropagation();
+  _pcalYearOpen = !_pcalYearOpen;
+  pcalRenderAll();
+}
+window.pcalYearToggle = pcalYearToggle;
+
+// 연도를 바꾸면 그 해에서 자리가 있는 첫 달로 간다 (빈 달을 먼저 보여주지 않는다)
+function pcalPickYear(y){
+  var byDate = _pcalByDate();
+  _pcalY = y;
+  _pcalYearOpen = false;
+  _pcalSelKey = null;
+  if(_pcalMonthTickets(y, _pcalM, byDate).length === 0){
+    for(var m=1; m<=12; m++){
+      if(_pcalMonthTickets(y, m, byDate).length > 0){ _pcalM = m; break; }
+    }
+  }
+  pcalRenderAll();
+}
+window.pcalPickYear = pcalPickYear;
 
 // ── 날짜 바텀시트 ──
 function pcalOpenDay(y, m, d){
@@ -37795,9 +37894,178 @@ window.pcalCloseSheet = pcalCloseSheet;
 
 function pcalGoTicket(id){
   pcalCloseSheet();
+  // 플래그 켜진 기기는 새 「자리 상세」로, 아니면 기존 티켓 상세로
+  if(typeof newHomeEnabled === 'function' && newHomeEnabled()){
+    pcalOpenTicket(id);
+    return;
+  }
   if(typeof openTicketDetail === 'function') openTicketDetail(id);
 }
 window.pcalGoTicket = pcalGoTicket;
+
+// ══════════════════════════════════════════════════════════════
+// 🆕 2026.08 자리 상세 (사진 캘린더 전용)
+//
+//   기존 `ticketDetailScreen` 은 한 줄도 건드리지 않는다. 플래그를 끄면 그대로 쓰인다.
+//   여기서 새로 하는 건 「보여주는 방식」뿐이고, **구매는 기존 것을 그대로 부른다** —
+//   `currentTicket`/`currentRest`/`_tdPax` 를 기존 상세와 똑같이 세팅한 뒤
+//   `handleTicketAction()` 을 호출하면 글래스모피즘 구매 시트(tdPurchaseSheet)가
+//   그대로 열린다. 금전 로직·좌석 홀드·취소 규정은 손대지 않았다.
+//
+//   화면에 쓰는 값은 전부 이미 있는 필드에서 온다. 없는 항목은 줄 자체를 그린다.
+//     형태 ← totalPax(좌석 수) · 코스 ← ticket_type/장르 · 주류 ← corkage/wineMin
+//     동행 ← slots 로 계산한 허용 인원
+// ══════════════════════════════════════════════════════════════
+function pcalOpenTicket(id){
+  var t = ticketDB.find(function(x){ return String(x.id) === String(id); });
+  if(!t) return;
+  if(t.status === 'pending' || t.status === 'deleteRequest') return;
+
+  // 기존 상세와 같은 가드 (자격 · 판매 종료 · 잠금 · 등급)
+  if(typeof _ticketAccessOk === 'function' && !_ticketAccessOk(t.id)){
+    if(typeof showToast === 'function') showToast('🔒','초대 전용','참가 자격이 없는 자리입니다');
+    return;
+  }
+  var r = restaurantDB.find(function(x){ return String(x.id) === String(t.restId); }) || null;
+  var expired = (typeof _isTicketExpired === 'function') && _isTicketExpired(t);
+  var dead = expired || t.status === 'soldout';
+  if(!dead){
+    if(typeof tcIsLocked === 'function' && tcIsLocked(t) && _currentRole !== 'superadmin'){
+      if(typeof tcShowLockPopup === 'function') tcShowLockPopup(t, r);
+      return;
+    }
+    if(typeof tcIsMOnly === 'function' && tcIsMOnly(t) && _currentRole !== 'superadmin'){
+      var g = (typeof getCurrentUserGrade === 'function') ? getCurrentUserGrade() : null;
+      if(g !== 'M'){ if(typeof tcShowLockPopup === 'function') tcShowLockPopup(t, r); return; }
+    }
+    if(typeof _tkTierAllowed === 'function' && !_tkTierAllowed(t)){
+      if(typeof showTierLockPopup === 'function') showTierLockPopup(t);
+      return;
+    }
+  }
+
+  // 구매 경로가 읽는 전역 — 기존 상세와 동일하게 세팅
+  currentTicket = t; currentRest = r;
+  var minP = parseInt(t.minPax || t.totalPax || 1), maxP = parseInt(t.maxPax || t.totalPax || 10);
+  _tdMinPax = minP; _tdMaxPax = maxP; _tdPax = minP;
+  if(typeof _tdCalcAllowedPax === 'function'){
+    _tdAllowedPax = _tdCalcAllowedPax(t);
+    if(_tdAllowedPax.length) _tdPax = _tdAllowedPax[0];
+  }
+
+  var inner = document.getElementById('pcalDetailInner');
+  if(inner) inner.innerHTML = _pcalDetailHtml(t, r, dead, expired);
+  var scr = document.getElementById('pcalDetail');
+  if(scr){ scr.style.display = 'block'; scr.scrollTop = 0; }
+}
+window.pcalOpenTicket = pcalOpenTicket;
+
+function pcalCloseTicket(){
+  var scr = document.getElementById('pcalDetail');
+  if(scr) scr.style.display = 'none';
+  // 결제를 끝내지 않고 나가면 잡아둔 좌석을 즉시 돌려준다 (기존 상세와 동일)
+  if(typeof _tkReleaseHoldOnLeave === 'function'){ try{ _tkReleaseHoldOnLeave(); }catch(e){} }
+}
+window.pcalCloseTicket = pcalCloseTicket;
+
+function _pcalDetailHtml(t, r, dead, expired){
+  var lang = window._tkCurrentLang;
+
+  // 날짜 — '8월 22일 (토) 12:00'
+  var full = (typeof _tkFullDate === 'function') ? _tkFullDate(t) : '';
+  var fp = String(full).split('.');
+  var whenTxt = '';
+  if(fp.length === 3){
+    var yy = parseInt(fp[0],10), mo = parseInt(fp[1],10), dd = parseInt(fp[2],10);
+    var dow = ['일','월','화','수','목','금','토'][new Date(yy, mo-1, dd).getDay()];
+    if(lang === 'en'){
+      var mn = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      whenTxt = mn[mo-1] + ' ' + dd;
+    } else if(lang === 'ja'){
+      whenTxt = mo + '月' + dd + '日';
+    } else {
+      whenTxt = mo + '월 ' + dd + '일 (' + dow + ')';
+    }
+  }
+  if(t.time) whenTxt += (whenTxt ? '  ' : '') + t.time;
+
+  // 매장명 · 지역 · 장르 · 좌석
+  var name = _pcalRestName(t);
+  var metaBits = [];
+  if(r){
+    var zone = r.zoneEn || r.cityEn || r.region || '';
+    if(zone) metaBits.push(_pcalEsc(zone));
+  }
+  if(t.ticketGenre) metaBits.push(_pcalEsc(t.ticketGenre));
+  var cap = parseInt(t.assignedPax || t.totalPax) || 0;
+  if(cap) metaBits.push('카운터 ' + cap + '석');
+
+  var photo = _pcalPhoto(t) || (r ? (r.photoHero || r.photoCard || r.photo || '') : '');
+
+  var h = '';
+  h += '<div class="pd-hero">';
+  h += photo ? '<img src="' + _pcalEsc(photo) + '" alt="">' : '';
+  h += '<div class="sh"></div></div>';
+
+  h += '<div class="pd-body">';
+  if(whenTxt) h += '<div class="pd-when">' + _pcalEsc(whenTxt) + '</div>';
+  h += '<div class="pd-name">' + _pcalEsc(name) + '</div>';
+  if(metaBits.length) h += '<div class="pd-meta">' + metaBits.join(' · ') + '</div>';
+
+  // ── 스펙 — 값이 있는 줄만 ──
+  var rows = [];
+  if(cap) rows.push(['형태', '카운터 ' + cap + '석']);
+  var course = t.type || t.ticketGenre || '';
+  if(course) rows.push(['코스', _pcalEsc(course)]);
+
+  var drink = [];
+  if(r && r.corkage) drink.push(_pcalEsc(r.corkage));
+  if(t.wineMin) drink.push('주류 미니멈 ' + (typeof fxMoney === 'function' ? fxMoney(parseInt(t.wineMin)) : '₩' + parseInt(t.wineMin).toLocaleString()));
+  if(drink.length) rows.push(['주류', drink.join(' · ')]);
+
+  var pax = (typeof _tdAllowedPax !== 'undefined' && _tdAllowedPax && _tdAllowedPax.length)
+    ? _tdAllowedPax.map(function(n){ return n + '인'; }).join(' · ')
+    : ((t.minPax && t.maxPax && t.minPax !== t.maxPax) ? (t.minPax + '–' + t.maxPax + '인') : (t.totalPax ? t.totalPax + '인' : ''));
+  if(pax) rows.push(['동행', pax]);
+
+  if(rows.length){
+    h += '<div class="pd-specs">';
+    rows.forEach(function(row){
+      h += '<div class="pd-spec"><b>' + row[0] + '</b><span>' + row[1] + '</span></div>';
+    });
+    h += '</div>';
+  }
+
+  var desc = (typeof window.pickI18nField === 'function')
+    ? (window.pickI18nField(t, 'ticket_desc') || t.ticketDesc || '')
+    : (t.ticketDesc || '');
+  if(desc) h += '<div class="pd-desc">' + _pcalEsc(desc) + '</div>';
+  h += '</div>';
+
+  // ── 하단 바 — 인당 금액 + 참가 신청 ──
+  var per = (parseInt(t.mealFee || t.mealAmt || 0) || 0)
+          + (parseInt(t.agencyFee || 0) || 0)
+          + (parseInt(t.wineMin || 0) || 0);
+  var priceTxt = per
+    ? (typeof fxMoney === 'function' ? fxMoney(per) : '₩' + per.toLocaleString())
+    : '';
+  h += '<div class="pd-bar">';
+  if(priceTxt) h += '<div class="pd-price">' + priceTxt + '<small>/ 인</small></div>';
+  if(dead){
+    h += '<button class="pd-cta off">' + (t.status === 'soldout' ? '마감' : '기한 만료') + '</button>';
+  } else {
+    h += '<button class="pd-cta" onclick="pcalRequestSeat()">참가 신청</button>';
+  }
+  h += '</div>';
+
+  return h;
+}
+
+// 기존 글래스모피즘 구매 시트를 그대로 연다 — 결제·좌석 홀드 로직은 손대지 않는다
+function pcalRequestSeat(){
+  if(typeof handleTicketAction === 'function') handleTicketAction();
+}
+window.pcalRequestSeat = pcalRequestSeat;
 
 // ── GNB 를 하단에 붙이고 Quest → Cast 로 바꾼다 (플래그 뒤에서만) ──
 function pcalApplyGnb(){
