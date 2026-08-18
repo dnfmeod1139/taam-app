@@ -579,6 +579,13 @@ html.auto-login .splash .bottom-group{display:none !important}
 #magView .mag-scroll::-webkit-scrollbar{display:none}
 #magView .mag-hero{position:relative;height:100%;min-height:100%;overflow:hidden}
 #magView .mag-hero img{width:100%;height:100%;object-fit:cover;filter:saturate(.88) contrast(1.06)}
+/* 분할 컷 — 만화 컷처럼 비스듬히 나눈다.
+   컷끼리 살짝 겹치게 폴리곤을 잡아 경계에 실선(안티에일리어싱 틈)이 안 남는다.
+   테두리·간격은 아예 주지 않는다 — 사진끼리 그대로 맞붙는다. */
+.cutwrap{position:absolute;inset:0}
+.cutwrap .cut{position:absolute;inset:0;overflow:hidden}
+.cutwrap .cut img{width:100%;height:100%;object-fit:cover;filter:saturate(.88) contrast(1.06)}
+.cutwrap .cut.empty{background:#141014}
 #magView .mag-shade{position:absolute;inset:0;
   background:linear-gradient(180deg,rgba(0,0,0,.62) 0%,rgba(0,0,0,.06) 26%,
     rgba(0,0,0,.10) 52%,rgba(0,0,0,.72) 84%,#0B0305 100%)}
@@ -37962,6 +37969,9 @@ function _pcalHeroFor(y, m, byDate){
   var photo  = cov && cov.photo_url ? cov.photo_url : '';
   var regions = cov && cov.regions ? cov.regions : '';
   var credit  = cov && cov.photo_credit ? cov.photo_credit : '';
+  // 분할 컷 — 컬럼이 없거나(SQL 미실행) 비어 있으면 자연히 1컷으로 돈다
+  var layout = (cov && cov.cover_layout) || 'single';
+  var cuts   = (cov && Array.isArray(cov.cover_photos)) ? cov.cover_photos.slice() : [];
 
   var days = _pcalMonthTickets(y, m, byDate);
   if(!photo){
@@ -37979,7 +37989,9 @@ function _pcalHeroFor(y, m, byDate){
     });
     regions = arr.slice(0,4).join(' · ');
   }
-  return { photo: photo, regions: regions, credit: credit };
+  if(!cuts.length && photo) cuts = [photo];
+  if(!photo && cuts.length) photo = cuts[0];
+  return { photo: photo, regions: regions, credit: credit, layout: layout, cuts: cuts };
 }
 
 function _pcalMonthTickets(y, m, byDate){
@@ -38068,7 +38080,7 @@ function renderPhotoCalInto(hostId, skipHero){
   if(!skipHero){
     h += '<div class="pcal-hero">';
     if(hero.photo){
-      h += '<img src="' + _pcalEsc(hero.photo) + '" alt="">';
+      h += _magCutsHtml(hero.cuts, hero.layout);
     } else {
       h += '<div class="pc-empty">PHOTO NOT SET</div>';
     }
@@ -38611,11 +38623,11 @@ function magRender(){
   //   ISSUE 번호 · SEATS OPEN · 사진 크레딧은 뺐다 — 표지에 글자가 늘수록
   //   사진이 죽고 잡지가 아니라 안내문이 된다.
   var h = '';
-  h += hero.photo ? '<img src="' + _pcalEsc(hero.photo) + '" alt="">' : '';
+  h += _magCutsHtml(hero.cuts, hero.layout);
   h += '<div class="mag-shade"></div>';
   var _lang = (window._tkCurrentLang || 'ko');
   h += '<div class="mag-top">'
-     + '<div class="ic" onclick="magMenu()">☰</div>'
+     + '<div class="ic"></div>'          // ☰ 제거 — 하단 GNB 로 충분하다 (자리만 남겨 로고를 가운데로)
      + '<div class="logo">TAAM</div>'
      + '<div class="mag-lang' + (_magLangOpen ? ' open' : '') + '">'
      +   '<span class="cur" onclick="magLangToggle(event)">' + _lang.toUpperCase() + '<i>▾</i></span>'
@@ -38646,6 +38658,50 @@ function magRender(){
   magBindSwipe();
 }
 window.magRender = magRender;
+
+// ══ 표지 분할 컷 ══════════════════════════════════════════════
+//   만화 컷처럼 비스듬히 나눈다. 각 컷은 clip-path 폴리곤이고,
+//   이웃한 컷끼리 경계를 조금씩 넘겨 잡아 실선(안티에일리어싱 틈)이 안 남게 했다.
+//   테두리·간격은 주지 않는다 — 사진끼리 그대로 맞붙는다.
+var MAG_LAYOUTS = {
+  single: { n:1, name:'1컷', cuts:[
+    '0% 0%, 100% 0%, 100% 100%, 0% 100%' ] },
+  two:    { n:2, name:'2분할', cuts:[
+    '0% 0%, 100% 0%, 100% 44.6%, 0% 60.6%',
+    '0% 59.4%, 100% 43.4%, 100% 100%, 0% 100%' ] },
+  three:  { n:3, name:'3분할', cuts:[
+    '0% 0%, 100% 0%, 100% 31.6%, 0% 40.6%',
+    '0% 39.4%, 100% 30.4%, 100% 65.6%, 0% 72.6%',
+    '0% 71.4%, 100% 64.4%, 100% 100%, 0% 100%' ] },
+  multi:  { n:4, name:'다분할', cuts:[
+    '0% 0%, 57% 0%, 47.6% 46.6%, 0% 40.6%',
+    '55.4% 0%, 100% 0%, 100% 36.6%, 45.4% 48.6%',
+    '0% 39.4%, 47.6% 45.4%, 39.6% 100%, 0% 100%',
+    '48.4% 44.6%, 100% 35.4%, 100% 100%, 38.4% 100%' ] }
+};
+function magLayout(key){ return MAG_LAYOUTS[key] || MAG_LAYOUTS.single; }
+window.MAG_LAYOUTS = MAG_LAYOUTS;
+
+// 컷 마크업 — photos 가 컷 수보다 모자라면 앞의 사진으로 채운다
+function _magCutsHtml(photos, layoutKey){
+  var L = magLayout(layoutKey);
+  var list = (photos || []).filter(function(x){ return !!x; });
+  if(L.n === 1){
+    var one = list[0] || '';
+    return one ? '<img src="' + _pcalEsc(one) + '" alt="">' : '';
+  }
+  var h = '<div class="cutwrap">';
+  for(var i=0; i<L.n; i++){
+    var src = list[i] || list[list.length-1] || '';
+    var poly = 'polygon(' + L.cuts[i] + ')';
+    h += '<div class="cut' + (src ? '' : ' empty') + '" '
+       + 'style="clip-path:' + poly + ';-webkit-clip-path:' + poly + ';">'
+       + (src ? '<img src="' + _pcalEsc(src) + '" alt="">' : '')
+       + '</div>';
+  }
+  return h + '</div>';
+}
+window._magCutsHtml = _magCutsHtml;   // 래퍼로 감싸면 전역 이름이 덮여 자기 자신을 부른다
 
 // 달력 표기는 회원의 언어 설정과 무관하게 전부 영문으로 통일한다.
 //   숫자+한자(8月)나 8월은 언어마다 달라져 표제가 매번 다른 모양이 된다.
@@ -38719,15 +38775,6 @@ function magBindSwipe(){
     x0 = null; y0 = null; axis = null;
   });
 }
-
-// 상단 ☰ — 슈퍼어드민은 어드민, 회원은 마이페이지
-function magMenu(){
-  if(typeof _isSuperAdmin === 'function' && _isSuperAdmin() && typeof openAdmin === 'function'){
-    openAdmin(); return;
-  }
-  if(typeof openMyPage === 'function') openMyPage();
-}
-window.magMenu = magMenu;
 
 // 상단 언어 — 눌러서 셋을 펼치고 하나를 고른다
 var _magLangOpen = false;
@@ -39239,10 +39286,15 @@ window.pcalAdminClose = pcalAdminClose;
 
 function _pcalAdmLoadDraft(){
   var cov = (_pcalCovers && _pcalCovers[_pcalAdmY + '-' + _pcalAdmM]) || null;
+  var cuts = (cov && Array.isArray(cov.cover_photos)) ? cov.cover_photos.slice() : [];
+  var one  = cov && cov.photo_url ? cov.photo_url : '';
+  if(!cuts.length && one) cuts = [one];
   _pcalAdmDraft = {
-    photo_url:    cov && cov.photo_url    ? cov.photo_url    : '',
-    regions:      cov && cov.regions      ? cov.regions      : '',
-    photo_credit: cov && cov.photo_credit ? cov.photo_credit : ''
+    photo_url:    one,
+    regions:      cov && cov.regions ? cov.regions : '',
+    photo_credit: cov && cov.photo_credit ? cov.photo_credit : '',
+    layout:       (cov && cov.cover_layout) || 'single',
+    cuts:         cuts
   };
 }
 
@@ -39318,18 +39370,47 @@ function pcalAdminRender(){
 
   // ── 히어로 ──
   h += '<div style="font-family:var(--font-main);font-size:12px;font-weight:800;letter-spacing:.1em;color:#5C0A14;margin:4px 0 10px;">월별 히어로</div>';
-  h += '<div style="border-radius:12px;overflow:hidden;background:#e9e5df;aspect-ratio:16/10;margin-bottom:10px;">';
-  if(_pcalAdmDraft.photo_url){
-    h += '<img src="' + _pcalEsc(_pcalAdmDraft.photo_url) + '" style="width:100%;height:100%;object-fit:cover;">';
+  // 미리보기 — 실제 표지와 같은 컷으로 보여 준다
+  var _L = magLayout(_pcalAdmDraft.layout);
+  h += '<div style="position:relative;border-radius:12px;overflow:hidden;background:#e9e5df;aspect-ratio:16/10;margin-bottom:10px;">';
+  if((_pcalAdmDraft.cuts || []).some(function(x){ return !!x; })){
+    h += _magCutsHtml(_pcalAdmDraft.cuts, _pcalAdmDraft.layout);
   } else {
     h += '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:11px;letter-spacing:.2em;color:#a8a29a;">PHOTO NOT SET</div>';
   }
   h += '</div>';
-  h += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">'
-     + '<button class="pcal-adm-btn" onclick="pcalPickOpen(\'hero\')">레스토랑 사진에서 고르기</button>'
-     + '<button class="pcal-adm-btn" onclick="pcalAdmUpload(\'hero\')">새 사진 올리기</button>'
-     + (_pcalAdmDraft.photo_url ? '<button class="pcal-adm-btn" onclick="pcalAdmSetHero(\'\')">사진 비우기</button>' : '')
-     + '</div>';
+
+  // 컷 나누기
+  h += '<div style="font-size:11px;color:#8a8580;margin-bottom:6px;">컷 나누기</div>';
+  h += '<div style="display:flex;gap:6px;margin-bottom:12px;">';
+  ['single','two','three','multi'].forEach(function(k){
+    var on = (_pcalAdmDraft.layout === k);
+    h += '<button onclick="pcalAdmLayout(\'' + k + '\')" style="flex:1;padding:9px 0;border-radius:8px;cursor:pointer;'
+       + 'font-family:var(--font-main);font-size:11px;font-weight:700;'
+       + (on ? 'background:#5C0A14;border:1px solid #5C0A14;color:#fff;'
+             : 'background:#fff;border:1px solid #d8d3cc;color:#5C0A14;')
+       + '">' + MAG_LAYOUTS[k].name + '</button>';
+  });
+  h += '</div>';
+
+  // 컷별 사진
+  for(var ci=0; ci<_L.n; ci++){
+    var cur = (_pcalAdmDraft.cuts && _pcalAdmDraft.cuts[ci]) || '';
+    h += '<div class="pcal-adm-row">';
+    h += '<div class="th">' + (cur ? '<img src="' + _pcalEsc(cur) + '">' : '') + '</div>';
+    h += '<div style="flex:1;min-width:0;">'
+       + '<div style="font-family:var(--font-main);font-size:12.5px;font-weight:700;color:#1a1a18;">'
+       + (_L.n > 1 ? (ci+1) + '번 컷' : '표지 사진') + '</div>'
+       + '<div style="font-size:10.5px;color:#8a8580;margin-top:3px;">' + (cur ? '지정됨' : '비어 있음') + '</div>'
+       + '</div>';
+    h += '<div style="display:flex;flex-wrap:wrap;gap:5px;justify-content:flex-end;max-width:112px;">'
+       + '<button class="pcal-adm-btn" onclick="pcalPickOpen(\'cut\',' + ci + ')">고르기</button>'
+       + '<button class="pcal-adm-btn" onclick="pcalAdmUpload(\'cut\',' + ci + ')">올리기</button>'
+       + (cur ? '<button class="pcal-adm-btn" onclick="pcalAdmSetCut(' + ci + ',\'\')">비우기</button>' : '')
+       + '</div>';
+    h += '</div>';
+  }
+  h += '<div style="height:12px;"></div>';
   h += '<div style="margin-bottom:9px;"><div style="font-size:11px;color:#8a8580;margin-bottom:5px;">지역 (예: 도쿄 · 오사카 · 교토)</div>'
      + '<input id="pcalAdmRegions" class="pcal-adm-inp" type="text" value="' + _pcalEsc(_pcalAdmDraft.regions) + '" placeholder="비워두면 그 달 티켓 지역으로 자동 표시"></div>';
 
@@ -39370,9 +39451,31 @@ window.pcalAdminRender = pcalAdminRender;
 function pcalAdmSetHero(url){
   _pcalAdmSyncInputs();
   _pcalAdmDraft.photo_url = url || '';
+  _pcalAdmDraft.cuts = url ? [url] : [];
   pcalAdminRender();
 }
 window.pcalAdmSetHero = pcalAdmSetHero;
+
+// 컷 나누기 변경 — 넣어 둔 사진은 최대한 살린다
+function pcalAdmLayout(key){
+  _pcalAdmSyncInputs();
+  _pcalAdmDraft.layout = key;
+  var n = magLayout(key).n;
+  var c = (_pcalAdmDraft.cuts || []).slice(0, n);
+  while(c.length < n) c.push('');
+  _pcalAdmDraft.cuts = c;
+  pcalAdminRender();
+}
+window.pcalAdmLayout = pcalAdmLayout;
+
+function pcalAdmSetCut(i, url){
+  _pcalAdmSyncInputs();
+  if(!Array.isArray(_pcalAdmDraft.cuts)) _pcalAdmDraft.cuts = [];
+  _pcalAdmDraft.cuts[i] = url || '';
+  if(i === 0) _pcalAdmDraft.photo_url = url || '';   // 1컷·구버전 폴백용
+  pcalAdminRender();
+}
+window.pcalAdmSetCut = pcalAdmSetCut;
 
 async function pcalAdmSaveCover(){
   if(typeof _isSuperAdmin === 'function' && !_isSuperAdmin()){
@@ -39386,10 +39489,13 @@ async function pcalAdmSaveCover(){
   _pcalAdmSyncInputs();
   //   photo_credit 는 화면에서 쓰지 않으므로 보내지 않는다.
   //   upsert 는 보낸 컬럼만 갱신하므로 기존 값이 지워지지도 않는다.
+  var cuts = (_pcalAdmDraft.cuts || []).filter(function(x){ return !!x; });
   var payload = {
     year: _pcalAdmY, month: _pcalAdmM,
-    photo_url: _pcalAdmDraft.photo_url || null,
+    photo_url: _pcalAdmDraft.photo_url || cuts[0] || null,
     regions:   _pcalAdmDraft.regions   || null,
+    cover_layout: _pcalAdmDraft.layout || 'single',
+    cover_photos: cuts,
     updated_at: new Date().toISOString()
   };
   try {
@@ -39398,6 +39504,18 @@ async function pcalAdmSaveCover(){
   } catch(e){}
 
   var res = await window.sb.from('month_covers').upsert(payload, { onConflict: 'year,month' });
+
+  // 분할 컬럼이 아직 없는 DB(sql/month_covers_split.sql 미실행)면 그 둘만 빼고 다시 시도한다.
+  //   컬럼 하나 때문에 표지 저장 전체가 막히면 안 된다.
+  if(res.error && /cover_layout|cover_photos|schema cache|column/i.test(res.error.message || '')){
+    delete payload.cover_layout;
+    delete payload.cover_photos;
+    res = await window.sb.from('month_covers').upsert(payload, { onConflict: 'year,month' });
+    if(!res.error && typeof showToast === 'function'){
+      showToast('⚠','컷 나누기는 저장 안 됨','sql/month_covers_split.sql 을 실행하면 분할 표지가 저장됩니다');
+    }
+  }
+
   if(res.error){
     console.warn('⚠ month_covers 저장 실패:', res.error.message);
     if(typeof showToast === 'function'){
@@ -39411,7 +39529,9 @@ async function pcalAdmSaveCover(){
   if(!_pcalCovers) _pcalCovers = {};
   _pcalCovers[_pcalAdmY + '-' + _pcalAdmM] = {
     year:_pcalAdmY, month:_pcalAdmM,
-    photo_url: payload.photo_url, regions: payload.regions
+    photo_url: payload.photo_url, regions: payload.regions,
+    cover_layout: payload.cover_layout || 'single',
+    cover_photos: payload.cover_photos || []
   };
   if(typeof showToast === 'function') showToast('✅','표지 저장', _pcalAdmY + '년 ' + _pcalAdmM + '월');
   pcalRenderAll();
@@ -39466,6 +39586,7 @@ function pcalAdmUpload(kind, ticketId){
       return;
     }
     if(kind === 'hero') pcalAdmSetHero(url);
+    else if(kind === 'cut') pcalAdmSetCut(ticketId, url);
     else pcalAdmSetTile(ticketId, url);
   };
   inp.click();
@@ -39490,8 +39611,8 @@ function _pcalAllRestPhotos(){
 }
 
 function pcalPickOpen(kind, ticketId){
-  _pcalPickTarget = { kind: kind, id: ticketId || null };
-  if(kind === 'hero') _pcalAdmSyncInputs();
+  _pcalPickTarget = { kind: kind, id: (ticketId === 0 ? 0 : (ticketId || null)) };
+  if(kind === 'hero' || kind === 'cut') _pcalAdmSyncInputs();
   var m = document.getElementById('pcalPickModal');
   if(m) m.style.display = 'block';
   var s = document.getElementById('pcalPickSearch');
@@ -39532,6 +39653,7 @@ function pcalPickChoose(idx){
   pcalPickClose();
   if(!tg || !o) return;
   if(tg.kind === 'hero') pcalAdmSetHero(o.url);
+  else if(tg.kind === 'cut') pcalAdmSetCut(tg.id, o.url);
   else pcalAdmSetTile(tg.id, o.url);
 }
 window.pcalPickChoose = pcalPickChoose;
