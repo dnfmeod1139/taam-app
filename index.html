@@ -6087,16 +6087,40 @@ function _tossRestoreViewportOnce(){
     void de.offsetHeight;            // reflow 강제
     de.style.height = '';
     void de.offsetHeight;
+    // ③-2 🆕 2026.08: 높이 흔들기만으로는 부족한 경우가 있다.
+    //   iOS 에서 결제창(외부 브라우저/인앱 시트)을 닫고 돌아오면 position:fixed 요소가
+    //   축소된 시점의 뷰포트에 고정된 채 남아, GNB 가 화면 중간까지 올라와 있다.
+    //   그 요소를 잠깐 display:none 으로 뺐다가 되돌리면 브라우저가 fixed 위치를
+    //   현재 뷰포트 기준으로 다시 계산한다 — 높이 흔들기보다 확실하다.
+    //   대상: 하단 고정 GNB · 자리 상세 하단 결제바 · 상단 고정 필터바.
+    ['mainGnb','ticketFilterBar','tkPillBar'].forEach(function(id){
+      var el = document.getElementById(id);
+      if(!el || el.style.display === 'none') return;
+      var prev = el.style.display;
+      el.style.display = 'none';
+      void el.offsetHeight;
+      el.style.display = prev;
+    });
+    var _pdBar = document.querySelector('#pcalDetail .pd-bar');
+    if(_pdBar){
+      var _pv = _pdBar.style.display;
+      _pdBar.style.display = 'none';
+      void _pdBar.offsetHeight;
+      _pdBar.style.display = _pv;
+    }
     // ④ 뷰포트 크기에 반응하는 리스너(캐러셀 등) 재계산
     try { window.dispatchEvent(new Event('resize')); } catch(_re){}
   } catch(_e){}
 }
-// 뷰포트가 늦게 안정화되는 경우까지 커버 (0 / 350 / 750ms 3회)
+// 뷰포트가 늦게 안정화되는 경우까지 커버.
+//   🆕 2026.08: 예전 일정(0/350/750/1200ms)은 750ms 에 trip 플래그를 지워버려서,
+//   그 뒤에 뷰포트가 안정화되는 기기(외부 브라우저에서 늦게 돌아오는 경우)는
+//   visualViewport resize 리스너가 이미 무력화된 상태였다. 끝까지 들고 간다.
 function _tossRestoreViewport(){
-  _tossRestoreViewportOnce();
-  setTimeout(_tossRestoreViewportOnce, 350);
-  setTimeout(function(){ _tossRestoreViewportOnce(); _tossClearTrip(); }, 750);
-  setTimeout(_tossRestoreViewportOnce, 1200);   // PWA reload 후 늦은 안정화 대비
+  [0, 300, 700, 1200, 2000, 3000].forEach(function(ms){
+    setTimeout(_tossRestoreViewportOnce, ms);
+  });
+  setTimeout(function(){ _tossRestoreViewportOnce(); _tossClearTrip(); }, 3500);
 }
 // ── 결제창 왕복 표시 ──
 //   PWA(standalone)에서는 결제창→복귀 시 앱이 reload 되어 window 변수가 날아가므로
@@ -6652,8 +6676,31 @@ if (window.visualViewport) {
     if (typeof _tossHasTrip==='function' && _tossHasTrip() && typeof _tossRestoreViewportOnce==='function') {
       _tossRestoreViewportOnce();
     }
+    if (typeof _gnbBottomGuard === 'function') _gnbBottomGuard();
   });
 }
+// 🆕 2026.08: 결제창 왕복과 무관한 안전망.
+//   하단 고정 GNB 의 아래변이 화면 아래변에서 떨어져 있으면(= fixed 가 축소된 옛
+//   뷰포트에 붙어 있으면) 그 자리에서 복원한다. trip 플래그가 이미 지워졌거나,
+//   결제 외의 경로(외부 링크·앱 전환)로 같은 증상이 나도 잡힌다.
+//   조건을 만족할 때만 도니 평소에는 아무 일도 하지 않는다.
+function _gnbBottomGuard(){
+  try {
+    var gnb = document.getElementById('mainGnb');
+    if (!gnb) return;
+    if (getComputedStyle(gnb).display === 'none') return;
+    var gap = window.innerHeight - gnb.getBoundingClientRect().bottom;
+    if (gap > 6 && typeof _tossRestoreViewportOnce === 'function') {
+      _tossRestoreViewportOnce();
+    }
+  } catch(_e){}
+}
+window._gnbBottomGuard = _gnbBottomGuard;
+document.addEventListener('visibilitychange', function(){
+  if (document.visibilityState === 'visible') setTimeout(_gnbBottomGuard, 250);
+});
+window.addEventListener('focus', function(){ setTimeout(_gnbBottomGuard, 250); });
+window.addEventListener('orientationchange', function(){ setTimeout(_gnbBottomGuard, 400); });
 
 window._googlePlacesReady = false;
 window._googleACSvc = null;
