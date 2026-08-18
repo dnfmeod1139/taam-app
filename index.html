@@ -528,6 +528,85 @@ html.auto-login .splash .bottom-group{display:none !important}
 .pcal-item .st.full{color:#57544f}
 .pcal-item .go{font-size:15px;color:#57544f;margin-top:5px}
 
+/* ══════ 🧪 매거진뷰 (프로토타입 · claude/magazine-view 브랜치 전용) ══════
+   첫 화면을 월간 표지 한 장으로 꽉 채우고, 캘린더는 아래로 밀거나 버튼을 눌렀을 때
+   시트로 올라오게 한다.
+
+   ⚠️ 시트는 하나만 쓴다. 캘린더 시트 위에 날짜 시트를 또 얹으면 시트가 겹겹이 쌓여
+   뒤로가기가 헷갈린다(기존 구조의 문제). 그래서 같은 시트 안에서 내용만
+   「캘린더 ↔ 그 날의 자리」로 갈아 끼운다. 화면에 떠 있는 판은 언제나 한 장이다. */
+#magView{position:fixed;inset:0;z-index:140;display:none;background:#0B0305;color:#F2EDE7;
+  word-break:keep-all}
+#magView .mag-scroll{position:absolute;inset:0;overflow-y:auto;overflow-x:hidden;
+  -webkit-overflow-scrolling:touch;scrollbar-width:none}
+#magView .mag-scroll::-webkit-scrollbar{display:none}
+#magView .mag-hero{position:relative;height:100%;min-height:100%;overflow:hidden}
+#magView .mag-hero img{width:100%;height:100%;object-fit:cover;filter:saturate(.88) contrast(1.06)}
+#magView .mag-shade{position:absolute;inset:0;
+  background:linear-gradient(180deg,rgba(0,0,0,.62) 0%,rgba(0,0,0,.06) 26%,
+    rgba(0,0,0,.10) 52%,rgba(0,0,0,.72) 84%,#0B0305 100%)}
+#magView .mag-top{position:absolute;top:0;left:0;right:0;z-index:4;display:flex;align-items:center;
+  justify-content:space-between;padding:18px 20px}
+#magView .mag-top .logo{font-family:'Nanum Myeongjo','Hiragino Mincho ProN',serif;
+  letter-spacing:.44em;font-size:13px;font-weight:600;padding-left:.44em;color:#F2EDE7}
+#magView .mag-top .ic{font-size:12px;color:#DED9D3;letter-spacing:.08em;width:34px}
+#magView .mag-issue{position:absolute;top:64px;left:24px;right:24px;z-index:4;
+  font-family:'Oswald',sans-serif;font-size:9.5px;letter-spacing:.34em;color:rgba(255,255,255,.62)}
+#magView .mag-txt{position:absolute;left:24px;right:24px;bottom:196px;z-index:4}
+#magView .mag-mon{font-family:'Nanum Myeongjo','Hiragino Mincho ProN',serif;
+  font-size:74px;line-height:.9;letter-spacing:.01em;color:#fff}
+#magView .mag-mon small{font-family:'Oswald',sans-serif;display:block;font-size:12px;
+  letter-spacing:.36em;color:rgba(255,255,255,.66);margin-bottom:12px}
+#magView .mag-line{margin-top:18px;font-size:13.5px;color:#E4DFD9;letter-spacing:.02em;line-height:1.7}
+#magView .mag-count{margin-top:10px;font-family:'Oswald',sans-serif;font-size:10.5px;
+  letter-spacing:.2em;color:rgba(255,255,255,.5)}
+#magView .mag-credit{margin-top:14px;font-size:10px;color:rgba(255,255,255,.34);letter-spacing:.08em}
+/* 아래로 밀거나 눌러서 캘린더 */
+/* GNB(하단 고정) 위로 띄운다 — 안 그러면 버튼이 GNB 에 가려 안 눌린다 */
+#magView .mag-cue{position:absolute;left:0;right:0;bottom:0;z-index:5;
+  padding:0 24px calc(96px + env(safe-area-inset-bottom));display:flex;align-items:center;gap:12px}
+#magView .mag-cue button{flex:1;border:1px solid rgba(255,255,255,.24);background:rgba(255,255,255,.07);
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-radius:999px;
+  padding:14px 0;color:#F2EDE7;cursor:pointer;
+  font-family:'Oswald','Noto Sans KR',sans-serif;font-size:11.5px;font-weight:600;letter-spacing:.14em}
+#magView .mag-cue .chev{width:44px;height:44px;flex:none;border-radius:50%;
+  border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.07);
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  display:flex;align-items:center;justify-content:center;color:#F2EDE7;font-size:15px;cursor:pointer;
+  animation:magNudge 2.4s ease-in-out infinite}
+@keyframes magNudge{0%,100%{transform:translateY(0)}50%{transform:translateY(4px)}}
+/* 아래로 스크롤하면 나오는 당김 영역 — 여기까지 오면 시트가 올라온다 */
+#magView .mag-pull{height:34vh;display:flex;flex-direction:column;align-items:center;
+  justify-content:flex-start;padding-top:26px;gap:9px;background:#0B0305}
+#magView .mag-pull .bar{width:34px;height:3px;border-radius:2px;background:#3A3A3E}
+#magView .mag-pull .t{font-family:'Oswald',sans-serif;font-size:10px;letter-spacing:.24em;color:#6F6A65}
+
+/* 시트 — 캘린더와 그 날 자리 목록이 같은 판을 나눠 쓴다 */
+#magSheet{position:fixed;inset:0;z-index:170;display:none}
+#magSheet .mg-dim{position:absolute;inset:0;background:rgba(0,0,0,.55);opacity:0;transition:opacity .3s ease}
+#magSheet.open .mg-dim{opacity:1}
+#magSheet .mg-panel{position:absolute;left:0;right:0;bottom:0;height:88vh;
+  background:rgba(12,10,11,.96);backdrop-filter:blur(30px) saturate(140%);
+  -webkit-backdrop-filter:blur(30px) saturate(140%);
+  border-top:1px solid rgba(255,255,255,.12);border-radius:22px 22px 0 0;
+  display:flex;flex-direction:column;overflow:hidden;color:#F2EDE7;
+  transform:translateY(100%);transition:transform .34s cubic-bezier(.22,1,.36,1)}
+#magSheet.open .mg-panel{transform:translateY(0)}
+#magSheet .mg-grab{padding:11px 0 6px;flex:none;display:flex;justify-content:center;cursor:grab;
+  touch-action:none}
+#magSheet .mg-grab i{display:block;width:38px;height:4px;border-radius:2px;background:#3A3A3E}
+#magSheet .mg-head{flex:none;display:flex;align-items:center;gap:10px;padding:2px 20px 12px;
+  border-bottom:1px solid #232326}
+#magSheet .mg-head .back{width:26px;font-size:19px;color:#DED9D3;cursor:pointer;display:none}
+#magSheet.day .mg-head .back{display:block}
+#magSheet .mg-head .ttl{font-family:'Nanum Myeongjo','Hiragino Mincho ProN',serif;font-size:19px;color:#F2EDE7}
+#magSheet .mg-head .sub{font-size:11px;color:#8D8781}
+#magSheet .mg-head .cnt{margin-left:auto;font-family:'Oswald',sans-serif;font-size:10px;
+  letter-spacing:.16em;color:#8D8781}
+#magSheet .mg-body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;
+  padding-bottom:calc(24px + env(safe-area-inset-bottom))}
+#magSheet .mg-body .pcal-cal{padding-top:6px}
+
 /* 자리 상세 (사진 캘린더 전용) — 기존 티켓 상세는 그대로 두고 별도 화면으로 둔다.
    결제는 기존 코드를 그대로 부른다 (openTdPayPopup).
 
@@ -7899,6 +7978,31 @@ window.closePromoCarousel = function(){
 
 <!-- ══════ 🆕 2026.08 사진 캘린더 — 날짜 바텀시트 / 슈퍼어드민 편집 / 사진 고르기 ══════
      사진은 전부 Supabase 에서 URL 로만 온다. index.html 에는 이미지 데이터를 넣지 않는다. -->
+<!-- 🧪 매거진뷰 (프로토타입) — 표지 한 장 + 시트 한 장 -->
+<div id="magView">
+  <div class="mag-scroll" id="magScroll">
+    <div class="mag-hero" id="magHero"></div>
+    <div class="mag-pull">
+      <div class="bar"></div>
+      <div class="t">RELEASE TO OPEN</div>
+    </div>
+  </div>
+</div>
+<div id="magSheet" onclick="if(event.target===this||event.target.className==='mg-dim')magCloseSheet()">
+  <div class="mg-dim"></div>
+  <div class="mg-panel">
+    <div class="mg-grab" id="magGrab"><i></i></div>
+    <div class="mg-head">
+      <div class="back" onclick="magBackToCal()">‹</div>
+      <div class="ttl" id="magSheetTitle"></div>
+      <div class="sub" id="magSheetSub"></div>
+      <div class="cnt" id="magSheetCnt"></div>
+    </div>
+    <!-- class="pcal" — 캘린더/목록이 쓰는 색 변수(--pc-gold 등)를 물려받는다 -->
+    <div class="mg-body pcal" id="magSheetBody"></div>
+  </div>
+</div>
+
 <div id="pcalSheet" onclick="if(event.target===this||event.target.className==='pc-dim')pcalCloseSheet()">
   <div class="pc-dim"></div>
   <div class="pc-bs" id="pcalSheetBody"></div>
@@ -9642,6 +9746,14 @@ window.closePromoCarousel = function(){
             <div>
               <div class="admin-menu-text" id="newHomeLabel">📅 사진 캘린더 (이 기기)</div>
               <div class="admin-menu-sub" id="newHomeSub">NEW_HOME_LIVE 가 꺼져 있어도 이 기기에서만 새 첫 화면(사진 타일 캘린더)을 연다. 슈퍼어드민 전용</div>
+            </div>
+            <div class="admin-arrow">›</div>
+          </div>
+          <!-- 🧪 프로토타입 (claude/magazine-view 브랜치) — 배포 대상 아님 -->
+          <div class="admin-menu-item" onclick="toggleMagazine()">
+            <div>
+              <div class="admin-menu-text" id="magLabel">🧪 매거진뷰 (이 기기)</div>
+              <div class="admin-menu-sub">홈을 월간 표지 한 장으로 꽉 채우고, 캘린더는 아래로 밀거나 버튼을 눌러야 시트로 올라온다. 사진 캘린더가 켜져 있어야 한다</div>
             </div>
             <div class="admin-arrow">›</div>
           </div>
@@ -16059,6 +16171,7 @@ function adminDirectAccess(){
   try{ if(typeof cardPayTestSync === 'function') cardPayTestSync(); }catch(e){}
   try{ if(typeof newHomeSync === 'function') newHomeSync(); }catch(e){}
   try{ if(typeof pdSkinSync === 'function') pdSkinSync(); }catch(e){}
+  try{ if(typeof magSync === 'function') magSync(); }catch(e){}
   try{ if(typeof pcalApplyGnb === 'function') pcalApplyGnb(); }catch(e){}
   // 참고: bootAutoLogin 경로에서도 이 함수가 호출되는데, 거기서 이미 ready 처리됨
 
@@ -16298,6 +16411,8 @@ function showView(view){
   var orb1 = document.getElementById('cfGlowOrb');
   var orb2 = document.getElementById('cfGlowOrb2');
 
+  // 🧪 매거진뷰(프로토타입)는 홈에서만 뜬다 — 탭을 옮기면 무조건 내린다
+  if(typeof magHide === 'function') magHide();
   // 항상 필터바·pill바·초기화버튼 숨기고 시작
   if(tickBar) tickBar.style.display='none';
   if(pillBar) pillBar.style.display='none';
@@ -16363,7 +16478,15 @@ function showView(view){
     // 🆕 2026.08: 홈도 같은 캘린더 (앞으로 팝업·이벤트 자리로 갈라질 예정)
     if(typeof newHomeEnabled === 'function' && newHomeEnabled()){
       if(typeof pcalApplyGnb === 'function') pcalApplyGnb();
-      if(typeof pcalRenderAll === 'function') pcalRenderAll();
+      // 🧪 매거진뷰가 켜져 있으면 홈은 표지 한 장 — 캘린더는 시트로만 올라온다
+      if(typeof magEnabled === 'function' && magEnabled()){
+        var _pcH = document.getElementById('pcalHome');
+        if(_pcH){ _pcH.style.display = 'none'; _pcH.innerHTML = ''; }
+        if(typeof magRender === 'function') magRender();
+      } else {
+        if(typeof magHide === 'function') magHide();
+        if(typeof pcalRenderAll === 'function') pcalRenderAll();
+      }
     }
   }
 }
@@ -37826,7 +37949,9 @@ async function pcalLoadCovers(){
 }
 window.pcalLoadCovers = pcalLoadCovers;
 
-function renderPhotoCalInto(hostId){
+//   skipHero: 매거진뷰의 캘린더 시트처럼 히어로가 이미 뒤에 깔려 있는 자리에서는
+//             히어로를 다시 그리지 않는다 (같은 사진이 두 번 나오는 것 방지)
+function renderPhotoCalInto(hostId, skipHero){
   var host = document.getElementById(hostId);
   if(!host) return;
   if(typeof newHomeEnabled !== 'function' || !newHomeEnabled()){
@@ -37849,18 +37974,20 @@ function renderPhotoCalInto(hostId){
   var h = '';
 
   // ── 히어로 ──
-  h += '<div class="pcal-hero">';
-  if(hero.photo){
-    h += '<img src="' + _pcalEsc(hero.photo) + '" alt="">';
-  } else {
-    h += '<div class="pc-empty">PHOTO NOT SET</div>';
+  if(!skipHero){
+    h += '<div class="pcal-hero">';
+    if(hero.photo){
+      h += '<img src="' + _pcalEsc(hero.photo) + '" alt="">';
+    } else {
+      h += '<div class="pc-empty">PHOTO NOT SET</div>';
+    }
+    h += '<div class="pc-shade"></div>';
+    h += '<div class="pc-txt">';
+    h += '<div class="pc-mon"><small>' + _pcalY + '</small>' + _pcalM + '月</div>';
+    if(hero.regions) h += '<div class="pc-line">' + _pcalEsc(hero.regions) + '</div>';
+    if(hero.credit)  h += '<div class="pc-credit">' + _pcalEsc(hero.credit) + '</div>';
+    h += '</div></div>';
   }
-  h += '<div class="pc-shade"></div>';
-  h += '<div class="pc-txt">';
-  h += '<div class="pc-mon"><small>' + _pcalY + '</small>' + _pcalM + '月</div>';
-  if(hero.regions) h += '<div class="pc-line">' + _pcalEsc(hero.regions) + '</div>';
-  if(hero.credit)  h += '<div class="pc-credit">' + _pcalEsc(hero.credit) + '</div>';
-  h += '</div></div>';
 
   // ── 연도 아코디언 + 월 스트립 (월은 선택 연도의 1~12月, 수평 스크롤 전용) ──
   h += '<div class="pcal-ybar' + (_pcalYearOpen ? ' open' : '') + '">'
@@ -37944,6 +38071,8 @@ function pcalRenderAll(){
   ['pcalTicket','pcalHome'].forEach(function(id){
     try { renderPhotoCalInto(id); } catch(e){ console.warn('[pcal] 렌더 실패', id, e); }
   });
+  // 매거진뷰(프로토타입)가 켜져 있으면 표지와 시트 안의 캘린더도 같이 갱신
+  try { if(typeof magRender === 'function') magRender(); } catch(e){}
 }
 window.pcalRenderAll = pcalRenderAll;
 
@@ -37977,6 +38106,12 @@ window.pcalPickYear = pcalPickYear;
 
 // ── 날짜 바텀시트 ──
 function pcalOpenDay(y, m, d){
+  // 🧪 매거진뷰: 시트가 이미 떠 있으면 그 안에서 내용만 바꾼다 (시트를 겹쳐 쌓지 않는다)
+  var _mgs = document.getElementById('magSheet');
+  if(_mgs && _mgs.classList.contains('open') && typeof magOpenDay === 'function'){
+    magOpenDay(y, m, d);
+    return;
+  }
   var byDate = _pcalByDate();
   var key = y*10000 + m*100 + d;
   var list = byDate[key] || [];
@@ -38203,6 +38338,246 @@ function _pcalDetailHtml(t, r, dead, expired){
   h += '</div>';
 
   return h;
+}
+
+// ══════════════════════════════════════════════════════════════
+// 🧪 매거진뷰 (프로토타입 — claude/magazine-view 브랜치 전용, 배포 대상 아님)
+//
+//   첫 화면을 월간 표지 한 장으로 꽉 채운다. 캘린더는 아래로 밀거나 버튼을 눌러야
+//   시트로 올라온다. 사진이 먼저 오고 기능이 뒤에 오는 순서다.
+//
+//   ⚠️ 판은 언제나 한 장만 떠 있다.
+//      캘린더 시트 위에 날짜 시트를 또 얹으면 시트가 겹겹이 쌓여 뒤로가기가 헷갈린다.
+//      그래서 같은 시트 안에서 내용만 「캘린더 ↔ 그 날의 자리」로 갈아 끼운다.
+//      자리를 고르면 그때만 전체화면(자리 상세)으로 넘어간다.
+//
+//   켜는 법: 어드민 메뉴 「🧪 매거진뷰 (이 기기)」. 사진 캘린더 스위치가 켜져 있어야 한다.
+// ══════════════════════════════════════════════════════════════
+var MAGAZINE_LIVE = false;
+function magEnabled(){
+  if(typeof newHomeEnabled !== 'function' || !newHomeEnabled()) return false;
+  if(MAGAZINE_LIVE) return true;
+  try { return localStorage.getItem('taamMagazine') === '1'; } catch(e){ return false; }
+}
+window.magEnabled = magEnabled;
+
+function toggleMagazine(){
+  var role = (typeof _currentRole !== 'undefined') ? _currentRole : '';
+  if(role !== 'superadmin'){
+    if(typeof showToast === 'function') showToast('⚠','권한 없음','슈퍼어드민 전용 기능입니다');
+    return;
+  }
+  var on = false;
+  try {
+    on = localStorage.getItem('taamMagazine') === '1';
+    if(on) localStorage.removeItem('taamMagazine');
+    else   localStorage.setItem('taamMagazine', '1');
+    on = !on;
+  } catch(e){
+    if(typeof showToast === 'function') showToast('⚠','저장 실패','localStorage 를 쓸 수 없습니다');
+    return;
+  }
+  magSync();
+  if(!on){ magHide(); }
+  if(typeof showView === 'function') showView(on ? 'home' : 'ticket');
+  if(typeof showToast === 'function'){
+    showToast(on ? '🧪' : '📅', on ? '매거진뷰 ON' : '매거진뷰 OFF',
+      on ? '홈이 월간 표지 한 장으로 열립니다' : '홈이 캘린더로 돌아왔습니다');
+  }
+}
+window.toggleMagazine = toggleMagazine;
+
+function magSync(){
+  try {
+    var on = localStorage.getItem('taamMagazine') === '1';
+    var lbl = document.getElementById('magLabel');
+    if(lbl) lbl.textContent = on ? '🧪 매거진뷰 (이 기기) — 켜짐' : '🧪 매거진뷰 (이 기기) — 꺼짐';
+  } catch(e){}
+}
+window.magSync = magSync;
+
+function magHide(){
+  var v = document.getElementById('magView');
+  if(v) v.style.display = 'none';
+  magCloseSheet();
+}
+window.magHide = magHide;
+
+// ── 표지 렌더 ──
+function magRender(){
+  var v = document.getElementById('magView');
+  if(!v) return;
+  if(!magEnabled()){ v.style.display = 'none'; return; }
+
+  if(_pcalCovers === null){
+    _pcalCovers = {};
+    pcalLoadCovers().then(function(){ magRender(); }).catch(function(){});
+  }
+  var byDate = _pcalByDate();
+  _pcalInitMonth(byDate);
+  var hero  = _pcalHeroFor(_pcalY, _pcalM, byDate);
+  var seats = _pcalMonthTickets(_pcalY, _pcalM, byDate);
+  var open  = seats.filter(function(t){
+    return t.status !== 'soldout' && !(typeof _isTicketExpired === 'function' && _isTicketExpired(t));
+  }).length;
+
+  var h = '';
+  h += hero.photo ? '<img src="' + _pcalEsc(hero.photo) + '" alt="">' : '';
+  h += '<div class="mag-shade"></div>';
+  h += '<div class="mag-top"><div class="ic">☰</div><div class="logo">TAAM</div><div class="ic" style="text-align:right;">KO</div></div>';
+  h += '<div class="mag-issue">ISSUE ' + _pcalY + '.' + (_pcalM < 10 ? '0' : '') + _pcalM + '</div>';
+  h += '<div class="mag-txt">';
+  h += '<div class="mag-mon"><small>' + _pcalY + '</small>' + _pcalM + '月</div>';
+  if(hero.regions) h += '<div class="mag-line">' + _pcalEsc(hero.regions) + '</div>';
+  h += '<div class="mag-count">' + (open > 0 ? open + ' SEATS OPEN' : 'NO SEATS THIS MONTH') + '</div>';
+  if(hero.credit) h += '<div class="mag-credit">' + _pcalEsc(hero.credit) + '</div>';
+  h += '</div>';
+  h += '<div class="mag-cue">'
+     + '<button onclick="magOpenSheet()">이 달의 자리 보기</button>'
+     + '<div class="chev" onclick="magOpenSheet()">⌄</div>'
+     + '</div>';
+
+  var heroEl = document.getElementById('magHero');
+  if(heroEl) heroEl.innerHTML = h;
+  v.style.display = 'block';
+  magBindScroll();
+}
+window.magRender = magRender;
+
+// 아래로 밀면 시트가 올라온다 — 스크롤이 당김 영역으로 넘어가는 순간 열고 되돌린다
+var _magScrollBound = false;
+function magBindScroll(){
+  if(_magScrollBound) return;
+  var sc = document.getElementById('magScroll');
+  if(!sc) return;
+  _magScrollBound = true;
+  sc.addEventListener('scroll', function(){
+    if(sc.scrollTop > 56){
+      magOpenSheet();
+      setTimeout(function(){ sc.scrollTop = 0; }, 260);
+    }
+  }, { passive:true });
+}
+
+// ── 시트 ──
+function magOpenSheet(){
+  var s = document.getElementById('magSheet');
+  if(!s) return;
+  magShowCalendar();
+  s.style.display = 'block';
+  void s.offsetHeight;          // 트랜지션이 먹도록 리플로우
+  s.classList.add('open');
+  magBindDrag();
+}
+window.magOpenSheet = magOpenSheet;
+
+function magCloseSheet(){
+  var s = document.getElementById('magSheet');
+  if(!s) return;
+  s.classList.remove('open');
+  setTimeout(function(){ s.style.display = 'none'; }, 320);
+}
+window.magCloseSheet = magCloseSheet;
+
+// 시트 안 · 캘린더 상태
+function magShowCalendar(){
+  var s = document.getElementById('magSheet');
+  if(s) s.classList.remove('day');
+  var byDate = _pcalByDate();
+  var seats = _pcalMonthTickets(_pcalY, _pcalM, byDate);
+  var t = document.getElementById('magSheetTitle');
+  var sub = document.getElementById('magSheetSub');
+  var cnt = document.getElementById('magSheetCnt');
+  if(t) t.textContent = _pcalY + '년 ' + _pcalM + '월';
+  if(sub) sub.textContent = '';
+  if(cnt) cnt.textContent = seats.length ? seats.length + ' SEATS' : '';
+  // 히어로는 뒤에 이미 깔려 있으니 시트 안에서는 그리지 않는다
+  renderPhotoCalInto('magSheetBody', true);
+}
+window.magShowCalendar = magShowCalendar;
+function magBackToCal(){ magShowCalendar(); }
+window.magBackToCal = magBackToCal;
+
+// 시트 안 · 그 날의 자리 목록 (새 시트를 얹지 않는다)
+function magOpenDay(y, m, d){
+  var byDate = _pcalByDate();
+  var key = y*10000 + m*100 + d;
+  var list = byDate[key] || [];
+  if(!list.length) return;
+  if(typeof _sortTickets === 'function') list = _sortTickets(list);
+
+  var s = document.getElementById('magSheet');
+  if(s) s.classList.add('day');
+  var dt = new Date(y, m-1, d);
+  var t = document.getElementById('magSheetTitle');
+  var sub = document.getElementById('magSheetSub');
+  var cnt = document.getElementById('magSheetCnt');
+  if(t) t.textContent = m + '월 ' + d + '일';
+  if(sub) sub.textContent = _pcalDowName(dt);
+  if(cnt) cnt.textContent = list.length + ' SEATS';
+
+  var h = '<div style="padding:4px 20px 0;">';
+  list.forEach(function(tk){
+    var r = _pcalRest(tk);
+    var dead = (tk.status === 'soldout') ||
+               (typeof _isTicketExpired === 'function' && _isTicketExpired(tk));
+    var ph = _pcalPhoto(tk);
+    var bits = [];
+    if(r && (r.zoneEn || r.cityEn)) bits.push(_pcalEsc(r.zoneEn || r.cityEn));
+    if(tk.time) bits.push(_pcalEsc(tk.time));
+    if(tk.ticketGenre) bits.push(_pcalEsc(tk.ticketGenre));
+    h += '<div class="pcal-item" onclick="magGoTicket(\'' + _pcalEsc(String(tk.id)) + '\')">';
+    h += '<div class="ph">' + (ph ? '<img src="' + _pcalEsc(ph) + '" alt="">' : '') + '</div>';
+    h += '<div class="m"><div class="nm">' + _pcalEsc(_pcalRestName(tk)) + '</div>'
+       + '<div class="sub">' + bits.join(' · ') + '</div></div>';
+    h += '<div class="rt"><div class="st' + (dead ? ' full' : '') + '">'
+       + (dead ? (tk.status === 'soldout' ? '마감' : '기한 만료') : '자리 있음')
+       + '</div><div class="go">›</div></div>';
+    h += '</div>';
+  });
+  h += '</div>';
+  var body = document.getElementById('magSheetBody');
+  if(body){ body.innerHTML = h; body.scrollTop = 0; }
+}
+window.magOpenDay = magOpenDay;
+
+function magGoTicket(id){
+  magCloseSheet();
+  setTimeout(function(){
+    if(typeof pcalOpenTicket === 'function') pcalOpenTicket(id);
+  }, 180);
+}
+window.magGoTicket = magGoTicket;
+
+// 손잡이를 아래로 끌면 닫힌다
+var _magDragBound = false;
+function magBindDrag(){
+  if(_magDragBound) return;
+  var grab = document.getElementById('magGrab');
+  var panel = document.querySelector('#magSheet .mg-panel');
+  if(!grab || !panel) return;
+  _magDragBound = true;
+  var y0 = null;
+  function start(y){ y0 = y; panel.style.transition = 'none'; }
+  function move(y){
+    if(y0 === null) return;
+    var dy = Math.max(0, y - y0);
+    panel.style.transform = 'translateY(' + dy + 'px)';
+  }
+  function end(y){
+    if(y0 === null) return;
+    var dy = Math.max(0, y - y0);
+    y0 = null;
+    panel.style.transition = '';
+    panel.style.transform = '';
+    if(dy > 90) magCloseSheet();
+  }
+  grab.addEventListener('touchstart', function(e){ start(e.touches[0].clientY); }, {passive:true});
+  grab.addEventListener('touchmove',  function(e){ move(e.touches[0].clientY); }, {passive:true});
+  grab.addEventListener('touchend',   function(e){ end(e.changedTouches[0].clientY); });
+  grab.addEventListener('mousedown',  function(e){ start(e.clientY); e.preventDefault(); });
+  window.addEventListener('mousemove', function(e){ if(y0 !== null) move(e.clientY); });
+  window.addEventListener('mouseup',   function(e){ if(y0 !== null) end(e.clientY); });
 }
 
 // ── 팔레트 (기기별 스위치) ──────────────────────────────────
