@@ -34,6 +34,17 @@ function json(body: unknown, status = 200) {
   });
 }
 
+// ── 훅의 오류는 HTTP 200 으로 돌려준다 ──
+//   Supabase Auth 훅 규약은 「응답은 200, 오류는 본문의 error 객체로」다.
+//   HTTP 상태로 4xx·5xx 를 돌려주면 GoTrue 는 본문을 읽지 않고
+//   "Hook errored out" 한 줄만 남긴 채 회원에게 일반 500 을 준다.
+//   그러면 무엇이 막았는지 앱에도, 로그에도 남지 않는다 — 원인을 찾을 길이 사라진다.
+//   본문으로 주면 이 message 가 그대로 앱 화면까지 올라온다.
+function hookErr(code: number, message: string) {
+  console.error('[sms-hook] ' + message);
+  return json({ error: { http_code: code, message: '[sms-hook] ' + message } }, 200);
+}
+
 // ── Standard Webhooks 서명 검증 ──
 //   Supabase 는 webhook-id / webhook-timestamp / webhook-signature 를 보낸다.
 //   서명 대상 문자열은 `${id}.${timestamp}.${body}` 이고,
@@ -93,8 +104,7 @@ serve(async (req) => {
   const hookSecret = Deno.env.get('SEND_SMS_HOOK_SECRET');
   if (!hookSecret) {
     // 시크릿 미설정 = 누구나 호출 가능 = 문자 폭탄. 열어두지 않는다.
-    console.error('[sms-hook] SEND_SMS_HOOK_SECRET 미설정 — 요청 거부');
-    return json({ error: { http_code: 500, message: 'hook secret not configured' } }, 500);
+    return hookErr(500, 'SEND_SMS_HOOK_SECRET 미설정');
   }
 
   const body = await req.text();
@@ -103,27 +113,25 @@ serve(async (req) => {
   const sig = req.headers.get('webhook-signature') || '';
 
   if (!id || !ts || !sig) {
-    console.warn('[sms-hook] 서명 헤더 누락');
-    return json({ error: { http_code: 401, message: 'missing signature headers' } }, 401);
+    return hookErr(401, '서명 헤더 누락 (id=' + (id ? 'o' : 'x')
+      + ' ts=' + (ts ? 'o' : 'x') + ' sig=' + (sig ? 'o' : 'x') + ')');
   }
 
   // 재전송 공격 방지 — 5분을 넘긴 요청은 받지 않는다
   const tsNum = Number(ts);
   if (!Number.isFinite(tsNum) || Math.abs(Date.now() / 1000 - tsNum) > 300) {
-    console.warn('[sms-hook] timestamp 유효범위 밖', ts);
-    return json({ error: { http_code: 401, message: 'timestamp out of range' } }, 401);
+    return hookErr(401, 'timestamp 유효범위 밖: ' + ts);
   }
 
   if (!(await verifySignature(hookSecret, id, ts, body, sig))) {
-    console.warn('[sms-hook] 서명 불일치 — 거부');
-    return json({ error: { http_code: 401, message: 'invalid signature' } }, 401);
+    return hookErr(401, '서명 불일치 — SEND_SMS_HOOK_SECRET 값이 훅 발급값과 다릅니다');
   }
 
   // ── 페이로드 ──
   //   { user: { phone: "+8210...", ... }, sms: { otp: "123456" } }
   let payload: Record<string, unknown>;
   try { payload = JSON.parse(body); }
-  catch { return json({ error: { http_code: 400, message: 'invalid json' } }, 400); }
+  catch { return hookErr(400, 'invalid json'); }
 
   const user = (payload.user || {}) as Record<string, unknown>;
   const smsIn = (payload.sms || {}) as Record<string, unknown>;
@@ -131,16 +139,15 @@ serve(async (req) => {
   const otp = String(smsIn.otp || '');
 
   if (!phone || !otp) {
-    console.warn('[sms-hook] phone/otp 없음');
-    return json({ error: { http_code: 400, message: 'missing phone or otp' } }, 400);
+    return hookErr(400, 'phone/otp 없음');
   }
 
   const apiKey = Deno.env.get('SOLAPI_API_KEY');
   const apiSecret = Deno.env.get('SOLAPI_API_SECRET');
   const sender = Deno.env.get('SOLAPI_SENDER');
   if (!apiKey || !apiSecret || !sender) {
-    console.error('[sms-hook] SOLAPI_* 시크릿 미설정');
-    return json({ error: { http_code: 500, message: 'sms provider not configured' } }, 500);
+    return hookErr(500, 'SOLAPI 시크릿 미설정 (key=' + (apiKey ? 'o' : 'x')
+      + ' secret=' + (apiSecret ? 'o' : 'x') + ' sender=' + (sender ? 'o' : 'x') + ')');
   }
 
   // 문자 본문 — 인증번호 외 정보는 넣지 않는다 (유출 시 피해 최소화)
@@ -164,16 +171,15 @@ serve(async (req) => {
 
     if (!res.ok) {
       const detail = await res.text().catch(() => '');
-      console.error('[sms-hook] Solapi 발송 실패', res.status, detail.slice(0, 300));
-      // Supabase 에 실패를 알려야 회원에게 '발송 실패' 가 표시된다
-      return json({ error: { http_code: 502, message: 'sms send failed' } }, 502);
+      // Solapi 가 준 사유를 그대로 실어 보낸다 — 발신번호 미등록·잔액 부족·번호 형식이
+      // 여기서 갈린다. 이 문자열이 없으면 대시보드 세 군데를 다 뒤져야 한다.
+      return hookErr(502, 'Solapi ' + res.status + ': ' + detail.slice(0, 160));
     }
 
     // 성공 — 인증번호는 절대 로그에 남기지 않는다
     console.log('[sms-hook] 발송 성공', toDomestic(phone).replace(/\d{4}$/, '****'));
     return json({});
   } catch (e) {
-    console.error('[sms-hook] 예외', e);
-    return json({ error: { http_code: 500, message: 'sms send exception' } }, 500);
+    return hookErr(500, '예외: ' + String((e as Error)?.message || e).slice(0, 160));
   }
 });
