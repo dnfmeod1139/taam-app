@@ -23210,6 +23210,7 @@ function _pvNormalize(raw){
 function _pvHint(el, msg, isErr){
   var h = document.getElementById(el);
   if(!h) return;
+  h.style.whiteSpace = 'pre-line';   // 사유를 두 번째 줄에 붙인다
   h.textContent = msg || '';
   h.style.color = isErr ? '#9B1C1C' : '#8a8a86';
   h.style.display = msg ? 'block' : 'none';
@@ -23244,12 +23245,21 @@ async function pvSendCode(){
     var ci = document.getElementById('pvCodeInput'); if(ci){ ci.value=''; ci.focus(); }
   }catch(e){
     var m = String((e && e.message) || e || '');
+    console.warn('[phoneVerify] 발송 실패:', e);
     // 이미 다른 계정이 쓰는 번호 — 한 번호가 두 계정에 붙지 않게 막는다
     if(/already|registered|taken|duplicate|unique/i.test(m)){
       _pvHint('pvHint1', t('mp_sub.pv_msg_taken','이미 다른 계정에서 사용 중인 번호입니다'), true);
     } else {
-      _pvHint('pvHint1', t('mp_sub.pv_msg_send_fail','발송에 실패했습니다 — 잠시 후 다시 시도해주세요'), true);
-      console.warn('[phoneVerify] 발송 실패:', m);
+      // 🔧 재전송 제한은 "잠시 후" 가 정확한 안내라 따로 잡아 남은 시간을 보여준다
+      var sec = (m.match(/after\s+(\d+)\s*seconds?/i) || [])[1];
+      if(sec || /rate limit|too many/i.test(m)){
+        _pvHint('pvHint1', sec ? (sec + '초 후에 다시 시도해주세요') : '요청이 너무 잦습니다 — 잠시 후 다시 시도해주세요', true);
+      } else {
+        // 원인을 화면에 남긴다. 폰에서는 콘솔을 볼 수 없어, 이게 없으면 무엇이 막혔는지 알 길이 없다.
+        _pvHint('pvHint1',
+          t('mp_sub.pv_msg_send_fail','발송에 실패했습니다 — 잠시 후 다시 시도해주세요')
+            + (m ? '\n(' + m.slice(0,110) + ')' : ''), true);
+      }
     }
     if(btn) btn.textContent = t('mp_sub.pv_btn_send','발송');
   }finally{
