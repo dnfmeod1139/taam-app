@@ -57,7 +57,39 @@ SEND_SMS_HOOK_SECRET=v1,whsec_...
 > ⚠️ 이 시크릿이 없으면 함수가 **모든 요청을 거부**한다.
 > 서명 검증 없이 열어두면 아무나 호출해 문자를 무한 발송시킬 수 있기 때문이다.
 
-## 5. Phone Provider 활성화
+## 5. ⭐ JWT 검증 끄기 — 여기서 막힌다
+
+Dashboard → Edge Functions → **taam-sms-hook** → **Settings**
+→ **Verify JWT / Enforce JWT Verification** 를 **끈다**.
+
+왜 꺼야 하나. Edge Function 은 기본적으로 요청에 Supabase JWT 가 붙어 있어야 통과시킨다.
+그런데 Auth 훅은 JWT 를 보내지 않는다 — 대신 Standard Webhooks 서명
+(`webhook-id` · `webhook-timestamp` · `webhook-signature`)을 보낸다.
+그래서 JWT 검증이 켜져 있으면 **함수 코드가 실행되기도 전에 게이트웨이가 막는다.**
+
+증상이 아주 특징적이다:
+
+| 어디 | 보이는 것 |
+|---|---|
+| Auth 로그 | `Hook errored out` · `/user` 500 |
+| **taam-sms-hook 로그** | **텅 비어 있음** (호출 기록조차 없다) |
+| Solapi 대시보드 | 오늘 발송 0건 |
+
+훅은 「등록됨·Enabled」로 멀쩡히 보이고, 함수도 배포돼 있고, Solapi 잔액도 있는데
+문자만 안 간다. 세 군데를 다 봐도 원인이 안 보이는 이유가 이것이다.
+
+> 보안은 약해지지 않는다. 이 함수는 **서명 검증 + 5분 타임스탬프 창**으로 스스로를 지킨다
+> (`SEND_SMS_HOOK_SECRET`). JWT 검증은 애초에 이 경로에 맞는 자물쇠가 아니다.
+
+CLI 로 배포한다면 `--no-verify-jwt` 를 붙인다:
+
+```
+supabase functions deploy taam-sms-hook --no-verify-jwt
+```
+
+---
+
+## 6. Phone Provider 활성화
 
 Dashboard → Authentication → **Sign In / Providers** → **Phone**
 
@@ -76,10 +108,14 @@ Dashboard → Authentication → **Sign In / Providers** → **Phone**
 
 | 로그 | 원인 |
 |---|---|
+| **로그가 아예 없음** + Auth 로그에 `Hook errored out` | **5번 — JWT 검증이 켜져 있다** |
 | `SEND_SMS_HOOK_SECRET 미설정` | 4번 시크릿 누락 |
 | `서명 불일치` | 시크릿 값이 훅 발급값과 다름 |
 | `SOLAPI_* 시크릿 미설정` | 3번 누락 |
 | `Solapi 발송 실패 (4xx)` | 발신번호 미등록 / 잔액 부족 / 수신번호 형식 |
+
+첫 줄이 제일 헷갈린다. **함수 로그가 비어 있으면 함수를 의심하지 말고 게이트웨이를 의심한다.**
+로그가 없다는 건 「함수가 실패했다」가 아니라 「함수가 불리지도 않았다」는 뜻이다.
 
 ## 보안 메모
 
