@@ -598,12 +598,13 @@ html.auto-login .splash .bottom-group{display:none !important}
    버튼을 누르면 살짝 눌리고, 화면은 툭 튀지 않고 올라온다.
    iOS 가 쓰는 감속 곡선(cubic-bezier(.32,.72,0,1))을 그대로 쓴다.
    누르는 순간 반응은 빨라야 하고(90ms), 화면 전환은 조금 길어야(300ms) 자연스럽다. */
-.gnb-btn, .pcal-adm-btn, #pcalDetail .pd-cta, #magSheet .mg-grab,
+.gnb-btn, .mag-sched, .pcal-adm-btn, #pcalDetail .pd-cta, #magSheet .mg-grab,
 .pcal-lrow, .pcal-item, .pcal-d.ev{
   -webkit-tap-highlight-color:transparent;
   transition:transform .09s cubic-bezier(.32,.72,0,1), opacity .09s ease, background .18s ease}
 .gnb-btn:active{transform:scale(.9)}
 .pcal-adm-btn:active, #pcalDetail .pd-cta:active{transform:scale(.94);opacity:.85}
+.mag-sched:active{transform:translateX(-50%) scale(.94);opacity:.88}
 .pcal-lrow:active, .pcal-item:active{transform:scale(.985);opacity:.8}
 .pcal-d.ev:active{transform:scale(.94)}
 #magView .mag-lang .cur:active{opacity:.6}
@@ -613,7 +614,6 @@ html.auto-login .splash .bottom-group{display:none !important}
 @keyframes tkFade{from{opacity:0}to{opacity:1}}
 #pcalDetail.opening{animation:tkRise .3s cubic-bezier(.32,.72,0,1)}
 #magView.opening{animation:tkFade .26s ease-out}
-#magSheet .mg-panel{transition:transform .34s cubic-bezier(.32,.72,0,1)}
 
 /* ══════ 🧪 매거진뷰 (프로토타입 · claude/magazine-view 브랜치 전용) ══════
    첫 화면을 월간 표지 한 장으로 꽉 채우고, 캘린더는 아래로 밀거나 버튼을 눌렀을 때
@@ -663,44 +663,67 @@ html.auto-login .splash .bottom-group{display:none !important}
 #magView .mag-langbox div.on{color:#fff;background:rgba(255,255,255,.06)}
 #magView .mag-issue{position:absolute;top:64px;left:24px;right:24px;z-index:4;
   font-family:'Oswald',sans-serif;font-size:9.5px;letter-spacing:.34em;color:rgba(255,255,255,.62)}
-/* 표지 글자는 월 하나뿐. 그 옆에 스케줄 버튼(버건디)이 붙는다.
-   매장 목록·지역·연도·크레딧은 다 뺐다 — 글자가 늘수록 사진이 죽는다. */
-#magView .mag-txt{position:absolute;left:20px;right:20px;bottom:calc(232px + env(safe-area-inset-bottom));z-index:4}
+/* 표지 글자는 월 하나뿐. 매장 목록·지역·연도·크레딧은 다 뺐다 — 글자가 늘수록 사진이 죽는다.
+   월 표제가 놓이는 자리는 달마다 다르다. 사진의 빈 곳이 매번 다른 데 있기 때문에,
+   한 자리에 못 박으면 어떤 달은 인물 얼굴 위에 글자가 얹힌다.
+   그래서 세로 3(위·가운데·아래) × 가로 3(왼·가운데·오른) 아홉 자리를 슈퍼어드민이 고른다. */
+#magView .mag-txt{position:absolute;left:22px;right:22px;z-index:4}
+#magView .mag-txt.v-t{top:calc(72px + env(safe-area-inset-top))}
+#magView .mag-txt.v-m{top:46%;transform:translateY(-50%)}
+#magView .mag-txt.v-b{bottom:calc(152px + env(safe-area-inset-bottom))}
 #magView .mag-head{display:flex;align-items:baseline;gap:16px}
+#magView .mag-txt.a-l .mag-head{justify-content:flex-start}
+#magView .mag-txt.a-c .mag-head{justify-content:center}
+#magView .mag-txt.a-r .mag-head{justify-content:flex-end}
 /* 월 표제 — 언어와 무관하게 영문. 폰트는 아래 세 후보를 클래스로 갈아 끼운다.
    f-bodoni(기본) 굵기 대비가 큰 디도네, 잡지 표제의 정석
    f-oswald       좁고 곧은 그로테스크, 강하고 현대적
    f-cormorant    가늘고 우아한 세리프, 조용한 고급 */
-#magView .mag-mon{font-size:6.8vw;line-height:.94;color:#fff;flex:none;
+/* 표지 밖(편집 미리보기)에서도 같은 글자로 보여야 하므로 #magView 로 가두지 않는다 */
+.mag-mon{font-size:6.8vw;line-height:.94;color:#fff;flex:none;
   text-shadow:0 2px 18px rgba(0,0,0,.45);white-space:nowrap}
-#magView .mag-mon.f-bodoni{font-family:Didot,'Bodoni 72','Times New Roman',serif;
+.mag-mon.f-bodoni{font-family:Didot,'Bodoni 72','Times New Roman',serif;
   font-weight:500;letter-spacing:-.005em}
-#magView .mag-mon.f-oswald{font-family:'Oswald',sans-serif;font-weight:500;letter-spacing:.005em}
-#magView .mag-mon.f-cormorant{font-family:'Cormorant Garamond',Garamond,serif;
+.mag-mon.f-oswald{font-family:'Oswald',sans-serif;font-weight:500;letter-spacing:.005em}
+.mag-mon.f-cormorant{font-family:'Cormorant Garamond',Garamond,serif;
   font-weight:600;letter-spacing:.008em}
+/* 스케줄 — 표지에서 캘린더로 가는 유일한 문. 화면 아래 가운데, GNB 바로 위에 둔다.
+   예전엔 월 표제 옆에 붙인 25px 알약이었는데, 사진 위에서 버튼이 아니라 캡션으로 읽혔고
+   최소 탭 크기(44pt)에도 못 미쳤다. 이제 혼자 서고 높이도 44pt 를 지킨다. */
+#magView .mag-sched{position:absolute;left:50%;transform:translateX(-50%);
+  bottom:calc(84px + env(safe-area-inset-bottom));z-index:6;
+  min-height:44px;padding:0 30px;border:none;cursor:pointer;border-radius:999px;
+  background:#5C0A14;color:#fff;
+  font-family:'Oswald','Noto Sans KR',sans-serif;font-size:12px;font-weight:700;
+  letter-spacing:.1em;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+/* 시트가 올라와 있는 동안에는 감춘다 — 반투명한 판 뒤로 붉은 알약이 비친다 */
+#magView.sheeton .mag-sched{opacity:0;pointer-events:none;
+  transform:translateX(-50%) translateY(14px)}
 
-/* 시트 — 처음부터 떠 있다 (Apple 지도 방식).
-   「열어야 할 것이 있다」는 구조 자체를 없앤다. 정지 상태에서 캘린더 첫 주가
-   일부러 잘린 채 보이고, 그 잘린 모양이 「아래 더 있다」를 화살표보다 강하게 말한다.
-   3단: 대기(132px) → 중간(52vh) → 전체(74vh).
-   위로 갈수록 뜬 간격과 모서리 둥글기가 줄어드는 것이 「더 올라간다」는 눈금이다. */
-#magSheet{position:fixed;inset:0;z-index:170;display:none;pointer-events:none}
-#magSheet.on{display:block}
+/* 시트 — 표지 위로 올라온다. 표지는 사진 한 장으로 끝나야 하므로 평소엔 없다.
+   (한때 132px 로 항상 띄워 캘린더 첫 주를 잘라 보여 줬는데, 표지가 반쪽이 됐다.
+    사진을 파는 화면에서 사진을 가리는 것보다 나쁜 건 없다.)
+   2단: 중간(52vh) → 전체(74vh). 손잡이를 누르면 중간 → 전체 → 닫힘으로 돈다. */
+#magSheet{position:fixed;inset:0;z-index:170;pointer-events:none;visibility:hidden}
+#magSheet.on{visibility:visible}
 #magSheet .mg-dim{position:absolute;inset:0;background:rgba(0,0,0,.45);
   opacity:0;pointer-events:none;transition:opacity .3s ease}
 #magSheet.d2 .mg-dim{opacity:1;pointer-events:auto}
-#magSheet .mg-panel{position:absolute;left:8px;right:8px;
+#magSheet .mg-panel{position:absolute;left:4px;right:4px;
   bottom:calc(90px + env(safe-area-inset-bottom));
-  height:132px;border-radius:22px;pointer-events:auto;overflow:hidden;
-  background:rgba(17,17,19,.62);
+  height:52vh;border-radius:18px;pointer-events:auto;overflow:hidden;
+  background:rgba(14,14,16,.82);
   backdrop-filter:blur(26px) saturate(1.15);-webkit-backdrop-filter:blur(26px) saturate(1.15);
   border:1px solid rgba(255,255,255,.12);color:#F2EDE7;
   display:flex;flex-direction:column;
   box-shadow:0 -14px 40px rgba(0,0,0,.5);
+  transform:translateY(calc(100% + 110px));
   transition:height .34s cubic-bezier(.32,.72,0,1), left .34s cubic-bezier(.32,.72,0,1),
              right .34s cubic-bezier(.32,.72,0,1), bottom .34s cubic-bezier(.32,.72,0,1),
-             border-radius .34s cubic-bezier(.32,.72,0,1), background .34s ease}
-#magSheet.d1 .mg-panel{height:52vh;left:4px;right:4px;border-radius:18px;background:rgba(14,14,16,.82)}
+             border-radius .34s cubic-bezier(.32,.72,0,1), background .34s ease,
+             transform .34s cubic-bezier(.32,.72,0,1)}
+/* visibility 로만 감춘다 — display:none 이면 올라오는 동작이 통째로 사라진다 */
+#magSheet.on .mg-panel{transform:translateY(0)}
 /* 전체 단계에서는 GNB 위에 딱 붙는다 — 사이로 표지가 새어 보이면 판이 떠 있는 것처럼 읽힌다 */
 #magSheet.d2 .mg-panel{height:74vh;left:0;right:0;border-radius:16px 16px 0 0;
   bottom:calc(59px + env(safe-area-inset-bottom));background:rgba(12,12,14,.94)}
@@ -719,11 +742,7 @@ html.auto-login .splash .bottom-group{display:none !important}
   letter-spacing:.16em;color:#8D8781}
 #magSheet .mg-body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;
   padding-bottom:calc(20px + env(safe-area-inset-bottom))}
-/* 대기 상태에서는 안쪽 스크롤을 잠근다 — 잘린 첫 주가 그대로 보여야 신호가 산다 */
-#magSheet.d0 .mg-body{overflow:hidden}
 #magSheet .mg-body .pcal-cal{padding-top:4px}
-/* 대기 상태에서는 연도·월 줄을 접어 캘린더가 바로 보이게 한다 */
-#magSheet.d0 .pcal-ybar, #magSheet.d0 .pcal-mstrip, #magSheet.d0 .pcal-mlist{display:none}
 
 /* 자리 상세 (사진 캘린더 전용) — 기존 티켓 상세는 그대로 두고 별도 화면으로 둔다.
    결제는 기존 코드를 그대로 부른다 (openTdPayPopup).
@@ -6272,6 +6291,40 @@ async function _tossPaymentsCtx(currency){
   // SDK v2: payment() 단수 (v1 은 없음) — payments() 호출 시 'not a function' 오류
   return { pay: tp.payment({ customerKey: u.id }), user: u, currency: cur };
 }
+// ── 🆕 2026.08: 굳어버린 화면 확대(page scale) 되돌리기 ──
+//   증상: 토스 결제창에 나갔다 취소하고 돌아오면 화면 전체가 1.2~1.3배로 커진 채 굳는다.
+//         글씨가 커지고, 상단 고정 제목이 로고와 겹치고, 아래에 검은 띠가 남는다.
+//   원인: iOS 는 접근성을 이유로 `user-scalable=no` 를 무시한다. 결제 페이지의 입력칸
+//         글씨가 16px 보다 작으면 포커스 순간 웹뷰 전체가 확대되고, 돌아와도 그 배율이 남는다.
+//   고침: 자바스크립트로 배율을 직접 되돌릴 방법은 없다. 대신 viewport 메타를
+//         maximum-scale 0.99 로 한 프레임 바꿨다가 되돌리면 iOS 가 배율을 1 로 다시 잡는다.
+//   이 앱은 애초에 확대를 허용하지 않으므로, 배율이 1 보다 크면 그 자체가 고장이다.
+//   따라서 결제 왕복 여부와 무관하게 되돌린다.
+var _VP_META = 'width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no';
+function _vpScale(){
+  try {
+    var vv = window.visualViewport;
+    if (vv && typeof vv.scale === 'number' && vv.scale > 0) return vv.scale;
+    // visualViewport 가 없으면 레이아웃 폭과 화면 폭을 견줘 어림한다
+    var dw = document.documentElement.clientWidth || 0;
+    if (dw > 0 && window.innerWidth > 0) return window.innerWidth / dw;
+  } catch(_e){}
+  return 1;
+}
+function _vpResetZoom(){
+  try {
+    if (_vpScale() <= 1.02) return false;
+    var m = document.querySelector('meta[name="viewport"]');
+    if (!m) return false;
+    m.setAttribute('content', 'width=device-width,initial-scale=1.0,maximum-scale=0.99,user-scalable=no');
+    setTimeout(function(){
+      try { m.setAttribute('content', _VP_META); } catch(_e){}
+    }, 80);
+    return true;
+  } catch(_e){ return false; }
+}
+window._vpResetZoom = _vpResetZoom;
+
 // ── 🆕 결제창 닫힘 후 뷰포트/스크롤 복원 ──
 //   iOS 에서 토스 카드입력 시트(iframe+키보드)가 body 를 스크롤/고정시킨 뒤
 //   취소·닫기 시 원복하지 않아 화면 배치가 밀려 보이던 문제 수정.
@@ -6320,6 +6373,8 @@ function _tossRestoreViewportOnce(){
     }
     // ④ 뷰포트 크기에 반응하는 리스너(캐러셀 등) 재계산
     try { window.dispatchEvent(new Event('resize')); } catch(_re){}
+    // ⑤ 화면 배율이 굳어 있으면 1 로 되돌린다 (위 ①~④ 로는 배율은 안 풀린다)
+    _vpResetZoom();
   } catch(_e){}
 }
 // 뷰포트가 늦게 안정화되는 경우까지 커버.
@@ -6924,6 +6979,8 @@ function _tossPayPending(){
 }
 function _gnbBottomGuard(){
   try {
+    // 배율이 굳은 것은 GNB 위치와 별개로 늘 되돌린다 — 이 앱은 확대를 허용하지 않는다
+    if (_vpResetZoom()) return;
     var gap = _vpGapPx();
     if (gap <= 6) return;
     if (typeof _tossRestoreViewportOnce === 'function') _tossRestoreViewportOnce();
@@ -6942,10 +6999,15 @@ function _gnbBottomGuard(){
   } catch(_e){}
 }
 window._gnbBottomGuard = _gnbBottomGuard;
+// 돌아온 직후에는 뷰포트가 아직 흔들린다. 한 번만 보면 놓치므로 몇 번 나눠 본다.
+function _vpGuardBurst(){
+  [120, 400, 900, 1600].forEach(function(ms){ setTimeout(_gnbBottomGuard, ms); });
+}
 document.addEventListener('visibilitychange', function(){
-  if (document.visibilityState === 'visible') setTimeout(_gnbBottomGuard, 250);
+  if (document.visibilityState === 'visible') _vpGuardBurst();
 });
-window.addEventListener('focus', function(){ setTimeout(_gnbBottomGuard, 250); });
+window.addEventListener('focus', _vpGuardBurst);
+window.addEventListener('pageshow', _vpGuardBurst);
 window.addEventListener('orientationchange', function(){ setTimeout(_gnbBottomGuard, 400); });
 
 window._googlePlacesReady = false;
@@ -38084,8 +38146,22 @@ function _pcalHeroFor(y, m, byDate){
   }
   if(!cuts.length && photo) cuts = [photo];
   if(!photo && cuts.length) photo = cuts[0];
-  return { photo: photo, regions: regions, credit: credit, layout: layout, cuts: cuts, focus: focus };
+  return { photo: photo, regions: regions, credit: credit, layout: layout, cuts: cuts, focus: focus,
+           titlePos: _magTitlePos(cov && cov.title_pos) };
 }
+
+// ── 월 표제 자리 ────────────────────────────────────────────
+//   세로 t(위) m(가운데) b(아래) × 가로 l(왼) c(가운데) r(오른) = 아홉 자리.
+//   컬럼(title_pos)이 없거나 값이 이상하면 예전과 같은 왼쪽 아래로 돈다.
+var MAG_TPOS = ['tl','tc','tr','ml','mc','mr','bl','bc','br'];
+function _magTitlePos(v){
+  return (MAG_TPOS.indexOf(v) >= 0) ? v : 'bl';
+}
+function _magTitleCls(v){
+  var p = _magTitlePos(v);
+  return 'v-' + p.charAt(0) + ' a-' + p.charAt(1);
+}
+window._magTitleCls = _magTitleCls;
 
 function _pcalMonthTickets(y, m, byDate){
   byDate = byDate || _pcalByDate();
@@ -38745,14 +38821,14 @@ function magRender(){
      + '</div>'
      + '</div>';
 
-  // 표지에는 월 하나뿐이다.
-  //   「스케줄」 알약은 뺐다 — 25px 높이 9px 글씨는 사진 위에서 버튼이 아니라 캡션으로 읽히고
-  //   최소 탭 크기(44pt)에도 못 미쳤다. 이제 아래 시트가 항상 떠 있어 그 역할을 대신한다.
-  h += '<div class="mag-txt">';
+  // 표지에는 월 하나뿐이고, 그 자리는 달마다 슈퍼어드민이 정한다.
+  h += '<div class="mag-txt ' + _magTitleCls(hero.titlePos) + '">';
   h += '<div class="mag-head">'
      + '<div class="mag-mon ' + _magMonFont() + '">' + _magMonLabel(_pcalM) + '</div>'
      + '</div>';
   h += '</div>';
+  // 표지에서 캘린더로 가는 유일한 문
+  h += '<button class="mag-sched" onclick="magOpenSheet()">스케줄</button>';
 
   var heroEl = document.getElementById('magHero');
   if(heroEl) heroEl.innerHTML = h;
@@ -38763,7 +38839,10 @@ function magRender(){
     setTimeout(function(){ v.classList.remove('opening'); }, 300);
   }
   magBindSwipe();
-  magShowSheet();   // 시트는 처음부터 떠 있다 — 여는 동작이 필요 없다
+  // 시트 안 캘린더는 미리 채워 둔다 — 열 때 빈 판이 한 프레임 스치지 않는다.
+  //   단계는 건드리지 않는다. 닫혀 있었으면 닫힌 채, 열려 있었으면 그 단계 그대로.
+  magShowCalendar();
+  magSheetTo(_magDet);
 }
 window.magRender = magRender;
 
@@ -38933,10 +39012,7 @@ function magStep(dir){
   _pcalM = months[n] % 100;
   _pcalSelKey = null;
   _pcalYearOpen = false;
-  magRender();
-  // 시트는 항상 떠 있다 — 달을 넘기면 안쪽 캘린더도 같은 달로 맞춘다
-  var s = document.getElementById('magSheet');
-  if(s && s.classList.contains('on')) magShowCalendar();
+  magRender();   // 안쪽 캘린더도 여기서 같은 달로 다시 그린다
 }
 window.magStep = magStep;
 
@@ -38962,8 +39038,10 @@ function magBindSwipe(){
   el.addEventListener('touchend', function(e){
     if(x0 === null) return;
     var t = e.changedTouches[0];
-    var dx = t.clientX - x0;
+    var dx = t.clientX - x0, dy = t.clientY - y0;
     if(axis === 'x' && Math.abs(dx) > 56) magStep(dx < 0 ? 1 : -1);
+    // 표지를 위로 밀면 시트가 올라온다 — 「스케줄」을 못 본 사람의 두 번째 길
+    else if(axis === 'y' && dy < -56) magOpenSheet();
     x0 = null; y0 = null; axis = null;
   });
 }
@@ -38996,29 +39074,25 @@ document.addEventListener('click', function(ev){
   if(typeof magRender === 'function') magRender();
 }, true);
 
-// ── 시트 — 처음부터 떠 있다. 여는 게 아니라 크기를 바꾼다 ──
-//   0 대기(132px) · 1 중간(52vh) · 2 전체(74vh)
+// ── 시트 — 표지 위로 올라온다. 표지는 사진 한 장으로 끝나야 하므로 평소엔 없다 ──
+//   0 닫힘 · 1 중간(52vh) · 2 전체(74vh)
 var _magDet = 0;
 function magSheetTo(d){
   var s = document.getElementById('magSheet');
   if(!s) return;
   _magDet = Math.max(0, Math.min(2, d));
+  s.classList.remove('d1','d2');
+  var v = document.getElementById('magView');
+  if(v) v.classList.toggle('sheeton', _magDet > 0);
+  if(!_magDet){ s.classList.remove('on','day'); return; }
   s.classList.add('on');
-  s.classList.remove('d0','d1','d2');
   s.classList.add('d' + _magDet);
   magBindDrag();
 }
 window.magSheetTo = magSheetTo;
 
-function magShowSheet(){
-  var s = document.getElementById('magSheet');
-  if(!s) return;
-  magShowCalendar();
-  magSheetTo(_magDet || 0);
-}
-window.magShowSheet = magShowSheet;
-
-// 손잡이·머리말을 누르면 단계가 순환한다 (제스처를 모르는 사람의 대체 경로 — HIG 권장)
+// 손잡이·머리말을 누르면 단계가 돈다 (제스처를 모르는 사람의 대체 경로 — HIG 권장)
+//   중간 → 전체 → 닫힘. 끝에서 닫히니 표지로 돌아가는 길도 손잡이 하나로 된다.
 function magSheetCycle(){
   magSheetTo(_magDet >= 2 ? 0 : _magDet + 1);
 }
@@ -39027,12 +39101,7 @@ window.magSheetCycle = magSheetCycle;
 function magOpenSheet(){ magSheetTo(1); }
 window.magOpenSheet = magOpenSheet;
 
-function magCloseSheet(){
-  var s = document.getElementById('magSheet');
-  if(!s) return;
-  s.classList.remove('on','d0','d1','d2','day');
-  _magDet = 0;
-}
+function magCloseSheet(){ magSheetTo(0); }
 window.magCloseSheet = magCloseSheet;
 
 // 시트 안 · 캘린더 상태
@@ -39116,9 +39185,10 @@ function magBindDrag(){
   if(!grab || !panel) return;
   _magDragBound = true;
   var y0 = null, h0 = 0, moved = false;
+  //   0번 자리는 「닫힘」이다. 아래로 충분히 내리면 표지로 돌아간다.
   function heights(){
     var vh = window.innerHeight;
-    return [132, vh * 0.52, vh * 0.74];
+    return [vh * 0.22, vh * 0.52, vh * 0.74];
   }
   function start(y){
     y0 = y; moved = false;
@@ -39130,7 +39200,7 @@ function magBindDrag(){
     var dy = y0 - y;                       // 위로 끌면 커진다
     if(Math.abs(dy) > 3) moved = true;
     var hs = heights();
-    var nh = Math.max(hs[0] - 40, Math.min(hs[2] + 40, h0 + dy));
+    var nh = Math.max(90, Math.min(hs[2] + 40, h0 + dy));
     panel.style.height = nh + 'px';
   }
   function end(){
@@ -39473,7 +39543,7 @@ window.pcalApplyGnb = pcalApplyGnb;
 //   어느 쪽이든 index.html 에는 URL 문자열만 남는다.
 // ══════════════════════════════════════════════════════════════
 var _pcalAdmY = null, _pcalAdmM = null;
-var _pcalAdmDraft = { photo_url:'', regions:'', photo_credit:'' };
+var _pcalAdmDraft = { photo_url:'', regions:'', photo_credit:'', titlePos:'bl' };
 var _pcalPickTarget = null;
 var _pcalAdmBusy = false;
 
@@ -39525,7 +39595,8 @@ function _pcalAdmLoadDraft(){
     photo_credit: cov && cov.photo_credit ? cov.photo_credit : '',
     layout:       (cov && cov.cover_layout) || 'single',
     cuts:         cuts,
-    focus:        (cov && Array.isArray(cov.cover_focus)) ? cov.cover_focus.slice() : []
+    focus:        (cov && Array.isArray(cov.cover_focus)) ? cov.cover_focus.slice() : [],
+    titlePos:     _magTitlePos(cov && cov.title_pos)
   };
 }
 
@@ -39640,6 +39711,15 @@ function pcalAdminRender(){
        + 'clip-path:' + selPoly + ';-webkit-clip-path:' + selPoly + ';'
        + 'box-shadow:inset 0 0 0 3px #C8A96E;"></div>';
   }
+  // 월 표제도 미리보기에 얹는다 — 자리를 고르는 화면에서 글자가 안 보이면 고를 수가 없다.
+  //   미리보기는 실제 화면보다 작으므로 자리 비율만 같게 잡는다(위 12% · 가운데 46% · 아래 76%).
+  var _tp = _magTitlePos(_pcalAdmDraft.titlePos);
+  var _tv = { t:'top:12%;', m:'top:46%;transform:translateY(-50%);', b:'top:76%;' }[_tp.charAt(0)];
+  var _ta = { l:'left', c:'center', r:'right' }[_tp.charAt(1)];
+  h += '<div style="position:absolute;left:7%;right:7%;' + _tv + 'z-index:3;pointer-events:none;'
+     + 'text-align:' + _ta + ';">'
+     + '<span class="mag-mon ' + _magMonFont() + '" style="font-size:20px;">'
+     + _magMonLabel(_pcalAdmM) + '</span></div>';
   h += '</div>';
 
   if(_L.n > 1){
@@ -39679,6 +39759,24 @@ function pcalAdminRender(){
        + '<div style="font-size:10px;color:#a8a29a;margin-top:5px;text-align:center;">100% 아래로 줄이면 사진 전체가 보입니다</div>'
        + '</div>';
   }
+
+  // ── 월 표제 자리 ──
+  h += '<div style="text-align:center;font-size:11px;color:#8a8580;margin-bottom:6px;">'
+     + '월 글자 자리 — 사진의 빈 곳으로 옮기세요</div>';
+  h += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:5px;'
+     + 'width:min(46vw,168px);margin:0 auto 14px;">';
+  MAG_TPOS.forEach(function(k){
+    var onT = (_tp === k);
+    var av = { l:'flex-start', c:'center', r:'flex-end' }[k.charAt(1)];
+    h += '<button onclick="pcalAdmTitlePos(\'' + k + '\')" style="cursor:pointer;padding:0;'
+       + 'aspect-ratio:1;border-radius:7px;display:flex;align-items:center;justify-content:' + av + ';'
+       + 'padding:0 7px;'
+       + (onT ? 'background:#5C0A14;border:1px solid #5C0A14;'
+              : 'background:#fff;border:1px solid #d8d3cc;') + '">'
+       + '<span style="display:block;width:60%;height:3px;border-radius:2px;background:'
+       + (onT ? '#fff' : '#c3bcb2') + ';"></span></button>';
+  });
+  h += '</div>';
 
   // ── 지역 문구 ──
   h += '<div style="margin:16px 0 10px;"><div style="font-size:11px;color:#8a8580;margin-bottom:5px;">지역 (예: 도쿄 · 오사카 · 교토)</div>'
@@ -39721,6 +39819,14 @@ window.pcalAdminRender = pcalAdminRender;
 
 // 지금 고치고 있는 컷
 var _pcalAdmSel = 0;
+// 월 표제 자리 — 아홉 칸 중 하나
+function pcalAdmTitlePos(k){
+  _pcalAdmSyncInputs();
+  _pcalAdmDraft.titlePos = _magTitlePos(k);
+  pcalAdminRender();
+}
+window.pcalAdmTitlePos = pcalAdmTitlePos;
+
 function pcalAdmSel(i){
   _pcalAdmSel = i;
   pcalAdminRender();
@@ -39962,6 +40068,7 @@ async function pcalAdmSaveCover(){
     cover_layout: _pcalAdmDraft.layout || 'single',
     cover_photos: cuts,
     cover_focus:  (_pcalAdmDraft.focus || []).slice(0, magLayout(_pcalAdmDraft.layout).n),
+    title_pos:    _magTitlePos(_pcalAdmDraft.titlePos),
     updated_at: new Date().toISOString()
   };
   try {
@@ -39971,12 +40078,22 @@ async function pcalAdmSaveCover(){
 
   var res = await window.sb.from('month_covers').upsert(payload, { onConflict: 'year,month' });
 
-  // 분할 컬럼이 아직 없는 DB(sql/month_covers_split.sql 미실행)면 그 둘만 빼고 다시 시도한다.
-  //   컬럼 하나 때문에 표지 저장 전체가 막히면 안 된다.
+  // 표제 자리 컬럼(sql/month_cover_title_pos.sql 미실행)만 없을 수도 있다.
+  //   컬럼 하나 때문에 표지 저장 전체가 막히면 안 되니, 그것부터 빼고 다시 시도한다.
+  if(res.error && /title_pos/i.test(res.error.message || '')){
+    delete payload.title_pos;
+    res = await window.sb.from('month_covers').upsert(payload, { onConflict: 'year,month' });
+    if(!res.error && typeof showToast === 'function'){
+      showToast('⚠','월 글자 자리는 저장 안 됨','sql/month_cover_title_pos.sql 을 실행하세요');
+    }
+  }
+
+  // 분할 컬럼이 아직 없는 DB(sql/month_covers_split.sql 미실행)면 그것들도 빼고 다시 시도한다.
   if(res.error && /cover_layout|cover_photos|cover_focus|schema cache|column/i.test(res.error.message || '')){
     delete payload.cover_layout;
     delete payload.cover_photos;
     delete payload.cover_focus;
+    delete payload.title_pos;
     res = await window.sb.from('month_covers').upsert(payload, { onConflict: 'year,month' });
     if(!res.error && typeof showToast === 'function'){
       showToast('⚠','컷 나누기는 저장 안 됨','sql/month_covers_split.sql 을 실행하면 분할 표지가 저장됩니다');
