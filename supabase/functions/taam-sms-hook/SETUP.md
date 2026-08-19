@@ -132,7 +132,19 @@ HTTP 상태로 4xx·5xx 를 주면 GoTrue 는 본문을 읽지 않고 `Hook erro
 | `[sms-hook] 서명 불일치 …` | 시크릿 값이 훅 발급값과 다름 |
 | `[sms-hook] 서명 헤더 누락 (id=x …)` | 훅이 아닌 곳에서 호출됨 |
 | `[sms-hook] SOLAPI 시크릿 미설정 (key=o secret=x …)` | 3번 중 무엇이 빠졌는지 그대로 나온다 |
+| `[sms-hook] 보낼 번호/인증번호 없음 (type=phone_change …)` | 페이로드에서 번호를 못 찾음 — 아래 참조 |
 | `[sms-hook] Solapi 4xx: …` | 발신번호 미등록 · 잔액 부족 · 번호 형식 — Solapi 가 준 사유가 그대로 |
+
+### 보낼 번호는 경로마다 다른 칸에 온다
+
+| 경로 | `sms_type` | 목적지 번호가 있는 칸 |
+|---|---|---|
+| 가입·로그인 `signInWithOtp({phone})` | `signup` · `sms` | `user.phone` |
+| 마이페이지 번호 인증 `updateUser({phone})` | `phone_change` | **`user.phone_change`** (또는 `new_phone`) |
+
+번호 변경 경로에서 `user.phone` 은 **기존** 번호다. 계정에 번호가 아직 없으면 빈 문자열이라,
+`user.phone` 만 보면 그 경로가 통째로 죽는다. 실제로 그렇게 죽어 있었다 —
+훅도 서명도 다 통과한 뒤 마지막 검사에서 걸려서, 겉으로는 "그냥 발송 실패" 로만 보였다.
 
 로그를 못 봐도 폰 화면 한 줄로 원인이 갈린다.
 
