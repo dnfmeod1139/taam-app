@@ -598,13 +598,14 @@ html.auto-login .splash .bottom-group{display:none !important}
    버튼을 누르면 살짝 눌리고, 화면은 툭 튀지 않고 올라온다.
    iOS 가 쓰는 감속 곡선(cubic-bezier(.32,.72,0,1))을 그대로 쓴다.
    누르는 순간 반응은 빨라야 하고(90ms), 화면 전환은 조금 길어야(300ms) 자연스럽다. */
-.gnb-btn, .mag-sched, .pcal-adm-btn, #pcalDetail .pd-cta, #magSheet .mg-grab,
+.gnb-btn, .mag-sched, #magView .mag-arrow, .pcal-adm-btn, #pcalDetail .pd-cta, #magSheet .mg-grab,
 .pcal-lrow, .pcal-item, .pcal-d.ev{
   -webkit-tap-highlight-color:transparent;
   transition:transform .09s cubic-bezier(.32,.72,0,1), opacity .09s ease, background .18s ease}
 .gnb-btn:active{transform:scale(.9)}
 .pcal-adm-btn:active, #pcalDetail .pd-cta:active{transform:scale(.94);opacity:.85}
 .mag-sched:active{transform:translateX(-50%) scale(.94);opacity:.88}
+#magView .mag-arrow:active{transform:scale(.94);opacity:.85}
 .pcal-lrow:active, .pcal-item:active{transform:scale(.985);opacity:.8}
 .pcal-d.ev:active{transform:scale(.94)}
 #magView .mag-lang .cur:active{opacity:.6}
@@ -708,6 +709,17 @@ html.auto-login .splash .bottom-group{display:none !important}
   display:flex;align-items:center;justify-content:center;
   background:#5C0A14;color:#fff;box-shadow:0 8px 24px rgba(0,0,0,.5)}
 #magView .mag-sched svg{width:23px;height:23px;display:block}
+/* 월 넘기기 — 화면 양옆. 좌우로 미는 제스처를 모르는 사람의 길이다 */
+#magView .mag-arrow{position:absolute;top:46%;z-index:5;width:38px;height:38px;border-radius:50%;
+  border:1px solid rgba(255,255,255,.16);background:rgba(0,0,0,.22);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,.82);
+  font-size:16px;cursor:pointer;transition:opacity .2s}
+#magView .mag-arrow.l{left:12px}
+#magView .mag-arrow.r{right:12px}
+#magView .mag-arrow.off{opacity:.18;pointer-events:none}
+/* 시트가 올라와 있는 동안에는 감춘다 — 달 넘기기는 시트 안 월 줄에서 한다 */
+#magView.sheeton .mag-arrow{opacity:0;pointer-events:none}
 /* 시트가 올라와 있는 동안에는 감춘다 — 반투명한 판 뒤로 붉은 알약이 비친다 */
 #magView.sheeton .mag-sched{opacity:0;pointer-events:none;
   transform:translateX(-50%) translateY(14px)}
@@ -718,9 +730,13 @@ html.auto-login .splash .bottom-group{display:none !important}
    2단: 중간(52vh) → 전체(74vh). 손잡이를 누르면 중간 → 전체 → 닫힘으로 돈다. */
 #magSheet{position:fixed;inset:0;z-index:170;pointer-events:none;visibility:hidden}
 #magSheet.on{visibility:visible}
+/* 판 뒤 아무 데나 누르면 닫힌다. 어둡게 보이는 건 전체 단계에서만이지만,
+   중간 단계에서도 눌러서 닫을 수 있어야 한다 — 손잡이를 세 번 누르게 하지 않는다.
+   GNB(z-index 200)는 이 위라 계속 눌린다. */
 #magSheet .mg-dim{position:absolute;inset:0;background:rgba(0,0,0,.45);
   opacity:0;pointer-events:none;transition:opacity .3s ease}
-#magSheet.d2 .mg-dim{opacity:1;pointer-events:auto}
+#magSheet.on .mg-dim{pointer-events:auto}
+#magSheet.d2 .mg-dim{opacity:1}
 #magSheet .mg-panel{position:absolute;left:4px;right:4px;
   bottom:calc(90px + env(safe-area-inset-bottom));
   height:52vh;border-radius:18px;pointer-events:auto;overflow:hidden;
@@ -8224,7 +8240,7 @@ window.closePromoCarousel = function(){
     <div class="mag-hero" id="magHero"></div>
   </div>
 </div>
-<div id="magSheet" onclick="if(event.target&&event.target.className==='mg-dim')magSheetTo(1)">
+<div id="magSheet" onclick="if(event.target&&event.target.className==='mg-dim')magSheetTo(0)">
   <div class="mg-dim"></div>
   <div class="mg-panel">
     <div class="mg-grab" id="magGrab"><i></i></div>
@@ -38973,6 +38989,10 @@ function magRender(){
   var _mon = hero.txt.mon; _mon.text = _magMonLabel(_pcalM);   // 월 이름은 달력이 정한다
   h += _magTextBlock(_mon, 'mon');
   h += _magTextBlock(hero.txt.hl, 'hl');
+  // 월 넘기기 — 좌우로 미는 제스처를 모르는 사람의 길
+  h += '<div class="mag-arrow l' + (mi > 0 ? '' : ' off') + '" onclick="magStep(-1)">\u2039</div>';
+  h += '<div class="mag-arrow r' + (mi >= 0 && mi < months.length-1 ? '' : ' off') + '" onclick="magStep(1)">\u203A</div>';
+
   // 표지에서 캘린더로 가는 유일한 문 — 글자 없이 달력 표시 하나로 끝낸다.
   //   표지에 글자가 늘수록 사진이 죽는다. 「스케줄」 넉 자도 사진 위에서는 군더더기다.
   h += '<button class="mag-sched" onclick="magOpenSheet()" aria-label="스케줄">'
@@ -39854,28 +39874,13 @@ function pcalAdminRender(){
   if(_pcalAdmSel >= _L.n) _pcalAdmSel = 0;
   var _hasAny = (_pcalAdmDraft.cuts || []).some(function(x){ return !!x; });
 
+  // 🔧 미리보기 상자는 자리만 잡아 둔다.
+  //   안쪽(사진)은 다시 그린 뒤에 채운다 — 사진이 안 바뀌었으면 아예 손대지 않는다.
+  //   예전엔 버튼 하나 누를 때마다 innerHTML 로 통째로 갈아엎어서 <img> 가 매번
+  //   새로 만들어졌고, 그 한 프레임이 깜빡임(잔상)으로 보였다.
   h += '<div id="pcalAdmPreview" style="position:relative;border-radius:14px;overflow:hidden;'
      + 'background:#0E0E10;width:min(66vw,250px);aspect-ratio:9/16;margin:0 auto 10px;'
-     + 'box-shadow:0 8px 26px rgba(0,0,0,.2);">';
-  h += _magCutsHtml(_pcalAdmDraft.cuts, _pcalAdmDraft.layout, _pcalAdmDraft.focus);
-  if(!_hasAny){
-    h += '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;'
-       + 'font-size:11px;letter-spacing:.2em;color:#5f5b57;pointer-events:none;">PHOTO NOT SET</div>';
-  }
-  if(_L.n > 1){
-    var selPoly = 'polygon(' + _L.cuts[_pcalAdmSel] + ')';
-    h += '<div id="pcalAdmSelMark" style="position:absolute;inset:0;pointer-events:none;'
-       + 'clip-path:' + selPoly + ';-webkit-clip-path:' + selPoly + ';'
-       + 'box-shadow:inset 0 0 0 3px #C8A96E;"></div>';
-  }
-  // 글자도 미리보기에 얹는다 — 자리·크기를 고르는 화면에서 글자가 안 보이면 고를 수가 없다.
-  //   실제 표지와 같은 마크업·같은 클래스를 쓰므로, 미리보기는 그대로 축소 모형이 된다.
-  h += '<div class="mag-shade" style="position:absolute;inset:0;pointer-events:none;"></div>';
-  h += '<div>'
-     + _magTextBlock(_pcalAdmMonTxt(), 'mon', true)
-     + _magTextBlock(_pcalAdmDraft.txt.hl, 'hl', true)
-     + '</div>';
-  h += '</div>';
+     + 'box-shadow:0 8px 26px rgba(0,0,0,.2);"></div>';
 
   if(_L.n > 1){
     h += '<div style="display:flex;gap:5px;justify-content:center;flex-wrap:wrap;margin-bottom:10px;">';
@@ -39964,11 +39969,85 @@ function pcalAdminRender(){
     });
   }
 
+  // 🔧 사진 부분은 살려서 옮겨 심는다.
+  //   innerHTML 로 통째로 갈아엎으면 <img> 가 매번 새로 만들어지고, 그 한 프레임이
+  //   깜빡임(잔상)으로 보인다. 넣은 사진·컷 모양이 그대로면 그 노드를 그냥 데려간다.
+  var _sig = _pcalPrevSignature();
+  var _keep = null;
+  var _oldPrev = document.getElementById('pcalAdmPreview');
+  if(_oldPrev && _sig === _pcalPrevSig){
+    _keep = _oldPrev.querySelector('.cutwrap') || _oldPrev.querySelector('img');
+    if(_keep && _keep.parentNode) _keep.parentNode.removeChild(_keep);
+  }
+
+  // 스크롤 자리도 지킨다 — 글자를 끌 때마다 화면이 튀면 그것도 잔상으로 보인다
+  var _sc = body.parentElement, _top = _sc ? _sc.scrollTop : 0;
   body.innerHTML = h;
+  _pcalAdmFillPreview(_keep, _sig);
   _magFitAll(body);        // 미리보기 글자 크기를 상자 너비에 맞춘다
+  if(_sc && _sc.scrollTop !== _top) _sc.scrollTop = _top;
   _pcalBindPreviewDrag();
 }
 window.pcalAdminRender = pcalAdminRender;
+
+// ── 미리보기 안쪽 ──────────────────────────────────────────
+//   사진(컷)과 덧그림(선택 표시·그늘·글자)을 나눠 그린다.
+//   사진은 「무엇이 어디에 들어갔나」가 바뀌었을 때만 다시 만든다.
+//   그러지 않으면 버튼 하나 누를 때마다 <img> 가 새로 생겨 한 프레임 깜빡인다.
+var _pcalPrevSig = null;
+function _pcalPrevSignature(){
+  return (_pcalAdmDraft.layout || '') + '|' + (_pcalAdmDraft.cuts || []).join('\u0001');
+}
+function _pcalAdmOverlayHtml(){
+  var L = magLayout(_pcalAdmDraft.layout);
+  var hasAny = (_pcalAdmDraft.cuts || []).some(function(x){ return !!x; });
+  var o = '';
+  if(!hasAny){
+    o += '<div class="pcal-adm-noph" style="position:absolute;inset:0;display:flex;align-items:center;'
+       + 'justify-content:center;font-size:11px;letter-spacing:.2em;color:#5f5b57;pointer-events:none;">'
+       + 'PHOTO NOT SET</div>';
+  }
+  if(L.n > 1){
+    var poly = 'polygon(' + L.cuts[_pcalAdmSel] + ')';
+    o += '<div id="pcalAdmSelMark" style="position:absolute;inset:0;pointer-events:none;'
+       + 'clip-path:' + poly + ';-webkit-clip-path:' + poly + ';'
+       + 'box-shadow:inset 0 0 0 3px #C8A96E;"></div>';
+  }
+  // 글자도 미리보기에 얹는다 — 자리·크기를 고르는 화면에서 글자가 안 보이면 고를 수가 없다.
+  //   실제 표지와 같은 마크업·같은 클래스를 쓰므로, 미리보기는 그대로 축소 모형이 된다.
+  o += '<div class="mag-shade" style="position:absolute;inset:0;pointer-events:none;"></div>';
+  o += _magTextBlock(_pcalAdmMonTxt(), 'mon', true)
+     + _magTextBlock(_pcalAdmDraft.txt.hl, 'hl', true);
+  return o;
+}
+function _pcalAdmFillPreview(keep, sig){
+  var prev = document.getElementById('pcalAdmPreview');
+  if(!prev) return;
+  if(keep) prev.appendChild(keep);
+  else     prev.innerHTML = _magCutsHtml(_pcalAdmDraft.cuts, _pcalAdmDraft.layout, _pcalAdmDraft.focus);
+  _pcalPrevSig = sig;
+  _pcalAdmSyncCutFx(prev);   // 데려온 사진의 위치·확대는 지금 값으로 다시 입힌다
+  prev.insertAdjacentHTML('beforeend', _pcalAdmOverlayHtml());
+}
+
+// 컷 사진의 위치·확대만 다시 입힌다 (_magCutsHtml 이 만드는 style 과 같은 규칙)
+function _pcalAdmSyncCutFx(prev){
+  var cuts = prev.querySelectorAll('.cutwrap > .cut');
+  if(cuts.length){
+    for(var i=0; i<cuts.length; i++){
+      var im = cuts[i].querySelector('img');
+      if(!im) continue;
+      var bx = _magCutBox(_pcalAdmDraft.layout, i);
+      im.setAttribute('style',
+        'position:absolute;left:' + bx.x + '%;top:' + bx.y + '%;'
+        + 'width:' + bx.w + '%;height:' + bx.h + '%;'
+        + _magFxOf(_pcalAdmDraft.focus, i));
+    }
+    return;
+  }
+  var one = prev.querySelector('img');
+  if(one) one.setAttribute('style', _magFxOf(_pcalAdmDraft.focus, 0));
+}
 
 // 지금 고치고 있는 컷
 var _pcalAdmSel = 0;
