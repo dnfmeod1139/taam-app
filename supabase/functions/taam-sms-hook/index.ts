@@ -135,11 +135,27 @@ serve(async (req) => {
 
   const user = (payload.user || {}) as Record<string, unknown>;
   const smsIn = (payload.sms || {}) as Record<string, unknown>;
-  const phone = String(user.phone || '');
+  const smsType = String(smsIn.sms_type || '');
+
+  // ── 보낼 번호를 어디서 찾는가 ──
+  //   가입·로그인(sms_type=signup|sms)  → user.phone 에 목적지가 있다
+  //   번호 변경/추가(phone_change)      → user.phone 은 '기존' 번호다.
+  //                                       계정에 번호가 아직 없으면 빈 문자열이고,
+  //                                       새 번호는 phone_change / new_phone 에 온다.
+  //   마이페이지의 「번호 인증」은 updateUser({phone}) 이라 늘 phone_change 로 온다.
+  //   user.phone 만 보면 그 경로가 통째로 죽는다 — 실제로 그렇게 죽어 있었다.
+  const phone = String(
+    user.phone_change || user.new_phone || user.phone || payload.phone || '',
+  );
   const otp = String(smsIn.otp || '');
 
   if (!phone || !otp) {
-    return hookErr(400, 'phone/otp 없음');
+    // 무엇이 비었는지 남긴다. 번호 자체는 찍지 않는다.
+    return hookErr(400, '보낼 번호/인증번호 없음 (type=' + (smsType || '?')
+      + ' phone=' + (user.phone ? 'o' : 'x')
+      + ' change=' + (user.phone_change ? 'o' : 'x')
+      + ' new=' + (user.new_phone ? 'o' : 'x')
+      + ' otp=' + (otp ? 'o' : 'x') + ')');
   }
 
   const apiKey = Deno.env.get('SOLAPI_API_KEY');
@@ -177,7 +193,7 @@ serve(async (req) => {
     }
 
     // 성공 — 인증번호는 절대 로그에 남기지 않는다
-    console.log('[sms-hook] 발송 성공', toDomestic(phone).replace(/\d{4}$/, '****'));
+    console.log('[sms-hook] 발송 성공', smsType || '-', toDomestic(phone).replace(/\d{4}$/, '****'));
     return json({});
   } catch (e) {
     return hookErr(500, '예외: ' + String((e as Error)?.message || e).slice(0, 160));
