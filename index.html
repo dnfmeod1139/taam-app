@@ -38780,6 +38780,30 @@ var MAG_LAYOUTS = {
 var MAG_LAYOUT_ORDER = ['single','two','twoV','three','threeV','multi','sixV','sixH','sixVH'];
 
 function magLayout(key){ return MAG_LAYOUTS[key] || MAG_LAYOUTS.single; }
+
+// 컷의 바깥 사각형(bbox). 사진을 화면 전체가 아니라 "그 컷" 에 맞춰 깔기 위해 쓴다.
+//   예전엔 사진이 화면 전체를 덮고 clip 으로 잘리기만 해서, 대각선 조각을 조정해도
+//   사진이 엉뚱하게 움직였다. 컷 기준으로 깔면 끄는 대로 그 조각 안에서 움직인다.
+var _magBoxCache = {};
+function _magCutBox(layoutKey, i){
+  var ck = layoutKey + ':' + i;
+  if(_magBoxCache[ck]) return _magBoxCache[ck];
+  var poly = magLayout(layoutKey).cuts[i] || '0% 0%, 100% 0%, 100% 100%, 0% 100%';
+  var xs = [], ys = [];
+  poly.split(',').forEach(function(pt){
+    var m = pt.trim().split(/\s+/);
+    var x = parseFloat(m[0]), y = parseFloat(m[1]);
+    if(!isNaN(x)) xs.push(x);
+    if(!isNaN(y)) ys.push(y);
+  });
+  var box = {
+    x: Math.min.apply(null, xs), y: Math.min.apply(null, ys),
+    w: Math.max.apply(null, xs) - Math.min.apply(null, xs),
+    h: Math.max.apply(null, ys) - Math.min.apply(null, ys)
+  };
+  _magBoxCache[ck] = box;
+  return box;
+}
 window.MAG_LAYOUTS = MAG_LAYOUTS;
 
 // 컷별 사진 보정 — 어느 지점을 보여줄지(x,y) + 얼마나 당겨 볼지(z)
@@ -38810,9 +38834,12 @@ function _magCutsHtml(photos, layoutKey, focus){
   for(var i=0; i<L.n; i++){
     var src = list[i] || list[list.length-1] || '';
     var poly = 'polygon(' + L.cuts[i] + ')';
-    h += '<div class="cut' + (src ? '' : ' empty') + '" '
+    var bx = _magCutBox(layoutKey, i);
+    var pos = 'position:absolute;left:' + bx.x + '%;top:' + bx.y + '%;'
+            + 'width:' + bx.w + '%;height:' + bx.h + '%;';
+    h += '<div class="cut' + (src ? '' : ' empty') + '" data-ci="' + i + '" '
        + 'style="clip-path:' + poly + ';-webkit-clip-path:' + poly + ';">'
-       + (src ? '<img src="' + _pcalEsc(src) + '" alt="" style="' + _magFxOf(focus, i) + '">' : '')
+       + (src ? '<img src="' + _pcalEsc(src) + '" alt="" style="' + pos + _magFxOf(focus, i) + '">' : '')
        + '</div>';
   }
   return h + '</div>';
@@ -39387,6 +39414,14 @@ function pcalAdminOpen(){
   _pcalAdmY = _pcalY || now.getFullYear();
   _pcalAdmM = _pcalM || (now.getMonth() + 1);
   var pg = document.getElementById('pcalAdminPage');
+  // 🔧 편집 화면이 mainScreen 안에 있어서, 그 화면이 숨으면 같이 사라졌다.
+  //   (position:fixed 라도 조상이 display:none 이면 그려지지 않는다)
+  //   본문 직속으로 한 번만 옮겨 두면 어느 화면에서 열든 항상 뜬다. 사진 고르기 모달도 같이.
+  try {
+    if(pg && pg.parentElement !== document.body) document.body.appendChild(pg);
+    var pk = document.getElementById('pcalPickModal');
+    if(pk && pk.parentElement !== document.body) document.body.appendChild(pk);
+  } catch(e){}
   if(pg) pg.style.display = 'flex';
   if(_pcalCovers === null){
     pcalLoadCovers().then(function(){ _pcalAdmLoadDraft(); pcalAdminRender(); });
@@ -39491,114 +39526,80 @@ function pcalAdminRender(){
 
   // ── 히어로 ──
   h += '<div style="font-family:var(--font-main);font-size:12px;font-weight:800;letter-spacing:.1em;color:#5C0A14;margin:4px 0 10px;">월별 히어로</div>';
-  // 미리보기 — 실제 표지와 같은 세로 비율(폰 화면). 컷을 직접 끌어 보여줄 면을 잡는다.
+  // ── 미리보기 하나로 끝낸다 ──────────────────────────────────
+  //   큰 미리보기에서 컷을 눌러 고르고, 끌어서 옮기고, 슬라이더로 키운다.
+  //   작은 보정 박스를 컷마다 따로 두던 것을 없앴다 — 화면이 두 벌이라 헷갈리기만 했다.
   var _L = magLayout(_pcalAdmDraft.layout);
+  if(_pcalAdmSel >= _L.n) _pcalAdmSel = 0;
   var _hasAny = (_pcalAdmDraft.cuts || []).some(function(x){ return !!x; });
+
   h += '<div id="pcalAdmPreview" style="position:relative;border-radius:14px;overflow:hidden;'
-     + 'background:#0E0E10;width:min(58vw,220px);aspect-ratio:9/16;margin:0 auto 6px;'
-     + 'box-shadow:0 8px 26px rgba(0,0,0,.18);">';
-  if(_hasAny){
-    h += _magCutsHtml(_pcalAdmDraft.cuts, _pcalAdmDraft.layout, _pcalAdmDraft.focus);
-  } else {
-    h += '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:11px;letter-spacing:.2em;color:#5f5b57;">PHOTO NOT SET</div>';
+     + 'background:#0E0E10;width:min(66vw,250px);aspect-ratio:9/16;margin:0 auto 10px;'
+     + 'box-shadow:0 8px 26px rgba(0,0,0,.2);">';
+  h += _magCutsHtml(_pcalAdmDraft.cuts, _pcalAdmDraft.layout, _pcalAdmDraft.focus);
+  if(!_hasAny){
+    h += '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;'
+       + 'font-size:11px;letter-spacing:.2em;color:#5f5b57;pointer-events:none;">PHOTO NOT SET</div>';
+  }
+  // 선택된 컷 표시 — 같은 폴리곤을 테두리로 덧그린다
+  if(_L.n > 1){
+    var selPoly = 'polygon(' + _L.cuts[_pcalAdmSel] + ')';
+    h += '<div id="pcalAdmSelMark" style="position:absolute;inset:0;pointer-events:none;'
+       + 'clip-path:' + selPoly + ';-webkit-clip-path:' + selPoly + ';'
+       + 'box-shadow:inset 0 0 0 3px #C8A96E;"></div>';
   }
   h += '</div>';
-  if(_hasAny){
-    h += '<div style="font-size:10.5px;color:#8a8580;text-align:center;margin-bottom:14px;">'
-       + '미리보기에서 컷을 끌면 보여줄 면이 바뀝니다' + (_L.n > 1 ? ' (컷마다 따로)' : '') + '</div>';
-  }
 
-  // 컷 나누기
-  h += '<div style="font-size:11px;color:#8a8580;margin-bottom:6px;">컷 나누기</div>';
-  h += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:14px;">';
-  MAG_LAYOUT_ORDER.forEach(function(k){
-    var on = (_pcalAdmDraft.layout === k);
-    h += '<button onclick="pcalAdmLayout(\'' + k + '\')" style="padding:9px 2px;border-radius:8px;cursor:pointer;'
-       + 'font-family:var(--font-main);font-size:10.5px;font-weight:700;white-space:nowrap;'
-       + (on ? 'background:#5C0A14;border:1px solid #5C0A14;color:#fff;'
-             : 'background:#fff;border:1px solid #d8d3cc;color:#5C0A14;')
-       + '">' + MAG_LAYOUTS[k].name + '</button>';
-  });
-  h += '</div>';
-
-  // 컷별 사진
-  for(var ci=0; ci<_L.n; ci++){
-    var cur = (_pcalAdmDraft.cuts && _pcalAdmDraft.cuts[ci]) || '';
-    h += '<div class="pcal-adm-row">';
-    h += '<div class="th">' + (cur ? '<img src="' + _pcalEsc(cur) + '">' : '') + '</div>';
-    h += '<div style="flex:1;min-width:0;">'
-       + '<div style="font-family:var(--font-main);font-size:12.5px;font-weight:700;color:#1a1a18;">'
-       + (_L.n > 1 ? (ci+1) + '번 컷' : '표지 사진') + '</div>'
-       + '<div style="font-size:10.5px;color:#8a8580;margin-top:3px;">' + (cur ? '지정됨' : '비어 있음') + '</div>'
-       + '</div>';
-    h += '<div style="display:flex;flex-wrap:wrap;gap:5px;justify-content:flex-end;max-width:112px;">'
-       + '<button class="pcal-adm-btn" onclick="pcalPickOpen(\'cut\',' + ci + ')">고르기</button>'
-       + '<button class="pcal-adm-btn" onclick="pcalAdmUpload(\'cut\',' + ci + ')">올리기</button>'
-       + (cur ? '<button class="pcal-adm-btn" onclick="pcalAdmSetCut(' + ci + ',\'\')">비우기</button>' : '')
-       + '</div>';
-    h += '</div>';
-
-    // 보여줄 면 · 크기 — 사진이 있을 때만
-    if(cur){
-      var fx = (_pcalAdmDraft.focus && _pcalAdmDraft.focus[ci]) || {};
-      var fxX = (typeof fx.x === 'number') ? fx.x : 50;
-      var fxY = (typeof fx.y === 'number') ? fx.y : 50;
-      var fxZ = (typeof fx.z === 'number') ? fx.z : 1;
-      h += '<div class="pcal-fx">';
-      h += '<div class="box" data-ci="' + ci + '" onpointerdown="pcalFxDown(event,' + ci + ')" '
-         + 'onpointermove="pcalFxMove(event,' + ci + ')" onpointerup="pcalFxUp(event)">'
-         + '<img src="' + _pcalEsc(cur) + '" style="object-position:' + fxX + '% ' + fxY + '%;'
-         + (fxZ > 1.001 ? 'transform:scale(' + fxZ + ');transform-origin:' + fxX + '% ' + fxY + '%;' : '')
-         + '">'
-         + '<div class="dot" style="left:' + fxX + '%;top:' + fxY + '%;"></div>'
-         + '<div class="hint">끌어서 보여줄 면을 잡습니다</div>'
-         + '</div>';
-      h += '<div class="zrow"><span>크기</span>'
-         + '<input type="range" min="100" max="300" step="5" value="' + Math.round(fxZ*100) + '" '
-         + 'oninput="pcalFxZoom(' + ci + ', this.value)">'
-         + '<span id="pcalFxZ' + ci + '">' + Math.round(fxZ*100) + '%</span>'
-         + '<button class="pcal-adm-btn" onclick="pcalFxReset(' + ci + ')">되돌리기</button></div>';
-      h += '</div>';
+  // 어느 컷을 고치고 있는지 + 컷 고르기
+  if(_L.n > 1){
+    h += '<div style="display:flex;gap:5px;justify-content:center;margin-bottom:10px;">';
+    for(var si=0; si<_L.n; si++){
+      var on = (si === _pcalAdmSel);
+      var filled = !!(_pcalAdmDraft.cuts && _pcalAdmDraft.cuts[si]);
+      h += '<button onclick="pcalAdmSel(' + si + ')" style="width:34px;padding:7px 0;border-radius:8px;cursor:pointer;'
+         + 'font-family:var(--font-main);font-size:11px;font-weight:800;'
+         + (on ? 'background:#5C0A14;border:1px solid #5C0A14;color:#fff;'
+               : 'background:#fff;border:1px solid #d8d3cc;color:' + (filled ? '#5C0A14' : '#c3bcb2') + ';')
+         + '">' + (si+1) + '</button>';
     }
+    h += '</div>';
   }
-  h += '<div style="height:12px;"></div>';
-  h += '<div style="margin-bottom:9px;"><div style="font-size:11px;color:#8a8580;margin-bottom:5px;">지역 (예: 도쿄 · 오사카 · 교토)</div>'
-     + '<input id="pcalAdmRegions" class="pcal-adm-inp" type="text" value="' + _pcalEsc(_pcalAdmDraft.regions) + '" placeholder="비워두면 그 달 티켓 지역으로 자동 표시"></div>';
 
-  h += '<button class="pcal-adm-btn dark" style="width:100%;padding:12px;font-size:12px;" onclick="pcalAdmSaveCover()">이 달 표지 저장</button>';
+  var _cur = (_pcalAdmDraft.cuts && _pcalAdmDraft.cuts[_pcalAdmSel]) || '';
+  h += '<div style="text-align:center;font-size:11px;color:#8a8580;margin-bottom:8px;">'
+     + (_L.n > 1 ? (_pcalAdmSel+1) + '번 컷' : '표지 사진')
+     + (_cur ? ' — 미리보기를 끌어서 옮기세요' : ' — 사진이 없습니다') + '</div>';
 
-  // ── 날짜 타일 ──
-  h += '<div style="font-family:var(--font-main);font-size:12px;font-weight:800;letter-spacing:.1em;color:#5C0A14;margin:26px 0 4px;">날짜 타일 사진</div>';
-  h += '<div style="font-size:11px;color:#8a8580;line-height:1.7;margin-bottom:8px;">'
-     + '지정하지 않으면 그 레스토랑의 등록 사진이 자동으로 쓰인다. 타일은 <b>요리 단품 클로즈업</b>이 가장 좋다 — 실내 전경·인물컷은 히어로에서만.</div>';
+  h += '<div style="display:flex;gap:6px;justify-content:center;margin-bottom:12px;">'
+     + '<button class="pcal-adm-btn" onclick="pcalPickOpen(\'cut\',' + _pcalAdmSel + ')">사진 고르기</button>'
+     + '<button class="pcal-adm-btn" onclick="pcalAdmUpload(\'cut\',' + _pcalAdmSel + ')">새 사진 올리기</button>'
+     + (_cur ? '<button class="pcal-adm-btn" onclick="pcalAdmSetCut(' + _pcalAdmSel + ',\'\')">비우기</button>' : '')
+     + '</div>';
 
-  if(!list.length){
-    h += '<div style="padding:22px 0;text-align:center;font-size:12px;color:#a8a29a;">이 달에 등록된 티켓이 없습니다</div>';
-  } else {
-    list.forEach(function(t){
-      var ph = _pcalPhoto(t);
-      var own = !!t.tilePhoto;
-      h += '<div class="pcal-adm-row">';
-      h += '<div class="th">' + (ph ? '<img src="' + _pcalEsc(ph) + '">' : '') + '</div>';
-      h += '<div style="flex:1;min-width:0;">'
-         + '<div style="font-family:var(--font-main);font-size:13px;font-weight:700;color:#1a1a18;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'
-         + _pcalEsc(_pcalRestName(t)) + '</div>'
-         + '<div style="font-size:10.5px;color:#8a8580;margin-top:3px;">' + _pcalEsc(t.date || '') + ' · ' + _pcalEsc(t.time || '')
-         + ' · ' + (own ? '타일 지정됨' : '레스토랑 사진 사용 중') + '</div>'
-         + '</div>';
-      h += '<div style="display:flex;flex-wrap:wrap;gap:5px;justify-content:flex-end;max-width:112px;">'
-         + '<button class="pcal-adm-btn" onclick="pcalPickOpen(\'tile\',\'' + _pcalEsc(String(t.id)) + '\')">고르기</button>'
-         + '<button class="pcal-adm-btn" onclick="pcalAdmUpload(\'tile\',\'' + _pcalEsc(String(t.id)) + '\')">올리기</button>'
-         + (own ? '<button class="pcal-adm-btn" onclick="pcalAdmSetTile(\'' + _pcalEsc(String(t.id)) + '\',\'\')">되돌리기</button>' : '')
-         + '</div>';
-      h += '</div>';
-    });
+  if(_cur){
+    var _f = (_pcalAdmDraft.focus && _pcalAdmDraft.focus[_pcalAdmSel]) || {};
+    var _z = (typeof _f.z === 'number') ? _f.z : 1;
+    h += '<div class="pcal-fx"><div class="zrow"><span>크기</span>'
+       + '<input type="range" min="100" max="300" step="5" value="' + Math.round(_z*100) + '" '
+       + 'oninput="pcalFxZoom(' + _pcalAdmSel + ', this.value)">'
+       + '<span id="pcalFxZ' + _pcalAdmSel + '">' + Math.round(_z*100) + '%</span>'
+       + '<button class="pcal-adm-btn" onclick="pcalFxReset(' + _pcalAdmSel + ')">가운데로</button>'
+       + '</div></div>';
   }
+  h += '<div style="height:14px;"></div>';
 
   body.innerHTML = h;
   _pcalBindPreviewDrag();
 }
 window.pcalAdminRender = pcalAdminRender;
+
+// 지금 고치고 있는 컷
+var _pcalAdmSel = 0;
+function pcalAdmSel(i){
+  _pcalAdmSel = i;
+  pcalAdminRender();
+}
+window.pcalAdmSel = pcalAdmSel;
 
 // 미리보기 안의 컷을 직접 끌어 보여줄 면을 잡는다.
 //   clip-path 는 마우스/터치 판정에도 적용되므로, 누른 지점이 속한 컷이 정확히 잡힌다.
@@ -39606,16 +39607,33 @@ window.pcalAdminRender = pcalAdminRender;
 function _pcalBindPreviewDrag(){
   var prev = document.getElementById('pcalAdmPreview');
   if(!prev) return;
-  var targets = prev.querySelectorAll('.cutwrap > .cut');
-  if(!targets.length){
-    var im = prev.querySelector('img');
-    if(im) targets = [prev];   // 1컷 — 미리보기 자체
+  var cuts = prev.querySelectorAll('.cutwrap > .cut');
+  if(cuts.length){
+    Array.prototype.forEach.call(cuts, function(el){
+      var idx = parseInt(el.getAttribute('data-ci'), 10) || 0;
+      el.style.cursor = 'move';
+      el.style.touchAction = 'none';
+      el.addEventListener('pointerdown', function(ev){
+        // 누른 컷이 곧 고치는 컷이 된다 — 따로 고를 필요가 없다
+        if(_pcalAdmSel !== idx){
+          _pcalAdmSel = idx;
+          var mark = document.getElementById('pcalAdmSelMark');
+          if(mark){
+            var poly = 'polygon(' + magLayout(_pcalAdmDraft.layout).cuts[idx] + ')';
+            mark.style.clipPath = poly; mark.style.webkitClipPath = poly;
+          }
+        }
+        _pcalPrevDown(ev, el, idx, prev);
+      });
+    });
+    return;
   }
-  Array.prototype.forEach.call(targets, function(el, idx){
-    el.style.cursor = 'move';
-    el.style.touchAction = 'none';
-    el.addEventListener('pointerdown', function(ev){ _pcalPrevDown(ev, el, idx, prev); });
-  });
+  var im = prev.querySelector('img');
+  if(im){
+    prev.style.cursor = 'move';
+    prev.style.touchAction = 'none';
+    prev.addEventListener('pointerdown', function(ev){ _pcalPrevDown(ev, prev, 0, prev); });
+  }
 }
 
 var _pcalPrevDrag = null;
@@ -39631,10 +39649,14 @@ function _pcalPrevDown(ev, el, idx, prev){
 function _pcalPrevMove(ev){
   var d = _pcalPrevDrag;
   if(!d) return;
-  var r = d.prev.getBoundingClientRect();
+  // 사진은 그 컷 크기만큼만 깔려 있으므로, 컷 크기를 기준으로 움직여야 손끝과 맞는다
+  var pr = d.prev.getBoundingClientRect();
+  var bx = _magCutBox(_pcalAdmDraft.layout, d.idx);
+  var w = Math.max(1, pr.width  * (bx.w / 100));
+  var hh = Math.max(1, pr.height * (bx.h / 100));
   // 끄는 방향과 사진이 움직이는 방향을 맞춘다 — 오른쪽으로 끌면 사진도 오른쪽으로 간다
-  var nx = d.fx - ((ev.clientX - d.x0) / r.width) * 100;
-  var ny = d.fy - ((ev.clientY - d.y0) / r.height) * 100;
+  var nx = d.fx - ((ev.clientX - d.x0) / w) * 100;
+  var ny = d.fy - ((ev.clientY - d.y0) / hh) * 100;
   var f = _pcalFxEnsure(d.idx);
   f.x = Math.round(Math.max(0, Math.min(100, nx)));
   f.y = Math.round(Math.max(0, Math.min(100, ny)));
@@ -39643,13 +39665,11 @@ function _pcalPrevMove(ev){
     d.img.style.transform = 'scale(' + f.z + ')';
     d.img.style.transformOrigin = f.x + '% ' + f.y + '%';
   }
-  // 아래 컷별 보정 박스도 같이 움직인다
-  var box = document.querySelector('.pcal-fx .box[data-ci="' + d.idx + '"]');
-  if(box) _pcalFxApply(box, f);
 }
 function _pcalPrevUp(){
   if(!_pcalPrevDrag) return;
   _pcalPrevDrag = null;
+  if(typeof pcalAdminRender === 'function') pcalAdminRender();
 }
 document.addEventListener('pointermove', _pcalPrevMove, { passive:false });
 document.addEventListener('pointerup', _pcalPrevUp);
@@ -39740,17 +39760,12 @@ function pcalFxZoom(i, v){
   f.z = Math.max(1, Math.min(3, (parseInt(v, 10) || 100) / 100));
   var lbl = document.getElementById('pcalFxZ' + i);
   if(lbl) lbl.textContent = Math.round(f.z * 100) + '%';
-  var box = document.querySelector('.pcal-fx .box[data-ci="' + i + '"]');
-  if(box) _pcalFxApply(box, f);
-  // 위 미리보기도 같이 — 슬라이더는 드래그와 달리 다시 그려도 손이 안 떨어진다
-  var prev = document.querySelector('#pcalAdminBody .cutwrap');
-  if(prev){
-    var im = prev.children[i] && prev.children[i].querySelector('img');
-    if(im){
-      im.style.objectPosition = f.x + '% ' + f.y + '%';
-      im.style.transform = (f.z > 1.001) ? 'scale(' + f.z + ')' : '';
-      im.style.transformOrigin = f.x + '% ' + f.y + '%';
-    }
+  var prev = document.getElementById('pcalAdmPreview');
+  var im = prev && (prev.querySelector('.cut[data-ci="' + i + '"] img') || prev.querySelector('img'));
+  if(im){
+    im.style.objectPosition = f.x + '% ' + f.y + '%';
+    im.style.transform = (f.z > 1.001) ? 'scale(' + f.z + ')' : '';
+    im.style.transformOrigin = f.x + '% ' + f.y + '%';
   }
 }
 window.pcalFxZoom = pcalFxZoom;
