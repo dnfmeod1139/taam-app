@@ -594,6 +594,28 @@ html.auto-login .splash .bottom-group{display:none !important}
 .pcal-item .st.full{color:#57544f}
 .pcal-item .go{font-size:15px;color:#57544f;margin-top:5px}
 
+/* ══════ 터치감 — iOS 처럼 ══════════════════════════════════════
+   버튼을 누르면 살짝 눌리고, 화면은 툭 튀지 않고 올라온다.
+   iOS 가 쓰는 감속 곡선(cubic-bezier(.32,.72,0,1))을 그대로 쓴다.
+   누르는 순간 반응은 빨라야 하고(90ms), 화면 전환은 조금 길어야(300ms) 자연스럽다. */
+.gnb-btn, .mag-sched, .pcal-adm-btn, #pcalDetail .pd-cta,
+#magView .mag-cue button, #magView .mag-arrow, .pcal-lrow, .pcal-item, .pcal-d.ev{
+  -webkit-tap-highlight-color:transparent;
+  transition:transform .09s cubic-bezier(.32,.72,0,1), opacity .09s ease, background .18s ease}
+.gnb-btn:active{transform:scale(.9)}
+.mag-sched:active, .pcal-adm-btn:active, #pcalDetail .pd-cta:active,
+#magView .mag-cue button:active, #magView .mag-arrow:active{transform:scale(.94);opacity:.85}
+.pcal-lrow:active, .pcal-item:active{transform:scale(.985);opacity:.8}
+.pcal-d.ev:active{transform:scale(.94)}
+#magView .mag-lang .cur:active{opacity:.6}
+
+/* 화면 전환 — 아래에서 살짝 올라오며 자리를 잡는다 */
+@keyframes tkRise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
+@keyframes tkFade{from{opacity:0}to{opacity:1}}
+#pcalDetail.opening{animation:tkRise .3s cubic-bezier(.32,.72,0,1)}
+#magView.opening{animation:tkFade .26s ease-out}
+#magSheet .mg-panel{transition:transform .34s cubic-bezier(.32,.72,0,1)}
+
 /* ══════ 🧪 매거진뷰 (프로토타입 · claude/magazine-view 브랜치 전용) ══════
    첫 화면을 월간 표지 한 장으로 꽉 채우고, 캘린더는 아래로 밀거나 버튼을 눌렀을 때
    시트로 올라오게 한다.
@@ -16361,7 +16383,9 @@ function openMain(){
       loadMembers(),
       loadInviteCodes(),
       loadAdminCodes(),
-      loadSplashSettings()
+      loadSplashSettings(),
+      // 표지를 미리 읽어 둔다. 안 읽으면 폴백 사진으로 먼저 그렸다가 갈아 끼우게 된다.
+      (typeof pcalLoadCovers === 'function' ? pcalLoadCovers().catch(function(){}) : Promise.resolve())
     ]);
   }).then(function(){
     return reloadUserData();
@@ -16399,6 +16423,12 @@ function openMain(){
     if (activeBar) activeBar.style.display = 'none'; // Step 2: 통합 상단바로 이동됨
     if (typeof tkPillSyncAll === 'function') tkPillSyncAll();
     setTimeout(function(){ renderTicketGenres(); }, 60);
+    // 🔧 화면을 보여주기 전에 표지를 먼저 그린다 — 뜬 뒤에 그리면 잔상이 된다
+    if(_newHomeOn){
+      if(typeof pcalApplyGnb === 'function') pcalApplyGnb();
+      if(typeof magEnabled === 'function' && magEnabled() && typeof magRender === 'function') magRender();
+      else if(typeof pcalRenderAll === 'function') pcalRenderAll();
+    }
     document.getElementById('mainScreen').style.display='flex';
     document.getElementById('mainGnb').style.display='flex';
     // 홈에서는 붉은 glow orb 숨김
@@ -16464,7 +16494,7 @@ function gnbGo(tab, btn){
     // 이전 탭으로 active 복원 방지용 — ticket 유지 (Ticket = 새 primary)
     document.querySelectorAll('.gnb-btn').forEach(function(b){b.classList.remove('active');});
     var tkB = document.getElementById('gnbHome'); if(tkB) tkB.classList.add('active');
-    showView('ticket');
+    showView(_landingView());
     return;
   }
 
@@ -16512,7 +16542,7 @@ function gnbGo(tab, btn){
       document.querySelectorAll('.gnb-btn').forEach(function(b){b.classList.remove('active');});
       var _rqBack = document.getElementById('gnbHome');
       if(_rqBack) _rqBack.classList.add('active');
-      showView('ticket');
+      showView(_landingView());
       return;
     }
     showView('request');
@@ -16529,7 +16559,7 @@ function gnbGo(tab, btn){
       document.querySelectorAll('.gnb-btn').forEach(function(b){b.classList.remove('active');});
       var tkBtn2 = document.getElementById('gnbHome');
       if(tkBtn2) tkBtn2.classList.add('active');
-      showView('ticket');
+      showView(_landingView());
       return;
     }
     openTaamChat();
@@ -16553,6 +16583,12 @@ function gnbGo(tab, btn){
     return;
   }
 }
+
+// 지금 설정에서 '첫 화면' 이 무엇인지 — 잔상 없이 한 번에 그리기 위한 단일 기준
+function _landingView(){
+  return (typeof newHomeEnabled === 'function' && newHomeEnabled()) ? 'home' : 'ticket';
+}
+window._landingView = _landingView;
 
 function showView(view){
   var homeV = document.getElementById('homeView');
@@ -16651,7 +16687,7 @@ function closeMyPageToHome(){
   // Ticket이 새 primary 랜딩
   var tkBtnCmp = document.getElementById('gnbHome');
   if(tkBtnCmp) tkBtnCmp.classList.add('active');
-  if (typeof showView === 'function') showView('ticket');
+  if (typeof showView === 'function') showView(_landingView());
 }
 
 function openMyPage(){
@@ -38325,7 +38361,15 @@ function _pcalMonthListHtml(byDate){
 }
 
 function pcalRenderAll(){
+  // 매거진이 켜져 있으면 홈 캘린더는 그리지 않는다.
+  //   그리면 홈에 캘린더가 잠깐 떴다가 매거진으로 바뀌는 잔상이 남는다.
+  var magOn = (typeof magEnabled === 'function') && magEnabled();
+  if(magOn){
+    var ph = document.getElementById('pcalHome');
+    if(ph){ ph.style.display = 'none'; ph.innerHTML = ''; }
+  }
   ['pcalTicket','pcalHome'].forEach(function(id){
+    if(magOn && id === 'pcalHome') return;
     try { renderPhotoCalInto(id); } catch(e){ console.warn('[pcal] 렌더 실패', id, e); }
   });
   // 매거진뷰(프로토타입)가 켜져 있으면 표지와 시트 안의 캘린더도 같이 갱신
@@ -38501,7 +38545,11 @@ function pcalOpenTicket(id){
   if(inner) inner.innerHTML = _pcalDetailHtml(t, r, dead, expired);
   pcalApplySkin();
   var scr = document.getElementById('pcalDetail');
-  if(scr){ scr.style.display = 'block'; scr.scrollTop = 0; }
+  if(scr){
+    scr.style.display = 'block'; scr.scrollTop = 0;
+    scr.classList.remove('opening'); void scr.offsetWidth; scr.classList.add('opening');
+    setTimeout(function(){ scr.classList.remove('opening'); }, 340);
+  }
   if(!dead) pcalRefreshPay();
 
   // 잔여석 배지 — 회원에겐 재고 전체를 노출하지 않는다 (기존 구매 시트와 같은 규칙)
@@ -38714,7 +38762,12 @@ function magRender(){
 
   var heroEl = document.getElementById('magHero');
   if(heroEl) heroEl.innerHTML = h;
+  var wasHidden = (v.style.display !== 'block');
   v.style.display = 'block';
+  if(wasHidden){
+    v.classList.remove('opening'); void v.offsetWidth; v.classList.add('opening');
+    setTimeout(function(){ v.classList.remove('opening'); }, 300);
+  }
   magBindScroll();
   magBindSwipe();
 }
