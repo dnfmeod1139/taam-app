@@ -672,7 +672,10 @@ html.auto-login .splash .bottom-group{display:none !important}
    그래서 #magView 로 가두지도 않는다. */
 /* 자리는 인라인 style 로 온다(_magTextStyle) — 아홉 칸에 미세조정(%)까지 더해야 해서다.
    아래는 인라인이 없을 때의 기본값이다. */
-.mag-txt{position:absolute;left:6%;right:6%;bottom:19%;z-index:4}
+/* 글자 칸은 사진 위를 넓게 덮는다. 그대로 두면 그 아래 사진·컷이 눌리지 않는다
+   (편집 화면에서 빈 컷을 눌러도 안 골라지던 원인). 칸은 투명하게 두고,
+   글자 자체만 편집 화면에서 다시 켠다(_pcalBindPreviewDrag). */
+.mag-txt{position:absolute;left:6%;right:6%;bottom:19%;z-index:4;pointer-events:none}
 .mag-head{display:flex;align-items:baseline;gap:16px}
 .mag-txt.a-l .mag-head{justify-content:flex-start}
 .mag-txt.a-c .mag-head{justify-content:center}
@@ -701,10 +704,10 @@ html.auto-login .splash .bottom-group{display:none !important}
    최소 탭 크기(44pt)에도 못 미쳤다. 이제 혼자 서고 높이도 44pt 를 지킨다. */
 #magView .mag-sched{position:absolute;left:50%;transform:translateX(-50%);
   bottom:calc(84px + env(safe-area-inset-bottom));z-index:6;
-  min-height:44px;padding:0 30px;border:none;cursor:pointer;border-radius:999px;
-  background:#5C0A14;color:#fff;
-  font-family:'Oswald','Noto Sans KR',sans-serif;font-size:12px;font-weight:700;
-  letter-spacing:.1em;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+  width:52px;height:52px;padding:0;border:none;cursor:pointer;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  background:#5C0A14;color:#fff;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+#magView .mag-sched svg{width:23px;height:23px;display:block}
 /* 시트가 올라와 있는 동안에는 감춘다 — 반투명한 판 뒤로 붉은 알약이 비친다 */
 #magView.sheeton .mag-sched{opacity:0;pointer-events:none;
   transform:translateX(-50%) translateY(14px)}
@@ -38970,8 +38973,13 @@ function magRender(){
   var _mon = hero.txt.mon; _mon.text = _magMonLabel(_pcalM);   // 월 이름은 달력이 정한다
   h += _magTextBlock(_mon, 'mon');
   h += _magTextBlock(hero.txt.hl, 'hl');
-  // 표지에서 캘린더로 가는 유일한 문
-  h += '<button class="mag-sched" onclick="magOpenSheet()">스케줄</button>';
+  // 표지에서 캘린더로 가는 유일한 문 — 글자 없이 달력 표시 하나로 끝낸다.
+  //   표지에 글자가 늘수록 사진이 죽는다. 「스케줄」 넉 자도 사진 위에서는 군더더기다.
+  h += '<button class="mag-sched" onclick="magOpenSheet()" aria-label="스케줄">'
+     + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" '
+     + 'stroke-linecap="round" stroke-linejoin="round">'
+     + '<rect x="3" y="5" width="18" height="16" rx="2.5"/>'
+     + '<path d="M16 3v4M8 3v4M3 10h18"/></svg></button>';
 
   var heroEl = document.getElementById('magHero');
   if(heroEl){ heroEl.innerHTML = h; _magFitAll(heroEl); }
@@ -39096,14 +39104,18 @@ function _magFxOf(focus, i){
 // 컷 마크업 — photos 가 컷 수보다 모자라면 앞의 사진으로 채운다
 function _magCutsHtml(photos, layoutKey, focus){
   var L = magLayout(layoutKey);
-  var list = (photos || []).filter(function(x){ return !!x; });
+  // 자리를 지켜 읽는다 — 걸러내면 뒤 컷 사진이 앞 자리로 밀린다.
+  //   빈 컷은 처음으로 채워진 사진으로 메운다 (표지에 검은 구멍을 두지 않는다).
+  var list = photos || [];
+  var firstPhoto = '';
+  for(var fi = 0; fi < list.length; fi++){ if(list[fi]){ firstPhoto = list[fi]; break; } }
   if(L.n === 1){
-    var one = list[0] || '';
+    var one = list[0] || firstPhoto || '';
     return one ? '<img src="' + _pcalEsc(one) + '" alt="" style="' + _magFxOf(focus, 0) + '">' : '';
   }
   var h = '<div class="cutwrap">';
   for(var i=0; i<L.n; i++){
-    var src = list[i] || list[list.length-1] || '';
+    var src = list[i] || firstPhoto || '';
     var poly = 'polygon(' + L.cuts[i] + ')';
     var bx = _magCutBox(layoutKey, i);
     var pos = 'position:absolute;left:' + bx.x + '%;top:' + bx.y + '%;'
@@ -39884,10 +39896,12 @@ function pcalAdminRender(){
      + (_L.n > 1 ? (_pcalAdmSel+1) + '번 컷' : '표지 사진')
      + (_cur ? ' — 미리보기를 끌어서 옮기세요' : ' — 사진이 없습니다') + '</div>';
 
+  // 컷 번호를 버튼에 박지 않는다 — 미리보기에서 컷을 바꾸면 박아둔 번호가 낡는다.
+  //   호출 시점의 _pcalAdmSel 을 보게 해서 「지금 고른 컷」과 늘 일치시킨다.
   h += '<div style="display:flex;gap:6px;justify-content:center;flex-wrap:wrap;margin-bottom:12px;">'
-     + '<button class="pcal-adm-btn" onclick="pcalPickOpen(\'cut\',' + _pcalAdmSel + ')">사진 고르기</button>'
-     + '<button class="pcal-adm-btn" onclick="pcalAdmUpload(\'cut\',' + _pcalAdmSel + ')">새 사진 올리기</button>'
-     + (_cur ? '<button class="pcal-adm-btn" onclick="pcalAdmSetCut(' + _pcalAdmSel + ',\'\')">비우기</button>' : '')
+     + '<button class="pcal-adm-btn" onclick="pcalAdmCutPick()">사진 고르기</button>'
+     + '<button class="pcal-adm-btn" onclick="pcalAdmCutUpload()">새 사진 올리기</button>'
+     + (_cur ? '<button class="pcal-adm-btn" onclick="pcalAdmCutClear()">비우기</button>' : '')
      + '</div>';
 
   if(_cur){
@@ -39895,9 +39909,9 @@ function pcalAdminRender(){
     var _z = (typeof _f.z === 'number') ? _f.z : 1;
     h += '<div class="pcal-fx"><div class="zrow"><span>크기</span>'
        + '<input type="range" min="60" max="300" step="5" value="' + Math.round(_z*100) + '" '
-       + 'oninput="pcalFxZoom(' + _pcalAdmSel + ', this.value)">'
+       + 'oninput="pcalAdmCutZoom(this.value)">'
        + '<span id="pcalFxZ' + _pcalAdmSel + '" style="min-width:52px;text-align:right;">' + _pcalFxLabel(_z) + '</span>'
-       + '<button class="pcal-adm-btn" onclick="pcalFxReset(' + _pcalAdmSel + ')">가운데로</button>'
+       + '<button class="pcal-adm-btn" onclick="pcalAdmCutReset()">가운데로</button>'
        + '</div>'
        + '<div style="font-size:10px;color:#a8a29a;margin-top:5px;text-align:center;">100% 아래로 줄이면 사진 전체가 보입니다</div>'
        + '</div>';
@@ -40077,7 +40091,13 @@ function _pcalBindPreviewDrag(){
     var which = box.getAttribute('data-tk');
     box.style.touchAction = 'none';
     var mon = box.querySelector('.mag-mon');
-    if(mon) mon.style.cursor = 'move';
+    if(mon){
+      mon.style.cursor = 'move';
+      mon.style.pointerEvents = 'auto';
+      // 끌 수 있다는 걸 보이게 한다 — 편집 화면에서만. 표지에는 안 나온다.
+      mon.style.outline = '1px dashed rgba(200,169,110,.55)';
+      mon.style.outlineOffset = '3px';
+    }
     box.addEventListener('pointerdown', function(ev){
       // 글자 위를 눌렀을 때만 잡는다 — 빈 칸을 누르면 사진이 움직여야 한다
       if(!ev.target || !ev.target.classList || !ev.target.classList.contains('mag-mon')) return;
@@ -40096,6 +40116,7 @@ function _pcalBindPreviewDrag(){
         // 누른 컷이 곧 고치는 컷이 된다 — 따로 고를 필요가 없다
         if(_pcalAdmSel !== idx){
           _pcalAdmSel = idx;
+          _pcalSelDirty = true;   // 손을 떼면 반드시 다시 그린다 (아래 _pcalPrevUp)
           var mark = document.getElementById('pcalAdmSelMark');
           if(mark){
             var poly = 'polygon(' + magLayout(_pcalAdmDraft.layout).cuts[idx] + ')';
@@ -40142,10 +40163,14 @@ function _pcalTxtUp(){
 }
 
 var _pcalPrevDrag = null;
+var _pcalSelDirty = false;
 function _pcalPrevDown(ev, el, idx, prev){
   ev.preventDefault();
-  var img = el.querySelector('img') || prev.querySelector('img');
-  if(!img) return;
+  // 🔧 그 컷 안의 사진만 잡는다.
+  //   예전엔 컷이 비면 미리보기의 '첫 번째' 사진을 잡았다 — 다른 컷의 사진이었다.
+  //   빈 컷을 끌면 엉뚱한 컷의 사진이 움직이고, 보정값은 빈 컷에 쌓였다.
+  var img = el.querySelector('img');
+  if(!img) return;   // 빈 컷은 끌 게 없다. 고르기만 된다.
   var f = _pcalFxEnsure(idx);
   _pcalPrevDrag = { idx: idx, img: img, el: el, prev: prev,
                     x0: ev.clientX, y0: ev.clientY, fx: f.x, fy: f.y };
@@ -40172,8 +40197,14 @@ function _pcalPrevMove(ev){
   }
 }
 function _pcalPrevUp(){
-  if(!_pcalPrevDrag) return;
+  // 🔧 컷만 바꾸고 끌지는 않았어도 다시 그린다.
+  //   예전엔 끌었을 때만 다시 그려서, 빈 컷을 눌러 고르면 화면이 그대로 남았다.
+  //   그러면 아래 버튼·슬라이더에 '이전 컷 번호' 가 박힌 채라, 사진을 올려도
+  //   엉뚱한 컷에 들어가고 크기 조절도 다른 컷에 먹었다.
+  //   컷에 사진이 있을 때만 끌기가 시작되므로, 이 증상은 됐다 안 됐다 했다.
+  if(!_pcalPrevDrag && !_pcalSelDirty) return;
   _pcalPrevDrag = null;
+  _pcalSelDirty = false;
   if(typeof pcalAdminRender === 'function') pcalAdminRender();
 }
 document.addEventListener('pointermove', function(ev){
@@ -40182,6 +40213,20 @@ document.addEventListener('pointermove', function(ev){
 }, { passive:false });
 document.addEventListener('pointerup', function(){ _pcalTxtUp(); _pcalPrevUp(); });
 document.addEventListener('pointercancel', function(){ _pcalTxtUp(); _pcalPrevUp(); });
+
+// ── 「지금 고른 컷」에 대고 부르는 감싸개 ──
+//   버튼 onclick 에 컷 번호를 박아 두면, 미리보기에서 컷을 바꿨을 때 그 번호가 낡는다.
+//   낡은 번호로 사진을 올리면 엉뚱한 컷에 들어가고, 크기 조절도 다른 컷에 먹는다.
+function pcalAdmCutPick(){   pcalPickOpen('cut', _pcalAdmSel); }
+function pcalAdmCutUpload(){ pcalAdmUpload('cut', _pcalAdmSel); }
+function pcalAdmCutClear(){  pcalAdmSetCut(_pcalAdmSel, ''); }
+function pcalAdmCutZoom(v){  pcalFxZoom(_pcalAdmSel, v); }
+function pcalAdmCutReset(){  pcalFxReset(_pcalAdmSel); }
+window.pcalAdmCutPick = pcalAdmCutPick;
+window.pcalAdmCutUpload = pcalAdmCutUpload;
+window.pcalAdmCutClear = pcalAdmCutClear;
+window.pcalAdmCutZoom = pcalAdmCutZoom;
+window.pcalAdmCutReset = pcalAdmCutReset;
 
 function pcalAdmSetHero(url){
   _pcalAdmSyncInputs();
@@ -40297,8 +40342,17 @@ window.pcalFxReset = pcalFxReset;
 function pcalAdmSetCut(i, url){
   _pcalAdmSyncInputs();
   if(!Array.isArray(_pcalAdmDraft.cuts)) _pcalAdmDraft.cuts = [];
-  _pcalAdmDraft.cuts[i] = url || '';
   if(!Array.isArray(_pcalAdmDraft.focus)) _pcalAdmDraft.focus = [];
+  // 🔧 3번 컷부터 채우면 1·2번이 '구멍'(빈 슬롯)으로 남는다.
+  //   구멍은 filter·map 이 통째로 건너뛰어서, 저장할 때 배열이 앞으로 밀린다.
+  //   그러면 3번에 넣은 사진이 2번 자리로 옮겨 붙는다 — 「업로드가 엉뚱하게 된다」의 정체다.
+  //   자리를 지키려면 구멍 없이 빈 문자열로 메워 둔다.
+  var n = magLayout(_pcalAdmDraft.layout).n;
+  for(var k = 0; k < Math.max(n, i + 1); k++){
+    if(typeof _pcalAdmDraft.cuts[k]  !== 'string') _pcalAdmDraft.cuts[k]  = _pcalAdmDraft.cuts[k]  || '';
+    if(!_pcalAdmDraft.focus[k]) _pcalAdmDraft.focus[k] = { x:50, y:50, z:1 };
+  }
+  _pcalAdmDraft.cuts[i] = url || '';
   _pcalAdmDraft.focus[i] = { x:50, y:50, z:1 };      // 사진이 바뀌면 보정은 처음부터
   if(i === 0) _pcalAdmDraft.photo_url = url || '';   // 1컷·구버전 폴백용
   pcalAdminRender();
@@ -40318,13 +40372,18 @@ async function pcalAdmSaveCover(){
   //   photo_credit 는 화면에서 쓰지 않으므로 보내지 않는다.
   //   upsert 는 보낸 컬럼만 갱신하므로 기존 값이 지워지지도 않는다.
   var L = magLayout(_pcalAdmDraft.layout);
-  var rawCuts = (_pcalAdmDraft.cuts || []).slice(0, L.n);
-  var cuts = rawCuts.filter(function(x){ return !!x; });
+  // 자리를 지켜서 보낸다 — 빈 컷은 null 로 남긴다.
+  //   예전엔 빈 것을 걸러 버려서 배열이 앞으로 밀렸고, 뒤 컷에 넣은 사진이
+  //   앞 컷 자리로 옮겨 붙었다. 컷 수만큼 길이를 맞춰 보내면 자리가 안 흔들린다.
+  var rawCuts = [];
+  for(var ri = 0; ri < L.n; ri++) rawCuts.push((_pcalAdmDraft.cuts || [])[ri] || '');
+  var cuts = rawCuts.map(function(x){ return x || null; });
+  var filled = rawCuts.filter(function(x){ return !!x; });
 
   // 🔧 사진이 하나도 없으면 저장하지 않는다.
   //   예전엔 그대로 저장돼서 cover_layout 만 들어가고 사진은 비는 행이 만들어졌다.
   //   화면에서는 "저장됐다" 고 하는데 표지는 그대로라, 편집이 안 먹는 것처럼 보였다.
-  if(!cuts.length){
+  if(!filled.length){
     if(typeof showToast === 'function'){
       showToast('⚠','사진을 먼저 지정하세요','컷에 사진이 없어 저장하지 않았습니다');
     }
@@ -40339,7 +40398,7 @@ async function pcalAdmSaveCover(){
 
   var payload = {
     year: _pcalAdmY, month: _pcalAdmM,
-    photo_url: _pcalAdmDraft.photo_url || cuts[0] || null,
+    photo_url: _pcalAdmDraft.photo_url || filled[0] || null,
     regions:   _pcalAdmDraft.regions   || null,
     cover_layout: _pcalAdmDraft.layout || 'single',
     cover_photos: cuts,
@@ -40471,9 +40530,16 @@ function pcalAdmUpload(kind, ticketId){
   var inp = document.createElement('input');
   inp.type = 'file';
   inp.accept = 'image/*';
+  // 🔧 화면에 붙여 둔다 (보이지는 않는다).
+  //   iOS 는 사진 고르는 동안 웹뷰를 뒤로 보내는데, 그때 DOM 에 없는 input 은
+  //   통째로 사라져 change 가 오지 않는다. 눌러도 아무 일도 안 일어난 것처럼 보이고,
+  //   사진 개수·메모리 상황에 따라 됐다 안 됐다 한다.
+  inp.style.cssText = 'position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0;';
+  document.body.appendChild(inp);
+  function done(){ try { if(inp.parentNode) inp.parentNode.removeChild(inp); } catch(e){} }
   inp.onchange = async function(){
     var f = inp.files && inp.files[0];
-    if(!f) return;
+    if(!f){ done(); return; }
     if(typeof uploadImageToStorage !== 'function'){
       if(typeof showToast === 'function') showToast('⚠','업로드 불가','업로드 함수 없음');
       return;
@@ -40483,6 +40549,7 @@ function pcalAdmUpload(kind, ticketId){
     var url = null;
     try { url = await uploadImageToStorage(f, 'taam-photos'); } catch(e){ console.warn(e); }
     _pcalAdmBusy = false;
+    done();
     if(!url){
       if(typeof showToast === 'function'){
         showToast('⚠','사진 업로드 실패','저장 안 됨 — 콘솔의 Storage 오류를 확인하세요 (taam-photos 버킷·권한)');
@@ -40494,6 +40561,9 @@ function pcalAdmUpload(kind, ticketId){
     else if(kind === 'cut') pcalAdmSetCut(ticketId, url);
     else pcalAdmSetTile(ticketId, url);
   };
+  // 고르지 않고 닫아도 남아 있지 않게 치운다 (iOS 는 cancel 을 안 줄 때가 있어 시간으로도 받친다)
+  inp.addEventListener('cancel', done);
+  setTimeout(function(){ if(!_pcalAdmBusy && (!inp.files || !inp.files.length)) done(); }, 120000);
   inp.click();
 }
 window.pcalAdmUpload = pcalAdmUpload;
