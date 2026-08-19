@@ -670,10 +670,9 @@ html.auto-login .splash .bottom-group{display:none !important}
 /* 자리는 전부 %다 — 편집 미리보기(작은 상자)가 실제 표지의 축소 모형이 되어야
    거기서 고른 자리가 화면에서 그대로 나온다. px 로 잡으면 둘이 어긋난다.
    그래서 #magView 로 가두지도 않는다. */
-.mag-txt{position:absolute;left:6%;right:6%;z-index:4}
-.mag-txt.v-t{top:9%}
-.mag-txt.v-m{top:46%;transform:translateY(-50%)}
-.mag-txt.v-b{bottom:19%}
+/* 자리는 인라인 style 로 온다(_magTextStyle) — 아홉 칸에 미세조정(%)까지 더해야 해서다.
+   아래는 인라인이 없을 때의 기본값이다. */
+.mag-txt{position:absolute;left:6%;right:6%;bottom:19%;z-index:4}
 .mag-head{display:flex;align-items:baseline;gap:16px}
 .mag-txt.a-l .mag-head{justify-content:flex-start}
 .mag-txt.a-c .mag-head{justify-content:center}
@@ -686,8 +685,12 @@ html.auto-login .splash .bottom-group{display:none !important}
    크기는 자바스크립트가 글자칸 너비에 비례해 정한다(_magFitAll) — vw 로 못 박으면
    편집 미리보기(작은 상자)에서 실제 표지와 다른 비율로 보여 고를 수가 없다.
    아래 6.8vw 는 자바스크립트가 덮기 전 한 프레임짜리 기본값이다. */
-.mag-mon{font-size:6.8vw;line-height:.92;color:#fff;flex:none;
-  text-shadow:0 2px 18px rgba(0,0,0,.45);white-space:nowrap}
+.mag-mon{font-size:6.8vw;line-height:.92;color:#fff;flex:none;white-space:nowrap}
+/* 색은 흰색·검정 둘뿐이다 — 사진 위 글자는 이 둘 말고는 읽히지 않는다.
+   번짐 방향도 색마다 뒤집는다. 흰 글자는 어두운 번짐, 검은 글자는 밝은 번짐이라야
+   사진에서 떠 보인다. 같은 그림자를 쓰면 검은 글자가 사진에 먹힌다. */
+.mag-mon.c-w{color:#fff;text-shadow:0 2px 18px rgba(0,0,0,.45)}
+.mag-mon.c-k{color:#111;text-shadow:0 2px 16px rgba(255,255,255,.42)}
 .mag-mon.f-bodoni{font-family:Didot,'Bodoni 72','Times New Roman','Nanum Myeongjo',serif;
   font-weight:500;letter-spacing:-.005em}
 .mag-mon.f-oswald{font-family:'Oswald','Noto Sans KR',sans-serif;font-weight:500;letter-spacing:.005em}
@@ -38167,11 +38170,7 @@ function _pcalHeroFor(y, m, byDate){
   if(!cuts.length && photo) cuts = [photo];
   if(!photo && cuts.length) photo = cuts[0];
   return { photo: photo, regions: regions, credit: credit, layout: layout, cuts: cuts, focus: focus,
-           titlePos:  _magTitlePos(cov && cov.title_pos),
-           titleSize: _magTSize(cov && cov.title_size),
-           headline:  (cov && cov.headline) ? String(cov.headline) : '',
-           hlPos:     _magTitlePos((cov && cov.headline_pos) || 'tl'),
-           hlSize:    _magTSize((cov && cov.headline_size) || 's') };
+           txt: _magCoverText(cov) };
 }
 
 // ── 월 표제 자리 ────────────────────────────────────────────
@@ -38186,6 +38185,71 @@ function _magTitleCls(v){
   return 'v-' + p.charAt(0) + ' a-' + p.charAt(1);
 }
 window._magTitleCls = _magTitleCls;
+
+// ── 아홉 자리에서 더 미세하게 ────────────────────────────────
+//   아홉 칸은 「대충 어디쯤」을 정하는 것이고, 실제로는 사진마다 몇 %씩 더
+//   밀어야 자리가 맞는다. dx·dy 는 그 미세조정이다 — 표지 상자의 폭/높이 대비 %.
+//   px 이 아니라 % 인 이유: 편집 미리보기(작은 상자)와 실제 화면이 같아야 한다.
+//   자리 계산을 left/top/bottom 의 calc 로 하므로, 가로는 폭 · 세로는 높이 기준이
+//   정확히 맞는다 (margin % 는 세로도 폭 기준이라 어긋난다).
+function _magNudge(v){
+  var n = parseFloat(v);
+  if(!isFinite(n)) return 0;
+  return Math.max(-40, Math.min(40, Math.round(n * 10) / 10));
+}
+function _magTextStyle(pos, dx, dy){
+  var p = _magTitlePos(pos), v = p.charAt(0);
+  var x = _magNudge(dx), y = _magNudge(dy);
+  var st = 'left:calc(6% + ' + x + '%);right:calc(6% - ' + x + '%);';
+  if(v === 't')      st += 'top:calc(9% + ' + y + '%);';
+  else if(v === 'm') st += 'top:calc(46% + ' + y + '%);transform:translateY(-50%);';
+  else               st += 'bottom:calc(19% - ' + y + '%);';
+  return st;
+}
+
+// ── 글자체 · 색 ─────────────────────────────────────────────
+//   글자체는 CSS 클래스로 갈아 끼운다. 색은 흰색·검정 둘뿐이다 —
+//   사진 위 글자는 이 둘 말고는 읽히지 않는다. 그림자 방향도 색마다 뒤집는다
+//   (흰 글자는 어두운 번짐, 검은 글자는 밝은 번짐이어야 사진에서 떠 보인다).
+var MAG_TFONT_ORDER = ['bodoni','oswald','cormorant'];
+var MAG_TFONT_NAME  = { bodoni:'세리프', oswald:'산세리프', cormorant:'가는 세리프' };
+function _magTFont(v){ return MAG_TFONT_ORDER.indexOf(v) >= 0 ? v : 'bodoni'; }
+var MAG_TCOLOR_ORDER = ['w','k'];
+var MAG_TCOLOR_NAME  = { w:'흰색', k:'검정' };
+function _magTColor(v){ return MAG_TCOLOR_ORDER.indexOf(v) >= 0 ? v : 'w'; }
+
+// ── 표지 글자 한 덩어리의 값 ────────────────────────────────
+//   cover_text(jsonb) 하나에 월 이름·머리말 둘을 담는다. 값이 없으면
+//   예전 컬럼(title_pos·title_size·headline…)에서 읽어 온다 — 이미 저장해 둔
+//   표지가 깨지지 않는다. 새 SQL 을 안 돌렸어도 예전 컬럼으로 그대로 돈다.
+function _magTxtNorm(o, legacy){
+  o = o || {}; legacy = legacy || {};
+  var t = (o.text != null) ? o.text : legacy.text;
+  return {
+    text:  (t == null) ? '' : String(t),
+    pos:   _magTitlePos(o.pos  != null ? o.pos  : legacy.pos),
+    size:  _magTSize(   o.size != null ? o.size : legacy.size),
+    font:  _magTFont(o.font),
+    color: _magTColor(o.color),
+    dx:    _magNudge(o.dx),
+    dy:    _magNudge(o.dy)
+  };
+}
+function _magCoverText(cov){
+  var raw = (cov && cov.cover_text && typeof cov.cover_text === 'object') ? cov.cover_text : null;
+  return {
+    mon: _magTxtNorm(raw && raw.mon, {
+      pos:  (cov && cov.title_pos)  || 'bl',
+      size: (cov && cov.title_size) || 's'
+    }),
+    hl: _magTxtNorm(raw && raw.hl, {
+      text: (cov && cov.headline) || '',
+      pos:  (cov && cov.headline_pos)  || 'tl',
+      size: (cov && cov.headline_size) || 's'
+    })
+  };
+}
+window._magCoverText = _magCoverText;
 
 // ── 표지 글자 크기 ──────────────────────────────────────────
 //   The Gourmand 처럼 제호가 화면 폭을 꽉 채우는 표지를 만들 수 있어야 한다.
@@ -38234,12 +38298,13 @@ window.addEventListener('resize', function(){ _magFitAll(); });
 //   keepEmpty: 비어 있어도 칸을 남긴다. 편집 미리보기에서 쓴다 —
 //   글자를 치는 동안 요소가 살아 있어야 다시 그리지 않고 즉시 반영된다
 //   (다시 그리면 첫 글자에서 입력칸 초점이 날아간다).
-function _magTextBlock(text, pos, size, keepEmpty){
-  var t = (text == null) ? '' : String(text);
-  if(!t && !keepEmpty) return '';
-  return '<div class="mag-txt ' + _magTitleCls(pos) + '"><div class="mag-head">'
-       + '<div class="mag-mon ' + _magMonFont() + '" data-sz="' + _magTSize(size) + '">'
-       + _pcalEsc(t) + '</div></div></div>';
+function _magTextBlock(c, key, keepEmpty){
+  c = _magTxtNorm(c);
+  if(!c.text && !keepEmpty) return '';
+  return '<div class="mag-txt a-' + c.pos.charAt(1) + '" data-tk="' + key + '" '
+       + 'style="' + _magTextStyle(c.pos, c.dx, c.dy) + '"><div class="mag-head">'
+       + '<div class="mag-mon f-' + c.font + ' c-' + c.color + '" data-sz="' + c.size + '">'
+       + _pcalEsc(c.text) + '</div></div></div>';
 }
 
 function _pcalMonthTickets(y, m, byDate){
@@ -38902,8 +38967,9 @@ function magRender(){
 
   // 표지 글자는 둘까지다 — 월 표제와 머리말(그 달의 핵심어).
   //   자리·크기는 달마다 슈퍼어드민이 정한다. 머리말은 비워 두면 아예 안 나온다.
-  h += _magTextBlock(_magMonLabel(_pcalM), hero.titlePos, hero.titleSize);
-  h += _magTextBlock(hero.headline, hero.hlPos, hero.hlSize);
+  var _mon = hero.txt.mon; _mon.text = _magMonLabel(_pcalM);   // 월 이름은 달력이 정한다
+  h += _magTextBlock(_mon, 'mon');
+  h += _magTextBlock(hero.txt.hl, 'hl');
   // 표지에서 캘린더로 가는 유일한 문
   h += '<button class="mag-sched" onclick="magOpenSheet()">스케줄</button>';
 
@@ -39620,7 +39686,7 @@ window.pcalApplyGnb = pcalApplyGnb;
 //   어느 쪽이든 index.html 에는 URL 문자열만 남는다.
 // ══════════════════════════════════════════════════════════════
 var _pcalAdmY = null, _pcalAdmM = null;
-var _pcalAdmDraft = { photo_url:'', regions:'', photo_credit:'', titlePos:'bl' };
+var _pcalAdmDraft = { photo_url:'', regions:'', photo_credit:'', txt:_magCoverText(null) };
 var _pcalPickTarget = null;
 var _pcalAdmBusy = false;
 
@@ -39673,11 +39739,7 @@ function _pcalAdmLoadDraft(){
     layout:       (cov && cov.cover_layout) || 'single',
     cuts:         cuts,
     focus:        (cov && Array.isArray(cov.cover_focus)) ? cov.cover_focus.slice() : [],
-    titlePos:     _magTitlePos(cov && cov.title_pos),
-    titleSize:    _magTSize(cov && cov.title_size),
-    headline:     (cov && cov.headline) ? String(cov.headline) : '',
-    hlPos:        _magTitlePos((cov && cov.headline_pos) || 'tl'),
-    hlSize:       _magTSize((cov && cov.headline_size) || 's')
+    txt:          _magCoverText(cov)
   };
 }
 
@@ -39686,7 +39748,7 @@ function _pcalAdmSyncInputs(){
   var r = document.getElementById('pcalAdmRegions');
   if(r) _pcalAdmDraft.regions = r.value;
   var hl = document.getElementById('pcalAdmHeadline');
-  if(hl) _pcalAdmDraft.headline = hl.value;
+  if(hl) _pcalAdmDraft.txt.hl.text = hl.value;
 }
 
 // 연도 이동 — 월은 유지한 채 해를 넘긴다
@@ -39797,9 +39859,9 @@ function pcalAdminRender(){
   // 글자도 미리보기에 얹는다 — 자리·크기를 고르는 화면에서 글자가 안 보이면 고를 수가 없다.
   //   실제 표지와 같은 마크업·같은 클래스를 쓰므로, 미리보기는 그대로 축소 모형이 된다.
   h += '<div class="mag-shade" style="position:absolute;inset:0;pointer-events:none;"></div>';
-  h += '<div style="pointer-events:none;">'
-     + _magTextBlock(_magMonLabel(_pcalAdmM), _pcalAdmDraft.titlePos, _pcalAdmDraft.titleSize)
-     + _magTextBlock(_pcalAdmDraft.headline, _pcalAdmDraft.hlPos, _pcalAdmDraft.hlSize, true)
+  h += '<div>'
+     + _magTextBlock(_pcalAdmMonTxt(), 'mon', true)
+     + _magTextBlock(_pcalAdmDraft.txt.hl, 'hl', true)
      + '</div>';
   h += '</div>';
 
@@ -39845,15 +39907,14 @@ function pcalAdminRender(){
   //   둘이 완전히 같은 조작(자리 아홉 칸 + 크기 네 단)을 쓴다. 배우는 게 하나뿐이다.
   h += '<div style="font-family:var(--font-main);font-size:12px;font-weight:800;letter-spacing:.1em;color:#5C0A14;margin:22px 0 10px;">표지 글자</div>';
 
-  h += _pcalAdmTextCtl('월 이름 — ' + _magMonLabel(_pcalAdmM),
-                       _pcalAdmDraft.titlePos, _pcalAdmDraft.titleSize, 'title');
+  h += _pcalAdmTextCtl('월 이름 — ' + _magMonLabel(_pcalAdmM), _pcalAdmDraft.txt.mon, 'mon');
 
   h += '<div style="margin:16px 0 6px;">'
      + '<div style="font-size:11px;color:#8a8580;margin-bottom:5px;">머리말 (선택) — 그 달을 한마디로. 비우면 안 나온다</div>'
      + '<input id="pcalAdmHeadline" class="pcal-adm-inp" type="text" maxlength="40" value="'
-     + _pcalEsc(_pcalAdmDraft.headline) + '" placeholder="예: TEMPURA · 우니의 계절" '
+     + _pcalEsc(_pcalAdmDraft.txt.hl.text) + '" placeholder="예: TEMPURA · 우니의 계절" '
      + 'oninput="pcalAdmHlInput(this.value)"></div>';
-  h += _pcalAdmTextCtl('머리말', _pcalAdmDraft.hlPos, _pcalAdmDraft.hlSize, 'hl');
+  h += _pcalAdmTextCtl('머리말', _pcalAdmDraft.txt.hl, 'hl');
 
   // ── 지역 문구 ──
   h += '<div style="margin:16px 0 10px;"><div style="font-size:11px;color:#8a8580;margin-bottom:5px;">지역 (예: 도쿄 · 오사카 · 교토)</div>'
@@ -39899,14 +39960,31 @@ window.pcalAdminRender = pcalAdminRender;
 var _pcalAdmSel = 0;
 // 표지 글자 한 덩어리의 조작 — 자리 아홉 칸 + 크기 네 단.
 //   월 이름과 머리말이 같은 함수를 쓴다 (which='title' | 'hl').
-function _pcalAdmTextCtl(label, pos, size, which){
-  var p = _magTitlePos(pos), sz = _magTSize(size);
+function _pcalAdmTextCtl(label, c, which){
+  c = _magTxtNorm(c);
+  // 알약 한 줄 만들기 — 크기·글자체·색이 전부 같은 모양이다
+  function row(order, names, cur, fn){
+    var r = '<div style="display:flex;gap:5px;justify-content:center;flex-wrap:wrap;margin-bottom:6px;">';
+    order.forEach(function(k){
+      var on = (cur === k);
+      r += '<button onclick="' + fn + '(\'' + which + '\',\'' + k + '\')" '
+         + 'style="cursor:pointer;padding:7px 11px;border-radius:8px;'
+         + 'font-family:var(--font-main);font-size:11px;font-weight:700;'
+         + (on ? 'background:#5C0A14;border:1px solid #5C0A14;color:#fff;'
+               : 'background:#fff;border:1px solid #d8d3cc;color:#8a8580;')
+         + '">' + names[k] + '</button>';
+    });
+    return r + '</div>';
+  }
+
   var h = '<div style="text-align:center;font-size:11px;color:#8a8580;margin-bottom:6px;">'
         + _pcalEsc(label) + '</div>';
+
+  // 자리 아홉 칸 — 「대충 어디쯤」을 정한다
   h += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:5px;'
      + 'width:min(46vw,168px);margin:0 auto 10px;">';
   MAG_TPOS.forEach(function(k){
-    var onT = (p === k);
+    var onT = (c.pos === k);
     var av = { l:'flex-start', c:'center', r:'flex-end' }[k.charAt(1)];
     h += '<button onclick="pcalAdmTextPos(\'' + which + '\',\'' + k + '\')" style="cursor:pointer;'
        + 'aspect-ratio:1;border-radius:7px;display:flex;align-items:center;justify-content:' + av + ';'
@@ -39917,46 +39995,67 @@ function _pcalAdmTextCtl(label, pos, size, which){
        + (onT ? '#fff' : '#c3bcb2') + ';"></span></button>';
   });
   h += '</div>';
-  h += '<div style="display:flex;gap:5px;justify-content:center;flex-wrap:wrap;margin-bottom:4px;">';
-  MAG_TSIZE_ORDER.forEach(function(k){
-    var onS = (sz === k);
-    h += '<button onclick="pcalAdmTextSize(\'' + which + '\',\'' + k + '\')" '
-       + 'style="cursor:pointer;padding:7px 11px;border-radius:8px;'
-       + 'font-family:var(--font-main);font-size:11px;font-weight:700;'
-       + (onS ? 'background:#5C0A14;border:1px solid #5C0A14;color:#fff;'
-              : 'background:#fff;border:1px solid #d8d3cc;color:#8a8580;')
-       + '">' + MAG_TSIZE_NAME[k] + '</button>';
-  });
-  h += '</div>';
+
+  h += row(MAG_TSIZE_ORDER,  MAG_TSIZE_NAME,  c.size,  'pcalAdmTextSize');
+  h += row(MAG_TFONT_ORDER,  MAG_TFONT_NAME,  c.font,  'pcalAdmTextFont');
+  h += row(MAG_TCOLOR_ORDER, MAG_TCOLOR_NAME, c.color, 'pcalAdmTextColor');
+
+  // 미세조정 — 나머지는 미리보기에서 끌어서 맞춘다
+  var moved = (c.dx || c.dy);
+  h += '<div style="text-align:center;font-size:10px;color:#a8a29a;margin-bottom:14px;">'
+     + '미리보기에서 이 글자를 <b>끌어서</b> 미세조정'
+     + (moved ? ' — 지금 ' + c.dx + '% · ' + c.dy + '% '
+                + '<button class="pcal-adm-btn" style="padding:3px 8px;font-size:10px;margin-left:4px;" '
+                + 'onclick="pcalAdmTextReset(\'' + which + '\')">되돌리기</button>'
+              : '')
+     + '</div>';
   return h;
+}
+
+// 표지 글자 값 바꾸기 — 월 이름(mon)과 머리말(hl) 공용
+function _pcalAdmTxt(which){
+  if(!_pcalAdmDraft.txt) _pcalAdmDraft.txt = _magCoverText(null);
+  return _pcalAdmDraft.txt[which === 'hl' ? 'hl' : 'mon'];
+}
+function pcalAdmTextPos(which, k){
+  _pcalAdmSyncInputs(); _pcalAdmTxt(which).pos = _magTitlePos(k); pcalAdminRender();
+}
+function pcalAdmTextSize(which, k){
+  _pcalAdmSyncInputs(); _pcalAdmTxt(which).size = _magTSize(k); pcalAdminRender();
+}
+function pcalAdmTextFont(which, k){
+  _pcalAdmSyncInputs(); _pcalAdmTxt(which).font = _magTFont(k); pcalAdminRender();
+}
+function pcalAdmTextColor(which, k){
+  _pcalAdmSyncInputs(); _pcalAdmTxt(which).color = _magTColor(k); pcalAdminRender();
+}
+function pcalAdmTextReset(which){
+  _pcalAdmSyncInputs();
+  var c = _pcalAdmTxt(which); c.dx = 0; c.dy = 0;
+  pcalAdminRender();
+}
+window.pcalAdmTextPos = pcalAdmTextPos;
+window.pcalAdmTextSize = pcalAdmTextSize;
+window.pcalAdmTextFont = pcalAdmTextFont;
+window.pcalAdmTextColor = pcalAdmTextColor;
+window.pcalAdmTextReset = pcalAdmTextReset;
+
+// 미리보기의 월 이름 — 글자는 달력이 정하고 나머지는 draft 가 정한다
+function _pcalAdmMonTxt(){
+  var c = _magTxtNorm(_pcalAdmTxt('mon'));
+  c.text = _magMonLabel(_pcalAdmM);
+  return c;
 }
 
 // 머리말 입력 — 다시 그리지 않고 미리보기 글자만 바꾼다 (치는 동안 초점을 잃지 않는다)
 function pcalAdmHlInput(v){
-  _pcalAdmDraft.headline = v;
+  _pcalAdmTxt('hl').text = v;
   var prev = document.getElementById('pcalAdmPreview');
   if(!prev) return;
-  var els = prev.querySelectorAll('.mag-mon');
-  if(els.length >= 2){ els[1].textContent = v; _magFitOne(els[1]); }
+  var el = prev.querySelector('.mag-txt[data-tk="hl"] .mag-mon');
+  if(el){ el.textContent = v; _magFitOne(el); }
 }
 window.pcalAdmHlInput = pcalAdmHlInput;
-
-// 표지 글자 자리·크기 — 월 이름과 머리말 공용
-function pcalAdmTextPos(which, k){
-  _pcalAdmSyncInputs();
-  if(which === 'hl') _pcalAdmDraft.hlPos = _magTitlePos(k);
-  else               _pcalAdmDraft.titlePos = _magTitlePos(k);
-  pcalAdminRender();
-}
-window.pcalAdmTextPos = pcalAdmTextPos;
-
-function pcalAdmTextSize(which, k){
-  _pcalAdmSyncInputs();
-  if(which === 'hl') _pcalAdmDraft.hlSize = _magTSize(k);
-  else               _pcalAdmDraft.titleSize = _magTSize(k);
-  pcalAdminRender();
-}
-window.pcalAdmTextSize = pcalAdmTextSize;
 
 function pcalAdmSel(i){
   _pcalAdmSel = i;
@@ -39970,6 +40069,23 @@ window.pcalAdmSel = pcalAdmSel;
 function _pcalBindPreviewDrag(){
   var prev = document.getElementById('pcalAdmPreview');
   if(!prev) return;
+
+  // 글자를 끌면 그 글자가 움직인다 (사진이 아니라).
+  //   아홉 칸은 「대충 어디쯤」까지고, 사진마다 몇 %씩 더 밀어야 자리가 맞는다.
+  //   숫자 입력칸을 두는 것보다 끌어 보는 쪽이 빠르다 — 눈으로 맞추는 일이라서다.
+  Array.prototype.forEach.call(prev.querySelectorAll('.mag-txt[data-tk]'), function(box){
+    var which = box.getAttribute('data-tk');
+    box.style.touchAction = 'none';
+    var mon = box.querySelector('.mag-mon');
+    if(mon) mon.style.cursor = 'move';
+    box.addEventListener('pointerdown', function(ev){
+      // 글자 위를 눌렀을 때만 잡는다 — 빈 칸을 누르면 사진이 움직여야 한다
+      if(!ev.target || !ev.target.classList || !ev.target.classList.contains('mag-mon')) return;
+      ev.preventDefault(); ev.stopPropagation();
+      _pcalTxtDown(ev, which, prev);
+    });
+  });
+
   var cuts = prev.querySelectorAll('.cutwrap > .cut');
   if(cuts.length){
     Array.prototype.forEach.call(cuts, function(el){
@@ -39997,6 +40113,32 @@ function _pcalBindPreviewDrag(){
     prev.style.touchAction = 'none';
     prev.addEventListener('pointerdown', function(ev){ _pcalPrevDown(ev, prev, 0, prev); });
   }
+}
+
+// ── 글자 끌기 ──
+//   가로는 상자 폭, 세로는 상자 높이 기준 %로 쌓는다 — 자리 계산(_magTextStyle)이
+//   left 는 폭, top/bottom 은 높이 기준이라 이렇게 해야 손끝과 정확히 맞는다.
+var _pcalTxtDrag = null;
+function _pcalTxtDown(ev, which, prev){
+  var c = _pcalAdmTxt(which);
+  var r = prev.getBoundingClientRect();
+  _pcalTxtDrag = { which: which, prev: prev, w: r.width, h: r.height,
+                   x0: ev.clientX, y0: ev.clientY, dx: c.dx, dy: c.dy };
+  try { prev.setPointerCapture(ev.pointerId); } catch(e){}
+}
+function _pcalTxtMove(ev){
+  var d = _pcalTxtDrag;
+  if(!d || !d.w || !d.h) return;
+  var c = _pcalAdmTxt(d.which);
+  c.dx = _magNudge(d.dx + (ev.clientX - d.x0) / d.w * 100);
+  c.dy = _magNudge(d.dy + (ev.clientY - d.y0) / d.h * 100);
+  var box = d.prev.querySelector('.mag-txt[data-tk="' + d.which + '"]');
+  if(box) box.setAttribute('style', _magTextStyle(c.pos, c.dx, c.dy));
+}
+function _pcalTxtUp(){
+  if(!_pcalTxtDrag) return;
+  _pcalTxtDrag = null;
+  pcalAdminRender();   // 「지금 몇 % · 몇 %」 표시와 되돌리기 버튼을 갱신한다
 }
 
 var _pcalPrevDrag = null;
@@ -40034,9 +40176,12 @@ function _pcalPrevUp(){
   _pcalPrevDrag = null;
   if(typeof pcalAdminRender === 'function') pcalAdminRender();
 }
-document.addEventListener('pointermove', _pcalPrevMove, { passive:false });
-document.addEventListener('pointerup', _pcalPrevUp);
-document.addEventListener('pointercancel', _pcalPrevUp);
+document.addEventListener('pointermove', function(ev){
+  if(_pcalTxtDrag) return _pcalTxtMove(ev);
+  _pcalPrevMove(ev);
+}, { passive:false });
+document.addEventListener('pointerup', function(){ _pcalTxtUp(); _pcalPrevUp(); });
+document.addEventListener('pointercancel', function(){ _pcalTxtUp(); _pcalPrevUp(); });
 
 function pcalAdmSetHero(url){
   _pcalAdmSyncInputs();
@@ -40199,11 +40344,15 @@ async function pcalAdmSaveCover(){
     cover_layout: _pcalAdmDraft.layout || 'single',
     cover_photos: cuts,
     cover_focus:  (_pcalAdmDraft.focus || []).slice(0, magLayout(_pcalAdmDraft.layout).n),
-    title_pos:     _magTitlePos(_pcalAdmDraft.titlePos),
-    title_size:    _magTSize(_pcalAdmDraft.titleSize),
-    headline:      (_pcalAdmDraft.headline || '').trim() || null,
-    headline_pos:  _magTitlePos(_pcalAdmDraft.hlPos),
-    headline_size: _magTSize(_pcalAdmDraft.hlSize),
+    // cover_text 하나가 진짜 값이다. 아래 낱개 컬럼은 새 SQL 을 아직 안 돌린 DB 를
+    // 위한 되돌림용이라 같이 써 둔다 (읽을 때는 cover_text 가 우선한다).
+    cover_text:    { mon: _magTxtNorm(_pcalAdmDraft.txt.mon),
+                     hl:  _magTxtNorm(_pcalAdmDraft.txt.hl) },
+    title_pos:     _magTitlePos(_pcalAdmDraft.txt.mon.pos),
+    title_size:    _magTSize(_pcalAdmDraft.txt.mon.size),
+    headline:      (_pcalAdmDraft.txt.hl.text || '').trim() || null,
+    headline_pos:  _magTitlePos(_pcalAdmDraft.txt.hl.pos),
+    headline_size: _magTSize(_pcalAdmDraft.txt.hl.size),
     updated_at: new Date().toISOString()
   };
   try {
@@ -40215,7 +40364,16 @@ async function pcalAdmSaveCover(){
 
   // 글자 컬럼(sql/month_cover_title_pos.sql · month_cover_text.sql 미실행)만 없을 수도 있다.
   //   컬럼 하나 때문에 표지 저장 전체가 막히면 안 되니, 그것부터 빼고 다시 시도한다.
+  if(res.error && /cover_text/i.test(res.error.message || '')){
+    delete payload.cover_text;
+    res = await window.sb.from('month_covers').upsert(payload, { onConflict: 'year,month' });
+    if(!res.error && typeof showToast === 'function'){
+      showToast('⚠','글자체·색·미세조정은 저장 안 됨','sql/month_cover_style.sql 을 실행하세요');
+    }
+  }
+
   if(res.error && /title_pos|title_size|headline/i.test(res.error.message || '')){
+    delete payload.cover_text;
     delete payload.title_pos;  delete payload.title_size;
     delete payload.headline;   delete payload.headline_pos;  delete payload.headline_size;
     res = await window.sb.from('month_covers').upsert(payload, { onConflict: 'year,month' });
@@ -40229,6 +40387,7 @@ async function pcalAdmSaveCover(){
     delete payload.cover_layout;
     delete payload.cover_photos;
     delete payload.cover_focus;
+    delete payload.cover_text;
     delete payload.title_pos;  delete payload.title_size;
     delete payload.headline;   delete payload.headline_pos;  delete payload.headline_size;
     res = await window.sb.from('month_covers').upsert(payload, { onConflict: 'year,month' });
