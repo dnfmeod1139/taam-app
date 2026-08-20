@@ -39046,6 +39046,59 @@ function magHide(){
 }
 window.magHide = magHide;
 
+// ── 표지 교체 — 사진이 전부 준비된 뒤 한 번에 ──────────────
+//   달을 넘길 때 바로 갈아끼우면 새 사진이 올 때까지 검은 화면이고,
+//   분할 컷은 도착한 것부터 하나씩 떠서 조각조각 보인다.
+//   그래서 새 표지를 화면 밖에서 만들어 사진 디코드까지 끝낸 뒤 한 프레임에 바꾼다.
+//   그동안 화면에는 이전 달 표지가 그대로 있다 — 검정이 낄 틈이 없다.
+//   1.2초가 지나도 안 오면(느린 회선) 그냥 바꾼다 — 무한정 옛 달을 붙들지 않는다.
+var _magHeroToken = 0;
+function _magCommitHero(heroEl, h){
+  var tok = ++_magHeroToken;
+  var tmp = document.createElement('div');
+  tmp.innerHTML = h;
+  function commit(){
+    if(tok !== _magHeroToken) return;        // 그 사이 더 새 표지가 요청됐으면 버린다
+    heroEl.innerHTML = '';
+    while(tmp.firstChild) heroEl.appendChild(tmp.firstChild);
+    heroEl._magHtml = h;
+    _magFitAll(heroEl);
+    if(typeof _notifBellDotSync === 'function') _notifBellDotSync();
+  }
+  var imgs = tmp.querySelectorAll('img');
+  // 첫 그리기(이전 표지가 없다)는 기다릴 이유가 없다 — 즉시 붙인다
+  if(!imgs.length || !heroEl.firstChild){ commit(); return; }
+  var done = false;
+  function fire(){ if(done) return; done = true; commit(); }
+  var waits = Array.prototype.map.call(imgs, function(im){
+    if(im.complete) return Promise.resolve();
+    if(im.decode) return im.decode().catch(function(){});
+    return new Promise(function(res){ im.onload = im.onerror = res; });
+  });
+  Promise.all(waits).then(fire, fire);
+  setTimeout(fire, 1200);
+}
+
+// 앞뒤 달의 표지 사진을 미리 받아 둔다 (한 번 받은 URL 은 다시 안 받는다)
+var _magPreloaded = {};
+function _magPreloadNeighbors(months, mi, byDate){
+  try {
+    if(_pcalCoversPending) return;
+    [mi - 1, mi + 1].forEach(function(n){
+      if(n < 0 || n >= months.length) return;
+      var y = Math.floor(months[n] / 100), m = months[n] % 100;
+      var hv = _pcalHeroFor(y, m, byDate);
+      var list = (hv.cuts && hv.cuts.length) ? hv.cuts : [hv.photo];
+      list.forEach(function(u){
+        if(!u || _magPreloaded[u]) return;
+        _magPreloaded[u] = 1;
+        var im = new Image();
+        im.src = u;
+      });
+    });
+  } catch(e){}
+}
+
 // ── 표지 렌더 ──
 function magRender(){
   var v = document.getElementById('magView');
@@ -39131,10 +39184,10 @@ function magRender(){
   // 같은 내용이면 손대지 않는다 — innerHTML 을 갈면 <img> 가 새로 만들어져
   // 사진이 한 프레임 비고, 홈 탭을 오갈 때마다 그게 깜빡임(잔상)으로 보인다.
   if(heroEl && heroEl._magHtml !== h){
-    heroEl.innerHTML = h;
-    heroEl._magHtml = h;
-    _magFitAll(heroEl);
+    _magCommitHero(heroEl, h);
   }
+  // 앞뒤 달 사진을 미리 받아 둔다 — 화살표를 눌렀을 때 이미 캐시에 있어야 즉시 뜬다
+  _magPreloadNeighbors(months, mi, byDate);
   var wasHidden = (v.style.display !== 'block');
   v.style.display = 'block';
   if(wasHidden){
