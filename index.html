@@ -45595,6 +45595,18 @@ function getNativePlatform(){
 //   Capacitor 환경에서만 동작. PWA/웹에서는 기존 Web Push 사용.
 async function setupNativePush(){
   if (!isNativeApp()) return;
+  // ⛔ Android 는 아직 부르면 안 된다 — Play 정책 이슈(2026-08-20)의 원인.
+  //   Android 푸시는 FCM 이라 빌드에 google-services.json 이 있어야 하는데 아직 없다.
+  //   그 상태에서 register() 를 부르면 네이티브가
+  //   IllegalStateException: Default FirebaseApp is not initialized
+  //   로 그 자리에서 죽는다. JS try/catch 로는 못 받는다 — 네이티브 크래시다.
+  //   부팅마다 부르니 "앱이 열리지만 계속 비정상 종료" 가 됐다.
+  //   iOS 는 APNs 라 Firebase 가 필요 없어 멀쩡했다.
+  //   FCM 을 붙이는 날: codemagic 에 google-services.json 주입 + 이 가드 제거.
+  if (getNativePlatform() === 'android') {
+    console.log('[native-push] android: FCM(google-services.json) 미구성 — 등록 건너뜀');
+    return;
+  }
   if (!window.Capacitor || !window.Capacitor.Plugins) return;
   var PushNotifications = window.Capacitor.Plugins.PushNotifications;
   if (!PushNotifications) {
