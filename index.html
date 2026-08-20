@@ -39176,6 +39176,14 @@ var MAG_LAYOUTS = {
     '38.4% 0%, 72% 0%, 63.6% 100%, 30.4% 100%',
     '70.4% 0%, 100% 0%, 100% 100%, 62.4% 100%' ] },
 
+  // ── 히어로+3 — 큰 사진 하나가 위를 다 쓰고, 아래 한 줄에 셋이 나란히 ──
+  //   경계는 다른 레이아웃과 같은 규칙으로 살짝 겹쳐(±0.8%) 이음선이 안 남는다.
+  heroTri:{ n:4, name:'히어로+3', cuts:[
+    '0% 0%, 100% 0%, 100% 63.4%, 0% 63.4%',
+    '0% 62.6%, 34.1% 62.6%, 34.1% 100%, 0% 100%',
+    '33.3% 62.6%, 66.7% 62.6%, 66.7% 100%, 33.3% 100%',
+    '65.9% 62.6%, 100% 62.6%, 100% 100%, 65.9% 100%' ] },
+
   // ── 3분할 Y — 위 가운데에서 선이 내려오다 한가운데서 하단 두 모서리로 갈라진다 ──
   //   키(multi)는 그대로 둔다. 이미 저장된 달이 있어도 깨지지 않는다.
   multi:  { n:3, name:'3분할 Y', cuts:[
@@ -39207,7 +39215,9 @@ var MAG_LAYOUTS = {
     '0% 71.6%, 46.6% 67.6%, 40.6% 100%, 0% 100%',
     '45.4% 67.6%, 100% 63.6%, 100% 100%, 39.4% 100%' ] }
 };
-var MAG_LAYOUT_ORDER = ['single','two','twoV','three','threeV','multi','sixV','sixH','sixVH'];
+// 3분할 세로·6분할 가로·6분할 혼합은 고르기에서 뺐다 (정의는 남긴다 —
+// 이미 그 레이아웃으로 저장된 달이 있으면 그대로 그려져야 한다).
+var MAG_LAYOUT_ORDER = ['single','heroTri','two','twoV','three','multi','sixV'];
 
 function magLayout(key){ return MAG_LAYOUTS[key] || MAG_LAYOUTS.single; }
 
@@ -40024,7 +40034,8 @@ function pcalAdminRender(){
   var _cur = (_pcalAdmDraft.cuts && _pcalAdmDraft.cuts[_pcalAdmSel]) || '';
   h += '<div style="text-align:center;font-size:11px;color:#8a8580;margin-bottom:8px;">'
      + (_L.n > 1 ? (_pcalAdmSel+1) + '번 컷' : '표지 사진')
-     + (_cur ? ' — 미리보기를 끌어서 옮기세요' : ' — 사진이 없습니다') + '</div>';
+     + (_cur ? (_L.n > 1 ? ' — 끌면 이동 · <b>길게 눌러 끌면</b> 컷 교환' : ' — 미리보기를 끌어서 옮기세요')
+              : ' — 사진이 없습니다') + '</div>';
 
   // 컷 번호를 버튼에 박지 않는다 — 미리보기에서 컷을 바꾸면 박아둔 번호가 낡는다.
   //   호출 시점의 _pcalAdmSel 을 보게 해서 「지금 고른 컷」과 늘 일치시킨다.
@@ -40368,6 +40379,49 @@ function _pcalTxtUp(){
 
 var _pcalPrevDrag = null;
 var _pcalSelDirty = false;
+// ── 컷 교환 — 길게(0.35초) 누른 채 끌면 사진이 컷에서 컷으로 옮겨 앉는다 ──
+//   짧게 끌면 지금처럼 사진 위치(팬)다. 두 동작을 시간으로 가른다 —
+//   iOS 홈 화면 아이콘 재배치와 같은 문법이라 따로 배울 게 없다.
+var _pcalSwapDrag = null;
+var _pcalSwapTimer = null;
+function _pcalSwapEnter(){
+  var d = _pcalPrevDrag;
+  if(!d) return;
+  _pcalPrevDrag = null;                       // 팬을 끊고 교환으로 전환
+  _pcalSwapDrag = { from: d.idx, to: d.idx, prev: d.prev };
+  d.el.style.opacity = '.45';                 // 들어 올린 컷 표시
+  _pcalSwapMark(d.idx);
+  try { if(navigator.vibrate) navigator.vibrate(10); } catch(e){}
+}
+function _pcalSwapMark(idx){
+  var d = _pcalSwapDrag;
+  if(!d) return;
+  Array.prototype.forEach.call(d.prev.querySelectorAll('.cutwrap > .cut'), function(c, i){
+    c.style.outline = (i === idx && idx !== d.from) ? '3px dashed #C8A96E' : '';
+    c.style.outlineOffset = '-3px';
+  });
+}
+function _pcalSwapMove(ev){
+  var d = _pcalSwapDrag;
+  if(!d) return;
+  var t = document.elementFromPoint(ev.clientX, ev.clientY);
+  var cut = t && t.closest ? t.closest('#pcalAdmPreview .cutwrap > .cut') : null;
+  d.to = cut ? (parseInt(cut.getAttribute('data-ci'), 10) || 0) : d.from;
+  _pcalSwapMark(d.to);
+}
+function _pcalSwapUp(){
+  var d = _pcalSwapDrag;
+  if(!d) return;
+  _pcalSwapDrag = null;
+  if(d.to !== d.from){
+    var c = _pcalAdmDraft.cuts, f = _pcalAdmDraft.focus;
+    var tc = c[d.from]; c[d.from] = c[d.to] || ''; c[d.to] = tc;
+    var tf = f[d.from]; f[d.from] = f[d.to] || { x:50, y:50, z:1 }; f[d.to] = tf;
+    _pcalAdmDraft.photo_url = c[0] || '';    // 1컷·구버전 폴백도 자리를 따라간다
+    _pcalAdmSel = d.to;                       // 옮겨 앉은 컷이 곧 고치는 컷
+  }
+  pcalAdminRender();
+}
 function _pcalPrevDown(ev, el, idx, prev){
   ev.preventDefault();
   // 🔧 그 컷 안의 사진만 잡는다.
@@ -40377,12 +40431,24 @@ function _pcalPrevDown(ev, el, idx, prev){
   if(!img) return;   // 빈 컷은 끌 게 없다. 고르기만 된다.
   var f = _pcalFxEnsure(idx);
   _pcalPrevDrag = { idx: idx, img: img, el: el, prev: prev,
-                    x0: ev.clientX, y0: ev.clientY, fx: f.x, fy: f.y };
+                    x0: ev.clientX, y0: ev.clientY, fx: f.x, fy: f.y, moved: false };
+  // 분할일 때만 교환 대기 — 1컷은 옮겨 앉을 곳이 없다
+  clearTimeout(_pcalSwapTimer);
+  if(magLayout(_pcalAdmDraft.layout).n > 1){
+    _pcalSwapTimer = setTimeout(function(){
+      if(_pcalPrevDrag && !_pcalPrevDrag.moved) _pcalSwapEnter();
+    }, 350);
+  }
   try { el.setPointerCapture(ev.pointerId); } catch(e){}
 }
 function _pcalPrevMove(ev){
+  if(_pcalSwapDrag) return _pcalSwapMove(ev);
   var d = _pcalPrevDrag;
   if(!d) return;
+  if(!d.moved && (Math.abs(ev.clientX - d.x0) > 8 || Math.abs(ev.clientY - d.y0) > 8)){
+    d.moved = true;                      // 이미 팬을 시작했다 — 교환으로 넘어가지 않는다
+    clearTimeout(_pcalSwapTimer);
+  }
   // 사진은 그 컷 크기만큼만 깔려 있으므로, 컷 크기를 기준으로 움직여야 손끝과 맞는다
   var pr = d.prev.getBoundingClientRect();
   var bx = _magCutBox(_pcalAdmDraft.layout, d.idx);
@@ -40401,6 +40467,8 @@ function _pcalPrevMove(ev){
   }
 }
 function _pcalPrevUp(){
+  clearTimeout(_pcalSwapTimer);
+  if(_pcalSwapDrag) return _pcalSwapUp();
   // 🔧 컷만 바꾸고 끌지는 않았어도 다시 그린다.
   //   예전엔 끌었을 때만 다시 그려서, 빈 컷을 눌러 고르면 화면이 그대로 남았다.
   //   그러면 아래 버튼·슬라이더에 '이전 컷 번호' 가 박힌 채라, 사진을 올려도
@@ -40735,6 +40803,8 @@ function pcalAdmUpload(kind, ticketId){
   var inp = document.createElement('input');
   inp.type = 'file';
   inp.accept = 'image/*';
+  // 컷은 여러 장을 한 번에 받는다 — 고른 컷부터 차례로 다음 컷에 채워진다
+  if(kind === 'cut') inp.multiple = true;
   // 🔧 화면에 붙여 둔다 (보이지는 않는다).
   //   iOS 는 사진 고르는 동안 웹뷰를 뒤로 보내는데, 그때 DOM 에 없는 input 은
   //   통째로 사라져 change 가 오지 않는다. 눌러도 아무 일도 안 일어난 것처럼 보이고,
@@ -40743,28 +40813,48 @@ function pcalAdmUpload(kind, ticketId){
   document.body.appendChild(inp);
   function done(){ try { if(inp.parentNode) inp.parentNode.removeChild(inp); } catch(e){} }
   inp.onchange = async function(){
-    var f = inp.files && inp.files[0];
-    if(!f){ done(); return; }
+    var files = Array.prototype.slice.call(inp.files || []);
+    if(!files.length){ done(); return; }
     if(typeof uploadImageToStorage !== 'function'){
       if(typeof showToast === 'function') showToast('⚠','업로드 불가','업로드 함수 없음');
-      return;
+      done(); return;
+    }
+    // 컷이 아니면 한 장만 쓴다
+    if(kind !== 'cut') files = files.slice(0, 1);
+    // 컷 수보다 많이 골랐으면 넘치는 만큼은 버린다 — 자리 없는 사진을 조용히 흘리지 않는다
+    if(kind === 'cut'){
+      var nCut = magLayout(_pcalAdmDraft.layout).n;
+      if(files.length > nCut){
+        if(typeof showToast === 'function') showToast('ℹ️','컷은 ' + nCut + '개', files.length + '장 중 앞 ' + nCut + '장만 씁니다');
+        files = files.slice(0, nCut);
+      }
     }
     _pcalAdmBusy = true;
-    if(typeof showToast === 'function') showToast('⏳','업로드 중','잠시만요');
-    var url = null;
-    try { url = await uploadImageToStorage(f, 'taam-photos'); } catch(e){ console.warn(e); }
+    var fail = 0;
+    for(var fi = 0; fi < files.length; fi++){
+      if(typeof showToast === 'function'){
+        showToast('⏳','업로드 중', files.length > 1 ? (fi+1) + ' / ' + files.length : '잠시만요');
+      }
+      var url = null;
+      try { url = await uploadImageToStorage(files[fi], 'taam-photos'); } catch(e){ console.warn(e); }
+      if(!url){ fail++; continue; }
+      if(kind === 'hero') pcalAdmSetHero(url);
+      else if(kind === 'cut'){
+        // 고른 컷부터 차례로 다음 컷에 — 순서대로 고르면 순서대로 앉는다
+        var slot = (ticketId + fi) % magLayout(_pcalAdmDraft.layout).n;
+        pcalAdmSetCut(slot, url);
+      }
+      else pcalAdmSetTile(ticketId, url);
+    }
     _pcalAdmBusy = false;
     done();
-    if(!url){
+    if(fail){
       if(typeof showToast === 'function'){
-        showToast('⚠','사진 업로드 실패','저장 안 됨 — 콘솔의 Storage 오류를 확인하세요 (taam-photos 버킷·권한)');
+        showToast('⚠','사진 업로드 실패', fail + '장 저장 안 됨 — 콘솔의 Storage 오류를 확인하세요 (taam-photos 버킷·권한)');
       }
-      console.warn('⚠ 표지 사진 업로드 실패 — uploadImageToStorage 가 null 을 돌려줬습니다. 위 Storage 오류 참고.');
-      return;
+    } else if(files.length > 1 && typeof showToast === 'function'){
+      showToast('✅','업로드 완료', files.length + '장을 컷에 채웠습니다');
     }
-    if(kind === 'hero') pcalAdmSetHero(url);
-    else if(kind === 'cut') pcalAdmSetCut(ticketId, url);
-    else pcalAdmSetTile(ticketId, url);
   };
   // 고르지 않고 닫아도 남아 있지 않게 치운다 (iOS 는 cancel 을 안 줄 때가 있어 시간으로도 받친다)
   inp.addEventListener('cancel', done);
