@@ -797,8 +797,11 @@ html.auto-login .splash .bottom-group{display:none !important}
   --d-cta:#5C0A14;             /* 결제 버튼 */
   --d-ctatxt:#FFFFFF;
   --d-mapbg:#1B1E22;
-  position:fixed;inset:0;z-index:560;display:none;overflow-y:auto;
-  -webkit-overflow-scrolling:touch;word-break:keep-all;
+  position:fixed;inset:0;z-index:560;display:none;overflow-y:auto;overflow-x:hidden;
+  -webkit-overflow-scrolling:touch;word-break:keep-all;overflow-wrap:anywhere;
+  /* keep-all 은 한국어 낱말을 안 쪼개려는 것인데, 띄어쓰기가 없는 일본어 긴 문장은
+     한 줄로 굳어 화면 밖까지 밀렸다. overflow-wrap:anywhere 는 넘칠 때만 꺾는다 —
+     한국어 줄바꿈 모양은 그대로고, 넘치는 줄만 구제된다. */
   background:var(--d-bg);color:var(--d-txt)}
 
 /* ── 팔레트 ──────────────────────────────────────────────────
@@ -842,7 +845,12 @@ html.auto-login .splash .bottom-group{display:none !important}
   line-height:1.18;margin-top:9px;color:var(--d-strong)}
 #pcalDetail .pd-meta{margin-top:9px;font-size:11.5px;color:var(--d-sub);letter-spacing:.03em}
 /* 탭 — 바텀시트를 없애고 매장명 바로 아래로 올렸다. 구매하기를 한 번 더 누를 일이 없다. */
-#pcalDetail .pd-tabs{display:flex;border-bottom:1px solid var(--d-line);margin-top:20px}
+/* 탭 이름이 길어지면(일어 번역 등) 화면보다 넓어질 수 있다.
+   그때 페이지 전체가 옆으로 밀리지 않게, 넘친 만큼은 탭 줄 안에서만 긁힌다. */
+#pcalDetail .pd-tabs{display:flex;border-bottom:1px solid var(--d-line);margin-top:20px;
+  overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+#pcalDetail .pd-tabs::-webkit-scrollbar{display:none}
+#pcalDetail .pd-tabs>div{white-space:nowrap;flex:none}
 #pcalDetail .pd-tabs>div{flex:1;text-align:center;padding:11px 2px;font-size:10px;font-weight:600;
   color:var(--d-faint);border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap;
   letter-spacing:-.02em;cursor:pointer}
@@ -16700,8 +16708,11 @@ function showView(view){
   var orb1 = document.getElementById('cfGlowOrb');
   var orb2 = document.getElementById('cfGlowOrb2');
 
-  // 🧪 매거진뷰(프로토타입)는 홈에서만 뜬다 — 탭을 옮기면 무조건 내린다
-  if(typeof magHide === 'function') magHide();
+  // 🧪 매거진뷰(프로토타입)는 홈에서만 뜬다 — 다른 탭으로 옮길 때만 내린다.
+  //   홈으로 가는 길에도 내렸다 다시 올리면, 그 사이 한 프레임 옛 홈이 비쳐 잔상이 된다.
+  var _goMag = (view !== 'request' && view !== 'contents' && view !== 'ticket')
+            && (typeof magEnabled === 'function' && magEnabled());
+  if(!_goMag && typeof magHide === 'function') magHide();
   // 항상 필터바·pill바·초기화버튼 숨기고 시작
   if(tickBar) tickBar.style.display='none';
   if(pillBar) pillBar.style.display='none';
@@ -16760,7 +16771,8 @@ function showView(view){
       if(typeof pcalRenderAll === 'function') pcalRenderAll();
     }
   } else {
-    homeV.style.display='flex';
+    // 매거진이 켜져 있으면 옛 홈은 켜지 않는다 — 표지가 덮기 전 한 프레임 비친다
+    homeV.style.display = _goMag ? 'none' : 'flex';
     contV.style.display='none';
     if(orb1) orb1.style.opacity='0';
     if(orb2) orb2.style.opacity='0';
@@ -36759,6 +36771,32 @@ var TX_MAP = {
   '현재는 예치금(계좌이체)으로만 이용하실 수 있습니다':['Currently only deposit (bank transfer) is available','現在はデポジット（銀行振込）のみご利用いただけます'],
   '로그인이 만료되었습니다. 다시 로그인해주세요.':['Your session has expired. Please sign in again.','セッションの有効期限が切れました。再度ログインしてください。'],
 
+  // ── 자리 상세(pcalDetail) · 매거진 시트 ──
+  '결제내역 및 취소규정':['Payment & Cancellation','支払い・キャンセル規定'],
+  '티켓 조건 및 레스토랑 정보':['Ticket Terms & Restaurant','チケット条件・店舗情報'],
+  '자리 있음':['Available','空席あり'],
+  '마감':['Sold out','満席'],
+  '기한 만료':['Expired','期限切れ'],
+  '카운터석':['Counter seats','カウンター席'],
+  '주소 복사':['Copy address','住所をコピー'],
+  '취소 규정':['Cancellation policy','キャンセル規定'],
+  '등록된 안내가 없습니다':['No details have been registered','登録された案内はありません'],
+  '취소 규정을 확인하였으며, 예약 완료 후 취소 시 수수료가 발생할 수 있음에 동의합니다.':[
+    'I have read the cancellation policy and agree that fees may apply to cancellations after booking.',
+    'キャンセル規定を確認し、予約確定後のキャンセルには手数料が発生し得ることに同意します。'],
+  '동의하셔야 결제할 수 있습니다':['Please agree to the policy to continue','規定に同意すると決済できます'],
+  '이 달은 아직 열린 자리가 없습니다. 위 월 스트립에서 다른 달을 보세요.':[
+    'No seats are open this month yet. Try another month above.',
+    '今月はまだ空席がありません。上の月から他の月をご覧ください。'],
+  '구매하기 →':['Buy →','購入する →'],
+  '좌석 · ':['Seats · ','座席 · '],
+  '주류 · ':['Drinks · ','ドリンク · '],
+  '/ 인':['/ person','/ 名'],
+  '인원':['Guests','人数'],
+  '인':['pax','名'],
+  '초대 전용':['Invite only','招待制'],
+  '참가 자격이 없는 자리입니다':['This seat is by invitation only','この席は招待制です'],
+
   // ── 예약 요청 · 파트너 ──
   '지도':['Map','地図'],
   '인스타그램':['Instagram','Instagram'],
@@ -38799,10 +38837,19 @@ function pcalOpenTicket(id){
       var sold = parseInt(d.total) || 0;
       if(window._tkSeatHoldId) sold = Math.max(0, sold - (parseInt(window._tkSeatHoldPax || 0) || 0));
       var remain = Math.max(0, cap - sold);
+      // 숫자가 끼는 문구는 TX 스윕(사전 치환)으로 못 잡는다 — 여기서 언어별로 만든다
+      var _lg = window._tkCurrentLang || 'ko';
       var txt, fg, bg;
-      if(remain <= 0){ txt = '매진'; fg = '#fff'; bg = '#9B1C1C'; }
-      else if(remain >= 4){ txt = '잔여 4석 이상'; fg = '#9FD9B4'; bg = 'rgba(30,122,70,.22)'; }
-      else { txt = '잔여 ' + remain + '석'; fg = '#fff'; bg = '#5C0A14'; }
+      if(remain <= 0){
+        txt = (_lg==='en') ? 'Sold out' : (_lg==='ja') ? '満席' : '매진';
+        fg = '#fff'; bg = '#9B1C1C';
+      } else if(remain >= 4){
+        txt = (_lg==='en') ? '4+ seats left' : (_lg==='ja') ? '残り4席以上' : '잔여 4석 이상';
+        fg = '#9FD9B4'; bg = 'rgba(30,122,70,.22)';
+      } else {
+        txt = (_lg==='en') ? ('Only ' + remain + ' left') : (_lg==='ja') ? ('残り' + remain + '席') : ('잔여 ' + remain + '석');
+        fg = '#fff'; bg = '#5C0A14';
+      }
       bd.textContent = txt; bd.style.color = fg; bd.style.background = bg;
       bd.style.display = 'inline-block';
     }).catch(function(){});
@@ -39002,7 +39049,13 @@ function magRender(){
      + '<path d="M16 3v4M8 3v4M3 10h18"/></svg></button>';
 
   var heroEl = document.getElementById('magHero');
-  if(heroEl){ heroEl.innerHTML = h; _magFitAll(heroEl); }
+  // 같은 내용이면 손대지 않는다 — innerHTML 을 갈면 <img> 가 새로 만들어져
+  // 사진이 한 프레임 비고, 홈 탭을 오갈 때마다 그게 깜빡임(잔상)으로 보인다.
+  if(heroEl && heroEl._magHtml !== h){
+    heroEl.innerHTML = h;
+    heroEl._magHtml = h;
+    _magFitAll(heroEl);
+  }
   var wasHidden = (v.style.display !== 'block');
   v.style.display = 'block';
   if(wasHidden){
@@ -39160,10 +39213,7 @@ window._magMonLabel = _magMonLabel;
 function _magMonShort(m){ return _MAG_EN3[m-1] || String(m); }
 window._magMonShort = _magMonShort;
 
-// 표제 폰트 — 'bodoni'(기본) · 'oswald' · 'cormorant'
-//   콘솔/테스트에서 window.MAG_MON_FONT 로 바꿔 비교할 수 있다.
-var MAG_MON_FONT = 'bodoni';
-function _magMonFont(){ return 'f-' + (window.MAG_MON_FONT || MAG_MON_FONT); }
+// (표제 폰트 전역 스위처는 지웠다 — 이제 글자체는 표지 편집에서 글자마다 고른다)
 
 // ── 월 넘기기 ──
 //   자리가 있는 달만 오간다. 빈 달 표지를 계속 넘기게 하면 매거진이 아니라 달력이 된다.
