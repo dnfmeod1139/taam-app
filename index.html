@@ -642,6 +642,13 @@ html.auto-login .splash .bottom-group{display:none !important}
 /* 1컷 사진 — 분할 컷(.cutwrap)과 같은 규칙. 이게 없으면 편집 미리보기에서
    원본 픽셀 크기로 그려져 사진의 구석만 보인다(심하게 확대된 것처럼 보이는 원인). */
 .magone{display:block;width:100%;height:100%;object-fit:cover;filter:saturate(.88) contrast(1.06)}
+/* 편집 미리보기 — iOS 는 사진을 길게 누르면 콜아웃(미리보기 메뉴)이나 네이티브
+   이미지 드래그를 시작해 우리 제스처를 뺏는다(pointercancel). 컷 교환(길게 눌러
+   끌기)이 실기기에서만 안 되던 원인. 셋 다 꺼야 길게 누름이 우리 것으로 남는다. */
+#pcalAdmPreview, #pcalAdmPreview *{
+  -webkit-touch-callout:none;
+  -webkit-user-select:none;user-select:none}
+#pcalAdmPreview img{-webkit-user-drag:none}
 .cutwrap .cut.empty{background:#141014}
 .mag-shade{position:absolute;inset:0;
   background:linear-gradient(180deg,rgba(0,0,0,.55) 0%,rgba(0,0,0,.04) 26%,
@@ -39336,7 +39343,7 @@ function _magCutsHtml(photos, layoutKey, focus){
   for(var fi = 0; fi < list.length; fi++){ if(list[fi]){ firstPhoto = list[fi]; break; } }
   if(L.n === 1){
     var one = list[0] || firstPhoto || '';
-    return one ? '<img class="magone" src="' + _pcalEsc(one) + '" alt="" style="' + _magFxOf(focus, 0) + '">' : '';
+    return one ? '<img class="magone" draggable="false" src="' + _pcalEsc(one) + '" alt="" style="' + _magFxOf(focus, 0) + '">' : '';
   }
   var h = '<div class="cutwrap">';
   for(var i=0; i<L.n; i++){
@@ -39347,7 +39354,7 @@ function _magCutsHtml(photos, layoutKey, focus){
             + 'width:' + bx.w + '%;height:' + bx.h + '%;';
     h += '<div class="cut' + (src ? '' : ' empty') + '" data-ci="' + i + '" '
        + 'style="clip-path:' + poly + ';-webkit-clip-path:' + poly + ';">'
-       + (src ? '<img src="' + _pcalEsc(src) + '" alt="" style="' + pos + _magFxOf(focus, i) + '">' : '')
+       + (src ? '<img draggable="false" src="' + _pcalEsc(src) + '" alt="" style="' + pos + _magFxOf(focus, i) + '">' : '')
        + '</div>';
   }
   return h + '</div>';
@@ -40360,6 +40367,11 @@ window.pcalAdmSel = pcalAdmSel;
 function _pcalBindPreviewDrag(){
   var prev = document.getElementById('pcalAdmPreview');
   if(!prev) return;
+  // 길게 누름이 우클릭 메뉴(contextmenu)로 새면 교환 모드가 끊긴다
+  if(!prev._ctxBound){
+    prev._ctxBound = true;
+    prev.addEventListener('contextmenu', function(e){ e.preventDefault(); });
+  }
 
   // 글자를 끌면 그 글자가 움직인다 (사진이 아니라).
   //   아홉 칸은 「대충 어디쯤」까지고, 사진마다 몇 %씩 더 밀어야 자리가 맞는다.
