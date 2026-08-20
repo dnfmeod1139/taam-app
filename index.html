@@ -45,7 +45,10 @@
       document.fonts.ready.then(show).catch(show);
     }
   } catch(e){}
-  setTimeout(show, 1200);   // 폰트가 늦어도 1.2초 뒤에는 무조건 보여준다
+  // 상한 2.6초 — 예전 1.2초는 셀룰러에서 폰트보다 먼저 끝나 버려서,
+  // 시스템 폰트로 뜬 화면이 뒤늦게 갈아 끼워지는 잔상이 그대로 남았다.
+  // 서비스워커가 폰트를 캐시하므로 두 번째 실행부터는 게이트가 거의 즉시 열린다.
+  setTimeout(show, 2600);
 })();
 </script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -16679,9 +16682,9 @@ function gnbGo(tab, btn){
   //   슈퍼어드민도 동일 (구현 전) — 추후 분기 추가 예정.
   if(tab==='quest'){
     if(typeof showToast === 'function'){
-      // 🆕 2026.08: 새 첫 화면에서는 Quest 자리를 Cast 로 쓴다 (라벨은 pcalApplyGnb 가 바꿈)
+      // Quest 는 어느 화면에서나 Quest 다 (한때 Cast 로 바꿨다가 되돌림)
       var _qOn = (typeof newHomeEnabled === 'function') && newHomeEnabled();
-      showToast('🧭', _qOn ? 'TAAM Cast' : 'TAAM Quest', _qOn ? '준비 중입니다' : '곧 공개됩니다');
+      showToast('🧭', 'TAAM Quest', '곧 공개됩니다');
     }
     // active 복원: ticket 탭으로 복귀
     document.querySelectorAll('.gnb-btn').forEach(function(b){b.classList.remove('active');});
@@ -38403,21 +38406,31 @@ function _pcalInitMonth(byDate){
   }
 }
 
+// 표지 설정을 기기에 남겨 둔다 — 다음 실행의 '첫 화면'이 이 값으로 그려진다.
+//   DB 응답을 기다렸다 그리면 표지가 늦고, 안 기다리고 폴백으로 그리면
+//   기본 자리·기본 크기로 떴다가 설정값이 도착하는 순간 갈아 끼워진다(잔상).
+//   마지막으로 알던 설정으로 즉시 그리는 것이 유일하게 둘 다 피한다.
+function _pcalCoversCacheWrite(){
+  try { localStorage.setItem('taamCoversV1', JSON.stringify(_pcalCovers || {})); } catch(e){}
+}
+var _pcalCoversPending = false;   // 캐시도 없고 DB 도 아직 — 이 동안은 폴백을 그리지 않는다
 async function pcalLoadCovers(){
   var out = {};
   try {
-    if(!window.sb){ _pcalCovers = out; return out; }
+    if(!window.sb){ _pcalCovers = out; _pcalCoversPending = false; return out; }
     var res = await window.sb.from('month_covers').select('*');
     if(res.error){
       // 테이블 미생성(SQL 미실행) 포함 — 조용히 폴백
       console.warn('ℹ️ month_covers 로드 생략:', res.error.message);
-      _pcalCovers = out; return out;
+      _pcalCovers = out; _pcalCoversPending = false; return out;
     }
     (res.data || []).forEach(function(row){ out[row.year + '-' + row.month] = row; });
   } catch(e){
     console.warn('ℹ️ month_covers 예외:', e && e.message);
   }
   _pcalCovers = out;
+  _pcalCoversPending = false;
+  _pcalCoversCacheWrite();
   return out;
 }
 window.pcalLoadCovers = pcalLoadCovers;
@@ -39001,11 +39014,28 @@ function magRender(){
   if(!magEnabled()){ v.style.display = 'none'; return; }
 
   if(_pcalCovers === null){
-    _pcalCovers = {};
+    // 마지막으로 알던 설정(기기 캐시)으로 즉시 그린다. 캐시가 없으면(진짜 첫 실행)
+    // 폴백으로 그리지 않고 빈 표지로 기다린다 — 틀린 화면 → 맞는 화면 전환이 없어야 한다.
+    var _cc = null;
+    try { _cc = JSON.parse(localStorage.getItem('taamCoversV1') || 'null'); } catch(e){}
+    _pcalCovers = _cc || {};
+    _pcalCoversPending = !_cc;
     pcalLoadCovers().then(function(){ magRender(); }).catch(function(){});
   }
   var byDate = _pcalByDate();
   _pcalInitMonth(byDate);
+
+  // 캐시도 DB 도 아직이면 검은 표지로 기다린다 — 폴백을 그렸다 갈아 끼우지 않는다
+  if(_pcalCoversPending){
+    var heroEl0 = document.getElementById('magHero');
+    if(heroEl0 && heroEl0._magHtml !== 'pending'){
+      heroEl0.innerHTML = '';
+      heroEl0._magHtml = 'pending';
+    }
+    v.style.display = 'block';
+    return;
+  }
+
   var hero = _pcalHeroFor(_pcalY, _pcalM, byDate);
   var months = _magMonths(byDate);
   var mi = months.indexOf(_pcalY*100 + _pcalM);
@@ -39741,17 +39771,12 @@ function pcalInitMap(){
 }
 window.pcalInitMap = pcalInitMap;
 
-// ── GNB 를 하단에 붙이고 Quest → Cast 로 바꾼다 (플래그 뒤에서만) ──
+// ── GNB 를 하단에 붙인다 (플래그 뒤에서만) — Quest 라벨은 그대로 둔다 ──
 function pcalApplyGnb(){
   try {
     var on  = (typeof newHomeEnabled === 'function') && newHomeEnabled();
     var gnb = document.getElementById('mainGnb');
     if(gnb) gnb.classList.toggle('gnb-flat', on);
-    var qb = document.getElementById('gnbQuest');
-    if(qb){
-      var lb = qb.querySelector('.gnb-label');
-      if(lb) lb.textContent = on ? 'Cast' : 'Quest';
-    }
     // 일정 탭: 캘린더가 히어로부터 시작하므로 상단 필터바 높이만큼의 여백을 없앤다
     var inner = document.getElementById('ticketViewInner');
     if(inner) inner.style.paddingTop = on ? '0' : '138px';
@@ -40611,6 +40636,7 @@ async function pcalAdmSaveCover(){
 
   if(!_pcalCovers) _pcalCovers = {};
   _pcalCovers[_pcalAdmY + '-' + _pcalAdmM] = vf.data;
+  _pcalCoversCacheWrite();   // 다음 실행의 첫 화면도 방금 저장한 설정으로 그려진다
 
   var savedUrl = vf.data.photo_url || '';
   var wantUrl  = payload.photo_url || '';
