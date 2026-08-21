@@ -610,6 +610,20 @@ html.auto-login .splash .bottom-group{display:none !important}
 .pcal-item .pr span{display:block;margin-top:2px;font-size:9px;color:#57544f;letter-spacing:.08em}
 .pcal-item .st{font-size:10px;color:var(--pc-gold);letter-spacing:.06em;margin-top:5px}
 .pcal-item .st.full{color:#57544f}
+/* 마감 도장 — 사진 위 워터마크. 글자 한 줄보다 명확하고, 지면의 문법이다 */
+.pcal-item .ph{position:relative}
+.so-stamp{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  font-family:'Oswald',sans-serif;font-size:8px;font-weight:600;letter-spacing:.16em;
+  color:rgba(255,255,255,.92);text-align:center;
+  background:rgba(0,0,0,.44);z-index:2}
+.so-stamp::after{content:"";position:absolute;inset:auto;width:74%;height:20px;
+  border:1px solid rgba(255,255,255,.65);border-radius:2px;transform:rotate(-7deg)}
+.pcal-item.dead .ph img{filter:grayscale(1) brightness(.75)}
+.pcal-item.dead{opacity:.75}
+/* 목록 오른쪽 칩 판형 — 사진이 없는 월 목록용 */
+.so-chip{display:inline-block;font-family:'Oswald',sans-serif;font-size:8.5px;font-weight:600;
+  letter-spacing:.16em;color:#8d8781;border:1px solid #3a3a3e;border-radius:2px;
+  padding:4px 8px;transform:rotate(-4deg)}
 
 /* ══════ 터치감 — iOS 처럼 ══════════════════════════════════════
    버튼을 누르면 살짝 눌리고, 화면은 툭 튀지 않고 올라온다.
@@ -38707,7 +38721,7 @@ function _pcalMonthListHtml(byDate){
   keys.forEach(function(k){ total += (byDate[k] || []).length; });
 
   var h = '<div class="pcal-mlist"><div class="sec">'
-        + _magMonLabel(_pcalM) + ' &nbsp;·&nbsp; ' + total + (total === 1 ? ' SEAT' : ' SEATS') + '</div>';
+        + _magMonLabel(_pcalM) + '</div>';
 
   keys.forEach(function(key){
     var d  = key % 100;
@@ -38727,9 +38741,8 @@ function _pcalMonthListHtml(byDate){
 
       // 3행: 시간 for 인원
       var pax = _pcalPaxLabel(t);
-      var tline = dead
-        ? (t.status === 'soldout' ? '마감' : '기한 만료')
-        : (_pcalTime12(t.time) + (pax ? ' for ' + pax : ''));
+      // 마감 문구는 오른쪽 도장이 대신한다 — 여기선 시간만 (죽은 줄은 시간도 가라앉음)
+      var tline = _pcalTime12(t.time) + (pax && !dead ? ' for ' + pax : '');
 
       h += '<div class="pcal-lrow' + (dead ? ' dead' : '') + (idx ? ' cont' : '') + '"'
          + (idx === 0 ? ' id="pcalDay' + key + '"' : '')
@@ -38742,8 +38755,11 @@ function _pcalMonthListHtml(byDate){
       h += '<div class="tm">' + tline + '</div>';
       h += '</div>';
       // 가격 — 목록에서 가장 먼저 궁금한 것. 1인 기준 총액(식사+대행+주류)을 오른쪽에.
+      //   마감이면 가격 대신 도장 — 살 수 없는 것의 값은 소음이다.
       var _pp = (parseInt(t.mealFee||t.mealAmt||0) + parseInt(t.agencyFee||0) + parseInt(t.wineMin||0));
-      if(_pp > 0){
+      if(dead){
+        h += '<div class="so-chip">' + (t.status === 'soldout' ? 'SOLD OUT' : 'CLOSED') + '</div>';
+      } else if(_pp > 0){
         h += '<div class="pr"><b>\u20A9' + _pp.toLocaleString() + '</b><span>/ \uC778</span></div>';
       }
       h += '</div>';
@@ -39569,13 +39585,13 @@ function magShowCalendar(){
   var s = document.getElementById('magSheet');
   if(s) s.classList.remove('day');
   var byDate = _pcalByDate();
-  var seats = _pcalMonthTickets(_pcalY, _pcalM, byDate);
   var t = document.getElementById('magSheetTitle');
   var sub = document.getElementById('magSheetSub');
   var cnt = document.getElementById('magSheetCnt');
   if(t) t.textContent = _magMonLabel(_pcalM) + ' ' + _pcalY;
   if(sub) sub.textContent = '';
-  if(cnt) cnt.textContent = seats.length ? (seats.length + (seats.length === 1 ? ' SEAT' : ' SEATS')) : '';
+  // SEATS 집계는 어디에도 안 쓴다 — 잔여석이 아니라 상품 줄 수라 오해만 만든다
+  if(cnt) cnt.textContent = '';
   // 히어로는 뒤에 이미 깔려 있으니 시트 안에서는 그리지 않는다
   renderPhotoCalInto('magSheetBody', true);
 }
@@ -39615,15 +39631,19 @@ function magOpenDay(y, m, d){
     if(tk.time) bits.push(_pcalEsc(tk.time));
     if(tk.ticketGenre) bits.push(_pcalEsc(tk.ticketGenre));
     var _pp = (parseInt(tk.mealFee||tk.mealAmt||0) + parseInt(tk.agencyFee||0) + parseInt(tk.wineMin||0));
-    h += '<div class="pcal-item" onclick="magGoTicket(\'' + _pcalEsc(String(tk.id)) + '\')">';
-    h += '<div class="ph">' + (ph ? '<img src="' + _pcalEsc(ph) + '" alt="">' : '') + '</div>';
+    // 마감이면 가격을 지운다 — 살 수 없는 것의 값은 정보가 아니라 소음이다.
+    //   대신 사진 위에 도장(SOLD OUT / CLOSED)을 찍는다. 글자 한 줄보다 명확하다.
+    var _stamp = dead ? (tk.status === 'soldout' ? 'SOLD OUT' : 'CLOSED') : '';
+    h += '<div class="pcal-item' + (dead ? ' dead' : '') + '" onclick="magGoTicket(\'' + _pcalEsc(String(tk.id)) + '\')">';
+    h += '<div class="ph">' + (ph ? '<img src="' + _pcalEsc(ph) + '" alt="">' : '')
+       + (_stamp ? '<span class="so-stamp">' + _stamp + '</span>' : '') + '</div>';
     h += '<div class="m"><div class="nm">' + _pcalEsc(_pcalRestName(tk)) + '</div>'
        + '<div class="sub">' + bits.join(' · ') + '</div></div>';
     h += '<div class="rt">'
-       + (_pp > 0 ? '<div class="pr"><b>\u20A9' + _pp.toLocaleString() + '</b><span>/ \uC778</span></div>' : '')
-       + '<div class="st' + (dead ? ' full' : '') + '">'
-       + (dead ? (tk.status === 'soldout' ? '마감' : '기한 만료') : '자리 있음')
-       + '</div></div>';
+       + (dead ? '<div class="so-chip">' + _stamp + '</div>'
+               : (_pp > 0 ? '<div class="pr"><b>\u20A9' + _pp.toLocaleString() + '</b><span>/ \uC778</span></div>' : '')
+                 + '<div class="st">자리 있음</div>')
+       + '</div>';
     h += '</div>';
   });
   h += '</div>';
