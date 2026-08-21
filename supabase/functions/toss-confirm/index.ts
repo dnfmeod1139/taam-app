@@ -16,7 +16,14 @@
 //   · 부분 실패 방지 — 승인 성공 후 적립에 실패하면 그 사실을 주문에 남긴다
 //
 // 필요한 시크릿 (Supabase Dashboard → Edge Functions → Secrets)
-//   TOSS_SECRET_KEY = live_sk_...   ⚠ 코드·커밋에 절대 넣지 말 것
+//   TOSS_SECRET_KEY     = live_sk_...   국내 MID(playtauif6)
+//   TOSS_SECRET_KEY_USD = live_sk_...   해외 MID(playtaamusd) — USD 승인 · KRW 정산
+//   TOSS_SECRET_KEY_JPY = live_sk_...   해외 MID(playtaamjpy) — JPY 승인 · KRW 정산
+//   ⚠ 코드·커밋에 절대 넣지 말 것
+//
+// 외화 주문(USD/JPY)의 원칙 — docs/TOSS_GOLIVE.md
+//   승인은 주문의 통화·금액(amount·currency) 그대로, 원화 쪽 정산(예치금 차감·티켓
+//   확정·기록)은 주문 생성 때 서버가 얼려둔 settle_krw 로 한다. 둘을 섞지 않는다.
 // ════════════════════════════════════════════════════════════
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
@@ -41,7 +48,9 @@ serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
 
   try {
-    const secretKey = Deno.env.get('TOSS_SECRET_KEY');
+    // 기본(국내) 시크릿. 외화 주문이면 주문 조회 후 통화별 시크릿으로 바꾼다 —
+    // 토스는 MID 마다 키가 달라서, 국내 키로 외화 승인 호출하면 무조건 거절된다.
+    let secretKey = Deno.env.get('TOSS_SECRET_KEY');
     if (!secretKey) {
       console.error('[toss-confirm] TOSS_SECRET_KEY 미설정');
       return json({ ok: false, error: 'server_not_configured' });
@@ -109,6 +118,17 @@ serve(async (req) => {
     }
     if (order.status !== 'pending') {
       return json({ ok: false, error: 'order_not_pending', status: order.status });
+    }
+
+    // ── 외화 주문 → 통화별 시크릿 키 선택 ──
+    const orderCur = String(order.currency || 'KRW').toUpperCase();
+    if (orderCur !== 'KRW') {
+      const fxSecret = Deno.env.get('TOSS_SECRET_KEY_' + orderCur);
+      if (!fxSecret) {
+        console.error('[toss-confirm] TOSS_SECRET_KEY_' + orderCur + ' 미설정');
+        return json({ ok: false, error: 'server_not_configured', currency: orderCur });
+      }
+      secretKey = fxSecret;
     }
 
     const expected = Number(order.amount);
@@ -192,7 +212,9 @@ serve(async (req) => {
       const total = Number(meta.total || 0);
       const depositUsed = Math.max(0, Number(meta.deposit_used || 0));
       const holdId = String(meta.hold_purchase_id || '');
-      const cardPaid = expected;   // 카드로 실제 승인된 금액
+      // 원화 쪽 정산 금액 — 외화 주문은 승인액(expected)이 $·¥ 라서 그대로 쓰면
+      // 원장이 통째로 어긋난다. 주문 생성 때 얼려둔 settle_krw 를 쓴다.
+      const cardPaid = (orderCur === 'KRW') ? expected : (Number(order.settle_krw) || 0);
 
       // ① 예치금 사용분 차감 (있으면). 결제 진행 중 잔액이 줄었을 수 있으니
       //   실제 잔액을 다시 읽어 그만큼만 뺀다 (음수 방지 · 회원 불리 방지).
@@ -345,11 +367,15 @@ async function convertHoldToActive(
   depositUsed: number,
 ): Promise<{ ok: true; purchaseId: string } | { ok: false; reason: string }> {
   const meta = (order.metadata || {}) as Record<string, unknown>;
+  const orderCur = String(order.currency || 'KRW').toUpperCase();
   const extra = {
     seatHold: false, cardPaid, depositUsed,
     buyerRole: 'user',
     agencyFee: Number(meta.agency_fee || 0),
     paidBy: 'card+deposit', order_id: order.order_id,
+    // 외화 결제 흔적 — 환불(카드 원거래 취소)은 이 통화·이 금액 그대로 한다.
+    //   cardPaid 는 원화 정산액(settle_krw)이고, 실제 카드 승인은 card_amount_fx 였다.
+    ...(orderCur !== 'KRW' ? { card_currency: orderCur, card_amount_fx: Number(order.amount) || 0 } : {}),
   };
 
   if (holdId) {

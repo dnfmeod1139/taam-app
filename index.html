@@ -5984,12 +5984,13 @@ var TOSS_CLIENT_KEY = 'live_ck_BX7zk2yd8ydNoLGwKnoBrx9POLqK';
 //   키가 비어있으면 해당 통화 결제 시 준비중 안내 (KRW 는 항상 동작).
 var TOSS_KEYS = {
   KRW: TOSS_CLIENT_KEY,   // MID1 playtauif6 — 국내 (카드·이체·가상계좌·카카오·네이버)
-  // ⚠ 아래 셋은 MID 는 개설됐지만(playtaamusd / playtaamjpy / bill_taam315)
-  //   의도적으로 비워둔다. 원장은 원화 단일이고 해외 회원 화면의 USD 는 표시용이라,
-  //   외화 MID 로 승인받으면 정산·환불 금액이 원장과 어긋난다.
-  //   해외 통화 결제와 정기결제는 별도 설계 후 연다 (docs/TOSS_GOLIVE.md 참고).
-  USD: null,              // MID playtaamusd — 해외카드 USD 승인 · KRW 정산
-  JPY: null,              // MID playtaamjpy — 해외카드 JPY 승인 · KRW 정산
+  // 🆕 2026.08.21 해외 MID 토스 승인 완료. 서버(toss-order/confirm)가 외화 주문
+  //   (amount=외화·settle_krw=원화 얼려두기)을 지원하므로, 여기에 각 MID 의
+  //   클라이언트 키(live_ck_)를 넣고 + Secrets 에 TOSS_SECRET_KEY_USD/JPY 를
+  //   등록하면 그 통화가 열린다. 키가 null 이면 해외 회원도 KRW 로 폴백 — 안전.
+  //   JPY 는 추가로 환율 설정(fxOpenSettings)의 엔화 기준율도 넣어야 열린다.
+  USD: 'live_ck_5OWRapdA8dme7aNmYOqY3o1zEqZK',   // MID playtaamusd — 해외카드 USD 승인 · KRW 정산
+  JPY: 'live_ck_Z61JOxRQVE9wZ5J26GGmVW0X9bAq',   // MID playtaamjpy — 해외카드 JPY 승인 · KRW 정산
   // 🆕 2026.08: 자동결제(빌링) MID 라이브 키. 토스는 MID 별로 키가 다르다 —
   //   이 값이 null 이면 tossOpenBilling() 이 KRW(일반결제) 키로 폴백해서
   //   "자동결제 계약이 안 되어 있다" 로 거절된다 (실제로 그렇게 막혔다).
@@ -6158,6 +6159,7 @@ var DEPOSIT_BANK_INFO = {
 // ═══════════════════════════════════════════
 var FX = {
   base_rate:      1410,   // 은행 매매기준율 (슈퍼어드민 갱신)
+  rate_jpy:       0,      // 🆕 엔화 기준율 (KRW / 1 JPY). 0 이면 JPY 결제 미오픈
   margin_pct:     3.5,    // 당사 마진
   agency_divisor: 1000,   // 대행비: 원화 ÷ 1000 = USD
   step_usd:       5,      // 식사비·주류비 USD 올림 단위
@@ -6312,6 +6314,9 @@ function fxOpenSettings(){
     + '<label style="display:block;font-size:11px;font-weight:700;color:#888;margin-bottom:5px;">기준 환율 (KRW / 1 USD) — <span style="color:#5C0A14;">송금 받으실 때</span> 권장</label>'
     + '<input id="fxBase" type="text" inputmode="decimal" value="'+FX.base_rate+'" style="width:100%;box-sizing:border-box;padding:11px 12px;border:1px solid #e0dcd4;border-radius:10px;font-size:15px;font-weight:700;margin-bottom:4px;">'
     + '<div style="font-size:10.5px;color:#b5afa2;margin-bottom:13px;line-height:1.65;">은행 환율표의 <b>송금 받으실 때</b> 값을 넣으세요 — 해외 송금이 실제로 원화로 들어오는 환율입니다.<br>⚠ <b>현찰 사실 때</b>(가장 높은 값)를 넣으면 청구 달러가 줄어 손해입니다.<br>시장 환율이 <b>내리면 즉시 낮추고</b>, 오를 때는 그대로 두시면 됩니다.</div>'
+    + '<label style="display:block;font-size:11px;font-weight:700;color:#888;margin-bottom:5px;">엔화 기준율 (KRW / 1 JPY) — 비우면 JPY 결제 안 열림</label>'
+    + '<input id="fxRateJpy" type="text" inputmode="decimal" value="'+(FX.rate_jpy||'')+'" placeholder="예: 9.4" style="width:100%;box-sizing:border-box;padding:11px 12px;border:1px solid #e0dcd4;border-radius:10px;font-size:15px;font-weight:700;margin-bottom:4px;">'
+    + '<div style="font-size:10.5px;color:#b5afa2;margin-bottom:13px;">일본 회원의 카드 결제(엔화 승인)에 쓰입니다. USD 와 같은 마진이 적용됩니다.</div>'
     + '<label style="display:block;font-size:11px;font-weight:700;color:#888;margin-bottom:5px;">당사 마진 (%)</label>'
     + '<input id="fxMargin" type="text" inputmode="decimal" value="'+FX.margin_pct+'" style="width:100%;box-sizing:border-box;padding:11px 12px;border:1px solid #e0dcd4;border-radius:10px;font-size:15px;font-weight:700;margin-bottom:4px;">'
     + '<div style="font-size:10.5px;color:#b5afa2;margin-bottom:13px;">환율 변동·해외 송금 수수료를 흡수합니다. 카드사 실효 수수료가 1.5~2% 수준입니다.</div>'
@@ -6348,15 +6353,16 @@ function fxRenderPreview(){
 }
 function fxSaveSettings(){
   var b = parseFloat((document.getElementById('fxBase')||{}).value);
+  var j = parseFloat((document.getElementById('fxRateJpy')||{}).value) || 0;
   var m = parseFloat((document.getElementById('fxMargin')||{}).value);
   var en = !!(document.getElementById('fxEnabled')||{}).checked;
   if (!(b > 0)) { showToast('⚠','확인','기준율을 올바르게 입력해주세요'); return; }
   if (!(m >= 0 && m < 100)) { showToast('⚠','확인','마진은 0 이상 100 미만이어야 합니다'); return; }
   if (!window.sb) { showToast('⚠','오류','서버 연결이 없습니다'); return; }
-  var value = { base_rate:b, margin_pct:m, agency_divisor:(FX.agency_divisor||1000), step_usd:(FX.step_usd||5), enabled:en };
+  var value = { base_rate:b, rate_jpy:j, margin_pct:m, agency_divisor:(FX.agency_divisor||1000), step_usd:(FX.step_usd||5), enabled:en };
   window.sb.from('app_config').upsert({ key:'fx_settings', value:value, updated_at:new Date().toISOString() }).then(function(res){
     if (res.error) { showToast('⚠','저장 실패', res.error.message); return; }
-    FX.base_rate=b; FX.margin_pct=m; FX.enabled=en;
+    FX.base_rate=b; FX.rate_jpy=j; FX.margin_pct=m; FX.enabled=en;
     var p=document.getElementById('fxSettingsPopup'); if(p) p.remove();
     showToast('✓','저장 완료','적용 환율 ' + (b*(1-m/100)).toFixed(2));
   });
@@ -6381,6 +6387,7 @@ function loadFxSettings(){
       var v = res && res.data && res.data.value;
       if (v && typeof v === 'object') {
         if (v.base_rate      != null) FX.base_rate      = parseFloat(v.base_rate);
+        if (v.rate_jpy       != null) FX.rate_jpy       = parseFloat(v.rate_jpy);
         if (v.margin_pct     != null) FX.margin_pct     = parseFloat(v.margin_pct);
         if (v.agency_divisor != null) FX.agency_divisor = parseFloat(v.agency_divisor);
         if (v.step_usd       != null) FX.step_usd       = parseFloat(v.step_usd);
@@ -6637,6 +6644,18 @@ async function tossPayTicketShortage(shortage, useSavedCard){
                : (t.rest || '티켓');
   var orderName = (restName + ' — 티켓 구매').slice(0,40);
 
+  // ── 결제 통화 결정 ──
+  //   해외 회원(언어 기준)은 국가별 통화(JP→JPY, 그 외→USD)로 승인한다.
+  //   단, 그 통화의 클라이언트 키가 비어 있으면 KRW 로 폴백 (해외 MID 미오픈 상태).
+  //   등록 카드(빌링) 결제는 국내 MID 전용이라 항상 KRW.
+  var _reqCur = 'KRW';
+  if (!useSavedCard) {
+    try {
+      var _uc = _tossCurrencyForUser();
+      if (_uc !== 'KRW' && TOSS_KEYS[_uc]) _reqCur = _uc;
+    } catch(_ce){}
+  }
+
   // ── 서버에서 주문 생성 (금액은 서버가 정한다) ──
   var ord;
   try {
@@ -6644,7 +6663,7 @@ async function tossPayTicketShortage(shortage, useSavedCard){
       // 🆕 결제하기 시점에 잡아둔 홀드를 함께 넘긴다.
       //   서버는 이 홀드가 본인 것이면 좌석 재검증을 건너뛴다 (자기 홀드 때문에
       //   "매진"으로 잘못 거절되는 것을 막는다).
-      body: { ticketId: String(t.id), pax: pax, currency: 'KRW',
+      body: { ticketId: String(t.id), pax: pax, currency: _reqCur,
               holdPurchaseId: window._tkSeatHoldId || null }
     });
     if (_r && _r.error) throw _r.error;
@@ -6656,6 +6675,19 @@ async function tossPayTicketShortage(shortage, useSavedCard){
     try { if (typeof _tkReleaseSeatHold === 'function') await _tkReleaseSeatHold(); } catch(_re){}
     showToast('⚠','결제 준비 실패','잠시 후 다시 시도해주세요');
     return;
+  }
+
+  // 외화가 아직 안 열려 있으면(시크릿 미등록·환율 미설정) KRW 로 자동 폴백 —
+  //   해외 회원의 결제가 서버 설정 하나 때문에 통째로 막히면 안 된다.
+  if (ord && !ord.ok && ord.error === 'currency_not_open' && _reqCur !== 'KRW') {
+    console.warn('[toss-order] ' + _reqCur + ' 미오픈 — KRW 로 폴백');
+    try {
+      var _r2 = await window.sb.functions.invoke('toss-order', {
+        body: { ticketId: String(t.id), pax: pax, currency: 'KRW',
+                holdPurchaseId: window._tkSeatHoldId || null }
+      });
+      if (_r2 && !_r2.error && _r2.data) ord = _r2.data;
+    } catch(_fe){ console.warn('[toss-order] KRW 폴백 실패:', _fe); }
   }
 
   if (!ord || !ord.ok) {
@@ -6687,7 +6719,9 @@ async function tossPayTicketShortage(shortage, useSavedCard){
   }
 
   var amt = parseInt(ord.amount, 10) || 0;
-  if (amt < 100) {
+  // 최소 금액은 통화별로 다르다 — 원화 100 을 외화에 그대로 적용하면 $99 이하가 전부 막힌다
+  var _minAmt = (String(ord.currency || 'KRW') === 'KRW') ? 100 : 1;
+  if (amt < _minAmt) {
     try { if (typeof _tkReleaseSeatHold === 'function') await _tkReleaseSeatHold(); } catch(_re){}
     showToast('⚠','금액 확인','결제 금액이 올바르지 않습니다'); return;
   }
