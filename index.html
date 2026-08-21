@@ -9884,6 +9884,14 @@ window.closePromoCarousel = function(){
         <div><div class="admin-menu-text" data-i18n="admin.member_list">회원 목록</div></div>
         <div class="admin-arrow">›</div>
       </div>
+      <!-- 회원 원장 — 회원별 구매·예치금 전체 이력. 슈퍼어드민 전용 -->
+      <div class="admin-menu-item" onclick="openMemberLedger()">
+        <div>
+          <div class="admin-menu-text">💰 회원 원장 (구매·예치금)</div>
+          <div class="admin-menu-sub">회원을 검색해 구매 내역·예치금 부여/차감/환불을 일자별로 본다</div>
+        </div>
+        <div class="admin-arrow">›</div>
+      </div>
       <!-- 🆕 v1.53.11 2026.05.28: 회원 멤버십 만료일 관리 (profiles 기반) -->
       <div class="admin-menu-item" onclick="openMembershipUntilMgmt()">
         <div>
@@ -11899,6 +11907,25 @@ window.closePromoCarousel = function(){
     <div id="pendingApprovalContent"></div>
   </div>
 </div>
+<!-- ══════ 💰 회원 원장 — 슈퍼어드민 전용 ══════
+     회원을 검색해 그 사람의 구매(tickets)와 예치금 변동(deposit_transactions)을
+     일자별로 본다. 데이터는 전부 조회 시점에 DB 에서 읽는다 — 지금 회원이든
+     앞으로 들어올 회원이든 코드는 같다. -->
+<div id="memberLedgerScreen" class="sub-screen" data-lang-lock="ko" style="display:none;">
+  <div class="sub-topbar">
+    <button class="sub-back" onclick="closeSubPage('memberLedgerScreen')">←</button>
+    <div class="sub-title">회원 원장</div>
+  </div>
+  <div class="sub-content" style="padding:16px 18px 60px;">
+    <input id="mlSearchInp" type="text" placeholder="이름 · 전화번호 · 이메일로 검색"
+      style="width:100%;box-sizing:border-box;padding:12px 14px;border:1px solid #d8d3cc;border-radius:12px;
+             font-family:var(--font-main);font-size:14px;background:#fff;"
+      oninput="mlSearchDebounced()">
+    <div id="mlResults" style="margin-top:10px;"></div>
+    <div id="mlDetail" style="margin-top:14px;"></div>
+  </div>
+</div>
+
 <div id="memberListScreen" class="sub-screen" data-lang-lock="ko" style="display:none;">
   <div class="sub-header">
     <button class="sub-back" onclick="closeSubPage('memberListScreen')">←</button>
@@ -25347,6 +25374,176 @@ function thxRender(){
   }).join('');
   listEl.innerHTML = html;
 }
+
+// ══════════════════════════════════════════════════════════════
+// 💰 회원 원장 — 슈퍼어드민 전용
+//   회원 한 명의 돈 흐름 전부: 구매(tickets) + 예치금 변동(deposit_transactions).
+//   합계는 화면에서 계산한다 — 저장된 집계를 믿으면 원장과 어긋났을 때 못 알아챈다.
+// ══════════════════════════════════════════════════════════════
+function openMemberLedger(){
+  if(typeof _isSuperAdmin === 'function' && !_isSuperAdmin()){
+    if(typeof showToast === 'function') showToast('🔒','권한 부족','슈퍼어드민 전용');
+    return;
+  }
+  openSubPage('memberLedgerScreen');
+  var inp = document.getElementById('mlSearchInp');
+  if(inp){ inp.value = ''; setTimeout(function(){ inp.focus(); }, 150); }
+  var r = document.getElementById('mlResults'); if(r) r.innerHTML = '';
+  var d = document.getElementById('mlDetail'); if(d) d.innerHTML =
+    '<div style="padding:30px 0;text-align:center;font-size:12px;color:#a8a29a;">회원을 검색하세요</div>';
+}
+window.openMemberLedger = openMemberLedger;
+
+var _mlTimer = null;
+function mlSearchDebounced(){
+  clearTimeout(_mlTimer);
+  _mlTimer = setTimeout(mlSearch, 300);
+}
+window.mlSearchDebounced = mlSearchDebounced;
+
+async function mlSearch(){
+  var q = (document.getElementById('mlSearchInp') || {}).value || '';
+  q = q.trim();
+  var box = document.getElementById('mlResults');
+  if(!box) return;
+  if(q.length < 2){ box.innerHTML = ''; return; }
+  if(!window.sb){ box.innerHTML = '<div style="font-size:12px;color:#a8a29a;">서버 연결 없음</div>'; return; }
+  var like = '%' + q.replace(/[%_]/g, '') + '%';
+  var res = await window.sb.from('profiles')
+    .select('id, display_name, phone, email, role, membership_deposit_balance, general_deposit_balance')
+    .or('display_name.ilike.' + like + ',phone.ilike.' + like + ',email.ilike.' + like)
+    .limit(20);
+  if(res.error){ box.innerHTML = '<div style="font-size:12px;color:#B23A2E;">검색 실패: ' + _pcalEsc(res.error.message) + '</div>'; return; }
+  var rows = res.data || [];
+  if(!rows.length){ box.innerHTML = '<div style="font-size:12px;color:#a8a29a;padding:8px 2px;">결과 없음</div>'; return; }
+  var h = '';
+  rows.forEach(function(u){
+    var bal = (parseInt(u.membership_deposit_balance)||0) + (parseInt(u.general_deposit_balance)||0);
+    h += '<div onclick="mlOpen(\'' + u.id + '\')" style="display:flex;justify-content:space-between;align-items:center;'
+       + 'padding:12px 4px;border-bottom:1px solid #eee7dc;cursor:pointer;">'
+       + '<div><div style="font-size:14px;font-weight:700;color:#1a1a18;">' + _pcalEsc(u.display_name || '(이름 없음)')
+       + (u.role && u.role !== 'user' ? ' <span style="font-size:9px;color:#B23A2E;">' + _pcalEsc(u.role) + '</span>' : '') + '</div>'
+       + '<div style="font-size:11px;color:#8a8580;margin-top:2px;">' + _pcalEsc(u.phone || u.email || '') + '</div></div>'
+       + '<div style="font-size:12px;font-weight:700;color:#5C0A14;">\u20A9' + bal.toLocaleString() + '</div>'
+       + '</div>';
+  });
+  box.innerHTML = h;
+}
+window.mlSearch = mlSearch;
+
+function _mlDate(iso){
+  try {
+    var d = new Date(iso);
+    return d.getFullYear() + '.' + String(d.getMonth()+1).padStart(2,'0') + '.' + String(d.getDate()).padStart(2,'0')
+      + ' ' + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+  } catch(e){ return iso || ''; }
+}
+
+async function mlOpen(uid){
+  if(typeof _isSuperAdmin === 'function' && !_isSuperAdmin()) return;
+  var d = document.getElementById('mlDetail');
+  if(!d || !window.sb) return;
+  d.innerHTML = '<div style="padding:20px 0;text-align:center;font-size:12px;color:#a8a29a;">불러오는 중…</div>';
+
+  var [pf, dt, tk] = await Promise.all([
+    window.sb.from('profiles').select('*').eq('id', uid).maybeSingle(),
+    window.sb.from('deposit_transactions')
+      .select('created_at, deposit_type, change_type, amount, balance_after, description, metadata')
+      .eq('user_id', uid).order('created_at', { ascending: false }).limit(500),
+    window.sb.from('tickets')
+      .select('created_at, restaurant_name, party_size, price, status, reservation_date, visit_time, purchase_id')
+      .eq('user_id', uid).order('created_at', { ascending: false }).limit(300)
+  ]);
+  var u = pf.data || {};
+  var txs = (dt.data || []);
+  // 좌석 홀드(구매 미완)는 원장이 아니다
+  var buys = (tk.data || []).filter(function(t){ return t.status !== 'hold'; });
+
+  // ── 합계 — 원장에서 직접 계산 ──
+  var granted = 0, deducted = 0, used = 0, refunded = 0, charged = 0;
+  txs.forEach(function(r){
+    var a = parseInt(r.amount) || 0;
+    if(r.change_type === 'admin_grant') granted += a;
+    else if(r.change_type === 'admin_deduct') deducted += -a;
+    else if(r.change_type === 'ticket_purchase') used += -a;
+    else if(r.change_type === 'ticket_refund') refunded += a;
+    else if(a > 0) charged += a;   // 그 외 + (충전 등)
+  });
+  var balNow = (parseInt(u.membership_deposit_balance)||0) + (parseInt(u.general_deposit_balance)||0);
+
+  var h = '';
+  h += '<div style="border-top:2px solid #1a1a18;padding-top:14px;">';
+  h += '<div style="font-size:16px;font-weight:800;color:#1a1a18;">' + _pcalEsc(u.display_name || '(이름 없음)') + '</div>';
+  h += '<div style="font-size:11px;color:#8a8580;margin-top:3px;">'
+     + _pcalEsc(u.phone || '') + (u.email ? ' · ' + _pcalEsc(u.email) : '')
+     + (u.membership_tier ? ' · ' + _pcalEsc(u.membership_tier) : '') + '</div>';
+
+  // 요약 카드
+  function card(l, v, c){
+    return '<div style="flex:1;min-width:96px;background:#faf8f4;border:1px solid #eee5d8;border-radius:10px;padding:9px 10px;">'
+      + '<div style="font-size:9.5px;color:#8a8580;">' + l + '</div>'
+      + '<div style="font-size:13.5px;font-weight:800;color:' + (c||'#1a1a18') + ';margin-top:3px;">\u20A9' + v.toLocaleString() + '</div></div>';
+  }
+  h += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:12px 0 4px;">'
+     + card('현재 잔액', balNow, '#5C0A14')
+     + card('누적 부여', granted, '#2a6a2a')
+     + card('누적 사용', used)
+     + '</div>';
+  h += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;">'
+     + card('누적 환불', refunded, '#2a6a2a')
+     + card('관리 차감', deducted, '#B23A2E')
+     + '<div style="flex:1;min-width:96px;background:#faf8f4;border:1px solid #eee5d8;border-radius:10px;padding:9px 10px;">'
+     + '<div style="font-size:9.5px;color:#8a8580;">구매 횟수</div>'
+     + '<div style="font-size:13.5px;font-weight:800;color:#1a1a18;margin-top:3px;">' + buys.length + '건</div></div>'
+     + '</div>';
+
+  // ── 구매 내역 ──
+  h += '<div style="font-family:var(--font-main);font-size:12px;font-weight:800;letter-spacing:.1em;color:#5C0A14;margin:14px 0 6px;">구매 내역</div>';
+  if(!buys.length){
+    h += '<div style="font-size:12px;color:#a8a29a;padding:8px 2px;">구매 내역 없음</div>';
+  } else {
+    buys.forEach(function(t){
+      var st = t.status === 'active' ? '' :
+        '<span style="font-size:9.5px;font-weight:800;color:' + (t.status === 'canceled' ? '#B23A2E' : '#8a8580') + ';margin-left:6px;">'
+        + (t.status === 'canceled' ? '취소' : _pcalEsc(String(t.status))) + '</span>';
+      h += '<div style="padding:9px 2px;border-bottom:1px solid #eee7dc;">'
+        + '<div style="display:flex;justify-content:space-between;">'
+        + '<span style="font-size:12.5px;font-weight:700;color:#1a1a18;">' + _pcalEsc(t.restaurant_name || '티켓') + st + '</span>'
+        + '<span style="font-size:12.5px;font-weight:700;">\u20A9' + (parseInt(t.price)||0).toLocaleString() + '</span></div>'
+        + '<div style="font-size:10.5px;color:#8a8580;margin-top:3px;">구매 ' + _mlDate(t.created_at)
+        + (t.reservation_date ? ' · 방문 ' + _pcalEsc(String(t.reservation_date)) + (t.visit_time ? ' ' + _pcalEsc(String(t.visit_time)) : '') : '')
+        + (t.party_size ? ' · ' + t.party_size + '인' : '') + '</div>'
+        + '</div>';
+    });
+  }
+
+  // ── 예치금 상세 ──
+  h += '<div style="font-family:var(--font-main);font-size:12px;font-weight:800;letter-spacing:.1em;color:#5C0A14;margin:20px 0 6px;">예치금 상세</div>';
+  if(!txs.length){
+    h += '<div style="font-size:12px;color:#a8a29a;padding:8px 2px;">예치금 내역 없음</div>';
+  } else {
+    var TL = { admin_grant:['부여','#2a6a2a'], admin_deduct:['차감','#B23A2E'],
+               ticket_purchase:['구매','#1a1a18'], ticket_refund:['환불','#2a6a2a'] };
+    txs.forEach(function(r){
+      var a = parseInt(r.amount) || 0;
+      var lab = TL[r.change_type] || [r.change_type, '#8a8580'];
+      h += '<div style="padding:8px 2px;border-bottom:1px solid #eee7dc;">'
+        + '<div style="display:flex;justify-content:space-between;align-items:baseline;">'
+        + '<span style="font-size:11px;"><b style="color:' + lab[1] + ';">' + _pcalEsc(lab[0]) + '</b>'
+        + ' <span style="color:#8a8580;">' + (r.deposit_type === 'membership' ? '멤버십' : '일반') + '</span></span>'
+        + '<span style="font-size:12.5px;font-weight:800;color:' + (a >= 0 ? '#2a6a2a' : '#1a1a18') + ';">'
+        + (a >= 0 ? '+' : '\u2212') + '\u20A9' + Math.abs(a).toLocaleString() + '</span></div>'
+        + '<div style="display:flex;justify-content:space-between;font-size:10px;color:#a8a29a;margin-top:2px;">'
+        + '<span>' + _mlDate(r.created_at) + (r.description ? ' · ' + _pcalEsc(String(r.description)).slice(0,44) : '') + '</span>'
+        + (r.balance_after != null ? '<span>잔액 \u20A9' + (parseInt(r.balance_after)||0).toLocaleString() + '</span>' : '')
+        + '</div></div>';
+    });
+  }
+  h += '</div>';
+  d.innerHTML = h;
+  d.scrollIntoView({ block:'start', behavior:'smooth' });
+}
+window.mlOpen = mlOpen;
 
 function loadAllUsersPurchases(){
   // 🆕 2026.05.22: IDB(레거시) + Supabase(현재) 동시 조회 → 병합
