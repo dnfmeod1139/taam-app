@@ -6315,8 +6315,11 @@ function fxOpenSettings(){
     + '<input id="fxBase" type="text" inputmode="decimal" value="'+FX.base_rate+'" style="width:100%;box-sizing:border-box;padding:11px 12px;border:1px solid #e0dcd4;border-radius:10px;font-size:15px;font-weight:700;margin-bottom:4px;">'
     + '<div style="font-size:10.5px;color:#b5afa2;margin-bottom:13px;line-height:1.65;">은행 환율표의 <b>송금 받으실 때</b> 값을 넣으세요 — 해외 송금이 실제로 원화로 들어오는 환율입니다.<br>⚠ <b>현찰 사실 때</b>(가장 높은 값)를 넣으면 청구 달러가 줄어 손해입니다.<br>시장 환율이 <b>내리면 즉시 낮추고</b>, 오를 때는 그대로 두시면 됩니다.</div>'
     + '<label style="display:block;font-size:11px;font-weight:700;color:#888;margin-bottom:5px;">엔화 기준율 (KRW / 1 JPY) — 비우면 JPY 결제 안 열림</label>'
-    + '<input id="fxRateJpy" type="text" inputmode="decimal" value="'+(FX.rate_jpy||'')+'" placeholder="예: 9.4" style="width:100%;box-sizing:border-box;padding:11px 12px;border:1px solid #e0dcd4;border-radius:10px;font-size:15px;font-weight:700;margin-bottom:4px;">'
-    + '<div style="font-size:10.5px;color:#b5afa2;margin-bottom:13px;">일본 회원의 카드 결제(엔화 승인)에 쓰입니다. USD 와 같은 마진이 적용됩니다.</div>'
+    + '<div style="display:flex;gap:7px;margin-bottom:4px;">'
+      + '<input id="fxRateJpy" type="text" inputmode="decimal" value="'+(FX.rate_jpy||'')+'" placeholder="예: 9.4" style="flex:1;box-sizing:border-box;padding:11px 12px;border:1px solid #e0dcd4;border-radius:10px;font-size:15px;font-weight:700;">'
+      + '<button onclick="fxFetchJpy()" style="flex:0 0 auto;padding:0 14px;background:#fff;border:1px solid #d8d2c6;border-radius:10px;font-size:11.5px;font-weight:700;color:#6a635a;cursor:pointer;">시장값</button>'
+    + '</div>'
+    + '<div style="font-size:10.5px;color:#b5afa2;margin-bottom:13px;">일본 회원의 카드 결제(엔화 승인)에 쓰입니다. <b>USD 와 같은 마진</b>이 적용됩니다.<br>「시장값」은 시장 환율을 가져올 뿐이니, 은행 <b>송금 받으실 때</b> 값이 있으면 그걸 넣는 게 정확합니다.</div>'
     + '<label style="display:block;font-size:11px;font-weight:700;color:#888;margin-bottom:5px;">당사 마진 (%)</label>'
     + '<input id="fxMargin" type="text" inputmode="decimal" value="'+FX.margin_pct+'" style="width:100%;box-sizing:border-box;padding:11px 12px;border:1px solid #e0dcd4;border-radius:10px;font-size:15px;font-weight:700;margin-bottom:4px;">'
     + '<div style="font-size:10.5px;color:#b5afa2;margin-bottom:13px;">환율 변동·해외 송금 수수료를 흡수합니다. 카드사 실효 수수료가 1.5~2% 수준입니다.</div>'
@@ -6330,7 +6333,7 @@ function fxOpenSettings(){
     + '<button onclick="var p=document.getElementById(\'fxSettingsPopup\');if(p)p.remove();" style="width:100%;padding:11px;background:transparent;border:none;font-size:10px;font-weight:600;letter-spacing:.18em;color:#bbb;cursor:pointer;">닫기</button>'
     + '</div>';
   document.body.appendChild(el);
-  ['fxBase','fxMargin'].forEach(function(id){
+  ['fxBase','fxRateJpy','fxMargin'].forEach(function(id){
     var i = document.getElementById(id); if(i) i.addEventListener('input', fxRenderPreview);
   });
   fxRenderPreview();
@@ -6338,11 +6341,15 @@ function fxOpenSettings(){
 function fxRenderPreview(){
   var box = document.getElementById('fxPreview'); if(!box) return;
   var b = parseFloat((document.getElementById('fxBase')||{}).value) || 0;
+  var jy = parseFloat((document.getElementById('fxRateJpy')||{}).value) || 0;
   var m = parseFloat((document.getElementById('fxMargin')||{}).value) || 0;
   var r = b * (1 - m/100);
+  var rj = jy * (1 - m/100);   // 엔 적용환율 — 달러와 같은 마진
   function ex(krw, step){ return r>0 ? ('$' + (Math.ceil(krw/r/step)*step).toLocaleString()) : '—'; }
   box.innerHTML =
-      '<div style="display:flex;justify-content:space-between;padding:3px 0;"><span style="font-size:11.5px;color:#9a9486;">적용 환율</span><span style="font-size:14px;font-weight:800;color:#5C0A14;">'+(r>0?r.toFixed(2):'—')+'</span></div>'
+      '<div style="display:flex;justify-content:space-between;padding:3px 0;"><span style="font-size:11.5px;color:#9a9486;">적용 환율 (USD)</span><span style="font-size:14px;font-weight:800;color:#5C0A14;">'+(r>0?r.toFixed(2):'—')+'</span></div>'
+    + '<div style="display:flex;justify-content:space-between;padding:3px 0;"><span style="font-size:11.5px;color:#9a9486;">적용 환율 (JPY)</span><span style="font-size:14px;font-weight:800;color:#5C0A14;">'+(rj>0?rj.toFixed(3):'미설정')+'</span></div>'
+    + (rj>0 ? '<div style="display:flex;justify-content:space-between;padding:2px 0;"><span style="font-size:11.5px;color:#777;">부족분 ₩270,000 결제 시</span><span style="font-size:12px;font-weight:700;">¥' + Math.ceil(270000/rj).toLocaleString() + '</span></div>' : '')
     + '<div style="height:1px;background:#eee5d8;margin:8px 0;"></div>'
     + '<div style="font-size:10.5px;color:#b5afa2;margin-bottom:5px;">미리보기 ($5 올림)</div>'
     + '<div style="display:flex;justify-content:space-between;padding:2px 0;"><span style="font-size:11.5px;color:#777;">식사비 ₩270,000</span><span style="font-size:12px;font-weight:700;">'+ex(270000,5)+'</span></div>'
@@ -6367,6 +6374,21 @@ function fxSaveSettings(){
     showToast('✓','저장 완료','적용 환율 ' + (b*(1-m/100)).toFixed(2));
   });
 }
+// 「시장값」 버튼 — 시장 환율(JPY→KRW)을 가져와 엔화 기준율 칸에 채운다.
+//   가져오기만 할 뿐 저장은 하지 않는다 — 확인 후 저장 버튼을 눌러야 반영된다.
+function fxFetchJpy(){
+  fetch('https://api.frankfurter.app/latest?from=JPY&to=KRW')
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(j){
+      var v = j && j.rates && j.rates.KRW;
+      if (!v) { showToast('⚠','조회 실패','잠시 후 다시 시도해주세요'); return; }
+      var i = document.getElementById('fxRateJpy');
+      if (i) { i.value = v.toFixed(3); fxRenderPreview(); }
+      showToast('✓','시장 환율','1엔 = ' + v.toFixed(3) + '원 (저장을 눌러야 반영됩니다)');
+    })
+    .catch(function(){ showToast('⚠','조회 실패','네트워크를 확인해주세요'); });
+}
+window.fxFetchJpy = fxFetchJpy;
 window.fxOpenSettings = fxOpenSettings; window.fxSaveSettings = fxSaveSettings;
 
 // 결제 상세 총액의 USD — 항목별 표시값의 합과 정확히 일치시킨다.
