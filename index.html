@@ -894,7 +894,7 @@ html.auto-login .splash .bottom-group{display:none !important}
   --d-chip:rgba(0,0,0,.06); --d-chiptxt:#1F1D1A;
   --d-check:#111111; --d-checkmark:#F7F4EF;
   --d-warn:#B84A38;
-  --d-cta:#111111; --d-ctatxt:#FFFFFF;   /* 버튼도 검정 — 종이 위 잉크 */
+  --d-cta:#5C0A14; --d-ctatxt:#FFFFFF;   /* 결제 버튼은 브랜드 버건디 — 종이 위 유일한 색 */
   --d-mapbg:#E9E5DE}
 
 #pcalDetail .pd-top{position:fixed;top:0;left:0;right:0;z-index:6;display:flex;align-items:center;
@@ -915,14 +915,16 @@ html.auto-login .splash .bottom-group{display:none !important}
   line-height:1.18;margin-top:9px;color:var(--d-strong)}
 #pcalDetail .pd-meta{margin-top:9px;font-size:11.5px;color:var(--d-sub);letter-spacing:.03em}
 /* 탭 — 바텀시트를 없애고 매장명 바로 아래로 올렸다. 구매하기를 한 번 더 누를 일이 없다. */
-/* 탭 고정 — 바깥 틀(pd-tabswrap)이 붙고, 안쪽(pd-tabs)이 가로로 긁힌다.
-   한 요소에 sticky 와 overflow 를 같이 주면 iOS 가 고정을 흔든다 — 그래서 나눈다.
-   붙는 위치는 0 이 아니라 44px — 0 에 붙이면 위의 투명한 TAAM 헤더(그라디언트+로고)
-   아래로 미끄러져 들어가 글자가 반쯤 먹힌다. 로고 줄 바로 아래에 앉힌다. */
-#pcalDetail .pd-tabswrap{position:sticky;top:calc(44px + env(safe-area-inset-top));
-  z-index:5;background:var(--d-bg);margin-top:20px}
+/* 탭 고정 — sticky 를 버리고 스크롤을 직접 듣는다.
+   iOS 웹뷰에서 sticky 가 (모멘텀 스크롤·overflow 조합에 따라) 걸렸다 안 걸렸다 했다.
+   세 번을 고쳐도 재발해서, 브라우저 재량이 없는 방식으로 바꾼다:
+   스크롤이 탭을 지나면 .pinned(=position:fixed) 를 붙이고, 바깥 틀이 그 높이를
+   대신 차지해 화면이 튀지 않는다. 붙는 위치는 로고 줄 아래 44px. */
+#pcalDetail .pd-tabswrap{margin-top:20px}
 #pcalDetail .pd-tabs{display:flex;border-bottom:1px solid var(--d-line);
   overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+#pcalDetail .pd-tabs.pinned{position:fixed;top:calc(44px + env(safe-area-inset-top));
+  left:0;right:0;z-index:8;background:var(--d-bg);padding:0 24px}
 #pcalDetail .pd-tabs::-webkit-scrollbar{display:none}
 #pcalDetail .pd-tabs>div{white-space:nowrap;flex:none}
 #pcalDetail .pd-tabs>div{flex:1;text-align:center;padding:11px 2px;font-size:10px;font-weight:600;
@@ -39957,6 +39959,28 @@ function pcalPay(){
   if(typeof openTdPayPopup === 'function') openTdPayPopup();
 }
 window.pcalPay = pcalPay;
+
+// ── 탭 고정 — 스크롤을 직접 듣는다 (sticky 는 iOS 에서 못 믿는다) ──
+function _pdPinTabs(){
+  var sc = document.getElementById('pcalDetail');
+  var wrap = sc && sc.querySelector('.pd-tabswrap');
+  var tabs = wrap && wrap.querySelector('.pd-tabs');
+  if(!tabs) return;
+  var stick = 44;   // 로고 줄 아래
+  var should = sc.scrollTop >= (wrap.offsetTop - stick);
+  var is = tabs.classList.contains('pinned');
+  if(should && !is){
+    wrap.style.height = tabs.offsetHeight + 'px';   // 빠진 자리를 채워 화면이 안 튄다
+    tabs.classList.add('pinned');
+  } else if(!should && is){
+    tabs.classList.remove('pinned');
+    wrap.style.height = '';
+  }
+}
+(function(){
+  var sc = document.getElementById('pcalDetail');
+  if(sc) sc.addEventListener('scroll', _pdPinTabs, { passive:true });
+})();
 
 function pcalCopyAddr(){
   var r = currentRest;
