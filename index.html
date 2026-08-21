@@ -772,7 +772,8 @@ html.auto-login .splash .bottom-group{display:none !important}
 /* visibility 로만 감춘다 — display:none 이면 올라오는 동작이 통째로 사라진다 */
 #magSheet.on .mg-panel{transform:translateY(0)}
 /* 전체 단계에서는 GNB 위에 딱 붙는다 — 사이로 표지가 새어 보이면 판이 떠 있는 것처럼 읽힌다 */
-#magSheet.d2 .mg-panel{height:74vh;left:0;right:0;border-radius:16px 16px 0 0;
+#magSheet.d2 .mg-panel{left:0;right:0;border-radius:16px 16px 0 0;
+  height:calc(100% - 132px - env(safe-area-inset-bottom));
   bottom:calc(59px + env(safe-area-inset-bottom));background:rgba(12,12,14,.94)}
 #magSheet.dragging .mg-panel{transition:none}
 /* 손잡이 — HIG 가 요구하는 요소. 탭하면 단계가 순환한다 */
@@ -20962,7 +20963,13 @@ function _showTdConfirmPopup(t, r, pax, meal, agency, wine, totalPay, after) {
   var _hb = document.getElementById('tdHoldBanner');
   if(_hb) _hb.innerHTML = window._tkSeatHoldId ? _tkHoldBannerHtml('tdHoldTimer') : '';
   var _ask = document.getElementById('tdConfirmAsk');
-  if(_ask) _ask.innerHTML = t('ticket.ask_deposit','예치금 {amt} 을 사용해<br>티켓을 구매하시겠습니까?')
+  // ⚠ 이 함수의 첫 매개변수가 t(티켓)라 전역 번역 함수 t 를 가린다.
+  //   t('ticket.ask_deposit') 로 부르면 티켓 객체를 호출해 TypeError — 팝업이 아예
+  //   안 뜨고 "결제하기를 눌러도 무반응" 이 된다. 예치금이 부족하면 카드 팝업
+  //   (가림 없음)으로 빠져 멀쩡했고, 딱 맞거나 충분할 때만 죽었다.
+  var _tr = (typeof window.t === 'function') ? window.t
+          : function(k, d){ return d; };
+  if(_ask) _ask.innerHTML = _tr('ticket.ask_deposit','예치금 {amt} 을 사용해<br>티켓을 구매하시겠습니까?')
       .replace('{amt}', '<b style="color:#5C0A14;">₩'+(totalPay||0).toLocaleString()+'</b>');
 
   var pop = document.getElementById('tdConfirmPopup');
@@ -39468,7 +39475,15 @@ function magSheetTo(d){
   s.classList.remove('d1','d2');
   var v = document.getElementById('magView');
   if(v) v.classList.toggle('sheeton', _magDet > 0);
-  if(!_magDet){ s.classList.remove('on','day'); return; }
+  if(!_magDet){
+    // 날짜 목록을 보다 닫았으면 캘린더로 되돌려 둔다.
+    //   안 되돌리면 다음에 열었을 때 마지막 날짜 목록이 그대로 떠서
+    //   뒤로 갈 수도, 다른 날짜를 고를 수도 없다 (앱 재시작으로만 풀리던 증상).
+    var wasDay = s.classList.contains('day');
+    s.classList.remove('on','day');
+    if(wasDay && typeof magShowCalendar === 'function') magShowCalendar();
+    return;
+  }
   s.classList.add('on');
   s.classList.add('d' + _magDet);
   magBindDrag();
@@ -39482,7 +39497,12 @@ function magSheetCycle(){
 }
 window.magSheetCycle = magSheetCycle;
 
-function magOpenSheet(){ magSheetTo(1); }
+function magOpenSheet(){
+  // 달력은 늘 전체 화면으로 연다 — 6주짜리 달도 스크롤 없이 다 보이고,
+  //   그 아래로 이 달 자리 목록이 이어진다 (있다는 게 보이는 것까지가 목적).
+  magShowCalendar();
+  magSheetTo(2);
+}
 window.magOpenSheet = magOpenSheet;
 
 function magCloseSheet(){ magSheetTo(0); }
@@ -39572,7 +39592,7 @@ function magBindDrag(){
   //   0번 자리는 「닫힘」이다. 아래로 충분히 내리면 표지로 돌아간다.
   function heights(){
     var vh = window.innerHeight;
-    return [vh * 0.22, vh * 0.52, vh * 0.74];
+    return [vh * 0.22, vh * 0.52, vh - 132];
   }
   function start(y){
     y0 = y; moved = false;
