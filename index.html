@@ -911,6 +911,20 @@ html.auto-login .splash .bottom-group{display:none !important}
 #pcalDetail .pd-body{padding:4px 24px calc(120px + env(safe-area-inset-bottom))}
 #pcalDetail .pd-when{font-family:'Oswald','Noto Sans KR',sans-serif;font-size:12px;font-weight:500;
   letter-spacing:.1em;color:var(--d-when)}
+/* 날짜 낱장 칩 — 어두운 팔레트에서는 흰 낱장, 페이퍼에서는 검정 머리의 흰 낱장 */
+#pcalDetail .pd-datechip{display:flex;align-items:center;gap:14px;margin:2px 0 4px}
+#pcalDetail .pd-datechip .cal{flex:none;width:58px;border:1.5px solid var(--d-strong);
+  border-radius:9px;overflow:hidden;text-align:center;background:var(--d-bg)}
+#pcalDetail .pd-datechip .cal .mo{display:block;font-family:'Oswald',sans-serif;font-size:9px;
+  letter-spacing:.2em;padding:3px 0 2px;background:var(--d-strong);color:var(--d-bg)}
+#pcalDetail .pd-datechip .cal .dd{display:block;font-family:Didot,'Bodoni 72',serif;
+  font-size:26px;line-height:1.15;color:var(--d-strong)}
+#pcalDetail .pd-datechip .cal .dw{display:block;font-family:'Oswald',sans-serif;font-size:8px;
+  letter-spacing:.18em;color:var(--d-sub);padding-bottom:4px}
+#pcalDetail .pd-datechip .ti b{display:block;font-family:'Oswald','Noto Sans KR',sans-serif;
+  font-size:15px;font-weight:600;color:var(--d-strong);letter-spacing:.04em}
+#pcalDetail .pd-datechip .ti span{display:block;margin-top:3px;font-family:'Oswald',sans-serif;
+  font-size:9.5px;letter-spacing:.16em;color:var(--d-when)}
 #pcalDetail .pd-name{font-family:'Nanum Myeongjo','Hiragino Mincho ProN',serif;font-size:31px;
   line-height:1.18;margin-top:9px;color:var(--d-strong)}
 #pcalDetail .pd-meta{margin-top:9px;font-size:11.5px;color:var(--d-sub);letter-spacing:.03em}
@@ -39015,12 +39029,23 @@ function _pcalDetailHtml(t, r, dead, expired){
   //   같은 자리인지 한 박자 늦게 알아챈다.
   var full = (typeof _tkFullDate === 'function') ? _tkFullDate(t) : '';
   var fp = String(full).split('.');
-  var whenTxt = '';
+  // 날짜는 달력 낱장 칩으로 — 글자 한 줄은 스치지만, '물건'은 스치지 못한다.
+  //   회원이 날짜를 착각한 채 결제하는 사고를 막는 것이 목적이다.
+  var whenHtml = '';
   if(fp.length === 3){
     var yy = parseInt(fp[0],10), mo = parseInt(fp[1],10), dd = parseInt(fp[2],10);
-    whenTxt = _magMonShort(mo) + ' ' + dd + ' ' + _pcalWkNames()[new Date(yy, mo-1, dd).getDay()];
+    var dw = _pcalWkNames()[new Date(yy, mo-1, dd).getDay()];
+    whenHtml = '<div class="pd-datechip">'
+      + '<div class="cal"><span class="mo">' + _magMonShort(mo) + '</span>'
+      + '<span class="dd">' + dd + '</span>'
+      + '<span class="dw">' + dw + '</span></div>'
+      + '<div class="ti">'
+      + (t.time ? '<b>' + _pcalEsc(_pcalTime12(t.time)) + '</b>' : '')
+      + '<span>' + _magMonLabel(mo) + ' ' + dd + ', ' + yy + '</span>'
+      + '</div></div>';
+  } else if(t.time){
+    whenHtml = '<div class="pd-when">' + _pcalEsc(_pcalTime12(t.time)) + '</div>';
   }
-  if(t.time) whenTxt += (whenTxt ? ' · ' : '') + _pcalTime12(t.time);
 
   // 매장명 · 지역 · 장르 · 좌석
   var name = _pcalRestName(t);
@@ -39042,7 +39067,7 @@ function _pcalDetailHtml(t, r, dead, expired){
   h += '<div class="sh"></div></div>';
 
   h += '<div class="pd-body">';
-  if(whenTxt) h += '<div class="pd-when">' + _pcalEsc(whenTxt) + '</div>';
+  if(whenHtml) h += whenHtml;
   h += '<div class="pd-name">' + _pcalEsc(name) + '</div>';
   if(metaBits.length) h += '<div class="pd-meta">' + metaBits.join(', ') + '</div>';
 
