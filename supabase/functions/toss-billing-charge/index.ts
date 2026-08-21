@@ -209,6 +209,15 @@ serve(async (req) => {
         return json({ ok: false, error: 'seat_lost', refunded: canceled, orderId });
       }
 
+      // 🆕 구매 성공 → 슈퍼어드민 푸시 (toss-confirm 과 같은 규칙 — 카드 경로는
+      //   승인이 서버에서 끝나므로 서버가 보내야 한다)
+      notifyAdmins(admin, user.id, {
+        rest: String(meta.restaurant_name || '티켓'),
+        pax: Number(meta.pax || 0),
+        amount: cardPaid,
+        purchaseId: conv.purchaseId,
+      }).catch((e) => console.warn('[toss-billing-charge] 관리자 푸시 실패(구매는 정상):', e));
+
       return json({
         ok: true, orderId, amount: expected, purpose: 'ticket_topup',
         total, depositUsed: deductedDeposit, cardPaid,
@@ -359,5 +368,41 @@ async function cancelTossPayment(secretKey: string, paymentKey: string, reason: 
   } catch (e) {
     console.error('[toss-billing-charge] 결제 취소 실패', e);
     return false;
+  }
+}
+
+// ── 구매 알림 → 슈퍼어드민 (toss-confirm 과 동일) ────────────
+async function notifyAdmins(
+  admin: ReturnType<typeof createClient>,
+  buyerId: string,
+  info: { rest: string; pax: number; amount: number; purchaseId: string },
+) {
+  const base = Deno.env.get('SUPABASE_URL');
+  const key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+  if (!base || !key) return;
+  let who = '회원';
+  try {
+    const { data } = await admin.from('profiles').select('display_name').eq('id', buyerId).maybeSingle();
+    if (data && data.display_name) who = String(data.display_name);
+  } catch (_e) { /* 이름은 장식 — 못 읽어도 보낸다 */ }
+  const body = who + '님 · ' + info.rest + (info.pax ? ' · ' + info.pax + '인' : '')
+             + ' · \u20A9' + Number(info.amount || 0).toLocaleString() + ' (카드)';
+  for (const role of ['superadmin', 'super_admin']) {
+    try {
+      await fetch(base + '/functions/v1/send-push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
+        body: JSON.stringify({
+          to: 'role:' + role,
+          payload: {
+            title: '\uD83C\uDFAB ' + who + '님이 티켓을 구매했습니다',
+            body,
+            url: '/',
+            category: 'ticket_purchased',
+            tag: 'taam-tpurchase-' + info.purchaseId,
+          },
+        }),
+      });
+    } catch (_e) { /* 한쪽 실패해도 다른 쪽은 보낸다 */ }
   }
 }
