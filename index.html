@@ -25236,7 +25236,7 @@ function _thxKind(h){
 function _thxStatusMeta(h){
   var k = _thxKind(h);
   if(k === 'cancel')    return { label:'취소',      bg:'#FCE8E6', fg:'#C5221F' };
-  if(k === 'returned')  return { label:'반환',      bg:'#E0F2F1', fg:'#00695C' };
+  if(k === 'returned')  return { label:'반환',      bg:'#ECEAE4', fg:'#1a1a18' };
   if(k === 'refund')    return { label:'환불',      bg:'#FFF3E0', fg:'#B45309' };
   if(k === 'unknown')   return { label:'취소·기록없음', bg:'#EFEDE8', fg:'#6b6b6b' };
   if(k === 'used')      return { label:'사용완료', bg:'#E8F0FE', fg:'#1A56C4' };
@@ -25254,6 +25254,9 @@ function _thxRouteTag(h){
   return ['앱','#8a8580'];
 }
 
+var _thxPtxPid = {};   // purchase_id → 예치금 차감 합계 (ticket_purchase 거래)
+var _thxPtxInv = {};   // 초대 결제: invite_id 앞 8자 → 예치금 차감 합계
+
 async function renderTicketHistory(){
   var listEl = document.getElementById('thxList');
   if(listEl) listEl.innerHTML = '<div style="text-align:center;color:#9a9486;padding:40px 0;font-size:13px;">불러오는 중…</div>';
@@ -25263,30 +25266,71 @@ async function renderTicketHistory(){
     _thxAll = [];
     console.warn('[thx] 로드 실패:', e);
   }
-  // 🆕 2026.08: '결제 전 취소'(좌석 홀드 만료·결제창에서 이탈 등)는 목록에서 뺀다.
-  //   결제가 일어나지 않았으니 구매내역이 아니고, 실제 취소·환불 건을 파묻는다.
-  //   (취소 46건 중 대부분이 ₩0 홀드 잔여였다)
-  _thxAll = _thxAll.filter(function(h){ return !_thxIsUnpaidCancel(h); });
+  // 🆕 결제 원장(ticket_purchase 거래) — 「실제로 돈이 들어온 구매인가」와
+  //   「예치금으로 얼마를 냈나」의 근거. extra_data 는 카드 흐름에만 남아서 이걸로 보완한다.
+  _thxPtxPid = {}; _thxPtxInv = {};
+  try {
+    var _pr = await window.sb.from('deposit_transactions')
+      .select('amount, metadata')
+      .eq('change_type', 'ticket_purchase')
+      .order('created_at', { ascending: false }).limit(5000);
+    (_pr.data || []).forEach(function(r){
+      var m = r.metadata || {}; var a = Math.abs(parseInt(r.amount) || 0);
+      if(!a) return;
+      if(m.purchase_id) _thxPtxPid[m.purchase_id] = (_thxPtxPid[m.purchase_id] || 0) + a;
+      if(m.invite_id){ var k8 = String(m.invite_id).slice(0,8); _thxPtxInv[k8] = (_thxPtxInv[k8] || 0) + a; }
+    });
+  } catch(_pe){ console.warn('[thx] 결제 원장 로드 실패:', _pe); }
+  // 구매내역이 아닌 행 제외:
+  //   · 좌석 홀드(hold) · 초대 홀드 · 수동 좌석 연동 — 결제가 아니다
+  //   · 결제 미완 취소 — 카운트다운에서 이탈해 돈이 오간 적 없는 건 (사용자 정책: 기록에 안 남긴다)
+  _thxAll = _thxAll.filter(function(h){
+    if((h.status || '') === 'hold') return false;
+    var ex = h.extra_data || {};
+    if(ex.inviteHold || ex.manualEntry) return false;
+    return !_thxIsUnpaidCancel(h);
+  });
   // 구매일시(created_at) 최신순
   _thxAll.sort(function(a,b){ return String(b.date||'').localeCompare(String(a.date||'')); });
   thxRender();
 }
 
-// 회원이 실제로 지불한 금액 — 예치금 + 카드. 구형 데이터는 티켓가로 폴백.
-function _thxPaidTotal(h){
+// 결제 수단 분해 — 예치금만 / 예치금+카드 / 카드만, 각각 얼마 냈는지.
+//   ① extra_data.depositUsed / cardPaid (카드 흐름이 남김)
+//   ② 없으면 ticket_purchase 거래 합계 (예치금 흐름의 원장)
+//   둘 다 없으면 known=false — 돈이 들어온 기록이 없는 것이다.
+function _thxPayInfo(h){
   var ex = h.extra_data || {};
-  var paid = (parseInt(ex.depositUsed || 0) || 0) + (parseInt(ex.cardPaid || 0) || 0);
-  if(paid > 0) return paid;
-  return parseInt(h.amt || 0) || 0;
+  var card = parseInt(ex.cardPaid) || 0;
+  var dep = parseInt(ex.depositUsed) || 0;
+  var known = (card > 0 || dep > 0);
+  if(!dep){
+    var pid = String(h.purchaseId || '');
+    var fromTx = _thxPtxPid[pid] || (pid.indexOf('INV-') === 0 ? _thxPtxInv[pid.slice(4,12)] : 0) || 0;
+    if(fromTx > 0){ dep = fromTx; known = true; }
+  }
+  var label = (card > 0 && dep > 0) ? '예치금+카드' : (card > 0 ? '카드' : '예치금');
+  return { dep: dep, card: card, known: known, label: label };
 }
 
-// '결제 없이 취소된 행' 판정 — 보수적으로, 돈이 오간 흔적이 하나도 없을 때만 true.
-//   판정이 틀리면 진짜 취소건이 사라지므로 의심스러우면 남기는 쪽을 택한다.
+// 카드에 붙는 결제 수단 문구 — '예치금 ₩x' / '카드 ₩y' / '예치금 ₩x + 카드 ₩y'
+function _thxPayLine(h){
+  var pi = _thxPayInfo(h);
+  if(!pi.known) return '';
+  var pp = [];
+  if(pi.dep > 0) pp.push('예치금 ₩' + pi.dep.toLocaleString());
+  if(pi.card > 0) pp.push('카드 ₩' + pi.card.toLocaleString());
+  if(!pp.length) return '';
+  return ' · <span style="color:#8a8478;font-weight:700;">' + pp.join(' + ') + '</span>';
+}
+
+// '결제 없이 취소된 행' — 예치금 차감 기록도, 카드 결제도, 돌려준 돈도 없으면
+//   결제가 일어난 적이 없는 것이다 (카운트다운 이탈·홀드 만료 등).
 function _thxIsUnpaidCancel(h){
   if((h.status || '') !== 'cancelled') return false;
-  if(_thxPaidTotal(h) > 0) return false;
+  if(_thxPayInfo(h).known) return false;
   var dr = h.depositReturn;
-  if(dr && ((dr.returnAmt || 0) > 0 || (dr.penaltyAmt || 0) > 0)) return false;
+  if(dr && !dr._fromStatusOnly && ((dr.returnAmt || 0) > 0 || (dr.penaltyAmt || 0) > 0)) return false;
   return true;
 }
 
@@ -25337,7 +25381,7 @@ function thxRender(){
     }
     statsEl.style.flexWrap = 'wrap';
     statsEl.innerHTML = _stat(nAll,'전체','#1a1a18') + _stat(nActive,'사용예정','#137333') + _stat(nUsed,'사용완료','#1A56C4')
-      + _stat(nCancel,'취소','#C5221F') + _stat(nReturned,'반환','#00695C') + _stat(nRefund,'환불','#B45309');
+      + _stat(nCancel,'취소','#C5221F') + _stat(nReturned,'반환','#1a1a18') + _stat(nRefund,'환불','#B45309');
   }
 
   // 필터
@@ -25380,23 +25424,36 @@ function thxRender(){
       var dr = h.depositReturn;
       var parts = [];
       var headTag, headBg, headFg;
+      // 돌려준 돈을 경로별로 — 예치금으로 낸 몫은 예치금 환불, 카드로 낸 몫은 카드 취소.
+      //   dr.depositRefund/cardRefund 는 환불 거래에서 복원된 값. 없으면 returnAmt 통짜로 폴백.
+      var _cardR = parseInt(dr.cardRefund) || 0;
+      var _depR = (dr.depositRefund != null) ? (parseInt(dr.depositRefund) || 0)
+                : Math.max(0, (parseInt(dr.returnAmt) || 0) - _cardR);
+      function _backParts(word){
+        var o = [];
+        if(_depR > 0) o.push('예치금 ' + word + ' ₩' + _depR.toLocaleString());
+        if(_cardR > 0) o.push('카드 취소 ₩' + _cardR.toLocaleString() + (dr.cardRefundDone ? ' 완료' : ' 대기'));
+        if(!o.length && (dr.returnAmt||0) > 0) o.push(word + ' ₩' + (dr.returnAmt||0).toLocaleString());
+        return o;
+      }
       if(_kind === 'cancel'){
         var _gm = _thxCancelGraceMin(h);
         if(_gm === null){       headTag = '구매자 취소 · 시점 불명';   headBg = '#EFEDE8'; headFg = '#6b6b6b'; }
         else if(_gm <= 30){     headTag = '구매자 취소 · 30분 이내';   headBg = '#E6F4EA'; headFg = '#137333'; }
         else {                  headTag = '구매자 취소 · 30분 경과 후'; headBg = '#FCE8E6'; headFg = '#C5221F'; }
-        if(dr.returnAmt>0) parts.push('환불 ₩'+(dr.returnAmt||0).toLocaleString());
+        parts = parts.concat(_backParts('환불'));
         if(dr.penaltyAmt>0) parts.push('위약금 ₩'+(dr.penaltyAmt||0).toLocaleString()+(dr.penaltyPct?' ('+dr.penaltyPct+'%)':''));
         if(_gm !== null && _gm > 30 && !(dr.penaltyAmt>0)) parts.push('위약금 없음');
       } else if(_kind === 'returned'){
-        headTag = '반환 완료 (정상 방문)'; headBg = '#E0F2F1'; headFg = '#00695C';
-        if(dr.returnAmt>0) parts.push('반환 ₩'+(dr.returnAmt||0).toLocaleString());
+        headTag = '반환 완료 (정상 방문)'; headBg = '#ECEAE4'; headFg = '#1a1a18';
+        parts = parts.concat(_backParts('반환'));
         if(dr.agencyHeld>0) parts.push('대행비 차감 ₩'+(dr.agencyHeld||0).toLocaleString());
         if(dr.extraDeduct>0) parts.push('추가 차감 ₩'+(dr.extraDeduct||0).toLocaleString()+(dr.extraNote?' ('+dr.extraNote+')':''));
       } else if(_kind === 'refund'){
         headTag = '환불 처리 (방문 불발·특별 사유)'; headBg = '#FFF3E0'; headFg = '#B45309';
         var _full = (dr.returnAmt||0) >= (parseInt(h.amt)||0) && (parseInt(h.amt)||0) > 0;
-        parts.push(_full ? '전액 환불 ₩'+(dr.returnAmt||0).toLocaleString() : '환불 ₩'+(dr.returnAmt||0).toLocaleString());
+        if(_full) parts.push('전액 환불');
+        parts = parts.concat(_backParts('환불'));
         if(dr.penaltyAmt>0) parts.push('위약금 ₩'+(dr.penaltyAmt||0).toLocaleString()+(dr.penaltyPct?' ('+dr.penaltyPct+'%)':''));
         if(dr.agencyHeld>0) parts.push('대행비 차감 ₩'+(dr.agencyHeld||0).toLocaleString());
       } else {
@@ -25406,7 +25463,7 @@ function thxRender(){
       var noteStr = (dr.note && _kind==='refund') ? '<div style="font-size:11px;color:#8a8478;margin-top:3px;">사유: '+dr.note+'</div>' : '';
       refundLine = '<div style="margin-top:8px;padding-top:8px;border-top:1px dashed rgba(0,0,0,.08);font-size:12px;">'
         + '<span style="display:inline-block;padding:1px 7px;border-radius:999px;font-size:10.5px;font-weight:800;background:'+headBg+';color:'+headFg+';">'+headTag+'</span>'
-        + (parts.length ? '<span style="color:'+(_kind==='returned'?'#00695C':'#C5221F')+';font-weight:700;"> ↩︎ '+parts.join(' · ')+'</span>' : '')
+        + (parts.length ? '<span style="color:'+(_kind==='returned'?'#1a1a18':'#C5221F')+';font-weight:700;"> ↩︎ '+parts.join(' · ')+'</span>' : '')
         + dateStr + noteStr + '</div>';
     } else if(h.status==='cancelled'){
       refundLine = '<div style="margin-top:8px;padding-top:8px;border-top:1px dashed rgba(0,0,0,.08);font-size:12px;">'
@@ -25424,7 +25481,7 @@ function thxRender(){
         + '<div style="color:#9a9486;">'+visit+(h.pax||1)+'인</div>'
         + '<div style="font-weight:800;color:#1a1a18;">₩'+(h.amt||0).toLocaleString()+'</div>'
       + '</div>'
-      + '<div style="font-size:11.5px;color:#b5afa2;margin-top:5px;">구매 '+_thxFmtDateTime(h.date)+'</div>'
+      + '<div style="font-size:11.5px;color:#b5afa2;margin-top:5px;">구매 '+_thxFmtDateTime(h.date)+_thxPayLine(h)+'</div>'
       + refundLine
     + '</div>';
   }).join('');
@@ -25680,7 +25737,7 @@ async function mlOpen(uid){
       if(rt && rt.has){
         var lab = rt.rtype === 'penalty' ? ['환불','#B45309']
                 : rt.cancelRefund        ? ['취소','#B23A2E']
-                :                          ['반환','#2a6a2a'];
+                :                          ['반환','#1a1a18'];
         st = '<span style="font-size:11px;font-weight:800;color:' + lab[1] + ';margin-left:6px;">' + lab[0] + '</span>';
       } else if(rt && rt.cancelled){
         st = '<span style="font-size:11px;font-weight:800;color:#8a8580;margin-left:6px;">취소(기록 없음)</span>';
