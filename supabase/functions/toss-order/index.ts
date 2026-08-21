@@ -56,9 +56,18 @@ serve(async (req) => {
     const holdPurchaseId = String(body.holdPurchaseId || '').trim();
 
     if (!ticketId || pax <= 0) return json({ ok: false, error: 'missing_params' });
+    // ── 통화 검증 ──
+    //   해외 MID(playtaamusd / playtaamjpy)는 승인 완료. 단, 해당 MID 의 시크릿 키가
+    //   Secrets 에 등록돼 있어야 연다 — 키 없이 주문을 만들면 결제창 인증까지 마친 회원의
+    //   승인(confirm)이 실패해 "결제했는데 아무것도 안 됨" 이 된다.
     if (currency !== 'KRW') {
-      // 외화 MID 는 토스 승인 대기 중이다. 열 때 fx 환산을 여기 추가한다.
-      return json({ ok: false, error: 'currency_not_open', currency });
+      if (currency !== 'USD' && currency !== 'JPY') {
+        return json({ ok: false, error: 'currency_not_open', currency });
+      }
+      if (!Deno.env.get('TOSS_SECRET_KEY_' + currency)) {
+        console.warn('[toss-order] TOSS_SECRET_KEY_' + currency + ' 미등록 — 외화 주문 거부');
+        return json({ ok: false, error: 'currency_not_open', currency });
+      }
     }
 
     const authHeader = req.headers.get('Authorization') || '';
@@ -210,14 +219,40 @@ serve(async (req) => {
       return json({ ok: true, needPayment: false, total, balance });
     }
 
+    // ── ⑤-2 외화 환산 (USD / JPY) ──
+    //   설계(docs/TOSS_GOLIVE.md): 한 주문 안에 「얼마를 승인했나(amount·currency)」와
+    //   「얼마를 적립했나(settle_krw)」를 각각 자기 통화로 고정한다. 주문 시점의
+    //   적용환율을 metadata.fx 에 얼려두므로 이후 환율이 움직여도 이 주문은 변하지 않는다.
+    //   환산은 반드시 서버가 한다 — 브라우저 값을 믿으면 $1 결제하고 수백만 원 적립이 가능하다.
+    //   올림(ceil)으로 외화 정수 금액을 만든다 — 회원이 정가보다 덜 내는 일이 없게.
+    let payAmount = shortage;
+    let fxMeta: Record<string, unknown> | null = null;
+    if (currency !== 'KRW') {
+      const { data: fxRow } = await admin.from('app_config')
+        .select('value').eq('key', 'fx_settings').maybeSingle();
+      const fx = (fxRow?.value || {}) as Record<string, unknown>;
+      const base = Number(fx.base_rate || 0);
+      const margin = Number(fx.margin_pct || 0);
+      // JPY 는 통화별 기준율(rate_jpy, KRW per 1 JPY)이 설정돼 있어야 연다
+      const rateRaw = currency === 'USD' ? base : Number(fx.rate_jpy || 0);
+      const applied = rateRaw * (1 - margin / 100);
+      if (!(applied > 0)) {
+        console.warn('[toss-order] 환율 미설정 — 외화 주문 거부', currency, fx);
+        return json({ ok: false, error: 'currency_not_open', currency, reason: 'fx_not_set' });
+      }
+      payAmount = Math.ceil(shortage / applied);
+      if (payAmount < 1) payAmount = 1;
+      fxMeta = { base_rate: rateRaw, margin_pct: margin, applied_rate: applied, shortage_krw: shortage };
+    }
+
     // ── ⑥ 주문 생성 ──
     const orderId = 'taamtkt_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
     const { error: oErr } = await admin.from('payment_orders').insert({
       order_id: orderId,
       user_id: user.id,
       purpose: 'ticket_topup',
-      amount: shortage,
-      currency: 'KRW',
+      amount: payAmount,
+      currency,
       settle_krw: shortage,
       status: 'pending',
       metadata: {
@@ -231,6 +266,7 @@ serve(async (req) => {
         // 승인 후 이 홀드를 실제 구매로 전환한다
         hold_purchase_id: holdPurchaseId || null,
         deposit_used: Math.max(0, total - shortage),
+        ...(fxMeta ? { fx: fxMeta } : {}),
       },
     });
 
@@ -243,8 +279,9 @@ serve(async (req) => {
       ok: true,
       needPayment: true,
       orderId,
-      amount: shortage,
-      currency: 'KRW',
+      amount: payAmount,
+      currency,
+      settleKrw: shortage,
       total,
       balance,
     });

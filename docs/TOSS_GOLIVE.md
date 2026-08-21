@@ -151,15 +151,20 @@ from public.profiles where id = auth.uid();
 
 ## 미구현 (다음 단계)
 
-- **해외 통화 결제 (USD / JPY)** — MID 는 개설됐지만 토스 승인 대기 중이라 키를 넣지 않았다.
-  승인되면 아래만 하면 된다. **원장 구조는 바꾸지 않는다.**
+- **해외 통화 결제 (USD / JPY)** — ✅ 2026.08.21 토스 승인 완료, 코드 반영됨. **원장 구조는 안 바꿨다.**
 
-  | 할 일 | 내용 |
+  구현된 구조 (toss-order / toss-confirm):
+  | 항목 | 내용 |
   |---|---|
-  | `TOSS_KEYS.USD` | MID `playtaamusd` 의 개별 연동 키(`live_ck_`) 입력 |
-  | 주문 생성 | `currency:'USD'`, `amount` 는 달러 금액. `settle_krw` 는 화면 표시용으로만 넣는다 |
-  | 적립 | `toss-confirm` 의 `convertToKrw()` 가 `app_config.fx_settings` 로 **서버에서 다시 계산**한다 |
-  | JPY | `fx_settings` 에 통화별 기준율을 추가하고 `convertToKrw()` 에 분기 추가 (지금은 명시적으로 거부) |
+  | `TOSS_KEYS.USD/JPY` | 각 MID(`playtaamusd`/`playtaamjpy`)의 클라이언트 키 입력됨 |
+  | 주문 생성 | `toss-order` 가 부족분(KRW)을 서버에서 외화로 환산(올림) — `amount`=외화, `settle_krw`=원화, `metadata.fx`=적용환율 스냅샷 |
+  | 승인 | `toss-confirm` 이 주문 통화별 시크릿(`TOSS_SECRET_KEY_USD`/`_JPY`)으로 승인, 원화 정산은 `settle_krw` 로 |
+  | JPY | 환율 설정 화면의 「엔화 기준율(KRW/1 JPY)」이 비어 있으면 JPY 주문 거부 → KRW 폴백 |
+  | 폴백 | 시크릿 미등록·환율 미설정 등 `currency_not_open` 이면 클라이언트가 KRW 로 자동 재시도 |
+
+  **남은 운영 절차**: ① Secrets 에 `TOSS_SECRET_KEY_USD` · `TOSS_SECRET_KEY_JPY` 등록
+  ② `toss-order` · `toss-confirm` 재배포 ③ (JPY) 환율 설정에 엔화 기준율 입력
+  ④ 언어를 EN/JA 로 바꾼 슈퍼어드민 계정으로 실결제 1건 검증
 
   설계 요지 — 한 주문 안에 **"얼마를 승인했나(amount·currency)"** 와
   **"얼마를 적립했나(settle_krw)"** 를 각각 자기 통화로 고정한다.
