@@ -45854,15 +45854,31 @@ async function setupNativePush(){
       try {
         if (!window.sb) return;
         var { data: { user } } = await window.sb.auth.getUser();
-        await window.sb.from('push_subscriptions').upsert({
+        // ⚠ role 을 반드시 채운다 — send-push 의 role:superadmin 타깃은
+        //   push_subscriptions.role 로 거른다. 네이티브 등록이 role 없이 저장돼서,
+        //   앱 재설치·TestFlight 갱신으로 APNs 토큰이 바뀔 때마다 새 행이 role=null 로
+        //   생겼고, 슈퍼어드민이 구매 알림에서 조용히 빠졌다 (웹 구독만 role 을 넣고 있었다).
+        var _rl = (typeof _currentRole !== 'undefined' && _currentRole) ? _currentRole : null;
+        if (!_rl && user) {
+          try {
+            var _pr = await window.sb.from('profiles').select('role').eq('id', user.id).maybeSingle();
+            _rl = (_pr.data && _pr.data.role) || null;
+          } catch(_e){}
+        }
+        var _payload = {
           user_id: user ? user.id : null,
           endpoint: endpoint,
           p256dh: '',
           auth: '',
           user_agent: 'capacitor-' + platform,
-          device_label: platform === 'ios' ? 'iPhone' : 'Android'
-        }, { onConflict: 'endpoint' });
-        console.log('[native-push] 구독 저장 완료');
+          device_label: platform === 'ios' ? 'iPhone' : 'Android',
+          role: _rl,
+          topics: []
+        };
+        // 웹 구독과 같은 저장 경로(RPC 우선, RLS 우회) — 저장 규칙이 갈리면 또 어긋난다
+        if (typeof _pushSaveSub === 'function') await _pushSaveSub(_payload);
+        else await window.sb.from('push_subscriptions').upsert(_payload, { onConflict: 'endpoint' });
+        console.log('[native-push] 구독 저장 완료 role=' + (_rl || '-'));
       } catch(e){ console.error('[native-push] save fail', e); }
     });
 
