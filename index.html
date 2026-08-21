@@ -25451,7 +25451,7 @@ async function mlOpen(uid){
       .select('created_at, deposit_type, change_type, amount, balance_after, description, metadata')
       .eq('user_id', uid).order('created_at', { ascending: false }).limit(500),
     window.sb.from('tickets')
-      .select('created_at, restaurant_name, party_size, price, status, reservation_date, visit_time, purchase_id')
+      .select('created_at, restaurant_name, party_size, price, status, reservation_date, visit_time, purchase_id, extra_data')
       .eq('user_id', uid).order('created_at', { ascending: false }).limit(300)
   ]);
   var u = pf.data || {};
@@ -25471,6 +25471,23 @@ async function mlOpen(uid){
   });
   var balNow = (parseInt(u.membership_deposit_balance)||0) + (parseInt(u.general_deposit_balance)||0);
 
+  // 대행비 — 스냅샷은 1인 기준(extra_data.agencyFee)이라 인원을 곱한다.
+  //   대행비는 취소돼도 돌려주지 않는 규정이므로 취소 건도 누적에 포함한다.
+  function _agencyOf(t){
+    var per = parseInt(t.extra_data && t.extra_data.agencyFee) || 0;
+    return per * (parseInt(t.party_size) || 1);
+  }
+  var agencyTotal = 0;
+  buys.forEach(function(t){ agencyTotal += _agencyOf(t); });
+
+  // 위약·노쇼 차감 — 취소로 낸 돈 중 돌려받지 못한 몫.
+  //   취소 건 결제 합계에서 환불 합계를 뺀다 (규정상 대행비·수수료가 여기 남는다).
+  var cancelledPaid = 0;
+  buys.forEach(function(t){
+    if(t.status === 'cancelled' || t.status === 'canceled') cancelledPaid += (parseInt(t.price)||0);
+  });
+  var penalty = Math.max(0, cancelledPaid - refunded);
+
   var h = '';
   h += '<div style="border-top:2px solid #1a1a18;padding-top:14px;">';
   h += '<div style="font-size:16px;font-weight:800;color:#1a1a18;">' + _pcalEsc(u.display_name || '(이름 없음)') + '</div>';
@@ -25489,12 +25506,18 @@ async function mlOpen(uid){
      + card('누적 부여', granted, '#2a6a2a')
      + card('누적 사용', used)
      + '</div>';
-  h += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;">'
+  h += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:4px;">'
      + card('누적 환불', refunded, '#2a6a2a')
      + card('관리 차감', deducted, '#B23A2E')
      + '<div style="flex:1;min-width:96px;background:#faf8f4;border:1px solid #eee5d8;border-radius:10px;padding:9px 10px;">'
      + '<div style="font-size:9.5px;color:#8a8580;">구매 횟수</div>'
      + '<div style="font-size:13.5px;font-weight:800;color:#1a1a18;margin-top:3px;">' + buys.length + '건</div></div>'
+     + '</div>';
+  // 대행비는 매출 성격이 달라 색을 갈라 둔다(골드). 위약·노쇼는 빨강 — 회원과 다툼이 생기는 돈이라 눈에 띄어야 한다.
+  h += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;">'
+     + card('누적 대행비', agencyTotal, '#A07E3B')
+     + card('위약·노쇼 차감', penalty, '#B23A2E')
+     + '<div style="flex:1;min-width:96px;"></div>'
      + '</div>';
 
   // ── 구매 내역 ──
@@ -25503,16 +25526,22 @@ async function mlOpen(uid){
     h += '<div style="font-size:12px;color:#a8a29a;padding:8px 2px;">구매 내역 없음</div>';
   } else {
     buys.forEach(function(t){
+      var isCancel = (t.status === 'cancelled' || t.status === 'canceled');
       var st = t.status === 'active' ? '' :
-        '<span style="font-size:9.5px;font-weight:800;color:' + (t.status === 'canceled' ? '#B23A2E' : '#8a8580') + ';margin-left:6px;">'
-        + (t.status === 'canceled' ? '취소' : _pcalEsc(String(t.status))) + '</span>';
+        '<span style="font-size:9.5px;font-weight:800;color:' + (isCancel ? '#B23A2E' : '#8a8580') + ';margin-left:6px;">'
+        + (isCancel ? '취소' : _pcalEsc(String(t.status))) + '</span>';
+      var ag = _agencyOf(t);
       h += '<div style="padding:9px 2px;border-bottom:1px solid #eee7dc;">'
         + '<div style="display:flex;justify-content:space-between;">'
         + '<span style="font-size:12.5px;font-weight:700;color:#1a1a18;">' + _pcalEsc(t.restaurant_name || '티켓') + st + '</span>'
         + '<span style="font-size:12.5px;font-weight:700;">\u20A9' + (parseInt(t.price)||0).toLocaleString() + '</span></div>'
-        + '<div style="font-size:10.5px;color:#8a8580;margin-top:3px;">구매 ' + _mlDate(t.created_at)
+        + '<div style="display:flex;justify-content:space-between;font-size:10.5px;color:#8a8580;margin-top:3px;">'
+        + '<span>구매 ' + _mlDate(t.created_at)
         + (t.reservation_date ? ' · 방문 ' + _pcalEsc(String(t.reservation_date)) + (t.visit_time ? ' ' + _pcalEsc(String(t.visit_time)) : '') : '')
-        + (t.party_size ? ' · ' + t.party_size + '인' : '') + '</div>'
+        + (t.party_size ? ' · ' + t.party_size + '인' : '') + '</span>'
+        + (ag > 0 ? '<span style="color:#A07E3B;font-weight:700;">대행비 \u20A9' + ag.toLocaleString() + '</span>' : '')
+        + '</div>'
+        + (isCancel ? '<div style="font-size:10px;color:#B23A2E;margin-top:2px;">취소 건 — 규정 차감분은 환불에서 제외</div>' : '')
         + '</div>';
     });
   }
