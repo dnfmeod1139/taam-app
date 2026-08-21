@@ -915,12 +915,13 @@ html.auto-login .splash .bottom-group{display:none !important}
   line-height:1.18;margin-top:9px;color:var(--d-strong)}
 #pcalDetail .pd-meta{margin-top:9px;font-size:11.5px;color:var(--d-sub);letter-spacing:.03em}
 /* 탭 — 바텀시트를 없애고 매장명 바로 아래로 올렸다. 구매하기를 한 번 더 누를 일이 없다. */
-/* 탭 이름이 길어지면(일어 번역 등) 화면보다 넓어질 수 있다.
-   그때 페이지 전체가 옆으로 밀리지 않게, 넘친 만큼은 탭 줄 안에서만 긁힌다.
-   sticky — 내용을 내려도 탭 세 개는 화면 위에 남는다. 지도·안내로 오가는 길이
-   스크롤 위치와 상관없이 늘 손 닿는 곳에 있어야 한다. */
-#pcalDetail .pd-tabs{display:flex;border-bottom:1px solid var(--d-line);margin-top:20px;
-  position:sticky;top:0;z-index:6;background:var(--d-bg);
+/* 탭 고정 — 바깥 틀(pd-tabswrap)이 붙고, 안쪽(pd-tabs)이 가로로 긁힌다.
+   한 요소에 sticky 와 overflow 를 같이 주면 iOS 가 고정을 흔든다 — 그래서 나눈다.
+   붙는 위치는 0 이 아니라 44px — 0 에 붙이면 위의 투명한 TAAM 헤더(그라디언트+로고)
+   아래로 미끄러져 들어가 글자가 반쯤 먹힌다. 로고 줄 바로 아래에 앉힌다. */
+#pcalDetail .pd-tabswrap{position:sticky;top:calc(44px + env(safe-area-inset-top));
+  z-index:5;background:var(--d-bg);margin-top:20px}
+#pcalDetail .pd-tabs{display:flex;border-bottom:1px solid var(--d-line);
   overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}
 #pcalDetail .pd-tabs::-webkit-scrollbar{display:none}
 #pcalDetail .pd-tabs>div{white-space:nowrap;flex:none}
@@ -39044,11 +39045,11 @@ function _pcalDetailHtml(t, r, dead, expired){
   if(metaBits.length) h += '<div class="pd-meta">' + metaBits.join(', ') + '</div>';
 
   // ── 탭 3개 — 바텀시트를 없애고 여기로 올렸다 ──
-  h += '<div class="pd-tabs">';
+  h += '<div class="pd-tabswrap"><div class="pd-tabs">';
   ['결제내역 및 취소규정','지도','티켓 조건 및 레스토랑 정보'].forEach(function(nm, i){
     h += '<div class="' + (i === 0 ? 'on' : '') + '" data-tab="' + i + '" onclick="pcalTab(' + i + ')">' + nm + '</div>';
   });
-  h += '</div>';
+  h += '</div></div>';
 
   h += '<div class="pd-panel" id="pdPanel0">' + _pcalPayPanel(t, r, dead) + '</div>';
   h += '<div class="pd-panel" id="pdPanel1" style="display:none;">' + _pcalMapPanel(t, r) + '</div>';
@@ -39654,10 +39655,10 @@ function magOpenDay(y, m, d){
 window.magOpenDay = magOpenDay;
 
 function magGoTicket(id){
-  magSheetTo(1);
-  setTimeout(function(){
-    if(typeof pcalOpenTicket === 'function') pcalOpenTicket(id);
-  }, 140);
+  // 시트는 건드리지 않는다 — 상세를 닫고 나오면 들어가기 전 그대로(전체 캘린더/목록)
+  //   여야 한다. 예전엔 중간(52vh)으로 줄여 두어서, 닫고 나오면 위가 뻥 뚫린
+  //   반쪽 시트가 보였다.
+  if(typeof pcalOpenTicket === 'function') pcalOpenTicket(id);
 }
 window.magGoTicket = magGoTicket;
 
