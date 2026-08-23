@@ -17196,6 +17196,15 @@ function openAdminDepositGrant(){
   document.getElementById('adgSearchInput').value = '';
   document.getElementById('adgAmount').value = '';
   document.getElementById('adgDescription').value = '';
+  // 통화는 항상 원화로 초기화 (외화는 명시적으로 골라야만)
+  _adgCur = 'KRW';
+  document.querySelectorAll('#adminDepositGrantModal .adg-cur').forEach(function(b){
+    var on = b.getAttribute('data-cur') === 'KRW';
+    b.style.background = on ? '#1a1a18' : '#fff';
+    b.style.borderColor = on ? '#1a1a18' : '#e0ddd8';
+    b.style.color = on ? '#fff' : '#666';
+  });
+  var _fxPv = document.getElementById('adgFxPreview'); if(_fxPv) _fxPv.style.display = 'none';
   document.getElementById('adgSearchResults').innerHTML = '<div style="padding:14px;color:#bbb;font-size:11px;text-align:center;">이름·전화·이메일 키워드로 회원/관리자를 검색하세요</div>';
   document.getElementById('adgSelectedUserInfo').style.display = 'none';
   // 일반 예치금 기본 선택
@@ -17697,8 +17706,66 @@ function adgFmtAmount(inp){
   var neg = raw.trim().charAt(0) === '-';
   var digits = raw.replace(/[^0-9]/g, '').replace(/^0+(?=\d)/, '');
   inp.value = digits ? ((neg ? '-' : '') + parseInt(digits, 10).toLocaleString()) : (neg ? '-' : '');
+  if (typeof _adgFxPreview === 'function') _adgFxPreview();
 }
 window.adgFmtAmount = adgFmtAmount;
+
+// ── 🆕 외화 송금 예치금 부여 — 환전 이익률을 시스템으로 통일 ──
+//   달러·엔 송금을 받고 예치금을 줄 때, 사람이 그때그때 환율을 계산하면 마진이
+//   빠지거나 회원마다 환율이 달라진다. 카드 결제와 같은 적용환율
+//   (기준율 × (1 − 마진%), fx_settings)로 서버 기록까지 남긴다.
+var _adgCur = 'KRW';
+
+// 통화별 적용환율 (KRW per 1 단위). 0 이면 그 통화는 못 쓴다.
+function _adgFxRate(cur){
+  if (cur === 'KRW') return 1;
+  var m = parseFloat(FX.margin_pct) || 0;
+  var base = cur === 'USD' ? (parseFloat(FX.base_rate) || 0) : (parseFloat(FX.rate_jpy) || 0);
+  var r = base * (1 - m / 100);
+  return r > 0 ? r : 0;
+}
+
+function adgSetCur(cur, btn){
+  if (cur !== 'KRW' && _adgFxRate(cur) <= 0) {
+    showToast('⚠', cur === 'JPY' ? '엔화 기준율 미설정' : '환율 미설정',
+      '어드민 메뉴 → 💱 환율 설정에서 기준율을 먼저 입력해주세요');
+    return;
+  }
+  _adgCur = cur;
+  document.querySelectorAll('#adminDepositGrantModal .adg-cur').forEach(function(b){
+    var on = b.getAttribute('data-cur') === cur;
+    b.style.background = on ? '#1a1a18' : '#fff';
+    b.style.borderColor = on ? '#1a1a18' : '#e0ddd8';
+    b.style.color = on ? '#fff' : '#666';
+  });
+  var inp = document.getElementById('adgAmount');
+  if (inp) inp.placeholder = cur === 'USD' ? '받은 달러 금액 — 예: 1,000'
+                          : cur === 'JPY' ? '받은 엔 금액 — 예: 100,000'
+                          : '예: 100,000  또는  -50,000';
+  _adgFxPreview();
+}
+window.adgSetCur = adgSetCur;
+
+// 외화 금액 → 부여될 원화 미리보기
+function _adgFxPreview(){
+  var box = document.getElementById('adgFxPreview');
+  if (!box) return;
+  if (_adgCur === 'KRW') { box.style.display = 'none'; return; }
+  var inp = document.getElementById('adgAmount');
+  var v = parseInt(String((inp && inp.value) || '').replace(/[^0-9-]/g, ''), 10) || 0;
+  var r = _adgFxRate(_adgCur);
+  var sym = _adgCur === 'USD' ? '$' : '¥';
+  if (!v || r <= 0) {
+    box.style.display = 'block';
+    box.innerHTML = '적용환율 <b>' + (r > 0 ? r.toFixed(2) : '미설정') + '</b> — ' + sym + ' 금액을 입력하면 원화가 계산됩니다';
+    return;
+  }
+  var krw = Math.round(v * r);
+  box.style.display = 'block';
+  box.innerHTML = sym + Math.abs(v).toLocaleString() + ' × 적용환율 ' + r.toFixed(2)
+    + ' = <b>₩' + Math.abs(krw).toLocaleString() + '</b> ' + (v > 0 ? '부여' : '차감');
+}
+window._adgFxPreview = _adgFxPreview;
 
 async function adgSubmit(){
   if (!_adgIsSuperAdmin()){
@@ -17715,9 +17782,24 @@ async function adgSubmit(){
     alert('② 금액을 정확히 입력해주세요 (음수면 차감).');
     return;
   }
+  // 🆕 외화 모드 — 입력값은 받은 외화 금액. 적용환율로 원화 환산해 부여한다.
+  //   환율·마진은 카드 결제와 같은 fx_settings 하나로 통일 — 접점마다 이익률이 달라지지 않게.
+  var _fxInfo = null;
+  if (_adgCur !== 'KRW') {
+    var _fr = _adgFxRate(_adgCur);
+    if (_fr <= 0){ alert('환율이 설정되지 않았습니다 — 어드민 메뉴 → 💱 환율 설정 확인'); return; }
+    // 환율은 소수 4자리로 기록 — 엔화(9.071 등)는 2자리로 끊으면 기록과 계산이 어긋난다
+    _fxInfo = { fx_currency: _adgCur, fx_amount: amount, fx_rate: Math.round(_fr * 10000) / 10000 };
+    amount = Math.round(amount * _fr);
+  }
   var depositTypeEl = document.querySelector('input[name="adgDepositType"]:checked');
   var depositType = depositTypeEl ? depositTypeEl.value : 'general';
   var description = document.getElementById('adgDescription').value.trim() || '슈퍼어드민 수동 부여';
+  if (_fxInfo) {
+    var _fxSym = _fxInfo.fx_currency === 'USD' ? '$' : '¥';
+    // 원장·회원 내역에 환산 근거가 그대로 남는다 — 나중에 "왜 이 금액이냐" 를 설명할 수 있게
+    description += ' — 송금 ' + _fxSym + Math.abs(_fxInfo.fx_amount).toLocaleString() + ' × 적용환율 ' + _fxInfo.fx_rate;
+  }
 
   var actionText = amount > 0 ? '지급' : '차감';
   var typeText = depositType === 'membership' ? '멤버십' : '일반';
@@ -17728,6 +17810,7 @@ async function adgSubmit(){
     '대상: ' + (_adgSelectedUser.display_name || _adgSelectedUser._inviteeName || '(이름 없음)') + '\n' +
     '구분: ' + typeText + ' 예치금\n' +
     '금액: ₩' + Math.abs(amount).toLocaleString() + ' ' + actionText + '\n' +
+    (_fxInfo ? ('송금: ' + (_fxInfo.fx_currency === 'USD' ? '$' : '¥') + Math.abs(_fxInfo.fx_amount).toLocaleString() + ' × ' + _fxInfo.fx_rate + '\n') : '') +
     '사유: ' + description + '\n\n' +
     '진행하시겠습니까?';
 
@@ -17737,7 +17820,9 @@ async function adgSubmit(){
     var btn = document.querySelector('#adminDepositGrantModal button[onclick="adgSubmit()"]');
     if (btn){ btn.disabled = true; btn.textContent = '처리 중...'; }
 
+    window._adgFxMeta = _fxInfo;   // adminGrantDeposit 의 metadata 에 실린다
     var result = await adminGrantDeposit(_adgSelectedUser.id, amount, depositType, description);
+    window._adgFxMeta = null;
 
     if (typeof showToast === 'function') {
       showToast('✅','예치금 ' + actionText + ' 완료', '새 잔액: ₩' + result.newBalance.toLocaleString());
@@ -17813,11 +17898,11 @@ async function adminGrantDeposit(targetUserId, amount, depositType, description)
     amount: amount,
     balance_after: newBalance,
     description: description,
-    metadata: {
+    metadata: Object.assign({
       granted_by: caller.id,
       granted_by_name: caller.user_metadata && caller.user_metadata.display_name || null,
       granted_at: new Date().toISOString()
-    }
+    }, window._adgFxMeta || {})
   });
   if (trxRes.error) {
     console.error('[adg] transaction insert 실패:', trxRes.error);
@@ -51622,7 +51707,15 @@ IDB.get('splashSettings').then(function(s) {
 
     <!-- 2단계: 금액 -->
     <div style="font-size:11px;color:#666;margin-bottom:8px;font-weight:700;letter-spacing:.05em;" data-i18n="admin.deposit_grant_amount_label">② 금액 (음수면 차감)</div>
-    <input type="text" id="adgAmount" inputmode="numeric" placeholder="예: 100,000  또는  -50,000" oninput="adgFmtAmount(this)" style="width:100%;padding:12px 14px;border:1.5px solid #e0ddd8;border-radius:8px;font-size:15px;outline:none;margin-bottom:16px;box-sizing:border-box;font-family:'Oswald',sans-serif;font-weight:700;letter-spacing:.02em;">
+    <!-- 🆕 외화 송금 부여 — 받은 통화로 입력하면 적용환율(카드 결제와 동일 마진)로 원화 자동 계산 -->
+    <div style="display:flex;gap:6px;margin-bottom:8px;">
+      <button type="button" class="adg-cur adg-cur-on" data-cur="KRW" onclick="adgSetCur('KRW',this)" style="flex:1;padding:9px 0;border:1.5px solid #1a1a18;border-radius:8px;background:#1a1a18;color:#fff;font-size:12px;font-weight:800;cursor:pointer;">₩ 원화</button>
+      <button type="button" class="adg-cur" data-cur="USD" onclick="adgSetCur('USD',this)" style="flex:1;padding:9px 0;border:1.5px solid #e0ddd8;border-radius:8px;background:#fff;color:#666;font-size:12px;font-weight:800;cursor:pointer;">$ 달러</button>
+      <button type="button" class="adg-cur" data-cur="JPY" onclick="adgSetCur('JPY',this)" style="flex:1;padding:9px 0;border:1.5px solid #e0ddd8;border-radius:8px;background:#fff;color:#666;font-size:12px;font-weight:800;cursor:pointer;">¥ 엔</button>
+    </div>
+    <input type="text" id="adgAmount" inputmode="numeric" placeholder="예: 100,000  또는  -50,000" oninput="adgFmtAmount(this)" style="width:100%;padding:12px 14px;border:1.5px solid #e0ddd8;border-radius:8px;font-size:15px;outline:none;margin-bottom:6px;box-sizing:border-box;font-family:'Oswald',sans-serif;font-weight:700;letter-spacing:.02em;">
+    <div id="adgFxPreview" style="display:none;font-size:12px;color:#5C0A14;font-weight:700;margin-bottom:12px;padding:8px 12px;background:#faf6ef;border:1px solid #eee0c8;border-radius:8px;"></div>
+    <div style="height:10px;"></div>
 
     <!-- 3단계: 예치금 종류 -->
     <div style="font-size:11px;color:#666;margin-bottom:8px;font-weight:700;letter-spacing:.05em;" data-i18n="admin.deposit_grant_type_label">③ 예치금 종류</div>
