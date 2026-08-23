@@ -6228,30 +6228,98 @@ function fxAgencyKrw(t){
 //   opts.exact    : true 면 '≈' 를 붙이지 않는다 (정액 요율)
 //   opts.step     : 올림 단위 (기본 FX.step_usd)
 //   opts.usdOnly  : true 면 USD 만 반환
+// 교차환율 (USD → JPY). 적용환율끼리 나누면 마진이 상쇄돼 순수 교차환율이 된다.
+function _fxCross(){
+  var b = parseFloat(FX.base_rate) || 0, j = parseFloat(FX.rate_jpy) || 0;
+  return j > 0 ? b / j : 0;
+}
+
+// 🆕 해외 회원은 원화를 숨긴다 — 한국 정가와 나란히 비교되지 않게 (확정 정책 2026.08.22).
+//   확정값(opts.jpy / exact usd)은 그대로, 환산값은 ≈ 를 붙인다. 실제 청구는 서버가 계산.
 function fxMoney(krw, opts){
   opts = opts || {};
   var n = parseInt(krw, 10) || 0;
   var won = '₩' + n.toLocaleString();
   var dc = _fxDispCur();
   if (!dc) return won;
+  if (dc === 'JPY') {
+    if (opts.jpy != null) return '¥' + parseInt(opts.jpy, 10).toLocaleString();   // 확정 정가
+    var rj = fxRateJpy();
+    var yen = (opts.usd != null)
+      ? Math.round(parseInt(opts.usd, 10) * _fxCross() / 1000) * 1000    // $정액 → 교차환율 파생
+      : (rj > 0 ? Math.ceil(n / rj / 1000) * 1000 : 0);                  // 원화 → 엔 (¥1,000 올림)
+    if (!(yen > 0)) return won;
+    return '≈ ¥' + yen.toLocaleString();
+  }
   var usd = (opts.usd != null) ? parseInt(opts.usd, 10)
                                : fxUsd(n, opts.step != null ? opts.step : FX.step_usd);
   if (usd == null) return won;
-  if (dc === 'JPY') {
-    // 엔 병기 — 달러 표시값에서 크로스 환율로 파생 (마진은 분자·분모에서 상쇄돼 순수 교차환율)
-    //   확정 요율이 아니므로 전부 '≈' 로 표시하고 ¥100 으로 반올림한다. 실제 청구는 서버가 계산.
-    var cross = (parseFloat(FX.base_rate) || 0) / (parseFloat(FX.rate_jpy) || 1);
-    var yen = Math.round(usd * cross / 100) * 100;
-    if (!(yen > 0)) return won;
-    var ys = '≈ ¥' + yen.toLocaleString();
-    if (opts.usdOnly) return ys;
-    return won + ' <span class="fx-usd">' + ys + '</span>';
-  }
-  var mark = opts.exact ? '$' : '≈ $';
-  var us = mark + usd.toLocaleString();
-  if (opts.usdOnly) return us;
-  return won + ' <span class="fx-usd">' + us + '</span>';
+  return (opts.exact ? '$' : '≈ $') + usd.toLocaleString();
 }
+
+// ── 티켓 해외 정가 (ticket_products.ovs_prices) ──
+//   확정값이 있으면 그 값이 정가다. 없으면 환산(≈) 폴백.
+function _fxTicketFixed(t, comp, dc){
+  var op = t && (t.ovsPrices || t.ovs_prices);
+  var cur = dc === 'JPY' ? 'jpy' : 'usd';
+  var v = op && op[cur] && op[cur][comp];
+  if (v != null && v !== '' && parseInt(v, 10) > 0) return parseInt(v, 10);
+  // 레거시: 해외 대행비 예외(USD)
+  if (dc !== 'JPY' && comp === 'agency') {
+    var ov = t && t.overseasAgencyUsd;
+    if (ov != null && String(ov) !== '' && parseInt(ov, 10) > 0) return parseInt(ov, 10);
+  }
+  return null;
+}
+
+// 구성요소의 1인 금액(표시 통화) + 확정 여부
+function _fxCompNum(t, comp, krwPer, dc){
+  var fixed = _fxTicketFixed(t, comp, dc);
+  if (fixed != null) return { v: fixed, fixed: true };
+  if (comp === 'agency') {
+    var u = fxAgencyUsd(t);   // $정액 규칙 (₩÷1,000) — 달러에선 확정 취급
+    if (dc === 'USD') return { v: u, fixed: true };
+    return { v: Math.round(u * _fxCross() / 1000) * 1000, fixed: false };
+  }
+  var krw = parseInt(krwPer, 10) || 0;
+  if (!krw) return { v: 0, fixed: true };
+  if (dc === 'USD') return { v: fxUsd(krw, FX.step_usd) || 0, fixed: false };
+  var rj = fxRateJpy();
+  return { v: rj > 0 ? Math.ceil(krw / rj / 1000) * 1000 : 0, fixed: false };
+}
+
+// 결제 상세 한 줄 (식사비/대행비/주류) — 해외 회원은 확정 정가 우선, 원화 숨김
+function fxTicketComp(t, comp, krwPer, pax){
+  var n = pax || 1;
+  var krw = (parseInt(krwPer, 10) || 0) * n;
+  var dc = _fxDispCur();
+  if (!dc) return '₩' + krw.toLocaleString();
+  var r = _fxCompNum(t, comp, krwPer, dc);
+  if (!(r.v > 0)) return '₩' + krw.toLocaleString();
+  var sym = dc === 'JPY' ? '¥' : '$';
+  return (r.fixed ? '' : '≈ ') + sym + (r.v * n).toLocaleString();
+}
+
+// 합계 — 항목 숫자의 합과 정확히 일치시킨다 (전 항목 확정이면 ≈ 없이)
+function fxTicketTotal(t, pax, meal, wine, krwTotal){
+  var dc = _fxDispCur();
+  if (!dc) return '₩' + (parseInt(krwTotal, 10) || 0).toLocaleString();
+  var n = pax || 1;
+  var agencyKrw = (t && (t.agencyFee || t.agency_fee)) || 0;
+  var sum = 0, allFixed = true, ok = true;
+  [['meal', meal], ['agency', agencyKrw], ['wine', wine]].forEach(function(c){
+    if (!(parseInt(c[1], 10) > 0) && c[0] !== 'agency') return;   // 0원 항목은 건너뜀
+    if (!(parseInt(c[1], 10) > 0) && _fxTicketFixed(t, 'agency', dc) == null && !(fxAgencyUsd(t) > 0)) return;
+    var r = _fxCompNum(t, c[0], c[1], dc);
+    if (!(r.v >= 0)) { ok = false; return; }
+    sum += r.v * n;
+    if (!r.fixed) allFixed = false;
+  });
+  if (!ok || !(sum > 0)) return '₩' + (parseInt(krwTotal, 10) || 0).toLocaleString();
+  var sym = dc === 'JPY' ? '¥' : '$';
+  return (allFixed ? '' : '≈ ') + sym + sum.toLocaleString();
+}
+window.fxTicketComp = fxTicketComp; window.fxTicketTotal = fxTicketTotal;
 
 // ── 🆕 2026.08: 환율 자동 점검 (슈퍼어드민 전용) ──
 //   설정값(base_rate)과 실제 시장 환율을 비교해 조치가 필요할 때만 알린다.
@@ -10597,16 +10665,30 @@ window.closePromoCarousel = function(){
         <div style="position:absolute;left:14px;top:50%;transform:translateY(-50%);font-family:var(--font-main);font-size:15px;font-weight:600;color:#aaa;pointer-events:none;">₩</div>
         <input class="tu-input" id="tuAgencyFee" type="text" inputmode="numeric" placeholder="30,000" oninput="tuFormatMoney(this);if(typeof tuOvsPreview==='function')tuOvsPreview();" style="padding-left:30px;font-family:var(--font-main);font-size:17px;">
       </div>
-      <!-- 🆕 2026.08: 해외 대행비 — 비워두면 원화 ÷ 1,000 자동 (₩100,000 → $100) -->
-      <div id="tuOvsRow" style="margin-top:9px;display:flex;align-items:center;gap:8px;">
-        <span style="font-size:11px;color:#9a9486;white-space:nowrap;">해외 대행비</span>
-        <div style="position:relative;flex:1;">
-          <div style="position:absolute;left:12px;top:50%;transform:translateY(-50%);font-family:var(--font-main);font-size:13px;font-weight:600;color:#aaa;pointer-events:none;">$</div>
-          <input class="tu-input" id="tuOverseasAgencyUsd" type="text" inputmode="numeric" placeholder="자동" oninput="tuOvsPreview()" style="padding-left:26px;height:40px;font-family:var(--font-main);font-size:14px;">
+      <!-- 🆕 2026.08: 해외 정가 (1인) — 통화 지정 회원에게 이 금액이 그대로 보인다 (원화 숨김).
+           빈 칸은 환산(≈)으로 폴백. 「제안」이 적용환율 기준 제안값을 채워주면 깔끔한 숫자로 다듬는다. -->
+      <div id="tuOvsRow" style="margin-top:10px;padding:10px 12px;background:#faf8f4;border:1px solid #eee5d8;border-radius:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <span style="font-size:11px;font-weight:800;color:#8a7a55;letter-spacing:.06em;">해외 정가 (1인)</span>
+          <span id="tuOvsHint" style="font-size:10.5px;color:#c8a96e;"></span>
+          <button type="button" onclick="tuOvsSuggest()" style="padding:5px 11px;border:1px solid #d8c9a8;border-radius:7px;background:#fff;color:#8a7a55;font-size:11px;font-weight:800;cursor:pointer;">제안값 채우기</button>
         </div>
-        <span id="tuOvsHint" style="font-size:11px;color:#c8a96e;white-space:nowrap;min-width:74px;text-align:right;"></span>
+        <div style="display:grid;grid-template-columns:20px 1fr 1fr 1fr;gap:6px 8px;align-items:center;">
+          <span></span>
+          <span style="font-size:10px;color:#9a9486;text-align:center;">식사비</span>
+          <span style="font-size:10px;color:#9a9486;text-align:center;">대행비</span>
+          <span style="font-size:10px;color:#9a9486;text-align:center;">주류</span>
+          <span style="font-size:13px;font-weight:700;color:#8a7a55;">$</span>
+          <input class="tu-input" id="tuOvsUsdMeal" type="text" inputmode="numeric" placeholder="—" oninput="this.value=this.value.replace(/[^0-9]/g,'')" style="height:38px;font-size:13px;text-align:center;font-family:var(--font-main);">
+          <input class="tu-input" id="tuOverseasAgencyUsd" type="text" inputmode="numeric" placeholder="자동" oninput="this.value=this.value.replace(/[^0-9]/g,'');tuOvsPreview()" style="height:38px;font-size:13px;text-align:center;font-family:var(--font-main);">
+          <input class="tu-input" id="tuOvsUsdWine" type="text" inputmode="numeric" placeholder="—" oninput="this.value=this.value.replace(/[^0-9]/g,'')" style="height:38px;font-size:13px;text-align:center;font-family:var(--font-main);">
+          <span style="font-size:13px;font-weight:700;color:#8a7a55;">¥</span>
+          <input class="tu-input" id="tuOvsJpyMeal" type="text" inputmode="numeric" placeholder="—" oninput="this.value=this.value.replace(/[^0-9]/g,'')" style="height:38px;font-size:13px;text-align:center;font-family:var(--font-main);">
+          <input class="tu-input" id="tuOvsJpyAgency" type="text" inputmode="numeric" placeholder="—" oninput="this.value=this.value.replace(/[^0-9]/g,'')" style="height:38px;font-size:13px;text-align:center;font-family:var(--font-main);">
+          <input class="tu-input" id="tuOvsJpyWine" type="text" inputmode="numeric" placeholder="—" oninput="this.value=this.value.replace(/[^0-9]/g,'')" style="height:38px;font-size:13px;text-align:center;font-family:var(--font-main);">
+        </div>
+        <div style="font-size:10px;color:#b5afa2;margin-top:6px;line-height:1.6;">통화 지정 회원에게 이 금액이 그대로 표시됩니다. 빈 칸은 환산(≈) 표시.<br>대행비 $ 는 비워두면 원화 ÷ 1,000 자동 (₩100,000 → $100).</div>
       </div>
-      <div style="font-size:10.5px;color:#b5afa2;margin-top:5px;line-height:1.6;">비워두면 <b>원화 ÷ 1,000</b> 으로 자동 계산됩니다 (₩100,000 → $100).<br>특정 티켓만 다르게 받을 때만 입력하세요.</div>
     </div>
     <div class="rp-field">
       <label class="rp-label">주류 미니멈 (1인, 원, 없으면 0)</label>
@@ -19235,8 +19317,8 @@ if (heroVidEl) {
   var priceEl = document.getElementById('tdGridPrice');
   var _perUnit = _tdIsEn ? ' / guest' : (_tdIsJa ? ' / お一人様' : ' / 인');
   if (priceEl) {
-    // 🆕 2026.08: 해외 회원은 USD 병기 (innerHTML — fxMoney 가 span 을 포함)
-    if (perPerson > 0) priceEl.innerHTML = fxMoney(perPerson) + _perUnit;
+    // 🆕 2026.08: 해외 회원은 지정 통화 확정 정가 — 원화는 숨긴다
+    if (perPerson > 0) priceEl.innerHTML = fxTicketTotal(t, 1, parseInt(t.mealFee||t.mealAmt||0)||0, parseInt(t.wineMin||0)||0, perPerson) + _perUnit;
     else priceEl.textContent = '';
   }
 
@@ -20258,10 +20340,10 @@ function refreshSheetSummary() {
   if(!_sheetName) _sheetName = r ? r.name : t.rest;
   h+='<div style="font-family:var(--font-main);font-size:17px;font-weight:800;color:#111;margin-bottom:4px;">'+_sheetName+'</div>';
   h+='<div style="font-family:var(--font-main);font-size:12px;color:#aaa;margin-bottom:10px;">'+dateStr+' · '+td+'</div>';
-  if(meal)   h+='<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">식사비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxMoney(meal*pax)+'</span></div>';
-  if(agency) h+='<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">대행비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxMoney(agency*pax,{usd:fxAgencyUsd(t)*pax,exact:true})+'</span></div>';
-  if(wine)   h+='<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">주류 미니멈 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxMoney(wine*pax)+'</span></div>';
-  h+='<div style="display:flex;justify-content:space-between;padding:9px 0;"><span style="font-size:14px;font-weight:800;color:#111;">합계</span><span style="font-size:20px;font-weight:900;color:#5C0A14;">'+fxMoney(totalPay,{usd:_fxTotalUsd(t,pax,meal,wine),exact:true})+'</span></div>';
+  if(meal)   h+='<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">식사비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxTicketComp(t,'meal',meal,pax)+'</span></div>';
+  if(agency) h+='<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">대행비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxTicketComp(t,'agency',agency,pax)+'</span></div>';
+  if(wine)   h+='<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">주류 미니멈 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxTicketComp(t,'wine',wine,pax)+'</span></div>';
+  h+='<div style="display:flex;justify-content:space-between;padding:9px 0;"><span style="font-size:14px;font-weight:800;color:#111;">합계</span><span style="font-size:20px;font-weight:900;color:#5C0A14;">'+fxTicketTotal(t,pax,meal,wine,totalPay)+'</span></div>';
   var cr=document.getElementById('tdConfirmRows'); if(cr) cr.innerHTML=h;
   var after=currentDepositBalance-totalPay;
   var bh='<div style="display:flex;justify-content:space-between;padding:6px 0;"><span style="font-size:12px;color:#aaa;">예치금 잔액</span><span style="font-size:13px;font-weight:700;">'+fxMoney(currentDepositBalance)+'</span></div>';
@@ -20443,10 +20525,10 @@ function handleTicketAction(){
   if(!_sheetName) _sheetName = r ? r.name : t.rest;
   h+='<div style="font-family:var(--font-main);font-size:17px;font-weight:800;color:#111;margin-bottom:4px;">'+_sheetName+'</div>';
   h+='<div style="font-family:var(--font-main);font-size:12px;color:#aaa;margin-bottom:16px;">'+dateStr+' · '+td+' · '+pax+'인</div>';
-  if(meal)   h+='<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">식사비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxMoney(meal*pax)+'</span></div>';
-  if(agency) h+='<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">대행비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxMoney(agency*pax,{usd:fxAgencyUsd(t)*pax,exact:true})+'</span></div>';
-  if(wine)   h+='<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">주류 미니멈 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxMoney(wine*pax)+'</span></div>';
-  h+='<div style="display:flex;justify-content:space-between;padding:10px 0;"><span style="font-size:14px;font-weight:800;color:#111;">합계</span><span style="font-size:20px;font-weight:900;color:#5C0A14;">'+fxMoney(totalPay,{usd:_fxTotalUsd(t,pax,meal,wine),exact:true})+'</span></div>';
+  if(meal)   h+='<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">식사비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxTicketComp(t,'meal',meal,pax)+'</span></div>';
+  if(agency) h+='<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">대행비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxTicketComp(t,'agency',agency,pax)+'</span></div>';
+  if(wine)   h+='<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">주류 미니멈 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxTicketComp(t,'wine',wine,pax)+'</span></div>';
+  h+='<div style="display:flex;justify-content:space-between;padding:10px 0;"><span style="font-size:14px;font-weight:800;color:#111;">합계</span><span style="font-size:20px;font-weight:900;color:#5C0A14;">'+fxTicketTotal(t,pax,meal,wine,totalPay)+'</span></div>';
   var cr=document.getElementById('tdConfirmRows'); if(cr) cr.innerHTML=h;
 
   // 예치금 / 추가 결제
@@ -21252,11 +21334,11 @@ function _showTdConfirmPopup(t, r, pax, meal, agency, wine, totalPay, after) {
   var sh='';
   sh+='<div style="font-family:var(--font-main);font-size:16px;font-weight:800;color:#111;margin-bottom:4px;">'+(r?r.name:t.rest)+'</div>';
   sh+='<div style="font-family:var(--font-main);font-size:12px;color:#aaa;margin-bottom:12px;">'+dateStr+' · '+td+' · '+pax+'인</div>';
-  if(meal)   sh+='<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">식사비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxMoney(meal*pax)+'</span></div>';
-  if(agency) sh+='<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">대행비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxMoney(agency*pax,{usd:fxAgencyUsd(t)*pax,exact:true})+'</span></div>';
+  if(meal)   sh+='<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">식사비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxTicketComp(t,'meal',meal,pax)+'</span></div>';
+  if(agency) sh+='<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">대행비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxTicketComp(t,'agency',agency,pax)+'</span></div>';
   // 🆕 2026.05.21: 주류 미니멈 줄 누락 수정 — 합계엔 포함됐는데 리스트 미표시로 고객 혼동 유발하던 버그
-  if(wine)   sh+='<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">주류 미니멈 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxMoney(wine*pax)+'</span></div>';
-  sh+='<div style="display:flex;justify-content:space-between;padding:8px 0;"><span style="font-size:14px;font-weight:800;color:#111;">합계</span><span style="font-size:18px;font-weight:900;color:#5C0A14;">'+fxMoney(totalPay,{usd:_fxTotalUsd(t,pax,meal,wine),exact:true})+'</span></div>';
+  if(wine)   sh+='<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">주류 미니멈 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxTicketComp(t,'wine',wine,pax)+'</span></div>';
+  sh+='<div style="display:flex;justify-content:space-between;padding:8px 0;"><span style="font-size:14px;font-weight:800;color:#111;">합계</span><span style="font-size:18px;font-weight:900;color:#5C0A14;">'+fxTicketTotal(t,pax,meal,wine,totalPay)+'</span></div>';
   var ps = document.getElementById('tdPaySummary'); if(ps) ps.innerHTML=sh;
   var bh='<div style="display:flex;justify-content:space-between;padding:6px 0;"><span style="font-size:12px;color:#aaa;">예치금 잔액</span><span style="font-size:13px;font-weight:700;">'+fxMoney(currentDepositBalance)+'</span></div>';
   bh+='<div style="display:flex;justify-content:space-between;padding:6px 0;"><span style="font-size:12px;color:#aaa;">결제 후 잔액</span><span style="font-size:13px;font-weight:700;">₩'+after.toLocaleString()+'</span></div>';
@@ -30163,7 +30245,8 @@ function closeTU(){
   tuResetSlots();
   document.getElementById('tuTotalPax').value = '';
   // 금액 초기화
-  ['tuMealAmt','tuAgencyFee','tuWineMin','tuOverseasAgencyUsd'].forEach(function(id){
+  ['tuMealAmt','tuAgencyFee','tuWineMin','tuOverseasAgencyUsd',
+   'tuOvsUsdMeal','tuOvsUsdWine','tuOvsJpyMeal','tuOvsJpyAgency','tuOvsJpyWine'].forEach(function(id){
     var el = document.getElementById(id); if(el) el.value = '';
   });
   // 🆕 해외 대행비 미리보기도 초기화
@@ -30441,6 +30524,14 @@ function uploadTicket(){
     assignedPax:assigned,
     mealFee:meal,agencyFee:agency,wineMin:wine,
     overseasAgencyUsd:(function(){ var v=(document.getElementById('tuOverseasAgencyUsd')||{}).value||''; v=String(v).replace(/[^0-9]/g,''); return v ? parseInt(v,10) : null; })(),   // 🆕 해외 대행비 예외(USD)
+    // 🆕 해외 정가 (1인) — 값이 하나라도 있어야 객체로 남긴다
+    ovsPrices:(function(){
+      function gv(id){ var v=String((document.getElementById(id)||{}).value||'').replace(/[^0-9]/g,''); return v ? parseInt(v,10) : null; }
+      var o = { usd:{ meal:gv('tuOvsUsdMeal'), agency:gv('tuOverseasAgencyUsd'), wine:gv('tuOvsUsdWine') },
+                jpy:{ meal:gv('tuOvsJpyMeal'), agency:gv('tuOvsJpyAgency'), wine:gv('tuOvsJpyWine') } };
+      var any = ['meal','agency','wine'].some(function(k){ return o.usd[k] != null || o.jpy[k] != null; });
+      return any ? o : null;
+    })(),
     price: meal + agency + wine,
     isEvent: isEve,
     homeSection: _tuHomeSections.slice(),
@@ -32835,6 +32926,18 @@ function tuEditTicket(id){
   // 🆕 해외 대행비 예외 — 없으면 빈칸(자동)
   var _ov=document.getElementById('tuOverseasAgencyUsd');
   if(_ov) _ov.value = (t.overseasAgencyUsd != null && t.overseasAgencyUsd !== '') ? String(t.overseasAgencyUsd) : '';
+  // 🆕 해외 정가 6칸 복원
+  (function(){
+    var op = t.ovsPrices || {};
+    function sv(id, v){ var el = document.getElementById(id); if (el) el.value = (v != null && v !== '') ? String(v) : ''; }
+    sv('tuOvsUsdMeal',   op.usd && op.usd.meal);
+    sv('tuOvsUsdWine',   op.usd && op.usd.wine);
+    sv('tuOvsJpyMeal',   op.jpy && op.jpy.meal);
+    sv('tuOvsJpyAgency', op.jpy && op.jpy.agency);
+    sv('tuOvsJpyWine',   op.jpy && op.jpy.wine);
+    // usd.agency 는 확정값이 있으면 기존 칸(tuOverseasAgencyUsd)을 덮는다
+    if (op.usd && op.usd.agency != null) sv('tuOverseasAgencyUsd', op.usd.agency);
+  })();
   if(typeof tuOvsPreview==='function') setTimeout(tuOvsPreview, 0);
   if(wm)wm.value=fmt(t.wineMin);
 
@@ -33223,6 +33326,30 @@ function tuOvsPreview(){
   var auto = Math.round(krw / d);
   hint.textContent = krw > 0 ? ('자동 $' + auto.toLocaleString()) : '';
 }
+
+// 🆕 해외 정가 제안 — 적용환율로 계산해 6칸을 채운다 ($5 / ¥1,000 올림).
+//   채우기만 할 뿐 저장은 아니다. 슈퍼어드민이 $100·¥15,000 처럼 다듬어 저장한다.
+function tuOvsSuggest(){
+  var meal = tuGetMoney('tuMealAmt'), agency = tuGetMoney('tuAgencyFee'), wine = tuGetMoney('tuWineMin');
+  var rU = (typeof fxRate === 'function') ? fxRate() : 0;
+  var rJ = (typeof fxRateJpy === 'function') ? fxRateJpy() : 0;
+  if (!(rU > 0)) { showToast('⚠','환율 미설정','어드민 메뉴 → 💱 환율 설정을 먼저 해주세요'); return; }
+  function set(id, v){ var el = document.getElementById(id); if (el) el.value = v > 0 ? String(v) : ''; }
+  var usdAgency = Math.round(agency / ((parseFloat(FX.agency_divisor) || 1000)));
+  set('tuOvsUsdMeal',  meal   > 0 ? Math.ceil(meal / rU / 5) * 5 : 0);
+  set('tuOverseasAgencyUsd', usdAgency);
+  set('tuOvsUsdWine',  wine   > 0 ? Math.ceil(wine / rU / 5) * 5 : 0);
+  if (rJ > 0) {
+    set('tuOvsJpyMeal',   meal > 0 ? Math.ceil(meal / rJ / 1000) * 1000 : 0);
+    set('tuOvsJpyAgency', usdAgency > 0 ? Math.round(usdAgency * _fxCross() / 1000) * 1000 : 0);
+    set('tuOvsJpyWine',   wine > 0 ? Math.ceil(wine / rJ / 1000) * 1000 : 0);
+  } else {
+    showToast('ℹ','엔 제안 생략','엔화 기준율이 없어 $ 만 채웠습니다 — 💱 환율 설정에서 입력 가능');
+  }
+  tuOvsPreview();
+  showToast('✓','제안값 채움','깔끔한 숫자로 다듬은 뒤 저장하세요');
+}
+window.tuOvsSuggest = tuOvsSuggest;
 
 // ── 홈 연동 섹션 ──
 var _tuHomeSections = [];
@@ -55841,6 +55968,13 @@ async function saveTicketProductToSupabase(ticket){
     }
 
     console.log('✅ ticket 저장 완료:', ticket.id, ticket.rest);
+    // 🆕 해외 정가 — 본 저장 페이로드에 넣지 않는다. 컬럼이 없는 DB 에서 티켓 저장
+    //   전체가 죽는 사고를 피하기 위해서다 (tile_photo 와 동일 패턴). 실패는 경고만.
+    try {
+      var _ovr = await window.sb.from('ticket_products')
+        .update({ ovs_prices: ticket.ovsPrices || null }).eq('id', String(ticket.id));
+      if (_ovr.error) console.warn('[ovs_prices] 저장 실패(sql/ticket_overseas_prices.sql 실행 필요?):', _ovr.error.message);
+    } catch(_ove){ console.warn('[ovs_prices] 저장 예외:', _ove); }
     return true;
   } catch(e){
     console.error('❌ saveTicketProductToSupabase 예외:', e);
@@ -55920,6 +56054,7 @@ async function loadAllTicketProductsFromSupabase(){
         mealFee: row.meal_fee || 0,
         agencyFee: row.agency_fee || 0,
       overseasAgencyUsd: (row.overseas_agency_usd == null ? null : parseInt(row.overseas_agency_usd,10)),   // 🆕 해외 대행비 예외(USD)
+      ovsPrices: row.ovs_prices || null,   // 🆕 해외 정가 (1인) — 컬럼 없으면 null 폴백
         wineMin: row.wine_min || 0,
         price: row.price || 0,
         type: row.ticket_type,
