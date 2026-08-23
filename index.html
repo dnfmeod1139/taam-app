@@ -6175,13 +6175,29 @@ function fxRate(){
   return r > 0 ? r : 0;
 }
 
-// 해외 회원 판정 — 화면 언어가 한국어가 아니면 해외로 본다.
-//   (국적 컬럼이 비어있는 회원이 많아 언어를 기준으로 삼는 게 실무상 정확하다)
+// 엔 적용환율 (KRW per 1 JPY) — 달러와 같은 마진
+function fxRateJpy(){
+  var b = parseFloat(FX.rate_jpy) || 0;
+  var m = parseFloat(FX.margin_pct) || 0;
+  var r = b * (1 - m / 100);
+  return r > 0 ? r : 0;
+}
+
+// 해외 회원 판정 — 슈퍼어드민 지정 통화(profiles.currency)가 최우선.
+//   미지정 회원은 종전 규칙(화면 언어) 폴백. _taamUserCur 가 그 순서를 담당한다.
 function fxIsOverseas(){
   if (!FX.enabled) return false;
   if (fxRate() <= 0) return false;
-  var l = window._tkCurrentLang || 'ko';
-  return l !== 'ko';
+  var cur = (typeof _taamUserCur === 'function') ? _taamUserCur() : 'KRW';
+  return cur !== 'KRW';
+}
+
+// 화면 병기 통화 — JPY 지정 회원은 엔(단, 엔 기준율이 없으면 달러 폴백), 그 외 해외는 달러
+function _fxDispCur(){
+  if (!fxIsOverseas()) return null;
+  var cur = (typeof _taamUserCur === 'function') ? _taamUserCur() : 'USD';
+  if (cur === 'JPY' && fxRateJpy() > 0) return 'JPY';
+  return 'USD';
 }
 
 // 원화 → USD (올림). step 을 주면 그 단위로 올림.
@@ -6216,10 +6232,21 @@ function fxMoney(krw, opts){
   opts = opts || {};
   var n = parseInt(krw, 10) || 0;
   var won = '₩' + n.toLocaleString();
-  if (!fxIsOverseas()) return won;
+  var dc = _fxDispCur();
+  if (!dc) return won;
   var usd = (opts.usd != null) ? parseInt(opts.usd, 10)
                                : fxUsd(n, opts.step != null ? opts.step : FX.step_usd);
   if (usd == null) return won;
+  if (dc === 'JPY') {
+    // 엔 병기 — 달러 표시값에서 크로스 환율로 파생 (마진은 분자·분모에서 상쇄돼 순수 교차환율)
+    //   확정 요율이 아니므로 전부 '≈' 로 표시하고 ¥100 으로 반올림한다. 실제 청구는 서버가 계산.
+    var cross = (parseFloat(FX.base_rate) || 0) / (parseFloat(FX.rate_jpy) || 1);
+    var yen = Math.round(usd * cross / 100) * 100;
+    if (!(yen > 0)) return won;
+    var ys = '≈ ¥' + yen.toLocaleString();
+    if (opts.usdOnly) return ys;
+    return won + ' <span class="fx-usd">' + ys + '</span>';
+  }
   var mark = opts.exact ? '$' : '≈ $';
   var us = mark + usd.toLocaleString();
   if (opts.usdOnly) return us;
@@ -6420,10 +6447,25 @@ function loadFxSettings(){
     .catch(function(e){ console.warn('[fx] 설정 로드 실패 — 기본값 사용:', e && e.message); });
 }
 window.fxMoney = fxMoney; window.fxUsd = fxUsd; window.fxIsOverseas = fxIsOverseas;
-window.fxAgencyUsd = fxAgencyUsd; window.fxAgencyKrw = fxAgencyKrw; window.fxRate = fxRate;
+window.fxAgencyUsd = fxAgencyUsd; window.fxAgencyKrw = fxAgencyKrw; window.fxRate = fxRate; window.fxRateJpy = fxRateJpy;
 
-// 회원 국가 → 결제 통화 (KR→KRW, JP→JPY, 그 외→USD)
+// ── 🆕 회원 통화 판정 — 슈퍼어드민 지정(profiles.currency)이 최우선 ──
+//   미지정 회원은 종전 규칙(화면 언어)으로 폴백: ko→KRW, ja→JPY, 그 외→USD.
+//   회원 스스로는 못 바꾼다 (SQL 트리거가 본인 변경을 되돌린다) — 해외 요율 보호.
+function _taamUserCur(){
+  var c = window._userCurrency;
+  if (c === 'KRW' || c === 'USD' || c === 'JPY') return c;
+  var l = window._tkCurrentLang || 'ko';
+  if (l === 'ja') return 'JPY';
+  return l === 'ko' ? 'KRW' : 'USD';
+}
+window._taamUserCur = _taamUserCur;
+
+// 회원 결제 통화 — 지정 통화 그대로 (KRW 폴백은 호출부에서 키 유무로)
 function _tossCurrencyForUser(){
+  return _taamUserCur();
+}
+function _tossCurrencyForUserLegacy(){
   try {
     var c = (window._tkCurrentLang === 'ja') ? 'JP'
           : (window._tkCurrentLang === 'en') ? 'EN' : 'KR';
@@ -25843,6 +25885,22 @@ async function mlOpen(uid){
      + _pcalEsc(u.phone || '') + (u.email ? ' · ' + _pcalEsc(u.email) : '')
      + (u.membership_tier ? ' · ' + _pcalEsc(u.membership_tier) : '') + '</div>';
 
+  // ── 결제·표시 통화 지정 — 슈퍼어드민만 여기서 바꾼다 (회원 스스로는 못 바꿈) ──
+  //   미지정(자동)은 화면 언어 폴백. 해외 요율이 통화에 붙으므로 회원과 합의 후 지정한다.
+  var _mlCurNow = (u.currency === 'KRW' || u.currency === 'USD' || u.currency === 'JPY') ? u.currency : null;
+  function _mlCurBtn(val, label){
+    var on = (_mlCurNow === val) || (val === null && _mlCurNow === null);
+    return '<button onclick="mlSetCur(\'' + uid + '\',' + (val ? '\'' + val + '\'' : 'null') + ')" '
+      + 'style="padding:6px 12px;border-radius:8px;font-size:11.5px;font-weight:800;cursor:pointer;'
+      + 'border:1.5px solid ' + (on ? '#1a1a18' : '#e0ddd8') + ';'
+      + 'background:' + (on ? '#1a1a18' : '#fff') + ';color:' + (on ? '#fff' : '#8a8580') + ';">' + label + '</button>';
+  }
+  h += '<div style="display:flex;align-items:center;gap:6px;margin-top:10px;flex-wrap:wrap;">'
+     + '<span style="font-size:11.5px;color:#8a8580;font-weight:700;">통화</span>'
+     + _mlCurBtn('KRW','₩') + _mlCurBtn('USD','$') + _mlCurBtn('JPY','¥') + _mlCurBtn(null,'자동')
+     + (_mlCurNow ? '' : '<span style="font-size:10.5px;color:#a8a29a;">미지정 — 화면 언어 기준</span>')
+     + '</div>';
+
   // 요약 카드
   function card(l, v, c){
     return '<div style="flex:1;min-width:96px;background:#faf8f4;border:1px solid #eee5d8;border-radius:10px;padding:12px 13px;">'
@@ -26030,6 +26088,30 @@ function mlTkPop(idx){
   document.body.appendChild(wrap);
 }
 window.mlTkPop = mlTkPop;
+
+// 회원 통화 지정 — profiles.currency 갱신 후 원장 새로고침.
+//   null = 미지정(자동): 화면 언어 폴백으로 되돌린다.
+async function mlSetCur(uid, cur){
+  if (typeof _isSuperAdmin === 'function' && !_isSuperAdmin()) return;
+  if (!window.sb) return;
+  var res = await window.sb.from('profiles').update({ currency: cur }).eq('id', uid).select('id');
+  if (res.error) {
+    // 컬럼이 아직 없으면 SQL 실행 안내
+    var em = String(res.error.message || '');
+    showToast('⚠', '통화 지정 실패', /column|currency/i.test(em)
+      ? 'sql/user_currency.sql 을 Supabase SQL Editor 에서 먼저 실행해주세요'
+      : em.slice(0, 60));
+    return;
+  }
+  if (!res.data || !res.data.length) {
+    showToast('⚠','통화 지정 실패','RLS 차단 — 변경된 row 없음');
+    return;
+  }
+  showToast('✓','통화 지정', cur ? (cur === 'KRW' ? '원화' : cur === 'USD' ? '달러' : '엔') + ' 로 지정되었습니다'
+                                : '자동(언어 기준)으로 되돌렸습니다');
+  mlOpen(uid);
+}
+window.mlSetCur = mlSetCur;
 
 function loadAllUsersPurchases(){
   // 🆕 2026.05.22: IDB(레거시) + Supabase(현재) 동시 조회 → 병합
@@ -44089,15 +44171,19 @@ async function _refreshUserGrade() {
       window._currentUserGrade = null;
       return null;
     }
+    // select('*') — currency 등 새 컬럼이 없는 DB 에서도 조회가 깨지지 않게
     const { data, error } = await window.sb
       .from('profiles')
-      .select('membership_tier, membership_expires_at, membership_deposit_balance, general_deposit_balance, billing_key, billing_key_card_info, billing_key_issued_at, auto_renew_enabled')
+      .select('*')
       .eq('id', user.id)
       .single();
     if (error || !data) {
       window._currentUserGrade = null;
       return null;
     }
+    // 🆕 회원 지정 통화 캐시 — 표시(fxIsOverseas)·결제(_tossCurrencyForUser)가 이 값을 최우선으로 본다
+    window._userCurrency = (data.currency === 'KRW' || data.currency === 'USD' || data.currency === 'JPY')
+      ? data.currency : null;
     var tier = data.membership_tier;
     var expires = data.membership_expires_at;
     var isActive = tier === 'M' && expires && new Date(expires) > new Date();
