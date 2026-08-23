@@ -153,7 +153,7 @@ serve(async (req) => {
     //   (클라이언트 _refreshUserGrade 와 같은 규칙: M 은 만료일이 지나면 등급 없음).
     const { data: prof, error: pErr } = await admin
       .from('profiles')
-      .select('membership_tier, membership_expires_at, membership_deposit_balance, general_deposit_balance')
+      .select('*')
       .eq('id', user.id)
       .maybeSingle();
 
@@ -206,8 +206,64 @@ serve(async (req) => {
     const meal = parseInt(String(ticket.meal_fee || '0'), 10) || 0;
     const agency = parseInt(String(ticket.agency_fee || '0'), 10) || 0;
     const wine = parseInt(String(ticket.wine_min || '0'), 10) || 0;
-    const total = (meal + agency + wine) * pax;
+    let total = (meal + agency + wine) * pax;
     if (total <= 0) return json({ ok: false, error: 'price_not_set' });
+
+    // ── ④-1 회원 통화 확정 ──
+    //   profiles.currency 가 지정돼 있으면 클라이언트가 보낸 통화를 덮는다 —
+    //   통화를 바꿔 보내 해외 정가를 피하는 우회를 서버가 막는다.
+    //   지정 외화의 시크릿 키가 없으면 원화로 폴백 (결제가 막히면 안 된다).
+    const profCur = String((prof as Record<string, unknown>).currency || '').toUpperCase();
+    let effCur = (profCur === 'KRW' || profCur === 'USD' || profCur === 'JPY') ? profCur : currency;
+    if (effCur !== 'KRW' && !Deno.env.get('TOSS_SECRET_KEY_' + effCur)) {
+      console.warn('[toss-order] TOSS_SECRET_KEY_' + effCur + ' 미등록 — KRW 폴백');
+      effCur = 'KRW';
+    }
+
+    // ── ④-2 환율 설정 (외화일 때만) ──
+    let fxApplied = 0, fxBase = 0, fxMargin = 0;
+    if (effCur !== 'KRW') {
+      const { data: fxRow } = await admin.from('app_config')
+        .select('value').eq('key', 'fx_settings').maybeSingle();
+      const fx = (fxRow?.value || {}) as Record<string, unknown>;
+      fxBase = effCur === 'USD' ? Number(fx.base_rate || 0) : Number(fx.rate_jpy || 0);
+      fxMargin = Number(fx.margin_pct || 0);
+      fxApplied = fxBase * (1 - fxMargin / 100);
+      if (!(fxApplied > 0)) {
+        console.warn('[toss-order] 환율 미설정 — KRW 폴백', effCur);
+        effCur = 'KRW';
+      }
+    }
+
+    // ── ④-3 확정 해외 정가 — 전 항목(0원 제외) 확정일 때만 외화 정가로 청구 ──
+    //   화면($1,000)과 청구가 같은 근거를 가져야 한다. 하나라도 미확정이면 원화 정가.
+    //   ovs_prices 컬럼이 없는 DB 에서도 죽지 않게 별도 조회 + 실패 무시.
+    let fxFixed: { amount: number; agencyPer: number } | null = null;
+    if (effCur !== 'KRW') {
+      let side: Record<string, unknown> = {};
+      let legacyAg = 0;
+      try {
+        const { data: ovsRow, error: ovsErr } = await admin.from('ticket_products')
+          .select('ovs_prices, overseas_agency_usd').eq('id', ticketId).maybeSingle();
+        if (!ovsErr && ovsRow) {
+          const op = (ovsRow.ovs_prices || {}) as Record<string, Record<string, unknown>>;
+          side = (effCur === 'JPY' ? op.jpy : op.usd) || {};
+          legacyAg = Number(ovsRow.overseas_agency_usd || 0);
+        }
+      } catch (_oe) { /* 컬럼 미설치 — 환산 폴백 */ }
+      const fixedOf = (comp: string, krw: number): number | null => {
+        if (krw <= 0) return 0;                              // 0원 항목은 청구 없음
+        const v = Number(side[comp] || 0);
+        if (v > 0) return v;
+        if (comp === 'agency' && effCur === 'USD' && legacyAg > 0) return legacyAg;
+        return null;
+      };
+      const fm = fixedOf('meal', meal), fa = fixedOf('agency', agency), fw = fixedOf('wine', wine);
+      if (fm != null && fa != null && fw != null && (fm + fa + fw) > 0) {
+        fxFixed = { amount: (fm + fa + fw) * pax, agencyPer: fa };
+        total = Math.round(fxFixed.amount * fxApplied);      // 원장 차감액 = 외화 정가 × 적용환율
+      }
+    }
 
     // ── ⑤ 부족분 ──
     const balance = (Number(prof.membership_deposit_balance) || 0)
@@ -227,22 +283,18 @@ serve(async (req) => {
     //   올림(ceil)으로 외화 정수 금액을 만든다 — 회원이 정가보다 덜 내는 일이 없게.
     let payAmount = shortage;
     let fxMeta: Record<string, unknown> | null = null;
-    if (currency !== 'KRW') {
-      const { data: fxRow } = await admin.from('app_config')
-        .select('value').eq('key', 'fx_settings').maybeSingle();
-      const fx = (fxRow?.value || {}) as Record<string, unknown>;
-      const base = Number(fx.base_rate || 0);
-      const margin = Number(fx.margin_pct || 0);
-      // JPY 는 통화별 기준율(rate_jpy, KRW per 1 JPY)이 설정돼 있어야 연다
-      const rateRaw = currency === 'USD' ? base : Number(fx.rate_jpy || 0);
-      const applied = rateRaw * (1 - margin / 100);
-      if (!(applied > 0)) {
-        console.warn('[toss-order] 환율 미설정 — 외화 주문 거부', currency, fx);
-        return json({ ok: false, error: 'currency_not_open', currency, reason: 'fx_not_set' });
+    if (effCur !== 'KRW') {
+      if (fxFixed && shortage >= total) {
+        // 예치금 0 → 카드가 전액: 확정 정가 그대로 청구 ($1,000 · ¥74,000 딱 떨어짐)
+        payAmount = fxFixed.amount;
+      } else {
+        payAmount = Math.ceil(shortage / fxApplied);
       }
-      payAmount = Math.ceil(shortage / applied);
       if (payAmount < 1) payAmount = 1;
-      fxMeta = { base_rate: rateRaw, margin_pct: margin, applied_rate: applied, shortage_krw: shortage };
+      fxMeta = {
+        base_rate: fxBase, margin_pct: fxMargin, applied_rate: fxApplied, shortage_krw: shortage,
+        ...(fxFixed ? { fixed_price: true, price_fx: fxFixed.amount, agency_fx_per: fxFixed.agencyPer } : {}),
+      };
     }
 
     // ── ⑥ 주문 생성 ──
@@ -252,7 +304,7 @@ serve(async (req) => {
       user_id: user.id,
       purpose: 'ticket_topup',
       amount: payAmount,
-      currency,
+      currency: effCur,
       settle_krw: shortage,
       status: 'pending',
       metadata: {
@@ -262,7 +314,10 @@ serve(async (req) => {
         pax,
         total,
         balance_at_order: balance,
-        meal_fee: meal, agency_fee: agency, wine_min: wine,
+        // 대행비 스냅샷 — 외화 정가 구매는 정가 × 환율(원화 환산)로 얼린다 (반환 차감의 근거)
+        meal_fee: meal,
+        agency_fee: fxFixed ? Math.round(fxFixed.agencyPer * fxApplied) : agency,
+        wine_min: wine,
         // 승인 후 이 홀드를 실제 구매로 전환한다
         hold_purchase_id: holdPurchaseId || null,
         deposit_used: Math.max(0, total - shortage),
@@ -280,7 +335,7 @@ serve(async (req) => {
       needPayment: true,
       orderId,
       amount: payAmount,
-      currency,
+      currency: effCur,
       settleKrw: shortage,
       total,
       balance,
