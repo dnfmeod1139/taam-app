@@ -906,7 +906,7 @@ html.auto-login .splash .bottom-group{display:none !important}
   letter-spacing:.42em;font-size:13px;font-weight:600;padding-left:.42em;color:#F2EDE7}
 #pcalDetail .pd-hero{position:relative;height:38vh;min-height:250px;max-height:360px;overflow:hidden;background:#141014}
 #pcalDetail .pd-hero img{width:100%;height:100%;object-fit:cover;filter:saturate(.9) contrast(1.04)}
-#pcalDetail .pd-hero .sh{position:absolute;inset:0;
+#pcalDetail .pd-hero .sh{position:absolute;inset:0;pointer-events:none;
   background:linear-gradient(180deg,rgba(0,0,0,.5) 0%,rgba(0,0,0,0) 38%,rgba(0,0,0,.25) 70%,var(--d-heroend) 100%)}
 #pcalDetail .pd-body{padding:4px 24px calc(120px + env(safe-area-inset-bottom))}
 #pcalDetail .pd-when{font-family:'Oswald','Noto Sans KR',sans-serif;font-size:12px;font-weight:500;
@@ -928,7 +928,7 @@ html.auto-login .splash .bottom-group{display:none !important}
 /* 이름은 고딕(Noto Sans KR) — 명조와 비교 견본으로 고른 결정 (2026-08-21).
    또렷함이 격보다 앞선다. 세리프는 날짜 낱장의 큰 숫자에만 남긴다. */
 #pcalDetail .pd-name{font-family:'Noto Sans KR','Noto Sans JP',sans-serif;font-weight:700;
-  font-size:29px;letter-spacing:-.01em;line-height:1.22;margin-top:9px;color:var(--d-strong)}
+  font-size:22px;letter-spacing:-.01em;line-height:1.3;margin-top:9px;color:var(--d-strong)}
 #pcalDetail .pd-meta{margin-top:9px;font-size:11.5px;color:var(--d-sub);letter-spacing:.03em}
 /* 탭 — 바텀시트를 없애고 매장명 바로 아래로 올렸다. 구매하기를 한 번 더 누를 일이 없다. */
 /* 탭 고정 — sticky 를 버리고 스크롤을 직접 듣는다.
@@ -994,7 +994,7 @@ html.auto-login .splash .bottom-group{display:none !important}
   transition:opacity .18s}
 #pcalDetail .pd-cta.wait{opacity:.42}
 /* ── 대비 손질 — 라벨은 낮게, 값은 또렷하게. 상태는 색이 아니라 명도로 갈린다 ── */
-#pcalDetail .pd-name{font-size:33px}
+#pcalDetail .pd-name{font-size:25px}
 #pcalDetail .pd-row span.l{color:var(--d-sub)}
 #pcalDetail .pd-row span.v{color:var(--d-txt);font-weight:600}
 #pcalDetail .pd-sum span.l{font-weight:700}
@@ -40078,6 +40078,52 @@ function _pcalRest(t){
   return restaurantDB.find(function(x){ return String(x.id) === String(t.restId); }) || null;
 }
 
+// ── 🆕 매장명 언어별 자동 줄바꿈 ──
+//   "덴푸라 아사누마(tempura asanuma /天ぶら 浅沼)" 처럼 한글·영문·일문이 섞인
+//   이름은 글자 체계가 바뀌는 지점에서 줄을 가른다. 괄호·슬래시 같은 중립 문자는
+//   뒤따르는 언어 덩어리에 붙는다 → "(tempura asanuma" / "/天ぶら 浅沼)".
+function _pdScriptOf(ch){
+  var c = ch.charCodeAt(0);
+  if((c >= 0xAC00 && c <= 0xD7A3) || (c >= 0x1100 && c <= 0x11FF) || (c >= 0x3130 && c <= 0x318F)) return 'ko';
+  if((c >= 0x3040 && c <= 0x30FF) || (c >= 0x4E00 && c <= 0x9FFF) || (c >= 0x3400 && c <= 0x4DBF) || (c >= 0xF900 && c <= 0xFAFF)) return 'ja';
+  if((c >= 0x41 && c <= 0x5A) || (c >= 0x61 && c <= 0x7A)) return 'en';
+  return null;   // 공백·괄호·숫자·기호 = 중립
+}
+function _pdNameHtml(name){
+  var str = String(name || '');
+  var segs = [], cur = '', curS = null, pend = '';
+  for(var i = 0; i < str.length; i++){
+    var ch = str[i];
+    var sc = _pdScriptOf(ch);
+    if(sc === null){ pend += ch; continue; }
+    if(curS !== null && sc !== curS && cur){
+      segs.push(cur);
+      cur = pend + ch;
+    } else {
+      cur += pend + ch;
+    }
+    pend = '';
+    curS = sc;
+  }
+  if(pend) cur += pend;
+  if(cur) segs.push(cur);
+  if(segs.length <= 1) return _pcalEsc(str);
+  return segs.map(function(sg){ return _pcalEsc(sg.trim()); }).filter(Boolean).join('<br>');
+}
+window._pdNameHtml = _pdNameHtml;
+
+// 히어로 슬라이드 점 갱신
+function _pdHeroDots(sl){
+  try{
+    var i = Math.round(sl.scrollLeft / Math.max(1, sl.clientWidth));
+    var wrap = sl.parentElement;
+    wrap.querySelectorAll('.pdh-dots [data-dot]').forEach(function(dt){
+      dt.style.background = 'rgba(255,255,255,' + (parseInt(dt.getAttribute('data-dot'), 10) === i ? '.95' : '.4') + ')';
+    });
+  }catch(e){}
+}
+window._pdHeroDots = _pdHeroDots;
+
 // 타일 사진 — 티켓 전용 지정이 우선, 없으면 레스토랑 등록 사진
 function _pcalPhoto(t){
   if(!t) return '';
@@ -40825,14 +40871,37 @@ function _pcalDetailHtml(t, r, dead, expired){
 
   var photo = _pcalPhoto(t) || (r ? (r.photoHero || r.photoCard || r.photo || '') : '');
 
+  // ── 히어로 사진 슬라이드 — 대표 사진 + 레스토랑 상세 사진(detailPhotos) ──
+  //   2장 이상이면 가로 스냅 슬라이더 + 점. 스와이프로 매장을 둘러본다.
+  var heroList = [];
+  if(photo) heroList.push(photo);
+  if(r && Array.isArray(r.detailPhotos)){
+    r.detailPhotos.forEach(function(u){ if(u && heroList.indexOf(u) < 0) heroList.push(u); });
+  }
+  heroList = heroList.slice(0, 8);
+
   var h = '';
   h += '<div class="pd-hero">';
-  h += photo ? '<img src="' + _pcalEsc(photo) + '" alt="">' : '';
-  h += '<div class="sh"></div></div>';
+  if(heroList.length > 1){
+    h += '<div class="pdh-slider" onscroll="_pdHeroDots(this)" style="display:flex;height:100%;overflow-x:auto;overflow-y:hidden;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;scrollbar-width:none;">'
+      + heroList.map(function(u){
+          return '<img src="' + _pcalEsc(u) + '" style="flex:0 0 100%;width:100%;height:100%;object-fit:cover;scroll-snap-align:center;filter:saturate(.9) contrast(1.04);" alt="">';
+        }).join('')
+      + '</div>';
+    h += '<div class="sh"></div>';
+    h += '<div class="pdh-dots" style="position:absolute;left:0;right:0;bottom:10px;display:flex;justify-content:center;gap:6px;z-index:2;">'
+      + heroList.map(function(_, i){
+          return '<span data-dot="' + i + '" style="width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,' + (i === 0 ? '.95' : '.4') + ');box-shadow:0 1px 3px rgba(0,0,0,.5);"></span>';
+        }).join('')
+      + '</div></div>';
+  } else {
+    h += (photo ? '<img src="' + _pcalEsc(photo) + '" alt="">' : '');
+    h += '<div class="sh"></div></div>';
+  }
 
   h += '<div class="pd-body">';
   if(whenHtml) h += whenHtml;
-  h += '<div class="pd-name">' + _pcalEsc(name) + '</div>';
+  h += '<div class="pd-name">' + _pdNameHtml(name) + '</div>';
   if(metaBits.length) h += '<div class="pd-meta">' + metaBits.join(', ') + '</div>';
 
   // ── 탭 3개 — 바텀시트를 없애고 여기로 올렸다 ──
