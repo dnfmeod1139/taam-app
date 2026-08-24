@@ -10744,11 +10744,19 @@ window.closePromoCarousel = function(){
         <button type="button" class="tu-sale-btn" data-sale="draft" onclick="tuSetSale('draft')" style="flex:1;padding:11px 0;border:1.5px solid #e0ddd8;border-radius:9px;background:#fff;color:#666;font-size:12px;font-weight:800;cursor:pointer;">비공개 보관</button>
       </div>
       <div id="tuSaleSchedRow" style="display:none;margin-top:8px;">
-        <!-- 눌러야 하는 줄임을 분명하게 — 라벨 + 선택값 + ▾. 실제 입력은 투명하게 위에 겹친다 -->
+        <!-- iOS 기본 선택기의 시간 칩은 버튼처럼 안 보여서 그냥 지나친다.
+             날짜와 시간을 아예 갈라, 각각 눌러야 하는 줄로 만든다. -->
         <div style="position:relative;border:1.5px solid #d8c9a8;border-radius:10px;background:#fff;padding:13px 14px;display:flex;align-items:center;justify-content:space-between;gap:10px;">
+          <span style="font-size:12.5px;font-weight:800;color:#8a7a55;white-space:nowrap;">오픈 날짜</span>
+          <span id="tuSaleOpenAtLabel" style="font-size:13.5px;font-weight:700;color:#b5afa2;">눌러서 날짜 선택 <span style="color:#c8a96e;font-size:12px;">▾</span></span>
+          <input type="date" id="tuSaleOpenDate" onchange="tuSaleAtChanged()" oninput="tuSaleAtChanged()" style="position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;border:0;">
+        </div>
+        <div style="position:relative;border:1.5px solid #d8c9a8;border-radius:10px;background:#fff;padding:6px 14px;display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:6px;">
           <span style="font-size:12.5px;font-weight:800;color:#8a7a55;white-space:nowrap;">오픈 시간 설정</span>
-          <span id="tuSaleOpenAtLabel" style="font-size:13.5px;font-weight:700;color:#b5afa2;">눌러서 날짜·시간 선택 <span style="color:#c8a96e;font-size:12px;">▾</span></span>
-          <input type="datetime-local" id="tuSaleOpenAt" onchange="tuSaleAtChanged()" oninput="tuSaleAtChanged()" style="position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;border:0;">
+          <span style="display:flex;align-items:center;gap:4px;">
+            <select id="tuSaleOpenTime" onchange="tuSaleAtChanged()" style="border:0;background:transparent;font-family:var(--font-main);font-size:15px;font-weight:800;color:#1a1a18;padding:8px 2px;outline:none;-webkit-appearance:none;appearance:none;text-align:right;"></select>
+            <span style="color:#c8a96e;font-size:12px;pointer-events:none;">▾</span>
+          </span>
         </div>
         <div style="font-size:10.5px;color:#c8a96e;margin-top:4px;">이 시각이 되면 자동으로 회원에게 공개됩니다 (별도 조작 불필요)</div>
       </div>
@@ -30622,8 +30630,10 @@ function uploadTicket(){
     saleState: (typeof _tuSaleState !== 'undefined' && _tuSaleState) || 'open',
     saleOpenAt: (function(){
       if (typeof _tuSaleState === 'undefined' || _tuSaleState !== 'scheduled') return null;
-      var v = (document.getElementById('tuSaleOpenAt')||{}).value || '';
-      return v || null;   // 일시 없는 예약은 무기한 비공개로 남는다 (안내문에 명시)
+      var d = (document.getElementById('tuSaleOpenDate')||{}).value || '';
+      if (!d) return null;   // 날짜 없는 예약은 무기한 비공개로 남는다 (안내문에 명시)
+      var tm = (document.getElementById('tuSaleOpenTime')||{}).value || '10:00';
+      return d + 'T' + tm;
     })(),
     isEvent: isEve,
     homeSection: _tuHomeSections.slice(),
@@ -33098,8 +33108,11 @@ function tuEditTicket(id){
   // 🆕 판매 오픈 상태 복원
   if (typeof tuSetSale === 'function') {
     tuSetSale(t.saleState === 'draft' || t.saleState === 'scheduled' ? t.saleState : 'open');
-    var _soEl = document.getElementById('tuSaleOpenAt');
-    if (_soEl) _soEl.value = t.saleOpenAt ? String(t.saleOpenAt).slice(0, 16) : '';
+    var _soD = document.getElementById('tuSaleOpenDate');
+    var _soT = document.getElementById('tuSaleOpenTime');
+    var _soV = t.saleOpenAt ? String(t.saleOpenAt) : '';
+    if (_soD) _soD.value = _soV ? _soV.slice(0, 10) : '';
+    if (_soT && _soT.options.length) _soT.value = (_soV.length >= 16 ? _soV.slice(11, 16) : '10:00');
     if (typeof tuSaleAtChanged === 'function') tuSaleAtChanged();
   }
   // 우선공개 설정 복원
@@ -33472,26 +33485,38 @@ function tuSetSale(state){
   });
   var row = document.getElementById('tuSaleSchedRow');
   if (row) row.style.display = _tuSaleState === 'scheduled' ? 'block' : 'none';
+  // 시간 선택지(30분 단위)는 처음 열릴 때 한 번만 만든다. 기본 10:00.
+  var ts = document.getElementById('tuSaleOpenTime');
+  if (ts && !ts.options.length) {
+    for (var _h = 0; _h < 24; _h++) {
+      ['00','30'].forEach(function(_m){
+        var v = String(_h).padStart(2,'0') + ':' + _m;
+        var o = document.createElement('option');
+        o.value = v; o.textContent = v;
+        if (v === '10:00') o.selected = true;
+        ts.appendChild(o);
+      });
+    }
+  }
   if (typeof tuSaleAtChanged === 'function') tuSaleAtChanged();
 }
 window.tuSetSale = tuSetSale;
 
-// 예약 일시 선택값을 사람이 읽는 라벨로 — 값이 있으면 진하게, 없으면 안내 문구
+// 예약 날짜 선택값을 사람이 읽는 라벨로 — 값이 있으면 진하게, 없으면 안내 문구
 function tuSaleAtChanged(){
-  var inp = document.getElementById('tuSaleOpenAt');
+  var inp = document.getElementById('tuSaleOpenDate');
   var lab = document.getElementById('tuSaleOpenAtLabel');
   if (!inp || !lab) return;
   var v = inp.value;
   if (!v) {
-    lab.innerHTML = '눌러서 날짜·시간 선택 <span style="color:#c8a96e;font-size:12px;">▾</span>';
+    lab.innerHTML = '눌러서 날짜 선택 <span style="color:#c8a96e;font-size:12px;">▾</span>';
     lab.style.color = '#b5afa2';
     return;
   }
-  var d = new Date(v);
+  var d = new Date(v + 'T00:00');
   var DOW = ['일','월','화','수','목','금','토'];
   var txt = isNaN(d.getTime()) ? v
-    : (d.getMonth()+1) + '/' + d.getDate() + ' (' + DOW[d.getDay()] + ') '
-      + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+    : d.getFullYear() + '. ' + (d.getMonth()+1) + '/' + d.getDate() + ' (' + DOW[d.getDay()] + ')';
   lab.innerHTML = txt + ' <span style="color:#c8a96e;font-size:12px;">▾</span>';
   lab.style.color = '#1a1a18';
 }
@@ -34382,7 +34407,8 @@ function tuResetGradeOpen() {
   if(typeof tuSetMinTier === 'function') tuSetMinTier('');
   // 🆕 판매 오픈도 즉시 공개로 초기화
   if(typeof tuSetSale === 'function') tuSetSale('open');
-  var _soRst = document.getElementById('tuSaleOpenAt'); if(_soRst) _soRst.value = '';
+  var _soRstD = document.getElementById('tuSaleOpenDate'); if(_soRstD) _soRstD.value = '';
+  var _soRstT = document.getElementById('tuSaleOpenTime'); if(_soRstT && _soRstT.options.length) _soRstT.value = '10:00';
   if (typeof tuSaleAtChanged === 'function') tuSaleAtChanged();
   _tuGradeOpen = false; _tuMOpenDate = null; _tuMOpenTime = null;
   _tuDelay = 24; _tuDelayUnit = 'hour';
