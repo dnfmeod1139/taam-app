@@ -32948,16 +32948,51 @@ function renderRestList(){
     +'</div>';
   }).join('');
 }
+// 🆕 2026.08: 티켓 리스트 탭 — 발행 / 오픈 예약 / 미공개 보관
+var _tuListTab = 'open';
+function tuListSetTab(k){ _tuListTab = k; renderTicketList(); }
+window.tuListSetTab = tuListSetTab;
+// 판매 공개 상태 분류: open=발행(자동 공개된 예약 건 포함) / sched=오픈 예약 / draft=미공개 보관
+function _tuSaleKind(t){
+  var ss = t.saleState || 'open';
+  if (ss === 'draft') return 'draft';
+  if (ss === 'scheduled') return (!t.saleOpenAt || new Date(t.saleOpenAt) > new Date()) ? 'sched' : 'open';
+  return 'open';
+}
+function _tuFmtOpenAt(v){
+  if(!v) return '일시 미정';
+  var d = new Date(v);
+  if(isNaN(d.getTime())) return String(v);
+  return (d.getMonth()+1)+'/'+d.getDate()+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
+}
 function renderTicketList(){
   var el=document.getElementById('ticketListContent');if(!el)return;
   if(ticketDB.length===0){el.innerHTML='<div class="sub-empty">등록된 티켓 없음</div>';return;}
-  // 정렬: 판매중 먼저, 매진 나중 · 🆕 같은 상태끼리는 연·월·일 순
-  var sorted=ticketDB.slice().sort(function(a,b){
+  // 🆕 탭 바 — 상태별 개수 포함
+  var _cnt={open:0,sched:0,draft:0};
+  ticketDB.forEach(function(t){ _cnt[_tuSaleKind(t)]++; });
+  var tabBar='<div style="display:flex;gap:6px;padding:2px 0 10px;">'
+    +[['open','발행'],['sched','오픈 예약'],['draft','미공개 보관']].map(function(d){
+      var on=_tuListTab===d[0];
+      return '<button onclick="tuListSetTab(\''+d[0]+'\')" style="flex:1;padding:9px 4px;border-radius:10px;font-size:12px;font-weight:800;cursor:pointer;font-family:inherit;'
+        +(on?'border:1px solid #1a1a18;background:#1a1a18;color:#fff;':'border:1px solid #ddd8ce;background:#fff;color:#8a8580;')
+        +'">'+d[1]+' '+_cnt[d[0]]+'</button>';
+    }).join('')+'</div>';
+  // 정렬: 판매중 먼저, 매진 나중 · 같은 상태끼리는 연·월·일 순 (오픈 예약 탭은 오픈 임박순)
+  var sorted=ticketDB.filter(function(t){ return _tuSaleKind(t)===_tuListTab; }).sort(function(a,b){
+    if(_tuListTab==='sched'){
+      var _s=String(a.saleOpenAt||'9').localeCompare(String(b.saleOpenAt||'9'));
+      if(_s) return _s;
+    }
     var _r=(a.status==='soldout'?1:0)-(b.status==='soldout'?1:0);
     if(_r) return _r;
     return (typeof _tkDateKey==='function') ? (_tkDateKey(a)-_tkDateKey(b)) : 0;
   });
-  el.innerHTML=sorted.map(function(t){
+  if(sorted.length===0){
+    el.innerHTML=tabBar+'<div class="sub-empty">'+(_tuListTab==='sched'?'오픈 예약된 티켓 없음':(_tuListTab==='draft'?'보관 중인 티켓 없음':'발행된 티켓 없음'))+'</div>';
+    return;
+  }
+  el.innerHTML=tabBar+sorted.map(function(t){
     var r=restaurantDB.find(function(x){return String(x.id)===String(t.restId);});
     var isSold=t.status==='soldout';
     var slots='';
@@ -33008,8 +33043,59 @@ function renderTicketList(){
         lockBadge = ' <span style="font-size:8px;font-weight:800;color:#27ae60;background:#f0fdf4;border:1px solid #b7eac7;border-radius:3px;padding:2px 5px;">전체오픈</span>';
       }
     }
-    return '<div class="rest-list-item">'      +'<div class="rest-list-info">'        +'<div class="rest-list-name"'+(isSold?' style="opacity:.4;"':'')+'>'+( r?r.name:t.rest)+' <span style="font-family:var(--font-main);font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:'+(isSold?'#E53935':'#c8a96e')+';">'+(isSold?'SOLD OUT':t.type)+'</span>'+lockBadge+'</div>'        +'<div class="rest-list-meta"'+(isSold?' style="opacity:.4;"':'')+'>'+t.date+' · '+t.time+slots+'</div>'      +'</div>'      +'<div class="rest-list-actions">'+        '<button class="rest-action-sold'+(isSold?' soldout':'')+'" onclick="tuToggleSoldout(\''+t.id+'\')">'+(isSold?'판매중':'매진')+'</button>'+        ((t.deadlineDate||t.gradeOpen)?'<button class="rest-action-extend" onclick="openExtendPopup(\''+t.id+'\')" >연장</button>':'')+        '<button class="rest-action-edit" onclick="tuEditTicket(\''+t.id+'\')" >수정</button>'+        '<button class="rest-action-del" onclick="tuDeleteTicket(\''+t.id+'\')" >삭제</button>'+      '</div>'+    '</div>';
+    // 🆕 오픈 예약 일정 — 언제 자동 공개되는지 매장명 아래 표시
+    var schedLine = (t.saleState==='scheduled' && t.saleOpenAt && new Date(t.saleOpenAt) > new Date())
+      ? '<div style="font-size:10.5px;font-weight:800;color:#B45309;margin-top:3px;">⏰ '+_tuFmtOpenAt(t.saleOpenAt)+' 오픈 예약</div>' : '';
+    return '<div class="rest-list-item">'      +'<div class="rest-list-info">'        +'<div class="rest-list-name"'+(isSold?' style="opacity:.4;"':'')+'>'+( r?r.name:t.rest)+' <span style="font-family:var(--font-main);font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:'+(isSold?'#E53935':'#c8a96e')+';">'+(isSold?'SOLD OUT':t.type)+'</span>'+lockBadge+'</div>'        +'<div class="rest-list-meta"'+(isSold?' style="opacity:.4;"':'')+'>'+t.date+' · '+t.time+slots+'</div>'
+        +schedLine
+        +'<div id="tkls_'+t.id+'" style="font-size:10.5px;color:#8a8580;margin-top:3px;">좌석 집계 중…</div>'
+      +'</div>'      +'<div class="rest-list-actions">'+        '<button class="rest-action-sold'+(isSold?' soldout':'')+'" onclick="tuToggleSoldout(\''+t.id+'\')">'+(isSold?'판매중':'매진')+'</button>'+        ((t.deadlineDate||t.gradeOpen)?'<button class="rest-action-extend" onclick="openExtendPopup(\''+t.id+'\')" >연장</button>':'')+        '<button class="rest-action-edit" onclick="tuEditTicket(\''+t.id+'\')" >수정</button>'+        '<button class="rest-action-del" onclick="tuDeleteTicket(\''+t.id+'\')" >삭제</button>'+      '</div>'+    '</div>';
   }).join('');
+  _tuListSeatStats(sorted);
+}
+
+// 🆕 2026.08: 티켓 리스트 좌석 집계 — 전체/잔여/앱 판매/초대 좌석을 매장명 아래 표시.
+//   tickets 테이블을 purchase_id 접두사로 분류한다:
+//     INVH-(초대 좌석 홀드) + INV-(초대 결제 완료) = 초대 좌석
+//     MAN-(캘린더 수동 연동) = 수동 좌석 / 그 외 = 앱에서 판매된 좌석
+//   취소(status=cancelled) 행은 좌석이 복구된 것이므로 제외 — 서버 트리거와 같은 기준.
+function _tuListSeatStats(list){
+  if(!window.sb || !list || !list.length) return;
+  var ids = list.map(function(t){ return String(t.id); });
+  window.sb.from('tickets')
+    .select('ticket_product_id, party_size, purchase_id, status')
+    .in('ticket_product_id', ids)
+    .limit(3000)
+    .then(function(r){
+      if(r.error || !r.data){ console.warn('[tkList] 좌석 집계 실패:', r.error && r.error.message); return; }
+      var agg = {};
+      r.data.forEach(function(row){
+        if(String(row.status||'')==='cancelled') return;
+        var k = String(row.ticket_product_id||''); if(!k) return;
+        var a = agg[k] || (agg[k] = { inv:0, app:0, man:0 });
+        var pid = String(row.purchase_id||'');
+        var pax = parseInt(row.party_size)||0;
+        if(pid.indexOf('INVH-')===0 || pid.indexOf('INV-')===0) a.inv += pax;
+        else if(pid.indexOf('MAN-')===0) a.man += pax;
+        else a.app += pax;
+      });
+      list.forEach(function(t){
+        var elS = document.getElementById('tkls_'+t.id); if(!elS) return;
+        var a = agg[String(t.id)] || { inv:0, app:0, man:0 };
+        var used = a.inv + a.app + a.man;
+        var cap = parseInt(t.totalPax || t.assignedPax) || 0;
+        var parts = [];
+        if(cap > 0){
+          var remain = Math.max(0, cap - used);
+          parts.push('전체 <b style="color:#1a1a18;">'+cap+'석</b>');
+          parts.push('잔여 <b style="color:'+(remain===0?'#9B1C1C':'#1E7A46')+';">'+remain+'석</b>');
+        }
+        parts.push('앱 판매 <b style="color:#1a1a18;">'+a.app+'석</b>');
+        if(a.inv > 0) parts.push('초대 <b style="color:#3E5C76;">'+a.inv+'석</b>');
+        if(a.man > 0) parts.push('수동 <b style="color:#8a6d3b;">'+a.man+'석</b>');
+        elS.innerHTML = parts.join(' · ');
+      });
+    }, function(e){ console.warn('[tkList] 좌석 집계 예외:', e); });
 }
 
 // 🆕 2026.07: 자유 구성 판매 모드 원탭 전환 (엄격⇄완화) — 판매 도중 가능, 저장 즉시 전 회원 반영
