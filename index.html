@@ -10319,6 +10319,14 @@ window.closePromoCarousel = function(){
             </div>
             <div class="admin-arrow">›</div>
           </div>
+          <!-- 🆕 2026.08: 메인 팝업 발행 -->
+          <div class="admin-menu-item" onclick="popAdminOpen()">
+            <div>
+              <div class="admin-menu-text">🎪 메인 팝업 발행</div>
+              <div class="admin-menu-sub">글·사진·영상 공지. 티켓 연결(캘린더 바로) 또는 이벤트 설명 화면 경유</div>
+            </div>
+            <div class="admin-arrow">›</div>
+          </div>
           <!-- 🆕 2026.08: 해외 통화(환율·해외 대행비) 설정 -->
           <div class="admin-menu-item" onclick="fxOpenSettings()">
             <div>
@@ -33618,6 +33626,324 @@ async function tkSaleMgrAct(id, act){
 }
 window.tkSaleMgrAct = tkSaleMgrAct;
 
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026.08: 메인 팝업 — 슈퍼어드민이 발행하는 홈 공지 (글·사진·영상)
+//   저장: app_config.home_popup { enabled, id, title, body, media_url, media_type,
+//          link_ticket_id, link_mode('ticket'|'event'), event_desc, event_media_url }
+//   · 발행 = 새 id → "오늘 하루 열지 않기" 한 회원에게도 다시 보인다
+//   · 일반 티켓 연결: 팝업 클릭 → 해당 날짜 캘린더로 바로
+//   · 이벤트 연결: 팝업 클릭 → 이벤트 간지 화면 → 하단 CTA → 캘린더 날짜로
+// ═══════════════════════════════════════════════════════════════
+var _homePopCfg = null, _homePopLoaded = false, _homePopKicked = false;
+
+function _popL(ko, en, ja){
+  var l = window._tkCurrentLang || 'ko';
+  return l === 'en' ? en : (l === 'ja' ? ja : ko);
+}
+function _popToday(){
+  var d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+
+async function homePopupLoad(){
+  if(!window.sb) return null;
+  try{
+    var r = await window.sb.from('app_config').select('value').eq('key','home_popup').maybeSingle();
+    _homePopCfg = (r && r.data && r.data.value) || null;
+  }catch(e){ _homePopCfg = null; }
+  _homePopLoaded = true;
+  return _homePopCfg;
+}
+
+// 메인(매거진) 첫 렌더에서 한 번만 — 스플래시가 걷힌 뒤 자연스럽게 뜨도록 지연
+function _homePopupKick(){
+  if(_homePopKicked) return;
+  _homePopKicked = true;
+  setTimeout(function(){
+    (_homePopLoaded ? Promise.resolve() : homePopupLoad()).then(function(){ homePopupShow(false); });
+  }, 900);
+}
+window._homePopupKick = _homePopupKick;
+
+function homePopupShow(force){
+  var c = _homePopCfg;
+  if(!c || !c.enabled || !c.id) return;
+  if(!force){
+    try{ if(localStorage.getItem('taamPopHide_' + c.id) === _popToday()) return; }catch(e){}
+  }
+  if(document.getElementById('homePopup')) return;
+  var media = '';
+  if(c.media_url){
+    media = (c.media_type === 'video')
+      ? '<video src="' + c.media_url + '" autoplay muted loop playsinline style="width:100%;display:block;max-height:340px;object-fit:cover;"></video>'
+      : '<img src="' + c.media_url + '" style="width:100%;display:block;max-height:340px;object-fit:cover;" alt="">';
+  }
+  var el = document.createElement('div');
+  el.id = 'homePopup';
+  el.style.cssText = 'position:fixed;inset:0;z-index:9300;background:rgba(10,8,6,.62);display:flex;align-items:center;justify-content:center;padding:26px;';
+  el.onclick = function(ev){ if(ev.target === el) homePopupClose(); };
+  el.innerHTML =
+    '<div style="width:100%;max-width:340px;background:#FBF9F4;border-radius:18px;overflow:hidden;font-family:var(--font-main);box-shadow:0 24px 60px rgba(0,0,0,.45);">'
+    + '<div onclick="homePopupGo()" style="cursor:pointer;">'
+      + media
+      + ((c.title || c.body) ? '<div style="padding:16px 18px ' + (c.link_ticket_id ? '8px' : '14px') + ';">'
+        + (c.title ? '<div style="font-size:16px;font-weight:800;color:#1a1a18;line-height:1.4;">' + _pcalEsc(c.title) + '</div>' : '')
+        + (c.body ? '<div style="font-size:12.5px;color:#5c554a;line-height:1.7;margin-top:6px;white-space:pre-line;">' + _pcalEsc(c.body) + '</div>' : '')
+        + '</div>' : '')
+      + (c.link_ticket_id ? '<div style="padding:0 18px 14px;font-size:12px;font-weight:800;color:#5C0A14;">'
+          + (c.link_mode === 'event' ? _popL('자세히 보기 →','See details →','詳しく見る →')
+                                     : _popL('캘린더에서 보기 →','View in calendar →','カレンダーで見る →')) + '</div>' : '')
+    + '</div>'
+    + '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-top:1px solid #eee5d8;background:#f5f1e9;">'
+      + '<label style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:#8a8580;cursor:pointer;">'
+        + '<input type="checkbox" id="homePopupHideChk" style="width:15px;height:15px;">'
+        + _popL('오늘 하루 열지 않기',"Don't show today",'今日は表示しない') + '</label>'
+      + '<button onclick="homePopupClose()" style="border:0;background:none;font-size:12.5px;font-weight:800;color:#1a1a18;padding:6px 8px;cursor:pointer;">'
+        + _popL('닫기','Close','閉じる') + '</button>'
+    + '</div></div>';
+  document.body.appendChild(el);
+}
+window.homePopupShow = homePopupShow;
+
+function homePopupClose(){
+  var c = _homePopCfg;
+  try{
+    var chk = document.getElementById('homePopupHideChk');
+    if(chk && chk.checked && c && c.id) localStorage.setItem('taamPopHide_' + c.id, _popToday());
+  }catch(e){}
+  var el = document.getElementById('homePopup'); if(el) el.remove();
+}
+window.homePopupClose = homePopupClose;
+
+function homePopupGo(){
+  var c = _homePopCfg;
+  var el = document.getElementById('homePopup'); if(el) el.remove();
+  if(!c || !c.link_ticket_id) return;
+  var t = (ticketDB || []).find(function(x){ return String(x.id) === String(c.link_ticket_id); });
+  if(!t){ if(typeof showToast === 'function') showToast('⚠','연결된 티켓 없음','티켓이 삭제되었거나 아직 로드되지 않았습니다'); return; }
+  if(c.link_mode === 'event') _popShowEvent(c, t);
+  else _popGoTicket(t);
+}
+window.homePopupGo = homePopupGo;
+
+// 해당 티켓의 캘린더 날짜로 — 매거진이면 시트를 올려 그 날을 짚는다
+function _popGoTicket(t){
+  try{
+    var fd = (typeof _tkFullDate === 'function') ? _tkFullDate(t) : String(t.date || '');
+    var p = String(fd).split('.');
+    var y = parseInt(p[0],10), m = parseInt(p[1],10), d = parseInt(p[2],10);
+    if(!(y > 2000 && m >= 1)) return;
+    window._pcalY = y; window._pcalM = m;
+    var ev = document.getElementById('popEventScreen'); if(ev) ev.remove();
+    if(typeof magEnabled === 'function' && magEnabled()){
+      if(typeof magRender === 'function') magRender();
+      if(typeof magOpenSheet === 'function') magOpenSheet();
+    } else {
+      if(typeof showView === 'function') showView('ticket');
+      if(typeof pcalRenderAll === 'function') pcalRenderAll();
+    }
+    if(d > 0 && typeof pcalOpenDay === 'function') setTimeout(function(){ try{ pcalOpenDay(y, m, d); }catch(_e){} }, 380);
+  }catch(e){ console.warn('[popup] 캘린더 이동 실패', e); }
+}
+
+// 이벤트 간지 화면 — 설명을 본 뒤 맨 아래 CTA 로 티켓 날짜로 들어간다
+function _popShowEvent(c, t){
+  var old = document.getElementById('popEventScreen'); if(old) old.remove();
+  var media = c.event_media_url || c.media_url || '';
+  var mediaHtml = media
+    ? ((c.media_type === 'video' && !c.event_media_url)
+        ? '<video src="' + media + '" autoplay muted loop playsinline style="width:100%;display:block;"></video>'
+        : '<img src="' + media + '" style="width:100%;display:block;" alt="">')
+    : '';
+  var el = document.createElement('div');
+  el.id = 'popEventScreen';
+  el.style.cssText = 'position:fixed;inset:0;z-index:9310;background:#0d0b09;overflow-y:auto;-webkit-overflow-scrolling:touch;font-family:var(--font-main);';
+  el.innerHTML =
+    '<button onclick="document.getElementById(\'popEventScreen\').remove()" style="position:fixed;top:calc(14px + env(safe-area-inset-top));right:14px;z-index:2;width:36px;height:36px;border-radius:50%;border:0;background:rgba(0,0,0,.45);color:#fff;font-size:18px;cursor:pointer;">×</button>'
+    + '<div style="padding-bottom:130px;">'
+    + mediaHtml
+    + '<div style="padding:26px 22px;">'
+      + (c.title ? '<div style="font-size:21px;font-weight:800;color:#fff;line-height:1.35;">' + _pcalEsc(c.title) + '</div>' : '')
+      + (c.event_desc ? '<div style="font-size:13.5px;color:rgba(255,255,255,.78);line-height:1.9;margin-top:14px;white-space:pre-line;">' + _pcalEsc(c.event_desc) + '</div>' : '')
+    + '</div></div>'
+    + '<div style="position:fixed;left:0;right:0;bottom:0;padding:12px 18px calc(16px + env(safe-area-inset-bottom));background:linear-gradient(transparent, rgba(13,11,9,.92) 40%);">'
+      + '<button onclick="_popEventCta(\'' + String(t.id) + '\')" style="width:100%;padding:16px;border:0;border-radius:14px;background:#c8a96e;color:#1a1410;font-size:14px;font-weight:800;letter-spacing:.04em;cursor:pointer;">'
+      + _popL('이벤트 참여하기 · 티켓 구매','Join the event · Buy ticket','イベントに参加 · チケット購入') + '</button>'
+    + '</div>';
+  document.body.appendChild(el);
+}
+function _popEventCta(tid){
+  var t = (ticketDB || []).find(function(x){ return String(x.id) === String(tid); });
+  if(t) _popGoTicket(t);
+}
+window._popEventCta = _popEventCta;
+
+// ── 팝업 발행 편집기 (슈퍼어드민) ──
+var _paW = null;   // 작업 중 설정 (working copy)
+async function popAdminOpen(){
+  if (typeof _isSuperAdmin === 'function' && !_isSuperAdmin()){
+    showToast('🔒','권한 부족','슈퍼어드민 전용'); return;
+  }
+  await homePopupLoad();
+  _paW = Object.assign({ enabled:false, id:null, title:'', body:'', media_url:'', media_type:'image',
+                         link_ticket_id:'', link_mode:'ticket', event_desc:'', event_media_url:'' }, _homePopCfg || {});
+  var old = document.getElementById('popAdmin'); if(old) old.remove();
+  var el = document.createElement('div');
+  el.id = 'popAdmin';
+  el.style.cssText = 'position:fixed;inset:0;z-index:9200;background:rgba(20,16,12,.55);display:flex;align-items:center;justify-content:center;padding:16px;';
+  el.onclick = function(ev){ if(ev.target === el) el.remove(); };
+  var tkOpts = '<option value="">연결 안 함</option>';
+  (ticketDB || []).forEach(function(t){
+    if(typeof _isTicketExpired === 'function' && _isTicketExpired(t)) return;
+    var r = (restaurantDB || []).find(function(x){ return String(x.id) === String(t.restId); });
+    var tag = t.isEvent ? '[이벤트] ' : '';
+    if (typeof _tkSaleHidden === 'function' && _tkSaleHidden(t)) tag += '[미오픈] ';
+    tkOpts += '<option value="' + String(t.id) + '"' + (String(_paW.link_ticket_id) === String(t.id) ? ' selected' : '') + '>'
+      + tag + ((r && r.name) || t.rest || '매장') + ' · ' + (t.dateYear ? t.dateYear + '.' : '') + t.date + '</option>';
+  });
+  function inp(id, ph, val){
+    return '<input id="' + id + '" type="text" placeholder="' + ph + '" value="' + _pcalEsc(val || '') + '" style="width:100%;box-sizing:border-box;padding:11px 12px;border:1.5px solid #e0ddd8;border-radius:9px;font-size:13px;font-family:var(--font-main);margin-bottom:10px;background:#fff;">';
+  }
+  el.innerHTML =
+    '<div style="width:100%;max-width:420px;max-height:88vh;overflow-y:auto;background:#FBF9F4;border-radius:18px;padding:20px 20px 24px;font-family:var(--font-main);-webkit-overflow-scrolling:touch;" data-lang-lock="ko">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">'
+      + '<div style="font-size:16px;font-weight:800;color:#1a1a18;">🎪 메인 팝업 발행</div>'
+      + '<span style="font-size:11px;font-weight:800;color:' + (_paW.enabled ? '#2a6a2a' : '#8a8580') + ';">' + (_paW.enabled ? '● 게시 중' : '○ 내려감') + '</span>'
+    + '</div>'
+    + '<div style="font-size:11px;color:#8a8580;margin-bottom:14px;line-height:1.6;">앱 메인 진입 시 모든 회원에게 뜹니다. 「발행」은 새 팝업으로 취급 — "오늘 하루 열지 않기" 한 회원에게도 다시 보입니다.</div>'
+    + inp('paTitle','제목', _paW.title)
+    + '<textarea id="paBody" placeholder="본문 (줄바꿈 유지)" style="width:100%;box-sizing:border-box;padding:11px 12px;border:1.5px solid #e0ddd8;border-radius:9px;font-size:13px;font-family:var(--font-main);margin-bottom:10px;background:#fff;min-height:70px;">' + _pcalEsc(_paW.body || '') + '</textarea>'
+    + '<div style="display:flex;gap:6px;margin-bottom:6px;">'
+      + '<button onclick="document.getElementById(\'paImgFile\').click()" style="flex:1;padding:10px 0;border:1.5px solid #d8c9a8;border-radius:9px;background:#fff;color:#8a7a55;font-size:12px;font-weight:800;cursor:pointer;">📷 사진 업로드</button>'
+      + '<button onclick="document.getElementById(\'paVidFile\').click()" style="flex:1;padding:10px 0;border:1.5px solid #d8c9a8;border-radius:9px;background:#fff;color:#8a7a55;font-size:12px;font-weight:800;cursor:pointer;">🎬 영상 업로드</button>'
+    + '</div>'
+    + '<input type="file" id="paImgFile" accept="image/*" style="display:none;" onchange="paUpMedia(this,\'image\')">'
+    + '<input type="file" id="paVidFile" accept="video/mp4,video/quicktime,video/webm" style="display:none;" onchange="paUpMedia(this,\'video\')">'
+    + '<div id="paMediaState" style="font-size:11px;color:' + (_paW.media_url ? '#2a6a2a' : '#a8a29a') + ';margin-bottom:12px;">'
+      + (_paW.media_url ? ('첨부됨 (' + (_paW.media_type === 'video' ? '영상' : '사진') + ') — 다시 업로드하면 교체') : '미디어 없음 (글만 표시)') + '</div>'
+    + '<div style="font-size:11px;font-weight:800;color:#666;margin-bottom:6px;">연결 티켓 (팝업 클릭 시 이동)</div>'
+    + '<select id="paLinkTicket" onchange="paLinkChanged()" class="tu-input" style="width:100%;box-sizing:border-box;background:#fff;font-size:13px;margin-bottom:10px;">' + tkOpts + '</select>'
+    + '<div style="display:flex;gap:6px;margin-bottom:10px;">'
+      + '<button id="paModeTicket" onclick="paSetMode(\'ticket\')" style="flex:1;padding:10px 0;border-radius:9px;font-size:12px;font-weight:800;cursor:pointer;"></button>'
+      + '<button id="paModeEvent" onclick="paSetMode(\'event\')" style="flex:1;padding:10px 0;border-radius:9px;font-size:12px;font-weight:800;cursor:pointer;"></button>'
+    + '</div>'
+    + '<div id="paEventBox" style="display:none;">'
+      + '<textarea id="paEventDesc" placeholder="이벤트 설명 — 팝업 클릭 시 보이는 간지 화면의 본문" style="width:100%;box-sizing:border-box;padding:11px 12px;border:1.5px solid #e0ddd8;border-radius:9px;font-size:13px;font-family:var(--font-main);margin-bottom:6px;background:#fff;min-height:90px;">' + _pcalEsc(_paW.event_desc || '') + '</textarea>'
+      + '<button onclick="document.getElementById(\'paEvImgFile\').click()" style="width:100%;padding:10px 0;border:1.5px solid #d8c9a8;border-radius:9px;background:#fff;color:#8a7a55;font-size:12px;font-weight:800;cursor:pointer;margin-bottom:4px;">📷 이벤트 화면 이미지 (선택 — 없으면 팝업 미디어 재사용)</button>'
+      + '<input type="file" id="paEvImgFile" accept="image/*" style="display:none;" onchange="paUpMedia(this,\'event\')">'
+      + '<div id="paEvMediaState" style="font-size:11px;color:' + (_paW.event_media_url ? '#2a6a2a' : '#a8a29a') + ';margin-bottom:10px;">' + (_paW.event_media_url ? '이벤트 이미지 첨부됨' : '') + '</div>'
+    + '</div>'
+    + '<button onclick="paPreview()" style="width:100%;padding:12px;border:1.5px solid #d8d3cc;border-radius:11px;background:#fff;color:#666;font-size:12.5px;font-weight:800;cursor:pointer;margin-bottom:8px;">👁 미리보기</button>'
+    + '<button onclick="paPublish(true)" style="width:100%;padding:14px;border:0;border-radius:11px;background:#5C0A14;color:#fff;font-size:13px;font-weight:800;cursor:pointer;margin-bottom:8px;">📣 발행하기 — 모든 회원에게 새로 표시</button>'
+    + '<button onclick="paPublish(false)" style="width:100%;padding:12px;border:1.5px solid #d8d3cc;border-radius:11px;background:#fff;color:#1a1a18;font-size:12.5px;font-weight:800;cursor:pointer;margin-bottom:8px;">내용만 저장 (조용히 수정)</button>'
+    + '<button onclick="paTakeDown()" style="width:100%;padding:11px;border:0;border-radius:11px;background:transparent;color:#B23A2E;font-size:12px;font-weight:800;cursor:pointer;">팝업 내리기</button>'
+    + '</div>';
+  document.body.appendChild(el);
+  paSetMode(_paW.link_mode === 'event' ? 'event' : 'ticket');
+}
+window.popAdminOpen = popAdminOpen;
+
+function paSetMode(mode){
+  _paW.link_mode = mode === 'event' ? 'event' : 'ticket';
+  var bt = document.getElementById('paModeTicket'), be = document.getElementById('paModeEvent');
+  function sty(b, on, label){
+    if(!b) return;
+    b.textContent = label;
+    b.style.border = '1.5px solid ' + (on ? '#1a1a18' : '#e0ddd8');
+    b.style.background = on ? '#1a1a18' : '#fff';
+    b.style.color = on ? '#fff' : '#666';
+  }
+  sty(bt, _paW.link_mode === 'ticket', '캘린더 바로 이동');
+  sty(be, _paW.link_mode === 'event', '이벤트 설명 화면 거침');
+  var box = document.getElementById('paEventBox');
+  if(box) box.style.display = _paW.link_mode === 'event' ? 'block' : 'none';
+}
+window.paSetMode = paSetMode;
+
+// 이벤트 티켓을 고르면 이벤트 모드를 기본 제안
+function paLinkChanged(){
+  var sel = document.getElementById('paLinkTicket');
+  var t = sel && sel.value ? (ticketDB || []).find(function(x){ return String(x.id) === String(sel.value); }) : null;
+  if(t && t.isEvent) paSetMode('event');
+}
+window.paLinkChanged = paLinkChanged;
+
+async function paUpMedia(input, kind){
+  var file = input.files && input.files[0];
+  if(!file) return;
+  input.value = '';
+  showToast('⏳','업로드 중','잠시만 기다려주세요');
+  try{
+    var url = null;
+    if(kind === 'video'){
+      if(file.size > 30 * 1024 * 1024){ showToast('⚠','파일이 큽니다','30MB 이하의 짧은 영상을 사용해주세요'); return; }
+      var ext = (file.name.split('.').pop() || 'mp4').toLowerCase().replace(/[^a-z0-9]/g,'') || 'mp4';
+      var path = 'popup_' + Date.now() + '.' + ext;
+      var up = await window.sb.storage.from('splash-media').upload(path, file, { cacheControl:'3600', upsert:true, contentType: file.type || 'video/mp4' });
+      if(up.error) throw up.error;
+      var pub = window.sb.storage.from('splash-media').getPublicUrl(path);
+      url = pub && pub.data && pub.data.publicUrl;
+    } else {
+      url = await uploadImageToStorage(file, 'taam-photos');
+    }
+    if(!url) throw new Error('URL 생성 실패');
+    if(kind === 'event'){
+      _paW.event_media_url = url;
+      var es = document.getElementById('paEvMediaState');
+      if(es){ es.textContent = '이벤트 이미지 첨부됨'; es.style.color = '#2a6a2a'; }
+    } else {
+      _paW.media_url = url;
+      _paW.media_type = kind;
+      var ms = document.getElementById('paMediaState');
+      if(ms){ ms.textContent = '첨부됨 (' + (kind === 'video' ? '영상' : '사진') + ') — 다시 업로드하면 교체'; ms.style.color = '#2a6a2a'; }
+    }
+    showToast('✓','업로드 완료','');
+  }catch(e){
+    console.warn('[popup] 업로드 실패', e);
+    showToast('⚠','업로드 실패', (e && e.message || '').slice(0, 60));
+  }
+}
+window.paUpMedia = paUpMedia;
+
+function _paCollect(){
+  _paW.title = (document.getElementById('paTitle') || {}).value || '';
+  _paW.body = (document.getElementById('paBody') || {}).value || '';
+  _paW.link_ticket_id = (document.getElementById('paLinkTicket') || {}).value || '';
+  _paW.event_desc = (document.getElementById('paEventDesc') || {}).value || '';
+  return _paW;
+}
+
+function paPreview(){
+  var c = _paCollect();
+  _homePopCfg = Object.assign({}, c, { enabled: true, id: c.id || 'preview' });
+  homePopupShow(true);
+}
+window.paPreview = paPreview;
+
+async function paPublish(asNew){
+  var c = _paCollect();
+  if(!c.title && !c.body && !c.media_url){ showToast('⚠','내용 없음','제목·본문·미디어 중 하나는 있어야 합니다'); return; }
+  c.enabled = true;
+  if(asNew || !c.id) c.id = 'pop_' + Date.now();
+  var res = await window.sb.from('app_config').upsert({ key:'home_popup', value:c, updated_at:new Date().toISOString() });
+  if(res.error){ showToast('⚠','저장 실패', res.error.message.slice(0,60)); return; }
+  _homePopCfg = c;
+  showToast('✓', asNew ? '발행 완료' : '저장 완료', asNew ? '모든 회원에게 새로 표시됩니다' : '내용이 수정되었습니다');
+  var el = document.getElementById('popAdmin'); if(el) el.remove();
+}
+window.paPublish = paPublish;
+
+async function paTakeDown(){
+  var c = _paCollect();
+  c.enabled = false;
+  var res = await window.sb.from('app_config').upsert({ key:'home_popup', value:c, updated_at:new Date().toISOString() });
+  if(res.error){ showToast('⚠','저장 실패', res.error.message.slice(0,60)); return; }
+  _homePopCfg = c;
+  showToast('✓','팝업 내림','회원에게 더 이상 표시되지 않습니다');
+  var el = document.getElementById('popAdmin'); if(el) el.remove();
+}
+window.paTakeDown = paTakeDown;
+
 // ── 홈 연동 섹션 ──
 var _tuHomeSections = [];
 
@@ -40417,6 +40743,8 @@ function magRender(){
   var v = document.getElementById('magView');
   if(!v) return;
   if(!magEnabled()){ v.style.display = 'none'; return; }
+  // 🆕 메인 팝업 — 첫 렌더에서 한 번만 (900ms 지연, 오늘 숨김 회원 제외)
+  try{ if(typeof _homePopupKick === 'function') _homePopupKick(); }catch(_pke){}
 
   if(_pcalCovers === null){
     // 마지막으로 알던 설정(기기 캐시)으로 즉시 그린다. 캐시가 없으면(진짜 첫 실행)
