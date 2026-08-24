@@ -10744,7 +10744,12 @@ window.closePromoCarousel = function(){
         <button type="button" class="tu-sale-btn" data-sale="draft" onclick="tuSetSale('draft')" style="flex:1;padding:11px 0;border:1.5px solid #e0ddd8;border-radius:9px;background:#fff;color:#666;font-size:12px;font-weight:800;cursor:pointer;">비공개 보관</button>
       </div>
       <div id="tuSaleSchedRow" style="display:none;margin-top:8px;">
-        <input type="datetime-local" id="tuSaleOpenAt" class="tu-input" style="height:44px;font-size:14px;font-family:var(--font-main);width:100%;box-sizing:border-box;">
+        <!-- 눌러야 하는 줄임을 분명하게 — 라벨 + 선택값 + ▾. 실제 입력은 투명하게 위에 겹친다 -->
+        <div style="position:relative;border:1.5px solid #d8c9a8;border-radius:10px;background:#fff;padding:13px 14px;display:flex;align-items:center;justify-content:space-between;gap:10px;">
+          <span style="font-size:12.5px;font-weight:800;color:#8a7a55;white-space:nowrap;">오픈 시간 설정</span>
+          <span id="tuSaleOpenAtLabel" style="font-size:13.5px;font-weight:700;color:#b5afa2;">눌러서 날짜·시간 선택 <span style="color:#c8a96e;font-size:12px;">▾</span></span>
+          <input type="datetime-local" id="tuSaleOpenAt" onchange="tuSaleAtChanged()" oninput="tuSaleAtChanged()" style="position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;border:0;">
+        </div>
         <div style="font-size:10.5px;color:#c8a96e;margin-top:4px;">이 시각이 되면 자동으로 회원에게 공개됩니다 (별도 조작 불필요)</div>
       </div>
       <div style="font-size:10.5px;color:#b5afa2;margin-top:6px;line-height:1.6;">비공개 보관·예약 오픈(시간 전) 티켓은 회원에게 전혀 보이지 않습니다.<br>일시를 비운 예약 오픈은 무기한 비공개로 남습니다. 전체 현황은 어드민 메뉴 「⏰ 판매 오픈 관리」.</div>
@@ -33095,6 +33100,7 @@ function tuEditTicket(id){
     tuSetSale(t.saleState === 'draft' || t.saleState === 'scheduled' ? t.saleState : 'open');
     var _soEl = document.getElementById('tuSaleOpenAt');
     if (_soEl) _soEl.value = t.saleOpenAt ? String(t.saleOpenAt).slice(0, 16) : '';
+    if (typeof tuSaleAtChanged === 'function') tuSaleAtChanged();
   }
   // 우선공개 설정 복원
   _tuGradeOpen = !!t.gradeOpen;
@@ -33466,8 +33472,30 @@ function tuSetSale(state){
   });
   var row = document.getElementById('tuSaleSchedRow');
   if (row) row.style.display = _tuSaleState === 'scheduled' ? 'block' : 'none';
+  if (typeof tuSaleAtChanged === 'function') tuSaleAtChanged();
 }
 window.tuSetSale = tuSetSale;
+
+// 예약 일시 선택값을 사람이 읽는 라벨로 — 값이 있으면 진하게, 없으면 안내 문구
+function tuSaleAtChanged(){
+  var inp = document.getElementById('tuSaleOpenAt');
+  var lab = document.getElementById('tuSaleOpenAtLabel');
+  if (!inp || !lab) return;
+  var v = inp.value;
+  if (!v) {
+    lab.innerHTML = '눌러서 날짜·시간 선택 <span style="color:#c8a96e;font-size:12px;">▾</span>';
+    lab.style.color = '#b5afa2';
+    return;
+  }
+  var d = new Date(v);
+  var DOW = ['일','월','화','수','목','금','토'];
+  var txt = isNaN(d.getTime()) ? v
+    : (d.getMonth()+1) + '/' + d.getDate() + ' (' + DOW[d.getDay()] + ') '
+      + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+  lab.innerHTML = txt + ' <span style="color:#c8a96e;font-size:12px;">▾</span>';
+  lab.style.color = '#1a1a18';
+}
+window.tuSaleAtChanged = tuSaleAtChanged;
 
 // ── 🆕 판매 오픈 관리 — 비공개·예약·최근 공개를 한눈에 (누락 방지) ──
 function tkSaleMgrOpen(){
@@ -34355,6 +34383,7 @@ function tuResetGradeOpen() {
   // 🆕 판매 오픈도 즉시 공개로 초기화
   if(typeof tuSetSale === 'function') tuSetSale('open');
   var _soRst = document.getElementById('tuSaleOpenAt'); if(_soRst) _soRst.value = '';
+  if (typeof tuSaleAtChanged === 'function') tuSaleAtChanged();
   _tuGradeOpen = false; _tuMOpenDate = null; _tuMOpenTime = null;
   _tuDelay = 24; _tuDelayUnit = 'hour';
   var sw = document.getElementById('tuGradeOpenSwitch');
