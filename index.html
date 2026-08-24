@@ -33815,16 +33815,35 @@ function _popGoTicket(t){
 // 이벤트 간지 화면 — 설명을 본 뒤 맨 아래 CTA 로 티켓 날짜로 들어간다
 function _popShowEvent(c, t){
   var old = document.getElementById('popEventScreen'); if(old) old.remove();
-  var media = c.event_media_url || c.media_url || '';
+  // 이벤트 사진 목록 — 여러 장이면 슬라이드. (구버전 단일 event_media_url 도 흡수)
+  var imgs = Array.isArray(c.event_media_urls) ? c.event_media_urls.filter(Boolean) : [];
+  if(!imgs.length && c.event_media_url) imgs = [c.event_media_url];
+  var media = imgs.length ? imgs[0] : (c.media_url || '');
   // 미디어는 풀 화면에서 세로 20% 만 줄인 80vh 풀블리드 — 임팩트는 살리고,
   //   object-fit:cover 라 비율은 안 깨진다(넘치는 부분만 크롭). 내용은 진입 직후
   //   자동 스크롤로 먼저 보여준다 — 내용을 보러 들어온 회원이 사진만 보고 당황하지 않게.
   var _evMediaStyle = 'width:100%;display:block;height:80vh;object-fit:cover;';
-  var mediaHtml = media
-    ? ((c.media_type === 'video' && !c.event_media_url)
-        ? '<video src="' + media + '" autoplay muted loop playsinline style="' + _evMediaStyle + '"></video>'
-        : '<img src="' + media + '" style="' + _evMediaStyle + '" alt="">')
-    : '';
+  var mediaHtml = '';
+  if(imgs.length > 1){
+    // 가로 스와이프 슬라이드 (스냅) + 점 인디케이터
+    mediaHtml = '<div style="position:relative;">'
+      + '<div class="pop-ev-slider" style="display:flex;overflow-x:auto;overflow-y:hidden;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;height:80vh;scrollbar-width:none;">'
+      + imgs.map(function(u){
+          return '<img src="' + u + '" style="flex:0 0 100%;width:100%;height:80vh;object-fit:cover;scroll-snap-align:center;" alt="">';
+        }).join('')
+      + '</div>'
+      + '<div class="pop-ev-dots" style="position:absolute;left:0;right:0;bottom:12px;display:flex;justify-content:center;gap:6px;">'
+      + imgs.map(function(_, i){
+          return '<span data-dot="' + i + '" style="width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,' + (i === 0 ? '.95' : '.45') + ');box-shadow:0 1px 3px rgba(0,0,0,.4);"></span>';
+        }).join('')
+      + '</div></div>';
+  } else if(imgs.length === 1){
+    mediaHtml = '<img src="' + imgs[0] + '" style="' + _evMediaStyle + '" alt="">';
+  } else if(c.media_url){
+    mediaHtml = (c.media_type === 'video')
+      ? '<video src="' + c.media_url + '" autoplay muted loop playsinline style="' + _evMediaStyle + '"></video>'
+      : '<img src="' + c.media_url + '" style="' + _evMediaStyle + '" alt="">';
+  }
   var el = document.createElement('div');
   el.id = 'popEventScreen';
   el.style.cssText = 'position:fixed;inset:0;z-index:9310;background:#FBF9F4;overflow-y:auto;-webkit-overflow-scrolling:touch;font-family:var(--font-main);';
@@ -33841,6 +33860,16 @@ function _popShowEvent(c, t){
       + _popL('이벤트 참여하기 · 티켓 구매','Join the event · Buy ticket','イベントに参加 · チケット購入') + '</button>'
     + '</div>';
   document.body.appendChild(el);
+  // 슬라이드 점 인디케이터 — 스크롤 위치로 현재 장 표시
+  var _sl = el.querySelector('.pop-ev-slider');
+  if(_sl){
+    _sl.addEventListener('scroll', function(){
+      var i = Math.round(_sl.scrollLeft / Math.max(1, _sl.clientWidth));
+      el.querySelectorAll('.pop-ev-dots [data-dot]').forEach(function(dt){
+        dt.style.background = 'rgba(255,255,255,' + (parseInt(dt.getAttribute('data-dot'),10) === i ? '.95' : '.45') + ')';
+      });
+    }, { passive: true });
+  }
   // 미디어가 있으면 잠시 뒤 부드럽게 내려 설명을 먼저 보여준다 —
   //   스크롤이 된다는 걸 알려주면 이후는 회원이 자유롭게 오르내린다.
   if(media){
@@ -33866,7 +33895,8 @@ async function popAdminOpen(){
   }
   await homePopupLoad();
   _paW = Object.assign({ enabled:false, id:null, title:'', body:'', media_url:'', media_type:'image',
-                         link_ticket_id:'', link_mode:'ticket', event_desc:'', event_media_url:'' }, _homePopCfg || {});
+                         link_ticket_id:'', link_mode:'ticket', event_desc:'', event_media_url:'', event_media_urls:[] }, _homePopCfg || {});
+  if(!Array.isArray(_paW.event_media_urls)) _paW.event_media_urls = [];
   var old = document.getElementById('popAdmin'); if(old) old.remove();
   var el = document.createElement('div');
   el.id = 'popAdmin';
@@ -33912,9 +33942,14 @@ async function popAdminOpen(){
     + '</div>'
     + '<div id="paEventBox" style="display:none;">'
       + '<textarea id="paEventDesc" placeholder="이벤트 설명 — 팝업 클릭 시 보이는 간지 화면의 본문" style="width:100%;box-sizing:border-box;padding:11px 12px;border:1.5px solid #e0ddd8;border-radius:9px;font-size:13px;font-family:var(--font-main);margin-bottom:6px;background:#fff;min-height:90px;">' + _pcalEsc(_paW.event_desc || '') + '</textarea>'
-      + '<button onclick="document.getElementById(\'paEvImgFile\').click()" style="width:100%;padding:10px 0;border:1.5px solid #d8c9a8;border-radius:9px;background:#fff;color:#8a7a55;font-size:12px;font-weight:800;cursor:pointer;margin-bottom:4px;">📷 이벤트 화면 이미지 (선택 — 없으면 팝업 미디어 재사용)</button>'
-      + '<input type="file" id="paEvImgFile" accept="image/*" style="display:none;" onchange="paUpMedia(this,\'event\')">'
-      + '<div id="paEvMediaState" style="font-size:11px;color:' + (_paW.event_media_url ? '#2a6a2a' : '#a8a29a') + ';margin-bottom:10px;">' + (_paW.event_media_url ? '이벤트 이미지 첨부됨' : '') + '</div>'
+      + '<div style="display:flex;gap:6px;margin-bottom:4px;">'
+        + '<button onclick="document.getElementById(\'paEvImgFile\').click()" style="flex:1;padding:10px 0;border:1.5px solid #d8c9a8;border-radius:9px;background:#fff;color:#8a7a55;font-size:12px;font-weight:800;cursor:pointer;">📷 이벤트 사진 추가 (여러 장 = 슬라이드)</button>'
+        + '<button onclick="paEvClear()" style="flex:0 0 auto;padding:10px 12px;border:1.5px solid #e0ddd8;border-radius:9px;background:#fff;color:#B23A2E;font-size:12px;font-weight:800;cursor:pointer;">비우기</button>'
+      + '</div>'
+      + '<input type="file" id="paEvImgFile" accept="image/*" multiple style="display:none;" onchange="paUpMedia(this,\'event\')">'
+      + '<div id="paEvMediaState" style="font-size:11px;color:' + ((_paW.event_media_urls && _paW.event_media_urls.length) || _paW.event_media_url ? '#2a6a2a' : '#a8a29a') + ';margin-bottom:10px;">'
+        + ((_paW.event_media_urls && _paW.event_media_urls.length) ? ('이벤트 사진 ' + _paW.event_media_urls.length + '장 — 추가 업로드하면 뒤에 붙습니다')
+           : (_paW.event_media_url ? '이벤트 사진 1장 (구버전)' : '없으면 팝업 미디어 재사용')) + '</div>'
     + '</div>'
     + '<button onclick="paPreview()" style="width:100%;padding:12px;border:1.5px solid #d8d3cc;border-radius:11px;background:#fff;color:#666;font-size:12.5px;font-weight:800;cursor:pointer;margin-bottom:8px;">👁 미리보기</button>'
     + '<button onclick="paPublish(true)" style="width:100%;padding:14px;border:0;border-radius:11px;background:#5C0A14;color:#fff;font-size:13px;font-weight:800;cursor:pointer;margin-bottom:8px;">📣 발행하기 — 모든 회원에게 새로 표시</button>'
@@ -33952,6 +33987,25 @@ function paLinkChanged(){
 window.paLinkChanged = paLinkChanged;
 
 async function paUpMedia(input, kind){
+  // 이벤트 사진은 여러 장 한 번에 — 순서대로 업로드해 슬라이드 순서를 보존한다
+  if(kind === 'event'){
+    var files = Array.prototype.slice.call(input.files || []);
+    input.value = '';
+    if(!files.length) return;
+    showToast('⏳','업로드 중', files.length + '장 올리는 중…');
+    _paW.event_media_urls = Array.isArray(_paW.event_media_urls) ? _paW.event_media_urls : [];
+    var okCnt = 0;
+    for(var fi = 0; fi < files.length; fi++){
+      try{
+        var u = await uploadImageToStorage(files[fi], 'taam-photos');
+        if(u){ _paW.event_media_urls.push(u); okCnt++; }
+      }catch(_ue){ console.warn('[popup] 이벤트 사진 업로드 실패', _ue); }
+    }
+    var es = document.getElementById('paEvMediaState');
+    if(es){ es.textContent = '이벤트 사진 ' + _paW.event_media_urls.length + '장 — 추가 업로드하면 뒤에 붙습니다'; es.style.color = '#2a6a2a'; }
+    showToast(okCnt ? '✓' : '⚠', okCnt ? '업로드 완료' : '업로드 실패', okCnt + '/' + files.length + '장');
+    return;
+  }
   var file = input.files && input.files[0];
   if(!file) return;
   input.value = '';
@@ -33970,16 +34024,10 @@ async function paUpMedia(input, kind){
       url = await uploadImageToStorage(file, 'taam-photos');
     }
     if(!url) throw new Error('URL 생성 실패');
-    if(kind === 'event'){
-      _paW.event_media_url = url;
-      var es = document.getElementById('paEvMediaState');
-      if(es){ es.textContent = '이벤트 이미지 첨부됨'; es.style.color = '#2a6a2a'; }
-    } else {
-      _paW.media_url = url;
-      _paW.media_type = kind;
-      var ms = document.getElementById('paMediaState');
-      if(ms){ ms.textContent = '첨부됨 (' + (kind === 'video' ? '영상' : '사진') + ') — 다시 업로드하면 교체'; ms.style.color = '#2a6a2a'; }
-    }
+    _paW.media_url = url;
+    _paW.media_type = kind;
+    var ms = document.getElementById('paMediaState');
+    if(ms){ ms.textContent = '첨부됨 (' + (kind === 'video' ? '영상' : '사진') + ') — 다시 업로드하면 교체'; ms.style.color = '#2a6a2a'; }
     showToast('✓','업로드 완료','');
   }catch(e){
     console.warn('[popup] 업로드 실패', e);
@@ -33987,6 +34035,15 @@ async function paUpMedia(input, kind){
   }
 }
 window.paUpMedia = paUpMedia;
+
+function paEvClear(){
+  _paW.event_media_urls = [];
+  _paW.event_media_url = '';
+  var es = document.getElementById('paEvMediaState');
+  if(es){ es.textContent = '없으면 팝업 미디어 재사용'; es.style.color = '#a8a29a'; }
+  showToast('✓','이벤트 사진 비움','');
+}
+window.paEvClear = paEvClear;
 
 function _paCollect(){
   _paW.title = (document.getElementById('paTitle') || {}).value || '';
