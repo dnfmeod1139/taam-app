@@ -13705,23 +13705,12 @@ async function saveDeposit(){
     await IDB.set(_dkey, JSON.stringify({data:depositData,balance:currentDepositBalance}))
       .catch(function(e){ console.warn('[saveDeposit IDB backup] failed', e); });
 
-    // 잔액만 Supabase에 저장
-    const { data: { user } } = await window.sb.auth.getUser();
-    if(!user){
-      console.warn('[saveDeposit] 로그인 안됨, 로컬에만 저장');
-      return;
-    }
-
-    const { error } = await window.sb
-      .from('profiles')
-      .update({ deposit_balance: currentDepositBalance })
-      .eq('id', user.id);
-
-    if(error){
-      console.error('[saveDeposit] Supabase 저장 실패:', error);
-    } else {
-      console.log('💰 예치금 잔액 저장됨');
-    }
+    // 🔧 2026.08.24: 서버 잔액 덮어쓰기 제거.
+    //   종전에는 브라우저가 계산한 currentDepositBalance 를 profiles.deposit_balance 에
+    //   밀어넣었다 — 클라이언트 화면 상태가 곧 서버 원장이 되는 구조라, 렌더 타이밍이
+    //   꼬이면 틀린 잔액이 DB 에 박혔다 (돈 문제). 잔액 변동은 각 거래 흐름이
+    //   membership/general 컬럼을 직접 갱신하고, deposit_balance 는 DB 트리거가
+    //   합으로 유지한다. 여기서는 IDB 백업(위에서 완료)만 남긴다.
   } catch(e){
     console.error('[saveDeposit] 예외:', e);
   }
@@ -14142,9 +14131,14 @@ async function loadDeposit(){
       return;
     }
 
+    // 🔧 2026.08.24: 진실은 membership + general 합 하나다.
+    //   종전에는 deposit_balance(통합 캐시)를 읽었는데, 취소 환불·반환·부여가
+    //   분리 컬럼만 갱신해 캐시가 뒤처졌고, 화면마다 읽는 소스가 달라 잔액이
+    //   11,000 ↔ 8,000 처럼 번갈아 보였다. DB 트리거(sql/deposit_balance_sync.sql)가
+    //   캐시를 합으로 강제하지만, 읽기도 합으로 통일해 이중 소스를 없앤다.
     const { data: profile, error } = await window.sb
       .from('profiles')
-      .select('deposit_balance')
+      .select('membership_deposit_balance, general_deposit_balance, deposit_balance')
       .eq('id', user.id)
       .single();
 
@@ -14153,9 +14147,16 @@ async function loadDeposit(){
       return;
     }
 
-    if(profile && typeof profile.deposit_balance === 'number'){
-      currentDepositBalance = profile.deposit_balance;
-      console.log('💰 예치금 잔액 로드됨');
+    if(profile){
+      var _ldMem = parseInt(profile.membership_deposit_balance, 10);
+      var _ldGen = parseInt(profile.general_deposit_balance, 10);
+      if(!isNaN(_ldMem) || !isNaN(_ldGen)){
+        currentDepositBalance = (isNaN(_ldMem) ? 0 : _ldMem) + (isNaN(_ldGen) ? 0 : _ldGen);
+      } else if (typeof profile.deposit_balance === 'number') {
+        // 분리 컬럼이 없는 아주 옛 스키마 폴백
+        currentDepositBalance = profile.deposit_balance;
+      }
+      console.log('💰 예치금 잔액 로드됨 (멤버십+일반 합)');
     }
 
     // 🆕 v1.53.39: 앱 진입/세션 복원 시점에도 자동 백필 (이름/등급 비어있는 케이스)
