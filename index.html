@@ -33636,6 +33636,18 @@ window.tkSaleMgrAct = tkSaleMgrAct;
 // ═══════════════════════════════════════════════════════════════
 var _homePopCfg = null, _homePopLoaded = false, _homePopKicked = false;
 
+// ── 노출 범위 잠금 — NEW_HOME_LIVE 와 같은 패턴 ──
+//   false 인 동안은 슈퍼어드민에게만 뜬다 (화면 검수용). 전 회원에게 열 때
+//   이 값 하나만 true 로 바꾼다. 웹 배포가 곧 앱 반영이므로 켜는 순간 전원에게 보인다.
+var HOME_POPUP_LIVE = false;
+function homePopupAudienceOk(){
+  if (HOME_POPUP_LIVE) return true;
+  try {
+    if (typeof _isSuperAdmin === 'function' && _isSuperAdmin()) return true;
+    return (typeof _currentRole !== 'undefined' && _currentRole === 'superadmin');
+  } catch(e){ return false; }
+}
+
 function _popL(ko, en, ja){
   var l = window._tkCurrentLang || 'ko';
   return l === 'en' ? en : (l === 'ja' ? ja : ko);
@@ -33659,9 +33671,16 @@ async function homePopupLoad(){
 function _homePopupKick(){
   if(_homePopKicked) return;
   _homePopKicked = true;
-  setTimeout(function(){
-    (_homePopLoaded ? Promise.resolve() : homePopupLoad()).then(function(){ homePopupShow(false); });
-  }, 900);
+  var tries = 0;
+  function attempt(){
+    tries++;
+    (_homePopLoaded ? Promise.resolve() : homePopupLoad()).then(function(){
+      // 잠금 모드에서 역할(role)이 아직 안 실렸으면 잠시 뒤 다시 — 슈퍼어드민 검수가 빠지면 안 된다
+      if(!homePopupAudienceOk() && !HOME_POPUP_LIVE && tries < 5){ setTimeout(attempt, 2000); return; }
+      homePopupShow(false);
+    });
+  }
+  setTimeout(attempt, 900);
 }
 window._homePopupKick = _homePopupKick;
 
@@ -33669,6 +33688,7 @@ function homePopupShow(force){
   var c = _homePopCfg;
   if(!c || !c.enabled || !c.id) return;
   if(!force){
+    if(!homePopupAudienceOk()) return;   // 잠금 중 — 슈퍼어드민만
     try{ if(localStorage.getItem('taamPopHide_' + c.id) === _popToday()) return; }catch(e){}
   }
   if(document.getElementById('homePopup')) return;
@@ -33810,7 +33830,10 @@ async function popAdminOpen(){
       + '<div style="font-size:16px;font-weight:800;color:#1a1a18;">🎪 메인 팝업 발행</div>'
       + '<span style="font-size:11px;font-weight:800;color:' + (_paW.enabled ? '#2a6a2a' : '#8a8580') + ';">' + (_paW.enabled ? '● 게시 중' : '○ 내려감') + '</span>'
     + '</div>'
-    + '<div style="font-size:11px;color:#8a8580;margin-bottom:14px;line-height:1.6;">앱 메인 진입 시 모든 회원에게 뜹니다. 「발행」은 새 팝업으로 취급 — "오늘 하루 열지 않기" 한 회원에게도 다시 보입니다.</div>'
+    + '<div style="font-size:11px;color:#8a8580;margin-bottom:6px;line-height:1.6;">앱 메인 진입 시 뜹니다. 「발행」은 새 팝업으로 취급 — "오늘 하루 열지 않기" 한 회원에게도 다시 보입니다.</div>'
+    + (typeof HOME_POPUP_LIVE !== 'undefined' && !HOME_POPUP_LIVE
+        ? '<div style="font-size:11px;font-weight:800;color:#B45309;background:#fff3e0;border:1px solid #f0d9b4;border-radius:8px;padding:8px 10px;margin-bottom:12px;">🔒 검수 모드 — 지금은 슈퍼어드민에게만 보입니다. 전 회원 공개는 코드 플래그(HOME_POPUP_LIVE) 전환으로.</div>'
+        : '<div style="margin-bottom:8px;"></div>')
     + inp('paTitle','제목', _paW.title)
     + '<textarea id="paBody" placeholder="본문 (줄바꿈 유지)" style="width:100%;box-sizing:border-box;padding:11px 12px;border:1.5px solid #e0ddd8;border-radius:9px;font-size:13px;font-family:var(--font-main);margin-bottom:10px;background:#fff;min-height:70px;">' + _pcalEsc(_paW.body || '') + '</textarea>'
     + '<div style="display:flex;gap:6px;margin-bottom:6px;">'
