@@ -33790,6 +33790,17 @@ function _popGoTicket(t){
     if(!(y > 2000 && m >= 1)) return;
     window._pcalY = y; window._pcalM = m;
     var ev = document.getElementById('popEventScreen'); if(ev) ev.remove();
+    // 🆕 슈퍼어드민은 부팅 직후 어드민 화면이 맨 위에 떠 있어, 캘린더로 넘어가도
+    //   그 아래 숨는다. 팝업에서 넘어갈 때는 위를 덮은 전체화면·서브화면을 걷어낸다.
+    try{
+      ['adminScreen','partnerAdminScreen','myPage'].forEach(function(id){
+        var sc = document.getElementById(id);
+        if(sc && sc.style.display !== 'none') sc.style.display = 'none';
+      });
+      document.querySelectorAll('.sub-screen').forEach(function(sc){
+        if(sc.style.display !== 'none') sc.style.display = 'none';
+      });
+    }catch(_ce){}
     if(typeof magEnabled === 'function' && magEnabled()){
       if(typeof magRender === 'function') magRender();
       if(typeof magOpenSheet === 'function') magOpenSheet();
@@ -33805,10 +33816,13 @@ function _popGoTicket(t){
 function _popShowEvent(c, t){
   var old = document.getElementById('popEventScreen'); if(old) old.remove();
   var media = c.event_media_url || c.media_url || '';
+  // 미디어가 화면을 다 먹으면 설명이 접혀 있는 줄 모른다 — 높이를 42vh 로 눌러
+  //   설명 첫 줄이 같이 보이게 하고, 진입 직후 살짝 자동 스크롤로 "내려간다"를 알려준다.
+  var _evMediaStyle = 'width:100%;display:block;max-height:42vh;object-fit:cover;';
   var mediaHtml = media
     ? ((c.media_type === 'video' && !c.event_media_url)
-        ? '<video src="' + media + '" autoplay muted loop playsinline style="width:100%;display:block;"></video>'
-        : '<img src="' + media + '" style="width:100%;display:block;" alt="">')
+        ? '<video src="' + media + '" autoplay muted loop playsinline style="' + _evMediaStyle + '"></video>'
+        : '<img src="' + media + '" style="' + _evMediaStyle + '" alt="">')
     : '';
   var el = document.createElement('div');
   el.id = 'popEventScreen';
@@ -33817,7 +33831,7 @@ function _popShowEvent(c, t){
     '<button onclick="document.getElementById(\'popEventScreen\').remove()" style="position:fixed;top:calc(14px + env(safe-area-inset-top));right:14px;z-index:2;width:36px;height:36px;border-radius:50%;border:0;background:rgba(0,0,0,.45);color:#fff;font-size:18px;cursor:pointer;">×</button>'
     + '<div style="padding-bottom:130px;">'
     + mediaHtml
-    + '<div style="padding:26px 22px;">'
+    + '<div class="pop-ev-body" style="padding:26px 22px;">'
       + (c.title ? '<div style="font-size:21px;font-weight:800;color:#fff;line-height:1.35;">' + _pcalEsc(c.title) + '</div>' : '')
       + (c.event_desc ? '<div style="font-size:13.5px;color:rgba(255,255,255,.78);line-height:1.9;margin-top:14px;white-space:pre-line;">' + _pcalEsc(c.event_desc) + '</div>' : '')
     + '</div></div>'
@@ -33826,6 +33840,16 @@ function _popShowEvent(c, t){
       + _popL('이벤트 참여하기 · 티켓 구매','Join the event · Buy ticket','イベントに参加 · チケット購入') + '</button>'
     + '</div>';
   document.body.appendChild(el);
+  // 미디어가 있으면 잠시 뒤 부드럽게 내려 설명을 먼저 보여준다 —
+  //   스크롤이 된다는 걸 알려주면 이후는 회원이 자유롭게 오르내린다.
+  if(media){
+    setTimeout(function(){
+      try{
+        var body = el.querySelector('.pop-ev-body');
+        if(body) el.scrollTo({ top: Math.max(0, body.offsetTop - 84), behavior: 'smooth' });
+      }catch(e){}
+    }, 800);
+  }
 }
 function _popEventCta(tid){
   var t = (ticketDB || []).find(function(x){ return String(x.id) === String(tid); });
