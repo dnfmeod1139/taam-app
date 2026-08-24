@@ -31040,7 +31040,15 @@ function riPopulateLinkTickets(){
     if(typeof _isTicketExpired === 'function' && _isTicketExpired(t)) return;
     var r = (restaurantDB || []).find(function(x){ return String(x.id) === String(t.restId); });
     var nm = (r && r.name) || t.rest || '매장';
-    html += '<option value="'+String(t.id)+'">'+nm+' · '+(t.dateYear ? t.dateYear+'.' : '')+t.date+' '+(t.time||'')+' · 총 '+(t.totalPax||'-')+'석</option>';
+    // 🆕 미오픈(비공개/예약) 티켓도 연결 가능 — 초대 홀드가 좌석을 먼저 차감하고,
+    //   오픈되는 순간 잔여석만 판매된다. 어떤 상태인지 앞에 표시해 구분한다.
+    var _lkTag = '';
+    if (typeof _tkSaleHidden === 'function' && _tkSaleHidden(t)) {
+      _lkTag = (t.saleState === 'scheduled' && t.saleOpenAt)
+        ? '[' + String(t.saleOpenAt).slice(5,10).replace('-','/') + ' 오픈예약] '
+        : '[비공개] ';
+    }
+    html += '<option value="'+String(t.id)+'">'+_lkTag+nm+' · '+(t.dateYear ? t.dateYear+'.' : '')+t.date+' '+(t.time||'')+' · 총 '+(t.totalPax||'-')+'석</option>';
   });
   sel.innerHTML = html;
   sel.value = '';
@@ -31074,7 +31082,10 @@ function riLinkTicketChange(){
   var r = (restaurantDB || []).find(function(x){ return String(x.id) === String(t.restId); });
   if(info){
     info.style.display = 'block';
-    info.innerHTML = '🎫 <b>'+((r&&r.name)||t.rest||'매장')+'</b> 티켓과 연결됨 — 매장·일시·가격 자동 적용.<br>이 초대가 결제되면 <b>해당 티켓 좌석에서 차감</b>되고 좌석 규칙(정원·1인 한도)이 적용됩니다.<br><span id="riLinkRemain" style="color:#9a9486;">잔여석 확인 중…</span>';
+    var _lkHidden = (typeof _tkSaleHidden === 'function' && _tkSaleHidden(t));
+    info.innerHTML = '🎫 <b>'+((r&&r.name)||t.rest||'매장')+'</b> 티켓과 연결됨 — 매장·일시·가격 자동 적용.<br>이 초대가 결제되면 <b>해당 티켓 좌석에서 차감</b>되고 좌석 규칙(정원·1인 한도)이 적용됩니다.<br>'
+      + (_lkHidden ? '<span style="color:#B45309;font-weight:700;">⏰ 아직 미오픈 티켓 — 초대 좌석은 지금부터 차감되고, 오픈되면 잔여석만 판매됩니다. 초대가 거절·취소되면 좌석은 자동 복구됩니다.</span><br>' : '')
+      + '<span id="riLinkRemain" style="color:#9a9486;">잔여석 확인 중…</span>';
     // 잔여석 실시간 표시
     if(window.sb){
       window.sb.rpc('taam_ticket_sold_slots', { p_ticket_id: String(t.id) }).then(function(_r2){
