@@ -33667,20 +33667,43 @@ async function homePopupLoad(){
   return _homePopCfg;
 }
 
-// 메인(매거진) 첫 렌더에서 한 번만 — 스플래시가 걷힌 뒤 자연스럽게 뜨도록 지연
+// ── 팝업을 띄워도 되는 시점인가 — 규칙: 모든 팝업·이벤트류는 「스플래시 다음」 ──
+//   스플래시가 완전히 끝나고(페이드 포함), 초대코드·로그인 화면이 닫혀 있고,
+//   메인 화면이 실제로 보일 때만 true. magRender 가 부팅 중 스플래시 뒤에서
+//   미리 돌기 때문에, 렌더 시점이 아니라 이 조건으로 판정해야 한다.
+function _homePopupReady(){
+  try{
+    if(!window._splashClosed) return false;                              // 스플래시 진행 중
+    var sp = document.querySelector('.splash');
+    if(sp && getComputedStyle(sp).display !== 'none') return false;      // 페이드아웃 중
+    var ms = document.getElementById('mainScreen');
+    if(!ms || getComputedStyle(ms).display === 'none') return false;     // 메인 아직 안 뜸
+    var cs = document.getElementById('codeScreen');
+    if(cs && getComputedStyle(cs).display !== 'none') return false;      // 초대코드/가입 진행 중
+    var ph = document.getElementById('phoneScreen');
+    if(ph && getComputedStyle(ph).display !== 'none') return false;      // 인증 진행 중
+    return true;
+  }catch(e){ return false; }
+}
+
+// 메인(매거진) 첫 렌더에서 시동 — 조건이 갖춰질 때까지 1.2초 간격으로 기다린다.
+//   첫 로그인(초대코드 → 인증)은 몇 분 걸릴 수 있어 넉넉히 기다린다 (최대 ~10분).
 function _homePopupKick(){
   if(_homePopKicked) return;
   _homePopKicked = true;
   var tries = 0;
   function attempt(){
     tries++;
+    if(tries > 500) return;
+    if(!_homePopupReady()){ setTimeout(attempt, 1200); return; }
     (_homePopLoaded ? Promise.resolve() : homePopupLoad()).then(function(){
-      // 잠금 모드에서 역할(role)이 아직 안 실렸으면 잠시 뒤 다시 — 슈퍼어드민 검수가 빠지면 안 된다
-      if(!homePopupAudienceOk() && !HOME_POPUP_LIVE && tries < 5){ setTimeout(attempt, 2000); return; }
-      homePopupShow(false);
+      // 잠금 모드: 역할(role)이 아직 안 실렸으면 잠시 뒤 다시 — 슈퍼어드민 검수가 빠지면 안 된다
+      if(!homePopupAudienceOk() && !HOME_POPUP_LIVE && tries < 480){ setTimeout(attempt, 2000); return; }
+      // 메인이 뜬 직후 살짝 숨 고르고 애니메이션으로 등장
+      setTimeout(function(){ homePopupShow(false); }, 500);
     });
   }
-  setTimeout(attempt, 900);
+  setTimeout(attempt, 600);
 }
 window._homePopupKick = _homePopupKick;
 
@@ -33698,9 +33721,11 @@ function homePopupShow(force){
       ? '<video src="' + c.media_url + '" autoplay muted loop playsinline style="width:100%;display:block;max-height:340px;object-fit:cover;"></video>'
       : '<img src="' + c.media_url + '" style="width:100%;display:block;max-height:340px;object-fit:cover;" alt="">';
   }
+  if(!force && !_homePopupReady()) return;   // 표시 직전 최종 확인 — 스플래시·로그인 위로는 절대 안 뜬다
   var el = document.createElement('div');
   el.id = 'homePopup';
-  el.style.cssText = 'position:fixed;inset:0;z-index:9300;background:rgba(10,8,6,.62);display:flex;align-items:center;justify-content:center;padding:26px;';
+  el.style.cssText = 'position:fixed;inset:0;z-index:9300;background:rgba(10,8,6,.62);display:flex;align-items:center;justify-content:center;padding:26px;'
+    + 'opacity:0;transition:opacity .3s ease;';
   el.onclick = function(ev){ if(ev.target === el) homePopupClose(); };
   el.innerHTML =
     '<div style="width:100%;max-width:340px;background:#FBF9F4;border-radius:18px;overflow:hidden;font-family:var(--font-main);box-shadow:0 24px 60px rgba(0,0,0,.45);">'
@@ -33722,6 +33747,16 @@ function homePopupShow(force){
         + _popL('닫기','Close','閉じる') + '</button>'
     + '</div></div>';
   document.body.appendChild(el);
+  // 등장 애니메이션 — 어둠이 깔리며 카드가 아래에서 살짝 떠오른다
+  var card = el.firstElementChild;
+  if(card){
+    card.style.transform = 'translateY(18px) scale(.97)';
+    card.style.transition = 'transform .38s cubic-bezier(.22,.9,.28,1)';
+  }
+  requestAnimationFrame(function(){ requestAnimationFrame(function(){
+    el.style.opacity = '1';
+    if(card) card.style.transform = 'none';
+  }); });
 }
 window.homePopupShow = homePopupShow;
 
