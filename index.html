@@ -14381,6 +14381,82 @@ window._notifMarkSeen = _notifMarkSeen;
 //   - 미확인은 노란 좌측 보더 + 배경 강조
 //   - 진입 시 모든 seen=false 를 seen=true 로 일괄 처리 (레드닷 사라짐)
 //   - 클릭 시 url 있으면 이동 (예: 예약 초대 결제 팝업)
+// ── 🆕 알림 언어 정규화 ──
+//   알림 텍스트는 발송 시점 기기 언어로 notifications 에 고정 저장된다.
+//   그래서 KO 화면에 "Refund Complete" 가 섞여 보였다. 저장을 바꾸는 대신
+//   알려진 제목·본문 패턴을 표시할 때 현재 언어로 다시 그린다 — 과거 알림까지 통일.
+function _notifLangIdx(){
+  var l = window._tkCurrentLang || 'ko';
+  return l === 'en' ? 1 : (l === 'ja' ? 2 : 0);
+}
+var _NOTIF_TITLES = [
+  { m:[/^refund complete$/i, /^(예치금 )?반환 완료$/, /^환불 완료$/, /^返金完了$/],
+    t:['환불 완료','Refund Complete','返金完了'] },
+  { m:[/^결제 완료$/, /^payment complete$/i, /^決済完了$/],
+    t:['결제 완료','Payment Complete','決済完了'] },
+  { m:[/^티켓 예약 완료$/, /^reservation confirmed$/i],
+    t:['티켓 예약 완료','Reservation Confirmed','チケット予約完了'] },
+  { m:[/^예치금이 부여되었습니다$/, /^deposit credited$/i],
+    t:['예치금이 부여되었습니다','Deposit Credited','デポジットが付与されました'] },
+  { m:[/^TAAM 예약 초대 도착$/i],
+    t:['TAAM 예약 초대 도착','TAAM Reservation Invite','TAAM 予約招待が届きました'] },
+  { m:[/^예약 시간이 변경되었습니다$/],
+    t:['예약 시간이 변경되었습니다','Reservation Time Changed','予約時間が変更されました'] },
+  { m:[/^매진 — 자동 환불$/],
+    t:['매진 — 자동 환불','Sold Out — Auto Refund','満席 — 自動返金'] },
+  { m:[/^회원이 초대 결제를 완료했습니다$/],
+    t:['회원이 초대 결제를 완료했습니다','Invite Payment Completed','会員が招待の決済を完了しました'] }
+];
+function _notifL10nTitle(title){
+  var s0 = String(title || '').trim();
+  for(var i = 0; i < _NOTIF_TITLES.length; i++){
+    var e = _NOTIF_TITLES[i];
+    for(var j = 0; j < e.m.length; j++){
+      if(e.m[j].test(s0)) return e.t[_notifLangIdx()];
+    }
+  }
+  return s0;
+}
+function _notifL10nBody(body){
+  var s0 = String(body || '').trim();
+  var li = _notifLangIdx();
+  var m;
+  // 환불: "Deposit ₩1,000 refunded" / "예치금 ₩1,000 반환 처리되었습니다"
+  m = s0.match(/^deposit ₩?([\d,]+) refunded\.?$/i) || s0.match(/^예치금 ₩?([\d,]+)(?:\s*이)? (?:반환 처리되었습니다|환불되었습니다)\.?$/);
+  if(m) return ['예치금 ₩' + m[1] + ' 이 환불되었습니다',
+                'Deposit ₩' + m[1] + ' refunded',
+                'デポジット ₩' + m[1] + ' が返金されました'][li];
+  // 부여: "일반|멤버십 예치금 ₩10,000 부여(\n사유: ...)"
+  m = s0.match(/^(일반|멤버십|general|membership)\s*(?:예치금)?\s*₩?([\d,]+)\s*(?:부여|credited)([\s\S]*)$/i);
+  if(m){
+    var typeKo = /멤버|member/i.test(m[1]) ? '멤버십' : '일반';
+    var typeEn = typeKo === '멤버십' ? 'Membership' : 'General';
+    var typeJa = typeKo === '멤버십' ? 'メンバーシップ' : '一般';
+    var tail = String(m[3] || '').trim();
+    var reason = '';
+    var rm = tail.match(/(?:사유|reason|事由)\s*[:：]\s*([\s\S]+)/i);
+    if(rm) reason = rm[1].trim();
+    var reasonLine = reason ? ['\n사유: ' + reason, '\nReason: ' + reason, '\n事由: ' + reason][li] : '';
+    return [typeKo + ' 예치금 ₩' + m[2] + ' 부여' + reasonLine,
+            typeEn + ' deposit ₩' + m[2] + ' credited' + reasonLine,
+            typeJa + 'デポジット ₩' + m[2] + ' 付与' + reasonLine][li];
+  }
+  // 구매 완료 안내
+  if(/^티켓 구매가 완료되었습니다\.?$/.test(s0) || /^your ticket purchase is complete\.?$/i.test(s0)){
+    return ['티켓 구매가 완료되었습니다','Your ticket purchase is complete','チケット購入が完了しました'][li];
+  }
+  // 매장 반환: "{매장} 예치금 ₩X 반환 ..."
+  m = s0.match(/^(.+?) 예치금 ₩?([\d,]+) 반환([\s\S]*)$/);
+  if(m){
+    var sfx = String(m[3] || '');
+    return [m[1] + ' 예치금 ₩' + m[2] + ' 반환' + sfx,
+            m[1] + ' deposit ₩' + m[2] + ' refunded' + sfx,
+            m[1] + ' デポジット ₩' + m[2] + ' 返金' + sfx][li];
+  }
+  return s0;
+}
+window._notifL10nTitle = _notifL10nTitle; window._notifL10nBody = _notifL10nBody;
+
 async function renderNotificationsList(){
   var contentEl = document.getElementById('notificationsListContent');
   if(!contentEl) return;
@@ -14442,6 +14518,10 @@ async function renderNotificationsList(){
 
       var cleanTitle = _stripLeadEmoji(n.title || '알림') || meta.label;
       var cleanBody  = _stripAllEmoji(n.body || '');
+      // 🆕 표시 시점 언어 정규화 — 알림은 보낸 기기의 언어로 저장돼 섞인다.
+      //   알려진 제목·본문 패턴을 현재 선택 언어로 다시 그린다 (과거 알림 포함).
+      cleanTitle = _notifL10nTitle(cleanTitle);
+      cleanBody  = _notifL10nBody(cleanBody);
       var clickAttr = n.url ? 'onclick="handleNotifClick(\''+_riEscHtml(n.url)+'\')" style="cursor:pointer;"' : '';
 
       // 카드 — 미확인은 좌측 띠가 색상 풀톤, 본 것은 옅음
