@@ -117,6 +117,24 @@ serve(async (req) => {
       return json({ ok: false, error: 'sales_closed' });
     }
 
+    // 🆕 판매 오픈 게이트 — 비공개(draft)·예약(scheduled, 시간 전)은 구매 불가.
+    //   화면에서 안 보여도 REST 직접 호출로 살 수 있으면 게이트가 아니다.
+    //   컬럼 미설치 DB 에서는 조용히 통과 (기존 동작 유지).
+    try {
+      const { data: saleRow, error: saleErr } = await admin.from('ticket_products')
+        .select('sale_state, sale_open_at').eq('id', ticketId).maybeSingle();
+      if (!saleErr && saleRow) {
+        const ss = String(saleRow.sale_state || 'open');
+        if (ss === 'draft') return json({ ok: false, error: 'sales_closed' });
+        if (ss === 'scheduled') {
+          const at = saleRow.sale_open_at ? new Date(String(saleRow.sale_open_at)) : null;
+          if (!at || isNaN(at.getTime()) || at > new Date()) {
+            return json({ ok: false, error: 'sales_closed' });
+          }
+        }
+      }
+    } catch (_se) { /* 컬럼 미설치 — 게이트 생략 */ }
+
     // ── 🆕 본인 좌석 홀드 확인 (매진 판정보다 먼저) ──
     //   "결제하기" 시점에 잡은 홀드는 그 자체로 좌석을 점유하므로, 마지막 1석을
     //   잡으면 자동 매진이 걸린다. 그 상태에서 매진을 먼저 보고 거절하면
