@@ -18712,7 +18712,12 @@ var cfCards=[];
 var cfBgUrls=[];
 var cfDragging=false, cfStartX=0, cfCurX=0, cfOffsetX=0, cfBaseX=0;
 
-function renderCarousel(){
+// ⚠ 정리 2026.08: 이 함수는 원래 renderCarousel 이라는 이름이었지만, 뒤쪽 계보도 홈
+//   스크립트의 renderCarousel(lhTrack 대상)이 전역 이름 충돌에서 이겨 이 함수는 한 번도
+//   실행되지 않는 죽은 코드였다 (여기를 고쳐도 앱에 반영 안 되는 편집 함정).
+//   Contents 탭 캐러셀을 되살리려면 이 함수를 이 이름(renderCarouselContentsLegacy)으로
+//   직접 호출하도록 연결해야 한다. 실제 살아있는 renderCarousel 은 lhTrack 버전이다.
+function renderCarouselContentsLegacy(){
   var inner=document.getElementById('cfInner');
   var dots=document.getElementById('cfDots');
   // 🆕 v1.52c: null 가드 — cfInner/cfDots 누락 시 contentsView 안에 즉석 생성
@@ -19046,25 +19051,8 @@ function _tdStepPax(cur, delta){
 }
 var _agreeState={agreeAll:false,agree2:false,agree3:false};
 
-function openTicketDetail(el) {
-  // Step 5-A: 진입 잔상 방지 — 화면 즉시 검은 페이드 + 부드러운 전환
-  var screen = document.getElementById('ticketDetailScreen');
-  if (screen) {
-    screen.style.opacity = '0';
-    screen.style.transition = 'opacity .25s ease-out';
-  }
-
-  // 2. 자동으로 구매 시트 열기 (약간의 딜레이 후)
-  if (autoOpenPurchase) {
-    setTimeout(function(){
-      if (typeof handleTicketAction === 'function') {
-        handleTicketAction();
-      } else if (typeof openPurchaseSheet === 'function') {
-        openPurchaseSheet();
-      }
-    }, 350);
-  }
-}
+// (정리 2026.08: 여기 있던 구버전 openTicketDetail(el) 삭제 — 아래 openTicketDetail(id) 가
+//  el/id 둘 다 처리하는 실제 정의다. 구버전은 전역 이름 충돌로 이미 죽은 코드였다.)
 
 // Step 5-A: 카드 구매 버튼 → 상세 화면 진입 + 구매 시트 자동 오픈
 function openTicketDetailFromCard(ticketId, autoOpenPurchase) {
@@ -32539,66 +32527,8 @@ function addInviteCode(){
   renderInviteCodes();
   showToast('✓','초대 코드 발급', v + ' 발급됨');
 }
-// 🆕 v1.53.15 2026.05.28: 초대 링크는 항상 공개 도메인(playtaam.com) 사용.
-//   기존 location.origin 은 관리자가 어느 호스트(taam-app.vercel.app vs playtaam.com)에서
-//   코드를 만들었는지에 따라 링크 호스트가 달라졌음. 공식 도메인으로 고정.
-function icMakeInviteUrl(code){
-  return 'https://playtaam.com/?invite=' + encodeURIComponent(code);
-}
-
-// 링크 클립보드 복사
-function icCopyLink(code){
-  var url = icMakeInviteUrl(code);
-  // 모던 API
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(url).then(function(){
-      showToast('📋','복사 완료','초대 링크가 복사되었어요');
-    }).catch(function(){
-      icCopyLinkFallback(url);
-    });
-  } else {
-    icCopyLinkFallback(url);
-  }
-}
-
-// 폴백 (구형 브라우저)
-function icCopyLinkFallback(url){
-  var ta = document.createElement('textarea');
-  ta.value = url;
-  ta.style.position = 'fixed';
-  ta.style.opacity = '0';
-  document.body.appendChild(ta);
-  ta.select();
-  try {
-    document.execCommand('copy');
-    showToast('📋','복사 완료','초대 링크가 복사되었어요');
-  } catch(e) {
-    showToast('⚠','복사 실패','수동으로 복사해주세요: ' + url);
-  }
-  document.body.removeChild(ta);
-}
-
-// Web Share API (모바일에서 카톡/문자 등 선택창)
-function icShareLink(code, name){
-  var url = icMakeInviteUrl(code);
-  var greeting = name ? (name + '님\n\n') : '';
-  var shareData = {
-    title: 'TAAM 초대',
-    text: greeting + '貪 탐하다\n세상의 재미난 모든것을 탐하다\n\n프리미엄 멤버십\nTAAM에 오신걸 환영합니다.\n\n' + url,
-    url: url
-  };
-  if (navigator.share) {
-    navigator.share(shareData).catch(function(err){
-      if (err.name !== 'AbortError') {
-        // 사용자가 취소한 게 아니면 폴백
-        icCopyLink(code);
-      }
-    });
-  } else {
-    // 데스크톱은 그냥 복사
-    icCopyLink(code);
-  }
-}
+// (정리 2026.08: 여기 있던 초대 공유 4종(icMakeInviteUrl·icCopyLink·icCopyLinkFallback·icShareLink)
+//  중복 사본 삭제 — 바로 아래 정의가 전역 이름 충돌에서 이기는 실제 코드였다.)
 
 // 🆕 v1.53.15 2026.05.28: 초대 링크는 항상 공개 도메인(playtaam.com) 사용.
 //   기존 location.origin 은 관리자가 어느 호스트(taam-app.vercel.app vs playtaam.com)에서
@@ -33049,6 +32979,7 @@ function renderTicketList(){
     return '<div class="rest-list-item">'      +'<div class="rest-list-info">'        +'<div class="rest-list-name"'+(isSold?' style="opacity:.4;"':'')+'>'+( r?r.name:t.rest)+' <span style="font-family:var(--font-main);font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:'+(isSold?'#E53935':'#c8a96e')+';">'+(isSold?'SOLD OUT':t.type)+'</span>'+lockBadge+'</div>'        +'<div class="rest-list-meta"'+(isSold?' style="opacity:.4;"':'')+'>'+t.date+' · '+t.time+slots+'</div>'
         +schedLine
         +'<div id="tkls_'+t.id+'" style="font-size:10.5px;color:#8a8580;margin-top:3px;">좌석 집계 중…</div>'
+        +flexToggle
       +'</div>'      +'<div class="rest-list-actions">'+        '<button class="rest-action-sold'+(isSold?' soldout':'')+'" onclick="tuToggleSoldout(\''+t.id+'\')">'+(isSold?'판매중':'매진')+'</button>'+        ((t.deadlineDate||t.gradeOpen)?'<button class="rest-action-extend" onclick="openExtendPopup(\''+t.id+'\')" >연장</button>':'')+        '<button class="rest-action-edit" onclick="tuEditTicket(\''+t.id+'\')" >수정</button>'+        '<button class="rest-action-del" onclick="tuDeleteTicket(\''+t.id+'\')" >삭제</button>'+      '</div>'+    '</div>';
   }).join('');
   _tuListSeatStats(sorted);
@@ -70432,47 +70363,7 @@ function taamOpenSheet() {
   if (_taamMap) setTimeout(function(){ _taamMap.invalidateSize(); }, 350);
 }
 
-function taamCloseSheet() {
-  var sheet = document.getElementById('taamChatSheet');
-  var fab = document.getElementById('taamChatFab');
-  if (!sheet || !fab) return;
-  
-  // 키보드 내려가게
-  var inp = document.getElementById('taamChatInput');
-  if (inp) inp.blur();
-  
-  sheet.style.transform = 'translateY(105%)';
-  setTimeout(function(){
-    sheet.style.display = 'none';
-    fab.style.display = 'flex';
-    requestAnimationFrame(function(){
-      fab.style.opacity = '1';
-      fab.style.transform = 'scale(1)';
-    });
-    // 지도 크기 재계산 (시트 닫혀서 지도가 풀화면)
-    if (_taamMap) setTimeout(function(){ _taamMap.invalidateSize(); }, 100);
-  }, 300);
-}
-
-function taamOpenSheet() {
-  var sheet = document.getElementById('taamChatSheet');
-  var fab = document.getElementById('taamChatFab');
-  if (!sheet || !fab) return;
-  
-  fab.style.opacity = '0';
-  fab.style.transform = 'scale(0.8)';
-  setTimeout(function(){ fab.style.display = 'none'; }, 250);
-  
-  sheet.style.display = 'flex';
-  sheet.style.transform = 'translateY(105%)';
-  requestAnimationFrame(function(){
-    requestAnimationFrame(function(){
-      sheet.style.transform = 'translateY(0)';
-    });
-  });
-  // 지도 크기 재계산 (시트가 다시 덮음)
-  if (_taamMap) setTimeout(function(){ _taamMap.invalidateSize(); }, 350);
-}
+// (정리 2026.08: 여기 있던 taamCloseSheet/taamOpenSheet 완전 동일 중복 사본 삭제 — 위 정의만 남김.)
 
 // ───────────────────────────────────────────────────────────────
 // 챗 답변 — 마크다운(##, **, -/•, > 등) → HTML 변환

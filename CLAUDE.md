@@ -15,14 +15,14 @@
 | 프론트엔드 | **단일 `index.html`** PWA (약 4.7MB, 인라인 CSS/JS/데이터) + 서비스워커 `sw.js` |
 | 네이티브 | Capacitor 8 (iOS/Android), `capacitor.config.json` |
 | 백엔드 | **Supabase** (Postgres + Auth + Edge Functions) — 프로젝트 ref `edfsmzbcixfnqabrsvut` |
-| 서버리스 | `api/` = Vercel 함수(taam-chat, taam-format) / `supabase/functions/` = Edge Functions |
+| 서버리스 | `supabase/functions/` = Edge Functions (Vercel `api/` 함수는 2026-08 미사용 확인 후 삭제) |
 | 결제 | **PortOne(포트원) V2**, 원화(KRW), 카드·계좌이체 |
 | AI | Anthropic Claude (컨시어지 챗 `taam-chat`, 번역 `taam-translate`) |
 | 배포 | Vercel(웹, `taam-app.vercel.app`), Codemagic(iOS TestFlight) / 기본 브랜치 `main` |
 
 ## 디렉토리 구조
 - `index.html` — **앱 본체**. 거의 모든 UI·로직·i18n이 여기 있음 (단일 파일)
-- `api/` — Vercel 서버리스 함수 (taam-chat.js, taam-format.js)
+- (삭제됨 2026-08) `api/` Vercel 함수 — 앱은 Supabase Edge Function 만 호출. 단 `taam-format` Edge Function 소스는 저장소에 없음(대시보드 배포) — 수정 시 대시보드에서 확인
 - `supabase/functions/` — Edge Functions (taam-chat, send-push, consume-invite, verify-invite, lineage-summarize, taam-translate, taam-translate-venues-batch, _shared)
 - `supabase/migrations/` — DB 마이그레이션 (0001~)
 - `sql/` — **수동 실행용 SQL 스크립트** (스키마·정책·수정·진단). `SQL_RUN_GUIDE.md` 참고
