@@ -41782,7 +41782,7 @@ function _pcalMapPanel(t, r){
   h += '<div class="pd-kick">LOCATION</div>';
   h += '<div style="font-size:13px;font-weight:800;color:#f5f2ee;">' + _pcalEsc(name) + '</div>';
   h += '<div style="font-size:11px;color:#8d8781;margin:3px 0 11px;">' + (_pcalEsc(addr) || '주소 정보 없음') + '</div>';
-  h += '<div class="pd-map" id="pdMap"></div>';
+  h += '<div class="pd-map" id="pdMap" style="cursor:pointer;" onclick="pcalOpenGoogleMap()" title="구글 지도에서 크게 보기"></div>';
   h += '<div class="pd-mapbtns">'
      + '<button style="background:#5C0A14;color:#fff;" onclick="pcalCopyAddr()">주소 복사</button>'
      + '<button style="background:rgba(255,255,255,.10);color:#f5f2ee;" onclick="fullMapOpenDirections()">길안내</button>'
@@ -41985,6 +41985,28 @@ function pcalInitMap(){
   }, 120);
 }
 window.pcalInitMap = pcalInitMap;
+
+// 🆕 2026.08: 지도 클릭 → 구글 지도 풀화면 (기존 티켓 상세 tdOpenGoogleMap 과 같은 규칙)
+//   placeId 가 있으면 장소 페이지(리뷰·경로찾기 포함)로, 없으면 좌표 → 주소 순 폴백.
+//   Leaflet 미니맵은 상호작용을 다 꺼둬서 클릭이 컨테이너 onclick 으로 그대로 올라온다.
+function pcalOpenGoogleMap(){
+  var r = currentRest;
+  if(!r){ if(typeof showToast === 'function') showToast('⚠','지도','가게 정보가 없습니다'); return; }
+  var lat = r.lat || null, lng = r.lng || null;
+  var placeId = r.placeId || '';
+  var addr = r.address || '';
+  var url = '';
+  if (placeId) {
+    url = 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(addr || (lat && lng ? lat + ',' + lng : '')) + '&query_place_id=' + placeId;
+  } else if (lat && lng) {
+    url = 'https://www.google.com/maps/search/?api=1&query=' + lat + ',' + lng;
+  } else if (addr) {
+    url = 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(addr);
+  }
+  if(url) window.open(url, '_blank', 'noopener,noreferrer');
+  else if(typeof showToast === 'function') showToast('⚠','지도','주소 정보가 없습니다');
+}
+window.pcalOpenGoogleMap = pcalOpenGoogleMap;
 
 // ── GNB 를 하단에 붙인다 (플래그 뒤에서만) — Quest 라벨은 그대로 둔다 ──
 function pcalApplyGnb(){
