@@ -298,6 +298,8 @@ html.splash-skip .splash{display:none !important}
 .sa-key{width:52px;height:52px;border-radius:50%;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.1);font-family:var(--font-main);font-size:17px;font-weight:500;color:rgba(255,255,255,.9);cursor:pointer;transition:background .1s;}
 .sa-key:active{background:rgba(255,255,255,.28);}
 @keyframes slideIn{to{opacity:1;transform:translateX(0)}}
+/* 당겨서 새로고침 스피너 */
+@keyframes taamPtrSpin{to{transform:rotate(360deg)}}
 @keyframes expandLine{to{width:110px}}
 @keyframes fadeUp{from{opacity:0;transform:translateX(-50%) translateY(18px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
 
@@ -13558,32 +13560,392 @@ function _tkRepaintAll(){
 }
 window._tkRepaintAll = _tkRepaintAll;
 
+// ── 잔액 표시만 다시 칠한다 (숫자는 이미 currentDepositBalance 에 들어있다) ──
+function _liveRepaintBalance(){
+  try {
+    var el = document.getElementById('mpBalance');
+    if(el) el.textContent = '₩ ' + (currentDepositBalance||0).toLocaleString();
+  } catch(_e){}
+  // 예치금 내역 화면이 열려 있으면 목록까지 다시 그린다
+  try {
+    var dh = document.getElementById('depositHistPage');
+    if(dh && dh.style.display && dh.style.display !== 'none' && typeof renderDepositHist === 'function'){
+      renderDepositHist();
+    }
+  } catch(_e){}
+}
+window._liveRepaintBalance = _liveRepaintBalance;
+
+// ── 지금 건드리면 안 되는 순간인가 ──
+//   결제 왕복 중이거나 구매/확인 시트가 열려 있으면 손대지 않는다.
+//   보고 있는 금액·좌석이 발밑에서 바뀌는 쪽이 더 위험하다.
+function _liveBusy(){
+  try { if (typeof _tossHasTrip === 'function' && _tossHasTrip()) return true; } catch(_e){}
+  var ids = ['tdPurchaseSheet','tdConfirmPopup','tdDonePopup'];
+  for(var i=0;i<ids.length;i++){
+    var el = document.getElementById(ids[i]);
+    if(el && el.style.display && el.style.display !== 'none') return true;
+  }
+  return false;
+}
+
+// ── 통합 새로고침: 티켓(좌석·매진) + 예치금(잔액·내역) ──
 var _tkSyncing = false, _tkSyncAt = 0;
-function _tkSyncFromServer(force){
+function taamSyncNow(force){
   if (_tkSyncing || !window.sb) return Promise.resolve();
-  // 결제 왕복 중이거나 구매 시트가 열려 있으면 건드리지 않는다 —
-  //   지금 보고 있는 금액·좌석이 발밑에서 바뀌는 쪽이 더 위험하다.
-  try { if (typeof _tossHasTrip === 'function' && _tossHasTrip()) return Promise.resolve(); } catch(_e){}
-  var sheet = document.getElementById('tdPurchaseSheet');
-  if (sheet && sheet.style.display && sheet.style.display !== 'none') return Promise.resolve();
-  // 화면 복귀가 잦아도 서버를 두들기지 않게 — 20초 안에는 다시 읽지 않는다
+  if (_liveBusy()) return Promise.resolve();
+  // 화면 복귀가 잦아도 서버를 두들기지 않게 — 15초 안에는 다시 읽지 않는다
+  //   (force=true 는 당겨서 새로고침·Realtime 이벤트처럼 "지금 바뀌었다" 가 확실할 때만)
   var now = Date.now();
-  if (!force && (now - _tkSyncAt) < 20000) return Promise.resolve();
+  if (!force && (now - _tkSyncAt) < 15000) return Promise.resolve();
   _tkSyncAt = now; _tkSyncing = true;
-  return Promise.resolve(loadTickets())
-    .then(function(){ _tkRepaintAll(); })
-    .catch(function(e){ console.warn('[tkSync] 실패:', e && e.message); })
+
+  var jobs = [ Promise.resolve(loadTickets())
+                 .catch(function(e){ console.warn('[live] 티켓 실패:', e && e.message); }) ];
+  // 로그인 상태에서만 예치금을 다시 읽는다 (비로그인 화면에서 헛질의 방지)
+  var authed = false;
+  try { authed = (localStorage.getItem('authedSession') === '1'); } catch(_e){}
+  if (authed && typeof loadDeposit === 'function') {
+    jobs.push(Promise.resolve(loadDeposit())
+                .catch(function(e){ console.warn('[live] 예치금 실패:', e && e.message); }));
+  }
+
+  return Promise.all(jobs).then(function(){
+    _tkRepaintAll();
+    _liveRepaintBalance();
+  }).catch(function(e){ console.warn('[live] 동기화 실패:', e && e.message); })
     .then(function(){ _tkSyncing = false; });
 }
+window.taamSyncNow = taamSyncNow;
+// 예전 이름 — 호출부가 여러 군데라 그대로 남긴다
+function _tkSyncFromServer(force){ return taamSyncNow(force); }
 window._tkSyncFromServer = _tkSyncFromServer;
 
-// 화면·네트워크로 돌아올 때 매진 여부를 다시 맞춘다
+// ════════════════════════════════════════════════════════════════
+// 🆕 2026.08: Realtime — 행동 즉시 반영 (앱을 다시 켜지 않아도 된다)
+//
+//   무엇을 듣는가
+//     · profiles(내 행)      — 슈퍼어드민이 예치금을 부여/차감하면 그 자리에서 숫자가 바뀐다
+//     · ticket_products      — 티켓 등록·수정·매진 토글, 그리고 좌석 트리거가 켜는 soldout
+//     · tickets              — 내 구매(다른 회원 행은 RLS 로 안 온다. 그래서 위 두 개가 본줄기다)
+//
+//   왜 ticket_products 가 본줄기인가
+//     회원은 남의 tickets 행을 읽을 수 없다 — RLS 가 막는다. 그래서 "누가 좌석을 샀다"
+//     자체는 회원 기기에 도달하지 않는다. 대신 좌석이 움직일 때마다 서버 트리거가
+//     ticket_products.updated_at 을 건드리게 해두면(sql/realtime_live_sync.sql),
+//     모두가 읽을 수 있는 그 테이블의 UPDATE 하나로 전 기기가 같이 갱신된다.
+//
+//   ⚠ 이 구독이 살아있지 않아도 앱은 정상 동작한다 — 화면 복귀·탭 이동·당겨서
+//     새로고침이 2겹으로 같은 일을 한다. Realtime 은 "더 빠르게" 일 뿐이다.
+// ════════════════════════════════════════════════════════════════
+var _liveChannel = null, _liveKickT = null;
+function _liveSubscribe(uid){
+  if(!window.sb) return;
+  try { if(_liveChannel) window.sb.removeChannel(_liveChannel); } catch(_e){}
+  _liveChannel = null;
+  if(!uid) return;
+
+  // 연속 이벤트(한 번의 구매가 여러 행을 건드린다)를 한 번으로 묶는다.
+  //   첫 이벤트는 0.7초 뒤 바로 반영하되, 그 뒤로는 5초에 한 번을 넘지 않게 한다 —
+  //   슈퍼어드민은 전 회원의 tickets 행을 읽을 수 있어서, 바쁜 시간대에 이벤트가
+  //   쏟아지면 그대로 서버를 두들기게 된다.
+  function kick(){
+    clearTimeout(_liveKickT);
+    var wait = Math.max(700, 5000 - (Date.now() - _tkSyncAt));
+    _liveKickT = setTimeout(function(){ taamSyncNow(true); }, wait);
+  }
+
+  try {
+    _liveChannel = window.sb.channel('taam_live_' + uid)
+      .on('postgres_changes', {
+        event: 'UPDATE', schema: 'public', table: 'profiles', filter: 'id=eq.' + uid
+      }, function(payload){
+        // 잔액은 페이로드에 이미 들어있다 — 서버를 다시 읽기 전에 먼저 칠한다
+        try {
+          var n = payload && payload.new;
+          if(n){
+            var m = parseInt(n.membership_deposit_balance, 10);
+            var g = parseInt(n.general_deposit_balance, 10);
+            if(!isNaN(m) || !isNaN(g)){
+              currentDepositBalance = (isNaN(m)?0:m) + (isNaN(g)?0:g);
+              _liveRepaintBalance();
+              console.log('[live] 💰 예치금 실시간 반영');
+            }
+          }
+        } catch(_e){}
+        kick();   // 거래 '내역' 까지 맞추려면 다시 읽어야 한다
+      })
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'ticket_products'
+      }, function(){ kick(); })
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'tickets'
+      }, function(){ kick(); })
+      .subscribe(function(status){ console.log('[live] Realtime 구독:', status); });
+  } catch(e){ console.warn('[live] subscribe 예외:', e); }
+}
+window._liveSubscribe = _liveSubscribe;
+
+function _liveUnsubscribe(){
+  try { if(_liveChannel) window.sb.removeChannel(_liveChannel); } catch(_e){}
+  _liveChannel = null;
+  clearTimeout(_liveKickT);
+}
+window._liveUnsubscribe = _liveUnsubscribe;
+
+// 로그인/세션복원이 끝난 뒤 호출 (openMain)
+function _liveBind(){
+  if(!window.sb) return;
+  try {
+    window.sb.auth.getUser().then(function(r){
+      var u = r && r.data && r.data.user;
+      if(u && u.id) _liveSubscribe(u.id);
+    }, function(){});
+  } catch(_e){}
+}
+window._liveBind = _liveBind;
+
+// 화면·네트워크로 돌아올 때 다시 맞춘다 (Realtime 이 끊겨 있어도 여기서 복구된다)
 (function(){
-  function _kick(){ if (document.visibilityState === 'visible') _tkSyncFromServer(); }
+  function _kick(){ if (document.visibilityState === 'visible') taamSyncNow(); }
   document.addEventListener('visibilitychange', _kick);
   window.addEventListener('online', _kick);
   window.addEventListener('focus', _kick);
 })();
+
+// ════════════════════════════════════════════════════════════════
+// 🆕 2026.08: 당겨서 새로고침 (pull-to-refresh)
+//   회원이 "이상한데?" 싶을 때 손에 익은 동작 하나로 강제 갱신할 수 있어야 한다.
+//   맨 위에서 아래로 70px 이상 당기면 taamSyncNow(true).
+// ════════════════════════════════════════════════════════════════
+(function(){
+  var THRESHOLD = 70, MAXPULL = 96;
+  var startY = 0, dist = 0, scroller = null, active = false, ind = null;
+
+  function indicator(){
+    if(ind) return ind;
+    ind = document.createElement('div');
+    ind.id = 'taamPtr';
+    ind.style.cssText = 'position:fixed;left:50%;top:0;z-index:9500;pointer-events:none;'
+      + 'width:34px;height:34px;margin-left:-17px;border-radius:50%;background:#fff;'
+      + 'box-shadow:0 2px 10px rgba(0,0,0,.18);display:flex;align-items:center;'
+      + 'justify-content:center;opacity:0;transform:translateY(-44px);'
+      + 'transition:opacity .15s ease;';
+    ind.innerHTML = '<div id="taamPtrArc" style="width:16px;height:16px;border-radius:50%;'
+      + 'border:2px solid #d8d3cb;border-top-color:#1a1a18;"></div>';
+    document.body.appendChild(ind);
+    return ind;
+  }
+  function place(y, spin){
+    var e = indicator();
+    e.style.opacity = y > 4 ? '1' : '0';
+    e.style.transform = 'translateY(' + y + 'px) rotate(' + (spin ? 0 : y * 4) + 'deg)';
+    var arc = document.getElementById('taamPtrArc');
+    if(arc) arc.style.animation = spin ? 'taamPtrSpin .7s linear infinite' : 'none';
+  }
+  function hide(){
+    var e = indicator();
+    e.style.opacity = '0';
+    e.style.transform = 'translateY(-44px)';
+    var arc = document.getElementById('taamPtrArc');
+    if(arc) arc.style.animation = 'none';
+  }
+
+  // 손가락이 닿은 지점에서 실제로 스크롤되는 요소를 찾는다
+  function findScroller(el){
+    while(el && el !== document.body && el !== document.documentElement){
+      try {
+        var ov = getComputedStyle(el).overflowY;
+        if((ov === 'auto' || ov === 'scroll') && el.scrollHeight > el.clientHeight + 4) return el;
+      } catch(_e){}
+      el = el.parentElement;
+    }
+    return document.scrollingElement || document.documentElement;
+  }
+
+  // 어디서 당겼을 때 새로고침으로 볼 것인가 — 본 화면·마이페이지·매거진만.
+  //   시트/팝업 안에서 당기는 건 그 시트의 스크롤이지 새로고침이 아니다.
+  function allowed(target){
+    if(!target || !target.closest) return false;
+    if(_liveBusy()) return false;
+    return !!target.closest('#mainScreen, #myPage, #magView, #homeView, #ticketView');
+  }
+
+  document.addEventListener('touchstart', function(e){
+    active = false; dist = 0;
+    if(!e.touches || e.touches.length !== 1) return;
+    if(!allowed(e.target)) return;
+    scroller = findScroller(e.target);
+    if(!scroller || scroller.scrollTop > 0) return;
+    startY = e.touches[0].clientY;
+    active = true;
+  }, { passive: true });
+
+  document.addEventListener('touchmove', function(e){
+    if(!active || !e.touches || e.touches.length !== 1) return;
+    if(scroller && scroller.scrollTop > 0){ active = false; hide(); return; }
+    var dy = e.touches[0].clientY - startY;
+    if(dy <= 0){ dist = 0; hide(); return; }
+    dist = Math.min(dy * 0.5, MAXPULL);
+    if(dist > 6){
+      try { e.preventDefault(); } catch(_e){}   // 화면 자체가 튕기지 않게
+      place(dist, false);
+    }
+  }, { passive: false });
+
+  document.addEventListener('touchend', function(){
+    if(!active){ return; }
+    active = false;
+    if(dist < THRESHOLD * 0.5){ hide(); dist = 0; return; }
+    dist = 0;
+    place(52, true);
+    Promise.resolve(taamSyncNow(true)).then(function(){
+      // 너무 빨리 사라지면 "안 된 것 같은" 느낌이 든다 — 최소 500ms 는 보여준다
+      setTimeout(hide, 500);
+    }, function(){ setTimeout(hide, 500); });
+  }, { passive: true });
+})();
+
+// ════════════════════════════════════════════════════════════════
+// 🆕 2026.08: 앱(네이티브) 업데이트 안내 — 구버전에 갇힌 회원을 꺼내온다
+//
+//   왜 필요한가
+//     capacitor.config.json 의 server.url 이 taam-app.vercel.app 이라
+//     "화면·로직" 은 웹 배포만으로 전 기기에 즉시 반영된다. 그런데 푸시·플러그인·
+//     권한 같은 네이티브 껍데기는 스토어 업데이트를 받아야만 바뀐다.
+//     그래서 회원 화면은 최신인데 푸시만 영영 안 오는 상태가 생길 수 있다.
+//     그 사람에게 "업데이트하세요" 라고 말해줄 방법이 앱 안에 있어야 한다.
+//
+//   설치된 네이티브 버전을 어떻게 아는가
+//     Capacitor 가 WebView User-Agent 뒤에 붙여주는 문자열을 쓴다.
+//     빌드할 때 capacitor.config.json 의 appendUserAgent 에
+//     `TAAM/<표시버전>(<빌드번호>)` 를 넣는다 (codemagic.yaml 의 주입 단계).
+//     플러그인을 새로 추가하지 않아도 되고, JS 한 줄로 읽힌다.
+//
+//   ⚠ 이 표식이 없는 앱 = 이 방식이 들어가기 전의 빌드 = 구버전.
+//     그래서 표식이 없으면 빌드번호 0 으로 본다.
+//
+//   ⚠ 플래그가 꺼져 있는 이유
+//     지금 스토어에 있는 1.01 에는 아직 이 표식이 없다. 켜면 최신 사용자에게도
+//     "업데이트하세요" 가 뜨는데 정작 받을 업데이트가 없다.
+//     표식이 들어간 빌드가 스토어에 올라간 다음에 켠다.
+//
+//   설정: app_config key='app_version' (sql/app_version_config.sql)
+//     { "ios":     { "min_build": 0, "latest_build": 33,   "url": "https://apps.apple.com/app/id..." },
+//       "android": { "min_build": 0, "latest_build": 1009, "url": "https://play.google.com/store/apps/details?id=com.playtaam.app" } }
+//     · 설치 빌드 <  min_build    → 강제 (닫을 수 없음)
+//     · 설치 빌드 <  latest_build → 권장 (나중에 하기 가능, 하루 1회)
+//     버전 문자열이 아니라 빌드번호로 비교한다 — '1.01' 이 '1.1' 인지 '1.0.1' 인지
+//     따질 필요가 없어지고, 두 스토어의 규칙 차이도 안 탄다.
+// ════════════════════════════════════════════════════════════════
+var APP_UPDATE_LIVE = false;   // ← 표식이 들어간 빌드가 스토어에 올라간 뒤 true
+
+function _appNativeBuild(){
+  // 반환: { ver:'1.01', build:33 } / 네이티브가 아니면 null
+  var isNative = false;
+  try { isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()); } catch(_e){}
+  if(!isNative) return null;
+  var m = null;
+  try { m = /TAAM\/([0-9][0-9.]*)\((\d+)\)/.exec(navigator.userAgent || ''); } catch(_e){}
+  if(!m) return { ver: '', build: 0 };   // 표식 없음 = 이 방식 이전 빌드
+  return { ver: m[1], build: parseInt(m[2], 10) || 0 };
+}
+window._appNativeBuild = _appNativeBuild;
+
+function _appPlatform(){
+  try { return (window.Capacitor && window.Capacitor.getPlatform && window.Capacitor.getPlatform()) || ''; }
+  catch(_e){ return ''; }
+}
+
+function _appStoreOpen(url){
+  if(!url) return;
+  try { window.open(url, '_blank', 'noopener,noreferrer'); }
+  catch(_e){ try { location.href = url; } catch(_e2){} }
+}
+
+function _appUpdatePopup(force, url, cur, want){
+  if(document.getElementById('appUpdOverlay')) return;
+  var lang = (window._tkCurrentLang || 'ko');
+  var TXT = {
+    ko: { t:'업데이트가 있습니다', b: force
+            ? '계속 사용하시려면 최신 버전으로 업데이트해주세요.'
+            : '새 버전이 나왔습니다. 지금 업데이트하시겠어요?',
+          go:'업데이트', later:'나중에' },
+    en: { t:'Update available', b: force
+            ? 'Please update to the latest version to continue.'
+            : 'A new version is available. Update now?',
+          go:'Update', later:'Later' },
+    ja: { t:'アップデートがあります', b: force
+            ? '引き続きご利用いただくには最新版へのアップデートが必要です。'
+            : '新しいバージョンがあります。今すぐ更新しますか？',
+          go:'アップデート', later:'あとで' }
+  };
+  var x = TXT[lang] || TXT.ko;
+
+  var ov = document.createElement('div');
+  ov.id = 'appUpdOverlay';
+  ov.style.cssText = 'position:fixed;inset:0;z-index:9800;background:rgba(12,11,10,.72);'
+    + 'display:flex;align-items:center;justify-content:center;padding:28px;'
+    + '-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px);';
+  var verLine = (cur && want) ? ('<div style="font-size:11px;color:#a8a29a;margin-top:14px;">'
+        + (cur.ver ? ('v' + cur.ver + ' (' + cur.build + ')') : ('build ' + cur.build))
+        + ' → build ' + want + '</div>') : '';
+  ov.innerHTML =
+    '<div style="background:#fff;border-radius:20px;max-width:340px;width:100%;padding:30px 26px 22px;text-align:center;box-shadow:0 18px 50px rgba(0,0,0,.3);">'
+    + '<div style="font-size:34px;line-height:1;">🎉</div>'
+    + '<div style="font-size:17px;font-weight:700;color:#1a1a18;margin-top:14px;letter-spacing:-.2px;">' + x.t + '</div>'
+    + '<div style="font-size:13px;color:#6b665f;margin-top:10px;line-height:1.65;">' + x.b + '</div>'
+    + verLine
+    + '<button id="appUpdGo" style="margin-top:22px;width:100%;height:48px;border:0;border-radius:12px;'
+    +   'background:#1a1a18;color:#fff;font-size:14px;font-weight:700;letter-spacing:-.2px;">' + x.go + '</button>'
+    + (force ? '' :
+       '<button id="appUpdLater" style="margin-top:8px;width:100%;height:42px;border:0;border-radius:12px;'
+       + 'background:transparent;color:#8a8580;font-size:13px;">' + x.later + '</button>')
+    + '</div>';
+  document.body.appendChild(ov);
+
+  var go = document.getElementById('appUpdGo');
+  if(go) go.onclick = function(){ _appStoreOpen(url); };
+  var later = document.getElementById('appUpdLater');
+  if(later) later.onclick = function(){
+    // 같은 빌드에 대해서는 오늘 하루 다시 묻지 않는다
+    try { localStorage.setItem('taamUpdSkip', want + ':' + new Date().toISOString().slice(0,10)); } catch(_e){}
+    ov.remove();
+  };
+}
+
+async function taamCheckAppUpdate(){
+  try {
+    if(!APP_UPDATE_LIVE) return;
+    var cur = _appNativeBuild();
+    if(!cur) return;                       // 웹/PWA 는 항상 최신이라 안내할 게 없다
+    if(!window.sb) return;
+    var plat = _appPlatform();
+    if(plat !== 'ios' && plat !== 'android') return;
+
+    var r = await window.sb.from('app_config').select('value').eq('key','app_version').maybeSingle();
+    var cfg = (r && r.data && r.data.value) || null;
+    var c = cfg && cfg[plat];
+    if(!c) return;                          // 설정이 없으면 아무것도 하지 않는다 (안전)
+
+    var minB    = parseInt(c.min_build, 10)    || 0;
+    var latestB = parseInt(c.latest_build, 10) || 0;
+    var url     = c.url || (plat === 'android'
+                    ? 'https://play.google.com/store/apps/details?id=com.playtaam.app' : '');
+
+    if(cur.build < minB){
+      _appUpdatePopup(true, url, cur, minB);
+      return;
+    }
+    if(cur.build < latestB){
+      var skip = '';
+      try { skip = localStorage.getItem('taamUpdSkip') || ''; } catch(_e){}
+      if(skip === (latestB + ':' + new Date().toISOString().slice(0,10))) return;
+      _appUpdatePopup(false, url, cur, latestB);
+    }
+  } catch(e){ console.warn('[update] 확인 실패:', e && e.message); }
+}
+window.taamCheckAppUpdate = taamCheckAppUpdate;
 
 function saveMembers(){ _idbSafeSet('excMembers', memberDB, '회원'); }
 function loadMembers(){
@@ -14064,6 +14426,7 @@ async function _forceSignOutDueToOtherDevice(otherLabel){
   setTimeout(async function(){
     try { if(_activeSessionChannel) window.sb.removeChannel(_activeSessionChannel); } catch(_){}
     _activeSessionChannel = null;
+    try { if(typeof _liveUnsubscribe === 'function') _liveUnsubscribe(); } catch(_){}
     try { await window.sb.auth.signOut(); } catch(_){}
     try { localStorage.removeItem('authedSession'); } catch(_){}
     try { if(typeof IDB !== 'undefined' && IDB.set) IDB.set('authedSession', ''); } catch(_){}
@@ -17082,6 +17445,12 @@ function openMain(){
     //   로그인·세션복원이 모두 지나가는 자리라, 회원이 아무것도 안 눌러도 연결된다.
     //   (종전에는 알림 설정에서 「재구독」 을 눌러야만 붙었다 — 회원에게 시킬 일이 아니다)
     try { if (typeof _npBindUser === 'function') _npBindUser(); } catch(_pe){}
+    // 🆕 2026.08: 실시간 반영 구독을 이 계정에 붙인다.
+    //   예치금 부여·좌석 매진이 앱을 다시 켜지 않아도 화면에 온다.
+    try { if (typeof _liveBind === 'function') _liveBind(); } catch(_le){}
+    // 🆕 네이티브 앱이 구버전이면 업데이트를 안내한다 (웹 화면은 항상 최신이지만
+    //   푸시·플러그인 같은 네이티브 껍데기는 스토어 업데이트를 받아야 바뀐다)
+    try { if (typeof taamCheckAppUpdate === 'function') taamCheckAppUpdate(); } catch(_ue){}
     // 🆕 2026.08: 로그인 직후 첫 화면 = Home.
     //   단, 사진 캘린더가 꺼져 있으면 homeView 는 빈 화면이라 그대로 들어가면 검은 화면이 된다.
     //   그래서 플래그가 꺼진 경우에는 예전처럼 Ticket 으로 들어간다 — 회원 화면은 바뀌지 않는다.
@@ -17136,6 +17505,10 @@ function openMain(){
 function gnbGo(tab, btn){
   document.querySelectorAll('.gnb-btn').forEach(function(b){b.classList.remove('active');});
   btn.classList.add('active');
+
+  // 🆕 2026.08: 탭을 옮길 때마다 최신값으로 맞춘다 (15초 스로틀 — 서버를 두들기지 않는다).
+  //   "다른 곳 갔다 오면 반영돼 있어야 한다" 를 이 한 줄이 담당한다.
+  try { if (typeof taamSyncNow === 'function') taamSyncNow(); } catch(_sy){}
 
   // 🆕 GNB 이동 시 열려있는 모달/모듈 강제 정리
   //    이걸 안 닫으면 검은 잔상 위에 새 view 가 가려져 보임 → "뒤로가기 막힘" 버그
@@ -17374,6 +17747,9 @@ function closeMyPageToHome(){
 
 function openMyPage(){
   document.getElementById('mpBalance').textContent='₩ '+currentDepositBalance.toLocaleString();
+  // 🆕 2026.08: 마이페이지는 잔액을 보러 오는 화면이다 — 열 때마다 서버값으로 맞춘다.
+  //   위 줄은 캐시값으로 즉시 그리고, 아래가 도착하면 조용히 갈아 끼운다 (깜빡임 없음).
+  try { if (typeof taamSyncNow === 'function') taamSyncNow(true); } catch(_sy){}
   // Phone
   var phone=document.getElementById('vpPhone');
   var phoneNum=(phone&&phone.value.trim())||'010-0000-0000';
