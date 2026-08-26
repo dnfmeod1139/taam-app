@@ -19067,6 +19067,47 @@ function _tdStepPax(cur, delta){
   }
   return null;
 }
+
+// ════════════════════════════════════════════════════════════════
+// 🆕 2026.08: 인원 상한은 '총 정원' 이 아니라 '지금 남은 좌석' 이다.
+//   잔여 2석인 티켓에서 인원이 6까지 올라가던 문제.
+//   좌석 자체는 서버(enforce_ticket_capacity 트리거 · toss-order)가 최종 차단하므로
+//   오버셀은 애초에 일어나지 않았다. 하지만 회원이 6인을 고르고 금액까지 확인한 뒤
+//   결제 버튼에서야 거절당하는 건 사고다 — 고를 수 있으면 살 수 있어야 한다.
+//   수동 추가·초대 홀드도 tickets 행이라 이 잔여석 계산(taam_ticket_sold_slots)에
+//   이미 들어 있다. 그래서 세 경로가 자동으로 같은 숫자를 본다.
+//
+//   잔여석을 아직 못 읽었으면(null) 종전대로 정원 기준으로 둔다 —
+//   조회가 늦거나 실패했다고 구매를 막아버리면 멀쩡한 회원이 못 산다.
+// ════════════════════════════════════════════════════════════════
+window._tdRemainSeats = null;   // 지금 열린 티켓의 잔여석 (null = 아직 모름)
+function _tdPaxCeiling(t){
+  var cap = parseInt((t && (t.maxPax || t.totalPax)) || 0) || 99;
+  var rem = window._tdRemainSeats;
+  if (typeof rem === 'number' && rem >= 0) cap = Math.min(cap, rem);
+  return Math.max(1, cap);
+}
+window._tdPaxCeiling = _tdPaxCeiling;
+
+// 인원 이동 한 번 — 잔여석을 넘으면 제자리에 두고 왜 막혔는지 알려준다
+function _tdApplyPax(t, next, cur){
+  var max = _tdPaxCeiling(t);
+  if (next > max) {
+    var rem = window._tdRemainSeats;
+    var capOnly = parseInt((t && (t.maxPax || t.totalPax)) || 0) || 99;
+    if (typeof rem === 'number' && rem >= 0 && rem < capOnly && typeof showToast === 'function') {
+      var _lg = window._tkCurrentLang || 'ko';
+      showToast('⚠',
+        _lg === 'en' ? 'Not enough seats' : _lg === 'ja' ? '座席が不足しています' : '좌석 부족',
+        _lg === 'en' ? ('Only ' + rem + ' seat(s) left') :
+        _lg === 'ja' ? ('残り' + rem + '席です') : ('남은 좌석은 ' + rem + '석입니다'));
+    }
+    return cur;
+  }
+  return next;
+}
+window._tdApplyPax = _tdApplyPax;
+
 var _agreeState={agreeAll:false,agree2:false,agree3:false};
 
 // (정리 2026.08: 여기 있던 구버전 openTicketDetail(el) 삭제 — 아래 openTicketDetail(id) 가
@@ -20202,7 +20243,9 @@ function updateBuyBar() {
 
 function adjustPax(delta){
   var _sp = _tdStepPax(_tdPax, delta);   // 🆕 좌석 유형 제한 시 1→2→4 단위 이동
-  _tdPax = (_sp !== null) ? _sp : Math.max(_tdMinPax,Math.min(_tdMaxPax,_tdPax+delta));
+  // 🆕 잔여석 상한은 _tdApplyPax 가 건다 (_tdMaxPax 는 정원 상한)
+  var _next = (_sp !== null) ? _sp : Math.max(_tdMinPax, Math.min(_tdMaxPax, _tdPax + delta));
+  _tdPax = (typeof _tdApplyPax === 'function') ? _tdApplyPax(currentTicket, _next, _tdPax) : _next;
   document.getElementById('tdPaxNum').textContent=_tdPax;
   renderPriceRows();
   updateBuyBar();
@@ -20479,9 +20522,10 @@ function sheetAdjPax(delta) {
   var t = currentTicket;
   if (!t) return;
   var min = t.minPax || 1;
-  var max = t.maxPax || (t.totalPax || 99);
+  var max = parseInt(t.maxPax || t.totalPax || 0) || 99;   // 정원 상한
   var _sp = _tdStepPax(_tdPax, delta);   // 🆕 좌석 유형 제한 시 1→2→4 단위 이동
-  _tdPax = (_sp !== null) ? _sp : Math.max(min, Math.min(max, _tdPax + delta));
+  var _next = (_sp !== null) ? _sp : Math.max(min, Math.min(max, _tdPax + delta));
+  _tdPax = _tdApplyPax(t, _next, _tdPax);   // 🆕 잔여석 상한은 여기서 — 넘으면 사유를 알려준다
   var el = document.getElementById('sheetPaxNum');
   if (el) el.textContent = _tdPax;
   // 예약 요약 + 잔액 업데이트
@@ -20728,6 +20772,7 @@ function handleTicketAction(){
   // 🆕 2026.08: 잔여석 배지 — 회원에겐 재고 전체를 노출하지 않는 규칙:
   //   잔여 ≥4 → "잔여 4석 이상" / 3~1 → 실제 숫자(희소 강조) / 0 → 매진
   (function(_t){
+    window._tdRemainSeats = null;   // 이전 티켓의 잔여석이 남아 상한을 잘못 조이지 않게
     var bd = document.getElementById('sheetRemainBadge');
     if(!bd || !window.sb || !_t) return;
     bd.style.display='none';
@@ -20740,6 +20785,8 @@ function handleTicketAction(){
       var _sold = parseInt(d.total)||0;
       if (window._tkSeatHoldId) _sold = Math.max(0, _sold - (parseInt(window._tkSeatHoldPax||0)||0));
       var remain = Math.max(0, cap - _sold);
+      window._tdRemainSeats = remain;    // 🆕 인원 상한도 이 숫자를 쓴다 (배지 전용이 아니다)
+      if (_tdPax > remain && remain > 0) { _tdPax = remain; var _pn0 = document.getElementById('sheetPaxNum'); if(_pn0) _pn0.textContent = _tdPax; if(typeof refreshSheetSummary==='function') refreshSheetSummary(); }
       var lang = window._tkCurrentLang;
       var txt, fg, bg;
       if(remain <= 0){
@@ -40934,6 +40981,7 @@ function pcalOpenTicket(id){
 
   // 잔여석 배지 — 회원에겐 재고 전체를 노출하지 않는다 (기존 구매 시트와 같은 규칙)
   (function(_t){
+    window._tdRemainSeats = null;   // 이전 티켓의 잔여석이 남아 상한을 잘못 조이지 않게
     var bd = document.getElementById('pdRemainBadge');
     if(!bd || !window.sb || !_t) return;
     var cap = parseInt(_t.assignedPax || _t.totalPax) || 0;
@@ -40944,6 +40992,8 @@ function pcalOpenTicket(id){
       var sold = parseInt(d.total) || 0;
       if(window._tkSeatHoldId) sold = Math.max(0, sold - (parseInt(window._tkSeatHoldPax || 0) || 0));
       var remain = Math.max(0, cap - sold);
+      window._tdRemainSeats = remain;    // 🆕 인원 상한도 이 숫자를 쓴다 (배지 전용이 아니다)
+      if(_tdPax > remain && remain > 0){ _tdPax = remain; if(typeof pcalRefreshPay === 'function') pcalRefreshPay(); }
       // 숫자가 끼는 문구는 TX 스윕(사전 치환)으로 못 잡는다 — 여기서 언어별로 만든다
       var _lg = window._tkCurrentLang || 'ko';
       var txt, fg, bg;
@@ -41897,9 +41947,11 @@ function pcalAdjPax(delta){
   var t = currentTicket;
   if(!t) return;
   var min = t.minPax || 1;
-  var max = t.maxPax || (t.totalPax || 99);
+  var max = parseInt(t.maxPax || t.totalPax || 0) || 99;   // 정원 상한
   var sp = (typeof _tdStepPax === 'function') ? _tdStepPax(_tdPax, delta) : null;
-  _tdPax = (sp !== null) ? sp : Math.max(min, Math.min(max, _tdPax + delta));
+  var next = (sp !== null) ? sp : Math.max(min, Math.min(max, _tdPax + delta));
+  // 🆕 잔여석 상한은 _tdApplyPax 가 — 넘으면 제자리에 두고 사유를 알려준다
+  _tdPax = (typeof _tdApplyPax === 'function') ? _tdApplyPax(t, next, _tdPax) : next;
   pcalRefreshPay();
 }
 window.pcalAdjPax = pcalAdjPax;
