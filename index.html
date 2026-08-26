@@ -33794,10 +33794,21 @@ function tuToggleSoldout(id){
   if(!t)return;
   t.status=(t.status==='soldout')?'active':'soldout';
   saveTickets();
-  // 🆕 수동 토글은 auto_soldout=false 로 명시 — 좌석 자동 동기화 트리거가
-  //   어드민이 손댄 매진/판매를 멋대로 되돌리지 못하게 보호한다.
+  // 🔧 2026.08: 방향에 따라 플래그를 반대로 쓴다 — 종전에는 양쪽 다 false 였다.
+  //
+  //   auto_soldout=false 는 「어드민이 손으로 잠갔다」는 뜻이다. 트리거가 못 되돌리고,
+  //   toss-order 는 본인 홀드가 있어도 결제를 무조건 거절한다 (외부 예약이 이미
+  //   잡혔다는 뜻이라 뚫으면 이중예약이 되기 때문).
+  //
+  //   그런데 종전 코드는 「판매중으로 되돌릴 때」도 false 를 썼다. 그래서 어드민이
+  //   한 번이라도 토글한 티켓은 영영 '수동 잠금' 으로 남았고, 나중에 좌석이 차서
+  //   자동 매진이 걸리면 그 티켓은 아무도 — 좌석을 잡은 본인조차 — 살 수 없게 됐다.
+  //   화면에는 "남은 좌석이 없습니다" 만 뜬다. 2026-08-27 타카미츠가 그 경우다.
+  //
+  //   매진으로 잠글 때만 false, 판매중으로 풀 때는 true 로 되돌린다.
   if(window.sb){
-    window.sb.from('ticket_products').update({ auto_soldout:false }).eq('id', String(id))
+    var _autoFlag = (t.status !== 'soldout');   // 판매 재개 = 수동 잠금 해제
+    window.sb.from('ticket_products').update({ auto_soldout:_autoFlag }).eq('id', String(id))
       .then(function(){}, function(e){ console.warn('[soldout] auto flag 갱신 실패', e); });
   }
   renderTicketList();
