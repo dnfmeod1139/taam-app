@@ -1,5 +1,5 @@
 -- ═══════════════════════════════════════════════════════════════
--- TAAM — 좌석이 다 차면 즉시 매진 표시 (2026-08) · v2 (flex 안전)
+-- TAAM — 좌석이 다 차면 즉시 매진 표시 (2026-08) · v3 (flex 꽉참 포함)
 -- Supabase SQL Editor 에서 실행 (idempotent — 함수 교체)
 --
 -- 왜 필요한가
@@ -12,9 +12,15 @@
 --   좌석 엔진이 매진 처리한다 (5/7 이지만 매진 등). v1 의 되돌리기가 이것을
 --   raw 합계만 보고 판매중으로 되살려 엔진 판단을 깼다.
 --
---   → 이 버전은 flex 티켓을 건드리지 않는다.
---     · 고정 구성(비 flex): 다 차면 soldout, 자리 나면 active 자동 전환
---     · flex: 아무것도 안 함 (좌석 엔진·구매 로직·홀드 해제가 관리)
+-- ⚠ v2 의 문제 (2026-08-26 발견)
+--   그걸 피하려고 v2 는 flex 를 통째로 건드리지 않았다. 그 결과 7/7 로 꽉 찬
+--   flex 티켓이 status='active' 로 남았고, 캘린더 타일이 컬러로 살아 있는데
+--   눌러 들어가면 "매진" 이 뜨는 상태가 됐다.
+--
+--   → v3 은 방향을 나눈다. 되돌리기만 위험했지, 올리는 건 안전하다.
+--     · 고정 구성(비 flex): 다 차면 soldout, 자리 나면 active (양방향)
+--     · flex: 꽉 찼을 때만 soldout 으로 올린다. 되돌리기는 하지 않는다
+--             (7/7 은 어떤 기준으로도 매진이다. 5/7 매진은 엔진 판단이라 존중한다)
 -- ═══════════════════════════════════════════════════════════════
 
 create or replace function public.sync_ticket_soldout()
@@ -39,18 +45,23 @@ begin
     return coalesce(new, old);   -- 정원 미설정 티켓은 매진 개념 없음
   end if;
 
-  -- flex 티켓은 좌석 엔진이 매진을 판단한다 — 여기서 손대지 않는다.
-  v_isflex := (v_slots ? 'mode' and v_slots->>'mode' = 'flex');
-  if v_isflex then
-    return coalesce(new, old);
-  end if;
-
   -- 취소된 행 제외 전 회원 합산 (hold·active 모두 좌석을 차지)
   select coalesce(sum(party_size), 0) into v_sold
     from public.tickets
    where ticket_product_id = v_pid
      and coalesce(status, '') <> 'cancelled';
 
+  v_isflex := (v_slots ? 'mode' and v_slots->>'mode' = 'flex');
+
+  -- flex: 올리는 방향만 한다. 되돌리기는 좌석 엔진 몫이다 (v1 사고의 원인).
+  if v_isflex then
+    if v_sold >= v_cap and coalesce(v_status,'') <> 'soldout' then
+      update public.ticket_products set status = 'soldout' where id = v_pid;
+    end if;
+    return coalesce(new, old);
+  end if;
+
+  -- 고정 구성: 양방향
   if v_sold >= v_cap and coalesce(v_status,'') <> 'soldout' then
     update public.ticket_products set status = 'soldout' where id = v_pid;
   elsif v_sold < v_cap and coalesce(v_status,'') = 'soldout' then
@@ -66,13 +77,12 @@ create trigger trg_sync_ticket_soldout
   after insert or update or delete on public.tickets
   for each row execute function public.sync_ticket_soldout();
 
--- ── 기존 데이터 보정 (비 flex 만) ──
---   ① 다 찼는데 soldout 아닌 것 → soldout
+-- ── 기존 데이터 보정 ──
+--   ① 다 찼는데 soldout 아닌 것 → soldout  (flex 포함 — 꽉 찬 건 어느 쪽이든 매진)
 update public.ticket_products tp
    set status = 'soldout'
  where coalesce(tp.total_pax, 0) > 0
    and coalesce(tp.status, '') <> 'soldout'
-   and not (to_jsonb(tp.slots) ? 'mode' and to_jsonb(tp.slots)->>'mode' = 'flex')
    and (select coalesce(sum(t.party_size), 0) from public.tickets t
          where t.ticket_product_id = tp.id
            and coalesce(t.status, '') <> 'cancelled') >= tp.total_pax;
@@ -98,4 +108,4 @@ where coalesce(total_pax,0) > 0
 order by updated_at desc
 limit 25;
 
-do $$ begin raise notice '✅ 좌석 매진 자동 동기화 v2 (flex 안전) 적용 완료'; end $$;
+do $$ begin raise notice '✅ 좌석 매진 자동 동기화 v3 (flex 꽉참 포함) 적용 완료'; end $$;
