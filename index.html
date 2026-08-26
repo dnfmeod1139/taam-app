@@ -31816,6 +31816,25 @@ async function riSubmit(){
   var desc = (document.getElementById('riTicketDesc') || {value:''}).value.trim();
   var extraText = _riPolicy.extra ? (document.getElementById('riPolicyExtraText') || {value:''}).value.trim() : '';
 
+  // 🔧 2026.08: 연결할 수 있는 티켓이 있는데 연결하지 않으면 막는다.
+  //   연결 없는 초대는 reservation_invites 에만 남고 tickets 에 좌석 행이 생기지 않는다.
+  //   그래서 캘린더에는 보이는데 티켓 좌석은 하나도 안 깎이고, 정원이 다 찬 뒤에도
+  //   앱에서 계속 팔린다. 실제로 그렇게 오버북이 났다 (2026-08-27, 1/25 스시 아라이).
+  //   연결할 티켓이 아예 없는 경우(순수 별도 판매)만 그대로 보낸다.
+  if(!_riLinkTicketId){
+    var _riCands = (ticketDB || []).filter(function(t){
+      if(String(t.restId) !== String(_riRestId)) return false;
+      var _fd = (typeof _tkFullDate === 'function') ? _tkFullDate(t) : t.date;
+      return String(_fd) === String(_riDate);
+    });
+    if(_riCands.length){
+      showToast('⚠','티켓 연결 필요',
+        '이 매장·날짜에 판매 티켓이 ' + _riCands.length + '건 있어요. 연결해야 좌석이 차감됩니다 — 「판매 티켓 연결」에서 골라주세요');
+      try { var _lel = document.getElementById('riLinkTicket'); if(_lel) _lel.focus(); } catch(_fe){}
+      return;
+    }
+  }
+
   // 🆕 판매 티켓 연결 시: 좌석 엔진으로 발송 전 잔여/규칙 검증 (결제 시점 트리거가 최종 강제)
   var _lnkT = null;
   if(_riLinkTicketId){
@@ -44505,6 +44524,67 @@ function _tcalDayGroups(dateKey){
   Object.keys(groups).forEach(function(k){ if(!groups[k].restName) groups[k].restName = _tcalRestName(k); });
   return Object.keys(groups).map(function(k){ return groups[k]; }).sort(function(a,b){ return String(a.restName).localeCompare(String(b.restName)); });
 }
+// ════════════════════════════════════════════════════════════════
+// 🆕 2026.08: 같은 사람의 예약을 한 줄로 묶는다 (화면만 — 결제 기록은 그대로)
+//
+//   무엇이 문제였나
+//     A 회원이 2명으로 앱에서 사고, 한 명이 더 필요해 연락이 와서 초대로 1명을
+//     더 결제했다. 실제로는 한 팀 3명인데 캘린더에는 「A 2명」·「A 1명」 두 줄로
+//     떨어져 보인다. 매장에 넘길 예약 명단이 사람 수도 팀 수도 맞지 않는다.
+//
+//   왜 데이터를 합치지 않는가
+//     두 줄은 서로 다른 결제다 — 결제 수단·금액·대행비·환불 기준이 각각 붙어 있다.
+//     행을 합치면 그 연결이 끊어져 정산과 환불이 어긋난다. 그래서 화면에서만 묶고,
+//     안에 각 결제를 그대로 펼쳐 보여준다. 취소(×)도 결제 단위로 그대로 남는다.
+//
+//   무엇을 같은 사람으로 보는가
+//     회원 id(uid)가 같으면 같은 사람. 회원 id 가 없는 수동 기록은 이름이 같을 때만.
+//     이름도 없으면 절대 묶지 않는다 (남남을 붙이는 쪽이 훨씬 위험하다).
+// ════════════════════════════════════════════════════════════════
+function _tcalIdentKey(e, idx){
+  if(e && e.uid) return 'u:' + String(e.uid);
+  var n = String((e && e.name) || '').replace(/\s+/g, '').toLowerCase();
+  if(n) return 'n:' + n;
+  return 'x:' + idx;      // 이름도 회원도 모르면 혼자 둔다
+}
+
+// 기기별 스위치 — 어드민이 원본 그대로 보고 싶을 때 끌 수 있다 (기본 켜짐)
+function _tcalMergeOn(){
+  try { return localStorage.getItem('taamCalMerge') !== '0'; } catch(_e){ return true; }
+}
+function tcalToggleMerge(){
+  try { localStorage.setItem('taamCalMerge', _tcalMergeOn() ? '0' : '1'); } catch(_e){}
+  if(_tcalSelectedDate) tcalRenderDetail(_tcalSelectedDate);
+}
+window.tcalToggleMerge = tcalToggleMerge;
+
+// entries → [{ name, uid, pax, amount, agency, time, parts:[entry...] }]
+function _tcalMergeEntries(entries){
+  var list = (entries || []);
+  if(!_tcalMergeOn()){
+    return list.map(function(e){
+      return { name:e.name, uid:e.uid, pax:(e.pax||0), amount:(e.amount||0), agency:(e.agency||0), time:e.time, parts:[e] };
+    });
+  }
+  var order = [], byKey = {};
+  list.forEach(function(e, i){
+    var k = _tcalIdentKey(e, i);
+    if(!byKey[k]){
+      byKey[k] = { name:e.name, uid:e.uid, pax:0, amount:0, agency:0, time:e.time, parts:[] };
+      order.push(k);
+    }
+    var g = byKey[k];
+    g.pax    += (e.pax || 0);
+    g.amount += (e.amount || 0);
+    g.agency += (e.agency || 0);
+    if(!g.name && e.name) g.name = e.name;
+    if(!g.uid && e.uid)   g.uid = e.uid;
+    if(!g.time && e.time) g.time = e.time;
+    g.parts.push(e);
+  });
+  return order.map(function(k){ return byKey[k]; });
+}
+
 // 🆕 그 날짜 총 인원 (캘린더 셀 배지)
 function _tcalDayTotalPax(dateKey){
   return _tcalDayGroups(dateKey).reduce(function(s,g){ return s + g.entries.reduce(function(p,e){ return p+(e.pax||0); },0); }, 0);
@@ -44582,7 +44662,36 @@ function openInviteFromCalendar(restId){
       btn.textContent = d ? ((d.getMonth()+1)+'월 '+d.getDate()+'일') : fullDate;
     }
     var db = document.getElementById('riDateBtn'); if(db) db.classList.add('selected');
-  }, 60);
+
+    // 🔧 2026.08: 이 매장·이 날짜의 판매 티켓을 자동으로 연결한다.
+    //   종전 기본값은 「연결 안 함 (별도 판매 — 좌석 카운팅 제외)」이었다.
+    //   캘린더에서 초대를 보내면 기록만 남고 좌석은 그대로여서, 만석인데도
+    //   티켓이 되살아났다. 캘린더에서 보내는 초대는 그 티켓의 자리를 주는 것이므로
+    //   연결이 기본이어야 한다.
+    try {
+      var _sel = document.getElementById('riLinkTicket');
+      if(_sel){
+        var _cands = (ticketDB || []).filter(function(t){
+          if(String(t.restId) !== String(restId)) return false;
+          var _fd = (typeof _tkFullDate === 'function') ? _tkFullDate(t) : t.date;
+          return String(_fd) === fullDate;
+        });
+        // 목록(riPopulateLinkTickets)에 실제로 올라온 것만 고를 수 있다 —
+        //   매진·만료 티켓은 애초에 옵션에 없다.
+        var _pick = null;
+        for(var _i = 0; _i < _cands.length; _i++){
+          if(_sel.querySelector('option[value="' + String(_cands[_i].id) + '"]')){ _pick = _cands[_i]; break; }
+        }
+        if(_pick){
+          _sel.value = String(_pick.id);
+          if(typeof riLinkTicketChange === 'function') riLinkTicketChange();
+          showToast('🎟','티켓 자동 연결', (_pick.time || '') + ' 티켓에 연결했어요 — 초대 좌석이 차감됩니다');
+        } else if(_cands.length){
+          showToast('⚠','연결 불가','이 날짜 티켓이 매진·만료라 연결할 수 없어요 — 좌석이 차감되지 않습니다');
+        }
+      }
+    } catch(_ae){ console.warn('[ri] 티켓 자동 연결 실패:', _ae && _ae.message); }
+  }, 140);
 }
 window.openInviteFromCalendar = openInviteFromCalendar;
 
@@ -44731,9 +44840,16 @@ function tcalOpenManual(restId){
       _opts += '<option value="'+String(t.id)+'">'+_lbl+'</option>';
     });
     lk.innerHTML = _opts;
-    lk.value = '';
+    // 🔧 2026.08: 연결 가능한 티켓이 하나뿐이면 자동으로 고른다.
+    //   종전 기본값은 「연결 안 함 (기록만)」이었다. 그래서 캘린더에서 수동 추가를 하면
+    //   기록만 남고 좌석은 그대로여서, 만석인데도 티켓이 되살아났다.
+    //   후보가 둘 이상이면(시간대가 다른 티켓) 자동으로 고르지 않는다 — 잘못 연결하면
+    //   엉뚱한 티켓의 좌석이 깎인다. 대신 저장할 때 막는다.
+    var _lkOpts = Array.prototype.filter.call(lk.options, function(o){ return !!o.value; });
+    lk.value = (_lkOpts.length === 1) ? _lkOpts[0].value : '';
     var _lkInfo = document.getElementById('tcalManualLinkInfo');
     if(_lkInfo){ _lkInfo.style.display='none'; _lkInfo.textContent=''; }
+    if(lk.value && typeof tcalManualLinkChange === 'function'){ try { tcalManualLinkChange(); } catch(_lc){} }
     // 🆕 각 연결 후보 티켓의 잔여석을 서버 RPC 로 조회해 옵션 라벨에 표시 ("… · 잔여 3석")
     if(window.sb){
       Array.prototype.forEach.call(lk.options, function(op){
@@ -44797,6 +44913,20 @@ async function tcalManualSave(){
   var amount = Math.max(0, parseInt(String((document.getElementById('tcalManualAmount')||{}).value||'').replace(/[^0-9]/g,'')) || 0);
   var memo = (document.getElementById('tcalManualMemo')||{}).value || '';
   var linkId = (document.getElementById('tcalManualLink')||{}).value || '';
+
+  // 🔧 2026.08: 연결할 수 있는 티켓이 있는데 연결하지 않으면 막는다.
+  //   연결 없이 저장하면 캘린더에 기록만 남고 좌석은 그대로다. 정원이 다 찼는데도
+  //   앱에서는 계속 팔린다 — 실제로 그렇게 오버북이 났다.
+  //   연결할 티켓이 아예 없는 날짜(순수 오프라인 일정)만 기록으로 남긴다.
+  var _lkEl = document.getElementById('tcalManualLink');
+  var _lkCands = _lkEl ? Array.prototype.filter.call(_lkEl.options, function(o){ return !!o.value; }) : [];
+  if(!linkId && _lkCands.length){
+    showToast('⚠','티켓 연결 필요',
+      '이 날짜에 판매 티켓이 ' + _lkCands.length + '건 있어요. 연결해야 좌석이 차감됩니다 — 「본 티켓 연결」에서 골라주세요');
+    if(_lkEl){ try { _lkEl.focus(); } catch(_fe){} }
+    return;
+  }
+
   try {
     var u = (await window.sb.auth.getUser()).data.user;
     // 🆕 2026.08: 본 티켓 연결 → tickets 에 MAN- 행 INSERT (좌석 트리거 검증 + 실제 카운팅 차감).
@@ -45023,7 +45153,14 @@ function tcalRenderDetail(dateStr) {
 
   var html = '<div style="padding:12px 14px 4px;display:flex;justify-content:space-between;align-items:center;font-family:\'Noto Sans KR\',sans-serif;">'
     + '<div style="font-size:15px;font-weight:800;color:#1a1a18;">' + dateLabel + '</div>'
-    + (isSuper ? '<button onclick="tcalOpenSchedule()" style="height:34px;padding:0 14px;border:none;border-radius:9px;background:#1a1a18;color:#fff;font-size:12px;font-weight:800;font-family:inherit;cursor:pointer;">＋ 일정 등록</button>' : '')
+    + '<div style="display:flex;gap:6px;align-items:center;">'
+    //   같은 사람의 분리 결제를 한 줄로 묶어 볼지 — 기기별 스위치 (원본을 보고 싶을 때 끈다)
+    +   '<button onclick="tcalToggleMerge()" style="height:34px;padding:0 11px;border:1px solid '
+    +     (_tcalMergeOn() ? '#c9a96e;background:#FFFDF7;color:#6A1A1A' : '#e0ddd5;background:#fff;color:#a8a29a')
+    +     ';border-radius:9px;font-size:11.5px;font-weight:800;font-family:inherit;cursor:pointer;">'
+    +     (_tcalMergeOn() ? '👥 묶어보기 ON' : '👥 묶어보기 OFF') + '</button>'
+    +   (isSuper ? '<button onclick="tcalOpenSchedule()" style="height:34px;padding:0 14px;border:none;border-radius:9px;background:#1a1a18;color:#fff;font-size:12px;font-weight:800;font-family:inherit;cursor:pointer;">＋ 일정 등록</button>' : '')
+    + '</div>'
     + '</div>';
 
   if(groups.length === 0){
@@ -45056,30 +45193,58 @@ function tcalRenderDetail(dateStr) {
     if(g.entries.length === 0){
       html += '<div style="padding:12px 16px;font-size:12px;color:#c9c4ba;">예약 없음</div>';
     } else {
-      g.entries.forEach(function(e){
-        // 🆕 2026.08: 좌석 연동 행 구분 — MAN-(수동·연동) / INVH-(초대 좌석 홀드)
-        var _isMan = (e.pid||'').indexOf('MAN-') === 0;
-        var _isHold = (e.pid||'').indexOf('INVH-') === 0;
-        var label = _isMan ? '수동·연동' : (_isHold ? '초대홀드' : (e.type==='invite' ? '초대' : (e.type==='app' ? '앱구매' : (e.ttype||'오프라인'))));
-        var col = _isMan ? ['#7A6A60','#F0ECE6','#E0D9CC']
-                : (_isHold ? ['#B07A1E','#FBF4E5','#EDDFC2']
-                : (e.type==='invite' ? ['#6A1A1A','#FBF3F2','#EEDADA'] : (e.type==='app' ? ['#1F5BD6','#EAF1FF','#D2E0FB'] : ['#7A6A60','#F0ECE6','#E0D9CC'])));
-        var badge = '<span style="font-size:9.5px;font-weight:800;color:'+col[0]+';background:'+col[1]+';border:1px solid '+col[2]+';border-radius:6px;padding:1px 6px;">'+label+'</span>';
-        var clickable = (e.type !== 'manual' && e.uid);
-        var nm = e.name || (e.type==='manual' ? '(이름없음)' : '(회원)');
-        var nmH = clickable
-          ? '<span onclick="tcalShowInviteMember(\''+e.uid+'\')" style="font-weight:700;color:#1a1a18;cursor:pointer;text-decoration:underline;">'+nm+'</span>'
-          : '<span style="font-weight:700;color:#1a1a18;">'+nm+'</span>';
-        var amt = (e.amount ? ('₩'+e.amount.toLocaleString()) : '') + (e.agency>0 ? ' <span style="color:#9A9486;font-weight:600;">(대행비 ₩'+e.agency.toLocaleString()+')</span>' : '');
-        var del = (e.type==='manual') ? '<span onclick="tcalManualDelete(\''+e.mid+'\')" style="cursor:pointer;color:#c33;font-size:17px;font-weight:700;line-height:1;padding:2px 4px;">×</span>'
-                : ((_isMan||_isHold) && (isSuper || _currentRole==='admin') ? '<span onclick="tcalCancelLinkedRow(\''+e.pid+'\')" style="cursor:pointer;color:#c33;font-size:17px;font-weight:700;line-height:1;padding:2px 4px;">×</span>' : '');
-        html += '<div style="padding:10px 16px;border-top:1px solid #f4f1ec;">'
+      // 🆕 2026.08: 같은 사람의 예약을 한 줄로 묶어 보여준다 (결제 기록은 그대로)
+      _tcalMergeEntries(g.entries).forEach(function(row){
+        var multi = row.parts.length > 1;
+
+        function partHtml(e, inner){
+          // 🆕 2026.08: 좌석 연동 행 구분 — MAN-(수동·연동) / INVH-(초대 좌석 홀드)
+          var _isMan = (e.pid||'').indexOf('MAN-') === 0;
+          var _isHold = (e.pid||'').indexOf('INVH-') === 0;
+          var label = _isMan ? '수동·연동' : (_isHold ? '초대홀드' : (e.type==='invite' ? '초대' : (e.type==='app' ? '앱구매' : (e.ttype||'오프라인'))));
+          var col = _isMan ? ['#7A6A60','#F0ECE6','#E0D9CC']
+                  : (_isHold ? ['#B07A1E','#FBF4E5','#EDDFC2']
+                  : (e.type==='invite' ? ['#6A1A1A','#FBF3F2','#EEDADA'] : (e.type==='app' ? ['#1F5BD6','#EAF1FF','#D2E0FB'] : ['#7A6A60','#F0ECE6','#E0D9CC'])));
+          var badge = '<span style="font-size:9.5px;font-weight:800;color:'+col[0]+';background:'+col[1]+';border:1px solid '+col[2]+';border-radius:6px;padding:1px 6px;">'+label+'</span>';
+          var clickable = (e.type !== 'manual' && e.uid);
+          var nm = e.name || (e.type==='manual' ? '(이름없음)' : '(회원)');
+          var nmH = clickable
+            ? '<span onclick="tcalShowInviteMember(\''+e.uid+'\')" style="font-weight:700;color:#1a1a18;cursor:pointer;text-decoration:underline;">'+nm+'</span>'
+            : '<span style="font-weight:700;color:#1a1a18;">'+nm+'</span>';
+          var amt = (e.amount ? ('₩'+e.amount.toLocaleString()) : '') + (e.agency>0 ? ' <span style="color:#9A9486;font-weight:600;">(대행비 ₩'+e.agency.toLocaleString()+')</span>' : '');
+          var del = (e.type==='manual') ? '<span onclick="tcalManualDelete(\''+e.mid+'\')" style="cursor:pointer;color:#c33;font-size:17px;font-weight:700;line-height:1;padding:2px 4px;">×</span>'
+                  : ((_isMan||_isHold) && (isSuper || _currentRole==='admin') ? '<span onclick="tcalCancelLinkedRow(\''+e.pid+'\')" style="cursor:pointer;color:#c33;font-size:17px;font-weight:700;line-height:1;padding:2px 4px;">×</span>' : '');
+          // 묶인 안쪽 줄은 이름을 반복하지 않는다 — 이미 위에 있다
+          var head = inner ? badge : (badge + ' ' + nmH);
+          return '<div style="padding:'+(inner?'7px 16px 7px 26px':'10px 16px')+';border-top:1px solid '+(inner?'#f8f6f2':'#f4f1ec')+';'+(inner?'background:#fdfcfa;':'')+'">'
+            + '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">'
+            +   '<div style="min-width:0;font-size:12.5px;">' + head + (e.time?' <span style="color:#9a9486;font-size:11px;">· '+e.time+'</span>':'') + '</div>'
+            +   '<div style="flex-shrink:0;display:flex;align-items:center;gap:8px;"><span style="font-size:'+(inner?'12':'13')+'px;font-weight:800;color:#6A1A1A;">'+e.pax+'명</span>'+del+'</div>'
+            + '</div>'
+            + ((amt||e.memo) ? '<div style="font-size:11.5px;color:#666;margin-top:2px;">'+amt+(e.memo?' <span style="color:#9a9486;">· '+_escHtmlAdg(e.memo)+'</span>':'')+'</div>' : '')
+            + '</div>';
+        }
+
+        if(!multi){ html += partHtml(row.parts[0], false); return; }
+
+        // ── 묶음 머리줄 — 한 팀으로 몇 명인지 한눈에 ──
+        var nm2 = row.name || '(회원)';
+        var nmH2 = row.uid
+          ? '<span onclick="tcalShowInviteMember(\''+row.uid+'\')" style="font-weight:800;color:#1a1a18;cursor:pointer;text-decoration:underline;">'+nm2+'</span>'
+          : '<span style="font-weight:800;color:#1a1a18;">'+nm2+'</span>';
+        var breakdown = row.parts.map(function(p){ return p.pax + ''; }).join(' + ');
+        var amt2 = row.amount ? ('₩'+row.amount.toLocaleString()) : '';
+        html += '<div style="padding:11px 16px 8px;border-top:1px solid #f4f1ec;background:#FFFDF7;">'
           + '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">'
-          +   '<div style="min-width:0;font-size:12.5px;">' + badge + ' ' + nmH + (e.time?' <span style="color:#9a9486;font-size:11px;">· '+e.time+'</span>':'') + '</div>'
-          +   '<div style="flex-shrink:0;display:flex;align-items:center;gap:8px;"><span style="font-size:13px;font-weight:800;color:#6A1A1A;">'+e.pax+'명</span>'+del+'</div>'
+          +   '<div style="min-width:0;font-size:13px;">'
+          +     '<span style="font-size:9.5px;font-weight:800;color:#8A5A1E;background:#FBF2E0;border:1px solid #EEDCBB;border-radius:6px;padding:1px 6px;">묶음 '+row.parts.length+'건</span> '
+          +     nmH2
+          +   '</div>'
+          +   '<div style="flex-shrink:0;font-size:15px;font-weight:900;color:#6A1A1A;">'+row.pax+'명</div>'
           + '</div>'
-          + ((amt||e.memo) ? '<div style="font-size:11.5px;color:#666;margin-top:2px;">'+amt+(e.memo?' <span style="color:#9a9486;">· '+_escHtmlAdg(e.memo)+'</span>':'')+'</div>' : '')
+          + '<div style="font-size:11px;color:#9a8f7e;margin-top:3px;">'+breakdown+' 명으로 나눠 결제'+(amt2?(' · 합계 '+amt2):'')+'</div>'
           + '</div>';
+        row.parts.forEach(function(p){ html += partHtml(p, true); });
       });
     }
     // 액션: 수동 추가 / 초대 발송 — 🆕 2026.08 파트너 어드민도 자기 매장 그룹에서 사용 가능
