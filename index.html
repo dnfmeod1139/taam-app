@@ -47896,8 +47896,17 @@ function getNativePlatform(){
 
 // 🆕 Native Push 등록 (iOS APNs + Android FCM 통합)
 //   Capacitor 환경에서만 동작. PWA/웹에서는 기존 Web Push 사용.
+// 🆕 2026.08: 네이티브 푸시 진행 상황 기록 — 폰에는 콘솔이 없어서,
+//   남기지 않으면 "권한도 허용인데 토큰이 안 생긴다" 를 화면에서 확인할 방법이 없다.
+//   「🔍 상태 확인」이 이 값을 그대로 보여준다.
+window._npState = { step: '미실행' };
+function _npMark(step, extra){
+  window._npState = Object.assign({ step: step, at: new Date().toTimeString().slice(0,8) }, extra || {});
+  console.log('[native-push] ' + step, extra || '');
+}
+
 async function setupNativePush(){
-  if (!isNativeApp()) return;
+  if (!isNativeApp()) { _npMark('네이티브 아님(웹/PWA)'); return; }
   // ⛔ Android 는 아직 부르면 안 된다 — Play 정책 이슈(2026-08-20)의 원인.
   //   Android 푸시는 FCM 이라 빌드에 google-services.json 이 있어야 하는데 아직 없다.
   //   그 상태에서 register() 를 부르면 네이티브가
@@ -47907,26 +47916,25 @@ async function setupNativePush(){
   //   iOS 는 APNs 라 Firebase 가 필요 없어 멀쩡했다.
   //   FCM 을 붙이는 날: codemagic 에 google-services.json 주입 + 이 가드 제거.
   if (getNativePlatform() === 'android') {
-    console.log('[native-push] android: FCM(google-services.json) 미구성 — 등록 건너뜀');
+    _npMark('android — FCM 미구성이라 건너뜀');
     return;
   }
-  if (!window.Capacitor || !window.Capacitor.Plugins) return;
+  if (!window.Capacitor || !window.Capacitor.Plugins) { _npMark('Capacitor.Plugins 없음'); return; }
   var PushNotifications = window.Capacitor.Plugins.PushNotifications;
   if (!PushNotifications) {
-    console.warn('[native-push] PushNotifications 플러그인 없음');
+    _npMark('PushNotifications 플러그인 없음 — 빌드에 미포함');
     return;
   }
 
   try {
     var perm = await PushNotifications.requestPermissions();
-    if (perm.receive !== 'granted') {
-      console.log('[native-push] 권한 거부');
-      return;
-    }
+    _npMark('권한 확인', { receive: perm && perm.receive });
+    if (perm.receive !== 'granted') { _npMark('권한 거부됨', { receive: perm && perm.receive }); return; }
     await PushNotifications.register();
+    _npMark('register() 호출됨 — 토큰 대기 중');
 
     PushNotifications.addListener('registration', async function(token){
-      console.log('[native-push] token:', token.value);
+      _npMark('토큰 수신', { tokenTail: String(token.value||'').slice(-8) });
       var platform = getNativePlatform();
       var endpoint = (platform === 'ios') ? ('apns://' + token.value) : ('fcm://' + token.value);
       try {
@@ -47956,12 +47964,14 @@ async function setupNativePush(){
         // 웹 구독과 같은 저장 경로(RPC 우선, RLS 우회) — 저장 규칙이 갈리면 또 어긋난다
         if (typeof _pushSaveSub === 'function') await _pushSaveSub(_payload);
         else await window.sb.from('push_subscriptions').upsert(_payload, { onConflict: 'endpoint' });
-        console.log('[native-push] 구독 저장 완료 role=' + (_rl || '-'));
-      } catch(e){ console.error('[native-push] save fail', e); }
+        _npMark('구독 저장 완료', { role: _rl || '-' });
+      } catch(e){ _npMark('구독 저장 실패', { err: String((e && e.message) || e).slice(0,120) }); }
     });
 
     PushNotifications.addListener('registrationError', function(err){
-      console.error('[native-push] registration error:', err);
+      // ⚠ aps-environment 가 빌드에 없으면 여기로 온다 —
+      //   "no valid aps-environment entitlement string found for application"
+      _npMark('등록 실패(APNs)', { err: String((err && (err.error || err.message)) || err).slice(0,160) });
     });
 
     PushNotifications.addListener('pushNotificationReceived', function(notification){
@@ -47975,7 +47985,7 @@ async function setupNativePush(){
       }
     });
   } catch(e) {
-    console.error('[native-push] setup error:', e);
+    _npMark('setup 예외', { err: String((e && e.message) || e).slice(0,160) });
   }
 }
 
@@ -48054,11 +48064,34 @@ window.pushSubscribeIfNeeded = async function(){
 // 🆕 푸시 인프라 전체 진단 (마이페이지 알림 설정의 [상태 확인] 버튼용)
 window.pushDiagnose = async function(){
   var lines = [];
+  // 🆕 2026.08: 네이티브(앱) 먼저 — 앱에서는 아래 웹 푸시 항목이 전부 '없음' 으로 나오는 게
+  //   정상이라, 그것만 보면 고장으로 오해한다. 앱은 APNs 를 쓰고 웹과 경로가 다르다.
+  var _isNat = (typeof isNativeApp === 'function') && isNativeApp();
+  lines.push('실행 환경: ' + (_isNat ? ('네이티브 앱 (' + getNativePlatform() + ')') : '웹/PWA'));
+  if(_isNat){
+    var st = window._npState || { step: '미실행' };
+    lines.push('네이티브 푸시: ' + (st.step || '?') + (st.at ? ' @' + st.at : ''));
+    ['receive','tokenTail','role','err'].forEach(function(k){
+      if(st[k]) lines.push('  ' + k + ': ' + st[k]);
+    });
+    var _pl = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.PushNotifications;
+    lines.push('플러그인: ' + (_pl ? '✓ 있음' : '✗ 없음(빌드 미포함)'));
+    if(_pl && _pl.checkPermissions){
+      try { var cp = await _pl.checkPermissions(); lines.push('OS 권한: ' + (cp && cp.receive)); }
+      catch(e){ lines.push('OS 권한 조회 실패: ' + e.message); }
+    }
+    lines.push('— 아래 웹 항목은 앱에서 비어 있는 게 정상 —');
+  }
   // 1. SW
+  //   ⚠ getRegistration() 은 환경에 따라 예외를 던진다(WKWebView·file:// 등).
+  //     감싸지 않으면 진단 전체가 죽어 화면에 아무것도 안 뜬다 — 진단이 제일 필요한
+  //     상황에서 진단이 사라지는 셈이라, 항목마다 실패를 안고 간다.
   if(!('serviceWorker' in navigator)) lines.push('SW 미지원');
   else {
-    var reg = await navigator.serviceWorker.getRegistration();
-    lines.push('SW: ' + (reg ? '✓ 등록됨' : '✗ 미등록'));
+    try {
+      var reg = await navigator.serviceWorker.getRegistration();
+      lines.push('SW: ' + (reg ? '✓ 등록됨' : '✗ 미등록'));
+    } catch(e){ lines.push('SW 조회 불가: ' + (e.message||'').slice(0,60)); }
   }
   // 2. 권한
   lines.push('권한: ' + (typeof Notification !== 'undefined' ? Notification.permission : '미지원'));
@@ -48066,12 +48099,19 @@ window.pushDiagnose = async function(){
   var vapidOk = VAPID_PUBLIC_KEY && VAPID_PUBLIC_KEY.indexOf('REPLACE') < 0;
   lines.push('VAPID: ' + (vapidOk ? '✓ 설정됨' : '✗ 미설정'));
   // 4. 구독
+  // ⚠ serviceWorker.ready 는 SW 가 없으면 '영원히' 대기하는 프로미스다 (reject 도 안 한다).
+  //   그대로 await 하면 진단 함수가 그 자리에서 멈춰 alert 까지 못 간다 —
+  //   앱에서 「상태 확인」을 눌러도 아무 반응이 없던 원인이 이것이었다.
+  //   네이티브 앱은 SW 를 안 쓰므로 항상 여기서 멈춘다. 1.5초만 기다리고 넘어간다.
   try{
-    var swr = await navigator.serviceWorker.ready;
+    var swr = await Promise.race([
+      navigator.serviceWorker.ready,
+      new Promise(function(_, rej){ setTimeout(function(){ rej(new Error('응답 없음(1.5s)')); }, 1500); })
+    ]);
     var sub = await swr.pushManager.getSubscription();
     lines.push('구독: ' + (sub ? '✓ 활성' : '✗ 없음'));
     if(sub) lines.push('  endpoint: ' + sub.endpoint.substring(0,40) + '...');
-  }catch(e){ lines.push('구독 조회 에러: ' + e.message); }
+  }catch(e){ lines.push('구독 조회 건너뜀: ' + (e.message||'').slice(0,50)); }
   // 5. Supabase Auth
   if(window.sb){
     try{
