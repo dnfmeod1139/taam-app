@@ -49295,13 +49295,36 @@ function _pushRouteSummary(details){
   return bits.join('\n');
 }
 
+// 🔧 2026.08: 알림을 띄우면서 배지를 0 으로 보낸다 — 이 방식은 확실히 먹는다.
+//
+//   왜 조용한 방식을 안 쓰나
+//     알림 없이 숫자만 바꾸는 푸시는 '앱을 깨우는 푸시' 라, Info.plist 의
+//     UIBackgroundModes 에 remote-notification 이 있어야 iOS 가 받는다.
+//     지금 스토어에 있는 빌드에는 그게 없어서 조용히 버려진다.
+//     (다음 빌드에 넣었다 — 그때부터는 조용한 방식도 동작한다)
+//
+//   반면 알림이 붙은 푸시의 badge 는 확실히 적용된다. 아이콘의 「1」이 바로
+//   그렇게 생긴 숫자다. 그러니 알림 한 번 띄우면서 0 을 보내면 무조건 지워진다.
+//   배너 하나가 뜨는 건 감수한다 — 안 지워지는 것보다 낫다.
+//
+//   ⚠ 1.02 부터는 앱을 열기만 해도 배지가 사라진다(AppDelegate). 그때는 이 버튼도
+//     쓸 일이 없어진다. 그전까지의 임시 수단이다.
 window.pushClearBadge = async function(){
   if(typeof pushSend !== 'function'){ alert('pushSend 함수 미정의'); return; }
-  var res = await pushSend('user', { silent: true, badge: 0, category: 'system' }, { dedupe: true });
+  var res = await pushSend('user', {
+    title: '알림 정리',
+    body: '아이콘 배지를 지웠습니다',
+    badge: 0,                     // ← 이 값이 아이콘 숫자를 0 으로 만든다
+    category: 'system',
+    tag: 'taam-badge-clear'
+  }, { dedupe: true });
   if(res && res.summary){
-    alert('배지 지우기\n\n시도: '+res.summary.attempted+'\n성공: '+res.summary.ok+'\n실패: '+res.summary.failed
+    alert('배지 지우기 (알림 1건이 뜹니다)\n\n시도: '+res.summary.attempted
+        + '\n성공: '+res.summary.ok+'\n실패: '+res.summary.failed
         + '\n\n── 어디로 갔나 ──\n' + _pushRouteSummary(res.details)
-        + (res.summary.ok > 0 ? '\n\n홈 화면으로 나가서 아이콘을 확인하세요 (몇 초 걸릴 수 있습니다)' : ''));
+        + (res.summary.ok > 0
+            ? '\n\n알림이 도착하면 그 순간 배지가 0 이 됩니다.\n알림은 지워도 됩니다 — 배지는 그대로 0 입니다.'
+            : ''));
   } else {
     alert('Edge Function 응답 없음 — send-push 가 최신으로 배포됐는지 확인하세요');
   }
