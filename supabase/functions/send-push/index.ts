@@ -249,6 +249,109 @@ async function sendWebPush(
 // ─────────────────────────────────────────────────────
 const FIREBASE_SERVICE_ACCOUNT_JSON = Deno.env.get("FIREBASE_SERVICE_ACCOUNT") || "";
 
+// ════════════════════════════════════════════════════════════
+// 🆕 2026-08: APNs 직접 발송 (iOS 네이티브)
+//
+//   왜 필요한가
+//     @capacitor/push-notifications 는 iOS 에서 APNs 기기토큰을 준다.
+//     그런데 여기서는 그 토큰을 FCM v1 의 message.token 으로 보내고 있었다.
+//     FCM 은 자기가 발급한 등록토큰만 받으므로 APNs 토큰은 무조건 거부된다 —
+//     Firebase 를 붙이지 않는 한 iOS 알림은 한 통도 나갈 수 없는 구조였다.
+//     APNs 로 곧장 보내면 Firebase 없이 iOS 가 열린다.
+//
+//   필요한 시크릿 (Supabase Dashboard → Edge Functions → Secrets)
+//     APNS_KEY_ID      — Apple Developer → Keys 에서 만든 APNs 키의 Key ID (10자)
+//     APNS_TEAM_ID     — Apple Developer 팀 ID (10자)
+//     APNS_PRIVATE_KEY — 그 키의 .p8 파일 내용 전체 (-----BEGIN PRIVATE KEY----- 포함)
+//     APNS_BUNDLE_ID   — com.playtaam.app  (없으면 이 값으로 기본 동작)
+//     APNS_HOST        — 기본 api.push.apple.com (개발 빌드 검증 시 api.sandbox.push.apple.com)
+//   ⚠ 셋 중 하나라도 없으면 APNs 를 건너뛰고 기존 FCM 경로로 폴백한다.
+// ════════════════════════════════════════════════════════════
+const APNS_KEY_ID = Deno.env.get("APNS_KEY_ID") || "";
+const APNS_TEAM_ID = Deno.env.get("APNS_TEAM_ID") || "";
+const APNS_PRIVATE_KEY = Deno.env.get("APNS_PRIVATE_KEY") || "";
+const APNS_BUNDLE_ID = Deno.env.get("APNS_BUNDLE_ID") || "com.playtaam.app";
+const APNS_HOST = Deno.env.get("APNS_HOST") || "api.push.apple.com";
+const APNS_READY = !!(APNS_KEY_ID && APNS_TEAM_ID && APNS_PRIVATE_KEY);
+
+// APNs 토큰(JWT ES256)은 최대 1시간 유효 — 55분마다 새로 만든다
+let _apnsJwt: string | null = null;
+let _apnsJwtAt = 0;
+
+async function _apnsImportKey(pem: string): Promise<CryptoKey> {
+  const b64 = pem.replace(/-----BEGIN PRIVATE KEY-----/g, "")
+                 .replace(/-----END PRIVATE KEY-----/g, "")
+                 .replace(/\s+/g, "");
+  const der = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  return await crypto.subtle.importKey(
+    "pkcs8", der, { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"],
+  );
+}
+
+function _b64url(buf: ArrayBuffer | Uint8Array): string {
+  const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+  let s = "";
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+async function getApnsJwt(): Promise<string> {
+  const now = Date.now();
+  if (_apnsJwt && (now - _apnsJwtAt) < 55 * 60 * 1000) return _apnsJwt;
+  const header = { alg: "ES256", kid: APNS_KEY_ID };
+  const claims = { iss: APNS_TEAM_ID, iat: Math.floor(now / 1000) };
+  const enc = new TextEncoder();
+  const signingInput = _b64url(enc.encode(JSON.stringify(header))) + "." +
+                       _b64url(enc.encode(JSON.stringify(claims)));
+  const key = await _apnsImportKey(APNS_PRIVATE_KEY);
+  const sig = await crypto.subtle.sign(
+    { name: "ECDSA", hash: "SHA-256" }, key, enc.encode(signingInput),
+  );
+  _apnsJwt = signingInput + "." + _b64url(sig);
+  _apnsJwtAt = now;
+  return _apnsJwt;
+}
+
+async function sendApnsPush(deviceToken: string, payload: any) {
+  try {
+    const jwt = await getApnsJwt();
+    const body = {
+      aps: {
+        alert: {
+          title: String(payload?.title || "TAAM"),
+          body: String(payload?.body || ""),
+        },
+        sound: "default",
+        badge: 1,
+      },
+      url: String(payload?.url || "/"),
+      category: String(payload?.category || "system"),
+      tag: String(payload?.tag || ("taam-" + Date.now())),
+    };
+    const res = await fetch(`https://${APNS_HOST}/3/device/${deviceToken}`, {
+      method: "POST",
+      headers: {
+        "authorization": "bearer " + jwt,
+        "apns-topic": APNS_BUNDLE_ID,
+        "apns-push-type": "alert",
+        "apns-priority": "10",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+    if (res.status >= 200 && res.status < 300) {
+      return { ok: true, status: res.status };
+    }
+    const text = await res.text().catch(() => "");
+    // 410 Unregistered / 400 BadDeviceToken = 죽은 토큰 — 지워야 다음부터 안 두들긴다
+    const dead = res.status === 410 ||
+      (res.status === 400 && /BadDeviceToken|DeviceTokenNotForTopic/i.test(text));
+    return { ok: false, status: res.status, error: text.substring(0, 200), dead };
+  } catch (e: any) {
+    return { ok: false, status: 500, error: (e?.message || String(e)).substring(0, 200) };
+  }
+}
+
 // access_token 1시간 유효 — 모듈 전역에 캐싱해서 재호출마다 토큰 발급 안 함
 let _fcmAccessToken: string | null = null;
 let _fcmAccessTokenExpiry = 0;
@@ -499,7 +602,20 @@ Deno.serve(async (req: Request) => {
     // 발송 (Web Push / FCM / APNs 분기)
     const results = await Promise.all(targets.map(async (s: any) => {
       try {
-        // 🆕 Native 토큰이면 FCM v1 사용 (APNs 도 FCM v1 의 apns 필드로 통합)
+        // 🆕 2026-08: iOS(apns://)는 APNs 로 곧장 보낸다.
+        //   FCM 으로 보내면 APNs 기기토큰을 FCM 등록토큰으로 착각해 무조건 거부된다.
+        //   APNS 시크릿이 없으면 종전 FCM 경로로 폴백 — 설정 전에도 앱은 그대로 돈다.
+        if (s.endpoint.startsWith("apns://") && APNS_READY) {
+          const ar = await sendApnsPush(s.endpoint.replace(/^apns:\/\//, ""), body.payload);
+          if (ar.ok) return { id: s.id, ok: true, status: ar.status, apns: true };
+          if ((ar as any).dead) {
+            await sb.from("push_subscriptions").delete().eq("id", s.id);
+            return { id: s.id, ok: false, removed: true, status: ar.status, reason: "expired", apns: true };
+          }
+          return { id: s.id, ok: false, status: ar.status, error: (ar.error || "").substring(0, 200), apns: true };
+        }
+
+        // 🆕 Native 토큰이면 FCM v1 사용 (Android FCM · APNs 폴백)
         const isNative = s.endpoint.startsWith("fcm://") || s.endpoint.startsWith("apns://");
         if (isNative) {
           const nr = await sendNativePush(s.endpoint, body.payload);
