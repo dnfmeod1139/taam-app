@@ -40,7 +40,7 @@ values (
     'ios', jsonb_build_object(
       'min_build',    0,          -- 강제 기준 (0 = 강제 안 함)
       'latest_build', 0,          -- ← 새 빌드를 출시할 때마다 이 숫자를 올린다
-      'url',          ''          -- ← App Store 주소 (예: https://apps.apple.com/kr/app/id0000000000)
+      'url',          'https://apps.apple.com/kr/app/id6783459650'
     ),
     'android', jsonb_build_object(
       'min_build',    0,
@@ -63,10 +63,10 @@ on conflict (key) do update
 --          updated_at = now()
 --    where key = 'app_version';
 --
---   -- App Store 주소 채우기
+--   -- App Store 주소 바꾸기 (앱 이름이 URL 에 붙어도 id 만 맞으면 열린다)
 --   update public.app_config
 --      set value = jsonb_set(value, '{ios,url}',
---                            to_jsonb('https://apps.apple.com/kr/app/id0000000000'::text)),
+--                            to_jsonb('https://apps.apple.com/kr/app/id6783459650'::text)),
 --          updated_at = now()
 --    where key = 'app_version';
 --
