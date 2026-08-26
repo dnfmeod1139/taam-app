@@ -185,15 +185,42 @@ serve(async (req) => {
       }),
     });
 
+    const detail = await res.text().catch(() => '');
+
     if (!res.ok) {
-      const detail = await res.text().catch(() => '');
       // Solapi 가 준 사유를 그대로 실어 보낸다 — 발신번호 미등록·잔액 부족·번호 형식이
       // 여기서 갈린다. 이 문자열이 없으면 대시보드 세 군데를 다 뒤져야 한다.
       return hookErr(502, 'Solapi ' + res.status + ': ' + detail.slice(0, 160));
     }
 
-    // 성공 — 인증번호는 절대 로그에 남기지 않는다
-    console.log('[sms-hook] 발송 성공', smsType || '-', toDomestic(phone).replace(/\d{4}$/, '****'));
+    // ── ⚠ Solapi 는 '접수 거부' 도 HTTP 200 으로 준다 ──
+    //   본문의 statusCode 가 2xxx 가 아니면 문자는 나가지 않은 것이다.
+    //   res.ok 만 보고 성공 처리하면 앱은 "발송했습니다" 라고 안내하는데
+    //   문자는 오지 않는다 — 어디에도 오류가 안 남아 가장 찾기 어려운 실패가 된다.
+    //   접수 코드까지 확인해야 그 침묵이 사라진다.
+    let statusCode = '', statusMessage = '';
+    try {
+      const j = JSON.parse(detail);
+      statusCode = String(j.statusCode || '');
+      statusMessage = String(j.statusMessage || j.errorMessage || '');
+      // 다건 응답 형태(failedMessageList)로 실패가 실려 오는 경우도 실패로 본다
+      const failed = Array.isArray(j.failedMessageList) ? j.failedMessageList : [];
+      if (failed.length) {
+        statusCode = String(failed[0]?.statusCode || statusCode || 'FAILED');
+        statusMessage = String(failed[0]?.statusMessage || statusMessage || '');
+      }
+    } catch (_e) { /* 본문이 JSON 이 아니면 상태코드 확인은 건너뛴다 */ }
+
+    if (statusCode && !statusCode.startsWith('2')) {
+      return hookErr(502, 'Solapi 접수 거부 ' + statusCode
+        + (statusMessage ? ': ' + statusMessage.slice(0, 120) : ''));
+    }
+
+    // 성공 — 인증번호는 절대 로그에 남기지 않는다.
+    //   접수코드를 함께 남긴다: 나중에 "문자가 안 왔다" 는 문의가 오면
+    //   접수까지 됐는지(우리 책임) 통신사 구간인지(그 뒤)를 이 한 줄로 가른다.
+    console.log('[sms-hook] 발송 성공', smsType || '-',
+      toDomestic(phone).replace(/\d{4}$/, '****'), statusCode || '-');
     return json({});
   } catch (e) {
     return hookErr(500, '예외: ' + String((e as Error)?.message || e).slice(0, 160));
