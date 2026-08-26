@@ -74,6 +74,18 @@ workflows:
             echo "<!DOCTYPE html><html><body>TAAM</body></html>" > www/index.html
           fi
 
+      # 🆕 2026.08: 앱이 자기 빌드번호를 알게 한다 (업데이트 안내용)
+      #   server.url 이 원격이라 화면은 늘 최신 웹이다. 그래서 JS 는 자기를 감싼
+      #   네이티브 껍데기가 몇 번인지 알 길이 없다 — 푸시·플러그인은 껍데기가 바뀌어야
+      #   바뀌는데도. appendUserAgent 에 새겨 넣으면 navigator.userAgent 로 읽힌다.
+      #   ⚠ 반드시 cap add/sync 앞이어야 한다 (그때 네이티브로 복사된다).
+      - name: 빌드 버전을 User-Agent 에 새김 (업데이트 안내)
+        script: |
+          set -ex
+          export APP_UA_VER="$MARKETING_VERSION"
+          export APP_UA_BUILD="$(($BUILD_NUMBER + 1))"
+          python3 scripts/inject_appversion_ua.py
+
       - name: Add or sync Capacitor iOS platform
         script: |
           set -ex
@@ -363,6 +375,15 @@ workflows:
           node --version
           rm -rf node_modules
           npm install --omit=dev
+
+      # 🆕 2026.08: 앱이 자기 빌드번호를 알게 한다 (업데이트 안내용) — iOS 와 같은 이유.
+      #   Android 는 versionCode 가 곧 빌드번호다 (아래 주입 단계와 같은 계산식).
+      - name: 빌드 버전을 User-Agent 에 새김 (업데이트 안내)
+        script: |
+          set -ex
+          export APP_UA_VER="${VERSION_NAME:-$MARKETING_VERSION}"
+          export APP_UA_BUILD="$((1000 + $BUILD_NUMBER))"
+          python3 scripts/inject_appversion_ua.py
 
       - name: Ensure www placeholder + Add Capacitor Android
         script: |
