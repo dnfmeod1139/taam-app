@@ -49201,6 +49201,20 @@ window.pushDiagnose = async function(){
       if(u){
         var cr = await window.sb.from('push_subscriptions').select('id,device_label,endpoint', {count:'exact'}).eq('user_id', u.id);
         lines.push('DB 구독 row: ' + (cr.data ? cr.data.length : 0) + '개');
+        // 🆕 2026.08: 종류를 갈라 보여준다.
+        //   아이폰 아이콘 배지를 바꾸는 건 apns:// 구독뿐이다. 웹 푸시 구독도
+        //   발송은 '성공' 으로 세어져서, 개수만 보면 되는 줄 알게 된다.
+        (function(){
+          var k = { apns:0, fcm:0, web:0 };
+          (cr.data || []).forEach(function(s){
+            var e = String(s.endpoint || '');
+            if(e.indexOf('apns://') === 0) k.apns++;
+            else if(e.indexOf('fcm://') === 0) k.fcm++;
+            else k.web++;
+          });
+          lines.push('  종류: APNs ' + k.apns + ' · FCM ' + k.fcm + ' · 웹 ' + k.web
+                   + (k.apns ? '' : '  ⚠ APNs 0 — 아이콘 배지 못 바꿈'));
+        })();
         // 🆕 2026.08: 빨간 점의 근거를 그대로 보여준다.
         //   "안에 안 읽은 게 없는데 점이 안 없어진다" 를 화면만 보고는 가릴 수 없어서,
         //   로컬(이 기기)과 서버(내 계정) 중 어느 쪽이 남아 있는지 숫자로 갈라준다.
@@ -49258,11 +49272,35 @@ window.pushTest = async function(){
 //   (scripts/ios_push_appdelegate.py). 다만 그건 새 빌드가 스토어에 올라가야 적용된다.
 //   이미 「1」이 박혀 있는 기기를 지금 정리하려면 서버가 badge:0 을 한 번 보내야 한다.
 //   silent=true 라 알림은 뜨지 않고 숫자만 사라진다.
+// 🆕 2026.08: 어느 경로로 나갔는지 사람 말로 요약한다.
+//
+//   「성공 2」만 보면 배지가 지워진 줄 알게 된다. 그런데 그 2 안에는 웹 푸시
+//   구독이 섞여 있을 수 있고, 웹 푸시는 아이폰 아이콘 배지와 아무 상관이 없다.
+//   그래서 "성공했는데 숫자가 안 변한다" 가 된다 — 어디로 갔는지를 봐야 갈린다.
+function _pushRouteSummary(details){
+  var n = { apns:0, fcm:0, web:0, fail:0 };
+  (details || []).forEach(function(d){
+    if(!d) return;
+    if(!d.ok){ n.fail++; return; }
+    if(d.apns) n.apns++;
+    else if(d.native) n.fcm++;
+    else n.web++;
+  });
+  var bits = [];
+  if(n.apns) bits.push('APNs 직결 ' + n.apns + '건  ← 아이콘 배지는 이것만 바꾼다');
+  if(n.fcm)  bits.push('FCM 경유 ' + n.fcm + '건');
+  if(n.web)  bits.push('웹 푸시 ' + n.web + '건  ← 아이콘 배지와 무관');
+  if(n.fail) bits.push('실패 ' + n.fail + '건');
+  if(!n.apns) bits.push('⚠ APNs 직결이 0건입니다 — 이 기기 아이콘은 바뀌지 않습니다');
+  return bits.join('\n');
+}
+
 window.pushClearBadge = async function(){
   if(typeof pushSend !== 'function'){ alert('pushSend 함수 미정의'); return; }
   var res = await pushSend('user', { silent: true, badge: 0, category: 'system' }, { dedupe: true });
   if(res && res.summary){
     alert('배지 지우기\n\n시도: '+res.summary.attempted+'\n성공: '+res.summary.ok+'\n실패: '+res.summary.failed
+        + '\n\n── 어디로 갔나 ──\n' + _pushRouteSummary(res.details)
         + (res.summary.ok > 0 ? '\n\n홈 화면으로 나가서 아이콘을 확인하세요 (몇 초 걸릴 수 있습니다)' : ''));
   } else {
     alert('Edge Function 응답 없음 — send-push 가 최신으로 배포됐는지 확인하세요');
@@ -49281,9 +49319,10 @@ window.pushBadgeTest = async function(){
   var res = await pushSend('user', { silent: true, badge: 5, category: 'system' }, { dedupe: true });
   if(res && res.summary){
     alert('배지 5 테스트\n\n시도: '+res.summary.attempted+'\n성공: '+res.summary.ok+'\n실패: '+res.summary.failed
+      + '\n\n── 어디로 갔나 ──\n' + _pushRouteSummary(res.details)
       + '\n\n홈 화면 아이콘을 보세요 (몇 초 소요)'
       + '\n· 5 로 바뀜  → 배지 푸시는 닿는다. 0 만 확인하면 된다'
-      + '\n· 1 그대로   → 이 기기에 배지 푸시가 닿지 않는다');
+      + '\n· 1 그대로   → 알림 없는 배지 갱신을 iOS 가 버린다 (1.02 에서 해결)');
   } else {
     alert('Edge Function 응답 없음 — send-push 배포 확인');
   }
