@@ -15,6 +15,13 @@ workflows:
         XCODE_PROJECT: "ios/App/App.xcodeproj"
         XCODE_SCHEME: "App"
         APP_STORE_APPLE_ID: "6783459650"
+        # 🆕 2026.08: App Store 표시 버전(CFBundleShortVersionString).
+        #   이미 출시된 버전과 같은 값으로는 업로드가 거부된다 —
+        #   "Invalid Pre-Release Train. The train version '1.0' is closed for new
+        #    build submissions" / "must contain a higher version than [1.0]".
+        #   Capacitor 가 만드는 iOS 프로젝트는 항상 1.0 이라, 여기서 올려주지 않으면
+        #   첫 출시 이후 모든 배포가 막힌다. 새 버전을 낼 때 이 값만 올리면 된다.
+        MARKETING_VERSION: "1.0.1"
       node: 22
       xcode: latest
 
@@ -227,10 +234,18 @@ workflows:
           # use-profiles 출력에 '어느 타깃에 어떤 프로파일 적용' 이 나옴 (실패 시 진단)
           xcode-project use-profiles 2>&1 | tee -a "$DBG"
 
-      - name: Increment build number (Codemagic 자동 — 매 빌드마다 +1)
+      - name: 버전 주입 (표시 버전 MARKETING_VERSION + 빌드번호 자동 +1)
         script: |
           cd $CM_BUILD_DIR/ios/App
+          # 빌드번호(CFBundleVersion) — 같은 번호 재업로드를 App Store 가 거부한다
           agvtool new-version -all $(($BUILD_NUMBER + 1)) || true
+          # 표시 버전(CFBundleShortVersionString) — 출시된 버전보다 높아야 업로드된다
+          agvtool new-marketing-version "$MARKETING_VERSION" || true
+          # 실제로 박혔는지 확인 — agvtool 이 조용히 실패하면 여기서 드러난다
+          echo "==== 버전 확인 ===="
+          agvtool what-marketing-version -terse1 || true
+          agvtool what-version -terse || true
+          grep -n "MARKETING_VERSION" App.xcodeproj/project.pbxproj | head -3
 
       - name: Build ipa for distribution
         script: |
