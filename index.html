@@ -17468,6 +17468,9 @@ function openMain(){
     // 🆕 2026.08: 외부 결제창에서 돌아왔거나 앱을 다시 켠 경우, 서버에 남아 있는
     //   내 좌석 홀드를 다시 물린다. 안 하면 자기가 잡아둔 자리에 「마감」이 뜬다.
     try { if (typeof _tkRestoreSeatHold === 'function') _tkRestoreSeatHold(); } catch(_hr){}
+    // 🆕 2026.08: 앱을 열면 아이콘 배지를 지운다 (되는 환경에서만 — 안 되면 조용히 넘어간다).
+    //   1.02 부터는 네이티브(AppDelegate)가 확실히 지운다. 이건 그전까지의 한 겹이다.
+    try { if (typeof _badgeClearLocal === 'function') _badgeClearLocal(); } catch(_bc){}
     // 🆕 네이티브 앱이 구버전이면 업데이트를 안내한다 (웹 화면은 항상 최신이지만
     //   푸시·플러그인 같은 네이티브 껍데기는 스토어 업데이트를 받아야 바뀐다)
     try { if (typeof taamCheckAppUpdate === 'function') taamCheckAppUpdate(); } catch(_ue){}
@@ -49309,8 +49312,24 @@ function _pushRouteSummary(details){
 //
 //   ⚠ 1.02 부터는 앱을 열기만 해도 배지가 사라진다(AppDelegate). 그때는 이 버튼도
 //     쓸 일이 없어진다. 그전까지의 임시 수단이다.
+// 🆕 2026.08: 푸시를 거치지 않고 이 기기에서 직접 배지를 지운다.
+//   Badging API (navigator.clearAppBadge) 는 홈 화면에 설치된 웹앱에서 동작한다.
+//   네이티브 WebView 에서도 되는지는 iOS 판마다 다르므로, 있으면 쓰고 없으면 넘어간다.
+//   되면 푸시가 안 닿아도 그 자리에서 지워진다 — 공짜로 얻는 한 겹이다.
+async function _badgeClearLocal(){
+  try {
+    if (navigator && typeof navigator.clearAppBadge === 'function') {
+      await navigator.clearAppBadge();
+      return 'ok';
+    }
+    return 'unsupported';
+  } catch(e){ return 'error:' + String((e && e.message) || e).slice(0, 60); }
+}
+window._badgeClearLocal = _badgeClearLocal;
+
 window.pushClearBadge = async function(){
   if(typeof pushSend !== 'function'){ alert('pushSend 함수 미정의'); return; }
+  var _local = await _badgeClearLocal();
   var res = await pushSend('user', {
     title: '알림 정리',
     body: '아이콘 배지를 지웠습니다',
@@ -49319,12 +49338,16 @@ window.pushClearBadge = async function(){
     tag: 'taam-badge-clear'
   }, { dedupe: true });
   if(res && res.summary){
-    alert('배지 지우기 (알림 1건이 뜹니다)\n\n시도: '+res.summary.attempted
+    alert('배지 지우기 (알림 1건이 뜹니다)\n\n'
+        + '이 기기에서 직접 지우기: '
+        + (_local === 'ok' ? '✅ 성공' : (_local === 'unsupported' ? '미지원(이 앱에선 안 됨)' : _local))
+        + '\n\n시도: '+res.summary.attempted
         + '\n성공: '+res.summary.ok+'\n실패: '+res.summary.failed
         + '\n\n── 어디로 갔나 ──\n' + _pushRouteSummary(res.details)
-        + (res.summary.ok > 0
-            ? '\n\n알림이 도착하면 그 순간 배지가 0 이 됩니다.\n알림은 지워도 됩니다 — 배지는 그대로 0 입니다.'
-            : ''));
+        + '\n\n⚠ 「알림 정리」 배너가 폰에 뜨는지 꼭 보세요.\n'
+        + '  뜬다  → 푸시는 닿는다 (배지만의 문제)\n'
+        + '  안 뜬다 → 이 폰에 푸시가 안 닿는다 (토큰이 옛것)\n'
+        + '           그때는 「🔄 재구독」을 누르고 다시 시도하세요');
   } else {
     alert('Edge Function 응답 없음 — send-push 가 최신으로 배포됐는지 확인하세요');
   }
