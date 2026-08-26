@@ -14573,10 +14573,18 @@ async function loadDeposit(){
     }
 
     // Supabase에서 진짜 잔액 가져오기 (우선)
-    const { data: { user } } = await window.sb.auth.getUser();
+    const _duRes = await window.sb.auth.getUser();
+    const user = _duRes && _duRes.data && _duRes.data.user;
     if(!user){
-      console.warn('[loadDeposit] 로그인 안됨, 로컬 값 사용');
-      try{ if(localStorage.getItem('authedSession') === '1' && typeof _tkSessionLost === 'function') _tkSessionLost('로그인이 만료되었습니다.'); }catch(_se){}
+      console.warn('[loadDeposit] 사용자 조회 실패/미로그인 — 로컬 값 사용');
+      // ⚠ 통신 실패를 만료로 오해하면 멀쩡한 회원이 앱 재시작처럼 튕긴다 (_tkSessionReallyGone 참고)
+      try{
+        if(localStorage.getItem('authedSession') === '1'
+           && typeof _tkSessionLost === 'function'
+           && await _tkSessionReallyGone(_duRes && _duRes.error)){
+          _tkSessionLost('로그인이 만료되었습니다.');
+        }
+      }catch(_se){}
       return;
     }
 
@@ -15553,13 +15561,17 @@ async function loadPurchase(){
     }
 
     // Supabase에서 진짜 데이터 로드 (우선)
-    const { data: { user } } = await window.sb.auth.getUser();
+    const _puRes = await window.sb.auth.getUser();
+    const user = _puRes && _puRes.data && _puRes.data.user;
     if(!user){
-      console.warn('[loadPurchase] 로그인 안됨, 로컬 값 사용');
+      console.warn('[loadPurchase] 사용자 조회 실패/미로그인 — 로컬 값 사용');
       // 🆕 '로그인했었는데 세션이 사라진' 경우에만 로그인으로 되돌린다.
       //   (로그인 전 부팅 단계에서도 이 경로를 지나므로 플래그로 구분한다)
+      // ⚠ 통신 실패는 만료가 아니다 — _tkSessionReallyGone 이 로컬 토큰으로 가른다
       try{
-        if(localStorage.getItem('authedSession') === '1' && typeof _tkSessionLost === 'function'){
+        if(localStorage.getItem('authedSession') === '1'
+           && typeof _tkSessionLost === 'function'
+           && await _tkSessionReallyGone(_puRes && _puRes.error)){
           _tkSessionLost('로그인이 만료되었습니다.');
         }
       }catch(_se){}
@@ -21387,8 +21399,29 @@ async function _tkReleaseSeatHold(){
     window._tkSeatHoldPax = 0;
     console.log('[seatHold] 반납:', pid);
   } catch(e){
+    // 🆕 2026.08: RPC 가 없으면(sql/seat_hold_5min.sql 미실행) 직접 취소를 시도한다.
+    //   RPC 가 배포돼 있지 않으면 반납이 '항상' 실패한다. 그 상태에서는
+    //   결제하기를 눌렀다 나가기만 해도 좌석이 영영 잡혀 있고, 정원이 차면
+    //   티켓이 매진으로 굳는다 — 아무도 사지 않았는데 매진이 된다.
+    //   RLS 가 본인 행 수정을 허용하면 이 폴백으로 그 자리에서 풀린다.
+    console.warn('[seatHold] RPC 반납 실패 — 직접 취소 시도:', pid, e && e.message);
+    try {
+      var _ur = await window.sb.auth.getUser();
+      var _uid = _ur && _ur.data && _ur.data.user && _ur.data.user.id;
+      if (_uid) {
+        var d = await window.sb.from('tickets')
+          .update({ status: 'cancelled' })
+          .eq('purchase_id', pid).eq('user_id', _uid).eq('status', 'hold');
+        if (d && d.error) throw d.error;
+        window._tkSeatHoldId = null;
+        window._tkSeatHoldPax = 0;
+        console.log('[seatHold] 직접 취소로 반납:', pid);
+        return;
+      }
+    } catch(e2){
+      console.warn('[seatHold] 직접 취소도 실패 — id 유지(재사용 대상):', pid, e2 && e2.message);
+    }
     // id 는 남겨둔다 — 다음 진입에서 이 홀드를 재사용하고, 최후엔 서버 5분 스윕이 정리한다
-    console.warn('[seatHold] 반납 실패 — id 유지(재사용 대상):', pid, e && e.message);
   }
 }
 window._tkAcquireSeatHold = _tkAcquireSeatHold;
@@ -22897,6 +22930,34 @@ async function _tkEnsureSession(){
 window._tkEnsureSession = _tkEnsureSession;
 
 // 세션이 끊겼다 → 앱에 머무르지 않고 로그인 화면으로 되돌린다.
+// ════════════════════════════════════════════════════════════════
+// 🆕 2026.08: '세션이 진짜 끊긴 것' 과 '네트워크가 잠깐 끊긴 것' 을 가른다
+//
+//   무엇이 문제였나
+//     sb.auth.getUser() 는 서버를 부른다. 모바일에서 신호가 잠깐 끊기거나
+//     앱이 백그라운드에서 돌아오는 순간이면 user:null 을 돌려준다.
+//     그걸 '세션 만료' 로 보고 _tkSessionLost() 를 부르면 location.reload() 까지
+//     가서, 회원 눈에는 앱이 혼자 재시작한 것처럼 보인다.
+//     실제로 그랬다 — 화면 복귀·탭 이동마다 loadDeposit 을 부르게 되면서
+//     이 확률이 크게 올라, 안드로이드에서 로그아웃 후 앱이 재시작됐다.
+//
+//   어떻게 가르나
+//     getSession() 은 로컬(localStorage)만 본다 — 네트워크를 타지 않는다.
+//     토큰이 아직 남아 있으면 세션은 살아 있는 것이고, 방금 실패는 통신 문제다.
+//     오류 객체가 있는 경우도 통신 실패로 본다. 둘 다 아닐 때만 진짜 만료다.
+// ════════════════════════════════════════════════════════════════
+async function _tkSessionReallyGone(err){
+  if (err) return false;                        // 오류가 있었다 = 통신 실패. 판단하지 않는다.
+  if (!window.sb || !window.sb.auth) return false;
+  try {
+    var s = await window.sb.auth.getSession();   // 로컬 확인 (네트워크 없음)
+    if (s && s.error) return false;
+    if (s && s.data && s.data.session) return false;   // 토큰이 남아 있다 = 살아 있다
+  } catch(_e){ return false; }
+  return true;
+}
+window._tkSessionReallyGone = _tkSessionReallyGone;
+
 function _tkSessionLost(reason){
   if(_tkSessionGuardDone) return;
   if(window._activeSessionForceSignedOut) return;   // 단일기기 강제 로그아웃은 자체 흐름이 있다
