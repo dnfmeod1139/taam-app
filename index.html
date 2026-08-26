@@ -23989,6 +23989,24 @@ async function pvSendCode(){
   _pvHint('pvHint1', '', false);
 
   try{
+    // 🆕 2026.08: 이미 이 계정에 인증돼 있는 번호면 updateUser 는 '바뀐 것 없음' 으로 보고
+    //   조용히 성공만 돌려준다 — 문자는 나가지 않고 훅도 호출되지 않는다.
+    //   그대로 두면 화면은 "인증번호를 문자로 보냈습니다" 라고 하는데 문자는 영영 안 오고,
+    //   오류도 로그도 없어 원인을 찾을 길이 없다. 부르기 전에 현재 번호와 비교해 끝낸다.
+    //   (PWA 에서 한 번 인증한 뒤 앱에서 같은 번호로 다시 시도하면 정확히 이 상태가 된다)
+    var _me = null;
+    try { _me = (await window.sb.auth.getUser()).data.user; } catch(_ge){}
+    var _curDigits = String((_me && _me.phone) || '').replace(/[^0-9]/g, '');
+    if(_curDigits && _curDigits === norm.e164.replace(/[^0-9]/g, '') && _me.phone_confirmed_at){
+      // 이미 인증된 번호 — 프로필만 최신으로 맞추고 인증 완료로 처리한다
+      if(_me.id){
+        try { await window.sb.from('profiles').update({ phone: norm.pretty }).eq('id', _me.id); } catch(_pe2){}
+        try { await window.sb.from('profiles').update({ country: 'KR' }).eq('id', _me.id); } catch(_ce2){}
+      }
+      _pvApplyVerified(norm.pretty);
+      return;
+    }
+
     // 로그인된 계정에 번호를 추가한다 → Supabase 가 인증번호를 발송(우리 훅 → Solapi)
     var res = await window.sb.auth.updateUser({ phone: norm.e164 });
     if(res && res.error) throw res.error;
