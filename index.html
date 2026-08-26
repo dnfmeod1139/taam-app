@@ -47899,6 +47899,9 @@ function getNativePlatform(){
 // 🆕 2026.08: 네이티브 푸시 진행 상황 기록 — 폰에는 콘솔이 없어서,
 //   남기지 않으면 "권한도 허용인데 토큰이 안 생긴다" 를 화면에서 확인할 방법이 없다.
 //   「🔍 상태 확인」이 이 값을 그대로 보여준다.
+// 코드 판별용 표식 — 앱은 웹을 불러오므로 "새 코드가 실제로 도는지" 를 확인할 방법이
+//   화면에 하나는 있어야 한다. 진단에 그대로 찍힌다. 푸시 코드를 고칠 때 같이 올린다.
+var PUSH_CODE_VER = 'v3-listener-first';
 window._npState = { step: '미실행' };
 function _npMark(step, extra){
   window._npState = Object.assign({ step: step, at: new Date().toTimeString().slice(0,8) }, extra || {});
@@ -47990,6 +47993,17 @@ async function setupNativePush(){
     if (perm.receive !== 'granted') { _npMark('권한 거부됨', { receive: perm && perm.receive }); return; }
     await PushNotifications.register();
     _npMark('register() 호출됨 — 토큰 대기 중');
+    // iOS 가 토큰도 오류도 주지 않고 조용한 경우가 있다 (APNs 미도달·엔타이틀먼트 부재 등).
+    //   그대로 두면 진단에 "대기 중" 만 남아 성공인지 실패인지 영영 알 수 없다.
+    //   10초 안에 아무 소식이 없으면 그 사실 자체를 기록한다.
+    setTimeout(function(){
+      var st = window._npState || {};
+      if (st.step === 'register() 호출됨 — 토큰 대기 중') {
+        _npMark('무응답 — iOS 가 토큰도 오류도 주지 않음', {
+          hint: 'aps-environment 없는 빌드이거나 APNs 미도달(네트워크 차단) 의심'
+        });
+      }
+    }, 10000);
   } catch(e) {
     _npMark('setup 예외', { err: String((e && e.message) || e).slice(0,160) });
   }
@@ -48074,6 +48088,7 @@ window.pushDiagnose = async function(){
   //   정상이라, 그것만 보면 고장으로 오해한다. 앱은 APNs 를 쓰고 웹과 경로가 다르다.
   var _isNat = (typeof isNativeApp === 'function') && isNativeApp();
   lines.push('실행 환경: ' + (_isNat ? ('네이티브 앱 (' + getNativePlatform() + ')') : '웹/PWA'));
+  lines.push('푸시 코드: ' + (typeof PUSH_CODE_VER !== 'undefined' ? PUSH_CODE_VER : '(구버전 — 캐시)'));
   if(_isNat){
     var st = window._npState || { step: '미실행' };
     lines.push('네이티브 푸시: ' + (st.step || '?') + (st.at ? ' @' + st.at : ''));
