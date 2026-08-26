@@ -150,7 +150,7 @@ workflows:
           plutil -lint "$PRIV"
           ls -la "$PRIV"
 
-      - name: 소셜 로그인 네이티브 설정 (구글 URL scheme + Apple Sign In entitlement)
+      - name: 소셜 로그인 + 푸시 네이티브 설정 (구글 URL scheme · Apple Sign In · APNs entitlement)
         script: |
           set -ex
           PL="ios/App/App/Info.plist"
@@ -161,7 +161,14 @@ workflows:
           /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes array" "$PL" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string $GSCHEME" "$PL" 2>/dev/null \
             || /usr/libexec/PlistBuddy -c "Set :CFBundleURLTypes:0:CFBundleURLSchemes:0 $GSCHEME" "$PL"
-          # 2) Sign in with Apple entitlement 파일 생성
+          # 2) Sign in with Apple + 푸시 알림(APNs) entitlement 파일 생성
+          #    ⚠ aps-environment 가 없으면 PushNotifications.register() 가
+          #      "no valid aps-environment entitlement string found" 로 실패한다.
+          #      토큰이 아예 안 나오므로 push_subscriptions 에 apns:// 행이 0건이 된다 —
+          #      실제로 그렇게 막혀 있었다(2026-08-26). 앱은 멀쩡해 보이고 권한도
+          #      「허용」인데 알림만 안 오는, 원인이 가장 안 보이는 상태다.
+          #    production 으로 둔다. TestFlight·App Store 배포 빌드가 쓰는 값이고,
+          #    개발용 development 토큰과는 APNs 서버가 갈린다.
           cat > ios/App/App/App.entitlements <<'PLIST'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -169,6 +176,8 @@ workflows:
           <dict>
             <key>com.apple.developer.applesignin</key>
             <array><string>Default</string></array>
+            <key>aps-environment</key>
+            <string>production</string>
           </dict>
           </plist>
           PLIST
