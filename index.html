@@ -858,30 +858,9 @@ html.auto-login .splash .bottom-group{display:none !important}
   background:var(--d-bg);color:var(--d-txt)}
 
 /* ── 팔레트 ──────────────────────────────────────────────────
-   ① 절제(기본) — 브랜드 그대로. 금색은 날짜 한 줄에만, 합계는 흰색.
-   ② 잉크        — 붉은기를 뺀 순수 무채. 색은 결제 버튼 하나뿐.
-   ③ 본          — 금색·버건디까지 뺀 흑백. 버튼만 흰 판에 검은 글씨.
-   구성·글자 크기·동작은 셋 다 완전히 같다. 바뀌는 건 색뿐. */
-#pcalDetail.pal-ink{
-  --d-bg:#0E0E10; --d-heroend:#0E0E10;
-  --d-txt:#EDEDEF; --d-strong:#FFFFFF; --d-sub:#94949A; --d-faint:#5A5A60;
-  --d-line:rgba(255,255,255,.09);
-  --d-when:#B9B9C0; --d-tabline:#FFFFFF;
-  --d-panel:rgba(255,255,255,.048); --d-panelline:rgba(255,255,255,.10);
-  --d-chip:rgba(255,255,255,.09); --d-chiptxt:#EDEDEF;
-  --d-check:#FFFFFF; --d-checkmark:#0E0E10;
-  --d-warn:#D97A6B; --d-mapbg:#191A1D}
-#pcalDetail.pal-bone{
-  --d-bg:#0C0B0A; --d-heroend:#0C0B0A;
-  --d-txt:#EFEDE9; --d-strong:#FFFFFF; --d-sub:#8C8880; --d-faint:#57544F;
-  --d-line:rgba(255,255,255,.09);
-  --d-when:#C3BEB6; --d-tabline:#FFFFFF;
-  --d-panel:rgba(255,255,255,.05); --d-panelline:rgba(255,255,255,.11);
-  --d-chip:rgba(255,255,255,.09); --d-chiptxt:#EFEDE9;
-  --d-check:#FFFFFF; --d-checkmark:#0C0B0A;
-  --d-warn:#CF8375;
-  --d-cta:#EFEDE9; --d-ctatxt:#12100F; --d-mapbg:#1A1917}
-
+   화이트(페이퍼) 하나로 확정됐다. 고르는 기능과 함께 잉크·본 팔레트는 걷어냈다
+   (2026.08). 아래 .pal-paper 는 pcalApplySkin() 이 항상 붙인다 —
+   기본 변수(브랜드 다크)를 덮어쓰는 구조라 클래스가 빠지면 검게 돌아간다. */
 #pcalDetail.pal-paper{
   /* 흰 종이에 검정 글씨 — 예전 구매 확인 화면의 가독성을 상세 전체로.
      순백(#fff)이 아니라 따뜻한 종이색 — 사진의 온도와 싸우지 않는다. */
@@ -6019,7 +5998,10 @@ var PAY_MODE_TOSS = true;
 //      2) Edge Function toss-confirm — 시크릿 키로 승인 API 호출 + 금액 대조 + 멱등 처리
 //      3) ?toss_pay=success 복귀 핸들러 — 승인 요청 → 티켓 확정/예치금 적립
 // ═══════════════════════════════════════════
-var CARD_PAY_LIVE = false;
+//   → 2026.08.26 전 회원 공개. 잠갔던 이유(서버 승인 부재)는 해소됐다 —
+//     payment_orders · toss-confirm · ?toss_pay=success 복귀 핸들러가 모두 붙어 있다.
+//     문제가 생기면 이 값 하나를 false 로 되돌리면 즉시 예치금 안내로 복귀한다.
+var CARD_PAY_LIVE = true;
 // 🆕 2026.08: 검증용 개별 스위치.
 //   전역 플래그를 켜면 검증도 하기 전에 전 회원에게 카드 결제가 열린다.
 //   실결제 1건을 먼저 확인해야 하므로, 슈퍼어드민이 자기 기기에서만 열 수 있게 한다.
@@ -10376,13 +10358,6 @@ window.closePromoCarousel = function(){
             <div>
               <div class="admin-menu-text" id="magLabel">🧪 매거진뷰 (이 기기)</div>
               <div class="admin-menu-sub">홈을 월간 표지 한 장으로 꽉 채우고, 캘린더는 아래로 밀거나 버튼을 눌러야 시트로 올라온다. 사진 캘린더가 켜져 있어야 한다</div>
-            </div>
-            <div class="admin-arrow">›</div>
-          </div>
-          <div class="admin-menu-item" onclick="togglePdSkin()">
-            <div>
-              <div class="admin-menu-text" id="pdSkinLabel">🎨 자리 상세 팔레트 (이 기기)</div>
-              <div class="admin-menu-sub" id="pdSkinSub">절제 · 잉크 · 본 세 가지를 눌러 돌린다. 색만 바뀌고 구성·동작은 완전히 같다</div>
             </div>
             <div class="admin-arrow">›</div>
           </div>
@@ -16949,7 +16924,6 @@ function adminDirectAccess(){
   loadRole(); // PIN으로 설정된 역할 로드
   try{ if(typeof cardPayTestSync === 'function') cardPayTestSync(); }catch(e){}
   try{ if(typeof newHomeSync === 'function') newHomeSync(); }catch(e){}
-  try{ if(typeof pdSkinSync === 'function') pdSkinSync(); }catch(e){}
   try{ if(typeof magSync === 'function') magSync(); }catch(e){}
   try{ if(typeof pcalApplyGnb === 'function') pcalApplyGnb(); }catch(e){}
   // 참고: bootAutoLogin 경로에서도 이 함수가 호출되는데, 거기서 이미 ready 처리됨
@@ -41712,68 +41686,19 @@ function magBindDrag(){
 // ── 팔레트 (기기별 스위치) ──────────────────────────────────
 //   색만 바뀐다. 구성·글자 크기·동작은 셋 다 완전히 같다.
 //   화면에서 나란히 봐야 정해지므로 기기에서 눌러 돌린다 (localStorage 라 기기마다 별개).
-var PD_PALETTES = [
-  { key:'pal-ink',   name:'① 잉크',   desc:'붉은기를 뺀 순수 무채 — 색은 결제 버튼 하나 (기본)' },
-  { key:'pal-bone',  name:'② 본',     desc:'흑백만 — 버튼도 흰 판에 검은 글씨' },
-  { key:'',          name:'③ 절제',   desc:'브랜드 그대로 — 배경에 붉은기가 남는다' },
-  { key:'pal-paper', name:'④ 페이퍼', desc:'흰 종이에 검정 글씨 — 예전 구매 화면의 가독성. 버튼도 검정' }
-];
-
-// 🆕 2026.08: 확정 팔레트 — 전 회원이 보는 값은 이 하나로 정해진다.
-//   아래 기기 스위치(taamPdPal)는 슈퍼어드민이 시안을 눈으로 비교하려고 두는 것이고,
-//   회원 화면과는 무관하다. 회원에게는 스위치가 보이지도 않는다(어드민 메뉴 안에 있다).
-//   기기별 저장이라 PWA 에서 고른 값이 앱에 따라오지 않는다 — 그래서 확정값은
-//   localStorage 가 아니라 여기 코드에 박아야 모든 기기가 같은 화면이 된다.
-var PD_PALETTE_DEFAULT = 3;   // ④ 페이퍼 — 흰 종이에 검정 글씨(#F7F4EF)
-
-function pcalPalIdx(){
-  try {
-    var i = parseInt(localStorage.getItem('taamPdPal'), 10);
-    return (i >= 0 && i < PD_PALETTES.length) ? i : PD_PALETTE_DEFAULT;
-  } catch(e){ return PD_PALETTE_DEFAULT; }
-}
-window.pcalPalIdx = pcalPalIdx;
-
+// 🆕 2026.08: 자리 상세 팔레트는 화이트(페이퍼)로 확정 — 고르는 기능은 걷어냈다.
+//   시안을 비교하는 동안에만 필요했던 스위치다. 확정된 뒤로는 들고 있을수록 사고만 는다:
+//   저장이 기기별(localStorage)이라 PWA 와 앱이 서로 다른 색으로 뜨고
+//   (실제로 "PWA 는 흰데 앱만 검다" 가 이것 때문이었다), 회원이 콘솔로 건드릴 여지도 남는다.
+//   색을 다시 바꿔야 하면 .pal-paper 자리에 다른 팔레트 클래스를 만들어 여기서 갈아 끼운다.
 function pcalApplySkin(){
   var scr = document.getElementById('pcalDetail');
   if(!scr) return;
-  PD_PALETTES.forEach(function(p){ if(p.key) scr.classList.remove(p.key); });
-  var cur = PD_PALETTES[pcalPalIdx()];
-  if(cur && cur.key) scr.classList.add(cur.key);
+  scr.classList.add('pal-paper');   // 흰 종이(#F7F4EF) — 전 회원·전 기기 동일
 }
 window.pcalApplySkin = pcalApplySkin;
 
-function togglePdSkin(){
-  // 다른 검증 스위치(toggleCardPayTest·toggleNewHome·toggleMagazine)와 같은 규칙 —
-  // 어드민 메뉴 안에 있어 회원에게 보이지는 않지만, 역할 검사는 함수가 스스로 한다.
-  var role = (typeof _currentRole !== 'undefined') ? _currentRole : '';
-  if (role !== 'superadmin') {
-    if (typeof showToast === 'function') showToast('⚠','권한 없음','슈퍼어드민 전용 기능입니다');
-    return;
-  }
-  var next = (pcalPalIdx() + 1) % PD_PALETTES.length;
-  try { localStorage.setItem('taamPdPal', String(next)); }
-  catch(e){
-    if(typeof showToast === 'function') showToast('⚠','저장 실패','이 브라우저에서 localStorage 를 쓸 수 없습니다');
-    return;
-  }
-  pcalApplySkin();
-  pdSkinSync();
-  var p = PD_PALETTES[next];
-  if(typeof showToast === 'function') showToast('🎨', '팔레트 ' + p.name, p.desc);
-}
-window.togglePdSkin = togglePdSkin;
-
-function pdSkinSync(){
-  try {
-    var p = PD_PALETTES[pcalPalIdx()];
-    var lbl = document.getElementById('pdSkinLabel');
-    if(lbl) lbl.textContent = '🎨 자리 상세 팔레트 (이 기기) — ' + p.name;
-    var sub = document.getElementById('pdSkinSub');
-    if(sub) sub.textContent = p.desc + ' · 누를 때마다 다음 팔레트로';
-  } catch(e){}
-}
-window.pdSkinSync = pdSkinSync;
+// (정리 2026.08: togglePdSkin · pdSkinSync 삭제 — 팔레트가 화이트로 확정돼 고를 일이 없다.)
 
 // ── 탭 전환 ──
 function pcalTab(i){
