@@ -13535,6 +13535,56 @@ function loadTickets(){
   return _loadTicketsFromIDB();
 }
 
+// ════════════════════════════════════════════════════════════════
+// 🆕 2026.08: 매진이 화면에 바로 반영되게 한다
+//
+//   무엇이 문제였나
+//     구매·수동 추가·초대 어느 쪽으로든 좌석이 차면 서버 트리거
+//     (sql/seat_soldout_sync.sql)가 ticket_products.status 를 'soldout' 으로 바꾼다.
+//     그런데 앱은 그 사실을 부팅할 때만 읽었다. 그래서 타일은 컬러로 살아 있는데
+//     눌러 들어가면 "매진" 이 뜬다 — 회원 입장에서 가장 헷갈리는 상태다.
+//
+//   어떻게 고치나
+//     ① 내 기기에서 구매해 매진이 됐으면 그 자리에서 다시 그린다 (_tkRepaintAll)
+//     ② 다른 기기·어드민이 채운 경우는 알 길이 없으므로, 화면에 돌아올 때
+//        서버에서 다시 읽는다 (_tkSyncFromServer)
+// ════════════════════════════════════════════════════════════════
+function _tkRepaintAll(){
+  ['renderTicketList','renderCarousel','renderHomeTickets','renderTicketGenres',
+   'pcalRenderAll','magRender'].forEach(function(fn){
+    try { if (typeof window[fn] === 'function') window[fn](); }
+    catch(e){ console.warn('[repaint] ' + fn, e && e.message); }
+  });
+}
+window._tkRepaintAll = _tkRepaintAll;
+
+var _tkSyncing = false, _tkSyncAt = 0;
+function _tkSyncFromServer(force){
+  if (_tkSyncing || !window.sb) return Promise.resolve();
+  // 결제 왕복 중이거나 구매 시트가 열려 있으면 건드리지 않는다 —
+  //   지금 보고 있는 금액·좌석이 발밑에서 바뀌는 쪽이 더 위험하다.
+  try { if (typeof _tossHasTrip === 'function' && _tossHasTrip()) return Promise.resolve(); } catch(_e){}
+  var sheet = document.getElementById('tdPurchaseSheet');
+  if (sheet && sheet.style.display && sheet.style.display !== 'none') return Promise.resolve();
+  // 화면 복귀가 잦아도 서버를 두들기지 않게 — 20초 안에는 다시 읽지 않는다
+  var now = Date.now();
+  if (!force && (now - _tkSyncAt) < 20000) return Promise.resolve();
+  _tkSyncAt = now; _tkSyncing = true;
+  return Promise.resolve(loadTickets())
+    .then(function(){ _tkRepaintAll(); })
+    .catch(function(e){ console.warn('[tkSync] 실패:', e && e.message); })
+    .then(function(){ _tkSyncing = false; });
+}
+window._tkSyncFromServer = _tkSyncFromServer;
+
+// 화면·네트워크로 돌아올 때 매진 여부를 다시 맞춘다
+(function(){
+  function _kick(){ if (document.visibilityState === 'visible') _tkSyncFromServer(); }
+  document.addEventListener('visibilitychange', _kick);
+  window.addEventListener('online', _kick);
+  window.addEventListener('focus', _kick);
+})();
+
 function saveMembers(){ _idbSafeSet('excMembers', memberDB, '회원'); }
 function loadMembers(){
   return IDB.get('excMembers').then(function(s){
@@ -21988,6 +22038,8 @@ async function completePurchase(){
     if (usedPax >= totalPax) {
       t.status = 'soldout';
       saveTickets();
+      // 🆕 화면도 그 자리에서 흑백으로 — 안 그리면 앱을 껐다 켤 때까지 컬러로 살아 있다
+      if (typeof _tkRepaintAll === 'function') _tkRepaintAll();
     }
   })();
 
@@ -31388,6 +31440,8 @@ async function riSubmit(){
       }
       console.log('[ri] 좌석 홀드 생성:', _holdRow.purchase_id);
       try { if (typeof renderTickets === 'function') renderTickets(); } catch(_rt){}
+      // 🆕 초대 좌석도 정원을 먹는다 — 이걸로 매진이 됐을 수 있으니 서버 상태를 다시 읽는다
+      try { if (typeof _tkSyncFromServer === 'function') _tkSyncFromServer(true); } catch(_ts){}
     }
 
     // 🆕 v1.53.30: 인앱 알림 INSERT (구독 안 한 회원도 다음 접속 시 토스트)
@@ -44149,6 +44203,8 @@ async function tcalManualSave(){
       try { await tcalLoadPurchases(); } catch(_e){}
       tcalRender(); tcalRenderDetail(_tcalSelectedDate);
       try { if (typeof renderTickets === 'function') renderTickets(); } catch(_rt){}
+      // 🆕 수동 추가도 좌석을 먹는다 — 매진이 됐으면 회원 화면(캘린더 타일)도 바로 흑백이 되게
+      try { if (typeof _tkSyncFromServer === 'function') _tkSyncFromServer(true); } catch(_ts){}
       return;
     }
     var r = await window.sb.from('daegwan_manual').insert({
