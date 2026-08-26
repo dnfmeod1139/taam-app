@@ -40371,7 +40371,17 @@ function _magFitOne(el){
     var box = el.parentElement;
     while(box && box.className.indexOf('mag-txt') < 0) box = box.parentElement;
     var w = box ? box.clientWidth : 0;
-    if(!w) return;
+    if(!w){
+      // 🆕 2026.08: 부팅 직후 첫 표지(현재 달)는 칸이 아직 화면에 붙기 전이라 너비가 0 —
+      //   그대로 두면 기본 크기로 떠 있다가 달을 오가야 맞춰졌다. 보일 때까지 다시 잰다.
+      var _tries = parseInt(el.getAttribute('data-fit-try') || '0', 10);
+      if(_tries < 25 && el.isConnected !== false){
+        el.setAttribute('data-fit-try', String(_tries + 1));
+        setTimeout(function(){ _magFitOne(el); }, 200);
+      }
+      return;
+    }
+    el.removeAttribute('data-fit-try');
     var size = _magTSize(el.getAttribute('data-sz'));
     var blank = !String(el.textContent || '').trim();
     if(size !== 'fill' || blank){
@@ -41241,6 +41251,8 @@ function magRender(){
   if(wasHidden){
     v.classList.remove('opening'); void v.offsetWidth; v.classList.add('opening');
     setTimeout(function(){ v.classList.remove('opening'); }, 300);
+    // 🆕 숨김 상태에서 그려진 표지는 글자 너비를 0 으로 쟀다 — 보이게 된 지금 다시 맞춘다
+    _magFitAll(v);
   }
   magBindSwipe();
   if(typeof _notifBellDotSync === 'function') _notifBellDotSync();   // 새로 그린 종에 점 상태를 입힌다
