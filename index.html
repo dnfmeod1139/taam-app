@@ -47901,7 +47901,7 @@ function getNativePlatform(){
 //   「🔍 상태 확인」이 이 값을 그대로 보여준다.
 // 코드 판별용 표식 — 앱은 웹을 불러오므로 "새 코드가 실제로 도는지" 를 확인할 방법이
 //   화면에 하나는 있어야 한다. 진단에 그대로 찍힌다. 푸시 코드를 고칠 때 같이 올린다.
-var PUSH_CODE_VER = 'v4-android-flag';
+var PUSH_CODE_VER = 'v5-await-listeners';
 
 // 🆕 2026.08: 안드로이드 푸시 잠금.
 //   google-services.json 이 빌드에 없는데 register() 를 부르면 네이티브가
@@ -47944,7 +47944,10 @@ async function setupNativePush(){
     //   토큰 이벤트가 리스너를 달기 전에 지나가버려서, 토큰도 오류도 영영 못 받는다.
     //   실제로 그렇게 막혀 있었다(2026-08-26) — 진단에 "register() 호출됨 — 토큰 대기 중"
     //   만 남고 그 다음이 없었다. Capacitor 공식 문서도 리스너 선등록을 요구한다.
-    PushNotifications.addListener('registration', async function(token){
+    // ⚠ addListener 는 Promise 를 돌려준다 — 기다리지 않으면 브리지가 네이티브에 리스너를
+    //   다 붙이기 전에 register() 가 나가고, 그 사이 도착한 토큰 이벤트는 사라진다.
+    //   "토큰도 오류도 안 온다" 의 남은 원인이 이것이다. 하나하나 await 로 확실히 붙인다.
+    await PushNotifications.addListener('registration', async function(token){
       _npMark('토큰 수신', { tokenTail: String(token.value||'').slice(-8) });
       var platform = getNativePlatform();
       var endpoint = (platform === 'ios') ? ('apns://' + token.value) : ('fcm://' + token.value);
@@ -47979,24 +47982,25 @@ async function setupNativePush(){
       } catch(e){ _npMark('구독 저장 실패', { err: String((e && e.message) || e).slice(0,120) }); }
     });
 
-    PushNotifications.addListener('registrationError', function(err){
+    await PushNotifications.addListener('registrationError', function(err){
       // ⚠ aps-environment 가 빌드에 없으면 여기로 온다 —
       //   "no valid aps-environment entitlement string found for application"
       _npMark('등록 실패(APNs)', { err: String((err && (err.error || err.message)) || err).slice(0,160) });
     });
 
-    PushNotifications.addListener('pushNotificationReceived', function(notification){
+    await PushNotifications.addListener('pushNotificationReceived', function(notification){
       console.log('[native-push] received:', notification);
     });
 
-    PushNotifications.addListener('pushNotificationActionPerformed', function(action){
+    await PushNotifications.addListener('pushNotificationActionPerformed', function(action){
       var url = action.notification && action.notification.data && action.notification.data.url;
       if (url && typeof location !== 'undefined') {
         try { location.href = url; } catch(e){}
       }
     });
 
-    // 리스너가 모두 붙은 뒤에야 권한을 묻고 등록한다 — 순서가 뒤집히면 토큰을 놓친다.
+    // 리스너가 '실제로' 붙은 뒤에야 권한을 묻고 등록한다 (위 await 가 그것을 보장한다).
+    _npMark('리스너 등록 완료');
     var perm = await PushNotifications.requestPermissions();
     _npMark('권한 확인', { receive: perm && perm.receive });
     if (perm.receive !== 'granted') { _npMark('권한 거부됨', { receive: perm && perm.receive }); return; }
@@ -48007,12 +48011,20 @@ async function setupNativePush(){
     //   10초 안에 아무 소식이 없으면 그 사실 자체를 기록한다.
     setTimeout(function(){
       var st = window._npState || {};
-      if (st.step === 'register() 호출됨 — 토큰 대기 중') {
-        _npMark('무응답 — iOS 가 토큰도 오류도 주지 않음', {
-          hint: 'aps-environment 없는 빌드이거나 APNs 미도달(네트워크 차단) 의심'
-        });
-      }
-    }, 10000);
+      if (st.step !== 'register() 호출됨 — 토큰 대기 중') return;
+      // 한 번 더 부른다 — 리스너는 이미 확실히 붙어 있으므로, 첫 호출의 응답을
+      //   놓친 경우라면 이번에는 잡힌다. 같은 기기는 같은 토큰이 오므로 중복은 무해하다.
+      _npMark('무응답 — register() 재시도');
+      try { PushNotifications.register(); } catch(_e){}
+      setTimeout(function(){
+        var st2 = window._npState || {};
+        if (st2.step === '무응답 — register() 재시도') {
+          _npMark('무응답 — iOS 가 토큰도 오류도 주지 않음', {
+            hint: '재시도에도 침묵. 빌드 entitlement 는 확인됨 → 기기/네트워크(APNs) 의심'
+          });
+        }
+      }, 8000);
+    }, 8000);
   } catch(e) {
     _npMark('setup 예외', { err: String((e && e.message) || e).slice(0,160) });
   }
