@@ -9346,6 +9346,7 @@ window.closePromoCarousel = function(){
     <div id="nsPurchasePreviewRow" style="padding:0 16px 10px;background:#faf8f5;border-bottom:1px solid rgba(0,0,0,.05);display:none;">
       <button type="button" onclick="pushTestPurchase()" style="width:100%;padding:9px;border:1px solid #c8a96e;background:#fff;color:#5C0A14;border-radius:10px;font-family:var(--font-main);font-size:11px;font-weight:600;cursor:pointer;">🎫 구매 알림 미리보기 (실제 문구 그대로)</button>
       <button type="button" onclick="pushClearBadge()" style="width:100%;margin-top:8px;padding:9px;border:1px solid #ddd;background:#fff;color:#555;border-radius:10px;font-family:var(--font-main);font-size:11px;font-weight:600;cursor:pointer;">🔴 아이콘 배지 지우기 (내 기기)</button>
+      <button type="button" onclick="pushBadgeTest()" style="width:100%;margin-top:6px;padding:9px;border:1px solid #ddd;background:#fff;color:#555;border-radius:10px;font-family:var(--font-main);font-size:11px;font-weight:600;cursor:pointer;">🔢 배지 5로 (닿는지 확인)</button>
     </div>
 
     <!-- 전체 알림 -->
@@ -44614,10 +44615,24 @@ function _tcalDayGroups(dateKey){
     if(_tcalDateKey(String(c.ymd).replace(/-/g,'.')) !== dateKey) return;
     var g = gr(c.venue_id, c.venue_name); g.capacity = parseInt(c.seats)||0; if(c.stime) g.time = c.stime;
   });
-  // 앱 구매 티켓 (초대유래 'inv-' 제외 → 중복 방지)
+  // 앱 구매 티켓 — 초대 결제분은 아래 '초대' 에서 한 번 그리므로 여기서 뺀다
+  //
+  //   🔧 2026.08: 판별 기준을 ticket_product_id 에서 purchase_id 로 바꿨다.
+  //     종전에는 'ticket_product_id 가 inv- 로 시작하면 초대유래' 로 걸렀다.
+  //     그런데 그 inv- 값은 '판매 티켓에 연결되지 않은 초대' 라는 사고의 흔적이었다
+  //     (연결이 없으면 진짜 티켓 id 대신 inv-<초대uuid> 가 들어갔다).
+  //     그 사고를 고쳐 진짜 티켓 id 를 넣자, 이 필터가 초대 결제분을 못 걸러
+  //     캘린더에 초대 1건이 '초대' + '앱구매' 두 줄로 나왔다.
+  //     1/25 이창훈이 3명인데 4명, 2/20 이 4명인데 6명으로 보인 이유다.
+  //
+  //     purchase_id 는 어디에 연결됐든 바뀌지 않는다 — 이쪽이 옳은 기준이다.
+  //       INV-  = 초대 결제 완료 → reservation_invites 에서 그리므로 여기서 제외
+  //       INVH- = 초대 좌석 홀드(미결제) → 초대 목록은 paid 만 읽으므로 여기서 그린다
+  //     옛 데이터(아직 inv- 인 행)도 계속 걸러지게 종전 조건을 함께 둔다.
   (_tcalPurchases||[]).forEach(function(h){
     if(h.status === 'cancelled') return;
     if(String(h.id||'').indexOf('inv-') === 0) return;
+    if(String(h.purchaseId||'').indexOf('INV-') === 0) return;
     if(_tcalDateKey(h.visitDate || h.reservation_date) !== dateKey) return;
     gr(h.restId||h.restaurant_id, h.rest||h.restName||h.restaurant_name).entries.push({type:'app', pid:(h.purchaseId||''), name:(h.buyerName||''), uid:(h._userId||''), pax:(h.pax||1), amount:(parseInt(h.amt)||0), agency:0, time:(h.visitTime||'')});
   });
@@ -49251,6 +49266,26 @@ window.pushClearBadge = async function(){
         + (res.summary.ok > 0 ? '\n\n홈 화면으로 나가서 아이콘을 확인하세요 (몇 초 걸릴 수 있습니다)' : ''));
   } else {
     alert('Edge Function 응답 없음 — send-push 가 최신으로 배포됐는지 확인하세요');
+  }
+};
+
+// 🆕 2026.08: 배지 푸시가 이 기기에 닿는지 가르는 테스트 — 5 를 찍어본다
+//
+//   「지우기」가 성공으로 나오는데 아이콘의 숫자가 안 변하면 두 가지 중 하나다.
+//     ① 푸시가 이 기기에 닿지 않는다 (토큰이 옛것이거나 다른 기기)
+//     ② 닿기는 하는데 iOS 가 '알림 없는 배지 갱신' 을 흘려보낸다
+//   0 은 '아무 일도 안 일어난 것' 과 '지워진 것' 이 화면상 같아서 구분이 안 된다.
+//   5 로 찍어보면 갈린다 — 5 가 뜨면 ①은 아니다.
+window.pushBadgeTest = async function(){
+  if(typeof pushSend !== 'function'){ alert('pushSend 함수 미정의'); return; }
+  var res = await pushSend('user', { silent: true, badge: 5, category: 'system' }, { dedupe: true });
+  if(res && res.summary){
+    alert('배지 5 테스트\n\n시도: '+res.summary.attempted+'\n성공: '+res.summary.ok+'\n실패: '+res.summary.failed
+      + '\n\n홈 화면 아이콘을 보세요 (몇 초 소요)'
+      + '\n· 5 로 바뀜  → 배지 푸시는 닿는다. 0 만 확인하면 된다'
+      + '\n· 1 그대로   → 이 기기에 배지 푸시가 닿지 않는다');
+  } else {
+    alert('Edge Function 응답 없음 — send-push 배포 확인');
   }
 };
 
