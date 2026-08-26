@@ -9321,8 +9321,13 @@ window.closePromoCarousel = function(){
 
   <div class="mp-sub-scroll" style="padding-bottom:80px;">
 
-    <!-- 🆕 OS 푸시 알림 권한 -->
-    <div class="ns-row" style="background:#faf8f5;border-bottom:1px solid rgba(0,0,0,.05);">
+    <!-- 🆕 OS 푸시 알림 권한
+         ⚠ 앱(네이티브)에서는 슈퍼어드민에게만 보인다.
+           앱은 첫 실행에 iOS 가 권한을 묻고 등록까지 알아서 끝낸다. 회원이 여기서
+           할 일이 없는데 「준비 중 · 다시 시도」가 남아 있으면, 뭔가 덜 된 것처럼 보여
+           의미 없이 계속 누르게 된다. 알림을 끄고 싶으면 아래 토글로 끄면 된다.
+           웹/PWA 는 그대로 둔다 — 거기서는 이 버튼을 눌러야 브라우저 권한을 받는다. -->
+    <div id="nsPermRow" class="ns-row" style="background:#faf8f5;border-bottom:1px solid rgba(0,0,0,.05);">
       <div class="ns-row-info">
         <div class="ns-row-label" id="nsPermLabel" data-i18n="notif_settings.device_push">📱 기기 푸시 알림</div>
         <div class="ns-row-sub" id="nsPermSub" data-i18n="notif_settings.device_push_sub">앱이 백그라운드일 때도 알림을 받으려면 권한 허용 필요</div>
@@ -9340,6 +9345,7 @@ window.closePromoCarousel = function(){
     <!-- 🆕 구매 알림 미리보기 (실제 구매 알림 문구 그대로 본인 기기로 발송) -->
     <div id="nsPurchasePreviewRow" style="padding:0 16px 10px;background:#faf8f5;border-bottom:1px solid rgba(0,0,0,.05);display:none;">
       <button type="button" onclick="pushTestPurchase()" style="width:100%;padding:9px;border:1px solid #c8a96e;background:#fff;color:#5C0A14;border-radius:10px;font-family:var(--font-main);font-size:11px;font-weight:600;cursor:pointer;">🎫 구매 알림 미리보기 (실제 문구 그대로)</button>
+      <button type="button" onclick="pushClearBadge()" style="width:100%;margin-top:8px;padding:9px;border:1px solid #ddd;background:#fff;color:#555;border-radius:10px;font-family:var(--font-main);font-size:11px;font-weight:600;cursor:pointer;">🔴 아이콘 배지 지우기 (내 기기)</button>
     </div>
 
     <!-- 전체 알림 -->
@@ -22629,6 +22635,12 @@ function openNotifSettings(){
   if(_ppRow) _ppRow.style.display = _isSuper ? 'block' : 'none';
   var _dgRow = document.getElementById('nsDiagRow');
   if(_dgRow) _dgRow.style.display = _isSuper ? 'flex' : 'none';
+  // 기기 푸시 알림 줄 — 앱에서는 슈퍼어드민만. 웹/PWA 는 권한 요청 버튼이 필요하니 그대로 둔다.
+  var _pmRow = document.getElementById('nsPermRow');
+  if(_pmRow){
+    var _nat = (typeof isNativeApp === 'function') && isNativeApp();
+    _pmRow.style.display = (_nat && !_isSuper) ? 'none' : 'flex';
+  }
 }
 // ════════════════════════════════════════════════
 // 💳 결제 수단 관리 (빌링키 방식)
@@ -48871,6 +48883,27 @@ window.pushTest = async function(){
     alert(msg);
   } else {
     alert('Edge Function 응답 없음 — Supabase Dashboard → Edge Functions → send-push → Logs 확인');
+  }
+};
+
+// 🆕 2026.08: 아이콘 배지(빨간 숫자) 지우기 — 내 기기 전부
+//
+//   왜 필요한가
+//     서버는 알림마다 badge:1 을 보내는데, 그 값을 0 으로 되돌리는 쪽이 없었다.
+//     배지는 알림센터와 별개라, 알림을 다 읽고 지워도 홈 화면 아이콘의 「1」은 남는다.
+//
+//   정공법은 앱이 열릴 때 스스로 0 으로 되돌리는 것이고, 그건 AppDelegate 에 넣었다
+//   (scripts/ios_push_appdelegate.py). 다만 그건 새 빌드가 스토어에 올라가야 적용된다.
+//   이미 「1」이 박혀 있는 기기를 지금 정리하려면 서버가 badge:0 을 한 번 보내야 한다.
+//   silent=true 라 알림은 뜨지 않고 숫자만 사라진다.
+window.pushClearBadge = async function(){
+  if(typeof pushSend !== 'function'){ alert('pushSend 함수 미정의'); return; }
+  var res = await pushSend('user', { silent: true, badge: 0, category: 'system' }, { dedupe: true });
+  if(res && res.summary){
+    alert('배지 지우기\n\n시도: '+res.summary.attempted+'\n성공: '+res.summary.ok+'\n실패: '+res.summary.failed
+        + (res.summary.ok > 0 ? '\n\n홈 화면으로 나가서 아이콘을 확인하세요 (몇 초 걸릴 수 있습니다)' : ''));
+  } else {
+    alert('Edge Function 응답 없음 — send-push 가 최신으로 배포됐는지 확인하세요');
   }
 };
 

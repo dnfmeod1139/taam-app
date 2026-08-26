@@ -312,29 +312,47 @@ async function getApnsJwt(): Promise<string> {
   return _apnsJwt;
 }
 
+// 🆕 2026.08: 배지(아이콘의 빨간 숫자) 제어
+//   payload.badge  — 숫자를 그대로 쓴다. 0 이면 배지를 지운다. 없으면 1 (종전 동작).
+//   payload.silent — 알림을 띄우지 않고 배지만 바꾼다 (background push).
+//     배지는 알림센터와 별개라, 알림을 다 읽어도 아이콘의 숫자는 남는다.
+//     앱이 열릴 때 0 으로 돌리는 게 정공법이지만(AppDelegate), 그건 새 빌드가
+//     스토어에 올라가야 적용된다. 이미 「1」이 박힌 기기를 지금 정리하려면
+//     서버가 badge:0 을 한 번 보내주는 길이 있어야 한다.
+function _apsBadge(payload: any): number {
+  return (typeof payload?.badge === "number" && payload.badge >= 0) ? payload.badge : 1;
+}
+
 async function sendApnsPush(deviceToken: string, payload: any) {
   try {
     const jwt = await getApnsJwt();
-    const body = {
-      aps: {
-        alert: {
-          title: String(payload?.title || "TAAM"),
-          body: String(payload?.body || ""),
-        },
-        sound: "default",
-        badge: 1,
-      },
-      url: String(payload?.url || "/"),
-      category: String(payload?.category || "system"),
-      tag: String(payload?.tag || ("taam-" + Date.now())),
-    };
+    const silent = payload?.silent === true;
+    const body = silent
+      ? {
+          // 조용한 배지 갱신 — alert/sound 를 넣으면 안 된다 (넣으면 알림이 뜬다)
+          aps: { "content-available": 1, badge: _apsBadge(payload) },
+        }
+      : {
+          aps: {
+            alert: {
+              title: String(payload?.title || "TAAM"),
+              body: String(payload?.body || ""),
+            },
+            sound: "default",
+            badge: _apsBadge(payload),
+          },
+          url: String(payload?.url || "/"),
+          category: String(payload?.category || "system"),
+          tag: String(payload?.tag || ("taam-" + Date.now())),
+        };
     const res = await fetch(`https://${APNS_HOST}/3/device/${deviceToken}`, {
       method: "POST",
       headers: {
         "authorization": "bearer " + jwt,
         "apns-topic": APNS_BUNDLE_ID,
-        "apns-push-type": "alert",
-        "apns-priority": "10",
+        // background 푸시는 push-type 과 priority 가 alert 와 달라야 APNs 가 받는다
+        "apns-push-type": silent ? "background" : "alert",
+        "apns-priority": silent ? "5" : "10",
         "content-type": "application/json",
       },
       body: JSON.stringify(body),
@@ -536,6 +554,16 @@ Deno.serve(async (req: Request) => {
           return { ok: false, status: 500, error: "project_id 추출 실패 — Service Account JSON 확인" };
         }
 
+        // 🆕 2026.08: 조용한 배지 갱신은 FCM 경로로 보내지 않는다.
+        //   FCM v1 의 notification 블록은 화면에 알림을 띄운다 — "배지만 지우려다
+        //   빈 알림이 뜨는" 결과가 된다. APNs 직결(APNS_READY)일 때만 지원한다.
+        if (payload?.silent === true) {
+          return {
+            ok: false, status: 400,
+            error: "silent 배지 갱신은 APNs 직결에서만 지원 (APNS_* 시크릿 확인)",
+          };
+        }
+
         // FCM v1 메시지 페이로드
         // data 필드는 모든 값을 string 으로 강제 (FCM v1 명세)
         const msgBody = {
@@ -566,7 +594,7 @@ Deno.serve(async (req: Request) => {
                     body: String(payload.body || ""),
                   },
                   sound: "default",
-                  badge: 1,
+                  badge: _apsBadge(payload),   // 🆕 payload.badge 존중 (0 = 배지 지움)
                 },
               },
             },
