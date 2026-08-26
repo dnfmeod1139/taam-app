@@ -47678,6 +47678,28 @@ window.notifPermSync = function(){
   var sub = document.getElementById('nsPermSub');
   var btn = document.getElementById('nsPermBtn');
   if(!label || !sub || !btn) return;
+
+  // 🆕 2026.08: 네이티브 앱은 웹 Notification API 를 쓰지 않는다(APNs 경로).
+  //   그런데 그 API 가 없다는 이유로 「미지원 · 이 브라우저는 알림을 지원하지 않습니다」
+  //   가 떴다 — 회원 눈에는 "이 폰은 알림이 안 되는 폰" 으로 읽힌다. 사실과 다르고,
+  //   실제로 그렇게 오해를 샀다. 앱에서는 OS 권한과 등록 상태를 그대로 보여준다.
+  if (typeof isNativeApp === 'function' && isNativeApp()) {
+    var st = (window._npState && window._npState.step) || '';
+    var done = st.indexOf('구독 저장 완료') >= 0;
+    var failed = st.indexOf('실패') >= 0 || st.indexOf('무응답') >= 0 || st.indexOf('거부') >= 0;
+    label.textContent = done ? '✅ 기기 푸시 알림 — 사용 중'
+                      : failed ? '⚠️ 기기 푸시 알림 — 등록 미완료'
+                      : '📱 기기 푸시 알림 — 등록 중';
+    sub.textContent = done ? '앱이 꺼져 있어도 알림을 받습니다'
+                    : failed ? ('상태: ' + st + ' — 「상태 확인」에서 자세히 볼 수 있어요')
+                    : '알림 등록을 진행하고 있어요';
+    btn.disabled = done;
+    btn.textContent = done ? '사용 중' : '다시 시도';
+    var c = done ? '#22c55e' : (failed ? '#9B1C1C' : '#1a1a18');
+    btn.style.background = c; btn.style.borderColor = c;
+    return;
+  }
+
   if(typeof Notification === 'undefined'){
     label.textContent = '📱 기기 푸시 알림';
     sub.textContent = '이 브라우저는 알림을 지원하지 않습니다';
