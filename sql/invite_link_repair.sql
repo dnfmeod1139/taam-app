@@ -37,7 +37,9 @@ select inv.id                      as "초대 id",
            and coalesce(x.status,'') <> 'cancelled')  as "현재 점유"
   from public.reservation_invites inv
   join public.ticket_products tp
-    on  tp.rest_id = inv.restaurant_id
+    -- ⚠ ticket_products.rest_id 는 uuid, reservation_invites.restaurant_id 는 text 다.
+    --   캐스트 없이 비교하면 42883 (operator does not exist: uuid = text) 로 실패한다.
+    on  tp.rest_id::text = inv.restaurant_id
     -- 날짜는 양쪽 다 텍스트다 ('YYYY.MM.DD' 또는 연도 없는 'MM.DD').
     -- MM.DD 는 반드시 같아야 하고, 둘 다 연도를 가지고 있으면 연도까지 같아야 한다.
     and right(replace(tp.date,'-','.'), 5) = right(replace(inv.visit_date,'-','.'), 5)
@@ -112,7 +114,8 @@ begin
     reservation_date, visit_time, party_size, price, status, purchase_id,
     buyer_name, buyer_phone, extra_data, created_at
   ) values (
-    inv.invitee_user_id, inv.restaurant_id, inv.restaurant_name, v_tp_id, tp.type_class,
+    -- 매장 id 는 티켓 쪽(uuid)을 기준으로 넣는다 — 초대의 text 값과 형식이 다를 수 있다
+    inv.invitee_user_id, tp.rest_id::text, inv.restaurant_name, v_tp_id, tp.type_class,
     inv.visit_date, inv.visit_time, inv.pax, coalesce(inv.total_amount,0),
     case when v_paid then 'active' else 'hold' end,
     (case when v_paid then 'INV-' else 'INVH-' end) || left(inv.id::text,8) || '-' || extract(epoch from now())::bigint,
