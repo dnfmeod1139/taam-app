@@ -17464,6 +17464,9 @@ function openMain(){
     // 🆕 2026.08: 실시간 반영 구독을 이 계정에 붙인다.
     //   예치금 부여·좌석 매진이 앱을 다시 켜지 않아도 화면에 온다.
     try { if (typeof _liveBind === 'function') _liveBind(); } catch(_le){}
+    // 🆕 2026.08: 외부 결제창에서 돌아왔거나 앱을 다시 켠 경우, 서버에 남아 있는
+    //   내 좌석 홀드를 다시 물린다. 안 하면 자기가 잡아둔 자리에 「마감」이 뜬다.
+    try { if (typeof _tkRestoreSeatHold === 'function') _tkRestoreSeatHold(); } catch(_hr){}
     // 🆕 네이티브 앱이 구버전이면 업데이트를 안내한다 (웹 화면은 항상 최신이지만
     //   푸시·플러그인 같은 네이티브 껍데기는 스토어 업데이트를 받아야 바뀐다)
     try { if (typeof taamCheckAppUpdate === 'function') taamCheckAppUpdate(); } catch(_ue){}
@@ -21439,13 +21442,94 @@ var _tkHoldTimer = null;
 var _tkHoldDeadline = 0;
 
 function _tkHoldBannerHtml(id){
-  return '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;'
-    + 'background:#FBF3F2;border:1px solid #EEDADA;border-radius:12px;padding:10px 13px;margin-bottom:14px;">'
-    + '<span style="font-size:11.5px;font-weight:700;color:#8C6A6A;line-height:1.4;">' + t('ticket.hold_title','좌석을 잡아두었어요') + '<br>'
-    + '<span style="font-weight:600;color:#A88C8C;">' + t('ticket.hold_sub','시간 내 완료하지 않으면 자동 취소됩니다') + '</span></span>'
-    + '<span id="'+id+'" style="font-family:var(--font-main);font-size:20px;font-weight:900;color:#6A1A1A;letter-spacing:.02em;">5:00</span>'
+  return '<div style="background:#FBF3F2;border:1px solid #EEDADA;border-radius:12px;padding:10px 13px;margin-bottom:14px;">'
+    + '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">'
+    +   '<span style="font-size:11.5px;font-weight:700;color:#8C6A6A;line-height:1.4;">' + t('ticket.hold_title','좌석을 잡아두었어요') + '<br>'
+    +   '<span style="font-weight:600;color:#A88C8C;">' + t('ticket.hold_sub','시간 내 완료하지 않으면 자동 취소됩니다') + '</span></span>'
+    +   '<span id="'+id+'" style="font-family:var(--font-main);font-size:20px;font-weight:900;color:#6A1A1A;letter-spacing:.02em;">5:00</span>'
+    + '</div>'
+    // 🆕 2026.08: 즉시 반납 버튼 — 5분을 기다릴 이유가 없다.
+    //   외부 결제창을 닫고 돌아왔는데 마음이 바뀐 경우, 이걸 눌러야 자리가 바로 풀린다.
+    //   안 그러면 본인에게도 다른 회원에게도 5분 내내 「마감」으로 보인다.
+    + '<button onclick="tkCancelHold()" style="width:100%;margin-top:9px;height:34px;border:1px solid #E0C9C9;'
+    +   'border-radius:9px;background:#fff;color:#8C4A4A;font-family:\'Noto Sans KR\',sans-serif;'
+    +   'font-size:11.5px;font-weight:800;cursor:pointer;">' + t('ticket.hold_cancel','✕ 좌석 반납하고 나가기') + '</button>'
     + '</div>';
 }
+
+// 🆕 2026.08: 홀드를 지금 반납한다 (회원이 직접 누르는 취소)
+window.tkCancelHold = async function(){
+  if(!window._tkSeatHoldId){
+    // 이미 풀렸으면 화면만 정리한다
+    _tkCloseHoldUi();
+    return;
+  }
+  if(typeof _tkStopHoldCountdown === 'function') _tkStopHoldCountdown();
+  try { await _tkReleaseSeatHold(); } catch(_e){}
+  _tkCloseHoldUi();
+  if(window._tkSeatHoldId){
+    // 반납이 실패하면 거짓말을 하지 않는다 — 서버 5분 스윕이 정리한다
+    showToast('⚠', t('ticket.hold_cancel_fail_t','반납 실패'),
+      t('ticket.hold_cancel_fail_m','통신 오류로 지금 반납하지 못했어요 — 5분 뒤 자동으로 풀립니다'));
+  } else {
+    showToast('✓', t('ticket.hold_cancel_ok_t','좌석 반납'),
+      t('ticket.hold_cancel_ok_m','잡아둔 자리를 풀었어요'));
+  }
+  try { if(typeof taamSyncNow === 'function') taamSyncNow(true); } catch(_s){}
+};
+
+function _tkCloseHoldUi(){
+  ['tdConfirmPopup','tdPurchaseSheet'].forEach(function(id){
+    var p = document.getElementById(id); if(p) p.style.display = 'none';
+  });
+  ['cardPayPopup','noCardPopup'].forEach(function(id){
+    var p = document.getElementById(id); if(p) p.remove();
+  });
+}
+
+// 🆕 지금 이 티켓의 좌석을 내가 잡고 있는가
+function _tkHoldsThisTicket(t){
+  if(!t || !window._tkSeatHoldId) return false;
+  // 홀드 purchase_id 형식: 'PAYH-<ticketId>_<timestamp>'
+  return String(window._tkSeatHoldId).indexOf('PAYH-' + String(t.id) + '_') === 0;
+}
+window._tkHoldsThisTicket = _tkHoldsThisTicket;
+
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026.08: 앱을 다시 켜도 내 홀드를 기억한다
+//
+//   외부 결제창(토스)으로 나갔다가 앱을 닫고 다시 들어오면 _tkSeatHoldId 가
+//   메모리에서 사라진다. 그런데 서버에는 홀드가 5분간 그대로 남아 있다.
+//   그 사이 티켓이 매진으로 바뀌어 있으면, 자기가 잡아둔 자리인데도
+//   「마감」이 떠서 자기 자리를 자기가 못 산다. 실제로 그렇게 막혔다.
+//
+//   부팅·복귀 때 내 PAYH- 홀드를 서버에서 찾아 다시 물린다. 그러면
+//   ① 잔여석 계산에서 내 홀드가 빠지고 ② 마감 판정에서 예외가 되고
+//   ③ 남은 시간과 「좌석 반납」 버튼을 다시 보여줄 수 있다.
+// ═══════════════════════════════════════════════════════════════
+async function _tkRestoreSeatHold(){
+  if(!window.sb || window._tkSeatHoldId) return;
+  try {
+    var ur = await window.sb.auth.getUser();
+    var u = ur && ur.data && ur.data.user;
+    if(!u) return;
+    var r = await window.sb.from('tickets')
+      .select('purchase_id, party_size, ticket_product_id, created_at')
+      .eq('user_id', u.id).eq('status', 'hold')
+      .like('purchase_id', 'PAYH-%')
+      .order('created_at', { ascending: false }).limit(1);
+    var row = (r && r.data && r.data[0]) || null;
+    if(!row) return;
+    // 5분이 지난 홀드는 서버 스윕이 곧 정리한다 — 붙잡지 않는다
+    var age = Date.now() - new Date(row.created_at).getTime();
+    if(!(age >= 0 && age < 5*60*1000)) return;
+    window._tkSeatHoldId = row.purchase_id;
+    window._tkSeatHoldPax = parseInt(row.party_size) || 0;
+    console.log('[seatHold] 복구:', row.purchase_id, window._tkSeatHoldPax + '석 (경과 '
+      + Math.round(age/1000) + '초)');
+  } catch(e){ console.warn('[seatHold] 복구 실패(무시):', e && e.message); }
+}
+window._tkRestoreSeatHold = _tkRestoreSeatHold;
 
 function _tkStartHoldCountdown(){
   _tkStopHoldCountdown();
@@ -36461,6 +36545,11 @@ var TRANSLATIONS = {
       hold_sub:'시간 내 완료하지 않으면 자동 취소됩니다',
       hold_expired_t:'좌석 홀드 만료',
       hold_expired_m:'5분이 지나 좌석을 반납했어요 — 다시 시도해주세요',
+      hold_cancel:'✕ 좌석 반납하고 나가기',
+      hold_cancel_ok_t:'좌석 반납',
+      hold_cancel_ok_m:'잡아둔 자리를 풀었어요',
+      hold_cancel_fail_t:'반납 실패',
+      hold_cancel_fail_m:'통신 오류로 지금 반납하지 못했어요 — 5분 뒤 자동으로 풀립니다',
       ask_deposit:'예치금 {amt} 을 사용해<br>티켓을 구매하시겠습니까?',
       ask_card:'부족한 금액 {amt} 을<br>카드로 결제하시겠습니까?',
       login_need_t:'로그인이 필요합니다',
@@ -37264,6 +37353,11 @@ var TRANSLATIONS = {
       hold_sub:'Cancelled automatically if not completed in time',
       hold_expired_t:'Hold expired',
       hold_expired_m:'5 minutes passed — the seat was released. Please try again',
+      hold_cancel:'✕ Release seat and exit',
+      hold_cancel_ok_t:'Seat released',
+      hold_cancel_ok_m:'Your held seat is now available again',
+      hold_cancel_fail_t:'Release failed',
+      hold_cancel_fail_m:'Network error — the seat will be released automatically in 5 minutes',
       ask_deposit:'Purchase this ticket using<br>{amt} from your deposit?',
       ask_card:'Pay the remaining {amt}<br>by card?',
       login_need_t:'Sign in required',
@@ -38263,6 +38357,11 @@ TRANSLATIONS.ja = {
     hold_sub:'時間内に完了しないと自動キャンセルされます',
     hold_expired_t:'確保時間切れ',
     hold_expired_m:'5分が経過し席を解放しました — もう一度お試しください',
+    hold_cancel:'✕ 席を解放して戻る',
+    hold_cancel_ok_t:'席を解放',
+    hold_cancel_ok_m:'確保していた席を解放しました',
+    hold_cancel_fail_t:'解放に失敗',
+    hold_cancel_fail_m:'通信エラーで今は解放できませんでした — 5分後に自動で解放されます',
     ask_deposit:'預り金 {amt} を使って<br>チケットを購入しますか？',
     ask_card:'不足額 {amt} を<br>カードで決済しますか？',
     login_need_t:'ログインが必要です',
@@ -41643,7 +41742,12 @@ function pcalOpenTicket(id){
   }
   var r = restaurantDB.find(function(x){ return String(x.id) === String(t.restId); }) || null;
   var expired = (typeof _isTicketExpired === 'function') && _isTicketExpired(t);
-  var dead = expired || t.status === 'soldout';
+  // 🔧 2026.08: 내가 잡아둔 좌석 때문에 내가 막히지 않게 한다.
+  //   결제하기를 누르면 좌석이 잡히고, 그 좌석이 마지막 자리였다면 티켓이 매진이 된다.
+  //   그 상태에서 외부 결제창을 닫고 돌아오면 자기 홀드 때문에 「마감」이 뜬다 —
+  //   자기 자리를 자기가 못 사는 상태다. 실제로 그렇게 막혔다.
+  var _myHold = (typeof _tkHoldsThisTicket === 'function') && _tkHoldsThisTicket(t);
+  var dead = expired || (t.status === 'soldout' && !_myHold);
   if(!dead){
     if(typeof tcIsLocked === 'function' && tcIsLocked(t) && _currentRole !== 'superadmin'){
       if(typeof tcShowLockPopup === 'function') tcShowLockPopup(t, r);
@@ -41818,6 +41922,12 @@ function _pcalDetailHtml(t, r, dead, expired){
   h += '<div class="pd-price" id="pdBarTotal"></div>';
   if(dead){
     h += '<button class="pd-cta off">' + (t.status === 'soldout' ? '마감' : '기한 만료') + '</button>';
+  } else if((typeof _tkHoldsThisTicket === 'function') && _tkHoldsThisTicket(t)){
+    // 🆕 내가 잡아둔 자리 — 계속 결제하거나, 그 자리에서 반납하고 나갈 수 있게 한다
+    h += '<button onclick="tkCancelHold()" style="height:52px;padding:0 14px;margin-right:8px;border:1px solid #E0C9C9;'
+      +  'border-radius:12px;background:#fff;color:#8C4A4A;font-family:\'Noto Sans KR\',sans-serif;'
+      +  'font-size:12px;font-weight:800;cursor:pointer;white-space:nowrap;">좌석 반납</button>';
+    h += '<button class="pd-cta wait" id="pdPayBtn" onclick="pcalPay()">결제 계속하기</button>';
   } else {
     h += '<button class="pd-cta wait" id="pdPayBtn" onclick="pcalPay()">결제하기</button>';
   }
