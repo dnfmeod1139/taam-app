@@ -61,9 +61,13 @@ on conflict (key) do update
 --     받을 수 있는 업데이트가 없는데 강제 안내를 띄우면, 회원은 앱을 못 쓰고
 --     스토어에는 옛 버전밖에 없는 상태가 된다 — 빠져나갈 길이 없다.
 --
---   빌드번호는 실제로 출시된 값으로 바꾼다.
---     iOS     = TestFlight/App Store 의 빌드 번호 (예: 34)
---     Android = Play 의 versionCode      (예: 1010)
+--   2026-08-27 빌드 결과 (커밋 f64ee77 · 두 스토어 모두 1.02)
+--     iOS     ipa #35     ← Codemagic 빌드 이름은 #34 다. ipa 에 박히는 건 +1 이라
+--                            하나씩 어긋난다. 넣어야 할 값은 ipa 쪽(35)이다.
+--     Android aab #1011   ← versionCode. 1009 보다 크기만 하면 되므로 건너뛴 건 무해하다.
+--
+--   ⚠ 두 스토어의 출시 시점이 다르다. 출시되지 않은 쪽은 0 으로 둔다 —
+--     받을 수 없는 업데이트를 안내하면 회원이 빠져나갈 길이 없다.
 --
 --   왜 안드로이드는 강제인가
 --     1008·1009 에는 푸시(FCM)가 없거나 반쪽이다. 그 상태로 두면 그 회원들에게는
@@ -77,12 +81,12 @@ update public.app_config
    set value = jsonb_build_object(
      'ios', jsonb_build_object(
        'min_build',    0,        -- iOS 는 강제하지 않는다 (1.01 도 정상 동작)
-       'latest_build', 34,       -- ← 실제 출시된 iOS 빌드번호로
+       'latest_build', 0,        -- ← 1.02 가 App Store 에 출시된 뒤에 35 로 올린다
        'url',          'https://apps.apple.com/kr/app/id6783459650'
      ),
      'android', jsonb_build_object(
-       'min_build',    1010,     -- ← 실제 출시된 versionCode 로 (이 아래는 강제)
-       'latest_build', 1010,
+       'min_build',    1011,     -- 이 아래(1008·1009·1010)는 강제 업데이트
+       'latest_build', 1011,
        'url',          'https://play.google.com/store/apps/details?id=com.playtaam.app'
      )
    ),
@@ -96,9 +100,9 @@ update public.app_config
 -- ═══════════════════════════════════════════════════════════════
 -- 나중에 숫자만 바꾸고 싶을 때 (전체를 다시 쓰지 않고 한 칸만)
 --
---   -- iOS 최신 빌드를 34 로
+--   -- iOS 1.02 가 App Store 에 출시된 뒤 (ipa #35)
 --   update public.app_config
---      set value = jsonb_set(value, '{ios,latest_build}', '34'::jsonb),
+--      set value = jsonb_set(value, '{ios,latest_build}', '35'::jsonb),
 --          updated_at = now()
 --    where key = 'app_version';
 --
@@ -109,9 +113,9 @@ update public.app_config
 --          updated_at = now()
 --    where key = 'app_version';
 --
---   -- Android 최신 versionCode 를 1010 으로
+--   -- Android 최신 versionCode 를 1011 로
 --   update public.app_config
---      set value = jsonb_set(value, '{android,latest_build}', '1010'::jsonb),
+--      set value = jsonb_set(value, '{android,latest_build}', '1011'::jsonb),
 --          updated_at = now()
 --    where key = 'app_version';
 --
