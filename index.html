@@ -9329,8 +9329,10 @@ window.closePromoCarousel = function(){
       </div>
       <button type="button" id="nsPermBtn" onclick="notifPermRequest()" data-i18n="notif_settings.btn_allow" style="padding:8px 14px;border:1px solid #1a1a18;background:#1a1a18;color:#fff;border-radius:14px;font-family:var(--font-main);font-size:11px;font-weight:700;cursor:pointer;letter-spacing:.02em;flex-shrink:0;">허용하기</button>
     </div>
-    <!-- 🆕 진단 / 테스트 버튼 (트러블슈팅용) -->
-    <div style="padding:10px 16px;background:#faf8f5;border-bottom:1px solid rgba(0,0,0,.05);display:flex;gap:8px;">
+    <!-- 🆕 진단 / 테스트 버튼 (트러블슈팅용) — 슈퍼어드민에게만 보인다.
+         회원에게는 눌러도 alert 로 내부 상태가 쏟아지는 버튼일 뿐이고,
+         「등록 미완료」 같은 문구와 겹치면 앱이 고장난 것처럼 읽힌다. -->
+    <div id="nsDiagRow" style="padding:10px 16px;background:#faf8f5;border-bottom:1px solid rgba(0,0,0,.05);display:none;gap:8px;">
       <button type="button" onclick="pushDiagnose()" data-i18n="notif_settings.btn_check" style="flex:1;padding:9px;border:1px solid #ddd;background:#fff;color:#555;border-radius:10px;font-family:var(--font-main);font-size:11px;font-weight:600;cursor:pointer;">🔍 상태 확인</button>
       <button type="button" onclick="pushTest()" data-i18n="notif_settings.btn_test" style="flex:1;padding:9px;border:1px solid #c8a96e;background:#fff;color:#5C0A14;border-radius:10px;font-family:var(--font-main);font-size:11px;font-weight:600;cursor:pointer;">🔔 테스트 발송</button>
       <button type="button" onclick="pushSubscribeIfNeeded().then(function(){if(typeof notifPermSync==='function')notifPermSync();}).catch(function(e){alert('재구독 실패: '+(e.message||e))})" data-i18n="notif_settings.btn_resub" style="flex:1;padding:9px;border:1px solid #ddd;background:#fff;color:#555;border-radius:10px;font-family:var(--font-main);font-size:11px;font-weight:600;cursor:pointer;">🔄 재구독</button>
@@ -22620,13 +22622,13 @@ function openNotifSettings(){
   if(typeof applyI18n==='function') applyI18n(p);
   // 🆕 OS 푸시 권한 버튼 상태 동기화
   if(typeof notifPermSync === 'function') setTimeout(notifPermSync, 30);
-  // 🆕 구매 알림 미리보기 버튼은 슈퍼어드민에게만 노출
+  // 🆕 진단·테스트 버튼과 구매 알림 미리보기는 슈퍼어드민에게만 노출
+  var _isSuper = (typeof _isSuperAdmin === 'function') ? _isSuperAdmin()
+    : (typeof _currentRole !== 'undefined' && _currentRole === 'superadmin');
   var _ppRow = document.getElementById('nsPurchasePreviewRow');
-  if(_ppRow){
-    var _isSuper = (typeof _isSuperAdmin === 'function') ? _isSuperAdmin()
-      : (typeof _currentRole !== 'undefined' && _currentRole === 'superadmin');
-    _ppRow.style.display = _isSuper ? 'block' : 'none';
-  }
+  if(_ppRow) _ppRow.style.display = _isSuper ? 'block' : 'none';
+  var _dgRow = document.getElementById('nsDiagRow');
+  if(_dgRow) _dgRow.style.display = _isSuper ? 'flex' : 'none';
 }
 // ════════════════════════════════════════════════
 // 💳 결제 수단 관리 (빌링키 방식)
@@ -33425,8 +33427,77 @@ function renderRestList(){
 }
 // 🆕 2026.08: 티켓 리스트 탭 — 발행 / 오픈 예약 / 미공개 보관
 var _tuListTab = 'open';
-function tuListSetTab(k){ _tuListTab = k; renderTicketList(); }
+function tuListSetTab(k){ _tuListTab = k; _tuFlexSel = {}; renderTicketList(); }
 window.tuListSetTab = tuListSetTab;
+
+// ════════════════════════════════════════════════════════════════
+// 🆕 2026.08: 자유석 판매 모드(엄격⇄완화) 일괄 변경
+//
+//   무엇이 문제였나
+//     티켓마다 「🧩 엄격 (조각 방지) — 탭하여 완화로」 버튼이 한 줄씩 붙어 있었다.
+//     자유석 티켓이 많아지자 목록이 그 버튼으로 뒤덮여, 정작 봐야 할 날짜·좌석이
+//     묻혔다. 게다가 여러 개를 바꾸려면 하나씩 눌러야 했다.
+//
+//   어떻게 바꿨나
+//     행에서는 현재 모드를 아주 작은 글씨로만 보여주고(🧩/🌊), 바꾸는 일은
+//     탭 바 아래 한 줄로 모았다. 그 줄을 누르면 선택 모드가 되고, 체크박스로
+//     여러 개를 골라 한 번에 완화/엄격으로 돌린다.
+// ════════════════════════════════════════════════════════════════
+var _tuFlexMode = false;    // 선택 모드 on/off
+var _tuFlexSel  = {};       // { ticketId: true }
+
+function _tuIsFlex(t){ return !!(t && t.slots && t.slots.mode === 'flex'); }
+
+function tuFlexModeToggle(){
+  _tuFlexMode = !_tuFlexMode;
+  if(!_tuFlexMode) _tuFlexSel = {};
+  renderTicketList();
+}
+window.tuFlexModeToggle = tuFlexModeToggle;
+
+function tuFlexSelToggle(id){
+  id = String(id);
+  if(_tuFlexSel[id]) delete _tuFlexSel[id];
+  else _tuFlexSel[id] = true;
+  renderTicketList();
+}
+window.tuFlexSelToggle = tuFlexSelToggle;
+
+// 지금 탭에 보이는 자유석 티켓 전체 선택 / 해제
+function tuFlexSelAll(ids){
+  var all = (ids||[]).every(function(id){ return _tuFlexSel[String(id)]; });
+  _tuFlexSel = {};
+  if(!all) (ids||[]).forEach(function(id){ _tuFlexSel[String(id)] = true; });
+  renderTicketList();
+}
+window.tuFlexSelAll = tuFlexSelAll;
+
+function tuFlexApply(toStrict){
+  var ids = Object.keys(_tuFlexSel);
+  if(!ids.length){ showToast('⚠','판매 모드','선택된 티켓이 없습니다'); return; }
+  var label = toStrict ? '엄격(조각 방지)' : '완화(자유 판매)';
+  var msg = toStrict
+    ? '선택한 ' + ids.length + '건을 🧩 엄격(조각 방지) 모드로 바꿀까요?\n지금부터의 구매는 "못 채우는 잔여석"이 생기지 않게 제한됩니다.'
+    : '선택한 ' + ids.length + '건을 🌊 완화(자유 판매) 모드로 바꿀까요?\n모든 허용 인원이 자유롭게 판매되고, 잔여 1석이 되면 1인 구매가 자동으로 열립니다.';
+  if(!confirm(msg)) return;
+
+  var changed = [];
+  ids.forEach(function(id){
+    var t = ticketDB.find(function(x){ return String(x.id) === String(id); });
+    if(!t || !_tuIsFlex(t)) return;
+    if((t.slots.strict === true) === toStrict) return;   // 이미 그 모드면 건드리지 않는다
+    t.slots = Object.assign({}, t.slots, { strict: toStrict });
+    changed.push(String(t.id));
+  });
+
+  if(!changed.length){ showToast('✓','판매 모드','이미 모두 '+label+' 입니다'); return; }
+  // 바뀐 것만 서버에 쓴다 — 전체 upsert 는 낡은 로컬값이 최신 티켓을 덮을 위험이 있다
+  saveTickets(changed);
+  _tuFlexMode = false; _tuFlexSel = {};
+  renderTicketList();
+  showToast('✓','판매 모드 변경', changed.length + '건을 ' + label + ' 로 전환 — 즉시 적용');
+}
+window.tuFlexApply = tuFlexApply;
 // 판매 공개 상태 분류: open=발행(자동 공개된 예약 건 포함) / sched=오픈 예약 / draft=미공개 보관
 function _tuSaleKind(t){
   var ss = t.saleState || 'open';
@@ -33467,7 +33538,45 @@ function renderTicketList(){
     el.innerHTML=tabBar+'<div class="sub-empty">'+(_tuListTab==='sched'?'오픈 예약된 티켓 없음':(_tuListTab==='draft'?'보관 중인 티켓 없음':'발행된 티켓 없음'))+'</div>';
     return;
   }
-  el.innerHTML=tabBar+sorted.map(function(t){
+
+  // 🆕 자유석 판매 모드 일괄 변경 줄 — 탭 바 바로 아래 한 줄.
+  //   자유석 티켓이 하나도 없는 탭에서는 아예 안 보인다 (쓸 데가 없는 줄이다).
+  var flexIds = sorted.filter(_tuIsFlex).map(function(t){ return String(t.id); });
+  var bulkBar = '';
+  if(flexIds.length){
+    if(!_tuFlexMode){
+      bulkBar = '<div style="padding:0 0 10px;">'
+        + '<button onclick="tuFlexModeToggle()" style="width:100%;padding:9px;border:1px dashed #c8a96e;background:#fffdf8;'
+        +   'color:#5C0A14;border-radius:10px;font-size:11.5px;font-weight:800;cursor:pointer;font-family:inherit;">'
+        +   '🧩 자유석 판매 모드 일괄 변경 (' + flexIds.length + '건)'
+        + '</button></div>';
+    } else {
+      var selN = flexIds.filter(function(id){ return _tuFlexSel[id]; }).length;
+      var allOn = (selN === flexIds.length);
+      var _idsArg = JSON.stringify(flexIds).replace(/"/g,'&quot;');
+      bulkBar = '<div style="padding:10px;margin-bottom:10px;border:1px solid #c8a96e;background:#fffdf8;border-radius:12px;">'
+        + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">'
+        +   '<button onclick="tuFlexSelAll(' + _idsArg + ')" style="padding:6px 10px;border:1px solid #ddd8ce;background:#fff;'
+        +     'color:#5a554f;border-radius:8px;font-size:10.5px;font-weight:800;cursor:pointer;font-family:inherit;">'
+        +     (allOn?'전체 해제':'전체 선택') + '</button>'
+        +   '<div style="flex:1;font-size:11px;font-weight:800;color:#5C0A14;">' + selN + '건 선택됨</div>'
+        +   '<button onclick="tuFlexModeToggle()" style="padding:6px 10px;border:1px solid #ddd8ce;background:#fff;'
+        +     'color:#8a8580;border-radius:8px;font-size:10.5px;font-weight:700;cursor:pointer;font-family:inherit;">취소</button>'
+        + '</div>'
+        + '<div style="display:flex;gap:6px;">'
+        +   '<button onclick="tuFlexApply(false)"' + (selN?'':' disabled') + ' style="flex:1;padding:9px;border:1px solid #c8a96e;'
+        +     'background:' + (selN?'#fff':'#f4f2ee') + ';color:' + (selN?'#5C0A14':'#b8b3ac') + ';border-radius:9px;font-size:11px;'
+        +     'font-weight:800;cursor:' + (selN?'pointer':'default') + ';font-family:inherit;">🌊 완화(자유 판매)로</button>'
+        +   '<button onclick="tuFlexApply(true)"' + (selN?'':' disabled') + ' style="flex:1;padding:9px;border:1px solid #5C0A14;'
+        +     'background:' + (selN?'#5C0A14':'#f4f2ee') + ';color:' + (selN?'#fff':'#b8b3ac') + ';border-radius:9px;font-size:11px;'
+        +     'font-weight:800;cursor:' + (selN?'pointer':'default') + ';font-family:inherit;">🧩 엄격(조각 방지)으로</button>'
+        + '</div></div>';
+    }
+  } else if(_tuFlexMode){
+    _tuFlexMode = false;   // 자유석이 없는 탭으로 옮기면 선택 모드는 스스로 닫힌다
+  }
+
+  el.innerHTML=tabBar+bulkBar+sorted.map(function(t){
     var r=restaurantDB.find(function(x){return String(x.id)===String(t.restId);});
     var isSold=t.status==='soldout';
     var slots='';
@@ -33477,11 +33586,10 @@ function renderTicketList(){
         var _isStrict = (t.slots.strict === true);
         slots=' · 자유석 (허용 '+((t.slots.allowed||[]).join('·')||'-')+'인'
           +((parseInt(t.slots.solo)||0)>0?' · 1인 '+t.slots.solo+'팀':'')+')';
-        // 🆕 판매 도중 원탭 모드 전환 (엄격⇄완화) — 즉시 전 회원 반영
-        flexToggle='<button onclick="event.stopPropagation();tkToggleFlexStrict(\''+String(t.id)+'\')" '
-          +'style="margin-top:6px;padding:5px 10px;border-radius:8px;font-size:10.5px;font-weight:800;cursor:pointer;font-family:inherit;'
-          +(_isStrict?'border:1px solid #5C0A14;background:#5C0A14;color:#fff;':'border:1px solid #c8a96e;background:#fff;color:#5C0A14;')
-          +'">'+(_isStrict?'🧩 엄격 (조각 방지) — 탭하여 완화로':'🌊 완화 (자유 판매) — 탭하여 엄격으로')+'</button>';
+        // 🔧 2026.08: 행마다 붙던 큰 전환 버튼을 없애고 현재 모드만 작게 남긴다.
+        //   바꾸는 일은 탭 바 아래 「자유석 판매 모드 일괄 변경」이 맡는다.
+        slots += ' <span style="font-size:9px;font-weight:800;color:'+(_isStrict?'#5C0A14':'#8a6d3b')+';">'
+              +  (_isStrict?'🧩엄격':'🌊완화') + '</span>';
       } else {
         var sp=[];
         if(t.slots.s1>0)sp.push('1인×'+t.slots.s1);
@@ -33521,11 +33629,27 @@ function renderTicketList(){
     // 🆕 오픈 예약 일정 — 언제 자동 공개되는지 매장명 아래 표시
     var schedLine = (t.saleState==='scheduled' && t.saleOpenAt && new Date(t.saleOpenAt) > new Date())
       ? '<div style="font-size:10.5px;font-weight:800;color:#B45309;margin-top:3px;">⏰ '+_tuFmtOpenAt(t.saleOpenAt)+' 오픈 예약</div>' : '';
-    return '<div class="rest-list-item">'      +'<div class="rest-list-info">'        +'<div class="rest-list-name"'+(isSold?' style="opacity:.4;"':'')+'>'+( r?r.name:t.rest)+' <span style="font-family:var(--font-main);font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:'+(isSold?'#E53935':'#c8a96e')+';">'+(isSold?'SOLD OUT':t.type)+'</span>'+lockBadge+'</div>'        +'<div class="rest-list-meta"'+(isSold?' style="opacity:.4;"':'')+'>'+t.date+' · '+t.time+slots+'</div>'
+    // 🆕 선택 모드: 자유석 티켓 앞에만 체크박스가 뜬다.
+    //   고정 슬롯 티켓은 '엄격/완화' 개념 자체가 없으므로 자리만 비워 흐리게 둔다.
+    var _selBox = '';
+    var _sel = !!_tuFlexSel[String(t.id)];
+    if(_tuFlexMode){
+      _selBox = _tuIsFlex(t)
+        ? '<div onclick="event.stopPropagation();tuFlexSelToggle(\''+t.id+'\')" style="flex-shrink:0;width:22px;height:22px;'
+          + 'border-radius:6px;margin-right:10px;align-self:center;cursor:pointer;display:flex;align-items:center;'
+          + 'justify-content:center;font-size:13px;font-weight:900;'
+          + (_sel ? 'border:1.5px solid #5C0A14;background:#5C0A14;color:#fff;' : 'border:1.5px solid #ddd8ce;background:#fff;color:transparent;')
+          + '">✓</div>'
+        : '<div style="flex-shrink:0;width:22px;margin-right:10px;"></div>';
+    }
+    // 선택 모드에서는 매진·연장·수정·삭제를 감춘다 — 고르는 중에 잘못 누르기 쉽다
+    var _acts = _tuFlexMode ? '' :
+      '<div class="rest-list-actions">'+        '<button class="rest-action-sold'+(isSold?' soldout':'')+'" onclick="tuToggleSoldout(\''+t.id+'\')">'+(isSold?'판매중':'매진')+'</button>'+        ((t.deadlineDate||t.gradeOpen)?'<button class="rest-action-extend" onclick="openExtendPopup(\''+t.id+'\')" >연장</button>':'')+        '<button class="rest-action-edit" onclick="tuEditTicket(\''+t.id+'\')" >수정</button>'+        '<button class="rest-action-del" onclick="tuDeleteTicket(\''+t.id+'\')" >삭제</button>'+      '</div>';
+    return '<div class="rest-list-item"'+(_tuFlexMode&&_sel?' style="background:#fffdf8;"':'')+'>'+_selBox      +'<div class="rest-list-info">'        +'<div class="rest-list-name"'+(isSold?' style="opacity:.4;"':'')+'>'+( r?r.name:t.rest)+' <span style="font-family:var(--font-main);font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:'+(isSold?'#E53935':'#c8a96e')+';">'+(isSold?'SOLD OUT':t.type)+'</span>'+lockBadge+'</div>'        +'<div class="rest-list-meta"'+(isSold?' style="opacity:.4;"':'')+'>'+t.date+' · '+t.time+slots+'</div>'
         +schedLine
         +'<div id="tkls_'+t.id+'" style="font-size:10.5px;color:#8a8580;margin-top:3px;">좌석 집계 중…</div>'
         +flexToggle
-      +'</div>'      +'<div class="rest-list-actions">'+        '<button class="rest-action-sold'+(isSold?' soldout':'')+'" onclick="tuToggleSoldout(\''+t.id+'\')">'+(isSold?'판매중':'매진')+'</button>'+        ((t.deadlineDate||t.gradeOpen)?'<button class="rest-action-extend" onclick="openExtendPopup(\''+t.id+'\')" >연장</button>':'')+        '<button class="rest-action-edit" onclick="tuEditTicket(\''+t.id+'\')" >수정</button>'+        '<button class="rest-action-del" onclick="tuDeleteTicket(\''+t.id+'\')" >삭제</button>'+      '</div>'+    '</div>';
+      +'</div>'+_acts+    '</div>';
   }).join('');
   _tuListSeatStats(sorted);
 }
@@ -45393,7 +45517,11 @@ function renderPartnerTicketList() {
       +'<div class="rest-list-info">'
         +'<div class="rest-list-name"'+(isSold?' style="opacity:.4;"':'')+'>'+t.rest+' <span style="font-family:var(--font-main);font-size:9px;color:'+(isSold?'#E53935':'#c8a96e')+';">'+(isSold?'SOLD OUT':t.type)+'</span></div>'
         +'<div class="rest-list-meta"'+(isSold?' style="opacity:.4;"':'')+'>'+t.date+' · '+t.time+slots+'</div>'
-        +flexToggle
+        // 🔧 2026.08: 여기 있던 +flexToggle 을 제거했다.
+        //   flexToggle 은 renderTicketList 안에서만 선언된 지역 변수라, 이 함수에서는
+        //   선언되지 않은 이름이었다 — 파트너(레스토랑 어드민) 티켓 목록을 그릴 때마다
+        //   ReferenceError 로 목록 전체가 비어 있었다. 판매 모드는 슈퍼어드민 몫이므로
+        //   파트너 화면에는 애초에 있을 자리가 아니다.
       +'</div>'
       +'<div class="rest-list-actions">'
         +'<button class="rest-action-edit" onclick="tuEditTicket(\''+t.id+'\')">수정</button>'
@@ -48057,14 +48185,48 @@ function _notifMarkAllRead(){
   _notifLogSave();
 }
 
-window._notifClearAll = function(){
+// 🔧 2026.08: 「모두 지우기」가 정말 지우게 한다.
+//
+//   무엇이 문제였나
+//     이 함수는 '로컬 로그' 만 비우고, 곧바로 서버 알림 캐시(_notifServerCache)로
+//     다시 그렸다. 목록의 대부분은 서버 알림이라, 눌러도 화면이 그대로였다 —
+//     회원 눈에는 "버튼이 죽어 있다" 로 보인다. 라벨이 약속한 일을 코드가 안 했다.
+//
+//   이제 서버 알림도 같이 지운다. 내 알림이므로 RLS 가 본인 삭제를 허용한다
+//   (sql/notifications.sql 의 notif_delete). 되돌릴 수 없으니 한 번 묻는다.
+window._notifClearAll = async function(){
+  var lang = (window._tkCurrentLang || 'ko');
+  var ask = (lang==='en') ? 'Delete all notifications? This cannot be undone.'
+          : (lang==='ja') ? 'すべての通知を削除しますか？元に戻せません。'
+          : '알림을 모두 지울까요? 되돌릴 수 없습니다.';
+  if (!confirm(ask)) return;
+
+  // 1) 로컬 로그
   _notifLog = [];
   _notifUnreadCount = 0;
-  _notifBellDotSync();
   _notifLogSave();
-  // 🆕 로컬 로그만 비우고 서버 알림(캐시)은 그대로 유지 렌더
-  if (window._notifServerCache && typeof _notifRenderMerged === 'function') _notifRenderMerged(window._notifServerCache);
-  else if (typeof _notifRenderList === 'function') _notifRenderList();
+
+  // 2) 서버 알림 — 실패해도 로컬은 이미 비웠으므로 화면은 갱신한다
+  var failed = false;
+  try {
+    if (window.sb) {
+      var u = (await window.sb.auth.getUser()).data.user;
+      if (u) {
+        var d = await window.sb.from('notifications').delete().eq('user_id', u.id);
+        if (d && d.error){ failed = true; console.warn('[notif] 서버 알림 삭제 실패:', d.error.message); }
+      }
+    }
+  } catch(e){ failed = true; console.warn('[notif] 서버 알림 삭제 예외:', e && e.message); }
+
+  window._notifServerCache = failed ? (window._notifServerCache || []) : [];
+  _notifBellDotSync();
+  if (typeof updateUnseenNotifBadge === 'function') updateUnseenNotifBadge();
+  if (failed && window._notifServerCache.length && typeof _notifRenderMerged === 'function'){
+    _notifRenderMerged(window._notifServerCache);
+    if (typeof showToast === 'function') showToast('⚠','알림','서버 알림을 지우지 못했습니다');
+  } else if (typeof _notifRenderItems === 'function') {
+    _notifRenderItems([]);   // 비었음을 그대로 보여준다
+  }
 };
 
 // OS 네이티브 알림 발사 (Notification API)
@@ -48106,18 +48268,38 @@ window.notifPermSync = function(){
   //   실제로 그렇게 오해를 샀다. 앱에서는 OS 권한과 등록 상태를 그대로 보여준다.
   if (typeof isNativeApp === 'function' && isNativeApp()) {
     var st = (window._npState && window._npState.step) || '';
-    var done = st.indexOf('구독 저장 완료') >= 0;
-    var failed = st.indexOf('실패') >= 0 || st.indexOf('무응답') >= 0 || st.indexOf('거부') >= 0;
-    label.textContent = done ? '✅ 기기 푸시 알림 — 사용 중'
-                      : failed ? '⚠️ 기기 푸시 알림 — 등록 미완료'
-                      : '📱 기기 푸시 알림 — 등록 중';
-    sub.textContent = done ? '앱이 꺼져 있어도 알림을 받습니다'
-                    : failed ? ('상태: ' + st + ' — 「상태 확인」에서 자세히 볼 수 있어요')
-                    : '알림 등록을 진행하고 있어요';
-    btn.disabled = done;
-    btn.textContent = done ? '사용 중' : '다시 시도';
-    var c = done ? '#22c55e' : (failed ? '#9B1C1C' : '#1a1a18');
-    btn.style.background = c; btn.style.borderColor = c;
+    // 🔧 2026.08: '이번 실행에서 등록 이벤트가 왔는가' 가 아니라 '이 기기에 토큰이 있는가' 로 판단한다.
+    //   iOS 는 토큰이 바뀌지 않으면 registration 이벤트를 조용히 넘기는 경우가 있다.
+    //   그러면 실제로는 알림이 멀쩡히 오는데도 화면만 「등록 미완료」로 남는다.
+    //   실제로 그랬다 — 테스트 발송 2/2 성공, DB 구독 2건인데 배너는 빨간 경고였다.
+    var have = !!window._npEndpoint;
+    var done = have || st.indexOf('구독 저장 완료') >= 0;
+    var denied = st.indexOf('거부') >= 0;
+    var _isSuper = (typeof _isSuperAdmin === 'function') ? _isSuperAdmin()
+      : (typeof _currentRole !== 'undefined' && _currentRole === 'superadmin');
+
+    if (done) {
+      label.textContent = '✅ 기기 푸시 알림 — 사용 중';
+      sub.textContent   = '앱이 꺼져 있어도 알림을 받습니다';
+      btn.disabled = true; btn.textContent = '사용 중';
+      btn.style.background = '#22c55e'; btn.style.borderColor = '#22c55e';
+    } else if (denied) {
+      // 회원이 실제로 조치할 수 있는 유일한 경우 — iOS 설정에서 알림을 켜야 한다
+      label.textContent = '🔔 기기 푸시 알림 — 꺼져 있어요';
+      sub.textContent   = 'iPhone 설정 → 알림 → TAAM 에서 켜주세요';
+      btn.disabled = false; btn.textContent = '다시 시도';
+      btn.style.background = '#1a1a18'; btn.style.borderColor = '#1a1a18';
+    } else {
+      // ⚠ 회원에게 「등록 미완료」 빨간 경고를 띄우지 않는다.
+      //   회원이 할 수 있는 일이 없는데 앱이 고장난 것처럼 읽힌다.
+      //   백그라운드에서 계속 재시도하고 있으므로 사실대로 '준비 중' 이라고만 한다.
+      //   슈퍼어드민에게만 원인 문자열을 그대로 보여준다.
+      label.textContent = '📱 기기 푸시 알림 — 준비 중';
+      sub.textContent   = _isSuper ? ('상태: ' + (st || '미실행') + ' — 「상태 확인」 참고')
+                                   : '알림을 받을 준비를 하고 있어요';
+      btn.disabled = false; btn.textContent = '다시 시도';
+      btn.style.background = '#1a1a18'; btn.style.borderColor = '#1a1a18';
+    }
     return;
   }
 
@@ -48372,7 +48554,14 @@ function _npMark(step, extra){
 //     한 번이면 끝난다. 그래서 로그인이 끝나는 자리에서 이 함수를 부른다.
 //
 //   여러 번 불러도 안전하다: endpoint 가 같으면 upsert 로 덮어쓴다.
+//   🔧 2026.08: 토큰을 기기에 기억해 둔다.
+//     iOS 는 토큰이 바뀌지 않으면 registration 이벤트를 조용히 넘길 때가 있다.
+//     그러면 앱을 다시 켤 때마다 _npEndpoint 가 비어, 실제로는 알림이 잘 오는데도
+//     화면은 「등록 미완료」로 남고 로그인해도 계정에 다시 붙지 않는다.
+//     한 번 받은 토큰을 저장해 두면 그다음 실행부터는 이벤트 없이도 이어진다.
 window._npEndpoint = null;
+try { window._npEndpoint = localStorage.getItem('taamPushEndpoint') || null; } catch(_npe){}
+
 async function _npBindUser(){
   if (!window._npEndpoint || !window.sb) return;
   try {
@@ -48441,6 +48630,7 @@ async function setupNativePush(){
       // 🆕 토큰을 기억해 둔다 — 앱을 켠 시점엔 아직 로그인 전이라 계정에 못 붙는다.
       //   로그인이 끝나면 _npBindUser() 가 이 값으로 다시 저장한다.
       window._npEndpoint = (platform === 'ios') ? ('apns://' + token.value) : ('fcm://' + token.value);
+      try { localStorage.setItem('taamPushEndpoint', window._npEndpoint); } catch(_se){}
       await _npBindUser();
     });
 
@@ -48474,17 +48664,28 @@ async function setupNativePush(){
     setTimeout(function(){
       var st = window._npState || {};
       if (st.step !== 'register() 호출됨 — 토큰 대기 중') return;
+      // 🔧 이미 이 기기에 토큰이 있으면 침묵은 정상이다 — iOS 는 토큰이 그대로면
+      //   이벤트를 다시 주지 않는다. 그걸 실패로 적으면 잘 되는 기기가 고장으로 보인다.
+      if (window._npEndpoint) {
+        _npMark('기존 토큰 사용 (이벤트 없음 — 정상)', { tokenTail: String(window._npEndpoint).slice(-8) });
+        _npBindUser();
+        return;
+      }
       // 한 번 더 부른다 — 리스너는 이미 확실히 붙어 있으므로, 첫 호출의 응답을
       //   놓친 경우라면 이번에는 잡힌다. 같은 기기는 같은 토큰이 오므로 중복은 무해하다.
       _npMark('무응답 — register() 재시도');
       try { PushNotifications.register(); } catch(_e){}
       setTimeout(function(){
         var st2 = window._npState || {};
-        if (st2.step === '무응답 — register() 재시도') {
-          _npMark('무응답 — iOS 가 토큰도 오류도 주지 않음', {
-            hint: '재시도에도 침묵. 빌드 entitlement 는 확인됨 → 기기/네트워크(APNs) 의심'
-          });
+        if (st2.step !== '무응답 — register() 재시도') return;
+        if (window._npEndpoint) {
+          _npMark('기존 토큰 사용 (이벤트 없음 — 정상)', { tokenTail: String(window._npEndpoint).slice(-8) });
+          _npBindUser();
+          return;
         }
+        _npMark('무응답 — iOS 가 토큰도 오류도 주지 않음', {
+          hint: '재시도에도 침묵. 빌드 entitlement 는 확인됨 → 기기/네트워크(APNs) 의심'
+        });
       }, 8000);
     }, 8000);
   } catch(e) {
