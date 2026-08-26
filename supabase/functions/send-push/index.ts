@@ -329,8 +329,14 @@ async function sendApnsPush(deviceToken: string, payload: any) {
     const silent = payload?.silent === true;
     const body = silent
       ? {
-          // 조용한 배지 갱신 — alert/sound 를 넣으면 안 된다 (넣으면 알림이 뜬다)
-          aps: { "content-available": 1, badge: _apsBadge(payload) },
+          // 배지만 갱신 — alert/sound 를 넣지 않으면 화면에는 아무것도 뜨지 않는다.
+          //
+          // ⚠ content-available(=백그라운드 푸시)로 보내면 안 된다.
+          //   그건 앱을 깨우는 푸시라 Info.plist 의 UIBackgroundModes 에
+          //   remote-notification 이 있어야 하고, 없으면 iOS 가 조용히 버린다.
+          //   Capacitor 기본 Info.plist 에는 없다 — 그래서 배지가 그대로였다.
+          //   Apple 문서상 '배지만 바꾸는 알림' 의 push-type 은 alert 다.
+          aps: { badge: _apsBadge(payload) },
         }
       : {
           aps: {
@@ -350,9 +356,9 @@ async function sendApnsPush(deviceToken: string, payload: any) {
       headers: {
         "authorization": "bearer " + jwt,
         "apns-topic": APNS_BUNDLE_ID,
-        // background 푸시는 push-type 과 priority 가 alert 와 달라야 APNs 가 받는다
-        "apns-push-type": silent ? "background" : "alert",
-        "apns-priority": silent ? "5" : "10",
+        // 배지만 바꾸는 알림도 push-type 은 alert 다 (background 는 앱을 깨우는 푸시라 별개)
+        "apns-push-type": "alert",
+        "apns-priority": "10",
         "content-type": "application/json",
       },
       body: JSON.stringify(body),
