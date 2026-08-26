@@ -14980,18 +14980,14 @@ async function renderNotificationsList(){
     }).join('') + '</div>';
 
     // 진입 시 모든 미확인 → seen=true 처리 (배지 사라짐)
-    var unseenIds = rows.filter(function(n){ return !n.seen; }).map(function(n){ return n.id; });
-    if(unseenIds.length > 0){
-      try {
-        await window.sb.from('notifications').update({
-          seen: true,
-          seen_at: new Date().toISOString()
-        }).in('id', unseenIds);
-        console.log('[notif] 알림 페이지 진입 → '+unseenIds.length+'건 seen=true 처리');
-      } catch(_ue) { console.warn('[notif] seen=true 일괄 처리 실패:', _ue); }
-      // 레드닷 갱신
-      if(typeof updateUnseenNotifBadge === 'function') updateUnseenNotifBadge();
-    }
+    //   🔧 2026.08: 화면에 뜬 100건이 아니라 '내 미확인 전부' 를 찍는다 — 종 버튼과 같은 이유.
+    //   빨간 점은 전체 개수로 켜지므로, 목록에 안 뜬 오래된 미확인이 남으면 점이 안 꺼진다.
+    var _updL = await window.sb.from('notifications')
+      .update({ seen: true, seen_at: new Date().toISOString() })
+      .eq('user_id', u.id)
+      .eq('seen', false);
+    if(_updL && _updL.error) console.warn('[notif] seen=true 일괄 처리 실패:', _updL.error.message);
+    if(typeof updateUnseenNotifBadge === 'function') updateUnseenNotifBadge();
   } catch(e){
     console.error('[notif list] 예외:', e);
     contentEl.innerHTML = '<div style="text-align:center;padding:30px;color:#c00;font-size:11px;">예외: '+_riEscHtml(e.message || String(e))+'</div>';
@@ -39944,17 +39940,30 @@ async function tkOpenNotice() {
         if (!r.error && Array.isArray(r.data)) {
           window._notifServerCache = r.data;   // 로컬 '모두 지우기' 후에도 서버 알림 유지용
           if (typeof _notifRenderMerged === 'function') _notifRenderMerged(r.data);
-          // 미확인 서버 알림 seen 처리 (종 버튼 확인 = 읽음) → 빨간점 제거
-          var unseen = r.data.filter(function(n){ return !n.seen; }).map(function(n){ return n.id; });
-          if (unseen.length) {
-            try {
-              await window.sb.from('notifications')
-                .update({ seen:true, seen_at:new Date().toISOString() })
-                .in('id', unseen);
-            } catch(_ue){}
+
+          // 🔧 2026.08: 화면에 뜬 50건만이 아니라 '내 미확인 전부' 를 읽음 처리한다.
+          //
+          //   무엇이 문제였나
+          //     종을 열면 최신 50건만 불러와, 그 50건의 id 로만 seen=true 를 찍었다.
+          //     그런데 빨간 점은 미확인 '전체 개수' 로 켜진다. 알림이 50건을 넘으면
+          //     51번째부터는 영원히 미확인으로 남아, 종을 아무리 열어도 점이 다시 켜졌다.
+          //     회원 눈에는 "안에 안 읽은 게 하나도 없는데 점이 안 없어지는" 상태가 된다.
+          //     알림을 가장 많이 받는 슈퍼어드민에게 제일 먼저 나타난다.
+          //
+          //   그리고 결과를 확인한다
+          //     종전에는 update 성공 여부와 무관하게 _notifServerUnseen 을 0 으로 찍었다.
+          //     RLS·네트워크로 쓰기가 막히면 점이 잠깐 꺼졌다가 다음 갱신에 되살아나서,
+          //     원인이 화면 어디에도 남지 않았다. 이제는 서버에 다시 물어본 값으로 켠다.
+          var _upd = await window.sb.from('notifications')
+            .update({ seen:true, seen_at:new Date().toISOString() })
+            .eq('user_id', u.id)
+            .eq('seen', false);
+          if (_upd && _upd.error) {
+            console.warn('[bell] 읽음 처리 실패:', _upd.error.message);
           }
-          window._notifServerUnseen = 0;
-          if (typeof _notifBellDotSync === 'function') _notifBellDotSync();
+          // 진실은 서버에 있다 — 다시 세어서 점을 켜고 끈다
+          if (typeof updateUnseenNotifBadge === 'function') await updateUnseenNotifBadge();
+          else { window._notifServerUnseen = 0; _notifBellDotSync(); }
         }
       }
     }
@@ -48617,6 +48626,13 @@ window.pushDiagnose = async function(){
       if(u){
         var cr = await window.sb.from('push_subscriptions').select('id,device_label,endpoint', {count:'exact'}).eq('user_id', u.id);
         lines.push('DB 구독 row: ' + (cr.data ? cr.data.length : 0) + '개');
+        // 🆕 2026.08: 빨간 점의 근거를 그대로 보여준다.
+        //   "안에 안 읽은 게 없는데 점이 안 없어진다" 를 화면만 보고는 가릴 수 없어서,
+        //   로컬(이 기기)과 서버(내 계정) 중 어느 쪽이 남아 있는지 숫자로 갈라준다.
+        var nr = await window.sb.from('notifications')
+          .select('id', { count:'exact', head:true }).eq('user_id', u.id).eq('seen', false);
+        lines.push('미확인 알림: 로컬 ' + (window._notifUnreadCount || 0)
+                 + ' · 서버 ' + ((nr && nr.count) || 0) + (nr && nr.error ? ' (조회오류)' : ''));
       }
     }catch(e){ lines.push('DB 에러: ' + e.message); }
   } else {
