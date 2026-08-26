@@ -55,6 +55,45 @@ on conflict (key) do update
       updated_at = now();
 
 -- ═══════════════════════════════════════════════════════════════
+-- 1.02 출시 뒤에 그대로 실행하는 블록 (강제 업데이트 켜기)
+--
+--   ⚠ 순서를 지킨다. 스토어에 1.02 가 '실제로 출시된 뒤' 에 실행한다.
+--     받을 수 있는 업데이트가 없는데 강제 안내를 띄우면, 회원은 앱을 못 쓰고
+--     스토어에는 옛 버전밖에 없는 상태가 된다 — 빠져나갈 길이 없다.
+--
+--   빌드번호는 실제로 출시된 값으로 바꾼다.
+--     iOS     = TestFlight/App Store 의 빌드 번호 (예: 34)
+--     Android = Play 의 versionCode      (예: 1010)
+--
+--   왜 안드로이드는 강제인가
+--     1008·1009 에는 푸시(FCM)가 없거나 반쪽이다. 그 상태로 두면 그 회원들에게는
+--     알림이 영영 오지 않는데, 본인은 이유를 알 수 없다. 올려야 고쳐진다.
+--   왜 iOS 는 권장인가
+--     1.01 도 푸시·결제가 모두 정상이다. 굳이 앱을 잠글 이유가 없다.
+--     (배지 자동 초기화만 1.02 의 개선이다)
+-- ═══════════════════════════════════════════════════════════════
+/*
+update public.app_config
+   set value = jsonb_build_object(
+     'ios', jsonb_build_object(
+       'min_build',    0,        -- iOS 는 강제하지 않는다 (1.01 도 정상 동작)
+       'latest_build', 34,       -- ← 실제 출시된 iOS 빌드번호로
+       'url',          'https://apps.apple.com/kr/app/id6783459650'
+     ),
+     'android', jsonb_build_object(
+       'min_build',    1010,     -- ← 실제 출시된 versionCode 로 (이 아래는 강제)
+       'latest_build', 1010,
+       'url',          'https://play.google.com/store/apps/details?id=com.playtaam.app'
+     )
+   ),
+   updated_at = now()
+ where key = 'app_version';
+*/
+
+-- 그리고 앱의 APP_UPDATE_LIVE 를 true 로 바꿔 배포한다 (index.html).
+-- 되돌리기: 그 플래그를 false 로 되돌리면 안내가 즉시 사라진다.
+
+-- ═══════════════════════════════════════════════════════════════
 -- 나중에 숫자만 바꾸고 싶을 때 (전체를 다시 쓰지 않고 한 칸만)
 --
 --   -- iOS 최신 빌드를 34 로
