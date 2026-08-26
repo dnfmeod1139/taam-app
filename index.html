@@ -17077,6 +17077,11 @@ function openMain(){
     updateMpAdminBtn();
     updatePendingBadge();
     syncTuRestList();
+    // 🆕 2026.08: 푸시 토큰을 지금 로그인한 계정에 붙인다.
+    //   토큰은 앱을 켜자마자 오는데 그때는 로그인 전이라 주인이 없다. 여기가
+    //   로그인·세션복원이 모두 지나가는 자리라, 회원이 아무것도 안 눌러도 연결된다.
+    //   (종전에는 알림 설정에서 「재구독」 을 눌러야만 붙었다 — 회원에게 시킬 일이 아니다)
+    try { if (typeof _npBindUser === 'function') _npBindUser(); } catch(_pe){}
     // 🆕 2026.08: 로그인 직후 첫 화면 = Home.
     //   단, 사진 캘린더가 꺼져 있으면 homeView 는 빈 화면이라 그대로 들어가면 검은 화면이 된다.
     //   그래서 플래그가 꺼진 경우에는 예전처럼 Ticket 으로 들어간다 — 회원 화면은 바뀌지 않는다.
@@ -47942,6 +47947,48 @@ function _npMark(step, extra){
   try { if (typeof notifPermSync === 'function') notifPermSync(); } catch(_e){}
 }
 
+// 🆕 2026.08: 받아둔 토큰을 '지금 로그인한 계정' 에 붙인다.
+//
+//   왜 따로 떼어냈나
+//     토큰은 앱을 켜자마자 온다. 그런데 그때는 아직 로그인 전이라 user_id 를 모른다.
+//     그대로 두면 주인 없는 구독으로 남아, 회원이 알림 설정에서 「재구독」 을 눌러야만
+//     계정에 붙었다 — 회원에게 그런 걸 시키면 그건 고장이다. 다른 앱은 「알림 허용」
+//     한 번이면 끝난다. 그래서 로그인이 끝나는 자리에서 이 함수를 부른다.
+//
+//   여러 번 불러도 안전하다: endpoint 가 같으면 upsert 로 덮어쓴다.
+window._npEndpoint = null;
+async function _npBindUser(){
+  if (!window._npEndpoint || !window.sb) return;
+  try {
+    var { data: { user } } = await window.sb.auth.getUser();
+    // ⚠ role 을 반드시 채운다 — send-push 의 role:superadmin 타깃은
+    //   push_subscriptions.role 로 거른다. role 이 비면 슈퍼어드민이 구매 알림에서 조용히 빠진다.
+    var _rl = (typeof _currentRole !== 'undefined' && _currentRole) ? _currentRole : null;
+    if (!_rl && user) {
+      try {
+        var _pr = await window.sb.from('profiles').select('role').eq('id', user.id).maybeSingle();
+        _rl = (_pr.data && _pr.data.role) || null;
+      } catch(_e){}
+    }
+    var platform = getNativePlatform();
+    var _payload = {
+      user_id: user ? user.id : null,
+      endpoint: window._npEndpoint,
+      p256dh: '',
+      auth: '',
+      user_agent: 'capacitor-' + platform,
+      device_label: platform === 'ios' ? 'iPhone' : 'Android',
+      role: _rl,
+      topics: []
+    };
+    // 웹 구독과 같은 저장 경로(RPC 우선, RLS 우회) — 저장 규칙이 갈리면 또 어긋난다
+    if (typeof _pushSaveSub === 'function') await _pushSaveSub(_payload);
+    else await window.sb.from('push_subscriptions').upsert(_payload, { onConflict: 'endpoint' });
+    _npMark(user ? '구독 저장 완료' : '구독 저장 완료 (로그인 대기)', { role: _rl || '-' });
+  } catch(e){ _npMark('구독 저장 실패', { err: String((e && e.message) || e).slice(0,120) }); }
+}
+window._npBindUser = _npBindUser;
+
 async function setupNativePush(){
   if (!isNativeApp()) { _npMark('네이티브 아님(웹/PWA)'); return; }
   // ⛔ Android 는 아직 부르면 안 된다 — Play 정책 이슈(2026-08-20)의 원인.
@@ -47975,36 +48022,10 @@ async function setupNativePush(){
     await PushNotifications.addListener('registration', async function(token){
       _npMark('토큰 수신', { tokenTail: String(token.value||'').slice(-8) });
       var platform = getNativePlatform();
-      var endpoint = (platform === 'ios') ? ('apns://' + token.value) : ('fcm://' + token.value);
-      try {
-        if (!window.sb) return;
-        var { data: { user } } = await window.sb.auth.getUser();
-        // ⚠ role 을 반드시 채운다 — send-push 의 role:superadmin 타깃은
-        //   push_subscriptions.role 로 거른다. 네이티브 등록이 role 없이 저장돼서,
-        //   앱 재설치·TestFlight 갱신으로 APNs 토큰이 바뀔 때마다 새 행이 role=null 로
-        //   생겼고, 슈퍼어드민이 구매 알림에서 조용히 빠졌다 (웹 구독만 role 을 넣고 있었다).
-        var _rl = (typeof _currentRole !== 'undefined' && _currentRole) ? _currentRole : null;
-        if (!_rl && user) {
-          try {
-            var _pr = await window.sb.from('profiles').select('role').eq('id', user.id).maybeSingle();
-            _rl = (_pr.data && _pr.data.role) || null;
-          } catch(_e){}
-        }
-        var _payload = {
-          user_id: user ? user.id : null,
-          endpoint: endpoint,
-          p256dh: '',
-          auth: '',
-          user_agent: 'capacitor-' + platform,
-          device_label: platform === 'ios' ? 'iPhone' : 'Android',
-          role: _rl,
-          topics: []
-        };
-        // 웹 구독과 같은 저장 경로(RPC 우선, RLS 우회) — 저장 규칙이 갈리면 또 어긋난다
-        if (typeof _pushSaveSub === 'function') await _pushSaveSub(_payload);
-        else await window.sb.from('push_subscriptions').upsert(_payload, { onConflict: 'endpoint' });
-        _npMark('구독 저장 완료', { role: _rl || '-' });
-      } catch(e){ _npMark('구독 저장 실패', { err: String((e && e.message) || e).slice(0,120) }); }
+      // 🆕 토큰을 기억해 둔다 — 앱을 켠 시점엔 아직 로그인 전이라 계정에 못 붙는다.
+      //   로그인이 끝나면 _npBindUser() 가 이 값으로 다시 저장한다.
+      window._npEndpoint = (platform === 'ios') ? ('apns://' + token.value) : ('fcm://' + token.value);
+      await _npBindUser();
     });
 
     await PushNotifications.addListener('registrationError', function(err){
