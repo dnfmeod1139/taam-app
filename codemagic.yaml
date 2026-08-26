@@ -202,6 +202,15 @@ workflows:
           ruby /tmp/set_ent.rb
           echo "==== Info.plist URL types ===="; /usr/libexec/PlistBuddy -c "Print :CFBundleURLTypes" "$PL" || true
 
+      # 🆕 2026.08: APNs 토큰이 JS 까지 오게 하는 마지막 연결 고리.
+      #   Capacitor 기본 AppDelegate 에는 APNs 콜백 전달 코드가 없어서, 넣어주지 않으면
+      #   register() 는 성공하는데 토큰도 오류도 오지 않는다(2026-08-26 증상).
+      #   ios/ 는 빌드마다 새로 생성되므로 매번 다시 넣어야 한다. 실패하면 빌드를 세운다.
+      - name: AppDelegate 에 APNs 콜백 주입 (푸시 토큰 수신)
+        script: |
+          set -e
+          python3 scripts/ios_push_appdelegate.py
+
       - name: 네이티브 앱 아이콘 생성 (TAAM — assets/icon.png 1024)
         script: |
           set -e
