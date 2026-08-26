@@ -41719,11 +41719,18 @@ var PD_PALETTES = [
   { key:'pal-paper', name:'④ 페이퍼', desc:'흰 종이에 검정 글씨 — 예전 구매 화면의 가독성. 버튼도 검정' }
 ];
 
+// 🆕 2026.08: 확정 팔레트 — 전 회원이 보는 값은 이 하나로 정해진다.
+//   아래 기기 스위치(taamPdPal)는 슈퍼어드민이 시안을 눈으로 비교하려고 두는 것이고,
+//   회원 화면과는 무관하다. 회원에게는 스위치가 보이지도 않는다(어드민 메뉴 안에 있다).
+//   기기별 저장이라 PWA 에서 고른 값이 앱에 따라오지 않는다 — 그래서 확정값은
+//   localStorage 가 아니라 여기 코드에 박아야 모든 기기가 같은 화면이 된다.
+var PD_PALETTE_DEFAULT = 3;   // ④ 페이퍼 — 흰 종이에 검정 글씨(#F7F4EF)
+
 function pcalPalIdx(){
   try {
     var i = parseInt(localStorage.getItem('taamPdPal'), 10);
-    return (i >= 0 && i < PD_PALETTES.length) ? i : 0;
-  } catch(e){ return 0; }
+    return (i >= 0 && i < PD_PALETTES.length) ? i : PD_PALETTE_DEFAULT;
+  } catch(e){ return PD_PALETTE_DEFAULT; }
 }
 window.pcalPalIdx = pcalPalIdx;
 
@@ -41737,6 +41744,13 @@ function pcalApplySkin(){
 window.pcalApplySkin = pcalApplySkin;
 
 function togglePdSkin(){
+  // 다른 검증 스위치(toggleCardPayTest·toggleNewHome·toggleMagazine)와 같은 규칙 —
+  // 어드민 메뉴 안에 있어 회원에게 보이지는 않지만, 역할 검사는 함수가 스스로 한다.
+  var role = (typeof _currentRole !== 'undefined') ? _currentRole : '';
+  if (role !== 'superadmin') {
+    if (typeof showToast === 'function') showToast('⚠','권한 없음','슈퍼어드민 전용 기능입니다');
+    return;
+  }
   var next = (pcalPalIdx() + 1) % PD_PALETTES.length;
   try { localStorage.setItem('taamPdPal', String(next)); }
   catch(e){
