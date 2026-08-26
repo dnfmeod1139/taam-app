@@ -134,6 +134,7 @@ HTTP 상태로 4xx·5xx 를 주면 GoTrue 는 본문을 읽지 않고 `Hook erro
 | `[sms-hook] SOLAPI 시크릿 미설정 (key=o secret=x …)` | 3번 중 무엇이 빠졌는지 그대로 나온다 |
 | `[sms-hook] 보낼 번호/인증번호 없음 (type=phone_change …)` | 페이로드에서 번호를 못 찾음 — 아래 참조 |
 | `[sms-hook] Solapi 4xx: …` | 발신번호 미등록 · 잔액 부족 · 번호 형식 — Solapi 가 준 사유가 그대로 |
+| `[sms-hook] Solapi 접수 거부 3xxx: …` | HTTP 는 200 인데 접수가 거부됐다 — 수신거부 번호 · 발신번호 반려 · 스팸 차단 등 |
 
 ### 보낼 번호는 경로마다 다른 칸에 온다
 
