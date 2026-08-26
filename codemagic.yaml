@@ -448,6 +448,51 @@ workflows:
           PY
           grep -nE "versionCode|versionName" android/app/build.gradle
 
+      # 🆕 2026.08: 안드로이드 푸시(FCM) 준비 — google-services.json 이 있을 때만 붙는다.
+      #   ⚠ 이 파일 없이 PushNotifications.register() 를 부르면 네이티브가
+      #     "Default FirebaseApp is not initialized" 로 그 자리에서 죽는다.
+      #     JS try/catch 로는 못 잡는 네이티브 크래시라, 앱이 열렸다 계속 종료됐다
+      #     (2026-08-20 Play 정책 이슈의 원인). 그래서 앱 쪽은 ANDROID_PUSH_LIVE
+      #     플래그로 잠가 두고, 이 스텝이 실제로 붙인 뒤에만 연다.
+      #
+      #   Codemagic 환경변수(그룹 android_keystore 등)에 등록하면 활성화된다:
+      #     GOOGLE_SERVICES_JSON_B64 = base64 -i google-services.json  (Secure ✓)
+      #   변수가 없으면 아무것도 하지 않는다 — 지금처럼 푸시 없이 그대로 빌드된다.
+      - name: FCM 설정 주입 (google-services.json — 있을 때만)
+        script: |
+          set -e
+          if [ -z "$GOOGLE_SERVICES_JSON_B64" ]; then
+            echo "GOOGLE_SERVICES_JSON_B64 미설정 — FCM 미구성으로 빌드 (푸시 없음)"
+            exit 0
+          fi
+          echo "$GOOGLE_SERVICES_JSON_B64" | base64 --decode > android/app/google-services.json
+          python3 -c "import json;d=json.load(open('android/app/google-services.json'));print('project_id =', d['project_info']['project_id'])"
+
+          # ① 프로젝트 build.gradle 에 google-services 플러그인 classpath
+          python3 - <<'PYX'
+          import re
+          p = 'android/build.gradle'
+          src = open(p, encoding='utf-8').read()
+          if 'com.google.gms:google-services' not in src:
+              src = re.sub(r"(dependencies\s*\{)",
+                           r"\1\n        classpath 'com.google.gms:google-services:4.4.2'",
+                           src, count=1)
+              open(p, 'w', encoding='utf-8').write(src)
+              print('project build.gradle: classpath 추가')
+          else:
+              print('project build.gradle: 이미 있음')
+          PYX
+
+          # ② 앱 build.gradle 에 플러그인 적용 (파일 맨 끝이 관례)
+          if ! grep -q "com.google.gms.google-services" android/app/build.gradle; then
+            echo "" >> android/app/build.gradle
+            echo "apply plugin: 'com.google.gms.google-services'" >> android/app/build.gradle
+            echo "app build.gradle: plugin 적용"
+          else
+            echo "app build.gradle: 이미 적용됨"
+          fi
+          echo "✅ FCM 구성 완료 — 앱의 ANDROID_PUSH_LIVE 도 true 여야 실제로 등록된다"
+
       - name: Java 버전 확인 (21 이어야 함)
         script: |
           set -e
