@@ -47901,7 +47901,16 @@ function getNativePlatform(){
 //   「🔍 상태 확인」이 이 값을 그대로 보여준다.
 // 코드 판별용 표식 — 앱은 웹을 불러오므로 "새 코드가 실제로 도는지" 를 확인할 방법이
 //   화면에 하나는 있어야 한다. 진단에 그대로 찍힌다. 푸시 코드를 고칠 때 같이 올린다.
-var PUSH_CODE_VER = 'v3-listener-first';
+var PUSH_CODE_VER = 'v4-android-flag';
+
+// 🆕 2026.08: 안드로이드 푸시 잠금.
+//   google-services.json 이 빌드에 없는데 register() 를 부르면 네이티브가
+//   "Default FirebaseApp is not initialized" 로 즉시 죽는다 — JS try/catch 로 못 잡는
+//   네이티브 크래시라 "앱이 열렸다가 계속 종료" 가 된다(2026-08-20 Play 이슈의 원인).
+//   그래서 파일이 실제로 빌드에 들어간 것을 확인한 뒤에만 이 값을 true 로 올린다.
+//   순서: ① Codemagic 에 GOOGLE_SERVICES_JSON_B64 등록 → ② 안드로이드 빌드에서
+//        "✅ FCM 구성 완료" 확인 → ③ 이 플래그 true → ④ 새 빌드 배포
+var ANDROID_PUSH_LIVE = false;
 window._npState = { step: '미실행' };
 function _npMark(step, extra){
   window._npState = Object.assign({ step: step, at: new Date().toTimeString().slice(0,8) }, extra || {});
@@ -47918,8 +47927,8 @@ async function setupNativePush(){
   //   부팅마다 부르니 "앱이 열리지만 계속 비정상 종료" 가 됐다.
   //   iOS 는 APNs 라 Firebase 가 필요 없어 멀쩡했다.
   //   FCM 을 붙이는 날: codemagic 에 google-services.json 주입 + 이 가드 제거.
-  if (getNativePlatform() === 'android') {
-    _npMark('android — FCM 미구성이라 건너뜀');
+  if (getNativePlatform() === 'android' && !ANDROID_PUSH_LIVE) {
+    _npMark('android — FCM 미구성이라 건너뜀', { hint: 'ANDROID_PUSH_LIVE=false' });
     return;
   }
   if (!window.Capacitor || !window.Capacitor.Plugins) { _npMark('Capacitor.Plugins 없음'); return; }
