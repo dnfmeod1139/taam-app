@@ -43,6 +43,12 @@ with fake as (
    where inv.ticket_product_id is null
      and t.ticket_product_id like 'inv-%'
      and coalesce(t.status,'') <> 'cancelled'
+     -- ⚠ 지나간 예약은 손대지 않는다.
+     --   이미 다녀온 자리는 좌석을 다시 셀 이유가 없고, 과거 티켓에 좌석을 붙이면
+     --   정산이 끝난 매진 티켓의 숫자가 뒤늦게 움직인다. 오늘 이후만 고친다.
+     --   연도가 없는 옛 기록('09.11')도 대상에서 뺀다 — 어느 해인지 알 수 없다.
+     and length(inv.visit_date) = 10
+     and to_date(replace(inv.visit_date,'.','-'), 'YYYY-MM-DD') >= current_date
 ), matched as (
   select f.*,
          (select count(*) from public.ticket_products tp
@@ -106,6 +112,9 @@ begin
        where inv.ticket_product_id is null
          and t.ticket_product_id like 'inv-%'
          and coalesce(t.status,'') <> 'cancelled'
+         -- 지나간 예약·연도 없는 옛 기록은 제외 (위 미리보기와 같은 기준)
+         and length(inv.visit_date) = 10
+         and to_date(replace(inv.visit_date,'.','-'), 'YYYY-MM-DD') >= current_date
     )
     select f.*,
            (select count(*) from public.ticket_products tp
