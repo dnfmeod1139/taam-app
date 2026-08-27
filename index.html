@@ -49312,8 +49312,17 @@ window.pushDiagnose = async function(){
   lines.push('실행 환경: ' + (_isNat ? ('네이티브 앱 (' + getNativePlatform() + ')') : '웹/PWA'));
   lines.push('푸시 코드: ' + (typeof PUSH_CODE_VER !== 'undefined' ? PUSH_CODE_VER : '(구버전 — 캐시)'));
   if(_isNat){
+    // 🆕 2026.08-27: 빌드 표식을 같이 보여준다.
+    //   안드로이드는 표식이 없으면 FCM 등록을 통째로 건너뛴다(옛 빌드 크래시 방지 게이트).
+    //   그 경우 화면에는 아무 오류도 안 뜨고 구독만 안 생겨서, 보낸 쪽에는
+    //   「푸시 미수신 기기」로만 보인다. 원인이 여기라는 걸 폰에서 바로 읽을 수 있어야 한다.
+    var _bm = (typeof _appNativeBuild === 'function') ? _appNativeBuild() : null;
+    lines.push('빌드 표식: ' + (_bm && _bm.ver
+      ? ('TAAM/' + _bm.ver + '(' + _bm.build + ')')
+      : '✗ 없음 — 옛 빌드 (안드로이드는 FCM 등록을 건너뜀 → 스토어 업데이트 필요)'));
     var st = window._npState || { step: '미실행' };
     lines.push('네이티브 푸시: ' + (st.step || '?') + (st.at ? ' @' + st.at : ''));
+    if(st.hint) lines.push('  hint: ' + st.hint);
     ['receive','tokenTail','role','err'].forEach(function(k){
       if(st[k]) lines.push('  ' + k + ': ' + st[k]);
     });
