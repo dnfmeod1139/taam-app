@@ -49576,6 +49576,31 @@ async function setupNativePush(){
       }
     });
 
+    // 🆕 2026.08-28: 안드로이드 알림 채널을 만든다.
+    //
+    //   Android 8(Oreo) 부터는 채널 없이는 알림이 '표시되지 않는다'.
+    //   FCM 은 200 OK 를 주고 서버 요약도 「시도 1 · 성공 1」 이 되는데,
+    //   폰에는 아무것도 안 뜬다 — 배달과 표시는 다른 단계다.
+    //   실제로 그랬다: OS 알림 설정에 「이 앱에서 게시한 알림이 없음」 = 채널 0개.
+    //
+    //   Capacitor PushNotifications 는 채널을 자동으로 만들지 않는다.
+    //   여기서 만들고, send-push 의 android.notification.channel_id 와 값을 맞춘다.
+    if (_npResolvePlatform() === 'android' && typeof PushNotifications.createChannel === 'function') {
+      try {
+        await PushNotifications.createChannel({
+          id: 'taam_default',
+          name: 'TAAM 알림',
+          description: '예약 · 티켓 · 예치금 알림',
+          importance: 5,     // HIGH — 화면 상단에 뜬다
+          visibility: 1,     // PUBLIC — 잠금화면에도 내용 표시
+          lights: true, vibration: true,
+        });
+        _npMark('알림 채널 생성됨', { channel: 'taam_default' });
+      } catch(_ce){
+        _npMark('알림 채널 생성 실패', { err: String((_ce && _ce.message) || _ce).slice(0,90) });
+      }
+    }
+
     // 리스너가 '실제로' 붙은 뒤에야 권한을 묻고 등록한다 (위 await 가 그것을 보장한다).
     _npMark('리스너 등록 완료');
     var perm = await PushNotifications.requestPermissions();
@@ -49715,6 +49740,14 @@ window.pushDiagnose = async function(){
     });
     var _pl = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.PushNotifications;
     lines.push('플러그인: ' + (_pl ? '✓ 있음' : '✗ 없음(빌드 미포함)'));
+    // 🆕 알림 채널 — 안드로이드는 채널이 없으면 '발송 성공' 이어도 화면에 안 뜬다
+    if(_pl && getNativePlatform() === 'android' && _pl.listChannels){
+      try {
+        var _ch = await _pl.listChannels();
+        var _ids = ((_ch && _ch.channels) || []).map(function(c){ return c.id; });
+        lines.push('알림 채널: ' + (_ids.length ? _ids.join(', ') : '✗ 없음 — 알림이 표시되지 않는다'));
+      } catch(e){ lines.push('알림 채널 조회 실패: ' + (e.message||'').slice(0,50)); }
+    }
     if(_pl && _pl.checkPermissions){
       try { var cp = await _pl.checkPermissions(); lines.push('OS 권한: ' + (cp && cp.receive)); }
       catch(e){ lines.push('OS 권한 조회 실패: ' + e.message); }
