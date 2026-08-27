@@ -49135,11 +49135,34 @@ async function pushAutoSyncOnBoot(){
     _pushSubscription = sub;
     var payload = _subToPayload(sub);
     payload.user_id = u.id;
+    // 🔧 2026.08-27: 역할은 서버(profiles)에서 다시 읽어 덮는다.
+    //   이 함수는 부팅 + 2.5초에 돈다. 그때 _currentRole 은 아직 기본값 'user' 다
+    //   (역할 판정은 로그인·세션복원 흐름 뒷단에서 일어난다). _subToPayload 가
+    //   그 값을 그대로 담아 upsert 하면 슈퍼어드민 구독의 role 이 'user' 로 덮이고,
+    //   그 뒤로 role:superadmin / role:super_admin 푸시에서 통째로 빠진다.
+    //   부팅할 때마다 다시 덮이므로 스스로 낫지도 않는다 —
+    //   "PWA 에서 잘 오던 알림이 어느 순간부터 안 온다" 의 원인이 이것이다.
+    payload.role = await _pushResolveRole(u.id);
     var r = await _pushSaveSub(payload);
     if (r.error) console.warn('[Push] boot auto-sync 실패:', r.error.message);
-    else console.log('[Push] boot auto-sync OK — 구독 DB 재저장 (' + r.via + ')');
+    else console.log('[Push] boot auto-sync OK — 구독 DB 재저장 (' + r.via + ', role=' + payload.role + ')');
   } catch(e){ console.warn('[Push] boot auto-sync 예외:', e && e.message); }
 }
+
+// 🆕 2026.08-27: 푸시 구독에 적을 역할을 '서버 기준' 으로 정한다.
+//   메모리의 _currentRole 은 기본값이 'user' 라 항상 truthy 다. 그래서 종전 코드의
+//   "비어 있으면 profiles 를 본다" 폴백은 한 번도 실행되지 않았다.
+//   role 이 틀리면 role: 스코프 푸시가 그 기기에 영영 안 간다 — 조용히.
+async function _pushResolveRole(uid){
+  var _mem = (typeof _currentRole !== 'undefined' && _currentRole) ? _currentRole : 'user';
+  if(!window.sb || !uid) return _mem;
+  try {
+    var r = await window.sb.from('profiles').select('role').eq('id', uid).maybeSingle();
+    if(!r.error && r.data && r.data.role) return r.data.role;
+  } catch(_e){}
+  return _mem;   // 조회 실패 시에는 메모리 값 — 없는 것보다 낫다
+}
+window._pushResolveRole = _pushResolveRole;
 window.pushAutoSyncOnBoot = pushAutoSyncOnBoot;
 
 // VAPID public key (base64url) → Uint8Array
@@ -49250,13 +49273,12 @@ async function _npBindUser(){
     var { data: { user } } = await window.sb.auth.getUser();
     // ⚠ role 을 반드시 채운다 — send-push 의 role:superadmin 타깃은
     //   push_subscriptions.role 로 거른다. role 이 비면 슈퍼어드민이 구매 알림에서 조용히 빠진다.
-    var _rl = (typeof _currentRole !== 'undefined' && _currentRole) ? _currentRole : null;
-    if (!_rl && user) {
-      try {
-        var _pr = await window.sb.from('profiles').select('role').eq('id', user.id).maybeSingle();
-        _rl = (_pr.data && _pr.data.role) || null;
-      } catch(_e){}
-    }
+    // 🔧 2026.08-27: 서버(profiles) 를 우선한다.
+    //   _currentRole 은 기본값이 'user' 라 항상 truthy → 종전의 "비어 있으면 profiles"
+    //   폴백은 한 번도 안 돌았다. 토큰은 로그인 전에 오므로, 그때 저장하면
+    //   슈퍼어드민 기기가 'user' 로 박힌다.
+    var _rl = user ? await _pushResolveRole(user.id)
+                   : ((typeof _currentRole !== 'undefined' && _currentRole) ? _currentRole : null);
     var platform = getNativePlatform();
     var _payload = {
       user_id: user ? user.id : null,
