@@ -7786,18 +7786,18 @@ window.addEventListener('error', function(e){
 <!-- 🆕 2026.05.20: 영문 이름 등록 모달 (카드 소유자 매칭용) -->
 <div id="memberNameEnModal" style="display:none;position:fixed;inset:0;z-index:10500;background:rgba(0,0,0,.55);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);align-items:center;justify-content:center;" onclick="if(event.target===this)closeMemberNameEnModal()">
   <div style="width:min(92vw,420px);background:#f7f5f2;border-radius:18px;padding:24px 22px 20px;box-shadow:0 30px 80px rgba(0,0,0,.45);">
-    <div style="font-family:var(--font-main);font-size:16px;font-weight:800;color:#1a1a18;margin-bottom:4px;">영문 이름 등록</div>
+    <div data-i18n="auth.en_title" style="font-family:var(--font-main);font-size:16px;font-weight:800;color:#1a1a18;margin-bottom:4px;">영문 이름 등록</div>
     <div style="font-family:var(--font-main);font-size:9px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:#999;margin-bottom:12px;">ENGLISH NAME</div>
-    <div style="font-family:var(--font-main);font-size:11.5px;color:#666;line-height:1.6;background:#faf8f4;padding:10px 12px;border-radius:8px;margin-bottom:14px;border-left:3px solid #c8a96e;">
+    <div data-i18n="auth.en_info" style="font-family:var(--font-main);font-size:11.5px;color:#666;line-height:1.6;background:#faf8f4;padding:10px 12px;border-radius:8px;margin-bottom:14px;border-left:3px solid #c8a96e;">
       카드 등록 시 소유자 이름(영문)과 자동 매칭됩니다. 신용카드에 적힌 그대로 입력해주세요.
     </div>
     <div style="margin-bottom:12px;">
-      <label style="display:block;font-family:var(--font-main);font-size:11px;font-weight:700;color:#555;margin-bottom:6px;">영문 이름 (여권 또는 카드 표기)</label>
+      <label data-i18n="auth.en_label" style="display:block;font-family:var(--font-main);font-size:11px;font-weight:700;color:#555;margin-bottom:6px;">영문 이름 (여권 또는 카드 표기)</label>
       <input id="memberNameEnInput" type="text" placeholder="HONG GIL DONG" style="width:100%;padding:11px 12px;border:1px solid #e0ddd8;border-radius:8px;background:#fff;font-family:Menlo,Consolas,monospace;font-size:13px;color:#1a1a18;outline:none;text-transform:uppercase;" oninput="this.value=this.value.toUpperCase()">
     </div>
     <div style="display:flex;gap:8px;margin-top:18px;">
-      <button onclick="closeMemberNameEnModal()" style="flex:1;padding:12px;border-radius:10px;border:1px solid #e0ddd8;background:#fff;color:#666;font-family:var(--font-main);font-size:13px;font-weight:700;cursor:pointer;">취소</button>
-      <button onclick="_saveMemberNameEn()" style="flex:1;padding:12px;border-radius:10px;border:none;background:#1a1a18;color:#fff;font-family:var(--font-main);font-size:13px;font-weight:700;cursor:pointer;">저장</button>
+      <button onclick="closeMemberNameEnModal()" data-i18n="common.cancel" style="flex:1;padding:12px;border-radius:10px;border:1px solid #e0ddd8;background:#fff;color:#666;font-family:var(--font-main);font-size:13px;font-weight:700;cursor:pointer;">취소</button>
+      <button onclick="_saveMemberNameEn()" data-i18n="common.save" style="flex:1;padding:12px;border-radius:10px;border:none;background:#1a1a18;color:#fff;font-family:var(--font-main);font-size:13px;font-weight:700;cursor:pointer;">저장</button>
     </div>
   </div>
 </div>
@@ -29390,6 +29390,8 @@ async function openMemberNameEnModal(){
     input.value = current || '';
   }
   modal.style.display = 'flex';
+  // 🔧 2026.08: 여는 자리에서 번역을 입힌다 (비밀번호 모달과 같은 이유)
+  if(typeof applyI18n === 'function') applyI18n(modal);
   setTimeout(function(){ if(input) input.focus(); }, 100);
 }
 function closeMemberNameEnModal(){
@@ -29400,16 +29402,16 @@ async function _saveMemberNameEn(){
   var input = document.getElementById('memberNameEnInput');
   var value = (input && input.value || '').trim().toUpperCase();
   if(!value){
-    if(typeof showToast === 'function') showToast('!','입력 필요','영문 이름을 입력해주세요');
+    if(typeof showToast === 'function') showToast('!', t('auth.en_err_empty_t','입력 필요'), t('auth.en_err_empty_m','영문 이름을 입력해주세요'));
     return;
   }
   // 영문/공백/하이픈만 허용
   if(!/^[A-Z\s\-]+$/.test(value)){
-    if(typeof showToast === 'function') showToast('!','입력 오류','영문 알파벳, 공백, 하이픈만 입력 가능합니다');
+    if(typeof showToast === 'function') showToast('!', t('auth.en_err_format_t','입력 오류'), t('auth.en_err_format_m','영문 알파벳, 공백, 하이픈만 입력 가능합니다'));
     return;
   }
   if(!window.sb){
-    if(typeof showToast === 'function') showToast('!','오류','서버 연결 오류');
+    if(typeof showToast === 'function') showToast('!', t('common.error','오류'), t('auth.en_err_server','서버 연결 오류'));
     return;
   }
   try {
@@ -29419,7 +29421,7 @@ async function _saveMemberNameEn(){
     var res = await window.sb.from('profiles').update({ display_name_en: value }).eq('id', uid);
     if(res.error) throw res.error;
     _myDisplayNameEn = value; // 캐시 갱신
-    if(typeof showToast === 'function') showToast('✓','저장 완료','영문 이름이 등록되었습니다');
+    if(typeof showToast === 'function') showToast('✓', t('auth.en_saved_t','저장 완료'), t('auth.en_saved_m','영문 이름이 등록되었습니다'));
     closeMemberNameEnModal();
   } catch(e){
     if(typeof showToast === 'function') showToast('!','저장 실패', e.message || '다시 시도해주세요');
@@ -36577,6 +36579,17 @@ var TRANSLATIONS = {
       mp_saving:'저장 중...',
       mp_saved_t:'비밀번호 저장 완료',
       mp_saved_m:'다음 로그인부터 이메일+비밀번호로 빠르게 로그인할 수 있습니다',
+      // 🆕 2026.08: 영문 이름 등록 모달 (카드 소유자 매칭용)
+      en_title:'영문 이름 등록',
+      en_info:'카드 등록 시 소유자 이름(영문)과 자동 매칭됩니다. 신용카드에 적힌 그대로 입력해주세요.',
+      en_label:'영문 이름 (여권 또는 카드 표기)',
+      en_err_empty_t:'입력 필요',
+      en_err_empty_m:'영문 이름을 입력해주세요',
+      en_err_format_t:'입력 오류',
+      en_err_format_m:'영문 알파벳, 공백, 하이픈만 입력 가능합니다',
+      en_err_server:'서버 연결 오류',
+      en_saved_t:'저장 완료',
+      en_saved_m:'영문 이름이 등록되었습니다',
     },
     // 🆕 티켓 상세 / 구매 / 결제 흐름
     ticket: {
@@ -37409,6 +37422,16 @@ var TRANSLATIONS = {
       mp_saving:'Saving...',
       mp_saved_t:'Password saved',
       mp_saved_m:'From next time you can sign in with email and password',
+      en_title:'Register English Name',
+      en_info:'Used to match the cardholder name when you add a card. Enter it exactly as printed on your credit card.',
+      en_label:'English name (as on passport or card)',
+      en_err_empty_t:'Required',
+      en_err_empty_m:'Please enter your English name',
+      en_err_format_t:'Invalid input',
+      en_err_format_m:'Only letters, spaces and hyphens are allowed',
+      en_err_server:'Server connection error',
+      en_saved_t:'Saved',
+      en_saved_m:'Your English name has been registered',
     },
     // 🆕 Ticket detail / purchase / payment flow
     ticket: {
@@ -38436,6 +38459,16 @@ TRANSLATIONS.ja = {
     mp_saving:'保存中...',
     mp_saved_t:'パスワードを保存しました',
     mp_saved_m:'次回からメールとパスワードでログインできます',
+    en_title:'英文氏名の登録',
+    en_info:'カード登録時に名義（英文）と自動照合します。クレジットカードに記載のとおり入力してください。',
+    en_label:'英文氏名（パスポートまたはカード表記）',
+    en_err_empty_t:'入力が必要です',
+    en_err_empty_m:'英文氏名を入力してください',
+    en_err_format_t:'入力エラー',
+    en_err_format_m:'英字・スペース・ハイフンのみ入力できます',
+    en_err_server:'サーバー接続エラー',
+    en_saved_t:'保存しました',
+    en_saved_m:'英文氏名を登録しました',
   },
   ticket: {
     tab_menu:'メニューを表示',
