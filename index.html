@@ -43169,16 +43169,26 @@ function pcalRefreshPay(){
   var total  = (meal + agency + wine) * pax;
   var money  = function(v, opt){ return (typeof fxMoney === 'function') ? fxMoney(v, opt) : (taamMoney(v)); };
 
+  // 🔧 2026.08-28: 사진 캘린더 상세가 티켓 금액을 자기만의 방식으로 계산하고 있었다.
+  //
+  //   하단 바만  money(total)      → 원화 총액을 통째로 환산 → ≈ $860
+  //   합계 행은  {usd:_fxTotalUsd} → 대행비 정액 반영        →   $900
+  //   항목들은   money(meal*pax)   → 확정정가(ovs_prices) 무시 → ≈ $485 (확정가인데 ≈)
+  //
+  //   같은 화면 안에서 셋이 서로 달랐다. 티켓 금액은 fxTicketComp/fxTicketTotal
+  //   하나만 쓴다 — 확정정가·대행비 정액·통화를 그 함수들이 이미 다 판단한다.
   var h = '';
-  if(meal)   h += '<div class="pd-row"><span class="l">식사비 ×' + pax + '인</span><span class="v">' + money(meal*pax) + '</span></div>';
-  if(agency) h += '<div class="pd-row"><span class="l">대행비 ×' + pax + '인</span><span class="v">'
-                + money(agency*pax, {usd:(typeof fxAgencyUsd==='function'?fxAgencyUsd(t)*pax:0), exact:true}) + '</span></div>';
-  if(wine)   h += '<div class="pd-row"><span class="l">주류 미니멈 ×' + pax + '인</span><span class="v">' + money(wine*pax) + '</span></div>';
+  if(meal)   h += '<div class="pd-row"><span class="l">식사비 ×' + pax + '인</span><span class="v">' + fxTicketComp(t,'meal',meal,pax) + '</span></div>';
+  if(agency) h += '<div class="pd-row"><span class="l">대행비 ×' + pax + '인</span><span class="v">' + fxTicketComp(t,'agency',agency,pax) + '</span></div>';
+  if(wine)   h += '<div class="pd-row"><span class="l">주류 미니멈 ×' + pax + '인</span><span class="v">' + fxTicketComp(t,'wine',wine,pax) + '</span></div>';
   h += '<div class="pd-sum"><span class="l">합계</span><span class="v">'
-     + money(total, {usd:(typeof _fxTotalUsd==='function'?_fxTotalUsd(t,pax,meal,wine):0), exact:true}) + '</span></div>';
+     + fxTicketTotal(t, pax, meal, wine, total) + '</span></div>';
   var rows = document.getElementById('pdPayRows'); if(rows) rows.innerHTML = h;
 
-  var after = (typeof currentDepositBalance !== 'undefined' ? currentDepositBalance : 0) - total;
+  // 잔액도 '실제 차감액' 기준이어야 한다. total 은 원화 정가라, 해외 회원은
+  //   화면 합계($900)와 다른 값(₩1,150,000)으로 잔액이 계산되고 있었다.
+  var _chgKrw = (typeof fxTicketCharge === 'function') ? fxTicketCharge(t, pax).krw : total;
+  var after = (typeof currentDepositBalance !== 'undefined' ? currentDepositBalance : 0) - _chgKrw;
   var bh = '<div class="pd-row" style="border-bottom:none;"><span class="l">예치금 잔액</span><span class="v">'
          + money(typeof currentDepositBalance !== 'undefined' ? currentDepositBalance : 0) + '</span></div>';
   // 🆕 2026.08: 통화 지정 회원에게 이 두 줄만 ₩ 로 박혀 있었다 — 위아래가 전부 $ 인데
@@ -43194,7 +43204,8 @@ function pcalRefreshPay(){
   if(pol) pol.innerHTML = (typeof renderPolicyClauses === 'function') ? renderPolicyClauses(t) : '';
 
   var bar = document.getElementById('pdBarTotal');
-  if(bar) bar.innerHTML = money(total) + '<small>' + (pax > 1 ? '· ' + pax + '인' : '/ 인') + '</small>';
+  if(bar) bar.innerHTML = fxTicketTotal(t, pax, meal, wine, total)
+        + '<small>' + (pax > 1 ? '· ' + pax + '인' : '/ 인') + '</small>';
 }
 window.pcalRefreshPay = pcalRefreshPay;
 
