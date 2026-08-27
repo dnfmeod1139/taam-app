@@ -22868,8 +22868,33 @@ function openNotifSettings(){
     : (typeof _currentRole !== 'undefined' && _currentRole === 'superadmin');
   var _ppRow = document.getElementById('nsPurchasePreviewRow');
   if(_ppRow) _ppRow.style.display = _isSuper ? 'block' : 'none';
+  // 🔧 2026.08-28: 진단 줄을 회원에게도 보여준다.
+  //
+  //   어제는 슈퍼어드민에게만 보이게 감추고, 회원 기기에서는 제목 7번 탭으로
+  //   열게 했다. 그런데 실제 안드로이드 기기에서 그 제스처가 먹지 않았고 —
+  //   코드는 최신인데(통화 표시가 새 코드로 나왔다) 진단만 안 열렸다 —
+  //   왜 안 먹는지 확정하지 못했다. 숨은 제스처는 확인도, 안내도 어렵다.
+  //
+  //   진단을 감출 이유가 애초에 약했다. 어제 감춘 건 「등록 미완료」 빨간 경고와
+  //   겹쳐 고장난 것처럼 보였기 때문인데 그 문구는 이미 고쳤다.
+  //   「상태 확인」은 읽기 전용이고 「테스트 발송」은 자기에게 알림 하나 보내는 게
+  //   전부다. 오히려 "알림이 안 와요" 하는 회원이 스스로 확인할 수 있다.
+  //   화면 맨 아래에 조용히 둔다. 7번 탭도 그대로 둔다(이미 아는 사람용).
   var _dgRow = document.getElementById('nsDiagRow');
-  if(_dgRow) _dgRow.style.display = _isSuper ? 'flex' : 'none';
+  if(_dgRow){
+    _dgRow.style.display = 'flex';
+    // 맨 아래로 옮긴다 — 회원에게는 토글이 먼저고 진단은 마지막이어야 한다.
+    //   (마크업상 이 줄은 권한 줄 바로 뒤에 있는데, 앱에서는 권한 줄이 숨겨져
+    //    맨 위로 올라온다. 회원 화면에서 제일 먼저 보이는 것이 진단 버튼이면 안 된다.)
+    try {
+      var _sc = _dgRow.closest('.mp-sub-scroll');
+      if(_sc && _sc.lastElementChild !== _dgRow) _sc.appendChild(_dgRow);
+      _dgRow.style.borderBottom = 'none';
+      _dgRow.style.borderTop = '1px solid rgba(0,0,0,.06)';
+      _dgRow.style.marginTop = '18px';
+      _dgRow.style.opacity = _isSuper ? '1' : '.72';
+    } catch(_de){}
+  }
   // 기기 푸시 알림 줄 — 앱에서는 슈퍼어드민만. 웹/PWA 는 권한 요청 버튼이 필요하니 그대로 둔다.
   var _pmRow = document.getElementById('nsPermRow');
   if(_pmRow){
