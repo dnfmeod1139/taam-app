@@ -71723,9 +71723,23 @@ var _notifPrefs = {
 };
 
 // IDB 저장/복원
+// 🆕 2026.08-27: 알림 설정을 서버(profiles.notif_prefs)에 둔다.
+//
+//   왜 — 종전엔 IDB(기기 로컬)에만 있었다. 그래서
+//     ① 아이폰 앱에서 끈 것이 PC 웹에는 반영되지 않았다 (기기마다 따로 놀았다)
+//     ② 앱을 새로 깔면 초기화됐다
+//     ③ 무엇보다, 이 값은 send-push 가 보지 않으므로 '껐는데 푸시는 오는' 상태였다
+//        — showToast 만 막고 있었다. 설정이 설정 노릇을 못 했다.
+//   서버에 두면 세 가지가 한 번에 해결된다. 기본값은 전부 켜짐이고,
+//   회원이 직접 끈 항목만 꺼진다.
+//
+//   IDB 는 계속 쓴다 — 오프라인·비로그인 상태의 폴백이고, 서버 값이 오면 덮인다.
 function loadNotifPrefs(){
-  if(typeof IDB === 'undefined') return Promise.resolve();
-  return IDB.get('notifPrefs').then(function(s){
+  var _local = (typeof IDB === 'undefined')
+    ? Promise.resolve(null)
+    : IDB.get('notifPrefs').catch(function(){ return null; });
+
+  return _local.then(function(s){
     if(s){
       try {
         var d = JSON.parse(s);
@@ -71735,11 +71749,47 @@ function loadNotifPrefs(){
       } catch(e){}
     }
     applyNotifPrefsToUI();
+    // 서버 값으로 덮어쓴다 (있을 때만) — 기기 간 동기화의 기준은 서버다
+    return _notifPrefsFromServer();
+  }).then(function(){
+    applyNotifPrefsToUI();
   }).catch(function(){});
 }
+
+async function _notifPrefsFromServer(){
+  if(!window.sb) return;
+  try {
+    var ur = await window.sb.auth.getUser();
+    var u = ur && ur.data && ur.data.user;
+    if(!u) return;
+    var r = await window.sb.from('profiles').select('notif_prefs').eq('id', u.id).maybeSingle();
+    // 컬럼이 아직 없는 DB 면 error 가 온다 — 조용히 넘어가고 로컬 값으로 돈다
+    if(r.error || !r.data || !r.data.notif_prefs) return;
+    var d = r.data.notif_prefs;
+    Object.keys(_notifPrefs).forEach(function(k){
+      if(typeof d[k] === 'boolean') _notifPrefs[k] = d[k];
+    });
+    if(typeof IDB !== 'undefined') IDB.set('notifPrefs', JSON.stringify(_notifPrefs)).catch(function(){});
+    console.log('[notifPrefs] 서버 값 적용:', _notifPrefs);
+  } catch(e){ console.warn('[notifPrefs] 서버 조회 예외:', e && e.message); }
+}
+window._notifPrefsFromServer = _notifPrefsFromServer;
+
 function saveNotifPrefs(){
-  if(typeof IDB === 'undefined') return;
-  IDB.set('notifPrefs', JSON.stringify(_notifPrefs)).catch(function(){});
+  if(typeof IDB !== 'undefined') IDB.set('notifPrefs', JSON.stringify(_notifPrefs)).catch(function(){});
+  // 서버에도 저장 — 다른 기기와 send-push 가 같은 값을 본다
+  (async function(){
+    if(!window.sb) return;
+    try {
+      var ur = await window.sb.auth.getUser();
+      var u = ur && ur.data && ur.data.user;
+      if(!u) return;
+      var up = await window.sb.from('profiles')
+        .update({ notif_prefs: _notifPrefs }).eq('id', u.id).select('id');
+      if(up.error) console.warn('[notifPrefs] 서버 저장 실패:', up.error.message);
+      else console.log('[notifPrefs] 서버 저장 완료');
+    } catch(e){ console.warn('[notifPrefs] 서버 저장 예외:', e && e.message); }
+  })();
 }
 function applyNotifPrefsToUI(){
   var map = {
