@@ -15603,6 +15603,46 @@ async function savePurchase(){
 
 // 🆕 2026.07: 매진 경합 자동 환불 — 서버 트리거가 좌석 초과로 INSERT 를 거부한 구매를
 //   전액 환불(예치금 복원) + 구매기록 제거 + 회원 안내 + 슈퍼어드민 통지.
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026.08-28: 예치금 환불은 '나간 주머니' 로 되돌린다.
+//
+//   왜 — 멤버십 예치금은 연회비의 90% 를 돌려준 것이고, 일반 예치금은 그 뒤
+//   회원이 추가로 납입한 돈이다. 성격이 다르다. 그런데 환불이 전부 일반으로
+//   들어가서, 구매·취소를 반복하면 멤버십 예치금이 일반으로 새어나갔다.
+//   실제로 한 계정이 네 번 만에 멤버십 10,000,000 → 4,133,834 가 됐다.
+//   (합계는 보존되지만 주머니가 바뀐다 — 멤버십의 성격이 사라진다)
+//
+//   지점마다 규칙도 달랐다. 구매 취소·방문 반환은 일반으로, 매진 자동환불은
+//   멤버십으로 넣고 있었다. 한 곳씩 고치면 반드시 하나가 빠지므로 함수로 모은다.
+//
+//   반환: { mem, gen } — 각 주머니에 더할 금액. 합은 언제나 amount 와 같다.
+async function _depRefundSplit(userId, purchaseId, amount){
+  var amt = Math.max(0, parseInt(amount, 10) || 0);
+  if (!amt || !userId) return { mem: 0, gen: 0 };
+  var mem = 0, gen = 0;
+  try {
+    // 같은 구매의 차감 거래를 읽어 '어느 주머니에서 얼마가 나갔는지' 를 본다
+    var r = await window.sb.from('deposit_transactions')
+      .select('deposit_type, amount')
+      .eq('user_id', userId)
+      .eq('change_type', 'ticket_purchase')
+      .filter('metadata->>purchase_id', 'eq', String(purchaseId || ''));
+    (r.data || []).forEach(function(x){
+      var a = Math.abs(parseInt(x.amount, 10) || 0);
+      if (x.deposit_type === 'membership') mem += a; else gen += a;
+    });
+  } catch(_e){ console.warn('[depRefund] 차감 내역 조회 실패:', _e && _e.message); }
+
+  var out = mem + gen;
+  // 기록이 없으면 멤버십 우선 — 차감이 '멤버십 먼저' 라서 그게 대칭이다.
+  //   (옛 구매는 purchase_id 가 metadata 에 없을 수 있다)
+  if (out <= 0) return { mem: amt, gen: 0 };
+  // 부분 환불(대행비 차감 등)은 나간 비율대로 나눈다. 반올림 잔액은 일반이 흡수.
+  var m = Math.min(amt, Math.round(amt * mem / out));
+  return { mem: m, gen: amt - m };
+}
+window._depRefundSplit = _depRefundSplit;
+
 async function _tkCapacityAutoRefund(row, user, errMsg){
   var amt = parseInt(row.price) || 0;
   // 🆕 2026.08: 카드 결제분은 예치금에 적립하지 않는다 (이중 환불 방지).
@@ -15638,15 +15678,20 @@ async function _tkCapacityAutoRefund(row, user, errMsg){
     if (_doRefund) {
       var me = await window.sb.from('profiles').select('*').eq('id', user.id).maybeSingle();
       if (!me.error && me.data) {
-        var _mem = (me.data.membership_deposit_balance || 0) + amt;
-        var _gen = me.data.general_deposit_balance || 0;
+        // 🔧 2026.08-28: 여기만 무조건 멤버십으로 넣고 있었다 — 나간 주머니로 되돌린다
+        var _spl3 = await _depRefundSplit(user.id, row.purchase_id, amt);
+        var _mem = (me.data.membership_deposit_balance || 0) + _spl3.mem;
+        var _gen = (me.data.general_deposit_balance || 0) + _spl3.gen;
         await window.sb.from('profiles').update({
           membership_deposit_balance: _mem,
+          general_deposit_balance: _gen,
           deposit_balance: _mem + _gen
         }).eq('id', user.id);
         await window.sb.from('deposit_transactions').insert({
-          user_id: user.id, deposit_type: 'membership', change_type: 'ticket_refund',
-          amount: amt, balance_after: _mem,
+          user_id: user.id,
+          deposit_type: (_spl3.mem >= _spl3.gen ? 'membership' : 'general'),
+          change_type: 'ticket_refund',
+          amount: amt, balance_after: _mem + _gen,
           description: '매진 자동 환불 · ' + (row.restaurant_name || '티켓'),
           metadata: { purchase_id: row.purchase_id, refund_type: 'returned', reason: 'capacity_auto_refund', error: String(errMsg || '').slice(0, 120) }
         });
@@ -25708,19 +25753,28 @@ async function cancelTicketPurchase(purchaseId, refundCalc, isSuperAdminOverride
           .eq('id', user.id).single();
         var memBal = (profRes.data && profRes.data.membership_deposit_balance) || 0;
         var genBal = (profRes.data && profRes.data.general_deposit_balance) || 0;
-        // 일반 예치금에 환불 (정책 — 사용처 분리)
-        var newGen = genBal + _depositRefund;
-        var newTotal = memBal + newGen;
+        // 🔧 2026.08-28: 나간 주머니로 되돌린다 (종전엔 전액 일반으로 들어갔다)
+        var _spl = await _depRefundSplit(user.id, purchaseId, _depositRefund);
+        var newMem = memBal + _spl.mem;
+        var newGen = genBal + _spl.gen;
+        var newTotal = newMem + newGen;
         await window.sb.from('profiles').update({
-          general_deposit_balance: newGen
+          membership_deposit_balance: newMem,
+          general_deposit_balance: newGen,
+          deposit_balance: newTotal
         }).eq('id', user.id);
 
         // deposit_transactions 환불 기록 (예치금 환원분만)
+        //   주머니가 둘로 나뉘면 두 건으로 남긴다 — 내역에서 어디로 돌아갔는지 보여야 한다
+        for (var _si = 0; _si < 2; _si++) {
+          var _sType = _si === 0 ? 'membership' : 'general';
+          var _sAmt  = _si === 0 ? _spl.mem : _spl.gen;
+          if (_sAmt <= 0) continue;
         await window.sb.from('deposit_transactions').insert({
           user_id: user.id,
-          deposit_type: 'general',
+          deposit_type: _sType,
           change_type: 'ticket_refund',
-          amount: _depositRefund,
+          amount: _sAmt,
           balance_after: newTotal,
           description: (r ? r.name : '티켓') + ' 취소 환불(예치금) — ' + refundCalc.reason,
           metadata: {
@@ -25738,6 +25792,7 @@ async function cancelTicketPurchase(purchaseId, refundCalc, isSuperAdminOverride
             cancelled_by: isSuperAdminOverride ? 'super_admin' : 'user'
           }
         });
+        }
 
         // 로컬 잔액 동기화
         currentDepositBalance = newTotal;
@@ -26137,10 +26192,15 @@ function _dmPersistBuyerChanges(h, refundToAdd, refundNote){
         if (refundToAdd > 0 && userId) {
           // 예치금으로 낸 부분만 일반 예치금에 크레딧 (카드 부분은 토스에서 카드로 환불).
           //   카드 전액 결제분이면 _depCredit=0 이라 예치금 잔액은 그대로, 카드 환불만 대기로 남는다.
-          var newGen = genBal + _depCredit;
-          var newTotal = memBal + newGen;
+          // 🔧 2026.08-28: 나간 주머니로 되돌린다 (종전엔 전액 일반으로)
+          var _spl2 = await _depRefundSplit(userId, purchaseId, _depCredit);
+          var newMem = memBal + _spl2.mem;
+          var newGen = genBal + _spl2.gen;
+          var newTotal = newMem + newGen;
           await window.sb.from('profiles').update({
-            general_deposit_balance: newGen
+            membership_deposit_balance: newMem,
+            general_deposit_balance: newGen,
+            deposit_balance: newTotal
           }).eq('id', userId);
 
           // description: 정상 반환은 "반환 완료" (대행비 차감은 정상 절차라 강조 안 함).
@@ -26154,11 +26214,13 @@ function _dmPersistBuyerChanges(h, refundToAdd, refundNote){
             : ((h.rest || '티켓') + ' 환불 처리(예치금) — ' + refundNote + _cardDesc);
           await window.sb.from('deposit_transactions').insert({
             user_id: userId,
-            deposit_type: 'general',
+            deposit_type: (_spl2.mem >= _spl2.gen ? 'membership' : 'general'),
             change_type: 'ticket_refund',
             amount: _depCredit,
             balance_after: newTotal,
-            description: _dtDesc,
+            description: _dtDesc + ((_spl2.mem > 0 && _spl2.gen > 0)
+              ? (' · 멤버십 ₩' + _spl2.mem.toLocaleString() + ' + 일반 ₩' + _spl2.gen.toLocaleString())
+              : ''),
             metadata: {
               purchase_id: purchaseId,
               ticket_id: h.id,
