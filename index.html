@@ -19905,9 +19905,9 @@ function openTicketDetail(id){
     var agency = parseInt(t.agencyFee||0);
     var wine   = parseInt(t.wineMin||0);
     var costs  = [];
-    if (meal)   costs.push({label:'식사비',      amt:meal,   desc:'인당 코스 (식사) 비용 방문후 · 예치금 반환'});
-    if (agency) costs.push({label:'대행비',      amt:agency, desc:'예약 대행 수수료 (환불 불가)'});
-    if (wine)   costs.push({label:'주류 미니멈', amt:wine,   desc:'인원당 최소 주류 주문 금액'});
+    if (meal)   costs.push({label:'식사비',      key:'meal',   amt:meal,   desc:'인당 코스 (식사) 비용 방문후 · 예치금 반환'});
+    if (agency) costs.push({label:'대행비',      key:'agency', amt:agency, desc:'예약 대행 수수료 (환불 불가)'});
+    if (wine)   costs.push({label:'주류 미니멈', key:'wine',   amt:wine,   desc:'인원당 최소 주류 주문 금액'});
     if (costs.length > 0) {
       var totalAmt = (meal+agency+wine) * _tdPax;
       costEl.innerHTML =
@@ -19919,14 +19919,14 @@ function openTicketDetail(id){
               +'<div style="font-family:var(--font-main);font-size:11px;color:#aaa;margin-top:2px;">'+c.desc+'</div>'
             +'</div>'
             +'<div style="text-align:right;">'
-              +'<div style="font-family:var(--font-main);font-size:14px;font-weight:800;color:#1a1a18;">₩'+c.amt.toLocaleString()+'<span style="font-size:9px;font-weight:500;color:#aaa;">/인</span></div>'
-              +'<div style="font-family:var(--font-main);font-size:10px;color:#bbb;">×'+_tdPax+'인 = ₩'+(c.amt*_tdPax).toLocaleString()+'</div>'
+              +'<div style="font-family:var(--font-main);font-size:14px;font-weight:800;color:#1a1a18;">'+fxTicketComp(t,c.key,c.amt,1)+'<span style="font-size:9px;font-weight:500;color:#aaa;">/인</span></div>'
+              +'<div data-perpax style="font-family:var(--font-main);font-size:10px;color:#bbb;">×'+_tdPax+'인 = '+fxTicketComp(t,c.key,c.amt,_tdPax)+'</div>'
             +'</div>'
           +'</div>';
         }).join('')
         +'<div id="tdTotalRow" style="display:flex;align-items:center;justify-content:space-between;padding:12px 0;margin-top:2px;">'
           +'<span style="font-family:var(--font-main);font-size:10px;font-weight:800;letter-spacing:.1em;color:#111;">TOTAL</span>'
-          +'<span id="tdTotal" style="font-family:Oswald,sans-serif;font-size:22px;font-weight:800;color:#5C0A14;">₩ '+totalAmt.toLocaleString()+'</span>'
+          +'<span id="tdTotal" style="font-family:Oswald,sans-serif;font-size:22px;font-weight:800;color:#5C0A14;">'+fxTicketTotal(t,_tdPax,meal,wine,totalAmt)+'</span>'
         +'</div>';
     } else {
       costEl.innerHTML = '';
@@ -20821,7 +20821,7 @@ function updateBuyBar() {
     var agency = parseInt(t.agencyFee||0);
     var wine   = parseInt(t.wineMin||0);
     var total  = (meal + agency + wine) * _tdPax;
-    priceEl.textContent = total > 0 ? '₩' + total.toLocaleString() : '';
+    priceEl.innerHTML = total > 0 ? fxTicketTotal(t, _tdPax, meal, wine, total) : '';
   }
 }
 
@@ -20839,15 +20839,22 @@ function renderPriceRows(){
   var t=currentTicket;if(!t)return;
   var meal=parseInt(t.mealFee||t.mealAmt||0),agency=parseInt(t.agencyFee||0),wine=parseInt(t.wineMin||0);
   var total=(meal+agency+wine)*_tdPax;
-  // Total 업데이트 (tdCostSummary 안)
+  // 🔧 2026.08-28: 티켓 금액은 fxTicketTotal / fxTicketComp 하나로만 계산한다.
+  //   taamMoney 는 '원화 총액을 통째로 환산' 한다. 그런데 대행비는 환산이 아니라
+  //   해외 정액 요율(₩÷1,000 = $)이다. 그래서 두 방식이 어긋났다 —
+  //   항목 합은 $485+$150+$265=$900 인데 총액 환산은 $860 으로 $40 이 사라졌다.
+  //   그 $40 이 정확히 대행비 정액분(150 − 150,000÷환율)이다. 돈이 걸린 자리라
+  //   화면끼리 다른 숫자를 보이면 안 된다.
   var totEl=document.getElementById('tdTotal');
-  if(totEl) totEl.textContent = taamMoney(total);
+  if(totEl) totEl.innerHTML = fxTicketTotal(t, _tdPax, meal, wine, total);
   // 인원당 금액도 업데이트
   var costEl=document.getElementById('tdCostSummary');
   if(costEl){
     var subEls=costEl.querySelectorAll('[data-perpax]');
-    var labels=[meal,agency,wine].filter(Boolean);
-    subEls.forEach(function(el,i){ if(labels[i]) el.textContent='×'+_tdPax+'인 = '+taamMoney((labels[i]*_tdPax)); });
+    var comps=[['meal',meal],['agency',agency],['wine',wine]].filter(function(c){ return c[1]; });
+    subEls.forEach(function(el,i){
+      if(comps[i]) el.innerHTML='×'+_tdPax+'인 = '+fxTicketComp(t, comps[i][0], comps[i][1], _tdPax);
+    });
   }
 }
 
@@ -20856,9 +20863,10 @@ function setAgree(id,val){
   _agreeState[id]=val;
   var box=document.getElementById(id);
   if(!box)return;
-  box.style.background=val?'#1a1a18':'#fff';
-  box.style.borderColor=val?'#1a1a18':'#ddd';
-  box.innerHTML=val?'<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>':'';
+  // 🔧 2026.08-28: tdConfirmToggle 과 같은 이유 — 10px SVG 라 체크가 안 보였다
+  box.style.background=val?'#5C0A14':'#fff';
+  box.style.borderColor=val?'#5C0A14':'#ddd';
+  box.innerHTML=val?'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>':'';
   checkAllAgreed();
 }
 
@@ -21258,9 +21266,15 @@ function tdConfirmToggle(){
   var chk = document.getElementById('tdConfirmCheck');
   var btn = document.getElementById('tdPayBtn');
   if(chk){
-    chk.style.background    = _tdConfirmAgreed ? '#1a1a18' : '#fff';
-    chk.style.borderColor   = _tdConfirmAgreed ? '#1a1a18' : '#ddd';
-    chk.innerHTML = _tdConfirmAgreed ? '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>' : '';
+    // 🔧 2026.08-28: 체크가 안 보이고 '검은 동그라미' 로만 보였다.
+    //   20px 원 안에 10px SVG 를 넣어 stroke 가 1.25px 로 줄었고, 검정 배경 위
+    //   가는 흰 선이라 눈에 안 걸렸다. 아이콘을 원 크기에 맞추고 선을 굵힌다.
+    //   배경도 검정 대신 브랜드 와인색으로 — 동의 표시가 경고처럼 보이지 않게.
+    chk.style.background    = _tdConfirmAgreed ? '#5C0A14' : '#fff';
+    chk.style.borderColor   = _tdConfirmAgreed ? '#5C0A14' : '#ddd';
+    chk.innerHTML = _tdConfirmAgreed
+      ? '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>'
+      : '';
   }
   if(btn){
     btn.style.opacity       = _tdConfirmAgreed ? '1' : '.4';
