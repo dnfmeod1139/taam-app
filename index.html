@@ -6177,11 +6177,16 @@ function fxIsOverseas(){
   return cur !== 'KRW';
 }
 
-// 화면 병기 통화 — JPY 지정 회원은 엔(단, 엔 기준율이 없으면 달러 폴백), 그 외 해외는 달러
+// 화면 표시 통화 — 회원에게 지정된 통화 하나를 정한다.
+// 🔧 2026.08-28: JPY 지정인데 엔 기준율(FX.rate_jpy)이 없으면 '달러' 로 떨어지던 것을
+//   '원화' 로 바꾼다. 엔 회원에게 달러를 보여주는 건 확실히 틀린 값이다 —
+//   본 적도 없는 통화가 뜨고, 그게 자기 청구액인 줄 알게 된다.
+//   원화는 적어도 실제 정산 통화라 틀리지 않는다.
+//   ⚠ 엔이 나오게 하려면 슈퍼어드민이 환율 설정에서 엔 기준율을 넣어야 한다.
 function _fxDispCur(){
   if (!fxIsOverseas()) return null;
   var cur = (typeof _taamUserCur === 'function') ? _taamUserCur() : 'USD';
-  if (cur === 'JPY' && fxRateJpy() > 0) return 'JPY';
+  if (cur === 'JPY') return fxRateJpy() > 0 ? 'JPY' : null;   // 기준율 없으면 원화
   return 'USD';
 }
 
@@ -6529,6 +6534,41 @@ function loadFxSettings(){
     })
     .catch(function(e){ console.warn('[fx] 설정 로드 실패 — 기본값 사용:', e && e.message); });
 }
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026.08-28: 회원 화면 금액 — 지정 통화 '하나' 로만 보여준다.
+//
+//   왜 병기를 버렸나
+//     원화와 달러를 나란히 쓰면 회원은 무엇이 자기가 낼 돈인지 매번 되짚어야 한다.
+//     특히 초대·결제 화면에서 그렇다. 지정 통화 하나만 보이는 편이 명확하다.
+//
+//   기준은 profiles.currency (슈퍼어드민 지정, _taamUserCur). 미지정이면 화면 언어.
+//
+//   ⚠ 관리 화면이 저절로 원화로 남는 이유
+//     이 함수는 '보는 사람' 의 통화를 따른다. 운영자는 KRW 이므로 어드민 화면은
+//     손대지 않아도 원화 그대로다. 통화별로 화면을 나눌 필요가 없다.
+//
+//   ⚠ 정산·차감은 언제나 원화다. 이건 표시 전용이다.
+//     실제 승인 금액을 보여주는 자리(계좌이체 안내 등)에는 krwOnly 를 준다.
+//
+//   opts: fxMoney 와 동일 ({usd, jpy, step, exact}) + krwOnly
+// ═══════════════════════════════════════════════════════════════
+function taamMoney(krw, opts){
+  opts = opts || {};
+  var n = parseInt(krw, 10) || 0;
+  var out = '₩' + n.toLocaleString();
+  if (!opts.krwOnly && typeof fxMoney === 'function') {
+    try { out = fxMoney(n, opts); } catch(_e){}
+  }
+  // 부호는 통화 기호 바로 앞에 붙인다.
+  //   '+' + '≈ $325' 를 그냥 이어붙이면 '+≈ $325' 가 되어 읽기 나쁘다.
+  //   '≈ +$325' 로 둔다 — 근사 표시는 앞에, 부호는 금액에 붙는다.
+  if (opts.sign) {
+    out = out.replace(/([₩$¥])/, opts.sign + '$1');
+  }
+  return out;
+}
+window.taamMoney = taamMoney;
+
 window.fxMoney = fxMoney; window.fxUsd = fxUsd; window.fxIsOverseas = fxIsOverseas;
 window.fxAgencyUsd = fxAgencyUsd; window.fxAgencyKrw = fxAgencyKrw; window.fxRate = fxRate; window.fxRateJpy = fxRateJpy;
 
@@ -13576,7 +13616,7 @@ window._tkRepaintAll = _tkRepaintAll;
 function _liveRepaintBalance(){
   try {
     var el = document.getElementById('mpBalance');
-    if(el) el.textContent = '₩ ' + (currentDepositBalance||0).toLocaleString();
+    if(el) el.textContent = taamMoney(currentDepositBalance||0);
   } catch(_e){}
   // 예치금 내역 화면이 열려 있으면 목록까지 다시 그린다
   try {
@@ -15085,19 +15125,10 @@ async function renderMyInvites(){
     //   통화를 USD 로 지정한 해외 회원에게도 원화만 보였다 — 화면 언어를 영어로 바꿔도
     //   똑같았다. 티켓 구매 화면은 fxMoney() 로 병기하는데 초대 경로만 빠져 있었다.
     //   ⚠ 정산은 그대로 원화(예치금)다. 표시만 회원 통화를 병기한다 — 기존 설계와 같다.
-    function _riCur(krw){
-      var n = parseInt(krw, 10) || 0;
-      var won = '₩' + n.toLocaleString();
-      if (typeof fxMoney !== 'function') return { main: won, sub: '' };
-      var s = fxMoney(n);
-      return (s === won) ? { main: won, sub: '' } : { main: s, sub: won };
-    }
-    function _riCurHtml(krw, subSize){
-      var c = _riCur(krw);
-      return c.main + (c.sub
-        ? '<span style="opacity:.5;font-weight:700;font-size:' + (subSize || '.62em') + ';margin-left:6px;">' + c.sub + '</span>'
-        : '');
-    }
+    // 🔧 2026.08-28: 병기를 버리고 지정 통화 하나만 보여준다.
+    //   원화와 달러를 나란히 두니 "내가 낼 돈이 어느 쪽인지" 를 매번 되짚게 됐다.
+    function _riCur(krw){ return { main: taamMoney(krw), sub: '' }; }
+    function _riCurHtml(krw){ return taamMoney(krw); }
     var _miChip = {
       paid:      {bg:'#DDF1E6', bd:'#BFE6CF', dot:'#1E9E5A', tx:'#1E9E5A', label:'결제 완료'},
       cancelled: {bg:'#F2EEEC', bd:'#E4DAD6', dot:'#A39690', tx:'#857069', label:'취소됨'},
@@ -15564,7 +15595,7 @@ async function _tkCapacityAutoRefund(row, user, errMsg){
           metadata: { purchase_id: row.purchase_id, refund_type: 'returned', reason: 'capacity_auto_refund', error: String(errMsg || '').slice(0, 120) }
         });
         currentDepositBalance = _mem + _gen;
-        try { var _bal = document.getElementById('mpBalance'); if(_bal) _bal.textContent = '₩ ' + currentDepositBalance.toLocaleString(); } catch(_be){}
+        try { var _bal = document.getElementById('mpBalance'); if(_bal) _bal.textContent = taamMoney(currentDepositBalance); } catch(_be){}
       }
     }
     // 3) 회원 안내 — 실제 환불이 발생한 경우만 (차감 없던 재동기화 정리는 조용히)
@@ -17813,7 +17844,7 @@ function closeMyPageToHome(){
 }
 
 function openMyPage(){
-  document.getElementById('mpBalance').textContent='₩ '+currentDepositBalance.toLocaleString();
+  document.getElementById('mpBalance').textContent=taamMoney(currentDepositBalance);
   // 🆕 2026.08: 마이페이지는 잔액을 보러 오는 화면이다 — 열 때마다 서버값으로 맞춘다.
   //   위 줄은 캐시값으로 즉시 그리고, 아래가 도착하면 조용히 갈아 끼운다 (깜빡임 없음).
   try { if (typeof taamSyncNow === 'function') taamSyncNow(true); } catch(_sy){}
@@ -20810,13 +20841,13 @@ function renderPriceRows(){
   var total=(meal+agency+wine)*_tdPax;
   // Total 업데이트 (tdCostSummary 안)
   var totEl=document.getElementById('tdTotal');
-  if(totEl) totEl.textContent='₩ '+total.toLocaleString();
+  if(totEl) totEl.textContent = taamMoney(total);
   // 인원당 금액도 업데이트
   var costEl=document.getElementById('tdCostSummary');
   if(costEl){
     var subEls=costEl.querySelectorAll('[data-perpax]');
     var labels=[meal,agency,wine].filter(Boolean);
-    subEls.forEach(function(el,i){ if(labels[i]) el.textContent='×'+_tdPax+'인 = ₩'+(labels[i]*_tdPax).toLocaleString(); });
+    subEls.forEach(function(el,i){ if(labels[i]) el.textContent='×'+_tdPax+'인 = '+taamMoney((labels[i]*_tdPax)); });
   }
 }
 
@@ -21867,7 +21898,7 @@ function doResetFinancialData() {
 
 function _refreshBalanceUI() {
   var el = document.getElementById('mpBalance');
-  if (el) el.textContent = '₩ ' + currentDepositBalance.toLocaleString();
+  if (el) el.textContent = taamMoney(currentDepositBalance);
 }
 // ═══════════════════════════════════════════
 // PortOne V2 결제 호출 함수
@@ -25104,21 +25135,21 @@ function ticketHistRender(idx){
         + '<div style="font-size:11px;font-weight:800;letter-spacing:1.1px;color:#B4B0A8;">REFUND SUMMARY</div>'
         + '<div style="margin-top:8px;display:flex;align-items:baseline;justify-content:space-between;">'
         +   '<span style="font-size:14px;font-weight:700;color:#7A7268;">환불 총액</span>'
-        +   '<span style="font-size:24px;font-weight:800;color:#1E9E5A;letter-spacing:-0.5px;">₩'+_sTotal.toLocaleString()+'</span>'
+        +   '<span style="font-size:24px;font-weight:800;color:#1E9E5A;letter-spacing:-0.5px;">'+taamMoney(_sTotal)+'</span>'
         + '</div>'
         + '<div style="height:1px;background:#EFEDE7;margin:12px 0 9px;"></div>'
         + '<div style="display:flex;align-items:center;justify-content:space-between;padding:3px 0;">'
         +   '<span style="font-size:13px;font-weight:600;color:#9A9486;">예치금으로 환불</span>'
-        +   '<span style="font-size:14.5px;font-weight:700;color:#26211D;">₩'+_sDep.toLocaleString()+'</span>'
+        +   '<span style="font-size:14.5px;font-weight:700;color:#26211D;">'+taamMoney(_sDep)+'</span>'
         + '</div>'
         + (_sCard > 0
             ? ('<div style="display:flex;align-items:center;justify-content:space-between;padding:3px 0;">'
                +   '<span style="font-size:13px;font-weight:600;color:#9A9486;">카드로 환불</span>'
-               +   '<span style="font-size:14.5px;font-weight:700;color:#26211D;">₩'+_sCard.toLocaleString()+'</span>'
+               +   '<span style="font-size:14.5px;font-weight:700;color:#26211D;">'+taamMoney(_sCard)+'</span>'
                + '</div>'
                + (_sCardWait > 0
                    ? ('<div style="margin-top:8px;padding:8px 11px;border-radius:9px;background:#FFF6E8;border:1px solid #F2E0BC;font-size:11.5px;font-weight:700;color:#9A6B12;">'
-                      + '카드 환불 진행 중 ₩'+_sCardWait.toLocaleString()+' · 완료되면 알림을 보내드려요</div>')
+                      + '카드 환불 진행 중 '+taamMoney(_sCardWait)+' · 완료되면 알림을 보내드려요</div>')
                    : ''))
             : '')
         + '</div>';
@@ -25140,7 +25171,7 @@ function ticketHistRender(idx){
         + '<button onclick="openCancelTicketModal(\''+h.purchaseId+'\')" '
         + 'style="width:100%;height:50px;border-radius:14px;border:1.5px solid #E0D9CC;background:#fff;color:#6A1A1A;font-family:'+_thF+';font-size:15px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;">'
         + btnLabel
-        + (refundPreview ? ' <span style="color:#B49A9A;">·</span> <span style="font-weight:600;color:#8C8475;">환불 가능 ₩'+refundPreview.refundable.toLocaleString()+'</span>' : '')
+        + (refundPreview ? ' <span style="color:#B49A9A;">·</span> <span style="font-weight:600;color:#8C8475;">환불 가능 '+taamMoney(refundPreview.refundable)+'</span>' : '')
         + '</button></div>';
     }
     // 환불 상태 표시 + 배지 분기 (기능 그대로)
@@ -25166,12 +25197,12 @@ function ticketHistRender(idx){
           var _dRef = (bd.depositRefund != null) ? bd.depositRefund : Math.min(refundedAmt, bd.depositUsed);
           var _cRef = bd.cardRefund || Math.max(0, refundedAmt - _dRef);
           if(_dRef > 0){
-            refundInfo = '<div style="margin-top:6px;font-size:11.5px;font-weight:700;color:#1E9E5A;">↳ 예치금 환불 완료 · +₩'+ _dRef.toLocaleString() +'</div>';
+            refundInfo = '<div style="margin-top:6px;font-size:11.5px;font-weight:700;color:#1E9E5A;">↳ 예치금 환불 완료 · '+taamMoney(_dRef, {sign:'+'}) +'</div>';
           }
           if(_cRef > 0){
             var _cDone = (bd.cardRefundStatus === 'done');
             refundInfo += '<div style="margin-top:7px;padding:10px 12px;border-radius:11px;background:'+(_cDone?'#EAF6EE':'#FFF6E8')+';border:1px solid '+(_cDone?'#CDE9D8':'#F2E0BC')+';">'
-              + '<div style="font-size:11.5px;font-weight:800;color:'+(_cDone?'#1E7A46':'#9A6B12')+';">💳 카드 환불 ₩'+_cRef.toLocaleString()+' · '+(_cDone?'환불 완료':'환불 진행 중')+'</div>'
+              + '<div style="font-size:11.5px;font-weight:800;color:'+(_cDone?'#1E7A46':'#9A6B12')+';">💳 카드 환불 '+taamMoney(_cRef)+' · '+(_cDone?'환불 완료':'환불 진행 중')+'</div>'
               + '<div style="margin-top:3px;font-size:10.5px;color:#8C8475;line-height:1.55;">'
               +   (_cDone
                     ? ('카드사로 승인취소되었습니다'+(bd.cardRefundedAt ? (' · '+_thShortDT(bd.cardRefundedAt)) : '')+'<br>카드사 반영은 영업일 기준 3~5일 소요될 수 있어요')
@@ -25180,17 +25211,17 @@ function ticketHistRender(idx){
               + '</div>';
           }
         } else {
-          refundInfo = '<div style="margin-top:6px;font-size:11.5px;font-weight:700;color:#1E9E5A;">↳ 환불 완료 · +₩'+ refundedAmt.toLocaleString() +'</div>';
+          refundInfo = '<div style="margin-top:6px;font-size:11.5px;font-weight:700;color:#1E9E5A;">↳ 환불 완료 · '+taamMoney(refundedAmt, {sign:'+'}) +'</div>';
         }
         if(dr && dr.agencyHeld > 0){
-          refundInfo += '<div style="margin-top:2px;font-size:10.5px;color:#1F5BD6;">대행비 차감 ₩'+ dr.agencyHeld.toLocaleString() +' (정상 절차)</div>';
+          refundInfo += '<div style="margin-top:2px;font-size:10.5px;color:#1F5BD6;">대행비 차감 '+taamMoney(dr.agencyHeld) +' (정상 절차)</div>';
         }
         if(dr && dr.penaltyAmt > 0 && (!dr.agencyHeld)){
-          refundInfo += '<div style="margin-top:2px;font-size:10.5px;color:#B23A2E;">위약금 ₩'+ dr.penaltyAmt.toLocaleString() +' ('+ (dr.penaltyPct||0) +'%)</div>';
+          refundInfo += '<div style="margin-top:2px;font-size:10.5px;color:#B23A2E;">위약금 '+taamMoney(dr.penaltyAmt) +' ('+ (dr.penaltyPct||0) +'%)</div>';
         }
         // 🆕 추가 차감 — 금액 + 사유(슈퍼어드민 기록에도 명시)
         if(dr && dr.extraDeduct > 0){
-          refundInfo += '<div style="margin-top:2px;font-size:10.5px;color:#B23A2E;font-weight:700;">추가 차감 ₩'+ dr.extraDeduct.toLocaleString() + (dr.extraNote ? ' · 사유: '+ _escHtmlAdg(dr.extraNote) : '') +'</div>';
+          refundInfo += '<div style="margin-top:2px;font-size:10.5px;color:#B23A2E;font-weight:700;">추가 차감 '+taamMoney(dr.extraDeduct) + (dr.extraNote ? ' · 사유: '+ _escHtmlAdg(dr.extraNote) : '') +'</div>';
         }
         if(h.cancelReason) refundInfo += '<div style="margin-top:2px;font-size:10.5px;color:#999;">사유: '+ _escHtmlAdg(h.cancelReason) +'</div>';
       }
@@ -25223,17 +25254,17 @@ function ticketHistRender(idx){
       + '<div style="margin:12px 16px 0;padding:15px 18px;background:#FBF3F2;border:1px solid #EEDADA;border-radius:16px;">'
       +   '<div style="display:flex;align-items:center;justify-content:space-between;">'
       +     '<span style="font-size:15px;font-weight:700;color:#7A5050;">결제 금액</span>'
-      +     '<span style="font-size:22px;font-weight:800;color:#6A1A1A;letter-spacing:-0.5px;">₩'+(h.amt||0).toLocaleString()+'</span>'
+      +     '<span style="font-size:22px;font-weight:800;color:#6A1A1A;letter-spacing:-0.5px;">'+taamMoney((h.amt||0))+'</span>'
       +   '</div>'
       +   (bd.isCard
             ? ('<div style="height:1px;background:#EEDADA;margin:12px 0 9px;"></div>'
                + '<div style="display:flex;align-items:center;justify-content:space-between;padding:3px 0;">'
                +   '<span style="font-size:13px;font-weight:600;color:#A08484;">예치금 사용</span>'
-               +   '<span style="font-size:14.5px;font-weight:700;color:#7A5050;">₩'+bd.depositUsed.toLocaleString()+'</span>'
+               +   '<span style="font-size:14.5px;font-weight:700;color:#7A5050;">'+taamMoney(bd.depositUsed)+'</span>'
                + '</div>'
                + '<div style="display:flex;align-items:center;justify-content:space-between;padding:3px 0;">'
                +   '<span style="font-size:13px;font-weight:600;color:#A08484;">카드 결제</span>'
-               +   '<span style="font-size:14.5px;font-weight:700;color:#7A5050;">₩'+bd.cardPaid.toLocaleString()+'</span>'
+               +   '<span style="font-size:14.5px;font-weight:700;color:#7A5050;">'+taamMoney(bd.cardPaid)+'</span>'
                + '</div>')
             : '')
       + '</div>'
@@ -28283,7 +28314,7 @@ function dhTab(idx,el){
     if(charges.length === 0){ content.innerHTML='<div class="mp-sub-empty"><div class="mp-sub-empty-text">'+_dhT('mp_sub.dh_empty_charge','충전 내역이 없어요')+'</div></div>'; return; }
     var h = '<div style="background:#f7f5f2;border-radius:14px;padding:16px 18px;margin:16px 16px 8px;display:flex;justify-content:space-between;align-items:center;">'
       +'<span style="font-family:\'Oswald\',\'Noto Sans KR\',\'Noto Sans JP\',sans-serif;font-size:13px;color:#555;">'+_dhT('mp_sub.dh_total_charge','총 충전 금액')+'</span>'
-      +'<span style="font-family:\'Oswald\',\'Noto Sans KR\',\'Noto Sans JP\',sans-serif;font-size:18px;font-weight:900;color:#1a1a18;">₩'+total.toLocaleString()+'</span>'
+      +'<span style="font-family:\'Oswald\',\'Noto Sans KR\',\'Noto Sans JP\',sans-serif;font-size:18px;font-weight:900;color:#1a1a18;">'+taamMoney(total)+'</span>'
       +'</div>';
     var _chDefault = _dhT('mp_sub.dh_charge_default','충전');
     var _chReasonLbl = _dhT('mp_sub.dh_reason','사유');
@@ -28298,7 +28329,7 @@ function dhTab(idx,el){
         +'<div style="font-family:\'Oswald\',\'Noto Sans KR\',\'Noto Sans JP\',sans-serif;font-size:11px;color:#aaa;margin-top:3px;">'+item.date+(item.method?' · '+item.method:'')+'</div>'
         +_noteHtml
         +'</div>'
-        +'<div style="font-family:\'Oswald\',\'Noto Sans KR\',\'Noto Sans JP\',sans-serif;font-size:15px;font-weight:800;color:#1a1a18;white-space:nowrap;">+₩'+(item.amt||0).toLocaleString()+'</div>'
+        +'<div style="font-family:\'Oswald\',\'Noto Sans KR\',\'Noto Sans JP\',sans-serif;font-size:15px;font-weight:800;color:#1a1a18;white-space:nowrap;">'+taamMoney((item.amt||0), {sign:'+'})+'</div>'
         +'</div>';
     }).join('');
     content.innerHTML = h;
@@ -28371,7 +28402,7 @@ function dhTab(idx,el){
           subItems += '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 20px 8px 36px;background:#f7fdf7;border-bottom:1px solid #f0ede8;">'
             +'<div><div style="font-family:var(--font-main);font-size:12px;font-weight:700;color:#2a7a2a;">'+_dhT('mp_sub.dh_returned','↩ 반환')+'</div>'
             +'<div style="font-size:10px;color:#aaa;margin-top:2px;">'+dr.date+'</div></div>'
-            +'<div style="font-family:var(--font-main);font-size:13px;font-weight:800;color:#2a7a2a;">+₩'+(dr.returnAmt||0).toLocaleString()+'</div></div>';
+            +'<div style="font-family:var(--font-main);font-size:13px;font-weight:800;color:#2a7a2a;">'+taamMoney((dr.returnAmt||0), {sign:'+'})+'</div></div>';
         } else if(dr.type === 'penalty'){
           // ── 대행비 차감 케이스 감지 ──
           //   새 데이터는 dr.agencyOnly=true, 기존 데이터는 note 텍스트로 판별
@@ -28387,7 +28418,7 @@ function dhTab(idx,el){
             subItems += '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 20px 8px 36px;background:#f7fdf7;border-bottom:1px solid #f0ede8;">'
               +'<div><div style="font-family:var(--font-main);font-size:12px;font-weight:700;color:#2a7a2a;">'+returnLabel+'</div>'
               +'<div style="font-size:10px;color:#aaa;margin-top:2px;">'+dr.date+'</div></div>'
-              +'<div style="font-family:var(--font-main);font-size:13px;font-weight:800;color:#2a7a2a;">+₩'+(dr.returnAmt).toLocaleString()+'</div></div>';
+              +'<div style="font-family:var(--font-main);font-size:13px;font-weight:800;color:#2a7a2a;">'+taamMoney((dr.returnAmt), {sign:'+'})+'</div></div>';
           }
           if(dr.penaltyAmt > 0){
             if (isAgencyOnly) {
@@ -28395,7 +28426,7 @@ function dhTab(idx,el){
               subItems += '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 20px 8px 36px;background:#f5f8fc;border-bottom:1px solid #f0ede8;">'
                 +'<div><div style="font-family:var(--font-main);font-size:12px;font-weight:700;color:#1B3A8F;">'+_dhT('mp_sub.dh_agency_fee_deduct','ℹ 대행비 차감')+'</div>'
                 +'<div style="font-size:10px;color:#aaa;margin-top:2px;">'+dr.date+'</div></div>'
-                +'<div style="font-family:var(--font-main);font-size:13px;font-weight:800;color:#1B3A8F;">-₩'+(dr.penaltyAmt).toLocaleString()+'</div></div>';
+                +'<div style="font-family:var(--font-main);font-size:13px;font-weight:800;color:#1B3A8F;">'+taamMoney((dr.penaltyAmt), {sign:'-'})+'</div></div>';
             } else {
               // 진짜 환불불가 (위약금) — 기존 빨강 유지, 사유 버튼 포함
               var noteBtn = dr.note ? '<button onclick="showPenaltyNote(\''+encodeURIComponent(dr.note)+'\')" style="font-size:10px;padding:2px 8px;border:1px solid #c00;border-radius:4px;background:#fff;color:#c00;cursor:pointer;margin-left:6px;">'+_dhT('mp_sub.dh_reason_btn','사유')+'</button>' : '';
@@ -28403,7 +28434,7 @@ function dhTab(idx,el){
                 +'<div style="display:flex;align-items:center;"><div>'
                 +'<div style="font-family:var(--font-main);font-size:12px;font-weight:700;color:#c00;">'+_dhT('mp_sub.dh_non_refundable','✕ 환불불가')+'</div>'
                 +'<div style="font-size:10px;color:#aaa;margin-top:2px;">'+dr.date+'</div></div>'+noteBtn+'</div>'
-                +'<div style="font-family:var(--font-main);font-size:13px;font-weight:800;color:#c00;">-₩'+(dr.penaltyAmt).toLocaleString()+'</div></div>';
+                +'<div style="font-family:var(--font-main);font-size:13px;font-weight:800;color:#c00;">'+taamMoney((dr.penaltyAmt), {sign:'-'})+'</div></div>';
             }
           }
         }
@@ -28431,7 +28462,7 @@ function dhTab(idx,el){
         +(ticketInfo ? '<span style="font-family:var(--font-main);font-size:11px;color:#888;background:#f0ede8;border-radius:4px;padding:1px 6px;">'+ticketInfo+'</span>' : '')
         +(timeStr ? '<span style="font-family:var(--font-main);font-size:11px;color:#aaa;">'+timeStr+'</span>' : '')
         +'</div></div>'
-        +'<div style="font-family:var(--font-main);font-size:15px;font-weight:800;color:#1a1a18;">-₩'+(item.amt||0).toLocaleString()+'</div>'
+        +'<div style="font-family:var(--font-main);font-size:15px;font-weight:800;color:#1a1a18;">'+taamMoney((item.amt||0), {sign:'-'})+'</div>'
         +'</div>' + subItems;
     }
 
@@ -28521,8 +28552,8 @@ function dhTab(idx,el){
         var header = '<div style="background:#f7f5f2;border-radius:14px;padding:16px 18px;margin:16px 16px 8px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">'
           + '<span style="font-family:var(--font-main);font-size:12px;color:#555;font-weight:700;">총 환불·반환 내역</span>'
           + '<div style="text-align:right;line-height:1.5;">'
-          +   '<div style="font-family:var(--font-main);font-size:15px;font-weight:900;color:#2a7a2a;">+₩'+sumPlus.toLocaleString()+'</div>'
-          +   (sumMinus > 0 ? '<div style="font-family:var(--font-main);font-size:12px;font-weight:700;color:#888;">차감 -₩'+sumMinus.toLocaleString()+'</div>' : '')
+          +   '<div style="font-family:var(--font-main);font-size:15px;font-weight:900;color:#2a7a2a;">'+taamMoney(sumPlus, {sign:'+'})+'</div>'
+          +   (sumMinus > 0 ? '<div style="font-family:var(--font-main);font-size:12px;font-weight:700;color:#888;">차감 '+taamMoney(sumMinus, {sign:'-'})+'</div>' : '')
           + '</div>'
           + '</div>';
 
@@ -28566,20 +28597,20 @@ function dhTab(idx,el){
             // 1) 본 티켓 가격
             lines += '<div style="display:flex;justify-content:space-between;padding:3px 0;">'
                    + '<span style="color:#666;">본 티켓 가격</span>'
-                   + '<span style="color:#1a1a18;font-weight:700;">₩'+origPrice.toLocaleString()+'</span>'
+                   + '<span style="color:#1a1a18;font-weight:700;">'+taamMoney(origPrice)+'</span>'
                    + '</div>';
             // 2) 대행비 (있으면)
             if(agencyHeld > 0){
               lines += '<div style="display:flex;justify-content:space-between;padding:3px 0;">'
                      + '<span style="color:#1B3A8F;">− 대행비 <span style="font-size:10.5px;color:#999;font-weight:600;">(정상 절차)</span></span>'
-                     + '<span style="color:#1B3A8F;font-weight:700;">-₩'+agencyHeld.toLocaleString()+'</span>'
+                     + '<span style="color:#1B3A8F;font-weight:700;">'+taamMoney(agencyHeld, {sign:'-'})+'</span>'
                      + '</div>';
             }
             // 2-2) 🆕 추가 차감 (별도 색 + 사유 자동 줄바꿈으로 분리)
             if(extraDeduct > 0){
               lines += '<div style="display:flex;justify-content:space-between;padding:3px 0;">'
                      + '<span style="color:#C0392B;font-weight:700;">− 추가 차감</span>'
-                     + '<span style="color:#C0392B;font-weight:800;">-₩'+extraDeduct.toLocaleString()+'</span>'
+                     + '<span style="color:#C0392B;font-weight:800;">'+taamMoney(extraDeduct, {sign:'-'})+'</span>'
                      + '</div>';
               if(extraNote){
                 lines += '<div style="color:#C0392B;font-size:11px;line-height:1.65;padding:1px 0 4px;word-break:keep-all;overflow-wrap:break-word;">사유 · '+_escHtmlAdg(extraNote)+'</div>';
@@ -28590,16 +28621,16 @@ function dhTab(idx,el){
               var noteBtn = m.note ? ' <button onclick="showPenaltyNote(\''+encodeURIComponent(m.note)+'\')" style="font-size:10px;padding:1px 6px;border:1px solid #c00;border-radius:4px;background:#fff;color:#c00;cursor:pointer;">사유</button>' : '';
               lines += '<div style="display:flex;justify-content:space-between;padding:3px 0;">'
                      + '<span style="color:#c00;">− 위약금 ('+(penaltyPct||0)+'%)' + noteBtn + '</span>'
-                     + '<span style="color:#c00;font-weight:700;">-₩'+penaltyAmt.toLocaleString()+'</span>'
+                     + '<span style="color:#c00;font-weight:700;">'+taamMoney(penaltyAmt, {sign:'-'})+'</span>'
                      + '</div>';
             }
             // 4) 최종 반환액 (합계 라인)
             var finalColor = returnAmt > 0 ? '#2a7a2a' : '#c00';
-            var finalSign  = returnAmt > 0 ? '+₩' : '₩';
+            var finalSign  = returnAmt > 0 ? '+' : '';
             var finalLabel = returnAmt > 0 ? '최종 반환' : '환불 없음';
             lines += '<div style="display:flex;justify-content:space-between;border-top:1.5px solid #e8e4dc;padding-top:7px;margin-top:5px;">'
                    + '<span style="color:'+finalColor+';font-weight:800;font-size:13px;">= '+finalLabel+'</span>'
-                   + '<span style="color:'+finalColor+';font-weight:900;font-size:14.5px;">'+finalSign+returnAmt.toLocaleString()+'</span>'
+                   + '<span style="color:'+finalColor+';font-weight:900;font-size:14.5px;">'+finalSign+taamMoney(returnAmt)+'</span>'
                    + '</div>';
             breakdown = '<div style="padding:11px 20px 13px 36px;background:#fbfaf6;border-bottom:1px solid #f0ede8;font-family:var(--font-main);font-size:12px;line-height:1.55;">'
                       + lines
@@ -28768,7 +28799,7 @@ function doChargeComplete(){
 
     // UI 업데이트
     var balEl = document.getElementById('mpBalance');
-    if (balEl) balEl.textContent = '₩ ' + currentDepositBalance.toLocaleString();
+    if (balEl) balEl.textContent = taamMoney(currentDepositBalance);
 
     // 페이지 닫기 & 토스트
     closePage('chargePage');
@@ -32794,14 +32825,7 @@ async function openReservationInvitePayPopup(inviteId){
     // 🆕 2026.08-28: 결제 팝업 금액도 회원 통화로 병기 (renderMyInvites 와 같은 규칙).
     //   여기가 실제로 「결제하기」를 누르는 화면이라, 카드만 고치고 두면
     //   목록은 $ 인데 결제창은 ₩ 인 상태가 된다 — 그게 더 헷갈린다.
-    function _rpCur(krw){
-      var n = parseInt(krw, 10) || 0;
-      var won = '₩' + n.toLocaleString();
-      if(typeof fxMoney !== 'function') return won;
-      var s = fxMoney(n);
-      return (s === won) ? won
-        : (s + '<span style="opacity:.5;font-weight:700;font-size:.78em;margin-left:5px;">' + won + '</span>');
-    }
+    function _rpCur(krw){ return taamMoney(krw); }
     var rows = [
       ['레스토랑', inv.restaurant_name || '–'],
       ['유형', inv.type_class === 'eve' ? 'Event' : 'Standard'],
@@ -33059,7 +33083,7 @@ async function riConfirmPay(){
     //   loadDeposit() 을 다시 호출해서 use 탭에 머지된 결과를 메모리에 반영 +
     //   IDB 동기화. 사용 내역 페이지가 이미 열려있으면 자동 재렌더.
     currentDepositBalance = totalBal - pay;
-    try { var bal = document.getElementById('mpBalance'); if(bal) bal.textContent = '₩ ' + currentDepositBalance.toLocaleString(); } catch(_){}
+    try { var bal = document.getElementById('mpBalance'); if(bal) bal.textContent = taamMoney(currentDepositBalance); } catch(_){}
 
     // 2) reservation_invites 상태 갱신
     var inv2 = await window.sb.from('reservation_invites').update({
@@ -33177,7 +33201,7 @@ async function riConfirmPay(){
     //   그 후 IDB 도 새 데이터로 갱신.
     try { if(typeof loadDeposit === 'function') await loadDeposit(); } catch(_){}
     // 마이페이지 잔액 다시 (loadDeposit 이 currentDepositBalance 갱신)
-    try { var bal2 = document.getElementById('mpBalance'); if(bal2) bal2.textContent = '₩ ' + currentDepositBalance.toLocaleString(); } catch(_){}
+    try { var bal2 = document.getElementById('mpBalance'); if(bal2) bal2.textContent = taamMoney(currentDepositBalance); } catch(_){}
     // 예치금 사용 내역 페이지가 열려있으면 다시 렌더 (사용내역 탭 = idx 1)
     try {
       var dhPage = document.getElementById('depositHistPage');
@@ -43062,7 +43086,7 @@ function pcalRefreshPay(){
   var agency = parseInt(t.agencyFee || 0) || 0;
   var wine   = parseInt(t.wineMin || 0) || 0;
   var total  = (meal + agency + wine) * pax;
-  var money  = function(v, opt){ return (typeof fxMoney === 'function') ? fxMoney(v, opt) : ('₩' + v.toLocaleString()); };
+  var money  = function(v, opt){ return (typeof fxMoney === 'function') ? fxMoney(v, opt) : (taamMoney(v)); };
 
   var h = '';
   if(meal)   h += '<div class="pd-row"><span class="l">식사비 ×' + pax + '인</span><span class="v">' + money(meal*pax) + '</span></div>';
