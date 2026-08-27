@@ -13890,7 +13890,19 @@ window._liveBind = _liveBind;
 //     버전 문자열이 아니라 빌드번호로 비교한다 — '1.01' 이 '1.1' 인지 '1.0.1' 인지
 //     따질 필요가 없어지고, 두 스토어의 규칙 차이도 안 탄다.
 // ════════════════════════════════════════════════════════════════
-var APP_UPDATE_LIVE = false;   // ← 표식이 들어간 빌드가 스토어에 올라간 뒤 true
+// 🆕 2026.08-28: 켠다. Android 1.02(versionCode 1011)가 스토어에 출시됐고,
+//   그 빌드부터 User-Agent 에 표식(TAAM/1.02(1011))이 박힌다.
+//   표식이 없는 옛 빌드는 _appNativeBuild() 가 build:0 을 돌려주므로
+//   min_build 보다 작아 강제 안내 대상이 된다 — 그게 의도한 동작이다.
+//   (옛 안드로이드 빌드는 FCM 등록을 통째로 건너뛰어 푸시가 아예 안 온다)
+//
+//   ⚠ iOS 는 app_config 에서 min_build/latest_build 를 0 으로 둔다.
+//     스토어의 1.01 에도 표식이 없어 build:0 이라, 0 이 아닌 값을 넣으면
+//     '최신을 쓰는데 업데이트하라' 는 막다른 길이 된다.
+//     표식이 들어간 1.02(빌드 35)가 출시된 뒤에 35 로 올린다.
+//   ⚠ 웹/PWA 는 _appNativeBuild() 가 null 이라 아무것도 뜨지 않는다.
+//     지금 실제 회원은 전부 웹이므로 영향받지 않는다.
+var APP_UPDATE_LIVE = true;
 
 function _appNativeBuild(){
   // 반환: { ver:'1.01', build:33 } / 네이티브가 아니면 null
@@ -22273,8 +22285,14 @@ function _showTdConfirmPopup(t, r, pax, meal, agency, wine, totalPay, after) {
   //   (가림 없음)으로 빠져 멀쩡했고, 딱 맞거나 충분할 때만 죽었다.
   var _tr = (typeof window.t === 'function') ? window.t
           : function(k, d){ return d; };
+  // 🔧 2026.08-28: 이 한 줄만 원화로 남아 있었다. 바로 위 결제 상세는 전부
+  //   지정 통화($/¥)인데 마지막 확인 문구만 ₩ 라 "얼마를 내는 건지" 가 흔들렸다.
+  //   fxTicketTotal 로 위 합계와 같은 값을 쓴다 (대행비 정액 요율 포함).
+  var _askAmt = (typeof fxTicketTotal === 'function')
+    ? fxTicketTotal(t, pax, meal, wine, totalPay)
+    : ('₩' + (totalPay||0).toLocaleString());
   if(_ask) _ask.innerHTML = _tr('ticket.ask_deposit','예치금 {amt} 을 사용해<br>티켓을 구매하시겠습니까?')
-      .replace('{amt}', '<b style="color:#5C0A14;">₩'+(totalPay||0).toLocaleString()+'</b>');
+      .replace('{amt}', '<b style="color:#5C0A14;">'+_askAmt+'</b>');
 
   var pop = document.getElementById('tdConfirmPopup');
   pop.style.display='flex';
