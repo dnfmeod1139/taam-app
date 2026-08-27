@@ -32785,14 +32785,38 @@ async function riConfirmPay(){
         var _pcT = (ticketDB || []).find(function(x){ return String(x.id) === String(inv.ticket_product_id); });
         var _pcR = await window.sb.rpc('taam_ticket_sold_slots', { p_ticket_id: String(inv.ticket_product_id) });
         var _pcD = (!_pcR.error && _pcR.data) || null;
+        // 🆕 2026.08: 자기차단 방지 — 이 초대가 발송 순간 잡아둔 좌석 홀드(INVH-)도
+        //   taam_ticket_sold_slots 는 '판매됨'으로 센다. 그대로 두면 내 홀드가 정원을
+        //   채워서 그 홀드의 주인인 내 결제가 거절된다. 정원 2석 티켓에 2인 초대를
+        //   보내면 잔여 0 → 100% 「결제 불가」 (2026-08-27 아카 11/12 사례).
+        //   홀드는 결제 확정 직전(_riReleaseHold)에 풀리므로 여기서는 빼고 세는 게 맞다.
+        //   PAYH- 홀드를 _tkSeatHoldPax 로 빼주는 것과 같은 보정이다.
+        var _pcMine = 0, _pcMineS1 = 0;
+        try {
+          var _mhR = await window.sb.rpc('taam_invite_hold_slots', { p_invite_id: String(inv.id) });
+          if(!_mhR.error && _mhR.data){
+            _pcMine = parseInt(_mhR.data.total) || 0;
+            _pcMineS1 = parseInt(_mhR.data.s1) || 0;
+          } else { throw new Error('rpc'); }
+        } catch(_mhe){
+          // RPC 미설치(sql/invite_hold_slots.sql 미실행) — 연결 초대는 발송 시 항상
+          // pax 만큼 홀드를 잡으므로 그 값으로 본다. 최종 강제는 서버 트리거가 한다.
+          _pcMine = parseInt(inv.pax) || 0;
+          _pcMineS1 = (_pcMine === 1) ? 1 : 0;
+          console.warn('[riPay] 초대 홀드 조회 RPC 없음 — pax 로 보정:', _pcMine);
+        }
         if(_pcD){
+          var _pcSold = Math.max(0, (parseInt(_pcD.total) || 0) - _pcMine);
+          var _pcS1   = Math.max(0, (parseInt(_pcD.s1) || 0) - _pcMineS1);
           var _pcCap = _pcT ? (parseInt(_pcT.totalPax) || 0) : 0;
-          var _pcRem = _pcCap > 0 ? Math.max(0, _pcCap - (parseInt(_pcD.total) || 0)) : 9999;
+          var _pcRem = _pcCap > 0 ? Math.max(0, _pcCap - _pcSold) : 9999;
           var _pcOk = (_pcCap === 0) || (inv.pax <= _pcRem);
           if(_pcOk && _pcT && _pcT.slots && _pcT.slots.mode === 'flex' && typeof _tseAvailableSizes === 'function'){
-            _pcOk = _tseAvailableSizes(_pcT, _pcRem, parseInt(_pcD.s1) || 0).indexOf(inv.pax) >= 0;
+            _pcOk = _tseAvailableSizes(_pcT, _pcRem, _pcS1).indexOf(inv.pax) >= 0;
           }
           if(!_pcOk){
+            console.warn('[riPay] 좌석 검증 실패 — 정원', _pcCap, '· 서버판매', _pcD.total,
+                         '· 내홀드', _pcMine, '· 보정후판매', _pcSold, '· 잔여', _pcRem, '· 요청', inv.pax);
             showToast('⚠','결제 불가','연결된 티켓의 좌석이 부족하거나 판매 규칙상 마감되었습니다. 초대한 관리자에게 문의해주세요.');
             riPayClose();
             return;
