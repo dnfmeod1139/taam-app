@@ -680,6 +680,11 @@ Deno.serve(async (req: Request) => {
             android: {
               priority: "high",
               notification: {
+                // 🆕 2026-08-28: 채널 지정. Android 8+ 는 채널 없이는 알림을 '표시하지'
+                //   않는다. FCM 은 200 OK 를 주고 요약도 「시도 1 · 성공 1」 이 되는데
+                //   폰에는 아무것도 안 뜬다 — 배달과 표시는 다른 단계다.
+                //   앱이 setupNativePush 에서 만드는 채널 id 와 반드시 같아야 한다.
+                channel_id: "taam_default",
                 // 알림 클릭 시 앱에서 이 click_action 수신 → URL 이동 처리
                 click_action: "OPEN_TAAM",
               },
