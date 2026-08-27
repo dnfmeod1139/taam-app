@@ -513,7 +513,29 @@ Deno.serve(async (req: Request) => {
     } else if (scope === "uid" && scopeValue) {
       query = query.eq("user_id", scopeValue);
     } else if (scope === "role" && scopeValue) {
-      query = query.eq("role", scopeValue);
+      // 🔧 2026-08-27: 역할은 profiles(서버 진실)로 판정한다.
+      //   종전엔 push_subscriptions.role 만 봤다. 그런데 그 값은 구독을 저장한
+      //   '그 시점의 클라이언트 메모리' 에서 온다 — 부팅 직후엔 아직 'user' 라
+      //   슈퍼어드민 기기가 'user' 로 덮이고, 그 뒤 role: 푸시에서 조용히 빠졌다.
+      //   여기서 profiles 로 user_id 를 뽑아 함께 잡으면 구독의 role 이 틀려도 닿는다.
+      //   앱 내부 문자열('superadmin')과 DB 값('super_admin')이 다른 것도 흡수한다.
+      const roleAliases = (scopeValue === "superadmin" || scopeValue === "super_admin")
+        ? ["superadmin", "super_admin"]
+        : [scopeValue];
+      let uidsByProfile: string[] = [];
+      try {
+        const { data: profs } = await sb
+          .from("profiles").select("id").in("role", roleAliases);
+        uidsByProfile = (profs || []).map((p: any) => p.id).filter(Boolean);
+      } catch (_) { /* profiles 조회 실패 시 아래 role 필터만으로 진행 */ }
+
+      if (uidsByProfile.length) {
+        // 구독 role 이 맞거나(구식 경로) 프로필상 그 역할이거나 — 둘 중 하나면 발송
+        const inList = uidsByProfile.map((u) => `"${u}"`).join(",");
+        query = query.or(`role.eq.${scopeValue},user_id.in.(${inList})`);
+      } else {
+        query = query.eq("role", scopeValue);
+      }
     } else if (scope === "topic" && scopeValue) {
       query = query.contains("topics", [scopeValue]);
     } else if (scope === "user" && callerUserId) {
