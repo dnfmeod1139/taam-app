@@ -6291,52 +6291,76 @@ function fxTicketComp(t, comp, krwPer, pax){
 }
 
 // 합계 — 항목 숫자의 합과 정확히 일치시킨다 (전 항목 확정이면 ≈ 없이)
-function fxTicketTotal(t, pax, meal, wine, krwTotal){
-  var dc = _fxDispCur();
-  if (!dc) return '₩' + (parseInt(krwTotal, 10) || 0).toLocaleString();
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026.08-28: 화면과 청구가 '같은 숫자' 를 쓰게 하는 단일 계산.
+//
+//   왜 합쳤나 — 종전엔 두 함수가 서로 다른 규칙을 썼다.
+//     화면(fxTicketTotal)  : 항목별로 _fxCompNum. 대행비는 정액 요율($150) 적용.
+//     청구(fxTicketCharge) : 확정 정가(ovs_prices)가 하나라도 빠지면 원화 정가.
+//   그래서 확정 정가가 없는 티켓은 화면 ≈$900 · 차감 ₩1,150,000(=$860) 로
+//   $40 이 어긋났다. 대행비 정액분이 통째로 빠진 것이다.
+//   엔 회원은 더 심했다 — ovs_prices.jpy 가 비어 있어 화면 ¥144,000 · 차감 ¥137,000.
+//
+//   두 함수가 이 하나를 부르게 하면 다시 어긋날 수 없다.
+//   반환: { sum: 표시통화 총액, allFixed: 전부 확정정가인가, ok, agencyPer: 1인 대행비 }
+// ═══════════════════════════════════════════════════════════════
+function _fxUnitSum(t, pax, dc){
   var n = pax || 1;
+  var mealKrw   = (t && (t.mealFee || t.mealAmt)) || 0;
   var agencyKrw = (t && (t.agencyFee || t.agency_fee)) || 0;
-  var sum = 0, allFixed = true, ok = true;
-  [['meal', meal], ['agency', agencyKrw], ['wine', wine]].forEach(function(c){
+  var wineKrw   = (t && t.wineMin) || 0;
+  var sum = 0, allFixed = true, ok = true, agencyPer = 0;
+  [['meal', mealKrw], ['agency', agencyKrw], ['wine', wineKrw]].forEach(function(c){
     if (!(parseInt(c[1], 10) > 0) && c[0] !== 'agency') return;   // 0원 항목은 건너뜀
     if (!(parseInt(c[1], 10) > 0) && _fxTicketFixed(t, 'agency', dc) == null && !(fxAgencyUsd(t) > 0)) return;
     var r = _fxCompNum(t, c[0], c[1], dc);
     if (!(r.v >= 0)) { ok = false; return; }
     sum += r.v * n;
+    if (c[0] === 'agency') agencyPer = r.v;
     if (!r.fixed) allFixed = false;
   });
-  if (!ok || !(sum > 0)) return '₩' + (parseInt(krwTotal, 10) || 0).toLocaleString();
+  return { sum: sum, allFixed: allFixed, ok: (ok && sum > 0), agencyPer: agencyPer };
+}
+window._fxUnitSum = _fxUnitSum;
+
+// 합계 표시 — 항목 숫자의 합과 정확히 일치한다 (전 항목 확정이면 ≈ 없이)
+function fxTicketTotal(t, pax, meal, wine, krwTotal){
+  var dc = _fxDispCur();
+  if (!dc) return '₩' + (parseInt(krwTotal, 10) || 0).toLocaleString();
+  var u = _fxUnitSum(t, pax, dc);
+  if (!u.ok) return '₩' + (parseInt(krwTotal, 10) || 0).toLocaleString();
   var sym = dc === 'JPY' ? '¥' : '$';
-  return (allFixed ? '' : '≈ ') + sym + sum.toLocaleString();
+  return (u.allFixed ? '' : '≈ ') + sym + u.sum.toLocaleString();
 }
 window.fxTicketComp = fxTicketComp; window.fxTicketTotal = fxTicketTotal;
 
-// ── 실제 결제액 계산 — 확정 해외 정가가 「전부」 갖춰진 티켓만 외화 정가로 청구 ──
-//   하나라도 빠지면 종전 원화 정가 그대로 (화면의 ≈ 표시와 청구가 일치해야 한다).
+// ── 실제 결제액 — 화면에 보이는 그 금액을 그대로 청구한다 ──
 //   반환: { krw: 차감할 원화, fx: {currency, amount(총 외화), rate, agency_fx(1인)} | null }
+//
+//   ⚠ Math.floor 로 내린다. round 로 올리면 그 원화를 다시 외화로 환산할 때
+//     ($5 단위 올림) 한 칸 튀어 "결제 후 잔액" 이 $905 처럼 보인다.
+//     내림은 회원에게 1원 유리한 쪽이라 안전하다.
+//   ⚠ 기준 통화는 _fxDispCur() — 화면이 쓰는 것과 같아야 한다.
+//     _taamUserCur() 를 쓰면 엔 기준율이 없는 JPY 회원에게 화면은 원화인데
+//     청구만 엔 환산이 되는 어긋남이 생긴다.
 function fxTicketCharge(t, pax){
   var n = pax || 1;
   var mealK = parseInt(t.mealFee || t.mealAmt || 0, 10) || 0;
   var agencyK = parseInt(t.agencyFee || 0, 10) || 0;
   var wineK = parseInt(t.wineMin || 0, 10) || 0;
   var krwTotal = (mealK + agencyK + wineK) * n;
-  var cur = (typeof _taamUserCur === 'function') ? _taamUserCur() : 'KRW';
-  if (cur === 'KRW') return { krw: krwTotal, fx: null };
-  var rate = cur === 'USD' ? fxRate() : fxRateJpy();
+
+  var dc = _fxDispCur();
+  if (!dc) return { krw: krwTotal, fx: null };                 // 원화 회원
+  var rate = dc === 'USD' ? fxRate() : fxRateJpy();
   if (!(rate > 0)) return { krw: krwTotal, fx: null };
-  var comps = [['meal', mealK], ['agency', agencyK], ['wine', wineK]];
-  var fxTotal = 0, fxAgencyPer = 0;
-  for (var i = 0; i < comps.length; i++) {
-    if (comps[i][1] <= 0) continue;                      // 0원 항목은 확정 불필요
-    var f = _fxTicketFixed(t, comps[i][0], cur);
-    if (f == null) return { krw: krwTotal, fx: null };   // 미확정 → 원화 기준
-    fxTotal += f * n;
-    if (comps[i][0] === 'agency') fxAgencyPer = f;
-  }
-  if (!(fxTotal > 0)) return { krw: krwTotal, fx: null };
+
+  var u = _fxUnitSum(t, pax, dc);
+  if (!u.ok) return { krw: krwTotal, fx: null };
+
   return {
-    krw: Math.round(fxTotal * rate),
-    fx: { currency: cur, amount: fxTotal, rate: Math.round(rate * 10000) / 10000, agency_fx: fxAgencyPer }
+    krw: Math.floor(u.sum * rate),
+    fx: { currency: dc, amount: u.sum, rate: Math.round(rate * 10000) / 10000, agency_fx: u.agencyPer }
   };
 }
 window.fxTicketCharge = fxTicketCharge;
