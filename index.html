@@ -13568,6 +13568,22 @@ function saveTickets(onlyIds){
   //     여기서 전체를 upsert 할 때 낡은 값이 서버의 최신 티켓을 덮어써
   //     날짜·상태가 과거로 되돌아간다 (티켓이 전량 만료로 보이던 사고의 경로).
   //   → ① 비어 있으면 아무것도 밀지 않는다  ② 바뀐 티켓만 지정해 저장할 수 있게 한다.
+  // 🔧 2026.08-28: 회원 세션은 ticket_products 를 쓸 권한이 없다(RLS).
+  //
+  //   구매·취소 흐름에서 t.status='soldout' 을 찍고 saveTickets() 를 부르는 자리가
+  //   세 곳 있는데, 회원이 그걸 밀면 반드시 RLS 에 거부되고 결제 완료 화면 위에
+  //   「ticket DB 저장 실패」 라는 무서운 토스트만 남는다. 실제로 그렇게 떴다.
+  //   회원 눈에는 결제가 잘못된 것처럼 보인다 — 사고가 아닌데 사고로 읽힌다.
+  //
+  //   서버에는 sync_ticket_soldout 트리거가 있어서 tickets 행이 들어가면
+  //   ticket_products.status 를 알아서 갱신한다. 회원이 밀 이유가 없다.
+  //   로컬(IDB) 저장은 그대로 둔다 — 화면은 즉시 매진으로 바뀌어야 하니까.
+  var _tkCanWrite = (typeof _currentRole !== 'undefined')
+                 && (_currentRole === 'superadmin' || _currentRole === 'admin');
+  if(!_tkCanWrite){
+    console.log('[saveTickets] 회원 세션 — 서버 저장 생략 (매진은 서버 트리거가 처리)');
+    return;
+  }
   if(typeof saveTicketProductToSupabase === 'function' && window.sb){
     if(!Array.isArray(ticketDB) || ticketDB.length === 0){
       console.warn('[saveTickets] ticketDB 가 비어 있어 서버 저장을 건너뜀');
