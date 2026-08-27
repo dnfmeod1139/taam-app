@@ -31943,12 +31943,36 @@ async function riSubmit(){
   //   그래서 캘린더에는 보이는데 티켓 좌석은 하나도 안 깎이고, 정원이 다 찬 뒤에도
   //   앱에서 계속 팔린다. 실제로 그렇게 오버북이 났다 (2026-08-27, 1/25 스시 아라이).
   //   연결할 티켓이 아예 없는 경우(순수 별도 판매)만 그대로 보낸다.
+  //   🔧 2026.08-27: 이 가드가 새고 있었다. _riDate 는 화면에서 날짜를 직접 고르면
+  //     'MM.DD'(_tuSelectedDate 형식), 캘린더에서 들어오면 'YYYY.MM.DD' 다.
+  //     그런데 비교는 _tkFullDate(t)('YYYY.MM.DD') 와 문자열 === 였다 —
+  //     화면에서 날짜를 고른 경우는 항상 불일치라 후보 0건, 가드가 통째로 통과.
+  //     그래서 좌석이 안 깎이는 초대가 3건 나갔다(1건은 이미 결제됨).
+  //     날짜는 반드시 파싱해서 비교한다(_riSameDay).
+  //   후보 목록은 「판매 티켓 연결」 드롭다운과 같은 조건이어야 한다.
+  //     매진·만료 티켓까지 후보로 세면 "연결하라는데 목록에 없는" 막다른 길이 된다.
   if(!_riLinkTicketId){
     var _riCands = (ticketDB || []).filter(function(t){
       if(String(t.restId) !== String(_riRestId)) return false;
+      if(t.status === 'soldout') return false;
+      if(typeof _isTicketExpired === 'function' && _isTicketExpired(t)) return false;
+      if(_currentRole === 'admin' && _currentAdminRestId && String(t.restId) !== String(_currentAdminRestId)) return false;
       var _fd = (typeof _tkFullDate === 'function') ? _tkFullDate(t) : t.date;
-      return String(_fd) === String(_riDate);
+      return _riSameDay(_fd, _riDate);
     });
+    if(_riCands.length === 1){
+      // 후보가 하나면 골라준다 — 고를 게 하나뿐인데 고르라고만 하면 실수만 는다.
+      //   자동 연결 후 한 번 더 누르게 해서, 무엇에 연결됐는지 보고 보내게 한다.
+      var _autoT = _riCands[0];
+      var _asel = document.getElementById('riLinkTicket');
+      if(_asel){ _asel.value = String(_autoT.id); }
+      _riLinkTicketId = String(_autoT.id);
+      if(typeof riLinkTicketChange === 'function') { try { riLinkTicketChange(); } catch(_ae){} }
+      showToast('🔗','판매 티켓 연결됨',
+        (_autoT.rest || '') + ' · ' + (_tkFullDate ? _tkFullDate(_autoT) : _autoT.date)
+        + ' · 총 ' + (_autoT.totalPax || '-') + '석 — 확인 후 다시 「초대 발송」을 눌러주세요');
+      return;
+    }
     if(_riCands.length){
       showToast('⚠','티켓 연결 필요',
         '이 매장·날짜에 판매 티켓이 ' + _riCands.length + '건 있어요. 연결해야 좌석이 차감됩니다 — 「판매 티켓 연결」에서 골라주세요');
@@ -35691,6 +35715,22 @@ function _tkFullDate(t){
   return y + '.' + ds;
 }
 window._tkFullDate = _tkFullDate;
+
+// 🆕 2026.08-27: 두 날짜 문자열이 같은 날인지 — 형식이 달라도 맞춘다.
+//   'MM.DD' 와 'YYYY.MM.DD' 를 문자열로 비교하면 항상 다르다. 실제로 그것 때문에
+//   초대 발송의 「티켓 연결 필요」 가드가 통째로 새어, 좌석이 안 깎이는 초대가
+//   3건 나갔다(그중 1건은 이미 결제됨). 반드시 파싱해서 비교한다.
+function _riSameDay(a, b){
+  if(!a || !b) return false;
+  if(String(a) === String(b)) return true;
+  var da = (typeof _dParseDate === 'function') ? _dParseDate(a) : null;
+  var db = (typeof _dParseDate === 'function') ? _dParseDate(b) : null;
+  if(!da || !db) return false;
+  return da.getFullYear() === db.getFullYear()
+      && da.getMonth()    === db.getMonth()
+      && da.getDate()     === db.getDate();
+}
+window._riSameDay = _riSameDay;
 
 function _tkDateKey(t){
   var p = String((t && t.date) || '').split('.');
@@ -44965,7 +45005,7 @@ function openInviteFromCalendar(restId){
         var _cands = (ticketDB || []).filter(function(t){
           if(String(t.restId) !== String(restId)) return false;
           var _fd = (typeof _tkFullDate === 'function') ? _tkFullDate(t) : t.date;
-          return String(_fd) === fullDate;
+          return _riSameDay(_fd, fullDate);   // 형식이 달라도 같은 날이면 후보
         });
         // 목록(riPopulateLinkTickets)에 실제로 올라온 것만 고를 수 있다 —
         //   매진·만료 티켓은 애초에 옵션에 없다.
