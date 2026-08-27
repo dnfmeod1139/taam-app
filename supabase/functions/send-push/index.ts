@@ -643,13 +643,22 @@ Deno.serve(async (req: Request) => {
 
         const text = await res.text();
 
-        // 만료/무효 토큰 (UNREGISTERED / INVALID_ARGUMENT 등) 자동 정리
-        if (res.status === 404 || res.status === 410) {
+        // 만료/무효 토큰 자동 정리
+        // 🔧 2026-08-27: 404/410 만 지우고 있었다. FCM v1 은 죽은 토큰을 그것만으로
+        //   알려주지 않는다 — 다른 Firebase 프로젝트 토큰, 스킴이 틀어져 저장된
+        //   APNs 토큰(fcm://+APNs), 앱 삭제 후 토큰은 400 INVALID_ARGUMENT 로 온다.
+        //   그래서 죽은 구독이 영원히 남아 매번 실패했다. 실제로 한 테스트 계정에
+        //   5월부터 쌓인 안드로이드 구독이 11건 있었고, 발송 요약의 '실패' 대부분이
+        //   그것이었다. 실패 수가 부풀면 진짜 실패를 못 알아본다.
+        const _dead = res.status === 404 || res.status === 410 ||
+          (res.status === 400 && /INVALID_ARGUMENT|not a valid FCM registration token|Invalid registration/i.test(text)) ||
+          /UNREGISTERED|NOT_FOUND|SenderId mismatch|MismatchSenderId/i.test(text);
+        if (_dead) {
           try { await sb.from("push_subscriptions").delete().eq("endpoint", endpoint); } catch (_) {}
           return { ok: false, status: res.status, removed: true, reason: "expired", body: text.substring(0, 200) };
         }
 
-        return { ok: res.ok, status: res.status, body: text };
+        return { ok: res.ok, status: res.status, body: text.substring(0, 300) };
       } catch (e: any) {
         return { ok: false, status: 500, error: e?.message || String(e) };
       }
