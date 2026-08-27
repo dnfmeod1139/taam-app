@@ -15080,6 +15080,24 @@ async function renderMyInvites(){
       var ap = h<12 ? '오전' : '오후'; var h12 = h%12; if(h12===0) h12=12;
       return ap+' '+h12+':'+p[1];
     }
+    // 🆕 2026.08-28: 초대 금액을 회원 통화로 보여준다.
+    //   초대 화면은 금액을 전부 '₩'+숫자 로 하드코딩하고 있었다. 그래서 슈퍼어드민이
+    //   통화를 USD 로 지정한 해외 회원에게도 원화만 보였다 — 화면 언어를 영어로 바꿔도
+    //   똑같았다. 티켓 구매 화면은 fxMoney() 로 병기하는데 초대 경로만 빠져 있었다.
+    //   ⚠ 정산은 그대로 원화(예치금)다. 표시만 회원 통화를 병기한다 — 기존 설계와 같다.
+    function _riCur(krw){
+      var n = parseInt(krw, 10) || 0;
+      var won = '₩' + n.toLocaleString();
+      if (typeof fxMoney !== 'function') return { main: won, sub: '' };
+      var s = fxMoney(n);
+      return (s === won) ? { main: won, sub: '' } : { main: s, sub: won };
+    }
+    function _riCurHtml(krw, subSize){
+      var c = _riCur(krw);
+      return c.main + (c.sub
+        ? '<span style="opacity:.5;font-weight:700;font-size:' + (subSize || '.62em') + ';margin-left:6px;">' + c.sub + '</span>'
+        : '');
+    }
     var _miChip = {
       paid:      {bg:'#DDF1E6', bd:'#BFE6CF', dot:'#1E9E5A', tx:'#1E9E5A', label:'결제 완료'},
       cancelled: {bg:'#F2EEEC', bd:'#E4DAD6', dot:'#A39690', tx:'#857069', label:'취소됨'},
@@ -15094,7 +15112,7 @@ async function renderMyInvites(){
       if(st === 'pending'){
         payBtn = '<div style="display:flex;gap:10px;padding:16px;">'
                + '<button onclick="cancelMyInvite(\''+inv.id+'\')" style="flex:1;height:50px;border-radius:14px;background:#fff;border:1.5px solid #E0D9CC;font-family:'+_miF+';font-size:14px;font-weight:700;color:#8C8475;cursor:pointer;">초대 취소</button>'
-               + '<button onclick="openReservationInvitePayPopup(\''+inv.id+'\')" style="flex:1.6;height:50px;border-radius:14px;background:#6A1A1A;border:none;font-family:'+_miF+';font-size:14px;font-weight:800;color:#fff;cursor:pointer;box-shadow:0 6px 16px rgba(106,26,26,.24);">결제하기 · ₩'+(inv.total_amount||0).toLocaleString()+'</button>'
+               + '<button onclick="openReservationInvitePayPopup(\''+inv.id+'\')" style="flex:1.6;height:50px;border-radius:14px;background:#6A1A1A;border:none;font-family:'+_miF+';font-size:14px;font-weight:800;color:#fff;cursor:pointer;box-shadow:0 6px 16px rgba(106,26,26,.24);">결제하기 · '+_riCur(inv.total_amount||0).main+'</button>'
                + '</div>';
       }
       var sentAt = inv.created_at ? new Date(inv.created_at).toLocaleString('ko-KR', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) : '–';
@@ -15121,7 +15139,7 @@ async function renderMyInvites(){
            // chapter 2 : 결제 금액
            + '<div style="margin:12px 16px 0;padding:15px 18px;background:#FBF3F2;border:1px solid #EEDADA;border-radius:16px;display:flex;align-items:center;justify-content:space-between;">'
            +   '<span style="font-size:15px;font-weight:700;color:#7A5050;">결제 금액</span>'
-           +   '<span style="font-size:22px;font-weight:800;color:#6A1A1A;letter-spacing:-0.5px;">₩'+(inv.total_amount||0).toLocaleString()+'</span>'
+           +   '<span style="font-size:22px;font-weight:800;color:#6A1A1A;letter-spacing:-0.5px;">'+_riCurHtml(inv.total_amount||0)+'</span>'
            + '</div>'
            // 받은/결제 시각
            + '<div style="display:flex;justify-content:space-between;padding:12px 18px 0;font-size:11px;color:#B4B0A8;font-weight:600;flex-wrap:wrap;gap:6px;">'
@@ -32773,17 +32791,28 @@ async function openReservationInvitePayPopup(inviteId){
       var tp = visitDispTime.split(':'), h = parseInt(tp[0]);
       visitDispTime = (h>12?h-12:(h===0?12:h))+':'+tp[1]+' '+(h>=12?'PM':'AM');
     }
+    // 🆕 2026.08-28: 결제 팝업 금액도 회원 통화로 병기 (renderMyInvites 와 같은 규칙).
+    //   여기가 실제로 「결제하기」를 누르는 화면이라, 카드만 고치고 두면
+    //   목록은 $ 인데 결제창은 ₩ 인 상태가 된다 — 그게 더 헷갈린다.
+    function _rpCur(krw){
+      var n = parseInt(krw, 10) || 0;
+      var won = '₩' + n.toLocaleString();
+      if(typeof fxMoney !== 'function') return won;
+      var s = fxMoney(n);
+      return (s === won) ? won
+        : (s + '<span style="opacity:.5;font-weight:700;font-size:.78em;margin-left:5px;">' + won + '</span>');
+    }
     var rows = [
       ['레스토랑', inv.restaurant_name || '–'],
       ['유형', inv.type_class === 'eve' ? 'Event' : 'Standard'],
       ['날짜', inv.visit_date || '–'],
       ['시간', visitDispTime || '–'],
       ['인원', inv.pax + '인'],
-      ['식사예약금', '₩'+((inv.meal_fee||0)*inv.pax).toLocaleString()],
-      ['대행비', '₩'+((inv.agency_fee||0)*inv.pax).toLocaleString()]
+      ['식사예약금', _rpCur((inv.meal_fee||0)*inv.pax)],
+      ['대행비', _rpCur((inv.agency_fee||0)*inv.pax)]
     ];
-    if(inv.wine_min > 0) rows.push(['주류 미니멈', '₩'+(inv.wine_min*inv.pax).toLocaleString()]);
-    rows.push(['<strong>총 결제 금액</strong>', '<strong style="color:#5C0A14;">₩'+(inv.total_amount||0).toLocaleString()+'</strong>']);
+    if(inv.wine_min > 0) rows.push(['주류 미니멈', _rpCur(inv.wine_min*inv.pax)]);
+    rows.push(['<strong>총 결제 금액</strong>', '<strong style="color:#5C0A14;">'+_rpCur(inv.total_amount||0)+'</strong>']);
     document.getElementById('riPayRows').innerHTML = rows.map(function(row){
       return '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid rgba(0,0,0,.05);">'
            + '<span style="font-size:11.5px;color:#777;">'+row[0]+'</span>'
