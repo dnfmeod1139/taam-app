@@ -504,50 +504,72 @@ Deno.serve(async (req: Request) => {
     }
 
     // 대상 쿼리
+    const SEL = "id,endpoint,p256dh,auth,user_id,topics,role";
     const sb = createClient(SUPABASE_URL, SERVICE_KEY);
-    let query = sb.from("push_subscriptions").select("id,endpoint,p256dh,auth,user_id,topics,role");
     const [scope, scopeValue] = body.to.includes(":") ? body.to.split(":") : [body.to, ""];
 
-    if (scope === "all") {
-      // no filter
-    } else if (scope === "uid" && scopeValue) {
-      query = query.eq("user_id", scopeValue);
-    } else if (scope === "role" && scopeValue) {
+    let subs: any[] | null = null;
+    let qErr: any = null;
+    const pick: Record<string, unknown> = { scope, scopeValue };
+
+    if (scope === "role" && scopeValue) {
       // 🔧 2026-08-27: 역할은 profiles(서버 진실)로 판정한다.
-      //   종전엔 push_subscriptions.role 만 봤다. 그런데 그 값은 구독을 저장한
-      //   '그 시점의 클라이언트 메모리' 에서 온다 — 부팅 직후엔 아직 'user' 라
-      //   슈퍼어드민 기기가 'user' 로 덮이고, 그 뒤 role: 푸시에서 조용히 빠졌다.
-      //   여기서 profiles 로 user_id 를 뽑아 함께 잡으면 구독의 role 이 틀려도 닿는다.
-      //   앱 내부 문자열('superadmin')과 DB 값('super_admin')이 다른 것도 흡수한다.
+      //   push_subscriptions.role 은 구독을 저장한 '그 시점의 클라이언트 메모리'
+      //   에서 온다 — 부팅 직후엔 아직 'user' 라 슈퍼어드민 기기가 'user' 로 덮이고,
+      //   그 뒤 role: 푸시에서 조용히 빠진다. profiles 로도 잡으면 그래도 닿는다.
+      //   앱 내부 문자열('superadmin')과 DB 값('super_admin') 차이도 흡수한다.
+      //
+      //   ⚠ 이걸 .or(`role.eq.X,user_id.in.("a","b")`) 한 방으로 짰다가 되돌렸다.
+      //     PostgREST 의 or + in + 따옴표 조합은 파싱이 까다로워, 실패하면 쿼리
+      //     전체가 500 으로 죽는다 — 그러면 이력만 남고 푸시는 통째로 안 나간다.
+      //     두 번 나눠 조회해 코드에서 합친다. 느려도 깨지지 않는 쪽을 택한다.
       const roleAliases = (scopeValue === "superadmin" || scopeValue === "super_admin")
         ? ["superadmin", "super_admin"]
         : [scopeValue];
-      let uidsByProfile: string[] = [];
-      try {
-        const { data: profs } = await sb
-          .from("profiles").select("id").in("role", roleAliases);
-        uidsByProfile = (profs || []).map((p: any) => p.id).filter(Boolean);
-      } catch (_) { /* profiles 조회 실패 시 아래 role 필터만으로 진행 */ }
 
-      if (uidsByProfile.length) {
-        // 구독 role 이 맞거나(구식 경로) 프로필상 그 역할이거나 — 둘 중 하나면 발송
-        const inList = uidsByProfile.map((u) => `"${u}"`).join(",");
-        query = query.or(`role.eq.${scopeValue},user_id.in.(${inList})`);
-      } else {
-        query = query.eq("role", scopeValue);
+      const byRole = await sb.from("push_subscriptions").select(SEL).in("role", roleAliases);
+      if (byRole.error) qErr = byRole.error;
+      const merged = new Map<string, any>();
+      for (const s of (byRole.data || [])) merged.set(s.id, s);
+      pick.byRole = (byRole.data || []).length;
+
+      let uids: string[] = [];
+      try {
+        const profs = await sb.from("profiles").select("id").in("role", roleAliases);
+        uids = (profs.data || []).map((p: any) => p.id).filter(Boolean);
+      } catch (_) { /* profiles 를 못 읽어도 role 필터 결과로는 보낸다 */ }
+      pick.profileUsers = uids.length;
+
+      if (uids.length) {
+        const byUser = await sb.from("push_subscriptions").select(SEL).in("user_id", uids);
+        if (byUser.error && !qErr) qErr = byUser.error;
+        for (const s of (byUser.data || [])) merged.set(s.id, s);
+        pick.byUser = (byUser.data || []).length;
       }
-    } else if (scope === "topic" && scopeValue) {
-      query = query.contains("topics", [scopeValue]);
-    } else if (scope === "user" && callerUserId) {
-      query = query.eq("user_id", callerUserId);
+      subs = [...merged.values()];
+      // 한쪽이라도 결과가 있으면 그것으로 보낸다 — 부분 실패로 전부 못 보내는 게 최악이다
+      if (subs.length) qErr = null;
     } else {
-      return json({ error: "Invalid 'to'", to: body.to }, 400);
+      let query = sb.from("push_subscriptions").select(SEL);
+      if (scope === "all") {
+        // no filter
+      } else if (scope === "uid" && scopeValue) {
+        query = query.eq("user_id", scopeValue);
+      } else if (scope === "topic" && scopeValue) {
+        query = query.contains("topics", [scopeValue]);
+      } else if (scope === "user" && callerUserId) {
+        query = query.eq("user_id", callerUserId);
+      } else {
+        return json({ error: "Invalid 'to'", to: body.to }, 400);
+      }
+      const r = await query;
+      subs = r.data; qErr = r.error;
     }
 
-    const { data: subs, error: qErr } = await query;
-    if (qErr) return json({ error: "Query failed", detail: qErr.message }, 500);
+    if (qErr) return json({ error: "Query failed", detail: qErr.message, pick }, 500);
 
     let targets = subs || [];
+    pick.matched = targets.length;
 
     // 제외 / dedupe
     const excludeUid = body.exclude_user_id || callerUserId;
@@ -763,7 +785,11 @@ Deno.serve(async (req: Request) => {
       removed: results.filter(r => (r as any).removed).length,
     };
 
-    return json({ ok: true, summary, details: results }, 200);
+    // 🆕 2026-08-27: pick 을 같이 돌려준다.
+    //   'attempted 0' 만 보면 구독이 없는 건지, 스코프 판정이 어긋난 건지,
+    //   설정으로 걸러진 건지 구분할 수 없다. 어디서 0 이 됐는지 남긴다.
+    console.log("[send-push]", body.to, JSON.stringify(pick), JSON.stringify(summary));
+    return json({ ok: true, summary, pick, details: results }, 200);
   } catch (e) {
     console.error("[send-push] error:", e);
     return json({ error: String(e) }, 500);
