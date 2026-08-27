@@ -68,6 +68,9 @@ order by inv.created_at;
 -- ⚠ ① 미리보기 결과를 확인한 뒤에 실행할 것.
 do $$
 declare
+  -- 🎯 특정 초대만 복구하려면 초대ID 앞 8자리를 넣는다. 비우면(= '{}') 조건에 맞는 전부.
+  --   테스트로 보낸 초대까지 같이 붙는 게 싫을 때 이걸 쓴다.
+  v_only     text[] := array['111699c6'];   -- 예: array['111699c6'] / 전부면 '{}'::text[]
   r          record;
   v_tp       record;
   v_occupied int;
@@ -92,6 +95,7 @@ begin
        and inv.status in ('sent','paid')
        and length(inv.visit_date) = 10
        and to_date(inv.visit_date, 'YYYY.MM.DD') >= current_date
+       and (cardinality(v_only) = 0 or left(inv.id::text, 8) = any(v_only))
      order by inv.created_at
   loop
     if r.cand_n <> 1 then
