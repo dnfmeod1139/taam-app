@@ -562,6 +562,55 @@ Deno.serve(async (req: Request) => {
       });
     }
 
+    // 🆕 2026-08-27: 회원 알림 설정(profiles.notif_prefs)을 실제로 존중한다.
+    //
+    //   종전엔 이 설정이 기기 IDB 에만 있었고 서버는 보지 않았다 — 회원이 껐는데도
+    //   푸시는 그대로 갔다(화면 토스트만 막혔다). 설정이 설정 노릇을 못 했다.
+    //
+    //   ⚠ 개인 알림(uid/user)에만 적용한다.
+    //     role:/all:/topic: 은 운영·공지 경로다. 알림 설정 화면에 있는 항목들은
+    //     전부 회원 대상 문구("찜한 레스토랑…", "티켓 구매 완료를…")라,
+    //     그 토글로 슈퍼어드민의 운영 알림까지 끊으면 운영이 눈을 잃는다.
+    //   ⚠ 표에 없는 카테고리는 보낸다. 설정은 '명시적으로 끈 것' 만 막는다.
+    const PREF_KEY: Record<string, string> = {
+      ticket_open: "fav",             // 찜한 레스토랑 티켓 오픈
+      ticket: "ticket",
+      ticket_purchased: "ticket",
+      ticket_cancelled: "ticket",
+      ticket_time_changed: "ticket",
+      reservation_invite: "ticket",
+      invite_paid: "ticket",
+      charge: "charge",
+      deposit_charged: "charge",
+      deposit_grant: "charge",        // 예치금이 들어오는 건 = 충전 계열
+      use: "use",
+      refund: "refund",
+      capacity_refund: "refund",
+      card_refund_done: "refund",
+      deposit_unreturned: "refund",
+      remind7: "remind7",
+      remind3: "remind3",
+      remind1: "remind1",
+    };
+    const _cat = String((body.payload as any)?.category || "system");
+    const _prefKey = PREF_KEY[_cat];
+    if ((scope === "uid" || scope === "user") && _prefKey && targets.length) {
+      try {
+        const uids = [...new Set(targets.map((s: any) => s.user_id).filter(Boolean))];
+        const { data: profs } = await sb
+          .from("profiles").select("id,notif_prefs").in("id", uids);
+        const blocked = new Set<string>();
+        for (const p of (profs || []) as any[]) {
+          const pref = p.notif_prefs || {};
+          // 기본은 켜짐 — false 로 '명시적으로 끈' 경우에만 막는다
+          if (pref.all === false || pref[_prefKey] === false) blocked.add(p.id);
+        }
+        if (blocked.size) {
+          targets = targets.filter((s: any) => !blocked.has(s.user_id));
+        }
+      } catch (_) { /* 조회 실패 시엔 보낸다 — 못 받는 것보다 낫다 */ }
+    }
+
     const payloadStr = JSON.stringify(body.payload);
 
     // 🆕 FCM HTTP v1 API (OAuth2 + Service Account JSON 방식)
