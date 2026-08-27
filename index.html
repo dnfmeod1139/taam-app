@@ -49299,7 +49299,25 @@ async function _npBindUser(){
     //   슈퍼어드민 기기가 'user' 로 박힌다.
     var _rl = user ? await _pushResolveRole(user.id)
                    : ((typeof _currentRole !== 'undefined' && _currentRole) ? _currentRole : null);
+    // 🔧 2026.08-27: 플랫폼은 '저장된 엔드포인트' 에서 되읽는 것이 가장 확실하다.
+    //
+    //   왜 — window._npEndpoint 는 파일 최상위에서 localStorage 로 복원된다.
+    //   그 줄은 setupNativePush() 보다 훨씬 먼저, Capacitor 브리지가 준비되기 전에
+    //   실행된다. 그래서 _npBindUser 가 토큰 리스너를 거치지 않고 로그인 시점에
+    //   바로 돌 수 있고, 그때 getNativePlatform() 이 'web' 을 주면
+    //   user_agent 가 'capacitor-web' 으로 박힌다. DB 에 그 행이 실제로 있다.
+    //   (테스트1 안드로이드 구독 11건 중 4건)
+    //
+    //   엔드포인트 스킴은 토큰을 처음 받을 때 이미 정해진 값이라 흔들리지 않는다.
+    //   apns:// → iOS, fcm:// → Android. 이걸 우선으로 삼는다.
     var platform = _npResolvePlatform();
+    var _epScheme = String(window._npEndpoint || '');
+    if (_epScheme.indexOf('apns://') === 0) platform = 'ios';
+    else if (_epScheme.indexOf('fcm://') === 0) platform = 'android';
+    if (platform !== 'ios' && platform !== 'android') {
+      _npMark('플랫폼 미확정 — 계정 연결 보류', { platform: platform });
+      return;   // capacitor-web 으로 덮어쓰느니 다음 기회에 다시 붙인다
+    }
     var _payload = {
       user_id: user ? user.id : null,
       endpoint: window._npEndpoint,
