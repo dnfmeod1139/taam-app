@@ -15213,6 +15213,9 @@ async function cancelMyInvite(inviteId){
           visit_date: inv.visit_date
         }
       }).select();
+      // ⚠ 이 INSERT 는 회원 세션에서는 RLS 에 막힌다(정책: 슈퍼어드민이거나 본인 행).
+      //   즉 종전엔 호스트 벨에 취소 이력이 하나도 안 남았다 — 푸시를 놓치면 끝이었다.
+      //   실패해도 흐름은 계속 가고, 아래 taamNotifyAdmins 가 RPC 로 확실히 남긴다.
       console.log('[cancel] host 알림 INSERT 결과:', { error: nIns && nIns.error, data: nIns && nIns.data });
       // 푸시 (호스트가 구독 안 했어도 무해)
       try {
@@ -15229,6 +15232,26 @@ async function cancelMyInvite(inviteId){
           }
         });
       } catch(_pe){ console.warn('[cancel] push 실패:', _pe); }
+
+      // 🆕 2026.08-27: 슈퍼어드민 전원에게 이력 + 푸시 (RLS 우회 RPC).
+      //   호스트가 아닌 다른 슈퍼어드민도 좌석이 풀린 것을 알아야 한다.
+      try {
+        if(typeof taamNotifyAdmins === 'function'){
+          var _cvWho = (typeof _currentUserName !== 'undefined' && _currentUserName) ? _currentUserName : '회원';
+          var _cvAt  = new Date().toLocaleString('ko-KR', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
+          await taamNotifyAdmins({
+            type: 'invite_cancelled',
+            title: '❌ ' + _cvWho + '님이 초대를 취소했습니다',
+            body: notifBody
+                + (inv.ticket_product_id ? ('\n좌석 ' + inv.pax + '석 반환됨') : '')
+                + '\n취소 ' + _cvAt,
+            url: '/',
+            tag: 'taam-cancel-' + inviteId,
+            payload: { invite_id: inviteId, cancelled_by: u.id, pax: inv.pax,
+                       total_amount: inv.total_amount, visit_date: inv.visit_date }
+          });
+        }
+      } catch(_ae){ console.warn('[cancel] 어드민 통지 예외:', _ae); }
     } catch(_ne){ console.warn('[cancel] 호스트 알림 처리 예외:', _ne); }
 
     showToast('✓','초대 취소 완료','슈퍼어드민에게 자동 통지됨');
@@ -18745,6 +18768,30 @@ async function adminGrantDeposit(targetUserId, amount, depositType, description)
           }
         });
       } catch(_pe) { console.warn('[adg] push 발송 예외:', _pe); }
+
+      // 🆕 2026.08-27: 부여한 쪽에도 확인 알림 — 누구에게 얼마가 나갔는지 이력으로 남는다.
+      //   종전엔 받는 회원에게만 갔고, 부여한 기록은 화면 토스트가 전부였다.
+      //   슈퍼어드민이 두 기기를 쓰면 다른 기기에는 아무것도 안 남았다.
+      try {
+        if(typeof taamNotifyAdmins === 'function'){
+          var _agWho = (selRes.data && selRes.data.display_name) || '회원';
+          var _agAt  = new Date().toLocaleString('ko-KR', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
+          taamNotifyAdmins({
+            type: 'deposit_granted_admin',
+            title: (amount >= 0 ? '💰 ' : '➖ ') + _agWho + '님에게 ' + typeLabel + ' 예치금 '
+                 + (amount >= 0 ? '부여' : '차감') + ' ₩' + Math.abs(amount).toLocaleString(),
+            body: _agWho + '님 · ' + typeLabel + ' 예치금 ₩' + Math.abs(amount).toLocaleString()
+                + (amount >= 0 ? ' 부여' : ' 차감')
+                + '\n부여 후 잔액 ₩' + newBalance.toLocaleString()
+                + (_grantReason ? ('\n사유: ' + _grantReason) : '')
+                + '\n처리 ' + _agAt,
+            url: '/',
+            tag: 'taam-grantadm-' + targetUserId + '-' + Date.now(),
+            payload: { target_user_id: targetUserId, target_name: _agWho, amount: amount,
+                       deposit_type: depositType, balance_after: newBalance }
+          });
+        }
+      } catch(_ae) { console.warn('[adg] 부여 확인 알림 예외:', _ae); }
     } catch(_ne) { console.warn('[adg] notifications 처리 예외:', _ne); }
   }
 
@@ -22615,24 +22662,21 @@ async function completePurchase(){
     var _pxRest = currentRest ? currentRest.name : (t.rest || '티켓');
     // 🆕 구매자 이름 포함 — "누가 · 어디 · 며칠 · 몇 명" 이 알림에서 바로 보이게
     var _pxWho = (typeof _currentUserName !== 'undefined' && _currentUserName) ? _currentUserName : '회원';
-    var _pxBody = _pxWho + '님 · ' + _pxRest + ' · ' + t.date + ' ' + t.time + ' · ' + pax + '인 · ₩' + (paid||0).toLocaleString();
-    ['superadmin','super_admin'].forEach(function(_rl){
-      try {
-        window.sb.functions.invoke('send-push', {
-          body: {
-            to: 'role:' + _rl,
-            payload: {
-              title: '🎫 ' + _pxWho + '님이 티켓을 구매했습니다',
-              body: _pxBody,
-              url: '/',
-              category: 'ticket_purchased',
-              tag: 'taam-tpurchase-' + purchaseId
-            }
-          }
-        });
-      } catch(_pe){}
-    });
-  } catch(_ce){ console.warn('[purchase] 슈퍼어드민 푸시 예외:', _ce); }
+    // 🆕 2026.08-27: 구매 시각을 본문에 넣는다 — 알림을 나중에 봐도 언제 산 건지 남는다
+    var _pxAt = new Date().toLocaleString('ko-KR', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
+    var _pxBody = _pxWho + '님 · ' + _pxRest + ' · ' + t.date + ' ' + t.time + ' · ' + pax + '인 · ₩' + (paid||0).toLocaleString()
+                + '\n결제 ' + _pxAt;
+    // 이력 + 푸시를 한 번에 (종전엔 푸시만 나가 슈퍼어드민 벨에 기록이 안 남았다)
+    if(typeof taamNotifyAdmins === 'function'){
+      taamNotifyAdmins({
+        type: 'ticket_purchased',
+        title: '🎫 ' + _pxWho + '님이 티켓을 구매했습니다',
+        body: _pxBody,
+        tag: 'taam-tpurchase-' + purchaseId,
+        payload: { purchase_id: purchaseId, ticket_id: t.id, pax: pax, amount: paid || 0, buyer: _pxWho }
+      });
+    }
+  } catch(_ce){ console.warn('[purchase] 슈퍼어드민 통지 예외:', _ce); }
 }
 
 function closeDonePopup(){
@@ -25523,23 +25567,23 @@ async function cancelTicketPurchase(purchaseId, refundCalc, isSuperAdminOverride
                        ? ('\n💳 카드 환불 필요: ₩' + _cardRefund.toLocaleString()
                           + ' (토스에서 승인취소' + (_ex0.order_id ? (' · 주문 ' + _ex0.order_id) : '') + ')')
                        : (_depositRefund > 0 ? '' : ' · 환불 없음'));
-      ['superadmin','super_admin'].forEach(function(_rl){
-        try {
-          window.sb.functions.invoke('send-push', {
-            body: {
-              to: 'role:' + _rl,
-              payload: {
-                title: _cxTitle,
-                body: _cxBody,
-                url: '/',
-                category: _cardRefund > 0 ? 'ticket_cancelled_card_refund' : 'ticket_cancelled',
-                tag: 'taam-tcancel-' + purchaseId
-              }
-            }
-          });
-        } catch(_pe){}
-      });
-    } catch(_ce){ console.warn('[cancel] 슈퍼어드민 푸시 예외:', _ce); }
+      // 🆕 2026.08-27: 취소 시각 + 누가 취소했는지 본문에 남긴다
+      var _cxWho = (typeof _currentUserName !== 'undefined' && _currentUserName) ? _currentUserName : '회원';
+      var _cxAt  = new Date().toLocaleString('ko-KR', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
+      if(typeof taamNotifyAdmins === 'function'){
+        taamNotifyAdmins({
+          type: _cardRefund > 0 ? 'ticket_cancelled_card_refund' : 'ticket_cancelled',
+          title: _cxTitle,
+          body: _cxWho + '님 · ' + _cxBody + '\n취소 ' + _cxAt,
+          tag: 'taam-tcancel-' + purchaseId,
+          payload: {
+            purchase_id: purchaseId, pax: h.pax || 1, amount: h.amt || 0,
+            deposit_refund: _depositRefund || 0, card_refund: _cardRefund || 0,
+            by: isSuperAdminOverride ? 'super_admin' : 'user'
+          }
+        });
+      }
+    } catch(_ce){ console.warn('[cancel] 슈퍼어드민 통지 예외:', _ce); }
 
     // 회원 안내: 예치금 환원분과 카드 환불 예정분을 분리해 보여준다
     var _cxMsg;
@@ -28716,6 +28760,24 @@ function doChargeComplete(){
     showToast('✓', _chTitle, _chMsg, { category:'charge', native:true });
     // 🆕 본인 다른 기기에도 충전 알림
     if(typeof notifPushSelf === 'function') notifPushSelf('💰', '예치금 충전 완료', '₩'+chargeAmount.toLocaleString()+' 충전되었습니다', 'charge');
+    // 🆕 2026.08-27: 돈이 들어온 건이므로 슈퍼어드민에게도 이력 + 푸시.
+    //   종전엔 회원 본인 기기에만 갔고 운영 쪽에는 아무 흔적도 안 남았다.
+    try {
+      if(typeof taamNotifyAdmins === 'function'){
+        var _cgWho = (typeof _currentUserName !== 'undefined' && _currentUserName) ? _currentUserName : '회원';
+        var _cgAt  = new Date().toLocaleString('ko-KR', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
+        taamNotifyAdmins({
+          type: 'deposit_charged',
+          title: '💰 ' + _cgWho + '님이 예치금을 충전했습니다',
+          body: _cgWho + '님 · ₩' + chargeAmount.toLocaleString() + ' 충전'
+              + '\n충전 후 잔액 ₩' + currentDepositBalance.toLocaleString()
+              + '\n충전 ' + _cgAt,
+          url: '/',
+          tag: 'taam-charge-' + Date.now(),
+          payload: { amount: chargeAmount, balance_after: currentDepositBalance }
+        });
+      }
+    } catch(_cge){ console.warn('[charge] 어드민 통지 예외:', _cge); }
 
     // 초기화
     _chargeAmt = 0;
@@ -32148,6 +32210,28 @@ async function riSubmit(){
     } catch(pe){ console.warn('[ri] 푸시 발송 예외:', pe); _riPushResult = 'error'; }
 
     var _riWho = _riInvitee.display_name || '회원';
+
+    // 🆕 2026.08-27: 발행한 쪽에도 확인 알림 — 누구에게 무엇이 나갔는지 이력으로 남는다.
+    //   종전엔 초대를 보내면 받는 사람에게만 갔고, 보낸 기록은 화면의 토스트가 전부였다.
+    //   토스트는 사라지고, 다른 슈퍼어드민 기기에는 아예 안 뜬다.
+    try {
+      if(typeof taamNotifyAdmins === 'function'){
+        var _riAt = new Date().toLocaleString('ko-KR', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
+        taamNotifyAdmins({
+          type: 'invite_sent',
+          title: '📨 ' + _riWho + '님에게 초대 티켓을 발행했습니다',
+          body: restName + ' · ' + _riVisitDate + ' ' + _riTime + ' · ' + _riPax + '인 · ₩' + total.toLocaleString()
+              + '\n' + (_lnkT ? ('판매 티켓 연결됨 · 좌석 ' + _riPax + '석 차감') : '⚠ 티켓 미연결 — 좌석 차감 안 됨')
+              + '\n발행 ' + _riAt
+              + (_riPushResult === 'nosub' ? '\n⚠ 받는 분 기기에 알림 미등록 — 푸시 안 감' : ''),
+          url: '/',
+          tag: 'taam-risent-' + inviteId,
+          payload: { invite_id: inviteId, invitee_id: _riInvitee.id, invitee: _riWho,
+                     pax: _riPax, amount: total, ticket_product_id: _lnkT ? String(_lnkT.id) : null,
+                     push_result: _riPushResult }
+        });
+      }
+    } catch(_rae){ console.warn('[ri] 발행 확인 알림 예외:', _rae); }
     if(_riPushResult === 'ok'){
       showToast('✓','초대 발송 완료', _riWho + '에게 푸시 전송됨 + 결제 팝업 대기');
     } else if(_riPushResult === 'nosub'){
@@ -32993,6 +33077,24 @@ async function riConfirmPay(){
             }
           });
         } catch(_ppe){ console.warn('[riPay] host 푸시 실패:', _ppe); }
+      }
+      // 🆕 2026.08-27: 슈퍼어드민 전원에게 이력 + 푸시.
+      //   위 INSERT 는 결제한 회원 세션이라 RLS 에 막힌다 — 이력이 안 남았다.
+      //   금전이 오간 건이므로 반드시 기록으로 남아야 한다.
+      if(typeof taamNotifyAdmins === 'function'){
+        var _pvWho = (typeof _currentUserName !== 'undefined' && _currentUserName) ? _currentUserName : '회원';
+        var _pvAt  = new Date().toLocaleString('ko-KR', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
+        await taamNotifyAdmins({
+          type: 'invite_paid',
+          title: '💳 ' + _pvWho + '님이 초대 결제를 완료했습니다',
+          body: _pvWho + '님 · ' + paidBody
+              + '\n예치금 차감 ₩' + pay.toLocaleString() + ' (멤버십 ₩' + memUsed.toLocaleString() + ' · 일반 ₩' + genUsed.toLocaleString() + ')'
+              + '\n결제 ' + _pvAt,
+          url: '/',
+          tag: 'taam-paid-' + inv.id,
+          payload: { invite_id: inv.id, paid_by: u.id, amount: inv.total_amount,
+                     pax: inv.pax, visit_date: inv.visit_date }
+        });
       }
     } catch(_pne){ console.warn('[riPay] host 결제완료 통지 예외:', _pne); }
 
@@ -49692,7 +49794,15 @@ window.pushSend = async function(to, payload, opts){
 // showToast 의 native 옵션이 ON 일 때 다른 기기/역할에도 푸시 발송하는 헬퍼
 // (현재는 본인 다른 기기로만 발송 — 'user' 스코프)
 window.notifPushSelf = function(icon, title, msg, category){
-  if(typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+  // 🔧 2026.08-27: 네이티브 앱에서는 Web Notification API 를 보지 않는다.
+  //   WKWebView(iOS)에는 window.Notification 이 아예 없고, 안드로이드 WebView 도
+  //   permission 이 'granted' 가 아니다. 그래서 앱에서는 이 함수가 첫 줄에서
+  //   조용히 리턴했다 — PWA 에서 잘 오던 「본인 다른 기기」 알림이 앱 출시 후
+  //   전부 사라진 원인이 이것이다. 앱은 APNs/FCM 을 쓰므로 웹 권한과 무관하다.
+  var _nat = (typeof isNativeApp === 'function') && isNativeApp();
+  if(!_nat){
+    if(typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+  }
   // 본인 다른 기기에도 알림 (현재 기기는 토스트로 이미 표시됨)
   pushSend('user', {
     title: (icon ? icon + ' ' : '') + title,
@@ -49700,6 +49810,99 @@ window.notifPushSelf = function(icon, title, msg, category){
     category: category || 'system',
     url: '/',
   });
+};
+
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026.08-27: 알림 파이프라인 통합
+//
+//   알림 한 건 = ① 이력(notifications 행) + ② 푸시. 둘 다 있어야 완성이다.
+//   푸시는 놓치면 끝이고, 이력만 있으면 제때 모른다.
+//
+//   지금까지는 자리마다 따로 짰다 — 어떤 이벤트는 푸시만, 어떤 건 이력만,
+//   슈퍼어드민 통지는 곳마다 ['superadmin','super_admin'] 루프를 복붙했다.
+//   그래서 이벤트를 하나 추가할 때마다 한쪽이 빠졌다.
+//
+//   ⚠ 슈퍼어드민 이력은 RPC 로만 남길 수 있다.
+//     notifications 의 INSERT 정책이 "슈퍼어드민이거나 본인 행" 이라,
+//     회원이 슈퍼어드민에게 직접 INSERT 하면 RLS 가 막는다(조용히 0행).
+//     그래서 taam_notify_admins (SECURITY DEFINER) 를 쓴다.
+//     RPC 가 아직 설치되지 않았어도 푸시는 그대로 나간다 — 알림이 통째로
+//     사라지는 것보다 이력만 비는 편이 낫다.
+// ═══════════════════════════════════════════════════════════════
+
+// 슈퍼어드민 전원에게 — 이력 + 푸시
+//   o: { type, title, body, url, tag, payload }
+window.taamNotifyAdmins = async function(o){
+  o = o || {};
+  if(!window.sb || !o.title) return { history: 0, push: false };
+  var _type = o.type || 'system';
+  var _url  = o.url || '/';
+  var _res  = { history: 0, push: false };
+
+  // ① 이력 — 슈퍼어드민 전원의 벨에 남는다
+  try {
+    var r = await window.sb.rpc('taam_notify_admins', {
+      p_type: _type,
+      p_title: String(o.title).slice(0, 200),
+      p_body: String(o.body || '').slice(0, 1000),
+      p_url: _url,
+      p_payload: o.payload || {}
+    });
+    if(r.error) console.warn('[notify] 어드민 이력 실패:', r.error.message);
+    else _res.history = parseInt(r.data) || 0;
+  } catch(e){ console.warn('[notify] 어드민 이력 예외:', e && e.message); }
+
+  // ② 푸시 — role 문자열이 환경에 따라 둘 다 존재해서 양쪽으로 보낸다.
+  //   send-push 는 role 스코프에서 호출자(행동한 본인) uid 를 자동 제외한다.
+  ['superadmin', 'super_admin'].forEach(function(_rl){
+    try {
+      window.sb.functions.invoke('send-push', {
+        body: { to: 'role:' + _rl, payload: {
+          title: o.title, body: o.body || '', url: _url,
+          category: _type, tag: o.tag || ('taam-' + _type + '-' + Date.now())
+        } }
+      });
+      _res.push = true;
+    } catch(_pe){ console.warn('[notify] 어드민 푸시 예외:', _pe && _pe.message); }
+  });
+  return _res;
+};
+
+// 특정 회원에게 — 이력 + 푸시
+//   슈퍼어드민이 회원에게 보낼 때 쓴다(RLS 상 INSERT 가능). 본인에게도 쓸 수 있다.
+window.taamNotifyUser = async function(uid, o){
+  o = o || {};
+  if(!window.sb || !uid || !o.title) return { history: 0, push: false };
+  var _type = o.type || 'system';
+  var _url  = o.url || '/';
+  var _res  = { history: 0, push: false };
+
+  try {
+    var ins = await window.sb.from('notifications').insert({
+      user_id: uid,
+      type: _type,
+      title: String(o.title).slice(0, 200),
+      body: String(o.body || '').slice(0, 1000),
+      url: _url,
+      payload: o.payload || {},
+      // 구버전 컬럼 호환 — 일부 배포본이 message/kind 를 읽는다
+      message: String(o.body || '').slice(0, 1000),
+      kind: _type
+    }).select();
+    if(ins.error) console.warn('[notify] 회원 이력 실패:', ins.error.message);
+    else _res.history = (ins.data && ins.data.length) || 0;
+  } catch(e){ console.warn('[notify] 회원 이력 예외:', e && e.message); }
+
+  try {
+    await window.sb.functions.invoke('send-push', {
+      body: { to: 'uid:' + uid, payload: {
+        title: o.title, body: o.body || '', url: _url,
+        category: _type, tag: o.tag || ('taam-' + _type + '-' + Date.now())
+      } }
+    });
+    _res.push = true;
+  } catch(_pe){ console.warn('[notify] 회원 푸시 예외:', _pe && _pe.message); }
+  return _res;
 };
 
 // OS 알림 권한 요청 (사용자 액션 후 호출 — Notif 설정 페이지 진입 시)
