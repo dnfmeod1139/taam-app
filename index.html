@@ -9316,7 +9316,10 @@ window.closePromoCarousel = function(){
     <button class="mp-sub-back" onclick="closePage('notifSettingsPage')">
       <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
     </button>
-    <div class="mp-sub-title" data-i18n="notif_settings.title">알림 설정</div>
+    <!-- 🆕 2026.08-27: 진단 버튼은 슈퍼어드민에게만 보인다(회원 화면 정리). 그런데 문제가
+         나는 건 늘 회원 기기다 — 그 기기에서 원인을 볼 방법이 없으면 추측만 하게 된다.
+         제목을 7번 연속 탭하면 진단 줄이 열린다. 회원이 우연히 밟을 일은 없다. -->
+    <div class="mp-sub-title" data-i18n="notif_settings.title" onclick="_nsDiagTap()" style="cursor:default;-webkit-user-select:none;user-select:none;">알림 설정</div>
   </div>
 
   <div class="mp-sub-scroll" style="padding-bottom:80px;">
@@ -22743,9 +22746,27 @@ function openMpCharge(){
   // p.style.display='flex';
   // if(typeof applyI18n==='function') applyI18n(p);
 }
+// 🆕 2026.08-27: 숨은 진단 열기 — 「알림 설정」 제목을 7번 연속 탭.
+//   왜 필요한가: 푸시가 안 오는 건 회원 기기에서 일어나는데, 진단 버튼은
+//   슈퍼어드민에게만 보인다. 그 기기에서 상태를 못 읽으면 원인을 추측할 수밖에 없다.
+//   (안드로이드 테스트 기기에서 실제로 그랬다 — 권한은 허용인데 구독이 0)
+var _nsTapN = 0, _nsTapT = null;
+function _nsDiagTap(){
+  _nsTapN++;
+  if(_nsTapT) clearTimeout(_nsTapT);
+  _nsTapT = setTimeout(function(){ _nsTapN = 0; }, 2500);   // 끊기면 처음부터
+  if(_nsTapN < 7) return;
+  _nsTapN = 0;
+  var _dg = document.getElementById('nsDiagRow');
+  if(_dg) _dg.style.display = 'flex';
+  if(typeof showToast === 'function') showToast('🔧','진단 열림','상태 확인 · 테스트 발송 · 재구독');
+}
+window._nsDiagTap = _nsDiagTap;
+
 function openNotifSettings(){
   var p = document.getElementById('notifSettingsPage');
   p.style.display='flex';
+  _nsTapN = 0;
   if(typeof applyI18n==='function') applyI18n(p);
   // 🆕 OS 푸시 권한 버튼 상태 동기화
   if(typeof notifPermSync === 'function') setTimeout(notifPermSync, 30);
