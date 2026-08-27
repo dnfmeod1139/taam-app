@@ -49224,6 +49224,26 @@ function getNativePlatform(){
   try { return window.Capacitor.getPlatform(); } catch(e){ return 'web'; }
 }
 
+// 🆕 2026.08-27: 네이티브 플랫폼을 '토큰을 받은 시점' 이 아니라 setup 시점에 확정해 둔다.
+//
+//   왜 필요한가 — DB 에 user_agent='capacitor-web' 인 구독이 실제로 쌓여 있다.
+//   그건 getNativePlatform() 이 그 순간 'web' 을 돌려줬다는 뜻이다. 그런데 토큰은
+//   네이티브 플러그인이 준 것이다. 저장 코드는 이렇게 되어 있다:
+//       endpoint = (platform === 'ios') ? 'apns://'+token : 'fcm://'+token
+//   즉 iOS 에서 이 창이 열리면 APNs 토큰이 fcm:// 로 박힌다 — FCM 이 그 토큰을
+//   모르니 그 기기는 영영 알림을 못 받는다. 되돌릴 방법도 없다(사람 눈엔 구독이 있다).
+//   device_label 도 'ios 아니면 Android' 라 iPhone 이 Android 로 기록된다.
+//
+//   setup 시점에는 Capacitor.Plugins.PushNotifications 존재를 이미 확인한 뒤라
+//   플랫폼을 신뢰할 수 있다. 그 값을 기억해 두고 이후로는 그것만 쓴다.
+window._npPlatform = null;
+function _npResolvePlatform(){
+  var p = getNativePlatform();
+  if (p === 'ios' || p === 'android') { window._npPlatform = p; return p; }
+  if (window._npPlatform) return window._npPlatform;   // setup 때 잡아둔 값
+  return p;
+}
+
 // 🆕 Native Push 등록 (iOS APNs + Android FCM 통합)
 //   Capacitor 환경에서만 동작. PWA/웹에서는 기존 Web Push 사용.
 // 🆕 2026.08: 네이티브 푸시 진행 상황 기록 — 폰에는 콘솔이 없어서,
@@ -49279,7 +49299,7 @@ async function _npBindUser(){
     //   슈퍼어드민 기기가 'user' 로 박힌다.
     var _rl = user ? await _pushResolveRole(user.id)
                    : ((typeof _currentRole !== 'undefined' && _currentRole) ? _currentRole : null);
-    var platform = getNativePlatform();
+    var platform = _npResolvePlatform();
     var _payload = {
       user_id: user ? user.id : null,
       endpoint: window._npEndpoint,
@@ -49337,6 +49357,11 @@ async function setupNativePush(){
     _npMark('PushNotifications 플러그인 없음 — 빌드에 미포함');
     return;
   }
+  // 여기까지 왔으면 Capacitor 가 확실히 살아 있다 — 플랫폼을 지금 확정해 둔다.
+  //   나중에 토큰 리스너 안에서 다시 물으면 'web' 이 나오는 순간이 있고,
+  //   그때 저장하면 엔드포인트 스킴(apns:// vs fcm://)이 틀어진다.
+  _npResolvePlatform();
+  _npMark('플랫폼 확정', { platform: window._npPlatform || getNativePlatform() });
 
   try {
     // ⚠ 리스너를 register() 보다 '먼저' 단다.
@@ -49349,7 +49374,15 @@ async function setupNativePush(){
     //   "토큰도 오류도 안 온다" 의 남은 원인이 이것이다. 하나하나 await 로 확실히 붙인다.
     await PushNotifications.addListener('registration', async function(token){
       _npMark('토큰 수신', { tokenTail: String(token.value||'').slice(-8) });
-      var platform = getNativePlatform();
+      var platform = _npResolvePlatform();
+      // ⚠ 플랫폼을 모르면 저장하지 않는다. 잘못 저장하면 iOS 의 APNs 토큰이
+      //   fcm:// 로 박혀 그 기기가 영영 알림을 못 받는다 — 게다가 DB 에는 구독이
+      //   멀쩡히 보여서 원인을 찾을 수가 없다. 다음 실행에 다시 시도하는 편이 낫다.
+      if (platform !== 'ios' && platform !== 'android') {
+        _npMark('플랫폼 미확정 — 토큰 저장 보류', { platform: platform,
+          hint: 'capacitor-web 으로 저장되면 엔드포인트 스킴이 틀어진다' });
+        return;
+      }
       // 🆕 토큰을 기억해 둔다 — 앱을 켠 시점엔 아직 로그인 전이라 계정에 못 붙는다.
       //   로그인이 끝나면 _npBindUser() 가 이 값으로 다시 저장한다.
       window._npEndpoint = (platform === 'ios') ? ('apns://' + token.value) : ('fcm://' + token.value);
