@@ -18841,9 +18841,12 @@ async function adminGrantDeposit(targetUserId, amount, depositType, description)
     : 'granted_general_balance';
 
   // 1) 타겟 사용자 현재 잔액 + 부여 누적 조회
+  //   🆕 2026.08-28: 두 주머니를 다 읽는다. 실패 메시지에 '다른 주머니에는 얼마가 있다' 를
+  //     같이 적어주기 위해서다 — 그 한 줄이 없어서 시간을 버렸다.
   var selRes = await window.sb
     .from('profiles')
-    .select(balanceField + ',' + grantedField + ', display_name')
+    .select('membership_deposit_balance, general_deposit_balance, '
+          + 'granted_membership_balance, granted_general_balance, display_name')
     .eq('id', targetUserId)
     .single();
   if (selRes.error) throw new Error('대상 사용자 조회 실패: ' + selRes.error.message);
@@ -18853,7 +18856,23 @@ async function adminGrantDeposit(targetUserId, amount, depositType, description)
   var newBalance = currentBalance + amount;
   var newGranted = currentGranted + amount; // 차감 시 음수 → 부여 누적도 감소
   if (newBalance < 0) {
-    throw new Error('잔액 부족 (현재 ₩' + currentBalance.toLocaleString() + ', 차감 ₩' + Math.abs(amount).toLocaleString() + ')');
+    // 🆕 어느 주머니가 부족한지, 다른 주머니엔 얼마가 있는지까지 적는다.
+    //   종전엔 '잔액 부족 (현재 ₩0)' 뿐이라, 돈이 멤버십에 있는데 일반에서 빼려던 것을
+    //   알 방법이 없었다. 실제로 그 상태로 네 번을 다시 시도했다.
+    var _thisLbl  = (depositType === 'membership') ? '멤버십' : '일반';
+    var _otherLbl = (depositType === 'membership') ? '일반' : '멤버십';
+    var _otherBal = (depositType === 'membership')
+      ? (parseInt(selRes.data.general_deposit_balance) || 0)
+      : (parseInt(selRes.data.membership_deposit_balance) || 0);
+    throw new Error(
+      _thisLbl + ' 예치금이 부족합니다'
+      + ' (현재 \u20A9' + currentBalance.toLocaleString()
+      + ' · 차감 \u20A9' + Math.abs(amount).toLocaleString() + ')'
+      + (_otherBal > 0
+          ? '\n\n' + _otherLbl + ' 예치금에는 \u20A9' + _otherBal.toLocaleString() + ' 이 있습니다.\n'
+            + '③ 예치금 종류를 「' + _otherLbl + ' 예치금」 으로 바꿔보세요.'
+          : '')
+    );
   }
 
   // 2) 잔액 + 부여 누적 동시 업데이트 (super_admin RLS 가 허용해야 함)
