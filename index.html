@@ -6597,6 +6597,31 @@ function taamMoney(krw, opts){
 }
 window.taamMoney = taamMoney;
 
+// 🆕 2026.08-28: '받는 사람' 통화로 금액을 만든다.
+//   taamMoney 는 지금 로그인한 사람의 통화를 쓴다. 그게 맞는 화면이 대부분이지만,
+//   초대 발송 알림처럼 **내 화면에서 만들어 남에게 보내는 문구**는 틀린다 —
+//   슈퍼어드민(원화) 브라우저에서 만들어지니 달러 회원에게도 ₩ 로 갔다.
+//   (실제로 USD 회원에게 「₩4,600,000」 으로 초대 알림이 나갔다)
+//   통화 판정이 전역(_userCurrency · _tkCurrentLang) 을 보므로 잠깐만 바꿔 끼운다.
+//   ⚠ 동기 함수여야 한다 — 중간에 await 이 끼면 그 사이 다른 코드가 뒤바뀐 값을 본다.
+function taamMoneyFor(cur, krw, opts){
+  var okCur = (cur === 'KRW' || cur === 'USD' || cur === 'JPY') ? cur : null;
+  var prevCur  = window._userCurrency;
+  var prevLang = window._tkCurrentLang;
+  try {
+    window._userCurrency = okCur;
+    // 미지정 회원은 원화로 본다 — 화면 언어 폴백은 '보는 사람' 기준이라 여기선 틀린다
+    if (!okCur) window._tkCurrentLang = 'ko';
+    return taamMoney(krw, opts);
+  } catch(e) {
+    return '₩' + (parseInt(krw, 10) || 0).toLocaleString();
+  } finally {
+    window._userCurrency  = prevCur;
+    window._tkCurrentLang = prevLang;
+  }
+}
+window.taamMoneyFor = taamMoneyFor;
+
 window.fxMoney = fxMoney; window.fxUsd = fxUsd; window.fxIsOverseas = fxIsOverseas;
 window.fxAgencyUsd = fxAgencyUsd; window.fxAgencyKrw = fxAgencyKrw; window.fxRate = fxRate; window.fxRateJpy = fxRateJpy;
 
@@ -32860,7 +32885,10 @@ async function riSubmit(){
     // 🆕 v1.53.30: 인앱 알림 INSERT (구독 안 한 회원도 다음 접속 시 토스트)
     try {
       var notifTitle = '🎫 TAAM 예약 초대 도착';
-      var notifBody = restName + ' · ' + _riDate + ' ' + _riTime + ' · ' + _riPax + '인 · ₩' + total.toLocaleString();
+      // 🆕 2026.08-28: 받는 회원의 통화로 적는다. 종전엔 ₩ 가 박혀 있어
+      //   달러 회원에게도 원화로 갔다 (실제로 그렇게 나갔다).
+      var _riCurTxt = taamMoneyFor(_riInvitee && _riInvitee.currency, total);
+      var notifBody = restName + ' · ' + _riDate + ' ' + _riTime + ' · ' + _riPax + '인 · ' + _riCurTxt;
       // v1.53.32: 기존 notifications 테이블의 NOT NULL 컬럼(kind/message) 대비 — 둘 다 함께 채움
       var nIns = await window.sb.from('notifications').insert({
         user_id: _riInvitee.id,
@@ -32881,7 +32909,7 @@ async function riSubmit(){
     try {
       var dispDate = _riDate;
       var dispTime = _riTime;
-      var pushBody = '🎫 ' + restName + ' · ' + dispDate + ' ' + dispTime + ' · ' + _riPax + '인 · ₩' + total.toLocaleString();
+      var pushBody = '🎫 ' + restName + ' · ' + dispDate + ' ' + dispTime + ' · ' + _riPax + '인 · ' + taamMoneyFor(_riInvitee && _riInvitee.currency, total);
       var pushRes = await window.sb.functions.invoke('send-push', {
         body: {
           to: 'uid:' + _riInvitee.id,
@@ -33507,11 +33535,14 @@ async function openReservationInvitePayPopup(inviteId){
       var genBal = (me.data && me.data.general_deposit_balance) || 0;
       var totalBal = (me.data && me.data.deposit_balance != null) ? me.data.deposit_balance : (memBal + genBal);
       var shortfall = (inv.total_amount || 0) - totalBal;
-      var balHtml = '<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:12px;"><span style="color:#777;">멤버십 예치금</span><span style="color:#5d1622;font-weight:700;">₩'+memBal.toLocaleString()+'</span></div>'
-                  + '<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:12px;"><span style="color:#777;">일반 예치금</span><span style="color:#2a6a2a;font-weight:700;">₩'+genBal.toLocaleString()+'</span></div>'
-                  + '<div style="display:flex;justify-content:space-between;padding:6px 0;font-size:12.5px;border-top:1px dashed #ddd;margin-top:4px;"><span style="color:#1a1a18;font-weight:800;">잔액 합계</span><span style="color:#1a1a18;font-weight:800;">₩'+totalBal.toLocaleString()+'</span></div>';
+      // 🆕 2026.08-28: 잔액도 회원 통화로. 위 금액줄은 이미 taamMoney 인데 여기만 ₩ 가
+      //   박혀 있어, 해외 회원 화면에 「총 결제 $3,400 / 잔액 ₩8,900,000」 이 나란히 떴다.
+      //   같은 팝업에서 통화가 갈리면 자기가 낼 돈이 어느 쪽인지 매번 되짚게 된다.
+      var balHtml = '<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:12px;"><span style="color:#777;">멤버십 예치금</span><span style="color:#5d1622;font-weight:700;">'+_rpCur(memBal)+'</span></div>'
+                  + '<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:12px;"><span style="color:#777;">일반 예치금</span><span style="color:#2a6a2a;font-weight:700;">'+_rpCur(genBal)+'</span></div>'
+                  + '<div style="display:flex;justify-content:space-between;padding:6px 0;font-size:12.5px;border-top:1px dashed #ddd;margin-top:4px;"><span style="color:#1a1a18;font-weight:800;">잔액 합계</span><span style="color:#1a1a18;font-weight:800;">'+_rpCur(totalBal)+'</span></div>';
       if(shortfall > 0){
-        balHtml += '<div style="margin-top:6px;padding:8px 10px;background:#fff5f5;border:1px solid #c33;border-radius:8px;font-size:11.5px;color:#9B1C1C;font-weight:700;text-align:center;">예치금 부족: ₩'+shortfall.toLocaleString()+' 추가 충전 필요</div>';
+        balHtml += '<div style="margin-top:6px;padding:8px 10px;background:#fff5f5;border:1px solid #c33;border-radius:8px;font-size:11.5px;color:#9B1C1C;font-weight:700;text-align:center;">예치금 부족: '+_rpCur(shortfall)+' 추가 충전 필요</div>';
         // 결제 차단
         document.getElementById('riPayBtn').dataset.insufficient = '1';
       } else {
