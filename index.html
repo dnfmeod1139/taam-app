@@ -15416,7 +15416,13 @@ async function cancelMyInvite(inviteId){
     console.log('[cancel] 초대 취소 OK:', inviteId);
 
     // 🆕 2026.08 A안: 연결 초대의 좌석 홀드 해제 → 본 티켓 잔여석 즉시 복구
-    if (inv.ticket_product_id && typeof _riReleaseHold === 'function') {
+    // 🔧 2026.08-28: ticket_product_id 조건을 뺐다.
+    //   홀드 행(INVH-)은 있는데 초대의 ticket_product_id 가 비어 있는 경우가 있다
+    //   (연결이 나중에 끊겼거나, 옛 경로로 만들어진 건). 그때 해제를 건너뛰면
+    //   좌석이 영영 잡힌 채 캘린더에도 계속 남는다 — 실제로 그렇게 남았다.
+    //   RPC 는 맞는 행이 없으면 released:0 으로 아무 일도 하지 않고, 권한도
+    //   스스로 검사한다. 항상 부르는 편이 언제나 더 안전하다.
+    if (typeof _riReleaseHold === 'function') {
       try { await _riReleaseHold(inviteId); } catch(_rh){ console.warn('[cancel] 홀드 해제 실패:', _rh); }
     }
 
@@ -33133,7 +33139,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.28-b';
+var TAAM_WEB_BUILD = '2026.08.28-d';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -33359,7 +33365,13 @@ async function siRecallInvite(inviteId){
     console.log('[recall] 초대 회수 OK:', inviteId);
 
     // ② 좌석 홀드 해제 — 안 하면 자리를 붙잡은 채 남는다
-    if(inv.ticket_product_id && typeof _riReleaseHold === 'function'){
+    // 🔧 2026.08-28: ticket_product_id 조건을 뺐다.
+    //   홀드 행(INVH-)은 있는데 초대의 ticket_product_id 가 비어 있는 경우가 있다
+    //   (연결이 나중에 끊겼거나, 옛 경로로 만들어진 건). 그때 해제를 건너뛰면
+    //   좌석이 영영 잡힌 채 캘린더에도 계속 남는다 — 실제로 그렇게 남았다.
+    //   RPC 는 맞는 행이 없으면 released:0 으로 아무 일도 하지 않고, 권한도
+    //   스스로 검사한다. 항상 부르는 편이 언제나 더 안전하다.
+    if(typeof _riReleaseHold === 'function'){
       try { await _riReleaseHold(inviteId); } catch(_rh){ console.warn('[recall] 홀드 해제 실패:', _rh); }
     }
 
@@ -34136,7 +34148,13 @@ async function riConfirmPay(){
     //   isInvited:true / inviteDesc 로 UI 에서 "초대로 구매" 배지 표시.
     // 🆕 2026.08 A안: 연결 초대는 결제 확정 순간 좌석 홀드(INVH-)를 먼저 해제 —
     //   이어지는 실 티켓 INSERT 가 좌석 트리거를 통과하도록 (홀드+실티켓 이중 카운트 방지)
-    if (inv.ticket_product_id && typeof _riReleaseHold === 'function') {
+    // 🔧 2026.08-28: ticket_product_id 조건을 뺐다.
+    //   홀드 행(INVH-)은 있는데 초대의 ticket_product_id 가 비어 있는 경우가 있다
+    //   (연결이 나중에 끊겼거나, 옛 경로로 만들어진 건). 그때 해제를 건너뛰면
+    //   좌석이 영영 잡힌 채 캘린더에도 계속 남는다 — 실제로 그렇게 남았다.
+    //   RPC 는 맞는 행이 없으면 released:0 으로 아무 일도 하지 않고, 권한도
+    //   스스로 검사한다. 항상 부르는 편이 언제나 더 안전하다.
+    if (typeof _riReleaseHold === 'function') {
       try { await _riReleaseHold(inv.id); } catch(_rh){ console.warn('[riPay] 홀드 해제 실패(계속 진행):', _rh); }
     }
     try {
