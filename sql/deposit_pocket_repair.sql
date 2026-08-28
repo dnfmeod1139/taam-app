@@ -38,19 +38,25 @@ with refund_g as (
 purch as (
   -- 그 구매가 '어느 주머니에서' 나갔는지
   select user_id,
-         metadata->>'purchase_id' as pid,
+         coalesce(
+           metadata->>'purchase_id',
+           case when metadata->>'invite_id' is not null
+                then 'INV-' || left(metadata->>'invite_id', 8) end
+         ) as pid,
          sum(case when deposit_type = 'membership' then abs(amount) else 0 end) as mem_out,
          sum(abs(amount))                                                       as tot_out
     from public.deposit_transactions
    where change_type = 'ticket_purchase'
-     and metadata->>'purchase_id' is not null
+     and (metadata->>'purchase_id' is not null or metadata->>'invite_id' is not null)
    group by 1, 2
 ),
 calc as (
   select r.user_id,
          sum(round(r.ref_amt * p.mem_out::numeric / nullif(p.tot_out, 0)))::bigint as to_move
     from refund_g r
-    join purch p on p.user_id = r.user_id and p.pid = r.pid
+    join purch p on p.user_id = r.user_id
+                and (p.pid = r.pid
+                     or (r.pid like 'INV-%' and p.pid = left(r.pid, 12)))
    where p.mem_out > 0
    group by r.user_id
 )
@@ -93,19 +99,25 @@ begin
        group by 1, 2
     ),
     purch as (
-      select user_id, metadata->>'purchase_id' as pid,
+      select user_id, coalesce(
+           metadata->>'purchase_id',
+           case when metadata->>'invite_id' is not null
+                then 'INV-' || left(metadata->>'invite_id', 8) end
+         ) as pid,
              sum(case when deposit_type = 'membership' then abs(amount) else 0 end) as mem_out,
              sum(abs(amount)) as tot_out
         from public.deposit_transactions
        where change_type = 'ticket_purchase'
-         and metadata->>'purchase_id' is not null
+         and (metadata->>'purchase_id' is not null or metadata->>'invite_id' is not null)
        group by 1, 2
     ),
     calc as (
       select rf.user_id,
              sum(round(rf.ref_amt * p.mem_out::numeric / nullif(p.tot_out, 0)))::bigint as to_move
         from refund_g rf
-        join purch p on p.user_id = rf.user_id and p.pid = rf.pid
+        join purch p on p.user_id = rf.user_id
+                    and (p.pid = rf.pid
+                         or (rf.pid like 'INV-%' and p.pid = left(rf.pid, 12)))
        where p.mem_out > 0
        group by rf.user_id
     )
@@ -125,6 +137,8 @@ begin
     update public.profiles
        set membership_deposit_balance = membership_deposit_balance + v_move,
            general_deposit_balance    = general_deposit_balance    - v_move,
+           -- ⚠ UPDATE SET 의 우변은 모두 '갱신 전' 값이다. 총액은 안 바뀌므로
+           --   갱신 전 합 = 갱신 후 합 이라 결과는 맞지만, 의도를 분명히 적어둔다.
            deposit_balance            = membership_deposit_balance + general_deposit_balance
      where id = r.user_id;
 
