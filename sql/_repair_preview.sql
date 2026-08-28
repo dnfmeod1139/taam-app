@@ -51,8 +51,13 @@ select
     when (select count(*) from public.ticket_products tp
            where tp.rest_id::text = inv.restaurant_id::text
              and tp.date = inv.visit_date
-             and coalesce(tp.status,'') <> 'soldout') <> 1
-      then '⛔ 자동 복구 안 됨 (후보가 1건이 아님)'
+             and coalesce(tp.status,'') <> 'soldout') = 0
+      then '· 티켓 없이 보낸 초대 — 붙일 대상 없음 (정상)'
+    when (select count(*) from public.ticket_products tp
+           where tp.rest_id::text = inv.restaurant_id::text
+             and tp.date = inv.visit_date
+             and coalesce(tp.status,'') <> 'soldout') > 1
+      then '⛔ 후보가 여럿 — 사람이 골라야 함'
     when exists (select 1 from public.tickets t
                   where coalesce(t.status,'') <> 'cancelled'
                     and ( coalesce(t.extra_data->>'inviteId','') = inv.id::text
