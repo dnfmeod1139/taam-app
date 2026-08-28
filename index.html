@@ -46328,7 +46328,17 @@ function _tcalDayGroups(dateKey){
     if(String(h.id||'').indexOf('inv-') === 0) return;
     if(String(h.purchaseId||'').indexOf('INV-') === 0) return;
     if(_tcalDateKey(h.visitDate || h.reservation_date) !== dateKey) return;
-    gr(h.restId||h.restaurant_id, h.rest||h.restName||h.restaurant_name).entries.push({type:'app', pid:(h.purchaseId||''), name:(h.buyerName||''), uid:(h._userId||''), pax:(h.pax||1), amount:(parseInt(h.amt)||0), agency:0, time:(h.visitTime||'')});
+    // 🔧 2026.08-28: 수동 추가 건은 uid 를 구매자로 쓰지 않는다.
+    //   tcalManualSave 가 tickets 에 넣을 때 user_id 에 **로그인한 어드민**을 박는다
+    //   (좌석 트리거를 태우려면 소유자가 필요해서다). 그래서 허재석·김민석·우댕을
+    //   따로 넣어도 셋의 uid 가 전부 어드민으로 같아지고, uid 로 묶는 규칙이
+    //   「허재석 3건 5명」 한 팀으로 합쳐 버렸다. 이름은 묶음 안에서 생략되어
+    //   적어둔 이름이 사라진 것처럼 보였다.
+    //   이 uid 는 '누가 예약했나' 가 아니라 '누가 입력했나' 다. 사람을 가리키는
+    //   근거가 아니므로 엔트리에서 지운다 — 이름(buyer_name)은 그대로 살아 있다.
+    var _mnRow = String(h.purchaseId||'').indexOf('MAN-') === 0
+              || !!(h.extra_data && h.extra_data.manualEntry);
+    gr(h.restId||h.restaurant_id, h.rest||h.restName||h.restaurant_name).entries.push({type:'app', pid:(h.purchaseId||''), name:(h.buyerName||''), uid:(_mnRow ? '' : (h._userId||'')), pax:(h.pax||1), amount:(parseInt(h.amt)||0), agency:0, time:(h.visitTime||'')});
   });
   // 초대 결제
   (_tcalInvites||[]).forEach(function(inv){
