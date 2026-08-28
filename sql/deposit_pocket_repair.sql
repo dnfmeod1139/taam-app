@@ -146,10 +146,14 @@ begin
     insert into public.deposit_transactions
       (user_id, deposit_type, change_type, amount, balance_after, description, metadata)
     values
-      (r.user_id, 'general', 'pocket_adjust', -v_move, r.mem + r.gen,
+      -- ⚠ change_type 은 CHECK 제약이 있다. 새 값('pocket_adjust')을 쓰면 23514 로 막힌다.
+      --   허용값 중 'other' 가 정확히 이런 용도다. 구분은 metadata.reason 으로 한다.
+      --   admin_grant/admin_deduct 를 재활용하면 안 된다 — 예치금 내역 화면이 그 값으로
+      --   「어드민 부여」를 집계해서, 보정이 회원에게 '예치금을 받았다' 로 잘못 보인다.
+      (r.user_id, 'general', 'other', -v_move, r.mem + r.gen,
        '예치금 주머니 보정 — 일반 → 멤버십 (환불 출처 복원)',
        jsonb_build_object('reason','refund_pocket_repair','moved',v_move,'to','membership')),
-      (r.user_id, 'membership', 'pocket_adjust',  v_move, r.mem + r.gen,
+      (r.user_id, 'membership', 'other',  v_move, r.mem + r.gen,
        '예치금 주머니 보정 — 일반 → 멤버십 (환불 출처 복원)',
        jsonb_build_object('reason','refund_pocket_repair','moved',v_move,'from','general'));
 
