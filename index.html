@@ -33234,6 +33234,9 @@ async function riConfirmPay(){
     var pay = inv.total_amount;
     var memUsed = Math.min(memBal, pay);
     var genUsed = pay - memUsed;
+    // 구매ID 를 차감보다 '먼저' 확정한다 — 차감 거래에 같은 값을 남겨야
+    // 나중에 환불이 나간 주머니를 찾을 수 있다.
+    window._riPurchaseId = 'INV-' + String(inv.id).slice(0, 8) + '-' + Date.now();
     var update = {
       membership_deposit_balance: memBal - memUsed,
       general_deposit_balance: genBal - genUsed,
@@ -33257,7 +33260,13 @@ async function riConfirmPay(){
     //   멤버십/일반 분리해서 각각 INSERT — 사용자가 두 종류 다 추적 가능.
     try {
       var descRest = inv.restaurant_name || '레스토랑';
+      // 🆕 2026.08-28: 구매ID 를 차감 기록에 함께 남긴다.
+      //   종전엔 invite_id 만 있고 purchase_id 가 없었다. 그래서 환불할 때
+      //   '어느 주머니에서 나갔는지' 를 되짚을 수 없었고(_depRefundSplit 이 매칭 실패),
+      //   주머니 보정 SQL 도 초대 결제 건을 통째로 놓쳤다.
+      //   실측: 한 계정의 초대 결제 3,450,000 이 보정 대상에서 빠졌다.
       var trxMeta = {
+        purchase_id: window._riPurchaseId || null,
         invite_id: inv.id,
         restaurant: descRest,
         pax: inv.pax,
@@ -33374,7 +33383,9 @@ async function riConfirmPay(){
     }
     try {
       var now = new Date();
-      var purchaseId = 'INV-' + inv.id.slice(0,8) + '-' + now.getTime();
+      // 위에서 차감 거래에 이미 남긴 값을 그대로 쓴다 (둘이 달라지면 매칭이 깨진다)
+      var purchaseId = window._riPurchaseId || ('INV-' + inv.id.slice(0,8) + '-' + now.getTime());
+      window._riPurchaseId = null;
       purchaseHistory.push({
         // 🆕 판매 티켓 연결 시 실제 티켓 상품 ID 로 기록 → 좌석 카운팅/트리거에 포함됨
         id: (inv.ticket_product_id ? String(inv.ticket_product_id) : 'inv-' + inv.id),
