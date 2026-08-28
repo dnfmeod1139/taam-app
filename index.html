@@ -6680,6 +6680,19 @@ function _tossAmountSane(cur, amt, ord){
   if (sk == null) return true;
   return (parseInt(amt, 10) || 0) === sk;
 }
+// ── 🆕 2026.08-28: 결제창 카드 옵션 — 외화는 해외카드 전용으로 열어야 한다 ──
+//   토스 확인 결과, 외화(USD·JPY) 승인은 `useInternationalCardOnly: true` 를
+//   켜야 열린다. 이걸 빼면 결제창이 국내 수단(카카오페이 등)을 그리고 외화가
+//   거부된다 — 김우 님 화면에 892원과 함께 카카오페이가 떴던 것이 그 모습이다.
+//   MID 설정 문제가 아니라 호출 옵션이 빠진 것이었다.
+//
+//   ⚠ 원화에는 켜지 않는다. 켜면 국내 카드로 결제할 수 없게 된다.
+function _tossCardOpts(cur){
+  if (String(cur) !== 'KRW') {
+    return { flowMode: 'DEFAULT', useCardPoint: false, useInternationalCardOnly: true };
+  }
+  return { useEscrow: false, flowMode: 'DEFAULT', useCardPoint: false, useAppCardOnly: false };
+}
 async function _tossPaymentsCtx(currency){
   var res = await window.sb.auth.getUser();
   var u = res && res.data && res.data.user;
@@ -6855,7 +6868,7 @@ async function tossRequestCharge(){
         failUrl: location.origin + '/?toss_pay=fail',
         customerEmail: ctx.user.email || undefined,
         customerName: (typeof _currentUserName !== 'undefined' && _currentUserName) || undefined,
-        card: { useEscrow: false, flowMode: 'DEFAULT', useCardPoint: false, useAppCardOnly: false }
+        card: _tossCardOpts(ctx.currency)
       });
       _tossRestoreViewport();
     } catch(e){
@@ -7028,7 +7041,7 @@ async function tossPayTicketShortage(shortage, useSavedCard){
         failUrl: location.origin + '/?toss_pay=fail',
         customerEmail: ctx.user.email || undefined,
         customerName: (typeof _currentUserName !== 'undefined' && _currentUserName) || undefined,
-        card: { useEscrow: false, flowMode: 'DEFAULT', useCardPoint: false, useAppCardOnly: false }
+        card: _tossCardOpts(ctx.currency)
       });
       _tossRestoreViewport();
     } catch(e){
@@ -7079,7 +7092,8 @@ async function tossPayTicketShortage(shortage, useSavedCard){
                 failUrl: location.origin + '/?toss_pay=fail',
                 customerEmail: _ctx2.user.email || undefined,
                 customerName: (typeof _currentUserName !== 'undefined' && _currentUserName) || undefined,
-                card: { useEscrow: false, flowMode: 'DEFAULT', useCardPoint: false, useAppCardOnly: false }
+                // 이 갈래는 원화 재주문이다 — 바깥 ctx(외화)가 아니라 _ctx2 를 따른다
+                card: _tossCardOpts(_ctx2.currency)
               });
               _tossRestoreViewport();
               return;
@@ -33222,7 +33236,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.28-f';
+var TAAM_WEB_BUILD = '2026.08.28-g';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
