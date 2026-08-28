@@ -6777,14 +6777,26 @@ function _tossRestoreViewport(){
 // ── 결제창 왕복 표시 ──
 //   PWA(standalone)에서는 결제창→복귀 시 앱이 reload 되어 window 변수가 날아가므로
 //   reload 를 견디는 sessionStorage 에도 표시. 취소-닫기(파라미터 없는 복귀)까지 커버.
-function _tossMarkTrip(){
+function _tossMarkTrip(orderId){
   window._tossPending = true;
-  try { sessionStorage.setItem('toss_trip', '1'); } catch(_e){}
+  try {
+    sessionStorage.setItem('toss_trip', '1');
+    // 🆕 2026.08-28: 어느 주문으로 나갔는지 남긴다.
+    //   네이티브 앱에서는 토스가 successUrl(https://…)로 리다이렉트하는데,
+    //   그 주소를 앱이 자기 것이라 주장한 적이 없어 **브라우저가 열린다.**
+    //   앱은 결과를 영영 못 받고 좌석을 쥔 채 굳는다 — 실제로 그렇게 멈췄다.
+    //   복귀했을 때 이 주문을 서버에 물어보면 무슨 일이 있었는지 알 수 있다.
+    if (orderId) sessionStorage.setItem('toss_trip_order', String(orderId));
+    else sessionStorage.removeItem('toss_trip_order');
+    sessionStorage.setItem('toss_trip_at', String(Date.now()));
+  } catch(_e){}
 }
 function _tossClearTrip(){
   window._tossPending = false;
   try {
     sessionStorage.removeItem('toss_trip');
+    sessionStorage.removeItem('toss_trip_order');
+    sessionStorage.removeItem('toss_trip_at');
     sessionStorage.removeItem('vp_reloaded');   // 다음 왕복에서 다시 쓸 수 있게
   } catch(_e){}
 }
@@ -6816,7 +6828,7 @@ async function tossRequestCharge(){
       if (!TOSS_KEYS[_cur]) _cur = 'KRW';
       var ctx = await _tossPaymentsCtx(_cur); if(!ctx) return;
       var oid = 'taamdep_' + Date.now() + '_' + Math.floor(Math.random()*100000);
-      _tossMarkTrip();   // 결제창 왕복 표시 — 복귀 시 뷰포트 복원 트리거 (reload 견딤)
+      _tossMarkTrip(oid);   // 결제창 왕복 표시 + 어느 주문인지 (복귀 시 결과 확인용)
       await ctx.pay.requestPayment({
         method: 'CARD',
         amount: { currency: ctx.currency, value: amt },
@@ -6978,7 +6990,7 @@ async function tossPayTicketShortage(shortage, useSavedCard){
       if (!TOSS_KEYS[_cur]) { showToast('⚠','결제 불가','해당 통화 결제는 준비 중입니다'); return; }
       var ctx = await _tossPaymentsCtx(_cur); if(!ctx) return;
       var oid = ord.orderId;
-      _tossMarkTrip();   // 결제창 왕복 표시 — 복귀 시 뷰포트 복원 트리거 (reload 견딤)
+      _tossMarkTrip(oid);   // 결제창 왕복 표시 + 어느 주문인지 (복귀 시 결과 확인용)
       await ctx.pay.requestPayment({
         method: 'CARD',
         amount: { currency: ctx.currency, value: amt },
@@ -7013,7 +7025,7 @@ async function tossPayTicketShortage(shortage, useSavedCard){
           if (_ok && _ok.ok && _ok.needPayment) {
             var _ctx2 = await _tossPaymentsCtx('KRW');
             if (_ctx2) {
-              _tossMarkTrip();
+              _tossMarkTrip(_ok.orderId);
               await _ctx2.pay.requestPayment({
                 method: 'CARD',
                 amount: { currency: 'KRW', value: parseInt(_ok.amount, 10) || 0 },
@@ -7394,10 +7406,96 @@ window.addEventListener('DOMContentLoaded', function(){
 });
 // 결제창(외부/인앱 브라우저)에서 앱으로 되돌아올 때(가시성 복귀)도 복원
 document.addEventListener('visibilitychange', function(){
-  if (document.visibilityState === 'visible' && typeof _tossHasTrip==='function' && _tossHasTrip() && typeof _tossRestoreViewport === 'function') {
+  if (document.visibilityState !== 'visible') return;
+  if (typeof _tossHasTrip==='function' && _tossHasTrip() && typeof _tossRestoreViewport === 'function') {
     _tossRestoreViewport();
   }
+  try { _tossRecoverTrip(); } catch(_re){}
 });
+
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026.08-28: 결과를 못 받고 돌아왔을 때의 회복
+//
+// 무슨 일이 있었나
+//   네이티브 앱에서 결제를 시작하면 토스는 successUrl/failUrl(https://…)로
+//   리다이렉트한다. 그 주소를 앱이 자기 것이라 주장한 적이 없어서 **브라우저가
+//   열린다.** 앱은 결과를 영영 못 받고, 좌석 홀드를 쥔 채 화면이 굳는다.
+//   회원 눈에는 '결제도 안 되고 취소도 안 되는 앱' 이다.
+//
+// 무엇을 하나
+//   복귀했는데 결과 쿼리가 없으면 서버에 그 주문을 물어본다. 화면 상태가 아니라
+//   **주문 상태**가 근거다 — 브라우저에서 승인이 끝났을 수도 있기 때문이다.
+//
+//   paid    → 다른 창에서 승인됐다. 좌석을 풀면 안 된다. 목록만 새로 읽는다.
+//   pending → 승인 전이다. 토스는 confirm 전에는 돈을 빼지 않으므로 안전하게
+//             좌석을 풀고 화면을 되살린다.
+//   조회 실패 → 아무것도 단정하지 않는다. 화면만 되살리고 좌석은 그대로 둔다.
+//             (회원이 「좌석 반납하고 나가기」로 직접 정리할 수 있다)
+//
+// ⚠ 승인된 주문의 좌석을 푸는 일만은 절대 없어야 한다 — 돈은 냈는데 자리가
+//   사라지는 것이 이 화면에서 가능한 가장 나쁜 결과다. 그래서 'pending 을
+//   눈으로 확인했을 때만' 푼다.
+// ═══════════════════════════════════════════════════════════════
+var _tossRecovering = false;
+async function _tossRecoverTrip(){
+  if (_tossRecovering) return;
+  if (typeof _tossHasTrip !== 'function' || !_tossHasTrip()) return;
+  // 결과 쿼리를 받고 돌아온 경우는 위쪽 복귀 핸들러가 처리한다
+  if (/[?&]toss_(pay|billing)=/.test(location.search || '')) return;
+
+  var oid = null, at = 0;
+  try {
+    oid = sessionStorage.getItem('toss_trip_order');
+    at  = parseInt(sessionStorage.getItem('toss_trip_at') || '0', 10) || 0;
+  } catch(_e){}
+
+  // 결제창이 뜨자마자의 순간적인 가시성 변화까지 회복으로 보면 멀쩡한 결제를 끊는다.
+  if (at && (Date.now() - at) < 4000) return;
+
+  // 좌석이 걸린 주문이 아니면(충전·카드등록) 흔적만 정리한다
+  if (!oid) { try { _tossClearTrip(); } catch(_e){} return; }
+
+  _tossRecovering = true;
+  try {
+    var st = null;
+    try {
+      var r = await window.sb.from('payment_orders')
+        .select('status').eq('order_id', oid).maybeSingle();
+      if (!r.error && r.data) st = String(r.data.status || '');
+    } catch(_qe){}
+
+    if (st === 'paid') {
+      try { _tossClearTrip(); } catch(_e){}
+      if (typeof showToast === 'function') showToast('✓','결제가 완료되었어요','구매 내역에서 확인하실 수 있어요');
+      try { if (typeof loadPurchase === 'function') await loadPurchase(); } catch(_le){}
+      try { if (typeof _tkSyncFromServer === 'function') _tkSyncFromServer(true); } catch(_se){}
+      return;
+    }
+
+    if (st === 'pending' || st === 'failed') {
+      // 승인 전이다 — 돈은 나가지 않았다. 좌석을 풀어 다른 회원이 살 수 있게 한다.
+      try { if (typeof _tkReleaseSeatHold === 'function') await _tkReleaseSeatHold(); } catch(_he){}
+      try { if (typeof _tkCloseHoldUi === 'function') _tkCloseHoldUi(); } catch(_ue){}
+      try { _tossClearTrip(); } catch(_e){}
+      if (typeof showToast === 'function') {
+        showToast('⚠','결제가 완료되지 않았어요','잡아둔 좌석은 풀었어요 — 다시 시도하실 수 있어요');
+      }
+      try { if (typeof _tkSyncFromServer === 'function') _tkSyncFromServer(true); } catch(_se){}
+      return;
+    }
+
+    // 여기까지 오면 주문 상태를 못 읽은 것이다. 단정하지 않는다.
+    //   화면만 되살리고 좌석은 그대로 둔다 — 5분 뒤 자동으로 풀리고,
+    //   그 전에 회원이 「좌석 반납하고 나가기」로 직접 정리할 수도 있다.
+    try { _tossClearTrip(); } catch(_e){}
+    if (typeof showToast === 'function') {
+      showToast('⚠','결제 결과를 확인하지 못했어요','좌석은 잠시 유지됩니다 — 구매 내역을 확인해주세요');
+    }
+  } finally {
+    _tossRecovering = false;
+  }
+}
+window._tossRecoverTrip = _tossRecoverTrip;
 // 비주얼 뷰포트가 다시 커지는 순간(키보드/결제시트 닫힘) 직접 감지해 복원
 if (window.visualViewport) {
   window.visualViewport.addEventListener('resize', function(){
