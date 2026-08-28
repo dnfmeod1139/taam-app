@@ -6663,6 +6663,23 @@ function _tossEnsureSdk(cb){
   s.onerror = function(){ _tossSdkLoading = false; if(typeof showToast==='function') showToast('⚠','로드 실패','결제 모듈을 불러오지 못했어요'); };
   document.head.appendChild(s);
 }
+// ── 🆕 2026.08-28: 결제창을 열기 직전, 금액에 붙은 통화가 맞는지 마지막으로 본다 ──
+//   왜 필요했나 (2026-08-28 ₩892 사고)
+//     타카미츠 2인 $1,400 짜리를 사려는데 결제창에 「892원」이 떴다. 원화 결제 키로,
+//     원화라고 적힌 채로. $892 에 원화 딱지만 갈아 끼운 것이었다. 그대로 승인됐으면
+//     119만 원짜리를 892원에 판 셈이 된다.
+//   무엇으로 잡나
+//     서버(toss-order)는 원화 주문일 때 승인 금액(amount)과 정산 원화(settleKrw)를
+//     같은 값으로 준다. 외화 주문이면 amount 는 외화·settleKrw 는 원화라 서로 다르다.
+//     그래서 「KRW 인데 둘이 다르다」 = 외화 금액에 원화 딱지가 붙었다는 뜻이다.
+//     ₩892 건은 892 ≠ 1,196,205 로 여기서 걸린다.
+//   옛 서버(settleKrw 미반환)에서는 이 검사만 조용히 건너뛴다 — 결제를 막지는 않는다.
+function _tossAmountSane(cur, amt, ord){
+  if (String(cur) !== 'KRW') return true;
+  var sk = (ord && ord.settleKrw != null) ? (parseInt(ord.settleKrw, 10) || 0) : null;
+  if (sk == null) return true;
+  return (parseInt(amt, 10) || 0) === sk;
+}
 async function _tossPaymentsCtx(currency){
   var res = await window.sb.auth.getUser();
   var u = res && res.data && res.data.user;
@@ -6986,8 +7003,19 @@ async function tossPayTicketShortage(shortage, useSavedCard){
 
   _tossEnsureSdk(async function(){
     try {
-      var _cur = String(ord.currency || 'KRW');
-      if (!TOSS_KEYS[_cur]) { showToast('⚠','결제 불가','해당 통화 결제는 준비 중입니다'); return; }
+      // 🔧 2026.08-28: 통화를 모르면 원화로 때우지 않는다.
+      //   종전은 `ord.currency || 'KRW'` 였다. 서버가 통화를 안 주는 순간
+      //   외화 금액에 원화 딱지가 붙어 $892 가 ₩892 로 나간다.
+      var _cur = String(ord.currency || '');
+      if (!_cur || !TOSS_KEYS[_cur]) {
+        try { if (typeof _tkReleaseSeatHold === 'function') await _tkReleaseSeatHold(); } catch(_re){}
+        showToast('⚠','결제 불가','해당 통화 결제는 준비 중입니다'); return;
+      }
+      if (!_tossAmountSane(_cur, amt, ord)) {
+        console.error('[toss] 통화·금액 불일치 — 결제창을 열지 않음', ord);
+        try { if (typeof _tkReleaseSeatHold === 'function') await _tkReleaseSeatHold(); } catch(_re){}
+        showToast('⚠','결제 중단','결제 금액 확인에 실패했습니다 — 예치금으로 결제하시거나 문의해주세요'); return;
+      }
       var ctx = await _tossPaymentsCtx(_cur); if(!ctx) return;
       var oid = ord.orderId;
       _tossMarkTrip(oid);   // 결제창 왕복 표시 + 어느 주문인지 (복귀 시 결과 확인용)
@@ -7022,13 +7050,29 @@ async function tossPayTicketShortage(shortage, useSavedCard){
                     holdPurchaseId: window._tkSeatHoldId || null }
           });
           var _ok = (_rk && !_rk.error && _rk.data) || null;
-          if (_ok && _ok.ok && _ok.needPayment) {
+          // 🔧 2026.08-28: 서버가 정말 원화로 바꿔줬는지 확인하고 연다.
+          //   여기서 통화를 'KRW' 로 못 박고 _ok.amount 를 그대로 쓰던 것이 ₩892 사고였다.
+          //   toss-order 는 profiles.currency 를 클라이언트 요청보다 우선한다(통화
+          //   바꿔치기 방지). 그래서 원화로 다시 주문해도 응답은 여전히 USD 892 로 온다.
+          //   그걸 원화 딱지 붙여 국내 MID 키로 열었더니 결제창에 892원이 떴다.
+          //   금액을 못 믿을 바에는 결제를 안 여는 쪽이 옳다 — 예치금 길은 살아 있다.
+          var _okCur = _ok ? String(_ok.currency || '') : '';
+          var _okAmt = _ok ? (parseInt(_ok.amount, 10) || 0) : 0;
+          if (_ok && _ok.ok && _okCur && _okCur !== 'KRW') {
+            console.error('[toss] 원화 재주문에도 서버가 ' + _okCur + ' 로 응답 — 폴백 중단', _ok);
+            _tossRestoreViewport();
+            try { if (typeof _tkReleaseSeatHold === 'function') await _tkReleaseSeatHold(); } catch(_re3){}
+            showToast('⚠','결제 실패','해외 카드 결제가 아직 열리지 않았습니다 — 예치금으로 결제하시거나 문의해주세요');
+            return;
+          }
+          if (_ok && _ok.ok && _ok.needPayment && _okCur === 'KRW'
+              && _tossAmountSane('KRW', _okAmt, _ok)) {
             var _ctx2 = await _tossPaymentsCtx('KRW');
             if (_ctx2) {
               _tossMarkTrip(_ok.orderId);
               await _ctx2.pay.requestPayment({
                 method: 'CARD',
-                amount: { currency: 'KRW', value: parseInt(_ok.amount, 10) || 0 },
+                amount: { currency: 'KRW', value: _okAmt },
                 orderId: _ok.orderId,
                 orderName: orderName,
                 successUrl: location.origin + '/?toss_pay=success',
@@ -33139,7 +33183,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.28-d';
+var TAAM_WEB_BUILD = '2026.08.28-e';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
