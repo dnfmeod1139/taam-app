@@ -18,9 +18,10 @@
 --
 --   '활성' = tickets.status 가 'cancelled' 가 아닌 것. 코드가 쓰는 기준과 같다.
 --
--- 실행: Supabase SQL Editor 에 통째로 붙여넣고 RUN → 표 네 개.
+-- 실행: Supabase SQL Editor 에 통째로 붙여넣고 RUN → 표 다섯 개.
 --   ① 초대 기준 전수 점검      ② 주인 없는 좌석 행
---   ③ 요약 집계                ④ 고칠 SQL (복사해서 눈으로 보고 실행)
+--   ③ 요약 집계                ④ 고칠 SQL (좌석)
+--   ⑤ 고칠 SQL (낡은 초대 상태)   — ④·⑤ 는 문장만 만든다. 실행은 사람이 한다
 -- ═══════════════════════════════════════════════════════════════
 
 
@@ -43,7 +44,20 @@ with inv as (
              and coalesce(t.status,'') <> 'cancelled')                     as paid_live,
          (select coalesce(sum(t.party_size),0) from public.tickets t
            where t.purchase_id like 'INVH-' || left(i.id::text,8) || '-%'
-             and coalesce(t.status,'') <> 'cancelled')                     as hold_pax
+             and coalesce(t.status,'') <> 'cancelled')                     as hold_pax,
+         -- 🆕 2026.08-28: 취소된 좌석 행이 있는지 따로 센다.
+         --   이게 없으면 '결제했는데 좌석이 없다' 가 두 가지를 뭉뚱그린다 —
+         --   ① 좌석을 잃어버렸다(사고)  ② 구매를 취소해 좌석이 정상 반납됐다(정상).
+         --   실제로 9건 중 전부가 ②였다. 앱이 취소 때 초대 상태를 안 내려서
+         --   'paid' 로 남아 있었을 뿐이다.
+         (select count(*) from public.tickets t
+           where t.purchase_id like 'INV-' || left(i.id::text,8) || '-%'
+             and coalesce(t.status,'') = 'cancelled')                      as paid_cx,
+         -- 환불 거래가 있으면 '돈까지 정상으로 되돌아갔다' 는 증거가 된다
+         exists (select 1 from public.deposit_transactions d
+                  where d.change_type = 'ticket_refund'
+                    and coalesce(d.metadata->>'purchase_id','')
+                        like 'INV-' || left(i.id::text,8) || '-%')         as refunded
     from public.reservation_invites i
 )
 select
@@ -58,6 +72,8 @@ select
   inv.hold_live                                                   as "활성홀드",
   inv.paid_live                                                   as "활성구매",
   inv.hold_pax                                                    as "홀드인원",
+  inv.paid_cx                                                     as "취소된좌석",
+  case when inv.refunded then '있음' else '' end                   as "환불기록",
   case
     -- 취소·회수·만료인데 좌석이 살아 있다 → 캘린더에 유령으로 남는다
     when inv.status in ('cancelled','expired') and (inv.hold_live > 0 or inv.paid_live > 0)
@@ -65,9 +81,15 @@ select
     -- 결제됐는데 홀드가 안 풀렸다 → 같은 초대가 좌석을 두 번 먹는다
     when inv.status = 'paid' and inv.hold_live > 0
       then '❌ 결제 완료인데 홀드도 살아 있음 — 좌석 이중 점유'
-    -- 결제됐는데 좌석 행이 없다 → 캘린더에서 이 손님이 안 보인다
+    -- 결제 후 구매를 취소한 건. 좌석도 돈도 정상 반납됐고 초대 상태만 안 내려갔다.
+    --   앱은 2026.08-28 부터 취소 시 초대 상태를 같이 내린다. 그 이전 건이 여기 남는다.
+    when inv.status = 'paid' and inv.paid_live = 0 and inv.paid_cx > 0 and inv.refunded
+      then '· 구매 취소됨 — 좌석·환불 정상. 초대 상태만 낡음(⑤에서 정리)'
+    when inv.status = 'paid' and inv.paid_live = 0 and inv.paid_cx > 0
+      then '⚠ 좌석은 취소됐는데 환불 기록이 없음 — 돈을 확인해야 한다'
+    -- 취소 흔적조차 없다 → 애초에 좌석이 안 만들어졌다는 뜻
     when inv.status = 'paid' and inv.paid_live = 0
-      then '⚠ 결제 완료인데 좌석 행이 없음 — 캘린더에 안 보임'
+      then '⚠ 결제 완료인데 좌석 행이 아예 없음 — 캘린더에 안 보임'
     -- 보냈고 티켓에 연결돼 있는데 홀드가 없다 → 남이 그 자리를 사 갈 수 있다
     when inv.status = 'sent' and inv.ticket_product_id is not null and inv.hold_live = 0
       then '⚠ 발송 중인데 좌석 홀드 없음 — 자리가 안 잡혀 있다'
@@ -90,6 +112,7 @@ order by
   case
     when inv.status in ('cancelled','expired') and (inv.hold_live > 0 or inv.paid_live > 0) then 0
     when inv.status = 'paid' and inv.hold_live > 0                                          then 0
+    when inv.status = 'paid' and inv.paid_live = 0 and inv.paid_cx > 0 and inv.refunded     then 8
     when inv.status = 'paid' and inv.paid_live = 0                                          then 1
     when inv.status = 'sent' and inv.ticket_product_id is not null and inv.hold_live = 0    then 1
     when inv.status = 'sent' and inv.hold_live > 1                                          then 0
@@ -137,7 +160,14 @@ with inv as (
            where ( t.purchase_id like 'INV-' || left(i.id::text,8) || '-%'
                 or coalesce(t.extra_data->>'inviteId','') = i.id::text )
              and t.purchase_id not like 'INVH-%'
-             and coalesce(t.status,'') <> 'cancelled') as paid_live
+             and coalesce(t.status,'') <> 'cancelled') as paid_live,
+         (select count(*) from public.tickets t
+           where t.purchase_id like 'INV-' || left(i.id::text,8) || '-%'
+             and coalesce(t.status,'') = 'cancelled')  as paid_cx,
+         exists (select 1 from public.deposit_transactions d
+                  where d.change_type = 'ticket_refund'
+                    and coalesce(d.metadata->>'purchase_id','')
+                        like 'INV-' || left(i.id::text,8) || '-%') as refunded
     from public.reservation_invites i
 )
 select '취소·회수됐는데 좌석이 살아 있음' as "항목",
@@ -148,9 +178,17 @@ select '결제 완료인데 홀드도 살아 있음',
        count(*), '❌ 좌석 이중 점유 — 잔여석이 실제보다 적게 나온다'
   from inv where status = 'paid' and hold_live > 0
 union all
-select '결제 완료인데 좌석 행 없음',
-       count(*), '⚠ 캘린더에 손님이 안 보인다'
-  from inv where status = 'paid' and paid_live = 0
+select '결제 완료인데 좌석 행이 아예 없음',
+       count(*), '⚠ 캘린더에 손님이 안 보인다 — 진짜 사고'
+  from inv where status = 'paid' and paid_live = 0 and paid_cx = 0
+union all
+select '구매 취소됨 — 초대 상태만 낡음',
+       count(*), '· 좌석·환불 정상. ⑤ 로 상태만 맞추면 된다'
+  from inv where status = 'paid' and paid_live = 0 and paid_cx > 0 and refunded
+union all
+select '좌석은 취소됐는데 환불 기록 없음',
+       count(*), '⚠ 돈을 확인해야 한다'
+  from inv where status = 'paid' and paid_live = 0 and paid_cx > 0 and not refunded
 union all
 select '발송 중인데 홀드 없음(연결 초대)',
        count(*), '⚠ 자리가 안 잡혀 남이 사 갈 수 있다'
@@ -211,3 +249,51 @@ where coalesce(t.status,'') <> 'cancelled'
     or (i.status = 'paid'  and t.purchase_id like 'INVH-%')               -- 결제 후 홀드 잔존
   )
 order by t.created_at desc;
+
+
+-- ═══════════════════════════════════════════════════════════════
+-- ⑤ 낡은 초대 상태 정리 — 여기서는 실행되지 않는다
+-- ═══════════════════════════════════════════════════════════════
+--   구매를 취소해 좌석도 환불도 정상으로 끝났는데 reservation_invites.status 만
+--   'paid' 로 남은 건이다. 앱은 2026.08-28 부터 취소 시 초대 상태를 같이 내리므로
+--   앞으로는 안 생긴다. 그 이전에 쌓인 것만 여기서 맞춘다.
+--
+--   ⚠ 왜 정리해야 하나 — 발송함이 이 건들을 「✓ 결제 완료」로 세어
+--     PAID 건수·금액이 실제보다 커 보이고, 회수 버튼도 뜨지 않는다.
+--
+--   ⚠ 안전장치 — 좌석이 살아 있거나(paid_live>0) 환불 기록이 없으면 제외한다.
+--     둘 중 하나라도 걸리면 그건 정리가 아니라 조사 대상이다.
+--
+--   「무엇을」 열을 눈으로 훑고 나서 「실행문」을 복사해 새 쿼리로 RUN 한다.
+with inv as (
+  select i.*,
+         (select count(*) from public.tickets t
+           where ( t.purchase_id like 'INV-' || left(i.id::text,8) || '-%'
+                or coalesce(t.extra_data->>'inviteId','') = i.id::text )
+             and t.purchase_id not like 'INVH-%'
+             and coalesce(t.status,'') <> 'cancelled')  as paid_live,
+         (select count(*) from public.tickets t
+           where t.purchase_id like 'INV-' || left(i.id::text,8) || '-%'
+             and coalesce(t.status,'') = 'cancelled')   as paid_cx,
+         exists (select 1 from public.deposit_transactions d
+                  where d.change_type = 'ticket_refund'
+                    and coalesce(d.metadata->>'purchase_id','')
+                        like 'INV-' || left(i.id::text,8) || '-%') as refunded
+    from public.reservation_invites i
+   where i.status = 'paid'
+)
+select
+  left(inv.id::text, 8)                               as "초대ID앞8",
+  coalesce(pr.display_name, '')                       as "받는분",
+  inv.restaurant_name || ' · ' || coalesce(inv.visit_date,'')
+    || ' · ' || inv.pax || '인'                        as "무엇을",
+  to_char(inv.created_at, 'MM-DD HH24:MI')            as "보낸시각",
+  '좌석 취소 ' || inv.paid_cx || '건 · 환불 기록 있음'  as "근거",
+  'update public.reservation_invites set status = ''cancelled'' where id = '''
+    || inv.id::text || ''' and status = ''paid'';'    as "실행문"
+from inv
+left join public.profiles pr on pr.id = inv.invitee_user_id
+where inv.paid_live = 0
+  and inv.paid_cx > 0
+  and inv.refunded
+order by inv.created_at desc;

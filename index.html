@@ -25879,6 +25879,42 @@ async function _tkMaybeReopen(h){
   } catch(e){ console.warn('[cancel] 좌석 재개방 예외:', e); }
 }
 
+// ── 🆕 2026.08-28: 초대로 산 티켓을 취소하면 초대 상태도 같이 내린다 ──
+//   종전에는 tickets 만 cancelled 로 바뀌고 reservation_invites 는 'paid' 로 남았다.
+//   그래서 발송함이 환불된 건을 「✓ 결제 완료」로 세고(PAID 건수·금액에 포함),
+//   회수 버튼도 뜨지 않았다. 스시 오바나 건이 실제로 그렇게 남아 있었다 —
+//   예치금으로 결제했다 30분 안에 취소해 돈도 좌석도 정상 반납됐는데,
+//   초대만 결제 완료로 보였다.
+//   '결제했었다' 는 사실은 deposit_transactions 에 그대로 남으므로 잃지 않는다.
+//
+//   purchase_id 에는 초대 id 의 앞 8자만 들어 있어 그것만으로는 행을 특정할 수 없다.
+//   전체 id 는 구매내역(h.inviteId) 이나 티켓 행(extra_data.inviteId)에 있다.
+async function _invMarkCancelledByPurchase(h){
+  try {
+    if (!window.sb || !h) return;
+    var pid = String(h.purchaseId || '');
+    if (pid.indexOf('INV-') !== 0) return;                 // 초대로 산 것이 아니다
+    var invId = h.inviteId || (h.extra_data && h.extra_data.inviteId) || null;
+    if (!invId) {
+      // 옛 구매내역엔 inviteId 가 없다 — 내 초대 중 앞 8자가 맞는 것을 찾는다
+      var _p8 = pid.slice(4, 12);
+      var _meRes = await window.sb.auth.getUser();
+      var _me = _meRes && _meRes.data && _meRes.data.user;
+      if (!_me) return;
+      var _r = await window.sb.from('reservation_invites')
+        .select('id, status').eq('invitee_user_id', _me.id);
+      if (_r.error || !_r.data) return;
+      var _hit = _r.data.filter(function(v){ return String(v.id).slice(0,8) === _p8; });
+      if (_hit.length !== 1) return;                       // 못 찾거나 여럿이면 손대지 않는다
+      invId = _hit[0].id;
+    }
+    // status='paid' 일 때만 내린다 — 이미 취소·만료된 초대를 덮어쓰지 않는다
+    var _u = await window.sb.from('reservation_invites')
+      .update({ status: 'cancelled' }).eq('id', invId).eq('status', 'paid');
+    if (_u.error) console.warn('[cancel] 초대 상태 정리 실패:', _u.error.message);
+    else console.log('[cancel] 초대 상태 → cancelled:', invId);
+  } catch(_e){ console.warn('[cancel] 초대 상태 정리 예외:', _e); }
+}
 async function cancelTicketPurchase(purchaseId, refundCalc, isSuperAdminOverride){
   var idx = purchaseHistory.findIndex(function(x){ return x.purchaseId === purchaseId; });
   if(idx < 0) return;
@@ -25945,6 +25981,9 @@ async function cancelTicketPurchase(purchaseId, refundCalc, isSuperAdminOverride
         else h.extra_data = _cxExtra;
       } catch(_ue){ console.warn('[cancel] tickets update 예외:', _ue); }
     }
+
+    // 🆕 2026.08-28: 초대로 산 것이면 초대 상태도 같이 내린다 (발송함·회수 버튼 정합)
+    await _invMarkCancelledByPurchase(h);
 
     // 🆕 2026.07: 좌석 해제 → 매진이었던 티켓을 실시간으로 판매중(active) 복귀
     await _tkMaybeReopen(h);
@@ -33183,7 +33222,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.28-e';
+var TAAM_WEB_BUILD = '2026.08.28-f';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
