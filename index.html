@@ -23291,6 +23291,14 @@ function _tkRelocalizeOpenScreens(){
        && typeof renderTicketList === 'function') renderTicketList();
   }catch(e){}
   try{ if(typeof _refreshBalanceUI === 'function') _refreshBalanceUI(); }catch(e){}
+  // 🆕 2026.08-28: 열려 있는 계보도의 노드 이름도 새 언어로 다시 칠한다.
+  //   계보도는 SVG 라 openPage 흐름을 타지 않아 여기서 따로 부른다.
+  //   한국어로 되돌릴 때도 불러야 data-ko 원문이 복원된다.
+  try{
+    if(typeof applyLineageNameOverrides === 'function' && window._lnCurrentId){
+      applyLineageNameOverrides(window._lnCurrentId);
+    }
+  }catch(e){}
 }
 window._tkRelocalizeOpenScreens = _tkRelocalizeOpenScreens;
 
@@ -64453,6 +64461,82 @@ function getLineagePrefix(lineageId){
   return map[lineageId] !== undefined ? map[lineageId] : '';
 }
 
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026.08-28: 계보도 하드코딩 노드의 이름을 chefs 의 번역으로 덮어쓴다.
+//
+// 왜 필요한가
+//   「🌳 계보도 노드 일괄 AI 번역」이 chefs.name_en / name_jp / sub_en / sub_jp 를
+//   이미 채우고 있다. 그런데 그 값을 읽는 곳은 renderCustomNodeToSvg() —
+//   즉 DB 로 새로 추가한 '커스텀 노드' 뿐이었다.
+//   계보도의 대부분을 차지하는 하드코딩 노드(index.html 안의 정적 SVG text)는
+//   아무도 갈아끼우지 않아, 번역을 다 돌려놔도 트리는 늘 한글이었다.
+//   → 번역이 없는 게 아니라 **쓰이지 않고 있었다.**
+//
+// 어떻게
+//   applyGeometryOverrides 와 똑같은 매칭을 쓴다 —
+//   g.nd[onclick="tapNodeQ('arai')"] 의 첫 인용부호 안 값 = chefs.id.
+//   노드 안의 <text> 는 순서가 고정이다: [0] 매장명 · [1] 부제(셰프명).
+//
+// 되돌리기
+//   원문을 data-ko 에 남긴다. 언어를 한국어로 되돌리면 그대로 복원한다.
+//   (txSweep 의 _txDone 과 같은 이유 — 치환 결과에는 한글이 없어 복구가 불가능하다)
+// ═══════════════════════════════════════════════════════════════
+async function applyLineageNameOverrides(lineageId){
+  var svg = (typeof getLineageSvg === 'function') ? getLineageSvg(lineageId) : null;
+  if(!svg) return;
+  var lang = window._tkCurrentLang || 'ko';
+
+  // 노드 이름은 고유명사다 — 런타임 한글 스윕(txSweep)이 손대면 안 된다.
+  //   「스시 아라이」를 사전으로 부분 치환하면 엉뚱한 말이 된다.
+  //   올바른 표기는 chefs.name_en / name_jp 하나뿐이므로 스윕에서 제외한다.
+  svg.querySelectorAll('g.nd').forEach(function(g){
+    if(!g.hasAttribute('data-no-tx')) g.setAttribute('data-no-tx', '1');
+  });
+
+  // 한국어면 원문 복원만 하고 끝낸다 — 조회도 하지 않는다
+  if(lang === 'ko'){
+    svg.querySelectorAll('text[data-ko]').forEach(function(el){
+      el.textContent = el.getAttribute('data-ko');
+    });
+    return;
+  }
+  if(!window.sb || typeof window.pickI18nField !== 'function') return;
+
+  var res;
+  try {
+    res = await window.sb.from('chefs')
+      .select('id, name, name_en, name_jp, sub, sub_en, sub_jp, i18n_jp_approved')
+      .eq('lineage_id', lineageId);
+  } catch(e){ return; }
+  if(res.error || !res.data || !res.data.length) return;
+
+  // onclick 의 첫 인용부호 값 → 노드 g
+  var byId = {};
+  svg.querySelectorAll('g.nd[onclick]').forEach(function(g){
+    if(g.id && g.id.indexOf('nCust_') === 0) return;   // 커스텀 노드는 이미 자기 이름을 쓴다
+    var m = (g.getAttribute('onclick') || '').match(/['"]([^'"]+)['"]/);
+    if(m) byId[m[1]] = g;
+  });
+
+  res.data.forEach(function(row){
+    var g = byId[row.id];
+    if(!g) return;
+    var texts = g.querySelectorAll('text');
+    if(!texts.length) return;
+    // [0] 매장명 · [1] 부제. 없으면 건드리지 않는다.
+    var pairs = [[texts[0], 'name'], [texts[1], 'sub']];
+    pairs.forEach(function(p){
+      var el = p[0]; if(!el) return;
+      var v = window.pickI18nField(row, p[1]);
+      if(!v || typeof v !== 'string') return;
+      if(!el.hasAttribute('data-ko')) el.setAttribute('data-ko', el.textContent || '');
+      // 부제는 원래 대문자로 조판된다 (Montserrat 800) — 그 규칙을 유지한다
+      el.textContent = (p[1] === 'sub') ? String(v).toUpperCase() : v;
+    });
+  });
+}
+window.applyLineageNameOverrides = applyLineageNameOverrides;
+
 // 🆕 2026.05.22: 옵션 B — 하드코딩 노드의 좌표를 chefs.geometry 로 동적 덮어쓰기.
 //   슈퍼어드민이 앱 안에서 노드 위치를 자유롭게 변경 가능.
 //   1. 노드 g 에 transform="translate(dx,dy)" 적용 → 모든 자식 (rect/image/text) 일괄 이동
@@ -64902,10 +64986,18 @@ function renderCustomNodesForCurrentLineage(){
 })();
 
 function renderCustomNodesForLineage(lineageId){
+  // 🆕 2026.08-28: 언어를 바꿨을 때 다시 칠할 대상을 기억해 둔다.
+  //   계보도는 SVG 라 openPage 흐름을 타지 않아, 어느 계보가 열려 있는지
+  //   알 방법이 여기 말고는 없다.
+  window._lnCurrentId = lineageId;
   // 🆕 2026.05.22: 옵션 B — 하드코딩 노드의 chefs.geometry 좌표 override 도 같이 적용.
   //   (renderCustomNodesForLineage 가 lineage 표시 시 호출되는 메인 진입점이라 여기서 처리)
   if(typeof applyGeometryOverrides === 'function'){
     try { applyGeometryOverrides(lineageId); } catch(e){ console.warn('[geometry] override 실패:', e); }
+  }
+  // 🆕 2026.08-28: 이름도 같은 방식으로 override 한다 (EN/JA 일 때만).
+  if(typeof applyLineageNameOverrides === 'function'){
+    try { applyLineageNameOverrides(lineageId); } catch(e){ console.warn('[lineage i18n] override 실패:', e); }
   }
   // 🆕 v1.51 (2026.05.24): 슈퍼어드민이 hide 한 timeline 연도 라벨 적용
   if(typeof applyHiddenTimelineYears === 'function'){
