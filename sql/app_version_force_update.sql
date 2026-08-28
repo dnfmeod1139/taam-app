@@ -22,9 +22,36 @@
 --   출시 전에 걸면 회원은 앱이 잠긴 채 스토어엔 옛 버전밖에 없다. 빠져나갈 길이 없다.
 --   심사 통과 ≠ 출시다. 스토어에서 직접 보이는 것을 확인하고 돌린다.
 --
--- 실행: Supabase SQL Editor 에 필요한 블록만 골라 붙여넣고 RUN.
+-- ⚠⚠ 이 파일은 위에서 아래로 통째로 돌리는 파일이 아니다.
+--   ⑤ 는 사고 났을 때만 쓰는 되돌리기다. 끝까지 돌리면 방금 건 강제가
+--   마지막에 전부 풀린다 — 실제로 2026-08-28 에 그렇게 됐다.
+--   ①(확인) → 필요한 것 하나 → ④(확인). 이 셋만 쓴다.
+--
+-- 실행: Supabase SQL Editor 에 **필요한 블록만 골라** 붙여넣고 RUN.
 --       값을 바꿔 여러 번 실행해도 안전하다.
 -- ═══════════════════════════════════════════════════════════════
+
+
+-- ═══════════════════════════════════════════════════════════════
+-- ⓪ 출시 전 정상 상태 — 헷갈리면 이걸로 돌아온다
+-- ═══════════════════════════════════════════════════════════════
+--   iOS 1.02 가 아직 App Store 에 없고, Android 는 1.02(1011)가 나가 있는 상태.
+--     iOS     0 / 0        → 아무것도 안 뜬다
+--     Android 1011 / 1011  → 1010 이하만 강제 (푸시가 없거나 반쪽인 구버전)
+--
+--   ⚠ iOS latest_build 를 미리 35 로 올려두면 안 된다. 1.01 은 빌드 표식이 없어
+--     앱이 build:0 으로 읽으므로 0 < 35 라 매일 「업데이트하세요」가 뜨는데,
+--     스토어엔 받을 게 없다. 눌러도 안 사라지고 다음 날 또 뜬다.
+/*
+update public.app_config
+   set value = jsonb_set(jsonb_set(jsonb_set(jsonb_set(value,
+                 '{ios,min_build}',        '0'::jsonb),
+                 '{ios,latest_build}',     '0'::jsonb),
+                 '{android,min_build}',    '1011'::jsonb),
+                 '{android,latest_build}', '1011'::jsonb),
+       updated_at = now()
+ where key = 'app_version';
+*/
 
 
 -- ═══════════════════════════════════════════════════════════════
@@ -50,6 +77,7 @@ where key = 'app_version';
 --
 --   1.01 에는 빌드 표식이 없어 앱이 build:0 으로 읽는다. 0 < 35 이므로
 --   1.01 사용자 전원이 강제 대상이 되고, 1.02 사용자(35)는 걸리지 않는다.
+/*
 with v as (select 35 as build)                 -- ← iOS 빌드번호 (ipa 기준)
 update public.app_config a
    set value = jsonb_set(
@@ -58,6 +86,7 @@ update public.app_config a
        updated_at = now()
   from v
  where a.key = 'app_version';
+*/
 
 
 -- ═══════════════════════════════════════════════════════════════
@@ -67,7 +96,10 @@ update public.app_config a
 --
 --   versionCode 는 Codemagic 빌드 로그나 .aab 파일 이름에서 확인한다
 --   (Android versionCode = 1000 + BUILD_NUMBER).
---   1011 = 1.02. 새 빌드를 올렸다면 그 versionCode 로 바꾼다.
+--
+--   1011 = 1.02 (2026-08-27 출시, 현재 스토어에 나가 있는 것)
+--   1012 = 2026-08-28 빌드 (상태바 알림 아이콘) — Play 에 올린 뒤 이 숫자로 바꾼다
+/*
 with v as (select 1011 as code)                -- ← Android versionCode
 update public.app_config a
    set value = jsonb_set(
@@ -76,6 +108,7 @@ update public.app_config a
        updated_at = now()
   from v
  where a.key = 'app_version';
+*/
 
 
 -- ═══════════════════════════════════════════════════════════════
