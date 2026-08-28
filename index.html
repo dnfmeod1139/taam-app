@@ -15322,23 +15322,15 @@ async function cancelMyInvite(inviteId){
       //   즉 종전엔 호스트 벨에 취소 이력이 하나도 안 남았다 — 푸시를 놓치면 끝이었다.
       //   실패해도 흐름은 계속 가고, 아래 taamNotifyAdmins 가 RPC 로 확실히 남긴다.
       console.log('[cancel] host 알림 INSERT 결과:', { error: nIns && nIns.error, data: nIns && nIns.data });
-      // 푸시 (호스트가 구독 안 했어도 무해)
-      try {
-        await window.sb.functions.invoke('send-push', {
-          body: {
-            to: 'uid:' + inv.host_user_id,
-            payload: {
-              title: notifTitle,
-              body: notifBody,
-              url: '/',
-              category: 'invite_cancelled',
-              // 🔧 어드민 통지와 같은 tag — 호스트가 슈퍼어드민이면 두 알림이
-              //   기기에서 하나로 합쳐진다(collapse). 겹쳐도 화면엔 1건만 남는다.
-              tag: 'taam-cancel-' + inviteId
-            }
-          }
-        });
-      } catch(_pe){ console.warn('[cancel] push 실패:', _pe); }
+      // 🔧 2026.08-28: host uid 푸시를 없앤다.
+      //
+      //   초대는 슈퍼어드민이 보낸다. 그래서 host 는 곧 슈퍼어드민이고,
+      //   바로 아래 taamNotifyAdmins 가 같은 사람에게 또 보낸다 —
+      //   폰에 「회원이 초대를 취소했습니다」와 「김우님이 초대를 취소했습니다」가
+      //   쌍으로 떴다. 같은 tag 를 줘서 합치려 했지만 확실하지 않았다.
+      //   중복을 합치는 것보다 만들지 않는 편이 확실하다.
+      //   이력(notifications)은 위에서 이미 남겼고, 어드민 통지에는 회원 이름까지
+      //   들어 있으므로 정보가 줄지도 않는다.
 
       // 🆕 2026.08-27: 슈퍼어드민 전원에게 이력 + 푸시 (RLS 우회 RPC).
       //   호스트가 아닌 다른 슈퍼어드민도 좌석이 풀린 것을 알아야 한다.
@@ -33383,20 +33375,9 @@ async function riConfirmPay(){
           }
         });
         // 푸시 (호스트가 구독 안 했어도 Edge Function 이 자동 skip — 무해)
-        try {
-          await window.sb.functions.invoke('send-push', {
-            body: {
-              to: 'uid:' + inv.host_user_id,
-              payload: {
-                title: paidTitle,
-                body: paidBody,
-                url: '/',
-                category: 'invite_paid',
-                tag: 'taam-paid-' + inv.id
-              }
-            }
-          });
-        } catch(_ppe){ console.warn('[riPay] host 푸시 실패:', _ppe); }
+        // 🔧 2026.08-28: host uid 푸시 제거 — 아래 taamNotifyAdmins 와 중복이었다.
+        //   host 는 초대를 보낸 슈퍼어드민이라 같은 알림을 두 번 받았다.
+        //   이력은 위 INSERT 와 어드민 RPC 가 남긴다.
       }
       // 🆕 2026.08-27: 슈퍼어드민 전원에게 이력 + 푸시.
       //   위 INSERT 는 결제한 회원 세션이라 RLS 에 막힌다 — 이력이 안 남았다.
