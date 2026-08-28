@@ -98,13 +98,33 @@ purch as (
      and (metadata->>'purchase_id' is not null or metadata->>'invite_id' is not null)
    group by 1, 2
 ),
+already as (
+      -- 🆕 2026.08-28: 이미 적용한 보정을 뺀다.
+      --   이 스크립트는 '일반으로 들어온 환불' 을 근거로 옮길 금액을 낸다. 그런데 한 번
+      --   돌리고 나도 그 환불 기록은 그대로 남는다 — 근거를 지우지 않으니 당연하다.
+      --   그래서 다시 돌리면 **같은 금액을 또 옮긴다.** 실제로 세 회원이 이미 보정된
+      --   상태인데 '아직 남았다' 로 나왔다. 그대로 실행했으면 멤버십이 부풀고,
+      --   진짜 일반 입금(admin_grant)까지 멤버십으로 넘어갈 뻔했다.
+      select user_id, sum(abs(amount)) as moved
+        from public.deposit_transactions
+       where change_type = 'other'
+         and deposit_type = 'general'
+         and amount < 0
+         and ( metadata->>'reason' = 'refund_pocket_repair'
+            or coalesce(description,'') like '%주머니 보정%' )
+       group by 1
+    ),
 calc as (
   select r.user_id,
-         sum(round(r.ref_amt * p.mem_out::numeric / nullif(p.tot_out, 0)))::bigint as to_move
+         greatest(0,
+           sum(round(r.ref_amt * p.mem_out::numeric / nullif(p.tot_out, 0)))::bigint
+           - coalesce(max(a.moved), 0)
+         )::bigint as to_move
     from refund_g r
     join purch p on p.user_id = r.user_id
                 and (p.pid = r.pid
                      or (r.pid like 'INV-%' and p.pid = left(r.pid, 12)))
+   left join already a on a.user_id = r.user_id
    where p.mem_out > 0
    group by r.user_id
 )
@@ -126,3 +146,23 @@ from calc c
 join public.profiles pr on pr.id = c.user_id
 where c.to_move > 0
 order by c.to_move desc;
+
+
+-- ═══════════════════════════════════════════════════════════════
+-- ③ 이미 적용된 주머니 보정 이력
+-- ═══════════════════════════════════════════════════════════════
+--   ② 가 비어 있으면 '할 게 없다' 인지 '쿼리가 안 돌았나' 인지 헷갈린다.
+--   여기에 줄이 있으면 ② 가 빈 것이 정상이라는 뜻이다 — 이미 끝났다.
+select
+  coalesce(pr.display_name, left(d.user_id::text, 8)) as "회원",
+  to_char(d.created_at, 'YYYY-MM-DD HH24:MI')         as "보정시각",
+  abs(d.amount)                                       as "옮긴금액",
+  d.description                                       as "내용"
+from public.deposit_transactions d
+join public.profiles pr on pr.id = d.user_id
+where d.change_type = 'other'
+  and d.deposit_type = 'general'
+  and d.amount < 0
+  and ( d.metadata->>'reason' = 'refund_pocket_repair'
+     or coalesce(d.description,'') like '%주머니 보정%' )
+order by d.created_at desc;
