@@ -680,6 +680,13 @@ Deno.serve(async (req: Request) => {
             android: {
               priority: "high",
               notification: {
+                // 🆕 2026-08-28: tag 를 '합침 키' 로 쓴다.
+                //   같은 tag 의 알림은 새 것이 옛 것을 대체한다. 종전엔 tag 를
+                //   data 로만 실어 보내서 실제 합침이 안 됐고, 같은 사건에 대한
+                //   알림이 폰에 3건씩 쌓였다(초대 취소 1건 → 화면에 3건).
+                tag: String(payload.tag || ("taam-" + Date.now())),
+                // 상태바 아이콘 배경 — 브랜드색. 회색 원으로 보이던 것을 살린다.
+                color: "#5C0A14",
                 // 🆕 2026-08-28: 채널 지정. Android 8+ 는 채널 없이는 알림을 '표시하지'
                 //   않는다. FCM 은 200 OK 를 주고 요약도 「시도 1 · 성공 1」 이 되는데
                 //   폰에는 아무것도 안 뜬다 — 배달과 표시는 다른 단계다.
@@ -690,7 +697,11 @@ Deno.serve(async (req: Request) => {
               },
             },
             apns: {
-              headers: { "apns-priority": "10" },
+              headers: {
+                "apns-priority": "10",
+                // 같은 collapse-id 는 iOS 가 하나로 합친다 (Android tag 와 같은 역할)
+                "apns-collapse-id": String(payload.tag || "").slice(0, 64),
+              },
               payload: {
                 aps: {
                   alert: {

@@ -15332,6 +15332,8 @@ async function cancelMyInvite(inviteId){
               body: notifBody,
               url: '/',
               category: 'invite_cancelled',
+              // 🔧 어드민 통지와 같은 tag — 호스트가 슈퍼어드민이면 두 알림이
+              //   기기에서 하나로 합쳐진다(collapse). 겹쳐도 화면엔 1건만 남는다.
               tag: 'taam-cancel-' + inviteId
             }
           }
@@ -50263,26 +50265,30 @@ window.taamNotifyAdmins = async function(o){
   //   종전엔 invoke 를 쏘고 끝이었다. 그래서 "이력은 왔는데 푸시가 안 온다" 가
   //   실제로 일어났을 때(초대 결제, 08-28 00:38) 어디서 끊겼는지 알 수 없었다.
   //   마지막 결과를 남겨두면 「🔍 상태 확인」에서 그대로 읽을 수 있다.
+  // 🔧 2026.08-28: 한 번만 부른다.
+  //   종전엔 'superadmin' 과 'super_admin' 을 각각 불렀다. 그런데 send-push 는
+  //   이미 두 문자열을 함께 처리한다(roleAliases). 그래서 같은 기기에 알림이
+  //   두 번 갔다 — 초대 취소 하나에 폰에 3건이 떴다(role 2 + host uid 1).
   var _pushLog = [];
-  for (var _i = 0; _i < 2; _i++) {
-    var _rl = ['superadmin', 'super_admin'][_i];
+  var _tag = o.tag || ('taam-' + _type + '-' + Date.now());
+  {
     try {
       var _pr = await window.sb.functions.invoke('send-push', {
-        body: { to: 'role:' + _rl, payload: {
+        body: { to: 'role:super_admin', payload: {
           title: o.title, body: o.body || '', url: _url,
-          category: _type, tag: o.tag || ('taam-' + _type + '-' + Date.now())
+          category: _type, tag: _tag
         } }
       });
       if (_pr && _pr.error) {
-        _pushLog.push(_rl + ': 오류 ' + String(_pr.error.message || _pr.error).slice(0, 60));
+        _pushLog.push('오류 ' + String(_pr.error.message || _pr.error).slice(0, 60));
       } else {
         var _s = _pr && _pr.data && _pr.data.summary;
         var _pk = _pr && _pr.data && _pr.data.pick;
-        _pushLog.push(_rl + ': 시도 ' + ((_s && _s.attempted) | 0) + ' 성공 ' + ((_s && _s.ok) | 0)
+        _pushLog.push('시도 ' + ((_s && _s.attempted) | 0) + ' 성공 ' + ((_s && _s.ok) | 0)
           + (_pk ? (' (역할일치 ' + (_pk.byRole | 0) + ' · 프로필 ' + (_pk.profileUsers | 0) + ')') : ''));
         if (_s && _s.ok > 0) _res.push = true;
       }
-    } catch(_pe){ _pushLog.push(_rl + ': 예외 ' + String(_pe && _pe.message).slice(0, 60)); }
+    } catch(_pe){ _pushLog.push('예외 ' + String(_pe && _pe.message).slice(0, 60)); }
   }
   window._lastAdminPush = { at: new Date().toTimeString().slice(0,8), type: _type, log: _pushLog, history: _res.history };
   console.log('[notify] 어드민 통지:', window._lastAdminPush);
