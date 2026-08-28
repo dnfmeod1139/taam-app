@@ -99,6 +99,12 @@ select * from (
 
   union all
   -- 예치금 주머니가 아직 어긋난 회원
+  -- 🔧 2026.08-28: 두 군데가 틀려서 이미 보정이 끝난 회원 3명을 '남았다' 로 셌다.
+  --   ① 비율의 분모가 mo/mo(=1) 였다 — 멤버십 비율이 아니라 환불 전액이 잡혔다.
+  --      분모는 그 구매의 총 차감액(tot)이어야 한다.
+  --   ② 이미 적용한 보정(other · reason=refund_pocket_repair)을 빼지 않았다.
+  --      근거가 되는 환불 기록은 보정 뒤에도 남으므로, 빼지 않으면 영원히 '남았다' 가 된다.
+  --   그대로 복구를 돌렸으면 같은 금액을 두 번 옮겨 멤버십이 부풀 뻔했다.
   select 3, '주머니 보정 남은 회원',
          count(*)::text || '명',
          'sql/deposit_pocket_repair.sql — 멤버십이 일반으로 넘어간 채다'
@@ -112,16 +118,25 @@ select * from (
                      coalesce(metadata->>'purchase_id',
                        case when metadata->>'invite_id' is not null
                             then 'INV-'||left(metadata->>'invite_id',8) end) pid,
-                     sum(case when deposit_type='membership' then abs(amount) else 0 end) mo
+                     sum(case when deposit_type='membership' then abs(amount) else 0 end) mo,
+                     sum(abs(amount)) tot
                 from public.deposit_transactions
                where change_type='ticket_purchase'
                  and (metadata->>'purchase_id' is not null or metadata->>'invite_id' is not null)
                group by 1,2) p
           on p.user_id=rf.user_id
          and (p.pid=rf.pid or (rf.pid like 'INV-%' and p.pid=left(rf.pid,12)))
+        left join (select user_id, sum(abs(amount)) moved
+                     from public.deposit_transactions
+                    where change_type='other' and deposit_type='general' and amount < 0
+                      and ( metadata->>'reason'='refund_pocket_repair'
+                         or coalesce(description,'') like '%주머니 보정%' )
+                    group by 1) a
+          on a.user_id = rf.user_id
        where p.mo > 0
        group by rf.user_id
-       having sum(round(rf.amt * p.mo::numeric / nullif(p.mo,0))) > 0
+       having sum(round(rf.amt * p.mo::numeric / nullif(p.tot,0)))
+              - coalesce(max(a.moved),0) > 0
     ) x
     join public.profiles pr on pr.id = x.user_id
    where pr.general_deposit_balance > 0
