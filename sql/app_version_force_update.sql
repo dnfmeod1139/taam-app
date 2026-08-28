@@ -77,6 +77,7 @@ where key = 'app_version';
 --
 --   1.01 에는 빌드 표식이 없어 앱이 build:0 으로 읽는다. 0 < 35 이므로
 --   1.01 사용자 전원이 강제 대상이 되고, 1.02 사용자(35)는 걸리지 않는다.
+/*
 with v as (select 35 as build)                 -- ← iOS 빌드번호 (ipa 기준)
 update public.app_config a
    set value = jsonb_set(
@@ -85,6 +86,7 @@ update public.app_config a
        updated_at = now()
   from v
  where a.key = 'app_version';
+*/
 
 
 -- ═══════════════════════════════════════════════════════════════
@@ -97,6 +99,7 @@ update public.app_config a
 --
 --   1011 = 1.02 (2026-08-27 출시, 현재 스토어에 나가 있는 것)
 --   1012 = 2026-08-28 빌드 (상태바 알림 아이콘) — Play 에 올린 뒤 이 숫자로 바꾼다
+/*
 with v as (select 1011 as code)                -- ← Android versionCode
 update public.app_config a
    set value = jsonb_set(
@@ -105,6 +108,7 @@ update public.app_config a
        updated_at = now()
   from v
  where a.key = 'app_version';
+*/
 
 
 -- ═══════════════════════════════════════════════════════════════
