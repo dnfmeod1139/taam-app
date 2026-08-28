@@ -26966,10 +26966,13 @@ function openMemberLedger(){
   }
   openSubPage('memberLedgerScreen');
   var inp = document.getElementById('mlSearchInp');
-  if(inp){ inp.value = ''; setTimeout(function(){ inp.focus(); }, 150); }
-  var r = document.getElementById('mlResults'); if(r) r.innerHTML = '';
-  var d = document.getElementById('mlDetail'); if(d) d.innerHTML =
-    '<div style="padding:30px 0;text-align:center;font-size:14px;color:#a8a29a;">회원을 검색하세요</div>';
+  if(inp){ inp.value = ''; }
+  var d = document.getElementById('mlDetail'); if(d) d.innerHTML = '';
+  // 🆕 2026.08-28: 들어오자마자 전원을 보여준다.
+  //   종전엔 두 글자를 쳐야 뭔가 나왔다. 검색은 좁히는 도구지 시작 조건이 아니다.
+  //   지금 회원이 50명 아래라 전부 그려도 부담이 없다 — 넘어가면 여기에 페이지네이션만 붙이면 된다.
+  //   포커스는 주지 않는다 — 열자마자 키보드가 올라오면 목록이 가려진다.
+  mlSearch();
 }
 window.openMemberLedger = openMemberLedger;
 
@@ -26985,25 +26988,72 @@ async function mlSearch(){
   q = q.trim();
   var box = document.getElementById('mlResults');
   if(!box) return;
-  if(q.length < 2){ box.innerHTML = ''; return; }
   if(!window.sb){ box.innerHTML = '<div style="font-size:14px;color:#a8a29a;">서버 연결 없음</div>'; return; }
-  var like = '%' + q.replace(/[%_]/g, '') + '%';
-  var res = await window.sb.from('profiles')
-    .select('id, display_name, phone, email, role, membership_deposit_balance, general_deposit_balance')
-    .or('display_name.ilike.' + like + ',phone.ilike.' + like + ',email.ilike.' + like)
-    .limit(20);
+  box.innerHTML = '<div style="padding:18px 2px;font-size:13px;color:#a8a29a;">불러오는 중…</div>';
+
+  var SEL = 'id, display_name, phone, email, role, currency, membership_tier,'
+          + ' membership_deposit_balance, general_deposit_balance';
+  var res;
+  if(q.length < 2){
+    // 검색어가 없으면 전원 — 잔액 많은 순. 운영에서 먼저 봐야 할 사람이 위로 온다.
+    res = await window.sb.from('profiles').select(SEL)
+      .order('deposit_balance', { ascending: false, nullsFirst: false })
+      .limit(200);
+  } else {
+    var like = '%' + q.replace(/[%_]/g, '') + '%';
+    res = await window.sb.from('profiles').select(SEL)
+      .or('display_name.ilike.' + like + ',phone.ilike.' + like + ',email.ilike.' + like)
+      .limit(50);
+  }
   if(res.error){ box.innerHTML = '<div style="font-size:14px;color:#B23A2E;">검색 실패: ' + _pcalEsc(res.error.message) + '</div>'; return; }
   var rows = res.data || [];
   if(!rows.length){ box.innerHTML = '<div style="font-size:14px;color:#a8a29a;padding:8px 2px;">결과 없음</div>'; return; }
-  var h = '';
+
+  // 잔액이 0 인 회원은 아래로 — 운영에서 먼저 볼 사람이 위에 오게.
+  //   (order 절이 deposit_balance 를 쓰는데 그 값이 비어 있는 옛 행이 있어 여기서 한 번 더 정렬)
+  rows.sort(function(a, b){
+    var ba = (parseInt(a.membership_deposit_balance)||0) + (parseInt(a.general_deposit_balance)||0);
+    var bb = (parseInt(b.membership_deposit_balance)||0) + (parseInt(b.general_deposit_balance)||0);
+    return bb - ba;
+  });
+
+  var h = '<div style="display:flex;justify-content:space-between;align-items:baseline;padding:12px 4px 6px;">'
+        + '<span style="font-family:var(--font-main);font-size:10px;font-weight:700;letter-spacing:.16em;color:#b5afa2;">MEMBERS · ' + rows.length + '</span>'
+        + '<span style="font-size:11px;color:#8a8580;">잔액 많은 순</span></div>';
+
   rows.forEach(function(u){
-    var bal = (parseInt(u.membership_deposit_balance)||0) + (parseInt(u.general_deposit_balance)||0);
-    h += '<div onclick="mlOpen(\'' + u.id + '\')" style="display:flex;justify-content:space-between;align-items:center;'
-       + 'padding:15px 8px;border-bottom:1px solid #eee7dc;cursor:pointer;">'
-       + '<div><div style="font-size:16px;font-weight:700;color:#1a1a18;">' + _pcalEsc(u.display_name || '(이름 없음)')
-       + (u.role && u.role !== 'user' ? ' <span style="font-size:10.5px;color:#B23A2E;">' + _pcalEsc(u.role) + '</span>' : '') + '</div>'
-       + '<div style="font-size:12.5px;color:#8a8580;margin-top:2px;">' + _pcalEsc(u.phone || u.email || '') + '</div></div>'
-       + '<div style="font-size:14px;font-weight:700;color:#5C0A14;">\u20A9' + bal.toLocaleString() + '</div>'
+    var mem = parseInt(u.membership_deposit_balance)||0;
+    var gen = parseInt(u.general_deposit_balance)||0;
+    var bal = mem + gen;
+    var nm  = u.display_name || '(이름 없음)';
+    var isM = (u.membership_tier === 'M');
+    // 아바타 — 이름 첫 글자. 사진이 없으니 색으로 등급을 나눈다.
+    var av  = '<div style="width:34px;height:34px;border-radius:50%;flex-shrink:0;display:flex;'
+            + 'align-items:center;justify-content:center;font-family:var(--font-main);font-size:13px;'
+            + 'font-weight:700;color:#fff;background:' + (isM ? '#5C0A14' : (bal > 0 ? '#7C6A55' : '#c9c2b6')) + ';">'
+            + _pcalEsc(String(nm).charAt(0)) + '</div>';
+    function tag(txt, bg, fg){
+      return '<span style="font-family:var(--font-main);font-size:9px;font-weight:700;letter-spacing:.06em;'
+           + 'padding:1px 5px;border-radius:4px;background:' + bg + ';color:' + fg + ';">' + txt + '</span>';
+    }
+    var tags = '';
+    if(u.membership_tier) tags += ' ' + tag(_pcalEsc(u.membership_tier), isM ? '#5C0A14' : '#f0ebe1', isM ? '#fff' : '#8a7b63');
+    if(u.currency && u.currency !== 'KRW') tags += ' ' + tag(_pcalEsc(u.currency), '#EDF1F6', '#3C5A80');
+    if(u.role && u.role !== 'user' && u.role !== 'member') tags += ' ' + tag(_pcalEsc(u.role), '#F7E4E1', '#A6382B');
+
+    h += '<div onclick="mlOpen(\'' + u.id + '\')" style="display:flex;align-items:center;gap:11px;'
+       + 'padding:12px 6px;border-bottom:1px solid #f4efe6;cursor:pointer;">'
+       + av
+       + '<div style="flex:1;min-width:0;">'
+       +   '<div style="font-size:14.5px;font-weight:700;color:#1a1a18;">' + _pcalEsc(nm) + tags + '</div>'
+       +   '<div style="font-size:11.5px;color:#b5afa2;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'
+       +     (bal > 0 ? ('멤버십 ' + mem.toLocaleString() + ' · 일반 ' + gen.toLocaleString())
+                      : _pcalEsc(u.phone || u.email || '')) + '</div>'
+       + '</div>'
+       + '<div style="text-align:right;flex-shrink:0;">'
+       +   '<div style="font-family:var(--font-main);font-size:15px;font-weight:700;color:' + (bal > 0 ? '#5C0A14' : '#c9c2b6') + ';">'
+       +     '\u20A9' + bal.toLocaleString() + '</div>'
+       + '</div>'
        + '</div>';
   });
   box.innerHTML = h;
@@ -27048,7 +27098,6 @@ async function mlOpen(uid){
     else if(r.change_type === 'ticket_refund') refunded += a;
     else if(a > 0) charged += a;   // 그 외 + (충전 등)
   });
-  var balNow = (parseInt(u.membership_deposit_balance)||0) + (parseInt(u.general_deposit_balance)||0);
 
   // ── 대행비 폴백 소스 — 스냅샷이 없는 옛 구매를 위해 ──
   //   extra_data.agencyFee(1인 스냅샷)는 2026.08 에 도입됐다. 그 전 구매(초대 결제 포함)는
@@ -27056,19 +27105,22 @@ async function mlOpen(uid){
   //   ① extra_data.agencyFee (구매 시점 스냅샷, 1인) — 가장 정확
   //   ② INV- 구매: reservation_invites.agency_fee (초대장에 적힌 값, 1인)
   //   ③ ticket_products.agency_fee (상품의 현재 값, 1인) — 상품이 수정됐으면 다를 수 있음
-  var invMap = {}, prodMap = {};
+  //   초대는 항상 가져온다 — 대행비 보완뿐 아니라 「결제 전에 거절된 초대」를
+  //   티켓 탭 취소 묶음에 보여줘야 하기 때문. 그 건은 tickets 에 아예 없다.
+  var invMap = {}, prodMap = {}, invRows = [];
   try {
-    var needInv = buys.some(function(t){ return String(t.purchase_id||'').indexOf('INV-') === 0; });
     var needProd = buys.filter(function(t){
       return !(t.extra_data && parseInt(t.extra_data.agencyFee) > 0) && t.ticket_product_id;
     }).map(function(t){ return String(t.ticket_product_id); });
     var aux = await Promise.all([
-      needInv ? window.sb.from('reservation_invites').select('id, agency_fee')
-                  .eq('invitee_user_id', uid).limit(100) : Promise.resolve({ data: [] }),
+      window.sb.from('reservation_invites')
+        .select('id, restaurant_name, visit_date, visit_time, pax, agency_fee, total_amount, status, created_at, cancelled_at, paid_at')
+        .eq('invitee_user_id', uid).order('created_at', { ascending: false }).limit(100),
       needProd.length ? window.sb.from('ticket_products').select('id, agency_fee')
                   .in('id', Array.from(new Set(needProd))) : Promise.resolve({ data: [] })
     ]);
-    (aux[0].data || []).forEach(function(v){ invMap[String(v.id).slice(0,8)] = v; });
+    invRows = aux[0].data || [];
+    invRows.forEach(function(v){ invMap[String(v.id).slice(0,8)] = v; });
     (aux[1].data || []).forEach(function(v){ prodMap[String(v.id)] = v; });
   } catch(_e){}
 
@@ -27142,28 +27194,113 @@ async function mlOpen(uid){
     });
   }
 
-  // ── 집계: 대행비 누적 / 반환 시 차감 / 취소·환불 차감 ──
-  //   반환 시 차감 = 「반환 완료」(정상 방문) 처리에서 돌려주지 않은 몫(대행비·추가 차감) — 정상 규정 절차
-  //   취소·환불 차감 = 구매자 취소·「환불 처리」(방문 불발·특별 사유)에서 뗀 몫 — 다툼이 생기는 돈이라 빨강
-  var agencyTotal = 0, returnDeduct = 0, penaltyForfeit = 0;
+  // ── 구매 건마다 필요한 것을 한 번에 붙여 둔다 ──
+  //   합계는 아래에서 묶음(진행/반환/환불/취소)별로 낸다 — 여기서 미리 더하면
+  //   같은 숫자를 두 곳에서 계산하게 되고, 한쪽만 고치면 화면이 어긋난다.
   var _mlItems = [];
   buys.forEach(function(t){
-    var ag = _agencyOf(t), rt = _retOf(t), ro = _routeOf(t), ptx = _ptxOf(t);
-    agencyTotal += ag.total;
-    if(rt && rt.has){
-      if(rt.rtype === 'penalty' || rt.cancelRefund) penaltyForfeit += rt.deduct;
-      else returnDeduct += rt.deduct;
-    }
-    _mlItems.push({ t:t, ag:ag, rt:rt, ro:ro, ptx:ptx });
+    _mlItems.push({ t:t, ag:_agencyOf(t), rt:_retOf(t), ro:_routeOf(t), ptx:_ptxOf(t) });
   });
   window._mlItems = _mlItems;
 
+  // ═══ 분류 — 실기록 기준. 상태 문자열 하나로 뭉뚱그리지 않는다 ═══
+  //   open : 진행 중 — 아직 돌려주지 않은 돈. 회사가 갚아야 할 몫이라 맨 위에 둔다
+  //   ret  : 방문 완료 · 정상 반환 (대행비·추가 차감을 떼고 돌려줌)
+  //   no   : 환불 처리 — 방문 불발·노쇼 등. 위약·차감이 붙어 다툼이 생기는 자리
+  //   cx   : 구매 취소 — 돈이 오갔다 되돌아옴 (초대 취소는 아래에서 따로 붙인다)
+  function _mlCls(it){
+    var rt = it.rt;
+    if(rt && rt.has){
+      if(rt.cancelRefund) return 'cx';
+      if(rt.rtype === 'penalty') return 'no';
+      return 'ret';
+    }
+    if(rt && rt.cancelled) return 'cx';
+    return 'open';
+  }
+  var G = { open:[], ret:[], no:[], cx:[] };
+  _mlItems.forEach(function(it, idx){ it.idx = idx; G[_mlCls(it)].push(it); });
+
+  // 결제 전에 거절·취소된 초대 — tickets 에 없으므로 초대 원본에서 가져온다
+  var invCx = invRows.filter(function(v){ return v.status === 'cancelled' || v.status === 'expired'; });
+
+  // ── 대행비 확정/예정 ──
+  //   대행비는 환불되지 않는다 → 반환·환불이 끝난 건은 '확정 수익',
+  //   아직 진행 중인 건은 '예정'. 섞으면 지금 번 돈을 알 수 없다.
+  var feeDone = 0, feePlan = 0;
+  G.open.forEach(function(it){ feePlan += it.ag.total; });
+  G.ret.concat(G.no).forEach(function(it){
+    feeDone += (it.rt && it.rt.agencyHeld > 0) ? it.rt.agencyHeld : it.ag.total;
+  });
+  // 취소는 대행비까지 함께 돌려주는 게 원칙 — 실기록에 남은 몫만 확정으로 센다
+  G.cx.forEach(function(it){ if(it.rt && it.rt.agencyHeld > 0) feeDone += it.rt.agencyHeld; });
+
+  // ── 예치금 묶음 ──
+  var dGrant = [], dUse = [], dBack = [], dCut = [];
+  txs.forEach(function(r){
+    var ct = r.change_type;
+    if(ct === 'ticket_purchase') dUse.push(r);
+    else if(ct === 'ticket_refund') dBack.push(r);
+    else if(ct === 'admin_deduct') dCut.push(r);
+    else dGrant.push(r);
+  });
+  function _sum(arr){ var s = 0; arr.forEach(function(r){ s += Math.abs(parseInt(r.amount)||0); }); return s; }
+
+  var memBal = parseInt(u.membership_deposit_balance) || 0;
+  var genBal = parseInt(u.general_deposit_balance) || 0;
+
+  // ═══ 그리기 ═══
+  var W = '₩';
+  var C = { wine:'#5C0A14', ink:'#1a1a18', sub:'#8a8580', faint:'#b5afa2',
+            paper:'#faf8f4', line:'#eee5d8', gold:'#c8a96e', "in":'#2a6a2a',
+            out:'#B23A2E', hold:'#9A6B12' };
+  function n(v){ return (parseInt(v)||0).toLocaleString(); }
+  function tag(txt, bg, fg){
+    return '<span style="font-size:9.5px;font-weight:800;letter-spacing:.06em;padding:1.5px 5px;'
+      + 'border-radius:4px;background:' + bg + ';color:' + fg + ';vertical-align:1px;">' + txt + '</span>';
+  }
+  function grp(label, right){
+    return '<div style="padding:13px 4px 6px;font-size:11.5px;font-weight:800;color:' + C.sub + ';'
+      + 'display:flex;justify-content:space-between;gap:10px;background:#fcfaf6;border-bottom:1px solid #f4efe6;'
+      + 'margin-top:2px;"><span>' + label + '</span>'
+      + '<span style="font-weight:700;color:' + C.ink + ';">' + (right || '') + '</span></div>';
+  }
+  //   ic  = 26px 아이콘, body = 제목/부제/부가, amt = 오른쪽 금액 + 배지
+  function item(ic, icBg, icFg, body, amt, click){
+    return '<div' + (click ? ' onclick="' + click + '" style="cursor:pointer;' : ' style="')
+      + 'display:flex;gap:10px;padding:12px 4px;border-bottom:1px solid #f4efe6;">'
+      + '<div style="width:26px;height:26px;border-radius:7px;flex-shrink:0;display:flex;'
+      + 'align-items:center;justify-content:center;font-size:12px;font-weight:800;'
+      + 'background:' + icBg + ';color:' + icFg + ';">' + ic + '</div>'
+      + '<div style="flex:1;min-width:0;">' + body + '</div>'
+      + '<div style="text-align:right;flex-shrink:0;">' + amt + '</div></div>';
+  }
+  function emptyLine(msg){
+    return '<div style="padding:18px 4px;font-size:12.5px;color:' + C.faint + ';">' + msg + '</div>';
+  }
+
   var h = '';
-  h += '<div style="border-top:2px solid #1a1a18;padding-top:20px;">';
-  h += '<div style="font-size:18.5px;font-weight:800;color:#1a1a18;">' + _pcalEsc(u.display_name || '(이름 없음)') + '</div>';
-  h += '<div style="font-size:12.5px;color:#8a8580;margin-top:3px;">'
-     + _pcalEsc(u.phone || '') + (u.email ? ' · ' + _pcalEsc(u.email) : '')
-     + (u.membership_tier ? ' · ' + _pcalEsc(u.membership_tier) : '') + '</div>';
+  h += '<div style="border-top:2px solid #1a1a18;padding-top:18px;">';
+
+  // ── 헤더 ──
+  var noCnt = G.no.length;
+  h += '<div style="font-size:20px;font-weight:900;letter-spacing:-.02em;color:' + C.ink + ';'
+     + 'display:flex;align-items:center;gap:7px;flex-wrap:wrap;">'
+     + _pcalEsc(u.display_name || '(이름 없음)')
+     + (u.membership_tier ? tag(_pcalEsc(String(u.membership_tier)) + '등급',
+          (String(u.membership_tier) === 'M' ? C.wine : '#f0ebe1'),
+          (String(u.membership_tier) === 'M' ? '#fff' : '#8a7b63')) : '')
+     + (noCnt ? tag('환불처리 ' + noCnt, '#F7E4E1', '#A6382B') : '')
+     + '</div>';
+  var _joined = u.created_at ? String(u.created_at).slice(0,10).replace(/-/g,'.') : '';
+  var _exp = u.membership_expires_at ? String(u.membership_expires_at).slice(0,10).replace(/-/g,'.') : '';
+  h += '<div style="font-size:11.5px;color:' + C.faint + ';margin-top:3px;">'
+     + _pcalEsc(u.phone || u.email || '')
+     + (_joined ? ' · ' + _joined + ' 가입' : '')
+     + (_exp ? ' · 멤버십 만료 ' + _exp : '') + '</div>';
+  h += '<button onclick="mlCsv()" style="margin-top:10px;padding:7px 11px;border:1px solid ' + C.line + ';'
+     + 'border-radius:9px;background:#fff;font-family:inherit;font-size:11.5px;font-weight:700;'
+     + 'color:' + C.sub + ';cursor:pointer;">⤓ 이 회원 내역 CSV</button>';
 
   // ── 결제·표시 통화 지정 — 슈퍼어드민만 여기서 바꾼다 (회원 스스로는 못 바꿈) ──
   //   미지정(자동)은 화면 언어 폴백. 해외 요율이 통화에 붙으므로 회원과 합의 후 지정한다.
@@ -27171,116 +27308,363 @@ async function mlOpen(uid){
   function _mlCurBtn(val, label){
     var on = (_mlCurNow === val) || (val === null && _mlCurNow === null);
     return '<button onclick="mlSetCur(\'' + uid + '\',' + (val ? '\'' + val + '\'' : 'null') + ')" '
-      + 'style="padding:6px 12px;border-radius:8px;font-size:11.5px;font-weight:800;cursor:pointer;'
+      + 'style="padding:5px 11px;border-radius:8px;font-size:11.5px;font-weight:800;cursor:pointer;'
       + 'border:1.5px solid ' + (on ? '#1a1a18' : '#e0ddd8') + ';'
       + 'background:' + (on ? '#1a1a18' : '#fff') + ';color:' + (on ? '#fff' : '#8a8580') + ';">' + label + '</button>';
   }
   h += '<div style="display:flex;align-items:center;gap:6px;margin-top:10px;flex-wrap:wrap;">'
-     + '<span style="font-size:11.5px;color:#8a8580;font-weight:700;">통화</span>'
+     + '<span style="font-size:11.5px;color:' + C.sub + ';font-weight:700;">통화</span>'
      + _mlCurBtn('KRW','₩') + _mlCurBtn('USD','$') + _mlCurBtn('JPY','¥') + _mlCurBtn(null,'자동')
-     + (_mlCurNow ? '' : '<span style="font-size:10.5px;color:#a8a29a;">미지정 — 화면 언어 기준</span>')
+     + (_mlCurNow ? '' : '<span style="font-size:10.5px;color:' + C.faint + ';">미지정 — 화면 언어 기준</span>')
      + '</div>';
 
-  // 요약 카드
-  function card(l, v, c){
-    return '<div style="flex:1;min-width:96px;background:#faf8f4;border:1px solid #eee5d8;border-radius:10px;padding:12px 13px;">'
-      + '<div style="font-size:11px;color:#8a8580;">' + l + '</div>'
-      + '<div style="font-size:15.5px;font-weight:800;color:' + (c||'#1a1a18') + ';margin-top:3px;">\u20A9' + v.toLocaleString() + '</div></div>';
+  // ── 잔액 — 막대 하나로 주머니 비율까지 ──
+  //   멤버십/일반이 섞였는지가 숫자 두 개보다 막대에서 빨리 읽힌다.
+  //   「나간 주머니로 되돌린다」가 지켜지면 취소를 반복해도 와인색 비율이 줄지 않는다.
+  var balNow = memBal + genBal;
+  var mPct = balNow > 0 ? (memBal / balNow * 100) : 0;
+  h += '<div style="margin-top:14px;background:' + C.paper + ';border:1px solid ' + C.line + ';'
+     + 'border-radius:14px;padding:14px;">'
+     + '<div style="display:flex;justify-content:space-between;align-items:flex-end;">'
+     + '<span style="font-size:11.5px;color:' + C.sub + ';">현재 잔액</span>'
+     + '<span style="font-size:26px;font-weight:800;color:' + C.wine + ';line-height:1;">'
+     + W + n(balNow) + '</span></div>'
+     + '<div style="display:flex;height:7px;border-radius:4px;overflow:hidden;margin:11px 0 8px;background:#eee7dc;">'
+     + '<i style="display:block;height:100%;width:' + mPct.toFixed(1) + '%;background:' + C.wine + ';"></i>'
+     + '<i style="display:block;height:100%;width:' + (100 - mPct).toFixed(1) + '%;background:' + C.gold + ';"></i>'
+     + '</div>'
+     + '<div style="display:flex;gap:14px;font-size:11.5px;color:' + C.sub + ';flex-wrap:wrap;">'
+     + '<span style="display:flex;align-items:center;gap:5px;"><i style="width:8px;height:8px;border-radius:2px;'
+     + 'display:inline-block;background:' + C.wine + ';"></i>멤버십 <b style="color:' + C.ink + ';">' + W + n(memBal) + '</b></span>'
+     + '<span style="display:flex;align-items:center;gap:5px;"><i style="width:8px;height:8px;border-radius:2px;'
+     + 'display:inline-block;background:' + C.gold + ';"></i>일반 <b style="color:' + C.ink + ';">' + W + n(genBal) + '</b></span>'
+     + '</div></div>';
+
+  // ── 지표 카드 = 탭 버튼 ──
+  //   숫자를 보고 궁금해진 그 자리에서 바로 내역이 열려야 한다. 개요 탭을 뺀 자리를 이 셋이 대신한다.
+  function kpi(id, label, val, color, cap){
+    return '<button onclick="mlTab(\'' + id + '\')" style="background:#fff;border:1px solid ' + C.line + ';'
+      + 'border-radius:11px;padding:10px 9px;cursor:pointer;text-align:left;font-family:inherit;">'
+      + '<div style="font-size:10px;color:' + C.sub + ';">' + label
+      + ' <span style="color:' + C.faint + ';font-size:9px;">›</span></div>'
+      + '<div style="font-size:15.5px;font-weight:800;margin-top:3px;line-height:1.15;color:' + color + ';">'
+      + W + n(val) + '</div>'
+      + '<div style="font-size:9.5px;color:' + C.faint + ';margin-top:1px;">' + cap + '</div></button>';
   }
-  h += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:12px 0 4px;">'
-     + card('현재 잔액', balNow, '#5C0A14')
-     + card('누적 부여', granted, '#2a6a2a')
-     + card('누적 사용', used)
-     + '</div>';
-  h += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:4px;">'
-     + card('누적 환불', refunded, '#2a6a2a')
-     + card('관리 차감', deducted, '#B23A2E')
-     + '<div style="flex:1;min-width:96px;background:#faf8f4;border:1px solid #eee5d8;border-radius:10px;padding:12px 13px;">'
-     + '<div style="font-size:11px;color:#8a8580;">구매 횟수</div>'
-     + '<div style="font-size:15.5px;font-weight:800;color:#1a1a18;margin-top:3px;">' + buys.length + '건</div></div>'
-     + '</div>';
-  // 대행비는 매출 성격이 달라 골드. 반환 시 차감은 규정 절차(브라운),
-  // 취소·환불 차감만 빨강 — 반환과 위약을 섞으면 회원과 다툴 때 설명이 안 된다.
-  h += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;">'
-     + card('누적 대행비', agencyTotal, '#A07E3B')
-     + card('반환 시 차감', returnDeduct, '#7A5C3F')
-     + card('취소·환불 차감', penaltyForfeit, '#B23A2E')
+  h += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px;margin-top:11px;">'
+     + kpi('dep','누적 부여', granted, C["in"], dGrant.length + '건')
+     + kpi('tk','누적 사용', used, C.ink,
+           '구매 ' + buys.length + ' · 진행 ' + G.open.length + (noCnt ? ' · 환불 ' + noCnt : ''))
+     + kpi('fee','대행비', feeDone, '#A07E3B', '확정 · 예정 ' + W + n(feePlan))
      + '</div>';
 
-  // ── 구매 내역 ──
-  h += '<div style="font-family:var(--font-main);font-size:14px;font-weight:800;letter-spacing:.1em;color:#5C0A14;margin:24px 0 10px;">구매 내역</div>';
-  if(!buys.length){
-    h += '<div style="font-size:14px;color:#a8a29a;padding:8px 2px;">구매 내역 없음</div>';
-  } else {
-    _mlItems.forEach(function(it, idx){
-      var t = it.t, ag = it.ag, rt = it.rt, ro = it.ro;
-      // 상태 라벨 — 실기록 기준. 'cancelled' 하나로 뭉뚱그리지 않는다.
-      var st = '';
-      if(rt && rt.has){
-        var lab = rt.rtype === 'penalty' ? ['환불','#B45309']
-                : rt.cancelRefund        ? ['취소','#B23A2E']
-                :                          ['반환','#1a1a18'];
-        st = '<span style="font-size:11px;font-weight:800;color:' + lab[1] + ';margin-left:6px;">' + lab[0] + '</span>';
-      } else if(rt && rt.cancelled){
-        st = '<span style="font-size:11px;font-weight:800;color:#8a8580;margin-left:6px;">취소(기록 없음)</span>';
-      } else if(t.status !== 'active'){
-        st = '<span style="font-size:11px;font-weight:800;color:#8a8580;margin-left:6px;">' + _pcalEsc(String(t.status)) + '</span>';
-      }
-      var badge = '<span style="font-size:10.5px;font-weight:800;color:#fff;background:' + ro[1]
-        + ';border-radius:4px;padding:1.5px 5px;margin-left:6px;vertical-align:1px;">' + ro[0] + '</span>';
-      h += '<div onclick="mlTkPop(' + idx + ')" style="padding:14px 8px;border-bottom:1px solid #eee7dc;cursor:pointer;">'
-        + '<div style="display:flex;justify-content:space-between;">'
-        + '<span style="font-size:14.5px;font-weight:700;color:#1a1a18;">' + _pcalEsc(t.restaurant_name || '티켓') + badge + st + '</span>'
-        + '<span style="font-size:14.5px;font-weight:700;">\u20A9' + (parseInt(t.price)||0).toLocaleString() + '</span></div>'
-        + '<div style="display:flex;justify-content:space-between;font-size:12px;color:#8a8580;margin-top:3px;">'
-        + '<span>구매 ' + _mlDate(t.created_at)
-        + (t.reservation_date ? ' · 방문 ' + _pcalEsc(String(t.reservation_date)) + (t.visit_time ? ' ' + _pcalEsc(String(t.visit_time)) : '') : '')
-        + (t.party_size ? ' · ' + t.party_size + '인' : '') + '</span>'
-        + (ag.total > 0 ? '<span style="color:#A07E3B;font-weight:700;">대행비 \u20A9' + ag.total.toLocaleString()
-            + (ag.src === 'product' ? '<span style="font-weight:400;color:#b8a680;">*</span>' : '') + '</span>' : '')
-        + '</div>';
-      // 반환·차감 요약 한 줄 — 실기록에서 읽은 숫자만 쓴다
-      if(rt && rt.has){
-        var bits = [];
-        if(rt.ret > 0) bits.push('<span style="color:#2a6a2a;">반환 \u20A9' + rt.ret.toLocaleString()
-          + (rt.card > 0 ? ' (카드 \u20A9' + rt.card.toLocaleString() + (rt.cardDone ? '' : ' 대기') + ')' : '') + '</span>');
-        if(rt.deduct > 0) bits.push('<span style="color:' + ((rt.rtype === 'penalty' || rt.cancelRefund) ? '#B23A2E' : '#7A5C3F') + ';font-weight:700;">'
-          + (rt.rtype === 'penalty' ? '위약·차감' : '차감') + ' \u20A9' + rt.deduct.toLocaleString() + '</span>');
-        if(rt.extraDeduct > 0 && rt.extraNote) bits.push('<span style="color:#B23A2E;">추가 차감: ' + _pcalEsc(String(rt.extraNote)).slice(0,30) + '</span>');
-        if(bits.length) h += '<div style="font-size:11.5px;margin-top:2px;">' + bits.join(' · ') + '</div>';
-      }
-      h += '</div>';
-    });
-    h += '<div style="font-size:11px;color:#a8a29a;margin-top:6px;">* 는 구매 시점 기록이 없어 상품의 현재 대행비로 보완한 값 · 항목을 누르면 상세</div>';
+  // ── 탭 ──
+  function tabBtn(id, label){
+    return '<button id="mlTab-' + id + '" onclick="mlTab(\'' + id + '\')" '
+      + 'style="flex:1;padding:9px 4px;border:0;background:none;font-family:inherit;font-size:12.5px;'
+      + 'font-weight:700;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;'
+      + 'color:' + C.faint + ';">' + label + '</button>';
   }
+  h += '<div style="display:flex;gap:2px;margin-top:15px;border-bottom:1px solid ' + C.line + ';">'
+     + tabBtn('dep','예치금') + tabBtn('tk','티켓') + tabBtn('fee','대행비') + '</div>';
 
-  // ── 예치금 상세 ──
-  h += '<div style="font-family:var(--font-main);font-size:14.5px;font-weight:800;letter-spacing:.1em;color:#5C0A14;margin:28px 0 10px;">예치금 상세</div>';
+  // ══════ 예치금 탭 ══════
+  var pd = '';
+  function depRow(r, kind){
+    var a = Math.abs(parseInt(r.amount)||0);
+    var pos = (parseInt(r.amount)||0) >= 0;
+    var pocket = (r.deposit_type === 'membership') ? '멤버십' : '일반';
+    var body = '<div style="font-size:13.5px;font-weight:700;line-height:1.4;">'
+      + _pcalEsc(String(r.description || kind)) + '</div>'
+      + '<div style="font-size:11px;color:' + C.faint + ';margin-top:2px;">' + _mlDate(r.created_at)
+      + (r.balance_after != null ? ' · 잔액 ' + W + n(r.balance_after) : '') + '</div>';
+    var amt = '<div style="font-size:14.5px;font-weight:800;color:' + (pos ? C["in"] : C.out) + ';">'
+      + (pos ? '+' : '−') + W + n(a) + '</div>'
+      + '<div style="margin-top:2px;">' + tag(pocket,
+          (r.deposit_type === 'membership' ? '#F3E7E9' : '#F5EFE3'),
+          (r.deposit_type === 'membership' ? C.wine : '#8a7b4a')) + '</div>';
+    return item(pos ? '＋' : '−', pos ? '#E7F1E7' : '#FBECEA', pos ? C["in"] : C.out, body, amt);
+  }
   if(!txs.length){
-    h += '<div style="font-size:14.5px;color:#a8a29a;padding:8px 2px;">예치금 내역 없음</div>';
+    pd += emptyLine('예치금 내역이 없습니다');
   } else {
-    var TL = { admin_grant:['부여','#2a6a2a'], admin_deduct:['차감','#B23A2E'],
-               ticket_purchase:['구매','#1a1a18'], ticket_refund:['환불','#2a6a2a'] };
-    txs.forEach(function(r){
-      var a = parseInt(r.amount) || 0;
-      var lab = TL[r.change_type] || [r.change_type, '#8a8580'];
-      h += '<div style="padding:14px 8px;border-bottom:1px solid #eee7dc;">'
-        + '<div style="display:flex;justify-content:space-between;align-items:baseline;">'
-        + '<span style="font-size:13px;"><b style="color:' + lab[1] + ';">' + _pcalEsc(lab[0]) + '</b>'
-        + ' <span style="color:#8a8580;">' + (r.deposit_type === 'membership' ? '멤버십' : '일반') + '</span></span>'
-        + '<span style="font-size:15px;font-weight:800;color:' + (a >= 0 ? '#2a6a2a' : '#1a1a18') + ';">'
-        + (a >= 0 ? '+' : '\u2212') + '\u20A9' + Math.abs(a).toLocaleString() + '</span></div>'
-        + '<div style="display:flex;justify-content:space-between;font-size:12px;color:#a8a29a;margin-top:2px;">'
-        + '<span>' + _mlDate(r.created_at) + (r.description ? ' · ' + _pcalEsc(String(r.description)).slice(0,44) : '') + '</span>'
-        + (r.balance_after != null ? '<span>잔액 \u20A9' + (parseInt(r.balance_after)||0).toLocaleString() + '</span>' : '')
-        + '</div></div>';
+    if(dGrant.length){
+      pd += grp('부여 — 어디서 들어온 돈인가', W + n(_sum(dGrant)));
+      dGrant.forEach(function(r){ pd += depRow(r, '예치금 부여'); });
+    }
+    if(dUse.length){
+      pd += grp('사용 — 티켓 결제', '−' + W + n(_sum(dUse)));
+      dUse.forEach(function(r){ pd += depRow(r, '티켓 결제'); });
+    }
+    if(dBack.length){
+      pd += grp('환불 · 반환 — 나간 주머니로 돌아옴', '+' + W + n(_sum(dBack)));
+      dBack.forEach(function(r){ pd += depRow(r, '반환'); });
+    }
+    if(dCut.length){
+      pd += grp('관리 차감', '−' + W + n(_sum(dCut)));
+      dCut.forEach(function(r){ pd += depRow(r, '관리 차감'); });
+    }
+    pd += '<div style="padding:12px 4px;font-size:11px;color:' + C.faint + ';border-top:1px solid ' + C.line + ';">'
+       + '부여·사용·환불이 <b>같은 주머니</b>에서 오가는지 배지로 확인합니다.</div>';
+  }
+
+  // ══════ 티켓 탭 ══════
+  //   결제 수단은 건마다 붙인다 — 카드가 섞인 건은 환불도 카드로 나가므로
+  //   취소 처리 전에 이걸 먼저 봐야 한다.
+  function payChips(it){
+    var e = it.t.extra_data || {};
+    var card = parseInt(e.cardPaid) || 0;
+    var pm = 0, pg = 0;
+    (it.ptx || []).forEach(function(r){
+      var a = Math.abs(parseInt(r.amount)||0);
+      if(r.deposit_type === 'membership') pm += a; else pg += a;
+    });
+    if(!pm && !pg){
+      var rest = Math.max(0, (parseInt(it.t.price)||0) - card);
+      if(rest > 0 && !card) pg = rest;   // 기록이 없으면 통칭으로만 표시
+    }
+    function chip(txt, hot){
+      return '<span style="font-size:9.5px;padding:1.5px 5px;border-radius:4px;font-weight:600;'
+        + 'background:' + (hot ? '#E9EEF5' : '#f3efe7') + ';color:' + (hot ? '#3A5578' : C.sub) + ';">'
+        + txt + '</span>';
+    }
+    var out = '';
+    if(pm > 0) out += chip('멤버십 ' + W + n(pm), false);
+    if(pg > 0) out += chip('일반 ' + W + n(pg), false);
+    if(card > 0) out += chip('카드 ' + W + n(card), true);
+    if(!out) out = chip('결제 기록 없음', false);
+    return '<div style="display:flex;gap:5px;margin-top:4px;flex-wrap:wrap;">' + out + '</div>';
+  }
+  function tkTitle(it){
+    var inv = String(it.t.purchase_id||'').indexOf('INV-') === 0;
+    return '<div style="font-size:13.5px;font-weight:700;line-height:1.4;">'
+      + _pcalEsc(it.t.restaurant_name || '티켓')
+      + (it.t.party_size ? ' · ' + it.t.party_size + '인' : '')
+      + (inv ? ' ' + tag('초대','#F2ECF4','#6B4A78') : '') + '</div>';
+  }
+  function tkWhen(it){
+    var t = it.t, s = [];
+    if(t.reservation_date) s.push('방문 ' + _pcalEsc(String(t.reservation_date)) + (t.visit_time ? ' ' + _pcalEsc(String(t.visit_time)) : ''));
+    s.push('구매 ' + _mlDate(t.created_at));
+    if(it.rt && it.rt.rows && it.rt.rows.length) s.push('처리 ' + _mlDate(it.rt.rows[0].created_at));
+    return '<div style="font-size:11px;color:' + C.faint + ';margin-top:2px;">' + s.join(' · ') + '</div>';
+  }
+  // 반환 계산식 — 「왜 이 금액이 돌아왔지?」 를 이 네 줄로 답할 수 있어야 한다
+  function calcBox(it){
+    var rt = it.rt; if(!rt || !rt.has) return '';
+    var price = parseInt(it.t.price) || 0;
+    var ag = rt.agencyHeld > 0 ? rt.agencyHeld : 0;
+    var ex = rt.extraDeduct > 0 ? rt.extraDeduct : 0;
+    var etc = Math.max(0, rt.deduct - ag - ex);
+    var rows = '<div style="display:flex;justify-content:space-between;gap:10px;padding:1.5px 0;">'
+      + '<span>결제</span><b>' + W + n(price) + '</b></div>';
+    if(ag > 0) rows += '<div style="display:flex;justify-content:space-between;gap:10px;padding:1.5px 0;color:' + C.out + ';">'
+      + '<span>− 대행비</span><b>' + W + n(ag) + '</b></div>';
+    if(ex > 0) rows += '<div style="display:flex;justify-content:space-between;gap:10px;padding:1.5px 0;color:' + C.out + ';">'
+      + '<span>− 추가 차감</span><b>' + W + n(ex) + '</b></div>';
+    if(etc > 0) rows += '<div style="display:flex;justify-content:space-between;gap:10px;padding:1.5px 0;color:' + C.out + ';">'
+      + '<span>− 그 외 차감</span><b>' + W + n(etc) + '</b></div>';
+    rows += '<div style="display:flex;justify-content:space-between;gap:10px;border-top:1px solid #EAE3D6;'
+      + 'margin-top:4px;padding-top:5px;color:' + C.ink + ';font-weight:700;">'
+      + '<span>= 반환</span><b>' + W + n(rt.ret) + '</b></div>';
+    // 추가 차감은 금액만으로 설명이 안 된다 — 반환 처리에서 필수로 받은 사유를 그대로 보여준다
+    if(ex > 0 && rt.extraNote) rows += '<div style="font-size:10.5px;color:#8a7b4a;background:#F7F2E6;'
+      + 'border-radius:5px;padding:4px 7px;margin-top:5px;line-height:1.5;word-break:keep-all;">'
+      + _pcalEsc(String(rt.extraNote)) + '</div>';
+    if(rt.card > 0) rows += '<div style="font-size:10.5px;color:' + (rt.cardDone ? C.sub : C.out) + ';margin-top:4px;">'
+      + '카드 환불 ' + W + n(rt.card) + (rt.cardDone ? ' (완료)' : ' — 토스 처리 대기') + '</div>';
+    if(rt.note) rows += '<div style="font-size:10.5px;color:' + C.sub + ';margin-top:3px;">메모: ' + _pcalEsc(String(rt.note)) + '</div>';
+    return '<div style="margin:7px 0 1px;padding:8px 10px;background:#FBFAF6;border:1px solid #F0EBE1;'
+      + 'border-radius:8px;font-size:11px;color:' + C.sub + ';">' + rows + '</div>';
+  }
+
+  var pt = '';
+  if(G.open.length){
+    var openSum = 0; G.open.forEach(function(it){ openSum += parseInt(it.t.price)||0; });
+    pt += grp('진행 중 — 아직 돌려주지 않음', G.open.length + '건 · ' + W + n(openSum));
+    G.open.forEach(function(it){
+      pt += item('◷', '#FCF3E0', C.hold,
+        tkTitle(it) + tkWhen(it) + payChips(it),
+        '<div style="font-size:14.5px;font-weight:800;color:' + C.ink + ';">' + W + n(it.t.price) + '</div>'
+        + '<div style="margin-top:2px;">' + tag('반환 대기','#FCF3E0',C.hold) + '</div>',
+        'mlTkPop(' + it.idx + ')');
     });
   }
+  if(G.ret.length){
+    var retSum = 0; G.ret.forEach(function(it){ retSum += it.rt.ret; });
+    pt += grp('방문 완료 — 반환됨', G.ret.length + '건 · ' + W + n(retSum) + ' 반환');
+    G.ret.forEach(function(it){
+      var extra = it.rt.extraDeduct > 0;
+      pt += item('✓', '#E7F1E7', C["in"],
+        tkTitle(it) + tkWhen(it) + calcBox(it),
+        '<div style="font-size:14.5px;font-weight:800;color:' + C.ink + ';">' + W + n(it.rt.ret) + '</div>'
+        + '<div style="margin-top:2px;">' + tag(extra ? '추가 차감' : '정상 반환',
+            extra ? '#F7E4E1' : '#EDEAE3', extra ? '#A6382B' : '#7a746c') + '</div>',
+        'mlTkPop(' + it.idx + ')');
+    });
+  }
+  if(G.no.length){
+    var noSum = 0; G.no.forEach(function(it){ noSum += it.rt.deduct; });
+    pt += grp('환불 처리 — 방문 불발 · 노쇼', G.no.length + '건 · 차감 ' + W + n(noSum));
+    G.no.forEach(function(it){
+      pt += item('!', '#F7E4E1', '#A6382B',
+        tkTitle(it) + tkWhen(it) + calcBox(it),
+        '<div style="font-size:14.5px;font-weight:800;color:' + C.out + ';">' + W + n(it.rt.deduct) + '</div>'
+        + '<div style="margin-top:2px;">' + tag('차감','#F7E4E1','#A6382B') + '</div>',
+        'mlTkPop(' + it.idx + ')');
+    });
+  }
+  if(G.cx.length || invCx.length){
+    pt += grp('취소', (G.cx.length + invCx.length) + '건');
+    G.cx.forEach(function(it){
+      var back = (it.rt && it.rt.has) ? it.rt.ret : 0;
+      var full = back >= (parseInt(it.t.price)||0) && back > 0;
+      pt += item('×', '#F3EEEC', '#96877f',
+        tkTitle(it) + tkWhen(it) + payChips(it) + ((it.rt && it.rt.has) ? calcBox(it) : ''),
+        '<div style="font-size:14.5px;font-weight:800;color:' + C.ink + ';">'
+        + (back > 0 ? W + n(back) : '—') + '</div>'
+        + '<div style="margin-top:2px;">' + tag(full ? '전액 환불' : ((it.rt && it.rt.has) ? '구매 취소' : '취소(기록 없음)'),
+            '#F3EEEC','#96877f') + '</div>',
+        'mlTkPop(' + it.idx + ')');
+    });
+    // 초대 취소 — 결제 전에 거절된 건. 금액이 비어 있는 게 정상이다
+    invCx.forEach(function(v){
+      var body = '<div style="font-size:13.5px;font-weight:700;line-height:1.4;">'
+        + _pcalEsc(v.restaurant_name || '초대')
+        + (v.pax ? ' · ' + v.pax + '인' : '') + ' ' + tag('초대','#F2ECF4','#6B4A78') + '</div>'
+        + '<div style="font-size:11px;color:' + C.faint + ';margin-top:2px;">'
+        + '초대 ' + _mlDate(v.created_at)
+        + (v.cancelled_at ? ' · 취소 ' + _mlDate(v.cancelled_at) : '')
+        + (v.visit_date ? ' · 방문 예정 ' + _pcalEsc(String(v.visit_date)) : '') + '</div>'
+        + '<div style="display:flex;gap:5px;margin-top:4px;"><span style="font-size:9.5px;padding:1.5px 5px;'
+        + 'border-radius:4px;font-weight:600;background:#f3efe7;color:' + C.sub + ';">결제 전</span></div>';
+      pt += item('×', '#F3EEEC', '#96877f', body,
+        '<div style="font-size:14.5px;font-weight:800;color:' + C.faint + ';">—</div>'
+        + '<div style="margin-top:2px;">' + tag(v.status === 'expired' ? '만료' : '초대 취소','#F3EEEC','#96877f') + '</div>');
+    });
+  }
+  if(!pt) pt = emptyLine('티켓 내역이 없습니다');
+  else pt += '<div style="padding:12px 4px;font-size:11px;color:' + C.faint + ';border-top:1px solid ' + C.line + ';">'
+    + '「진행 중」이 곧 <b>아직 갚아야 할 돈</b>입니다 · 항목을 누르면 상세</div>';
+
+  // ══════ 대행비 탭 ══════
+  var pf = '';
+  var feeDoneList = G.ret.concat(G.no).concat(G.cx.filter(function(it){ return it.rt && it.rt.agencyHeld > 0; }));
+  if(feeDoneList.length){
+    pf += grp('확정 — 돌려주지 않은 몫', W + n(feeDone));
+    feeDoneList.forEach(function(it){
+      var amt = (it.rt && it.rt.agencyHeld > 0) ? it.rt.agencyHeld : it.ag.total;
+      var isNo = _mlCls(it) === 'no';
+      pf += item('%', isNo ? '#F7E4E1' : '#F5EFE3', isNo ? '#A6382B' : '#8a7b4a',
+        '<div style="font-size:13.5px;font-weight:700;line-height:1.4;">'
+          + _pcalEsc(it.t.restaurant_name || '티켓') + (it.t.party_size ? ' · ' + it.t.party_size + '인' : '')
+          + (isNo ? ' — 환불 처리' : '') + '</div>'
+        + '<div style="font-size:11px;color:' + C.faint + ';margin-top:2px;">'
+          + (it.ag.per > 0 ? W + n(it.ag.per) + ' × ' + it.ag.pax + '인 · ' : '')
+          + '반환 시 차감'
+          + (it.rt && it.rt.rows && it.rt.rows.length ? ' · ' + _mlDate(it.rt.rows[0].created_at) : '') + '</div>',
+        '<div style="font-size:14.5px;font-weight:800;color:#A07E3B;">' + W + n(amt) + '</div>'
+        + '<div style="margin-top:2px;">' + tag('확정','#EDEAE3','#7a746c') + '</div>',
+        'mlTkPop(' + it.idx + ')');
+    });
+  }
+  var feePlanList = G.open.filter(function(it){ return it.ag.total > 0; });
+  if(feePlanList.length){
+    pf += grp('예정 — 반환 시 차감될 몫', W + n(feePlan));
+    feePlanList.forEach(function(it){
+      pf += item('%', '#FCF3E0', C.hold,
+        '<div style="font-size:13.5px;font-weight:700;line-height:1.4;">'
+          + _pcalEsc(it.t.restaurant_name || '티켓') + (it.t.party_size ? ' · ' + it.t.party_size + '인' : '') + '</div>'
+        + '<div style="font-size:11px;color:' + C.faint + ';margin-top:2px;">'
+          + (it.ag.per > 0 ? W + n(it.ag.per) + ' × ' + it.ag.pax + '인' : '')
+          + (it.t.reservation_date ? ' · 방문 ' + _pcalEsc(String(it.t.reservation_date)) : '')
+          + (it.ag.src === 'product' ? ' · 상품 현재값으로 보완' : '') + '</div>',
+        '<div style="font-size:14.5px;font-weight:800;color:#A07E3B;">' + W + n(it.ag.total) + '</div>'
+        + '<div style="margin-top:2px;">' + tag('예정','#FCF3E0',C.hold) + '</div>',
+        'mlTkPop(' + it.idx + ')');
+    });
+  }
+  if(!pf) pf = emptyLine('대행비 내역이 없습니다');
+  else pf += '<div style="padding:12px 4px;font-size:11px;color:' + C.faint + ';border-top:1px solid ' + C.line + ';">'
+    + '대행비는 환불되지 않습니다 — 이 회원에게서 <b>확정된 수익</b>이 얼마인지 봅니다.</div>';
+
+  h += '<div id="mlPane-dep" style="padding:4px 0 20px;">' + pd + '</div>';
+  h += '<div id="mlPane-tk"  style="display:none;padding:4px 0 20px;">' + pt + '</div>';
+  h += '<div id="mlPane-fee" style="display:none;padding:4px 0 20px;">' + pf + '</div>';
   h += '</div>';
+
+  // CSV 는 화면에 그린 것과 같은 자료를 쓴다 — 따로 만들면 둘이 어긋난다
+  window._mlCsv = { name: (u.display_name || uid), txs: txs, items: _mlItems, invCx: invCx };
+
   d.innerHTML = h;
+  mlTab('dep');
   d.scrollIntoView({ block:'start', behavior:'smooth' });
 }
 window.mlOpen = mlOpen;
+
+// 탭 전환 — 지표 카드와 탭 버튼이 같은 함수를 부른다
+function mlTab(id){
+  ['dep','tk','fee'].forEach(function(k){
+    var p = document.getElementById('mlPane-' + k);
+    if(p) p.style.display = (k === id) ? 'block' : 'none';
+    var b = document.getElementById('mlTab-' + k);
+    if(b){
+      b.style.color = (k === id) ? '#5C0A14' : '#b5afa2';
+      b.style.borderBottomColor = (k === id) ? '#5C0A14' : 'transparent';
+    }
+  });
+}
+window.mlTab = mlTab;
+
+// ── 회원 한 명의 원장을 CSV 로 ──
+//   회계 정산이 아니라 「이 회원과 무슨 일이 있었나」를 파일로 남기는 용도.
+//   엑셀이 한글을 깨뜨리지 않도록 BOM 을 붙인다.
+function mlCsv(){
+  var D = window._mlCsv;
+  if(!D){ if(typeof showToast === 'function') showToast('⚠','내역 없음','회원을 먼저 여세요'); return; }
+  function q(v){ return '"' + String(v == null ? '' : v).replace(/"/g,'""') + '"'; }
+  var L = [];
+  L.push(['구분','일시','내용','주머니·경로','금액','비고'].map(q).join(','));
+  D.txs.forEach(function(r){
+    var TL = { admin_grant:'예치금 부여', admin_deduct:'관리 차감',
+               ticket_purchase:'티켓 결제', ticket_refund:'반환·환불' };
+    L.push([ TL[r.change_type] || r.change_type, _mlDate(r.created_at),
+             r.description || '', (r.deposit_type === 'membership' ? '멤버십' : '일반'),
+             (parseInt(r.amount)||0),
+             (r.balance_after != null ? '잔액 ' + (parseInt(r.balance_after)||0) : '') ].map(q).join(','));
+  });
+  D.items.forEach(function(it){
+    var rt = it.rt;
+    var st = (rt && rt.has) ? (rt.cancelRefund ? '구매 취소' : (rt.rtype === 'penalty' ? '환불 처리' : '정상 반환'))
+           : ((rt && rt.cancelled) ? '취소(기록 없음)' : '진행 중');
+    L.push([ '티켓 · ' + st, _mlDate(it.t.created_at),
+             (it.t.restaurant_name || '') + (it.t.party_size ? ' ' + it.t.party_size + '인' : ''),
+             it.ro[0] + (it.t.reservation_date ? ' / 방문 ' + it.t.reservation_date : ''),
+             (parseInt(it.t.price)||0),
+             '대행비 ' + it.ag.total
+             + (rt && rt.has ? ' / 반환 ' + rt.ret + ' / 차감 ' + rt.deduct : '')
+             + (rt && rt.extraNote ? ' / 추가 차감 사유: ' + rt.extraNote : '') ].map(q).join(','));
+  });
+  (D.invCx || []).forEach(function(v){
+    L.push([ '초대 ' + (v.status === 'expired' ? '만료' : '취소'), _mlDate(v.created_at),
+             (v.restaurant_name || '') + (v.pax ? ' ' + v.pax + '인' : ''),
+             '초대 / 결제 전', 0,
+             (v.visit_date ? '방문 예정 ' + v.visit_date : '') ].map(q).join(','));
+  });
+  try {
+    var blob = new Blob(['﻿' + L.join('\r\n')], { type:'text/csv;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'TAAM_원장_' + String(D.name).replace(/[^\w가-힣]/g,'') + '.csv';
+    document.body.appendChild(a); a.click();
+    setTimeout(function(){ document.body.removeChild(a); URL.revokeObjectURL(url); }, 1000);
+    if(typeof showToast === 'function') showToast('✓','CSV 저장','다운로드 폴더를 확인하세요');
+  } catch(e){
+    if(typeof showToast === 'function') showToast('⚠','저장 실패', e.message || '오류');
+  }
+}
+window.mlCsv = mlCsv;
 
 // ── 구매 건 상세 팝업 — 어떤 조건으로 샀고, 무엇이 어떻게 처리됐는지 전부 ──
 //   원장 줄만으로는 "왜 이 금액이 차감됐나" 를 설명 못 한다. 회원과 다툼이 생겼을 때
