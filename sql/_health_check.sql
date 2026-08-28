@@ -79,13 +79,22 @@ select * from (
 -- ═══════════════════════════════════════════════════════════════
 select * from (
   -- 좌석에 안 붙은 초대 (앞으로 날짜만)
-  select 1 as "순서", '좌석 미연결 초대' as "항목",
+  -- 🔧 2026.08-28: '붙일 티켓이 있는' 건만 센다.
+  --   「티켓 발행 → 초대」 기획 이전에는 티켓 없이 초대를 바로 보냈다. 그 건들은
+  --   그 날짜에 판매 티켓 자체가 없으므로 붙일 대상이 없고, 정원 충돌도 없다.
+  --   그런데 종전 조건은 그것까지 세서 9건을 '조치 필요' 로 울렸다 — 전부 오탐이었다.
+  --   경보가 늘 켜져 있으면 진짜 경보를 놓친다.
+  select 1 as "순서", '좌석 미연결 초대 (붙일 티켓 있음)' as "항목",
          count(*)::text || '건' as "값",
          'sql/invite_unlinked_repair.sql — 결제돼도 정원에서 안 깎인다' as "조치"
-    from public.reservation_invites
-   where ticket_product_id is null and status in ('sent','paid')
-     and length(visit_date) = 10
-     and to_date(visit_date,'YYYY.MM.DD') >= current_date
+    from public.reservation_invites inv
+   where inv.ticket_product_id is null and inv.status in ('sent','paid')
+     and length(inv.visit_date) = 10
+     and to_date(inv.visit_date,'YYYY.MM.DD') >= current_date
+     and exists (select 1 from public.ticket_products tp
+                  where tp.rest_id::text = inv.restaurant_id::text
+                    and tp.date = inv.visit_date
+                    and coalesce(tp.status,'') <> 'soldout')
 
   union all
   -- 5분이 지났는데 안 풀린 결제 홀드
