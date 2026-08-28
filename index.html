@@ -32984,6 +32984,13 @@ async function riSubmit(){
 //   reservation_invites WHERE host_user_id = me ORDER BY created_at DESC
 //   상태별 카운트 + 각 row 의 회원/일정/금액/결제여부 표시
 // ════════════════════════════════════════════════════════════════
+// 🆕 2026.08-28: 웹 빌드 표시.
+//   「고쳤다는데 화면에 안 보인다」의 절반은 배포가 아직 안 닿은 것이다.
+//   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
+//   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
+//   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
+var TAAM_WEB_BUILD = '2026.08.28-b';
+
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
     showToast('⚠','권한 없음','슈퍼어드민 전용 기능입니다');
@@ -33042,7 +33049,8 @@ async function loadSentInvites(){
     var paidAmt = rows.filter(function(x){ return x.status === 'paid'; }).reduce(function(s,x){ return s + (x.total_amount||0); }, 0);
 
     document.getElementById('sentInvitesStats').innerHTML =
-      '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:14px;">'
+      '<div style="text-align:right;font-family:var(--font-main);font-size:9.5px;letter-spacing:.1em;color:#c9c2b6;margin-bottom:8px;">BUILD ' + TAAM_WEB_BUILD + '</div>'
+      + '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:14px;">'
       + '<div style="background:#1a1a18;color:#fff;border-radius:10px;padding:11px 4px;text-align:center;">'
       +   '<div style="font-family:var(--font-main);font-size:8.5px;letter-spacing:.15em;color:#c8a96e;margin-bottom:3px;">TOTAL</div>'
       +   '<div style="font-family:var(--font-main);font-size:17px;font-weight:900;">'+total+'</div></div>'
@@ -33106,7 +33114,10 @@ async function loadSentInvites(){
            // 🆕 2026.08-28: 대기중 건만 — 초대 회수.
            //   결제된 건은 여기서 못 회수한다. 돈이 오간 건은 환불·반환 절차를 타야 하고,
            //   그 판단(대행비 공제·위약)은 예치금 관리 화면에 이미 있다.
-           + (inv.status === 'sent'
+           //   ⚠ 조건을 배지와 똑같이 둔다 — 'sent' 하나로 좁히면, 예전에 다른 문자열로
+           //     저장된 행이 「⌛ 대기중」으로 보이면서 버튼만 없는 상태가 된다.
+           //     화면에 대기중이라 적혀 있으면 회수도 되어야 한다.
+           + (['paid','cancelled','expired'].indexOf(inv.status) < 0
               ? '<button onclick="siRecallInvite(\''+inv.id+'\')" style="width:100%;margin-top:10px;padding:10px;border:1px solid #d9c3c3;border-radius:10px;background:#fff;color:#9B1C1C;font-family:inherit;font-size:12.5px;font-weight:800;cursor:pointer;">↩︎ 초대 회수</button>'
               : '')
            // 🆕 결제 완료 건만 — 예약 시간 변경 (고객 확인 푸시 플로우 연동)
@@ -33154,7 +33165,7 @@ async function siRecallInvite(inviteId){
       showToast('⚠','회수 불가','이미 결제된 초대입니다 — 예치금 관리에서 환불·반환으로 처리해주세요');
       return;
     }
-    if(inv.status !== 'sent'){
+    if(inv.status === 'cancelled' || inv.status === 'expired'){
       showToast('⚠','회수 불가','이미 처리된 초대입니다 (' + inv.status + ')');
       return;
     }
@@ -33191,10 +33202,11 @@ async function siRecallInvite(inviteId){
     var upd = await window.sb.from('reservation_invites').update({
       status: 'cancelled',
       cancelled_at: new Date().toISOString()
-    }).eq('id', inviteId).eq('status', 'sent').select();
+    }).eq('id', inviteId).neq('status', 'paid').select();
     if(upd.error){ console.error('[recall]', upd.error); showToast('❌','회수 실패', upd.error.message); return; }
-    // eq('status','sent') 를 함께 걸었다 — 그 사이 회원이 결제했으면 0행이 돌아온다.
-    //   결제와 회수가 부딪히는 찰나를 막는 유일한 방법이다.
+    // neq('status','paid') 를 함께 걸었다 — 그 사이 회원이 결제했으면 0행이 돌아온다.
+    //   막아야 하는 건 '결제된 건을 덮어쓰는 것' 이다. status 문자열을 'sent' 로
+    //   좁히면 예전 표기의 행이 조용히 0행이 되어 아무 일도 안 일어난다.
     if(!upd.data || upd.data.length === 0){
       showToast('⚠','회수 못 함','그 사이 상태가 바뀌었습니다 — 목록을 다시 확인해주세요');
       await loadSentInvites();
