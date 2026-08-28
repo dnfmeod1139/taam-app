@@ -32172,9 +32172,11 @@ function riTogglePolicyAll(){
 
 // ── 🆕 2026.07: 판매 티켓과 연결 — 초대도 티켓 좌석 재고에서 차감/카운팅 ──
 var _riLinkTicketId = null;
+var _riLinkCands = [];
 function riPopulateLinkTickets(){
   var sel = document.getElementById('riLinkTicket');
   if(!sel) return;
+  _riLinkCands = [];
   var html = '<option value="">연결 안 함 (별도 판매 — 좌석 카운팅 제외)</option>';
   (ticketDB || []).forEach(function(t){
     // 🆕 2026.08: 파트너 어드민은 자기 매장 티켓만 연결 가능
@@ -32191,12 +32193,53 @@ function riPopulateLinkTickets(){
         ? '[' + String(t.saleOpenAt).slice(5,10).replace('-','/') + ' 오픈예약] '
         : '[비공개] ';
     }
-    html += '<option value="'+String(t.id)+'">'+_lkTag+nm+' · '+(t.dateYear ? t.dateYear+'.' : '')+t.date+' '+(t.time||'')+' · 총 '+(t.totalPax||'-')+'석</option>';
+    // 잔여석은 서버에서 채운다(_riFillLinkRemain). 먼저 정원으로 그려 화면이 비지 않게 한다.
+    _riLinkCands.push(t);
+    html += '<option value="'+String(t.id)+'" data-cap="'+(parseInt(t.totalPax)||0)+'">'
+          + _lkTag+nm+' · '+(t.dateYear ? t.dateYear+'.' : '')+t.date+' '+(t.time||'')
+          + ' · 총 '+(t.totalPax||'-')+'석</option>';
   });
   sel.innerHTML = html;
   sel.value = '';
   var info = document.getElementById('riLinkInfo'); if(info){ info.style.display='none'; info.innerHTML=''; }
+  _riFillLinkRemain();
 }
+
+// 🆕 2026.08-28: 연결 목록에 '잔여석' 을 채운다.
+//
+//   종전엔 총 좌석(t.totalPax)만 보여줬다. 그래서 11석짜리 티켓이 2석만 남았어도
+//   목록에는 「총 11석」 으로 보였고, 고른 뒤 발송 단계에서야 좌석 부족을 알았다.
+//   초대를 보낼 때 정작 알아야 하는 건 정원이 아니라 '지금 몇 자리 남았나' 다.
+//
+//   잔여는 taam_ticket_sold_slots(SECURITY DEFINER)로 읽는다 — tickets 를 직접
+//   조회하면 RLS 에 걸린다. 티켓 수가 많지 않으니 병렬로 한 번에 부른다.
+//   조회가 실패한 항목은 종전처럼 '총 N석' 으로 남는다 — 목록이 비는 것보다 낫다.
+async function _riFillLinkRemain(){
+  var sel = document.getElementById('riLinkTicket');
+  if(!sel || !window.sb || !_riLinkCands.length) return;
+  var cands = _riLinkCands.slice(0, 40);   // 방어 — 목록이 폭발해도 요청은 상한
+  var jobs = cands.map(function(t){
+    return window.sb.rpc('taam_ticket_sold_slots', { p_ticket_id: String(t.id) })
+      .then(function(r){ return { t: t, d: (!r.error && r.data) || null }; })
+      .catch(function(){ return { t: t, d: null }; });
+  });
+  var out;
+  try { out = await Promise.all(jobs); } catch(_e){ return; }
+
+  out.forEach(function(x){
+    var opt = sel.querySelector('option[value="' + String(x.t.id) + '"]');
+    if(!opt || !x.d) return;
+    var cap = parseInt(x.t.totalPax) || 0;
+    if(cap <= 0) return;
+    var rem = Math.max(0, cap - (parseInt(x.d.total) || 0));
+    var base = opt.textContent.replace(/ · 총 .*$/, '');
+    opt.textContent = base + ' · 잔여 ' + rem + '석 / 총 ' + cap + '석' + (rem === 0 ? ' — 매진' : '');
+    // 자리가 없으면 고를 수 없게 한다. 고른 뒤 발송에서 막히는 것보다 먼저 막는 게 낫다.
+    opt.disabled = (rem === 0);
+    opt.dataset.rem = String(rem);
+  });
+}
+window._riFillLinkRemain = _riFillLinkRemain;
 function riLinkTicketChange(){
   var sel = document.getElementById('riLinkTicket');
   var info = document.getElementById('riLinkInfo');
