@@ -27210,6 +27210,14 @@ async function mlOpen(uid){
       ret: ret, dep: dep, card: card, rtype: rtype,
       cancelRefund: !!m.cancel_refund,
       agencyHeld: parseInt(m.agency_held) || (extraDr && parseInt(extraDr.agencyHeld)) || 0,
+      // 🆕 2026.08-28: '기록된 0' 과 '기록이 없음' 을 가른다.
+      //   슈퍼어드민이 「대행비 제외 환불」을 체크하지 않으면 대행비까지 돌려준다 —
+      //   그때 agency_held 는 0 으로 **기록된다**. 그건 수익이 아니라 돌려준 돈이다.
+      //   반면 이 필드가 아예 없는 옛 반환 건은 '알 수 없음' 이라 상품값으로 보완해야 한다.
+      //   둘을 0 하나로 뭉치면 면제한 대행비가 확정 수익으로 잡힌다.
+      agencyRec: (m.agency_held != null) ? (parseInt(m.agency_held) || 0)
+               : (extraDr && extraDr.agencyHeld != null) ? (parseInt(extraDr.agencyHeld) || 0)
+               : null,
       extraDeduct: parseInt(m.extra_deduct) || (extraDr && parseInt(extraDr.extraDeduct)) || 0,
       extraNote: m.extra_note || (extraDr && extraDr.extraNote) || '',
       note: m.note || (extraDr && extraDr.note) || '',
@@ -27272,13 +27280,22 @@ async function mlOpen(uid){
   // ── 대행비 확정/예정 ──
   //   대행비는 환불되지 않는다 → 반환·환불이 끝난 건은 '확정 수익',
   //   아직 진행 중인 건은 '예정'. 섞으면 지금 번 돈을 알 수 없다.
+  // 확정 대행비 — 반환/환불 처리에서 **실제로 떼고 안 돌려준 금액**만 센다.
+  //   ⚠ 「대행비 제외 환불」을 체크하지 않으면 대행비까지 돌려주고 agency_held 가 0 으로
+  //     기록된다. 그건 수익이 아니다. 종전엔 0 을 '기록 없음' 과 같이 보고 상품값으로
+  //     보완해 버려서, 면제한 대행비가 확정 수익으로 잡혔다.
+  //   기록이 아예 없는 옛 건만 상품값(ag.total)으로 보완하고, 화면에 그렇게 표시한다.
+  //   반환 전(진행 중)은 확정이 아니라 '예정' 이다.
+  function _feeOf(it){
+    if(!it.rt || !it.rt.has) return null;                 // 아직 처리 전
+    if(it.rt.agencyRec != null) return it.rt.agencyRec;   // 기록대로 (0 = 면제·환불됨)
+    return it.ag.total;                                   // 옛 기록 — 상품값으로 보완
+  }
   var feeDone = 0, feePlan = 0;
   G.open.forEach(function(it){ feePlan += it.ag.total; });
-  G.ret.concat(G.no).forEach(function(it){
-    feeDone += (it.rt && it.rt.agencyHeld > 0) ? it.rt.agencyHeld : it.ag.total;
+  G.ret.concat(G.no).concat(G.cx).forEach(function(it){
+    feeDone += (_feeOf(it) || 0);
   });
-  // 취소는 대행비까지 함께 돌려주는 게 원칙 — 실기록에 남은 몫만 확정으로 센다
-  G.cx.forEach(function(it){ if(it.rt && it.rt.agencyHeld > 0) feeDone += it.rt.agencyHeld; });
 
   // ── 예치금 묶음 ──
   var dGrant = [], dUse = [], dBack = [], dCut = [];
@@ -27594,22 +27611,32 @@ async function mlOpen(uid){
 
   // ══════ 대행비 탭 ══════
   var pf = '';
-  var feeDoneList = G.ret.concat(G.no).concat(G.cx.filter(function(it){ return it.rt && it.rt.agencyHeld > 0; }));
+  // 처리가 끝난 건은 금액이 0(면제)이어도 줄로 남긴다 — '왜 0 인가' 를 볼 수 있어야 한다
+  var feeDoneList = G.ret.concat(G.no).concat(G.cx).filter(function(it){ return _feeOf(it) != null; });
   if(feeDoneList.length){
     pf += grp('확정 — 돌려주지 않은 몫', W + n(feeDone));
     feeDoneList.forEach(function(it){
-      var amt = (it.rt && it.rt.agencyHeld > 0) ? it.rt.agencyHeld : it.ag.total;
-      var isNo = _mlCls(it) === 'no';
-      pf += item('%', isNo ? '#F7E4E1' : '#F5EFE3', isNo ? '#A6382B' : '#8a7b4a',
+      var amt = _feeOf(it) || 0;
+      var cls = _mlCls(it);
+      var noRec = (it.rt.agencyRec == null);      // 옛 기록 — 상품값으로 보완한 값
+      var waived = !noRec && amt === 0;           // 기록상 0 — 회원에게 돌려줬다
+      // 왜 이 금액인지 한 줄로 설명한다. 0 이면 '왜 0 인가' 가 더 중요하다.
+      var why = waived
+        ? (cls === 'cx' ? '취소 — 대행비도 환불' : '대행비 제외 없이 전액 반환 — 면제')
+        : (noRec ? '기록 없음 — 상품 현재값으로 보완' : '반환 시 차감');
+      pf += item('%', waived ? '#F3EEEC' : (cls === 'no' ? '#F7E4E1' : '#F5EFE3'),
+                      waived ? '#96877f' : (cls === 'no' ? '#A6382B' : '#8a7b4a'),
         '<div style="font-size:13.5px;font-weight:700;line-height:1.4;">'
           + _pcalEsc(it.t.restaurant_name || '티켓') + (it.t.party_size ? ' · ' + it.t.party_size + '인' : '')
-          + (isNo ? ' — 환불 처리' : '') + '</div>'
+          + (cls === 'no' ? ' — 환불 처리' : (cls === 'cx' ? ' — 취소' : '')) + '</div>'
         + '<div style="font-size:11px;color:' + C.faint + ';margin-top:2px;">'
           + (it.ag.per > 0 ? W + n(it.ag.per) + ' × ' + it.ag.pax + '인 · ' : '')
-          + '반환 시 차감'
+          + why
           + (it.rt && it.rt.rows && it.rt.rows.length ? ' · ' + _mlDate(it.rt.rows[0].created_at) : '') + '</div>',
-        '<div style="font-size:14.5px;font-weight:800;color:#A07E3B;">' + W + n(amt) + '</div>'
-        + '<div style="margin-top:2px;">' + tag('확정','#EDEAE3','#7a746c') + '</div>',
+        '<div style="font-size:14.5px;font-weight:800;color:' + (waived ? C.faint : '#A07E3B') + ';">' + W + n(amt) + '</div>'
+        + '<div style="margin-top:2px;">'
+          + (waived ? tag('면제','#F3EEEC','#96877f')
+            : noRec ? tag('보완','#FCF3E0',C.hold) : tag('확정','#EDEAE3','#7a746c')) + '</div>',
         'mlTkPop(' + it.idx + ')');
     });
   }
