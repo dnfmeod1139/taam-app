@@ -18,10 +18,11 @@
 --
 --   '활성' = tickets.status 가 'cancelled' 가 아닌 것. 코드가 쓰는 기준과 같다.
 --
--- 실행: Supabase SQL Editor 에 통째로 붙여넣고 RUN → 표 다섯 개.
+-- 실행: Supabase SQL Editor 에 통째로 붙여넣고 RUN → 표 여섯 개.
 --   ① 초대 기준 전수 점검      ② 주인 없는 좌석 행
 --   ③ 요약 집계                ④ 고칠 SQL (좌석)
 --   ⑤ 고칠 SQL (낡은 초대 상태)   — ④·⑤ 는 문장만 만든다. 실행은 사람이 한다
+--   ⑥ 결제·환불 정합 (돌려준 돈이 맞나)
 -- ═══════════════════════════════════════════════════════════════
 
 
@@ -296,4 +297,80 @@ left join public.profiles pr on pr.id = inv.invitee_user_id
 where inv.paid_live = 0
   and inv.paid_cx > 0
   and inv.refunded
+order by inv.created_at desc;
+
+
+-- ═══════════════════════════════════════════════════════════════
+-- ⑥ 초대 결제·환불 정합 — 돌려준 돈이 맞나
+-- ═══════════════════════════════════════════════════════════════
+--   읽기 전용. 취소된 초대 구매만 본다(살아 있는 결제는 환불이 없는 게 당연하다).
+--
+--   기준 — calculateTicketRefund 는 네 갈래 전부에서
+--     환불액 + 유보액 = 결제액  이 되게 계산한다.
+--       30분 이내      → 전액 환불 · 유보 0
+--       D-31 이상      → 결제액 − 대행비 · 유보 = 대행비
+--       D-30 이하      → 환불 0 · 유보 = 전액
+--       슈퍼어드민 예외 → 전액 환불 · 유보 0
+--     그래서 「회원부담 = 대행비유보」가 성립해야 한다.
+--
+--   ⚠ 그런데 실제 운영에서는 여기에 없는 차감이 있다 —
+--     교통비 부담분, 앱 도입 이전에 발생한 대행비 같은 것들. 반환할 때
+--     사유를 적어 차감하므로 「부담 > 유보」가 곧 잘못은 아니다.
+--     그래서 판정을 ❌ 로 단정하지 않고, 환불 내용(사유)을 같이 띄운다.
+--     사유가 납득되면 정상이다. 사유가 없거나 말이 안 되면 그때 파고든다.
+--
+--   ⚠ 결제 기록 매칭 — 초대 결제 차감에 purchase_id 를 남기기 시작한 것은
+--     2026.08-28 부터다. 그 이전 건은 metadata.invite_id 로만 남아 있어
+--     둘 다 봐야 한다. purchase_id 만 보면 옛 건이 통째로 '결제 기록 없음' 이 된다.
+with tx as (
+  select d.*,
+         coalesce(
+           d.metadata->>'purchase_id',
+           case when d.metadata->>'invite_id' is not null
+                then 'INV-' || left(d.metadata->>'invite_id', 8) end
+         ) as pid
+    from public.deposit_transactions d
+   where d.change_type in ('ticket_purchase','ticket_refund')
+),
+inv as (
+  select i.*,
+         (select count(*) from public.tickets t
+           where ( t.purchase_id like 'INV-' || left(i.id::text,8) || '-%'
+                or coalesce(t.extra_data->>'inviteId','') = i.id::text )
+             and t.purchase_id not like 'INVH-%'
+             and coalesce(t.status,'') <> 'cancelled') as paid_live
+    from public.reservation_invites i
+)
+select
+  left(inv.id::text,8)                                                       as "초대ID앞8",
+  coalesce(pr.display_name,'')                                               as "받는분",
+  inv.restaurant_name                                                        as "매장",
+  inv.pax                                                                    as "인원",
+  count(*) filter (where tx.change_type = 'ticket_purchase')                 as "결제건",
+  count(*) filter (where tx.change_type = 'ticket_refund')                   as "환불건",
+  coalesce(-sum(tx.amount) filter (where tx.change_type='ticket_purchase'),0) as "결제합",
+  coalesce( sum(tx.amount) filter (where tx.change_type='ticket_refund'),0)   as "환불합",
+  coalesce(-sum(tx.amount),0)                                                as "회원부담",
+  coalesce(sum((tx.metadata->>'agency_held')::bigint)
+             filter (where tx.change_type='ticket_refund'),0)                as "대행비유보",
+  -- 사유를 읽어야 판단이 된다. 여러 건이면 이어붙인다.
+  string_agg(tx.description, ' / ')
+    filter (where tx.change_type = 'ticket_refund')                          as "환불 내용(사유)",
+  case
+    when count(*) filter (where tx.change_type='ticket_purchase') = 0
+      then '⚠ 결제 기록을 못 찾음 — 따로 확인'
+    when coalesce(-sum(tx.amount),0) = coalesce(sum((tx.metadata->>'agency_held')::bigint)
+             filter (where tx.change_type='ticket_refund'),0)
+      then '✅ 정책대로 (부담 = 유보한 대행비)'
+    when coalesce(-sum(tx.amount),0) > coalesce(sum((tx.metadata->>'agency_held')::bigint)
+             filter (where tx.change_type='ticket_refund'),0)
+      then '⚠ 대행비 말고 더 뗐다 — 옆의 사유를 읽어보고 판단'
+    else '❌ 결제액보다 더 돌려줬다 — 확인 필요'
+  end                                                                        as "판정"
+from inv
+left join public.profiles pr on pr.id = inv.invitee_user_id
+join tx on tx.pid = 'INV-' || left(inv.id::text,8)
+        or tx.pid like 'INV-' || left(inv.id::text,8) || '-%'
+where inv.paid_live = 0
+group by inv.id, pr.display_name, inv.restaurant_name, inv.pax, inv.created_at
 order by inv.created_at desc;
