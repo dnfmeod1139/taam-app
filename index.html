@@ -15320,6 +15320,7 @@ async function renderNotificationsList(){
         // 🆕 2026.08-29: 가입·탈퇴 — 초대제라 회원이 드나드는 것 자체가 소식이다
         case 'member_joined':      return { label:'NEW MEMBER',   color:'#3F6B45' };
         case 'member_left':        return { label:'WITHDRAWN',    color:'#7A6A5C' };
+        case 'pax_change':         return { label:'PAX CHANGE',   color:'#8A5A1E' };
         default:                   return { label:'NOTICE',       color:'#888' };
       }
     }
@@ -28209,6 +28210,32 @@ function mlTkPop(idx){
     h += '<div style="font-size:12.5px;color:#8a8580;">취소 상태이지만 환불 거래 기록을 찾지 못했습니다 (예치금 상세에서 확인 필요)</div>';
   }
 
+  // 🆕 2026.08-29: 인원 변경 이력 — 있으면 그대로 펼친다
+  var _pxc = (t.extra_data && t.extra_data.pax_changes) || null;
+  if(Array.isArray(_pxc) && _pxc.length){
+    h += sec('인원 변경 이력');
+    _pxc.forEach(function(c){
+      h += row(_mlDate(c.at), '<b>' + c.from + '인 → ' + c.to + '인</b>'
+        + (parseInt(c.refund) > 0 ? ' <span style="color:#2a6a2a;">환불 ' + W + (parseInt(c.refund)||0).toLocaleString() + '</span>'
+                                  : ' <span style="color:#a8a29a;">환불 없음</span>'));
+      h += '<div style="font-size:11.5px;color:#8a8580;padding:2px 0 5px;border-bottom:1px solid #f0eadf;">'
+        + _pcalEsc(String(c.reason || '')) + ' · ' + (c.actor_role === 'super_admin' ? '슈퍼어드민' : '매장 어드민') + '</div>';
+    });
+  }
+  var _crq = (t.extra_data && t.extra_data.card_refund_queue) || null;
+  if(Array.isArray(_crq) && _crq.length){
+    var _crSum = _crq.reduce(function(s, x){ return s + (parseInt(x.amount) || 0); }, 0);
+    if(_crSum > 0) h += row('카드 환불 대기', '<b style="color:#B23A2E;">' + W + _crSum.toLocaleString() + '</b> (토스 부분취소 필요)');
+  }
+
+  // 인원 변경 — 취소되지 않은 다인 예약에만
+  var _pxPid = String(t.purchase_id || '');
+  if(_pxPid && t.status !== 'cancelled' && t.status !== 'canceled' && (parseInt(t.party_size) || 1) > 1){
+    h += '<button onclick="document.getElementById(\'mlTkPop\').remove(); paxChangeOpen(\'' + _pxPid.replace(/'/g, "\\'") + '\')" '
+      + 'style="width:100%;margin-top:18px;padding:13px;border:1.5px solid #d8c9a8;border-radius:11px;background:#fff;color:#6A1A1A;font-size:12.5px;font-weight:800;cursor:pointer;">'
+      + '인원 변경 (감소)</button>';
+  }
+
   var wrap = document.createElement('div');
   wrap.id = 'mlTkPop';
   wrap.style.cssText = 'position:fixed;inset:0;z-index:9990;background:rgba(20,16,12,.55);display:flex;align-items:center;justify-content:center;padding:18px;';
@@ -28222,6 +28249,241 @@ function mlTkPop(idx){
   document.body.appendChild(wrap);
 }
 window.mlTkPop = mlTkPop;
+
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026.08-29: 판매된 티켓의 인원 변경 (1단계 — 감소만)
+// ═══════════════════════════════════════════════════════════════
+//   이미 결제된 예약의 인원이 줄어드는 일은 계속 생긴다. 종전에는 「취소 후
+//   재구매」밖에 없었는데 그게 네 가지를 망가뜨렸다.
+//     · D-30 이내면 환불이 0원이라, 인원을 줄이려고 취소하면 돈은 안 돌아오고
+//       좌석만 풀린다. 인원 감소는 취소가 아닌데 취소로 처리됐다.
+//     · 취소하는 순간 좌석이 열려 다른 회원이 채간다.
+//     · 원장이 두 건으로 쪼개져 감사 추적이 끊긴다.
+//     · 카드분은 토스에서 수동 환불 → 재결제 왕복.
+//
+//   실제로 돈을 옮기는 일은 전부 RPC(taam_change_party_size)가 한 트랜잭션으로
+//   한다. 여기서 직접 profiles 를 건드리지 않는다 — 잔액 UPDATE 는 슈퍼어드민
+//   에게만 열려 있고(admin_deposit_grant_policies.sql), 레스토랑 어드민은
+//   tickets 조차 SELECT 만 된다(tickets_admin_rls.sql). 두 잠금은 의도된 것이라
+//   풀지 않고, SECURITY DEFINER 안에서 권한을 다시 검사하는 쪽을 택했다.
+//
+//   ⚠ sql/ticket_pax_change.sql 을 Supabase SQL Editor 에서 실행해야 동작한다.
+
+var _paxW = null;   // 작업 중 상태
+
+// 정책이 제안하는 환불액 — 실행자가 고칠 수 있는 '기본값'일 뿐이다.
+//   줄어든 인원분에만 기존 취소 정책을 적용한다. 약관과 일관되고 설명하기 쉽다.
+function _paxPolicyDefault(row, newPax){
+  var oldPax = parseInt(row.party_size) || 1;
+  var delta  = Math.max(0, oldPax - (parseInt(newPax) || 0));
+  var price  = parseInt(row.price) || 0;
+  if(delta <= 0 || price <= 0) return { amount: 0, reason: '변경 없음', policy: 'none' };
+
+  var perPax = Math.floor(price / oldPax);
+  var ex = row.extra_data || {};
+  var agencyPer = parseInt(ex.agencyFee || 0) || 0;
+  if(!agencyPer){
+    var _t = (ticketDB || []).find(function(x){ return String(x.id) === String(row.ticket_product_id); });
+    agencyPer = _t ? (parseInt(_t.agencyFee || 0) || 0) : 0;
+  }
+
+  // 구매 30분 이내 — 전액
+  var bought = row.created_at ? new Date(row.created_at) : null;
+  if(bought && !isNaN(bought.getTime()) && (Date.now() - bought.getTime()) / 60000 <= 30){
+    return { amount: Math.min(price, delta * perPax), reason: '구매 30분 이내 — 전액', policy: 'within_30min' };
+  }
+
+  var visit = row.reservation_date ? _dParseDate(String(row.reservation_date)) : null;
+  if(!visit || isNaN(visit.getTime())){
+    return { amount: Math.min(price, delta * Math.max(0, perPax - agencyPer)),
+             reason: '방문일 미확인 — 대행비 제외(보수적)', policy: 'agency_excluded' };
+  }
+  var days = (visit - Date.now()) / 86400000;
+  if(days >= 31){
+    return { amount: Math.min(price, delta * Math.max(0, perPax - agencyPer)),
+             reason: '방문 ' + Math.floor(days) + '일 전 — 대행비 제외', policy: 'agency_excluded' };
+  }
+  return { amount: 0,
+           reason: '방문 ' + Math.max(0, Math.floor(days)) + '일 전 — 환불 불가 구간 (금액은 직접 정할 수 있습니다)',
+           policy: 'no_refund' };
+}
+
+async function paxChangeOpen(purchaseId){
+  var isSuper = (typeof _isSuperAdmin === 'function') && _isSuperAdmin();
+  if(!isSuper && _currentRole !== 'admin'){ showToast('🔒','권한 부족','슈퍼어드민·매장 어드민 전용'); return; }
+  if(!window.sb) return;
+  // 화면에 들고 있던 값이 아니라 지금 DB 값을 다시 읽는다 — 다른 기기에서 이미
+  // 바꿨을 수 있고, 그 위에 또 바꾸면 인원·금액이 어긋난다.
+  var res = await window.sb.from('tickets')
+    .select('user_id, restaurant_name, ticket_product_id, party_size, price, status, purchase_id, reservation_date, visit_time, extra_data, created_at')
+    .eq('purchase_id', String(purchaseId)).maybeSingle();
+  if(res.error || !res.data){ showToast('⚠','구매를 찾을 수 없습니다', (res.error && res.error.message) || purchaseId); return; }
+  var row = res.data;
+  if(row.status === 'cancelled' || row.status === 'canceled'){ showToast('⚠','취소된 구매입니다','인원을 바꿀 수 없습니다'); return; }
+
+  var oldPax = parseInt(row.party_size) || 1;
+  if(oldPax <= 1){ showToast('⚠','1인 예약입니다','줄일 인원이 없습니다 — 취소를 쓰세요'); return; }
+
+  _paxW = { row: row, oldPax: oldPax, newPax: oldPax - 1 };
+  var old = document.getElementById('paxChangeModal'); if(old) old.remove();
+
+  var opts = '';
+  for(var i = 1; i < oldPax; i++){
+    opts += '<option value="' + i + '"' + (i === oldPax - 1 ? ' selected' : '') + '>' + i + '인</option>';
+  }
+
+  var el = document.createElement('div');
+  el.id = 'paxChangeModal';
+  el.style.cssText = 'position:fixed;inset:0;z-index:9995;background:rgba(20,16,12,.6);display:flex;align-items:center;justify-content:center;padding:18px;';
+  el.onclick = function(ev){ if(ev.target === el) el.remove(); };
+  el.innerHTML =
+    '<div style="width:100%;max-width:400px;max-height:86vh;overflow-y:auto;background:#FBF9F4;border-radius:18px;padding:22px 22px 24px;font-family:var(--font-main);-webkit-overflow-scrolling:touch;" data-lang-lock="ko">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center;">'
+      + '<div style="font-size:16px;font-weight:800;color:#1a1a18;">인원 변경</div>'
+      + '<button onclick="document.getElementById(\'paxChangeModal\').remove()" style="border:0;background:none;font-size:22px;color:#8a8580;padding:0 4px;cursor:pointer;">×</button></div>'
+    + '<div style="font-size:12px;color:#8a8580;margin:4px 0 14px;line-height:1.6;">'
+      + _pcalEsc(row.restaurant_name || '티켓') + ' · ' + _pcalEsc(String(row.reservation_date || '')) + '<br>'
+      + '결제 ₩' + (parseInt(row.price) || 0).toLocaleString() + ' · 현재 ' + oldPax + '인</div>'
+    + '<div style="font-size:11px;font-weight:800;color:#666;margin-bottom:6px;">바꿀 인원</div>'
+    + '<select id="paxNew" onchange="paxChangeRecalc()" class="tu-input" style="width:100%;box-sizing:border-box;background:#fff;font-size:14px;margin-bottom:12px;">' + opts + '</select>'
+    + '<div style="font-size:11px;font-weight:800;color:#666;margin-bottom:6px;">돌려줄 금액 (원)</div>'
+    + '<input id="paxRefund" type="number" min="0" inputmode="numeric" style="width:100%;box-sizing:border-box;padding:11px 12px;border:1.5px solid #e0ddd8;border-radius:9px;font-size:15px;font-weight:800;font-family:var(--font-main);background:#fff;">'
+    + '<div id="paxPolicyNote" style="font-size:11.5px;color:#8a8580;margin:6px 0 4px;line-height:1.6;"></div>'
+    + '<button onclick="paxChangeUseDefault()" style="border:0;background:none;font-size:11.5px;font-weight:800;color:#5C0A14;padding:2px 0 12px;cursor:pointer;text-decoration:underline;">정책 기본값으로 되돌리기</button>'
+    + '<div id="paxSplitNote" style="font-size:11.5px;color:#8a7a55;background:#FBF6EA;border:1px solid #EEE3CC;border-radius:9px;padding:9px 11px;margin-bottom:12px;line-height:1.6;"></div>'
+    + '<div style="font-size:11px;font-weight:800;color:#666;margin-bottom:6px;">사유 (필수 · 기록에 남습니다)</div>'
+    + '<textarea id="paxReason" placeholder="예: 동반 1인 불참 — 매장 확인" style="width:100%;box-sizing:border-box;padding:10px 11px;border:1.5px solid #e0ddd8;border-radius:9px;font-size:13px;font-family:var(--font-main);background:#fff;min-height:60px;margin-bottom:14px;"></textarea>'
+    + '<button id="paxApplyBtn" onclick="paxChangeApply()" style="width:100%;padding:15px;border:0;border-radius:12px;background:#5C0A14;color:#fff;font-size:13.5px;font-weight:800;cursor:pointer;">인원 변경 실행</button>'
+    + '<div style="font-size:10.5px;color:#a8a29a;margin-top:10px;line-height:1.6;">좌석은 줄어든 만큼 즉시 열립니다. 실행자·사유·금액이 원장과 구매 기록에 함께 남습니다.</div>'
+    + '</div>';
+  document.body.appendChild(el);
+  paxChangeUseDefault();
+}
+window.paxChangeOpen = paxChangeOpen;
+
+function _paxCurrent(){
+  var sel = document.getElementById('paxNew');
+  return sel ? (parseInt(sel.value) || 1) : 1;
+}
+
+function paxChangeUseDefault(){
+  if(!_paxW) return;
+  var d = _paxPolicyDefault(_paxW.row, _paxCurrent());
+  var inp = document.getElementById('paxRefund');
+  if(inp) inp.value = d.amount;
+  paxChangeRecalc();
+}
+window.paxChangeUseDefault = paxChangeUseDefault;
+
+function paxChangeRecalc(){
+  if(!_paxW) return;
+  var newPax = _paxCurrent();
+  var d = _paxPolicyDefault(_paxW.row, newPax);
+  var note = document.getElementById('paxPolicyNote');
+  if(note){
+    note.innerHTML = '정책 기준: <b>₩' + d.amount.toLocaleString() + '</b> — ' + _pcalEsc(d.reason);
+  }
+  // 예치금/카드가 어떻게 나뉘는지 미리 보여준다. RPC 와 같은 규칙으로 계산한다.
+  var refund = Math.max(0, parseInt((document.getElementById('paxRefund') || {}).value) || 0);
+  var ex = _paxW.row.extra_data || {};
+  var isCard = ((parseInt(ex.cardPaid) || 0) > 0) || (ex.paidBy === 'card+deposit');
+  var split = document.getElementById('paxSplitNote');
+  if(split){
+    if(refund <= 0){
+      split.innerHTML = '돌려줄 금액이 없습니다 — <b>인원만 조정</b>됩니다.';
+    } else if(isCard){
+      // 이미 돌려준 예치금은 여기서 알 수 없다(서버가 뺀다). 한도만 안내한다.
+      var cap = parseInt(ex.depositUsed) || 0;
+      var dep = Math.min(refund, cap);
+      split.innerHTML = '예치금 환원 최대 <b>₩' + dep.toLocaleString() + '</b>'
+        + (refund > dep ? ' · 카드 환불 대기 <b>₩' + (refund - dep).toLocaleString() + '</b>' : '')
+        + '<br><span style="color:#B23A2E;">카드분은 토스에서 부분취소를 따로 하셔야 합니다.</span>'
+        + '<br><span style="color:#a8a29a;">이 구매를 이미 부분 환불했다면 예치금 몫은 그만큼 줄고 카드 몫이 늘어납니다.</span>';
+    } else {
+      split.innerHTML = '전액 <b>예치금</b>으로 환원됩니다 (₩' + refund.toLocaleString() + ').';
+    }
+  }
+}
+window.paxChangeRecalc = paxChangeRecalc;
+
+async function paxChangeApply(){
+  if(!_paxW || !window.sb) return;
+  var newPax = _paxCurrent();
+  var refund = Math.max(0, parseInt((document.getElementById('paxRefund') || {}).value) || 0);
+  var reason = ((document.getElementById('paxReason') || {}).value || '').trim();
+  if(!reason){ showToast('⚠','사유가 필요합니다','왜 바꾸는지 남겨야 합니다'); return; }
+  if(newPax >= _paxW.oldPax){ showToast('⚠','인원을 줄여야 합니다','증가는 아직 지원하지 않습니다'); return; }
+  if(refund > (parseInt(_paxW.row.price) || 0)){ showToast('⚠','금액이 큽니다','결제액을 넘을 수 없습니다'); return; }
+
+  var btn = document.getElementById('paxApplyBtn');
+  if(btn){ btn.disabled = true; btn.textContent = '처리 중…'; btn.style.opacity = '.6'; }
+
+  var r = await window.sb.rpc('taam_change_party_size', {
+    p_purchase_id: String(_paxW.row.purchase_id),
+    p_new_pax: newPax,
+    p_refund: refund,
+    p_reason: reason
+  });
+
+  if(r.error){
+    var m = String(r.error.message || '');
+    var friendly = /FORBIDDEN/.test(m) ? '이 구매를 바꿀 권한이 없습니다'
+      : /INCREASE_NOT_SUPPORTED/.test(m) ? '인원 증가는 아직 지원하지 않습니다'
+      : /ALREADY_CANCELLED/.test(m) ? '이미 취소된 구매입니다'
+      : /REFUND_TOO_LARGE/.test(m) ? '돌려줄 금액이 결제액보다 큽니다'
+      : /REASON_REQUIRED/.test(m) ? '사유를 입력하세요'
+      : /does not exist|schema cache/i.test(m) ? 'sql/ticket_pax_change.sql 을 먼저 실행해야 합니다'
+      : m.slice(0, 80);
+    showToast('⚠','인원 변경 실패', friendly);
+    if(btn){ btn.disabled = false; btn.textContent = '인원 변경 실행'; btn.style.opacity = '1'; }
+    return;
+  }
+
+  var out = r.data || {};
+  var el = document.getElementById('paxChangeModal'); if(el) el.remove();
+  showToast('✓','인원 변경 완료',
+    (out.pax_from || _paxW.oldPax) + '인 → ' + (out.pax_to || newPax) + '인'
+    + (refund > 0 ? ' · ₩' + refund.toLocaleString() + ' 환불' : ' · 환불 없음'));
+
+  // 좌석이 열렸으니 매진이던 티켓을 되살린다 (취소 경로와 같은 처리)
+  try {
+    if(typeof _tkMaybeReopen === 'function'){
+      await _tkMaybeReopen({ id: _paxW.row.ticket_product_id, purchaseId: _paxW.row.purchase_id });
+    }
+  } catch(_re){ console.warn('[paxChange] 재오픈 실패(무시):', _re); }
+
+  // 돈이 움직였고 남이 실행했을 수 있다 — 슈퍼어드민에게 남긴다
+  try {
+    if(typeof taamNotifyAdmins === 'function'){
+      taamNotifyAdmins({
+        type: 'pax_change',
+        title: '인원 변경 — ' + (out.restaurant_name || _paxW.row.restaurant_name || '티켓'),
+        body: (out.pax_from || _paxW.oldPax) + '인 → ' + (out.pax_to || newPax) + '인 · 환불 ₩'
+          + (parseInt(out.refund_total) || refund).toLocaleString()
+          + (out.card_refund_pending > 0 ? ' (카드 ₩' + out.card_refund_pending.toLocaleString() + ' 토스 처리 필요)' : '')
+          + ' · ' + reason,
+        payload: out
+      });
+    }
+  } catch(_ne){ console.warn('[paxChange] 알림 실패(무시):', _ne); }
+
+  if(out.card_refund_pending > 0){
+    setTimeout(function(){
+      showToast('💳','카드 환불이 남았습니다',
+        '토스에서 ₩' + out.card_refund_pending.toLocaleString() + ' 부분취소를 처리하세요');
+    }, 1200);
+  }
+
+  // 열려 있던 화면 새로고침 — 무엇이 떠 있는지 모르니 있는 것만 부른다
+  var _uid = _paxW.row.user_id;
+  try {
+    var _md = document.getElementById('mlDetail');
+    if(_md && _md.offsetParent !== null && typeof mlOpen === 'function' && _uid) mlOpen(_uid);
+  } catch(_e1){}
+  try { if(typeof tcalRender === 'function') tcalRender(); } catch(_e2){}
+  _paxW = null;
+}
+window.paxChangeApply = paxChangeApply;
 
 // 회원 통화 지정 — profiles.currency 갱신 후 원장 새로고침.
 //   null = 미지정(자동): 화면 언어 폴백으로 되돌린다.
@@ -33414,7 +33676,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.29-h';
+var TAAM_WEB_BUILD = '2026.08.29-i';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -47725,12 +47987,17 @@ function tcalRenderDetail(dateStr) {
           var amt = (e.amount ? ('₩'+e.amount.toLocaleString()) : '') + (e.agency>0 ? ' <span style="color:#9A9486;font-weight:600;">(대행비 ₩'+e.agency.toLocaleString()+')</span>' : '');
           var del = (e.type==='manual') ? '<span onclick="tcalManualDelete(\''+e.mid+'\')" style="cursor:pointer;color:#c33;font-size:17px;font-weight:700;line-height:1;padding:2px 4px;">×</span>'
                   : ((_isMan||_isHold) && (isSuper || _currentRole==='admin') ? '<span onclick="tcalCancelLinkedRow(\''+e.pid+'\')" style="cursor:pointer;color:#c33;font-size:17px;font-weight:700;line-height:1;padding:2px 4px;">×</span>' : '');
+          // 🆕 2026.08-29: 인원 변경 — 실제 결제 건에만. 수동(MAN-)·초대홀드(INVH-)는
+          //   결제가 없어 돈을 계산할 게 없다. 그건 ×(취소)로 지우는 게 맞다.
+          var pxBtn = (!_isMan && !_isHold && e.pid && (e.pax||0) > 1 && (isSuper || _currentRole==='admin'))
+            ? '<span onclick="paxChangeOpen(\''+String(e.pid).replace(/'/g,"\\'")+'\')" title="인원 변경" style="cursor:pointer;color:#8A5A1E;font-size:11px;font-weight:800;border:1px solid #EEDCBB;background:#FBF2E0;border-radius:6px;padding:2px 6px;">인원</span>'
+            : '';
           // 묶인 안쪽 줄은 이름을 반복하지 않는다 — 이미 위에 있다
           var head = inner ? badge : (badge + ' ' + nmH);
           return '<div style="padding:'+(inner?'7px 16px 7px 26px':'10px 16px')+';border-top:1px solid '+(inner?'#f8f6f2':'#f4f1ec')+';'+(inner?'background:#fdfcfa;':'')+'">'
             + '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">'
             +   '<div style="min-width:0;font-size:12.5px;">' + head + (e.time?' <span style="color:#9a9486;font-size:11px;">· '+e.time+'</span>':'') + '</div>'
-            +   '<div style="flex-shrink:0;display:flex;align-items:center;gap:8px;"><span style="font-size:'+(inner?'12':'13')+'px;font-weight:800;color:#6A1A1A;">'+e.pax+'명</span>'+del+'</div>'
+            +   '<div style="flex-shrink:0;display:flex;align-items:center;gap:6px;"><span style="font-size:'+(inner?'12':'13')+'px;font-weight:800;color:#6A1A1A;">'+e.pax+'명</span>'+pxBtn+del+'</div>'
             + '</div>'
             + ((amt||e.memo) ? '<div style="font-size:11.5px;color:#666;margin-top:2px;">'+amt+(e.memo?' <span style="color:#9a9486;">· '+_escHtmlAdg(e.memo)+'</span>':'')+'</div>' : '')
             + '</div>';
