@@ -7753,9 +7753,54 @@ window.openAccountDelete = async function(){
     if(yes.disabled) return;
     yes.disabled = true; yes.textContent = '삭제 중...'; yes.style.background = '#bbb';
     try {
+      // 🆕 2026.08-29: 누가 나갔는지 알리려면 이름을 '지우기 전에' 잡아둬야 한다.
+      //   taam_delete_my_account 는 profiles 를 마스킹하므로, 삭제 뒤에 읽으면
+      //   이름도 등급도 남아 있지 않다.
+      var _gone = null;
+      try {
+        var _me = (await window.sb.auth.getUser()).data.user;
+        if(_me){
+          var _pf = await window.sb.from('profiles')
+            .select('display_name, membership_tier, country, created_at')
+            .eq('id', _me.id).maybeSingle();
+          if(_pf && _pf.data) _gone = { id: _me.id, p: _pf.data };
+        }
+      } catch(_ge){ console.warn('[acctDel] 탈퇴자 정보 조회 실패:', _ge && _ge.message); }
+
       var r = await window.sb.rpc('taam_delete_my_account');
       if(r.error) throw r.error;
       if(r.data && r.data.ok === false) throw new Error(r.data.error || '삭제 실패');
+
+      // 🆕 슈퍼어드민에게 탈퇴 알림 — 로그아웃 전에 보낸다.
+      //   아래 _acctDelSignOut 이 세션을 끊으면 RPC 도 푸시도 못 보낸다.
+      //   조회에 실패했으면 이름 없이라도 알린다 — 아무 소식도 없는 것보다 낫다.
+      try {
+        if(typeof taamNotifyAdmins === 'function'){
+          var _gp   = (_gone && _gone.p) || {};
+          var _gWho = (_gp.display_name || '').toString().trim() || '회원';
+          var _gTier= (_gp.membership_tier || '').toString().trim();
+          var _gCty = (_gp.country === 'EN') ? '해외' : '국내';
+          var _gJoin= _gp.created_at
+            ? new Date(_gp.created_at).toLocaleDateString('ko-KR', { year:'2-digit', month:'2-digit', day:'2-digit' })
+            : '';
+          var _gAt  = new Date().toLocaleString('ko-KR',
+                        { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
+          await taamNotifyAdmins({
+            type: 'member_left',
+            title: '👋 ' + _gWho + '님이 탈퇴했습니다',
+            body: (_gTier ? (_gTier + '등급 · ') : '') + _gCty
+                + (_gJoin ? (' · 가입 ' + _gJoin) : '')
+                + '\n탈퇴 ' + _gAt
+                // 정책상 같은 번호·이메일로는 재가입이 막힌다 (CLAUDE.md).
+                // 나중에 문의가 들어올 때 이 한 줄이 근거가 된다.
+                + '\n※ 같은 번호·이메일로는 재가입 불가',
+            url: '/',
+            tag: 'taam-left-' + String((_gone && _gone.id) || Date.now()).slice(0, 8),
+            payload: { user_id: (_gone && _gone.id) || null, tier: _gTier || null }
+          });
+        }
+      } catch(_ne){ console.warn('[acctDel] 탈퇴 통지 예외:', _ne && _ne.message); }
+
       overlay.remove();
       if(typeof showToast==='function') showToast('✓','계정 삭제 완료','그동안 이용해주셔서 감사합니다');
       setTimeout(function(){ if(typeof _acctDelSignOut==='function') _acctDelSignOut(); }, 900);
@@ -15222,6 +15267,9 @@ async function renderNotificationsList(){
         case 'reservation_invite': return { label:'RESERVATION',  color:'#c8a96e' };
         case 'ticket_open':        return { label:'TICKET OPEN',  color:'#1a1a18' };
         case 'invite_cancelled':   return { label:'CANCELLED',    color:'#9B1C1C' };
+        // 🆕 2026.08-29: 가입·탈퇴 — 초대제라 회원이 드나드는 것 자체가 소식이다
+        case 'member_joined':      return { label:'NEW MEMBER',   color:'#3F6B45' };
+        case 'member_left':        return { label:'WITHDRAWN',    color:'#7A6A5C' };
         default:                   return { label:'NOTICE',       color:'#888' };
       }
     }
@@ -16489,6 +16537,48 @@ function vpSend(){
     });
   }
 }
+// ── 🆕 2026.08-29: 가입 알림 (슈퍼어드민) ──
+//   초대제라 회원 한 명이 들어오는 것 자체가 소식인데, 그동안 아무 데도 안 알렸다.
+//   슈퍼어드민이 회원 관리를 열어봐야만 알 수 있었다.
+//
+//   ⚠ 잠금화면에 뜨는 글이라 전화번호·이메일 전체는 싣지 않는다.
+//     누가·어느 등급·누구 초대인지까지만. 나머지는 회원 관리에서 본다.
+//   ⚠ 프로필 UPDATE 가 아직 안 끝났을 수 있으므로 DB 를 다시 읽지 않고
+//     가입 흐름이 이미 들고 있는 값으로만 쓴다.
+var _memberJoinNotified = false;
+function _notifyMemberJoined(user, name, phone){
+  try {
+    if(_memberJoinNotified) return;              // 경로가 겹쳐도 한 번만
+    if(typeof taamNotifyAdmins !== 'function') return;
+    _memberJoinNotified = true;
+
+    var inv  = _pendingInviteCode || {};
+    var tier = (inv.inviteeTier || inv.invitee_tier || 'T');
+    if(['M','T','A'].indexOf(tier) < 0) tier = 'T';
+    var ctry = ((inv.country || 'KR') === 'EN') ? '해외' : '국내';
+    var who  = (name && String(name).trim())
+            || (inv.memberName || inv.invitee_name || '').toString().trim()
+            || '새 회원';
+    var by   = (inv.invitedBy || inv.invited_by || '').toString().trim();
+    var tail = String(phone || '').replace(/[^0-9]/g, '').slice(-4);
+    var at   = new Date().toLocaleString('ko-KR',
+                 { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
+
+    taamNotifyAdmins({
+      type: 'member_joined',
+      title: '🎉 ' + who + '님이 가입했습니다',
+      body: tier + '등급 · ' + ctry + (tail ? ' · ****' + tail : '')
+          + (by ? ('\n초대: ' + by) : '')
+          + (inv.code ? ('\n코드 ' + inv.code) : '')
+          + '\n가입 ' + at,
+      url: '/',
+      tag: 'taam-join-' + String(user && user.id || '').slice(0, 8),
+      payload: { user_id: (user && user.id) || null, tier: tier,
+                 country: (inv.country || 'KR'), code: inv.code || null }
+    });
+  } catch(e){ console.warn('[join] 가입 통지 예외:', e && e.message); }
+}
+
 // 🔒 Edge Function 통과 후: 프로필 저장 + consume-invite 호출 (used 처리)
 function _doProfileAndConsume(user, savedName, email, phone){
   if(!user) return;
@@ -16586,6 +16676,10 @@ function _doProfileAndConsume(user, savedName, email, phone){
       }, 500);
     }
   } catch(_){}
+
+  // 🆕 2026.08-29: 슈퍼어드민에게 가입 알림 (이력 + 푸시)
+  //   send-push 가 호출자(가입한 본인)를 자동 제외하므로 새 회원에게는 안 간다.
+  _notifyMemberJoined(user, finalName, phone);
 
   // 3) 가입 완료 후 메인 화면으로 (기존 흐름)
   if(typeof onSignupComplete === 'function') onSignupComplete();
@@ -33236,7 +33330,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.28-g';
+var TAAM_WEB_BUILD = '2026.08.29-a';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
