@@ -447,6 +447,41 @@ workflows:
       #   com.google.android.gms.permission.AD_ID 를 갖고 있어 병합 시 앱에 딸려 들어온다.
       #   → 선언(아니요)과 번들(권한 있음)이 불일치 → Play 가 "광고 ID 선언이 불완전함" 으로 제출 차단.
       #   tools:node="remove" 로 병합 단계에서 명시적으로 제거해 일치시킨다.
+      # 🆕 2026-08-29: App Links — taam-app.vercel.app / playtaam.com 을 앱이 받는다.
+      #   왜 필요한가
+      #     토스 결제창은 앱 안에서 뜨는데, 취소·완료 후 돌아오는 리다이렉트만
+      #     크롬으로 샜다. 그 창은 앱 세션이 아니라 승인이 403 으로 막히고,
+      #     회원 눈에는 「결제했는데 티켓이 없다」 가 된다.
+      #     autoVerify 를 걸어두면 안드로이드가 그 주소를 크롬 대신 앱에 넘긴다.
+      #   ⚠ 도메인의 /.well-known/assetlinks.json 과 서명 지문이 맞아야 검증된다.
+      #     틀리면 조용히 실패한다(그냥 크롬으로 감) — 오류가 안 뜬다.
+      #     확인: adb shell pm get-app-links com.playtaam.app
+      - name: App Links intent-filter 주입
+        script: |
+          set -ex
+          python3 - <<'PY'
+          import re, sys
+          mf = 'android/app/src/main/AndroidManifest.xml'
+          src = open(mf, encoding='utf-8').read()
+          if 'android:autoVerify="true"' in src:
+              print('이미 있음 — 건너뜀'); raise SystemExit(0)
+          m = re.search(r'(<activity\b[^>]*android:name="[^"]*MainActivity"[^>]*>)', src)
+          if not m:
+              sys.exit('MainActivity 를 찾지 못했습니다')
+          hosts = ['taam-app.vercel.app', 'playtaam.com', 'www.playtaam.com']
+          data = '\n'.join('                <data android:scheme="https" android:host="%s" />' % h for h in hosts)
+          filt = ('\n            <intent-filter android:autoVerify="true">\n'
+                  '                <action android:name="android.intent.action.VIEW" />\n'
+                  '                <category android:name="android.intent.category.DEFAULT" />\n'
+                  '                <category android:name="android.intent.category.BROWSABLE" />\n'
+                  + data + '\n'
+                  '            </intent-filter>')
+          src = src[:m.end()] + filt + src[m.end():]
+          open(mf, 'w', encoding='utf-8').write(src)
+          print('App Links intent-filter 주입 완료:', ', '.join(hosts))
+          PY
+          grep -n "autoVerify\|android:host" android/app/src/main/AndroidManifest.xml
+
       - name: AndroidManifest 권한 주입 (위치·카메라) + AD_ID 제거
         script: |
           set -ex
