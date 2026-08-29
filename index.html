@@ -33414,7 +33414,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.29-f';
+var TAAM_WEB_BUILD = '2026.08.29-g';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -36202,20 +36202,26 @@ function homePopupShow(force){
     + 'opacity:0;transition:opacity .3s ease;';
   el.onclick = function(ev){ if(ev.target === el) homePopupClose(); };
   // 레이블 — 이벤트/티켓/일반 공지 구분 (P3 디자인)
-  var _popLabel = c.link_mode === 'event' ? 'SPECIAL EVENT'
-                : (c.link_ticket_id ? 'NEW OPEN' : 'NOTICE');
+  var _popLabel = c.link_mode === 'story' ? 'COLLECTION'
+                : (c.link_mode === 'event' ? 'SPECIAL EVENT'
+                : (c.link_ticket_id ? 'NEW OPEN' : 'NOTICE'));
+  // 스토리는 연결 티켓 없이도 넘어갈 곳이 있다 — 안내 줄을 띄울지 따로 판단한다
+  var _popHasGo = (c.link_mode === 'story')
+    ? (_popStoryList(c).length > 0)
+    : !!c.link_ticket_id;
   el.innerHTML =
     '<div style="width:100%;max-width:340px;background:#FBF9F4;border-radius:18px;overflow:hidden;font-family:var(--font-main);box-shadow:0 24px 60px rgba(0,0,0,.45);">'
     + '<div onclick="homePopupGo()" style="cursor:pointer;">'
       + media
-      + ((c.title || c.body) ? '<div style="padding:16px 18px ' + (c.link_ticket_id ? '6px' : '14px') + ';">'
+      + ((c.title || c.body) ? '<div style="padding:16px 18px ' + (_popHasGo ? '6px' : '14px') + ';">'
         + '<div style="font-size:9.5px;letter-spacing:.28em;text-indent:.28em;color:#5C0A14;font-weight:800;">' + _popLabel + '</div>'
         + (c.title ? '<div style="border-left:2px solid #c8a96e;padding-left:12px;margin-top:10px;"><div style="font-size:16.5px;font-weight:800;color:#1a1a18;line-height:1.5;">' + _pcalEsc(c.title) + '</div></div>' : '')
         + (c.body ? '<div style="font-size:12.5px;color:#3d3a33;line-height:1.8;margin-top:10px;white-space:pre-line;">' + _pcalEsc(c.body) + '</div>' : '')
         + '</div>' : '')
-      + (c.link_ticket_id ? '<div style="padding:0 18px 14px;font-size:12px;font-weight:800;color:#5C0A14;text-align:right;">'
-          + (c.link_mode === 'event' ? _popL('자세히 보기 →','See details →','詳しく見る →')
-                                     : _popL('캘린더에서 보기 →','View in calendar →','カレンダーで見る →')) + '</div>' : '')
+      + (_popHasGo ? '<div style="padding:0 18px 14px;font-size:12px;font-weight:800;color:#5C0A14;text-align:right;">'
+          + (c.link_mode === 'story' ? _popL('전체 보기 →','View all →','すべて見る →')
+            : (c.link_mode === 'event' ? _popL('자세히 보기 →','See details →','詳しく見る →')
+                                       : _popL('캘린더에서 보기 →','View in calendar →','カレンダーで見る →'))) + '</div>' : '')
     + '</div>'
     + '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-top:1px solid #eee5d8;background:#f5f1e9;">'
       + '<label style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:#8a8580;cursor:pointer;">'
@@ -36251,7 +36257,10 @@ window.homePopupClose = homePopupClose;
 function homePopupGo(){
   var c = _homePopCfg;
   var el = document.getElementById('homePopup'); if(el) el.remove();
-  if(!c || !c.link_ticket_id) return;
+  if(!c) return;
+  // 스토리 모드는 티켓을 하나로 묶지 않는다 — 슬라이드 목록 자체가 목적지다
+  if(c.link_mode === 'story'){ _popShowStory(c); return; }
+  if(!c.link_ticket_id) return;
   var t = (ticketDB || []).find(function(x){ return String(x.id) === String(c.link_ticket_id); });
   if(!t){ if(typeof showToast === 'function') showToast('⚠','연결된 티켓 없음','티켓이 삭제되었거나 아직 로드되지 않았습니다'); return; }
   if(c.link_mode === 'event') _popShowEvent(c, t);
@@ -36384,6 +36393,140 @@ function _popEventCta(tid){
 }
 window._popEventCta = _popEventCta;
 
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026.08-29: 스토리 슬라이드 — 이번에 여는 곳을 한 곳씩 소개한다
+// ═══════════════════════════════════════════════════════════════
+//   대표 한 곳만 올리면 나머지가 묻힌다. 목록에 있는 만큼 슬라이드를 만든다.
+//   한 장 = 한 티켓. 가로로 넘기고, 각 장은 세로로 읽는다.
+//
+//   사진은 지정이 없으면 레스토랑 등록 사진에서 자동으로 가져온다.
+//   ⚠ 코드에는 URL 문자열만 남는다 — base64 를 박아 index.html 이 25MB 까지
+//     부푼 적이 있다. 새 사진은 Supabase Storage 에 올리고 URL 만 저장한다.
+//
+//   히어로(photoHero)를 먼저 쓴다. 캘린더 타일은 요리 클로즈업이라 80vh
+//   풀블리드에서는 답답하다 — 여기서는 공간·인물이 보이는 컷이 맞다.
+
+function _popStoryPhoto(s, t){
+  if(s && s.media_url) return s.media_url;
+  var r = (typeof _pcalRest === 'function') ? _pcalRest(t) : null;
+  return (r && (r.photoHero || r.photoCard || r.photo || r.img)) || (t && t.tilePhoto) || '';
+}
+
+// 설정에 담긴 슬라이드를 살아 있는 티켓과 짝지어 돌려준다.
+// 티켓이 지워졌거나 아직 로드 전이면 그 장은 조용히 빠진다 — 빈 슬라이드를
+// 보여주느니 없는 편이 낫다.
+function _popStoryList(c){
+  var arr = Array.isArray(c && c.stories) ? c.stories : [];
+  var out = [];
+  arr.forEach(function(s){
+    var t = (ticketDB || []).find(function(x){ return String(x.id) === String(s.ticket_id); });
+    if(t) out.push({ s: s, t: t });
+  });
+  return out;
+}
+
+function _popStoryDate(t){
+  try{
+    var fd = (typeof _tkFullDate === 'function') ? _tkFullDate(t) : String(t.date || '');
+    var p = String(fd).split('.');
+    if(p.length < 3) return String(t.date || '');
+    var wd = ['일','월','화','수','목','금','토'][new Date(+p[0], +p[1]-1, +p[2]).getDay()];
+    var l = window._tkCurrentLang || 'ko';
+    if(l === 'ko') return p[1] + '월 ' + p[2] + '일 (' + wd + ')';
+    var mn = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+p[1]-1] || p[1];
+    if(l === 'ja') return p[1] + '月' + p[2] + '日';
+    return mn + ' ' + p[2];
+  }catch(e){ return String(t.date || ''); }
+}
+
+var _popStIdx = 0;
+
+function _popShowStory(c){
+  var old = document.getElementById('popStoryScreen'); if(old) old.remove();
+  var list = _popStoryList(c);
+  if(!list.length){
+    if(typeof showToast === 'function') showToast('⚠','소개할 티켓 없음','연결된 티켓이 삭제되었거나 아직 로드되지 않았습니다');
+    return;
+  }
+  _popStIdx = 0;
+  var n = list.length;
+
+  var slides = list.map(function(it, i){
+    var t = it.t, s = it.s;
+    var photo = _popStoryPhoto(s, t);
+    var name = (typeof _pcalRestName === 'function') ? _pcalRestName(t) : (t.rest || '');
+    var head = String(s.headline || '').trim();
+    var body = String(s.body || '').trim();
+    return '<div class="pop-st-slide" style="flex:0 0 100%;width:100%;height:100%;overflow-y:auto;-webkit-overflow-scrolling:touch;scroll-snap-align:center;">'
+      + '<div style="padding-bottom:158px;">'
+        + (photo ? '<img src="' + photo + '" style="width:100%;height:54vh;object-fit:cover;display:block;" alt="">'
+                 : '<div style="height:22vh;"></div>')
+        + '<div style="padding:28px 24px 0;">'
+          + '<div style="display:flex;align-items:center;gap:10px;">'
+            + '<span style="font-family:\'Montserrat\',sans-serif;font-size:10px;font-weight:800;letter-spacing:.2em;color:#c8a96e;">'
+              + String(i+1).padStart(2,'0') + ' <span style="opacity:.5;">/ ' + String(n).padStart(2,'0') + '</span></span>'
+            + '<span style="flex:1;height:1px;background:#e8e0d2;"></span>'
+            + '<span style="font-size:11px;font-weight:700;color:#8a8580;">' + _pcalEsc(_popStoryDate(t)) + '</span>'
+          + '</div>'
+          + '<div style="font-family:\'Nanum Myeongjo\',\'Shippori Mincho\',serif;font-size:23px;font-weight:700;color:#1a1a18;margin-top:16px;letter-spacing:.04em;line-height:1.45;">'
+            + _pcalEsc(name) + '</div>'
+          + '<div style="width:34px;height:1px;background:#5C0A14;margin:18px 0 20px;"></div>'
+          + (head ? '<div style="border-left:2px solid #c8a96e;padding-left:14px;"><div style="font-size:15px;font-weight:700;color:#1a1a18;line-height:1.85;white-space:pre-line;">'
+              + _pcalEsc(head) + '</div></div>' : '')
+          + (body ? '<div style="font-size:13.5px;color:#3d3a33;line-height:2.05;margin-top:16px;white-space:pre-line;">'
+              + _pcalEsc(body) + '</div>' : '')
+        + '</div>'
+      + '</div></div>';
+  }).join('');
+
+  var el = document.createElement('div');
+  el.id = 'popStoryScreen';
+  el.style.cssText = 'position:fixed;inset:0;z-index:9310;background:#FBF9F4;font-family:var(--font-main);overflow:hidden;';
+  el.innerHTML =
+    '<button onclick="document.getElementById(\'popStoryScreen\').remove()" style="position:fixed;top:calc(14px + env(safe-area-inset-top));right:14px;z-index:4;width:36px;height:36px;border-radius:50%;border:0;background:rgba(0,0,0,.45);color:#fff;font-size:18px;cursor:pointer;">×</button>'
+    // 진행 막대 — 장수가 많아도 안 무너진다 (점 인디케이터는 8장만 넘어가도 뭉갠다)
+    + '<div style="position:fixed;top:0;left:0;right:0;height:2px;background:rgba(0,0,0,.08);z-index:4;">'
+      + '<div id="popStBar" style="height:100%;width:' + (100/n) + '%;background:#c8a96e;transition:width .25s ease;"></div></div>'
+    + '<div class="pop-st-slider" style="display:flex;height:100%;overflow-x:auto;overflow-y:hidden;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;scrollbar-width:none;">'
+      + slides
+    + '</div>'
+    // 하단 — 페이드 한 겹 위에 불투명 바를 얹는다.
+    //   반투명 그라데이션 하나로만 덮으면 안내 문구와 본문 마지막 줄이 겹쳐 읽힌다.
+    + '<div style="position:fixed;left:0;right:0;bottom:0;z-index:3;">'
+      + '<div style="height:40px;background:linear-gradient(transparent, #FBF9F4);"></div>'
+      + '<div style="padding:0 18px calc(16px + env(safe-area-inset-bottom));background:#FBF9F4;">'
+        + '<div id="popStHint" style="text-align:center;font-size:10.5px;color:#a8a29a;font-weight:700;letter-spacing:.08em;margin-bottom:10px;">'
+          + (n > 1 ? _popL('옆으로 넘겨 다음 곳으로','Swipe for the next','スワイプで次へ') : '') + '</div>'
+        + '<button id="popStCta" style="width:100%;padding:16px;border:0;border-radius:14px;background:#c8a96e;color:#1a1410;font-size:14px;font-weight:800;letter-spacing:.04em;cursor:pointer;">'
+          + _popL('캘린더에서 보기','View in calendar','カレンダーで見る') + '</button>'
+      + '</div>'
+    + '</div>';
+  document.body.appendChild(el);
+
+  var sl = el.querySelector('.pop-st-slider');
+  var bar = el.querySelector('#popStBar');
+  var cta = el.querySelector('#popStCta');
+  var hint = el.querySelector('#popStHint');
+  function sync(){
+    var i = Math.round(sl.scrollLeft / Math.max(1, sl.clientWidth));
+    if(i < 0) i = 0; if(i > n-1) i = n-1;
+    _popStIdx = i;
+    if(bar) bar.style.width = ((i+1) * 100 / n) + '%';
+    if(hint) hint.textContent = (i < n-1)
+      ? _popL('옆으로 넘겨 다음 곳으로','Swipe for the next','スワイプで次へ')
+      : _popL('마지막 장입니다','That is the last one','最後のページです');
+  }
+  if(sl) sl.addEventListener('scroll', sync, { passive: true });
+  if(cta) cta.onclick = function(){
+    var it = list[_popStIdx];
+    if(!it) return;
+    var s = document.getElementById('popStoryScreen'); if(s) s.remove();
+    _popGoTicket(it.t);
+  };
+  sync();
+}
+window._popShowStory = _popShowStory;
+
 // ── 팝업 발행 편집기 (슈퍼어드민) ──
 var _paW = null;   // 작업 중 설정 (working copy)
 async function popAdminOpen(preset){
@@ -36394,8 +36537,10 @@ async function popAdminOpen(preset){
   // preset = 발행 내역에서 불러온 내용. id 는 비워 「발행」 시 새 팝업이 되게 한다.
   var base = preset ? Object.assign({}, preset, { id: null }) : (_homePopCfg || {});
   _paW = Object.assign({ enabled:false, id:null, title:'', body:'', media_url:'', media_type:'image',
-                         link_ticket_id:'', link_mode:'ticket', event_desc:'', event_media_url:'', event_media_urls:[] }, base);
+                         link_ticket_id:'', link_mode:'ticket', event_desc:'', event_media_url:'', event_media_urls:[],
+                         stories:[] }, base);
   if(!Array.isArray(_paW.event_media_urls)) _paW.event_media_urls = [];
+  if(!Array.isArray(_paW.stories)) _paW.stories = [];
   var old = document.getElementById('popAdmin'); if(old) old.remove();
   var el = document.createElement('div');
   el.id = 'popAdmin';
@@ -36436,9 +36581,23 @@ async function popAdminOpen(preset){
       + (_paW.media_url ? ('첨부됨 (' + (_paW.media_type === 'video' ? '영상' : '사진') + ') — 다시 업로드하면 교체') : '미디어 없음 (글만 표시)') + '</div>'
     + '<div style="font-size:11px;font-weight:800;color:#666;margin-bottom:6px;">연결 티켓 (팝업 클릭 시 이동)</div>'
     + '<select id="paLinkTicket" onchange="paLinkChanged()" class="tu-input" style="width:100%;box-sizing:border-box;background:#fff;font-size:13px;margin-bottom:10px;">' + tkOpts + '</select>'
-    + '<div style="display:flex;gap:6px;margin-bottom:10px;">'
-      + '<button id="paModeTicket" onclick="paSetMode(\'ticket\')" style="flex:1;padding:10px 0;border-radius:9px;font-size:12px;font-weight:800;cursor:pointer;"></button>'
-      + '<button id="paModeEvent" onclick="paSetMode(\'event\')" style="flex:1;padding:10px 0;border-radius:9px;font-size:12px;font-weight:800;cursor:pointer;"></button>'
+    + '<div style="display:flex;gap:5px;margin-bottom:10px;">'
+      + '<button id="paModeTicket" onclick="paSetMode(\'ticket\')" style="flex:1;padding:10px 0;border-radius:9px;font-size:11.5px;font-weight:800;cursor:pointer;"></button>'
+      + '<button id="paModeEvent" onclick="paSetMode(\'event\')" style="flex:1;padding:10px 0;border-radius:9px;font-size:11.5px;font-weight:800;cursor:pointer;"></button>'
+      + '<button id="paModeStory" onclick="paSetMode(\'story\')" style="flex:1;padding:10px 0;border-radius:9px;font-size:11.5px;font-weight:800;cursor:pointer;"></button>'
+    + '</div>'
+    // ── 스토리 모드 — 여러 곳을 한 장씩 소개한다 ──
+    + '<div id="paStoryBox" style="display:none;">'
+      + '<div style="font-size:11px;color:#8a8580;line-height:1.7;margin-bottom:8px;">'
+        + '티켓을 고르는 만큼 슬라이드가 생깁니다. 사진은 <b>레스토랑 등록 사진에서 자동</b>으로 들어가고, '
+        + '한 줄 카피만 쓰면 됩니다. 위 「연결 티켓」은 이 모드에서 쓰지 않습니다.</div>'
+      + '<div style="display:flex;gap:6px;margin-bottom:8px;">'
+        + '<select id="paStoryPick" class="tu-input" style="flex:1;min-width:0;box-sizing:border-box;background:#fff;font-size:12.5px;">'
+          + tkOpts.replace(/ selected/g, '').replace('>연결 안 함<', '>티켓을 고르세요<') + '</select>'
+        + '<button onclick="paStoryAdd()" style="flex:0 0 auto;padding:10px 14px;border:0;border-radius:9px;background:#1a1a18;color:#fff;font-size:12px;font-weight:800;cursor:pointer;">+ 추가</button>'
+      + '</div>'
+      + '<div id="paStoryList"></div>'
+      + '<input type="file" id="paStFile" accept="image/*" style="display:none;" onchange="paStoryUpload(this)">'
     + '</div>'
     + '<div id="paEventBox" style="display:none;">'
       + '<textarea id="paEventDesc" placeholder="이벤트 설명 — 팝업 클릭 시 보이는 간지 화면의 본문" style="width:100%;box-sizing:border-box;padding:11px 12px;border:1.5px solid #e0ddd8;border-radius:9px;font-size:13px;font-family:var(--font-main);margin-bottom:6px;background:#fff;min-height:90px;">' + _pcalEsc(_paW.event_desc || '') + '</textarea>'
@@ -36457,13 +36616,16 @@ async function popAdminOpen(preset){
     + '<button onclick="paTakeDown()" style="width:100%;padding:11px;border:0;border-radius:11px;background:transparent;color:#B23A2E;font-size:12px;font-weight:800;cursor:pointer;">팝업 내리기</button>'
     + '</div>';
   document.body.appendChild(el);
-  paSetMode(_paW.link_mode === 'event' ? 'event' : 'ticket');
+  paSetMode(_paW.link_mode === 'event' ? 'event' : (_paW.link_mode === 'story' ? 'story' : 'ticket'));
 }
 window.popAdminOpen = popAdminOpen;
 
 function paSetMode(mode){
-  _paW.link_mode = mode === 'event' ? 'event' : 'ticket';
-  var bt = document.getElementById('paModeTicket'), be = document.getElementById('paModeEvent');
+  // 모드를 떠나기 전에 입력값을 거둔다 — 안 그러면 쓰던 카피가 날아간다
+  if(_paW.link_mode === 'story') _paStoryCollect();
+  _paW.link_mode = (mode === 'event' || mode === 'story') ? mode : 'ticket';
+  var bt = document.getElementById('paModeTicket'), be = document.getElementById('paModeEvent'),
+      bs = document.getElementById('paModeStory');
   function sty(b, on, label){
     if(!b) return;
     b.textContent = label;
@@ -36471,12 +36633,131 @@ function paSetMode(mode){
     b.style.background = on ? '#1a1a18' : '#fff';
     b.style.color = on ? '#fff' : '#666';
   }
-  sty(bt, _paW.link_mode === 'ticket', '캘린더 바로 이동');
-  sty(be, _paW.link_mode === 'event', '이벤트 설명 화면 거침');
+  sty(bt, _paW.link_mode === 'ticket', '캘린더 이동');
+  sty(be, _paW.link_mode === 'event', '이벤트 화면');
+  sty(bs, _paW.link_mode === 'story', '스토리 슬라이드');
   var box = document.getElementById('paEventBox');
   if(box) box.style.display = _paW.link_mode === 'event' ? 'block' : 'none';
+  var sbox = document.getElementById('paStoryBox');
+  if(sbox) sbox.style.display = _paW.link_mode === 'story' ? 'block' : 'none';
+  if(_paW.link_mode === 'story') paStoryRender();
 }
 window.paSetMode = paSetMode;
+
+// ── 스토리 슬라이드 편집 ──
+//   화면을 다시 그릴 때마다 입력값이 사라지지 않게, 어떤 조작이든
+//   _paStoryCollect() 로 먼저 거두고 나서 배열을 손댄다.
+function _paStoryCollect(){
+  if(!Array.isArray(_paW.stories)) return;
+  _paW.stories.forEach(function(s, i){
+    var h = document.getElementById('paStH' + i);
+    var b = document.getElementById('paStB' + i);
+    if(h) s.headline = h.value || '';
+    if(b) s.body = b.value || '';
+  });
+}
+
+function paStoryRender(){
+  var box = document.getElementById('paStoryList');
+  if(!box) return;
+  var arr = Array.isArray(_paW.stories) ? _paW.stories : [];
+  if(!arr.length){
+    box.innerHTML = '<div style="font-size:11.5px;color:#a8a29a;text-align:center;padding:18px 0;border:1px dashed #e0ddd8;border-radius:9px;margin-bottom:10px;">'
+      + '아직 없습니다 — 위에서 티켓을 골라 「+ 추가」</div>';
+    return;
+  }
+  box.innerHTML = arr.map(function(s, i){
+    var t = (ticketDB || []).find(function(x){ return String(x.id) === String(s.ticket_id); });
+    var name = t ? ((typeof _pcalRestName === 'function') ? _pcalRestName(t) : (t.rest || '')) : '⚠ 삭제된 티켓';
+    var dt = t ? ((t.dateYear ? t.dateYear + '.' : '') + t.date) : String(s.ticket_id || '');
+    var auto = !s.media_url;
+    return '<div style="border:1.5px solid #e8e2d8;border-radius:11px;padding:12px;margin-bottom:8px;background:#fff;">'
+      + '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;">'
+        + '<span style="font-family:\'Montserrat\',sans-serif;font-size:10px;font-weight:800;color:#c8a96e;letter-spacing:.1em;">' + String(i+1).padStart(2,'0') + '</span>'
+        + '<span style="flex:1;min-width:0;font-size:12.5px;font-weight:800;color:#1a1a18;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + _pcalEsc(name) + '</span>'
+        + '<span style="font-size:10.5px;color:#8a8580;">' + _pcalEsc(dt) + '</span>'
+        + '<button onclick="paStoryMove(' + i + ',-1)" style="border:0;background:none;font-size:14px;color:' + (i === 0 ? '#ddd' : '#666') + ';cursor:pointer;padding:2px 4px;">↑</button>'
+        + '<button onclick="paStoryMove(' + i + ',1)" style="border:0;background:none;font-size:14px;color:' + (i === arr.length-1 ? '#ddd' : '#666') + ';cursor:pointer;padding:2px 4px;">↓</button>'
+        + '<button onclick="paStoryDel(' + i + ')" style="border:0;background:none;font-size:13px;color:#B23A2E;cursor:pointer;padding:2px 4px;">✕</button>'
+      + '</div>'
+      + '<input id="paStH' + i + '" type="text" placeholder="한 줄 카피 — 이 곳을 한 문장으로" value="' + _pcalEsc(s.headline || '') + '" style="width:100%;box-sizing:border-box;padding:9px 10px;border:1.5px solid #e0ddd8;border-radius:8px;font-size:12.5px;font-family:var(--font-main);margin-bottom:6px;background:#fff;">'
+      + '<textarea id="paStB' + i + '" placeholder="설명 (선택) — 줄바꿈 유지" style="width:100%;box-sizing:border-box;padding:9px 10px;border:1.5px solid #e0ddd8;border-radius:8px;font-size:12.5px;font-family:var(--font-main);background:#fff;min-height:56px;">' + _pcalEsc(s.body || '') + '</textarea>'
+      + '<div style="display:flex;align-items:center;gap:6px;margin-top:6px;">'
+        + '<span style="flex:1;font-size:10.5px;color:' + (auto ? '#a8a29a' : '#2a6a2a') + ';">' + (auto ? '사진: 레스토랑 등록 사진 자동' : '사진: 직접 지정됨') + '</span>'
+        + '<button onclick="paStoryPickPhoto(' + i + ')" style="padding:7px 10px;border:1.5px solid #d8c9a8;border-radius:8px;background:#fff;color:#8a7a55;font-size:11px;font-weight:800;cursor:pointer;">📷 교체</button>'
+        + (auto ? '' : '<button onclick="paStoryPhotoAuto(' + i + ')" style="padding:7px 10px;border:1.5px solid #e0ddd8;border-radius:8px;background:#fff;color:#666;font-size:11px;font-weight:800;cursor:pointer;">자동으로</button>')
+      + '</div>'
+    + '</div>';
+  }).join('');
+}
+window.paStoryRender = paStoryRender;
+
+function paStoryAdd(){
+  _paStoryCollect();
+  var sel = document.getElementById('paStoryPick');
+  var id = sel && sel.value;
+  if(!id){ showToast('⚠','티켓을 고르세요',''); return; }
+  if(!Array.isArray(_paW.stories)) _paW.stories = [];
+  if(_paW.stories.some(function(s){ return String(s.ticket_id) === String(id); })){
+    showToast('⚠','이미 있습니다','같은 티켓은 한 번만 넣습니다'); return;
+  }
+  _paW.stories.push({ ticket_id: String(id), media_url:'', headline:'', body:'' });
+  if(sel) sel.value = '';
+  paStoryRender();
+}
+window.paStoryAdd = paStoryAdd;
+
+function paStoryMove(i, d){
+  _paStoryCollect();
+  var a = _paW.stories, j = i + d;
+  if(!a || j < 0 || j >= a.length) return;
+  var tmp = a[i]; a[i] = a[j]; a[j] = tmp;
+  paStoryRender();
+}
+window.paStoryMove = paStoryMove;
+
+function paStoryDel(i){
+  _paStoryCollect();
+  if(!_paW.stories) return;
+  _paW.stories.splice(i, 1);
+  paStoryRender();
+}
+window.paStoryDel = paStoryDel;
+
+var _paStTarget = -1;
+function paStoryPickPhoto(i){
+  _paStoryCollect();
+  _paStTarget = i;
+  var f = document.getElementById('paStFile');
+  if(f) f.click();
+}
+window.paStoryPickPhoto = paStoryPickPhoto;
+
+function paStoryPhotoAuto(i){
+  _paStoryCollect();
+  if(_paW.stories && _paW.stories[i]) _paW.stories[i].media_url = '';
+  paStoryRender();
+}
+window.paStoryPhotoAuto = paStoryPhotoAuto;
+
+async function paStoryUpload(input){
+  var file = input.files && input.files[0];
+  input.value = '';
+  var i = _paStTarget; _paStTarget = -1;
+  if(!file || i < 0 || !_paW.stories || !_paW.stories[i]) return;
+  showToast('⏳','업로드 중','잠시만 기다려주세요');
+  try{
+    var url = await uploadImageToStorage(file, 'taam-photos');
+    if(!url) throw new Error('URL 생성 실패');
+    _paW.stories[i].media_url = url;
+    paStoryRender();
+    showToast('✓','업로드 완료','');
+  }catch(e){
+    console.warn('[popup] 스토리 사진 업로드 실패', e);
+    showToast('⚠','업로드 실패', (e && e.message || '').slice(0, 60));
+  }
+}
+window.paStoryUpload = paStoryUpload;
 
 // 이벤트 티켓을 고르면 이벤트 모드를 기본 제안
 function paLinkChanged(){
@@ -36550,6 +36831,7 @@ function _paCollect(){
   _paW.body = (document.getElementById('paBody') || {}).value || '';
   _paW.link_ticket_id = (document.getElementById('paLinkTicket') || {}).value || '';
   _paW.event_desc = (document.getElementById('paEventDesc') || {}).value || '';
+  _paStoryCollect();
   return _paW;
 }
 
@@ -36562,7 +36844,10 @@ window.paPreview = paPreview;
 
 async function paPublish(asNew){
   var c = _paCollect();
-  if(!c.title && !c.body && !c.media_url){ showToast('⚠','내용 없음','제목·본문·미디어 중 하나는 있어야 합니다'); return; }
+  // 스토리는 슬라이드가 곧 내용이다 — 카드에 제목·사진이 없어도 발행할 수 있다
+  var _hasSt = c.link_mode === 'story' && Array.isArray(c.stories) && c.stories.length > 0;
+  if(c.link_mode === 'story' && !_hasSt){ showToast('⚠','슬라이드 없음','소개할 티켓을 하나 이상 추가하세요'); return; }
+  if(!c.title && !c.body && !c.media_url && !_hasSt){ showToast('⚠','내용 없음','제목·본문·미디어 중 하나는 있어야 합니다'); return; }
   c.enabled = true;
   if(asNew || !c.id) c.id = 'pop_' + Date.now();
   var res = await window.sb.from('app_config').upsert({ key:'home_popup', value:c, updated_at:new Date().toISOString() });
