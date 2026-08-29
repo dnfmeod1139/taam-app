@@ -33414,7 +33414,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.29-g';
+var TAAM_WEB_BUILD = '2026.08.29-h';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -36439,6 +36439,48 @@ function _popStoryDate(t){
   }catch(e){ return String(t.date || ''); }
 }
 
+// 슬라이드 아래 붙는 일정 카드 — 그 티켓의 실제 일정을 그대로 보여준다.
+//   가격은 fxTicketTotal 을 그대로 쓴다. 여기서 따로 계산하면 해외 회원 화면과
+//   어긋난다 — 예전에 대행비 정액분이 빠져 $40 이 어긋난 적이 있다.
+//   값이 없는 줄은 아예 그리지 않는다. 「시간 미정」 같은 빈칸을 남기지 않는다.
+function _popStoryMeta(t){
+  var rows = [];
+  function row(k, v){
+    if(!v) return;
+    rows.push('<div style="display:flex;align-items:baseline;gap:12px;padding:7px 0;">'
+      + '<span style="flex:0 0 52px;font-size:11px;font-weight:700;color:#a8a29a;letter-spacing:.06em;">' + k + '</span>'
+      + '<span style="flex:1;font-size:13px;font-weight:700;color:#1a1a18;">' + v + '</span></div>');
+  }
+  // 날짜는 넣지 않는다 — 슬라이드 머리에 이미 크게 떠 있다. 같은 화면에 두 번 쓰지 않는다
+  row(_popL('시간','Time','時間'), t.time ? _pcalEsc(String(t.time)) : '');
+
+  var cap = parseInt(t.assignedPax || t.totalPax) || 0;
+  row(_popL('좌석','Seats','席'), cap ? (cap + _popL('석','','席')) : '');
+
+  try{
+    var meal = parseInt(t.mealFee || t.mealAmt || 0) || 0;
+    var wine = parseInt(t.wineMin || 0) || 0;
+    var per  = meal + (parseInt(t.agencyFee || 0) || 0) + wine;
+    if(per > 0 && typeof fxTicketTotal === 'function'){
+      row(_popL('1인','Per guest','お一人様'), fxTicketTotal(t, 1, meal, wine, per));
+    }
+  }catch(_pe){}
+
+  // 등급 제한은 미리 알려주는 편이 낫다 — 슬라이드를 다 읽고 잠긴 걸 알면 늦다
+  var need = String(t.minTier || '').toUpperCase();
+  if(need === 'M' || need === 'T' || need === 'A'){
+    var mine = (typeof _tkTierAllowed === 'function') && _tkTierAllowed(t);
+    var lbl = need === 'M' ? _popL('M 등급 전용','M members only','M会員限定')
+            : (need + _popL(' 등급 이상',' and above','等級以上'));
+    rows.push('<div style="display:flex;align-items:center;gap:12px;padding:7px 0;">'
+      + '<span style="flex:0 0 52px;font-size:11px;font-weight:700;color:#a8a29a;letter-spacing:.06em;">' + _popL('이용','Access','利用') + '</span>'
+      + '<span style="flex:1;font-size:12px;font-weight:800;color:' + (mine ? '#5C0A14' : '#8a7a55') + ';">'
+        + (mine ? '' : '🔒 ') + _pcalEsc(lbl) + '</span></div>');
+  }
+  if(!rows.length) return '';
+  return '<div style="margin-top:26px;border-top:1px solid #e8e0d2;padding-top:10px;">' + rows.join('') + '</div>';
+}
+
 var _popStIdx = 0;
 
 function _popShowStory(c){
@@ -36475,6 +36517,7 @@ function _popShowStory(c){
               + _pcalEsc(head) + '</div></div>' : '')
           + (body ? '<div style="font-size:13.5px;color:#3d3a33;line-height:2.05;margin-top:16px;white-space:pre-line;">'
               + _pcalEsc(body) + '</div>' : '')
+          + _popStoryMeta(t)
         + '</div>'
       + '</div></div>';
   }).join('');
