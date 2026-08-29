@@ -33414,7 +33414,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.29-e';
+var TAAM_WEB_BUILD = '2026.08.29-f';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -46151,7 +46151,7 @@ async function memOpenProfileQuick(userId, name){
   if(body) body.innerHTML = '<div style="text-align:center;color:#999;font-size:11px;padding:30px;">불러오는 중...</div>';
   try {
     var res = await window.sb.from('profiles')
-      .select('id, display_name, phone, email, created_at, member_until, role, deleted_at, membership_tier, country, single_device_exempt')
+      .select('id, display_name, phone, email, created_at, member_until, role, deleted_at, membership_tier, membership_expires_at, country, single_device_exempt')
       .eq('id', userId)
       .single();
     if(res.error || !res.data){
@@ -46280,10 +46280,23 @@ async function mmmSaveTier(tier){
   if(!_isSuperAdmin || !_isSuperAdmin()){ if(typeof showToast==='function') showToast('🔒','권한 부족','슈퍼어드민 전용'); return; }
   if(tier!=='M' && tier!=='T') return;
   try{
-    var res = await window.sb.from('profiles').update({ membership_tier: tier }).eq('id', _mmmCurrentUser.id).select();
+    // ⚠ M 으로 올릴 때는 만료일을 반드시 같이 넣는다.
+    //   _refreshUserGrade 는 `tier==='M' && expires && 미래` 일 때만 M 으로 친다.
+    //   만료일이 비면 M 도 T 도 A 도 아닌 null 로 떨어져, 그 회원은 등급 제한이
+    //   걸린 티켓을 하나도 못 산다 — T 회원보다 못한 상태가 된다.
+    //   가입 경로 두 곳은 이미 같이 넣는데 이 버튼만 빠져 있었고,
+    //   실제로 회원 3명이 그 상태로 있었다(2026-08-29 발견).
+    //   이미 만료일이 있으면 건드리지 않는다 — 갱신은 결제 쪽이 한다.
+    var _upd = { membership_tier: tier };
+    if(tier === 'M' && !_mmmCurrentUser.membership_expires_at){
+      var _ex = new Date(); _ex.setDate(_ex.getDate() + 365);
+      _upd.membership_expires_at = _ex.toISOString();
+    }
+    var res = await window.sb.from('profiles').update(_upd).eq('id', _mmmCurrentUser.id).select();
     if(res.error){ if(typeof showToast==='function') showToast('⚠','저장 실패', res.error.message); return; }
     if(!res.data || !res.data.length){ if(typeof showToast==='function') showToast('⚠','RLS 차단','변경 안 됨 — 권한 점검'); return; }
     _mmmCurrentUser.membership_tier = tier;
+    if(_upd.membership_expires_at) _mmmCurrentUser.membership_expires_at = _upd.membership_expires_at;
     renderMemberManageModal();
     if(typeof showToast==='function') showToast('✓','등급 변경', tier+' 등급으로 변경되었습니다');
     if(typeof renderMemberList==='function') renderMemberList();
@@ -48456,7 +48469,12 @@ async function _refreshUserGrade() {
     var tier = data.membership_tier;
     var expires = data.membership_expires_at;
     var isActive = tier === 'M' && expires && new Date(expires) > new Date();
-    window._currentUserGrade = isActive ? 'M' : (tier === 'T' ? 'T' : (tier === 'A' ? 'A' : null));   // 🆕 2026.08: A 등급(무료·만료 없음)
+    // 🆕 2026.08-29: M 인데 만료일이 없거나 지났으면 T 로 내려앉힌다. 종전에는 null 이 됐다.
+    //   TIER_RANK 는 M:3 T:2 A:1 이고 null 은 0 이라, 만료된(또는 만료일이 안 들어간)
+    //   M 회원이 A 회원보다도 아래로 떨어져 등급 제한 티켓을 하나도 못 사게 됐다.
+    //   가입하면 누구나 T 이므로, 회원인 이상 T 아래로는 내려가지 않는 게 맞다.
+    window._currentUserGrade = isActive ? 'M'
+      : (tier === 'M' ? 'T' : (tier === 'T' ? 'T' : (tier === 'A' ? 'A' : null)));   // 🆕 2026.08: A 등급(무료·만료 없음)
     window._mshipExpiresAt = isActive ? expires : null;
     window._mshipDepositBal = data.membership_deposit_balance || 0;
     window._genDepositBal = data.general_deposit_balance || 0;
