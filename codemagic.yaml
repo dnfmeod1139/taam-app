@@ -629,12 +629,19 @@ workflows:
           PY
           grep -n "signingConfig" "$BG" || true
 
-      - name: Build AAB (release)
+      # 🆕 2026-08-29: assembleRelease 를 같이 돌린다 — 폰에 바로 설치할 APK 가 필요하다.
+      #   .aab 는 Play 업로드용이라 폰에 직접 설치할 수 없다. 그래서 스토어에 올리기
+      #   전에 실기기에서 확인할 방법이 없었다 (결제창이 앱 안에서 열리는지 같은 것).
+      #   같은 signingConfigs.release 를 쓰므로 APK 도 서명된 채로 나오고,
+      #   Play 버전과 서명이 같아 지우지 않고 위에 덮어 설치된다.
+      - name: Build AAB + APK (release)
         script: |
           set -o pipefail
           java -version   # gradle 이 쓰는 JVM 확인 (21 이어야 함)
           cd android
-          ./gradlew bundleRelease 2>&1 | tee "$CM_BUILD_DIR/android-build.txt"
+          ./gradlew bundleRelease assembleRelease 2>&1 | tee "$CM_BUILD_DIR/android-build.txt"
+          echo "==== 산출물 ===="
+          find app/build/outputs -name '*.aab' -o -name '*.apk' | sort
 
       # 병합 결과에 AD_ID 가 정말 없는지 확인 — 남아 있으면 Play 가 제출을 막으므로
       # 업로드 전에 여기서 실패시키는 편이 낫다.
