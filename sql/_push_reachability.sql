@@ -137,3 +137,48 @@ select
 from public.push_subscriptions ps
 left join public.profiles pr on pr.id = ps.user_id
 order by pr.display_name nulls last, ps.last_seen_at desc;
+
+
+-- ═══════════════════════════════════════════════════════════════
+-- ④ 못 받는 회원 — 왜 그런지 좁히기
+-- ═══════════════════════════════════════════════════════════════
+--   active_sessions.device_label 에 '마지막으로 로그인한 기기' 가 남는다.
+--   _getDeviceLabel() 이 만드는 값이라 형식을 정확히 알고 읽을 수 있다.
+--     "iOS · Safari"      사파리 탭
+--     "iOS · Safari · PWA" 홈 화면에 추가해 연 것
+--     "iOS · Browser"     Safari·Chrome·Edge·Firefox 어디에도 안 걸린 웹뷰
+--                         = 카카오톡·인스타 등 인앱 브라우저이거나 네이티브 앱
+--     "Android · Chrome"  등
+--
+--   ⚠ iOS 는 웹 푸시를 '홈 화면에 추가한 PWA' 에만 허용한다. 사파리 탭이나
+--     인앱 브라우저에서는 권한 팝업조차 뜨지 않는다. 회원이 거부한 게 아니라
+--     애초에 물어보지도 못한 것이다 — 안내를 「권한을 켜주세요」로 하면 안 된다.
+select
+  coalesce(p.display_name,'(이름없음)')                       as "회원",
+  coalesce(p.membership_tier,'-')                             as "등급",
+  to_char(p.created_at,'MM-DD')                               as "가입",
+  coalesce(a.device_label,'(로그인 기록 없음)')                as "마지막기기",
+  case when a.last_active is null then '-'
+       else to_char(a.last_active,'MM-DD HH24:MI') end        as "마지막접속",
+  case
+    when a.user_id is null
+      then '한 번도 로그인한 적이 없다 — 초대 안내부터 다시'
+    when a.device_label ilike '%PWA%'
+      then '홈 화면 앱인데 등록 없음 — 알림 권한을 거부했다'
+    when a.device_label ilike '%iOS%'
+      then 'iOS 웹으로 쓰고 있다 — App Store 앱을 깔아야 알림이 온다'
+    when a.device_label ilike '%android%'
+      then '안드로이드인데 등록 없음 — 옛 빌드(1010 이하)이거나 권한 거부'
+    else 'PC 브라우저 — 알림 권한을 거부했을 가능성'
+  end                                                         as "이유",
+  case
+    when a.user_id is null                    then '개별 연락'
+    when a.device_label ilike '%PWA%'         then '기기 설정 → 알림 허용'
+    when a.device_label ilike '%iOS%'         then 'App Store 에서 TAAM 설치 후 로그인'
+    when a.device_label ilike '%android%'     then 'Play 에서 업데이트 후 알림 허용'
+    else '브라우저 사이트 설정에서 알림 허용'
+  end                                                         as "안내할 것"
+from public.profiles p
+left join public.active_sessions a on a.user_id = p.id
+where not exists (select 1 from public.push_subscriptions s where s.user_id = p.id)
+order by a.last_active desc nulls last;
