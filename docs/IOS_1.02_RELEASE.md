@@ -125,7 +125,32 @@ Branch `main` · Workflow **`TAAM iOS TestFlight Build`**.
 
 ---
 
-## 「이번 버전의 새로운 기능」 문구
+## 「이번 버전의 새로운 기능」 — 1.03
+
+1.03 의 네이티브 변경은 `server.allowNavigation` 하나다. 결제창이 앱 안에서 열리고,
+결제·취소 후 외부 브라우저로 빠지지 않고 앱으로 돌아온다.
+
+**한국어**
+```
+· 결제창이 앱 안에서 바로 열립니다. 결제나 취소 후 외부 브라우저로 빠지지 않고 앱으로 돌아옵니다.
+· 안정성 개선 및 세부 오류 수정.
+```
+
+**English**
+```
+· The payment sheet now opens inside the app. After paying or cancelling you return to TAAM instead of being left in an external browser.
+· Stability improvements and minor bug fixes.
+```
+
+**日本語**
+```
+· 決済画面がアプリ内で開くようになりました。決済・キャンセル後も外部ブラウザに移らず、そのままアプリに戻ります。
+· 安定性の向上と細かな不具合の修正。
+```
+
+---
+
+## 「이번 버전의 새로운 기능」 — 1.02
 
 **한국어**
 ```
