@@ -46,14 +46,14 @@ m as (
     i.code, i.invitee_tier, i.used_at,
     -- 무엇으로 이었는지 — 근거가 약한 매칭을 눈으로 걸러낼 수 있게 남긴다
     case
-      when i.member_id = p.id then 'member_id'
+      when i.member_id = p.id::text then 'member_id'
       when i.em <> '' and i.em = lower(trim(coalesce(p.email,''))) then 'email'
       else 'phone'
     end as matched_by,
     row_number() over (partition by p.id order by i.used_at desc nulls last) as rn
   from public.profiles p
   join inv i
-    on  i.member_id = p.id
+    on  i.member_id = p.id::text
     or (i.em <> '' and i.em = lower(trim(coalesce(p.email,''))))
     or (length(i.ph) >= 8
         and i.ph = regexp_replace(coalesce(p.phone,''), '[^0-9]', '', 'g'))
@@ -103,7 +103,7 @@ m as (
     row_number() over (partition by p.id order by i.used_at desc nulls last) as rn
   from public.profiles p
   join inv i
-    on  i.member_id = p.id
+    on  i.member_id = p.id::text
     or (i.em <> '' and i.em = lower(trim(coalesce(p.email,''))))
 )
 select
