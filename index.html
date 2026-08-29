@@ -7382,9 +7382,13 @@ async function _taamLoadDefaultCard(){
 window._taamLoadDefaultCard = _taamLoadDefaultCard;
 
 // ── 결제창 리다이렉트 복귀 처리 ──
-(function(){
+//   🆕 2026.08-29: 함수로 뺐다. 종전에는 로드 시점의 location.search 만 봤는데,
+//   App Links 로 앱이 열릴 때는 URL 이 이벤트(appUrlOpen)로 온다 — 화면은 이미
+//   떠 있고 주소는 바뀌지 않는다. 그래서 같은 처리를 쿼리만 바꿔 다시 부를 수
+//   있어야 한다. 아래 _tossBindAppUrlOpen 이 그 값을 물어다 준다.
+function _tossHandleReturn(qIn){
   try {
-    var q = location.search || '';
+    var q = (typeof qIn === 'string' && qIn) ? qIn : (location.search || '');
     var m = q.match(/[?&]toss_(pay|billing)=(success|fail)/);
     if (!m) return;
     var kind = m[1], ok = (m[2] === 'success');
@@ -7449,7 +7453,35 @@ window._taamLoadDefaultCard = _taamLoadDefaultCard;
     // 승인 — 앱 부팅이 어느 정도 끝난 뒤 실행
     setTimeout(function(){ _tossConfirmPayment(_pk, _oid, _amt); }, 1200);
   } catch(_e){}
-})();
+}
+window._tossHandleReturn = _tossHandleReturn;
+
+// 로드 시점(웹·PWA·앱 콜드스타트) — 종전 동작 그대로
+_tossHandleReturn();
+
+// ── 🆕 2026.08-29: App Links 복귀 ──
+//   안드로이드가 taam-app.vercel.app/?toss_pay=... 를 크롬 대신 우리 앱에 넘기면
+//   Capacitor 가 appUrlOpen 으로 알려준다. 그때 쿼리만 떼어 같은 처리를 태운다.
+//   ⚠ 이게 없으면 앱은 뜨는데 결제 결과가 반영되지 않는다 — 회원 눈에는
+//     「결제했는데 아무 일도 안 일어남」 이 된다. 링크만 잡아서는 반쪽이다.
+function _tossBindAppUrlOpen(){
+  try {
+    if (!(window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App)) return;
+    window.Capacitor.Plugins.App.addListener('appUrlOpen', function(ev){
+      try {
+        var u = (ev && ev.url) || '';
+        if (!u) return;
+        var qi = u.indexOf('?');
+        if (qi < 0) return;
+        var q = u.slice(qi);
+        if (!/toss_(pay|billing)=/.test(q)) return;   // 결제 복귀가 아니면 건드리지 않는다
+        console.log('[toss] App Links 복귀:', q.slice(0, 80));
+        _tossHandleReturn(q);
+      } catch(_e){ console.warn('[toss] appUrlOpen 처리 예외:', _e && _e.message); }
+    });
+  } catch(_e){ console.warn('[toss] appUrlOpen 연결 실패:', _e && _e.message); }
+}
+_tossBindAppUrlOpen();
 // 결제창 왕복 후 복귀 — 어떤 경로(리다이렉트 reload · bfcache · 취소닫기 · 앱복귀)로도 복원.
 //   PWA reload 를 견디는 _tossHasTrip()(sessionStorage) 로 판별.
 window.addEventListener('pageshow', function(ev){
@@ -33382,7 +33414,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.29-d';
+var TAAM_WEB_BUILD = '2026.08.29-e';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
