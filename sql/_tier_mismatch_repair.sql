@@ -69,6 +69,9 @@ select
   case when m.membership_expires_at is null then '없음'
        else to_char(m.membership_expires_at, 'YY-MM-DD') end as "멤버십만료",
   case
+    -- 프로필이 이미 더 높다 = 나중에 손으로 올려준 회원. 초대 등급은 옛 기록일 뿐이다
+    when m.membership_tier in ('M','A') and m.invitee_tier = 'T'
+      then '⛔ 손대지 말 것 — 나중에 승급된 회원 (되돌리면 강등된다)'
     when m.matched_by = 'phone' then '⚠ 전화번호로만 이었다 — 사람 확인 후 적용'
     else '✅ 고칠 수 있음'
   end                                              as "판정"
@@ -86,6 +89,13 @@ order by
 --   ① 에서 「✅ 고칠 수 있음」인 줄만 문장을 만든다.
 --   전화번호로만 이어진 건은 제외했다 — 번호가 겹치거나 바뀌었을 수 있어
 --   사람이 확인하고 손으로 고치는 편이 안전하다.
+--
+--   ⚠ 올리는 방향만 만든다 (프로필 T → 초대 M/A).
+--     처음엔 방향을 안 보고 「초대 등급을 그대로 쓴다」로 짰는데,
+--     2026-08-29 실제 DB 에서 나온 4명이 전부 반대 방향이었다 —
+--     초대는 T 로 나갔지만 나중에 손으로 M 을 준 회원들이다.
+--     그대로 돌렸으면 멀쩡한 M 회원 넷을 T 로 강등시킬 뻔했다.
+--     내리는 일은 자동으로 하지 않는다. 필요하면 사람이 한 명씩 한다.
 --
 --   M 등급은 멤버십 만료일도 같이 넣는다 (가입일 + 365일, 현재 정책).
 --   이미 만료일이 있으면 건드리지 않는다.
@@ -119,6 +129,9 @@ select
 from m
 where m.rn = 1
   and m.invitee_tier is distinct from m.membership_tier
+  -- 올리는 방향만. 프로필이 이미 M/A 인 회원은 건드리지 않는다
+  and coalesce(m.membership_tier, 'T') = 'T'
+  and m.invitee_tier in ('M','A')
 order by m.created_at desc;
 
 
