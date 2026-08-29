@@ -144,10 +144,15 @@ order by pr.display_name nulls last, ps.last_seen_at desc;
 -- ═══════════════════════════════════════════════════════════════
 --   active_sessions.device_label 에 '마지막으로 로그인한 기기' 가 남는다.
 --   _getDeviceLabel() 이 만드는 값이라 형식을 정확히 알고 읽을 수 있다.
+--     "iOS · App"         네이티브 앱 (2026.08-29 부터 이렇게 찍힌다)
+--     "Android · App"     네이티브 앱
 --     "iOS · Safari"      사파리 탭
 --     "iOS · Safari · PWA" 홈 화면에 추가해 연 것
 --     "iOS · Browser"     Safari·Chrome·Edge·Firefox 어디에도 안 걸린 웹뷰
---                         = 카카오톡·인스타 등 인앱 브라우저이거나 네이티브 앱
+--                         = 카카오톡·인스타 등 인앱 브라우저
+--                         ⚠ 2026.08-29 이전에 로그인한 건은 네이티브 앱도
+--                           이 값으로 남아 있다. 그 회원이 다시 로그인하면
+--                           'App' 으로 바뀐다
 --     "Android · Chrome"  등
 --
 --   ⚠ iOS 는 웹 푸시를 '홈 화면에 추가한 PWA' 에만 허용한다. 사파리 탭이나
@@ -163,19 +168,22 @@ select
   case
     when a.user_id is null
       then '한 번도 로그인한 적이 없다 — 초대 안내부터 다시'
+    when a.device_label ilike '%· App%'
+      then '앱에서 로그인했는데 등록 없음 — 알림 권한을 거부했다'
     when a.device_label ilike '%PWA%'
       then '홈 화면 앱인데 등록 없음 — 알림 권한을 거부했다'
     when a.device_label ilike '%iOS%'
-      then 'iOS 웹으로 쓰고 있다 — App Store 앱을 깔아야 알림이 온다'
+      then 'iOS 웹·인앱 브라우저 — App Store 앱을 깔아야 알림이 온다'
     when a.device_label ilike '%android%'
-      then '안드로이드인데 등록 없음 — 옛 빌드(1010 이하)이거나 권한 거부'
+      then '안드로이드 웹 또는 옛 빌드(1010 이하) — 앱 설치·업데이트 필요'
     else 'PC 브라우저 — 알림 권한을 거부했을 가능성'
   end                                                         as "이유",
   case
     when a.user_id is null                    then '개별 연락'
+    when a.device_label ilike '%· App%'       then '기기 설정 → TAAM → 알림 허용'
     when a.device_label ilike '%PWA%'         then '기기 설정 → 알림 허용'
     when a.device_label ilike '%iOS%'         then 'App Store 에서 TAAM 설치 후 로그인'
-    when a.device_label ilike '%android%'     then 'Play 에서 업데이트 후 알림 허용'
+    when a.device_label ilike '%android%'     then 'Play 에서 설치·업데이트 후 알림 허용'
     else '브라우저 사이트 설정에서 알림 허용'
   end                                                         as "안내할 것"
 from public.profiles p
