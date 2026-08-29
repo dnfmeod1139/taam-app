@@ -70,16 +70,17 @@ where key = 'app_version';
 -- ═══════════════════════════════════════════════════════════════
 -- ② iOS 강제 — App Store 에 그 버전이 보인 뒤에 실행
 -- ═══════════════════════════════════════════════════════════════
---   ⚠ 바꿀 곳은 아래 `select 35` 의 숫자 하나뿐이다.
+--   ⚠ 바꿀 곳은 아래 `select 36` 의 숫자 하나뿐이다.
 --
---   ⚠ 2026-08-29: 35 는 옛 값이다. allowNavigation 수정으로 새로 빌드했으므로
---     그 빌드의 ipa 번호로 바꿔 넣는다. Codemagic 빌드 로그의
---     `agvtool what-version` 출력이 그 값이다 — 빌드 이름보다 항상 1 크다.
+--   36 = 1.03 (2026-08-29 심사 제출, TestFlight 에 「1.03(36)」 으로 보임).
+--   35 = 1.02 — 출시하지 않고 넘어갔다(allowNavigation 이 빠져 있어서).
+--   CFBundleVersion 은 Codemagic 빌드 이름보다 1 크다. TestFlight 의
+--   괄호 안 숫자가 곧 이 값이라, 거기서 읽는 게 가장 확실하다.
 --
---   1.01 에는 빌드 표식이 없어 앱이 build:0 으로 읽는다. 0 < 35 이므로
---   1.01 사용자 전원이 강제 대상이 되고, 1.02 사용자(35)는 걸리지 않는다.
+--   1.01 에는 빌드 표식이 없어 앱이 build:0 으로 읽는다. 0 < 36 이므로
+--   1.01·1.02 사용자 전원이 강제 대상이 된다.
 /*
-with v as (select 35 as build)                 -- ← iOS 빌드번호 (ipa 기준)
+with v as (select 36 as build)                 -- ← iOS 빌드번호 (ipa 기준)
 update public.app_config a
    set value = jsonb_set(
                  jsonb_set(a.value, '{ios,min_build}',    to_jsonb(v.build)),
@@ -93,17 +94,20 @@ update public.app_config a
 -- ═══════════════════════════════════════════════════════════════
 -- ③ Android 강제 — Play 에 그 빌드가 출시된 뒤에 실행
 -- ═══════════════════════════════════════════════════════════════
---   ⚠ 바꿀 곳은 아래 `select 1011` 의 숫자 하나뿐이다.
+--   ⚠ 바꿀 곳은 아래 `select 1015` 의 숫자 하나뿐이다.
 --
---   versionCode 는 Codemagic 빌드 로그나 .aab 파일 이름에서 확인한다
+--   versionCode 는 Play 콘솔의 출시 화면이나 .aab 파일 이름에서 확인한다
 --   (Android versionCode = 1000 + BUILD_NUMBER).
 --
---   1011 = 1.02 (2026-08-27 출시, 현재 스토어에 나가 있는 것)
---   1012 = 2026-08-28 빌드 (상태바 알림 아이콘) — 올리지 않고 넘어갔다
---   ⚠ 2026-08-29: allowNavigation 수정으로 다시 빌드했다. Play 에 올릴 것은
---     그 새 빌드이고 versionCode 도 1012 가 아니다 — 빌드 로그에서 확인해 넣는다.
+--   1011 = 1.02 (2026-08-27 출시)
+--   1012 = 1.02 (2026-08-28, 프로덕션에 나가 있던 것)
+--   1015 = 1.03 (2026-08-29 프로덕션 제출 — App Links·결제 취소 복귀)
+--
+--   ⚠ 관리형 게시가 켜져 있다. 심사 통과만으로는 안 나간다 —
+--     게시 개요에서 「변경사항 게시」를 눌러 스토어에 실제로 보이는 것을
+--     확인한 뒤에 이 블록을 돌린다.
 /*
-with v as (select 1011 as code)                -- ← Android versionCode
+with v as (select 1015 as code)                -- ← Android versionCode
 update public.app_config a
    set value = jsonb_set(
                  jsonb_set(a.value, '{android,min_build}',    to_jsonb(v.code)),
