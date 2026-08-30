@@ -34088,7 +34088,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.29-m';
+var TAAM_WEB_BUILD = '2026.08.29-n';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -37096,7 +37096,14 @@ function _popStoryList(c){
   var out = [];
   arr.forEach(function(s){
     var t = (ticketDB || []).find(function(x){ return String(x.id) === String(s.ticket_id); });
-    if(t) out.push({ s: s, t: t });
+    if(!t) return;
+    // 🆕 2026.08-29: 발행한 뒤에 매진되거나 기한이 지난 곳은 뺀다.
+    //   팔 수 없는 자리를 홍보하면, 회원은 눌러서 매진을 확인하게 된다.
+    //   여기서는 status 만 본다 — 팝업이 뜨는 자리에서 좌석을 다시 세면
+    //   그만큼 팝업이 늦게 뜬다. 좌석과 status 는 서버가 맞춰준다.
+    if(String(t.status || '') === 'soldout') return;
+    if(typeof _isTicketExpired === 'function' && _isTicketExpired(t)) return;
+    out.push({ s: s, t: t });
   });
   return out;
 }
@@ -37163,7 +37170,13 @@ function _popShowStory(c){
   var old = document.getElementById('popStoryScreen'); if(old) old.remove();
   var list = _popStoryList(c);
   if(!list.length){
-    if(typeof showToast === 'function') showToast('⚠','소개할 티켓 없음','연결된 티켓이 삭제되었거나 아직 로드되지 않았습니다');
+    if(typeof showToast === 'function'){
+      // 어드민이 미리보기로 부른 것과 회원이 카드를 누른 것은 사정이 다르다
+      var _isAdm = (typeof _isSuperAdmin === 'function') && _isSuperAdmin();
+      if(_isAdm) showToast('⚠','보여줄 슬라이드가 없습니다','연결한 티켓이 매진·만료됐거나 삭제되었습니다');
+      else showToast('', _popL('지금은 볼 수 있는 자리가 없습니다','No seats available right now','ご案内できる席がありません'),
+                     _popL('곧 새로운 자리를 엽니다','New seats open soon','まもなく新しい席をご案内します'));
+    }
     return;
   }
   _popStIdx = 0;
@@ -37247,12 +37260,75 @@ function _popShowStory(c){
 window._popShowStory = _popShowStory;
 
 // ── 팝업 발행 편집기 (슈퍼어드민) ──
+
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026.08-29: 팝업에 연결할 수 있는 티켓만 고른다
+// ═══════════════════════════════════════════════════════════════
+//   종전 목록은 「기한 만료」만 걸렀다. 그래서 이미 매진된 티켓이 그대로
+//   보였고, 그걸 골라 팝업으로 홍보하면 회원은 눌러서 매진을 확인하게 된다.
+//
+//   매진 판정은 두 갈래다. 둘 중 하나라도 걸리면 제외한다.
+//     ① t.status === 'soldout'  — 손으로 내렸거나 자동으로 내려간 것
+//     ② 잔여 0석                — 정원에서 팔린 좌석을 뺀 값.
+//                                 status 가 안 따라온 경우가 실제로 있다
+//
+//   ②를 세는 규칙은 티켓 리스트(_tuListSeatStats)와 같아야 한다. 두 화면이
+//   다른 숫자를 말하면 어느 쪽을 믿을지 알 수 없다 — 취소분 제외, 초대·수동·
+//   앱 구매를 모두 점유로 센다.
+//
+//   미공개(_tkSaleHidden)는 남긴다. 아직 안 연 티켓을 팝업으로 먼저 알리는
+//   것은 정상적인 쓰임이다. 다만 목록에 그렇게 표시한다.
+var _paSeatUsed = null;   // { ticket_product_id: 팔린 좌석 } · null = 아직 안 셈
+
+async function _paLoadSeats(){
+  _paSeatUsed = {};
+  if(!window.sb) return _paSeatUsed;
+  try{
+    var r = await window.sb.from('tickets')
+      .select('ticket_product_id, party_size, purchase_id, status')
+      .limit(5000);
+    if(r.error){ console.warn('[popup] 좌석 집계 실패:', r.error.message); return _paSeatUsed; }
+    (r.data || []).forEach(function(row){
+      if(String(row.status || '') === 'cancelled' || String(row.status || '') === 'canceled') return;
+      var k = String(row.ticket_product_id || ''); if(!k) return;
+      _paSeatUsed[k] = (_paSeatUsed[k] || 0) + (parseInt(row.party_size, 10) || 0);
+    });
+  }catch(e){ console.warn('[popup] 좌석 집계 예외:', e); }
+  return _paSeatUsed;
+}
+
+// 남은 좌석. 정원을 모르면 null — 모를 때 매진으로 치면 멀쩡한 티켓이 사라진다
+function _paSeatsLeft(t){
+  var cap = parseInt((t && (t.totalPax || t.assignedPax)) || 0, 10) || 0;
+  if(cap <= 0) return null;
+  var used = (_paSeatUsed && _paSeatUsed[String(t.id)]) || 0;
+  return Math.max(0, cap - used);
+}
+
+function _paSoldOut(t){
+  if(!t) return true;
+  if(String(t.status || '') === 'soldout') return true;
+  var left = _paSeatsLeft(t);
+  return (left !== null && left <= 0);
+}
+
+// 팝업에 연결할 수 있는 티켓 목록 (매진·만료 제외)
+function _paSellableTickets(){
+  return (typeof ticketDB !== 'undefined' ? ticketDB : []).filter(function(t){
+    if(typeof _isTicketExpired === 'function' && _isTicketExpired(t)) return false;
+    return !_paSoldOut(t);
+  });
+}
+window._paSellableTickets = _paSellableTickets;
+
 var _paW = null;   // 작업 중 설정 (working copy)
 async function popAdminOpen(preset){
   if (typeof _isSuperAdmin === 'function' && !_isSuperAdmin()){
     showToast('🔒','권한 부족','슈퍼어드민 전용'); return;
   }
   await homePopupLoad();
+  // 좌석을 먼저 센다 — 매진된 티켓을 목록에 올리면 회원이 눌러서 매진을 확인하게 된다
+  await _paLoadSeats();
   // preset = 발행 내역에서 불러온 내용. id 는 비워 「발행」 시 새 팝업이 되게 한다.
   var base = preset ? Object.assign({}, preset, { id: null }) : (_homePopCfg || {});
   _paW = Object.assign({ enabled:false, id:null, title:'', body:'', media_url:'', media_type:'image',
@@ -37265,15 +37341,20 @@ async function popAdminOpen(preset){
   el.id = 'popAdmin';
   el.style.cssText = 'position:fixed;inset:0;z-index:9200;background:rgba(20,16,12,.55);display:flex;align-items:center;justify-content:center;padding:16px;';
   el.onclick = function(ev){ if(ev.target === el) el.remove(); };
+  // ⚠ 매진·만료는 목록에 올리지 않는다. 잔여 좌석은 옵션에 적어 고를 때 보이게 한다
+  var _sellable = _paSellableTickets();
   var tkOpts = '<option value="">연결 안 함</option>';
-  (ticketDB || []).forEach(function(t){
-    if(typeof _isTicketExpired === 'function' && _isTicketExpired(t)) return;
+  _sellable.forEach(function(t){
     var r = (restaurantDB || []).find(function(x){ return String(x.id) === String(t.restId); });
     var tag = t.isEvent ? '[이벤트] ' : '';
-    if (typeof _tkSaleHidden === 'function' && _tkSaleHidden(t)) tag += '[미오픈] ';
+    if (typeof _tkSaleHidden === 'function' && _tkSaleHidden(t)) tag += '[미공개] ';
+    var left = _paSeatsLeft(t);
     tkOpts += '<option value="' + String(t.id) + '"' + (String(_paW.link_ticket_id) === String(t.id) ? ' selected' : '') + '>'
-      + tag + ((r && r.name) || t.rest || '매장') + ' · ' + (t.dateYear ? t.dateYear + '.' : '') + t.date + '</option>';
+      + tag + ((r && r.name) || t.rest || '매장') + ' · ' + (t.dateYear ? t.dateYear + '.' : '') + t.date
+      + (left === null ? '' : ' · 잔여 ' + left + '석') + '</option>';
   });
+  // 고를 게 하나도 없을 때 빈 셀렉트만 두면 「고장났나」로 읽힌다
+  var _noTk = (_sellable.length === 0);
   function inp(id, ph, val){
     return '<input id="' + id + '" type="text" placeholder="' + ph + '" value="' + _pcalEsc(val || '') + '" style="width:100%;box-sizing:border-box;padding:11px 12px;border:1.5px solid #e0ddd8;border-radius:9px;font-size:13px;font-family:var(--font-main);margin-bottom:10px;background:#fff;">';
   }
@@ -37312,10 +37393,12 @@ async function popAdminOpen(preset){
     + '<div id="paStoryBox" style="display:none;">'
       + '<div style="font-size:11px;color:#8a8580;line-height:1.7;margin-bottom:8px;">'
         + '티켓을 고르는 만큼 슬라이드가 생깁니다. 사진은 <b>레스토랑 등록 사진에서 자동</b>으로 들어가고, '
-        + '한 줄 카피만 쓰면 됩니다. 위 「연결 티켓」은 이 모드에서 쓰지 않습니다.</div>'
+        + '한 줄 카피만 쓰면 됩니다.<br><b>매진·기한 지난 티켓은 목록에 없습니다.</b>'
+        + (_noTk ? ' 지금은 판매 중인 티켓이 하나도 없습니다.' : '') + '</div>'
       + '<div style="display:flex;gap:6px;margin-bottom:8px;">'
         + '<select id="paStoryPick" class="tu-input" style="flex:1;min-width:0;box-sizing:border-box;background:#fff;font-size:12.5px;">'
-          + tkOpts.replace(/ selected/g, '').replace('>연결 안 함<', '>티켓을 고르세요<') + '</select>'
+          + tkOpts.replace(/ selected/g, '').replace('>연결 안 함<',
+              _noTk ? '>고를 수 있는 티켓이 없습니다<' : '>티켓을 고르세요<') + '</select>'
         + '<button onclick="paStoryAdd()" style="flex:0 0 auto;padding:10px 14px;border:0;border-radius:9px;background:#1a1a18;color:#fff;font-size:12px;font-weight:800;cursor:pointer;">+ 추가</button>'
       + '</div>'
       + '<div id="paStoryList"></div>'
@@ -37429,10 +37512,16 @@ function paStoryRender(){
     var name = t ? ((typeof _pcalRestName === 'function') ? _pcalRestName(t) : (t.rest || '')) : '⚠ 삭제된 티켓';
     var dt = t ? ((t.dateYear ? t.dateYear + '.' : '') + t.date) : String(s.ticket_id || '');
     var auto = !s.media_url;
+    // 담을 때는 팔던 티켓이 그 사이에 매진될 수 있다. 회원 화면에서는 조용히
+    // 빠지므로, 여기서 왜 빠지는지 보여주지 않으면 이유를 알 수 없다.
+    var _dead = !t ? '삭제됨'
+      : (_paSoldOut(t) ? '매진'
+      : ((typeof _isTicketExpired === 'function' && _isTicketExpired(t)) ? '기한 지남' : ''));
     return '<div style="border:1.5px solid #e8e2d8;border-radius:11px;padding:12px;margin-bottom:8px;background:#fff;">'
       + '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;">'
         + '<span style="font-family:\'Montserrat\',sans-serif;font-size:10px;font-weight:800;color:#c8a96e;letter-spacing:.1em;">' + String(i+1).padStart(2,'0') + '</span>'
-        + '<span style="flex:1;min-width:0;font-size:12.5px;font-weight:800;color:#1a1a18;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + _pcalEsc(name) + '</span>'
+        + '<span style="flex:1;min-width:0;font-size:12.5px;font-weight:800;color:' + (_dead ? '#B23A2E' : '#1a1a18') + ';overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + _pcalEsc(name) + '</span>'
+        + (_dead ? '<span style="flex:0 0 auto;font-size:10px;font-weight:800;color:#B23A2E;background:#FBECEA;border-radius:5px;padding:2px 6px;">' + _dead + '</span>' : '')
         + '<span style="font-size:10.5px;color:#8a8580;">' + _pcalEsc(dt) + '</span>'
         + '<button onclick="paStoryMove(' + i + ',-1)" style="border:0;background:none;font-size:14px;color:' + (i === 0 ? '#ddd' : '#666') + ';cursor:pointer;padding:2px 4px;">↑</button>'
         + '<button onclick="paStoryMove(' + i + ',1)" style="border:0;background:none;font-size:14px;color:' + (i === arr.length-1 ? '#ddd' : '#666') + ';cursor:pointer;padding:2px 4px;">↓</button>'
@@ -37440,6 +37529,8 @@ function paStoryRender(){
       + '</div>'
       + '<input id="paStH' + i + '" type="text" placeholder="한 줄 카피 — 이 곳을 한 문장으로" value="' + _pcalEsc(s.headline || '') + '" style="width:100%;box-sizing:border-box;padding:9px 10px;border:1.5px solid #e0ddd8;border-radius:8px;font-size:12.5px;font-family:var(--font-main);margin-bottom:6px;background:#fff;">'
       + '<textarea id="paStB' + i + '" placeholder="설명 (선택) — 줄바꿈 유지" style="width:100%;box-sizing:border-box;padding:9px 10px;border:1.5px solid #e0ddd8;border-radius:8px;font-size:12.5px;font-family:var(--font-main);background:#fff;min-height:56px;">' + _pcalEsc(s.body || '') + '</textarea>'
+      + (_dead ? '<div style="font-size:11px;color:#B23A2E;background:#FBECEA;border:1px solid #F3D9D5;border-radius:8px;padding:7px 9px;margin-top:7px;line-height:1.55;">'
+          + '이 슬라이드는 <b>회원에게 보이지 않습니다</b> (' + _dead + '). 빼거나 다른 티켓으로 바꾸세요.</div>' : '')
       + '<div style="display:flex;align-items:center;gap:6px;margin-top:6px;">'
         + '<span style="flex:1;font-size:10.5px;color:' + (auto ? '#a8a29a' : '#2a6a2a') + ';">' + (auto ? '사진: 레스토랑 등록 사진 자동' : '사진: 직접 지정됨') + '</span>'
         + '<button onclick="paStoryPickPhoto(' + i + ')" style="padding:7px 10px;border:1.5px solid #d8c9a8;border-radius:8px;background:#fff;color:#8a7a55;font-size:11px;font-weight:800;cursor:pointer;">📷 교체</button>'
