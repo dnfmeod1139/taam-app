@@ -19,6 +19,8 @@
    └ ⚠ 이것만으로는 안 바뀐다. send-push Edge Function 을 대시보드에서 교체해야 실제로 갈린다
 - ticket_pax_change.sql               (★ 판매된 티켓의 인원 감소 + 차액 환불 RPC)
    └ 슈퍼어드민 또는 해당 매장 어드민만 실행. 돈이 움직이므로 실행자·사유가 남는다
+- ticket_admin_memo.sql                (★ 「예약」 화면의 운영 메모 — 안 돌리면 저장이 안 된다)
+   └ 권한 판정은 ticket_pax_change 와 같다. 회원이 쓴 요청사항과는 다른 칸에 저장
 - (기존) ticket_access_lists.sql / ticket_access_helpers.sql
 - (기존) invite_codes_*_rpc.sql / notifications.sql / reservation_invites*.sql / active_sessions.sql
 
