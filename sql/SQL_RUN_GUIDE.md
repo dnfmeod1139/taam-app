@@ -29,6 +29,8 @@
 - restore_missing_ticket_transactions.sql / sync_profiles_email_phone_from_auth.sql
 - taam_verified_insert.sql / chefs_geometry_sync.sql
 - fix_membership_expires_null.sql  (★ M 등급인데 만료일이 빈 회원 — 등급 산출이 T 로 내려앉는다)
+- fix_reservation_date_year.sql   (★ 2026.08 이전 예약의 방문일에 연도 채우기)
+   └ ① 미리보기로 눈으로 확인 → ② 를 벗겨 실행. 연도는 created_at 으로 도출한다
 - fix_*.sql / restore_*.sql / delete_*.sql  (특정 매장·회원 핀포인트 수정 — 대상 확인 후)
 
 ## 4️⃣ 진단용 (읽기 전용 — 안 돌려도 됨, 상태 점검할 때만)

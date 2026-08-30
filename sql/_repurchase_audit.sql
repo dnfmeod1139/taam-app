@@ -116,3 +116,46 @@ left join public.restaurants r on r.id::text = k.restaurant_id::text
 where k.buyer_name = '구자호'
   and k.purchase_id not like 'PAYH-%'
 order by k.reservation_date;
+
+
+-- ═══════════════════════════════════════════════════════════════
+-- ⑤ 구매 한 건만 낱낱이 — 「이게 뭐지」 싶은 행이 나왔을 때
+-- ═══════════════════════════════════════════════════════════════
+--   아래 구매번호를 바꿔 실행한다. extra_data 까지 통째로 편다.
+--   구매번호의 뒤쪽 13자리는 만든 시각(epoch ms)이라 언제 생긴 건지도 나온다.
+select k.purchase_id                                   as "구매번호",
+       k.created_at                                    as "만든 시각",
+       k.reservation_date                              as "방문일",
+       k.visit_time                                    as "시간",
+       k.restaurant_name                               as "매장",
+       k.buyer_name                                    as "회원명",
+       k.buyer_phone                                   as "연락처",
+       k.party_size                                    as "인원",
+       k.price                                         as "금액",
+       k.status                                        as "상태",
+       k.user_id                                       as "회원 id",
+       p.display_name                                  as "프로필 이름",
+       p.phone                                         as "프로필 번호",
+       p.role                                          as "역할",
+       k.ticket_product_id                             as "티켓 id",
+       k.extra_data                                    as "부가정보"
+from public.tickets k
+left join public.profiles p on p.id = k.user_id
+where k.purchase_id = '1776748091440_1776748397590';
+
+--   그 회원의 다른 구매도 같이 (누구 것인지 감이 안 잡힐 때)
+select k.reservation_date as "방문일", k.restaurant_name as "매장",
+       k.buyer_name as "회원명", k.price as "금액", k.status as "상태",
+       k.created_at as "만든 시각", k.purchase_id as "구매번호"
+from public.tickets k
+where k.user_id = (select user_id from public.tickets
+                    where purchase_id = '1776748091440_1776748397590')
+order by k.created_at;
+
+--   같은 티켓 상품을 산 다른 사람 (테스트 티켓이면 대개 혼자다)
+select k.buyer_name as "회원명", k.reservation_date as "방문일",
+       k.price as "금액", k.status as "상태", k.purchase_id as "구매번호"
+from public.tickets k
+where k.ticket_product_id = (select ticket_product_id from public.tickets
+                              where purchase_id = '1776748091440_1776748397590')
+order by k.created_at;
