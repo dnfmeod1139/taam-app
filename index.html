@@ -19992,8 +19992,9 @@ async function tamAddAccess(userId, type){
         var restName = (r && r.name) || (t && t.rest) || '레스토랑';
         var dateStr = '';
         if(t && t.date){
-          var dp = String(t.date).split('.');
-          if(dp.length === 2) dateStr = parseInt(dp[0],10)+'/'+parseInt(dp[1],10);
+          // 연도까지 적는다 — 「1/23」만 보면 2026 인지 2027 인지 알 수 없다
+          var _pv = (typeof _tkYMD === 'function') ? _tkYMD(t) : null;
+          dateStr = _pv ? (_pv.y + '.' + _pv.m + '.' + _pv.d) : String(t.date);
           if(t.time) dateStr += ' ' + t.time;
         }
         var bodyText = '🎫 ' + restName + (dateStr ? ' ('+dateStr+')' : '') + ' 전용 티켓 — 지금 확인하세요';
@@ -20610,8 +20611,8 @@ function openTicketDetail(id){
   document.getElementById('tdGenreAddr').textContent = r ? [_tdGenre, _tdAddr].filter(Boolean).join(' · ') : '';
 
   // Date/time
-  var parts=(t.date||'').split('.');
-  document.getElementById('tdDate').innerHTML=parts.length===2?parseInt(parts[0])+'월 '+parseInt(parts[1])+'일':t.date;
+  document.getElementById('tdDate').innerHTML =
+    (typeof _tkDateLabel === 'function') ? _tkDateLabel(t) : (t.date||'');
   var td=t.time||'–';
   if(t.time&&t.time.includes(':')){var tp=t.time.split(':'),h=parseInt(tp[0]);td=(h>12?h-12:(h===0?12:h))+':'+tp[1]+' '+(h>=12?'PM':'AM');}
   document.getElementById('tdTime').textContent=td;
@@ -20829,19 +20830,11 @@ if (heroVidEl) {
   // 🆕 i18n: EN: Jul 15 / JA: 7月15日 / KO: 7월 15일
   var _tdIsEn = (window._tkCurrentLang === 'en');
   var _tdIsJa = (window._tkCurrentLang === 'ja');
-  var dParts = (t.date||'').split('.');
-  var dStr = (t.date||'');
-  if (dParts.length === 2) {
-    var _dM = parseInt(dParts[0]), _dD = parseInt(dParts[1]);
-    if (_tdIsEn) {
-      var _mNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-      dStr = _mNames[_dM-1] + ' ' + _dD;
-    } else if (_tdIsJa) {
-      dStr = _dM + '月' + _dD + '日';
-    } else {
-      dStr = _dM + '월 ' + _dD + '일';
-    }
-  }
+  // 연도 포함 — _tkDateLabel 이 세 언어를 다 만든다.
+  //   「1월 23일」만 적으면 2026 인지 2027 인지 회원이 알 수 없다.
+  var dStr = (typeof _tkDateLabel === 'function')
+    ? _tkDateLabel(t, _tdIsEn ? 'en' : (_tdIsJa ? 'ja' : 'ko'))
+    : (t.date||'');
   var tStr   = t.time||'';
   if (tStr.includes(':')) {
     var tp = tStr.split(':'), hh = parseInt(tp[0]);
@@ -21543,10 +21536,9 @@ function updateBuyBar() {
   if (!dateEl || !timeEl) return;
 
   // 날짜: 연/월/일
-  var parts = (t.date||'').split('.');
-  var yr = new Date().getFullYear();
-  var dateStr = parts.length===2 ? yr+'년 '+parseInt(parts[0])+'월 '+parseInt(parts[1])+'일' : (t.date||'');
-  dateEl.textContent = dateStr;
+  //   ⚠ 종전에는 「올해」를 붙였다. 2027년 예약을 사면서 화면에는 2026년이
+  //     적혀 있었다 — 돈을 내기 직전 화면이라 가장 틀리면 안 되는 자리다.
+  dateEl.textContent = (typeof _tkDateLabel === 'function') ? _tkDateLabel(t) : (t.date||'');
 
   // 시간: AM/PM
   var timeStr = '–';
@@ -21881,8 +21873,8 @@ function refreshSheetSummary() {
   var wine   = parseInt(t.wineMin||0);
   // 🆕 해외 정가 구매 — 확정 정가면 차감 원화(정가 × 적용환율)가 총액. 잔액 계산도 이 기준.
   var totalPay = (typeof fxTicketCharge === 'function') ? fxTicketCharge(t, pax).krw : (meal+agency+wine)*pax;
-  var parts = (t.date||'').split('.');
-  var dateStr = parts.length===2 ? parseInt(parts[0])+'월 '+parseInt(parts[1])+'일' : t.date;
+  // 연도를 함께 적는다 — 2026·2027 예약이 같이 있어 「1월 23일」로는 못 가린다
+  var dateStr = (typeof _tkDateLabel === 'function') ? _tkDateLabel(t) : (t.date||'');
   var td=t.time||'–';
   if(t.time&&t.time.includes(':')){var tp=t.time.split(':'),h=parseInt(tp[0]);td=(h>12?h-12:(h===0?12:h))+':'+tp[1]+' '+(h>=12?'PM':'AM');}
   var h='';
@@ -22071,8 +22063,8 @@ function handleTicketAction(){
   // 🆕 해외 정가 구매 — 확정 정가면 차감 원화(정가 × 적용환율)가 총액. 잔액 계산도 이 기준.
   var totalPay = (typeof fxTicketCharge === 'function') ? fxTicketCharge(t, pax).krw : (meal+agency+wine)*pax;
 
-  var parts = (t.date||'').split('.');
-  var dateStr = parts.length===2 ? parseInt(parts[0])+'월 '+parseInt(parts[1])+'일' : t.date;
+  // 연도를 함께 적는다 — 2026·2027 예약이 같이 있어 「1월 23일」로는 못 가린다
+  var dateStr = (typeof _tkDateLabel === 'function') ? _tkDateLabel(t) : (t.date||'');
   var td=t.time||'–';
   if(t.time&&t.time.includes(':')){var tp=t.time.split(':'),h=parseInt(tp[0]);td=(h>12?h-12:(h===0?12:h))+':'+tp[1]+' '+(h>=12?'PM':'AM');}
 
@@ -22996,8 +22988,8 @@ function doCardCharge(shortage, useSavedCard) {
 
 
 function _showTdConfirmPopup(t, r, pax, meal, agency, wine, totalPay, after) {
-  var parts = (t.date||'').split('.');
-  var dateStr = parts.length===2 ? parseInt(parts[0])+'월 '+parseInt(parts[1])+'일' : t.date;
+  // 연도를 함께 적는다 — 2026·2027 예약이 같이 있어 「1월 23일」로는 못 가린다
+  var dateStr = (typeof _tkDateLabel === 'function') ? _tkDateLabel(t) : (t.date||'');
   var td=t.time||'–';
   if(t.time&&t.time.includes(':')){var tp=t.time.split(':'),h=parseInt(tp[0]);td=(h>12?h-12:(h===0?12:h))+':'+tp[1]+' '+(h>=12?'PM':'AM');}
   var sh='';
@@ -23299,15 +23291,14 @@ async function completePurchase(){
         }
         var jwt = session.access_token;
 
-        // visitDate 파싱: "11.25" 또는 "2026.11.25" → "2026-11-25"
+        // visitDate → "YYYY-MM-DD".
+        //   ⚠ 종전에는 t.date 가 '11.25' 처럼 두 토막이면 「올해」를 붙였다.
+        //     2027년 예약이 2026년으로 서버에 기록됐다. 연도는 t.dateYear 에
+        //     따로 있으므로 _tkYMD 로 읽는다.
         var visitDateISO = null;
         try {
-          var dp = (t.date||'').split('.');
-          if (dp.length === 3) {
-            visitDateISO = dp[0] + '-' + dp[1].padStart(2,'0') + '-' + dp[2].padStart(2,'0');
-          } else if (dp.length === 2) {
-            visitDateISO = now.getFullYear() + '-' + dp[0].padStart(2,'0') + '-' + dp[1].padStart(2,'0');
-          }
+          var _vy = (typeof _tkYMD === 'function') ? _tkYMD(t) : null;
+          if (_vy) visitDateISO = _vy.y + '-' + String(_vy.m).padStart(2,'0') + '-' + String(_vy.d).padStart(2,'0');
         } catch(e){}
 
         // Edge Function에 보낼 payload
@@ -30924,8 +30915,9 @@ function dhTab(idx,el){
       if(matched){
         var visitDate = matched.visitDate || '';
         var pax = matched.pax || '';
-        var parts = visitDate.split('.');
-        var visitStr = parts.length >= 2 ? parseInt(parts[0])+'월 '+parseInt(parts[1])+'일' : visitDate;
+        // ⚠ 종전에는 split('.')[0] 을 월로 읽었다. visitDate 는 'YYYY.M.D' 라
+        //   2027.1.23 이 「2027월 1일」로 찍히고 있었다.
+        var visitStr = (typeof _vdLabel === 'function') ? _vdLabel(visitDate) : visitDate;
         if(visitStr || pax){
           ticketInfo = (visitStr ? visitStr : '') + (visitStr && pax ? ' · ' : '') + (pax ? pax+'인' : '');
         }
@@ -34849,7 +34841,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.30-k';
+var TAAM_WEB_BUILD = '2026.08.30-l';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -39249,6 +39241,75 @@ function _tkFullDate(t){
 }
 window._tkFullDate = _tkFullDate;
 
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026.08-30: 방문일의 연·월·일은 여기서만 정한다
+// ═══════════════════════════════════════════════════════════════
+//   티켓은 날짜를 두 칸에 나눠 갖는다. t.date='1.23' · t.dateYear=2027.
+//   그런데 코드 곳곳에서 t.date 를 '.' 로 쪼개 쓰면서 연도를 「올해」로
+//   채웠다. 전수로 세어 보니 여덟 군데였고, 그중 하나(재구매 제한)는
+//   실제로 새어 나가 회원이 90일 안에 같은 매장을 두 번 샀다.
+//
+//   앞으로 방문일이 필요하면 t.date 를 직접 쪼개지 말고 이 셋을 쓴다.
+//     _tkYMD(t)       숫자 {y,m,d}
+//     _tkDateObj(t)   Date
+//     _tkDateLabel(t) 화면에 쓰는 글자 (연도 포함)
+function _tkYMD(t){
+  var p = String(_tkFullDate(t) || '').split('.');
+  if(p.length < 3) return null;
+  var y = parseInt(p[0],10), m = parseInt(p[1],10), d = parseInt(p[2],10);
+  if(isNaN(y) || isNaN(m) || isNaN(d)) return null;
+  if(y < 2020 || y > 2100 || m < 1 || m > 12 || d < 1 || d > 31) return null;
+  return { y:y, m:m, d:d };
+}
+function _tkDateObj(t, hh, mm){
+  var v = _tkYMD(t); if(!v) return null;
+  return new Date(v.y, v.m - 1, v.d, parseInt(hh,10) || 0, parseInt(mm,10) || 0, 0, 0);
+}
+// 화면에 쓰는 방문일. 연도를 뺄 수 없다 — 지금 앱에는 2026·2027 예약이 같이
+//   있어서 「1월 23일」만 보면 어느 해인지 알 수 없다. 회원이 돈을 내는 화면이면
+//   더더욱 안 된다.
+function _tkDateLabel(t, lang){
+  var v = _tkYMD(t);
+  if(!v) return String((t && t.date) || '');
+  var L = lang || (typeof window !== 'undefined' && window._tkCurrentLang) || 'ko';
+  if(L === 'en'){
+    var M = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return M[v.m - 1] + ' ' + v.d + ', ' + v.y;
+  }
+  if(L === 'ja') return v.y + '年' + v.m + '月' + v.d + '日';
+  return v.y + '년 ' + v.m + '월 ' + v.d + '일';
+}
+// 같은 날인지 — 연도까지 본다. 월·일만 맞춰 보면 2026.1.23 과 2027.1.23 이 섞인다
+function _tkSameDay(t, y, m, d){
+  var v = _tkYMD(t);
+  return !!v && v.y === y && v.m === m && v.d === d;
+}
+// 방문일 「문자열」용 (구매내역·알림의 visitDate = reservation_date).
+//   티켓 객체가 아니라 'YYYY.M.D' 같은 글자만 있을 때 쓴다.
+//   ⚠ 알림 목록에서 이걸 안 쓰고 split('.')[0] 을 월로 읽어, 2027.1.23 이
+//     「2027월 1일」로 찍히고 있었다.
+function _vdLabel(v, lang){
+  var s = String(v == null ? '' : v).trim();
+  if(!s) return '';
+  var p = s.split(/[.\-\/]/).map(function(x){ return parseInt(x, 10); })
+           .filter(function(x){ return !isNaN(x); });
+  var y, m, d;
+  if(p.length >= 3){ y = p[0]; m = p[1]; d = p[2]; }
+  else if(p.length === 2){ m = p[0]; d = p[1]; }
+  else return s;
+  if(m < 1 || m > 12 || d < 1 || d > 31) return s;
+  var L = lang || (typeof window !== 'undefined' && window._tkCurrentLang) || 'ko';
+  if(L === 'en'){
+    var M = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return M[m - 1] + ' ' + d + (y ? ', ' + y : '');
+  }
+  if(L === 'ja') return (y ? y + '年' : '') + m + '月' + d + '日';
+  return (y ? y + '년 ' : '') + m + '월 ' + d + '일';
+}
+window._tkYMD = _tkYMD; window._tkDateObj = _tkDateObj;
+window._tkDateLabel = _tkDateLabel; window._tkSameDay = _tkSameDay;
+window._vdLabel = _vdLabel;
+
 // 🆕 2026.08-27: 두 날짜 문자열이 같은 날인지 — 형식이 달라도 맞춘다.
 //   'MM.DD' 와 'YYYY.MM.DD' 를 문자열로 비교하면 항상 다르다. 실제로 그것 때문에
 //   초대 발송의 「티켓 연결 필요」 가드가 통째로 새어, 좌석이 안 깎이는 초대가
@@ -39344,11 +39405,10 @@ function renderTicketGenres() {
     }
     // 패치 123: 날짜 필터 (월·일 일치)
     if (_tkSelDate) {
-      var _dParts = (t.date||'').split('.');
-      if (_dParts.length !== 2) return false;
-      var _tMonth = parseInt(_dParts[0], 10);
-      var _tDay = parseInt(_dParts[1], 10);
-      if (_tMonth !== _tkSelDate.getMonth()+1 || _tDay !== _tkSelDate.getDate()) return false;
+      // ⚠ 종전에는 월·일만 맞춰 봤다. 1월 23일을 고르면 2026년과 2027년 것이
+      //   같이 나왔다 — 어느 해 티켓인지 목록에서 구별할 방법이 없었다.
+      if (typeof _tkSameDay !== 'function') return false;
+      if (!_tkSameDay(t, _tkSelDate.getFullYear(), _tkSelDate.getMonth()+1, _tkSelDate.getDate())) return false;
     }
     // 🎫 인원 필터: 선택 인원을 수용할 수 있는 슬롯이 있는지 확인
     if (_tkPax && t.slots) {
@@ -39515,22 +39575,34 @@ function tuTogglePolicy(key) {
   tuSyncAllCheckbox();
 }
 
-function tuCalcD30(dateStr) {
-  // dateStr: MM.DD → 30일 전 계산
+// 환불 경계(D-30)를 계산해 글자로 돌려준다.
+//   ⚠ 종전에는 연도를 「올해」로 잡고, 지났으면 내년으로 미는 추측을 했다.
+//     이 값은 취소 규정에 그대로 박혀 회원에게 보이는 환불 기준일이다.
+//     추측으로 정할 값이 아니다 — 연도는 항상 같이 받는다.
+function tuCalcD30(dateStr, dateYear) {
   if (!dateStr) return null;
-  var parts = dateStr.split('.');
-  if (parts.length < 2) return null;
-  var year = new Date().getFullYear();
-  var ticketDate = new Date(year, parseInt(parts[0])-1, parseInt(parts[1]));
-  if (ticketDate < new Date()) ticketDate.setFullYear(ticketDate.getFullYear()+1);
-  var d30 = new Date(ticketDate.getTime() - 30*86400000);
-  return d30.getFullYear()+'년 '+( d30.getMonth()+1)+'월 '+d30.getDate()+'일';
+  var parts = String(dateStr).split('.');
+  var y, mi, dd;
+  if (parts.length >= 3){ y = parseInt(parts[0],10); mi = parseInt(parts[1],10)-1; dd = parseInt(parts[2],10); }
+  else if (parts.length === 2){
+    mi = parseInt(parts[0],10)-1; dd = parseInt(parts[1],10);
+    y = parseInt(dateYear, 10);
+    if (isNaN(y) || y < 2020 || y > 2100){
+      // 연도를 끝내 모르면 예전 규칙(올해 → 지났으면 내년)으로 물러난다.
+      //   틀릴 수 있으므로 여기까지 오지 않게 호출부에서 연도를 넘겨야 한다.
+      y = new Date().getFullYear();
+      if (new Date(y, mi, dd) < new Date()) y++;
+    }
+  } else return null;
+  if (isNaN(y) || isNaN(mi) || isNaN(dd)) return null;
+  var d30 = new Date(new Date(y, mi, dd).getTime() - 30*86400000);
+  return d30.getFullYear()+'년 '+(d30.getMonth()+1)+'월 '+d30.getDate()+'일';
 }
 
 function tuUpdatePolicyD30() {
   var el = document.getElementById('tuPolicyD30');
   if (!el) return;
-  var d30 = tuCalcD30(_tuSelectedDate);
+  var d30 = tuCalcD30(_tuSelectedDate, _tuSelectedDateYear);
   el.textContent = d30 || '날짜 미지정';
 }
 
@@ -39546,7 +39618,7 @@ function buildPolicyClauses(tk) {
     text: t('policy.p1')
   });
   if (cp.p2) {
-    var d30 = tuCalcD30(tk.date) || '';
+    var d30 = tuCalcD30(tk.date, tk.dateYear) || '';
     clauses.push({
       num:'CLAUSE 02',
       text: t('policy.p2_a')+'<strong>'+d30+'</strong>'+t('policy.p2_b')
@@ -44931,19 +45003,11 @@ function _ticketCardHtml(t,r){
   }
 
   // 날짜 형식 (EN: Jul 15 / JA: 7月15日 / KO: 7월 15일)
-  var dParts = (t.date||'').split('.');
-  var dStr = (t.date||'');
-  if (dParts.length===2) {
-    var _dM = parseInt(dParts[0]), _dD = parseInt(dParts[1]);
-    if (_cIsEn) {
-      var _mNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-      dStr = _mNames[_dM-1] + ' ' + _dD;
-    } else if (_cIsJa) {
-      dStr = _dM + '月' + _dD + '日';
-    } else {
-      dStr = _dM + '월 ' + _dD + '일';
-    }
-  }
+  // 연도 포함 — _tkDateLabel 이 세 언어를 다 만든다.
+  //   「1월 23일」만 적으면 2026 인지 2027 인지 회원이 알 수 없다.
+  var dStr = (typeof _tkDateLabel === 'function')
+    ? _tkDateLabel(t, _cIsEn ? 'en' : (_cIsJa ? 'ja' : 'ko'))
+    : (t.date||'');
 
   // 영문 지역 / 구역 / 나라·장르 추출
   //   - 1행: 지역(cityEn, 22px) + 구역(zoneEn, 13px ≈ 60%) 같은 행 인라인
@@ -49376,11 +49440,12 @@ function tcalRender() {
   var ticketMap = {}; // 'MM.DD' → { active: bool, soldout: bool }
   _tcalScopedTickets().forEach(function(t) {
     if (t.status==='hidden'||t.status==='pending') return;
-    var parts = (t.date || '').split('.');
-    var m = parseInt(parts[0]), d = parseInt(parts[1]);
-    if (isNaN(m) || isNaN(d)) return;
-    var year = _tcalYear; // 날짜는 MM.DD 포맷이라 연도는 현재 기준
-    if (m - 1 !== _tcalMonth) return;
+    // ⚠ 종전에는 월만 맞춰 봤다(「연도는 현재 기준」이라 적혀 있었다). 그래서
+    //   2027.1.23 티켓이 2026년 1월 칸에도 똑같이 찍혔다. 연도까지 본다.
+    var v = (typeof _tkYMD === 'function') ? _tkYMD(t) : null;
+    if (!v) return;
+    var m = v.m, d = v.d;
+    if (v.y !== _tcalYear || m - 1 !== _tcalMonth) return;
     var key = t.date;
     if (!ticketMap[key]) ticketMap[key] = { active: false, soldout: false };
     if (t.status === 'soldout') ticketMap[key].soldout = true;
@@ -49593,17 +49658,35 @@ function tcalCloseBuyer() {
 // ── 카운트다운 엔진 ──
 var _cdInterval = null;
 
-function tcGetDatetime(dateStr, timeStr) {
-  // dateStr: MM.DD, timeStr: HH:MM
+// 판매 오픈일·마감시한을 Date 로. 이 둘은 'MM.DD' 로만 저장돼 연도가 없다.
+//   ⚠ 종전에는 「올해」를 붙였다. 2027.1.23 티켓의 오픈일 2026.12.01 이
+//     2026 이 아니라 올해로 계산돼 카운트다운이 한 해씩 어긋났다.
+//   연도를 따로 저장하지 않고도 정할 수 있다 — 오픈일도 마감시한도 반드시
+//   방문일 이전이다. 그래서 방문일(ref)을 기준으로 「방문일 이전이면서 가장
+//   가까운 해」를 고른다. 스키마를 안 건드리고 맞출 수 있는 유일한 방법이다.
+function tcGetDatetime(dateStr, timeStr, ref) {
   if (!dateStr || !timeStr) return null;
-  var dp = dateStr.split('.'), tp = timeStr.split(':');
-  var d = new Date(new Date().getFullYear(), parseInt(dp[0])-1, parseInt(dp[1]), parseInt(tp[0]), parseInt(tp[1]), 0);
-  return d;
+  var dp = String(dateStr).split('.'), tp = String(timeStr).split(':');
+  var hh = parseInt(tp[0],10) || 0, mi = parseInt(tp[1],10) || 0;
+  if (dp.length >= 3){
+    var d3 = new Date(parseInt(dp[0],10), parseInt(dp[1],10)-1, parseInt(dp[2],10), hh, mi, 0);
+    return isNaN(d3.getTime()) ? null : d3;
+  }
+  if (dp.length !== 2) return null;
+  var m = parseInt(dp[0],10)-1, dd = parseInt(dp[1],10);
+  if (isNaN(m) || isNaN(dd)) return null;
+  var base = (ref instanceof Date && !isNaN(ref.getTime())) ? ref : new Date();
+  // 기준은 방문일의 「끝」이다. 자정으로 비교하면 방문 당일 오전에 잡은
+  //   마감시한이 「방문일보다 뒤」로 판정돼 한 해 전으로 밀린다.
+  var end = new Date(base.getFullYear(), base.getMonth(), base.getDate(), 23, 59, 59);
+  var cand = new Date(end.getFullYear(), m, dd, hh, mi, 0);
+  if (cand > end) cand = new Date(end.getFullYear() - 1, m, dd, hh, mi, 0);   // 방문일보다 뒤면 전 해
+  return cand;
 }
 
 function tcGetTOpenDatetime(t) {
   if (!t.mOpenDate || !t.mOpenTime) return null;
-  var mOpen = tcGetDatetime(t.mOpenDate, t.mOpenTime);
+  var mOpen = tcGetDatetime(t.mOpenDate, t.mOpenTime, _tkDateObj(t));
   if (!mOpen) return null;
   var ms = t.tOpenUnit === 'day' ? (t.tOpenDelay||24)*86400000 : (t.tOpenDelay||24)*3600000;
   return new Date(mOpen.getTime() + ms);
@@ -49668,14 +49751,14 @@ window.showTierLockPopup = showTierLockPopup;
 function tcIsLocked(t) {
   // 완전 잠금 = M오픈 시간도 아직 안 지남
   if (!t.gradeOpen || !t.mOpenDate || !t.mOpenTime) return false;
-  var mOpen = tcGetDatetime(t.mOpenDate, t.mOpenTime);
+  var mOpen = tcGetDatetime(t.mOpenDate, t.mOpenTime, _tkDateObj(t));
   return mOpen && new Date() < mOpen;
 }
 
 function tcIsMOnly(t) {
   // M등급만 열려있는 상태 (mOpen 지났지만 tOpen 안 지남)
   if (!t.gradeOpen || !t.mOpenDate || !t.mOpenTime) return false;
-  var mOpen = tcGetDatetime(t.mOpenDate, t.mOpenTime);
+  var mOpen = tcGetDatetime(t.mOpenDate, t.mOpenTime, _tkDateObj(t));
   var tOpen = tcGetTOpenDatetime(t);
   var now = new Date();
   return mOpen && tOpen && now >= mOpen && now < tOpen;
@@ -49707,11 +49790,11 @@ function tickCountdowns() {
       label = '';
     } else if (t && t.countdown && t.deadlineDate && t.deadlineTime) {
       // 마감 카운트다운
-      target = tcGetDatetime(t.deadlineDate, t.deadlineTime);
+      target = tcGetDatetime(t.deadlineDate, t.deadlineTime, _tkDateObj(t));
       label = '마감시한';
     } else if (t && t.countdown && t.date && t.time) {
       // 예약일 카운트다운
-      target = tcGetDatetime(t.date, t.time);
+      target = _tkDateObj(t, (String(t.time).split(':')[0]), (String(t.time).split(':')[1]));
       label = '마감시한';
     }
 
@@ -50113,8 +50196,10 @@ function partnerCalRender() {
   var daysInMonth = new Date(_partnerCalYear, _partnerCalMonth+1, 0).getDate();
   var ticketMap = {};
   ticketDB.filter(function(t){ return String(t.restId)===String(_currentAdminRestId)&&t.status==='active'&&(t.uploaderRestId===_currentAdminRestId||t.uploadedBy===_currentAdminRestId); }).forEach(function(t){
-    var p=(t.date||'').split('.');
-    if(parseInt(p[0])-1===_partnerCalMonth){ var key=t.date; if(!ticketMap[key])ticketMap[key]={active:false}; ticketMap[key].active=true; }
+    // ⚠ 종전에는 월만 맞춰 봤다. 2027년 티켓이 2026년 같은 달 칸에도 찍혔다
+    var _pv = (typeof _tkYMD === 'function') ? _tkYMD(t) : null;
+    if(_pv && _pv.y===_partnerCalYear && _pv.m-1===_partnerCalMonth){
+      var key=t.date; if(!ticketMap[key])ticketMap[key]={active:false}; ticketMap[key].active=true; }
   });
   var html='';
   for(var i=0;i<firstDay;i++) html+='<div class="tcal-cell empty"></div>';
@@ -50448,7 +50533,7 @@ function tcShowLockPopup(t, r) {
   if (!sheet) return;
 
   // M오픈 시간 (= 이 팝업의 기준 오픈 시간)
-  var mOpen = tcGetDatetime(t.mOpenDate, t.mOpenTime);
+  var mOpen = tcGetDatetime(t.mOpenDate, t.mOpenTime, _tkDateObj(t));
   var tOpen = tcGetTOpenDatetime(t);
 
   // 날짜 포맷 헬퍼
