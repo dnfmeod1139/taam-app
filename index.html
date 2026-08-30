@@ -2209,6 +2209,36 @@ html.auto-login .splash .bottom-group{display:none !important}
 .rv-memo i{display:block;font-style:normal;font-size:9.5px;font-weight:800;letter-spacing:.1em;
   color:#A07E3B;margin-bottom:3px}
 
+/* ═══ 🆕 2026.08-30 「회원」 화면 ═══
+   카드·칩·상태색은 「오늘」·「예약」 것을 그대로 쓴다. 색은 상태에만 쓴다. */
+#mbBody{overflow-x:hidden;overscroll-behavior-x:none;touch-action:pan-y}
+#mbBody .mb-nm,#mbBody .mb-sub,#mbBody .tb-empty{overflow-wrap:anywhere}
+.mb-bar{flex:none;background:#f7f5f2;border-bottom:1px solid rgba(0,0,0,.06);padding:10px 14px 11px}
+.mb-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;width:100%;text-align:left;
+  background:#fff;border:1px solid #e3dcce;border-radius:12px;padding:12px 14px;margin-bottom:8px;
+  cursor:pointer;font-family:var(--font-main);color:#17150f}
+.mb-row.gone{opacity:.45}
+.mb-row .mb-nm{display:block;font-size:13.5px;font-weight:800;line-height:1.4}
+.mb-row .mb-sub{display:block;font-size:11.5px;color:#79736a;margin-top:3px}
+.mb-row .mb-right{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex:none}
+.mb-tier{display:inline-block;font-size:10px;font-weight:800;letter-spacing:.06em;
+  padding:2px 8px;border-radius:6px}
+.mb-t-M{color:#7A5C1E;background:#F7EDD6}
+.mb-t-T{color:#46413A;background:#EFECE6}
+.mb-t-A{color:#3A5A6B;background:#E7EFF4}
+.mb-t-none{color:#7A736A;background:#EFECE6}
+.mb-bal{font-family:'Montserrat',sans-serif;font-size:12px;font-weight:800;color:#17150f}
+.mb-bal.zero{color:#a69f94;font-weight:700}
+/* 「등급이 실제로 안 먹는」 회원 — 이 화면이 있는 가장 큰 이유다 */
+.mb-warn{display:block;font-size:11px;font-weight:700;color:#9B1C1C;background:#FBEBE9;
+  border:1px solid #F2D5D1;border-radius:8px;padding:6px 9px;margin-top:7px;line-height:1.5}
+.tb-chip.warn{color:#9B1C1C;border-color:#F2D5D1;background:#FBEBE9}
+.tb-chip.warn .k{color:#9B1C1C;opacity:.7}
+.tb-chip.warn.on{background:#9B1C1C;color:#fff;border-color:#9B1C1C}
+.tb-chip.warn.on .k{color:#fff;opacity:.75}
+.mb-note{font-size:11.5px;color:#79736a;line-height:1.7;background:#fcfaf5;border:1px dashed #e3dcce;
+  border-radius:10px;padding:11px 12px;margin:0 0 12px}
+
 .sub-item-title{font-size:14px;font-weight:700;color:#111;margin-bottom:4px}
 .sub-item-meta{font-family:var(--font-main);font-size:10px;color:#aaa}
 .sub-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:200px;color:#ccc;font-size:13px;gap:8px}
@@ -10517,6 +10547,17 @@ window.closePromoCarousel = function(){
         </span>
         <span style="color:#a69f94;font-size:17px;">›</span>
       </button>
+      <!-- 🆕 2026.08-30: 「회원」 — 찾기 + 실효 등급. 슈퍼어드민만 -->
+      <button id="mbMenuBtn" onclick="mbOpen()" style="display:none;width:100%;align-items:center;gap:12px;text-align:left;
+        background:#fff;border:1px solid #e3dcce;border-radius:13px;padding:14px 17px;margin-top:8px;
+        cursor:pointer;font-family:var(--font-main);">
+        <span style="flex:1;min-width:0;">
+          <span style="display:block;font-size:14px;font-weight:800;color:#17150f;">회원</span>
+          <span style="display:block;font-size:11.5px;color:#79736a;margin-top:2px;">찾기 · 등급 · 예치금 · 원장</span>
+        </span>
+        <span id="mbMenuBadge" style="flex:none;"></span>
+        <span style="color:#a69f94;font-size:17px;">›</span>
+      </button>
     </div>
     <!-- ════════ 0. Quick Access (자주 쓰는 항목 바로가기 — 슈퍼어드민 편집 가능) ════════ -->
     <div style="padding:14px 16px 4px;">
@@ -12274,6 +12315,24 @@ window.closePromoCarousel = function(){
     <div id="rvFilters"></div>
   </div>
   <div id="rvBody" class="sub-content" style="padding:0 14px 90px;"></div>
+</div>
+
+<!-- 🆕 2026.08-30: 「회원」 — 찾고, 실효 등급을 보고, 바로 처리한다 -->
+<div id="mbScreen" class="sub-screen" data-lang-lock="ko" style="display:none;">
+  <div class="sub-header">
+    <button class="sub-back" onclick="closeSubPage('mbScreen')">←</button>
+    <div class="sub-title">회원</div>
+    <div id="mbCount" style="margin-left:auto;font-family:var(--font-main);font-size:11.5px;font-weight:700;color:#79736a;"></div>
+  </div>
+  <div class="mb-bar">
+    <!-- 검색칸은 한 번만 그린다. 다시 그리면 글자를 치는 도중 포커스가 날아간다 -->
+    <div class="rv-q">
+      <input id="mbQ" type="search" autocomplete="off" placeholder="이름 · 연락처 · 이메일" aria-label="회원 찾기">
+      <button id="mbQX" onclick="mbClearQ()" aria-label="지우기" style="display:none;">×</button>
+    </div>
+    <div id="mbFilters"></div>
+  </div>
+  <div id="mbBody" class="sub-content" style="padding:14px 14px 90px;"></div>
 </div>
 
 <div id="restListScreen" class="sub-screen" data-lang-lock="ko" style="display:none;">
@@ -29643,6 +29702,294 @@ async function rvMemoSave(pid, del){
 window.rvMemoOpen = rvMemoOpen; window.rvMemoClose = rvMemoClose; window.rvMemoSave = rvMemoSave;
 
 
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026.08-30 「회원」 — 찾고, 실효 등급을 보고, 바로 처리한다
+// ═══════════════════════════════════════════════════════════════
+//   기존 「회원 목록」에 없던 것이 둘이다.
+//     ① 검색. 회원이 늘면 스크롤로는 못 찾는다.
+//     ② 실효 등급. profiles.membership_tier 가 'M' 이어도 만료일이 없거나
+//        지났으면 앱은 그 회원을 T 로 취급한다(_refreshUserGrade). 그런데
+//        목록은 저장된 값만 보여줘서, 어드민 눈에는 M 인데 회원은 M 티켓을
+//        못 사는 상태가 보이지 않았다. 실제로 회원 세 명이 그랬다.
+//   그래서 이 화면은 「저장된 등급」이 아니라 「지금 실제로 먹는 등급」을 센다.
+var _mbRows = null;
+var _mbState = { q:'', filter:'all', open:null };
+var _mbQTimer = null;
+
+// 실효 등급 — _refreshUserGrade 와 같은 규칙이라야 한다.
+//   여기가 앱과 다르게 계산하면 어드민이 보는 화면과 회원이 겪는 현실이 갈린다.
+function _mbGrade(p){
+  var tier = p && p.membership_tier;
+  var exp  = p && p.membership_expires_at;
+  var active = tier === 'M' && exp && new Date(exp) > new Date();
+  var eff = active ? 'M' : (tier === 'M' ? 'T' : (tier === 'T' ? 'T' : (tier === 'A' ? 'A' : null)));
+  return {
+    saved: tier || null,
+    eff: eff,
+    // 저장된 값과 실제가 다르면 손봐야 한다
+    broken: (tier === 'M' && !active),
+    expiredAt: exp || null
+  };
+}
+function _mbBal(p){
+  return (parseInt(p && p.membership_deposit_balance, 10) || 0)
+       + (parseInt(p && p.general_deposit_balance, 10) || 0);
+}
+function _mbDate(iso){
+  if(!iso) return '';
+  var d = new Date(iso);
+  if(isNaN(d.getTime())) return '';
+  return d.getFullYear() + '.' + String(d.getMonth()+1).padStart(2,'0') + '.' + String(d.getDate()).padStart(2,'0');
+}
+// 만료가 며칠 남았나 (음수 = 이미 지남)
+function _mbDaysLeft(iso){
+  if(!iso) return null;
+  var d = new Date(iso);
+  if(isNaN(d.getTime())) return null;
+  return Math.floor((d - new Date()) / 86400000);
+}
+
+async function mbOpen(){
+  if(!(typeof _isSuperAdmin === 'function' && _isSuperAdmin())){
+    if(typeof showToast === 'function') showToast('🔒','권한 부족','슈퍼어드민 전용');
+    return;
+  }
+  _mbState = { q:'', filter:'all', open:null };
+  openSubPage('mbScreen');
+  var q = document.getElementById('mbQ');
+  if(q){
+    q.value = '';
+    q.oninput = function(){
+      var v = this.value;
+      clearTimeout(_mbQTimer);
+      _mbQTimer = setTimeout(function(){
+        _mbState.q = v; _mbState.open = null;
+        var x = document.getElementById('mbQX'); if(x) x.style.display = v ? '' : 'none';
+        _mbRenderFilters(); _mbRenderBody();
+      }, 160);
+    };
+  }
+  var b = document.getElementById('mbBody');
+  if(b) b.innerHTML = '<div class="tb-empty">불러오는 중…</div>';
+  await _mbLoad();
+  _mbRender();
+}
+window.mbOpen = mbOpen;
+
+async function _mbLoad(){
+  if(!window.sb){ _mbRows = []; return; }
+  try{
+    // select('*') — 컬럼이 없는 DB 에서도 조회가 통째로 깨지지 않게 (renderMemberList 와 같은 이유)
+    var res = await window.sb.from('profiles').select('*')
+      .order('created_at', { ascending:false }).limit(1000);
+    if(res.error){ console.warn('[member] 조회 실패:', res.error.message); _mbRows = []; return; }
+    _mbRows = res.data || [];
+  }catch(e){ console.warn('[member] 예외:', e); _mbRows = []; }
+}
+
+function _mbHit(p, q){
+  if(!q) return true;
+  var hay = ((p.display_name || '') + ' ' + (p.email || '') + ' ' + (p.phone || '')).toLowerCase();
+  if(hay.indexOf(q) >= 0) return true;
+  var d = q.replace(/[^0-9]/g, '');
+  if(d.length >= 2 && String(p.phone || '').replace(/[^0-9]/g, '').indexOf(d) >= 0) return true;
+  return false;
+}
+function _mbBase(){
+  var q = _mbState.q.trim().toLowerCase();
+  return (_mbRows || []).filter(function(p){ return _mbHit(p, q); });
+}
+function _mbPass(p, f){
+  var g = _mbGrade(p);
+  if(f === 'all')    return !p.deleted_at;          // 기본은 살아 있는 회원만
+  if(f === 'broken') return !p.deleted_at && g.broken;
+  if(f === 'M')      return !p.deleted_at && g.eff === 'M';
+  if(f === 'T')      return !p.deleted_at && g.eff === 'T';
+  if(f === 'bal')    return !p.deleted_at && _mbBal(p) > 0;
+  if(f === 'soon'){                                  // 30일 안에 만료
+    if(p.deleted_at || g.eff !== 'M') return false;
+    var dl = _mbDaysLeft(g.expiredAt);
+    return dl !== null && dl >= 0 && dl <= 30;
+  }
+  if(f === 'gone')   return !!p.deleted_at;
+  return true;
+}
+
+function _mbRender(){ _mbRenderFilters(); _mbRenderBody(); }
+
+function _mbRenderFilters(){
+  var el = document.getElementById('mbFilters');
+  if(!el) return;
+  var base = _mbBase();
+  var cnt = {};
+  ['all','broken','M','T','bal','soon','gone'].forEach(function(f){
+    cnt[f] = base.filter(function(p){ return _mbPass(p, f); }).length;
+  });
+  // 0건인 칩은 만들지 않는다 (「오늘」·「예약」과 같은 규칙)
+  var chips = [['all','전체']];
+  if(cnt.broken) chips.push(['broken','확인 필요']);
+  [['M','M 등급'], ['T','T 등급'], ['bal','예치금 보유'], ['soon','만료 임박'], ['gone','탈퇴']]
+    .forEach(function(c){ if(cnt[c[0]]) chips.push(c); });
+  if(!cnt[_mbState.filter]) _mbState.filter = 'all';
+  el.innerHTML = (chips.length > 1)
+    ? '<div class="tb-chips" style="margin:9px 0 0;">' + chips.map(function(c){
+        // 「확인 필요」만 색을 준다 — 이모지 대신 색으로 눈에 걸리게 한다
+        return '<button class="tb-chip' + (c[0] === 'broken' ? ' warn' : '')
+          + (_mbState.filter === c[0] ? ' on' : '') + '" '
+          + 'onclick="mbSetFilter(\'' + c[0] + '\')">' + c[1]
+          + '<span class="k">' + cnt[c[0]] + '</span></button>';
+      }).join('') + '</div>'
+    : '';
+}
+
+function _mbRenderBody(){
+  var el = document.getElementById('mbBody');
+  if(!el) return;
+  if(_mbRows === null){ el.innerHTML = '<div class="tb-empty">불러오는 중…</div>'; return; }
+
+  var list = _mbBase().filter(function(p){ return _mbPass(p, _mbState.filter); });
+  // 손봐야 하는 회원을 맨 위로. 그다음 가입 최신순.
+  list.sort(function(a,b){
+    var ab = _mbGrade(a).broken ? 0 : 1, bb = _mbGrade(b).broken ? 0 : 1;
+    if(ab !== bb) return ab - bb;
+    return String(b.created_at || '').localeCompare(String(a.created_at || ''));
+  });
+
+  var head = document.getElementById('mbCount');
+  if(head) head.textContent = list.length ? (list.length + '명') : '';
+
+  if(!list.length){
+    el.innerHTML = '<div class="tb-empty">'
+      + (_mbState.q.trim()
+          ? '「' + _tbEsc(_mbState.q.trim()) + '」로 찾은 회원이 없습니다.'
+            + '<br><span style="color:#a69f94">이름 · 연락처 · 이메일로 찾습니다.</span>'
+          : '해당하는 회원이 없습니다.')
+      + '</div>';
+    return;
+  }
+
+  var h = '';
+  // 손봐야 할 회원이 있으면 왜 그런지 한 번만 설명한다
+  var brokenN = _mbBase().filter(function(p){ return _mbPass(p, 'broken'); }).length;
+  if(brokenN && (_mbState.filter === 'all' || _mbState.filter === 'broken')){
+    h += '<div class="mb-note"><b style="color:#9B1C1C;">확인 필요 ' + brokenN + '명</b> — '
+      + 'M 등급으로 저장돼 있지만 만료일이 없거나 지났습니다. 앱은 이 회원을 <b>T 로 취급</b>하므로 '
+      + 'M 전용 티켓을 살 수 없습니다. 열어서 만료일을 넣어주세요.</div>';
+  }
+  list.forEach(function(p){ h += _mbRow(p); });
+  el.innerHTML = h;
+}
+
+function _mbRow(p){
+  var g = _mbGrade(p);
+  var uid = String(p.id || '');
+  var esc = _tbEsc(uid).replace(/'/g, "\\'");
+  var bal = _mbBal(p);
+  var gone = !!p.deleted_at;
+  var role = String(p.role || '');
+  var roleLbl = (role === 'super_admin' || role === 'superadmin') ? '슈퍼어드민'
+              : (role === 'admin') ? '매장 어드민' : (role === 'partner') ? '파트너' : '';
+  var dl = _mbDaysLeft(g.expiredAt);
+  var tierCls = gone ? 'mb-t-none' : ('mb-t-' + (g.eff || 'none'));
+  var tierLbl = gone ? '탈퇴' : (g.eff || '등급없음');
+
+  var sub = [];
+  if(p.phone || p.email) sub.push(_tbEsc(p.phone || p.email));
+  if(roleLbl) sub.push(roleLbl);
+  if(g.eff === 'M' && g.expiredAt){
+    sub.push('만료 ' + _mbDate(g.expiredAt) + (dl !== null && dl <= 30 ? ' (' + dl + '일)' : ''));
+  }
+
+  var h = '<button class="mb-row' + (gone ? ' gone' : '') + '" onclick="mbToggleRow(\'' + esc + '\')">'
+    + '<span style="min-width:0;">'
+      + '<span class="mb-nm">' + _tbEsc(p.display_name || '(이름 없음)') + '</span>'
+      + '<span class="mb-sub">' + sub.join(' · ') + '</span>'
+      + (g.broken && !gone
+          ? '<span class="mb-warn">저장된 등급은 M 인데 '
+            + (g.expiredAt ? '만료일이 지났습니다 (' + _mbDate(g.expiredAt) + ')' : '만료일이 비어 있습니다')
+            + ' — 지금은 T 로 동작합니다</span>'
+          : '')
+    + '</span>'
+    + '<span class="mb-right">'
+      + '<span class="mb-tier ' + tierCls + '">' + tierLbl + '</span>'
+      + '<span class="mb-bal' + (bal ? '' : ' zero') + '">' + _tbWon(bal) + '</span>'
+    + '</span></button>';
+
+  if(_mbState.open === uid){
+    var tel = String(p.phone || '').replace(/[^0-9+]/g, '');
+    h += '<div class="tb-acts">'
+      + '<button onclick="mbLedger(\'' + esc + '\')">원장</button>'
+      + '<button onclick="mbManage(\'' + esc + '\')">등급 · 만료일</button>'
+      + (tel ? '<button onclick="tbCall(\'' + tel + '\')">전화 ' + tel.slice(-4) + '</button>' : '')
+      + '</div>';
+  }
+  return h;
+}
+
+function mbSetFilter(f){ _mbState.filter = f; _mbState.open = null; _mbRenderFilters(); _mbRenderBody(); }
+function mbToggleRow(uid){ _mbState.open = (_mbState.open === uid) ? null : uid; _mbRenderBody(); }
+function mbClearQ(){
+  var q = document.getElementById('mbQ'); if(q){ q.value = ''; q.focus(); }
+  var x = document.getElementById('mbQX'); if(x) x.style.display = 'none';
+  clearTimeout(_mbQTimer);
+  _mbState.q = ''; _mbState.open = null;
+  _mbRenderFilters(); _mbRenderBody();
+}
+// 원장·등급 변경은 이미 있는 화면을 그대로 연다. 돈이 움직이는 자리를 두 벌 만들지 않는다.
+function mbLedger(uid){
+  closeSubPage('mbScreen');
+  if(typeof openMemberLedger === 'function'){
+    openMemberLedger();
+    setTimeout(function(){ try{ if(typeof mlOpen === 'function') mlOpen(uid); }catch(e){} }, 220);
+  }
+}
+function mbManage(uid){
+  var p = (_mbRows || []).find(function(x){ return String(x.id) === String(uid); });
+  if(!p) return;
+  if(typeof memOpenProfileQuick !== 'function'){
+    if(typeof showToast === 'function') showToast('⚠','열 수 없음','앱을 새로고침해주세요');
+    return;
+  }
+  memOpenProfileQuick(uid, p.display_name || '');
+  // 모달에서 등급·만료일을 고치면 이 목록도 옛 값을 들고 있다. 닫히면 다시 읽는다.
+  var chk = setInterval(function(){
+    var m = document.getElementById('memberManageModal');
+    if(!m || m.style.display === 'none'){
+      clearInterval(chk);
+      _mbLoad().then(function(){
+        var sc = document.getElementById('mbScreen');
+        if(sc && sc.style.display !== 'none') _mbRender();
+      });
+    }
+  }, 600);
+  setTimeout(function(){ clearInterval(chk); }, 120000);
+}
+window.mbSetFilter = mbSetFilter; window.mbToggleRow = mbToggleRow; window.mbClearQ = mbClearQ;
+window.mbLedger = mbLedger; window.mbManage = mbManage;
+
+// 어드민 메뉴의 「회원」 버튼에 붙는 배지 — 손봐야 할 회원 수.
+//   화면을 열어봐야만 알 수 있으면 아무도 안 연다. 메뉴에서 먼저 보이게 한다.
+//   회원 전체를 받아오지 않고 건수만 센다(head:true) — 메뉴 열 때마다 도는 질의다.
+async function _mbBadge(){
+  var el = document.getElementById('mbMenuBadge');
+  if(!el || !window.sb) return;
+  try{
+    var res = await window.sb.from('profiles')
+      .select('id', { count:'exact', head:true })
+      .eq('membership_tier', 'M')
+      .is('deleted_at', null)
+      .or('membership_expires_at.is.null,membership_expires_at.lt.' + new Date().toISOString());
+    if(res.error){ el.innerHTML = ''; return; }
+    var n = res.count || 0;
+    el.innerHTML = n
+      ? '<span style="display:inline-block;background:#FBEBE9;color:#9B1C1C;border:1px solid #F2D5D1;'
+        + 'border-radius:7px;padding:3px 8px;font-size:10.5px;font-weight:800;">확인 ' + n + '</span>'
+      : '';
+  }catch(e){ el.innerHTML = ''; }
+}
+window._mbBadge = _mbBadge;
+
+
 // 회원 통화 지정 — profiles.currency 갱신 후 원장 새로고침.
 //   null = 미지정(자동): 화면 언어 폴백으로 되돌린다.
 async function mlSetCur(uid, cur){
@@ -31771,8 +32118,13 @@ function _qaCat(id){ for(var i=0;i<QA_CATALOG.length;i++){ if(QA_CATALOG[i].id==
 
 function qaLoad(){
   // 편집 버튼은 슈퍼어드민에게만
+  var _isSuper = (typeof _currentRole!=='undefined' && _currentRole==='superadmin');
   var eb = document.getElementById('qaEditBtn');
-  if(eb) eb.style.display = (typeof _currentRole!=='undefined' && _currentRole==='superadmin') ? 'block' : 'none';
+  if(eb) eb.style.display = _isSuper ? 'block' : 'none';
+  // 🆕 2026.08-30: 「회원」 메뉴도 슈퍼어드민에게만. 손봐야 할 회원 수를 배지로 먼저 알린다
+  var mb = document.getElementById('mbMenuBtn');
+  if(mb) mb.style.display = _isSuper ? 'flex' : 'none';
+  if(_isSuper) _mbBadge();
   if(!window.sb){ renderQuickAccess(); return; }
   window.sb.from('app_config').select('value').eq('key','quick_access').maybeSingle().then(function(res){
     var v = res && res.data && res.data.value;
@@ -34852,7 +35204,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.30-m';
+var TAAM_WEB_BUILD = '2026.08.30-n';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
