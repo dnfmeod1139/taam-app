@@ -15852,7 +15852,9 @@ async function cancelMyInvite(inviteId){
 
     // 3) 호스트(슈퍼어드민)에게 인앱 알림 + 푸시
     try {
-      var notifTitle = '❌ 회원이 초대를 취소했습니다';
+      // 이름은 제목에 들어가야 한다 — 벨 목록에 보이는 건 제목이다
+      var _cvWho = (await _taamMyName()) || '회원';
+      var notifTitle = '❌ ' + _cvWho + '님이 초대를 취소했습니다';
       var visitDisp = (inv.visit_date || '') + ' ' + (inv.visit_time || '');
       var notifBody = (inv.restaurant_name || '') + ' · ' + visitDisp + ' · ' + inv.pax + '인 · ₩' + (inv.total_amount||0).toLocaleString();
       var nIns = await window.sb.from('notifications').insert({
@@ -15889,9 +15891,6 @@ async function cancelMyInvite(inviteId){
       //   호스트가 아닌 다른 슈퍼어드민도 좌석이 풀린 것을 알아야 한다.
       try {
         if(typeof taamNotifyAdmins === 'function'){
-          // 전역이 비어 있으면 profiles·번호 뒷자리까지 찾아본다 (_taamMyName).
-          //   종전엔 전역만 보고 바로 '회원' 으로 떨어져, 알림에 이름이 안 나왔다.
-          var _cvWho = (await _taamMyName()) || '회원';
           var _cvAt  = new Date().toLocaleString('ko-KR', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
           await taamNotifyAdmins({
             type: 'invite_cancelled',
@@ -26706,9 +26705,13 @@ async function cancelTicketPurchase(purchaseId, refundCalc, isSuperAdminOverride
     //   send-push 는 role/all/topic scope 에서 호출자(취소한 회원) uid 를 자동 제외하므로
     //   슈퍼어드민만 수신. role 문자열이 환경에 따라 'superadmin'/'super_admin' 둘 다 존재 → 양쪽 발송.
     try {
+      // ⚠ 이름은 제목에 들어가야 한다. 잠금화면에 보이는 건 제목이다.
+      //   종전에는 본문에만 이름을 넣고 제목은 「회원이 티켓을 취소했습니다」로
+      //   박아 뒀다. 그래서 본문을 고쳐도 폰에는 계속 「회원이…」로 떴다.
+      var _cxWho = (await _taamMyName()) || '회원';
       // 카드 환불 대기가 있으면 제목에 🔴 를 붙여 슈퍼어드민이 토스에서 카드 환불하도록 강조
       var _cxTitle = (_cardRefund > 0 ? '🔴 카드 환불 필요 — ' : '')
-                   + (h.isInvited ? '회원이 초대 티켓을 취소했습니다' : '회원이 티켓을 취소했습니다');
+                   + _cxWho + (h.isInvited ? '님이 초대 티켓을 취소했습니다' : '님이 티켓을 취소했습니다');
       var _cxVisit = (h.visitDate || '') + (h.visitTime ? (' ' + h.visitTime) : '');
       var _cxBody = (r ? r.name : (h.restName || '티켓')) + ' · ' + _cxVisit + ' · ' + (h.pax || 1) + '인 · ₩' + (h.amt || 0).toLocaleString()
                   + (_depositRefund > 0 ? (' · 예치금환불 ₩' + _depositRefund.toLocaleString()) : '')
@@ -26716,9 +26719,7 @@ async function cancelTicketPurchase(purchaseId, refundCalc, isSuperAdminOverride
                        ? ('\n💳 카드 환불 필요: ₩' + _cardRefund.toLocaleString()
                           + ' (토스에서 승인취소' + (_ex0.order_id ? (' · 주문 ' + _ex0.order_id) : '') + ')')
                        : (_depositRefund > 0 ? '' : ' · 환불 없음'));
-      // 🆕 2026.08-27: 취소 시각 + 누가 취소했는지 본문에 남긴다
-      // 전역이 비어 있으면 profiles·번호 뒷자리까지 찾아본다 (_taamMyName)
-      var _cxWho = (await _taamMyName()) || '회원';
+      // 🆕 2026.08-27: 취소 시각도 본문에 남긴다 (_cxWho 는 제목에서 이미 구했다)
       var _cxAt  = new Date().toLocaleString('ko-KR', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
       if(typeof taamNotifyAdmins === 'function'){
         taamNotifyAdmins({
@@ -35264,7 +35265,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.30-o';
+var TAAM_WEB_BUILD = '2026.08.30-p';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -36277,7 +36278,9 @@ async function riConfirmPay(){
     // 2.5) 호스트(슈퍼어드민)에게 결제 완료 통지 — 인앱 알림 + 푸시
     //   (cancelMyInvite 의 호스트 통지 패턴과 동일)
     try {
-      var paidTitle = '💳 회원이 초대 결제를 완료했습니다';
+      // 이름은 제목에 들어가야 한다
+      var _pvWho = (await _taamMyName()) || '회원';
+      var paidTitle = '💳 ' + _pvWho + '님이 초대 결제를 완료했습니다';
       var paidVisit = (inv.visit_date || '') + ' ' + (inv.visit_time || '');
       var paidBody = (inv.restaurant_name || '') + ' · ' + paidVisit + ' · ' + (inv.pax||1) + '인 · ₩' + (inv.total_amount||0).toLocaleString();
       if(inv.host_user_id){
@@ -36306,8 +36309,6 @@ async function riConfirmPay(){
       //   위 INSERT 는 결제한 회원 세션이라 RLS 에 막힌다 — 이력이 안 남았다.
       //   금전이 오간 건이므로 반드시 기록으로 남아야 한다.
       if(typeof taamNotifyAdmins === 'function'){
-        // 전역이 비어 있으면 profiles·번호 뒷자리까지 찾아본다 (_taamMyName)
-        var _pvWho = (await _taamMyName()) || '회원';
         var _pvAt  = new Date().toLocaleString('ko-KR', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
         await taamNotifyAdmins({
           type: 'invite_paid',
@@ -54227,8 +54228,10 @@ window.pushTestPurchase = async function(){
   if(typeof pushSend !== 'function'){ alert('pushSend 함수 미정의'); return; }
   // 실제 completePurchase() 의 구매 알림과 동일한 형태(예시 데이터)
   var sample = '스시 사이토 · 2026-07-15 18:00 · 2인 · ₩300,000';
+  // 미리보기도 실제와 같은 문구라야 의미가 있다 — 이름을 넣는다
+  var _tpWho = (await _taamMyName()) || '회원';
   var res = await pushSend('user', {
-    title: '🎫 회원이 티켓을 구매했습니다',
+    title: '🎫 ' + _tpWho + '님이 티켓을 구매했습니다',
     body: sample,
     url: '/',
     category: 'ticket_purchased',
