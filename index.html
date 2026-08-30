@@ -23418,7 +23418,20 @@ async function completePurchase(){
     // popup 외에 별도 토스트는 표시 안 함(persist만) — 사용자가 종모양에서 확인
     showToast('🎫','티켓 예약 완료', msg2, { category:'ticket', native:true });
     // 🆕 본인 다른 기기에도 푸시 발송 (PC + 폰 동기화)
-    if(typeof notifPushSelf === 'function') notifPushSelf('🎫', '티켓 예약 완료', msg2, 'ticket');
+    //   ⚠ 「본인 다른 기기」라도 언어가 같다는 보장이 없다. 폰은 일본어,
+    //     PC 는 한국어일 수 있다. 그래서 여기도 세 언어를 실어 보낸다.
+    var _pcI18n = (function(){
+      function one(lang){
+        var nm = _plRest(currentRest, t.rest, lang);
+        var ds = _plDate(t, lang) + (t.time ? ' ' + t.time : '');
+        var px = _plPax(pax, lang);
+        if(lang === 'en') return { title:'Reservation confirmed', body: nm + ' · ' + ds + ' · ' + px };
+        if(lang === 'ja') return { title:'ご予約が確定しました', body: nm + ' · ' + ds + ' · ' + px };
+        return { title:'티켓 예약 완료', body: nm + ' · ' + ds + ' · ' + px };
+      }
+      return { ko: one('ko'), en: one('en'), ja: one('ja') };
+    })();
+    if(typeof notifPushSelf === 'function') notifPushSelf('🎫', '티켓 예약 완료', msg2, 'ticket', _pcI18n);
   }
   // 🆕 구매 발생 → 슈퍼어드민에게 푸시 통지 (취소 알림과 동일 패턴)
   //   send-push 가 호출자(구매한 회원)를 자동 제외하므로 슈퍼어드민만 수신.
@@ -34072,13 +34085,30 @@ async function riSubmit(){
     try {
       var dispDate = _riDate;
       var dispTime = _riTime;
-      var pushBody = '🎫 ' + restName + ' · ' + dispDate + ' ' + dispTime + ' · ' + _riPax + '인 · ' + taamMoneyFor(_riInvitee && _riInvitee.currency, total);
+      var _riMoney = taamMoneyFor(_riInvitee && _riInvitee.currency, total);
+      var pushBody = '🎫 ' + restName + ' · ' + dispDate + ' ' + dispTime + ' · ' + _riPax + '인 · ' + _riMoney;
+      // 🆕 2026.08-30: 받는 기기의 언어로 나간다.
+      //   초대는 회원 한 사람에게 가는 알림이라 언어가 틀리면 특히 티가 난다.
+      //   ⚠ 금액은 회원 지정 통화로 이미 정해져 있다 — 언어와 별개라 그대로 쓴다.
+      var _riRest = (restaurantDB || []).find(function(r){ return String(r.name) === String(restName); }) || null;
+      var _riI18n = (function(){
+        function one(lang){
+          var nm = _plRest(_riRest, restName, lang);
+          var tail = nm + ' · ' + dispDate + (dispTime ? ' ' + dispTime : '')
+                   + ' · ' + _plPax(_riPax, lang) + ' · ' + _riMoney;
+          if(lang === 'en') return { title:'A reservation invitation', body: '🎫 ' + tail };
+          if(lang === 'ja') return { title:'ご予約のご招待が届きました', body: '🎫 ' + tail };
+          return { title:'TAAM 예약 초대 도착', body: '🎫 ' + tail };
+        }
+        return { ko: one('ko'), en: one('en'), ja: one('ja') };
+      })();
       var pushRes = await window.sb.functions.invoke('send-push', {
         body: {
           to: 'uid:' + _riInvitee.id,
           payload: {
             title: 'TAAM 예약 초대 도착',
             body: pushBody,
+            i18n: _riI18n,
             url: '/?ri_pay=' + inviteId,
             category: 'reservation_invite',
             tag: 'taam-ri-' + inviteId
@@ -34152,7 +34182,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.30-b';
+var TAAM_WEB_BUILD = '2026.08.30-c';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -37422,18 +37452,26 @@ function _popStoryPill(){
   var pill = document.createElement('div');
   pill.id = 'popStoryPill';
   // GNB 위에 띄운다. 캘린더를 가리지 않을 만큼만 차지한다
+  // 색 — 크림색 캘린더 위에서 눈에 띄어야 하지만, 구매 버튼으로 읽히면 안 된다.
+  //   버건디 단색은 앱의 결제 CTA 와 같아서 「누르면 사는 것」으로 보인다.
+  //   골드 단색은 크림 바탕에 묻힌다.
+  //   그래서 깊은 버건디-블랙 바탕에 골드 글씨 — 소개 화면(어두운 사진 위 골드)과
+  //   같은 짝이라 「아까 그 화면으로 돌아간다」가 색으로 읽힌다.
   pill.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);'
     + 'bottom:calc(74px + env(safe-area-inset-bottom));z-index:9305;display:flex;align-items:center;gap:2px;'
-    + 'background:#1a1a18;border-radius:999px;box-shadow:0 8px 24px rgba(0,0,0,.32);'
+    + 'max-width:calc(100vw - 32px);'
+    + 'background:#2A1418;border:1px solid rgba(200,169,110,.34);border-radius:999px;'
+    + 'box-shadow:0 10px 28px rgba(42,20,24,.42);'
     + 'font-family:var(--font-main);opacity:0;transition:opacity .28s ease;';
   pill.innerHTML =
-      '<button onclick="popStoryResume()" style="border:0;background:none;color:#FBF9F4;'
-    + 'font-family:inherit;font-size:12.5px;font-weight:800;padding:11px 6px 11px 17px;cursor:pointer;">'
-    + _popL('소개 이어 보기','Back to the story','紹介の続きを見る')
-    + ' <span style="color:#c8a96e;font-family:\'Montserrat\',sans-serif;font-size:12.5px;font-weight:800;">'
+      '<button onclick="popStoryResume()" style="border:0;background:none;color:#F2E6D2;'
+    + 'font-family:inherit;font-size:14px;font-weight:800;letter-spacing:-.01em;white-space:nowrap;'
+    + 'padding:14px 8px 14px 24px;cursor:pointer;">'
+    + _popL('다른 일정 안내 이어보기','See the other dates','他の日程の紹介を見る')
+    + ' <span style="color:#D9BC85;font-family:\'Montserrat\',sans-serif;font-size:13.5px;font-weight:800;">'
     + String(Math.min(n, _popStIdx + 1)).padStart(2,'0') + '/' + String(n).padStart(2,'0') + '</span></button>'
-    + '<button onclick="popStoryDismiss()" aria-label="닫기" style="border:0;background:none;color:#8a8580;'
-    + 'font-size:16px;line-height:1;padding:11px 15px 11px 6px;cursor:pointer;">×</button>';
+    + '<button onclick="popStoryDismiss()" aria-label="닫기" style="border:0;background:none;color:#9A8B7A;'
+    + 'font-size:17px;line-height:1;padding:14px 20px 14px 8px;cursor:pointer;">×</button>';
   document.body.appendChild(pill);
   requestAnimationFrame(function(){ pill.style.opacity = '1'; });
 }
@@ -53041,6 +53079,45 @@ window.pushUnsubscribe = async function(){
 // 푸시 발송 (서버측 Edge Function 호출)
 //   to: 'user' (본인 다른 기기) | 'all' | 'role:admin' | 'topic:ticket' | 'uid:<UUID>'
 //   payload: { title, body, icon?, url?, category?, tag? }
+
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026.08-30: 알림 문구를 세 언어로 짓는 재료
+// ═══════════════════════════════════════════════════════════════
+//   send-push 가 payload.i18n 을 기기 언어(push_subscriptions.lang)로 고른다.
+//   여기서는 「같은 사실을 세 언어로 쓰는 데 필요한 조각」만 만든다.
+//   ⚠ 한국어 문장에 영문 이름만 갈아끼우면 안 된다. 날짜 형식·어순·매장
+//     표기가 언어마다 다르다.
+var _PL_MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+// 티켓의 방문일을 그 언어의 형식으로
+function _plDate(t, lang){
+  var raw = ((typeof _tkFullDate === 'function' ? _tkFullDate(t) : (t && t.date) || '') || '');
+  var d = String(raw).split('.');
+  if(d.length !== 3) return String((t && t.date) || '');
+  var y = parseInt(d[0],10), mo = parseInt(d[1],10), dd = parseInt(d[2],10);
+  if(!y) return String((t && t.date) || '');
+  if(lang === 'en') return _PL_MON[mo-1] + ' ' + dd + ', ' + y;
+  if(lang === 'ja') return y + '年' + mo + '月' + dd + '日';
+  return y + '년 ' + mo + '월 ' + dd + '일';
+}
+
+// 매장 이름을 그 언어로. 없으면 한글로 떨어뜨린다 —
+// 일본어는 검수 전(i18n_jp_approved=false)이면 쓰지 않는다(AI 음차가 틀릴 수 있다)
+function _plRest(rest, fallback, lang){
+  if(!rest) return fallback || '';
+  if(lang === 'en' && rest.name_en) return rest.name_en;
+  if(lang === 'ja' && rest.name_jp && rest.i18n_jp_approved !== false) return rest.name_jp;
+  return rest.name || fallback || '';
+}
+
+// 인원
+function _plPax(n, lang){
+  n = parseInt(n, 10) || 1;
+  if(lang === 'en') return n + (n > 1 ? ' guests' : ' guest');
+  if(lang === 'ja') return n + '名';
+  return n + '인';
+}
+
 window.pushSend = async function(to, payload, opts){
   if(!window.sb){ console.warn('[Push] Supabase 미초기화'); return null; }
   opts = opts || {};
@@ -53077,7 +53154,7 @@ window.pushSend = async function(to, payload, opts){
 
 // showToast 의 native 옵션이 ON 일 때 다른 기기/역할에도 푸시 발송하는 헬퍼
 // (현재는 본인 다른 기기로만 발송 — 'user' 스코프)
-window.notifPushSelf = function(icon, title, msg, category){
+window.notifPushSelf = function(icon, title, msg, category, i18n){
   // 🔧 2026.08-27: 네이티브 앱에서는 Web Notification API 를 보지 않는다.
   //   WKWebView(iOS)에는 window.Notification 이 아예 없고, 안드로이드 WebView 도
   //   permission 이 'granted' 가 아니다. 그래서 앱에서는 이 함수가 첫 줄에서
@@ -53088,9 +53165,20 @@ window.notifPushSelf = function(icon, title, msg, category){
     if(typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
   }
   // 본인 다른 기기에도 알림 (현재 기기는 토스트로 이미 표시됨)
+  // i18n 이 있으면 아이콘을 각 언어 제목에도 붙여 보낸다 — 한 언어만 아이콘이
+  // 빠지면 알림 목록에서 그 줄만 달라 보인다
+  var _i18n = null;
+  if(i18n){
+    _i18n = {};
+    ['ko','en','ja'].forEach(function(k){
+      if(!i18n[k]) return;
+      _i18n[k] = { title: (icon ? icon + ' ' : '') + i18n[k].title, body: i18n[k].body };
+    });
+  }
   pushSend('user', {
     title: (icon ? icon + ' ' : '') + title,
     body: msg,
+    i18n: _i18n || undefined,
     category: category || 'system',
     url: '/',
   });
@@ -53202,6 +53290,7 @@ window.taamNotifyUser = async function(uid, o){
     await window.sb.functions.invoke('send-push', {
       body: { to: 'uid:' + uid, payload: {
         title: o.title, body: o.body || '', url: _url,
+        i18n: o.i18n || undefined,   // 🆕 있으면 기기 언어로 골라 나간다
         category: _type, tag: o.tag || ('taam-' + _type + '-' + Date.now())
       } }
     });
