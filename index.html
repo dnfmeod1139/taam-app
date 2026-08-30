@@ -23673,7 +23673,23 @@ function _repTicketDate(t){
   if(raw.split(/[.\-\/]/).length < 3 && t.dateYear) raw = t.dateYear + '.' + raw;
   return _repParseDate(raw, new Date());
 }
+// 취소한 예약은 세지 않는다.
+//   좌석도 풀렸고 방문도 없었다. 기간 안에 두 건을 못 사는 것이 규칙이지,
+//   한 번 샀던 사실이 기간 내내 따라다니는 것이 규칙은 아니다.
+//   「1월 예약이 있는데 4월을 사려 하면 막힌다. 1월을 취소하고 4월을 사면
+//    안 막힌다」— 이게 되려면 여기서 걸러야 한다.
+//   방문한 예약(used)은 센다. 방문은 일어난 일이라 취소와 다르다.
+function _repIsCancelled(h){
+  if(!h) return true;
+  var s = String(h.status || '').toLowerCase();
+  // 앱은 'cancelled' 로 쓰지만 읽는 쪽에는 'canceled' 표기도 섞여 있다. 둘 다 받는다
+  if(s === 'cancelled' || s === 'canceled') return true;
+  // 방금 취소한 건은 status 반영이 늦어도 이 표시가 먼저 붙는다(cancelTicketPurchase)
+  if(h.cancelledAt) return true;
+  return false;
+}
 window._repParseDate = _repParseDate; window._repTicketDate = _repTicketDate;
+window._repIsCancelled = _repIsCancelled;
 
 function checkRepurchaseLimit(t){
   // 면제 계정은 재구매 제한을 적용하지 않는다 (심사용 테스트 계정 · 슈퍼어드민)
@@ -23692,6 +23708,7 @@ function checkRepurchaseLimit(t){
   //   사이가 제한 일수 안이면 똑같이 막는다. Math.abs 가 그 역할을 한다.
   var blocked = purchaseHistory.find(function(h){
     if(String(h.restId)!==String(t.restId)) return false;
+    if(_repIsCancelled(h)) return false;
     var prev = _repParseDate(h.visitDate || h.date, newVisitDate);
     if(!prev) return false;
     var diff = (newVisitDate - prev)/(1000*60*60*24);
@@ -34832,7 +34849,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.30-j';
+var TAAM_WEB_BUILD = '2026.08.30-k';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
