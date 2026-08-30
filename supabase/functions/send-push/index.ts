@@ -509,6 +509,58 @@ Deno.serve(async (req: Request) => {
     const sb = createClient(SUPABASE_URL, SERVICE_KEY);
     const [scope, scopeValue] = body.to.includes(":") ? body.to.split(":") : [body.to, ""];
 
+    // ═══════════════════════════════════════════════════════════
+    // 🆕 2026.08-30 누가 무엇을 쏠 수 있는지 — 여기서 정한다
+    // ═══════════════════════════════════════════════════════════
+    //   종전엔 호출자 id 를 뽑아 놓고 아무것도 막지 않았다. body.to 를 그대로 믿었다.
+    //   그래서 로그인한 회원이면 누구나 이 한 줄로 전 회원에게 푸시를 쏠 수 있었다.
+    //
+    //     invoke('send-push', { body: { to: 'all', payload: {...} } })
+    //
+    //   role:super_admin 으로 운영진에게만 쏘거나, uid:<남의 id> 로 특정 회원을
+    //   괴롭히는 것도 됐다. 앱이 실제로 쓰는 것은 role: 과 uid: 뿐이고
+    //   all·topic 은 어디서도 안 쓴다 — 회원 세션에서 나올 이유가 없다.
+    //
+    //   ⚠ 서버끼리 부르는 경로(Edge Function → Edge Function, service_role 키)는
+    //     막지 않는다. toss-confirm 등이 결제 후 슈퍼어드민에게 알릴 때 쓴다.
+    //     그 경우 Authorization 이 service_role 키라 callerUserId 가 안 잡힌다.
+    const isServiceCall = (() => {
+      const t = authHeader.startsWith("Bearer ") ? authHeader.substring(7) : "";
+      return !!t && !!SERVICE_KEY && t === SERVICE_KEY;
+    })();
+
+    if (!isServiceCall) {
+      // 로그인하지 않았으면 아무것도 못 쏜다
+      if (!callerUserId) {
+        return json({ error: "로그인이 필요합니다" }, 401);
+      }
+
+      // ① 본인에게 — 언제나 된다 (구독 확인용 테스트 푸시 등)
+      const isSelf = scope === "user" || (scope === "uid" && scopeValue === callerUserId);
+
+      // ② 운영진에게 올려보내기 — 회원도 된다.
+      //   ⚠ 이걸 막으면 실제 흐름 둘이 조용히 죽는다. 확인하고 남긴다:
+      //     · confirmTimeChange()  — 고객이 시간 변경을 확인하면 슈퍼어드민에게 알린다
+      //     · 매진 경합 자동 환불   — 회원 세션에서 환불이 나면 슈퍼어드민에게 알린다
+      //   위로 올라가는 알림은 최악이라도 「운영진에게 스팸」이다. 아래로 내려가는
+      //   것(전 회원·남의 기기)과는 위험이 다르다.
+      //   role:user 처럼 **전 회원**을 가리키는 것은 여기 안 든다 — 그건 브로드캐스트다.
+      const ADMIN_ROLES = ["admin", "superadmin", "super_admin"];
+      const isUpward = scope === "role" && ADMIN_ROLES.includes(String(scopeValue));
+
+      if (!isSelf && !isUpward) {
+        // ③ 나머지 — all · topic: · role:user · uid:<남의 id> 는 어드민만.
+        //   앱은 회원 세션에서 이것들을 쓰지 않는다. 쓰였다면 앱 밖에서 온 것이다.
+        const { data: me } = await sb.from("profiles")
+          .select("role").eq("id", callerUserId).maybeSingle();
+        const r = String(me?.role || "");
+        if (!ADMIN_ROLES.includes(r)) {
+          console.warn("[send-push] 권한 없는 호출 차단:", { callerUserId, to: body.to });
+          return json({ error: "이 대상으로는 보낼 수 없습니다", to: body.to }, 403);
+        }
+      }
+    }
+
     let subs: any[] | null = null;
     let qErr: any = null;
     const pick: Record<string, unknown> = { scope, scopeValue };
