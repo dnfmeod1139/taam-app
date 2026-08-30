@@ -34088,7 +34088,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.29-l';
+var TAAM_WEB_BUILD = '2026.08.29-m';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -37289,6 +37289,7 @@ async function popAdminOpen(preset){
         : '<div style="margin-bottom:8px;"></div>')
     + inp('paTitle','제목', _paW.title)
     + '<textarea id="paBody" placeholder="본문 (줄바꿈 유지)" style="width:100%;box-sizing:border-box;padding:11px 12px;border:1.5px solid #e0ddd8;border-radius:9px;font-size:13px;font-family:var(--font-main);margin-bottom:10px;background:#fff;min-height:70px;">' + _pcalEsc(_paW.body || '') + '</textarea>'
+    + '<div id="paCardNote"></div>'
     + '<div style="font-size:11px;font-weight:800;color:#666;margin-bottom:6px;">팝업 카드 미디어 <span style="font-weight:400;color:#a8a29a;">(이벤트 간지 사진과 별개)</span></div>'
     + '<div style="display:flex;gap:6px;margin-bottom:6px;">'
       + '<button onclick="document.getElementById(\'paImgFile\').click()" style="flex:1;padding:10px 0;border:1.5px solid #d8c9a8;border-radius:9px;background:#fff;color:#8a7a55;font-size:12px;font-weight:800;cursor:pointer;">📷 사진 업로드</button>'
@@ -37298,8 +37299,10 @@ async function popAdminOpen(preset){
     + '<input type="file" id="paVidFile" accept="video/mp4,video/quicktime,video/webm" style="display:none;" onchange="paUpMedia(this,\'video\')">'
     + '<div id="paMediaState" style="font-size:11px;color:' + (_paW.media_url ? '#2a6a2a' : '#a8a29a') + ';margin-bottom:12px;">'
       + (_paW.media_url ? ('첨부됨 (' + (_paW.media_type === 'video' ? '영상' : '사진') + ') — 다시 업로드하면 교체') : '미디어 없음 (글만 표시)') + '</div>'
-    + '<div style="font-size:11px;font-weight:800;color:#666;margin-bottom:6px;">연결 티켓 (팝업 클릭 시 이동)</div>'
-    + '<select id="paLinkTicket" onchange="paLinkChanged()" class="tu-input" style="width:100%;box-sizing:border-box;background:#fff;font-size:13px;margin-bottom:10px;">' + tkOpts + '</select>'
+    + '<div id="paLinkRow">'
+      + '<div style="font-size:11px;font-weight:800;color:#666;margin-bottom:6px;">연결 티켓 (팝업 클릭 시 이동)</div>'
+      + '<select id="paLinkTicket" onchange="paLinkChanged()" class="tu-input" style="width:100%;box-sizing:border-box;background:#fff;font-size:13px;margin-bottom:10px;">' + tkOpts + '</select>'
+    + '</div>'
     + '<div style="display:flex;gap:5px;margin-bottom:10px;">'
       + '<button id="paModeTicket" onclick="paSetMode(\'ticket\')" style="flex:1;padding:10px 0;border-radius:9px;font-size:11.5px;font-weight:800;cursor:pointer;"></button>'
       + '<button id="paModeEvent" onclick="paSetMode(\'event\')" style="flex:1;padding:10px 0;border-radius:9px;font-size:11.5px;font-weight:800;cursor:pointer;"></button>'
@@ -37329,7 +37332,7 @@ async function popAdminOpen(preset){
         + ((_paW.event_media_urls && _paW.event_media_urls.length) ? ('이벤트 사진 ' + _paW.event_media_urls.length + '장 — 추가 업로드하면 뒤에 붙습니다')
            : (_paW.event_media_url ? '이벤트 사진 1장 (구버전)' : '없으면 팝업 미디어 재사용')) + '</div>'
     + '</div>'
-    + '<button onclick="paPreview()" style="width:100%;padding:12px;border:1.5px solid #d8d3cc;border-radius:11px;background:#fff;color:#666;font-size:12.5px;font-weight:800;cursor:pointer;margin-bottom:8px;">👁 미리보기</button>'
+    + '<div id="paPrevRow" style="margin-bottom:8px;"></div>'
     + '<button onclick="paPublish(true)" style="width:100%;padding:14px;border:0;border-radius:11px;background:#5C0A14;color:#fff;font-size:13px;font-weight:800;cursor:pointer;margin-bottom:8px;">📣 발행하기 — 모든 회원에게 새로 표시</button>'
     + '<button onclick="paPublish(false)" style="width:100%;padding:12px;border:1.5px solid #d8d3cc;border-radius:11px;background:#fff;color:#1a1a18;font-size:12.5px;font-weight:800;cursor:pointer;margin-bottom:8px;">내용만 저장 (조용히 수정)</button>'
     + '<button onclick="paTakeDown()" style="width:100%;padding:11px;border:0;border-radius:11px;background:transparent;color:#B23A2E;font-size:12px;font-weight:800;cursor:pointer;">팝업 내리기</button>'
@@ -37359,6 +37362,42 @@ function paSetMode(mode){
   if(box) box.style.display = _paW.link_mode === 'event' ? 'block' : 'none';
   var sbox = document.getElementById('paStoryBox');
   if(sbox) sbox.style.display = _paW.link_mode === 'story' ? 'block' : 'none';
+
+  // 🆕 2026.08-29: 스토리 모드에서는 단일 「연결 티켓」을 아예 감춘다.
+  //   종전엔 「이 모드에서 쓰지 않습니다」라고 글로만 말하고 그대로 뒀는데,
+  //   화면 위에 있는 셀렉트가 더 눈에 띄어서 그걸로 티켓을 고르려다
+  //   「하나밖에 안 된다」고 막히는 일이 실제로 있었다. 안 쓰는 것은 치운다.
+  var lrow = document.getElementById('paLinkRow');
+  if(lrow) lrow.style.display = _paW.link_mode === 'story' ? 'none' : 'block';
+
+  // 🆕 미리보기는 모드마다 볼 것이 다르다. 스토리는 카드와 슬라이드가 따로다 —
+  //   한 버튼으로 카드만 띄우니 「아무것도 안 바뀌었다」로 보였다.
+  var prow = document.getElementById('paPrevRow');
+  if(prow){
+    var _pb = 'padding:12px;border:1.5px solid #d8d3cc;border-radius:11px;background:#fff;'
+      + 'color:#666;font-size:12.5px;font-weight:800;cursor:pointer;';
+    prow.innerHTML = (_paW.link_mode === 'story')
+      ? '<div style="display:flex;gap:6px;">'
+        + '<button onclick="paPreviewCard()" style="flex:1;' + _pb + '">카드 미리보기</button>'
+        + '<button onclick="paPreviewStory()" style="flex:1;' + _pb + '">슬라이드 미리보기</button></div>'
+      : '<button onclick="paPreview()" style="width:100%;' + _pb + '">👁 미리보기</button>';
+  }
+
+  // 🆕 모드를 바꾸면 카드에 이전 모드의 글·사진이 남는다. 자동으로 지우지 않는다 —
+  //   지우고 싶은지는 사람이 정할 일이다. 다만 남아 있다는 건 반드시 알린다.
+  var note = document.getElementById('paCardNote');
+  if(note){
+    var stale = _paW.link_mode === 'story' && (_paW.title || _paW.body || _paW.media_url);
+    note.innerHTML = stale
+      ? '<div style="font-size:11.5px;color:#8a6216;background:#FAF0DA;border:1px solid #EEDCBB;'
+        + 'border-radius:9px;padding:9px 11px;margin-bottom:10px;line-height:1.6;">'
+        + '아래 제목·본문·사진은 <b>이전에 발행한 팝업</b>의 것입니다. 회원이 처음 보는 카드가 이 내용입니다.'
+        + '<button onclick="paCardClear()" style="display:block;margin-top:7px;border:0;background:none;'
+        + 'color:#5C0A14;font-size:11.5px;font-weight:800;cursor:pointer;padding:0;text-decoration:underline;">'
+        + '카드 비우고 새로 쓰기</button></div>'
+      : '';
+  }
+
   if(_paW.link_mode === 'story') paStoryRender();
 }
 window.paSetMode = paSetMode;
@@ -37554,15 +37593,50 @@ function _paCollect(){
   return _paW;
 }
 
-function paPreview(){
+function _paPrevCfg(){
   var c = _paCollect();
   _homePopCfg = Object.assign({}, c, { enabled: true, id: c.id || 'preview' });
-  homePopupShow(true);
+  // 미리보기가 남긴 화면을 먼저 걷는다 — 겹쳐 뜨면 옛 것을 보고 「안 바뀌었다」고 읽는다
+  var a = document.getElementById('homePopup'); if(a) a.remove();
+  var b = document.getElementById('popStoryScreen'); if(b) b.remove();
+  var d = document.getElementById('popEventScreen'); if(d) d.remove();
+  return _homePopCfg;
+}
+function paPreview(){ _paPrevCfg(); homePopupShow(true); }
+function paPreviewCard(){ paPreview(); }
+function paPreviewStory(){
+  var c = _paPrevCfg();
+  if(!Array.isArray(c.stories) || !c.stories.length){
+    showToast('⚠','슬라이드 없음','소개할 티켓을 하나 이상 추가하세요'); return;
+  }
+  _popShowStory(c);
+}
+// 카드에 남은 이전 팝업 내용을 비운다. 슬라이드·연결은 건드리지 않는다
+function paCardClear(){
+  _paCollect();
+  _paW.title = ''; _paW.body = ''; _paW.media_url = ''; _paW.media_type = 'image';
+  var t = document.getElementById('paTitle'); if(t) t.value = '';
+  var b = document.getElementById('paBody');  if(b) b.value = '';
+  var m = document.getElementById('paMediaState');
+  if(m){ m.textContent = '미디어 없음 (글만 표시)'; m.style.color = '#a8a29a'; }
+  paSetMode(_paW.link_mode);
+  showToast('✓','카드를 비웠습니다','제목·본문·사진만 지웠습니다');
 }
 window.paPreview = paPreview;
+window.paPreviewCard = paPreviewCard;
+window.paPreviewStory = paPreviewStory;
+window.paCardClear = paCardClear;
 
 async function paPublish(asNew){
   var c = _paCollect();
+  // 🆕 2026.08-29: 고른 모드에 안 쓰는 값은 발행 때 비운다.
+  //   이벤트로 쓰던 팝업을 스토리로 바꾸면 link_ticket_id·event_desc 가 그대로 실려
+  //   나가서, 나중에 발행 내역을 보면 무엇으로 나간 건지 읽을 수 없게 된다.
+  if(c.link_mode === 'story'){
+    c.link_ticket_id = ''; c.event_desc = ''; c.event_media_url = ''; c.event_media_urls = [];
+  } else {
+    c.stories = [];
+  }
   // 스토리는 슬라이드가 곧 내용이다 — 카드에 제목·사진이 없어도 발행할 수 있다
   var _hasSt = c.link_mode === 'story' && Array.isArray(c.stories) && c.stories.length > 0;
   if(c.link_mode === 'story' && !_hasSt){ showToast('⚠','슬라이드 없음','소개할 티켓을 하나 이상 추가하세요'); return; }
