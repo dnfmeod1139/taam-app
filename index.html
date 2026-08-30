@@ -7984,7 +7984,7 @@ window.openAccountDelete = async function(){
       try {
         if(typeof taamNotifyAdmins === 'function'){
           var _gp   = (_gone && _gone.p) || {};
-          var _gWho = (_gp.display_name || '').toString().trim() || '회원';
+          var _gWho = _taamWhoName(_gp);
           var _gTier= (_gp.membership_tier || '').toString().trim();
           var _gCty = (_gp.country === 'EN') ? '해외' : '국내';
           var _gJoin= _gp.created_at
@@ -15889,7 +15889,9 @@ async function cancelMyInvite(inviteId){
       //   호스트가 아닌 다른 슈퍼어드민도 좌석이 풀린 것을 알아야 한다.
       try {
         if(typeof taamNotifyAdmins === 'function'){
-          var _cvWho = (typeof _currentUserName !== 'undefined' && _currentUserName) ? _currentUserName : '회원';
+          // 전역이 비어 있으면 profiles·번호 뒷자리까지 찾아본다 (_taamMyName).
+          //   종전엔 전역만 보고 바로 '회원' 으로 떨어져, 알림에 이름이 안 나왔다.
+          var _cvWho = (await _taamMyName()) || '회원';
           var _cvAt  = new Date().toLocaleString('ko-KR', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
           await taamNotifyAdmins({
             type: 'invite_cancelled',
@@ -19641,7 +19643,7 @@ async function adminGrantDeposit(targetUserId, amount, depositType, description)
       //   슈퍼어드민이 두 기기를 쓰면 다른 기기에는 아무것도 안 남았다.
       try {
         if(typeof taamNotifyAdmins === 'function'){
-          var _agWho = (selRes.data && selRes.data.display_name) || '회원';
+          var _agWho = _taamWhoName(selRes.data);
           var _agAt  = new Date().toLocaleString('ko-KR', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
           taamNotifyAdmins({
             type: 'deposit_granted_admin',
@@ -23122,6 +23124,18 @@ function confirmReservation(){ completePurchase(); }
 //   전역 변수를 믿지 말고, 없으면 그 자리에서 profiles 를 읽는다.
 //
 //   읽은 값은 전역에도 되돌려 넣는다 — 다음부터는 조회가 필요 없다.
+// 🆕 2026.08-30: 「다른 사람」의 이름 — 알림 문구에 넣을 때 쓴다.
+//   display_name 이 빈 회원이 실제로 여럿이다. 그때마다 「회원님이…」로 나가
+//   누구 얘긴지 알 수 없었다. 이름이 없으면 번호 뒷자리라도 붙인다.
+//   본인 이름은 _taamMyName() 을 쓴다 (전역·조회까지 거친다).
+function _taamWhoName(p){
+  var nm = ((p && p.display_name) || '').toString().trim();
+  if(nm) return nm;
+  var tail = String((p && (p.phone || p.buyer_phone)) || '').replace(/[^0-9]/g, '').slice(-4);
+  return tail ? ('회원 ' + tail) : '회원';
+}
+window._taamWhoName = _taamWhoName;
+
 async function _taamMyName(){
   try{
     if(typeof _currentUserName !== 'undefined' && _currentUserName) return _currentUserName;
@@ -26703,7 +26717,8 @@ async function cancelTicketPurchase(purchaseId, refundCalc, isSuperAdminOverride
                           + ' (토스에서 승인취소' + (_ex0.order_id ? (' · 주문 ' + _ex0.order_id) : '') + ')')
                        : (_depositRefund > 0 ? '' : ' · 환불 없음'));
       // 🆕 2026.08-27: 취소 시각 + 누가 취소했는지 본문에 남긴다
-      var _cxWho = (typeof _currentUserName !== 'undefined' && _currentUserName) ? _currentUserName : '회원';
+      // 전역이 비어 있으면 profiles·번호 뒷자리까지 찾아본다 (_taamMyName)
+      var _cxWho = (await _taamMyName()) || '회원';
       var _cxAt  = new Date().toLocaleString('ko-KR', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
       if(typeof taamNotifyAdmins === 'function'){
         taamNotifyAdmins({
@@ -29292,6 +29307,7 @@ async function rvOpen(){
   }
   var b = document.getElementById('rvBody');
   if(b) b.innerHTML = '<div class="tb-empty">불러오는 중…</div>';
+  _rvBindSwipe();
   if(_tbRows === null) await _tbLoad();
   _rvRender();
 }
@@ -29355,13 +29371,45 @@ function _rvRenderMon(){
     return _tbStatus(r).s !== 'cx';
   });
   var isNow = (ym.y === t.getFullYear() && ym.m === t.getMonth());
+  // 「오늘」 버튼은 이번 달이 아닐 때뿐 아니라, 이번 달이어도 오늘이 아닌 날을
+  //   보고 있으면 띄운다. 며칠 뒤를 보다 오늘로 돌아오는 것이 가장 잦다.
+  var onToday = isNow && _rvState.day === _tbKey(t);
   el.innerHTML =
       '<button onclick="rvMonStep(-1)" aria-label="이전 달">‹</button>'
     + '<b>' + ym.y + '. ' + (ym.m + 1) + '월</b>'
     + '<em>' + mon.length + '건 · ' + mon.reduce(function(s,r){ return s + (parseInt(r.party_size,10) || 0); }, 0) + '명</em>'
     + '<span class="sp"></span>'
-    + (isNow ? '' : '<button class="now" onclick="rvGoToday()">이번 달</button>')
+    + (onToday ? '' : '<button class="now" onclick="rvGoToday()">오늘</button>')
     + '<button onclick="rvMonStep(1)" aria-label="다음 달">›</button>';
+}
+
+// ── 달력을 좌우로 밀어 달을 넘긴다 ──
+//   화살표만으로도 되지만, 달력은 미는 것이 먼저 손에 붙는다.
+//   #rvBody 에 touch-action:pan-y 를 줘 뒀으므로 가로 제스처는 스크롤에
+//   먹히지 않고 여기까지 온다.
+//   달력 위에서만 듣는다 — 아래 목록을 밀다 달이 바뀌면 놀란다.
+var _rvSwipe = null;      // { x, y, t }
+var _rvSwipeUntil = 0;    // 이 시각 전에는 날짜 클릭을 무시한다 (민 끝에 클릭이 따라온다)
+function _rvBindSwipe(){
+  var el = document.getElementById('rvBody');
+  if(!el || el._rvSwipeBound) return;
+  el._rvSwipeBound = true;
+  el.addEventListener('touchstart', function(e){
+    if(!e.target.closest || !e.target.closest('.rv-cal')){ _rvSwipe = null; return; }
+    var p = e.touches && e.touches[0];
+    _rvSwipe = p ? { x:p.clientX, y:p.clientY, t:Date.now() } : null;
+  }, { passive:true });
+  el.addEventListener('touchend', function(e){
+    var s = _rvSwipe; _rvSwipe = null;
+    if(!s) return;
+    var p = e.changedTouches && e.changedTouches[0];
+    if(!p) return;
+    var dx = p.clientX - s.x, dy = p.clientY - s.y;
+    // 가로로 충분히 갔고, 세로보다 확실히 크고, 끄는 동작이 아니라 미는 동작일 때만
+    if(Math.abs(dx) < 45 || Math.abs(dx) < Math.abs(dy) * 1.5 || (Date.now() - s.t) > 700) return;
+    _rvSwipeUntil = Date.now() + 400;
+    rvMonStep(dx < 0 ? 1 : -1);   // 왼쪽으로 밀면 다음 달
+  }, { passive:true });
 }
 
 function _rvRenderFilters(){
@@ -29580,8 +29628,13 @@ function rvGoToday(){
 // 누르면 고른다. 같은 날을 또 눌러도 접지 않는다 — 달력은 목록 위에 그대로
 //   보이므로 접어서 새로 드러나는 것이 없고, 목록만 사라져 「왜 없어졌지」가 된다.
 function rvPickDay(key){
+  // 민 끝에 클릭이 따라온다 — 달을 넘긴 직후의 클릭은 무시한다
+  if(Date.now() < _rvSwipeUntil) return;
   _rvState.day = key;
   _rvState.open = null;
+  // 월 줄도 다시 그린다 — 「오늘」 버튼이 고른 날에 따라 나타났다 사라진다.
+  //   본문만 다시 그리면 다른 날을 골라도 버튼이 안 뜬다.
+  _rvRenderMon();
   _rvRenderBody();
 }
 function rvSetStatus(s){ _rvState.status = s; _rvState.open = null; _rvRenderFilters(); _rvRenderBody(); }
@@ -31642,17 +31695,24 @@ function doChargeComplete(){
     //   종전엔 회원 본인 기기에만 갔고 운영 쪽에는 아무 흔적도 안 남았다.
     try {
       if(typeof taamNotifyAdmins === 'function'){
-        var _cgWho = (typeof _currentUserName !== 'undefined' && _currentUserName) ? _currentUserName : '회원';
-        var _cgAt  = new Date().toLocaleString('ko-KR', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
-        taamNotifyAdmins({
-          type: 'deposit_charged',
-          title: '💰 ' + _cgWho + '님이 예치금을 충전했습니다',
-          body: _cgWho + '님 · ₩' + chargeAmount.toLocaleString() + ' 충전'
-              + '\n충전 후 잔액 ₩' + currentDepositBalance.toLocaleString()
-              + '\n충전 ' + _cgAt,
-          url: '/',
-          tag: 'taam-charge-' + Date.now(),
-          payload: { amount: chargeAmount, balance_after: currentDepositBalance }
+        // 이 함수는 async 가 아니라 이름을 기다릴 수 없다. 이름이 오면 그때 보낸다.
+        //   전역이 비어 있으면 profiles·번호 뒷자리까지 찾는다 (_taamMyName).
+        var _cgAmt = chargeAmount, _cgBal = currentDepositBalance;
+        Promise.resolve(_taamMyName()).catch(function(){ return ''; }).then(function(_cgWho){
+          _cgWho = _cgWho || '회원';
+          var _cgAt = new Date().toLocaleString('ko-KR', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
+          try{
+            taamNotifyAdmins({
+              type: 'deposit_charged',
+              title: '💰 ' + _cgWho + '님이 예치금을 충전했습니다',
+              body: _cgWho + '님 · ₩' + _cgAmt.toLocaleString() + ' 충전'
+                  + '\n충전 후 잔액 ₩' + _cgBal.toLocaleString()
+                  + '\n충전 ' + _cgAt,
+              url: '/',
+              tag: 'taam-charge-' + Date.now(),
+              payload: { amount: _cgAmt, balance_after: _cgBal }
+            });
+          }catch(_e){ console.warn('[charge] 어드민 통지 예외:', _e); }
         });
       }
     } catch(_cge){ console.warn('[charge] 어드민 통지 예외:', _cge); }
@@ -35155,7 +35215,7 @@ async function riSubmit(){
       console.log('[ri] 푸시 결과:', _riPushResult, _sum);
     } catch(pe){ console.warn('[ri] 푸시 발송 예외:', pe); _riPushResult = 'error'; }
 
-    var _riWho = _riInvitee.display_name || '회원';
+    var _riWho = _taamWhoName(_riInvitee);
 
     // 🆕 2026.08-27: 발행한 쪽에도 확인 알림 — 누구에게 무엇이 나갔는지 이력으로 남는다.
     //   종전엔 초대를 보내면 받는 사람에게만 갔고, 보낸 기록은 화면의 토스트가 전부였다.
@@ -35204,7 +35264,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.30-n';
+var TAAM_WEB_BUILD = '2026.08.30-o';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -36246,7 +36306,8 @@ async function riConfirmPay(){
       //   위 INSERT 는 결제한 회원 세션이라 RLS 에 막힌다 — 이력이 안 남았다.
       //   금전이 오간 건이므로 반드시 기록으로 남아야 한다.
       if(typeof taamNotifyAdmins === 'function'){
-        var _pvWho = (typeof _currentUserName !== 'undefined' && _currentUserName) ? _currentUserName : '회원';
+        // 전역이 비어 있으면 profiles·번호 뒷자리까지 찾아본다 (_taamMyName)
+        var _pvWho = (await _taamMyName()) || '회원';
         var _pvAt  = new Date().toLocaleString('ko-KR', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
         await taamNotifyAdmins({
           type: 'invite_paid',
