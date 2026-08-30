@@ -10677,6 +10677,13 @@ window.closePromoCarousel = function(){
         <button id="qaEditBtn" onclick="qaOpenEdit()" style="display:none;border:none;background:none;color:#9a9486;font-size:11px;font-weight:800;cursor:pointer;padding:2px 4px;">✎ 편집</button>
       </div>
       <div id="quickAccessRow" style="display:flex;gap:8px;margin-top:9px;flex-wrap:wrap;"></div>
+      <!-- 🆕 2026.08-30: 지금 이 기기가 보고 있는 빌드.
+           종전엔 「발송한 예약 초대 내역」 안에만 있어서, 배포가 반영됐는지
+           확인하려면 그 화면까지 들어가야 했다. 배포 확인은 자주 하는 일이라
+           어드민을 열자마자 보이는 자리에 둔다. 눌러서 복사도 된다. -->
+      <div id="acBuildTag" onclick="acCopyBuild()" title="눌러서 복사"
+        style="margin-top:10px;text-align:right;font-family:var(--font-main);font-size:9.5px;
+        letter-spacing:.1em;color:#c9c2b6;cursor:pointer;"></div>
     </div>
 
     <!-- Quick Access 편집 모달 (슈퍼어드민) -->
@@ -30674,6 +30681,21 @@ function acGo(tab){
 }
 window.acGo = acGo;
 
+// 빌드 번호를 눌러 복사한다 — 「지금 어떤 빌드인지」를 물어볼 때 그대로 붙여넣게
+function acCopyBuild(){
+  var v = 'BUILD ' + TAAM_WEB_BUILD;
+  var done = function(){ if(typeof showToast === 'function') showToast('✓','복사됨', v); };
+  try{
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(v).then(done, function(){ done(); });
+      return;
+    }
+  }catch(e){}
+  // 클립보드를 못 쓰는 환경(구형 웹뷰·비보안 컨텍스트)에서도 값은 보여준다
+  done();
+}
+window.acCopyBuild = acCopyBuild;
+
 
 // 회원 통화 지정 — profiles.currency 갱신 후 원장 새로고침.
 //   null = 미지정(자동): 화면 언어 폴백으로 되돌린다.
@@ -32817,6 +32839,9 @@ function qaLoad(){
   var mb = document.getElementById('mbMenuBtn');
   if(mb) mb.style.display = _isSuper ? 'flex' : 'none';
   if(_isSuper) _mbBadge();
+  // 지금 보고 있는 빌드 — 배포가 반영됐는지 여기서 바로 확인한다
+  var _bt = document.getElementById('acBuildTag');
+  if(_bt) _bt.textContent = 'BUILD ' + TAAM_WEB_BUILD;
   if(!window.sb){ renderQuickAccess(); return; }
   window.sb.from('app_config').select('value').eq('key','quick_access').maybeSingle().then(function(res){
     var v = res && res.data && res.data.value;
@@ -35896,7 +35921,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.30-s';
+var TAAM_WEB_BUILD = '2026.08.30-t';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){

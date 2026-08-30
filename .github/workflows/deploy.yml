@@ -39,6 +39,20 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
+      # 🆕 2026.08-30: 어떤 빌드를 내보냈는지 로그에 남긴다.
+      #   Deploy Hook 으로 만든 배포는 Vercel 목록에서 커밋에 안 붙는다.
+      #   그래서 「배포가 됐나」를 목록만 보고는 알 수 없고, 실제로 그것 때문에
+      #   「머지가 안 돌고 있다」고 오해한 적이 있다.
+      #   여기에 BUILD 값을 찍어 두면 Actions 로그만 보고 확인할 수 있다.
+      - uses: actions/checkout@v4
+      - name: Show build number
+        run: |
+          B=$(grep -o "TAAM_WEB_BUILD = '[^']*'" index.html | head -1 | sed "s/.*'\(.*\)'/\1/")
+          echo "이 커밋의 BUILD = ${B:-(못 읽음)}"
+          echo "### 배포 BUILD \`${B:-?}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "앱 화면의 BUILD 표시가 이 값과 같으면 최신입니다." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Trigger Vercel production build
         env:
           HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK }}
