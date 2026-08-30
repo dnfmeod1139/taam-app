@@ -382,8 +382,24 @@ async function notifyAdmins(
   if (!base || !key) return;
   let who = '회원';
   try {
-    const { data } = await admin.from('profiles').select('display_name').eq('id', buyerId).maybeSingle();
-    if (data && data.display_name) who = String(data.display_name);
+    // 이름을 못 찾으면 「회원님이 구매했습니다」로 나가 누가 샀는지 알 수 없다.
+    //   실제로 display_name 이 빈 회원이 여럿이라 그 알림이 계속 나갔다.
+    //   ① 프로필 이름 → ② 이 구매에 적힌 이름 → ③ 번호 뒷자리 순으로 찾는다.
+    const { data } = await admin.from('profiles')
+      .select('display_name, phone').eq('id', buyerId).maybeSingle();
+    if (data && data.display_name && String(data.display_name).trim()) {
+      who = String(data.display_name).trim();
+    } else {
+      const { data: tk } = await admin.from('tickets')
+        .select('buyer_name, buyer_phone').eq('purchase_id', info.purchaseId).maybeSingle();
+      if (tk && tk.buyer_name && String(tk.buyer_name).trim()) {
+        who = String(tk.buyer_name).trim();
+      } else {
+        const tail = String((data && data.phone) || (tk && tk.buyer_phone) || '')
+          .replace(/[^0-9]/g, '').slice(-4);
+        if (tail) who = '회원 ' + tail;
+      }
+    }
   } catch (_e) { /* 이름은 장식 — 못 읽어도 보낸다 */ }
   const body = who + '님 · ' + info.rest + (info.pax ? ' · ' + info.pax + '인' : '')
              + ' · \u20A9' + Number(info.amount || 0).toLocaleString() + ' (카드)';
