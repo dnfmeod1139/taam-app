@@ -16281,6 +16281,33 @@ window.handleNotifClick = handleNotifClick;
 // 🎫 구매 티켓 (Supabase 연동)
 // ═══════════════════════════════════════════════════
 
+// 🆕 2026.08-31 1단계 — 동기화가 무엇을 올리는지 본다
+//
+//   savePurchase() 는 브라우저 메모리의 purchaseHistory 를 DB 와 비교해
+//   **없는 것을 status:'active' 로 INSERT** 한다. purchaseHistory 는 IDB 에
+//   저장되고 로컬 백업에서도 복원되므로, 회원이 자기 저장소에 가짜 구매를
+//   한 줄 적어 두면 앱이 그걸 올려 준다. 돈이 안 움직이는데 확정 예약이 생긴다.
+//
+//   ⚠ 처음엔 이 INSERT 를 지우려 했다가 되돌렸다. 코드를 읽어 보니
+//     **초대 결제(INV-)의 유일한 저장 경로**였다. riPay 가 purchaseHistory 에
+//     push 하고 savePurchase() 를 부르는 것이 전부다. 지웠으면 초대 결제가
+//     통째로 깨졌을 것이다 — 돈은 빠지고 예약은 안 생긴다.
+//
+//   그래서 지우지 않고 **가른다.** 이 세션에서 실제로 만든 구매는 정상이고,
+//   저장소에서 올라온 것은 봐야 한다. 세션 목록은 저장하지 않는다 —
+//   앱을 새로 열면 비므로, 복원된 것과 방금 산 것이 섞이지 않는다.
+//
+//   한 주 지켜본 뒤 알림이 안 오면 저장소 경로는 죽은 코드라는 뜻이고,
+//   그때 INSERT 를 안전하게 지울 수 있다. 3단계(INSERT 잠금)의 전제다.
+window._tkSessionPurchases = window._tkSessionPurchases || {};
+function _tkMarkSessionPurchase(pid){
+  if(pid) window._tkSessionPurchases[String(pid)] = 1;
+}
+function _tkIsSessionPurchase(pid){
+  return !!(pid && window._tkSessionPurchases[String(pid)]);
+}
+window._tkMarkSessionPurchase = _tkMarkSessionPurchase;
+
 async function savePurchase(){
   try {
     // 🛡 2026.08: 빈 배열로 백업을 덮어쓰지 않는다 (구매내역 유실 방지).
@@ -16377,6 +16404,31 @@ async function savePurchase(){
         },
         created_at: h.date || new Date().toISOString(),
       }));
+
+    // 🆕 2026.08-31: 이 세션에서 만들지 않은 것이 올라가려 하면 알린다.
+    //   정상 구매(방금 산 것·초대 결제)는 세션 목록에 있어 조용히 지나간다.
+    //   저장소에서 복원된 것만 여기 걸린다 — 그게 봐야 할 것이다.
+    //   ⚠ 막지는 않는다. 아직 이 경로로 무엇이 오는지 모르고, 막았다가
+    //     진짜 복구가 필요한 건을 잃으면 되돌릴 수 없다. 먼저 본다.
+    try {
+      var _fromStore = toInsert.filter(function(r){ return !_tkIsSessionPurchase(r.purchase_id); });
+      if (_fromStore.length) {
+        console.warn('[savePurchase] 세션 밖에서 올라온 구매 ' + _fromStore.length + '건:',
+          _fromStore.map(function(r){ return r.purchase_id; }).join(', '));
+        if (typeof taamNotifyAdmins === 'function') {
+          taamNotifyAdmins({
+            type: 'sync_from_storage',
+            title: '⚠ 저장소에서 올라온 구매 ' + _fromStore.length + '건',
+            body: _fromStore.map(function(r){
+              return (r.restaurant_name || '매장') + ' · ' + (r.reservation_date || '날짜없음')
+                   + ' · ' + (r.party_size || 0) + '인 · ' + (r.purchase_id || '');
+            }).join('\n'),
+            // 내용을 통째로 담는다 — 나중에 손으로 되살려야 할 수도 있다
+            payload: { rows: _fromStore, user_id: user.id }
+          });
+        }
+      }
+    } catch(_sfe){ console.warn('[savePurchase] 세션 판별 실패(무시):', _sfe); }
 
     if(toInsert.length > 0){
       // 🆕 2026.07: 건별 INSERT — 좌석 트리거가 한 건을 거부해도 나머지는 정상 저장.
@@ -23723,6 +23775,9 @@ async function completePurchase(){
     paymentId: window._lastPaymentId || null,       // 포트원 결제 ID (없으면 예치금만 사용)
     _srcKey: _purchaseSrcKey                         // 역추적용 — 슈퍼어드민이 활용
   });
+      // 🆕 이 세션에서 만든 구매다. 저장소에서 복원된 것과 가르는 표시 —
+      //   이게 없으면 정상 구매마다 「저장소에서 올라옴」 알림이 간다.
+      try { _tkMarkSessionPurchase(purchaseHistory[purchaseHistory.length-1].purchaseId); } catch(_me){}
   savePurchase();
 
   // ═══════════════════════════════════════════
@@ -36388,7 +36443,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.31-d';
+var TAAM_WEB_BUILD = '2026.08.31-e';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -37485,6 +37540,9 @@ async function riConfirmPay(){
         visitTime: inv.visit_time || '',
         restName: inv.restaurant_name || ''        // restId 매칭 실패 시 폴백 표시
       });
+      // 🆕 이 세션에서 만든 구매다. 저장소에서 복원된 것과 가르는 표시 —
+      //   이게 없으면 정상 구매마다 「저장소에서 올라옴」 알림이 간다.
+      try { _tkMarkSessionPurchase(purchaseHistory[purchaseHistory.length-1].purchaseId); } catch(_me){}
       if (typeof savePurchase === 'function') {
         savePurchase().catch(function(_e){ console.warn('[riPay] savePurchase 실패:', _e); });
       }
