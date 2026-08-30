@@ -24124,15 +24124,30 @@ window._repIsCancelled = _repIsCancelled;
 //     한쪽만 바꾸면 앱은 열어주는데 서버가 막는(또는 그 반대) 상태가 된다.
 var REPURCHASE_RELEASE_DAYS = 7;
 
-// 이 티켓의 「판매 오픈 시각」. 등록일이 아니다 —
-//   오픈 예약(saleOpenAt)으로 미리 만들어 둔 티켓을 등록일로 세면
-//   오픈하자마자 풀린다. 그건 사고다.
+// 이 티켓이 「실제로 발매된 시각」. 발매된 적이 없으면 null.
+//
+//   ⚠ _tuSaleKind() 와 같은 규칙이다. 그게 판매 공개 상태의 기준이다.
+//     · 발행(open)        — 등록한 날부터 팔린다
+//     · 오픈 예약(sched)  — saleOpenAt 이 지나야 팔린다
+//     · 미공개 보관(draft) — 팔린 적이 없다 → 세지 않는다
+//
+//   처음엔 (saleOpenAt || regDate) 로 짰다가 되돌렸다. 그러면 미공개 보관이
+//   등록 7일 뒤에 저절로 풀린다 — 발매된 적도 없는데. 미리 만들어 둔 것은
+//   적용되지 않아야 한다. 카운트다운은 발매부터다.
 function _repSaleOpenedAt(t){
-  var v = t && (t.saleOpenAt || t.regDate);
-  if(!v) return null;
-  var sv = String(v);
-  var d = new Date(sv.length <= 10 ? (sv + 'T00:00:00') : sv);
-  return isNaN(d.getTime()) ? null : d;
+  if(!t) return null;
+  var ss = t.saleState || 'open';
+  if(ss === 'draft') return null;              // 미공개 보관 — 발매된 적 없다
+  if(ss === 'scheduled'){
+    if(!t.saleOpenAt) return null;             // 오픈 일시 미정 — 아직이다
+    var od = new Date(t.saleOpenAt);
+    if(isNaN(od.getTime()) || od.getTime() > Date.now()) return null;
+    return od;                                 // 오픈 시각이 지났다 = 그때 발매
+  }
+  if(!t.regDate) return null;
+  var rv = String(t.regDate);
+  var rd = new Date(rv.length <= 10 ? (rv + 'T00:00:00') : rv);
+  return isNaN(rd.getTime()) ? null : rd;      // 발행 — 등록일부터
 }
 
 function _repReleasedByAge(t){
@@ -36326,7 +36341,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.31-b';
+var TAAM_WEB_BUILD = '2026.08.31-c';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){

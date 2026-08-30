@@ -14,10 +14,15 @@
 --   경험이다. 실제로 완판이면 살 자리가 없으니 해제해도 아무 일이 없다.
 --   조건이 하나면 회원에게 설명하기도 쉽다 — 「7일 지나면 열립니다」.
 --
--- 기준 시각은 「등록일」이 아니라 「판매 오픈 시각」이다
---   ticket_products 에 sale_state='scheduled' + sale_open_at 이 있다.
---   3주 전에 만들어 두고 어제 오픈한 티켓을 등록일로 세면 **오픈하자마자
---   풀린다.** 그건 사고다. coalesce(sale_open_at, reg_date) 로 센다.
+-- 카운트다운은 「발매된 다음부터」다
+--   ticket_products 에 판매 공개 상태가 셋 있다.
+--     · 발행(open)        — 등록한 날부터 팔린다        → 등록일부터 센다
+--     · 오픈 예약(sched)  — sale_open_at 이 지나야 팔린다 → 그 시각부터 센다
+--     · 미공개 보관(draft) — 팔린 적이 없다              → **세지 않는다**
+--
+--   미리 만들어 둔 것은 적용되지 않아야 한다. draft 를 등록일로 세면
+--   **발매된 적도 없는데 7일 뒤에 풀린다.** 「오픈 예약인데 일시 미정」도 같다.
+--   앱의 _tuSaleKind() 가 이 분류의 기준이라 그것과 한 글자도 안 어긋나게 맞춘다.
 --
 -- ⚠ 세 곳이 같은 규칙이어야 한다
 --   ① 이 트리거              — 서버의 마지막 그물
@@ -40,7 +45,21 @@ comment on function public.taam_repurchase_release_days() is
   '재구매 제한 자동 해제 일수. 앱의 REPURCHASE_RELEASE_DAYS 와 같아야 한다.';
 
 
--- 이 티켓의 「판매 오픈 시각」. 모르면 null 을 준다.
+-- 이 티켓이 「실제로 발매된 시각」. 발매된 적이 없으면 null 을 준다.
+--
+--   ⚠ 앱의 _tuSaleKind() 와 같은 규칙이어야 한다. 그 함수가 판매 공개 상태의
+--     기준이다 — open=발행 / sched=오픈 예약(아직) / draft=미공개 보관.
+--
+--     function _tuSaleKind(t){
+--       var ss = t.saleState || 'open';
+--       if (ss === 'draft') return 'draft';
+--       if (ss === 'scheduled') return (!t.saleOpenAt || new Date(t.saleOpenAt) > new Date()) ? 'sched' : 'open';
+--       return 'open';
+--     }
+--
+--   처음엔 coalesce(sale_open_at, reg_date) 로 짰다가 되돌렸다. 그러면
+--   **미공개 보관(draft)이 등록 7일 뒤에 저절로 풀린다** — 발매된 적도 없는데.
+--   「오픈 예약인데 일시 미정」도 같은 구멍이었다. 카운트다운은 발매부터다.
 create or replace function public.taam_ticket_sale_opened_at(p_ticket_id text)
 returns timestamptz
 language sql
@@ -49,9 +68,16 @@ security definer
 set search_path = public
 as $$
   select case
-           -- 오픈 예약이면 그 시각이 진짜 판매 시작이다
-           when tp.sale_open_at is not null then tp.sale_open_at::timestamptz
-           -- 아니면 등록일 (날짜만 있으므로 그날 0시로 본다)
+           -- 미공개 보관 — 발매된 적이 없다. 카운트다운도 없다
+           when coalesce(tp.sale_state, 'open') = 'draft' then null
+           -- 오픈 예약 — 그 시각이 지나야 발매다. 일시 미정이면 아직 아니다
+           when coalesce(tp.sale_state, 'open') = 'scheduled' then
+                case when tp.sale_open_at is not null
+                      and tp.sale_open_at <= now()
+                     then tp.sale_open_at::timestamptz
+                     else null
+                end
+           -- 발행 — 등록한 날부터 팔린다 (날짜만 있으므로 그날 0시로 본다)
            when tp.reg_date is not null then (tp.reg_date::date)::timestamptz
            else null
          end
