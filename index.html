@@ -23624,10 +23624,43 @@ async function completePurchase(){
       //
       //   종전엔 console.warn 만 남겨서 아무도 몰랐다. 재시도하고, 끝내 안 되면
       //   회원에게 알린다 — 돈이 빠진 건은 조용히 넘어가면 안 된다.
+      // 🆕 2026.08-31: 예치금 전액이면 서버 RPC 하나로 끝낸다.
+      //
+      //   위 주석이 적어 둔 사고 — 「예치금은 빠졌는데 티켓이 없다」 — 는
+      //   차감·거래기록·티켓확정이 **따로따로 나가서** 생긴 것이다. 중간이
+      //   끊기면 앞엣것만 남는다. taam_purchase_confirm_deposit 은 셋을 한
+      //   트랜잭션으로 묶는다. 전부 되거나 전부 없던 일이 된다.
+      //
+      //   그리고 금액을 서버가 다시 센다. 종전엔 앱이 정한 paid 를 그대로
+      //   적었다 — 앱을 거치지 않으면 아무 금액이나 쓸 수 있었다.
+      //
+      //   ⚠ 카드(PortOne)가 섞인 결제는 예전 경로 그대로 둔다. 그쪽은
+      //     PG 충전분을 예치금에 더하는 계산이 얽혀 있어 함께 옮기면 위험하다.
+      //     실측상 카드 결제 실적은 0이라 급하지도 않다.
+      var _depositOnly = !window._lastPaymentId
+                      && !(parseInt(window._tdPgPayAmount || 0) || 0);
       var _hOk = false, _hErr = null;
       for (var _ht = 0; _ht < 3 && !_hOk; _ht++) {
         if (_ht > 0) await new Promise(function(rz){ setTimeout(rz, 600 * _ht); });
         try {
+          if (_depositOnly) {
+            var _rc = await window.sb.rpc('taam_purchase_confirm_deposit', {
+              p_purchase_id:   _hid,
+              p_expect_amount: paid,
+              p_buyer_name:    (await _taamMyName()) || '',
+              p_buyer_phone:   _currentUserPhone || ''
+            });
+            if (_rc.error) {
+              _hErr = _rc.error.message;
+              // 금액이 바뀌었거나 잔액이 모자라면 다시 시도해도 소용없다 — 바로 멈춘다
+              if (/PRICE_CHANGED|INSUFFICIENT_DEPOSIT|HOLD_GONE/.test(_hErr)) break;
+              continue;
+            }
+            // 서버가 차감까지 했다. 아래 예치금 블록이 또 빼지 않도록 표시한다.
+            window._tkServerConfirmed = true;
+            console.log('[seatHold] 서버 확정 완료:', _rc.data);
+            _hOk = true; break;
+          }
           var _up = await window.sb.from('tickets')
             .update({ status: 'active', price: paid,
                       buyer_name: (await _taamMyName()) || '', buyer_phone: _currentUserPhone || '' })
@@ -23842,6 +23875,20 @@ async function completePurchase(){
           commonMeta.fx_rate = _hFx.fxRate;
         }
       } catch(_fxe){}
+
+      // 🆕 2026.08-31: 서버가 이미 차감·기록까지 했으면 여기서 또 하지 않는다.
+      //   taam_purchase_confirm_deposit 이 한 트랜잭션으로 끝냈다.
+      //   이 표시를 안 보면 **두 번 빠진다.**
+      if (window._tkServerConfirmed) {
+        window._tkServerConfirmed = false;
+        currentDepositBalance = Math.max(0, balanceBeforePay - paid);
+        try {
+          var _mb = document.getElementById('mpBalance');
+          if(_mb) _mb.textContent = taamMoney(currentDepositBalance);
+        } catch(_be){}
+        console.log('[deposit] 서버가 이미 처리함 — 앱 차감 건너뜀');
+        return;
+      }
 
       var balanceTracker = balanceBeforePay;
       // 🔧 2026.05.22: 컬럼별 차감/충전 추적 — 마지막에 profiles update 함께 진행
@@ -36341,7 +36388,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.31-c';
+var TAAM_WEB_BUILD = '2026.08.31-d';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
