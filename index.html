@@ -16713,16 +16713,36 @@ function vpSend(){
 //   ⚠ 프로필 UPDATE 가 아직 안 끝났을 수 있으므로 DB 를 다시 읽지 않고
 //     가입 흐름이 이미 들고 있는 값으로만 쓴다.
 var _memberJoinNotified = false;
-function _notifyMemberJoined(user, name, phone){
+async function _notifyMemberJoined(user, name, phone){
   try {
     if(_memberJoinNotified) return;              // 경로가 겹쳐도 한 번만
     if(typeof taamNotifyAdmins !== 'function') return;
     _memberJoinNotified = true;
 
     var inv  = _pendingInviteCode || {};
-    var tier = (inv.inviteeTier || inv.invitee_tier || 'T');
+
+    // 🆕 2026.08-30: 등급을 invite_codes 에서 직접 읽는다.
+    //   종전엔 메모리에 든 초대 객체만 봤다. 그런데 일반 가입 경로(verify-invite)가
+    //   만드는 객체에는 등급 칸이 아예 없어서 언제나 'T' 로 떨어졌다 —
+    //   M 으로 초대해 M 으로 가입한 회원인데 알림만 「T등급」이라고 나갔다.
+    //   프로필 등급을 고칠 때 같은 자리를 고쳤는데 알림은 놓쳤다.
+    //
+    //   초대 코드 행은 가입이 건드리지 않으므로 지금 읽어도 경합이 없다.
+    //   프로필과 같은 곳을 보게 해야 둘이 어긋날 수 없다.
+    var tier = (inv.inviteeTier || inv.invitee_tier || '');
+    var ctry = (inv.country || '');
+    if(inv.code && window.sb){
+      try {
+        var _q = await window.sb.from('invite_codes')
+          .select('invitee_tier, country').eq('code', String(inv.code)).maybeSingle();
+        if(_q && _q.data){
+          if(_q.data.invitee_tier) tier = _q.data.invitee_tier;
+          if(_q.data.country) ctry = _q.data.country;
+        }
+      } catch(_qe){ console.warn('[join] 초대코드 조회 실패 — 메모리 값 사용:', _qe && _qe.message); }
+    }
     if(['M','T','A'].indexOf(tier) < 0) tier = 'T';
-    var ctry = ((inv.country || 'KR') === 'EN') ? '해외' : '국내';
+    ctry = (ctry === 'EN') ? '해외' : '국내';
     var who  = (name && String(name).trim())
             || (inv.memberName || inv.invitee_name || '').toString().trim()
             || '새 회원';
@@ -16741,7 +16761,7 @@ function _notifyMemberJoined(user, name, phone){
       url: '/',
       tag: 'taam-join-' + String(user && user.id || '').slice(0, 8),
       payload: { user_id: (user && user.id) || null, tier: tier,
-                 country: (inv.country || 'KR'), code: inv.code || null }
+                 country: (ctry === '해외' ? 'EN' : 'KR'), code: inv.code || null }
     });
   } catch(e){ console.warn('[join] 가입 통지 예외:', e && e.message); }
 }
@@ -34132,7 +34152,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.30-a';
+var TAAM_WEB_BUILD = '2026.08.30-b';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
