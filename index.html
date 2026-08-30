@@ -23625,6 +23625,56 @@ function _tkRepurchaseExempt(){
 }
 window._tkRepurchaseExempt = _tkRepurchaseExempt;
 
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026.08-30: 재구매 제한의 날짜 읽기 — 연도가 빠져 제한이 통째로 풀렸다
+// ═══════════════════════════════════════════════════════════════
+//   티켓 객체는 날짜를 두 칸에 나눠 갖는다. t.date = '1.23' · t.dateYear = 2027.
+//   그런데 판정은 t.date 만 보고, 연도가 없으면 「올해」로 채웠다.
+//   구매내역 쪽(reservation_date)은 _tkFullDate 로 저장돼 '2027.4.17' 처럼
+//   연도가 들어 있다. 그래서 한쪽만 연도가 밀렸다.
+//
+//     2027.1.23 을 2026.1.23 으로 읽음 → 2027.4.17 과의 간격이
+//     84일이 아니라 449일 → 90일 제한을 그냥 통과
+//
+//   실제로 이렇게 새어 나갔다. 앞뒤 순서 때문이 아니라 연도 때문이었다.
+//
+// 연도를 정말 모를 때는 「가장 가까운 해」로 붙인다.
+//   모르는 연도를 올해로 밀어버리면 위와 같은 일이 다시 난다. 제한을 거는
+//   판정이므로, 모를 때는 가까운 쪽(= 더 많이 막는 쪽)으로 붙이는 것이 맞다.
+function _repParseDate(v, ref){
+  var s = String(v == null ? '' : v).trim();
+  if(!s) return null;
+  // 'YYYY.M.D' · 'YYYY-MM-DD' · ISO · 'M.D' 를 모두 받는다
+  var p = s.split(/[.\-\/T\s]/)
+           .map(function(x){ return parseInt(x, 10); })
+           .filter(function(x){ return !isNaN(x); });
+  if(p.length >= 3){
+    var d3 = new Date(p[0], p[1] - 1, p[2]);
+    return isNaN(d3.getTime()) ? null : d3;
+  }
+  if(p.length === 2){
+    var base = (ref instanceof Date && !isNaN(ref.getTime())) ? ref : new Date();
+    var best = null, gap = Infinity;
+    for(var i = -1; i <= 1; i++){
+      var c = new Date(base.getFullYear() + i, p[0] - 1, p[1]);
+      var g = Math.abs(c - base);
+      if(g < gap){ gap = g; best = c; }
+    }
+    return best;
+  }
+  return null;
+}
+// 구매하려는 티켓의 방문일 — 연도(dateYear)를 반드시 함께 본다
+function _repTicketDate(t){
+  if(!t) return null;
+  var raw = String(t.date || t.visitDate || '').trim();
+  if(!raw) return null;
+  // date 에 이미 연도가 들어 있으면 그대로 둔다 (붙이면 '2027.2027.1.23' 이 된다)
+  if(raw.split(/[.\-\/]/).length < 3 && t.dateYear) raw = t.dateYear + '.' + raw;
+  return _repParseDate(raw, new Date());
+}
+window._repParseDate = _repParseDate; window._repTicketDate = _repTicketDate;
+
 function checkRepurchaseLimit(t){
   // 면제 계정은 재구매 제한을 적용하지 않는다 (심사용 테스트 계정 · 슈퍼어드민)
   if (_tkRepurchaseExempt()) {
@@ -23634,27 +23684,22 @@ function checkRepurchaseLimit(t){
   var r=restaurantDB.find(function(x){return String(x.id)===String(t.restId);});
   if(!r||!r.repurchaseDay||r.repurchaseDay===0)return true;
 
-  // 구매하려는 티켓의 예약일 파싱
-  function parseVisitDate(vd, fallback){
-    var parts=(vd||'').split('.');
-    if(parts.length>=3) return new Date(parseInt(parts[0]),parseInt(parts[1])-1,parseInt(parts[2]));
-    if(parts.length===2) return new Date(new Date().getFullYear(),parseInt(parts[0])-1,parseInt(parts[1]));
-    return fallback ? new Date(fallback) : new Date();
-  }
+  var newVisitDate = _repTicketDate(t);
+  if(!newVisitDate) return true;   // 방문일을 못 읽으면 막지 않는다
 
-  var newVisitDate = parseVisitDate(t.date || t.visitDate);
-
-  // 같은 레스토랑의 기존 구매 내역 검색
+  // 같은 레스토랑의 기존 구매 내역 검색.
+  //   앞뒤를 가리지 않는다 — 4월 티켓을 먼저 사고 1월 티켓을 사도, 두 방문일
+  //   사이가 제한 일수 안이면 똑같이 막는다. Math.abs 가 그 역할을 한다.
   var blocked = purchaseHistory.find(function(h){
     if(String(h.restId)!==String(t.restId)) return false;
-    var prevVisitDate = parseVisitDate(h.visitDate, h.date);
-    // 기존 예약일로부터 N일 이내의 예약일은 구매 불가
-    var diff = (newVisitDate - prevVisitDate)/(1000*60*60*24);
+    var prev = _repParseDate(h.visitDate || h.date, newVisitDate);
+    if(!prev) return false;
+    var diff = (newVisitDate - prev)/(1000*60*60*24);
     return Math.abs(diff) < r.repurchaseDay;
   });
 
   if(blocked){
-    var prevVisitDate = parseVisitDate(blocked.visitDate, blocked.date);
+    var prevVisitDate = _repParseDate(blocked.visitDate || blocked.date, newVisitDate);
     var diff = (newVisitDate - prevVisitDate)/(1000*60*60*24);
     var left = r.repurchaseDay - Math.floor(Math.abs(diff));
     showRepurchasePopup(r.repurchaseDay, left, blocked.visitDate||'');
@@ -34787,7 +34832,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.30-i';
+var TAAM_WEB_BUILD = '2026.08.30-j';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
