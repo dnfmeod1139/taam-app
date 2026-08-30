@@ -105,49 +105,56 @@ comment on function public._taam_uid_is_super() is
 
 
 -- ═══════════════════════════════════════════════════════════════
--- ② 확인 — 지금 슈퍼어드민이 누구인가
+-- ② 확인 — 네 가지를 한 표로 본다
 -- ═══════════════════════════════════════════════════════════════
---   막기 전에 이미 올라간 사람이 있는지 본다. 아는 계정만 있어야 한다.
-select id                                   as "회원 id",
-       coalesce(display_name, '(이름 없음)') as "이름",
-       coalesce(email, phone, '(없음)')      as "연락처",
-       role                                 as "역할",
-       (created_at at time zone 'UTC')::date as "가입일"
-from public.profiles
-where role in ('super_admin','superadmin')
-order by created_at;
-
--- 모르는 계정이 있으면 그 자리에서 내린다 (id 를 넣어 실행):
---   update public.profiles set role = 'member' where id = '<그 id>';
-
-
--- ═══════════════════════════════════════════════════════════════
--- ③ 가입(INSERT) 쪽도 같이 확인한다
--- ═══════════════════════════════════════════════════════════════
---   이 트리거는 UPDATE 만 막는다. 가입할 때 role 을 직접 넣어 만들 수
---   있는지는 INSERT 정책의 WITH CHECK 와 auto_promote 트리거가 정한다.
-select policyname as "정책", cmd as "동작",
-       coalesce(qual, '(없음)')       as "USING",
-       coalesce(with_check, '(없음)') as "WITH CHECK"
-from pg_policies
-where schemaname = 'public' and tablename = 'profiles' and cmd = 'INSERT';
-
---   가입 때 role 을 무엇으로 정하는지 (이메일로 판정하는지)
-select pg_get_functiondef(oid) as "auto_promote_super_admin 정의"
-from pg_proc where proname = 'auto_promote_super_admin';
-
---   ⚠ WITH CHECK 가 그냥 true 이고 auto_promote 가 role 을 덮어쓰지 않으면,
---     가입할 때 role='super_admin' 으로 넣어 만들 수 있다. 그러면 INSERT 도
---     같이 막아야 한다 — 결과를 보고 판단한다.
-
-
--- ═══════════════════════════════════════════════════════════════
--- ④ 트리거가 붙었는지
--- ═══════════════════════════════════════════════════════════════
-select tgname as "트리거", pg_get_triggerdef(oid) as "정의"
+--   ⚠ Supabase SQL Editor 는 여러 SELECT 를 돌려도 「마지막 결과 하나」만
+--     보여준다. 그래서 확인 쿼리를 나눠 쓰면 앞엣것이 화면에서 사라진다.
+--     실제로 그렇게 만들었다가 트리거 결과만 보였다. 그래서 합쳐 둔다.
+--
+--   무엇을 보나
+--     ⓐ 트리거    — 붙었는지
+--     ⓑ 슈퍼어드민 — 이미 올라간 사람이 있는지. 아는 계정만 있어야 한다
+--     ⓒ INSERT 정책 — WITH CHECK 가 가입 때 role 을 막는지
+--     ⓓ auto_promote — 가입 때 role 을 무엇으로 덮어쓰는지
+--
+--   ⚠ ⓒ 의 WITH CHECK 가 그냥 true 인데 ⓓ 가 role 을 덮어쓰지 않으면,
+--     가입할 때 role='super_admin' 으로 넣어 만들 수 있다는 뜻이다.
+--     그러면 INSERT 도 같이 막아야 한다 — 결과를 보고 판단한다.
+select 'ⓐ 트리거'                    as "구분",
+       tgname                        as "이름",
+       '설치됨'                      as "내용"
 from pg_trigger
 where tgrelid = 'public.profiles'::regclass
-  and tgname = 'trg_taam_guard_profile_role';
+  and tgname = 'trg_taam_guard_profile_role'
+
+union all
+select 'ⓑ 슈퍼어드민',
+       coalesce(display_name, '(이름 없음)'),
+       coalesce(email, phone, '(연락처 없음)') || '  ·  ' || role
+         || '  ·  가입 ' || (created_at at time zone 'UTC')::date::text
+from public.profiles
+where role in ('super_admin','superadmin')
+
+union all
+select 'ⓒ INSERT 정책',
+       policyname,
+       'WITH CHECK: ' || coalesce(with_check, '(없음)')
+from pg_policies
+where schemaname = 'public' and tablename = 'profiles' and cmd = 'INSERT'
+
+union all
+select 'ⓓ auto_promote',
+       proname,
+       pg_get_functiondef(oid)
+from pg_proc
+where proname = 'auto_promote_super_admin'
+
+order by 1, 2;
+
+-- 모르는 슈퍼어드민이 있으면 그 자리에서 내린다 (id 를 넣어 실행):
+--   update public.profiles set role = 'member' where id = '<그 id>';
+--
+-- ⚠ ⓐ 줄이 아예 안 나오면 트리거가 안 붙은 것이다. 위 ① 을 다시 돌린다.
 
 
 -- ═══════════════════════════════════════════════════════════════
