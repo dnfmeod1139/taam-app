@@ -16713,16 +16713,36 @@ function vpSend(){
 //   ⚠ 프로필 UPDATE 가 아직 안 끝났을 수 있으므로 DB 를 다시 읽지 않고
 //     가입 흐름이 이미 들고 있는 값으로만 쓴다.
 var _memberJoinNotified = false;
-function _notifyMemberJoined(user, name, phone){
+async function _notifyMemberJoined(user, name, phone){
   try {
     if(_memberJoinNotified) return;              // 경로가 겹쳐도 한 번만
     if(typeof taamNotifyAdmins !== 'function') return;
     _memberJoinNotified = true;
 
     var inv  = _pendingInviteCode || {};
-    var tier = (inv.inviteeTier || inv.invitee_tier || 'T');
+
+    // 🆕 2026.08-30: 등급을 invite_codes 에서 직접 읽는다.
+    //   종전엔 메모리에 든 초대 객체만 봤다. 그런데 일반 가입 경로(verify-invite)가
+    //   만드는 객체에는 등급 칸이 아예 없어서 언제나 'T' 로 떨어졌다 —
+    //   M 으로 초대해 M 으로 가입한 회원인데 알림만 「T등급」이라고 나갔다.
+    //   프로필 등급을 고칠 때 같은 자리를 고쳤는데 알림은 놓쳤다.
+    //
+    //   초대 코드 행은 가입이 건드리지 않으므로 지금 읽어도 경합이 없다.
+    //   프로필과 같은 곳을 보게 해야 둘이 어긋날 수 없다.
+    var tier = (inv.inviteeTier || inv.invitee_tier || '');
+    var ctry = (inv.country || '');
+    if(inv.code && window.sb){
+      try {
+        var _q = await window.sb.from('invite_codes')
+          .select('invitee_tier, country').eq('code', String(inv.code)).maybeSingle();
+        if(_q && _q.data){
+          if(_q.data.invitee_tier) tier = _q.data.invitee_tier;
+          if(_q.data.country) ctry = _q.data.country;
+        }
+      } catch(_qe){ console.warn('[join] 초대코드 조회 실패 — 메모리 값 사용:', _qe && _qe.message); }
+    }
     if(['M','T','A'].indexOf(tier) < 0) tier = 'T';
-    var ctry = ((inv.country || 'KR') === 'EN') ? '해외' : '국내';
+    ctry = (ctry === 'EN') ? '해외' : '국내';
     var who  = (name && String(name).trim())
             || (inv.memberName || inv.invitee_name || '').toString().trim()
             || '새 회원';
@@ -16741,7 +16761,7 @@ function _notifyMemberJoined(user, name, phone){
       url: '/',
       tag: 'taam-join-' + String(user && user.id || '').slice(0, 8),
       payload: { user_id: (user && user.id) || null, tier: tier,
-                 country: (inv.country || 'KR'), code: inv.code || null }
+                 country: (ctry === '해외' ? 'EN' : 'KR'), code: inv.code || null }
     });
   } catch(e){ console.warn('[join] 가입 통지 예외:', e && e.message); }
 }
@@ -34132,7 +34152,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.29-r';
+var TAAM_WEB_BUILD = '2026.08.30-b';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -34660,7 +34680,46 @@ function tbBuildMessage(tickets){
   } else {
     body = lines[0] + ' 외 ' + (lines.length - 1) + '개 티켓이 오픈되었습니다';
   }
-  return { title: title, body: body, preview: preview, lines: lines };
+
+  // 🆕 2026.08-30: 세 언어를 함께 만든다. 받는 기기의 언어로 send-push 가 고른다.
+  //   이 문구는 어드민이 직접 쓰는 글이 아니라 티켓 데이터로 짜는 템플릿이라,
+  //   번역을 부르지 않고 여기서 그대로 세 벌을 만들 수 있다.
+  //   ⚠ 날짜 형식과 매장 이름이 언어마다 다르다. 한국어 문장에 영문 이름만
+  //     바꿔 끼우면 「2027년 1월 23일 acá 1° 티켓이 오픈되었습니다」가 된다.
+  var MN = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  function lineFor(t, lang){
+    var rest = (restaurantDB || []).find(function(r){ return String(r.id) === String(t.restId); });
+    var nm = rest ? ((lang === 'en' && rest.name_en) ? rest.name_en
+                   : (lang === 'ja' && rest.name_jp && rest.i18n_jp_approved !== false) ? rest.name_jp
+                   : (rest.name || '')) : '';
+    if(!nm) nm = t.rest || '';
+    var d = ((typeof _tkFullDate === 'function' ? _tkFullDate(t) : (t.date || '')) || '').split('.');
+    var y = d.length === 3 ? parseInt(d[0],10) : 0,
+        mo = d.length === 3 ? parseInt(d[1],10) : 0,
+        dd = d.length === 3 ? parseInt(d[2],10) : 0;
+    var ds = !y ? (t.date || '')
+      : (lang === 'en' ? (MN[mo-1] + ' ' + dd + ', ' + y)
+      : (lang === 'ja' ? (y + '年' + mo + '月' + dd + '日')
+      : (y + '년 ' + mo + '월 ' + dd + '일')));
+    return lang === 'en' ? (nm + ' — ' + ds) : (ds + ' ' + nm);
+  }
+  function bundle(lang){
+    var ls = tickets.map(function(t){ return lineFor(t, lang); });
+    var more = ls.length - 1;
+    if(lang === 'en'){
+      return { title: '🎫 New tickets',
+               body: ls[0] + (more > 0 ? ' and ' + more + ' more' : '') + ' — now open' };
+    }
+    if(lang === 'ja'){
+      return { title: '🎫 新しいチケット',
+               body: ls[0] + (more > 0 ? ' 他' + more + '件' : '') + ' のチケットが公開されました' };
+    }
+    return { title: title,
+             body: ls[0] + (more > 0 ? ' 외 ' + more + '개' : '') + ' 티켓이 오픈되었습니다' };
+  }
+  var i18n = { ko: bundle('ko'), en: bundle('en'), ja: bundle('ja') };
+
+  return { title: title, body: body, preview: preview, lines: lines, i18n: i18n };
 }
 
 function tbUpdatePreview(){
@@ -34744,8 +34803,11 @@ async function tbSendBroadcast(){
           body: {
             to: 'uid:' + uid,
             payload: {
+              // title/body 는 폴백 — send-push 를 아직 안 바꾼 환경에서도 나간다
               title: msg.title,
               body: msg.body,
+              // 🆕 2026.08-30: 받는 기기의 언어로 골라 쓴다 (push_subscriptions.lang)
+              i18n: msg.i18n,
               url: targetUrl,
               category: 'ticket_open',
               tag: 'taam-tkopen-' + Date.now()
@@ -52170,6 +52232,12 @@ function _onSwMessage(event){
 // 🆕 구독 저장 공통 — SECURITY DEFINER RPC(save_push_subscription) 우선 → RLS 우회.
 //   RPC 미배포 등으로 실패하면 기존 직접 upsert 로 폴백. 반환: { error, via }.
 async function _pushSaveSub(payload){
+  // 🆕 2026.08-30: 이 기기가 쓰는 언어를 같이 저장한다.
+  //   푸시 문구는 기기로 간다. 회원 한 명이 폰은 일본어, PC 는 한국어일 수 있으니
+  //   사람이 아니라 기기에 붙인다. 저장 경로가 둘이라 여기 한 군데서 붙인다 —
+  //   호출부마다 넣게 하면 한쪽을 빠뜨리고 그 기기만 한국어를 받는다.
+  var _lang = payload.lang || window._tkCurrentLang || 'ko';
+  if(['ko','en','ja'].indexOf(_lang) < 0) _lang = 'ko';
   try {
     var rpc = await window.sb.rpc('save_push_subscription', {
       p_endpoint: payload.endpoint,
@@ -52178,11 +52246,34 @@ async function _pushSaveSub(payload){
       p_user_agent: payload.user_agent || null,
       p_device_label: payload.device_label || null,
       p_role: payload.role || null,
-      p_topics: payload.topics || []
+      p_topics: payload.topics || [],
+      p_lang: _lang
     });
     if(!rpc.error) return { error: null, via: 'rpc' };
+    // sql/push_lang.sql 을 아직 안 돌린 환경 — p_lang 을 모르는 옛 RPC 다.
+    // 언어를 빼고 다시 부른다. 구독 저장이 언어 때문에 통째로 실패하면 안 된다.
+    if(/p_lang|does not exist|schema cache/i.test(String(rpc.error.message || ''))){
+      var rpc2 = await window.sb.rpc('save_push_subscription', {
+        p_endpoint: payload.endpoint,
+        p_p256dh: payload.p256dh,
+        p_auth: payload.auth,
+        p_user_agent: payload.user_agent || null,
+        p_device_label: payload.device_label || null,
+        p_role: payload.role || null,
+        p_topics: payload.topics || []
+      });
+      if(!rpc2.error){
+        console.warn('[Push] 옛 RPC — 언어 없이 저장됨 (sql/push_lang.sql 실행 필요)');
+        return { error: null, via: 'rpc-nolang' };
+      }
+    }
     console.warn('[Push] RPC 저장 실패 → upsert 폴백:', rpc.error.message);
-    var up = await window.sb.from('push_subscriptions').upsert(payload, { onConflict: 'endpoint' });
+    var up = await window.sb.from('push_subscriptions')
+      .upsert(Object.assign({}, payload, { lang: _lang }), { onConflict: 'endpoint' });
+    if(up.error && /lang/i.test(String(up.error.message || ''))){
+      // lang 컬럼이 아직 없는 DB — 언어를 빼고 저장한다
+      up = await window.sb.from('push_subscriptions').upsert(payload, { onConflict: 'endpoint' });
+    }
     return { error: up.error, via: 'upsert' };
   } catch(e){ return { error: e }; }
 }

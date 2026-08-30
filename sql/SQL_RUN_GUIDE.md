@@ -15,6 +15,8 @@
 - set_super_admin_dnfmeod.sql         (본인 계정 슈퍼어드민 지정)
 - tickets_admin_rls.sql               (★ 레스토랑 어드민이 자기 매장 구매 조회 — 캘린더용)
    └ 실행 후, restaurant_admins 에 매핑 INSERT 필요 (파일 하단 주석 참고)
+- push_lang.sql                        (★ 푸시를 회원 언어로 — 컬럼 + 저장 RPC 확장)
+   └ ⚠ 이것만으로는 안 바뀐다. send-push Edge Function 을 대시보드에서 교체해야 실제로 갈린다
 - ticket_pax_change.sql               (★ 판매된 티켓의 인원 감소 + 차액 환불 RPC)
    └ 슈퍼어드민 또는 해당 매장 어드민만 실행. 돈이 움직이므로 실행자·사유가 남는다
 - (기존) ticket_access_lists.sql / ticket_access_helpers.sql

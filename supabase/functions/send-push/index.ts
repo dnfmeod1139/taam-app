@@ -504,7 +504,8 @@ Deno.serve(async (req: Request) => {
     }
 
     // 대상 쿼리
-    const SEL = "id,endpoint,p256dh,auth,user_id,topics,role";
+    // 🆕 2026.08-30: lang — 이 기기가 쓰는 언어. 없으면 ko 로 본다
+    const SEL = "id,endpoint,p256dh,auth,user_id,topics,role,lang";
     const sb = createClient(SUPABASE_URL, SERVICE_KEY);
     const [scope, scopeValue] = body.to.includes(":") ? body.to.split(":") : [body.to, ""];
 
@@ -633,6 +634,39 @@ Deno.serve(async (req: Request) => {
       } catch (_) { /* 조회 실패 시엔 보낸다 — 못 받는 것보다 낫다 */ }
     }
 
+    // ═══════════════════════════════════════════════════════════════
+    // 🆕 2026.08-30: 받는 사람의 언어로 보낸다
+    // ═══════════════════════════════════════════════════════════════
+    //   종전에는 앱이 보낸 title/body 를 그대로 전달만 했다. 한 번의 호출이
+    //   여러 기기로 가는데 문구가 하나뿐이라, 일본에 계신 회원도 한국어를 받았다.
+    //   ⚠ 핸드폰의 OS 언어 설정으로는 바뀌지 않는다 — OS 언어는 OS 가 만든
+    //     알림에만 적용된다. 우리가 고르지 않으면 아무도 안 골라준다.
+    //
+    //   payload.i18n = { ko:{title,body}, en:{...}, ja:{...} } 을 실어 보내면
+    //   기기의 lang 으로 고른다. 없으면 payload.title/body 를 그대로 쓴다 —
+    //   기존 호출부(16곳)를 한 줄도 안 고쳐도 지금처럼 돈다.
+    //
+    //   고를 수 없으면 ko 로 떨어뜨린다. 빈 알림을 보내느니 한국어가 낫다.
+    function pickLang(sub: any): string {
+      const raw = String(sub?.lang || "").toLowerCase();
+      if (raw.startsWith("ja")) return "ja";
+      if (raw.startsWith("en")) return "en";
+      return "ko";
+    }
+    function payloadFor(sub: any) {
+      const p: any = body.payload;
+      const i18n = p && p.i18n;
+      if (!i18n || typeof i18n !== "object") return p;
+      const lang = pickLang(sub);
+      const t = i18n[lang] || i18n.ko || i18n.en || i18n.ja;
+      if (!t) return p;
+      // i18n 은 문구만 갈아끼운다. url·category·tag·badge 는 언어와 무관하다
+      return Object.assign({}, p, {
+        title: t.title != null ? t.title : p.title,
+        body:  t.body  != null ? t.body  : p.body,
+      });
+    }
+
     const payloadStr = JSON.stringify(body.payload);
 
     // 🆕 FCM HTTP v1 API (OAuth2 + Service Account JSON 방식)
@@ -758,7 +792,7 @@ Deno.serve(async (req: Request) => {
         //   FCM 으로 보내면 APNs 기기토큰을 FCM 등록토큰으로 착각해 무조건 거부된다.
         //   APNS 시크릿이 없으면 종전 FCM 경로로 폴백 — 설정 전에도 앱은 그대로 돈다.
         if (s.endpoint.startsWith("apns://") && APNS_READY) {
-          const ar = await sendApnsPush(s.endpoint.replace(/^apns:\/\//, ""), body.payload);
+          const ar = await sendApnsPush(s.endpoint.replace(/^apns:\/\//, ""), payloadFor(s));
           if (ar.ok) return { id: s.id, ok: true, status: ar.status, apns: true };
           if ((ar as any).dead) {
             await sb.from("push_subscriptions").delete().eq("id", s.id);
@@ -770,7 +804,7 @@ Deno.serve(async (req: Request) => {
         // 🆕 Native 토큰이면 FCM v1 사용 (Android FCM · APNs 폴백)
         const isNative = s.endpoint.startsWith("fcm://") || s.endpoint.startsWith("apns://");
         if (isNative) {
-          const nr = await sendNativePush(s.endpoint, body.payload);
+          const nr = await sendNativePush(s.endpoint, payloadFor(s));
           if (nr.ok) return { id: s.id, ok: true, status: nr.status, native: true };
           // 만료/무효 토큰은 sendNativePush 안에서 이미 push_subscriptions 에서 삭제됨
           if ((nr as any).removed) {
@@ -780,7 +814,9 @@ Deno.serve(async (req: Request) => {
         }
 
         // Web Push (기존)
-        const r = await sendWebPush(s.endpoint, s.p256dh, s.auth, payloadStr);
+        // 웹푸시는 문자열을 통째로 실어 보낸다. 기기 언어가 다르면 그 기기 것만 다시 만든다
+        const _ps = (body.payload as any)?.i18n ? JSON.stringify(payloadFor(s)) : payloadStr;
+        const r = await sendWebPush(s.endpoint, s.p256dh, s.auth, _ps);
         if (r.status >= 200 && r.status < 300) {
           return { id: s.id, ok: true, status: r.status };
         }
