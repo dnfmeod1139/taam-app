@@ -13,6 +13,9 @@
 --   무엇을 취소·환불할지는 사람이 판단한다 — 돈이 걸린 자리라 자동으로
 --   손대지 않는다.
 --
+-- ⚠ restaurants.id 는 uuid, tickets.restaurant_id 는 text 다. 그냥 join 하면
+--   'operator does not exist: uuid = text' 로 죽는다. 양쪽을 ::text 로 맞춘다.
+--
 -- 실행: Supabase SQL Editor 에 통째로 붙여넣고 RUN.
 -- ═══════════════════════════════════════════════════════════════
 
@@ -57,7 +60,7 @@ pairs as (
     on a.user_id = b.user_id
    and a.restaurant_id = b.restaurant_id
    and a.purchase_id < b.purchase_id                 -- 같은 쌍을 두 번 세지 않는다
-  join public.restaurants r on r.id = a.restaurant_id
+  join public.restaurants r on r.id::text = a.restaurant_id::text
   where a.vd is not null and b.vd is not null
     and coalesce(r.repurchase_day, 0) > 0
     and abs(a.vd - b.vd) < r.repurchase_day
@@ -109,7 +112,7 @@ select k.reservation_date   as "방문일",
        k.purchase_id        as "구매번호",
        coalesce(r.repurchase_day, 0) as "그 매장 제한(일)"
 from public.tickets k
-left join public.restaurants r on r.id = k.restaurant_id
+left join public.restaurants r on r.id::text = k.restaurant_id::text
 where k.buyer_name = '구자호'
   and k.purchase_id not like 'PAYH-%'
 order by k.reservation_date;
