@@ -24110,6 +24110,39 @@ function _repIsCancelled(h){
 window._repParseDate = _repParseDate; window._repTicketDate = _repTicketDate;
 window._repIsCancelled = _repIsCancelled;
 
+// 🆕 2026.08-31: 판매 오픈 7일이 지나면 재구매 제한을 푼다.
+//
+//   재구매 제한은 귀한 자리를 여러 회원에게 고루 나누려는 규칙이다. 그런데
+//   7일이 지나도록 안 팔린 자리는 나눌 경쟁자가 없다는 뜻이다. 비워 두면
+//   매장도 회원도 탐도 손해다. 전제가 사라졌으면 규칙도 풀리는 게 맞다.
+//
+//   좌석이 얼마나 남았는지는 안 본다 — 인기 있는 곳은 바로 완판되고 아닌 곳은
+//   몇 자리든 그대로 남는다(운영 경험). 완판이면 어차피 살 자리가 없으니
+//   해제해도 아무 일이 없다. 조건이 하나면 회원에게 설명하기도 쉽다.
+//
+//   ⚠ 이 값은 서버에도 있다 — taam_repurchase_release_days().
+//     한쪽만 바꾸면 앱은 열어주는데 서버가 막는(또는 그 반대) 상태가 된다.
+var REPURCHASE_RELEASE_DAYS = 7;
+
+// 이 티켓의 「판매 오픈 시각」. 등록일이 아니다 —
+//   오픈 예약(saleOpenAt)으로 미리 만들어 둔 티켓을 등록일로 세면
+//   오픈하자마자 풀린다. 그건 사고다.
+function _repSaleOpenedAt(t){
+  var v = t && (t.saleOpenAt || t.regDate);
+  if(!v) return null;
+  var sv = String(v);
+  var d = new Date(sv.length <= 10 ? (sv + 'T00:00:00') : sv);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function _repReleasedByAge(t){
+  var op = _repSaleOpenedAt(t);
+  // 오픈 시각을 모르면 풀지 않는다. 제한이 기본이고 해제가 예외다.
+  if(!op) return false;
+  return (Date.now() - op.getTime()) >= REPURCHASE_RELEASE_DAYS * 86400000;
+}
+window._repReleasedByAge = _repReleasedByAge;
+
 function checkRepurchaseLimit(t){
   // 면제 계정은 재구매 제한을 적용하지 않는다 (심사용 테스트 계정 · 슈퍼어드민)
   if (_tkRepurchaseExempt()) {
@@ -24118,6 +24151,12 @@ function checkRepurchaseLimit(t){
   }
   var r=restaurantDB.find(function(x){return String(x.id)===String(t.restId);});
   if(!r||!r.repurchaseDay||r.repurchaseDay===0)return true;
+
+  // 🆕 판매 오픈 7일이 지났으면 제한을 푼다 (서버 트리거와 같은 규칙)
+  if(_repReleasedByAge(t)){
+    console.log('[repurchase] 판매 오픈 ' + REPURCHASE_RELEASE_DAYS + '일 경과 — 제한 해제');
+    return true;
+  }
 
   var newVisitDate = _repTicketDate(t);
   if(!newVisitDate) return true;   // 방문일을 못 읽으면 막지 않는다
@@ -36287,7 +36326,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.31-a';
+var TAAM_WEB_BUILD = '2026.08.31-b';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
