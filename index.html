@@ -14891,6 +14891,48 @@ function loadRole(){
   }).catch(function(){});
 }
 
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026.08-30: 슈퍼어드민은 「지금 로그인한 이메일」로만 결정된다
+// ═══════════════════════════════════════════════════════════════
+//   excRole 은 IndexedDB 에 있고 계정이 아니라 「기기」에 붙는다. 그래서
+//   슈퍼어드민으로 한 번 쓴 브라우저에서 다른 계정으로 로그인하면,
+//   loadRole() 이 그 값을 되살려 그 계정이 슈퍼어드민 화면을 통째로 봤다.
+//
+//   두 로그인 경로 모두 `if(isSuper){ ... }` 만 있고 아닐 때 되돌리는 줄이
+//   없었다. 그래서 올려주기만 하고 내려주지는 않았다.
+//
+//   ⚠ 권한은 올리는 쪽보다 내리는 쪽을 빠뜨리기 쉽다. 이 함수는 「내리는」
+//     일만 한다 — 이메일이 슈퍼어드민이 아니면 무조건 내린다.
+//     매장 어드민 승격은 그 뒤에 detectAndSetRole · _applyServerAdminGrant 가
+//     각자 근거(코드·서버 grant)를 보고 다시 올린다.
+var TAAM_SUPER_ADMIN_EMAILS = ['dnfmeod@playtaam.com'];
+
+function _taamIsSuperEmail(email){
+  return TAAM_SUPER_ADMIN_EMAILS.indexOf(String(email || '').trim().toLowerCase()) >= 0;
+}
+
+function _roleGuardByEmail(email){
+  if(_taamIsSuperEmail(email)) return false;          // 진짜 슈퍼어드민 — 손대지 않는다
+  if(_currentRole !== 'superadmin') return false;     // 이미 아니면 할 일 없다
+  console.warn('[role] 이 계정은 슈퍼어드민이 아닙니다 — 기기에 남아 있던 권한을 내립니다:', email);
+  _currentRole = 'user';
+  _currentAdminRestId = null;
+  _currentAdminRestName = '';
+  try{ if(typeof saveRole === 'function') saveRole(); }catch(e){}
+  try{ if(typeof updateMpAdminBtn === 'function') updateMpAdminBtn(); }catch(e){}
+  // 열려 있던 어드민 화면이 있으면 닫는다 — 내려놓고 화면만 남으면 소용없다
+  try{
+    ['adminScreen','partnerAdminScreen'].forEach(function(id){
+      var el = document.getElementById(id);
+      if(el && el.style.display !== 'none') el.style.display = 'none';
+    });
+    if(typeof _acCloseOthers === 'function') _acCloseOthers(null);
+  }catch(e){}
+  return true;
+}
+window._roleGuardByEmail = _roleGuardByEmail;
+window._taamIsSuperEmail = _taamIsSuperEmail;
+
 // ── 개인 데이터 ──
 // ※ save*() 들은 Promise 반환 — 호출자가 await/then으로 저장 완료 대기 가능.
 //   특히 티켓 구매 → 슈퍼어드민 집계 플로우에서 IDB 반영 보장에 중요.
@@ -16953,13 +16995,14 @@ function vpSend(){
   // 🆕 2026.05.20: 슈퍼어드민 이메일 화이트리스트 — 미가입이어도 자동 가입 + 로그인 허용
   //   첫 진입 시 Supabase 가 auth.users 에 자동 생성, profiles 트리거가 role='super_admin' 자동 부여.
   //   초대코드 없이 이 계정이 존재해야 시스템 어드민 진입 가능.
-  var SUPER_ADMIN_EMAILS = ['dnfmeod@playtaam.com'];
+  //   ⚠ 목록은 TAAM_SUPER_ADMIN_EMAILS 한 군데에만 둔다. 같은 목록이 여러 벌이면
+  //     하나만 고치는 날이 오고, 그날 권한이 어긋난다.
   var inputEmailLower = '';
   try {
     var _em = document.getElementById('vpEmail');
     inputEmailLower = (_em && _em.value || '').trim().toLowerCase();
   } catch(e){}
-  var isSuperAdminEmail = (country === 'EN') && SUPER_ADMIN_EMAILS.indexOf(inputEmailLower) >= 0;
+  var isSuperAdminEmail = (country === 'EN') && _taamIsSuperEmail(inputEmailLower);
 
   // 일반 로그인은 false, 슈퍼어드민 이메일은 true (예외)
   var shouldCreateUser = (!isLogin) || isSuperAdminEmail;
@@ -17659,8 +17702,11 @@ function vpVerify(){
       //   - PIN 입력 없이 어드민 페이지로 직접 진입
       //   - DB(profiles.role)는 SQL 로 미리 설정해두는 게 안전 (admin_deposit_grant_policies.sql)
       var loggedEmail = (res.data.user && res.data.user.email) || '';
-      var SUPER_ADMIN_EMAILS = ['dnfmeod@playtaam.com'];
-      var isSuper = SUPER_ADMIN_EMAILS.indexOf((loggedEmail || '').toLowerCase()) >= 0;
+      var isSuper = _taamIsSuperEmail(loggedEmail);
+      // 슈퍼어드민이 아니면 기기에 남아 있던 권한을 먼저 내린다.
+      //   올려주는 줄만 있고 내려주는 줄이 없어서, 슈퍼어드민을 쓴 브라우저에서
+      //   다른 계정으로 들어오면 그 계정이 어드민 화면을 통째로 봤다.
+      _roleGuardByEmail(loggedEmail);
 
       if(isSuper){
         console.log('✅ 슈퍼어드민 로그인 — 어드민 페이지로 직접 진입 (다중 기기 허용)');
@@ -18151,9 +18197,9 @@ async function vpPasswordLogin(){
     if(typeof IDB !== 'undefined' && IDB.set){ IDB.set('authedSession','1').catch(function(){}); }
 
     // 슈퍼어드민 분기
-    var SUPER_ADMIN_EMAILS = ['dnfmeod@playtaam.com'];
     var loggedEmail = (res.data.user && res.data.user.email || '').toLowerCase();
-    var isSuper = SUPER_ADMIN_EMAILS.indexOf(loggedEmail) >= 0;
+    var isSuper = _taamIsSuperEmail(loggedEmail);
+    _roleGuardByEmail(loggedEmail);   // 아니면 기기에 남은 권한을 내린다
 
     if(isSuper){
       _currentRole = 'superadmin';
@@ -18426,6 +18472,19 @@ function adminDirectAccess(){
   var wrap = document.getElementById('appWrapper');
   if(wrap){ wrap.classList.add('ready'); wrap.style.display = 'block'; }
   loadRole(); // PIN으로 설정된 역할 로드
+  // ⚠ excRole 은 기기에 붙는다. 지금 로그인한 계정이 슈퍼어드민이 아니면 내린다.
+  //   부팅 경로는 이메일을 다시 안 보고 있었다 — 여기가 제일 조용히 새던 길이다.
+  try{
+    if(window.sb && window.sb.auth){
+      window.sb.auth.getUser().then(function(r){
+        var em = r && r.data && r.data.user && r.data.user.email;
+        if(_roleGuardByEmail(em)){
+          // 내려간 뒤에는 일반 회원 화면으로 다시 보낸다
+          try{ if(typeof openMain === 'function') openMain(); }catch(e){}
+        }
+      }).catch(function(){});
+    }
+  }catch(e){}
   try{ if(typeof cardPayTestSync === 'function') cardPayTestSync(); }catch(e){}
   try{ if(typeof newHomeSync === 'function') newHomeSync(); }catch(e){}
   try{ if(typeof magSync === 'function') magSync(); }catch(e){}
@@ -35921,7 +35980,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.30-t';
+var TAAM_WEB_BUILD = '2026.08.30-u';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
