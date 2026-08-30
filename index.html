@@ -22620,6 +22620,20 @@ async function _tkAcquireSeatHold(t, r, pax){
     if (/SLOT_SOLD_OUT/.test(m))        return { ok:false, soldOut:true, reason:pax + '인석이 모두 판매되었습니다' };
     if (/INVALID_PARTY_SIZE|SOLO_LIMIT|FRAGMENT_BLOCKED/.test(m))
       return { ok:false, soldOut:true, reason:'이 인원으로는 구매할 수 없습니다' };
+    // 🆕 2026.08-30: 서버 재구매 가드(trg_taam_repurchase_guard)에 걸렸다.
+    //   여기까지 오는 건 앱의 checkRepurchaseLimit() 이 놓쳤을 때뿐이다 —
+    //   바로 그 「조용히 안 걸리는」 경우가 오늘 종일 잡던 문제였다.
+    //   그때 「좌석 확보 실패 — 잠시 후 다시 시도」로 보이면 회원은 계속 다시 누른다.
+    //   서버가 알려준 제한 일수·기존 방문일을 그대로 꺼내 제대로 말한다.
+    if (/REPURCHASE_BLOCKED/.test(m)) {
+      var _rpD  = (m.match(/(\d+)\s*일 재구매/) || [])[1];
+      var _rpPv = (m.match(/기존 방문일\s*([0-9]{4}-[0-9]{2}-[0-9]{2})/) || [])[1];
+      console.warn('[seatHold] 서버 재구매 제한:', m);
+      return { ok:false, repurchase:true,
+               days: _rpD ? parseInt(_rpD, 10) : 0,
+               prev: _rpPv || '',
+               reason:'같은 레스토랑 재구매 제한 기간입니다' };
+    }
     console.warn('[seatHold] 실패:', ins.error);
     return { ok:false, reason:'좌석 확보에 실패했습니다 — 잠시 후 다시 시도해주세요' };
   }
@@ -22833,6 +22847,28 @@ async function openTdPayPopup() {
   if (!window._tkSeatHoldId) {
     var _hold = await _tkAcquireSeatHold(t, r, pax);
     if (!_hold.ok) {
+      // 🆕 재구매 제한은 토스트가 아니라 원래 쓰던 팝업으로 보여준다.
+      //   앱이 먼저 걸렀을 때와 화면이 같아야 한다 — 같은 이유로 막혔는데
+      //   어떤 날은 토스트, 어떤 날은 팝업이면 회원은 다른 문제로 받아들인다.
+      if (_hold.repurchase) {
+        try {
+          if (typeof showRepurchasePopup === 'function') {
+            // 남은 일수는 서버가 안 준다. 방문일을 알면 계산하고, 모르면 0.
+            var _left = 0;
+            if (_hold.prev && _hold.days) {
+              var _nv = (typeof _repTicketDate === 'function') ? _repTicketDate(t) : null;
+              var _pv = new Date(_hold.prev + 'T00:00:00');
+              if (_nv && !isNaN(_pv)) {
+                _left = _hold.days - Math.floor(Math.abs((_nv - _pv) / 86400000));
+              }
+            }
+            showRepurchasePopup(_hold.days || 0, _left > 0 ? _left : 0, _hold.prev || '');
+          } else {
+            showToast('⚠','재구매 제한', _hold.reason);
+          }
+        } catch(_rpe){ showToast('⚠','재구매 제한', _hold.reason); }
+        return;
+      }
       showToast(_hold.soldOut ? '⚠' : '❌', _hold.soldOut ? '좌석 확보 실패' : '오류', _hold.reason);
       if (_hold.soldOut && typeof renderTicketList === 'function') { try { renderTicketList(); } catch(e){} }
       return;
@@ -36251,7 +36287,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.30-z';
+var TAAM_WEB_BUILD = '2026.08.31-a';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
