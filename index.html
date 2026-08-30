@@ -2095,8 +2095,10 @@ html.auto-login .splash .bottom-group{display:none !important}
 .tb-sum .l em{font-style:normal;color:#79736a;font-weight:600}
 .tb-sum .money{font-size:12px;font-weight:600;color:#79736a;border-top:1px solid #efe9dc;padding-top:7px;margin-top:7px}
 .tb-sum .money b{color:#17150f;font-weight:800}
-.tb-chips{display:flex;gap:6px;margin-bottom:12px;overflow-x:auto;padding-bottom:2px;-webkit-overflow-scrolling:touch}
-.tb-chips::-webkit-scrollbar{height:0}
+/* 칩은 가로로 굴리지 않고 접는다. 최대 넉 장(전체·미결제·변경됨·취소)이라
+   좁은 기기에서도 두 줄이면 다 들어간다. 가로 스크롤러는 스크롤바가 없어
+   「옆에 더 있다」를 알 방법이 없었다 — 안 보이는 칩은 없는 칩이다. */
+.tb-chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
 .tb-chip{flex:none;border:1px solid #e3dcce;background:#fff;color:#46413a;border-radius:8px;padding:6px 11px;
   cursor:pointer;font-family:var(--font-main);font-size:11.5px;font-weight:700;white-space:nowrap}
 .tb-chip .k{margin-left:4px;color:#79736a}
@@ -2139,6 +2141,25 @@ html.auto-login .splash .bottom-group{display:none !important}
 .tb-slot{font-size:10.5px;font-weight:800;letter-spacing:.16em;color:#a69f94;margin:16px 2px 7px}
 .tb-find{width:100%;box-sizing:border-box;padding:9px 12px;border:1.5px solid #e0ddd6;border-radius:9px;
   background:#fff;font-family:var(--font-main);font-size:13px;color:#17150f;outline:none}
+
+/* ── 날짜 아래 본문은 세로로만 움직인다 ──
+   .sub-content 는 overflow-y:auto 만 지정한다. 한 축만 visible 이 아니면
+   브라우저가 나머지 축을 auto 로 계산하므로, 본문에는 쓴 적 없는 가로
+   스크롤축이 늘 살아 있었다. 내용이 1px 만 넘쳐도 옆으로 밀렸고, iOS 에서는
+   대각선 스와이프가 가로 스크롤로 먹혀 목록이 흔들렸다.
+   축을 명시적으로 없앤다. touch-action:pan-y 까지 둬야 스크롤 계산이 아니라
+   손가락 제스처 단계에서 막힌다. overscroll-behavior-x 는 가로로 밀었을 때
+   바깥 화면으로 넘어가는 것(뒤로가기 제스처 오작동)을 끊는다. */
+#tbBody{overflow-x:hidden;overscroll-behavior-x:none;touch-action:pan-y}
+
+/* 가로를 감추는 이상, 넘칠 수 있는 글자는 접히게 해야 한다.
+   안 그러면 잘려서 사라진다 — 감추는 것과 지우는 것은 다르다.
+   한글은 아무 데서나 접히지만 영문 이름·URL·이메일은 안 접힌다.
+   메모에 예약 확인 링크를 붙여 넣는 일이 실제로 있다. */
+#tbBody .tb-rsv .st,
+#tbBody .tb-rsv .gu,
+#tbBody .tb-rsv .memo,
+#tbBody .tb-empty{overflow-wrap:anywhere}
 
 .sub-item-title{font-size:14px;font-weight:700;color:#111;margin-bottom:4px}
 .sub-item-meta{font-family:var(--font-main);font-size:10px;color:#aaa}
@@ -34222,7 +34243,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.30-f';
+var TAAM_WEB_BUILD = '2026.08.30-g';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
