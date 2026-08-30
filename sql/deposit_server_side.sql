@@ -179,10 +179,23 @@ language plpgsql
 set search_path = public
 as $guard$
 begin
-  -- 잔액이 안 바뀌면 볼 것 없다
+  -- 잔액이 안 바뀌면 볼 것 없다.
+  --
+  -- ⚠ deposit_balance 는 **일부러 안 본다.** 이 값은 원본이 아니라 합계다.
+  --   profiles 에 sync 트리거가 둘 붙어 있고(trg_sync_deposit_balance ·
+  --   trg_taam_sync_deposit_balance), 그중 뒤엣것은 컬럼을 안 가리고
+  --   **모든 UPDATE 마다** deposit_balance := 멤버십 + 일반 로 다시 쓴다.
+  --   그래서 합계가 어긋나 있던 행은 이름만 바꿔도 그 자리에서 교정된다.
+  --   합계까지 보면 그 교정을 「잔액을 바꿨다」고 오해할 수 있다.
+  --
+  --   지금 이름들로는 마침 이 가드가 sync 보다 먼저 돈다
+  --   (BEFORE 트리거는 이름 알파벳 순 · trg_taam_g… < trg_taam_s…).
+  --   그래서 합계를 봐도 오늘은 문제가 안 난다 — 로컬에서 확인했다.
+  --   다만 그건 **이름 덕분이지 설계 덕분이 아니다.** 순서를 뒤집어 보니
+  --   그 즉시 멀쩡한 이름 변경이 막혔다. 트리거 이름 하나에 결제 화면이
+  --   걸리는 구조를 남기지 않는다. 원본 둘만 본다 — 순서와 무관해진다.
   if new.membership_deposit_balance is not distinct from old.membership_deposit_balance
-     and new.general_deposit_balance is not distinct from old.general_deposit_balance
-     and new.deposit_balance is not distinct from old.deposit_balance then
+     and new.general_deposit_balance is not distinct from old.general_deposit_balance then
     return new;
   end if;
 
