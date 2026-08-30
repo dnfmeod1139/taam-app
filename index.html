@@ -2165,10 +2165,27 @@ html.auto-login .splash .bottom-group{display:none !important}
    「오늘」이 하루라면 여기는 전 기간이다. 카드·칩·상태색은 「오늘」 것을
    그대로 쓴다 — 두 화면이 다른 언어를 쓰면 어드민이 두 번 배운다. */
 .rv-bar{flex:none;background:#f7f5f2;border-bottom:1px solid rgba(0,0,0,.06);padding:10px 14px 11px}
-.rv-seg{display:flex;background:#eae5da;border-radius:10px;padding:3px;margin-bottom:9px}
-.rv-seg button{flex:1;border:0;background:none;border-radius:8px;padding:8px 0;cursor:pointer;
-  font-family:var(--font-main);font-size:12px;font-weight:800;color:#79736a}
-.rv-seg button.on{background:#fff;color:#17150f;box-shadow:0 1px 3px rgba(0,0,0,.10)}
+/* 월 이동 — 달력이 날짜 이동을 다 하므로 기간 세그먼트는 두지 않는다 */
+.rv-mon{display:flex;align-items:center;gap:8px;margin-bottom:9px}
+.rv-mon b{font-size:14.5px;font-weight:800;color:#17150f;letter-spacing:-.01em}
+.rv-mon em{font-style:normal;font-size:11.5px;font-weight:700;color:#79736a}
+.rv-mon .sp{flex:1}
+.rv-mon button{flex:none;border:1px solid #e3dcce;background:#fff;border-radius:9px;
+  width:32px;height:32px;font-size:16px;line-height:1;color:#46413a;cursor:pointer;font-family:var(--font-main)}
+.rv-mon button.now{width:auto;padding:0 11px;font-size:11.5px;font-weight:800}
+.rv-cal{background:#fff;border:1px solid #e3dcce;border-radius:12px;padding:10px 10px 11px;margin:12px 0 2px}
+.rv-cal .hd{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;margin-bottom:5px}
+.rv-cal .hd span{text-align:center;font-size:9.5px;font-weight:800;color:#a69f94}
+.rv-cal .gr{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}
+.rv-cal .dy{aspect-ratio:1;border:1px solid transparent;border-radius:9px;background:none;padding:0;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;cursor:pointer;
+  font-family:var(--font-main);font-size:12.5px;font-weight:700;color:#c4bdb2}
+.rv-cal .dy.has{color:#17150f;font-weight:800}
+.rv-cal .dy i{font-style:normal;font-size:9px;font-weight:800;line-height:1;color:#5C0A14}
+.rv-cal .dy.tdy{border-color:#dcc9a2;background:#FCF8EF}
+.rv-cal .dy.sel{background:#17150f;border-color:#17150f;color:#faf8f3}
+.rv-cal .dy.sel i{color:#D9BC85}
+.rv-cal .dy.pad{visibility:hidden;cursor:default}
 .rv-q{position:relative}
 .rv-q input{width:100%;box-sizing:border-box;padding:9px 34px 9px 12px;border:1.5px solid #e0ddd6;
   border-radius:9px;background:#fff;font-family:var(--font-main);font-size:13px;color:#17150f;outline:none}
@@ -10496,7 +10513,7 @@ window.closePromoCarousel = function(){
         cursor:pointer;font-family:var(--font-main);">
         <span style="flex:1;min-width:0;">
           <span style="display:block;font-size:14px;font-weight:800;color:#17150f;">예약</span>
-          <span style="display:block;font-size:11.5px;color:#79736a;margin-top:2px;">전 기간에서 찾기 · 인원 변경 · 메모</span>
+          <span style="display:block;font-size:11.5px;color:#79736a;margin-top:2px;">월 달력 · 날짜별 예약 · 인원 변경 · 메모</span>
         </span>
         <span style="color:#a69f94;font-size:17px;">›</span>
       </button>
@@ -12248,7 +12265,7 @@ window.closePromoCarousel = function(){
     <div id="rvCount" style="margin-left:auto;font-family:var(--font-main);font-size:11.5px;font-weight:700;color:#79736a;"></div>
   </div>
   <div class="rv-bar">
-    <div id="rvSeg" class="rv-seg"></div>
+    <div id="rvMon" class="rv-mon"></div>
     <!-- 검색칸은 한 번만 그린다. 다시 그리면 글자를 치는 도중 포커스가 날아간다 -->
     <div class="rv-q">
       <input id="rvQ" type="search" autocomplete="off" placeholder="회원 · 매장 · 연락처 뒷자리" aria-label="예약 찾기">
@@ -29112,8 +29129,20 @@ window.tbCall = tbCall; window.tbLedger = tbLedger; window.tbPax = tbPax;
 //   매장 어드민이 자기 매장만 보는 것은 여기서 거르지 않는다. tickets 의
 //   RLS(tickets_admin_rls.sql)가 SELECT 단계에서 이미 자른다. 클라이언트에서
 //   한 번 더 거르면 「막고 있다」는 착각만 생기고 실제 방어는 그대로다.
-var _rvState = { q:'', period:'up', status:'all', rest:'', open:null };
+//   화면의 뼈대는 달력이다. 「어느 날에 몇 건 오나」는 목록을 아무리 잘 걸러도
+//   한눈에 안 들어온다 — 달을 통째로 보여주고 날을 눌러 내려가는 쪽이 맞다.
+//   검색은 날짜를 넘는 질문이라, 글자를 치는 동안에는 달력을 접고 전 기간
+//   결과를 보여준다.
+//     ym  = 보고 있는 달 { y, m(0-11) }
+//     day = 고른 날 'YYYY-MM-DD'
+var _rvState = { q:'', ym:null, day:null, status:'all', rest:'', open:null };
 var _rvQTimer = null;
+
+function _rvFresh(){
+  var t = _tbToday();
+  return { q:'', ym:{ y:t.getFullYear(), m:t.getMonth() }, day:_tbKey(t),
+           status:'all', rest:'', open:null };
+}
 
 async function rvOpen(){
   var isSuper = (typeof _isSuperAdmin === 'function') && _isSuperAdmin();
@@ -29121,7 +29150,7 @@ async function rvOpen(){
     if(typeof showToast === 'function') showToast('🔒','권한 부족','슈퍼어드민·매장 어드민 전용');
     return;
   }
-  _rvState = { q:'', period:'up', status:'all', rest:'', open:null };
+  _rvState = _rvFresh();
   openSubPage('rvScreen');
   var q = document.getElementById('rvQ');
   if(q){
@@ -29133,7 +29162,8 @@ async function rvOpen(){
       _rvQTimer = setTimeout(function(){
         _rvState.q = v; _rvState.open = null;
         var x = document.getElementById('rvQX'); if(x) x.style.display = v ? '' : 'none';
-        _rvRenderFilters(); _rvRenderBody();
+        // 검색이 켜지고 꺼질 때 월 이동 줄도 같이 나타났다 사라진다
+        _rvRenderMon(); _rvRenderFilters(); _rvRenderBody();
       }, 160);
     };
   }
@@ -29145,11 +29175,9 @@ async function rvOpen(){
 window.rvOpen = rvOpen;
 
 // ── 거르기 ──
-function _rvPeriodOk(r, today){
-  if(_rvState.period === 'all')  return true;
-  if(_rvState.period === 'up')   return r._d >= today;   // 오늘 포함 — 오늘은 아직 안 지났다
-  return r._d < today;
-}
+function _rvSearching(){ return !!_rvState.q.trim(); }
+// 'YYYY-MM' — 문자열 비교만으로 그 달인지 가린다
+function _rvMonKey(ym){ return ym.y + '-' + String(ym.m + 1).padStart(2, '0'); }
 function _rvHit(r, q){
   if(!q) return true;
   var hay = ((r.buyer_name || '') + ' ' + (r.restaurant_name || '') + ' ' + (r.purchase_id || '')).toLowerCase();
@@ -29159,12 +29187,14 @@ function _rvHit(r, q){
   if(d.length >= 2 && String(r.buyer_phone || '').replace(/[^0-9]/g, '').indexOf(d) >= 0) return true;
   return false;
 }
-// 기간 + 검색까지만 — 상태·매장 칩의 건수는 이 집합을 기준으로 센다.
-//   거른 뒤에 세면 「0건」 칩만 남아 어디로도 못 간다
+// 매장 칩·상태 칩의 건수는 이 집합을 기준으로 센다. 거른 뒤에 세면
+//   「0건」 칩만 남아 어디로도 못 간다.
+//   검색 중이면 전 기간, 아니면 보고 있는 달.
 function _rvBase(){
-  var today = _tbKey(_tbDateAt(0));
   var q = _rvState.q.trim().toLowerCase();
-  return (_tbRows || []).filter(function(r){ return _rvPeriodOk(r, today) && _rvHit(r, q); });
+  if(q) return (_tbRows || []).filter(function(r){ return _rvHit(r, q); });
+  var mk = _rvMonKey(_rvState.ym);
+  return (_tbRows || []).filter(function(r){ return r._d.slice(0, 7) === mk; });
 }
 function _rvApply(base){
   return base.filter(function(r){
@@ -29173,30 +29203,42 @@ function _rvApply(base){
     return true;
   });
 }
-// 앞으로 올 것은 가까운 순, 지나간 것은 최근 순. 「전체」는 앞의 것 먼저.
-//   한 방향으로만 정렬하면 「전체」에서 제일 먼 미래가 맨 위로 올라온다
+// 검색 결과는 앞으로 올 것을 가까운 순으로 먼저, 그 다음 지나간 것을 최근 순으로.
+//   한 방향으로만 정렬하면 제일 먼 미래가 맨 위로 올라온다
 function _rvSort(list){
   var today = _tbKey(_tbDateAt(0));
   var up = list.filter(function(r){ return r._d >= today; })
     .sort(function(a,b){ return a._d < b._d ? -1 : (a._d > b._d ? 1 : a._m - b._m); });
-  if(_rvState.period === 'up') return up;
   var pa = list.filter(function(r){ return r._d < today; })
     .sort(function(a,b){ return a._d > b._d ? -1 : (a._d < b._d ? 1 : b._m - a._m); });
-  if(_rvState.period === 'past') return pa;
   return up.concat(pa);
 }
 
 // ── 그리기 ──
-function _rvRender(){ _rvRenderSeg(); _rvRenderFilters(); _rvRenderBody(); }
+function _rvRender(){ _rvRenderMon(); _rvRenderFilters(); _rvRenderBody(); }
 
-function _rvRenderSeg(){
-  var el = document.getElementById('rvSeg');
+// 월 이동 줄 — 검색 중에는 감춘다. 검색은 달을 넘는 질문이라 「8월」이 붙어 있으면
+//   결과가 그 달만인 줄로 읽힌다
+function _rvRenderMon(){
+  var el = document.getElementById('rvMon');
   if(!el) return;
-  var segs = [['up','예정'], ['past','지난'], ['all','전체']];
-  el.innerHTML = segs.map(function(s){
-    return '<button class="' + (_rvState.period === s[0] ? 'on' : '') + '" '
-      + 'onclick="rvSetPeriod(\'' + s[0] + '\')">' + s[1] + '</button>';
-  }).join('');
+  if(_rvSearching()){ el.style.display = 'none'; el.innerHTML = ''; return; }
+  el.style.display = '';
+  var ym = _rvState.ym, t = _tbToday();
+  var mk = _rvMonKey(ym);
+  var mon = (_tbRows || []).filter(function(r){
+    if(r._d.slice(0,7) !== mk) return false;
+    if(_rvState.rest && String(r.restaurant_id || r.restaurant_name || '') !== _rvState.rest) return false;
+    return _tbStatus(r).s !== 'cx';
+  });
+  var isNow = (ym.y === t.getFullYear() && ym.m === t.getMonth());
+  el.innerHTML =
+      '<button onclick="rvMonStep(-1)" aria-label="이전 달">‹</button>'
+    + '<b>' + ym.y + '. ' + (ym.m + 1) + '월</b>'
+    + '<em>' + mon.length + '건 · ' + mon.reduce(function(s,r){ return s + (parseInt(r.party_size,10) || 0); }, 0) + '명</em>'
+    + '<span class="sp"></span>'
+    + (isNow ? '' : '<button class="now" onclick="rvGoToday()">이번 달</button>')
+    + '<button onclick="rvMonStep(1)" aria-label="다음 달">›</button>';
 }
 
 function _rvRenderFilters(){
@@ -29245,65 +29287,108 @@ function _rvRenderFilters(){
   el.innerHTML = h;
 }
 
+// 날짜 머리 한 줄 — 건수는 살아 있는 예약만 센다(취소는 좌석이 아니다).
+//   다만 취소가 섞여 있으면 그것도 적는다 — 안 그러면 「1건」이라고 써 놓고
+//   카드가 두 장 보인다
+function _rvDayHead(key, rows, today){
+  var live = rows.filter(function(x){ return _tbStatus(x).s !== 'cx'; });
+  var cx = rows.length - live.length;
+  var p = key.split('-');
+  var dd = new Date(parseInt(p[0],10), parseInt(p[1],10)-1, parseInt(p[2],10));
+  return '<div class="rv-date"><b>' + parseInt(p[1],10) + '월 ' + parseInt(p[2],10) + '일</b>'
+    + '<span>(' + _tbDayName(dd) + ') · ' + live.length + '건 · '
+    + live.reduce(function(s,x){ return s + (parseInt(x.party_size,10) || 0); }, 0) + '명'
+    + (cx ? ' · 취소 ' + cx : '') + '</span>'
+    + (key === today ? '<em>오늘</em>' : '') + '</div>';
+}
+
 function _rvRenderBody(){
   var el = document.getElementById('rvBody');
   if(!el) return;
   if(_tbRows === null){ el.innerHTML = '<div class="tb-empty">불러오는 중…</div>'; return; }
-
-  var base = _rvBase();
-  var list = _rvSort(_rvApply(base));
-  var live = list.filter(function(r){ return _tbStatus(r).s !== 'cx'; });
-  var pax  = live.reduce(function(s,r){ return s + (parseInt(r.party_size,10) || 0); }, 0);
-
+  var today = _tbKey(_tbDateAt(0));
   var head = document.getElementById('rvCount');
-  if(head) head.textContent = list.length ? (list.length + '건 · ' + pax + '명') : '';
 
-  if(!list.length){
-    // 왜 없는지, 어디를 보면 있는지까지 말한다. 「없습니다」만 남기면 다음 손이 안 나간다
-    var other = _rvState.period === 'up' ? 'past' : (_rvState.period === 'past' ? 'up' : '');
-    var otherN = 0;
-    if(other){
-      var save = _rvState.period; _rvState.period = other;
-      otherN = _rvApply(_rvBase()).length; _rvState.period = save;
+  // ── 검색 중 — 달을 넘어 전 기간에서 찾는다. 달력은 접는다 ──
+  if(_rvSearching()){
+    var hits = _rvSort(_rvApply(_rvBase()));
+    var hLive = hits.filter(function(r){ return _tbStatus(r).s !== 'cx'; });
+    if(head) head.textContent = hits.length
+      ? (hits.length + '건 · ' + hLive.reduce(function(s,r){ return s + (parseInt(r.party_size,10) || 0); }, 0) + '명') : '';
+    if(!hits.length){
+      el.innerHTML = '<div class="tb-empty" style="margin-top:16px;">'
+        + '「' + _tbEsc(_rvState.q.trim()) + '」로 찾은 예약이 없습니다.'
+        + '<br><span style="color:#a69f94">회원 이름 · 매장 · 연락처 뒷자리 · 구매번호로 찾습니다.</span></div>';
+      return;
     }
-    el.innerHTML = '<div class="tb-empty" style="margin-top:16px;">'
-      + (_rvState.q.trim()
-          ? '「' + _tbEsc(_rvState.q.trim()) + '」로 찾은 예약이 없습니다.'
-          : '해당하는 예약이 없습니다.')
-      + (otherN
-          ? '<br><span style="color:#a69f94">'
-            + (other === 'past' ? '지난' : '예정') + ' 예약에는 ' + otherN + '건 있습니다.</span>'
-            + '<br><button class="tb-mini" style="margin-top:11px;" onclick="rvSetPeriod(\'' + other + '\')">'
-            + (other === 'past' ? '지난 예약 보기' : '예정 예약 보기') + '</button>'
-          : '<br><span style="color:#a69f94">위 기간이나 상태를 바꿔 보세요.</span>')
-      + '</div>';
+    var sh = '<div class="rv-div">전체에서 ' + hits.length + '건</div>', sCur = null, sDiv = false;
+    hits.forEach(function(r){
+      if(!sDiv && r._d < today){ sh += '<div class="rv-div">지난 예약</div>'; sDiv = true; }
+      if(r._d !== sCur){
+        sCur = r._d;
+        sh += _rvDayHead(sCur, hits.filter(function(x){ return x._d === sCur; }), today);
+      }
+      sh += _rvRow(r, r._d < today);
+    });
+    el.innerHTML = sh;
     return;
   }
 
-  var today = _tbKey(_tbDateAt(0));
-  var h = '', curDate = null, divided = false;
-  list.forEach(function(r){
-    // 「전체」에서 미래와 과거가 만나는 자리에 선을 하나 긋는다
-    if(_rvState.period === 'all' && !divided && r._d < today){
-      h += '<div class="rv-div">지난 예약</div>'; divided = true;
-    }
-    if(r._d !== curDate){
-      curDate = r._d;
-      var same = list.filter(function(x){ return x._d === curDate; });
-      var sameLive = same.filter(function(x){ return _tbStatus(x).s !== 'cx'; });
-      var sameCx = same.length - sameLive.length;
-      var p = curDate.split('-');
-      var dd = new Date(parseInt(p[0],10), parseInt(p[1],10)-1, parseInt(p[2],10));
-      // 건수는 살아 있는 예약만 센다(취소는 좌석이 아니다). 다만 취소가 섞여 있으면
-      //   그것도 적는다 — 안 그러면 「1건」이라고 써 놓고 카드가 두 장 보인다
-      h += '<div class="rv-date"><b>' + parseInt(p[1],10) + '월 ' + parseInt(p[2],10) + '일</b>'
-        + '<span>(' + _tbDayName(dd) + ') · ' + sameLive.length + '건 · '
-        + sameLive.reduce(function(s,x){ return s + (parseInt(x.party_size,10) || 0); }, 0) + '명'
-        + (sameCx ? ' · 취소 ' + sameCx : '') + '</span>'
-        + (curDate === today ? '<em>오늘</em>' : '') + '</div>';
-    }
-    h += _rvRow(r, r._d < today);
+  // ── 달력 ──
+  var ym = _rvState.ym;
+  var monthAll = _rvApply(_rvBase());          // 이 달 + 매장·상태 필터
+  var byDay = {};
+  monthAll.forEach(function(r){
+    var d = parseInt(r._d.slice(8), 10);
+    if(!byDay[d]) byDay[d] = [];
+    byDay[d].push(r);
   });
+
+  var first = new Date(ym.y, ym.m, 1).getDay();
+  var days  = new Date(ym.y, ym.m + 1, 0).getDate();
+  var tk = _tbKey(_tbToday());
+  var h = '<div class="rv-cal"><div class="hd">'
+    + ['일','월','화','수','목','금','토'].map(function(w){ return '<span>' + w + '</span>'; }).join('')
+    + '</div><div class="gr">';
+  for(var i = 0; i < first; i++) h += '<span class="dy pad"></span>';
+  for(var d = 1; d <= days; d++){
+    var key = ym.y + '-' + String(ym.m + 1).padStart(2,'0') + '-' + String(d).padStart(2,'0');
+    var rows = byDay[d] || [];
+    // 칸의 숫자는 살아 있는 건수. 「오늘」의 주간 띠와 같은 뜻이라야 한다 —
+    //   같은 어드민 안에서 두 달력이 다른 것을 세면 어느 쪽을 믿을지 알 수 없다
+    var n = rows.filter(function(x){ return _tbStatus(x).s !== 'cx'; }).length;
+    h += '<button class="dy' + (n ? ' has' : '') + (key === tk ? ' tdy' : '')
+      + (key === _rvState.day ? ' sel' : '') + '" onclick="rvPickDay(\'' + key + '\')">'
+      + d + (n ? '<i>' + n + '</i>' : '') + '</button>';
+  }
+  h += '</div></div>';
+
+  // ── 고른 날 ──
+  if(!_rvState.day || _rvState.day.slice(0,7) !== _rvMonKey(ym)){
+    // 달만 넘기고 아직 날을 안 골랐다 — 달력만 보여준다
+    if(head) head.textContent = '';
+    h += '<div class="tb-empty" style="margin-top:14px;">날짜를 누르면 그날 예약이 나옵니다.</div>';
+    el.innerHTML = h;
+    return;
+  }
+  var dayRows = (byDay[parseInt(_rvState.day.slice(8), 10)] || [])
+    .sort(function(a,b){ return a._m - b._m; });
+  var dLive = dayRows.filter(function(r){ return _tbStatus(r).s !== 'cx'; });
+  if(head) head.textContent = dayRows.length
+    ? (dLive.length + '건 · ' + dLive.reduce(function(s,r){ return s + (parseInt(r.party_size,10) || 0); }, 0) + '명') : '';
+
+  if(!dayRows.length){
+    var monthN = monthAll.filter(function(r){ return _tbStatus(r).s !== 'cx'; }).length;
+    h += '<div class="tb-empty" style="margin-top:14px;">'
+      + '이 날은 예약이 없습니다.'
+      + (monthN ? '<br><span style="color:#a69f94">이 달에는 ' + monthN + '건 — 위 달력에서 숫자가 있는 날을 누르세요.</span>'
+                : '<br><span style="color:#a69f94">이 달에는 예약이 없습니다.</span>')
+      + '</div>';
+    el.innerHTML = h;
+    return;
+  }
+  h += _rvDayHead(_rvState.day, dayRows, today);
+  dayRows.forEach(function(r){ h += _rvRow(r, r._d < today); });
   el.innerHTML = h;
 }
 
@@ -29350,18 +29435,44 @@ function _rvRow(r, isPast){
 }
 
 // ── 손대기 ──
-function rvSetPeriod(p){ _rvState.period = p; _rvState.open = null; _rvRender(); }
+// 달을 넘긴다. 고른 날은 지운다 — 8월 30일을 보다 9월로 넘겼는데 9월 30일이
+//   저절로 열리면 누른 적 없는 날이 열린 것이다. 다만 이번 달로 돌아오면
+//   오늘을 다시 고른다(가장 흔한 목적지라 한 번 덜 누르게).
+function rvMonStep(d){
+  var ym = _rvState.ym;
+  var n = new Date(ym.y, ym.m + d, 1);
+  _rvState.ym = { y:n.getFullYear(), m:n.getMonth() };
+  _rvState.open = null;
+  var t = _tbToday();
+  _rvState.day = (n.getFullYear() === t.getFullYear() && n.getMonth() === t.getMonth())
+    ? _tbKey(t) : null;
+  _rvRender();
+}
+function rvGoToday(){
+  var t = _tbToday();
+  _rvState.ym = { y:t.getFullYear(), m:t.getMonth() };
+  _rvState.day = _tbKey(t); _rvState.open = null;
+  _rvRender();
+}
+// 누르면 고른다. 같은 날을 또 눌러도 접지 않는다 — 달력은 목록 위에 그대로
+//   보이므로 접어서 새로 드러나는 것이 없고, 목록만 사라져 「왜 없어졌지」가 된다.
+function rvPickDay(key){
+  _rvState.day = key;
+  _rvState.open = null;
+  _rvRenderBody();
+}
 function rvSetStatus(s){ _rvState.status = s; _rvState.open = null; _rvRenderFilters(); _rvRenderBody(); }
-function rvSetRest(v){ _rvState.rest = v; _rvState.open = null; _rvRenderFilters(); _rvRenderBody(); }
+function rvSetRest(v){ _rvState.rest = v; _rvState.open = null; _rvRenderMon(); _rvRenderFilters(); _rvRenderBody(); }
 function rvToggleRow(pid){ _rvState.open = (_rvState.open === pid) ? null : pid; _rvRenderBody(); }
 function rvClearQ(){
   var q = document.getElementById('rvQ'); if(q){ q.value = ''; q.focus(); }
   var x = document.getElementById('rvQX'); if(x) x.style.display = 'none';
   clearTimeout(_rvQTimer);
   _rvState.q = ''; _rvState.open = null;
-  _rvRenderFilters(); _rvRenderBody();
+  _rvRenderMon(); _rvRenderFilters(); _rvRenderBody();
 }
-window.rvSetPeriod = rvSetPeriod; window.rvSetStatus = rvSetStatus; window.rvSetRest = rvSetRest;
+window.rvMonStep = rvMonStep; window.rvGoToday = rvGoToday; window.rvPickDay = rvPickDay;
+window.rvSetStatus = rvSetStatus; window.rvSetRest = rvSetRest;
 window.rvToggleRow = rvToggleRow; window.rvClearQ = rvClearQ;
 
 // 인원 변경은 「오늘」과 같은 문을 쓴다. 돈이 움직이는 자리를 두 벌 만들지 않는다
@@ -34676,7 +34787,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.30-h';
+var TAAM_WEB_BUILD = '2026.08.30-i';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
