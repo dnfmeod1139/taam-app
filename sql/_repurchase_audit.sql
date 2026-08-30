@@ -44,7 +44,18 @@ with t as (
               then to_date(regexp_replace(k.reservation_date, '[.\-]', '.', 'g'), 'YYYY.MM.DD')
               else null end as vd
   from public.tickets k
-  where k.purchase_id not like 'PAYH-%'            -- 결제 전 홀드는 구매가 아니다
+  -- ⚠ 개인이 산 것만 센다. 운영용 행을 섞으면 없는 위반이 무더기로 나온다.
+  --   PAYH- 결제 전 홀드 · INVH- 초대 좌석 홀드 = 아직 구매가 아니다
+  --   MAN-  캘린더 수동 연동 = 어드민이 좌석을 맞추려고 넣은 행이고,
+  --         user_id 에 「어드민」이 들어간다(tcal 수동 추가). 그래서 서로 다른
+  --         회원의 MAN- 행이 같은 user_id 로 묶여 엉뚱하게 짝지어진다.
+  --         앱도 이 둘을 개인 구매내역에서 뺀다(loadPurchase 의 필터).
+  where k.purchase_id not like 'PAYH-%'
+    and k.purchase_id not like 'INVH-%'
+    and k.purchase_id not like 'MAN-%'
+    and coalesce(k.extra_data ->> 'manualEntry', '') not in ('true','1')
+    and coalesce(k.extra_data ->> 'inviteHold',  '') not in ('true','1')
+    and k.user_id is not null                      -- 주인 없는 행끼리 묶이면 안 된다
     and k.status not in ('cancelled','canceled')   -- 취소한 예약은 방문이 아니다
 ),
 pairs as (
@@ -65,7 +76,8 @@ pairs as (
     and coalesce(r.repurchase_day, 0) > 0
     and abs(a.vd - b.vd) < r.repurchase_day
 )
-select buyer_name                        as "회원",
+select case when gap = 0 then '같은 날 (인원추가·동반)' else '⚠ 위반' end as "구분",
+       buyer_name                        as "회원",
        restaurant_name                   as "매장",
        repurchase_day                    as "제한(일)",
        gap                               as "실제 간격(일)",
@@ -76,9 +88,11 @@ select buyer_name                        as "회원",
        pid_b                             as "구매번호 ②",
        user_id                           as "회원 id"
 from pairs
-order by (repurchase_day - gap) desc, buyer_name;
+-- 같은 날 두 건은 인원추가·동반이라 위반이 아니다. 뒤로 민다.
+order by (gap = 0), (repurchase_day - gap) desc, buyer_name;
 
--- 0건이면 빠져나간 구매가 없다는 뜻이다.
+-- 「⚠ 위반」이 0건이면 빠져나간 구매가 없다는 뜻이다.
+-- 「같은 날」만 나오면 정상 — 한 예약에 인원을 나눠 넣은 것이다.
 
 
 -- ═══════════════════════════════════════════════════════════════
