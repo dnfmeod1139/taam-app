@@ -36,8 +36,13 @@
 --     붙어 있는데 아무것도 막지 못하는, 제일 나쁜 모양이었다.
 --     대신 슈퍼어드민 판정만 별도 DEFINER 함수(_taam_uid_is_super)로 뺐다.
 --
--- ⚠ UPDATE 만 막는다. INSERT(가입) 는 auto_promote_super_admin 트리거가
---   이메일로 판정하므로 건드리지 않았다 — 아래 ③ 으로 확인할 것.
+-- ⚠ INSERT(가입) 도 막는다 — 확인해 보니 이쪽도 열려 있었다.
+--   profiles_insert_own 의 WITH CHECK 가 (auth.uid() = id) 뿐이다.
+--   role 을 보지 않는다. 그리고 auto_promote_super_admin 은 지정된 이메일을
+--   super_admin 으로 올려줄 뿐, 나머지 사람의 role 을 덮어쓰지 않는다.
+--   그래서 profiles 행이 아직 없는 새 계정은 가입 직후 이렇게 만들 수 있었다.
+--       insert into profiles (id, role) values (auth.uid(), 'super_admin')
+--   UPDATE 만 막으면 이 길이 그대로 남는다. 아래 ②' 로 같이 막는다.
 --
 -- 실행: Supabase SQL Editor 에 통째로 붙여넣고 RUN. 여러 번 돌려도 안전.
 -- ═══════════════════════════════════════════════════════════════
@@ -105,6 +110,81 @@ comment on function public._taam_uid_is_super() is
 
 
 -- ═══════════════════════════════════════════════════════════════
+-- ②' 가입(INSERT)으로 올라가는 길도 막는다
+-- ═══════════════════════════════════════════════════════════════
+-- 왜 필요한가
+--   profiles_insert_own 의 WITH CHECK 는 (auth.uid() = id) 다. 자기 id 로만
+--   넣으라는 것이지, role 을 무엇으로 넣든 보지 않는다. auto_promote 는
+--   지정 이메일만 올려주고 남의 role 은 그대로 둔다. 그래서 profiles 행이
+--   아직 없는 계정은 스스로 super_admin 행을 만들 수 있었다.
+--
+-- INSERT 는 예외를 던진다 (UPDATE 와 다르다)
+--   UPDATE 때는 조용히 되돌린다 — 이름 수정 같은 정상 요청이 같이 죽으면
+--   안 되기 때문이다. INSERT 는 그 행 자체가 부정한 것이라 막아도 잃을 게
+--   없다. 그리고 예외를 던지면 「기본값이 뭐였더라」를 추측하지 않아도 된다.
+--
+-- 트리거 순서에 기대지 않는다
+--   BEFORE 트리거는 이름 알파벳 순으로 돈다. auto_promote 가 먼저 돌 수도,
+--   나중일 수도 있다. 그래서 「누가 먼저 도느냐」로 판단하지 않고,
+--   그 행의 auth.users 이메일이 승격 대상인지를 직접 본다. 어느 순서로
+--   돌아도 결과가 같다.
+create or replace function public._taam_auth_email(p_id uuid)
+returns text
+language sql
+stable
+security definer
+set search_path = public, auth
+as $$
+  select lower(u.email) from auth.users u where u.id = p_id
+$$;
+
+create or replace function public.taam_guard_profile_role_ins()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  -- 평범한 가입은 볼 것 없다
+  if new.role is null or new.role not in ('super_admin','superadmin','admin') then
+    return new;
+  end if;
+
+  -- 서버가 하는 일은 막지 않는다 (auth.users 트리거·Edge Function·마이그레이션)
+  if current_user not in ('authenticated', 'anon') then
+    return new;
+  end if;
+
+  -- 슈퍼어드민은 통과.
+  --   ⚠ 지금은 여기까지 오지도 못한다 — profiles_insert_own 의 WITH CHECK 가
+  --     (auth.uid() = id) 라서, 슈퍼어드민이라도 「남의 행」을 새로 만들 수는
+  --     없다(RLS 가 먼저 막는다). 나중에 INSERT 정책에 is_superadmin() 이
+  --     붙으면 그때 이 줄이 일을 한다. 미리 열어 두는 게 아니라, 정책이
+  --     바뀌었을 때 어드민 생성이 조용히 막히는 것을 피하려는 것이다.
+  if public._taam_uid_is_super() then
+    return new;
+  end if;
+
+  -- ⚠ 이 목록은 auto_promote_super_admin 안의 목록과 같아야 한다.
+  --   거기가 바뀌면 여기도 같이 바꾼다. 다르면 슈퍼어드민 첫 가입이 막힌다.
+  if public._taam_auth_email(new.id) in ('dnfmeod@playtaam.com') then
+    return new;
+  end if;
+
+  raise exception 'profiles.role 은 직접 지정할 수 없습니다 (요청 role=%)', new.role
+    using errcode = '42501';
+end;
+$$;
+
+drop trigger if exists trg_taam_guard_profile_role_ins on public.profiles;
+create trigger trg_taam_guard_profile_role_ins
+  before insert on public.profiles
+  for each row execute function public.taam_guard_profile_role_ins();
+
+comment on function public.taam_guard_profile_role_ins() is
+  '가입 때 회원이 스스로 super_admin·admin 행을 만들지 못하게 막는다.';
+
+
+-- ═══════════════════════════════════════════════════════════════
 -- ② 확인 — 네 가지를 한 표로 본다
 -- ═══════════════════════════════════════════════════════════════
 --   ⚠ Supabase SQL Editor 는 여러 SELECT 를 돌려도 「마지막 결과 하나」만
@@ -122,10 +202,10 @@ comment on function public._taam_uid_is_super() is
 --     그러면 INSERT 도 같이 막아야 한다 — 결과를 보고 판단한다.
 select 'ⓐ 트리거'                    as "구분",
        tgname                        as "이름",
-       '설치됨'                      as "내용"
+       '설치됨 — 두 줄(UPDATE·INSERT)이 다 나와야 한다' as "내용"
 from pg_trigger
 where tgrelid = 'public.profiles'::regclass
-  and tgname = 'trg_taam_guard_profile_role'
+  and tgname in ('trg_taam_guard_profile_role', 'trg_taam_guard_profile_role_ins')
 
 union all
 select 'ⓑ 슈퍼어드민',
