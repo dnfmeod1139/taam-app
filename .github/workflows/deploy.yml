@@ -30,9 +30,21 @@
 # ═══════════════════════════════════════════════════════════════
 name: Deploy to Vercel
 
+# 🆕 2026.08-30: 앱이 안 바뀌는 머지는 빌드를 걸지 않는다.
+#   Hobby 플랜은 하루 100 배포다. 오늘 그 한도를 다 써서 라이브를 못 올렸다.
+#   그날 머지한 27건 중 상당수가 sql/·문서만 바뀐 것이었는데도 앱 빌드가 나갔다.
+#   웹에 나가는 것은 index.html · sw.js · 정적 파일뿐이다. 나머지는 건너뛴다.
+#   (Edge Function 은 대시보드에서 따로 배포하므로 supabase/ 도 제외)
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'sql/**'
+      - 'supabase/**'
+      - 'venues/**'
+      - 'docs/**'
+      - '**.md'
+      - '.gitignore'
   workflow_dispatch:        # 손으로도 돌릴 수 있게 — 대시보드까지 안 가도 된다
 
 jobs:
@@ -67,6 +79,13 @@ jobs:
           echo "HTTP $code"
           cat /tmp/hook.out || true
           echo
+          # 하루 배포 한도(Hobby 100건)에 닿으면 Vercel 이 429 를 준다.
+          #   그건 우리 잘못이 아니라 「오늘은 여기까지」라는 뜻이라 빨간 X 로 세우지 않는다.
+          #   빨간 X 가 흔해지면 진짜 실패를 못 알아본다.
+          if [ "$code" = "429" ] || grep -qi 'limited\|per-day' /tmp/hook.out 2>/dev/null; then
+            echo "::warning::배포 한도에 닿았습니다 — 한도가 풀린 뒤 이 워크플로를 Re-run 하세요."
+            exit 0
+          fi
           if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
             echo "::error::Deploy Hook 호출 실패 (HTTP $code) — Vercel 대시보드에서 확인하세요."
             exit 1
