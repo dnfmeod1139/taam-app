@@ -2268,6 +2268,22 @@ html.auto-login .splash .bottom-group{display:none !important}
 .tkb-s-sold{color:#9B1C1C;background:#FBEBE9}
 .tkb-s-past{color:#7A736A;background:#EFECE6}
 
+/* ═══ 🆕 2026.08-30 「더보기」 화면 ═══
+   어드민 메뉴 마흔아홉 개에서 하나를 찾는 화면. 목록을 손으로 들고 있지 않고
+   실제 메뉴를 훑어 만든다 — 메뉴가 늘면 검색도 저절로 따라온다. */
+#moBody{overflow-x:hidden;overscroll-behavior-x:none;touch-action:pan-y}
+#moBody .mo-t,#moBody .mo-sub,#moBody .tb-empty{overflow-wrap:anywhere}
+.mo-grp{font-size:10.5px;font-weight:800;letter-spacing:.16em;color:#a69f94;margin:18px 2px 8px}
+.mo-grp:first-child{margin-top:2px}
+.mo-item{display:flex;align-items:center;gap:11px;width:100%;text-align:left;background:#fff;
+  border:1px solid #e3dcce;border-radius:11px;padding:13px 14px;margin-bottom:7px;cursor:pointer;
+  font-family:var(--font-main);color:#17150f}
+.mo-item .mo-t{flex:1;min-width:0;font-size:13.5px;font-weight:700;line-height:1.45}
+.mo-item .mo-t small{display:block;font-size:11px;font-weight:400;color:#79736a;margin-top:2px}
+.mo-item .mo-where{flex:none;font-size:10.5px;font-weight:700;color:#a69f94}
+.mo-item .mo-chev{flex:none;color:#c4bdb2;font-size:14px}
+.mo-hit{background:#F7EDD6;border-radius:3px;padding:0 1px}
+
 .sub-item-title{font-size:14px;font-weight:700;color:#111;margin-bottom:4px}
 .sub-item-meta{font-family:var(--font-main);font-size:10px;color:#aaa}
 .sub-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:200px;color:#ccc;font-size:13px;gap:8px}
@@ -10597,6 +10613,16 @@ window.closePromoCarousel = function(){
         </span>
         <span style="color:#a69f94;font-size:17px;">›</span>
       </button>
+      <!-- 🆕 2026.08-30: 「더보기」 — 아래 메뉴 전체에서 하나를 찾는다 -->
+      <button onclick="moOpen()" style="width:100%;display:flex;align-items:center;gap:12px;text-align:left;
+        background:#fff;border:1px solid #e3dcce;border-radius:13px;padding:14px 17px;margin-top:8px;
+        cursor:pointer;font-family:var(--font-main);">
+        <span style="flex:1;min-width:0;">
+          <span style="display:block;font-size:14px;font-weight:800;color:#17150f;">더보기</span>
+          <span style="display:block;font-size:11.5px;color:#79736a;margin-top:2px;">아래 메뉴 전체에서 찾기</span>
+        </span>
+        <span style="color:#a69f94;font-size:17px;">›</span>
+      </button>
     </div>
     <!-- ════════ 0. Quick Access (자주 쓰는 항목 바로가기 — 슈퍼어드민 편집 가능) ════════ -->
     <div style="padding:14px 16px 4px;">
@@ -12389,6 +12415,22 @@ window.closePromoCarousel = function(){
     <div id="tkbFilters"></div>
   </div>
   <div id="tkbBody" class="sub-content" style="padding:14px 14px 90px;"></div>
+</div>
+
+<!-- 🆕 2026.08-30: 「더보기」 — 어드민 메뉴 전체에서 하나를 찾는다 -->
+<div id="moScreen" class="sub-screen" data-lang-lock="ko" style="display:none;">
+  <div class="sub-header">
+    <button class="sub-back" onclick="closeSubPage('moScreen')">←</button>
+    <div class="sub-title">더보기</div>
+    <div id="moCount" style="margin-left:auto;font-family:var(--font-main);font-size:11.5px;font-weight:700;color:#79736a;"></div>
+  </div>
+  <div class="mb-bar">
+    <div class="rv-q">
+      <input id="moQ" type="search" autocomplete="off" placeholder="원장 · 환율 · 초대 · 팝업 · 번역…" aria-label="어드민 기능 검색">
+      <button id="moQX" onclick="moClearQ()" aria-label="지우기" style="display:none;">×</button>
+    </div>
+  </div>
+  <div id="moBody" class="sub-content" style="padding:14px 14px 90px;"></div>
 </div>
 
 <div id="restListScreen" class="sub-screen" data-lang-lock="ko" style="display:none;">
@@ -30305,6 +30347,179 @@ window.tkbSetFilter = tkbSetFilter; window.tkbToggleRow = tkbToggleRow; window.t
 window.tkbEdit = tkbEdit; window.tkbSold = tkbSold; window.tkbSaleMgr = tkbSaleMgr;
 
 
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026.08-30 「더보기」 — 어드민 메뉴 전체에서 하나를 찾는다
+// ═══════════════════════════════════════════════════════════════
+//   어드민 메뉴에 마흔아홉 개가 있다. 「환율 어디 있더라」를 스크롤로 찾는다.
+//
+//   목록을 여기에 손으로 적지 않는다. 적는 순간 낡기 시작하고, 새 메뉴를
+//   넣을 때마다 두 군데를 고쳐야 하고, 반드시 한쪽을 빠뜨린다.
+//   대신 실제 어드민 메뉴(.admin-menu-item)를 그때그때 훑는다 —
+//   메뉴가 늘면 검색도 저절로 따라온다.
+//
+//   누르면 원래 메뉴 항목을 그대로 클릭한다. 동작을 흉내 내지 않는다 —
+//   흉내 내면 원래 항목이 바뀌었을 때 여기만 옛 동작으로 남는다.
+var _moRows = null;
+var _moState = { q:'' };
+var _moQTimer = null;
+
+// 어드민 메뉴를 훑어 목록을 만든다. 화면에 실제로 보이는 것만 담는다 —
+//   역할에 따라 숨겨진 항목까지 찾아주면 눌러도 아무 일이 안 난다.
+// 이 항목이 「역할 때문에」 숨어 있는가. 접힌 아코디언은 숨은 것으로 치지 않는다.
+function _moHidden(el, root){
+  for(var n = el; n && n !== root; n = n.parentElement){
+    var d = '';
+    try{ d = getComputedStyle(n).display; }catch(_e){}
+    if(d !== 'none') continue;
+    // 아코디언 몸통이면 접힌 것뿐이다 — 눌러도 동작은 그대로 난다
+    var prev = n.previousElementSibling;
+    var isAcc = /AccBody$/.test(n.id || '')
+      || (prev && (prev.getAttribute('onclick') || '').indexOf('toggleAdminAccordion') >= 0);
+    if(!isAcc) return true;
+  }
+  return false;
+}
+
+function _moScan(){
+  var out = [];
+  var root = document.getElementById('adminScreen');
+  if(!root) return out;
+  var grp = '';
+  var nodes = root.querySelectorAll('.admin-section-label, .admin-menu-item');
+  Array.prototype.forEach.call(nodes, function(el){
+    if(el.classList.contains('admin-section-label')){
+      grp = (el.textContent || '').trim();
+      return;
+    }
+    var click = el.getAttribute('onclick') || '';
+    // 아코디언 머리는 목적지가 아니라 접었다 펴는 것이다. 대신 그 이름을 그룹으로 쓴다
+    if(click.indexOf('toggleAdminAccordion') >= 0){
+      var _h = el.querySelector('.admin-menu-text');
+      if(_h) grp = (_h.textContent || '').trim().replace(/^[^\wㄱ-힣]+/, '').trim();
+      return;
+    }
+    // 숨어 있는 항목은 담지 않는다 — 눌러도 아무 일 없는 것을 찾아주면 안 된다.
+    //   ⚠ 다만 「접힌 아코디언」 안에 있는 것은 담는다. 그런 항목이야말로
+    //     스크롤로 가장 찾기 어렵고, 접혀 있어도 눌리면 동작은 그대로 난다.
+    //     처음엔 offsetParent 로 걸렀다가 「예약 초대 발송」이 통째로 빠졌다.
+    if(_moHidden(el, root)) return;
+    var t = el.querySelector('.admin-menu-text');
+    if(!t) return;
+    var sub = el.querySelector('.admin-menu-sub');
+    out.push({
+      el: el,
+      // 이모지는 검색에 방해만 된다. 보여줄 때도 뗀다 — 어드민 화면에는 안 쓴다
+      title: (t.textContent || '').trim().replace(/^[\u{1F000}-\u{1FAFF}☀-➿️\s]+/u, '').trim(),
+      sub: sub ? (sub.textContent || '').trim() : '',
+      grp: grp || '기타'
+    });
+  });
+  return out;
+}
+
+function moOpen(){
+  var isSuper = (typeof _isSuperAdmin === 'function') && _isSuperAdmin();
+  if(!isSuper && _currentRole !== 'admin'){
+    if(typeof showToast === 'function') showToast('🔒','권한 부족','슈퍼어드민·매장 어드민 전용');
+    return;
+  }
+  // ⚠ 어드민 화면이 열려 있는 동안 훑어야 한다. 닫힌 뒤에 훑으면
+  //   offsetParent 가 전부 null 이라 아무것도 안 잡힌다.
+  _moRows = _moScan();
+  _moState = { q:'' };
+  openSubPage('moScreen');
+  var q = document.getElementById('moQ');
+  if(q){
+    q.value = '';
+    q.oninput = function(){
+      var v = this.value;
+      clearTimeout(_moQTimer);
+      _moQTimer = setTimeout(function(){
+        _moState.q = v;
+        var x = document.getElementById('moQX'); if(x) x.style.display = v ? '' : 'none';
+        _moRenderBody();
+      }, 140);
+    };
+    setTimeout(function(){ try{ q.focus(); }catch(e){} }, 120);
+  }
+  _moRenderBody();
+}
+window.moOpen = moOpen;
+
+function _moHit(r, q){
+  if(!q) return true;
+  return (r.title + ' ' + r.sub + ' ' + r.grp).toLowerCase().indexOf(q) >= 0;
+}
+// 찾은 글자에 표시를 남긴다 — 왜 걸렸는지 보이면 다음 검색어가 나온다
+function _moMark(s, q){
+  var e = _tbEsc(s);
+  if(!q) return e;
+  var i = s.toLowerCase().indexOf(q);
+  if(i < 0) return e;
+  return _tbEsc(s.slice(0, i)) + '<span class="mo-hit">' + _tbEsc(s.slice(i, i + q.length))
+       + '</span>' + _tbEsc(s.slice(i + q.length));
+}
+
+function _moRenderBody(){
+  var el = document.getElementById('moBody');
+  if(!el) return;
+  var q = _moState.q.trim().toLowerCase();
+  var list = (_moRows || []).filter(function(r){ return _moHit(r, q); });
+
+  var head = document.getElementById('moCount');
+  if(head) head.textContent = list.length ? (list.length + '개') : '';
+
+  if(!list.length){
+    el.innerHTML = '<div class="tb-empty">'
+      + '「' + _tbEsc(_moState.q.trim()) + '」에 맞는 것이 없습니다.'
+      + '<br><span style="color:#a69f94">원장 · 환율 · 초대 · 팝업 · 번역 · 좌표</span></div>';
+    return;
+  }
+
+  var h = '';
+  if(q){
+    // 찾을 때는 묶지 않는다. 몇 개 안 되는데 머리글만 늘어난다
+    h += '<div class="mo-grp">검색 결과 ' + list.length + '</div>';
+    list.forEach(function(r, i){ h += _moItem(r, i, q, true); });
+  } else {
+    var grp = null;
+    list.forEach(function(r, i){
+      if(r.grp !== grp){ grp = r.grp; h += '<div class="mo-grp">' + _tbEsc(grp) + '</div>'; }
+      h += _moItem(r, i, '', false);
+    });
+  }
+  el.innerHTML = h;
+}
+
+function _moItem(r, i, q, showGrp){
+  return '<button class="mo-item" onclick="moGo(' + i + ')">'
+    + '<span class="mo-t">' + _moMark(r.title, q)
+      + (r.sub ? '<small>' + _moMark(r.sub, q) + '</small>' : '') + '</span>'
+    + (showGrp ? '<span class="mo-where">' + _tbEsc(r.grp) + '</span>' : '')
+    + '<span class="mo-chev">›</span></button>';
+}
+
+// 누르면 원래 메뉴 항목을 그대로 클릭한다
+function moGo(i){
+  var q = _moState.q.trim().toLowerCase();
+  var list = (_moRows || []).filter(function(r){ return _moHit(r, q); });
+  var r = list[i];
+  if(!r || !r.el) return;
+  closeSubPage('moScreen');
+  // 어드민 화면이 다시 앞으로 와야 그 항목의 동작(서브화면 열기 등)이 보인다
+  setTimeout(function(){ try{ r.el.click(); }catch(e){ console.warn('[more] 실행 실패:', e); } }, 60);
+}
+
+function moClearQ(){
+  var q = document.getElementById('moQ'); if(q){ q.value = ''; q.focus(); }
+  var x = document.getElementById('moQX'); if(x) x.style.display = 'none';
+  clearTimeout(_moQTimer);
+  _moState.q = '';
+  _moRenderBody();
+}
+window.moGo = moGo; window.moClearQ = moClearQ; window._moScan = _moScan;
+
+
 // 회원 통화 지정 — profiles.currency 갱신 후 원장 새로고침.
 //   null = 미지정(자동): 화면 언어 폴백으로 되돌린다.
 async function mlSetCur(uid, cur){
@@ -35526,7 +35741,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.30-q';
+var TAAM_WEB_BUILD = '2026.08.30-r';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
