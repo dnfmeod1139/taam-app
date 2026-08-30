@@ -22054,6 +22054,8 @@ async function _tkAcquireSeatHold(t, r, pax){
 
   // 최종 구매 ID 를 여기서 확정한다 (completePurchase 가 같은 값을 쓴다)
   var purchaseId = 'PAYH-' + String(t.id) + '_' + Date.now();
+  // 이름이 비면 「오늘」 화면과 구매 알림에 「(이름없음)」으로 남는다. 여기서 확정한다
+  var _byNm = await _taamMyName();
   var row = {
     user_id: u.id,
     restaurant_id: String(t.restId || (r && r.id) || ''),
@@ -22066,7 +22068,7 @@ async function _tkAcquireSeatHold(t, r, pax){
     price: 0,                     // 결제 확정 시 실제 금액으로 갱신
     status: 'hold',
     purchase_id: purchaseId,
-    buyer_name: (typeof _currentUserName !== 'undefined' && _currentUserName) || '',
+    buyer_name: _byNm || '',
     buyer_phone: (typeof _currentUserPhone !== 'undefined' && _currentUserPhone) || '',
     extra_data: { seatHold: true, heldAt: new Date().toISOString() },
     created_at: new Date().toISOString()
@@ -22882,6 +22884,40 @@ function setConfirmAgree(val){
 function toggleConfirmAgree(){setConfirmAgree(!_confirmAgreed2);}
 
 function confirmReservation(){ completePurchase(); }
+
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026.08-29: 내 이름을 확실히 찾아온다
+// ═══════════════════════════════════════════════════════════════
+//   구매 알림이 「회원님이 티켓을 구매했습니다」로 나갔다. 누가 샀는지가
+//   알림의 핵심인데 그게 빠지면 알림을 받고도 원장을 뒤져야 한다.
+//
+//   원인은 _currentUserName 이 로그인 경로마다 채워지는 시점이 달라서다.
+//   부팅 복원처럼 detectAndSetRole 을 안 타는 길에서는 빈 채로 남는다.
+//   전역 변수를 믿지 말고, 없으면 그 자리에서 profiles 를 읽는다.
+//
+//   읽은 값은 전역에도 되돌려 넣는다 — 다음부터는 조회가 필요 없다.
+async function _taamMyName(){
+  try{
+    if(typeof _currentUserName !== 'undefined' && _currentUserName) return _currentUserName;
+    if(window._currentUserName) return window._currentUserName;
+    if(!window.sb) return '';
+    var a = await window.sb.auth.getUser();
+    var u = a && a.data && a.data.user;
+    if(!u) return '';
+    var r = await window.sb.from('profiles').select('display_name, phone').eq('id', u.id).maybeSingle();
+    var nm = (r.data && r.data.display_name) ? String(r.data.display_name).trim() : '';
+    if(nm){
+      try{ _currentUserName = nm; }catch(_e){}
+      window._currentUserName = nm;
+      return nm;
+    }
+    // 이름이 정말 없으면 번호 뒷자리라도 남긴다 — 「회원님」보다는 낫다
+    var ph = (r.data && r.data.phone) ? String(r.data.phone).replace(/[^0-9]/g, '') : '';
+    return ph ? ('회원 ' + ph.slice(-4)) : '';
+  }catch(e){ console.warn('[myName] 조회 실패:', e); return ''; }
+}
+window._taamMyName = _taamMyName;
+
 async function completePurchase(){
   // 홀드는 이 구매로 전환된다 — 카운트다운만 멈추고 반납은 하지 않는다
   if (typeof _tkStopHoldCountdown === 'function') _tkStopHoldCountdown();
@@ -23008,7 +23044,7 @@ async function completePurchase(){
         try {
           var _up = await window.sb.from('tickets')
             .update({ status: 'active', price: paid,
-                      buyer_name: _currentUserName || '', buyer_phone: _currentUserPhone || '' })
+                      buyer_name: (await _taamMyName()) || '', buyer_phone: _currentUserPhone || '' })
             .eq('purchase_id', _hid).eq('status', 'hold').select('purchase_id');
           if (_up.error) { _hErr = _up.error.message; continue; }
           if (_up.data && _up.data.length) { _hOk = true; break; }
@@ -23364,7 +23400,9 @@ async function completePurchase(){
   try {
     var _pxRest = currentRest ? currentRest.name : (t.rest || '티켓');
     // 🆕 구매자 이름 포함 — "누가 · 어디 · 며칠 · 몇 명" 이 알림에서 바로 보이게
-    var _pxWho = (typeof _currentUserName !== 'undefined' && _currentUserName) ? _currentUserName : '회원';
+    // 전역이 비어 있으면 profiles 에서 읽어 온다. 누가 샀는지가 이 알림의 핵심이다
+    var _pxWho = await _taamMyName();
+    if(!_pxWho) _pxWho = '회원';
     // 🆕 2026.08-27: 구매 시각을 본문에 넣는다 — 알림을 나중에 봐도 언제 산 건지 남는다
     var _pxAt = new Date().toLocaleString('ko-KR', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
     var _pxBody = _pxWho + '님 · ' + _pxRest + ' · ' + t.date + ' ' + t.time + ' · ' + pax + '인 · ₩' + (paid||0).toLocaleString()
@@ -34088,7 +34126,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.29-n';
+var TAAM_WEB_BUILD = '2026.08.29-p';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -34410,6 +34448,8 @@ function openTicketBroadcastScreen(){
   document.getElementById('ticketBroadcastScreen').style.display = 'flex';
   // 활성 회원 수 미리 조회
   tbLoadActiveMembersCount();
+  // 좌석을 세둔다 — 매진된 티켓의 오픈 알림을 보내면 회원이 눌러서 매진을 확인한다
+  if(typeof _paLoadSeats === 'function') _paLoadSeats();
 }
 window.openTicketBroadcastScreen = openTicketBroadcastScreen;
 
@@ -34451,20 +34491,30 @@ function tbSearchTickets(q){
   if(_tbTicketSearchTimer) clearTimeout(_tbTicketSearchTimer);
   _tbTicketSearchTimer = setTimeout(function(){
     var matches = (ticketDB || []).filter(function(t){
-      // 활성 티켓만 (지난 티켓 제외)
+      // 🆕 2026.08-29: 「활성 티켓만」이라고 적혀 있었지만 실제로는 아무것도 안 걸렀다.
+      //   그래서 지난 티켓·매진 티켓까지 검색에 나왔고, 그걸 골라 오픈 알림을 보내면
+      //   회원은 푸시를 받고 들어와 살 수 없는 자리를 보게 된다.
+      //   매진 판정은 팝업 목록과 같은 규칙을 쓴다(status + 잔여 0석).
+      if(typeof _isTicketExpired === 'function' && _isTicketExpired(t)) return false;
+      if(typeof _paSoldOut === 'function' && _paSoldOut(t)) return false;
       var rest = (restaurantDB || []).find(function(r){ return String(r.id) === String(t.restId); });
       var restName = (rest && rest.name) || t.rest || '';
       var hay = (restName + ' ' + (t.date || '') + ' ' + (t.ticketGenre || '') + ' ' + (t.type || '')).toLowerCase();
       return hay.indexOf(q) !== -1;
     }).slice(0, 30);
     if(matches.length === 0){
-      resEl.innerHTML = '<div style="padding:14px;text-align:center;font-size:12px;color:#999;">검색 결과 없음</div>';
+      resEl.innerHTML = '<div style="padding:14px;text-align:center;font-size:12px;color:#999;line-height:1.7;">'
+        + '검색 결과 없음<br><span style="font-size:11px;color:#bbb;">지난 티켓과 매진된 티켓은 나오지 않습니다</span></div>';
     } else {
       resEl.innerHTML = matches.map(function(t){
         var rest = (restaurantDB || []).find(function(r){ return String(r.id) === String(t.restId); });
         var restName = (rest && rest.name) || t.rest || '(레스토랑 없음)';
         var isSelected = !!_tbSelectedTicketIds[t.id];
-        var label = (t.date || '') + (t.time ? ' ' + t.time : '') + ' · ' + restName + (t.ticketGenre ? ' · ' + t.ticketGenre : '');
+        var _left = (typeof _paSeatsLeft === 'function') ? _paSeatsLeft(t) : null;
+        var _hid = (typeof _tkSaleHidden === 'function' && _tkSaleHidden(t)) ? '[미공개] ' : '';
+        var label = _hid + (t.date || '') + (t.time ? ' ' + t.time : '') + ' · ' + restName
+          + (t.ticketGenre ? ' · ' + t.ticketGenre : '')
+          + (_left === null ? '' : ' · 잔여 ' + _left + '석');
         return '<div onclick="tbToggleTicket(\''+t.id+'\')" style="padding:10px 12px;margin-bottom:4px;border-radius:8px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;background:'+(isSelected?'#1a1a18':'#fff')+';color:'+(isSelected?'#fff':'#1a1a18')+';">'
              + '<div style="font-size:12.5px;font-weight:700;">'+_riEscHtml(label)+'</div>'
              + '<div style="font-size:10px;font-weight:800;color:'+(isSelected?'#c8a96e':'#c8a96e')+';">'+(isSelected?'✓ 선택됨':'+ 선택')+'</div>'
@@ -37168,6 +37218,8 @@ var _popStIdx = 0;
 
 function _popShowStory(c){
   var old = document.getElementById('popStoryScreen'); if(old) old.remove();
+  var _pill = document.getElementById('popStoryPill'); if(_pill) _pill.remove();
+  window._popStoryAt = null;
   var list = _popStoryList(c);
   if(!list.length){
     if(typeof showToast === 'function'){
@@ -37215,7 +37267,7 @@ function _popShowStory(c){
   el.id = 'popStoryScreen';
   el.style.cssText = 'position:fixed;inset:0;z-index:9310;background:#FBF9F4;font-family:var(--font-main);overflow:hidden;';
   el.innerHTML =
-    '<button onclick="document.getElementById(\'popStoryScreen\').remove()" style="position:fixed;top:calc(14px + env(safe-area-inset-top));right:14px;z-index:4;width:36px;height:36px;border-radius:50%;border:0;background:rgba(0,0,0,.45);color:#fff;font-size:18px;cursor:pointer;">×</button>'
+    '<button onclick="popStoryDismiss()" style="position:fixed;top:calc(14px + env(safe-area-inset-top));right:14px;z-index:4;width:36px;height:36px;border-radius:50%;border:0;background:rgba(0,0,0,.45);color:#fff;font-size:18px;cursor:pointer;">×</button>'
     // 진행 막대 — 장수가 많아도 안 무너진다 (점 인디케이터는 8장만 넘어가도 뭉갠다)
     + '<div style="position:fixed;top:0;left:0;right:0;height:2px;background:rgba(0,0,0,.08);z-index:4;">'
       + '<div id="popStBar" style="height:100%;width:' + (100/n) + '%;background:#c8a96e;transition:width .25s ease;"></div></div>'
@@ -37252,11 +37304,74 @@ function _popShowStory(c){
   if(cta) cta.onclick = function(){
     var it = list[_popStIdx];
     if(!it) return;
-    var s = document.getElementById('popStoryScreen'); if(s) s.remove();
+    // 지우지 않고 세워둔다 — 캘린더를 보고 나서 이어 볼 수 있어야 한다
+    _popStoryPark();
     _popGoTicket(it.t);
   };
   sync();
 }
+
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026.08-29: 소개를 보다 캘린더로 갔다가 돌아오기
+// ═══════════════════════════════════════════════════════════════
+//   종전에는 「캘린더에서 보기」를 누르면 소개 화면을 지웠다. 다섯 곳 중
+//   두 번째를 보다 한 곳을 확인하러 들어가면 나머지 셋을 볼 길이 없었고,
+//   다시 보려면 앱을 껐다 켜야 했다. 발행한 소개를 한 번밖에 못 읽는다.
+//
+//   지우는 대신 세워둔다. 어디까지 봤는지(가로 스크롤 위치)를 기억하고,
+//   화면 아래에 돌아가는 알약을 띄운다. 회원이 닫으면 그때 지운다.
+function _popStoryPark(){
+  var el = document.getElementById('popStoryScreen');
+  if(!el) return;
+  var sl = el.querySelector('.pop-st-slider');
+  window._popStoryAt = sl ? sl.scrollLeft : 0;
+  el.style.display = 'none';
+  _popStoryPill();
+}
+
+function _popStoryPill(){
+  var old = document.getElementById('popStoryPill'); if(old) old.remove();
+  var el = document.getElementById('popStoryScreen');
+  if(!el) return;
+  var n = el.querySelectorAll('.pop-st-slide').length;
+  var pill = document.createElement('div');
+  pill.id = 'popStoryPill';
+  // GNB 위에 띄운다. 캘린더를 가리지 않을 만큼만 차지한다
+  pill.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);'
+    + 'bottom:calc(74px + env(safe-area-inset-bottom));z-index:9305;display:flex;align-items:center;gap:2px;'
+    + 'background:#1a1a18;border-radius:999px;box-shadow:0 8px 24px rgba(0,0,0,.32);'
+    + 'font-family:var(--font-main);opacity:0;transition:opacity .28s ease;';
+  pill.innerHTML =
+      '<button onclick="popStoryResume()" style="border:0;background:none;color:#FBF9F4;'
+    + 'font-family:inherit;font-size:12.5px;font-weight:800;padding:11px 6px 11px 17px;cursor:pointer;">'
+    + _popL('소개 이어 보기','Back to the story','紹介の続きを見る')
+    + ' <span style="color:#c8a96e;font-family:\'Montserrat\',sans-serif;font-size:11px;">'
+    + String(Math.min(n, _popStIdx + 1)).padStart(2,'0') + '/' + String(n).padStart(2,'0') + '</span></button>'
+    + '<button onclick="popStoryDismiss()" aria-label="닫기" style="border:0;background:none;color:#8a8580;'
+    + 'font-size:16px;line-height:1;padding:11px 15px 11px 6px;cursor:pointer;">×</button>';
+  document.body.appendChild(pill);
+  requestAnimationFrame(function(){ pill.style.opacity = '1'; });
+}
+
+function popStoryResume(){
+  var el = document.getElementById('popStoryScreen');
+  if(!el){ popStoryDismiss(); return; }
+  var pill = document.getElementById('popStoryPill'); if(pill) pill.remove();
+  el.style.display = '';
+  // 보던 장으로 되돌린다. 처음으로 튕기면 「이어 보기」가 아니다
+  var sl = el.querySelector('.pop-st-slider');
+  if(sl && typeof window._popStoryAt === 'number'){
+    sl.scrollLeft = window._popStoryAt;
+    sl.dispatchEvent(new Event('scroll'));
+  }
+}
+function popStoryDismiss(){
+  var pill = document.getElementById('popStoryPill'); if(pill) pill.remove();
+  var el = document.getElementById('popStoryScreen'); if(el) el.remove();
+  window._popStoryAt = null;
+}
+window.popStoryResume = popStoryResume;
+window.popStoryDismiss = popStoryDismiss;
 window._popShowStory = _popShowStory;
 
 // ── 팝업 발행 편집기 (슈퍼어드민) ──
