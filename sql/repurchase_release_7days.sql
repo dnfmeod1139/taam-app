@@ -60,30 +60,79 @@ comment on function public.taam_repurchase_release_days() is
 --   처음엔 coalesce(sale_open_at, reg_date) 로 짰다가 되돌렸다. 그러면
 --   **미공개 보관(draft)이 등록 7일 뒤에 저절로 풀린다** — 발매된 적도 없는데.
 --   「오픈 예약인데 일시 미정」도 같은 구멍이었다. 카운트다운은 발매부터다.
+--   ⚠ sale_open_at · reg_date 는 **text 컬럼**이다 (timestamptz 가 아니다).
+--     앱이 'YYYY-MM-DDTHH:MM' / 'YYYY-MM-DD' 같은 문자열을 그대로 넣는다.
+--     그래서 ① 비교 전에 변환해야 하고 ② 시간대를 정해야 하고
+--     ③ 이상한 값 한 줄이 cron 을 통째로 죽이지 않게 막아야 한다.
+--
+--     시간대는 **Asia/Seoul** 로 읽는다. 앱은 new Date('2026-09-01T10:00') 로
+--     브라우저 로컬(=KST)로 해석한다. 서버가 UTC 로 읽으면 9시간이 어긋나
+--     「앱은 열어주는데 서버는 막는다」가 된다.
 create or replace function public.taam_ticket_sale_opened_at(p_ticket_id text)
 returns timestamptz
-language sql
+language plpgsql
 stable
 security definer
 set search_path = public
 as $$
-  select case
-           -- 미공개 보관 — 발매된 적이 없다. 카운트다운도 없다
-           when coalesce(tp.sale_state, 'open') = 'draft' then null
-           -- 오픈 예약 — 그 시각이 지나야 발매다. 일시 미정이면 아직 아니다
-           when coalesce(tp.sale_state, 'open') = 'scheduled' then
-                case when tp.sale_open_at is not null
-                      and tp.sale_open_at <= now()
-                     then tp.sale_open_at::timestamptz
-                     else null
-                end
-           -- 발행 — 등록한 날부터 팔린다 (날짜만 있으므로 그날 0시로 본다)
-           when tp.reg_date is not null then (tp.reg_date::date)::timestamptz
-           else null
-         end
+declare
+  v_state text;
+  v_open  text;
+  v_reg   text;
+  v_ts    timestamptz;
+begin
+  select coalesce(tp.sale_state, 'open'), tp.sale_open_at, tp.reg_date
+    into v_state, v_open, v_reg
     from public.ticket_products tp
-   where tp.id::text = p_ticket_id
+   where tp.id::text = p_ticket_id;
+
+  if not found then return null; end if;
+
+  -- 미공개 보관 — 발매된 적이 없다. 카운트다운도 없다
+  if v_state = 'draft' then return null; end if;
+
+  -- 오픈 예약 — 그 시각이 지나야 발매다. 일시 미정이면 아직 아니다
+  if v_state = 'scheduled' then
+    if v_open is null or btrim(v_open) = '' then return null; end if;
+    begin
+      v_ts := (btrim(v_open)::timestamp) at time zone 'Asia/Seoul';
+    exception when others then
+      -- 형식이 깨진 값 — 풀지 않는다. 제한이 기본이고 해제가 예외다
+      return null;
+    end;
+    if v_ts > now() then return null; end if;
+    return v_ts;
+  end if;
+
+  -- 발행 — 등록한 날부터 팔린다 (날짜만 있으므로 그날 0시로 본다)
+  if v_reg is null or btrim(v_reg) = '' then return null; end if;
+  begin
+    v_ts := (btrim(v_reg)::date)::timestamp at time zone 'Asia/Seoul';
+  exception when others then
+    return null;
+  end;
+  return v_ts;
+end;
 $$;
+
+
+-- ── 깨진 날짜 문자열이 쿼리를 죽이지 않게 ────────────────────────
+--   ticket_products.date 는 text 다. 앱은 보통 '2026.09.30' 로 넣지만,
+--   연도가 빠진 '09.30' 같은 옛 행이 섞여 있을 수 있다. 그런 값 하나가
+--   ::date 에서 터지면 크론이 통째로 죽고 알림이 영영 안 나간다.
+--   못 읽으면 null 로 넘긴다 — 그 티켓만 조용히 빠진다.
+create or replace function public.taam_date_or_null(p_text text)
+returns date
+language plpgsql
+immutable
+as $dnull$
+begin
+  if p_text is null or btrim(p_text) = '' then return null; end if;
+  return btrim(p_text)::date;
+exception when others then
+  return null;
+end;
+$dnull$;
 
 
 -- 이 티켓은 재구매 제한이 풀렸는가
@@ -219,7 +268,8 @@ security definer
 set search_path = public
 as $$
   with tk as (
-    select tp.id::text as tid, tp.rest_id::text as rid, tp.date as tdate
+    select tp.id::text as tid, tp.rest_id::text as rid,
+           public.taam_date_or_null(tp.date) as tdate
     from public.ticket_products tp
     where tp.id::text = p_ticket_id
   ),
@@ -227,7 +277,7 @@ as $$
     select distinct on (k.user_id)
            k.user_id,
            k.reservation_date::date as prev_visit,
-           abs(k.reservation_date::date - (tk.tdate)::date) as gap
+           abs(k.reservation_date::date - tk.tdate) as gap
     from public.tickets k
     join tk on k.restaurant_id::text = tk.rid
     join public.restaurants r on r.id::text = tk.rid
@@ -240,8 +290,8 @@ as $$
       and coalesce(k.extra_data ->> 'manualEntry', '') not in ('true','1')
       and coalesce(k.extra_data ->> 'inviteHold',  '') not in ('true','1')
       and coalesce(r.repurchase_day, 0) > 0
-      and abs(k.reservation_date::date - (tk.tdate)::date) > 0
-      and abs(k.reservation_date::date - (tk.tdate)::date) < r.repurchase_day
+      and abs(k.reservation_date::date - tk.tdate) > 0
+      and abs(k.reservation_date::date - tk.tdate) < r.repurchase_day
       -- 이미 이 티켓을 산 사람은 뺀다
       and not exists (
         select 1 from public.tickets b
@@ -249,7 +299,7 @@ as $$
            and b.ticket_product_id::text = tk.tid
            and coalesce(b.status,'') not in ('cancelled','canceled')
       )
-    order by k.user_id, abs(k.reservation_date::date - (tk.tdate)::date)
+    order by k.user_id, abs(k.reservation_date::date - tk.tdate)
   )
   select t.user_id,
          coalesce(p.display_name, '(이름 없음)'),
@@ -286,8 +336,7 @@ begin
     from public.ticket_products tp
     where public.taam_repurchase_released(tp.id::text)
       and coalesce(tp.status,'') <> 'soldout'
-      and tp.date is not null
-      and (tp.date)::date >= current_date
+      and public.taam_date_or_null(tp.date) >= current_date
   ),
   ins as (
     insert into public.notifications (user_id, type, title, body, url, payload)
@@ -356,8 +405,7 @@ select coalesce(tp.rest_name,'(매장 없음)')            as "매장",
        g.gap                                          as "간격(일)"
 from public.ticket_products tp
 left join lateral public.taam_repurchase_release_targets(tp.id::text) g on true
-where tp.date is not null
-  and (tp.date)::date >= current_date
+where public.taam_date_or_null(tp.date) >= current_date
   and coalesce(tp.status,'') <> 'soldout'
   and public.taam_repurchase_released(tp.id::text)
 order by tp.date, g.display_name;
