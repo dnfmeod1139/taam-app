@@ -23259,22 +23259,28 @@ async function depositTransaction(opts) {
   
   const currentBalance = profile[balanceField] || 0;
   const newBalance = currentBalance + opts.amount;
-  
+
   if (newBalance < 0) {
     throw new Error(`예치금 부족: 현재 ${currentBalance}, 차감 시도 ${Math.abs(opts.amount)}`);
   }
-  
-  // 2) 잔액 업데이트
-  const updateObj = {};
-  updateObj[balanceField] = newBalance;
-  
-  const { error: uErr } = await window.sb
-    .from('profiles')
-    .update(updateObj)
-    .eq('id', user.id);
-  
-  if (uErr) throw uErr;
-  
+
+  // 2) 잔액 업데이트 — 서버 RPC 로 한다
+  //
+  //   🔧 2026.08-31: 종전에는 여기서 profiles 를 직접 update 했다.
+  //     ① 읽은 잔액으로 새 값을 계산해 덮어쓰므로, 같은 순간에 다른 탭·기기가
+  //        움직이면 한쪽이 사라진다(lost update). 다른 금전 경로는 이미
+  //        taam_apply_deposit_delta 로 옮겼는데 여기만 남아 있었다.
+  //     ② 곧 걸 예치금 가드(trg_taam_guard_deposit_balance)가 회원의 직접
+  //        수정을 막는다. 이 줄이 남아 있으면 **카드가 승인된 다음** 여기서
+  //        막혀서, 돈은 나갔는데 멤버십이 안 붙는다. 그건 절대 안 된다.
+  //
+  //   RPC 는 델타를 받아 서버가 잠그고 더한다 — 읽고-쓰는 사이가 없다.
+  const _dtMem = (opts.deposit_type === 'membership') ? opts.amount : 0;
+  const _dtGen = (opts.deposit_type === 'membership') ? 0 : opts.amount;
+  const _dtBal = await _depApplyDelta(user.id, _dtMem, _dtGen);
+  // 서버가 확정한 잔액을 이력에 적는다 (앱이 계산한 값이 아니라)
+  const _dtAfter = (opts.deposit_type === 'membership') ? _dtBal.mem : _dtBal.gen;
+
   // 3) 변동 이력 기록
   const { error: tErr } = await window.sb
     .from('deposit_transactions')
@@ -23283,16 +23289,16 @@ async function depositTransaction(opts) {
       deposit_type: opts.deposit_type,
       change_type: opts.change_type,
       amount: opts.amount,
-      balance_after: newBalance,
+      balance_after: _dtAfter,
       payment_id: opts.payment_id || null,
       description: opts.description || null,
       metadata: opts.metadata || null
     });
-  
+
   if (tErr) console.error('[deposit] 이력 기록 실패:', tErr);
-  
-  console.log(`[deposit] ${opts.deposit_type} ${opts.amount > 0 ? '+' : ''}${opts.amount} → 잔액 ${newBalance}`);
-  return newBalance;
+
+  console.log(`[deposit] ${opts.deposit_type} ${opts.amount > 0 ? '+' : ''}${opts.amount} → 잔액 ${_dtAfter}`);
+  return _dtAfter;
 }
 
 function payWithPortOne(amount, orderName, callback) {
@@ -36502,7 +36508,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.31-j';
+var TAAM_WEB_BUILD = '2026.08.31-k';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
