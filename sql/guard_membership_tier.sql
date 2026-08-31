@@ -77,7 +77,9 @@ begin
     from public.invite_codes ic
    where upper(btrim(coalesce(ic.invitee_tier,''))) in ('M','T','A')
      and (
-          ic.member_id = p_user_id
+          -- ⚠ invite_codes.member_id 는 uuid 가 아니라 **text** 다.
+          --   그냥 비교하면 42883 (operator does not exist: text = uuid) 로 죽는다.
+          ic.member_id::text = p_user_id::text
        or (v_email <> '' and lower(btrim(coalesce(ic.used_by_email,''))) = v_email)
        or (v_email <> '' and lower(btrim(coalesce(ic.invitee_email,''))) = v_email)
        or (length(v_pkey) >= 8 and public._taam_phone_key(ic.used_by_phone) = v_pkey)
