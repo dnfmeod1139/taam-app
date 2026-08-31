@@ -36539,7 +36539,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.31-o';
+var TAAM_WEB_BUILD = '2026.08.31-p';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -48874,7 +48874,16 @@ var _cpfBusy = false, _cpfStop = false;
 
 // data:image/...;base64,... 한 장을 Storage 에 올리고 public URL 을 준다
 async function _cpfUploadDataUrl(dataUrl){
-  // 1) 리사이즈 — 원본이 이미 크다. 계보도 노드는 1200px 이면 충분하다
+  // ⚠ PNG 는 PNG 로 다시 굽는다. 전부 JPEG 로 바꾸면 **투명 배경이 검게** 된다.
+  //   node_photo 는 인물 사진뿐이라 몰랐는데, sec1/sec2 는 시그니처·미디어
+  //   챕터라 로고 같은 투명 PNG 가 섞여 있을 수 있다. 86건을 다 돌린 뒤에
+  //   알아채면 되돌릴 방법이 없다.
+  //   Storage 로 나가면 DB 에는 URL 만 남으므로, PNG 가 좀 커도 상관없다.
+  var isPng = /^data:image\/(png|webp)/i.test(dataUrl);
+  var outMime = isPng ? 'image/png' : 'image/jpeg';
+  var outExt  = isPng ? '.png' : '.jpg';
+
+  // 리사이즈 — 원본이 이미 크다. 1200px 이면 충분하다
   var resized = await new Promise(function(resolve){
     try {
       var img = new Image();
@@ -48886,7 +48895,7 @@ async function _cpfUploadDataUrl(dataUrl){
           cv.width  = Math.round(w * scale);
           cv.height = Math.round(h * scale);
           cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
-          resolve(cv.toDataURL('image/jpeg', 0.85));
+          resolve(isPng ? cv.toDataURL('image/png') : cv.toDataURL('image/jpeg', 0.85));
         } catch(e){ resolve(dataUrl); }   // 못 줄이면 원본 그대로 올린다
       };
       img.onerror = function(){ resolve(dataUrl); };
@@ -48899,9 +48908,9 @@ async function _cpfUploadDataUrl(dataUrl){
   //   (RLS 로 막혔을 때 파일명을 의심했지만 관계없었다. 원인은 chef-photos
   //    INSERT 정책이 profiles.is_admin 만 보고 슈퍼어드민을 몰랐던 것이다.
   //    sql/chef_photos_storage_policy.sql 참고)
-  var fileName = Date.now() + '_' + Math.random().toString(36).substr(2, 9) + '.jpg';
+  var fileName = Date.now() + '_' + Math.random().toString(36).substr(2, 9) + outExt;
   var up = await window.sb.storage.from('chef-photos').upload(fileName, blob, {
-    contentType: 'image/jpeg', upsert: false
+    contentType: outMime, upsert: false
   });
   if(up.error) throw new Error('업로드 실패: ' + up.error.message);
   var pub = window.sb.storage.from('chef-photos').getPublicUrl(fileName);
