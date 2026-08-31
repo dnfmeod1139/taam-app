@@ -16524,17 +16524,44 @@ async function savePurchase(){
 //   ⚠ 이 함수가 실패하면 예외를 던진다. 부르는 쪽이 잔액이 바뀐 줄 알고
 //     다음 단계로 넘어가면 안 된다.
 //   반환: { mem, gen, total } — 적용 후 잔액
-async function _depApplyDelta(userId, memDelta, genDelta){
+//   🆕 2026.08-31: entries 를 같이 넘기면 **원장까지 서버가 쓴다.**
+//     지금은 잔액은 RPC 가, 원장은 앱이 따로 쓴다. 갈라져 있어서
+//     ① 중간이 끊기면 한쪽만 남고 ② 앱이 쓸 수 있는 한 위조도 못 막는다.
+//     서버는 entries 합계가 잔액 변동과 같은지 검산하고, balance_after 를
+//     직접 센다. 앱이 보낸 값은 안 쓴다.
+//     설계: docs/DESIGN_ledger_server_side.md
+//
+//   반환의 ledger 가 false 면 **원장은 안 쓰였다** — 부르는 쪽이 예전처럼 쓴다.
+async function _depApplyDelta(userId, memDelta, genDelta, entries){
   if(!window.sb) throw new Error('서버 연결이 없습니다');
   if(!userId)    throw new Error('회원 정보가 없습니다');
-  var res = await window.sb.rpc('taam_apply_deposit_delta', {
+  var wantLedger = !!(entries && entries.length);
+  var args = {
     p_user_id:   userId,
     p_mem_delta: Math.round(Number(memDelta) || 0),
     p_gen_delta: Math.round(Number(genDelta) || 0)
-  });
+  };
+  if(wantLedger) args.p_entries = entries;
+
+  var res = await window.sb.rpc('taam_apply_deposit_delta', args);
+
+  // 서버가 아직 옛 3인자 버전이면 p_entries 를 모른다.
+  //   여기서 그냥 죽으면 환불이 통째로 안 된다 — 잔액만 옮기고 알린다.
+  //   (2026-08-31 오전에 앱을 DB 보다 먼저 배포해서 낸 사고와 같은 종류다)
+  if(res.error && wantLedger &&
+     (res.error.code === 'PGRST202' ||
+      /could not find the function|schema cache/i.test(res.error.message || ''))){
+    console.warn('[deposit] 서버가 원장 인자를 모름 — 잔액만 옮긴다:', res.error.message);
+    delete args.p_entries;
+    res = await window.sb.rpc('taam_apply_deposit_delta', args);
+    if(res.error) throw new Error(res.error.message);
+    var d0 = res.data || {};
+    return { mem: d0.mem || 0, gen: d0.gen || 0, total: d0.total || 0, ledger: false };
+  }
+
   if(res.error) throw new Error(res.error.message);
   var d = res.data || {};
-  return { mem: d.mem || 0, gen: d.gen || 0, total: d.total || 0 };
+  return { mem: d.mem || 0, gen: d.gen || 0, total: d.total || 0, ledger: wantLedger };
 }
 
 //   반환: { mem, gen } — 각 주머니에 더할 금액. 합은 언제나 amount 와 같다.
@@ -16602,17 +16629,35 @@ async function _tkCapacityAutoRefund(row, user, errMsg){
       if (!me.error && me.data) {
         // 🔧 2026.08-28: 여기만 무조건 멤버십으로 넣고 있었다 — 나간 주머니로 되돌린다
         var _spl3 = await _depRefundSplit(user.id, row.purchase_id, amt);
-        var _bal3 = await _depApplyDelta(user.id, _spl3.mem, _spl3.gen);
+        // 🆕 2026.08-31 (원장 서버화 3단계 ①): 원장을 서버가 쓴다.
+        //   종전에는 한 줄만 쓰면서 deposit_type 을 「더 많이 들어간 주머니」로
+        //   적었다 — 반씩 나뉘면 절반이 틀린 주머니로 기록됐다.
+        //   이제 실제로 들어간 주머니마다 한 줄씩 남는다.
+        var _meta3 = { purchase_id: row.purchase_id, refund_type: 'returned',
+                       reason: 'capacity_auto_refund',
+                       error: String(errMsg || '').slice(0, 120) };
+        var _desc3 = '매진 자동 환불 · ' + (row.restaurant_name || '티켓');
+        var _ent3 = [];
+        if(_spl3.mem > 0) _ent3.push({ deposit_type:'membership', change_type:'ticket_refund',
+                                       amount:_spl3.mem, description:_desc3 + ' (멤버십 예치금)',
+                                       metadata:_meta3 });
+        if(_spl3.gen > 0) _ent3.push({ deposit_type:'general', change_type:'ticket_refund',
+                                       amount:_spl3.gen, description:_desc3 + ' (일반 예치금)',
+                                       metadata:_meta3 });
+        var _bal3 = await _depApplyDelta(user.id, _spl3.mem, _spl3.gen, _ent3);
         var _mem = _bal3.mem;
         var _gen = _bal3.gen;
-        await window.sb.from('deposit_transactions').insert({
-          user_id: user.id,
-          deposit_type: (_spl3.mem >= _spl3.gen ? 'membership' : 'general'),
-          change_type: 'ticket_refund',
-          amount: amt, balance_after: _mem + _gen,
-          description: '매진 자동 환불 · ' + (row.restaurant_name || '티켓'),
-          metadata: { purchase_id: row.purchase_id, refund_type: 'returned', reason: 'capacity_auto_refund', error: String(errMsg || '').slice(0, 120) }
-        });
+        // 서버가 원장을 못 썼으면(옛 함수) 예전처럼 앱이 한 줄 남긴다
+        if(!_bal3.ledger){
+          await window.sb.from('deposit_transactions').insert({
+            user_id: user.id,
+            deposit_type: (_spl3.mem >= _spl3.gen ? 'membership' : 'general'),
+            change_type: 'ticket_refund',
+            amount: amt, balance_after: _mem + _gen,
+            description: _desc3,
+            metadata: _meta3
+          });
+        }
         currentDepositBalance = _mem + _gen;
         try { var _bal = document.getElementById('mpBalance'); if(_bal) _bal.textContent = taamMoney(currentDepositBalance); } catch(_be){}
       }
@@ -24064,7 +24109,27 @@ async function completePurchase(){
         });
       }
 
-      if(txnsToInsert.length > 0){
+      // 🆕 2026.08-31 (원장 서버화 3단계 ⑤): 차감과 원장을 한 트랜잭션으로.
+      //   entries 는 txnsToInsert 와 **같은 순서**여야 한다 — 서버가 그 순서대로
+      //   balance_after 를 누적한다(충전 → 멤버십 차감 → 일반 차감).
+      //   user_id·balance_after 는 빼고 보낸다. 서버가 정한다.
+      var _pLedger = false;
+      if(newMem !== memBal || newGen !== genBal){
+        try {
+          var _entP = txnsToInsert.map(function(x){
+            return { deposit_type:x.deposit_type, change_type:x.change_type,
+                     amount:x.amount, description:x.description, metadata:x.metadata };
+          });
+          var _balP0 = await _depApplyDelta(user.id, newMem - memBal, newGen - genBal, _entP);
+          _pLedger = !!_balP0.ledger;
+          console.log('✅ 잔액·원장 서버 처리: 멤버십 ' + memBal + '→' + _balP0.mem
+            + ', 일반 ' + genBal + '→' + _balP0.gen + ' / 원장 ' + (_pLedger ? '서버' : '앱'));
+        } catch(_be0){
+          console.error('❌ 잔액 이동 실패:', _be0.message);
+        }
+      }
+
+      if(txnsToInsert.length > 0 && !_pLedger){
         var res = await window.sb.from('deposit_transactions').insert(txnsToInsert);
         if(res.error){
           console.warn('⚠ deposit_transactions insert 일부 실패:', res.error.message);
@@ -24078,17 +24143,7 @@ async function completePurchase(){
       //   이전 버그: deposit_transactions 에만 INSERT 했고 profiles 잔액은 안 건드려서
       //              환불 처리 시 트리거가 합산 덮어쓰면서 차감 흔적 증발.
       //   newMem/newGen 둘 다 명시적 update + deposit_balance 도 합산 보강.
-      if(newMem !== memBal || newGen !== genBal){
-        // 🔧 2026.08-30: 새 잔액을 덮어쓰지 않고 델타를 서버로 보낸다.
-        //   음수 = 차감. 서버가 행을 잠그고 더하므로 동시 구매에도 하나가 안 사라진다.
-        try {
-          var _balP = await _depApplyDelta(user.id, newMem - memBal, newGen - genBal);
-          console.log('✅ profiles 잔액 업데이트: 멤버십 ' + memBal + '→' + _balP.mem
-            + ', 일반 ' + genBal + '→' + _balP.gen);
-        } catch(_be){
-          console.error('❌ profiles 잔액 update 실패:', _be.message);
-        }
-      }
+      // (잔액 이동은 위에서 원장과 함께 처리했다 — 여기서 또 하지 않는다)
     } catch(e){
       console.warn('⚠ deposit_transactions 기록 예외 (구매는 정상 진행):', e.message);
     }
@@ -27216,14 +27271,29 @@ async function cancelTicketPurchase(purchaseId, refundCalc, isSuperAdminOverride
         var genBal = (profRes.data && profRes.data.general_deposit_balance) || 0;
         // 🔧 2026.08-28: 나간 주머니로 되돌린다 (종전엔 전액 일반으로 들어갔다)
         var _spl = await _depRefundSplit(user.id, purchaseId, _depositRefund);
-        var _balC = await _depApplyDelta(user.id, _spl.mem, _spl.gen);
+        // 🆕 2026.08-31 (원장 서버화 3단계 ③): 환원과 원장을 한 트랜잭션으로.
+        var _cxMeta2 = {
+          purchase_id: purchaseId, ticket_id: h.id, policy: refundCalc.policy,
+          agency_held: refundCalc.agencyHeld || 0, deposit_refund: _depositRefund,
+          card_refund_pending: _cardRefund,
+          paid_by: _isCardPurchase ? 'card+deposit' : 'deposit',
+          refund_type: 'returned', cancel_refund: true,
+          cancelled_by: isSuperAdminOverride ? 'super_admin' : 'user'
+        };
+        var _cxDesc2 = (r ? r.name : '티켓') + ' 취소 환불(예치금) — ' + refundCalc.reason;
+        var _cxEnt = [];
+        if(_spl.mem > 0) _cxEnt.push({ deposit_type:'membership', change_type:'ticket_refund',
+                                       amount:_spl.mem, description:_cxDesc2, metadata:_cxMeta2 });
+        if(_spl.gen > 0) _cxEnt.push({ deposit_type:'general', change_type:'ticket_refund',
+                                       amount:_spl.gen, description:_cxDesc2, metadata:_cxMeta2 });
+        var _balC = await _depApplyDelta(user.id, _spl.mem, _spl.gen, _cxEnt);
         var newMem = _balC.mem;
         var newGen = _balC.gen;
         var newTotal = _balC.total;
 
         // deposit_transactions 환불 기록 (예치금 환원분만)
         //   주머니가 둘로 나뉘면 두 건으로 남긴다 — 내역에서 어디로 돌아갔는지 보여야 한다
-        for (var _si = 0; _si < 2; _si++) {
+        for (var _si = 0; _si < 2 && !_balC.ledger; _si++) {
           var _sType = _si === 0 ? 'membership' : 'general';
           var _sAmt  = _si === 0 ? _spl.mem : _spl.gen;
           if (_sAmt <= 0) continue;
@@ -27687,10 +27757,23 @@ function _dmPersistBuyerChanges(h, refundToAdd, refundNote){
           //   카드 전액 결제분이면 _depCredit=0 이라 예치금 잔액은 그대로, 카드 환불만 대기로 남는다.
           // 🔧 2026.08-28: 나간 주머니로 되돌린다 (종전엔 전액 일반으로)
           var _spl2 = await _depRefundSplit(userId, purchaseId, _depCredit);
-          var _balR = await _depApplyDelta(userId, _spl2.mem, _spl2.gen);
-          var newMem = _balR.mem;
-          var newGen = _balR.gen;
-          var newTotal = _balR.total;
+          // 🆕 2026.08-31 (원장 서버화 3단계 ④): 반환과 원장을 한 트랜잭션으로.
+          //   종전에는 한 줄만 쓰면서 deposit_type 을 「더 많이 들어간 주머니」로
+          //   적고, 설명에 「멤버십 ₩x + 일반 ₩y」를 덧붙여 얼버무렸다.
+          //   이제 들어간 주머니마다 한 줄씩 정확히 남는다.
+          var _rtMeta = {
+            purchase_id: purchaseId, ticket_id: h.id,
+            refund_type: dr.type,
+            penalty_amt: dr.penaltyAmt || 0, penalty_pct: dr.penaltyPct || 0,
+            agency_held: dr.agencyHeld || 0,
+            extra_deduct: dr.extraDeduct || 0, extra_note: dr.extraNote || '',
+            return_amt: dr.returnAmt || refundToAdd,
+            deposit_refund: _depCredit, card_refund_pending: _saCardRefund,
+            paid_by: _saIsCard ? 'card+deposit' : 'deposit',
+            note: dr.note || refundNote,
+            processed_by: 'super_admin', processed_at: new Date().toISOString()
+          };
+          var _rtEnt = [];
 
           // description: 정상 반환은 "반환 완료" (대행비 차감은 정상 절차라 강조 안 함).
           //   🆕 단, 추가 차감이 있으면 사유를 반드시 명시 → 회원 예치금 내역에 그대로 노출.
@@ -27701,6 +27784,17 @@ function _dmPersistBuyerChanges(h, refundToAdd, refundNote){
           var _dtDesc = dr.type === 'returned'
             ? ((h.rest || '티켓') + ' 반환 완료(예치금)' + _extraDesc + _cardDesc)
             : ((h.rest || '티켓') + ' 환불 처리(예치금) — ' + refundNote + _cardDesc);
+          if(_spl2.mem > 0) _rtEnt.push({ deposit_type:'membership', change_type:'ticket_refund',
+                                          amount:_spl2.mem, description:_dtDesc + ' (멤버십 예치금)',
+                                          metadata:_rtMeta });
+          if(_spl2.gen > 0) _rtEnt.push({ deposit_type:'general', change_type:'ticket_refund',
+                                          amount:_spl2.gen, description:_dtDesc + ' (일반 예치금)',
+                                          metadata:_rtMeta });
+          var _balR = await _depApplyDelta(userId, _spl2.mem, _spl2.gen, _rtEnt);
+          var newMem = _balR.mem;
+          var newGen = _balR.gen;
+          var newTotal = _balR.total;
+          if(!_balR.ledger)
           await window.sb.from('deposit_transactions').insert({
             user_id: userId,
             deposit_type: (_spl2.mem >= _spl2.gen ? 'membership' : 'general'),
@@ -36543,7 +36637,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.31-s';
+var TAAM_WEB_BUILD = '2026.08.31-u';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -37479,8 +37573,25 @@ async function riConfirmPay(){
     // 🔧 2026.08-30: 서버에서 차감한다. 종전엔 새 잔액을 계산해 덮어썼고,
     //   RLS 차단을 affected_rows=0 으로 뒤늦게 알아채는 구조였다.
     //   RPC 는 막히면 그 자리에서 에러를 준다.
+    // 🆕 2026.08-31 (원장 서버화 3단계 ②): 차감과 원장을 한 트랜잭션으로.
+    //   서버가 entries 합계(-memUsed-genUsed)와 잔액 변동이 같은지 검산한다.
+    var _riDesc = inv.restaurant_name || '레스토랑';
+    var _riMeta = {
+      purchase_id: window._riPurchaseId || null, invite_id: inv.id,
+      restaurant: _riDesc, pax: inv.pax,
+      visit_date: inv.visit_date, visit_time: inv.visit_time,
+      source: 'reservation_invite'
+    };
+    var _riEnt = [];
+    if(memUsed > 0) _riEnt.push({ deposit_type:'membership', change_type:'ticket_purchase',
+                                  amount:-memUsed, description:'초대 결제 (멤버십) · ' + _riDesc,
+                                  metadata:_riMeta });
+    if(genUsed > 0) _riEnt.push({ deposit_type:'general', change_type:'ticket_purchase',
+                                  amount:-genUsed, description:'초대 결제 (일반) · ' + _riDesc,
+                                  metadata:_riMeta });
+    var _riBal = null;
     try {
-      await _depApplyDelta(u.id, -memUsed, -genUsed);
+      _riBal = await _depApplyDelta(u.id, -memUsed, -genUsed, _riEnt);
     } catch(_pe){
       console.error('[riPay] 잔액 차감 실패:', _pe);
       showToast('❌','예치금 차감 실패', _pe.message);
@@ -37497,15 +37608,11 @@ async function riConfirmPay(){
       //   '어느 주머니에서 나갔는지' 를 되짚을 수 없었고(_depRefundSplit 이 매칭 실패),
       //   주머니 보정 SQL 도 초대 결제 건을 통째로 놓쳤다.
       //   실측: 한 계정의 초대 결제 3,450,000 이 보정 대상에서 빠졌다.
-      var trxMeta = {
-        purchase_id: window._riPurchaseId || null,
-        invite_id: inv.id,
-        restaurant: descRest,
-        pax: inv.pax,
-        visit_date: inv.visit_date,
-        visit_time: inv.visit_time,
-        source: 'reservation_invite'
-      };
+      var trxMeta = _riMeta;
+      // 서버가 원장을 썼으면 여기서 또 쓰지 않는다 (두 번 남는다)
+      if (_riBal && _riBal.ledger) {
+        console.log('[riPay] 원장은 서버가 기록함 — 앱 INSERT 건너뜀');
+      } else {
       if (memUsed > 0) {
         var trxM = await window.sb.from('deposit_transactions').insert({
           user_id: u.id,
@@ -37530,7 +37637,8 @@ async function riConfirmPay(){
         });
         if (trxG.error) console.warn('[riPay] trx general 실패:', trxG.error.message);
       }
-      console.log('[riPay] deposit_transactions INSERT 완료');
+      }
+      console.log('[riPay] deposit_transactions 기록 완료');
     } catch(_te){ console.warn('[riPay] deposit_transactions 예외:', _te); }
 
     // 🆕 v1.53.37: 결제 후 — Supabase deposit_transactions 가 truth source.
