@@ -19032,6 +19032,21 @@ function openMain(){
       if(typeof pcalApplyGnb === 'function') pcalApplyGnb();
       if(typeof pcalRenderAll === 'function') pcalRenderAll();
     }
+
+    // 🆕 2026.09-01: 어드민의 첫 화면은 콘솔 대시보드다.
+    //   회원 앱을 거쳐 My Page 를 눌러야 콘솔이 열리던 것을, 앱을 켜는 순간으로
+    //   당긴다. 매일 처음 보는 것이 「오늘 처리할 일」이지 티켓 목록이 아니다.
+    //
+    //   ⚠ **세션에 한 번만** 연다. openMain() 은 콘솔에서 ← 로 나올 때도 도는데
+    //     (closeMyPageToHome → openMain), 그때도 열면 콘솔을 나갈 수가 없다.
+    //   ⚠ 회원 화면은 이미 다 그려 둔 뒤에 연다. 콘솔에서 나오면 그대로 있어야 한다.
+    if(!window._acAutoOpened
+       && (_currentRole === 'superadmin' || _currentRole === 'admin')
+       && typeof openAdminConsole === 'function'){
+      window._acAutoOpened = true;
+      try{ openAdminConsole(false); }
+      catch(_ao){ console.warn('[console] 자동 진입 실패 — 회원 화면 그대로:', _ao); }
+    }
   }).catch(function(e){ console.error('Init error:', e); });
 }
 
@@ -35141,9 +35156,10 @@ function openAdminConsole(fromMy){
   if(role === 'superadmin')      openAdmin();
   else if(role === 'admin')      openPartnerAdmin();
   else { if(typeof openMyPage === 'function') openMyPage(); return; }
-  setTimeout(function(){
-    try{ acGo('today'); }catch(e){ console.warn('[console] 첫 화면 실패:', e); }
-  }, 30);
+  // 🆕 2026.09-01: 곧바로 연다. 종전엔 30ms 뒤였는데, 그 30ms 동안 아래의
+  //   어드민 화면이 그대로 보였다 — 「전체 메뉴」가 한 번 스쳤다는 뜻이다.
+  //   tbOpen() 은 openSubPage 를 await 앞에서 하므로 동기로 불러도 바로 덮인다.
+  try{ acGo('today'); }catch(e){ console.warn('[console] 첫 화면 실패:', e); }
 }
 window.openAdminConsole = openAdminConsole;
 
@@ -38292,7 +38308,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.01-k';
+var TAAM_WEB_BUILD = '2026.09.01-l';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
