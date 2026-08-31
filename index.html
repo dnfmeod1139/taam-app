@@ -36539,7 +36539,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.31-p';
+var TAAM_WEB_BUILD = '2026.08.31-q';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -65229,6 +65229,13 @@ function openSigMediaCrop(origData, idx, existingCrop, onComplete){
       }
     });
   };
+  // 🆕 2026.08-31: 원본이 Storage URL 이면 crossOrigin 을 켜야 캔버스가 오염되지
+  //   않는다. 안 켜면 getCroppedCanvas().toDataURL() 이 보안 오류로 죽어서
+  //   「재크롭이 안 된다」가 된다. data: 원본에는 붙이면 안 된다.
+  try {
+    if (/^https?:/i.test(String(origData))) img.crossOrigin = 'anonymous';
+    else img.removeAttribute('crossorigin');
+  } catch(_co){}
   img.src = origData;
 
   // 콜백 저장 (확인/취소 버튼에서 사용)
@@ -65256,7 +65263,7 @@ function confirmSigMediaCrop(){
     var croppedUrl = canvas.toDataURL('image/jpeg', 0.88);
     var cropData = _rpCropper.getData(true);
 
-    // 슬롯에 저장
+    // 슬롯에 저장 — 우선 base64 로 즉시 보여준다 (화면이 비면 안 된다)
     if (!_editingInfo.sec2Medias) _editingInfo.sec2Medias = [];
     _editingInfo.sec2Medias[ctx.idx] = {
       type: 'image',
@@ -65266,6 +65273,36 @@ function confirmSigMediaCrop(){
     };
     renderSigMediasSlots();
     refreshMagLivePreview(2);
+
+    // 🆕 2026.08-31: 그다음 Storage 로 올리고 URL 로 바꿔 끼운다.
+    //
+    //   종전에는 base64 를 그대로 sec2_data 에 저장했다. 그것도 **두 벌** —
+    //   크롭본(data)과 원본(origData). 이게 sec2_data 를 135MB 로 부풀린
+    //   원인이다. 오늘 396장을 Storage 로 옮겼는데, 여기를 안 고치면
+    //   새로 올리는 사진마다 그대로 다시 쌓인다.
+    //
+    //   실패하면 base64 를 그대로 둔다 — 사진이 사라지는 것보다 낫다.
+    (function(_idx, _cropped, _orig){
+      if (typeof _cpfUploadDataUrl !== 'function') return;
+      Promise.all([
+        _cpfUploadDataUrl(_cropped).catch(function(e){
+          console.warn('[sigCrop] 크롭본 업로드 실패 — base64 유지:', e && e.message); return null;
+        }),
+        (/^data:image/i.test(String(_orig))
+          ? _cpfUploadDataUrl(_orig).catch(function(e){
+              console.warn('[sigCrop] 원본 업로드 실패 — base64 유지:', e && e.message); return null;
+            })
+          : Promise.resolve(_orig))
+      ]).then(function(urls){
+        var slot = _editingInfo && _editingInfo.sec2Medias && _editingInfo.sec2Medias[_idx];
+        // 그 사이 다른 사진으로 바뀌었으면 손대지 않는다
+        if (!slot || slot.data !== _cropped) return;
+        if (urls[0]) slot.data = urls[0];
+        if (urls[1]) slot.origData = urls[1];
+        console.log('[sigCrop] Storage 로 교체:', _idx, urls[0]);
+        try { renderSigMediasSlots(); refreshMagLivePreview(2); } catch(_re){}
+      });
+    })(ctx.idx, croppedUrl, ctx.origData);
   } catch(e){
     console.warn('크롭 실패:', e);
   }
