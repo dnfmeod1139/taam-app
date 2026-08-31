@@ -37,6 +37,27 @@ const { chromium } = require('playwright-core');
     const wh = el.querySelectorAll('.mo-where');
     ok('「티켓 탭」 같은 표시가 붙는다', wh.length >= tabOwned.length);
 
+    // ── 접었을 때(ac-lean) ──
+    adm.classList.add('ac-lean');
+    const lbl = Array.prototype.find.call(
+      adm.querySelectorAll('.admin-section-label'), e => e.textContent.indexOf('내 계정') >= 0);
+    ok('접어도 「내 계정」 라벨은 남는다', lbl && getComputedStyle(lbl).display !== 'none');
+    const lo = Array.prototype.find.call(
+      adm.querySelectorAll('.admin-menu-item'), e => (e.getAttribute('onclick')||'').indexOf('confirmLogout') >= 0);
+    ok('접어도 로그아웃은 남는다', lo && getComputedStyle(lo).display !== 'none');
+    const pw = Array.prototype.find.call(
+      adm.querySelectorAll('.admin-menu-item'), e => (e.getAttribute('onclick')||'').indexOf('openMemberPwdModal') >= 0);
+    ok('접으면 비밀번호 변경은 숨는다', pw && getComputedStyle(pw).display === 'none');
+    ok('접어도 훑기는 51개 그대로', _moScan().length === 51);
+    adm.classList.remove('ac-lean');
+
+    // 묶음이 아홉이고 이름이 새 것인가
+    const grps = [...new Set(_moScan().map(r => r.grp))];
+    ok('묶음이 아홉 (' + grps.join(' / ') + ')', grps.length === 9);
+    ok('「Test · 실험·도구」가 사라졌다', !grps.some(g => g.indexOf('Test') >= 0));
+    ok('「승인 대기0」이 아니라 「승인 대기」',
+       _moScan().some(r => r.title === '승인 대기') && !_moScan().some(r => /승인 대기\d/.test(r.title)));
+
     adm.style.display = 'none';
     return out;
   });
