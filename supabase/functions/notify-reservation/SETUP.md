@@ -39,8 +39,14 @@ SQL 1개 실행: `sql/venue_notify_fields.sql` (notify_phone / notify_line_id �
    LINE_CHANNEL_ACCESS_TOKEN=...
    ```
 4. 매장 담당자가 OA를 **친구 추가** → 그 사람의 **userId**(U로 시작) 확보
-   - ⚠ userId는 follow webhook 으로 수집해야 함 (LINE Developers 콘솔의
-     webhook 이벤트 로그로도 확인 가능). 수집용 간단 webhook이 필요하면 추가 개발.
+   - ✅ **`line-webhook` 함수가 이미 이걸 한다.** 친구 추가하면 userId 를
+     카드로 답장해 준다. 콘솔 로그를 뒤질 필요 없다.
+   - 배포: `supabase functions deploy line-webhook --no-verify-jwt`
+     (LINE 은 인증 헤더 없이 호출하므로 `--no-verify-jwt` 필수)
+   - LINE Developers → Messaging API → Webhook URL 에
+     `https://<project-ref>.supabase.co/functions/v1/line-webhook`
+     → Verify → **Use webhook ON**
+   - 서명 검증을 켜려면 시크릿에 `LINE_CHANNEL_SECRET` 추가 (권장)
 5. 어드민이 앱 → 나의 레스토랑 → "LINE ID" 에 userId 입력
 
 ## 4. 테스트

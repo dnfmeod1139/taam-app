@@ -24244,6 +24244,24 @@ async function completePurchase(){
       });
     }
   } catch(_ce){ console.warn('[purchase] 슈퍼어드민 통지 예외:', _ce); }
+
+  // 🆕 2026.08-31: 그 매장 **파트너 어드민**에게도 알린다 (앱푸시 + 알림톡 + LINE).
+  //
+  //   위 taamNotifyAdmins 는 슈퍼어드민 전용이다. 파트너는 지금까지
+  //   「오늘」 화면을 직접 열어봐야 예약이 들어온 걸 알았다 — 파트너십을
+  //   맺으면 그건 안 된다.
+  //
+  //   ⚠ 앱에서 파트너의 uid 로 직접 푸시할 수는 없다. send-push 게이트가
+  //     「자기에게만 · 어드민 상향 통지만」으로 막는다(2026-08-31). 그래서
+  //     service role 을 쥔 Edge Function 이 대신 보낸다.
+  //     앱은 purchase_id 하나만 넘기고, 함수가 DB 를 다시 읽어 status='active'
+  //     일 때만 보낸다 — 회원이 아무 id 나 넘겨도 없는 건은 아무 일도 안 난다.
+  //
+  //   실패해도 구매 흐름에 영향이 없어야 한다. 알림은 부가 기능이다.
+  try {
+    window.sb.functions.invoke('notify-purchase', { body: { purchase_id: purchaseId } })
+      .catch(function(){});
+  } catch(_pn){}
 }
 
 function closeDonePopup(){
@@ -36647,7 +36665,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.31-v';
+var TAAM_WEB_BUILD = '2026.08.31-w';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
