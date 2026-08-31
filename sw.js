@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.68.2';  // 1.55.2 — 2026.08: 자동 새로고침 재도입(네이티브 앱에 최신 index.html 강제 반영). index.html 의 "네이티브 splash-skip 미부여" 수정과 함께라 인트로/스킵 안 사라짐.
-const STATIC_CACHE = 'taam-static-v1.68.2';
+const SW_VERSION = 'taam-sw-v1.68.3';  // 1.55.2 — 2026.08: 자동 새로고침 재도입(네이티브 앱에 최신 index.html 강제 반영). index.html 의 "네이티브 splash-skip 미부여" 수정과 함께라 인트로/스킵 안 사라짐.
+const STATIC_CACHE = 'taam-static-v1.68.3';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
