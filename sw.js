@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.67.0';  // 1.55.2 — 2026.08: 자동 새로고침 재도입(네이티브 앱에 최신 index.html 강제 반영). index.html 의 "네이티브 splash-skip 미부여" 수정과 함께라 인트로/스킵 안 사라짐.
-const STATIC_CACHE = 'taam-static-v1.67.0';
+const SW_VERSION = 'taam-sw-v1.68.0';  // 1.55.2 — 2026.08: 자동 새로고침 재도입(네이티브 앱에 최신 index.html 강제 반영). index.html 의 "네이티브 splash-skip 미부여" 수정과 함께라 인트로/스킵 안 사라짐.
+const STATIC_CACHE = 'taam-static-v1.68.0';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
@@ -56,16 +56,33 @@ function isAppShell(url) {
   return url.pathname === '/' || url.pathname === '/index.html';
 }
 
-async function handleAppShell(req) {
+async function handleAppShell(req, event) {
   const cache = await caches.open(STATIC_CACHE);
 
   // 네트워크 시도 — 성공하면 캐시를 갱신해 다음 실행이 최신을 쓰게 한다.
-  const network = fetch(req).then((res) => {
+  //
+  // ⚠ 2026-09-01: 여기가 옛 빌드에 갇히는 자리였다.
+  //   index.html 이 4.7MB 라 1초 안에 못 받는다 → 거의 항상 캐시로 렌더된다.
+  //   그건 의도한 것이다(빠른 부팅). 문제는 **배경 갱신이 안 끝난다**는 것.
+  //   respondWith 가 캐시로 먼저 답하면 브라우저가 SW 를 재울 수 있고,
+  //   그러면 cache.put 이 날아간다. 다음 실행도 같은 옛 캐시를 쓴다 —
+  //   이렇게 며칠이고 갇힌다. 실제로 -c 에서 -e 까지 세 빌드를 못 봤다.
+  //   event.waitUntil 로 그 갱신이 끝날 때까지 SW 를 붙잡는다.
+  const network = fetch(req).then(async (res) => {
     if (res && res.status === 200) {
-      cache.put(req, res.clone()).catch(() => {});
+      await cache.put(req, res.clone()).catch(() => {});
+      // 캐시가 바뀌었으면 열린 창에 알린다. **리로드는 앱이 정한다** —
+      //   결제·편집 중이면 미룬다(_taamApplyUpdateWhenIdle).
+      try {
+        const ws = await self.clients.matchAll({ type: 'window' });
+        ws.forEach((w) => w.postMessage({ type: 'SW_HTML_UPDATED', version: SW_VERSION }));
+      } catch (e) {}
     }
     return res;
   });
+  if (event && typeof event.waitUntil === 'function') {
+    try { event.waitUntil(network.catch(() => {})); } catch (e) {}
+  }
   // 네트워크 실패가 unhandled rejection 이 되지 않도록 흡수 (아래에서 별도 처리)
   const networkSafe = network.catch(() => null);
 
@@ -122,7 +139,7 @@ self.addEventListener('fetch', (event) => {
   //   · 시간 초과/실패 → 직전 캐시로 즉시 렌더, 네트워크 응답은 도착하는 대로 캐시에 반영
   //   · 캐시도 없으면(최초 실행) 네트워크를 끝까지 기다린다
   if (isAppShell(url)) {
-    event.respondWith(handleAppShell(req));
+    event.respondWith(handleAppShell(req, event));
     return;
   }
 
