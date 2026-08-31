@@ -36665,7 +36665,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.31-w';
+var TAAM_WEB_BUILD = '2026.08.31-x';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -36964,7 +36964,8 @@ var _tbTicketSearchTimer = null;
 var _tbMemberSearchTimer = null;
 var _tbAllActiveMembers = [];        // 발송 대상 전체 회원 캐시 (count 표시용)
 
-function openTicketBroadcastScreen(){
+//   preselectId 를 주면 그 티켓을 미리 골라 둔 채로 연다 (승인 직후 이어질 때).
+function openTicketBroadcastScreen(preselectId){
   if(_currentRole !== 'superadmin'){
     showToast('⚠','권한 없음','슈퍼어드민 전용 기능입니다');
     return;
@@ -36983,6 +36984,15 @@ function openTicketBroadcastScreen(){
   document.getElementById('tbExcludedMembers').innerHTML = '';
   document.getElementById('tbPreview').textContent = '티켓을 선택하면 알림 내용이 여기에 미리보입니다.';
   document.getElementById('tbSendCount').textContent = '계산 중...';
+
+  // 승인 직후라면 그 티켓을 미리 골라 둔다 — 슈퍼어드민이 다시 찾을 필요가 없다
+  if(preselectId){
+    var _pt = (ticketDB || []).find(function(x){ return String(x.id) === String(preselectId); });
+    if(_pt){
+      _tbSelectedTicketIds[_pt.id] = _pt;
+      try { tbRenderSelectedTickets(); tbUpdatePreview(); } catch(_pe){}
+    }
+  }
 
   document.getElementById('ticketBroadcastScreen').style.display = 'flex';
   // 활성 회원 수 미리 조회
@@ -37870,6 +37880,29 @@ function finalUploadTicket(){
     ticketDB.push(_pendingTicket);
     if(_currentRole==='admin'){
       showToast('⏳','업로드 신청 완료','슈퍼 어드민 승인 후 게시됩니다');
+      // 🆕 2026.08-31: 슈퍼어드민에게 알린다.
+      //   종전에는 어드민 화면의 **배지 숫자**만 늘었다. 슈퍼어드민이 그 화면을
+      //   열어보기 전에는 파트너가 티켓을 올린 걸 몰랐고, 그동안 티켓은
+      //   pending 이라 회원에게 안 보인다 — 매장은 올렸는데 아무 일도 안 일어난다.
+      try {
+        if(typeof taamNotifyAdmins === 'function'){
+          var _upR = (restaurantDB || []).find(function(x){
+            return String(x.id) === String(_pendingTicket.restId); });
+          var _upName = (_upR && _upR.name) || _pendingTicket.rest || '매장';
+          var _upDate = (typeof _tkFullDate === 'function'
+                          ? _tkFullDate(_pendingTicket) : _pendingTicket.date) || '';
+          taamNotifyAdmins({
+            type: 'ticket_upload_request',
+            title: '🎫 ' + _upName + ' 티켓 업로드 신청',
+            body: _upName + ' · ' + _upDate + ' ' + (_pendingTicket.time || '')
+                + '\n어드민 → 승인 대기에서 게시 승인해주세요',
+            url: '/',
+            tag: 'taam-tkreq-' + _pendingTicket.id,
+            payload: { ticket_id: _pendingTicket.id, rest_id: _pendingTicket.restId,
+                       by: _currentAdminRestName || '' }
+          });
+        }
+      } catch(_ur){ console.warn('[upload] 슈퍼어드민 통지 예외:', _ur); }
     } else {
       showToast('✓','업로드 완료','티켓이 등록되었습니다');
     }
@@ -52585,6 +52618,19 @@ function approveTicket(id) {
   } else {
     t.status = 'active';
     showToast('✓','게시 승인','티켓이 공개되었습니다');
+    // 🆕 2026.08-31: 승인과 「전체 알림」이 따로 놀고 있었다.
+    //   승인해도 회원에게는 아무 소식이 없고, 슈퍼어드민이 기억했다가
+    //   「📢 티켓 오픈 알림 발송」 화면에서 그 티켓을 다시 찾아 골라야 했다.
+    //   승인한 자리에서 바로 이어지게 한다 — 고르는 수고도 없앤다.
+    setTimeout(function(){
+      try {
+        if(typeof openTicketBroadcastScreen !== 'function') return;
+        if(!confirm('「' + ((restaurantDB||[]).find(function(x){
+             return String(x.id)===String(t.restId); })||{}).name
+             + '」 티켓을 전체 회원에게 알릴까요?\n\n지금 안 보내도 나중에\n어드민 → 📢 티켓 오픈 알림 발송 에서 보낼 수 있습니다.')) return;
+        openTicketBroadcastScreen(t.id);   // 이 티켓을 미리 골라 둔 채로 연다
+      } catch(_bc){ console.warn('[approve] 방송 화면 예외:', _bc); }
+    }, 400);
   }
   saveTickets(); renderCarousel(); renderHomeTickets(); renderTicketGenres(); renderTicketList();
   renderPendingApproval(); updatePendingBadge();
