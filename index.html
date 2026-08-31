@@ -64598,6 +64598,23 @@ async function saveTicketProductToSupabase(ticket){
 
     if(res.error){
       console.warn('⚠ ticket_products 저장 실패:', ticket.id, res.error.message, res.error);
+      // 🔧 2026.08-31: RLS 거부는 사고가 아니다 — 토스트를 띄우지 않는다.
+      //
+      //   구매 직후 매진 판정이 t.status='soldout' 을 찍고 이 함수를 부른다.
+      //   그런데 ticket_products.status 는 서버 트리거(sync_ticket_soldout)가
+      //   맡고 있어서 앱이 밀 이유가 없고, 회원·파트너 어드민 세션은 RLS 가
+      //   거부한다(42501). 결제는 멀쩡한데 결제 완료 화면 위에
+      //   「ticket DB 저장 실패」 만 떠서, 회원 눈에는 결제가 잘못된 것으로 보인다.
+      //   실제로 그렇게 떴다(2026-08-31 09:53).
+      //
+      //   ⚠ 그때 힌트가 「외래키」로 나온 것도 틀렸다. 아래 정규식이
+      //     /foreign key|violates|constraint/ 를 먼저 보는데, RLS 메시지
+      //     "new row violates row-level security policy" 에도 violates 가 있다.
+      //     권한 판정을 먼저 하도록 순서를 뒤집었다.
+      if (res.error.code === '42501' || /row-level security|policy/i.test(res.error.message || '')) {
+        console.log('[ticket] 서버 저장 권한 없음 — 무시 (매진 상태는 서버 트리거가 맞춘다)');
+        return false;
+      }
       // 패치 137: silently 실패 차단 — 사용자에게도 알림 (이전엔 console만 → 재접속 시 사라지는 침묵 실패)
       // saveTickets에서 forEach로 일괄 호출될 때 폭발 방지: 3초 throttle
       var __now = Date.now();
@@ -64606,8 +64623,8 @@ async function saveTicketProductToSupabase(ticket){
         if (typeof showToast === 'function') {
           var __em = res.error.message || '';
           var __hint = '';
-          if (/foreign key|violates|constraint/i.test(__em)) __hint = '외래키';
-          else if (/permission|denied|policy|rls/i.test(__em)) __hint = 'RLS/권한';
+          if (/permission|denied|policy|rls|row-level/i.test(__em)) __hint = 'RLS/권한';
+          else if (/foreign key|constraint|violates/i.test(__em)) __hint = '외래키';
           else if (/not.?null|null value/i.test(__em)) __hint = 'NOT NULL';
           else if (/duplicate|already exists/i.test(__em)) __hint = '중복';
           showToast('⚠','ticket DB 저장 실패' + (__hint ? ' ('+__hint+')' : ''), (__em || '에러 미상').slice(0, 60) + ' — 콘솔 확인');
