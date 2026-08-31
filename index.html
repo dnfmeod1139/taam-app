@@ -36539,7 +36539,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.31-n';
+var TAAM_WEB_BUILD = '2026.08.31-o';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -39380,9 +39380,14 @@ function homePopupShow(force){
     + 'opacity:0;transition:opacity .3s ease;';
   el.onclick = function(ev){ if(ev.target === el) homePopupClose(); };
   // 레이블 — 이벤트/티켓/일반 공지 구분 (P3 디자인)
-  var _popLabel = c.link_mode === 'story' ? 'COLLECTION'
+  //   🆕 2026.08-31: 어드민이 직접 쓴 값(c.label)이 있으면 그것을 쓴다.
+  //     모드로 자동 정하던 값은 「이번 팝업은 COLLECTION 이 아닌데」 같은 때
+  //     손댈 방법이 없었다. 비워 두면 종전대로 모드에 맞춰 자동으로 정한다.
+  var _popLabel = (c.label && String(c.label).trim())
+                ? String(c.label).trim()
+                : (c.link_mode === 'story' ? 'COLLECTION'
                 : (c.link_mode === 'event' ? 'SPECIAL EVENT'
-                : (c.link_ticket_id ? 'NEW OPEN' : 'NOTICE'));
+                : (c.link_ticket_id ? 'NEW OPEN' : 'NOTICE')));
   // 스토리는 연결 티켓 없이도 넘어갈 곳이 있다 — 안내 줄을 띄울지 따로 판단한다
   var _popHasGo = (c.link_mode === 'story')
     ? (_popStoryList(c).length > 0)
@@ -39392,8 +39397,11 @@ function homePopupShow(force){
     + '<div onclick="homePopupGo()" style="cursor:pointer;">'
       + media
       + ((c.title || c.body) ? '<div style="padding:16px 18px ' + (_popHasGo ? '6px' : '14px') + ';">'
-        + '<div style="font-size:9.5px;letter-spacing:.28em;text-indent:.28em;color:#5C0A14;font-weight:800;">' + _popLabel + '</div>'
-        + (c.title ? '<div style="border-left:2px solid #c8a96e;padding-left:12px;margin-top:10px;"><div style="font-size:16.5px;font-weight:800;color:#1a1a18;line-height:1.5;">' + _pcalEsc(c.title) + '</div></div>' : '')
+        + '<div style="font-size:9.5px;letter-spacing:.28em;text-indent:.28em;color:#5C0A14;font-weight:800;">' + _pcalEsc(_popLabel) + '</div>'
+        // 🆕 제목도 줄바꿈을 그대로 살린다(white-space:pre-line). 자동 줄바꿈에
+        //   맡기면 「2026년과 2027년 / 예약슬롯들이 일부 오픈 / 됩니다」처럼
+        //   엉뚱한 데서 끊긴다. 어디서 끊을지는 쓰는 사람이 정하는 게 맞다.
+        + (c.title ? '<div style="border-left:2px solid #c8a96e;padding-left:12px;margin-top:10px;"><div style="font-size:16.5px;font-weight:800;color:#1a1a18;line-height:1.5;white-space:pre-line;">' + _pcalEsc(c.title) + '</div></div>' : '')
         + (c.body ? '<div style="font-size:12.5px;color:#3d3a33;line-height:1.8;margin-top:10px;white-space:pre-line;">' + _pcalEsc(c.body) + '</div>' : '')
         + '</div>' : '')
       + (_popHasGo ? '<div style="padding:0 18px 14px;font-size:12px;font-weight:800;color:#5C0A14;text-align:right;">'
@@ -39952,7 +39960,7 @@ async function popAdminOpen(preset){
   await _paLoadSeats();
   // preset = 발행 내역에서 불러온 내용. id 는 비워 「발행」 시 새 팝업이 되게 한다.
   var base = preset ? Object.assign({}, preset, { id: null }) : (_homePopCfg || {});
-  _paW = Object.assign({ enabled:false, id:null, title:'', body:'', media_url:'', media_type:'image',
+  _paW = Object.assign({ enabled:false, id:null, label:'', title:'', body:'', media_url:'', media_type:'image',
                          link_ticket_id:'', link_mode:'ticket', event_desc:'', event_media_url:'', event_media_urls:[],
                          stories:[] }, base);
   if(!Array.isArray(_paW.event_media_urls)) _paW.event_media_urls = [];
@@ -39989,7 +39997,12 @@ async function popAdminOpen(preset){
     + (typeof HOME_POPUP_LIVE !== 'undefined' && !HOME_POPUP_LIVE
         ? '<div style="font-size:11px;font-weight:800;color:#B45309;background:#fff3e0;border:1px solid #f0d9b4;border-radius:8px;padding:8px 10px;margin-bottom:12px;">🔒 검수 모드 — 지금은 슈퍼어드민에게만 보입니다. 전 회원 공개는 코드 플래그(HOME_POPUP_LIVE) 전환으로.</div>'
         : '<div style="margin-bottom:8px;"></div>')
-    + inp('paTitle','제목', _paW.title)
+    // 라벨 — 비워 두면 모드에 맞춰 자동 (COLLECTION / SPECIAL EVENT / NEW OPEN / NOTICE)
+    + '<div style="font-size:11px;font-weight:800;color:#666;margin-bottom:6px;">머리말 <span style="font-weight:400;color:#a8a29a;">비워 두면 모드에 맞춰 자동</span></div>'
+    + inp('paLabel','COLLECTION · SPECIAL EVENT · NEW OPEN …', _paW.label)
+    // 제목 — 줄바꿈을 그대로 살린다. 어디서 끊을지는 쓰는 사람이 정한다
+    + '<div style="font-size:11px;font-weight:800;color:#666;margin-bottom:6px;">제목 <span style="font-weight:400;color:#a8a29a;">엔터로 줄을 나누면 그대로 보입니다</span></div>'
+    + '<textarea id="paTitle" placeholder="제목 (엔터로 줄바꿈)" style="width:100%;box-sizing:border-box;padding:11px 12px;border:1.5px solid #e0ddd8;border-radius:9px;font-size:14px;font-weight:800;font-family:var(--font-main);margin-bottom:10px;background:#fff;min-height:58px;line-height:1.5;">' + _pcalEsc(_paW.title || '') + '</textarea>'
     + '<textarea id="paBody" placeholder="본문 (줄바꿈 유지)" style="width:100%;box-sizing:border-box;padding:11px 12px;border:1.5px solid #e0ddd8;border-radius:9px;font-size:13px;font-family:var(--font-main);margin-bottom:10px;background:#fff;min-height:70px;">' + _pcalEsc(_paW.body || '') + '</textarea>'
     + '<div id="paCardNote"></div>'
     + '<div style="font-size:11px;font-weight:800;color:#666;margin-bottom:6px;">팝업 카드 미디어 <span style="font-weight:400;color:#a8a29a;">(이벤트 간지 사진과 별개)</span></div>'
@@ -40297,6 +40310,7 @@ function paEvClear(){
 window.paEvClear = paEvClear;
 
 function _paCollect(){
+  _paW.label = (document.getElementById('paLabel') || {}).value || '';
   _paW.title = (document.getElementById('paTitle') || {}).value || '';
   _paW.body = (document.getElementById('paBody') || {}).value || '';
   _paW.link_ticket_id = (document.getElementById('paLinkTicket') || {}).value || '';
@@ -40326,7 +40340,8 @@ function paPreviewStory(){
 // 카드에 남은 이전 팝업 내용을 비운다. 슬라이드·연결은 건드리지 않는다
 function paCardClear(){
   _paCollect();
-  _paW.title = ''; _paW.body = ''; _paW.media_url = ''; _paW.media_type = 'image';
+  _paW.label = ''; _paW.title = ''; _paW.body = ''; _paW.media_url = ''; _paW.media_type = 'image';
+  var l = document.getElementById('paLabel'); if(l) l.value = '';
   var t = document.getElementById('paTitle'); if(t) t.value = '';
   var b = document.getElementById('paBody');  if(b) b.value = '';
   var m = document.getElementById('paMediaState');
