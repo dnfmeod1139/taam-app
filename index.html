@@ -27042,9 +27042,13 @@ async function _tkMaybeReopen(h){
     var usedPax = (rpcPax >= 0) ? rpcPax : localPax;
     if(usedPax < totalPax){
       t.status = 'active';                 // 판매중 복귀
-      // ⚠ 바뀐 티켓 하나만 서버에 저장한다. 전체를 밀면 로컬(IDB)의 낡은 값이
-      //   서버의 최신 티켓들을 덮어써 날짜·상태가 되돌아간다.
-      try { saveTickets(t.id); } catch(_){}
+      // 🔧 2026.08-31: 로컬만 바꾼다. 재개방도 서버 트리거(sync_ticket_soldout)가
+      //   이미 한다 — 자리가 나면 auto_soldout=true 인 자동 매진을 스스로 되돌린다.
+      //   앱이 여기서 ticket_products 를 밀면 두 가지가 나쁘다.
+      //     ① 파트너 어드민은 남의 매장 티켓을 못 써서 403 만 남는다.
+      //     ② 밀면 status='active' 가 통째로 올라가, 어드민이 손으로 잠근 매진
+      //        (auto_soldout=false) 까지 풀어 버린다. 트리거는 그걸 일부러 존중한다.
+      try { saveTickets(t.id, true); } catch(_){}
       try { if(typeof renderTickets === 'function') renderTickets(); } catch(_){}
     }
   } catch(e){ console.warn('[cancel] 좌석 재개방 예외:', e); }
@@ -36498,7 +36502,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.31-i';
+var TAAM_WEB_BUILD = '2026.08.31-j';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
