@@ -29979,17 +29979,24 @@ function tbToggleFind(){
 //
 //   ⚠ 여기 조건은 화면을 정리하려는 것뿐이다. 권한·취소건·미래 날짜는
 //     서버(taam_set_ticket_visit)가 다시 본다. 앱만 고쳐도 안 뚫린다.
+//   ⚠ reservation_date 는 **'2026.04.22' 처럼 점**으로 들어온다.
+//     처음에 'YYYY-MM-DD' 로 가정하고 정규식을 짰다가, 그 검사가 한 번도
+//     안 맞아 미래 예약에도 버튼이 떴다. 형식을 짐작하지 않고 **숫자만**
+//     뽑아 비교한다 — 점이든 하이픈이든 같은 키가 나온다.
 function _taamTodayKst(){
-  return new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
+  return new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10).replace(/-/g, '');
+}
+function _visDateKey(s){
+  var d = String(s || '').replace(/[^0-9]/g, '');
+  return d.length === 8 ? d : '';        // 연도 없는 'MM.DD' 같은 건 키를 안 만든다
 }
 function _visCanMark(r, st){
   if(window._tbNoVisitCol) return false;           // 컬럼을 못 읽은 세션
   if(!r || !r.id) return false;                    // 옛 캐시엔 id 가 없다
   if(st && st.s === 'cx') return false;            // 취소건에는 방문이 없다
-  var d = String(r.reservation_date || '');
-  // 형식이 아닌 값(수동 입력 등)은 막지 않는다 — 잠그면 기록을 못 남긴다
-  if(!/^\d{4}-\d{2}-\d{2}$/.test(d)) return true;
-  return d <= _taamTodayKst();
+  var k = _visDateKey(r.reservation_date);
+  if(!k) return true;   // 형식을 모르는 값(수동 입력 등)은 막지 않는다
+  return k <= _taamTodayKst();
 }
 function _visActs(r, st){
   if(!_visCanMark(r, st)) return '';
@@ -36776,7 +36783,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.31-ab';
+var TAAM_WEB_BUILD = '2026.08.31-ac';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){

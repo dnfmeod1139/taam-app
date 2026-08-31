@@ -179,6 +179,7 @@ as $$
 declare
   v_t      public.tickets%rowtype;
   v_today  text;
+  v_key    text;
 begin
   if p_status is not null and p_status not in ('attended', 'no_show') then
     raise exception '방문 상태는 attended · no_show · 비움만 가능합니다' using errcode = '22023';
@@ -199,13 +200,17 @@ begin
   end if;
 
   -- 아직 오지 않은 날을 미리 찍지 못하게.
-  --   ⚠ reservation_date 는 **text** 다. 날짜로 캐스팅하면 형식이 어긋난 옛 행에서
-  --     통째로 터진다. ISO 문자열끼리는 사전순이 곧 날짜순이라 그대로 비교한다.
-  --     형식이 아닌 값은 막지 않는다 — 수동 입력 건을 잠그면 안 된다.
-  v_today := to_char(now() at time zone 'Asia/Seoul', 'YYYY-MM-DD');
+  --   ⚠ reservation_date 는 **text** 이고, 실제 값은 '2026.04.22' 처럼 **점**이다.
+  --     처음에 'YYYY-MM-DD' 로 가정하고 정규식을 걸었더니 한 번도 안 맞아
+  --     이 검사가 통째로 죽어 있었다. 형식을 짐작하지 않고 **숫자만 뽑아**
+  --     비교한다 — 점이든 하이픈이든 같은 키(20260422)가 나온다.
+  --     날짜로 캐스팅하지 않는 이유는 그대로다: 형식이 어긋난 옛 행에서 터진다.
+  --     8자리가 안 나오면 막지 않는다 — 수동 입력 건을 잠그면 안 된다.
+  v_today := to_char(now() at time zone 'Asia/Seoul', 'YYYYMMDD');
+  v_key   := regexp_replace(coalesce(v_t.reservation_date, ''), '[^0-9]', '', 'g');
   if p_status is not null
-     and v_t.reservation_date ~ '^\d{4}-\d{2}-\d{2}$'
-     and v_t.reservation_date > v_today then
+     and length(v_key) = 8
+     and v_key > v_today then
     raise exception '아직 방문일이 지나지 않았습니다 (%)', v_t.reservation_date
       using errcode = '42501';
   end if;

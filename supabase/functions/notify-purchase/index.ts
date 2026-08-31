@@ -134,10 +134,15 @@ function money(n: number | null | undefined): string {
 }
 
 // 날짜 포맷 — 요일 로케일만 다름 (ko: 카카오/푸시, ja: LINE)
-//   ⚠ tickets.reservation_date 는 'YYYY-MM-DD' 로 들어온다.
+//   ⚠ tickets.reservation_date 는 실제로 '2026.04.22' 처럼 **점**이다.
+//     처음에 'YYYY-MM-DD' 로 가정하고 split("-") 했다가, 쪼개지지 않아
+//     「9/30 (수)」 대신 원문이 그대로 알림톡·LINE 으로 나갈 뻔했다.
+//     형식을 짐작하지 않고 숫자만 뽑는다 — 점·하이픈·슬래시 다 받는다.
 function fmtDate(date: string, time: string | null, lang: "ko" | "ja"): string {
   if (!date) return "-";
-  const [y, m, d] = String(date).split("-").map(Number);
+  const k = String(date).replace(/[^0-9]/g, "");
+  if (k.length !== 8) return String(date);
+  const y = Number(k.slice(0, 4)), m = Number(k.slice(4, 6)), d = Number(k.slice(6, 8));
   if (!y || !m || !d) return String(date);
   const dow = lang === "ja"
     ? ["日", "月", "火", "水", "木", "金", "土"]
