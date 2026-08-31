@@ -63,22 +63,37 @@ order by 5 desc, 1;
 --   한쪽에만 있는 매핑을 반대쪽에도 넣는다. **지우지 않는다** —
 --   지우면 누군가의 권한이 사라지고, 그건 되돌리기 어렵다.
 --
---   ⚠ 두 표의 컬럼 이름이 다르다. 실행 전에 실제 컬럼을 한 번 본다:
---       select column_name, data_type from information_schema.columns
---        where table_schema='public' and table_name in ('restaurant_admins','admin_grants')
---        order by table_name, ordinal_position;
---     (2026-08-31 에 sale_open_at·member_id 타입을 짐작으로 짜다 두 번 깨뜨렸다)
+--   ⚠ 2026-08-31 확인된 실제 타입 (짐작하지 말 것):
+--
+--       restaurant_admins.user_id       uuid
+--       restaurant_admins.restaurant_id **text**
+--       admin_grants.user_id            uuid
+--       admin_grants.rest_id            text
+--       admin_grants.venue_id           text
+--       venue_partners.venue_id         text
+--       restaurants.id                  **uuid**
+--
+--     처음에 여기 `ag.rest_id::uuid` 를 적어 뒀었다. restaurant_id 가 text 라
+--     그대로 돌렸으면 깨졌다. 캐스팅이 하나도 필요 없다 — 양쪽 다 text 다.
+--     (같은 날 sale_open_at·member_id 를 짐작으로 짜다 두 번 라이브를 깨뜨렸다)
+--
+--   ⚠ `restaurants.id` 만 uuid 다. 그래서 「진짜 매장을 가리키는 grant 인가」를
+--     확인할 때만 `r.id::text = ...` 로 맞춘다. venue 슬러그를 가리키는 grant 를
+--     restaurant_admins 에 넣어봐야 어떤 티켓에도 안 걸린다 — 넣지 않는다.
 /*
 -- 알림만 있고 화면이 없는 사람 → restaurant_admins 에 추가
+--   (실제 restaurants 행을 가리키는 grant 만)
 insert into public.restaurant_admins (user_id, restaurant_id)
-select ag.user_id, ag.rest_id::uuid
-  from (select user_id, coalesce(rest_id, venue_id)::text as rest_id
-          from public.admin_grants
-         where coalesce(rest_id, venue_id) is not null) ag
- where not exists (
-   select 1 from public.restaurant_admins ra
-    where ra.user_id = ag.user_id and ra.restaurant_id::text = ag.rest_id)
-on conflict do nothing;
+select g.user_id, coalesce(g.rest_id, g.venue_id)
+  from public.admin_grants g
+ where coalesce(g.rest_id, g.venue_id) is not null
+   and exists (
+     select 1 from public.restaurants r
+      where r.id::text = coalesce(g.rest_id, g.venue_id))
+   and not exists (
+     select 1 from public.restaurant_admins ra
+      where ra.user_id = g.user_id
+        and ra.restaurant_id = coalesce(g.rest_id, g.venue_id));
 
 -- 화면만 있고 알림이 없는 사람 → admin_grants 에 추가
 insert into public.admin_grants (user_id, rest_id)
@@ -87,8 +102,7 @@ select ra.user_id, ra.restaurant_id
  where not exists (
    select 1 from public.admin_grants ag
     where ag.user_id = ra.user_id
-      and coalesce(ag.rest_id, ag.venue_id)::text = ra.restaurant_id::text)
-on conflict do nothing;
+      and coalesce(ag.rest_id, ag.venue_id) = ra.restaurant_id);
 */
 
 
