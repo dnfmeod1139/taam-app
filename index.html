@@ -22691,6 +22691,16 @@ async function _tkAcquireSeatHold(t, r, pax){
                prev: _rpPv || '',
                reason:'같은 레스토랑 재구매 제한 기간입니다' };
     }
+    // 🆕 2026.08-31: 서버 등급 가드(trg_taam_guard_ticket_tier)에 걸렸다.
+    //   여기까지 오는 건 앱의 _tkTierAllowed() 가 놓쳤을 때뿐이다.
+    //   그때 「좌석 확보 실패 — 잠시 후 다시 시도」로 보이면 회원은 계속 다시 누른다.
+    //   등급 때문이라는 걸 그 자리에서 말해야 한다.
+    if (/TIER_BLOCKED/.test(m)) {
+      console.warn('[seatHold] 서버 등급 제한:', m);
+      return { ok:false, tier:true,
+               need: (m.match(/이 티켓은\s*([MTA])\s*등급/) || [])[1] || '',
+               reason:'이 티켓은 등급 제한이 있습니다' };
+    }
     console.warn('[seatHold] 실패:', ins.error);
     return { ok:false, reason:'좌석 확보에 실패했습니다 — 잠시 후 다시 시도해주세요' };
   }
@@ -22924,6 +22934,19 @@ async function openTdPayPopup() {
             showToast('⚠','재구매 제한', _hold.reason);
           }
         } catch(_rpe){ showToast('⚠','재구매 제한', _hold.reason); }
+        return;
+      }
+      // 🆕 등급 제한도 같은 이유로 원래 쓰던 팝업을 그대로 쓴다.
+      //   서버가 알려준 필요 등급을 티켓 값보다 우선한다 — 앱의 minTier 가
+      //   낡았을 수 있고, 실제로 막은 근거는 서버 값이다.
+      if (_hold.tier) {
+        try {
+          if (typeof showTierLockPopup === 'function') {
+            showTierLockPopup(Object.assign({}, t, { minTier: _hold.need || t.minTier }));
+          } else {
+            showToast('🔒','등급 제한', _hold.reason);
+          }
+        } catch(_tie){ showToast('🔒','등급 제한', _hold.reason); }
         return;
       }
       showToast(_hold.soldOut ? '⚠' : '❌', _hold.soldOut ? '좌석 확보 실패' : '오류', _hold.reason);
@@ -36508,7 +36531,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.31-k';
+var TAAM_WEB_BUILD = '2026.08.31-l';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -51368,9 +51391,18 @@ function _tierLabel(g){
   var k = String(g||'').toUpperCase();
   return k === 'M' ? 'M 등급' : (k === 'T' ? 'T 등급' : (k === 'A' ? 'A 등급' : '전체 공개'));
 }
-// 현재 사용자 등급 ('M'|'T'|'A'|null). 슈퍼어드민·파트너 어드민은 운영상 최상위로 취급.
+// 현재 사용자 등급 ('M'|'T'|'A'|null).
+//
+//   🔧 2026.08-31: 파트너 어드민을 M 으로 올려 주던 줄을 뺐다.
+//     파트너 어드민은 「레스토랑 사장님」이지 상위 등급 회원이 아니다. 그런데
+//     이 한 줄 때문에 membership_tier 가 T 여도 M 전용 티켓의 상세 진입과
+//     구매가 **둘 다** 통과했다. 라이브에서 확인했다 — 등급 제한이 사실상
+//     파트너 어드민에게는 없는 규칙이었다.
+//     이제 파트너 어드민도 자기 실제 등급으로 판정한다.
+//
+//   슈퍼어드민만 최상위로 남긴다. 운영·검수에서 모든 티켓을 열어봐야 한다.
 function _tkUserTier(){
-  if (typeof _currentRole !== 'undefined' && (_currentRole === 'superadmin' || _currentRole === 'admin')) return 'M';
+  if (typeof _currentRole !== 'undefined' && _currentRole === 'superadmin') return 'M';
   var g = window._currentUserGrade;
   if (g === 'M' || g === 'T' || g === 'A') return g;
   return null;
