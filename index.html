@@ -2273,6 +2273,38 @@ html.auto-login .splash .bottom-group{display:none !important}
   border:1.5px dashed #d8d2c6;border-radius:11px;padding:13px;font-size:12.5px;
   font-weight:700;color:#79736a;background:#fcfaf5}
 
+/* ═══ 🆕 2026.09-01 대시보드 ═══ */
+/* 처리할 일 — 있을 때만 나온다 */
+.todo{background:#fff;border:1px solid #e3dcce;border-radius:12px;overflow:hidden}
+.todo > div{display:flex;align-items:center;gap:11px;padding:12px 14px;
+  border-bottom:1px solid #f2eee5;cursor:pointer}
+.todo > div:last-child{border-bottom:0}
+.todo .t{flex:1;font-size:13px;font-weight:700}
+.todo .n{flex:none;font-family:'Montserrat',sans-serif;font-size:11px;font-weight:800;
+  color:#fff;background:#9B1C1C;border-radius:7px;padding:1px 7px}
+.todo .n.warn{color:#8A6216;background:#FAF0DA}
+/* 축 하나당 카드 하나 */
+.sum{background:#fff;border:1px solid #e3dcce;border-radius:12px;padding:13px 14px;cursor:pointer}
+.sum .hd{display:flex;align-items:baseline;gap:8px}
+.sum .hd b{flex:1;font-size:11px;font-weight:800;letter-spacing:.16em;color:#a69f94}
+.sum .hd .v{font-family:'Oswald','Noto Sans KR','Noto Sans JP',sans-serif;font-size:21px;
+  font-weight:600;color:#17150f;letter-spacing:.01em}
+.sum .hd .u{font-size:11.5px;font-weight:700;color:#79736a}
+.sum .hd .chev{flex:none;color:#c4bdb2;font-size:14px;margin-left:2px}
+.sum .sub{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.sum .sub:empty{display:none}
+/* 작은 조각 */
+.bit{display:inline-flex;align-items:baseline;gap:5px;padding:5px 10px;
+  border:1px solid #e3dcce;border-radius:8px;background:#fcfaf5;
+  font-size:11.5px;font-weight:700;color:#46413a}
+.bit b{font-family:'Montserrat',sans-serif;font-size:12px;font-weight:800;color:#17150f}
+.bit.warn{border-color:#F2D5D1;background:#FBEBE9;color:#9B1C1C}
+.bit.warn b{color:#9B1C1C}
+.bit.mute{color:#a69f94} .bit.mute b{color:#79736a}
+/* 가로 비율 막대 — 축도 눈금도 없다 */
+.split{display:flex;height:8px;border-radius:4px;overflow:hidden;background:#eae5da;margin-top:10px}
+.split i{display:block;height:100%}
+
 /* ═══ 🆕 2026.09-01 공개 대상 ═══ */
 .tkb-aud{display:block;font-size:11.5px;color:#79736a;border-top:1px solid #f2eee5;
   padding-top:9px;margin-top:10px}
@@ -29818,11 +29850,23 @@ async function tbOpen(){
   _tbState = { off:0, filter:'all', open:null, find:'', findOn:false };
   _acCloseOthers('today');
   openSubPage('todayBoardScreen');
+  // 🆕 2026.09-01: 이 탭은 이제 「대시보드」다. 날짜 스트립·찾기는 예약 탭의 것.
+  var _st = document.getElementById('tbStrip'); if(_st) _st.style.display = 'none';
+  var _fb = document.getElementById('tbFindBtn'); if(_fb) _fb.style.display = 'none';
+  var _tt = document.getElementById('tbTodayBtn'); if(_tt) _tt.style.display = 'none';
+  var _ti = document.querySelector('#todayBoardScreen .sub-title');
+  if(_ti) _ti.textContent = '대시보드';
   var b = document.getElementById('tbBody');
   if(b) b.innerHTML = '<div class="tb-empty">불러오는 중…</div>';
+  _dashExtra = { resvPending:null, deposit:null };
   await _tbLoad();
-  _tbRender();
+  _dashRender();                 // 티켓·예약은 이미 있는 것으로 먼저 그린다
   _acRenderTabs('today');
+  // 나머지(파트너 요청·예치금)는 도착하면 조용히 갈아 끼운다 — 첫 그림을 늦추지 않는다
+  _dashLoad().then(function(){
+    var s = document.getElementById('todayBoardScreen');
+    if(s && s.style.display !== 'none') _dashRender();
+  });
 }
 window.tbOpen = tbOpen;
 
@@ -30082,6 +30126,161 @@ function _tbRow(r, showDate, nextKey){
     if(_va) h += '<div class="tb-acts">' + _va + '</div>';
   }
   return h;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026.09-01 대시보드 — 「오늘」을 버린다
+// ═══════════════════════════════════════════════════════════════
+//   매일 예약이 도는 서비스가 아니다. 날짜 중심 첫 화면은 대부분 비어 있고,
+//   빈 화면을 매일 보면 그 탭을 안 열게 된다. 첫 화면이 답할 질문을 바꾼다 —
+//   「오늘 몇 명 오나」가 아니라 「지금 이 서비스가 어떤 상태인가」.
+//
+//   ⚠ 「처리할 일」은 **있을 때만** 뜬다. 0건일 때 「0건」을 보여주려고
+//     자리를 잡아두지 않는다. 그 습관이 「오늘」을 빈 화면으로 만들었다.
+//
+//   ⚠ 카드마다 따로 실패한다. 한 조회가 깨져도 나머지는 그대로 보인다 —
+//     첫 화면이 통째로 비는 일을 다시 만들지 않는다.
+var _dashExtra = { resvPending: null, deposit: null };
+
+function _dashPending(){
+  // 티켓 업로드·삭제 승인 대기 — ticketDB 에서 바로 센다
+  try{
+    return (window.ticketDB || []).filter(function(t){
+      var s = String(t.status || '');
+      return s === 'pending' || s === 'deleteRequest';
+    }).length;
+  }catch(e){ return 0; }
+}
+function _dashUnmarked(){
+  // 지난 예약인데 방문 기록이 안 남은 것.
+  //   이게 밀리면 방문 횟수가 틀리고, 「단골에게만」 조건이 통째로 무너진다.
+  try{
+    if(window._tbNoVisitCol) return 0;
+    var today = _taamTodayKst();
+    return (_tbRows || []).filter(function(r){
+      if(String(r.visit_status || '')) return false;
+      var st = _tbStatus(r);
+      if(st && st.s === 'cx') return false;
+      var k = _visDateKey(r.reservation_date);
+      return k && k < today;
+    }).length;
+  }catch(e){ return 0; }
+}
+
+async function _dashLoad(){
+  // 파트너 예약 요청 — 대기 중인 것만
+  try{
+    var r = await window.sb.from('reservation_requests')
+      .select('id', { count:'exact', head:true }).eq('status', 'pending');
+    _dashExtra.resvPending = (r.error ? null : (r.count || 0));
+  }catch(e){ _dashExtra.resvPending = null; }
+  // 예치금 총 잔액 — 슈퍼어드민만 전 회원 프로필을 읽을 수 있다(RLS)
+  try{
+    if(typeof _isSuperAdmin === 'function' && _isSuperAdmin()){
+      var d = await window.sb.from('profiles').select('deposit_balance');
+      if(d.error){ _dashExtra.deposit = null; }
+      else {
+        var sum = 0;
+        (d.data || []).forEach(function(p){ sum += (parseInt(p.deposit_balance, 10) || 0); });
+        _dashExtra.deposit = sum;
+      }
+    }
+  }catch(e){ _dashExtra.deposit = null; }
+}
+
+function _dashRender(){
+  var el = document.getElementById('tbBody');
+  if(!el) return;
+  var isSuper = (typeof _isSuperAdmin === 'function') && _isSuperAdmin();
+  var h = '';
+
+  // ── 처리할 일 ──
+  var todo = [];
+  var np = _dashPending();
+  if(np) todo.push(['티켓 업로드 승인', np, '']);
+  if(_dashExtra.resvPending) todo.push(['파트너 예약 요청', _dashExtra.resvPending, '']);
+  var nu = _dashUnmarked();
+  if(nu) todo.push(['방문 기록 안 함', nu, 'warn']);
+  if(todo.length){
+    var tot = todo.reduce(function(a, x){ return a + x[1]; }, 0);
+    h += '<div class="mo-grp" style="margin-top:2px;">처리할 일 <span style="color:#9B1C1C;">'
+      +  tot + '</span></div><div class="todo">';
+    todo.forEach(function(x){
+      h += '<div><span class="t">' + x[0] + '</span>'
+        +  '<span class="n' + (x[2] ? ' ' + x[2] : '') + '">' + x[1] + '</span>'
+        +  '<span style="color:#c4bdb2;font-size:14px;">›</span></div>';
+    });
+    h += '</div>';
+  }
+
+  // ── 티켓 ──
+  var base = (typeof _tkbBase === 'function') ? _tkbBase() : [];
+  var live = 0, hide = 0, sold = 0, cap = 0, used = 0, next = null;
+  base.forEach(function(t){
+    var s = _tkbStatus(t).s;
+    if(s === 'past') return;
+    if(s === 'live') live++; else if(s === 'hide') hide++; else if(s === 'sold') sold++;
+    var c = parseInt(t.totalPax || t.assignedPax, 10) || 0;
+    var lf = (typeof _paSeatsLeft === 'function') ? _paSeatsLeft(t) : null;
+    if(c > 0 && lf !== null){ cap += c; used += (c - lf); }
+    var v = (typeof _tkYMD === 'function') ? _tkYMD(t) : null;
+    if(v && s !== 'sold'){
+      var kk = v.y * 10000 + v.m * 100 + v.d;
+      if(!next || kk < next.k) next = { k:kk, t:t };
+    }
+  });
+  var pct = cap > 0 ? Math.round(used / cap * 100) : 0;
+  h += '<div class="mo-grp">티켓</div><div class="sum" onclick="acGo(\'tkb\')">'
+    +  '<div class="hd"><b>판매중</b><span class="v">' + live + '</span>'
+    +  '<span class="u">건</span><span class="chev">›</span></div>';
+  if(cap > 0){
+    h += '<div class="split"><i style="width:' + pct + '%;background:'
+      +  (pct >= 100 ? '#9B1C1C' : '#B08D4F') + ';"></i></div>'
+      +  '<div style="display:flex;align-items:baseline;justify-content:space-between;margin-top:7px;">'
+      +  '<span style="font-size:11.5px;font-weight:700;color:#79736a;">좌석 <b>' + used + '</b>/' + cap + '</span>'
+      +  '<span style="font-size:11.5px;font-weight:700;color:#79736a;">' + pct + '%</span></div>';
+  }
+  h += '<div class="sub">'
+    +  (hide ? '<span class="bit">오픈예정 <b>' + hide + '</b></span>' : '')
+    +  (sold ? '<span class="bit warn">매진 <b>' + sold + '</b></span>' : '')
+    +  '</div>';
+  if(next){
+    var nm = (typeof _pcalRestName === 'function') ? _pcalRestName(next.t) : (next.t.rest || '');
+    var wl = (typeof _tkDateLabel === 'function') ? _tkDateLabel(next.t) : String(next.t.date || '');
+    h += '<div style="font-size:11.5px;color:#79736a;border-top:1px solid #efe9dc;'
+      +  'padding-top:9px;margin-top:11px;">다음 <b style="color:#17150f;font-weight:800;">'
+      +  _tbEsc(wl) + '</b> · ' + _tbEsc(nm) + '</div>';
+  }
+  h += '</div>';
+
+  // ── 예약 (이번 달) ──
+  var t0 = _tbToday();
+  var mk = t0.getFullYear() + '-' + String(t0.getMonth() + 1).padStart(2, '0');
+  var mc = 0, mp = 0, mx = 0;
+  (_tbRows || []).forEach(function(r){
+    if(String(r._d || '').indexOf(mk) !== 0) return;
+    var st = _tbStatus(r);
+    if(st && st.s === 'cx'){ mx++; return; }
+    mc++; mp += (parseInt(r.party_size, 10) || 1);
+  });
+  h += '<div class="mo-grp">예약 · 이번 달</div><div class="sum" onclick="acGo(\'rv\')">'
+    +  '<div class="hd"><b>확정</b><span class="v">' + mc + '</span>'
+    +  '<span class="u">건 · ' + mp + '명</span><span class="chev">›</span></div>'
+    +  '<div class="sub">' + (mx ? '<span class="bit mute">취소 <b>' + mx + '</b></span>' : '')
+    +  '</div></div>';
+
+  // ── 예치금 (슈퍼어드민만) ──
+  if(isSuper){
+    h += '<div class="mo-grp">예치금</div><div class="sum" onclick="acGo(\'mb\')">'
+      +  '<div class="hd"><b>총 잔액</b><span class="v">'
+      +  (_dashExtra.deposit === null ? '—' : taamMoney(_dashExtra.deposit))
+      +  '</span><span class="chev">›</span></div>'
+      +  (_dashExtra.deposit === null
+          ? '<div style="font-size:11px;color:#a69f94;margin-top:8px;">불러오지 못했습니다</div>' : '')
+      +  '</div>';
+  }
+
+  el.innerHTML = h;
 }
 
 function _tbRender(){ _tbRenderStrip(); _tbRenderBody(); _tbSyncHeader(); }
@@ -31960,7 +32159,7 @@ var AC_MENU_RULES = [
   { tab:'mb',  grp:'예치금',      re:/예치금/ },
   { tab:'mb',  grp:'초대 · 알림', re:/예약 초대 발송|발송한 예약 초대|오픈 알림 발송|회원 초대/ }
 ];
-var AC_TAB_NAME = { today:'오늘', rv:'예약', tkb:'티켓', mb:'회원', mo:'더보기' };
+var AC_TAB_NAME = { today:'대시보드', rv:'예약', tkb:'티켓', mb:'회원', mo:'더보기' };
 
 function _acMenuOf(title){
   for(var i = 0; i < AC_MENU_RULES.length; i++){
@@ -32040,8 +32239,8 @@ window._acApplyLean = _acApplyLean;
 //   화면을 하나로 합치지 않고 각 화면에 탭 바만 붙였다. 다섯 화면은 이미
 //   각자 상태를 들고 잘 돌고 있고, 하나로 합치면 그 상태를 전부 다시 짜야 한다.
 //   합치는 것이 목적이 아니라 오가는 것이 목적이다.
-var AC_TABS_SUPER   = [['today','오늘'], ['rv','예약'], ['tkb','티켓'], ['mb','회원'], ['mo','더보기']];
-var AC_TABS_PARTNER = [['today','오늘'], ['rv','예약'], ['tkb','티켓']];
+var AC_TABS_SUPER   = [['today','대시보드'], ['rv','예약'], ['tkb','티켓'], ['mb','회원'], ['mo','더보기']];
+var AC_TABS_PARTNER = [['today','대시보드'], ['rv','예약'], ['tkb','티켓']];
 
 function _acTabList(){
   return (typeof _isSuperAdmin === 'function' && _isSuperAdmin()) ? AC_TABS_SUPER : AC_TABS_PARTNER;
@@ -32050,20 +32249,18 @@ function _acTabList(){
 // 「오늘」에 붙는 숫자 — 오늘 처리할 일. 없으면 아무것도 안 붙인다.
 //   결제대기 + 카드 환불 대기. 「몇 건 있다」가 아니라 「손댈 게 몇 건」이다.
 function _acTodoCount(){
-  // 배지는 장식이다. 「오늘」의 데이터·헬퍼가 아직 없어도 탭 바는 그려져야 한다 —
+  // 배지는 장식이다. 데이터·헬퍼가 아직 없어도 탭 바는 그려져야 한다 —
   //   숫자 하나 때문에 화면 전체가 안 뜨면 그게 더 큰 손해다.
+  //
+  // 🆕 2026.09-01: 대시보드의 「처리할 일」과 **같은 값**을 센다.
+  //   배지가 3인데 열어보니 2건이면 그 배지를 다시는 안 믿게 된다.
   try{
-    if(typeof _tbRows === 'undefined' || !Array.isArray(_tbRows)) return 0;
-    if(typeof _tbKey !== 'function' || typeof _tbToday !== 'function'
-       || typeof _tbStatus !== 'function') return 0;
-    var key = _tbKey(_tbToday());
-    return _tbRows.filter(function(r){
-      if(r._d !== key) return false;
-      var st = _tbStatus(r);
-      if(st && st.s === 'wait') return true;
-      var q = (r.extra_data && r.extra_data.card_refund_queue) || null;
-      return Array.isArray(q) && q.length > 0;
-    }).length;
+    var n = 0;
+    if(typeof _dashPending === 'function') n += _dashPending();
+    if(typeof _dashUnmarked === 'function') n += _dashUnmarked();
+    if(typeof _dashExtra !== 'undefined' && _dashExtra && _dashExtra.resvPending)
+      n += _dashExtra.resvPending;
+    return n;
   }catch(e){ console.warn('[console] 배지 계산 실패:', e); return 0; }
 }
 
@@ -37349,7 +37546,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.01-a';
+var TAAM_WEB_BUILD = '2026.09.01-b';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
