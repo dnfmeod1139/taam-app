@@ -2312,6 +2312,37 @@ html.auto-login .splash .bottom-group{display:none !important}
 #tbBody .split{display:flex;height:8px;border-radius:4px;overflow:hidden;background:#eae5da;margin-top:10px}
 #tbBody .split i{display:block;height:100%}
 
+/* ═══ 🆕 2026.09-01 자주 쓰는 메뉴 (대시보드) ═══
+   지름길은 눈에 먼저 들어와야 하지만 요약을 밀어내면 안 된다 — 두 칸 격자로 낮게 깐다. */
+#tbBody .qm-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+#tbBody .qm-b{display:flex;flex-direction:column;gap:3px;min-width:0;text-align:left;
+  background:#fff;border:1px solid #e3dcce;border-radius:12px;padding:12px 13px;
+  cursor:pointer;font-family:var(--font-main);color:#17150f}
+#tbBody .qm-b .t{font-size:13px;font-weight:800;line-height:1.35;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#tbBody .qm-b .s{font-size:10.5px;color:#a69f94;line-height:1.35;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#tbBody .qm-b:active{background:#faf8f3}
+#tbBody .qm-empty{font-size:11.5px;color:#a69f94;line-height:1.7;background:#fcfaf5;
+  border:1px dashed #e3dcce;border-radius:12px;padding:14px 13px;cursor:pointer}
+.mo-grp .qm-edit{float:right;border:none;background:none;color:#9a9486;font-size:11px;
+  font-weight:800;cursor:pointer;padding:0 2px;font-family:var(--font-main);letter-spacing:0}
+/* 편집 시트 — 고른 것과 남은 것을 한 줄 모양으로 맞춘다 */
+#qmEditModal .qm-e{display:flex;align-items:center;gap:7px;background:#fff;border:1px solid #e3dcce;
+  border-radius:11px;padding:9px 11px;margin-bottom:7px;font-family:var(--font-main)}
+#qmEditModal .qm-e .t{flex:1;min-width:0;font-size:12.5px;font-weight:800;color:#17150f;line-height:1.4}
+#qmEditModal .qm-e .t small{display:block;font-size:10.5px;font-weight:600;color:#a69f94;margin-top:2px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#qmEditModal .qm-e button{flex:none;width:30px;height:30px;border:1px solid #e0ddd5;border-radius:8px;
+  background:#fff;font-size:13px;color:#666;cursor:pointer;font-family:inherit}
+#qmEditModal .qm-e button:disabled{color:#d5d0c6;cursor:default}
+#qmEditModal .qm-e button.x{border-color:#e8d5d5;color:#b05555}
+#qmEditModal .qm-e button.add{border-color:#17150f;background:#17150f;color:#fff;font-size:15px}
+#qmEditModal .qm-sub{font-size:10px;font-weight:800;letter-spacing:.14em;color:#b5afa2;
+  margin:12px 0 6px;font-family:var(--font-main)}
+#qmEditModal .qm-empty{font-size:11.5px;color:#a69f94;line-height:1.7;background:#fcfaf5;
+  border:1px dashed #e3dcce;border-radius:12px;padding:14px 13px}
+
 /* ═══ 🆕 2026.09-01 공개 대상 ═══ */
 .tkb-aud{display:flex;align-items:center;gap:7px;font-size:11.5px;color:#79736a;
   border-top:1px solid #f2eee5;padding-top:9px;margin-top:10px}
@@ -12708,6 +12739,30 @@ window.closePromoCarousel = function(){
       <div style="display:flex;gap:8px;margin-top:10px;">
         <button class="aud-btn" onclick="audClose()">취소</button>
         <button class="aud-btn go" onclick="audSave()">공개 대상 저장</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 🆕 2026.09-01: 대시보드 「자주 쓰는 메뉴」 편집 —
+     목록은 손으로 적지 않는다. 실제 어드민 메뉴를 훑어(_moScan) 그대로 고른다. -->
+<div id="qmEditModal" class="aud-modal" onclick="if(event.target===this)qmCloseEdit()">
+  <div class="aud-sheet">
+    <div class="aud-hd">
+      <div class="ti">자주 쓰는 메뉴</div>
+      <button class="aud-x" onclick="qmCloseEdit()" aria-label="닫기">✕</button>
+    </div>
+    <div class="mb-bar" style="padding:10px 14px 0;">
+      <div class="rv-q">
+        <input id="qmQ" type="search" autocomplete="off" placeholder="메뉴 이름으로 찾기" aria-label="메뉴 검색">
+        <button id="qmQX" onclick="qmClearQ()" aria-label="지우기" style="display:none;">×</button>
+      </div>
+    </div>
+    <div id="qmEditBody" class="aud-bd"></div>
+    <div class="aud-ft">
+      <div style="display:flex;gap:8px;">
+        <button class="aud-btn" onclick="qmCloseEdit()">취소</button>
+        <button class="aud-btn go" onclick="qmSave()">저장</button>
       </div>
     </div>
   </div>
@@ -30242,6 +30297,250 @@ async function _dashLoad(){
   }catch(e){ _dashExtra.deposit = null; }
 }
 
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026.09-01 자주 쓰는 메뉴 — 대시보드에 내가 고른 지름길
+// ═══════════════════════════════════════════════════════════════
+//   메뉴가 마흔아홉 개다. 그중 매일 쓰는 건 서너 개인데, 그 서너 개가
+//   매번 「더보기 → 검색 → 누르기」 세 걸음 뒤에 있었다.
+//
+//   목록은 **손으로 적지 않는다.** 실제 어드민 메뉴를 훑어(_moScan) 고르고,
+//   누르면 그 항목을 그대로 클릭한다 — 「더보기」·탭 메뉴와 같은 방식이다.
+//   적어 두면 메뉴가 바뀔 때마다 두 군데를 고쳐야 하고 반드시 한쪽을 빠뜨린다.
+//
+//   저장은 두 겹이다.
+//     ① localStorage — 늘 되고 즉시 뜬다. 권한도 네트워크도 필요 없다.
+//     ② app_config('dash_quick') — 되면 기기 사이로 따라온다.
+//   ②가 실패해도 ①이 남으므로 설정은 사라지지 않는다. **SQL 은 필요 없다.**
+var _qmCfg = null;            // 고른 키 순서 (null = 아직 안 읽음)
+var _qmCfgRole = null;        // 그 설정이 어느 역할의 것인지
+var _qmDraft = [];            // 편집 중 임시본
+var _qmRows = [];             // 이번에 그린 항목의 실제 메뉴 원소
+var _qmQ = '', _qmQTimer = null, _qmPulled = false;
+var _qmAvail = [];            // 편집 시트에서 「추가할 수 있는」 항목의 키 (자리 번호로 부른다)
+
+// 항목을 가리키는 키 — 화면 글자가 아니라 **동작**으로 잡는다.
+//   제목은 다듬어질 수 있지만 onclick 은 그 항목이 무엇인지 그 자체다.
+function _qmKey(r){
+  var c = '';
+  try{ c = (r.el && r.el.getAttribute('onclick')) || ''; }catch(e){}
+  c = String(c).replace(/\s+/g, ' ').trim();
+  return c || ('t:' + r.grp + '|' + r.title);
+}
+
+// 처음 여는 사람에게 빈 칸을 주지 않는다. 제목으로 골라 담는다 —
+//   onclick 을 적어 두면 함수 이름이 바뀌는 날 조용히 사라진다.
+var QM_DEFAULT_TITLES = ['티켓 캘린더', '예치금 관리', '티켓 업로드', '예약 관리', '회원 목록'];
+function _qmDefault(rows){
+  var out = [];
+  QM_DEFAULT_TITLES.forEach(function(t){
+    for(var i = 0; i < rows.length; i++){
+      if(rows[i].title.indexOf(t) < 0) continue;
+      var k = _qmKey(rows[i]);
+      if(out.indexOf(k) < 0) out.push(k);
+      return;
+    }
+  });
+  return out;
+}
+
+function _qmLsKey(){
+  var role = (typeof _currentRole !== 'undefined') ? _currentRole : 'user';
+  return 'taamDashQuick.' + role;   // 슈퍼어드민과 매장 어드민은 메뉴가 다르다
+}
+function _qmLoadLocal(){
+  try{
+    var v = JSON.parse(localStorage.getItem(_qmLsKey()) || 'null');
+    if(Array.isArray(v)) return v;
+  }catch(e){}
+  return null;
+}
+// 서버에도 있으면 그것이 이긴다 — 다른 기기에서 고친 것을 따라온다.
+//   한 번만 당긴다. 실패는 조용히 넘어간다 (설정 하나 때문에 대시보드가 흔들리면 안 된다)
+function _qmPullRemote(){
+  if(_qmPulled || !window.sb) return;
+  _qmPulled = true;
+  try{
+    window.sb.from('app_config').select('value').eq('key', 'dash_quick').maybeSingle()
+      .then(function(res){
+        var v = res && res.data && res.data.value;
+        if(!v || !Array.isArray(v.items)) return;
+        if(JSON.stringify(v.items) === JSON.stringify(_qmCfg)) return;
+        _qmCfg = v.items.slice();
+        try{ localStorage.setItem(_qmLsKey(), JSON.stringify(_qmCfg)); }catch(e){}
+        var s = document.getElementById('todayBoardScreen');
+        if(s && s.style.display !== 'none') _dashRender();
+      }, function(){});
+  }catch(e){}
+}
+
+// 지금 고른 항목을 실제 메뉴와 맞춰 돌려준다.
+//   못 찾은 키는 조용히 버린다 — 역할이 바뀌거나 메뉴가 없어졌다는 뜻이고,
+//   눌러도 아무 일이 안 나는 칸을 남기는 것보다 없는 편이 낫다.
+function _qmResolve(rows){
+  var by = {};
+  rows.forEach(function(r){ by[_qmKey(r)] = r; });
+  var out = [];
+  (_qmCfg || []).forEach(function(k){ if(by[k]) out.push(by[k]); });
+  return out;
+}
+
+function _qmHtml(){
+  var rows = _moScan();
+  // 역할이 바뀌면 설정도 다시 읽는다 — 슈퍼어드민과 매장 어드민은 메뉴가 다르다.
+  //   안 하면 로그아웃 후 다른 역할로 들어왔을 때 남의 지름길이 그대로 남는다.
+  var _role = (typeof _currentRole !== 'undefined') ? _currentRole : 'user';
+  if(_qmCfg === null || _qmCfgRole !== _role){
+    _qmCfgRole = _role;
+    _qmPulled = false;
+    _qmCfg = _qmLoadLocal() || _qmDefault(rows);
+  }
+  _qmPullRemote();
+  var mine = _qmResolve(rows);
+  _qmRows = mine;
+
+  var h = '<div class="mo-grp" style="margin-top:2px;">자주 쓰는 메뉴'
+        + '<button class="qm-edit" onclick="qmOpenEdit()">✎ 편집</button></div>';
+  if(!mine.length){
+    return h + '<div class="qm-empty" onclick="qmOpenEdit()">'
+      + '매일 쓰는 메뉴를 여기에 올려두세요 — <b>✎ 편집</b></div>';
+  }
+  h += '<div class="qm-grid">';
+  mine.forEach(function(r, i){
+    h += '<button class="qm-b" onclick="qmGo(' + i + ')">'
+      +  '<span class="t">' + _tbEsc(r.title) + '</span>'
+      +  (r.sub ? '<span class="s">' + _tbEsc(r.sub) + '</span>' : '')
+      +  '</button>';
+  });
+  return h + '</div>';
+}
+
+// 「더보기」·탭 메뉴와 같다 — 원래 항목을 그대로 클릭한다. 동작을 흉내 내지 않는다
+function qmGo(i){
+  var r = _qmRows[i];
+  if(!r || !r.el) return;
+  if(typeof _acCloseOthers === 'function') _acCloseOthers(null);
+  setTimeout(function(){ try{ r.el.click(); }catch(e){ console.warn('[quick] 실행 실패:', e); } }, 60);
+}
+
+// ── 편집 시트 ──
+function qmOpenEdit(){
+  _qmDraft = (_qmCfg || []).slice();
+  _qmQ = '';
+  var q = document.getElementById('qmQ'); if(q) q.value = '';
+  var x = document.getElementById('qmQX'); if(x) x.style.display = 'none';
+  if(q){
+    q.oninput = function(){
+      var v = this.value;
+      clearTimeout(_qmQTimer);
+      _qmQTimer = setTimeout(function(){
+        _qmQ = v;
+        var xx = document.getElementById('qmQX'); if(xx) xx.style.display = v ? '' : 'none';
+        qmRenderEdit();
+      }, 140);
+    };
+  }
+  qmRenderEdit();
+  var m = document.getElementById('qmEditModal'); if(m) m.style.display = 'flex';
+}
+function qmCloseEdit(){
+  var m = document.getElementById('qmEditModal'); if(m) m.style.display = 'none';
+}
+function qmClearQ(){
+  var q = document.getElementById('qmQ'); if(q){ q.value = ''; q.focus(); }
+  var x = document.getElementById('qmQX'); if(x) x.style.display = 'none';
+  clearTimeout(_qmQTimer);
+  _qmQ = '';
+  qmRenderEdit();
+}
+
+function qmRenderEdit(){
+  var el = document.getElementById('qmEditBody');
+  if(!el) return;
+  var rows = _moScan();
+  var by = {};
+  rows.forEach(function(r){ by[_qmKey(r)] = r; });
+
+  var h = '<div class="mo-grp" style="margin-top:2px;">고른 메뉴 '
+        + (_qmDraft.length ? _qmDraft.length : '') + '</div>';
+  if(!_qmDraft.length){
+    h += '<div class="qm-empty" style="cursor:default;">아래에서 항목을 추가하세요.</div>';
+  } else {
+    _qmDraft.forEach(function(k, i){
+      var r = by[k];
+      h += '<div class="qm-e">'
+        +  '<span class="t">' + _tbEsc(r ? r.title : '(지금 메뉴에 없는 항목)')
+        +  (r && r.sub ? '<small>' + _tbEsc(r.sub) + '</small>' : '') + '</span>'
+        +  '<button onclick="qmMove(' + i + ',-1)"' + (i === 0 ? ' disabled' : '') + ' aria-label="위로">↑</button>'
+        +  '<button onclick="qmMove(' + i + ',1)"' + (i === _qmDraft.length - 1 ? ' disabled' : '') + ' aria-label="아래로">↓</button>'
+        +  '<button class="x" onclick="qmRemove(' + i + ')" aria-label="빼기">✕</button>'
+        +  '</div>';
+    });
+  }
+
+  var q = _qmQ.trim().toLowerCase();
+  var rest = rows.filter(function(r){
+    if(_qmDraft.indexOf(_qmKey(r)) >= 0) return false;
+    if(!q) return true;
+    return (r.title + ' ' + r.sub + ' ' + r.grp).toLowerCase().indexOf(q) >= 0;
+  });
+  h += '<div class="mo-grp">추가할 수 있는 메뉴 ' + rest.length + '</div>';
+  if(!rest.length){
+    h += '<div class="qm-empty" style="cursor:default;">'
+      +  (q ? '「' + _tbEsc(_qmQ.trim()) + '」에 맞는 것이 없습니다.' : '더 추가할 항목이 없습니다.') + '</div>';
+  } else {
+    // ⚠ 키를 onclick 문자열에 실어 보내지 않는다. 키 자체가 `openSubPage('x')` 같은
+    //   **작은따옴표를 품은 코드**라, 속성에 넣는 순간 따옴표가 엇갈려 버튼이 죽는다.
+    //   대신 자리 번호만 넘긴다 — 「더보기」의 acMenuGo 와 같은 방식이다.
+    _qmAvail = [];
+    var grp = null;
+    rest.forEach(function(r){
+      if(!q && r.grp !== grp){ grp = r.grp; h += '<div class="qm-sub">' + _tbEsc(grp) + '</div>'; }
+      var i = _qmAvail.push(_qmKey(r)) - 1;
+      h += '<div class="qm-e">'
+        +  '<span class="t">' + _tbEsc(r.title)
+        +  (r.sub ? '<small>' + _tbEsc(r.sub) + '</small>' : '') + '</span>'
+        +  '<button class="add" onclick="qmAdd(' + i + ')">＋</button>'
+        +  '</div>';
+    });
+  }
+  el.innerHTML = h;
+}
+
+function qmAdd(i){
+  var k = _qmAvail[i];
+  if(k && _qmDraft.indexOf(k) < 0) _qmDraft.push(k);
+  qmRenderEdit();
+}
+function qmRemove(i){ _qmDraft.splice(i, 1); qmRenderEdit(); }
+function qmMove(i, d){
+  var j = i + d;
+  if(j < 0 || j >= _qmDraft.length) return;
+  var t = _qmDraft[i]; _qmDraft[i] = _qmDraft[j]; _qmDraft[j] = t;
+  qmRenderEdit();
+}
+
+function qmSave(){
+  _qmCfg = _qmDraft.slice();
+  // ① 기기에 먼저 — 여기까지는 반드시 성공한다
+  try{ localStorage.setItem(_qmLsKey(), JSON.stringify(_qmCfg)); }catch(e){}
+  qmCloseEdit();
+  _dashRender();
+  if(typeof showToast === 'function') showToast('✓','저장했습니다','대시보드 자주 쓰는 메뉴가 바뀌었습니다');
+  // ② 서버는 되면 좋고 — 안 되면 이 기기에만 남는다. 실패로 알리지 않는다
+  if(!window.sb) return;
+  try{
+    window.sb.from('app_config')
+      .upsert({ key:'dash_quick', value:{ items:_qmCfg }, updated_at:new Date().toISOString() })
+      .then(function(res){
+        if(res && res.error) console.warn('[quick] 서버 저장 실패 — 이 기기에는 남습니다:', res.error.message);
+      }, function(){});
+  }catch(e){}
+}
+
+window.qmGo = qmGo; window.qmOpenEdit = qmOpenEdit; window.qmCloseEdit = qmCloseEdit;
+window.qmClearQ = qmClearQ; window.qmAdd = qmAdd; window.qmRemove = qmRemove;
+window.qmMove = qmMove; window.qmSave = qmSave;
+
 function _dashRender(){
   var el = document.getElementById('tbBody');
   if(!el) return;
@@ -30266,6 +30565,10 @@ function _dashRender(){
     });
     h += '</div>';
   }
+
+  // ── 자주 쓰는 메뉴 ──
+  //   요약보다 위에 둔다. 대시보드에 들어오는 이유의 절반은 「어디로 가려고」다.
+  try{ h += _qmHtml(); }catch(e){ console.warn('[quick] 그리기 실패:', e); }
 
   // ── 다음 영업 (파트너) ──
   //   매장이 아침에 궁금한 것은 「오늘 몇 명」이 아니라 「다음에 언제 몇 명」이다.
@@ -32298,7 +32601,11 @@ function _moRenderBody(){
   //   ⚠ 다만 **찾을 때는 뺀 것까지 다 찾는다.** 「예치금 어디 있더라」에
   //     「여기 없습니다」로 답하면 검색이 있으나 마나다. 대신 어느 탭에
   //     있는지를 오른쪽에 적어 준다.
-  if(!q) list = list.filter(function(r){ return !_acMenuOf(r.title); });
+  //   🆕 2026.09-01: **빼지 않는다.** 「더보기에는 전부 있다」가 규칙이 됐다.
+  //     탭으로 간 것도 남기되, 오른쪽에 「티켓 탭」처럼 어디에도 있는지를 적는다.
+  //     두 군데 있는 것이 헷갈림이 아니라, 없는 것이 헷갈림이었다 —
+  //     대시보드의 「자주 쓰는 메뉴」로 쓰는 것만 따로 올려두면 되므로
+  //     목록이 길어지는 값은 이제 치르지 않는다.
 
   var head = document.getElementById('moCount');
   if(head) head.textContent = list.length ? (list.length + '개') : '';
@@ -32329,13 +32636,14 @@ function _moRenderBody(){
 }
 
 function _moItem(r, i, q, showGrp){
+  // 탭에도 있는 항목은 **묶어 볼 때도** 어디에 있는지 적는다. 더보기에 전부 두기로
+  //   했으므로, 안 적으면 같은 것이 두 군데 있는 이유를 알 수 없다.
+  var m = _acMenuOf(r.title);
+  var where = m ? (AC_TAB_NAME[m.tab] + ' 탭') : (showGrp ? r.grp : '');
   return '<button class="mo-item" onclick="moGo(' + i + ')">'
     + '<span class="mo-t">' + _moMark(r.title, q)
       + (r.sub ? '<small>' + _moMark(r.sub, q) + '</small>' : '') + '</span>'
-    + (showGrp ? '<span class="mo-where">'
-        + _tbEsc((function(){ var m = _acMenuOf(r.title);
-            return m ? (AC_TAB_NAME[m.tab] + ' 탭') : r.grp; })())
-        + '</span>' : '')
+    + (where ? '<span class="mo-where">' + _tbEsc(where) + '</span>' : '')
     + '<span class="mo-chev">›</span></button>';
 }
 
@@ -37954,7 +38262,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.01-h';
+var TAAM_WEB_BUILD = '2026.09.01-i';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -56531,7 +56839,8 @@ function _taamBusyNow(){
     var ids = ['tdPurchaseSheet','tdConfirmPopup','tdDonePopup','chargePage',
                'mshipScreen','cardPage','restPage','tuScreen','popAdmin',
                'cpfModal','pcalAdminPage','rpCropModal','homePopup',
-               'audModal'];   // 🆕 2026.09-01 공개 대상 편집 중
+               'audModal',    // 🆕 2026.09-01 공개 대상 편집 중
+               'qmEditModal'];// 🆕 2026.09-01 자주 쓰는 메뉴 편집 중
     // ⚠ offsetParent 로 판단하면 안 된다. **position:fixed 는 offsetParent 가
     //   항상 null** 이고, 이 목록은 전부 fixed 다 — 그래서 이 검사가 한 번도
     //   참이 된 적이 없었다(2026-09-01 발견). 계산된 스타일을 본다.
