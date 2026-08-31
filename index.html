@@ -14313,9 +14313,14 @@ function _idbSafeSet(key, val, label){
 window._idbSafeSet = _idbSafeSet;
 
 // onlyIds: 실제로 바뀐 티켓 id(들). 주면 그 티켓만 서버에 저장한다.
-function saveTickets(onlyIds){
+function saveTickets(onlyIds, localOnly){
   // 1. IDB 저장 — 빈 배열로 백업을 날리지 않는다
   _idbSafeSet('excTickets', ticketDB, '티켓');
+
+  // 🔧 2026.08-31: localOnly = 화면만 즉시 바꾸고 서버는 건드리지 않는다.
+  //   매진 판정이 그렇다. ticket_products.status 는 서버 트리거가 소유하므로
+  //   앱이 밀 이유가 없고, 밀면 자기 매장이 아닌 티켓에서 403 만 난다.
+  if(localOnly) return;
 
   // 2. Supabase 저장
   //   ⚠ ticketDB 는 loadTickets() 가 IDB(로컬)에서만 읽어온다. 그래서 로컬이 낡아 있으면
@@ -23602,7 +23607,8 @@ async function completePurchase(){
         // ⚠ 바뀐 티켓 하나만 민다. 인자 없이 부르면 ticketDB 전체가 올라가
         //   ① 낡은 로컬 값이 서버의 최신 티켓을 덮어쓰고(날짜·상태가 과거로)
         //   ② 파트너 어드민 세션에서는 남의 매장 티켓까지 밀어 403 이 수십 건 난다.
-        try { saveTickets(t.id); } catch(_){}
+        //   매진 상태 자체는 서버 트리거가 소유하므로 로컬만 바꾸면 된다.
+        try { saveTickets(t.id, true); } catch(_){}
         try { if (typeof renderTickets === 'function') renderTickets(); } catch(_){}
         showToast('⚠','매진','죄송합니다 — 남은 좌석이 없습니다');
       } else {
@@ -24063,8 +24069,8 @@ async function completePurchase(){
     var usedPax = Math.max(ownPax, rpcPax);
     if (usedPax >= totalPax) {
       t.status = 'soldout';
-      // ⚠ 바뀐 티켓 하나만 민다 — 위 ②번 자리와 같은 이유다
-      saveTickets(t.id);
+      // ⚠ 로컬만 바꾼다 — 위 ②번 자리와 같은 이유다 (서버는 트리거가 맞춘다)
+      saveTickets(t.id, true);
       // 🆕 화면도 그 자리에서 흑백으로 — 안 그리면 앱을 껐다 켤 때까지 컬러로 살아 있다
       if (typeof _tkRepaintAll === 'function') _tkRepaintAll();
     }
@@ -27261,6 +27267,39 @@ async function cancelTicketPurchase(purchaseId, refundCalc, isSuperAdminOverride
       _cxMsg = '취소 요청 완료 (환불 없음)';
     }
     showToast('✓','취소 완료', _cxMsg);
+
+    // 🆕 2026.08-31: 회원 본인의 종모양에도 남긴다.
+    //
+    //   구매는 24109 줄에서 종모양 이력 + 본인 다른 기기 푸시를 남기는데,
+    //   취소는 여기 토스트가 전부였다. 토스트는 몇 초 뒤 사라지고 이력에
+    //   아무것도 안 남아서, 회원이 나중에 알림함을 열면 「예약 완료」만 있고
+    //   「취소」는 없다 — 취소가 안 된 것처럼 읽힌다. 실제로 그렇게 보였다.
+    //
+    //   taamNotifyUser 는 notifications 행 + 푸시를 함께 한다. 실패해도
+    //   취소 자체는 이미 끝났으므로 흐름을 막지 않는다.
+    try {
+      var _cxAuth = await window.sb.auth.getUser();
+      var _cxMe = _cxAuth && _cxAuth.data && _cxAuth.data.user;
+      if(_cxMe && typeof taamNotifyUser === 'function'){
+        var _cxRest = (r ? r.name : (h.restName || '티켓'));
+        var _cxLine = _cxRest + ' · ' + (h.visitDate || '') + ' · ' + (h.pax || 1) + '인';
+        taamNotifyUser(_cxMe.id, {
+          type: 'ticket',
+          title: '티켓 취소 완료',
+          body: _cxLine + '\n' + _cxMsg,
+          url: '/',
+          tag: 'taam-mycancel-' + purchaseId,
+          i18n: {
+            ko: { title:'티켓 취소 완료',        body: _cxLine + '\n' + _cxMsg },
+            en: { title:'Reservation cancelled', body: _cxLine + '\n' + _cxMsg },
+            ja: { title:'ご予約をキャンセルしました', body: _cxLine + '\n' + _cxMsg }
+          },
+          payload: { purchase_id: purchaseId,
+                     deposit_refund: _depositRefund || 0,
+                     card_refund: _cardRefund || 0 }
+        });
+      }
+    } catch(_mce){ console.warn('[cancel] 본인 알림 예외:', _mce && _mce.message); }
 
     // 화면 새로고침
     if(typeof ticketHistRender === 'function') ticketHistRender(_ticketHistTabIdx || 0);
@@ -36459,7 +36498,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.31-h';
+var TAAM_WEB_BUILD = '2026.08.31-i';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
