@@ -36543,7 +36543,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.31-r';
+var TAAM_WEB_BUILD = '2026.08.31-s';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -54992,6 +54992,60 @@ function _onSwMessage(event){
     console.log('[Push] 구독 만료 — 재구독 시도');
     pushSubscribeIfNeeded();
   }
+  // 🆕 2026.08-31: 새 빌드가 준비됐다는 알림. **언제 반영할지는 여기서 정한다.**
+  //   종전에는 서비스워커가 열린 창을 그냥 리로드했다. 배포는 하루에도 여러 번
+  //   나가는데, 그때 회원이 결제 중이면 결제 시트가 통째로 날아간다.
+  if(d && d.type === 'SW_ACTIVATED'){
+    console.log('[SW] 새 버전 준비됨:', d.version);
+    _taamApplyUpdateWhenIdle();
+  }
+}
+
+// 지금 끊으면 안 되는 일을 하고 있는가
+//   ⚠ 여기 빠뜨린 화면이 있으면 그 화면에서 리로드가 난다. 새 결제·편집
+//     화면을 만들면 이 목록에 같이 넣는다.
+function _taamBusyNow(){
+  try {
+    // 좌석을 잡아둔 상태 = 결제 진행 중. 이때 끊기면 돈과 자리가 엇갈린다
+    if (window._tkSeatHoldId) return '좌석 홀드 중';
+    if (window._lastPaymentId) return '결제 처리 중';
+    if (typeof _cpfBusy !== 'undefined' && _cpfBusy) return '사진 정리 중';
+    // 열려 있으면 끊으면 안 되는 화면들
+    var ids = ['tdPurchaseSheet','tdConfirmPopup','tdDonePopup','chargePage',
+               'mshipScreen','cardPage','restPage','tuScreen','popAdmin',
+               'cpfModal','pcalAdminPage','rpCropModal','homePopup'];
+    for (var i = 0; i < ids.length; i++){
+      var el = document.getElementById(ids[i]);
+      if (el && el.style.display !== 'none' && el.offsetParent !== null) return ids[i];
+    }
+    // 무언가 입력 중이면 건드리지 않는다
+    var ae = document.activeElement;
+    if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return '입력 중';
+  } catch(e){}
+  return null;
+}
+window._taamBusyNow = _taamBusyNow;
+
+// 한가해지면 반영한다. 바쁘면 기다렸다가 화면을 다시 열 때.
+var _taamUpdatePending = false;
+function _taamApplyUpdateWhenIdle(){
+  var why = _taamBusyNow();
+  if (!why){
+    console.log('[SW] 한가함 — 지금 반영');
+    try { location.reload(); } catch(e){}
+    return;
+  }
+  if (_taamUpdatePending) return;          // 이미 대기 중
+  _taamUpdatePending = true;
+  console.log('[SW] 바쁨(' + why + ') — 끝나면 반영');
+  // 화면을 껐다 켜거나 탭을 다시 볼 때 한 번 더 본다
+  document.addEventListener('visibilitychange', function _v(){
+    if (document.visibilityState !== 'visible') return;
+    if (_taamBusyNow()) return;            // 여전히 바쁘면 그대로 둔다
+    document.removeEventListener('visibilitychange', _v);
+    console.log('[SW] 이제 한가함 — 반영');
+    try { location.reload(); } catch(e){}
+  });
 }
 
 // 부팅 시 SW 등록 (DOMContentLoaded 후)

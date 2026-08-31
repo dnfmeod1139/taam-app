@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.66.0';  // 1.55.2 — 2026.08: 자동 새로고침 재도입(네이티브 앱에 최신 index.html 강제 반영). index.html 의 "네이티브 splash-skip 미부여" 수정과 함께라 인트로/스킵 안 사라짐.
-const STATIC_CACHE = 'taam-static-v1.66.0';
+const SW_VERSION = 'taam-sw-v1.67.0';  // 1.55.2 — 2026.08: 자동 새로고침 재도입(네이티브 앱에 최신 index.html 강제 반영). index.html 의 "네이티브 splash-skip 미부여" 수정과 함께라 인트로/스킵 안 사라짐.
+const STATIC_CACHE = 'taam-static-v1.67.0';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
@@ -21,13 +21,23 @@ self.addEventListener('activate', (event) => {
       await Promise.all(keys.map((k) => (k === STATIC_CACHE ? null : caches.delete(k))));
       // 현재 열린 모든 탭의 SW를 즉시 새 버전으로 교체
       await self.clients.claim();
-      // 🆕 v1.55.2: 새 버전 활성화 시 열린 창 자동 새로고침 — 네이티브 앱/설치형 PWA 가
-      //   재실행만으로 최신 index.html 을 받도록(하드리프레시 불가 대응).
-      //   ※ v1.55.0 때 이게 splash-skip 을 유발했으나, index.html 에 "네이티브는 splash-skip 미부여"
-      //     수정을 넣어서 이제 리로드해도 인트로/스킵이 사라지지 않음.
+      // 🔧 2026.08-31: **강제 새로고침을 그만둔다.** 페이지에게 물어본다.
+      //
+      //   종전에는 여기서 열린 창을 전부 w.navigate(w.url) 로 리로드했다.
+      //   그런데 배포는 하루에도 여러 번 나가고, 그때 회원이 결제 중이면
+      //   **결제 시트가 통째로 날아간다.** 좌석 홀드를 잡아둔 채 리로드되면
+      //   무슨 일이 일어났는지 회원은 알 수가 없다.
+      //   사진 정리 도구처럼 몇십 분 도는 작업도 중간에 끊긴다.
+      //
+      //   이제 메시지만 보낸다. 리로드할지는 페이지가 정한다 —
+      //   한가하면 즉시, 바쁘면 일이 끝난 뒤에. (index.html _onSwMessage)
+      //   페이지가 옛 빌드라 이 메시지를 모르면? 그냥 아무 일도 안 일어나고
+      //   다음 실행에서 최신을 받는다 — 강제로 끊는 것보다 낫다.
       try {
         const wins = await self.clients.matchAll({ type: 'window' });
-        for (const w of wins) { try { await w.navigate(w.url); } catch (e) {} }
+        for (const w of wins) {
+          try { w.postMessage({ type: 'SW_ACTIVATED', version: SW_VERSION }); } catch (e) {}
+        }
       } catch (e) {}
     })()
   );
