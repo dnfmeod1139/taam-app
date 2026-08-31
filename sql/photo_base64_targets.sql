@@ -1,119 +1,113 @@
 -- ═══════════════════════════════════════════════════════════════
--- TAAM — base64 사진 목록을 레스토랑까지 넓힌다 (2026-08-31)
+-- TAAM — base64 사진이 남은 곳을 **컬럼을 짚지 않고** 찾는다 (2026-08-31)
 -- ═══════════════════════════════════════════════════════════════
--- 왜 넓히나
---   셰프 173MB 를 옮기고 나서 부팅 경로를 재 봤더니 이렇게 나왔다.
+-- 왜 다시 만드나
+--   컬럼 이름을 하나씩 적어서 찾다가 계속 놓쳤다.
+--     1차: chefs.node_photo · sec1_data · sec2_data     → 173MB 발견
+--     2차: restaurants.photo_card · photo_hero · detail_photos → 661kB 발견
+--     3차: 정리하고 다시 재 보니 **restaurants.image_url 이 669kB**
+--          — 아무도 이 컬럼을 후보에 넣지 않았다.
 --
---     restaurants      144행  1,475 kB   ← 회원이 앱 켤 때마다 통째로 받는다
---       └ photo_card   8건에 base64 668 kB   (전체의 45%)
---     ticket_products   32행     15 kB   ← 무시해도 된다
+--   같은 실수를 세 번 했다. 이제 **컬럼 목록을 짜지 않는다.**
+--   information_schema 로 텍스트·JSON 계열 컬럼을 전부 훑어서
+--   값이 'data:image' 로 시작하거나 그 문자열을 품은 것을 찾는다.
+--   컬럼이 새로 생겨도 자동으로 잡힌다.
 --
---   photo_card 8건만 Storage 로 옮기면 **부팅 쿼리 하나가 45% 줄어든다.**
---   행 수가 적어 금방 끝나는데 효과는 회원 전원에게 매번 돌아온다.
---
---   ⚠ restaurants 는 loadRestaurants() 가 select('*') 로 읽는다.
---     첫 화면이 이 응답을 기다리므로, 여기 든 무게는 곧 스플래시 시간이다.
---
--- 무엇이 달라지나
---   taam_chef_base64_targets() 는 그대로 둔다 (이미 라이브에 있다).
---   새 함수는 chefs + restaurants 를 함께 준다. 앱은 새 것을 먼저 부르고,
---   없으면 옛 것으로 물러난다 — SQL 을 안 돌린 상태에서도 앱이 죽지 않는다.
+-- 왜 목록만 서버에서 주나
+--   원본을 다 받으면 그 요청이 죽는다(처음에 173MB 였다).
+--   내용은 빼고 **어디에 몇 바이트가 있는지만** 준다. 앱이 한 건씩
+--   골라 받아서 Storage 로 올리고 URL 로 바꿔 쓴다.
 --
 -- 실행: Supabase SQL Editor 에 통째로 붙여넣고 RUN. 읽기 전용 함수다.
 -- ═══════════════════════════════════════════════════════════════
 
 create or replace function public.taam_photo_base64_targets()
 returns table (
-  tbl    text,   -- 'chefs' | 'restaurants'
-  k1     text,   -- chefs: id      · restaurants: id
-  k2     text,   -- chefs: lineage_id · restaurants: null
+  tbl    text,   -- 'restaurants' | 'chefs'
+  k1     text,   -- 기본키 (chefs 는 id)
+  k2     text,   -- chefs 만: lineage_id
   label  text,   -- 화면에 보여줄 이름
   field  text,
   bytes  bigint
 )
-language sql
+language plpgsql
 stable
 security definer
 set search_path = public
 as $$
-  -- 슈퍼어드민만. 아니면 빈 목록 (예외를 던지지 않는다)
-  select * from (
-    -- ── 레스토랑: 부팅 때 전원이 받는다 → 가장 먼저 ──────────────
-    select 'restaurants'::text as tbl, r.id::text as k1, null::text as k2,
-           coalesce(r.name,'(이름없음)')::text as label,
-           'photo_card'::text as field,
-           octet_length(r.photo_card)::bigint as bytes
-      from public.restaurants r
-     where public._taam_uid_is_super() and r.photo_card like 'data:%'
-    union all
-    select 'restaurants', r.id::text, null, coalesce(r.name,'(이름없음)'),
-           'photo_hero', octet_length(r.photo_hero)::bigint
-      from public.restaurants r
-     where public._taam_uid_is_super() and r.photo_hero like 'data:%'
-    union all
-    select 'restaurants', r.id::text, null, coalesce(r.name,'(이름없음)'),
-           'detail_photos', octet_length(r.detail_photos::text)::bigint
-      from public.restaurants r
-     where public._taam_uid_is_super() and r.detail_photos::text like '%data:image%'
-    -- ── 셰프: 카드 상세에서만 내려간다 ───────────────────────────
-    union all
-    select 'chefs', c.id::text, c.lineage_id::text, coalesce(c.name,'(이름없음)'),
-           'node_photo', octet_length(c.node_photo)::bigint
-      from public.chefs c
-     where public._taam_uid_is_super() and c.node_photo like 'data:%'
-    union all
-    select 'chefs', c.id::text, c.lineage_id::text, coalesce(c.name,'(이름없음)'),
-           'sec1_data', octet_length(c.sec1_data::text)::bigint
-      from public.chefs c
-     where public._taam_uid_is_super() and c.sec1_data::text like '%data:image%'
-    union all
-    select 'chefs', c.id::text, c.lineage_id::text, coalesce(c.name,'(이름없음)'),
-           'sec2_data', octet_length(c.sec2_data::text)::bigint
-      from public.chefs c
-     where public._taam_uid_is_super() and c.sec2_data::text like '%data:image%'
-  ) t
-  order by case t.tbl when 'restaurants' then 0 else 1 end,
-           case t.field when 'photo_card' then 0 when 'photo_hero' then 1
-                        when 'node_photo' then 2 else 3 end,
-           t.bytes desc
+declare
+  c record;
+  v_key2 text;
+begin
+  -- 슈퍼어드민만. 아니면 아무것도 주지 않는다 (예외를 던지지 않는다)
+  if not public._taam_uid_is_super() then
+    return;
+  end if;
+
+  for c in
+    select col.table_name, col.column_name
+      from information_schema.columns col
+     where col.table_schema = 'public'
+       and col.table_name in ('restaurants', 'chefs')
+       -- 텍스트·JSON·배열 계열만. 숫자·불리언·날짜에는 사진이 못 들어간다.
+       and (col.data_type in ('text', 'character varying', 'jsonb', 'json')
+            or col.data_type = 'ARRAY')
+       -- 기본키·식별자는 건드리지 않는다
+       and col.column_name not in ('id', 'lineage_id')
+     order by col.table_name, col.column_name
+  loop
+    v_key2 := case when c.table_name = 'chefs' then 'lineage_id::text' else 'null::text' end;
+
+    -- 값 안에 data:image 가 있는 행만. 크기는 그 컬럼의 실제 길이.
+    return query execute format(
+      'select %L::text, t.id::text, %s, coalesce(t.name, %L)::text, %L::text,
+              octet_length(t.%I::text)::bigint
+         from public.%I t
+        where t.%I::text like %L',
+      c.table_name, v_key2, '(이름없음)', c.column_name,
+      c.column_name, c.table_name, c.column_name, '%data:image%'
+    );
+  end loop;
+end;
 $$;
 
 revoke all on function public.taam_photo_base64_targets() from public;
 grant execute on function public.taam_photo_base64_targets() to authenticated;
 
 comment on function public.taam_photo_base64_targets() is
-  'base64 사진이 남아 있는 행 목록 (내용 제외) — chefs + restaurants. 슈퍼어드민만.';
+  'base64 사진이 남은 행·컬럼 목록 (내용 제외). 컬럼을 짚지 않고 전부 훑는다. 슈퍼어드민만.';
 
 
 -- ═══════════════════════════════════════════════════════════════
--- 확인 — 지금 무엇이 얼마나 남았나
+-- 확인 — 지금 어디에 얼마나 남았나 (SQL Editor 용 · 함수를 안 거친다)
 -- ═══════════════════════════════════════════════════════════════
---   ⚠ SQL Editor 는 로그인 세션이 아니라 auth.uid() 가 null 이다.
---     그래서 위 함수는 여기서 0행을 준다 — 정상이다. 앱에서는 보인다.
---     여기서는 원본 테이블을 직접 세서 확인한다.
-select 'restaurants.photo_card'  as "항목", count(*) as "건수",
-       pg_size_pretty(coalesce(sum(octet_length(photo_card)),0)::bigint) as "크기"
-  from public.restaurants where photo_card like 'data:%'
-union all
-select 'restaurants.photo_hero', count(*),
-       pg_size_pretty(coalesce(sum(octet_length(photo_hero)),0)::bigint)
-  from public.restaurants where photo_hero like 'data:%'
-union all
-select 'restaurants.detail_photos', count(*),
-       pg_size_pretty(coalesce(sum(octet_length(detail_photos::text)),0)::bigint)
-  from public.restaurants where detail_photos::text like '%data:image%'
-union all
-select 'chefs (전부)', count(*), pg_size_pretty(coalesce(sum(
-         coalesce(octet_length(node_photo),0)
-       + coalesce(octet_length(sec1_data::text),0)
-       + coalesce(octet_length(sec2_data::text),0)),0)::bigint)
-  from public.chefs
- where node_photo like 'data:%' or sec1_data::text like '%data:image%'
-    or sec2_data::text like '%data:image%'
-union all
-select '── restaurants 전체 (부팅에 받는 양)', count(*),
-       pg_size_pretty(sum(pg_column_size(restaurants.*))::bigint)
-  from public.restaurants;
+--   ⚠ SQL Editor 는 auth.uid() 가 null 이라 위 함수는 여기서 0행을 준다.
+--     그래서 같은 방식으로 직접 훑는다.
+--   ⚠ 임시 테이블은 psql 자동커밋에서 문장이 끝나면 사라진다. 한 문장으로 센다.
+with cols as (
+  select c.table_name, c.column_name
+    from information_schema.columns c
+   where c.table_schema = 'public'
+     and c.table_name in ('restaurants','chefs','ticket_products','profiles')
+     and (c.data_type in ('text','character varying','jsonb','json') or c.data_type = 'ARRAY')
+     and c.column_name not in ('id','lineage_id')
+),
+scan as (
+  select cols.table_name, cols.column_name,
+         query_to_xml(format(
+           'select count(*) as n, coalesce(sum(octet_length(%I::text)),0) as b
+              from public.%I where %I::text like %L',
+           cols.column_name, cols.table_name, cols.column_name, '%data:image%'),
+           false, true, '') as x
+    from cols
+)
+select table_name                                        as "테이블",
+       column_name                                       as "컬럼",
+       (xpath('/row/n/text()', x))[1]::text::bigint       as "건수",
+       pg_size_pretty((xpath('/row/b/text()', x))[1]::text::bigint) as "크기"
+from scan
+where (xpath('/row/n/text()', x))[1]::text::bigint > 0
+order by (xpath('/row/b/text()', x))[1]::text::bigint desc;
 
 
 -- ═══════════════════════════════════════════════════════════════
