@@ -2313,8 +2313,11 @@ html.auto-login .splash .bottom-group{display:none !important}
 #tbBody .split i{display:block;height:100%}
 
 /* ═══ 🆕 2026.09-01 공개 대상 ═══ */
-.tkb-aud{display:block;font-size:11.5px;color:#79736a;border-top:1px solid #f2eee5;
-  padding-top:9px;margin-top:10px}
+.tkb-aud{display:flex;align-items:center;gap:7px;font-size:11.5px;color:#79736a;
+  border-top:1px solid #f2eee5;padding-top:9px;margin-top:10px}
+/* 대상 인원수 — 서버가 세어 뒤따라 들어온다. 비어 있어도 줄이 흔들리지 않게 오른쪽 고정 */
+.tkb-aud em{margin-left:auto;font-style:normal;font-family:'Montserrat',sans-serif;
+  font-size:11.5px;font-weight:800;color:#17150f;white-space:nowrap}
 .aud-modal{position:fixed;inset:0;z-index:1150;background:rgba(0,0,0,.42);
   display:none;align-items:flex-end;justify-content:center}
 .aud-sheet{width:100%;max-width:520px;max-height:88vh;background:#f7f5f2;
@@ -2370,6 +2373,10 @@ html.auto-login .splash .bottom-group{display:none !important}
 /* 「등급이 실제로 안 먹는」 회원 — 이 화면이 있는 가장 큰 이유다 */
 .mb-warn{display:block;font-size:11px;font-weight:700;color:#9B1C1C;background:#FBEBE9;
   border:1px solid #F2D5D1;border-radius:8px;padding:6px 9px;margin-top:7px;line-height:1.5}
+/* 이용 제한 — 명부에서 바로 보이게. 줄 전체를 흐리되 배지는 또렷하게 */
+.mb-row.ban{border-color:#F2D5D1;background:#FFFCFB}
+.mb-ban{display:inline-block;font-size:11px;font-weight:700;color:#9B1C1C;background:#FBEBE9;
+  border-radius:6px;padding:3px 8px;margin-top:6px;line-height:1.45}
 .tb-chip.warn{color:#9B1C1C;border-color:#F2D5D1;background:#FBEBE9}
 .tb-chip.warn .k{color:#9B1C1C;opacity:.7}
 .tb-chip.warn.on{background:#9B1C1C;color:#fff;border-color:#9B1C1C}
@@ -30151,8 +30158,10 @@ function _tbRow(r, showDate, nextKey){
     + '<span>'
     + (isNext ? '<span class="now">다음 예약</span>' : (isPast ? '<span class="done">지남</span>' : ''))
     + (showDate ? '<span class="gu" style="margin:0 0 2px">' + _tbEsc(dd + ' · ' + (r.restaurant_name || '')) + '</span>' : '')
+    // 「외 1명」이 아니라 **총 인원**을 적는다. 자리를 잡는 것은 동행 수가 아니라
+    //   전체 인원인데, 「외 N명」은 매번 머릿속에서 1 을 더해야 읽힌다.
     + '<span class="st">' + _tbEsc(r.buyer_name || '(이름없음)')
-      + (pax > 1 ? ' 외 ' + (pax - 1) + '명' : ' 1명') + '</span>'
+      + ' ' + pax + '명</span>'
     + ((parseInt(r.price,10) || 0) ? '<span class="gu">' + _tbWon(r.price) + '</span>' : '')
     + '<span class="tb-pill ' + st.k + '">' + st.l + '</span>'
     + (memo ? '<span class="memo">' + _tbEsc(memo) + '</span>' : '')
@@ -30884,8 +30893,9 @@ function _rvRow(r, isPast){
     // 🆕 2026.08-30: 시안대로 주어를 회원 이름으로 올린다. 종전엔 매장명이 첫 줄이라
     //   「누가 오는지」가 둘째 줄로 밀렸다. 매장은 금액과 한 줄로 내린다.
     + (isPast && st.s !== 'cx' ? '<span class="done">지남</span>' : '')
+    // 「외 1명」이 아니라 **총 인원** — 자리를 잡는 것은 동행 수가 아니라 전체 인원이다
     + '<span class="st">' + _tbEsc(r.buyer_name || '(이름없음)')
-      + (pax > 1 ? ' 외 ' + (pax - 1) + '명' : ' 1명') + '</span>'
+      + ' ' + pax + '명</span>'
     + '<span class="gu">' + _tbEsc(r.restaurant_name || '매장')
       + ((parseInt(r.price,10) || 0) ? ' · ' + _tbWon(r.price) : '') + '</span>'
     + '<span class="tb-pill ' + st.k + '">' + st.l + '</span>'
@@ -31433,6 +31443,47 @@ async function _mbLoad(){
     if(res.error){ console.warn('[member] 조회 실패:', res.error.message); _mbRows = []; return; }
     _mbRows = res.data || [];
   }catch(e){ console.warn('[member] 예외:', e); _mbRows = []; }
+
+  // 🆕 2026.09-01: 명부 한 줄에 「구매 N회」와 「이용 제한」을 같이 보여준다.
+  //   종전엔 둘 다 다른 화면을 열어야 알 수 있었다 — 명부는 회원을 「고르는」
+  //   곳인데, 고를 재료가 명부에 없으면 명부가 아니라 이름표에 그친다.
+  //   ⚠ 실패해도 명부는 그대로 뜬다. 곁가지가 본체를 못 막게 한다.
+  try{
+    await Promise.all([
+      (_acBans === null || _acRules === null) ? _acLoadAccess() : Promise.resolve(),
+      (_tbRows === null && typeof _tbLoad === 'function') ? _tbLoad() : Promise.resolve()
+    ]);
+  }catch(e){ console.warn('[member] 곁가지 로드 실패 — 명부는 그대로:', e && e.message); }
+}
+
+// 살아 있는 이용 제한만 — until 이 지났으면 이미 풀린 것이다 (접근 제어와 같은 판정)
+function _mbBanOf(uid){
+  if(!Array.isArray(_acBans)) return null;
+  var today = _taamTodayKst();
+  for(var i = 0; i < _acBans.length; i++){
+    var b = _acBans[i];
+    if(String(b.user_id) !== String(uid)) continue;
+    if(!b.until || String(b.until).replace(/[^0-9]/g, '') >= today) return b;
+  }
+  return null;
+}
+
+// 구매 횟수 — 취소는 빼고 센다. 자리를 잡은 것만이 구매다.
+//   (등급 규칙이 쓰는 「방문 횟수」와는 다른 수다. 방문은 매장별로 서버가 센다)
+var _mbBuyMap = null, _mbBuySig = null;
+function _mbBuyCount(uid){
+  if(!Array.isArray(_tbRows)) return null;
+  if(_mbBuyMap === null || _mbBuySig !== _tbRows.length){
+    _mbBuyMap = {};
+    _tbRows.forEach(function(r){
+      if(_tbStatus(r).s === 'cx') return;
+      var u = String(r.user_id || '');
+      if(!u) return;
+      _mbBuyMap[u] = (_mbBuyMap[u] || 0) + 1;
+    });
+    _mbBuySig = _tbRows.length;
+  }
+  return _mbBuyMap[String(uid)] || 0;
 }
 
 function _mbHit(p, q){
@@ -31454,6 +31505,8 @@ function _mbPass(p, f){
   if(f === 'M')      return !p.deleted_at && g.eff === 'M';
   if(f === 'T')      return !p.deleted_at && g.eff === 'T';
   if(f === 'bal')    return !p.deleted_at && _mbBal(p) > 0;
+  if(f === 'ban')    return !p.deleted_at && !!_mbBanOf(p.id);
+  if(f === 'buy')    return !p.deleted_at && (_mbBuyCount(p.id) || 0) > 0;
   if(f === 'soon'){                                  // 30일 안에 만료
     if(p.deleted_at || g.eff !== 'M') return false;
     var dl = _mbDaysLeft(g.expiredAt);
@@ -31470,19 +31523,20 @@ function _mbRenderFilters(){
   if(!el) return;
   var base = _mbBase();
   var cnt = {};
-  ['all','broken','M','T','bal','soon','gone'].forEach(function(f){
+  ['all','broken','M','T','buy','bal','soon','ban','gone'].forEach(function(f){
     cnt[f] = base.filter(function(p){ return _mbPass(p, f); }).length;
   });
   // 0건인 칩은 만들지 않는다 (「오늘」·「예약」과 같은 규칙)
   var chips = [['all','전체']];
   if(cnt.broken) chips.push(['broken','확인 필요']);
-  [['M','M 등급'], ['T','T 등급'], ['bal','예치금 보유'], ['soon','만료 임박'], ['gone','탈퇴']]
+  [['M','M 등급'], ['T','T 등급'], ['buy','구매 있음'], ['bal','예치금 보유'],
+   ['soon','만료 임박'], ['ban','이용 제한'], ['gone','탈퇴']]
     .forEach(function(c){ if(cnt[c[0]]) chips.push(c); });
   if(!cnt[_mbState.filter]) _mbState.filter = 'all';
   el.innerHTML = (chips.length > 1)
     ? '<div class="tb-chips" style="margin:9px 0 0;">' + chips.map(function(c){
         // 「확인 필요」만 색을 준다 — 이모지 대신 색으로 눈에 걸리게 한다
-        return '<button class="tb-chip' + (c[0] === 'broken' ? ' warn' : '')
+        return '<button class="tb-chip' + ((c[0] === 'broken' || c[0] === 'ban') ? ' warn' : '')
           + (_mbState.filter === c[0] ? ' on' : '') + '" '
           + 'onclick="mbSetFilter(\'' + c[0] + '\')">' + c[1]
           + '<span class="k">' + cnt[c[0]] + '</span></button>';
@@ -31545,17 +31599,28 @@ function _mbRow(p){
   var tierCls = gone ? 'mb-t-none' : ('mb-t-' + (g.eff || 'none'));
   var tierLbl = gone ? '탈퇴' : (g.eff || '등급없음');
 
+  var buys = _mbBuyCount(uid);
+  var ban  = gone ? null : _mbBanOf(uid);
+
   var sub = [];
   if(p.phone || p.email) sub.push(_tbEsc(p.phone || p.email));
   if(roleLbl) sub.push(roleLbl);
+  if(buys !== null) sub.push(buys ? ('구매 ' + buys + '회') : '구매 없음');
   if(g.eff === 'M' && g.expiredAt){
     sub.push('만료 ' + _mbDate(g.expiredAt) + (dl !== null && dl <= 30 ? ' (' + dl + '일)' : ''));
   }
 
-  var h = '<button class="mb-row' + (gone ? ' gone' : '') + '" onclick="mbToggleRow(\'' + esc + '\')">'
+  var h = '<button class="mb-row' + (gone ? ' gone' : '') + (ban ? ' ban' : '') + '" onclick="mbToggleRow(\'' + esc + '\')">'
     + '<span style="min-width:0;">'
       + '<span class="mb-nm">' + _tbEsc(p.display_name || '(이름 없음)') + '</span>'
       + '<span class="mb-sub">' + sub.join(' · ') + '</span>'
+      // 이용 제한은 명부에서 바로 보인다 — 티켓을 열어줄 사람을 고르는 자리라
+      //   「이 사람은 지금 막혀 있다」를 다른 화면에서 확인하게 두면 놓친다
+      + (ban
+          ? '<span class="mb-ban">이용 제한'
+            + (ban.reason ? ' · ' + _tbEsc(String(ban.reason).slice(0, 24)) : '')
+            + (ban.until ? ' · ' + _mbDate(ban.until) + '까지' : '') + '</span>'
+          : '')
       + (g.broken && !gone
           ? '<span class="mb-warn">저장된 등급은 M 인데 '
             + (g.expiredAt ? '만료일이 지났습니다 (' + _mbDate(g.expiredAt) + ')' : '만료일이 비어 있습니다')
@@ -31772,6 +31837,50 @@ function _tkbRenderBody(){
     return;
   }
   el.innerHTML = _acMenuHtml('tkb') + list.map(_tkbRow).join('');
+  _tkbFillAud(list);
+}
+
+// ── 공개 대상 인원수를 목록에 채운다 ──
+//   조건은 앱이 알지만 **몇 명이 걸리는지는 서버만 안다** (taam_ticket_audience_count).
+//   그래서 줄을 먼저 그리고, 수는 뒤따라 넣는다. 세는 동안 목록이 멈추면
+//   「누가 볼 수 있나」 하나 때문에 티켓 화면 전체가 늦어진다.
+//   한 번 센 티켓은 다시 세지 않는다. 함수가 없는 DB(SQL 미실행)면 조용히 넘어간다.
+var _tkbAudN = {}, _tkbAudOff = false, _tkbAudTok = 0;
+function _tkbFillAud(list){
+  if(_tkbAudOff || !window.sb) return;
+  var tok = ++_tkbAudTok;
+  var ids = [];
+  (list || []).slice(0, 40).forEach(function(t){
+    var id = String(t.id || '');
+    if(id && !(id in _tkbAudN) && ids.indexOf(id) < 0) ids.push(id);
+  });
+  _tkbPaintAud();
+  if(!ids.length) return;
+  Promise.all(ids.map(function(id){
+    return window.sb.rpc('taam_ticket_audience_count', { p_ticket_id: id })
+      .then(function(r){
+        if(r.error){
+          var m = String(r.error.message || '');
+          if(r.error.code === 'PGRST202' || /could not find the function|schema cache/i.test(m)) _tkbAudOff = true;
+          return;
+        }
+        _tkbAudN[id] = parseInt(r.data, 10) || 0;
+      })
+      .catch(function(){});
+  })).then(function(){
+    if(tok !== _tkbAudTok) return;   // 그 사이 다시 그렸다 — 옛 결과로 덮지 않는다
+    _tkbPaintAud();
+  });
+}
+function _tkbPaintAud(){
+  var el = document.getElementById('tkbBody');
+  if(!el) return;
+  Array.prototype.forEach.call(el.querySelectorAll('[data-tkb-aud]'), function(sp){
+    var n = _tkbAudN[sp.getAttribute('data-tkb-aud')];
+    var em = sp.querySelector('em');
+    if(!em) return;
+    em.textContent = (typeof n === 'number') ? (n + '명') : '';
+  });
 }
 
 function _tkbRow(t){
@@ -31805,7 +31914,9 @@ function _tkbRow(t){
         : '<span class="tkb-bar"><span class="n">좌석 수 미설정</span></span>')
     // 🆕 2026.09-01: 공개 대상을 목록에서 바로 보여준다.
     //   「누가 볼 수 있는 티켓인지」는 좌석만큼 중요한데, 지금은 열어봐야 안다.
-    + '<span class="tkb-aud">' + _tbEsc(_audLabel(t)) + '</span>'
+    //   대상 인원수는 서버가 세어 뒤따라 채운다 (_tkbFillAud)
+    + '<span class="tkb-aud" data-tkb-aud="' + _tbEsc(id) + '">'
+      + _tbEsc(_audLabel(t)) + '<em></em></span>'
     + '</button>';
 
   if(_tkbState.open === id){
@@ -37843,7 +37954,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.01-g';
+var TAAM_WEB_BUILD = '2026.09.01-h';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
