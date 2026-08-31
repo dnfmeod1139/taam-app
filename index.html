@@ -2248,6 +2248,30 @@ html.auto-login .splash .bottom-group{display:none !important}
 #mbBody{overflow-x:hidden;overscroll-behavior-x:none;touch-action:pan-y}
 #mbBody .mb-nm,#mbBody .mb-sub,#mbBody .tb-empty{overflow-wrap:anywhere}
 .mb-bar{flex:none;background:#f7f5f2;border-bottom:1px solid rgba(0,0,0,.06);padding:10px 14px 11px}
+/* 🆕 2026.09-01 세그먼트 — 탭 안에서 갈래를 나눈다. 화면을 새로 파지 않는다 */
+.seg{display:flex;gap:4px;background:#EFECE6;border-radius:10px;padding:3px}
+.seg > div{flex:1;text-align:center;padding:8px 4px;border-radius:8px;cursor:pointer;
+  font-size:12px;font-weight:700;color:#79736a}
+.seg > div.on{background:#fff;color:#17150f;box-shadow:0 1px 3px rgba(0,0,0,.07)}
+/* 이용 제한 한 줄 */
+.blk{display:flex;align-items:center;gap:10px;background:#fff;border:1px solid #F2D5D1;
+  border-radius:11px;padding:12px 13px;margin-bottom:7px}
+.blk .tx{flex:1;min-width:0}
+.blk .tx b{display:block;font-size:13px;font-weight:800}
+.blk .tx small{display:block;font-size:11px;color:#9B1C1C;margin-top:3px}
+.blk .un{flex:none;border:1px solid #e0ddd6;background:#fff;border-radius:8px;
+  padding:6px 11px;font-size:11.5px;font-weight:700;color:#79736a;cursor:pointer}
+/* 기준 한 줄 */
+.rule{display:flex;align-items:center;gap:10px;background:#fff;border:1px solid #e3dcce;
+  border-radius:11px;padding:12px 13px;margin-bottom:7px}
+.rule .lb{flex:none;font-size:12.5px;font-weight:800;color:#17150f}
+.rule .df{flex:1;text-align:right;font-size:12px;color:#79736a}
+.rule .ed{flex:none;border:1px solid #e0ddd6;border-radius:8px;padding:5px 10px;
+  font-size:11px;font-weight:700;color:#79736a;background:#fcfaf5;cursor:pointer}
+/* 더하기 줄 */
+.addrow{display:flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;
+  border:1.5px dashed #d8d2c6;border-radius:11px;padding:13px;font-size:12.5px;
+  font-weight:700;color:#79736a;background:#fcfaf5}
 .mb-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;width:100%;text-align:left;
   background:#fff;border:1px solid #e3dcce;border-radius:12px;padding:12px 14px;margin-bottom:8px;
   cursor:pointer;font-family:var(--font-main);color:#17150f}
@@ -12529,8 +12553,13 @@ window.closePromoCarousel = function(){
     <div id="mbCount" style="margin-left:auto;font-family:var(--font-main);font-size:11.5px;font-weight:700;color:#79736a;"></div>
   </div>
   <div class="mb-bar">
+    <!-- 🆕 2026.09-01: 명부 / 접근 제어. 회원 탭은 보는 곳이자 **거는 곳**이다 -->
+    <div class="seg" id="mbSeg">
+      <div class="on" onclick="mbSetSeg('list')">명부</div>
+      <div onclick="mbSetSeg('access')">접근 제어</div>
+    </div>
     <!-- 검색칸은 한 번만 그린다. 다시 그리면 글자를 치는 도중 포커스가 날아간다 -->
-    <div class="rv-q">
+    <div class="rv-q" id="mbQWrap" style="margin-top:8px;">
       <input id="mbQ" type="search" autocomplete="off" placeholder="이름 · 연락처 · 이메일" aria-label="회원 찾기">
       <button id="mbQX" onclick="mbClearQ()" aria-label="지우기" style="display:none;">×</button>
     </div>
@@ -30232,21 +30261,35 @@ function _rvRenderMon(){
   if(!el) return;
   if(_rvSearching()){ el.style.display = 'none'; el.innerHTML = ''; return; }
   el.style.display = '';
-  var t = _tbToday();
-  // 고른 날이 없으면(달을 막 넘겼을 때) 그 달 1일을 말한다 — 빈칸을 두지 않는다
-  var key = _rvState.day || _rvMonKey(_rvState.ym) + '-01';
-  var pp = key.split('-');
-  var d  = new Date(parseInt(pp[0],10), parseInt(pp[1],10)-1, parseInt(pp[2],10));
-  var diff = Math.round((d - t) / 86400000);
-  var sub = diff === 0 ? '오늘'
-          : diff === 1 ? '내일'
-          : diff === -1 ? '어제'
-          : (diff > 0 ? diff + '일 뒤' : (-diff) + '일 전');
+  // 🆕 2026.09-01: 양쪽 화살표는 **달**을 옮긴다.
+  //   종전엔 하루씩 옮겼다. 달력이 한 달을 통째로 보여주고 있는데 화살표가
+  //   하루씩 가면, 달을 넘기려고 서른 번을 눌러야 한다. 날짜는 달력에서
+  //   직접 고르는 것이 빠르고, 화살표가 할 일은 달을 넘기는 것뿐이다.
+  //   (rvDayStep 은 지우지 않는다 — 다른 데서 쓸 수 있다)
+  var ym = _rvState.ym || (function(){ var t0 = _tbToday();
+    return { y:t0.getFullYear(), m:t0.getMonth() }; })();
+  var mk = _rvMonKey(ym);              // 'YYYY-MM'
+  var t  = _tbToday();
+  var isNow = (ym.y === t.getFullYear() && ym.m === t.getMonth());
+
+  // 그 달에 예약이 몇 건인지 — 달을 넘길 때마다 「여긴 몇 건」이 바로 보인다.
+  //   취소는 빼고 센다. 자리를 차지하는 것만이 예약이다.
+  var cnt = 0, pax = 0;
+  (_tbRows || []).forEach(function(r){
+    if(String(r._d || '').indexOf(mk) !== 0) return;
+    var st = _tbStatus(r);
+    if(st && st.s === 'cx') return;
+    cnt++; pax += (parseInt(r.party_size, 10) || 1);
+  });
+  var sub = cnt ? (cnt + '건 · ' + pax + '명') : '예약 없음';
+
+  // 이번 달이 아니면 가운데를 눌러 오늘로 돌아온다 — 화살표로 되짚어 오지 않게
   el.innerHTML =
-      '<button onclick="rvDayStep(-1)" aria-label="이전 날">‹</button>'
-    + '<span class="mid"><b>' + (d.getMonth()+1) + '월 ' + d.getDate() + '일 ('
-      + _tbDayName(d) + ')</b><em>' + sub + '</em></span>'
-    + '<button onclick="rvDayStep(1)" aria-label="다음 날">›</button>';
+      '<button onclick="rvMonStep(-1)" aria-label="이전 달">‹</button>'
+    + '<span class="mid"' + (isNow ? '' : ' onclick="rvGoToday()" style="cursor:pointer"')
+      + '><b>' + ym.y + '년 ' + (ym.m + 1) + '월</b>'
+      + '<em>' + sub + (isNow ? '' : ' · 오늘로 ↩') + '</em></span>'
+    + '<button onclick="rvMonStep(1)" aria-label="다음 달">›</button>';
 }
 
 // 하루씩 옮긴다. 달을 넘어가면 달력도 따라간다 — 시안의 화살표가 하는 일이다.
@@ -30711,7 +30754,234 @@ window.rvMemoOpen = rvMemoOpen; window.rvMemoClose = rvMemoClose; window.rvMemoS
 //        못 사는 상태가 보이지 않았다. 실제로 회원 세 명이 그랬다.
 //   그래서 이 화면은 「저장된 등급」이 아니라 「지금 실제로 먹는 등급」을 센다.
 var _mbRows = null;
-var _mbState = { q:'', filter:'all', open:null };
+var _mbState = { q:'', filter:'all', open:null, seg:'list' };
+
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026.09-01 접근 제어 — 회원 탭은 보는 곳이자 「거는 곳」이다
+// ═══════════════════════════════════════════════════════════════
+//   여기서 정한 것이 티켓을 발행할 때 「공개 대상」의 재료가 된다.
+//   명단을 티켓마다 새로 짜면 매번 같은 일을 반복한다.
+//
+//   이용 제한  member_bans     — 모든 티켓에서 자동 제외 (until 지나면 해제)
+//   방문 기준  visit_tier_rules — '*' 가 기본, 매장 행이 있으면 그것이 이긴다
+//
+//   ⚠ 쓰기는 슈퍼어드민만 (RLS). 앱이 막는 게 아니라 서버가 막는다.
+var _acBans = null, _acRules = null;
+
+async function _acLoadAccess(){
+  if(!window.sb) return;
+  try{
+    var b = await window.sb.from('member_bans')
+      .select('user_id, reason, banned_at, until').order('banned_at', { ascending:false });
+    _acBans = b.error ? [] : (b.data || []);
+    if(b.error) console.warn('[access] 이용제한 조회 실패:', b.error.message);
+  }catch(e){ _acBans = []; }
+  try{
+    var r = await window.sb.from('visit_tier_rules')
+      .select('restaurant_id, repeat_min, regular_min').order('restaurant_id');
+    _acRules = r.error ? [] : (r.data || []);
+    if(r.error) console.warn('[access] 방문기준 조회 실패:', r.error.message);
+  }catch(e){ _acRules = []; }
+}
+
+function _acSqlMissing(){
+  // 두 표가 다 비어 있고 기본 행('*')도 없으면 SQL 이 아직 안 돌아간 것이다
+  return Array.isArray(_acRules) && !_acRules.some(function(x){ return x.restaurant_id === '*'; });
+}
+
+function _acName(uid){
+  var p = (_mbRows || []).find(function(x){ return String(x.id) === String(uid); });
+  if(!p) return String(uid).slice(0, 8) + '…';
+  return p.display_name || p.phone || String(uid).slice(0, 8) + '…';
+}
+function _acRestName(rid){
+  if(rid === '*') return '기본 (정하지 않은 매장 전부)';
+  var r = (restaurantDB || []).find(function(x){ return String(x.id) === String(rid); });
+  return (r && (r.name || r.nameKo)) || String(rid).slice(0, 12) + '…';
+}
+
+function _acRenderAccess(){
+  var el = document.getElementById('mbBody');
+  if(!el) return;
+  if(_acBans === null || _acRules === null){
+    el.innerHTML = '<div class="tb-empty">불러오는 중…</div>'; return;
+  }
+  if(_acSqlMissing()){
+    el.innerHTML = '<div class="tb-empty">접근 제어가 아직 준비되지 않았습니다.'
+      + '<br><span style="color:#a69f94">sql/ticket_audience.sql 을 Supabase SQL Editor 에서 먼저 실행해주세요.</span></div>';
+    return;
+  }
+
+  var today = _taamTodayKst();   // 'YYYYMMDD'
+  var live = (_acBans || []).filter(function(b){
+    if(!b.until) return true;
+    return String(b.until).replace(/[^0-9]/g, '') >= today;
+  });
+
+  var h = '<div class="mo-grp" style="margin-top:2px;">이용 제한 '
+        + (live.length ? '<span style="color:#9B1C1C;">' + live.length + '</span>' : '') + '</div>';
+  if(!live.length){
+    h += '<div class="tb-empty" style="padding:22px 20px;">제한된 회원이 없습니다.</div>';
+  } else {
+    live.forEach(function(b){
+      h += '<div class="blk"><div class="tx"><b>' + _tbEsc(_acName(b.user_id)) + '</b>'
+        + '<small>' + _tbEsc(b.reason || '사유 없음')
+        + (b.until ? ' · ' + _tbEsc(String(b.until)) + ' 까지' : ' · 기한 없음') + '</small></div>'
+        + '<span class="un" onclick="acUnban(\'' + b.user_id + '\')">해제</span></div>';
+    });
+  }
+  h += '<div class="addrow" onclick="acBanPick()">＋ 회원 추가</div>'
+    +  '<div style="font-size:11px;color:#a69f94;line-height:1.75;margin-top:9px;">'
+    +  '제한된 회원은 <b style="color:#79736a;">모든 티켓에서 자동 제외</b>됩니다. 발행할 때 따로 뺄 필요가 없습니다.</div>';
+
+  // ── 방문 등급 기준 ──
+  var base = (_acRules || []).find(function(x){ return x.restaurant_id === '*'; })
+           || { repeat_min:1, regular_min:3 };
+  var per  = (_acRules || []).filter(function(x){ return x.restaurant_id !== '*'; });
+
+  h += '<div class="mo-grp">방문 등급 기준</div>'
+    +  '<div class="rule"><span class="lb">첫 방문</span>'
+    +    '<span class="df">이 매장 방문 ' + (base.repeat_min - 1) + '회 이하</span></div>'
+    +  '<div class="rule"><span class="lb">재방문</span>'
+    +    '<span class="df">' + base.repeat_min + '회 이상</span>'
+    +    '<span class="ed" onclick="acEditRule(\'*\')">수정</span></div>'
+    +  '<div class="rule"><span class="lb">단골</span>'
+    +    '<span class="df">' + base.regular_min + '회 이상</span>'
+    +    '<span class="ed" onclick="acEditRule(\'*\')">수정</span></div>'
+    +  '<div style="font-size:11px;color:#a69f94;line-height:1.75;margin-top:2px;">'
+    +  '<b style="color:#79736a;">방문 완료로 기록된 것만</b> 셉니다 — 취소 · 노쇼는 방문이 아닙니다.</div>';
+
+  h += '<div class="mo-grp">매장별로 다르게 '
+    +  (per.length ? '<span style="color:#79736a;">' + per.length + '곳</span>' : '') + '</div>';
+  per.forEach(function(r){
+    h += '<div class="rule"><span class="lb" style="max-width:46%;overflow:hidden;'
+      +  'text-overflow:ellipsis;white-space:nowrap;">' + _tbEsc(_acRestName(r.restaurant_id)) + '</span>'
+      +  '<span class="df">재방문 ' + r.repeat_min + '+ · 단골 ' + r.regular_min + '+</span>'
+      +  '<span class="ed" onclick="acEditRule(\'' + r.restaurant_id + '\')">수정</span></div>';
+  });
+  h += '<div class="addrow" onclick="acAddRestRule()">＋ 매장 기준 추가</div>'
+    +  '<div style="font-size:11px;color:#a69f94;line-height:1.75;margin-top:9px;">'
+    +  '정하지 않은 매장은 기본 기준을 씁니다. 한 달에 한 번 여는 가게와 매주 여는 가게에서 '
+    +  '「단골」이 같은 수일 수 없습니다.</div>';
+
+  el.innerHTML = h;
+}
+
+function mbSetSeg(s){
+  _mbState.seg = s;
+  _mbState.open = null;
+  var seg = document.getElementById('mbSeg');
+  if(seg) Array.prototype.forEach.call(seg.children, function(d, i){
+    d.classList.toggle('on', (i === 0) === (s === 'list'));
+  });
+  // 접근 제어에서는 회원 검색·필터가 할 일이 없다. 자리만 차지한다.
+  var qw = document.getElementById('mbQWrap');
+  if(qw) qw.style.display = (s === 'list') ? '' : 'none';
+  var fl = document.getElementById('mbFilters');
+  if(fl) fl.style.display = (s === 'list') ? '' : 'none';
+  var cnt = document.getElementById('mbCount');
+  if(cnt) cnt.style.display = (s === 'list') ? '' : 'none';
+
+  if(s === 'access'){
+    var el = document.getElementById('mbBody');
+    if(el) el.innerHTML = '<div class="tb-empty">불러오는 중…</div>';
+    if(_acBans === null || _acRules === null){
+      _acLoadAccess().then(function(){ if(_mbState.seg === 'access') _acRenderAccess(); });
+    } else {
+      _acRenderAccess();
+    }
+  } else {
+    _mbRender();
+  }
+}
+window.mbSetSeg = mbSetSeg;
+
+// ── 이용 제한 걸기 · 풀기 ──────────────────────────────────────
+async function acUnban(uid){
+  if(!window.sb) return;
+  if(!confirm(_acName(uid) + ' 님의 이용 제한을 해제할까요?')) return;
+  var res = await window.sb.from('member_bans').delete().eq('user_id', uid);
+  if(res.error){ showToast('⚠','해제 실패', String(res.error.message || '').slice(0,70)); return; }
+  _acBans = (_acBans || []).filter(function(b){ return String(b.user_id) !== String(uid); });
+  showToast('✓','해제됨', _acName(uid));
+  _acRenderAccess();
+}
+window.acUnban = acUnban;
+
+function acBanPick(){
+  // 명부를 그대로 쓴다 — 회원 목록을 두 벌 만들지 않는다
+  var q = prompt('제한할 회원을 찾습니다.\n이름 · 연락처 · 이메일 일부를 입력하세요.');
+  if(q === null) return;
+  q = String(q).trim().toLowerCase();
+  if(!q) return;
+  var hit = (_mbRows || []).filter(function(p){
+    return ((p.display_name || '') + ' ' + (p.phone || '') + ' ' + (p.email || ''))
+             .toLowerCase().indexOf(q) >= 0;
+  }).slice(0, 12);
+  if(!hit.length){ showToast('⚠','없음','「' + q + '」에 맞는 회원이 없습니다'); return; }
+  var lines = hit.map(function(p, i){
+    return (i + 1) + '. ' + (p.display_name || '(이름없음)') + '  ' + (p.phone || '');
+  }).join('\n');
+  var pick = prompt('몇 번을 제한할까요?\n\n' + lines);
+  var idx = parseInt(pick, 10);
+  if(!idx || idx < 1 || idx > hit.length) return;
+  var target = hit[idx - 1];
+  var reason = prompt((target.display_name || '이 회원') + ' 님을 제한합니다.\n사유를 적어주세요 (노쇼 3회 · 결제 분쟁 등)');
+  if(reason === null) return;
+  acBan(target.id, String(reason).trim());
+}
+window.acBanPick = acBanPick;
+
+async function acBan(uid, reason){
+  if(!window.sb) return;
+  var res = await window.sb.from('member_bans')
+    .upsert({ user_id: uid, reason: reason || null,
+              banned_by: (typeof _currentUserId === 'function' ? _currentUserId() : null) },
+            { onConflict: 'user_id' });
+  if(res.error){ showToast('⚠','제한 실패', String(res.error.message || '').slice(0,70)); return; }
+  await _acLoadAccess();
+  showToast('✓','이용 제한', _acName(uid));
+  _acRenderAccess();
+}
+
+// ── 방문 등급 기준 ────────────────────────────────────────────
+async function acEditRule(rid){
+  var cur = (_acRules || []).find(function(x){ return String(x.restaurant_id) === String(rid); })
+          || { repeat_min:1, regular_min:3 };
+  var a = prompt(_acRestName(rid) + '\n\n재방문은 몇 회부터입니까?', String(cur.repeat_min));
+  if(a === null) return;
+  var b = prompt(_acRestName(rid) + '\n\n단골은 몇 회부터입니까?', String(cur.regular_min));
+  if(b === null) return;
+  var rp = parseInt(a, 10), rg = parseInt(b, 10);
+  if(!(rp >= 1) || !(rg >= rp)){
+    showToast('⚠','값이 맞지 않습니다','재방문 ≥ 1 · 단골 ≥ 재방문 이어야 합니다'); return;
+  }
+  var res = await window.sb.from('visit_tier_rules')
+    .upsert({ restaurant_id: String(rid), repeat_min: rp, regular_min: rg,
+              updated_at: new Date().toISOString() }, { onConflict: 'restaurant_id' });
+  if(res.error){ showToast('⚠','저장 실패', String(res.error.message || '').slice(0,70)); return; }
+  await _acLoadAccess();
+  showToast('✓','기준 저장', _acRestName(rid) + ' · 재방문 ' + rp + '+ · 단골 ' + rg + '+');
+  _acRenderAccess();
+}
+window.acEditRule = acEditRule;
+
+function acAddRestRule(){
+  var q = prompt('기준을 따로 정할 매장을 찾습니다.\n매장 이름 일부를 입력하세요.');
+  if(q === null) return;
+  q = String(q).trim().toLowerCase();
+  if(!q) return;
+  var hit = (restaurantDB || []).filter(function(r){
+    return String(r.name || '').toLowerCase().indexOf(q) >= 0;
+  }).slice(0, 12);
+  if(!hit.length){ showToast('⚠','없음','「' + q + '」에 맞는 매장이 없습니다'); return; }
+  var lines = hit.map(function(r, i){ return (i + 1) + '. ' + (r.name || r.id); }).join('\n');
+  var pick = prompt('몇 번 매장입니까?\n\n' + lines);
+  var idx = parseInt(pick, 10);
+  if(!idx || idx < 1 || idx > hit.length) return;
+  acEditRule(String(hit[idx - 1].id));
+}
+window.acAddRestRule = acAddRestRule;
 var _mbQTimer = null;
 
 // 실효 등급 — _refreshUserGrade 와 같은 규칙이라야 한다.
@@ -30752,7 +31022,16 @@ async function mbOpen(){
     if(typeof showToast === 'function') showToast('🔒','권한 부족','슈퍼어드민 전용');
     return;
   }
-  _mbState = { q:'', filter:'all', open:null };
+  _mbState = { q:'', filter:'all', open:null, seg:'list' };
+  // 세그먼트는 열 때마다 「명부」로 되돌린다 — 접근 제어를 보다 나갔다가
+  //   다시 들어왔는데 거기가 열려 있으면 회원을 찾으러 온 사람이 헤맨다
+  var _seg = document.getElementById('mbSeg');
+  if(_seg) Array.prototype.forEach.call(_seg.children, function(d, i){
+    d.classList.toggle('on', i === 0);
+  });
+  ['mbQWrap','mbFilters','mbCount'].forEach(function(id){
+    var e = document.getElementById(id); if(e) e.style.display = '';
+  });
   _acCloseOthers('mb');
   openSubPage('mbScreen');
   var q = document.getElementById('mbQ');
@@ -30845,6 +31124,9 @@ function _mbRenderFilters(){
 function _mbRenderBody(){
   var el = document.getElementById('mbBody');
   if(!el) return;
+  // 접근 제어를 보고 있는 동안에는 명부가 덮어쓰지 않는다.
+  //   _mbRender() 가 다른 곳(등급 저장·통화 지정 등)에서도 불린다.
+  if(_mbState.seg === 'access'){ _acRenderAccess(); return; }
   if(_mbRows === null){ el.innerHTML = '<div class="tb-empty">불러오는 중…</div>'; return; }
 
   var list = _mbBase().filter(function(p){ return _mbPass(p, _mbState.filter); });
