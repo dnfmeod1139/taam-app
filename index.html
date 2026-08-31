@@ -30234,6 +30234,46 @@ function _dashRender(){
     h += '</div>';
   }
 
+  // ── 다음 영업 (파트너) ──
+  //   매장이 아침에 궁금한 것은 「오늘 몇 명」이 아니라 「다음에 언제 몇 명」이다.
+  //   한 달에 몇 번 여는 가게라 오늘은 대개 비어 있다.
+  //   ⚠ 슈퍼어드민에게는 안 보인다 — 여러 매장이 섞여 「다음 영업」이 뜻을 잃는다.
+  if(!isSuper){
+    var tk0 = _tbKey(_tbToday());
+    var nextKey = null;
+    (_tbRows || []).forEach(function(r){
+      var d = String(r._d || '');
+      if(!d || d < tk0) return;
+      var st0 = _tbStatus(r);
+      if(st0 && st0.s === 'cx') return;
+      if(!nextKey || d < nextKey) nextKey = d;
+    });
+    if(nextKey){
+      var nc = 0, np2 = 0, lunch = 0, dinner = 0;
+      (_tbRows || []).forEach(function(r){
+        if(String(r._d || '') !== nextKey) return;
+        var st1 = _tbStatus(r);
+        if(st1 && st1.s === 'cx') return;
+        nc++; np2 += (parseInt(r.party_size, 10) || 1);
+        if((parseInt(r._m, 10) || 0) < 15 * 60) lunch++; else dinner++;
+      });
+      var pp2 = nextKey.split('-');
+      var nd = new Date(parseInt(pp2[0],10), parseInt(pp2[1],10) - 1, parseInt(pp2[2],10));
+      var days = Math.round((nd - _tbToday()) / 86400000);
+      var when = days === 0 ? '오늘' : days === 1 ? '내일' : days + '일 뒤';
+      h += '<div class="mo-grp">다음 영업</div><div class="sum" onclick="acGo(\'rv\')">'
+        +  '<div class="hd"><b>' + (nd.getMonth() + 1) + '월 ' + nd.getDate() + '일 ('
+        +  _tbDayName(nd) + ')</b><span class="v">' + np2 + '</span>'
+        +  '<span class="u">명</span><span class="chev">›</span></div>'
+        +  '<div class="sub">'
+        +  '<span class="bit">' + nc + '건</span>'
+        +  (lunch ? '<span class="bit mute">점심 <b>' + lunch + '</b></span>' : '')
+        +  (dinner ? '<span class="bit mute">저녁 <b>' + dinner + '</b></span>' : '')
+        +  '<span class="bit mute">' + when + '</span>'
+        +  '</div></div>';
+    }
+  }
+
   // ── 티켓 ──
   var base = (typeof _tkbBase === 'function') ? _tkbBase() : [];
   var live = 0, hide = 0, sold = 0, cap = 0, used = 0, next = null;
