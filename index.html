@@ -29770,7 +29770,17 @@ async function _tbLoad(){
     }
     if(res.error){ console.warn('[today] 조회 실패:', res.error.message); _tbRows = []; return; }
     _tbRows = (res.data || []).filter(function(r){
-      if(String(r.purchase_id || '').indexOf('PAYH-') === 0) return false;   // 결제 전 홀드
+      // 🆕 2026.09-01: **id 앞머리가 아니라 상태로 판단한다.**
+      //   종전엔 purchase_id 가 PAYH- 로 시작하면 무조건 「결제 전 홀드」로 보고
+      //   뺐다. 그런데 홀드로 잡은 좌석이 **그대로 결제되면** purchase_id 는
+      //   PAYH- 인 채로 남는다. 그 건은 진짜 예약인데 어드민 화면에서 통째로
+      //   안 보이고 있었다 (2026.09.10 이창훈 님 예약이 그랬다).
+      //   홀드는 status='hold' 로 만들어지므로, 확정된 상태면 보여준다.
+      var _pid = String(r.purchase_id || '');
+      var _st  = String(r.status || '');
+      if((_pid.indexOf('PAYH-') === 0 || _pid.indexOf('INVH-') === 0)
+         && _st !== 'active' && _st !== 'completed' && _st !== 'manual') return false;
+      if(_st === 'hold') return false;
       return !!r.reservation_date;
     }).map(function(r){
       var d = (typeof _dParseDate === 'function') ? _dParseDate(String(r.reservation_date)) : null;
@@ -29778,6 +29788,37 @@ async function _tbLoad(){
       r._m = _tbMins(r.visit_time);
       return r;
     }).filter(function(r){ return r._d; });
+
+    // 🆕 2026.09-01: 이름이 빈 예약을 회원 프로필로 채운다.
+    //   154건 중 86건(56%)이 buyer_name 이 비어 있다. 대개 초대(INV-) 건인데,
+    //   그 화면에서 「(이름없음)」이 절반이면 누가 오는지를 알 수가 없다.
+    //   user_id 는 남아 있으니 그걸로 채운다. **DB 는 건드리지 않는다** —
+    //   화면에서만 보여주는 것이라, 실패해도 예전처럼 (이름없음)일 뿐이다.
+    try{
+      var _need = {};
+      _tbRows.forEach(function(r){
+        if(!String(r.buyer_name || '').trim() && r.user_id) _need[r.user_id] = 1;
+      });
+      var _ids = Object.keys(_need);
+      if(_ids.length){
+        var _pr = await window.sb.from('profiles')
+          .select('id, display_name, phone').in('id', _ids);
+        if(_pr.error){
+          console.warn('[today] 이름 채우기 실패(무시):', _pr.error.message);
+        } else {
+          var _map = {};
+          (_pr.data || []).forEach(function(p){ _map[p.id] = p; });
+          _tbRows.forEach(function(r){
+            if(String(r.buyer_name || '').trim()) return;
+            var p = _map[r.user_id];
+            if(!p) return;
+            var nm = String(p.display_name || '').trim();
+            if(nm) r.buyer_name = nm;
+            if(!String(r.buyer_phone || '').trim() && p.phone) r.buyer_phone = p.phone;
+          });
+        }
+      }
+    }catch(_pe){ console.warn('[today] 이름 채우기 예외(무시):', _pe); }
   }catch(e){ console.warn('[today] 예외:', e); _tbRows = []; }
 }
 
@@ -36783,7 +36824,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.31-ac';
+var TAAM_WEB_BUILD = '2026.09.01-a';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
