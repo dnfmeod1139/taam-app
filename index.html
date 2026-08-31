@@ -1454,6 +1454,11 @@ html.auto-login .splash .bottom-group{display:none !important}
 .charge-btn{width:100%;padding:16px;background:#1a1a18;border:none;border-radius:10px;font-family:var(--font-main);font-size:10px;font-weight:800;letter-spacing:.22em;text-transform:uppercase;color:#fff;cursor:pointer}
 
 /* ── ADMIN ── */
+/* 🆕 2026.09-01 콘솔(.sub-screen 635) 위에서 연 마이페이지 화면만 층을 올린다.
+   .mp-subpage 의 전역 620 은 건드리지 않는다 — 마이페이지에서 여는
+   기존 흐름의 층은 그대로여야 한다. */
+.mp-subpage.mp-over-sub{z-index:660}
+
 .admin-screen{position:fixed;inset:0;z-index:620;background:#f7f5f2;display:none;flex-direction:column;font-family:var(--font-main);overflow:hidden}
 .admin-header{padding:54px 24px 16px;border-bottom:1px solid rgba(0,0,0,.08);display:flex;align-items:center;justify-content:space-between;flex-shrink:0;background:#f7f5f2}
 .admin-title{font-family:var(--font-main);font-size:9px;font-weight:700;letter-spacing:.4em;text-transform:uppercase;color:#555}
@@ -12658,6 +12663,22 @@ window.closePromoCarousel = function(){
   </div>
   <div id="tkbBody" class="sub-content" style="padding:14px 14px 90px;"></div>
   <div class="ac-tabs" id="tkbTabs" role="tablist"></div>
+</div>
+
+<!-- 🆕 2026.09-01: 「내 매장」 — 파트너의 넷째 탭.
+     매장 정보 · 알림 수신처 · 내 정보(회원)를 한 곳에 모은다.
+     지금은 이 셋이 「나의 레스토랑」 화면 아래쪽에 묻혀 있어서,
+     알림이 안 와도 어디를 봐야 하는지 모른다. -->
+<div id="pshScreen" class="sub-screen" data-lang-lock="ko" style="display:none;">
+  <div class="sub-header">
+    <button class="sub-back" onclick="closeSubPage('pshScreen')">←</button>
+    <div class="sub-title">내 매장</div>
+    <div id="pshBuild" onclick="acCopyBuild()" title="눌러서 복사"
+      style="margin-left:auto;font-family:'Montserrat',sans-serif;font-size:10px;
+      letter-spacing:.08em;color:#c4bdb2;cursor:pointer;"></div>
+  </div>
+  <div id="pshBody" class="sub-content" style="padding:14px 14px 90px;"></div>
+  <div class="ac-tabs" id="pshTabs" role="tablist"></div>
 </div>
 
 <!-- 🆕 2026.09-01: 공개 대상 — 조건은 회원 탭에서 정하고 여기선 고르기만 한다 -->
@@ -32159,7 +32180,7 @@ var AC_MENU_RULES = [
   { tab:'mb',  grp:'예치금',      re:/예치금/ },
   { tab:'mb',  grp:'초대 · 알림', re:/예약 초대 발송|발송한 예약 초대|오픈 알림 발송|회원 초대/ }
 ];
-var AC_TAB_NAME = { today:'대시보드', rv:'예약', tkb:'티켓', mb:'회원', mo:'더보기' };
+var AC_TAB_NAME = { today:'대시보드', rv:'예약', tkb:'티켓', mb:'회원', mo:'더보기', shop:'내 매장' };
 
 function _acMenuOf(title){
   for(var i = 0; i < AC_MENU_RULES.length; i++){
@@ -32240,7 +32261,10 @@ window._acApplyLean = _acApplyLean;
 //   각자 상태를 들고 잘 돌고 있고, 하나로 합치면 그 상태를 전부 다시 짜야 한다.
 //   합치는 것이 목적이 아니라 오가는 것이 목적이다.
 var AC_TABS_SUPER   = [['today','대시보드'], ['rv','예약'], ['tkb','티켓'], ['mb','회원'], ['mo','더보기']];
-var AC_TABS_PARTNER = [['today','대시보드'], ['rv','예약'], ['tkb','티켓']];
+// 🆕 2026.09-01: 파트너에게 넷째 탭 「내 매장」.
+//   슈퍼어드민의 「회원」·「더보기」는 자기 매장 밖의 것이라 주지 않는다.
+//   대신 그 자리에 매장 정보 · 알림 수신처 · 내 정보를 모은다.
+var AC_TABS_PARTNER = [['today','대시보드'], ['rv','예약'], ['tkb','티켓'], ['shop','내 매장']];
 
 function _acTabList(){
   return (typeof _isSuperAdmin === 'function' && _isSuperAdmin()) ? AC_TABS_SUPER : AC_TABS_PARTNER;
@@ -32273,14 +32297,14 @@ function _acRenderTabs(active){
       + (t[0] === 'today' && todo ? '<span class="bdg">' + todo + '</span>' : '')
       + '</button>';
   }).join('');
-  ['tbTabs','rvTabs','mbTabs','tkbTabs','moTabs'].forEach(function(id){
+  ['tbTabs','rvTabs','mbTabs','tkbTabs','moTabs','pshTabs'].forEach(function(id){
     var el = document.getElementById(id);
     if(el) el.innerHTML = html;
   });
 }
 window._acRenderTabs = _acRenderTabs;
 
-var AC_SCREEN = { today:'todayBoardScreen', rv:'rvScreen', tkb:'tkbScreen', mb:'mbScreen', mo:'moScreen' };
+var AC_SCREEN = { today:'todayBoardScreen', rv:'rvScreen', tkb:'tkbScreen', mb:'mbScreen', mo:'moScreen', shop:'pshScreen' };
 
 // 이 화면을 열 때 나머지 넷을 닫는다.
 //   탭으로 오든 어드민 메뉴에서 바로 오든 같아야 한다 — 종전엔 탭으로 올 때만
@@ -32302,8 +32326,158 @@ function acGo(tab){
   else if(tab === 'tkb') tkbOpen();
   else if(tab === 'mb')  mbOpen();
   else if(tab === 'mo')  moOpen();
+  else if(tab === 'shop') pshOpen();
 }
 window.acGo = acGo;
+
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026.09-01 「내 매장」 — 파트너의 넷째 탭
+// ═══════════════════════════════════════════════════════════════
+//   매장 정보 · 알림 수신처 · 내 정보(회원)를 한 곳에 모은다.
+//   화면을 새로 만들지 않는다 — 원래 화면을 그대로 연다.
+//
+//   ⚠ 파트너도 회원이다. 티켓을 살 때는 슈퍼어드민이 지정한 자기 등급을
+//     따른다 — 매장 어드민이어도 M 전용 티켓은 보이지 않는다.
+var _pshNotify = null;
+
+async function pshOpen(){
+  var isSuper = (typeof _isSuperAdmin === 'function') && _isSuperAdmin();
+  if(!isSuper && _currentRole !== 'admin'){
+    if(typeof showToast === 'function') showToast('🔒','권한 부족','매장 어드민 전용');
+    return;
+  }
+  _acCloseOthers('shop');
+  openSubPage('pshScreen');
+  var bt = document.getElementById('pshBuild');
+  if(bt) bt.textContent = 'BUILD ' + TAAM_WEB_BUILD;
+  _pshRender();
+  _acRenderTabs('shop');
+  // 알림 수신처는 도착하면 조용히 갈아 끼운다 — 첫 그림을 늦추지 않는다
+  if(_pshNotify === null) await _pshLoadNotify();
+  var s = document.getElementById('pshScreen');
+  if(s && s.style.display !== 'none') _pshRender();
+}
+window.pshOpen = pshOpen;
+
+async function _pshLoadNotify(){
+  _pshNotify = {};
+  try{
+    var rid = String(_currentAdminRestId || '');
+    if(!rid || !window.sb) return;
+    var r = await window.sb.from('venue_partners')
+      .select('notify_phone, notify_line_id').eq('venue_id', rid).maybeSingle();
+    if(r.error){ console.warn('[shop] 알림 수신처 조회 실패:', r.error.message); return; }
+    _pshNotify = r.data || {};
+  }catch(e){ console.warn('[shop] 알림 수신처 예외:', e); }
+}
+
+function _pshRender(){
+  var el = document.getElementById('pshBody');
+  if(!el) return;
+  var restName = _currentAdminRestName || '레스토랑 미지정';
+  var n = _pshNotify || {};
+  var phone = String(n.notify_phone || '').trim();
+  var line  = String(n.notify_line_id || '').trim();
+
+  // 이번 달 확정 — 내 매장 기준. RLS 가 이미 자기 매장만 내려준다.
+  var t0 = _tbToday();
+  var mk = t0.getFullYear() + '-' + String(t0.getMonth() + 1).padStart(2, '0');
+  var mc = 0, mp = 0;
+  (_tbRows || []).forEach(function(r){
+    if(String(r._d || '').indexOf(mk) !== 0) return;
+    var st = _tbStatus(r);
+    if(st && st.s === 'cx') return;
+    mc++; mp += (parseInt(r.party_size, 10) || 1);
+  });
+
+  var h = '<div class="me"><div class="n">' + _tbEsc(restName) + '</div>'
+    + '<div class="s">' + (_currentAdminRestId ? '' : '슈퍼어드민에게 매장 연동을 요청하세요') + '</div>'
+    + '<div class="b"><span class="bl">이번 달 확정</span>'
+    + '<span class="bv">' + mc + '건 · ' + mp + '명</span></div></div>';
+
+  h += '<div class="mo-grp">매장</div><div class="stack">'
+    +  '<button class="mo-item" onclick="closeSubPage(\'pshScreen\');openSubPage(\'partnerRestScreen\');">'
+    +    '<span class="mo-t">매장 정보<small>소개 · 사진 · 영업시간 · 알림 수신처</small></span>'
+    +    '<span class="mo-chev">›</span></button>'
+    +  '<button class="mo-item" onclick="closeSubPage(\'pshScreen\');openPartnerTU();">'
+    +    '<span class="mo-t">티켓 업로드 신청<small>TAAM 승인 후 게시됩니다</small></span>'
+    +    '<span class="mo-chev">›</span></button>'
+    + '</div>';
+
+  // ── 알림 받기 ──
+  var pill = function(ok, txt){
+    return '<span class="tb-pill ' + (ok ? 'tb-p-paid' : 'tb-p-wait')
+         + '" style="margin-top:0;flex:none;">' + txt + '</span>';
+  };
+  h += '<div class="mo-grp">알림 받기</div><div class="stack">'
+    +  '<div class="mo-item" style="cursor:default;"><span class="mo-t">카카오 알림톡<small>'
+    +    (phone ? _tbEsc(phone) : '번호가 비어 있습니다') + '</small></span>'
+    +    pill(!!phone, phone ? '연결됨' : '미설정') + '</div>'
+    +  '<div class="mo-item" style="cursor:default;"><span class="mo-t">LINE<small>'
+    +    (line ? '연결된 ID 가 있습니다' : '공식 계정을 친구 추가하면 ID 가 옵니다') + '</small></span>'
+    +    pill(!!line, line ? '연결됨' : '미연결') + '</div>'
+    + '</div>'
+    + '<div style="font-size:11px;color:#a69f94;line-height:1.75;margin-top:9px;">'
+    + '수신처는 <b style="color:#79736a;">매장 정보</b> 화면에서 바꿉니다. '
+    + '비어 있으면 그 채널만 조용히 건너뜁니다 — 앱 푸시는 그대로 나갑니다.</div>';
+
+  // ── 내 정보 (파트너도 회원이다) ──
+  var grade = window._currentUserGrade || '';
+  h += '<div class="mo-grp">내 정보 <span style="color:#3A5A6B;">회원</span></div>'
+    +  '<div class="me" style="background:#fff;border:1px solid #e3dcce;">'
+    +    '<div class="n" style="color:#17150f;">' + _tbEsc(window._currentUserName || '—')
+    +      (grade ? '<span class="tg" style="background:#EFECE6;color:#46413A;">'
+                  + _tbEsc(grade) + ' 등급</span>' : '') + '</div>'
+    +    '<div class="s" style="color:#79736a;">' + _tbEsc(window._currentUserEmail || '') + '</div>'
+    +    '<div class="b" style="border-top-color:#efe9dc;">'
+    +      '<span class="bl" style="color:#a69f94;">예치금</span>'
+    +      '<span class="bv" style="color:#17150f;">'
+    +      ((typeof currentDepositBalance !== 'undefined' && typeof taamMoney === 'function')
+          ? taamMoney(currentDepositBalance) : '—') + '</span></div></div>'
+    +  '<div class="stack" style="margin-top:9px;">'
+    +    '<button class="mo-item" onclick="pshMy(\'tkt\')">'
+    +      '<span class="mo-t">티켓 구매 내역 · 예치금<small>회원으로 산 것</small></span>'
+    +      '<span class="mo-chev">›</span></button>'
+    +    '<button class="mo-item" onclick="pshMy(\'profile\')">'
+    +      '<span class="mo-t">회원정보 변경</span><span class="mo-chev">›</span></button>'
+    +    '<button class="mo-item" onclick="pshMy(\'notif\')">'
+    +      '<span class="mo-t">알림 설정</span><span class="mo-chev">›</span></button>'
+    +    '<button class="mo-item" onclick="pshMy(\'pwd\')">'
+    +      '<span class="mo-t">비밀번호 설정/변경</span><span class="mo-chev">›</span></button>'
+    +    '<button class="mo-item" onclick="confirmLogout()">'
+    +      '<span class="mo-t" style="color:#9B1C1C;">로그아웃</span>'
+    +      '<span class="mo-chev">›</span></button>'
+    +  '</div>'
+    +  '<div style="font-size:11px;color:#a69f94;line-height:1.75;margin-top:9px;">'
+    +  '티켓을 살 때는 <b style="color:#79736a;">회원 등급</b>을 따릅니다 — '
+    +  '매장 어드민이어도 상위 등급 전용 티켓은 보이지 않습니다.</div>';
+
+  el.innerHTML = h;
+  // 이름·잔액은 서버값으로 조용히 맞춘다
+  try{ if(typeof _refreshMyPageUserName === 'function') _refreshMyPageUserName(); }catch(e){}
+  try{ if(typeof taamSyncNow === 'function') taamSyncNow(true); }catch(e){}
+}
+
+// 원래 마이페이지 화면을 그대로 연다. 층만 올린다 —
+//   .mp-subpage(620) 는 콘솔 화면(.sub-screen 635) 뒤에 깔린다.
+function pshMy(kind){
+  var raise = function(id){
+    var e = document.getElementById(id);
+    if(e) e.classList.add('mp-over-sub');
+  };
+  var run = {
+    tkt:     function(){ raise('ticketHistPage'); openPage('ticketHistPage', renderTicketHist); },
+    profile: function(){ raise('profileEditPage'); openProfileEdit(); },
+    notif:   function(){ raise('notifSettingsPage'); openNotifSettings(); },
+    pwd:     function(){ openMemberPwdModal(); }
+  }[kind];
+  if(!run) return;
+  try{ run(); }catch(e){
+    console.warn('[내 매장] 열기 실패:', e);
+    showToast('⚠','열지 못했습니다', String(e && e.message || e).slice(0, 60));
+  }
+}
+window.pshMy = pshMy;
 
 // 빌드 번호를 눌러 복사한다 — 「지금 어떤 빌드인지」를 물어볼 때 그대로 붙여넣게
 function acCopyBuild(){
@@ -37546,7 +37720,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.01-c';
+var TAAM_WEB_BUILD = '2026.09.01-d';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
