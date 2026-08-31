@@ -2345,6 +2345,27 @@ html.auto-login .splash .bottom-group{display:none !important}
 /* 탭 바가 본문을 가리지 않게 — 각 화면의 아래 여백은 탭 바 높이 + 여유 */
 #tbBody,#rvBody,#mbBody,#tkbBody,#moBody{padding-bottom:24px}
 
+/* ═══ 🆕 2026.08-31 관리자 페이지 통합 ═══
+   어드민·슈퍼어드민은 마이페이지를 거쳐 어드민 화면으로 들어갔다. 하루에도
+   몇 번씩 오가는 길인데 매번 두 화면이었다. 이제 GNB「My」가 곧장 콘솔로
+   가고, 마이페이지에 있던 개인 항목은 「더보기」 맨 위 「내 정보」로 들어온다.
+
+   ⚠ .mp-subpage 는 620 이라 콘솔 화면(.sub-screen 635) 뒤에 깔린다.
+     콘솔에서 연 것만 이 클래스를 달아 위로 올린다 — 전역 값은 건드리지 않는다.
+     마이페이지에서 여는 기존 흐름의 층은 그대로여야 한다. */
+.mp-subpage.mp-over-ac{z-index:660}
+
+.ac-me{background:#17150f;border-radius:14px;padding:15px 17px;margin:2px 0 2px}
+.ac-me-n{font-size:15px;font-weight:800;color:#faf8f3}
+.ac-me-s{font-size:11.5px;color:#a69f94;margin-top:3px}
+.ac-me-b{display:flex;align-items:baseline;justify-content:space-between;gap:10px;
+  margin-top:12px;padding-top:11px;border-top:1px solid rgba(255,255,255,.13)}
+.ac-me-bl{font-family:var(--font-main);font-size:10px;font-weight:800;letter-spacing:.14em;color:#a69f94}
+.ac-me-bv{font-family:'Oswald','Noto Sans KR','Noto Sans JP',sans-serif;font-size:19px;
+  font-weight:600;color:#faf8f3;letter-spacing:.02em}
+.ac-me-tag{display:inline-block;margin-left:7px;padding:2px 8px;border-radius:6px;background:#5d1622;
+  font-family:var(--font-main);font-size:9.5px;font-weight:900;letter-spacing:.1em;color:#fff;vertical-align:1px}
+
 .sub-item-title{font-size:14px;font-weight:700;color:#111;margin-bottom:4px}
 .sub-item-meta{font-family:var(--font-main);font-size:10px;color:#aaa}
 .sub-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:200px;color:#ccc;font-size:13px;gap:8px}
@@ -10529,10 +10550,10 @@ window.closePromoCarousel = function(){
 <div id="partnerAdminScreen" class="partner-screen">
   <div class="partner-header">
     <div>
-      <div class="admin-title">어드민</div>
+      <div class="admin-title">관리자</div>
       <div class="partner-rest-tag" id="partnerRestTag"></div>
     </div>
-    <button class="admin-close-btn" onclick="closePartnerAdmin()">✕</button>
+    <button class="admin-close-btn" onclick="exitPartnerAdmin()">✕</button>
   </div>
   <div class="admin-scroll">
     <!-- 🆕 2026.08-30 3단계: 매장 어드민도 같은 운영 화면을 쓴다.
@@ -10617,6 +10638,9 @@ window.closePromoCarousel = function(){
       </div>
     </div>
   </div>
+  <!-- 🆕 2026.08-31: 메뉴 화면에도 같은 탭 바. 콘솔 화면들만 탭이 있어서
+       여기로 돌아오면 바가 사라졌다 — 「관리자 페이지 하나」로 안 보였다 -->
+  <div class="ac-tabs" id="paTabs" role="tablist"></div>
 </div>
 
 <!-- PARTNER TICKET LIST SCREEN -->
@@ -10666,7 +10690,9 @@ window.closePromoCarousel = function(){
     <button onclick="closeAdmin();" style="position:absolute;left:0;top:50%;transform:translateY(-50%);background:none;border:none;padding:8px;cursor:pointer;display:flex;align-items:center;">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1a1a18" stroke-width="2.5" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg>
     </button>
-    <div class="admin-title" data-i18n="my_page.title" style="text-align:center;width:100%;">마이페이지</div>
+    <!-- 🆕 2026.08-31: 「마이페이지」가 아니라 「관리자」다. 마이페이지는
+         이제 이 화면의 「더보기 → 내 정보」 안에 있다. -->
+    <div class="admin-title" style="text-align:center;width:100%;">관리자</div>
     <button class="admin-close-btn" onclick="closeAdmin()" aria-label="Close">✕</button>
   </div>
   <div class="admin-scroll">
@@ -11156,6 +11182,8 @@ window.closePromoCarousel = function(){
       </div>
     </div>
   </div>
+  <!-- 🆕 2026.08-31: 메뉴 화면에도 같은 탭 바 (파트너 화면과 같은 이유) -->
+  <div class="ac-tabs" id="acTabs" role="tablist"></div>
 </div>
 <div id="restPage" class="restpage" style="display:none;">
   <div class="rp-header">
@@ -16897,6 +16925,9 @@ function updateMpAdminBtn() {
 
 function mpOpenAdmin() {
   closePage('myPage');
+  // 🆕 2026.08-31: 메뉴가 아니라 콘솔 첫 화면(「오늘」)으로. 마이페이지를 거쳐
+  //   들어왔다는 것을 남겨, 나갈 때 그리로 되돌린다.
+  if (typeof openAdminConsole === 'function') { openAdminConsole(true); return; }
   if (_currentRole === 'superadmin') {
     openAdmin();
   } else if (_currentRole === 'admin') {
@@ -18865,7 +18896,19 @@ function gnbGo(tab, btn){
     });
   } catch(e){ console.warn('[gnbGo] cleanup error', e); }
 
-  if(tab==='my'){ openMyPage(); return; }
+  // 🆕 2026.08-31: 어드민·슈퍼어드민은 곧장 관리자 페이지(콘솔)로.
+  //   마이페이지를 거쳐 어드민 버튼을 한 번 더 누르던 것을 없앤다.
+  //   개인 항목은 「더보기 → 내 정보」에 그대로 있다. 회원은 예전 그대로.
+  if(tab==='my'){
+    if(typeof _currentRole !== 'undefined'
+       && (_currentRole === 'superadmin' || _currentRole === 'admin')
+       && typeof openAdminConsole === 'function'){
+      document.getElementById('myPage').style.display='none';
+      openAdminConsole(false);
+      return;
+    }
+    openMyPage(); return;
+  }
 
   // 마이페이지 닫기
   document.getElementById('myPage').style.display='none';
@@ -19225,7 +19268,9 @@ window._applyMembershipPeriodToUI = _applyMembershipPeriodToUI;
 function _applyUserNameToUI(name){
   if(!name) return;
   window._currentUserName = name;
-  var ids = ['mpUserName', 'peNameDisplay'];
+  // 🆕 2026.08-31: acMeName = 관리자 페이지 「더보기 → 내 정보」의 이름.
+  //   어드민은 마이페이지를 열지 않고도 자기 이름을 봐야 한다.
+  var ids = ['mpUserName', 'peNameDisplay', 'acMeName'];
   ids.forEach(function(id){
     var el = document.getElementById(id);
     if(el && el.textContent !== name) el.textContent = name;
@@ -23220,6 +23265,10 @@ function doResetFinancialData() {
 function _refreshBalanceUI() {
   var el = document.getElementById('mpBalance');
   if (el) el.textContent = taamMoney(currentDepositBalance);
+  // 🆕 2026.08-31: 관리자 페이지 「더보기 → 내 정보」의 잔액도 같이 맞춘다.
+  //   두 곳에 같은 숫자가 있으면 반드시 한 곳은 낡는다 — 갱신을 한 자리에 둔다.
+  var _acb = document.getElementById('acMeBal');
+  if (_acb) _acb.textContent = taamMoney(currentDepositBalance);
 }
 // ═══════════════════════════════════════════
 // PortOne V2 결제 호출 함수
@@ -31094,6 +31143,13 @@ function _moScan(){
     var pr = document.getElementById('partnerAdminScreen');
     if(_vis(pr)) root = pr;
   }
+  // 🆕 2026.08-31: 매장 어드민은 **무조건** 자기 화면만 훑는다.
+  //   종전엔 「보이는 쪽」만 봤다. 둘 다 안 보이면(전환 도중·타이밍) 기본값인
+  //   adminScreen 이 그대로 남아, 매장 어드민의 「더보기」에 슈퍼어드민 메뉴
+  //   마흔 개가 통째로 실렸다. 눌러도 RLS 가 막지만 목록에 보이는 것부터가 틀렸다.
+  if(typeof _currentRole !== 'undefined' && _currentRole === 'admin'){
+    root = document.getElementById('partnerAdminScreen');
+  }
   if(!root) return out;
   // 🆕 2026.08-30: 첫 화면을 접어 뒀으면(ac-lean) 메뉴가 display:none 이다.
   //   그대로 훑으면 「역할 때문에 숨은 것」과 구분이 안 돼 전부 빠진다 —
@@ -31183,6 +31239,109 @@ function _moMark(s, q){
        + '</span>' + _tbEsc(s.slice(i + q.length));
 }
 
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026.08-31 「내 정보」 — 마이페이지가 더보기 안으로 들어온다
+// ═══════════════════════════════════════════════════════════════
+//   어드민도 회원이다. 예치금을 쓰고, 티켓을 사고, 비밀번호를 바꾼다.
+//   그 항목들이 다른 화면(마이페이지)에 있어서 어드민은 화면 둘을 오갔다.
+//
+//   화면을 새로 만들지 않는다. **원래 페이지를 그대로 연다** — 회원 화면과
+//   같은 코드가 돌아야 한 쪽만 고쳐지는 일이 안 생긴다. 여기서 하는 일은
+//   ① 층을 올리고(.mp-over-ac) ② 원래 함수를 부르는 것, 둘뿐이다.
+var AC_ME_ROWS = [
+  { k:'profile', t:'회원정보 변경' },
+  { k:'card',    t:'결제 수단 관리' },
+  { k:'dep',     t:'예치금 내역' },
+  { k:'tkt',     t:'티켓 구매 내역' },
+  { k:'resv',    t:'예약 요청 내역' },
+  { k:'inv',     t:'초대받은 티켓' },
+  { k:'notif',   t:'알림 설정' },
+  { k:'pwd',     t:'비밀번호 설정/변경' },
+  { k:'nameEn',  t:'영문 이름 등록' }
+];
+
+function _acMeHtml(){
+  var nm = (window._currentUserName || '—');
+  var g  = window._currentUserGrade;
+  var bal = (typeof currentDepositBalance !== 'undefined' && typeof taamMoney === 'function')
+    ? taamMoney(currentDepositBalance) : '—';
+  var h = '<div class="mo-grp">내 정보</div>'
+    + '<div class="ac-me">'
+    +   '<div class="ac-me-n"><span id="acMeName">' + _tbEsc(nm) + '</span>'
+    +     (g ? '<span class="ac-me-tag" id="acMeTier">' + _tbEsc(g) + ' 등급</span>' : '')
+    +   '</div>'
+    +   '<div class="ac-me-s">' + _tbEsc(window._currentUserEmail || '') + '</div>'
+    +   '<div class="ac-me-b"><span class="ac-me-bl">예치금</span>'
+    +     '<span class="ac-me-bv" id="acMeBal">' + _tbEsc(bal) + '</span></div>'
+    + '</div>'
+    + '<button class="mo-item" onclick="acMy(\'charge\')" style="margin-top:8px;">'
+    +   '<span class="mo-t">예치금 충전<small>계좌이체로 충전합니다</small></span>'
+    +   '<span class="mo-chev">›</span></button>';
+  AC_ME_ROWS.forEach(function(r){
+    h += '<button class="mo-item" onclick="acMy(\'' + r.k + '\')">'
+      +  '<span class="mo-t">' + _tbEsc(r.t) + '</span><span class="mo-chev">›</span></button>';
+  });
+  h += '<button class="mo-item" onclick="acMy(\'del\')">'
+    +  '<span class="mo-t" style="color:#9B1C1C;">계정 삭제</span>'
+    +  '<span class="mo-chev">›</span></button>'
+    +  '<button class="mo-item" onclick="confirmLogout()" style="margin-top:8px;">'
+    +  '<span class="mo-t" style="color:#9B1C1C;">로그아웃</span>'
+    +  '<span class="mo-chev">›</span></button>';
+  return h;
+}
+
+// 카드를 그린 뒤 서버값으로 조용히 갈아 끼운다 — 깜빡임 없이.
+function _acMeFill(){
+  try{ if(typeof _refreshMyPageUserName === 'function') _refreshMyPageUserName(); }catch(e){}
+  try{ if(typeof taamSyncNow === 'function') taamSyncNow(true); }catch(e){}
+  // 마이페이지를 열지 않게 됐으니 여기서 배지도 같이 갱신한다 —
+  //   종전엔 openMyPage() 가 유일한 갱신 지점이라, 어드민은 종 배지가 안 바뀐다
+  try{ if(typeof updateUnseenNotifBadge === 'function') updateUnseenNotifBadge(); }catch(e){}
+  try{ if(typeof updateUnseenInvitesCount === 'function') updateUnseenInvitesCount(); }catch(e){}
+  try{
+    if(typeof _refreshUserGrade === 'function'){
+      _refreshUserGrade().then(function(g){
+        var el = document.getElementById('acMeTier');
+        if(!g) return;
+        if(el){ el.textContent = g + ' 등급'; return; }
+        var n = document.getElementById('acMeName');
+        if(n && n.parentNode){
+          var s = document.createElement('span');
+          s.className = 'ac-me-tag'; s.id = 'acMeTier'; s.textContent = g + ' 등급';
+          n.parentNode.appendChild(s);
+        }
+      }).catch(function(){});
+    }
+  }catch(e){}
+}
+
+// 원래 마이페이지 항목을 그대로 연다. 층만 올린다.
+function acMy(kind){
+  var raise = function(id){
+    var el = document.getElementById(id);
+    if(el) el.classList.add('mp-over-ac');
+  };
+  var run = {
+    profile: function(){ raise('profileEditPage');   openProfileEdit(); },
+    charge:  function(){ openMpCharge(); },   // 계좌이체 안내 모달 — 층이 이미 위다
+    card:    function(){ raise('cardManagePage'); raise('cardPage'); openCardManagePage(); },
+    dep:     function(){ raise('depositHistPage');   openPage('depositHistPage', renderDepositHist); },
+    tkt:     function(){ raise('ticketHistPage');    openPage('ticketHistPage', renderTicketHist); },
+    resv:    function(){ raise('reserveHistPage');   openPage('reserveHistPage', renderReserveHist); },
+    inv:     function(){ raise('myInvitesPage');     openPage('myInvitesPage', renderMyInvites); },
+    notif:   function(){ raise('notifSettingsPage'); openNotifSettings(); },
+    pwd:     function(){ openMemberPwdModal(); },
+    nameEn:  function(){ openMemberNameEnModal(); },
+    del:     function(){ openAccountDelete(); }
+  }[kind];
+  if(!run) return;
+  try{ run(); }catch(e){
+    console.warn('[내 정보] 실패:', e);
+    if(typeof showToast === 'function') showToast('⚠','열지 못했습니다', String(e && e.message || e).slice(0,60));
+  }
+}
+window.acMy = acMy;
+
 function _moRenderBody(){
   var el = document.getElementById('moBody');
   if(!el) return;
@@ -31194,21 +31353,28 @@ function _moRenderBody(){
   //     「여기 없습니다」로 답하면 검색이 있으나 마나다. 대신 어느 탭에
   //     있는지를 오른쪽에 적어 준다.
   if(!q) list = list.filter(function(r){ return !_acMenuOf(r.title); });
+  // 🆕 2026.08-31: 「로그아웃」은 「내 정보」 맨 아래에 이미 있다. 한 화면에 두 번
+  //   놓지 않는다 — 어느 쪽을 눌러야 하나가 생긴다. (찾을 때는 그대로 나온다)
+  if(!q) list = list.filter(function(r){ return r.title !== '로그아웃'; });
 
   var head = document.getElementById('moCount');
   if(head) head.textContent = list.length ? (list.length + '개') : '';
 
+  // 🆕 2026.08-31: 「내 정보」는 맨 위에 늘 있다. 찾을 때만 접는다 —
+  //   검색은 어드민 기능을 찾는 것이고, 개인 항목이 결과를 밀어내면 안 된다.
+  var h = q ? '' : _acMeHtml();
+
   if(!list.length){
     // 훑은 것이 아예 없으면 검색어 문제가 아니다 — 왜 비었는지 다르게 말한다
-    el.innerHTML = (_moRows && _moRows.length)
+    el.innerHTML = h + ((_moRows && _moRows.length)
       ? '<div class="tb-empty">「' + _tbEsc(_moState.q.trim()) + '」에 맞는 것이 없습니다.'
         + '<br><span style="color:#a69f94">원장 · 환율 · 초대 · 팝업 · 번역 · 좌표</span></div>'
       : '<div class="tb-empty">어드민 메뉴를 읽지 못했습니다.'
-        + '<br><span style="color:#a69f94">어드민 화면에서 다시 열어주세요.</span></div>';
+        + '<br><span style="color:#a69f94">어드민 화면에서 다시 열어주세요.</span></div>');
+    if(!q) _acMeFill();
     return;
   }
 
-  var h = '';
   if(q){
     // 찾을 때는 묶지 않는다. 몇 개 안 되는데 머리글만 늘어난다
     h += '<div class="mo-grp">검색 결과 ' + list.length + '</div>';
@@ -31221,6 +31387,7 @@ function _moRenderBody(){
     });
   }
   el.innerHTML = h;
+  if(!q) _acMeFill();
 }
 
 function _moItem(r, i, q, showGrp){
@@ -31357,7 +31524,11 @@ window._acApplyLean = _acApplyLean;
 //   각자 상태를 들고 잘 돌고 있고, 하나로 합치면 그 상태를 전부 다시 짜야 한다.
 //   합치는 것이 목적이 아니라 오가는 것이 목적이다.
 var AC_TABS_SUPER   = [['today','오늘'], ['rv','예약'], ['tkb','티켓'], ['mb','회원'], ['mo','더보기']];
-var AC_TABS_PARTNER = [['today','오늘'], ['rv','예약'], ['tkb','티켓']];
+// 🆕 2026.08-31: 매장 어드민에게도 「더보기」를 준다.
+//   종전엔 세 개뿐이라 「나의 레스토랑」·「예약 관리」가 갈 곳이 없었다
+//   (그래서 매장 화면만 접기를 못 했다). 더보기가 생기면 그 둘도 어느 탭에서든
+//   닿고, 마이페이지의 개인 항목도 여기로 들어온다.
+var AC_TABS_PARTNER = [['today','오늘'], ['rv','예약'], ['tkb','티켓'], ['mo','더보기']];
 
 function _acTabList(){
   return (typeof _isSuperAdmin === 'function' && _isSuperAdmin()) ? AC_TABS_SUPER : AC_TABS_PARTNER;
@@ -31392,7 +31563,9 @@ function _acRenderTabs(active){
       + (t[0] === 'today' && todo ? '<span class="bdg">' + todo + '</span>' : '')
       + '</button>';
   }).join('');
-  ['tbTabs','rvTabs','mbTabs','tkbTabs','moTabs'].forEach(function(id){
+  // acTabs·paTabs = 어드민 메뉴 화면(콘솔의 바닥). 여기도 같은 바가 있어야
+  //   탭에서 뒤로 나왔을 때 바가 사라지지 않는다.
+  ['tbTabs','rvTabs','mbTabs','tkbTabs','moTabs','acTabs','paTabs'].forEach(function(id){
     var el = document.getElementById(id);
     if(el) el.innerHTML = html;
   });
@@ -33541,8 +33714,47 @@ function openAdmin(){
   // mainGnb가 하단에 떠서 로그아웃 버튼 가리는 것 방지
   var gnb = document.getElementById('mainGnb');
   if(gnb) gnb.style.display = 'none';
+  // 🆕 2026.08-31: 메뉴 화면에도 콘솔 탭 바를 그린다 (고른 탭 없음)
+  if(typeof _acRenderTabs === 'function') _acRenderTabs('');
   if(typeof qaLoad === 'function') qaLoad();
 }
+
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026.08-31 관리자 페이지 — 한 화면으로 들어온다
+// ═══════════════════════════════════════════════════════════════
+//   종전: GNB「My」 → 마이페이지 → 「Super Admin」 행 → 어드민 화면.
+//   어드민이 하루에 몇 번씩 가는 길인데 매번 화면 둘을 지났다. 그 사이의
+//   마이페이지는 어드민에게 지나가는 화면일 뿐이었다.
+//
+//   이제 어드민·슈퍼어드민은 곧장 콘솔 첫 화면(「오늘」)으로 간다.
+//   마이페이지가 사라지는 것이 아니라 「더보기 → 내 정보」로 자리를 옮긴다.
+//   회원은 아무것도 바뀌지 않는다 — 예전 그대로 마이페이지가 열린다.
+//
+//   ⚠ 어드민 메뉴 화면(adminScreen·partnerAdminScreen)은 그대로 둔다.
+//     콘솔 화면들이 그 위에 얹히는 구조이고, 「더보기」가 그 메뉴를 훑어
+//     목록을 만든다(_moScan). 닫으면 더보기가 통째로 빈다.
+function openAdminConsole(fromMy){
+  window._acFromMy = !!fromMy;
+  var role = (typeof _currentRole !== 'undefined') ? _currentRole : 'user';
+  if(role === 'superadmin')   openAdmin();
+  else if(role === 'admin')   openPartnerAdmin();
+  else { if(typeof openMyPage === 'function') openMyPage(); return; }
+  // 메뉴가 아니라 「오늘」이 첫 화면이다. 화면이 그려진 뒤에 얹는다.
+  setTimeout(function(){ try{ acGo('today'); }catch(e){ console.warn('[console] 첫 화면 실패:', e); } }, 30);
+}
+window.openAdminConsole = openAdminConsole;
+
+// 콘솔에서 나갈 때 — 마이페이지를 거쳐 들어왔으면 그리로, 아니면 홈으로.
+//   직접 진입인데 마이페이지를 열면 없앤 그 한 단계가 되살아난다.
+function _acExitTo(){
+  if(window._acFromMy){
+    window._acFromMy = false;
+    if(typeof openMyPage === 'function') openMyPage();
+    return;
+  }
+  if(typeof closeMyPageToHome === 'function') closeMyPageToHome();
+}
+window._acExitTo = _acExitTo;
 
 /* ═══════════════════════════════════════════════════════════════
    🆕 2026.07: Quick Access 편집 (슈퍼어드민) — 하드코딩 대신 app_config 저장
@@ -33998,8 +34210,10 @@ function closeAdmin(){
   try {
     var myPageEl = document.getElementById('myPage');
     var alreadyOpen = myPageEl && myPageEl.style.display && myPageEl.style.display !== 'none';
-    if(!alreadyOpen && typeof openMyPage === 'function') openMyPage();
-  } catch(e){ console.warn('[closeAdmin] openMyPage failed:', e); }
+    // 🆕 2026.08-31: 마이페이지를 거치지 않고 들어온 경우엔 홈으로 나간다.
+    //   그대로 마이페이지를 열면 없앤 한 단계가 나갈 때 되살아난다.
+    if(!alreadyOpen) _acExitTo();
+  } catch(e){ console.warn('[closeAdmin] 복귀 실패:', e); }
 }
 function closeSubPage(id){
   var el=document.getElementById(id);
@@ -36665,7 +36879,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.31-x';
+var TAAM_WEB_BUILD = '2026.08.31-y';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -52221,6 +52435,8 @@ function openPartnerAdmin() {
   var _pb = document.getElementById('paBuildTag');
   if(_pb) _pb.textContent = 'BUILD ' + TAAM_WEB_BUILD;
   if(typeof _acApplyLean === 'function') _acApplyLean();
+  // 🆕 2026.08-31: 메뉴 화면에도 콘솔 탭 바 (고른 탭 없음)
+  if(typeof _acRenderTabs === 'function') _acRenderTabs('');
   document.getElementById('partnerAdminScreen').style.display = 'flex';
   // mainGnb가 하단에 떠서 로그아웃 버튼 가리는 것 방지
   var gnb = document.getElementById('mainGnb');
@@ -52233,6 +52449,15 @@ function closePartnerAdmin() {
   var gnb = document.getElementById('mainGnb');
   if(gnb) gnb.style.display = 'flex';
 }
+
+// 파트너 어드민 화면의 ✕ — 콘솔을 완전히 닫고 홈(또는 마이페이지)으로.
+//   closePartnerAdmin() 은 다른 화면을 열기 직전에도 쓰이므로(openPartnerTU 등)
+//   거기에 복귀 동작을 넣으면 안 된다. 나가는 문은 따로 둔다.
+function exitPartnerAdmin() {
+  closePartnerAdmin();
+  if(typeof _acExitTo === 'function') _acExitTo();
+}
+window.exitPartnerAdmin = exitPartnerAdmin;
 
 function openPartnerTU() {
   // ── 미지정 어드민 진입 차단 ──
