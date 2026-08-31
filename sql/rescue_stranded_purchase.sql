@@ -34,7 +34,7 @@ with paid as (
    group by 1, 2
 )
 select p.purchase_id                                    as "구매ID",
-       coalesce(pr.display_name, pr.name, '(이름없음)') as "회원",
+       coalesce(pr.display_name, pr.phone, '(이름없음)') as "회원",
        (-p.차감액)                                       as "빠져나간 금액",
        p.되돌린액                                        as "되돌아온 금액",
        coalesce(t.status, '❌ 티켓 행 없음')             as "티켓 상태",
