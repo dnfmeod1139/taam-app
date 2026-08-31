@@ -58,8 +58,8 @@
      DNS→TCP→TLS 를 시작했다. 셀룰러 RTT(100~300ms)에서 이 왕복이 그대로 지연이 된다. -->
 <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
 <link rel="preconnect" href="https://unpkg.com" crossorigin>
-<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Oswald:wght@300;400;500;600;700&family=Noto+Sans+KR:wght@400;500;700;900&family=Noto+Sans+JP:wght@400;500;700;900&display=block" onload="this.onload=null;this.rel='stylesheet'">
-<noscript><link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Oswald:wght@300;400;500;600;700&family=Noto+Sans+KR:wght@400;500;700;900&family=Noto+Sans+JP:wght@400;500;700;900&display=block" rel="stylesheet"></noscript>
+<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Oswald:wght@300;400;500;600;700&family=Noto+Sans+KR:wght@400;500;700;900&family=Noto+Sans+JP:wght@400;500;700;900&display=swap" onload="this.onload=null;this.rel='stylesheet'">
+<noscript><link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Oswald:wght@300;400;500;600;700&family=Noto+Sans+KR:wght@400;500;700;900&family=Noto+Sans+JP:wght@400;500;700;900&display=swap" rel="stylesheet"></noscript>
 <link rel="preload" as="style" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css" onload="this.onload=null;this.rel='stylesheet'">
 <noscript><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css"></noscript>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js" defer></script>
@@ -18688,6 +18688,11 @@ function openMain(){
   loadRole().then(function(){
     return _seedWaitCapped(2500); // 시드는 최대 2.5초만 기다린다 (나머지는 백그라운드)
   }).then(function(){
+    // 🔧 2026.08-31: reloadUserData() 를 이 묶음 안으로 넣었다.
+    //   종전에는 아래 7개가 **끝난 뒤에** 다시 4개(예치금·구매내역·카드·본인인증)를
+    //   던졌다. 서로 의존이 없는데 왕복이 한 번 더 있었다. 셀룰러에서는
+    //   왕복 한 번이 그대로 300~600ms 다. 같이 던지면 그만큼 먼저 뜬다.
+    //   ⚠ loadRole() 은 앞에 남겨 둔다 — loadInviteCodes 가 _currentRole 을 본다.
     return Promise.all([
       loadRestaurants(),
       loadTickets(),
@@ -18696,10 +18701,9 @@ function openMain(){
       loadAdminCodes(),
       loadSplashSettings(),
       // 표지를 미리 읽어 둔다. 안 읽으면 폴백 사진으로 먼저 그렸다가 갈아 끼우게 된다.
-      (typeof pcalLoadCovers === 'function' ? pcalLoadCovers().catch(function(){}) : Promise.resolve())
+      (typeof pcalLoadCovers === 'function' ? pcalLoadCovers().catch(function(){}) : Promise.resolve()),
+      reloadUserData()
     ]);
-  }).then(function(){
-    return reloadUserData();
   }).then(function(){
     // 어드민/슈퍼어드민으로 재접속 시 유저 전용 데이터 초기화
     if (_currentRole === 'admin' || _currentRole === 'superadmin') {
@@ -36539,7 +36543,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.31-q';
+var TAAM_WEB_BUILD = '2026.08.31-r';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -48979,14 +48983,29 @@ async function chefPhotoFixOpen(){
   document.body.appendChild(el);
 
   // 목록을 미리 읽어 규모를 보여준다 (내용은 안 받는다)
+  //
+  //   🆕 2026.08-31: chefs + restaurants 를 함께 주는 새 RPC 를 먼저 부른다.
+  //     레스토랑은 loadRestaurants() 가 부팅마다 select('*') 로 읽어서, 거기
+  //     든 base64 는 회원 전원의 스플래시 시간이 된다 — 그래서 먼저 처리한다.
+  //     새 RPC 가 아직 없으면(SQL 미실행) 옛 셰프 전용 RPC 로 물러난다.
   try {
-    var r = await window.sb.rpc('taam_chef_base64_targets');
-    if(r.error) throw new Error(r.error.message);
+    var r = await window.sb.rpc('taam_photo_base64_targets');
+    if(r.error){
+      console.warn('[photoFix] 새 RPC 없음 — 셰프 전용으로 물러남:', r.error.message);
+      r = await window.sb.rpc('taam_chef_base64_targets');
+      if(r.error) throw new Error(r.error.message);
+      // 옛 응답에는 tbl/k1/k2/label 이 없다 — 새 모양으로 맞춰 준다
+      r.data = (r.data || []).map(function(x){
+        return { tbl:'chefs', k1:x.chef_id, k2:x.lineage_id,
+                 label:x.chef_name, field:x.field, bytes:x.bytes };
+      });
+    }
     window._cpfTargets = r.data || [];
     var byField = {};
     var total = 0;
     window._cpfTargets.forEach(function(x){
-      byField[x.field] = (byField[x.field] || 0) + 1;
+      var key = (x.tbl === 'restaurants' ? '레스토랑 ' : '셰프 ') + x.field;
+      byField[key] = (byField[key] || 0) + 1;
       total += parseInt(x.bytes, 10) || 0;
     });
     var mb = (total / 1048576).toFixed(1);
@@ -48994,7 +49013,7 @@ async function chefPhotoFixOpen(){
       ? ('옮길 것 <b>' + window._cpfTargets.length + '건 · 약 ' + mb + 'MB</b><br>'
          + '<span style="font-size:11px;color:#8a8580;">'
          + Object.keys(byField).map(function(k){ return k + ' ' + byField[k] + '건'; }).join(' · ')
-         + ' — node_photo 부터 처리합니다 (첫 화면에서 내려가는 건 그것뿐)</span>')
+         + ' — 레스토랑부터 처리합니다 (부팅마다 전원이 받는 건 그것)</span>')
       : '✅ 옮길 것이 없습니다. 이미 전부 링크로 되어 있습니다.';
   } catch(e){
     document.getElementById('cpfSummary').innerHTML =
@@ -49023,32 +49042,40 @@ async function chefPhotoFixRun(){
   for(var i = 0; i < list.length; i++){
     if(_cpfStop){ _cpfLog('⏹ 중지했습니다 — 여기까지는 저장됐습니다'); break; }
     var t = list[i];
-    var who = (t.chef_name || t.chef_id) + ' · ' + t.field;
+    var _tbl = t.tbl || 'chefs';
+    var who = (_tbl === 'restaurants' ? '🍽 ' : '👨‍🍳 ')
+            + (t.label || t.k1) + ' · ' + t.field;
     document.getElementById('cpfBarIn').style.width = Math.round((i / list.length) * 100) + '%';
+    // 테이블마다 기본키가 다르다 — chefs 는 (id, lineage_id) 복합키다
+    function _cpfWhere(q){
+      q = q.eq('id', t.k1);
+      if(_tbl === 'chefs') q = q.eq('lineage_id', t.k2);
+      return q;
+    }
     try {
       // ① 이 한 건의 그 컬럼만 받는다
-      var sel = await window.sb.from('chefs').select(t.field)
-        .eq('id', t.chef_id).eq('lineage_id', t.lineage_id).maybeSingle();
+      var sel = await _cpfWhere(window.sb.from(_tbl).select(t.field)).maybeSingle();
       if(sel.error) throw new Error(sel.error.message);
       if(!sel.data){ _cpfLog('· ' + who + ' — 행이 없어 건너뜀'); continue; }
 
       var cnt = { n: 0 };
       var before = JSON.stringify(sel.data[t.field] || '').length;
+      var _raw = sel.data[t.field];
       var next;
-      if(t.field === 'node_photo'){
-        var v = sel.data.node_photo || '';
-        next = (v.indexOf('data:image') === 0) ? await _cpfUploadDataUrl(v) : v;
-        cnt.n = (next !== v) ? 1 : 0;
+      if(typeof _raw === 'string'){
+        // 사진 한 장이 통째로 든 컬럼 (node_photo · photo_card · photo_hero)
+        next = (_raw.indexOf('data:image') === 0) ? await _cpfUploadDataUrl(_raw) : _raw;
+        cnt.n = (next !== _raw) ? 1 : 0;
       } else {
-        next = await _cpfWalk(sel.data[t.field], cnt);
+        // jsonb·배열 — 값의 모양으로 찾아 전부 바꾼다
+        next = await _cpfWalk(_raw, cnt);
       }
 
       if(!cnt.n){ _cpfLog('· ' + who + ' — 바꿀 사진 없음'); continue; }
 
       // ② 그 컬럼만 갱신한다
       var upd = {}; upd[t.field] = next;
-      var wr = await window.sb.from('chefs').update(upd)
-        .eq('id', t.chef_id).eq('lineage_id', t.lineage_id);
+      var wr = await _cpfWhere(window.sb.from(_tbl).update(upd));
       if(wr.error) throw new Error(wr.error.message);
 
       var after = JSON.stringify(next || '').length;

@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.65.0';  // 1.55.2 — 2026.08: 자동 새로고침 재도입(네이티브 앱에 최신 index.html 강제 반영). index.html 의 "네이티브 splash-skip 미부여" 수정과 함께라 인트로/스킵 안 사라짐.
-const STATIC_CACHE = 'taam-static-v1.65.0';
+const SW_VERSION = 'taam-sw-v1.66.0';  // 1.55.2 — 2026.08: 자동 새로고침 재도입(네이티브 앱에 최신 index.html 강제 반영). index.html 의 "네이티브 splash-skip 미부여" 수정과 함께라 인트로/스킵 안 사라짐.
+const STATIC_CACHE = 'taam-static-v1.66.0';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
@@ -34,7 +34,13 @@ self.addEventListener('activate', (event) => {
 });
 
 // 🆕 2026.08: 앱 셸 전략 상수/헬퍼
-const HTML_TIMEOUT_MS = 3000;   // 이 시간 안에 네트워크가 응답 못 하면 캐시로 먼저 렌더
+// 🔧 2026.08-31: 3000 → 1000.
+//   캐시가 있는데도 네트워크를 3초까지 기다렸다. 셀룰러에서 앱 셸(압축 약 1.1MB)을
+//   받는 데 2.5초가 걸리면 그 2.5초가 그대로 스플래시 시간이 됐다.
+//   1초로 줄이면 회선이 괜찮을 때는 지금과 똑같이 최신을 쓰고(1초 안에 옴),
+//   느릴 때만 캐시로 먼저 그린다. 네트워크 응답은 도착하는 대로 캐시에 반영되므로
+//   다음 실행은 최신이다 — 「한 실행 뒤처짐」은 느린 회선에서만, 한 번만 생긴다.
+const HTML_TIMEOUT_MS = 1000;   // 이 시간 안에 네트워크가 응답 못 하면 캐시로 먼저 렌더
 
 function isAppShell(url) {
   return url.pathname === '/' || url.pathname === '/index.html';
