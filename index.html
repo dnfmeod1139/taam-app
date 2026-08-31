@@ -10637,7 +10637,7 @@ window.closePromoCarousel = function(){
       <div class="admin-title">어드민</div>
       <div class="partner-rest-tag" id="partnerRestTag"></div>
     </div>
-    <button class="admin-close-btn" onclick="closePartnerAdmin()">✕</button>
+    <button class="admin-close-btn" onclick="exitPartnerAdmin()">✕</button>
   </div>
   <div class="admin-scroll">
     <!-- 🆕 2026.08-30 3단계: 매장 어드민도 같은 운영 화면을 쓴다.
@@ -10722,6 +10722,9 @@ window.closePromoCarousel = function(){
       </div>
     </div>
   </div>
+  <!-- 🆕 2026.09-01: 메뉴 화면에도 같은 탭 바. 콘솔 화면들만 탭이 있어서
+       여기로 돌아오면 바가 사라졌다 — 「콘솔 하나」로 안 보였다 -->
+  <div class="ac-tabs" id="paTabs" role="tablist"></div>
 </div>
 
 <!-- PARTNER TICKET LIST SCREEN -->
@@ -10771,7 +10774,7 @@ window.closePromoCarousel = function(){
     <button onclick="closeAdmin();" style="position:absolute;left:0;top:50%;transform:translateY(-50%);background:none;border:none;padding:8px;cursor:pointer;display:flex;align-items:center;">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1a1a18" stroke-width="2.5" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg>
     </button>
-    <div class="admin-title" data-i18n="my_page.title" style="text-align:center;width:100%;">마이페이지</div>
+    <div class="admin-title" style="text-align:center;width:100%;">전체 메뉴</div>
     <button class="admin-close-btn" onclick="closeAdmin()" aria-label="Close">✕</button>
   </div>
   <div class="admin-scroll">
@@ -11261,6 +11264,7 @@ window.closePromoCarousel = function(){
       </div>
     </div>
   </div>
+  <div class="ac-tabs" id="acTabs" role="tablist"></div>
 </div>
 <div id="restPage" class="restpage" style="display:none;">
   <div class="rp-header">
@@ -17041,6 +17045,9 @@ function updateMpAdminBtn() {
 
 function mpOpenAdmin() {
   closePage('myPage');
+  // 메뉴가 아니라 콘솔 첫 화면(대시보드)으로. 마이페이지를 거쳐 들어왔다는
+  //   것을 남겨, 나갈 때 그리로 되돌린다.
+  if (typeof openAdminConsole === 'function') { openAdminConsole(true); return; }
   if (_currentRole === 'superadmin') {
     openAdmin();
   } else if (_currentRole === 'admin') {
@@ -19009,7 +19016,21 @@ function gnbGo(tab, btn){
     });
   } catch(e){ console.warn('[gnbGo] cleanup error', e); }
 
-  if(tab==='my'){ openMyPage(); return; }
+  // 🆕 2026.09-01: 어드민·슈퍼어드민은 곧장 콘솔(대시보드)로 간다.
+  //   종전엔 마이페이지 → 「Super Admin」 행 → 어드민 메뉴 화면 → 카드를
+  //   눌러야 콘솔이었다. 시안의 요지는 「메뉴가 첫 화면이 아니다」인데
+  //   대시보드만 만들고 들어가는 길을 안 바꿔서 여전히 메뉴가 먼저 떴다.
+  //   회원은 예전 그대로 마이페이지가 열린다.
+  if(tab==='my'){
+    if(typeof _currentRole !== 'undefined'
+       && (_currentRole === 'superadmin' || _currentRole === 'admin')
+       && typeof openAdminConsole === 'function'){
+      var _mp = document.getElementById('myPage'); if(_mp) _mp.style.display='none';
+      openAdminConsole(false);
+      return;
+    }
+    openMyPage(); return;
+  }
 
   // 마이페이지 닫기
   document.getElementById('myPage').style.display='none';
@@ -32337,7 +32358,7 @@ function _acRenderTabs(active){
       + (t[0] === 'today' && todo ? '<span class="bdg">' + todo + '</span>' : '')
       + '</button>';
   }).join('');
-  ['tbTabs','rvTabs','mbTabs','tkbTabs','moTabs','pshTabs'].forEach(function(id){
+  ['tbTabs','rvTabs','mbTabs','tkbTabs','moTabs','pshTabs','acTabs','paTabs'].forEach(function(id){
     var el = document.getElementById(id);
     if(el) el.innerHTML = html;
   });
@@ -34630,12 +34651,43 @@ function closeAllAdminScreens(){
     if(el) el.style.display='none';
   });
 }
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026.09-01 관리자 콘솔 — 대시보드가 바닥이다
+// ═══════════════════════════════════════════════════════════════
+//   어드민 메뉴 화면(adminScreen · partnerAdminScreen)은 **지우지 않는다.**
+//   「더보기」가 그 DOM 을 훑어(_moScan) 목록을 만든다. 닫아도 되지만
+//   DOM 에서 빼면 더보기가 통째로 빈다. 대신 첫 화면이 아니게 한다.
+function openAdminConsole(fromMy){
+  window._acFromMy = !!fromMy;
+  var role = (typeof _currentRole !== 'undefined') ? _currentRole : 'user';
+  if(role === 'superadmin')      openAdmin();
+  else if(role === 'admin')      openPartnerAdmin();
+  else { if(typeof openMyPage === 'function') openMyPage(); return; }
+  setTimeout(function(){
+    try{ acGo('today'); }catch(e){ console.warn('[console] 첫 화면 실패:', e); }
+  }, 30);
+}
+window.openAdminConsole = openAdminConsole;
+
+// 콘솔에서 나갈 때 — 마이페이지를 거쳐 들어왔으면 그리로, 아니면 홈으로.
+//   직접 진입인데 마이페이지를 열면 없앤 그 한 단계가 나갈 때 되살아난다.
+function _acExitTo(){
+  if(window._acFromMy){
+    window._acFromMy = false;
+    if(typeof openMyPage === 'function') openMyPage();
+    return;
+  }
+  if(typeof closeMyPageToHome === 'function') closeMyPageToHome();
+}
+window._acExitTo = _acExitTo;
+
 function openAdmin(){
   closeAllAdminScreens();
   document.getElementById('adminScreen').style.display='flex';
   // mainGnb가 하단에 떠서 로그아웃 버튼 가리는 것 방지
   var gnb = document.getElementById('mainGnb');
   if(gnb) gnb.style.display = 'none';
+  if(typeof _acRenderTabs === 'function') _acRenderTabs('');
   if(typeof qaLoad === 'function') qaLoad();
 }
 
@@ -35093,8 +35145,10 @@ function closeAdmin(){
   try {
     var myPageEl = document.getElementById('myPage');
     var alreadyOpen = myPageEl && myPageEl.style.display && myPageEl.style.display !== 'none';
-    if(!alreadyOpen && typeof openMyPage === 'function') openMyPage();
-  } catch(e){ console.warn('[closeAdmin] openMyPage failed:', e); }
+    // 🆕 2026.09-01: 마이페이지를 거치지 않고 들어온 경우엔 홈으로 나간다.
+    //   그대로 마이페이지를 열면 없앤 한 단계가 나갈 때 되살아난다.
+    if(!alreadyOpen) _acExitTo();
+  } catch(e){ console.warn('[closeAdmin] 복귀 실패:', e); }
 }
 function closeSubPage(id){
   var el=document.getElementById(id);
@@ -37760,7 +37814,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.01-d';
+var TAAM_WEB_BUILD = '2026.09.01-e';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -53316,6 +53370,7 @@ function openPartnerAdmin() {
   var _pb = document.getElementById('paBuildTag');
   if(_pb) _pb.textContent = 'BUILD ' + TAAM_WEB_BUILD;
   if(typeof _acApplyLean === 'function') _acApplyLean();
+  if(typeof _acRenderTabs === 'function') _acRenderTabs('');
   document.getElementById('partnerAdminScreen').style.display = 'flex';
   // mainGnb가 하단에 떠서 로그아웃 버튼 가리는 것 방지
   var gnb = document.getElementById('mainGnb');
@@ -53328,6 +53383,15 @@ function closePartnerAdmin() {
   var gnb = document.getElementById('mainGnb');
   if(gnb) gnb.style.display = 'flex';
 }
+
+// 🆕 2026.09-01: 파트너 메뉴 화면의 ✕ — 콘솔을 완전히 닫고 홈(또는 마이페이지)으로.
+//   closePartnerAdmin() 은 다른 화면을 열기 직전에도 쓰이므로(openPartnerTU 등)
+//   거기에 복귀 동작을 넣으면 안 된다. 나가는 문은 따로 둔다.
+function exitPartnerAdmin() {
+  closePartnerAdmin();
+  if(typeof _acExitTo === 'function') _acExitTo();
+}
+window.exitPartnerAdmin = exitPartnerAdmin;
 
 function openPartnerTU() {
   // ── 미지정 어드민 진입 차단 ──
