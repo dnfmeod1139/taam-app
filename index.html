@@ -29743,15 +29743,31 @@ async function _tbLoad(){
   try{
     // 취소분도 읽는다 — 「오늘 취소가 있었나」를 못 보면 매장이 헛되이 자리를 비운다.
     // 홀드(PAYH-)는 결제 전 임시 점유라 예약이 아니다. 빼고 읽는다.
+    // 🆕 2026.08-31: id · visit_status 를 같이 읽는다.
+    //   방문 기록 RPC 가 tickets.id(uuid) 로 받는다 — purchase_id 는 유일성이
+    //   제약으로 보장되지 않아 키로 쓰지 않는다.
+    //
+    //   ⚠ 컬럼 하나가 실패하면 이 조회 전체가 실패하고, 그러면 아래에서
+    //     _tbRows = [] 가 되어 **예약이 통째로 사라진 것처럼 보인다.**
+    //     visit_status 는 새 컬럼이라, SQL 이 아직 안 돌았거나 PostgREST 의
+    //     스키마 캐시가 늦으면 그 일이 실제로 일어난다. 그래서 실패하면
+    //     예전 컬럼만으로 한 번 더 읽는다 — 화면이 비는 것보다 방문 버튼이
+    //     없는 편이 훨씬 낫다.
+    var _COLS_BASE = 'id, purchase_id, user_id, restaurant_id, restaurant_name, ticket_product_id, '
+                   + 'reservation_date, visit_time, party_size, price, status, buyer_name, '
+                   + 'buyer_phone, extra_data';
     var res = await window.sb.from('tickets')
-      // 🆕 2026.08-31: id · visit_status 를 같이 읽는다.
-      //   방문 기록 RPC 가 tickets.id(uuid) 로 받는다 — purchase_id 는 유일성이
-      //   제약으로 보장되지 않아 키로 쓰지 않는다.
-      .select('id, purchase_id, user_id, restaurant_id, restaurant_name, ticket_product_id, '
-            + 'reservation_date, visit_time, party_size, price, status, buyer_name, buyer_phone, '
-            + 'visit_status, extra_data')
+      .select(_COLS_BASE + ', visit_status')
       .order('created_at', { ascending:false })
       .limit(3000);
+    if(res.error){
+      console.warn('[today] visit_status 포함 조회 실패 — 예전 컬럼으로 재시도:', res.error.message);
+      window._tbNoVisitCol = true;          // 이번 세션은 방문 버튼을 숨긴다
+      res = await window.sb.from('tickets')
+        .select(_COLS_BASE)
+        .order('created_at', { ascending:false })
+        .limit(3000);
+    }
     if(res.error){ console.warn('[today] 조회 실패:', res.error.message); _tbRows = []; return; }
     _tbRows = (res.data || []).filter(function(r){
       if(String(r.purchase_id || '').indexOf('PAYH-') === 0) return false;   // 결제 전 홀드
@@ -29967,6 +29983,7 @@ function _taamTodayKst(){
   return new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
 }
 function _visCanMark(r, st){
+  if(window._tbNoVisitCol) return false;           // 컬럼을 못 읽은 세션
   if(!r || !r.id) return false;                    // 옛 캐시엔 id 가 없다
   if(st && st.s === 'cx') return false;            // 취소건에는 방문이 없다
   var d = String(r.reservation_date || '');
@@ -36759,7 +36776,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.08.31-aa';
+var TAAM_WEB_BUILD = '2026.08.31-ab';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
