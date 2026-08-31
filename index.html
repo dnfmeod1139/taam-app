@@ -521,7 +521,9 @@ html.auto-login .splash .bottom-group{display:none !important}
 .pcal-mstrip .on{color:#f2ede7}
 .pcal-mstrip .on::after{content:"";position:absolute;left:0;right:0;bottom:0;height:1px;background:#f2ede7}
 
-.pcal-cal{padding:12px 12px 0}
+/* 가로 제스처는 달을 넘긴다 — 세로만 스크롤에 넘겨준다 */
+.pcal-cal{padding:12px 12px 0;touch-action:pan-y}
+.pcal-hero{touch-action:pan-y}
 .pcal-wk{display:grid;grid-template-columns:repeat(7,1fr);font-size:9.5px;color:#5f5b57;
   letter-spacing:.1em;text-align:center;padding-bottom:9px}
 .pcal-days{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
@@ -2609,7 +2611,8 @@ input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none}
 .tcal-nav{display:flex;align-items:center;justify-content:space-between;padding:20px 20px 12px;}
 .tcal-month{font-family:var(--font-main);font-size:18px;font-weight:700;color:#1a1a18;letter-spacing:.05em;}
 .tcal-arrow{background:none;border:none;font-size:20px;color:#888;cursor:pointer;padding:4px 10px;}
-.tcal-grid{display:grid;grid-template-columns:repeat(7,1fr);text-align:center;}
+/* 가로 제스처는 달을 넘긴다 — 세로만 스크롤에 넘겨준다 */
+.tcal-grid{display:grid;grid-template-columns:repeat(7,1fr);text-align:center;touch-action:pan-y;}
 .tcal-dow{font-family:var(--font-main);font-size:9px;font-weight:700;letter-spacing:.1em;color:#bbb;padding:6px 0 10px;}
 .tcal-cell{padding:6px 2px 10px;cursor:pointer;position:relative;min-height:48px;}
 .tcal-cell:active{background:rgba(0,0,0,.04);border-radius:8px;}
@@ -30658,33 +30661,59 @@ function rvFindToggle(){
 }
 window.rvFindToggle = rvFindToggle;
 
-// ── 달력을 좌우로 밀어 달을 넘긴다 ──
+// ── 달력을 좌우로 밀어 달을 넘긴다 (공용) ──
 //   화살표만으로도 되지만, 달력은 미는 것이 먼저 손에 붙는다.
-//   #rvBody 에 touch-action:pan-y 를 줘 뒀으므로 가로 제스처는 스크롤에
-//   먹히지 않고 여기까지 온다.
+//   ⚠ 2026.09-01: 종전엔 touch 이벤트만 들었다. 데스크톱 브라우저는 마우스로
+//     끌어도 touchstart 가 안 오므로, 화면에선 「밀어도 아무 일이 없는」 달력이었다.
+//     그래서 pointer 도 같이 듣는다 (터치 포인터는 위에서 이미 들었으니 건너뛴다).
 //   달력 위에서만 듣는다 — 아래 목록을 밀다 달이 바뀌면 놀란다.
-var _rvSwipe = null;      // { x, y, t }
-var _rvSwipeUntil = 0;    // 이 시각 전에는 날짜 클릭을 무시한다 (민 끝에 클릭이 따라온다)
-function _rvBindSwipe(){
-  var el = document.getElementById('rvBody');
-  if(!el || el._rvSwipeBound) return;
-  el._rvSwipeBound = true;
-  el.addEventListener('touchstart', function(e){
-    if(!e.target.closest || !e.target.closest('.rv-cal')){ _rvSwipe = null; return; }
-    var p = e.touches && e.touches[0];
-    _rvSwipe = p ? { x:p.clientX, y:p.clientY, t:Date.now() } : null;
-  }, { passive:true });
-  el.addEventListener('touchend', function(e){
-    var s = _rvSwipe; _rvSwipe = null;
-    if(!s) return;
-    var p = e.changedTouches && e.changedTouches[0];
-    if(!p) return;
-    var dx = p.clientX - s.x, dy = p.clientY - s.y;
+//   호스트에 touch-action:pan-y 가 있어야 가로 제스처가 스크롤에 안 먹힌다.
+var _calSwipeUntil = 0;   // 이 시각 전의 클릭은 민 끝에 따라온 것이라 무시한다
+function _taamCalSwiped(){ return Date.now() < _calSwipeUntil; }
+window._taamCalSwiped = _taamCalSwiped;
+
+function _taamBindCalSwipe(host, sel, step){
+  if(!host || host._calSwipeBound) return;
+  host._calSwipeBound = true;
+  var s = null;
+  function begin(x, y, target){
+    if(!target || !target.closest || !target.closest(sel)){ s = null; return; }
+    s = { x:x, y:y, t:Date.now() };
+  }
+  function end(x, y){
+    var a = s; s = null;
+    if(!a) return;
+    var dx = x - a.x, dy = y - a.y;
     // 가로로 충분히 갔고, 세로보다 확실히 크고, 끄는 동작이 아니라 미는 동작일 때만
-    if(Math.abs(dx) < 45 || Math.abs(dx) < Math.abs(dy) * 1.5 || (Date.now() - s.t) > 700) return;
-    _rvSwipeUntil = Date.now() + 400;
-    rvMonStep(dx < 0 ? 1 : -1);   // 왼쪽으로 밀면 다음 달
+    if(Math.abs(dx) < 45 || Math.abs(dx) < Math.abs(dy) * 1.5 || (Date.now() - a.t) > 700) return;
+    _calSwipeUntil = Date.now() + 400;
+    try { step(dx < 0 ? 1 : -1); } catch(e){ console.warn('[cal] 월 이동 실패', e); }
+  }
+  host.addEventListener('touchstart', function(e){
+    var p = e.touches && e.touches[0];
+    if(!p){ s = null; return; }
+    begin(p.clientX, p.clientY, e.target);
   }, { passive:true });
+  host.addEventListener('touchend', function(e){
+    var p = e.changedTouches && e.changedTouches[0];
+    if(!p){ s = null; return; }
+    end(p.clientX, p.clientY);
+  }, { passive:true });
+  host.addEventListener('pointerdown', function(e){
+    if(e.pointerType === 'touch') return;
+    begin(e.clientX, e.clientY, e.target);
+  }, { passive:true });
+  host.addEventListener('pointerup', function(e){
+    if(e.pointerType === 'touch') return;
+    end(e.clientX, e.clientY);
+  }, { passive:true });
+}
+window._taamBindCalSwipe = _taamBindCalSwipe;
+
+function _rvBindSwipe(){
+  _taamBindCalSwipe(document.getElementById('rvBody'), '.rv-cal', function(d){
+    rvMonStep(d);   // 왼쪽으로 밀면 다음 달
+  });
 }
 
 function _rvRenderFilters(){
@@ -30910,7 +30939,7 @@ function rvGoToday(){
 //   보이므로 접어서 새로 드러나는 것이 없고, 목록만 사라져 「왜 없어졌지」가 된다.
 function rvPickDay(key){
   // 민 끝에 클릭이 따라온다 — 달을 넘긴 직후의 클릭은 무시한다
-  if(Date.now() < _rvSwipeUntil) return;
+  if(_taamCalSwiped()) return;
   _rvState.day = key;
   _rvState.open = null;
   // 월 줄도 다시 그린다 — 「오늘」 버튼이 고른 날에 따라 나타났다 사라진다.
@@ -37814,7 +37843,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.01-f';
+var TAAM_WEB_BUILD = '2026.09.01-g';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -48696,6 +48725,14 @@ function renderPhotoCalInto(hostId, skipHero){
 
   host.innerHTML = h;
 
+  // 달력(과 표지)을 좌우로 밀면 달이 넘어간다. 호스트는 그대로 살아 있으므로
+  //   한 번만 건다 — innerHTML 만 갈아끼우는 구조라 셀에 걸면 매번 다시 걸어야 한다.
+  try {
+    if(typeof _taamBindCalSwipe === 'function'){
+      _taamBindCalSwipe(host, '.pcal-cal,.pcal-hero', pcalStep);
+    }
+  } catch(e){}
+
   // 선택된 달이 스트립 밖에 있으면 가운데로 끌어온다.
   //   시트가 올라오는 중에는 폭이 아직 안 잡혀 빗나가므로 한 박자 뒤 한 번 더 맞춘다.
   function _center(){
@@ -48828,6 +48865,15 @@ function pcalGo(y, m){
 }
 window.pcalGo = pcalGo;
 
+// 옆 달로 한 칸 — 좌우로 미는 제스처와 월 스트립이 같이 쓴다.
+//   자리가 없는 달도 지나간다. 스트립에서 빈 달을 눌러도 그 달을 보여주므로
+//   미는 것만 건너뛰면 「눌렀을 때와 밀었을 때가 다른」 달력이 된다.
+function pcalStep(dir){
+  var n = new Date(_pcalY, (_pcalM - 1) + dir, 1);
+  pcalGo(n.getFullYear(), n.getMonth() + 1);
+}
+window.pcalStep = pcalStep;
+
 function pcalYearToggle(ev){
   if(ev && ev.stopPropagation) ev.stopPropagation();
   _pcalYearOpen = !_pcalYearOpen;
@@ -48852,6 +48898,8 @@ window.pcalPickYear = pcalPickYear;
 
 // ── 날짜 바텀시트 ──
 function pcalOpenDay(y, m, d){
+  // 민 끝에 클릭이 따라온다 — 달을 넘긴 직후의 클릭은 무시한다
+  if(typeof _taamCalSwiped === 'function' && _taamCalSwiped()) return;
   // 아래 목록에서 그 날짜 줄을 금색으로 짚어 준다 (시트와 함께 — 시트가 주(主))
   var key = y*10000 + m*100 + d;
   var sec = document.getElementById('pcalDay' + key);
@@ -52677,6 +52725,7 @@ function tcalInit() {
   _tcalSelectedDate = null;
   var _d = document.getElementById('tcalDetail');
   if(_d) _d.innerHTML = '<div class="tcal-empty-day">불러오는 중…</div>';
+  _tcalBindSwipe();
   tcalRender();
   // 데이터 로드 → 완료 후 캘린더·상세 재렌더
   _tcalLoadFailed = false;   // 이번 로드의 실패 여부를 새로 집계한다
@@ -52694,6 +52743,12 @@ function tcalInit() {
       if(d2) d2.innerHTML = '<div class="tcal-empty-day">날짜를 선택하세요</div>';
     }
   });
+}
+
+// 좌우로 밀어도 달이 넘어간다 — 화살표와 같은 일을 한다
+function _tcalBindSwipe(){
+  if(typeof _taamBindCalSwipe !== 'function') return;
+  _taamBindCalSwipe(document.getElementById('tcalScroll'), '.tcal-grid,.tcal-nav', tcalMove);
 }
 
 function tcalMove(dir) {
@@ -52764,6 +52819,8 @@ function tcalRender() {
 }
 
 function tcalSelectDay(dateStr) {
+  // 민 끝에 클릭이 따라온다 — 달을 넘긴 직후의 클릭은 무시한다
+  if(typeof _taamCalSwiped === 'function' && _taamCalSwiped()) return;
   _tcalSelectedDate = dateStr;
   tcalRender(); // 선택 하이라이트 갱신
   tcalRenderDetail(dateStr);
