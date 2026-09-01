@@ -83,11 +83,11 @@ const { chromium } = require('playwright-core');
        && getComputedStyle(document.getElementById('mbScreen')).display === 'none');
     ok('콘솔은 안 닫힌다', getComputedStyle(adm).display !== 'none');
 
-    // 대시보드에서 한 번 더 → 회원 앱
+    // 🆕 앱으로 나가는 문은 ✕ 다 (← 는 늘 대시보드)
     let out2 = 0;
     const realMain = window.openMain; window.openMain = function(){ out2++; };
-    acBack();
-    ok('대시보드에서 ← → 회원 앱',
+    acExit();
+    ok('✕ → 회원 앱',
        getComputedStyle(document.getElementById('todayBoardScreen')).display === 'none'
        && getComputedStyle(adm).display === 'none' && out2 === 1);
     window.openMain = realMain;

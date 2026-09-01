@@ -2651,6 +2651,12 @@ input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none}
 /* Sub-screens */
 .sub-header{padding:54px 20px 16px;border-bottom:1px solid rgba(0,0,0,.08);display:flex;align-items:center;gap:12px;flex-shrink:0;background:#f7f5f2;}
 .sub-back{background:none;border:none;font-size:20px;cursor:pointer;color:#333;padding:0;}
+/* 🆕 2026.09-01 콘솔에서 앱으로 나가는 문. ← 는 대시보드로, ✕ 는 밖으로 —
+   같은 버튼이 두 가지 일을 하면 어느 쪽이 나올지 매번 헷갈린다. */
+.ac-x{flex:none;margin-left:10px;width:30px;height:30px;border:1px solid #e3dcce;
+  background:#fff;border-radius:9px;font-size:14px;line-height:1;color:#79736a;
+  cursor:pointer;font-family:var(--font-main);padding:0}
+.ac-x:active{background:#f2eee5;color:#17150f}
 .sub-title{font-family:var(--font-main);font-size:11px;font-weight:700;letter-spacing:.25em;text-transform:uppercase;color:#555;}
 .sub-content{flex:1;overflow-y:auto;padding:0 20px 40px;}
 .sub-empty{font-family:var(--font-main);font-size:13px;color:#bbb;text-align:center;padding:40px 0;}
@@ -12621,11 +12627,12 @@ window.closePromoCarousel = function(){
      ═══════════════════════════════════════════════════════════════ -->
 <div id="todayBoardScreen" class="sub-screen" data-lang-lock="ko" style="display:none;">
   <div class="sub-header">
-    <button class="sub-back" onclick="acBack()">←</button>
+    <button class="sub-back" id="tbBackBtn" onclick="acBack()" style="visibility:hidden;">←</button>
     <div class="sub-title">오늘</div>
-    <div style="margin-left:auto;display:flex;gap:6px;">
+    <div style="margin-left:auto;display:flex;gap:6px;align-items:center;">
       <button id="tbFindBtn" onclick="tbToggleFind()" class="tb-mini">이름 찾기</button>
       <button id="tbTodayBtn" onclick="tbGoToday()" class="tb-mini" style="display:none;">오늘로</button>
+      <button class="ac-x" onclick="acExit()" aria-label="앱으로 나가기" title="앱으로">✕</button>
     </div>
   </div>
   <div id="tbStrip" style="flex:none;background:#f7f5f2;border-bottom:1px solid rgba(0,0,0,.06);padding:10px 14px 12px;"></div>
@@ -12645,6 +12652,7 @@ window.closePromoCarousel = function(){
     <div class="sub-title">예약</div>
     <button class="rv-find" id="rvFindBtn" onclick="rvFindToggle()">찾기</button>
     <div id="rvCount" style="display:none;"></div>
+    <button class="ac-x" onclick="acExit()" aria-label="앱으로 나가기" title="앱으로">✕</button>
   </div>
   <div class="rv-bar">
     <!-- 🆕 2026.08-30: 시안대로 — 달을 말하지 않고 「그 날짜」를 말한다.
@@ -12677,6 +12685,7 @@ window.closePromoCarousel = function(){
     <button class="sub-back" onclick="acBack()">←</button>
     <div class="sub-title">회원</div>
     <div id="mbCount" style="margin-left:auto;font-family:var(--font-main);font-size:11.5px;font-weight:700;color:#79736a;"></div>
+    <button class="ac-x" onclick="acExit()" aria-label="앱으로 나가기" title="앱으로">✕</button>
   </div>
   <div class="mb-bar">
     <!-- 🆕 2026.09-01: 명부 / 접근 제어. 회원 탭은 보는 곳이자 **거는 곳**이다 -->
@@ -12701,6 +12710,7 @@ window.closePromoCarousel = function(){
     <button class="sub-back" onclick="acBack()">←</button>
     <div class="sub-title">티켓</div>
     <div id="tkbCount" style="margin-left:auto;font-family:var(--font-main);font-size:11.5px;font-weight:700;color:#79736a;"></div>
+    <button class="ac-x" onclick="acExit()" aria-label="앱으로 나가기" title="앱으로">✕</button>
   </div>
   <div class="mb-bar">
     <div class="rv-q">
@@ -12724,6 +12734,7 @@ window.closePromoCarousel = function(){
     <div id="pshBuild" onclick="acCopyBuild()" title="눌러서 복사"
       style="margin-left:auto;font-family:'Montserrat',sans-serif;font-size:10px;
       letter-spacing:.08em;color:#c4bdb2;cursor:pointer;"></div>
+    <button class="ac-x" onclick="acExit()" aria-label="앱으로 나가기" title="앱으로">✕</button>
   </div>
   <div id="pshBody" class="sub-content" style="padding:14px 14px 90px;"></div>
   <div class="ac-tabs" id="pshTabs" role="tablist"></div>
@@ -12777,6 +12788,7 @@ window.closePromoCarousel = function(){
     <button class="sub-back" onclick="acBack()">←</button>
     <div class="sub-title">더보기</div>
     <div id="moCount" style="margin-left:auto;font-family:var(--font-main);font-size:11.5px;font-weight:700;color:#79736a;"></div>
+    <button class="ac-x" onclick="acExit()" aria-label="앱으로 나가기" title="앱으로">✕</button>
   </div>
   <div class="mb-bar">
     <div class="rv-q">
@@ -32949,12 +32961,15 @@ window._acEnsureConsole = _acEnsureConsole;
 //   콘솔째로 나가 회원 앱(캘린더)이 떴고, 다시 들어오려면 한 번 더 눌러야 했다.
 //   나가는 길은 남는다 — **대시보드에서 한 번 더** 누르면 회원 앱이다.
 function acBack(){
-  var dash = document.getElementById('todayBoardScreen');
-  var onDash = false;
-  try{ onDash = !!dash && getComputedStyle(dash).display !== 'none'; }catch(e){}
-  if(!onDash){
-    if(typeof acGo === 'function'){ acGo('today'); return; }
-  }
+  // 어디서 눌러도 대시보드다. 대시보드에서 누르면(← 는 숨겨 두지만) 그대로 둔다 —
+  //   앱으로 나가는 길은 오른쪽 위 ✕ 다. 뒤로가기가 앱까지 내보내면
+  //   「대시보드로 돌아오려고 눌렀는데 앱이 떴다」가 된다.
+  if(typeof acGo === 'function') acGo('today');
+}
+window.acBack = acBack;
+
+// 콘솔을 나가 회원 앱(메인 캘린더)으로 — 오른쪽 위 ✕
+function acExit(){
   _acExiting = true;
   try{
     if(typeof _acCloseOthers === 'function') _acCloseOthers(null);
@@ -32967,7 +32982,7 @@ function acBack(){
     setTimeout(function(){ _acExiting = false; }, 80);
   }
 }
-window.acBack = acBack;
+window.acExit = acExit;
 
 // 대시보드의 「처리할 일」에서 바로 그 화면으로 간다.
 //   탭 화면을 먼저 닫고 연다 — 같은 z-index 라 겹쳐 열면 어느 것이 위인지가
@@ -38422,7 +38437,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.01-o';
+var TAAM_WEB_BUILD = '2026.09.01-p';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -74128,6 +74143,17 @@ window.LineageModule = {
   close: function() {
     // 🪟 전환 시작 — 잔상 차단을 위해 cream 커튼 즉시 ON (도착지 복원 끝나면 OFF)
     try { _lineageTransitionStart(); } catch(e){}
+
+    // 🆕 2026.09-01: 홈은 늘 **처음 상태**로 되돌린다 — 표지부터, 맨 위부터.
+    //   캘린더를 펼쳐 둔 채 계보도로 갔다가 닫고 나오면, 펼친 그대로 덮고 있어
+    //   「처음 화면」이 아니었다. 스크롤도 내려둔 자리가 그대로 남았다.
+    //   ⚠ 여기서 한 번, showView('home') 에서 또 한 번 닫는다. 닫는 건 여러 번
+    //     해도 해가 없지만, 한 번이라도 빠지면 열린 채로 돌아온다.
+    try { if(typeof magCloseSheet === 'function') magCloseSheet(); } catch(e){}
+    try {
+      var _ms = document.getElementById('magScroll'); if(_ms) _ms.scrollTop = 0;
+      var _hv0 = document.getElementById('homeView'); if(_hv0) _hv0.scrollTop = 0;
+    } catch(e){}
 
     // 커스텀 애니 플래그 리셋 (재진입 시 또 애니)
     try { _customAnimDone = {}; _customAnimQueue = {}; } catch(e){}
