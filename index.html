@@ -2436,7 +2436,9 @@ html.auto-login .splash .bottom-group{display:none !important}
 .tkb-row .tkb-nm{flex:1;min-width:0;font-size:13.5px;font-weight:800;line-height:1.4;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tkb-row .tkb-when{flex:none;font-family:'Montserrat',sans-serif;font-size:11.5px;font-weight:800;color:#79736a}
-.tkb-row .tkb-sub{display:block;font-size:11.5px;color:#79736a;margin-top:3px}
+/* 일정 한 줄 — 날짜·시간·인원은 한 가지 정보라 붙여 둔다. 숫자는 자리를 맞춘다 */
+.tkb-row .tkb-sub{display:block;font-size:12px;font-weight:700;color:#46413a;margin-top:4px;
+  font-variant-numeric:tabular-nums}
 /* 좌석 게이지 — 얼마나 찼는지가 숫자보다 먼저 읽힌다 */
 .tkb-bar{display:flex;align-items:center;gap:9px;margin-top:9px}
 .tkb-bar .g{flex:1;height:6px;border-radius:3px;background:#eae5da;overflow:hidden;min-width:40px}
@@ -2446,8 +2448,8 @@ html.auto-login .splash .bottom-group{display:none !important}
 .tkb-bar .n{flex:none;font-size:11px;font-weight:700;color:#79736a}
 .tkb-bar .n b{color:#17150f}
 .tkb-bar .n.full,.tkb-bar .n.full b{color:#9B1C1C}
-.tkb-st{display:inline-block;font-size:10px;font-weight:800;letter-spacing:.04em;
-  padding:2px 7px;border-radius:6px;margin-left:6px;vertical-align:1px}
+.tkb-st{flex:none;display:inline-block;font-size:10px;font-weight:800;letter-spacing:.04em;
+  padding:2px 7px;border-radius:6px;margin-left:8px;vertical-align:1px}
 .tkb-s-live{color:#1E6F44;background:#E6F1EA}
 .tkb-s-hide{color:#8A6216;background:#FAF0DA}
 .tkb-s-sold{color:#9B1C1C;background:#FBEBE9}
@@ -12636,7 +12638,8 @@ window.closePromoCarousel = function(){
     </div>
   </div>
   <div id="tbStrip" style="flex:none;background:#f7f5f2;border-bottom:1px solid rgba(0,0,0,.06);padding:10px 14px 12px;"></div>
-  <div id="tbBody" class="sub-content" style="padding:14px 14px 96px;"></div>
+  <!-- 아래 여백 140px — ＋ 버튼(바닥 70px + 높이 56px)이 마지막 카드를 덮지 않게 -->
+  <div id="tbBody" class="sub-content" style="padding:14px 14px 140px;"></div>
   <!-- 시안엔 「오늘」에도 같은 ＋ 가 있다. 예약 화면과 같은 시트를 쓴다 -->
   <button class="rv-fab" onclick="rvFabOpen('tb')" aria-label="빠른 추가">＋</button>
   <div class="rv-sheet" id="tbFabSheet" onclick="rvFabClose(event)">
@@ -32271,16 +32274,21 @@ function _tkbRow(t){
   var pct  = cap > 0 ? Math.min(100, Math.round(used / cap * 100)) : 0;
   var full = cap > 0 && left === 0;
 
-  var sub = [];
-  if(t.time) sub.push(t.time);
+  // 🆕 2026.09-01: 일정을 한 줄로 모은다.
+  //   종전엔 날짜가 첫 줄 오른쪽 끝, 시간이 둘째 줄 왼쪽이라 「언제」를 읽으려면
+  //   눈이 두 번 움직여야 했다. 날짜·시간·인원은 한 가지 정보다 — 붙여 둔다.
+  //   첫 줄은 매장 이름과 상태만. 무엇인지 먼저, 언제인지 그다음.
+  var sub = [_tbEsc(when)];
+  if(t.time) sub.push(_tbEsc(t.time));
+  if(cap > 0) sub.push(cap + '명');
   if(t.ticketGenre) sub.push(_tbEsc(t.ticketGenre));
 
   var h = '<button class="tkb-row' + (st.s === 'past' ? ' past' : '') + '" onclick="tkbToggleRow(\'' + esc + '\')">'
     + '<span class="tkb-top">'
-      + '<span class="tkb-nm">' + _tbEsc(rest) + '<span class="tkb-st ' + st.k + '">' + st.l + '</span></span>'
-      + '<span class="tkb-when">' + _tbEsc(when) + '</span>'
+      + '<span class="tkb-nm">' + _tbEsc(rest) + '</span>'
+      + '<span class="tkb-st ' + st.k + '">' + st.l + '</span>'
     + '</span>'
-    + (sub.length ? '<span class="tkb-sub">' + sub.join(' · ') + '</span>' : '')
+    + '<span class="tkb-sub">' + sub.join(' · ') + '</span>'
     // 좌석 — 정원을 모르면 게이지를 그리지 않는다. 0/0 막대는 거짓말이다
     + (cap > 0
         ? '<span class="tkb-bar">'
@@ -38437,7 +38445,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.01-p';
+var TAAM_WEB_BUILD = '2026.09.01-q';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -49813,6 +49821,10 @@ function _pcalDetailHtml(t, r, dead, expired){
 var MAGAZINE_LIVE = true;
 function magEnabled(){
   if(typeof newHomeEnabled !== 'function' || !newHomeEnabled()) return false;
+  // 🆕 2026.09-01: 「이 기기」에서 끈 경우를 **전역 플래그보다 먼저** 본다.
+  //   MAGAZINE_LIVE 가 true 로 올라간 뒤로 토글이 아무 일도 안 하고 있었다 —
+  //   메뉴에 있는 채로 눌러도 안 꺼지는 버튼이 됐다. 끄는 쪽이 이긴다.
+  try { if(localStorage.getItem('taamMagazine') === '0') return false; } catch(e){}
   if(MAGAZINE_LIVE) return true;
   try { return localStorage.getItem('taamMagazine') === '1'; } catch(e){ return false; }
 }
@@ -49824,11 +49836,13 @@ function toggleMagazine(){
     if(typeof showToast === 'function') showToast('⚠','권한 없음','슈퍼어드민 전용 기능입니다');
     return;
   }
+  // 🆕 2026.09-01: 기본이 켜짐으로 바뀌었으므로 **끄는 쪽**을 저장한다.
+  //   ('1' 을 저장하던 옛 값이 남아 있어도 켜짐으로 읽히므로 그대로 호환된다)
   var on = false;
   try {
-    on = localStorage.getItem('taamMagazine') === '1';
-    if(on) localStorage.removeItem('taamMagazine');
-    else   localStorage.setItem('taamMagazine', '1');
+    on = localStorage.getItem('taamMagazine') !== '0';
+    if(on) localStorage.setItem('taamMagazine', '0');
+    else   localStorage.removeItem('taamMagazine');
     on = !on;
   } catch(e){
     if(typeof showToast === 'function') showToast('⚠','저장 실패','localStorage 를 쓸 수 없습니다');
@@ -49846,7 +49860,7 @@ window.toggleMagazine = toggleMagazine;
 
 function magSync(){
   try {
-    var on = localStorage.getItem('taamMagazine') === '1';
+    var on = localStorage.getItem('taamMagazine') !== '0';   // 기본은 켜짐
     var lbl = document.getElementById('magLabel');
     if(lbl) lbl.textContent = on ? '🧪 매거진뷰 (이 기기) — 켜짐' : '🧪 매거진뷰 (이 기기) — 꺼짐';
   } catch(e){}
