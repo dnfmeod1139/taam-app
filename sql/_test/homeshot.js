@@ -54,7 +54,9 @@ const { chromium } = require('playwright-core');
     magOpenSheet();
     ok('홈에서는 표지가 뜨고 시트도 열린다', v.style.display === 'block' && open());
 
-    showView('ticket');                       // 다른 탭으로 이동
+    // ⚠ showView('ticket') 은 이제 입구에서 'home' 으로 돌아간다(옛 티켓 화면 차단).
+    //   홈을 실제로 떠나는 건 계보도·요청 탭이다.
+    showView('contents');                     // 계보도 탭으로 이동
     ok('탭을 옮기면 표지가 내려간다', v.style.display === 'none');
     ok('그때 시트도 접힌다', !open() && _magDet === 0);
 
@@ -71,6 +73,11 @@ const { chromium } = require('playwright-core');
     magRender(true);
     ok('표지가 뜨면 옛 티켓 목록은 내려간다',
        v.style.display === 'block' && getComputedStyle(tv).display === 'none');
+
+    // ── 옛 티켓 화면은 아예 목적지가 아니다 ──
+    tv.style.display = 'block';
+    showView('ticket');
+    ok("showView('ticket') 이 홈으로 돌아간다", getComputedStyle(tv).display === 'none');
 
     return out;
   });
