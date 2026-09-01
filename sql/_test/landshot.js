@@ -46,9 +46,9 @@ const { chromium } = require('playwright-core');
     // 실제로 눌러 본다 — 대시보드를 열고 ← 를 누르면 어드민 화면까지 닫혀야 한다
     const dash = document.getElementById('todayBoardScreen');
     dash.style.display = 'flex';
-    document.querySelector('#todayBoardScreen .sub-back').click();
-    ok('← 로 대시보드가 닫힌다', getComputedStyle(dash).display === 'none');
-    ok('← 로 「전체 메뉴」가 드러나지 않는다', getComputedStyle(adm).display === 'none');
+    document.querySelector('#todayBoardScreen .ac-x').click();
+    ok('✕ 로 대시보드가 닫힌다', getComputedStyle(dash).display === 'none');
+    ok('✕ 로 「전체 메뉴」가 드러나지 않는다', getComputedStyle(adm).display === 'none');
 
     // ── 빌드 번호가 대시보드로 옮겨졌나 ──
     window._tbRows = []; window._qmCfg = []; window._qmCfgRole = 'superadmin'; window._qmPulled = true;

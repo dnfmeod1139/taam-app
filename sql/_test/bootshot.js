@@ -27,9 +27,9 @@ const { chromium } = require('playwright-core');
     let mainOpened = 0;
     const realMain = window.openMain;
     window.openMain = function(){ mainOpened++; };   // 실제 부팅은 무겁다 — 호출만 센다
-    acBack();
-    ok('← 로 콘솔이 닫힌다', d('todayBoardScreen') === 'none' && d('adminScreen') === 'none');
-    ok('← 는 회원 앱으로 나간다 (openMain 호출)', mainOpened === 1);
+    acExit();
+    ok('✕ 로 콘솔이 닫힌다', d('todayBoardScreen') === 'none' && d('adminScreen') === 'none');
+    ok('✕ 는 회원 앱으로 나간다 (openMain 호출)', mainOpened === 1);
     window.openMain = realMain;
     ok('openMain 이 세션에 한 번만 열도록 막고 있다',
        /_acAutoOpened/.test(String(window.openMain)) &&
@@ -60,8 +60,8 @@ const { chromium } = require('playwright-core');
     ok('파트너 어드민 화면이 뒤에 깔린다', d('partnerAdminScreen') !== 'none');
     const tabs = [...document.querySelectorAll('#tbTabs .ac-tab, #todayBoardScreen .ac-tabs *')]
       .map(e => e.textContent.trim()).filter(Boolean).join('·');
-    acBack();
-    ok('파트너 ← 도 콘솔을 닫는다', d('todayBoardScreen') === 'none' && d('partnerAdminScreen') === 'none');
+    acExit();
+    ok('파트너 ✕ 도 콘솔을 닫는다', d('todayBoardScreen') === 'none' && d('partnerAdminScreen') === 'none');
 
     return out;
   });

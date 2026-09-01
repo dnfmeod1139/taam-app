@@ -53,9 +53,9 @@ const { chromium } = require('playwright-core');
 
   // ── ← 는 여전히 콘솔을 나간다 (되돌아오지 않는다) ──
   await p.evaluate(() => { window.openMain = function(){}; });
-  await p.evaluate(() => acBack());
+  await p.evaluate(() => acExit());
   await p.waitForTimeout(200);
-  ok('← 로 콘솔이 닫히고 대시보드가 다시 안 열린다',
+  ok('✕ 로 콘솔이 닫히고 대시보드가 다시 안 열린다',
      (await d('todayBoardScreen')) === 'none' && (await d('adminScreen')) === 'none');
 
   // ── 처리할 일 줄이 눌린다 ──
