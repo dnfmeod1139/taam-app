@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5">
+<meta name="robots" content="noindex, nofollow">
+<title>貸切ゲストシート — TAAM</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:opsz,wght@6..96,700&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+<!--
+  ════════════════════════════════════════════════════════════════
+  貸切ゲストシート — 셰프에게 보내는 한 장 (로그인 없음)
+  ════════════════════════════════════════════════════════════════
+  스기타 같은 분에게 앱을 들이밀면 그 자리에서 끝난다. 그래서 링크 하나로
+  끝나는 화면을 따로 둔다. LINE·인스타 DM 어디로 던져도 열린다.
+
+  ⚠ 돈은 이 페이지가 감추는 게 아니다.
+    taam_kashikiri_sheet_public() 이 **금액 컬럼을 아예 select 하지 않는다.**
+    개발자 도구를 열어도 팀 확정액·청구액·환율·매장 지급액이 없다.
+    딱 하나 나가는 금액은 「그 매장에서의 지난 회계」다 — 원래 그 매장 매출이다.
+  ⚠ 전화번호는 컬럼 자체가 없다. 없는 것은 샐 수 없다.
+  ════════════════════════════════════════════════════════════════
+-->
+<style>
+:root{
+  --ground:#F6F6F7; --card:#FFFFFF;
+  --ink:#16161A; --ink-2:#61616B; --ink-3:#9A9AA4;
+  --rule:#E6E6EA; --rule-2:#F0F0F3;
+  --burg:#7A1B2B;
+  --blue:#2C5AA0; --blue-bg:#E8EFF9;
+  --green:#2C6B47; --green-bg:#E6F2EA;
+  --amber:#9A5116;
+  --shadow:0 1px 2px rgba(22,22,26,.04),0 1px 12px -6px rgba(22,22,26,.14);
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ground:#121215; --card:#1B1B20;
+    --ink:#EFEFF2; --ink-2:#A3A3AE; --ink-3:#71717C;
+    --rule:#2C2C34; --rule-2:#24242B;
+    --burg:#D98494;
+    --blue:#8FB4E4; --blue-bg:#1B2536;
+    --green:#7FC79B; --green-bg:#152618;
+    --amber:#E0A468;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 1px 12px -6px rgba(0,0,0,.8);
+  }
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{background:var(--ground);color:var(--ink);
+  font-family:'Noto Sans JP','Hiragino Kaku Gothic ProN','Yu Gothic',system-ui,sans-serif;
+  font-size:15px;line-height:1.75;-webkit-font-smoothing:antialiased;padding:22px 14px 48px}
+.sheet{max-width:520px;margin:0 auto}
+
+.top{display:flex;align-items:baseline;gap:12px}
+.wordmark{font-family:'Bodoni Moda',Didot,serif;font-weight:700;font-size:21px;
+  letter-spacing:.28em;color:var(--burg);line-height:1}
+.kind{margin-left:auto;font-size:12.5px;color:var(--ink-3);letter-spacing:.04em}
+.date{margin-top:12px;font-size:24px;font-weight:700;letter-spacing:-.01em;
+  line-height:1.35;font-variant-numeric:tabular-nums}
+.venue{margin-top:2px;font-size:14px;color:var(--ink-2)}
+
+.pills{margin-top:15px;display:flex;flex-wrap:wrap;gap:8px}
+.pill{display:inline-flex;align-items:center;gap:6px;border-radius:999px;
+  font-size:12.5px;font-weight:500;padding:6px 14px 6px 11px;white-space:nowrap}
+.pill svg{width:14px;height:14px;flex:none}
+.pill.escort{background:var(--blue-bg);color:var(--blue)}
+.pill.escort.off{background:transparent;color:var(--ink-3);box-shadow:inset 0 0 0 1px var(--rule)}
+.pill.verified{background:var(--green-bg);color:var(--green)}
+
+.teams{margin-top:18px;display:grid;gap:11px}
+.card{background:var(--card);border:1px solid var(--rule);border-radius:14px;
+  box-shadow:var(--shadow);overflow:hidden}
+.card > .hit{display:block;width:100%;text-align:left;background:none;border:0;
+  font:inherit;color:inherit;padding:15px 17px 14px;cursor:pointer;
+  -webkit-tap-highlight-color:transparent}
+.card > .hit:focus-visible{outline:2px solid var(--blue);outline-offset:-3px}
+.hd{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap}
+.hd .grp{font-size:16px;font-weight:700;letter-spacing:-.01em}
+.hd .host{font-size:14.5px;color:var(--ink-3);font-weight:500}
+.hd .host b{color:var(--ink-2);font-weight:500}
+.hd .visit{margin-left:auto;font-size:13.5px;font-weight:500;color:var(--blue);
+  white-space:nowrap;font-variant-numeric:tabular-nums}
+.hd .visit.first{color:var(--ink-3);font-weight:400}
+.lines{margin-top:9px;display:grid;gap:3px}
+.ln{display:flex;gap:7px;font-size:14px;line-height:1.7}
+.ln .k{color:var(--ink-3);flex:none}
+.ln .v .amt{font-weight:500;font-variant-numeric:tabular-nums}
+.ln .v .when{color:var(--ink-3);font-size:12.5px;margin-left:3px}
+.ln.none .v{color:var(--ink-3)}
+.ln.warn .v{color:var(--amber);font-weight:500}
+.more{margin-top:11px;display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-3)}
+.more .chev{width:11px;height:11px;transition:transform .22s ease}
+.card.open .more .chev{transform:rotate(180deg)}
+.card.open .more .lbl-c{display:none}
+.more .lbl-o{display:none}
+.card.open .more .lbl-o{display:inline}
+@media (prefers-reduced-motion: reduce){ .more .chev{transition:none} }
+
+.detail{border-top:1px solid var(--rule-2);padding:4px 17px 6px}
+.g{padding:13px 0}
+.g + .g{border-top:1px solid var(--rule-2)}
+.g-h{display:flex;align-items:baseline;gap:8px}
+.g-h .nm{font-size:15px;font-weight:700;letter-spacing:-.01em}
+.g-h .tag{font-size:10.5px;font-weight:500;padding:1px 7px;border-radius:999px;
+  background:var(--blue-bg);color:var(--blue)}
+.g-h .cnt{margin-left:auto;font-size:12.5px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.g-l{margin-top:5px;display:grid;gap:2px}
+.g-l .r{display:flex;gap:7px;font-size:13.5px;line-height:1.7}
+.g-l .r .k{color:var(--ink-3);flex:none;min-width:4.6em}
+.g-l .r.warn .v{color:var(--amber);font-weight:500}
+.g-l .r.none .v{color:var(--ink-3)}
+.memo{margin-top:7px;padding:9px 12px;border-radius:9px;background:var(--ground);
+  font-size:13px;line-height:1.8;color:var(--ink-2)}
+
+.foot{margin-top:22px;padding-top:16px;border-top:1px solid var(--rule)}
+.foot p{font-size:13px;line-height:1.9;color:var(--ink-2)}
+.foot p + p{margin-top:2px}
+.foot b{color:var(--ink);font-weight:500}
+.fine{margin-top:13px;font-size:11px;line-height:1.75;color:var(--ink-3)}
+.stamp{margin-top:14px;display:flex;align-items:center;gap:9px;font-size:10.5px;color:var(--ink-3)}
+.stamp .sp{flex:1;border-bottom:1px solid var(--rule-2)}
+
+.msg{background:var(--card);border:1px solid var(--rule);border-radius:14px;
+  padding:34px 20px;text-align:center;box-shadow:var(--shadow);margin-top:18px}
+.msg .t{font-size:16px;font-weight:700}
+.msg .d{margin-top:7px;font-size:13.5px;color:var(--ink-2);line-height:1.85}
+.skel{height:15px;border-radius:6px;background:var(--rule-2);margin:10px 0}
+.skel.w60{width:60%} .skel.w40{width:40%}
+[hidden]{display:none !important}
+</style>
+</head>
+<body>
+<div class="sheet">
+
+  <div class="top">
+    <span class="wordmark">TAAM</span>
+    <span class="kind">貸切ゲストシート</span>
+  </div>
+
+  <div id="load"><div class="skel w60"></div><div class="skel"></div><div class="skel w40"></div></div>
+
+  <div id="body" hidden>
+    <div class="date"  id="sDate"></div>
+    <div class="venue" id="sVenue"></div>
+    <div class="pills" id="sPills"></div>
+    <div class="teams" id="sTeams"></div>
+
+    <footer class="foot">
+      <p>ご連絡はすべて <b>TAAM（Woo）</b> までお願いいたします。</p>
+      <p>当日の変更・キャンセルは <b>全額 TAAM が責任を負います</b>。</p>
+      <p class="fine">お客様のお名前は姓のみ、お電話番号は記載しておりません。お気づきの点は TAAM 担当までお知らせください — 次回のご案内に反映いたします。</p>
+      <div class="stamp"><span class="sp"></span><span id="sStamp"></span></div>
+    </footer>
+  </div>
+
+  <div class="msg" id="msg" hidden>
+    <div class="t" id="mT"></div>
+    <div class="d" id="mD"></div>
+  </div>
+
+</div>
+
+<script>
+(function(){
+  'use strict';
+  var SB_URL = 'https://edfsmzbcixfnqabrsvut.supabase.co';
+  var SB_KEY = 'sb_publishable_NlJp3lRtSVvkgFGRBesoog_q4XlGEPC';
+
+  var $ = function(id){ return document.getElementById(id); };
+  var WD = ['日','月','火','水','木','金','土'];
+
+  function esc(s){
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+      return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];
+    });
+  }
+  function yen(n){ return '¥' + (parseInt(n,10)||0).toLocaleString('ja-JP'); }
+  function ym(d){
+    if(!/^\d{4}-\d{2}-\d{2}/.test(String(d||''))) return '';
+    var p = String(d).slice(0,10).split('-');
+    return p[0] + '.' + p[1];
+  }
+  function msg(t, d){
+    $('load').hidden = true; $('body').hidden = true;
+    $('mT').textContent = t; $('mD').textContent = d || '';
+    $('msg').hidden = false;
+  }
+
+  var TOKEN = (new URLSearchParams(location.search).get('t') || '').trim();
+
+  function paint(v){
+    // 日付
+    var d = String(v.event_date || ''), t = String(v.event_time || '').slice(0,5);
+    if(/^\d{4}-\d{2}-\d{2}$/.test(d)){
+      var p = d.split('-');
+      var w = WD[new Date(Date.UTC(+p[0],+p[1]-1,+p[2])).getUTCDay()];
+      $('sDate').textContent = +p[0] + '年' + (+p[1]) + '月' + (+p[2]) + '日（' + w + '）' + (t ? ' ' + t : '');
+    } else { $('sDate').textContent = d; }
+
+    var teams = Array.isArray(v.teams) ? v.teams : [];
+    $('sVenue').textContent = (v.venue_name || '') + '　貸切 ・ 計' + (v.total_pax || 0) + '名（' + teams.length + '組）';
+
+    // 引率 — 無い回も必ず出す。出さない回があると、この印が意味を失う
+    var esc1 = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>';
+    var esc2 = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>';
+    $('sPills').innerHTML =
+      '<span class="pill escort' + (v.escort ? '' : ' off') + '">' + esc1
+        + (v.escort ? 'Woo引率 同行あり' : 'Woo引率なし・TAAM検証済ゲスト') + '</span>'
+      + '<span class="pill verified">' + esc2 + '全員TAAM検証済</span>';
+
+    var h = '';
+    teams.forEach(function(tm, i){
+      var gs = Array.isArray(tm.guests) ? tm.guests : [];
+      var host = gs.filter(function(g){ return g.is_host; })[0] || null;
+
+      // 겉면 3줄 — 주류 / 지난 회계(초방문이면 참가 횟수) / 알레르기
+      var vis = host ? (parseInt(host.visit_count,10) || 0) : 0;
+      var visTx = vis > 0 ? ('御店 ' + vis + '回目') : '御店 初訪問';
+
+      var lines = '';
+      if(tm.drink_note) lines += '<div class="ln"><span class="k">お酒:</span><span class="v">' + esc(tm.drink_note) + '</span></div>';
+      if(host && host.last_spend){
+        lines += '<div class="ln"><span class="k">前回お会計:</span><span class="v"><span class="amt">'
+               + yen(host.last_spend) + '</span><span class="when">（' + esc(ym(host.last_visit)) + '）</span></span></div>';
+      }
+      // 알레르기·주의는 인원에서 모아 겉면에 올린다 — 열지 않아도 보여야 한다
+      var warn = [];
+      gs.forEach(function(g){ if(g.allergy) warn.push(esc(g.allergy)); });
+      if(tm.allergy_note) warn.push(esc(tm.allergy_note));
+      lines += warn.length
+        ? '<div class="ln warn"><span class="k">アレルギー:</span><span class="v">' + warn.join('・') + '</span></div>'
+        : '<div class="ln none"><span class="k">アレルギー:</span><span class="v">なし</span></div>';
+
+      // 상세 — 인원별
+      var det = '';
+      gs.forEach(function(g){
+        var gv = parseInt(g.visit_count,10) || 0;
+        det += '<div class="g"><div class="g-h"><span class="nm">' + esc(g.name) + '</span>'
+             + (g.is_host ? '<span class="tag">ホスト</span>' : '')
+             + '<span class="cnt">' + (gv > 0 ? ('御店 ' + gv + '回目') : '初訪問') + '</span></div><div class="g-l">';
+        if(g.drink_note) det += '<div class="r"><span class="k">お酒</span><span class="v">' + esc(g.drink_note) + '</span></div>';
+        if(g.last_spend) det += '<div class="r"><span class="k">前回</span><span class="v">' + yen(g.last_spend)
+                              + '（' + esc(ym(g.last_visit)) + '）</span></div>';
+        det += g.allergy
+          ? '<div class="r warn"><span class="k">アレルギー</span><span class="v">' + esc(g.allergy) + '</span></div>'
+          : '<div class="r none"><span class="k">アレルギー</span><span class="v">なし</span></div>';
+        det += '</div>';
+        if(g.memo) det += '<div class="memo">' + esc(g.memo) + '</div>';
+        det += '</div>';
+      });
+
+      h += '<article class="card" id="c' + i + '">'
+         +   '<button class="hit" type="button" aria-expanded="false" aria-controls="d' + i + '" data-i="' + i + '">'
+         +     '<div class="hd"><span class="grp">' + (tm.seq || i+1) + '組・' + (tm.pax || gs.length) + '名</span>'
+         +       (tm.host_label ? '<span class="host">ホスト <b>' + esc(tm.host_label) + '</b></span>' : '')
+         +       '<span class="visit' + (vis > 0 ? '' : ' first') + '">' + visTx + '</span></div>'
+         +     '<div class="lines">' + lines + '</div>'
+         +     '<div class="more"><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>'
+         +       '<span class="lbl-c">' + gs.length + '名の詳細を見る</span><span class="lbl-o">閉じる</span></div>'
+         +   '</button>'
+         +   '<div class="detail" id="d' + i + '" hidden>' + det + '</div>'
+         + '</article>';
+    });
+    $('sTeams').innerHTML = h;
+
+    // 눌러서 펼치기 — 높이를 만지지 않고 hidden 만 여닫는다
+    Array.prototype.forEach.call($('sTeams').querySelectorAll('.hit'), function(b){
+      b.addEventListener('click', function(){
+        var i = b.getAttribute('data-i');
+        var c = $('c' + i), p = $('d' + i);
+        var open = !p.hidden;
+        p.hidden = open;
+        c.classList.toggle('open', !open);
+        b.setAttribute('aria-expanded', String(!open));
+      });
+    });
+
+    var now = new Date();
+    $('sStamp').textContent = now.getFullYear() + '.'
+      + String(now.getMonth()+1).padStart(2,'0') + '.'
+      + String(now.getDate()).padStart(2,'0') + ' 現在';
+
+    $('load').hidden = true; $('body').hidden = false;
+  }
+
+  (async function(){
+    if(!TOKEN){ msg('リンクが正しくありません', '受け取られたリンクをもう一度お開きください。'); return; }
+    var v = null;
+    try {
+      var res = await fetch(SB_URL + '/rest/v1/rpc/taam_kashikiri_sheet_public', {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json', 'apikey':SB_KEY, 'Authorization':'Bearer '+SB_KEY },
+        body: JSON.stringify({ p_token: TOKEN })
+      });
+      v = await res.json();
+    } catch(e){
+      msg('読み込めませんでした', 'しばらくしてからもう一度お試しください。'); return;
+    }
+    if(!v){ msg('ご覧いただけません', 'このリンクは無効になりました。TAAM 担当までお問い合わせください。'); return; }
+    if(v.expired){ msg('閲覧期間が終了しました', 'この控えは貸切当日から3日で閲覧できなくなります。TAAM 担当までお知らせください。'); return; }
+    paint(v);
+  })();
+})();
+</script>
+</body>
+</html>
