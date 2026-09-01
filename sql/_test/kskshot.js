@@ -64,7 +64,7 @@ const { chromium } = require('playwright-core');
         const key = t.replace('kashikiri_', '');
         const o = q(DB[key] || []);
         o.insert = (row) => { window.__ins = [t, row]; return q([{ id: 'new-1' }]); };
-        o.update = (row) => { window.__upd = [t, row]; return q([]); };
+        o.update = (row) => { window.__upd = [t, row]; (window.__upds = window.__upds || []).push([t, row]); return q([]); };
         o.delete = () => q([]);
         return o;
       },
@@ -204,7 +204,86 @@ const { chromium } = require('playwright-core');
        RPC.some(x => x[0] === 'taam_kashikiri_sheet_link' && x[1].p_event_id === 'e1'));
     ok('시트 링크는 /sheet/?t=', copied && copied.indexOf('/sheet/?t=') >= 0);
 
+    // ── ⑦ 입력 시트 — prompt() 를 안 쓴다 ────────────────────
+    let promptCalls = 0;
+    window.prompt = function(){ promptCalls++; return null; };
+    window.confirm = function(){ promptCalls++; return true; };
+
+    await window.kskOpenEvent('e1'); await sleep(150);
+    window.kskEditEvent(); await sleep(120);
+    ok('회차 정보가 시트로 뜬다', document.getElementById('kskForm').style.display === 'flex');
+    ok('prompt 를 쓰지 않는다', promptCalls === 0);
+    const ff = document.getElementById('kskfBody');
+    ok('매장 이름 칸에 현재 값',  document.getElementById('kskf_name').value === '鮨 めい乃');
+    ok('날짜 칸에 현재 값',       document.getElementById('kskf_date').value === '2027-01-01');
+    ok('시간 칸에 현재 값',       document.getElementById('kskf_time').value === '18:00');
+    ok('환율 칸은 꼬리 0 없이',   document.getElementById('kskf_fx').value === '9.35');
+    ok('환율 근거 칸',            document.getElementById('kskf_note').value.indexOf('매매기준율') >= 0);
+    ok('매장 지급은 콤마로',      document.getElementById('kskf_paid').value === '960,000');
+    ok('동행은 세그먼트',         document.getElementById('kskf_escort').getAttribute('data-v') === '1');
+    ok('한 판에 8칸이 다 보인다', ff.querySelectorAll('.kskf-f').length === 8);
+
+    // 세그먼트 전환
+    window.kskFormSeg('escort', '0'); await sleep(40);
+    ok('동행 없음으로 바뀐다', document.getElementById('kskf_escort').getAttribute('data-v') === '0');
+
+    // 필수값 검사 — 저장하지 않고 시트에 머문다
+    document.getElementById('kskf_name').value = '';
+    await window.kskFormSave(); await sleep(120);
+    ok('필수값이 비면 안 닫힌다', document.getElementById('kskForm').style.display === 'flex');
+    ok('무엇이 빠졌는지 알려준다',
+       document.getElementById('kskfErr').textContent.indexOf('매장 이름') >= 0);
+    ok('저장 버튼이 다시 열린다', document.getElementById('kskfGo').disabled === false);
+
+    // 제대로 채우면 저장된다
+    document.getElementById('kskf_name').value = '鮨 あお';
+    document.getElementById('kskf_fx').value = '9.4';
+    window.__upds = [];
+    await window.kskFormSave(); await sleep(250);
+    ok('저장하면 닫힌다', document.getElementById('kskForm').style.display === 'none');
+    // 회차 update 는 첫 호출. 그 뒤 조 원화 재계산 update 가 이어진다.
+    const evUpd = (window.__upds || []).filter(x => x[0] === 'kashikiri_events')[0];
+    ok('세그먼트 값이 boolean 으로 간다', !!evUpd && evUpd[1].escort === false);
+    ok('환율이 숫자로 간다', !!evUpd && evUpd[1].fx_rate === 9.4);
+    ok('환율이 바뀌면 조 원화도 다시 계산한다',
+       (window.__upds || []).some(x => x[0] === 'kashikiri_teams' && x[1].total_krw === Math.round(450000 * 9.4)));
+
+    // ── 조 추가 — 게스트 이름까지 한 판에 ────────────────────
+    window.kskAddTeam(); await sleep(120);
+    ok('조 추가도 시트',    document.getElementById('kskForm').style.display === 'flex');
+    ok('게스트 이름 칸이 같이 있다', !!document.getElementById('kskf_names'));
+    ok('주류·알레르기도 같이',
+       !!document.getElementById('kskf_drink') && !!document.getElementById('kskf_allergy'));
+    // 앞 테스트에서 3組(t3)을 이미 넣었으므로 다음은 4組 — seq 는 최대값 +1 이다
+    ok('새 조는 4組 (seq 자동)', document.getElementById('kskfTitle').textContent.indexOf('4組') >= 0);
+    document.getElementById('kskf_host').value = 'Z様';
+    document.getElementById('kskf_pax').value = '2';
+    document.getElementById('kskf_names').value = 'Z様*, W様';
+    window.__ins = null;
+    await window.kskFormSave(); await sleep(250);
+    ok('조가 저장된다', window.__ins && window.__ins[0] === 'kashikiri_guests');
+
+    // 조 수정 — 현재 게스트 이름이 채워져 온다
+    window.kskEditTeam('t1'); await sleep(120);
+    ok('조 수정 시트에 확정 엔화', document.getElementById('kskf_jpy').value === '450,000');
+    ok('게스트 이름이 채워져 온다',
+       document.getElementById('kskf_names').value === 'K様*, P様, L様, C様');
+    window.kskFormClose(); await sleep(80);
+    ok('취소하면 닫힌다', document.getElementById('kskForm').style.display === 'none');
+
+    ok('끝까지 prompt 를 한 번도 안 썼다', promptCalls === 0);
+
+    // ── ⑧ 토스트가 아래로 새지 않는다 ────────────────────────
+    //   배너는 top:20px 이고 그 아래에 콘솔 헤더의 ✕(앱으로 나가기)가 있다.
+    //   pointer-events:none 이면 탭이 그대로 통과해 앱 밖으로 나갔다.
+    const tb = document.getElementById('toastBanner');
+    tb.classList.add('show'); tb.style.display = 'flex';
+    ok('떠 있는 토스트는 탭을 삼킨다', getComputedStyle(tb).pointerEvents === 'auto');
+    tb.classList.remove('show');
+    ok('숨은 토스트는 화면을 막지 않는다', getComputedStyle(tb).pointerEvents === 'none');
+
     // ── 뒤로가기 ────────────────────────────────────────────
+    await window.kskOpenEvent('e1'); await sleep(150);
     window.kskBack(); await sleep(120);
     ok('상세에서 뒤로 = 목록', document.getElementById('kskTitle').textContent === '대관 정산');
 
