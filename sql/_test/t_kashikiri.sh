@@ -166,5 +166,88 @@ echo "── ⑫ 만료된 시트 ──"
 $P -c "update public.kashikiri_events set sheet_expires = now() - interval '1 day';" >/dev/null
 has "만료 표시로 돌려준다" "expired" "$($P -c "select public.taam_kashikiri_sheet_public('$ST2');" | tail -1)"
 
+
+echo "── ⑬ 판매 티켓에서 조 불러오기 ──"
+# 티켓 상품 하나에 구매 3건 — 4인 · 2인 · 2인 (그 조의 인원이 곧 party_size)
+$P -c "
+delete from public.tickets where purchase_id like 'KSK-%';
+insert into public.tickets(user_id,restaurant_id,purchase_id,status,price,party_size,
+        reservation_date,ticket_product_id,buyer_name,created_at)
+ values ('$MEM','$RA','KSK-1','active',100000,4,'2027-01-01','TP_MEI','김우종', now()),
+        ('$OTH','$RA','KSK-2','active',100000,2,'2027-01-01','TP_MEI','박지연', now() + interval '1 min'),
+        ('$SUP','$RA','KSK-3','active',100000,2,'2027-01-01','TP_MEI','이상훈', now() + interval '2 min'),
+        ('$MEM','$RA','KSK-X','cancelled',100000,2,'2027-01-01','TP_MEI','취소된사람', now());
+-- 김우종의 지난 방문 — 이 매장 2건만 세어야 한다 (취소·타매장 제외)
+insert into public.tickets(user_id,restaurant_id,purchase_id,status,price,party_size,
+        reservation_date,visit_status)
+ values ('$MEM','$RA','KSK-V1','active',100000,2,'2026-08-01','attended'),
+        ('$MEM','$RA','KSK-V2','active',100000,2,'2026-09-01','attended'),
+        ('$MEM','$RA','KSK-V3','cancelled',100000,2,'2026-10-01','attended'),
+        ('$MEM','$RB','KSK-V4','active',100000,2,'2026-08-01','attended');
+delete from public.kashikiri_charges; delete from public.kashikiri_guests;
+delete from public.kashikiri_teams;
+update public.kashikiri_events set ticket_product_id='TP_MEI', venue_id='$RA';
+" >/dev/null 2>&1
+
+ok "티켓이 없으면 거절" FAIL \
+   "$($P -c "update public.kashikiri_events set ticket_product_id=null;" >/dev/null;
+      rc $SUP "select public.taam_kashikiri_import_teams('e1111111-1111-4111-8111-111111111111');")"
+$P -c "update public.kashikiri_events set ticket_product_id='TP_MEI';" >/dev/null
+
+ok "회원은 못 불러온다" FAIL \
+   "$(rc $MEM "select public.taam_kashikiri_import_teams('e1111111-1111-4111-8111-111111111111');")"
+
+R=$(as $SUP "select public.taam_kashikiri_import_teams('e1111111-1111-4111-8111-111111111111');")
+has "3건을 만든다"        '"created": 3'  "$R"
+has "총 인원 8명으로 맞춘다" '"total_pax": 8' "$R"
+ok "조가 3개"             3 "$(sudo_ "select count(*) from public.kashikiri_teams;")"
+ok "취소된 구매는 안 온다" 0 "$(sudo_ "select count(*) from public.kashikiri_teams where host_label='취'||'様';")"
+ok "인원이 구매대로 4·2·2" "4,2,2" \
+   "$(sudo_ "select string_agg(pax::text,',' order by seq) from public.kashikiri_teams;")"
+ok "호스트가 구매자다" "$MEM" \
+   "$(sudo_ "select host_user_id from public.kashikiri_teams where seq=1;")"
+ok "표기는 姓+様 초안" "김様" \
+   "$(sudo_ "select host_label from public.kashikiri_teams where seq=1;")"
+ok "게스트도 같이 생긴다" 3 "$(sudo_ "select count(*) from public.kashikiri_guests;")"
+ok "게스트가 호스트로 표시" 3 "$(sudo_ "select count(*) from public.kashikiri_guests where is_host;")"
+# 지난 방문 2건만 세어야 한다 — 취소된 건과 남의 매장 건은 빠진다
+ok "그 매장 방문 횟수가 채워진다 (취소·타매장 제외)" 2 \
+   "$(sudo_ "select visit_count from public.kashikiri_guests g
+              join public.kashikiri_teams t on t.id=g.team_id where t.seq=1;")"
+
+echo "── ⑭ 두 번 불러도 안전하다 ──"
+R2=$(as $SUP "select public.taam_kashikiri_import_teams('e1111111-1111-4111-8111-111111111111');")
+has "새로 만든 건 0"   '"created": 0'  "$R2"
+has "3건은 건너뛴다"   '"skipped": 3'  "$R2"
+ok "조가 여전히 3개"   3 "$(sudo_ "select count(*) from public.kashikiri_teams;")"
+
+echo "── ⑮ 구매가 하나 늘면 그것만 온다 ──"
+$P -c "insert into public.tickets(user_id,restaurant_id,purchase_id,status,price,party_size,
+         reservation_date,ticket_product_id,buyer_name,created_at)
+       values ('$MEM','$RA','KSK-4','active',100000,1,'2027-01-01','TP_MEI','최은서', now() + interval '3 min');" >/dev/null
+R3=$(as $SUP "select public.taam_kashikiri_import_teams('e1111111-1111-4111-8111-111111111111');")
+has "1건만 새로"       '"created": 1'  "$R3"
+ok "seq 가 4로 이어진다" 4 "$(sudo_ "select max(seq) from public.kashikiri_teams;")"
+ok "총 인원 9명"        9 "$(sudo_ "select total_pax from public.kashikiri_events;")"
+
+echo "── ⑯ 게스트 시트 — 나갈 것만 나간다 ──"
+# 금액을 셋으로 갈라 둔다. 무엇이 나가고 무엇이 안 나가는지 한 판에 보려는 것이다.
+#   512000 = 그 매장에서의 지난 회계 → **나가야 한다** (원래 그 매장 매출)
+#   777777 = 조 확정액                → 나가면 안 된다
+#   888888 = 매장 지급액              → 나가면 안 된다
+$P -c "update public.tickets set price = 512000 where purchase_id = 'KSK-V2';
+       update public.kashikiri_teams set total_jpy = 777777, total_krw = 777777 where seq = 1;
+       update public.kashikiri_events set venue_paid_jpy = 888888,
+              sheet_expires = now() + interval '3 day';" >/dev/null
+ST3=$(as $SUP "select public.taam_kashikiri_sheet_link('e1111111-1111-4111-8111-111111111111', 3);")
+$P -c "update public.kashikiri_events set sheet_expires = now() + interval '3 day';" >/dev/null
+G3=$($P -c "select public.taam_kashikiri_sheet_public('$ST3');" | tail -1)
+has  "불러온 조가 시트에"        "김様"        "$G3"
+has  "방문 횟수도"               "visit_count" "$G3"
+has  "그 매장 지난 회계는 나간다" "512000"      "$G3"
+hasnt "조 확정액(777777)은 안 나간다"   "777777" "$G3"
+hasnt "매장 지급액(888888)은 안 나간다" "888888" "$G3"
+hasnt "전화번호 컬럼은 여전히 없다"     "phone"  "$G3"
+
 echo
 [ "$FAIL" = "1" ] && echo "=== 실패 있음 ===" || echo "=== 전부 통과 ==="
