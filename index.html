@@ -2345,6 +2345,28 @@ html.auto-login .splash .bottom-group{display:none !important}
 #tbBody .split{display:flex;height:8px;border-radius:4px;overflow:hidden;background:#eae5da;margin-top:10px}
 #tbBody .split i{display:block;height:100%}
 
+/* ═══ 🆕 2026.09-01 방문 기록 몰아 찍기 ═══ */
+#visBody .vis-note{font-size:11.5px;color:#79736a;line-height:1.75;background:#fcfaf5;
+  border:1px dashed #e3dcce;border-radius:10px;padding:11px 12px;margin:0 0 14px}
+#visBody .vis-note b{color:#17150f}
+#visBody .vis-day{display:flex;align-items:center;gap:10px;margin:18px 2px 8px}
+#visBody .vis-day span{flex:1;min-width:0;font-size:11.5px;font-weight:800;color:#79736a;
+  letter-spacing:.02em}
+#visBody .vis-day button{flex:none;border:1px solid #17150f;background:#17150f;color:#fff;
+  border-radius:9px;padding:7px 12px;font-family:var(--font-main);font-size:11.5px;
+  font-weight:800;cursor:pointer}
+#visBody .vis-day button:active{opacity:.8}
+#visBody .vis-row{display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #e3dcce;
+  border-radius:12px;padding:11px 12px;margin-bottom:7px;font-family:var(--font-main)}
+#visBody .vis-row .t{flex:1;min-width:0;font-size:13px;font-weight:800;color:#17150f;line-height:1.4}
+#visBody .vis-row .t b{font-weight:800;color:#5C0A14}
+#visBody .vis-row .t small{display:block;font-size:11px;font-weight:600;color:#a69f94;margin-top:2px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#visBody .vis-row button{flex:none;border-radius:9px;padding:8px 12px;font-family:inherit;
+  font-size:11.5px;font-weight:800;cursor:pointer}
+#visBody .vis-row button.go{border:1px solid #e3dcce;background:#fff;color:#46413a}
+#visBody .vis-row button.no{border:1px solid #F2D5D1;background:#FBEBE9;color:#9B1C1C}
+
 /* ═══ 🆕 2026.09-01 QR 크게 보기 (앱 안 팝업) ═══
    화면을 꽉 채우지 않는다. 상대 폰이 코드 **전체 + 여백**을 프레임에 담아야
    찍히기 때문에, 오히려 적당한 크기가 잘 찍힌다. */
@@ -12870,6 +12892,21 @@ window.closePromoCarousel = function(){
       </div>
     </div>
   </div>
+</div>
+
+<!-- 🆕 2026.09-01: 방문 기록 몰아 찍기.
+     한 건씩 카드를 펼쳐 누르는 길밖에 없어서, 지난 예약 154건 중 기록이 1건이었다.
+     방문 횟수는 「단골에게만 보이는 티켓」의 재료라, 안 쌓이면 조건 자체가 죽는다.
+     날짜별로 묶고 「이 날 전부 방문」을 둔다 — 대개 다 온다. 안 온 사람만 노쇼로. -->
+<div id="visScreen" class="sub-screen" data-lang-lock="ko" style="display:none;">
+  <div class="sub-header">
+    <button class="sub-back" onclick="acBack()">←</button>
+    <div class="sub-title">방문 기록</div>
+    <div id="visCount" style="margin-left:auto;font-family:var(--font-main);font-size:11.5px;font-weight:700;color:#79736a;"></div>
+    <button class="ac-x" onclick="acExit()" aria-label="앱으로 나가기" title="앱으로">✕</button>
+  </div>
+  <div id="visBody" class="sub-content" style="padding:14px 14px 96px;"></div>
+  <div class="ac-tabs" id="visTabs" role="tablist"></div>
 </div>
 
 <!-- 🆕 2026.08-30: 「더보기」 — 어드민 메뉴 전체에서 하나를 찾는다 -->
@@ -30801,7 +30838,8 @@ function _dashRender(){
   if(np && isSuper) todo.push(['티켓 업로드 승인', np, '', "acOpenMenu('pendingApprovalScreen')"]);
   if(_dashExtra.resvPending) todo.push(['파트너 예약 요청', _dashExtra.resvPending, '', "acOpenMenu('reservationAdminScreen')"]);
   var nu = _dashUnmarked();
-  if(nu) todo.push(['방문 기록 안 함', nu, 'warn', "acGo('rv')"]);
+  // 예약 탭으로 보내면 거기서 또 한 건씩 펼쳐야 한다. 몰아 찍는 화면으로 보낸다.
+  if(nu) todo.push(['방문 기록 안 함', nu, 'warn', "visOpen()"]);
   if(todo.length){
     var tot = todo.reduce(function(a, x){ return a + x[1]; }, 0);
     h += '<div class="mo-grp" style="margin-top:2px;">처리할 일 <span style="color:#9B1C1C;">'
@@ -30977,6 +31015,131 @@ function _visCanMark(r, st){
   if(!k) return true;   // 형식을 모르는 값(수동 입력 등)은 막지 않는다
   return k <= _taamTodayKst();
 }
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026.09-01 방문 기록 몰아 찍기 — 밀린 것을 따라잡는 화면
+// ═══════════════════════════════════════════════════════════════
+//   지난 예약 154건 중 기록이 1건이었다. 한 건씩 카드를 펼쳐 누르는 길밖에
+//   없었으니 당연하다. 방문 횟수는 「이 매장 단골에게만 보이는 티켓」의
+//   재료라, 안 쌓이면 조건이 통째로 죽는다(모두가 영원히 첫 방문).
+//
+//   날짜별로 묶고 「이 날 전부 방문」을 둔다 — 대개는 다 온다. 안 온 사람만
+//   따로 노쇼를 누른다. 기록한 줄은 목록에서 빠져, 남은 수가 줄어드는 게 보인다.
+async function visOpen(){
+  var role = (typeof _currentRole !== 'undefined') ? _currentRole : 'user';
+  var isSuper = (typeof _isSuperAdmin === 'function') && _isSuperAdmin();
+  if(!isSuper && role !== 'admin'){
+    if(typeof showToast === 'function') showToast('🔒','권한 부족','슈퍼어드민·매장 어드민 전용');
+    return;
+  }
+  if(typeof _acNavHold === 'function') _acNavHold();
+  if(typeof _acCloseOthers === 'function') _acCloseOthers(null);
+  openSubPage('visScreen');
+  var b = document.getElementById('visBody');
+  if(b) b.innerHTML = '<div class="tb-empty">불러오는 중…</div>';
+  if(_tbRows === null) await _tbLoad();
+  _visRender();
+  if(typeof _acRenderTabs === 'function') _acRenderTabs('');
+}
+window.visOpen = visOpen;
+
+// 아직 기록이 안 된 지난 예약. 대시보드의 「방문 기록 안 함」과 같은 기준이다 —
+//   숫자와 목록이 어긋나면 그 숫자를 다시는 안 믿게 된다.
+function _visPending(){
+  try{
+    if(window._tbNoVisitCol) return [];
+    var today = _taamTodayKst();
+    return (_tbRows || []).filter(function(r){
+      if(String(r.visit_status || '')) return false;
+      var st = _tbStatus(r);
+      if(st && st.s === 'cx') return false;
+      var k = _visDateKey(r.reservation_date);
+      return k && k < today;
+    }).sort(function(a, b){
+      return String(b._d || '').localeCompare(String(a._d || '')) || (a._m - b._m);
+    });
+  }catch(e){ return []; }
+}
+
+function _visRender(){
+  var el = document.getElementById('visBody');
+  if(!el) return;
+  var list = _visPending();
+  var head = document.getElementById('visCount');
+  if(head) head.textContent = list.length ? (list.length + '건 남음') : '';
+
+  if(window._tbNoVisitCol){
+    el.innerHTML = '<div class="tb-empty">방문 기록이 아직 준비되지 않았습니다.'
+      + '<br><span style="color:#a69f94">sql/ticket_visit_record.sql 을 먼저 실행해주세요.</span></div>';
+    return;
+  }
+  if(!list.length){
+    el.innerHTML = '<div class="tb-empty">밀린 방문 기록이 없습니다.'
+      + '<br><span style="color:#a69f94">지난 예약이 생기면 여기에 모입니다.</span></div>';
+    return;
+  }
+
+  var h = '<div class="vis-note">지난 예약인데 방문 기록이 없는 건입니다. '
+        + '<b>기록해야 「단골에게만 보이는 티켓」이 돌아갑니다.</b><br>'
+        + '대개는 다 오므로 날짜별 「전부 방문」이 빠릅니다. 안 온 사람만 노쇼로 바꾸세요.</div>';
+
+  var day = null;
+  list.forEach(function(r){
+    if(r._d !== day){
+      day = r._d;
+      var same = list.filter(function(x){ return x._d === day; });
+      var pp = String(day).split('-');
+      var dt = new Date(parseInt(pp[0],10), parseInt(pp[1],10)-1, parseInt(pp[2],10));
+      h += '<div class="vis-day"><span>' + (dt.getMonth()+1) + '월 ' + dt.getDate() + '일 ('
+        +  _tbDayName(dt) + ') · ' + same.length + '건</span>'
+        +  '<button onclick="visDayAll(\'' + day + '\')">이 날 전부 방문</button></div>';
+    }
+    h += '<div class="vis-row" id="visRow-' + _tbEsc(String(r.id)) + '">'
+      +  '<span class="t">' + _tbEsc(r.buyer_name || '(이름없음)')
+      +    ' <b>' + (parseInt(r.party_size,10) || 1) + '명</b>'
+      +    '<small>' + _tbEsc(r.restaurant_name || '매장')
+      +    (_tbTime(r) ? ' · ' + _tbTime(r) : '') + '</small></span>'
+      +  '<button class="go" onclick="visMark(\'' + _tbEsc(String(r.id)) + '\',\'attended\')">방문</button>'
+      +  '<button class="no" onclick="visMark(\'' + _tbEsc(String(r.id)) + '\',\'no_show\')">노쇼</button>'
+      +  '</div>';
+  });
+  el.innerHTML = h;
+}
+
+// 한 건 — taamMarkVisit 을 그대로 쓴다. 기록되면 목록에서 빠진다.
+async function visMark(id, status){
+  await taamMarkVisit(id, status);
+  _visRender();
+}
+window.visMark = visMark;
+
+// 그 날 전부 — 서버 판정은 건마다 따로 받는다(권한·날짜·취소).
+//   ⚠ 한꺼번에 던지지 않는다. 몇 건씩 나눠 보낸다 — 백 건을 동시에 던지면
+//     서버가 아니라 브라우저가 먼저 막힌다.
+async function visDayAll(dayKey){
+  var rows = _visPending().filter(function(r){ return r._d === dayKey; });
+  if(!rows.length) return;
+  var okN = 0, bad = 0;
+  if(typeof showToast === 'function') showToast('⏳','기록 중', rows.length + '건');
+  for(var i = 0; i < rows.length; i += 4){
+    var part = rows.slice(i, i + 4);
+    /* eslint-disable no-await-in-loop */
+    await Promise.all(part.map(function(r){
+      return window.sb.rpc('taam_set_ticket_visit', { p_ticket_id: String(r.id), p_status: 'attended' })
+        .then(function(res){
+          if(res && res.error){ bad++; console.warn('[visit] 실패', r.id, res.error.message); }
+          else { r.visit_status = 'attended'; okN++; }
+        }, function(){ bad++; });
+    }));
+  }
+  _visRender();
+  if(typeof _acRenderTabs === 'function') _acRenderTabs('');
+  if(typeof showToast === 'function'){
+    if(bad) showToast('⚠','일부만 기록됨', okN + '건 성공 · ' + bad + '건 실패');
+    else    showToast('✓','기록 완료', okN + '건을 방문으로 남겼습니다');
+  }
+}
+window.visDayAll = visDayAll;
+
 function _visActs(r, st){
   if(!_visCanMark(r, st)) return '';
   var v  = String(r.visit_status || '');
@@ -33107,9 +33270,17 @@ var AC_SCREEN = { today:'todayBoardScreen', rv:'rvScreen', tkb:'tkbScreen', mb:'
 //   탭으로 오든 어드민 메뉴에서 바로 오든 같아야 한다 — 종전엔 탭으로 올 때만
 //   닫아서, 메뉴로 들어오면 앞서 열어 둔 화면이 뒤에 남고 뒤로가기가 한 번에
 //   안 끝났다.
+// 탭은 아니지만 콘솔에 딸린 화면. 탭을 옮길 때 같이 닫아야 한다 —
+//   안 닫으면 뒤에 남아 있다가 새로 연 탭을 덮는다(같은 .sub-screen 이라
+//   DOM 에서 늦은 쪽이 위로 온다).
+var AC_EXTRA_SCREENS = ['visScreen'];
+
 function _acCloseOthers(keep){
   Object.keys(AC_SCREEN).forEach(function(k){
     if(k !== keep && typeof closeSubPage === 'function') closeSubPage(AC_SCREEN[k]);
+  });
+  AC_EXTRA_SCREENS.forEach(function(id){
+    if(typeof closeSubPage === 'function') closeSubPage(id);
   });
 }
 window._acCloseOthers = _acCloseOthers;
@@ -38652,7 +38823,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.01-x';
+var TAAM_WEB_BUILD = '2026.09.01-y';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
