@@ -120,7 +120,25 @@ async function sendKakao(phone: string, vars: Record<string, string>): Promise<s
         },
       }),
     });
-    return res.ok ? "ok" : `fail(${res.status})`;
+    // ⚠ 솔라피는 **발송이 실패해도 HTTP 200** 을 준다. 실제 결과는 본문에 있다.
+    //   res.ok 만 보면 템플릿 불일치·pfId 오류·수신거부까지 「ok」로 읽고,
+    //   그러면 partner_notified_at 이 찍혀 **다시 시도하지도 않는다.**
+    //   안 갔는데 갔다고 기록되고 아무도 모른다 — 그게 제일 나쁘다.
+    if (!res.ok) return `fail(http ${res.status})`;
+    let body: any = null;
+    try { body = await res.json(); } catch (_) { /* 본문이 없으면 아래에서 걸린다 */ }
+    if (!body) return "fail(응답 없음)";
+    // 단건 전송은 statusCode 2000 이 정상. 그 밖은 전부 실패로 본다.
+    const code = String(body.statusCode ?? body.groupInfo?.status ?? "");
+    const failed = Number(body.groupInfo?.count?.registeredFailed ?? 0)
+                 + Number(body.failedMessageList?.length ?? 0);
+    if (failed > 0 || (code && code !== "2000")) {
+      const why = body.failedMessageList?.[0]?.statusMessage
+               || body.statusMessage || code || "알 수 없음";
+      console.warn("[kakao] 발송 실패:", code, why, JSON.stringify(body).slice(0, 300));
+      return `fail(${code || "?"}: ${String(why).slice(0, 40)})`;
+    }
+    return "ok";
   } catch (e) { return `fail(${(e as Error).message})`; }
 }
 

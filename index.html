@@ -524,6 +524,14 @@ html.auto-login .splash .bottom-group{display:none !important}
 /* 가로 제스처는 달을 넘긴다 — 세로만 스크롤에 넘겨준다 */
 .pcal-cal{padding:12px 12px 0;touch-action:pan-y}
 .pcal-hero{touch-action:pan-y}
+/* 아이폰식 페이저 — 앞·이번·다음 세 판을 나란히 두고 트랙을 옮긴다.
+   미는 동안 옆 달이 손끝에 붙어 같이 오고, 놓으면 남은 거리를 이어서 미끄러진다.
+   ⚠ 판 높이는 늘 6줄이라 서로 어긋나지 않는다(_pcalCalHtml 이 42칸을 채운다). */
+.pcal-swipe{overflow:hidden;touch-action:pan-y}
+.pcal-track{display:flex;align-items:flex-start;width:300%;
+  transform:translate3d(-33.3333%,0,0);will-change:transform;backface-visibility:hidden}
+.pcal-track.pcal-anim{transition:transform .34s cubic-bezier(.22,.68,.32,1)}
+.pcal-track>.pcal-pane{flex:0 0 33.3333%;width:33.3333%;min-width:0}
 .pcal-wk{display:grid;grid-template-columns:repeat(7,1fr);font-size:9.5px;color:#5f5b57;
   letter-spacing:.1em;text-align:center;padding-bottom:9px}
 .pcal-days{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
@@ -31400,6 +31408,9 @@ window.rvFindToggle = rvFindToggle;
 var _calSwipeUntil = 0;   // 이 시각 전의 클릭은 민 끝에 따라온 것이라 무시한다
 function _taamCalSwiped(){ return Date.now() < _calSwipeUntil; }
 window._taamCalSwiped = _taamCalSwiped;
+// 다른 스크립트 블록(사진 캘린더 페이저)에서도 같은 창을 연다 — 전역 var 를
+// 직접 건드리지 않고 이 함수로만 민다.
+window._taamCalSwipeHold = function(ms){ _calSwipeUntil = Date.now() + (ms || 400); };
 
 function _taamBindCalSwipe(host, sel, step){
   if(!host || host._calSwipeBound) return;
@@ -38823,7 +38834,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.01-y';
+var TAAM_WEB_BUILD = '2026.09.01-z';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -49595,6 +49606,179 @@ async function pcalLoadCovers(){
 }
 window.pcalLoadCovers = pcalLoadCovers;
 
+// ── 달력 한 판 (한 달치) ─────────────────────────────────────
+//   페이저가 앞·뒤 달을 같이 그려야 해서 연·월을 받는다. 종전엔 이 코드가
+//   renderPhotoCalInto 안에서 _pcalY/_pcalM 을 직접 읽고 있어 이번 달밖에 못 그렸다.
+//   ⚠ 칸은 늘 42칸(6줄)로 채운다. 달마다 줄 수가 달라지면 미는 도중 세 판의
+//     높이가 서로 달라 옆 달이 위아래로 어긋나 보인다.
+//   lowPri: 옆 달(앞·뒤)이면 true. 타일 사진을 낮은 우선순위로 받는다 —
+//           한 달만 그리던 것이 셋이 됐으니, 지금 보는 달이 먼저 떠야 한다.
+function _pcalCalHtml(byDate, y, m, lowPri){
+  var _imgAttr = lowPri ? ' decoding="async" fetchpriority="low"' : ' decoding="async"';
+  var h = '<div class="pcal-cal"><div class="pcal-wk">';
+  _pcalWkNames().forEach(function(w){ h += '<div>' + w + '</div>'; });
+  h += '</div><div class="pcal-days">';
+
+  var lead = new Date(y, m - 1, 1).getDay();
+  var last = new Date(y, m, 0).getDate();
+  var now2 = new Date();
+  var todayKey = now2.getFullYear()*10000 + (now2.getMonth()+1)*100 + now2.getDate();
+  var cells = 0;
+
+  for(var i=0; i<lead; i++){ h += '<div class="pcal-d"></div>'; cells++; }
+  for(var d=1; d<=last; d++){
+    cells++;
+    var key = y*10000 + m*100 + d;
+    var list = byDate[key] || [];
+    var cls = 'pcal-d';
+    if(key === todayKey) cls += ' today';
+    if(list.length){
+      // 그 날 대표 사진 — 판매중인 티켓 우선
+      var pick = null;
+      for(var j=0; j<list.length; j++){
+        var alive = (list[j].status !== 'soldout') &&
+                    !(typeof _isTicketExpired === 'function' && _isTicketExpired(list[j]));
+        if(alive && _pcalPhoto(list[j])){ pick = list[j]; break; }
+      }
+      var anyAlive = !!pick;
+      if(!pick){ for(var j2=0; j2<list.length; j2++){ if(_pcalPhoto(list[j2])){ pick = list[j2]; break; } } }
+      var ph = pick ? _pcalPhoto(pick) : '';
+      if(ph){
+        cls += ' ev' + (anyAlive ? '' : ' dead');
+        if(_pcalSelKey === key) cls += ' sel';
+        h += '<div class="' + cls + '" onclick="pcalOpenDay(' + y + ',' + m + ',' + d + ')">'
+           + '<img src="' + _pcalEsc(ph) + '" alt=""' + _imgAttr + '><span class="n">' + d + '</span></div>';
+        continue;
+      }
+      // 사진이 아직 없는 날 — 숫자만 금색으로 (자리는 있다는 뜻)
+      h += '<div class="' + cls + '" style="color:#C8A96E;cursor:pointer;" '
+         + 'onclick="pcalOpenDay(' + y + ',' + m + ',' + d + ')">' + d + '</div>';
+      continue;
+    }
+    h += '<div class="' + cls + '">' + d + '</div>';
+  }
+  while(cells < 42){ h += '<div class="pcal-d"></div>'; cells++; }
+  h += '</div></div>';
+  return h;
+}
+window._pcalCalHtml = _pcalCalHtml;
+
+// ── 달력 좌우 넘기기 — 아이폰식 ──────────────────────────────
+//   종전엔 「45px 넘게 밀었나」만 보고 손을 뗄 때 툭 갈아 끼웠다. 미는 동안
+//   화면이 가만히 있으니 손끝이 뭘 하고 있는지 안 보였고, 놓는 순간 다른 달이
+//   튀어나왔다. iOS 는 반대다 — 옆 달이 손끝에 붙어 같이 오고, 놓으면 **속도까지
+//   봐서** 남은 거리를 이어서 미끄러뜨린다. 짧고 빠르게 튕기면(플릭) 조금만
+//   밀어도 넘어가는 이유가 그 속도다.
+//
+//   호스트에 한 번만 건다 — innerHTML 을 통째로 갈아 끼우는 구조라 트랙에 걸면
+//   렌더마다 다시 걸어야 하고, 한 번이라도 빠뜨리면 그 화면만 안 밀린다.
+function _pcalBindPager(host){
+  if(!host || host._pcalPagerBound) return;
+  host._pcalPagerBound = true;
+
+  var track = null, w = 0, busy = false;
+  var x0 = 0, y0 = 0, lx = 0, lt = 0, vx = 0, axis = null, dx = 0, on = false;
+
+  function setX(px){
+    if(track) track.style.transform = 'translate3d(' + (px - w) + 'px,0,0)';
+  }
+  // 남은 거리를 CSS 트랜지션으로 잇는다. transitionend 가 안 오는 경우가
+  // 있어(탭이 뒤로 갔거나 트랙이 갈려 나갔거나) 타이머로도 한 번 더 받는다.
+  function glide(px, done){
+    if(!track){ if(done) done(); return; }
+    var t = track, fired = false;
+    function fin(){
+      if(fired) return;
+      fired = true;
+      t.removeEventListener('transitionend', fin);
+      busy = false;
+      try { if(done) done(); } catch(e){ console.warn('[pcal] 월 이동 실패', e); }
+    }
+    t.addEventListener('transitionend', fin);
+    t.classList.add('pcal-anim');
+    setX(px);
+    setTimeout(fin, 460);
+  }
+  function begin(x, y, target){
+    on = false; track = null;
+    if(busy) return;                       // 미끄러지는 중에는 새 손짓을 받지 않는다
+    if(!target || !target.closest) return;
+    var sw = target.closest('.pcal-swipe');
+    if(!sw || !host.contains(sw)) return;
+    var tr = sw.querySelector('.pcal-track');
+    if(!tr) return;
+    w = sw.clientWidth || 0;
+    if(!w) return;
+    track = tr;
+    track.classList.remove('pcal-anim');
+    x0 = lx = x; y0 = y; lt = Date.now();
+    vx = 0; axis = null; dx = 0; on = true;
+  }
+  function move(x, y){
+    if(!on) return;
+    dx = x - x0;
+    var dy = y - y0;
+    if(axis === null){
+      if(Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+      // 세로가 이기면 손을 뗀다 — 아래 목록 스크롤은 브라우저 몫이다.
+      //   (호스트에 touch-action:pan-y 가 있어 가로는 스크롤로 새지 않는다)
+      axis = (Math.abs(dx) > Math.abs(dy) * 1.2) ? 'x' : 'y';
+      if(axis === 'y'){ setX(0); on = false; track = null; return; }
+    }
+    var now = Date.now(), dt = now - lt;
+    if(dt > 0){ vx = (x - lx) / dt; lx = x; lt = now; }   // px/ms
+    setX(dx);
+  }
+  function end(){
+    if(!on){ track = null; return; }
+    on = false;
+    if(axis !== 'x' || !track){ track = null; return; }
+    var far  = Math.abs(dx) > w * 0.26;                    // 충분히 끌고 갔거나
+    var fast = Math.abs(vx) > 0.45 && Math.abs(dx) > 20;   // 짧아도 빠르게 튕겼거나
+    if(far || fast){
+      var dir = (dx < 0) ? 1 : -1;
+      busy = true;
+      // 민 끝에 클릭이 따라온다 — 그 사이 날짜 시트가 열리지 않게 창을 연다
+      try { if(typeof window._taamCalSwipeHold === 'function') window._taamCalSwipeHold(600); } catch(e){}
+      glide(dir * -w, function(){ pcalStep(dir); });
+    } else {
+      glide(0, null);
+    }
+    track = null;
+  }
+  function cancel(){ if(on){ on = false; glide(0, null); } track = null; }
+
+  host.addEventListener('touchstart', function(e){
+    var p = e.touches && e.touches[0];
+    if(p) begin(p.clientX, p.clientY, e.target);
+  }, { passive:true });
+  host.addEventListener('touchmove', function(e){
+    var p = e.touches && e.touches[0];
+    if(p) move(p.clientX, p.clientY);
+  }, { passive:true });
+  host.addEventListener('touchend', end, { passive:true });
+  host.addEventListener('touchcancel', cancel, { passive:true });
+
+  // 데스크톱(마우스·펜) — 터치 포인터는 위에서 이미 들었으니 건너뛴다
+  host.addEventListener('pointerdown', function(e){
+    if(e.pointerType === 'touch') return;
+    begin(e.clientX, e.clientY, e.target);
+  }, { passive:true });
+  host.addEventListener('pointermove', function(e){
+    if(e.pointerType === 'touch') return;
+    move(e.clientX, e.clientY);
+  }, { passive:true });
+  host.addEventListener('pointerup', function(e){
+    if(e.pointerType === 'touch') return;
+    end();
+  }, { passive:true });
+  host.addEventListener('pointercancel', function(e){
+    if(e.pointerType === 'touch') return;
+    cancel();
+  }, { passive:true });
+}
+window._pcalBindPager = _pcalBindPager;
+
 //   skipHero: 매거진뷰의 캘린더 시트처럼 히어로가 이미 뒤에 깔려 있는 자리에서는
 //             히어로를 다시 그리지 않는다 (같은 사진이 두 번 나오는 것 방지)
 function renderPhotoCalInto(hostId, skipHero){
@@ -49652,49 +49836,14 @@ function renderPhotoCalInto(hostId, skipHero){
   }
   h += '</div>';
 
-  // ── 캘린더 ──
-  h += '<div class="pcal-cal"><div class="pcal-wk">';
-  _pcalWkNames().forEach(function(w){ h += '<div>' + w + '</div>'; });
-  h += '</div><div class="pcal-days">';
-
-  var first = new Date(_pcalY, _pcalM - 1, 1);
-  var lead  = first.getDay();
-  var last  = new Date(_pcalY, _pcalM, 0).getDate();
-  var now2  = new Date();
-  var todayKey = now2.getFullYear()*10000 + (now2.getMonth()+1)*100 + now2.getDate();
-
-  for(var i=0; i<lead; i++) h += '<div class="pcal-d"></div>';
-  for(var d=1; d<=last; d++){
-    var key = _pcalY*10000 + _pcalM*100 + d;
-    var list = byDate[key] || [];
-    var cls = 'pcal-d';
-    if(key === todayKey) cls += ' today';
-    if(list.length){
-      // 그 날 대표 사진 — 판매중인 티켓 우선
-      var pick = null;
-      for(var j=0; j<list.length; j++){
-        var alive = (list[j].status !== 'soldout') &&
-                    !(typeof _isTicketExpired === 'function' && _isTicketExpired(list[j]));
-        if(alive && _pcalPhoto(list[j])){ pick = list[j]; break; }
-      }
-      var anyAlive = !!pick;
-      if(!pick){ for(var j2=0; j2<list.length; j2++){ if(_pcalPhoto(list[j2])){ pick = list[j2]; break; } } }
-      var ph = pick ? _pcalPhoto(pick) : '';
-      if(ph){
-        cls += ' ev' + (anyAlive ? '' : ' dead');
-        if(_pcalSelKey === key) cls += ' sel';
-        h += '<div class="' + cls + '" onclick="pcalOpenDay(' + _pcalY + ',' + _pcalM + ',' + d + ')">'
-           + '<img src="' + _pcalEsc(ph) + '" alt=""><span class="n">' + d + '</span></div>';
-        continue;
-      }
-      // 사진이 아직 없는 날 — 숫자만 금색으로 (자리는 있다는 뜻)
-      h += '<div class="' + cls + '" style="color:#C8A96E;cursor:pointer;" '
-         + 'onclick="pcalOpenDay(' + _pcalY + ',' + _pcalM + ',' + d + ')">' + d + '</div>';
-      continue;
-    }
-    h += '<div class="' + cls + '">' + d + '</div>';
-  }
-  h += '</div></div>';
+  // ── 캘린더 — 앞·이번·다음 세 판을 나란히 둔다 (미는 동안 옆 달이 같이 온다) ──
+  var _pv = new Date(_pcalY, _pcalM - 2, 1);
+  var _nx = new Date(_pcalY, _pcalM,     1);
+  h += '<div class="pcal-swipe"><div class="pcal-track">'
+     +   '<div class="pcal-pane">' + _pcalCalHtml(byDate, _pv.getFullYear(), _pv.getMonth()+1, true) + '</div>'
+     +   '<div class="pcal-pane">' + _pcalCalHtml(byDate, _pcalY, _pcalM) + '</div>'
+     +   '<div class="pcal-pane">' + _pcalCalHtml(byDate, _nx.getFullYear(), _nx.getMonth()+1, true) + '</div>'
+     + '</div></div>';
 
   if(_pcalMonthTickets(_pcalY, _pcalM, byDate).length === 0){
     h += '<div class="pcal-note">이 달은 아직 열린 자리가 없습니다. 위 월 스트립에서 다른 달을 보세요.</div>';
@@ -49708,8 +49857,9 @@ function renderPhotoCalInto(hostId, skipHero){
   // 달력(과 표지)을 좌우로 밀면 달이 넘어간다. 호스트는 그대로 살아 있으므로
   //   한 번만 건다 — innerHTML 만 갈아끼우는 구조라 셀에 걸면 매번 다시 걸어야 한다.
   try {
+    _pcalBindPager(host);                       // 달력 — 손끝을 따라오는 페이저
     if(typeof _taamBindCalSwipe === 'function'){
-      _taamBindCalSwipe(host, '.pcal-cal,.pcal-hero', pcalStep);
+      _taamBindCalSwipe(host, '.pcal-hero', pcalStep);   // 표지 — 옆 판이 없어 종전대로
     }
   } catch(e){}
 
