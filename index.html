@@ -2683,7 +2683,13 @@ html.auto-login .splash .bottom-group{display:none !important}
 
 /* ── TOAST ── */
 #toastBanner{position:fixed;top:20px;left:50%;z-index:9998;width:calc(100% - 48px);max-width:420px;background:#fff;border-radius:16px;padding:18px 20px;display:none;align-items:center;gap:14px;box-shadow:0 6px 28px rgba(0,0,0,.16);transform:translateX(-50%) translateY(-140%);opacity:0;transition:transform .38s cubic-bezier(.22,1,.36,1),opacity .28s ease;pointer-events:none}
-#toastBanner.show{transform:translateX(-50%) translateY(0);opacity:1}
+/* 🆕 2026.09: 떠 있는 동안에는 탭을 **삼킨다.**
+   종전엔 배너 전체가 pointer-events:none 이라 탭이 그대로 통과했다.
+   배너는 top:20px 이고 그 아래에는 콘솔 헤더의 ✕(앱으로 나가기)가 있다 —
+   토스트를 누르려다 앱 밖으로 나가 메인 캘린더가 떴다.
+   대신 아무 데나 누르면 곧바로 닫히므로 가리는 시간은 오히려 짧아진다.
+   숨은 상태·들어오는 중에는 여전히 none 이라 화면을 막지 않는다. */
+#toastBanner.show{transform:translateX(-50%) translateY(0);opacity:1;pointer-events:auto;cursor:pointer}
 #toastBanner .toast-close{pointer-events:auto}
 .toast-icon{font-size:26px;flex-shrink:0}
 .toast-title{font-size:16px;font-weight:700;color:#1a1a18;margin-bottom:3px}
@@ -12970,6 +12976,24 @@ window.closePromoCarousel = function(){
   <div class="ac-tabs" id="kskTabs" role="tablist"></div>
 </div>
 
+<!-- 입력 시트 — 회차·조·게스트를 한 판에 적는다.
+     ⚠ prompt() 를 연달아 띄우지 않는다. 여섯 번 눌러야 끝나고, 중간에 취소하면
+     앞에 적은 것이 통째로 날아가며, 무엇을 적고 있었는지 되짚을 수도 없다. -->
+<div id="kskForm" style="display:none;position:fixed;inset:0;z-index:1185;background:rgba(0,0,0,.55);align-items:flex-end;justify-content:center;"
+     onclick="if(event.target===this)kskFormClose()">
+  <div style="width:100%;max-width:520px;max-height:90vh;background:#fff;border-radius:18px 18px 0 0;display:flex;flex-direction:column;overflow:hidden;">
+    <div style="flex:none;padding:14px 18px 10px;border-bottom:1px solid #ece7dd;display:flex;align-items:center;gap:10px;">
+      <div style="font-size:15px;font-weight:800;color:#1a1a18;" id="kskfTitle">입력</div>
+      <div style="margin-left:auto;font-size:20px;color:#9a948a;cursor:pointer;" onclick="kskFormClose()">✕</div>
+    </div>
+    <div style="flex:1 1 0;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:6px 18px 12px;" id="kskfBody"></div>
+    <div style="flex:none;padding:12px 18px calc(14px + env(safe-area-inset-bottom));border-top:1px solid #ece7dd;display:flex;gap:9px;">
+      <button class="ksk-btn ghost" style="flex:1;padding:14px" onclick="kskFormClose()">취소</button>
+      <button class="ksk-btn" style="flex:2;padding:14px" id="kskfGo" onclick="kskFormSave()">저장</button>
+    </div>
+  </div>
+</div>
+
 <!-- 분할 청구 시트 -->
 <div id="kskSplit" style="display:none;position:fixed;inset:0;z-index:1180;background:rgba(0,0,0,.55);align-items:flex-end;justify-content:center;"
      onclick="if(event.target===this)kskSplitClose()">
@@ -13031,6 +13055,19 @@ window.closePromoCarousel = function(){
 .ksp-seg{display:flex;border:1px solid #d5ccb6;border-radius:9px;overflow:hidden;margin-top:10px}
 .ksp-seg span{flex:1;text-align:center;padding:9px;font-size:12.5px;color:#79736a;cursor:pointer}
 .ksp-seg span.on{background:#5C0A14;color:#fff;font-weight:700}
+/* 입력 시트 */
+.kskf-f{padding:11px 0;border-bottom:1px solid #f2efe8}
+.kskf-f:last-child{border-bottom:none}
+.kskf-f > label{display:block;font-size:12px;color:#79736a;margin-bottom:5px}
+.kskf-f > label b{color:#5C0A14;font-weight:700}
+.kskf-f .hint{margin-top:5px;font-size:11px;color:#9a948a;line-height:1.65}
+.kskf-f .pre{position:relative}
+.kskf-f .pre > span{position:absolute;left:12px;top:50%;transform:translateY(-50%);
+  font-size:14px;font-weight:600;color:#aaa;pointer-events:none}
+.kskf-f .pre > input{padding-left:28px}
+.kskf-f textarea.ksk-in{min-height:64px;resize:vertical;line-height:1.7}
+.kskf-err{margin-top:9px;padding:9px 12px;border-radius:8px;background:#fff5f5;
+  border:1px solid #e7b9b9;font-size:12px;color:#9B1C1C;line-height:1.6}
 </style>
 
 <!-- 🆕 2026.08-30: 「더보기」 — 어드민 메뉴 전체에서 하나를 찾는다 -->
@@ -31275,21 +31312,134 @@ function _kskRenderList(){
   b.innerHTML = h;
 }
 
-async function kskNewEvent(){
-  var name = prompt('매장 이름 (게스트 시트·결제 화면에 그대로 나갑니다)');
-  if(!name) return;
-  var date = prompt('대관 날짜 (YYYY-MM-DD)', new Date().toISOString().slice(0,10));
-  if(!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)){ showToast('⚠','날짜 형식','YYYY-MM-DD 로 넣어주세요'); return; }
+// ── 입력 시트 ─────────────────────────────────────────────────
+//   prompt() 를 연달아 띄우던 것을 한 판으로 바꿨다. 여섯 번 눌러야 끝나고,
+//   중간에 취소하면 앞에 적은 것이 통째로 날아가고, 무엇을 적는 중이었는지
+//   되짚을 수도 없었다. 한 화면에 다 보여야 검토가 된다.
+//
+//   fields: [{ k, label, type, value, ph, hint, pre, opts }]
+//     type — text | area | num | money(천단위 콤마) | dec(소수) | date | time | seg
+var _kskForm = null;   // { fields, onSave }
+
+function _kskFormVal(f, raw){
+  var s = String(raw == null ? '' : raw).trim();
+  if(f.type === 'money' || f.type === 'num') return parseInt(s.replace(/[^0-9]/g,''), 10) || 0;
+  if(f.type === 'dec')  return parseFloat(s.replace(/[^0-9.]/g,'')) || 0;
+  return s;
+}
+
+function kskFormOpen(title, fields, onSave){
+  _kskForm = { fields: fields, onSave: onSave };
+  var h = '';
+  fields.forEach(function(f){
+    h += '<div class="kskf-f"><label for="kskf_' + f.k + '">' + f.label
+       + (f.req ? ' <b>*</b>' : '') + '</label>';
+    if(f.type === 'seg'){
+      h += '<div class="ksp-seg" id="kskf_' + f.k + '" data-v="' + _kskEsc(f.value) + '">';
+      (f.opts || []).forEach(function(o){
+        h += '<span class="' + (String(f.value) === String(o[0]) ? 'on' : '') + '" '
+           + 'data-o="' + _kskEsc(o[0]) + '" onclick="kskFormSeg(\'' + f.k + '\',\'' + _kskEsc(o[0]) + '\')">'
+           + _kskEsc(o[1]) + '</span>';
+      });
+      h += '</div>';
+    } else if(f.type === 'area'){
+      h += '<textarea class="ksk-in" id="kskf_' + f.k + '" placeholder="' + _kskEsc(f.ph||'') + '">'
+         + _kskEsc(f.value == null ? '' : f.value) + '</textarea>';
+    } else {
+      var it = (f.type === 'date') ? 'date' : (f.type === 'time') ? 'time' : 'text';
+      var im = (f.type === 'money' || f.type === 'num') ? ' inputmode="numeric"'
+             : (f.type === 'dec') ? ' inputmode="decimal"' : '';
+      var oi = (f.type === 'money') ? ' oninput="tuFormatMoney(this)"' : '';
+      var val = f.value == null ? '' : f.value;
+      if(f.type === 'money' && val !== '') val = (parseInt(val,10)||0).toLocaleString('ko-KR');
+      var inp = '<input class="ksk-in" id="kskf_' + f.k + '" type="' + it + '"' + im + oi
+              + ' value="' + _kskEsc(val) + '" placeholder="' + _kskEsc(f.ph||'') + '">';
+      h += f.pre ? ('<div class="pre"><span>' + _kskEsc(f.pre) + '</span>' + inp + '</div>') : inp;
+    }
+    if(f.hint) h += '<div class="hint">' + f.hint + '</div>';
+    h += '</div>';
+  });
+  h += '<div class="kskf-err" id="kskfErr" style="display:none"></div>';
+  document.getElementById('kskfTitle').textContent = title;
+  document.getElementById('kskfBody').innerHTML = h;
+  document.getElementById('kskfBody').scrollTop = 0;
+  var go = document.getElementById('kskfGo');
+  if(go){ go.disabled = false; go.textContent = '저장'; }
+  document.getElementById('kskForm').style.display = 'flex';
+}
+window.kskFormOpen = kskFormOpen;
+
+function kskFormClose(){
+  var m = document.getElementById('kskForm');
+  if(m) m.style.display = 'none';
+  _kskForm = null;
+}
+window.kskFormClose = kskFormClose;
+
+function kskFormSeg(k, v){
+  var el = document.getElementById('kskf_' + k);
+  if(!el) return;
+  el.setAttribute('data-v', v);
+  Array.prototype.forEach.call(el.children, function(c){
+    c.classList.toggle('on', c.getAttribute('data-o') === String(v));
+  });
+}
+window.kskFormSeg = kskFormSeg;
+
+function _kskFormErr(msg){
+  var e = document.getElementById('kskfErr');
+  if(e){ e.textContent = msg; e.style.display = msg ? 'block' : 'none'; }
+  var go = document.getElementById('kskfGo');
+  if(go){ go.disabled = false; go.textContent = '저장'; }
+}
+
+async function kskFormSave(){
+  var f = _kskForm; if(!f) return;
+  var vals = {};
+  for(var i=0;i<f.fields.length;i++){
+    var fd = f.fields[i];
+    var el = document.getElementById('kskf_' + fd.k);
+    var raw = (fd.type === 'seg') ? (el && el.getAttribute('data-v')) : (el && el.value);
+    vals[fd.k] = _kskFormVal(fd, raw);
+    if(fd.req && (vals[fd.k] === '' || vals[fd.k] === 0)){
+      _kskFormErr('「' + fd.label + '」을(를) 넣어주세요');
+      if(el && el.focus) el.focus();
+      return;
+    }
+  }
+  var go = document.getElementById('kskfGo');
+  if(go){ go.disabled = true; go.textContent = '저장 중…'; }
   try {
+    var msg = await f.onSave(vals);
+    if(msg){ _kskFormErr(msg); return; }   // 저장하지 않고 시트에 머문다
+    kskFormClose();
+  } catch(e){
+    console.warn('[ksk] 저장 실패:', e);
+    _kskFormErr((e && e.message) || '저장하지 못했습니다');
+  }
+}
+window.kskFormSave = kskFormSave;
+
+// ── 회차 만들기 ───────────────────────────────────────────────
+function kskNewEvent(){
+  kskFormOpen('새 대관 회차', [
+    { k:'name', label:'매장 이름', type:'text', req:true, ph:'鮨 めい乃',
+      hint:'게스트 시트와 결제 화면에 <b>그대로</b> 나갑니다.' },
+    { k:'date', label:'대관 날짜', type:'date', req:true, value:new Date().toISOString().slice(0,10) },
+    { k:'time', label:'시작 시간', type:'time', value:'' },
+    { k:'pax',  label:'총 인원 (대표 포함)', type:'num', value:'', ph:'9' }
+  ], async function(v){
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(v.date)) return '날짜를 골라주세요';
     var u = (await window.sb.auth.getUser()).data.user;
     var r = await window.sb.from('kashikiri_events').insert({
-      venue_id: 'manual-' + Date.now(), venue_name: name.trim(),
-      event_date: date, status: 'draft', escort: true, created_by: u && u.id
+      venue_id: 'manual-' + Date.now(), venue_name: v.name,
+      event_date: v.date, event_time: v.time || null,
+      total_pax: v.pax || 0, status: 'draft', escort: true, created_by: u && u.id
     }).select().maybeSingle();
     if(r.error) throw r.error;
     await _kskLoad();
-    kskOpenEvent(r.data.id);
-  } catch(e){ showToast('❌','만들지 못했습니다', (e && e.message) || ''); }
+    await kskOpenEvent(r.data.id);
+  });
 }
 window.kskNewEvent = kskNewEvent;
 
@@ -31385,10 +31535,10 @@ function _kskRenderEvent(){
     }
 
     h += '<div class="ksk-acts">'
-       +   '<button class="ksk-btn ghost sm" onclick="kskEditTeam(\'' + tm.id + '\')">금액 · 인원</button>'
+       +   '<button class="ksk-btn ghost sm" onclick="kskEditTeam(\'' + tm.id + '\')">'
+       +     '수정' + (gs.length ? ' · 게스트 ' + gs.length + '명' : '') + '</button>'
        +   '<button class="ksk-btn sm" onclick="kskSplitOpen(\'' + tm.id + '\')"' + (tm.total_krw ? '' : ' disabled') + '>'
        +     (cs.length ? '다시 나누기' : '분할 청구') + '</button>'
-       +   '<button class="ksk-btn ghost sm" onclick="kskGuests(\'' + tm.id + '\')">게스트 ' + gs.length + '명</button>'
        + '</div></div>';
   });
 
@@ -31397,116 +31547,130 @@ function _kskRenderEvent(){
   b.innerHTML = h;
 }
 
-async function kskEditEvent(){
+function kskEditEvent(){
   if(!_kskCur) return;
   var e = _kskCur.ev;
-  var pax = prompt('총 인원 (대표 포함)', String(e.total_pax || ''));
-  if(pax === null) return;
-  var tm  = prompt('시작 시간 (HH:MM, 없으면 비움)', String(e.event_time || '').slice(0,5));
-  var fx  = prompt('적용 환율 — 1엔 = ?원 (예: 9.35)', e.fx_rate ? _kskFx(e.fx_rate) : '');
-  var nt  = prompt('환율 근거 (결제 화면에 그대로 나갑니다)', e.fx_note || '');
-  var vp  = prompt('매장에 지급한 엔화 총액 (숫자만)', String(e.venue_paid_jpy || ''));
-  var esc = confirm('대표(Woo)가 동행하나요?\n\n확인 = 동행 · 취소 = 동행 없음');
-  var patch = {
-    total_pax: parseInt(pax,10) || 0,
-    event_time: (tm && /^\d{1,2}:\d{2}$/.test(tm)) ? tm : null,
-    fx_rate: fx ? (parseFloat(String(fx).replace(/[^0-9.]/g,'')) || null) : null,
-    fx_note: (nt || '').trim() || null,
-    venue_paid_jpy: parseInt(String(vp||'').replace(/[^0-9]/g,''), 10) || null,
-    escort: !!esc, status: 'settling', updated_at: new Date().toISOString()
-  };
-  try {
-    var r = await window.sb.from('kashikiri_events').update(patch).eq('id', e.id);
+  kskFormOpen('회차 정보', [
+    { k:'name', label:'매장 이름', type:'text', req:true, value:e.venue_name || '' },
+    { k:'date', label:'대관 날짜', type:'date', req:true, value:String(e.event_date||'').slice(0,10) },
+    { k:'time', label:'시작 시간', type:'time', value:String(e.event_time||'').slice(0,5) },
+    { k:'pax',  label:'총 인원 (대표 포함)', type:'num', value:e.total_pax || '', ph:'9' },
+    { k:'escort', label:'대표(Woo) 동행', type:'seg', value: e.escort ? '1' : '0',
+      opts:[['1','동행'],['0','동행 없음']],
+      hint:'게스트 시트에 <b>매번</b> 표시됩니다. 없는 회차도 「동행 없음」으로 적힙니다.' },
+    { k:'fx',   label:'적용 환율 — 1엔 = ?원', type:'dec', value:e.fx_rate ? _kskFx(e.fx_rate) : '',
+      ph:'9.35', hint:'이걸 넣어야 조 금액(엔화)이 원화로 확정됩니다.' },
+    { k:'note', label:'환율 근거', type:'text', value:e.fx_note || '', ph:'1/1 매매기준율 + 2%',
+      hint:'결제 화면에 <b>그대로</b> 나갑니다 — 숨기면 분쟁이 납니다.' },
+    { k:'paid', label:'매장에 지급한 엔화 총액', type:'money', pre:'¥',
+      value:e.venue_paid_jpy || '', ph:'960,000' }
+  ], async function(v){
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(v.date)) return '날짜를 골라주세요';
+    var fx = v.fx || null;
+    var r = await window.sb.from('kashikiri_events').update({
+      venue_name: v.name,
+      event_date: v.date,
+      event_time: v.time || null,
+      total_pax: v.pax || 0,
+      escort: (v.escort === '1'),
+      fx_rate: fx,
+      fx_note: v.note || null,
+      venue_paid_jpy: v.paid || null,
+      status: 'settling', updated_at: new Date().toISOString()
+    }).eq('id', e.id);
     if(r.error) throw r.error;
-    // 환율이 바뀌면 팀 원화도 다시 계산한다 — 엔화가 있는 팀만.
-    if(patch.fx_rate){
+    // 환율이 바뀌면 조 원화도 다시 계산한다 — 엔화가 있는 조만.
+    //   안 하면 화면의 원화와 실제 청구가 어긋난 채로 남는다.
+    if(fx){
       for(var i=0;i<_kskCur.teams.length;i++){
         var t2 = _kskCur.teams[i];
         if(t2.total_jpy){
           await window.sb.from('kashikiri_teams')
-            .update({ total_krw: Math.round(t2.total_jpy * patch.fx_rate) }).eq('id', t2.id);
+            .update({ total_krw: Math.round(t2.total_jpy * fx) }).eq('id', t2.id);
         }
       }
     }
     await kskOpenEvent(e.id);
     showToast('✓','저장했습니다','');
-  } catch(err){ showToast('❌','저장 실패', (err && err.message) || ''); }
+  });
 }
 window.kskEditEvent = kskEditEvent;
 
-async function kskAddTeam(){
+function kskAddTeam(){
   if(!_kskCur) return;
   var seq = (_kskCur.teams.length ? Math.max.apply(null, _kskCur.teams.map(function(t){ return t.seq||0; })) : 0) + 1;
-  var host = prompt(seq + '組 호스트 표기 (게스트 시트에 나갑니다 — 예: K様)');
-  if(host === null) return;
-  var pax = prompt(seq + '組 인원', '2');
-  try {
-    var r = await window.sb.from('kashikiri_teams').insert({
-      event_id: _kskCur.ev.id, seq: seq,
-      host_label: (host||'').trim() || null,
-      pax: Math.max(1, parseInt(pax,10) || 1)
-    });
-    if(r.error) throw r.error;
-    await kskOpenEvent(_kskCur.ev.id);
-  } catch(e){ showToast('❌','추가 실패', (e && e.message) || ''); }
+  _kskTeamForm(seq + '組 추가', null, seq);
 }
 window.kskAddTeam = kskAddTeam;
 
-async function kskEditTeam(id){
+function kskEditTeam(id){
   if(!_kskCur) return;
   var t = _kskCur.teams.filter(function(x){ return x.id === id; })[0];
   if(!t) return;
-  var pax = prompt((t.seq||1) + '組 인원', String(t.pax || 1));
-  if(pax === null) return;
-  var jpy = prompt('현장 확정 금액 (엔화, 숫자만)', String(t.total_jpy || ''));
-  if(jpy === null) return;
-  var dn  = prompt('주류 성향 (게스트 시트용 — 금액은 적지 마세요)', t.drink_note || '');
-  var an  = prompt('알레르기 · 주의 (게스트 시트용)', t.allergy_note || '');
-
-  var j = parseInt(String(jpy).replace(/[^0-9]/g,''), 10) || 0;
-  var fx = parseFloat(_kskCur.ev.fx_rate) || 0;
-  if(j > 0 && !fx){ showToast('⚠','환율 먼저','회차 정보에서 적용 환율을 먼저 넣어주세요'); return; }
-  try {
-    var r = await window.sb.from('kashikiri_teams').update({
-      pax: Math.max(1, parseInt(pax,10) || 1),
-      total_jpy: j || null,
-      total_krw: j ? Math.round(j * fx) : null,
-      drink_note: (dn||'').trim() || null,
-      allergy_note: (an||'').trim() || null
-    }).eq('id', id);
-    if(r.error) throw r.error;
-    await kskOpenEvent(_kskCur.ev.id);
-  } catch(e){ showToast('❌','저장 실패', (e && e.message) || ''); }
+  _kskTeamForm((t.seq||1) + '組', t, t.seq || 1);
 }
 window.kskEditTeam = kskEditTeam;
 
-// ── 게스트 (게스트 시트용) ────────────────────────────────────
-//   ⚠ 전화번호는 받지 않는다. 표에 컬럼 자체가 없다.
-async function kskGuests(teamId){
-  if(!_kskCur) return;
-  var gs = _kskCur.guests.filter(function(g){ return g.team_id === teamId; });
-  var t  = _kskCur.teams.filter(function(x){ return x.id === teamId; })[0];
+// 조 만들기·고치기 — 같은 판을 쓴다. 다른 건 저장할 때뿐이다.
+//   게스트 이름까지 여기서 함께 받는다. 조를 만들고 나서 다시 들어가
+//   이름을 넣게 하면 반드시 빠뜨린다.
+function _kskTeamForm(title, t, seq){
+  var fx  = parseFloat(_kskCur.ev.fx_rate) || 0;
+  var gs  = t ? _kskCur.guests.filter(function(g){ return g.team_id === t.id; }) : [];
   var cur = gs.map(function(g){ return g.display_name + (g.is_host ? '*' : ''); }).join(', ');
-  var s = prompt(
-    (t ? (t.seq + '組 ') : '') + '게스트 이름 — 쉼표로 구분, 호스트 뒤에 *\n'
-    + '예: K様*, P様, L様, C様\n\n(전화번호는 적지 않습니다)', cur);
-  if(s === null) return;
-  var names = String(s).split(',').map(function(x){ return x.trim(); }).filter(Boolean);
-  try {
-    await window.sb.from('kashikiri_guests').delete().eq('team_id', teamId);
-    if(names.length){
-      var rows = names.map(function(n, i){
-        var host = /\*$/.test(n);
-        return { team_id: teamId, seq: i+1, display_name: n.replace(/\*$/,'').trim(),
-                 is_host: host, visit_count: 0 };
-      });
-      var r = await window.sb.from('kashikiri_guests').insert(rows);
+  kskFormOpen(title, [
+    { k:'host', label:'호스트 표기', type:'text', value:(t && t.host_label) || '', ph:'K様',
+      hint:'게스트 시트에 나갑니다. <b>姓 + 様</b> 만 — 전화번호는 받지 않습니다.' },
+    { k:'pax',  label:'인원', type:'num', req:true, value:(t && t.pax) || 2 },
+    { k:'jpy',  label:'현장 확정 금액', type:'money', pre:'¥', value:(t && t.total_jpy) || '',
+      ph:'450,000',
+      hint: fx ? ('환율 1엔 = ' + _kskFx(_kskCur.ev.fx_rate) + '원 으로 원화가 확정됩니다.')
+               : '⚠ 회차 정보에서 <b>적용 환율</b>을 먼저 넣어야 금액을 쓸 수 있습니다.' },
+    { k:'names', label:'게스트 이름', type:'text', value:cur, ph:'K様*, P様, L様, C様',
+      hint:'쉼표로 구분, 호스트 뒤에 <b>*</b>. 분할 청구에서 이 이름을 그대로 씁니다.' },
+    { k:'drink', label:'주류 성향', type:'area', value:(t && t.drink_note) || '',
+      ph:'シャンパーニュ中心・日本酒少々',
+      hint:'게스트 시트용. <b>금액은 적지 마세요</b> — 셰프에게 나갑니다.' },
+    { k:'allergy', label:'알레르기 · 주의', type:'area', value:(t && t.allergy_note) || '',
+      ph:'甲殻類（1名）' }
+  ], async function(v){
+    if(v.jpy > 0 && !fx) return '회차 정보에서 적용 환율을 먼저 넣어주세요';
+    var row = {
+      host_label: v.host || null,
+      pax: Math.max(1, v.pax || 1),
+      total_jpy: v.jpy || null,
+      total_krw: v.jpy ? Math.round(v.jpy * fx) : null,
+      drink_note: v.drink || null,
+      allergy_note: v.allergy || null
+    };
+    var teamId = t ? t.id : null;
+    if(t){
+      var r = await window.sb.from('kashikiri_teams').update(row).eq('id', t.id);
       if(r.error) throw r.error;
+    } else {
+      row.event_id = _kskCur.ev.id; row.seq = seq;
+      var r2 = await window.sb.from('kashikiri_teams').insert(row).select().maybeSingle();
+      if(r2.error) throw r2.error;
+      teamId = r2.data && r2.data.id;
+    }
+    // 게스트는 통째로 갈아 끼운다 — 이름만 담는 표라 잃을 것이 없다.
+    //   ⚠ 이미 청구가 물려 있으면 guest_id 가 끊긴다. 그래서 청구가 있으면 건드리지 않는다.
+    var hasCharge = t && _kskCur.charges.some(function(c){ return c.team_id === t.id; });
+    if(teamId && !hasCharge){
+      await window.sb.from('kashikiri_guests').delete().eq('team_id', teamId);
+      var names = String(v.names || '').split(',').map(function(x){ return x.trim(); }).filter(Boolean);
+      if(names.length){
+        var rows = names.map(function(n, i){
+          return { team_id: teamId, seq: i+1, display_name: n.replace(/\*$/,'').trim(),
+                   is_host: /\*$/.test(n), visit_count: 0 };
+        });
+        var r3 = await window.sb.from('kashikiri_guests').insert(rows);
+        if(r3.error) throw r3.error;
+      }
     }
     await kskOpenEvent(_kskCur.ev.id);
-  } catch(e){ showToast('❌','저장 실패', (e && e.message) || ''); }
+  });
 }
-window.kskGuests = kskGuests;
 
 // ── 게스트 시트 링크 ──────────────────────────────────────────
 //   다시 부르면 토큰이 새로 나온다 — 셰프가 남에게 넘긴 링크를 끊는 유일한 길이다.
@@ -39557,7 +39721,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.01-ab';
+var TAAM_WEB_BUILD = '2026.09.01-ac';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -57963,8 +58127,11 @@ function showToast(icon,title,msg,opts){
   requestAnimationFrame(function(){ el.classList.add('show'); });
   // 🆕 탭 가능한 토스트 — opts.onTap 있으면 배너 전체 탭 시 콜백 실행 후 닫힘.
   //   (닫기 ✕ 는 기존대로 단순 닫기 — 읽음 처리 안 함). 배너는 기본 pointer-events:none 이라 켜줌.
-  el.style.cursor = opts.onTap ? 'pointer' : '';
-  el.style.pointerEvents = opts.onTap ? 'auto' : '';
+  // 🆕 2026.09: 인라인으로 pointer-events 를 끄지 않는다 — CSS(.show)가 정한다.
+  //   종전엔 onTap 이 없으면 'none' 을 박아서, 탭이 배너를 뚫고 아래 헤더의
+  //   ✕(앱으로 나가기)를 눌렀다. 토스트를 닫으려다 앱 밖으로 나갔다.
+  el.style.cursor = '';
+  el.style.pointerEvents = '';
   el.onclick = null;
   // 🆕 탭 안내 힌트 — 탭 가능한 토스트에만 노출 (탭해야 확인됨을 명시)
   var _hintEl = document.getElementById('toastHint');
@@ -57983,14 +58150,14 @@ function showToast(icon,title,msg,opts){
       _hintEl.style.display = 'none';
     }
   }
-  if (opts.onTap) {
-    el.onclick = function(ev){
-      // ✕ 닫기 버튼 탭은 closeToast 가 담당 — 읽음 처리 제외
-      if (ev && ev.target && ev.target.closest && ev.target.closest('.toast-close')) return;
-      try { opts.onTap(); } catch(_e){}
-      closeToast();
-    };
-  }
+  el.onclick = function(ev){
+    // ✕ 닫기 버튼 탭은 closeToast 가 담당 — 읽음 처리 제외
+    if (ev && ev.target && ev.target.closest && ev.target.closest('.toast-close')) return;
+    // onTap 이 없는 토스트는 「그냥 닫기」다. 아무 일도 안 하는 것보다 낫고,
+    // 무엇보다 아래로 새지 않는다.
+    if (opts.onTap) { try { opts.onTap(); } catch(_e){} }
+    closeToast();
+  };
   if(_toastTimer)clearTimeout(_toastTimer);
   // 🆕 탭 가능한 토스트는 탭할 시간을 주기 위해 노출을 길게 (6s), 일반 토스트는 2.5s
   //   🆕 오류·경고 토스트는 2.5초로는 읽을 수 없다 (실제로 문구를 놓쳐 원인 파악이 늦어졌다).
