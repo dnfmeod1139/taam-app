@@ -11993,6 +11993,33 @@ window.closePromoCarousel = function(){
         <button class="tu-slot-btn" onclick="riAdjPax(1)" style="width:36px;height:36px;font-size:18px;">+</button>
       </div>
     </div>
+    <!-- 🆕 2026.09: 대관 — 엔화 원금 · 적용 환율.
+         비워두면 아무 일도 안 일어난다 (기존 원화 초대 그대로).
+         채우면 아래 원화 칸을 자동으로 채우고, 회원 결제 화면에
+         「엔화 원금 · 적용 환율 · 원화 확정액」 셋을 다 보여준다. -->
+    <div class="rp-field">
+      <label class="rp-label">엔화 원금 · 환율 <span style="color:#aaa;font-weight:400;">(대관용 — 비우면 안 씀)</span></label>
+      <div style="display:flex;gap:8px;">
+        <div style="position:relative;flex:1;">
+          <div style="position:absolute;left:12px;top:50%;transform:translateY(-50%);font-family:var(--font-main);font-size:14px;font-weight:600;color:#aaa;pointer-events:none;">¥</div>
+          <input class="tu-input" id="riJpyMeal" type="text" inputmode="numeric" placeholder="식사 40,000"
+                 oninput="tuFormatMoney(this);riFxApply()" style="padding-left:26px;font-family:var(--font-main);font-size:15px;">
+        </div>
+        <div style="position:relative;flex:1;">
+          <div style="position:absolute;left:12px;top:50%;transform:translateY(-50%);font-family:var(--font-main);font-size:14px;font-weight:600;color:#aaa;pointer-events:none;">¥</div>
+          <input class="tu-input" id="riJpyDrink" type="text" inputmode="numeric" placeholder="주류 30,000"
+                 oninput="tuFormatMoney(this);riFxApply()" style="padding-left:26px;font-family:var(--font-main);font-size:15px;">
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:8px;">
+        <input class="tu-input" id="riFxRate" type="text" inputmode="decimal" placeholder="환율 (1엔 = 9.35원)"
+               oninput="riFxApply()" style="flex:1;font-family:var(--font-main);font-size:15px;">
+      </div>
+      <input class="tu-input" id="riFxNote" type="text" placeholder="환율 근거 (예: 9/10 매매기준율 + 2%)"
+             style="margin-top:8px;font-size:13px;">
+      <div id="riFxCalc" style="margin-top:8px;font-size:12px;color:#777;line-height:1.7;"></div>
+    </div>
+
     <div class="rp-field">
       <label class="rp-label">식사 예약금 (1인, 원)</label>
       <div style="position:relative;">
@@ -38099,9 +38126,11 @@ function openReservationInviteScreen(){
     var el = document.getElementById(id);
     if(el) el.textContent = (id==='riDateBtnText'?'날짜를':'시간을')+' 선택하세요';
   });
-  ['riMealAmt','riAgencyFee','riWineMin','riTicketDesc','riMemberSearch','riPolicyExtraText'].forEach(function(id){
+  ['riMealAmt','riAgencyFee','riWineMin','riTicketDesc','riMemberSearch','riPolicyExtraText',
+   'riJpyMeal','riJpyDrink','riFxRate','riFxNote'].forEach(function(id){
     var el = document.getElementById(id); if(el) el.value='';
   });
+  var _rfc = document.getElementById('riFxCalc'); if(_rfc) _rfc.textContent = '';
   document.getElementById('riPaxVal').textContent = '1';
   document.getElementById('riTotalDisplay').textContent = '₩0';
   document.getElementById('riSelectedMember').style.display='none';
@@ -38272,6 +38301,38 @@ function riUpdateTotal(){
   var total = (meal + agency + wine) * _riPax;
   document.getElementById('riTotalDisplay').textContent = '₩' + total.toLocaleString();
 }
+
+// ── 대관: 엔화 원금 × 환율 → 원화 칸을 채운다 ────────────────
+//   식사·주류만 환산한다. **대행비는 건드리지 않는다** — 대행비는 엔화
+//   원금이 아니라 탐의 수익이고, 「식사비는 액면가 통과」가 이 모델의 축이다.
+//   엔화나 환율이 비어 있으면 아무것도 하지 않는다 (기존 원화 초대 보호).
+function _riFxRate(){
+  var el = document.getElementById('riFxRate');
+  var v = parseFloat(String((el && el.value) || '').replace(/[^0-9.]/g, ''));
+  return (isFinite(v) && v > 0) ? v : 0;
+}
+function riFxApply(){
+  var rate  = _riFxRate();
+  var jMeal = tuGetMoney('riJpyMeal');
+  var jDrnk = tuGetMoney('riJpyDrink');
+  var box   = document.getElementById('riFxCalc');
+  if(!rate || (!jMeal && !jDrnk)){
+    if(box) box.textContent = '';
+    return;
+  }
+  // 원 단위 반올림 — 회원에게 보이는 숫자와 실제 차감액이 같아야 한다
+  var wMeal = Math.round(jMeal * rate);
+  var wDrnk = Math.round(jDrnk * rate);
+  if(jMeal){ var m = document.getElementById('riMealAmt'); if(m){ m.value = wMeal.toLocaleString(); } }
+  if(jDrnk){ var d = document.getElementById('riWineMin'); if(d){ d.value = wDrnk.toLocaleString(); } }
+  riUpdateTotal();
+  if(box){
+    box.textContent = '1인 ¥' + (jMeal + jDrnk).toLocaleString()
+                    + ' × ' + rate + ' = ₩' + (wMeal + wDrnk).toLocaleString()
+                    + '  (식사 ₩' + wMeal.toLocaleString() + ' · 주류 ₩' + wDrnk.toLocaleString() + ')';
+  }
+}
+window.riFxApply = riFxApply;
 
 // v1.53.27: 회원 검색 — onclick 에 JSON 이중 인코딩 대신 캐시 객체 사용.
 //   진단 로그 + 에러 시 사용자에게 메시지 표시 + deleted_at 컬럼 안전 처리.
@@ -38550,6 +38611,23 @@ async function riSubmit(){
   var agency = tuGetMoney('riAgencyFee');
   var wine = tuGetMoney('riWineMin');
   if(meal <= 0){ showToast('⚠','입력 필요','식사 예약금을 입력해주세요'); return; }
+  // 🆕 2026.09 대관: 엔화·환율을 쓰기로 했으면 원화가 그 계산과 어긋나면 안 된다.
+  //   회원 결제 화면에 「¥원금 · 환율 · ₩확정액」 셋이 나란히 뜬다. 환산을 걸어 둔 뒤
+  //   원화 칸을 손으로 고치면 그 셋이 서로 안 맞고, 그건 회원이 바로 알아본다 —
+  //   숫자를 숨겨서 나는 분쟁보다 숫자가 안 맞아서 나는 분쟁이 더 나쁘다.
+  var _fxMis = (function(){
+    var _rate = _riFxRate();
+    var _jm = tuGetMoney('riJpyMeal'), _jd = tuGetMoney('riJpyDrink');
+    if(!_rate || (!_jm && !_jd)) return '';              // 엔화를 안 쓰는 초대는 통과
+    if(_jm && Math.abs(meal - Math.round(_jm*_rate)) > 1) return '식사';
+    if(_jd && Math.abs(wine - Math.round(_jd*_rate)) > 1) return '주류';
+    return '';
+  })();
+  if(_fxMis){
+    showToast('⚠','엔화 환산 불일치',
+      _fxMis + ' 금액이 「엔화 × 환율」과 다릅니다. 환율을 다시 입력하거나 엔화 칸을 비워주세요');
+    return;
+  }
   var total = (meal + agency + wine) * _riPax;
   var r = (restaurantDB || []).find(function(x){ return String(x.id) === String(_riRestId); });
   var restName = r ? r.name : '';
@@ -38670,6 +38748,26 @@ async function riSubmit(){
     }
     var inviteId = ins.data && ins.data.id;
     console.log('[ri] 초대 발송 완료 id=', inviteId);
+
+    // 🆕 2026.09 대관: 엔화 원금·환율은 **INSERT 에 싣지 않고 따로 쓴다.**
+    //   컬럼이 아직 없는 DB(sql/kashikiri_fx.sql 미실행)에서 INSERT 에 실으면
+    //   초대 발송이 통째로 실패한다. 따로 쓰면 이 UPDATE 만 조용히 실패하고
+    //   초대는 정상으로 나간다 — 원화 금액은 이미 total_amount 에 들어 있다.
+    //   (ticket_products.tile_photo 와 같은 이유·같은 방식)
+    try {
+      var _fxRate = _riFxRate();
+      var _fxJm = tuGetMoney('riJpyMeal'), _fxJd = tuGetMoney('riJpyDrink');
+      if(inviteId && _fxRate > 0 && (_fxJm > 0 || _fxJd > 0)){
+        var _fxNoteEl = document.getElementById('riFxNote');
+        var _fxU = await window.sb.from('reservation_invites').update({
+          jpy_meal:  _fxJm || null,
+          jpy_drink: _fxJd || null,
+          fx_rate:   _fxRate,
+          fx_note:   ((_fxNoteEl && _fxNoteEl.value) || '').trim() || null
+        }).eq('id', inviteId);
+        if(_fxU.error) console.warn('ℹ️ 엔화·환율 저장 생략 (컬럼 없음?):', _fxU.error.message);
+      }
+    } catch(_fxe){ console.warn('ℹ️ 엔화·환율 저장 예외:', _fxe); }
 
     // 🆕 2026.08 A안: 판매 티켓 연결 초대는 발송 즉시 좌석 홀드(INVH- 행) 생성.
     //   서버 좌석 트리거가 홀드 INSERT 를 검증 → 잔여석 없으면 발송 자체를 롤백.
@@ -38834,7 +38932,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.01-z';
+var TAAM_WEB_BUILD = '2026.09.01-aa';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -39586,6 +39684,21 @@ async function openReservationInvitePayPopup(inviteId){
       ['대행비', _rpCur((inv.agency_fee||0)*inv.pax)]
     ];
     if(inv.wine_min > 0) rows.push(['주류 미니멈', _rpCur(inv.wine_min*inv.pax)]);
+    // 🆕 2026.09 대관: 엔화 원금과 적용 환율을 그대로 보여준다.
+    //   「당일 환율 + α%」 라고만 쓰고 숫자를 숨기면 나중에 반드시 분쟁이 난다.
+    //   회원이 이 화면에서 원금·환율·원화를 한 번에 볼 수 있어야 한다.
+    //   컬럼이 없거나 비어 있으면 이 세 줄은 아예 안 나온다(기존 원화 초대 그대로).
+    var _fxR = parseFloat(inv.fx_rate);
+    var _fxJm = parseInt(inv.jpy_meal, 10) || 0, _fxJd = parseInt(inv.jpy_drink, 10) || 0;
+    if(isFinite(_fxR) && _fxR > 0 && (_fxJm > 0 || _fxJd > 0)){
+      var _fxBits = [];
+      if(_fxJm > 0) _fxBits.push('식사 ¥' + (_fxJm*inv.pax).toLocaleString());
+      if(_fxJd > 0) _fxBits.push('주류 ¥' + (_fxJd*inv.pax).toLocaleString());
+      rows.push(['엔화 원금', '¥' + ((_fxJm+_fxJd)*inv.pax).toLocaleString()
+                              + '<br><span style="font-size:10.5px;font-weight:500;color:#888;">' + _fxBits.join(' · ') + '</span>']);
+      rows.push(['적용 환율', '1엔 = ' + _fxR + '원'
+                              + (inv.fx_note ? '<br><span style="font-size:10.5px;font-weight:500;color:#888;">' + _riEscHtml(inv.fx_note) + '</span>' : '')]);
+    }
     rows.push(['<strong>총 결제 금액</strong>', '<strong style="color:#5C0A14;">'+_rpCur(inv.total_amount||0)+'</strong>']);
     document.getElementById('riPayRows').innerHTML = rows.map(function(row){
       return '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid rgba(0,0,0,.05);">'
@@ -39611,6 +39724,16 @@ async function openReservationInvitePayPopup(inviteId){
                   + '<div style="display:flex;justify-content:space-between;padding:6px 0;font-size:12.5px;border-top:1px dashed #ddd;margin-top:4px;"><span style="color:#1a1a18;font-weight:800;">잔액 합계</span><span style="color:#1a1a18;font-weight:800;">'+_rpCur(totalBal)+'</span></div>';
       if(shortfall > 0){
         balHtml += '<div style="margin-top:6px;padding:8px 10px;background:#fff5f5;border:1px solid #c33;border-radius:8px;font-size:11.5px;color:#9B1C1C;font-weight:700;text-align:center;">예치금 부족: '+_rpCur(shortfall)+' 추가 충전 필요</div>';
+        // 🆕 2026.09: 막다른 길을 없앤다 — 여기서 바로 충전으로 보낸다.
+        //   종전엔 「부족합니다」만 띄우고 끝이라, 회원이 팝업을 닫고 마이페이지를
+        //   찾아 들어가야 했다. 대관은 금액이 커서 이 길을 반드시 쓰게 된다.
+        //   ⚠ 새 카드결제 경로를 만들지 않는다 — 충전은 이미 카드로 되고,
+        //     검증된 결제 함수(toss-billing-charge)를 초대용으로 손대면
+        //     두 결제 경로의 정산이 어긋난다.
+        balHtml += '<button onclick="riPayGoCharge()" style="width:100%;margin-top:8px;padding:12px;'
+                 + 'background:#5C0A14;border:none;border-radius:10px;font-family:var(--font-main);'
+                 + 'font-size:13px;font-weight:800;color:#fff;cursor:pointer;letter-spacing:.02em;">'
+                 + '예치금 충전하기</button>';
         // 결제 차단
         document.getElementById('riPayBtn').dataset.insufficient = '1';
       } else {
@@ -39648,6 +39771,20 @@ async function openReservationInvitePayPopup(inviteId){
     showToast('❌','오류','['+e.name+'] '+e.message);
   }
 }
+
+// 예치금이 모자랄 때 — 결제 팝업을 닫고 충전 화면으로 보낸다.
+//   충전을 마치고 알림/마이페이지에서 초대를 다시 열면 그 자리에서 결제된다.
+function riPayGoCharge(){
+  try { riPayClose(); } catch(e){}
+  try {
+    if(typeof openMpCharge === 'function') openMpCharge();
+    else showToast('⚠','충전 화면 없음','마이페이지 → 충전하기 에서 채워주세요');
+  } catch(e){
+    console.warn('[riPay] 충전 화면 열기 실패:', e);
+    showToast('⚠','열 수 없음','마이페이지 → 충전하기 에서 채워주세요');
+  }
+}
+window.riPayGoCharge = riPayGoCharge;
 
 function riPayClose(){
   document.getElementById('riPayPopup').style.display = 'none';
