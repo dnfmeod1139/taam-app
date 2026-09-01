@@ -1628,7 +1628,7 @@ html.auto-login .splash .bottom-group{display:none !important}
 .taam-edit-cancel{padding:12px 18px;background:white;color:#666;border:1px solid #e0dcd4;border-radius:10px;font-family:var(--font-main);font-size:14px;font-weight:600;cursor:pointer}
 
 /* ── RESTAURANT PAGE ── */
-.restpage{position:fixed;inset:0;z-index:630;background:#f7f5f2;display:none;flex-direction:column;font-family:var(--font-main)}
+.restpage{position:fixed;inset:0;z-index:645;background:#f7f5f2;display:none;flex-direction:column;font-family:var(--font-main)}
 .rp-form{flex:1;overflow-y:auto;padding:16px 24px 120px}
 .rp-field{margin-bottom:20px}
 .rp-label{font-family:var(--font-main);font-size:8px;font-weight:700;letter-spacing:.2em;text-transform:uppercase;color:#999;margin-bottom:8px;display:block}
@@ -1641,7 +1641,9 @@ html.auto-login .splash .bottom-group{display:none !important}
 .rp-photo-preview{width:100%;height:100%;object-fit:cover;display:none}
 
 /* ── TICKET UPLOAD ── */
-.tu-screen{position:fixed;inset:0;z-index:625;background:#f7f5f2;display:none;flex-direction:column;font-family:var(--font-main)}
+/* 🆕 2026.09-01: 콘솔 탭(.sub-screen, z 635) **위**로 올린다.
+   메뉴에서 열리는 화면인데 아래에 깔려 있어, 버튼은 눌리는데 화면이 안 보였다. */
+.tu-screen{position:fixed;inset:0;z-index:645;background:#f7f5f2;display:none;flex-direction:column;font-family:var(--font-main)}
 .tu-form{flex:1;overflow-y:auto;padding:16px 24px 120px}
 .tu-rest-list{display:flex;flex-direction:column;gap:8px}
 .tu-rest-item{display:flex;align-items:center;justify-content:space-between;padding:14px;background:#fff;border-radius:10px;border:2px solid #e8e4df;cursor:pointer;transition:all .15s}
@@ -2538,12 +2540,16 @@ html.auto-login .splash .bottom-group{display:none !important}
 .dm-tabs{display:flex;border-bottom:1px solid rgba(0,0,0,.08);flex-shrink:0;background:#fff;}
 .dm-tab{flex:1;padding:14px 0;text-align:center;font-family:var(--font-main);font-size:8px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:#bbb;cursor:pointer;border-bottom:2px solid transparent;transition:all .2s}
 .dm-tab.active{color:#1a1a18;border-bottom-color:#1a1a18}
-.dm-summary{padding:14px 20px;background:#fff;border-bottom:1px solid rgba(0,0,0,.06);flex-shrink:0;display:flex;justify-content:space-between;align-items:center;}
+.dm-summary{padding:14px 20px;background:#fff;border-bottom:1px solid rgba(0,0,0,.06);flex:none;
+  display:flex;justify-content:space-between;align-items:center;}
 .dm-summary-left{flex:1;}
 .dm-summary-label{font-family:var(--font-main);font-size:8px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:#aaa;margin-bottom:4px;}
 .dm-summary-amt{font-family:var(--font-main);font-size:22px;font-weight:700;}
 .dm-summary-count{font-size:11px;color:#bbb;margin-top:2px;}
-.dm-list{flex:1;overflow-y:auto;padding-bottom:40px;}
+/* 🆕 2026.09-01: 스크롤은 바깥(.dm-scroll)이 맡는다 — 요약이 길어져도 같이 밀린다 */
+.dm-scroll{flex:1 1 0;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;
+  display:flex;flex-direction:column}
+.dm-list{flex:none;padding-bottom:40px;}
 .dm-item{background:#fff;border-bottom:1px solid rgba(0,0,0,.06);padding:18px 20px;}
 .dm-item-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;}
 .dm-item-name{font-size:14px;font-weight:700;color:#1a1a18;}
@@ -12990,8 +12996,15 @@ window.closePromoCarousel = function(){
       <span style="position:absolute;right:11px;top:50%;transform:translateY(-50%);font-size:13px;color:#aaa;pointer-events:none;">🔍</span>
     </div>
   </div>
-  <div class="dm-summary" id="dmMgmtSummary"></div>
-  <div class="dm-list" id="dmMgmtList"></div>
+  <!-- 🆕 2026.09-01: 요약과 목록을 **한 스크롤**로 묶는다.
+       반환완료·환불·카드환불 탭은 요약에 분해(티켓 총액·총 차감·대행비·추가 차감·
+       위약금)가 붙어 길어지는데, .dm-summary 가 flex-shrink:0 이라 줄지 않고
+       목록을 화면 밖으로 밀어냈다. 스크롤하는 건 목록뿐인데 그 높이가 0 이 되니
+       아래 내역을 볼 방법이 없었다. -->
+  <div class="dm-scroll">
+    <div class="dm-summary" id="dmMgmtSummary"></div>
+    <div class="dm-list" id="dmMgmtList"></div>
+  </div>
 </div>
 
 <!-- DEPOSIT RETURN ACTION POPUP -->
@@ -30594,6 +30607,7 @@ function _qmHtml(){
 function qmGo(i){
   var r = _qmRows[i];
   if(!r || !r.el) return;
+  if(typeof _acNavHold === 'function') _acNavHold();
   if(typeof _acCloseOthers === 'function') _acCloseOthers(null);
   setTimeout(function(){ try{ r.el.click(); }catch(e){ console.warn('[quick] 실행 실패:', e); } }, 60);
 }
@@ -32862,6 +32876,7 @@ function moGo(i){
   var list = (_moRows || []).filter(function(r){ return _moHit(r, q); });
   var r = list[i];
   if(!r || !r.el) return;
+  if(typeof _acNavHold === 'function') _acNavHold();
   closeSubPage('moScreen');
   // 어드민 화면이 다시 앞으로 와야 그 항목의 동작(서브화면 열기 등)이 보인다
   setTimeout(function(){ try{ r.el.click(); }catch(e){ console.warn('[more] 실행 실패:', e); } }, 60);
@@ -32938,6 +32953,7 @@ function _acMenuHtml(tab){
 function acMenuGo(i){
   var r = _acMenuCache[i];
   if(!r || !r.el) return;
+  _acNavHold();
   _acCloseOthers(null);   // 어드민 화면이 앞으로 와야 그 항목의 동작이 보인다
   setTimeout(function(){ try{ r.el.click(); }catch(e){ console.warn('[menu] 실행 실패:', e); } }, 60);
 }
@@ -33053,8 +33069,18 @@ window._acCloseOthers = _acCloseOthers;
 //   ⚠ 콘솔을 나가는 중(_acExiting)에도 하지 않는다. 나가려는데 다시 열면 갇힌다.
 var _acExiting = false, _acEnsuring = false;
 
+// 🆕 2026.09-01: 메뉴 항목으로 **가는 중**에는 대시보드로 되돌리지 않는다.
+//   메뉴를 누르면 ① 콘솔 탭을 닫고 ② 잠시 뒤 그 항목을 클릭한다. 그런데 ①이
+//   closeSubPage → openAdmin → _acEnsureConsole 을 태워서, ②가 화면을 열기
+//   **전에** 대시보드가 먼저 다시 열렸다. 그 뒤에 열린 화면은 대시보드 아래로
+//   깔린다(티켓 업로드가 그랬다 — 버튼은 눌리는데 화면이 안 보였다).
+var _acNavUntil = 0;
+function _acNavHold(ms){ _acNavUntil = Date.now() + (ms || 700); }
+window._acNavHold = _acNavHold;
+
 function _acEnsureConsole(){
   if(_acExiting || _acEnsuring) return;
+  if(Date.now() < _acNavUntil) return;
   var role = (typeof _currentRole !== 'undefined') ? _currentRole : 'user';
   if(role !== 'superadmin' && role !== 'admin') return;
   _acEnsuring = true;
@@ -33063,6 +33089,11 @@ function _acEnsureConsole(){
     _acEnsuring = false;
     try{
       if(_acExiting) return;
+      // ⚠ 잠금은 **여기서 다시 본다.** 위에서 한 번 봤지만, 그건 타이머를 걸기
+      //   전이다. 메뉴로 가는 클릭이 그 사이에 들어오면 이미 걸린 타이머가
+      //   그대로 돌아 대시보드를 다시 열었다 — 그러면 뒤이어 열리는 화면이
+      //   대시보드 아래로 깔린다(티켓 업로드가 그랬다).
+      if(Date.now() < _acNavUntil) return;
       var vis = function(el){
         try{ return !!el && getComputedStyle(el).display !== 'none'; }catch(e){ return false; }
       };
@@ -33070,7 +33101,9 @@ function _acEnsureConsole(){
       if(!vis(document.getElementById('adminScreen'))
          && !vis(document.getElementById('partnerAdminScreen'))) return;
       // 위에 뭔가 열려 있으면 그대로 둔다
-      var pages = document.querySelectorAll('.sub-screen, .restpage');
+      //   ⚠ .tu-screen(티켓 업로드)을 빠뜨리고 있었다 — 열려 있는데도 「비었다」로
+      //     보고 대시보드를 그 위에 올렸다. 전체화면 판은 전부 센다.
+      var pages = document.querySelectorAll('.sub-screen, .restpage, .tu-screen, .mp-subpage');
       for(var i = 0; i < pages.length; i++){ if(vis(pages[i])) return; }
       acGo('today');
     }catch(e){ console.warn('[console] 대시보드 복귀 실패:', e); }
@@ -33110,6 +33143,7 @@ window.acExit = acExit;
 //   탭 화면을 먼저 닫고 연다 — 같은 z-index 라 겹쳐 열면 어느 것이 위인지가
 //   DOM 순서에 달린다. 닫고 열면 나올 때 대시보드로 되돌아온다(_acEnsureConsole).
 function acOpenMenu(id){
+  _acNavHold();
   if(typeof _acCloseOthers === 'function') _acCloseOthers(null);
   setTimeout(function(){
     try{ openSubPage(id); }catch(e){ console.warn('[console] 열기 실패:', id, e); }
@@ -38559,7 +38593,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.01-u';
+var TAAM_WEB_BUILD = '2026.09.01-v';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){

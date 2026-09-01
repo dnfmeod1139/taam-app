@@ -82,8 +82,11 @@ const { chromium } = require('playwright-core');
   });
   await p.waitForTimeout(150);
   ok('눌러서 예약 관리가 열린다', (await d('reservationAdminScreen')) !== 'none');
+  // ⚠ 메뉴로 가는 동안은 대시보드 복귀를 잠근다(_acNavHold 700ms). 실사용은 몇 초
+  //   뒤에 닫으므로, 테스트도 잠금이 풀린 뒤에 닫는다.
+  await p.waitForTimeout(800);
   await p.evaluate(() => closeSubPage('reservationAdminScreen'));
-  await p.waitForTimeout(150);
+  await p.waitForTimeout(250);
   ok('거기서 뒤로 → 다시 대시보드', (await d('todayBoardScreen')) !== 'none');
 
   out.forEach(l => console.log(l));
