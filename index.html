@@ -2419,6 +2419,10 @@ html.auto-login .splash .bottom-group{display:none !important}
 .tb-chip.warn.on .k{color:#fff;opacity:.75}
 .mb-note{font-size:11.5px;color:#79736a;line-height:1.7;background:#fcfaf5;border:1px dashed #e3dcce;
   border-radius:10px;padding:11px 12px;margin:0 0 12px}
+/* 🆕 2026.09-01 「이 탭의 도구」 — 목록 아래에 선으로 끊어 붙인다.
+   거르는 것(칩)과 가는 것(메뉴)이 한 덩어리로 보이지 않게. */
+.ac-tools{margin-top:26px;padding-top:4px;border-top:1px solid #e3dcce}
+.ac-tools .mo-grp:first-child{margin-top:14px}
 
 /* ═══ 🆕 2026.08-30 「티켓」 화면 ═══
    좌석이 어떻게 차고 있는지가 한눈에 들어와야 한다. 나머지는 기존 화면으로 보낸다. */
@@ -31299,7 +31303,11 @@ function rvPickDay(key){
   _rvRenderMon();
   _rvRenderBody();
 }
-function rvSetStatus(s){ _rvState.status = s; _rvState.open = null; _rvRenderFilters(); _rvRenderBody(); }
+function rvSetStatus(s){
+  _rvState.status = s; _rvState.open = null;
+  _rvRenderFilters(); _rvRenderBody();
+  // 예약 탭은 달력이 맨 위라 통째로 올리지 않는다 — 고른 날 카드만 보이면 된다
+}
 function rvSetRest(v){ _rvState.rest = v; _rvState.open = null; _rvRenderMon(); _rvRenderFilters(); _rvRenderBody(); }
 function rvToggleRow(pid){ _rvState.open = (_rvState.open === pid) ? null : pid; _rvRenderBody(); }
 function rvClearQ(){
@@ -31865,21 +31873,22 @@ function _mbRenderFilters(){
   if(!el) return;
   var base = _mbBase();
   var cnt = {};
-  ['all','broken','M','T','buy','bal','soon','ban','gone'].forEach(function(f){
-    cnt[f] = base.filter(function(p){ return _mbPass(p, f); }).length;
+  // 🆕 2026.09-01: 칩은 **등급 축 하나**로 줄인다.
+  //   일곱 개까지 늘어나니 두 줄로 접히면서 아래 도구 목록과 뒤엉켜, 무엇이
+  //   필터고 무엇이 메뉴인지 구분이 안 됐다. 「구매 있음」·「예치금 보유」·
+  //   「만료 임박」·「이용 제한」·「확인 필요」는 어차피 **줄 안에 배지로** 보인다 —
+  //   칩까지 둘 이유가 없다. (확인 필요는 아래 안내문이 개수까지 말해 준다)
+  var CHIPS = [['all','전체'], ['M','M 등급'], ['T','T 등급'], ['gone','탈퇴']];
+  CHIPS.forEach(function(c){
+    cnt[c[0]] = base.filter(function(p){ return _mbPass(p, c[0]); }).length;
   });
-  // 0건인 칩은 만들지 않는다 (「오늘」·「예약」과 같은 규칙)
-  var chips = [['all','전체']];
-  if(cnt.broken) chips.push(['broken','확인 필요']);
-  [['M','M 등급'], ['T','T 등급'], ['buy','구매 있음'], ['bal','예치금 보유'],
-   ['soon','만료 임박'], ['ban','이용 제한'], ['gone','탈퇴']]
-    .forEach(function(c){ if(cnt[c[0]]) chips.push(c); });
-  if(!cnt[_mbState.filter]) _mbState.filter = 'all';
+  // 0건인 칩은 만들지 않는다 (「오늘」·「예약」과 같은 규칙). 「전체」는 늘 둔다
+  var chips = CHIPS.filter(function(c){ return c[0] === 'all' || cnt[c[0]]; });
+  // 없어진 칩이 골라져 있으면(옛 상태) 조용히 전체로 되돌린다
+  if(!chips.some(function(c){ return c[0] === _mbState.filter; })) _mbState.filter = 'all';
   el.innerHTML = (chips.length > 1)
     ? '<div class="tb-chips" style="margin:9px 0 0;">' + chips.map(function(c){
-        // 「확인 필요」만 색을 준다 — 이모지 대신 색으로 눈에 걸리게 한다
-        return '<button class="tb-chip' + ((c[0] === 'broken' || c[0] === 'ban') ? ' warn' : '')
-          + (_mbState.filter === c[0] ? ' on' : '') + '" '
+        return '<button class="tb-chip' + (_mbState.filter === c[0] ? ' on' : '') + '" '
           + 'onclick="mbSetFilter(\'' + c[0] + '\')">' + c[1]
           + '<span class="k">' + cnt[c[0]] + '</span></button>';
       }).join('') + '</div>'
@@ -31912,7 +31921,7 @@ function _mbRenderBody(){
             + '<br><span style="color:#a69f94">이름 · 연락처 · 이메일로 찾습니다.</span>'
           : '해당하는 회원이 없습니다.')
       + '</div>';
-    el.innerHTML = _acMenuHtml('mb') + el.innerHTML;
+    el.innerHTML = el.innerHTML + _acMenuHtml('mb');
     return;
   }
 
@@ -31925,7 +31934,10 @@ function _mbRenderBody(){
       + 'M 전용 티켓을 살 수 없습니다. 열어서 만료일을 넣어주세요.</div>';
   }
   list.forEach(function(p){ h += _mbRow(p); });
-  el.innerHTML = _acMenuHtml('mb') + h;
+  // 🆕 2026.09-01: 도구는 **명부 아래**로. 위에 있으니 칩을 눌러도 화면이 안
+  //   움직이는 것처럼 보였다 — 결과는 도구 목록을 지나 한참 스크롤해야 나왔다.
+  //   찾으러 온 사람에게 먼저 보여야 하는 건 회원이지 메뉴가 아니다.
+  el.innerHTML = h + _acMenuHtml('mb');
 }
 
 function _mbRow(p){
@@ -31985,7 +31997,16 @@ function _mbRow(p){
   return h;
 }
 
-function mbSetFilter(f){ _mbState.filter = f; _mbState.open = null; _mbRenderFilters(); _mbRenderBody(); }
+// 🆕 2026.09-01: 필터를 바꾸면 목록 맨 위로 올린다.
+//   눌러도 화면이 안 움직이면 「아무 일도 안 났다」로 읽힌다. 실제로는 아래에서
+//   바뀌고 있었는데, 그걸 보려면 스크롤을 해야 했다.
+function _acScrollTop(id){
+  try{ var el = document.getElementById(id); if(el) el.scrollTop = 0; }catch(e){}
+}
+function mbSetFilter(f){
+  _mbState.filter = f; _mbState.open = null;
+  _mbRenderFilters(); _mbRenderBody(); _acScrollTop('mbBody');
+}
 function mbToggleRow(uid){ _mbState.open = (_mbState.open === uid) ? null : uid; _mbRenderBody(); }
 function mbClearQ(){
   var q = document.getElementById('mbQ'); if(q){ q.value = ''; q.focus(); }
@@ -32175,10 +32196,11 @@ function _tkbRenderBody(){
             + '<br><span style="color:#a69f94">매장 · 장르 · 날짜로 찾습니다.</span>'
           : '해당하는 티켓이 없습니다.')
       + '</div>';
-    el.innerHTML = _acMenuHtml('tkb') + el.innerHTML;
+    el.innerHTML = el.innerHTML + _acMenuHtml('tkb');
     return;
   }
-  el.innerHTML = _acMenuHtml('tkb') + list.map(_tkbRow).join('');
+  // 도구는 티켓 아래로 (회원 탭과 같은 이유 — 위에 있으면 필터가 죽은 것처럼 보인다)
+  el.innerHTML = list.map(_tkbRow).join('') + _acMenuHtml('tkb');
   _tkbFillAud(list);
 }
 
@@ -32456,7 +32478,10 @@ async function audSave(){
 }
 window.audSave = audSave;
 
-function tkbSetFilter(f){ _tkbState.filter = f; _tkbState.open = null; _tkbRenderFilters(); _tkbRenderBody(); }
+function tkbSetFilter(f){
+  _tkbState.filter = f; _tkbState.open = null;
+  _tkbRenderFilters(); _tkbRenderBody(); _acScrollTop('tkbBody');
+}
 function tkbToggleRow(id){ _tkbState.open = (_tkbState.open === id) ? null : id; _tkbRenderBody(); }
 function tkbClearQ(){
   var q = document.getElementById('tkbQ'); if(q){ q.value = ''; q.focus(); }
@@ -32769,7 +32794,10 @@ function _acMenuHtml(tab){
       n++;
     });
   });
-  return n ? ('<div style="margin-top:18px;">' + out + '</div>') : '';
+  // 🆕 2026.09-01: 목록 아래에 붙으므로 선으로 끊는다.
+  //   안 끊으면 필터 칩과 메뉴가 한 덩어리로 보여, 무엇이 「거르는 것」이고
+  //   무엇이 「가는 것」인지 구분이 안 된다.
+  return n ? ('<div class="ac-tools">' + out + '</div>') : '';
 }
 
 // 「더보기」와 같다 — 원래 메뉴 항목을 그대로 클릭한다. 동작을 흉내 내지 않는다.
@@ -32916,8 +32944,17 @@ function _acEnsureConsole(){
 }
 window._acEnsureConsole = _acEnsureConsole;
 
-// 콘솔에서 ← 는 **콘솔을 나간다.** 탭 다섯은 서로 형제라 뒤로 갈 「위」가 없다.
+// 🆕 2026.09-01: 어드민·슈퍼어드민에게 **대시보드가 마이페이지**다.
+//   예약·티켓·회원·더보기·내 매장에서 ← 를 누르면 대시보드로 온다. 종전엔
+//   콘솔째로 나가 회원 앱(캘린더)이 떴고, 다시 들어오려면 한 번 더 눌러야 했다.
+//   나가는 길은 남는다 — **대시보드에서 한 번 더** 누르면 회원 앱이다.
 function acBack(){
+  var dash = document.getElementById('todayBoardScreen');
+  var onDash = false;
+  try{ onDash = !!dash && getComputedStyle(dash).display !== 'none'; }catch(e){}
+  if(!onDash){
+    if(typeof acGo === 'function'){ acGo('today'); return; }
+  }
   _acExiting = true;
   try{
     if(typeof _acCloseOthers === 'function') _acCloseOthers(null);
@@ -38385,7 +38422,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.01-n';
+var TAAM_WEB_BUILD = '2026.09.01-o';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
