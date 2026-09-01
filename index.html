@@ -2122,8 +2122,10 @@ html.auto-login .splash .bottom-group{display:none !important}
 .tb-rsv{display:grid;grid-template-columns:52px minmax(0,1fr);gap:12px;width:100%;text-align:left;background:#fff;
   border:1px solid #e3dcce;border-radius:12px;padding:13px 14px;margin-bottom:8px;cursor:pointer;
   font-family:var(--font-main);color:#17150f}
-.tb-rsv .tm{display:block;font-size:15px;font-weight:800;padding-top:1px}
-.tb-rsv .tm small{display:block;font-size:10px;font-weight:600;color:#a69f94}
+/* 시각은 한 줄 — 「20:00」. 시·분을 두 줄로 쪼개면 콜론이 없어 매번 다시 읽게 된다 */
+.tb-rsv .tm{display:block;font-size:14px;font-weight:800;padding-top:2px;white-space:nowrap;
+  font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.tb-rsv .tm.none{font-size:10.5px;font-weight:700;color:#a69f94;line-height:1.35;letter-spacing:0}
 .tb-rsv .st{display:block;font-size:13.5px;font-weight:800;line-height:1.4}
 .tb-rsv .gu{display:block;font-size:12.5px;color:#46413a;margin-top:2px}
 .tb-rsv .memo{display:block;font-size:11.5px;color:#79736a;margin-top:6px;padding-left:9px;
@@ -29949,6 +29951,28 @@ function _tbMins(t){
   var m = String(t || '').match(/(\d{1,2}):(\d{2})/);
   return m ? (parseInt(m[1],10) * 60 + parseInt(m[2],10)) : 9999;
 }
+
+// 🆕 2026.09-01 예약 시각 — 「20:00」 한 줄로 돌려준다. 못 찾으면 빈 문자열.
+//   ⚠ 초대로 만든 예약은 `visit_time` 이 비어 있다. 자리는 그 시각에 잡혀 있는데
+//     화면만 「--」였다. 티켓 상품이 아는 시각을 가져와 메운다.
+function _tbTime(r){
+  var v = String((r && r.visit_time) || '').trim();
+  if(!v && r && r.ticket_product_id && typeof ticketDB !== 'undefined' && Array.isArray(ticketDB)){
+    var t = ticketDB.find(function(x){ return String(x.id) === String(r.ticket_product_id); });
+    if(t && t.time) v = String(t.time).trim();
+  }
+  var m = v.match(/(\d{1,2}):(\d{2})/);
+  if(!m) return '';
+  return (m[1].length < 2 ? '0' + m[1] : m[1]) + ':' + m[2];
+}
+
+// 예약 카드 왼쪽 시각 칸. 시·분을 두 줄로 쪼개 놓았던 것을 한 줄로 붙인다 —
+//   콜론이 없으니 「20」 아래 「00」 이 무슨 숫자인지 매번 읽어야 했다.
+function _tbTimeCell(r){
+  var v = _tbTime(r);
+  return v ? '<span class="tm">' + v + '</span>'
+           : '<span class="tm none">시간<br>미정</span>';
+}
 function _tbWon(n){ return '₩' + (parseInt(n,10) || 0).toLocaleString(); }
 function _tbEsc(s){ return (typeof _pcalEsc === 'function') ? _pcalEsc(s)
   : String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
@@ -30057,7 +30081,7 @@ async function _tbLoad(){
     }).map(function(r){
       var d = (typeof _dParseDate === 'function') ? _dParseDate(String(r.reservation_date)) : null;
       r._d = (d && !isNaN(d.getTime())) ? _tbKey(d) : '';
-      r._m = _tbMins(r.visit_time);
+      r._m = _tbMins(_tbTime(r) || r.visit_time);
       return r;
     }).filter(function(r){ return r._d; });
 
@@ -30241,8 +30265,7 @@ function _tbRow(r, showDate, nextKey){
   var dd = showDate ? (function(){ var p = r._d.split('-'); return p[1].replace(/^0/,'') + '월 ' + p[2].replace(/^0/,'') + '일'; })() : '';
   var h = '<button class="tb-rsv' + (st.s === 'cx' ? ' cx' : '') + (isPast ? ' past' : '') + (isNext ? ' next' : '') + '" '
     + 'onclick="tbToggleRow(\'' + _tbEsc(pid).replace(/'/g, "\\'") + '\')">'
-    + '<span class="tm">' + String(r.visit_time || '--:--').split(':')[0]
-      + '<small>' + (String(r.visit_time || '--:--').split(':')[1] || '') + '</small></span>'
+    + _tbTimeCell(r)
     + '<span>'
     + (isNext ? '<span class="now">다음 예약</span>' : (isPast ? '<span class="done">지남</span>' : ''))
     + (showDate ? '<span class="gu" style="margin:0 0 2px">' + _tbEsc(dd + ' · ' + (r.restaurant_name || '')) + '</span>' : '')
@@ -31246,10 +31269,9 @@ function _rvRow(r, isPast){
   var ex  = r.extra_data || {};
   var memo = _tbMemo(r);
   var adm  = ex.admin_memo ? String(ex.admin_memo) : '';
-  var t = String(r.visit_time || '--:--').split(':');
   var h = '<button class="tb-rsv' + (st.s === 'cx' ? ' cx' : '') + (isPast && st.s !== 'cx' ? ' past' : '') + '" '
     + 'onclick="rvToggleRow(\'' + esc + '\')">'
-    + '<span class="tm">' + t[0] + '<small>' + (t[1] || '') + '</small></span>'
+    + _tbTimeCell(r)
     + '<span>'
     // 🆕 2026.08-30: 시안대로 주어를 회원 이름으로 올린다. 종전엔 매장명이 첫 줄이라
     //   「누가 오는지」가 둘째 줄로 밀렸다. 매장은 금액과 한 줄로 내린다.
@@ -38445,7 +38467,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.01-r';
+var TAAM_WEB_BUILD = '2026.09.01-s';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
