@@ -2283,9 +2283,11 @@ html.auto-login .splash .bottom-group{display:none !important}
 /* ═══ 🆕 2026.09-01 대시보드 ═══ */
 /* 처리할 일 — 있을 때만 나온다 */
 #tbBody .todo{background:#fff;border:1px solid #e3dcce;border-radius:12px;overflow:hidden}
-#tbBody .todo > div{display:flex;align-items:center;gap:11px;padding:12px 14px;
-  border-bottom:1px solid #f2eee5;cursor:pointer}
-#tbBody .todo > div:last-child{border-bottom:0}
+#tbBody .todo > button{display:flex;align-items:center;gap:11px;padding:12px 14px;
+  width:100%;text-align:left;background:none;border:0;border-bottom:1px solid #f2eee5;
+  cursor:pointer;font-family:var(--font-main);color:#17150f}
+#tbBody .todo > button:last-child{border-bottom:0}
+#tbBody .todo > button:active{background:#faf8f3}
 #tbBody .todo .t{flex:1;font-size:13px;font-weight:700}
 #tbBody .todo .n{flex:none;font-family:'Montserrat',sans-serif;font-size:11px;font-weight:800;
   color:#fff;background:#9B1C1C;border-radius:7px;padding:1px 7px}
@@ -30560,20 +30562,22 @@ function _dashRender(){
   var h = '';
 
   // ── 처리할 일 ──
+  // 🆕 2026.09-01: 줄마다 갈 곳을 붙인다. 「처리할 일」이라고 적어 놓고 눌러도
+  //   아무 일이 안 나면, 그 숫자는 알림이 아니라 잔소리다.
   var todo = [];
   var np = _dashPending();
-  if(np) todo.push(['티켓 업로드 승인', np, '']);
-  if(_dashExtra.resvPending) todo.push(['파트너 예약 요청', _dashExtra.resvPending, '']);
+  if(np) todo.push(['티켓 업로드 승인', np, '', "acOpenMenu('pendingApprovalScreen')"]);
+  if(_dashExtra.resvPending) todo.push(['파트너 예약 요청', _dashExtra.resvPending, '', "acOpenMenu('reservationAdminScreen')"]);
   var nu = _dashUnmarked();
-  if(nu) todo.push(['방문 기록 안 함', nu, 'warn']);
+  if(nu) todo.push(['방문 기록 안 함', nu, 'warn', "acGo('rv')"]);
   if(todo.length){
     var tot = todo.reduce(function(a, x){ return a + x[1]; }, 0);
     h += '<div class="mo-grp" style="margin-top:2px;">처리할 일 <span style="color:#9B1C1C;">'
       +  tot + '</span></div><div class="todo">';
     todo.forEach(function(x){
-      h += '<div><span class="t">' + x[0] + '</span>'
+      h += '<button type="button" onclick="' + x[3] + '"><span class="t">' + x[0] + '</span>'
         +  '<span class="n' + (x[2] ? ' ' + x[2] : '') + '">' + x[1] + '</span>'
-        +  '<span style="color:#c4bdb2;font-size:14px;">›</span></div>';
+        +  '<span style="color:#c4bdb2;font-size:14px;">›</span></button>';
     });
     h += '</div>';
   }
@@ -32856,20 +32860,71 @@ function _acCloseOthers(keep){
 }
 window._acCloseOthers = _acCloseOthers;
 
-// 🆕 2026.09-01: 콘솔에서 ← 는 **콘솔을 나간다.**
-//   탭 다섯은 서로 형제라 뒤로 갈 「위」가 없다. 종전엔 서브페이지만 닫아서
-//   그 아래의 「전체 메뉴」가 드러났고, 아무도 가려던 적 없는 화면이 매번
-//   한 번씩 끼어들었다.
-function acBack(){
-  if(typeof _acCloseOthers === 'function') _acCloseOthers(null);
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026.09-01 어드민 화면은 **목적지가 아니라 바탕**이다
+// ═══════════════════════════════════════════════════════════════
+//   첫 화면(카드·Quick Access)을 접고 나니, 거기 남는 사람은 「로그아웃 한 줄뿐인
+//   빈 화면」을 보게 됐다. 그런데 closeSubPage() 가 **모든 뒤로가기에서** 그
+//   화면으로 되돌리고 있었다 — 쉰한 개 메뉴 어디에 들어갔다 나와도 거기였다.
+//
+//   콘솔의 첫 화면은 대시보드다. 어디서 나오든 거기로 보낸다.
+//
+//   ⚠ 아직 위에 다른 화면이 남아 있으면(티켓 리스트 → 티켓 상세처럼 겹쳐 열린
+//     경우) 건드리지 않는다. 그때의 뒤로가기는 「한 겹 벗기」지 「처음으로」가 아니다.
+//   ⚠ 콘솔을 나가는 중(_acExiting)에도 하지 않는다. 나가려는데 다시 열면 갇힌다.
+var _acExiting = false, _acEnsuring = false;
+
+function _acEnsureConsole(){
+  if(_acExiting || _acEnsuring) return;
   var role = (typeof _currentRole !== 'undefined') ? _currentRole : 'user';
-  if(role === 'admin'){
-    if(typeof exitPartnerAdmin === 'function'){ exitPartnerAdmin(); return; }
+  if(role !== 'superadmin' && role !== 'admin') return;
+  _acEnsuring = true;
+  // 한 박자 미룬다 — 부른 쪽이 화면을 다 정리한 뒤에 판단해야 한다
+  setTimeout(function(){
+    _acEnsuring = false;
+    try{
+      if(_acExiting) return;
+      var vis = function(el){
+        try{ return !!el && getComputedStyle(el).display !== 'none'; }catch(e){ return false; }
+      };
+      // 콘솔 밖이면 상관없다
+      if(!vis(document.getElementById('adminScreen'))
+         && !vis(document.getElementById('partnerAdminScreen'))) return;
+      // 위에 뭔가 열려 있으면 그대로 둔다
+      var pages = document.querySelectorAll('.sub-screen, .restpage');
+      for(var i = 0; i < pages.length; i++){ if(vis(pages[i])) return; }
+      acGo('today');
+    }catch(e){ console.warn('[console] 대시보드 복귀 실패:', e); }
+  }, 0);
+}
+window._acEnsureConsole = _acEnsureConsole;
+
+// 콘솔에서 ← 는 **콘솔을 나간다.** 탭 다섯은 서로 형제라 뒤로 갈 「위」가 없다.
+function acBack(){
+  _acExiting = true;
+  try{
+    if(typeof _acCloseOthers === 'function') _acCloseOthers(null);
+    var role = (typeof _currentRole !== 'undefined') ? _currentRole : 'user';
+    if(role === 'admin' && typeof exitPartnerAdmin === 'function') exitPartnerAdmin();
+    else if(typeof closeAdmin === 'function') closeAdmin();
+    else if(typeof _acExitTo === 'function') _acExitTo();
+  } finally {
+    // _acEnsureConsole 이 한 박자 뒤에 판단하므로, 그보다 늦게 푼다
+    setTimeout(function(){ _acExiting = false; }, 80);
   }
-  if(typeof closeAdmin === 'function'){ closeAdmin(); return; }
-  if(typeof _acExitTo === 'function') _acExitTo();
 }
 window.acBack = acBack;
+
+// 대시보드의 「처리할 일」에서 바로 그 화면으로 간다.
+//   탭 화면을 먼저 닫고 연다 — 같은 z-index 라 겹쳐 열면 어느 것이 위인지가
+//   DOM 순서에 달린다. 닫고 열면 나올 때 대시보드로 되돌아온다(_acEnsureConsole).
+function acOpenMenu(id){
+  if(typeof _acCloseOthers === 'function') _acCloseOthers(null);
+  setTimeout(function(){
+    try{ openSubPage(id); }catch(e){ console.warn('[console] 열기 실패:', id, e); }
+  }, 40);
+}
+window.acOpenMenu = acOpenMenu;
 
 function acGo(tab){
   // 그 역할에 없는 탭은 무시한다 — 눌릴 일도 없지만, 눌렀을 때 빈 화면이 되면 안 된다
@@ -35183,6 +35238,8 @@ function openAdmin(){
   if(gnb) gnb.style.display = 'none';
   if(typeof _acRenderTabs === 'function') _acRenderTabs('');
   if(typeof qaLoad === 'function') qaLoad();
+  // 이 화면에 머무르지 않는다 — 콘솔 첫 화면은 대시보드다
+  if(typeof _acEnsureConsole === 'function') _acEnsureConsole();
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -35647,12 +35704,15 @@ function closeAdmin(){
 function closeSubPage(id){
   var el=document.getElementById(id);
   if(el) el.style.display='none';
-  // 역할에 따라 올바른 화면으로 복귀
+  // 역할에 따라 올바른 바탕으로 복귀 (여기는 바탕일 뿐, 머무는 화면이 아니다)
   if(_currentRole==='admin'){
     openPartnerAdmin();
   } else {
     openAdmin();
   }
+  // 🆕 2026.09-01: 그 바탕에 그대로 남지 않는다 — 콘솔 첫 화면(대시보드)으로.
+  //   위에 아직 다른 화면이 있으면 _acEnsureConsole 이 알아서 손대지 않는다.
+  if(typeof _acEnsureConsole === 'function') _acEnsureConsole();
 }
 
 function openRestPage(){
@@ -38308,7 +38368,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.01-l';
+var TAAM_WEB_BUILD = '2026.09.01-m';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -53897,6 +53957,8 @@ function openPartnerAdmin() {
   // mainGnb가 하단에 떠서 로그아웃 버튼 가리는 것 방지
   var gnb = document.getElementById('mainGnb');
   if(gnb) gnb.style.display = 'none';
+  // 이 화면에 머무르지 않는다 — 콘솔 첫 화면은 대시보드다
+  if(typeof _acEnsureConsole === 'function') _acEnsureConsole();
 }
 
 function closePartnerAdmin() {
