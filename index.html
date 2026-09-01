@@ -30291,11 +30291,28 @@ function _dashUnmarked(){
 }
 
 async function _dashLoad(){
-  // 파트너 예약 요청 — 대기 중인 것만
+  // 파트너 예약 요청 — 대기 중이고 **아직 지나지 않은** 것만.
+  //   🆕 2026.09-01: 종전엔 status='pending' 을 전부 셌다. 그래서 6/11 에 들어온
+  //   6/24 예약 요청 하나가 9월까지 붉은 1을 띄우고 있었다. 수락도 거절도 의미가
+  //   없는 건인데 매일 알리면, 배지가 「손댈 게 있다」가 아니라 배경이 된다.
+  //   ⚠ 날짜는 앱에서 거른다. reserve_date 의 실제 타입을 짐작하지 않으려는 것 —
+  //     문자열이든 date 든 숫자만 뽑아 비교하면 같다 (reservation_date 와 같은 방식).
+  //   ⚠ 컬럼이 없으면 예전처럼 전부 센다. 숫자가 조금 큰 것이 화면이 비는 것보다 낫다.
   try{
     var r = await window.sb.from('reservation_requests')
-      .select('id', { count:'exact', head:true }).eq('status', 'pending');
-    _dashExtra.resvPending = (r.error ? null : (r.count || 0));
+      .select('id, reserve_date').eq('status', 'pending').limit(500);
+    if(r.error){
+      console.warn('[dash] 예약 요청 날짜 조회 실패 — 개수만 센다:', r.error.message);
+      var r2 = await window.sb.from('reservation_requests')
+        .select('id', { count:'exact', head:true }).eq('status', 'pending');
+      _dashExtra.resvPending = (r2.error ? null : (r2.count || 0));
+    } else {
+      var _t0 = _taamTodayKst();
+      _dashExtra.resvPending = (r.data || []).filter(function(x){
+        var k = _visDateKey(x.reserve_date);
+        return !k || k >= _t0;   // 날짜를 못 읽으면 센다 — 모르는 것은 알린다
+      }).length;
+    }
   }catch(e){ _dashExtra.resvPending = null; }
   // 예치금 총 잔액 — 슈퍼어드민만 전 회원 프로필을 읽을 수 있다(RLS)
   try{
@@ -38368,7 +38385,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.01-m';
+var TAAM_WEB_BUILD = '2026.09.01-n';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
