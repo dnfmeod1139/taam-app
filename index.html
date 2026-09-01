@@ -30794,7 +30794,11 @@ function _dashRender(){
   //   아무 일이 안 나면, 그 숫자는 알림이 아니라 잔소리다.
   var todo = [];
   var np = _dashPending();
-  if(np) todo.push(['티켓 업로드 승인', np, '', "acOpenMenu('pendingApprovalScreen')"]);
+  // 🆕 2026.09-01: 승인은 **슈퍼어드민의 일**이다.
+  //   파트너 화면에도 「티켓 업로드 승인」이 떠서, 누르면 승인 화면이 열렸다.
+  //   자기가 올린 것을 자기가 승인하는 자리가 된다(RLS 가 막긴 하지만, 목록에
+  //   보이는 것부터가 틀렸다). 파트너에게 그건 **기다리는 일**이지 할 일이 아니다.
+  if(np && isSuper) todo.push(['티켓 업로드 승인', np, '', "acOpenMenu('pendingApprovalScreen')"]);
   if(_dashExtra.resvPending) todo.push(['파트너 예약 요청', _dashExtra.resvPending, '', "acOpenMenu('reservationAdminScreen')"]);
   var nu = _dashUnmarked();
   if(nu) todo.push(['방문 기록 안 함', nu, 'warn', "acGo('rv')"]);
@@ -33070,7 +33074,10 @@ function _acTodoCount(){
   //   배지가 3인데 열어보니 2건이면 그 배지를 다시는 안 믿게 된다.
   try{
     var n = 0;
-    if(typeof _dashPending === 'function') n += _dashPending();
+    // 승인은 슈퍼어드민의 일이다 — 대시보드에서 뺐으면 배지에서도 빼야 한다.
+    //   안 그러면 배지는 1 인데 열어 보면 아무것도 없다.
+    var _sup = (typeof _isSuperAdmin === 'function') && _isSuperAdmin();
+    if(_sup && typeof _dashPending === 'function') n += _dashPending();
     if(typeof _dashUnmarked === 'function') n += _dashUnmarked();
     if(typeof _dashExtra !== 'undefined' && _dashExtra && _dashExtra.resvPending)
       n += _dashExtra.resvPending;
@@ -38645,7 +38652,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.01-w';
+var TAAM_WEB_BUILD = '2026.09.01-x';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
