@@ -45,8 +45,9 @@ const { chromium } = require('playwright-core');
     ok('시각을 모르면 맨 뒤(9999)', _tbMins(_tbTime({})) === 9999);
 
     // ── 두 화면 모두 같은 칸을 쓴다 ──
-    ok('예약·오늘 두 줄 렌더가 같은 함수를 쓴다',
-       /_tbTimeCell\(r\)/.test(String(_rvRow)) && /_tbTimeCell\(r\)/.test(String(_tbRow)));
+    ok('예약·오늘 두 줄 렌더가 같은 카드를 쓴다',
+       /_tbCard\(r/.test(String(_rvRow)) && /_tbCard\(r/.test(String(_tbRow)));
+    ok('그 카드가 _tbTime 을 쓴다', /_tbTime\(r\)/.test(String(_tbCard)));
 
     return out;
   });

@@ -17,8 +17,8 @@ const { chromium } = require('playwright-core');
     const sheet = document.getElementById('magSheet');
     const open = () => sheet.classList.contains('on');
 
-    // 표지를 한 번 그려 둔다 (여기서부터가 「홈 안」)
-    magRender();
+    // 표지를 한 번 그려 둔다 (여기서부터가 「홈 안」) — 홈을 여는 자리라 force
+    magRender(true);
     ok('처음엔 시트가 닫혀 있다', !open() && _magDet === 0);
 
     // 캘린더를 연다
@@ -32,7 +32,7 @@ const { chromium } = require('playwright-core');
     // ── 밖에 나갔다 돌아오면 표지부터 ──
     magHide();                       // 계보도·마이페이지·콘솔로 나감
     ok('나가면 표지가 숨는다', v.style.display === 'none');
-    magRender();                     // 돌아옴
+    magRender(true);                 // 홈으로 돌아옴
     ok('돌아오면 캘린더가 접혀 있다', !open() && _magDet === 0);
     ok('📅 버튼이 다시 보인다', !!document.querySelector('#magHero .mag-sched'));
 
@@ -46,6 +46,31 @@ const { chromium } = require('playwright-core');
     magOpenSheet();
     showView('home');
     ok("showView('home') 로 와도 접힌다", !open() && _magDet === 0);
+
+    // ── 홈이 아닌 화면 위로 표지가 다시 올라오지 않는다 ──
+    //   pcalRenderAll() 이 끝에서 magRender() 를 부른다. 종전엔 그 한 번에
+    //   티켓 목록 위로 표지가 도로 올라오고 시트까지 열렸다.
+    magRender(true);
+    magOpenSheet();
+    ok('홈에서는 표지가 뜨고 시트도 열린다', v.style.display === 'block' && open());
+
+    showView('ticket');                       // 다른 탭으로 이동
+    ok('탭을 옮기면 표지가 내려간다', v.style.display === 'none');
+    ok('그때 시트도 접힌다', !open() && _magDet === 0);
+
+    // pcalRenderAll 이 끝에서 부르는 그 호출 — 이게 표지를 도로 올리고 있었다
+    magRender();
+    ok('내려둔 표지는 스스로 안 올라온다', v.style.display === 'none');
+    ok('시트도 그대로 접혀 있다', !open());
+    pcalRenderAll();
+    ok('pcalRenderAll 로도 안 올라온다', v.style.display === 'none');
+
+    // ── 표지가 뜰 때 옛 티켓 화면은 반드시 내려간다 ──
+    const tv = document.getElementById('ticketView');
+    tv.style.display = 'block';
+    magRender(true);
+    ok('표지가 뜨면 옛 티켓 목록은 내려간다',
+       v.style.display === 'block' && getComputedStyle(tv).display === 'none');
 
     return out;
   });

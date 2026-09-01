@@ -15,16 +15,17 @@ const { chromium } = require('playwright-core');
       price:180000, status:'active', restaurant_name:'타카미츠',
       reservation_date:'2026.10.03', visit_time:'18:00', _d:'2026-10-03', _m:1080, extra_data:{} }, false);
     ok('예약 줄에 「외」가 없다', row.indexOf('외 ') < 0);
-    ok('예약 줄에 총 인원 2명', row.indexOf('김진현 2명') >= 0);
+    ok('예약 줄에 총 인원 2명', /<b>2명<\/b>/.test(row) && row.indexOf('김진현') >= 0);
     const row1 = _rvRow({ id:'t2', purchase_id:'P-2', buyer_name:'홍길동', party_size:1,
       price:1000, status:'active', restaurant_name:'가', reservation_date:'2026.10.03',
       visit_time:'18:00', _d:'2026-10-03', _m:1080, extra_data:{} }, false);
-    ok('1명도 그대로 1명', row1.indexOf('홍길동 1명') >= 0);
+    ok('1명도 그대로 1명', /<b>1명<\/b>/.test(row1) && row1.indexOf('홍길동') >= 0);
 
     const trow = _tbRow({ id:'t3', purchase_id:'P-3', buyer_name:'이하늘', party_size:4,
       price:9000, status:'active', restaurant_name:'나', reservation_date:'2026.10.03',
       visit_time:'19:00', _d:'2026-10-03', _m:1140, extra_data:{} }, false, false);
-    ok('오늘 화면 줄도 총 인원 4명', trow.indexOf('이하늘 4명') >= 0 && trow.indexOf('외 ') < 0);
+    ok('오늘 화면 줄도 총 인원 4명',
+       /<b>4명<\/b>/.test(trow) && trow.indexOf('이하늘') >= 0 && trow.indexOf('외 ') < 0);
 
     // ── 명부: 구매 횟수 · 이용 제한 ──
     window._tbRows = [
