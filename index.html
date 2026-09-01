@@ -31334,7 +31334,15 @@ function kskFormOpen(title, fields, onSave){
   fields.forEach(function(f){
     h += '<div class="kskf-f"><label for="kskf_' + f.k + '">' + f.label
        + (f.req ? ' <b>*</b>' : '') + '</label>';
-    if(f.type === 'seg'){
+    if(f.type === 'sel'){
+      h += '<select class="ksk-in" id="kskf_' + f.k + '"'
+         + (f.onchange ? (' onchange="' + f.onchange + '"') : '') + '>';
+      (f.opts || []).forEach(function(o){
+        h += '<option value="' + _kskEsc(o[0]) + '"'
+           + (String(f.value) === String(o[0]) ? ' selected' : '') + '>' + _kskEsc(o[1]) + '</option>';
+      });
+      h += '</select>';
+    } else if(f.type === 'seg'){
       h += '<div class="ksp-seg" id="kskf_' + f.k + '" data-v="' + _kskEsc(f.value) + '">';
       (f.opts || []).forEach(function(o){
         h += '<span class="' + (String(f.value) === String(o[0]) ? 'on' : '') + '" '
@@ -31421,27 +31429,145 @@ async function kskFormSave(){
 window.kskFormSave = kskFormSave;
 
 // ── 회차 만들기 ───────────────────────────────────────────────
+//   판매 티켓을 고르면 매장·날짜·시간이 따라온다. 티켓을 산 사람이 곧
+//   호스트라, 만들고 나서 「구매자 불러오기」 한 번이면 조가 다 선다.
+//   ⚠ 티켓을 고르는 진짜 이유는 편의가 아니라 venue_id 다.
+//     손으로 만든 회차는 venue_id 가 'manual-…' 이라, 게스트 시트의
+//     「그 매장에서의 지난 회계」가 영영 안 잡힌다.
+function _kskTicketOpts(){
+  var out = [['', '연결 안 함 (직접 입력)']];
+  try {
+    var list = (typeof ticketDB !== 'undefined' && Array.isArray(ticketDB)) ? ticketDB : [];
+    // 최근 것이 위로 — 대관은 보통 방금 만든 티켓에 붙는다
+    list.slice().sort(function(a, b){
+      return String(_kskTkDate(b)).localeCompare(String(_kskTkDate(a)));
+    }).slice(0, 60).forEach(function(t){
+      var r = (typeof restaurantDB !== 'undefined' && Array.isArray(restaurantDB))
+        ? restaurantDB.filter(function(x){ return String(x.id) === String(t.restId); })[0] : null;
+      out.push([String(t.id),
+        ((r && r.name) || t.rest || '매장') + ' · ' + _kskTkDate(t)
+        + (t.time ? ' ' + t.time : '') + (t.totalPax ? ' · ' + t.totalPax + '석' : '')]);
+    });
+  } catch(e){ console.warn('[ksk] 티켓 목록 실패', e); }
+  return out;
+}
+// ticketDB 의 날짜는 'MM.DD' 이거나 'YYYY.MM.DD' 다. 늘 'YYYY-MM-DD' 로 만든다.
+function _kskTkDate(t){
+  try {
+    var s = (typeof _tkFullDate === 'function') ? _tkFullDate(t) : (t.date || '');
+    var k = String(s).replace(/[^0-9]/g, '');
+    if(k.length === 8) return k.slice(0,4) + '-' + k.slice(4,6) + '-' + k.slice(6,8);
+  } catch(e){}
+  return '';
+}
+function _kskTk(id){
+  try {
+    return (typeof ticketDB !== 'undefined' && Array.isArray(ticketDB))
+      ? ticketDB.filter(function(x){ return String(x.id) === String(id); })[0] : null;
+  } catch(e){ return null; }
+}
+
+// 티켓을 고르면 아래 칸들을 채워 준다. 사람이 다시 적지 않게 한다.
+function kskFormPickTicket(id){
+  var t = _kskTk(id);
+  if(!t) return;
+  var r = (typeof restaurantDB !== 'undefined' && Array.isArray(restaurantDB))
+    ? restaurantDB.filter(function(x){ return String(x.id) === String(t.restId); })[0] : null;
+  var set = function(k, v){ var el = document.getElementById('kskf_' + k); if(el && v != null) el.value = v; };
+  set('name', (r && r.name) || t.rest || '');
+  set('date', _kskTkDate(t));
+  set('time', t.time || '');
+}
+window.kskFormPickTicket = kskFormPickTicket;
+
 function kskNewEvent(){
   kskFormOpen('새 대관 회차', [
+    { k:'ticket', label:'판매 티켓 연결', type:'sel', value:'', opts:_kskTicketOpts(),
+      onchange:'kskFormPickTicket(this.value)',
+      hint:'고르면 매장·날짜가 따라오고, 만든 뒤 <b>구매자를 조로 불러올 수</b> 있습니다.<br>'
+         + '연결하지 않으면 게스트 시트의 「그 매장 지난 회계」가 뜨지 않습니다.' },
     { k:'name', label:'매장 이름', type:'text', req:true, ph:'鮨 めい乃',
       hint:'게스트 시트와 결제 화면에 <b>그대로</b> 나갑니다.' },
     { k:'date', label:'대관 날짜', type:'date', req:true, value:new Date().toISOString().slice(0,10) },
     { k:'time', label:'시작 시간', type:'time', value:'' },
-    { k:'pax',  label:'총 인원 (대표 포함)', type:'num', value:'', ph:'9' }
+    { k:'pax',  label:'총 인원 (대표 포함)', type:'num', value:'', ph:'9',
+      hint:'구매자를 불러오면 <b>조 합계로 자동 갱신</b>됩니다.' }
   ], async function(v){
     if(!/^\d{4}-\d{2}-\d{2}$/.test(v.date)) return '날짜를 골라주세요';
+    var t = v.ticket ? _kskTk(v.ticket) : null;
     var u = (await window.sb.auth.getUser()).data.user;
-    var r = await window.sb.from('kashikiri_events').insert({
-      venue_id: 'manual-' + Date.now(), venue_name: v.name,
+    var row = {
+      venue_id: t ? String(t.restId) : ('manual-' + Date.now()),
+      venue_name: v.name,
       event_date: v.date, event_time: v.time || null,
       total_pax: v.pax || 0, status: 'draft', escort: true, created_by: u && u.id
-    }).select().maybeSingle();
+    };
+    var r = await window.sb.from('kashikiri_events').insert(row).select().maybeSingle();
     if(r.error) throw r.error;
+    var id = r.data && r.data.id;
+    // ⚠ ticket_product_id 는 INSERT 에 싣지 않는다. 컬럼이 아직 없는 DB
+    //   (sql/kashikiri_link.sql 미실행)에서 회차 생성이 통째로 실패한다.
+    //   따로 쓰면 이 UPDATE 만 조용히 실패하고 회차는 정상으로 만들어진다.
+    if(t && id){
+      try {
+        var up = await window.sb.from('kashikiri_events')
+          .update({ ticket_product_id: String(t.id) }).eq('id', id);
+        if(up.error) console.warn('ℹ️ 티켓 연결 생략 (컬럼 없음?):', up.error.message);
+      } catch(_e){ console.warn('ℹ️ 티켓 연결 예외:', _e); }
+    }
     await _kskLoad();
-    await kskOpenEvent(r.data.id);
+    await kskOpenEvent(id);
+    if(t) showToast('🎫','티켓과 연결됨','「구매자에서 조 불러오기」를 누르면 조가 한 번에 섭니다');
   });
 }
 window.kskNewEvent = kskNewEvent;
+
+// ── 구매자 → 조 ───────────────────────────────────────────────
+//   한 구매 = 한 조. party_size 가 그 조의 인원이고 산 사람이 호스트다.
+//   여러 번 눌러도 안전하다 — 이미 불러온 구매는 서버가 건너뛴다.
+async function kskImportTeams(){
+  if(!_kskCur) return;
+  try {
+    var r = await window.sb.rpc('taam_kashikiri_import_teams', { p_event_id: _kskCur.ev.id });
+    if(r.error) throw r.error;
+    var d = r.data || {};
+    await kskOpenEvent(_kskCur.ev.id);
+    if(!d.created && !d.skipped){
+      showToast('ℹ️','불러올 구매가 없습니다','이 티켓에 결제 완료된 구매가 아직 없습니다');
+    } else if(!d.created){
+      showToast('✓','이미 다 불러왔습니다', d.skipped + '건 모두 조로 서 있습니다');
+    } else {
+      showToast('✓', d.created + '개 조를 만들었습니다',
+        '총 ' + (d.total_pax || 0) + '명 · 이름은 「수정」에서 다듬을 수 있습니다');
+    }
+  } catch(e){
+    console.warn('[ksk] 구매자 불러오기 실패:', e);
+    showToast('❌','불러오지 못했습니다', (e && e.message) || '');
+  }
+}
+window.kskImportTeams = kskImportTeams;
+
+// 이미 만들어 둔 회차를 뒤늦게 티켓에 붙인다.
+//   venue_id 도 티켓의 매장으로 바로잡는다 — 그게 「지난 회계」가 안 잡히던 이유다.
+function kskLinkTicket(){
+  if(!_kskCur) return;
+  var e = _kskCur.ev;
+  kskFormOpen('판매 티켓 연결', [
+    { k:'ticket', label:'판매 티켓', type:'sel', value:e.ticket_product_id || '', opts:_kskTicketOpts(),
+      hint:'연결하면 매장(venue_id)이 그 티켓의 매장으로 바로잡힙니다.<br>'
+         + '게스트 시트의 「그 매장 지난 회계」는 <b>이 값이 맞아야</b> 뜹니다.' }
+  ], async function(v){
+    if(!v.ticket) return '티켓을 골라주세요';
+    var t = _kskTk(v.ticket);
+    if(!t) return '티켓을 찾을 수 없습니다';
+    var r = await window.sb.from('kashikiri_events')
+      .update({ ticket_product_id: String(t.id), venue_id: String(t.restId) }).eq('id', e.id);
+    if(r.error) throw r.error;
+    await kskOpenEvent(e.id);
+    showToast('🎫','연결했습니다','「구매자에서 조 불러오기」를 눌러보세요');
+  });
+}
+window.kskLinkTicket = kskLinkTicket;
 
 async function kskOpenEvent(id){
   var b = document.getElementById('kskBody');
@@ -31490,13 +31616,27 @@ function _kskRenderEvent(){
      +     (e.venue_paid_jpy ? _kskYen(e.venue_paid_jpy) : '<span style="color:#9a948a">—</span>') + '</span></div>'
      +   (allN ? ('<div class="ksk-row"><span class="k">회수</span><span class="v">' + _kskWon(got) + ' / ' + _kskWon(all) + '</span></div>'
      +            '<div class="ksk-bar"><i style="width:' + (all ? Math.round(got/all*100) : 0) + '%"></i></div>') : '')
+     +   '<div class="ksk-row"><span class="k">판매 티켓</span><span class="v">'
+     +     (e.ticket_product_id ? '연결됨' : '<span style="color:#9a948a">연결 안 됨</span>') + '</span></div>'
      +   '<div class="ksk-acts">'
      +     '<button class="ksk-btn ghost sm" onclick="kskEditEvent()">회차 정보 수정</button>'
      +     '<button class="ksk-btn ghost sm" onclick="kskSheetLink()">게스트 시트 링크</button>'
      +   '</div>'
      + '</div>';
 
-  h += '<button class="ksk-btn" style="width:100%;padding:12px;margin:4px 0 12px;" onclick="kskAddTeam()">＋ 조 추가</button>';
+  // 티켓이 연결돼 있으면 조를 손으로 만들지 않는다 — 구매자가 곧 조다
+  if(e.ticket_product_id){
+    h += '<button class="ksk-btn" style="width:100%;padding:13px;margin:4px 0 8px;" onclick="kskImportTeams()">'
+       +   '🎫 구매자에서 조 불러오기</button>'
+       + '<div class="ksk-note" style="margin:0 0 12px;">한 구매 = 한 조입니다. 인원·호스트·그 매장 방문 횟수가 '
+       + '함께 들어오고, <b>여러 번 눌러도 이미 불러온 구매는 건너뜁니다.</b></div>';
+  } else {
+    h += '<div class="ksk-note" style="margin:4px 0 12px;">이 회차는 판매 티켓에 연결돼 있지 않습니다. '
+       + '연결하면 구매자를 조로 불러오고, 게스트 시트에 <b>그 매장 지난 회계</b>가 뜹니다. '
+       + '<b onclick="kskLinkTicket()" style="color:#5C0A14;cursor:pointer;text-decoration:underline;">지금 연결하기</b></div>';
+  }
+
+  h += '<button class="ksk-btn' + (e.ticket_product_id ? ' ghost' : '') + '" style="width:100%;padding:12px;margin:0 0 12px;" onclick="kskAddTeam()">＋ 조 직접 추가</button>';
 
   if(!_kskCur.teams.length){
     h += '<div class="ksk-empty">아직 조가 없습니다.<br>조를 만들고 현장 확정 금액을 넣으세요.</div>';
@@ -39721,7 +39861,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.01-ac';
+var TAAM_WEB_BUILD = '2026.09.01-ad';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){

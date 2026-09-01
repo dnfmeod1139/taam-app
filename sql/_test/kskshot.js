@@ -273,6 +273,75 @@ const { chromium } = require('playwright-core');
 
     ok('끝까지 prompt 를 한 번도 안 썼다', promptCalls === 0);
 
+    // ── ⑨ 판매 티켓 연결 ─────────────────────────────────────
+    //   대관은 결국 그 날짜 티켓을 산 사람들이 오는 자리다.
+    //   손으로 만든 회차는 venue_id 가 'manual-…' 이라 게스트 시트의
+    //   「그 매장 지난 회계」가 영영 안 잡힌다 — 이걸 막는 게 요점이다.
+    window.ticketDB = [
+      { id:'TP_MEI', restId:'rest-1', rest:'鮨 めい乃', date:'01.01', dateYear:'2027',
+        time:'18:00', totalPax:9 },
+      { id:'TP_OLD', restId:'rest-2', rest:'鮨 あお', date:'12.20', dateYear:'2026',
+        time:'19:00', totalPax:8 }
+    ];
+    window.restaurantDB = [{ id:'rest-1', name:'鮨 めい乃' }, { id:'rest-2', name:'鮨 あお' }];
+    window._tkFullDate = t => (t.dateYear ? t.dateYear + '.' : '') + t.date;
+
+    window.kskNewEvent(); await sleep(120);
+    const sel = document.getElementById('kskf_ticket');
+    ok('회차 만들 때 티켓을 고른다', !!sel && sel.tagName === 'SELECT');
+    ok('「연결 안 함」이 맨 위', sel.options[0].value === '');
+    ok('최근 티켓이 위로', sel.options[1].value === 'TP_MEI');
+    ok('티켓 라벨에 매장·날짜·석수',
+       sel.options[1].textContent.indexOf('めい乃') >= 0
+       && sel.options[1].textContent.indexOf('2027-01-01') >= 0
+       && sel.options[1].textContent.indexOf('9석') >= 0);
+
+    // 고르면 아래 칸이 채워진다 — 사람이 다시 적지 않는다
+    sel.value = 'TP_MEI'; window.kskFormPickTicket('TP_MEI'); await sleep(60);
+    ok('매장 이름이 따라온다', document.getElementById('kskf_name').value === '鮨 めい乃');
+    ok('날짜가 따라온다',     document.getElementById('kskf_date').value === '2027-01-01');
+    ok('시간이 따라온다',     document.getElementById('kskf_time').value === '18:00');
+
+    window.__ins = null; window.__upds = [];
+    await window.kskFormSave(); await sleep(250);
+    ok('venue_id 가 진짜 매장이 된다 (manual- 아님)',
+       window.__ins && window.__ins[1].venue_id === 'rest-1');
+    ok('ticket_product_id 는 INSERT 에 안 싣는다',
+       window.__ins && window.__ins[1].ticket_product_id === undefined);
+    ok('연결은 따로 UPDATE 한다 (컬럼 없는 DB 보호)',
+       (window.__upds || []).some(x => x[0] === 'kashikiri_events'
+                                    && x[1].ticket_product_id === 'TP_MEI'));
+
+    // 연결된 회차에는 「구매자에서 조 불러오기」가 뜬다
+    DB.events[0].ticket_product_id = 'TP_MEI';
+    await window.kskOpenEvent('e1'); await sleep(180);
+    ok('연결되면 불러오기 버튼이 뜬다',
+       document.getElementById('kskBody').textContent.indexOf('구매자에서 조 불러오기') >= 0);
+    ok('연결 상태가 보인다',
+       document.getElementById('kskBody').textContent.indexOf('연결됨') >= 0);
+
+    RPC.length = 0; window.__toast = null;
+    await window.kskImportTeams(); await sleep(250);
+    ok('import RPC 를 부른다',
+       RPC.some(x => x[0] === 'taam_kashikiri_import_teams' && x[1].p_event_id === 'e1'));
+
+    // 연결이 없으면 「지금 연결하기」를 권한다
+    DB.events[0].ticket_product_id = null;
+    await window.kskOpenEvent('e1'); await sleep(180);
+    ok('연결 안 됐으면 안내가 뜬다',
+       document.getElementById('kskBody').textContent.indexOf('지금 연결하기') >= 0);
+    ok('불러오기 버튼은 없다',
+       document.getElementById('kskBody').textContent.indexOf('구매자에서 조 불러오기') < 0);
+
+    window.kskLinkTicket(); await sleep(120);
+    ok('뒤늦게 연결하는 시트가 열린다', !!document.getElementById('kskf_ticket'));
+    document.getElementById('kskf_ticket').value = 'TP_MEI';
+    window.__upds = [];
+    await window.kskFormSave(); await sleep(250);
+    const lk = (window.__upds || []).filter(x => x[0] === 'kashikiri_events')[0];
+    ok('연결하면 venue_id 도 바로잡는다',
+       !!lk && lk[1].venue_id === 'rest-1' && lk[1].ticket_product_id === 'TP_MEI');
+
     // ── ⑧ 토스트가 아래로 새지 않는다 ────────────────────────
     //   배너는 top:20px 이고 그 아래에 콘솔 헤더의 ✕(앱으로 나가기)가 있다.
     //   pointer-events:none 이면 탭이 그대로 통과해 앱 밖으로 나갔다.
