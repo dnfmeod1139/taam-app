@@ -657,6 +657,53 @@ const { chromium } = require('playwright-core');
     ok('이름 칸이 실제로 보인다', elH('#ksdBody .ksd-row input.nm') > 20);
     window.kskSendClose(); await sleep(80);
 
+    // ── ⑬-b 총액은 「넘을 때만」 막는다 ⭐ ────────────────────
+    //   보내기는 더하기다. 4명 중 2명만 먼저 보내는 건 정상적인 중간
+    //   상태이고, 그때 합계는 당연히 총액보다 적다. 「같아야」로 막으면
+    //   한 번에 다 보내지 않고는 아무것도 못 보낸다 — 실제로 그렇게 막혔다.
+    DB.events[0].total_krw = 9350000;
+    DB.charges = [
+      { id:'p1', event_id:'e1', team_id:null, label:'먼저낸사람',
+        amount_krw:2000000, status:'paid', token:'11'.repeat(16) }
+    ];
+    window.__buyers = [];
+    await window.kskOpenEvent('e1'); await sleep(200);
+    await window.kskSendOpen(); await sleep(300);
+    window.kskSendAdd(); await sleep(120);
+    let nm2 = document.querySelector('#ksdBody .ksd-row input.nm');
+    let am2 = document.querySelector('#ksdBody .ksd-row input.amt');
+    nm2.value = '테스트'; am2.value = '1,000,000'; window.kskSendSum(); await sleep(80);
+    ok('모자라도 보낼 수 있다 ⭐', document.getElementById('ksdGo').disabled === false);
+    ok('남은 금액을 알려준다',
+       document.getElementById('ksdSum').textContent.indexOf('남은 금액') >= 0);
+    ok('이미 보낸 것을 빼고 센다 (9,350,000 − 2,000,000)',
+       document.getElementById('ksdSum').textContent.indexOf('7,350,000') >= 0);
+
+    am2.value = '8,000,000'; window.kskSendSum(); await sleep(80);
+    ok('넘으면 버튼이 잠긴다', document.getElementById('ksdGo').disabled === true);
+    ok('얼마나 넘는지 알려준다',
+       document.getElementById('ksdSum').textContent.indexOf('넘습니다') >= 0);
+    ok('버튼 글씨도 바뀐다',
+       document.getElementById('ksdGo').textContent.indexOf('넘습니다') >= 0);
+
+    am2.value = '7,350,000'; window.kskSendSum(); await sleep(80);
+    ok('딱 맞으면 다시 열린다', document.getElementById('ksdGo').disabled === false);
+
+    // 총액이 없으면 대조하지 않는다
+    DB.events[0].total_krw = null;
+    await window.kskOpenEvent('e1'); await sleep(200);
+    await window.kskSendOpen(); await sleep(300);
+    window.kskSendAdd(); await sleep(120);
+    nm2 = document.querySelector('#ksdBody .ksd-row input.nm');
+    am2 = document.querySelector('#ksdBody .ksd-row input.amt');
+    nm2.value = 'x'; am2.value = '99,999,999'; window.kskSendSum(); await sleep(80);
+    ok('총액이 없으면 아무리 커도 안 막는다',
+       document.getElementById('ksdGo').disabled === false);
+    ok('대조하지 않는다고 적어 준다',
+       document.getElementById('ksdBody').textContent.indexOf('대조하지 않습니다') >= 0);
+    window.kskSendClose(); await sleep(80);
+    DB.charges = [];
+
     // ── ⑭ 가로로는 스크롤되지 않는다 ⭐ ──────────────────────
     //   가로 스크롤이 나면 손가락이 세로로 미끄러지다 옆으로 새고, 그 상태로
     //   버튼을 누르면 엉뚱한 것이 눌린다.
