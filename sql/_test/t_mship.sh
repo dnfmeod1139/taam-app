@@ -93,9 +93,12 @@ echo "── ⑥ 어드민 ──"
 if $P -c "set role authenticated; select set_config('taam.uid','$U1',false);
           select public.taam_mship_apply_list(null,10);" >/dev/null 2>&1;
 then echo "❌ 회원이 심사 큐를 봤다"; FAIL=1; else echo "✅ 회원은 심사 큐를 못 본다 ⭐"; fi
+# ⚠ 개수로 세면 다른 테스트가 남긴 신청까지 딸려 온다 (t_offer 가 한 건 남긴다).
+#   이 테스트가 만든 두 건이 큐에 있는지로 본다.
 ok "슈퍼어드민은 큐를 본다" 2 \
    "$($P -c "set role authenticated; select set_config('taam.uid','$SUP',false);
-             select jsonb_array_length(public.taam_mship_apply_list(null,10));" | tail -1)"
+             select count(*) from jsonb_array_elements(public.taam_mship_apply_list(null,500)) e
+              where e->>'phone' in ('01011112222','01033334444');" | tail -1)"
 ok "상태를 바꾼다" screening \
    "$($P -c "set role authenticated; select set_config('taam.uid','$SUP',false);
              select (public.taam_mship_apply_status(

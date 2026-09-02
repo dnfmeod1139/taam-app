@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="robots" content="noindex, nofollow">
+<title>TAAM — 추천</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:opsz,wght@6..96,700&family=Noto+Sans+KR:wght@400;500;700&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+<!--
+  ════════════════════════════════════════════════════════════════
+  추천 초대장 — 회원이 보낸 링크를 받은 사람이 여는 화면
+  ════════════════════════════════════════════════════════════════
+  ⚠ 여기에는 **가격이 없다.** 추천은 심사 기회이지 가입이 아니다.
+    금액은 심사를 통과한 사람만 오퍼 페이지에서 본다.
+
+  ⚠ 추천인의 **성만** 보여준다. 서버가 그 이상 주지 않는다 —
+    코드를 주운 사람이 회원의 이름·번호까지 알게 할 이유가 없다.
+
+  ⚠ 「가입 보장이 아니다」를 반드시 적는다. 추천받았으니 되는 줄 알고
+    기다리게 만들면, 떨어졌을 때 잃는 것이 추천인의 신뢰다.
+  ════════════════════════════════════════════════════════════════
+-->
+<style>
+:root{
+  --ground:#F6F6F7; --card:#FFFFFF;
+  --ink:#16161A; --ink-2:#61616B; --ink-3:#9A9AA4;
+  --rule:#E6E6EA; --rule-2:#F0F0F3;
+  --burg:#5E1622; --burg-tx:#8A3242;
+  --shadow:0 1px 2px rgba(22,22,26,.04),0 1px 12px -6px rgba(22,22,26,.14);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{background:var(--ground);color:var(--ink);
+  font-family:'Noto Sans KR','Noto Sans JP',system-ui,-apple-system,sans-serif;
+  font-size:15px;line-height:1.75;-webkit-font-smoothing:antialiased;
+  padding:48px 18px 56px;word-break:keep-all}
+.wrap{max-width:380px;margin:0 auto;text-align:center}
+.wordmark{font-family:'Bodoni Moda',Didot,serif;font-weight:700;font-size:22px;
+  letter-spacing:.28em;color:var(--burg-tx);line-height:1}
+h1{margin-top:32px;font-size:20px;font-weight:700;letter-spacing:-.01em;line-height:1.5}
+.lead{margin-top:12px;font-size:14.5px;color:var(--ink-2);line-height:1.9}
+.code{margin-top:30px;padding:20px 16px;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}
+.code .k{font-size:11px;letter-spacing:.14em;color:var(--ink-3);text-transform:uppercase}
+.code .v{margin-top:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:19px;font-weight:700;letter-spacing:.06em}
+.go{display:block;width:100%;margin-top:28px;padding:16px;border:0;border-radius:13px;
+  background:var(--burg);color:#fff;font-family:inherit;font-size:15px;font-weight:700;cursor:pointer}
+.fine{margin-top:14px;font-size:11.5px;line-height:1.85;color:var(--ink-3)}
+.state{padding:50px 6px}
+.state .ic{font-size:32px}
+.state .t{margin-top:14px;font-size:17px;font-weight:700}
+.state .d{margin-top:10px;font-size:13.5px;line-height:1.9;color:var(--ink-2)}
+.langs{margin-top:34px;display:flex;justify-content:center;gap:6px}
+.langs button{padding:6px 13px;border:1px solid var(--rule);border-radius:999px;background:var(--card);
+  font-family:inherit;font-size:11.5px;font-weight:700;color:var(--ink-3);cursor:pointer}
+.langs button.on{border-color:var(--burg);color:var(--burg-tx)}
+</style>
+</head>
+<body>
+<div class="wrap" id="wrap">
+  <div class="state"><div class="ic">·</div><div class="t">…</div></div>
+</div>
+<script>
+(function(){
+  'use strict';
+  var SB_URL = 'https://edfsmzbcixfnqabrsvut.supabase.co';
+  var SB_KEY = 'sb_publishable_NlJp3lRtSVvkgFGRBesoog_q4XlGEPC';
+  var qs = new URLSearchParams(location.search);
+  var CODE = (qs.get('c') || qs.get('code') || '').trim();
+
+  var T = {
+    ko:{ h1:'{n}○님의 추천', h1x:'멤버십 추천',
+      lead:'탐 멤버십 심사에<br>귀하를 추천하셨습니다.',
+      ck:'추천 코드', go:'심사 신청하기',
+      fine:'유효기간 {d}까지 · 추천은 <b>심사 기회</b>이며 가입을 보장하지 않습니다.',
+      fine_x:'추천은 <b>심사 기회</b>이며 가입을 보장하지 않습니다.',
+      exp_t:'추천 기간이 지났습니다', exp_d:'추천해 주신 분께 다시 말씀해 주세요.',
+      used_t:'이미 사용된 추천입니다', used_d:'심사 결과는 신청하신 연락처로 안내드립니다.',
+      nf_t:'추천을 찾을 수 없습니다', nf_d:'주소가 잘렸을 수 있습니다. 받으신 링크를 다시 확인해 주세요.',
+      err_t:'잠시 문제가 있었습니다', err_d:'잠시 후 다시 열어 주세요.' },
+    en:{ h1:'Referred by {n}.', h1x:'A referral to TAAM',
+      lead:'You have been referred for<br>TAAM membership review.',
+      ck:'Referral code', go:'Apply for review',
+      fine:'Valid until {d} · A referral is <b>an opportunity to be reviewed</b>; it does not guarantee membership.',
+      fine_x:'A referral is <b>an opportunity to be reviewed</b>; it does not guarantee membership.',
+      exp_t:'This referral has expired', exp_d:'Please ask the member who referred you.',
+      used_t:'This referral has been used', used_d:'We will contact you with the outcome.',
+      nf_t:'We could not find this referral', nf_d:'The address may have been cut off. Please check the link you received.',
+      err_t:'Something went wrong', err_d:'Please open the link again shortly.' },
+    ja:{ h1:'{n}様からのご推薦', h1x:'メンバーシップのご推薦',
+      lead:'TAAMメンバーシップの審査に<br>ご推薦いただきました。',
+      ck:'ご推薦コード', go:'審査を申し込む',
+      fine:'有効期限 {d}まで · ご推薦は<b>審査の機会</b>であり、ご入会をお約束するものではございません。',
+      fine_x:'ご推薦は<b>審査の機会</b>であり、ご入会をお約束するものではございません。',
+      exp_t:'ご推薦の期間が過ぎました', exp_d:'ご推薦くださった方にお伝えください。',
+      used_t:'すでに使用されたご推薦です', used_d:'審査結果はご記入の連絡先にご案内いたします。',
+      nf_t:'ご推薦が見つかりません', nf_d:'アドレスが途中で切れている可能性がございます。',
+      err_t:'問題が発生しました', err_d:'しばらくしてからもう一度お開きください。' }
+  };
+  var LANG = 'ko';
+  function t(k){ return (T[LANG] && T[LANG][k]) || T.ko[k] || k; }
+  function pickLang(){
+    try {
+      var q = qs.get('lang'); if(q && T[q]) return q;
+      var s = localStorage.getItem('taamRefLang'); if(s && T[s]) return s;
+    } catch(e){}
+    var n = String(navigator.language || 'ko').toLowerCase();
+    if(n.indexOf('ja') === 0) return 'ja';
+    if(n.indexOf('ko') === 0) return 'ko';
+    return 'en';
+  }
+  function esc(s){
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+      return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];
+    });
+  }
+  function ymd(iso){
+    if(!iso) return '';
+    try {
+      var d = new Date(iso);
+      if(LANG === 'en') return d.toLocaleDateString('en-GB', { day:'numeric', month:'long' });
+      return (d.getMonth()+1) + (LANG === 'ja' ? '月' : '.') + d.getDate() + (LANG === 'ja' ? '日' : '');
+    } catch(e){ return ''; }
+  }
+  async function rpc(fn, args){
+    var res = await fetch(SB_URL + '/rest/v1/rpc/' + fn, {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json', 'apikey':SB_KEY, 'Authorization':'Bearer ' + SB_KEY },
+      body: JSON.stringify(args || {})
+    });
+    var body = null; try { body = await res.json(); } catch(e){}
+    if(!res.ok) throw new Error((body && (body.message || body.hint)) || ('HTTP ' + res.status));
+    return body;
+  }
+  function langBar(){
+    return '<div class="langs">' + ['ko','en','ja'].map(function(L){
+      return '<button class="' + (LANG === L ? 'on' : '') + '" onclick="__lang(\'' + L + '\')">'
+           + ({ko:'한국어',en:'English',ja:'日本語'})[L] + '</button>';
+    }).join('') + '</div>';
+  }
+  window.__lang = function(L){
+    LANG = L;
+    try { localStorage.setItem('taamRefLang', L); } catch(e){}
+    document.documentElement.lang = L;
+    render();
+  };
+  var REF = null;
+  function state(ic, tk, dk){
+    document.getElementById('wrap').innerHTML =
+      '<div class="wordmark">TAAM</div><div class="state"><div class="ic">' + ic + '</div>'
+      + '<div class="t">' + t(tk) + '</div><div class="d">' + t(dk) + '</div></div>' + langBar();
+  }
+  function render(){
+    document.documentElement.lang = LANG;
+    if(!REF) return;
+    var h = '<div class="wordmark">TAAM</div>'
+      + '<h1>' + (REF.surname ? t('h1').replace('{n}', esc(REF.surname)) : t('h1x')) + '</h1>'
+      + '<div class="lead">' + t('lead') + '</div>'
+      + '<div class="code"><div class="k">' + t('ck') + '</div>'
+      +   '<div class="v">' + esc(REF.code || '') + '</div></div>'
+      + '<button class="go" onclick="__go()">' + t('go') + '</button>'
+      + '<div class="fine">'
+      +   (REF.expires_at ? t('fine').replace('{d}', ymd(REF.expires_at)) : t('fine_x')) + '</div>'
+      + langBar();
+    document.getElementById('wrap').innerHTML = h;
+  }
+  // 심사 신청 페이지로 넘긴다 — 코드를 붙여서. 여기서 다시 적게 하지 않는다.
+  window.__go = function(){
+    location.href = '../apply/?ref=' + encodeURIComponent(REF.code || CODE) + '&lang=' + LANG;
+  };
+  (async function(){
+    LANG = pickLang();
+    document.documentElement.lang = LANG;
+    if(!CODE){ state('🔗','nf_t','nf_d'); return; }
+    try {
+      var r = await rpc('taam_ref_public', { p_code: CODE });
+      if(!r || !r.found){ state('🔗','nf_t','nf_d'); return; }
+      if(r.blocked === 'expired'){ state('⏳','exp_t','exp_d'); return; }
+      if(r.blocked === 'applied'){ state('✓','used_t','used_d'); return; }
+      if(r.blocked){ state('·','used_t','used_d'); return; }
+      REF = r; render();
+    } catch(e){ state('·','err_t','err_d'); }
+  })();
+})();
+</script>
+</body>
+</html>

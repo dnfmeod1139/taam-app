@@ -53,6 +53,23 @@ const { chromium } = require('playwright-core');
         guest_expires_at:new Date(Date.now()+60*DAY).toISOString(), expired:false,
         guest_extended_cnt:0, has_purchased:false, has_applied:false }
     ];
+    const OFFERS = [
+      { id:'o1', name:'김우종', phone:'01033334444', token:'a'.repeat(32), status:'opened',
+        deposit_amount:10125000, annual_fee_cash:1125000, annual_fee_card:1270000,
+        expires_at:new Date(Date.now()+5*DAY).toISOString(), opened_at:new Date().toISOString(),
+        created_at:new Date().toISOString(), expired:false },
+      { id:'o2', name:'만료된분', phone:'01099998888', token:'b'.repeat(32), status:'sent',
+        deposit_amount:10125000, annual_fee_cash:1125000, annual_fee_card:1270000,
+        expires_at:new Date(Date.now()-DAY).toISOString(),
+        created_at:new Date(Date.now()-9*DAY).toISOString(), expired:true }
+    ];
+    const CORPS = [
+      { id:'k1', company:'주식회사 탐', contact:'김우종 대표', phone:'01033334444',
+        email:'woo@playtaam.com', memo:'연 20회 검토', status:'new',
+        created_at:new Date().toISOString() },
+      { id:'k2', company:'종료된회사', contact:'이담당', phone:'01099998888',
+        status:'closed', created_at:new Date(Date.now()-30*DAY).toISOString() }
+    ];
     const CFG = { deposit_amount:10125000, annual_fee_cash:1125000, annual_fee_card:1270000,
                   guest_days:90, guest_extend_days:90, guest_warn_days:7,
                   offer_days:7, referral_days:14, referral_per_year:2 };
@@ -69,6 +86,10 @@ const { chromium } = require('playwright-core');
           return Promise.resolve({ data: l, error: null });
         }
         if (fn === 'taam_mship_settings') return Promise.resolve({ data: CFG, error: null });
+        if (fn === 'taam_mship_offer_list') return Promise.resolve({ data: OFFERS, error: null });
+        if (fn === 'taam_corp_list') return Promise.resolve({ data: CORPS, error: null });
+        if (fn === 'taam_mship_offer_create') return Promise.resolve({ data: {
+          ok:true, already:false, id:'o9', token:'f'.repeat(32) }, error: null });
         if (fn === 'taam_guest_extend') return Promise.resolve({ data: {
           ok:true, expires_at:new Date(Date.now()+90*DAY).toISOString(), count:1 }, error: null });
         return Promise.resolve({ data: { ok: true }, error: null }); },
@@ -114,8 +135,12 @@ const { chromium } = require('playwright-core');
     const acts = document.getElementById('msdActs').textContent;
     ok('심사 중으로 바꿀 수 있다', acts.indexOf('심사 중') >= 0);
     ok('보류할 수 있다',           acts.indexOf('보류') >= 0);
-    ok('「통과」 버튼이 없다 ⭐ (통과는 오퍼 링크를 만드는 것)',
-       acts.indexOf('통과') < 0 && acts.indexOf('승인') < 0);
+    // ⭐ 「통과」가 **상태만 바꾸는 버튼**이면 안 된다 — 그러면 통과인데
+    //   보낼 게 없는 사람이 생긴다. 통과는 오퍼 링크를 만드는 것이어야 한다.
+    const actsHtml = document.getElementById('msdActs').innerHTML;
+    ok('통과가 상태만 바꾸지 않는다 ⭐',
+       actsHtml.indexOf("msaSetStatus('offered')") < 0
+       && actsHtml.indexOf('msaMakeOffer()') >= 0);
 
     RPC = [];
     await window.msaSetStatus('screening'); await sleep(150);
@@ -125,6 +150,45 @@ const { chromium } = require('playwright-core');
     ok('바꾸면 신청서가 닫힌다', document.getElementById('msaDetail').style.display === 'none');
     ok('목록이 갱신된다',
        document.getElementById('msaBody').textContent.indexOf('신규') < 0);
+
+    // ── ③-b 오퍼 ─────────────────────────────────────────────
+    //   통과 = 링크를 만드는 것. 상태만 바꾸는 버튼은 없다.
+    window.msaDetail('a2'); await sleep(120);
+    ok('통과 버튼은 「오퍼 링크 만들기」다 ⭐',
+       document.getElementById('msdActs').textContent.indexOf('오퍼 링크 만들기') >= 0);
+    RPC = [];
+    let copied = null;
+    navigator.clipboard.writeText = (t) => { copied = t; return Promise.resolve(); };
+    await window.msaMakeOffer(); await sleep(300);
+    ok('오퍼를 서버에 만든다',
+       RPC.some(x => x[0] === 'taam_mship_offer_create' && x[1].p_application_id === 'a2'));
+    ok('만들면 링크를 바로 복사해 준다 ⭐',
+       copied && copied.indexOf('/offer/?t=' + 'f'.repeat(32)) >= 0);
+    ok('오퍼 탭으로 넘어간다', _msa.tab === 'offer');
+    bt = document.getElementById('msaBody').textContent;
+    ok('보낸 오퍼가 뜬다', bt.indexOf('김우종') >= 0);
+    // 금액은 **보낸 순간의 값**이다
+    ok('오퍼에 박제된 금액을 보여준다 ⭐',
+       bt.indexOf('11,250,000원 (이체)') >= 0 && bt.indexOf('11,395,000원 (카드)') >= 0);
+    ok('열어봤는지 보여준다', bt.indexOf('열어봄') >= 0);
+    ok('만료된 오퍼를 구분한다', bt.indexOf('만료') >= 0);
+    ok('살아 있는 것만 센다 ⭐', document.getElementById('msaCount').textContent === '1건');
+
+    RPC = []; window.__toast = null;
+    window.confirm = () => true;
+    await window.msaOfferPaid('o1', '김우종'); await sleep(200);
+    ok('결제 완료를 기록한다',
+       RPC.some(x => x[0] === 'taam_mship_offer_paid' && x[1].p_id === 'o1'));
+    // ⚠ 이 버튼은 돈을 안 움직인다
+    ok('예치금을 건드리지 않는다 ⭐',
+       !RPC.some(x => /deposit|balance/i.test(x[0])));
+    ok('예치금은 따로 하라고 말해 준다',
+       window.__toast && String(window.__toast[2]).indexOf('예치금') >= 0);
+
+    RPC = [];
+    await window.msaOfferCancel('o1', '김우종'); await sleep(200);
+    ok('취소를 서버에 넘긴다',
+       RPC.some(x => x[0] === 'taam_mship_offer_cancel' && x[1].p_id === 'o1'));
 
     // ── ④ 게스트 ─────────────────────────────────────────────
     window.msaTab('guest'); await sleep(300);
@@ -150,6 +214,20 @@ const { chromium } = require('playwright-core');
        RPC.some(x => x[0] === 'taam_guest_extend' && x[1].p_uid === 'g1'));
     ok('연장 결과를 알려준다', window.__toast && window.__toast[1] === '연장했습니다');
 
+    // ── ④-b 법인 문의 ────────────────────────────────────────
+    window.msaTab('corp'); await sleep(300);
+    bt = document.getElementById('msaBody').textContent;
+    ok('법인 문의가 뜬다', bt.indexOf('주식회사 탐') >= 0);
+    ok('담당자·연락처를 보여준다',
+       bt.indexOf('김우종 대표') >= 0 && bt.indexOf('010-3333-4444') >= 0);
+    ok('메모도 보여준다', bt.indexOf('연 20회 검토') >= 0);
+    ok('종료된 건은 세지 않는다 ⭐', document.getElementById('msaCount').textContent === '1건');
+    RPC = [];
+    await window.msaCorpStatus('k1','talking'); await sleep(200);
+    ok('상담 중으로 바꾼다',
+       RPC.some(x => x[0] === 'taam_corp_status'
+                  && x[1].p_id === 'k1' && x[1].p_status === 'talking'));
+
     // ── ⑤ 설정값 ─────────────────────────────────────────────
     window.msaTab('cfg'); await sleep(300);
     bt = document.getElementById('msaBody').textContent;
@@ -158,6 +236,8 @@ const { chromium } = require('playwright-core');
     ok('금액의 유일한 출처라고 적는다', bt.indexOf('유일한 출처') >= 0);
     ok('정원을 고칠 수 있다', !!document.getElementById('msaSeatCap'));
     ok('잔여석을 계산한다',   bt.indexOf('잔여 5석') >= 0);
+    ok('법인 슬롯도 고칠 수 있다',
+       !!document.querySelector('#msaBody input[data-k="corp_slots"]'));
     ok('연회비 두 칸이 따로 있다',
        !!document.querySelector('#msaBody input[data-k="annual_fee_cash"]')
        && !!document.querySelector('#msaBody input[data-k="annual_fee_card"]'));

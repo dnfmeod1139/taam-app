@@ -9948,6 +9948,11 @@ window.closePromoCarousel = function(){
       <div style="flex:none;font-size:16px;color:#c5bfb2;">›</div>
     </div>
 
+    <!-- 추천권 — M·T 회원에게만. 게스트에게는 아예 안 그린다.
+         「보냈는데 소식이 없다」와 「열어는 봤다」는 회원에게 전혀 다른 정보라
+         장마다 상태를 적는다. -->
+    <div id="mpRefCard" style="display:none;margin:12px 28px 6px;padding:13px 15px;background:#fff;border:1px solid #ece8df;border-radius:11px;"></div>
+
     <!-- Deposit -->
     <div class="mp-deposit-section-label" data-i18n="my_page.deposit_section">예치금</div>
     <div class="mp-deposit-block" style="margin-top:10px;">
@@ -13149,7 +13154,9 @@ textarea.mapl-in{min-height:78px;resize:vertical;line-height:1.7}
   </div>
   <div class="msa-tabs" id="msaTabs">
     <span class="on" data-t="apply" onclick="msaTab('apply')">심사 큐</span>
+    <span data-t="offer" onclick="msaTab('offer')">오퍼</span>
     <span data-t="guest" onclick="msaTab('guest')">게스트</span>
+    <span data-t="corp"  onclick="msaTab('corp')">법인</span>
     <span data-t="cfg"   onclick="msaTab('cfg')">설정</span>
   </div>
   <div id="msaBody" class="sub-content" style="padding:12px 14px 96px;"></div>
@@ -16134,8 +16141,59 @@ function _subscribeActiveSession(userId, myDeviceId){
 //   소유권을 되찾아 최신 로그인 기기를 쫓아낸다 — 두 기기를 번갈아 열면 핑퐁이 되고,
 //   결과가 '마지막 로그인' 이 아니라 '마지막으로 앱을 연 기기' 가 된다.
 //   → 서버의 현재 소유자를 먼저 읽고, 내 기기가 아니면 이 기기가 물러난다.
+// ══════════════════════════════════════════════════════════════
+// 게스트 초대 만료 — 서버 시각으로만 판정한다 (2026-09-02)
+// ══════════════════════════════════════════════════════════════
+// ⚠ 앱이 자기 시계로 세면 시계를 돌려 놓으면 그만이다. taam_guest_state 가
+//   준 expired 만 믿는다.
+// ⚠ **조회가 실패하면 아무것도 하지 않는다.** 네트워크·RLS 오류로
+//   로그아웃시키면 멀쩡한 게스트가 튕긴다 — 단일 기기 규칙에서 이미
+//   같은 실수를 했고, 그래서 그 규칙에도 같은 문장이 적혀 있다.
+// ⚠ 삭제가 아니다. 등급·이력은 서버에 그대로 남고, 어드민이 [+90일] 로
+//   되살릴 수 있다.
+async function _checkGuestExpiry(){
+  if(!window.sb) return false;
+  try {
+    var r = await window.sb.rpc('taam_guest_state');
+    if(r.error || !r.data) return false;          // 못 읽으면 아무것도 안 한다
+    if(!r.data.is_guest || !r.data.expired) return false;
+  } catch(e){ return false; }
+  try { if(typeof _showGuestExpired === 'function') _showGuestExpired(); } catch(e){}
+  try { await window.sb.auth.signOut(); } catch(e){}
+  return true;
+}
+// 만료 안내 — 「끝났습니다」로 끝내지 않는다. 돌아올 길을 같이 준다.
+function _showGuestExpired(){
+  var old = document.getElementById('guestExpiredModal'); if(old) old.remove();
+  var el = document.createElement('div');
+  el.id = 'guestExpiredModal';
+  el.style.cssText = 'position:fixed;inset:0;z-index:99998;background:rgba(0,0,0,.72);'
+    + 'display:flex;align-items:center;justify-content:center;padding:24px;box-sizing:border-box;';
+  el.innerHTML =
+    '<div style="background:#fff;border-radius:20px;width:100%;max-width:330px;padding:30px 24px 22px;'
+    + 'text-align:center;font-family:var(--font-main);">'
+    + '<div style="font-size:17px;font-weight:800;color:#1a1a18;margin-bottom:10px;">게스트 초대가 종료되었습니다</div>'
+    + '<div style="font-size:13px;color:#777;line-height:1.85;margin-bottom:20px;">'
+    +   '멤버십 심사 신청 또는 회원의 추천으로<br>다시 함께할 수 있습니다.</div>'
+    + '<button id="gxApply" style="width:100%;padding:15px;background:#5C0A14;border:none;'
+    + 'border-radius:12px;font-size:14px;font-weight:800;color:#fff;cursor:pointer;">심사 신청하기</button>'
+    + '<button id="gxClose" style="width:100%;margin-top:8px;padding:12px;background:none;border:none;'
+    + 'font-size:12.5px;font-weight:700;color:#9a9486;cursor:pointer;">닫기</button></div>';
+  document.body.appendChild(el);
+  var c = el.querySelector('#gxClose');
+  if(c) c.onclick = function(){ el.remove(); };
+  var a = el.querySelector('#gxApply');
+  if(a) a.onclick = function(){
+    // 로그인이 풀린 상태라 앱 안 시트로는 못 간다 — 공개 신청 페이지로 보낸다
+    location.href = _kskOrigin() + '/apply/';
+  };
+}
+window._checkGuestExpiry = _checkGuestExpiry;
+
 async function _resumeActiveSession(user, role){
   if(!window.sb || !user || !user.id) return;
+  // 만료된 게스트는 세션 얘기를 하기 전에 먼저 내보낸다
+  if(await _checkGuestExpiry()) return;
   if(await _isSingleDeviceExempt(user, role)) return;   // 슈퍼어드민 · 심사/데모 면제
 
   var deviceId = _getDeviceId();
@@ -20089,6 +20147,7 @@ function openMyPage(){
           badge.style.display = 'none';
         }
         if(typeof _mpPaintGuest === 'function') _mpPaintGuest(grade);
+        if(typeof _mpPaintRef === 'function') _mpPaintRef(grade);
       }).catch(function(){});
     }
   } catch(_te){}
@@ -31643,7 +31702,9 @@ function msaTab(t){
   for(var i = 0; i < tabs.length; i++)
     tabs[i].className = (tabs[i].getAttribute('data-t') === t) ? 'on' : '';
   if(t === 'apply') _msaLoadApply();
+  else if(t === 'offer') _msaLoadOffer();
   else if(t === 'guest') _msaLoadGuest();
+  else if(t === 'corp') _msaLoadCorp();
   else _msaLoadCfg();
 }
 window.msaOpen = msaOpen; window.msaBack = msaBack; window.msaTab = msaTab;
@@ -31731,8 +31792,11 @@ function msaDetail(id){
     + 'onclick="msaSetStatus(\'declined\')">보류</button>';
   if(st !== 'applied') acts += '<button class="msa-btn" style="flex:1;padding:13px" '
     + 'onclick="msaSetStatus(\'applied\')">신규로 되돌리기</button>';
-  // ⚠ 「통과」 버튼을 여기 두지 않는다. 통과는 오퍼 링크를 만드는 것이고,
-  //   상태만 바꾸면 「통과인데 보낼 게 없는」 사람이 생긴다.
+  // 통과 = 오퍼 링크를 만드는 것. 상태만 바꾸는 버튼은 두지 않는다 —
+  // 그러면 「통과인데 보낼 게 없는」 사람이 생긴다.
+  if(st !== 'offered' && st !== 'paid')
+    acts = '<button class="msa-btn on" style="flex:2;padding:13px" '
+         + 'onclick="msaMakeOffer()">통과 — 오퍼 링크 만들기</button>' + acts;
   document.getElementById('msdActs').innerHTML = acts;
   document.getElementById('msaDetail').style.display = 'flex';
 }
@@ -31755,6 +31819,115 @@ async function msaSetStatus(st){
 }
 window.msaDetail = msaDetail; window.msaDetailClose = msaDetailClose;
 window.msaSetStatus = msaSetStatus;
+
+// ── 오퍼 ──────────────────────────────────────────────────────
+// 통과시키는 순간 링크가 생긴다. 「통과」와 「보낼 것」이 따로 놀지 않는다.
+function _msaOfferUrl(tok){ return _kskOrigin() + '/offer/?t=' + encodeURIComponent(tok); }
+
+async function msaMakeOffer(){
+  var a = _msa.cur; if(!a) return;
+  try {
+    var r = await window.sb.rpc('taam_mship_offer_create', { p_application_id: a.id });
+    if(r.error) throw r.error;
+    var d = r.data || {};
+    a.status = 'offered';
+    msaDetailClose();
+    _msaRenderApply();
+    // 링크를 바로 복사해 준다 — 만들어 놓고 어디 있는지 다시 찾게 하지 않는다
+    _kskClip(_msaOfferUrl(d.token),
+      (a.name || '') + ' — ' + (d.already ? '이미 있던 링크입니다' : '오퍼 링크를 복사했습니다'));
+    _msa.tab = 'offer';
+    msaTab('offer');
+  } catch(e){
+    var m = (e && e.message) || '';
+    if(_msaIsMissing(e)) showToast('⚠','아직 준비 안 됨','sql/membership_offer.sql 을 실행해 주세요');
+    else showToast('❌','오퍼를 만들지 못했습니다', m);
+  }
+}
+window.msaMakeOffer = msaMakeOffer;
+
+async function _msaLoadOffer(){
+  var b = document.getElementById('msaBody');
+  b.innerHTML = '<div class="msa-empty">불러오는 중…</div>';
+  try {
+    var r = await window.sb.rpc('taam_mship_offer_list', { p_limit: 200 });
+    if(r.error) throw r.error;
+    _msa.offer = r.data || [];
+  } catch(e){
+    b.innerHTML = _msaIsMissing(e) ? _msaNeedSql('sql/membership_offer.sql')
+      : '<div class="msa-empty">불러오지 못했습니다<br>' + _msaEsc((e && e.message) || '') + '</div>';
+    return;
+  }
+  _msaRenderOffer();
+}
+function _msaRenderOffer(){
+  var b = document.getElementById('msaBody');
+  var list = _msa.offer || [];
+  var live = list.filter(function(o){
+    return o.status !== 'cancelled' && o.status !== 'paid' && !o.expired;
+  });
+  document.getElementById('msaCount').textContent = live.length + '건';
+  if(!list.length){
+    b.innerHTML = '<div class="msa-empty">아직 보낸 오퍼가 없습니다.<br>'
+                + '심사 큐에서 「통과 — 오퍼 링크 만들기」로 시작하세요.</div>';
+    return;
+  }
+  var LBL = { sent:'보냄', opened:'열어봄', accepted:'하겠다고 함', paid:'결제 완료',
+              cancelled:'취소', declined:'거절' };
+  var h = '';
+  list.forEach(function(o){
+    var st = o.expired && o.status !== 'paid' ? 'expired' : o.status;
+    var cls = (st === 'paid') ? 'active'
+            : (st === 'accepted') ? 'screening'
+            : (st === 'cancelled' || st === 'expired') ? 'dormant' : 'applied';
+    var d = _msaDays(o.expires_at);
+    h += '<div class="msa-card">'
+       + '<div class="h"><span class="nm">' + _msaEsc(o.name || '—') + '</span>'
+       +   '<span class="ph">' + _msaEsc(_ksdPhone(o.phone)) + '</span>'
+       +   '<span class="msa-st ' + cls + '">' + (st === 'expired' ? '만료' : (LBL[st] || st)) + '</span></div>'
+       // 금액은 **보낸 순간의 값**이다. 설정이 바뀌어도 이 사람 것은 안 흔들린다.
+       + '<div class="msa-sub">' + _mshipWon((o.deposit_amount||0) + (o.annual_fee_cash||0)) + ' (이체)'
+       +   ' · ' + _mshipWon((o.deposit_amount||0) + (o.annual_fee_card||0)) + ' (카드)'
+       +   '<br>' + (o.expired ? '만료됨' : (d != null ? d + '일 남음' : '')) + ' · ' + _msaDate(o.expires_at)
+       +   (o.opened_at ? ' · 열어봄' : '')
+       +   (o.admin_memo ? '<br>' + _msaEsc(o.admin_memo) : '')
+       + '</div>'
+       + '<div class="msa-acts">'
+       +   ((st === 'cancelled' || st === 'paid') ? ''
+          : '<button class="msa-btn on" onclick="msaOfferCopy(\'' + o.token + '\')">링크 복사</button>'
+          + '<button class="msa-btn" onclick="msaOfferPaid(\'' + o.id + '\',\''
+            + _msaEsc(o.name || '').replace(/'/g, "\\'") + '\')">결제 완료</button>'
+          + '<button class="msa-btn" onclick="msaOfferCancel(\'' + o.id + '\',\''
+            + _msaEsc(o.name || '').replace(/'/g, "\\'") + '\')">취소</button>')
+       + '</div></div>';
+  });
+  b.innerHTML = h;
+}
+function msaOfferCopy(tok){ _kskClip(_msaOfferUrl(tok), '오퍼 링크를 복사했습니다'); }
+async function msaOfferCancel(id, name){
+  if(!confirm((name || '이 오퍼') + ' 의 링크를 끊을까요?\n\n신청은 심사 중으로 돌아갑니다.')) return;
+  try {
+    var r = await window.sb.rpc('taam_mship_offer_cancel', { p_id: id });
+    if(r.error) throw r.error;
+    showToast('✓','끊었습니다', (name || '') + ' — 심사 큐로 돌아갔습니다');
+    _msaLoadOffer();
+  } catch(e){ showToast('❌','끊지 못했습니다', (e && e.message) || ''); }
+}
+// ⚠ 이 버튼은 **돈을 움직이지 않는다.** 입금·승인을 눈으로 확인한 뒤
+//   「받았다」를 기록하는 것뿐이다. 예치금 잔액은 기존 RPC 로만 움직인다.
+async function msaOfferPaid(id, name){
+  if(!confirm((name || '이 사람') + ' 의 결제를 받았습니까?\n\n'
+    + '⚠ 이 버튼은 돈을 움직이지 않습니다. 입금·카드 승인을 확인한 뒤 누르세요.\n'
+    + '예치금 충전은 회원 관리에서 따로 합니다.')) return;
+  try {
+    var r = await window.sb.rpc('taam_mship_offer_paid', { p_id: id, p_memo: null });
+    if(r.error) throw r.error;
+    showToast('✓','기록했습니다', (name || '') + ' — 예치금 충전은 따로 해주세요');
+    _msaLoadOffer();
+  } catch(e){ showToast('❌','기록하지 못했습니다', (e && e.message) || ''); }
+}
+window.msaOfferCopy = msaOfferCopy; window.msaOfferCancel = msaOfferCancel;
+window.msaOfferPaid = msaOfferPaid;
 
 // ── 게스트 ────────────────────────────────────────────────────
 async function _msaLoadGuest(){
@@ -31816,6 +31989,61 @@ async function msaExtend(uid){
 }
 window.msaExtend = msaExtend;
 
+// ── 법인 문의 ─────────────────────────────────────────────────
+// 법인은 셀프 결제가 없다. 여기서 보는 건 「누가 물어봤나」와 상담 진행뿐이다.
+async function _msaLoadCorp(){
+  var b = document.getElementById('msaBody');
+  b.innerHTML = '<div class="msa-empty">불러오는 중…</div>';
+  try {
+    var r = await window.sb.rpc('taam_corp_list', { p_limit: 200 });
+    if(r.error) throw r.error;
+    _msa.corp = r.data || [];
+  } catch(e){
+    b.innerHTML = _msaIsMissing(e) ? _msaNeedSql('sql/membership_corp.sql')
+      : '<div class="msa-empty">불러오지 못했습니다<br>' + _msaEsc((e && e.message) || '') + '</div>';
+    return;
+  }
+  _msaRenderCorp();
+}
+function _msaRenderCorp(){
+  var b = document.getElementById('msaBody');
+  var list = _msa.corp || [];
+  var live = list.filter(function(c){ return c.status !== 'closed'; });
+  document.getElementById('msaCount').textContent = live.length + '건';
+  if(!list.length){ b.innerHTML = '<div class="msa-empty">아직 법인 문의가 없습니다.</div>'; return; }
+  var LBL = { 'new':'신규', talking:'상담 중', closed:'종료' };
+  var CLS = { 'new':'applied', talking:'screening', closed:'declined' };
+  var h = '';
+  list.forEach(function(c){
+    h += '<div class="msa-card">'
+       + '<div class="h"><span class="nm">' + _msaEsc(c.company || '—') + '</span>'
+       +   '<span class="msa-st ' + (CLS[c.status] || 'applied') + '">'
+       +     (LBL[c.status] || c.status) + '</span></div>'
+       + '<div class="msa-sub">' + _msaEsc(c.contact || '') + ' · ' + _msaEsc(_ksdPhone(c.phone))
+       +   (c.email ? '<br>' + _msaEsc(c.email) : '')
+       +   '<br>' + _msaDate(c.created_at) + ' 문의'
+       +   (c.memo ? '<br>' + _msaEsc(c.memo) : '')
+       + '</div>'
+       + '<div class="msa-acts">'
+       +   (c.status !== 'talking'
+          ? '<button class="msa-btn on" onclick="msaCorpStatus(\'' + c.id + '\',\'talking\')">상담 중으로</button>' : '')
+       +   (c.status !== 'closed'
+          ? '<button class="msa-btn" onclick="msaCorpStatus(\'' + c.id + '\',\'closed\')">종료</button>' : '')
+       +   (c.status !== 'new'
+          ? '<button class="msa-btn" onclick="msaCorpStatus(\'' + c.id + '\',\'new\')">신규로</button>' : '')
+       + '</div></div>';
+  });
+  b.innerHTML = h;
+}
+async function msaCorpStatus(id, st){
+  try {
+    var r = await window.sb.rpc('taam_corp_status', { p_id: id, p_status: st, p_memo: null });
+    if(r.error) throw r.error;
+    _msaLoadCorp();
+  } catch(e){ showToast('❌','바꾸지 못했습니다', (e && e.message) || ''); }
+}
+window.msaCorpStatus = msaCorpStatus;
+
 // ── 설정값 ────────────────────────────────────────────────────
 var _MSA_CFG_ROWS = [
   ['deposit_amount',  '다이닝 예치금',        '결제 수단과 무관'],
@@ -31826,7 +32054,9 @@ var _MSA_CFG_ROWS = [
   ['guest_warn_days', '만료 알림(일 전)',     ''],
   ['offer_days',      '오퍼 유효(일)',        ''],
   ['referral_days',   '추천권 유효(일)',      ''],
-  ['referral_per_year','추천권 연 매수',      '']
+  ['referral_per_year','추천권 연 매수',      ''],
+  ['corp_slots',      '법인 슬롯',            '「법인 N사 한정」에 적힌다'],
+  ['corp_deposit_ratio','법인 예치금 비율(%)', '']
 ];
 async function _msaLoadCfg(){
   var b = document.getElementById('msaBody');
@@ -41461,7 +41691,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.02-o';
+var TAAM_WEB_BUILD = '2026.09.02-r';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -58188,6 +58418,76 @@ function mpMembershipTap(){
   if(typeof openMshipScreen === 'function') openMshipScreen();
 }
 window.mpMembershipTap = mpMembershipTap;
+
+// ══════════════════════════════════════════════════════════════
+// 추천권 (2026-09-02) — M·T 회원의 마이페이지 카드
+// ══════════════════════════════════════════════════════════════
+// ⚠ 매수는 앱이 세지 않는다. 서버가 그 해 발급분을 세어 막는다 —
+//   앱에서 세면 RPC 를 두 번 부르면 그만이다.
+var _mpRef = null;
+function _mpRefUrl(code){ return _kskOrigin() + '/ref/?c=' + encodeURIComponent(code); }
+function _mpRefLabel(it){
+  if(it.status === 'applied') return ['심사 신청함', '#2c6b47'];
+  if(it.expired)              return ['기간 지남', '#9a948a'];
+  if(it.status === 'opened')  return ['열어봄', '#2C5AA0'];
+  return ['보내기 전', '#79736a'];
+}
+async function _mpPaintRef(grade){
+  var el = document.getElementById('mpRefCard');
+  if(!el) return;
+  var g = String(grade || '').toUpperCase();
+  if(g !== 'M' && g !== 'T'){ el.style.display = 'none'; return; }
+  var d = null;
+  try {
+    var r = await window.sb.rpc('taam_ref_mine');
+    if(!r.error) d = r.data;
+  } catch(e){}
+  if(!d){ el.style.display = 'none'; return; }   // 못 읽으면 아무 말도 안 한다
+  _mpRef = d;
+  var h = '<div style="display:flex;align-items:baseline;gap:9px;">'
+        + '<div style="font-family:var(--font-main);font-size:13.5px;font-weight:800;color:#1a1a18;">나의 추천권</div>'
+        + '<div style="margin-left:auto;font-family:var(--font-main);font-size:10.5px;font-weight:800;'
+        +   'padding:2px 9px;border-radius:999px;background:#f3efe7;color:#5C0A14;">'
+        +   (d.left || 0) + '매 보유</div></div>'
+        + '<div style="margin-top:5px;font-family:var(--font-main);font-size:11.5px;color:#79736a;line-height:1.7;">'
+        + '추천권은 연 ' + (d.max || 2) + '매 발급되며, 추천받은 분은 <b>심사를 거쳐</b> 합류합니다.</div>';
+  (d.items || []).forEach(function(it){
+    var lb = _mpRefLabel(it);
+    h += '<div style="display:flex;align-items:center;gap:8px;margin-top:9px;padding-top:9px;'
+       +   'border-top:1px solid #f2efe8;font-family:var(--font-main);min-width:0;">'
+       + '<span style="font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#1a1a18;'
+       +   'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + _kskEsc(it.code) + '</span>'
+       + '<span style="margin-left:auto;font-size:10.5px;font-weight:700;color:' + lb[1] + ';'
+       +   'white-space:nowrap;">' + lb[0] + '</span>'
+       + (it.status === 'applied' || it.expired ? ''
+          : '<button class="ksk-btn ghost sm" style="padding:6px 10px;font-size:11px" '
+            + 'onclick="mpRefShare(\'' + it.code + '\')">링크</button>')
+       + '</div>';
+  });
+  if((d.left || 0) > 0){
+    h += '<button class="ksk-btn" style="width:100%;margin-top:11px;padding:12px;font-size:12.5px" '
+       + 'onclick="mpRefIssue()">추천권 보내기</button>';
+  }
+  el.innerHTML = h;
+  el.style.display = '';
+}
+async function mpRefIssue(){
+  try {
+    var r = await window.sb.rpc('taam_ref_issue');
+    if(r.error) throw r.error;
+    var d = r.data || {};
+    // 만들자마자 링크를 손에 쥐여 준다 — 만들어 놓고 다시 찾게 하지 않는다
+    _kskClip(_mpRefUrl(d.code), '추천 링크를 복사했습니다 · ' + (d.max - d.used) + '매 남음');
+    _mpPaintRef(_currentUserGrade);
+  } catch(e){
+    var m = (e && e.message) || '';
+    if(/does not exist|schema cache/i.test(m))
+      showToast('⚠','아직 준비 안 됨','sql/membership_referral.sql 을 실행해야 합니다');
+    else showToast('⚠','발급하지 못했습니다', m);
+  }
+}
+function mpRefShare(code){ _kskClip(_mpRefUrl(code), '추천 링크를 복사했습니다'); }
+window.mpRefIssue = mpRefIssue; window.mpRefShare = mpRefShare;
 
 // ══════════════════════════════════════════════════════════════
 // 멤버십 설정값 (2026-09-02) — 금액·기간을 코드에 박지 않는다

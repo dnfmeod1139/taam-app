@@ -243,6 +243,45 @@ const { chromium } = require('playwright-core');
     await window._mpPaintGuest('M'); await sleep(60);
     ok('M 회원에게는 게스트 줄이 없다', gl.style.display === 'none');
 
+    // ── ⑥-b 추천권 카드 ──────────────────────────────────────
+    window.sb.rpc = (fn) => fn === 'taam_ref_mine'
+      ? Promise.resolve({ data: { year:2026, max:2, used:2, left:0, items:[
+          { id:'r1', code:'TAAM-2026-AB12', status:'opened', expired:false },
+          { id:'r2', code:'TAAM-2026-CD34', status:'applied', expired:false }
+        ] }, error: null })
+      : Promise.resolve({ data: null, error: null });
+    await window._mpPaintRef('M'); await sleep(120);
+    const rc = document.getElementById('mpRefCard');
+    ok('M 회원에게 추천권 카드가 보인다', rc.style.display !== 'none');
+    ok('남은 매수를 적는다', rc.textContent.indexOf('0매 보유') >= 0);
+    ok('가입 보장이 아니라 심사라고 적는다 ⭐', rc.textContent.indexOf('심사를 거쳐') >= 0);
+    // 「보냈는데 소식이 없다」와 「열어는 봤다」는 전혀 다른 정보다
+    ok('장마다 상태를 적는다 ⭐',
+       rc.textContent.indexOf('열어봄') >= 0 && rc.textContent.indexOf('심사 신청함') >= 0);
+    ok('다 썼으면 보내기 버튼이 없다', rc.innerHTML.indexOf('mpRefIssue()') < 0);
+    ok('쓴 코드에는 링크 버튼이 없다',
+       (rc.innerHTML.match(/mpRefShare/g) || []).length === 1);
+
+    // 남은 게 있으면 발급 버튼
+    window.sb.rpc = (fn) => fn === 'taam_ref_mine'
+      ? Promise.resolve({ data: { year:2026, max:2, used:0, left:2, items:[] }, error: null })
+      : Promise.resolve({ data: { ok:true, code:'TAAM-2026-EF56', used:1, max:2 }, error: null });
+    await window._mpPaintRef('M'); await sleep(120);
+    ok('남았으면 보내기 버튼', rc.innerHTML.indexOf('mpRefIssue()') >= 0);
+    let copied2 = null;
+    navigator.clipboard.writeText = (t) => { copied2 = t; return Promise.resolve(); };
+    await window.mpRefIssue(); await sleep(200);
+    ok('발급하면 링크를 바로 준다 ⭐',
+       copied2 && copied2.indexOf('/ref/?c=TAAM-2026-EF56') >= 0);
+
+    // 게스트에게는 아예 안 그린다
+    await window._mpPaintRef('A'); await sleep(80);
+    ok('게스트에게는 추천권 카드가 없다 ⭐', rc.style.display === 'none');
+    // 서버가 없으면 조용히 숨긴다
+    window.sb.rpc = () => Promise.resolve({ data:null, error:{ message:'does not exist' } });
+    await window._mpPaintRef('M'); await sleep(80);
+    ok('서버가 없으면 조용히 숨긴다', rc.style.display === 'none');
+
     // ── ⑦ 3개 국어 ───────────────────────────────────────────
     const T = window.TRANSLATIONS;
     ['ko','en','ja'].forEach(function(L){
