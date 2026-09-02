@@ -32,6 +32,10 @@ const { chromium } = require('playwright-core');
     window.sb = {
       rpc: (fn, a) => { rpc.push([fn, a]);
         if (fn === 'taam_mship_my_application') return Promise.resolve({ data: null, error: null });
+        if (fn === 'taam_mship_settings') return Promise.resolve({ data: {
+          deposit_amount: 10125000, annual_fee: 1270000,
+          annual_fee_note: '금액 확정 전', guest_days: 90 }, error: null });
+        if (fn === 'taam_guest_state') return Promise.resolve({ data: null, error: null });
         return Promise.resolve({ data: { ok: true, already: false, id: 'x' }, error: null }); },
       from: () => ({ select: () => ({ eq: () => ({ maybeSingle: () =>
         Promise.resolve({ data: { capacity: 33, taken: 28 }, error: null }) }) }) })
@@ -42,9 +46,15 @@ const { chromium } = require('playwright-core');
     const scr = document.getElementById('mshipScreen');
     ok('멤버십 화면이 열린다', scr.style.display === 'flex');
     const txt = scr.textContent;
-    ok('1,125만이 적혀 있다', txt.indexOf('11,250,000') >= 0);
-    ok('예치금 90% 를 적는다',  txt.indexOf('10,125,000') >= 0);
-    ok('연회비 10% 를 적는다',  txt.indexOf('1,125,000') >= 0);
+    // ⚠ 금액은 설정값에서 온다. 연회비를 127만으로 넣었으니 총액은 1,139.5만이어야 한다.
+    ok('예치금을 설정값에서 읽는다 ⭐', txt.indexOf('10,125,000원') >= 0);
+    ok('연회비를 설정값에서 읽는다 ⭐', txt.indexOf('1,270,000원') >= 0);
+    ok('총액을 서버 값으로 더한다 ⭐',  txt.indexOf('11,395,000원') >= 0);
+    ok('미확정이라고 적어 준다',       txt.indexOf('금액 확정 전') >= 0);
+    // 퍼센트 문구는 전면 금지 — 예치금은 적립이 아니라 맡아 두는 돈이다
+    ok('90%·10% 가 없다 ⭐', !/9\s*0\s*%|1\s*0\s*%/.test(txt));
+    ok('금액이 번역에 안 박혀 있다 ⭐',
+       ['ko','en','ja'].every(L => !/11,250,000|10,125,000/.test(JSON.stringify(window.TRANSLATIONS[L].membership))));
     ok('연회비는 소멸이라고 말한다', txt.indexOf('환불되지 않습니다') >= 0);
     ok('사용 기한이 없다고 말한다',  txt.indexOf('사용 기한은 없습니다') >= 0);
     ok('12월 28일 연장을 말한다',    txt.indexOf('12월 28일') >= 0);
@@ -158,7 +168,66 @@ const { chromium } = require('playwright-core');
        && document.getElementById('maplGo').disabled === false);
     window.closeMshipApply();
 
-    // ── ⑥ 3개 국어 ───────────────────────────────────────────
+    // ── ⑥ 게스트 — 90일 한정 초대 ────────────────────────────
+    //   「일반 회원」이 아니라 「게스트」다. 무료지만 무기한이 아니다.
+    ok('A 등급의 이름은 게스트 ⭐', window._tierLabel('A') === '게스트');
+    ok('M·T 이름은 그대로', window._tierLabel('M') === 'M 등급' && window._tierLabel('T') === 'T 등급');
+
+    // 잠금 팝업 — 닫기만 있는 팝업 금지. 심사 신청이 먼저다.
+    window._currentUserGrade = 'A';
+    window._currentRole = 'user';
+    document.getElementById('tierLockModal')?.remove();
+    window.showTierLockPopup({ minTier: '' }); await sleep(100);
+    const lock = document.getElementById('tierLockModal');
+    ok('게스트 잠금 팝업이 뜬다', !!lock);
+    ok('「멤버십 전용입니다」라고 적는다', !!lock && lock.textContent.indexOf('멤버십 전용입니다') >= 0);
+    ok('「정원 33인 · 심사제」를 적는다', !!lock && lock.textContent.indexOf('33인') >= 0
+                                                  && lock.textContent.indexOf('심사제') >= 0);
+    ok('심사 신청 버튼이 먼저다 ⭐', !!lock && !!lock.querySelector('#tlkApply'));
+    ok('멤버십 안내도 갈 수 있다',   !!lock && !!lock.querySelector('#tlkMship'));
+    ok('내 등급을 게스트라고 적는다', !!lock && lock.textContent.indexOf('게스트') >= 0);
+    let applied = 0;
+    const realApply = window.openMshipApply;
+    window.openMshipApply = () => { applied++; };
+    lock.querySelector('#tlkApply').click(); await sleep(80);
+    ok('누르면 심사 신청으로 바로 간다 ⭐ (두 번 안 누른다)', applied === 1);
+    ok('누르면 팝업이 닫힌다', !document.getElementById('tierLockModal'));
+    window.openMshipApply = realApply;
+
+    // My Page — 게스트에게 남은 기한과 갈 곳을 준다
+    window.sb.rpc = (fn) => {
+      if (fn === 'taam_guest_state') return Promise.resolve({ data: {
+        is_guest: true, expired: false, warn: false, days_left: 42, status: 'active' }, error: null });
+      return Promise.resolve({ data: null, error: null });
+    };
+    await window._mpPaintGuest('A'); await sleep(80);
+    const gl = document.getElementById('mpGuestLine');
+    ok('게스트 줄이 보인다', !!gl && gl.style.display !== 'none');
+    ok('남은 날을 적는다 (서버 값)', !!gl && gl.textContent.indexOf('42') >= 0);
+
+    window.sb.rpc = (fn) => fn === 'taam_guest_state'
+      ? Promise.resolve({ data: { is_guest: true, expired: false, warn: true, days_left: 5 }, error: null })
+      : Promise.resolve({ data: null, error: null });
+    await window._mpPaintGuest('A'); await sleep(60);
+    ok('D-7 이면 재촉한다', gl.textContent.indexOf('5일') >= 0 && gl.textContent.indexOf('심사') >= 0);
+
+    window.sb.rpc = (fn) => fn === 'taam_guest_state'
+      ? Promise.resolve({ data: { is_guest: true, expired: true, days_left: 0 }, error: null })
+      : Promise.resolve({ data: null, error: null });
+    await window._mpPaintGuest('A'); await sleep(60);
+    ok('만료면 종료됐다고 말한다 ⭐', gl.textContent.indexOf('종료') >= 0);
+    ok('만료돼도 갈 길을 준다',
+       gl.textContent.indexOf('심사') >= 0 || gl.textContent.indexOf('추천') >= 0);
+
+    // 서버가 답을 못 주면 날짜를 지어내지 않는다
+    window.sb.rpc = () => Promise.resolve({ data: null, error: { message: 'x' } });
+    await window._mpPaintGuest('A'); await sleep(60);
+    ok('서버가 없으면 날짜를 지어내지 않는다 ⭐', !/\d+일/.test(gl.textContent));
+
+    await window._mpPaintGuest('M'); await sleep(60);
+    ok('M 회원에게는 게스트 줄이 없다', gl.style.display === 'none');
+
+    // ── ⑦ 3개 국어 ───────────────────────────────────────────
     const T = window.TRANSLATIONS;
     ['ko','en','ja'].forEach(function(L){
       const m = T[L] && T[L].mapl, ms = T[L] && T[L].membership;

@@ -84,8 +84,12 @@ const { chromium } = require('playwright-core');
     await sleep(80);
     let el = document.getElementById('tierLockModal');
     ok('일반 회원 — 제한 없는 티켓에도 팝업이 뜬다 ⭐', !!el);
-    ok('「멤버십 전용」이라고 적는다',
-       !!el && el.textContent.indexOf('유료 멤버십 회원') >= 0);
+    // 통합 스펙(2026-09-02): 제목 「멤버십 전용입니다」 / 본문 「정원 33인 · 심사제」
+    ok('「멤버십 전용입니다」라고 적는다',
+       !!el && el.textContent.indexOf('멤버십 전용입니다') >= 0);
+    ok('정원과 심사제를 적는다',
+       !!el && el.textContent.indexOf('33인') >= 0 && el.textContent.indexOf('심사제') >= 0);
+    ok('심사 신청 버튼이 있다 ⭐', !!el && !!el.querySelector('#tlkApply'));
     ok('멤버십 안내 버튼이 있다', !!el && !!el.querySelector('#tlkMship'));
     ok('멤버십이 주는 것을 적어 준다',
        !!el && el.textContent.indexOf('셰프 계보도') >= 0);
