@@ -505,6 +505,71 @@ const { chromium } = require('playwright-core');
     ok('원화 기준도 같이 보인다',
        document.getElementById('kskBody').textContent.indexOf('₩1,051,875') >= 0);
 
+    // ── ⑩-c 회원 통화를 자동으로 잡는다 ──────────────────────
+    //   해외 손님이 섞인 자리에서 「누가 해외였더라」를 기억해 누르는 건
+    //   반드시 틀린다. profiles.currency 가 이미 답을 갖고 있다.
+    DB.charges = [];
+    window.__buyers = [
+      { ticket_id:'tk1', user_id:'u1', name:'김우종', phone:'01011112222', pax:4, currency:'KRW' },
+      { ticket_id:'tk2', user_id:'u2', name:'Tanaka', phone:'01033334444', pax:2, currency:'JPY' },
+      { ticket_id:'tk3', user_id:'u3', name:'Smith',  phone:null,          pax:2, currency:'USD' }
+    ];
+    await window.kskOpenEvent('e1'); await sleep(180);
+    await window.kskSendOpen(); await sleep(320);
+    let segs = document.querySelectorAll('#ksdBody .ksd-row .ksd-cur .seg');
+    let on = [].map.call(segs, sg => sg.querySelector('span.on').textContent);
+    ok('회원 통화가 그대로 잡힌다 (₩ ¥ $)', on.join('') === '₩¥$');
+    ok('해외 회원에 표시가 붙는다',
+       document.getElementById('ksdBody').textContent.indexOf('해외 ¥') >= 0
+       && document.getElementById('ksdBody').textContent.indexOf('해외 $') >= 0);
+    ok('국내 회원에는 안 붙는다',
+       (document.getElementById('ksdBody').textContent.match(/해외 /g) || []).length === 2);
+
+    // 환율이 없으면 원화로 두고 알려준다 — 없는 환율로 금액을 지어내지 않는다
+    DB.events[0].fx_usd = null;
+    await window.kskOpenEvent('e1'); await sleep(180);
+    window.__toast = null;
+    await window.kskSendOpen(); await sleep(320);
+    segs = document.querySelectorAll('#ksdBody .ksd-row .ksd-cur .seg');
+    on = [].map.call(segs, sg => sg.querySelector('span.on').textContent);
+    ok('환율 없는 통화는 원화로 둔다', on.join('') === '₩¥₩');
+    ok('몇 명이 그랬는지 알려준다',
+       window.__toast && String(window.__toast[1]).indexOf('원화로 잡았습니다') >= 0);
+    ok('해외 표시는 그대로 (지정은 지정이다)',
+       document.getElementById('ksdBody').textContent.indexOf('해외 $') >= 0);
+    DB.events[0].fx_usd = '1360.5000';
+
+    // 전부 한 통화로
+    await window.kskOpenEvent('e1'); await sleep(180);
+    await window.kskSendOpen(); await sleep(320);
+    ok('일괄 전환 버튼이 있다', !!document.querySelector('#ksdBody .ksd-all'));
+    window.kskSendCurAll('JPY'); await sleep(120);
+    segs = document.querySelectorAll('#ksdBody .ksd-row .ksd-cur .seg');
+    ok('전부 엔으로 바뀐다',
+       [].every.call(segs, sg => sg.querySelector('span.on').textContent === '¥'));
+    DB.events[0].fx_rate = null;
+    await window.kskOpenEvent('e1'); await sleep(180);
+    await window.kskSendOpen(); await sleep(320);
+    window.__toast = null;
+    window.kskSendCurAll('JPY'); await sleep(100);
+    ok('환율 없으면 일괄 전환도 막는다',
+       window.__toast && window.__toast[1] === '엔 환율 먼저');
+    DB.events[0].fx_rate = '9.3500';
+    window.__buyers = [
+      { ticket_id:'tk1', user_id:'u1', name:'윤태호', phone:'010-1111-2222', pax:2 },
+      { ticket_id:'tk2', user_id:'u2', name:'김우종', phone:'01033334444', pax:4 },
+      { ticket_id:'tk3', user_id:'u3', name:'박지연', phone:null, pax:2 }
+    ];
+    DB.charges = [
+      { id:'c1', event_id:'e1', team_id:'t2', label:'Y様', amount_krw:1122000,
+        status:'paid', token:'aa'.repeat(16), user_id:'u1' }
+    ];
+    await window.kskOpenEvent('e1'); await sleep(180);
+    await window.kskSendOpen(); await sleep(320);
+    ok('통화 미지정 회원은 원화로 (모르면 원화)',
+       [].every.call(document.querySelectorAll('#ksdBody .ksd-row .ksd-cur .seg'),
+                     sg => sg.querySelector('span.on').textContent === '₩'));
+
     // ── ⑪ 수동 입력 전환 ─────────────────────────────────────
     await window.kskSendOpen(); await sleep(300);
     ok('처음엔 티켓 모드', document.getElementById('ksdBody').textContent.indexOf('판매 티켓') >= 0);
