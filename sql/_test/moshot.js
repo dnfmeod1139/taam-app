@@ -49,7 +49,7 @@ const { chromium } = require('playwright-core');
       adm.querySelectorAll('.admin-menu-item'), e => (e.getAttribute('onclick')||'').indexOf('openMemberPwdModal') >= 0);
     ok('접으면 비밀번호 변경은 숨는다', pw && getComputedStyle(pw).display === 'none');
     // 메뉴가 늘면 이 숫자도 같이 는다 — 접어도 **훑기는 줄지 않는다** 가 요점이다
-    ok('접어도 훑기는 그대로', _moScan().length === 52);
+    ok('접어도 훑기는 그대로', _moScan().length === 53);   // 2026-09-02: 「멤버십 · 게스트」 추가
     adm.classList.remove('ac-lean');
 
     // 묶음이 아홉이고 이름이 새 것인가
