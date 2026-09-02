@@ -2,7 +2,10 @@ drop schema if exists public cascade; create schema public;
 create schema if not exists auth;
 create table auth.users(id uuid primary key);
 -- 실측 타입 그대로
-create table public.profiles(id uuid primary key, role text, display_name text);
+-- ⚠ 라이브 profiles 에 있는 것과 맞춘다. 없으면 「로컬에서만 나는 오류」가 나고,
+--   그걸 코드 문제로 착각해 멀쩡한 쿼리를 고치게 된다 (실제로 그랬다).
+create table public.profiles(id uuid primary key, role text, display_name text,
+  phone text, created_at timestamptz default now());
 create table public.restaurants(id uuid primary key default gen_random_uuid(), name text);
 create table public.restaurant_admins(user_id uuid, restaurant_id text);
 create table public.reservation_requests(

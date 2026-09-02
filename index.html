@@ -9921,7 +9921,11 @@ window.closePromoCarousel = function(){
 
     <!-- 🆕 v1.53.11 2026.05.28: 회원 가입일 / 종료일 표시 (profiles.created_at, profiles.member_until) -->
     <!-- 🆕 v1.53.38 2026.06.01: 회원 등급(M/T) 배지 추가 -->
-    <div id="mpMembershipPeriod" style="margin:14px 28px 6px;padding:12px 14px;background:#fbf9f5;border:1px solid #ece8df;border-radius:10px;display:flex;align-items:center;justify-content:space-between;gap:12px;">
+    <!-- 🆕 2026-09-02: 누를 수 있게 했다. 종전엔 표시 전용이라
+         ① M 회원이 자기 멤버십 규칙을 볼 곳이 없었고
+         ② 게스트에게는 배지조차 안 떠서 「회원 자격」이 빈 칸이었다 —
+            자기가 무슨 등급인지도, 뭘 하면 되는지도 알 수 없었다. -->
+    <div id="mpMembershipPeriod" onclick="mpMembershipTap()" style="margin:14px 28px 6px;padding:12px 14px;background:#fbf9f5;border:1px solid #ece8df;border-radius:10px;display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer;">
       <div style="flex:1;min-width:0;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
           <div style="font-family:var(--font-main);font-size:9.5px;font-weight:700;color:#999;letter-spacing:.12em;text-transform:uppercase;">회원 자격</div>
@@ -9938,7 +9942,10 @@ window.closePromoCarousel = function(){
           </div>
         </div>
         <div id="mpMemberPromoLabel" style="font-family:var(--font-main);font-size:9.5px;color:#c8a96e;font-weight:600;margin-top:5px;letter-spacing:.04em;display:none;">★ 프로모션 적용 (~2027.12.31)</div>
+        <!-- 게스트에게만 뜨는 줄. 남은 기한과 갈 곳을 같이 준다 -->
+        <div id="mpGuestLine" style="display:none;font-family:var(--font-main);font-size:10.5px;line-height:1.65;color:#79736a;margin-top:6px;"></div>
       </div>
+      <div style="flex:none;font-size:16px;color:#c5bfb2;">›</div>
     </div>
 
     <!-- Deposit -->
@@ -11895,7 +11902,7 @@ window.closePromoCarousel = function(){
     <!-- 🆕 2026.08: 티켓 이용 등급 제한 (M/T/A) — 위 '우선 공개'(시간차)와 독립 -->
     <div class="rp-field">
       <div class="tu-section-title">티켓 이용 등급</div>
-      <div style="font-family:var(--font-main);font-size:11px;color:#888;margin-bottom:10px;">「일반공개」만 일반 회원(A)이 살 수 있습니다. 나머지는 전부 유료 회원 전용입니다.</div>
+      <div style="font-family:var(--font-main);font-size:11px;color:#888;margin-bottom:10px;">「일반공개」만 게스트(A)가 살 수 있습니다. 나머지는 전부 유료 회원 전용입니다.</div>
       <div style="display:flex;gap:6px;">
         <button type="button" class="tu-tier-btn on" data-tier="" id="tuMinTierAll" onclick="tuSetMinTier('')">회원 전용</button>
         <button type="button" class="tu-tier-btn" data-tier="A" id="tuMinTierA" onclick="tuSetMinTier('A')">일반공개</button>
@@ -12303,27 +12310,30 @@ window.closePromoCarousel = function(){
       </div>
       <div class="ms-cs">
         <div class="ms-cs-title" data-i18n="membership.fee">■ 멤버십 · 1년</div>
-        <div class="ms-cs-amt" data-i18n="membership.fee_m">11,250,000원</div>
+        <!-- ⚠ 금액을 여기 박지 않는다. 연회비가 아직 안 정해졌고(과세 구분 대기),
+             정하는 날 KO·EN·JA 세 곳을 고치고 배포까지 해야 한다.
+             membership_settings 에서 읽어 채운다 — 어드민에서 바꾸면 끝이다. -->
+        <div class="ms-cs-amt" id="mshipTotalAmt">—</div>
       </div>
-      <!-- 구성 — 종전엔 「연회비 1,125만 + 캐시백 90%」라고 적었는데,
-           예치금은 적립이 아니라 **맡아 두는 돈**이다(쓰면 그만큼 줄고 남으면 돌려준다).
-           적립으로 적으면 환불 얘기가 나올 때 말이 어긋난다. -->
+      <!-- 구성 — 퍼센트로 적지 않는다. 「90%」는 적립처럼 읽히는데
+           예치금은 적립이 아니라 **맡아 두는 돈**이다(쓰면 줄고 남으면 돌려준다).
+           금액으로만 적으면 그 오해가 생길 자리가 없다. -->
       <div class="ms-cs">
         <div class="ms-cs-title" data-i18n="membership.compose">■ 구성</div>
         <div class="ms-cs-val">
-          <span data-i18n="membership.compose_dep">다이닝 예치금 90%</span>
-          <span class="ms-cs-amt-sub" data-i18n="membership.compose_dep_sub">10,125,000원 — 티켓·다이닝 결제에 사용</span>
+          <span data-i18n="membership.compose_dep">다이닝 예치금</span>
+          <span class="ms-cs-amt-sub"><span id="mshipDepAmt">—</span> <span data-i18n="membership.compose_dep_sub">티켓·다이닝 결제에 사용, 종료 시 잔액 전액 환불</span></span>
         </div>
         <div class="ms-cs-val" style="margin-top:7px;">
-          <span data-i18n="membership.compose_fee">연회비 10%</span>
-          <span class="ms-cs-amt-sub" data-i18n="membership.compose_fee_sub">1,125,000원 — 소멸, 환불되지 않습니다</span>
+          <span data-i18n="membership.compose_fee">연회비</span>
+          <span class="ms-cs-amt-sub"><span id="mshipFeeAmt">—</span> <span data-i18n="membership.compose_fee_sub">소멸, 환불되지 않습니다</span><span id="mshipFeeNote" style="display:none;color:#c8a96e;"></span></span>
         </div>
       </div>
       <div class="ms-cs">
         <div class="ms-cs-title" data-i18n="membership.rules">■ 운영 규칙</div>
         <div class="ms-bn">
           <div class="ms-bn-item"><div class="ms-bn-detail" data-i18n="membership.rule_1">예치금은 티켓 구매와 다이닝 결제에 사용됩니다. 사용 기한은 없습니다.</div></div>
-          <div class="ms-bn-item"><div class="ms-bn-detail" data-i18n="membership.rule_2">매년 12월 28일 연장 여부를 확인합니다. 연장 시 사용분과 연회비를 채워 1,125만원으로 다시 시작합니다.</div></div>
+          <div class="ms-bn-item"><div class="ms-bn-detail" data-i18n="membership.rule_2">매년 12월 28일 연장 여부를 확인합니다. 연장 시 사용한 예치금과 연회비를 채워 다시 시작합니다.</div></div>
           <div class="ms-bn-item"><div class="ms-bn-detail" data-i18n="membership.rule_3">멤버십 종료 시 남은 예치금은 전액 환불됩니다. 연회비는 환불되지 않습니다.</div></div>
         </div>
       </div>
@@ -19967,9 +19977,16 @@ function openMyPage(){
           badge.style.display = 'inline-block';
           badge.style.background = '#1a1a18';
           badge.textContent = 'T 등급';
+        } else if(grade === 'A'){
+          // 🆕 종전엔 여기서 배지를 숨겼다. 그래서 게스트가 보는 화면은
+          //   「회원 자격」이라고 적혀 있는데 **아무 자격도 안 적힌** 칸이었다.
+          badge.style.display = 'inline-block';
+          badge.style.background = '#79736a';
+          badge.textContent = '게스트';
         } else {
           badge.style.display = 'none';
         }
+        if(typeof _mpPaintGuest === 'function') _mpPaintGuest(grade);
       }).catch(function(){});
     }
   } catch(_te){}
@@ -41026,7 +41043,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.02-l';
+var TAAM_WEB_BUILD = '2026.09.02-m';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -45999,8 +46016,8 @@ function tuSetMinTier(tier){
     //   그리고 빈 값은 「전체 공개」가 아니라 **유료 회원 이상**이다.
     hint.textContent = tier === 'M' ? 'M 등급 회원만 이용할 수 있습니다'
       : tier === 'T' ? 'T · M 등급 회원이 이용할 수 있습니다'
-      : tier === 'A' ? '일반 회원을 포함해 누구나 구매할 수 있습니다'
-      : '유료 회원(T · M)만 구매할 수 있습니다 — 일반 회원은 막힙니다';
+      : tier === 'A' ? '게스트를 포함해 누구나 구매할 수 있습니다'
+      : '유료 회원(T · M)만 구매할 수 있습니다 — 게스트는 막힙니다';
   }
 }
 window.tuSetMinTier = tuSetMinTier;
@@ -46916,26 +46933,22 @@ var TRANSLATIONS = {
       cap_m:'총 33명 (한정 운영)',
       cap_t:'총 55명 (한정 운영)',
       fee:'■ 멤버십 · 1년',
-      fee_m:'11,250,000원',
       fee_t:'3,150,000원',
       compose:'■ 구성',
-      compose_dep:'다이닝 예치금 90%',
-      compose_dep_sub:'10,125,000원 — 티켓·다이닝 결제에 사용',
-      compose_fee:'연회비 10%',
-      compose_fee_sub:'1,125,000원 — 소멸, 환불되지 않습니다',
+      compose_dep:'다이닝 예치금',
+      compose_dep_sub:'티켓·다이닝 결제에 사용, 종료 시 잔액 전액 환불',
+      compose_fee:'연회비',
+      compose_fee_sub:'소멸, 환불되지 않습니다',
       rules:'■ 운영 규칙',
       rule_1:'예치금은 티켓 구매와 다이닝 결제에 사용됩니다. 사용 기한은 없습니다.',
-      rule_2:'매년 12월 28일 연장 여부를 확인합니다. 연장 시 사용분과 연회비를 채워 1,125만원으로 다시 시작합니다.',
+      rule_2:'매년 12월 28일 연장 여부를 확인합니다. 연장 시 사용한 예치금과 연회비를 채워 다시 시작합니다.',
       rule_3:'멤버십 종료 시 남은 예치금은 전액 환불됩니다. 연회비는 환불되지 않습니다.',
       cta_apply:'심사 신청하기',
       cta_apply_note:'모든 신청은 개별 심사를 거칩니다.<br>심사 결과는 신청하신 연락처로 안내드립니다.',
       cashback:'■ 캐시백 혜택',
-      cashback_m:'연회비의 90% 적립',
-      cashback_m_sub:'10,125,000원 상당 앱 내 예치금 지급',
       cashback_t:'연회비의 80% 적립',
       cashback_t_sub:'2,520,000원 상당 앱 내 예치금 지급',
       effective:'■ 실질 비용',
-      effective_m:'약 1,125,000원',
       effective_t:'약 630,000원',
       effective_note:'(실소멸 비용)',
       benefits:'■ 주요 혜택',
@@ -47799,26 +47812,22 @@ var TRANSLATIONS = {
       cap_m:'Limited to 33 members',
       cap_t:'Limited to 55 members',
       fee:'■ MEMBERSHIP · 1 YEAR',
-      fee_m:'KRW 11,250,000',
       fee_t:'KRW 3,150,000',
       compose:'■ Breakdown',
-      compose_dep:'Dining deposit 90%',
-      compose_dep_sub:'KRW 10,125,000 — for tickets and dining',
-      compose_fee:'Annual fee 10%',
-      compose_fee_sub:'KRW 1,125,000 — non-refundable',
+      compose_dep:'Dining deposit',
+      compose_dep_sub:'for tickets and dining; any balance is refunded in full when the membership ends',
+      compose_fee:'Annual fee',
+      compose_fee_sub:'non-refundable',
       rules:'■ How it works',
       rule_1:'The deposit is used for tickets and dining. It does not expire.',
-      rule_2:'Renewal is confirmed each year on 28 December. On renewal you top up what you used plus the annual fee, returning to KRW 11,250,000.',
+      rule_2:'Renewal is confirmed each year on 28 December. On renewal you top up the deposit you used plus the annual fee, and start again.',
       rule_3:'When the membership ends, any remaining deposit is refunded in full. The annual fee is not refunded.',
       cta_apply:'Apply for review',
       cta_apply_note:'Every application is reviewed individually.<br>We will contact you at the number you provide.',
       cashback:'■ CASHBACK BENEFIT',
-      cashback_m:'90% of the annual fee is credited back',
-      cashback_m_sub:'KRW 10,125,000 equivalent provided as in-app deposit balance',
       cashback_t:'80% of the annual fee is credited back',
       cashback_t_sub:'KRW 2,520,000 equivalent provided as in-app deposit balance',
       effective:'■ EFFECTIVE COST',
-      effective_m:'Approximately KRW 1,125,000',
       effective_t:'Approximately KRW 630,000',
       effective_note:'(actual non-refundable membership cost)',
       benefits:'■ KEY BENEFITS',
@@ -48750,26 +48759,22 @@ TRANSLATIONS.ja = {
     cap_m:'33名 (限定運営)',
     cap_t:'55名 (限定運営)',
     fee:'■ メンバーシップ · 1年',
-    fee_m:'11,250,000ウォン',
     fee_t:'3,150,000ウォン',
     compose:'■ 内訳',
-    compose_dep:'ダイニング預り金 90%',
-    compose_dep_sub:'10,125,000ウォン — チケット・ダイニングのお支払いに',
-    compose_fee:'年会費 10%',
-    compose_fee_sub:'1,125,000ウォン — 消滅・返金不可',
+    compose_dep:'ダイニング預り金',
+    compose_dep_sub:'チケット・ダイニングのお支払いに。終了時は残額を全額返金いたします',
+    compose_fee:'年会費',
+    compose_fee_sub:'消滅・返金不可',
     rules:'■ 運営ルール',
     rule_1:'預り金はチケット購入とダイニングのお支払いに使えます。使用期限はありません。',
-    rule_2:'毎年12月28日に更新の可否を確認します。更新時は使用分と年会費を補填し、11,250,000ウォンから再開します。',
+    rule_2:'毎年12月28日に更新の可否を確認します。更新時は使用した預り金と年会費を補填し、あらためて開始いたします。',
     rule_3:'メンバーシップ終了時、残りの預り金は全額返金されます。年会費は返金されません。',
     cta_apply:'審査を申し込む',
     cta_apply_note:'すべてのお申し込みは個別に審査いたします。<br>審査結果はご記入の連絡先にご案内します。',
     cashback:'■ キャッシュバック',
-    cashback_m:'年会費の90%還元',
-    cashback_m_sub:'10,125,000ウォン相当をアプリ内デポジットで付与',
     cashback_t:'年会費の80%還元',
     cashback_t_sub:'2,520,000ウォン相当をアプリ内デポジットで付与',
     effective:'■ 実質負担',
-    effective_m:'約1,125,000ウォン',
     effective_t:'約630,000ウォン',
     effective_note:'(実質消滅費用)',
     benefits:'■ 主な特典',
@@ -56541,9 +56546,12 @@ function tcGetTOpenDatetime(t) {
 // ══════════════════════════════════════════════════════════════
 var TIER_RANK = { M:3, T:2, A:1 };
 function _tierRank(g){ return TIER_RANK[String(g||'').toUpperCase()] || 0; }
+// 화면에 적는 등급 이름. ⚠ DB 값은 'A' 그대로 두고 **이름만** 게스트다 —
+//   'G' 로 바꾸면 invite_codes 제약·티켓 가드·기존 회원 데이터까지 옮겨야 하는데,
+//   얻는 게 이름뿐이라 그 위험을 지지 않는다.
 function _tierLabel(g){
   var k = String(g||'').toUpperCase();
-  return k === 'M' ? 'M 등급' : (k === 'T' ? 'T 등급' : (k === 'A' ? 'A 등급' : '전체 공개'));
+  return k === 'M' ? 'M 등급' : (k === 'T' ? 'T 등급' : (k === 'A' ? '게스트' : '전체 공개'));
 }
 // 현재 사용자 등급 ('M'|'T'|'A'|null).
 //
@@ -56613,9 +56621,10 @@ function showTierLockPopup(t){
   el.innerHTML =
     '<div style="background:#fff;border-radius:20px;width:100%;max-width:330px;padding:30px 24px 22px;text-align:center;font-family:var(--font-main);">'
     + '<div style="width:54px;height:54px;margin:0 auto 14px;border-radius:50%;background:#faf6ef;border:1.5px solid #e8dcc4;display:flex;align-items:center;justify-content:center;font-size:24px;">🔒</div>'
-    + '<div style="font-size:17px;font-weight:800;color:#1a1a18;margin-bottom:8px;">' + allowTxt + ' 전용 티켓</div>'
+    + '<div style="font-size:17px;font-weight:800;color:#1a1a18;margin-bottom:8px;">'
+      + (free ? '멤버십 전용입니다' : allowTxt + ' 전용 티켓') + '</div>'
     + '<div style="font-size:13px;color:#777;line-height:1.75;margin-bottom:18px;">'
-      + (free ? '이 티켓은 <b style="color:#5C0A14;">유료 멤버십 회원</b>만<br>구매하실 수 있습니다.'
+      + (free ? '정원 <b style="color:#5C0A14;">33인</b> · 심사제'
               : '이 티켓은 <b style="color:#5C0A14;">' + allowTxt + '</b> 회원만<br>이용하실 수 있습니다.')
     + '</div>'
     + '<div style="background:#faf8f5;border-radius:12px;padding:12px 14px;margin-bottom:'
@@ -56630,9 +56639,11 @@ function showTierLockPopup(t){
          + 'background:#fbf9f5;border:1px solid #ece8df;border-radius:12px;padding:13px 15px;">'
          + '멤버십 회원이 되시면<br>· 모든 티켓을 직접 예약하실 수 있습니다<br>'
          + '· 셰프 계보도와 컨텐츠가 열립니다<br>· 예치금으로 바로 결제하실 수 있습니다</div>'
-         + '<button id="tlkMship" style="width:100%;padding:15px;background:#5C0A14;border:none;'
-         + 'border-radius:12px;font-size:14px;font-weight:800;color:#fff;cursor:pointer;">멤버십 안내</button>'
-         + '<button id="tlkClose" style="width:100%;margin-top:8px;padding:13px;background:none;border:none;'
+         + '<button id="tlkApply" style="width:100%;padding:15px;background:#5C0A14;border:none;'
+         + 'border-radius:12px;font-size:14px;font-weight:800;color:#fff;cursor:pointer;">심사 신청하기</button>'
+         + '<button id="tlkMship" style="width:100%;margin-top:8px;padding:12px;background:none;border:none;'
+         + 'font-size:12.5px;font-weight:700;color:#5C0A14;cursor:pointer;">멤버십 안내</button>'
+         + '<button id="tlkClose" style="width:100%;margin-top:2px;padding:11px;background:none;border:none;'
          + 'font-size:12.5px;font-weight:700;color:#9a9486;cursor:pointer;">닫기</button>'
        : '<button id="tlkClose" style="width:100%;padding:14px;background:#1a1a18;border:none;'
          + 'border-radius:12px;font-size:10px;font-weight:800;letter-spacing:.2em;color:#fff;cursor:pointer;">확인</button>')
@@ -56640,6 +56651,12 @@ function showTierLockPopup(t){
   document.body.appendChild(el);
   var _cb = el.querySelector('#tlkClose');
   if(_cb) _cb.onclick = function(){ el.remove(); };
+  var _ab = el.querySelector('#tlkApply');
+  if(_ab) _ab.onclick = function(){
+    el.remove();
+    if(typeof openMshipApply === 'function') openMshipApply();
+    else if(typeof openMshipScreen === 'function') openMshipScreen();
+  };
   var _mb = el.querySelector('#tlkMship');
   if(_mb) _mb.onclick = function(){
     el.remove();
@@ -57551,6 +57568,7 @@ function openMshipScreen() {
   // 🆕 멤버십 화면 진입 시 등급 상태 새로고침 (B-3a)
   if (typeof _refreshUserGrade === 'function') _refreshUserGrade();
   if (typeof _mshipLoadSeats === 'function') _mshipLoadSeats();
+  if (typeof _mshipLoadCfg === 'function') _mshipLoadCfg().then(_mshipPaintAmounts);
 }
 function closeMshipScreen() {
   document.getElementById('mshipScreen').style.display = 'none';
@@ -57714,6 +57732,88 @@ async function mshipApplySubmit(){
 }
 window.openMshipApply = openMshipApply; window.closeMshipApply = closeMshipApply;
 window.mshipApplySubmit = mshipApplySubmit; window.mshipApplyPick = mshipApplyPick;
+
+// ══════════════════════════════════════════════════════════════
+// My Page 「회원 자격」 — 게스트에게 남은 기한과 갈 곳을 준다
+// ══════════════════════════════════════════════════════════════
+// ⚠ 남은 날짜를 앱이 세지 않는다. 서버(taam_guest_state)가 준 값만 적는다 —
+//   기기 시계를 돌려 놓으면 그만인 숫자로 「아직 괜찮다」를 보여주면 안 된다.
+var _mpGuest = null;
+async function _mpPaintGuest(grade){
+  var line = document.getElementById('mpGuestLine');
+  if(!line) return;
+  if(String(grade || '').toUpperCase() !== 'A'){ line.style.display = 'none'; return; }
+  var st = null;
+  try {
+    var r = await window.sb.rpc('taam_guest_state');
+    if(!r.error) st = r.data;
+  } catch(e){}
+  _mpGuest = st;
+  if(!st || !st.is_guest){
+    // 서버가 답을 못 주면 기한 얘기를 꺼내지 않는다. 틀린 날짜보다 낫다.
+    line.innerHTML = '초대 기간제 · 티켓 상세는 멤버십 회원만 볼 수 있습니다';
+    line.style.color = '#79736a'; line.style.display = '';
+    return;
+  }
+  if(st.expired){
+    line.innerHTML = '<b style="color:#9B1C1C;">초대가 종료되었습니다</b> — 심사 신청 또는 회원의 추천으로 다시 함께할 수 있습니다';
+  } else if(st.warn){
+    line.innerHTML = '<b style="color:#9a5116;">초대 종료까지 ' + st.days_left + '일</b> — 심사를 신청하시면 계속 함께할 수 있습니다';
+  } else if(st.days_left != null){
+    line.innerHTML = '초대 기간 <b>' + st.days_left + '일</b> 남음 · 눌러서 멤버십 안내를 보세요';
+  } else {
+    line.innerHTML = '초대 기간제 · 눌러서 멤버십 안내를 보세요';
+  }
+  line.style.display = '';
+}
+function mpMembershipTap(){
+  if(typeof openMshipScreen === 'function') openMshipScreen();
+}
+window.mpMembershipTap = mpMembershipTap;
+
+// ══════════════════════════════════════════════════════════════
+// 멤버십 설정값 (2026-09-02) — 금액·기간을 코드에 박지 않는다
+// ══════════════════════════════════════════════════════════════
+// 연회비는 아직 안 정해졌다(과세 127만 / 영세율 115만 대기). 번역에 숫자를
+// 박아 두면 정하는 날 KO·EN·JA 세 곳을 고치고 배포까지 해야 한다.
+// ⚠ 못 읽으면 화면에 금액을 안 적는다. 옛 숫자를 대신 적으면
+//   틀린 값을 「확정된 값」처럼 보여주게 된다 — 돈 얘기에서 제일 나쁘다.
+var _MSHIP_CFG = null;
+function _mshipWon(n){
+  var v = parseInt(n, 10);
+  if(!isFinite(v) || v <= 0) return '';
+  return v.toLocaleString('ko-KR') + '원';
+}
+async function _mshipLoadCfg(){
+  if(!window.sb) return null;
+  try {
+    var r = await window.sb.rpc('taam_mship_settings');
+    if(r.error || !r.data) return null;
+    _MSHIP_CFG = r.data;
+    return _MSHIP_CFG;
+  } catch(e){ return null; }
+}
+function _mshipPaintAmounts(){
+  var c = _MSHIP_CFG;
+  var dep = document.getElementById('mshipDepAmt');
+  var fee = document.getElementById('mshipFeeAmt');
+  var tot = document.getElementById('mshipTotalAmt');
+  var nt  = document.getElementById('mshipFeeNote');
+  if(!dep || !fee || !tot) return;
+  if(!c){ dep.textContent = fee.textContent = ''; tot.textContent = '—'; return; }
+  var d = parseInt(c.deposit_amount, 10) || 0;
+  var f = parseInt(c.annual_fee, 10) || 0;
+  // 구분 대시는 금액이 있을 때만. 없는데 붙이면 「— —」로 겹쳐 보인다.
+  dep.textContent = d > 0 ? (_mshipWon(d) + ' — ') : '';
+  fee.textContent = f > 0 ? (_mshipWon(f) + ' — ') : '';
+  tot.textContent = (d > 0 && f > 0) ? _mshipWon(d + f) : '—';
+  // 「금액 확정 전」 같은 한 줄. 비어 있으면 안 붙인다.
+  var note = (typeof c.annual_fee_note === 'string') ? c.annual_fee_note.trim() : '';
+  if(nt){
+    if(note){ nt.textContent = ' (' + note + ')'; nt.style.display = ''; }
+    else { nt.textContent = ''; nt.style.display = 'none'; }
+  }
+}
 
 // 잔여석 — 어드민이 정하는 값이다. 못 읽으면 아무 말도 안 한다.
 async function _mshipLoadSeats(){
