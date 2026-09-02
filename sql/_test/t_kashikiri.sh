@@ -249,5 +249,76 @@ hasnt "조 확정액(777777)은 안 나간다"   "777777" "$G3"
 hasnt "매장 지급액(888888)은 안 나간다" "888888" "$G3"
 hasnt "전화번호 컬럼은 여전히 없다"     "phone"  "$G3"
 
+
+echo "── ⑰ 보내기 — 지우지 않고 더한다 ──"
+$P -c "delete from public.kashikiri_charges;
+       update public.kashikiri_events set total_krw = null;" >/dev/null
+S1='[{"label":"김우종","phone":"010-1234-5678","amount_krw":1051875,"amount_jpy":112500},
+     {"label":"박지연","phone":"01098765432","amount_krw":1051875}]'
+ok "슈퍼어드민은 보낸다" OK \
+   "$(rc $SUP "select public.taam_kashikiri_send('e1111111-1111-4111-8111-111111111111','$S1'::jsonb);")"
+ok "회원은 못 보낸다" FAIL \
+   "$(rc $MEM "select public.taam_kashikiri_send('e1111111-1111-4111-8111-111111111111','$S1'::jsonb);")"
+ok "2건 생겼다" 2 "$(sudo_ "select count(*) from public.kashikiri_charges;")"
+ok "조 없이도 선다 (team_id 비어도 됨)" 2 \
+   "$(sudo_ "select count(*) from public.kashikiri_charges where team_id is null;")"
+ok "번호에서 하이픈을 걷어낸다" 01012345678 \
+   "$(sudo_ "select payer_phone from public.kashikiri_charges where label='김우종';")"
+ok "번호를 안 준 줄은 비워 둔다" 1 \
+   "$(sudo_ "select count(*) from public.kashikiri_charges where payer_phone is not null and label='박지연';")"
+
+S2='[{"label":"이상훈","amount_krw":500000}]'
+ok "한 명을 더 보낸다" OK \
+   "$(rc $SUP "select public.taam_kashikiri_send('e1111111-1111-4111-8111-111111111111','$S2'::jsonb);")"
+ok "앞 사람 링크는 살아 있다" 3 "$(sudo_ "select count(*) from public.kashikiri_charges;")"
+ok "김우종 토큰이 그대로다" 1 \
+   "$(sudo_ "select count(*) from public.kashikiri_charges where label='김우종' and status='pending';")"
+
+echo "── ⑱ 빈 이름·0원은 거절 ──"
+ok "이름이 비면 거절" FAIL \
+   "$(rc $SUP "select public.taam_kashikiri_send('e1111111-1111-4111-8111-111111111111','[{\"label\":\"  \",\"amount_krw\":1000}]'::jsonb);")"
+ok "0원은 거절" FAIL \
+   "$(rc $SUP "select public.taam_kashikiri_send('e1111111-1111-4111-8111-111111111111','[{\"label\":\"ا\",\"amount_krw\":0}]'::jsonb);")"
+ok "빈 배열은 거절" FAIL \
+   "$(rc $SUP "select public.taam_kashikiri_send('e1111111-1111-4111-8111-111111111111','[]'::jsonb);")"
+ok "거절된 줄은 하나도 안 들어갔다" 3 "$(sudo_ "select count(*) from public.kashikiri_charges;")"
+
+echo "── ⑲ 총액을 적어 두면 합계를 대조한다 ──"
+$P -c "delete from public.kashikiri_charges;
+       update public.kashikiri_events set total_krw = 3000000;" >/dev/null
+ok "합계가 모자라면 거절" FAIL \
+   "$(rc $SUP "select public.taam_kashikiri_send('e1111111-1111-4111-8111-111111111111','[{\"label\":\"a\",\"amount_krw\":1000000}]'::jsonb);")"
+ok "딱 맞으면 통과" OK \
+   "$(rc $SUP "select public.taam_kashikiri_send('e1111111-1111-4111-8111-111111111111','[{\"label\":\"a\",\"amount_krw\":1000000},{\"label\":\"b\",\"amount_krw\":2000000}]'::jsonb);")"
+ok "이미 보낸 것까지 합해서 본다" FAIL \
+   "$(rc $SUP "select public.taam_kashikiri_send('e1111111-1111-4111-8111-111111111111','[{\"label\":\"c\",\"amount_krw\":1}]'::jsonb);")"
+$P -c "update public.kashikiri_events set total_krw = null;" >/dev/null
+
+echo "── ⑳ 한 건 끊기 ──"
+CID=$(sudo_ "select id from public.kashikiri_charges where label='a' limit 1;")
+ok "회원은 못 끊는다" FAIL "$(rc $MEM "select public.taam_kashikiri_charge_cancel('$CID');")"
+ok "슈퍼어드민은 끊는다" OK  "$(rc $SUP "select public.taam_kashikiri_charge_cancel('$CID');")"
+ok "지우지 않고 cancelled 로 남긴다" cancelled \
+   "$(sudo_ "select status from public.kashikiri_charges where id='$CID';")"
+TK=$(sudo_ "select token from public.kashikiri_charges where id='$CID';")
+# ⚠ 조 없이 만든 청구도 링크가 열려야 한다. 종전엔 teams 를 inner join 해서
+#   team_id 가 null 인 청구가 조인에서 통째로 떨어졌다 — 링크가 아예 안 열렸다.
+CP=$($P -c "select public.taam_kashikiri_charge_public('$TK');" | tail -1)
+has "조 없는 청구도 링크가 열린다"  "amount_krw" "$CP"
+has "끊긴 링크는 cancelled 로 보인다" "cancelled"  "$CP"
+$P -c "update public.kashikiri_charges set status='paid' where label='b';" >/dev/null
+BID=$(sudo_ "select id from public.kashikiri_charges where label='b' limit 1;")
+ok "결제된 건은 못 끊는다" FAIL "$(rc $SUP "select public.taam_kashikiri_charge_cancel('$BID');")"
+
+echo "── ㉑ 티켓 구매자 읽기 ──"
+ok "회원은 못 읽는다" FAIL "$(rc $MEM "select public.taam_kashikiri_buyers('TP_MEI');")"
+B=$(as $SUP "select public.taam_kashikiri_buyers('TP_MEI');")
+has  "구매자 이름이 온다"  "김우종"    "$B"
+has  "인원이 온다"        '"pax": 4'  "$B"
+has  "구매 id 가 온다"    "ticket_id" "$B"
+hasnt "티켓 가격은 안 온다" "100000"   "$B"
+ok "없는 티켓은 빈 배열" "[]" "$(as $SUP "select public.taam_kashikiri_buyers('NOPE');")"
+ok "빈 값도 빈 배열"     "[]" "$(as $SUP "select public.taam_kashikiri_buyers('');")"
+
 echo
 [ "$FAIL" = "1" ] && echo "=== 실패 있음 ===" || echo "=== 전부 통과 ==="
