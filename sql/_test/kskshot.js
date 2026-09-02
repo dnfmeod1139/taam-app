@@ -833,8 +833,34 @@ const { chromium } = require('playwright-core');
     tb.classList.remove('show');
     ok('숨은 토스트는 화면을 막지 않는다', getComputedStyle(tb).pointerEvents === 'none');
 
+    // ── 색·레이아웃 — 게스트 시트와 같은 팔레트인가 ──────────
+    //   따로 놀면 같은 자리에서 두 화면을 나란히 보는 사람에게
+    //   서로 다른 서비스처럼 보인다.
+    await window.kskOpenEvent('e1'); await sleep(200);
+    const cs = getComputedStyle(document.getElementById('kskScreen'));
+    const V = n => cs.getPropertyValue(n).trim();
+    ok('바탕은 시트와 같은 회색',   V('--k-ground') === '#F6F6F7');
+    ok('본문 먹색도 같다',          V('--k-ink') === '#16161A');
+    ok('보조 글씨도 같다',          V('--k-ink2') === '#61616B');
+    ok('구분선도 같다',             V('--k-rule') === '#E6E6EA');
+    ok('채움은 브랜드 포도주',      V('--k-burg') === '#5E1622');
+    ok('글씨용 포도주는 한 단계 밝게', V('--k-burg-tx') === '#8A3242');
+    // 따뜻한 베이지가 남아 있으면 두 색이 한 화면에서 섞인다
+    const card = document.querySelector('#kskBody .ksk-card');
+    ok('카드 테두리에 베이지가 안 남았다 ⭐',
+       !!card && getComputedStyle(card).borderTopColor === 'rgb(230, 230, 234)');
+    ok('카드에 그림자가 있다', !!card && getComputedStyle(card).boxShadow !== 'none');
+
+    // 버튼은 제 줄에서 오른쪽 — 이름이 길어도 글자가 안 쪼개진다
+    const payRow = document.querySelector('#kskBody .ksk-pay .acts');
+    ok('청구 줄 버튼이 따로 한 줄', !!payRow &&
+       payRow.getBoundingClientRect().top >
+       payRow.parentElement.querySelector('.who').getBoundingClientRect().bottom - 2);
+    const tag = document.querySelector('#kskBody .ksk-tag');
+    ok('「회원」 배지가 안 접힌다',
+       !tag || tag.getBoundingClientRect().height < 24);
+
     // ── 뒤로가기 ────────────────────────────────────────────
-    await window.kskOpenEvent('e1'); await sleep(150);
     window.kskBack(); await sleep(120);
     ok('상세에서 뒤로 = 목록', document.getElementById('kskTitle').textContent === '정산 링크');
 
