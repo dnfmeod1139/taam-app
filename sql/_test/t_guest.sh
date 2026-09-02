@@ -114,14 +114,22 @@ then echo "❌ 회원이 연회비를 바꿨다"; FAIL=1; else echo "✅ 연회�
 echo "── ⑦ 설정값 ──"
 ok "누구나 읽는다 (화면에 적힌다)" 10125000 \
    "$($P -c "set role anon; select (public.taam_mship_settings())->>'deposit_amount';" | tail -1)"
-ok "슈퍼어드민은 바꾼다" 1270000 \
+ok "슈퍼어드민은 바꾼다" 1300000 \
    "$($P -c "set role authenticated; select set_config('taam.uid','$SUP',false);
-             select (public.taam_mship_settings_set('annual_fee','1270000'::jsonb))->>'v';" | tail -1)"
+             select (public.taam_mship_settings_set('annual_fee_card','1300000'::jsonb))->>'v';" | tail -1)"
+# 연회비는 결제 수단으로 갈린다 — 하나로 합쳐 두면 한쪽이 반드시 틀린다
+ok "이체 연회비" 1125000 \
+   "$($P -c "set role anon; select (public.taam_mship_settings())->>'annual_fee_cash';" | tail -1)"
+ok "카드 연회비는 더 크다 ⭐" t \
+   "$($P -c "set role anon; select ((public.taam_mship_settings())->>'annual_fee_card')::int
+                                 > ((public.taam_mship_settings())->>'annual_fee_cash')::int;" | tail -1)"
+ok "예치금은 결제 수단과 무관 (하나뿐)" 1 \
+   "$($P -c "select count(*) from public.membership_settings where k like 'deposit%';" | tail -1)"
 if $P -c "set role authenticated; select set_config('taam.uid','$SUP',false);
           select public.taam_mship_settings_set('annual_feee','1'::jsonb);" >/dev/null 2>&1;
 then echo "❌ 오타로 새 설정이 생겼다 (화면은 옛 값을 계속 읽는다)"; FAIL=1;
 else echo "✅ 없는 열쇠는 안 만든다 ⭐"; fi
-$P -c "select public.taam_mship_settings_set('annual_fee','1125000'::jsonb);" >/dev/null 2>&1
+$P -c "select public.taam_mship_settings_set('annual_fee_card','1270000'::jsonb);" >/dev/null 2>&1
 
 echo "── ⑧ 어드민 목록 ──"
 ok "만료 임박순으로 나온다" 게스트만료 \

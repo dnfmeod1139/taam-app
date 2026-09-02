@@ -12313,7 +12313,11 @@ window.closePromoCarousel = function(){
         <!-- ⚠ 금액을 여기 박지 않는다. 연회비가 아직 안 정해졌고(과세 구분 대기),
              정하는 날 KO·EN·JA 세 곳을 고치고 배포까지 해야 한다.
              membership_settings 에서 읽어 채운다 — 어드민에서 바꾸면 끝이다. -->
+        <!-- 결제 수단으로 총액이 갈린다. 하나만 적으면 카드로 낸 사람에게는
+             적게 적히고, 이체한 사람에게는 더 받는 것처럼 적힌다 —
+             둘 다 그대로 문의가 된다. 두 줄로 나란히 적는다. -->
         <div class="ms-cs-amt" id="mshipTotalAmt">—</div>
+        <div id="mshipTotalCard" style="display:none;margin-top:4px;font-size:12.5px;color:#8a857c;font-variant-numeric:tabular-nums;"></div>
       </div>
       <!-- 구성 — 퍼센트로 적지 않는다. 「90%」는 적립처럼 읽히는데
            예치금은 적립이 아니라 **맡아 두는 돈**이다(쓰면 줄고 남으면 돌려준다).
@@ -12326,7 +12330,8 @@ window.closePromoCarousel = function(){
         </div>
         <div class="ms-cs-val" style="margin-top:7px;">
           <span data-i18n="membership.compose_fee">연회비</span>
-          <span class="ms-cs-amt-sub"><span id="mshipFeeAmt">—</span> <span data-i18n="membership.compose_fee_sub">소멸, 환불되지 않습니다</span><span id="mshipFeeNote" style="display:none;color:#c8a96e;"></span></span>
+          <span class="ms-cs-amt-sub"><span id="mshipFeeAmt">—</span> <span data-i18n="membership.compose_fee_sub">소멸, 환불되지 않습니다</span></span>
+          <span class="ms-cs-amt-sub" id="mshipFeeNote" style="display:none;color:#c8a96e;"></span>
         </div>
       </div>
       <div class="ms-cs">
@@ -41043,7 +41048,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.02-m';
+var TAAM_WEB_BUILD = '2026.09.02-n';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -57800,13 +57805,31 @@ function _mshipPaintAmounts(){
   var tot = document.getElementById('mshipTotalAmt');
   var nt  = document.getElementById('mshipFeeNote');
   if(!dep || !fee || !tot) return;
-  if(!c){ dep.textContent = fee.textContent = ''; tot.textContent = '—'; return; }
-  var d = parseInt(c.deposit_amount, 10) || 0;
-  var f = parseInt(c.annual_fee, 10) || 0;
+  if(!c){
+    dep.textContent = fee.textContent = ''; tot.textContent = '—';
+    var c0 = document.getElementById('mshipTotalCard'); if(c0) c0.style.display = 'none';
+    return;
+  }
+  var d  = parseInt(c.deposit_amount, 10) || 0;
+  // 연회비만 결제 수단으로 갈린다. 카드에는 수수료·부가세가 얹힌다.
+  // 예치금은 어느 쪽이든 같다 — 손님이 맡기는 돈 자체는 같은 금액이다.
+  var fc = parseInt(c.annual_fee_cash, 10) || 0;   // 현금·계좌이체
+  var fk = parseInt(c.annual_fee_card, 10) || 0;   // 카드
   // 구분 대시는 금액이 있을 때만. 없는데 붙이면 「— —」로 겹쳐 보인다.
   dep.textContent = d > 0 ? (_mshipWon(d) + ' — ') : '';
-  fee.textContent = f > 0 ? (_mshipWon(f) + ' — ') : '';
-  tot.textContent = (d > 0 && f > 0) ? _mshipWon(d + f) : '—';
+  var feeTx = '';
+  if(fc > 0 && fk > 0 && fc !== fk) feeTx = _mshipWon(fc) + ' (이체) / ' + _mshipWon(fk) + ' (카드) — ';
+  else if(fc > 0 || fk > 0)         feeTx = _mshipWon(fc || fk) + ' — ';
+  fee.textContent = feeTx;
+  tot.textContent = (d > 0 && fc > 0) ? (_mshipWon(d + fc) + ' (이체)')
+                  : ((d > 0 && fk > 0) ? (_mshipWon(d + fk) + ' (카드)') : '—');
+  var card = document.getElementById('mshipTotalCard');
+  if(card){
+    if(d > 0 && fk > 0 && fc > 0 && fk !== fc){
+      card.textContent = _mshipWon(d + fk) + ' (카드 — 수수료·부가세 포함)';
+      card.style.display = '';
+    } else card.style.display = 'none';
+  }
   // 「금액 확정 전」 같은 한 줄. 비어 있으면 안 붙인다.
   var note = (typeof c.annual_fee_note === 'string') ? c.annual_fee_note.trim() : '';
   if(nt){
