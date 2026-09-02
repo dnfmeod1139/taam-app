@@ -9948,6 +9948,11 @@ window.closePromoCarousel = function(){
       <div style="flex:none;font-size:16px;color:#c5bfb2;">›</div>
     </div>
 
+    <!-- 추천권 — M·T 회원에게만. 게스트에게는 아예 안 그린다.
+         「보냈는데 소식이 없다」와 「열어는 봤다」는 회원에게 전혀 다른 정보라
+         장마다 상태를 적는다. -->
+    <div id="mpRefCard" style="display:none;margin:12px 28px 6px;padding:13px 15px;background:#fff;border:1px solid #ece8df;border-radius:11px;"></div>
+
     <!-- Deposit -->
     <div class="mp-deposit-section-label" data-i18n="my_page.deposit_section">예치금</div>
     <div class="mp-deposit-block" style="margin-top:10px;">
@@ -20090,6 +20095,7 @@ function openMyPage(){
           badge.style.display = 'none';
         }
         if(typeof _mpPaintGuest === 'function') _mpPaintGuest(grade);
+        if(typeof _mpPaintRef === 'function') _mpPaintRef(grade);
       }).catch(function(){});
     }
   } catch(_te){}
@@ -41575,7 +41581,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.02-p';
+var TAAM_WEB_BUILD = '2026.09.02-q';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -58302,6 +58308,76 @@ function mpMembershipTap(){
   if(typeof openMshipScreen === 'function') openMshipScreen();
 }
 window.mpMembershipTap = mpMembershipTap;
+
+// ══════════════════════════════════════════════════════════════
+// 추천권 (2026-09-02) — M·T 회원의 마이페이지 카드
+// ══════════════════════════════════════════════════════════════
+// ⚠ 매수는 앱이 세지 않는다. 서버가 그 해 발급분을 세어 막는다 —
+//   앱에서 세면 RPC 를 두 번 부르면 그만이다.
+var _mpRef = null;
+function _mpRefUrl(code){ return _kskOrigin() + '/ref/?c=' + encodeURIComponent(code); }
+function _mpRefLabel(it){
+  if(it.status === 'applied') return ['심사 신청함', '#2c6b47'];
+  if(it.expired)              return ['기간 지남', '#9a948a'];
+  if(it.status === 'opened')  return ['열어봄', '#2C5AA0'];
+  return ['보내기 전', '#79736a'];
+}
+async function _mpPaintRef(grade){
+  var el = document.getElementById('mpRefCard');
+  if(!el) return;
+  var g = String(grade || '').toUpperCase();
+  if(g !== 'M' && g !== 'T'){ el.style.display = 'none'; return; }
+  var d = null;
+  try {
+    var r = await window.sb.rpc('taam_ref_mine');
+    if(!r.error) d = r.data;
+  } catch(e){}
+  if(!d){ el.style.display = 'none'; return; }   // 못 읽으면 아무 말도 안 한다
+  _mpRef = d;
+  var h = '<div style="display:flex;align-items:baseline;gap:9px;">'
+        + '<div style="font-family:var(--font-main);font-size:13.5px;font-weight:800;color:#1a1a18;">나의 추천권</div>'
+        + '<div style="margin-left:auto;font-family:var(--font-main);font-size:10.5px;font-weight:800;'
+        +   'padding:2px 9px;border-radius:999px;background:#f3efe7;color:#5C0A14;">'
+        +   (d.left || 0) + '매 보유</div></div>'
+        + '<div style="margin-top:5px;font-family:var(--font-main);font-size:11.5px;color:#79736a;line-height:1.7;">'
+        + '추천권은 연 ' + (d.max || 2) + '매 발급되며, 추천받은 분은 <b>심사를 거쳐</b> 합류합니다.</div>';
+  (d.items || []).forEach(function(it){
+    var lb = _mpRefLabel(it);
+    h += '<div style="display:flex;align-items:center;gap:8px;margin-top:9px;padding-top:9px;'
+       +   'border-top:1px solid #f2efe8;font-family:var(--font-main);min-width:0;">'
+       + '<span style="font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#1a1a18;'
+       +   'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + _kskEsc(it.code) + '</span>'
+       + '<span style="margin-left:auto;font-size:10.5px;font-weight:700;color:' + lb[1] + ';'
+       +   'white-space:nowrap;">' + lb[0] + '</span>'
+       + (it.status === 'applied' || it.expired ? ''
+          : '<button class="ksk-btn ghost sm" style="padding:6px 10px;font-size:11px" '
+            + 'onclick="mpRefShare(\'' + it.code + '\')">링크</button>')
+       + '</div>';
+  });
+  if((d.left || 0) > 0){
+    h += '<button class="ksk-btn" style="width:100%;margin-top:11px;padding:12px;font-size:12.5px" '
+       + 'onclick="mpRefIssue()">추천권 보내기</button>';
+  }
+  el.innerHTML = h;
+  el.style.display = '';
+}
+async function mpRefIssue(){
+  try {
+    var r = await window.sb.rpc('taam_ref_issue');
+    if(r.error) throw r.error;
+    var d = r.data || {};
+    // 만들자마자 링크를 손에 쥐여 준다 — 만들어 놓고 다시 찾게 하지 않는다
+    _kskClip(_mpRefUrl(d.code), '추천 링크를 복사했습니다 · ' + (d.max - d.used) + '매 남음');
+    _mpPaintRef(_currentUserGrade);
+  } catch(e){
+    var m = (e && e.message) || '';
+    if(/does not exist|schema cache/i.test(m))
+      showToast('⚠','아직 준비 안 됨','sql/membership_referral.sql 을 실행해야 합니다');
+    else showToast('⚠','발급하지 못했습니다', m);
+  }
+}
+function mpRefShare(code){ _kskClip(_mpRefUrl(code), '추천 링크를 복사했습니다'); }
+window.mpRefIssue = mpRefIssue; window.mpRefShare = mpRefShare;
 
 // ══════════════════════════════════════════════════════════════
 // 멤버십 설정값 (2026-09-02) — 금액·기간을 코드에 박지 않는다
