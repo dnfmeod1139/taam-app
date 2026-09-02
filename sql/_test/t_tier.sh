@@ -42,7 +42,9 @@ insert into public.profiles(id,role,display_name,membership_tier,membership_expi
  ('$UN','member','옛회원',null,null)
  on conflict (id) do update set membership_tier=excluded.membership_tier,
    membership_expires_at=excluded.membership_expires_at, role='member';
-delete from public.tickets where purchase_id like 'TR-%';
+-- ⚠ 앞 실행이 남긴 것 위에서 돌면 재구매 가드에 걸려 「막힘」이 무더기로 난다.
+--   이 배우들의 티켓은 통째로 지운다 (INV-·MAN- 예외 건까지).
+delete from public.tickets where user_id in ('$UA','$UT','$UM','$UN','$SUP');
 delete from public.ticket_products where id in ('TP_OPEN','TP_BLANK','TP_T','TP_M');
 insert into public.ticket_products(id, rest_id, min_tier) values
  ('TP_OPEN','$RA','A'),      -- 일반공개
