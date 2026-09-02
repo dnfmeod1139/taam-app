@@ -502,6 +502,21 @@ const { chromium } = require('playwright-core');
     ok('달러로 바꾸면 센트까지 환산',
        document.getElementById('ksdBody').textContent.indexOf('≈ $773.15') >= 0);
 
+    // 통화를 고른 뒤 금액을 고쳐도 환산이 따라온다 ⭐
+    //   종전엔 안 따라와서, 외화 줄에서 「얼마가 찍히는지 모르는 채로」 보냈다.
+    amts = document.querySelectorAll('#ksdBody .ksd-row input.amt');
+    amts[0].value = '1,360,500'; window.kskSendSum(); await sleep(60);   // 1,360.5원/$ → 정확히 $1,000
+    ok('금액을 고치면 환산이 따라온다 ⭐',
+       document.querySelector('#ksdBody .ksd-row .ksd-cur .pv').textContent.indexOf('$1,000.00') >= 0);
+    ok('다시 그리지 않는다 (치던 칸이 안 날아간다)',
+       document.querySelectorAll('#ksdBody .ksd-row input.amt')[0] === amts[0]);
+    window.kskSendCur(0, 'KRW'); await sleep(100);
+    amts = document.querySelectorAll('#ksdBody .ksd-row input.amt');
+    amts[0].value = '900,000'; window.kskSendSum(); await sleep(60);
+    ok('원화 줄은 「원화로 승인」이라고 적는다',
+       document.querySelector('#ksdBody .ksd-row .ksd-cur .pv').textContent === '원화로 승인');
+    amts[0].value = '1,051,875'; window.kskSendCur(0, 'JPY'); await sleep(100);
+
     // 환율이 없으면 그 통화를 못 고른다
     DB.events[0].fx_usd = null;
     await window.kskOpenEvent('e1'); await sleep(180);
