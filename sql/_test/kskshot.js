@@ -221,7 +221,8 @@ const { chromium } = require('playwright-core');
     ok('환율 근거 칸',            document.getElementById('kskf_note').value.indexOf('매매기준율') >= 0);
     ok('매장 지급은 콤마로',      document.getElementById('kskf_paid').value === '960,000');
     ok('동행은 세그먼트',         document.getElementById('kskf_escort').getAttribute('data-v') === '1');
-    ok('한 판에 8칸이 다 보인다', ff.querySelectorAll('.kskf-f').length === 8);
+    ok('한 판에 9칸이 다 보인다 (정산 총액 포함)', ff.querySelectorAll('.kskf-f').length === 9);
+    ok('정산 총액 칸이 있다', !!document.getElementById('kskf_total'));
 
     // 세그먼트 전환
     window.kskFormSeg('escort', '0'); await sleep(40);
@@ -316,7 +317,7 @@ const { chromium } = require('playwright-core');
     DB.events[0].ticket_product_id = 'TP_MEI';
     await window.kskOpenEvent('e1'); await sleep(180);
     ok('연결되면 불러오기 버튼이 뜬다',
-       document.getElementById('kskBody').textContent.indexOf('구매자에서 조 불러오기') >= 0);
+       document.getElementById('kskBody').textContent.indexOf('구매자에서 불러오기') >= 0);
     ok('연결 상태가 보인다',
        document.getElementById('kskBody').textContent.indexOf('연결됨') >= 0);
 
@@ -328,10 +329,10 @@ const { chromium } = require('playwright-core');
     // 연결이 없으면 「지금 연결하기」를 권한다
     DB.events[0].ticket_product_id = null;
     await window.kskOpenEvent('e1'); await sleep(180);
-    ok('연결 안 됐으면 안내가 뜬다',
-       document.getElementById('kskBody').textContent.indexOf('지금 연결하기') >= 0);
+    ok('연결 안 됐으면 티켓 연결 버튼이 뜬다',
+       document.getElementById('kskBody').textContent.indexOf('티켓 연결') >= 0);
     ok('불러오기 버튼은 없다',
-       document.getElementById('kskBody').textContent.indexOf('구매자에서 조 불러오기') < 0);
+       document.getElementById('kskBody').textContent.indexOf('구매자에서 불러오기') < 0);
 
     window.kskLinkTicket(); await sleep(120);
     ok('뒤늦게 연결하는 시트가 열린다', !!document.getElementById('kskf_ticket'));
@@ -341,6 +342,127 @@ const { chromium } = require('playwright-core');
     const lk = (window.__upds || []).filter(x => x[0] === 'kashikiri_events')[0];
     ok('연결하면 venue_id 도 바로잡는다',
        !!lk && lk[1].venue_id === 'rest-1' && lk[1].ticket_product_id === 'TP_MEI');
+
+    // ── ⑩ 정산 링크 보내기 ───────────────────────────────────
+    //   티켓을 고르면 구매자가 그대로 목록이 되고, 거기에 사람을 더한다.
+    //   티켓이 없는 자리는 「수동 입력」으로 전부 직접 적는다.
+    DB.events[0].ticket_product_id = 'TP_MEI';
+    DB.events[0].total_krw = null;
+    DB.charges = [
+      { id:'c1', event_id:'e1', team_id:'t2', label:'Y様', amount_krw:1122000,
+        status:'paid', token:'aa'.repeat(16), user_id:'u1' }
+    ];
+    // 구매자 3명 — 그중 u1 은 이미 보냈다
+    window.__buyers = [
+      { ticket_id:'tk1', user_id:'u1', name:'윤태호', phone:'010-1111-2222', pax:2 },
+      { ticket_id:'tk2', user_id:'u2', name:'김우종', phone:'01033334444', pax:4 },
+      { ticket_id:'tk3', user_id:'u3', name:'박지연', phone:null, pax:2 }
+    ];
+    const realRpc = window.sb.rpc;
+    window.sb.rpc = (fn, args) => {
+      RPC.push([fn, args]);
+      if (fn === 'taam_kashikiri_buyers') return Promise.resolve({ data: window.__buyers, error: null });
+      return Promise.resolve({ data: { created: 1 }, error: null });
+    };
+
+    await window.kskOpenEvent('e1'); await sleep(180);
+    ok('「정산 링크 보내기」 버튼이 중심에 있다',
+       document.getElementById('kskBody').textContent.indexOf('정산 링크 보내기') >= 0);
+    ok('회수 현황이 사람 단위로 편다',
+       document.getElementById('kskBody').textContent.indexOf('회수 현황') >= 0);
+    ok('정산 총액 미설정이면 그렇게 적는다',
+       document.getElementById('kskBody').textContent.indexOf('합계를 대조하지 않습니다') >= 0);
+
+    await window.kskSendOpen(); await sleep(300);
+    ok('보내기 시트가 열린다', document.getElementById('kskSend').style.display === 'flex');
+    ok('구매자를 불러온다',
+       RPC.some(x => x[0] === 'taam_kashikiri_buyers' && x[1].p_ticket_product_id === 'TP_MEI'));
+    let rows = document.querySelectorAll('#ksdBody .ksd-row[data-i]');
+    ok('이미 보낸 사람은 다시 안 올린다 (2명)', rows.length === 2);
+    ok('구매자 표시가 붙는다',
+       document.getElementById('ksdBody').textContent.indexOf('구매자 · 4인') >= 0);
+    ok('번호를 보기 좋게 끊어 준다',
+       document.getElementById('ksdBody').textContent.indexOf('010-3333-4444') >= 0);
+    ok('번호 없는 사람은 그렇게 적는다',
+       document.getElementById('ksdBody').textContent.indexOf('번호 없음') >= 0);
+    ok('이미 보낸 사람은 위에 따로 보인다',
+       document.getElementById('ksdBody').textContent.indexOf('이미 보냄') >= 0);
+    ok('금액 전에는 버튼이 잠긴다', document.getElementById('ksdGo').disabled === true);
+
+    // 구매자 금액 입력
+    let amts = document.querySelectorAll('#ksdBody .ksd-row input.amt');
+    amts[0].value = '1,051,875'; window.kskSendSum();
+    amts[1].value = '500,000';   window.kskSendSum();
+    ok('합계가 붙는다', document.getElementById('ksdSum').textContent.indexOf('1,551,875') >= 0);
+    ok('금액이 들어가면 버튼이 열린다', document.getElementById('ksdGo').disabled === false);
+
+    // 구매자가 아닌 사람 추가 — 이름·번호·금액
+    window.kskSendAdd(); await sleep(80);
+    rows = document.querySelectorAll('#ksdBody .ksd-row[data-i]');
+    ok('사람을 더할 수 있다', rows.length === 3);
+    const last = rows[2];
+    ok('추가한 줄은 이름·번호를 직접 적는다',
+       !!last.querySelector('input.nm') && !!last.querySelector('input.ph'));
+    last.querySelector('input.nm').value = '이상훈';
+    last.querySelector('input.ph').value = '010-5555-6666';
+    last.querySelector('input.amt').value = '300,000';
+    window.kskSendSum();
+    ok('추가한 사람도 합계에 든다',
+       document.getElementById('ksdSum').textContent.indexOf('1,851,875') >= 0);
+    ok('앞서 적은 금액이 안 날아간다',
+       document.querySelectorAll('#ksdBody .ksd-row input.amt')[0].value === '1,051,875');
+
+    // 한 줄 빼기
+    window.kskSendDel(1); await sleep(80);
+    ok('한 줄을 뺀다', document.querySelectorAll('#ksdBody .ksd-row[data-i]').length === 2);
+    ok('뺀 만큼 합계가 준다',
+       document.getElementById('ksdSum').textContent.indexOf('1,351,875') >= 0);
+
+    // 보내기 — 서버에 무엇을 넘기나
+    RPC.length = 0;
+    await window.kskSendSave(); await sleep(300);
+    const sendCall = RPC.filter(x => x[0] === 'taam_kashikiri_send')[0];
+    ok('send RPC 를 부른다', !!sendCall);
+    ok('회차 id 를 넘긴다', sendCall && sendCall[1].p_event_id === 'e1');
+    ok('2명을 넘긴다', sendCall && sendCall[1].p_rows.length === 2);
+    ok('구매자는 user_id 를 물고 간다',
+       sendCall && sendCall[1].p_rows.some(r2 => r2.user_id === 'u2'));
+    ok('추가한 사람은 user_id 가 없다',
+       sendCall && sendCall[1].p_rows.some(r2 => r2.label === '이상훈' && !r2.user_id));
+    ok('번호를 함께 넘긴다',
+       sendCall && sendCall[1].p_rows.some(r2 => String(r2.phone).indexOf('5555') >= 0));
+    ok('환율이 있으면 엔화도 되돌린다',
+       sendCall && sendCall[1].p_rows[0].amount_jpy === Math.round(1051875 / 9.35));
+    ok('보내면 시트가 닫힌다', document.getElementById('kskSend').style.display === 'none');
+
+    // ── ⑪ 수동 입력 전환 ─────────────────────────────────────
+    await window.kskSendOpen(); await sleep(300);
+    ok('처음엔 티켓 모드', document.getElementById('ksdBody').textContent.indexOf('판매 티켓') >= 0);
+    window.kskSendManual(); await sleep(120);
+    ok('수동으로 바꾸면 티켓 선택이 사라진다',
+       document.getElementById('ksdBody').textContent.indexOf('판매 티켓') < 0);
+    ok('구매자 줄이 걷힌다',
+       document.getElementById('ksdBody').textContent.indexOf('구매자 ·') < 0);
+    rows = document.querySelectorAll('#ksdBody .ksd-row[data-i]');
+    ok('빈 줄 하나로 시작한다', rows.length === 1 && !!rows[0].querySelector('input.nm'));
+    ok('체크박스가 켜져 보인다', !!document.querySelector('#ksdBody .ksd-chk.on'));
+    window.kskSendManual(); await sleep(200);
+    ok('다시 끄면 티켓 모드로 돌아온다',
+       document.getElementById('ksdBody').textContent.indexOf('판매 티켓') >= 0);
+    window.kskSendClose(); await sleep(80);
+
+    // ── ⑫ 링크 끊기 ──────────────────────────────────────────
+    DB.charges.push({ id:'c9', event_id:'e1', team_id:null, label:'잘못보냄',
+                      amount_krw:1000, status:'pending', token:'cc'.repeat(16) });
+    await window.kskOpenEvent('e1'); await sleep(180);
+    ok('조 없는 청구도 회수 현황에 보인다',
+       document.getElementById('kskBody').textContent.indexOf('잘못보냄') >= 0);
+    window.confirm = () => true;
+    RPC.length = 0;
+    await window.kskCancelCharge('c9', '잘못보냄'); await sleep(250);
+    ok('끊기 RPC 를 부른다',
+       RPC.some(x => x[0] === 'taam_kashikiri_charge_cancel' && x[1].p_charge_id === 'c9'));
+    window.sb.rpc = realRpc;
 
     // ── ⑧ 토스트가 아래로 새지 않는다 ────────────────────────
     //   배너는 top:20px 이고 그 아래에 콘솔 헤더의 ✕(앱으로 나가기)가 있다.
@@ -354,7 +476,7 @@ const { chromium } = require('playwright-core');
     // ── 뒤로가기 ────────────────────────────────────────────
     await window.kskOpenEvent('e1'); await sleep(150);
     window.kskBack(); await sleep(120);
-    ok('상세에서 뒤로 = 목록', document.getElementById('kskTitle').textContent === '대관 정산');
+    ok('상세에서 뒤로 = 목록', document.getElementById('kskTitle').textContent === '정산 링크');
 
     return out;
   });
