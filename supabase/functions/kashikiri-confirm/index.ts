@@ -20,8 +20,14 @@
 //     승인은 우리 시크릿 키로 토스에 다시 물어 확정된다. 위조가 안 된다
 //   · 확정은 taam_kashikiri_mark_paid 가 하고, 금액이 다르면 거절한다
 //
-// 입력:  { token, orderId, paymentKey, amount? }
-// 시크릿: TOSS_SECRET_KEY  (일반결제 MID. 없으면 실패)
+// 통화 (2026-09-02)
+//   해외 손님에게는 달러·엔으로 청구한다. 토스는 **MID 별로 키가 다르다** —
+//   원화 키로 외화 승인을 부르면 거절된다. 통화에 맞는 시크릿을 고른다.
+//   승인은 외화로, 우리 매출 기록(amount_krw)은 원화로. 둘을 섞지 않는다.
+//
+// 입력:  { token, orderId, paymentKey, amount?, currency? }
+// 시크릿: TOSS_SECRET_KEY            (원화 · 일반결제 MID)
+//         TOSS_SECRET_KEY_USD / _JPY (해외 MID. 그 통화를 쓸 때만 필요)
 // 배포:  Supabase Dashboard → Edge Functions → kashikiri-confirm
 //        ⚠ Verify JWT 를 **꺼야** 한다 (비회원이 부른다)
 // ════════════════════════════════════════════════════════════
@@ -48,12 +54,6 @@ serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
 
   try {
-    const secretKey = Deno.env.get('TOSS_SECRET_KEY');
-    if (!secretKey) {
-      console.error('[kashikiri-confirm] TOSS_SECRET_KEY 미설정');
-      return json({ ok: false, error: 'server_not_configured' });
-    }
-
     const body = await req.json().catch(() => ({}));
     const token = String(body.token || '').trim();
     const orderId = String(body.orderId || '').trim();
@@ -71,7 +71,7 @@ serve(async (req) => {
     // ── 청구 조회 — 토큰과 주문번호가 **같은 행**을 가리켜야 한다 ──
     const { data: charge, error: cErr } = await admin
       .from('kashikiri_charges')
-      .select('id, order_id, amount_krw, status, token')
+      .select('id, order_id, amount_krw, status, token, pay_currency, pay_amount')
       .eq('token', token)
       .maybeSingle();
 
@@ -87,18 +87,31 @@ serve(async (req) => {
 
     // 멱등 — 복귀 URL 은 새로고침·뒤로가기로 여러 번 열린다
     if (charge.status === 'paid') {
-      return json({ ok: true, already: true, amount: Number(charge.amount_krw) });
+      return json({ ok: true, already: true,
+                    amount: Number(charge.pay_amount ?? charge.amount_krw),
+                    currency: String(charge.pay_currency || 'KRW').toUpperCase() });
     }
     if (charge.status !== 'pending') {
       return json({ ok: false, error: 'not_pending', status: charge.status });
     }
 
-    // 금액은 언제나 DB 것을 쓴다. 브라우저가 주장하는 값은 대조에만 쓴다.
-    const expected = Number(charge.amount_krw);
+    // 금액·통화는 언제나 DB 것을 쓴다. 브라우저가 주장하는 값은 대조에만 쓴다.
+    const currency = String(charge.pay_currency || 'KRW').toUpperCase();
+    const expected = Number(charge.pay_amount ?? charge.amount_krw);
     const clientAmount = Number(body.amount || 0);
-    if (clientAmount && clientAmount !== expected) {
+    if (clientAmount && Math.round(clientAmount * 100) !== Math.round(expected * 100)) {
       console.warn('[kashikiri-confirm] 금액 불일치(클라)', orderId, clientAmount, expected);
       return json({ ok: false, error: 'amount_mismatch' });
+    }
+
+    // ⚠ 토스는 MID 별로 키가 다르다. 원화 키로 외화 승인을 부르면 거절된다.
+    //   (앱에서도 같은 이유로 통화별 클라이언트 키를 라우팅한다)
+    const secretKey = (currency === 'KRW')
+      ? Deno.env.get('TOSS_SECRET_KEY')
+      : (Deno.env.get('TOSS_SECRET_KEY_' + currency) || Deno.env.get('TOSS_SECRET_KEY'));
+    if (!secretKey) {
+      console.error('[kashikiri-confirm] 시크릿 미설정', currency);
+      return json({ ok: false, error: 'server_not_configured', currency });
     }
 
     // ── 토스 승인 ──
@@ -124,8 +137,9 @@ serve(async (req) => {
     }
 
     // 토스가 실제로 승인한 금액을 한 번 더 대조한다 (방어적)
+    //   ⚠ 달러는 센트가 있다. 정수 비교로는 0.01 차이를 못 잡는다.
     const approved = Number(toss.totalAmount ?? toss.balanceAmount ?? 0);
-    if (approved !== expected) {
+    if (Math.round(approved * 100) !== Math.round(expected * 100)) {
       console.error('[kashikiri-confirm] 승인 금액 불일치', orderId, approved, expected);
       await admin.from('kashikiri_charges')
         .update({ fail_reason: `amount_mismatch_toss:${approved}` })
@@ -133,14 +147,38 @@ serve(async (req) => {
       return json({ ok: false, error: 'amount_mismatch_toss' });
     }
 
-    // ── 확정 — 금액 대조·멱등은 RPC 가 다시 한 번 한다 ──
-    const { data: marked, error: mErr } = await admin.rpc('taam_kashikiri_mark_paid', {
-      p_order_id: orderId,
-      p_payment_key: paymentKey,
-      p_amount: expected,
-      p_method: toss.method || null,
-      p_receipt: toss.receipt?.url || null,
-    });
+    // ── 확정 — 통화·금액 대조와 멱등은 RPC 가 다시 한 번 한다 ──
+    //   v2 는 numeric 을 받아 달러 센트까지 본다. 아직 SQL 이 안 올라간 DB 를
+    //   위해 옛 함수로 내려가는 길을 남긴다 — 단, 원화일 때만이다.
+    //   외화인데 v2 가 없으면 확정하지 않는다. 잘못 찍느니 안 찍는 게 낫다.
+    let marked: unknown = null;
+    let mErr: { message?: string; code?: string } | null = null;
+    {
+      const r1 = await admin.rpc('taam_kashikiri_mark_paid_v2', {
+        p_order_id: orderId,
+        p_payment_key: paymentKey,
+        p_amount: expected,
+        p_currency: currency,
+        p_method: toss.method || null,
+        p_receipt: toss.receipt?.url || null,
+      });
+      if (!r1.error) {
+        marked = r1.data;
+      } else if (/does not exist|schema cache|PGRST202/i.test(String(r1.error.message || ''))
+                 && currency === 'KRW') {
+        console.warn('[kashikiri-confirm] v2 없음 — 옛 함수로 내려간다 (원화)');
+        const r0 = await admin.rpc('taam_kashikiri_mark_paid', {
+          p_order_id: orderId,
+          p_payment_key: paymentKey,
+          p_amount: expected,
+          p_method: toss.method || null,
+          p_receipt: toss.receipt?.url || null,
+        });
+        marked = r0.data; mErr = r0.error;
+      } else {
+        mErr = r1.error;
+      }
+    }
 
     if (mErr) {
       // 돈은 이미 승인됐다. 여기서 실패하면 사람이 손으로 맞춰야 하므로
@@ -152,6 +190,8 @@ serve(async (req) => {
     return json({
       ok: true,
       amount: expected,
+      currency,
+      settleKrw: Number(charge.amount_krw),
       receiptUrl: toss.receipt?.url || null,
       method: toss.method || null,
       marked,

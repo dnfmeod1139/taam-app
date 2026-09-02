@@ -221,8 +221,9 @@ const { chromium } = require('playwright-core');
     ok('환율 근거 칸',            document.getElementById('kskf_note').value.indexOf('매매기준율') >= 0);
     ok('매장 지급은 콤마로',      document.getElementById('kskf_paid').value === '960,000');
     ok('동행은 세그먼트',         document.getElementById('kskf_escort').getAttribute('data-v') === '1');
-    ok('한 판에 9칸이 다 보인다 (정산 총액 포함)', ff.querySelectorAll('.kskf-f').length === 9);
+    ok('한 판에 10칸이 다 보인다', ff.querySelectorAll('.kskf-f').length === 10);
     ok('정산 총액 칸이 있다', !!document.getElementById('kskf_total'));
+    ok('달러 환율 칸이 있다', !!document.getElementById('kskf_fxu'));
 
     // 세그먼트 전환
     window.kskFormSeg('escort', '0'); await sleep(40);
@@ -431,9 +432,78 @@ const { chromium } = require('playwright-core');
        sendCall && sendCall[1].p_rows.some(r2 => r2.label === '이상훈' && !r2.user_id));
     ok('번호를 함께 넘긴다',
        sendCall && sendCall[1].p_rows.some(r2 => String(r2.phone).indexOf('5555') >= 0));
-    ok('환율이 있으면 엔화도 되돌린다',
-       sendCall && sendCall[1].p_rows[0].amount_jpy === Math.round(1051875 / 9.35));
+    // 외화 금액은 서버가 만든다 — 화면은 통화만 넘긴다
+    ok('통화를 넘긴다 (기본 원화)',
+       sendCall && sendCall[1].p_rows.every(r2 => r2.currency === 'KRW'));
+    ok('외화 금액을 화면이 만들지 않는다',
+       sendCall && sendCall[1].p_rows.every(r2 => r2.amount_jpy === undefined));
     ok('보내면 시트가 닫힌다', document.getElementById('kskSend').style.display === 'none');
+
+    // ── ⑩-b 통화 — 달러·엔으로도 보낸다 ──────────────────────
+    //   해외 손님 카드에 원화로 찍히면 카드사 환가료가 붙고, 명세서에
+    //   얼마가 나올지 본인도 모른다.
+    DB.events[0].fx_usd = '1360.5000';
+    await window.kskSendOpen(); await sleep(300);
+    ok('통화 고르는 칸이 줄마다 있다',
+       document.querySelectorAll('#ksdBody .ksd-cur .seg').length ===
+       document.querySelectorAll('#ksdBody .ksd-row[data-i]').length);
+    ok('기본은 원화',
+       document.querySelector('#ksdBody .ksd-cur .seg span.on').textContent === '₩');
+
+    amts = document.querySelectorAll('#ksdBody .ksd-row input.amt');
+    amts[0].value = '1,051,875'; window.kskSendSum();
+    window.kskSendCur(0, 'JPY'); await sleep(120);
+    ok('엔으로 바꾸면 환산이 보인다',
+       document.getElementById('ksdBody').textContent.indexOf('≈ ¥112,500') >= 0);
+    ok('원화 금액은 그대로',
+       document.querySelectorAll('#ksdBody .ksd-row input.amt')[0].value === '1,051,875');
+    window.kskSendCur(0, 'USD'); await sleep(120);
+    ok('달러로 바꾸면 센트까지 환산',
+       document.getElementById('ksdBody').textContent.indexOf('≈ $773.15') >= 0);
+
+    // 환율이 없으면 그 통화를 못 고른다
+    DB.events[0].fx_usd = null;
+    await window.kskOpenEvent('e1'); await sleep(180);
+    await window.kskSendOpen(); await sleep(300);
+    amts = document.querySelectorAll('#ksdBody .ksd-row input.amt');
+    amts[0].value = '1,000'; window.kskSendSum();
+    window.__toast = null;
+    window.kskSendCur(0, 'USD'); await sleep(100);
+    ok('달러 환율이 없으면 막고 알려준다',
+       window.__toast && window.__toast[1] === '달러 환율 먼저');
+    ok('막혔으면 통화도 안 바뀐다',
+       document.querySelector('#ksdBody .ksd-cur .seg span.on').textContent === '₩');
+    DB.events[0].fx_usd = '1360.5000';
+    await window.kskOpenEvent('e1'); await sleep(180);
+    await window.kskSendOpen(); await sleep(300);
+
+    // 통화를 섞어 보낸다
+    amts = document.querySelectorAll('#ksdBody .ksd-row input.amt');
+    amts[0].value = '1,051,875'; window.kskSendSum();
+    amts[1].value = '500,000';   window.kskSendSum();
+    window.kskSendCur(1, 'JPY'); await sleep(120);
+    ok('통화가 섞이면 합계에 표시한다',
+       document.getElementById('ksdSum').textContent.indexOf('₩1 ¥1') >= 0);
+    ok('합계는 원화 기준 그대로',
+       document.getElementById('ksdSum').textContent.indexOf('1,551,875') >= 0);
+    RPC.length = 0;
+    await window.kskSendSave(); await sleep(300);
+    const mixCall = RPC.filter(x => x[0] === 'taam_kashikiri_send')[0];
+    ok('통화를 줄마다 넘긴다',
+       mixCall && mixCall[1].p_rows[0].currency === 'KRW'
+               && mixCall[1].p_rows[1].currency === 'JPY');
+    ok('금액은 언제나 원화로 넘긴다 (외화는 서버가 만든다)',
+       mixCall && mixCall[1].p_rows.every(r2 => r2.amount_krw > 0 && r2.pay_amount === undefined));
+
+    // 회수 현황에 외화 표기
+    DB.charges.push({ id:'c8', event_id:'e1', team_id:null, label:'엔화손님',
+                      amount_krw:1051875, pay_currency:'JPY', pay_amount:112500,
+                      status:'pending', token:'dd'.repeat(16) });
+    await window.kskOpenEvent('e1'); await sleep(180);
+    ok('회수 현황에 엔화로 보인다',
+       document.getElementById('kskBody').textContent.indexOf('¥112,500') >= 0);
+    ok('원화 기준도 같이 보인다',
+       document.getElementById('kskBody').textContent.indexOf('₩1,051,875') >= 0);
 
     // ── ⑪ 수동 입력 전환 ─────────────────────────────────────
     await window.kskSendOpen(); await sleep(300);

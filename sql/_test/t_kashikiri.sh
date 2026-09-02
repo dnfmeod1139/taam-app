@@ -320,5 +320,75 @@ hasnt "티켓 가격은 안 온다" "100000"   "$B"
 ok "없는 티켓은 빈 배열" "[]" "$(as $SUP "select public.taam_kashikiri_buyers('NOPE');")"
 ok "빈 값도 빈 배열"     "[]" "$(as $SUP "select public.taam_kashikiri_buyers('');")"
 
+
+echo "── ㉒ 달러·엔으로도 보낸다 ──"
+$P -c "delete from public.kashikiri_charges;
+       update public.kashikiri_events set total_krw=null, fx_rate=9.35, fx_usd=1360.50;" >/dev/null
+FX='[{"label":"원화","amount_krw":1051875},
+     {"label":"엔화","amount_krw":1051875,"currency":"JPY"},
+     {"label":"달러","amount_krw":1051875,"currency":"USD"}]'
+ok "셋을 한 번에 보낸다" OK \
+   "$(rc $SUP "select public.taam_kashikiri_send('e1111111-1111-4111-8111-111111111111','$FX'::jsonb);")"
+ok "원화는 그대로"    1051875.00 "$(sudo_ "select pay_amount from public.kashikiri_charges where label='원화';")"
+ok "엔은 정수로 환산" 112500.00  "$(sudo_ "select pay_amount from public.kashikiri_charges where label='엔화';")"
+ok "달러는 센트까지"  773.15     "$(sudo_ "select pay_amount from public.kashikiri_charges where label='달러';")"
+ok "정산 기준은 원화 그대로" "1051875,1051875,1051875" \
+   "$(sudo_ "select string_agg(amount_krw::text,',' order by label) from public.kashikiri_charges;")"
+ok "환율을 청구에 못 박는다" 9.3500 \
+   "$(sudo_ "select pay_fx from public.kashikiri_charges where label='엔화';")"
+ok "엔화 청구는 amount_jpy 도 채운다" 112500 \
+   "$(sudo_ "select amount_jpy from public.kashikiri_charges where label='엔화';")"
+ok "원화 청구는 amount_jpy 가 없다" 0 \
+   "$(sudo_ "select count(*) from public.kashikiri_charges where label='원화' and amount_jpy is not null;")"
+
+echo "── ㉓ 환율이 없으면 그 통화로 못 보낸다 ──"
+$P -c "update public.kashikiri_events set fx_usd=null;" >/dev/null
+ok "달러 환율 없으면 거절" FAIL \
+   "$(rc $SUP "select public.taam_kashikiri_send('e1111111-1111-4111-8111-111111111111','[{\"label\":\"x\",\"amount_krw\":1000,\"currency\":\"USD\"}]'::jsonb);")"
+$P -c "update public.kashikiri_events set fx_rate=null, fx_usd=1360.50;" >/dev/null
+ok "엔 환율 없으면 거절" FAIL \
+   "$(rc $SUP "select public.taam_kashikiri_send('e1111111-1111-4111-8111-111111111111','[{\"label\":\"y\",\"amount_krw\":1000,\"currency\":\"JPY\"}]'::jsonb);")"
+ok "모르는 통화는 거절" FAIL \
+   "$(rc $SUP "select public.taam_kashikiri_send('e1111111-1111-4111-8111-111111111111','[{\"label\":\"z\",\"amount_krw\":1000,\"currency\":\"EUR\"}]'::jsonb);")"
+$P -c "update public.kashikiri_events set fx_rate=9.35;" >/dev/null
+
+echo "── ㉔ 링크·결제 시작이 통화를 들고 간다 ──"
+TJ=$(sudo_ "select token from public.kashikiri_charges where label='엔화';")
+CJ=$($P -c "select public.taam_kashikiri_charge_public('$TJ');" | tail -1)
+has "통화가 나온다"        '"pay_currency": "JPY"' "$CJ"
+has "승인 금액이 나온다"   '"pay_amount": 112500'  "$CJ"
+has "원화 기준도 나온다"   '"amount_krw": 1051875' "$CJ"
+OJ=$($P -c "select public.taam_kashikiri_order_start('$TJ','테스트');" | tail -1)
+has "결제 시작이 통화를 준다" '"currency": "JPY"' "$OJ"
+has "승인 금액을 준다"        '"amount": 112500'  "$OJ"
+
+echo "── ㉕ 확정은 통화·금액을 둘 다 본다 ──"
+OID=$(sudo_ "select order_id from public.kashikiri_charges where label='엔화';")
+ok "원화라고 우기면 거절" FAIL \
+   "$(rc $SUP "select public.taam_kashikiri_mark_paid_v2('$OID','pk',112500,'KRW',null,null);")"
+ok "금액이 다르면 거절" FAIL \
+   "$(rc $SUP "select public.taam_kashikiri_mark_paid_v2('$OID','pk',112499,'JPY',null,null);")"
+ok "원화 금액으로 우기면 거절" FAIL \
+   "$(rc $SUP "select public.taam_kashikiri_mark_paid_v2('$OID','pk',1051875,'JPY',null,null);")"
+MP=$($P -c "select public.taam_kashikiri_mark_paid_v2('$OID','pk_ok',112500,'JPY','카드',null);" | tail -1)
+has "맞으면 확정"              '"ok": true'   "$MP"
+has "정산 원화를 함께 돌려준다" "settle_krw"   "$MP"
+has "승인 통화도 돌려준다"      '"JPY"'        "$MP"
+ok "상태가 paid" paid "$(sudo_ "select status from public.kashikiri_charges where label='엔화';")"
+# 두 번째는 already 로 빠진다 — 복귀 URL 을 새로고침해도 두 번 안 찍힌다
+has "두 번 확정하면 already"   "already" \
+    "$($P -c "select public.taam_kashikiri_mark_paid_v2('$OID','pk_ok',112500,'JPY',null,null);" | tail -1)"
+ok "회원은 v2 도 못 부른다" FAIL \
+   "$(rc $MEM "select public.taam_kashikiri_mark_paid_v2('$OID','pk',112500,'JPY',null,null);")"
+
+echo "── ㉖ 달러 센트가 어긋나면 거절 ──"
+TU=$(sudo_ "select token from public.kashikiri_charges where label='달러';")
+$P -c "select public.taam_kashikiri_order_start('$TU');" >/dev/null
+OU=$(sudo_ "select order_id from public.kashikiri_charges where label='달러';")
+ok "1센트 달라도 거절" FAIL \
+   "$(rc $SUP "select public.taam_kashikiri_mark_paid_v2('$OU','pk',773.14,'USD',null,null);")"
+ok "센트까지 맞으면 확정" OK \
+   "$($P -c "select public.taam_kashikiri_mark_paid_v2('$OU','pk',773.15,'USD','카드',null);" >/dev/null 2>&1 && echo OK || echo FAIL)"
+
 echo
 [ "$FAIL" = "1" ] && echo "=== 실패 있음 ===" || echo "=== 전부 통과 ==="
