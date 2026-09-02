@@ -13127,6 +13127,14 @@ window.closePromoCarousel = function(){
 .ksd-sum.bad .v{color:#9B1C1C}
 .ksd-sum .k{color:#79736a}
 .ksd-empty{padding:22px 0;text-align:center;font-size:12.5px;color:#9a948a;line-height:1.8}
+.ksd-cur{display:flex;align-items:center;gap:9px;margin-top:7px}
+.ksd-cur .seg{display:flex;border:1px solid #d5ccb6;border-radius:8px;overflow:hidden;flex:none}
+.ksd-cur .seg span{padding:6px 11px;font-size:12.5px;font-weight:700;color:#79736a;cursor:pointer;
+  background:#faf8f3;line-height:1.3}
+.ksd-cur .seg span + span{border-left:1px solid #d5ccb6}
+.ksd-cur .seg span.on{background:#5C0A14;color:#fff}
+.ksd-cur .seg span.off{color:#c5bfb2}
+.ksd-cur .pv{font-size:11.5px;color:#79736a;font-variant-numeric:tabular-nums}
 </style>
 
 <!-- 🆕 2026.08-30: 「더보기」 — 어드민 메뉴 전체에서 하나를 찾는다 -->
@@ -31303,6 +31311,17 @@ function _kskOrigin(){
 }
 // 정산 총액 한 줄. 안 적혀 있으면 「대조하지 않는다」는 사실까지 적는다 —
 // 지켜 주는 줄 알고 지나치는 게 제일 위험하다.
+// 청구 한 건의 금액 표기. 외화면 그 통화로 보여주고 원화 기준을 작게 붙인다 —
+// 회수 현황에서 「얼마 받기로 했나」는 언제나 원화가 기준이다.
+function _kskChargeAmt(c){
+  var cur = String(c.pay_currency || 'KRW').toUpperCase();
+  if(cur === 'KRW' || c.pay_amount == null) return _kskWon(c.amount_krw);
+  var n = Number(c.pay_amount) || 0;
+  var tx = (cur === 'JPY') ? _kskYen(Math.round(n))
+         : ('$' + n.toLocaleString('en-US', { minimumFractionDigits:2, maximumFractionDigits:2 }));
+  return tx + '<br><span style="font-weight:400;color:#9a948a;font-size:11px">'
+       + _kskWon(c.amount_krw) + '</span>';
+}
 function _kskTotalTx(e){
   if(!e || !e.total_krw) return '<span style="color:#9a948a">미설정 — 합계를 대조하지 않습니다</span>';
   var s = _kskWon(e.total_krw);
@@ -31604,6 +31623,7 @@ var _ksd = null;   // { manual, ticketId, rows:[{label,phone,amount,user_id,team
 function _ksdRow(o){
   o = o || {};
   return { label:o.label||'', phone:o.phone||'', amount:o.amount||0,
+           cur:o.cur||'KRW',
            user_id:o.user_id||null, team_id:o.team_id||null, guest_id:o.guest_id||null,
            fixed:!!o.fixed, pax:o.pax||0 };
 }
@@ -31699,6 +31719,36 @@ function kskSendAdd(){
 }
 window.kskSendAdd = kskSendAdd;
 
+// 통화를 바꾼다. 금액은 **원화 그대로** 두고 승인 통화만 바꾼다 —
+//   우리 매출 기준은 언제나 원화다. 외화 금액은 서버가 환율로 만든다.
+function kskSendCur(i, cur){
+  if(!_ksd) return;
+  _ksdCollect();
+  var e = _kskCur.ev;
+  if(cur === 'JPY' && !(parseFloat(e.fx_rate) > 0)){
+    showToast('⚠','엔 환율 먼저','「정산 정보 수정」에서 엔 환율을 넣어주세요'); return;
+  }
+  if(cur === 'USD' && !(parseFloat(e.fx_usd) > 0)){
+    showToast('⚠','달러 환율 먼저','「정산 정보 수정」에서 달러 환율을 넣어주세요'); return;
+  }
+  if(_ksd.rows[i]) _ksd.rows[i].cur = cur;
+  _ksdRender();
+}
+window.kskSendCur = kskSendCur;
+
+// 원화 금액을 그 통화로 환산해 보여준다 (서버가 하는 계산과 같은 식)
+function _ksdPreview(r){
+  var e = _kskCur.ev;
+  if(!r.amount || r.cur === 'KRW') return '';
+  if(r.cur === 'JPY'){
+    var fj = parseFloat(e.fx_rate) || 0;
+    return fj ? ('≈ ¥' + Math.round(r.amount / fj).toLocaleString('ja-JP')) : '';
+  }
+  var fu = parseFloat(e.fx_usd) || 0;
+  return fu ? ('≈ $' + (Math.round(r.amount / fu * 100) / 100).toLocaleString('en-US',
+                { minimumFractionDigits:2, maximumFractionDigits:2 })) : '';
+}
+
 function kskSendDel(i){
   if(!_ksd) return;
   _ksdCollect();
@@ -31783,7 +31833,8 @@ function _ksdRender(){
                       : '<span class="ph" style="color:#B45309">번호 없음</span>') + '</div>'
          + '<input class="amt" type="text" inputmode="numeric" placeholder="금액 (원)" '
          + 'value="' + (r.amount ? r.amount.toLocaleString('ko-KR') : '') + '" '
-         + 'oninput="tuFormatMoney(this);kskSendSum()" style="margin-top:7px"></div>';
+         + 'oninput="tuFormatMoney(this);kskSendSum()" style="margin-top:7px">'
+         + _ksdCurHtml(r, i) + '</div>';
     } else {
       h += '<div><div class="g2">'
          + '<input class="nm" type="text" placeholder="이름" value="' + _kskEsc(r.label) + '" oninput="kskSendSum()">'
@@ -31791,7 +31842,8 @@ function _ksdRender(){
          + '</div>'
          + '<input class="amt" type="text" inputmode="numeric" placeholder="금액 (원)" '
          + 'value="' + (r.amount ? r.amount.toLocaleString('ko-KR') : '') + '" '
-         + 'oninput="tuFormatMoney(this);kskSendSum()" style="margin-top:7px"></div>';
+         + 'oninput="tuFormatMoney(this);kskSendSum()" style="margin-top:7px">'
+         + _ksdCurHtml(r, i) + '</div>';
     }
     h += '<button class="del" onclick="kskSendDel(' + i + ')" aria-label="빼기">✕</button></div>';
   });
@@ -31806,6 +31858,22 @@ function _ksdRender(){
 
   body.innerHTML = h;
   kskSendSum();
+}
+
+// 통화 고르기 — 금액 칸 바로 아래. 해외 손님 카드에 원화 결제로 찍히면
+//   카드사 환가료가 붙고, 본인도 명세서에 얼마가 나올지 모른다.
+function _ksdCurHtml(r, i){
+  var e = _kskCur.ev;
+  var okJ = (parseFloat(e.fx_rate) > 0), okU = (parseFloat(e.fx_usd) > 0);
+  var pv = _ksdPreview(r);
+  var b = function(c, tx, on){
+    return '<span class="' + (r.cur === c ? 'on' : '') + (on ? '' : ' off') + '" '
+         + 'onclick="kskSendCur(' + i + ',\'' + c + '\')">' + tx + '</span>';
+  };
+  return '<div class="ksd-cur">'
+       +   '<div class="seg">' + b('KRW','₩',true) + b('JPY','¥',okJ) + b('USD','$',okU) + '</div>'
+       +   '<span class="pv">' + (pv || (r.cur === 'KRW' ? '원화로 승인' : '')) + '</span>'
+       + '</div>';
 }
 
 function _ksdPhone(p){
@@ -31824,8 +31892,15 @@ function kskSendSum(){
   var go = document.getElementById('ksdGo');
   var ready = s.rows.filter(function(r){ return r.label && r.amount > 0; }).length;
   if(el){
+    var byCur = { KRW:0, JPY:0, USD:0 };
+    s.rows.forEach(function(r){ if(r.label && r.amount > 0) byCur[r.cur || 'KRW']++; });
+    var mix = [];
+    if(byCur.KRW) mix.push('₩' + byCur.KRW);
+    if(byCur.JPY) mix.push('¥' + byCur.JPY);
+    if(byCur.USD) mix.push('$' + byCur.USD);
     el.className = 'ksd-sum';
-    el.innerHTML = '<span class="k">보낼 ' + ready + '명 합계</span>'
+    el.innerHTML = '<span class="k">보낼 ' + ready + '명 합계'
+                 + ((mix.length > 1) ? (' · ' + mix.join(' ')) : '') + '</span>'
                  + '<span class="v">' + _kskWon(sum) + '</span>';
   }
   if(go){
@@ -31846,13 +31921,13 @@ async function kskSendSave(){
   var go = document.getElementById('ksdGo');
   if(go){ go.disabled = true; go.textContent = '만드는 중…'; }
   try {
-    var fx = parseFloat(_kskCur.ev.fx_rate) || 0;
     var payload = rows.map(function(r){
       return {
         label: r.label, phone: r.phone || null,
         amount_krw: r.amount,
-        // 엔화는 환율이 있을 때만 되돌린다. 없으면 결제 화면에 원화만 뜬다.
-        amount_jpy: fx ? Math.round(r.amount / fx) : null,
+        // 통화만 넘긴다. 외화 금액은 **서버가** 환율로 만든다 —
+        // 브라우저가 준 금액을 쓰면 그걸로 끝이다.
+        currency: r.cur || 'KRW',
         user_id: r.user_id || null, team_id: r.team_id || null, guest_id: r.guest_id || null
       };
     });
@@ -31971,7 +32046,9 @@ function _kskRenderEvent(){
      +   '<div class="ksk-row"><span class="k">인원</span><span class="v">' + (e.total_pax||0) + '명</span></div>'
      +   '<div class="ksk-row"><span class="k">대표 동행</span><span class="v">' + (e.escort ? '동행' : '없음') + '</span></div>'
      +   '<div class="ksk-row"><span class="k">적용 환율</span><span class="v">'
-     +     (e.fx_rate ? ('1엔 = ' + _kskFx(e.fx_rate) + '원') : '<span style="color:#9a948a">미설정</span>') + '</span></div>'
+     +     (e.fx_rate ? ('1엔 = ' + _kskFx(e.fx_rate) + '원') : '<span style="color:#9a948a">엔 미설정</span>')
+     +     (e.fx_usd ? ('<br><span style="color:#79736a;font-size:11.5px">1달러 = ' + _kskFx(e.fx_usd) + '원</span>') : '')
+     +   '</span></div>'
      +   '<div class="ksk-row"><span class="k">매장 지급</span><span class="v">'
      +     (e.venue_paid_jpy ? _kskYen(e.venue_paid_jpy) : '<span style="color:#9a948a">—</span>') + '</span></div>'
      +   '<div class="ksk-row"><span class="k">정산 총액</span><span class="v">'
@@ -32008,7 +32085,7 @@ function _kskRenderEvent(){
       h += '<div class="ksk-pay"><span class="' + (done ? 'ok' : 'no') + '">' + (done ? '✓' : '○') + '</span>'
          + '<span>' + _kskEsc(c.payer_name || c.label) + '</span>'
          + (c.user_id ? '<span class="ksk-tag">회원</span>' : '')
-         + '<span class="amt">' + _kskWon(c.amount_krw) + '</span>'
+         + '<span class="amt">' + _kskChargeAmt(c) + '</span>'
          + (done ? ''
             : '<button class="ksk-btn ghost sm" style="margin-left:8px" onclick="kskCopy(\'' + c.token + '\')">링크</button>'
             + '<button class="ksk-btn ghost sm" style="margin-left:5px;padding:7px 9px" '
@@ -32069,6 +32146,9 @@ function kskEditEvent(){
       hint:'게스트 시트에 <b>매번</b> 표시됩니다. 없는 회차도 「동행 없음」으로 적힙니다.' },
     { k:'fx',   label:'적용 환율 — 1엔 = ?원', type:'dec', value:e.fx_rate ? _kskFx(e.fx_rate) : '',
       ph:'9.35', hint:'이걸 넣어야 조 금액(엔화)이 원화로 확정됩니다.' },
+    { k:'fxu', label:'적용 환율 — 1달러 = ?원', type:'dec',
+      value:e.fx_usd ? _kskFx(e.fx_usd) : (typeof fxRate === 'function' ? String(Math.round(fxRate())) : ''),
+      ph:'1360', hint:'해외 손님에게 <b>달러로</b> 청구할 때만 씁니다. 비워도 원화·엔화는 됩니다.' },
     { k:'note', label:'환율 근거', type:'text', value:e.fx_note || '', ph:'1/1 매매기준율 + 2%',
       hint:'결제 화면에 <b>그대로</b> 나갑니다 — 숨기면 분쟁이 납니다.' },
     { k:'paid', label:'매장에 지급한 엔화 총액', type:'money', pre:'¥',
@@ -32098,7 +32178,8 @@ function kskEditEvent(){
     try {
       var tj = v.total || null;
       var up2 = await window.sb.from('kashikiri_events')
-        .update({ total_jpy: tj, total_krw: (tj && fx) ? Math.round(tj * fx) : null }).eq('id', e.id);
+        .update({ total_jpy: tj, total_krw: (tj && fx) ? Math.round(tj * fx) : null,
+                  fx_usd: v.fxu || null }).eq('id', e.id);
       if(up2.error) console.warn('ℹ️ 정산 총액 저장 생략 (컬럼 없음?):', up2.error.message);
     } catch(_te){ console.warn('ℹ️ 정산 총액 예외:', _te); }
     // 환율이 바뀌면 조 원화도 다시 계산한다 — 엔화가 있는 조만.
@@ -40245,7 +40326,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.02-a';
+var TAAM_WEB_BUILD = '2026.09.02-b';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
