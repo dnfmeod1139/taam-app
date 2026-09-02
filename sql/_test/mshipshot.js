@@ -33,8 +33,9 @@ const { chromium } = require('playwright-core');
       rpc: (fn, a) => { rpc.push([fn, a]);
         if (fn === 'taam_mship_my_application') return Promise.resolve({ data: null, error: null });
         if (fn === 'taam_mship_settings') return Promise.resolve({ data: {
-          deposit_amount: 10125000, annual_fee: 1270000,
-          annual_fee_note: '금액 확정 전', guest_days: 90 }, error: null });
+          deposit_amount: 10125000,
+          annual_fee_cash: 1125000, annual_fee_card: 1270000,
+          annual_fee_note: '카드 결제 시 수수료·부가세 포함', guest_days: 90 }, error: null });
         if (fn === 'taam_guest_state') return Promise.resolve({ data: null, error: null });
         return Promise.resolve({ data: { ok: true, already: false, id: 'x' }, error: null }); },
       from: () => ({ select: () => ({ eq: () => ({ maybeSingle: () =>
@@ -48,9 +49,24 @@ const { chromium } = require('playwright-core');
     const txt = scr.textContent;
     // ⚠ 금액은 설정값에서 온다. 연회비를 127만으로 넣었으니 총액은 1,139.5만이어야 한다.
     ok('예치금을 설정값에서 읽는다 ⭐', txt.indexOf('10,125,000원') >= 0);
-    ok('연회비를 설정값에서 읽는다 ⭐', txt.indexOf('1,270,000원') >= 0);
-    ok('총액을 서버 값으로 더한다 ⭐',  txt.indexOf('11,395,000원') >= 0);
-    ok('미확정이라고 적어 준다',       txt.indexOf('금액 확정 전') >= 0);
+    // ⚠ 연회비만 결제 수단으로 갈린다. 하나만 적으면 카드로 낸 사람에게는
+    //   적게 적히고 이체한 사람에게는 더 받는 것처럼 적힌다.
+    ok('이체 연회비를 적는다',   txt.indexOf('1,125,000원 (이체)') >= 0);
+    ok('카드 연회비도 적는다 ⭐', txt.indexOf('1,270,000원 (카드)') >= 0);
+    ok('이체 총액',              txt.indexOf('11,250,000원 (이체)') >= 0);
+    ok('카드 총액도 나란히 ⭐',   txt.indexOf('11,395,000원') >= 0);
+    // ⚠ 흰 카드 위에 흰 글씨로 적어 안 보인 적이 있다. 보이는지까지 본다.
+    ok('카드 총액이 실제로 보인다 ⭐', (function(){
+       // ⚠ offsetParent 로 보이는지 판정하면 안 된다 — position:fixed 조상
+       //   아래에서는 null 이 나와 「멀쩡한데 안 보인다」로 잘못 잡힌다.
+       var el = document.getElementById('mshipTotalCard');
+       if(!el || getComputedStyle(el).display === 'none') return false;
+       var c = getComputedStyle(el).color.replace(/[^0-9,]/g,'').split(',').map(Number);
+       return !(c[0] > 230 && c[1] > 230 && c[2] > 230);   // 흰 배경에 흰 글씨 금지
+    })());
+    ok('카드에 수수료·부가세가 붙는다고 말한다', txt.indexOf('수수료·부가세') >= 0);
+    ok('예치금은 결제 수단과 무관 (한 번만 적는다)',
+       (txt.match(/10,125,000원/g) || []).length === 1);
     // 퍼센트 문구는 전면 금지 — 예치금은 적립이 아니라 맡아 두는 돈이다
     ok('90%·10% 가 없다 ⭐', !/9\s*0\s*%|1\s*0\s*%/.test(txt));
     ok('금액이 번역에 안 박혀 있다 ⭐',

@@ -44,9 +44,15 @@ grant select on public.membership_settings to anon, authenticated;
 -- 기본값. ⚠ annual_fee 는 **아직 정해지지 않은 값**이다 —
 --   지금 값은 실수령 기준(112.5만)일 뿐, 과세 구분이 확정되면 바뀐다.
 insert into public.membership_settings (k, v, note) values
-  ('deposit_amount', '10125000'::jsonb, '다이닝 예치금 (원). M회원 전용'),
-  ('annual_fee',     '1125000'::jsonb,  '연회비 (원). ⚠ 미확정 — 과세 127만 / 영세율 115만 결정 대기'),
-  ('annual_fee_note','"금액 확정 전"'::jsonb, '연회비 옆에 붙일 한 줄. 비우면 안 붙는다'),
+  -- 예치금은 결제 수단과 무관하다. 손님이 맡기는 돈 자체는 같은 금액이다.
+  ('deposit_amount',   '10125000'::jsonb, '다이닝 예치금 (원). 결제 수단과 무관 · M회원 전용'),
+  -- ⚠ 연회비만 결제 수단에 따라 갈린다. 카드에는 수수료·부가세가 얹힌다.
+  --   하나로 합쳐 두면 카드로 낸 사람에게 적게 적히거나, 이체한 사람에게
+  --   더 받는 것처럼 적힌다 — 둘 다 그대로 문의가 된다.
+  ('annual_fee_cash',  '1125000'::jsonb,  '연회비 — 현금·계좌이체 (원)'),
+  ('annual_fee_card',  '1270000'::jsonb,  '연회비 — 카드 (원). 수수료·부가세 포함. ⚠ 과세 구분 확정 전'),
+  ('annual_fee_note',  '"카드 결제 시 수수료·부가세 포함"'::jsonb,
+                       '연회비 옆에 붙일 한 줄. 비우면 안 붙는다'),
   ('guest_days',     '90'::jsonb,       '게스트 초대 기간 (일)'),
   ('guest_extend_days','90'::jsonb,     '[+90일] 한 번에 늘리는 일수'),
   ('guest_warn_days','7'::jsonb,        '만료 며칠 전에 알리나'),
@@ -265,10 +271,12 @@ commit;
 -- 확인 — 하나만 돌린다
 -- ═══════════════════════════════════════════════════════════════
 select '① 설정값' as "구분",
-       case when count(*) >= 12 then '✅ ' || count(*)::text || '개'
+       case when count(*) >= 13 then '✅ ' || count(*)::text || '개'
             else '❌ ' || count(*)::text || '개뿐' end as "상태",
-       coalesce((select v#>>'{}' from public.membership_settings where k='annual_fee'), '—')
-         || '원 (연회비 · 미확정)' as "메모"
+       coalesce((select v#>>'{}' from public.membership_settings where k='annual_fee_cash'), '—')
+         || '원(이체) / '
+         || coalesce((select v#>>'{}' from public.membership_settings where k='annual_fee_card'), '—')
+         || '원(카드)' as "메모"
   from public.membership_settings
 
 union all
