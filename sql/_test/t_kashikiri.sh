@@ -283,18 +283,59 @@ ok "빈 배열은 거절" FAIL \
    "$(rc $SUP "select public.taam_kashikiri_send('e1111111-1111-4111-8111-111111111111','[]'::jsonb);")"
 ok "거절된 줄은 하나도 안 들어갔다" 3 "$(sudo_ "select count(*) from public.kashikiri_charges;")"
 
-echo "── ⑲ 총액을 적어 두면 합계를 대조한다 ──"
+echo "── ⑲ 총액은 「넘을 때만」 막는다 ──"
+# 보내기는 더하기다. 4명 중 2명만 먼저 보내는 건 정상적인 중간 상태고,
+# 그때 합계는 당연히 총액보다 적다. 막아야 하는 건 **넘기는 것**뿐이다.
 $P -c "delete from public.kashikiri_charges;
        update public.kashikiri_events set total_krw = 3000000;" >/dev/null
-ok "합계가 모자라면 거절" FAIL \
+ok "모자라도 보낸다 ⭐" OK \
    "$(rc $SUP "select public.taam_kashikiri_send('e1111111-1111-4111-8111-111111111111','[{\"label\":\"a\",\"amount_krw\":1000000}]'::jsonb);")"
-ok "딱 맞으면 통과" OK \
-   "$(rc $SUP "select public.taam_kashikiri_send('e1111111-1111-4111-8111-111111111111','[{\"label\":\"a\",\"amount_krw\":1000000},{\"label\":\"b\",\"amount_krw\":2000000}]'::jsonb);")"
-ok "이미 보낸 것까지 합해서 본다" FAIL \
+ok "남은 만큼 더 보낸다" OK \
+   "$(rc $SUP "select public.taam_kashikiri_send('e1111111-1111-4111-8111-111111111111','[{\"label\":\"b\",\"amount_krw\":2000000}]'::jsonb);")"
+ok "다 채운 뒤 1원이라도 더 보내면 거절" FAIL \
    "$(rc $SUP "select public.taam_kashikiri_send('e1111111-1111-4111-8111-111111111111','[{\"label\":\"c\",\"amount_krw\":1}]'::jsonb);")"
+ok "한 번에 총액을 넘겨도 거절" FAIL \
+   "$($P -c "delete from public.kashikiri_charges;" >/dev/null;
+      rc $SUP "select public.taam_kashikiri_send('e1111111-1111-4111-8111-111111111111','[{\"label\":\"d\",\"amount_krw\":3000001}]'::jsonb);")"
+ok "거절되면 한 줄도 안 들어간다" 0 "$(sudo_ "select count(*) from public.kashikiri_charges;")"
+# 취소된 건은 「보낸 것」에서 빠진다 — 끊고 다시 보낼 수 있어야 한다
+$P -c "set role authenticated; select set_config('taam.uid','$SUP',false);
+       select public.taam_kashikiri_send('e1111111-1111-4111-8111-111111111111','[{\"label\":\"e\",\"amount_krw\":3000000}]'::jsonb);" >/dev/null 2>&1
+ok "다 찼으면 더 못 보낸다" FAIL \
+   "$(rc $SUP "select public.taam_kashikiri_send('e1111111-1111-4111-8111-111111111111','[{\"label\":\"f\",\"amount_krw\":1}]'::jsonb);")"
+CE=$(sudo_ "select id from public.kashikiri_charges where label='e' limit 1;")
+$P -c "set role authenticated; select set_config('taam.uid','$SUP',false);
+       select public.taam_kashikiri_charge_cancel('$CE');" >/dev/null 2>&1
+ok "끊으면 그만큼 다시 보낼 수 있다 ⭐" OK \
+   "$(rc $SUP "select public.taam_kashikiri_send('e1111111-1111-4111-8111-111111111111','[{\"label\":\"g\",\"amount_krw\":3000000}]'::jsonb);")"
+
+echo "── ⑲-b 남은 금액 ──"
+$P -c "delete from public.kashikiri_charges;" >/dev/null
+$P -c "set role authenticated; select set_config('taam.uid','$SUP',false);
+       select public.taam_kashikiri_send('e1111111-1111-4111-8111-111111111111','[{\"label\":\"h\",\"amount_krw\":1200000}]'::jsonb);" >/dev/null 2>&1
+RM=$(as $SUP "select public.taam_kashikiri_remaining('e1111111-1111-4111-8111-111111111111');")
+has "보낸 금액을 센다"   '"sent_krw": 1200000' "$RM"
+has "남은 금액을 준다"   '"left_krw": 1800000' "$RM"
+ok "회원은 못 본다" FAIL \
+   "$(rc $MEM "select public.taam_kashikiri_remaining('e1111111-1111-4111-8111-111111111111');")"
 $P -c "update public.kashikiri_events set total_krw = null;" >/dev/null
+has "총액이 없으면 남은 금액도 없다" '"left_krw": null' \
+    "$(as $SUP "select public.taam_kashikiri_remaining('e1111111-1111-4111-8111-111111111111');")"
+
+echo "── ⑲-c 토큰이 pgcrypto 에 안 기댄다 ──"
+# Supabase 는 확장을 extensions 스키마에 둔다. search_path=public 인 함수에서
+# gen_random_bytes 를 부르면 「does not exist」로 **링크 발급이 통째로 실패**했다.
+ok "토큰이 32자로 나온다" 32 "$($P -c "select length(public.taam_kashikiri_token());" | tail -1)"
+ok "두 번 불러도 다르다" different \
+   "$([ "$($P -c "select public.taam_kashikiri_token();" | tail -1)" != "$($P -c "select public.taam_kashikiri_token();" | tail -1)" ] && echo different || echo same)"
 
 echo "── ⑳ 한 건 끊기 ──"
+# ⚠ 앞 블록이 남긴 행에 기대지 않는다 — 그러면 앞이 바뀔 때마다 여기가 깨진다
+$P -c "delete from public.kashikiri_charges;
+       update public.kashikiri_events set total_krw = null;" >/dev/null
+$P -c "set role authenticated; select set_config('taam.uid','$SUP',false);
+       select public.taam_kashikiri_send('e1111111-1111-4111-8111-111111111111',
+         '[{\"label\":\"a\",\"amount_krw\":1000000},{\"label\":\"b\",\"amount_krw\":2000000}]'::jsonb);" >/dev/null 2>&1
 CID=$(sudo_ "select id from public.kashikiri_charges where label='a' limit 1;")
 ok "회원은 못 끊는다" FAIL "$(rc $MEM "select public.taam_kashikiri_charge_cancel('$CID');")"
 ok "슈퍼어드민은 끊는다" OK  "$(rc $SUP "select public.taam_kashikiri_charge_cancel('$CID');")"

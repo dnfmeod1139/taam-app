@@ -31940,8 +31940,12 @@ function _ksdRender(){
   h += '<div class="ksk-note" style="margin-top:14px">'
      + '보내기는 <b>더하기</b>입니다 — 이미 보낸 링크는 그대로 살아 있습니다. '
      + '빼야 할 사람은 회수 현황에서 한 건씩 끊으세요.'
-     + (e.total_krw ? ('<br>이 회차 정산 총액이 <b>' + _kskWon(e.total_krw)
-                       + '</b>로 적혀 있어, 합계가 어긋나면 서버가 막습니다.') : '')
+     + (e.total_krw
+        ? ('<br>정산 총액 <b>' + _kskWon(e.total_krw) + '</b> 중 '
+           + '이미 <b>' + _kskWon(_ksdSent()) + '</b> 보냈고, '
+           + '<b>' + _kskWon(_ksdLeft()) + '</b> 남았습니다. '
+           + '<b>총액을 넘기면</b> 서버가 막습니다 — 모자란 건 괜찮습니다.')
+        : '<br>이 회차에 정산 총액이 없어 합계를 대조하지 않습니다.')
      + '</div>';
 
   body.innerHTML = h;
@@ -31964,6 +31968,21 @@ function _ksdCurHtml(r, i){
        + '</div>';
 }
 
+// 이미 보낸 합계 (취소된 건은 뺀다) — 서버가 세는 것과 같은 기준이다
+function _ksdSent(){
+  if(!_kskCur) return 0;
+  var n = 0;
+  (_kskCur.charges || []).forEach(function(c){
+    if(c.status !== 'cancelled') n += (parseInt(c.amount_krw,10) || 0);
+  });
+  return n;
+}
+// 아직 안 보낸 금액. 총액을 안 적었으면 「남은 금액」이라는 것도 없다.
+function _ksdLeft(){
+  var t = _kskCur ? (parseInt(_kskCur.ev.total_krw,10) || 0) : 0;
+  return t > 0 ? (t - _ksdSent()) : 0;
+}
+
 function _ksdPhone(p){
   var d = String(p || '').replace(/[^0-9]/g, '');
   if(d.length === 11) return d.slice(0,3) + '-' + d.slice(3,7) + '-' + d.slice(7);
@@ -31979,6 +31998,11 @@ function kskSendSum(){
   var el = document.getElementById('ksdSum');
   var go = document.getElementById('ksdGo');
   var ready = s.rows.filter(function(r){ return r.label && r.amount > 0; }).length;
+  // 총액이 적혀 있으면 「남은 금액」을 넘는지 그 자리에서 본다.
+  //   서버가 막기 전에 화면이 먼저 알려줘야, 다 적고 나서 튕기지 않는다.
+  var total = _kskCur ? (parseInt(_kskCur.ev.total_krw,10) || 0) : 0;
+  var left  = _ksdLeft();
+  var over  = (total > 0) && (sum > left);
   if(el){
     var byCur = { KRW:0, JPY:0, USD:0 };
     s.rows.forEach(function(r){ if(r.label && r.amount > 0) byCur[r.cur || 'KRW']++; });
@@ -31986,14 +32010,21 @@ function kskSendSum(){
     if(byCur.KRW) mix.push('₩' + byCur.KRW);
     if(byCur.JPY) mix.push('¥' + byCur.JPY);
     if(byCur.USD) mix.push('$' + byCur.USD);
-    el.className = 'ksd-sum';
+    el.className = 'ksd-sum' + (over ? ' bad' : '');
     el.innerHTML = '<span class="k">보낼 ' + ready + '명 합계'
-                 + ((mix.length > 1) ? (' · ' + mix.join(' ')) : '') + '</span>'
+                 + ((mix.length > 1) ? (' · ' + mix.join(' ')) : '')
+                 + (total > 0
+                    ? ('<br><span style="font-size:11px;color:' + (over ? '#9B1C1C' : '#79736a') + '">'
+                       + (over ? ('남은 ' + _kskWon(left) + ' 을 ' + _kskWon(sum - left) + ' 넘습니다')
+                               : ('남은 금액 ' + _kskWon(left))) + '</span>')
+                    : '')
+                 + '</span>'
                  + '<span class="v">' + _kskWon(sum) + '</span>';
   }
   if(go){
-    go.disabled = !ready;
-    go.textContent = ready ? ('링크 ' + ready + '건 만들고 보내기') : '보낼 사람을 채워주세요';
+    go.disabled = !ready || over;
+    go.textContent = over ? '총액을 넘습니다'
+                   : (ready ? ('링크 ' + ready + '건 만들고 보내기') : '보낼 사람을 채워주세요');
   }
 }
 window.kskSendSum = kskSendSum;
@@ -40414,7 +40445,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.02-f';
+var TAAM_WEB_BUILD = '2026.09.02-g';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
