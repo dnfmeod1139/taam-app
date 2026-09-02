@@ -31372,6 +31372,17 @@ function _kskTotalTx(e){
   if(e.total_jpy) s += '<br><span style="color:#79736a;font-size:11.5px">' + _kskYen(e.total_jpy) + '</span>';
   return s;
 }
+// 문자로 나가는 금액. 화면용(_kskChargeAmt)과 달리 HTML 이 아니다.
+// 외화 건은 **그 통화로** 적는다 — 결제 페이지가 엔·달러로 승인하는데
+// 문자에는 원화만 적혀 있으면 「금액이 다른데요」가 그대로 문의로 돌아온다.
+function _kskAmtTx(c){
+  var cur = String((c && c.pay_currency) || 'KRW').toUpperCase();
+  if(cur === 'KRW' || c.pay_amount == null) return _kskWon(c.amount_krw);
+  var n = Number(c.pay_amount) || 0;
+  var tx = (cur === 'JPY') ? _kskYen(Math.round(n))
+         : ('$' + n.toLocaleString('en-US', { minimumFractionDigits:2, maximumFractionDigits:2 }));
+  return tx + ' (' + _kskWon(c.amount_krw) + ')';
+}
 function _kskPayUrl(tok){ return _kskOrigin() + '/pay/?t=' + encodeURIComponent(tok); }
 function _kskSheetUrl(tok){ return _kskOrigin() + '/sheet/?t=' + encodeURIComponent(tok); }
 
@@ -32426,10 +32437,20 @@ function kskCopyAll(){
     return c.status !== 'paid' && c.status !== 'cancelled';
   });
   if(!cs.length){ showToast('✓','전부 결제됨',''); return; }
+  // 외화 건이 하나라도 섞였으면 안내를 EN·JA 로도 붙인다. 한 덩어리로 복사해
+  // 단체 채팅에 붙이는 용도라, 받는 사람이 섞여 있어도 각자 자기 줄을 읽는다.
+  var hasFx = cs.some(function(c){
+    return String(c.pay_currency || 'KRW').toUpperCase() !== 'KRW';
+  });
   var head = '[TAAM] ' + (_kskCur.ev.venue_name||'') + ' · ' + _kskDate(_kskCur.ev.event_date) + '\n'
-           + '아래 링크에서 각자 카드로 결제해 주세요. 앱 설치는 필요 없습니다.\n\n';
+           + '아래 링크에서 각자 카드로 결제해 주세요. 앱 설치는 필요 없습니다.\n';
+  if(hasFx){
+    head += 'Please pay with your card at the link below. No app needed.\n'
+          + '下記のリンクからカードでお支払いください。アプリのインストールは不要です。\n';
+  }
+  head += '\n';
   var body = cs.map(function(c){
-    return c.label + '  ' + _kskWon(c.amount_krw) + '\n' + _kskPayUrl(c.token);
+    return c.label + '  ' + _kskAmtTx(c) + '\n' + _kskPayUrl(c.token);
   }).join('\n\n');
   _kskClip(head + body, cs.length + '건을 복사했습니다');
 }
@@ -40445,7 +40466,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.02-g';
+var TAAM_WEB_BUILD = '2026.09.02-h';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
