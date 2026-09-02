@@ -599,6 +599,62 @@ const { chromium } = require('playwright-core');
        RPC.some(x => x[0] === 'taam_kashikiri_charge_cancel' && x[1].p_charge_id === 'c9'));
     window.sb.rpc = realRpc;
 
+    // ── ⑬ 시트가 접히지 않는다 ⭐ ────────────────────────────
+    //   ⚠ flex:1 1 0 은 바깥 높이가 auto 인 flex 컨테이너에서 본문을 0 으로
+    //     접는다. 컨테이너 높이가 내용으로 정해지는데 본문이 flex-basis:0 이라
+    //     「내용 0」으로 계산돼 헤더와 버튼만 남는다. 실제로 「새 정산」이
+    //     두 줄짜리 띠로 떠서 아무것도 못 골랐다.
+    //   높이는 눈으로만 보이는 것이라 렌더링을 재야 잡힌다.
+    // ⚠ 헤드리스에서는 #mainScreen 이 display:none 이라 그 안의 요소가 전부
+    //   높이 0 으로 잡힌다. position:fixed 라도 마찬가지다 — 부모가 안 그려지면
+    //   자식도 안 그려진다. 높이를 재기 전에 화면을 켠다.
+    const _ms = document.getElementById('mainScreen');
+    if(_ms) _ms.style.display = 'flex';
+    const _aw = document.getElementById('appWrapper');
+    if(_aw) _aw.style.display = 'block';
+
+    function bodyH(id){
+      const el = document.getElementById(id);
+      return el ? Math.round(el.getBoundingClientRect().height) : 0;
+    }
+    // 없으면 0 — null 로 터지지 않게 한다 (터지면 어느 줄인지도 못 본다).
+    // ⚠ '#' 로 시작한다고 id 로 단정하면 '#a .b' 같은 선택자를 통째로 id 로
+    //   찾아 늘 null 이 된다. querySelector 는 둘 다 받는다.
+    function elH(sel){
+      const el = document.querySelector(sel);
+      return el ? Math.round(el.getBoundingClientRect().height) : 0;
+    }
+    const vh = window.innerHeight;
+
+    await window.kskOpenEvent('e1'); await sleep(180);
+    window.kskEditEvent(); await sleep(200);
+    ok('정산 정보 시트 본문이 화면 절반은 된다', bodyH('kskfBody') > vh * 0.5);
+    ok('본문이 스크롤된다', document.getElementById('kskfBody').scrollHeight
+                            >= document.getElementById('kskfBody').clientHeight);
+    ok('첫 칸이 실제로 보인다', elH('#kskf_name') > 20);
+    window.kskFormClose(); await sleep(80);
+
+    window.kskAddTeam(); await sleep(200);
+    ok('조 추가 시트도 안 접힌다', bodyH('kskfBody') > vh * 0.5);
+    window.kskFormClose(); await sleep(80);
+
+    window.kskNewEvent(); await sleep(200);
+    ok('새 정산 시트도 안 접힌다', bodyH('kskfBody') > vh * 0.5);
+    ok('티켓 고르는 칸이 보인다', elH('#kskf_ticket') > 20);
+    window.kskFormClose(); await sleep(80);
+
+    window.kskSplitOpen('t1'); await sleep(200);
+    ok('분할 시트도 안 접힌다', bodyH('kspBody') > vh * 0.5);
+    window.kskSplitClose(); await sleep(80);
+
+    await window.kskSendOpen(); await sleep(320);
+    ok('보내기 시트도 안 접힌다', bodyH('ksdBody') > vh * 0.5);
+    // 이 시점엔 구매자 스텁이 풀려 있어 줄이 비어 있을 수 있다 — 하나 넣고 잰다
+    window.kskSendAdd(); await sleep(120);
+    ok('보내기 시트에 보낼 줄이 실제로 보인다', elH('#ksdBody .ksd-row[data-i]') > 30);
+    ok('이름 칸이 실제로 보인다', elH('#ksdBody .ksd-row input.nm') > 20);
+    window.kskSendClose(); await sleep(80);
+
     // ── ⑧ 토스트가 아래로 새지 않는다 ────────────────────────
     //   배너는 top:20px 이고 그 아래에 콘솔 헤더의 ✕(앱으로 나가기)가 있다.
     //   pointer-events:none 이면 탭이 그대로 통과해 앱 밖으로 나갔다.
