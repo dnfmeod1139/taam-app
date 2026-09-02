@@ -13031,7 +13031,7 @@ window.closePromoCarousel = function(){
 <style>
 /* 정산 링크 — 어드민 콘솔의 다른 화면과 같은 결(밝은 종이 위 카드) */
 .ksk-card{background:#fff;border:1px solid #e8e2d3;border-radius:12px;padding:14px 15px;margin-bottom:10px}
-.ksk-card .h{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap}
+.ksk-card .h{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;min-width:0}
 .ksk-card .h .nm{font-size:15px;font-weight:800;color:#1a1a18;letter-spacing:-.01em}
 .ksk-card .h .dt{font-size:12.5px;color:#79736a;font-variant-numeric:tabular-nums}
 .ksk-card .h .st{margin-left:auto;font-size:10.5px;font-weight:700;padding:2px 9px;border-radius:999px}
@@ -13057,7 +13057,8 @@ window.closePromoCarousel = function(){
 .ksk-grid2{display:grid;grid-template-columns:1fr 1fr;gap:9px}
 .ksk-pay{display:flex;align-items:baseline;gap:8px;padding:8px 0;border-bottom:1px dashed #ece7dd;font-size:13px}
 .ksk-pay:last-child{border-bottom:none}
-.ksk-pay .amt{margin-left:auto;font-variant-numeric:tabular-nums;font-weight:600}
+.ksk-pay .amt{margin-left:auto;font-variant-numeric:tabular-nums;font-weight:600;
+  white-space:nowrap;flex:none;text-align:right}
 .ksk-pay .ok{color:#2c6b47;font-weight:700}
 .ksk-pay .no{color:#9a948a}
 .ksk-tag{font-size:9.5px;font-weight:700;padding:1px 6px;border-radius:999px;background:rgba(200,169,110,.2);color:#8a6d2e}
@@ -13066,7 +13067,7 @@ window.closePromoCarousel = function(){
   font-size:11.5px;color:#5a5751;line-height:1.7}
 .ksp-line{display:flex;align-items:center;gap:9px;padding:9px 0;border-bottom:1px solid #f2efe8}
 .ksp-line .lb{flex:1;min-width:0;font-size:13px;color:#1a1a18;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ksp-line input{width:130px;padding:9px 10px;border:1px solid #d5ccb6;border-radius:8px;
+.ksp-line input{width:130px;min-width:0;padding:9px 10px;border:1px solid #d5ccb6;border-radius:8px;
   background:#faf8f3;font-family:var(--font-main);font-size:14px;text-align:right;
   font-variant-numeric:tabular-nums}
 .ksp-sum{display:flex;justify-content:space-between;align-items:baseline;gap:10px;
@@ -13108,7 +13109,8 @@ window.closePromoCarousel = function(){
   padding:10px 0;border-bottom:1px solid #f2efe8}
 .ksd-row:last-child{border-bottom:none}
 .ksd-row .g2{display:grid;grid-template-columns:1fr 1fr;gap:7px}
-.ksd-row .who{font-size:13.5px;font-weight:700;color:#1a1a18;display:flex;align-items:baseline;gap:7px}
+.ksd-row .who{font-size:13.5px;font-weight:700;color:#1a1a18;display:flex;align-items:baseline;
+  gap:7px;flex-wrap:wrap;min-width:0}
 .ksd-row .who .tag{font-size:9.5px;font-weight:700;padding:1px 6px;border-radius:999px;
   background:rgba(200,169,110,.2);color:#8a6d2e}
 .ksd-row .who .tag.ov{background:rgba(44,90,160,.14);color:#2C5AA0}
@@ -13135,7 +13137,44 @@ window.closePromoCarousel = function(){
 .ksd-cur .seg span + span{border-left:1px solid #d5ccb6}
 .ksd-cur .seg span.on{background:#5C0A14;color:#fff}
 .ksd-cur .seg span.off{color:#c5bfb2}
-.ksd-cur .pv{font-size:11.5px;color:#79736a;font-variant-numeric:tabular-nums}
+.ksd-cur .pv{font-size:11.5px;color:#79736a;font-variant-numeric:tabular-nums;
+  min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ══════════════════════════════════════════════════════════════
+   정산 링크 — 세로로만 스크롤한다
+   ══════════════════════════════════════════════════════════════
+   가로 스크롤이 나면 손가락이 세로로 미끄러지다 옆으로 새고, 그 상태로
+   버튼을 누르면 엉뚱한 것이 눌린다. 폭이 넘칠 일을 아예 안 만든다.
+
+   ⚠ overflow-x:hidden 만 걸면 「안 보이게」 될 뿐 여전히 넘친다 —
+     잘린 쪽 내용은 영영 못 본다. 그래서 넘치는 원인을 같이 없앤다:
+     · flex·grid 자식은 기본 min-width 가 auto 라 내용보다 안 줄어든다.
+       min-width:0 을 줘야 실제로 줄어든다 (여기가 대부분의 원인이다)
+     · 이름·주소처럼 띄어쓰기 없는 긴 문자열은 anywhere 로 끊는다
+     · 고정 폭 입력칸(130px)은 좁은 화면에서 그대로 넘친다 — 최대폭으로 바꾼다
+   ══════════════════════════════════════════════════════════════ */
+/* ⚠ overflow-x:hidden 은 「그릴 때」 자르는 것이고, 손가락 제스처는 따로다.
+     폰에서 옆으로 미는 느낌(고무줄·튐)은 touch-action 으로만 막힌다.
+     pan-y = 브라우저는 세로 패닝만 처리한다. 가로 제스처는 아무 일도 안 한다.
+     이 화면들엔 가로로 밀 것이 하나도 없으므로 잃는 것도 없다. */
+#kskBody, #ksdBody, #kskfBody, #kspBody{
+  overflow-x:hidden; overscroll-behavior-x:none; overscroll-behavior-y:contain;
+  touch-action:pan-y }
+#kskScreen, #kskSend, #kskForm, #kskSplit{ overflow-x:hidden; touch-action:pan-y }
+#kskBody *, #ksdBody *, #kskfBody *, #kspBody *{ max-width:100% }
+.ksk-card, .ksk-row, .ksk-pay, .ksk-acts, .ksd-row, .ksd-row .g2,
+.ksp-line, .kskf-f, .ksd-cur, .ksd-sec, .ksd-all{ min-width:0 }
+.ksk-row > *, .ksk-pay > *, .ksd-row > *, .ksd-row .g2 > *,
+.ksp-line > *, .ksd-cur > *{ min-width:0 }
+/* 이름·매장명·문구는 넘치는 대신 줄을 바꾼다 */
+.ksk-card .nm, .ksk-row .v, .ksk-pay span, .ksd-row .who,
+.ksk-sub, .ksk-note, .ksk-empty, .kskf-f .hint{ overflow-wrap:anywhere }
+/* 링크·토큰처럼 붙어 있는 긴 문자열이 카드를 밀지 않게 */
+#kskBody code, #ksdBody code{ overflow-wrap:anywhere }
+/* 입력칸은 고정 폭을 두지 않는다 — 좁은 화면에서 그대로 넘친다 */
+.ksp-line input{ width:auto; max-width:44%; flex:0 1 130px }
+.ksp-line .lb{ flex:1 1 auto }
+.ksk-btn{ max-width:100%; white-space:normal }
 .ksd-all{display:flex;align-items:center;gap:6px;font-size:11.5px;color:#79736a;padding:4px 0 2px}
 .ksd-all span{border:1px solid #d5ccb6;border-radius:7px;padding:3px 10px;font-size:12.5px;
   font-weight:700;color:#5a5751;cursor:pointer;background:#faf8f3}
@@ -40375,7 +40414,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.02-e';
+var TAAM_WEB_BUILD = '2026.09.02-f';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){

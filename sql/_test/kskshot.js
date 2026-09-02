@@ -16,7 +16,9 @@ const { chromium } = require('playwright-core');
 
 (async () => {
   const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium' });
-  const p = await b.newPage();
+  // ⚠ 폭은 좁게 잡는다. 데스크톱 폭(1280)에서는 가로 넘침이 안 잡힌다 —
+  //   이 화면은 폰에서 쓰는 것이고, 넘치는 건 늘 좁은 쪽에서 넘친다.
+  const p = await b.newPage({ viewport: { width: 390, height: 844 } });
   const errs = [];
   p.on('pageerror', e => errs.push(String(e)));
   await p.goto('file:///home/user/taam-app/index.html', { waitUntil: 'domcontentloaded' });
@@ -654,6 +656,87 @@ const { chromium } = require('playwright-core');
     ok('보내기 시트에 보낼 줄이 실제로 보인다', elH('#ksdBody .ksd-row[data-i]') > 30);
     ok('이름 칸이 실제로 보인다', elH('#ksdBody .ksd-row input.nm') > 20);
     window.kskSendClose(); await sleep(80);
+
+    // ── ⑭ 가로로는 스크롤되지 않는다 ⭐ ──────────────────────
+    //   가로 스크롤이 나면 손가락이 세로로 미끄러지다 옆으로 새고, 그 상태로
+    //   버튼을 누르면 엉뚱한 것이 눌린다.
+    //   ⚠ overflow-x:hidden 만 걸면 「안 보이게」 될 뿐 여전히 넘친다 —
+    //     잘린 쪽 내용은 영영 못 본다. 그래서 scrollWidth 로 **실제 폭**을 잰다.
+    function overflows(id){
+      const el = document.getElementById(id);
+      if(!el) return false;
+      return el.scrollWidth > el.clientWidth + 1;
+    }
+    // 안쪽에서 삐져나온 놈이 있는지도 본다 (숨겨 놓고 넘치는 걸 잡는다)
+    function widest(id){
+      const box = document.getElementById(id);
+      if(!box) return 0;
+      const w = box.getBoundingClientRect().width;
+      let over = 0;
+      box.querySelectorAll('*').forEach(el => {
+        const r = el.getBoundingClientRect();
+        if(r.width > 0) over = Math.max(over, Math.round(r.right - box.getBoundingClientRect().right));
+      });
+      return over;              // 0 이하면 아무것도 안 삐져나왔다
+    }
+
+    // 좁은 화면 + 길게 붙은 값으로 몰아붙인다
+    const realW = window.innerWidth;
+    DB.events[0].venue_name = '鮨 めい乃 ' + 'ながいてんぽめい'.repeat(3);
+    DB.events[0].fx_note = '2027/01/01매매기준율에2퍼센트를더한값입니다'.repeat(2);
+    DB.charges = [
+      { id:'cx1', event_id:'e1', team_id:null, status:'pending', token:'ee'.repeat(16),
+        label:'아주아주긴이름을가진동행자님이오셨습니다', amount_krw:123456789 },
+      { id:'cx2', event_id:'e1', team_id:null, status:'paid', token:'ff'.repeat(16),
+        label:'Ludwig van Beethoven-Schmidt', amount_krw:98765432,
+        pay_currency:'USD', pay_amount:72596.65 }
+    ];
+    await window.kskOpenEvent('e1'); await sleep(220);
+    ok('목록·상세가 가로로 안 넘친다', !overflows('kskBody'));
+    ok('긴 이름이 카드를 밀지 않는다', widest('kskBody') <= 1);
+    ok('그래도 세로로는 스크롤된다',
+       document.getElementById('kskBody').scrollHeight > 0);
+
+    window.kskEditEvent(); await sleep(200);
+    ok('정산 정보 시트가 가로로 안 넘친다', !overflows('kskfBody'));
+    ok('입력칸이 삐져나오지 않는다', widest('kskfBody') <= 1);
+    window.kskFormClose(); await sleep(80);
+
+    window.kskSplitOpen('t1'); await sleep(200);
+    ok('분할 시트가 가로로 안 넘친다', !overflows('kspBody'));
+    ok('금액칸이 삐져나오지 않는다', widest('kspBody') <= 1);
+    window.kskSplitClose(); await sleep(80);
+
+    await window.kskSendOpen(); await sleep(320);
+    window.kskSendAdd(); await sleep(120);
+    const nmEl = document.querySelector('#ksdBody .ksd-row input.nm');
+    if(nmEl){ nmEl.value = '이름이아주긴사람의성함입니다정말로깁니다'; window.kskSendSum(); }
+    await sleep(120);
+    ok('보내기 시트가 가로로 안 넘친다', !overflows('ksdBody'));
+    ok('이름·번호칸이 삐져나오지 않는다', widest('ksdBody') <= 1);
+    window.kskSendClose(); await sleep(80);
+
+    // 화면 자체가 옆으로 밀리지 않는다
+    ok('화면이 옆으로 안 밀린다',
+       document.documentElement.scrollWidth <= window.innerWidth + 1);
+
+    // ⚠ 그리기(overflow)와 제스처(touch-action)는 다른 것이다.
+    //   폰에서 옆으로 미는 느낌은 touch-action 으로만 막힌다.
+    function ta(id){
+      const el = document.getElementById(id);
+      return el ? getComputedStyle(el).touchAction : '';
+    }
+    ['kskBody','ksdBody','kskfBody','kspBody'].forEach(id => {
+      ok('세로 제스처만 받는다 — #' + id, ta(id) === 'pan-y');
+    });
+    ['kskScreen','kskSend','kskForm','kskSplit'].forEach(id => {
+      ok('가로 제스처를 안 받는다 — #' + id, ta(id) === 'pan-y');
+    });
+    ok('가로 넘침을 그리지도 않는다',
+       ['kskBody','ksdBody','kskfBody','kspBody'].every(id => {
+         const el = document.getElementById(id);
+         return el && getComputedStyle(el).overflowX === 'hidden';
+       }));
 
     // ── ⑧ 토스트가 아래로 새지 않는다 ────────────────────────
     //   배너는 top:20px 이고 그 아래에 콘솔 헤더의 ✕(앱으로 나가기)가 있다.
