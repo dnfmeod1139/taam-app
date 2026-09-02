@@ -199,6 +199,45 @@ const { chromium } = require('playwright-core');
     ok('미결제만 모아 복사한다', copied && copied.indexOf('bb'.repeat(16)) >= 0
                                 && copied.indexOf('aa'.repeat(16)) < 0);
     ok('보낼 문구가 붙는다', copied && copied.indexOf('앱 설치는 필요 없습니다') >= 0);
+    // 머리글 — 매장·날짜가 없으면 받는 사람이 무슨 결제인지 모른다
+    ok('머리글에 [TAAM]',   copied && copied.indexOf('[TAAM]') === 0);
+    ok('머리글에 매장 이름', copied && copied.indexOf('めい乃') >= 0);
+    ok('머리글에 날짜',      copied && copied.indexOf('1.1 (금)') >= 0);
+    ok('이름 옆에 금액',     copied && copied.indexOf('동행 1  ₩1,122,000') >= 0);
+    ok('이름 다음 줄이 링크',
+       copied && /동행 1 {2}₩1,122,000\nhttps?:\/\/\S+\/pay\/\?t=b{32}/.test(copied));
+    // 원화만인 회차에는 외국어를 붙이지 않는다 — 한국 손님에게 3줄은 군더더기다
+    ok('원화만이면 EN·JA 는 안 붙는다', copied && copied.indexOf('No app needed') < 0);
+
+    // ── ⑥-2 외화가 섞이면 ───────────────────────────────────
+    //   결제 페이지는 엔·달러로 승인하는데 문자에 원화만 적으면
+    //   「금액이 다른데요」가 그대로 문의가 된다.
+    DB.charges = [
+      { id:'c1', event_id:'e1', team_id:'t2', label:'Y様', amount_krw:1122000, status:'pending',
+        token:'dd'.repeat(16), pay_currency:'JPY', pay_amount:120000, pay_fx:9.35 },
+      { id:'c2', event_id:'e1', team_id:'t2', label:'Mr. Lee', amount_krw:1400000, status:'pending',
+        token:'ee'.repeat(16), pay_currency:'USD', pay_amount:1015.94, pay_fx:1378 },
+      { id:'c3', event_id:'e1', team_id:'t2', label:'김우종', amount_krw:1122000, status:'pending',
+        token:'ff'.repeat(16), pay_currency:'KRW' }
+    ];
+    await window.kskOpenEvent('e1'); await sleep(150);
+    window.kskCopyAll(); await sleep(120);
+    ok('엔화 건은 ¥ 로 적는다',   copied && copied.indexOf('Y様  ¥120,000') >= 0);
+    ok('달러 건은 $ 로 적는다',   copied && copied.indexOf('Mr. Lee  $1,015.94') >= 0);
+    ok('외화 옆에 원화 기준 ⭐',  copied && copied.indexOf('¥120,000 (₩1,122,000)') >= 0);
+    ok('원화 건은 그대로 ₩',     copied && copied.indexOf('김우종  ₩1,122,000') >= 0);
+    ok('섞이면 영어 안내가 붙는다', copied && copied.indexOf('No app needed') >= 0);
+    ok('섞이면 일본어 안내도',      copied && copied.indexOf('アプリのインストールは不要です') >= 0);
+    ok('사람마다 링크가 다르다',
+       copied && copied.indexOf('dd'.repeat(16)) >= 0
+              && copied.indexOf('ee'.repeat(16)) >= 0
+              && copied.indexOf('ff'.repeat(16)) >= 0);
+    // 뒤 블록이 기대하는 상태로 돌려놓는다 — 안 그러면 여기 때문에 뒤가 깨진다
+    DB.charges = [
+      { id:'c1', event_id:'e1', team_id:'t2', label:'Y様', amount_krw:1122000, status:'paid',  token:'aa'.repeat(16), user_id:'u1' },
+      { id:'c2', event_id:'e1', team_id:'t2', label:'동행 1', amount_krw:1122000, status:'pending', token:'bb'.repeat(16) }
+    ];
+    await window.kskOpenEvent('e1'); await sleep(150);
 
     RPC.length = 0;
     await window.kskSheetLink(); await sleep(150);
