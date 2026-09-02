@@ -82,7 +82,8 @@ const jsQR = require('jsqr');
     window.showToast = (a, b2, c) => { window.__toast = [a, b2, c]; };
 
     window._kskCur = {
-      ev: { id: 'e1', venue_name: '鮨 めい乃', event_date: '2027-01-01', total_krw: 4000000 },
+      ev: { id: 'e1', venue_name: '鮨 めい乃', event_date: '2027-01-01', total_krw: 4000000,
+            fx_rate: 9.35, fx_usd: 1378 },
       teams: [], guests: [],
       charges: [
         { id:'c1', label:'Y様',     token:'aa'.repeat(16), status:'pending',
@@ -134,6 +135,71 @@ const jsQR = require('jsqr');
     okk('끝에서 처음으로 돌아온다', document.getElementById('kqrWho').textContent === 'Y様');
     window.kskQrStep(-1); await sleep(80);
     okk('뒤로도 돈다', document.getElementById('kqrWho').textContent === '김우종');
+
+    // ── ④-b 자리에서 국내·해외를 확정한다 ────────────────────
+    //   QR 을 내미는 그 순간이 「이분 해외카드시네」를 아는 순간이다.
+    let rpc = [];
+    window.sb = { rpc: (fn, a) => { rpc.push([fn, a]);
+      return Promise.resolve({ data: { ok:true, pay_currency:a.p_currency,
+        pay_fx: a.p_currency === 'JPY' ? 9.35 : (a.p_currency === 'USD' ? 1378 : 1),
+        pay_amount: a.p_currency === 'JPY' ? 120000
+                  : (a.p_currency === 'USD' ? 815.68 : 1122000) }, error: null }); } };
+    window._kskRenderEvent = () => {};
+
+    window.kskQrOpen('c3'); await sleep(120);   // 김우종 — 원화
+    const seg = document.getElementById('kqrCur');
+    okk('국내·해외 칸이 있다', !!seg && seg.querySelectorAll('span').length === 3);
+    okk('세 개가 아니라 「국내 / 해외 ¥ / 해외 $」',
+        seg.textContent.indexOf('국내') >= 0 && seg.textContent.indexOf('해외 ¥') >= 0);
+    okk('지금 통화가 켜져 있다', seg.querySelector('span.on').textContent.indexOf('국내') >= 0);
+
+    rpc = [];
+    await window.kskQrCur('JPY'); await sleep(120);
+    okk('서버에 통화만 넘긴다 ⭐',
+        rpc.length === 1 && rpc[0][0] === 'taam_kashikiri_charge_currency'
+        && rpc[0][1].p_charge_id === 'c3' && rpc[0][1].p_currency === 'JPY');
+    okk('금액을 앱이 만들지 않는다',
+        Object.keys(rpc[0][1]).every(k => k === 'p_charge_id' || k === 'p_currency'));
+    okk('바꾸면 ¥ 로 다시 그린다', document.getElementById('kqrAmt').textContent === '¥120,000');
+    okk('안내도 일본어로 바뀐다',
+        document.getElementById('kqrTip').firstElementChild.textContent.indexOf('カメラ') >= 0);
+    okk('링크는 그대로다 ⭐', /\/pay\/\?t=c{32}$/.test(document.getElementById('kqrUrl').textContent));
+
+    rpc = [];
+    await window.kskQrCur('JPY'); await sleep(80);
+    okk('같은 통화를 다시 누르면 서버를 안 부른다', rpc.length === 0);
+
+    // 환율이 없으면 못 고른다 — 없는 환율로 금액을 지어내지 않는다
+    const savedU = window._kskCur.ev.fx_usd;
+    window._kskCur.ev.fx_usd = null;
+    window.kskQrStep(0); await sleep(80);   // 제자리에서 다시 그린다
+    okk('달러 환율이 없으면 흐리게', !!seg.querySelector('span.off'));
+    window.__toast = null; rpc = [];
+    await window.kskQrCur('USD'); await sleep(80);
+    okk('환율 없이 누르면 서버를 안 부른다', rpc.length === 0);
+    okk('왜 안 되는지 말해준다', window.__toast && window.__toast[1] === '달러 환율 먼저');
+
+    // 지금 쓰는 통화는 환율이 비어도 흐려지지 않는다 ⭐
+    //   회차에서 엔 환율을 지우면, 이미 엔으로 나간 청구가 「못 쓰는 것」처럼
+    //   보인다 — 멀쩡히 살아 있는 링크인데.
+    const savedJ = window._kskCur.ev.fx_rate;
+    window._kskCur.ev.fx_rate = null;
+    window.kskQrStep(0); await sleep(80);
+    okk('쓰고 있는 통화는 안 흐려진다 ⭐',
+        !seg.querySelector('span.on').classList.contains('off'));
+    window._kskCur.ev.fx_rate = savedJ;
+    window._kskCur.ev.fx_usd = savedU;
+    window.kskQrStep(0); await sleep(60);
+
+    // SQL 을 아직 안 돌린 경우 — 조용히 실패하지 않는다
+    window.sb = { rpc: () => Promise.resolve({ data:null,
+      error: { message: 'function public.taam_kashikiri_charge_currency does not exist' } }) };
+    window.__toast = null;
+    await window.kskQrCur('KRW'); await sleep(100);
+    okk('SQL 이 없으면 무엇을 해야 하는지 알려준다',
+        window.__toast && window.__toast[1] === '아직 준비 안 됨'
+        && String(window.__toast[2]).indexOf('kashikiri_charge_currency.sql') >= 0);
+    okk('실패하면 화면도 안 바뀐다', document.getElementById('kqrAmt').textContent === '¥120,000');
 
     // URL 이 화면에도 남는다 (카메라가 안 될 때 불러 줄 수 있어야 한다)
     okk('링크가 글자로도 보인다',
