@@ -6870,6 +6870,11 @@ function _fxCompNum(t, comp, krwPer, dc){
 function fxTicketComp(t, comp, krwPer, pax){
   var n = pax || 1;
   var krw = (parseInt(krwPer, 10) || 0) * n;
+  // 🆕 2026-09: 게스트가는 원화 그대로 보여준다.
+  //   ⚠ 확정 정가(ovs_prices)는 **회원가** 기준으로 적혀 있다. 게스트가를
+  //     그 표로 환산하면 화면은 ≈$ 인데 청구는 원화 게스트가로 나간다.
+  //     fxTicketCharge 도 게스트석에서는 환산을 안 한다 — 여기도 맞춘다.
+  if (comp === 'guest') return '₩' + krw.toLocaleString();
   var dc = _fxDispCur();
   if (!dc) return '₩' + krw.toLocaleString();
   var r = _fxCompNum(t, comp, krwPer, dc);
@@ -6913,6 +6918,10 @@ window._fxUnitSum = _fxUnitSum;
 
 // 합계 표시 — 항목 숫자의 합과 정확히 일치한다 (전 항목 확정이면 ≈ 없이)
 function fxTicketTotal(t, pax, meal, wine, krwTotal){
+  // 🆕 게스트석은 환산하지 않는다 — _fxUnitSum 은 **회원가 항목**을 더한다.
+  //   그대로 두면 게스트 화면의 합계만 회원가로 돌아가 항목과 안 맞는다.
+  if (typeof _tkIsGuestBuy === 'function' && _tkIsGuestBuy(t))
+    return '₩' + (parseInt(krwTotal, 10) || 0).toLocaleString();
   var dc = _fxDispCur();
   if (!dc) return '₩' + (parseInt(krwTotal, 10) || 0).toLocaleString();
   var u = _fxUnitSum(t, pax, dc);
@@ -6931,8 +6940,62 @@ window.fxTicketComp = fxTicketComp; window.fxTicketTotal = fxTicketTotal;
 //   ⚠ 기준 통화는 _fxDispCur() — 화면이 쓰는 것과 같아야 한다.
 //     _taamUserCur() 를 쓰면 엔 기준율이 없는 JPY 회원에게 화면은 원화인데
 //     청구만 엔 환산이 되는 어긋남이 생긴다.
+// 회원가 — 1인당. 결제도 화면도 이 식 하나만 쓴다.
+function _tkMemberPer(t){
+  return (parseInt((t && (t.mealFee || t.mealAmt)) || 0, 10) || 0)
+       + (parseInt((t && t.agencyFee) || 0, 10) || 0)
+       + (parseInt((t && t.wineMin) || 0, 10) || 0);
+}
+// 🆕 2026-09: 지금 이 사람이 낼 1인당 금액.
+//   ⚠ 게스트가 게스트석을 살 때는 **게스트가**다 (회원가 + 서비스피).
+//     종전에는 회원가로 결제됐다 — guest_price 를 적어 두고 아무도 안 읽었다.
+//   ⚠ 게스트가가 안 적혀 있으면 회원가로 떨어뜨리지 않는다.
+//     그건 「싸게 파는」 쪽이라 조용히 넘어가면 안 된다 — 0 을 돌려
+//     결제를 못 하게 하고, 어드민이 가격을 채우게 한다.
+// 지금 이 사람이 이 자리를 **게스트로** 사는가. 금액·표시가 전부 이걸로 갈린다.
+function _tkIsGuestBuy(t){
+  return typeof _tkIsFreeMember === 'function' && _tkIsFreeMember()
+      && typeof _tkIsGuestSeat  === 'function' && _tkIsGuestSeat(t);
+}
+function _tkPayPer(t){
+  var member = _tkMemberPer(t);
+  if(!_tkIsGuestBuy(t)) return member;
+  var g = parseInt((t && (t.guestPrice || t.guest_price)) || 0, 10) || 0;
+  return g > 0 ? g : 0;
+}
+window._tkMemberPer = _tkMemberPer; window._tkPayPer = _tkPayPer;
+window._tkIsGuestBuy = _tkIsGuestBuy;
+
+// 결제 상세의 **항목 목록**. 게스트석이면 「게스트 초대석」 한 줄로 갈린다.
+//   ⚠ 같은 표를 네 화면이 그린다 — 예약 시트 · 확인 시트 · 결제 팝업 · 구매 상세.
+//     한 곳만 고치면 어떤 화면은 회원가 항목, 어떤 화면은 게스트가가 떠서
+//     같은 결제를 두 가지로 설명하게 된다. 그래서 목록은 여기 하나만 만든다.
+//   ⚠ 회원가와 게스트가를 나란히 놓지 않는다 — 스펙이 금지한다.
+function _tkCostRows(t){
+  if (_tkIsGuestBuy(t)) {
+    var g = _tkPayPer(t);
+    // 가격이 안 적혀 있으면 줄을 안 만든다 — 회원가로 떨어뜨리지 않는다.
+    return g > 0 ? [{ key: 'guest', label: '게스트 초대석', amt: g }] : [];
+  }
+  var out = [];
+  var meal   = parseInt((t && (t.mealFee || t.mealAmt)) || 0, 10) || 0;
+  var agency = parseInt((t && t.agencyFee) || 0, 10) || 0;
+  var wine   = parseInt((t && t.wineMin) || 0, 10) || 0;
+  if (meal)   out.push({ key: 'meal',   label: '식사비',      amt: meal });
+  if (agency) out.push({ key: 'agency', label: '대행비',      amt: agency });
+  if (wine)   out.push({ key: 'wine',   label: '주류 미니멈', amt: wine });
+  return out;
+}
+window._tkCostRows = _tkCostRows;
+
 function fxTicketCharge(t, pax){
   var n = pax || 1;
+  var per = _tkPayPer(t);
+  // 게스트석이면 게스트가 하나로 받는다 — 항목을 쪼개지 않는다.
+  if(typeof _tkIsFreeMember === 'function' && _tkIsFreeMember()
+     && typeof _tkIsGuestSeat === 'function' && _tkIsGuestSeat(t)){
+    return { krw: per * n, fx: null, guest: true, per: per };
+  }
   var mealK = parseInt(t.mealFee || t.mealAmt || 0, 10) || 0;
   var agencyK = parseInt(t.agencyFee || 0, 10) || 0;
   var wineK = parseInt(t.wineMin || 0, 10) || 0;
@@ -22250,12 +22313,22 @@ function openTicketDetail(id){
     var meal   = parseInt(t.mealFee||t.mealAmt||0);
     var agency = parseInt(t.agencyFee||0);
     var wine   = parseInt(t.wineMin||0);
-    var costs  = [];
-    if (meal)   costs.push({label:'식사비',      key:'meal',   amt:meal,   desc:'인당 코스 (식사) 비용 방문후 · 예치금 반환'});
-    if (agency) costs.push({label:'대행비',      key:'agency', amt:agency, desc:'예약 대행 수수료 (환불 불가)'});
-    if (wine)   costs.push({label:'주류 미니멈', key:'wine',   amt:wine,   desc:'인원당 최소 주류 주문 금액'});
+    // 🆕 2026-09: 게스트가 게스트석을 볼 때는 **게스트가 한 줄**만 보여준다.
+    //   ⚠ 회원가와 나란히 놓지 않는다 — 스펙이 금지한다. 대신
+    //     「멤버는 우선 · 우대가로 구매합니다」 한 줄을 아래에 붙인다.
+    var _gsMine = (typeof _tkIsGuestBuy === 'function') && _tkIsGuestBuy(t);
+    var DESC = {
+      guest : (typeof _tkGuestReason === 'function' && _tkGuestReason(t))
+              ? _tkGuestReason(t) : '초대석 요금 (1인)',
+      meal  : '인당 코스 (식사) 비용 방문후 · 예치금 반환',
+      agency: '예약 대행 수수료 (환불 불가)',
+      wine  : '인원당 최소 주류 주문 금액'
+    };
+    var costs = _tkCostRows(t).map(function(c){
+      return { label: c.label, key: c.key, amt: c.amt, desc: DESC[c.key] || '' };
+    });
     if (costs.length > 0) {
-      var totalAmt = (meal+agency+wine) * _tdPax;
+      var totalAmt = _tkPayPer(t) * _tdPax;
       costEl.innerHTML =
         '<div style="font-family:var(--font-main);font-size:8px;font-weight:800;letter-spacing:.18em;color:#aaa;margin-bottom:10px;">PRICE BREAKDOWN</div>'
         + costs.map(function(c){
@@ -22273,7 +22346,16 @@ function openTicketDetail(id){
         +'<div id="tdTotalRow" style="display:flex;align-items:center;justify-content:space-between;padding:12px 0;margin-top:2px;">'
           +'<span style="font-family:var(--font-main);font-size:10px;font-weight:800;letter-spacing:.1em;color:#111;">TOTAL</span>'
           +'<span id="tdTotal" style="font-family:Oswald,sans-serif;font-size:22px;font-weight:800;color:#5C0A14;">'+fxTicketTotal(t,_tdPax,meal,wine,totalAmt)+'</span>'
-        +'</div>';
+        +'</div>'
+        // ⚠ 회원가를 나란히 적지 않는다. 스펙이 금지한다 — 대신 한 줄만.
+        //   「영영 못 산다」가 아니라 「멤버는 우선·우대가」라고 말한다.
+        + (_gsMine
+           ? '<div style="margin-top:2px;padding:11px 13px;border-radius:10px;background:#fbf9f5;'
+             + 'border:1px solid #ece8df;font-family:var(--font-main);font-size:11.5px;'
+             + 'line-height:1.75;color:#8a7b63;">'
+             + '멤버는 <b style="color:#5C0A14;">우선</b> · <b style="color:#5C0A14;">우대가</b>로 구매합니다.<br>'
+             + '게스트 초대석은 비정기적으로, 드물게 열립니다.</div>'
+           : '');
     } else {
       costEl.innerHTML = '';
     }
@@ -22440,9 +22522,12 @@ if (heroVidEl) {
   var dtEl = document.getElementById('tdGridDateTime');
   if (dtEl) dtEl.textContent = dStr + (tStr ? ' · ' + tStr : '');
 
-  var perPerson = (parseInt(t.mealFee||t.mealAmt||0)||0)
-                + (parseInt(t.agencyFee||0)||0)
-                + (parseInt(t.wineMin||0)||0);
+  // 🆕 게스트가 게스트석을 볼 때는 게스트가. 결제와 같은 식 하나만 쓴다.
+  var perPerson = (typeof _tkPayPer === 'function')
+    ? _tkPayPer(t)
+    : ((parseInt(t.mealFee||t.mealAmt||0)||0)
+     + (parseInt(t.agencyFee||0)||0)
+     + (parseInt(t.wineMin||0)||0));
   var priceEl = document.getElementById('tdGridPrice');
   var _perUnit = _tdIsEn ? ' / guest' : (_tdIsJa ? ' / お一人様' : ' / 인');
   if (priceEl) {
@@ -23480,9 +23565,9 @@ function refreshSheetSummary() {
   if(!_sheetName) _sheetName = r ? r.name : t.rest;
   h+='<div style="font-family:var(--font-main);font-size:17px;font-weight:800;color:#111;margin-bottom:4px;">'+_sheetName+'</div>';
   h+='<div style="font-family:var(--font-main);font-size:12px;color:#aaa;margin-bottom:10px;">'+dateStr+' · '+td+'</div>';
-  if(meal)   h+='<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">식사비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxTicketComp(t,'meal',meal,pax)+'</span></div>';
-  if(agency) h+='<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">대행비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxTicketComp(t,'agency',agency,pax)+'</span></div>';
-  if(wine)   h+='<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">주류 미니멈 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxTicketComp(t,'wine',wine,pax)+'</span></div>';
+  _tkCostRows(t).forEach(function(c){
+    h+='<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">'+c.label+' ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxTicketComp(t,c.key,c.amt,pax)+'</span></div>';
+  });
   h+='<div style="display:flex;justify-content:space-between;padding:9px 0;"><span style="font-size:14px;font-weight:800;color:#111;">합계</span><span style="font-size:20px;font-weight:900;color:#5C0A14;">'+fxTicketTotal(t,pax,meal,wine,totalPay)+'</span></div>';
   var cr=document.getElementById('tdConfirmRows'); if(cr) cr.innerHTML=h;
   var after=currentDepositBalance-totalPay;
@@ -23672,9 +23757,9 @@ function handleTicketAction(){
   if(!_sheetName) _sheetName = r ? r.name : t.rest;
   h+='<div style="font-family:var(--font-main);font-size:17px;font-weight:800;color:#111;margin-bottom:4px;">'+_sheetName+'</div>';
   h+='<div style="font-family:var(--font-main);font-size:12px;color:#aaa;margin-bottom:16px;">'+dateStr+' · '+td+' · '+pax+'인</div>';
-  if(meal)   h+='<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">식사비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxTicketComp(t,'meal',meal,pax)+'</span></div>';
-  if(agency) h+='<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">대행비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxTicketComp(t,'agency',agency,pax)+'</span></div>';
-  if(wine)   h+='<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">주류 미니멈 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxTicketComp(t,'wine',wine,pax)+'</span></div>';
+  _tkCostRows(t).forEach(function(c){
+    h+='<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">'+c.label+' ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxTicketComp(t,c.key,c.amt,pax)+'</span></div>';
+  });
   h+='<div style="display:flex;justify-content:space-between;padding:10px 0;"><span style="font-size:14px;font-weight:800;color:#111;">합계</span><span style="font-size:20px;font-weight:900;color:#5C0A14;">'+fxTicketTotal(t,pax,meal,wine,totalPay)+'</span></div>';
   var cr=document.getElementById('tdConfirmRows'); if(cr) cr.innerHTML=h;
 
@@ -24657,10 +24742,10 @@ function _showTdConfirmPopup(t, r, pax, meal, agency, wine, totalPay, after) {
   var sh='';
   sh+='<div style="font-family:var(--font-main);font-size:16px;font-weight:800;color:#111;margin-bottom:4px;">'+(r?r.name:t.rest)+'</div>';
   sh+='<div style="font-family:var(--font-main);font-size:12px;color:#aaa;margin-bottom:12px;">'+dateStr+' · '+td+' · '+pax+'인</div>';
-  if(meal)   sh+='<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">식사비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxTicketComp(t,'meal',meal,pax)+'</span></div>';
-  if(agency) sh+='<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">대행비 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxTicketComp(t,'agency',agency,pax)+'</span></div>';
   // 🆕 2026.05.21: 주류 미니멈 줄 누락 수정 — 합계엔 포함됐는데 리스트 미표시로 고객 혼동 유발하던 버그
-  if(wine)   sh+='<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">주류 미니멈 ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxTicketComp(t,'wine',wine,pax)+'</span></div>';
+  _tkCostRows(t).forEach(function(c){
+    sh+='<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f4f1ec;"><span style="font-size:13px;color:#555;">'+c.label+' ×'+pax+'인</span><span style="font-size:13px;font-weight:700;">'+fxTicketComp(t,c.key,c.amt,pax)+'</span></div>';
+  });
   sh+='<div style="display:flex;justify-content:space-between;padding:8px 0;"><span style="font-size:14px;font-weight:800;color:#111;">합계</span><span style="font-size:18px;font-weight:900;color:#5C0A14;">'+fxTicketTotal(t,pax,meal,wine,totalPay)+'</span></div>';
   var ps = document.getElementById('tdPaySummary'); if(ps) ps.innerHTML=sh;
   var bh='<div style="display:flex;justify-content:space-between;padding:6px 0;"><span style="font-size:12px;color:#aaa;">예치금 잔액</span><span style="font-size:13px;font-weight:700;">'+fxMoney(currentDepositBalance)+'</span></div>';
@@ -32151,8 +32236,9 @@ function _gsRender(){
   h += '<div class="gs-f"><label>게스트가 <b>*</b></label>'
      + '<input class="gs-in" id="gsPrice" type="text" inputmode="numeric" '
      + 'value="' + (st.price ? Number(st.price).toLocaleString('ko-KR') : '') + '" '
-     + 'oninput="tuFormatMoney(this)" placeholder="회원가 + 서비스피">'
-     + '<div class="gs-hint">회원가(' + _mshipWon(t.price || 0) + ')보다 높게 잡습니다. '
+     + 'oninput="tuFormatMoney(this)" placeholder="1인당 · 회원가 + 서비스피">'
+     // ⚠ t.price 는 의미가 모호하다. **결제가 실제로 쓰는 식**을 기준으로 보여준다.
+     + '<div class="gs-hint">회원가(' + _mshipWon(_tkMemberPer(t)) + ' / 1인)보다 높게 잡습니다. '
      + '두 가격을 나란히 보여주지는 않습니다 — 「멤버는 우대가」 한 줄만 나갑니다.</div></div>';
 
   h += '<div class="gs-f"><label>몇 석 <b>*</b></label>'
@@ -42009,7 +42095,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.02-u';
+var TAAM_WEB_BUILD = '2026.09.02-v';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -50712,6 +50798,8 @@ var TX_MAP = {
   '식사비 ×':['Meal price ×','食事代 ×'],
   '대행비 ×':['Service fee ×','予約代行手数料 ×'],
   '주류 미니멈 ×':['Beverage minimum ×','ドリンク最低料金 ×'],
+  '게스트 초대석':['Guest seat','ゲスト招待席'],
+  '게스트 초대석 ×':['Guest seat ×','ゲスト招待席 ×'],
   '합계':['Total','合計'],
   '추가 결제 필요':['Additional payment required','追加決済が必要'],
   '결제 후 잔액':['Balance after payment','決済後の残高'],
@@ -54479,7 +54567,9 @@ function pcalRefreshPay(){
   var meal   = parseInt(t.mealFee || t.mealAmt || 0) || 0;
   var agency = parseInt(t.agencyFee || 0) || 0;
   var wine   = parseInt(t.wineMin || 0) || 0;
-  var total  = (meal + agency + wine) * pax;
+  // ⚠ 게스트석이면 회원가가 아니라 게스트가다. _tkPayPer 하나로 갈린다 —
+  //   여기서 (meal+agency+wine) 로 두면 이 화면만 회원가로 되돌아간다.
+  var total  = ((typeof _tkPayPer === 'function') ? _tkPayPer(t) : (meal + agency + wine)) * pax;
   var money  = function(v, opt){ return (typeof fxMoney === 'function') ? fxMoney(v, opt) : (taamMoney(v)); };
 
   // 🔧 2026.08-28: 사진 캘린더 상세가 티켓 금액을 자기만의 방식으로 계산하고 있었다.
@@ -54491,9 +54581,9 @@ function pcalRefreshPay(){
   //   같은 화면 안에서 셋이 서로 달랐다. 티켓 금액은 fxTicketComp/fxTicketTotal
   //   하나만 쓴다 — 확정정가·대행비 정액·통화를 그 함수들이 이미 다 판단한다.
   var h = '';
-  if(meal)   h += '<div class="pd-row"><span class="l">식사비 ×' + pax + '인</span><span class="v">' + fxTicketComp(t,'meal',meal,pax) + '</span></div>';
-  if(agency) h += '<div class="pd-row"><span class="l">대행비 ×' + pax + '인</span><span class="v">' + fxTicketComp(t,'agency',agency,pax) + '</span></div>';
-  if(wine)   h += '<div class="pd-row"><span class="l">주류 미니멈 ×' + pax + '인</span><span class="v">' + fxTicketComp(t,'wine',wine,pax) + '</span></div>';
+  _tkCostRows(t).forEach(function(c){
+    h += '<div class="pd-row"><span class="l">' + c.label + ' ×' + pax + '인</span><span class="v">' + fxTicketComp(t,c.key,c.amt,pax) + '</span></div>';
+  });
   h += '<div class="pd-sum"><span class="l">합계</span><span class="v">'
      + fxTicketTotal(t, pax, meal, wine, total) + '</span></div>';
   var rows = document.getElementById('pdPayRows'); if(rows) rows.innerHTML = h;
