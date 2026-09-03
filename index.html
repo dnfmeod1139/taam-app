@@ -40990,8 +40990,38 @@ function _rpShowMapsErr(){
   if(!dd || !_rpMapsErr) return;
   dd.innerHTML = '<div style="padding:11px 14px;font-size:12px;color:#9B1C1C;line-height:1.75;">'
     + _rpMapsErr
+    + (_rpMapsWhy ? '<br><span style="color:#61616B;font-size:11px;">서버 응답: '
+        + _rpEscTxt(_rpMapsWhy) + '</span>' : '')
     + '<br><span style="color:#999;">주소를 직접 입력해도 저장됩니다 — 좌표만 나중에 채워집니다.</span></div>';
   dd.style.display = 'block';
+}
+function _rpEscTxt(s){ return String(s||'').replace(/[&<>]/g, function(c){
+  return ({'&':'&amp;','<':'&lt;','>':'&gt;'})[c]; }); }
+
+// 🆕 실패했을 때 **서버에 직접 물어본다.**
+//   「Places API (New) 가 안 켜져 있다」는 앱의 짐작일 뿐이다. 켜져 있는데
+//   키 제한에 안 들어 있어도, 리퍼러가 막혀도 똑같이 안 붙는다 — 셋은
+//   고치는 곳이 다르다. REST 로 한 번 찔러 보면 Google 이 이유를 말해 준다.
+//   ⚠ 실패한 뒤에만 부른다. 평소에는 호출하지 않는다.
+var _rpMapsWhy = '';
+async function _rpProbePlaces(){
+  try {
+    var r = await fetch('https://places.googleapis.com/v1/places:autocomplete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json',
+                 'X-Goog-Api-Key': GOOGLE_GEOCODE_KEY },
+      body: JSON.stringify({ input: '테스트' })
+    });
+    if (r.ok) return '';   // 키도 API 도 멀쩡하다 — 다른 원인이다
+    var j = await r.json().catch(function(){ return null; });
+    var e = j && j.error;
+    return e ? ((e.status || r.status) + ' — ' + (e.message || '').slice(0, 150))
+             : ('HTTP ' + r.status);
+  } catch(e){
+    // ⚠ null 은 「멀쩡하다」가 아니라 **물어보지 못했다**이다.
+    //   ''(정상)과 섞으면 네트워크가 막힌 것을 「키는 괜찮다」로 잘못 읽는다.
+    return null;
+  }
 }
 
 function _rpEnsureMapsLoaded(){
@@ -41009,9 +41039,34 @@ function _rpEnsureMapsLoaded(){
     var done = function(){
       _rpMapsLoading = false;
       if (!_rpHasGooglePlaces()) {
-        _rpMapsErr = '이 키에 Places API (New) 가 켜져 있지 않습니다. '
-                   + 'Google Cloud 콘솔에서 「Places API (New)」를 사용 설정해주세요.';
+        // ⚠ 여기서 이유를 단정하지 않는다. 「API 미설정」·「키 제한」·「반영 대기」가
+        //   전부 같은 모습으로 온다. 서버에 물어보고 나온 답을 그대로 붙인다.
+        _rpMapsErr = 'Places 자동완성을 쓸 수 없습니다.';
         _rpShowMapsErr();
+        _rpProbePlaces().then(function(why){
+          _rpMapsWhy = why || '';
+          if (why === null) {
+            // 물어보지도 못했다 — 네트워크가 막혀 있을 때다
+            _rpMapsErr = 'Places API 에 연결하지 못했습니다. '
+                       + '네트워크·광고차단을 확인해주세요.';
+          } else if (why === '') {
+            // 키·API 는 통과했다 → 지도 스크립트 쪽 문제다
+            _rpMapsErr = 'Places API 는 응답하는데 지도 라이브러리가 안 붙었습니다. '
+                       + '잠시 후 다시 시도해주세요.';
+          } else if (/SERVICE_DISABLED|has not been used|is disabled/i.test(why)) {
+            _rpMapsErr = '이 키의 프로젝트에서 Places API (New) 가 꺼져 있습니다. '
+                       + 'Google Cloud 콘솔에서 사용 설정해주세요.';
+          // ⚠ 리퍼러 차단 메시지에도 「blocked」가 들어 있다. 넓은 조건을
+          //   먼저 두면 도메인 문제를 키 제한으로 잘못 안내한다 — 순서가 중요하다.
+          } else if (/REFERRER|REFERER|referer/i.test(why)) {
+            _rpMapsErr = '이 도메인이 키의 허용 목록에 없습니다. '
+                       + 'HTTP 리퍼러에 이 주소를 추가해주세요.';
+          } else if (/API_KEY_SERVICE_BLOCKED|blocked/i.test(why)) {
+            _rpMapsErr = '키 제한에 Places API (New) 가 빠져 있습니다. '
+                       + 'API 키 → API 제한사항에 추가해주세요.';
+          }
+          _rpShowMapsErr();
+        });
         return;
       }
       // 로드가 끝나면 이어서 검색한다 — 다시 타이핑하게 만들지 않는다.
@@ -42646,7 +42701,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.03-g';
+var TAAM_WEB_BUILD = '2026.09.03-h';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
