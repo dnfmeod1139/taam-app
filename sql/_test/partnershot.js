@@ -137,6 +137,9 @@ const { chromium } = require('playwright-core');
     window.fetch = (url, opt) => { CALLS.push([url, JSON.parse(opt.body)]);
       return Promise.resolve({ status:200, json: () => Promise.resolve(
         { ok:true, login_id:'sushi-arai', password:'ABCD-EFGH-JKMN' }) }); };
+    // ⚠ Supabase 함수 주소는 대소문자를 구별한다. 대시보드에서 대문자로
+    //   만들면 slug 가 굳고 Name 을 고쳐도 주소는 안 바뀐다 — 404 만 온다.
+    window.__fnNames = () => window.PA_FN_NAMES;
 
     window.paOpen(); await sleep(300);
     ok('슈퍼어드민에게는 열린다', $('paSheet').style.display === 'flex');
@@ -173,6 +176,38 @@ const { chromium } = require('playwright-core');
     ok('매장과 아이디를 넘긴다',
        CALLS[0][1].rest_id === 'R1' && CALLS[0][1].login_id === 'sushi-arai');
     ok('여러 기기 허용을 넘긴다 ⭐', CALLS[0][1].multi_device === true);
+
+    // ── 함수 이름 대소문자 ⭐ ─────────────────────────────────
+    //   404 면 다음 이름으로 넘어간다. 401·403 은 이름 문제가 아니라
+    //   권한 문제라 다시 부르지 않는다 — 부르면 같은 답을 두 번 받을 뿐이다.
+    CALLS = [];
+    window.fetch = (url, opt) => { CALLS.push([url, JSON.parse(opt.body)]);
+      return Promise.resolve(String(url).indexOf('/partner-account') >= 0
+        ? { status:404, json: () => Promise.resolve({ ok:false }) }
+        : { status:200, json: () => Promise.resolve({ ok:true, login_id:'x', password:'P' }) }); };
+    let rr = await window._paCallTest({ action:'create', login_id:'sushi-arai', rest_id:'R1' });
+    ok('소문자가 404 면 대문자로 다시 ⭐', CALLS.length === 2);
+    ok('두 번째는 대문자 이름 ⭐',
+       CALLS[1] && String(CALLS[1][0]).indexOf('/Partner-account') >= 0);
+    ok('그래도 결과를 돌려준다 ⭐', rr && rr.ok === true);
+
+    CALLS = [];
+    window.fetch = (url, opt) => { CALLS.push([url, JSON.parse(opt.body)]);
+      return Promise.resolve({ status:403,
+        json: () => Promise.resolve({ ok:false, error:'권한이 없습니다' }) }); };
+    rr = await window._paCallTest({ action:'create', login_id:'sushi-arai', rest_id:'R1' });
+    ok('403 이면 다시 안 부른다 ⭐', CALLS.length === 1);
+    ok('403 사유를 그대로 전한다', rr && rr.error === '권한이 없습니다');
+
+    CALLS = [];
+    window.fetch = () => Promise.resolve({ status:404, json: () => Promise.resolve({ ok:false }) });
+    rr = await window._paCallTest({ action:'create', login_id:'sushi-arai', rest_id:'R1' });
+    ok('둘 다 없으면 배포하라고 말한다 ⭐',
+       rr && !rr.ok && rr.error.indexOf('배포되지 않았습니다') >= 0);
+
+    // ⚠ 위 _paCallTest 는 화면을 건드리지 않는다. 아래 검사는 앞서 성공한
+    //   발급이 만든 「비밀번호 화면」을 그대로 본다 — 다시 만들지 않는다.
+    //   (이때는 입력 폼이 없어서 $('paId') 가 null 이다)
 
     // 비밀번호는 여기서만 보인다
     t = $('paBody').textContent;

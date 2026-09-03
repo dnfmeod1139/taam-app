@@ -32723,27 +32723,43 @@ function _paFallbackCopy(txt, done){
 // Edge Function 호출 — service_role 이 필요한 일은 전부 여기를 지난다.
 //   ⚠ 세션 토큰을 실어 보낸다. 서버가 그걸로 슈퍼어드민인지 확인한다 —
 //     앱이 「나 슈퍼어드민이야」라고 말하는 것은 아무 의미가 없다.
+// ⚠ Supabase 함수 주소는 **대소문자를 구별한다.**
+//   대시보드에서 「Partner-account」로 만들면 slug 가 그대로 굳고, Settings 의
+//   Name 을 고쳐도 주소는 안 바뀐다. 그러면 앱은 404 만 받는다 —
+//   화면에는 「배포되지 않았습니다」로 보여서 원인을 엉뚱한 데서 찾게 된다.
+//   소문자를 먼저 부르고, 없으면 대문자로 한 번 더 부른다.
+//   ⓘ 함수를 소문자 이름으로 다시 만들면 아래 대문자 항목은 지워도 된다.
+var PA_FN_NAMES = ['partner-account', 'Partner-account'];
+
 async function _paCall(payload){
   try {
     var s = await window.sb.auth.getSession();
     var tok = s && s.data && s.data.session && s.data.session.access_token;
     if(!tok) return { ok:false, error:'로그인이 필요합니다' };
-    var res = await fetch(SUPABASE_URL + '/functions/v1/partner-account', {
-      method:'POST',
-      headers:{ 'Authorization':'Bearer ' + tok, 'Content-Type':'application/json',
-                // ⚠ SUPABASE_ANON_KEY 는 window 에만 있다 (전역 var 아님).
-                //   바로 쓰면 이 함수만 ReferenceError 로 죽는다.
-                'apikey': window.SUPABASE_ANON_KEY },
-      body: JSON.stringify(payload)
-    });
-    var j = await res.json().catch(function(){ return null; });
-    if(!j) return { ok:false, error:'서버가 응답하지 않았습니다 (' + res.status + ')' };
-    if(!j.ok && res.status === 404){
-      return { ok:false, error:'partner-account 함수가 배포되지 않았습니다' };
+
+    var last = null;
+    for(var i = 0; i < PA_FN_NAMES.length; i++){
+      var res = await fetch(SUPABASE_URL + '/functions/v1/' + PA_FN_NAMES[i], {
+        method:'POST',
+        headers:{ 'Authorization':'Bearer ' + tok, 'Content-Type':'application/json',
+                  // ⚠ SUPABASE_ANON_KEY 는 window 에만 있다 (전역 var 아님).
+                  //   바로 쓰면 이 함수만 ReferenceError 로 죽는다.
+                  'apikey': window.SUPABASE_ANON_KEY },
+        body: JSON.stringify(payload)
+      });
+      // 이름이 틀렸을 때만 다음 이름으로 넘어간다. 401·403 은 이름 문제가
+      // 아니라 권한 문제라, 다시 부르면 같은 답을 두 번 받을 뿐이다.
+      if(res.status === 404){ last = res; continue; }
+      var j = await res.json().catch(function(){ return null; });
+      if(!j) return { ok:false, error:'서버가 응답하지 않았습니다 (' + res.status + ')' };
+      return j;
     }
-    return j;
+    return { ok:false, error:'partner-account 함수가 배포되지 않았습니다'
+      + (last ? ' (' + last.status + ')' : '') };
   } catch(e){ return { ok:false, error:(e && e.message) || '통신 오류' }; }
 }
+window.PA_FN_NAMES = PA_FN_NAMES;
+window._paCallTest = _paCall;   // 테스트에서 호출 규칙만 따로 본다
 window.paOpen = paOpen; window.paClose = paClose; window.paCreate = paCreate;
 window.paReset = paReset; window.paRevoke = paRevoke; window.paHanded = paHanded;
 window.paDoneMade = paDoneMade; window.paCopyCred = paCopyCred;
@@ -42531,7 +42547,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.03-d';
+var TAAM_WEB_BUILD = '2026.09.03-e';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
