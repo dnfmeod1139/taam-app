@@ -7,10 +7,11 @@
 #   ③ 매장이 안 허락하면 못 여는가 ← 핵심 관계 매장이 실수로 열리면 안 된다
 #   ④ 정한 수량을 못 넘는가        ← 한 석짜리가 두 장 나가면 안 된다
 #   ⑤ 게스트 구매가 **확정 대기**로 들어가는가
+#   ⑤-2 **게스트가로** 받는가       ← 앱이 회원가를 보내도 서버가 덮어쓴다
 #   ⑥ 회원은 종전 그대로인가       ← 라이브가 안 깨지나
 #   ⑦ 매장을 끄면 열린 자리도 닫히는가
 #
-# 먼저: general_member_tier.sql · guest_seat.sql
+# 먼저: general_member_tier.sql · guest_seat.sql · guest_seat_price.sql
 # 실행: bash sql/_test/t_guestseat.sh
 # ═══════════════════════════════════════════════════════════════
 P="psql -h /tmp -U postgres -d postgres -q -t -A"
@@ -31,6 +32,13 @@ buy(){ # uid, product, purchase_id
                    party_size,reservation_date,ticket_product_id)
             values('$1','$RA','$3','active',300000,2,'2027-06-06','$2');" >/dev/null 2>&1;
   then echo 산다; else echo 막힘; fi; }
+# 앱이 **틀린 금액**을 보냈을 때를 보기 위한 변형 — 금액·인원을 골라 넣는다
+buyp(){ # uid, product, purchase_id, price, pax
+  if $P -c "set role authenticated; select set_config('taam.uid','$1',false);
+            insert into public.tickets(user_id,restaurant_id,purchase_id,status,price,
+                   party_size,reservation_date,ticket_product_id)
+            values('$1','$RA','$3','active',$4,$5,'2027-06-06','$2');" >/dev/null 2>&1;
+  then echo 산다; else echo 막힘; fi; }
 
 # ── 배우 ─────────────────────────────────────────────────────
 $P -c "
@@ -40,12 +48,13 @@ insert into public.profiles(id,role,display_name,membership_tier) values
  on conflict (id) do update set membership_tier=excluded.membership_tier, role='member';
 insert into public.restaurants(id,name) values ('$RA','허용매장'),('$RB','잠긴매장')
  on conflict (id) do nothing;
-delete from public.tickets where ticket_product_id in ('GP_OPEN','GP_SHUT','GP_MEM','GP_LOCKED');
-delete from public.ticket_products where id in ('GP_OPEN','GP_SHUT','GP_MEM','GP_LOCKED');
+delete from public.tickets where ticket_product_id in ('GP_OPEN','GP_SHUT','GP_MEM','GP_LOCKED','GP_PRICE');
+delete from public.ticket_products where id in ('GP_OPEN','GP_SHUT','GP_MEM','GP_LOCKED','GP_PRICE');
 insert into public.ticket_products(id, rest_id, min_tier) values
  ('GP_OPEN','$RA','A'),     -- 게스트석으로 열 것
  ('GP_SHUT','$RA','A'),     -- 안 여는 것
  ('GP_MEM','$RA',null),     -- 회원 전용
+ ('GP_PRICE','$RA','A'),    -- 금액을 보는 것 (⑤-2)
  ('GP_LOCKED','$RB','A');   -- 잠긴 매장
 update public.restaurants set guest_seat_allowed=true  where id='$RA';
 update public.restaurants set guest_seat_allowed=false where id='$RB';
@@ -82,6 +91,43 @@ ok "확정 대기로 들어간다 ⭐" pending_confirm \
 # ⚠ 앱이 'active' 로 보냈는데 서버가 내렸다 — 앱이 보낸 status 를 안 믿는다
 ok "남은 자리가 준다" 1 \
    "$($P -c "set role anon; select (public.taam_guest_seat_state('GP_OPEN'))->>'left';" | tail -1)"
+
+echo "── ⑤-2 금액은 서버가 정한다 ── ⭐"
+# ⚠ guest_price 는 **1인당**, tickets.price 는 **총액**이다. 그래서 곱한다.
+#   앱이 회원가를 보내도(옛 버전·앱을 거치지 않은 호출) 서버가 게스트가로 덮어쓴다.
+$P -c "$SA select public.taam_guest_seat_open('GP_PRICE','개점 10주년을 기념해',300000,4);" >/dev/null 2>&1
+ok "게스트가가 남는다" 300000 \
+   "$($P -c "select guest_price from public.ticket_products where id='GP_PRICE';" | tail -1)"
+# 앱이 회원가(250,000×2=500,000)를 보냈다 — 서버가 600,000 으로 고쳐야 한다
+ok "산다" 산다 "$(buyp $G1 GP_PRICE GS-40 500000 2)"
+ok "게스트가×인원으로 덮어쓴다 ⭐" 600000 \
+   "$($P -c "select price from public.tickets where purchase_id='GS-40';" | tail -1)"
+ok "앱이 틀렸다는 흔적을 남긴다 ⭐" true \
+   "$($P -c "select extra_data->>'guest_price_fixed' from public.tickets where purchase_id='GS-40';" | tail -1)"
+ok "앱이 보낸 금액을 적어 둔다" 500000 \
+   "$($P -c "select extra_data->>'guest_price_app' from public.tickets where purchase_id='GS-40';" | tail -1)"
+ok "1인당 금액도 적어 둔다" 300000 \
+   "$($P -c "select extra_data->>'guest_price_per' from public.tickets where purchase_id='GS-40';" | tail -1)"
+# 앱이 맞게 보냈으면 흔적을 안 남긴다 — 어드민 큐에 헛경고가 뜨면 안 된다
+ok "맞게 보내면 그대로" 산다 "$(buyp $G2 GP_PRICE GS-41 900000 3)"
+ok "맞으면 금액이 그대로다" 900000 \
+   "$($P -c "select price from public.tickets where purchase_id='GS-41';" | tail -1)"
+ok "맞으면 흔적을 안 남긴다 ⭐" "" \
+   "$($P -c "select coalesce(extra_data->>'guest_price_fixed','') from public.tickets where purchase_id='GS-41';" | tail -1)"
+# 어드민이 확정 전에 볼 수 있어야 한다
+ok "큐가 어긋난 건을 표시한다 ⭐" true \
+   "$($P -c "$SA select e->>'price_fixed' from jsonb_array_elements(public.taam_guest_seat_queue(200)) e
+             where e->>'purchase_id'='GS-40';" | tail -1)"
+ok "큐가 앱 금액도 준다" 500000 \
+   "$($P -c "$SA select e->>'price_app' from jsonb_array_elements(public.taam_guest_seat_queue(200)) e
+             where e->>'purchase_id'='GS-40';" | tail -1)"
+ok "맞은 건은 표시가 안 뜬다" false \
+   "$($P -c "$SA select e->>'price_fixed' from jsonb_array_elements(public.taam_guest_seat_queue(200)) e
+             where e->>'purchase_id'='GS-41';" | tail -1)"
+# ⚠ 회원 금액은 손대지 않는다. 회원가는 게스트가와 무관하다.
+ok "회원 금액은 안 건드린다 ⭐" 산다 "$(buyp $UM GP_PRICE GS-42 500000 2)"
+ok "회원은 보낸 금액 그대로" 500000 \
+   "$($P -c "select price from public.tickets where purchase_id='GS-42';" | tail -1)"
 
 echo "── ⑥ 수량을 못 넘는다 ── ⭐"
 ok "두 번째도 산다" 산다 "$(buy $G2 GP_OPEN GS-11)"

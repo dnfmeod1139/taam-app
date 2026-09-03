@@ -9,6 +9,7 @@
 //   ② 일반공개는 하한이 아니라 개방인가 (등급 없는 옛 회원도 통과)
 //   ③ 막힌 자리에서 멤버십으로 갈 길이 있는가
 //   ④ 「멤버십 전용」 노출이 유료 회원에게는 열리는가
+//   ⑤ 게스트가 **게스트가로** 결제되는가 ← 서버(t_guestseat.sh ⑤-2)와 같은 값인가
 //
 // 실행: node sql/_test/tiershot.js
 // ═══════════════════════════════════════════════════════════════
@@ -148,6 +149,55 @@ const { chromium } = require('playwright-core');
     ok('공개 항목은 A 도 열린다',          window.isVisible('chat') === true);
     ok('점검 중은 M 도 막힌다',
        (function(){ setTier('M'); return window.isVisible('x') === false; })());
+
+    // ── ⑤ 게스트가로 결제된다 ⭐ ────────────────────────────
+    //   서버(t_guestseat.sh ⑤-2)가 guest_price×인원으로 덮어쓴다. 앱이 다른
+    //   금액을 결제창에 넘기면 **카드 승인만 틀린 금액으로 나고** 티켓은
+    //   서버 금액으로 남는다 — 그래서 앱도 같은 식을 써야 한다.
+    const PAID = Object.assign({ mealFee: 200000, agencyFee: 30000, wineMin: 20000,
+                                 guestPrice: 300000 }, SEAT);
+    ok('_tkMemberPer 존재', typeof window._tkMemberPer === 'function');
+    ok('_tkPayPer 존재',    typeof window._tkPayPer === 'function');
+    ok('_tkCostRows 존재',  typeof window._tkCostRows === 'function');
+
+    setTier('M');
+    ok('회원가는 식사+대행+주류 ⭐', window._tkMemberPer(PAID) === 250000);
+    ok('회원은 회원가로 낸다 ⭐',    window._tkPayPer(PAID) === 250000);
+    ok('회원은 항목이 세 줄',        window._tkCostRows(PAID).length === 3);
+    ok('회원 2인 합계 = 회원가×2',   window.fxTicketCharge(PAID, 2).krw === 500000);
+
+    setTier('A');
+    ok('게스트는 게스트가로 낸다 ⭐', window._tkPayPer(PAID) === 300000);
+    ok('게스트 2인 = 게스트가×2 ⭐',  window.fxTicketCharge(PAID, 2).krw === 600000);
+    ok('게스트 결제에 표시가 붙는다', window.fxTicketCharge(PAID, 2).guest === true);
+    // ⚠ 한 줄로만 보여준다 — 회원가를 나란히 놓지 않는다 (스펙 금지)
+    let rows = window._tkCostRows(PAID);
+    ok('게스트는 한 줄만 ⭐',        rows.length === 1);
+    ok('그 줄이 「게스트 초대석」',   rows[0] && rows[0].label === '게스트 초대석');
+    ok('그 줄 금액이 게스트가',       rows[0] && rows[0].amt === 300000);
+    ok('회원가 항목이 안 섞인다 ⭐',
+       !rows.some(c => c.key === 'meal' || c.key === 'agency' || c.key === 'wine'));
+
+    // ⚠ 게스트가가 비어 있으면 **회원가로 떨어뜨리지 않는다**.
+    //   조용히 싸게 파는 쪽이라, 0 으로 막고 어드민이 채우게 한다.
+    const NOPRICE = Object.assign({ mealFee: 200000, agencyFee: 30000, wineMin: 20000 }, SEAT);
+    ok('게스트가가 없으면 0 ⭐',      window._tkPayPer(NOPRICE) === 0);
+    ok('그러면 줄도 안 만든다 ⭐',    window._tkCostRows(NOPRICE).length === 0);
+    // 같은 티켓이라도 회원에게는 그대로 회원가다
+    setTier('M');
+    ok('회원에게는 여전히 회원가',    window._tkPayPer(NOPRICE) === 250000);
+
+    // 게스트석이 아니면 게스트가가 적혀 있어도 안 쓴다
+    setTier('A');
+    const NOTSEAT = { mealFee: 200000, agencyFee: 30000, wineMin: 20000, guestPrice: 300000 };
+    ok('게스트석이 아니면 게스트가를 안 쓴다 ⭐', window._tkPayPer(NOTSEAT) === 250000);
+
+    // ⚠ 표시 통화 — 확정 정가(ovs_prices)는 **회원가** 기준이라 게스트가에
+    //   적용하면 화면(≈$)과 청구(₩ 게스트가)가 어긋난다. 원화로 굳힌다.
+    ok('게스트 항목은 원화로 적는다 ⭐',
+       window.fxTicketComp(PAID, 'guest', 300000, 2) === '₩600,000');
+    ok('게스트 합계도 원화로 적는다 ⭐',
+       window.fxTicketTotal(PAID, 2, 200000, 20000, 600000) === '₩600,000');
 
     return out;
   });

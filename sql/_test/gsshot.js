@@ -28,7 +28,10 @@ const { chromium } = require('playwright-core');
     window.showToast = (a, b2, c) => { window.__toast = [a, b2, c]; };
     window.renderTicketList = () => {};
     window.restaurantDB = [{ id: 'R1', name: '스시 아라이' }];
-    window.ticketDB = [{ id: 'TP1', rest: 'R1', date: '2027-06-06', time: '18:00', price: 250000 }];
+    // ⚠ 회원가는 t.price 가 아니라 **식사비+대행비+주류 미니멈** 이다.
+    //   price 하나로 두면 어느 값이 회원가인지 화면마다 달라진다 (_tkMemberPer).
+    window.ticketDB = [{ id: 'TP1', rest: 'R1', date: '2027-06-06', time: '18:00',
+                         mealFee: 200000, agencyFee: 30000, wineMin: 20000 }];
 
     let RPC = [];
     const mk = (state) => ({
