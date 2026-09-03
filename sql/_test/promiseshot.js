@@ -275,6 +275,49 @@ const { chromium } = require('playwright-core');
   //   TXT 를 안 거치고 코드에 박아 둔 글자를 잡는다. 한 곳만 박혀 있어도
   //   그 문장만 다른 언어로 남아 셰프가 읽다가 걸린다.
   //   ⚠ 한자는 세 언어가 공통으로 쓴다(壱弐参肆伍·承認). 가나와 한글만 본다.
+  // ── 줄바꿈 ⭐ ───────────────────────────────────────────────
+  //   「문장의 흐름에 방해가 되게 끊긴다」
+  //   ⚠ 텍스트 노드별로 재면 <b> 뒤의 「.」 같은 조각을 마지막 줄로 착각한다.
+  //     같은 y 에 있는 조각을 한 줄로 묶어서 재야 한다.
+  for (const lang of ['ko','ja','en']) {
+    await p.evaluate(l => window.pvSetLang(l), lang);
+    await p.waitForTimeout(350);
+    const w = await p.evaluate(() => {
+      const bad = [];
+      const R = document.createRange();
+      document.querySelectorAll('#page p, #page .d, #page .sd, #page li, #page .note .n, #page .ln')
+        .forEach(el => {
+          if (el.querySelector('.ln, .n')) return;
+          const cw = el.getBoundingClientRect().width; if (!cw) return;
+          const wk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+          let rects = [], n;
+          while ((n = wk.nextNode())) { R.selectNodeContents(n);
+            rects = rects.concat([...R.getClientRects()]); }
+          rects = rects.filter(x => x.width > 0); if (!rects.length) return;
+          const lines = {};
+          rects.forEach(x => { const k = Math.round(x.top / 4);
+            lines[k] = lines[k] || { l: 1e9, r: -1e9 };
+            lines[k].l = Math.min(lines[k].l, x.left); lines[k].r = Math.max(lines[k].r, x.right); });
+          const keys = Object.keys(lines).map(Number).sort((a, b) => a - b);
+          if (keys.length < 2) return;
+          const last = lines[keys[keys.length - 1]];
+          if ((last.r - last.l) / cw < 0.14)
+            bad.push((el.textContent || '').trim().slice(-24));
+        });
+      // nowrap 이 걸린 볼드가 길면 통째로 다음 줄로 밀려 앞 줄에 빈칸이 남는다
+      const longB = [...document.querySelectorAll('#page .lead b.nb, #page .terms p b.nb')]
+        .filter(e => e.getBoundingClientRect().width > 180)
+        .map(e => e.textContent.trim());
+      return { bad, longB, wb: getComputedStyle(document.body).wordBreak };
+    });
+    ok(lang + ' — 끝줄이 토막나지 않는다 ⭐ (' + w.bad.slice(0,1).join('') + ')', w.bad.length === 0);
+    ok(lang + ' — 긴 볼드를 붙여두지 않는다 ⭐ (' + w.longB.slice(0,1).join('') + ')',
+       w.longB.length === 0);
+    // 언어마다 규칙이 다르다 — 하나로 묶으면 어느 하나가 반드시 어색해진다
+    const want = { ko:'keep-all', ja:'auto-phrase', en:'normal' }[lang];
+    ok(lang + ' — 그 언어의 규칙을 쓴다 ⭐', w.wb === want);
+  }
+
   // ── 판번호 ⭐ ───────────────────────────────────────────────
   //   이 페이지엔 앱의 BUILD 같은 표시가 없어 「배포가 됐나」를 못 가렸다.
   //   미리보기 바에만 붙인다 — 셰프에게는 안 보인다.
