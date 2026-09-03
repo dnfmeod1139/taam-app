@@ -13178,6 +13178,42 @@ textarea.mapl-in{min-height:78px;resize:vertical;line-height:1.7}
   </div>
 </div>
 
+<!-- 게스트 초대석 — 티켓 리스트에서 자리를 연다.
+     ⚠ 「일반 판매」가 아니다. 이유가 서사이고, 이유 없이는 못 연다. -->
+<div id="gsSheet" style="display:none;position:fixed;inset:0;z-index:1215;background:rgba(0,0,0,.55);align-items:flex-end;justify-content:center;"
+     onclick="if(event.target===this)tuGuestSeatClose()">
+  <div style="width:100%;max-width:520px;max-height:88vh;background:#fff;border-radius:18px 18px 0 0;display:flex;flex-direction:column;overflow:hidden;">
+    <div style="flex:none;padding:14px 18px 10px;border-bottom:1px solid #E6E6EA;display:flex;align-items:baseline;gap:10px;">
+      <div style="font-size:15px;font-weight:800;color:#16161A;">게스트 초대석</div>
+      <div style="font-size:12px;color:#9A9AA4;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" id="gsTitle"></div>
+      <div style="margin-left:auto;font-size:20px;color:#9A9AA4;cursor:pointer;" onclick="tuGuestSeatClose()">✕</div>
+    </div>
+    <div style="flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:14px 18px 16px;" id="gsBody"></div>
+    <div style="flex:none;padding:11px 18px calc(14px + env(safe-area-inset-bottom));border-top:1px solid #E6E6EA;display:flex;gap:8px;" id="gsFoot"></div>
+  </div>
+</div>
+
+<style>
+#gsSheet{overflow-x:hidden;touch-action:pan-y}
+#gsSheet .gs-note{padding:11px 13px;border-radius:10px;background:#F0F0F3;
+  font-size:12.5px;line-height:1.75;color:#61616B;margin-bottom:12px}
+#gsSheet .gs-note.on{background:#E6F2EA;color:#2C6B47}
+#gsSheet .gs-note.bad{background:#FDF3F3;color:#9B1C1C}
+#gsSheet .gs-note b{color:inherit;font-weight:700}
+#gsSheet .gs-f{padding:12px 0;border-bottom:1px solid #F0F0F3}
+#gsSheet .gs-f:last-of-type{border-bottom:none}
+#gsSheet .gs-f > label{display:block;font-size:12px;font-weight:700;color:#61616B;margin-bottom:6px}
+#gsSheet .gs-f > label b{color:#8A3242}
+#gsSheet .gs-in{width:100%;padding:12px 13px;border:1px solid #D8D8DE;border-radius:11px;
+  background:#F6F6F7;font-family:var(--font-main);font-size:15px;color:#16161A}
+#gsSheet .gs-in:focus{outline:none;border-color:#5E1622;background:#fff}
+#gsSheet .gs-hint{margin-top:6px;font-size:11px;line-height:1.7;color:#9A9AA4}
+#gsSheet .gs-hint b{color:#61616B;font-weight:700}
+#gsSheet .gs-btn{flex:1;padding:14px;border:0;border-radius:12px;background:#5E1622;color:#fff;
+  font-family:var(--font-main);font-size:13.5px;font-weight:800;cursor:pointer}
+#gsSheet .gs-btn.ghost{background:#fff;border:1px solid #D8D8DE;color:#61616B}
+</style>
+
 <!-- ══════════════════════════════════════════════════════════════
      멤버십 · 게스트 어드민 (2026-09-02)
      ══════════════════════════════════════════════════════════════
@@ -32031,6 +32067,169 @@ async function msaExtend(uid){
 }
 window.msaExtend = msaExtend;
 
+// ══════════════════════════════════════════════════════════════
+// 게스트 초대석 — 자리 열기 (티켓 리스트에서)
+// ══════════════════════════════════════════════════════════════
+// ⚠ 「일반 판매」가 아니다. 화면에도 그렇게 안 적는다.
+// ⚠ 이유는 **필수**다. 서버도 막지만 여기서 먼저 막는다 —
+//   보내고 나서 튕기면 적은 걸 다시 적게 된다.
+// ⚠ 상태는 화면 캐시가 아니라 **서버 값**으로 연다. 다른 기기에서
+//   바꿨을 수 있다 (노출 대상 화면과 같은 이유).
+var _gsT = null;
+
+async function tuGuestSeat(id){
+  var t = (typeof ticketDB !== 'undefined' ? ticketDB : []).find(function(x){
+    return String(x.id) === String(id); });
+  if(!t){ showToast('⚠','티켓을 찾을 수 없습니다',''); return; }
+  _gsT = { id: String(id), t: t, st: null, busy: false };
+  document.getElementById('gsSheet').style.display = 'flex';
+  _gsRender();
+  try {
+    var r = await window.sb.rpc('taam_guest_seat_state', { p_ticket_product_id: String(id) });
+    if(r.error) throw r.error;
+    _gsT.st = r.data || null;
+    // 화면 캐시도 같이 맞춘다 — 목록의 ● 표시가 어긋나지 않게
+    if(_gsT.st && _gsT.st.found){
+      t.guestOpen = !!_gsT.st.open;
+      t.guestSeatQty = _gsT.st.qty;
+      t.guestOpenReason = _gsT.st.reason || '';
+      t.guestPrice = _gsT.st.price;
+    }
+  } catch(e){
+    _gsT.err = /does not exist|schema cache/i.test((e && e.message) || '')
+      ? 'sql/guest_seat.sql 을 실행해야 합니다'
+      : ((e && e.message) || '불러오지 못했습니다');
+  }
+  _gsRender();
+}
+function tuGuestSeatClose(){
+  _gsT = null;
+  var el = document.getElementById('gsSheet');
+  if(el) el.style.display = 'none';
+  if(typeof renderTicketList === 'function') renderTicketList();
+}
+function _gsRender(){
+  var b = document.getElementById('gsBody');
+  if(!b || !_gsT) return;
+  var t = _gsT.t, st = _gsT.st;
+  var name = (typeof restaurantDB !== 'undefined'
+    ? (restaurantDB.find(function(r){ return String(r.id) === String(t.rest); }) || {}).name : '') || t.rest || '';
+  document.getElementById('gsTitle').textContent = name + ' · ' + (t.date || '');
+
+  if(_gsT.err){
+    b.innerHTML = '<div class="gs-note bad">' + _kskEsc(_gsT.err) + '</div>';
+    document.getElementById('gsFoot').innerHTML = '';
+    return;
+  }
+  if(!st){ b.innerHTML = '<div class="gs-note">불러오는 중…</div>';
+           document.getElementById('gsFoot').innerHTML = ''; return; }
+
+  // 매장이 안 열어 뒀으면 여기서 끝. 먼저 매장을 켜야 한다.
+  if(!st.allowed){
+    b.innerHTML = '<div class="gs-note bad">이 매장은 게스트석을 <b>허용하지 않습니다</b>.<br>'
+      + '핵심 관계 매장이 실수로 열리지 않도록 기본이 잠김입니다.</div>'
+      + '<div class="gs-note">아래 버튼으로 이 매장을 열면, 이 매장의 모든 회차에서 '
+      + '게스트석을 열 수 있게 됩니다.</div>';
+    document.getElementById('gsFoot').innerHTML =
+      '<button class="gs-btn" onclick="gsAllow(true)">이 매장 게스트석 허용</button>';
+    return;
+  }
+
+  var open = !!st.open;
+  var h = '<div class="gs-note' + (open ? ' on' : '') + '">'
+        + (open
+           ? '지금 <b>열려 있습니다</b> — ' + (st.sold || 0) + '/' + (st.qty || 0) + '석 나감'
+           : '지금 닫혀 있습니다.')
+        + '</div>';
+
+  h += '<div class="gs-f"><label>여는 이유 <b>*</b></label>'
+     + '<input class="gs-in" id="gsReason" type="text" value="' + _kskEsc(st.reason || '') + '" '
+     + 'placeholder="셰프의 요청으로 / 개점 10주년을 기념해">'
+     // 이유가 서사다. 왜 필수인지 화면에 적어 둔다.
+     + '<div class="gs-hint">손님에게 <b>그대로 보입니다.</b> 이유 없이 열면 그냥 할인이 됩니다.</div></div>';
+
+  h += '<div class="gs-f"><label>게스트가 <b>*</b></label>'
+     + '<input class="gs-in" id="gsPrice" type="text" inputmode="numeric" '
+     + 'value="' + (st.price ? Number(st.price).toLocaleString('ko-KR') : '') + '" '
+     + 'oninput="tuFormatMoney(this)" placeholder="회원가 + 서비스피">'
+     + '<div class="gs-hint">회원가(' + _mshipWon(t.price || 0) + ')보다 높게 잡습니다. '
+     + '두 가격을 나란히 보여주지는 않습니다 — 「멤버는 우대가」 한 줄만 나갑니다.</div></div>';
+
+  h += '<div class="gs-f"><label>몇 석 <b>*</b></label>'
+     + '<input class="gs-in" id="gsQty" type="text" inputmode="numeric" '
+     + 'value="' + (st.qty || '') + '" placeholder="1 ~ 2">'
+     + '<div class="gs-hint">회차당 1~2석. 완판 기록이 목적입니다.</div></div>';
+
+  if(open && (st.sold || 0) > 0){
+    h += '<div class="gs-note">이미 <b>' + st.sold + '명</b>이 샀습니다. '
+       + '닫아도 그분들의 자리는 그대로입니다.</div>';
+  }
+  h += '<div id="gsErr"></div>';
+  b.innerHTML = h;
+
+  document.getElementById('gsFoot').innerHTML =
+    (open
+     ? '<button class="gs-btn ghost" onclick="gsClose()">닫기</button>'
+       + '<button class="gs-btn" onclick="gsOpen()">고쳐서 다시 열기</button>'
+     : '<button class="gs-btn" onclick="gsOpen()">게스트석 열기</button>');
+}
+function _gsNum(id){
+  var el = document.getElementById(id);
+  return parseInt(String((el && el.value) || '').replace(/[^0-9]/g, ''), 10) || 0;
+}
+async function gsOpen(){
+  if(!_gsT || _gsT.busy) return;
+  var reason = String((document.getElementById('gsReason') || {}).value || '').trim();
+  var price = _gsNum('gsPrice'), qty = _gsNum('gsQty');
+  var err = document.getElementById('gsErr');
+  // ⚠ 서버도 막지만 여기서 먼저 막는다 — 보내고 튕기면 적은 걸 다시 적게 된다
+  var miss = [];
+  if(!reason) miss.push('여는 이유');
+  if(price <= 0) miss.push('게스트가');
+  if(qty <= 0) miss.push('몇 석');
+  if(miss.length){
+    if(err) err.innerHTML = '<div class="gs-note bad">' + miss.join(' · ') + ' 을(를) 채워주세요</div>';
+    return;
+  }
+  _gsT.busy = true;
+  try {
+    var r = await window.sb.rpc('taam_guest_seat_open', {
+      p_ticket_product_id: _gsT.id, p_reason: reason, p_price: price, p_qty: qty });
+    if(r.error) throw r.error;
+    _gsT.st = r.data;
+    showToast('✓','게스트석을 열었습니다', qty + '석 · ' + reason);
+    _gsRender();
+  } catch(e){
+    if(err) err.innerHTML = '<div class="gs-note bad">' + _kskEsc((e && e.message) || '') + '</div>';
+  } finally { _gsT.busy = false; }
+}
+async function gsClose(){
+  if(!_gsT || _gsT.busy) return;
+  if(!confirm('게스트석을 닫을까요?\n\n이미 산 분들의 자리는 그대로입니다.')) return;
+  _gsT.busy = true;
+  try {
+    var r = await window.sb.rpc('taam_guest_seat_close', { p_ticket_product_id: _gsT.id });
+    if(r.error) throw r.error;
+    _gsT.st = r.data;
+    showToast('✓','닫았습니다','이유·가격은 그대로 두었습니다');
+    _gsRender();
+  } catch(e){ showToast('❌','닫지 못했습니다', (e && e.message) || ''); }
+  finally { _gsT.busy = false; }
+}
+async function gsAllow(on){
+  if(!_gsT) return;
+  var rid = _gsT.t && _gsT.t.rest;
+  if(!rid){ showToast('⚠','매장을 알 수 없습니다',''); return; }
+  try {
+    var r = await window.sb.rpc('taam_guest_seat_allow', { p_rest_id: String(rid), p_on: !!on });
+    if(r.error) throw r.error;
+    showToast('✓', on ? '이 매장을 열었습니다' : '이 매장을 잠갔습니다', '');
+    tuGuestSeat(_gsT.id);
+  } catch(e){ showToast('❌','바꾸지 못했습니다', (e && e.message) || ''); }
+}
+window.tuGuestSeat = tuGuestSeat; window.tuGuestSeatClose = tuGuestSeatClose;
+window.gsOpen = gsOpen; window.gsClose = gsClose; window.gsAllow = gsAllow;
+
 // ── 게스트 초대석 ─────────────────────────────────────────────
 // ⚠ 「일반 판매」가 아니다. 화면에도 그렇게 안 적는다 —
 //   한 번 「아무나 살 수 있는 곳」이 되면 되돌릴 수 없다.
@@ -41810,7 +42009,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.02-t';
+var TAAM_WEB_BUILD = '2026.09.02-u';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -43869,8 +44068,21 @@ function renderTicketList(){
         : '<div style="flex-shrink:0;width:22px;margin-right:10px;"></div>';
     }
     // 선택 모드에서는 매진·연장·수정·삭제를 감춘다 — 고르는 중에 잘못 누르기 쉽다
+    // 🆕 2026-09: 게스트 초대석. 열려 있으면 그 사실이 목록에서 바로 보여야 한다 —
+    //   「지금 몇 자리가 게스트에게 열려 있나」는 자주 확인하는 값이다.
+    var _gsOpen = _tkIsGuestSeat({
+      guestOpen: t.guestOpen, guestSeatQty: t.guestSeatQty, guestOpenReason: t.guestOpenReason
+    });
     var _acts = _tuFlexMode ? '' :
-      '<div class="rest-list-actions">'+        '<button class="rest-action-sold'+(isSold?' soldout':'')+'" onclick="tuToggleSoldout(\''+t.id+'\')">'+(isSold?'판매중':'매진')+'</button>'+        ((t.deadlineDate||t.gradeOpen)?'<button class="rest-action-extend" onclick="openExtendPopup(\''+t.id+'\')" >연장</button>':'')+        '<button class="rest-action-edit" onclick="tuEditTicket(\''+t.id+'\')" >수정</button>'+        '<button class="rest-action-del" onclick="tuDeleteTicket(\''+t.id+'\')" >삭제</button>'+      '</div>';
+      '<div class="rest-list-actions">'
+      + '<button class="rest-action-sold'+(isSold?' soldout':'')+'" onclick="tuToggleSoldout(\''+t.id+'\')">'+(isSold?'판매중':'매진')+'</button>'
+      + ((t.deadlineDate||t.gradeOpen)?'<button class="rest-action-extend" onclick="openExtendPopup(\''+t.id+'\')" >연장</button>':'')
+      + '<button class="rest-action-edit" onclick="tuGuestSeat(\''+t.id+'\')" style="'
+      +   (_gsOpen ? 'background:#5C0A14;border-color:#5C0A14;color:#fff;' : '')
+      +   '">게스트석' + (_gsOpen ? ' ●' : '') + '</button>'
+      + '<button class="rest-action-edit" onclick="tuEditTicket(\''+t.id+'\')" >수정</button>'
+      + '<button class="rest-action-del" onclick="tuDeleteTicket(\''+t.id+'\')" >삭제</button>'
+      + '</div>';
     return '<div class="rest-list-item"'+(_tuFlexMode&&_sel?' style="background:#fffdf8;"':'')+'>'+_selBox      +'<div class="rest-list-info">'        +'<div class="rest-list-name"'+(isSold?' style="opacity:.4;"':'')+'>'+( r?r.name:t.rest)+' <span style="font-family:var(--font-main);font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:'+(isSold?'#E53935':'#c8a96e')+';">'+(isSold?'SOLD OUT':t.type)+'</span>'+lockBadge+'</div>'        +'<div class="rest-list-meta"'+(isSold?' style="opacity:.4;"':'')+'>'+t.date+' · '+t.time+slots+'</div>'
         +schedLine
         // 좌석 집계는 이 화면에서 가장 자주 읽는 줄이다. 10.5px 은 실기기에서
