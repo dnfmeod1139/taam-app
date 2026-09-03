@@ -77,17 +77,51 @@ const dd = p => p.evaluate(() => {
   ok('무엇을 확인할지 알려준다', /키 제한|결제/.test(t));
   await p.close();
 
-  // ── ④ 내려왔는데 Places API (New) 가 없을 때 ───────────────
-  //   구버전 Places 만 켜져 있으면 google.maps.places 는 있는데
-  //   AutocompleteSuggestion 이 없다. 「로드됐는데 안 잡히는」 상태다.
-  p = await fresh(b, r => r.fulfill({ status: 200,
-    contentType: 'application/javascript',
-    body: 'window.google={maps:{places:{},importLibrary:function(){return Promise.resolve();}}};' }));
+  // ── ④ 내려왔는데 Places 가 안 붙을 때 ⭐ ────────────────────
+  //   ⚠ 여기서 이유를 **단정하면 안 된다.** 「API 미설정」·「키 제한」·
+  //     「리퍼러 차단」이 전부 같은 모습으로 온다. 고치는 곳은 셋 다 다르다.
+  //     그래서 Places REST 에 한 번 물어보고, 온 답으로 갈라 말한다.
+  const NOPLACES = 'window.google={maps:{places:{},importLibrary:function(){return Promise.resolve();}}};';
+  const probe = (status, body) => async (r) =>
+    /places\.googleapis\.com/.test(r.request().url())
+      ? r.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
+      : r.fulfill({ status: 200, contentType: 'application/javascript', body: NOPLACES });
+
+  for (const [name, st, body, want] of [
+    ['API 가 꺼져 있으면', 403,
+      { error: { status: 'PERMISSION_DENIED', message: 'Places API (New) has not been used in project 1 before or it is disabled' } },
+      '꺼져 있습니다'],
+    ['키 제한에 빠져 있으면', 403,
+      { error: { status: 'PERMISSION_DENIED', message: 'Requests to this API are blocked. API_KEY_SERVICE_BLOCKED' } },
+      '키 제한에'],
+    ['도메인이 막혀 있으면', 403,
+      { error: { status: 'PERMISSION_DENIED', message: 'Requests from referer are blocked. API_KEY_HTTP_REFERRER_BLOCKED' } },
+      '허용 목록에 없습니다'],
+    ['키는 멀쩡한데 안 붙으면', 200, { suggestions: [] },
+      '라이브러리가 안 붙었습니다']
+  ]) {
+    p = await fresh(b, null);
+    await p.route('**googleapis.com**', probe(st, body));
+    await p.evaluate(() => window.rpAddrInput('스시'));
+    await p.waitForTimeout(1800);
+    t = await dd(p);
+    ok(name + ' 그렇게 말한다 ⭐', t.indexOf(want) >= 0);
+    // 서버가 준 원문도 같이 보여준다 — 내가 못 가른 경우에도 단서가 남는다
+    if (st !== 200) ok(name + ' 서버 응답을 같이 보여준다', t.indexOf('서버 응답') >= 0);
+    await p.close();
+  }
+
+  // 물어보지도 못했을 때 — 「키는 괜찮다」로 오해하면 안 된다
+  p = await fresh(b, null);
+  await p.route('**googleapis.com**', async (r) =>
+    /places\.googleapis\.com/.test(r.request().url())
+      ? r.abort()
+      : r.fulfill({ status: 200, contentType: 'application/javascript', body: NOPLACES }));
   await p.evaluate(() => window.rpAddrInput('스시'));
-  await p.waitForTimeout(1500);
+  await p.waitForTimeout(1800);
   t = await dd(p);
-  ok('구버전이면 그렇게 말한다 ⭐', t.indexOf('Places API (New)') >= 0);
-  ok('어디서 켜는지 알려준다', t.indexOf('Google Cloud') >= 0);
+  ok('못 물어봤으면 그렇게 말한다 ⭐', t.indexOf('연결하지 못했습니다') >= 0);
+  ok('「괜찮다」로 넘기지 않는다 ⭐', t.indexOf('라이브러리가 안 붙었습니다') < 0);
   await p.close();
 
   // ── ⑤ 정상일 때는 검색이 이어진다 ⭐ ───────────────────────
