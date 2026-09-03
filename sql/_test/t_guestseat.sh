@@ -48,14 +48,18 @@ insert into public.profiles(id,role,display_name,membership_tier) values
  on conflict (id) do update set membership_tier=excluded.membership_tier, role='member';
 insert into public.restaurants(id,name) values ('$RA','허용매장'),('$RB','잠긴매장')
  on conflict (id) do nothing;
-delete from public.tickets where ticket_product_id in ('GP_OPEN','GP_SHUT','GP_MEM','GP_LOCKED','GP_PRICE');
-delete from public.ticket_products where id in ('GP_OPEN','GP_SHUT','GP_MEM','GP_LOCKED','GP_PRICE');
+delete from public.tickets where ticket_product_id in ('GP_OPEN','GP_SHUT','GP_MEM','GP_LOCKED','GP_PRICE','GP_PUBLIC');
+delete from public.ticket_products where id in ('GP_OPEN','GP_SHUT','GP_MEM','GP_LOCKED','GP_PRICE','GP_PUBLIC');
+-- ⚠ 게스트석은 **회원 전용 회차**(min_tier 비움)에 여는 것이다. 2026-09-03
+--   부터 min_tier='A' 는 「일반공개」라 게스트가 그냥 산다 — 거기에 게스트석을
+--   얹으면 무의미하고, 이 파일이 보려는 규칙도 안 타게 된다.
 insert into public.ticket_products(id, rest_id, min_tier) values
- ('GP_OPEN','$RA','A'),     -- 게스트석으로 열 것
- ('GP_SHUT','$RA','A'),     -- 안 여는 것
+ ('GP_OPEN','$RA',''),      -- 게스트석으로 열 것
+ ('GP_SHUT','$RA',''),      -- 안 여는 것
  ('GP_MEM','$RA',null),     -- 회원 전용
- ('GP_PRICE','$RA','A'),    -- 금액을 보는 것 (⑤-2)
- ('GP_LOCKED','$RB','A');   -- 잠긴 매장
+ ('GP_PRICE','$RA',''),     -- 금액을 보는 것 (⑤-2)
+ ('GP_LOCKED','$RB',''),    -- 잠긴 매장
+ ('GP_PUBLIC','$RA','A');   -- 🆕 일반공개 — 게스트가 회원처럼 산다
 update public.restaurants set guest_seat_allowed=true  where id='$RA';
 update public.restaurants set guest_seat_allowed=false where id='$RB';
 " >/dev/null 2>&1
@@ -63,6 +67,29 @@ update public.restaurants set guest_seat_allowed=false where id='$RB';
 echo "── ① 안 연 자리는 못 산다 ──"
 ok "게스트석이 아니면 막힌다 ⭐" 막힘 "$(buy $G1 GP_SHUT GS-1)"
 ok "회원 전용도 막힌다"          막힘 "$(buy $G1 GP_MEM  GS-2)"
+
+echo "── ①-2 일반공개는 게스트도 산다 ── ⭐ (2026-09-03)"
+# ⚠ 게스트석과 **다른 길**이다. 확정 대기로 안 가고, 금액도 안 건드린다.
+#   게스트석 분기보다 먼저 판정돼야 한다 — 나중이면 일반공개인데도
+#   pending_confirm 으로 들어가고 게스트가로 덮인다.
+ok "일반공개는 게스트도 산다 ⭐" 산다 "$(buyp $G1 GP_PUBLIC GS-50 500000 2)"
+ok "바로 확정된다 ⭐" active \
+   "$($P -c "select status from public.tickets where purchase_id='GS-50';" | tail -1)"
+ok "금액을 안 건드린다 ⭐" 500000 \
+   "$($P -c "select price from public.tickets where purchase_id='GS-50';" | tail -1)"
+ok "게스트가 흔적도 안 남는다" "" \
+   "$($P -c "select coalesce(extra_data->>'guest_price_fixed','') from public.tickets where purchase_id='GS-50';" | tail -1)"
+# ⚠ 0행이면 tail -1 이 앞의 set_config 출력을 집어 온다. 스칼라 서브쿼리로
+#   **항상 한 행**을 만들어 비교한다 — 안 그러면 통과·실패가 뒤집혀 보인다.
+ok "확정 큐에 안 들어간다 ⭐" "" \
+   "$($P -c "$SA select coalesce((select e->>'purchase_id'
+                                    from jsonb_array_elements(public.taam_guest_seat_queue(200)) e
+                                   where e->>'purchase_id'='GS-50'), '');" | tail -1)"
+# 회원도 당연히 산다
+ok "회원도 일반공개를 산다" 산다 "$(buyp $UM GP_PUBLIC GS-51 500000 2)"
+# ⚠ 빈 등급은 일반공개가 아니다 — 옛 회차가 통째로 열리면 안 된다
+ok "빈 등급은 일반공개가 아니다 ⭐" f \
+   "$($P -c "select public.taam_tier_is_open('');" | tail -1)"
 
 echo "── ② 이유 없이는 못 연다 ── ⭐"
 if $P -c "$SA select public.taam_guest_seat_open('GP_OPEN','',300000,2);" >/dev/null 2>&1;

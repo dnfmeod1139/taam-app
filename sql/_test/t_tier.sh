@@ -53,15 +53,14 @@ insert into public.ticket_products(id, rest_id, min_tier) values
  ('TP_M','$RA','M');
 " >/dev/null 2>&1
 
-echo "── ① 게스트(A)는 게스트석만 산다 ──"
-# ⚠ 2026-09: min_tier='A' **만으로는 못 산다.** 게스트석으로 열려야 한다 —
-#   이유·수량·매장 허락까지 갖춰야 한다(sql/guest_seat.sql). 그전에는
-#   min_tier='A' 하나로 열렸는데, 그러면 이유 없는 자리가 그냥 할인이 된다.
-ok "안 연 자리는 못 산다 ⭐"       막힘 "$(buy $UA TP_OPEN  TR-A0)"
-$P -c "update public.restaurants set guest_seat_allowed=true where id='$RA';
-       set role authenticated; select set_config('taam.uid','$SUP',false);
-       select public.taam_guest_seat_open('TP_OPEN','셰프의 요청으로',300000,3);" >/dev/null 2>&1
-ok "게스트석으로 열면 산다"        산다 "$(buy $UA TP_OPEN  TR-A1)"
+echo "── ① 게스트(A)는 「일반공개」만 산다 ──"
+# ⚠ 2026-09-03: min_tier='A'(일반공개)면 게스트도 회원처럼 산다. 어드민이
+#   회차마다 눌러 주는 값이라 「실수로 열리는」 일이 없다.
+#   ⚠ 빈 값은 일반공개가 **아니다** — 옛 회차 대부분이 빈 값이라, 같이
+#     열면 티켓이 통째로 열린다. 그래서 TP_BLANK 는 계속 막혀야 한다.
+ok "일반공개는 산다 ⭐"            산다 "$(buy $UA TP_OPEN  TR-A0)"
+ok "바로 확정된다 ⭐" active \
+   "$($P -c "select status from public.tickets where purchase_id='TR-A0';" | tail -1)"
 ok "제한 없는 티켓은 못 산다 ⭐"   막힘 "$(buy $UA TP_BLANK TR-A2)"
 ok "T 전용은 못 산다"              막힘 "$(buy $UA TP_T     TR-A3)"
 ok "M 전용은 못 산다"              막힘 "$(buy $UA TP_M     TR-A4)"
