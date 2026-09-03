@@ -82,5 +82,35 @@ if $P -c "set role authenticated; select set_config('taam.uid','$GA',false);
           select public.taam_guest_extend('$GA');" >/dev/null 2>&1;
 then echo "❌ 게스트가 스스로 연장했다"; FAIL=1; else echo "✅ 연장은 어드민만 ⭐"; fi
 
+echo "── ⑥ 새로 들어온 게스트에게도 기한이 선다 ── ⭐"
+# ⚠ 종전엔 설치 때 한 번 도는 백필뿐이었다. 그 뒤 가입한 게스트는
+#   guest_expires_at 이 null 이라 **영영 만료되지 않았다.**
+#   아무 일도 안 일어나는 종류의 고장이라 늦게 발견된다.
+GN=d1000000-0000-4000-8000-0000000000a4
+$P -c "delete from public.profiles where id='$GN';
+       delete from auth.users where id='$GN';
+       insert into auth.users(id) values ('$GN');
+       insert into public.profiles(id,role,display_name,membership_tier)
+       values ('$GN','member','새게스트','A');" >/dev/null 2>&1
+ok "가입하면 90일이 선다 ⭐" 90 "$(days $GN)"
+
+# 나중에 A 로 바뀌는 경우 (초대코드로 등급이 붙는 길)
+GU=d1000000-0000-4000-8000-0000000000a5
+$P -c "delete from public.profiles where id='$GU';
+       delete from auth.users where id='$GU';
+       insert into auth.users(id) values ('$GU');
+       insert into public.profiles(id,role,display_name) values ('$GU','member','나중게스트');
+       update public.profiles set membership_tier='A' where id='$GU';" >/dev/null 2>&1
+ok "나중에 A 가 돼도 선다 ⭐" 90 "$(days $GU)"
+
+# 어드민이 늘려 둔 값을 프로필 저장이 덮으면 안 된다
+$P -c "update public.profiles set guest_expires_at = now() + interval '200 day' where id='$GN';
+       update public.profiles set display_name='이름만 바꿈' where id='$GN';" >/dev/null 2>&1
+ok "저장해도 늘려둔 기한이 그대로 ⭐" 200 "$(days $GN)"
+
+# 승급하면 게스트 기한은 사라진다
+$P -c "update public.profiles set membership_tier='M' where id='$GN';" >/dev/null 2>&1
+ok "M 으로 올라가면 기한이 지워진다 ⭐" "" "$(days $GN)"
+
 echo
 [ "$FAIL" = "1" ] && echo "=== 실패 있음 ===" || echo "=== 전부 통과 ==="
