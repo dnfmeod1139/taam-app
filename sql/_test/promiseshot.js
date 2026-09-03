@@ -143,6 +143,79 @@ const { chromium } = require('playwright-core');
        (await p.evaluate(() => document.querySelectorAll('#promiseList li').length)) === 5);
   }
 
+  // ── 금전 예시 ⭐ ────────────────────────────────────────────
+  //   처음 보는 셰프에게 「프리미엄을 안 붙입니다」는 와닿지 않는다.
+  //   숫자를 끝까지 세워 **얼마가 들어오는지**를 보여줘야 한다.
+  for (const [lang, w] of [
+    ['ja', { sum:'¥220,000', tot:'¥280,000', keep:'全額が御店の売上' }],
+    ['ko', { sum:'¥220,000', tot:'¥280,000', keep:'전액이 매장 매출' }],
+    ['en', { sum:'$1,520',   tot:'$1,920',   keep:'All of it is your revenue' }]
+  ]) {
+    await p.evaluate(l => window.pvSetLang(l), lang);
+    await p.waitForTimeout(200);
+    const e = await p.evaluate(() => {
+      const b = document.getElementById('exBox');
+      return { txt: b.textContent, rows: b.querySelectorAll('.r').length,
+               notes: b.querySelectorAll('.note .n').length,
+               who: [...b.querySelectorAll('.who')].map(x => x.textContent) };
+    });
+    ok(lang + ' — 협의 금액이 있다 ⭐', e.txt.indexOf(w.sum) >= 0);
+    ok(lang + ' — 수령 총액이 있다 ⭐', e.txt.indexOf(w.tot) >= 0);
+    ok(lang + ' — 전액 매장이라 적는다 ⭐', e.txt.indexOf(w.keep) >= 0);
+    // 코스 · 미니멈 · 협의합계 · 추가 · 총액 = 다섯 줄
+    ok(lang + ' — 다섯 줄로 센다', e.rows === 5);
+    ok(lang + ' — 누가 내는지 두 번 적는다 ⭐', e.who.length === 2);
+    ok(lang + ' — 예시일 뿐이라 적는다 ⭐', e.notes === 3);
+  }
+
+  // ── 「지금 정하지 않아도 된다」 ⭐ ───────────────────────────
+  for (const [lang, w] of [
+    ['ja', '今すぐお決めにならなくて'],
+    ['ko', '지금 정하지 않으셔도'],
+    ['en', 'don’t have to decide now']
+  ]) {
+    await p.evaluate(l => window.pvSetLang(l), lang);
+    await p.waitForTimeout(200);
+    const l2 = await p.evaluate(() => {
+      const b = document.getElementById('laterBox');
+      const cta = document.getElementById('agCtaBtn').getBoundingClientRect();
+      return { txt: b.textContent, btns: b.querySelectorAll('button').length,
+               hasCeTxt: !!b.querySelector('.ce-txt'),
+               afterCta: b.getBoundingClientRect().top >= cta.bottom };
+    });
+    ok(lang + ' — 지금 안 정해도 된다고 적는다 ⭐', l2.txt.indexOf(w) >= 0);
+    ok(lang + ' — 라인·메일 두 길을 준다 ⭐', l2.btns === 2);
+    // ⚠ .ce-txt 가 없으면 눌러도 아무 일 없는 것처럼 보인다 (복사는 됐는데)
+    ok(lang + ' — 복사 피드백이 붙는다 ⭐', l2.hasCeTxt);
+    ok(lang + ' — 승인 버튼 다음에 온다', l2.afterCta);
+  }
+
+  // ── 승인 시트 — 서명 전에 한 번 더 ⭐ ───────────────────────
+  for (const [lang, w] of [
+    ['ja', { t:'こうなります', off:'ご承認なさらなくても' }],
+    ['ko', { t:'이렇게 됩니다', off:'승인하지 않으셔도' }],
+    ['en', { t:'What approving means', off:'do not have to approve' }]
+  ]) {
+    await p.evaluate(l => window.pvSetLang(l), lang);
+    await p.waitForTimeout(150);
+    await p.evaluate(() => window.agOpen());
+    await p.waitForTimeout(200);
+    const a = await p.evaluate(() => {
+      const s = document.getElementById('agSum');
+      const form = document.getElementById('agf') || document.querySelector('.agf');
+      return { txt: s.textContent, items: s.querySelectorAll('li').length,
+               off: s.querySelector('.off').textContent,
+               beforeFields: s.getBoundingClientRect().top <= form.getBoundingClientRect().top };
+    });
+    ok(lang + ' — 무슨 뜻인지 다시 적는다 ⭐', a.txt.indexOf(w.t) >= 0);
+    ok(lang + ' — 네 가지로 짚는다',           a.items === 4);
+    // ⚠ 시트를 열면 이미 승인하기로 한 것처럼 느껴진다. 물러날 길을 다시 보여준다.
+    ok(lang + ' — 안 해도 된다고 다시 적는다 ⭐', a.off.indexOf(w.off) >= 0);
+    ok(lang + ' — 입력칸보다 위에 있다 ⭐',    a.beforeFields);
+    await p.evaluate(() => window.agClose());
+    await p.waitForTimeout(120);
+  }
+
   // ── 견본 내용 ───────────────────────────────────────────────
   for (const [lang, want] of [
     ['ja', { kind:'貸切ゲストシート', note:'アプリは不要' }],
