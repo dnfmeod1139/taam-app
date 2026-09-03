@@ -216,6 +216,37 @@ const { chromium } = require('playwright-core');
     await p.waitForTimeout(120);
   }
 
+  // ── 증서도 3개 국어인가 ⭐ ──────────────────────────────────
+  //   증서는 제출한 뒤에야 그려져서 눈에 잘 안 띈다. 도장 글자가 「承」로
+  //   박혀 있어 한국어·영어 증서에도 한자가 찍히고 있었다.
+  for (const [lang, w] of [
+    ['ja', { seal:'承認', rep:'代表',   msg:'心より感謝' }],
+    ['en', { seal:'OK',   rep:'Founder', msg:'Thank you' }],
+    ['ko', { seal:'승인', rep:'대표',   msg:'감사합니다' }]
+  ]) {
+    const c = await p.evaluate((lang) => {
+      const el = document.getElementById('agCertToken');
+      el.innerHTML = window.__tokenHTML(lang, { restaurant:'Sushi Arai', chef:'Arai',
+        name:'Taro', meal:'¥30,000', min:'¥25,000', signature:null, since:'2026.09' });
+      const kana = /[ぁ-んァ-ヶ]/, han = /[가-힣]/;
+      const want = lang === 'ja' ? han : (lang === 'ko' ? kana
+                 : new RegExp(kana.source + '|' + han.source));
+      const bad = [];
+      const wk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      let n; while ((n = wk.nextNode())) {
+        const t = (n.nodeValue || '').trim();
+        if (t && want.test(t)) bad.push(t.slice(0, 40));
+      }
+      return { seal: (el.querySelector('.tk-seal') || {}).textContent || '',
+               txt: el.textContent, bad };
+    }, lang);
+    ok(lang + ' — 도장이 언어를 따른다 ⭐', c.seal === w.seal);
+    ok(lang + ' — 대표 표기',              c.txt.indexOf(w.rep) >= 0);
+    ok(lang + ' — 인사말',                 c.txt.indexOf(w.msg) >= 0);
+    // ⚠ 다른 언어 글자가 섞이면 안 된다 (한자는 세 언어 공통이라 제외)
+    ok(lang + ' — 다른 언어가 안 섞인다 ⭐', c.bad.length === 0);
+  }
+
   // ── 견본 내용 ───────────────────────────────────────────────
   for (const [lang, want] of [
     ['ja', { kind:'貸切ゲストシート', note:'アプリは不要' }],
@@ -238,6 +269,39 @@ const { chromium } = require('playwright-core');
     ok(lang + ' — 알레르기가 눈에 띈다 ⭐', s.warn === 1);
     // ⚠ 실제 시트와 같은 원칙 — 나가는 금액은 「그 매장에서의 지난 회계」뿐
     ok(lang + ' — 지난 회계 두 건만', (s.txt.match(/¥/g) || []).length === 2);
+  }
+
+  // ── 전수: 언어를 바꿔도 안 바뀌는 문구가 있나 ⭐ ─────────────
+  //   TXT 를 안 거치고 코드에 박아 둔 글자를 잡는다. 한 곳만 박혀 있어도
+  //   그 문장만 다른 언어로 남아 셰프가 읽다가 걸린다.
+  //   ⚠ 한자는 세 언어가 공통으로 쓴다(壱弐参肆伍·承認). 가나와 한글만 본다.
+  // ⚠ 위 증서 검사가 #agCertToken 에 한국어 증서를 남겨 뒀다. 그대로 두면
+  //   그게 「박아 둔 문구」로 잡힌다 — 실제 페이지가 아니라 검사 찌꺼기다.
+  await p.evaluate(() => { document.getElementById('agCertToken').innerHTML = ''; });
+  for (const lang of ['ja','en','ko']) {
+    await p.evaluate(l => window.pvSetLang(l), lang);
+    await p.evaluate(() => window.agOpen());
+    await p.waitForTimeout(250);
+    const leak = await p.evaluate((lang) => {
+      const kana = /[ぁ-んァ-ヶ]/, han = /[가-힣]/;
+      const want = lang === 'ja' ? han : (lang === 'ko' ? kana
+                 : new RegExp(kana.source + '|' + han.source));
+      const bad = [];
+      ['page','agModal'].forEach(id => {
+        const root = document.getElementById(id); if (!root) return;
+        const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        let n; while ((n = w.nextNode())) {
+          const t = (n.nodeValue || '').trim();
+          if (t && want.test(t)) bad.push((n.parentElement && (n.parentElement.id
+            || n.parentElement.className) || '?') + ' :: ' + t.slice(0, 40));
+        }
+      });
+      return bad;
+    }, lang);
+    ok(lang + ' — 박아 둔 문구가 없다 ⭐ (' + leak.slice(0,2).join(' / ') + ')',
+       leak.length === 0);
+    await p.evaluate(() => window.agClose());
+    await p.waitForTimeout(120);
   }
 
   out.forEach(l => console.log(l));
