@@ -28,14 +28,18 @@ insert into auth.users(id) values ('$G1'),('$G2'),('$GM') on conflict do nothing
 insert into public.profiles(id,role,display_name,membership_tier) values
  ('$G1','member','게스트살아','A'),('$G2','member','게스트만료','A'),('$GM','member','엠회원','M')
  on conflict (id) do update set membership_tier=excluded.membership_tier, role='member';
+-- ⚠ 티켓을 **먼저** 넣는다. 2026-09-03 부터 게스트가 티켓을 사면
+--   서버가 기한을 90일로 다시 잡는다(trg_taam_guest_touch_on_purchase).
+--   기한을 먼저 세우면 이 삽입이 그걸 덮어써서, 「만료된 게스트」를
+--   만들려다 멀쩡한 게스트가 된다.
+delete from public.tickets where user_id='$G2';
+insert into public.tickets(user_id,restaurant_id,purchase_id,status,price,party_size,reservation_date)
+ values('$G2','$RA','MAN-guest','active',100000,2,'2027-05-05');
 update public.profiles set guest_expires_at = now() + interval '40 day',
        guest_status='active', guest_extended_cnt=0 where id='$G1';
 update public.profiles set guest_expires_at = now() - interval '3 day',
        guest_status='active', guest_extended_cnt=0 where id='$G2';
 update public.profiles set guest_expires_at = null, guest_status=null where id='$GM';
-delete from public.tickets where user_id='$G2';
-insert into public.tickets(user_id,restaurant_id,purchase_id,status,price,party_size,reservation_date)
- values('$G2','$RA','MAN-guest','active',100000,2,'2027-05-05');
 " >/dev/null 2>&1
 
 echo "── ① 만료 판정은 서버가 ──"
