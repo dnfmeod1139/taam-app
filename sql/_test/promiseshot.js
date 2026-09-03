@@ -275,6 +275,17 @@ const { chromium } = require('playwright-core');
   //   TXT 를 안 거치고 코드에 박아 둔 글자를 잡는다. 한 곳만 박혀 있어도
   //   그 문장만 다른 언어로 남아 셰프가 읽다가 걸린다.
   //   ⚠ 한자는 세 언어가 공통으로 쓴다(壱弐参肆伍·承認). 가나와 한글만 본다.
+  // ── 판번호 ⭐ ───────────────────────────────────────────────
+  //   이 페이지엔 앱의 BUILD 같은 표시가 없어 「배포가 됐나」를 못 가렸다.
+  //   미리보기 바에만 붙인다 — 셰프에게는 안 보인다.
+  const bld = await p.evaluate(() => ({
+    v: window.PARTNER_BUILD || null,
+    tag: (document.getElementById('pvTag') || {}).textContent || ''
+  }));
+  ok('판번호가 있다 ⭐', /^\d{4}\.\d{2}\.\d{2}-[a-z]$/.test(bld.v || ''));
+  ok('미리보기 태그에 붙는다 ⭐',
+     bld.tag.indexOf('미리보기') >= 0 && bld.tag.indexOf(bld.v) >= 0);
+
   // ⚠ 위 증서 검사가 #agCertToken 에 한국어 증서를 남겨 뒀다. 그대로 두면
   //   그게 「박아 둔 문구」로 잡힌다 — 실제 페이지가 아니라 검사 찌꺼기다.
   await p.evaluate(() => { document.getElementById('agCertToken').innerHTML = ''; });
