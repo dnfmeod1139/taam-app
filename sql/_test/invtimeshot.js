@@ -65,6 +65,44 @@ const fs = require('fs');
     ok('null 도 안전',     window.taamInviteTimeOf(map, null) === '');
     ok('맵이 없어도 안전', window.taamInviteTimeOf(null, 'INV-abcd1234') === '');
 
+    // ── ⑤ 매장 헤더의 시각 ⭐ ────────────────────────────────
+    //   일정 없이 초대만 나간 날은 「시간 —」이었다. 정작 예약 줄에는
+    //   시각이 적혀 있는데도 매장 시간을 모르는 것처럼 보였다 (9/11 슌지).
+    window.restaurantDB = [{ id: 'R1', name: '슌지' }];
+    window.ticketDB = [];
+    window._tcalPurchases = [];
+    window._tcalManual = [];
+    window._tcalCapacity = [];
+    // ⚠ _tcalDayGroups 는 **정규화된** 열쇠를 받는다 ('2026-9-11').
+    //   원형('2026.09.11')을 그대로 넘기면 한 건도 안 걸린다.
+    const RAW = '2026.09.11';
+    const KEY = window._tcalDateKey(RAW);
+    const inv = (t) => ({ restaurant_id:'R1', restaurant_name:'슌지', visit_date:RAW,
+      visit_time:t, pax:2, status:'paid', invitee_user_id:'U1', total_amount:1700000, agency_fee:100000 });
+
+    window._tcalInvites = [inv('20:00')];
+    let g = window._tcalDayGroups(KEY)[0];
+    ok('초대만 있어도 매장 시간이 뜬다 ⭐', g && g.time === '20:00');
+    ok('예약 줄에도 그대로 있다', g && g.entries[0] && g.entries[0].time === '20:00');
+
+    // ⚠ 시각이 여러 개면 하나로 뭉치지 않는다 — 없는 사실을 말하게 된다
+    window._tcalInvites = [inv('18:00'), inv('20:00')];
+    g = window._tcalDayGroups(KEY)[0];
+    ok('시각이 여러 개면 안 적는다 ⭐', g && !g.time);
+    ok('그때도 각 줄에는 남는다',
+       g && g.entries.length === 2 && g.entries[0].time === '18:00');
+
+    // 같은 시각이 여럿이면 그건 하나다
+    window._tcalInvites = [inv('20:00'), inv('20:00')];
+    g = window._tcalDayGroups(KEY)[0];
+    ok('같은 시각 여러 건은 그 시각', g && g.time === '20:00');
+
+    // 시각이 아예 없으면 비운다 (없는 것을 지어내지 않는다)
+    window._tcalInvites = [inv('')];
+    g = window._tcalDayGroups(KEY)[0];
+    ok('시각이 없으면 비워 둔다 ⭐', g && !g.time);
+    window._tcalInvites = [];
+
     // ── 조회 실패해도 화면이 죽지 않는다 ──
     window.sb = { from: () => ({ select: () => ({ limit: () =>
       Promise.resolve({ data: null, error: { message: '조회 실패' } }) }) }) };

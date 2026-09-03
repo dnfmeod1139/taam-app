@@ -42847,7 +42847,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.04-a';
+var TAAM_WEB_BUILD = '2026.09.04-b';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -57605,6 +57605,21 @@ function _tcalDayGroups(dateKey){
     gr(m.venue_id, m.venue_name).entries.push({type:'manual', ttype:(m.ttype||'오프라인'), name:(m.name||''), pax:(m.pax||1), amount:(parseInt(m.amount)||0), agency:0, memo:(m.memo||''), mid:m.id});
   });
   Object.keys(groups).forEach(function(k){ if(!groups[k].restName) groups[k].restName = _tcalRestName(k); });
+  // 🆕 2026-09-04: 일정 없이 초대만 나간 날은 매장 시간이 「—」였다.
+  //   g.time 은 일정(ticketDB)과 정원 설정에서만 채워진다. 티켓 없이 초대로만
+  //   보낸 날은 둘 다 없어서 방문 시각을 알 수 없는 것처럼 보인다 — 정작
+  //   예약 줄에는 시각이 적혀 있는데도. (9/11 슌지)
+  //   ⚠ 시각이 여러 개면 아무것도 안 적는다. 하나로 뭉치면 「이 매장은 그날
+  //     19시」처럼 읽혀 없는 사실을 말하게 된다. 그 경우 각 줄의 시각이 답이다.
+  Object.keys(groups).forEach(function(k){
+    var g = groups[k];
+    if(g.time) return;
+    var ts = [];
+    (g.entries || []).forEach(function(e){
+      if(e.time && ts.indexOf(e.time) < 0) ts.push(e.time);
+    });
+    if(ts.length === 1) g.time = ts[0];
+  });
   return Object.keys(groups).map(function(k){ return groups[k]; }).sort(function(a,b){ return String(a.restName).localeCompare(String(b.restName)); });
 }
 // ════════════════════════════════════════════════════════════════
