@@ -42112,7 +42112,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.03-a';
+var TAAM_WEB_BUILD = '2026.09.03-b';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -44180,9 +44180,14 @@ function renderTicketList(){
       '<div class="rest-list-actions">'
       + '<button class="rest-action-sold'+(isSold?' soldout':'')+'" onclick="tuToggleSoldout(\''+t.id+'\')">'+(isSold?'판매중':'매진')+'</button>'
       + ((t.deadlineDate||t.gradeOpen)?'<button class="rest-action-extend" onclick="openExtendPopup(\''+t.id+'\')" >연장</button>':'')
-      + '<button class="rest-action-edit" onclick="tuGuestSeat(\''+t.id+'\')" style="'
-      +   (_gsOpen ? 'background:#5C0A14;border-color:#5C0A14;color:#fff;' : '')
-      +   '">게스트석' + (_gsOpen ? ' ●' : '') + '</button>'
+      // 🆕 2026-09-03: 게스트는 이제 **티켓 이용 등급 = 일반공개** 로 받는다.
+      //   게스트석은 두 갈래가 되어 헷갈리므로 입구를 닫았다.
+      //   ⚠ 코드·SQL 은 지우지 않았다. 열려 있는 자리가 남아 있으면(● )
+      //     버튼을 계속 보여줘야 닫을 수 있다 — 안 보이면 영영 못 닫는다.
+      + (_gsOpen
+         ? '<button class="rest-action-edit" onclick="tuGuestSeat(\''+t.id+'\')"'
+           + ' style="background:#5C0A14;border-color:#5C0A14;color:#fff;">게스트석 ●</button>'
+         : '')
       + '<button class="rest-action-edit" onclick="tuEditTicket(\''+t.id+'\')" >수정</button>'
       + '<button class="rest-action-del" onclick="tuDeleteTicket(\''+t.id+'\')" >삭제</button>'
       + '</div>';
@@ -57689,9 +57694,12 @@ function _tkTierAllowed(t){
   var need = String((t && t.minTier) || '').toUpperCase();
   if (typeof _currentRole !== 'undefined' && _currentRole === 'superadmin') return true;
 
-  // ① 게스트(A)는 **게스트 초대석만**. 그 외에는 전부 막힌다.
-  //    ⚠ min_tier='A' 하나로는 안 된다 — 이유·수량·매장 허락까지 갖춰야 한다.
-  if (_tkIsFreeMember()) return _tkIsGuestSeat(t);
+  // ① 게스트(A)는 **「일반공개」로 지정한 회차만** 산다. (2026-09-03)
+  //    ⚠ need 가 비어 있는 것은 일반공개가 아니다. 대부분의 옛 회차가
+  //      빈 값이라, 여기서 같이 통과시키면 티켓이 통째로 열린다.
+  //      서버 taam_tier_is_open 도 'A' 하나만 일반공개로 친다 — 같은 줄이다.
+  //    게스트 초대석도 계속 통한다(입구는 닫혔지만 규칙은 살아 있다).
+  if (_tkIsFreeMember()) return need === 'A' || _tkIsGuestSeat(t);
 
   // ② 게스트가 아닌 사람에게 min_tier='A'(일반공개)는 **하한이 아니라 개방**이다.
   //    여기를 빼면 등급이 아예 없는 옛 회원이 열린 티켓에서 튕긴다 —
@@ -57707,6 +57715,10 @@ window._tkTierAllowed = _tkTierAllowed;
 function showTierLockPopup(t){
   var need = String((t && t.minTier) || '').toUpperCase();
   var free = _tkIsFreeMember();
+  // 🆕 2026-09-03: 살 수 있는 티켓에는 절대 안 띄운다.
+  //   일반공개 회차는 게스트도 그냥 산다 — 여기서 팝업이 뜨면
+  //   「열어 놨는데 멤버십 가입하라고 막는」 화면이 된다.
+  if(_tkTierAllowed(t)) return;
   // 🆕 일반 회원에게는 min_tier 가 비어 있어도 띄운다 — 그게 막히는 이유다.
   //   종전엔 TIER_RANK[need] 가 없으면 그냥 돌아갔고, 그래서 「눌러도 아무
   //   일이 없는」 티켓이 됐다.

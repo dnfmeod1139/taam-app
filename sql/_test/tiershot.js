@@ -56,7 +56,11 @@ const { chromium } = require('playwright-core');
     // ── ② 등급별 판정 — 서버 t_tier.sh 와 같은 표 ────────────
     //    행: 회원 등급 / 열: 티켓 min_tier
     const cases = [
-      ['A', 'A',  false, '게스트 — min_tier=A 만으로는 못 산다 ⭐'],
+      // 🆕 2026-09-03: min_tier='A'(일반공개)면 게스트도 산다. 어드민이
+      //   회차마다 눌러 주는 값이라 실수로 열리지 않는다.
+      ['A', 'A',  true,  '게스트 — 일반공개는 산다 ⭐'],
+      // ⚠ 빈 값은 일반공개가 **아니다**. 옛 회차 대부분이 빈 값이라,
+      //   같이 열면 티켓이 통째로 열린다. 서버 taam_tier_is_open 과 같은 줄.
       ['A', '',   false, '게스트 — 제한 없는 티켓은 못 산다 ⭐'],
       ['A', 'T',  false, '게스트 — T 전용은 못 산다'],
       ['A', 'M',  false, '게스트 — M 전용은 못 산다'],
@@ -112,6 +116,16 @@ const { chromium } = require('playwright-core');
     el.querySelector('#tlkMship').click(); await sleep(80);
     ok('누르면 멤버십 화면으로 간다', opened === 1);
     ok('누르면 팝업이 닫힌다', !document.getElementById('tierLockModal'));
+
+    // ⚠ 살 수 있는 티켓에는 절대 안 뜬다. 일반공개인데 「멤버십 가입하라」는
+    //   팝업이 뜨면, 열어 놓고 막는 화면이 된다.
+    document.getElementById('tierLockModal')?.remove();
+    window.showTierLockPopup(T('A')); await sleep(80);
+    ok('게스트 — 일반공개엔 팝업이 안 뜬다 ⭐', !document.getElementById('tierLockModal'));
+    ok('게스트 — 일반공개는 회원가로 낸다 ⭐',
+       window._tkPayPer({ minTier:'A', mealFee:200000, agencyFee:30000, wineMin:20000 }) === 250000);
+    ok('게스트 — 일반공개는 항목이 세 줄',
+       window._tkCostRows({ minTier:'A', mealFee:200000, agencyFee:30000, wineMin:20000 }).length === 3);
 
     // 닫기도 된다
     window.showTierLockPopup(T('')); await sleep(80);
