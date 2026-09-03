@@ -31242,22 +31242,14 @@ async function _tbLoad(){
         return p.indexOf('INV-') === 0 || p.indexOf('INVH-') === 0;
       });
       if(_needT.length){
-        var _iv = await window.sb.from('reservation_invites')
-          .select('id, visit_time').limit(1000);
-        if(_iv.error){
-          console.warn('[today] 초대 시각 조회 실패 — 시간 미정으로 둔다:', _iv.error.message);
-        } else {
-          var _byInv = {};
-          (_iv.data || []).forEach(function(v){
-            if(v && v.visit_time) _byInv[String(v.id).slice(0, 8)] = String(v.visit_time);
-          });
-          _needT.forEach(function(r){
-            var p = String(r.purchase_id || '');
-            var key = (p.indexOf('INVH-') === 0) ? p.slice(5, 13) : p.slice(4, 12);
-            var t = _byInv[key];
-            if(t){ r.visit_time = t; r._m = _tbMins(t); }
-          });
-        }
+        // ⚠ 같은 보정을 화면마다 따로 쓰지 않는다. 종전에 여기만 있고 티켓
+        //   캘린더에는 없어서, 같은 예약이 한 화면에는 시간이 뜨고 다른
+        //   화면에는 안 떴다. 이제 taamInviteTimeMap 하나만 쓴다.
+        var _byInv = await taamInviteTimeMap();
+        _needT.forEach(function(r){
+          var t = taamInviteTimeOf(_byInv, r.purchase_id);
+          if(t){ r.visit_time = t; r._m = _tbMins(t); }
+        });
       }
     }catch(e){ console.warn('[today] 초대 시각 채우기 예외 — 화면은 그대로:', e && e.message); }
 
@@ -42855,7 +42847,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.03-l';
+var TAAM_WEB_BUILD = '2026.09.04-a';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -57465,6 +57457,44 @@ async function tcalLoadManual(){
   }
 }
 
+// ═══════════════════════════════════════════════════════════════
+// 초대 건의 방문 시각 — 한 곳에서만 구한다 (2026-09-04)
+// ═══════════════════════════════════════════════════════════════
+//   초대(INV-·INVH-)로 나간 예약은 tickets.visit_time 이 비어 있는 일이 많다.
+//   시각은 reservation_invites 에 있고, purchase_id 앞자리가 그 초대 id 의
+//   앞 8글자다. 그걸로 이어 붙인다.
+//
+//   ⚠ 대시보드(_tbLoad)는 이미 이 보정을 하고 있었는데 **티켓 캘린더에는
+//     없었다.** 그래서 같은 예약이 한 화면에는 시간이 뜨고 다른 화면에는
+//     안 떴다 (9/11 슌지). 화면마다 따로 구하면 또 갈라진다 — 함수 하나로 모은다.
+//
+//   ⚠ status 로 거르지 않는다. 캘린더의 초대 목록은 paid 만 보지만, 시각은
+//     결제 상태와 무관하게 그 예약의 사실이다. 거르면 지금 이 버그가 다시 난다.
+var _invTimeCache = null;
+async function taamInviteTimeMap(force){
+  if(_invTimeCache && !force) return _invTimeCache;
+  var m = {};
+  try{
+    if(window.sb){
+      var r = await window.sb.from('reservation_invites').select('id, visit_time').limit(2000);
+      if(r.error) console.warn('[invite-time] 조회 실패 — 시간 미정으로 둔다:', r.error.message);
+      (r.data || []).forEach(function(v){
+        if(v && v.visit_time) m[String(v.id).slice(0, 8)] = String(v.visit_time);
+      });
+    }
+  }catch(e){ console.warn('[invite-time] 예외 — 시간 미정으로 둔다:', e && e.message); }
+  _invTimeCache = m;
+  return m;
+}
+function taamInviteTimeOf(map, purchaseId){
+  var p = String(purchaseId || '');
+  var isH = p.indexOf('INVH-') === 0;
+  if(!isH && p.indexOf('INV-') !== 0) return '';
+  return (map || {})[isH ? p.slice(5, 13) : p.slice(4, 12)] || '';
+}
+window.taamInviteTimeMap = taamInviteTimeMap;
+window.taamInviteTimeOf = taamInviteTimeOf;
+
 // 🆕 초대 결제(paid) 로드 — 역구조(초대→결제)로 팔린 예약도 캘린더 점유에 반영 (금액·회원명 포함)
 async function tcalLoadInvites(){
   try {
@@ -58091,6 +58121,20 @@ async function tcalLoadPurchases(){
     if(_currentRole === 'admin' && _currentAdminRestId){
       _tcalPurchases = _tcalPurchases.filter(function(h){
         return String(h.restId) === String(_currentAdminRestId);
+      });
+    }
+    // 🆕 2026-09-04: 초대 건의 방문 시각을 채운다.
+    //   tickets 에는 비어 있고 reservation_invites 에 있다. 대시보드는 진작
+    //   이 보정을 하고 있었는데 여기만 빠져서, 같은 예약이 대시보드에는
+    //   시간이 뜨고 캘린더에는 안 떴다 (9/11 슌지).
+    var _need = _tcalPurchases.filter(function(h){
+      return !h.visitTime && /^INVH?-/.test(String(h.purchaseId || ''));
+    });
+    if(_need.length){
+      var _m = await taamInviteTimeMap();
+      _need.forEach(function(h){
+        var t = taamInviteTimeOf(_m, h.purchaseId);
+        if(t) h.visitTime = t;
       });
     }
   } catch(e){
