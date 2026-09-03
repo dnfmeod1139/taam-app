@@ -40970,14 +40970,83 @@ function _rpHasGooglePlaces(){
 // 🆕 보안/비용: Google Maps JS 지연 로더. 주소 자동완성 최초 사용 시에만 스크립트 주입.
 //   (전역 <script> 제거 → 회원은 로드 안 함. 중복 주입 방지 플래그.)
 var _rpMapsLoading = false;
+// 🆕 2026-09-03: 왜 안 되는지 화면에 적는다.
+//   종전에는 실패해도 「Google Maps 로드 중...」만 남았다. 스크립트가 막혔든,
+//   키가 거부됐든, Places API (New) 가 안 켜져 있든 전부 같은 화면이라
+//   영영 기다리게 된다. 셋은 고치는 방법이 서로 다르다.
+var _rpMapsErr = '';    // 사람이 읽을 실패 이유
+var _rpPendingQ = '';   // 로드가 끝나면 이어서 검색할 말
+
+// Google 은 키·도메인·결제 문제를 콘솔에만 적고 조용히 멈춘다.
+//   이 이름의 함수를 만들어 두면 그때 불러 준다 — 유일한 신호다.
+window.gm_authFailure = function(){
+  _rpMapsLoading = false;
+  _rpMapsErr = 'Google 지도 키가 거부됐습니다. 키 제한(도메인)·결제 상태를 확인해주세요.';
+  _rpShowMapsErr();
+};
+
+function _rpShowMapsErr(){
+  var dd = document.getElementById('rpAddrDropdown');
+  if(!dd || !_rpMapsErr) return;
+  dd.innerHTML = '<div style="padding:11px 14px;font-size:12px;color:#9B1C1C;line-height:1.75;">'
+    + _rpMapsErr
+    + '<br><span style="color:#999;">주소를 직접 입력해도 저장됩니다 — 좌표만 나중에 채워집니다.</span></div>';
+  dd.style.display = 'block';
+}
+
 function _rpEnsureMapsLoaded(){
   if (_rpHasGooglePlaces()) return;   // 이미 로드됨
   if (_rpMapsLoading) return;         // 로딩 진행 중
-  _rpMapsLoading = true;
+  _rpMapsLoading = true; _rpMapsErr = '';
   var s = document.createElement('script');
   s.src = 'https://maps.googleapis.com/maps/api/js?key=AIzaSyBzzMJ637TFCVIabUZvLCGF7wz7zhRpoGY&libraries=places&language=ko&loading=async';
   s.async = true; s.defer = true;
-  s.onerror = function(){ _rpMapsLoading = false; };
+
+  s.onload = function(){
+    // ⚠ loading=async 는 스크립트가 내려온 뒤에도 라이브러리를 바로 안 붙인다.
+    //   importLibrary 로 기다려야 google.maps.places 가 생긴다. 이걸 안 해서
+    //   「내려는 왔는데 계속 없는」 상태로 보였다.
+    var done = function(){
+      _rpMapsLoading = false;
+      if (!_rpHasGooglePlaces()) {
+        _rpMapsErr = '이 키에 Places API (New) 가 켜져 있지 않습니다. '
+                   + 'Google Cloud 콘솔에서 「Places API (New)」를 사용 설정해주세요.';
+        _rpShowMapsErr();
+        return;
+      }
+      // 로드가 끝나면 이어서 검색한다 — 다시 타이핑하게 만들지 않는다.
+      var q = _rpPendingQ; _rpPendingQ = '';
+      if (q && typeof rpAddrInput === 'function') rpAddrInput(q);
+    };
+    try {
+      if (window.google && google.maps && google.maps.importLibrary) {
+        google.maps.importLibrary('places').then(done, function(e){
+          _rpMapsLoading = false;
+          _rpMapsErr = 'Places 라이브러리를 못 불러왔습니다: '
+                     + ((e && e.message) || String(e)).slice(0, 80);
+          _rpShowMapsErr();
+        });
+      } else done();
+    } catch(e){ done(); }
+  };
+
+  s.onerror = function(){
+    _rpMapsLoading = false;
+    _rpMapsErr = 'Google 지도 스크립트를 못 불러왔습니다. 네트워크·광고차단·사내망을 확인해주세요.';
+    _rpShowMapsErr();
+  };
+
+  // ⚠ 막히면 **onerror 도 안 온다.** 요청이 그냥 매달려 있는 경우가 있다
+  //   (사내망·광고차단·프록시). 그때 화면에는 「불러오는 중」만 영영 남는다 —
+  //   실제로 그래서 「로딩중이고 안 잡힌다」가 됐다. 시한을 둔다.
+  setTimeout(function(){
+    if (_rpHasGooglePlaces() || _rpMapsErr) return;
+    _rpMapsLoading = false;
+    _rpMapsErr = 'Google 지도가 응답하지 않습니다 (10초 초과). '
+               + '네트워크·광고차단을 확인하시거나 잠시 후 다시 시도해주세요.';
+    _rpShowMapsErr();
+  }, 10000);
+
   document.head.appendChild(s);
 }
 
@@ -40997,8 +41066,11 @@ async function rpAddrInput(q) {
 
   _rpAddrTimer = setTimeout(async function() {
     if (!_rpHasGooglePlaces()) {
+      // 이미 실패한 이유를 안다면 기다리라고 하지 않는다.
+      if (_rpMapsErr) { _rpShowMapsErr(); return; }
+      _rpPendingQ = q;         // 로드가 끝나면 이걸로 알아서 이어 검색한다
       _rpEnsureMapsLoaded();   // 🆕 최초 사용 시 지연 로드 트리거
-      dd.innerHTML = '<div style="padding:11px 14px;font-size:12px;color:#bbb;">Google Maps 로드 중... 잠시 후 다시 입력</div>';
+      dd.innerHTML = '<div style="padding:11px 14px;font-size:12px;color:#bbb;">Google 지도를 불러오는 중…</div>';
       dd.style.display = 'block';
       return;
     }
@@ -42574,7 +42646,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.03-f';
+var TAAM_WEB_BUILD = '2026.09.03-g';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
