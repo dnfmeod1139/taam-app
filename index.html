@@ -32197,8 +32197,13 @@ function _gsRender(){
   var b = document.getElementById('gsBody');
   if(!b || !_gsT) return;
   var t = _gsT.t, st = _gsT.st;
-  var name = (typeof restaurantDB !== 'undefined'
-    ? (restaurantDB.find(function(r){ return String(r.id) === String(t.rest); }) || {}).name : '') || t.rest || '';
+  // ⚠ 매장 id 는 restId 다. rest 는 **이름**이라 id 로 찾으면 늘 빗나가고,
+  //   폴백이 이름을 돌려주는 바람에 제목만 멀쩡해 보였다 (gsAllow 참고).
+  //   서버가 준 이름이 있으면 그걸 먼저 쓴다.
+  var name = (st && st.rest_name)
+    || (typeof restaurantDB !== 'undefined'
+        ? (restaurantDB.find(function(r){ return String(r.id) === String(t.restId); }) || {}).name : '')
+    || t.rest || '';
   document.getElementById('gsTitle').textContent = name + ' · ' + (t.date || '');
 
   if(_gsT.err){
@@ -32302,12 +32307,24 @@ async function gsClose(){
   } catch(e){ showToast('❌','닫지 못했습니다', (e && e.message) || ''); }
   finally { _gsT.busy = false; }
 }
+// ⚠ 매장 id 를 앱이 고르지 않는다.
+//   종전에 _gsT.t.rest 를 매장 id 로 넘겼는데, ticketDB 의 매장 id 는
+//   **restId** 이고 rest 는 **매장 이름**이다. 이름을 id 자리에 넣어 보내서
+//   「매장을 찾을 수 없습니다」로 튕겼다. 시트 제목이 멀쩡히 떠서 더 헷갈렸다 —
+//   제목은 이름을 쓰니까 맞고, 허용만 안 됐다.
+//   서버는 회차에서 매장을 이미 안다(taam_guest_seat_state). 회차 id 만 넘긴다.
 async function gsAllow(on){
   if(!_gsT) return;
-  var rid = _gsT.t && _gsT.t.rest;
-  if(!rid){ showToast('⚠','매장을 알 수 없습니다',''); return; }
   try {
-    var r = await window.sb.rpc('taam_guest_seat_allow', { p_rest_id: String(rid), p_on: !!on });
+    var r = await window.sb.rpc('taam_guest_seat_allow_for',
+      { p_ticket_product_id: String(_gsT.id), p_on: !!on });
+    // guest_seat_allow_fix.sql 을 아직 안 돌렸으면 옛 함수로 내려간다.
+    //   ⚠ 이때도 t.rest 가 아니라 서버가 준 rest_id · 앱의 restId 를 쓴다.
+    if(r.error && /does not exist|schema cache/i.test(r.error.message || '')){
+      var rid = (_gsT.st && _gsT.st.rest_id) || (_gsT.t && _gsT.t.restId);
+      if(!rid){ showToast('⚠','매장을 알 수 없습니다','sql/guest_seat_allow_fix.sql 을 실행해 주세요'); return; }
+      r = await window.sb.rpc('taam_guest_seat_allow', { p_rest_id: String(rid), p_on: !!on });
+    }
     if(r.error) throw r.error;
     showToast('✓', on ? '이 매장을 열었습니다' : '이 매장을 잠갔습니다', '');
     tuGuestSeat(_gsT.id);
@@ -42095,7 +42112,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.02-v';
+var TAAM_WEB_BUILD = '2026.09.03-a';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
