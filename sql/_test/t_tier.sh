@@ -53,8 +53,15 @@ insert into public.ticket_products(id, rest_id, min_tier) values
  ('TP_M','$RA','M');
 " >/dev/null 2>&1
 
-echo "── ① A 등급은 일반공개만 산다 ──"
-ok "일반공개(min_tier=A)는 산다"   산다 "$(buy $UA TP_OPEN  TR-A1)"
+echo "── ① 게스트(A)는 게스트석만 산다 ──"
+# ⚠ 2026-09: min_tier='A' **만으로는 못 산다.** 게스트석으로 열려야 한다 —
+#   이유·수량·매장 허락까지 갖춰야 한다(sql/guest_seat.sql). 그전에는
+#   min_tier='A' 하나로 열렸는데, 그러면 이유 없는 자리가 그냥 할인이 된다.
+ok "안 연 자리는 못 산다 ⭐"       막힘 "$(buy $UA TP_OPEN  TR-A0)"
+$P -c "update public.restaurants set guest_seat_allowed=true where id='$RA';
+       set role authenticated; select set_config('taam.uid','$SUP',false);
+       select public.taam_guest_seat_open('TP_OPEN','셰프의 요청으로',300000,3);" >/dev/null 2>&1
+ok "게스트석으로 열면 산다"        산다 "$(buy $UA TP_OPEN  TR-A1)"
 ok "제한 없는 티켓은 못 산다 ⭐"   막힘 "$(buy $UA TP_BLANK TR-A2)"
 ok "T 전용은 못 산다"              막힘 "$(buy $UA TP_T     TR-A3)"
 ok "M 전용은 못 산다"              막힘 "$(buy $UA TP_M     TR-A4)"
@@ -68,7 +75,8 @@ ok "M 회원 — M 전용"          산다 "$(buy $UM TP_M     TR-M1)"
 ok "M 회원 — 제한 없는 티켓"  산다 "$(buy $UM TP_BLANK TR-M2)"
 # ⚠ 등급이 아예 없는 옛 회원. 여기가 막히면 멀쩡한 회원이 아무것도 못 산다.
 ok "등급 없는 옛 회원 — 제한 없는 티켓" 산다 "$(buy $UN TP_BLANK TR-N1)"
-ok "등급 없는 옛 회원 — 일반공개"       산다 "$(buy $UN TP_OPEN  TR-N2)"
+# ⚠ 게스트가 아닌 사람에게 min_tier=A 는 여전히 「개방」이다 — 하한이 아니다
+ok "등급 없는 옛 회원 — 일반공개 ⭐"     산다 "$(buy $UN TP_OPEN  TR-N2)"
 ok "등급 없는 옛 회원 — T 전용은 막힘"  막힘 "$(buy $UN TP_T     TR-N3)"
 
 echo "── ③ 예외 ──"
