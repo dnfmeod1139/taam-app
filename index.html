@@ -8873,6 +8873,26 @@ window.addEventListener('error', function(e){
         <button type="button" id="vpLoginMethodPassword" data-i18n="auth.login_method_password" onclick="vpSwitchLoginMethod('password')" style="flex:1;height:38px;border:none;border-radius:7px;background:#5C0A14;color:#fff;font-family:var(--font-main);font-size:11px;font-weight:600;letter-spacing:.02em;cursor:pointer;">비밀번호</button>
         <button type="button" id="vpLoginMethodEmail" data-i18n="auth.login_method_email" onclick="vpSwitchLoginMethod('email')" style="flex:1;height:38px;border:none;border-radius:7px;background:transparent;color:#666;font-family:var(--font-main);font-size:11px;font-weight:600;letter-spacing:.02em;cursor:pointer;">이메일 OTP</button>
         <button type="button" id="vpLoginMethodPhone" data-i18n="auth.login_method_sms" onclick="vpSwitchLoginMethod('phone')" style="flex:1;height:38px;border:none;border-radius:7px;background:transparent;color:#666;font-family:var(--font-main);font-size:11px;font-weight:600;letter-spacing:.02em;cursor:pointer;">SMS</button>
+        <!-- 🆕 2026-09-03: 파트너 레스토랑 — 슈퍼어드민이 미리 발급한 아이디·비번 -->
+        <button type="button" id="vpLoginMethodPartner" data-i18n="auth.login_method_partner" onclick="vpSwitchLoginMethod('partner')" style="flex:1;height:38px;border:none;border-radius:7px;background:transparent;color:#666;font-family:var(--font-main);font-size:11px;font-weight:600;letter-spacing:.02em;cursor:pointer;">파트너</button>
+      </div>
+
+      <!-- 🆕 파트너 로그인 — 아이디(이메일 아님) + 비밀번호
+           매장은 「sushi-arai」만 입력한다. 뒤의 도메인은 앱이 붙인다 —
+           받아 적을 것이 하나라도 적어야 협의 자리에서 건네기 쉽다. -->
+      <div id="vpPartnerRow" style="margin-bottom:10px;display:none;">
+        <input class="phone-num-input" id="vpPartnerId" type="text" autocomplete="username"
+          autocapitalize="none" autocorrect="off" spellcheck="false"
+          data-i18n-ph="auth.ph_partner_id" placeholder="매장 아이디"
+          style="width:100%;border:1.5px solid #ddd;border-radius:10px;height:48px;padding:0 14px;font-size:14px;font-family:var(--font-main);box-sizing:border-box;outline:none;margin-bottom:8px;">
+        <div style="position:relative;display:flex;align-items:center;">
+          <input class="phone-num-input" id="vpPartnerPw" type="password" autocomplete="current-password"
+            data-i18n-ph="auth.ph_login_password" placeholder="비밀번호"
+            style="flex:1;border:1.5px solid #ddd;border-radius:10px;height:48px;padding:0 38px 0 14px;font-size:14px;font-family:var(--font-main);box-sizing:border-box;outline:none;"
+            onkeydown="if(event.key==='Enter')vpPartnerLogin()">
+          <button type="button" onclick="_vpTogglePartnerPwShow(this)" style="position:absolute;right:6px;width:32px;height:32px;background:none;border:none;color:#888;cursor:pointer;font-size:14px;">👁</button>
+        </div>
+        <div data-i18n="auth.partner_hint" style="margin-top:9px;font-family:var(--font-main);font-size:11px;color:#999;line-height:1.7;">TAAM 에서 받으신 아이디와 비밀번호로 로그인해주세요.</div>
       </div>
 
       <!-- 🆕 비밀번호 로그인 모드 — 이메일 + 비밀번호 입력 -->
@@ -11378,6 +11398,13 @@ window.closePromoCarousel = function(){
         </div>
         <div class="admin-arrow">›</div>
       </div>
+      <div class="admin-menu-item" onclick="paOpen()">
+        <div>
+          <div class="admin-menu-text">🔑 파트너 계정 발급</div>
+          <div class="admin-menu-sub">매장에 미리 만들어 두고, 협의 자리에서 건넨다</div>
+        </div>
+        <div class="admin-arrow">›</div>
+      </div>
       <div class="admin-menu-item" onclick="msaOpen()">
         <div>
           <div class="admin-menu-text">🎫 멤버십 · 게스트</div>
@@ -13243,6 +13270,20 @@ textarea.mapl-in{min-height:78px;resize:vertical;line-height:1.7}
 
 <!-- 게스트 초대석 — 티켓 리스트에서 자리를 연다.
      ⚠ 「일반 판매」가 아니다. 이유가 서사이고, 이유 없이는 못 연다. -->
+<!-- 🆕 2026-09-03: 파트너 계정 발급 (슈퍼어드민) -->
+<div id="paSheet" style="display:none;position:fixed;inset:0;z-index:1216;background:rgba(0,0,0,.55);align-items:flex-end;justify-content:center;touch-action:pan-y;"
+     onclick="if(event.target===this)paClose()">
+  <div style="width:100%;max-width:520px;max-height:90vh;background:#fff;border-radius:18px 18px 0 0;display:flex;flex-direction:column;overflow:hidden;">
+    <div style="flex:none;padding:14px 18px 10px;border-bottom:1px solid #E6E6EA;display:flex;align-items:baseline;gap:10px;">
+      <div style="font-size:15px;font-weight:800;color:#16161A;">파트너 계정</div>
+      <div style="font-size:12px;color:#9A9AA4;" id="paTitle"></div>
+      <div style="margin-left:auto;font-size:20px;color:#9A9AA4;cursor:pointer;" onclick="paClose()">✕</div>
+    </div>
+    <div style="flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:14px 18px 16px;" id="paBody"></div>
+    <div style="flex:none;padding:11px 18px calc(14px + env(safe-area-inset-bottom));border-top:1px solid #E6E6EA;display:flex;gap:8px;" id="paFoot"></div>
+  </div>
+</div>
+
 <div id="gsSheet" style="display:none;position:fixed;inset:0;z-index:1215;background:rgba(0,0,0,.55);align-items:flex-end;justify-content:center;"
      onclick="if(event.target===this)tuGuestSeatClose()">
   <div style="width:100%;max-width:520px;max-height:88vh;background:#fff;border-radius:18px 18px 0 0;display:flex;flex-direction:column;overflow:hidden;">
@@ -13275,6 +13316,43 @@ textarea.mapl-in{min-height:78px;resize:vertical;line-height:1.7}
 #gsSheet .gs-btn{flex:1;padding:14px;border:0;border-radius:12px;background:#5E1622;color:#fff;
   font-family:var(--font-main);font-size:13.5px;font-weight:800;cursor:pointer}
 #gsSheet .gs-btn.ghost{background:#fff;border:1px solid #D8D8DE;color:#61616B}
+
+/* 파트너 계정 시트 — 게스트석 시트와 같은 옷을 입힌다.
+   어드민 시트가 화면마다 다르게 생기면 어느 화면인지 매번 다시 읽어야 한다. */
+#paSheet .gs-note, #paSheet .gs-f, #paSheet .gs-in, #paSheet .gs-hint, #paSheet .gs-btn{}
+#paSheet .gs-note{padding:11px 13px;border-radius:10px;background:#F0F0F3;
+  font-size:12.5px;line-height:1.75;color:#61616B;margin-bottom:12px}
+#paSheet .gs-note.on{background:#E6F2EA;color:#2C6B47}
+#paSheet .gs-note.bad{background:#FDF3F3;color:#9B1C1C}
+#paSheet .gs-note b{color:inherit;font-weight:700}
+#paSheet .gs-f{padding:12px 0;border-bottom:1px solid #F0F0F3}
+#paSheet .gs-f > label{display:block;font-size:12px;font-weight:700;color:#61616B;margin-bottom:6px}
+#paSheet .gs-in{width:100%;padding:12px 13px;border:1px solid #D8D8DE;border-radius:11px;
+  background:#F6F6F7;font-family:var(--font-main);font-size:15px;color:#16161A;box-sizing:border-box}
+#paSheet .gs-in:focus{outline:none;border-color:#5E1622;background:#fff}
+#paSheet .gs-hint{margin-top:6px;font-size:11px;line-height:1.7;color:#9A9AA4}
+#paSheet .gs-hint b{color:#61616B;font-weight:700}
+#paSheet .gs-btn{flex:1;padding:14px;border:0;border-radius:12px;background:#5E1622;color:#fff;
+  font-family:var(--font-main);font-size:13.5px;font-weight:800;cursor:pointer}
+#paSheet .gs-btn.ghost{background:#fff;border:1px solid #D8D8DE;color:#61616B}
+/* 발급 결과 — 비밀번호가 보이는 유일한 화면이다. 크게, 그리고 딱 한 번. */
+#paSheet .pa-cred{margin-top:10px;padding:14px;border-radius:12px;background:#16161A;color:#fff}
+#paSheet .pa-cred .k{font-size:10.5px;letter-spacing:.14em;color:#9A9AA4;text-indent:.14em}
+#paSheet .pa-cred .v{margin-top:3px;font-size:19px;font-weight:800;letter-spacing:.04em;
+  font-family:'Oswald',var(--font-main),sans-serif;word-break:break-all}
+#paSheet .pa-cred .v + .k{margin-top:12px}
+/* 목록 한 줄 */
+#paSheet .pa-row{padding:12px 0;border-bottom:1px solid #F0F0F3}
+#paSheet .pa-row:last-child{border-bottom:none}
+#paSheet .pa-row .id{font-size:14px;font-weight:800;color:#16161A;
+  font-family:'Oswald',var(--font-main),sans-serif;letter-spacing:.02em}
+#paSheet .pa-row .nm{font-size:12px;color:#61616B;margin-top:1px}
+#paSheet .pa-row .st{margin-top:5px;font-size:11px;color:#9A9AA4;line-height:1.7}
+#paSheet .pa-row .st b{color:#2C6B47;font-weight:700}
+#paSheet .pa-row .st i{color:#9B1C1C;font-style:normal;font-weight:700}
+#paSheet .pa-acts{margin-top:8px;display:flex;gap:6px;flex-wrap:wrap}
+#paSheet .pa-acts button{padding:7px 11px;border:1px solid #D8D8DE;border-radius:9px;
+  background:#fff;font-family:var(--font-main);font-size:11.5px;color:#61616B;cursor:pointer}
 </style>
 
 <!-- ══════════════════════════════════════════════════════════════
@@ -19413,9 +19491,11 @@ function vpSwitchLoginMethod(method){
   var pwdBtn = document.getElementById('vpLoginMethodPassword');
   var emailBtn = document.getElementById('vpLoginMethodEmail');
   var phoneBtn = document.getElementById('vpLoginMethodPhone');
+  var partnerBtn = document.getElementById('vpLoginMethodPartner');
   var pwdRow = document.getElementById('vpPasswordRow');
   var emailRow = document.getElementById('vpEmailRow');
   var phoneRow = document.getElementById('vpPhoneRow');
+  var partnerRow = document.getElementById('vpPartnerRow');
   var verifyBtn = document.querySelector('.phone-verify-btn');
   var sendBtn = document.querySelector('.phone-send-btn');
   var codeRow = document.getElementById('vpCode');
@@ -19429,23 +19509,26 @@ function vpSwitchLoginMethod(method){
   _setActive(pwdBtn, method === 'password');
   _setActive(emailBtn, method === 'email');
   _setActive(phoneBtn, method === 'phone');
+  _setActive(partnerBtn, method === 'partner');
 
   // 입력 영역 토글
   if(pwdRow) pwdRow.style.display = (method === 'password') ? '' : 'none';
   if(emailRow) emailRow.style.display = (method === 'email') ? '' : 'none';
   if(phoneRow) phoneRow.style.display = (method === 'phone') ? '' : 'none';
+  if(partnerRow) partnerRow.style.display = (method === 'partner') ? '' : 'none';
 
-  // 인증번호 입력칸 — 비밀번호 모드일 때 숨김 (OTP 불필요)
+  // 인증번호 입력칸 — 비밀번호·파트너는 OTP 가 없다
+  var _noOtp = (method === 'password' || method === 'partner');
   if(codeRow){
-    codeRow.parentElement && (codeRow.parentElement.style.display = (method === 'password') ? 'none' : '');
+    codeRow.parentElement && (codeRow.parentElement.style.display = _noOtp ? 'none' : '');
   }
 
   // 인증/송신 버튼 — 비밀번호 모드는 별도 흐름
-  if(method === 'password'){
+  if(_noOtp){
     if(sendBtn) sendBtn.style.display = 'none'; // OTP 송신 불필요
     if(verifyBtn){
       verifyBtn.textContent = t('auth.vp_login_btn');
-      verifyBtn.setAttribute('onclick', 'vpPasswordLogin()');
+      verifyBtn.setAttribute('onclick', method === 'partner' ? 'vpPartnerLogin()' : 'vpPasswordLogin()');
       verifyBtn.style.display = '';
     }
   } else {
@@ -19464,6 +19547,94 @@ function _vpToggleLoginPwdShow(btn){
   el.type = (el.type === 'password') ? 'text' : 'password';
   if(btn) btn.style.color = (el.type === 'text') ? '#5C0A14' : '#888';
 }
+
+// ═══════════════════════════════════════════════════════════════
+// 파트너 레스토랑 로그인 (2026-09-03)
+// ═══════════════════════════════════════════════════════════════
+//   슈퍼어드민이 미리 발급한 아이디·비밀번호로 들어온다.
+//   권한은 **새로 만들지 않는다** — admin_grants 가 이미 주고 있고,
+//   _applyServerAdminGrant() 가 그걸 읽어 어드민으로 바꾼다.
+//   그래서 로그인 뒤의 화면·권한이 지금 어드민과 한 글자도 다르지 않다.
+//
+// ⚠ 아이디는 이메일로 바뀌어 Auth 에 저장돼 있다. 매장은 앞부분만 친다.
+//   도메인은 서버(Edge Function)와 **같은 값**이어야 한다 — 어긋나면
+//   「비밀번호가 틀렸습니다」로 보이는데 사실은 없는 계정을 찾는 것이다.
+var PARTNER_LOGIN_DOMAIN = 'partner.taam.kr';
+
+function _vpTogglePartnerPwShow(btn){
+  var el = document.getElementById('vpPartnerPw');
+  if(!el) return;
+  el.type = (el.type === 'password') ? 'text' : 'password';
+  if(btn) btn.style.color = (el.type === 'text') ? '#5C0A14' : '#888';
+}
+
+async function vpPartnerLogin(){
+  var hint = document.getElementById('vpHint');
+  var raw = (document.getElementById('vpPartnerId').value || '').trim().toLowerCase();
+  var pwd = (document.getElementById('vpPartnerPw').value || '');
+  // 아이디만 받는데 통째로 붙여넣는 사람이 있다 — @ 뒤는 떼어 준다.
+  var id = raw.indexOf('@') > 0 ? raw.slice(0, raw.indexOf('@')) : raw;
+
+  if(!id){ hint.textContent = t('auth.partner_need_id'); hint.className = 'phone-hint error'; return; }
+  if(!pwd){ hint.textContent = t('auth.partner_need_pw'); hint.className = 'phone-hint error'; return; }
+  if(!window.sb){ hint.textContent = '서버 연결 오류'; hint.className = 'phone-hint error'; return; }
+
+  var btn = document.querySelector('.phone-verify-btn');
+  if(btn){ btn.disabled = true; btn.textContent = t('auth.partner_logging_in'); }
+  hint.textContent = t('auth.partner_logging_in'); hint.className = 'phone-hint';
+
+  var fail = function(msg){
+    hint.textContent = msg; hint.className = 'phone-hint error';
+    if(btn){ btn.disabled = false; btn.textContent = t('auth.vp_login_btn'); }
+  };
+
+  try {
+    var res = await window.sb.auth.signInWithPassword({
+      email: id + '@' + PARTNER_LOGIN_DOMAIN, password: pwd });
+    if(res.error){
+      // ⚠ 「아이디가 없다」와 「비밀번호가 틀렸다」를 구별해 주지 않는다.
+      //   구별해 주면 어떤 매장에 계정이 있는지 밖에서 헤아릴 수 있다.
+      return fail(t('auth.partner_bad'));
+    }
+
+    try { localStorage.setItem('authedSession','1'); } catch(e){}
+    if(typeof IDB !== 'undefined' && IDB.set){ IDB.set('authedSession','1').catch(function(){}); }
+
+    // 단일 기기 규칙 — 다른 로그인 경로와 같은 함수 하나만 부른다.
+    //   ⚠ 개별 함수를 직접 부르지 않는다(CLAUDE.md). 여러 기기를 쓰는
+    //     매장은 발급 때 single_device_exempt 로 풀어 준다.
+    try {
+      if(typeof _claimDeviceSession === 'function'){
+        await _claimDeviceSession(res.data && res.data.user, 'admin');
+      }
+    } catch(e){ console.warn('[partner] 기기 등록 실패', e); }
+
+    // 권한은 서버가 정한다. admin_grants 에 행이 없으면 어드민이 안 된다 —
+    //   계정만 만들고 권한을 안 준 경우라, 그때는 그렇게 말해 준다.
+    if(typeof _applyServerAdminGrant === 'function') await _applyServerAdminGrant();
+    if(_currentRole !== 'admin' && _currentRole !== 'superadmin'){
+      try { await window.sb.auth.signOut(); } catch(e){}
+      return fail(t('auth.partner_no_grant'));
+    }
+
+    // 「만들어만 두고 안 쓰는 계정」을 가려내는 단서. 실패해도 로그인은 계속한다.
+    try { await window.sb.rpc('taam_partner_touch'); } catch(e){}
+
+    hint.textContent = '✅ ' + t('auth.partner_ok'); hint.className = 'phone-hint';
+    if(typeof reloadUserData === 'function') reloadUserData();
+    if(typeof saveRole === 'function') saveRole();
+    if(typeof markAuthedSession === 'function') markAuthedSession();
+    if(typeof updateMpAdminBtn === 'function') updateMpAdminBtn();
+    setTimeout(function(){
+      if(typeof adminDirectAccess === 'function') adminDirectAccess();
+      else location.reload();
+    }, 400);
+  } catch(e){
+    fail('로그인 실패: ' + ((e && e.message) || ''));
+  }
+}
+window.vpPartnerLogin = vpPartnerLogin;
+window._vpTogglePartnerPwShow = _vpTogglePartnerPwShow;
 
 // 🆕 2026.05.20: 비밀번호로 로그인 (signInWithPassword)
 async function vpPasswordLogin(){
@@ -32330,6 +32501,254 @@ async function gsAllow(on){
     tuGuestSeat(_gsT.id);
   } catch(e){ showToast('❌','바꾸지 못했습니다', (e && e.message) || ''); }
 }
+// ═══════════════════════════════════════════════════════════════
+// 파트너 계정 발급 (슈퍼어드민) — 2026-09-03
+// ═══════════════════════════════════════════════════════════════
+//   협의 자리에서 바로 건네려면 **미리** 만들어져 있어야 한다.
+//   안 쓰면 그만이고, 쓰게 되면 그 자리에서 아이디·비번을 읽어 주면 된다.
+//
+// ⚠ 비밀번호는 만드는 순간에만 보인다. 어디에도 저장하지 않는다 —
+//   저장하면 언젠가 샌다. 잊으면 재설정이지 조회가 아니다.
+// ⚠ 권한은 admin_grants 가 준다. 이 화면은 그걸 대신 만들어 줄 뿐이고,
+//   로그인 뒤의 권한은 지금 어드민과 한 글자도 다르지 않다.
+// ═══════════════════════════════════════════════════════════════
+var _pa = { rows: null, err: '', busy: false, made: null };
+
+function paOpen(){
+  if(typeof _currentRole !== 'undefined' && _currentRole !== 'superadmin'){
+    if(typeof showToast === 'function') showToast('⚠','슈퍼어드민만 쓸 수 있습니다','');
+    return;
+  }
+  _pa = { rows: null, err: '', busy: false, made: null };
+  document.getElementById('paSheet').style.display = 'flex';
+  _paRender();
+  _paLoad();
+}
+function paClose(){
+  var el = document.getElementById('paSheet');
+  if(el) el.style.display = 'none';
+  _pa.made = null;
+}
+async function _paLoad(){
+  try {
+    var r = await window.sb.rpc('taam_partner_accounts');
+    if(r.error) throw r.error;
+    _pa.rows = r.data || []; _pa.err = '';
+  } catch(e){
+    _pa.rows = [];
+    _pa.err = /does not exist|schema cache/i.test((e && e.message) || '')
+      ? 'sql/partner_accounts.sql 을 실행해야 합니다'
+      : ((e && e.message) || '불러오지 못했습니다');
+  }
+  _paRender();
+}
+
+function _paEsc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g, function(c){
+  return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]; }); }
+function _paDate(s){
+  if(!s) return '';
+  var d = new Date(s); if(isNaN(d)) return '';
+  return (d.getMonth()+1) + '.' + d.getDate();
+}
+
+function _paRender(){
+  var b = document.getElementById('paBody'), f = document.getElementById('paFoot');
+  if(!b) return;
+
+  // ── 발급 직후: 비밀번호를 보여 주는 화면 ─────────────────────
+  //   ⚠ 여기를 닫으면 다시 못 본다. 그렇게 적어 둔다.
+  if(_pa.made){
+    var m = _pa.made;
+    b.innerHTML =
+      '<div class="gs-note on"><b>계정을 만들었습니다.</b><br>'
+      + '이 비밀번호는 <b>지금만 보입니다</b>. 닫으면 다시 볼 수 없고, 잊으면 재설정해야 합니다.</div>'
+      + '<div class="pa-cred">'
+      +   '<div class="k">ID</div><div class="v">' + _paEsc(m.login_id) + '</div>'
+      +   '<div class="k">PASSWORD</div><div class="v">' + _paEsc(m.password) + '</div>'
+      + '</div>'
+      + '<div class="gs-hint">매장은 앱 로그인 화면에서 <b>「파트너」</b> 탭을 고르고 '
+      +   '이 아이디와 비밀번호를 넣으면 됩니다. 이메일 주소가 아니라 <b>아이디만</b> 넣습니다.</div>';
+    f.innerHTML =
+      '<button class="gs-btn ghost" onclick="paCopyCred()">복사</button>'
+      + '<button class="gs-btn" onclick="paDoneMade()">확인했습니다</button>';
+    return;
+  }
+
+  if(_pa.err){
+    b.innerHTML = '<div class="gs-note bad">' + _paEsc(_pa.err) + '</div>';
+    f.innerHTML = ''; return;
+  }
+  if(_pa.rows === null){
+    b.innerHTML = '<div class="gs-note">불러오는 중…</div>'; f.innerHTML = ''; return;
+  }
+
+  // ── 발급 폼 + 목록 ───────────────────────────────────────────
+  var rests = (typeof restaurantDB !== 'undefined' ? restaurantDB : []) || [];
+  var opts = '<option value="">매장을 고르세요</option>' + rests.map(function(r){
+    return '<option value="' + _paEsc(r.id) + '">' + _paEsc(r.name) + '</option>'; }).join('');
+
+  var h =
+    '<div class="gs-note">미리 만들어 두고, 협의 자리에서 건넵니다.<br>'
+    + '<b>안 쓰면 그만</b>이고, 쓰게 되면 바로 드리면 됩니다. '
+    + '비밀번호를 바꾸면 그전 기기는 전부 끊깁니다.</div>'
+    + '<div class="gs-f"><label>매장</label>'
+    +   '<select class="gs-in" id="paRest" onchange="_paSuggestId()">' + opts + '</select></div>'
+    + '<div class="gs-f"><label>아이디</label>'
+    +   '<input class="gs-in" id="paId" type="text" autocapitalize="none" spellcheck="false" placeholder="sushi-arai">'
+    +   '<div class="gs-hint">소문자 · 숫자 · 하이픈만. 매장이 받아 적을 것이라 <b>짧을수록 좋습니다</b>.</div></div>'
+    + '<div class="gs-f"><label style="display:flex;align-items:center;gap:8px;cursor:pointer;">'
+    +   '<input type="checkbox" id="paMulti" checked style="width:16px;height:16px;">'
+    +   '<span>여러 기기에서 쓰게 허용</span></label>'
+    +   '<div class="gs-hint">매장은 홀 태블릿과 사장님 휴대폰을 같이 쓰는 일이 흔합니다. '
+    +   '끄면 <b>한 기기만</b> 유지되고 나중에 로그인한 쪽이 이깁니다.</div></div>'
+    + '<div id="paErr" style="min-height:16px;margin-top:8px;font-size:11.5px;color:#9B1C1C;"></div>';
+
+  h += '<div style="margin-top:16px;font-size:11px;font-weight:800;letter-spacing:.14em;color:#9A9AA4;">발급한 계정 ' + _pa.rows.length + '</div>';
+  if(!_pa.rows.length){
+    h += '<div class="gs-hint" style="margin-top:8px;">아직 없습니다.</div>';
+  } else {
+    h += _pa.rows.map(function(r){
+      var st = [];
+      // ⚠ 권한이 안 붙어 있으면 로그인은 되는데 어드민이 아니다.
+      //   가장 헷갈리는 고장이라 맨 앞에 세운다.
+      if(!r.has_grant) st.push('<i>권한 없음 — 로그인해도 어드민이 아닙니다</i>');
+      if(r.disabled) st.push('<i>해지됨</i>');
+      st.push(r.handed_at ? '<b>건넴 ' + _paDate(r.handed_at) + '</b>' : '아직 안 건넴');
+      st.push(r.last_login_at ? '<b>마지막 로그인 ' + _paDate(r.last_login_at) + '</b>' : '한 번도 안 씀');
+      var id = _paEsc(r.login_id);
+      return '<div class="pa-row">'
+        + '<div class="id">' + id + '</div>'
+        + '<div class="nm">' + _paEsc(r.label || '(매장 없음)') + '</div>'
+        + '<div class="st">' + st.join(' · ') + '</div>'
+        + '<div class="pa-acts">'
+        +   '<button onclick="paHanded(\'' + id + '\',' + (r.handed_at ? 'false' : 'true') + ')">'
+        +     (r.handed_at ? '안 건넴으로' : '건넸다고 표시') + '</button>'
+        +   '<button onclick="paReset(\'' + id + '\')">비밀번호 재설정</button>'
+        +   '<button onclick="paRevoke(\'' + id + '\',' + (r.disabled ? 'false' : 'true') + ')">'
+        +     (r.disabled ? '되살리기' : '해지') + '</button>'
+        + '</div></div>';
+    }).join('');
+  }
+  b.innerHTML = h;
+  f.innerHTML = '<button class="gs-btn ghost" onclick="paClose()">닫기</button>'
+    + '<button class="gs-btn" id="paMakeBtn" onclick="paCreate()">계정 만들기</button>';
+}
+
+// 매장을 고르면 아이디를 지어 준다 — 매번 손으로 짓게 하면 규칙이 흐트러진다.
+function _paSuggestId(){
+  var sel = document.getElementById('paRest'), idEl = document.getElementById('paId');
+  if(!sel || !idEl || idEl.value.trim()) return;
+  var r = ((typeof restaurantDB !== 'undefined' ? restaurantDB : []) || [])
+    .find(function(x){ return String(x.id) === String(sel.value); });
+  if(!r) return;
+  // 한글·일본어 매장명은 아이디로 못 쓴다. 영문명이 없으면 비워 두고 직접 짓게 한다.
+  var base = String(r.name_en || r.nameEn || '').toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  if(base.length >= 3) idEl.value = base.slice(0, 32);
+}
+
+async function paCreate(){
+  if(_pa.busy) return;
+  var err = document.getElementById('paErr');
+  var restId = (document.getElementById('paRest').value || '').trim();
+  var id = (document.getElementById('paId').value || '').trim().toLowerCase();
+  var multi = !!(document.getElementById('paMulti') || {}).checked;
+  var rest = ((typeof restaurantDB !== 'undefined' ? restaurantDB : []) || [])
+    .find(function(x){ return String(x.id) === String(restId); });
+
+  // ⚠ 서버를 부르기 전에 여기서 거른다. 서버도 같은 규칙으로 다시 본다 —
+  //   이 검사는 친절이지 방어가 아니다.
+  if(!restId){ err.textContent = '매장을 골라주세요'; return; }
+  if(!/^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$/.test(id)){
+    err.textContent = '아이디는 소문자·숫자·하이픈 3~32자입니다 (예: sushi-arai)'; return;
+  }
+  err.textContent = '';
+  _pa.busy = true;
+  var btn = document.getElementById('paMakeBtn');
+  if(btn){ btn.disabled = true; btn.textContent = '만드는 중…'; }
+
+  var r = await _paCall({ action:'create', login_id:id, rest_id:restId,
+                          label:(rest && rest.name) || '', multi_device:multi });
+  _pa.busy = false;
+  if(btn){ btn.disabled = false; btn.textContent = '계정 만들기'; }
+  if(!r.ok){ err.textContent = r.error || '만들지 못했습니다'; return; }
+  _pa.made = { login_id: r.login_id, password: r.password };
+  _paRender();
+  _paLoad();
+}
+
+async function paReset(id){
+  if(!confirm(id + ' 의 비밀번호를 새로 만듭니다.\n\n지금 쓰고 있는 기기는 전부 로그아웃됩니다.')) return;
+  var r = await _paCall({ action:'reset', login_id:id });
+  if(!r.ok){ if(typeof showToast === 'function') showToast('❌','바꾸지 못했습니다', r.error||''); return; }
+  _pa.made = { login_id: r.login_id, password: r.password };
+  _paRender(); _paLoad();
+}
+async function paRevoke(id, off){
+  if(off && !confirm(id + ' 을 해지합니다.\n\n매장 권한이 떨어지고 쓰던 기기가 끊깁니다.\n계정 기록은 남습니다 — 나중에 되살릴 수 있습니다.')) return;
+  var r = await _paCall({ action: off ? 'revoke' : 'restore', login_id:id });
+  if(typeof showToast === 'function'){
+    r.ok ? showToast('✓', off ? '해지했습니다' : '되살렸습니다', '')
+         : showToast('❌','바꾸지 못했습니다', r.error||'');
+  }
+  _paLoad();
+}
+async function paHanded(id, on){
+  try {
+    var r = await window.sb.rpc('taam_partner_mark_handed', { p_login_id:id, p_on:on });
+    if(r.error) throw r.error;
+  } catch(e){
+    if(typeof showToast === 'function') showToast('❌','바꾸지 못했습니다', (e&&e.message)||'');
+  }
+  _paLoad();
+}
+function paDoneMade(){ _pa.made = null; _paRender(); }
+function paCopyCred(){
+  if(!_pa.made) return;
+  var txt = 'TAAM 파트너 로그인\n아이디: ' + _pa.made.login_id + '\n비밀번호: ' + _pa.made.password;
+  var done = function(){ if(typeof showToast === 'function') showToast('✓','복사했습니다',''); };
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(txt).then(done).catch(function(){ _paFallbackCopy(txt, done); });
+  } else _paFallbackCopy(txt, done);
+}
+function _paFallbackCopy(txt, done){
+  try {
+    var ta = document.createElement('textarea');
+    ta.value = txt; ta.style.position='fixed'; ta.style.opacity='0';
+    document.body.appendChild(ta); ta.select(); document.execCommand('copy');
+    document.body.removeChild(ta); done();
+  } catch(e){ if(typeof showToast === 'function') showToast('⚠','직접 복사해주세요',''); }
+}
+
+// Edge Function 호출 — service_role 이 필요한 일은 전부 여기를 지난다.
+//   ⚠ 세션 토큰을 실어 보낸다. 서버가 그걸로 슈퍼어드민인지 확인한다 —
+//     앱이 「나 슈퍼어드민이야」라고 말하는 것은 아무 의미가 없다.
+async function _paCall(payload){
+  try {
+    var s = await window.sb.auth.getSession();
+    var tok = s && s.data && s.data.session && s.data.session.access_token;
+    if(!tok) return { ok:false, error:'로그인이 필요합니다' };
+    var res = await fetch(SUPABASE_URL + '/functions/v1/partner-account', {
+      method:'POST',
+      headers:{ 'Authorization':'Bearer ' + tok, 'Content-Type':'application/json',
+                // ⚠ SUPABASE_ANON_KEY 는 window 에만 있다 (전역 var 아님).
+                //   바로 쓰면 이 함수만 ReferenceError 로 죽는다.
+                'apikey': window.SUPABASE_ANON_KEY },
+      body: JSON.stringify(payload)
+    });
+    var j = await res.json().catch(function(){ return null; });
+    if(!j) return { ok:false, error:'서버가 응답하지 않았습니다 (' + res.status + ')' };
+    if(!j.ok && res.status === 404){
+      return { ok:false, error:'partner-account 함수가 배포되지 않았습니다' };
+    }
+    return j;
+  } catch(e){ return { ok:false, error:(e && e.message) || '통신 오류' }; }
+}
+window.paOpen = paOpen; window.paClose = paClose; window.paCreate = paCreate;
+window.paReset = paReset; window.paRevoke = paRevoke; window.paHanded = paHanded;
+window.paDoneMade = paDoneMade; window.paCopyCred = paCopyCred;
+window._paSuggestId = _paSuggestId;
+
 window.tuGuestSeat = tuGuestSeat; window.tuGuestSeatClose = tuGuestSeatClose;
 window.gsOpen = gsOpen; window.gsClose = gsClose; window.gsAllow = gsAllow;
 
@@ -42112,7 +42531,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.03-c';
+var TAAM_WEB_BUILD = '2026.09.03-d';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -47591,6 +48010,17 @@ var TRANSLATIONS = {
       login_method_password:'비밀번호',
       login_method_email:'이메일 OTP',
       login_method_sms:'SMS',
+      // 파트너 레스토랑 — 슈퍼어드민이 미리 발급한 아이디·비밀번호
+      login_method_partner:'파트너',
+      ph_partner_id:'매장 아이디',
+      partner_hint:'TAAM 에서 받으신 아이디와 비밀번호로 로그인해주세요.',
+      partner_need_id:'매장 아이디를 입력해주세요',
+      partner_need_pw:'비밀번호를 입력해주세요',
+      partner_logging_in:'로그인 중...',
+      // ⚠ 「없는 아이디」와 「틀린 비밀번호」를 구별해 주지 않는다
+      partner_bad:'아이디 또는 비밀번호가 올바르지 않습니다',
+      partner_no_grant:'아직 매장 권한이 연결되지 않았습니다. TAAM 담당자에게 문의해주세요.',
+      partner_ok:'로그인되었습니다',
       ph_login_email:'이메일 주소',
       ph_login_password:'비밀번호',
       // 본인 인증 (가입)
@@ -48481,6 +48911,15 @@ var TRANSLATIONS = {
       login_method_password:'Password',
       login_method_email:'Email OTP',
       login_method_sms:'SMS',
+      login_method_partner:'Partner',
+      ph_partner_id:'Restaurant ID',
+      partner_hint:'Sign in with the ID and password TAAM gave you.',
+      partner_need_id:'Please enter your restaurant ID',
+      partner_need_pw:'Please enter your password',
+      partner_logging_in:'Signing in…',
+      partner_bad:'That ID or password is not correct',
+      partner_no_grant:'This account is not linked to a restaurant yet. Please contact TAAM.',
+      partner_ok:'Signed in',
       ph_login_email:'Email address',
       ph_login_password:'Password',
       vp_title:'Identity Verification',
@@ -49561,6 +50000,15 @@ TRANSLATIONS.ja = {
     login_method_password:'パスワード',
     login_method_email:'メールOTP',
     login_method_sms:'SMS',
+    login_method_partner:'パートナー',
+    ph_partner_id:'御店 ID',
+    partner_hint:'TAAM からお渡しした ID とパスワードでログインしてください。',
+    partner_need_id:'御店 ID をご入力ください',
+    partner_need_pw:'パスワードをご入力ください',
+    partner_logging_in:'ログイン中…',
+    partner_bad:'ID またはパスワードが正しくありません',
+    partner_no_grant:'まだ御店の権限が紐づいていません。TAAM 担当までお知らせください。',
+    partner_ok:'ログインしました',
     ph_login_email:'メールアドレス',
     ph_login_password:'パスワード',
     vp_title:'本人認証',
