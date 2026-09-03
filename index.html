@@ -7120,7 +7120,7 @@ function fxOpenSettings(){
     + '</label>'
     + '<button onclick="fxSaveSettings()" style="width:100%;padding:13px;background:#1a1a18;border:none;border-radius:12px;font-size:13px;font-weight:800;color:#fff;cursor:pointer;margin-bottom:8px;">저장</button>'
     + '<button onclick="fxCheckRate(true)" style="width:100%;padding:11px;background:#fff;border:1px solid #d8d2c6;border-radius:12px;font-size:12px;font-weight:700;color:#6a635a;cursor:pointer;margin-bottom:8px;">지금 시장 환율과 비교</button>'
-    + '<button onclick="var p=document.getElementById(\'fxSettingsPopup\');if(p)p.remove();" style="width:100%;padding:11px;background:transparent;border:none;font-size:10px;font-weight:600;letter-spacing:.18em;color:#bbb;cursor:pointer;">닫기</button>'
+    + '<button onclick="var p=document.getElementById(\'fxSettingsPopup\');if(p)p.remove();_acPopupClosed();" style="width:100%;padding:11px;background:transparent;border:none;font-size:10px;font-weight:600;letter-spacing:.18em;color:#bbb;cursor:pointer;">닫기</button>'
     + '</div>';
   document.body.appendChild(el);
   ['fxBase','fxRateJpy','fxMargin'].forEach(function(id){
@@ -20655,6 +20655,7 @@ window.adgSwitchTab = adgSwitchTab;
 function closeAdminDepositGrant(){
   document.getElementById('adminDepositGrantModal').style.display = 'none';
   _adgSelectedUser = null;
+  _acPopupClosed();
 }
 window.closeAdminDepositGrant = closeAdminDepositGrant;
 
@@ -21474,6 +21475,7 @@ window.openMembershipUntilMgmt = openMembershipUntilMgmt;
 function closeMembershipUntilMgmt(){
   var modal = document.getElementById('membershipUntilMgmtModal');
   if(modal) modal.style.display = 'none';
+  _acPopupClosed();
 }
 window.closeMembershipUntilMgmt = closeMembershipUntilMgmt;
 
@@ -32363,6 +32365,9 @@ function tuGuestSeatClose(){
   var el = document.getElementById('gsSheet');
   if(el) el.style.display = 'none';
   if(typeof renderTicketList === 'function') renderTicketList();
+  // ⓘ 티켓 목록에서 연 시트다. 목록(.sub-screen)이 열려 있으면
+  //   _acEnsureConsole 이 손대지 않아 그대로 목록에 남는다.
+  _acPopupClosed();
 }
 function _gsRender(){
   var b = document.getElementById('gsBody');
@@ -32528,6 +32533,7 @@ function paClose(){
   var el = document.getElementById('paSheet');
   if(el) el.style.display = 'none';
   _pa.made = null;
+  _acPopupClosed();
 }
 async function _paLoad(){
   try {
@@ -36992,6 +36998,25 @@ function _acEnsureConsole(){
     }catch(e){ console.warn('[console] 대시보드 복귀 실패:', e); }
   }, 0);
 }
+
+// 🆕 2026-09-03: 어드민 팝업을 닫은 뒤 어디에 남을 것인가.
+//
+//   종전에는 팝업만 사라지고, 그 아래 깔려 있던 화면에 그대로 남았다.
+//   메뉴에서 바로 연 팝업(비밀번호·예치금 지급·환율·사진 캘린더·파트너
+//   계정…)을 닫으면 어느 판에 서 있는지 알 수 없는 상태가 됐다.
+//   closeSubPage 는 진작 대시보드로 돌아가고 있었는데, 팝업 닫기 함수는
+//   **하나도** 그러지 않았다.
+//
+//   ⚠ 새 팝업을 만들면 닫는 자리에서 이것을 부른다. 안 부르면 그 팝업
+//     하나만 옛 동작으로 남아, 나중에 「왜 이것만 다르지」를 겪게 된다.
+//
+//   ⓘ 무조건 대시보드로 튕기지는 않는다. 전체화면 판(.sub-screen 등)이
+//     열려 있으면 _acEnsureConsole 이 손대지 않는다 — 티켓 목록에서 연
+//     시트를 닫으면 목록으로 돌아간다. 자리를 잃지 않는다.
+function _acPopupClosed(){
+  if(typeof _acEnsureConsole === 'function') _acEnsureConsole();
+}
+window._acPopupClosed = _acPopupClosed;
 window._acEnsureConsole = _acEnsureConsole;
 
 // 🆕 2026.09-01: 어드민·슈퍼어드민에게 **대시보드가 마이페이지**다.
@@ -39528,6 +39553,7 @@ function openMemberPwdModal(){
 function closeMemberPwdModal(){
   var modal = document.getElementById('memberPwdModal');
   if(modal) modal.style.display = 'none';
+  _acPopupClosed();
 }
 
 function _memberPwdToggleShow(id, btn){
@@ -39708,6 +39734,7 @@ function openAdminPwdModal(){
 function closeAdminPwdModal(){
   var modal = document.getElementById('adminPwdModal');
   if(modal) modal.classList.remove('open');
+  _acPopupClosed();
 }
 
 function _adminPwdToggleShow(inputId, btn){
@@ -42547,7 +42574,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.03-e';
+var TAAM_WEB_BUILD = '2026.09.03-f';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -42565,6 +42592,7 @@ async function openSentInvitesScreen(){
 function closeSentInvitesScreen(){
   var sc = document.getElementById('sentInvitesScreen');
   if(sc) sc.style.display = 'none';
+  _acPopupClosed();
 }
 
 async function loadSentInvites(){
@@ -55459,6 +55487,7 @@ window.chefPhotoFixOpen = chefPhotoFixOpen;
 function chefPhotoFixClose(){
   if(_cpfBusy){ _cpfStop = true; return; }
   var m = document.getElementById('cpfModal'); if(m) m.remove();
+  _acPopupClosed();
 }
 window.chefPhotoFixClose = chefPhotoFixClose;
 
@@ -55540,6 +55569,7 @@ function pcalAdminClose(){
   var pg = document.getElementById('pcalAdminPage');
   if(pg) pg.style.display = 'none';
   pcalRenderAll();
+  _acPopupClosed();
 }
 window.pcalAdminClose = pcalAdminClose;
 
