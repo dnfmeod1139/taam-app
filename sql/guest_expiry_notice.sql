@@ -113,22 +113,23 @@ revoke all on function public.taam_guest_expiry_notify() from public;
 -- 사람이 부를 일은 없다. Edge Function(service_role)만 부른다.
 
 
--- ── 매일 돌린다 ────────────────────────────────────────────────
---   ⚠ 이것만으로는 **인앱 알림(종 아이콘)** 까지다. 실제 푸시는
---     notify-guest-expiry Edge Function 이 쏜다 — 그쪽도 같이 걸어야 한다.
+-- ── 예약은 Edge Function 쪽에만 건다 ──────────────────────────
+--   ⚠ 여기서 pg_cron 으로 이 함수를 또 돌리면 **푸시를 놓친다.**
+--     notify-guest-expiry 는 「방금 들어온 알림」을 보고 푸시를 쏘는데,
+--     SQL 예약이 먼저 넣어 버리면 그 함수가 볼 것이 없어진다.
+--     둘 다 걸면 어느 쪽이 먼저 도느냐에 따라 푸시가 오락가락한다.
+--
+--   그래서 예약은 **한 곳에만** — 대시보드 Cron 에서 notify-guest-expiry 를
+--   매일 부른다. 그 함수가 이 SQL 을 직접 부르고, 인앱 알림과 푸시를
+--   한 번에 처리한다.
+--
+--   ⓘ 예전 판에서 걸어 둔 SQL 예약이 있으면 여기서 걷어낸다.
 do $$
 begin
-  if exists (select 1 from pg_extension where extname = 'pg_cron') then
+  if to_regclass('cron.job') is not null then
     perform cron.unschedule('taam_guest_expiry_notify')
       where exists (select 1 from cron.job where jobname = 'taam_guest_expiry_notify');
-    perform cron.schedule(
-      'taam_guest_expiry_notify',
-      '0 1 * * *',                              -- UTC 01:00 = KST 10:00
-      'select public.taam_guest_expiry_notify();'
-    );
-    raise notice '[guest] 만료 알림 예약 완료 — 매일 한국시간 오전 10시';
-  else
-    raise notice '[guest] pg_cron 이 없습니다 — 대시보드 Cron 이나 Edge Function 스케줄로 거세요';
+    raise notice '[guest] SQL 예약은 두지 않는다 — 대시보드 Cron 에서 notify-guest-expiry 를 매일 거세요';
   end if;
 end $$;
 
@@ -156,9 +157,11 @@ select '① 알림 함수가 있나 ⭐' as "구분",
   from pg_proc
  where pronamespace='public'::regnamespace and proname='taam_guest_expiry_notify'
 union all
-select '② 매일 예약됐나 ⭐',
-       public._taam_cron_desc('taam_guest_expiry_notify'),
-       'UTC 01:00 = 한국시간 오전 10시'
+select '② SQL 예약이 없나 ⭐',
+       case when public._taam_cron_desc('taam_guest_expiry_notify') like '❌%'
+              or public._taam_cron_desc('taam_guest_expiry_notify') like '⚠%'
+            then '✅ 없음' else '❌ 남아 있음 — 걷어내야 푸시가 정상' end,
+       '예약은 대시보드 Cron 의 notify-guest-expiry 하나만'
 union all
 select '③ 5일 안에 만료될 게스트',
        (select count(*)::text from public.profiles
