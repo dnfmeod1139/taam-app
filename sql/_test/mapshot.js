@@ -97,8 +97,9 @@ const dd = p => p.evaluate(() => {
     ['도메인이 막혀 있으면', 403,
       { error: { status: 'PERMISSION_DENIED', message: 'Requests from referer are blocked. API_KEY_HTTP_REFERRER_BLOCKED' } },
       '허용 목록에 없습니다'],
-    ['키는 멀쩡한데 안 붙으면', 200, { suggestions: [] },
-      '라이브러리가 안 붙었습니다']
+    // ⭐ 키가 멀쩡하면 **에러를 내지 않는다.** REST 로 돌아서 계속 찾는다.
+    //   여기서 「라이브러리가 안 붙었습니다」로 멈추면, 되는 길을 두고 포기하는 것이다.
+    ['키는 멀쩡하면', 200, { suggestions: [] }, '검색 결과 없음']
   ]) {
     p = await fresh(b, null);
     await p.route('**googleapis.com**', probe(st, body));
@@ -110,6 +111,39 @@ const dd = p => p.evaluate(() => {
     if (st !== 200) ok(name + ' 서버 응답을 같이 보여준다', t.indexOf('서버 응답') >= 0);
     await p.close();
   }
+
+  // ── ⑤ REST 우회 ⭐ 실제로 걸린 경우 ────────────────────────
+  //   키·API·리퍼러가 전부 정상인데(탐침 200) 지도 JS 만 안 붙었다.
+  //   그러면 포기하지 말고 REST 로 찾는다 — 된다는 걸 방금 확인했으니까.
+  p = await fresh(b, null);
+  await p.route('**googleapis.com**', async (r) => {
+    const u = r.request().url();
+    if (/places\.googleapis\.com\/v1\/places:autocomplete/.test(u))
+      return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+        suggestions: [{ placePrediction: { placeId: 'PID1',
+          text: { text: '스시 아라이, 도쿄' },
+          structuredFormat: { mainText: { text: '스시 아라이' }, secondaryText: { text: '도쿄' } } } }] }) });
+    if (/places\.googleapis\.com\/v1\/places\/PID1/.test(u))
+      return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+        id: 'PID1', formattedAddress: '일본 도쿄도 미나토구 시바코엔 2-2-21',
+        location: { latitude: 35.6586, longitude: 139.7454 } }) });
+    return r.fulfill({ status: 200, contentType: 'application/javascript', body: NOPLACES });
+  });
+  await p.evaluate(() => window.rpAddrInput('스시'));
+  await p.waitForTimeout(2000);
+  t = await dd(p);
+  ok('지도 JS 가 죽어도 결과가 뜬다 ⭐', t.indexOf('스시 아라이') >= 0);
+  ok('막혔다는 문구는 안 남는다 ⭐', t.indexOf('쓸 수 없습니다') < 0);
+  // 고르면 좌표까지 채워야 한다 — 저장 코드는 어느 길로 왔는지 모른다
+  await p.evaluate(() => document.querySelector('#rpAddrDropdown div').click());
+  await p.waitForTimeout(900);
+  const got = await p.evaluate(() => ({
+    lat: window._rpLat, lng: window._rpLng, pid: window._rpPlaceId,
+    val: (document.getElementById('rpAddress') || {}).value || '' }));
+  ok('좌표가 채워진다 ⭐', got.lat === 35.6586 && got.lng === 139.7454);
+  ok('place_id 가 채워진다', got.pid === 'PID1');
+  ok('정식 주소로 바뀐다 ⭐', got.val.indexOf('시바코엔') >= 0);
+  await p.close();
 
   // 물어보지도 못했을 때 — 「키는 괜찮다」로 오해하면 안 된다
   p = await fresh(b, null);

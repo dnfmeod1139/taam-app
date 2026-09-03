@@ -40976,6 +40976,7 @@ var _rpMapsLoading = false;
 //   영영 기다리게 된다. 셋은 고치는 방법이 서로 다르다.
 var _rpMapsErr = '';    // 사람이 읽을 실패 이유
 var _rpPendingQ = '';   // 로드가 끝나면 이어서 검색할 말
+var _rpUseRest = false; // 지도 JS 가 안 붙었을 때 REST 로 돌아간다
 
 // Google 은 키·도메인·결제 문제를 콘솔에만 적고 조용히 멈춘다.
 //   이 이름의 함수를 만들어 두면 그때 불러 준다 — 유일한 신호다.
@@ -41050,9 +41051,14 @@ function _rpEnsureMapsLoaded(){
             _rpMapsErr = 'Places API 에 연결하지 못했습니다. '
                        + '네트워크·광고차단을 확인해주세요.';
           } else if (why === '') {
-            // 키·API 는 통과했다 → 지도 스크립트 쪽 문제다
-            _rpMapsErr = 'Places API 는 응답하는데 지도 라이브러리가 안 붙었습니다. '
-                       + '잠시 후 다시 시도해주세요.';
+            // ⭐ 키·API·리퍼러가 전부 정상인데 지도 JS 만 안 붙은 것이다.
+            //   그러면 **REST 로 돌아간다.** 방금 200 을 받아 확인했으니
+            //   된다는 걸 안다 — 여기서 포기하면 되는 길을 두고 멈추는 셈이다.
+            _rpUseRest = true;
+            _rpMapsErr = '';
+            var q2 = _rpPendingQ; _rpPendingQ = '';
+            if (q2) rpAddrInput(q2);
+            return;
           } else if (/SERVICE_DISABLED|has not been used|is disabled/i.test(why)) {
             _rpMapsErr = '이 키의 프로젝트에서 Places API (New) 가 꺼져 있습니다. '
                        + 'Google Cloud 콘솔에서 사용 설정해주세요.';
@@ -41105,6 +41111,101 @@ function _rpEnsureMapsLoaded(){
   document.head.appendChild(s);
 }
 
+// ═══════════════════════════════════════════════════════════════
+// REST 로 직접 찾기 — 지도 JS 가 안 붙어도 주소는 찾을 수 있어야 한다
+// ═══════════════════════════════════════════════════════════════
+//   실제로 겪은 일: 키·API·리퍼러가 전부 정상인데(REST 탐침 200)
+//   google.maps.places.AutocompleteSuggestion 만 안 붙었다. 그러면
+//   자동완성이 통째로 죽는다 — 지도 JS 하나에 매달려 있었기 때문이다.
+//
+//   REST 는 그 자리에서 되는 것이 확인됐다. 그러니 그쪽으로 돌아간다.
+//   ⚠ 세션 토큰은 REST 에서도 같은 규칙이다 — 입력~선택 한 사이클에
+//     같은 토큰을 쓰고 선택하면 버린다. 안 그러면 요금이 건건이 붙는다.
+var _rpRestToken = null;
+function _rpNewRestToken(){
+  // UUID v4 — Google 이 세션 식별에만 쓴다
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c){
+    var r = Math.random()*16|0; return (c === 'x' ? r : (r&0x3|0x8)).toString(16); });
+}
+
+async function _rpRestSuggest(q){
+  if (!_rpRestToken) _rpRestToken = _rpNewRestToken();
+  var r = await fetch('https://places.googleapis.com/v1/places:autocomplete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': GOOGLE_GEOCODE_KEY },
+    body: JSON.stringify({ input: q, sessionToken: _rpRestToken, languageCode: 'ko' })
+  });
+  if (!r.ok) {
+    var j = await r.json().catch(function(){ return null; });
+    throw new Error((j && j.error && j.error.message) || ('HTTP ' + r.status));
+  }
+  var d = await r.json();
+  return ((d && d.suggestions) || []).map(function(s){
+    var pp = s.placePrediction; if (!pp) return null;
+    return {
+      id: pp.placeId,
+      main: (pp.structuredFormat && pp.structuredFormat.mainText && pp.structuredFormat.mainText.text) || '',
+      sec:  (pp.structuredFormat && pp.structuredFormat.secondaryText && pp.structuredFormat.secondaryText.text) || '',
+      full: (pp.text && pp.text.text) || ''
+    };
+  }).filter(Boolean);
+}
+
+// 고른 뒤 좌표·정식 주소를 받는다. 필드는 꼭 필요한 것만 — 요금이 필드 단위다.
+async function _rpRestDetails(placeId){
+  var r = await fetch('https://places.googleapis.com/v1/places/' + encodeURIComponent(placeId)
+      + '?languageCode=ko&sessionToken=' + encodeURIComponent(_rpRestToken || ''), {
+    headers: { 'X-Goog-Api-Key': GOOGLE_GEOCODE_KEY,
+               'X-Goog-FieldMask': 'id,displayName,formattedAddress,location' }
+  });
+  _rpRestToken = null;   // 세션 종료 — 다음 검색은 새 토큰
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return await r.json();
+}
+
+// REST 결과를 그린다. 고르면 좌표까지 받아 채운다.
+//   ⚠ 채우는 값(_rpLat·_rpLng·_rpPlaceId·_rpAddressEn)은 지도 JS 경로와
+//     **똑같아야** 한다. 저장 코드는 어느 길로 왔는지 모른다.
+function _rpRenderSuggest(dd, rows){
+  dd.innerHTML = '';
+  rows.slice(0, 5).forEach(function(r){
+    var item = document.createElement('div');
+    item.style.cssText = 'padding:11px 14px;font-family:var(--font-main);font-size:13px;color:#111;cursor:pointer;border-bottom:1px solid #f5f3f0;';
+    item.innerHTML = '<div style="font-weight:700;">' + _rpEscTxt(r.main || r.full) + '</div>'
+      + (r.sec ? '<div style="font-size:11px;color:#aaa;margin-top:2px;">' + _rpEscTxt(r.sec) + '</div>' : '');
+    item.onmousedown = function(e){ e.preventDefault(); };
+    item.onclick = async function(){
+      var input = document.getElementById('rpAddress');
+      var sel = document.getElementById('rpAddrSelectedText');
+      var selWrap = document.getElementById('rpAddrSelected');
+      if (input) input.value = r.full;
+      if (sel) sel.textContent = r.full;
+      if (selWrap) selWrap.style.display = 'block';
+      dd.style.display = 'none';
+      try {
+        var d = await _rpRestDetails(r.id);
+        var addr = d.formattedAddress || r.full;
+        if (input) input.value = addr;
+        if (sel) sel.textContent = addr;
+        _rpPlaceId = d.id || r.id || '';
+        _rpAddressEn = addr;
+        if (d.location) { _rpLat = d.location.latitude; _rpLng = d.location.longitude; }
+        else {
+          _rpLat = null; _rpLng = null;
+          if (typeof showToast === 'function') showToast('⚠','좌표 받기 실패','주소만 저장됨');
+        }
+        console.log('✅ [rpAddrInput/REST] 좌표:', _rpLat, _rpLng, '| place_id:', _rpPlaceId);
+      } catch(e){
+        console.warn('[rpAddrInput/REST] 상세 실패:', e);
+        if (typeof showToast === 'function') showToast('⚠','좌표 에러', ((e && e.message) || '').slice(0, 60));
+      }
+    };
+    dd.appendChild(item);
+  });
+  dd.style.display = 'block';
+}
+
 async function rpAddrInput(q) {
   var dd = document.getElementById('rpAddrDropdown');
   if (!dd) return;
@@ -41120,6 +41221,23 @@ async function rpAddrInput(q) {
   if (!q || q.length < 2) { dd.style.display = 'none'; return; }
 
   _rpAddrTimer = setTimeout(async function() {
+    // ⭐ REST 로 돌아선 경우 — 지도 JS 를 더 기다리지 않는다.
+    if (_rpUseRest) {
+      try {
+        var rows = await _rpRestSuggest(q);
+        if (!rows.length) {
+          dd.innerHTML = '<div style="padding:11px 14px;font-size:12px;color:#bbb;">검색 결과 없음 — 매장명·도시·랜드마크 등으로 시도</div>';
+          dd.style.display = 'block'; return;
+        }
+        _rpRenderSuggest(dd, rows);
+      } catch(e){
+        dd.innerHTML = '<div style="padding:11px 14px;font-size:12px;color:#9B1C1C;">검색 에러: '
+          + _rpEscTxt((e && e.message) || '').slice(0, 90) + '</div>';
+        dd.style.display = 'block';
+      }
+      return;
+    }
+
     if (!_rpHasGooglePlaces()) {
       // 이미 실패한 이유를 안다면 기다리라고 하지 않는다.
       if (_rpMapsErr) { _rpShowMapsErr(); return; }
@@ -42701,7 +42819,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.03-h';
+var TAAM_WEB_BUILD = '2026.09.03-i';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
