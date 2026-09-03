@@ -192,6 +192,29 @@ ok "이유는 안 지운다 (다시 열 때 쓴다)" "셰프의 요청으로" \
 ok "닫히면 못 산다" 막힘 "$(buy $G1 GP_OPEN GS-30)"
 $P -c "$SA select public.taam_guest_seat_allow('$RA', true);" >/dev/null 2>&1
 
+echo "── ⑨-2 회차 id 만으로 매장을 연다 ── ⭐"
+# ⚠ 앱이 매장 id 를 고르면 안 된다. ticketDB 의 매장 id 는 restId 이고
+#   rest 는 **이름**이라, 이름을 id 자리에 넣어 보내 라이브가 튕겼다.
+#   서버가 회차에서 매장을 찾게 하면 앱이 틀릴 자리가 없어진다.
+ok "상태가 매장 id 를 준다 ⭐" "$RA" \
+   "$($P -c "select public.taam_guest_seat_state('GP_OPEN')->>'rest_id';" | tail -1)"
+# 이름은 restaurants 에 적힌 것 그대로여야 한다 (픽스처 값을 짐작하지 않는다)
+ok "상태가 매장 이름도 준다" \
+   "$($P -c "select name from public.restaurants where id='$RA';" | tail -1)" \
+   "$($P -c "select public.taam_guest_seat_state('GP_OPEN')->>'rest_name';" | tail -1)"
+$P -c "$SA select public.taam_guest_seat_allow_for('GP_OPEN', false);" >/dev/null 2>&1
+ok "회차 id 로 매장을 잠근다 ⭐" f \
+   "$($P -c "select guest_seat_allowed from public.restaurants where id='$RA';" | tail -1)"
+$P -c "$SA select public.taam_guest_seat_allow_for('GP_OPEN', true);" >/dev/null 2>&1
+ok "회차 id 로 매장을 다시 연다" t \
+   "$($P -c "select guest_seat_allowed from public.restaurants where id='$RA';" | tail -1)"
+# 없는 회차는 「회차를 못 찾았다」고 말한다 — 「매장을 못 찾았다」로 뭉뚱그리면 또 헤맨다
+if $P -c "$SA select public.taam_guest_seat_allow_for('NOPE', true);" 2>&1 | grep -q "회차를 찾을 수 없습니다";
+then echo "✅ 없는 회차는 그렇게 말한다 ⭐"; else echo "❌ 없는 회차 메시지가 다르다"; FAIL=1; fi
+if $P -c "set role authenticated; select set_config('taam.uid','$G1',false);
+          select public.taam_guest_seat_allow_for('GP_OPEN', true);" >/dev/null 2>&1;
+then echo "❌ 게스트가 매장을 열었다"; FAIL=1; else echo "✅ 회차로 여는 것도 슈퍼어드민만 ⭐"; fi
+
 echo "── ⑩ 권한 ──"
 if $P -c "set role authenticated; select set_config('taam.uid','$G1',false);
           select public.taam_guest_seat_open('GP_SHUT','내가 연다',1,1);" >/dev/null 2>&1;

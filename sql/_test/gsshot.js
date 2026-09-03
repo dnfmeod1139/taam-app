@@ -28,9 +28,13 @@ const { chromium } = require('playwright-core');
     window.showToast = (a, b2, c) => { window.__toast = [a, b2, c]; };
     window.renderTicketList = () => {};
     window.restaurantDB = [{ id: 'R1', name: '스시 아라이' }];
-    // ⚠ 회원가는 t.price 가 아니라 **식사비+대행비+주류 미니멈** 이다.
-    //   price 하나로 두면 어느 값이 회원가인지 화면마다 달라진다 (_tkMemberPer).
-    window.ticketDB = [{ id: 'TP1', rest: 'R1', date: '2027-06-06', time: '18:00',
+    // ⚠ 픽스처는 **라이브와 같은 모양**이어야 한다. ticketDB 의 매장 id 는
+    //   `restId` 이고 `rest` 는 **매장 이름**이다 (index.html 15014 주석).
+    //   종전 픽스처가 rest:'R1' 이라 매장 id 를 담고 있었고, 그래서
+    //   「이름을 id 자리에 넣어 보내는」 라이브 버그를 테스트가 못 잡았다.
+    // ⚠ 회원가도 t.price 가 아니라 **식사비+대행비+주류 미니멈** 이다.
+    window.ticketDB = [{ id: 'TP1', restId: 'R1', rest: '스시 아라이',
+                         date: '2027-06-06', time: '18:00',
                          mealFee: 200000, agencyFee: 30000, wineMin: 20000 }];
 
     let RPC = [];
@@ -61,11 +65,30 @@ const { chromium } = require('playwright-core');
     ok('열 자리 입력칸을 안 보여준다 ⭐', !document.getElementById('gsReason'));
     ok('매장을 켜는 버튼이 있다',
        document.getElementById('gsFoot').textContent.indexOf('허용') >= 0);
+    // ⚠ 매장 id 를 앱이 고르지 않는다 — **회차 id** 를 넘기고 서버가 찾는다.
+    //   종전엔 t.rest(=매장 이름)를 매장 id 자리에 넣어 「매장을 찾을 수
+    //   없습니다」로 튕겼다. 시트 제목은 이름을 쓰니 멀쩡해 보여 더 헷갈렸다.
     RPC = [];
     await window.gsAllow(true); await sleep(200);
-    ok('매장 허용을 서버에 넘긴다',
-       RPC.some(x => x[0] === 'taam_guest_seat_allow'
-                  && x[1].p_rest_id === 'R1' && x[1].p_on === true));
+    let al = RPC.filter(x => x[0] === 'taam_guest_seat_allow_for')[0];
+    ok('회차 id 로 매장을 연다 ⭐',
+       !!al && al[1].p_ticket_product_id === 'TP1' && al[1].p_on === true);
+    ok('매장 이름을 id 자리에 안 넣는다 ⭐',
+       !RPC.some(x => JSON.stringify(x[1] || {}).indexOf('스시 아라이') >= 0));
+
+    // 새 함수가 없으면(SQL 미실행) 옛 함수로 내려가되, **restId** 를 쓴다
+    window.sb = { rpc: (fn, a) => { RPC.push([fn, a]);
+      if (fn === 'taam_guest_seat_allow_for')
+        return Promise.resolve({ data: null, error: {
+          message: 'function public.taam_guest_seat_allow_for does not exist' } });
+      if (fn === 'taam_guest_seat_allow') return Promise.resolve({ data: { ok: true }, error: null });
+      return Promise.resolve({ data: { found: true, open: false, allowed: false,
+                                       qty: 0, sold: 0 }, error: null }); } };
+    RPC = [];
+    await window.gsAllow(true); await sleep(200);
+    let old = RPC.filter(x => x[0] === 'taam_guest_seat_allow')[0];
+    ok('SQL 전이면 옛 함수로 내려간다 ⭐', !!old);
+    ok('그때도 매장 id 는 restId ⭐', !!old && old[1].p_rest_id === 'R1');
 
     // ── ③ 열려 있는 매장, 닫힌 자리 ──────────────────────────
     window.sb = mk({ found: true, open: false, allowed: true, qty: 0, sold: 0, reason: null, price: null });
