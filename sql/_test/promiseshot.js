@@ -90,6 +90,27 @@ const { chromium } = require('playwright-core');
     const inline = await p.evaluate(() => [...document.querySelectorAll('.qual .sub .sd .ln')]
       .filter(e => getComputedStyle(e).display !== 'block').length);
     ok(lang + ' — 문장이 안 붙는다 ⭐', inline === 0);
+
+    // ── 지급 방식 ⭐ 돈 이야기라 문구가 흔들리면 안 된다 ──────────
+    //   협의한 비용(식사비+미니멈 주류) = 현금 **선납**
+    //   손님별 초과 주류·추가 차지     = 당일 현장, 현금 또는 카드(되도록 현금)
+    //   ⚠ 「貸切은 선납 / 일반은 현장」이 아니다. 한때 그렇게 적었다가 고쳤다 —
+    //     매장의 입금 예정이 어긋난다.
+    const pay = await p.evaluate(() => {
+      const li = document.querySelectorAll('#promiseList li')[1];
+      return { d: li.querySelector('.d').textContent,
+               sub: [...li.querySelectorAll('.sub .sd')].map(e => e.textContent).join(' ') };
+    });
+    const PAY = { ja:{ pre:'先払い', card:'クレジットカード', both:'現金' },
+                  ko:{ pre:'선납',   card:'신용카드',        both:'현금' },
+                  en:{ pre:'prepaid', card:'credit card',    both:'cash' } }[lang];
+    ok(lang + ' — 협의분은 선납이라 적는다 ⭐', pay.d.indexOf(PAY.pre) >= 0);
+    ok(lang + ' — 현금이라 적는다 ⭐',          pay.d.indexOf(PAY.both) >= 0);
+    ok(lang + ' — 초과분은 카드도 된다 ⭐',     pay.d.indexOf(PAY.card) >= 0);
+    // 「당일 현장에서 전부 낸다」로 되돌아가면 안 된다
+    const OLD = { ja:'当日その場でお食事代', ko:'당일 현장에서 식사비',
+                  en:'pay on site for only the meal' }[lang];
+    ok(lang + ' — 옛 지급 문구가 안 남았다 ⭐', (pay.d + pay.sub).indexOf(OLD) < 0);
   }
 
   // ── 유일한 부탁 ─────────────────────────────────────────────
