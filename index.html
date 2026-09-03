@@ -37019,7 +37019,12 @@ function _acEnsureConsole(){
       //     보고 대시보드를 그 위에 올렸다. 전체화면 판은 전부 센다.
       var pages = document.querySelectorAll('.sub-screen, .restpage, .tu-screen, .mp-subpage');
       for(var i = 0; i < pages.length; i++){ if(vis(pages[i])) return; }
-      acGo('today');
+      // ⚠ 늘 'today' 로 보내면 안 된다. 예약 탭에서 항목을 열었다가 닫으면
+      //   오늘 탭에 서 있게 된다 — 「바로 전 단계」가 아니다.
+      //   그 역할에 없는 탭이면 acGo 가 알아서 무시하므로, 그때만 today 로.
+      var back = _acLastTab || 'today';
+      acGo(back);
+      if(!_acTabList().some(function(t){ return t[0] === back; })) acGo('today');
     }catch(e){ console.warn('[console] 대시보드 복귀 실패:', e); }
   }, 0);
 }
@@ -37084,9 +37089,15 @@ function acOpenMenu(id){
 }
 window.acOpenMenu = acOpenMenu;
 
+// 🆕 2026-09-03: 마지막으로 서 있던 탭.
+//   뒤로가기가 늘 「today」로 떨어지고 있었다 — 예약 탭에서 항목을 열었다가
+//   닫으면 오늘 탭에 서 있게 된다. 「바로 전 단계」가 아니다.
+var _acLastTab = 'today';
+
 function acGo(tab){
   // 그 역할에 없는 탭은 무시한다 — 눌릴 일도 없지만, 눌렀을 때 빈 화면이 되면 안 된다
   if(!_acTabList().some(function(t){ return t[0] === tab; })) return;
+  _acLastTab = tab;
   // 닫는 것은 여는 쪽(_acCloseOthers)이 한다 — 메뉴로 바로 들어와도 같게 동작해야 한다
   if(tab === 'today') tbOpen();
   else if(tab === 'rv')  rvOpen();
@@ -42844,7 +42855,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.03-k';
+var TAAM_WEB_BUILD = '2026.09.03-l';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
