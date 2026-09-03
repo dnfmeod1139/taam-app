@@ -1,142 +1,209 @@
+// ═══════════════════════════════════════════════════════════════
+// 파트너 계정 — 앱 화면 검증 (2026-09-03)
+// ═══════════════════════════════════════════════════════════════
+//   ① 로그인에 「파트너」 탭이 있고, 고르면 아이디·비번만 묻는가
+//   ② 아이디만 넣는가 (도메인은 앱이 붙인다) · @ 를 붙여 넣어도 되는가
+//   ③ 권한이 없으면 **로그아웃시키는가** ← 로그인만 되고 어드민이 아닌 상태를 남기면 안 된다
+//   ④ 단일 기기 등록을 부르는가 (CLAUDE.md — 모든 로그인 경로 공통)
+//   ⑤ 발급 화면 — 슈퍼어드민만 · 비번은 한 번만 · 권한 없음을 알려주는가
+//   ⑥ SQL·함수를 안 올렸으면 무엇을 해야 하는지 말하는가
+//
+// 실행: node sql/_test/partnershot.js
+// ═══════════════════════════════════════════════════════════════
 const { chromium } = require('playwright-core');
+
 (async () => {
   const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium' });
-  const p = await b.newPage({ viewport: { width: 390, height: 844 } });
-  const errs = []; p.on('pageerror', e => errs.push(String(e)));
+  const p = await b.newPage({ viewport: { width: 390, height: 900 } });
+  const errs = [];
+  p.on('pageerror', e => errs.push(String(e)));
+  await p.route('**://fonts.g**', r => r.abort());
   await p.goto('file:///home/user/taam-app/index.html', { waitUntil: 'domcontentloaded' });
   await p.waitForTimeout(2500);
 
-  const out = []; const ok = (n, c) => out.push((c ? 'OK   ' : 'FAIL ') + n);
-  const d = id => p.evaluate(i => { const e = document.getElementById(i); return e ? getComputedStyle(e).display : '(없음)'; }, id);
-
-  const setup = () => p.evaluate(() => {
+  const r = await p.evaluate(async () => {
+    const out = [];
+    const ok = (n, c) => out.push((c ? 'OK   ' : 'FAIL ') + n);
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    const $ = id => document.getElementById(id);
     document.getElementById('appWrapper').classList.add('ready');
-    document.getElementById('mainScreen').style.display = 'flex';
-    var sp = document.getElementById('splash-ov'); if(sp) sp.remove();
-    [...document.body.children].forEach(n => { try{ if(getComputedStyle(n).zIndex==='99999') n.remove(); }catch(e){} });
-    // ── 파트너 계정 ──
-    window._currentRole = 'admin';
-    window._isSuperAdmin = () => false;
-    window._currentAdminRestId = 'REST_MINE';
-    window._currentAdminRestName = '우리매장';
-    const iso = '2026.12.20';
-    window.ticketDB = [
-      { id:'tp1', rest:'우리매장', restId:'REST_MINE', time:'19:00', date:iso, totalPax:8, status:'active' },
-      { id:'tp2', rest:'우리매장', restId:'REST_MINE', time:'12:00', date:iso, totalPax:6, status:'pending' }
+    window.showToast = (a, b2, c) => { window.__toast = [a, b2, c]; };
+
+    // ── ① 로그인 탭 ────────────────────────────────────────────
+    ok('파트너 탭이 있다 ⭐', !!$('vpLoginMethodPartner'));
+    ok('아이디 칸이 있다',   !!$('vpPartnerId'));
+    ok('비밀번호 칸이 있다', !!$('vpPartnerPw'));
+    // ⚠ 이메일 칸이 아니다. 매장은 앞부분만 받아 적는다.
+    ok('아이디 칸은 email 타입이 아니다 ⭐', $('vpPartnerId').type === 'text');
+    ok('자동 대문자를 끈다 ⭐', $('vpPartnerId').getAttribute('autocapitalize') === 'none');
+
+    window.vpSwitchLoginMethod('partner'); await sleep(120);
+    ok('고르면 파트너 칸이 열린다 ⭐', $('vpPartnerRow').style.display !== 'none');
+    ok('비밀번호 로그인 칸은 닫힌다',  $('vpPasswordRow').style.display === 'none');
+    ok('SMS 칸도 닫힌다',              $('vpPhoneRow').style.display === 'none');
+    const vbtn = document.querySelector('.phone-verify-btn');
+    ok('버튼이 파트너 로그인을 부른다 ⭐',
+       (vbtn.getAttribute('onclick') || '').indexOf('vpPartnerLogin') >= 0);
+    // OTP 는 없다 — 인증번호 칸이 보이면 안 된다
+    ok('인증번호 칸을 안 보여준다 ⭐',
+       $('vpCode').parentElement.style.display === 'none');
+    window.vpSwitchLoginMethod('password'); await sleep(80);
+    ok('다시 비밀번호로 돌아간다', $('vpPartnerRow').style.display === 'none');
+    window.vpSwitchLoginMethod('partner'); await sleep(80);
+
+    // ── ② 아이디 → 이메일 변환 ─────────────────────────────────
+    let signInArg = null, signedOut = 0, claimed = null, touched = 0;
+    window._claimDeviceSession = (u, role) => { claimed = role; return Promise.resolve(); };
+    window._applyServerAdminGrant = async () => { window._currentRole = window.__grantRole; };
+    const mkSb = (loginOk) => ({
+      auth: {
+        signInWithPassword: (a) => { signInArg = a;
+          return Promise.resolve(loginOk
+            ? { data: { user: { id: 'U1' } }, error: null }
+            : { data: null, error: { message: 'Invalid login credentials' } }); },
+        signOut: () => { signedOut++; return Promise.resolve({}); },
+        getSession: () => Promise.resolve({ data: { session: { access_token: 'TOK' } } })
+      },
+      rpc: (fn) => { if (fn === 'taam_partner_touch') touched++;
+                     return Promise.resolve({ data: null, error: null }); }
+    });
+
+    window.sb = mkSb(true); window.__grantRole = 'admin';
+    window.adminDirectAccess = () => {};
+    $('vpPartnerId').value = 'sushi-arai'; $('vpPartnerPw').value = 'ABCD-EFGH-JKMN';
+    await window.vpPartnerLogin(); await sleep(300);
+    ok('아이디에 도메인을 붙인다 ⭐',
+       signInArg && signInArg.email === 'sushi-arai@partner.taam.kr');
+    ok('비밀번호를 그대로 넘긴다', signInArg && signInArg.password === 'ABCD-EFGH-JKMN');
+    // ⚠ 도메인이 서버(Edge Function)와 같아야 한다. 어긋나면 「비번이 틀렸다」로 보인다.
+    ok('도메인 상수가 서버와 같다 ⭐', window.PARTNER_LOGIN_DOMAIN === 'partner.taam.kr');
+    // 단일 기기 — 모든 로그인 경로가 이 함수 하나만 부른다 (CLAUDE.md)
+    ok('기기 등록을 부른다 ⭐', claimed === 'admin');
+    ok('로그인 기록을 남긴다', touched === 1);
+
+    // 통째로 붙여넣어도 된다
+    signInArg = null;
+    $('vpPartnerId').value = 'Sushi-Arai@partner.taam.kr  ';
+    await window.vpPartnerLogin(); await sleep(300);
+    ok('@ 뒤를 떼고 소문자로 ⭐',
+       signInArg && signInArg.email === 'sushi-arai@partner.taam.kr');
+
+    // ── ③ 권한이 없으면 들여보내지 않는다 ⭐ ────────────────────
+    //   로그인만 되고 어드민이 아닌 상태로 두면, 매장은 「됐다」고 생각한 채
+    //   아무것도 못 하는 화면을 본다. 그럴 바엔 못 들어오게 한다.
+    signedOut = 0; window.__grantRole = 'user'; window._currentRole = 'user';
+    $('vpPartnerId').value = 'no-grant'; $('vpPartnerPw').value = 'x';
+    await window.vpPartnerLogin(); await sleep(300);
+    ok('권한 없으면 로그아웃시킨다 ⭐', signedOut === 1);
+    ok('무엇이 문제인지 말한다 ⭐',
+       $('vpHint').textContent.indexOf('권한') >= 0);
+
+    // 비밀번호가 틀렸을 때 — 아이디 유무를 알려주지 않는다
+    window.sb = mkSb(false);
+    $('vpPartnerId').value = 'sushi-arai'; $('vpPartnerPw').value = 'nope';
+    await window.vpPartnerLogin(); await sleep(200);
+    const bad = $('vpHint').textContent;
+    ok('틀리면 알려준다', bad.indexOf('올바르지') >= 0);
+    ok('아이디 유무를 흘리지 않는다 ⭐',
+       bad.indexOf('없는') < 0 && bad.indexOf('찾을 수') < 0);
+
+    // 빈 칸은 서버를 안 부른다
+    window.sb = mkSb(true); signInArg = null;
+    $('vpPartnerId').value = ''; $('vpPartnerPw').value = 'x';
+    await window.vpPartnerLogin(); await sleep(120);
+    ok('아이디가 비면 서버를 안 부른다 ⭐', signInArg === null);
+    $('vpPartnerId').value = 'a-b'; $('vpPartnerPw').value = '';
+    await window.vpPartnerLogin(); await sleep(120);
+    ok('비번이 비면 서버를 안 부른다 ⭐', signInArg === null);
+
+    // ── ⑤ 발급 화면 ────────────────────────────────────────────
+    window._currentRole = 'user';
+    window.paOpen(); await sleep(120);
+    ok('슈퍼어드민이 아니면 안 열린다 ⭐', $('paSheet').style.display === 'none');
+    window._currentRole = 'superadmin';
+    window.restaurantDB = [{ id: 'R1', name: '스시 아라이', name_en: 'Sushi Arai' }];
+
+    const ROWS = [
+      { login_id:'sushi-arai', label:'스시 아라이', has_grant:true,
+        handed_at:'2026-09-01T00:00:00Z', last_login_at:null, disabled:false },
+      { login_id:'no-grant', label:'타카미츠', has_grant:false,
+        handed_at:null, last_login_at:null, disabled:false }
     ];
-    window._tbRows = [
-      { id:'t1', purchase_id:'P-1', user_id:'u1', buyer_name:'홍길동', party_size:2, price:100000,
-        status:'active', restaurant_id:'REST_MINE', restaurant_name:'우리매장', ticket_product_id:'tp1',
-        reservation_date:iso, visit_time:'19:00', _d:'2026-12-20', _m:1140, extra_data:{} }
-    ];
-    window._mbRows = []; window._acBans = []; window._acRules = [{restaurant_id:'*'}];
-    window._dashExtra = { resvPending:0, deposit:null };
-    window._qmCfg = null; window._qmCfgRole = null; window._qmPulled = true;
-    window.showToast = function(){};
-    openAdminConsole(false);
+    let RPC = [];
+    window.sb = { rpc: (fn, a) => { RPC.push([fn, a]);
+      return Promise.resolve({ data: fn === 'taam_partner_accounts' ? ROWS : null, error: null }); },
+      auth: { getSession: () => Promise.resolve({ data:{ session:{ access_token:'TOK' } } }) } };
+    let CALLS = [];
+    window.fetch = (url, opt) => { CALLS.push([url, JSON.parse(opt.body)]);
+      return Promise.resolve({ status:200, json: () => Promise.resolve(
+        { ok:true, login_id:'sushi-arai', password:'ABCD-EFGH-JKMN' }) }); };
+
+    window.paOpen(); await sleep(300);
+    ok('슈퍼어드민에게는 열린다', $('paSheet').style.display === 'flex');
+    let t = $('paBody').textContent;
+    ok('서버에 목록을 묻는다 ⭐', RPC.some(x => x[0] === 'taam_partner_accounts'));
+    ok('미리 만들어 둔다고 적는다', t.indexOf('안 쓰면 그만') >= 0);
+    ok('발급한 계정을 보여준다', t.indexOf('sushi-arai') >= 0);
+    ok('건넸는지 보여준다',      t.indexOf('건넴') >= 0);
+    ok('안 쓴 계정을 알려준다 ⭐', t.indexOf('한 번도 안 씀') >= 0);
+    // ⚠ 「로그인은 되는데 어드민이 아니다」 — 가장 헷갈리는 고장이라 눈에 띄어야 한다
+    ok('권한 없는 계정을 짚어준다 ⭐', t.indexOf('권한 없음') >= 0);
+    ok('여러 기기 허용이 기본 ⭐', $('paMulti').checked === true);
+
+    // 매장을 고르면 아이디를 지어 준다
+    $('paRest').value = 'R1'; window._paSuggestId();
+    ok('아이디를 지어 준다 ⭐', $('paId').value === 'sushi-arai');
+
+    // 잘못된 아이디는 서버를 안 부른다
+    CALLS = [];
+    $('paId').value = 'AB';
+    await window.paCreate(); await sleep(150);
+    ok('짧은 아이디는 서버를 안 부른다 ⭐', CALLS.length === 0);
+    ok('무엇이 틀렸는지 말한다', $('paErr').textContent.indexOf('아이디') >= 0);
+    $('paId').value = '스시아라이';
+    await window.paCreate(); await sleep(150);
+    ok('한글 아이디도 막는다 ⭐', CALLS.length === 0);
+
+    // 제대로 만들면 Edge Function 을 부른다
+    $('paId').value = 'sushi-arai';
+    await window.paCreate(); await sleep(300);
+    ok('Edge Function 을 부른다 ⭐',
+       CALLS.length === 1 && String(CALLS[0][0]).indexOf('/functions/v1/partner-account') >= 0);
+    ok('만들기라고 보낸다', CALLS[0][1].action === 'create');
+    ok('매장과 아이디를 넘긴다',
+       CALLS[0][1].rest_id === 'R1' && CALLS[0][1].login_id === 'sushi-arai');
+    ok('여러 기기 허용을 넘긴다 ⭐', CALLS[0][1].multi_device === true);
+
+    // 비밀번호는 여기서만 보인다
+    t = $('paBody').textContent;
+    ok('비밀번호를 보여준다 ⭐', t.indexOf('ABCD-EFGH-JKMN') >= 0);
+    ok('지금만 보인다고 적는다 ⭐', t.indexOf('지금만 보입니다') >= 0);
+    ok('파트너 탭을 쓰라고 적는다', t.indexOf('파트너') >= 0);
+    ok('아이디만 넣으라고 적는다 ⭐', t.indexOf('아이디만') >= 0);
+    window.paDoneMade(); await sleep(120);
+    ok('확인하면 비밀번호가 사라진다 ⭐',
+       $('paBody').textContent.indexOf('ABCD-EFGH-JKMN') < 0);
+
+    // ── ⑥ SQL 을 안 돌렸을 때 ──────────────────────────────────
+    window.sb = { rpc: () => Promise.resolve({ data:null,
+      error: { message: 'function public.taam_partner_accounts does not exist' } }),
+      auth: { getSession: () => Promise.resolve({ data:{ session:{ access_token:'TOK' } } }) } };
+    window.paOpen(); await sleep(300);
+    ok('무엇을 해야 하는지 알려준다 ⭐',
+       $('paBody').textContent.indexOf('partner_accounts.sql') >= 0);
+    ok('만들 수 있는 버튼을 안 준다', $('paFoot').textContent.trim() === '');
+
+    window.paClose(); await sleep(80);
+    ok('닫힌다', $('paSheet').style.display === 'none');
+    ok('세로 제스처만 받는다',
+       getComputedStyle($('paSheet')).touchAction === 'pan-y');
+    return out;
   });
 
-  await setup();
-  await p.waitForTimeout(250);
-  // ⚠ openAdminConsole → tbOpen → _tbLoad() 가 _tbRows 를 서버값(헤드리스에선 빈 값)
-  //   으로 덮는다. 데이터는 **그 뒤에** 넣어야 한다 — 처음엔 이걸 몰라서
-  //   「다음 영업이 안 뜬다」로 잘못 읽었다.
-  await p.evaluate(() => {
-    const iso = '2026.12.20';
-    window.ticketDB = [
-      { id:'tp1', rest:'우리매장', restId:'REST_MINE', time:'19:00', date:iso, totalPax:8, status:'active' },
-      { id:'tp2', rest:'우리매장', restId:'REST_MINE', time:'12:00', date:iso, totalPax:6, status:'pending' }
-    ];
-    window._tbRows = [
-      { id:'t1', purchase_id:'P-1', user_id:'u1', buyer_name:'홍길동', party_size:2, price:100000,
-        status:'active', restaurant_id:'REST_MINE', restaurant_name:'우리매장', ticket_product_id:'tp1',
-        reservation_date:iso, visit_time:'19:00', _d:'2026-12-20', _m:1140, extra_data:{} }
-    ];
-  });
-
-  // ── 진입 ──
-  ok('파트너도 앱을 켜면 대시보드', (await d('todayBoardScreen')) !== 'none');
-  ok('파트너 어드민 화면이 바탕에 있다', (await d('partnerAdminScreen')) !== 'none');
-  ok('슈퍼어드민 화면은 안 열린다', (await d('adminScreen')) === 'none');
-
-  const tabs = await p.evaluate(() =>
-    [...document.querySelectorAll('#tbTabs .ac-tab, #todayBoardScreen .ac-tabs > *')]
-      .map(e => e.textContent.replace(/\d+$/,'').trim()).filter(Boolean));
-  ok('탭이 넷 (' + tabs.join('·') + ')', tabs.length === 4);
-  ok('회원·더보기 탭은 없다', !tabs.some(t => t === '회원' || t === '더보기'));
-  ok('내 매장 탭이 있다', tabs.includes('내 매장'));
-
-  // ── 대시보드 내용 ──
-  const dash = await p.evaluate(() => {
-    _dashRender();
-    const body = document.getElementById('tbBody');
-    return {
-      text: body.innerText.replace(/\s+/g,' '),
-      todo: [...body.querySelectorAll('.todo > button')].map(x => ({
-        t: x.querySelector('.t').textContent, n: x.querySelector('.n').textContent,
-        on: x.getAttribute('onclick') })),
-      qm: [...body.querySelectorAll('.qm-b .t')].map(x => x.textContent),
-      hasDeposit: /예치금/.test(body.innerText)
-    };
-  });
-  ok('파트너에게 「다음 영업」이 뜬다', /다음 영업/.test(dash.text));
-  ok('예치금 총 잔액은 파트너에게 안 보인다', !dash.hasDeposit);
-  ok('자주 쓰는 메뉴가 파트너 메뉴로 채워진다 (' + dash.qm.join('·') + ')', dash.qm.length > 0);
-  ok('파트너 메뉴에 슈퍼어드민 것이 안 섞인다',
-     !dash.qm.some(t => /예치금|환율|회원 목록|계보|마켓/.test(t)));
-
-  // 처리할 일 — 파트너가 자기 업로드를 스스로 승인하면 안 된다
-  const approve = dash.todo.find(x => /승인/.test(x.t));
-  ok('처리할 일에 「티켓 업로드 승인」이 파트너에게는 없다 (' +
-     (dash.todo.map(x=>x.t).join(', ') || '없음') + ')', !approve);
-  const badge = await p.evaluate(() => _acTodoCount());
-  const sum = dash.todo.reduce((a,x) => a + parseInt(x.n||'0',10), 0);
-  ok('탭 배지도 같은 값 (배지 ' + badge + ')', badge === 0);
-
-  // ── 탭 이동 · ← · ✕ ──
-  for (const [fn, id, name] of [['rv','rvScreen','예약'], ['tkb','tkbScreen','티켓'], ['shop','pshScreen','내 매장']]) {
-    await p.evaluate(k => acGo(k), fn);
-    await p.waitForTimeout(160);
-    if ((await d(id)) === 'none') { ok(name + ' 탭이 열린다', false); continue; }
-    ok(name + ' 탭이 열린다', true);
-    await p.evaluate(() => acBack());
-    await p.waitForTimeout(160);
-    ok(name + ' 에서 ← → 대시보드',
-       (await d('todayBoardScreen')) !== 'none' && (await d('partnerAdminScreen')) !== 'none');
-  }
-
-  // ── 범위: 남의 매장 것이 안 섞이나 ──
-  const scope = await p.evaluate(() => {
-    window._tbRows.push({ id:'t2', purchase_id:'P-2', user_id:'u2', buyer_name:'남의손님', party_size:2,
-      price:1, status:'active', restaurant_id:'REST_OTHER', restaurant_name:'남의매장',
-      reservation_date:'2026.12.20', visit_time:'18:00', _d:'2026-12-20', _m:1080, extra_data:{} });
-    window.ticketDB.push({ id:'tp9', rest:'남의매장', restId:'REST_OTHER', date:'2026.12.20', status:'active' });
-    const rv = (typeof _rvBase === 'function') ? _rvBase() : [];
-    const tk = (typeof _tkbBase === 'function') ? _tkbBase() : [];
-    return { rv: rv.map(r => r.restaurant_name), tk: tk.map(t => t.rest || t.restId) };
-  });
-  ok('예약에 남의 매장이 안 섞인다 (' + (scope.rv.join(',') || '없음') + ')',
-     !scope.rv.includes('남의매장'));
-  ok('티켓에 남의 매장이 안 섞인다 (' + (scope.tk.join(',') || '없음') + ')',
-     !scope.tk.includes('남의매장'));
-
-  // ── 메뉴 원본 ──
-  const menu = await p.evaluate(() => _moScan().map(r => r.title));
-  ok('파트너 메뉴는 자기 것만 (' + menu.length + '개)', menu.length >= 4 && menu.length <= 10);
-  ok('예치금·환율·회원 목록이 없다', !menu.some(t => /예치금|환율|회원 목록|계보도 관리|마켓/.test(t)));
-  ok('로그아웃은 있다', menu.some(t => /로그아웃/.test(t)));
-
-  // ── ✕ 로 앱으로 ──
-  let outMain = 0;
-  await p.evaluate(() => { window.__om = 0; const r = window.openMain; window.openMain = function(){ window.__om++; }; });
-  await p.evaluate(() => acExit());
-  await p.waitForTimeout(200);
-  outMain = await p.evaluate(() => window.__om);
-  ok('✕ → 콘솔이 닫히고 앱으로',
-     (await d('todayBoardScreen')) === 'none' && (await d('partnerAdminScreen')) === 'none' && outMain === 1);
-
-  out.forEach(l => console.log(l));
-  console.log('pageerror:', errs.length ? errs.slice(0,2).join(' | ') : '없음');
-  console.log(out.some(l => l.startsWith('FAIL')) ? '\n=== 실패 있음 ===' : '\n=== 전부 통과 ===');
+  r.forEach(l => console.log(l));
+  if (errs.length) { console.log('\n페이지 오류:'); errs.slice(0, 5).forEach(e => console.log('  ' + e)); }
+  const bad = r.filter(l => l.startsWith('FAIL')).length;
+  console.log('\n' + (bad ? `=== 실패 ${bad}건 ===` : `=== 전부 통과 (${r.length}건) ===`));
   await b.close();
+  process.exit(bad ? 1 : 0);
 })();
