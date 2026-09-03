@@ -112,5 +112,12 @@ ok "저장해도 늘려둔 기한이 그대로 ⭐" 200 "$(days $GN)"
 $P -c "update public.profiles set membership_tier='M' where id='$GN';" >/dev/null 2>&1
 ok "M 으로 올라가면 기한이 지워진다 ⭐" "" "$(days $GN)"
 
+# ── 뒷정리 ──────────────────────────────────────────────────
+#   ⚠ 남겨 두면 다른 테스트의 「전역 목록」 검사에 끼어든다. 테스트가
+#     남긴 것이 다른 테스트를 깨뜨리면 원인을 엉뚱한 데서 찾게 된다.
+$P -c "delete from public.notifications where user_id in ('$GA','$GB','$UM','$GN','$GU');
+       delete from public.tickets where user_id in ('$GA','$GB','$UM','$GN','$GU');
+       delete from public.profiles where id in ('$GA','$GB','$UM','$GN','$GU');" >/dev/null 2>&1
+
 echo
 [ "$FAIL" = "1" ] && echo "=== 실패 있음 ===" || echo "=== 전부 통과 ==="
