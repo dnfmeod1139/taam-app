@@ -16124,6 +16124,12 @@ function _taamIsSuperEmail(email){
 }
 
 function _roleGuardByEmail(email){
+  // ⚠ 「모른다」를 「아니다」로 읽지 않는다. (2026-09-03)
+  //   네트워크가 끊기면 getUser() 가 사용자 없이 돌아온다. 그걸 「슈퍼어드민이
+  //   아니다」로 읽어 권한을 내리고 saveRole() 로 기기에 남겼다 — 네트워크가
+  //   돌아와도 일반 회원인 채였다. 다시 로그인해야만 풀렸다.
+  //   활성 세션 조회가 실패하면 아무것도 하지 않는다는 규칙과 같은 자리다.
+  if(!String(email || '').trim()) return false;
   if(_taamIsSuperEmail(email)) return false;          // 진짜 슈퍼어드민 — 손대지 않는다
   if(_currentRole !== 'superadmin') return false;     // 이미 아니면 할 일 없다
   console.warn('[role] 이 계정은 슈퍼어드민이 아닙니다 — 기기에 남아 있던 권한을 내립니다:', email);
@@ -19956,10 +19962,26 @@ function adminDirectAccess(){
   try{
     if(window.sb && window.sb.auth){
       window.sb.auth.getUser().then(function(r){
-        var em = r && r.data && r.data.user && r.data.user.email;
+        // ⚠ 물어보지 못했으면 판단하지 않는다. 오류이거나 사용자가 없으면
+        //   그건 「슈퍼어드민이 아니다」가 아니라 「모른다」다.
+        if(r && r.error) return;
+        var u = r && r.data && r.data.user;
+        var em = u && u.email;
+        if(!em) return;
         if(_roleGuardByEmail(em)){
           // 내려간 뒤에는 일반 회원 화면으로 다시 보낸다
           try{ if(typeof openMain === 'function') openMain(); }catch(e){}
+          return;
+        }
+        // 🆕 반대쪽도 본다 — 기기에 남은 값이 낮으면 올려 준다.
+        //   종전에는 내리기만 하고 올리지 않아서, 한 번 잘못 내려가면
+        //   다시 로그인하기 전까지 영영 일반 회원이었다.
+        if(_taamIsSuperEmail(em) && _currentRole !== 'superadmin'){
+          console.warn('[role] 슈퍼어드민 계정인데 기기 값이 낮았습니다 — 되돌립니다:', em);
+          _currentRole = 'superadmin';
+          _currentAdminRestId = null; _currentAdminRestName = '';
+          try{ if(typeof saveRole === 'function') saveRole(); }catch(e){}
+          try{ if(typeof updateMpAdminBtn === 'function') updateMpAdminBtn(); }catch(e){}
         }
       }).catch(function(){});
     }
@@ -42819,7 +42841,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.03-i';
+var TAAM_WEB_BUILD = '2026.09.03-j';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
