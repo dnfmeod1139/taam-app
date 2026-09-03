@@ -15,9 +15,47 @@
   .serif{font-family:'Shippori Mincho',serif;}
   body.en{font-family:-apple-system,'Helvetica Neue',Arial,sans-serif;letter-spacing:.02em;}
   body.en .serif{font-family:'Oswald',sans-serif;letter-spacing:.12em;}
-  body.ko{font-family:'Noto Sans KR',sans-serif;letter-spacing:.01em;word-break:keep-all;overflow-wrap:break-word;}
-  /* 문장이 어중간하게 잘리지 않게 — 브라우저가 가독성 좋게 줄바꿈 배분 */
-  .lead, .terms p, .qual .d, .hero .sub{text-wrap:pretty;}
+  body.ko{font-family:'Noto Sans KR',sans-serif;letter-spacing:.01em;}
+
+  /* ── 줄바꿈 ──────────────────────────────────────────────
+     ⚠ 언어마다 규칙이 다르다. 하나로 묶으면 어느 하나가 반드시 어색해진다.
+       한국어 — 어절 안에서 끊으면 안 된다 (keep-all).
+       일본어 — 어디서든 끊되, 작은 가나·구두점 **앞**에서는 안 끊는다
+                (line-break: strict). 종전엔 아무 규칙이 없어 「っ」「、」가
+                줄 머리에 떨어졌다.
+       영어   — 띄어쓰기에서만 끊고 하이픈은 넣지 않는다.
+     ⚠ 종전에는 word-break:keep-all 이 body.ko 에만 있었다. 일본어·영어는
+       브라우저 기본값으로 굴러가고 있었다. */
+  body{line-break:strict;overflow-wrap:break-word;}
+  body.ko{word-break:keep-all;}
+  body.en{word-break:normal;hyphens:none;}
+  /* 일본어는 **문절(文節)** 단위로 끊는다. 일본어에는 띄어쓰기가 없어서
+     브라우저 기본값은 글자 아무 데서나 끊는다 — 「私たちの強みで/す。」처럼
+     읽다가 걸리는 자리가 계속 생긴다. auto-phrase 는 조사·어미를 보고
+     말 단위로 끊어 준다. 이것이 일본어 가독성에 가장 크게 듣는다.
+     ⚠ 일본어일 때 body 에 클래스가 없다 (ko/en 만 붙는다). 그래서 부정으로 짚는다.
+     ⓘ 지원 안 하는 브라우저는 종전 동작 그대로다 — 나빠지지 않는다. */
+  body:not(.ko):not(.en){word-break:auto-phrase;}
+
+  /* 마지막 줄에 한두 글자만 남지 않게 — 본문은 전부 건다.
+     ⚠ 종전엔 네 곳만 걸려 있어서, 나머지 문단은 「…입니다.」 한 조각이
+       혼자 남는 줄이 흔했다. 재보니 끝줄이 폭의 7~14% 인 곳이 열 군데였다. */
+  .lead, .terms p, .terms h3, .qual .t, .qual .d, .qual .sub .sd,
+  .hero .sub, .hero .to, .ex .note, .agsum li, .agsum .off,
+  .oneask .d, .later .d, .promise-foot, .agdis, .tk-dis,
+  .smpl .foot, .smpl .note, #agIntro,
+  /* ⚠ sb() 가 문장마다 만드는 .ln 과 예시 주석의 .n 은 **자기가 블록**이다.
+     부모에만 걸면 안 먹는다 — 줄을 만드는 상자에 직접 걸어야 한다.
+     이걸 빠뜨려서 「…입니다.」 한 조각이 혼자 남는 줄이 계속 나왔다. */
+  .lead .ln, .terms p .ln, .ex .note .n, .tk-msg .ln{text-wrap:pretty;}
+  /* 제목은 줄 길이를 고르게 — 두 줄짜리 제목이 「한 단어만 아래」가 안 되게 */
+  h2, .hero h1, .ex .h, .oneask .t, .later .t, .agsum .t{text-wrap:balance;}
+  /* 짧은 덧붙임은 줄 길이를 아예 고르게 나눈다. pretty 는 마지막 줄만 손보는데,
+     서너 줄짜리에서는 그것만으로 「set.」 한 조각이 남는 걸 못 막는다.
+     ⓘ balance 는 긴 문단에는 브라우저가 알아서 적용하지 않는다 — 안전하다. */
+  /* ⚠ .later .d 는 <br> 로 줄을 직접 지정해 둔 곳이라 balance 를 걸면 안 된다.
+     지정한 줄 안에서 또 고르게 나누려 들어 끝줄이 오히려 짧아진다. */
+  .ex .note .n, .smpl .note{text-wrap:balance;}
   /* 문장을 하나씩 딱딱 떨어지게 (각 문장 = 한 블록) */
   .lead .ln, .terms p .ln{display:block;}
   .lead .ln + .ln, .terms p .ln + .ln{margin-top:8px;}
@@ -40,7 +78,12 @@
   h2{font-family:'Shippori Mincho',serif;font-size:20px;font-weight:600;letter-spacing:.18em;text-indent:.18em;text-align:center;margin-top:14px;}
   body.en h2{font-family:'Oswald',sans-serif;font-weight:500;}
   .lead{margin-top:26px;font-size:13px;color:#3d3a33;line-height:2.3;}
-  .lead b{font-weight:700;color:var(--bd);font-size:1.06em;white-space:nowrap;}
+  /* ⚠ 볼드에 white-space:nowrap 을 걸어 두고 있었다. 「預託金（デポジット）に
+     基づいて」처럼 219px 짜리 구절이 통째로 다음 줄로 밀리면서, 앞 줄에
+     큰 빈칸이 남고 문장이 뚝 끊겨 읽혔다 — 흐름을 깨던 주범이다.
+     짧은 것(금액 등)만 붙여 두는 건 _pFitBolds() 가 글자 수를 보고 한다. */
+  .lead b{font-weight:700;color:var(--bd);font-size:1.06em;}
+  .lead b.nb, .terms p b.nb{white-space:nowrap;}
   /* ── member conditions ── */
   .qual{margin-top:30px;border:1px solid var(--line);background:#fff;}
   .qual li{list-style:none;display:flex;gap:15px;align-items:flex-start;padding:18px 22px;border-bottom:1px solid var(--line);}
@@ -177,7 +220,7 @@
     font-size:11px;color:var(--sub);line-height:1.85;}
   .agsum .off b{color:var(--bd);font-weight:700;}
   .terms p{font-size:12.5px;color:var(--sub);margin-top:8px;line-height:2.05;}
-  .terms p b{color:var(--bd);font-weight:700;font-size:1.06em;white-space:nowrap;}
+  .terms p b{color:var(--bd);font-weight:700;font-size:1.06em;}
   .terms .val{font-family:'Shippori Mincho',serif;font-size:16px;font-weight:600;color:var(--bd);letter-spacing:.04em;margin-top:6px;}
   body.en .terms .val{font-family:'Oswald',sans-serif;font-weight:500;}
   /* ── partner logos ── */
@@ -452,7 +495,7 @@
   // 이 페이지의 판번호. 미리보기 바에만 보인다 (?preview=1).
   //   ⚠ partner/index.html 을 고치면 **여기도 같이 올린다.** 안 올리면
   //     「배포가 됐나」를 다시 가릴 수 없게 된다 — 그게 이걸 만든 이유다.
-  var PARTNER_BUILD   = '2026.09.03-a';
+  var PARTNER_BUILD   = '2026.09.03-b';
   var CONTACT_EMAIL   = 'dnfmeod@playtaam.com';
   var CONTACT_LINE_ID = 'dnfmeod';                              // 라인 개인 ID (소문자)
   var CONTACT_LINE    = 'https://line.me/ti/p/~' + CONTACT_LINE_ID;  // 친구추가 링크
@@ -511,7 +554,7 @@
       mealLabel: 'お食事代（コース）',
       bevLabel: 'お飲み物の最低注文額',
       bevH: 'お飲み物のご注文について',
-      bevP: 'ご来店される会員は、<b>お飲み物のご注文が必須である</b>ことを理解した上でお越しになります。最低注文額は<b>貴店との協議で設定</b>でき、平均は<b>お一人様 ¥25,000〜¥100,000++</b> です。',
+      bevP: 'ご来店される会員は、<b>お飲み物のご注文が必須である</b>ことを理解した上でお越しになります。最低注文額は<b>貴店との協議で設定</b>でき、平均はお一人様 <b>¥25,000〜¥100,000++</b> です。',
       noteLabel: 'その他の条件',
       payH: 'お支払い・プレミアムなし',
       payP: '協議済みの費用は TAAM が<b>現金で先払い</b>いたします。お客様は当日、<b>超過分のみ</b>をその場でお支払いいただきます。TAAM は貴店のお食事代に<b>一切のプレミアム（自社・外部を問わず）を上乗せいたしません</b>。売上は100%貴店のものです。',
@@ -630,7 +673,7 @@
       mealLabel: 'Dining fee (course)',
       bevLabel: 'Minimum beverage order',
       bevH: 'BEVERAGE ORDERING',
-      bevP: 'Every member arrives understanding that <b>ordering beverages is required</b>. The minimum can be <b>set in consultation with you</b> — the average is <b>$180–$700++ per guest</b>.',
+      bevP: 'Every member arrives understanding that <b>ordering beverages is required</b>. The minimum can be <b>set in consultation with you</b> — the average is <b>$180–$700++</b> per guest.',
       noteLabel: 'Other conditions',
       payH: 'PAYMENT — NO PREMIUM',
       payP: 'TAAM <b>prepays the agreed amount in cash</b>. On the day, guests settle <b>only what exceeds it</b>. TAAM adds <b>no premium of any kind</b> to your pricing — neither ours nor a third party’s. Sales are 100% yours.',
@@ -744,7 +787,7 @@
       mealLabel: '식사 가격 (코스)',
       bevLabel: '주류 최소 주문',
       bevH: '주류 주문 조건',
-      bevP: '방문하는 회원은 <b>주류 주문이 필수임을 인지</b>하고 오십니다. 최소 금액은 <b>매장과 협의로 설정</b>할 수 있으며, 평균은 <b>인당 250,000원~1,000,000원++</b> 입니다.',
+      bevP: '방문하는 회원은 <b>주류 주문이 필수임을 인지</b>하고 오십니다. 최소 금액은 <b>매장과 협의로 설정</b>할 수 있으며, 평균은 1인당 <b>250,000원~1,000,000원++</b> 입니다.',
       noteLabel: '기타 조건',
       payH: '결제 · 프리미엄 없음',
       payP: '협의한 비용은 TAAM이 <b>현금으로 선납</b>합니다. 손님은 당일 현장에서 <b>초과분만</b> 결제합니다. TAAM은 매장의 식사비에 <b>어떤 프리미엄도 붙이지 않습니다</b> — 자체든 외부든. 매출은 100% 매장의 몫입니다.',
@@ -1001,6 +1044,9 @@
       +   '<button type="button" onclick="copyEmail(this)"><span class="ce-txt">' + esc(L.mail) + '</span></button>'
       + '</div>';
 
+    // ⚠ 본문을 다 그린 **뒤에** 부른다. 그리기 전에 부르면 잴 것이 없다.
+    _pFitBolds(lang);
+
     // 파트너 로고 — 직접 읽은 캐시 우선, 없으면 RPC 반환값 폴백
     renderPartners(lang);
 
@@ -1199,6 +1245,22 @@
       + '<div class="tk-detbody" style="display:none;">' + rows + '</div>'
       + '</div>';
   }
+  // 볼드 중 **짧은 것만** 한 줄로 묶는다.
+  //   금액(¥25,000〜¥100,000++)이 줄 사이에서 갈라지면 읽다가 걸린다.
+  //   반대로 긴 구절까지 묶으면 통째로 다음 줄로 밀려 앞 줄에 큰 빈칸이
+  //   남는다 — 그게 「흐름이 끊긴다」의 정체였다. 글자 수로 가른다.
+  //   ⚠ 언어마다 한 줄에 들어가는 글자 수가 다르다. 일본어·한국어는
+  //     글자가 넓어 같은 길이도 더 많은 자리를 먹는다.
+  function _pFitBolds(lang){
+    var max = (lang === 'en') ? 22 : 10;
+    document.querySelectorAll('#page .lead b, #page .terms p b').forEach(function(el){
+      var t = (el.textContent || '').trim();
+      // 숫자·통화·범위만으로 된 것은 길어도 붙인다 (금액은 갈라지면 안 된다)
+      var moneyish = /^[0-9¥$₩,.\s〜~\-–—+()円원]+$/.test(t);
+      el.classList.toggle('nb', moneyish || t.length <= max);
+    });
+  }
+
   window.__tokenHTML = tokenHTML;   // 증서도 3개 국어인지 테스트에서 본다
   window.tokDetail = function(btn){
     var body = btn.parentNode.querySelector('.tk-detbody');
