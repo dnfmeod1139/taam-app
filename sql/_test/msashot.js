@@ -63,6 +63,11 @@ const { chromium } = require('playwright-core');
         expires_at:new Date(Date.now()-DAY).toISOString(),
         created_at:new Date(Date.now()-9*DAY).toISOString(), expired:true }
     ];
+    const SEATS = [
+      { id:'s1', display_name:'정민서', phone:'01011110000', venue_name:'스시 아라이',
+        reservation_date:'2027-06-06', party_size:2, price:300000,
+        guest_open_reason:'셰프의 요청으로', created_at:new Date().toISOString() }
+    ];
     const CORPS = [
       { id:'k1', company:'주식회사 탐', contact:'김우종 대표', phone:'01033334444',
         email:'woo@playtaam.com', memo:'연 20회 검토', status:'new',
@@ -88,6 +93,7 @@ const { chromium } = require('playwright-core');
         if (fn === 'taam_mship_settings') return Promise.resolve({ data: CFG, error: null });
         if (fn === 'taam_mship_offer_list') return Promise.resolve({ data: OFFERS, error: null });
         if (fn === 'taam_corp_list') return Promise.resolve({ data: CORPS, error: null });
+        if (fn === 'taam_guest_seat_queue') return Promise.resolve({ data: SEATS, error: null });
         if (fn === 'taam_mship_offer_create') return Promise.resolve({ data: {
           ok:true, already:false, id:'o9', token:'f'.repeat(32) }, error: null });
         if (fn === 'taam_guest_extend') return Promise.resolve({ data: {
@@ -213,6 +219,31 @@ const { chromium } = require('playwright-core');
     ok('[+90일] 을 서버에 넘긴다',
        RPC.some(x => x[0] === 'taam_guest_extend' && x[1].p_uid === 'g1'));
     ok('연장 결과를 알려준다', window.__toast && window.__toast[1] === '연장했습니다');
+
+    // ── ③-c 게스트 초대석 ────────────────────────────────────
+    window.msaTab('seat'); await sleep(300);
+    bt = document.getElementById('msaBody').textContent;
+    ok('확정 대기가 뜬다', bt.indexOf('정민서') >= 0);
+    // 확정 판단의 근거 — 무슨 이유로 연 자리인가
+    ok('연 이유를 같이 보여준다 ⭐', bt.indexOf('셰프의 요청으로') >= 0);
+    ok('매장·날짜·인원을 보여준다',
+       bt.indexOf('스시 아라이') >= 0 && bt.indexOf('2027-06-06') >= 0);
+    // ⚠ 「결제됨 = 확정」이 아니라는 것을 화면에 적어 둔다
+    ok('카드 취소는 따로라고 적는다 ⭐', bt.indexOf('토스에서 따로') >= 0);
+    ok('「일반 판매」라고 안 적는다 ⭐', bt.indexOf('일반 판매') < 0);
+
+    RPC = []; window.confirm = () => true;
+    await window.msaSeatConfirm('s1', '정민서'); await sleep(200);
+    ok('확정을 서버에 넘긴다',
+       RPC.some(x => x[0] === 'taam_guest_seat_confirm' && x[1].p_ticket_id === 's1'));
+    RPC = []; window.prompt = () => '자리가 안 나왔습니다';
+    await window.msaSeatReject('s1', '정민서'); await sleep(200);
+    const rj = RPC.filter(x => x[0] === 'taam_guest_seat_reject')[0];
+    ok('거절을 서버에 넘긴다', !!rj && rj[1].p_ticket_id === 's1');
+    ok('거절 사유를 함께 넘긴다', rj && String(rj[1].p_memo).indexOf('안 나왔') >= 0);
+    // ⚠ 앱이 환불을 하지 않는다 — 안 빠진 돈을 빠진 것으로 세면 안 된다
+    ok('앱이 환불을 하지 않는다 ⭐',
+       !RPC.some(x => /refund|cancel_pay|toss/i.test(x[0])));
 
     // ── ④-b 법인 문의 ────────────────────────────────────────
     window.msaTab('corp'); await sleep(300);

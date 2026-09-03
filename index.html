@@ -13196,6 +13196,7 @@ textarea.mapl-in{min-height:78px;resize:vertical;line-height:1.7}
     <span class="on" data-t="apply" onclick="msaTab('apply')">심사 큐</span>
     <span data-t="offer" onclick="msaTab('offer')">오퍼</span>
     <span data-t="guest" onclick="msaTab('guest')">게스트</span>
+    <span data-t="seat"  onclick="msaTab('seat')">게스트석</span>
     <span data-t="corp"  onclick="msaTab('corp')">법인</span>
     <span data-t="cfg"   onclick="msaTab('cfg')">설정</span>
   </div>
@@ -31744,6 +31745,7 @@ function msaTab(t){
   if(t === 'apply') _msaLoadApply();
   else if(t === 'offer') _msaLoadOffer();
   else if(t === 'guest') _msaLoadGuest();
+  else if(t === 'seat') _msaLoadSeat();
   else if(t === 'corp') _msaLoadCorp();
   else _msaLoadCfg();
 }
@@ -32028,6 +32030,83 @@ async function msaExtend(uid){
   } catch(e){ showToast('❌','연장하지 못했습니다', (e && e.message) || ''); }
 }
 window.msaExtend = msaExtend;
+
+// ── 게스트 초대석 ─────────────────────────────────────────────
+// ⚠ 「일반 판매」가 아니다. 화면에도 그렇게 안 적는다 —
+//   한 번 「아무나 살 수 있는 곳」이 되면 되돌릴 수 없다.
+// 확정 대기 큐가 먼저다. 손님은 이미 결제했고 답을 기다리고 있다.
+async function _msaLoadSeat(){
+  var b = document.getElementById('msaBody');
+  b.innerHTML = '<div class="msa-empty">불러오는 중…</div>';
+  try {
+    var r = await window.sb.rpc('taam_guest_seat_queue', { p_limit: 200 });
+    if(r.error) throw r.error;
+    _msa.seat = r.data || [];
+  } catch(e){
+    b.innerHTML = _msaIsMissing(e) ? _msaNeedSql('sql/guest_seat.sql')
+      : '<div class="msa-empty">불러오지 못했습니다<br>' + _msaEsc((e && e.message) || '') + '</div>';
+    return;
+  }
+  _msaRenderSeat();
+}
+function _msaRenderSeat(){
+  var b = document.getElementById('msaBody');
+  var list = _msa.seat || [];
+  document.getElementById('msaCount').textContent = list.length + '건';
+  var h = '<div class="msa-card"><div class="h"><span class="nm">확정 대기</span>'
+        + '<span class="msa-st ' + (list.length ? 'applied' : 'active') + '">'
+        +   (list.length ? list.length + '명' : '없음') + '</span></div>'
+        + '<div class="msa-sub">게스트가 결제한 자리입니다. 대표 확인 뒤 확정하세요.<br>'
+        // ⚠ 여기가 「결제됨 = 확정」이 아니라는 것을 화면에 적어 둔다
+        + '⚠ 거절하면 <b>카드 취소는 토스에서 따로</b> 해야 합니다 — 여기서는 자리만 돌려놓습니다.'
+        + '</div></div>';
+  if(!list.length){
+    h += '<div class="msa-empty">확정을 기다리는 게스트석이 없습니다.<br>'
+       + '자리를 여는 것은 티켓 화면에서 합니다.</div>';
+    b.innerHTML = h; return;
+  }
+  list.forEach(function(t){
+    h += '<div class="msa-card">'
+       + '<div class="h"><span class="nm">' + _msaEsc(t.display_name || '게스트') + '</span>'
+       +   '<span class="ph">' + _msaEsc(_ksdPhone(t.phone)) + '</span>'
+       +   '<span class="msa-st applied">확정 대기</span></div>'
+       + '<div class="msa-sub">' + _msaEsc(t.venue_name || '') + ' · '
+       +   _msaEsc(String(t.reservation_date || '').slice(0,10))
+       +   ' · ' + (t.party_size || 1) + '명'
+       +   '<br>' + _mshipWon(t.price || 0)
+       // 무슨 이유로 연 자리인지 같이 본다 — 확정 판단의 근거다
+       +   (t.guest_open_reason ? '<br>「' + _msaEsc(t.guest_open_reason) + '」' : '')
+       + '</div>'
+       + '<div class="msa-acts">'
+       +   '<button class="msa-btn on" onclick="msaSeatConfirm(\'' + t.id + '\',\''
+       +     _msaEsc(t.display_name || '').replace(/'/g, "\\'") + '\')">확정</button>'
+       +   '<button class="msa-btn" onclick="msaSeatReject(\'' + t.id + '\',\''
+       +     _msaEsc(t.display_name || '').replace(/'/g, "\\'") + '\')">자리를 못 드림</button>'
+       + '</div></div>';
+  });
+  b.innerHTML = h;
+}
+async function msaSeatConfirm(id, name){
+  if(!confirm((name || '이 분') + ' 의 자리를 확정할까요?')) return;
+  try {
+    var r = await window.sb.rpc('taam_guest_seat_confirm', { p_ticket_id: id });
+    if(r.error) throw r.error;
+    showToast('✓','확정했습니다', name || '');
+    _msaLoadSeat();
+  } catch(e){ showToast('❌','확정하지 못했습니다', (e && e.message) || ''); }
+}
+async function msaSeatReject(id, name){
+  var memo = prompt((name || '이 분') + ' 께 자리를 못 드리는 이유를 적어주세요.\n\n'
+    + '⚠ 카드 취소는 토스에서 따로 하셔야 합니다. 여기서는 자리만 돌려놓습니다.');
+  if(memo === null) return;
+  try {
+    var r = await window.sb.rpc('taam_guest_seat_reject', { p_ticket_id: id, p_memo: memo || null });
+    if(r.error) throw r.error;
+    showToast('✓','자리를 돌려놨습니다', '⚠ 토스에서 카드 취소를 해주세요');
+    _msaLoadSeat();
+  } catch(e){ showToast('❌','처리하지 못했습니다', (e && e.message) || ''); }
+}
+window.msaSeatConfirm = msaSeatConfirm; window.msaSeatReject = msaSeatReject;
 
 // ── 법인 문의 ─────────────────────────────────────────────────
 // 법인은 셀프 결제가 없다. 여기서 보는 건 「누가 물어봤나」와 상담 진행뿐이다.
@@ -41731,7 +41810,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.02-s';
+var TAAM_WEB_BUILD = '2026.09.02-t';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -57258,14 +57337,28 @@ function _tkUserTier(){
   return null;
 }
 window._tkUserTier = _tkUserTier;
-// 🆕 2026.09: 「일반공개」는 min_tier='A' 하나뿐이다.
-//   빈 값은 일반공개가 **아니다** — 기본은 유료 회원 이상이다.
-//   서버(taam_tier_is_open)와 같은 글자를 쓴다. 두 곳이 어긋나면
-//   앱에서는 보이는데 사면 막히는(또는 그 반대) 화면이 된다.
-function _tkIsOpenTicket(t){
-  return String((t && t.minTier) || '').toUpperCase() === 'A';
+// 🆕 2026.09: 게스트가 살 수 있는 자리 = **게스트 초대석**.
+//   ⚠ min_tier='A' 만으로는 더 이상 아니다. 이유·수량·매장 허락까지
+//     갖춰야 열린 것으로 친다 — 서버 가드(taam_guard_ticket_tier)와 같은
+//     조건이다. 두 곳이 어긋나면 「보이는데 못 사는」(또는 그 반대) 화면이 된다.
+//   ⚠ 「일반 판매」가 아니다. 화면에도 그렇게 안 적는다.
+function _tkIsGuestSeat(t){
+  if(!t) return false;
+  var open = (t.guestOpen === true) || (t.guest_open === true);
+  if(!open) return false;
+  var qty = parseInt((t.guestSeatQty != null ? t.guestSeatQty : t.guest_seat_qty), 10) || 0;
+  var why = String(t.guestOpenReason || t.guest_open_reason || '').trim();
+  return qty > 0 && why !== '';
 }
+window._tkIsGuestSeat = _tkIsGuestSeat;
+// 남은 이름. 부르는 곳이 여러 군데라 그대로 두고 속만 바꾼다.
+function _tkIsOpenTicket(t){ return _tkIsGuestSeat(t); }
 window._tkIsOpenTicket = _tkIsOpenTicket;
+// 게스트에게 보여줄 이유 한 줄. 이유가 서사다 — 없으면 그냥 할인이 된다.
+function _tkGuestReason(t){
+  return String((t && (t.guestOpenReason || t.guest_open_reason)) || '').trim();
+}
+window._tkGuestReason = _tkGuestReason;
 
 // 일반 회원(A) 인가 — 「유료 회원이 아니다」의 판정은 이 하나로만 한다
 function _tkIsFreeMember(){ return _tkUserTier() === 'A'; }
@@ -57277,12 +57370,14 @@ function _tkTierAllowed(t){
   var need = String((t && t.minTier) || '').toUpperCase();
   if (typeof _currentRole !== 'undefined' && _currentRole === 'superadmin') return true;
 
-  // 일반 회원(A)은 「일반공개」로 분류된 티켓만. 빈 값도 막힌다.
-  if (_tkIsFreeMember() && !_tkIsOpenTicket(t)) return false;
+  // ① 게스트(A)는 **게스트 초대석만**. 그 외에는 전부 막힌다.
+  //    ⚠ min_tier='A' 하나로는 안 된다 — 이유·수량·매장 허락까지 갖춰야 한다.
+  if (_tkIsFreeMember()) return _tkIsGuestSeat(t);
 
-  // 일반공개는 하한이 아니라 개방이다 — 등급이 없는 옛 회원도 통과한다.
-  //   여기를 빼면 min_tier='A' 가 「A 이상」으로 읽혀, 열어 놓고 못 사게 된다.
-  if (_tkIsOpenTicket(t)) return true;
+  // ② 게스트가 아닌 사람에게 min_tier='A'(일반공개)는 **하한이 아니라 개방**이다.
+  //    여기를 빼면 등급이 아예 없는 옛 회원이 열린 티켓에서 튕긴다 —
+  //    열어 놓고 못 사게 되는 정반대의 결과가 된다. (서버도 같은 줄이 있다)
+  if (need === 'A') return true;
 
   if (!need || !TIER_RANK[need]) return true;                                   // 제한 없음
   return _tierRank(_tkUserTier()) >= _tierRank(need);
@@ -57326,7 +57421,9 @@ function showTierLockPopup(t){
        ? '<div style="font-size:12px;color:#8a7b63;line-height:1.8;margin-bottom:16px;text-align:left;'
          + 'background:#fbf9f5;border:1px solid #ece8df;border-radius:12px;padding:13px 15px;">'
          + '멤버십 회원이 되시면<br>· 모든 티켓을 직접 예약하실 수 있습니다<br>'
-         + '· 셰프 계보도와 컨텐츠가 열립니다<br>· 예치금으로 바로 결제하실 수 있습니다</div>'
+         + '· 셰프 계보도와 컨텐츠가 열립니다<br>· 예치금으로 바로 결제하실 수 있습니다<br>'
+         // 게스트석의 존재를 알린다 — 「영영 못 산다」가 아니라 「가끔 열린다」
+         + '<span style="color:#9a5116;">· 게스트 초대석은 비정기적으로, 드물게 열립니다</span></div>'
          + '<button id="tlkApply" style="width:100%;padding:15px;background:#5C0A14;border:none;'
          + 'border-radius:12px;font-size:14px;font-weight:800;color:#fff;cursor:pointer;">심사 신청하기</button>'
          + '<button id="tlkMship" style="width:100%;margin-top:8px;padding:12px;background:none;border:none;'

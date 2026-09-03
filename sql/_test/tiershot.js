@@ -33,25 +33,32 @@ const { chromium } = require('playwright-core');
 
     const setTier = g => { window._currentUserGrade = g; };
     const T = m => ({ minTier: m });
+    // 게스트 초대석 — 이유·수량까지 갖춰야 열린 것으로 친다 (서버와 같은 조건)
+    const SEAT = { guestOpen: true, guestSeatQty: 2, guestOpenReason: '셰프의 요청으로' };
+    const SEAT_NOWHY = { guestOpen: true, guestSeatQty: 2, guestOpenReason: '' };
+    const SEAT_NOQTY = { guestOpen: true, guestSeatQty: 0, guestOpenReason: '셰프의 요청으로' };
 
     ok('_tkIsOpenTicket 존재',  typeof window._tkIsOpenTicket === 'function');
     ok('_tkIsFreeMember 존재',  typeof window._tkIsFreeMember === 'function');
     ok('_visMemberOk 존재',     typeof window._visMemberOk === 'function');
 
-    // ── ① 「일반공개」는 min_tier='A' 하나뿐 ─────────────────
-    ok('A 는 일반공개',        window._tkIsOpenTicket(T('A')) === true);
-    ok('소문자 a 도 일반공개', window._tkIsOpenTicket(T('a')) === true);
-    ok('빈 값은 일반공개가 아니다 ⭐', window._tkIsOpenTicket(T('')) === false);
-    ok('없으면 일반공개가 아니다',     window._tkIsOpenTicket({}) === false);
-    ok('T 는 일반공개가 아니다',       window._tkIsOpenTicket(T('T')) === false);
+    // ── ① 게스트 초대석 판정 (2026-09) ──────────────────────
+    //   ⚠ min_tier='A' 만으로는 아니다. 이유·수량까지 갖춰야 한다 —
+    //     서버 가드와 같은 조건이어야 「보이는데 못 사는」 화면이 안 생긴다.
+    ok('열고 이유·수량이 있으면 게스트석 ⭐', window._tkIsGuestSeat(SEAT) === true);
+    ok('이유가 없으면 아니다 ⭐',            window._tkIsGuestSeat(SEAT_NOWHY) === false);
+    ok('수량이 0이면 아니다 ⭐',             window._tkIsGuestSeat(SEAT_NOQTY) === false);
+    ok('min_tier=A 만으로는 아니다 ⭐',      window._tkIsGuestSeat(T('A')) === false);
+    ok('아무것도 없으면 아니다',             window._tkIsGuestSeat({}) === false);
+    ok('이유를 꺼내 준다', window._tkGuestReason(SEAT) === '셰프의 요청으로');
 
     // ── ② 등급별 판정 — 서버 t_tier.sh 와 같은 표 ────────────
     //    행: 회원 등급 / 열: 티켓 min_tier
     const cases = [
-      ['A', 'A',  true,  '일반 회원 — 일반공개는 산다'],
-      ['A', '',   false, '일반 회원 — 제한 없는 티켓은 못 산다 ⭐'],
-      ['A', 'T',  false, '일반 회원 — T 전용은 못 산다'],
-      ['A', 'M',  false, '일반 회원 — M 전용은 못 산다'],
+      ['A', 'A',  false, '게스트 — min_tier=A 만으로는 못 산다 ⭐'],
+      ['A', '',   false, '게스트 — 제한 없는 티켓은 못 산다 ⭐'],
+      ['A', 'T',  false, '게스트 — T 전용은 못 산다'],
+      ['A', 'M',  false, '게스트 — M 전용은 못 산다'],
       ['T', '',   true,  'T 회원 — 제한 없는 티켓'],
       ['T', 'A',  true,  'T 회원 — 일반공개'],
       ['T', 'T',  true,  'T 회원 — T 전용'],
@@ -66,6 +73,14 @@ const { chromium } = require('playwright-core');
       setTier(mine);
       ok(name, window._tkTierAllowed(T(need)) === want);
     });
+
+    // 게스트는 **게스트석만** 산다
+    setTier('A');
+    ok('게스트 — 게스트석은 산다 ⭐',        window._tkTierAllowed(SEAT) === true);
+    ok('게스트 — 이유 없는 자리는 못 산다 ⭐', window._tkTierAllowed(SEAT_NOWHY) === false);
+    ok('게스트 — 수량 0인 자리는 못 산다 ⭐',  window._tkTierAllowed(SEAT_NOQTY) === false);
+    setTier('M');
+    ok('M 회원도 게스트석을 살 수 있다',       window._tkTierAllowed(SEAT) === true);
 
     // 슈퍼어드민은 전부 통과
     window._currentRole = 'superadmin';
