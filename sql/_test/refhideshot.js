@@ -113,6 +113,28 @@ const fs = require('fs');
     await _mpPaintRef('A'); await wait(120);
     ok('게스트(A)에게는 켜도 안 보인다 ⭐', getComputedStyle(card).display === 'none');
     window.REFERRAL_LIVE = false;
+
+    // ── ⑦ 안내문에 「추천」이 남아 있지 않은가 ⭐ ─────────────
+    //   버튼만 감추고 안내문에 「기존 회원의 추천으로 가입」이 남아 있으면,
+    //   회원은 되는 줄 알고 찾다가 없는 것을 묻게 된다.
+    //   ⚠ EN·JA 는 KO 가 바뀔 때 따라오지 않는다. 실제로 영어 화면에는
+    //     「Priority invitation for existing VIP customers」가 남아 있었다 —
+    //     KO 에는 없어진 지 오래된 줄이다. 세 언어를 다 본다.
+    const li = () => document.querySelectorAll('#mshipScreen .mship-condition-list li');
+    ok('가입 조건이 한 줄이다 ⭐ (' + li().length + ')', li().length === 1);
+    for (const L of ['ko', 'en', 'ja']) {
+      window.currentLang = L; window._tkCurrentLang = L;
+      if (typeof setLang === 'function') { try { setLang(L); } catch (e) {} }
+      else if (typeof applyI18n === 'function') applyI18n();
+      await wait(200);
+      const t = [...li()].map(x => x.textContent.trim()).join(' | ');
+      ok('가입 조건 ' + L + ' — 추천이 없다 ⭐ 「' + t + '」',
+         t.length > 0 && !/추천|[Rr]eferral|紹介|推薦|VIP/.test(t));
+    }
+    // 게스트 초대 종료 안내도 없는 길을 알려주지 않는다
+    const src = document.documentElement.innerHTML;
+    ok('게스트 종료 안내에 추천이 없다 ⭐', src.indexOf('또는 회원의 추천으로') < 0);
+    try { setLang('ko'); } catch (e) {}
     return res;
   });
 
