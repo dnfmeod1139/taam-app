@@ -76,6 +76,9 @@ declare
   e       jsonb;
   v_type  text;
   v_amt   bigint;
+  v_pid_t text;
+  v_pid   uuid;
+  v_extra jsonb;
 begin
   if v_uid is null then
     raise exception '로그인이 필요합니다' using errcode = '42501';
@@ -149,6 +152,29 @@ begin
     for e in select * from jsonb_array_elements(p_entries) loop
       v_amt := (e->>'amount')::bigint;
       v_run := v_run + v_amt;
+
+      -- ⚠ payment_id 는 **uuid 컬럼**이고 e->>'payment_id' 는 text 다.
+      --   그냥 넣으면 값이 무엇이든 상관없이 죽는다 — 앱이 payment_id 를
+      --   아예 안 보내도 마찬가지다. 문장을 **짤 때** 걸리는 오류라서
+      --   (42804) 원장을 넘기는 모든 결제가 통째로 막혔다.
+      --   2026-09-04, 초대 티켓 결제에서 「예치금 차감 실패」로 드러났다.
+      --
+      --   그렇다고 무조건 ::uuid 로 바꾸면 안 된다. 여기 들어오는 값이
+      --   언제나 payments 행의 uuid 라는 보장이 없다 — 티켓 구매 쪽은
+      --   PortOne 결제ID('taam-...')를 payment_id 라는 이름으로 들고 다닌다.
+      --   그 값이 하루라도 섞여 들어오면 이번엔 **결제 중에** 터진다.
+      --   그래서 uuid 모양일 때만 컬럼에 넣고, 아니면 metadata 에 남긴다.
+      --   버리지 않는다 — 나중에 되짚을 수 있어야 한다.
+      v_pid_t := nullif(btrim(coalesce(e->>'payment_id', '')), '');
+      if v_pid_t ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
+        v_pid   := v_pid_t::uuid;
+        v_extra := '{}'::jsonb;
+      else
+        v_pid   := null;
+        v_extra := case when v_pid_t is null then '{}'::jsonb
+                        else jsonb_build_object('payment_ref', v_pid_t) end;
+      end if;
+
       insert into public.deposit_transactions
         (user_id, deposit_type, change_type, amount, balance_after,
          description, payment_id, metadata)
@@ -159,8 +185,9 @@ begin
         v_amt,
         v_run,
         nullif(e->>'description', ''),
-        nullif(e->>'payment_id', ''),
+        v_pid,
         coalesce(e->'metadata', '{}'::jsonb)
+          || v_extra
           || jsonb_build_object('server_written', true)
       );
     end loop;
@@ -185,13 +212,32 @@ commit;
 
 
 -- ═══════════════════════════════════════════════════════════════
--- 확인
+-- 확인 — 하나만 돌린다 (SQL Editor 는 마지막 결과만 보여준다)
 -- ═══════════════════════════════════════════════════════════════
-select p.proname                        as "함수",
-       pg_get_function_arguments(p.oid) as "인자",
-       case when p.prosecdef then 'DEFINER' else 'INVOKER' end as "권한"
-from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-where n.nspname = 'public' and p.proname = 'taam_apply_deposit_delta';
+select '① 함수가 4인자인가' as "구분",
+       case when count(*) = 1 then '✅' else '❌ ' || count(*)::text || '개' end as "상태",
+       coalesce(max(pg_get_function_arguments(p.oid)), '(없음)') as "메모"
+  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+ where n.nspname = 'public' and p.proname = 'taam_apply_deposit_delta'
+union all
+-- ⭐ 이번 사고의 핵심. text 를 uuid 컬럼에 그대로 넣던 줄이 남아 있으면
+--    원장을 넘기는 결제가 전부 「예치금 차감 실패」로 막힌다.
+select '② payment_id 를 안전하게 넣나 ⭐',
+       case when max(p.prosrc) like '%nullif(e->>''payment_id''%' then '❌ 옛 판 — 결제가 막힌다'
+            when max(p.prosrc) like '%v_pid_t::uuid%'            then '✅ 고쳐짐'
+            else '❌ 알 수 없음' end,
+       'uuid 모양일 때만 넣고 아니면 metadata.payment_ref 로'
+  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+ where n.nspname = 'public' and p.proname = 'taam_apply_deposit_delta'
+union all
+-- ⚠ 「짐작하지 말고 실제 타입을 본다」 — 이번 사고가 정확히 그것이었다
+select '③ payment_id 컬럼의 실제 타입',
+       coalesce(max(data_type), '(컬럼 없음)'),
+       'uuid 여야 정상'
+  from information_schema.columns
+ where table_schema = 'public' and table_name = 'deposit_transactions'
+   and column_name = 'payment_id'
+ order by 1;
 
 
 -- ═══════════════════════════════════════════════════════════════
