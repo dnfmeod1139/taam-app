@@ -2321,6 +2321,20 @@ html.auto-login .splash .bottom-group{display:none !important}
 .rv-date span{font-size:11px;font-weight:700;color:#c4bdb2}
 .rv-date em{font-style:normal;font-size:9.5px;font-weight:800;letter-spacing:.1em;color:#5C0A14;
   margin-left:auto;flex:none}
+/* 🆕 2026-09-04 달력 ⇄ 목록 — 「회원」 화면의 세그먼트와 같은 모양 */
+.rv-seg{display:flex;gap:4px;background:#EFECE6;border-radius:10px;padding:3px;margin-top:9px}
+.rv-seg > button{flex:1;border:0;background:none;padding:8px 4px;border-radius:8px;cursor:pointer;
+  font-family:var(--font-main);font-size:12px;font-weight:700;color:#79736a}
+.rv-seg > button.on{background:#fff;color:#17150f;box-shadow:0 1px 3px rgba(0,0,0,.07)}
+/* 초대로 들어온 건임을 카드 왼쪽에 붙인다 — 상태(결제완료/대기)와 다른 축이다 */
+.rsv-op .inv{flex:none;font-size:9.5px;font-weight:800;letter-spacing:.06em;color:#5C0A14;
+  background:#FAF1F1;border:1px solid #EBD7D7;border-radius:6px;padding:2px 5px;margin-right:5px}
+.rsv-op .inv.w{color:#8A6A16;background:#FCF6E6;border-color:#EDE0BE}
+.rv-sum{display:flex;gap:6px;margin:12px 0 2px}
+.rv-sum > div{flex:1;background:#fff;border:1px solid #e3dcce;border-radius:12px;padding:9px 6px;
+  text-align:center}
+.rv-sum b{display:block;font-size:16px;font-weight:900;color:#17150f;letter-spacing:-.01em}
+.rv-sum span{display:block;font-size:10px;font-weight:700;color:#a69f94;margin-top:2px}
 .rv-div{display:flex;align-items:center;gap:9px;margin:26px 2px 2px;color:#a69f94;
   font-size:9.5px;font-weight:800;letter-spacing:.16em}
 .rv-div:before,.rv-div:after{content:'';flex:1;height:1px;background:#e3dcce}
@@ -13035,6 +13049,9 @@ textarea.mapl-in{min-height:78px;resize:vertical;line-height:1.7}
     <!-- 🆕 2026.08-30: 시안대로 — 달을 말하지 않고 「그 날짜」를 말한다.
          종전엔 「2026. 8월 3건·9명」이었다. 운영자가 보는 건 달이 아니라 그날이다. -->
     <div id="rvMon" class="rv-day"></div>
+    <!-- 🆕 2026-09-04: 달력 ⇄ 목록. 달력은 「언제 자리가 있나」, 목록은
+         「이번 달에 누가 오나」에 답한다. 둘 다 필요해서 지우지 않고 나눈다 -->
+    <div class="rv-seg" id="rvSeg"></div>
     <!-- 검색·매장·상태는 접어 둔다. 시안의 예약 화면엔 달력과 예약만 있다 —
          늘 떠 있는 입력칸 셋이 화면의 절반을 먹고 있었다.
          지우지는 않는다. 헤더의 「찾기」로 편다.
@@ -31904,7 +31921,10 @@ function _dashRender(){
     if(st && st.s === 'cx'){ mx++; return; }
     mc++; mp += (parseInt(r.party_size, 10) || 1);
   });
-  h += '<div class="mo-grp">예약 · 이번 달</div><div class="sum" onclick="acGo(\'rv\')">'
+  // 🆕 2026-09-04: 누르면 **이번 달 명단**으로 간다. 종전엔 예약 탭의 달력이
+  //   떴는데, 달력은 「언제 자리가 있나」에 답하는 그림이라 여기서 물은
+  //   「이번 달에 누가 오나」에는 답하지 못했다. 날을 서른 번 눌러야 했다.
+  h += '<div class="mo-grp">예약 · 이번 달</div><div class="sum" onclick="rvOpenMonthList()">'
     +  '<div class="hd"><b>확정</b><span class="v">' + mc + '</span>'
     +  '<span class="u">건 · ' + mp + '명</span><span class="chev">›</span></div>'
     +  '<div class="sub">' + (mx ? '<span class="bit mute">취소 <b>' + mx + '</b></span>' : '')
@@ -34925,8 +34945,120 @@ var _rvQTimer = null;
 function _rvFresh(){
   var t = _tbToday();
   return { q:'', ym:{ y:t.getFullYear(), m:t.getMonth() }, day:_tbKey(t),
-           status:'all', rest:'', open:null };
+           status:'all', rest:'', open:null, view:'cal', kind:'all' };
 }
+
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026-09-04 「예약 · 이번 달」 — 달력 말고 **명단**
+// ═══════════════════════════════════════════════════════════════
+//   대시보드의 「예약 · 이번 달」을 누르면 달력이 떴다. 달력은 「언제 자리가
+//   있나」에 답하는 그림이라, 「이번 달에 누가 어디에 몇 시에 몇 명 오나」에는
+//   답하지 못한다. 날을 하나씩 눌러 서른 번을 확인해야 했다.
+//   달력은 그대로 두고 **목록 모드**를 더한다 (달력 ⇄ 목록 토글).
+//
+//   ⚠ 「초대 대기」는 tickets 에 없다. 초대를 보내면 reservation_invites 에만
+//     행이 생기고, 회원이 결제해야 비로소 tickets 에 INV- 건이 들어온다.
+//     그래서 예약 화면이 여태 초대 대기를 **한 건도 못 보여주고 있었다** —
+//     보낸 사람만 「발송한 예약 초대 내역」에서 따로 봐야 했다.
+//     여기서 둘을 합친다. 합쳐야 「이번 달 손님」이 한 화면에 다 있다.
+//
+//   ⚠ 결제된 초대를 reservation_invites 에서 또 읽지 않는다. 그 건은 이미
+//     tickets 에 INV- 로 있다 — 양쪽을 다 세면 **한 사람이 두 번 온다.**
+var _rvPending = null;      // 초대 대기 (status='sent') — null 이면 아직 안 읽음
+
+async function _rvLoadPending(){
+  if(!window.sb){ _rvPending = []; return; }
+  try{
+    // ⚠ 없는 컬럼을 하나라도 적으면 **조회 전체가 실패한다.** 그러면 초대 대기가
+    //   통째로 안 보이고, 화면은 「이 달엔 없다」로 조용히 거짓말한다.
+    //   expires_at 은 이 표에 없다 — 만료는 created_at + 48시간으로 센다.
+    var r = await window.sb.from('reservation_invites')
+      .select('id,restaurant_id,restaurant_name,visit_date,visit_time,pax,'
+            + 'status,invitee_user_id,total_amount,created_at,ticket_product_id')
+      .eq('status', 'sent')
+      .limit(500);
+    if(r.error){ console.warn('[rv] 초대 대기 조회 실패:', r.error.message); _rvPending = []; return; }
+    var rows = r.data || [];
+    // 매장 어드민은 자기 매장만 (RLS 가 이미 거르지만 화면도 같은 규칙을 지킨다)
+    if(_currentRole === 'admin' && _currentAdminRestId){
+      rows = rows.filter(function(x){ return String(x.restaurant_id) === String(_currentAdminRestId); });
+    }
+    // 초대받은 회원 이름 — 이름이 없으면 「누가」에 답을 못 한다
+    var nm = {};
+    var uids = Array.from(new Set(rows.map(function(x){ return x.invitee_user_id; }).filter(Boolean)));
+    if(uids.length){
+      var pr = await window.sb.from('profiles').select('id,display_name,email').in('id', uids);
+      (pr.data || []).forEach(function(p){ nm[p.id] = p.display_name || p.email || ''; });
+    }
+    // 티켓 행과 **같은 모양**으로 바꾼다. 그래야 카드·정렬·필터를 그대로 쓴다.
+    //   price 를 0 으로 두면 _tbStatus 가 「결제대기」로 읽는다 — 실제로 그렇다.
+    _rvPending = rows.map(function(x){
+      var d = (typeof _dParseDate === 'function') ? _dParseDate(String(x.visit_date)) : null;
+      return {
+        id: x.id, purchase_id: 'INVW-' + String(x.id).slice(0, 8),
+        user_id: x.invitee_user_id,
+        restaurant_id: x.restaurant_id, restaurant_name: x.restaurant_name,
+        reservation_date: x.visit_date, visit_time: x.visit_time,
+        party_size: x.pax, price: 0, status: 'invite_sent',
+        buyer_name: nm[x.invitee_user_id] || '', extra_data: {},
+        _invite: true, _amount: parseInt(x.total_amount, 10) || 0,
+        // 좌석을 잡아 둔 초대만 48시간 뒤 만료된다. 연결 없는 초대는 안 끝난다 —
+        //   그런데 「만료까지 —」라고 적으면 끝나는 줄로 읽는다. 아예 안 적는다.
+        _expAt: x.ticket_product_id ? x.created_at : '',
+        _d: (d && !isNaN(d.getTime())) ? _tbKey(d) : '',
+        _m: _tbMins(x.visit_time)
+      };
+    }).filter(function(x){ return x._d; });
+  }catch(e){
+    console.warn('[rv] 초대 대기 예외:', e && e.message);
+    _rvPending = [];
+  }
+}
+
+// 이 예약이 어떻게 잡혔나 — 목록에서 갈라 보는 유일한 기준
+function _rvKind(r){
+  if(r.status === 'cancelled' || r.status === 'canceled') return 'cx';
+  if(r._invite) return 'wait';                                   // 초대 대기
+  var p = String(r.purchase_id || '');
+  if(p.indexOf('INV-') === 0 || p.indexOf('INVH-') === 0) return 'done';  // 초대 완료
+  return 'buy';                                                  // 회원이 직접 산 것
+}
+var RV_KIND_LABEL = { buy:'예약', wait:'초대 대기', done:'초대 완료', cx:'취소' };
+
+// 그 달의 모든 것 — 티켓 + 초대 대기. 매장 필터까지 먹인다.
+function _rvMonthAll(){
+  var mk = _rvMonKey(_rvState.ym);
+  var all = (_tbRows || []).concat(_rvPending || []);
+  return all.filter(function(r){
+    if(String(r._d || '').indexOf(mk) !== 0) return false;
+    if(_rvState.rest && String(r.restaurant_id || r.restaurant_name || '') !== _rvState.rest) return false;
+    return true;
+  });
+}
+
+// 대시보드의 「예약 · 이번 달」이 부르는 자리 — 목록으로 연다
+async function rvOpenMonthList(){
+  await rvOpen();
+  _rvState.view = 'list';
+  _rvState.kind = 'all';
+  if(_rvPending === null){
+    _rvRender();                       // 티켓만으로 먼저 그린다 — 기다리게 하지 않는다
+    await _rvLoadPending();
+  }
+  _rvRender();
+}
+window.rvOpenMonthList = rvOpenMonthList;
+
+async function rvSetView(v){
+  _rvState.view = v;
+  _rvState.open = null;
+  if(v === 'list' && _rvPending === null){ _rvRender(); await _rvLoadPending(); }
+  _rvRender();
+}
+window.rvSetView = rvSetView;
+
+function rvSetKind(k){ _rvState.kind = k; _rvState.open = null; _rvRenderBody(); }
+window.rvSetKind = rvSetKind;
 
 async function rvOpen(){
   var isSuper = (typeof _isSuperAdmin === 'function') && _isSuperAdmin();
@@ -35002,7 +35134,20 @@ function _rvSort(list){
 }
 
 // ── 그리기 ──
-function _rvRender(){ _rvRenderMon(); _rvRenderFilters(); _rvRenderBody(); }
+function _rvRender(){ _rvRenderMon(); _rvRenderSeg(); _rvRenderFilters(); _rvRenderBody(); }
+
+// 달력 ⇄ 목록. 검색 중에는 감춘다 — 검색 결과는 이미 목록이다
+function _rvRenderSeg(){
+  var el = document.getElementById('rvSeg');
+  if(!el) return;
+  if(_rvSearching()){ el.style.display = 'none'; return; }
+  el.style.display = '';
+  var v = _rvState.view || 'cal';
+  el.innerHTML = [['cal','달력'], ['list','이번 달 명단']].map(function(x){
+    return '<button class="' + (v === x[0] ? 'on' : '') + '" onclick="rvSetView(\'' + x[0] + '\')">'
+      + x[1] + '</button>';
+  }).join('');
+}
 
 // 월 이동 줄 — 검색 중에는 감춘다. 검색은 달을 넘는 질문이라 「8월」이 붙어 있으면
 //   결과가 그 달만인 줄로 읽힌다
@@ -35024,11 +35169,16 @@ function _rvRenderMon(){
 
   // 그 달에 예약이 몇 건인지 — 달을 넘길 때마다 「여긴 몇 건」이 바로 보인다.
   //   취소는 빼고 센다. 자리를 차지하는 것만이 예약이다.
+  // 🆕 2026-09-04: 명단 모드에서는 **아래 타일과 같은 것**을 센다.
+  //   달력 모드는 티켓만 센다(달력이 그리는 것이 그것뿐이라 그렇다). 그런데
+  //   명단 모드는 초대 대기까지 보여주므로, 머리줄이 티켓만 세면 한 화면에
+  //   숫자가 두 개 있게 된다 — 「3건」이라 써 놓고 카드는 다섯 장이었다.
+  var src = (_rvState.view === 'list')
+    ? _rvMonthAll()
+    : (_tbRows || []).filter(function(r){ return String(r._d || '').indexOf(mk) === 0; });
   var cnt = 0, pax = 0;
-  (_tbRows || []).forEach(function(r){
-    if(String(r._d || '').indexOf(mk) !== 0) return;
-    var st = _tbStatus(r);
-    if(st && st.s === 'cx') return;
+  src.forEach(function(r){
+    if(_rvKind(r) === 'cx') return;              // 취소는 자리를 차지하지 않는다
     cnt++; pax += (parseInt(r.party_size, 10) || 1);
   });
   var sub = cnt ? (cnt + '건 · ' + pax + '명') : '예약 없음';
@@ -35217,6 +35367,10 @@ function _rvRenderBody(){
     return;
   }
 
+  // ── 이번 달 명단 ── 🆕 2026-09-04
+  //   누가 · 어디 · 몇 시 · 몇 명, 그리고 그게 예약인지 초대인지.
+  if(_rvState.view === 'list'){ el.innerHTML = _rvMonthListHtml(today); return; }
+
   // ── 달력 ──
   var ym = _rvState.ym;
   var monthAll = _rvApply(_rvBase());          // 이 달 + 매장·상태 필터
@@ -35276,6 +35430,99 @@ function _rvRenderBody(){
   h += _rvDayHead(_rvState.day, dayRows, today);
   dayRows.forEach(function(r){ h += _rvRow(r, r._d < today); });
   el.innerHTML = h;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026-09-04 이번 달 명단
+// ═══════════════════════════════════════════════════════════════
+//   위: 예약 / 초대 대기 / 초대 완료 / 취소 를 세어 보여주고, 눌러 고른다.
+//   아래: 날짜순으로 죽. 카드는 「오늘」·「예약」의 것을 그대로 쓴다 —
+//         여기만 새로 그리면 같은 예약이 화면마다 다르게 보인다.
+function _rvMonthListHtml(today){
+  var all = _rvMonthAll();
+  var head = document.getElementById('rvCount');
+
+  // ── 세어 보여주기 ──
+  var cnt = { buy:0, wait:0, done:0, cx:0 }, pax = { buy:0, wait:0, done:0, cx:0 };
+  all.forEach(function(r){
+    var k = _rvKind(r);
+    cnt[k]++; pax[k] += (parseInt(r.party_size, 10) || 1);
+  });
+  var live = cnt.buy + cnt.wait + cnt.done;
+  var livePax = pax.buy + pax.wait + pax.done;
+  if(head) head.textContent = live ? (live + '건 · ' + livePax + '명') : '';
+
+  var h = '<div class="rv-sum">'
+    + [['buy','예약'], ['wait','초대 대기'], ['done','초대 완료']].map(function(x){
+        return '<div><b>' + cnt[x[0]] + '</b><span>' + x[1] + '</span></div>';
+      }).join('')
+    + (cnt.cx ? '<div><b>' + cnt.cx + '</b><span>취소</span></div>' : '')
+    + '</div>';
+
+  // 갈래 칩 — 0건인 것은 만들지 않는다 (「오늘」과 같은 규칙)
+  var chips = [['all', '전체', live + cnt.cx]];
+  ['buy','wait','done','cx'].forEach(function(k){
+    if(cnt[k]) chips.push([k, RV_KIND_LABEL[k], cnt[k]]);
+  });
+  if(_rvState.kind !== 'all' && !cnt[_rvState.kind]) _rvState.kind = 'all';
+  if(chips.length > 2){
+    h += '<div class="tb-chips" style="margin:10px 0 0;">' + chips.map(function(c){
+      return '<button class="tb-chip' + (_rvState.kind === c[0] ? ' on' : '') + '" '
+        + 'onclick="rvSetKind(\'' + c[0] + '\')">' + c[1] + '<span class="k">' + c[2] + '</span></button>';
+    }).join('') + '</div>';
+  }
+
+  // ── 명단 ──
+  var list = all.filter(function(r){
+    return _rvState.kind === 'all' ? true : _rvKind(r) === _rvState.kind;
+  }).sort(function(a, b){
+    return a._d < b._d ? -1 : (a._d > b._d ? 1 : (a._m - b._m));
+  });
+
+  if(!list.length){
+    return h + '<div class="tb-empty" style="margin-top:16px;">'
+      + (all.length ? '이 갈래에는 없습니다.' : '이 달에는 예약이 없습니다.')
+      + (_rvPending === null
+          ? '<br><span style="color:#a69f94">초대 대기를 불러오는 중…</span>' : '')
+      + '</div>';
+  }
+
+  var cur = null;
+  list.forEach(function(r){
+    if(r._d !== cur){ cur = r._d; h += _rvDayHead(cur, [], today); }
+    h += _rvListRow(r, r._d < today);
+  });
+  if(_rvPending === null){
+    h += '<div class="tb-empty" style="margin-top:14px;font-size:11.5px;">초대 대기를 불러오는 중…</div>';
+  }
+  return h;
+}
+
+// 명단의 한 줄. 초대 대기는 tickets 에 없어 펼칠 상세가 없다 — 누르지 않게 둔다.
+function _rvListRow(r, isPast){
+  var k = _rvKind(r);
+  var flag = (k === 'done') ? '<span class="inv">초대</span>'
+           : (k === 'wait') ? '<span class="inv w">초대 대기</span>' : '';
+  if(isPast && k !== 'cx') flag += '<span class="done">지남</span>';
+  if(k === 'wait'){
+    // 좌석을 잡아 둔 초대는 발송 48시간 뒤 만료된다. 남은 시간을 적어 둔다 —
+    //   이 줄이 없으면 「왜 어제 것이 오늘 사라졌지」가 된다.
+    var bits = [];
+    if(r._expAt){
+      var ms = new Date(r._expAt).getTime() + 48 * 3600 * 1000 - Date.now();
+      if(!isNaN(ms)) bits.push(ms > 0 ? ('만료까지 ' + Math.max(1, Math.round(ms / 3600000)) + '시간')
+                                      : '만료됨 — 좌석이 풀립니다');
+    }
+    if(r._amount) bits.push('청구 ' + _tbWon(r._amount));
+    return '<div class="tb-rsv" style="cursor:default;">'
+      + _tbCard(r, { flag: flag })
+      + (bits.length ? '<span class="memo">' + _tbEsc(bits.join(' · ')) + '</span>' : '')
+      + '</div>';
+  }
+  var esc = _tbEsc(String(r.purchase_id || '')).replace(/'/g, "\\'");
+  return '<button class="tb-rsv' + (k === 'cx' ? ' cx' : '') + (isPast && k !== 'cx' ? ' past' : '') + '" '
+    + 'onclick="rvSetView(\'cal\');rvPickDay(\'' + r._d + '\');rvToggleRow(\'' + esc + '\')">'
+    + _tbCard(r, { flag: flag }) + '</button>';
 }
 
 function _rvRow(r, isPast){
@@ -42872,7 +43119,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.04-d';
+var TAAM_WEB_BUILD = '2026.09.04-e';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
