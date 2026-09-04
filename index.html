@@ -13188,7 +13188,7 @@ textarea.mapl-in{min-height:78px;resize:vertical;line-height:1.7}
      날짜별로 묶고 「이 날 전부 방문」을 둔다 — 대개 다 온다. 안 온 사람만 노쇼로. -->
 <div id="visScreen" class="sub-screen" data-lang-lock="ko" style="display:none;">
   <div class="sub-header">
-    <button class="sub-back" onclick="acBack()">←</button>
+    <button class="sub-back" onclick="closeSubPage('visScreen')">←</button>
     <div class="sub-title">방문 기록</div>
     <div id="visCount" style="margin-left:auto;font-family:var(--font-main);font-size:11.5px;font-weight:700;color:#79736a;"></div>
     <button class="ac-x" onclick="acExit()" aria-label="앱으로 나가기" title="앱으로">✕</button>
@@ -21641,6 +21641,7 @@ function closeTicketAccessMgmt(){
   if(modal) modal.style.display = 'none';
   _tamSelectedTicketId = null;
   _tamAccessRows = [];
+  if(typeof _acPopupClosed === 'function') _acPopupClosed();
 }
 window.closeTicketAccessMgmt = closeTicketAccessMgmt;
 
@@ -30882,7 +30883,7 @@ async function paxChangeOpen(purchaseId){
   var el = document.createElement('div');
   el.id = 'paxChangeModal';
   el.style.cssText = 'position:fixed;inset:0;z-index:9995;background:rgba(20,16,12,.6);display:flex;align-items:center;justify-content:center;padding:18px;';
-  el.onclick = function(ev){ if(ev.target === el) el.remove(); };
+  el.onclick = function(ev){ if(ev.target === el) _acOverlayClose(el.id); };
   el.innerHTML =
     '<div style="width:100%;max-width:400px;max-height:86vh;overflow-y:auto;background:#FBF9F4;border-radius:18px;padding:22px 22px 24px;font-family:var(--font-main);-webkit-overflow-scrolling:touch;" data-lang-lock="ko">'
     + '<div style="display:flex;justify-content:space-between;align-items:center;">'
@@ -33363,7 +33364,11 @@ window.kskOpen = kskOpen;
 // 목록 안에서는 목록으로, 목록에서는 대시보드로 — 뒤로가기가 한 단계씩 물러난다
 function kskBack(){
   if(_kskCur){ _kskCur = null; _kskRenderList(); return; }
-  if(typeof acBack === 'function') acBack();
+  // ⚠ acBack() 은 「대시보드로」다. 이 화면은 탭이 아니라 메뉴에서 들어온 것이라,
+  //   그러면 더보기에서 왔든 어디서 왔든 늘 대시보드로 떨어진다.
+  //   closeSubPage 를 거치면 서 있던 탭으로 돌아간다 (msaBack 과 같은 길).
+  if(typeof closeSubPage === 'function') closeSubPage('kskScreen');
+  else document.getElementById('kskScreen').style.display = 'none';
 }
 window.kskBack = kskBack;
 
@@ -36952,6 +36957,12 @@ var AC_SCREEN = { today:'todayBoardScreen', rv:'rvScreen', tkb:'tkbScreen', mb:'
 var AC_EXTRA_SCREENS = ['visScreen', 'kskScreen'];
 
 function _acCloseOthers(keep){
+  // 🆕 2026-09-04: 지금 어느 탭을 여는지 **여기서** 적어 둔다.
+  //   종전엔 acGo() 만 적었다. 그래서 탭 바로 옮길 때는 남았지만, 어드민
+  //   메뉴에서 moOpen()·tbOpen() 을 직접 부르는 길에서는 안 남아, 그 뒤에
+  //   연 항목에서 뒤로가기를 하면 「전 단계」가 아니라 대시보드로 떨어졌다.
+  //   탭을 여는 함수는 전부 이 함수를 자기 열쇠와 함께 부른다 — 한 곳이면 된다.
+  if(keep && AC_SCREEN[keep]) _acLastTab = keep;
   Object.keys(AC_SCREEN).forEach(function(k){
     if(k !== keep && typeof closeSubPage === 'function') closeSubPage(AC_SCREEN[k]);
   });
@@ -37039,6 +37050,18 @@ function _acPopupClosed(){
   if(typeof _acEnsureConsole === 'function') _acEnsureConsole();
 }
 window._acPopupClosed = _acPopupClosed;
+
+// 🆕 2026-09-04: 코드로 만들어 붙인 판(popAdmin · popHistory · tkSaleMgr…)을 닫는다.
+//   이런 판은 DOM 에 미리 있지 않아 닫는 함수도 없다. 그래서 여기저기서
+//   `document.getElementById('...').remove()` 를 손으로 적고 있었고, 적는
+//   자리마다 복귀를 빠뜨렸다 — 닫으면 「전체 메뉴」에 남았다.
+//   지우는 것과 돌아가는 것을 한 함수로 묶는다. 새 판을 만들면 이것을 쓴다.
+function _acOverlayClose(id){
+  var el = document.getElementById(id);
+  if(el) el.remove();
+  _acPopupClosed();
+}
+window._acOverlayClose = _acOverlayClose;
 window._acEnsureConsole = _acEnsureConsole;
 
 // 🆕 2026.09-01: 어드민·슈퍼어드민에게 **대시보드가 마이페이지**다.
@@ -39485,7 +39508,8 @@ function qaOpenEdit(){
   qaRenderEdit();
   var m = document.getElementById('qaEditModal'); if(m) m.style.display='flex';
 }
-function qaCloseEdit(){ var m=document.getElementById('qaEditModal'); if(m) m.style.display='none'; }
+function qaCloseEdit(){ var m=document.getElementById('qaEditModal'); if(m) m.style.display='none';
+  if(typeof _acPopupClosed === 'function') _acPopupClosed(); }
 
 function qaRenderEdit(){
   var sel = document.getElementById('qaSelList');
@@ -42087,6 +42111,7 @@ function openReservationInviteScreen(){
 
 function closeReservationInviteScreen(){
   document.getElementById('riScreen').style.display = 'none';
+  if(typeof _acPopupClosed === 'function') _acPopupClosed();
 }
 
 // v1.53.25: 레스토랑 검색 (이름/장르/주소/지역/도시 매칭, 최대 12개)
@@ -42847,7 +42872,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.04-b';
+var TAAM_WEB_BUILD = '2026.09.04-c';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -43187,6 +43212,7 @@ window.openTicketBroadcastScreen = openTicketBroadcastScreen;
 
 function closeTicketBroadcastScreen(){
   document.getElementById('ticketBroadcastScreen').style.display = 'none';
+  if(typeof _acPopupClosed === 'function') _acPopupClosed();
 }
 window.closeTicketBroadcastScreen = closeTicketBroadcastScreen;
 
@@ -45663,11 +45689,11 @@ function tkSaleMgrOpen(){
   var el = document.createElement('div');
   el.id = 'tkSaleMgr';
   el.style.cssText = 'position:fixed;inset:0;z-index:9100;background:rgba(20,16,12,.55);display:flex;align-items:center;justify-content:center;padding:18px;';
-  el.onclick = function(ev){ if(ev.target === el) el.remove(); };
+  el.onclick = function(ev){ if(ev.target === el) _acOverlayClose(el.id); };
   var inner = '<div style="width:100%;max-width:440px;max-height:82vh;overflow-y:auto;background:#FBF9F4;border-radius:18px;padding:20px 20px 24px;font-family:var(--font-main);-webkit-overflow-scrolling:touch;" data-lang-lock="ko">'
     + '<div style="display:flex;justify-content:space-between;align-items:center;">'
       + '<div style="font-size:16px;font-weight:800;color:#1a1a18;">⏰ 판매 오픈 관리</div>'
-      + '<button onclick="document.getElementById(\'tkSaleMgr\').remove()" style="border:0;background:none;font-size:20px;color:#8a8580;padding:2px 6px;cursor:pointer;">×</button></div>'
+      + '<button onclick="_acOverlayClose(\'tkSaleMgr\')" style="border:0;background:none;font-size:20px;color:#8a8580;padding:2px 6px;cursor:pointer;">×</button></div>'
     + '<div style="font-size:11px;color:#8a8580;margin-top:3px;line-height:1.6;">예약 오픈은 시간이 되면 자동 공개됩니다 — 따로 열 필요 없습니다.</div>'
     + sec('오픈 예약', sched, 'sched', '예약된 티켓 없음')
     + sec('비공개 보관', drafts, 'draft', '보관 중인 티켓 없음')
@@ -46388,7 +46414,7 @@ async function popAdminOpen(preset){
   var el = document.createElement('div');
   el.id = 'popAdmin';
   el.style.cssText = 'position:fixed;inset:0;z-index:9200;background:rgba(20,16,12,.55);display:flex;align-items:center;justify-content:center;padding:16px;';
-  el.onclick = function(ev){ if(ev.target === el) el.remove(); };
+  el.onclick = function(ev){ if(ev.target === el) _acOverlayClose(el.id); };
   // ⚠ 매진·만료는 목록에 올리지 않는다. 잔여 좌석은 옵션에 적어 고를 때 보이게 한다
   var _sellable = _paSellableTickets();
   var tkOpts = '<option value="">연결 안 함</option>';
@@ -46803,7 +46829,7 @@ async function paPublish(asNew){
     }catch(_he){ console.warn('[popup] 발행 내역 저장 실패', _he); }
   }
   showToast('✓', asNew ? '발행 완료' : '저장 완료', asNew ? '모든 회원에게 새로 표시됩니다' : '내용이 수정되었습니다');
-  var el = document.getElementById('popAdmin'); if(el) el.remove();
+  _acOverlayClose('popAdmin');
 }
 window.paPublish = paPublish;
 
@@ -46848,12 +46874,12 @@ async function popHistoryOpen(){
   var el = document.createElement('div');
   el.id = 'popHistory';
   el.style.cssText = 'position:fixed;inset:0;z-index:9200;background:rgba(20,16,12,.55);display:flex;align-items:center;justify-content:center;padding:16px;';
-  el.onclick = function(ev){ if(ev.target === el) el.remove(); };
+  el.onclick = function(ev){ if(ev.target === el) _acOverlayClose(el.id); };
   el.innerHTML =
     '<div style="width:100%;max-width:420px;max-height:84vh;overflow-y:auto;background:#FBF9F4;border-radius:18px;padding:20px 20px 24px;font-family:var(--font-main);-webkit-overflow-scrolling:touch;" data-lang-lock="ko">'
     + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">'
       + '<div style="font-size:16px;font-weight:800;color:#1a1a18;">📜 이벤트 발행 내역</div>'
-      + '<button onclick="document.getElementById(\'popHistory\').remove()" style="border:0;background:none;font-size:20px;color:#8a8580;padding:2px 6px;cursor:pointer;">×</button></div>'
+      + '<button onclick="_acOverlayClose(\'popHistory\')" style="border:0;background:none;font-size:20px;color:#8a8580;padding:2px 6px;cursor:pointer;">×</button></div>'
     + '<div style="font-size:11px;color:#8a8580;margin-bottom:10px;">「불러오기」로 지난 내용을 편집기에 올려 그대로 재발행하거나 고쳐서 발행할 수 있습니다.</div>'
     + rows
     + '</div>';
@@ -46876,7 +46902,7 @@ async function paTakeDown(){
   if(res.error){ showToast('⚠','저장 실패', res.error.message.slice(0,60)); return; }
   _homePopCfg = c;
   showToast('✓','팝업 내림','회원에게 더 이상 표시되지 않습니다');
-  var el = document.getElementById('popAdmin'); if(el) el.remove();
+  _acOverlayClose('popAdmin');
 }
 window.paTakeDown = paTakeDown;
 
@@ -80066,6 +80092,8 @@ function closeLineageAdmin() {
     try {
       if(typeof closeAllAdminScreens === 'function') closeAllAdminScreens();
     } catch(e){ console.warn('[closeLineageAdmin] closeAll failed:', e); }
+    // 여기서 멈추면 「전체 메뉴」에 남는다 — 이 화면은 바탕이지 목적지가 아니다
+    if(typeof _acPopupClosed === 'function') _acPopupClosed();
   });
 }
 
