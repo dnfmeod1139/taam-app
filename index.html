@@ -42872,7 +42872,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.04-c';
+var TAAM_WEB_BUILD = '2026.09.04-d';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -52300,6 +52300,7 @@ var TX_MAP = {
   '예치금 부족':['Not enough deposit','デポジット不足'],
   '잔액이 부족합니다':['Your balance is not enough','残高が不足しています'],
   '예치금 차감 실패':['Deposit could not be charged','デポジットの引き落としに失敗しました'],
+  '잠시 후 다시 시도해주세요 — 계속되면 문의해 주세요':['Please try again in a moment. If it keeps happening, contact us.','しばらくしてからもう一度お試しください。続く場合はお問い合わせください。'],
   '잔액 차감이 차단됨 — RLS 정책 확인 필요':['We could not charge your deposit. Please contact us.','デポジットを引き落とせませんでした。お問い合わせください。'],
   '예약 완료':['Reservation complete','予約完了'],
   '초대 결제가 완료되었습니다 (구매 내역 + 사용 내역 자동 반영)':['Your invitation payment is complete — it now appears in your purchase and usage history.','招待の決済が完了しました。購入履歴・利用履歴に自動反映されます。'],
@@ -61896,6 +61897,38 @@ function _toastAutoMap(s){
 }
 window._toastAutoMap = _toastAutoMap;
 
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026-09-04: 서버가 준 원문을 회원에게 그대로 보여주지 않는다
+// ═══════════════════════════════════════════════════════════════
+//   초대 티켓 결제가 막혔을 때 회원 화면에 이렇게 떴다.
+//     예치금 차감 실패
+//     column "payment_id" is of type uuid but expression is of type text
+//   제목은 우리가 쓴 한국어라 번역이 되는데, 본문은 Postgres 가 준 문장이라
+//   **번역 대상이 아니다.** 한국어로 쓰는 회원에게도 그 줄만 영어로 나온다.
+//   언어 설정 문제가 아니라, 번역할 수 없는 것을 실어 보낸 문제다.
+//
+//   그리고 번역보다 앞선 문제가 있다 — 저 줄은 **DB 내부 구조**다.
+//   컬럼 이름과 타입, 정책 이름, 함수 시그니처가 회원에게 보일 이유가 없다.
+//
+//   ⚠ 어드민에게는 원문을 그대로 준다. 원문이 없으면 고칠 수가 없다.
+//     회원에게만 가린다. 가린 원문은 콘솔에 남는다.
+//
+//   ⚠ 「영어면 감춘다」로 하지 않는다. 매장 이름·구매ID 처럼 우리가 일부러
+//     실어 보내는 영문이 있다. **기계가 뱉은 모양**일 때만 바꾼다.
+var _TOAST_MACHINE_RE = /(column|relation|constraint|function|operator|schema|table) "|is of type|violates |permission denied|row-level security|duplicate key|syntax error|invalid input|does not exist|null value in column|schema cache|JWT|PGRST|Failed to fetch|NetworkError|Load failed|TypeError|ReferenceError|SyntaxError|RangeError|undefined is not|null is not an object|Cannot read (properties|property)/i;
+
+function _toastSafeMsg(msg){
+  if(typeof msg !== 'string' || !msg) return msg;
+  var role = (typeof _currentRole !== 'undefined') ? _currentRole : 'user';
+  if(role === 'superadmin' || role === 'admin') return msg;      // 원문이 필요한 쪽
+  // 한글·가나가 섞여 있으면 우리가 쓴 문장이다 (번역은 이 뒤에서 돈다)
+  if(/[가-힣ㄱ-ㅎㅏ-ㅣ぀-ヿ一-鿿]/.test(msg)) return msg;
+  if(!_TOAST_MACHINE_RE.test(msg)) return msg;
+  console.warn('[toast] 서버 원문은 회원에게 감춤:', msg);
+  return '잠시 후 다시 시도해주세요 — 계속되면 문의해 주세요';
+}
+window._toastSafeMsg = _toastSafeMsg;
+
 function showToast(icon,title,msg,opts){
   // opts: { category, persist, native }
   //   category: 'fav'|'ticket'|'charge'|'use'|'refund'|'remind'|'system' (기본 'system')
@@ -61918,6 +61951,9 @@ function showToast(icon,title,msg,opts){
   if (typeof msg === 'string' && msg.indexOf('t:') === 0 && typeof t === 'function') {
     msg = t(msg.slice(2));
   }
+  // 🆕 2026-09-04: 번역보다 **먼저** 거른다. 여기서 걸러야 우리가 쓴 한국어와
+  //   서버 원문이 아직 구분된다 — 자동 매핑을 먼저 태우면 둘 다 영어가 된다.
+  msg = _toastSafeMsg(msg);
   // 🆕 자주 등장하는 KO 문자열 → 자동 매핑 (EN/JA 사용자에게도 번역되어 보이도록)
   if (typeof _toastAutoMap === 'function') {
     title = _toastAutoMap(title);
