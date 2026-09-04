@@ -70,6 +70,16 @@ h1{margin-top:32px;font-size:20px;font-weight:700;letter-spacing:-.01em;line-hei
   var qs = new URLSearchParams(location.search);
   var CODE = (qs.get('c') || qs.get('code') || '').trim();
 
+  // ── 🆕 2026-09-04 추천권은 아직 열지 않는다 ──────────────────────
+  //   앱의 REFERRAL_LIVE 와 **짝**이다. 앱에서 발급을 막아도 이미 나간
+  //   링크는 이 페이지로 그대로 들어온다 — 그래서 여기도 같이 닫는다.
+  //   ⚠ 「없는 추천」이라고 말하지 않는다. 코드는 멀쩡한데 거짓말이 되고,
+  //     받은 사람은 추천해 준 회원에게 잘못을 묻게 된다.
+  //   ⚠ 서버를 부르기 **전에** 멈춘다. taam_ref_public 이 열어봄(opened) 을
+  //     기록하므로, 불러 놓고 안 보여주면 회원 화면에는 「열어봄」이 뜬다.
+  //   열 때: 이 값 true + index.html 의 REFERRAL_LIVE 도 true.
+  var REF_LIVE = false;
+
   var T = {
     ko:{ h1:'{n}○님의 추천', h1x:'멤버십 추천',
       lead:'탐 멤버십 심사에<br>귀하를 추천하셨습니다.',
@@ -79,6 +89,7 @@ h1{margin-top:32px;font-size:20px;font-weight:700;letter-spacing:-.01em;line-hei
       exp_t:'추천 기간이 지났습니다', exp_d:'추천해 주신 분께 다시 말씀해 주세요.',
       used_t:'이미 사용된 추천입니다', used_d:'심사 결과는 신청하신 연락처로 안내드립니다.',
       nf_t:'추천을 찾을 수 없습니다', nf_d:'주소가 잘렸을 수 있습니다. 받으신 링크를 다시 확인해 주세요.',
+      soon_t:'아직 준비 중입니다', soon_d:'추천 초대는 곧 열립니다. 추천해 주신 분을 통해 다시 안내드리겠습니다.',
       err_t:'잠시 문제가 있었습니다', err_d:'잠시 후 다시 열어 주세요.' },
     en:{ h1:'Referred by {n}.', h1x:'A referral to TAAM',
       lead:'You have been referred for<br>TAAM membership review.',
@@ -88,6 +99,7 @@ h1{margin-top:32px;font-size:20px;font-weight:700;letter-spacing:-.01em;line-hei
       exp_t:'This referral has expired', exp_d:'Please ask the member who referred you.',
       used_t:'This referral has been used', used_d:'We will contact you with the outcome.',
       nf_t:'We could not find this referral', nf_d:'The address may have been cut off. Please check the link you received.',
+      soon_t:'Not open just yet', soon_d:'Referral invitations open shortly. The member who referred you will be in touch again.',
       err_t:'Something went wrong', err_d:'Please open the link again shortly.' },
     ja:{ h1:'{n}様からのご推薦', h1x:'メンバーシップのご推薦',
       lead:'TAAMメンバーシップの審査に<br>ご推薦いただきました。',
@@ -97,6 +109,7 @@ h1{margin-top:32px;font-size:20px;font-weight:700;letter-spacing:-.01em;line-hei
       exp_t:'ご推薦の期間が過ぎました', exp_d:'ご推薦くださった方にお伝えください。',
       used_t:'すでに使用されたご推薦です', used_d:'審査結果はご記入の連絡先にご案内いたします。',
       nf_t:'ご推薦が見つかりません', nf_d:'アドレスが途中で切れている可能性がございます。',
+      soon_t:'ただいま準備中でございます', soon_d:'ご推薦のご招待は間もなく開始いたします。ご推薦くださった方より、改めてご案内申し上げます。',
       err_t:'問題が発生しました', err_d:'しばらくしてからもう一度お開きください。' }
   };
   var LANG = 'ko';
@@ -173,6 +186,7 @@ h1{margin-top:32px;font-size:20px;font-weight:700;letter-spacing:-.01em;line-hei
   (async function(){
     LANG = pickLang();
     document.documentElement.lang = LANG;
+    if(!REF_LIVE){ state('·','soon_t','soon_d'); return; }
     if(!CODE){ state('🔗','nf_t','nf_d'); return; }
     try {
       var r = await rpc('taam_ref_public', { p_code: CODE });

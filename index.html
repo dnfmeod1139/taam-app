@@ -6685,6 +6685,26 @@ function newHomeEnabled(){
 }
 window.newHomeEnabled = newHomeEnabled;
 
+// ═══════════════════════════════════════════
+// 🆕 2026-09-04 회원 추천권 — 안전 스위치
+//   회원이 추천 코드를 만들어 남에게 보내는 기능. **아직 열 때가 아니다.**
+//   지우지 않고 플래그 뒤에 둔다 — CARD_PAY_LIVE·NEW_HOME_LIVE 와 같은 모양.
+//
+//   ⚠ 끄면 세 곳이 같이 닫힌다. 하나라도 열려 있으면 닫은 것이 아니다.
+//     ① 마이페이지 「나의 추천권」 카드 — 발급·링크 복사가 여기서 시작된다
+//     ② 슈퍼어드민 설정의 추천권 두 줄 — 닫아 둔 기능의 설정값
+//     ③ /ref/ 초대장 화면 — **이미 보낸 링크로 들어오는 길**.
+//        ①만 막으면 새로 못 만들 뿐, 나간 링크는 그대로 살아 있다.
+//        (그 파일은 따로 열리는 페이지라 플래그를 각자 갖는다 — 켤 때 둘 다 켠다)
+//
+//   서버(taam_ref_issue·taam_ref_mine)는 건드리지 않는다. 화면만 닫는다 —
+//   되돌릴 때 SQL 을 다시 돌릴 일이 없어야 한다.
+//   열 때: 여기 true + ref/index.html 의 REF_LIVE 도 true.
+// ═══════════════════════════════════════════
+var REFERRAL_LIVE = false;
+function referralEnabled(){ return !!REFERRAL_LIVE; }
+window.referralEnabled = referralEnabled;
+
 // 검증 스위치 토글 — PWA 는 콘솔이 없어 어드민 메뉴에서 켜고 끈다 (기기별)
 function toggleNewHome(){
   var role = (typeof _currentRole !== 'undefined') ? _currentRole : '';
@@ -32953,8 +32973,10 @@ var _MSA_CFG_ROWS = [
   ['guest_extend_days','한 번에 연장(일)',    ''],
   ['guest_warn_days', '만료 알림(일 전)',     ''],
   ['offer_days',      '오퍼 유효(일)',        ''],
-  ['referral_days',   '추천권 유효(일)',      ''],
-  ['referral_per_year','추천권 연 매수',      ''],
+  // 추천권 두 줄은 REFERRAL_LIVE 가 켜질 때 같이 돌아온다 (아래에서 걸러낸다).
+  //   닫아 둔 기능의 설정값이 남아 있으면 「되는 기능」으로 읽힌다.
+  ['referral_days',   '추천권 유효(일)',      '', 'ref'],
+  ['referral_per_year','추천권 연 매수',      '', 'ref'],
   ['corp_slots',      '법인 슬롯',            '「법인 N사 한정」에 적힌다'],
   ['corp_deposit_ratio','법인 예치금 비율(%)', '']
 ];
@@ -33004,6 +33026,10 @@ function _msaRenderCfg(seats){
 
   h += '<div class="msa-card"><div class="h"><span class="nm">금액 · 기간</span></div>';
   _MSA_CFG_ROWS.forEach(function(row){
+    // 닫아 둔 기능의 설정값은 안 보여준다 — 있으면 되는 기능으로 읽힌다.
+    //   msaCfgSave 는 화면에 있는 input 만 훑으므로, 안 그리면 저장도 안 된다
+    //   (서버의 값은 그대로 남는다 — 켤 때 그대로 돌아온다).
+    if(row[3] === 'ref' && typeof referralEnabled === 'function' && !referralEnabled()) return;
     var v = c[row[0]];
     h += '<div class="msa-row"><span class="k">' + row[1]
        +   (row[2] ? '<br><span style="font-size:10.5px;color:var(--k-ink3)">' + row[2] + '</span>' : '')
@@ -43119,7 +43145,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.04-e';
+var TAAM_WEB_BUILD = '2026.09.04-f';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -60016,6 +60042,11 @@ function _mpRefLabel(it){
 async function _mpPaintRef(grade){
   var el = document.getElementById('mpRefCard');
   if(!el) return;
+  // 🆕 2026-09-04: 아직 열 때가 아니다 (REFERRAL_LIVE). 카드를 아예 안 그린다 —
+  //   「준비 중」이라고 적어 두면 없는 기능을 광고하는 셈이 된다.
+  if(typeof referralEnabled === 'function' && !referralEnabled()){
+    el.style.display = 'none'; el.innerHTML = ''; return;
+  }
   var g = String(grade || '').toUpperCase();
   if(g !== 'M' && g !== 'T'){ el.style.display = 'none'; return; }
   var d = null;
@@ -60053,6 +60084,9 @@ async function _mpPaintRef(grade){
   el.style.display = '';
 }
 async function mpRefIssue(){
+  // 카드를 안 그렸으니 눌릴 일은 없지만, 발급은 서버에 흔적을 남기는 일이라
+  //   부르는 길을 하나만 믿지 않는다.
+  if(typeof referralEnabled === 'function' && !referralEnabled()) return;
   try {
     var r = await window.sb.rpc('taam_ref_issue');
     if(r.error) throw r.error;
