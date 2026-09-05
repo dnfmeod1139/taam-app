@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<title>오사카 4일 · TAAM</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:opsz,wght@6..96,700&family=Noto+Sans+KR:wght@400;500;700;800&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+<!--
+  ════════════════════════════════════════════════════════════════
+  여정표 — 슈퍼어드민이 만들어 손님에게 링크로 보내는 화면  ⚠ 시안
+  ════════════════════════════════════════════════════════════════
+  아직 데이터도 어드민 편집기도 없다. **모양만** 보는 판이다.
+  아래 TRIP 하나만 손으로 채워 두었고, 나중에 서버에서 같은 모양의
+  JSON 을 받아 그대로 그리면 된다.
+
+  ⚠ 돈을 두 갈래로 나눠 적는다 — 이 화면에서 제일 중요한 결정이다.
+    ① TAAM 으로 이미 결제한 것 (티켓)
+    ② 현지에서 낼 것 (이동·식사·실비)
+    합쳐서 「이 날 ¥116,400」이라고만 적으면 손님이 묻는 「그래서 내가
+    얼마를 더 내야 하나」에 답하지 못한다. 이미 낸 돈까지 앞으로 낼 돈처럼
+    보여서, 같은 금액을 두 번 내는 줄 알고 연락이 온다.
+
+  ⚠ 사진은 URL 만 싣는다. base64 를 박으면 링크 하나가 수 MB 가 되고,
+    손님은 대개 해외에서 로밍으로 연다. (CLAUDE.md — 사진은 Storage 로)
+
+  ⚠ 이 링크는 회원이 아닌 사람도 연다. 그래서 여기에는 **회원 전용
+    정보를 싣지 않는다** — 예치금·등급·다른 손님 이름은 나오지 않는다.
+  ════════════════════════════════════════════════════════════════
+-->
+<style>
+:root{
+  --ground:#F6F6F7; --card:#FFFFFF; --wash:#FBFAF7;
+  --ink:#16161A; --ink-2:#61616B; --ink-3:#9A9AA4;
+  --rule:#E6E6EA; --rule-2:#F0F0F3;
+  --burg:#5E1622; --burg-tx:#8A3242; --burg-wash:#FAF1F1; --burg-line:#EBD7D7;
+  --gold:#8A6A16; --gold-wash:#FCF6E6; --gold-line:#EDE0BE;
+  --shadow:0 1px 2px rgba(22,22,26,.04),0 1px 12px -6px rgba(22,22,26,.14);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{background:var(--ground);color:var(--ink);
+  font-family:'Noto Sans KR','Noto Sans JP',system-ui,-apple-system,sans-serif;
+  font-size:15px;line-height:1.75;-webkit-font-smoothing:antialiased;
+  word-break:keep-all;line-break:strict;overflow-wrap:break-word}
+.frame{max-width:430px;margin:0 auto;background:var(--card);min-height:100vh;
+  box-shadow:var(--shadow)}
+
+/* ── 표지 ───────────────────────────────────────────────── */
+.cover{padding:38px 24px 26px;border-bottom:1px solid var(--rule)}
+.wordmark{font-family:'Bodoni Moda',Didot,serif;font-weight:700;font-size:17px;
+  letter-spacing:.3em;color:var(--burg-tx);line-height:1}
+.kicker{margin-top:22px;font-size:10.5px;font-weight:800;letter-spacing:.16em;color:var(--ink-3)}
+h1{margin-top:7px;font-size:27px;font-weight:800;letter-spacing:-.02em;line-height:1.32}
+.when{margin-top:11px;font-size:14px;font-weight:500;color:var(--ink-2)}
+.host{margin-top:19px;padding-top:15px;border-top:1px solid var(--rule-2);
+  display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--ink-3)}
+.host b{font-weight:700;color:var(--ink-2)}
+.host a{margin-left:auto;flex:none;text-decoration:none;padding:7px 13px;border-radius:999px;
+  border:1px solid var(--rule);color:var(--ink-2);font-size:11.5px;font-weight:700}
+
+/* ── 날짜 ───────────────────────────────────────────────── */
+.days{position:sticky;top:0;z-index:5;display:flex;gap:1px;background:var(--rule-2);
+  border-bottom:1px solid var(--rule);
+  -webkit-backdrop-filter:saturate(180%) blur(8px);backdrop-filter:saturate(180%) blur(8px)}
+.days button{flex:1;padding:13px 0 11px;background:var(--card);border:0;cursor:pointer;
+  font-family:inherit;color:var(--ink-3);border-bottom:2px solid transparent}
+.days .d{font-size:15px;font-weight:700;line-height:1.2}
+.days .w{display:block;margin-top:3px;font-size:9.5px;font-weight:700;letter-spacing:.1em}
+.days .n{display:block;margin:5px auto 0;width:4px;height:4px;border-radius:50%;background:var(--burg)}
+.days button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--burg);background:var(--wash)}
+
+/* ── 하루 ───────────────────────────────────────────────── */
+.sheet{padding:22px 22px 0}
+.dayhead{display:flex;align-items:baseline;gap:8px;padding-bottom:6px}
+.dayhead b{font-size:13px;font-weight:800;color:var(--ink-2);letter-spacing:.02em}
+.dayhead em{font-style:normal;margin-left:auto;font-size:11px;font-weight:700;color:var(--ink-3)}
+.summary{margin:4px 0 20px;padding:11px 13px;border-radius:11px;background:var(--wash);
+  border:1px solid var(--rule-2);font-size:12.5px;color:var(--ink-2);line-height:1.7}
+
+/* ── 타임라인 ───────────────────────────────────────────── */
+.rail{display:grid;grid-template-columns:44px 1fr}
+.at{padding-top:1px;font-size:11.5px;font-weight:700;color:var(--ink-3);
+  font-variant-numeric:tabular-nums}
+.stop{position:relative;padding:0 0 26px 18px;border-left:1px solid var(--rule)}
+.stop::before{content:"";position:absolute;left:-4.5px;top:6px;width:8px;height:8px;
+  border-radius:50%;background:var(--burg);box-shadow:0 0 0 3px var(--card)}
+.rail:last-of-type .stop{border-left-color:transparent}
+.tag{display:inline-block;margin-bottom:5px;padding:2px 7px;border-radius:6px;
+  font-size:9.5px;font-weight:800;letter-spacing:.06em}
+.tag.taam{color:var(--burg-tx);background:var(--burg-wash);border:1px solid var(--burg-line)}
+.tag.stay{color:var(--gold);background:var(--gold-wash);border:1px solid var(--gold-line)}
+.tag.own{color:var(--ink-3);background:var(--rule-2);border:1px solid var(--rule)}
+.nm{font-size:17px;font-weight:800;letter-spacing:-.01em;line-height:1.4}
+.nm small{display:block;margin-top:2px;font-size:11.5px;font-weight:500;color:var(--ink-3);
+  letter-spacing:0}
+.note{margin-top:7px;font-size:13px;color:var(--ink-2);line-height:1.8}
+.tips{margin-top:9px;padding:9px 11px;border-radius:9px;background:var(--gold-wash);
+  border:1px solid var(--gold-line);font-size:12px;color:#6E5410;line-height:1.75}
+.tips b{display:block;font-size:9.5px;font-weight:800;letter-spacing:.1em;color:var(--gold);
+  margin-bottom:3px}
+.shot{margin-top:11px;border-radius:11px;overflow:hidden;border:1px solid var(--rule)}
+.shot .ph{aspect-ratio:16/10;display:flex;align-items:center;justify-content:center;
+  background:repeating-linear-gradient(135deg,#F4F3F0 0 10px,#EFEEEA 10px 20px);
+  font-size:11px;font-weight:700;color:var(--ink-3);letter-spacing:.04em}
+.shot .cap{padding:8px 11px;font-size:11px;color:var(--ink-3);background:var(--wash);
+  border-top:1px solid var(--rule-2)}
+.money{margin-top:11px;padding-top:10px;border-top:1px solid var(--rule-2);
+  display:flex;align-items:baseline;gap:8px;font-size:12.5px}
+.money em{font-style:normal;color:var(--ink-3)}
+.money b{margin-left:auto;font-weight:800;font-variant-numeric:tabular-nums}
+.money .paid{color:var(--burg-tx)}
+.money .paid::after{content:"결제 완료";margin-left:6px;font-size:9.5px;font-weight:800;
+  color:var(--burg-tx);opacity:.75}
+
+/* 이동 */
+.move{position:relative;padding:0 0 26px 18px;border-left:1px dashed var(--rule)}
+.move::before{content:"";position:absolute;left:-3px;top:9px;width:5px;height:5px;border-radius:50%;
+  background:var(--card);border:1px solid var(--rule)}
+.move > div{display:flex;align-items:center;gap:8px;padding:9px 12px;border-radius:10px;
+  background:var(--wash);border:1px solid var(--rule-2);font-size:12px;color:var(--ink-2)}
+.move i{font-style:normal;flex:none;font-size:13px;opacity:.75}
+.move span{min-width:0}
+.move b{margin-left:auto;flex:none;font-weight:700;color:var(--ink);font-variant-numeric:tabular-nums}
+.move b.free{color:var(--ink-3);font-weight:500}
+
+/* ── 하루 합계 ─────────────────────────────────────────── */
+.tally{margin:2px 22px 0;padding:16px 0 0;border-top:1px solid var(--rule)}
+.tally .r{display:flex;align-items:baseline;gap:10px;padding:5px 0;font-size:13px}
+.tally .r span{color:var(--ink-2)}
+.tally .r b{margin-left:auto;font-weight:800;font-variant-numeric:tabular-nums}
+.tally .r.on b{font-size:18px}
+.tally .r.done span,.tally .r.done b{color:var(--ink-3)}
+.tally .krw{margin-left:auto;font-size:11px;font-weight:500;color:var(--ink-3)}
+.fine{margin:14px 22px 0;padding:11px 13px;border-radius:10px;background:var(--wash);
+  border:1px solid var(--rule-2);font-size:11.5px;color:var(--ink-3);line-height:1.85}
+
+/* ── 바닥 ───────────────────────────────────────────────── */
+.acts{margin:24px 22px 0;display:flex;gap:8px}
+.acts button{flex:1;padding:14px 0;border-radius:12px;border:1px solid var(--rule);
+  background:var(--card);font-family:inherit;font-size:13px;font-weight:700;color:var(--ink-2);
+  cursor:pointer}
+.acts button.on{background:var(--burg);border-color:var(--burg);color:#fff}
+.foot{margin-top:26px;padding:22px 22px calc(34px + env(safe-area-inset-bottom));
+  border-top:1px solid var(--rule-2);text-align:center;font-size:11px;color:var(--ink-3);
+  line-height:1.95}
+.foot .wm{font-family:'Bodoni Moda',Didot,serif;font-weight:700;font-size:12px;
+  letter-spacing:.3em;color:var(--ink-3);display:block;margin-bottom:9px}
+.langs{margin-top:16px;display:flex;justify-content:center;gap:6px}
+.langs button{padding:5px 12px;border:1px solid var(--rule);border-radius:999px;background:var(--card);
+  font-family:inherit;font-size:11px;font-weight:700;color:var(--ink-3);cursor:pointer}
+.langs button.on{border-color:var(--burg);color:var(--burg-tx)}
+</style>
+</head>
+<body>
+<main class="frame">
+
+  <header class="cover">
+    <div class="wordmark">TAAM</div>
+    <div class="kicker">여정 안내</div>
+    <h1>오사카 4일</h1>
+    <div class="when">9월 22일 (화) – 25일 (금) · 3인</div>
+    <div class="host">담당 <b>김우종</b><a href="tel:01075773012">문의</a></div>
+  </header>
+
+  <nav class="days" id="days" role="tablist" aria-label="날짜"></nav>
+
+  <section class="sheet" id="sheet"></section>
+  <div class="tally" id="tally"></div>
+  <p class="fine" id="fine"></p>
+
+  <div class="acts">
+    <button type="button" class="on">이 날 지도로 보기</button>
+    <button type="button">일정 전체 저장</button>
+  </div>
+
+  <footer class="foot">
+    <span class="wm">TAAM</span>
+    이 링크는 초대받은 분만 열람하실 수 있습니다.<br>
+    2026년 9월 30일까지 유효합니다.
+    <div class="langs">
+      <button class="on">한국어</button><button>English</button><button>日本語</button>
+    </div>
+  </footer>
+</main>
+
+<script>
+(function(){
+'use strict';
+// ════════════════════════════════════════════════════════════════
+// 시안용 데이터 — 나중에 서버가 이 모양 그대로 내려준다
+// ════════════════════════════════════════════════════════════════
+//   kind:'stop' | 'move'
+//   stop.pay: { per, sum, paid }   paid=true 면 TAAM 으로 이미 결제한 것
+//   stop.shot: { url, cap }        url 이 없으면 자리만 잡는다(시안)
+var TRIP = {
+  cur: '¥', fx: 9.6,                 // 엔 → 원 환산 참고용 (앱 환율 설정과 같은 값)
+  days: [
+    { d:'22', w:'화', date:'9월 22일 화요일',
+      sum:'도착 후 호텔 체크인. 첫 저녁은 호텔에서 도보 9분입니다.',
+      items:[
+        { kind:'stop', at:'11:20', tag:null, nm:'간사이 국제공항', sub:'KE723 · 3인',
+          note:'입국 심사 후 1층 도착 로비에서 기사가 성함 팻말을 들고 기다립니다.',
+          shot:{ cap:'도착 로비 미팅 지점' } },
+        { kind:'move', how:'전용차 · 약 55분', cost:18000, icon:'🚘' },
+        { kind:'stop', at:'14:00', tag:'stay', nm:'콘래드 오사카', sub:'3박 · 디럭스 코너 2실',
+          note:'체크인 15:00. 이른 도착 시 짐만 맡기고 라운지 이용 가능합니다.',
+          pay:{ per:'1박 ¥96,000 · 2실', sum:288000, paid:true } },
+        { kind:'move', how:'도보 · 약 9분', cost:0, icon:'🚶' },
+        { kind:'stop', at:'19:00', tag:'taam', nm:'카하라', sub:'かはら · 오마카세',
+          note:'개인실. 알레르기·못 드시는 것은 3일 전까지 알려주세요.',
+          pay:{ per:'1인 ¥42,000 · 3인', sum:126000, paid:true },
+          shot:{ cap:'건물 입구 — 1층 안내판 왼쪽' } }
+      ] },
+
+    { d:'23', w:'수', date:'9월 23일 수요일',
+      sum:'낮에는 교토 반나절. 저녁은 예약 없이 실비로 다녀오는 곳입니다.',
+      items:[
+        { kind:'stop', at:'10:00', tag:null, nm:'자유 일정', sub:'조식 후',
+          note:'호텔 라운지 조식은 07:00–10:30 입니다.' },
+        { kind:'move', how:'JR 특급 하루카 · 약 1시간', cost:9600, icon:'🚆',
+          hint:'신오사카역 3번 홈' },
+        { kind:'stop', at:'13:00', tag:null, nm:'교토 반나절', sub:'난젠지 · 기온 산책',
+          note:'가이드 동행 없이 자유롭게 걸으시는 일정입니다.',
+          shot:{ cap:'난젠지 산문 앞 집합' } },
+        { kind:'move', how:'전용차 · 약 1시간', cost:24000, icon:'🚘' },
+        { kind:'stop', at:'18:30', tag:'own', nm:'멘야 이노이치', sub:'麺屋 猪一 · 라멘',
+          note:'예약을 받지 않는 곳입니다. 대기 20–30분 예상.',
+          pay:{ per:'현장 결제 · 1인 약 ¥2,000', sum:6000, paid:false } }
+      ] },
+
+    { d:'24', w:'목', date:'9월 24일 목요일',
+      sum:'오늘이 이번 여정의 중심입니다. 스시 사사다는 15분 전 도착을 권합니다.',
+      items:[
+        { kind:'stop', at:'12:00', tag:null, nm:'늦은 조식', sub:'호텔 라운지',
+          note:'전날 늦게 드셨다면 가볍게 드시길 권합니다.' },
+        { kind:'move', how:'택시 · 약 18분', cost:2400, icon:'🚕' },
+        { kind:'stop', at:'15:00', tag:null, nm:'구로몬 시장', sub:'黒門市場',
+          note:'가벼운 장보기. 저녁을 생각해 시식은 조금만.',
+          shot:{ cap:'시장 동쪽 입구' } },
+        { kind:'move', how:'도보 · 약 12분', cost:0, icon:'🚶' },
+        { kind:'stop', at:'18:00', tag:'taam', nm:'스시 사사다', sub:'鮨 佐々田 · 카운터 3석',
+          note:'오마카세 코스. 음료는 현장에서 따로 정산합니다.',
+          tips:'간판이 없습니다. 건물 뒤편 나무문으로 들어가 2층입니다.\n15분 전 도착을 권합니다 — 카운터는 정시에 함께 시작합니다.',
+          pay:{ per:'1인 ¥38,000 · 3인', sum:114000, paid:true },
+          shot:{ cap:'뒤편 입구 — 이 문입니다' } },
+        { kind:'move', how:'도보 · 약 6분', cost:0, icon:'🚶' },
+        { kind:'stop', at:'21:30', tag:'own', nm:'바 노스쇼어', sub:'Bar North Shore',
+          note:'예약 없이 들르는 곳입니다. 자리가 없으면 근처 한 곳 더 안내드립니다.',
+          pay:{ per:'현장 결제 · 1인 약 ¥4,000', sum:12000, paid:false } }
+      ] },
+
+    { d:'25', w:'금', date:'9월 25일 금요일',
+      sum:'체크아웃 후 점심 한 끼, 공항으로 이동합니다.',
+      items:[
+        { kind:'stop', at:'11:00', tag:'stay', nm:'콘래드 오사카 체크아웃', sub:'짐은 프런트 보관',
+          note:'점심 뒤 호텔로 돌아와 짐을 찾고 출발합니다.' },
+        { kind:'move', how:'도보 · 약 4분', cost:0, icon:'🚶' },
+        { kind:'stop', at:'12:30', tag:'taam', nm:'하리쥬', sub:'はり重 · 스키야키',
+          note:'점심 코스. 개인실은 아니고 홀 안쪽 자리입니다.',
+          pay:{ per:'1인 ¥12,000 · 3인', sum:36000, paid:true } },
+        { kind:'move', how:'전용차 · 약 55분', cost:18000, icon:'🚘',
+          hint:'호텔 로비 15:20 출발' },
+        { kind:'stop', at:'16:40', tag:null, nm:'간사이 국제공항 출발', sub:'KE724',
+          note:'국제선 카운터는 3시간 전부터 엽니다.' }
+      ] }
+  ]
+};
+
+var esc = function(s){ return String(s == null ? '' : s)
+  .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); };
+var yen = function(n){ return '¥' + (n || 0).toLocaleString(); };
+var krw = function(n){ return '약 ₩' + Math.round((n || 0) * TRIP.fx).toLocaleString(); };
+var nl  = function(s){ return esc(s).replace(/\n/g,'<br>'); };
+
+// 하루의 돈을 **두 갈래로** 센다 — 이 화면의 핵심이다
+function tallyOf(day){
+  var paid = 0, local = 0;
+  day.items.forEach(function(it){
+    if(it.kind === 'move'){ local += (it.cost || 0); return; }
+    if(!it.pay) return;
+    if(it.pay.paid) paid += (it.pay.sum || 0); else local += (it.pay.sum || 0);
+  });
+  return { paid: paid, local: local };
+}
+
+function stopHtml(it){
+  var TAG = { taam:['taam','TAAM 예약'], stay:['stay','숙소'], own:['own','현장 결제'] };
+  var tg = it.tag && TAG[it.tag];
+  var h = '<div class="rail"><div class="at">' + esc(it.at || '') + '</div><div class="stop">'
+    + (tg ? '<span class="tag ' + tg[0] + '">' + tg[1] + '</span>' : '')
+    + '<p class="nm">' + esc(it.nm) + (it.sub ? '<small>' + esc(it.sub) + '</small>' : '') + '</p>';
+  if(it.note) h += '<p class="note">' + nl(it.note) + '</p>';
+  if(it.tips) h += '<div class="tips"><b>미리 알아두실 것</b>' + nl(it.tips) + '</div>';
+  if(it.shot) h += '<div class="shot"><div class="ph">사진이 들어갈 자리</div>'
+    + (it.shot.cap ? '<div class="cap">' + esc(it.shot.cap) + '</div>' : '') + '</div>';
+  if(it.pay) h += '<p class="money"><em>' + esc(it.pay.per) + '</em>'
+    + '<b class="' + (it.pay.paid ? 'paid' : '') + '">' + yen(it.pay.sum) + '</b></p>';
+  return h + '</div></div>';
+}
+
+function moveHtml(it){
+  return '<div class="rail"><div></div><div class="move"><div>'
+    + '<i>' + esc(it.icon || '·') + '</i>'
+    + '<span>' + esc(it.how) + (it.hint ? ' · ' + esc(it.hint) : '') + '</span>'
+    + '<b class="' + (it.cost ? '' : 'free') + '">' + (it.cost ? yen(it.cost) : '무료') + '</b>'
+    + '</div></div></div>';
+}
+
+function render(i){
+  var day = TRIP.days[i];
+  document.querySelectorAll('#days button').forEach(function(b, j){
+    b.setAttribute('aria-selected', String(j === i));
+  });
+  document.getElementById('sheet').innerHTML =
+      '<div class="dayhead"><b>' + esc(day.date) + '</b><em>' + (i + 1) + ' / ' + TRIP.days.length + '</em></div>'
+    + (day.sum ? '<div class="summary">' + nl(day.sum) + '</div>' : '')
+    + day.items.map(function(it){ return it.kind === 'move' ? moveHtml(it) : stopHtml(it); }).join('');
+
+  var t = tallyOf(day);
+  document.getElementById('tally').innerHTML =
+      (t.paid ? '<div class="r done"><span>TAAM 으로 이미 결제하신 금액</span><b>' + yen(t.paid) + '</b></div>' : '')
+    + '<div class="r on"><span>현지에서 내실 예상 금액</span><b>' + yen(t.local)
+    +   '<span class="krw"> ' + krw(t.local) + '</span></b></div>';
+  document.getElementById('fine').innerHTML =
+      '「현지에서 내실 금액」은 <b>예상액</b>이며 실비로 정산합니다. 환율은 참고용입니다.<br>'
+    + 'TAAM 으로 결제하신 금액은 다시 내지 않으셔도 됩니다.';
+}
+
+document.getElementById('days').innerHTML = TRIP.days.map(function(d, i){
+  var money = tallyOf(d);
+  return '<button type="button" role="tab" aria-selected="false" data-i="' + i + '">'
+    + '<span class="d">' + esc(d.d) + '</span><span class="w">' + esc(d.w) + '</span>'
+    + (money.paid ? '<span class="n"></span>' : '') + '</button>';
+}).join('');
+document.querySelectorAll('#days button').forEach(function(b){
+  b.addEventListener('click', function(){ render(parseInt(b.dataset.i, 10)); });
+});
+render(2);   // 시안은 스시 사사다가 있는 24일부터 보여준다
+})();
+</script>
+</body>
+</html>
