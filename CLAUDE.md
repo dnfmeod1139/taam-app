@@ -39,6 +39,50 @@
 - **다국어**: KO/EN/JA. → 아래 「다국어 — 어디가 새는가」를 반드시 읽을 것
 - 환불 정책: `legal/refund.html` (대행비 환불불가, D-31 기준 등) — 결제/취소 코드 수정 시 반드시 참고
 
+## 예약 작업(Cron) — 「Succeeded」를 믿지 말 것
+
+**2026-09-07에 실제로 겪은 일:** `notify-guest-expiry-daily` 가 며칠간 매일
+`Succeeded` 로 찍혀 있었는데, Edge Function 은 **한 번도 실행된 적이 없었다.**
+
+pg_cron 의 `Succeeded` 는 「`net.http_post` 를 큐에 넣는 데 성공」이라는 뜻이다.
+pg_net 은 비동기라 **HTTP 응답은 별도 표에 남는다.** 거기를 보면 매번 이랬다.
+
+```
+401  {"code":"UNAUTHORIZED_NO_AUTH_HEADER","message":"Missing authorization header"}
+```
+
+Edge Function 에 `Verify JWT` 가 켜져 있는데 cron 명령에 Authorization 헤더가
+없었다. 게이트웨이가 함수를 부르기도 전에 막았으므로 함수 통계도 0 이었다.
+
+### 그래서 예약을 걸었으면 반드시 이걸 본다
+
+```sql
+select status_code, created, left(coalesce(content,''),200)
+  from net._http_response order by created desc limit 10;
+```
+
+`200` 과 함수의 응답 본문이 보여야 진짜로 도는 것이다.
+`cron.job.last_run` 이 `Succeeded` 인 것은 근거가 못 된다.
+
+### 새 예약을 걸 때 지킬 것
+
+- 키는 **Vault 에 한 번만** 넣고(`vault.create_secret`), 명령에서는 이름으로 참조한다.
+  cron 명령에 키를 직접 박으면 `cron.job` 테이블에 평문으로 남는다.
+- ⚠ **legacy JWT 여야 한다.** `Verify JWT with legacy secret` 는 `eyJ…` 로 시작하는
+  200자 이상 JWT 만 받는다. 새 형식 키(`sb_secret_…`, 41자)를 넣으면 401 이다.
+  Settings → API Keys → **Legacy API keys** 탭에서 가져온다.
+- 알림 잡은 **시간을 겹치지 않게** 둔다 (게스트 10시 · 방문 11시). 같이 돌면
+  둘 다 `send-push` 를 때린다.
+
+### 푸시 대상을 「최근 N분」으로 긁지 말 것
+
+`taam_*_notify()` 계열은 방금 만든 알림을 Edge Function 에 넘겨 푸시를 쏜다.
+이때 대상을 `created_at > now() - interval '2 minute'` 로 다시 조회하면
+**이번 실행이 만든 것인지 구분하지 못한다.** 2분 안에 두 번 부르면(재시도·수동
+호출) 앞 실행이 만든 알림을 다시 집어 **같은 사람에게 푸시가 두 번** 간다.
+실제로 `made:0` 인데 `push_sent:1` 로 관측됐다.
+→ `insert … returning` 으로 **이번에 넣은 행만** 돌려받는다. 시간 창을 쓰지 않는다.
+
 ## 다국어 — 어디가 새는가 (2026-09-07 전수 조사)
 
 **사전은 멀쩡하다.** `TRANSLATIONS` 는 ko/en/ja 957키 완전 일치, 누락 0건.
