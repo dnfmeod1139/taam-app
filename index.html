@@ -19288,6 +19288,20 @@ function vpVerify(){
                 hint.className='phone-hint error';
                 return;
               }
+
+              // 🆕 폰번호 유니크 강제 — 같은 휴대폰으로 가입된 다른 활성 계정이 있으면 차단.
+              //   ※ 현재는 이메일 가입(phone 미수집)이라 RPC 가 false → 무영향(잠복).
+              //     폰 인증 도입 후 profiles.phone 이 채워지면 자동으로 중복 가입 차단 활성화.
+              try {
+                var _dup = await window.sb.rpc('phone_dup_other_account');
+                if(!_dup.error && _dup.data === true){
+                  console.warn('[login security] 🚫 동일 휴대폰 다른 활성 계정 존재 → 차단');
+                  await window.sb.auth.signOut();
+                  hint.textContent='이 휴대폰 번호로 이미 가입된 계정이 있습니다. 기존 계정으로 로그인해주세요.';
+                  hint.className='phone-hint error';
+                  return;
+                }
+              } catch(_dpe){ console.warn('[login security] 폰중복 RPC 예외(무시):', _dpe); }
             } else {
               console.log('[login security] ✅ 관리자/스태프 — 초대 코드 검증 면제');
             }
