@@ -15372,6 +15372,18 @@ var payload = {
       rules: r.rules || [],
       map_photos: r.mapPhotos || []
     };
+    // 🆕 2026.09: 원문이 바뀌면 재번역 대상으로 되돌린다.
+    //   _i18nBatch 는 「i18n_status_en 이 pending 인 행」만 번역한다. 그런데 이 저장
+    //   경로에는 status 를 되돌리는 코드가 없어서, 매장 이름·설명·주소를 고쳐도
+    //   번역은 옛 값 그대로 남았다(배치를 돌려도 이미 처리된 행으로 보고 건너뛴다).
+    //   한국어 원문 3개를 스냅샷과 비교해 실제로 달라졌을 때만 pending 으로 내린다.
+    //   — 무관한 저장(사진 교체 등)에 매번 pending 을 찍으면 번역비만 나간다.
+    var _koNow = [r.name || '', r.genre || '', r.address || ''].join('');
+    if (r._i18nKoSnap !== undefined && r._i18nKoSnap !== _koNow) {
+      payload.i18n_status_en = 'pending';
+      payload.i18n_status_jp = 'pending';
+    }
+    r._i18nKoSnap = _koNow;
     // DB id가 UUID 형태(문자열 길이 36)면 이미 DB에 있는 것 → UPDATE
     if(r.id && typeof r.id === 'string' && r.id.length === 36){
       return window.sb.from('restaurants').update(payload).eq('id', r.id)
@@ -15440,11 +15452,20 @@ return {
           description_jp: r.description_jp || '',
           address_en: r.address_en || '',
           address_jp: r.address_jp || '',
-          genre_jp: r.genre_jp || '',
+          // 🆕 2026.09: 분류("스시" 등)가 EN·JA 에서 늘 한글이던 원인 —
+          //   메모리의 genre 는 DB 의 description 이고, 일괄 번역도 description_en/jp 에 쓴다.
+          //   그런데 화면은 pickI18nField(r,'genre') 로 genre_en/genre_jp 를 찾았다.
+          //   쓰는 칸과 읽는 칸이 달라 번역이 있어도 안 보였다. 여기서 이어 붙인다.
+          //   어드민이 손으로 넣은 genre_en 이 있으면 그것을 우선한다.
+          genre_en: r.genre_en || r.description_en || '',
+          genre_jp: r.genre_jp || r.description_jp || '',
           // 일본어 검수 게이트 — false 면 화면에서 일본어 대신 한글로 폴백한다
           i18n_jp_approved: r.i18n_jp_approved,
           address: r.address || '',
           genre: r.description || '',
+          // 🆕 2026.09: 저장할 때 「원문이 실제로 바뀌었는지」 판정하는 기준값.
+          //   saveRestaurants 가 이 값과 비교해 달라졌을 때만 재번역 대상으로 내린다.
+          _i18nKoSnap: [r.name || '', r.description || '', r.address || ''].join(''),
           region: r.region || '',
           countryEn: r.country_en || '',
           cityEn: r.city_en || '',
@@ -16166,6 +16187,14 @@ function loadRole(){
       _currentRole=d.role||'user'; _currentAdminRestId=d.restId||null;
       _currentAdminRestName=d.restName||''; _currentUserPhone=d.phone||''; _currentUserName=d.name||'';
     }
+    // 🆕 2026.09: 새로 올라온 콘텐츠를 자동으로 번역한다.
+    //   부팅을 방해하지 않도록 충분히 미뤄서 한 번만 건드린다.
+    //   권한(슈퍼어드민)·주기(6시간) 판정은 taamI18nAutoSweep 안에서 다시 한다.
+    try {
+      setTimeout(function(){
+        if (typeof taamI18nAutoSweep === 'function') taamI18nAutoSweep();
+      }, 20000);
+    } catch(e){}
   }).catch(function(){});
 }
 
@@ -22458,8 +22487,11 @@ function openTicketDetail(id){
     var pt = r ? (r.photoTexts || []) : [];
 
     function photoBlock(src, idx) {
-      var title = (pt[idx] && pt[idx].title) || '';
-      var desc  = (pt[idx] && pt[idx].desc)  || '';
+      // 🆕 2026.09: 사진 위 카피도 언어를 따라간다.
+      //   종전에는 원문(한국어)을 그대로 박아, EN·JA 화면에서도
+      //   「향기를 가둔 순간의 요리」 같은 문구가 한국어로 남았다.
+      var title = pickI18nObj(pt[idx], 'title');
+      var desc  = pickI18nObj(pt[idx], 'desc');
       var overlay = '';
       var tx = (pt[idx] && pt[idx].tx !== undefined) ? pt[idx].tx : 2.5;
       var ty = (pt[idx] && pt[idx].ty !== undefined) ? pt[idx].ty : 86;
@@ -22872,8 +22904,9 @@ function openRestInfoScreen() {
     var photoTexts = (r && Array.isArray(r.photoTexts)) ? r.photoTexts : [];
     photos.forEach(function(url, i){
       var pt = photoTexts[i] || {};
-      var title = pt.title || '';
-      var desc  = pt.desc  || '';
+      // 🆕 2026.09: 레스토랑 정보 풀스크린에서도 사진 카피가 언어를 따라간다
+      var title = pickI18nObj(pt, 'title');
+      var desc  = pickI18nObj(pt, 'desc');
       // 위치: 등록 시 설정한 X/Y (%) 그대로
       var tx = (pt.tx !== undefined) ? pt.tx : 2.5;
       var ty = (pt.ty !== undefined) ? pt.ty : 86;
@@ -46127,8 +46160,17 @@ function homePopupShow(force){
   //   🆕 2026.08-31: 어드민이 직접 쓴 값(c.label)이 있으면 그것을 쓴다.
   //     모드로 자동 정하던 값은 「이번 팝업은 COLLECTION 이 아닌데」 같은 때
   //     손댈 방법이 없었다. 비워 두면 종전대로 모드에 맞춰 자동으로 정한다.
-  var _popLabel = (c.label && String(c.label).trim())
-                ? String(c.label).trim()
+  // 🆕 2026.09: 공지 팝업 문구도 언어를 따라간다.
+  //   app_config.home_popup 은 jsonb 라 i18n 컬럼이 없었고, 번역 대상에서
+  //   통째로 빠져 있었다. 그래서 EN·JA 회원에게도 「2026년과 2027 예약슬롯들이
+  //   일부 오픈됩니다」가 한국어로 그대로 떴다.
+  //   title_en/title_ja, body_en/body_ja, label_en/label_ja 가 있으면 그것을 쓰고
+  //   없으면 지금까지처럼 한국어 원문으로 폴백한다(기존 데이터 그대로 동작).
+  var _popTitle = pickI18nObj(c, 'title') || (c.title || '');
+  var _popBody  = pickI18nObj(c, 'body')  || (c.body  || '');
+  var _popLabelRaw = pickI18nObj(c, 'label') || c.label;
+  var _popLabel = (_popLabelRaw && String(_popLabelRaw).trim())
+                ? String(_popLabelRaw).trim()
                 : (c.link_mode === 'story' ? 'COLLECTION'
                 : (c.link_mode === 'event' ? 'SPECIAL EVENT'
                 : (c.link_ticket_id ? 'NEW OPEN' : 'NOTICE')));
@@ -46140,13 +46182,13 @@ function homePopupShow(force){
     '<div style="width:100%;max-width:340px;background:#FBF9F4;border-radius:18px;overflow:hidden;font-family:var(--font-main);box-shadow:0 24px 60px rgba(0,0,0,.45);">'
     + '<div onclick="homePopupGo()" style="cursor:pointer;">'
       + media
-      + ((c.title || c.body) ? '<div style="padding:16px 18px ' + (_popHasGo ? '6px' : '14px') + ';">'
+      + ((_popTitle || _popBody) ? '<div style="padding:16px 18px ' + (_popHasGo ? '6px' : '14px') + ';">'
         + '<div style="font-size:9.5px;letter-spacing:.28em;text-indent:.28em;color:#5C0A14;font-weight:800;">' + _pcalEsc(_popLabel) + '</div>'
         // 🆕 제목도 줄바꿈을 그대로 살린다(white-space:pre-line). 자동 줄바꿈에
         //   맡기면 「2026년과 2027년 / 예약슬롯들이 일부 오픈 / 됩니다」처럼
         //   엉뚱한 데서 끊긴다. 어디서 끊을지는 쓰는 사람이 정하는 게 맞다.
-        + (c.title ? '<div style="border-left:2px solid #c8a96e;padding-left:12px;margin-top:10px;"><div style="font-size:16.5px;font-weight:800;color:#1a1a18;line-height:1.5;white-space:pre-line;">' + _pcalEsc(c.title) + '</div></div>' : '')
-        + (c.body ? '<div style="font-size:12.5px;color:#3d3a33;line-height:1.8;margin-top:10px;white-space:pre-line;">' + _pcalEsc(c.body) + '</div>' : '')
+        + (_popTitle ? '<div style="border-left:2px solid #c8a96e;padding-left:12px;margin-top:10px;"><div style="font-size:16.5px;font-weight:800;color:#1a1a18;line-height:1.5;white-space:pre-line;">' + _pcalEsc(_popTitle) + '</div></div>' : '')
+        + (_popBody ? '<div style="font-size:12.5px;color:#3d3a33;line-height:1.8;margin-top:10px;white-space:pre-line;">' + _pcalEsc(_popBody) + '</div>' : '')
         + '</div>' : '')
       + (_popHasGo ? '<div style="padding:0 18px 14px;font-size:12px;font-weight:800;color:#5C0A14;text-align:right;">'
           + (c.link_mode === 'story' ? _popL('전체 보기 →','View all →','すべて見る →')
@@ -48492,7 +48534,22 @@ var TK_LANGS = [
   { code:'ja', label:'日本語',     short:'JA' },
   { code:'en', label:'English',    short:'EN' }
 ];
-var _tkCurrentLang = (localStorage.getItem('tkLang') || 'ko');
+// 🆕 2026.09: 저장된 선택이 없으면 브라우저 언어로 첫 화면을 정한다.
+//   종전에는 무조건 'ko' 라, 해외 회원이 앱을 열면 한국어 화면을 먼저 보고
+//   직접 EN 을 눌러야 했다. 회원이 한 번이라도 고른 뒤에는 그 선택이 이긴다.
+function _tkDetectLang(){
+  var saved = localStorage.getItem('tkLang');
+  if (saved) return saved;
+  var nav = '';
+  try { nav = (navigator.languages && navigator.languages[0]) || navigator.language || ''; }
+  catch(e){}
+  nav = String(nav).toLowerCase();
+  if (nav.indexOf('ko') === 0) return 'ko';
+  if (nav.indexOf('ja') === 0) return 'ja';
+  if (nav) return 'en';   // 그 외 언어권은 영어로 받는다
+  return 'ko';
+}
+var _tkCurrentLang = _tkDetectLang();
 // 🆕 중요: window 에도 초기 동기화 — t() / applyI18n / tkPillSync / tkRenderCal 등이 참조
 window._tkCurrentLang = _tkCurrentLang;
 
@@ -51194,6 +51251,25 @@ function pickI18nField(row, base){
 }
 window.pickI18nField = pickI18nField;
 
+// 🆕 2026.09: jsonb 안에 들어 있는 문구용 언어 선택기.
+//   pickI18nField 는 DB 행의 평면 컬럼(name_en 등)을 고르는 함수라
+//   photo_texts(사진 위 카피)나 app_config 의 공지 팝업처럼
+//   jsonb 오브젝트 안에 든 텍스트에는 쓸 수 없었다.
+//   그래서 이 둘은 번역 대상에서 통째로 빠져 EN·JA 에서도 늘 한국어였다.
+//   같은 규칙(_en / _ja, 없으면 한국어 폴백)을 오브젝트에도 적용한다.
+function pickI18nObj(obj, base){
+  if(!obj || !base) return '';
+  var lang = window._tkCurrentLang || 'ko';
+  function v(k){ var x = obj[k]; return (typeof x === 'string' && x.trim() !== '') ? x : undefined; }
+  var pref;
+  if (lang === 'en')      pref = v(base+'_en');
+  else if (lang === 'ja') pref = v(base+'_ja') || v(base+'_jp');
+  else                    pref = v(base);
+  if (pref !== undefined) return pref;
+  return v(base) || v(base+'_en') || v(base+'_ja') || v(base+'_jp') || '';
+}
+window.pickI18nObj = pickI18nObj;
+
 // 🆕 AI 번역 호출 helper — Supabase Edge Function `taam-translate` 사용
 //   사용 예 (어드민 큐레이션 화면에서):
 //     taamTranslate([
@@ -51235,8 +51311,11 @@ window.taamTranslate = taamTranslate;
 var _i18nBatchRunning = null;   // 실행 중인 label
 
 async function _i18nBatch(cfg){
-  // cfg: { table, label, idCol, fields:[{ko, en, jp, ctx}], dryRun }
-  if (!window.sb) { showToast('⚠','오류','서버 연결이 없습니다'); return; }
+  // cfg: { table, label, idCol, fields:[{ko, en, jp, ctx}], dryRun, quiet }
+  //   🆕 quiet — 자동 스윕에서 쓴다. 사람이 누른 게 아니므로 "미번역 없음" 같은
+  //      토스트를 띄우면 안 된다. 실제로 번역이 일어난 건수만 돌려준다.
+  var _q = !!cfg.quiet;
+  if (!window.sb) { if(!_q) showToast('⚠','오류','서버 연결이 없습니다'); return { done:0, fail:0, targets:0 }; }
   if (!cfg.dryRun && _i18nBatchRunning) {
     showToast('⏳','이미 진행 중입니다', _i18nBatchRunning + ' 번역이 끝난 뒤 실행해주세요');
     return;
@@ -51250,7 +51329,7 @@ async function _i18nBatch(cfg){
   // 🆕 회원에게 안 보이는 행은 번역하지 않는다 (시간·비용 절약)
   if (cfg.filter) q = cfg.filter(q);
   var res = await q;
-  if (res.error) { showToast('⚠','조회 실패', res.error.message); return; }
+  if (res.error) { if(!_q) showToast('⚠','조회 실패', res.error.message); return { done:0, fail:0, targets:0 }; }
   var rows = res.data || [];
 
   // 대상 = 번역할 한글이 있고, 아직 처리하지 않은 행
@@ -51276,9 +51355,12 @@ async function _i18nBatch(cfg){
     console.log('[i18n] ' + cfg.table + ' 대상', targets.map(function(r){ return r[idCol]; }));
     return;
   }
-  if (targets.length === 0) { showToast('✓', cfg.label, '미번역 항목이 없습니다'); return; }
+  if (targets.length === 0) {
+    if(!_q) showToast('✓', cfg.label, '미번역 항목이 없습니다');
+    return { done:0, fail:0, targets:0 };
+  }
 
-  showToast('⏳', cfg.label + ' 번역 시작', targets.length + '건 — 완료까지 몇 분 걸립니다');
+  if(!_q) showToast('⏳', cfg.label + ' 번역 시작', targets.length + '건 — 완료까지 몇 분 걸립니다');
   _i18nBatchRunning = cfg.label;
   _taamTxBarShow(cfg.label + ' 번역', 0, targets.length);
   var done = 0, fail = 0;
@@ -51320,9 +51402,11 @@ async function _i18nBatch(cfg){
   }
   } finally { _i18nBatchRunning = null; }
   _taamTxBarDone(done, fail, '—');
-  showToast(fail ? '⚠' : '✓', cfg.label + ' 번역 완료',
-    '성공 ' + done + '건' + (fail ? ' · 실패 ' + fail + '건 (콘솔 확인)' : '') +
-    '\n일본어는 검수 후 노출됩니다');
+  // 🆕 2026.09: 일본어 검수 게이트를 열었으므로(sql/i18n_jp_open.sql)
+  //   "검수 후 노출" 안내는 더 이상 사실이 아니다. 번역되면 바로 나온다.
+  if(!_q) showToast(fail ? '⚠' : '✓', cfg.label + ' 번역 완료',
+    '성공 ' + done + '건' + (fail ? ' · 실패 ' + fail + '건 (콘솔 확인)' : ''));
+  return { done: done, fail: fail, targets: targets.length };
 }
 
 function taamTranslateRestaurants(opts){
@@ -51376,6 +51460,172 @@ function taamTranslatePartners(opts){
 window.taamTranslatePartners = taamTranslatePartners;
 window.taamTranslateRestaurants = taamTranslateRestaurants;
 window.taamTranslateTickets = taamTranslateTickets;
+
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026.09: 번역 자동화 — 등록부 + 자동 스윕
+//
+//   왜 필요한가
+//     티켓·파트너십은 어드민이 「일괄 AI 번역」 버튼을 눌러야만 번역됐다.
+//     아무도 안 누르면 새로 올린 콘텐츠는 한국어로 그대로 쌓인다.
+//     "전수 조사해서 고쳐도 또 생긴다"의 구조적 원인이 이것이었다.
+//
+//   어떻게 푸는가
+//     i18n_status_en 은 DB 기본값이 'pending' 이다. 즉 새로 들어온 행은
+//     아무 조치 없이도 이미 「미번역」으로 표시돼 있다. 그래서 등록부에
+//     올라온 잡을 가끔 한 번씩 돌리기만 하면 새 콘텐츠가 저절로 번역된다.
+//
+//   ⭐ 앞으로 번역이 필요한 콘텐츠가 생기면 I18N_AUTO_JOBS 에 한 줄만
+//      추가하면 자동 번역에 포함된다. 별도 배선이 필요 없다.
+// ═══════════════════════════════════════════════════════════════
+// ── jsonb 안에 든 문구 번역 ────────────────────────────────────
+//   photo_texts(사진 위 카피)와 app_config 의 공지 팝업은 평면 컬럼이 아니라
+//   jsonb 라 _i18nBatch 의 컬럼 모델로는 다룰 수 없다. 그래서 지금까지 번역
+//   대상에서 통째로 빠져 EN·JA 에서도 한국어로 남았다. 전용 잡으로 처리한다.
+//   원문 옆에 _en / _ja 를 나란히 넣어 두는 방식이라 기존 데이터는 그대로 동작한다.
+
+// 이미 번역돼 있으면 건너뛴다 — 매번 다시 번역하면 비용만 든다
+function _i18nObjNeeds(o, keys){
+  if(!o) return false;
+  for (var i=0;i<keys.length;i++){
+    var ko = (o[keys[i]] || '').toString().trim();
+    if (!ko) continue;
+    if (!(o[keys[i]+'_en'] || '').toString().trim()) return true;
+    if (!(o[keys[i]+'_ja'] || '').toString().trim()) return true;
+  }
+  return false;
+}
+// 번역 결과를 원문 오브젝트에 _en / _ja 로 붙인다
+async function _i18nFillObj(o, keys, ctx){
+  var items = [];
+  keys.forEach(function(k){
+    var ko = (o[k] || '').toString().trim();
+    if (ko) items.push({ id:k, value:ko });
+  });
+  if (!items.length) return 0;
+  var res = await window.taamTranslate(items, ctx);
+  var tr = res && res.translations;
+  if (!tr) return 0;
+  var got = 0;
+  keys.forEach(function(k){
+    var v = tr[k];
+    if (!v) return;
+    if (v.en) { o[k+'_en'] = v.en; got++; }
+    if (v.ja) { o[k+'_ja'] = v.ja; got++; }
+  });
+  return got;
+}
+
+// 사진 위 카피 — restaurants.photo_texts (jsonb 배열)
+async function taamTranslatePhotoTexts(opts){
+  opts = opts || {};
+  var q = window.sb.from('restaurants').select('id, photo_texts')
+            .or('super_admin_only.is.null,super_admin_only.eq.false');
+  var res = await q;
+  if (res.error) { if(!opts.quiet) showToast('⚠','조회 실패', res.error.message); return { done:0, fail:0 }; }
+  var KEYS = ['title','desc','detail'];
+  var CTX = '레스토랑 사진 위에 얹는 짧은 카피. 감성적인 한 줄 문구다. 직역하지 말고 같은 인상을 주는 자연스러운 문장으로 옮길 것.';
+  var done = 0, fail = 0;
+  var rows = (res.data || []).filter(function(r){
+    return Array.isArray(r.photo_texts) && r.photo_texts.some(function(p){ return _i18nObjNeeds(p, KEYS); });
+  });
+  for (var i=0;i<rows.length;i++){
+    var r = rows[i], changed = 0;
+    try {
+      for (var j=0;j<r.photo_texts.length;j++){
+        var p = r.photo_texts[j];
+        if (!_i18nObjNeeds(p, KEYS)) continue;
+        changed += await _i18nFillObj(p, KEYS, CTX);
+      }
+      if (changed){
+        var up = await window.sb.from('restaurants').update({ photo_texts: r.photo_texts }).eq('id', r.id);
+        if (up.error) { fail++; console.warn('[i18n] 사진카피 저장 실패', r.id, up.error.message); }
+        else done++;
+      }
+    } catch(e){ fail++; console.warn('[i18n] 사진카피 번역 실패', r.id, e && e.message); }
+  }
+  if(!opts.quiet && (done || fail)) showToast(fail?'⚠':'✓','사진 카피 번역', '성공 '+done+'건'+(fail?' · 실패 '+fail+'건':''));
+  return { done: done, fail: fail };
+}
+window.taamTranslatePhotoTexts = taamTranslatePhotoTexts;
+
+// 공지 팝업 — app_config.home_popup (jsonb)
+async function taamTranslateHomePopup(opts){
+  opts = opts || {};
+  var res = await window.sb.from('app_config').select('key, value').eq('key','home_popup').maybeSingle();
+  if (res.error) { if(!opts.quiet) showToast('⚠','조회 실패', res.error.message); return { done:0, fail:0 }; }
+  var c = res.data && res.data.value;
+  if (!c || typeof c !== 'object') return { done:0, fail:0 };
+  var KEYS = ['title','body','label','event_desc'];
+  var CTX = '앱 홈 공지 팝업 문구. 회원에게 알리는 짧은 안내다. 정중하고 담백한 문체 유지.';
+  var changed = 0;
+  try {
+    if (_i18nObjNeeds(c, KEYS)) changed += await _i18nFillObj(c, KEYS, CTX);
+    // 스토리 카드도 같은 방식으로
+    if (Array.isArray(c.stories)){
+      for (var i=0;i<c.stories.length;i++){
+        var s = c.stories[i];
+        if (_i18nObjNeeds(s, ['headline','body'])) changed += await _i18nFillObj(s, ['headline','body'], CTX);
+      }
+    }
+    if (changed){
+      var up = await window.sb.from('app_config').update({ value: c }).eq('key','home_popup');
+      if (up.error) { console.warn('[i18n] 공지 저장 실패', up.error.message); return { done:0, fail:1 }; }
+      if(!opts.quiet) showToast('✓','공지 팝업 번역','EN·JA 를 채웠습니다');
+      return { done:1, fail:0 };
+    }
+  } catch(e){ console.warn('[i18n] 공지 번역 실패', e && e.message); return { done:0, fail:1 }; }
+  return { done:0, fail:0 };
+}
+window.taamTranslateHomePopup = taamTranslateHomePopup;
+
+var I18N_AUTO_JOBS = [
+  { key:'restaurants', label:'레스토랑',      run:function(o){ return taamTranslateRestaurants(o); } },
+  { key:'tickets',     label:'티켓 설명',     run:function(o){ return taamTranslateTickets(o); } },
+  { key:'partners',    label:'파트너십 매장', run:function(o){ return taamTranslatePartners(o); } },
+  { key:'phototexts',  label:'사진 카피',     run:function(o){ return taamTranslatePhotoTexts(o); } },
+  { key:'homepopup',   label:'공지 팝업',     run:function(o){ return taamTranslateHomePopup(o); } }
+];
+window.I18N_AUTO_JOBS = I18N_AUTO_JOBS;
+
+var I18N_AUTO_MIN_GAP_MS = 6 * 60 * 60 * 1000;   // 같은 기기에서 6시간에 한 번
+var _i18nAutoRunning = false;
+
+//   opts.force = true 면 주기·권한 제한을 무시한다 (어드민 메뉴에서 수동 실행용)
+async function taamI18nAutoSweep(opts){
+  opts = opts || {};
+  if (_i18nAutoRunning) return;
+  if (_i18nBatchRunning) return;              // 사람이 돌리는 배치가 우선
+  if (!window.sb) return;
+  if (!opts.force){
+    // 번역 API 비용이 드는 작업이라 슈퍼어드민 세션에서만 자동으로 돈다
+    if (typeof _currentRole === 'undefined' || _currentRole !== 'superadmin') return;
+    var last = 0;
+    try { last = parseInt(localStorage.getItem('taamI18nAutoAt') || '0', 10) || 0; } catch(e){}
+    if (Date.now() - last < I18N_AUTO_MIN_GAP_MS) return;
+  }
+  _i18nAutoRunning = true;
+  var total = 0, failed = 0;
+  try {
+    for (var i = 0; i < I18N_AUTO_JOBS.length; i++){
+      var job = I18N_AUTO_JOBS[i];
+      try {
+        var r = await job.run({ quiet: true });
+        if (r) { total += (r.done || 0); failed += (r.fail || 0); }
+      } catch(e){
+        console.warn('[i18n] 자동 번역 실패 — ' + job.key, e && e.message);
+      }
+    }
+    try { localStorage.setItem('taamI18nAutoAt', String(Date.now())); } catch(e){}
+  } finally { _i18nAutoRunning = false; }
+  // 실제로 뭔가 번역했을 때만 알린다 (평소엔 조용해야 한다)
+  if (total > 0) {
+    showToast('🌐','자동 번역 완료',
+      '새 콘텐츠 ' + total + '건을 EN·JA 로 번역했습니다' +
+      (failed ? ' · 실패 ' + failed + '건' : ''));
+  }
+  return { done: total, fail: failed };
+}
+window.taamI18nAutoSweep = taamI18nAutoSweep;
 
 // 🆕 v1.53.2 2026.05.28: 노드 단위 AI 번역 (KO → EN + JA).
 //   chefs 테이블 한 row 의 한국어 필드 (name, sub_title, sec1_data.title/desc, sec2_data.title/desc)
@@ -52746,8 +52996,12 @@ function txRestoreAll(){
     var rec = list[i], node = rec[0];
     try{
       if (!node) continue;
-      if (rec[1] === 'ph'){
-        if (node.getAttribute && node.getAttribute('placeholder') === rec[3]) node.setAttribute('placeholder', rec[2]);
+      // 속성 종류별로 되돌린다. 🆕 2026.09 title / aria-label 추가 —
+      //   텍스트 노드로 취급하면 nodeValue 가 null 이라 조용히 복구를 건너뛰고,
+      //   EN→KO 로 되돌릴 때 영어가 그대로 남는다.
+      var attrOf = { ph:'placeholder', title:'title', aria:'aria-label' }[rec[1]];
+      if (attrOf){
+        if (node.getAttribute && node.getAttribute(attrOf) === rec[3]) node.setAttribute(attrOf, rec[2]);
       } else {
         if (node.nodeValue === rec[3]) node.nodeValue = rec[2];
       }
@@ -52800,9 +53054,52 @@ function txSweep(root){
         if (_txDone.length < TX_DONE_MAX) _txDone.push([el, 'ph', ph, nph]);
       }
     }
+
+    // 🆕 2026.09: title / aria-label 도 속성이라 스윕에서 빠져 있었다.
+    //   홈 캐러셀의 aria-label="닫기", 챗 버튼 aria-label="채팅창 열기" 같은 것이
+    //   EN·JA 화면에서 계속 한글로 남아 있던 이유다. placeholder 와 같은 방식으로 훑는다.
+    //   data-i18n-title / data-i18n-aria 가 붙은 요소는 applyI18n 이 이미 처리하므로 건너뛴다.
+    var _TX_ATTRS = [
+      { attr:'title',      skip:'data-i18n-title', tag:'title' },
+      { attr:'aria-label', skip:'data-i18n-aria',  tag:'aria'  }
+    ];
+    for (var a=0; a<_TX_ATTRS.length; a++){
+      var spec = _TX_ATTRS[a];
+      var els = root.querySelectorAll ? root.querySelectorAll('['+spec.attr+']') : [];
+      for (var k=0; k<els.length; k++){
+        var ae = els[k];
+        if (_txSkip(ae)) continue;
+        if (ae.hasAttribute(spec.skip)) continue;
+        var av = ae.getAttribute(spec.attr);
+        if (!av || !_TX_KO_RE.test(av)) continue;
+        var nav2 = txText(av);
+        if (nav2 !== av) {
+          ae.setAttribute(spec.attr, nav2);
+          if (_txDone.length < TX_DONE_MAX) _txDone.push([ae, spec.tag, av, nav2]);
+        }
+      }
+    }
   }catch(e){ /* 번역 실패가 화면을 막으면 안 된다 */ }
 }
 window.txSweep = txSweep;
+
+// 🆕 2026.09: alert / confirm / prompt 는 네이티브 다이얼로그라 DOM 이 아니다.
+//   MutationObserver 도 txSweep 도 닿지 못해 EN·JA 회원에게 늘 한글로 떴다.
+//   호출부 180곳을 일일이 고치는 대신 여기서 한 번 감싸 사전을 태운다.
+//   사전에 없는 문구는 txText 가 원문을 그대로 돌려주므로 동작은 달라지지 않는다.
+//   ko 일 때도 txText 가 즉시 원문을 반환한다(비용 없음).
+(function _txWrapDialogs(){
+  if (window._txDialogsWrapped) return;
+  window._txDialogsWrapped = true;
+  var _alert = window.alert, _confirm = window.confirm, _prompt = window.prompt;
+  function tr(m){
+    try { return (typeof m === 'string') ? txText(m) : m; }
+    catch(e){ return m; }   // 번역 실패가 경고창 자체를 막으면 안 된다
+  }
+  if (typeof _alert === 'function')   window.alert   = function(m){ return _alert.call(window, tr(m)); };
+  if (typeof _confirm === 'function') window.confirm = function(m){ return _confirm.call(window, tr(m)); };
+  if (typeof _prompt === 'function')  window.prompt  = function(m, d){ return _prompt.call(window, tr(m), d); };
+})();
 
 // 새로 그려지는 DOM 을 따라간다. 텍스트 값만 바꾸므로 자기 자신을 다시 깨우지 않는다.
 var _txObserver = null, _txPending = [], _txRafId = 0;
@@ -72691,8 +72988,6 @@ async function saveTicketProductToSupabase(ticket){
       uploaded_by: ticket.uploadedBy || null,
       uploader_rest_id: ticket.uploaderRestId || null,
       ticket_desc: ticket.ticketDesc || null,
-      // 🆕 2026.08: 원문이 바뀌면 번역을 pending 으로 되돌려 자동 재번역되게 한다
-      i18n_status_en: 'pending', i18n_status_jp: 'pending',
       cancel_policy: ticket.cancelPolicy || null,
       grade_open: ticket.gradeOpen || false,
       min_tier: ticket.minTier || null,          // 🆕 2026.08: 티켓 이용 등급 제한
@@ -72706,7 +73001,18 @@ async function saveTicketProductToSupabase(ticket){
       reg_date: ticket.regDate || null,
       updated_at: new Date().toISOString()
     };
-    
+
+    // 🆕 2026.09: 설명 원문이 실제로 바뀐 경우에만 재번역 대상으로 되돌린다.
+    //   종전에는 저장할 때마다 무조건 pending 을 찍었다. 매진 토글처럼 설명과
+    //   무관한 저장에도 재번역이 걸려 번역비가 새고, 손으로 다듬은 번역문이
+    //   AI 초벌로 덮였다. 자동 스윕이 도는 지금은 그 낭비가 더 커진다.
+    var _descNow = ticket.ticketDesc || '';
+    if (ticket._i18nDescSnap === undefined || ticket._i18nDescSnap !== _descNow) {
+      payload.i18n_status_en = 'pending';
+      payload.i18n_status_jp = 'pending';
+    }
+    ticket._i18nDescSnap = _descNow;
+
     var res = await window.sb.from('ticket_products').upsert(payload, { onConflict: 'id' });
 
     if(res.error){
@@ -72854,6 +73160,8 @@ async function loadAllTicketProductsFromSupabase(){
         uploadedBy: row.uploaded_by,
         uploaderRestId: row.uploader_rest_id,
         ticketDesc: row.ticket_desc,
+        // 🆕 2026.09: 저장 시 「설명 원문이 실제로 바뀌었는지」 판정하는 기준값
+        _i18nDescSnap: row.ticket_desc || '',
         ticket_desc: row.ticket_desc, ticket_desc_en: row.ticket_desc_en, ticket_desc_jp: row.ticket_desc_jp,
         i18n_jp_approved: row.i18n_jp_approved,   // 🆕 pickI18nField 게이트용
         cancelPolicy: row.cancel_policy || {},
