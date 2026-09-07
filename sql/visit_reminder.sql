@@ -125,20 +125,28 @@ begin
           and n.type = 'visit_reminder'
           and n.payload ->> 'ticket_id' = w.ticket_id::text
           and (n.payload ->> 'days')::int = w.d)
-    returning 1
+    -- ⚠ 이번 실행이 **실제로 넣은 행만** 돌려받는다.
+    --   예전에는 여기서 1 만 돌려받고, 푸시 대상은 따로
+    --   「created_at > now() - 2분」으로 다시 긁었다. 그러면 이번 실행이
+    --   만든 것인지 구분하지 못해, 2분 안에 두 번 부르면 앞 실행이 만든
+    --   알림을 다시 집어 **같은 회원에게 푸시가 두 번** 나갔다.
+    --   (made:0 인데 push_sent:1 로 실제로 관측됨)
+    returning id, user_id, title, body, url, payload
   )
-  select count(*) into v_cnt from ins;
-
-  -- 방금 넣은 것 — Edge Function 이 이걸로 푸시를 쏜다
-  select coalesce(jsonb_agg(to_jsonb(x)), '[]'::jsonb) into v_rows
-    from (select n.id, n.user_id, n.title, n.body, n.url,
-                 (n.payload ->> 'days')::int as days,
-                 n.payload ->> 'ticket_id' as ticket_id,
-                 n.payload ->> 'rest' as rest,
-                 n.payload ->> 'time' as vtime
-            from public.notifications n
-           where n.type = 'visit_reminder'
-             and n.created_at > now() - interval '2 minute') x;
+  select count(*)::int,
+         coalesce(jsonb_agg(jsonb_build_object(
+           'id',        i.id,
+           'user_id',   i.user_id,
+           'title',     i.title,
+           'body',      i.body,
+           'url',       i.url,
+           'days',      (i.payload ->> 'days')::int,
+           'ticket_id', i.payload ->> 'ticket_id',
+           'rest',      i.payload ->> 'rest',
+           'vtime',     i.payload ->> 'time'
+         )), '[]'::jsonb)
+    into v_cnt, v_rows
+    from ins i;
 
   return jsonb_build_object('made', v_cnt, 'rows', v_rows);
 end;
