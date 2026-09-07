@@ -122,13 +122,37 @@
       document.body.appendChild(el);
     } catch(e){}
   }
-  if (!_initSb()) {
+  // 🆕 2026-09-06: 새로고침은 **딱 한 번**만 한다.
+  //   종전에는 폴백이 성공할 때마다 location.reload() 를 했다. 그런데 새로고침
+  //   하면 다시 unpkg 부터 시작한다 — unpkg 가 계속 막혀 있으면
+  //     unpkg 실패 → 폴백 성공 → 새로고침 → unpkg 실패 → …
+  //   가 끝없이 돈다. 매번 부팅 첫 화면(검정)으로 되돌아가므로, 회원 눈에는
+  //   **「켜면 까만 화면만 나오는 앱」** 이 된다. 오류도 안 뜬다 — 오류가 뜰
+  //   만큼 오래 살아 있질 못한다.
+  //   ⚠ 서비스워커 버전을 올린 직후가 특히 위험하다. activate 가 옛 캐시를
+  //     전부 지워서 SDK 를 네트워크에서 새로 받아야 하기 때문이다.
+  var _SB_RETRY_KEY = 'taamSbCdnRetried';
+  if (_initSb()) {
+    // 정상으로 돌아왔으면 표시를 지운다 — 다음에 또 막히면 한 번은 시도해야 한다
+    try { sessionStorage.removeItem(_SB_RETRY_KEY); } catch(e){}
+  } else {
     console.warn('[boot] Supabase SDK 미로드 — 폴백 CDN 재시도');
     var _fb = document.createElement('script');
     _fb.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
     _fb.onload  = function(){
-      if (_initSb()) { console.warn('[boot] 폴백 CDN 성공 — 새로고침'); location.reload(); }
-      else _sbFailNotice();
+      if (!_initSb()) { _sbFailNotice(); return; }
+      var _tried = false;
+      try { _tried = sessionStorage.getItem(_SB_RETRY_KEY) === '1'; } catch(e){}
+      if (_tried) {
+        // 이미 한 번 돌았다. 또 새로고침하면 같은 자리로 돌아온다.
+        //   window.sb 는 지금 만들어졌으니 그대로 간다 — 이 실행에서 이미
+        //   지나간 초기화들은 부팅 감시견(8초)이 로그인 화면으로 받아준다.
+        console.warn('[boot] 폴백 CDN 성공 — 새로고침은 한 번만 한다. 그대로 진행');
+        return;
+      }
+      try { sessionStorage.setItem(_SB_RETRY_KEY, '1'); } catch(e){}
+      console.warn('[boot] 폴백 CDN 성공 — 새로고침 (1회)');
+      location.reload();
     };
     _fb.onerror = function(){ _sbFailNotice(); };
     document.head.appendChild(_fb);
@@ -43147,7 +43171,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.04-g';
+var TAAM_WEB_BUILD = '2026.09.06-a';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -85675,6 +85699,57 @@ function _instaDrawPath(id, offsetVal){
   } else {
     setTimeout(bootAutoLogin, 50);
   }
+
+  // ═══════════════════════════════════════════════════════════
+  // 🆕 2026-09-06 부팅 감시견 — 검은 화면에 갇히지 않는다
+  // ═══════════════════════════════════════════════════════════
+  //   #appWrapper 는 .ready 가 붙기 전까지 display:none 이고 배경은 검정이다.
+  //   그래서 **부팅이 어디서든 멈추면 결과가 똑같다 — 아무것도 없는 검은 화면.**
+  //   게다가 html.auto-login 이 codeScreen·phoneScreen 을 !important 로 숨기고
+  //   있어서, 그 상태에서는 로그인조차 할 수 없다. 앱을 지웠다 까는 것 말고는
+  //   빠져나올 길이 없다.
+  //
+  //   멈추는 길이 여럿이다. 위 bootAutoLogin 만 봐도 —
+  //     · IDB.get 이 거부 → .catch(function(){}) 가 삼킨다
+  //     · loadRole() 이 거부(네트워크·RLS) → 역시 삼킨다
+  //     · typeof loadRole !== 'function' → 그냥 return
+  //   셋 다 .ready 를 안 붙인 채 끝난다. 삼키는 것 자체는 고치지 않는다 —
+  //   부르는 쪽마다 사정이 달라서, 한 곳에서 **바닥**을 깔아주는 편이 낫다.
+  //
+  //   ⚠ 이건 정상 경로를 앞지르지 않는다. 이미 .ready 면 아무 일도 안 한다.
+  //     8초는 느린 셀룰러에서 index.html(약 1MB)을 받고 세션까지 확인하기에
+  //     넉넉하되, 사람이 「먹통이다」라고 느끼기 전이다.
+  //
+  //   ⚠ 서비스워커를 새 버전으로 올린 직후가 특히 위험하다. activate 가
+  //     옛 캐시를 전부 지우므로 그 실행에는 셸 폴백이 없다 — 네트워크가
+  //     끝까지 안 오면 그대로 검은 화면이다. 감시견이 그 자리를 받는다.
+  var _bootWatchdogFired = false;
+  function _bootWatchdog(){
+    if(_bootWatchdogFired) return;
+    var wrap = document.getElementById('appWrapper');
+    if(wrap && wrap.classList.contains('ready')) return;   // 정상적으로 떴다
+    _bootWatchdogFired = true;
+    console.warn('[boot] 8초 안에 화면이 뜨지 않았다 — 로그인 화면으로 내린다');
+    try {
+      // 자동 로그인 강제 숨김을 푼다. 이걸 안 풀면 로그인 화면도 안 보인다.
+      document.documentElement.classList.remove('auto-login');
+      if(wrap){ wrap.classList.add('ready'); wrap.style.display = 'block'; }
+      var sp = document.querySelector('.splash');
+      if(sp){ sp.style.display = 'none'; }
+      var sk = document.getElementById('splashSkipBtn');
+      if(sk) sk.style.display = 'none';
+      window._splashHolding = false; window._splashClosed = true;
+      // 세션이 살아 있으면 openCode 뒤에도 앱이 알아서 들어간다.
+      //   못 들어가면 회원이 직접 로그인하면 된다 — 검은 화면보다 낫다.
+      if(typeof openCode === 'function') openCode();
+    } catch(e){ console.warn('[boot] 감시견 실패:', e); }
+  }
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', function(){ setTimeout(_bootWatchdog, 8000); });
+  } else {
+    setTimeout(_bootWatchdog, 8000);
+  }
+  window._bootWatchdog = _bootWatchdog;
 })();
 
 // 실제 로그아웃 — 앞쪽 body 시작 script의 커스텀 팝업 버전을 사용
