@@ -15372,6 +15372,18 @@ var payload = {
       rules: r.rules || [],
       map_photos: r.mapPhotos || []
     };
+    // 🆕 2026.09: 원문이 바뀌면 재번역 대상으로 되돌린다.
+    //   _i18nBatch 는 「i18n_status_en 이 pending 인 행」만 번역한다. 그런데 이 저장
+    //   경로에는 status 를 되돌리는 코드가 없어서, 매장 이름·설명·주소를 고쳐도
+    //   번역은 옛 값 그대로 남았다(배치를 돌려도 이미 처리된 행으로 보고 건너뛴다).
+    //   한국어 원문 3개를 스냅샷과 비교해 실제로 달라졌을 때만 pending 으로 내린다.
+    //   — 무관한 저장(사진 교체 등)에 매번 pending 을 찍으면 번역비만 나간다.
+    var _koNow = [r.name || '', r.genre || '', r.address || ''].join('');
+    if (r._i18nKoSnap !== undefined && r._i18nKoSnap !== _koNow) {
+      payload.i18n_status_en = 'pending';
+      payload.i18n_status_jp = 'pending';
+    }
+    r._i18nKoSnap = _koNow;
     // DB id가 UUID 형태(문자열 길이 36)면 이미 DB에 있는 것 → UPDATE
     if(r.id && typeof r.id === 'string' && r.id.length === 36){
       return window.sb.from('restaurants').update(payload).eq('id', r.id)
@@ -15451,6 +15463,9 @@ return {
           i18n_jp_approved: r.i18n_jp_approved,
           address: r.address || '',
           genre: r.description || '',
+          // 🆕 2026.09: 저장할 때 「원문이 실제로 바뀌었는지」 판정하는 기준값.
+          //   saveRestaurants 가 이 값과 비교해 달라졌을 때만 재번역 대상으로 내린다.
+          _i18nKoSnap: [r.name || '', r.description || '', r.address || ''].join(''),
           region: r.region || '',
           countryEn: r.country_en || '',
           cityEn: r.city_en || '',
@@ -16172,6 +16187,14 @@ function loadRole(){
       _currentRole=d.role||'user'; _currentAdminRestId=d.restId||null;
       _currentAdminRestName=d.restName||''; _currentUserPhone=d.phone||''; _currentUserName=d.name||'';
     }
+    // 🆕 2026.09: 새로 올라온 콘텐츠를 자동으로 번역한다.
+    //   부팅을 방해하지 않도록 충분히 미뤄서 한 번만 건드린다.
+    //   권한(슈퍼어드민)·주기(6시간) 판정은 taamI18nAutoSweep 안에서 다시 한다.
+    try {
+      setTimeout(function(){
+        if (typeof taamI18nAutoSweep === 'function') taamI18nAutoSweep();
+      }, 20000);
+    } catch(e){}
   }).catch(function(){});
 }
 
@@ -51256,8 +51279,11 @@ window.taamTranslate = taamTranslate;
 var _i18nBatchRunning = null;   // 실행 중인 label
 
 async function _i18nBatch(cfg){
-  // cfg: { table, label, idCol, fields:[{ko, en, jp, ctx}], dryRun }
-  if (!window.sb) { showToast('⚠','오류','서버 연결이 없습니다'); return; }
+  // cfg: { table, label, idCol, fields:[{ko, en, jp, ctx}], dryRun, quiet }
+  //   🆕 quiet — 자동 스윕에서 쓴다. 사람이 누른 게 아니므로 "미번역 없음" 같은
+  //      토스트를 띄우면 안 된다. 실제로 번역이 일어난 건수만 돌려준다.
+  var _q = !!cfg.quiet;
+  if (!window.sb) { if(!_q) showToast('⚠','오류','서버 연결이 없습니다'); return { done:0, fail:0, targets:0 }; }
   if (!cfg.dryRun && _i18nBatchRunning) {
     showToast('⏳','이미 진행 중입니다', _i18nBatchRunning + ' 번역이 끝난 뒤 실행해주세요');
     return;
@@ -51271,7 +51297,7 @@ async function _i18nBatch(cfg){
   // 🆕 회원에게 안 보이는 행은 번역하지 않는다 (시간·비용 절약)
   if (cfg.filter) q = cfg.filter(q);
   var res = await q;
-  if (res.error) { showToast('⚠','조회 실패', res.error.message); return; }
+  if (res.error) { if(!_q) showToast('⚠','조회 실패', res.error.message); return { done:0, fail:0, targets:0 }; }
   var rows = res.data || [];
 
   // 대상 = 번역할 한글이 있고, 아직 처리하지 않은 행
@@ -51297,9 +51323,12 @@ async function _i18nBatch(cfg){
     console.log('[i18n] ' + cfg.table + ' 대상', targets.map(function(r){ return r[idCol]; }));
     return;
   }
-  if (targets.length === 0) { showToast('✓', cfg.label, '미번역 항목이 없습니다'); return; }
+  if (targets.length === 0) {
+    if(!_q) showToast('✓', cfg.label, '미번역 항목이 없습니다');
+    return { done:0, fail:0, targets:0 };
+  }
 
-  showToast('⏳', cfg.label + ' 번역 시작', targets.length + '건 — 완료까지 몇 분 걸립니다');
+  if(!_q) showToast('⏳', cfg.label + ' 번역 시작', targets.length + '건 — 완료까지 몇 분 걸립니다');
   _i18nBatchRunning = cfg.label;
   _taamTxBarShow(cfg.label + ' 번역', 0, targets.length);
   var done = 0, fail = 0;
@@ -51341,9 +51370,11 @@ async function _i18nBatch(cfg){
   }
   } finally { _i18nBatchRunning = null; }
   _taamTxBarDone(done, fail, '—');
-  showToast(fail ? '⚠' : '✓', cfg.label + ' 번역 완료',
-    '성공 ' + done + '건' + (fail ? ' · 실패 ' + fail + '건 (콘솔 확인)' : '') +
-    '\n일본어는 검수 후 노출됩니다');
+  // 🆕 2026.09: 일본어 검수 게이트를 열었으므로(sql/i18n_jp_open.sql)
+  //   "검수 후 노출" 안내는 더 이상 사실이 아니다. 번역되면 바로 나온다.
+  if(!_q) showToast(fail ? '⚠' : '✓', cfg.label + ' 번역 완료',
+    '성공 ' + done + '건' + (fail ? ' · 실패 ' + fail + '건 (콘솔 확인)' : ''));
+  return { done: done, fail: fail, targets: targets.length };
 }
 
 function taamTranslateRestaurants(opts){
@@ -51397,6 +51428,69 @@ function taamTranslatePartners(opts){
 window.taamTranslatePartners = taamTranslatePartners;
 window.taamTranslateRestaurants = taamTranslateRestaurants;
 window.taamTranslateTickets = taamTranslateTickets;
+
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026.09: 번역 자동화 — 등록부 + 자동 스윕
+//
+//   왜 필요한가
+//     티켓·파트너십은 어드민이 「일괄 AI 번역」 버튼을 눌러야만 번역됐다.
+//     아무도 안 누르면 새로 올린 콘텐츠는 한국어로 그대로 쌓인다.
+//     "전수 조사해서 고쳐도 또 생긴다"의 구조적 원인이 이것이었다.
+//
+//   어떻게 푸는가
+//     i18n_status_en 은 DB 기본값이 'pending' 이다. 즉 새로 들어온 행은
+//     아무 조치 없이도 이미 「미번역」으로 표시돼 있다. 그래서 등록부에
+//     올라온 잡을 가끔 한 번씩 돌리기만 하면 새 콘텐츠가 저절로 번역된다.
+//
+//   ⭐ 앞으로 번역이 필요한 콘텐츠가 생기면 I18N_AUTO_JOBS 에 한 줄만
+//      추가하면 자동 번역에 포함된다. 별도 배선이 필요 없다.
+// ═══════════════════════════════════════════════════════════════
+var I18N_AUTO_JOBS = [
+  { key:'restaurants', label:'레스토랑',      run:function(o){ return taamTranslateRestaurants(o); } },
+  { key:'tickets',     label:'티켓 설명',     run:function(o){ return taamTranslateTickets(o); } },
+  { key:'partners',    label:'파트너십 매장', run:function(o){ return taamTranslatePartners(o); } }
+];
+window.I18N_AUTO_JOBS = I18N_AUTO_JOBS;
+
+var I18N_AUTO_MIN_GAP_MS = 6 * 60 * 60 * 1000;   // 같은 기기에서 6시간에 한 번
+var _i18nAutoRunning = false;
+
+//   opts.force = true 면 주기·권한 제한을 무시한다 (어드민 메뉴에서 수동 실행용)
+async function taamI18nAutoSweep(opts){
+  opts = opts || {};
+  if (_i18nAutoRunning) return;
+  if (_i18nBatchRunning) return;              // 사람이 돌리는 배치가 우선
+  if (!window.sb) return;
+  if (!opts.force){
+    // 번역 API 비용이 드는 작업이라 슈퍼어드민 세션에서만 자동으로 돈다
+    if (typeof _currentRole === 'undefined' || _currentRole !== 'superadmin') return;
+    var last = 0;
+    try { last = parseInt(localStorage.getItem('taamI18nAutoAt') || '0', 10) || 0; } catch(e){}
+    if (Date.now() - last < I18N_AUTO_MIN_GAP_MS) return;
+  }
+  _i18nAutoRunning = true;
+  var total = 0, failed = 0;
+  try {
+    for (var i = 0; i < I18N_AUTO_JOBS.length; i++){
+      var job = I18N_AUTO_JOBS[i];
+      try {
+        var r = await job.run({ quiet: true });
+        if (r) { total += (r.done || 0); failed += (r.fail || 0); }
+      } catch(e){
+        console.warn('[i18n] 자동 번역 실패 — ' + job.key, e && e.message);
+      }
+    }
+    try { localStorage.setItem('taamI18nAutoAt', String(Date.now())); } catch(e){}
+  } finally { _i18nAutoRunning = false; }
+  // 실제로 뭔가 번역했을 때만 알린다 (평소엔 조용해야 한다)
+  if (total > 0) {
+    showToast('🌐','자동 번역 완료',
+      '새 콘텐츠 ' + total + '건을 EN·JA 로 번역했습니다' +
+      (failed ? ' · 실패 ' + failed + '건' : ''));
+  }
+  return { done: total, fail: failed };
+}
+window.taamI18nAutoSweep = taamI18nAutoSweep;
 
 // 🆕 v1.53.2 2026.05.28: 노드 단위 AI 번역 (KO → EN + JA).
 //   chefs 테이블 한 row 의 한국어 필드 (name, sub_title, sec1_data.title/desc, sec2_data.title/desc)
@@ -72759,8 +72853,6 @@ async function saveTicketProductToSupabase(ticket){
       uploaded_by: ticket.uploadedBy || null,
       uploader_rest_id: ticket.uploaderRestId || null,
       ticket_desc: ticket.ticketDesc || null,
-      // 🆕 2026.08: 원문이 바뀌면 번역을 pending 으로 되돌려 자동 재번역되게 한다
-      i18n_status_en: 'pending', i18n_status_jp: 'pending',
       cancel_policy: ticket.cancelPolicy || null,
       grade_open: ticket.gradeOpen || false,
       min_tier: ticket.minTier || null,          // 🆕 2026.08: 티켓 이용 등급 제한
@@ -72774,7 +72866,18 @@ async function saveTicketProductToSupabase(ticket){
       reg_date: ticket.regDate || null,
       updated_at: new Date().toISOString()
     };
-    
+
+    // 🆕 2026.09: 설명 원문이 실제로 바뀐 경우에만 재번역 대상으로 되돌린다.
+    //   종전에는 저장할 때마다 무조건 pending 을 찍었다. 매진 토글처럼 설명과
+    //   무관한 저장에도 재번역이 걸려 번역비가 새고, 손으로 다듬은 번역문이
+    //   AI 초벌로 덮였다. 자동 스윕이 도는 지금은 그 낭비가 더 커진다.
+    var _descNow = ticket.ticketDesc || '';
+    if (ticket._i18nDescSnap === undefined || ticket._i18nDescSnap !== _descNow) {
+      payload.i18n_status_en = 'pending';
+      payload.i18n_status_jp = 'pending';
+    }
+    ticket._i18nDescSnap = _descNow;
+
     var res = await window.sb.from('ticket_products').upsert(payload, { onConflict: 'id' });
 
     if(res.error){
@@ -72922,6 +73025,8 @@ async function loadAllTicketProductsFromSupabase(){
         uploadedBy: row.uploaded_by,
         uploaderRestId: row.uploader_rest_id,
         ticketDesc: row.ticket_desc,
+        // 🆕 2026.09: 저장 시 「설명 원문이 실제로 바뀌었는지」 판정하는 기준값
+        _i18nDescSnap: row.ticket_desc || '',
         ticket_desc: row.ticket_desc, ticket_desc_en: row.ticket_desc_en, ticket_desc_jp: row.ticket_desc_jp,
         i18n_jp_approved: row.i18n_jp_approved,   // 🆕 pickI18nField 게이트용
         cancelPolicy: row.cancel_policy || {},
