@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.85.1';  // 1.55.2 — 2026.08: 자동 새로고침 재도입(네이티브 앱에 최신 index.html 강제 반영). index.html 의 "네이티브 splash-skip 미부여" 수정과 함께라 인트로/스킵 안 사라짐.
-const STATIC_CACHE = 'taam-static-v1.85.1';
+const SW_VERSION = 'taam-sw-v1.85.2';  // 1.55.2 — 2026.08: 자동 새로고침 재도입(네이티브 앱에 최신 index.html 강제 반영). index.html 의 "네이티브 splash-skip 미부여" 수정과 함께라 인트로/스킵 안 사라짐.
+const STATIC_CACHE = 'taam-static-v1.85.2';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
@@ -111,16 +111,25 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(req.url);
 
-  // 같은 origin 만 SW 캐싱 (외부 CDN 도 추가 가능)
+  // 🔧 2026-09-06: **바깥 CDN 은 건드리지 않는다.**
+  //
+  //   종전엔 unpkg·fonts·cdnjs 도 가로채 캐싱했다. 두 가지가 걸린다.
+  //
+  //   ① 캐싱이 애초에 안 됐다. <script src="https://unpkg.com/...">는
+  //      crossorigin 이 없어 응답이 opaque 로 오고, 아래 캐싱 조건이
+  //      res.type !== 'opaque' 이라 **한 번도 저장되지 않았다.**
+  //      이득은 0인데 위험만 떠안고 있었다.
+  //
+  //   ② 그 위험이 터졌다. 아래 stale-while-revalidate 는 네트워크가
+  //      실패하면 null 로 끝나고, respondWith(null) 은 그 요청을 통째로
+  //      실패시킨다. Supabase SDK 가 그렇게 죽으면 앱은 폴백 CDN →
+  //      새로고침 고리에 빠져 **까만 화면**이 된다.
+  //      서비스워커는 안드로이드에서만 실질적으로 도는데, 그래서
+  //      아이폰은 멀쩡하고 안드로이드만 검었다 (2026-09-06).
+  //
+  //   이제 바깥 CDN 은 브라우저가 직접 받는다 — 아이폰과 같은 길이다.
   const isSameOrigin = url.origin === self.location.origin;
-  const isExternalCDN = (
-    url.hostname === 'fonts.googleapis.com' ||
-    url.hostname === 'fonts.gstatic.com' ||
-    url.hostname === 'cdnjs.cloudflare.com' ||
-    url.hostname === 'unpkg.com'
-  );
-
-  if (!isSameOrigin && !isExternalCDN) return;
+  if (!isSameOrigin) return;
 
   // SW / manifest / API 는 항상 네트워크 (캐싱 안 함)
   if (
@@ -159,8 +168,16 @@ self.addEventListener('fetch', (event) => {
         return res;
       }).catch(() => null);
 
-      // 캐시 있으면 즉시 반환, 없으면 네트워크 대기
-      return cached || networkFetch || new Response('', { status: 504 });
+      // 캐시 있으면 즉시 반환, 없으면 네트워크를 기다린다.
+      //   ⚠ networkFetch 는 **Promise 라 언제나 truthy** 다. 그래서 종전의
+      //     `cached || networkFetch || new Response(504)` 는 마지막 항이
+      //     절대 실행되지 않았고, 네트워크가 실패하면 그 Promise 가 null 로
+      //     풀려 respondWith(null) 이 됐다 — 그 요청은 통째로 실패한다.
+      //     캐시도 없고 네트워크도 죽었으면 **504 를 돌려준다.** 부르는 쪽이
+      //     「실패했다」를 알아야 폴백이든 재시도든 할 수 있다.
+      if (cached) return cached;
+      const res = await networkFetch;
+      return res || new Response('', { status: 504, statusText: 'SW offline' });
     })
   );
 });
