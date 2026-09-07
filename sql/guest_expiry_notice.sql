@@ -35,6 +35,7 @@ returns jsonb
 language plpgsql volatile security definer set search_path = public
 as $$
 declare v_admin int := 0; v_self int := 0; v_ids jsonb;
+        v_rows_a jsonb := '[]'::jsonb; v_rows_s jsonb := '[]'::jsonb;
 begin
   -- ── ① 슈퍼어드민에게 — 5일 전부터 매일 ──────────────────────
   with due as (
@@ -64,9 +65,15 @@ begin
           and n.type = 'guest_expiry_admin'
           and n.payload ->> 'guest_id' = k.guest_id::text
           and (n.payload ->> 'days')::int = k.d)
-    returning 1
+    -- ⚠ 이번 실행이 실제로 넣은 행만 돌려받는다 — 아래 「고친 것」 참고
+    returning id, user_id, title, body, url
   )
-  select count(*) into v_admin from ins;
+  select count(*)::int,
+         coalesce(jsonb_agg(jsonb_build_object(
+           'id', i.id, 'user_id', i.user_id,
+           'title', i.title, 'body', i.body, 'url', i.url)), '[]'::jsonb)
+    into v_admin, v_rows_a
+    from ins i;
 
   -- ── ② 게스트 본인에게 — 3일 전·1일 전만 ─────────────────────
   with pick as (
@@ -91,16 +98,24 @@ begin
           and n.type = 'guest_expiry_self'
           and (n.payload ->> 'days')::int = k.d
           and n.created_at > now() - interval '30 day')
-    returning 1
+    returning id, user_id, title, body, url
   )
-  select count(*) into v_self from ins;
+  select count(*)::int,
+         coalesce(jsonb_agg(jsonb_build_object(
+           'id', i.id, 'user_id', i.user_id,
+           'title', i.title, 'body', i.body, 'url', i.url)), '[]'::jsonb)
+    into v_self, v_rows_s
+    from ins i;
 
-  -- 방금 넣은 것들 — Edge Function 이 이걸로 푸시를 쏜다
-  select coalesce(jsonb_agg(to_jsonb(x)), '[]'::jsonb) into v_ids
-    from (select n.id, n.user_id, n.title, n.body, n.url
-            from public.notifications n
-           where n.type in ('guest_expiry_admin','guest_expiry_self')
-             and n.created_at > now() - interval '2 minute') x;
+  -- ── 고친 것 (2026-09-07) ────────────────────────────────────
+  --   예전에는 푸시 대상을 「type in (...) and created_at > now() - 2분」으로
+  --   다시 긁어왔다. 그러면 **이번 실행이 만든 것인지 구분하지 못한다.**
+  --   2분 안에 두 번 부르면(재시도·수동 호출·Cron 중복) 앞 실행이 만든
+  --   알림을 다시 집어 같은 사람에게 푸시가 두 번 나간다.
+  --   방문 리마인드(visit_reminder.sql)에서 같은 코드로 실제 재현됐다 —
+  --   새로 만든 것이 0 건인데 푸시는 1 건 나갔다.
+  --   이제 각 insert 가 자기가 넣은 행만 돌려주고, 시간 창은 쓰지 않는다.
+  v_ids := v_rows_a || v_rows_s;
 
   return jsonb_build_object('admin', v_admin, 'self', v_self, 'rows', v_ids);
 end;
