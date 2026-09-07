@@ -22487,8 +22487,11 @@ function openTicketDetail(id){
     var pt = r ? (r.photoTexts || []) : [];
 
     function photoBlock(src, idx) {
-      var title = (pt[idx] && pt[idx].title) || '';
-      var desc  = (pt[idx] && pt[idx].desc)  || '';
+      // 🆕 2026.09: 사진 위 카피도 언어를 따라간다.
+      //   종전에는 원문(한국어)을 그대로 박아, EN·JA 화면에서도
+      //   「향기를 가둔 순간의 요리」 같은 문구가 한국어로 남았다.
+      var title = pickI18nObj(pt[idx], 'title');
+      var desc  = pickI18nObj(pt[idx], 'desc');
       var overlay = '';
       var tx = (pt[idx] && pt[idx].tx !== undefined) ? pt[idx].tx : 2.5;
       var ty = (pt[idx] && pt[idx].ty !== undefined) ? pt[idx].ty : 86;
@@ -22901,8 +22904,9 @@ function openRestInfoScreen() {
     var photoTexts = (r && Array.isArray(r.photoTexts)) ? r.photoTexts : [];
     photos.forEach(function(url, i){
       var pt = photoTexts[i] || {};
-      var title = pt.title || '';
-      var desc  = pt.desc  || '';
+      // 🆕 2026.09: 레스토랑 정보 풀스크린에서도 사진 카피가 언어를 따라간다
+      var title = pickI18nObj(pt, 'title');
+      var desc  = pickI18nObj(pt, 'desc');
       // 위치: 등록 시 설정한 X/Y (%) 그대로
       var tx = (pt.tx !== undefined) ? pt.tx : 2.5;
       var ty = (pt.ty !== undefined) ? pt.ty : 86;
@@ -46156,8 +46160,17 @@ function homePopupShow(force){
   //   🆕 2026.08-31: 어드민이 직접 쓴 값(c.label)이 있으면 그것을 쓴다.
   //     모드로 자동 정하던 값은 「이번 팝업은 COLLECTION 이 아닌데」 같은 때
   //     손댈 방법이 없었다. 비워 두면 종전대로 모드에 맞춰 자동으로 정한다.
-  var _popLabel = (c.label && String(c.label).trim())
-                ? String(c.label).trim()
+  // 🆕 2026.09: 공지 팝업 문구도 언어를 따라간다.
+  //   app_config.home_popup 은 jsonb 라 i18n 컬럼이 없었고, 번역 대상에서
+  //   통째로 빠져 있었다. 그래서 EN·JA 회원에게도 「2026년과 2027 예약슬롯들이
+  //   일부 오픈됩니다」가 한국어로 그대로 떴다.
+  //   title_en/title_ja, body_en/body_ja, label_en/label_ja 가 있으면 그것을 쓰고
+  //   없으면 지금까지처럼 한국어 원문으로 폴백한다(기존 데이터 그대로 동작).
+  var _popTitle = pickI18nObj(c, 'title') || (c.title || '');
+  var _popBody  = pickI18nObj(c, 'body')  || (c.body  || '');
+  var _popLabelRaw = pickI18nObj(c, 'label') || c.label;
+  var _popLabel = (_popLabelRaw && String(_popLabelRaw).trim())
+                ? String(_popLabelRaw).trim()
                 : (c.link_mode === 'story' ? 'COLLECTION'
                 : (c.link_mode === 'event' ? 'SPECIAL EVENT'
                 : (c.link_ticket_id ? 'NEW OPEN' : 'NOTICE')));
@@ -46169,13 +46182,13 @@ function homePopupShow(force){
     '<div style="width:100%;max-width:340px;background:#FBF9F4;border-radius:18px;overflow:hidden;font-family:var(--font-main);box-shadow:0 24px 60px rgba(0,0,0,.45);">'
     + '<div onclick="homePopupGo()" style="cursor:pointer;">'
       + media
-      + ((c.title || c.body) ? '<div style="padding:16px 18px ' + (_popHasGo ? '6px' : '14px') + ';">'
+      + ((_popTitle || _popBody) ? '<div style="padding:16px 18px ' + (_popHasGo ? '6px' : '14px') + ';">'
         + '<div style="font-size:9.5px;letter-spacing:.28em;text-indent:.28em;color:#5C0A14;font-weight:800;">' + _pcalEsc(_popLabel) + '</div>'
         // 🆕 제목도 줄바꿈을 그대로 살린다(white-space:pre-line). 자동 줄바꿈에
         //   맡기면 「2026년과 2027년 / 예약슬롯들이 일부 오픈 / 됩니다」처럼
         //   엉뚱한 데서 끊긴다. 어디서 끊을지는 쓰는 사람이 정하는 게 맞다.
-        + (c.title ? '<div style="border-left:2px solid #c8a96e;padding-left:12px;margin-top:10px;"><div style="font-size:16.5px;font-weight:800;color:#1a1a18;line-height:1.5;white-space:pre-line;">' + _pcalEsc(c.title) + '</div></div>' : '')
-        + (c.body ? '<div style="font-size:12.5px;color:#3d3a33;line-height:1.8;margin-top:10px;white-space:pre-line;">' + _pcalEsc(c.body) + '</div>' : '')
+        + (_popTitle ? '<div style="border-left:2px solid #c8a96e;padding-left:12px;margin-top:10px;"><div style="font-size:16.5px;font-weight:800;color:#1a1a18;line-height:1.5;white-space:pre-line;">' + _pcalEsc(_popTitle) + '</div></div>' : '')
+        + (_popBody ? '<div style="font-size:12.5px;color:#3d3a33;line-height:1.8;margin-top:10px;white-space:pre-line;">' + _pcalEsc(_popBody) + '</div>' : '')
         + '</div>' : '')
       + (_popHasGo ? '<div style="padding:0 18px 14px;font-size:12px;font-weight:800;color:#5C0A14;text-align:right;">'
           + (c.link_mode === 'story' ? _popL('전체 보기 →','View all →','すべて見る →')
@@ -51238,6 +51251,25 @@ function pickI18nField(row, base){
 }
 window.pickI18nField = pickI18nField;
 
+// 🆕 2026.09: jsonb 안에 들어 있는 문구용 언어 선택기.
+//   pickI18nField 는 DB 행의 평면 컬럼(name_en 등)을 고르는 함수라
+//   photo_texts(사진 위 카피)나 app_config 의 공지 팝업처럼
+//   jsonb 오브젝트 안에 든 텍스트에는 쓸 수 없었다.
+//   그래서 이 둘은 번역 대상에서 통째로 빠져 EN·JA 에서도 늘 한국어였다.
+//   같은 규칙(_en / _ja, 없으면 한국어 폴백)을 오브젝트에도 적용한다.
+function pickI18nObj(obj, base){
+  if(!obj || !base) return '';
+  var lang = window._tkCurrentLang || 'ko';
+  function v(k){ var x = obj[k]; return (typeof x === 'string' && x.trim() !== '') ? x : undefined; }
+  var pref;
+  if (lang === 'en')      pref = v(base+'_en');
+  else if (lang === 'ja') pref = v(base+'_ja') || v(base+'_jp');
+  else                    pref = v(base);
+  if (pref !== undefined) return pref;
+  return v(base) || v(base+'_en') || v(base+'_ja') || v(base+'_jp') || '';
+}
+window.pickI18nObj = pickI18nObj;
+
 // 🆕 AI 번역 호출 helper — Supabase Edge Function `taam-translate` 사용
 //   사용 예 (어드민 큐레이션 화면에서):
 //     taamTranslate([
@@ -51445,10 +51477,113 @@ window.taamTranslateTickets = taamTranslateTickets;
 //   ⭐ 앞으로 번역이 필요한 콘텐츠가 생기면 I18N_AUTO_JOBS 에 한 줄만
 //      추가하면 자동 번역에 포함된다. 별도 배선이 필요 없다.
 // ═══════════════════════════════════════════════════════════════
+// ── jsonb 안에 든 문구 번역 ────────────────────────────────────
+//   photo_texts(사진 위 카피)와 app_config 의 공지 팝업은 평면 컬럼이 아니라
+//   jsonb 라 _i18nBatch 의 컬럼 모델로는 다룰 수 없다. 그래서 지금까지 번역
+//   대상에서 통째로 빠져 EN·JA 에서도 한국어로 남았다. 전용 잡으로 처리한다.
+//   원문 옆에 _en / _ja 를 나란히 넣어 두는 방식이라 기존 데이터는 그대로 동작한다.
+
+// 이미 번역돼 있으면 건너뛴다 — 매번 다시 번역하면 비용만 든다
+function _i18nObjNeeds(o, keys){
+  if(!o) return false;
+  for (var i=0;i<keys.length;i++){
+    var ko = (o[keys[i]] || '').toString().trim();
+    if (!ko) continue;
+    if (!(o[keys[i]+'_en'] || '').toString().trim()) return true;
+    if (!(o[keys[i]+'_ja'] || '').toString().trim()) return true;
+  }
+  return false;
+}
+// 번역 결과를 원문 오브젝트에 _en / _ja 로 붙인다
+async function _i18nFillObj(o, keys, ctx){
+  var items = [];
+  keys.forEach(function(k){
+    var ko = (o[k] || '').toString().trim();
+    if (ko) items.push({ id:k, value:ko });
+  });
+  if (!items.length) return 0;
+  var res = await window.taamTranslate(items, ctx);
+  var tr = res && res.translations;
+  if (!tr) return 0;
+  var got = 0;
+  keys.forEach(function(k){
+    var v = tr[k];
+    if (!v) return;
+    if (v.en) { o[k+'_en'] = v.en; got++; }
+    if (v.ja) { o[k+'_ja'] = v.ja; got++; }
+  });
+  return got;
+}
+
+// 사진 위 카피 — restaurants.photo_texts (jsonb 배열)
+async function taamTranslatePhotoTexts(opts){
+  opts = opts || {};
+  var q = window.sb.from('restaurants').select('id, photo_texts')
+            .or('super_admin_only.is.null,super_admin_only.eq.false');
+  var res = await q;
+  if (res.error) { if(!opts.quiet) showToast('⚠','조회 실패', res.error.message); return { done:0, fail:0 }; }
+  var KEYS = ['title','desc','detail'];
+  var CTX = '레스토랑 사진 위에 얹는 짧은 카피. 감성적인 한 줄 문구다. 직역하지 말고 같은 인상을 주는 자연스러운 문장으로 옮길 것.';
+  var done = 0, fail = 0;
+  var rows = (res.data || []).filter(function(r){
+    return Array.isArray(r.photo_texts) && r.photo_texts.some(function(p){ return _i18nObjNeeds(p, KEYS); });
+  });
+  for (var i=0;i<rows.length;i++){
+    var r = rows[i], changed = 0;
+    try {
+      for (var j=0;j<r.photo_texts.length;j++){
+        var p = r.photo_texts[j];
+        if (!_i18nObjNeeds(p, KEYS)) continue;
+        changed += await _i18nFillObj(p, KEYS, CTX);
+      }
+      if (changed){
+        var up = await window.sb.from('restaurants').update({ photo_texts: r.photo_texts }).eq('id', r.id);
+        if (up.error) { fail++; console.warn('[i18n] 사진카피 저장 실패', r.id, up.error.message); }
+        else done++;
+      }
+    } catch(e){ fail++; console.warn('[i18n] 사진카피 번역 실패', r.id, e && e.message); }
+  }
+  if(!opts.quiet && (done || fail)) showToast(fail?'⚠':'✓','사진 카피 번역', '성공 '+done+'건'+(fail?' · 실패 '+fail+'건':''));
+  return { done: done, fail: fail };
+}
+window.taamTranslatePhotoTexts = taamTranslatePhotoTexts;
+
+// 공지 팝업 — app_config.home_popup (jsonb)
+async function taamTranslateHomePopup(opts){
+  opts = opts || {};
+  var res = await window.sb.from('app_config').select('key, value').eq('key','home_popup').maybeSingle();
+  if (res.error) { if(!opts.quiet) showToast('⚠','조회 실패', res.error.message); return { done:0, fail:0 }; }
+  var c = res.data && res.data.value;
+  if (!c || typeof c !== 'object') return { done:0, fail:0 };
+  var KEYS = ['title','body','label','event_desc'];
+  var CTX = '앱 홈 공지 팝업 문구. 회원에게 알리는 짧은 안내다. 정중하고 담백한 문체 유지.';
+  var changed = 0;
+  try {
+    if (_i18nObjNeeds(c, KEYS)) changed += await _i18nFillObj(c, KEYS, CTX);
+    // 스토리 카드도 같은 방식으로
+    if (Array.isArray(c.stories)){
+      for (var i=0;i<c.stories.length;i++){
+        var s = c.stories[i];
+        if (_i18nObjNeeds(s, ['headline','body'])) changed += await _i18nFillObj(s, ['headline','body'], CTX);
+      }
+    }
+    if (changed){
+      var up = await window.sb.from('app_config').update({ value: c }).eq('key','home_popup');
+      if (up.error) { console.warn('[i18n] 공지 저장 실패', up.error.message); return { done:0, fail:1 }; }
+      if(!opts.quiet) showToast('✓','공지 팝업 번역','EN·JA 를 채웠습니다');
+      return { done:1, fail:0 };
+    }
+  } catch(e){ console.warn('[i18n] 공지 번역 실패', e && e.message); return { done:0, fail:1 }; }
+  return { done:0, fail:0 };
+}
+window.taamTranslateHomePopup = taamTranslateHomePopup;
+
 var I18N_AUTO_JOBS = [
   { key:'restaurants', label:'레스토랑',      run:function(o){ return taamTranslateRestaurants(o); } },
   { key:'tickets',     label:'티켓 설명',     run:function(o){ return taamTranslateTickets(o); } },
-  { key:'partners',    label:'파트너십 매장', run:function(o){ return taamTranslatePartners(o); } }
+  { key:'partners',    label:'파트너십 매장', run:function(o){ return taamTranslatePartners(o); } },
+  { key:'phototexts',  label:'사진 카피',     run:function(o){ return taamTranslatePhotoTexts(o); } },
+  { key:'homepopup',   label:'공지 팝업',     run:function(o){ return taamTranslateHomePopup(o); } }
 ];
 window.I18N_AUTO_JOBS = I18N_AUTO_JOBS;
 
