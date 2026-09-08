@@ -2249,6 +2249,8 @@ html.auto-login .splash .bottom-group{display:none !important}
 /* 🆕 2026.08-31 방문 기록 — 남긴 뒤에는 눌린 채로 남는다. 다시 누르면 취소 */
 .tb-acts button.vis-on{color:#faf8f3;border-color:#17150f;background:#17150f}
 .tb-acts button.vis-no{color:#fff;border-color:#9B1C1C;background:#9B1C1C}
+/* 🆕 2026.09-08 취소 — 노쇼(붉은색)와 확실히 구분되게 회색으로 물린다 */
+.tb-acts button.vis-cx{color:#fff;border-color:#8a8378;background:#8a8378}
 .tb-empty{text-align:center;padding:44px 20px;color:#79736a;font-size:12.5px;line-height:1.85;
   border:1px dashed #e3dcce;border-radius:12px;background:#fcfaf5}
 .tb-slot{font-size:10.5px;font-weight:800;letter-spacing:.16em;color:#a69f94;margin:16px 2px 7px}
@@ -2452,6 +2454,9 @@ html.auto-login .splash .bottom-group{display:none !important}
   font-size:11.5px;font-weight:800;cursor:pointer}
 #visBody .vis-row button.go{border:1px solid #e3dcce;background:#fff;color:#46413a}
 #visBody .vis-row button.no{border:1px solid #F2D5D1;background:#FBEBE9;color:#9B1C1C}
+/* 🆕 2026.09-08 취소 — 노쇼와 헷갈리면 안 되므로 붉은 기를 빼고 회색으로 물린다.
+   잘못 눌러 회원에게 없는 잘못을 남기는 쪽이 더 큰 사고다. */
+#visBody .vis-row button.cx{border:1px solid #e3dcce;background:#f5f2ec;color:#8a8378}
 
 /* ═══ 🆕 2026.09-01 QR 크게 보기 (앱 안 팝업) ═══
    화면을 꽉 채우지 않는다. 상대 폰이 코드 **전체 + 여백**을 프레임에 담아야
@@ -34863,7 +34868,9 @@ function _visRender(){
 
   var h = '<div class="vis-note">지난 예약인데 방문 기록이 없는 건입니다. '
         + '<b>기록해야 「단골에게만 보이는 티켓」이 돌아갑니다.</b><br>'
-        + '대개는 다 오므로 날짜별 「전부 방문」이 빠릅니다. 안 온 사람만 노쇼로 바꾸세요.</div>';
+        + '대개는 다 오므로 날짜별 「전부 방문」이 빠릅니다. 안 온 사람만 노쇼로 바꾸세요.<br>'
+        + '<span style="color:#a69f94">미리 연락이 와 오지 않기로 한 건은 「취소」로 둡니다 — '
+        + '노쇼로 남기지 않습니다. 환불은 따로 처리해야 합니다.</span></div>';
 
   var day = null;
   list.forEach(function(r){
@@ -34883,6 +34890,9 @@ function _visRender(){
       +    (_tbTime(r) ? ' · ' + _tbTime(r) : '') + '</small></span>'
       +  '<button class="go" onclick="visMark(\'' + _tbEsc(String(r.id)) + '\',\'attended\')">방문</button>'
       +  '<button class="no" onclick="visMark(\'' + _tbEsc(String(r.id)) + '\',\'no_show\')">노쇼</button>'
+      // 🆕 2026.09-08: 오지 않기로 미리 연락이 온 건. 노쇼로 찍으면 그 회원에게
+      //   없는 잘못을 남기고, 안 찍으면 목록에 영원히 남아 다른 건을 가린다.
+      +  '<button class="cx" onclick="visMark(\'' + _tbEsc(String(r.id)) + '\',\'cancelled\')">취소</button>'
       +  '</div>';
   });
   el.innerHTML = h;
@@ -34932,7 +34942,12 @@ function _visActs(r, st){
        + (v === 'attended' ? '✓ 방문' : '방문') + '</button>'
        + '<button class="' + (v === 'no_show' ? 'vis-no' : 'warn') + '"'
        + ' onclick="taamMarkVisit(\'' + id + '\',\'no_show\')">'
-       + (v === 'no_show' ? '✕ 노쇼' : '노쇼') + '</button>';
+       + (v === 'no_show' ? '✕ 노쇼' : '노쇼') + '</button>'
+       // 🆕 2026.09-08: 미리 연락이 와 오지 않기로 한 건. 방문 기록 화면과
+       //   같은 값을 쓰므로, 한쪽에서 찍으면 다른 쪽에도 그대로 보인다.
+       + '<button class="' + (v === 'cancelled' ? 'vis-cx' : '') + '"'
+       + ' onclick="taamMarkVisit(\'' + id + '\',\'cancelled\')">'
+       + (v === 'cancelled' ? '— 취소' : '취소') + '</button>';
 }
 async function taamMarkVisit(ticketId, status){
   if(!window.sb || !ticketId) return;
@@ -34965,8 +34980,10 @@ async function taamMarkVisit(ticketId, status){
 
   // 서버가 받았으니 로컬만 갈아 끼운다. 전체를 다시 읽지 않는다.
   if(row) row.visit_status = next;
-  showToast('✓', next === 'attended' ? '방문 기록'
-                : next === 'no_show' ? '노쇼 기록' : '기록 취소', '');
+  showToast('✓', next === 'attended'  ? '방문 기록'
+                : next === 'no_show'   ? '노쇼 기록'
+                : next === 'cancelled' ? '취소 기록'
+                : '기록 지움', '');
   try{
     var tb = document.getElementById('todayBoardScreen');
     if(tb && tb.style.display !== 'none' && typeof _tbRenderBody === 'function') _tbRenderBody();
