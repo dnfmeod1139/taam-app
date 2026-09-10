@@ -7338,12 +7338,22 @@ window.fxAgencyUsd = fxAgencyUsd; window.fxAgencyKrw = fxAgencyKrw; window.fxRat
 // ── 🆕 회원 통화 판정 — 슈퍼어드민 지정(profiles.currency)이 최우선 ──
 //   미지정 회원은 종전 규칙(화면 언어)으로 폴백: ko→KRW, ja→JPY, 그 외→USD.
 //   회원 스스로는 못 바꾼다 (SQL 트리거가 본인 변경을 되돌린다) — 해외 요율 보호.
+// ⚠ 2026-09-10: **언어로 통화를 추론하지 않는다.**
+//   종전에는 지정 통화가 비어 있으면 앱 언어로 정했다 —
+//     return l === 'ko' ? 'KRW' : 'USD';
+//   그래서 폰 언어가 한국어가 아닌 **국내 회원**이 앱을 열면 USD 로 판정돼
+//   해외 회원 취급을 받았고, fxTicketCharge 가 환율로 왕복 환산한 금액을
+//   보냈다. 서버는 정가(식사비+대행비+주류미니멈)×인원만 세므로 금액이
+//   어긋나 PRICE_CHANGED 로 막혔다 — 결제는 됐는데 티켓이 안 붙었다.
+//   (2026-09-10 이형주님 건: 화면 1,785,278 · 서버 1,700,000)
+//
+//   언어와 통화는 별개다. 한국 회원이 앱을 영어로 볼 수 있다.
+//   통화는 슈퍼어드민이 지정한 profiles.currency 에서만 온다.
+//   지정이 없으면 원화다 — 추론하지 않는다.
 function _taamUserCur(){
   var c = window._userCurrency;
   if (c === 'KRW' || c === 'USD' || c === 'JPY') return c;
-  var l = window._tkCurrentLang || 'ko';
-  if (l === 'ja') return 'JPY';
-  return l === 'ko' ? 'KRW' : 'USD';
+  return 'KRW';
 }
 window._taamUserCur = _taamUserCur;
 
@@ -7351,6 +7361,9 @@ window._taamUserCur = _taamUserCur;
 function _tossCurrencyForUser(){
   return _taamUserCur();
 }
+// ⚠ 쓰지 않는다 (호출부 0곳). 언어·국적으로 통화를 추론하던 옛 방식이라
+//   되살리면 2026-09-10 사고(국내 회원이 USD 로 판정돼 환율 환산 청구)가 재현된다.
+//   통화는 profiles.currency 에서만 온다. 지우지 않고 경고만 남긴다.
 function _tossCurrencyForUserLegacy(){
   try {
     var c = (window._tkCurrentLang === 'ja') ? 'JP'
@@ -18049,6 +18062,28 @@ async function loadPurchase(){
     }));
 
     console.log('🎫 티켓 Supabase 로드:', purchaseHistory.length + '건');
+
+    // 🆕 2026-09-10: 초대로 받은 건의 방문 시각을 채운다.
+    //   tickets.visit_time 은 비어 있고 실제 시각은 reservation_invites 에 있다.
+    //   대시보드(#562)와 티켓 캘린더는 진작 이 보정을 하고 있었는데 **회원이 보는
+    //   「티켓 구매 내역」만 빠져 있었다.** 그래서 초대로 받은 예약은 회원 화면에서
+    //   시간이 「–」로 비어 보였다 (회원 폰 캡쳐로 확인).
+    //   원본(tickets)은 건드리지 않는다 — 화면에 보일 값만 채운다.
+    try {
+      var _needT = purchaseHistory.filter(function(h){
+        return !h.visitTime && /^INVH?-/.test(String(h.purchaseId || ''));
+      });
+      if(_needT.length && typeof taamInviteTimeMap === 'function'){
+        var _mT = await taamInviteTimeMap();
+        _needT.forEach(function(h){
+          var t = taamInviteTimeOf(_mT, h.purchaseId);
+          if(t) h.visitTime = t;
+        });
+      }
+    } catch(e){
+      // 시각을 못 채워도 구매 내역 자체는 보여야 한다 — 종전처럼 「–」로 둔다
+      console.warn('[loadPurchase] 초대 시각 보정 실패:', e && e.message);
+    }
 
     // 🆕 2026.07: IDB 에만 있고 Supabase 에 없는 구매(동기화 누락분) 복구.
     //   구매는 로컬 완료됐지만 DB 저장이 실패해 슈퍼어드민에 안 뜨던 건을
