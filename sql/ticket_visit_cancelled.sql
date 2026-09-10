@@ -132,13 +132,30 @@ select '② 함수가 cancelled 를 아나 ⭐',
        ) then '✅' else '❌' end,
        'taam_set_ticket_visit'
 union all
+-- ⚠ 「prosrc 에 cancelled 라는 글자가 있으면 센다」로 보면 안 된다. 오탐이 난다 —
+--   실제 함수는 `and coalesce(t.status,'') not in ('cancelled','canceled')` 처럼
+--   **제외 조건**에도 그 글자를 쓴다. 세는 조건(visit_status = 'cancelled')만 본다.
 select '③ 방문 횟수는 attended 만 세나 ⭐',
-       case when exists (
-         select 1 from pg_proc
-          where pronamespace = 'public'::regnamespace
-            and proname like 'taam_visit_count%'
-            and prosrc like '%cancelled%'
-       ) then '❌ 취소를 센다' else '✅ 안 셈' end,
+       case
+         when not exists (
+           select 1 from pg_proc
+            where pronamespace = 'public'::regnamespace
+              and proname like 'taam_visit_count%'
+         ) then '⚠ 함수 없음'
+         when exists (
+           select 1 from pg_proc
+            where pronamespace = 'public'::regnamespace
+              and proname like 'taam_visit_count%'
+              and prosrc ~ 'visit_status\s*=\s*''(cancelled|no_show)'''
+         ) then '❌ 취소·노쇼를 센다'
+         when exists (
+           select 1 from pg_proc
+            where pronamespace = 'public'::regnamespace
+              and proname like 'taam_visit_count%'
+              and prosrc ~ 'visit_status\s*=\s*''attended'''
+         ) then '✅ attended 만'
+         else '⚠ 판정 불가 — 함수를 직접 읽어볼 것'
+       end,
        '단골 티켓 조건이 헐거워지면 안 된다'
 union all
 select '④ ' || coalesce(visit_status, '(미기록)'),
