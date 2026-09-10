@@ -112,28 +112,38 @@ comment on function public.taam_set_ticket_visit(uuid, text) is
 -- ═══════════════════════════════════════════════════════════════
 -- 확인 — 하나만 돌린다
 -- ═══════════════════════════════════════════════════════════════
+--   ⚠ union 가지에 limit 을 붙이면 Postgres 문법 오류다(42601).
+--     한 행짜리 판정은 전부 exists 스칼라로 만든다 — from 절이 없으니
+--     행 수가 0 이 되거나 여러 개가 되는 일도 없다.
 select '① 제약이 세 값을 받나 ⭐' as "구분",
-       case when pg_get_constraintdef(oid) like '%cancelled%' then '✅' else '❌' end as "상태",
+       case when exists (
+         select 1 from pg_constraint
+          where conname = 'tickets_visit_status_chk'
+            and pg_get_constraintdef(oid) like '%cancelled%'
+       ) then '✅' else '❌' end as "상태",
        'attended · no_show · cancelled' as "메모"
-  from pg_constraint
- where conname = 'tickets_visit_status_chk'
 union all
 select '② 함수가 cancelled 를 아나 ⭐',
-       case when prosrc like '%cancelled%' then '✅' else '❌' end,
+       case when exists (
+         select 1 from pg_proc
+          where pronamespace = 'public'::regnamespace
+            and proname = 'taam_set_ticket_visit'
+            and prosrc like '%cancelled%'
+       ) then '✅' else '❌' end,
        'taam_set_ticket_visit'
-  from pg_proc
- where pronamespace = 'public'::regnamespace and proname = 'taam_set_ticket_visit'
 union all
 select '③ 방문 횟수는 attended 만 세나 ⭐',
-       case when prosrc not like '%cancelled%' then '✅ 안 셈' else '❌ 취소를 센다' end,
+       case when exists (
+         select 1 from pg_proc
+          where pronamespace = 'public'::regnamespace
+            and proname like 'taam_visit_count%'
+            and prosrc like '%cancelled%'
+       ) then '❌ 취소를 센다' else '✅ 안 셈' end,
        '단골 티켓 조건이 헐거워지면 안 된다'
-  from pg_proc
- where pronamespace = 'public'::regnamespace and proname like 'taam_visit_count%'
- limit 1
 union all
-select '④ 지금까지 기록된 것',
-       coalesce(visit_status, '(미기록)'),
-       count(*)::text || '건'
+select '④ ' || coalesce(visit_status, '(미기록)'),
+       count(*)::text || '건',
+       '지금까지 기록된 것'
   from public.tickets
  group by visit_status
  order by 1;
