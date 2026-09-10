@@ -7072,8 +7072,21 @@ function fxTicketCharge(t, pax){
   var u = _fxUnitSum(t, pax, dc);
   if (!u.ok) return { krw: krwTotal, fx: null };
 
+  // ⚠ 2026-09-10: **청구 원화는 정가 그대로 보낸다.** 환율로 되돌리지 않는다.
+  //   종전에는 krw: Math.floor(u.sum * rate) 였다 — 외화 합계를 실시간 환율로
+  //   다시 원화로 환산했다. 그런데 서버(taam_ticket_price_krw)는
+  //   (식사비+대행비+주류미니멈)×인원만 세므로 두 값이 맞을 수가 없다.
+  //   2026-09-10 슌지 건: 앱 1,785,278 · 서버 1,700,000 → PRICE_CHANGED 로
+  //   막혀 결제는 되고 티켓은 안 붙었다.
+  //
+  //   환율은 순간마다 변한다. 그걸 청구 근거로 쓰면 서버가 검증할 방법이
+  //   원리적으로 없다. 그래서 역할을 나눈다 —
+  //     · 외화 금액(u.sum) = **회원에게 보여줄 값.** 어드민이 티켓 업로드에서
+  //       확정 정가(ovs_prices)로 직접 넣는다.
+  //     · 원화(krw)        = **실제로 차감할 값.** 서버와 같은 식으로 센다.
+  //   fx 는 표시·기록용으로 그대로 실어 보낸다(무엇을 보고 샀는지 남는다).
   return {
-    krw: Math.floor(u.sum * rate),
+    krw: krwTotal,
     fx: { currency: dc, amount: u.sum, rate: Math.round(rate * 10000) / 10000, agency_fx: u.agencyPer }
   };
 }
