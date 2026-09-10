@@ -18050,6 +18050,28 @@ async function loadPurchase(){
 
     console.log('🎫 티켓 Supabase 로드:', purchaseHistory.length + '건');
 
+    // 🆕 2026-09-10: 초대로 받은 건의 방문 시각을 채운다.
+    //   tickets.visit_time 은 비어 있고 실제 시각은 reservation_invites 에 있다.
+    //   대시보드(#562)와 티켓 캘린더는 진작 이 보정을 하고 있었는데 **회원이 보는
+    //   「티켓 구매 내역」만 빠져 있었다.** 그래서 초대로 받은 예약은 회원 화면에서
+    //   시간이 「–」로 비어 보였다 (회원 폰 캡쳐로 확인).
+    //   원본(tickets)은 건드리지 않는다 — 화면에 보일 값만 채운다.
+    try {
+      var _needT = purchaseHistory.filter(function(h){
+        return !h.visitTime && /^INVH?-/.test(String(h.purchaseId || ''));
+      });
+      if(_needT.length && typeof taamInviteTimeMap === 'function'){
+        var _mT = await taamInviteTimeMap();
+        _needT.forEach(function(h){
+          var t = taamInviteTimeOf(_mT, h.purchaseId);
+          if(t) h.visitTime = t;
+        });
+      }
+    } catch(e){
+      // 시각을 못 채워도 구매 내역 자체는 보여야 한다 — 종전처럼 「–」로 둔다
+      console.warn('[loadPurchase] 초대 시각 보정 실패:', e && e.message);
+    }
+
     // 🆕 2026.07: IDB 에만 있고 Supabase 에 없는 구매(동기화 누락분) 복구.
     //   구매는 로컬 완료됐지만 DB 저장이 실패해 슈퍼어드민에 안 뜨던 건을
     //   메모리에 다시 병합 + 잠시 후 자동 재저장(savePurchase 재시도)으로 자가 복구.
