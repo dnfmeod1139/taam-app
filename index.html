@@ -18026,20 +18026,15 @@ async function _depApplyDelta(userId, memDelta, genDelta, entries){
 
   var res = await window.sb.rpc('taam_apply_deposit_delta', args);
 
-  // 서버가 아직 옛 3인자 버전이면 p_entries 를 모른다.
-  //   여기서 그냥 죽으면 환불이 통째로 안 된다 — 잔액만 옮기고 알린다.
-  //   (2026-08-31 오전에 앱을 DB 보다 먼저 배포해서 낸 사고와 같은 종류다)
+  // 🔧 2026-09-14 (원장 서버화 4단계 마무리): 「서버가 옛 3인자 함수면 잔액만 옮기고
+  //   앱이 원장을 남긴다」는 폴백을 없앴다. 회원의 deposit_transactions INSERT 가 RLS 로
+  //   닫혀서 그 폴백은 이제 **잔액만 움직이고 원장은 안 남는** 최악의 모양이 된다.
+  //   4인자 함수는 8/31 부터 라이브고 오늘 재확인했다. 없으면 돈을 움직이지 않고 멈춘다.
   if(res.error && wantLedger &&
      (res.error.code === 'PGRST202' ||
       /could not find the function|schema cache/i.test(res.error.message || ''))){
-    console.warn('[deposit] 서버가 원장 인자를 모름 — 잔액만 옮긴다:', res.error.message);
-    // 🆕 2026-09-12: 「옛 길로 돌고 있다」는 나에게 와야 한다 — 몇 주째 그래도 아무도 모른다
     try { window.taamReportError('ledger_fallback', 'taam_apply_deposit_delta 가 p_entries 를 모름 — ledger_server_side.sql 미적용?', null, {}); } catch(_e){}
-    delete args.p_entries;
-    res = await window.sb.rpc('taam_apply_deposit_delta', args);
-    if(res.error) throw new Error(res.error.message);
-    var d0 = res.data || {};
-    return { mem: d0.mem || 0, gen: d0.gen || 0, total: d0.total || 0, ledger: false };
+    throw new Error('서버 원장 함수가 없어 처리하지 않았습니다 (관리자에게 알려주세요)');
   }
 
   if(res.error) throw new Error(res.error.message);
@@ -18130,17 +18125,6 @@ async function _tkCapacityAutoRefund(row, user, errMsg){
         var _bal3 = await _depApplyDelta(user.id, _spl3.mem, _spl3.gen, _ent3);
         var _mem = _bal3.mem;
         var _gen = _bal3.gen;
-        // 서버가 원장을 못 썼으면(옛 함수) 예전처럼 앱이 한 줄 남긴다
-        if(!_bal3.ledger){
-          await window.sb.from('deposit_transactions').insert({
-            user_id: user.id,
-            deposit_type: (_spl3.mem >= _spl3.gen ? 'membership' : 'general'),
-            change_type: 'ticket_refund',
-            amount: amt, balance_after: _mem + _gen,
-            description: _desc3,
-            metadata: _meta3
-          });
-        }
         currentDepositBalance = _mem + _gen;
         try { var _bal = document.getElementById('mpBalance'); if(_bal) _bal.textContent = taamMoney(currentDepositBalance); } catch(_be){}
       }
@@ -21700,14 +21684,6 @@ async function adminGrantDeposit(targetUserId, amount, depositType, description)
     throw new Error('잔액 업데이트 실패: ' + _gm);
   }
   newBalance = (depositType === 'membership') ? (_agBal.mem || 0) : (_agBal.gen || 0);
-  if (!_agBal.ledger) {
-    // 서버가 옛 3인자 함수라 원장을 못 썼다 — 잔액만 움직였다. 슈퍼어드민 세션이라 직접 남길 수 있다.
-    console.warn('[adg] 서버가 원장을 못 씀 — 앱이 한 줄 남긴다 (ledger_server_side.sql 미적용?)');
-    var trxRes = await window.sb.from('deposit_transactions').insert(Object.assign({
-      user_id: targetUserId, balance_after: newBalance
-    }, _agEntry));
-    if (trxRes.error) console.error('[adg] transaction insert 실패:', trxRes.error);
-  }
 
   // 🆕 v1.53.30 2026.06.01: 부여 시 받은 회원에게 인앱 알림 + 푸시 발송
   //   notifications 테이블 INSERT → 회원 다음 접속 시 토스트 + 마이페이지 레드닷.
@@ -25096,22 +25072,7 @@ async function depositTransaction(opts) {
   // 서버가 확정한 잔액을 이력에 적는다 (앱이 계산한 값이 아니라)
   const _dtAfter = (opts.deposit_type === 'membership') ? _dtBal.mem : _dtBal.gen;
 
-  // 3) 변동 이력 기록 — 서버가 원장을 썼으면 끝. 옛 3인자 함수일 때만 앱이 한 줄 남긴다
-  if (!_dtBal.ledger) {
-    const { error: tErr } = await window.sb
-      .from('deposit_transactions')
-      .insert({
-        user_id: user.id,
-        deposit_type: opts.deposit_type,
-        change_type: opts.change_type,
-        amount: opts.amount,
-        balance_after: _dtAfter,
-        payment_id: opts.payment_id || null,
-        description: opts.description || null,
-        metadata: opts.metadata || null
-      });
-    if (tErr) console.error('[deposit] 이력 기록 실패:', tErr);
-  }
+  // 3) 변동 이력은 서버가 같은 트랜잭션으로 남겼다 — 앱은 쓰지 않는다 (RLS 로 닫힘, 2026-09-14)
 
   console.log(`[deposit] ${opts.deposit_type} ${opts.amount > 0 ? '+' : ''}${opts.amount} → 잔액 ${_dtAfter}`);
   return _dtAfter;
@@ -25880,15 +25841,7 @@ async function completePurchase(){
         }
       }
 
-      if(txnsToInsert.length > 0 && !_pLedger){
-        var res = await window.sb.from('deposit_transactions').insert(txnsToInsert);
-        if(res.error){
-          console.warn('⚠ deposit_transactions insert 일부 실패:', res.error.message);
-        } else {
-          console.log('✅ deposit_transactions 기록 완료 (' + txnsToInsert.length + '건):',
-            txnsToInsert.map(function(x){ return x.change_type+':'+x.amount; }).join(', '));
-        }
-      }
+      // (원장은 위 RPC 가 같은 트랜잭션으로 남겼다 — 앱 INSERT 폴백은 2026-09-14 제거, RLS 로 닫힘)
 
       // 🆕 2026.05.22 핵심: profiles 잔액 컬럼 직접 update
       //   이전 버그: deposit_transactions 에만 INSERT 했고 profiles 잔액은 안 건드려서
@@ -29071,35 +29024,7 @@ async function cancelTicketPurchase(purchaseId, refundCalc, isSuperAdminOverride
         var newGen = _balC.gen;
         var newTotal = _balC.total;
 
-        // deposit_transactions 환불 기록 (예치금 환원분만)
-        //   주머니가 둘로 나뉘면 두 건으로 남긴다 — 내역에서 어디로 돌아갔는지 보여야 한다
-        for (var _si = 0; _si < 2 && !_balC.ledger; _si++) {
-          var _sType = _si === 0 ? 'membership' : 'general';
-          var _sAmt  = _si === 0 ? _spl.mem : _spl.gen;
-          if (_sAmt <= 0) continue;
-        await window.sb.from('deposit_transactions').insert({
-          user_id: user.id,
-          deposit_type: _sType,
-          change_type: 'ticket_refund',
-          amount: _sAmt,
-          balance_after: newTotal,
-          description: (r ? r.name : '티켓') + ' 취소 환불(예치금) — ' + refundCalc.reason,
-          metadata: {
-            purchase_id: purchaseId,
-            ticket_id: h.id,
-            policy: refundCalc.policy,
-            agency_held: refundCalc.agencyHeld || 0,
-            deposit_refund: _depositRefund,
-            card_refund_pending: _cardRefund,
-            paid_by: _isCardPurchase ? 'card+deposit' : 'deposit',
-            // 🆕 분류 키 — 위약금(penalty)이 아니라 '구매 취소 환불' 임을 명시한다.
-            //   이게 없으면 슈퍼어드민 화면이 (티켓가 − 예치금환원)을 위약금으로 잘못 계산한다.
-            refund_type: 'returned',
-            cancel_refund: true,
-            cancelled_by: isSuperAdminOverride ? 'super_admin' : 'user'
-          }
-        });
-        }
+        // (환불 원장은 위 RPC 가 주머니별로 남겼다 — 앱 INSERT 폴백은 2026-09-14 제거)
 
         // 로컬 잔액 동기화
         currentDepositBalance = newTotal;
@@ -29574,43 +29499,14 @@ function _dmPersistBuyerChanges(h, refundToAdd, refundNote){
           var newMem = _balR.mem;
           var newGen = _balR.gen;
           var newTotal = _balR.total;
-          if(!_balR.ledger)
-          await window.sb.from('deposit_transactions').insert({
-            user_id: userId,
-            deposit_type: (_spl2.mem >= _spl2.gen ? 'membership' : 'general'),
-            change_type: 'ticket_refund',
-            amount: _depCredit,
-            balance_after: newTotal,
-            description: _dtDesc + ((_spl2.mem > 0 && _spl2.gen > 0)
-              ? (' · 멤버십 ₩' + _spl2.mem.toLocaleString() + ' + 일반 ₩' + _spl2.gen.toLocaleString())
-              : ''),
-            metadata: {
-              purchase_id: purchaseId,
-              ticket_id: h.id,
-              refund_type: dr.type,                           // ⚠ 분류 키 — 반환완료/환불불가 탭 분기
-              penalty_amt: dr.penaltyAmt || 0,
-              penalty_pct: dr.penaltyPct || 0,
-              agency_held: dr.agencyHeld || 0,
-              extra_deduct: dr.extraDeduct || 0,              // 🆕 추가 차감 금액
-              extra_note: dr.extraNote || '',                 // 🆕 추가 차감 사유
-              return_amt: dr.returnAmt || refundToAdd,
-              deposit_refund: _depCredit,                     // 🆕 예치금 환원분
-              card_refund_pending: _saCardRefund,             // 🆕 카드 환불(토스) 대기분
-              paid_by: _saIsCard ? 'card+deposit' : 'deposit',
-              note: dr.note || refundNote,
-              processed_by: 'super_admin',
-              processed_at: new Date().toISOString()
-            }
-          });
+          // (반환 원장은 위 RPC 가 주머니별로 남겼다 — 앱 INSERT 폴백은 2026-09-14 제거)
         } else {
           // 환불 0원 (전액 환불불가): 잔액 변화 없지만 처리 기록은 남김
-          var curTotal = memBal + genBal;
-          await window.sb.from('deposit_transactions').insert({
-            user_id: userId,
+          //   🔧 2026-09-14 직접 INSERT 대신 RPC 에 0원 원장으로 — balance_after 는 서버가 센다
+          await _depApplyDelta(userId, 0, 0, [{
             deposit_type: 'general',
             change_type: 'ticket_refund',
             amount: 0,
-            balance_after: curTotal,
             description: (h.rest || '티켓') + ' 환불 없음 처리 — ' + refundNote,
             metadata: {
               purchase_id: purchaseId,
@@ -29623,7 +29519,7 @@ function _dmPersistBuyerChanges(h, refundToAdd, refundNote){
               processed_by: 'super_admin',
               processed_at: new Date().toISOString()
             }
-          });
+          }]);
         }
       } catch(e){
         console.warn('[_dmPersistBuyerChanges supabase] failed', e);
@@ -43571,7 +43467,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.14-i';
+var TAAM_WEB_BUILD = '2026.09.14-j';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -44584,47 +44480,7 @@ async function riConfirmPay(){
     }
     console.log('[riPay] 잔액 차감 OK:', { memBefore: memBal, memUsed, memAfter: memBal-memUsed, genBefore: genBal, genUsed, genAfter: genBal-genUsed });
 
-    // 🆕 v1.53.36: deposit_transactions 에 사용 row INSERT (사용 내역 영구 기록)
-    //   멤버십/일반 분리해서 각각 INSERT — 사용자가 두 종류 다 추적 가능.
-    try {
-      var descRest = inv.restaurant_name || '레스토랑';
-      // 🆕 2026.08-28: 구매ID 를 차감 기록에 함께 남긴다.
-      //   종전엔 invite_id 만 있고 purchase_id 가 없었다. 그래서 환불할 때
-      //   '어느 주머니에서 나갔는지' 를 되짚을 수 없었고(_depRefundSplit 이 매칭 실패),
-      //   주머니 보정 SQL 도 초대 결제 건을 통째로 놓쳤다.
-      //   실측: 한 계정의 초대 결제 3,450,000 이 보정 대상에서 빠졌다.
-      var trxMeta = _riMeta;
-      // 서버가 원장을 썼으면 여기서 또 쓰지 않는다 (두 번 남는다)
-      if (_riBal && _riBal.ledger) {
-        console.log('[riPay] 원장은 서버가 기록함 — 앱 INSERT 건너뜀');
-      } else {
-      if (memUsed > 0) {
-        var trxM = await window.sb.from('deposit_transactions').insert({
-          user_id: u.id,
-          deposit_type: 'membership',
-          change_type: 'ticket_purchase',
-          amount: -memUsed,
-          balance_after: memBal - memUsed,
-          description: '초대 결제 (멤버십) · ' + descRest,
-          metadata: trxMeta
-        });
-        if (trxM.error) console.warn('[riPay] trx membership 실패:', trxM.error.message);
-      }
-      if (genUsed > 0) {
-        var trxG = await window.sb.from('deposit_transactions').insert({
-          user_id: u.id,
-          deposit_type: 'general',
-          change_type: 'ticket_purchase',
-          amount: -genUsed,
-          balance_after: genBal - genUsed,
-          description: '초대 결제 (일반) · ' + descRest,
-          metadata: trxMeta
-        });
-        if (trxG.error) console.warn('[riPay] trx general 실패:', trxG.error.message);
-      }
-      }
-      console.log('[riPay] deposit_transactions 기록 완료');
-    } catch(_te){ console.warn('[riPay] deposit_transactions 예외:', _te); }
+    // 사용 내역(원장)은 위 RPC 가 같은 트랜잭션으로 남겼다 — 앱 INSERT 폴백은 2026-09-14 제거 (RLS 로 닫힘)
 
     // 🆕 v1.53.37: 결제 후 — Supabase deposit_transactions 가 truth source.
     //   loadDeposit() 을 다시 호출해서 use 탭에 머지된 결과를 메모리에 반영 +

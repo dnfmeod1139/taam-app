@@ -7,7 +7,7 @@
 //   ③ 새 잔액은 RPC 가 돌려준 값이다 (앱 계산값이 아니라)
 //   ④ 차감은 admin_deduct · 음수 델타
 //   ⑤ 서버 LEDGER_INSUFFICIENT → 사람이 읽는 문구
-//   ⑥ 옛 3인자 함수(PGRST202) 폴백일 때만 앱이 원장을 한 줄 남긴다
+//   ⑥ 옛 3인자 함수(PGRST202) 면 잔액을 움직이지 않고 멈춘다 (폴백 제거 · 2026-09-14)
 // 실행: node sql/_test/adgshot.js
 // ═══════════════════════════════════════════════════════════════
 const fs = require('fs'), vm = require('vm');
@@ -74,13 +74,13 @@ function mk(opts){
     ok('⑤ LEDGER_INSUFFICIENT → 읽을 수 있는 문구', err && /예치금이 부족해/.test(err.message), err && err.message);
     ok('⑤ 실패 시 원장·알림 아무것도 안 남김', calls.insert.length === 0, calls.insert);
   }
-  // ⑥ 옛 함수 폴백
+  // ⑥ 옛 함수 — 폴백 없이 멈춘다
   {
     let k = 0;
-    const { ctx, calls } = mk({ rpc: async (fn, args) => { k++; if (args.p_entries) return { data: null, error: { code: 'PGRST202', message: 'could not find the function' } }; return { data: { mem: 100000, gen: 6000 }, error: null }; } });
-    const r = await ctx.adminGrantDeposit('U1', 1000, 'general', '');
-    ok('⑥ 옛 함수면 두 번 부르고(원장 없이) 앱이 원장 한 줄', k === 2 && calls.insert.filter(c => c.name === 'deposit_transactions').length === 1, { k, ins: calls.insert.map(c => c.name) });
-    ok('⑥ 그 줄의 balance_after 는 서버 잔액', calls.insert.find(c => c.name === 'deposit_transactions').obj.balance_after === 6000 && r.newBalance === 6000);
+    const { ctx, calls } = mk({ rpc: async (fn, args) => { k++; return { data: null, error: { code: 'PGRST202', message: 'could not find the function' } }; } });
+    let err = null; try { await ctx.adminGrantDeposit('U1', 1000, 'general', ''); } catch(e){ err = e; }
+    ok('⑥ 옛 함수면 RPC 를 한 번만 부르고 오류로 멈춘다 ⭐', k === 1 && err && /서버 원장 함수가 없어/.test(err.message), { k, msg: err && err.message });
+    ok('⑥ 잔액도 원장도 건드리지 않는다', calls.update.length === 0 && calls.insert.length === 0, calls);
   }
   console.log('\n' + (fail ? `=== 실패 ${fail}/${n} ===` : `=== 전부 통과 (${n}건) ===`));
   process.exit(fail ? 1 : 0);

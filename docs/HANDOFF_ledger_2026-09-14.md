@@ -13,13 +13,13 @@
 
 ## 이번에 만든 것 (전부 로컬 테스트 통과)
 
-1. **SQL** `sql/ledger_close_member_insert.sql` — ⚠ **사용자가 SQL Editor 에서 실행 필요**
+1. **SQL** `sql/ledger_close_member_insert.sql` — ✅ 라이브 적용됨 (7줄 ✅)
    - `taam_apply_deposit_delta` 에 service_role / postgres 호출 길 (슈퍼어드민과 같게)
    - 원장을 넘겼는데 잔액이 모자라면 `LEDGER_INSUFFICIENT` (조용한 clamp 폐지)
    - 반환값에 `prev_mem` / `prev_gen`
    - `deposit_transactions` INSERT 정책: 본인 → **슈퍼어드민만** (`deposit_tx_insert_server`)
    - 확인 표 7줄 전부 ✅ 여야 정상
-2. **Edge** `toss-confirm` · `toss-billing-charge` — ⚠ **대시보드에서 재배포 필요, SQL 다음에**
+2. **Edge** `toss-confirm` · `toss-billing-charge` — ✅ 재배포됨 (줄 수 510 · 462 일치)
    - `deductDeposit` / `refundDeposit` → RPC 호출. 환원은 뺀 주머니로(종전 전부 일반)
    - 순서: SQL 먼저. 반대면 예치금 섞은 카드 결제가 `deposit_short` 로 취소된다
 3. **앱** `depositTransaction()` (멤버십 예치금 결제 이력) → RPC 원장으로. 빌드 `2026.09.14-h`
@@ -33,10 +33,9 @@
 3. main 머지 → 빌드 `14-h` 시크릿창 확인
 4. 검증: 예치금 일부 + 카드로 티켓 1건 → `deposit_transactions` 에
    `metadata.server_caller='service_role'` 차감 행 · `profiles.deposit_balance` 일치
-5. ✅ 슈퍼어드민 `adminGrantDeposit` → RPC (빌드 `14-i`, `sql/admin_grant_via_rpc.sql` ⚠ 실행 필요 — 부여 누적 트리거 + 진단)
-6. 그 다음 후보 (아직 안 함)
-   - 앱의 옛 폴백 INSERT 8곳 제거 (서버가 4인자 함수임이 확정됐으니 죽은 코드)
-   - `_dmPersistBuyerChanges` 환불 0원 기록도 RPC(0 델타 + 원장)로 통일
+5. ✅ 슈퍼어드민 `adminGrantDeposit` → RPC (빌드 `14-i`, `sql/admin_grant_via_rpc.sql` ✅ 적용 · 테스트1 부여 누적 3,510,000 으로 정정)
+6. ✅ 앱의 옛 폴백 INSERT 8곳 제거 + 환불 0원 기록도 RPC (빌드 `14-j`) — 앱에 원장 INSERT 0줄
+7. 그 다음 후보 (아직 안 함)
    - 회원 세션 `deposit_transactions` SELECT 는 그대로 (자기 것만) — 건드릴 것 없음
 
 ## 넘어가지 말 것

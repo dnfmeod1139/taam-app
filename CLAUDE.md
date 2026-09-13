@@ -429,8 +429,10 @@ toss-order(홀드↔티켓 대조), toss-confirm/billing-charge(예치금 부족
 `deposit_transactions` INSERT 정책이 「본인이면 허용」→ **슈퍼어드민만** 이 됐다.
 회원 세션에서 `sb.from('deposit_transactions').insert(...)` 를 새로 쓰면 **RLS 에 막힌다.**
 잔액과 원장은 언제나 `_depApplyDelta(userId, mem, gen, entries)` 한 번으로 — entries 를
-꼭 넘긴다. 앱에 남은 직접 INSERT 는 「서버가 옛 3인자 함수일 때」의 폴백(`!…ledger`)과
-슈퍼어드민의 환불 0원 기록뿐이다. **슈퍼어드민 부여(`adminGrantDeposit`)도 같은 날 RPC 로 옮겼다** —
+꼭 넘긴다. **앱에는 이제 `deposit_transactions` INSERT 가 한 줄도 없다** — 「서버가 옛 3인자
+함수일 때」의 폴백 8곳과 슈퍼어드민 환불 0원 기록까지 같은 날 걷어냈다(빌드 `14-j`). `_depApplyDelta` 는
+서버가 `p_entries` 를 모르면 잔액을 움직이지 않고 오류로 멈춘다 — 잔액만 움직이고 원장이 안 남는 것이
+가장 나쁜 모양이기 때문이다. **슈퍼어드민 부여(`adminGrantDeposit`)도 같은 날 RPC 로 옮겼다** —
 이제 앱 어디에도 `profiles` 잔액을 직접 update 하는 줄이 없다. 「부여 누적」(`granted_*`)은
 원장 INSERT 트리거 `trg_sync_split_balance` 가 더한다(`sql/admin_grant_via_rpc.sql`). 앱이 또 더하면 두 배가 된다.
 
