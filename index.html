@@ -6720,6 +6720,11 @@ var PAY_MODE_TOSS = true;
 //     payment_orders · toss-confirm · ?toss_pay=success 복귀 핸들러가 모두 붙어 있다.
 //     문제가 생기면 이 값 하나를 false 로 되돌리면 즉시 예치금 안내로 복귀한다.
 var CARD_PAY_LIVE = true;
+// 🔒 2026-09-14: 외화(USD·JPY) 표시·청구를 잠근다 — 전원 원화.
+//   외화 회원의 화면(≈ 추정치)과 청구(원화 정가)가 따로 놀아 혼란을 줬다. 확정 정가·표시·
+//   환율 표시를 정리한 뒤 다시 연다. 켜기 전에 sql/currency_krw_only.sql 의 되돌리기를 본다.
+//   서버(toss-order)는 profiles.currency 를 보므로 SQL 로 currency 를 KRW 로 맞춘 것과 짝이다.
+var FX_CURRENCY_LIVE = false;
 // 🆕 2026.08: 검증용 개별 스위치.
 //   전역 플래그를 켜면 검증도 하기 전에 전 회원에게 카드 결제가 열린다.
 //   실결제 1건을 먼저 확인해야 하므로, 슈퍼어드민이 자기 기기에서만 열 수 있게 한다.
@@ -7449,6 +7454,7 @@ window.fxAgencyUsd = fxAgencyUsd; window.fxAgencyKrw = fxAgencyKrw; window.fxRat
 //   통화는 슈퍼어드민이 지정한 profiles.currency 에서만 온다.
 //   지정이 없으면 원화다 — 추론하지 않는다.
 function _taamUserCur(){
+  if (typeof FX_CURRENCY_LIVE !== 'undefined' && !FX_CURRENCY_LIVE) return 'KRW';   // 🔒 2026-09-14 전원 원화
   var c = window._userCurrency;
   if (c === 'KRW' || c === 'USD' || c === 'JPY') return c;
   return 'KRW';
@@ -37925,6 +37931,12 @@ window.acCopyBuild = acCopyBuild;
 async function mlSetCur(uid, cur){
   if (typeof _isSuperAdmin === 'function' && !_isSuperAdmin()) return;
   if (!window.sb) return;
+  // 🔒 2026-09-14: 외화가 잠겨 있는 동안은 원화만 지정할 수 있다 — 서버(toss-order)가
+  //   profiles.currency 를 청구 통화로 쓰므로, 여기서 USD/JPY 를 넣으면 화면은 원화인데 카드는 외화가 된다.
+  if (typeof FX_CURRENCY_LIVE !== 'undefined' && !FX_CURRENCY_LIVE && cur && cur !== 'KRW') {
+    showToast('🔒', '외화 결제 준비 중', '지금은 전 회원 원화로 고정돼 있습니다. 외화를 다시 열 때 함께 켭니다.');
+    return;
+  }
   var res = await window.sb.from('profiles').update({ currency: cur }).eq('id', uid).select('id');
   if (res.error) {
     // 컬럼이 아직 없으면 SQL 실행 안내
@@ -43504,7 +43516,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.14-b';
+var TAAM_WEB_BUILD = '2026.09.14-c';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
