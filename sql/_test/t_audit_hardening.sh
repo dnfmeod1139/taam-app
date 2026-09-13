@@ -116,19 +116,20 @@ anon(){ $P -c "set role anon; $1" 2>&1; }
 has(){ echo "$1" | grep -q "$2" && echo 1 || echo 0; }
 
 echo "── ① 푸시 role ── ⭐"
-as $U "select public.save_push_subscription('https://push/u','k','a',null,null,'super_admin','{}');" >/dev/null
+as $U "select public.save_push_subscription('https://push/u','k','a',null,null,'super_admin','{}','ko');" >/dev/null
 ok "회원이 super_admin 이라 해도 user 로 저장 ⭐" user "$($P -c "select role from public.push_subscriptions where endpoint='https://push/u'")"
-as $S "select public.save_push_subscription('https://push/s','k','a',null,null,null,'{}');" >/dev/null
+as $S "select public.save_push_subscription('https://push/s','k','a',null,null,null,'{}',null);" >/dev/null
 ok "슈퍼어드민은 superadmin" superadmin "$($P -c "select role from public.push_subscriptions where endpoint='https://push/s'")"
-as $A "select public.save_push_subscription('https://push/a','k','a',null,null,'user','{}');" >/dev/null
+as $A "select public.save_push_subscription(p_endpoint=>'https://push/a',p_p256dh=>'k',p_auth=>'a',p_role=>'user');" >/dev/null   # PostgREST 식 이름 인자 · p_lang 생략
 ok "매장 어드민은 admin" admin "$($P -c "select role from public.push_subscriptions where endpoint='https://push/a'")"
 ok "옛 구독의 잘못된 role 도 바로잡힘" user "$($P -c "select role from public.push_subscriptions where endpoint='https://push/old'")"
-ok "anon 은 실행 불가" f "$($P -c "select has_function_privilege('anon','public.save_push_subscription(text,text,text,text,text,text,text[])','execute')")"
+ok "anon 은 실행 불가" f "$($P -c "select has_function_privilege('anon','public.save_push_subscription(text,text,text,text,text,text,text[],text)','execute')")"
+ok "7인자 판은 사라졌다 (공존하면 호출이 모호해진다)" "" "$($P -c "select to_regprocedure('public.save_push_subscription(text,text,text,text,text,text,text[])')")"
 # 앱이 실제로 먼저 부르는 8인자(p_lang) 판 — 여기서도 role 은 서버가 정해야 한다
 as $U "select public.save_push_subscription('https://push/u8','k','a',null,null,'super_admin','{}','ja-JP');" >/dev/null
 ok "8인자 판도 회원의 super_admin 을 user 로 ⭐" "user|ja" "$($P -c "select role||'|'||lang from public.push_subscriptions where endpoint='https://push/u8'")"
-as $U "select public.save_push_subscription('https://push/u8','k','a',null,null,'admin','{}');" >/dev/null
-ok "7인자로 다시 저장해도 role 은 user · 언어는 유지" "user|ja" "$($P -c "select role||'|'||lang from public.push_subscriptions where endpoint='https://push/u8'")"
+as $U "select public.save_push_subscription('https://push/u8','k','a',null,null,'admin','{}',null);" >/dev/null
+ok "언어 없이 다시 저장해도 role 은 user · 언어는 유지" "user|ja" "$($P -c "select role||'|'||lang from public.push_subscriptions where endpoint='https://push/u8'")"
 
 echo "── ② tickets INSERT ── ⭐"
 R=$(as $U "insert into public.tickets(purchase_id,user_id,restaurant_id,status,price,party_size) values ('taam-1','$U','R1','active',0,2);")

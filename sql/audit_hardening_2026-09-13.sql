@@ -127,7 +127,7 @@ alter table public.push_subscriptions add column if not exists last_seen_at time
 
 -- ⚠ 판이 둘이다. 앱은 **8인자(p_lang, push_lang.sql)** 를 먼저 부르고, 그게 없을 때만 7인자로 내려간다
 --   (index.html 「save_push_subscription」 호출부). 7인자만 고치면 실제 호출 경로에 닿지 않는다 —
---   그래서 8인자를 본체로 두고 7인자는 그리로 넘긴다. (2026-09-14 라이브 호환 검사에서 잡힘)
+--   그래서 8인자를 본체로 두고 7인자는 지운다. (2026-09-14 라이브 호환 검사에서 잡힘)
 create or replace function public.save_push_subscription(
   p_endpoint     text,
   p_p256dh       text,
@@ -193,24 +193,10 @@ $$;
 revoke all on function public.save_push_subscription(text,text,text,text,text,text,text[],text) from public, anon;
 grant execute on function public.save_push_subscription(text,text,text,text,text,text,text[],text) to authenticated;
 
--- 7인자(옛 앱·폴백) — 8인자로 넘긴다. role 판정은 한 곳(위)에만 있다.
-create or replace function public.save_push_subscription(
-  p_endpoint     text,
-  p_p256dh       text,
-  p_auth         text,
-  p_user_agent   text   default null,
-  p_device_label text   default null,
-  p_role         text   default null,
-  p_topics       text[] default '{}'
-) returns void
-language sql
-security definer
-set search_path = public
-as $$
-  select public.save_push_subscription(p_endpoint, p_p256dh, p_auth, p_user_agent, p_device_label, p_role, p_topics, null::text);
-$$;
-revoke all on function public.save_push_subscription(text,text,text,text,text,text,text[]) from public, anon;
-grant execute on function public.save_push_subscription(text,text,text,text,text,text,text[]) to authenticated;
+-- 7인자 판은 지운다. 8인자에 p_lang 기본값이 있어 둘이 공존하면 7인자 호출이
+--   「function is not unique」로 실패한다(로컬 테스트에서 재현). 앱은 항상 p_lang 을 실어 부르고,
+--   PostgREST 의 이름 인자 호출은 p_lang 을 빼도 8인자 하나로 유일하게 풀린다.
+drop function if exists public.save_push_subscription(text,text,text,text,text,text,text[]);
 
 -- 이미 잘못 저장된 role 을 profiles 기준으로 한 번 바로잡는다
 update public.push_subscriptions s
@@ -963,8 +949,8 @@ grant execute on function public.taam_error_prune() to authenticated;
 select '① 푸시 role 을 서버가 정하나' as "구분",
        case when pg_get_functiondef(to_regprocedure('public.save_push_subscription(text,text,text,text,text,text,text[],text)'))
                  like '%from public.profiles p where p.id = auth.uid()%'
-             and pg_get_functiondef(to_regprocedure('public.save_push_subscription(text,text,text,text,text,text,text[])'))
-                 like '%null::text%' then '✅' else '❌' end as "결과",
+             and to_regprocedure('public.save_push_subscription(text,text,text,text,text,text,text[])') is null
+             then '✅' else '❌' end as "결과",
        (select count(*)::text || '건' from public.push_subscriptions where role not in ('superadmin','admin','user')) || ' 비표준 role 남음' as "메모"
 union all
 select '② tickets INSERT 가드',
