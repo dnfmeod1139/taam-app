@@ -117,13 +117,17 @@ grant execute on function public._taam_uid_role() to anon, authenticated;
 --   p_role 은 시그니처 호환을 위해 남기지만 **무시한다.**
 --   send-push 는 push_subscriptions.role 로도 대상을 고르므로(role:superadmin),
 --   이 칸이 클라이언트 말대로 저장되면 회원이 운영진 푸시를 받는다.
--- 이 함수가 쓰는 컬럼은 여기서 보장한다 (push_subscriptions_fix.sql 과 같은 정의 — 라이브가 옛 판일 수 있다)
+-- 이 함수가 쓰는 컬럼은 여기서 보장한다 (push_subscriptions_fix.sql·push_lang.sql 과 같은 정의 — 라이브가 옛 판일 수 있다)
 alter table public.push_subscriptions add column if not exists user_agent   text;
 alter table public.push_subscriptions add column if not exists device_label text;
 alter table public.push_subscriptions add column if not exists role         text;
 alter table public.push_subscriptions add column if not exists topics       text[] default array[]::text[];
+alter table public.push_subscriptions add column if not exists lang         text;
 alter table public.push_subscriptions add column if not exists last_seen_at timestamptz default now();
 
+-- ⚠ 판이 둘이다. 앱은 **8인자(p_lang, push_lang.sql)** 를 먼저 부르고, 그게 없을 때만 7인자로 내려간다
+--   (index.html 「save_push_subscription」 호출부). 7인자만 고치면 실제 호출 경로에 닿지 않는다 —
+--   그래서 8인자를 본체로 두고 7인자는 그리로 넘긴다. (2026-09-14 라이브 호환 검사에서 잡힘)
 create or replace function public.save_push_subscription(
   p_endpoint     text,
   p_p256dh       text,
@@ -131,7 +135,8 @@ create or replace function public.save_push_subscription(
   p_user_agent   text   default null,
   p_device_label text   default null,
   p_role         text   default null,
-  p_topics       text[] default '{}'
+  p_topics       text[] default '{}',
+  p_lang         text   default null
 ) returns void
 language plpgsql
 security definer
@@ -139,6 +144,7 @@ set search_path = public
 as $$
 declare
   v_role text;
+  v_lang text;
 begin
   if auth.uid() is null then
     raise exception 'not authenticated';
@@ -147,7 +153,7 @@ begin
     raise exception 'endpoint invalid';
   end if;
 
-  -- 앱 내부 표기(superadmin/admin/user)로 맞춘다 — send-push 의 roleAliases 와 같은 축
+  -- 앱 내부 표기(superadmin/admin/user)로 맞춘다 — send-push 의 roleAliases 와 같은 축. p_role 은 무시.
   select case
            when p.role in ('super_admin','superadmin') then 'superadmin'
            when p.role = 'admin'                        then 'admin'
@@ -157,11 +163,20 @@ begin
     from public.profiles p where p.id = auth.uid();
   v_role := coalesce(v_role, 'user');
 
+  -- 아는 언어만 받는다 ('ko-KR' 같은 변형은 앞 두 글자로)
+  v_lang := lower(coalesce(p_lang, ''));
+  v_lang := case
+              when v_lang like 'ja%' then 'ja'
+              when v_lang like 'en%' then 'en'
+              when v_lang like 'ko%' then 'ko'
+              else null
+            end;
+
   insert into public.push_subscriptions
-    (user_id, endpoint, p256dh, auth, user_agent, device_label, role, topics, last_seen_at)
+    (user_id, endpoint, p256dh, auth, user_agent, device_label, role, topics, lang, last_seen_at)
   values
     (auth.uid(), p_endpoint, p_p256dh, p_auth, left(p_user_agent, 400), left(p_device_label, 120),
-     v_role, coalesce(p_topics, '{}'), now())
+     v_role, coalesce(p_topics, '{}'), v_lang, now())
   on conflict (endpoint) do update set
     user_id      = excluded.user_id,        -- 같은 기기를 다른 회원이 쓰게 됐다 (공용 기기·재로그인)
     p256dh       = excluded.p256dh,
@@ -170,8 +185,29 @@ begin
     device_label = excluded.device_label,
     role         = excluded.role,
     topics       = excluded.topics,
+    -- 새 값이 없으면 알던 언어를 지우지 않는다 (옛 앱이 저장해도 언어가 안 날아간다)
+    lang         = coalesce(excluded.lang, public.push_subscriptions.lang),
     last_seen_at = now();
 end;
+$$;
+revoke all on function public.save_push_subscription(text,text,text,text,text,text,text[],text) from public, anon;
+grant execute on function public.save_push_subscription(text,text,text,text,text,text,text[],text) to authenticated;
+
+-- 7인자(옛 앱·폴백) — 8인자로 넘긴다. role 판정은 한 곳(위)에만 있다.
+create or replace function public.save_push_subscription(
+  p_endpoint     text,
+  p_p256dh       text,
+  p_auth         text,
+  p_user_agent   text   default null,
+  p_device_label text   default null,
+  p_role         text   default null,
+  p_topics       text[] default '{}'
+) returns void
+language sql
+security definer
+set search_path = public
+as $$
+  select public.save_push_subscription(p_endpoint, p_p256dh, p_auth, p_user_agent, p_device_label, p_role, p_topics, null::text);
 $$;
 revoke all on function public.save_push_subscription(text,text,text,text,text,text,text[]) from public, anon;
 grant execute on function public.save_push_subscription(text,text,text,text,text,text,text[]) to authenticated;
@@ -925,8 +961,10 @@ grant execute on function public.taam_error_prune() to authenticated;
 -- 확인 — 하나만 돌린다. ❌ 가 한 줄도 없어야 정상.
 -- ═══════════════════════════════════════════════════════════════
 select '① 푸시 role 을 서버가 정하나' as "구분",
-       case when pg_get_functiondef(to_regprocedure('public.save_push_subscription(text,text,text,text,text,text,text[])'))
-                 like '%from public.profiles p where p.id = auth.uid()%' then '✅' else '❌' end as "결과",
+       case when pg_get_functiondef(to_regprocedure('public.save_push_subscription(text,text,text,text,text,text,text[],text)'))
+                 like '%from public.profiles p where p.id = auth.uid()%'
+             and pg_get_functiondef(to_regprocedure('public.save_push_subscription(text,text,text,text,text,text,text[])'))
+                 like '%null::text%' then '✅' else '❌' end as "결과",
        (select count(*)::text || '건' from public.push_subscriptions where role not in ('superadmin','admin','user')) || ' 비표준 role 남음' as "메모"
 union all
 select '② tickets INSERT 가드',

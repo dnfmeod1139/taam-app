@@ -124,6 +124,11 @@ as $A "select public.save_push_subscription('https://push/a','k','a',null,null,'
 ok "매장 어드민은 admin" admin "$($P -c "select role from public.push_subscriptions where endpoint='https://push/a'")"
 ok "옛 구독의 잘못된 role 도 바로잡힘" user "$($P -c "select role from public.push_subscriptions where endpoint='https://push/old'")"
 ok "anon 은 실행 불가" f "$($P -c "select has_function_privilege('anon','public.save_push_subscription(text,text,text,text,text,text,text[])','execute')")"
+# 앱이 실제로 먼저 부르는 8인자(p_lang) 판 — 여기서도 role 은 서버가 정해야 한다
+as $U "select public.save_push_subscription('https://push/u8','k','a',null,null,'super_admin','{}','ja-JP');" >/dev/null
+ok "8인자 판도 회원의 super_admin 을 user 로 ⭐" "user|ja" "$($P -c "select role||'|'||lang from public.push_subscriptions where endpoint='https://push/u8'")"
+as $U "select public.save_push_subscription('https://push/u8','k','a',null,null,'admin','{}');" >/dev/null
+ok "7인자로 다시 저장해도 role 은 user · 언어는 유지" "user|ja" "$($P -c "select role||'|'||lang from public.push_subscriptions where endpoint='https://push/u8'")"
 
 echo "── ② tickets INSERT ── ⭐"
 R=$(as $U "insert into public.tickets(purchase_id,user_id,restaurant_id,status,price,party_size) values ('taam-1','$U','R1','active',0,2);")
