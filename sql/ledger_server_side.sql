@@ -32,6 +32,21 @@
 --
 -- 실행: Supabase SQL Editor 에 통째로 붙여넣고 RUN. 여러 번 돌려도 안전.
 --       ⚠ 앱 배포 필요 없음 — 앱은 지금처럼 3개 인자로 부른다.
+--
+-- ⚠ 2026-09-13 핫픽스 — 회원이 자기 잔액을 **무한 충전**할 수 있었다
+--   「자기 것이거나 슈퍼어드민」만 보고 델타의 부호를 안 봤다. 그래서
+--     sb.rpc('taam_apply_deposit_delta', {p_user_id: 나, p_mem_delta: 10000000, p_gen_delta: 0})
+--   한 줄이면 천만 원이 생겼다. 원장을 붙이면 원장까지 그럴듯하게 남았다.
+--   감사에서 렌즈 셋이 독립적으로 짚었고 로컬에서 재현했다.
+--
+--   회원이 잔액을 **늘릴 수 있는 정당한 길은 환불뿐**이다 (취소·정원초과·반환).
+--   카드 충전은 서버(toss-confirm)가 넣는다 — 앱이 「나 카드 냈어」라고 하는
+--   말은 믿지 않는다. 그래서 회원의 양(+)은 이제 이렇게만 통과한다:
+--     · 원장(entries)이 있고
+--     · 양수 항목은 전부 change_type='ticket_refund' + metadata.purchase_id 이고
+--     · 그 구매로 이 회원이 **실제로 낸 돈**(ticket_purchase 합) 에서
+--       이미 돌려받은 것을 뺀 한도 안이다 — 두 번 환불도 여기서 막힌다.
+--   슈퍼어드민은 종전대로.
 -- ═══════════════════════════════════════════════════════════════
 
 begin;
@@ -79,6 +94,9 @@ declare
   v_pid_t text;
   v_pid   uuid;
   v_extra jsonb;
+  v_paid  bigint;          -- 그 구매로 낸 돈
+  v_back  bigint;          -- 이미 돌려받은 돈
+  r_ref   record;
 begin
   if v_uid is null then
     raise exception '로그인이 필요합니다' using errcode = '42501';
@@ -122,6 +140,53 @@ begin
       raise exception 'LEDGER_MISMATCH: 원장 합계(%)가 잔액 변동(%)과 다릅니다',
         v_sum, coalesce(p_mem_delta,0) + coalesce(p_gen_delta,0)
         using errcode = '22023';
+    end if;
+  end if;
+
+  -- ── 🆕 2026-09-13 회원은 돈을 만들지 못한다 ──────────────────────
+  --   슈퍼어드민이 아니면 잔액을 늘리는 길은 「낸 돈 한도 안의 환불」뿐이다.
+  if not v_super then
+    -- ① 원장 없이 양수 → 거부. 「그냥 더해 줘」는 없다.
+    if p_entries is null and coalesce(p_mem_delta,0) + coalesce(p_gen_delta,0) > 0 then
+      raise exception 'LEDGER_CREDIT_DENIED: 잔액을 늘리려면 환불 원장이 필요합니다' using errcode = '42501';
+    end if;
+    -- ② 각 주머니도 따로 본다 — 합이 0 이어도 한쪽에서 빼서 다른 쪽에 넣는 식은 안 된다
+    --    (멤버십 예치금은 연회비의 90% 라 성격이 다르다. 주머니 이동은 슈퍼어드민만)
+    if p_entries is null and (coalesce(p_mem_delta,0) > 0 or coalesce(p_gen_delta,0) > 0) then
+      raise exception 'LEDGER_CREDIT_DENIED: 주머니를 늘리려면 환불 원장이 필요합니다' using errcode = '42501';
+    end if;
+    if p_entries is not null then
+      -- ③ 양수 항목은 전부 ticket_refund + purchase_id 여야 한다
+      for e in select * from jsonb_array_elements(p_entries) loop
+        v_amt := (e->>'amount')::bigint;
+        if v_amt > 0 then
+          if coalesce(e->>'change_type','') <> 'ticket_refund'
+             or coalesce(nullif(btrim(e->'metadata'->>'purchase_id'), ''), '') = '' then
+            raise exception 'LEDGER_CREDIT_DENIED: 회원의 양수 원장은 환불(ticket_refund + purchase_id)만 됩니다 (받은 값 %)',
+              coalesce(e->>'change_type','(없음)') using errcode = '42501';
+          end if;
+        end if;
+      end loop;
+      -- ④ 구매별로: 이번 환불 + 이미 돌려받은 것 ≤ 그 구매로 낸 돈
+      for r_ref in
+        select x->'metadata'->>'purchase_id' as pur, sum((x->>'amount')::bigint) as amt
+          from jsonb_array_elements(p_entries) x
+         where (x->>'amount')::bigint > 0
+         group by 1
+      loop
+        select coalesce(-sum(amount), 0) into v_paid
+          from public.deposit_transactions
+         where user_id = p_user_id and change_type = 'ticket_purchase'
+           and metadata->>'purchase_id' = r_ref.pur and amount < 0;
+        select coalesce(sum(amount), 0) into v_back
+          from public.deposit_transactions
+         where user_id = p_user_id and change_type = 'ticket_refund'
+           and metadata->>'purchase_id' = r_ref.pur and amount > 0;
+        if r_ref.amt > v_paid - v_back then
+          raise exception 'LEDGER_REFUND_EXCEEDS: 구매 % 로 낸 돈 %, 이미 환불 %, 이번 요청 % — 한도를 넘습니다',
+            r_ref.pur, v_paid, v_back, r_ref.amt using errcode = '42501';
+        end if;
+      end loop;
     end if;
   end if;
 
@@ -227,6 +292,14 @@ select '② payment_id 를 안전하게 넣나 ⭐',
             when max(p.prosrc) like '%v_pid_t::uuid%'            then '✅ 고쳐짐'
             else '❌ 알 수 없음' end,
        'uuid 모양일 때만 넣고 아니면 metadata.payment_ref 로'
+  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+ where n.nspname = 'public' and p.proname = 'taam_apply_deposit_delta'
+union all
+-- ⭐ 2026-09-13 핫픽스 — 이 줄이 ❌ 면 회원이 자기 잔액을 무한 충전할 수 있다
+select '②-2 회원의 자가 충전을 막나 ⭐',
+       case when max(p.prosrc) like '%LEDGER_CREDIT_DENIED%' and max(p.prosrc) like '%LEDGER_REFUND_EXCEEDS%'
+            then '✅ 막힘 — 환불은 낸 돈 한도 안에서만' else '❌ 옛 판 — 지금 뚫려 있다' end,
+       '슈퍼어드민만 임의 부여 가능'
   from pg_proc p join pg_namespace n on n.oid = p.pronamespace
  where n.nspname = 'public' and p.proname = 'taam_apply_deposit_delta'
 union all
