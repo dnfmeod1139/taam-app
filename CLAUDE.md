@@ -423,6 +423,19 @@ toss-order(홀드↔티켓 대조), toss-confirm/billing-charge(예치금 부족
 넣어 봐야 서버가 거부한다. 회원 세션에서 `tickets` 를 INSERT/UPDATE 하는 코드를 새로
 쓰기 전에 이 표를 본다.
 
+### 예치금이 두 번 빠졌다 — 2026-09-14 (서버 확정과 앱 차감의 경주)
+
+`completePurchase` 의 홀드 전환(`taam_purchase_confirm_deposit` 이 차감·확정)과 예치금
+블록(앱 차감)이 둘 다 **await 없는 async** 였다. 예치금 블록이 `_tkServerConfirmed` 를
+읽는 순간 RPC 가 안 끝나 있으면 앱이 또 뺐다. 8/31 원장 서버화부터 살아 있었고,
+1인 ₩1,000 티켓에 ₩2,000 · 한 회원은 ₩1,700,000 이 더 빠진 채 사흘을 갔다.
+원장에 같은 `purchase_id` 로 `ticket_purchase` 가 두 줄(`server_confirmed` · `server_written`)
+남는 것이 증상이다. 핫픽스: 전환 프로미스(`_tkHoldConvertPromise`)를 예치금 블록이 먼저
+기다리고, 전환 실패(`_tkHoldConfirmFailed`)면 앱 차감도 하지 않는다.
+→ **결제 경로에 「서버가 했으면 앱은 건너뛴다」 류의 플래그를 두면, 그 플래그를 세우는
+쪽을 반드시 await 한다.** 병렬 async 두 개가 같은 돈을 만지게 두지 않는다.
+정정 여부는 `metadata->>'fix' = 'double_deduct_2026-09-14'` 원장 줄로 남겼다.
+
 ### 금전 코드를 만질 때
 
 1. **잔액은 절대 `profiles` 를 직접 update 하지 않는다.** `_depApplyDelta()` → RPC.
