@@ -17095,6 +17095,7 @@ async function loadDeposit(){
         .eq('user_id', user.id)
         .eq('seen', false)
         .order('created_at', { ascending: false })
+        .order('id', { ascending: false })   // 🆕 2026-09-14 같은 시각 행이 많아도 순서가 고정된다
         .limit(10);
       console.log('[notif] 조회 결과:', { error: nres.error, count: (nres.data||[]).length });
       if (!nres.error && Array.isArray(nres.data) && nres.data.length > 0) {
@@ -17102,7 +17103,25 @@ async function loadDeposit(){
         var shownKey = 'taam_notif_toasted';
         var shown = {};
         try { shown = JSON.parse(sessionStorage.getItem(shownKey) || '{}') || {}; } catch(_){}
-        var newOnes = nres.data.filter(function(n){ return !shown[n.id]; });
+        // 🆕 2026-09-14 토스트가 끝없이 반복됐다 (슈퍼어드민 대시보드, 「김우님이 티켓을 구매했습니다」).
+        //   loadDeposit 은 화면 복귀·포커스·Realtime 마다 다시 돌고, 중복 방지는 sessionStorage 하나뿐이었다.
+        //   저장이 막히거나(시크릿·저장소 차단) 같은 내용의 행이 여럿이면(id 가 다르면 새 것으로 본다)
+        //   돌 때마다 같은 토스트가 다시 떴다. 그래서 세 겹으로 막는다:
+        //     ① 메모리에도 기억한다 — 저장소가 죽어도 이 페이지 안에서는 두 번 안 뜬다
+        //     ② 제목+본문이 같으면 id 가 달라도 한 번만 띄운다
+        //     ③ 한 번에 최대 3건. 넘치면 「외 N건」 한 줄로 — 벨(알림)에서 본다
+        if (!window._notifToastedMem) window._notifToastedMem = {};
+        var _mem = window._notifToastedMem;
+        var _seenBody = {};
+        var newOnes = nres.data.filter(function(n){
+          if (shown[n.id] || _mem[n.id]) return false;
+          var _k = String(n.title || '') + '\u0001' + String(n.body || '');
+          if (_seenBody[_k] || _mem['body:' + _k]) return false;
+          _seenBody[_k] = true;
+          return true;
+        });
+        var _overflow = 0;
+        if (newOnes.length > 3) { _overflow = newOnes.length - 3; newOnes = newOnes.slice(0, 3); }
         // 🆕 v1.53.46: 토스트도 이모지 strip 한 깔끔한 텍스트로
         function _toastStripLead(s){
           return String(s||'').replace(/^[\s\u{1F000}-\u{1FFFF}\u{2300}-\u{27BF}\u{2190}-\u{21FF}\u{2700}-\u{27BF}]+/gu, '').trim();
@@ -17131,7 +17150,16 @@ async function loadDeposit(){
             });
           }, idx * 2200);
           shown[n.id] = Date.now();
+          _mem[n.id] = Date.now();
+          _mem['body:' + String(n.title || '') + '\u0001' + String(n.body || '')] = Date.now();
         });
+        if (_overflow > 0) {
+          setTimeout(function(){
+            if (typeof showToast === 'function') showToast('🔔', '알림 ' + _overflow + '건 더 있어요', '알림(종) 에서 확인하세요', { persist: false, native: false });
+          }, newOnes.length * 2200);
+        }
+        // 같은 내용의 나머지 행도 「본 것」으로 적어 둔다 — 다음 갱신에서 또 뜨지 않게
+        nres.data.forEach(function(n){ if (!shown[n.id] && _seenBody[String(n.title || '') + '\u0001' + String(n.body || '')]) { shown[n.id] = Date.now(); _mem[n.id] = Date.now(); } });
         try { sessionStorage.setItem(shownKey, JSON.stringify(shown)); } catch(_){}
       }
       // 항상 레드닷 갱신 (seen=false 카운트로)
