@@ -9,10 +9,15 @@
 -- 실행: Supabase SQL Editor. 여러 번 돌려도 안전.
 -- ═══════════════════════════════════════════════════════════════
 alter table public.profiles add column if not exists currency_prev text;
+-- ⚠ trg_taam_guard_profile_currency 는 「로그인한 슈퍼어드민」이 아니면 currency 변경을 조용히
+--   되돌린다. SQL Editor 는 세션이 없어(auth.uid() null) 그대로 돌리면 아무것도 안 바뀐다
+--   (2026-09-14 실제로 그랬다). 잠깐 끄고 바꾼 뒤 다시 켠다.
+alter table public.profiles disable trigger trg_taam_guard_profile_currency;
 update public.profiles
    set currency_prev = coalesce(currency_prev, currency),
        currency      = 'KRW'
  where currency is distinct from 'KRW';
+alter table public.profiles enable trigger trg_taam_guard_profile_currency;
 
 select '통화별 회원 수' as "구분", coalesce(currency, '(null)') as "currency", count(*)::text as "명"
   from public.profiles group by currency
@@ -22,4 +27,6 @@ select '외화였던 회원(보관)', coalesce(currency_prev, '(없음)'), count
 order by 1, 2;
 
 -- ── 되돌리기 (외화를 다시 열 때, 앱 FX_CURRENCY_LIVE=true 와 함께) ──
+-- alter table public.profiles disable trigger trg_taam_guard_profile_currency;
 -- update public.profiles set currency = currency_prev where currency_prev in ('USD','JPY');
+-- alter table public.profiles enable trigger trg_taam_guard_profile_currency;
