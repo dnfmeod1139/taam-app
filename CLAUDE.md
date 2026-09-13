@@ -430,7 +430,9 @@ toss-order(홀드↔티켓 대조), toss-confirm/billing-charge(예치금 부족
 회원 세션에서 `sb.from('deposit_transactions').insert(...)` 를 새로 쓰면 **RLS 에 막힌다.**
 잔액과 원장은 언제나 `_depApplyDelta(userId, mem, gen, entries)` 한 번으로 — entries 를
 꼭 넘긴다. 앱에 남은 직접 INSERT 는 「서버가 옛 3인자 함수일 때」의 폴백(`!…ledger`)과
-슈퍼어드민 화면(`adminGrantDeposit` · 환불 0원 기록)뿐이다.
+슈퍼어드민의 환불 0원 기록뿐이다. **슈퍼어드민 부여(`adminGrantDeposit`)도 같은 날 RPC 로 옮겼다** —
+이제 앱 어디에도 `profiles` 잔액을 직접 update 하는 줄이 없다. 「부여 누적」(`granted_*`)은
+원장 INSERT 트리거 `trg_sync_split_balance` 가 더한다(`sql/admin_grant_via_rpc.sql`). 앱이 또 더하면 두 배가 된다.
 
 Edge Function 도 같다. `toss-confirm` · `toss-billing-charge` 의 `deductDeposit` /
 `refundDeposit` 은 profiles 를 직접 고치지 않고 `admin.rpc('taam_apply_deposit_delta', …)` 를

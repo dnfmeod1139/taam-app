@@ -33,8 +33,8 @@
 3. main 머지 → 빌드 `14-h` 시크릿창 확인
 4. 검증: 예치금 일부 + 카드로 티켓 1건 → `deposit_transactions` 에
    `metadata.server_caller='service_role'` 차감 행 · `profiles.deposit_balance` 일치
-5. 그 다음 후보 (아직 안 함)
-   - 슈퍼어드민 `adminGrantDeposit` 이 profiles 를 직접 update → RPC 로 (원장 entries 포함)
+5. ✅ 슈퍼어드민 `adminGrantDeposit` → RPC (빌드 `14-i`, `sql/admin_grant_via_rpc.sql` ⚠ 실행 필요 — 부여 누적 트리거 + 진단)
+6. 그 다음 후보 (아직 안 함)
    - 앱의 옛 폴백 INSERT 8곳 제거 (서버가 4인자 함수임이 확정됐으니 죽은 코드)
    - `_dmPersistBuyerChanges` 환불 0원 기록도 RPC(0 델타 + 원장)로 통일
    - 회원 세션 `deposit_transactions` SELECT 는 그대로 (자기 것만) — 건드릴 것 없음

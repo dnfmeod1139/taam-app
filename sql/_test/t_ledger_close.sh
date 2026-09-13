@@ -149,5 +149,30 @@ E='[{"deposit_type":"membership","change_type":"ticket_refund","amount":600000,"
 ok "낸 돈 안의 환불은 통과" 0 "$(has "$(call_user $U $U 600000 0 "$E")" ERROR)"
 ok "다른 회원 것은 못 건드림" 1 "$(has "$(call_user $U $S 0 -1 null)" "다른 회원")"
 
+echo "── ⑫ 슈퍼어드민 부여·차감이 RPC 로 (2026-09-14 adminGrantDeposit)"
+$P -c "update public.profiles set membership_deposit_balance=0, general_deposit_balance=0, granted_membership_balance=0, granted_general_balance=0 where id='$U'; delete from public.deposit_transactions where user_id='$U';" >/dev/null
+E='[{"deposit_type":"general","change_type":"admin_grant","amount":50000,"description":"테스트 부여","metadata":{"granted_by":"'$S'"}}]'
+OUT=$(call_user $S $U 0 50000 "$E")
+ok "슈퍼어드민 부여 +50,000 통과" 0 "$(has "$OUT" ERROR)"
+ok "잔액" "0/50000" "$(bal)"
+ok "부여 누적은 트리거가 **한 번만** 더한다 ⭐" "50000" "$($P -c "select granted_general_balance from public.profiles where id='$U';" | tail -1)"
+ok "원장 admin_grant 1건" 1 "$(nrows " and change_type='admin_grant'")"
+E='[{"deposit_type":"general","change_type":"admin_deduct","amount":-20000,"description":"테스트 차감","metadata":{}}]'
+ok "차감 −20,000 통과" 0 "$(has "$(call_user $S $U 0 -20000 "$E")" ERROR)"
+ok "부여 누적도 같이 준다" "30000" "$($P -c "select granted_general_balance from public.profiles where id='$U';" | tail -1)"
+E='[{"deposit_type":"general","change_type":"admin_deduct","amount":-40000,"description":"과다 차감","metadata":{}}]'
+ok "잔액(30,000) 넘는 차감은 LEDGER_INSUFFICIENT ⭐" 1 "$(has "$(call_user $S $U 0 -40000 "$E")" LEDGER_INSUFFICIENT)"
+ok "잔액 그대로" "0/30000" "$(bal)"
+E='[{"deposit_type":"membership","change_type":"admin_deduct","amount":-1,"description":"빈 주머니","metadata":{}}]'
+ok "빈 멤버십 주머니 차감도 거부 (앱이 「다른 주머니에 있다」 안내)" 1 "$(has "$(call_user $S $U -1 0 "$E")" LEDGER_INSUFFICIENT)"
+
+echo "── ⑬ 4단계 SQL(admin_grant_via_rpc.sql) 적용·확인 표"
+$P -v ON_ERROR_STOP=1 -f sql/admin_grant_via_rpc.sql >/tmp/_c2.out 2>/tmp/_c2.err || { echo "❌ 적용"; head -5 /tmp/_c2.err; FAIL=1; }
+ok "확인 표 ①~③ ✅" 3 "$(grep -c '✅' /tmp/_c2.out)"
+ok "부여 누적 ≠ 원장 인 회원 없음" 0 "$(grep -c '⚠ 차이' /tmp/_c2.out)"
+$P -c "update public.profiles set granted_general_balance = 999 where id='$U';" >/dev/null
+$P -f sql/admin_grant_via_rpc.sql >/tmp/_c2.out 2>/dev/null
+ok "누적을 틀어 놓으면 그 회원이 「⚠ 차이」로 보인다" 1 "$(grep -c '⚠ 차이' /tmp/_c2.out)"
+
 echo
 [ $FAIL = 0 ] && echo "=== 전부 통과 ===" || { echo "=== 실패 있음 ==="; exit 1; }
