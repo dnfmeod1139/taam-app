@@ -412,6 +412,7 @@ Apple 은 iPad 와 iPhone **두 기기로 심사**하므로(리뷰 노트에 명
 | `app_config` | RLS | 읽기 전원, 쓰기 슈퍼어드민만 — 환율(`fx_settings`) 오염 차단 (2026-09-13) |
 | 공개 RPC 속도 | `taam_rate_hit(key, limit, window)` | `partner_agree`·`taam_mship_apply`·`taam_corp_inquire`·`taam_notify_admins`·verify/consume-invite·taam-chat. 새 공개 RPC 를 만들면 이걸 부른다 (2026-09-13) |
 | 예치금 양수 델타 | `taam_apply_deposit_delta` | 회원은 `ticket_refund` + `purchase_id` 원장으로, **낸 돈 − 이미 환불** 한도 안에서만 (2026-09-13 핫픽스) |
+| 원장 INSERT | RLS `deposit_tx_insert_server` | **회원은 `deposit_transactions` 를 직접 못 쓴다** — 슈퍼어드민만. 회원 원장은 RPC 가 쓴다. Edge(service_role)·SQL Editor 도 같은 RPC 를 부른다. 원장을 넘겼는데 잔액이 모자라면 `LEDGER_INSUFFICIENT` (2026-09-14, `sql/ledger_close_member_insert.sql`) |
 | 푸시 발송 | `send-push` Edge Function | 회원은 자기에게만. 어드민 상향 통지만 예외 |
 
 이 표의 2026-09-13 항목은 `sql/audit_hardening_2026-09-13.sql` 한 파일이 만든다
@@ -422,6 +423,27 @@ toss-order(홀드↔티켓 대조), toss-confirm/billing-charge(예치금 부족
 **앱은 tickets 에 확정 행을 넣지 않는다** (`savePurchase` 의 `TK_CLIENT_INSERT=false`) —
 넣어 봐야 서버가 거부한다. 회원 세션에서 `tickets` 를 INSERT/UPDATE 하는 코드를 새로
 쓰기 전에 이 표를 본다.
+
+### 원장은 서버만 쓴다 — 2026-09-14 (4단계 완료)
+
+`deposit_transactions` INSERT 정책이 「본인이면 허용」→ **슈퍼어드민만** 이 됐다.
+회원 세션에서 `sb.from('deposit_transactions').insert(...)` 를 새로 쓰면 **RLS 에 막힌다.**
+잔액과 원장은 언제나 `_depApplyDelta(userId, mem, gen, entries)` 한 번으로 — entries 를
+꼭 넘긴다. 앱에 남은 직접 INSERT 는 「서버가 옛 3인자 함수일 때」의 폴백(`!…ledger`)과
+슈퍼어드민 화면(`adminGrantDeposit` · 환불 0원 기록)뿐이다.
+
+Edge Function 도 같다. `toss-confirm` · `toss-billing-charge` 의 `deductDeposit` /
+`refundDeposit` 은 profiles 를 직접 고치지 않고 `admin.rpc('taam_apply_deposit_delta', …)` 를
+부른다. RPC 는 `auth.uid()` 가 없을 때 `request.jwt.claims.role = 'service_role'` 또는
+`session_user = 'postgres'` 면 슈퍼어드민과 같게 본다 (그 밖엔 「로그인이 필요합니다」).
+그래서 **Edge 를 재배포하기 전에 SQL 을 먼저** 돌린다 — 반대면 예치금 섞은 카드 결제가
+`deposit_short` 로 취소된다(돈은 안 새지만 결제가 안 된다).
+
+원장을 넘긴 호출에서 잔액이 모자라면 이제 0 에서 조용히 멈추지 않고 `LEDGER_INSUFFICIENT`
+로 거부한다. 종전엔 원장에는 요청 금액이, 잔액에는 그보다 작은 움직임이 남아 둘이 어긋났다.
+원장 없는 옛 3인자 호출만 종전대로 0 에서 멈춘다.
+
+테스트: `bash sql/_test/t_ledger_close.sh`(40건) · `t_ledger_mint.sh` · `t_ledger.sh`.
 
 ### 예치금이 두 번 빠졌다 — 2026-09-14 (서버 확정과 앱 차감의 경주)
 

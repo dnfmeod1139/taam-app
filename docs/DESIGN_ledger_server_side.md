@@ -97,7 +97,9 @@ taam_apply_deposit_delta(
 5. 티켓 구매 (24068)
 6. 슈퍼어드민 부여 (19954)
 
-**4단계 — INSERT 정책을 조인다**
+**4단계 — INSERT 정책을 조인다** ✅ 2026-09-14 완료 — `sql/ledger_close_member_insert.sql`
+(정책 이름은 `deposit_tx_insert_server`. 같은 파일에서 RPC 에 service_role/postgres 호출 길과 `LEDGER_INSUFFICIENT` 를 넣었고, toss-confirm · toss-billing-charge 가 RPC 를 쓰도록 바꿨다.)
+
 9곳이 전부 옮겨진 뒤에만. 그 전에 조이면 안 옮긴 흐름이 죽는다.
 
 ```sql

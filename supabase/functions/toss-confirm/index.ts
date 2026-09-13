@@ -219,18 +219,20 @@ serve(async (req) => {
       // ① 예치금 사용분 차감 (있으면). 결제 진행 중 잔액이 줄었을 수 있으니
       //   실제 잔액을 다시 읽어 그만큼만 뺀다 (음수 방지 · 회원 불리 방지).
       let deductedDeposit = 0;
+      let deductedParts = { fromMem: 0, fromGen: 0 };
       if (depositUsed > 0) {
         const ded = await deductDeposit(admin, user.id, depositUsed, {
           purchase_id: holdId, ticket_id: meta.ticket_id, restaurant_name: meta.restaurant_name,
           party_size: meta.pax, order_id: orderId,
         });
         deductedDeposit = ded.deducted;
+        deductedParts = { fromMem: ded.fromMem, fromGen: ded.fromGen };
         if (ded.deducted < depositUsed) {
           // 🔒 2026-09-13: 덜 냈으면 확정하지 않는다. 종전에는 부족분을 경고만 남기고
           //   정가(total)로 티켓을 붙여, 예치금이 결제 중에 줄어든 회원이 덜 내고 확정됐다.
           //   좌석 상실과 같은 처리 — 뺀 예치금 환원 · 카드 승인 취소 · 주문 canceled.
           console.warn('[toss-confirm] 예치금 부족(결제 중 변동) — 확정 취소', ded.deducted, '/', depositUsed, orderId);
-          if (ded.deducted > 0) await refundDeposit(admin, user.id, ded.deducted, orderId).catch(() => {});
+          if (ded.deducted > 0) await refundDeposit(admin, user.id, ded, orderId, holdId, '예치금 부족 취소 · 예치금 환원').catch(() => {});
           const canceled = await cancelTossPayment(secretKey, paymentKey, '예치금 부족으로 구매 불가');
           await admin.from('payment_orders')
             .update({ status: canceled ? 'canceled' : 'paid',
@@ -248,7 +250,7 @@ serve(async (req) => {
         // 좌석이 사라졌다(홀드 만료 등). 돈을 그냥 삼킬 수 없으므로:
         //   차감한 예치금을 되돌리고 · 카드 결제를 취소하고 · 회원에게 알린다.
         if (deductedDeposit > 0) {
-          await refundDeposit(admin, user.id, deductedDeposit, orderId).catch(() => {});
+          await refundDeposit(admin, user.id, deductedParts, orderId, holdId).catch(() => {});
         }
         const canceled = await cancelTossPayment(secretKey, paymentKey, '좌석 만료로 구매 불가');
         await admin.from('payment_orders')
@@ -295,75 +297,88 @@ serve(async (req) => {
 });
 
 // ── 예치금 차감 (멤버십 먼저, 부족분 일반) ──
-//   클라이언트 completePurchase 의 차감 로직을 그대로 미러링한다.
-//   main 컬럼(membership/general/deposit_balance)을 직접 갱신하고,
-//   deposit_transactions INSERT 는 split 트리거가 charged_* 를 맞추게 한다.
+//   🔧 2026-09-14 원장 서버화 4단계: profiles 를 직접 고치고 원장을 따로 넣던 것을
+//   RPC taam_apply_deposit_delta 한 번으로 바꿨다 — 잔액 이동과 원장이 한 트랜잭션이고
+//   balance_after 는 서버가 센다. service_role 호출은 서버가 슈퍼어드민과 같게 본다
+//   (sql/ledger_close_member_insert.sql). 읽은 뒤 잔액이 줄어 모자라면 서버가
+//   LEDGER_INSUFFICIENT 로 거부하므로 한 번 다시 읽어 재시도하고, 그래도 안 되면 0 을
+//   돌려 호출자가 deposit_short 로 처리한다(카드 승인 취소).
 async function deductDeposit(
   admin: ReturnType<typeof createClient>,
   userId: string,
   want: number,
   meta: Record<string, unknown>,
-): Promise<{ deducted: number }> {
-  const { data: prof } = await admin.from('profiles')
-    .select('membership_deposit_balance, general_deposit_balance, deposit_balance')
-    .eq('id', userId).maybeSingle();
-  if (!prof) return { deducted: 0 };
+): Promise<{ deducted: number; fromMem: number; fromGen: number }> {
+  const none = { deducted: 0, fromMem: 0, fromGen: 0 };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const { data: prof } = await admin.from('profiles')
+      .select('membership_deposit_balance, general_deposit_balance')
+      .eq('id', userId).maybeSingle();
+    if (!prof) return none;
 
-  const mem = Number(prof.membership_deposit_balance || 0);
-  const gen = Number(prof.general_deposit_balance || 0);
-  const totalBal = Number(prof.deposit_balance ?? (mem + gen));
-  const deduct = Math.min(want, totalBal);
-  if (deduct <= 0) return { deducted: 0 };
+    const mem = Number(prof.membership_deposit_balance || 0);
+    const gen = Number(prof.general_deposit_balance || 0);
+    const deduct = Math.min(want, mem + gen);
+    if (deduct <= 0) return none;
 
-  const fromMem = Math.min(mem, deduct);
-  const fromGen = deduct - fromMem;
-  const newMem = mem - fromMem;
-  const newGen = gen - fromGen;
-
-  await admin.from('profiles').update({
-    membership_deposit_balance: newMem,
-    general_deposit_balance: newGen,
-    deposit_balance: totalBal - deduct,
-  }).eq('id', userId);
-
-  const rows: Record<string, unknown>[] = [];
-  let after = totalBal;
-  if (fromMem > 0) {
-    after -= fromMem;
-    rows.push({ user_id: userId, deposit_type: 'membership', change_type: 'ticket_purchase',
-      amount: -fromMem, balance_after: after,
-      description: (meta.restaurant_name || '티켓') + ' 카드결제 · 멤버십 예치금 차감',
-      metadata: { ...meta, portion: 'membership' } });
+    const fromMem = Math.min(mem, deduct);
+    const fromGen = deduct - fromMem;
+    const label = String(meta.restaurant_name || '티켓');
+    const entries: Record<string, unknown>[] = [];
+    if (fromMem > 0) {
+      entries.push({ deposit_type: 'membership', change_type: 'ticket_purchase', amount: -fromMem,
+        description: label + ' 카드결제 · 멤버십 예치금 차감', metadata: { ...meta, portion: 'membership' } });
+    }
+    if (fromGen > 0) {
+      entries.push({ deposit_type: 'general', change_type: 'ticket_purchase', amount: -fromGen,
+        description: label + ' 카드결제 · 일반 예치금 차감', metadata: { ...meta, portion: 'general' } });
+    }
+    const { data, error } = await admin.rpc('taam_apply_deposit_delta', {
+      p_user_id: userId, p_mem_delta: -fromMem, p_gen_delta: -fromGen, p_entries: entries,
+    });
+    if (!error) {
+      // 서버가 실제로 움직인 만큼만 「뺐다」고 한다 (prev_* 는 4단계 함수부터 온다)
+      const d = (data || {}) as Record<string, number>;
+      const realMem = (typeof d.prev_mem === 'number') ? Math.max(0, d.prev_mem - Number(d.mem || 0)) : fromMem;
+      const realGen = (typeof d.prev_gen === 'number') ? Math.max(0, d.prev_gen - Number(d.gen || 0)) : fromGen;
+      return { deducted: realMem + realGen, fromMem: realMem, fromGen: realGen };
+    }
+    const msg = String(error.message || '');
+    if (/LEDGER_INSUFFICIENT/.test(msg) && attempt === 0) {
+      console.warn('[deposit] 결제 중 잔액 변동 — 다시 읽어 재시도', userId);
+      continue;
+    }
+    console.error('[deposit] 차감 RPC 실패', msg.slice(0, 200));
+    return none;
   }
-  if (fromGen > 0) {
-    after -= fromGen;
-    rows.push({ user_id: userId, deposit_type: 'general', change_type: 'ticket_purchase',
-      amount: -fromGen, balance_after: after,
-      description: (meta.restaurant_name || '티켓') + ' 카드결제 · 일반 예치금 차감',
-      metadata: { ...meta, portion: 'general' } });
-  }
-  if (rows.length) await admin.from('deposit_transactions').insert(rows);
-  return { deducted: deduct };
+  return none;
 }
 
-// 좌석 상실 시 차감한 예치금을 되돌린다 (일반 예치금으로 환원)
+// 좌석 상실·예치금 부족 시 차감한 예치금을 되돌린다 — **뺀 주머니로** (종전엔 전부 일반으로 갔다)
 async function refundDeposit(
   admin: ReturnType<typeof createClient>,
   userId: string,
-  amount: number,
+  parts: { fromMem: number; fromGen: number },
   orderId: string,
+  purchaseId?: string,
+  why = '좌석 만료 취소 · 예치금 환원',
 ): Promise<void> {
-  const { data: prof } = await admin.from('profiles')
-    .select('general_deposit_balance, deposit_balance').eq('id', userId).maybeSingle();
-  if (!prof) return;
-  const gen = Number(prof.general_deposit_balance || 0) + amount;
-  const bal = Number(prof.deposit_balance || 0) + amount;
-  await admin.from('profiles').update({ general_deposit_balance: gen, deposit_balance: bal }).eq('id', userId);
-  await admin.from('deposit_transactions').insert({
-    user_id: userId, deposit_type: 'general', change_type: 'ticket_refund',
-    amount: amount, balance_after: bal,
-    description: '좌석 만료 취소 · 예치금 환원', metadata: { order_id: orderId },
+  const mem = Math.max(0, Math.round(parts.fromMem || 0));
+  const gen = Math.max(0, Math.round(parts.fromGen || 0));
+  if (mem + gen <= 0) return;
+  const md: Record<string, unknown> = { order_id: orderId };
+  if (purchaseId) md.purchase_id = purchaseId;
+  const entries: Record<string, unknown>[] = [];
+  if (mem > 0) entries.push({ deposit_type: 'membership', change_type: 'ticket_refund', amount: mem, description: why, metadata: md });
+  if (gen > 0) entries.push({ deposit_type: 'general',    change_type: 'ticket_refund', amount: gen, description: why, metadata: md });
+  const { error } = await admin.rpc('taam_apply_deposit_delta', {
+    p_user_id: userId, p_mem_delta: mem, p_gen_delta: gen, p_entries: entries,
   });
+  if (error) {
+    // 돈이 걸린 실패 — 조용히 넘기지 않는다. 호출자는 catch 로 흐름을 잇고 이 줄이 증거가 된다.
+    console.error('[deposit] 환원 RPC 실패 — 수동 확인 필요', userId, orderId, mem, gen, String(error.message).slice(0, 200));
+    throw error;
+  }
 }
 
 // 좌석 홀드 → 실제 구매. 홀드가 있으면 UPDATE, 없으면(만료) 새로 INSERT 하며

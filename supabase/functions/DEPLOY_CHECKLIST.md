@@ -1,3 +1,20 @@
+# 2026-09-14 원장 서버화 4단계 — Edge Function 재배포 2개
+
+`sql/ledger_close_member_insert.sql` 을 **먼저** SQL Editor 에서 돌린 뒤 아래 둘을 재배포한다.
+SQL 없이 배포하면 RPC 가 「로그인이 필요합니다」로 거부해 **예치금을 섞은 카드 결제가
+deposit_short 로 취소된다**(돈은 안 샌다 — 카드 승인이 취소되고 좌석은 홀드로 남는다).
+그러니 순서를 지킨다. 반대로 SQL 만 돌리고 배포를 미루는 것은 안전하다.
+
+| 함수 | 바뀐 것 | 배포 전 확인 |
+|---|---|---|
+| toss-confirm | `deductDeposit`/`refundDeposit` 가 profiles 직접 수정 대신 RPC `taam_apply_deposit_delta` 호출. 환원은 **뺀 주머니로**(종전 전부 일반) | SQL 확인 표 ⑤ `service_role 실행 권한` ✅ |
+| toss-billing-charge | 〃 | 〃 |
+
+배포 뒤 확인: 예치금 일부 + 카드 부족분으로 티켓 1건 결제 → `deposit_transactions` 에
+`metadata.server_caller = 'service_role'` 인 차감 행이 있고 `profiles.deposit_balance` 가 맞는지.
+
+---
+
 # 2026-09-13 감사 보강 — Edge Function 재배포 목록
 
 `sql/audit_hardening_2026-09-13.sql` 을 **먼저** SQL Editor 에서 돌린 뒤, 아래 13개를

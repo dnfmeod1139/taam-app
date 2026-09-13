@@ -27,6 +27,9 @@ FAIL=0
 
 $P -v ON_ERROR_STOP=1 -f sql/_test/fx_ledger.sql >/dev/null 2>/tmp/_m.err || { echo "❌ 픽스처"; head -3 /tmp/_m.err; exit 1; }
 $P -v ON_ERROR_STOP=1 -f sql/ledger_server_side.sql >/dev/null 2>/tmp/_m.err || { echo "❌ 함수 적용"; head -5 /tmp/_m.err; exit 1; }
+# 4단계(2026-09-14) 함수 위에서도 같은 불변식이 지켜져야 한다
+$P -v ON_ERROR_STOP=1 -f sql/_test/fx_ledger_close.sql >/dev/null 2>/tmp/_m.err || { echo "❌ 픽스처(close)"; head -3 /tmp/_m.err; exit 1; }
+$P -v ON_ERROR_STOP=1 -f sql/ledger_close_member_insert.sql >/dev/null 2>/tmp/_m.err || { echo "❌ 4단계 함수 적용"; head -5 /tmp/_m.err; exit 1; }
 $P -c "insert into auth.users(id) values ('$U'),('$S');
 insert into public.profiles(id,role,display_name,membership_deposit_balance,general_deposit_balance)
  values ('$U','member','회원',2000000,500000),('$S','super_admin','슈퍼',0,0);" >/dev/null
