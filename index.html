@@ -57,19 +57,92 @@
      기존에는 폰트에만 preconnect 가 걸려 있어, cdnjs/unpkg 는 스크립트를 만난 시점에야
      DNS→TCP→TLS 를 시작했다. 셀룰러 RTT(100~300ms)에서 이 왕복이 그대로 지연이 된다. -->
 <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
-<link rel="preconnect" href="https://unpkg.com" crossorigin>
 <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Oswald:wght@300;400;500;600;700&family=Noto+Sans+KR:wght@400;500;700;900&family=Noto+Sans+JP:wght@400;500;700;900&display=swap" onload="this.onload=null;this.rel='stylesheet'">
 <noscript><link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600;700&family=Oswald:wght@300;400;500;600;700&family=Noto+Sans+KR:wght@400;500;700;900&family=Noto+Sans+JP:wght@400;500;700;900&display=swap" rel="stylesheet"></noscript>
 <link rel="preload" as="style" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css" onload="this.onload=null;this.rel='stylesheet'">
 <noscript><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css"></noscript>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js" defer></script>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<!-- 🔧 2026-09-13: 동기 stylesheet 였다 — cdnjs 가 느리면 첫 페인트가 그만큼 밀렸다. 지도는 함수 안에서만 쓰인다. -->
+<link rel="preload" as="style" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" onload="this.onload=null;this.rel='stylesheet'">
+<noscript><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"></noscript>
 <!-- 🆕 2026.08: defer — Leaflet 은 지도 화면(아틀라스/레스토랑 위치)에서만 쓰이고
      모든 호출이 함수 내부라 초기 렌더를 막을 이유가 없다. -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js" defer></script>
 
+<!-- ═════════ 오류 리포팅 (2026-09-12) ═════════
+     회원 기기에서 나는 오류가 나에게 오는 유일한 통로. sql/app_errors.sql.
+     ⚠ 이 블록은 Supabase 초기화보다 **앞**에 있어야 한다 — CDN 폴백·부팅 실패는
+       sb 가 생기기 전에 난다. sb 가 없으면 줄 세워 두고, 생기면 보낸다.
+     ⚠ 여기서 절대 예외를 던지지 않는다. 오류를 적다가 난 오류로 앱을 죽이면 본말전도다. -->
+<script>
+(function(){
+  var Q = [], SEEN = {}, SENT = 0, MAX_SESSION = 40, FLUSHING = false;
+  function plat(){
+    try { return (window.Capacitor && window.Capacitor.getPlatform && window.Capacitor.getPlatform()) || 'web'; }
+    catch(e){ return 'web'; }
+  }
+  function cut(v, n){ v = (v == null ? '' : String(v)); return v.length > n ? v.slice(0, n) : v; }
+  // 이름·전화·이메일이 message 에 섞이면 여기서 지운다 — 표에는 안 들어간다
+  function scrub(v){
+    return cut(v, 500)
+      .replace(/[\w.+-]+@[\w-]+\.[\w.]+/g, '[email]')
+      .replace(/\b01[016789]-?\d{3,4}-?\d{4}\b/g, '[phone]')
+      .replace(/eyJ[A-Za-z0-9_-]{20,}/g, '[jwt]');
+  }
+  function flush(){
+    if (FLUSHING || !Q.length) return;
+    var sb = window.sb;
+    if (!sb || !sb.rpc) return;                       // 아직 없다 — 다음 기회에
+    FLUSHING = true;
+    var item = Q.shift();
+    try {
+      Promise.resolve(sb.rpc('taam_report_error', item)).then(function(){}, function(){})
+        .then(function(){ FLUSHING = false; if (Q.length) setTimeout(flush, 300); });
+    } catch(e){ FLUSHING = false; }
+  }
+  // kind: js · promise · boot_stuck · cdn_fallback · ledger_fallback · …
+  window.taamReportError = function(kind, message, stack, extra){
+    try {
+      var msg = scrub(message);
+      if (!msg) return;
+      // 같은 오류는 한 세션에 한 번만 — 무한 루프 하나가 60건을 다 먹지 않게
+      var key = kind + '|' + msg.slice(0, 120);
+      if (SEEN[key]) return;
+      SEEN[key] = 1;
+      if (SENT >= MAX_SESSION) return;
+      SENT++;
+      Q.push({
+        p_kind: cut(kind || 'js', 40),
+        p_message: msg,
+        p_stack: cut(stack, 2000) || null,
+        p_url: cut(location.pathname + location.search, 300),
+        p_build: cut(typeof TAAM_WEB_BUILD !== 'undefined' ? TAAM_WEB_BUILD : '', 40) || null,
+        p_platform: plat(),
+        p_extra: (extra && typeof extra === 'object') ? extra : {}
+      });
+      flush();
+    } catch(e){}
+  };
+  // sb 가 늦게 생겨도 30초 동안은 다시 시도한다
+  var tries = 0, t = setInterval(function(){ flush(); if (++tries > 10 || (!Q.length && window.sb)) clearInterval(t); }, 3000);
+  // 처리 안 된 Promise — 지금까지 아무 데도 안 잡혔다
+  window.addEventListener('unhandledrejection', function(e){
+    try {
+      var r = e && e.reason;
+      var m = (r && (r.message || r.msg)) || (typeof r === 'string' ? r : '') || 'unhandledrejection';
+      window.taamReportError('promise', m, r && r.stack, {});
+    } catch(x){}
+  });
+})();
+</script>
+
 <!-- ═════════ Supabase 연결 ═════════ -->
-<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<!-- 🆕 2026-09-12: SDK 를 우리 도메인에서 받는다 (vendor/). 남의 CDN 이 죽으면 앱이
+     죽던 것을 끊는다 — 09-06 안드로이드 검은 화면이 그 절반이었다.
+     같은 origin 이라 서비스워커가 캐시하고, 파일명에 버전이 있어 영구 캐시가 안전하다.
+     못 받으면 아래 초기화 블록이 jsdelivr → unpkg 순으로 **같은 버전**을 시도한다.
+     ⚠ 버전을 올릴 때: vendor/ 파일 · 이 줄 · 아래 폴백 두 줄을 함께 바꾼다. -->
+<script src="/vendor/supabase-js-2.116.0.js"></script>
 <script>
 (function(){
   var SUPABASE_URL = 'https://edfsmzbcixfnqabrsvut.supabase.co';
@@ -136,9 +209,9 @@
     // 정상으로 돌아왔으면 표시를 지운다 — 다음에 또 막히면 한 번은 시도해야 한다
     try { sessionStorage.removeItem(_SB_RETRY_KEY); } catch(e){}
   } else {
-    console.warn('[boot] Supabase SDK 미로드 — 폴백 CDN 재시도');
+    console.warn('[boot] Supabase SDK 미로드(vendor) — 폴백 CDN 재시도');
     var _fb = document.createElement('script');
-    _fb.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
+    _fb.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js';
     _fb.onload  = function(){
       if (!_initSb()) { _sbFailNotice(); return; }
       var _tried = false;
@@ -148,13 +221,25 @@
         //   window.sb 는 지금 만들어졌으니 그대로 간다 — 이 실행에서 이미
         //   지나간 초기화들은 부팅 감시견(8초)이 로그인 화면으로 받아준다.
         console.warn('[boot] 폴백 CDN 성공 — 새로고침은 한 번만 한다. 그대로 진행');
+        try { window.taamReportError('cdn_fallback', 'vendor SDK 실패 → CDN 폴백으로 진행 (2회째)', null, {}); } catch(e){}
         return;
       }
       try { sessionStorage.setItem(_SB_RETRY_KEY, '1'); } catch(e){}
       console.warn('[boot] 폴백 CDN 성공 — 새로고침 (1회)');
+      try { window.taamReportError('cdn_fallback', 'vendor SDK 실패 → CDN 폴백 성공, 새로고침', null, {}); } catch(e){}
       location.reload();
     };
-    _fb.onerror = function(){ _sbFailNotice(); };
+    _fb.onerror = function(){
+      // 둘째 폴백 — unpkg. 셋 다 같은 버전이다.
+      var _fb2 = document.createElement('script');
+      _fb2.src = 'https://unpkg.com/@supabase/supabase-js@2.116.0/dist/umd/supabase.js';
+      _fb2.onload = _fb.onload;
+      _fb2.onerror = function(){
+        try { window.taamReportError('cdn_dead', 'vendor·jsdelivr·unpkg 전부 실패', null, {}); } catch(e){}
+        _sbFailNotice();
+      };
+      document.head.appendChild(_fb2);
+    };
     document.head.appendChild(_fb);
     return;   // sb 없이 아래 코드를 실행하면 연쇄 오류가 난다
   }
@@ -8737,6 +8822,11 @@ window.emergencyClose = function(){
 // 4. 전역 에러 핸들러: 심각한 에러 발생시 긴급 복구 버튼 표시
 window.addEventListener('error', function(e){
   console.error('[Global Error]', e.message, e.filename, e.lineno);
+  // 🆕 2026-09-12: 나에게도 보낸다 (sql/app_errors.sql)
+  try {
+    var _src = e.filename ? String(e.filename).replace(/^.*\//, '') : '';
+    window.taamReportError('js', e.message, (e.error && e.error.stack) || (_src + ':' + e.lineno + ':' + e.colno), {});
+  } catch(_re){}
   // 3초 이상 계속 에러 나면 탈출 배너 표시
   if (!window._errCount) window._errCount = 0;
   window._errCount++;
@@ -15176,6 +15266,15 @@ textarea.mapl-in{min-height:78px;resize:vertical;line-height:1.7}
 <script>
 
 window.onerror = function(msg, src, line, col, err) {
+  // 🆕 2026-09-12: 회원에게는 빨간 박스를 안 보여준다.
+  //   종전엔 모든 회원 화면 하단에 「⚠ TypeError: ... | index.html:12345」가 그대로
+  //   떴다 — 토스트에서 서버 원문을 가린 것과 같은 종류의 노출이고, 회원이 할 수
+  //   있는 일도 없다. 이제 오류는 app_errors 로 나에게 온다(전역 error 핸들러가
+  //   보낸다). 박스는 어드민·슈퍼어드민에게만 — 그들은 그 줄 번호가 필요하다.
+  try {
+    var _r = (typeof _currentRole !== 'undefined') ? _currentRole : '';
+    if (_r !== 'superadmin' && _r !== 'admin') return false;
+  } catch(_e){ return false; }
   var box = document.getElementById('_errBox');
   if (!box) {
     box = document.createElement('div');
@@ -16683,8 +16782,12 @@ async function _forceSignOutDueToOtherDevice(otherLabel){
     try { if(_activeSessionChannel) window.sb.removeChannel(_activeSessionChannel); } catch(_){}
     _activeSessionChannel = null;
     try { if(typeof _liveUnsubscribe === 'function') _liveUnsubscribe(); } catch(_){}
-    try { await window.sb.auth.signOut(); } catch(_){}
+    // 🔧 2026-09-13: scope:'local' — 쫓겨나는 기기는 **자기** 토큰만 버린다.
+    //   기본값(global)은 그 회원의 refresh token 을 전부 지우므로, 방금 로그인한
+    //   새 기기까지 1시간 안에 튕겼다(「마지막 로그인이 이긴다」의 반대).
+    try { await window.sb.auth.signOut({ scope: 'local' }); } catch(_){}
     try { localStorage.removeItem('authedSession'); } catch(_){}
+    try { localStorage.removeItem('taamSaPw'); } catch(_){}
     try { if(typeof IDB !== 'undefined' && IDB.set) IDB.set('authedSession', ''); } catch(_){}
     setTimeout(function(){ location.reload(); }, 300);
   }, 2500);
@@ -16871,8 +16974,13 @@ async function loadDeposit(){
     //   종전에는 여기서 무조건 UPSERT 해서, 강제 로그아웃 당시 꺼져 있던 기기가
     //   앱을 여는 순간 최신 기기를 쫓아냈다 (핑퐁). _resumeActiveSession 은
     //   현재 소유자를 먼저 확인하고, 내 기기가 아니면 이 기기가 물러난다.
+    //   🔧 2026-09-13: 이 함수(loadDeposit)는 동기화(taamSyncNow)마다 불린다. 그때마다
+    //   세션 복원(쿼리 3회 + Realtime 재구독 + 워치독 재설정)을 반복하고 있었다 —
+    //   분당 최대 16쿼리를 세션 장부 유지에만 썼다. 같은 회원에 대해 한 번만 한다.
+    //   주기 확인은 워치독(60초)이 이미 맡고 있다.
     try {
-      if(typeof _resumeActiveSession === 'function'){
+      if(typeof _resumeActiveSession === 'function' && window._sessResumedFor !== user.id){
+        window._sessResumedFor = user.id;
         var roleRes = await window.sb.from('profiles').select('role').eq('id', user.id).maybeSingle();
         var rrr = (roleRes && roleRes.data && roleRes.data.role) || 'member';
         _resumeActiveSession(user, rrr);
@@ -17884,6 +17992,8 @@ async function _depApplyDelta(userId, memDelta, genDelta, entries){
      (res.error.code === 'PGRST202' ||
       /could not find the function|schema cache/i.test(res.error.message || ''))){
     console.warn('[deposit] 서버가 원장 인자를 모름 — 잔액만 옮긴다:', res.error.message);
+    // 🆕 2026-09-12: 「옛 길로 돌고 있다」는 나에게 와야 한다 — 몇 주째 그래도 아무도 모른다
+    try { window.taamReportError('ledger_fallback', 'taam_apply_deposit_delta 가 p_entries 를 모름 — ledger_server_side.sql 미적용?', null, {}); } catch(_e){}
     delete args.p_entries;
     res = await window.sb.rpc('taam_apply_deposit_delta', args);
     if(res.error) throw new Error(res.error.message);
@@ -20204,7 +20314,7 @@ function openMain(){
     //   던졌다. 서로 의존이 없는데 왕복이 한 번 더 있었다. 셀룰러에서는
     //   왕복 한 번이 그대로 300~600ms 다. 같이 던지면 그만큼 먼저 뜬다.
     //   ⚠ loadRole() 은 앞에 남겨 둔다 — loadInviteCodes 가 _currentRole 을 본다.
-    return Promise.all([
+    var _allLoads = Promise.all([
       loadRestaurants(),
       loadTickets(),
       loadMembers(),
@@ -20215,6 +20325,25 @@ function openMain(){
       (typeof pcalLoadCovers === 'function' ? pcalLoadCovers().catch(function(){}) : Promise.resolve()),
       reloadUserData()
     ]);
+    // 🔧 2026-09-13: 첫 화면이 이 8건 **전부**에 인질이었다. supabase-js 의 fetch 는
+    //   타임아웃이 없어서, 하나라도 매달리면(기업망·로밍·TCP stall) 화면이 영영 안 떴다.
+    //   6초가 지나면 그때까지 온 것(+IDB 폴백)으로 먼저 그리고, 나머지는 뒤에서 끝나는
+    //   대로 다시 그린다. 정상 회선에서는 6초 전에 끝나므로 아무것도 달라지지 않는다.
+    var _bootCapped = false;
+    var _cap = new Promise(function(res){ setTimeout(function(){ _bootCapped = true; res(); }, 6000); });
+    _allLoads.then(function(){
+      if (!_bootCapped) return;
+      console.warn('[boot] 늦게 끝난 로드 — 화면 다시 그림');
+      try { if (typeof renderTicketGenres === 'function') renderTicketGenres(); } catch(_r1){}
+      try { if (typeof updateMpAdminBtn === 'function') updateMpAdminBtn(); } catch(_r2){}
+      try { if (typeof updatePendingBadge === 'function') updatePendingBadge(); } catch(_r3){}
+      try { if (typeof newHomeEnabled === 'function' && newHomeEnabled() && typeof pcalRenderAll === 'function') pcalRenderAll(); } catch(_r4){}
+      try { if (typeof _liveRepaintBalance === 'function') _liveRepaintBalance(); } catch(_r5){}
+    }).catch(function(){});
+    return Promise.race([_allLoads, _cap.then(function(){
+      console.warn('[boot] 6초 안에 로드가 안 끝남 — 지금까지 온 것으로 먼저 그린다');
+      try { if (typeof window.taamReportError === 'function') window.taamReportError('boot_slow', 'openMain 로드 6초 초과', null, {}); } catch(_e){}
+    })]);
   }).then(function(){
     // 어드민/슈퍼어드민으로 재접속 시 유저 전용 데이터 초기화
     if (_currentRole === 'admin' || _currentRole === 'superadmin') {
@@ -31339,7 +31468,7 @@ async function tbOpen(){
   if(_ti) _ti.textContent = '대시보드';
   var b = document.getElementById('tbBody');
   if(b) b.innerHTML = '<div class="tb-empty">불러오는 중…</div>';
-  _dashExtra = { resvPending:null, deposit:null };
+  _dashExtra = { resvPending:null, deposit:null, errors:null };
   await _tbLoad();
   _dashRender();                 // 티켓·예약은 이미 있는 것으로 먼저 그린다
   _acRenderTabs('today');
@@ -31640,7 +31769,7 @@ function _tbRow(r, showDate, nextKey){
 //
 //   ⚠ 카드마다 따로 실패한다. 한 조회가 깨져도 나머지는 그대로 보인다 —
 //     첫 화면이 통째로 비는 일을 다시 만들지 않는다.
-var _dashExtra = { resvPending: null, deposit: null };
+var _dashExtra = { resvPending: null, deposit: null, errors: null };
 
 function _dashPending(){
   // 티켓 업로드·삭제 승인 대기 — ticketDB 에서 바로 센다
@@ -31703,6 +31832,14 @@ async function _dashLoad(){
       }
     }
   }catch(e){ _dashExtra.deposit = null; }
+  // 🆕 2026-09-12: 오늘 오류 — 회원 기기에서 올라온 것 (sql/app_errors.sql)
+  //   ⚠ 함수가 없으면(아직 SQL 안 돌림) 조용히 null — 카드에 「준비 안 됨」으로 뜬다.
+  try{
+    if(typeof _isSuperAdmin === 'function' && _isSuperAdmin()){
+      var er = await window.sb.rpc('taam_error_summary', { p_hours: 24 });
+      _dashExtra.errors = er.error ? { missing: /does not exist|schema cache/i.test(er.error.message || '') } : (er.data || null);
+    }
+  }catch(e){ _dashExtra.errors = null; }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -31950,6 +32087,44 @@ window.qmGo = qmGo; window.qmOpenEdit = qmOpenEdit; window.qmCloseEdit = qmClose
 window.qmClearQ = qmClearQ; window.qmAdd = qmAdd; window.qmRemove = qmRemove;
 window.qmMove = qmMove; window.qmSave = qmSave;
 
+// 🆕 2026-09-12: 오늘 오류 상세 — 카드를 누르면 상위 8개. 코드로 만든 판이라 _acOverlayClose 로 닫는다.
+function acErrOpen(){
+  var d = _dashExtra.errors;
+  var old = document.getElementById('acErrPop'); if(old) old.remove();
+  var el = document.createElement('div');
+  el.id = 'acErrPop';
+  el.style.cssText = 'position:fixed;inset:0;z-index:9100;background:rgba(20,16,12,.55);display:flex;align-items:center;justify-content:center;padding:18px;';
+  el.onclick = function(ev){ if(ev.target === el) _acOverlayClose(el.id); };
+  var rows = (d && d.top) ? d.top : [];
+  var h = '<div style="width:100%;max-width:440px;max-height:82vh;overflow-y:auto;background:#FBF9F4;border-radius:18px;padding:20px 20px 24px;font-family:var(--font-main);-webkit-overflow-scrolling:touch;" data-lang-lock="ko">'
+    + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">'
+    +   '<div style="font-size:15px;font-weight:800;color:#17150f;">오늘 오류 · 24시간</div>'
+    +   '<button onclick="_acOverlayClose(\'acErrPop\')" style="border:0;background:none;font-size:20px;color:#8a8580;padding:2px 6px;cursor:pointer;">×</button></div>';
+  if(!d || d.missing){
+    h += '<div class="tb-empty">sql/app_errors.sql 을 Supabase SQL Editor 에서 실행하면 여기에 쌓입니다.</div>';
+  } else if(!rows.length){
+    h += '<div class="tb-empty">올라온 오류가 없습니다.</div>';
+  } else {
+    h += '<div style="font-size:11.5px;color:#79736a;margin-bottom:10px;">' + (d.total || 0) + '건 · 회원 ' + (d.users || 0) + '명 · 비로그인 ' + (d.anon || 0) + '건</div>';
+    rows.forEach(function(r){
+      var last = r.last ? String(r.last).slice(5, 16).replace('T', ' ') : '';
+      h += '<div style="padding:10px 0;border-top:1px solid #efe9dc;">'
+        + '<div style="display:flex;gap:8px;align-items:baseline;">'
+        +   '<span style="font-size:9.5px;font-weight:800;letter-spacing:.06em;padding:2px 6px;border-radius:6px;'
+        +     (/boot|cdn|ledger/.test(r.kind) ? 'color:#8A3242;background:#FAF1F1;border:1px solid #EBD7D7;' : 'color:#79736a;background:#f2efe8;border:1px solid #e3dcce;')
+        +     '">' + _tbEsc(r.kind) + '</span>'
+        +   '<b style="margin-left:auto;font-size:12px;color:#17150f;">' + (r.n || 0) + '회</b></div>'
+        + '<div style="font-size:12.5px;color:#17150f;margin-top:5px;line-height:1.5;overflow-wrap:anywhere;">' + _tbEsc(r.message) + '</div>'
+        + '<div style="font-size:10.5px;color:#a69f94;margin-top:3px;">' + _tbEsc((r.platforms || []).join(' · ')) + (last ? ' · 마지막 ' + last : '') + '</div>'
+        + '</div>';
+    });
+  }
+  h += '</div>';
+  el.innerHTML = h;
+  document.body.appendChild(el);
+}
+window.acErrOpen = acErrOpen;
+
 function _dashRender(){
   var el = document.getElementById('tbBody');
   if(!el) return;
@@ -32084,6 +32259,28 @@ function _dashRender(){
     +  '<span class="u">건 · ' + mp + '명</span><span class="chev">›</span></div>'
     +  '<div class="sub">' + (mx ? '<span class="bit mute">취소 <b>' + mx + '</b></span>' : '')
     +  '</div></div>';
+
+  // ── 오늘 오류 (슈퍼어드민만) — 2026-09-12 ──
+  //   회원 기기가 나에게 말을 거는 유일한 자리. 0건이어도 카드는 둔다 —
+  //   「안 보이는 것」과 「없는 것」이 구분돼야 한다.
+  if(isSuper){
+    var _er = _dashExtra.errors;
+    var _erN = (_er && typeof _er.total === 'number') ? _er.total : null;
+    h += '<div class="mo-grp">오늘 오류</div><div class="sum" onclick="acErrOpen()">'
+      +  '<div class="hd"><b>24시간</b><span class="v">'
+      +  (_er && _er.missing ? '—' : (_erN === null ? '—' : _erN))
+      +  '</span><span class="u">' + (_erN === null ? '' : ('건 · ' + (_er.users || 0) + '명')) + '</span><span class="chev">›</span></div>'
+      +  (_er && _er.missing
+          ? '<div style="font-size:11px;color:#a69f94;margin-top:8px;">sql/app_errors.sql 을 아직 안 돌렸습니다</div>'
+          : (_erN === null
+              ? '<div style="font-size:11px;color:#a69f94;margin-top:8px;">불러오지 못했습니다</div>'
+              : (_erN === 0
+                  ? '<div style="font-size:11px;color:#a69f94;margin-top:8px;">올라온 오류가 없습니다</div>'
+                  : '<div class="sub">' + Object.keys(_er.by_kind || {}).slice(0, 4).map(function(k){
+                      return '<span class="bit' + (/boot|cdn|ledger/.test(k) ? ' warn' : '') + '">' + _tbEsc(k) + ' <b>' + _er.by_kind[k] + '</b></span>';
+                    }).join('') + '</div>')))
+      +  '</div>';
+  }
 
   // ── 예치금 (슈퍼어드민만) ──
   if(isSuper){
@@ -63122,9 +63319,21 @@ window._taamBusyNow = _taamBusyNow;
 
 // 한가해지면 반영한다. 바쁘면 기다렸다가 화면을 다시 열 때.
 var _taamUpdatePending = false;
+var _taamUpdateLastReload = 0;
 function _taamApplyUpdateWhenIdle(){
   var why = _taamBusyNow();
+  // 🔧 2026-09-13: 부팅이 끝나기 전(첫 화면이 아직 안 떴다)이나 페이지가 열린 지 2분이
+  //   안 됐으면 리로드하지 않는다. 느린 회선에서 「캐시로 먼저 그림 → 같은 HTML 뒤늦게
+  //   도착 → 새 화면이라며 reload」 가 부팅마다 반복돼 앱이 저절로 다시 시작했다.
+  //   (서비스워커도 내용이 달라졌을 때만 알리도록 고쳤다 — 두 겹이다.)
+  try {
+    var _wrap = document.getElementById('appWrapper');
+    var _booted = _wrap && _wrap.classList.contains('ready');
+    var _age = (typeof performance !== 'undefined' && performance.now) ? performance.now() : 1e9;
+    if (!_booted || _age < 120000) why = why || (_booted ? '방금 열림' : '부팅 중');
+  } catch(_bt){}
   if (!why){
+    _taamUpdateLastReload = Date.now();
     console.log('[SW] 한가함 — 지금 반영');
     try { location.reload(); } catch(e){}
     return;
@@ -86063,7 +86272,24 @@ function _instaDrawPath(id, offsetVal){
     if(!document.documentElement.classList.contains('auto-login')) return;
     if(typeof IDB === 'undefined') return;
     // IDB로 이중 검증 (localStorage는 수동 삭제 가능)
-    IDB.get('authedSession').then(function(v){
+    // 🔧 2026-09-13: IDB 가 거부하거나(시크릿·저장공간 정리) 플래그가 비어 있어도
+    //   Supabase 세션이 살아 있으면 자동 로그인한다. 종전엔 IDB 한 칸이 비면 8초 검은
+    //   화면 뒤 가입 화면으로 떨어졌고, 재로그인해도 다음 부팅에 반복됐다.
+    var _idbFlag = IDB.get('authedSession').catch(function(){ return null; });
+    var _sbSess = new Promise(function(res){
+      try {
+        if (!window.sb || !window.sb.auth) return res(false);
+        Promise.race([ window.sb.auth.getSession(), new Promise(function(r){ setTimeout(function(){ r(null); }, 2500); }) ])
+          .then(function(g){ res(!!(g && g.data && g.data.session)); }, function(){ res(false); });
+      } catch(e){ res(false); }
+    });
+    Promise.all([_idbFlag, _sbSess]).then(function(rs){
+      var v = rs[0], live = rs[1];
+      if(v !== '1' && live){
+        console.warn('[boot] IDB 플래그 없음 · Supabase 세션 있음 — 세션을 믿고 자동 로그인');
+        try { if (typeof markAuthedSession === 'function') markAuthedSession(); } catch(e){}
+        v = '1';
+      }
       if(v !== '1'){
         // IDB엔 없는데 localStorage만 있는 경우 — 불일치 → 자동 로그인 취소
         document.documentElement.classList.remove('auto-login');
@@ -86133,6 +86359,12 @@ function _instaDrawPath(id, offsetVal){
     if(wrap && wrap.classList.contains('ready')) return;   // 정상적으로 떴다
     _bootWatchdogFired = true;
     console.warn('[boot] 8초 안에 화면이 뜨지 않았다 — 로그인 화면으로 내린다');
+    try {
+      window.taamReportError('boot_stuck', '8초 안에 .ready 가 안 붙음', null, {
+        auto_login: document.documentElement.classList.contains('auto-login'),
+        sb: typeof window.sb, online: navigator.onLine
+      });
+    } catch(_e){}
     try {
       // 자동 로그인 강제 숨김을 푼다. 이걸 안 풀면 로그인 화면도 안 보인다.
       document.documentElement.classList.remove('auto-login');

@@ -16,8 +16,25 @@ self.addEventListener('activate', (event) => {
   // 옛 SW가 만든 모든 캐시 삭제 (현재 SW의 STATIC_CACHE 제외)
   event.waitUntil(
     (async () => {
-      // 옛 SW가 만든 모든 캐시 삭제 (현재 STATIC_CACHE 제외)
+      // 🔧 2026-09-13: 옛 캐시를 지우기 **전에** 앱 셸(/ · /index.html)을 새 캐시로 옮긴다.
+      //   종전엔 버전을 올릴 때마다 셸 폴백이 사라져, 그 다음 실행은 네트워크를 끝까지
+      //   기다렸다(9/2~9/4 사흘에 37번). 옛 셸이라도 있으면 느린 회선에서 먼저 그린다.
       const keys = await caches.keys();
+      try {
+        const fresh = await caches.open(STATIC_CACHE);
+        for (const k of keys) {
+          if (k === STATIC_CACHE || !k.startsWith('taam-static-')) continue;
+          const old = await caches.open(k);
+          for (const path of ['/', '/index.html']) {
+            try {
+              const have = await fresh.match(path);
+              if (have) continue;
+              const r = await old.match(path);
+              if (r) await fresh.put(path, r.clone());
+            } catch (e) {}
+          }
+        }
+      } catch (e) {}
       await Promise.all(keys.map((k) => (k === STATIC_CACHE ? null : caches.delete(k))));
       // 현재 열린 모든 탭의 SW를 즉시 새 버전으로 교체
       await self.clients.claim();
@@ -52,6 +69,15 @@ self.addEventListener('activate', (event) => {
 //   다음 실행은 최신이다 — 「한 실행 뒤처짐」은 느린 회선에서만, 한 번만 생긴다.
 const HTML_TIMEOUT_MS = 1000;   // 이 시간 안에 네트워크가 응답 못 하면 캐시로 먼저 렌더
 
+// 캐시도 없고 네트워크도 안 올 때 보여줄 한 장 (빈 화면 대신)
+const OFFLINE_HTML = '<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+  + '<title>TAAM</title><style>html,body{margin:0;height:100%;background:#0e0d0c;color:#f3efe7;font-family:-apple-system,"Noto Sans KR",sans-serif}'
+  + '.w{min-height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:24px;box-sizing:border-box}'
+  + 'h1{font-size:13px;letter-spacing:.3em;font-weight:600;margin:0 0 18px;color:#c8a96e}p{font-size:14px;line-height:1.7;color:#bdb6aa;margin:0 0 22px}'
+  + 'button{padding:13px 26px;border:1px solid #c8a96e;border-radius:10px;background:transparent;color:#f3efe7;font-size:14px;font-weight:700}</style></head>'
+  + '<body><div class="w"><h1>TAAM</h1><p>연결에 실패했습니다.<br>네트워크를 확인한 뒤 다시 시도해 주세요.<br><span style="font-size:12px;color:#8e887c">Connection failed · 接続に失敗しました</span></p>'
+  + '<button onclick="location.reload()">다시 시도 · Retry</button></div></body></html>';
+
 function isAppShell(url) {
   return url.pathname === '/' || url.pathname === '/index.html';
 }
@@ -70,13 +96,29 @@ async function handleAppShell(req, event) {
   //   event.waitUntil 로 그 갱신이 끝날 때까지 SW 를 붙잡는다.
   const network = fetch(req).then(async (res) => {
     if (res && res.status === 200) {
+      // 🔧 2026-09-13: **실제로 달라졌을 때만** 알린다.
+      //   종전엔 200 이면 무조건 SW_HTML_UPDATED 를 보냈다. 느린 회선에서 1초 상한을
+      //   넘겨 캐시로 먼저 그린 뒤, 똑같은 HTML 이 뒤늦게 도착해도 「새 화면」이라며
+      //   부팅 직후 reload 가 났다 — 회원 눈엔 앱이 저절로 다시 시작하는 것.
+      //   ETag / Last-Modified / Content-Length 가 모두 같으면 같은 빌드로 본다.
+      let changed = true;
+      try {
+        const prev = await cache.match(req);
+        if (prev) {
+          const sig = (r) => [r.headers.get('etag') || '', r.headers.get('last-modified') || '', r.headers.get('content-length') || ''].join('|');
+          const a = sig(prev), b = sig(res);
+          if (a === b && a !== '||') changed = false;
+        }
+      } catch (e) {}
       await cache.put(req, res.clone()).catch(() => {});
       // 캐시가 바뀌었으면 열린 창에 알린다. **리로드는 앱이 정한다** —
       //   결제·편집 중이면 미룬다(_taamApplyUpdateWhenIdle).
-      try {
-        const ws = await self.clients.matchAll({ type: 'window' });
-        ws.forEach((w) => w.postMessage({ type: 'SW_HTML_UPDATED', version: SW_VERSION }));
-      } catch (e) {}
+      if (changed) {
+        try {
+          const ws = await self.clients.matchAll({ type: 'window' });
+          ws.forEach((w) => w.postMessage({ type: 'SW_HTML_UPDATED', version: SW_VERSION }));
+        } catch (e) {}
+      }
     }
     return res;
   });
@@ -88,10 +130,13 @@ async function handleAppShell(req, event) {
 
   const cached = await cache.match(req);
 
-  // 캐시가 없으면(최초 실행) 네트워크를 끝까지 기다린다.
+  // 캐시가 없으면(최초 실행) 네트워크를 기다린다 — 단, 끝없이는 아니다.
+  //   🔧 2026-09-13: 20초 상한. 실패하면 빈 504 대신 「연결 실패 · 다시 시도」 한 장을 준다.
+  //   빈 응답은 회원 눈에 검은/흰 화면이고, 빠져나올 버튼도 없었다.
   if (!cached) {
-    const res = await networkSafe;
-    return res || new Response('', { status: 504 });
+    const cap = new Promise((resolve) => setTimeout(() => resolve(null), 20000));
+    const res = await Promise.race([networkSafe, cap]);
+    return res || new Response(OFFLINE_HTML, { status: 503, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } });
   }
 
   // 캐시가 있으면 네트워크를 상한까지만 기다리고, 늦으면 캐시로 즉시 렌더.

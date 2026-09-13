@@ -73,7 +73,9 @@ const fs = require('fs');
     // ⚠ 서버가 추천권을 **가지고 있어도** 안 그려야 한다. 「데이터가 없어서
     //   안 보이는 것」과 「닫아서 안 보이는 것」은 다르다.
     let asked = 0;
-    window.sb = { rpc: (fn) => { asked++; return Promise.resolve({ data:
+    // ⚠ 오류 리포터(taam_report_error)도 sb.rpc 를 쓴다. 그건 세지 않는다 —
+    //   여기서 세는 것은 「추천권이 서버에 묻나」뿐이다.
+    window.sb = { rpc: (fn) => { if (fn !== 'taam_report_error') asked++; return Promise.resolve({ data:
       { left: 2, max: 2, items: [{ code:'ABCD1234', status:'sent' }] }, error: null }); } };
     const card = document.getElementById('mpRefCard');
     await _mpPaintRef('M'); await wait(150);

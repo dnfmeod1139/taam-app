@@ -4,7 +4,7 @@
 //   안드로이드에서 앱을 켜면 **까만 화면만** 나왔다. 오류도, 로그인 화면도,
 //   빠져나갈 길도 없었다.
 //
-//   원인: Supabase SDK 의 CDN(unpkg)이 막히면
+//   원인: Supabase SDK 의 주 경로(당시 unpkg, 지금은 vendor/)가 막히면
 //     unpkg 실패 → 폴백(jsdelivr) 성공 → location.reload()
 //     → 새로고침하면 다시 unpkg 부터 → 실패 → 폴백 → 새로고침 → …
 //   이 고리가 끝없이 돈다. 실측 **14초에 44번**. 매번 부팅 첫 화면(검정)으로
@@ -43,12 +43,12 @@ async function run(browser, opts) {
   // ⚠ 이 검증 환경은 바깥 CDN 이 통째로 막혀 있다. 「정상」을 재려면 주 CDN 이
   //   **되는** 상황을 직접 만들어 줘야 한다 — 안 그러면 정상 케이스도 폴백을
   //   타서, 멀쩡한 코드가 실패로 나온다(처음에 그렇게 재서 한 건이 틀렸다).
-  if (opts.blockPrimary)  await p.route('**unpkg.com**', r => r.abort());
-  else await p.route('**unpkg.com**', r =>
-    r.fulfill({ status: 200, contentType: 'application/javascript', body: FAKE_SDK }));
-  if (opts.blockFallback) await p.route('**cdn.jsdelivr.net**', r => r.abort());
-  else await p.route('**cdn.jsdelivr.net**', r =>
-    r.fulfill({ status: 200, contentType: 'application/javascript', body: FAKE_SDK }));
+  // 2026-09-12 부터 주 경로는 우리 도메인의 vendor/ 다. CDN 둘은 폴백.
+  const ok200 = r => r.fulfill({ status: 200, contentType: 'application/javascript', body: FAKE_SDK });
+  if (opts.blockPrimary)  await p.route('**/vendor/supabase-js-*.js', r => r.abort());
+  else await p.route('**/vendor/supabase-js-*.js', ok200);
+  if (opts.blockFallback) { await p.route('**cdn.jsdelivr.net**', r => r.abort()); await p.route('**unpkg.com**', r => r.abort()); }
+  else { await p.route('**cdn.jsdelivr.net**', ok200); await p.route('**unpkg.com**', ok200); }
   await p.goto(URL, { waitUntil: 'domcontentloaded' });
   // 자동 로그인 상태 — 갇히는 것은 이 경로다 (codeScreen 이 !important 로 숨는다)
   if (opts.autoLogin) await p.evaluate(() => document.documentElement.classList.add('auto-login'));
