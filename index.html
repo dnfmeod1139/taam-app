@@ -20031,8 +20031,11 @@ function backToCodeFromLogin(){
 
 var _saPin = '';
 // 🆕 SA_PIN — IDB 에 저장된 값 우선 사용. 부팅 시 loadSaPin() 으로 갱신.
-// 기본값 '1111' 은 첫 배포 직후 1회 사용용 — 슈퍼어드민이 바로 10자리로 변경 권장.
-var SA_PIN_DEFAULT = '1111';
+// 🔒 2026-09-14: 기본값을 없앴다. 종전 '1111' 은 새 기기마다 살아 있어, PIN 화면만 열면
+//   (전역 함수라 콘솔에서 열린다) 아무나 클라이언트 역할을 superadmin 으로 올릴 수 있었다.
+//   슈퍼어드민 판정은 로그인 뒤 서버 role/이메일(_roleGuardByEmail)로 하므로 PIN 이 없어도 된다.
+//   이 기기에 저장된 PIN(excSaPin)이 있을 때만 PIN 경로가 산다.
+var SA_PIN_DEFAULT = '';
 var SA_PIN = SA_PIN_DEFAULT;
 async function loadSaPin(){
   try{
@@ -20140,7 +20143,7 @@ function resetUserSessionData() {
 // 계정 전환 시 해당 유저 데이터 로드
 
 function checkSaPin() {
-  if (_saPin === SA_PIN) {
+  if (SA_PIN && SA_PIN.length >= 4 && _saPin === SA_PIN) {
     _currentRole = 'superadmin';
     _currentAdminRestId = null;
     _currentAdminRestName = '';
@@ -20156,24 +20159,7 @@ function checkSaPin() {
     });
     return;
     
-  } else if (_saPin === '2222') {
-    // 개발용 어드민 테스트 진입
-    _currentRole = 'admin';
-    reloadUserData();
-    // 첫 번째 레스토랑을 임시 연동
-    loadAdminCodes();
-    if (adminCodes.length > 0) {
-      _currentAdminRestId = adminCodes[0].restId;
-      _currentAdminRestName = adminCodes[0].restName;
-    } else if (restaurantDB.length > 0) {
-      _currentAdminRestId = restaurantDB[0].id;
-      _currentAdminRestName = restaurantDB[0].name;
-    }
-    saveRole();
-    markAuthedSession(); // 자동 로그인 활성화
-    updateMpAdminBtn();
-    closeSuperAdminPin();
-    adminDirectAccess();
+  // 🔒 2026-09-14: '2222' 개발용 어드민 진입(첫 매장을 임시 연동)을 지웠다 — 라이브에 백도어로 남아 있었다.
   } else {
     document.getElementById('superPinError').textContent = '비밀번호가 올바르지 않습니다';
     _saPin = '';
@@ -43534,7 +43520,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.14-d';
+var TAAM_WEB_BUILD = '2026.09.14-e';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
