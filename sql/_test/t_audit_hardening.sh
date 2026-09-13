@@ -32,7 +32,7 @@ end \$\$;
 grant usage on schema public, auth to anon, authenticated;
 
 create table public.profiles(id uuid primary key, role text default 'member', display_name text, phone text,
-  nationality text, membership_tier text);
+  nationality text, membership_tier text, single_device_exempt boolean not null default false);
 create or replace function public.is_super_admin(uid uuid) returns boolean
 language sql stable security definer set search_path=public as
 \$\$ select coalesce((select role in ('super_admin','superadmin') from public.profiles where id=uid), false) \$\$;
@@ -203,6 +203,7 @@ echo "── ⑦ partner_agree ── ⭐"
 R=$(anon "select public.partner_agree('ZZZZ','가짜매장','가짜셰프','누군가',null,null,null,null);")
 ok "모르는 코드 거부 ⭐" code_invalid "$(echo "$R" | j error)"
 R=$(anon "select public.partner_agree('qhff','스시 사사다','佐々田','사사다',null,'data:image/png;base64,AA','¥5,000','¥38,000');")
+R_OK="$R"; ID=$(echo "$R" | j id)
 ok "발급된 코드(대소문자 무관) 통과" True "$(echo "$R" | j ok)"
 ok "토큰이 같이 온다" 32 "$(echo -n "$(echo "$R" | j token)" | wc -c)"
 R=$(anon "select public.partner_agree('','일반랜딩','셰프','서명자',null,null,null,null);")
@@ -227,6 +228,15 @@ for i in $(seq 1 30); do as $U "select public.taam_notify_admins('t','제목$i')
 ok "30건까지는 들어간다" 30 "$($P -c "select count(*) from public.notifications")"
 ok "31번째는 0 (예외 없이)" 0 "$(as $U "select public.taam_notify_admins('t','제목31');")"
 ok "슈퍼어드민은 제한 없음" 0 "$(as $S "select public.taam_notify_admins('t','슈퍼가 보냄');")"   # 자기 제외 → 다른 슈퍼 없음 = 0, 예외 없음
+
+echo "── ⑪⑫⑬ 접힌 파일들 ──"
+ok "⑪ 증서 id 만으로는 거부" False "$(anon "select public.partner_agreement_get($ID);" | j ok)"
+ok "⑪ id+토큰은 통과" True "$(anon "select public.partner_agreement_get($ID, '$(echo "$R_OK" | j token)');" | j ok)"
+as $U "update public.profiles set single_device_exempt=true where id='$U';" >/dev/null
+ok "⑫ 회원이 면제를 못 켠다" f "$($P -c "select single_device_exempt from public.profiles where id='$U'")"
+anon "select public.taam_report_error('js','boom',null,'/','2026.09.13-a','web','{}'::jsonb);" >/dev/null
+ok "⑬ 익명도 오류를 적을 수 있다" 1 "$($P -c "select count(*) from public.app_errors")"
+ok "⑬ 회원은 못 읽는다" 0 "$(as $U "select count(*) from public.app_errors;" | tail -1)"
 
 echo "── ⑨ ref_consume ──"
 ok "anon 실행 권한 회수" f "$($P -c "select has_function_privilege('anon','public.taam_ref_consume(text, uuid)','execute')")"

@@ -28,6 +28,9 @@
 --      taam_corp_inquire. 같은 번호 시간당 6회, 전체 시간당 30~120회.
 --      partner_agree 는 모르는 코드를 거부한다 (아무 매장·셰프 이름으로 TAAM 증서를 만들 수 있었다).
 --   ⑧ taam_notify_admins — 한 사람이 시간당 30건 넘게 운영진 알림함에 꽂지 못한다.
+--   ⑪ 파트너 증서 조회는 id + 토큰 (partner_cert_token.sql 을 따로 돌릴 필요 없음)
+--   ⑫ single_device_exempt 회원 변경 차단 (guard_profile_exempt.sql 을 따로 돌릴 필요 없음)
+--   ⑬ 오류 리포팅 표·RPC (app_errors.sql 을 따로 돌릴 필요 없음)
 --   ⑨ taam_ref_consume — 실행 권한 회수. 저장소 어디에도 호출하는 코드가 없는데
 --      anon 에게 열려 있어 코드만 알면 남의 추천권을 태울 수 있었다 (추천 기능은 숨김 상태).
 --
@@ -688,6 +691,226 @@ end $$;
 
 
 -- ═══════════════════════════════════════════════════════════════
+-- ⑪ 파트너 증서 조회 — id + 토큰 (partner_cert_token.sql 과 같은 정의)
+-- ═══════════════════════════════════════════════════════════════
+--   이 파일 하나로 끝나게 같이 넣었다. partner/ 페이지 배포와 짝 — 옛 링크(?cert=<id>)는
+--   더 열리지 않으니 파트너에게 새 링크(확인 쿼리 ③)를 다시 보낸다.
+-- ── 조회 — id + 토큰. 1인자 판은 항상 거부 ────────────────────────
+create or replace function public.partner_agreement_get(p_id bigint)
+returns json
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select json_build_object('ok', false, 'reason', 'token_required');
+$$;
+revoke execute on function public.partner_agreement_get(bigint) from public;
+grant  execute on function public.partner_agreement_get(bigint) to anon;
+grant  execute on function public.partner_agreement_get(bigint) to authenticated;
+
+create or replace function public.partner_agreement_get(p_id bigint, p_token text)
+returns json
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select coalesce(
+    (select json_build_object(
+        'ok', true,
+        'restaurant_name', coalesce(restaurant_name,''),
+        'chef_name', coalesce(chef_name,''),
+        'signer_name', coalesce(signer_name,''),
+        'agreed_at', agreed_at,
+        'signature_data', signature_data,
+        'agreed_meal', coalesce(agreed_meal,''),
+        'agreed_min', coalesce(agreed_min,'')
+      )
+      from public.partner_agreements
+     where id = p_id
+       and length(coalesce(p_token,'')) >= 16
+       and cert_token = p_token),
+    json_build_object('ok', false)
+  );
+$$;
+revoke execute on function public.partner_agreement_get(bigint, text) from public;
+grant  execute on function public.partner_agreement_get(bigint, text) to anon;
+grant  execute on function public.partner_agreement_get(bigint, text) to authenticated;
+
+
+-- ═══════════════════════════════════════════════════════════════
+-- ⑫ single_device_exempt 는 회원이 못 켠다 (guard_profile_exempt.sql 과 같은 정의)
+-- ═══════════════════════════════════════════════════════════════
+create or replace function public.taam_guard_profile_exempt()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  if new.single_device_exempt is distinct from old.single_device_exempt then
+    if auth.uid() is not null and not public.is_super_admin(auth.uid()) then
+      new.single_device_exempt := old.single_device_exempt;
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_taam_guard_profile_exempt on public.profiles;
+create trigger trg_taam_guard_profile_exempt
+  before update of single_device_exempt on public.profiles
+  for each row execute function public.taam_guard_profile_exempt();
+
+comment on function public.taam_guard_profile_exempt() is
+  'single_device_exempt 는 슈퍼어드민·서버만 바꾼다. 회원이 바꾸면 조용히 원래 값으로 되돌린다.';
+
+
+-- ═══════════════════════════════════════════════════════════════
+-- 확인 — 하나만 돌린다
+-- ═══════════════════════════════════════════════════════════════
+
+
+-- ═══════════════════════════════════════════════════════════════
+-- ⑬ 오류 리포팅 표·RPC (app_errors.sql 과 같은 정의) — 앱이 taam_report_error 로 보낸다
+-- ═══════════════════════════════════════════════════════════════
+create table if not exists public.app_errors (
+  id          bigserial primary key,
+  created_at  timestamptz not null default now(),
+  user_id     uuid,                       -- 비로그인이면 null
+  role        text,
+  build       text,
+  platform    text,                       -- web / ios / android
+  kind        text not null,              -- js · promise · boot_stuck · cdn_fallback · ledger_fallback · …
+  message     text not null,
+  stack       text,
+  url         text,
+  extra       jsonb not null default '{}'::jsonb
+);
+create index if not exists idx_app_errors_at   on public.app_errors (created_at desc);
+create index if not exists idx_app_errors_kind on public.app_errors (kind, created_at desc);
+create index if not exists idx_app_errors_user on public.app_errors (user_id, created_at desc);
+
+alter table public.app_errors enable row level security;
+revoke all on public.app_errors from anon, authenticated;
+grant select on public.app_errors to authenticated;   -- 정책이 슈퍼어드민만 통과시킨다
+
+drop policy if exists app_errors_read_super on public.app_errors;
+create policy app_errors_read_super on public.app_errors
+  for select to authenticated
+  using (public.is_super_admin(auth.uid()));
+-- INSERT/UPDATE/DELETE 정책은 두지 않는다 — 함수(definer)만 쓴다.
+
+comment on table public.app_errors is
+  '회원 기기에서 올라온 오류. 앱은 taam_report_error() 로만 쓰고, 슈퍼어드민만 읽는다. 30일 뒤 taam_error_prune() 로 지운다.';
+
+
+-- ── 적기 — 누구나(익명 포함), 한 시간 60건까지 ─────────────────
+create or replace function public.taam_report_error(
+  p_kind     text,
+  p_message  text,
+  p_stack    text  default null,
+  p_url      text  default null,
+  p_build    text  default null,
+  p_platform text  default null,
+  p_extra    jsonb default '{}'::jsonb
+)
+returns void
+language plpgsql volatile security definer set search_path = public
+as $$
+declare
+  v_uid  uuid := auth.uid();
+  v_role text;
+  v_n    int;
+begin
+  -- 폭주 방지. 같은 사람이 한 시간에 60건을 넘기면 그 뒤는 버린다.
+  --   익명은 구분할 열쇠가 없어 한 묶음으로 센다 — 익명 폭주도 60건에서 선다.
+  if v_uid is not null then
+    select count(*) into v_n from public.app_errors
+     where user_id = v_uid and created_at > now() - interval '1 hour';
+  else
+    select count(*) into v_n from public.app_errors
+     where user_id is null and created_at > now() - interval '1 hour';
+  end if;
+  if v_n >= 60 then return; end if;
+
+  if v_uid is not null then
+    select p.role into v_role from public.profiles p where p.id = v_uid;
+  end if;
+
+  insert into public.app_errors (user_id, role, build, platform, kind, message, stack, url, extra)
+  values (
+    v_uid, v_role,
+    left(p_build, 40), left(p_platform, 20),
+    left(coalesce(nullif(btrim(p_kind), ''), 'js'), 40),
+    left(coalesce(p_message, ''), 500),
+    left(p_stack, 2000),
+    left(p_url, 300),
+    case when jsonb_typeof(p_extra) = 'object' then p_extra else '{}'::jsonb end
+  );
+exception when others then
+  -- 오류를 적다가 난 오류로 앱을 죽이지 않는다
+  return;
+end;
+$$;
+revoke all on function public.taam_report_error(text,text,text,text,text,text,jsonb) from public;
+grant execute on function public.taam_report_error(text,text,text,text,text,text,jsonb) to anon, authenticated;
+
+
+-- ── 요약 — 슈퍼어드민만. 대시보드 카드가 부른다 ─────────────────
+create or replace function public.taam_error_summary(p_hours int default 24)
+returns jsonb
+language plpgsql stable security definer set search_path = public
+as $$
+declare
+  v     jsonb;
+  since timestamptz := now() - make_interval(hours => greatest(1, least(coalesce(p_hours, 24), 720)));
+begin
+  if not public.is_super_admin(auth.uid()) then
+    raise exception '권한이 없습니다' using errcode = '42501';
+  end if;
+  select jsonb_build_object(
+    'hours',  extract(epoch from (now() - since))::int / 3600,
+    'total',  (select count(*) from public.app_errors where created_at > since),
+    'users',  (select count(distinct user_id) from public.app_errors where created_at > since and user_id is not null),
+    'anon',   (select count(*) from public.app_errors where created_at > since and user_id is null),
+    'by_kind',(select coalesce(jsonb_object_agg(kind, n), '{}'::jsonb)
+                 from (select kind, count(*) n from public.app_errors
+                        where created_at > since group by kind) k),
+    'top',    (select coalesce(jsonb_agg(jsonb_build_object(
+                 'kind', kind, 'message', message, 'n', n, 'last', last, 'platforms', platforms)), '[]'::jsonb)
+                 from (select kind, message, count(*) n, max(created_at) last,
+                              array_agg(distinct coalesce(platform,'?')) platforms
+                         from public.app_errors where created_at > since
+                        group by kind, message order by n desc, last desc limit 8) t)
+  ) into v;
+  return v;
+end;
+$$;
+revoke all on function public.taam_error_summary(int) from public;
+grant execute on function public.taam_error_summary(int) to authenticated;
+
+
+-- ── 정리 — 30일 지난 것. 자동으로 걸지 않는다(필요하면 대시보드 Cron) ──
+create or replace function public.taam_error_prune()
+returns int
+language plpgsql volatile security definer set search_path = public
+as $$
+declare n int;
+begin
+  if not public.is_super_admin(auth.uid()) then
+    raise exception '권한이 없습니다' using errcode = '42501';
+  end if;
+  delete from public.app_errors where created_at < now() - interval '30 day';
+  get diagnostics n = row_count;
+  return n;
+end;
+$$;
+revoke all on function public.taam_error_prune() from public;
+grant execute on function public.taam_error_prune() to authenticated;
+
+
+-- ═══════════════════════════════════════════════════════════════
 -- 확인 — 하나만 돌린다. ❌ 가 한 줄도 없어야 정상.
 -- ═══════════════════════════════════════════════════════════════
 select '① 푸시 role 을 서버가 정하나' as "구분",
@@ -737,6 +960,27 @@ select '⑩ 예약 알림 1회 표시 컬럼',
        case when to_regclass('public.reservation_requests') is null then '— (표 없음)'
             when exists (select 1 from information_schema.columns where table_schema='public' and table_name='reservation_requests' and column_name='notified_at') then '✅' else '❌' end,
        'notify-reservation 이 두 번 보내지 않게'
+union all
+select '⑪ 증서 id 만으로 열리나 ⭐',
+       case when to_regclass('public.partner_agreements') is null then '— (표 없음)'
+            when (select count(*) from public.partner_agreements) = 0 then '✅ (행 없음)'
+            when (public.partner_agreement_get((select min(id) from public.partner_agreements)))->>'ok' = 'true'
+            then '❌ 아직 열린다' else '✅ 막힘' end,
+       '1인자 조회는 항상 ok:false'
+union all
+select '⑪ 다시 보낼 증서 링크 (id=토큰)',
+       coalesce((select string_agg(id || '=' || cert_token, ' / ' order by id) from public.partner_agreements), '(없음)'),
+       '?cert=<id>&t=<토큰>'
+union all
+select '⑫ 면제 플래그 가드',
+       case when exists (select 1 from pg_trigger where tgname = 'trg_taam_guard_profile_exempt' and not tgisinternal) then '✅' else '❌' end,
+       (select count(*)::text from public.profiles where single_device_exempt = true) || '명 면제 중 — 심사·데모·파트너만이어야 정상'
+union all
+select '⑬ 오류 표·RPC',
+       case when to_regclass('public.app_errors') is not null
+             and to_regprocedure('public.taam_report_error(text,text,text,text,text,text,jsonb)') is not null
+             and not exists (select 1 from pg_policies where tablename='app_errors' and cmd='INSERT') then '✅' else '❌' end,
+       '회원은 RPC 로만 쓰고 슈퍼어드민만 읽는다'
 union all
 select '⑨ taam_ref_consume anon 권한',
        case when to_regprocedure('public.taam_ref_consume(text, uuid)') is null then '— (함수 없음)'

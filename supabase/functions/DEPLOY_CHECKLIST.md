@@ -1,3 +1,30 @@
+# 2026-09-13 감사 보강 — Edge Function 재배포 목록
+
+`sql/audit_hardening_2026-09-13.sql` 을 **먼저** SQL Editor 에서 돌린 뒤, 아래 13개를
+대시보드(Edge Functions → 함수 → 코드 붙여넣기 → Deploy)에서 다시 배포한다.
+순서는 상관없다 — 어느 것도 SQL 이 없으면 통과(fail-open)하거나 종전대로 동작한다.
+
+| 함수 | 바뀐 것 | 배포 전 확인 |
+|---|---|---|
+| toss-order | 홀드가 이 티켓의 홀드여야 함 | — |
+| toss-confirm | 예치금 부족이면 확정 안 함(환원·카드 취소·`deposit_short`) | — |
+| toss-billing-charge | 외화 주문 거부 · 예치금 부족 처리 | — |
+| send-push | 회원 위로는 슈퍼어드민만 · 매장 어드민은 자기 손님만 · url 우리 경로만 | — |
+| notify-reservation | 자기 예약만 · `notified_at` 1회 | SQL ⑩ (컬럼) |
+| notify-purchase | 실제 발송 건수로 성공 판정 | — |
+| lineage-summarize | 슈퍼어드민만 · 공개 http(s) 만 | — |
+| verify-invite | IP 시간당 40회 | SQL 0 (`taam_rate_hit`) |
+| consume-invite | 로그인 필수 · 초대받은 번호/이메일 대조 · 시간당 10회 | 〃 |
+| taam-chat | 회원당 시간당 60회 | 〃 |
+| taam-translate | 어드민·슈퍼어드민·서버만 | — |
+| taam-translate-venues-batch | 슈퍼어드민·서버만 | — |
+| line-webhook | `LINE_CHANNEL_SECRET` 없으면 거부 | ⚠ Secrets 에 `LINE_CHANNEL_SECRET` 이 있는지 먼저 본다 (LINE 콘솔 Basic settings → Channel secret). 없으면 LINE ID 회신이 멈춘다 |
+
+배포 뒤 확인: 회원 계정으로 티켓 하나 결제(예치금) · 예약 요청 1건(알림톡이 **한 번**만) ·
+컨시어지 챗 1회 · 파트너 계정으로 예약 수락 푸시가 회원에게 가는지.
+
+---
+
 # 계보 챗 두뇌 — 배포 체크리스트
 
 이번 작업으로 만들어진 것 → 운영 적용까지 순서대로.

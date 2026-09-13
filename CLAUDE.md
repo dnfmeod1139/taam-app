@@ -405,8 +405,23 @@ Apple 은 iPad 와 iPhone **두 기기로 심사**하므로(리뷰 노트에 명
 | `membership_tier` | `trg_taam_guard_membership_tier` | 비어 있을 때 **자기 초대코드 값으로만** 1회. M 만료일은 서버가 365일로 |
 | 티켓 등급 제한 | `trg_taam_guard_ticket_tier` | `min_tier` 미달 구매 차단. 슈퍼어드민·초대·수동입력만 예외 |
 | 재구매 제한 | `trg_taam_repurchase_guard` | 같은 매장 N일. **발매 7일 뒤 자동 해제**(`taam_repurchase_released`) |
-| 티켓 필드 | `trg_taam_guard_ticket_row` | 회원이 `price`·`party_size`·`status` 를 못 고침 |
+| 티켓 필드 | `trg_taam_guard_ticket_row` | 회원은 **취소만**. `price`·`party_size`·`status(hold→active 포함)` 를 못 고침 (2026-09-13 강화) |
+| 티켓 INSERT | `trg_taam_guard_ticket_insert` | 회원은 `status='hold'` 만, 매장 어드민은 `hold`·`manual`. **확정 행은 서버(RPC·toss-confirm)만** 만든다 (2026-09-13) |
+| 푸시 구독 role | `save_push_subscription` | 클라이언트 `p_role` 무시 — `profiles.role` 로 정한다 (2026-09-13) |
+| 초대코드 | `trg_taam_guard_invite_code_row` | 회원은 `used`·`used_by_*` 만. `invitee_tier` 등은 슈퍼어드민만 (2026-09-13) |
+| `app_config` | RLS | 읽기 전원, 쓰기 슈퍼어드민만 — 환율(`fx_settings`) 오염 차단 (2026-09-13) |
+| 공개 RPC 속도 | `taam_rate_hit(key, limit, window)` | `partner_agree`·`taam_mship_apply`·`taam_corp_inquire`·`taam_notify_admins`·verify/consume-invite·taam-chat. 새 공개 RPC 를 만들면 이걸 부른다 (2026-09-13) |
+| 예치금 양수 델타 | `taam_apply_deposit_delta` | 회원은 `ticket_refund` + `purchase_id` 원장으로, **낸 돈 − 이미 환불** 한도 안에서만 (2026-09-13 핫픽스) |
 | 푸시 발송 | `send-push` Edge Function | 회원은 자기에게만. 어드민 상향 통지만 예외 |
+
+이 표의 2026-09-13 항목은 `sql/audit_hardening_2026-09-13.sql` 한 파일이 만든다
+(테스트 `sql/_test/t_audit_hardening.sh`). 같은 날 Edge Function 도 같이 조였다 —
+send-push(회원의 위로는 슈퍼어드민만·매장 어드민은 자기 손님만·url 은 우리 경로만),
+notify-reservation(자기 예약·1회), lineage-summarize(슈퍼어드민·공개 URL 만),
+toss-order(홀드↔티켓 대조), toss-confirm/billing-charge(예치금 부족이면 확정 안 함, 외화 빌링 거부).
+**앱은 tickets 에 확정 행을 넣지 않는다** (`savePurchase` 의 `TK_CLIENT_INSERT=false`) —
+넣어 봐야 서버가 거부한다. 회원 세션에서 `tickets` 를 INSERT/UPDATE 하는 코드를 새로
+쓰기 전에 이 표를 본다.
 
 ### 금전 코드를 만질 때
 
