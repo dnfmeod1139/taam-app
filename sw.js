@@ -2,8 +2,8 @@
 // TAAM Service Worker — Web Push 알림 + 기본 캐싱
 // ═══════════════════════════════════════════════════════════════
 
-const SW_VERSION = 'taam-sw-v1.85.2';  // 1.55.2 — 2026.08: 자동 새로고침 재도입(네이티브 앱에 최신 index.html 강제 반영). index.html 의 "네이티브 splash-skip 미부여" 수정과 함께라 인트로/스킵 안 사라짐.
-const STATIC_CACHE = 'taam-static-v1.85.2';
+const SW_VERSION = 'taam-sw-v1.85.3';  // 1.55.2 — 2026.08: 자동 새로고침 재도입(네이티브 앱에 최신 index.html 강제 반영). index.html 의 "네이티브 splash-skip 미부여" 수정과 함께라 인트로/스킵 안 사라짐.
+const STATIC_CACHE = 'taam-static-v1.85.3';
 
 self.addEventListener('install', (event) => {
   console.log('[SW] install', SW_VERSION);
@@ -220,7 +220,12 @@ self.addEventListener('push', (event) => {
 // ─── 알림 클릭 ───
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const targetUrl = (event.notification.data && event.notification.data.url) || '/';
+  let targetUrl = (event.notification.data && event.notification.data.url) || '/';
+  // 🔒 2026-09-13: 같은 출처의 경로만 연다 — 바깥 주소면 TAAM 이름을 단 피싱 링크가 된다
+  try {
+    const u = new URL(targetUrl, self.location.origin);
+    targetUrl = (u.origin === self.location.origin) ? (u.pathname + u.search + u.hash) : '/';
+  } catch (_) { targetUrl = '/'; }
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
       // 이미 열린 TAAM 탭이 있으면 포커스

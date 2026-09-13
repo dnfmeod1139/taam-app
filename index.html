@@ -8586,6 +8586,7 @@ window._acctDelSignOut = function(){
     if(typeof IDB !== 'undefined'){ IDB.del('excRole').catch(function(){}); IDB.del('authedSession').catch(function(){}); }
   } catch(e){}
   try { localStorage.removeItem('authedSession'); } catch(e){}
+  try { localStorage.removeItem('taamSaPw'); } catch(e){}
   try { sessionStorage.removeItem('splashShownThisSession'); } catch(e){}
   var done = function(){
     var clearCaches = (typeof caches !== 'undefined' && caches.keys)
@@ -8652,11 +8653,22 @@ window.confirmLogout = function(){
         }, 100);
       });
     };
-    if(window.sb && window.sb.auth && typeof window.sb.auth.signOut === 'function'){
-      window.sb.auth.signOut().then(_doReload).catch(_doReload);
-    } else {
-      _doReload();
-    }
+    // 🔒 2026-09-13: 이 기기에 남는 것을 지운다 — 슈퍼어드민 Supabase 비밀번호(평문) ·
+    //   이 기기의 푸시 구독(공용 기기에서 다음 사람에게 이전 회원의 푸시가 계속 오던 문제).
+    try { localStorage.removeItem('taamSaPw'); } catch(_pw){}
+    var _unsub = Promise.resolve();
+    try {
+      if (typeof window.pushUnsubscribe === 'function') {
+        _unsub = Promise.race([ window.pushUnsubscribe(), new Promise(function(r){ setTimeout(r, 1500); }) ]);
+      }
+    } catch(_pe){}
+    _unsub.catch(function(){}).then(function(){
+      if(window.sb && window.sb.auth && typeof window.sb.auth.signOut === 'function'){
+        window.sb.auth.signOut().then(_doReload).catch(_doReload);
+      } else {
+        _doReload();
+      }
+    });
   };
 };
 </script>
@@ -12162,12 +12174,12 @@ window.closePromoCarousel = function(){
 
         <div class="tu-policy-item" onclick="tuTogglePolicy('p1')">
           <div class="tu-policy-chk" id="tuPolicyP1"></div>
-          <div class="tu-policy-text"><strong>대행비 환불 불가</strong><br>티켓 금액 중 대행비는 어떠한 경우에도 환불되지 않습니다. 단, 티켓 구매 10분 이내 취소시에는 전액 환불, 이외에는 전면 불가합니다.</div>
+          <div class="tu-policy-text"><strong>대행비 환불 불가</strong><br>티켓 금액 중 대행비는 어떠한 경우에도 환불되지 않습니다. 단, 티켓 구매 30분 이내 취소시에는 전액 환불, 이외에는 전면 불가합니다.</div>
         </div>
 
         <div class="tu-policy-item" onclick="tuTogglePolicy('p2')">
           <div class="tu-policy-chk" id="tuPolicyP2"></div>
-          <div class="tu-policy-text"><strong>예약일 기준 환불</strong><br>해당 티켓은 예약일 30일 전까지인 <span id="tuPolicyD30" style="color:#c8a96e;font-weight:700;">날짜 미지정</span>까지는 대행비 제외 100% 환불 가능하고, 이후부터는 환불 불가능한 티켓입니다.</div>
+          <div class="tu-policy-text"><strong>예약일 기준 환불</strong><br>해당 티켓은 예약일 31일 전(D-31)까지인 <span id="tuPolicyD30" style="color:#c8a96e;font-weight:700;">날짜 미지정</span>까지는 대행비 제외 100% 환불 가능하고, 이후부터는 환불 불가능한 티켓입니다.</div>
         </div>
 
         <div class="tu-policy-item" onclick="tuTogglePolicy('p3')">
@@ -12344,11 +12356,11 @@ window.closePromoCarousel = function(){
         </div>
         <div class="tu-policy-item" onclick="riTogglePolicy('p1')">
           <div class="tu-policy-chk" id="riPolicyP1"></div>
-          <div class="tu-policy-text"><strong>대행비 환불 불가</strong><br>티켓 금액 중 대행비는 어떠한 경우에도 환불되지 않습니다. 단, 티켓 구매 10분 이내 취소시에는 전액 환불, 이외에는 전면 불가합니다.</div>
+          <div class="tu-policy-text"><strong>대행비 환불 불가</strong><br>티켓 금액 중 대행비는 어떠한 경우에도 환불되지 않습니다. 단, 티켓 구매 30분 이내 취소시에는 전액 환불, 이외에는 전면 불가합니다.</div>
         </div>
         <div class="tu-policy-item" onclick="riTogglePolicy('p2')">
           <div class="tu-policy-chk" id="riPolicyP2"></div>
-          <div class="tu-policy-text"><strong>예약일 기준 환불</strong><br>해당 티켓은 예약일 30일 전까지인 <span id="riPolicyD30" style="color:#c8a96e;font-weight:700;">날짜 미지정</span>까지는 대행비 제외 100% 환불 가능하고, 이후부터는 환불 불가능한 티켓입니다.</div>
+          <div class="tu-policy-text"><strong>예약일 기준 환불</strong><br>해당 티켓은 예약일 31일 전(D-31)까지인 <span id="riPolicyD30" style="color:#c8a96e;font-weight:700;">날짜 미지정</span>까지는 대행비 제외 100% 환불 가능하고, 이후부터는 환불 불가능한 티켓입니다.</div>
         </div>
         <div class="tu-policy-item" onclick="riTogglePolicy('p3')">
           <div class="tu-policy-chk" id="riPolicyP3"></div>
@@ -17752,7 +17764,18 @@ async function savePurchase(){
       }
     } catch(_sfe){ console.warn('[savePurchase] 세션 판별 실패(무시):', _sfe); }
 
-    if(toInsert.length > 0){
+    // 🔒 2026-09-13: 회원 세션은 tickets 에 확정 행을 넣지 않는다.
+    //   서버 트리거(trg_taam_guard_ticket_insert · audit_hardening_2026-09-13.sql)가 hold 외
+    //   INSERT 를 거부한다 — 여기서 넣어 봐야 3번 재시도 뒤 「저장 재시도 중」 토스트만 남는다.
+    //   확정은 taam_purchase_confirm_deposit · toss-confirm 이 이미 했고, DB 에 없는 구매는
+    //   위에서 슈퍼어드민에게 통지된다(운영이 손으로 잡는다). 로컬 저장소에 심은 행이
+    //   그대로 올라가던 길(결제 없이 좌석 차지)도 이것으로 닫힌다.
+    var TK_CLIENT_INSERT = false;
+    if(toInsert.length > 0 && !TK_CLIENT_INSERT){
+      console.warn('[savePurchase] DB 에 없는 구매 ' + toInsert.length + '건 — 회원 세션은 넣지 않는다 (서버 확정만):',
+        toInsert.map(function(r){ return r.purchase_id; }).join(', '));
+    }
+    if(toInsert.length > 0 && TK_CLIENT_INSERT){
       // 🆕 2026.07: 건별 INSERT — 좌석 트리거가 한 건을 거부해도 나머지는 정상 저장.
       //   거부(매진 경합 패자)된 건은 자동 전액 환불 + 기록 제거 + 슈퍼어드민 통지.
       //   (기존 배치 insert 는 한 건 거부 시 전체 실패 + 돈만 빠진 상태로 침묵)
@@ -24290,10 +24313,10 @@ async function _tkAcquireSeatHold(t, r, pax){
       console.warn('[seatHold] 서버 등급 제한:', m);
       return { ok:false, tier:true,
                need: (m.match(/이 티켓은\s*([MTA])\s*등급/) || [])[1] || '',
-               reason:'이 티켓은 등급 제한이 있습니다' };
+               reason: t('seathold.tier','이 티켓은 등급 제한이 있습니다') };
     }
     console.warn('[seatHold] 실패:', ins.error);
-    return { ok:false, reason:'좌석 확보에 실패했습니다 — 잠시 후 다시 시도해주세요' };
+    return { ok:false, reason: t('seathold.fail','좌석 확보에 실패했습니다 — 잠시 후 다시 시도해주세요') };
   }
   window._tkSeatHoldId = purchaseId;
   window._tkSeatHoldPax = pax;          // 잔여석 계산에서 내 홀드를 빼기 위해 기록
@@ -27547,7 +27570,7 @@ function _raReqHtml(r, name){
   var dows = t('resv.dows','일,월,화,수,목,금,토').split(',');
   var d = new Date(r.reserve_date + 'T00:00:00');
   var dateStr = (d.getMonth()+1)+'.'+d.getDate()+' ('+dows[d.getDay()]+')' + (r.reserve_time ? ' '+String(r.reserve_time).slice(0,5) : '');
-  var who = name || (t('resvadm.member','회원')+' '+String(r.user_id).slice(0,6));
+  var who = _raEsc(name || (t('resvadm.member','회원')+' '+String(r.user_id).slice(0,6)));   // 🔒 2026-09-13 요청자 이름은 이스케이프
   var actions = '';
   if(r.status === 'pending'){
     actions = '<button onclick="raAct(\''+r.id+'\',\'confirm\')" style="flex:1;padding:11px;border:none;border-radius:8px;background:#5C0A14;color:#fff;font-family:var(--font-main);font-weight:800;font-size:11px;letter-spacing:.12em;cursor:pointer;">'+t('resvadm.accept','수락')+'</button>'
@@ -43269,7 +43292,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.06-b';
+var TAAM_WEB_BUILD = '2026.09.13-a';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -48136,7 +48159,9 @@ function tuTogglePolicy(key) {
   tuSyncAllCheckbox();
 }
 
-// 환불 경계(D-30)를 계산해 글자로 돌려준다.
+// 환불 경계(D-31 — 이 날까지 대행비 제외 환불, 이후 불가)를 계산해 글자로 돌려준다.
+//   🔧 2026-09-13: 30 → 31. 환불 코드(calculateTicketRefund 정책 2)와 약관(legal/refund.html)은
+//   「D-31 이상」까지 환불이다. 화면만 D-30 을 보여 줘서 하루 어긋났다.
 //   ⚠ 종전에는 연도를 「올해」로 잡고, 지났으면 내년으로 미는 추측을 했다.
 //     이 값은 취소 규정에 그대로 박혀 회원에게 보이는 환불 기준일이다.
 //     추측으로 정할 값이 아니다 — 연도는 항상 같이 받는다.
@@ -48156,7 +48181,7 @@ function tuCalcD30(dateStr, dateYear) {
     }
   } else return null;
   if (isNaN(y) || isNaN(mi) || isNaN(dd)) return null;
-  var d30 = new Date(new Date(y, mi, dd).getTime() - 30*86400000);
+  var d30 = new Date(new Date(y, mi, dd).getTime() - 31*86400000);
   return d30.getFullYear()+'년 '+(d30.getMonth()+1)+'월 '+d30.getDate()+'일';
 }
 
@@ -49404,11 +49429,12 @@ var TRANSLATIONS = {
       vat:'부가세',
     },
     // 🆕 티켓 취소 규정 — 티켓 상세/구매 화면의 CLAUSE 블록
+    seathold: { tier:'이 티켓은 등급 제한이 있습니다', fail:'좌석 확보에 실패했습니다 — 잠시 후 다시 시도해주세요' },
     policy: {
       none:'취소 규정이 설정되지 않았습니다.',
       etc:'기타',
-      p1:'티켓 금액 중 대행비는 어떠한 경우에도 환불되지 않습니다. 단, 티켓 구매 10분 이내 취소시에는 전액 환불, 이외에는 전면 불가합니다.',
-      p2_a:'해당 티켓은 예약일 30일 전까지인 ',
+      p1:'티켓 금액 중 대행비는 어떠한 경우에도 환불되지 않습니다. 단, 티켓 구매 30분 이내 취소시에는 전액 환불, 이외에는 전면 불가합니다.',
+      p2_a:'해당 티켓은 예약일 31일 전(D-31)까지인 ',
       p2_b:'까지는 대행비 제외 100% 환불 가능하고, 이후부터는 환불 불가능한 티켓입니다.',
       p3:'본 티켓은 양도 및 거래가 불가능하고 본 회사의 동의 없이 개인 판매하는 것을 금지하고 있습니다.',
     },
@@ -50096,7 +50122,7 @@ var TRANSLATIONS = {
       info_key_term:'Term',
       info_val_term:'Valid through Dec 31, 2027<br><span style="font-size:11px;color:rgba(255,255,255,.45);">Pre-launch only · 1 year base with extension</span>',
       sect_tiers:'1. Membership Tiers',
-      sect_tiers_desc:'Two tiers with limited capacity<br>to maintain the quality of service.',
+      sect_tiers_desc:'TAAM runs a single tier limited to 33 members.<br>Every application is reviewed individually.',
       cond_title:'Eligibility',
       cond_1:'Individual review after you apply',
       m_tagline:'M Membership · single tier',
@@ -50289,12 +50315,13 @@ var TRANSLATIONS = {
       discount:'Discount',
       vat:'VAT',
     },
+    seathold: { tier:'This ticket is limited to certain membership tiers', fail:'Could not secure the seat — please try again shortly' },
     policy: {
       none:'No cancellation policy has been set for this ticket.',
       etc:'Other',
-      p1:'The reservation service fee is non-refundable under any circumstances. A full refund is available only if the ticket is cancelled within 10 minutes of purchase; no refund is possible thereafter.',
+      p1:'The reservation service fee is non-refundable under any circumstances. A full refund is available only if the ticket is cancelled within 30 minutes of purchase; no refund is possible thereafter.',
       p2_a:'This ticket is 100% refundable excluding the reservation service fee until ',
-      p2_b:', which is 30 days before the reservation date. No refund is possible after that date.',
+      p2_b:', which is 31 days before the reservation date (D-31). No refund is possible after that date.',
       p3:'This ticket may not be transferred or resold. Private resale without our consent is prohibited.',
     },
     deposit: {
@@ -50458,11 +50485,12 @@ TRANSLATIONS.ja = {
     g_beef:'牛肉', g_pork:'豚肉',
   },
   lang_sheet: { label:'LANGUAGE' },
+  seathold: { tier:'このチケットには等級制限があります', fail:'席を確保できませんでした — しばらくしてからもう一度お試しください' },
   policy: {
     none:'このチケットにはキャンセル規定が設定されていません。',
     etc:'その他',
-    p1:'チケット代金のうち予約代行手数料は、いかなる場合も返金されません。購入から10分以内のキャンセルに限り全額返金、それ以降は返金不可となります。',
-    p2_a:'このチケットは予約日の30日前にあたる ',
+    p1:'チケット代金のうち予約代行手数料は、いかなる場合も返金されません。購入から30分以内のキャンセルに限り全額返金、それ以降は返金不可となります。',
+    p2_a:'このチケットは予約日の31日前(D-31)にあたる ',
     p2_b:' までは予約代行手数料を除き100%返金可能で、それ以降は返金不可となります。',
     p3:'本チケットの譲渡・転売はできません。当社の同意なく個人間で販売することを禁止しています。',
   },
@@ -51051,7 +51079,7 @@ TRANSLATIONS.ja = {
     info_key_term:'期間',
     info_val_term:'2027年12月31日まで<br><span style="font-size:11px;color:rgba(255,255,255,.45);">先行募集限定・基本1年に延長適用</span>',
     sect_tiers:'1. メンバーシップ等級',
-    sect_tiers_desc:'2つの等級制で<br>各等級の人数制限によりサービス品質を維持します。',
+    sect_tiers_desc:'TAAMは定員33名・単一等級で運営します。<br>すべてのご入会は個別審査を経ます。',
     cond_title:'入会条件',
     cond_1:'ご申請後、個別に審査いたします',
     m_tagline:'M Membership · 単一グレード',
@@ -53642,7 +53670,7 @@ window.openFAQ = function(){
     faqs = [
       ['What is TAAM?', 'TAAM is a members-only concierge service for premium dining in Japan and Korea, providing curated access to high-end restaurants that are difficult to book independently.'],
       ['How do I join the membership?', 'Membership is currently invite-only. Please contact us via email for inquiries about joining.'],
-      ['How is the cancellation policy structured?', 'Each ticket has a specific cancellation policy. Refunds (excluding the reservation fee) are available up to 30 days before the visit date. Please review the policy before booking.'],
+      ['How is the cancellation policy structured?', 'Each ticket has a specific cancellation policy. Refunds (excluding the reservation fee) are available up to 31 days before the visit date (D-31). Please review the policy before booking.'],
       ['What is "deposit"?', 'Deposit is a prepaid balance used to purchase tickets. After your visit, the amount minus the reservation fee is returned to your balance.'],
       ['What languages are supported?', 'TAAM supports Korean, English, and Japanese. You can switch languages anytime from the top-right toggle.'],
       ['Are children allowed?', 'It depends on the restaurant. Each venue has its own house rules — please check the RULES section in the ticket detail before booking.']
@@ -53652,7 +53680,7 @@ window.openFAQ = function(){
     faqs = [
       ['TAAMとは何ですか?', 'TAAMは日本・韓国のプレミアム美食をご案内するメンバーシップ専用のコンシェルジュサービスです。個人では予約困難な高級レストランへの優先アクセスを提供します。'],
       ['メンバーシップ加入方法は?', '現在は招待制で運営しています。加入のお問い合わせはEメールにてご連絡ください。'],
-      ['キャンセル規約は?', 'チケットごとに個別のキャンセル規約があります。来店30日前まで予約手数料を除いて返金可能です。予約前に必ずご確認ください。'],
+      ['キャンセル規約は?', 'チケットごとに個別のキャンセル規約があります。来店31日前(D-31)まで予約手数料を除いて返金可能です。予約前に必ずご確認ください。'],
       ['デポジットとは?', 'デポジットはチケット購入に使用される事前チャージ残高です。来店後、予約手数料を除いた金額が残高に返金されます。'],
       ['対応言語は?', 'TAAMは韓国語・英語・日本語に対応しています。画面右上のトグルで切り替えできます。'],
       ['子供の入店は可能?', '店舗により異なります。各店舗のハウスルールはチケット詳細のRULESセクションでご確認ください。']
@@ -53661,7 +53689,7 @@ window.openFAQ = function(){
     faqs = [
       ['TAAM은 어떤 서비스인가요?', 'TAAM은 일본·한국 최고급 미식을 큐레이션하는 멤버십 전용 컨시어지 서비스입니다. 개인적으로 예약하기 어려운 명점에 우선 접근권을 제공합니다.'],
       ['멤버십 가입은 어떻게 하나요?', '현재는 초대제로 운영됩니다. 가입 문의는 이메일로 연락주세요.'],
-      ['취소 규정은 어떻게 되나요?', '티켓별로 개별 취소 규정이 있습니다. 방문일 30일 전까지는 대행비를 제외한 금액 환불 가능합니다. 예약 전 반드시 규정을 확인해주세요.'],
+      ['취소 규정은 어떻게 되나요?', '티켓별로 개별 취소 규정이 있습니다. 방문일 31일 전(D-31)까지는 대행비를 제외한 금액 환불 가능합니다. 예약 전 반드시 규정을 확인해주세요.'],
       ['예치금은 무엇인가요?', '예치금은 티켓 구매에 사용되는 사전 충전 잔액입니다. 방문 완료 후 대행비를 제외한 금액이 잔액으로 환불됩니다.'],
       ['지원 언어는?', 'TAAM은 한국어·영어·일본어를 지원합니다. 화면 우측 상단 토글로 변경 가능합니다.'],
       ['어린이도 동반 가능한가요?', '매장별로 다릅니다. 각 매장의 하우스 룰은 티켓 상세의 RULES 섹션에서 확인해주세요.']
@@ -59019,7 +59047,7 @@ function tcalRenderDetail(dateStr) {
                   : (e.type==='invite' ? ['#6A1A1A','#FBF3F2','#EEDADA'] : (e.type==='app' ? ['#1F5BD6','#EAF1FF','#D2E0FB'] : ['#7A6A60','#F0ECE6','#E0D9CC'])));
           var badge = '<span style="font-size:9.5px;font-weight:800;color:'+col[0]+';background:'+col[1]+';border:1px solid '+col[2]+';border-radius:6px;padding:1px 6px;">'+label+'</span>';
           var clickable = (e.type !== 'manual' && e.uid);
-          var nm = e.name || (e.type==='manual' ? '(이름없음)' : '(회원)');
+          var nm = _raEsc(e.name || (e.type==='manual' ? '(이름없음)' : '(회원)'));   // 🔒 2026-09-13 회원 이름은 이스케이프
           var nmH = clickable
             ? '<span onclick="tcalShowInviteMember(\''+e.uid+'\')" style="font-weight:700;color:#1a1a18;cursor:pointer;text-decoration:underline;">'+nm+'</span>'
             : '<span style="font-weight:700;color:#1a1a18;">'+nm+'</span>';
@@ -59428,7 +59456,7 @@ async function acSearchMember(q) {
   _acMemberResults = results;
   if (!results.length) { dd.innerHTML='<div class="ac-dropdown-item" style="color:#bbb;">검색 결과 없음</div>'; dd.classList.add('open'); return; }
   dd.innerHTML = results.map(function(m){
-    return '<div class="ac-dropdown-item" onclick="acSelectMember(\''+m.id+'\')"><div>'+m.name+'</div><div class="ac-dropdown-sub">'+(m.phone||'연락처 없음')+'</div></div>';
+    return '<div class="ac-dropdown-item" onclick="acSelectMember(\''+String(m.id).replace(/[^0-9a-zA-Z_-]/g,'')+'\')"><div>'+_raEsc(m.name)+'</div><div class="ac-dropdown-sub">'+_raEsc(m.phone||'연락처 없음')+'</div></div>';   // 🔒 2026-09-13 이스케이프
   }).join('');
   dd.classList.add('open');
 }
@@ -63071,7 +63099,9 @@ function _taamBusyNow(){
                'cpfModal','pcalAdminPage','rpCropModal','homePopup',
                'audModal',    // 🆕 2026.09-01 공개 대상 편집 중
                'qmEditModal',  // 🆕 2026.09-01 자주 쓰는 메뉴 편집 중
-               'pqrBigModal'];// 🆕 2026.09-01 QR 을 보여주는 중 (상대가 찍고 있다)
+               'pqrBigModal', // 🆕 2026.09-01 QR 을 보여주는 중 (상대가 찍고 있다)
+               'riPayPopup',   // 🆕 2026.09-13 초대 결제 팝업 — 예치금 차감과 티켓 기록 사이
+               'codeScreen','phoneScreen'];   // 🆕 2026.09-13 초대코드·OTP 입력 중
     // ⚠ offsetParent 로 판단하면 안 된다. **position:fixed 는 offsetParent 가
     //   항상 null** 이고, 이 목록은 전부 fixed 다 — 그래서 이 검사가 한 번도
     //   참이 된 적이 없었다(2026-09-01 발견). 계산된 스타일을 본다.
@@ -86768,6 +86798,10 @@ function taamOpenSheet() {
 function taamMdToHtml(s){
   if(!s) return '';
   var html = String(s);
+  // 🔒 2026-09-13: 모델 출력·매장 데이터에 섞인 태그가 그대로 실행되지 않게 먼저 이스케이프한다.
+  //   이미 &gt; 처럼 이스케이프된 입력도 있어서(아래 인용 처리 참조) 엔티티는 두 번 감싸지 않는다.
+  html = html.replace(/&(?!(?:amp|lt|gt|quot|#39|#\d+|#x[0-9a-fA-F]+);)/g, '&amp;')
+             .replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
   // 인라인 코드 보호
   var codeStash = [];
