@@ -31,8 +31,10 @@ do \$\$ begin
 end \$\$;
 grant usage on schema public, auth to anon, authenticated;
 
+-- ⚠ 라이브의 「옛 판」을 흉내낸다 — single_device_exempt · partner_agreements.agreed_meal 등이 없다.
+--   2026-09-14 실제로 라이브에 agreed_meal 이 없어 SQL 이 통째로 실패했다. 파일이 스스로 보장해야 한다.
 create table public.profiles(id uuid primary key, role text default 'member', display_name text, phone text,
-  nationality text, membership_tier text, single_device_exempt boolean not null default false);
+  nationality text, membership_tier text);
 create or replace function public.is_super_admin(uid uuid) returns boolean
 language sql stable security definer set search_path=public as
 \$\$ select coalesce((select role in ('super_admin','superadmin') from public.profiles where id=uid), false) \$\$;
@@ -49,8 +51,7 @@ create policy tickets_insert_own on public.tickets for insert to authenticated w
 create policy tickets_update_own on public.tickets for update to authenticated using (auth.uid()=user_id or public.is_super_admin(auth.uid()));
 
 create table public.push_subscriptions(id uuid primary key default gen_random_uuid(), user_id uuid, endpoint text not null unique,
-  p256dh text, auth text, user_agent text, device_label text, role text, topics text[] default '{}',
-  created_at timestamptz default now(), last_seen_at timestamptz default now());
+  p256dh text, auth text, role text, created_at timestamptz default now());   -- 옛 판: user_agent·device_label·topics·last_seen_at 없음
 
 create table public.invite_codes(code text primary key, used boolean default false, used_at timestamptz,
   used_by_email text, used_by_name text, used_by_phone text, invitee_tier text, member_id text, expires_at timestamptz);
@@ -82,8 +83,7 @@ language sql stable security definer set search_path = public as
 
 create table public.partner_qr_codes(code text primary key, restaurant_name text not null, chef_name text, active boolean default true);
 create table public.partner_agreements(id bigint generated always as identity primary key, code text, restaurant_name text,
-  chef_name text, signer_name text not null, agreed_at timestamptz not null default now(), user_agent text,
-  signature_data text, agreed_meal text, agreed_min text);
+  chef_name text, signer_name text not null, agreed_at timestamptz not null default now(), agreed_min text);   -- 옛 판: user_agent·signature_data·agreed_meal 없음
 insert into public.partner_qr_codes(code, restaurant_name) values ('QHFF', '스시 사사다');
 
 create table public.membership_applications(id uuid primary key default gen_random_uuid(), user_id uuid, name text, phone text not null,

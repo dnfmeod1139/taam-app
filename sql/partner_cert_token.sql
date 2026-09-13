@@ -24,6 +24,13 @@
 -- 실행: Supabase SQL Editor. 여러 번 돌려도 안전. 페이지(partner/) 배포와 짝.
 -- ═══════════════════════════════════════════════════════════════
 
+-- ⚠ 2026-09-14: 라이브 partner_agreements 에 agreed_meal 이 없었다 (repo 의 partner_qr.sql 은
+--   나중에 add column 을 넣었지만 라이브는 그 전 판이었다). SQL 함수는 만들 때 컬럼을 검사하므로
+--   ⑪ 에서 42703 으로 통째로 실패했다. 이 파일이 쓰는 컬럼은 여기서 직접 보장한다.
+alter table public.partner_agreements add column if not exists user_agent     text;
+alter table public.partner_agreements add column if not exists signature_data text;
+alter table public.partner_agreements add column if not exists agreed_meal    text;
+alter table public.partner_agreements add column if not exists agreed_min     text;
 alter table public.partner_agreements add column if not exists cert_token text;
 update public.partner_agreements
    set cert_token = replace(gen_random_uuid()::text, '-', '')

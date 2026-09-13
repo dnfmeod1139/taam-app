@@ -117,6 +117,13 @@ grant execute on function public._taam_uid_role() to anon, authenticated;
 --   p_role 은 시그니처 호환을 위해 남기지만 **무시한다.**
 --   send-push 는 push_subscriptions.role 로도 대상을 고르므로(role:superadmin),
 --   이 칸이 클라이언트 말대로 저장되면 회원이 운영진 푸시를 받는다.
+-- 이 함수가 쓰는 컬럼은 여기서 보장한다 (push_subscriptions_fix.sql 과 같은 정의 — 라이브가 옛 판일 수 있다)
+alter table public.push_subscriptions add column if not exists user_agent   text;
+alter table public.push_subscriptions add column if not exists device_label text;
+alter table public.push_subscriptions add column if not exists role         text;
+alter table public.push_subscriptions add column if not exists topics       text[] default array[]::text[];
+alter table public.push_subscriptions add column if not exists last_seen_at timestamptz default now();
+
 create or replace function public.save_push_subscription(
   p_endpoint     text,
   p_p256dh       text,
@@ -449,6 +456,13 @@ end $$;
 -- ⑦ 공개 쓰기 RPC — 속도 제한 · 코드 검증
 -- ═══════════════════════════════════════════════════════════════
 -- ⑦-a partner_agree — 토큰(partner_cert_token.sql 과 같은 정의) + 모르는 코드 거부 + 제한
+-- ⚠ 2026-09-14: 라이브 partner_agreements 에 agreed_meal 이 없었다 (repo 의 partner_qr.sql 은
+--   나중에 add column 을 넣었지만 라이브는 그 전 판이었다). SQL 함수는 만들 때 컬럼을 검사하므로
+--   ⑪ 에서 42703 으로 통째로 실패했다. 이 파일이 쓰는 컬럼은 여기서 직접 보장한다.
+alter table public.partner_agreements add column if not exists user_agent     text;
+alter table public.partner_agreements add column if not exists signature_data text;
+alter table public.partner_agreements add column if not exists agreed_meal    text;
+alter table public.partner_agreements add column if not exists agreed_min     text;
 alter table public.partner_agreements add column if not exists cert_token text;
 update public.partner_agreements
    set cert_token = replace(gen_random_uuid()::text, '-', '')
@@ -742,6 +756,8 @@ grant  execute on function public.partner_agreement_get(bigint, text) to authent
 -- ═══════════════════════════════════════════════════════════════
 -- ⑫ single_device_exempt 는 회원이 못 켠다 (guard_profile_exempt.sql 과 같은 정의)
 -- ═══════════════════════════════════════════════════════════════
+alter table public.profiles add column if not exists single_device_exempt boolean not null default false;   -- single_device_exempt.sql 과 같은 정의
+
 create or replace function public.taam_guard_profile_exempt()
 returns trigger
 language plpgsql
@@ -914,7 +930,7 @@ select '① 푸시 role 을 서버가 정하나' as "구분",
        (select count(*)::text || '건' from public.push_subscriptions where role not in ('superadmin','admin','user')) || ' 비표준 role 남음' as "메모"
 union all
 select '② tickets INSERT 가드',
-       case when exists (select 1 from pg_trigger where tgrelid='public.tickets'::regclass and tgname='trg_taam_guard_ticket_insert') then '✅' else '❌' end,
+       case when exists (select 1 from pg_trigger where tgrelid=to_regclass('public.tickets') and tgname='trg_taam_guard_ticket_insert') then '✅' else '❌' end,
        '회원은 hold 만 · 어드민은 hold·manual'
 union all
 select '② tickets UPDATE 가드 (확정 차단)',
@@ -933,12 +949,12 @@ select '④ 계보 지식 쓰기 정책',
 union all
 select '⑤ invite_codes 가드',
        case when to_regclass('public.invite_codes') is null then '— (표 없음)'
-            when exists (select 1 from pg_trigger where tgrelid='public.invite_codes'::regclass and tgname='trg_taam_guard_invite_code_row') then '✅' else '❌' end,
+            when exists (select 1 from pg_trigger where tgrelid=to_regclass('public.invite_codes') and tgname='trg_taam_guard_invite_code_row') then '✅' else '❌' end,
        '회원은 used·used_by_* 만'
 union all
 select '⑥ app_config RLS',
        case when to_regclass('public.app_config') is null then '— (표 없음)'
-            when (select relrowsecurity from pg_class where oid='public.app_config'::regclass)
+            when (select relrowsecurity from pg_class where oid=to_regclass('public.app_config'))
                  and (select count(*) from pg_policies where tablename='app_config') = 2 then '✅'
             else '❌' end,
        (select string_agg(policyname, ' / ') from pg_policies where tablename='app_config')
