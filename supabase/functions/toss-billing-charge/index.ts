@@ -441,6 +441,24 @@ async function notifyAdmins(
   } catch (_e) { /* 이름은 장식 — 못 읽어도 보낸다 */ }
   const body = who + '님 · ' + info.rest + (info.pax ? ' · ' + info.pax + '인' : '')
              + ' · \u20A9' + Number(info.amount || 0).toLocaleString() + ' (카드)';
+  const title = '\uD83C\uDFAB ' + who + '님이 티켓을 구매했습니다';
+  // 🆕 2026-09-14 벨(알림 내역)에도 남긴다.
+  //   예치금 결제는 앱이 taam_notify_admins 로 이력 + 푸시를 남기는데, 카드 결제는 여기서
+  //   푸시만 보내고 있었다 — 슈퍼어드민 벨을 열면 카드 구매만 빠져 있었다. 같은 모양(한 슈퍼어드민당
+  //   한 줄, 구매자 제외)으로 넣는다. 그 RPC 는 auth.uid() 가 필요해 서버에서는 직접 INSERT 한다.
+  try {
+    const { data: sups } = await admin.from('profiles').select('id')
+      .in('role', ['superadmin', 'super_admin']).neq('id', buyerId);
+    const rows = (sups || []).map((p: { id: string }) => ({
+      user_id: p.id, type: 'ticket_purchased', title, body, url: '/',
+      payload: { purchase_id: info.purchaseId, pax: info.pax, amount: info.amount, buyer: who,
+                 paid_by: 'card', actor_id: buyerId, via: 'toss-billing-charge' },
+    }));
+    if (rows.length) {
+      const { error } = await admin.from('notifications').insert(rows);
+      if (error) console.warn('[notifyAdmins] 벨 이력 INSERT 실패(푸시는 보낸다):', error.message);
+    }
+  } catch (_e) { /* 이력은 부가 — 푸시는 계속 */ }
   for (const role of ['superadmin', 'super_admin']) {
     try {
       await fetch(base + '/functions/v1/send-push', {
@@ -449,7 +467,7 @@ async function notifyAdmins(
         body: JSON.stringify({
           to: 'role:' + role,
           payload: {
-            title: '\uD83C\uDFAB ' + who + '님이 티켓을 구매했습니다',
+            title,
             body,
             url: '/',
             category: 'ticket_purchased',

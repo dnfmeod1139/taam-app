@@ -10,6 +10,9 @@ deposit_short 로 취소된다**(돈은 안 샌다 — 카드 승인이 취소�
 | toss-confirm | `deductDeposit`/`refundDeposit` 가 profiles 직접 수정 대신 RPC `taam_apply_deposit_delta` 호출. 환원은 **뺀 주머니로**(종전 전부 일반) | SQL 확인 표 ⑤ `service_role 실행 권한` ✅ |
 | toss-billing-charge | 〃 | 〃 |
 
+**2차 (같은 날 오후, 선택)** — 카드 구매도 슈퍼어드민 **벨 이력**에 남긴다(`notifications` 행, 예치금 결제와 같은 모양).
+종전엔 카드 구매는 푸시만 가고 벨을 열면 없었다. 두 함수 다시 복사해 Deploy. 줄 수 toss-confirm 528 · toss-billing-charge 480.
+
 배포 뒤 확인: 예치금 일부 + 카드 부족분으로 티켓 1건 결제 → `deposit_transactions` 에
 `metadata.server_caller = 'service_role'` 인 차감 행이 있고 `profiles.deposit_balance` 가 맞는지.
 

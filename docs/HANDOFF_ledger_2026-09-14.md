@@ -35,7 +35,10 @@
    `metadata.server_caller='service_role'` 차감 행 · `profiles.deposit_balance` 일치
 5. ✅ 슈퍼어드민 `adminGrantDeposit` → RPC (빌드 `14-i`, `sql/admin_grant_via_rpc.sql` ✅ 적용 · 테스트1 부여 누적 3,510,000 으로 정정)
 6. ✅ 앱의 옛 폴백 INSERT 8곳 제거 + 환불 0원 기록도 RPC (빌드 `14-j`) — 앱에 원장 INSERT 0줄
-7. 그 다음 후보 (아직 안 함)
+7. 알림 중복 조사 — **중복 없음**. 구매 1건 = 앱 `taam_notify_admins` 1회(예치금) 또는 Edge `notifyAdmins` 1회(카드).
+   틈 하나: 카드 구매는 푸시만 가고 벨 이력이 없었다 → Edge 두 함수에 `notifications` INSERT 추가
+   (⚠ 재배포 필요 · `DEPLOY_CHECKLIST.md` 2차)
+8. 그 다음 후보 (아직 안 함)
    - 회원 세션 `deposit_transactions` SELECT 는 그대로 (자기 것만) — 건드릴 것 없음
 
 ## 넘어가지 말 것
