@@ -672,6 +672,22 @@ end $$;
 
 
 -- ═══════════════════════════════════════════════════════════════
+-- ⑩ Edge Function 과 짝 — 예약 알림 1회 표시 · 제한기 실행 권한
+-- ═══════════════════════════════════════════════════════════════
+--   notify-reservation 이 한 예약에 한 번만 보내도록 notified_at 을 찍는다.
+--   verify-invite · consume-invite · taam-chat 은 service_role 로 taam_rate_hit 를 부른다.
+do $$
+begin
+  if to_regclass('public.reservation_requests') is not null then
+    execute 'alter table public.reservation_requests add column if not exists notified_at timestamptz';
+  end if;
+  if exists (select 1 from pg_roles where rolname = 'service_role') then
+    execute 'grant execute on function public.taam_rate_hit(text, integer, interval) to service_role';
+  end if;
+end $$;
+
+
+-- ═══════════════════════════════════════════════════════════════
 -- 확인 — 하나만 돌린다. ❌ 가 한 줄도 없어야 정상.
 -- ═══════════════════════════════════════════════════════════════
 select '① 푸시 role 을 서버가 정하나' as "구분",
@@ -716,6 +732,11 @@ union all
 select '⑦ partner_agree 코드 검증',
        case when pg_get_functiondef(to_regprocedure('public.partner_agree(text,text,text,text,text,text,text,text)')) like '%code_invalid%' then '✅' else '❌' end,
        '모르는 코드 거부 · 토큰 반환'
+union all
+select '⑩ 예약 알림 1회 표시 컬럼',
+       case when to_regclass('public.reservation_requests') is null then '— (표 없음)'
+            when exists (select 1 from information_schema.columns where table_schema='public' and table_name='reservation_requests' and column_name='notified_at') then '✅' else '❌' end,
+       'notify-reservation 이 두 번 보내지 않게'
 union all
 select '⑨ taam_ref_consume anon 권한',
        case when to_regprocedure('public.taam_ref_consume(text, uuid)') is null then '— (함수 없음)'

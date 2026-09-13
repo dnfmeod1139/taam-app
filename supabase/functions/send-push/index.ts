@@ -546,18 +546,61 @@ Deno.serve(async (req: Request) => {
       //   것(전 회원·남의 기기)과는 위험이 다르다.
       //   role:user 처럼 **전 회원**을 가리키는 것은 여기 안 든다 — 그건 브로드캐스트다.
       const ADMIN_ROLES = ["admin", "superadmin", "super_admin"];
-      const isUpward = scope === "role" && ADMIN_ROLES.includes(String(scopeValue));
+      const SUPER_ROLES = ["superadmin", "super_admin"];
+      // 🔒 2026-09-13: 「위로」는 슈퍼어드민에게만. role:admin 은 **전 파트너 매장**이라
+      //   회원 한 명이 파트너 전원의 기기에 임의 문구를 띄울 수 있었다.
+      const isUpward = scope === "role" && SUPER_ROLES.includes(String(scopeValue));
 
       if (!isSelf && !isUpward) {
-        // ③ 나머지 — all · topic: · role:user · uid:<남의 id> 는 어드민만.
-        //   앱은 회원 세션에서 이것들을 쓰지 않는다. 쓰였다면 앱 밖에서 온 것이다.
+        // ③ 나머지 — all · topic: · role:user · uid:<남의 id>.
+        //   슈퍼어드민은 전부 된다. 매장 어드민은 **자기 매장에 요청·예약한 회원(uid:)**에게만
+        //   (예약 수락·거절·시간 변경 통지). 그 밖(all·topic·role:)은 브로드캐스트라 막는다.
         const { data: me } = await sb.from("profiles")
           .select("role").eq("id", callerUserId).maybeSingle();
         const r = String(me?.role || "");
-        if (!ADMIN_ROLES.includes(r)) {
-          console.warn("[send-push] 권한 없는 호출 차단:", { callerUserId, to: body.to });
+        let allowed = SUPER_ROLES.includes(r);
+        if (!allowed && r === "admin" && scope === "uid" && scopeValue) {
+          const venues = new Set<string>();
+          const g = await sb.from("admin_grants").select("venue_id, rest_id").eq("user_id", callerUserId);
+          for (const row of (g.data || []) as any[]) {
+            if (row.venue_id) venues.add(String(row.venue_id));
+            if (row.rest_id) venues.add(String(row.rest_id));
+          }
+          const va = await sb.from("venue_admins").select("venue_id").eq("admin_user_id", callerUserId);
+          for (const row of (va.data || []) as any[]) if (row.venue_id) venues.add(String(row.venue_id));
+          const vlist = [...venues];
+          if (vlist.length) {
+            const rr = await sb.from("reservation_requests").select("id")
+              .eq("user_id", scopeValue).in("venue_id", vlist).limit(1);
+            if ((rr.data || []).length) allowed = true;
+            if (!allowed) {
+              const tk = await sb.from("tickets").select("purchase_id")
+                .eq("user_id", scopeValue).in("restaurant_id", vlist).limit(1);
+              if ((tk.data || []).length) allowed = true;
+            }
+          }
+        }
+        if (!allowed) {
+          console.warn("[send-push] 권한 없는 호출 차단:", { callerUserId, role: r, to: body.to });
           return json({ error: "이 대상으로는 보낼 수 없습니다", to: body.to }, 403);
         }
+      }
+
+      // 🔒 url 은 우리 앱 안의 경로만. 알림을 누르면 sw.js 가 그 주소로 이동하므로,
+      //   바깥 주소를 실으면 TAAM 이름을 단 피싱 링크가 된다. 서버끼리의 호출은 예외.
+      if (body.payload && typeof body.payload === "object") {
+        const raw = String((body.payload as Record<string, unknown>).url || "/");
+        let safe = "/";
+        if (/^\/(?!\/)/.test(raw)) safe = raw;
+        else {
+          try {
+            const u = new URL(raw);
+            const okHost = ["taam-app.vercel.app", "playtaam.com", "www.playtaam.com", "app.playtaam.com"];
+            if (u.protocol === "https:" && okHost.includes(u.hostname)) safe = u.pathname + u.search + u.hash;
+          } catch (_) { /* 잘못된 URL → '/' */ }
+        }
+        if (safe !== raw) console.warn("[send-push] url 정리:", raw, "→", safe);
+        (body.payload as Record<string, unknown>).url = safe;
       }
     }
 

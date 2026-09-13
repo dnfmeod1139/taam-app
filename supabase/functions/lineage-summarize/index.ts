@@ -387,12 +387,46 @@ Deno.serve(async (req) => {
   }
 
   try {
+    // 🔒 2026-09-13: 슈퍼어드민만. 종전에는 anon 키만으로 아무나 임의 URL fetch(SSRF) ·
+    //   Claude 호출 · chef_lineage_knowledge 갱신을 시킬 수 있었다.
+    {
+      const sUrl = Deno.env.get("SUPABASE_URL") || "";
+      const sKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+      const h = req.headers.get("Authorization") || "";
+      const t = h.startsWith("Bearer ") ? h.substring(7) : "";
+      let ok = !!t && !!sKey && t === sKey;            // 서버끼리
+      if (!ok && t && sUrl && sKey) {
+        const gate = createClient(sUrl, sKey, { auth: { persistSession: false, autoRefreshToken: false } });
+        const { data: u } = await gate.auth.getUser(t);
+        if (u?.user?.id) {
+          const { data: p } = await gate.from("profiles").select("role").eq("id", u.user.id).maybeSingle();
+          ok = ["super_admin", "superadmin"].includes(String(p?.role || ""));
+        }
+      }
+      if (!ok) {
+        return new Response(JSON.stringify({ error: "슈퍼어드민만 사용할 수 있습니다" }),
+          { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+    }
+
     const body = await req.json();
     const lineage_id: string = (body.lineage_id || "").trim();
     const lineage_name_ko: string = (body.lineage_name_ko || "").trim();
     const lineage_name_en: string | undefined = body.lineage_name_en;
+    // 🔒 공개 http(s) 주소만 — 내부망·localhost·IP 직접 지정은 거른다 (SSRF)
+    const safeUrl = (u: string): boolean => {
+      try {
+        const p = new URL(u.trim());
+        if (p.protocol !== "https:" && p.protocol !== "http:") return false;
+        const host = p.hostname.toLowerCase();
+        if (host === "localhost" || host.endsWith(".local") || host.endsWith(".internal")) return false;
+        if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(":")) return false;   // IPv4 · IPv6 리터럴
+        if (host.endsWith("supabase.co") || host.endsWith("supabase.in")) return false;
+        return true;
+      } catch (_) { return false; }
+    };
     const reference_urls: string[] = Array.isArray(body.reference_urls)
-      ? body.reference_urls.filter((u: any) => typeof u === "string" && u.trim())
+      ? body.reference_urls.filter((u: any) => typeof u === "string" && u.trim() && safeUrl(u))
       : [];
     const curator_notes: string = (body.curator_notes || "").trim();
 

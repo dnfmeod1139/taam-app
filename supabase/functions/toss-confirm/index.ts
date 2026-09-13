@@ -226,7 +226,18 @@ serve(async (req) => {
         });
         deductedDeposit = ded.deducted;
         if (ded.deducted < depositUsed) {
-          console.warn('[toss-confirm] 예치금 부족(결제 중 변동) — 뺀 금액', ded.deducted, '/', depositUsed, orderId);
+          // 🔒 2026-09-13: 덜 냈으면 확정하지 않는다. 종전에는 부족분을 경고만 남기고
+          //   정가(total)로 티켓을 붙여, 예치금이 결제 중에 줄어든 회원이 덜 내고 확정됐다.
+          //   좌석 상실과 같은 처리 — 뺀 예치금 환원 · 카드 승인 취소 · 주문 canceled.
+          console.warn('[toss-confirm] 예치금 부족(결제 중 변동) — 확정 취소', ded.deducted, '/', depositUsed, orderId);
+          if (ded.deducted > 0) await refundDeposit(admin, user.id, ded.deducted, orderId).catch(() => {});
+          const canceled = await cancelTossPayment(secretKey, paymentKey, '예치금 부족으로 구매 불가');
+          await admin.from('payment_orders')
+            .update({ status: canceled ? 'canceled' : 'paid',
+                      fail_reason: 'deposit_short' + (canceled ? '_refunded' : '_refund_failed') })
+            .eq('order_id', orderId);
+          return json({ ok: false, error: 'deposit_short', refunded: canceled, orderId,
+                        deducted: ded.deducted, needed: depositUsed });
         }
       }
 

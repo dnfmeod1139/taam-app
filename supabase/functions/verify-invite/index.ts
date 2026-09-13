@@ -57,6 +57,20 @@ serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     );
 
+    // 🔒 2026-09-13: 속도 제한 — 같은 IP 시간당 40회. 코드를 긁어 초대자 이름을 모으는 것을 막는다.
+    //   (taam_rate_hit 는 audit_hardening_2026-09-13.sql 이 만든다. 없으면 통과 — 가입을 막지 않는다.)
+    try {
+      const ip = (req.headers.get('x-forwarded-for') || req.headers.get('cf-connecting-ip') || 'noip').split(',')[0].trim();
+      const { data: allowed, error: rlErr } = await supabase.rpc('taam_rate_hit',
+        { p_key: 'verify_invite:' + ip, p_limit: 40, p_window: '1 hour' });
+      if (!rlErr && allowed === false) {
+        return new Response(
+          JSON.stringify({ ok: false, error: '잠시 후 다시 시도해 주세요' }),
+          { status: 200, headers: { ...cors, 'Content-Type': 'application/json' } }
+        );
+      }
+    } catch (_) { /* 제한기 미설치 — 통과 */ }
+
     // ── 1) 코드 조회 ──
     const { data: row, error: qErr } = await supabase
       .from('invite_codes')

@@ -148,6 +148,29 @@ Deno.serve(async (req) => {
   }
 
   try {
+    // 🔒 2026-09-13: 어드민 도구다 — 매장 어드민·슈퍼어드민·서버(service_role)만.
+    //   종전에는 로그인한 회원 누구나 Claude 번역을 무제한으로 돌릴 수 있었다.
+    {
+      const sUrl = Deno.env.get("SUPABASE_URL") || "";
+      const sKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+      const h = req.headers.get("Authorization") || "";
+      const t = h.startsWith("Bearer ") ? h.substring(7) : "";
+      let ok = !!t && !!sKey && t === sKey;
+      if (!ok && t && sUrl && sKey) {
+        try {
+          const r = await fetch(`${sUrl}/auth/v1/user`, { headers: { apikey: sKey, Authorization: `Bearer ${t}` } });
+          const u = r.ok ? await r.json() : null;
+          if (u?.id) {
+            const pr = await fetch(`${sUrl}/rest/v1/profiles?id=eq.${u.id}&select=role`,
+              { headers: { apikey: sKey, Authorization: `Bearer ${sKey}` } });
+            const rows = pr.ok ? await pr.json() : [];
+            ok = ["admin", "super_admin", "superadmin"].includes(String(rows?.[0]?.role || ""));
+          }
+        } catch (_) { ok = false; }
+      }
+      if (!ok) return jsonResp({ error: "어드민만 사용할 수 있습니다" }, 403);
+    }
+
     const body: ReqBody = await req.json();
     const items = Array.isArray(body.items) ? body.items : [];
     const targetLangs = body.target_langs ?? ["en", "ja"];

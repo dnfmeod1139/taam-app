@@ -129,11 +129,15 @@ serve(async (req) => {
     if (holdPurchaseId) {
       const { data: hold } = await admin
         .from('tickets')
-        .select('purchase_id, party_size, user_id, status')
+        .select('purchase_id, party_size, user_id, status, ticket_product_id')
         .eq('purchase_id', holdPurchaseId)
         .maybeSingle();
+      // 🔒 2026-09-13: 홀드가 **이 티켓**의 홀드여야 한다.
+      //   종전에는 본인·hold·인원만 봐서, 비싼 티켓의 홀드를 싼 티켓 id 와 짝지어
+      //   싼 가격으로 주문을 만들고 toss-confirm 이 그 홀드를 확정할 수 있었다.
       hasValidHold = !!(hold && hold.user_id === user.id && hold.status === 'hold'
-                        && Number(hold.party_size) === pax);
+                        && Number(hold.party_size) === pax
+                        && String(hold.ticket_product_id || '') === String(ticketId));
       if (!hasValidHold) {
         console.warn('[toss-order] 홀드 무효 — 좌석 재검증으로 진행', holdPurchaseId);
       }

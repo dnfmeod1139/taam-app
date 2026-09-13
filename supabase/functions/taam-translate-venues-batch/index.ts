@@ -93,6 +93,27 @@ Deno.serve(async (req: Request) => {
     return jsonResp({ error: "SUPABASE_URL/SERVICE_ROLE_KEY 미설정" }, 500);
   }
 
+  // 🔒 2026-09-13: 슈퍼어드민·서버(service_role · cron)만. 종전에는 로그인한 회원 누구나
+  //   venues 배치 번역을 돌려 수동 번역을 덮어쓰고 Claude 비용을 태울 수 있었다.
+  {
+    const h = req.headers.get("Authorization") || "";
+    const t = h.startsWith("Bearer ") ? h.substring(7) : "";
+    let ok = !!t && t === SERVICE_KEY;
+    if (!ok && t) {
+      try {
+        const r = await fetch(`${SUPABASE_URL}/auth/v1/user`, { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${t}` } });
+        const u = r.ok ? await r.json() : null;
+        if (u?.id) {
+          const pr = await fetch(`${SUPABASE_URL}/rest/v1/profiles?id=eq.${u.id}&select=role`,
+            { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } });
+          const rows = pr.ok ? await pr.json() : [];
+          ok = ["super_admin", "superadmin"].includes(String(rows?.[0]?.role || ""));
+        }
+      } catch (_) { ok = false; }
+    }
+    if (!ok) return jsonResp({ error: "슈퍼어드민만 사용할 수 있습니다" }, 403);
+  }
+
   // ── 옵션 파싱 ──
   let body: ReqBody = {};
   if (req.method === "POST") {

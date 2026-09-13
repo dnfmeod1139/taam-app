@@ -23,7 +23,9 @@ const SECRET = Deno.env.get("LINE_CHANNEL_SECRET") || "";
 
 // ── LINE 서명 검증 (HMAC-SHA256, base64) ──
 async function verifySignature(body: string, signature: string): Promise<boolean> {
-  if (!SECRET) return true; // 시크릿 미설정이면 검증 생략(동작 우선)
+  // 🔒 2026-09-13: 시크릿이 없으면 **거부**한다. 종전에는 검증을 통째로 건너뛰어
+  //   아무나 POST 로 회신 API(채널 토큰)를 소비시킬 수 있었다. LINE_CHANNEL_SECRET 을 넣을 것.
+  if (!SECRET) { console.error("[line-webhook] LINE_CHANNEL_SECRET 미설정 — 요청 거부"); return false; }
   if (!signature) return false;
   try {
     const key = await crypto.subtle.importKey(

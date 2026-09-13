@@ -30,6 +30,36 @@ function json(body: unknown, status = 200): Response {
 }
 
 // ── Supabase REST 헬퍼 (service role) ──
+// 호출자 확인 — 회원 JWT 로 auth 사용자 id 를 얻는다 (service_role 키면 서버 호출)
+async function callerId(req: Request): Promise<{ uid: string | null; service: boolean }> {
+  const h = req.headers.get("Authorization") || "";
+  const t = h.startsWith("Bearer ") ? h.substring(7) : "";
+  if (!t) return { uid: null, service: false };
+  if (SERVICE_KEY && t === SERVICE_KEY) return { uid: null, service: true };
+  try {
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+      headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${t}` },
+    });
+    if (!res.ok) return { uid: null, service: false };
+    const u = await res.json();
+    return { uid: u?.id || null, service: false };
+  } catch (_) { return { uid: null, service: false }; }
+}
+
+// PATCH — 바뀐 행을 돌려받는다 (0 행이면 [])
+async function sbPatchRows(path: string, body: unknown): Promise<{ ok: boolean; rows: any[]; status: number }> {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    method: "PATCH",
+    headers: {
+      apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`,
+      "Content-Type": "application/json", Prefer: "return=representation",
+    },
+    body: JSON.stringify(body),
+  });
+  const rows = res.ok ? await res.json().catch(() => []) : [];
+  return { ok: res.ok, rows: Array.isArray(rows) ? rows : [], status: res.status };
+}
+
 async function sbGet(path: string): Promise<any[]> {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
     headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
@@ -209,12 +239,31 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   try {
     const { reservation_id } = await req.json();
-    if (!reservation_id) return json({ error: "reservation_id 필요" }, 400);
+    if (!reservation_id || !/^[0-9a-f-]{36}$/i.test(String(reservation_id))) {
+      return json({ error: "reservation_id 필요" }, 400);
+    }
 
     // 1) 예약 요청 조회
     const rrs = await sbGet(`reservation_requests?id=eq.${reservation_id}&select=*`);
     const rr = rrs[0];
     if (!rr) return json({ error: "요청 없음" }, 404);
+
+    // 🔒 2026-09-13: 자기 예약만 알린다. 종전에는 로그인만 돼 있으면 남의 reservation_id 로
+    //   임의 매장에 알림톡·LINE·푸시를 무한히 쏠 수 있었다 (유료 발송).
+    const who = await callerId(req);
+    if (!who.service) {
+      if (!who.uid || who.uid !== rr.user_id) return json({ error: "forbidden" }, 403);
+    }
+
+    // 🔒 한 예약에 한 번만 — notified_at 을 먼저 찍고, 이미 찍혀 있으면 보내지 않는다.
+    //   (audit_hardening_2026-09-13.sql ⑩ 이 컬럼을 만든다. 없으면 종전처럼 보낸다.)
+    const mark = await sbPatchRows(
+      `reservation_requests?id=eq.${reservation_id}&notified_at=is.null`,
+      { notified_at: new Date().toISOString() });
+    if (mark.ok && mark.rows.length === 0) {
+      return json({ ok: true, skip: "이미 보냄" });
+    }
+    if (!mark.ok) console.warn("[notify-reservation] notified_at 표시 실패 (컬럼 미설치?)", mark.status);
 
     // 2) 매장명 (restaurants → venue_partners.label 폴백)
     let venueName = "매장";

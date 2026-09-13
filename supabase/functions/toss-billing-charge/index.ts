@@ -93,6 +93,14 @@ serve(async (req) => {
     const expected = Number(order.amount);
     if (!(expected > 0)) return json({ ok: false, error: 'amount_invalid' });
 
+    // 🔒 2026-09-13: 빌링키는 국내(원화) 결제수단이다. 외화 주문(amount 가 $·¥)을
+    //   그대로 승인하면 ₩892 를 내고 $892 티켓이 확정된다. 외화 주문은 일반 결제창으로.
+    const orderCur = String(order.currency || 'KRW').toUpperCase();
+    if (orderCur !== 'KRW') {
+      console.warn('[toss-billing-charge] 외화 주문은 빌링 청구 불가', orderId, orderCur);
+      return json({ ok: false, error: 'currency_not_supported', currency: orderCur });
+    }
+
     // ── 결제수단(빌링키) ──
     //   기본카드 우선, 없으면 가장 최근 등록 카드.
     const { data: cards, error: ckErr } = await admin
@@ -190,7 +198,17 @@ serve(async (req) => {
         });
         deductedDeposit = ded.deducted;
         if (ded.deducted < depositUsed) {
-          console.warn('[toss-billing-charge] 예치금 부족(결제 중 변동)', ded.deducted, '/', depositUsed, orderId);
+          // 🔒 2026-09-13: 덜 냈으면 확정하지 않는다. 종전에는 부족분을 경고만 남기고
+          //   정가(total)로 티켓을 붙여, 예치금이 결제 중에 줄어든 회원이 덜 내고 확정됐다.
+          console.warn('[toss-billing-charge] 예치금 부족(결제 중 변동) — 확정 취소', ded.deducted, '/', depositUsed, orderId);
+          if (ded.deducted > 0) await refundDeposit(admin, user.id, ded.deducted, orderId).catch(() => {});
+          const canceled = await cancelTossPayment(secretKey, paymentKey, '예치금 부족으로 구매 불가');
+          await admin.from('payment_orders')
+            .update({ status: canceled ? 'canceled' : 'paid',
+                      fail_reason: 'deposit_short' + (canceled ? '_refunded' : '_refund_failed') })
+            .eq('order_id', orderId);
+          return json({ ok: false, error: 'deposit_short', refunded: canceled, orderId,
+                        deducted: ded.deducted, needed: depositUsed });
         }
       }
 

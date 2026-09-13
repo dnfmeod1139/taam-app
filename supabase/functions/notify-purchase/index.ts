@@ -80,7 +80,12 @@ async function sendAppPush(userId: string, title: string, body: string): Promise
         },
       }),
     });
-    return res.ok;
+    if (!res.ok) return false;
+    // 🔒 2026-09-13: send-push 는 대상이 0 이어도 200 을 준다. 「한 기기라도 갔다」를 본다.
+    //   종전엔 200 = 성공으로 읽어 partner_notified_at 을 찍고, 알림톡·LINE 실패는 영영 재시도되지 않았다.
+    const j = await res.json().catch(() => null);
+    const okN = Number(j?.summary?.ok ?? 0);
+    return okN > 0;
   } catch (_) { return false; }
 }
 

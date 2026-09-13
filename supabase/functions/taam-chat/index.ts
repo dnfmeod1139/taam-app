@@ -159,6 +159,23 @@ Deno.serve(async (req) => {
 
     const sb = createClient(supabaseUrl, serviceKey);
 
+    // 🔒 2026-09-13: 한 사람이 시간당 60회 — Claude 호출 비용을 회원 한 명이 태우지 못하게.
+    //   (taam_rate_hit 미설치면 통과.)
+    try {
+      const h = req.headers.get("Authorization") || "";
+      const t = h.startsWith("Bearer ") ? h.substring(7) : "";
+      let key = (req.headers.get("x-forwarded-for") || "noip").split(",")[0].trim();
+      if (t && t !== serviceKey) {
+        const { data: u } = await sb.auth.getUser(t);
+        if (u?.user?.id) key = u.user.id;
+      }
+      const { data: allowed, error: rlErr } = await sb.rpc("taam_rate_hit",
+        { p_key: "chat:" + key, p_limit: 60, p_window: "1 hour" });
+      if (!rlErr && allowed === false) {
+        return jsonRes({ ok: false, error: "잠시 후 다시 이용해 주세요" }, 429);
+      }
+    } catch (_) { /* 제한기 미설치 — 통과 */ }
+
     // ──────────────────────────────────────────
     // region 키워드 사전 필터
     // ──────────────────────────────────────────
