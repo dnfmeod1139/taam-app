@@ -414,6 +414,7 @@ Apple 은 iPad 와 iPhone **두 기기로 심사**하므로(리뷰 노트에 명
 | 예치금 양수 델타 | `taam_apply_deposit_delta` | 회원은 `ticket_refund` + `purchase_id` 원장으로, **낸 돈 − 이미 환불** 한도 안에서만 (2026-09-13 핫픽스) |
 | 원장 INSERT | RLS `deposit_tx_insert_server` | **회원은 `deposit_transactions` 를 직접 못 쓴다** — 슈퍼어드민만. 회원 원장은 RPC 가 쓴다. Edge(service_role)·SQL Editor 도 같은 RPC 를 부른다. 원장을 넘겼는데 잔액이 모자라면 `LEDGER_INSUFFICIENT` (2026-09-14, `sql/ledger_close_member_insert.sql`) |
 | 푸시 발송 | `send-push` Edge Function | 회원은 자기에게만. 어드민 상향 통지만 예외 |
+| 초대제 가입 | `trg_taam_guard_signup` (auth.users BEFORE INSERT) | **초대받은 사람만 계정이 생긴다** — 슈퍼어드민 화이트리스트 · `@partner.taam.kr` · 메타데이터 `invite_code`(미사용·미만료·초대장 번호/이메일 일치) · 초대장에 적힌 이메일/번호(소셜 첫 로그인). 그 밖은 `SIGNUP_NOT_INVITED` → GoTrue "Database error saving new user". 모드는 `app_config.signup_guard` (`enforce`, 2026-09-15 새벽 전환 · `log` 로 되돌림 가능). 판정 로그 `signup_guard_log`. 문지기 자체 오류는 `error` 로 적고 **막지 않는다** (`sql/signup_guard.sql`) |
 | 환불 정책 | `taam_refund_cap` → `taam_apply_deposit_delta` ④ | 회원 환불은 **결제 30분 내 전액 · D-31 이상 총액−대행비 · 그 뒤 0** 을 서버가 센다. 앱 `calculateTicketRefund` 값은 참고일 뿐. 슈퍼어드민·옛 구매(tickets 없음)는 종전 (2026-09-14 밤, `sql/refund_policy_server.sql`) |
 
 이 표의 2026-09-13 항목은 `sql/audit_hardening_2026-09-13.sql` 한 파일이 만든다

@@ -112,3 +112,11 @@
 
 - `sql/refund_policy_server.sql` **적용 ✅** (5/5). D-31 유지로 사용자 확정. 앱은 빌드 `r`.
 - 다음: 문서의 「남은 것」 1·2 는 사용자 결정 대기 (슈퍼어드민 비밀번호 localStorage · 옛 카드 등록 화면 폐기).
+
+### 초대제 2단계 완료 (2026-09-15 01:59 KST)
+
+- 트랜잭션 가짜 가입으로 6갈래 검증(no_invite · code_not_found · partner_domain · invite_code · phone_mismatch · 미사용 코드 없음) → 전부 기대값, error 0.
+- `app_config.signup_guard` = **enforce**. 확인: 초대 없는 INSERT 가 `P0001 SIGNUP_NOT_INVITED: no_invite` 로 거부됨.
+- 소셜 첫 로그인 규칙: 「초대장 이메일 일치」로 확정 (추가 코드 없음). 이메일 없는 초대자는 전화·이메일 인증으로 가입.
+- 실기기 검증(초대코드 신규 가입 1건)은 사용자가 편할 때. 되돌리기: mode 를 `log` 로.
+- 참고: 미사용 초대코드가 0장이었다 (전부 used=true).

@@ -16,8 +16,8 @@
 --   거부    그 밖의 전부
 --
 -- 모드 (app_config.key='signup_guard' → value->>'mode'):
---   'log'     (기본·1단계)  판정만 signup_guard_log 에 적고 막지 않는다.
---   'enforce' (2단계)       거부면 예외 → GoTrue 가 "Database error saving new user" 로 가입을 끊는다.
+--   'log'     (1단계)       판정만 signup_guard_log 에 적고 막지 않는다.
+--   'enforce' (2단계 · 2026-09-15 01:59 라이브 전환) 거부면 예외 → GoTrue 가 "Database error saving new user" 로 가입을 끊는다.
 --   모드는 아래 ⑤ 의 한 줄로 바꾼다. 앱은 안 건드려도 된다.
 --
 -- 안전장치: 판정 코드 자체가 오류를 내면(컬럼 없음 등) 가입을 막지 않고 verdict='error' 로 남긴다.
