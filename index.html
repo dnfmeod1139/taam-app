@@ -18671,9 +18671,30 @@ function showCodeError(msg) {
 //   그래서 미가입으로 읽히는 오류만 초대 안내로 바꾸고, 나머지는 사유를 남긴다.
 //   (종전엔 로그인 화면의 모든 오류를 초대 안내로 덮어서, 문자 발송이 죽어도
 //    "초대되지 않은 번호" 라고 말했다. 회원은 자기 번호를 의심하고 우리는 사유를 못 봤다.)
+// 🔒 2026.09.14 초대제 서버화 1단계 — 가입 메타데이터에 초대코드를 싣는다.
+//   auth.users BEFORE INSERT 트리거(sql/signup_guard.sql)가 raw_user_meta_data.invite_code 를 읽어
+//   「초대받은 사람인가」를 DB 에서 판정한다. 지금은 log 모드(판정만 기록), 2단계에서 enforce.
+//   로그인 모드에서는 계정이 새로 생기지 않으므로(shouldCreateUser:false) 코드를 싣지 않는다.
+function _vpSignupMeta(name, isLogin){
+  var d = { display_name: name };
+  try {
+    var c = (!isLogin && _pendingInviteCode && _pendingInviteCode.code) ? String(_pendingInviteCode.code).trim().toUpperCase() : '';
+    if (c) d.invite_code = c;
+  } catch(e){}
+  return d;
+}
+// 서버 문지기가 가입을 거부하면 GoTrue 는 사유를 숨기고 "Database error saving new user" 만 돌려준다.
+function _vpIsGuardReject(err){
+  var msg  = (err && err.message) ? String(err.message) : '';
+  var code = (err && err.code) ? String(err.code) : '';
+  return /database\s+error\s+(saving|creating)\s+new\s+user/i.test(msg) || (/unexpected_failure/i.test(code) && /new user/i.test(msg));
+}
+var _VP_GUARD_REJECT_TEXT = '초대 정보와 일치하지 않아 가입할 수 없습니다. 초대코드·이름·번호(이메일)를 확인해주세요. / Sign-up refused: invite details do not match.';
+
 function _vpSendErrText(err, invitedMsgOk, kind){
   var msg  = (err && err.message) ? String(err.message) : '';
   var code = (err && err.code) ? String(err.code) : '';
+  if(_vpIsGuardReject(err)) return _VP_GUARD_REJECT_TEXT;
   var notSignedUp = /signups?\s+not\s+allowed|otp_disabled|user\s+not\s+found|invalid\s+login/i
                       .test(msg + ' ' + code);
   if(invitedMsgOk && notSignedUp){
@@ -18736,7 +18757,7 @@ function vpSend(){
     btn.disabled=true;
     window.sb.auth.signInWithOtp({
       phone: e164,
-      options: { shouldCreateUser: shouldCreateUser, data: { display_name: name } }
+      options: { shouldCreateUser: shouldCreateUser, data: _vpSignupMeta(name, isLogin) }
     }).then(function(res){
       btn.disabled=false;
       if(res.error){
@@ -18764,7 +18785,7 @@ function vpSend(){
     btn.disabled=true;
     window.sb.auth.signInWithOtp({
       email: email,
-      options: { shouldCreateUser: shouldCreateUser, data: { display_name: name } }
+      options: { shouldCreateUser: shouldCreateUser, data: _vpSignupMeta(name, isLogin) }
     }).then(function(res){
       btn.disabled=false;
       if(res.error){
@@ -19270,6 +19291,18 @@ function _socialReturnCheck(){
   try { raw = localStorage.getItem('taam_pending_social'); } catch(e){}
   if(!raw) return;
   if(!window.sb) return;
+  // 🔒 2026.09.14: 서버 문지기가 소셜 첫 로그인을 거부하면 provider 복귀 URL 에 오류만 실려 온다.
+  //   (#error=server_error&error_description=Database+error+saving+new+user) — 세션이 없으니 아래 getSession 은 조용히 끝난다.
+  try {
+    var _q = new URLSearchParams((location.hash || '').replace(/^#/, '') + '&' + (location.search || '').replace(/^\?/, ''));
+    var _ed = _q.get('error_description') || '';
+    if(_ed && _vpIsGuardReject({ message: _ed })){
+      try { localStorage.removeItem('taam_pending_social'); } catch(e){}
+      try { history.replaceState(null, '', location.pathname); } catch(e){}
+      _socialHint(_VP_GUARD_REJECT_TEXT, true);
+      return;
+    }
+  } catch(e){}
   window.sb.auth.getSession().then(function(r){
     var s = r && r.data && r.data.session;
     if(s && s.user){ _finishSocialAuth(s.user); }
@@ -43429,7 +43462,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.14-p';
+var TAAM_WEB_BUILD = '2026.09.14-q';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
