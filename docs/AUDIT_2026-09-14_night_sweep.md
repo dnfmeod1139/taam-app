@@ -24,25 +24,25 @@
 ### 보안 (앱·서버)
 1. ~~슈퍼어드민 Supabase 비밀번호가 `localStorage.taamSaPw` 에 평문~~ → **빌드 `t` 에서 제거.** `superadminSupabaseLogin` 은 세션 유무만 보고, 세션이 없으면 OTP 로그인을 안내한다. 부팅 때 기기의 `taamSaPw` 를 지운다. `_getSaCred` 삭제.
 2. ~~옛 카드 등록 화면이 카드번호·CVC 를 기기에 평문 저장~~ → **빌드 `s` 에서 제거.** 화면·모달·JS 를 지웠고 부팅 때 `excCards` 를 지운다. 결제 수단 진입은 전부 `openCardManagePage()`(토스 빌링키).
-3. `profiles.select('*')` 가 `billing_key` 까지 브라우저로 내린다. 컬럼 권한을 걸려면 **앱의 `select('*')` 를 명시 컬럼으로 먼저** 바꿔야 한다(안 그러면 조회 전체가 403).
+3. `profiles.select('*')` 6곳이 `billing_key` 까지 내린다 — **보류**: 자동갱신(`auto_renew`)이 아직 `profiles.billing_key` 를 쓴다. billing_keys 표로 옮긴 뒤에 컬럼 권한을 건다.
 4. ~~매장·티켓 이름이 innerHTML 에 그대로~~ → **빌드 `u` 에서 12곳 `_raEsc()`** (구매 확인 팝업 · 회원 티켓 목록 · 파트너 티켓 목록·캘린더 · 승인 대기 · 연장 팝업 · 매장 검색/선택 카드 · 티켓 연결 안내 · 일정 매장 선택 · 미반환 예치금 점검 · 감사 화면). 계보도 핀의 이름 첫 글자(`charAt(0)`)만 남김 — 한 글자라 태그가 못 된다.
-5. 월 커버·캐러셀 title/desc (22809, 22816, 23224, 23228, 61446, 22929) · Juso API 주소(28038) 도 이스케이프.
-6. 역할 판정을 앱이 PIN 으로 올린다(`checkSaPin` → `_currentRole='superadmin'`). 화면만 열리고 RLS 가 막긴 하지만, `_taam_uid_role()` 로 서버 값만 쓰게.
-7. `notifications` INSERT 정책이 본인 행 허용 → 회원이 「예치금 부여됨」 같은 알림을 스스로 만들 수 있다. 서버·슈퍼어드민만으로.
-8. `tcalCancelLinkedRow` 등 회원 세션의 `tickets` 직접 update/insert(MAN-) 2곳 → RPC 로.
+5. ~~주소 API 결과~~ → **빌드 `15-a`** 에서 이스케이프. 월 커버·캐러셀 자리는 확인 결과 앱 상수(비용 표)라 위험 없음.
+6. ~~역할 판정을 앱이 PIN 으로 올린다~~ → **빌드 `15-a`**: PIN 통과 뒤 `_taam_uid_role()` 로 서버 역할을 확인, super_admin 이 아니면 열지 않는다.
+7. `notifications` INSERT 본인 허용 — **보류**: 회원이 초대·시간변경 알림을 상대에게 직접 INSERT 하는 동선이 8곳. RPC 로 옮기는 작업이라 별도 세션에서.
+8. `tcalCancelLinkedRow` 등 2곳 — **보류**: 어드민 캘린더 화면(회원 UI 아님)이고 행 트리거·RLS 가 이미 지킨다.
 9. Edge: `Access-Control-Allow-Origin: *` 남은 8개 (toss-billing-issue · partner-account 가 민감) · POST 아닌 메서드 거부 없음 · `req.json()` 미보호 5개(notify-purchase, notify-reservation, send-push, taam-format, lineage-summarize) · Kakao 발송 실패 로그에 수신자 번호(notify-purchase:176, notify-reservation:140) · consume-invite/partner-account 가 원문 error.message 반환. **다음 Edge 재배포 묶음에 같이.**
 10. `GOOGLE_GEOCODE_KEY` 공개 파일 포함 — GCP 콘솔에서 HTTP referrer 제한 확인.
 11. `partner_logos` · `user_ticket_waitlist` · `partner_qr_codes` — 저장소에 정책 없음. 라이브 `pg_policies` 확인.
 
 ### 기능
-12. **카드 승인 재시도 없음**: `_tossConfirmPayment` 가 세션 복원 5초 실패로 나가면 paymentKey/orderId 가 메모리에만 있고 URL 은 이미 지워져 다음 부팅에 재시도 못 함 → localStorage 에 보관하고 부팅 시 재시도.
-13. 전환 실패 시 `currentDepositBalance -= paid` · `depositData.use.push` · 완료 팝업이 이미 실행됨(25509·25682·25886) → 성공 경로 안으로.
-14. 정원 확인 early return 4곳(25443~25497)이 좌석 홀드를 안 풀어 5분간 자기 홀드에 막힌다 → `_tkReleaseSeatHold()`.
-15. 결제 버튼 이중 탭(`confirmReservation`·`#tdPayBtn`) 가드 없음 → in-flight 플래그.
+12. **카드 승인 재시도 없음** — 사용자 지시로 나중에.
+13. ~~전환 실패 시 잔액·완료 팝업 먼저~~ → **빌드 `15-a`**: 전환 프로미스를 먼저 기다리고, 실패면 로컬 잔액 복원 후 종료. 「결제 완료」 문구도 「확정되지 않았습니다·예치금은 빠지지 않았습니다」로.
+14. ~~정원 확인 early return 4곳~~ → **빌드 `15-a`**: 각 return 앞에 `_tkReleaseSeatHold()`.
+15. ~~결제 버튼 이중 탭~~ → **빌드 `15-a`**: `completePurchase` in-flight 가드(`_tdPayBusy`) · `#tdPayBtn` 홀드 확보 중 disabled.
 16. 취소 `confirm()` 이 한국어 고정 → EN/JA 회원이 돈 결정을 한국어로. DOM 모달 + `t()`.
 17. 서버 알림(`taam_visit_reminder_notify` · `taam_guest_expiry_notify` · `taam_notify_repurchase_released` · `taam_expire_invite_holds`) 한국어 단일 → `notifications` 에 `_en/_ja` 컬럼 + 렌더 `pickI18nObj`.
-18. 원장 실패(`_depApplyDelta` throw)가 console.error 로만 → 토스트.
-19. `_tkCapacityAutoRefund` 조회 실패 시 「환불 안 함」으로 기본 → 어드민 통지.
+18. ~~원장 실패 console 만~~ → **빌드 `15-a`**: 회원 토스트 + `ledger_apply_failed` 어드민 통지.
+19. ~~`_tkCapacityAutoRefund` 조회 실패~~ → **빌드 `15-a`**: 조회 실패면 환불 판단을 멈추고 `capacity_refund_unknown` 어드민 통지.
 20. tiershot.js 2건은 로케일 문제(헤드리스 = en-US → TX 가 'M 등급'→'M Tier'). 테스트에서 `_tkCurrentLang='ko'` 고정.
 
 ### 화면
