@@ -43382,7 +43382,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.14-k';
+var TAAM_WEB_BUILD = '2026.09.14-l';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -86551,8 +86551,9 @@ async function taamFormatMemo() {
     var json = await res.json();
     
     if (!json.ok) {
-      var errMsg = json.error || '알 수 없는 에러';
-      var rawHtml = json.raw ? '<details style="margin-top:8px;"><summary style="cursor:pointer;font-size:11px;">raw 응답 보기</summary><pre style="font-size:11px;overflow:auto;background:#f8f5f0;padding:8px;border-radius:6px;white-space:pre-wrap;">' + json.raw + '</pre></details>' : '';
+      // 🔒 2026-09-14 서버·AI 유래 문자열은 전부 이스케이프 — 슈퍼어드민 세션에서 실행되면 안 된다
+      var errMsg = _raEsc(json.error || '알 수 없는 에러');
+      var rawHtml = json.raw ? '<details style="margin-top:8px;"><summary style="cursor:pointer;font-size:11px;">raw 응답 보기</summary><pre style="font-size:11px;overflow:auto;background:#f8f5f0;padding:8px;border-radius:6px;white-space:pre-wrap;">' + _raEsc(json.raw) + '</pre></details>' : '';
       resultArea.innerHTML = '<div style="padding:16px;background:#fff;border:1px solid #f4c1c1;border-radius:10px;color:#a32d2d;font-family:\'Noto Sans KR\',sans-serif;font-size:13px;">⚠ ' + errMsg + rawHtml + '</div>';
       return;
     }
@@ -86560,7 +86561,7 @@ async function taamFormatMemo() {
     _taamLastResult = json.data;
     taamRenderResultCard(json.data, json.google_found);
   } catch (e) {
-    resultArea.innerHTML = '<div style="padding:16px;background:#fff;border:1px solid #f4c1c1;border-radius:10px;color:#a32d2d;font-family:\'Noto Sans KR\',sans-serif;font-size:13px;">⚠ 네트워크 에러: ' + (e.message || e) + '</div>';
+    resultArea.innerHTML = '<div style="padding:16px;background:#fff;border:1px solid #f4c1c1;border-radius:10px;color:#a32d2d;font-family:\'Noto Sans KR\',sans-serif;font-size:13px;">⚠ 네트워크 에러: ' + _raEsc(e.message || e) + '</div>';
   } finally {
     btn.disabled = false;
     btn.textContent = '정형화';
@@ -86579,7 +86580,7 @@ function taamRenderResultCard(d, googleFound) {
   };
   var lp = lpColors[d.local_popularity] || { bg:'#f1efe8', fg:'#444' };
   
-  var ts = d.trust_score || 0;
+  var ts = parseInt(d.trust_score, 10) || 0;   // 🔒 숫자만 — style 속성에 들어간다
   var tsBar = ts >= 80 ? '#1d9e75' : ts >= 40 ? '#ba7517' : '#888';
   
   var bk = d.trust_score_breakdown || {};
@@ -86595,13 +86596,13 @@ function taamRenderResultCard(d, googleFound) {
   function chips(arr, bgC, fgC) {
     if (!Array.isArray(arr) || arr.length === 0) return '<span style="color:#bbb;font-size:11px;">없음</span>';
     return arr.map(function(t){
-      return '<span style="font-size:11px;padding:3px 10px;background:'+bgC+';color:'+fgC+';border-radius:999px;display:inline-block;margin:2px 4px 2px 0;">'+t+'</span>';
+      return '<span style="font-size:11px;padding:3px 10px;background:'+bgC+';color:'+fgC+';border-radius:999px;display:inline-block;margin:2px 4px 2px 0;">'+_raEsc(t)+'</span>';
     }).join('');
   }
   
   var googleLine = '';
   if (googleFound && d.google_rating) {
-    googleLine = '<div style="margin-top:10px;padding-top:10px;border-top:1px dashed #e0dcd4;font-family:\'Noto Sans KR\',sans-serif;font-size:11px;color:#888;">Google ⭐ '+d.google_rating+' · 리뷰 '+(d.google_review_count||0).toLocaleString()+'</div>';
+    googleLine = '<div style="margin-top:10px;padding-top:10px;border-top:1px dashed #e0dcd4;font-family:\'Noto Sans KR\',sans-serif;font-size:11px;color:#888;">Google ⭐ '+_raEsc(d.google_rating)+' · 리뷰 '+(parseInt(d.google_review_count,10)||0).toLocaleString()+'</div>';
   } else if (!googleFound) {
     googleLine = '<div style="margin-top:10px;padding-top:10px;border-top:1px dashed #e0dcd4;font-family:\'Noto Sans KR\',sans-serif;font-size:11px;color:#bbb;">Google 매칭 없음</div>';
   }
@@ -86609,10 +86610,10 @@ function taamRenderResultCard(d, googleFound) {
   var html = '<div style="background:#fff;border:1px solid #e8e4dc;border-radius:14px;padding:16px;">' +
     '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;">' +
       '<div style="flex:1;min-width:0;">' +
-        '<div style="font-family:\'Noto Sans KR\',sans-serif;font-size:16px;font-weight:700;color:#1a1a18;">'+(d.name||'(이름 없음)')+'</div>' +
-        '<div style="font-family:\'Noto Sans KR\',sans-serif;font-size:11px;color:#888;margin-top:2px;">'+(d.city_en||'')+' · '+(d.district||'')+' · '+(d.genre_en||'')+'</div>' +
+        '<div style="font-family:\'Noto Sans KR\',sans-serif;font-size:16px;font-weight:700;color:#1a1a18;">'+_raEsc(d.name||'(이름 없음)')+'</div>' +
+        '<div style="font-family:\'Noto Sans KR\',sans-serif;font-size:11px;color:#888;margin-top:2px;">'+_raEsc(d.city_en||'')+' · '+_raEsc(d.district||'')+' · '+_raEsc(d.genre_en||'')+'</div>' +
       '</div>' +
-      '<span style="font-size:10px;padding:3px 8px;background:'+lp.bg+';color:'+lp.fg+';border-radius:999px;white-space:nowrap;flex-shrink:0;">'+(d.local_popularity||'?')+'</span>' +
+      '<span style="font-size:10px;padding:3px 8px;background:'+lp.bg+';color:'+lp.fg+';border-radius:999px;white-space:nowrap;flex-shrink:0;">'+_raEsc(d.local_popularity||'?')+'</span>' +
     '</div>' +
     '<div style="margin-top:12px;padding-top:12px;border-top:1px solid #f0ece4;">' +
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">' +
@@ -86627,11 +86628,11 @@ function taamRenderResultCard(d, googleFound) {
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px;">' +
       '<div style="background:#f8f5f0;padding:8px 12px;border-radius:8px;">' +
         '<div style="font-family:var(--font-main);font-size:10px;color:#888;letter-spacing:.06em;">PRICE</div>' +
-        '<div style="font-family:\'Noto Sans KR\',sans-serif;font-size:14px;font-weight:700;color:#1a1a18;margin-top:2px;">'+(d.price_tier||'-')+'</div>' +
+        '<div style="font-family:\'Noto Sans KR\',sans-serif;font-size:14px;font-weight:700;color:#1a1a18;margin-top:2px;">'+_raEsc(d.price_tier||'-')+'</div>' +
       '</div>' +
       '<div style="background:#f8f5f0;padding:8px 12px;border-radius:8px;">' +
         '<div style="font-family:var(--font-main);font-size:10px;color:#888;letter-spacing:.06em;">POPULAR</div>' +
-        '<div style="font-family:\'Noto Sans KR\',sans-serif;font-size:14px;font-weight:700;color:#1a1a18;margin-top:2px;">'+(d.popularity_score||0)+' / 10</div>' +
+        '<div style="font-family:\'Noto Sans KR\',sans-serif;font-size:14px;font-weight:700;color:#1a1a18;margin-top:2px;">'+(parseInt(d.popularity_score,10)||0)+' / 10</div>' +
       '</div>' +
     '</div>' +
     '<div style="margin-top:12px;">' +
@@ -86648,7 +86649,7 @@ function taamRenderResultCard(d, googleFound) {
     '</div>' +
     '<div style="margin-top:12px;padding:10px 12px;background:#f8f5f0;border-radius:8px;">' +
       '<div style="font-family:var(--font-main);font-size:10px;color:#888;letter-spacing:.06em;margin-bottom:4px;">CONCIERGE NOTE</div>' +
-      '<div style="font-family:\'Noto Sans KR\',sans-serif;font-size:13px;line-height:1.5;color:#1a1a18;">'+(d.concierge_note||'-')+'</div>' +
+      '<div style="font-family:\'Noto Sans KR\',sans-serif;font-size:13px;line-height:1.5;color:#1a1a18;">'+_raEsc(d.concierge_note||'-')+'</div>' +
     '</div>' +
     googleLine +
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:14px;">' +

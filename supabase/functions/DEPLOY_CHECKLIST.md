@@ -9,6 +9,7 @@
 | notify-visit-reminder | **service_role 호출자만** 받는다 · DB 오류 원문을 응답에 안 싣는다 | ⚠ cron 이 보내는 Authorization 이 **service_role legacy JWT** 여야 한다. anon 키면 403 이 난다 — 다음 실행 뒤 `net._http_response` 에서 200 확인 |
 | notify-guest-expiry | 〃 | 〃 |
 | ⚠ verify-and-save-purchase | **삭제할 것.** 2026-04 대시보드 전용 함수(purchases 표 저장). 09-14 저녁 notify-purchase 코드를 이 함수에 잘못 붙여 배포하면서 옛 소스가 덮였다(복구 불가 · 저장소에 없었음). 앱은 빌드 14-k 부터 부르지 않는다 → 대시보드에서 함수 삭제 | — |
+| taam-format | 소스를 저장소로 회수(`supabase/functions/taam-format/index.ts`). role `super_admin` 도 허용 · 회원당 30회/시간 · 예외 원문 비노출. 앱(14-l)은 응답 문자열을 전부 이스케이프해 그린다 | — |
 | notify-purchase | **자기 구매만**(회원 JWT → uid 대조, service_role 은 통과) · 중복 방지를 「먼저 찍고 조건부」로(동시 호출 N 번 → 1 번) · 오류 원문 비노출. 2차 검증(critic)이 찾음 | — (SQL 없음) |
 
 ---
