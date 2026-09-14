@@ -47,6 +47,39 @@ async function sbGet(path: string): Promise<any[]> {
   return await res.json();
 }
 
+// 🔒 2026-09-14 호출자 확인 — 회원 JWT 로 auth 사용자 id 를 얻는다 (service_role 키면 서버 호출)
+//   09-13 에 형제 함수 notify-reservation 은 「자기 예약만」으로 조였는데 이 함수만 빠져 있었다.
+//   종전엔 anon key 만으로 purchase_id 를 열거해 구매 상태·매장 어드민 수·알림톡 설정 여부를
+//   읽을 수 있었고, 같은 id 를 동시에 여러 번 던지면 매장에 알림이 N 번 갔다.
+async function callerId(req: Request): Promise<{ uid: string | null; service: boolean }> {
+  const h = req.headers.get("Authorization") || "";
+  const t = h.startsWith("Bearer ") ? h.substring(7) : "";
+  if (!t) return { uid: null, service: false };
+  if (SERVICE_KEY && t === SERVICE_KEY) return { uid: null, service: true };
+  try {
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+      headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${t}` },
+    });
+    if (!res.ok) return { uid: null, service: false };
+    const u = await res.json();
+    return { uid: u?.id || null, service: false };
+  } catch (_) { return { uid: null, service: false }; }
+}
+
+// PATCH — 바뀐 행을 돌려받는다 (0 행이면 [])
+async function sbPatchRows(path: string, body: unknown): Promise<{ ok: boolean; rows: any[]; status: number }> {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    method: "PATCH",
+    headers: {
+      apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`,
+      "Content-Type": "application/json", Prefer: "return=representation",
+    },
+    body: JSON.stringify(body),
+  });
+  const rows = res.ok ? await res.json().catch(() => []) : [];
+  return { ok: res.ok, rows: Array.isArray(rows) ? rows : [], status: res.status };
+}
+
 async function sbPatch(path: string, body: unknown): Promise<boolean> {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
     method: "PATCH",
@@ -267,6 +300,13 @@ Deno.serve(async (req) => {
       `tickets?purchase_id=eq.${pid}&select=purchase_id,user_id,restaurant_id,restaurant_name,` +
       `reservation_date,visit_time,party_size,price,status,buyer_name,buyer_phone,extra_data`);
     const tk = tks[0];
+
+    // 🔒 자기 구매만. 회원이 아니면(익명·남의 구매) 존재 여부도 알려주지 않는다 — 응답을 하나로 뭉갠다.
+    const who = await callerId(req);
+    if (!who.service) {
+      if (!who.uid) return json({ error: "forbidden" }, 403);
+      if (!tk || who.uid !== tk.user_id) return json({ ok: true });
+    }
     if (!tk) return json({ ok: true, skip: "구매 없음" });
 
     // 2) 실제로 결제된 건만. 홀드·취소는 아무것도 안 한다.
@@ -274,12 +314,22 @@ Deno.serve(async (req) => {
       return json({ ok: true, skip: `상태 ${tk.status || "없음"}` });
     }
 
-    // 3) 두 번 보내지 않는다. 재시도·새로고침으로 같은 알림이 또 가면
-    //    매장은 예약이 두 건인 줄 안다.
+    // 3) 두 번 보내지 않는다 — 🔒 먼저 찍고 조건부로. 종전엔 「읽고 → 보내고 → 찍기」라
+    //    같은 id 를 동시에 N 개 던지면 전부 통과해 매장에 알림이 N 번 갔다.
+    //    partner_notified_at 이 비어 있을 때만 지금 시각으로 찍는다(0 행이면 남이 먼저 찍은 것).
+    //    아무 데도 못 보냈으면 아래에서 다시 비운다 — 다음 호출이 재시도할 수 있게.
     const ex = tk.extra_data || {};
     if (ex.partner_notified_at) {
-      return json({ ok: true, skip: "이미 보냄", at: ex.partner_notified_at });
+      return json({ ok: true, skip: "이미 보냄" });
     }
+    const claimedAt = new Date().toISOString();
+    const claim = await sbPatchRows(
+      `tickets?purchase_id=eq.${pid}&extra_data->>partner_notified_at=is.null`,
+      { extra_data: { ...ex, partner_notified_at: claimedAt, partner_notify_pending: true } });
+    if (claim.ok && claim.rows.length === 0) {
+      return json({ ok: true, skip: "이미 보냄" });
+    }
+    if (!claim.ok) console.warn("[notify-purchase] 선표시 실패", claim.status);
 
     // 4) 이 매장의 파트너 어드민 (admin_grants — rest_id 또는 venue_id 매칭)
     const rid = encodeURIComponent(String(tk.restaurant_id || ""));
@@ -326,20 +376,20 @@ Deno.serve(async (req) => {
       alt: `[TAAM] ご予約確定 — ${venueName} ${dateJa} ${party}名`,
     });
 
-    // 8) 보낸 표시 — 하나라도 나갔을 때만 남긴다.
-    //    아무 데도 못 갔으면 다음 호출에서 다시 시도할 수 있어야 한다.
+    // 8) 보낸 표시 — 하나라도 나갔으면 확정, 아무 데도 못 갔으면 표시를 비워 다음 호출이 재시도한다.
     const anySent = pushOk > 0 || kakaoResult === "ok" || lineResult === "ok";
-    if (anySent) {
-      await sbPatch(`tickets?purchase_id=eq.${pid}`, {
-        extra_data: { ...ex, partner_notified_at: new Date().toISOString() },
-      });
-    }
+    await sbPatch(`tickets?purchase_id=eq.${pid}`, {
+      extra_data: anySent
+        ? { ...ex, partner_notified_at: claimedAt }
+        : { ...ex, partner_notified_at: null },
+    });
 
     return json({
       ok: true, admins: adminIds.length, push: pushOk,
       kakao: kakaoResult, line: lineResult, marked: anySent,
     });
   } catch (e) {
-    return json({ error: (e as Error).message }, 500);
+    console.error("[notify-purchase] 예외", e);
+    return json({ error: "server error" }, 500);
   }
 });

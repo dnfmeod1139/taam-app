@@ -376,3 +376,128 @@ supabase-js 는 실패해도 throw 하지 않고 {error} 를 돌려준다. creat
 - Google Cloud OAuth 동의화면: Production 게시 여부와 Test users — Testing 상태면 100명 제한으로 소셜 로그인이 특정 사용자에게만 실패
 - Supabase → Auth → JWT expiry(현재 3600s 로 추정): 단일 기기 3겹의 잔여 창. 900s 로 줄일지 결정
 - Vercel Deployments: 라이브 커밋과 main HEAD 일치 여부(하루 100건 한도로 밀린 배포가 없는지) — 보안 수정이 라이브에 안 올라간 상태로 남을 수 있다
+
+## 6. 2차 검증 (2026-09-14 저녁 · 반박자 55건 + 빠진 각도 검토)
+
+1차에서 반박자가 못 돈 9건 + 미검증 low 45건을 다시 돌렸다. 결과: 통과 25 · 반박 30. 전체 JSON `docs/audit5_verify_result.json`.
+
+### 6-1. 통과 (살아남은 발견)
+
+| 심각도 | # | 영역 | 발견 | 오늘 처리 |
+|---|---|---|---|---|
+| high | 0 | storage | restaurant-videos: 로그인만 하면 누구나 업로드·덮어쓰기(UPDATE) 가능 — 남의 매장 영상 교체·무제한 저장소 채우기 | SQL ⑧ restaurant-videos 정책 |
+| high | 3 | auth | 초대제 게이트가 클라이언트 JS 에만 있다 — 누구나 auth.users + profiles 행을 만들고 authenticated JWT 를 얻는다 |  |
+| high | 4 | auth | 등급 가드 우회 — 회원이 profiles.phone/email 을 바꾸면서 같은 UPDATE 로 membership_tier='M' 을 넣을 수 있다 | SQL ⑦ taam_invited_tier |
+| medium | 5 | auth | 탈퇴(deleted_at)를 서버가 어디서도 강제하지 않고, 비밀번호 로그인·세션 복원 경로는 앱에서도 확인하지 않는다 | SQL ③ 탈퇴 잠금 |
+| low | 1 | storage | profiles.is_admin 은 회원이 스스로 켤 수 있고, chef-photos·restaurant-photos 정책이 아직 is_admin 을 보면 전 사진 삭제·교체 권한이 열린다 | SQL ⑤ is_admin 가드·정책 |
+| low | 7 | auth | 회원 여부 오라클 — 로그인 모드 OTP 발송 응답이 「초대되지 않은 번호/이메일」과 「발송했습니다」로 갈린다 |  |
+| low | 9 | edge:partner-account | create 의 중복 검사가 partner_accounts 만 본다 — 같은 이메일이 auth.users 에 먼저 있으면 그 login_id 는 영구히 못 쓴다 |  |
+| low | 14 | edge:kashikiri-confirm | 공개 RPC 두 개(charge_public · order_start)와 Edge 함수에 속도 제한이 없고, order_start 는 anon 이 payer_name 을 길이 제한 없이 덮어쓴다 |  |
+| low | 16 | edge:kashikiri-confirm | 링크 결제는 어느 회원의 예치금·티켓에도 붙지 않고 원장에도 남지 않으며, 결제된 청구의 환불 경로가 없다 |  |
+| low | 20 | edge:taam-sms-hook | 훅 오류 본문(설정 상태·Solapi 거부 사유)이 익명 호출자 화면까지 그대로 올라간다 |  |
+| low | 22 | edge:taam-sms-hook | signInWithOtp(shouldCreateUser:false) 오류로 회원 번호 등록 여부가 열거된다 (GoTrue 고유, 훅 밖) |  |
+| low | 23 | edge:toss-billing-issue | 속도 제한 없음 — 회원 JWT 하나로 토스 발급 API 를 무한정 대리 호출할 수 있다 |  |
+| low | 25 | edge:toss-billing-issue | 복귀 URL 에 요청-응답 대조값(nonce)이 없다 — 제3자가 만든 authKey 를 회원 세션이 그대로 교환한다 |  |
+| low | 26 | edge:toss-billing-issue | 회원이 billing_key 원문을 읽을 수 있다 — RLS select 가 컬럼을 안 가리고 앱은 select('*') |  |
+| low | 32 | edge:notify-guest-expiry | 슈퍼어드민 알림 중복 열쇠에 기간이 없다 — 같은 게스트의 두 번째 만료 주기는 알림이 영영 안 간다 |  |
+| low | 34 | taam-format | 메모 길이·호출 횟수 제한 없음 — 호출 1회 = Google 4요청 + Sonnet 1회, 비용 DoS |  |
+| low | 35 | taam-format | 오류 응답에 모델 원문(raw)·예외 메시지·예외 타입을 그대로 반환 |  |
+| low | 38 | storage | 공개 버킷에 anon SELECT 정책 → 로그인 없이 파일 목록 전체 열거 |  |
+| low | 39 | storage | is_super_admin(uuid) 가 PUBLIC 실행 가능 — 아무 uuid 의 슈퍼어드민 여부를 묻는 오라클 |  |
+| low | 44 | auth | signInWithIdToken 에 nonce 가 없다 — 네이티브 소셜 id_token 재전송 가능 |  |
+| low | 45 | auth | implicit 플로우 + detectSessionInUrl 기본값 — URL 해시로 남의 세션을 심는 로그인 CSRF |  |
+| low | 50 | native | allowNavigation '*.tosspayments.com' 와일드카드 + limitsNavigationsToAppBoundDomains:false |  |
+| low | 51 | native | Google Maps 브라우저 키 하나로 Embed·JS(Places)·Geocoding 웹서비스까지 호출 — 참조자·API 제한이 없으면 누구나 청구를 발생시킨다 |  |
+| low | 53 | native | taam_report_error 익명 버킷이 전역 60건/시간 — 한 사람이 전 세계 익명 오류 수집을 끌 수 있고 p_extra 크기 제한이 없다 |  |
+| low | 55 | native | partner_qr_lookup: 비인증 무제한 INSERT(partner_qr_views) + 코드 열거에 속도제한 없음 |  |
+
+### 6-2. 반박됨 (기존 방어가 막거나 오늘 고쳐짐)
+
+- #2 (storage) 버킷 파일 크기·MIME 제한이 서버(storage.buckets)에 하나도 없다 — 검사는 전부 클라이언트
+  - 사실관계 자체는 맞다 — 버킷을 만드는 SQL 세 곳(sql/photo_calendar.sql:60, sql/splash_media_bucket.sql:9, sql/partner_qr.sql:76)에 file_size_limit·allowed_mime_types 가 없고, 앱 검사(index.html:41076 영상 50MB, 47289 팝업 영상 30MB, 62513 스플래시 20MB, 72833 uploadImageToStorage 의 canvas JPEG 재인코딩)는 직접 API 호출이면 전부 우회된다. 그러나 (1) 같은 감사 결과물로 이미 고쳐져 있다: sql/audit5_hardening_2026-09-14.sql ⑨(371-386행, 커밋 bd0b9a2 10:55 — 이 발견 JSON 10:50
+- #6 (auth) SMS OTP 발송이 인증 없이 아무 번호로 열려 있고, 훅이 국내 번호로 제한하지 않는다 (SMS 펌핑·과금 공격)
+  - 발견의 핵심 주장(「훅이 국내 번호로 제한하지 않는다」)은 저장소 HEAD 기준으로 이미 사실이 아니다.  1. `/home/user/taam-app/supabase/functions/taam-sms-hook/index.ts:167-175` — 커밋 f492c5f(2026-09-14 11:01, PR #521 머지, 워킹트리 변경 없음)에서 국내 번호 게이트가 들어갔다: `domesticOk = /^\+?82(10|11|16|17|18|19)\d{7,8}$/.test(digits) || /^0(10|11|16|17|18|19)\d{7,8}$/.test(digits)` 이고, 통과하지 못하면 `hookErr(400,'국내 휴대폰 번호만 …')` 로 Solapi `fetch`(193줄) 이전에 끊는다. 발견이 
+- #8 (native) server.url 원격 로드 + SRI/CSP 부재: 웹 배포 경로를 쥔 사람이 곧 네이티브 앱(푸시 토큰·소셜 SDK·앱 링크)을 쥔다
+  - 사실관계(capacitor.config.json:5-9 server.url 원격, vercel.json:8 CSP 가 frame-ancestors 뿐, index.html:64/70 cdnjs 스크립트 integrity 없음)는 맞지만 「악용 시나리오」가 이 코드베이스의 결함으로 성립하지 않는다. ① 시나리오 ①의 전제는 GitHub main 쓰기권한·Vercel 계정 탈취다. 그 전제가 서면 같은 회원이 같은 Supabase 세션으로 쓰는 웹 PWA 가 이미 통째로 넘어간 상태라, 네이티브에서 추가로 얻는 것(APNs/FCM 토큰 — 이미 push_subscriptions 에 서버 저장, SocialLogin idToken — 어차피 Supabase 세션이 손에 있음)은 한계적이다. 스토어 심사도 JS 유
+- #10 (edge:partner-account) rest_id·label 을 검증하지 않는다 — 존재하지 않는 매장에 권한이 붙고 has_grant 는 true 로 보인다
+  - 보안 발견으로는 성립하지 않는다 — 도달 조건 자체가 「이미 그 표를 마음대로 쓸 수 있는 사람」이다.  ① 호출자 게이트: supabase/functions/partner-account/index.ts 63-71 — JWT 를 admin.auth.getUser 로 서버가 검증하고 `is_super_admin(uid)` 가 true 가 아니면 403. 발견 본문도 「슈퍼어드민만 부를 수 있어 권한 상승은 아니다」라고 인정한다. ② 슈퍼어드민은 이 함수 없이도 같은 결과를 직접 만들 수 있다: sql/admin_grants.sql 88-91 `ag write` 정책(for all, is_super_admin) · sql/partner_accounts.sql 47-49 `pa_super_all` — PostgR
+- #11 (edge:partner-account) reset 이 해지된 계정의 disabled 를 조용히 false 로 되돌린다 — 권한은 없는데 장부는 「사용 중」
+  - 이미 고쳐진 발견이다. 발견이 인용한 `update({ disabled: false })` 는 옛 커밋 367d346 의 reset 블록(161-162행)이고, 현재 저장소(커밋 f492c5f, 2026-09-14 「partner-account(taam_kill_sessions 로 세션 폐기·revoke 는 ban·단계별 오류)」)의 /home/user/taam-app/supabase/functions/partner-account/index.ts 149-168행 reset 은 비밀번호 갱신 + `taam_kill_sessions` RPC 만 하고 `partner_accounts.disabled` 를 건드리는 줄이 없다. 162행 주석에 「해지(disabled) 상태는 건드리지 않는다 — 비밀번호 재설정은 해
+- #12 (edge:partner-account) user_metadata 에 권한성 값(taam_partner·rest_id)을 둔다 — 사용자가 스스로 고칠 수 있는 칸
+  - 발견 자체가 「지금은 악용 경로가 없다」고 인정하는 가상의 위험이고, 실제로도 권한 판정이 user_metadata 를 한 번도 보지 않는다. 근거: (1) `supabase/functions/partner-account/index.ts:100` 이 `user_metadata: { taam_partner, rest_id, label }` 을 넣지만, 같은 함수 114~136줄 주석·코드대로 권한은 `admin_grants` INSERT(133줄)와 `profiles.role='user'`(119줄)로만 만들어진다. (2) `index.html` 에서 `user_metadata` 를 읽는 자리는 18893·20820·21671·21714줄뿐이며 모두 `display_name`/`name` 표시용이다. `taa
+- #13 (edge:partner-account) 인증 전 비용·속도 제한 없음 — URL 만 알면 getUser 왕복을 무제한으로 시킬 수 있다
+  - 발견의 핵심 전제 「임의 Bearer 로 getUser 왕복을 무제한으로 시킨다」는 다른 층에서 막힌다. (1) 게이트웨이 Verify JWT — supabase/config.toml 은 taam-sms-hook 만 verify_jwt=false 로 두고 나머지(partner-account 포함)는 켜진 채라고 명시한다(config.toml:7-20). 켜져 있으면 프로젝트 서명이 아닌 임의 토큰은 함수 코드가 돌기 전에 401 로 끊겨 getUser 도 Edge 실행 시간도 발생하지 않는다. 앱도 실제 회원 access_token 을 실어 부른다(index.html:33107-33114 _paCall). 남는 길은 anon key(유효 JWT)를 Bearer 로 넣는 것뿐인데, 그 경우 getUser(an
+- #15 (edge:kashikiri-confirm) taam_kashikiri_charge_public · order_start · send 가 저장소에 각 2~3판 공존 — 마지막에 실행한 파일이 라이브 정의를 정한다
+  - 발견 자체가 「직접 악용은 없다」「라이브에 어느 판이 올라가 있는지 미확인」이라고 적고 있고, 어긋난 조합이 실제로 생겨도 돈이 새는 길은 다른 층이 막는다.  ① 금액·통화의 최종 권위는 Edge 다. supabase/functions/kashikiri-confirm/index.ts:72-76 은 `kashikiri_charges` 의 `pay_currency`/`pay_amount` 를 DB 에서 직접 읽고, :99-104 에서 브라우저 주장 금액을 DB 값과 대조해 어긋나면 `amount_mismatch` 로 거절, :113-121 은 토스 승인을 DB 값(`expected`)으로 부르며, :141-149 는 토스가 실제 승인한 금액을 다시 DB 값과 대조한다(센트 단위). 따라서 charge_publ
+- #17 (edge:kashikiri-confirm) 외화 청구인데 TOSS_SECRET_KEY_<통화> 가 없으면 조용히 원화 시크릿으로 폴백하고, 토스 응답의 currency 를 대조하지 않는다
+  - 코드 자체는 발견대로다 — /home/user/taam-app/supabase/functions/kashikiri-confirm/index.ts:109-111 이 외화 시크릿 부재 시 TOSS_SECRET_KEY 로 폴백하고, 141-148 은 totalAmount 만 대조하며, 199-202 는 e.message 를 그대로 돌려준다. 그러나 다른 층이 막고 있어 실질 악용이 성립하지 않는다. ① 폴백 분기는 라이브에서 죽은 코드다: Supabase Edge 시크릿은 프로젝트 전역이고, 같은 시크릿을 toss-order(index.ts:67-68 — 없으면 외화 주문 자체를 거부)·toss-confirm(126-133 — server_not_configured) 이 이미 필수로 요구한다. 해외 MID(pla
+- #18 (edge:kashikiri-confirm) 링크 토큰이 URL 쿼리(?t=)로 다니는데 pay 페이지에 Referrer-Policy 가 없다
+  - 전제가 틀렸다. pay 페이지에 `<meta name="referrer">` 가 없는 것은 맞지만(grep 0건), Referrer-Policy 는 HTTP 응답 헤더로 이미 걸려 있다. `/home/user/taam-app/vercel.json:3-7` — `"source": "/(.*)"` 에 `{ "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" }`. 이 source 패턴은 `/pay/`(및 `/pay/index.html`)에도 적용되고, `pay/` 는 같은 Vercel 프로젝트(taam-app.vercel.app)에서 서빙된다(커밋 72c1281 「보안 헤더」에 포함, 작업 트리 변경 없음). strict-origin-whe
+- #19 (edge:taam-sms-hook) webhook-id 재사용 차단 없음 — 5분 창 안 재전송·GoTrue 재시도에 문자가 중복 발송된다
+  - 코드 사실 자체는 맞다 — /home/user/taam-app/supabase/functions/taam-sms-hook/index.ts 111줄에서 webhook-id 를 읽기만 하고 120-128줄은 ±300초 창 + HMAC 서명만 검사하며, 어디에도 id 를 저장·비교하지 않는다(sql/·supabase/ 전체 grep 에 sms_hook_seen 류 없음, config.toml 19-20줄 verify_jwt=false 라 게이트웨이도 안 막음). 그러나 발견이 주장한 두 피해 경로가 모두 실질적으로 성립하지 않는다. ① 재전송: 서명된 요청 원본은 GoTrue→Edge 구간(Supabase 내부, TLS) 안에만 존재한다. 이것을 손에 넣은 자는 사실상 SEND_SMS_HOOK_SECRET 을 가
+- #21 (edge:taam-sms-hook) 성공 로그에 수신번호 앞 7자리가 남는다 (마스킹이 뒤 4자리뿐)
+  - 이미 고쳐졌다. 발견의 증거 `toDomestic(phone).replace(/\d{4}$/, '****')` 는 옛 코드이고, 현재 HEAD(브랜치 claude/optimistic-bohr-gCBZ7, 커밋 f492c5f 「미감사 영역 점검 후속 — Edge 4개」, HEAD 의 조상임을 `git merge-base --is-ancestor` 로 확인)의 /home/user/taam-app/supabase/functions/taam-sms-hook/index.ts:238-239 는 `toDomestic(phone).replace(/\d(?=\d{4})/g, '*')` 로 바뀌어 있다. 실행해 보면 01012345678 → `*******5678`, 821012345678 → `********5678` 이라
+- #24 (edge:toss-billing-issue) 재등록(restore) 경로가 기존 행의 소유자를 확인하지 않고 user_id 를 호출자로 덮어쓴다 · update 오류도 안 본다
+  - 발견의 핵심(다른 회원의 빌링키 행을 호출자 소유로 넘긴다)은 이미 앞 층에서 막힌다. ① supabase/functions/toss-billing-issue/index.ts:78 `customerKey !== user.id → 403 customer_mismatch` — 토스 빌링키는 발급 시 customerKey 에 묶이고, 청구(POST /v1/billing/{billingKey})도 같은 customerKey 를 요구한다(toss-billing-charge/index.ts:133 `customerKey: card.customer_key || user.id`). 따라서 회원 B 가 자기 uid 를 customerKey 로 교환한 authKey 에서 A 의 customerKey 로 발급된 빌링키가 돌아올
+- #27 (edge:toss-billing-issue) 발급 성공 뒤 저장 실패면 토스에 빌링키가 고아로 남고, DB 오류 원문이 클라이언트로 나간다
+  - 두 주장 모두 실질 피해 경로가 없다. ① 「토스에 고아 빌링키」: 청구는 `supabase/functions/toss-billing-charge/index.ts:106-124` 가 `billing_keys` 의 `deleted_at is null` 행만 읽어 `card.billing_key` 로 승인한다 — DB 에 없는 키는 우리 시스템 어디서도 청구에 쓰이지 않고, 토스 쪽 승인은 `TOSS_BILLING_SECRET_KEY` 가 있어야만 된다(index.ts:84-88). 게다가 `customerKey !== user.id` 를 403 으로 막으므로(toss-billing-issue/index.ts:78-81) 고아 키는 반드시 호출자 본인의 customerKey 에만 붙는다. 그리고 이 상태는 새 
+- #28 (edge:toss-billing-issue) isFirst 판정과 setDefault 가 트랜잭션 밖 — 동시 등록·중복 복귀 시 기본카드가 어긋나고 응답만 성공
+  - 발견이 말하는 실제 피해(「화면은 기본카드, DB 는 아님 → 다른 카드로 청구」)는 성립하지 않는다. (1) 앱은 toss-billing-issue 응답의 isDefault 를 읽지 않는다 — index.html 8158-8163 은 d.ok 이면 곧바로 _taamLoadDefaultCard() 와 loadMyCards() 로 DB 를 다시 읽어 그린다(grep 결과 index.html 에 응답 isDefault 를 쓰는 곳이 없음). 따라서 화면의 「기본카드」 표시는 언제나 DB 의 is_default 와 같다. (2) toss-billing-charge/index.ts 105-113 은 회원이 카드를 고르는 입력이 없고 DB 의 is_default desc, created_at desc limit 1 
+- #29 (edge:notify-visit-reminder) 인앱 알림은 notif_prefs.all=false 를 무시한다 — 「전체 알림 끔」 회원에게도 종 알림이 쌓인다
+  - 앱 UI 에서 「전체 알림」 마스터를 끄면 개별 remind 키도 같이 꺼진다. index.html:86451-86455 `nsToggleAll(master)` 는 `.ns-item` 전부(ns-remind7/3/1 포함, HTML 10564 부근)를 `checked=on` 으로 맞춘 뒤 `collectNotifPrefsFromUI()` 로 `profiles.notif_prefs` 에 `{all:false, remind7:false, remind3:false, remind1:false, …}` 를 저장한다(86428-86438, 86400-86414). 따라서 sql/visit_reminder.sql:96-102 의 want CTE 가 보는 `(p.notif_prefs ->> 'remind'||d)::boo
+- #30 (edge:notify-visit-reminder) DB 오류 메시지를 호출자에게 그대로 반환한다
+  - 이미 고쳐진 발견이다. 커밋 f492c5f(2026-09-14 11:01, "notify-visit-reminder/guest-expiry(service_role 만·오류 원문 비노출)")가 현재 main 의 /home/user/taam-app/supabase/functions/notify-visit-reminder/index.ts 를 두 겹으로 막았다. ① 103행 `if (!isServiceCaller(req, svc)) return json({ ok:false, error:'forbidden' }, 403)` — 85~95행 isServiceCaller 가 Authorization 이 service_role 키와 같거나 JWT role 클레임이 service_role 일 때만 통과시키므로, 발견이 전제
+- #31 (edge:notify-guest-expiry) 동시 호출 시 같은 알림·푸시가 두 번 나간다 — not exists 만 있고 잠금·유니크 키가 없다
+  - 기술적 사실(잠금·유니크 없음)은 맞다 — sql/guest_expiry_notice.sql:62-67·95-100 의 `not exists` 는 READ COMMITTED 에서 동시 트랜잭션을 못 막고, notifications 에는 notifications.sql:42 의 비유니크 인덱스뿐이며 `pg_advisory_xact_lock` 은 sql/ticket_capacity_guard.sql:101 에만 있다. 그러나 발견이 전제한 공격 경로는 이미 다른 층에서 막혀 있다. ① Edge: supabase/functions/notify-guest-expiry/index.ts:37-59 `isServiceCaller` — Authorization 이 service_role 키이거나 role=service_r
+- #33 (edge:notify-guest-expiry) DB 오류 문자열을 인증 없는 호출자에게 그대로 돌려준다
+  - 발견이 짚은 코드는 이미 저장소에서 고쳐져 있다. 커밋 f492c5f (2026-09-14 11:01, 「notify-visit-reminder/guest-expiry(service_role 만·오류 원문 비노출)」)로 /home/user/taam-app/supabase/functions/notify-guest-expiry/index.ts 가 바뀌어, 현재 파일에는 (1) 41~51행 `isServiceCaller()` + 59행 `if (!isServiceCaller(req, svc)) return json({ ok:false, error:'forbidden' }, 403);` — service_role 토큰(시크릿 값 일치 또는 JWT role 클레임 service_role)이 아니면 RPC 를 부르기도
+- #36 (taam-format) 저장 값이 서버 재계산 없이 클라이언트 전역에서 온다 + 저장 버튼 이중 클릭 시 중복 행
+  - 보안 발견으로서는 이미 막혀 있다. (1) `restaurants` INSERT 는 라이브 실측 정책(sql/curation_tables_rls.sql:8) 상 `restaurants_superadmin_all[ALL] is_superadmin()` 뿐이라 일반 회원·매장 어드민은 `taamSaveResult`(index.html:86748-86798) 의 insert 를 호출해도 RLS 에 거부된다. sql/restaurants_admin_update.sql 의 파트너 UPDATE 정책은 「선택 실행」이며 09-14 실측 목록에 없고, 어차피 INSERT 가 아니다. (2) 발견의 exploit 은 「슈퍼어드민 세션 탈취」를 전제로 하는데, 슈퍼어드민은 `_taamLastResult` 를 건드릴 필요 없이
+- #37 (taam-format) 메모·Google 데이터 → 모델 → restaurants → 회원 컨시어지 프롬프트로 이어지는 저장형 프롬프트 주입 경로
+  - 발견이 그린 경로(공격자 Google 리스팅 → taam-format → restaurants.concierge_note → 회원 챗)는 각 단계에 이미 막는 것이 있거나 전제가 틀렸다. ① 공격자 통제 표면이 거의 없다: 옛 소스(git 07c44f2 api/taam-format.js) 의 Google details 요청은 `fields=place_id,name,formatted_address,geometry,rating,user_ratings_total,types,price_level,website` 뿐이다 — 「리스팅 설명」(editorial_summary)·리뷰는 아예 가져오지 않는다. rating/review_count/price_level/types 는 Google 이 정하는 숫자·enum, fo
+- #40 (storage) is_superadmin() 은 splash-media 등 여러 정책이 쓰는데 정의가 저장소에 없다 — 세 헬퍼의 동치 여부 미확인
+  - 발견 자체가 「정의를 못 봤다 → 옛 기준일지도」라는 추측(evidence 에 '추측 단계' 라고 적혀 있다)이고, 저장소 안 기록과 이미 깔린 가드가 그 추측을 양쪽에서 닫는다.  ① is_superadmin() 이 profiles.role 을 본다는 직접 기록이 있다. sql/guard_profile_role.sql:5-13 (2026-08-30, "2026-08-30 확인"): "profiles_update_own : (auth.uid()=id) OR is_superadmin() … `update profiles set role='super_admin'` … 그 뒤로는 is_superadmin() 이 참이 되어 전 회원 명부·예치금·티켓이 전부 열린다". docs/AUDIT_2026-08-30.md:3
+- #41 (storage) splash-media·partner-logos 에 UPDATE 정책이 없는데 앱은 upsert:true 로 올린다
+  - 발견의 절반은 사실과 다르고, 나머지 절반은 지금 막혀 있다. ① partner-logos 는 upsert:true 로 올리지 않는다 — index.html:62440 이 uploadImageToStorage(files[i],'partner-logos') 를 부르고, 그 함수(index.html:72819~)는 `timestamp + '_' + randomStr + '.jpg'` 이름에 `upsert:false` 다. 즉 발견이 제안한 「uploadImageToStorage 와 같은 형식」이 이미 적용돼 있다. ② splash-media 두 곳(index.html:47292 · 62523~62525)만 upsert:true 인데, storage 정책은 sql/splash_media_bucket.sql:20-
+- #42 (storage) 파트너 「나의 레스토랑」 사진은 Storage 를 거치지 않고 base64 로 restaurants 에 저장된다
+  - 발견이 지목한 행위자·경로가 틀렸다. (1) 파트너의 「나의 레스토랑」 화면은 `partnerRestScreen`(index.html:11258) → `renderPartnerRest`/`prsPhotoPick`/`prsSave`(59979~60180)이고, 이 경로는 `restaurants` 를 건드리지 않는다 — 사진은 `venue_partners.request_photo` 에 base64 로 upsert 하며 이는 `sql/reservation_simple_settings.sql:6` 에 「base64, 등록 사진과 별개」로 설계된 것이다. (2) 증거로 든 rp* 크롭 경로(`rpCropConfirm` 41322~41362 → `_pendingRest` 42091~42098 → `saveRestaur
+- #46 (auth) invite_codes 클라이언트 폴백 조회의 .or() 문자열에 이메일·번호가 그대로 들어간다 (PostgREST 필터 인젝션 + 초대자 정보 열거)
+  - 「PostgREST 필터 인젝션」은 여기서 권한 상승이 아니다. `.or()` 문자열은 원래 클라이언트가 전부 만드는 것이라, 회원은 앱을 거치지 않고도 자기 JWT 로 `/rest/v1/invite_codes?or=(…)` 에 아무 필터나 보낼 수 있다. 어떤 행이 돌아오는지는 오직 invite_codes 의 SELECT RLS 가 정하지, 앱이 문자열을 어떻게 이어붙이느냐와 무관하다. 그래서 발견이 말하는 두 결과 모두 다른 층에서 이미 막혀 있다. ① 등급: `_backfillProfileFromInvite` 가 쓰려는 `membership_tier` 는 `trg_taam_guard_membership_tier`(sql/guard_membership_tier.sql:103-164) 가 `taam_inv
+- #47 (auth) OTP 로그인 시 슈퍼어드민이 클라이언트에서 profiles.upsert(role='super_admin') 를 시도한다
+  - 발견 자체가 「가드에 막힌다」를 인정하는 코드 위생 항목이고, 실제로 서버가 두 겹으로 막는다. ① `index.html:19420-19428` 의 `profiles.upsert({id, role:'super_admin', display_name:'Super Admin'})` 는 기존 행이면 UPDATE 인데, `sql/guard_profile_role.sql:71-104` 의 `trg_taam_guard_profile_role`(BEFORE UPDATE, SECURITY INVOKER) 이 `current_user in ('authenticated','anon')` 이고 요청자가 `_taam_uid_is_super()` 가 아니면 `new.role := old.role` 로 되돌린다. ② 행이 없으면 IN
+- #48 (native) 네이티브 푸시 탭 시 data.url 을 검증 없이 location.href 에 대입 — sw.js 는 9/13 에 고쳤는데 네이티브 경로는 그대로
+  - 발견 자체가 인정하듯 이미 다른 층이 막고 있고, 우회 전제가 「서버 키 유출」뿐이라 현재 공격 경로가 없다. (1) supabase/functions/send-push/index.ts:589-604 — `if (!isServiceCall)` 블록(532행부터) 안에서 payload.url 을 정리한다: `^\/(?!\/)` 상대경로만 통과, 절대 URL 은 https + 허용 호스트(taam-app.vercel.app·playtaam.com 계열)일 때만 pathname+search+hash 로 바꾸고 그 외는 '/' 로 강제. 회원·어드민 JWT 로 오는 모든 호출은 여기서 걸러져 기기에는 상대경로만 도착한다. javascript:·https://evil 은 `new URL` 파싱 후 protocol/h
+- #49 (native) Android 매니페스트 allowBackup 을 끄지 않음 — WebView localStorage 의 refresh token 이 기기 백업에 실린다
+  - 사실관계 자체는 대체로 맞다: codemagic.yaml 429행 `[ -d android ] || $CAP add android` 로 매번 템플릿에서 생성되고, 488~531행 「AndroidManifest 권한 주입」 스텝은 위치·카메라 권한 추가와 AD_ID 제거만 하며 allowBackup 은 건드리지 않는다(저장소 전체 grep 에서 allowBackup/dataExtractionRules 는 감사 문서 docs/AUDIT_2026-09-14_unaudited5.md 외에 없음). index.html 182행 `supabase.createClient(SUPABASE_URL, SUPABASE_KEY)` 는 storage 옵션 없이 기본(localStorage)이라 세션이 WebView Local St
+- #52 (native) vercel.json 보안 헤더가 얇다 — CSP 는 frame-ancestors 만, HSTS preload 없음
+  - 헤더 내용 자체(/home/user/taam-app/vercel.json:6-10 — CSP 는 `frame-ancestors 'self'` 뿐, HSTS 에 preload 없음, X-Frame-Options 없음)는 발견이 옮긴 그대로다. 그러나 발견이 든 세 가지 악용 근거는 각각 다른 층에서 막혀 있거나 이 구조에서 성립하지 않는다. ① HSTS preload: 서비스 도메인이 `taam-app.vercel.app` 이고(capacitor.config.json:6, vercel.json), 상위 `vercel.app` 은 Chromium HSTS preload 정적 목록에 include_subdomains 로 이미 실려 있어 앱이 따로 preload 지시어를 달거나 hstspreload.org 에 등록
+- #54 (native) 코드사인 스텝이 복호화한 개인키의 첫 줄을 build artifact(signing-debug.txt)에 남긴다
+  - 사실관계는 맞다 — /home/user/taam-app/codemagic.yaml:285-286 에서 `openssl base64 -d -A` 로 복호화한 $KEYPEM 의 `head -1` 을 `tee "$DBG"` 로 signing-debug.txt 와 빌드 로그(stdout)에 찍고, 358행 artifacts 에 signing-debug.txt 가 들어 있다. 그러나 실제로 새는 내용은 키 재료가 아니다. (1) 283행 주석대로 변수는 「PEM 파일을 base64(단일행)로 인코딩」한 값이고, 디코드 결과는 줄바꿈이 살아 있는 PEM 이므로 첫 줄은 `-----BEGIN (RSA) PRIVATE KEY-----` 헤더뿐이다. (2) 바로 다음 줄(288-291행)의 `app-store-connect
+
+### 6-3. 빠진 각도 검토(critic)가 새로 찾은 것
+
+- **[medium] notify-purchase 가 호출자를 전혀 확인하지 않는다 — 09-13 에 형제 함수 notify-reservation 은 '자기 예약만' 으로 조였는데 이 함수만 빠졌다** — `index.ts:261`
+  - 고침: ① notify-reservation 과 같은 callerId() 를 붙인다: service key 가 아니면 `who.uid === tk.user_id` 일 때만 진행, 아니면 403. ② 중복 방지를 '먼저 찍고 조건부' 로 바꾼다 — notify-reservation:258-262 처럼 `PATCH tickets?purchase_id=eq.X&extra_data->>partner_notified_at=is.null` 로 먼저 표시하고 갱신 행이 0이면 skip (extra_data 안이라 jsonb 조건이 어려우면 `partner_notified_at timestamptz` 컬럼을 tickets 에 추가). ③ 오류 응답을 '구매 없음/상태 X/이미 보냄' 대신 단일 `{ok:true}` 로 뭉갠다. 
+- **[medium] verify-and-save-purchase — 저장소에 소스가 없는 Edge Function 을 결제 확정마다 JWT 와 클라이언트 금액으로 부른다; taam-format 과 같은 '미확인' 인데 문서가 이름조차 올리지 않았다** — `index.html:25652`
+  - 고침: 대시보드 Edge Functions 목록에서 verify-and-save-purchase 존재 여부 확인. 있으면 소스를 저장소로 가져와 감사(taam-format 과 같은 절차) 하거나 삭제; 없으면 index.html:25596-25680 블록을 제거한다(완료 처리는 이미 taam_purchase_confirm_deposit / toss-confirm 이 한다). 어느 쪽이든 문서 taam-format 절에 '저장소에 없는 함수 2개' 로 함께 올린다.
+- **[low] Edge Function 오류 응답이 예외 원문을 그대로 돌려준다 — 12곳 (문서는 sms-hook·kashikiri 만 지적)** — `index.ts:131`
+  - 고침: catch 에서는 `console.error` 로만 원문을 남기고 응답은 `{ok:false, error:'server error'}` 고정. toss-* 의 `detail` 은 사용자 안내에 필요한 코드(deposit_short 등)만 화이트리스트로 돌려준다.
+- **[low] 모든 Edge Function 이 Access-Control-Allow-Origin: * — 문서는 taam-format 한 곳에서만 언급** — `cors.ts:3`
+  - 고침: 허용 오리진을 `https://taam-app.vercel.app`, `https://playtaam.com`, `capacitor://localhost`, `https://localhost` 로 제한하고 Origin 헤더를 대조해 Vary: Origin 으로 돌려준다. 서버-서버 호출(send-push 내부 호출·cron)은 Origin 이 없으므로 영향 없다.
+- **[low] line-webhook 이 config.toml 과 대시보드 체크리스트 양쪽에서 빠졌다 — Verify JWT 가 켜지면 LINE 연동이 조용히 죽고, 문서는 '예외는 taam-sms-hook 뿐' 이라고 잘못 적었다** — `config.toml:19`
+  - 고침: config.toml 에 `[functions.line-webhook] verify_jwt = false`, `[functions.kashikiri-confirm] verify_jwt = false` 를 사유 주석과 함께 추가. 문서 대시보드 항목을 'OFF 허용 목록 = taam-sms-hook, line-webhook, kashikiri-confirm, verify-invite, consume-invite; 그 외 전부 ON' 으로 고친다. line-webhook 의 LINE_CHANNEL_SECRET 존재 여부도 같은 항목에.
+- **[low] taam_report_error 는 anon 에게 열려 있고 익명 전체가 60건/시간 단일 버킷 — 외부인이 버킷을 비워 진짜 부팅 오류 신고를 막는다** — `app_errors.sql:74`
+  - 고침: 익명 호출은 `taam_rate_hit('apperr:'||coalesce(ip,''),20,3600)` 같은 IP 키로 세고, `p_extra` 는 `left(p_extra::text, 4000)::jsonb` 로 자른다. 로그인 전 신고가 정말 필요한지 재검토 — 아니면 authenticated 만.
+
+### 6-4. critic 이 추가한 대시보드 확인 항목
+
+- Edge Functions 목록에 `verify-and-save-purchase` 가 존재하는가 — 있으면 소스 열어 tickets INSERT·PortOne 검증 로직 확인 후 저장소로 회수 또는 삭제; 없으면 index.html:25596-25680 제거
+- Edge Functions → notify-purchase: 배포된 소스가 저장소 index.ts(345줄)와 같은지, Verify JWT 상태, Logs 에서 앱 외 User-Agent 호출·같은 purchase_id 연속 호출 흔적
+- Edge Functions → Verify JWT 상태를 19개 함수 전부 한 표로: OFF 허용 = taam-sms-hook, line-webhook, kashikiri-confirm, verify-invite, consume-invite; 나머지 ON
+- Edge Functions → line-webhook → Secrets 에 LINE_CHANNEL_SECRET 존재 여부 (09-13 판은 없으면 전부 거부) + LINE 콘솔 Webhook 'Verify' 가 200 인지
+- Realtime → Settings: postgres_changes 가 RLS 를 적용하는지(private channels / 'Enable RLS on Realtime') — realtime_live_sync.sql 이 profiles·tickets 를 발행 목록에 넣었으므로, RLS 미적용이면 구독만으로 전 회원 profiles 변경 행이 흘러나온다
+- SQL Editor: `select proname from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and has_function_privilege('anon', p.oid, 'execute') order by 1;` — anon 실행 가능 RPC 전수 목록을 떠서 저장소의 의도 목록(partner_agree, partner_agreement_get, taam_report_error, taam_mship_apply, taam_corp_inquire, verify/consume 계열, kashikiri order_start/charge_public)과 대조. 목록 밖 함수가 있으면 default privileges 누수
+- SQL Editor: `select jobname, schedule, active, left(command,120) from cron.job order by 1;` — 저장소 SQL 잡 3개(taam-expire-invite-holds, seat_hold, repurchase_release)와 대시보드 notify 잡 2개 외에 남은 잡·중복 잡이 있는지
+- Storage → Policies: `select policyname, cmd, roles from pg_policies where schemaname='storage'` 로 'for select to public/anon' 인 버킷(splash-media, partner-logos, taam-photos, chef-photos, restaurant-photos, carousel-photos, restaurant-videos) 목록 조회(list)가 anon 에게 열려 있는지 — 파일명 열거 허용 여부를 의도로 기록
+- Supabase → Logs → Edge Functions: 로그 보존 기간과 조회 권한(팀원 범위). toss-billing-issue:79 uid, kashikiri-confirm:84 토큰 앞 8자, sms-hook 마스킹 번호가 남는다
+- Vercel → Project → Environment: 프리뷰 배포 도메인(*.vercel.app) 접근 보호 여부 — CORS 가 * 라 프리뷰 오리진에서도 Edge Function 을 부를 수 있다
