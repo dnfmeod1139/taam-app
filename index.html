@@ -20352,8 +20352,9 @@ function openMain(){
     //   타임아웃이 없어서, 하나라도 매달리면(기업망·로밍·TCP stall) 화면이 영영 안 떴다.
     //   6초가 지나면 그때까지 온 것(+IDB 폴백)으로 먼저 그리고, 나머지는 뒤에서 끝나는
     //   대로 다시 그린다. 정상 회선에서는 6초 전에 끝나므로 아무것도 달라지지 않는다.
-    var _bootCapped = false;
+    var _bootCapped = false, _bootSettled = false;
     var _cap = new Promise(function(res){ setTimeout(function(){ _bootCapped = true; res(); }, 6000); });
+    _allLoads.then(function(){ _bootSettled = true; }, function(){ _bootSettled = true; });
     _allLoads.then(function(){
       if (!_bootCapped) return;
       console.warn('[boot] 늦게 끝난 로드 — 화면 다시 그림');
@@ -20364,6 +20365,9 @@ function openMain(){
       try { if (typeof _liveRepaintBalance === 'function') _liveRepaintBalance(); } catch(_r5){}
     }).catch(function(){});
     return Promise.race([_allLoads, _cap.then(function(){
+      // 🔧 2026-09-14: 타이머는 race 에서 졌어도 6초에 반드시 돈다. 로드가 이미 끝났으면 여기서 멈춘다 —
+      //   종전엔 이 검사가 없어 0.3초에 끝난 부팅도 매번 「6초 초과」로 신고됐다 (하루 22건 전부 헛신고).
+      if (_bootSettled) return;
       console.warn('[boot] 6초 안에 로드가 안 끝남 — 지금까지 온 것으로 먼저 그린다');
       try {
         if (typeof window.taamReportError === 'function') {
@@ -43407,7 +43411,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.14-m';
+var TAAM_WEB_BUILD = '2026.09.14-n';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
