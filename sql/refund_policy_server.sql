@@ -9,10 +9,14 @@
 --
 -- 무엇: 회원(슈퍼어드민·service_role 이 아닌 호출)의 ticket_refund 양수 원장에
 --       taam_refund_cap(회원, purchase_id) 를 한 번 더 씌운다.
---         · 티켓 생성 30분 이내         → 낸 돈 전액
---         · 방문일 D-31 이상(KST 날짜차) → 낸 돈 − 대행비×인원
---         · 방문일 모름                  → 낸 돈 − 대행비×인원 (앱과 같은 보수 처리)
+--         · 결제 완료 30분 이내          → 낸 돈 전액 (대행비 포함)
+--         · 방문일 D-31 이상(KST 날짜차) → 식사비 + 주류 필수 (= 총액 − 대행비×인원)
+--         · 방문일 모름                  → 식사비 + 주류 필수 (앱과 같은 보수 처리)
 --         · D-30 이하                    → 0
+--       ⚠ 30분의 기준은 「결제가 된 시각」(원장의 ticket_purchase 행 시각)이다. 좌석 홀드 시각이 아니다.
+--       ⚠ 대행비는 「결제 총액(tickets.price = 예치금 + 카드)」에서 뺀다. 예치금 부분에서 빼면
+--         카드+예치금 혼합 결제의 정당한 예치금 환원(앱: min(환불가능액, 예치금 사용분))이 거부된다.
+--       경계일(31)은 c_min_days 한 곳에만 있다. 규정이 바뀌면 그 숫자만 바꾼다.
 --       tickets 행이 없으면(옛 구매) 종전 한도(낸 돈 − 이미 환불)만 적용 — 정당한 옛 환불을 막지 않는다.
 --       슈퍼어드민 예외 환불은 v_super 라 이 한도를 타지 않는다 (종전과 같다).
 --
@@ -40,15 +44,18 @@ returns bigint
 language plpgsql stable security definer set search_path = public
 as $$
 declare
-  v_paid   bigint := 0;
+  c_min_days constant int := 31;   -- 이 날짜 차 이상이면 대행비 제외 환불. 미만이면 0
+  v_paid   bigint := 0;            -- 예치금으로 낸 돈 (원장)
+  v_paid_at timestamptz;           -- 결제가 된 시각 (원장 ticket_purchase 행)
   v_back   bigint := 0;
   v_base   bigint;
+  v_total  bigint;                 -- 결제 총액 = 예치금 + 카드 (tickets.price)
   v_tk     record;
   v_agency bigint := 0;
   v_vd     date;
   v_days   int;
 begin
-  select coalesce(-sum(amount), 0) into v_paid
+  select coalesce(-sum(amount), 0), min(created_at) into v_paid, v_paid_at
     from public.deposit_transactions
    where user_id = p_user_id and change_type = 'ticket_purchase'
      and metadata->>'purchase_id' = p_purchase_id and amount < 0;
@@ -59,7 +66,7 @@ begin
   v_base := greatest(0, v_paid - v_back);
 
   if to_regclass('public.tickets') is null then return v_base; end if;
-  select t.created_at, t.party_size, t.reservation_date, t.ticket_product_id::text as tpid
+  select t.created_at, t.party_size, t.reservation_date, t.price, t.ticket_product_id::text as tpid
     into v_tk
     from public.tickets t
    where t.purchase_id = p_purchase_id and t.user_id = p_user_id
@@ -67,8 +74,9 @@ begin
    limit 1;
   if not found then return v_base; end if;                      -- 옛 구매: 종전 한도만
 
-  -- 30분 이내 전액
-  if v_tk.created_at is not null and now() - v_tk.created_at <= interval '30 minutes' then
+  -- 결제 완료 30분 이내 전액 (원장 시각 우선, 없으면 티켓 행 시각)
+  v_paid_at := coalesce(v_paid_at, v_tk.created_at);
+  if v_paid_at is not null and now() - v_paid_at <= interval '30 minutes' then
     return v_base;
   end if;
 
@@ -81,19 +89,21 @@ begin
   exception when others then v_agency := 0; end;
   v_agency := coalesce(v_agency, 0);
 
+  -- 식사비 + 주류 필수 = 총액 − 대행비. 총액은 tickets.price(예치금+카드), 없으면 예치금 부분
+  v_total := coalesce(nullif(v_tk.price, 0)::bigint, v_paid);
   v_vd := public._taam_refund_visit_date(v_tk.reservation_date);
   if v_vd is null then
-    return greatest(0, least(v_base, v_paid - v_agency - v_back));   -- 방문일 모름: 대행비 제외
+    return greatest(0, least(v_base, v_total - v_agency - v_back));  -- 방문일 모름: 대행비 제외
   end if;
   v_days := v_vd - (now() at time zone 'Asia/Seoul')::date;
-  if v_days >= 31 then
-    return greatest(0, least(v_base, v_paid - v_agency - v_back));
+  if v_days >= c_min_days then
+    return greatest(0, least(v_base, v_total - v_agency - v_back));
   end if;
-  return 0;                                                         -- D-30 이하: 환불 불가
+  return 0;                                                         -- 경계 미만: 환불 불가
 end $$;
 revoke all on function public.taam_refund_cap(uuid, text) from public, anon, authenticated;
 comment on function public.taam_refund_cap(uuid, text) is
-  '회원 취소 환불의 서버 한도. 30분 전액 · D-31 이상 대행비 제외 · D-30 이하 0. tickets 없으면 낸 돈−환불.';
+  '회원 취소 환불의 서버 한도. 결제 30분 전액 · D-31 이상 총액−대행비 · 그 뒤 0. tickets 없으면 낸 돈−환불.';
 
 -- ── ③ taam_apply_deposit_delta — ④ 구매별 한도에 정책 한도를 덧댄다 (그 밖은 2026-09-14 ledger_close 와 동일) ──
 create or replace function public.taam_apply_deposit_delta(
@@ -237,7 +247,7 @@ begin
         --   30분 이내 전액 · 방문 D-31 이상 대행비 제외 · D-30 이하 환불 불가.
         v_cap := public.taam_refund_cap(p_user_id, r_ref.pur);
         if r_ref.amt > v_cap then
-          raise exception 'LEDGER_REFUND_POLICY: 구매 % 환불 한도 % (30분 내 전액 · D-31 이상 대행비 제외 · D-30 이하 불가), 이번 요청 %',
+          raise exception 'LEDGER_REFUND_POLICY: 구매 % 환불 한도 % (결제 30분 내 전액 · D-31 이상 대행비 제외 · 그 뒤 불가), 이번 요청 %',
             r_ref.pur, v_cap, r_ref.amt using errcode = '42501';
         end if;
       end loop;
