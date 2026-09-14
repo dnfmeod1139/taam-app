@@ -38,7 +38,7 @@
 7. 알림 중복 조사 — **중복 없음**. 구매 1건 = 앱 `taam_notify_admins` 1회(예치금) 또는 Edge `notifyAdmins` 1회(카드).
    틈 하나: 카드 구매는 푸시만 가고 벨 이력이 없었다 → Edge 두 함수에 `notifications` INSERT 추가
    (⚠ 재배포 필요 · `DEPLOY_CHECKLIST.md` 2차)
-8. 미감사 5개 영역 점검 (`docs/AUDIT_2026-09-14_unaudited5.md`) → `sql/audit5_hardening_2026-09-14.sql` ✅ 라이브 적용(9줄 ✅) · Edge 4개(sms-hook·partner-account·notify 2개) ✅ 재배포됨 · 2차 검증 후 notify-purchase 수정 — ⚠ 재배포 필요
+8. 미감사 5개 영역 점검 (`docs/AUDIT_2026-09-14_unaudited5.md`) → `sql/audit5_hardening_2026-09-14.sql` ✅ 라이브 적용(9줄 ✅) · Edge 4개(sms-hook·partner-account·notify 2개) ✅ 재배포됨 · 2차 검증 후 notify-purchase 수정 — ⚠ 재배포 필요(⚠ 저녁에 verify-and-save-purchase 함수에 잘못 붙임 → 앱 호출 제거(14-k) · 그 함수는 대시보드에서 삭제)
 9. 그 다음 후보 (아직 안 함)
    - 초대제 서버화(가입은 consume-invite 가 service_role 로 사용자 생성 · 대시보드 signup OFF)
    - taam-format 소스를 저장소로 가져와 호출자 검증·innerHTML 이스케이프

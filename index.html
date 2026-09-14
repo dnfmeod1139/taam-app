@@ -25591,99 +25591,14 @@ async function completePurchase(){
       try { _tkMarkSessionPurchase(purchaseHistory[purchaseHistory.length-1].purchaseId); } catch(_me){}
   savePurchase();
 
-  // ═══════════════════════════════════════════
-  // Supabase purchases 테이블에 결제 기록 저장
-  // ═══════════════════════════════════════════
-    // ═══════════════════════════════════════════
-  // Edge Function 호출 — 서버에서 결제 검증 후 저장
-  // (금액 위조 방지, PortOne API로 실제 결제 재검증)
-  // ═══════════════════════════════════════════
-  (function saveToSupabase(){
-    // ⭐ 전역 변수 스냅샷 (finally 초기화 전에)
-    var _snapPaymentId   = window._lastPaymentId || null;
-    var _snapUsedPortone = !!_snapPaymentId;
-    window._lastPaymentId     = null;
-    window._lastPaymentAmount = 0;
-
-    try {
-      if (!window.sb) {
-        console.warn('⚠️ Supabase 클라이언트 없음 — DB 저장 스킵');
-        return;
-      }
-
-      // 현재 로그인 사용자 세션 토큰(JWT) 획득
-      window.sb.auth.getSession().then(function(sessRes){
-        var session = (sessRes && sessRes.data && sessRes.data.session) ? sessRes.data.session : null;
-        if (!session) {
-          console.warn('⚠️ 로그인 세션 없음 — Supabase 저장 스킵');
-          return;
-        }
-        var jwt = session.access_token;
-
-        // visitDate → "YYYY-MM-DD".
-        //   ⚠ 종전에는 t.date 가 '11.25' 처럼 두 토막이면 「올해」를 붙였다.
-        //     2027년 예약이 2026년으로 서버에 기록됐다. 연도는 t.dateYear 에
-        //     따로 있으므로 _tkYMD 로 읽는다.
-        var visitDateISO = null;
-        try {
-          var _vy = (typeof _tkYMD === 'function') ? _tkYMD(t) : null;
-          if (_vy) visitDateISO = _vy.y + '-' + String(_vy.m).padStart(2,'0') + '-' + String(_vy.d).padStart(2,'0');
-        } catch(e){}
-
-        // Edge Function에 보낼 payload
-        var payload = {
-          paymentId     : _snapPaymentId,
-          expectedAmount: paid,
-          restaurantId  : t.restId ? String(t.restId) : null,
-          visitDate     : visitDateISO,
-          visitTime     : t.time || null,
-          partySize     : pax,
-          orderName     : (currentRest ? currentRest.name : t.rest) + ' — 티켓 구매',
-          paymentMethod : _snapUsedPortone ? 'card' : 'deposit'
-        };
-
-        console.log('📝 Edge Function 호출 (스냅샷):', {
-          usedPortone: _snapUsedPortone,
-          paymentId: _snapPaymentId,
-          amount: paid
-        });
-
-        // Edge Function 호출 (서버 사이드 검증 + 저장)
-        var edgeUrl = 'https://edfsmzbcixfnqabrsvut.supabase.co/functions/v1/verify-and-save-purchase';
-        fetch(edgeUrl, {
-          method: 'POST',
-          headers: {
-            'Authorization': 'Bearer ' + jwt,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(payload)
-        }).then(function(res){
-          return res.json().then(function(body){ return { status: res.status, body: body }; });
-        }).then(function(result){
-          if (result.status >= 200 && result.status < 300) {
-            console.log('✅ 서버 검증 & 저장 성공:', result.body);
-          } else {
-            console.error('❌ 서버 검증 실패:', result.status, result.body);
-            // 🆕 카드(PortOne) 결제의 금액 위조 등 심각 오류만 사용자 알림.
-            //   예치금 결제·서버 검증 미배포 등은 로컬 저장(savePurchase)으로 이미 처리되므로
-            //   랜덤 알림을 띄우지 않음 (구매·알림은 정상 진행됨).
-            if (_snapUsedPortone && result.status === 400 && result.body && result.body.error) {
-              alert('카드 결제 검증 중 문제가 발생했습니다:\n' + result.body.error +
-                    '\n\n관리자에게 문의해주세요.\n결제 ID: ' + (_snapPaymentId || 'N/A'));
-            }
-          }
-        }).catch(function(err){
-          console.error('❌ Edge Function 호출 실패 (네트워크):', err);
-          // 네트워크 오류 — IDB 로컬 기록은 유지되니 일단 넘어감
-        });
-      }).catch(function(e){
-        console.error('❌ 세션 조회 실패:', e);
-      });
-    } catch(e){
-      console.error('❌ saveToSupabase 예외:', e);
-    }
-  })();
-
+  // ── (삭제 2026-09-14) verify-and-save-purchase 호출 ──
+  //   2026-04 설계: 결제마다 회원 JWT + 클라이언트 금액(expectedAmount)을 대시보드 전용 Edge Function 에
+  //   보내 purchases 표에 저장했다. 지금은 아무 화면도 purchases 를 읽지 않고, 확정은 서버
+  //   (taam_purchase_confirm_deposit · toss-confirm)가 한다. 소스가 저장소에 없는 함수에 회원 토큰과
+  //   금액을 계속 보내는 것은 「서버가 클라이언트 금액으로 확정 행을 만드는 뒷문」이 될 수 있어 걷어냈다.
+  //   PortOne 옛 경로(_lastPaymentId)는 롤백용 보존 코드라 여기서 전역만 비운다.
+  window._lastPaymentId     = null;
+  window._lastPaymentAmount = 0;
 
   depositData.use.push({name:(currentRest?currentRest.name:t.rest)+' — '+t.type,date:ds,amt:paid,purchaseId:purchaseId});
   saveDeposit();
@@ -43467,7 +43382,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.14-j';
+var TAAM_WEB_BUILD = '2026.09.14-k';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){

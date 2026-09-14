@@ -8,6 +8,7 @@
 | partner-account | reset·revoke 가 실제로 세션을 끊는다(`taam_kill_sessions`) · revoke 는 계정 잠금(ban) · restore 는 잠금 해제 · 단계별 오류 확인 · reset 이 해지를 되돌리지 않음 | SQL ② ✅ |
 | notify-visit-reminder | **service_role 호출자만** 받는다 · DB 오류 원문을 응답에 안 싣는다 | ⚠ cron 이 보내는 Authorization 이 **service_role legacy JWT** 여야 한다. anon 키면 403 이 난다 — 다음 실행 뒤 `net._http_response` 에서 200 확인 |
 | notify-guest-expiry | 〃 | 〃 |
+| ⚠ verify-and-save-purchase | **삭제할 것.** 2026-04 대시보드 전용 함수(purchases 표 저장). 09-14 저녁 notify-purchase 코드를 이 함수에 잘못 붙여 배포하면서 옛 소스가 덮였다(복구 불가 · 저장소에 없었음). 앱은 빌드 14-k 부터 부르지 않는다 → 대시보드에서 함수 삭제 | — |
 | notify-purchase | **자기 구매만**(회원 JWT → uid 대조, service_role 은 통과) · 중복 방지를 「먼저 찍고 조건부」로(동시 호출 N 번 → 1 번) · 오류 원문 비노출. 2차 검증(critic)이 찾음 | — (SQL 없음) |
 
 ---
