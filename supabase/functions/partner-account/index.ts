@@ -157,11 +157,14 @@ serve(async (req) => {
 
       // 쓰던 기기를 전부 끊는다. 「비번 바꾸면 침해당할 일 없다」가 성립하려면
       // 옛 비밀번호로 이미 들어와 있던 세션도 같이 죽어야 한다.
-      await admin.auth.admin.signOut(row.user_id, 'global').catch(() => {});
-      await admin.from('partner_accounts')
-        .update({ disabled: false }).eq('login_id', loginId);
+      //   🔧 2026-09-14: 종전 admin.signOut(user_id) 는 JWT 자리에 uuid 를 넣은 것이라
+      //   401 을 조용히 삼키고 아무 세션도 안 끊었다. DB 함수(taam_kill_sessions)로 지운다.
+      //   해지(disabled) 상태는 건드리지 않는다 — 비밀번호 재설정은 해지를 되돌리는 행위가 아니다.
+      const { data: killed, error: kErr } = await admin.rpc('taam_kill_sessions', { p_uid: row.user_id });
+      if (kErr) console.error('[partner-account] 세션 폐기 실패', kErr.message);
 
-      return json({ ok: true, login_id: loginId, password, domain: PARTNER_DOMAIN });
+      return json({ ok: true, login_id: loginId, password, domain: PARTNER_DOMAIN,
+                    sessions_killed: kErr ? null : (killed ?? 0) });
     }
 
     // ── 해지 / 되살리기 ────────────────────────────────────────
@@ -174,17 +177,31 @@ serve(async (req) => {
         .eq('login_id', loginId).maybeSingle();
       if (!row) return json({ ok: false, error: '그런 아이디가 없습니다' });
 
+      // 🔧 2026-09-14: 각 단계의 오류를 본다 — 종전엔 권한 삭제가 실패해도 장부만 「해지됨」이 됐다.
+      //   순서: 권한 → 로그인 잠금 → 세션 → 장부(마지막). 반쪽 상태면 장부를 안 바꾸고 실패로 돌려준다.
       if (off) {
-        await admin.from('admin_grants').delete().eq('user_id', row.user_id);
-        await admin.auth.admin.signOut(row.user_id, 'global').catch(() => {});
+        const { error: dErr } = await admin.from('admin_grants').delete().eq('user_id', row.user_id);
+        if (dErr) return json({ ok: false, error: '권한을 떼지 못했습니다: ' + dErr.message });
+        // 비밀번호 로그인 자체를 막는다 (권한이 없어도 authenticated 로 들어오는 것까지 끊는다)
+        const { error: bErr } = await admin.auth.admin.updateUserById(row.user_id, { ban_duration: '876000h' });
+        if (bErr) return json({ ok: false, error: '계정을 잠그지 못했습니다: ' + bErr.message });
+        const { error: kErr } = await admin.rpc('taam_kill_sessions', { p_uid: row.user_id });
+        if (kErr) console.error('[partner-account] 세션 폐기 실패', kErr.message);
       } else {
-        await admin.from('admin_grants').insert({
+        const { error: uErr } = await admin.auth.admin.updateUserById(row.user_id, { ban_duration: 'none' });
+        if (uErr) return json({ ok: false, error: '계정 잠금을 풀지 못했습니다: ' + uErr.message });
+        const { error: iErr } = await admin.from('admin_grants').insert({
           user_id: row.user_id, rest_id: row.rest_id,
           label: row.label, granted_by: caller.id,
-        }).select().maybeSingle();
+        });
+        // 이미 권한이 있으면(부분 unique) 그대로 둔다
+        if (iErr && !/duplicate|unique/i.test(iErr.message)) {
+          return json({ ok: false, error: '권한을 붙이지 못했습니다: ' + iErr.message });
+        }
       }
-      await admin.from('partner_accounts')
+      const { error: aErr } = await admin.from('partner_accounts')
         .update({ disabled: off }).eq('login_id', loginId);
+      if (aErr) return json({ ok: false, error: '장부를 고치지 못했습니다: ' + aErr.message });
       return json({ ok: true, login_id: loginId, disabled: off });
     }
 

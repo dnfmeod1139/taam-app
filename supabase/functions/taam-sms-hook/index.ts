@@ -144,8 +144,14 @@ serve(async (req) => {
   //                                       새 번호는 phone_change / new_phone 에 온다.
   //   마이페이지의 「번호 인증」은 updateUser({phone}) 이라 늘 phone_change 로 온다.
   //   user.phone 만 보면 그 경로가 통째로 죽는다 — 실제로 그렇게 죽어 있었다.
+  // 🔒 2026-09-14 목적지는 sms_type 이 정한다.
+  //   종전엔 phone_change/new_phone 을 무조건 우선했다 — 번호 변경을 시작만 하고 끝내지 않은
+  //   회원(auth.users.phone_change 가 남아 있음)은 그 뒤 **로그인 OTP 까지 새 번호로** 갔다.
+  //   phone_change 일 때만 새 번호, 나머지(sms·signup·reauthentication 등)는 기존 번호.
+  const isChange = smsType === 'phone_change';
   const phone = String(
-    user.phone_change || user.new_phone || user.phone || payload.phone || '',
+    isChange ? (user.phone_change || user.new_phone || '')
+             : (user.phone || payload.phone || ''),
   );
   const otp = String(smsIn.otp || '');
 
@@ -156,6 +162,16 @@ serve(async (req) => {
       + ' change=' + (user.phone_change ? 'o' : 'x')
       + ' new=' + (user.new_phone ? 'o' : 'x')
       + ' otp=' + (otp ? 'o' : 'x') + ')');
+  }
+
+  // 🔒 2026-09-14 국내 번호만 보낸다.
+  //   OTP 요청(/auth/v1/otp)은 anon key 만 있으면 어떤 E.164 번호로든 부를 수 있다.
+  //   국제번호를 그대로 Solapi 에 넘기면 SMS 펌핑(국제 문자 요금 공격)이 된다. 비용 없이 여기서 끊는다.
+  const digits = String(phone).replace(/[^0-9+]/g, '');
+  const domesticOk = /^\+?82(10|11|16|17|18|19)\d{7,8}$/.test(digits) || /^0(10|11|16|17|18|19)\d{7,8}$/.test(digits);
+  if (!domesticOk) {
+    console.warn('[sms-hook] 국내 번호가 아님 — 거부', smsType || '-', digits.replace(/\d(?=\d{4})/g, '*'));
+    return hookErr(400, '국내 휴대폰 번호만 인증 문자를 보낼 수 있습니다');
   }
 
   const apiKey = Deno.env.get('SOLAPI_API_KEY');
@@ -220,7 +236,7 @@ serve(async (req) => {
     //   접수코드를 함께 남긴다: 나중에 "문자가 안 왔다" 는 문의가 오면
     //   접수까지 됐는지(우리 책임) 통신사 구간인지(그 뒤)를 이 한 줄로 가른다.
     console.log('[sms-hook] 발송 성공', smsType || '-',
-      toDomestic(phone).replace(/\d{4}$/, '****'), statusCode || '-');
+      toDomestic(phone).replace(/\d(?=\d{4})/g, '*'), statusCode || '-');
     return json({});
   } catch (e) {
     return hookErr(500, '예외: ' + String((e as Error)?.message || e).slice(0, 160));

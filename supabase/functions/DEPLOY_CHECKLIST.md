@@ -1,3 +1,16 @@
+# 2026-09-14 미감사 영역 점검 — Edge Function 재배포 4개
+
+`sql/audit5_hardening_2026-09-14.sql` 을 **먼저** 돌린 뒤(② `taam_kill_sessions` 가 있어야 partner-account 가 세션을 끊는다) 아래 넷을 재배포한다.
+
+| 함수 | 바뀐 것 | 배포 전 확인 |
+|---|---|---|
+| taam-sms-hook | 목적지를 `sms_type` 으로 고정(phone_change 일 때만 새 번호) · **국내 휴대폰 번호만** 발송 · 로그 마스킹 강화 | 라이브에 `phone_change` 가 남은 회원이 있으면 정리: `select id from auth.users where coalesce(phone_change,'')<>''` |
+| partner-account | reset·revoke 가 실제로 세션을 끊는다(`taam_kill_sessions`) · revoke 는 계정 잠금(ban) · restore 는 잠금 해제 · 단계별 오류 확인 · reset 이 해지를 되돌리지 않음 | SQL ② ✅ |
+| notify-visit-reminder | **service_role 호출자만** 받는다 · DB 오류 원문을 응답에 안 싣는다 | ⚠ cron 이 보내는 Authorization 이 **service_role legacy JWT** 여야 한다. anon 키면 403 이 난다 — 다음 실행 뒤 `net._http_response` 에서 200 확인 |
+| notify-guest-expiry | 〃 | 〃 |
+
+---
+
 # 2026-09-14 원장 서버화 4단계 — Edge Function 재배포 2개
 
 `sql/ledger_close_member_insert.sql` 을 **먼저** SQL Editor 에서 돌린 뒤 아래 둘을 재배포한다.
