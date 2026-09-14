@@ -20325,16 +20325,28 @@ function openMain(){
     //   던졌다. 서로 의존이 없는데 왕복이 한 번 더 있었다. 셀룰러에서는
     //   왕복 한 번이 그대로 300~600ms 다. 같이 던지면 그만큼 먼저 뜬다.
     //   ⚠ loadRole() 은 앞에 남겨 둔다 — loadInviteCodes 가 _currentRole 을 본다.
+    // 🆕 2026-09-14 어느 로드가 늦는지 잰다 — boot_slow 신고 24건이 전부 extra:{} 라 아무것도 알 수 없었다.
+    //   (대부분 슈퍼어드민 자신의 시크릿창 콜드 로드였고, 회원은 5명 1회씩) 이름·소요시간을 extra 에 싣는다.
+    var _bootT0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    var _bootDone = {}, _bootPending = {};
+    function _bootTrack(name, p){
+      _bootPending[name] = 1;
+      return Promise.resolve(p).then(function(v){
+        delete _bootPending[name];
+        _bootDone[name] = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - _bootT0);
+        return v;
+      }, function(e){ delete _bootPending[name]; _bootDone[name] = -1; throw e; });
+    }
     var _allLoads = Promise.all([
-      loadRestaurants(),
-      loadTickets(),
-      loadMembers(),
-      loadInviteCodes(),
-      loadAdminCodes(),
-      loadSplashSettings(),
+      _bootTrack('restaurants', loadRestaurants()),
+      _bootTrack('tickets',     loadTickets()),
+      _bootTrack('members',     loadMembers()),
+      _bootTrack('invites',     loadInviteCodes()),
+      _bootTrack('adminCodes',  loadAdminCodes()),
+      _bootTrack('splash',      loadSplashSettings()),
       // 표지를 미리 읽어 둔다. 안 읽으면 폴백 사진으로 먼저 그렸다가 갈아 끼우게 된다.
-      (typeof pcalLoadCovers === 'function' ? pcalLoadCovers().catch(function(){}) : Promise.resolve()),
-      reloadUserData()
+      _bootTrack('covers', (typeof pcalLoadCovers === 'function' ? pcalLoadCovers().catch(function(){}) : Promise.resolve())),
+      _bootTrack('userData',    reloadUserData())
     ]);
     // 🔧 2026-09-13: 첫 화면이 이 8건 **전부**에 인질이었다. supabase-js 의 fetch 는
     //   타임아웃이 없어서, 하나라도 매달리면(기업망·로밍·TCP stall) 화면이 영영 안 떴다.
@@ -20353,7 +20365,20 @@ function openMain(){
     }).catch(function(){});
     return Promise.race([_allLoads, _cap.then(function(){
       console.warn('[boot] 6초 안에 로드가 안 끝남 — 지금까지 온 것으로 먼저 그린다');
-      try { if (typeof window.taamReportError === 'function') window.taamReportError('boot_slow', 'openMain 로드 6초 초과', null, {}); } catch(_e){}
+      try {
+        if (typeof window.taamReportError === 'function') {
+          var _nav = null;
+          try { var _pe = performance.getEntriesByType && performance.getEntriesByType('navigation')[0]; if (_pe) _nav = { type: _pe.type, ttfb: Math.round(_pe.responseStart), dcl: Math.round(_pe.domContentLoadedEventEnd), size_kb: Math.round((_pe.transferSize || 0) / 1024) }; } catch(_pn){}
+          window.taamReportError('boot_slow', 'openMain 로드 6초 초과', null, {
+            role: _currentRole || null,
+            pending: Object.keys(_bootPending),      // 6초에 아직 안 끝난 로드
+            done_ms: _bootDone,                      // 끝난 로드의 소요 ms (-1 = 실패)
+            nav: _nav,                               // type: navigate/reload/back_forward · 문서 크기·TTFB
+            sw: !!(navigator.serviceWorker && navigator.serviceWorker.controller),
+            conn: (navigator.connection && navigator.connection.effectiveType) || null
+          });
+        }
+      } catch(_e){}
     })]);
   }).then(function(){
     // 어드민/슈퍼어드민으로 재접속 시 유저 전용 데이터 초기화
@@ -43382,7 +43407,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.14-l';
+var TAAM_WEB_BUILD = '2026.09.14-m';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -86214,9 +86239,18 @@ function _instaDrawPath(id, offsetVal){
     _bootWatchdogFired = true;
     console.warn('[boot] 8초 안에 화면이 뜨지 않았다 — 로그인 화면으로 내린다');
     try {
+      var _bsNav = null;
+      try { var _bpe = performance.getEntriesByType && performance.getEntriesByType('navigation')[0]; if (_bpe) _bsNav = { type: _bpe.type, ttfb: Math.round(_bpe.responseStart), dcl: Math.round(_bpe.domContentLoadedEventEnd), size_kb: Math.round((_bpe.transferSize || 0) / 1024) }; } catch(_bpn){}
       window.taamReportError('boot_stuck', '8초 안에 .ready 가 안 붙음', null, {
         auto_login: document.documentElement.classList.contains('auto-login'),
-        sb: typeof window.sb, online: navigator.onLine
+        sb: typeof window.sb, online: navigator.onLine,
+        // 🆕 2026-09-14 어디서 멈췄는지: 문서 상태·세션 확인 여부·서비스워커·회선
+        ready_state: document.readyState,
+        authed: (function(){ try { return localStorage.getItem('authedSession') === '1'; } catch(_){ return null; } })(),
+        sw: !!(navigator.serviceWorker && navigator.serviceWorker.controller),
+        conn: (navigator.connection && navigator.connection.effectiveType) || null,
+        nav: _bsNav,
+        splash_holding: !!window._splashHolding
       });
     } catch(_e){}
     try {
