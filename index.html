@@ -249,7 +249,7 @@
 // 🔒 슈퍼어드민 Supabase 비밀번호는 이 파일에 두지 않는다.
 //   index.html 은 taam-app.vercel.app 에서 그대로 서빙되는 공개 파일이라,
 //   문자를 배열로 쪼개도 소스 보기 한 번이면 그대로 읽힌다(난독화가 아니다).
-//   → _getSaCred('p') 가 기기별 localStorage 에서 읽고, 없으면 1회 입력받는다.
+//   → 2026.09.14: 기기 저장 비밀번호 폴백 제거. 세션이 없으면 OTP 로그인 안내 (superadminSupabaseLogin 은 세션 유무만 본다).
 
   window.sb.from('restaurants').select('*', { count: 'exact', head: true })
     .then(function(res){
@@ -20109,9 +20109,17 @@ function checkSaPin() {
     updateMpAdminBtn();
     closeSuperAdminPin();
     
-    // 🆕 Supabase Auth 슈퍼어드민 자동 로그인 (크로스 기기 쓰기 권한)
-    superadminSupabaseLogin().finally(function(){
-      adminDirectAccess();
+    // 🔒 2026.09.14: 옛 「기기에 저장한 Supabase 비밀번호로 signInWithPassword」 폴백을 지웠다.
+    //   비밀번호가 localStorage 에 평문으로 남아 XSS 하나면 슈퍼어드민 DB 계정이 새는 구조였다.
+    //   PIN 은 어드민 화면을 여는 기기 잠금일 뿐이고, 권한은 서버 profiles.role 이 정한다.
+    //   세션이 없으면 비밀번호를 묻지 않고 「먼저 이메일 OTP 로 로그인」을 안내한다.
+    superadminSupabaseLogin().then(function(hasSession){
+      if (hasSession) { adminDirectAccess(); return; }
+      try {
+        showToast('🔐','로그인이 필요합니다','슈퍼어드민 이메일로 먼저 로그인한 뒤 PIN 을 입력하세요');
+      } catch(e){}
+      _currentRole = 'user'; saveRole(); updateMpAdminBtn();
+      try { if (typeof openLogin === 'function') openLogin(); } catch(e){}
     });
     return;
     
@@ -20128,63 +20136,17 @@ function checkSaPin() {
 
 // 🆕 슈퍼어드민 전용 Supabase Auth 자동 로그인
 async function superadminSupabaseLogin(){
+  // 🔒 2026.09.14: 더 이상 로그인하지 않는다 — 세션이 있는지만 본다.
+  //   (종전엔 세션이 없으면 기기에 저장한 Supabase 비밀번호로 signInWithPassword 했다)
   try {
-    if(!window.sb) return;
-    
-    // 이미 로그인되어 있으면 스킵
-    var currentUser = await window.sb.auth.getUser();
-    if(currentUser && currentUser.data && currentUser.data.user){
-      console.log('ℹ️ 이미 Supabase Auth 로그인됨');
-      return;
-    }
-    
-    // 난독화된 관리자 자격 증명 복원
-    var email = _getSaCred('e');
-    var password = _getSaCred('p');
-    
-    if(!email || !password){
-      console.warn('⚠ 관리자 자격 증명 미설정');
-      return;
-    }
-    
-    var res = await window.sb.auth.signInWithPassword({
-      email: email,
-      password: password
-    });
-    
-    if(res.error){
-      console.warn('⚠ Supabase 슈퍼어드민 Auth 실패:', res.error.message);
-    } else {
-      console.log('✅ Supabase 슈퍼어드민 Auth 성공');
-    }
-  } catch(e){
-    console.warn('⚠ superadminSupabaseLogin 예외:', e);
-  }
+    if(!window.sb) return false;
+    var r = await window.sb.auth.getUser();
+    return !!(r && r.data && r.data.user);
+  } catch(e){ return false; }
 }
-
-// 🔒 관리자 자격 증명 난독화 복원
-function _getSaCred(type){
-  if(type === 'e'){
-    // 이메일: dnfmeod@gmail.com (난독화)
-    var p1 = ['d','n','f','m','e','o','d'].join('');
-    var p2 = ['g','m','a','i','l','.','c','o','m'].join('');
-    return p1 + '@' + p2;
-  }
-  if(type === 'p'){
-    // 🔒 비밀번호는 배포 파일에 넣지 않는다 (공개 URL 로 그대로 노출된다).
-    //   이 기기에 저장된 값을 쓰고, 없으면 한 번만 입력받아 저장한다.
-    //   여기까지 오는 경로는 슈퍼어드민 PIN 통과 후뿐이라 일반 회원에게는 안 뜬다.
-    try {
-      var pw = localStorage.getItem('taamSaPw');
-      if (pw) return pw;
-      pw = window.prompt('슈퍼어드민 Supabase 비밀번호\n(이 기기에만 저장됩니다)');
-      if (pw) { localStorage.setItem('taamSaPw', pw); return pw; }
-    } catch(e){}
-    console.warn('⚠ 슈퍼어드민 비밀번호 미입력 — Supabase Auth 로그인 생략');
-    return '';
-  }
-  return '';
-}
+// 옛 자격 증명 복원 함수는 지웠다. 기기에 남아 있던 비밀번호는 부팅 때 _purgeLegacySaPw() 가 지운다.
+function _purgeLegacySaPw(){ try { localStorage.removeItem('taamSaPw'); } catch(e){} }
+try { _purgeLegacySaPw(); } catch(e){}
 
 function adminDirectAccess(){
   var splash = document.querySelector('.splash');
@@ -43026,7 +42988,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.14-s';
+var TAAM_WEB_BUILD = '2026.09.14-t';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
