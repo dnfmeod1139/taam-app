@@ -476,7 +476,7 @@ interface SendRequest {
   exclude_user_id?: string;
 }
 
-Deno.serve(async (req: Request) => {
+async function handle(req: Request): Promise<Response> {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
@@ -939,9 +939,27 @@ Deno.serve(async (req: Request) => {
     return json({ ok: true, summary, pick, details: results }, 200);
   } catch (e) {
     console.error("[send-push] error:", e);
-    return json({ error: String(e) }, 500);
+    return json({ error: "server error" }, 500);   // 원문은 로그에만 (2026-09-14)
   }
+}
+
+// 🔒 2026-09-14 CORS — 우리 오리진만 허용한다.
+//   Bearer 방식이라 브라우저가 자격을 자동으로 싣진 않지만, 회원 세션이 열린 다른 오리진
+//   (프리뷰 배포·서드파티 페이지의 XSS)에서 fetch 로 부르는 것을 브라우저가 막게 한다.
+//   서버-서버 호출(cron·내부 send-push·LINE·Auth 훅)은 Origin 헤더가 없어 영향 없다.
+//   네이티브 앱은 server.url 이 taam-app.vercel.app 이라 그 오리진으로 온다.
+const TAAM_ORIGINS = ['https://taam-app.vercel.app', 'https://playtaam.com', 'https://www.playtaam.com'];
+function taamOrigin(req: Request): string {
+  const o = req.headers.get('Origin') || '';
+  if (TAAM_ORIGINS.includes(o) || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(o)) return o;
+  return TAAM_ORIGINS[0];
+}
+Deno.serve(async (req: Request) => {
+  const res = await handle(req);
+  try { res.headers.set('Access-Control-Allow-Origin', taamOrigin(req)); res.headers.append('Vary', 'Origin'); } catch (_e) { /* 헤더 잠긴 응답이면 그대로 */ }
+  return res;
 });
+
 
 function json(obj: unknown, status = 200): Response {
   return new Response(JSON.stringify(obj), {

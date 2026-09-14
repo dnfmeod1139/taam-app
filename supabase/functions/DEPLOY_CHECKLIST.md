@@ -1,3 +1,27 @@
+# 2026-09-14 밤 · low 마무리 — Edge 10개 재배포 (오류 원문 비노출 + CORS 오리진 제한)
+
+SQL 과 순서 무관. 열 함수 모두 같은 두 가지가 바뀌었다.
+- 바깥 catch 가 예외 원문(DB 컬럼·제약·함수 이름, 내부 URL) 대신 고정 문구를 돌려준다. 원문은 함수 로그에만.
+- 응답의 `Access-Control-Allow-Origin` 이 `*` 대신 우리 오리진(`taam-app.vercel.app` · `playtaam.com` · `www.playtaam.com` · localhost)만.
+  구조: 기존 본문을 `handle(req)` 로 감싸고 `serve()` 가 헤더를 덧씌운다 — 호출부는 그대로다.
+
+| 함수 | 줄 수 | 비고 |
+|---|---|---|
+| consume-invite | 154 | |
+| verify-invite | 244 | |
+| lineage-summarize | 545 | |
+| notify-reservation | 327 | |
+| taam-translate-venues-batch | 349 | |
+| send-push | 969 | 내부 호출(다른 Edge → send-push)은 Origin 없음 → 영향 없음 |
+| toss-order | 393 | `detail` 제거 — 앱은 `error` 코드만 읽는다 |
+| toss-confirm | 546 | 〃 |
+| toss-billing-charge | 498 | 〃 |
+| kashikiri-confirm | 221 | `message` 를 고정 문구로 (pay 페이지가 그대로 보여준다) |
+
+아직 `*` 인 함수(재배포 안 함): notify-purchase · notify-guest-expiry · notify-visit-reminder · partner-account · taam-chat · taam-format · taam-translate · toss-billing-issue · taam-sms-hook · line-webhook. 다음 수정 때 같이.
+
+---
+
 # 2026-09-14 저녁 · low 묶음 — Edge 2개 재배포
 
 `sql/low_batch_2026-09-14.sql` 과 순서 무관. 앱 빌드 `14-o` 와도 무관(각자 독립).
