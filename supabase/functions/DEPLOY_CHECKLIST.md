@@ -1,3 +1,14 @@
+# 2026-09-14 저녁 · low 묶음 — Edge 2개 재배포
+
+`sql/low_batch_2026-09-14.sql` 과 순서 무관. 앱 빌드 `14-o` 와도 무관(각자 독립).
+
+| 함수 | 바뀐 것 | 줄 수 |
+|---|---|---|
+| toss-billing-issue | 회원당 시간당 10회(`taam_rate_hit`, 없으면 통과) · DB/예외 원문을 응답에 안 실음 | 174 |
+| taam-sms-hook | 회원 화면에는 고정 문구 + 코드(`SMS_4xx`)만. 설정 상태·Solapi 사유는 로그에만. 「국내 번호만」 안내는 유지 | 249 |
+
+---
+
 # 2026-09-14 미감사 영역 점검 — Edge Function 재배포 4개
 
 `sql/audit5_hardening_2026-09-14.sql` 을 **먼저** 돌린 뒤(② `taam_kill_sessions` 가 있어야 partner-account 가 세션을 끊는다) 아래 넷을 재배포한다.

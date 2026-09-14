@@ -80,6 +80,15 @@ serve(async (req) => {
       return json({ ok: false, error: 'customer_mismatch' }, 403);
     }
 
+    // 🔒 2026-09-14 회원당 시간당 10회 — 회원 JWT 하나로 토스 발급 API 를 무한정 대리 호출하던 길.
+    //   taam_rate_hit 는 09-13 SQL 이 만든다(service_role 실행 가능). 없거나 오류면 통과.
+    try {
+      const { data: allowed, error: rlErr } = await admin.rpc('taam_rate_hit', {
+        p_key: 'billing_issue:' + user.id, p_limit: 10, p_window: '1 hour',
+      });
+      if (!rlErr && allowed === false) return json({ ok: false, error: 'rate_limited' }, 429);
+    } catch (_e) { /* 제한기 없음 → 통과 */ }
+
     // ── 빌링키 교환 ──
     const basic = btoa(`${secretKey}:`);
     const res = await fetch(TOSS_ISSUE_URL, {
@@ -139,7 +148,8 @@ serve(async (req) => {
       // 발급은 됐는데 저장이 실패했다 — 회원 화면에 그대로 알린다.
       //   조용히 성공 처리하면 "등록했는데 목록에 없다"가 된다.
       console.error('[toss-billing-issue] 저장 실패', insErr);
-      return json({ ok: false, error: 'save_failed', detail: String(insErr?.message || '').slice(0, 200) });
+      // DB 오류 원문(컬럼·제약 이름)은 로그에만
+      return json({ ok: false, error: 'save_failed' });
     }
 
     if (isFirst) await setDefault(admin, user.id, ins.id);
@@ -148,7 +158,7 @@ serve(async (req) => {
 
   } catch (e) {
     console.error('[toss-billing-issue] 예외', e);
-    return json({ ok: false, error: 'exception', detail: String(e).slice(0, 300) });
+    return json({ ok: false, error: 'exception' });
   }
 });
 

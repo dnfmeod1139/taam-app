@@ -77,6 +77,8 @@
 <script>
 (function(){
   var Q = [], SEEN = {}, SENT = 0, MAX_SESSION = 40, FLUSHING = false;
+  // 🆕 2026-09-14 세션 id — 익명 신고를 세션별로 세기 위한 열쇠 (개인정보 아님, 랜덤)
+  var SID = ''; try { SID = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(36).slice(2)).slice(0, 36); } catch(e){}
   function plat(){
     try { return (window.Capacitor && window.Capacitor.getPlatform && window.Capacitor.getPlatform()) || 'web'; }
     catch(e){ return 'web'; }
@@ -118,7 +120,7 @@
         p_url: cut(location.pathname + location.search, 300),
         p_build: cut(typeof TAAM_WEB_BUILD !== 'undefined' ? TAAM_WEB_BUILD : '', 40) || null,
         p_platform: plat(),
-        p_extra: (extra && typeof extra === 'object') ? extra : {}
+        p_extra: Object.assign({ sid: SID }, (extra && typeof extra === 'object') ? extra : {})
       });
       flush();
     } catch(e){}
@@ -7713,10 +7715,14 @@ function tossOpenBilling(){
     try {
       var ctx = await _tossPaymentsCtx(TOSS_KEYS.BILLING ? 'BILLING' : 'KRW'); if(!ctx) return;
       _tossMarkTrip();   // 카드등록 창 왕복 표시 — 복귀 시 뷰포트 복원 트리거 (reload 견딤)
+      // 🔒 2026-09-14 요청-응답 대조값(nonce). 복귀 URL 에 실어 보내고 돌아올 때 대조한다 —
+      //   없으면 제3자가 만든 authKey 를 이 회원 세션이 그대로 빌링키로 교환한다(남의 카드를 내 계정에).
+      var _bn = '';
+      try { _bn = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(36).slice(2)); sessionStorage.setItem('taam_bill_nonce', _bn); } catch(_ne){}
       await ctx.pay.requestBillingAuth({
         method: 'CARD',
-        successUrl: location.origin + '/?toss_billing=success',
-        failUrl: location.origin + '/?toss_billing=fail',
+        successUrl: location.origin + '/?toss_billing=success&n=' + encodeURIComponent(_bn),
+        failUrl: location.origin + '/?toss_billing=fail&n=' + encodeURIComponent(_bn),
         customerEmail: ctx.user.email || undefined,
         customerName: (typeof _currentUserName !== 'undefined' && _currentUserName) || undefined
       });
@@ -8231,6 +8237,7 @@ function _tossHandleReturn(qIn){
       //   authKey 는 짧게 만료되므로 여기서 챙겨 곧바로 서버에서 빌링키로 교환한다.
       _ck  = _qs.get('customerKey') || '';
       _ak  = _qs.get('authKey') || '';
+      var _bnq = _qs.get('n') || '';
     } catch(_qe){}
     // 결제창(리다이렉트) 복귀 즉시 뷰포트 복원 — 하단 검정 공백/GNB 밀림 방지
     if (typeof _tossRestoreViewport === 'function') _tossRestoreViewport();
@@ -8256,6 +8263,16 @@ function _tossHandleReturn(qIn){
       if (!_ck || !_ak) {
         setTimeout(function(){
           if (typeof showToast === 'function') showToast('⚠','카드 등록 정보가 없습니다','다시 시도해주세요');
+        }, 1200);
+        return;
+      }
+      // 🔒 2026-09-14 nonce 대조 — 이 기기가 연 등록창에서 돌아온 것만 교환한다
+      var _bnStored = '';
+      try { _bnStored = sessionStorage.getItem('taam_bill_nonce') || ''; sessionStorage.removeItem('taam_bill_nonce'); } catch(_be){}
+      if (!_bnStored || !_bnq || _bnStored !== _bnq) {
+        console.warn('[toss] 카드 등록 복귀 nonce 불일치 — 교환하지 않음');
+        setTimeout(function(){
+          if (typeof showToast === 'function') showToast('⚠','카드 등록을 확인할 수 없습니다','앱에서 다시 시도해주세요');
         }, 1200);
         return;
       }
@@ -26243,7 +26260,8 @@ async function loadMyCards(){
 
     const { data: cards, error } = await window.sb
       .from('billing_keys')
-      .select('*')
+      // 🔒 2026-09-14 billing_key(승인 자격증명) 원문은 안 읽는다 — 표시에 필요한 컬럼만
+      .select('id, user_id, card_company, card_number, card_type, is_default, created_at')
       .is('deleted_at', null)
       .order('is_default', { ascending: false })
       .order('created_at', { ascending: false });
@@ -43411,7 +43429,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.14-n';
+var TAAM_WEB_BUILD = '2026.09.14-o';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){

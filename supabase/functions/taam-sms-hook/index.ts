@@ -40,9 +40,14 @@ function json(body: unknown, status = 200) {
 //   "Hook errored out" 한 줄만 남긴 채 회원에게 일반 500 을 준다.
 //   그러면 무엇이 막았는지 앱에도, 로그에도 남지 않는다 — 원인을 찾을 길이 사라진다.
 //   본문으로 주면 이 message 가 그대로 앱 화면까지 올라온다.
-function hookErr(code: number, message: string) {
-  console.error('[sms-hook] ' + message);
-  return json({ error: { http_code: code, message: '[sms-hook] ' + message } }, 200);
+//   🔒 2026-09-14: 원문(설정 상태·Solapi 거부 사유·서명 불일치)은 **로그에만** 남긴다.
+//   종전엔 그대로 회원 화면까지 올라갔다 — 익명 호출자가 시크릿 설정 여부·발신번호 상태를 읽을 수 있었다.
+//   회원에게는 고정 문구 + 짧은 코드만 준다. 운영 진단은 Edge 로그로 한다.
+//   publicMsg 를 주면 그 문구를 그대로 쓴다 (예: 「국내 번호만」 — 회원이 알아야 고칠 수 있는 것).
+function hookErr(code: number, message: string, publicMsg?: string) {
+  console.error('[sms-hook] ' + code + ' ' + message);
+  const shown = publicMsg || ('인증번호 발송에 실패했습니다. 잠시 후 다시 시도해주세요 (SMS_' + code + ')');
+  return json({ error: { http_code: code, message: shown } }, 200);
 }
 
 // ── Standard Webhooks 서명 검증 ──
@@ -171,7 +176,7 @@ serve(async (req) => {
   const domesticOk = /^\+?82(10|11|16|17|18|19)\d{7,8}$/.test(digits) || /^0(10|11|16|17|18|19)\d{7,8}$/.test(digits);
   if (!domesticOk) {
     console.warn('[sms-hook] 국내 번호가 아님 — 거부', smsType || '-', digits.replace(/\d(?=\d{4})/g, '*'));
-    return hookErr(400, '국내 휴대폰 번호만 인증 문자를 보낼 수 있습니다');
+    return hookErr(400, '국내 번호 아님', '국내 휴대폰 번호만 인증 문자를 보낼 수 있습니다');
   }
 
   const apiKey = Deno.env.get('SOLAPI_API_KEY');
