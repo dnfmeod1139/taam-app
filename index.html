@@ -614,7 +614,11 @@ html.auto-login .splash .bottom-group{display:none !important}
 .gnb-btn.active{background:rgba(255,255,255,.12)}
 .gnb-btn svg{width:20px;height:20px;stroke:rgba(255,255,255,.45);fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;transition:stroke .2s;flex-shrink:0}
 .gnb-btn.active svg{stroke:#fff}
-.gnb-label{font-family:var(--font-main);font-size:8.4px;font-weight:1000;letter-spacing:.06em;color:rgba(255,255,255,.4);transition:color .2s;white-space:nowrap}
+.gnb-label{font-family:var(--font-main);font-size:9.5px;font-weight:1000;letter-spacing:.06em;color:rgba(255,255,255,.6);transition:color .2s;white-space:nowrap} /* 2026.09.14: 8.4px·.4 → 대비 3.2:1 이라 4.5:1 로 */
+.gnb-btn svg{stroke:rgba(255,255,255,.6)}
+/* 2026.09.14 접근성: 키보드 포커스 표시 · 모션 축소 존중 */
+:focus-visible{outline:2px solid #c8a96e;outline-offset:2px}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
 
 /* ── 🆕 2026.08 사진 캘린더 (새 첫 화면) ──────────────────────────
    플래그(newHomeEnabled) 뒤에서만 붙는다. 기존 GNB/홈 스타일은 건드리지 않음.
@@ -8084,6 +8088,7 @@ async function _tossConfirmPayment(paymentKey, orderId, amount){
     await new Promise(function(res){ setTimeout(res, 500); });
   }
   if (!u) {
+    window._tossConfirmRunning = false;   // 🔧 2026.09.14: 여기서 나가면 뷰포트 가드가 영영 멈춰 있었다
     showToast('⚠','로그인이 필요합니다','다시 로그인하시면 결제가 자동으로 확인됩니다');
     return;
   }
@@ -25622,8 +25627,16 @@ async function completePurchase(){
       // 회원에게 알린다. 결제는 됐고 좌석 기록만 못 붙은 상태라, 운영이 손으로 잡아야 한다.
       try {
         if (typeof showToast === 'function') {
-          showToast('⚠','좌석 기록 확인 필요',
-            '결제는 완료됐습니다. 좌석 등록이 지연되고 있어요 — 관리자에게 자동 통지했습니다');
+          if (/PRICE_CHANGED|INSUFFICIENT_DEPOSIT|HOLD_GONE/.test(String(_hErr || ''))) {
+            // 🔧 2026.09.14: 이 셋은 서버가 차감도 확정도 하지 않은 것이다 — 「결제 완료」라고 말하면 안 된다
+            showToast('⚠','결제가 진행되지 않았습니다',
+              /HOLD_GONE/.test(String(_hErr)) ? '좌석 확보 시간이 지났습니다. 다시 시도해주세요'
+              : /INSUFFICIENT_DEPOSIT/.test(String(_hErr)) ? '예치금이 부족합니다. 충전 후 다시 시도해주세요'
+              : '가격이 바뀌었습니다. 화면을 새로고침한 뒤 다시 시도해주세요');
+          } else {
+            showToast('⚠','좌석 기록 확인 필요',
+              '결제는 완료됐습니다. 좌석 등록이 지연되고 있어요 — 관리자에게 자동 통지했습니다');
+          }
         }
       } catch(_te){}
       // 슈퍼어드민에게 즉시 통지 — 사람이 개입해야 하는 건이다
@@ -26076,7 +26089,7 @@ function _repSaleOpenedAt(t){
   if(ss === 'draft') return null;              // 미공개 보관 — 발매된 적 없다
   if(ss === 'scheduled'){
     if(!t.saleOpenAt) return null;             // 오픈 일시 미정 — 아직이다
-    var od = new Date(t.saleOpenAt);
+    var od = new Date(String(t.saleOpenAt).replace(' ', 'T'));
     if(isNaN(od.getTime()) || od.getTime() > Date.now()) return null;
     return od;                                 // 오픈 시각이 지났다 = 그때 발매
   }
@@ -27905,7 +27918,7 @@ function _rhItemHtml(r){
     +   '<span style="font-size:9px;font-weight:800;padding:3px 9px;border-radius:10px;white-space:nowrap;'+bc+';">'+badge+'</span>'
     + '</div>'
     + '<div style="font-size:12px;color:#888;margin-top:5px;">'+dateStr+' · '+r.party_size+t('resv.people','명')+'</div>'
-    + (r.member_memo ? '<div style="font-size:11px;color:#aaa;margin-top:3px;">"'+r.member_memo+'"</div>' : '')
+    + (r.member_memo ? '<div style="font-size:11px;color:#aaa;margin-top:3px;">"'+_raEsc(r.member_memo)+'"</div>' : '')
     + dep
     + '</div>';
 }
@@ -28421,8 +28434,8 @@ function ticketHistRender(idx){
     // status 없으면 날짜 기준으로 자동 분류
     var s = h.status || 'upcoming';
     if(!h.status && h.visitDate){
-      var vd = new Date(h.visitDate);
-      s = vd < new Date() ? 'visited' : 'upcoming';
+      var vd = (typeof _dParseDate === 'function') ? _dParseDate(h.visitDate) : new Date(h.visitDate);
+      s = (vd && !isNaN(vd.getTime()) && vd < new Date()) ? 'visited' : 'upcoming';
     }
     return s === targetStatus;
   });
@@ -28724,7 +28737,11 @@ function calculateTicketRefund(purchaseRecord, restaurant, currentTime, isSuperA
     // 방문일 모르면 — 보수적으로 대행비 제외 환불 (정책 2 기본)
     return { refundable: paidTotal - agencyTotal, agencyHeld: agencyTotal, reason: '대행비 제외 환불 (방문일 미확인)', policy: 'agency_excluded' };
   }
-  var daysUntilVisit = (visitDate - currentTime) / (1000 * 60 * 60 * 24);
+  // 🔧 2026.09.14: 서버 한도(taam_refund_cap)와 같이 「달력 날짜 차」로 센다.
+  //   종전엔 방문일 0시 − 지금 이라 D-31 당일 아침이 30.6일로 계산돼 환불이 막혔다.
+  var _today0 = new Date(currentTime); _today0.setHours(0,0,0,0);
+  var _visit0 = new Date(visitDate); _visit0.setHours(0,0,0,0);
+  var daysUntilVisit = Math.round((_visit0 - _today0) / (1000 * 60 * 60 * 24));
 
   // 정책 2: 방문 D-31 이상(31일 이상 남음) — 대행비 제외 환불 (약관 제3조 2)
   if(daysUntilVisit >= 31){
@@ -30186,7 +30203,7 @@ function thxRender(){
         headTag = '취소 · 처리 기록 없음'; headBg = '#EFEDE8'; headFg = '#6b6b6b';
       }
       var dateStr = dr.date ? '<span style="color:#b5afa2;"> · '+dr.date+'</span>' : '';
-      var noteStr = (dr.note && _kind==='refund') ? '<div style="font-size:11px;color:#8a8478;margin-top:3px;">사유: '+dr.note+'</div>' : '';
+      var noteStr = (dr.note && _kind==='refund') ? '<div style="font-size:11px;color:#8a8478;margin-top:3px;">사유: '+_raEsc(dr.note)+'</div>' : '';
       refundLine = '<div style="margin-top:8px;padding-top:8px;border-top:1px dashed rgba(0,0,0,.08);font-size:12px;">'
         + '<span style="display:inline-block;padding:1px 7px;border-radius:999px;font-size:10.5px;font-weight:800;background:'+headBg+';color:'+headFg+';">'+headTag+'</span>'
         + (parts.length ? '<span style="color:'+(_kind==='returned'?'#1a1a18':'#C5221F')+';font-weight:700;"> ↩︎ '+parts.join(' · ')+'</span>' : '')
@@ -39375,7 +39392,7 @@ function showPenaltyNote(encodedNote) {
   el.innerHTML =
     '<div style="background:#fff;border-radius:20px;width:100%;max-width:320px;padding:28px 24px;">'
     +'<div style="font-family:var(--font-main);font-size:9px;font-weight:800;letter-spacing:.2em;color:#aaa;margin-bottom:12px;">환불불가 사유</div>'
-    +'<div style="font-family:var(--font-main);font-size:14px;color:#333;line-height:1.7;margin-bottom:24px;">'+note+'</div>'
+    +'<div style="font-family:var(--font-main);font-size:14px;color:#333;line-height:1.7;margin-bottom:24px;">'+_raEsc(note)+'</div>'
     +'<button onclick="document.getElementById(\'penaltyNotePopup\').remove()" style="width:100%;padding:14px;background:#1a1a18;border:none;border-radius:12px;font-family:var(--font-main);font-size:10px;font-weight:800;letter-spacing:.2em;color:#fff;cursor:pointer;">확인</button>'
     +'</div>';
   document.body.appendChild(el);
@@ -43462,7 +43479,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.14-q';
+var TAAM_WEB_BUILD = '2026.09.14-r';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -54308,7 +54325,7 @@ function _tkSaleHidden(t){
   if (ss === 'draft') return true;
   if (ss === 'scheduled') {
     if (!t.saleOpenAt) return true;                 // 일시 없는 예약 = 아직 비공개
-    var d = new Date(t.saleOpenAt);
+    var d = new Date(String(t.saleOpenAt).replace(' ', 'T'));
     return isNaN(d.getTime()) ? true : (new Date() < d);
   }
   return false;
@@ -58162,7 +58179,7 @@ function memRenderSheet(m) {
   html += _memRow('가입 경로', '<input class="mem-sheet-input" id="memFieldJoinPath" value="'+(m?m.joinPath||'':'')+'" placeholder="인스타그램, 지인 소개 등">');
   html += '<div style="padding:10px 16px;border-top:1px solid #f5f3f0;">';
   html += '<div style="font-family:\'Noto Sans KR\',sans-serif;font-size:12px;color:#888;margin-bottom:6px;">메모</div>';
-  html += '<textarea class="mem-sheet-textarea" id="memFieldMemo" rows="3" placeholder="관리자 메모를 입력하세요">'+(m?m.memo||'':'')+'</textarea>';
+  html += '<textarea class="mem-sheet-textarea" id="memFieldMemo" rows="3" placeholder="관리자 메모를 입력하세요">'+_raEsc(m?m.memo||'':'')+'</textarea>';
   html += '</div></div>';
 
   // 초대 코드 발송
@@ -63669,8 +63686,12 @@ async function setupNativePush(){
 
     await PushNotifications.addListener('pushNotificationActionPerformed', function(action){
       var url = action.notification && action.notification.data && action.notification.data.url;
+      // 🔒 2026.09.14: 푸시 payload 의 url 은 같은 출처의 경로만 연다 (javascript:/외부 도메인 차단)
       if (url && typeof location !== 'undefined') {
-        try { location.href = url; } catch(e){}
+        try {
+          var _u = new URL(String(url), location.origin);
+          if (_u.origin === location.origin && /^https?:$/.test(_u.protocol)) location.href = _u.href;
+        } catch(e){}
       }
     });
 

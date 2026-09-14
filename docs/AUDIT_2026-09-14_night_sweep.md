@@ -1,0 +1,57 @@
+# 2026-09-14 밤 — 보안·기능·화면 전수 점검 (남은 사용량 활용)
+
+세 갈래(보안 / 기능 / 화면 구조)로 훑었다. **이미 닫힌 것은 뺐고**, 점검기가 옛 파일을 보고 낸
+오탐(멤버십 등급 가드의 phone 신뢰 → audit5 ⑦ 로 이미 닫힘 · `taam_ref_consume` anon → 09-13 ⑨ 로 회수됨)도 뺐다.
+
+## 이번에 고친 것
+
+| # | 무엇 | 어디 | 상태 |
+|---|---|---|---|
+| S-1 ⭐ | **환불액을 앱이 정했다.** 서버는 「낸 돈 − 이미 환불」만 봐서, 앱을 고친 회원이 D-5 티켓을 전액·대행비까지 환불받을 수 있었다 → `taam_refund_cap` (30분 전액 · D-31 이상 대행비 제외 · D-30 이하 0) 을 `taam_apply_deposit_delta` ④ 에 덧댐. 슈퍼어드민 예외는 그대로 | `sql/refund_policy_server.sql` (테스트 `t_refund_policy.sh` 24건 + ledger_close 52건 회귀) | **실행 필요** |
+| S-2 | 회원이 쓴 예약 메모가 어드민 예약 목록 innerHTML 에 그대로 → 저장형 XSS (회원→어드민) | index.html `_raEsc(r.member_memo)` | 빌드 r |
+| S-3 | 환불불가 사유 팝업 · 예치금 내역 환불 사유 · 회원관리 메모 textarea 이스케이프 누락 | index.html | 빌드 r |
+| S-4 | 네이티브 푸시 탭 시 payload 의 url 을 그대로 `location.href` → 같은 출처 http(s) 경로만 | index.html `pushNotificationActionPerformed` | 빌드 r |
+| F-1 | 홀드 전환이 `PRICE_CHANGED`/`INSUFFICIENT_DEPOSIT`/`HOLD_GONE` 으로 멈췄는데 「결제는 완료됐습니다」라고 말했다 → 「결제가 진행되지 않았습니다」+ 사유별 안내 | index.html `completePurchase` | 빌드 r |
+| F-2 | D-31 경계: 앱은 「방문일 0시 − 지금」이라 D-31 당일 아침이 30.6일로 계산돼 환불이 막혔다 → 달력 날짜 차(서버와 동일) | `calculateTicketRefund` | 빌드 r |
+| F-3 | `_tossConfirmPayment` 가 세션 없이 나가면 `_tossConfirmRunning` 이 영영 true → 뷰포트 가드 정지 | index.html | 빌드 r |
+| F-4 | 옛 방문일 `'YYYY.MM.DD'` 를 `new Date()` 로 파싱 (iOS Invalid Date → 영원히 「방문예정」) → `_dParseDate` | index.html 구매내역 상태 | 빌드 r |
+| F-5 | `sale_open_at` 에 공백 구분 값이 오면 Invalid Date → 티켓 영구 비공개·재구매 잠금 → `' '→'T'` | `_repSaleOpenedAt` · `_tkSaleHidden` | 빌드 r |
+| U-1 | GNB 라벨 8.4px·투명도 .4 (대비 3.2:1) → 9.5px·.6 · 아이콘 .6 | CSS `.gnb-label` | 빌드 r |
+| U-2 | 키보드 포커스 표시(`:focus-visible`) · `prefers-reduced-motion` 전역 | CSS | 빌드 r |
+
+## 남은 것 — 우선순위 순 (다음 세션에서)
+
+### 보안 (앱·서버)
+1. **슈퍼어드민 Supabase 비밀번호가 `localStorage.taamSaPw` 에 평문** (`superadminSupabaseLogin`, PIN 통과 후 1회 입력). XSS 하나면 슈퍼어드민 DB 로그인이 새 나간다. 이 경로 자체를 없애고 일반 세션 + 서버 role 판정으로. **사용자 결정 필요** (슈퍼어드민 동선이 바뀐다).
+2. **옛 카드 등록 화면(`registerCard`)이 카드번호·유효기간·CVC 를 IndexedDB(`excCards`) 에 평문 저장**. `noCardGoCharge()` 로 아직 열린다. 토스 빌링키로 대체됐으니 화면을 지우고 저장 데이터를 폐기.
+3. `profiles.select('*')` 가 `billing_key` 까지 브라우저로 내린다. 컬럼 권한을 걸려면 **앱의 `select('*')` 를 명시 컬럼으로 먼저** 바꿔야 한다(안 그러면 조회 전체가 403).
+4. 매장·티켓 이름이 innerHTML 에 그대로 11곳 (25333, 42357, 45511, 54210, 59874, 59962, 60188, 61227, 43112, 29654, 30201). 매장 어드민이 이름을 쓸 수 있으니 전 회원 대상 저장형 XSS 가능. `_esc()` 로 감싼다.
+5. 월 커버·캐러셀 title/desc (22809, 22816, 23224, 23228, 61446, 22929) · Juso API 주소(28038) 도 이스케이프.
+6. 역할 판정을 앱이 PIN 으로 올린다(`checkSaPin` → `_currentRole='superadmin'`). 화면만 열리고 RLS 가 막긴 하지만, `_taam_uid_role()` 로 서버 값만 쓰게.
+7. `notifications` INSERT 정책이 본인 행 허용 → 회원이 「예치금 부여됨」 같은 알림을 스스로 만들 수 있다. 서버·슈퍼어드민만으로.
+8. `tcalCancelLinkedRow` 등 회원 세션의 `tickets` 직접 update/insert(MAN-) 2곳 → RPC 로.
+9. Edge: `Access-Control-Allow-Origin: *` 남은 8개 (toss-billing-issue · partner-account 가 민감) · POST 아닌 메서드 거부 없음 · `req.json()` 미보호 5개(notify-purchase, notify-reservation, send-push, taam-format, lineage-summarize) · Kakao 발송 실패 로그에 수신자 번호(notify-purchase:176, notify-reservation:140) · consume-invite/partner-account 가 원문 error.message 반환. **다음 Edge 재배포 묶음에 같이.**
+10. `GOOGLE_GEOCODE_KEY` 공개 파일 포함 — GCP 콘솔에서 HTTP referrer 제한 확인.
+11. `partner_logos` · `user_ticket_waitlist` · `partner_qr_codes` — 저장소에 정책 없음. 라이브 `pg_policies` 확인.
+
+### 기능
+12. **카드 승인 재시도 없음**: `_tossConfirmPayment` 가 세션 복원 5초 실패로 나가면 paymentKey/orderId 가 메모리에만 있고 URL 은 이미 지워져 다음 부팅에 재시도 못 함 → localStorage 에 보관하고 부팅 시 재시도.
+13. 전환 실패 시 `currentDepositBalance -= paid` · `depositData.use.push` · 완료 팝업이 이미 실행됨(25509·25682·25886) → 성공 경로 안으로.
+14. 정원 확인 early return 4곳(25443~25497)이 좌석 홀드를 안 풀어 5분간 자기 홀드에 막힌다 → `_tkReleaseSeatHold()`.
+15. 결제 버튼 이중 탭(`confirmReservation`·`#tdPayBtn`) 가드 없음 → in-flight 플래그.
+16. 취소 `confirm()` 이 한국어 고정 → EN/JA 회원이 돈 결정을 한국어로. DOM 모달 + `t()`.
+17. 서버 알림(`taam_visit_reminder_notify` · `taam_guest_expiry_notify` · `taam_notify_repurchase_released` · `taam_expire_invite_holds`) 한국어 단일 → `notifications` 에 `_en/_ja` 컬럼 + 렌더 `pickI18nObj`.
+18. 원장 실패(`_depApplyDelta` throw)가 console.error 로만 → 토스트.
+19. `_tkCapacityAutoRefund` 조회 실패 시 「환불 안 함」으로 기본 → 어드민 통지.
+20. tiershot.js 2건은 로케일 문제(헤드리스 = en-US → TX 가 'M 등급'→'M Tier'). 테스트에서 `_tkCurrentLang='ko'` 고정.
+
+### 화면
+21. **viewport 에 `viewport-fit=cover` 없음** → `env(safe-area-inset-*)` 43곳이 전부 0. iOS PWA 에서 하단 바가 홈 인디케이터 밑. 추가하면 43곳이 한꺼번에 움직이므로 **실기기(노치·SE) 확인 후** 적용. `user-scalable=no` 도 제거.
+22. 상단 여백이 화면마다 36/52/54/56px 하드코딩 → `--sat` 토큰 하나로.
+23. `.ticket-modal` z-index 2147483000 !important → 토스트·오프라인 배지가 밑에 깔림. ~9750 으로.
+24. 홈 첫 렌더: 커버 로딩 중엔 메뉴·언어·벨·FAB 까지 비어 검은 화면 → 사진만 기다리게.
+25. 마이페이지 8px/7px 라벨(462 규칙 <12px) → 10px 바닥. 스테퍼·pax 버튼 28px 등 탭 영역 44px.
+26. 1024px 에서 캘린더 max-width 없음 · 월 스트립 좌측 잘림 · 티켓 상세 사진 없을 때 검은 300px 블록 · 3번째 탭 말줄임.
+27. 어드민 모달 10개 `data-lang-lock="ko"` 누락(혼합 번역) · aria-label 한국어 6곳 · 아이콘 버튼 27개 aria-label 없음 · 약관 중복 id.
+28. `theme-color` 가 다크 고정인데 마이페이지·상세는 라이트 → 화면 열 때 갱신 · `color-scheme`.
+29. 도달 불가 `#ticketView` 제거.
