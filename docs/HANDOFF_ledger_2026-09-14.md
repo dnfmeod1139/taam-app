@@ -53,6 +53,12 @@
 - 남은 high: **초대제 서버화 1건** (내일 별도 세션) — 설계: 가입은 verify-invite(welcome)가 service_role 로 createUser · 슈퍼어드민 화이트리스트도 서버 · 소셜 첫 로그인은 초대 대조 후 허용 · 대시보드 signup OFF 는 앱·Edge 배포 뒤 마지막에
 - 내일 아침 확인: `net._http_response` 200 두 줄(10시·11시) · 「오늘 오류」 boot_slow 신규 0
 
+## 밤에 더 한 것 (사용량 35% 남은 시점)
+
+- ✅ 등급 판정 두 갈래 통일(빌드 `14-p`) — `getCurrentUserGrade` 가 프로필 기반 값을 먼저 본다. 회원에게 `memberDB` 가 비어 있어 M 회원이 M 우선 공개 구간 상세 입구에서 막히던 것(CLAUDE.md 「재현 미확인」 → 코드로 확인·수정)
+- ⚠ `sql/_test/tiershot.js` 에 **내 변경 전부터** 실패 2건(팝업 문구 「33인 · 심사제」 · 「M 등급」 검사). 09-13 「단일 등급」 문구 변경 뒤 갱신이 안 된 옛 기대값으로 보임 — 다음에 테스트 기대값을 현재 문구에 맞출 것
+- 안 한 것: 나머지 10개 함수 CORS · CSP Report-Only · 서버 생성 알림 EN/JA · 환율 재개 준비(확정 정가 강제, ≈ 제거)
+
 ## 넘어가지 말 것
 
 - 잔액은 `profiles` 직접 update 금지. `_depApplyDelta` 에 **델타 + entries**.
