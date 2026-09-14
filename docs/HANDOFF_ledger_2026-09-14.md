@@ -105,3 +105,10 @@
 5. 검증이 끝나면 `verify-invite` 의 「이미 가입」 예외 처리와 `consume-invite` 는 그대로 둔다 — 문지기는 **추가** 방어다.
    대시보드 "Allow new users to sign up" 은 **켜 둔다** (끄면 초대 가입 자체가 막힌다).
 6. 그 뒤 low: 나머지 10개 함수 CORS · CSP Report-Only · 서버 알림 EN/JA · tiershot 옛 기대값.
+
+---
+
+## 밤 전수 점검 결과 (2026-09-14 밤) — `docs/AUDIT_2026-09-14_night_sweep.md`
+
+- `sql/refund_policy_server.sql` **적용 ✅** (5/5). D-31 유지로 사용자 확정. 앱은 빌드 `r`.
+- 다음: 문서의 「남은 것」 1·2 는 사용자 결정 대기 (슈퍼어드민 비밀번호 localStorage · 옛 카드 등록 화면 폐기).
