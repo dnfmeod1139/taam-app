@@ -40,12 +40,18 @@
    (⚠ 재배포 필요 · `DEPLOY_CHECKLIST.md` 2차)
 8. 미감사 5개 영역 점검 (`docs/AUDIT_2026-09-14_unaudited5.md`) → `sql/audit5_hardening_2026-09-14.sql` ✅ 라이브 적용(9줄 ✅) · Edge 4개(sms-hook·partner-account·notify 2개) ✅ 재배포됨 · 2차 검증 후 notify-purchase 수정 — ⚠ 재배포 필요(⚠ 저녁에 verify-and-save-purchase 함수에 잘못 붙임 → 앱 호출 제거(14-k) · 그 함수는 대시보드에서 삭제)
 9. low 묶음 — `sql/low_batch_2026-09-14.sql`(⚠ 실행 필요) · Edge 2개(toss-billing-issue·taam-sms-hook ⚠ 재배포) · 앱 14-o(카드등록 nonce · billing_key 원문 안 읽음 · 오류신고 sid)
-   - ✅ `sql/billing_keys_columns.sql`(⚠ 실행 필요) · Edge 10개 오류 원문 비노출 + CORS 오리진 제한(⚠ 재배포) · 남은 것: CSP Report-Only, 나머지 10개 함수 CORS
+   - ✅ `sql/billing_keys_columns.sql` 적용(3줄 ✅) · ✅ Edge 10개 재배포됨(오류 원문 비노출 + CORS 오리진 제한) · 남은 것: CSP Report-Only, 나머지 10개 함수 CORS
 10. 그 다음 후보 (아직 안 함)
    - 초대제 서버화(가입은 consume-invite 가 service_role 로 사용자 생성 · 대시보드 signup OFF)
    - ✅ taam-format 소스 회수 + 이스케이프(14-l) · 저장소 밖 함수 3개(portone-webhook·save-billing-key·verify-identity-and-auth) 삭제 · partner-account·lineage-summarize Verify JWT ON
    - vercel.json CSP(script-src) Report-Only 도입 + cdnjs SRI
    - 회원 세션 `deposit_transactions` SELECT 는 그대로 (자기 것만) — 건드릴 것 없음
+
+## 2026-09-14 종료 시점 라이브 상태
+
+- 앱 `2026.09.14-o` · SQL 6파일 적용(ledger_close · admin_grant_via_rpc · audit5_hardening · low_batch · billing_keys_columns 등) · Edge 재배포 총 17회
+- 남은 high: **초대제 서버화 1건** (내일 별도 세션) — 설계: 가입은 verify-invite(welcome)가 service_role 로 createUser · 슈퍼어드민 화이트리스트도 서버 · 소셜 첫 로그인은 초대 대조 후 허용 · 대시보드 signup OFF 는 앱·Edge 배포 뒤 마지막에
+- 내일 아침 확인: `net._http_response` 200 두 줄(10시·11시) · 「오늘 오류」 boot_slow 신규 0
 
 ## 넘어가지 말 것
 
