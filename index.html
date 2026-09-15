@@ -17056,6 +17056,8 @@ async function loadDeposit(){
             var headerLabel = _typeLabelKo(n.type);
             var cleanTitle = _toastStripLead(n.title || '') || headerLabel;
             var cleanBody = _toastStripAll(n.body || '');
+            // 🆕 2026.09.15 미접속 중 쌓인 서버 알림도 현재 언어로 (목록과 같은 정규화)
+            try { cleanTitle = _notifL10nTitle(cleanTitle); cleanBody = _notifL10nBody(cleanBody); } catch(_l10){}
             if (typeof showToast === 'function') showToast(headerLabel, cleanTitle, cleanBody, {
               onTap: (function(_id){ return function(){ _notifMarkSeen(_id); }; })(n.id)
             });
@@ -17161,10 +17163,26 @@ var _NOTIF_TITLES = [
   { m:[/^매진 — 자동 환불$/],
     t:['매진 — 자동 환불','Sold Out — Auto Refund','満席 — 自動返金'] },
   { m:[/^회원이 초대 결제를 완료했습니다$/],
-    t:['회원이 초대 결제를 완료했습니다','Invite Payment Completed','会員が招待の決済を完了しました'] }
+    t:['회원이 초대 결제를 완료했습니다','Invite Payment Completed','会員が招待の決済を完了しました'] },
+  // 🆕 2026.09.15 서버(pg_cron)가 만드는 알림 — 한국어로만 저장되므로 여기서 다시 그린다
+  { m:[/^내일 방문 예정입니다$/], t:['내일 방문 예정입니다','Your visit is tomorrow','明日ご来店の予定です'] },
+  { m:[/^3일 뒤 방문 예정입니다$/], t:['3일 뒤 방문 예정입니다','Your visit is in 3 days','3日後にご来店の予定です'] },
+  { m:[/^내일 초대가 종료됩니다$/], t:['내일 초대가 종료됩니다','Your guest access ends tomorrow','ゲスト期間は明日終了します'] },
+  { m:[/^예약이 열렸습니다$/], t:['예약이 열렸습니다','Booking is open again','予約が再開されました'] },
+  { m:[/^⏰?\s*초대 자동 만료 \(48시간\)$/], t:['초대 자동 만료 (48시간)','Invite expired (48h)','招待の自動失効（48時間）'] }
 ];
+// 숫자가 든 제목 (「방문 N일 전입니다」·「초대 종료 N일 전입니다」)
+function _notifL10nTitleNum(s0){
+  var li = _notifLangIdx(), m;
+  m = s0.match(/^방문 (\d+)일 전입니다$/);
+  if(m) return ['방문 ' + m[1] + '일 전입니다', 'Your visit is in ' + m[1] + ' days', 'ご来店まであと' + m[1] + '日です'][li];
+  m = s0.match(/^초대 종료 (\d+)일 전입니다$/);
+  if(m) return ['초대 종료 ' + m[1] + '일 전입니다', 'Guest access ends in ' + m[1] + ' days', 'ゲスト期間終了まであと' + m[1] + '日'][li];
+  return null;
+}
 function _notifL10nTitle(title){
   var s0 = String(title || '').trim();
+  var _num = _notifL10nTitleNum(s0); if(_num) return _num;
   for(var i = 0; i < _NOTIF_TITLES.length; i++){
     var e = _NOTIF_TITLES[i];
     for(var j = 0; j < e.m.length; j++){
@@ -17201,6 +17219,24 @@ function _notifL10nBody(body){
   if(/^티켓 구매가 완료되었습니다\.?$/.test(s0) || /^your ticket purchase is complete\.?$/i.test(s0)){
     return ['티켓 구매가 완료되었습니다','Your ticket purchase is complete','チケット購入が完了しました'][li];
   }
+  // 🆕 2026.09.15 서버 알림 본문 4종
+  // 방문 리마인드: "{매장}( · {시간}) 예약이 내일입니다." / "… 예약이 N일 남았습니다."
+  m = s0.match(/^(.+?) 예약이 (?:내일입니다|(\d+)일 남았습니다)\.?$/);
+  if(m){
+    var _d = m[2];
+    return [s0,
+            m[1] + (_d ? ' — your reservation is in ' + _d + ' days' : ' — your reservation is tomorrow'),
+            m[1] + (_d ? ' — ご予約まであと' + _d + '日です' : ' — ご予約は明日です')][li];
+  }
+  if(/^예약하시면 기한이 다시 늘어납니다\.?$/.test(s0)){
+    return ['예약하시면 기한이 다시 늘어납니다', 'Making a reservation extends your guest access', 'ご予約いただくと期間が延長されます'][li];
+  }
+  // 재구매 해제: "{매장} · {날짜} — 재구매 제한이 풀려 지금 예약하실 수 있습니다"
+  m = s0.match(/^(.+?) — 재구매 제한이 풀려 지금 예약하실 수 있습니다$/);
+  if(m) return [s0, m[1] + ' — the repurchase limit has lifted, you can book now', m[1] + ' — 再購入制限が解除され、今すぐ予約できます'][li];
+  // 초대 만료: "{매장} · {날짜} {시간} · N인 — 미결제로 만료, 좌석 자동 복구됨"
+  m = s0.match(/^(.+?) · (\d+)인 — 미결제로 만료, 좌석 자동 복구됨$/);
+  if(m) return [s0, m[1] + ' · ' + m[2] + ' guests — expired unpaid, seats released', m[1] + ' · ' + m[2] + '名 — 未決済のため失効、席は自動復旧'][li];
   // 매장 반환: "{매장} 예치금 ₩X 반환 ..."
   m = s0.match(/^(.+?) 예치금 ₩?([\d,]+) 반환([\s\S]*)$/);
   if(m){
@@ -28744,41 +28780,51 @@ function openCancelTicketModal(purchaseId){
   var isSuper = (typeof _currentRole !== 'undefined' && (_currentRole === 'superadmin' || _currentRole === 'super_admin'));
   var preview = calculateTicketRefund(h, r, new Date(), isSuper);
 
-  var msg = '[티켓 취소 요청]\n\n';
-  msg += '레스토랑: ' + (r ? r.name : '알 수 없음') + '\n';
-  msg += '인원: ' + h.pax + '인\n';
-  msg += '결제 금액: ₩' + (h.amt||0).toLocaleString() + '\n';
-  msg += '방문일: ' + (h.visitDate || '미지정') + '\n';
-  // 🆕 2026-09-14: 구매 일시와 경과 시간 — 30분 규칙이 왜 적용/미적용인지 그 자리에서 보이게
+  // 🆕 2026.09.15 EN/JA 회원이 돈 결정을 한국어로 하고 있었다 — confirm() 은 TX 스윕이 못 닿으므로 여기서 언어별로 짓는다
+  var _cl = (window._tkCurrentLang === 'en') ? 1 : (window._tkCurrentLang === 'ja') ? 2 : 0;
+  var L = function(ko, en, ja){ return [ko, en, ja][_cl]; };
+  var _won = function(v){ return '₩' + (parseInt(v||0)||0).toLocaleString(); };
+  var msg = L('[티켓 취소 요청]', '[Cancel Ticket]', '[チケットのキャンセル]') + '\n\n';
+  msg += L('레스토랑: ', 'Restaurant: ', 'レストラン: ') + (r ? r.name : L('알 수 없음','Unknown','不明')) + '\n';
+  msg += L('인원: ' + h.pax + '인', 'Guests: ' + h.pax, '人数: ' + h.pax + '名') + '\n';
+  msg += L('결제 금액: ', 'Paid: ', '決済金額: ') + _won(h.amt) + '\n';
+  msg += L('방문일: ', 'Visit date: ', '来店日: ') + (h.visitDate || L('미지정','—','未定')) + '\n';
   try {
     var _pd = h.date ? new Date(h.date) : null;
     if (_pd && !isNaN(_pd.getTime())) {
       var _min = Math.floor((Date.now() - _pd.getTime()) / 60000);
-      var _el = _min < 60 ? (_min + '분') : (_min < 1440 ? (Math.floor(_min/60) + '시간 ' + (_min%60) + '분') : (Math.floor(_min/1440) + '일'));
-      msg += '구매 일시: ' + _thxFmtDateTime(h.date) + ' (' + _el + ' 경과' + (_min <= 30 ? ' · 30분 이내' : '') + ')\n';
+      var _el = _min < 60 ? L(_min + '분', _min + ' min', _min + '分')
+              : _min < 1440 ? L(Math.floor(_min/60) + '시간 ' + (_min%60) + '분', Math.floor(_min/60) + 'h ' + (_min%60) + 'm', Math.floor(_min/60) + '時間' + (_min%60) + '分')
+              : L(Math.floor(_min/1440) + '일', Math.floor(_min/1440) + ' days', Math.floor(_min/1440) + '日');
+      msg += L('구매 일시: ', 'Purchased: ', '購入日時: ') + _thxFmtDateTime(h.date) + ' (' + _el + L(' 경과', ' ago', ' 経過') + (_min <= 30 ? L(' · 30분 이내', ' · within 30 min', ' · 30分以内') : '') + ')\n';
     }
   } catch(_pt){}
-  msg += '\n━━━━━━ 환불 정책 ━━━━━━\n';
-  msg += '· 구매 30분 이내: 전액 환불\n';
-  msg += '· 방문일 D-31 이상: 대행비 제외 환불\n';
-  msg += '· D-30 ~ 당일: 환불 불가 (슈퍼어드민 예외 가능)\n\n';
-  msg += '━━━━━━ 환불 미리보기 ━━━━━━\n';
-  msg += '환불 가능 금액: ₩' + preview.refundable.toLocaleString() + '\n';
-  if(preview.agencyHeld > 0) msg += '대행비 보유: ₩' + preview.agencyHeld.toLocaleString() + '\n';
-  // 🆕 카드 결제분은 카드로, 예치금 결제분은 예치금으로 나뉘어 환불됨을 안내
+  msg += '\n━━━━━━ ' + L('환불 정책', 'Refund policy', '返金規定') + ' ━━━━━━\n';
+  msg += L('· 구매 30분 이내: 전액 환불', '· Within 30 min of purchase: full refund', '· 購入後30分以内: 全額返金') + '\n';
+  msg += L('· 방문일 D-31 이상: 대행비 제외 환불', '· 31+ days before visit: refund excluding service fee', '· 来店31日前まで: 代行手数料を除き返金') + '\n';
+  msg += L('· D-30 ~ 당일: 환불 불가 (슈퍼어드민 예외 가능)', '· 30 days or less: no refund (admin exception possible)', '· 30日前〜当日: 返金不可（管理者の例外あり）') + '\n\n';
+  msg += '━━━━━━ ' + L('환불 미리보기', 'Refund preview', '返金プレビュー') + ' ━━━━━━\n';
+  msg += L('환불 가능 금액: ', 'Refundable: ', '返金可能額: ') + _won(preview.refundable) + '\n';
+  if(preview.agencyHeld > 0) msg += L('대행비 보유: ', 'Service fee retained: ', '代行手数料（返金なし）: ') + _won(preview.agencyHeld) + '\n';
   var _pex = h.extra_data || {};
   var _pIsCard = ((parseInt(_pex.cardPaid || 0) || 0) > 0) || (_pex.paidBy === 'card+deposit');
   if(_pIsCard && preview.refundable > 0){
     var _pDep = Math.min(preview.refundable, parseInt(_pex.depositUsed || 0) || 0);
     var _pCard = Math.max(0, preview.refundable - _pDep);
-    if(_pDep > 0) msg += ' └ 예치금 환불: ₩' + _pDep.toLocaleString() + '\n';
-    if(_pCard > 0) msg += ' └ 카드 환불(영업일 기준): ₩' + _pCard.toLocaleString() + '\n';
+    if(_pDep > 0) msg += ' └ ' + L('예치금 환불: ', 'To deposit: ', 'デポジットへ返金: ') + _won(_pDep) + '\n';
+    if(_pCard > 0) msg += ' └ ' + L('카드 환불(영업일 기준): ', 'To card (business days): ', 'カードへ返金（営業日）: ') + _won(_pCard) + '\n';
   }
-  msg += '사유: ' + preview.reason + '\n\n';
+  var _reason = { within_30min: L('구매 30분 이내 전액 환불','Full refund — within 30 min of purchase','購入後30分以内の全額返金'),
+                  agency_excluded: L('대행비 제외 환불','Refund excluding service fee','代行手数料を除く返金'),
+                  no_refund: L('환불 불가 (슈퍼어드민 예외 가능)','No refund (admin exception possible)','返金不可（管理者の例外あり）'),
+                  super_admin: L('슈퍼어드민 예외 환불','Admin exception refund','管理者による例外返金') }[preview.policy] || preview.reason;
+  msg += L('사유: ', 'Reason: ', '理由: ') + _reason + '\n\n';
   if(preview.refundable === 0 && !isSuper){
-    msg += '⚠ 현재 환불이 불가합니다.\n슈퍼어드민에게 문의해주세요.\n\n취소 요청만 진행하시겠습니까?';
+    msg += L('⚠ 현재 환불이 불가합니다.\n슈퍼어드민에게 문의해주세요.\n\n취소 요청만 진행하시겠습니까?',
+             '⚠ No refund is available now.\nPlease contact the concierge.\n\nProceed with the cancellation request anyway?',
+             '⚠ 現在返金はできません。\nコンシェルジュにお問い合わせください。\n\nキャンセル申請のみ進めますか？');
   } else {
-    msg += '취소를 진행하시겠습니까?';
+    msg += L('취소를 진행하시겠습니까?', 'Proceed with cancellation?', 'キャンセルを進めますか？');
   }
 
   if(!confirm(msg)) return;
@@ -43066,7 +43112,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.15-a';
+var TAAM_WEB_BUILD = '2026.09.15-b';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){

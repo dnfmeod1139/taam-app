@@ -24,6 +24,8 @@ const { chromium } = require('playwright-core');
   await p.waitForTimeout(2500);
 
   const r = await p.evaluate(async () => {
+    // 🔧 2026.09.15: 헤드리스 로케일(en-US)이면 TX 스윕이 'M 등급'→'M Tier' 로 바꿔 기대값이 어긋난다 — 한국어로 고정
+    try { window._tkCurrentLang = 'ko'; if (typeof applyI18n === 'function') applyI18n(document); } catch(e){}
     const out = [];
     const ok = (n, c) => out.push((c ? 'OK   ' : 'FAIL ') + n);
     const sleep = ms => new Promise(r => setTimeout(r, ms));
