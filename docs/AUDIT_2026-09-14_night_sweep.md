@@ -32,7 +32,7 @@
 8. `tcalCancelLinkedRow` 등 2곳 — **보류**: 어드민 캘린더 화면(회원 UI 아님)이고 행 트리거·RLS 가 이미 지킨다.
 9. ~~Edge 8개 CORS `*` · POST 가드 · `req.json()` 미보호 · 로그 PII · 원문 오류~~ → **2026-09-15 코드 반영** (toss-billing-issue · partner-account · notify-purchase · notify-guest-expiry · notify-visit-reminder · taam-chat · taam-format · taam-translate 에 출처 허용목록 + 405 · json().catch 5곳 · Kakao/send-push 로그 수신자 마스킹 · consume-invite 고정 문구). 배포는 `supabase.yml` 이 시크릿 등록 뒤 자동. partner-account 의 원문 오류는 슈퍼어드민 전용 도구라 그대로.
 10. `GOOGLE_GEOCODE_KEY` 공개 파일 포함 — GCP 콘솔에서 HTTP referrer 제한 확인.
-11. `partner_logos` · `user_ticket_waitlist` · `partner_qr_codes` — 저장소에 정책 없음. 라이브 `pg_policies` 확인.
+11. ~~`partner_logos` · `user_ticket_waitlist` · `partner_qr_codes` 정책~~ → 라이브 확인: 셋 다 RLS 켜짐·정책 맞음(로고·QR 은 슈퍼어드민 전용 화면, 대기열은 본인 행). 손댈 것 없음.
 
 ### 기능
 12. **카드 승인 재시도 없음** — 사용자 지시로 나중에.
@@ -40,7 +40,7 @@
 14. ~~정원 확인 early return 4곳~~ → **빌드 `15-a`**: 각 return 앞에 `_tkReleaseSeatHold()`.
 15. ~~취소 `confirm()` 한국어 고정~~ → **빌드 `15-b`**: 현재 언어(KO/EN/JA)로 문구를 짓는다 (정책·미리보기·사유 전부).
 16. ~~서버 알림 4종 한국어 단일~~ → **빌드 `15-b`**: 컬럼 추가 대신 앱의 알림 정규화(`_notifL10nTitle/Body`)에 4종 패턴을 넣어 목록·토스트 모두 현재 언어로. SQL 변경 없음.
-17. 서버 알림(`taam_visit_reminder_notify` · `taam_guest_expiry_notify` · `taam_notify_repurchase_released` · `taam_expire_invite_holds`) 한국어 단일 → `notifications` 에 `_en/_ja` 컬럼 + 렌더 `pickI18nObj`.
+17. ~~서버 알림 4종 한국어 단일~~ → 16 과 같은 항목 (빌드 `15-b` 에서 앱 정규화로 해결).
 18. ~~원장 실패 console 만~~ → **빌드 `15-a`**: 회원 토스트 + `ledger_apply_failed` 어드민 통지.
 19. ~~`_tkCapacityAutoRefund` 조회 실패~~ → **빌드 `15-a`**: 조회 실패면 환불 판단을 멈추고 `capacity_refund_unknown` 어드민 통지.
 20. ~~tiershot.js 2건~~ → 테스트에서 `_tkCurrentLang='ko'` 고정. 전부 통과.
@@ -52,6 +52,6 @@
 24. 홈 첫 렌더: 커버 로딩 중엔 메뉴·언어·벨·FAB 까지 비어 검은 화면 → 사진만 기다리게.
 25. ~~마이페이지 7~8px 라벨 · 28px 탭 영역~~ → **빌드 `15-c`** 라벨 9~10px 바닥 · 스테퍼/인원 버튼 손가락 영역 44px(::before).
 26. 1024px 캘린더 폭 → **빌드 `15-c`** 768px 이상에서 600px 가운데. 월 스트립 잘림 · 상세 사진 없을 때 검은 블록 · 탭 말줄임은 남음.
-27. 어드민 모달 10개 `data-lang-lock="ko"` 누락(혼합 번역) · aria-label 한국어 6곳 · 아이콘 버튼 27개 aria-label 없음 · 약관 중복 id.
+27. ~~어드민 모달 `data-lang-lock` · aria-label 한국어~~ → **빌드 `15-d`** 모달 12개 잠금 · aria-label 8개 문구 TX_MAP 등록. 아이콘 버튼 aria-label 27개·약관 중복 id 는 남음(낮음).
 28. `theme-color` 가 다크 고정인데 마이페이지·상세는 라이트 → 화면 열 때 갱신 · `color-scheme`.
 29. 도달 불가 `#ticketView` 제거.
