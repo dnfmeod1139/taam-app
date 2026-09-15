@@ -11704,6 +11704,17 @@ window.closePromoCarousel = function(){
       <label class="rp-label">레스토랑명</label>
       <input class="rp-input" id="rpName" type="text" placeholder="레스토랑 이름">
     </div>
+    <!-- 🆕 2026.09.15 언어별 표기 — 한자·로마자 표기가 AI 음차와 다를 수 있어 어드민이 직접 적는다.
+         비워 두면 AI 일괄 번역이 채우고, 적혀 있으면 AI 가 덮어쓰지 않는다 (_i18nBatch 의 keep). -->
+    <div class="rp-field" data-lang-lock="ko">
+      <label class="rp-label">영문 표기 (EN)</label>
+      <input class="rp-input" id="rpNameEn" type="text" placeholder="예: Sushi Saito — 비우면 AI 가 채웁니다" autocomplete="off">
+    </div>
+    <div class="rp-field" data-lang-lock="ko">
+      <label class="rp-label">일본어 표기 (JA)</label>
+      <input class="rp-input" id="rpNameJp" type="text" placeholder="예: 鮨 さいとう — 비우면 AI 가 채웁니다" autocomplete="off">
+      <div style="font-family:var(--font-main);font-size:10.5px;color:#999;margin-top:6px;line-height:1.5;">영어·일본어 화면에서 매장 이름이 이 표기로 나옵니다. 적어 두면 AI 번역이 덮어쓰지 않습니다.</div>
+    </div>
     <div class="rp-field" style="position:relative;">
       <label class="rp-label">주소</label>
       <input class="rp-input" id="rpAddress" type="text" placeholder="레스토랑 이름 또는 주소 검색" autocomplete="off" oninput="rpAddrInput(this.value)">
@@ -15449,6 +15460,10 @@ var payload = {
     //   번역은 옛 값 그대로 남았다(배치를 돌려도 이미 처리된 행으로 보고 건너뛴다).
     //   한국어 원문 3개를 스냅샷과 비교해 실제로 달라졌을 때만 pending 으로 내린다.
     //   — 무관한 저장(사진 교체 등)에 매번 pending 을 찍으면 번역비만 나간다.
+    // 🆕 2026.09.15 언어별 표기 — 폼을 거친 객체에만 name_en/name_jp 키가 있다. 그때만 보낸다.
+    //   빈 값은 null 로 지워 AI 배치가 다시 채우게 한다 (폼은 기존 값으로 채워지므로 비운 건 의도다).
+    if (r.name_en !== undefined) payload.name_en = (r.name_en || '').trim() || null;
+    if (r.name_jp !== undefined) payload.name_jp = (r.name_jp || '').trim() || null;
     var _koNow = [r.name || '', r.genre || '', r.address || ''].join('');
     if (r._i18nKoSnap !== undefined && r._i18nKoSnap !== _koNow) {
       payload.i18n_status_en = 'pending';
@@ -40223,7 +40238,7 @@ function rpResetForm() {
   if (addrInp) addrInp._nominatimBound = false;
 
   // 텍스트 입력 초기화 (restInfo 포함)
-  var fields = ['rpName','rpAddress','rpAddrDetail','rpCorkageAmt','rpCorkageBottles','rpRestInfo'];
+  var fields = ['rpName','rpNameEn','rpNameJp','rpAddress','rpAddrDetail','rpCorkageAmt','rpCorkageBottles','rpRestInfo'];
   fields.forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
 
   // 주소 선택 초기화
@@ -41132,6 +41147,8 @@ function rpEditRest(id) {
 
   // 기본 정보 채우기
   document.getElementById('rpName').value = r.name || '';
+  var _ne = document.getElementById('rpNameEn'); if (_ne) _ne.value = r.name_en || '';
+  var _nj = document.getElementById('rpNameJp'); if (_nj) _nj.value = r.name_jp || '';
   rpAddrClear();
   document.getElementById('rpAddress').value = r.address || '';
   _rpAddressEn = r.addressEn || '';
@@ -41722,6 +41739,9 @@ function submitRestaurant(){
   var img=document.getElementById('rpPhotoCardPreview');
   _pendingRest={
     name:name,
+    // 🆕 2026.09.15 언어별 표기 (빈 값이면 AI 가 채운다)
+    name_en: ((document.getElementById('rpNameEn')||{}).value || '').trim(),
+    name_jp: ((document.getElementById('rpNameJp')||{}).value || '').trim(),
     address:document.getElementById('rpAddress').value.trim(),
     addressEn:_rpAddressEn,
     lat:_rpLat,
@@ -41765,6 +41785,8 @@ function submitRestaurant(){
   else{photoWrap.style.display='none';}
   document.getElementById('rcpRows').innerHTML=[
     ['레스토랑',name],
+    ['영문 표기',_pendingRest.name_en||'(AI 번역)'],
+    ['일본어 표기',_pendingRest.name_jp||'(AI 번역)'],
     ['지역',_pendingRest.region||'–'],
     ['장르',_pendingRest.genre||'–'],
     ['주소',_pendingRest.address||'–'],
@@ -43117,7 +43139,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.15-d';
+var TAAM_WEB_BUILD = '2026.09.15-e';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -51265,8 +51287,13 @@ async function _i18nBatch(cfg){
       cfg.fields.forEach(function(f){
         var v = tr && tr[f.ko];
         if (!v) return;
-        if (v.en) { payload[f.en] = v.en; got++; }
-        if (v.ja) { payload[f.jp] = v.ja; got++; }
+        // 🆕 2026.09.15 keep — 어드민이 직접 적은 표기(매장 이름 EN/JA)는 AI 가 덮어쓰지 않는다.
+        //   비어 있을 때만 채운다. 다시 AI 로 받고 싶으면 폼에서 그 칸을 비운다.
+        var keepEn = !!f.keep && (r[f.en] || '').toString().trim() !== '';
+        var keepJp = !!f.keep && (r[f.jp] || '').toString().trim() !== '';
+        if (v.en && !keepEn) { payload[f.en] = v.en; got++; }
+        if (v.ja && !keepJp) { payload[f.jp] = v.ja; got++; }
+        if (keepEn || keepJp) got++;   // 지킨 것도 처리된 것으로 센다 (행이 영원히 대상으로 남지 않게)
       });
       // 번역 결과가 하나도 없으면 완료로 표시하지 않는다 (다음 실행에서 재시도)
       if (got === 0) { fail++; console.warn('[i18n] 번역 결과 없음', r[idCol]); continue; }
@@ -51305,7 +51332,7 @@ function taamTranslateRestaurants(opts){
       return head + '. 고유명사는 현지 통용 표기를 우선하고, 억지 의역을 피할 것.';
     },
     fields: [
-      { ko:'name',        en:'name_en',        jp:'name_jp' },
+      { ko:'name',        en:'name_en',        jp:'name_jp', keep:true },   // 🆕 어드민 표기 우선
       { ko:'description', en:'description_en', jp:'description_jp' },
       { ko:'address',     en:'address_en',     jp:'address_jp' }
     ]
