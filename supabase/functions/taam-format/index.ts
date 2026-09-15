@@ -44,7 +44,7 @@ const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 const DEFAULT_MODEL = "claude-sonnet-4-6";
 const MAX_MEMO_LEN = 5000; // 블로거/유튜버 본문 인풋도 받을 수 있도록 여유롭게
 
-serve(async (req) => {
+async function handle(req: Request): Promise<Response> {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
@@ -53,7 +53,7 @@ serve(async (req) => {
     // ────────────────────────────────────────
     // 입력 검증
     // ────────────────────────────────────────
-    const body = await req.json();
+    const body = await req.json().catch(() => ({}));
     const memo = (body.memo || "").trim();
     const verifiedByTaam = !!body.verified_by_taam;
 
@@ -330,7 +330,28 @@ ${memo}
     console.error("[taam-format] 예외:", e);
     return jsonRes({ ok: false, error: "서버 오류가 났습니다. 잠시 후 다시 시도해주세요" }, 500);
   }
+}
+
+// ── 🔒 2026-09-15 CORS 는 우리 출처만 · 메서드는 POST/OPTIONS 만 ──
+//   (다른 10개 함수와 같은 마무리. Access-Control-Allow-Origin '*' 는 위 cors 상수에 남아 있지만 여기서 덮어쓴다)
+const TAAM_ORIGINS = ['https://taam-app.vercel.app', 'https://playtaam.com', 'https://www.playtaam.com'];
+function taamOrigin(req: Request): string {
+  const o = req.headers.get('Origin') || '';
+  if (TAAM_ORIGINS.includes(o) || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(o)) return o;
+  return TAAM_ORIGINS[0];
+}
+serve(async (req: Request) => {
+  let res: Response;
+  if (req.method !== 'OPTIONS' && req.method !== 'POST') {
+    res = new Response(JSON.stringify({ error: 'method_not_allowed' }),
+      { status: 405, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+  } else {
+    res = await handle(req);
+  }
+  try { res.headers.set('Access-Control-Allow-Origin', taamOrigin(req)); res.headers.append('Vary', 'Origin'); } catch (_e) { /* 헤더 잠긴 응답이면 그대로 */ }
+  return res;
 });
+
 
 function jsonRes(obj: unknown, status = 200) {
   return new Response(JSON.stringify(obj), {

@@ -173,7 +173,7 @@ async function sendKakao(phone: string, vars: Record<string, string>): Promise<s
     if (failed > 0 || (code && code !== "2000")) {
       const why = body.failedMessageList?.[0]?.statusMessage
                || body.statusMessage || code || "알 수 없음";
-      console.warn("[kakao] 발송 실패:", code, why, JSON.stringify(body).slice(0, 300));
+      console.warn("[kakao] 발송 실패:", code, why, "to=…" + String((body as any)?.messages?.[0]?.to ?? (body as any)?.to ?? "").slice(-4));
       return `fail(${code || "?"}: ${String(why).slice(0, 40)})`;
     }
     return "ok";
@@ -288,10 +288,10 @@ function maskPhone(p: string | null | undefined): string {
 }
 
 // ════════════════ 메인 ════════════════
-Deno.serve(async (req) => {
+async function handle(req: Request): Promise<Response> {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   try {
-    const { purchase_id } = await req.json();
+    const { purchase_id } = await req.json().catch(() => ({}));
     if (!purchase_id) return json({ error: "purchase_id 필요" }, 400);
 
     // 1) 그 구매를 **DB 에서 다시 읽는다.** 앱이 넘긴 건 id 뿐이다.
@@ -392,4 +392,25 @@ Deno.serve(async (req) => {
     console.error("[notify-purchase] 예외", e);
     return json({ error: "server error" }, 500);
   }
+}
+
+// ── 🔒 2026-09-15 CORS 는 우리 출처만 · 메서드는 POST/OPTIONS 만 ──
+//   (다른 10개 함수와 같은 마무리. Access-Control-Allow-Origin '*' 는 위 cors 상수에 남아 있지만 여기서 덮어쓴다)
+const TAAM_ORIGINS = ['https://taam-app.vercel.app', 'https://playtaam.com', 'https://www.playtaam.com'];
+function taamOrigin(req: Request): string {
+  const o = req.headers.get('Origin') || '';
+  if (TAAM_ORIGINS.includes(o) || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(o)) return o;
+  return TAAM_ORIGINS[0];
+}
+Deno.serve(async (req: Request) => {
+  let res: Response;
+  if (req.method !== 'OPTIONS' && req.method !== 'POST') {
+    res = new Response(JSON.stringify({ error: 'method_not_allowed' }),
+      { status: 405, headers: { ...CORS, 'Content-Type': 'application/json' } });
+  } else {
+    res = await handle(req);
+  }
+  try { res.headers.set('Access-Control-Allow-Origin', taamOrigin(req)); res.headers.append('Vary', 'Origin'); } catch (_e) { /* 헤더 잠긴 응답이면 그대로 */ }
+  return res;
 });
+

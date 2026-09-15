@@ -1,0 +1,133 @@
+# ═══════════════════════════════════════════════════════════════
+# Supabase — SQL·Edge Function 자동 배포 (2026-09-15)
+# ═══════════════════════════════════════════════════════════════
+# 왜 만들었나
+#   지금까지 SQL 은 사람이 SQL Editor 에 붙여 넣고, Edge Function 은 대시보드에
+#   코드를 붙여 넣어 배포했다. 하루에 열 개를 두 번 붙여 넣는 날이 있었다.
+#   main 에 들어온 것이 곧 라이브가 되게 한다 — 앱(Vercel)과 같은 방식으로.
+#
+# 무엇을 하나 (main 에 supabase/ 가 바뀌어 들어오면)
+#   ① supabase/migrations/2*.sql 중 아직 안 돌린 파일을 순서대로 실행한다.
+#      어느 파일을 돌렸는지는 public._taam_migrations 에 남긴다.
+#      파일 안의 확인 표에 ❌ 가 있으면 실패로 끝낸다 (사람이 눈으로 보던 것을 로그가 본다).
+#      ⚠ 옛 0001~0003 은 손대지 않는다 (라이브 적용 여부가 기록에 없다).
+#      ⚠ 원장·잔액 수리처럼 미리보기가 필요한 SQL 은 여기 넣지 말고 sql/ 에 두고 SQL Editor 로.
+#   ② supabase/functions/<이름>/ 이 바뀐 함수만 배포한다. _shared/ 가 바뀌면 전부.
+#      verify_jwt 는 supabase/config.toml 이 정한다 — 대시보드에서 OFF 인 함수는 거기 적혀 있어야 한다.
+#
+# 준비 (한 번만) — GitHub → 저장소 → Settings → Secrets and variables → Actions
+#   SUPABASE_ACCESS_TOKEN : Supabase → Account → Access Tokens → Generate new token
+#   SUPABASE_DB_URL       : Supabase → 프로젝트 → Connect → Session pooler 의 URI
+#                           (postgresql://postgres.edfs…:[비밀번호]@aws-0-….pooler.supabase.com:5432/postgres)
+#                           ⚠ 직접 연결(db.….supabase.co)은 IPv6 라 GitHub 러너에서 안 붙는다.
+#   ⚠ 둘 다 열쇠다. 시크릿에만 두고 코드·채팅 어디에도 붙여넣지 않는다.
+#
+# 시크릿이 없으면 조용히 건너뛴다. 손으로 돌리려면 Actions → 이 워크플로 → Run workflow
+#   (functions 칸에 all 을 넣으면 함수 전부, 이름을 쉼표로 넣으면 그것만).
+# ═══════════════════════════════════════════════════════════════
+name: Supabase deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/functions/**'
+      - 'supabase/migrations/**'
+      - 'supabase/config.toml'
+  workflow_dispatch:
+    inputs:
+      functions:
+        description: '배포할 함수 — 비우면 바뀐 것만 · all = 전부 · 이름1,이름2'
+        required: false
+        default: ''
+
+concurrency:
+  group: supabase-deploy
+  cancel-in-progress: false
+
+env:
+  PROJECT_REF: edfsmzbcixfnqabrsvut
+
+jobs:
+  sql:
+    name: ① SQL migrations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 새 마이그레이션 실행
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SUPABASE_DB_URL:-}" ]; then
+            echo "SUPABASE_DB_URL 시크릿이 없다 — SQL 배포 건너뜀"; exit 0; fi
+          P="psql $SUPABASE_DB_URL -v ON_ERROR_STOP=1 -q"
+          $P -c "create table if not exists public._taam_migrations(
+                   name text primary key, applied_at timestamptz not null default now(), sha text);
+                 alter table public._taam_migrations enable row level security;
+                 revoke all on public._taam_migrations from anon, authenticated;"
+          ran=0
+          for f in $(ls supabase/migrations/2*.sql 2>/dev/null | sort); do
+            n=$(basename "$f")
+            done_=$($P -tA -c "select 1 from public._taam_migrations where name = '$n'")
+            if [ "$done_" = "1" ]; then echo "· $n — 이미 적용"; continue; fi
+            echo "▶ $n 실행"
+            out=$(psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 --single-transaction -f "$f" 2>&1) || { echo "$out"; echo "❌ $n 실패"; exit 1; }
+            echo "$out"
+            if echo "$out" | grep -q '❌'; then echo "❌ $n 확인 표에 ❌ 가 있다 — 실패로 처리 (SQL 자체는 적용됐다. 기록은 남기지 않는다)"; exit 1; fi
+            $P -c "insert into public._taam_migrations(name, sha) values ('$n', '${GITHUB_SHA}')"
+            ran=$((ran+1))
+          done
+          echo "✅ 새로 적용한 마이그레이션: $ran"
+
+  functions:
+    name: ② Edge Functions
+    runs-on: ubuntu-latest
+    needs: sql          # SQL 이 먼저다 — Edge 가 없는 함수를 부르는 사고를 막는다 (CLAUDE.md 「SQL 을 먼저」)
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: 배포 대상 정하기
+        id: pick
+        run: |
+          set -euo pipefail
+          want="${{ github.event.inputs.functions }}"
+          all=$(ls -d supabase/functions/*/ | xargs -n1 basename | grep -v '^_' | tr '\n' ' ')
+          if [ "$want" = "all" ]; then
+            list="$all"
+          elif [ -n "$want" ]; then
+            list=$(echo "$want" | tr ',' ' ')
+          else
+            changed=$(git diff --name-only HEAD~1 HEAD -- supabase/functions supabase/config.toml || true)
+            if echo "$changed" | grep -q 'supabase/functions/_shared/\|supabase/config.toml'; then
+              list="$all"
+            else
+              list=$(echo "$changed" | sed -n 's#^supabase/functions/\([^/]*\)/.*#\1#p' | sort -u | tr '\n' ' ')
+            fi
+          fi
+          echo "list=$list" >> "$GITHUB_OUTPUT"
+          echo "배포 대상: ${list:-(없음)}"
+
+      - uses: supabase/setup-cli@v1
+        if: steps.pick.outputs.list != ''
+        with:
+          version: latest
+
+      - name: 함수 배포
+        if: steps.pick.outputs.list != ''
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SUPABASE_ACCESS_TOKEN:-}" ]; then
+            echo "SUPABASE_ACCESS_TOKEN 시크릿이 없다 — Edge 배포 건너뜀"; exit 0; fi
+          fail=0
+          for fn in ${{ steps.pick.outputs.list }}; do
+            [ -f "supabase/functions/$fn/index.ts" ] || { echo "· $fn — index.ts 없음, 건너뜀"; continue; }
+            echo "▶ $fn"
+            supabase functions deploy "$fn" --project-ref "$PROJECT_REF" --use-api || { echo "❌ $fn 배포 실패"; fail=1; }
+          done
+          [ $fail = 0 ] && echo "✅ 배포 끝" || exit 1

@@ -40,7 +40,7 @@ function json(body: unknown, status = 200) {
   });
 }
 
-serve(async (req) => {
+async function handle(req: Request): Promise<Response> {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
 
   try {
@@ -160,7 +160,28 @@ serve(async (req) => {
     console.error('[toss-billing-issue] 예외', e);
     return json({ ok: false, error: 'exception' });
   }
+}
+
+// ── 🔒 2026-09-15 CORS 는 우리 출처만 · 메서드는 POST/OPTIONS 만 ──
+//   (다른 10개 함수와 같은 마무리. Access-Control-Allow-Origin '*' 는 위 cors 상수에 남아 있지만 여기서 덮어쓴다)
+const TAAM_ORIGINS = ['https://taam-app.vercel.app', 'https://playtaam.com', 'https://www.playtaam.com'];
+function taamOrigin(req: Request): string {
+  const o = req.headers.get('Origin') || '';
+  if (TAAM_ORIGINS.includes(o) || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(o)) return o;
+  return TAAM_ORIGINS[0];
+}
+serve(async (req: Request) => {
+  let res: Response;
+  if (req.method !== 'OPTIONS' && req.method !== 'POST') {
+    res = new Response(JSON.stringify({ error: 'method_not_allowed' }),
+      { status: 405, headers: { ...cors, 'Content-Type': 'application/json' } });
+  } else {
+    res = await handle(req);
+  }
+  try { res.headers.set('Access-Control-Allow-Origin', taamOrigin(req)); res.headers.append('Vary', 'Origin'); } catch (_e) { /* 헤더 잠긴 응답이면 그대로 */ }
+  return res;
 });
+
 
 // 기본카드 지정 — 부분 유니크 인덱스(회원당 1장) 때문에 기존 것을 먼저 내린다
 async function setDefault(

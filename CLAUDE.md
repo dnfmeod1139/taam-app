@@ -572,6 +572,19 @@ raw 링크는 CDN 캐시가 남아 **고친 파일 대신 옛 파일이 뜨는 �
 6. sql/·docs/·supabase/·*.md 만 바뀌는 커밋은 배포를 걸지 않는다
    (deploy.yml 의 paths-ignore) — 기록용 커밋이 Vercel 하루 한도를 먹지 않는다.
 
+## Supabase 도 main 이 곧 라이브다 — 2026-09-15 부터
+
+`.github/workflows/supabase.yml` 이 `supabase/**` 가 바뀐 `main` 푸시마다 돈다.
+- **SQL**: `supabase/migrations/2*.sql` 중 안 돌린 파일을 순서대로 실행하고 `public._taam_migrations` 에 기록한다.
+  파일 안 확인 표에 ❌ 가 있으면 실패. 옛 `0001~0003` 은 건드리지 않는다.
+  ⚠ **원장·잔액 수리처럼 미리보기가 필요한 SQL 은 여기 넣지 않는다** — `sql/` 에 두고 SQL Editor 로.
+  트리거·정책·함수 같은 코드성 SQL 만 마이그레이션으로 간다. 파일 이름은 `20260915_무엇.sql`.
+- **Edge**: 바뀐 함수만 CLI 로 배포한다 (`_shared/`·`config.toml` 이 바뀌면 전부).
+  `verify_jwt` 는 **`supabase/config.toml` 이 정한다.** 대시보드에서 OFF 인 함수가 거기 없으면 다음 배포 때 ON 으로 돌아가 앱이 막힌다.
+- 시크릿 `SUPABASE_ACCESS_TOKEN` · `SUPABASE_DB_URL`(Session pooler URI) 이 없으면 조용히 건너뛴다.
+  손으로 돌리기: Actions → Supabase deploy → Run workflow (functions 칸 `all`).
+- 순서는 SQL → Edge 다. 「SQL 을 먼저」 규칙을 워크플로가 지킨다.
+
 ## 배포 — Deploy Hook 의 201 은 「배포됐다」가 아니다
 
 Vercel Hobby 는 **하루 100건**이다. 한도에 닿으면 이렇게 갈린다.

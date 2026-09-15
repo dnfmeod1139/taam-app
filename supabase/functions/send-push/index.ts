@@ -486,7 +486,7 @@ async function handle(req: Request): Promise<Response> {
   }
 
   try {
-    const body: SendRequest = await req.json();
+    const body: SendRequest = await req.json().catch(() => ({} as SendRequest));
     if (!body || !body.to || !body.payload) {
       return json({ error: "Required: { to, payload }" }, 400);
     }
@@ -935,7 +935,7 @@ async function handle(req: Request): Promise<Response> {
     // 🆕 2026-08-27: pick 을 같이 돌려준다.
     //   'attempted 0' 만 보면 구독이 없는 건지, 스코프 판정이 어긋난 건지,
     //   설정으로 걸러진 건지 구분할 수 없다. 어디서 0 이 됐는지 남긴다.
-    console.log("[send-push]", body.to, JSON.stringify(pick), JSON.stringify(summary));
+    console.log("[send-push]", "to=…" + String(body.to ?? "").slice(-6), JSON.stringify(pick), JSON.stringify(summary));
     return json({ ok: true, summary, pick, details: results }, 200);
   } catch (e) {
     console.error("[send-push] error:", e);

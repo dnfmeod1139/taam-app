@@ -137,7 +137,7 @@ async function sendKakao(phone: string, vars: Record<string, string>): Promise<s
     if (failed > 0 || (code && code !== "2000")) {
       const why = body.failedMessageList?.[0]?.statusMessage
                || body.statusMessage || code || "알 수 없음";
-      console.warn("[kakao] 발송 실패:", code, why, JSON.stringify(body).slice(0, 300));
+      console.warn("[kakao] 발송 실패:", code, why, "to=…" + String((body as any)?.messages?.[0]?.to ?? (body as any)?.to ?? "").slice(-4));
       return `fail(${code || "?"}: ${String(why).slice(0, 40)})`;
     }
     return "ok";
@@ -238,7 +238,7 @@ async function sendLine(
 async function handle(req: Request): Promise<Response> {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   try {
-    const { reservation_id } = await req.json();
+    const { reservation_id } = await req.json().catch(() => ({}));
     if (!reservation_id || !/^[0-9a-f-]{36}$/i.test(String(reservation_id))) {
       return json({ error: "reservation_id 필요" }, 400);
     }

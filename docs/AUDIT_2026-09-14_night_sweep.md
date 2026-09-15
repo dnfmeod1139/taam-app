@@ -30,7 +30,7 @@
 6. ~~역할 판정을 앱이 PIN 으로 올린다~~ → **빌드 `15-a`**: PIN 통과 뒤 `_taam_uid_role()` 로 서버 역할을 확인, super_admin 이 아니면 열지 않는다.
 7. `notifications` INSERT 본인 허용 — **보류**: 회원이 초대·시간변경 알림을 상대에게 직접 INSERT 하는 동선이 8곳. RPC 로 옮기는 작업이라 별도 세션에서.
 8. `tcalCancelLinkedRow` 등 2곳 — **보류**: 어드민 캘린더 화면(회원 UI 아님)이고 행 트리거·RLS 가 이미 지킨다.
-9. Edge: `Access-Control-Allow-Origin: *` 남은 8개 (toss-billing-issue · partner-account 가 민감) · POST 아닌 메서드 거부 없음 · `req.json()` 미보호 5개(notify-purchase, notify-reservation, send-push, taam-format, lineage-summarize) · Kakao 발송 실패 로그에 수신자 번호(notify-purchase:176, notify-reservation:140) · consume-invite/partner-account 가 원문 error.message 반환. **다음 Edge 재배포 묶음에 같이.**
+9. ~~Edge 8개 CORS `*` · POST 가드 · `req.json()` 미보호 · 로그 PII · 원문 오류~~ → **2026-09-15 코드 반영** (toss-billing-issue · partner-account · notify-purchase · notify-guest-expiry · notify-visit-reminder · taam-chat · taam-format · taam-translate 에 출처 허용목록 + 405 · json().catch 5곳 · Kakao/send-push 로그 수신자 마스킹 · consume-invite 고정 문구). 배포는 `supabase.yml` 이 시크릿 등록 뒤 자동. partner-account 의 원문 오류는 슈퍼어드민 전용 도구라 그대로.
 10. `GOOGLE_GEOCODE_KEY` 공개 파일 포함 — GCP 콘솔에서 HTTP referrer 제한 확인.
 11. `partner_logos` · `user_ticket_waitlist` · `partner_qr_codes` — 저장소에 정책 없음. 라이브 `pg_policies` 확인.
 

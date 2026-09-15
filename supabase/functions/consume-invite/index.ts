@@ -117,7 +117,7 @@ async function handle(req: Request): Promise<Response> {
 
     if (error) {
       return new Response(
-        JSON.stringify({ ok: false, error: error.message }),
+        JSON.stringify({ ok: false, error: '처리하지 못했습니다. 잠시 후 다시 시도해주세요' }),
         { status: 200, headers: { ...cors, 'Content-Type': 'application/json' } }
       );
     }
