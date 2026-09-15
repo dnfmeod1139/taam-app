@@ -38,20 +38,20 @@
 12. **카드 승인 재시도 없음** — 사용자 지시로 나중에.
 13. ~~전환 실패 시 잔액·완료 팝업 먼저~~ → **빌드 `15-a`**: 전환 프로미스를 먼저 기다리고, 실패면 로컬 잔액 복원 후 종료. 「결제 완료」 문구도 「확정되지 않았습니다·예치금은 빠지지 않았습니다」로.
 14. ~~정원 확인 early return 4곳~~ → **빌드 `15-a`**: 각 return 앞에 `_tkReleaseSeatHold()`.
-15. ~~결제 버튼 이중 탭~~ → **빌드 `15-a`**: `completePurchase` in-flight 가드(`_tdPayBusy`) · `#tdPayBtn` 홀드 확보 중 disabled.
-16. 취소 `confirm()` 이 한국어 고정 → EN/JA 회원이 돈 결정을 한국어로. DOM 모달 + `t()`.
+15. ~~취소 `confirm()` 한국어 고정~~ → **빌드 `15-b`**: 현재 언어(KO/EN/JA)로 문구를 짓는다 (정책·미리보기·사유 전부).
+16. ~~서버 알림 4종 한국어 단일~~ → **빌드 `15-b`**: 컬럼 추가 대신 앱의 알림 정규화(`_notifL10nTitle/Body`)에 4종 패턴을 넣어 목록·토스트 모두 현재 언어로. SQL 변경 없음.
 17. 서버 알림(`taam_visit_reminder_notify` · `taam_guest_expiry_notify` · `taam_notify_repurchase_released` · `taam_expire_invite_holds`) 한국어 단일 → `notifications` 에 `_en/_ja` 컬럼 + 렌더 `pickI18nObj`.
 18. ~~원장 실패 console 만~~ → **빌드 `15-a`**: 회원 토스트 + `ledger_apply_failed` 어드민 통지.
 19. ~~`_tkCapacityAutoRefund` 조회 실패~~ → **빌드 `15-a`**: 조회 실패면 환불 판단을 멈추고 `capacity_refund_unknown` 어드민 통지.
-20. tiershot.js 2건은 로케일 문제(헤드리스 = en-US → TX 가 'M 등급'→'M Tier'). 테스트에서 `_tkCurrentLang='ko'` 고정.
+20. ~~tiershot.js 2건~~ → 테스트에서 `_tkCurrentLang='ko'` 고정. 전부 통과.
 
 ### 화면
-21. **viewport 에 `viewport-fit=cover` 없음** → `env(safe-area-inset-*)` 43곳이 전부 0. iOS PWA 에서 하단 바가 홈 인디케이터 밑. 추가하면 43곳이 한꺼번에 움직이므로 **실기기(노치·SE) 확인 후** 적용. `user-scalable=no` 도 제거.
+21. **`viewport-fit=cover`** — 아직 안 넣음. 넣는 순간 43곳의 `env()` 가 살아나므로 **iPhone 실기기(노치·SE)에서 확인하며** 넣는다. 그 전 준비로 토스트 상단·GNB 필 변형에 `env()` 를 미리 달아 두었다(빌드 `15-c`).
 22. 상단 여백이 화면마다 36/52/54/56px 하드코딩 → `--sat` 토큰 하나로.
-23. `.ticket-modal` z-index 2147483000 !important → 토스트·오프라인 배지가 밑에 깔림. ~9750 으로.
+23. ~~`.ticket-modal` z-index~~ → **빌드 `15-c`** 9750 (토스트 9998 아래).
 24. 홈 첫 렌더: 커버 로딩 중엔 메뉴·언어·벨·FAB 까지 비어 검은 화면 → 사진만 기다리게.
-25. 마이페이지 8px/7px 라벨(462 규칙 <12px) → 10px 바닥. 스테퍼·pax 버튼 28px 등 탭 영역 44px.
-26. 1024px 에서 캘린더 max-width 없음 · 월 스트립 좌측 잘림 · 티켓 상세 사진 없을 때 검은 300px 블록 · 3번째 탭 말줄임.
+25. ~~마이페이지 7~8px 라벨 · 28px 탭 영역~~ → **빌드 `15-c`** 라벨 9~10px 바닥 · 스테퍼/인원 버튼 손가락 영역 44px(::before).
+26. 1024px 캘린더 폭 → **빌드 `15-c`** 768px 이상에서 600px 가운데. 월 스트립 잘림 · 상세 사진 없을 때 검은 블록 · 탭 말줄임은 남음.
 27. 어드민 모달 10개 `data-lang-lock="ko"` 누락(혼합 번역) · aria-label 한국어 6곳 · 아이콘 버튼 27개 aria-label 없음 · 약관 중복 id.
 28. `theme-color` 가 다크 고정인데 마이페이지·상세는 라이트 → 화면 열 때 갱신 · `color-scheme`.
 29. 도달 불가 `#ticketView` 제거.
