@@ -43156,7 +43156,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.16-a';
+var TAAM_WEB_BUILD = '2026.09.16-b';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -46351,12 +46351,35 @@ function _popStoryMeta(t){
   var cap = parseInt(t.assignedPax || t.totalPax) || 0;
   row(_popL('좌석','Seats','席'), cap ? (cap + _popL('석','','席')) : '');
 
+  // 🆕 2026.09.16: 「1인 ₩950,000」 한 줄로는 무엇이 들어 있는지 회원이 모른다.
+  //   식사비 · 미니멈 주류 · 예약 대행비를 항목별로 적고 합계(1인)를 낸다.
+  //   항목·금액은 결제 시트와 같은 _tkCostRows/fxTicketComp 를 쓴다 — 여기서 따로 계산하면 두 화면이 어긋난다.
   try{
     var meal = parseInt(t.mealFee || t.mealAmt || 0) || 0;
     var wine = parseInt(t.wineMin || 0) || 0;
     var per  = meal + (parseInt(t.agencyFee || 0) || 0) + wine;
     if(per > 0 && typeof fxTicketTotal === 'function'){
-      row(_popL('1인','Per guest','お一人様'), fxTicketTotal(t, 1, meal, wine, per));
+      var _items = (typeof _tkCostRows === 'function') ? _tkCostRows(t) : [];
+      var _lab = { meal: _popL('식사비','Meal','食事代'), wine: _popL('미니멈 주류','Beverage minimum','ドリンク最低料金'),
+                   agency: _popL('기타 (예약 대행비)','Other (booking service fee)','その他（予約代行手数料）'),
+                   guest: _popL('게스트 초대석','Guest seat','ゲスト席') };
+      var _order = { meal:0, wine:1, agency:2, guest:0 };
+      _items.sort(function(a,b){ return (_order[a.key]||0) - (_order[b.key]||0); });
+      var _sub = _items.map(function(it){
+        var amt = (typeof fxTicketComp === 'function') ? fxTicketComp(t, it.key, it.amt, 1) : ('₩' + it.amt.toLocaleString());
+        return '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:4px 0;">'
+          + '<span style="font-size:12px;color:#6b665e;">' + _pcalEsc(_lab[it.key] || it.label) + '</span>'
+          + '<span style="font-size:12.5px;font-weight:700;color:#3d3a33;font-variant-numeric:tabular-nums;">' + _pcalEsc(amt) + '</span></div>';
+      }).join('');
+      var _total = (typeof _tkPayPer === 'function') ? _tkPayPer(t) : per;
+      var _totalTxt = fxTicketTotal(t, 1, meal, wine, _total);
+      rows.push('<div style="padding:7px 0;">'
+        + '<div style="font-size:11px;font-weight:700;color:#a8a29a;letter-spacing:.06em;margin-bottom:6px;">' + _popL('가격','Price','料金') + '</div>'
+        + '<div style="padding:2px 0 6px 12px;border-left:2px solid #e8e0d2;">' + _sub + '</div>'
+        + '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding-top:8px;margin-top:4px;border-top:1px solid #e8e0d2;">'
+          + '<span style="font-size:12px;font-weight:800;color:#1a1a18;">' + _popL('합계 (1인)','Total (per guest)','合計（お一人様）') + '</span>'
+          + '<span style="font-size:15px;font-weight:800;color:#5C0A14;font-variant-numeric:tabular-nums;">' + _pcalEsc(_totalTxt) + '</span></div>'
+        + '</div>');
     }
   }catch(_pe){}
 
