@@ -43156,7 +43156,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.15-g';
+var TAAM_WEB_BUILD = '2026.09.16-a';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -46226,7 +46226,7 @@ function _popShowEvent(c, t){
         // A+C 디자인 — 초대장 헤더(골드 레이블·세리프 제목·버건디 단선) +
         //   리드문(설명 첫 문단, 골드 세로선) + 나머지 평문. 리드문은 발행할 때
         //   따로 정하지 않는다: 설명의 첫 빈 줄 전까지가 자동으로 리드문이 된다.
-        var _dr = String(c.event_desc || '');
+        var _dr = String(pickI18nObj(c, 'event_desc') || c.event_desc || '');   // 🔧 2026.09.16 언어 반영
         var _pp = _dr.split(/\n\s*\n/);
         var _lead = (_pp[0] || '').trim();
         var _rest = _pp.slice(1).join('\n\n').trim();
@@ -46399,8 +46399,9 @@ function _popShowStory(c){
     var t = it.t, s = it.s;
     var photo = _popStoryPhoto(s, t);
     var name = (typeof _pcalRestName === 'function') ? _pcalRestName(t) : (t.rest || '');
-    var head = String(s.headline || '').trim();
-    var body = String(s.body || '').trim();
+    // 🔧 2026.09.16: 번역이 있으면 현재 언어로 (종전엔 EN/JA 회원도 한국어 원문)
+    var head = String(pickI18nObj(s, 'headline') || s.headline || '').trim();
+    var body = String(pickI18nObj(s, 'body') || s.body || '').trim();
     return '<div class="pop-st-slide" style="flex:0 0 100%;width:100%;height:100%;overflow-y:auto;-webkit-overflow-scrolling:touch;scroll-snap-align:center;">'
       + '<div style="padding-bottom:158px;">'
         + (photo ? '<img src="' + photo + '" style="width:100%;height:54vh;object-fit:cover;display:block;" alt="">'
@@ -47068,6 +47069,20 @@ async function paPublish(asNew){
   if(!c.title && !c.body && !c.media_url && !_hasSt){ showToast('⚠','내용 없음','제목·본문·미디어 중 하나는 있어야 합니다'); return; }
   c.enabled = true;
   if(asNew || !c.id) c.id = 'pop_' + Date.now();
+  // 🔧 2026.09.16: 작업 사본(_paW)에 옛 번역(title_en 등)이 실려 있어, 한국어를 고쳐 다시 발행해도
+  //   EN/JA 회원은 예전 영어를 봤다(번역 잡은 _en 이 있으면 「됐다」고 넘어간다). 원문이 바뀐 칸의 번역은 버린다.
+  try {
+    var _prev = _homePopCfg || {};
+    ['title','body','label','event_desc'].forEach(function(k){
+      if (String(c[k] || '').trim() !== String(_prev[k] || '').trim()) { delete c[k+'_en']; delete c[k+'_ja']; }
+    });
+    if (Array.isArray(c.stories)) c.stories.forEach(function(st, i){
+      var ps = (Array.isArray(_prev.stories) && _prev.stories[i]) || {};
+      ['headline','body'].forEach(function(k){
+        if (String(st[k] || '').trim() !== String(ps[k] || '').trim()) { delete st[k+'_en']; delete st[k+'_ja']; }
+      });
+    });
+  } catch(_i18c){}
   var res = await window.sb.from('app_config').upsert({ key:'home_popup', value:c, updated_at:new Date().toISOString() });
   if(res.error){ showToast('⚠','저장 실패', res.error.message.slice(0,60)); return; }
   _homePopCfg = c;
@@ -48458,11 +48473,32 @@ function _tkDetectLang(){
   try { nav = (navigator.languages && navigator.languages[0]) || navigator.language || ''; }
   catch(e){}
   nav = String(nav).toLowerCase();
+  // 🔧 2026.09.16: 회원이 고른 게 아니라 기기에서 짐작한 값이다 — 아래 _tkFixLangFromProfile 이 프로필로 바로잡을 수 있게 표시.
+  //   ⚠ 네이티브(iOS WKWebView)는 앱 번들에 ko 로컬라이즈가 없으면 한국 폰에서도 navigator.language 가 en-US 다.
+  //     그래서 슈퍼어드민이 한국어로 발행한 팝업이 앱에서는 영어로 떴다. codemagic.yaml 에 CFBundleLocalizations 도 같이 넣었다.
+  window._tkLangGuessed = true;
   if (nav.indexOf('ko') === 0) return 'ko';
   if (nav.indexOf('ja') === 0) return 'ja';
   if (nav) return 'en';   // 그 외 언어권은 영어로 받는다
   return 'ko';
 }
+// 자동 감지였고(회원이 고른 적 없음) 프로필이 한국 회원(country=KR)이면 한국어로 되돌린다.
+//   해외 회원(EN)은 건드리지 않는다 — 통화가 아니라 화면 언어만이고, 명시 선택(tkLang)이 있으면 그것이 우선.
+function _tkFixLangFromProfile(profile){
+  try {
+    if (!window._tkLangGuessed) return;
+    if (localStorage.getItem('tkLang')) return;
+    var country = String((profile && profile.country) || '').toUpperCase();
+    if (country !== 'KR') return;
+    if (window._tkCurrentLang === 'ko') return;
+    _tkCurrentLang = 'ko'; window._tkCurrentLang = 'ko';
+    try { if (typeof applyI18n === 'function') applyI18n(); } catch(e){}
+    try { if (typeof _tkRelocalizeOpenScreens === 'function') _tkRelocalizeOpenScreens(); } catch(e){}
+    try { if (typeof magRender === 'function') magRender(); } catch(e){}
+    console.log('[lang] 기기 감지 ' + '→ 프로필(KR) 기준 한국어로 보정');
+  } catch(e){}
+}
+window._tkFixLangFromProfile = _tkFixLangFromProfile;
 var _tkCurrentLang = _tkDetectLang();
 // 🆕 중요: window 에도 초기 동기화 — t() / applyI18n / tkPillSync / tkRenderCal 등이 참조
 window._tkCurrentLang = _tkCurrentLang;
@@ -60527,6 +60563,8 @@ async function _refreshUserGrade() {
     // 🆕 회원 지정 통화 캐시 — 표시(fxIsOverseas)·결제(_tossCurrencyForUser)가 이 값을 최우선으로 본다
     window._userCurrency = (data.currency === 'KRW' || data.currency === 'USD' || data.currency === 'JPY')
       ? data.currency : null;
+    // 🔧 2026.09.16 기기 언어 짐작이 틀렸으면(네이티브 en-US) 한국 회원은 한국어로
+    try { if (typeof _tkFixLangFromProfile === 'function') _tkFixLangFromProfile(data); } catch(_lf){}
     var tier = data.membership_tier;
     var expires = data.membership_expires_at;
     var isActive = tier === 'M' && expires && new Date(expires) > new Date();
