@@ -43156,7 +43156,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.15-f';
+var TAAM_WEB_BUILD = '2026.09.15-g';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -75390,7 +75390,7 @@ function _ensureSecData(chefId, info, cacheKey, cb, lineageId){
   if(!window.sb){ info._secLoaded = true; if(cb) cb(info); return; }
   // 🔧 FIX 2026.05: 복합 PK (id, lineage_id) — lineageId 없으면 fetch 안전 차단
   if(!lineageId){ info._secLoaded = true; if(cb) cb(info); return; }
-  window.sb.from('chefs').select('sec1_data, sec2_data').eq('id', chefId).eq('lineage_id', lineageId).single()
+  window.sb.from('chefs').select('sec1_data, sec2_data, reserve_url, ticket_url, ticket_status, linked_rest_id').eq('id', chefId).eq('lineage_id', lineageId).single()
     .then(function(res){
       if(!res.error && res.data){
         var s1 = res.data.sec1_data || {};
@@ -75412,6 +75412,8 @@ function _ensureSecData(chefId, info, cacheKey, cb, lineageId){
         info.sec2SigFs = s2.sigFs; info.sec2CaptionFs = s2.captionFs;
         info.sec2BgX = s2.bgX; info.sec2BgY = s2.bgY; info.sec2BgScale = s2.bgScale;
         info.sec2Filter = s2.filter;
+        // 🔧 2026.09.15 링크는 DB 가 진실 — 캐시가 링크를 몰라 「레스토랑 정보 없음」이 뜨던 것(DB 엔 있었다)
+        if ('reserve_url' in res.data) { info.reserveUrl = res.data.reserve_url || ''; info.ticketUrl = res.data.ticket_url || ''; info.ticketStatus = res.data.ticket_status || 'off'; if (res.data.linked_rest_id) info.linkedRestId = res.data.linked_rest_id; }
         info.sec2Media = s2.media;
         info._s2TitleKo = s2.title; info._s2TitleEn = s2.title_en; info._s2TitleJp = s2.title_jp;
         info._s2DescKo  = s2.desc;  info._s2DescEn  = s2.desc_en;  info._s2DescJp  = s2.desc_jp;
@@ -75447,7 +75449,7 @@ function prefetchSecDataForLineage(lineageId){
 
   schedule(function(){
     window.sb.from('chefs')
-      .select('id, sec1_data, sec2_data')
+      .select('id, sec1_data, sec2_data, reserve_url, ticket_url, ticket_status, linked_rest_id')
       .eq('lineage_id', lineageId)
       .then(function(res){
         if(res.error){
@@ -75477,6 +75479,8 @@ function prefetchSecDataForLineage(lineageId){
           info.sec2SigFs = s2.sigFs; info.sec2CaptionFs = s2.captionFs;
           info.sec2BgX = s2.bgX; info.sec2BgY = s2.bgY; info.sec2BgScale = s2.bgScale;
           info.sec2Filter = s2.filter;
+        // 🔧 2026.09.15 링크는 DB 가 진실 — 캐시가 링크를 몰라 「레스토랑 정보 없음」이 뜨던 것(DB 엔 있었다)
+          if ('reserve_url' in row) { info.reserveUrl = row.reserve_url || ''; info.ticketUrl = row.ticket_url || ''; info.ticketStatus = row.ticket_status || 'off'; if (row.linked_rest_id) info.linkedRestId = row.linked_rest_id; }
           info.sec2Media = s2.media;
           info._s2TitleKo = s2.title; info._s2TitleEn = s2.title_en; info._s2TitleJp = s2.title_jp;
           info._s2DescKo  = s2.desc;  info._s2DescEn  = s2.desc_en;  info._s2DescJp  = s2.desc_jp;
