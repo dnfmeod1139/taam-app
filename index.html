@@ -41896,7 +41896,8 @@ function finalSubmitRestaurant(){
     //   _i18nBatch 가 스스로 건너뛰므로 중복 호출 걱정은 없다.
     //   (수정 모드는 자동 번역하지 않는다 — 손으로 고친 번역을 덮어쓸 수 있어서.
     //    원문을 크게 바꿨으면 어드민 메뉴의 「레스토랑 일괄 AI 번역」을 눌러준다.)
-    setTimeout(function(){
+    // 🛑 2026-09-20 신규 등록 자동 번역도 중지 (I18N_AUTO_LIVE). 필요하면 어드민 메뉴에서 수동으로.
+    if (typeof I18N_AUTO_LIVE !== 'undefined' && I18N_AUTO_LIVE) setTimeout(function(){
       try { if (typeof taamTranslateRestaurants === 'function') taamTranslateRestaurants(); } catch(_te){}
     }, 5000);
   }
@@ -43191,7 +43192,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.20-b';
+var TAAM_WEB_BUILD = '2026.09.20-c';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -51654,10 +51655,16 @@ window.I18N_AUTO_JOBS = I18N_AUTO_JOBS;
 
 var I18N_AUTO_MIN_GAP_MS = 6 * 60 * 60 * 1000;   // 같은 기기에서 6시간에 한 번
 var _i18nAutoRunning = false;
+// 🛑 2026-09-20 자동 번역 전면 중지 (사용자 지시: "더 이상 번역하지 않게 앞으로도 쭉 — 지금 번역된 기존 것을 쓴다").
+//   슈퍼어드민 로그인 때 도는 자동 스윕과 매장 신규 등록 직후 자동 번역이 모두 멈춘다.
+//   이미 채워진 name_en/name_jp 등 번역 컬럼은 그대로 쓰인다. 어드민 메뉴의 「일괄 AI 번역」 버튼(수동)만 남는다.
+//   다시 켜려면 이 값만 true 로.
+var I18N_AUTO_LIVE = false;
 
 //   opts.force = true 면 주기·권한 제한을 무시한다 (어드민 메뉴에서 수동 실행용)
 async function taamI18nAutoSweep(opts){
   opts = opts || {};
+  if (!I18N_AUTO_LIVE && !opts.force) return;   // 🛑 자동 번역 중지 (수동 실행만)
   if (_i18nAutoRunning) return;
   if (_i18nBatchRunning) return;              // 사람이 돌리는 배치가 우선
   if (!window.sb) return;
@@ -72967,7 +72974,7 @@ async function saveChefToSupabase(chefId, lineageId, info){
           existingRow.i18n_status_en === 'manual' ||
           existingRow.i18n_status_jp === 'manual'
         );
-        if(_textChanged && !_isManual){
+        if(_textChanged && !_isManual && (typeof I18N_AUTO_LIVE !== 'undefined' && I18N_AUTO_LIVE)){   // 🛑 2026-09-20 자동 번역 중지
           console.log('[saveChefToSupabase] 한국어 변경 감지 → 백그라운드 AI 번역 trigger');
           // 비동기 호출 — 응답 기다리지 않음 (사용자는 SAVE 즉시 응답 받음)
           setTimeout(function(){
