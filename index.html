@@ -43191,7 +43191,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.20-a';
+var TAAM_WEB_BUILD = '2026.09.20-b';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -86254,11 +86254,24 @@ function _instaDrawPath(id, offsetVal){
     if(wrap && wrap.classList.contains('ready')) return;   // 정상적으로 떴다
     _bootWatchdogFired = true;
     console.warn('[boot] 8초 안에 화면이 뜨지 않았다 — 로그인 화면으로 내린다');
-    try {
+    // 🔧 2026-09-20 신고 정리: 로그아웃 상태에서 스플래시(가입/로그인 버튼)가 멀쩡히 보이는 채로
+    //   8초 넘게 머문 것은 정상이다 — 이제 그건 신고하지 않는다(가짜 boot_stuck 이 표를 채웠다).
+    //   대신 화면에 아무것도 없는 경우(스플래시도 안 보임·body 투명)를 boot_black 으로 따로 신고하고,
+    //   기기 정보(UA)를 같이 싣는다 — 안드로이드 검은 화면을 기기별로 추적하기 위해.
+    var _bsAuto = document.documentElement.classList.contains('auto-login');
+    var _bsAuthed = (function(){ try { return localStorage.getItem('authedSession') === '1'; } catch(_){ return null; } })();
+    var _bsSplashVis = false, _bsBodyOp = '';
+    try { var _sp0 = document.querySelector('.splash'); _bsSplashVis = !!(_sp0 && getComputedStyle(_sp0).display !== 'none' && getComputedStyle(_sp0).opacity !== '0'); } catch(_){}
+    try { _bsBodyOp = getComputedStyle(document.body).opacity; } catch(_){}
+    var _bsKind = (!_bsAuto && !_bsAuthed) ? (_bsSplashVis && _bsBodyOp !== '0' ? null : 'boot_black') : 'boot_stuck';
+    if (_bsKind) try {
       var _bsNav = null;
       try { var _bpe = performance.getEntriesByType && performance.getEntriesByType('navigation')[0]; if (_bpe) _bsNav = { type: _bpe.type, ttfb: Math.round(_bpe.responseStart), dcl: Math.round(_bpe.domContentLoadedEventEnd), size_kb: Math.round((_bpe.transferSize || 0) / 1024) }; } catch(_bpn){}
-      window.taamReportError('boot_stuck', '8초 안에 .ready 가 안 붙음', null, {
-        auto_login: document.documentElement.classList.contains('auto-login'),
+      window.taamReportError(_bsKind, _bsKind === 'boot_black' ? '8초 뒤에도 화면에 아무것도 없음' : '8초 안에 .ready 가 안 붙음', null, {
+        ua: String(navigator.userAgent || '').slice(0, 200),
+        splash_visible: _bsSplashVis, body_opacity: _bsBodyOp,
+        fonts_ready: document.documentElement.classList.contains('fonts-ready'),
+        auto_login: _bsAuto,
         sb: typeof window.sb, online: navigator.onLine,
         // 🆕 2026-09-14 어디서 멈췄는지: 문서 상태·세션 확인 여부·서비스워커·회선
         ready_state: document.readyState,
