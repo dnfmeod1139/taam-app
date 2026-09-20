@@ -135,6 +135,39 @@
       window.taamReportError('promise', m, r && r.stack, {});
     } catch(x){}
   });
+
+  // 🔧 2026-09-20 옛 Android WebView 안내.
+  //   앱이 쓰는 supabase-js(vendor) 가 `?.` `??` 를 쓴다 — Chrome/Android System WebView 80(2020-02) 이상이 필요하다.
+  //   그보다 낮은 WebView 는 그 스크립트가 통째로 파싱 실패해 아무 오류도 없이 **검은 화면**만 남는다
+  //   (배경 #000 위에 아무것도 못 그린다). 여기서 먼저 검사해 무엇을 해야 하는지 보여 준다.
+  //   ⚠ 이 블록은 ES5 로만 쓴다 — 옛 WebView 에서도 돌아야 한다.
+  try { new Function('var a = {}; return (a.b ?? 1) + (a.c?.d ?? 0);'); }
+  catch (oldWv) {
+    try { window.taamReportError('old_webview', navigator.userAgent, null, { js: String(oldWv && oldWv.message || '') }); } catch (_o1) {}
+    var showOldWv = function(){
+      if (document.getElementById('taamOldWv')) return;
+      var isAndroid = /Android/i.test(navigator.userAgent || '');
+      var d = document.createElement('div');
+      d.id = 'taamOldWv';
+      d.setAttribute('data-lang-lock', 'ko');
+      d.style.cssText = 'position:fixed;inset:0;z-index:2147483646;background:#111;color:#f3efe8;display:flex;align-items:center;justify-content:center;padding:28px;box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,"Noto Sans KR",sans-serif;text-align:center;';
+      d.innerHTML =
+        '<div style="max-width:340px;">'
+        + '<div style="font-size:34px;margin-bottom:14px;">⚠️</div>'
+        + '<div style="font-size:18px;font-weight:800;margin-bottom:10px;line-height:1.4;">앱을 실행할 수 없습니다</div>'
+        + '<div style="font-size:14px;line-height:1.7;color:#cfc9bf;margin-bottom:22px;">'
+        +   (isAndroid ? '이 기기의 <b>Android System WebView</b> 버전이 오래되어 TAAM 이 열리지 않습니다.<br>Play 스토어에서 업데이트한 뒤 앱을 다시 켜 주세요.'
+                       : '이 브라우저 버전이 오래되어 TAAM 이 열리지 않습니다.<br>브라우저를 업데이트한 뒤 다시 열어 주세요.')
+        +   '<br><span style="font-size:12px;color:#8f887c;">Your browser / Android System WebView is too old to run TAAM. Please update it and reopen the app.</span></div>'
+        + (isAndroid
+            ? '<a href="https://play.google.com/store/apps/details?id=com.google.android.webview" style="display:block;padding:14px;border-radius:12px;background:#c8a96e;color:#1a1a18;font-weight:800;text-decoration:none;margin-bottom:10px;">Android System WebView 업데이트</a>'
+              + '<a href="https://play.google.com/store/apps/details?id=com.android.chrome" style="display:block;padding:13px;border-radius:12px;border:1px solid #444;color:#f3efe8;text-decoration:none;font-weight:700;">Chrome 업데이트</a>'
+            : '')
+        + '</div>';
+      (document.body || document.documentElement).appendChild(d);
+    };
+    if (document.body) showOldWv(); else document.addEventListener('DOMContentLoaded', showOldWv);
+  }
 })();
 </script>
 
@@ -23551,7 +23584,7 @@ function closeFullMapPhoto() {
 
 // Step 7: 주소 복사
 function fullMapCopyAddr() {
-  var addr = document.getElementById('fullMapAddr')?.textContent || '';
+  var _fmA = document.getElementById('fullMapAddr'); var addr = (_fmA && _fmA.textContent) || '';
   if (!addr) {
     showToast('⚠', '주소', '주소가 없습니다');
     return;
@@ -25023,11 +25056,11 @@ async function paymentComplete(paymentRowId, portoneRes) {
   const updates = {
     status: 'paid',
     paid_at: new Date().toISOString(),
-    portone_tx_id: portoneRes?.txId || null,
-    pg_provider: portoneRes?.pgProvider || null,
-    pg_tid: portoneRes?.pgTxId || null,
-    card_company: portoneRes?.card?.company || null,
-    card_number_masked: portoneRes?.card?.number || null
+    portone_tx_id: (portoneRes && portoneRes.txId) || null,
+    pg_provider: (portoneRes && portoneRes.pgProvider) || null,
+    pg_tid: (portoneRes && portoneRes.pgTxId) || null,
+    card_company: (portoneRes && portoneRes.card && portoneRes.card.company) || null,
+    card_number_masked: (portoneRes && portoneRes.card && portoneRes.card.number) || null
   };
   
   const { error } = await window.sb
@@ -43158,7 +43191,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.19-a';
+var TAAM_WEB_BUILD = '2026.09.20-a';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
