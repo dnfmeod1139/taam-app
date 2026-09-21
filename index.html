@@ -2232,6 +2232,10 @@ html.auto-login .splash .bottom-group{display:none !important}
 /* 🆕 2026-09-21 티켓 리스트 카드 — 날짜가 10px 회색이라 실기기에서 안 읽혔다.
    한 줄에 다 밀어 넣던 것을 카드로 나누고, 가장 자주 읽는 「날짜·시간」을 제일 크게 둔다.
    버튼도 한 줄 아래로 내려 손가락이 닿는 크기(44px)로 키웠다. */
+.tkl-year{display:flex;align-items:center;gap:9px;margin:4px 2px 9px;font-family:var(--font-main)}
+.tkl-year:first-child{margin-top:0}
+.tkl-year span{flex:0 0 auto;font-size:12px;font-weight:900;letter-spacing:.06em;color:#8a6d3b;background:#fdf8ef;border:1px solid #f0deb4;border-radius:999px;padding:3px 11px}
+.tkl-year::after{content:'';flex:1;height:1px;background:#e8e4dd}
 .tkl-card{background:#fff;border:1px solid #e8e4dd;border-radius:14px;padding:14px 14px 10px;margin-bottom:10px;font-family:var(--font-main)}
 .tkl-card.sold{background:#faf9f7;border-color:#eee9e1}
 .tkl-card.picked{background:#fffdf8;border-color:#c8a96e}
@@ -43234,7 +43238,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.21-a';
+var TAAM_WEB_BUILD = '2026.09.21-b';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -45043,7 +45047,23 @@ function renderRestList(){
 }
 // 🆕 2026.08: 티켓 리스트 탭 — 발행 / 오픈 예약 / 미공개 보관
 var _tuListTab = 'open';
+// 🆕 2026-09-21 발행 탭 안의 상세 구분 — 지금 무엇이 팔리고, 무엇이 끝났는지 한눈에.
+//   onsale 판매중 : 방문일이 아직 안 지났고 매진이 아님
+//   sold   매진   : 방문일이 아직 안 지났고 매진
+//   done   방문완료: 매진 여부와 상관없이 방문일이 지남
+var _tuOpenSub = 'onsale';
+function _tuOpenKind(t){
+  if(_isTicketExpired(t)) return 'done';
+  return (t.status === 'soldout') ? 'sold' : 'onsale';
+}
 function tuListSetTab(k){ _tuListTab = k; _tuFlexSel = {}; renderTicketList(); }
+function tuListSetSub(k){ _tuOpenSub = k; _tuFlexSel = {}; renderTicketList(); }
+window.tuListSetSub = tuListSetSub;
+// 목록 안의 연도 구분선 — 2026·2027 이 섞여 내려올 때 어느 해인지 놓치지 않게
+function _tkYearOf(t){
+  var k = _tkDateKey(t);
+  return (k && k < 99999999) ? Math.floor(k / 10000) : 0;
+}
 window.tuListSetTab = tuListSetTab;
 
 // ════════════════════════════════════════════════════════════════
@@ -45140,18 +45160,43 @@ function renderTicketList(){
         +(on?'border:1px solid #1a1a18;background:#1a1a18;color:#fff;':'border:1px solid #ddd8ce;background:#fff;color:#8a8580;')
         +'">'+d[1]+' '+_cnt[d[0]]+'</button>';
     }).join('')+'</div>';
-  // 정렬: 판매중 먼저, 매진 나중 · 같은 상태끼리는 연·월·일 순 (오픈 예약 탭은 오픈 임박순)
-  var sorted=ticketDB.filter(function(t){ return _tuSaleKind(t)===_tuListTab; }).sort(function(a,b){
+  // 🆕 2026-09-21 발행 탭 안을 판매중 / 매진 / 방문완료 로 나눈다.
+  //   방문일이 지났으면 매진이든 아니든 「방문완료」다 — 끝난 회차가 판매중 목록을 채우지 않게.
+  var _pub = ticketDB.filter(function(t){ return _tuSaleKind(t)==='open'; });
+  var _sub={onsale:0,sold:0,done:0};
+  _pub.forEach(function(t){ _sub[_tuOpenKind(t)]++; });
+  var subBar='';
+  if(_tuListTab==='open'){
+    subBar='<div style="display:flex;gap:6px;padding:0 0 10px;">'
+      +[['onsale','판매중','#1E7A46'],['sold','매진','#1a1a18'],['done','방문완료','#8a8580']].map(function(d){
+        var on=_tuOpenSub===d[0];
+        return '<button onclick="tuListSetSub(\''+d[0]+'\')" style="flex:1;padding:8px 4px;border-radius:999px;font-size:11.5px;font-weight:800;cursor:pointer;font-family:inherit;'
+          +(on?'border:1.5px solid '+d[2]+';background:'+d[2]+';color:#fff;':'border:1.5px solid #e4e0d8;background:#fff;color:#8a8580;')
+          +'">'+d[1]+' '+_sub[d[0]]+'</button>';
+      }).join('')+'</div>';
+  }
+  // 정렬: 방문일 가까운 순 (방문완료는 최근에 끝난 것부터) · 오픈 예약 탭은 오픈 임박순
+  var sorted=ticketDB.filter(function(t){
+    if(_tuSaleKind(t)!==_tuListTab) return false;
+    if(_tuListTab==='open') return _tuOpenKind(t)===_tuOpenSub;
+    return true;
+  }).sort(function(a,b){
     if(_tuListTab==='sched'){
       var _s=String(a.saleOpenAt||'9').localeCompare(String(b.saleOpenAt||'9'));
       if(_s) return _s;
     }
+    var _ka=(typeof _tkDateKey==='function')?_tkDateKey(a):0, _kb=(typeof _tkDateKey==='function')?_tkDateKey(b):0;
+    // 끝난 회차는 최근 것이 위로 — 방금 치른 예약을 먼저 확인한다
+    if(_tuListTab==='open' && _tuOpenSub==='done') return _kb-_ka;
     var _r=(a.status==='soldout'?1:0)-(b.status==='soldout'?1:0);
     if(_r) return _r;
-    return (typeof _tkDateKey==='function') ? (_tkDateKey(a)-_tkDateKey(b)) : 0;
+    return _ka-_kb;
   });
   if(sorted.length===0){
-    el.innerHTML=tabBar+'<div class="sub-empty">'+(_tuListTab==='sched'?'오픈 예약된 티켓 없음':(_tuListTab==='draft'?'보관 중인 티켓 없음':'발행된 티켓 없음'))+'</div>';
+    var _emptyTxt = (_tuListTab==='sched') ? '오픈 예약된 티켓 없음'
+      : (_tuListTab==='draft') ? '보관 중인 티켓 없음'
+      : (_tuOpenSub==='sold' ? '매진된 티켓 없음' : (_tuOpenSub==='done' ? '방문이 끝난 티켓 없음' : '판매중인 티켓 없음'));
+    el.innerHTML=tabBar+subBar+'<div class="sub-empty">'+_emptyTxt+'</div>';
     return;
   }
 
@@ -45192,7 +45237,8 @@ function renderTicketList(){
     _tuFlexMode = false;   // 자유석이 없는 탭으로 옮기면 선택 모드는 스스로 닫힌다
   }
 
-  el.innerHTML=tabBar+bulkBar+sorted.map(function(t){
+  var _lastYear = 0;
+  el.innerHTML=tabBar+subBar+bulkBar+sorted.map(function(t){
     var r=restaurantDB.find(function(x){return String(x.id)===String(t.restId);});
     var isSold=t.status==='soldout';
     var slots='';
@@ -45286,7 +45332,13 @@ function renderTicketList(){
     var _dateTxt = (typeof _popStoryDate === 'function')
       ? _popStoryDate({ date: t.date, dateYear: t.dateYear })
       : ((typeof _tkFullDate === 'function' ? _tkFullDate(t) : t.date) || '');
-    return '<div class="tkl-card'+(isSold?' sold':'')+(_tuFlexMode&&_sel?' picked':'')+'">'
+    // 🆕 2026-09-21 연도가 바뀌는 자리에 구분선 — 2026·2027 이 섞여도 어느 해인지 놓치지 않는다
+    var _yr = _tkYearOf(t), _yHead = '';
+    if(_yr && _yr !== _lastYear){
+      _lastYear = _yr;
+      _yHead = '<div class="tkl-year"><span>'+_yr+'년</span></div>';
+    }
+    return _yHead + '<div class="tkl-card'+(isSold?' sold':'')+(_tuFlexMode&&_sel?' picked':'')+'">'
       + '<div class="tkl-top">'
       +   (_tuFlexMode ? _selBox : '')
       +   '<div class="tkl-name">'+_raEsc(r?r.name:t.rest)+'</div>'
@@ -47839,8 +47891,14 @@ window._ticketAccessOk = _ticketAccessOk;
 function _isTicketExpired(t){
   if(!t || !t.date) return false;
   var p = String(t.date).split('.');
-  if(p.length !== 2) return false;
-  var m = parseInt(p[0],10), d = parseInt(p[1],10);
+  var m, d, _y3 = 0;
+  // 🔧 2026-09-21 'YYYY.MM.DD' 도 읽는다. 종전엔 false 로 빠져 **지난 날짜가 영영 안 지난 것**이 됐다.
+  if(p.length === 3){
+    _y3 = parseInt(p[0],10)||0; m = parseInt(p[1],10); d = parseInt(p[2],10);
+    if(!(_y3 >= 2020 && _y3 <= 2100)) return false;
+  } else if(p.length === 2){
+    m = parseInt(p[0],10); d = parseInt(p[1],10);
+  } else return false;
   if(isNaN(m) || isNaN(d)) return false;
   var now = new Date();
   var hh = 23, mm = 59;
@@ -47849,6 +47907,7 @@ function _isTicketExpired(t){
     var _h = parseInt(tp[0],10); if(!isNaN(_h)) hh = _h;
     var _m = parseInt(tp[1],10); if(!isNaN(_m)) mm = _m;
   }
+  if(_y3) return new Date(_y3, m-1, d, hh, mm, 0).getTime() < Date.now();
   // 🆕 2026.07: 업로드 시 저장된 연도(dateYear)가 있으면 그대로 사용 — 추정 불필요.
   //   (2027.01.25 티켓이 '180일 추정' 때문에 2026으로 해석돼 만료 처리되던 버그 수정)
   var _yr = parseInt(t.dateYear, 10);
@@ -47971,6 +48030,11 @@ window._riSameDay = _riSameDay;
 
 function _tkDateKey(t){
   var p = String((t && t.date) || '').split('.');
+  // 🔧 2026-09-21 'YYYY.MM.DD' 로 저장된 티켓을 맨 뒤로 밀어내던 것을 고친다 (연도가 무시됐다)
+  if(p.length === 3){
+    var _y3 = parseInt(p[0],10)||0, _m3 = parseInt(p[1],10)||0, _d3 = parseInt(p[2],10)||0;
+    if(_y3 >= 2020 && _y3 <= 2100) return _y3*10000 + _m3*100 + _d3;
+  }
   if(p.length !== 2) return 99999999;   // 날짜 없는 티켓은 맨 뒤
   var m = parseInt(p[0],10) || 0, d = parseInt(p[1],10) || 0;
   var y = parseInt(t.dateYear, 10);
