@@ -30747,7 +30747,10 @@ async function mlOpen(uid){
       + '<div style="font-size:9.5px;color:' + C.faint + ';margin-top:1px;">' + cap + '</div></button>';
   }
   h += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px;margin-top:11px;">'
-     + kpi('dep','누적 부여', granted, C["in"], dGrant.length + '건')
+     // 🔧 2026-09-28 부여만 세고 차감(admin_deduct)은 안 보여줘서, 부여 뒤 바로 되돌린 건이
+     //   「부여만 있고 차감이 없다」로 읽혔다(9/12 유수봉 사이토). 값은 순액, 설명에 차감 건수·금액.
+     + kpi('dep', dCut.length ? '부여 − 차감' : '누적 부여', granted - deducted, C["in"],
+           dGrant.length + '건' + (dCut.length ? ' · 차감 ' + dCut.length + '건 −' + W + n(deducted) : ''))
      + kpi('tk','누적 사용', used, C.ink,
            '구매 ' + buys.length + ' · 진행 ' + G.open.length + (noCnt ? ' · 환불 ' + noCnt : ''))
      + kpi('fee','대행비', feeDone, '#A07E3B', '확정 · 예정 ' + W + n(feePlan))
@@ -30783,9 +30786,13 @@ async function mlOpen(uid){
   if(!txs.length){
     pd += emptyLine('예치금 내역이 없습니다');
   } else {
-    if(dGrant.length){
-      pd += grp('부여 — 어디서 들어온 돈인가', W + n(_sum(dGrant)));
-      dGrant.forEach(function(r){ pd += depRow(r, '예치금 부여'); });
+    // 🔧 2026-09-28 종전엔 「관리 차감」이 맨 아래 별도 그룹이라, 2분 뒤 되돌린 차감이
+    //   모든 티켓 결제·환불 줄 아래로 밀려 부여만 보였다. 부여·차감을 한 줄에 시간순으로 섞는다.
+    var dAdm = dGrant.concat(dCut).sort(function(a,b){ return String(b.created_at||'').localeCompare(String(a.created_at||'')); });
+    if(dAdm.length){
+      pd += grp('부여 · 관리 차감 — 어디서 들어오고 되돌아갔나',
+                W + n(_sum(dGrant)) + (dCut.length ? ' <span style="color:' + C.out + ';">−' + W + n(_sum(dCut)) + '</span>' : ''));
+      dAdm.forEach(function(r){ pd += depRow(r, r.change_type === 'admin_deduct' ? '관리 차감' : '예치금 부여'); });
     }
     if(dUse.length){
       pd += grp('사용 — 티켓 결제', '−' + W + n(_sum(dUse)));
@@ -30794,10 +30801,6 @@ async function mlOpen(uid){
     if(dBack.length){
       pd += grp('환불 · 반환 — 나간 주머니로 돌아옴', '+' + W + n(_sum(dBack)));
       dBack.forEach(function(r){ pd += depRow(r, '반환'); });
-    }
-    if(dCut.length){
-      pd += grp('관리 차감', '−' + W + n(_sum(dCut)));
-      dCut.forEach(function(r){ pd += depRow(r, '관리 차감'); });
     }
     pd += '<div style="padding:12px 4px;font-size:11px;color:' + C.faint + ';border-top:1px solid ' + C.line + ';">'
        + '부여·사용·환불이 <b>같은 주머니</b>에서 오가는지 배지로 확인합니다.</div>';
@@ -43246,7 +43249,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.28-a';
+var TAAM_WEB_BUILD = '2026.09.28-b';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
