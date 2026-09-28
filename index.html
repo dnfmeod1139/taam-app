@@ -14545,7 +14545,7 @@ textarea.mapl-in{min-height:78px;resize:vertical;line-height:1.7}
 </div>
 
 <!-- ═══ 계보 학습 편집 모달 ═══ -->
-<div id="lineageBrainEditModal" style="display:none;position:fixed;inset:0;z-index:9100;background:rgba(0,0,0,.55);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);">
+<div id="lineageBrainEditModal" data-lang-lock="ko" style="display:none;position:fixed;inset:0;z-index:9100;background:rgba(0,0,0,.55);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);">
   <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(94vw,560px);max-height:90vh;background:#f7f5f2;border-radius:14px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 60px rgba(0,0,0,.5);">
     <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid #ebe7dd;background:#fff;">
       <div style="font-family:var(--font-main);font-size:15px;font-weight:800;color:#1a1a18;" id="lbeTitle">계보 학습</div>
@@ -43249,7 +43249,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.28-b';
+var TAAM_WEB_BUILD = '2026.09.28-c';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -51962,8 +51962,9 @@ async function aiTranslateNode(chefId, lineageId, opts){
     //     각 호출의 출력이 작아져 빨라지고, 하나가 실패해도 나머지는 저장된다.
     var groups = [];
     var shortItems = [];
-    if(ko.name)      shortItems.push({id:'name',       value: ko.name});
-    if(ko.sub_title) shortItems.push({id:'sub',        value: ko.sub_title});
+    // 🔧 2026-09-28 이름·부제는 romanize 로 요청 — 모델이 이름 항목을 아예 빼고 돌려주던 것(그래서 트리 이름만 한글로 남았다)
+    if(ko.name)      shortItems.push({id:'name',       value: ko.name,      romanize: true});
+    if(ko.sub_title) shortItems.push({id:'sub',        value: ko.sub_title, romanize: true});
     if(sec1.title)   shortItems.push({id:'sec1_title', value: sec1.title});
     if(sec2.title)   shortItems.push({id:'sec2_title', value: sec2.title});
     if(shortItems.length) groups.push(shortItems);
@@ -52021,7 +52022,8 @@ async function aiTranslateNode(chefId, lineageId, opts){
     // 🆕 일부 그룹만 성공했으면 완료로 표시하지 않는다.
     //   받아온 건 저장하되 status 는 pending 으로 남겨, 다음 실행에서 나머지를 채운다.
     //   (완료로 찍어버리면 못 받은 필드가 영영 한글로 남는다)
-    var _allDone = (okGroups === groups.length);
+    // 🔧 2026-09-28 그룹이 성공해도 name/sub 가 응답에 없으면 완료가 아니다 — 종전엔 ai_draft 로 찍혀 일괄 번역이 영영 건너뛰었다
+    var _allDone = (okGroups === groups.length) && (!ko.name || !!tr.name) && (!ko.sub_title || !!tr.sub);
     if(!_allDone) console.warn('[aiTranslateNode] 부분 성공 —', okGroups + '/' + groups.length, chefId, '→ pending 유지');
     var payload = {
       sec1_data: newSec1,
@@ -52145,7 +52147,7 @@ async function _taamTranslateAllChefs(opts){
     //   → i18n_status_en 이 pending/빈값일 때만 대상. 원문을 고치면 저장 시
     //     status 가 pending 으로 돌아가 자동으로 재번역된다.
     var st = (r.i18n_status_en == null ? '' : String(r.i18n_status_en).trim());
-    return st === '' || st === 'pending';
+    return st === '' || st === 'pending' || (r.name && (!r.name_en || !r.name_jp));   /* 🔧 2026-09-28 이름 번역이 빈 행도 */
   });
 
   var skipped = rows.length - targets.length;
@@ -64992,13 +64994,13 @@ IDB.get('splashSettings').then(function(s) {
   </div>
   
   <!-- 디버그 토글 버튼 -->
-  <button id="debugToggleBtn" class="debug-btn" onclick="toggleDebugGrid()" 
+  <button id="debugToggleBtn" class="debug-btn" data-lang-lock="ko" onclick="toggleDebugGrid()" 
     style="position:absolute;top:10px;right:10px;z-index:100;padding:6px 12px;background:rgba(255,0,255,0.1);border:1px solid #ff00ff;border-radius:6px;color:#ff00ff;font-family:var(--font-main);font-size:10px;font-weight:600;letter-spacing:.1em;cursor:pointer;">
     GRID: OFF
   </button>
   
   <!-- 좌표 표시 패널 -->
-  <div id="debugCoordPanel" class="debug-coord-panel" 
+  <div id="debugCoordPanel" class="debug-coord-panel" data-lang-lock="ko" 
     style="display:none;position:fixed;top:60px;right:10px;z-index:100;padding:10px 14px;background:rgba(0,0,0,.88);border:1px solid #ff00ff;border-radius:8px;color:#fff;font-family:'Menlo',monospace;font-size:12px;line-height:1.6;min-width:130px;pointer-events:none;">
     <div style="font-family:var(--font-main);font-size:9px;font-weight:600;color:#ff00ff;letter-spacing:.15em;margin-bottom:6px;">MARKER COORD</div>
     <div>X: <span id="debugX" style="color:#ff8cff;font-weight:700;">220</span></div>
@@ -65408,11 +65410,11 @@ IDB.get('splashSettings').then(function(s) {
     <div class="lh-back" onclick="window.LineageModule.close()">←</div>
     <div><div class="lh-t">카네사카 계보</div><div class="lh-s" data-lineage-sub="1"></div></div>
   </div>
-  <button id="debugToggleBtnK" class="debug-btn" onclick="toggleDebugGridK()" 
+  <button id="debugToggleBtnK" class="debug-btn" data-lang-lock="ko" onclick="toggleDebugGridK()" 
     style="position:fixed;top:70px;right:10px;z-index:1100;padding:6px 12px;background:rgba(255,0,255,0.1);border:1px solid #ff00ff;border-radius:6px;color:#ff00ff;font-family:var(--font-main);font-size:10px;font-weight:600;letter-spacing:.1em;cursor:pointer;">
     GRID: OFF
   </button>
-  <div id="debugCoordPanelK" class="debug-coord-panel" 
+  <div id="debugCoordPanelK" class="debug-coord-panel" data-lang-lock="ko" 
     style="display:none;position:fixed;top:110px;right:10px;z-index:1100;padding:10px 14px;background:rgba(0,0,0,.88);border:1px solid #ff00ff;border-radius:8px;color:#fff;font-family:'Menlo',monospace;font-size:12px;line-height:1.6;min-width:130px;pointer-events:none;">
     <div style="font-family:var(--font-main);font-size:9px;font-weight:600;color:#ff00ff;letter-spacing:.15em;margin-bottom:6px;">MARKER COORD</div>
     <div>X: <span id="debugXK" style="color:#ff8cff;font-weight:700;">190</span></div>
@@ -65852,11 +65854,11 @@ IDB.get('splashSettings').then(function(s) {
     <div class="lh-back" onclick="window.LineageModule.close()">←</div>
     <div><div class="lh-t">큐베이 계보</div><div class="lh-s" data-lineage-sub="1"></div></div>
   </div>
-  <button id="debugToggleBtnQ" class="debug-btn" onclick="toggleDebugGridQ()" 
+  <button id="debugToggleBtnQ" class="debug-btn" data-lang-lock="ko" onclick="toggleDebugGridQ()" 
     style="position:fixed;top:70px;right:10px;z-index:1100;padding:6px 12px;background:rgba(255,0,255,0.1);border:1px solid #ff00ff;border-radius:6px;color:#ff00ff;font-family:var(--font-main);font-size:10px;font-weight:600;letter-spacing:.1em;cursor:pointer;">
     GRID: OFF
   </button>
-  <div id="debugCoordPanelQ" class="debug-coord-panel" 
+  <div id="debugCoordPanelQ" class="debug-coord-panel" data-lang-lock="ko" 
     style="display:none;position:fixed;top:110px;right:10px;z-index:1100;padding:10px 14px;background:rgba(0,0,0,.88);border:1px solid #ff00ff;border-radius:8px;color:#fff;font-family:'Menlo',monospace;font-size:12px;line-height:1.6;min-width:130px;pointer-events:none;">
     <div style="font-family:var(--font-main);font-size:9px;font-weight:600;color:#ff00ff;letter-spacing:.15em;margin-bottom:6px;">MARKER COORD</div>
     <div>X: <span id="debugXQ" style="color:#ff8cff;font-weight:700;">190</span></div>
@@ -66145,11 +66147,11 @@ IDB.get('splashSettings').then(function(s) {
     <div class="lh-back" onclick="window.LineageModule.close()">←</div>
     <div><div class="lh-t">사이토 계보</div><div class="lh-s" data-lineage-sub="1"></div></div>
   </div>
-  <button id="debugToggleBtnS" class="debug-btn" onclick="toggleDebugGridS()" 
+  <button id="debugToggleBtnS" class="debug-btn" data-lang-lock="ko" onclick="toggleDebugGridS()" 
     style="position:fixed;top:70px;right:10px;z-index:1100;padding:6px 12px;background:rgba(255,0,255,0.1);border:1px solid #ff00ff;border-radius:6px;color:#ff00ff;font-family:var(--font-main);font-size:10px;font-weight:600;letter-spacing:.1em;cursor:pointer;">
     GRID: OFF
   </button>
-  <div id="debugCoordPanelS" class="debug-coord-panel" 
+  <div id="debugCoordPanelS" class="debug-coord-panel" data-lang-lock="ko" 
     style="display:none;position:fixed;top:110px;right:10px;z-index:1100;padding:10px 14px;background:rgba(0,0,0,.88);border:1px solid #ff00ff;border-radius:8px;color:#fff;font-family:'Menlo',monospace;font-size:12px;line-height:1.6;min-width:130px;pointer-events:none;">
     <div style="font-family:var(--font-main);font-size:9px;font-weight:600;color:#ff00ff;letter-spacing:.15em;margin-bottom:6px;">MARKER COORD</div>
     <div>X: <span id="debugXS" style="color:#ff8cff;font-weight:700;">190</span></div>
@@ -66505,11 +66507,11 @@ IDB.get('splashSettings').then(function(s) {
     <div class="lh-back" onclick="window.LineageModule.close()">←</div>
     <div><div class="lh-t">우미 계보</div><div class="lh-s" data-lineage-sub="1"></div></div>
   </div>
-  <button id="debugToggleBtnU" class="debug-btn" onclick="toggleDebugGridU()" 
+  <button id="debugToggleBtnU" class="debug-btn" data-lang-lock="ko" onclick="toggleDebugGridU()" 
     style="position:fixed;top:70px;right:10px;z-index:1100;padding:6px 12px;background:rgba(255,0,255,0.1);border:1px solid #ff00ff;border-radius:6px;color:#ff00ff;font-family:var(--font-main);font-size:10px;font-weight:600;letter-spacing:.1em;cursor:pointer;">
     GRID: OFF
   </button>
-  <div id="debugCoordPanelU" class="debug-coord-panel" 
+  <div id="debugCoordPanelU" class="debug-coord-panel" data-lang-lock="ko" 
     style="display:none;position:fixed;top:110px;right:10px;z-index:1100;padding:10px 14px;background:rgba(0,0,0,.88);border:1px solid #ff00ff;border-radius:8px;color:#fff;font-family:'Menlo',monospace;font-size:12px;line-height:1.6;min-width:130px;pointer-events:none;">
     <div style="font-family:var(--font-main);font-size:9px;font-weight:600;color:#ff00ff;letter-spacing:.15em;margin-bottom:6px;">MARKER COORD</div>
     <div>X: <span id="debugXU" style="color:#ff8cff;font-weight:700;">190</span></div>
@@ -66759,11 +66761,11 @@ IDB.get('splashSettings').then(function(s) {
     <div class="lh-back" onclick="window.LineageModule.close()">←</div>
     <div><div class="lh-t">지로 계보</div><div class="lh-s" data-lineage-sub="1"></div></div>
   </div>
-  <button id="debugToggleBtnJ" class="debug-btn" onclick="toggleDebugGridJ()" 
+  <button id="debugToggleBtnJ" class="debug-btn" data-lang-lock="ko" onclick="toggleDebugGridJ()" 
     style="position:fixed;top:70px;right:10px;z-index:1100;padding:6px 12px;background:rgba(255,0,255,0.1);border:1px solid #ff00ff;border-radius:6px;color:#ff00ff;font-family:var(--font-main);font-size:10px;font-weight:600;letter-spacing:.1em;cursor:pointer;">
     GRID: OFF
   </button>
-  <div id="debugCoordPanelJ" class="debug-coord-panel" 
+  <div id="debugCoordPanelJ" class="debug-coord-panel" data-lang-lock="ko" 
     style="display:none;position:fixed;top:110px;right:10px;z-index:1100;padding:10px 14px;background:rgba(0,0,0,.88);border:1px solid #ff00ff;border-radius:8px;color:#fff;font-family:'Menlo',monospace;font-size:12px;line-height:1.6;min-width:130px;pointer-events:none;">
     <div style="font-family:var(--font-main);font-size:9px;font-weight:600;color:#ff00ff;letter-spacing:.15em;margin-bottom:6px;">MARKER COORD</div>
     <div>X: <span id="debugXJ" style="color:#ff8cff;font-weight:700;">190</span></div>
@@ -67007,11 +67009,11 @@ IDB.get('splashSettings').then(function(s) {
     <div class="lh-back" onclick="window.LineageModule.close()">←</div>
     <div><div class="lh-t">아라이 계보</div><div class="lh-s" data-lineage-sub="1"></div></div>
   </div>
-  <button id="debugToggleBtnA" class="debug-btn" onclick="toggleDebugGridA()" 
+  <button id="debugToggleBtnA" class="debug-btn" data-lang-lock="ko" onclick="toggleDebugGridA()" 
     style="position:fixed;top:70px;right:10px;z-index:1100;padding:6px 12px;background:rgba(255,0,255,0.1);border:1px solid #ff00ff;border-radius:6px;color:#ff00ff;font-family:var(--font-main);font-size:10px;font-weight:600;letter-spacing:.1em;cursor:pointer;">
     GRID: OFF
   </button>
-  <div id="debugCoordPanelA" class="debug-coord-panel" 
+  <div id="debugCoordPanelA" class="debug-coord-panel" data-lang-lock="ko" 
     style="display:none;position:fixed;top:110px;right:10px;z-index:1100;padding:10px 14px;background:rgba(0,0,0,.88);border:1px solid #ff00ff;border-radius:8px;color:#fff;font-family:'Menlo',monospace;font-size:12px;line-height:1.6;min-width:130px;pointer-events:none;">
     <div style="font-family:var(--font-main);font-size:9px;font-weight:600;color:#ff00ff;letter-spacing:.15em;margin-bottom:6px;">MARKER COORD</div>
     <div>X: <span id="debugXA" style="color:#ff8cff;font-weight:700;">190</span></div>
@@ -67202,11 +67204,11 @@ IDB.get('splashSettings').then(function(s) {
     <div class="lh-back" onclick="window.LineageModule.close()">←</div>
     <div><div class="lh-t">스시 쇼 계보</div><div class="lh-s" data-lineage-sub="1"></div></div>
   </div>
-  <button id="debugToggleBtnSh" class="debug-btn" onclick="toggleDebugGridSh()" 
+  <button id="debugToggleBtnSh" class="debug-btn" data-lang-lock="ko" onclick="toggleDebugGridSh()" 
     style="position:fixed;top:70px;right:10px;z-index:1100;padding:6px 12px;background:rgba(255,0,255,0.1);border:1px solid #ff00ff;border-radius:6px;color:#ff00ff;font-family:var(--font-main);font-size:10px;font-weight:600;letter-spacing:.1em;cursor:pointer;">
     GRID: OFF
   </button>
-  <div id="debugCoordPanelSh" class="debug-coord-panel" 
+  <div id="debugCoordPanelSh" class="debug-coord-panel" data-lang-lock="ko" 
     style="display:none;position:fixed;top:110px;right:10px;z-index:1100;padding:10px 14px;background:rgba(0,0,0,.88);border:1px solid #ff00ff;border-radius:8px;color:#fff;font-family:'Menlo',monospace;font-size:12px;line-height:1.6;min-width:130px;pointer-events:none;">
     <div style="font-family:var(--font-main);font-size:9px;font-weight:600;color:#ff00ff;letter-spacing:.15em;margin-bottom:6px;">MARKER COORD</div>
     <div>X: <span id="debugXSh" style="color:#ff8cff;font-weight:700;">190</span></div>
@@ -67461,11 +67463,11 @@ IDB.get('splashSettings').then(function(s) {
     <div class="lh-back" onclick="window.LineageModule.close()">←</div>
     <div><div class="lh-t">기요타 계보</div><div class="lh-s" data-lineage-sub="1">Kiyota Lineage</div></div>
   </div>
-  <button id="debugToggleBtnNew9" class="debug-btn" onclick="toggleDebugGridNew9()" 
+  <button id="debugToggleBtnNew9" class="debug-btn" data-lang-lock="ko" onclick="toggleDebugGridNew9()" 
     style="position:fixed;top:70px;right:10px;z-index:1100;padding:6px 12px;background:rgba(255,0,255,0.1);border:1px solid #ff00ff;border-radius:6px;color:#ff00ff;font-family:var(--font-main);font-size:10px;font-weight:600;letter-spacing:.1em;cursor:pointer;">
     GRID: OFF
   </button>
-  <div id="debugCoordPanelNew9" class="debug-coord-panel" 
+  <div id="debugCoordPanelNew9" class="debug-coord-panel" data-lang-lock="ko" 
     style="display:none;position:fixed;top:110px;right:10px;z-index:1100;padding:10px 14px;background:rgba(0,0,0,.88);border:1px solid #ff00ff;border-radius:8px;color:#fff;font-family:'Menlo',monospace;font-size:12px;line-height:1.6;min-width:130px;pointer-events:none;">
     <div style="font-family:var(--font-main);font-size:9px;font-weight:600;color:#ff00ff;letter-spacing:.15em;margin-bottom:6px;">MARKER COORD</div>
     <div style="font-size:10px;color:#999;">x: <span id="debugXNew9" style="color:#ff00ff;font-weight:700;">0</span></div>
@@ -67786,11 +67788,11 @@ IDB.get('splashSettings').then(function(s) {
     <div class="lh-back" onclick="window.LineageModule.close()">←</div>
     <div><div class="lh-t" id="lhTitleNew10" onclick="editLineageName(10)" style="cursor:pointer;">아라키 계보</div><div class="lh-s" data-lineage-sub="1">Araki Lineage</div></div>
   </div>
-  <button id="debugToggleBtnNew10" class="debug-btn" onclick="toggleDebugGridNew10()" 
+  <button id="debugToggleBtnNew10" class="debug-btn" data-lang-lock="ko" onclick="toggleDebugGridNew10()" 
     style="position:fixed;top:70px;right:10px;z-index:1100;padding:6px 12px;background:rgba(255,0,255,0.1);border:1px solid #ff00ff;border-radius:6px;color:#ff00ff;font-family:var(--font-main);font-size:10px;font-weight:600;letter-spacing:.1em;cursor:pointer;">
     GRID: OFF
   </button>
-  <div id="debugCoordPanelNew10" class="debug-coord-panel" 
+  <div id="debugCoordPanelNew10" class="debug-coord-panel" data-lang-lock="ko" 
     style="display:none;position:fixed;top:110px;right:10px;z-index:1100;padding:10px 14px;background:rgba(0,0,0,.88);border:1px solid #ff00ff;border-radius:8px;color:#fff;font-family:'Menlo',monospace;font-size:12px;line-height:1.6;min-width:130px;pointer-events:none;">
     <div style="font-family:var(--font-main);font-size:9px;font-weight:600;color:#ff00ff;letter-spacing:.15em;margin-bottom:6px;">MARKER COORD</div>
     <div style="font-size:10px;color:#999;">x: <span id="debugXNew10" style="color:#ff00ff;font-weight:700;">0</span></div>
@@ -67938,11 +67940,11 @@ IDB.get('splashSettings').then(function(s) {
     <div class="lh-back" onclick="window.LineageModule.close()">←</div>
     <div><div class="lh-t" id="lhTitleNew11" onclick="editLineageName(11)" style="cursor:pointer;">미타니 계보</div><div class="lh-s" data-lineage-sub="1">Mitani Lineage</div></div>
   </div>
-  <button id="debugToggleBtnNew11" class="debug-btn" onclick="toggleDebugGridNew11()" 
+  <button id="debugToggleBtnNew11" class="debug-btn" data-lang-lock="ko" onclick="toggleDebugGridNew11()" 
     style="position:fixed;top:70px;right:10px;z-index:1100;padding:6px 12px;background:rgba(255,0,255,0.1);border:1px solid #ff00ff;border-radius:6px;color:#ff00ff;font-family:var(--font-main);font-size:10px;font-weight:600;letter-spacing:.1em;cursor:pointer;">
     GRID: OFF
   </button>
-  <div id="debugCoordPanelNew11" class="debug-coord-panel" 
+  <div id="debugCoordPanelNew11" class="debug-coord-panel" data-lang-lock="ko" 
     style="display:none;position:fixed;top:110px;right:10px;z-index:1100;padding:10px 14px;background:rgba(0,0,0,.88);border:1px solid #ff00ff;border-radius:8px;color:#fff;font-family:'Menlo',monospace;font-size:12px;line-height:1.6;min-width:130px;pointer-events:none;">
     <div style="font-family:var(--font-main);font-size:9px;font-weight:600;color:#ff00ff;letter-spacing:.15em;margin-bottom:6px;">MARKER COORD</div>
     <div style="font-size:10px;color:#999;">x: <span id="debugXNew11" style="color:#ff00ff;font-weight:700;">0</span></div>
@@ -68079,11 +68081,11 @@ IDB.get('splashSettings').then(function(s) {
     <div class="lh-back" onclick="window.LineageModule.close()">←</div>
     <div><div class="lh-t" id="lhTitleNew12" onclick="editLineageName(12)" style="cursor:pointer;">요시타케 계보</div><div class="lh-s" data-lineage-sub="1">Yoshitake Lineage</div></div>
   </div>
-  <button id="debugToggleBtnNew12" class="debug-btn" onclick="toggleDebugGridNew12()" 
+  <button id="debugToggleBtnNew12" class="debug-btn" data-lang-lock="ko" onclick="toggleDebugGridNew12()" 
     style="position:fixed;top:70px;right:10px;z-index:1100;padding:6px 12px;background:rgba(255,0,255,0.1);border:1px solid #ff00ff;border-radius:6px;color:#ff00ff;font-family:var(--font-main);font-size:10px;font-weight:600;letter-spacing:.1em;cursor:pointer;">
     GRID: OFF
   </button>
-  <div id="debugCoordPanelNew12" class="debug-coord-panel" 
+  <div id="debugCoordPanelNew12" class="debug-coord-panel" data-lang-lock="ko" 
     style="display:none;position:fixed;top:110px;right:10px;z-index:1100;padding:10px 14px;background:rgba(0,0,0,.88);border:1px solid #ff00ff;border-radius:8px;color:#fff;font-family:'Menlo',monospace;font-size:12px;line-height:1.6;min-width:130px;pointer-events:none;">
     <div style="font-family:var(--font-main);font-size:9px;font-weight:600;color:#ff00ff;letter-spacing:.15em;margin-bottom:6px;">MARKER COORD</div>
     <div style="font-size:10px;color:#999;">x: <span id="debugXNew12" style="color:#ff00ff;font-weight:700;">0</span></div>
@@ -68610,7 +68612,7 @@ IDB.get('splashSettings').then(function(s) {
 </div>
 
 <!-- 정식: 노드 추가 버튼 (superadmin 전용, 플로팅) -->
-<button class="node-add-fab" onclick="openAddNodeModal()" style="position:fixed;bottom:20px;right:20px;z-index:1100;display:none;">
+<button class="node-add-fab" data-lang-lock="ko" onclick="openAddNodeModal()" style="position:fixed;bottom:20px;right:20px;z-index:1100;display:none;">
   <span class="fab-plus">+</span>
   <span class="fab-label">노드 추가</span>
 </button>
@@ -68619,7 +68621,7 @@ IDB.get('splashSettings').then(function(s) {
 <div id="gridHtmlMarker" class="grid-html-marker">+</div>
 
 <!-- 노드 추가 모달 -->
-<div id="addNodeModal" class="node-modal">
+<div id="addNodeModal" class="node-modal" data-lang-lock="ko">
   <div class="node-modal-backdrop" onclick="closeAddNodeModal()"></div>
   <div class="node-modal-box">
     <div class="node-modal-header">
@@ -68683,7 +68685,7 @@ IDB.get('splashSettings').then(function(s) {
 </div>
 
 <!-- ═══ 팝업 v2 (풀스크린, 2섹션) ═══ -->
-<div id="is2">
+<div id="is2" data-lang-lock="ko">
   <div class="is2-hd">
     <button class="is2-back" onclick="closeInfo2()">←</button>
     <div id="is2Title" class="is2-hd-title"></div>
@@ -72865,6 +72867,8 @@ function relocalizeChefNames(){
       if (typeof applyNodeUpdateToSvg === 'function') applyNodeUpdateToSvg(chefId, info, lineageId);
     });
     if (typeof applyAllLineageChefNames === 'function') applyAllLineageChefNames();
+    // 🔧 2026-09-28 커스텀 노드(슈퍼어드민이 추가한 노드)는 별도 렌더라 여기서 다시 그려야 언어가 바뀐다
+    if (window._lnCurrentId && typeof renderCustomNodesForLineage === 'function') renderCustomNodesForLineage(window._lnCurrentId);
   } catch(e){ console.warn('[lineage] 언어 재적용 실패:', e && e.message); }
 }
 window._chefPickName = _chefPickName; window.relocalizeChefNames = relocalizeChefNames;
@@ -74758,7 +74762,7 @@ function showInfoModal(title, message){
     '<div class="ticket-modal-box">' +
       '<div class="ticket-modal-title">' + title + '</div>' +
       '<div class="ticket-modal-msg">' + message.replace(/\n/g, '<br>') + '</div>' +
-      '<button class="ticket-modal-btn" onclick="closeTicketModal()">확인</button>' +
+      '<button class="ticket-modal-btn" onclick="closeTicketModal()">' + _popL('확인','OK','確認') + '</button>' +
     '</div>';
   document.body.appendChild(modal);
   requestAnimationFrame(function(){ modal.classList.add('open'); });
@@ -74779,11 +74783,14 @@ function showMembershipModal(chefName){
   modal.innerHTML = '<div class="ticket-modal-backdrop" onclick="closeTicketModal()"></div>' +
     '<div class="ticket-modal-box">' +
       '<div class="ticket-modal-badge">MEMBERSHIP</div>' +
-      '<div class="ticket-modal-title">멤버십 전용 티켓</div>' +
-      '<div class="ticket-modal-msg">' + chefName + '의 티켓은<br>TAAM 멤버십 회원만<br>예약하실 수 있습니다.</div>' +
+      '<div class="ticket-modal-title">' + _popL('멤버십 전용 티켓','Members-only ticket','メンバーシップ限定チケット') + '</div>' +
+      '<div class="ticket-modal-msg">' + (function(){ var nm = '<span data-no-tx="1">' + escapeBasicHtml(chefName) + '</span>';
+          return _popL(nm + '의 티켓은<br>TAAM 멤버십 회원만<br>예약하실 수 있습니다.',
+                       'Tickets for ' + nm + '<br>can be booked only by<br>TAAM membership members.',
+                       nm + 'のチケットは<br>TAAMメンバーシップ会員のみ<br>ご予約いただけます。'); })() + '</div>' +
       '<div class="ticket-modal-btns">' +
-        '<button class="ticket-modal-btn secondary" onclick="closeTicketModal()">닫기</button>' +
-        '<button class="ticket-modal-btn primary" onclick="goToTicketFromMembership()">티켓 페이지로</button>' +
+        '<button class="ticket-modal-btn secondary" onclick="closeTicketModal()">' + _popL('닫기','Close','閉じる') + '</button>' +
+        '<button class="ticket-modal-btn primary" onclick="goToTicketFromMembership()">' + _popL('티켓 페이지로','Go to tickets','チケットページへ') + '</button>' +
       '</div>' +
     '</div>';
   document.body.appendChild(modal);
@@ -74898,7 +74905,7 @@ function showSoldoutModal(rest){
   var is2 = document.getElementById('is2');
   if(is2) is2.classList.add('blurred');
 
-  var chefName = (rest && rest.name) ? rest.name : '해당 레스토랑';
+  var chefName = (rest && rest.name) ? rest.name : _popL('해당 레스토랑','This restaurant','当該レストラン');
   var restId = (rest && rest.linkedRestId) ? rest.linkedRestId : '';
   var restName = (rest && rest.name) ? rest.name : '';
 
@@ -74909,11 +74916,13 @@ function showSoldoutModal(rest){
     '<div class="ticket-modal-backdrop" onclick="closeTicketModal()"></div>' +
     '<div class="ticket-modal-box">' +
       '<div class="ticket-modal-badge soldout">SOLD OUT</div>' +
-      '<div class="ticket-modal-title">' + escapeBasicHtml(chefName) + ' 티켓 솔드아웃</div>' +
-      '<div class="ticket-modal-msg">현재 판매 중인 티켓이 없습니다.<br>아래 <b>알림 설정</b>을 켜두시면<br>다음 티켓이 업로드될 때<br>푸시 알람으로 알려드립니다.</div>' +
+      '<div class="ticket-modal-title"><span data-no-tx="1">' + escapeBasicHtml(chefName) + '</span>' + _popL(' 티켓 솔드아웃',' — tickets sold out',' チケット完売') + '</div>' +
+      '<div class="ticket-modal-msg">' + _popL('현재 판매 중인 티켓이 없습니다.<br>아래 <b>알림 설정</b>을 켜두시면<br>다음 티켓이 업로드될 때<br>푸시 알람으로 알려드립니다.',
+                                               'No tickets are on sale right now.<br>Turn on <b>Alerts</b> below and we will<br>push-notify you when the next<br>ticket is uploaded.',
+                                               '現在販売中のチケットはありません。<br>下の<b>通知設定</b>をオンにすると<br>次のチケットが公開されたときに<br>プッシュ通知でお知らせします。') + '</div>' +
       '<div class="ticket-modal-btns">' +
-        '<button id="soldoutCloseBtn" class="ticket-modal-btn secondary" onclick="closeTicketModal()">닫기</button>' +
-        '<button id="soldoutNotifyBtn" class="ticket-modal-btn primary" onclick="onSoldoutNotifyClick(\'' + (restId+'').replace(/'/g,"\\'") + '\',\'' + (restName+'').replace(/'/g,"\\'") + '\')">알림 설정</button>' +
+        '<button id="soldoutCloseBtn" class="ticket-modal-btn secondary" onclick="closeTicketModal()">' + _popL('닫기','Close','閉じる') + '</button>' +
+        '<button id="soldoutNotifyBtn" class="ticket-modal-btn primary" onclick="onSoldoutNotifyClick(\'' + (restId+'').replace(/'/g,"\\'") + '\',\'' + (restName+'').replace(/'/g,"\\'") + '\')">' + _popL('알림 설정','Set alert','通知設定') + '</button>' +
       '</div>' +
     '</div>';
   document.body.appendChild(modal);
@@ -74966,6 +74975,12 @@ function onSoldoutNotifyToggle(restId, btnEl){
   });
 }
 
+// 🆕 2026-09-28 팝업 본문 인라인 마크다운 — **굵게** 만 <strong> 으로. 나머지 기호는 글자 그대로.
+function _ndmInline(s){
+  return escapeBasicHtml(s == null ? '' : String(s))
+    .replace(/\*\*([^*\n]+?)\*\*/g, '<strong>$1</strong>');
+}
+window._ndmInline = _ndmInline;
 function escapeBasicHtml(s){
   return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
@@ -75033,8 +75048,8 @@ function showHiddenNodeInfoPopup(node){
       '</button>' +
       photoBlock +
       '<div class="hni-body">' +
-        '<div class="hni-name">' + nameH + '</div>' +
-        (sub ? '<div class="hni-sub">' + subH + '</div>' : '') +
+        '<div class="hni-name" data-no-tx="1">' + nameH + '</div>' +
+        (sub ? '<div class="hni-sub" data-no-tx="1">' + subH + '</div>' : '') +
         '<div class="hni-msg">해당 매장의 레스토랑 정보와 예약 가능 정보입니다.<br><span class="hni-msg-hint">예약 사이트가 없을 경우 클릭이 되지 않을 수 있습니다.</span></div>' +
         '<div class="hni-btns">' +
           '<button class="hni-btn ' + reserveBtnClass + '" ' +
@@ -75100,15 +75115,18 @@ function openNodeDetailModal(node, opts){
   _ndmCurrentNode = node;
   var editMode = !!(opts && opts.editing);
   _ndmEditing = editMode;
+  // 🔧 2026-09-28 편집은 원문(한국어 컬럼)으로 — EN/JA 화면에서 「팝업 편집」을 열면 input 에 번역문이
+  //   들어가고 저장하면 그게 chefs.name / sec1_data.title 등 한국어 컬럼을 덮어썼다. raw(_*Ko)가 있으면 그걸 쓴다.
+  function _ko(rawKey, shown){ return (node[rawKey] !== undefined && node[rawKey] !== null) ? (node[rawKey] || '') : (shown || ''); }
   if(editMode){
     _ndmTempData = {
       // 챕터 1 사진 = nodePhoto (계보도 노드와 동기화)
       nodePhoto: node.nodePhoto || '',
-      sec1Title: node.sec1Title || '',
-      sec1Desc: node.sec1Desc || '',
+      sec1Title: _ko('_s1TitleKo', node.sec1Title),
+      sec1Desc:  _ko('_s1DescKo',  node.sec1Desc),
       // 챕터 2 사진/영상 = sec2Media
-      sec2Title: node.sec2Title || '',
-      sec2Desc: node.sec2Desc || '',
+      sec2Title: _ko('_s2TitleKo', node.sec2Title),
+      sec2Desc:  _ko('_s2DescKo',  node.sec2Desc),
       sec2Media: node.sec2Media || '',
       // 시그니처 숨김 옵션 — true 면 일반 표시 시 sig 챕터 미노출
       sec2Hidden: !!node.sec2Hidden
@@ -75120,8 +75138,8 @@ function openNodeDetailModal(node, opts){
   if(existing) existing.remove();
 
   // ── 데이터 추출 ──
-  var name = node.name || '';
-  var sub = node.sub || node.en || '';
+  var name = editMode ? _ko('_nameKo', node.name) : (node.name || '');
+  var sub  = editMode ? _ko('_subKo',  node.sub || node.en) : (node.sub || node.en || '');
   // 🔧 FIX 2026.05.09: 챕터 1 사진 = sec1Media (별도 필드).
   // 이전엔 nodePhoto 와 통합 → 노드 사진 바꾸면 팝업도 바뀌는 혼선 발생.
   // 이제 분리: nodePhoto = 계보도 트리 작은 동그라미, sec1Media = 팝업 인물소개 큰 사진.
@@ -75174,7 +75192,7 @@ function openNodeDetailModal(node, opts){
 
   // ── 상단바 ──
   var topbarHtml = '<div class="ndm-topbar">' +
-    '<div class="ndm-topbar-left">';
+    '<div class="ndm-topbar-left"' + (isSuper ? ' data-lang-lock="ko"' : '') + '>';
   if(isSuper){
     if(editMode){
       topbarHtml += '<button class="ndm-topbtn cancel show" onclick="ndmCancelPopupEdit()">취소</button>' +
@@ -75300,7 +75318,7 @@ function _ndmRenderChapter(sec, name, sub, title, desc, media, isSuper, editMode
 
   // 시그니처 챕터의 편집 모드 → 상단에 "시그니처 표시 안 함" 체크박스
   if(sec === 'sig' && editMode){
-    html += '<label class="ndm-sig-toggle">' +
+    html += '<label class="ndm-sig-toggle" data-lang-lock="ko">' +
               '<input type="checkbox" id="ndmSigHiddenChk" ' +
                 (sigHiddenNow ? 'checked' : '') + ' ' +
                 'onchange="ndmToggleSigHidden(this.checked)" />' +
@@ -75325,8 +75343,8 @@ function _ndmRenderChapter(sec, name, sub, title, desc, media, isSuper, editMode
   if(sec === 'chef'){
     overlayHtml = '<div class="ndm-chapter-img-grad"></div>' +
                   '<div class="ndm-chapter-img-meta">' +
-                    '<div class="ndm-chapter-img-name">' + escapeBasicHtml(name) + '</div>' +
-                    (sub ? '<div class="ndm-chapter-img-sub">' + escapeBasicHtml(sub) + '</div>' : '') +
+                    '<div class="ndm-chapter-img-name" data-no-tx="1">' + escapeBasicHtml(name) + '</div>' +
+                    (sub ? '<div class="ndm-chapter-img-sub" data-no-tx="1">' + escapeBasicHtml(sub) + '</div>' : '') +
                   '</div>';
   }
   html += '<div class="' + imgClass + '" data-sec="' + sec + '"' + imgClick + '>' +
@@ -75349,21 +75367,23 @@ function _ndmRenderChapter(sec, name, sub, title, desc, media, isSuper, editMode
     if(editMode){
       // 🔧 NEW 2026.05.10: chef 챕터 편집 시 「매장 이름」 + 「쉐프 영문/일본어명」 추가 input
       if(sec === 'chef'){
-        html += '<div class="ndm-chapter-headfields">' +
+        html += '<div class="ndm-chapter-headfields" data-lang-lock="ko">' +
                   '<label>매장 이름 (한글)</label>' +
                   '<input type="text" id="ndmName_chef" value="' + escapeBasicHtml(name) + '" placeholder="예: 스시 카네사카" />' +
                   '<label>쉐프명 (영문/한자/일본어)</label>' +
                   '<input type="text" id="ndmSub_chef" value="' + escapeBasicHtml(sub) + '" placeholder="예: Kanesaka Shinji" />' +
                 '</div>';
       }
-      html += '<input type="text" class="ndm-chapter-input" id="ndmTitle_' + sec + '" placeholder="타이틀 (예: 본가 · 銀座 鮨かねさか)" value="' + escapeBasicHtml(title) + '" />' +
-              '<textarea class="ndm-chapter-textarea" id="ndmDesc_' + sec + '" placeholder="상세 설명을 입력하세요. 자유롭게 줄바꿈(Enter) 가능. 박스 우측 하단을 드래그하면 더 길게 늘릴 수 있습니다.">' + escapeBasicHtml(desc) + '</textarea>';
+      html += '<input type="text" class="ndm-chapter-input" data-lang-lock="ko" id="ndmTitle_' + sec + '" placeholder="타이틀 (예: 본가 · 銀座 鮨かねさか)" value="' + escapeBasicHtml(title) + '" />' +
+              '<textarea class="ndm-chapter-textarea" data-lang-lock="ko" id="ndmDesc_' + sec + '" placeholder="상세 설명을 입력하세요. 자유롭게 줄바꿈(Enter) 가능. 박스 우측 하단을 드래그하면 더 길게 늘릴 수 있습니다.">' + escapeBasicHtml(desc) + '</textarea>';
     } else {
+      // 🔧 2026-09-28 본문의 **굵게** 가 별표 그대로 보였다(AI 번역·요약 초안이 마크다운을 씀).
+      //   escape 뒤에 <strong> 으로만 바꾼다. DB 본문·번역문은 사전 대상이 아니므로 TX 스윕에서 뺀다.
       if(title){
-        html += '<div class="ndm-chapter-title">' + escapeBasicHtml(title) + '</div>';
+        html += '<div class="ndm-chapter-title" data-no-tx="1">' + _ndmInline(title) + '</div>';
       }
       if(desc){
-        html += '<div class="ndm-chapter-desc">' + escapeBasicHtml(desc) + '</div>';
+        html += '<div class="ndm-chapter-desc" data-no-tx="1">' + _ndmInline(desc) + '</div>';
       }
     }
     html += '</div>';
@@ -75647,7 +75667,7 @@ function onNdmReserveClick(btn){
   if(!url){
     closeNodeDetailModal();
     setTimeout(function(){
-      showInfoModal('레스토랑 정보 없음', '레스토랑 정보 링크가\n설정되지 않았습니다.');
+      showInfoModal(_popL('레스토랑 정보 없음','No restaurant info','店舗情報がありません'), _popL('레스토랑 정보 링크가\n설정되지 않았습니다.','No restaurant info link\nhas been set.','店舗情報リンクが\n設定されていません。'));
     }, 220);
     return;
   }
@@ -75668,7 +75688,7 @@ function onNdmTicketClick(btn){
     } else {
       closeNodeDetailModal();
       setTimeout(function(){
-        showInfoModal('예약 링크 없음', '예약 가능한 링크가\n설정되지 않았습니다.');
+        showInfoModal(_popL('예약 링크 없음','No reservation link','予約リンクなし'), _popL('예약 가능한 링크가\n설정되지 않았습니다.','No reservation link\nhas been set.','予約可能なリンクが\n設定されていません。'));
       }, 220);
     }
     return;
@@ -75676,8 +75696,8 @@ function onNdmTicketClick(btn){
   if(!restId){
     closeNodeDetailModal();
     setTimeout(function(){
-      showInfoModal('TAAM 티켓 준비 중',
-        '연결 레스토랑이 설정되지 않아\nTAAM 티켓 페이지로 이동할 수 없습니다.');
+      showInfoModal(_popL('TAAM 티켓 준비 중','TAAM ticket coming soon','TAAMチケット準備中'),
+        _popL('연결 레스토랑이 설정되지 않아\nTAAM 티켓 페이지로 이동할 수 없습니다.','No linked restaurant yet,\nso the TAAM ticket page cannot open.','レストランが未連携のため\nTAAMチケットページを開けません。'));
     }, 220);
     return;
   }
@@ -75711,8 +75731,8 @@ function onHniReserveClick(btn){
   if(!url){
     closeHiddenNodeInfo();
     setTimeout(function(){
-      showInfoModal('레스토랑 정보 없음',
-        '레스토랑 정보 링크가\n설정되지 않았습니다.');
+      showInfoModal(_popL('레스토랑 정보 없음','No restaurant info','店舗情報がありません'),
+        _popL('레스토랑 정보 링크가\n설정되지 않았습니다.','No restaurant info link\nhas been set.','店舗情報リンクが\n設定されていません。'));
     }, 220);
     return;
   }
@@ -75736,8 +75756,8 @@ function onHniTicketClick(btn){
       // 외부 URL 없음 (ghost 버튼) → 안내 팝업
       closeHiddenNodeInfo();
       setTimeout(function(){
-        showInfoModal('예약 링크 없음',
-          '예약 가능한 링크가\n설정되지 않았습니다.');
+        showInfoModal(_popL('예약 링크 없음','No reservation link','予約リンクなし'),
+          _popL('예약 가능한 링크가\n설정되지 않았습니다.','No reservation link\nhas been set.','予約可能なリンクが\n設定されていません。'));
       }, 220);
     }
     return;
@@ -75748,8 +75768,8 @@ function onHniTicketClick(btn){
   if(!restId){
     closeHiddenNodeInfo();
     setTimeout(function(){
-      showInfoModal('TAAM 티켓 준비 중',
-        '연결 레스토랑이 설정되지 않아\nTAAM 티켓 페이지로 이동할 수 없습니다.');
+      showInfoModal(_popL('TAAM 티켓 준비 중','TAAM ticket coming soon','TAAMチケット準備中'),
+        _popL('연결 레스토랑이 설정되지 않아\nTAAM 티켓 페이지로 이동할 수 없습니다.','No linked restaurant yet,\nso the TAAM ticket page cannot open.','レストランが未連携のため\nTAAMチケットページを開けません。'));
     }, 220);
     return;
   }
@@ -75832,11 +75852,18 @@ function _ensureSecData(chefId, info, cacheKey, cb, lineageId){
   if(!window.sb){ info._secLoaded = true; if(cb) cb(info); return; }
   // 🔧 FIX 2026.05: 복합 PK (id, lineage_id) — lineageId 없으면 fetch 안전 차단
   if(!lineageId){ info._secLoaded = true; if(cb) cb(info); return; }
-  window.sb.from('chefs').select('sec1_data, sec2_data, reserve_url, ticket_url, ticket_status, linked_rest_id').eq('id', chefId).eq('lineage_id', lineageId).single()
+  window.sb.from('chefs').select('name, name_en, name_jp, sub_title, sub_en, sub_jp, sec1_data, sec2_data, reserve_url, ticket_url, ticket_status, linked_rest_id').eq('id', chefId).eq('lineage_id', lineageId).single()
     .then(function(res){
       if(!res.error && res.data){
         var s1 = res.data.sec1_data || {};
         var s2 = res.data.sec2_data || {};
+        // 🔧 2026-09-28 이름·부제 raw 보관 + 현재 언어 선택 (팝업 제목이 한글로 남던 경로)
+        if(res.data.name){
+          info._nameKo = res.data.name; info._nameEn = res.data.name_en; info._nameJp = res.data.name_jp;
+          info._subKo = res.data.sub_title; info._subEn = res.data.sub_en; info._subJp = res.data.sub_jp;
+          info.name = _chefPickName(res.data.name, res.data.name_en, res.data.name_jp);
+          info.sub  = _chefPickName(res.data.sub_title, res.data.sub_en, res.data.sub_jp);
+        }
         info.sec1BoxAX = s1.boxAX; info.sec1BoxAY = s1.boxAY; info.sec1BoxAAlign = s1.boxAAlign;
         info.sec1BoxBX = s1.boxBX; info.sec1BoxBY = s1.boxBY; info.sec1BoxBAlign = s1.boxBAlign;
         info.sec1NameFs = s1.nameFs; info.sec1CaptionFs = s1.captionFs;
@@ -75891,7 +75918,7 @@ function prefetchSecDataForLineage(lineageId){
 
   schedule(function(){
     window.sb.from('chefs')
-      .select('id, sec1_data, sec2_data, reserve_url, ticket_url, ticket_status, linked_rest_id')
+      .select('id, name, name_en, name_jp, sub_title, sub_en, sub_jp, sec1_data, sec2_data, reserve_url, ticket_url, ticket_status, linked_rest_id')
       .eq('lineage_id', lineageId)
       .then(function(res){
         if(res.error){
@@ -75904,6 +75931,12 @@ function prefetchSecDataForLineage(lineageId){
           var info = _chefInfoCache[cacheKey] || {};
           var s1 = row.sec1_data || {};
           var s2 = row.sec2_data || {};
+          if(row.name){   // 🔧 2026-09-28 이름·부제 raw 보관 + 현재 언어 선택
+            info._nameKo = row.name; info._nameEn = row.name_en; info._nameJp = row.name_jp;
+            info._subKo = row.sub_title; info._subEn = row.sub_en; info._subJp = row.sub_jp;
+            info.name = _chefPickName(row.name, row.name_en, row.name_jp);
+            info.sub  = _chefPickName(row.sub_title, row.sub_en, row.sub_jp);
+          }
           info.sec1BoxAX = s1.boxAX; info.sec1BoxAY = s1.boxAY; info.sec1BoxAAlign = s1.boxAAlign;
           info.sec1BoxBX = s1.boxBX; info.sec1BoxBY = s1.boxBY; info.sec1BoxBAlign = s1.boxBAlign;
           info.sec1NameFs = s1.nameFs; info.sec1CaptionFs = s1.captionFs;
@@ -76203,6 +76236,12 @@ function mergeChefInfo(r, info){
   for(var k in r) merged[k] = r[k];
   if(info.name !== undefined && info.name) merged.name = info.name;
   if(info.sub !== undefined) merged.sub = info.sub;
+  // 🔧 2026-09-28 원문(Ko)·번역문 raw 도 같이 — 편집 모드는 표시값이 아니라 원문을 input 에 넣어야 한다
+  ['_nameKo','_nameEn','_nameJp','_subKo','_subEn','_subJp',
+   '_s1TitleKo','_s1TitleEn','_s1TitleJp','_s1DescKo','_s1DescEn','_s1DescJp',
+   '_s2TitleKo','_s2TitleEn','_s2TitleJp','_s2DescKo','_s2DescEn','_s2DescJp'].forEach(function(k){
+    if(info[k] !== undefined) merged[k] = info[k];
+  });
   if(info.nodePhoto !== undefined) merged.nodePhoto = info.nodePhoto;
   if(info.nodeBorderColor !== undefined) merged.nodeBorderColor = info.nodeBorderColor;
   if(info.nodeHidden !== undefined) merged.nodeHidden = !!info.nodeHidden;
@@ -76368,7 +76407,7 @@ function refreshNewLineageTiles(isSuper){
     // 저장된 이름 로드
     if(typeof IDB !== 'undefined'){
       IDB.get('lineageName_new'+num).then(function(name){
-        if(name){
+        if(name && (window._tkCurrentLang || 'ko') === 'ko'){   // 🔧 2026-09-28
           var nameEl = document.getElementById('lgeNameNew'+num);
           if(nameEl) nameEl.textContent = name;
           var titleEl = document.getElementById('lhTitleNew'+num);
@@ -78045,6 +78084,8 @@ async function applyLineageNameOverrides(lineageId){
   svg.querySelectorAll('g.nd').forEach(function(g){
     if(!g.hasAttribute('data-no-tx')) g.setAttribute('data-no-tx', '1');
   });
+  // 🆕 2026-09-28 세대 축·배지·관계 라벨·메타 줄 — 이름 외의 SVG 글자를 현재 언어로
+  try { _lnLocalizeSvgTexts(svg); } catch(_lx){ console.warn('[lineage i18n] 라벨 사전 적용 실패:', _lx && _lx.message); }
 
   // 한국어면 원문 복원만 하고 끝낸다 — 조회도 하지 않는다
   if(lang === 'ko'){
@@ -78057,11 +78098,15 @@ async function applyLineageNameOverrides(lineageId){
 
   var res;
   try {
+    // 🔧 2026-09-28 chefs 에는 `sub` 도 `i18n_jp_approved` 도 없다(컬럼은 sub_title). PostgREST 가 42703 을
+    //   돌려주고 아래 return 이 조용히 삼켜서, EN/JA 에서 하드코딩 노드 이름이 한 번도 갈아끼워지지 않았다
+    //   (JA 화면의 「스시 큐베이 1대」). 실패는 이제 콘솔에 남긴다.
     res = await window.sb.from('chefs')
-      .select('id, name, name_en, name_jp, sub, sub_en, sub_jp, i18n_jp_approved')
+      .select('id, name, name_en, name_jp, sub_title, sub_en, sub_jp')
       .eq('lineage_id', lineageId);
-  } catch(e){ return; }
-  if(res.error || !res.data || !res.data.length) return;
+  } catch(e){ console.warn('[lineage i18n] chefs 조회 예외:', e && e.message); return; }
+  if(res.error){ console.warn('[lineage i18n] chefs 조회 실패:', res.error.message); return; }
+  if(!res.data || !res.data.length) return;
 
   // onclick 의 첫 인용부호 값 → 노드 g
   var byId = {};
@@ -78077,10 +78122,12 @@ async function applyLineageNameOverrides(lineageId){
     var texts = g.querySelectorAll('text');
     if(!texts.length) return;
     // [0] 매장명 · [1] 부제. 없으면 건드리지 않는다.
-    var pairs = [[texts[0], 'name'], [texts[1], 'sub']];
-    pairs.forEach(function(p){
+    // 부제 컬럼은 sub_title 이라 pickI18nField(row,'sub') 로는 못 읽는다 — 언어별 값을 직접 고른다
+    var pairs = [[texts[0], _chefPickName(row.name, row.name_en, row.name_jp)],
+                 [texts[1], _chefPickName(row.sub_title, row.sub_en, row.sub_jp)]];
+    pairs.forEach(function(p, pi){
       var el = p[0]; if(!el) return;
-      var v = window.pickI18nField(row, p[1]);
+      var v = p[1]; p[1] = pi === 1 ? 'sub' : 'name';
       if(!v || typeof v !== 'string') return;
       if(!el.hasAttribute('data-ko')) el.setAttribute('data-ko', el.textContent || '');
       // 부제는 원래 대문자로 조판된다 (Montserrat 800) — 그 규칙을 유지한다
@@ -78089,6 +78136,63 @@ async function applyLineageNameOverrides(lineageId){
   });
 }
 window.applyLineageNameOverrides = applyLineageNameOverrides;
+
+// 🆕 2026-09-28 계보 SVG 의 나머지 글자 — 세대 축(2代·3代·1세대), 배지(1935 · 1代), 관계 라벨(첫제자·프로듀싱),
+//   노드 메타(2006 오픈 · 긴자 · 총점장), 힌트 문장. 전부 SVG 에 박힌 리터럴이라 t()·TX 가 못 닿았고(g.nd 는 data-no-tx),
+//   KO/EN 회원에게 「代」가, EN/JA 회원에게 한글 메타가 그대로 보였다.
+//   토큰 사전 방식: ' · ' 로 쪼개 토큰별로 바꾼다. 사전에 없는 토큰(고유명사)은 그대로 둔다.
+//   g.nd 의 첫 두 <text>(매장명·부제)는 chefs.name_en/name_jp 가 맡으므로 건드리지 않는다.
+var LIN_SVG_DICT = {
+  // 세 번째 값은 한국어 — SVG 원문이 한자(代)라 KO 회원에게도 바꿔 보여야 하는 것들
+  '1代':['1st gen','1代','1대'], '2代':['2nd gen','2代','2대'], '3代':['3rd gen','3代','3대'], '4代':['4th gen','4代','4대'],
+  '2代 主人':['2nd gen owner','2代 主人','2대 주인'], '3代 主人 (現)':['3rd gen owner (current)','3代 主人 (現)','3대 주인 (현)'],
+  '1세대':['1st gen','1世代'], '2대':['2nd gen','2代目'], '2대째':['2nd gen','2代目'], '손자':['Grandchild','孫'],
+  '3대 키무라':['Kimura 3rd gen','3代目 木村'], '3대 키무라 (2019)':['Kimura 3rd gen (2019)','3代目 木村 (2019)'],
+  '4대 요시자와':['Yoshizawa 4th gen','4代目 吉澤'], '2대 니이즈':['Niizu 2nd gen','2代目 新津'],
+  '첫제자':['First apprentice','一番弟子'], '프로듀싱':['Producing','プロデュース'], '간접 사사':['Indirect mentorship','間接的師事'],
+  '총괄':['Head chef','総括'], '별저':['Annex','別邸'], '협업':['Collab','コラボ'], '2025 협업':['2025 collab','2025 コラボ'],
+  '2025 기술 협업':['2025 technical collab','2025 技術コラボ'], 'LDH 프로듀스':['LDH produce','LDH プロデュース'],
+  '슌스케 직계':["Shunsuke's direct line",'俊介直系'], '마츠모토 손자':["Matsumoto's grandson",'松本の孫'],
+  '여성 직인':['Female shokunin','女性職人'], '전 코지마 2023~25':['ex-Kojima 2023–25','元こじま 2023~25'],
+  '카토 2번째 매장':["Kato's 2nd shop",'加藤 2号店'], '韓國 系列':['Korea line','韓国系列'], '日本 本家':['Japan main house','日本本家'],
+  '홋카이도':['Hokkaido','北海道'], '홍콩':['Hong Kong','香港'], '긴자':['Ginza','銀座'], '런던':['London','ロンドン'],
+  '아카사카':['Akasaka','赤坂'], '요츠야':['Yotsuya','四谷'], '히비야':['Hibiya','日比谷'], '신바시':['Shimbashi','新橋'],
+  '롯폰기':['Roppongi','六本木'], '스이텐구마에':['Suitengumae','水天宮前'], '가구라자카':['Kagurazaka','神楽坂'],
+  '시로카네':['Shirokane','白金'], '신토미초':['Shintomicho','新富町'], '이세':['Ise','伊勢'], '나가타초':['Nagatacho','永田町'],
+  '고베':['Kobe','神戸'], '아오야마':['Aoyama','青山'], '하와이':['Hawaii','ハワイ'], '방콕':['Bangkok','バンコク'],
+  '뉴욕':['New York','ニューヨーク'], '오사카':['Osaka','大阪'], '나고야':['Nagoya','名古屋'], '마쓰야마':['Matsuyama','松山'],
+  '만다린 도쿄':['Mandarin Oriental Tokyo','マンダリン東京'], '웨스턴조선 호텔':['Westin Chosun Hotel','ウェスティン朝鮮ホテル'],
+  '불가리 호텔':['Bulgari Hotel','ブルガリホテル'], '신라호텔 아리아케':['Shilla Hotel Ariake','新羅ホテル 有明'],
+  '아자부 다이힐즈':['Azabudai Hills','麻布台ヒルズ'], '자매점':['Sister shop','姉妹店'], '본가':['Main house','本家'],
+  '본점':['Main shop','本店'], '오픈':['opened','オープン'], '총점장':['Head chef','総料理長'], '하나레':['Hanare','はなれ'],
+  '서브카운터':['Sub counter','サブカウンター'], '롯폰기점':['Roppongi','六本木店'], '도요스점':['Toyosu','豊洲店'],
+  '긴자 본점':['Ginza main','銀座本店'], '2006 오픈':['Opened 2006','2006 オープン'],
+  '• 사진을 클릭하면 상세한 정보를 볼 수 있습니다.':['• Tap a photo to see details','• 写真をタップすると詳細を見られます']
+};
+function _lnLocalizeSvgTexts(svg){
+  if(!svg) return;
+  var l = window._tkCurrentLang || 'ko';
+  var idx = (l === 'ja') ? 1 : 0;
+  svg.querySelectorAll('text').forEach(function(el){
+    var g = el.closest ? el.closest('g.nd') : null;
+    if(g){ var ts = g.querySelectorAll('text'); if(ts[0] === el || ts[1] === el) return; }   // 이름·부제는 chefs 번역이 맡는다
+    if(el.querySelector('tspan')) return;
+    if(!el.hasAttribute('data-ko2')) el.setAttribute('data-ko2', el.textContent || '');
+    var ko = el.getAttribute('data-ko2');
+    // KO: 원문 복원이 기본이지만, 사전에 한국어 표기(세 번째 값)가 있는 한자 라벨(2代 등)은 그걸 쓴다
+    var out = ko.split(' · ').map(function(tok){
+      var t = tok.trim(); var m = LIN_SVG_DICT[t];
+      if(l === 'ko') return (m && m[2]) ? m[2] : tok;
+      if(m) return m[idx];
+      // 「2006 오픈」처럼 연도+토큰 — 뒤 토큰만 바꾼다
+      var ym = t.match(/^(\d{4}(?:\.\d{1,2})?)\s+(.+)$/);
+      if(ym && LIN_SVG_DICT[ym[2]]) return ym[1] + ' ' + LIN_SVG_DICT[ym[2]][idx];
+      return tok;
+    }).join(' · ');
+    if(out !== el.textContent) el.textContent = out;
+  });
+}
+window._lnLocalizeSvgTexts = _lnLocalizeSvgTexts;
 
 // 🆕 2026.05.22: 옵션 B — 하드코딩 노드의 좌표를 chefs.geometry 로 동적 덮어쓰기.
 //   슈퍼어드민이 앱 안에서 노드 위치를 자유롭게 변경 가능.
@@ -78304,13 +78408,29 @@ function getLineageSvg(lineageId){
 // 🆕 2026.05.22: 노드 좌표/부모/연결 정보를 Supabase chefs.geometry 와 IDB 둘 다에서 로드.
 //   Supabase 우선 → 다른 기기에서 추가한 노드도 표시됨.
 //   네트워크 실패 시 IDB 폴백.
+// 🆕 2026-09-28 섹션 기본 제목 — 회원 화면에 한글 기본값('쉐프 소개'/'시그니처')이 그대로 나가던 것
+function _lnSecDefault(which){
+  return which === 1 ? _popL('쉐프 소개','About the chef','シェフ紹介') : _popL('시그니처','Signature','シグネチャー');
+}
+// 노드 객체에 원문(_nameKo…)이 있으면 현재 언어로 표시값을 다시 고른다. 없으면(옛 IDB 캐시) 그대로.
+function _lnCustomNodeLocalize(n){
+  if(!n || n._nameKo === undefined) return n;
+  n.name = _chefPickName(n._nameKo, n._nameEn, n._nameJp) || '';
+  n.sub  = _chefPickName(n._subKo,  n._subEn,  n._subJp)  || '';
+  n.sec1Title = _chefPickName(n._s1TitleKo, n._s1TitleEn, n._s1TitleJp) || _lnSecDefault(1);
+  n.sec1Desc  = _chefPickName(n._s1DescKo,  n._s1DescEn,  n._s1DescJp)  || '';
+  n.sec2Title = _chefPickName(n._s2TitleKo, n._s2TitleEn, n._s2TitleJp) || _lnSecDefault(2);
+  n.sec2Desc  = _chefPickName(n._s2DescKo,  n._s2DescEn,  n._s2DescJp)  || '';
+  return n;
+}
+window._lnSecDefault = _lnSecDefault; window._lnCustomNodeLocalize = _lnCustomNodeLocalize;
 function loadCustomNodes(lineageId, cb){
   if(typeof IDB === 'undefined' && !window.sb){ if(cb) cb([]); return; }
 
   // ① Supabase 우선
   if(window.sb){
     window.sb.from('chefs')
-      .select('id, lineage_id, name, sub_title, node_photo, node_border_color, geometry, sec1_data, sec2_data, ticket_status, ticket_url, reserve_url, linked_rest_id')
+      .select('id, lineage_id, name, name_en, name_jp, sub_title, sub_en, sub_jp, node_photo, node_border_color, geometry, sec1_data, sec2_data, ticket_status, ticket_url, reserve_url, linked_rest_id')
       .eq('lineage_id', lineageId)
       .eq('is_custom', true)
       .then(function(res){
@@ -78324,10 +78444,20 @@ function loadCustomNodes(lineageId, cb){
           var g = r.geometry || {};
           var s1 = r.sec1_data || {};
           var s2 = r.sec2_data || {};
-          return {
+          // 🔧 2026-09-28 커스텀 노드도 언어를 탄다. 표시값(name/sub/sec*)은 현재 언어로 고르고,
+          //   원문·번역문은 _nameKo/_nameEn/… 으로 같이 싣는다 — 저장은 원문(Ko)만 쓰고(saveCustomNodes),
+          //   언어 전환은 raw 에서 다시 고른다(_lnCustomNodeLocalize). IDB 백업도 이 모양 그대로다.
+          var _nd = {
             id: r.id,
-            name: r.name || '',
-            sub: r.sub_title || '',
+            name: _chefPickName(r.name, r.name_en, r.name_jp) || '',
+            sub:  _chefPickName(r.sub_title, r.sub_en, r.sub_jp) || '',
+            name_en: r.name_en || '', name_jp: r.name_jp || '', sub_en: r.sub_en || '', sub_jp: r.sub_jp || '',
+            _nameKo: r.name || '', _nameEn: r.name_en || '', _nameJp: r.name_jp || '',
+            _subKo: r.sub_title || '', _subEn: r.sub_en || '', _subJp: r.sub_jp || '',
+            _s1TitleKo: s1.title || '', _s1TitleEn: s1.title_en || '', _s1TitleJp: s1.title_jp || '',
+            _s1DescKo:  s1.desc  || '', _s1DescEn:  s1.desc_en  || '', _s1DescJp:  s1.desc_jp  || '',
+            _s2TitleKo: s2.title || '', _s2TitleEn: s2.title_en || '', _s2TitleJp: s2.title_jp || '',
+            _s2DescKo:  s2.desc  || '', _s2DescEn:  s2.desc_en  || '', _s2DescJp:  s2.desc_jp  || '',
             x: g.x, y: g.y,
             parentId: g.parentId || null,
             parentX: g.parentX != null ? g.parentX : null,
@@ -78335,8 +78465,10 @@ function loadCustomNodes(lineageId, cb){
             connection: g.connection || 'L-branch',
             nodeBorderColor: r.node_border_color || '#1a1a18',
             nodePhoto: r.node_photo || null,
-            sec1Title: s1.title || '쉐프 소개', sec1Desc: s1.desc || '', sec1Media: s1.media || null,
-            sec2Title: s2.title || '시그니처',  sec2Desc: s2.desc || '', sec2Media: s2.media || null,
+            sec1Title: _chefPickName(s1.title, s1.title_en, s1.title_jp) || _lnSecDefault(1),
+            sec1Desc:  _chefPickName(s1.desc,  s1.desc_en,  s1.desc_jp)  || '', sec1Media: s1.media || null,
+            sec2Title: _chefPickName(s2.title, s2.title_en, s2.title_jp) || _lnSecDefault(2),
+            sec2Desc:  _chefPickName(s2.desc,  s2.desc_en,  s2.desc_jp)  || '', sec2Media: s2.media || null,
             sec2Hidden: !!s2.hidden,  // 🆕 v1.46: 시그니처 미노출 플래그 복원
             ticketStatus: r.ticket_status || 'off',
             ticketUrl: r.ticket_url || '',
@@ -78348,6 +78480,7 @@ function loadCustomNodes(lineageId, cb){
             nodeHidden: !!g.nodeHidden,
             nodeHiddenShowInfo: !!g.nodeHiddenShowInfo
           };
+          return _nd;
         }).filter(function(n){ return n.x != null && n.y != null; });
 
         // IDB 에도 백업 (오프라인 대비)
@@ -78394,7 +78527,7 @@ function saveCustomNodes(lineageId, nodes){
         //   DB 의 현재 링크를 먼저 읽어, 로컬이 비어 있으면 DB 값을 그대로 둔다.
         var _dbLinks = {};
         try {
-          var _lk = await window.sb.from('chefs').select('id, reserve_url, ticket_url, ticket_status, linked_rest_id').eq('lineage_id', lineageId);
+          var _lk = await window.sb.from('chefs').select('id, reserve_url, ticket_url, ticket_status, linked_rest_id, sec1_data, sec2_data').eq('lineage_id', lineageId);
           (_lk.data || []).forEach(function(r){ _dbLinks[r.id] = r; });
         } catch(_le){}
         var payloads = nodes.map(function(n){
@@ -78415,15 +78548,25 @@ function saveCustomNodes(lineageId, nodes){
           return {
             id: n.id,
             lineage_id: lineageId,
-            name: n.name || null,
-            sub_title: n.sub || null,
+            // 🔧 2026-09-28 표시값(name/sub/sec*)은 현재 언어로 골라진 값이라, 그대로 쓰면 EN/JA 화면에서
+            //   좌표만 옮겨도 영어·일본어가 한국어 컬럼에 들어간다. 원문(_*Ko)이 있으면 그걸 쓴다.
+            name: (n._nameKo !== undefined ? n._nameKo : n.name) || null,
+            sub_title: (n._subKo !== undefined ? n._subKo : n.sub) || null,
             node_border_color: n.nodeBorderColor || '#1a1a18',
             node_photo: n.nodePhoto || null,
             geometry: geometry,
             is_custom: true,
-            // sec1/sec2 는 ndmSavePopupEdit 가 별도 갱신 — 기본 구조만 보장
-            sec1_data: { title: n.sec1Title || '쉐프 소개', desc: n.sec1Desc || '', media: n.sec1Media || null },
-            sec2_data: { title: n.sec2Title || '시그니처',  desc: n.sec2Desc || '', media: n.sec2Media || null },
+            // sec1/sec2 는 ndmSavePopupEdit 가 별도 갱신 — 기본 구조만 보장.
+            //   번역 키(title_en/desc_jp…)와 레이아웃 키는 DB 의 것을 그대로 잇는다(종전엔 통째로 지워졌다).
+            //   한글 기본값('쉐프 소개')은 DB 에 박지 않는다 — 비면 화면이 언어별 기본 제목을 쓴다.
+            sec1_data: Object.assign({}, _old.sec1_data || {}, {
+              title: (n._s1TitleKo !== undefined ? n._s1TitleKo : n.sec1Title) || '',
+              desc:  (n._s1DescKo  !== undefined ? n._s1DescKo  : n.sec1Desc)  || '',
+              media: n.sec1Media || null }),
+            sec2_data: Object.assign({}, _old.sec2_data || {}, {
+              title: (n._s2TitleKo !== undefined ? n._s2TitleKo : n.sec2Title) || '',
+              desc:  (n._s2DescKo  !== undefined ? n._s2DescKo  : n.sec2Desc)  || '',
+              media: n.sec2Media || null }),
             ticket_status: n.ticketStatus || _old.ticket_status || 'off',
             ticket_url: n.ticketUrl || _old.ticket_url || null,
             reserve_url: n.reserveUrl || _old.reserve_url || null,
@@ -78996,9 +79139,8 @@ function renderCustomNodeToSvg(layer, node, prefix, lineageId, idx){
   //   (CUSTOM_FONT_MAP 값들은 이제 무의미 — 호환성 위해 코드는 유지하되 미사용)
 
   // 텍스트: 매장명 (i18n — name_en / name_jp 폴백)
-  var _nodeName = (typeof window.pickI18nField === 'function')
-    ? (window.pickI18nField(node, 'name') || node.name || '')
-    : (node.name || '');
+  _lnCustomNodeLocalize(node);   // 🔧 2026-09-28 원문·번역문에서 현재 언어로
+  var _nodeName = node.name || '';
   var text1 = document.createElementNS(SVG_NS, 'text');
   text1.setAttribute('x', cx);
   text1.setAttribute('y', cy + 43);
@@ -79567,7 +79709,10 @@ function tapCustomNode(nodeId, lineageId){
         customNodeId: nodeId,
         customLineage: lineageId,
         _lineageId: lineageId,            // openNodeDetailModal 캐시 키
-        name: n.name || '(이름 미입력)',
+        name: n.name || _popL('(이름 미입력)','(No name)','(名称未入力)'),
+        _nameKo: n._nameKo, _nameEn: n._nameEn, _nameJp: n._nameJp,
+        _subKo: n._subKo, _subEn: n._subEn, _subJp: n._subJp,
+        _s1TitleKo: n._s1TitleKo, _s1DescKo: n._s1DescKo, _s2TitleKo: n._s2TitleKo, _s2DescKo: n._s2DescKo,
         en: n.en || '',
         city: n.city || '',
         open: n.open || '',
@@ -79579,10 +79724,10 @@ function tapCustomNode(nodeId, lineageId){
         sub: n.sub || '',
         nodePhoto: n.nodePhoto || null,
         nodeBorderColor: n.nodeBorderColor || '#1a1a18',
-        sec1Title: n.sec1Title || '쉐프 소개',
+        sec1Title: n.sec1Title || _lnSecDefault(1),
         sec1Desc: n.sec1Desc || n.desc || '',
         sec1Media: n.sec1Media || null,
-        sec2Title: n.sec2Title || '시그니처',
+        sec2Title: n.sec2Title || _lnSecDefault(2),
         sec2Desc: n.sec2Desc || '',
         sec2Media: n.sec2Media || null,
         sec2Hidden: !!n.sec2Hidden,
@@ -79599,7 +79744,7 @@ function tapCustomNode(nodeId, lineageId){
     }
 
     if(node){
-      _renderInfoFromNode(node);
+      _renderInfoFromNode(_lnCustomNodeLocalize(node));
       return;
     }
 
@@ -79607,7 +79752,7 @@ function tapCustomNode(nodeId, lineageId){
     //   (IDB 캐시가 비었거나, 다른 기기에서 추가됐는데 sync 지연된 경우)
     if(window.sb){
       window.sb.from('chefs')
-        .select('id, name, sub_title, node_photo, node_border_color, geometry, sec1_data, sec2_data, ticket_status, ticket_url, reserve_url')
+        .select('id, name, name_en, name_jp, sub_title, sub_en, sub_jp, node_photo, node_border_color, geometry, sec1_data, sec2_data, ticket_status, ticket_url, reserve_url')
         .eq('id', nodeId).eq('lineage_id', lineageId).maybeSingle()
         .then(function(res){
           if(res && res.data){
@@ -79616,13 +79761,17 @@ function tapCustomNode(nodeId, lineageId){
             var s1 = d.sec1_data || {};
             var s2 = d.sec2_data || {};
             _renderInfoFromNode({
-              id: d.id, name: d.name, sub: d.sub_title,
+              id: d.id,
+              name: _chefPickName(d.name, d.name_en, d.name_jp), sub: _chefPickName(d.sub_title, d.sub_en, d.sub_jp),
+              _nameKo: d.name || '', _nameEn: d.name_en || '', _nameJp: d.name_jp || '',
+              _subKo: d.sub_title || '', _subEn: d.sub_en || '', _subJp: d.sub_jp || '',
+              _s1TitleKo: s1.title || '', _s1DescKo: s1.desc || '', _s2TitleKo: s2.title || '', _s2DescKo: s2.desc || '',
               x: g.x, y: g.y, gen: g.gen, diff: g.diff,
               en: g.en, city: g.city, open: g.open, desc: g.desc,
               nodePhoto: d.node_photo,
               nodeBorderColor: d.node_border_color,
-              sec1Title: s1.title, sec1Desc: s1.desc, sec1Media: s1.media,
-              sec2Title: s2.title, sec2Desc: s2.desc, sec2Media: s2.media,
+              sec1Title: _chefPickName(s1.title, s1.title_en, s1.title_jp), sec1Desc: _chefPickName(s1.desc, s1.desc_en, s1.desc_jp), sec1Media: s1.media,
+              sec2Title: _chefPickName(s2.title, s2.title_en, s2.title_jp), sec2Desc: _chefPickName(s2.desc, s2.desc_en, s2.desc_jp), sec2Media: s2.media,
               sec2Hidden: !!s2.hidden,  // 🆕 v1.46: 시그니처 미노출 플래그 복원
               ticketStatus: d.ticket_status, ticketUrl: d.ticket_url,
               reserveUrl: d.reserve_url
@@ -79630,14 +79779,14 @@ function tapCustomNode(nodeId, lineageId){
           } else {
             // 정말 데이터 없음 — 빈 노드라도 팝업 띄움 (사용자가 편집할 수 있게)
             console.warn('[tapCustomNode] chefs 에 row 없음, 빈 노드 표시:', nodeId);
-            _renderInfoFromNode({ id: nodeId, name: '(노드 데이터 없음)', sub: '' });
+            _renderInfoFromNode({ id: nodeId, name: _popL('(노드 데이터 없음)','(No data)','(データなし)'), sub: '' });
           }
         }, function(e){
           console.warn('[tapCustomNode] chefs 조회 실패:', e);
-          _renderInfoFromNode({ id: nodeId, name: '(조회 실패)', sub: '' });
+          _renderInfoFromNode({ id: nodeId, name: _popL('(조회 실패)','(Load failed)','(取得失敗)'), sub: '' });
         });
     } else {
-      _renderInfoFromNode({ id: nodeId, name: '(연결 없음)', sub: '' });
+      _renderInfoFromNode({ id: nodeId, name: _popL('(연결 없음)','(Offline)','(接続なし)'), sub: '' });
     }
   });
 }
@@ -82056,7 +82205,7 @@ function productsImportJSON(input){
 <!-- ═══════════════════════════════════════════════════════
      캐러셀 에디터 (슈퍼 어드민 전용)
 ═══════════════════════════════════════════════════════ -->
-<div id="carouselEditor" style="position:fixed;top:0;left:0;right:0;bottom:0;z-index:9500;background:#1a1a18;display:none;flex-direction:column;font-family:var(--font-main);">
+<div id="carouselEditor" data-lang-lock="ko" style="position:fixed;top:0;left:0;right:0;bottom:0;z-index:9500;background:#1a1a18;display:none;flex-direction:column;font-family:var(--font-main);">
   <!-- 헤더 (상단 고정) -->
   <div style="padding:50px 16px 14px;border-bottom:1px solid rgba(255,255,255,.08);display:flex;align-items:center;gap:12px;background:#0a0a08;flex-shrink:0;z-index:10;">
     <button onclick="closeCarouselEditor()" style="width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0;flex-shrink:0;">
@@ -85419,7 +85568,7 @@ function startAnimNew14(){
 function loadNewLineageName(num){
   if(typeof IDB === 'undefined') return;
   IDB.get('lineageName_new'+num).then(function(name){
-    if(name){
+    if(name && (window._tkCurrentLang || 'ko') === 'ko'){   // 🔧 2026-09-28 EN/JA 는 사전(content.lin_*)이 맡는다
       // 1) 뷰어 헤더
       var titleEl = document.getElementById('lhTitleNew'+num);
       if(titleEl) titleEl.textContent = name;
@@ -94195,7 +94344,8 @@ body.taam-ramen-show #ramenLineageModule:not(.open){ display:none !important; }
     if(typeof s1 === 'string'){
       try { s1 = JSON.parse(s1); } catch(e) { return null; }
     }
-    return (s1 && s1.desc && typeof s1.desc === 'string' && s1.desc.trim()) ? s1.desc : null;
+    var d = _chefPickName(s1 && s1.desc, s1 && s1.desc_en, s1 && s1.desc_jp);   // 🔧 2026-09-28 언어별
+    return (typeof d === 'string' && d.trim()) ? d : null;
   }
 
   function _ltGetChefTitle(stepOrPin){
@@ -94205,7 +94355,8 @@ body.taam-ramen-show #ramenLineageModule:not(.open){ display:none !important; }
     if(typeof s1 === 'string'){
       try { s1 = JSON.parse(s1); } catch(e) { return null; }
     }
-    return (s1 && s1.title && typeof s1.title === 'string' && s1.title.trim()) ? s1.title : null;
+    var t = _chefPickName(s1 && s1.title, s1 && s1.title_en, s1 && s1.title_jp);   // 🔧 2026-09-28 언어별
+    return (typeof t === 'string' && t.trim()) ? t : null;
   }
 
   function _ltLookupPhoto(stepOrPin){
@@ -94555,7 +94706,8 @@ body.taam-ramen-show #ramenLineageModule:not(.open){ display:none !important; }
             displayDesc = step.desc || '';
             displayLabel = step.label || '';
           } else {
-            displayDesc = _ltGetChefDesc(step) || '본문 준비 중 — 어드민에서 노드 팝업 → 「팝업 편집」으로 본문을 입력해 주세요.';
+            displayDesc = _ltGetChefDesc(step) || (function(){ var _ph = _popL('본문 준비 중','Content coming soon','本文は準備中です');
+              if(typeof _isSuperAdmin === 'function' && _isSuperAdmin()) _ph += ' — 어드민: 노드 팝업 → 「팝업 편집」으로 본문을 입력해 주세요.'; return _ph; })();
             displayLabel = _ltGetChefTitle(step) || step.label || '';
           }
           if(labelEl) labelEl.textContent = (step.chef ? step.chef + ' · ' : '') + displayLabel;
