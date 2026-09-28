@@ -43249,7 +43249,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.28-c';
+var TAAM_WEB_BUILD = '2026.09.28-d';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -44337,9 +44337,20 @@ async function riConfirmPay(){
     //   좌석이 영영 잡힌 채 캘린더에도 계속 남는다 — 실제로 그렇게 남았다.
     //   RPC 는 맞는 행이 없으면 released:0 으로 아무 일도 하지 않고, 권한도
     //   스스로 검사한다. 항상 부르는 편이 언제나 더 안전하다.
-    if (typeof _riReleaseHold === 'function') {
-      try { await _riReleaseHold(inv.id); } catch(_rh){ console.warn('[riPay] 홀드 해제 실패(계속 진행):', _rh); }
-    }
+    // 🔧 2026-09-28 홀드를 「해제」하지 않고 「확정」한다.
+    //   종전: 홀드 해제 → 앱이 확정 행 INSERT. 9/13 부터 앱은 tickets 확정 행을 넣지 않으므로(TK_CLIENT_INSERT=false)
+    //   홀드만 풀리고 좌석 행이 영영 안 생겼다 — 결제됐는데 티켓 상세는 「잔여 4석 이상」(5/1 마츠카와 · 유수봉).
+    //   서버 RPC 가 INVH- 행을 그 자리에서 INV- 확정 행으로 바꾼다. RPC 가 아직 없으면(SQL 미적용) 홀드를
+    //   그대로 둔다 — 해제하는 것보다 좌석이 잡혀 있는 쪽이 언제나 낫다.
+    try {
+      var _cf = await window.sb.rpc('taam_invite_confirm_hold', { p_invite_id: String(inv.id), p_purchase_id: window._riPurchaseId || null });
+      if (_cf.error) {
+        console.warn('[riPay] 초대 확정 RPC 실패 — 홀드는 유지:', _cf.error.message);
+        try { if (typeof taamNotifyAdmins === 'function') taamNotifyAdmins({ type: 'invite_confirm_failed', invite_id: String(inv.id), why: String(_cf.error.message||'').slice(0,120) }); } catch(_na){}
+      } else {
+        console.log('[riPay] 초대 좌석 확정:', _cf.data);
+      }
+    } catch(_ce){ console.warn('[riPay] 초대 확정 예외 — 홀드는 유지:', _ce); }
     try {
       var now = new Date();
       // 위에서 차감 거래에 이미 남긴 값을 그대로 쓴다 (둘이 달라지면 매칭이 깨진다)
