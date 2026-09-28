@@ -8,7 +8,7 @@
 # 먼저: 로컬 pg (psql -h /tmp -U postgres). 실행: bash sql/_test/ledger_sweep/t_sweep.sh [sweep.sql]
 # ═════════════════════════════════════════════════
 cd "$(dirname "$0")/../../.."
-SQL="${1:-sql/diag_ledger_sweep_v3_2026-09-28.sql}"; SEEDS=sql/_test/ledger_sweep/seeds; FAIL=0
+SQL="${1:-sql/diag_ledger_sweep_v4_2026-09-28.sql}"; SEEDS=sql/_test/ledger_sweep/seeds; FAIL=0
 fam() {
   local fam="$1"; local db="rg_$1"; shift
   psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $db" >/dev/null 2>&1
