@@ -10745,7 +10745,7 @@ window.closePromoCarousel = function(){
         <div class="ns-row-sub" data-i18n="notif_settings.remind_7d_sub">방문 1주일 전 알려드립니다</div>
       </div>
       <label class="ns-toggle">
-        <input type="checkbox" class="ns-item" id="ns-remind7" checked onchange="nsSync()">
+        <input type="checkbox" class="ns-item" id="ns-remind7" onchange="nsSync()">
         <div class="ns-toggle-track"></div>
         <div class="ns-toggle-thumb"></div>
       </label>
@@ -15093,6 +15093,13 @@ textarea.mapl-in{min-height:78px;resize:vertical;line-height:1.7}
       <div style="margin-top:12px;">
         <label style="font-size:12px;font-weight:700;color:#6b6b6b;">이름</label>
         <input id="tcalManualName" type="text" placeholder="예약자 이름" style="width:100%;box-sizing:border-box;margin-top:5px;padding:12px;border:1px solid #e0ddd5;border-radius:10px;font-size:14px;">
+      </div>
+      <!-- 🆕 2026-09-28 국내 손님(앱 비회원)에게 카카오 알림톡으로 예약 안내를 보내기 위한 번호.
+           비워 두면 안 보낸다. 본 티켓을 연결한 건에만 보낸다(그래야 매장·일시·인원이 확정값이다). -->
+      <div style="margin-top:12px;">
+        <label style="font-size:12px;font-weight:700;color:#6b6b6b;">휴대폰 번호 <span style="color:#b3aa98;font-weight:500;">(선택 · 국내 번호만)</span></label>
+        <input id="tcalManualPhone" type="tel" inputmode="tel" placeholder="010-0000-0000" autocomplete="off" style="width:100%;box-sizing:border-box;margin-top:5px;padding:12px;border:1px solid #e0ddd5;border-radius:10px;font-size:14px;font-weight:700;font-family:inherit;color:#1a1a18;background:#fff;">
+        <div style="font-size:11px;color:#9a9486;margin-top:5px;line-height:1.5;">적으면 저장 직후 <b style="color:#5a554f;">카카오 알림톡</b>으로 예약자명·매장·일시·인원·이용 규정을 보냅니다. 카카오가 없으면 문자로 대체됩니다.</div>
       </div>
       <div style="margin-top:12px;">
         <label style="font-size:12px;font-weight:700;color:#6b6b6b;">인원</label>
@@ -29877,7 +29884,7 @@ async function _dmLoadSupabasePurchases(){
     // 1) 모든 티켓 (슈퍼어드민 RLS 허용)
     var tres = await window.sb
       .from('tickets')
-      .select('id, user_id, restaurant_id, restaurant_name, party_size, price, status, purchase_id, ticket_product_id, ticket_type, reservation_date, visit_time, created_at, extra_data, buyer_name')
+      .select('id, user_id, restaurant_id, restaurant_name, party_size, price, status, purchase_id, ticket_product_id, ticket_type, reservation_date, visit_time, created_at, extra_data, buyer_name, buyer_phone')
       .order('created_at', { ascending: false })
       .limit(2000);
     if(tres.error){ console.warn('[dm supabase] tickets 조회 실패:', tres.error.message); return []; }
@@ -29941,6 +29948,7 @@ async function _dmLoadSupabasePurchases(){
         ticket_type: t.ticket_type,
         agencyFee: (t.extra_data && t.extra_data.agencyFee) || 0,   // 🆕 대행비 스냅샷 폴백(슈퍼어드민)
         extra_data: t.extra_data || {},
+        guestPhone: t.buyer_phone || '',   // 🆕 2026-09-28 수동 예약 손님 번호 (프로필 phone 과 다르다)
         _srcKey: 'supabase_tickets',
         _userId: t.user_id,
         _supabase: true,    // ⚠ Supabase 데이터임을 표시 → _dmPersistBuyerChanges 가 Supabase 분기로 처리
@@ -43238,7 +43246,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.21-b';
+var TAAM_WEB_BUILD = '2026.09.28-a';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -58559,7 +58567,7 @@ function _tcalDayGroups(dateKey){
     //   근거가 아니므로 엔트리에서 지운다 — 이름(buyer_name)은 그대로 살아 있다.
     var _mnRow = String(h.purchaseId||'').indexOf('MAN-') === 0
               || !!(h.extra_data && h.extra_data.manualEntry);
-    gr(h.restId||h.restaurant_id, h.rest||h.restName||h.restaurant_name).entries.push({type:'app', pid:(h.purchaseId||''), name:(h.buyerName||''), uid:(_mnRow ? '' : (h._userId||'')), pax:(h.pax||1), amount:(parseInt(h.amt)||0), agency:0, time:(h.visitTime||''), bought:(h.date||h.created_at||'')});   // 🆕 2026-09-14 구매 일시
+    gr(h.restId||h.restaurant_id, h.rest||h.restName||h.restaurant_name).entries.push({type:'app', pid:(h.purchaseId||''), name:(h.buyerName||''), uid:(_mnRow ? '' : (h._userId||'')), pax:(h.pax||1), amount:(parseInt(h.amt)||0), agency:0, time:(h.visitTime||''), bought:(h.date||h.created_at||''), ex:(h.extra_data||{}), gphone:(h.guestPhone||'')});   // 🆕 2026-09-14 구매 일시
   });
   // 초대 결제
   (_tcalInvites||[]).forEach(function(inv){
@@ -58893,6 +58901,7 @@ function tcalOpenManual(restId){
   if(ctx) ctx.textContent = _tcalRestName(restId) + ' · ' + (_tcalMonth+1) + '월 ' + parseInt(_tcalSelectedDate.split('.')[1],10) + '일';
   var ty = document.getElementById('tcalManualType'); if(ty) ty.value='오프라인';
   var nm = document.getElementById('tcalManualName'); if(nm) nm.value='';
+  var ph = document.getElementById('tcalManualPhone'); if(ph) ph.value='';
   var px = document.getElementById('tcalManualPax'); if(px) px.value='1';
   var am = document.getElementById('tcalManualAmount'); if(am) am.value='0';
   var mm = document.getElementById('tcalManualMemo'); if(mm) mm.value='';
@@ -59004,6 +59013,13 @@ async function tcalManualSave(){
     if (linkId) {
       var _lt = (ticketDB||[]).find(function(x){ return String(x.id)===String(linkId); });
       var _vd = _tcalYear + '.' + String(_tcalMonth+1).padStart(2,'0') + '.' + String(parseInt(_tcalSelectedDate.split('.')[1],10)).padStart(2,'0');
+      var _gRaw = (document.getElementById('tcalManualPhone')||{}).value || '';
+      var _gPhone = _krMobile(_gRaw);
+      if(_gRaw.trim() && !_gPhone){
+        showToast('⚠','번호 확인','국내 휴대폰 번호(010-…)만 받습니다. 해외 번호는 비워 두세요');
+        return;
+      }
+      var _gPid = 'MAN-' + Date.now();
       var _mr = await window.sb.from('tickets').insert({
         user_id: (u&&u.id)||null,
         restaurant_id: String(_tcalManualRest),
@@ -59015,9 +59031,9 @@ async function tcalManualSave(){
         party_size: pax,
         price: amount,
         status: 'manual',
-        purchase_id: 'MAN-' + Date.now(),
+        purchase_id: _gPid,
         buyer_name: name.trim() || '수동 예약',
-        buyer_phone: '',
+        buyer_phone: _gPhone,          // 🆕 2026-09-28 손님 번호 (알림톡 수신처). 없으면 ''
         extra_data: { manualEntry:true, ttype:ttype, memo:memo.trim(), by:(u&&u.id)||null },
         created_at: new Date().toISOString()
       });
@@ -59029,6 +59045,8 @@ async function tcalManualSave(){
       }
       showToast('✓','추가 완료 (좌석 차감)', (name.trim()||'수동') + ' · ' + pax + '명');
       tcalCloseManual();
+      // 🆕 2026-09-28 번호가 있으면 저장 직후 손님에게 알림톡 (결과는 토스트로)
+      if(_gPhone) _tcalGuestNotify(_gPid, false);
       try { await tcalLoadPurchases(); } catch(_e){}
       tcalRender(); tcalRenderDetail(_tcalSelectedDate);
       try { if (typeof renderTickets === 'function') renderTickets(); } catch(_rt){}
@@ -59047,6 +59065,45 @@ async function tcalManualSave(){
   } catch(e){ showToast('❌','오류', (e.message||'').substring(0,80)); }
 }
 window.tcalManualSave = tcalManualSave;
+
+// 🆕 2026-09-28 국내 휴대폰 번호 정규화 — 아니면 '' (Edge 의 krMobile 과 같은 규칙)
+function _krMobile(raw){
+  var d = String(raw||'').replace(/[^\d+]/g,'');
+  if(d.indexOf('+82')===0) d = '0' + d.slice(3);
+  else if(d.indexOf('82')===0 && d.length >= 11) d = '0' + d.slice(2);
+  d = d.replace(/\D/g,'');
+  return /^01[016789]\d{7,8}$/.test(d) ? d : '';
+}
+window._krMobile = _krMobile;
+
+// 🆕 2026-09-28 수동 예약(MAN-) 손님에게 카카오 알림톡 — Edge notify-guest-booking.
+//   force=true 면 이미 보낸 건도 다시 보낸다 (캘린더 상세의 「재발송」).
+//   템플릿·시크릿이 아직 없으면 skip 으로 돌아온다 — 그때는 그 사실을 그대로 보여준다.
+var _tcalGuestBusy = {};
+async function _tcalGuestNotify(pid, force){
+  if(!window.sb || !pid) return;
+  if(_tcalGuestBusy[pid]) return;
+  _tcalGuestBusy[pid] = true;
+  try {
+    var r = await window.sb.functions.invoke('notify-guest-booking', { body: { purchase_id: pid, force: !!force } });
+    var d = (r && r.data) || {};
+    if(r && r.error && !d.kakao){ showToast('❌','알림톡 실패', String(r.error.message||'').slice(0,80)); return; }
+    if(d.skip){
+      var why = d.skip === '이미 보냄' ? '이미 보낸 예약입니다 — 재발송은 상세의 「재발송」' 
+              : d.skip === '국내번호아님' ? '국내 번호가 아니라 보내지 않았습니다'
+              : d.skip;
+      showToast('ⓘ','알림톡 건너뜀', why);
+    } else if(d.ok){
+      showToast('✓','알림톡 발송', '…' + (d.to_tail||'') + ' 번으로 예약 안내를 보냈습니다');
+    } else {
+      var k = String(d.kakao||d.error||'실패');
+      showToast('⚠','알림톡 미발송', k.indexOf('템플릿 미설정')>=0 ? '카카오 템플릿이 아직 등록되지 않았습니다' : k.slice(0,80));
+    }
+    try { await tcalLoadPurchases(); if(_tcalSelectedDate) tcalRenderDetail(_tcalSelectedDate); } catch(_e){}
+  } catch(e){ showToast('❌','알림톡 오류', String(e&&e.message||'').slice(0,80)); }
+  finally { delete _tcalGuestBusy[pid]; }
+}
+window._tcalGuestNotify = _tcalGuestNotify;
 
 async function tcalManualDelete(id){
   if(!id || !window.sb) return;
@@ -59313,6 +59370,22 @@ function tcalRenderDetail(dateStr) {
           var pxBtn = (!_isMan && !_isHold && e.pid && (e.pax||0) > 1 && (isSuper || _currentRole==='admin'))
             ? '<span onclick="paxChangeOpen(\''+String(e.pid).replace(/'/g,"\\'")+'\')" title="인원 변경" style="cursor:pointer;color:#8A5A1E;font-size:11px;font-weight:800;border:1px solid #EEDCBB;background:#FBF2E0;border-radius:6px;padding:2px 6px;">인원</span>'
             : '';
+          // 🆕 2026-09-28 수동 예약 손님 알림톡 — 번호가 있는 MAN- 행에만.
+          //   보낸 적 있으면 「✓ 카톡 09.28」 + 재발송, 없으면 「📨 카톡 안내」
+          var kkBtn = '';
+          if(_isMan && (isSuper || _currentRole==='admin') && _krMobile(e.gphone||'')){
+            var _kx = e.ex || {};
+            var _pidQ = String(e.pid).replace(/'/g,"\\'");
+            if(_kx.kakao_sent_at){
+              var _kd = new Date(_kx.kakao_sent_at);
+              var _kdS = isNaN(_kd) ? '' : (String(_kd.getMonth()+1).padStart(2,'0')+'.'+String(_kd.getDate()).padStart(2,'0'));
+              kkBtn = '<span style="font-size:10.5px;font-weight:800;color:#1E7A46;">✓ 카톡 '+_kdS+'</span>'
+                    + ' <span onclick="_tcalGuestNotify(\''+_pidQ+'\',true)" style="cursor:pointer;font-size:10.5px;font-weight:800;color:#8a6d3b;background:#fdf8ef;border:1px solid #f0deb4;border-radius:6px;padding:2px 7px;">재발송</span>';
+            } else {
+              kkBtn = '<span onclick="_tcalGuestNotify(\''+_pidQ+'\',false)" style="cursor:pointer;font-size:10.5px;font-weight:800;color:#5C0A14;background:#fbf1f3;border:1px solid #eecdd4;border-radius:6px;padding:2px 7px;">📨 카톡 안내</span>'
+                    + (_kx.kakao_result && _kx.kakao_result!=='ok' ? ' <span title="'+_raEsc(String(_kx.kakao_result))+'" style="font-size:10px;color:#9B1C1C;">실패</span>' : '');
+            }
+          }
           // 묶인 안쪽 줄은 이름을 반복하지 않는다 — 이미 위에 있다
           var head = inner ? badge : (badge + ' ' + nmH);
           return '<div style="padding:'+(inner?'7px 16px 7px 26px':'10px 16px')+';border-top:1px solid '+(inner?'#f8f6f2':'#f4f1ec')+';'+(inner?'background:#fdfcfa;':'')+'">'
@@ -59321,6 +59394,7 @@ function tcalRenderDetail(dateStr) {
             +     (e.bought ? '<div style="font-size:10.5px;color:#b5afa2;margin-top:2px;">구매 '+_thxFmtDateTime(e.bought)+'</div>' : '') + '</div>'
             +   '<div style="flex-shrink:0;display:flex;align-items:center;gap:6px;"><span style="font-size:'+(inner?'12':'13')+'px;font-weight:800;color:#6A1A1A;">'+e.pax+'명</span>'+pxBtn+del+'</div>'
             + '</div>'
+            + (kkBtn ? '<div style="margin-top:5px;display:flex;align-items:center;gap:6px;">'+kkBtn+'</div>' : '')
             + ((amt||e.memo) ? '<div style="font-size:11.5px;color:#666;margin-top:2px;">'+amt+(e.memo?' <span style="color:#9a9486;">· '+_escHtmlAdg(e.memo)+'</span>':'')+'</div>' : '')
             + '</div>';
         }
@@ -86538,7 +86612,10 @@ var _notifPrefs = {
   all: true,
   fav: true, ticket: true,
   charge: true, use: true, refund: true,
-  remind7: true, remind3: true, remind1: true
+  // 🔧 2026-09-28 7일 전은 서버 기본이 「꺼짐」이다(visit_reminder.sql — 한 예약에 세 번은 많다).
+  //   앱 기본이 true 라 설정 화면은 켜진 것처럼 보였는데, 설정을 저장한 적 없는 회원은 실제로 안 받았다.
+  //   화면이 서버와 같은 말을 하게 맞춘다. 회원이 켜서 저장하면 그때부터 간다.
+  remind7: false, remind3: true, remind1: true
 };
 
 // IDB 저장/복원
