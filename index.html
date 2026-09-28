@@ -5504,6 +5504,13 @@ input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none}
   transform: scale(0.92);
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.4);
 }
+/* 🆕 2026-09-28 파트너 로고 — 편집 모드에서 길게 눌러 끌어 순서 바꾸기 */
+.pqr-logo-tile{position:relative;width:84px;transition:transform .15s ease,box-shadow .15s ease;touch-action:pan-y;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+.pqr-logo-tile.edit{cursor:grab}
+.pqr-logo-tile.long-pressing{transform:scale(.92);box-shadow:0 0 0 3px rgba(92,10,20,.35);border-radius:12px}
+.pqr-logo-tile.dragging{transform:scale(1.08);opacity:.85;z-index:5;box-shadow:0 10px 24px rgba(0,0,0,.25);border-radius:12px}
+.pqr-logo-tile.drag-over > div:first-child{outline:2px dashed #5C0A14;outline-offset:2px}
+.pqr-logo-tile img{pointer-events:none;-webkit-user-drag:none}
 
 /* ─── C-9: ticket-modal을 뷰어보다 위에 강제 표시 ─── */
 body > #ticketInfoModal,
@@ -43249,7 +43256,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.28-d';
+var TAAM_WEB_BUILD = '2026.09.28-e';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -62628,8 +62635,13 @@ function pqrLogoRender(){
     return;
   }
   var html = '';
+  // 🆕 2026-09-28 편집 모드 안내 — 길게 눌러 끌면 순서가 바뀐다 (결이 비슷한 로고끼리 모아 둘 수 있게)
+  if(_pqrLogoEdit){
+    html += '<div style="flex-basis:100%;font-size:11px;color:#8a6d3b;background:#fdf8ef;border:1px solid #f0deb4;border-radius:9px;padding:8px 10px;line-height:1.6;">'
+      + '로고를 <b>길게 누른 뒤 끌어서</b> 원하는 자리에 놓으면 순서가 바뀝니다. 제안 페이지 하단에도 같은 순서로 나갑니다.</div>';
+  }
   _pqrLogos.forEach(function(g, i){
-    html += '<div style="position:relative;width:84px;">'
+    html += '<div class="pqr-logo-tile' + (_pqrLogoEdit ? ' edit' : '') + '" data-idx="' + i + '">'
       + '<div style="width:84px;height:84px;border:1px solid #e5e0d6;border-radius:12px;background:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;">'
       +   '<img src="' + g.image_url + '" alt="logo" loading="lazy" style="max-width:100%;max-height:100%;object-fit:contain;">'
       + '</div>'
@@ -62640,6 +62652,91 @@ function pqrLogoRender(){
       + '</div>';
   });
   box.innerHTML = html;
+  _pqrLogoBindDrag(box);
+}
+
+// ═══════ 🆕 2026-09-28 파트너 로고 순서 바꾸기 — 길게 눌러 끌어 끼워 넣기 ═══════
+//   자리 「바꾸기」가 아니라 「끼워 넣기」다 — 비슷한 결의 로고를 한 무리로 모으려면 끌어다 놓는 자리에
+//   들어가야 한다. 놓으면 sort_order 를 0..n-1 로 다시 써서 제안 페이지(/partner/ · sort_order asc)에도 반영.
+var _pqrDrag = { tile:null, idx:-1, activated:false, timer:null, startX:0, startY:0, bound:null };
+function _pqrTileFromPoint(x, y){
+  try { var el = document.elementFromPoint(x, y); return el ? el.closest('.pqr-logo-tile') : null; } catch(e){ return null; }
+}
+function _pqrClearDrag(){
+  document.querySelectorAll('.pqr-logo-tile').forEach(function(t){ t.classList.remove('dragging','drag-over','long-pressing'); });
+  if(_pqrDrag.timer) clearTimeout(_pqrDrag.timer);
+  _pqrDrag.tile = null; _pqrDrag.idx = -1; _pqrDrag.activated = false; _pqrDrag.timer = null;
+}
+// 배열에서 from 을 빼 to 자리에 끼운다 (순수 함수 — 테스트용으로도 쓴다)
+function _pqrLogoMove(list, from, to){
+  var a = list.slice(); if(from === to || from < 0 || to < 0 || from >= a.length || to >= a.length) return a;
+  var it = a.splice(from, 1)[0]; a.splice(to, 0, it); return a;
+}
+window._pqrLogoMove = _pqrLogoMove;
+async function _pqrLogoPersistOrder(){
+  if(!window.sb) return false;
+  var changed = [];
+  _pqrLogos.forEach(function(g, i){ if((g.sort_order|0) !== i){ g.sort_order = i; changed.push(g); } });
+  var ok = true;
+  for(var i = 0; i < changed.length; i++){
+    var r = await window.sb.from('partner_logos').update({ sort_order: changed[i].sort_order }).eq('id', changed[i].id);
+    if(r.error){ ok = false; console.warn('[pqrLogo] 순서 저장 실패:', r.error.message); }
+  }
+  return ok;
+}
+window._pqrLogoPersistOrder = _pqrLogoPersistOrder;
+function _pqrLogoBindDrag(box){
+  if(!box || box._pqrDragBound) return;
+  box._pqrDragBound = true;
+  function down(e){
+    if(!_pqrLogoEdit) return;
+    var tile = e.target.closest && e.target.closest('.pqr-logo-tile'); if(!tile) return;
+    if(e.target.tagName === 'BUTTON') return;                    // 삭제 배지는 그냥 버튼
+    var pt = (e.touches && e.touches[0]) ? e.touches[0] : e;
+    _pqrClearDrag();
+    _pqrDrag.tile = tile; _pqrDrag.idx = parseInt(tile.getAttribute('data-idx'), 10);
+    _pqrDrag.startX = pt.clientX; _pqrDrag.startY = pt.clientY;
+    tile.classList.add('long-pressing');
+    _pqrDrag.timer = setTimeout(function(){
+      _pqrDrag.activated = true;
+      tile.classList.remove('long-pressing'); tile.classList.add('dragging');
+      try { if(navigator.vibrate) navigator.vibrate(30); } catch(_){}
+    }, 350);
+  }
+  function move(e){
+    if(!_pqrDrag.tile) return;
+    var pt = (e.touches && e.touches[0]) ? e.touches[0] : e;
+    if(!_pqrDrag.activated){
+      // 활성화 전 10px 이상 움직이면 스크롤 의도 — 길게 누르기 취소
+      if(Math.abs(pt.clientX - _pqrDrag.startX) > 10 || Math.abs(pt.clientY - _pqrDrag.startY) > 10) _pqrClearDrag();
+      return;
+    }
+    if(e.cancelable) e.preventDefault();                          // 끄는 동안 화면 스크롤 금지
+    var over = _pqrTileFromPoint(pt.clientX, pt.clientY);
+    box.querySelectorAll('.pqr-logo-tile').forEach(function(t){ t.classList.toggle('drag-over', t === over && t !== _pqrDrag.tile); });
+  }
+  async function up(e){
+    if(!_pqrDrag.tile) return;
+    if(!_pqrDrag.activated){ _pqrClearDrag(); return; }
+    var pt = (e.changedTouches && e.changedTouches[0]) ? e.changedTouches[0] : e;
+    var target = _pqrTileFromPoint(pt.clientX, pt.clientY);
+    var from = _pqrDrag.idx, to = target ? parseInt(target.getAttribute('data-idx'), 10) : -1;
+    _pqrClearDrag();
+    if(to < 0 || to === from) return;
+    _pqrLogos = _pqrLogoMove(_pqrLogos, from, to);
+    pqrLogoRender();                                              // 화면부터 (저장은 뒤에서)
+    var ok = await _pqrLogoPersistOrder();
+    if(ok) showToast('✓','순서 저장', '제안 페이지에도 같은 순서로 나갑니다');
+    else { showToast('!','순서 저장 실패','다시 불러옵니다'); pqrLogoLoad(); }
+  }
+  box.addEventListener('touchstart', down, { passive: true });
+  box.addEventListener('touchmove',  move, { passive: false });
+  box.addEventListener('touchend',   up);
+  box.addEventListener('touchcancel', function(){ _pqrClearDrag(); });
+  box.addEventListener('mousedown',  down);
+  window.addEventListener('mousemove', move);
+  window.addEventListener('mouseup',   up);
+  box.addEventListener('contextmenu', function(e){ if(_pqrLogoEdit) e.preventDefault(); });   // 길게 누를 때 iOS 메뉴 차단
 }
 function pqrLogoUpload(input){
   var files = input.files ? Array.prototype.slice.call(input.files) : [];
