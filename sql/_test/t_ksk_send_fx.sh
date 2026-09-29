@@ -31,4 +31,10 @@ ok "0 이하 → 거부" "1" "$(echo "$r" | grep -c '0 이하')"
 $P -c "update public.kashikiri_events set total_krw = 2321760 + 910000 + 500000 + 2321555 + 138200 where id='$EV'" >/dev/null
 $P -c "$S select count(*) from public.taam_kashikiri_send('$EV', '[{\"label\":\"Last\",\"currency\":\"USD\",\"pay_amount\":100}]'::jsonb)" >/dev/null
 ok "총액 대조는 서버가 만든 원화(100×1382=138,200)로 맞는다" "1" "$($P -c "select count(*) from public.kashikiri_charges where label='Last' and amount_krw=138200")"
+$P -c "update public.kashikiri_events set total_krw = 99999999 where id='$EV'" >/dev/null
+$P -c "$S select count(*) from public.taam_kashikiri_send('$EV', '[{\"label\":\"Partial\",\"currency\":\"KRW\",\"amount_krw\":1000}]'::jsonb)" >/dev/null
+ok "총액에 모자라는 부분 발송은 통과 (나눠 보내기)" "1" "$($P -c "select count(*) from public.kashikiri_charges where label='Partial'")"
+$P -c "update public.kashikiri_events set total_krw = 100 where id='$EV'" >/dev/null
+r=$($P -c "$S select count(*) from public.taam_kashikiri_send('$EV', '[{\"label\":\"Over\",\"currency\":\"KRW\",\"amount_krw\":1000}]'::jsonb)" 2>&1)
+ok "총액을 넘기면 거부" "1" "$(echo "$r" | grep -c '총액을 넘습니다')"
 [ $FAIL = 0 ] && echo "=== 전부 통과 ===" || echo "=== 실패 있음 ==="; exit $FAIL

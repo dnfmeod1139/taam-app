@@ -5,6 +5,7 @@
 -- 역산해 넣어야 했고, 나눗셈 끝수 때문에 $1,679.85 가 나갔다 (Takiya · Trina). 이제 통화를 $·¥ 로 고르면 **그 통화로
 -- 금액을 적고**, 서버는 그 금액을 그대로 승인액(pay_amount)으로 쓰며 원화(amount_krw)를 곱셈으로 만든다.
 --   달러: 센트 둘째 자리까지 · 엔: 정수 · 원화 = round(외화 × 회차 환율)
+-- 같이 고친 것: 총액 대조는 「넘을 때만」 막는다 (종전엔 정확히 같아야 해서 나눠 보내기가 막혔다).
 -- 원칙은 그대로다 — 환율은 회차(kashikiri_events.fx_usd / fx_rate)에 못 박힌 값만 쓰고, 브라우저가 보낸 원화는 믿지 않는다
 -- (외화를 적은 줄은 원화를 서버가 다시 만든다). 외화 입력이 없는 줄은 종전대로 원화 → 외화 나눗셈.
 -- ============================================================================
@@ -79,8 +80,10 @@ begin
     select coalesce(sum(amount_krw), 0) into v_have
       from public.kashikiri_charges
      where event_id = e.id and status <> 'cancelled';
-    if (v_have + v_new) <> e.total_krw then
-      raise exception '보낼 합계가 정산 총액과 다릅니다 (이미 % + 이번 % = %, 총액 %)',
+    -- 🔧 2026-09-29 종전엔 「정확히 같아야」 통과시켰다 — 화면 안내(「총액을 넘기면 막는다 · 모자란 건 괜찮다」)와 달랐고,
+    --   나눠 보내는 첫 링크가 전부 막혔다. 넘길 때만 막는다.
+    if (v_have + v_new) > e.total_krw then
+      raise exception '보낼 합계가 정산 총액을 넘습니다 (이미 % + 이번 % = %, 총액 %)',
         v_have, v_new, v_have + v_new, e.total_krw using errcode = '22023';
     end if;
   end if;
