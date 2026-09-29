@@ -186,6 +186,33 @@ capacity|error) 로 적고, 트리거 3종은 예외를 `raise warning` 으로 �
 교체하고 다르면 건너뛰고 ❌ 로 알린다 (`prosrc` 는 닫는 `$$` 앞 줄바꿈까지 포함한다 — md5 셀 때 빠뜨려 한 번 틀렸다).
 회귀: `bash sql/_test/t_ksk_seat2.sh`(21건 · 실제 정원 트리거 v3 와 티어 가드 원본을 픽스처에 올린다).
 
+### 취소표(재입고) 알림 — 매진이던 회차에 자리가 나면 전원 푸시 (2026-09-29 밤)
+
+`supabase/migrations/20260929_ticket_restock.sql` + Edge `notify-restock`. 좌석이 풀리는 길은 전부 `tickets` 를 지나
+`trg_sync_ticket_soldout` 이 `ticket_products.status` 를 soldout→active 로 되돌리고, 어드민 토글·연장·재편집은 status 를
+직접 쓴다 — 그래서 **status 의 soldout→active 전이**가 유일한 길목이고 거기에 `trg_ticket_restock` 을 걸었다.
+**지연 제약 트리거(DEFERRABLE INITIALLY DEFERRED)** 다: 한 트랜잭션 안의 soldout→active→soldout 왕복(링크 초대의 만료 홀드
+정리 + 새 홀드, 재연결)을 즉시 트리거는 「자리가 났다」고 잘못 본다. 커밋 직전에 `taam_ticket_restock_check` 가 다시 읽는다 —
+active · 판매 공개 · 방문일 안 지남 · 잔여 > 0 · flex 면 채울 수 있음(`taam_seat_fillable`) · 60분 쿨다운. 통과하면
+`ticket_restock_events` 에 pending 한 줄 → `taam_restock_kick()` 이 Edge 를 부른다(`app_config.restock_push` 에 Vault 시크릿
+**이름**과 URL — 값은 Vault 에만) → Edge 가 `taam_ticket_restock_process()` 로 수신자를 정하고(탈퇴 아님 · `notif_prefs.restock`
+·`all` 안 끔 · `min_tier` 통과 · `taam_ticket_visible` · 그 회차 미보유) 인앱 알림을 넣고, 회원 uid 마다 + 슈퍼어드민 `role:` 로
+한 번 send-push(category `ticket_restock` → 설정 키 `restock`). 1분 크론이 같은 kick 을 불러 놓친 것을 줍는다.
+못 잡는 것(의도): 등급별 우선 공개 시각(서버가 모른다) · 고정 슬롯(1·2·4인석)이 종류별로 매진된 것 · `daegwan_manual`.
+알림 url `/?ticket=<id>` 는 이날부터 앱이 읽는다(`_taamOpenTicketById` · 부팅 시 `_taamPendingTicket` → `pcalRenderAll` 뒤 열기).
+회귀: `bash sql/_test/t_restock.sh`(20건).
+
+### 방문 리마인드 — 실제로 어떻게 나가나 (2026-09-29 점검)
+
+`sql/visit_reminder.sql` `taam_visit_reminder_notify()` 가 방문 **7·3·1일 전** 알림 행을 만들고(회원 설정 `remind7/3/1`, 기본
+3·1만), Edge `notify-visit-reminder` 가 uid 마다 send-push — 대시보드 크론이 매일 11:00 KST 에 Edge 를 부른다(저장소엔 없다).
+문구: 「내일 방문 예정입니다 / 3일 뒤 방문 예정입니다 / 방문 7일 전입니다」 + 「{매장} · {시간} 예약이 내일입니다.」 EN/JA 는 Edge 가 만든다.
+확인은 반드시 `net._http_response`(200 + `{"ok":true,"made":N,"push_sent":…}`)로 — `cron.job.last_run` 은 근거가 못 된다.
+미리보기: 슈퍼어드민 알림 설정의 「7일 전 리마인드 / 3일 전 / 하루 전」 버튼(본인 기기, 서버 문구 그대로, 본인 설정 적용).
+⚠ 같은 날 잡은 회귀: 알림 설정 「전체」가 「모든 항목이 켜져야 켜짐」이라 7일 전 기본 꺼짐(09-28) 뒤 항목 하나만 건드려도
+`all=false` 가 저장됐고 send-push 는 그걸 「아무 푸시도 보내지 말라」로 읽었다 → 「하나라도 켜져 있으면 켜짐」으로 고치고
+`sql/notif_prefs_all_repair_2026-09-29.sql` 로 되돌린다. 리마인드는 KSK-·LINK-·MAN- 행(user_id 가 어드민)을 뺀다.
+
 ### 방문일의 연도는 두 군데가 읽는다 — 둘 다 세 토막을 받아야 한다 (2026-09-21)
 
 티켓의 `date` 는 보통 `MM.DD` + `dateYear` 지만, `YYYY.MM.DD` 로 들어온 행도 있다.

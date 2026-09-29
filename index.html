@@ -10701,6 +10701,18 @@ window.closePromoCarousel = function(){
         <div class="ns-toggle-thumb"></div>
       </label>
     </div>
+    <!-- 🆕 2026-09-29 취소표 — 매진이던 회차에 자리가 다시 나면 (서버 taam_ticket_restock_process · send-push category ticket_restock) -->
+    <div class="ns-row">
+      <div class="ns-row-info">
+        <div class="ns-row-label" data-i18n="notif_settings.restock">취소표 알림</div>
+        <div class="ns-row-sub" data-i18n="notif_settings.restock_sub">매진된 회차에 자리가 다시 나면 알려드립니다</div>
+      </div>
+      <label class="ns-toggle">
+        <input type="checkbox" class="ns-item" id="ns-restock" checked onchange="nsSync()">
+        <div class="ns-toggle-track"></div>
+        <div class="ns-toggle-thumb"></div>
+      </label>
+    </div>
     <div class="ns-row">
       <div class="ns-row-info">
         <div class="ns-row-label" data-i18n="notif_settings.ticket_purchase">티켓 구매 알림</div>
@@ -17202,6 +17214,8 @@ async function loadDeposit(){
           if(type === 'reservation_invite') return '예약 초대';
           if(type === 'ticket_open') return '티켓 오픈';
           if(type === 'invite_cancelled') return '초대 취소';
+          if(type === 'visit_reminder') return '방문 리마인드';   // 🆕 2026-09-29
+          if(type === 'ticket_restock') return '취소표';          // 🆕 2026-09-29
           return '알림';
         }
         // 🆕 2026.07: 토스트를 손으로 탭해야만 읽음(seen) 처리.
@@ -17830,6 +17844,16 @@ window._updateGnbMyReddot = _updateGnbMyReddot;
 // 알림 클릭 처리 — url 패턴별 분기
 function handleNotifClick(url){
   if(!url) return;
+  try {
+    // 🆕 2026-09-29 /?ticket=<id> → 그 회차 상세 (취소표·티켓 오픈 알림). 종전엔 아무도 이 파라미터를 읽지 않았다.
+    var mk = url.match(/[?&]ticket=([^&]+)/);
+    if(mk && mk[1]){
+      try { closePage('notificationsListPage'); } catch(_){}
+      var _tid = decodeURIComponent(mk[1]);
+      setTimeout(function(){ _taamOpenTicketById(_tid); }, 120);
+      return;
+    }
+  } catch(_k){}
   // /?ri_pay=<id> → 예약 초대 결제 팝업 직접 오픈
   try {
     var m = url.match(/[?&]ri_pay=([^&]+)/);
@@ -43524,7 +43548,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.29-f';
+var TAAM_WEB_BUILD = '2026.09.29-g';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -49182,6 +49206,7 @@ var TRANSLATIONS = {
       remind_3d_sub:'방문 3일 전 알려드립니다',
       remind_1d:'예약 1일 전',
       remind_1d_sub:'방문 하루 전 알려드립니다',
+      restock:'취소표 알림', restock_sub:'매진된 회차에 자리가 다시 나면 알려드립니다',
     },
     my_page: {
       title:'마이페이지',
@@ -50087,6 +50112,7 @@ var TRANSLATIONS = {
       remind_3d_sub:'3 days before your reservation',
       remind_1d:'1 Day Before Visit',
       remind_1d_sub:'A day before your reservation',
+      restock:'Seat released alerts', restock_sub:'We let you know when a seat opens up on a sold-out date',
     },
     my_page: {
       title:'My Page',
@@ -50972,6 +50998,7 @@ TRANSLATIONS.ja = {
     remind_3d_sub:'来店の3日前にお知らせします',
     remind_1d:'予約1日前',
     remind_1d_sub:'来店の前日にお知らせします',
+    restock:'キャンセル席のお知らせ', restock_sub:'満席の回に席が出たらお知らせします',
   },
   my_page: {
     title:'マイページ',
@@ -59474,6 +59501,40 @@ function tcalGoMemberTicket(restId, dateStr){
   }catch(e){ console.warn('[tcal] 회원 화면 이동 실패', e); showToast('❌','이동 실패', String(e && e.message || e).slice(0, 80)); }
 }
 window.tcalGoMemberTicket = tcalGoMemberTicket;
+
+// 🆕 2026-09-29 id 로 회차 열기 — 알림(?ticket=) · 푸시 딥링크가 쓴다. 사진 캘린더면 pcalGoTicket, 아니면 옛 상세.
+function _taamOpenTicketById(tid){
+  try{
+    var t = (window.ticketDB || []).filter(function(x){ return String(x.id) === String(tid); })[0];
+    if(!t){ window._taamPendingTicket = String(tid); return; }   // 데이터가 아직이면 캘린더가 그려질 때 연다
+    if(typeof _popGoTicket === 'function') _popGoTicket(t);
+    if(typeof pcalGoTicket === 'function') setTimeout(function(){ try{ pcalGoTicket(String(tid)); }catch(_e){} }, 480);
+    else if(typeof openTicketDetail === 'function') openTicketDetail(String(tid));
+  }catch(e){ console.warn('[ticket] id 로 열기 실패', e); }
+}
+window._taamOpenTicketById = _taamOpenTicketById;
+// 부팅 시 주소에 ?ticket= 이 있으면 챙겨 두고 지운다 (푸시를 눌러 앱이 열린 경우)
+try{
+  var _bootTk = String(location.search || '').match(/[?&]ticket=([^&]+)/);
+  if(_bootTk && _bootTk[1]){
+    window._taamPendingTicket = decodeURIComponent(_bootTk[1]);
+    try{ history.replaceState(null, '', location.pathname); }catch(_h){}
+  }
+}catch(_b){}
+// 캘린더가 그려지면(데이터 준비됨) 기다리던 회차를 연다
+if(typeof pcalRenderAll === 'function'){
+  var _pcalRenderAllOrig = pcalRenderAll;
+  pcalRenderAll = function(){
+    var r = _pcalRenderAllOrig.apply(this, arguments);
+    try{
+      if(window._taamPendingTicket){
+        var _pt = window._taamPendingTicket; window._taamPendingTicket = null;
+        setTimeout(function(){ _taamOpenTicketById(_pt); }, 300);
+      }
+    }catch(_e){}
+    return r;
+  };
+}
 async function tcalCancelLinkedRow(pid){
   if(!pid || !window.sb) return;
   var _kind = pid.indexOf('INVH-')===0 ? '초대 좌석 홀드' : '수동 예약(좌석 연동)';
@@ -64117,7 +64178,7 @@ function _detectDeviceLabel(){
 function _collectTopicsFromPrefs(){
   var t = [];
   if(typeof _notifPrefs !== 'object') return t;
-  ['fav','ticket','charge','use','refund','remind7','remind3','remind1'].forEach(function(k){
+  ['fav','ticket','restock','charge','use','refund','remind7','remind3','remind1'].forEach(function(k){
     if(_notifPrefs[k] !== false) t.push(k);
   });
   return t;
@@ -87240,6 +87301,7 @@ function _instaDrawPath(id, offsetVal){
 var _notifPrefs = {
   all: true,
   fav: true, ticket: true,
+  restock: true,   // 🆕 2026-09-29 취소표
   charge: true, use: true, refund: true,
   // 🔧 2026-09-28 7일 전은 서버 기본이 「꺼짐」이다(visit_reminder.sql — 한 예약에 세 번은 많다).
   //   앱 기본이 true 라 설정 화면은 켜진 것처럼 보였는데, 설정을 저장한 적 없는 회원은 실제로 안 받았다.
@@ -87318,18 +87380,18 @@ function saveNotifPrefs(){
 }
 function applyNotifPrefsToUI(){
   var map = {
-    'ns-all':'all','ns-fav':'fav','ns-ticket':'ticket',
+    'ns-all':'all','ns-fav':'fav','ns-ticket':'ticket','ns-restock':'restock',
     'ns-charge':'charge','ns-use':'use','ns-refund':'refund',
     'ns-remind7':'remind7','ns-remind3':'remind3','ns-remind1':'remind1'
   };
   Object.keys(map).forEach(function(id){
     var cb = document.getElementById(id);
-    if(cb) cb.checked = _notifPrefs[map[id]];
+    if(cb) cb.checked = _notifPrefs[map[id]] !== false;   // 🔧 키가 없으면(옛 저장값) 켜짐
   });
 }
 function collectNotifPrefsFromUI(){
   var map = {
-    'ns-all':'all','ns-fav':'fav','ns-ticket':'ticket',
+    'ns-all':'all','ns-fav':'fav','ns-ticket':'ticket','ns-restock':'restock',
     'ns-charge':'charge','ns-use':'use','ns-refund':'refund',
     'ns-remind7':'remind7','ns-remind3':'remind3','ns-remind1':'remind1'
   };

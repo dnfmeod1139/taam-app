@@ -709,6 +709,7 @@ async function handle(req: Request): Promise<Response> {
       remind7: "remind7",
       remind3: "remind3",
       remind1: "remind1",
+      ticket_restock: "restock",      // 🆕 2026-09-29 취소표(재입고) — 회원이 끄면 안 보낸다
     };
     const _cat = String((body.payload as any)?.category || "system");
     const _prefKey = PREF_KEY[_cat];
