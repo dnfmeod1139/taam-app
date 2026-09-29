@@ -1,0 +1,133 @@
+#!/bin/bash
+# 정산 좌석 연동 2차 회귀 — 2026-09-29. 실제 정원 트리거(v3)·티어 가드 원본을 픽스처에 올리고 2차 마이그레이션이
+#   ① md5 가 맞아 교체되는지 ② 1인 한도·M 전용을 KSK- 가 넘는지 ③ 총 정원은 여전히 막는지
+#   ④ 회원 구매는 종전 규칙 그대로인지 ⑤ 좌석 오류가 결제 확정을 깨지 않는지 본다.
+#   먼저: 로컬 pg. 실행: bash sql/_test/t_ksk_seat2.sh
+cd "$(dirname "$0")/../.."
+DB=t_kskseat2; psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1; psql -h /tmp -U postgres -d postgres -q -c "create database $DB" >/dev/null
+P="psql -h /tmp -U postgres -d $DB -q -At"
+SU=a1000000-0000-4000-8000-000000000001; AD=a1000000-0000-4000-8000-000000000002; MB=a1000000-0000-4000-8000-000000000003
+REST=b1000000-0000-4000-8000-000000000001
+$P <<SQL >/dev/null 2>&1
+create schema auth; create table auth.users(id uuid primary key);
+create or replace function auth.uid() returns uuid language sql stable as \$\$ select nullif(current_setting('taam.uid', true),'')::uuid \$\$;
+create or replace function public._taam_uid_is_super() returns boolean language sql stable as \$\$ select coalesce(current_setting('taam.super', true),'') = '1' \$\$;
+create or replace function public.taam_kashikiri_token() returns text language sql as \$\$ select md5(random()::text || clock_timestamp()::text) \$\$;
+create table public.profiles(id uuid primary key, role text, membership_tier text, display_name text);
+create table public.admin_grants(user_id uuid, rest_id text, venue_id text);
+create table public.restaurants(id uuid primary key, guest_seat_allowed boolean default false);
+create table public.ticket_products(id text primary key, rest_id uuid, rest_name text, date text, time text, total_pax int, slots jsonb,
+  meal_fee int, agency_fee int, wine_min int, type_class text, min_tier text default '', guest_open boolean default false,
+  guest_open_reason text, guest_seat_qty int default 0, guest_price int default 0);
+create table public.tickets(id uuid primary key default gen_random_uuid(), user_id uuid, restaurant_id text, restaurant_name text, ticket_product_id text, ticket_type text,
+  reservation_date text, visit_time text, party_size int, price bigint, status text, purchase_id text, buyer_name text, buyer_phone text, extra_data jsonb, created_at timestamptz default now());
+create table public.kashikiri_events(id uuid primary key default gen_random_uuid(), venue_id text, venue_name text, event_date date, event_time time, total_pax int, escort boolean, status text,
+  fx_rate numeric, fx_usd numeric, ticket_product_id text, created_by uuid, memo text, created_at timestamptz default now());
+create table public.kashikiri_teams(id uuid primary key default gen_random_uuid(), event_id uuid, seq int, host_label text, pax int);
+create table public.kashikiri_charges(id uuid primary key default gen_random_uuid(), event_id uuid, team_id uuid, label text, payer_phone text, amount_krw int, amount_jpy int,
+  token text default public.taam_kashikiri_token(), status text default 'pending' check (status in ('pending','paid','cancelled','expired','failed')),
+  pay_currency text default 'KRW', pay_fx numeric, pay_amount numeric, expires_at timestamptz, payment_key text, payer_name text, approved_at timestamptz);
+create or replace function public.taam_ticket_price_krw(p text, n int) returns bigint language sql stable as \$\$
+  select (coalesce(meal_fee,0)+coalesce(agency_fee,0)+coalesce(wine_min,0))*greatest(coalesce(n,1),1) from public.ticket_products where id = p \$\$;
+create or replace function public.taam_tier_rank(p text) returns int language sql immutable as \$\$ select case upper(coalesce(p,'')) when 'M' then 3 when 'T' then 2 when 'A' then 1 else 0 end \$\$;
+create or replace function public.taam_tier_is_open(p text) returns boolean language sql immutable as \$\$ select upper(coalesce(p,'')) = 'A' \$\$;
+create or replace function public.taam_user_tier(p uuid) returns text language sql stable as \$\$ select membership_tier from public.profiles where id = p \$\$;
+insert into auth.users values ('$SU'),('$AD'),('$MB');
+insert into public.profiles values ('$SU','super_admin','M','슈퍼'),('$AD','admin','','매장어드민'),('$MB','member','T','회원T');
+insert into public.admin_grants values ('$AD','$REST',null);
+insert into public.restaurants values ('$REST', false);
+-- tp1: 정원 4 · 자유구성 1·2인 · 1인 한도 1 · M 전용
+insert into public.ticket_products(id,rest_id,rest_name,date,time,total_pax,slots,meal_fee,agency_fee,wine_min,type_class,min_tier)
+  values ('tp1','$REST','타키야','03.20','20:30',4,'{"mode":"flex","allowed":[1,2],"solo":1,"strict":false}',550000,100000,250000,'Standard','M');
+SQL
+# 실제 정원 트리거 v3 (파일 통째로) + 티어 가드 원본(함수 블록만) + 트리거 바인딩
+$P -f sql/ticket_capacity_guard.sql >/dev/null 2>&1
+S=$(grep -n "create or replace function public.taam_guard_ticket_tier" sql/general_open_to_guest.sql | head -1 | cut -d: -f1)
+E=$(awk -v s=$S 'NR>s && /^\$tier\$;/ {print NR; exit}' sql/general_open_to_guest.sql)
+sed -n "${S},${E}p" sql/general_open_to_guest.sql | $P >/dev/null 2>&1
+$P -c "create trigger trg_taam_guard_ticket_tier before insert on public.tickets for each row execute function public.taam_guard_ticket_tier();" >/dev/null
+FAIL=0
+ok(){ if [ "$2" = "$3" ]; then echo "✅ $1"; else echo "❌ $1  (기대 $2, 실제 $3)"; FAIL=1; fi; }
+SUP="select set_config('taam.uid','$SU',false); select set_config('taam.super','1',false);"
+EDGE="select set_config('taam.uid','',false); select set_config('taam.super','',false);"
+MEM="select set_config('taam.uid','$MB',false); select set_config('taam.super','',false);"
+LIVE="select coalesce(sum(party_size),0)||'|'||count(*) from public.tickets where purchase_id like 'KSK-%' and coalesce(status,'')<>'cancelled'"
+
+echo "── 0. 전제: 원본 규칙이 산다 — 회원 1인 구매가 이미 1건이면 SOLO_LIMIT · T 회원은 M 전용에 TIER_BLOCKED"
+$P -c "$SUP insert into public.tickets(user_id,restaurant_id,ticket_product_id,party_size,price,status,purchase_id) values ('$SU','$REST','tp1',1,900000,'manual','MAN-1')" >/dev/null
+r=$($P -c "$SUP insert into public.tickets(user_id,restaurant_id,ticket_product_id,party_size,price,status,purchase_id) values ('$SU','$REST','tp1',1,900000,'active','PAY-x')" 2>&1)
+ok "두 번째 1인 → SOLO_LIMIT" "1" "$(echo "$r" | grep -c SOLO_LIMIT)"
+r=$($P -c "$MEM insert into public.tickets(user_id,restaurant_id,ticket_product_id,party_size,price,status,purchase_id) values ('$MB','$REST','tp1',2,1800000,'active','PAY-y')" 2>&1)
+ok "T 회원 2인 → TIER_BLOCKED" "1" "$(echo "$r" | grep -c TIER_BLOCKED)"
+
+echo "── 1. 마이그레이션 1차 → 2차 (md5 일치 → 교체)"
+$P -f supabase/migrations/20260929_link_invite.sql 2>&1 | grep -E "❌|ERROR"
+$P -f supabase/migrations/20260929_kashikiri_seat_sync.sql 2>&1 | grep -E "❌|ERROR"
+out=$($P -f supabase/migrations/20260929_kashikiri_seat_sync2.sql 2>&1)
+ok "2차 오류 없음" "" "$(echo "$out" | grep -E "ERROR" | head -1)"
+ok "2차 확인 표 ❌ 없음 · ✅ 7줄(표 5 + 교체 notice 2)" "0|7" "$(echo "$out" | grep -c '❌')|$(echo "$out" | grep -c '✅')"
+ok "교체 notice 2건 (티어·정원)" "2" "$(echo "$out" | grep -c '교체')"
+
+EV=e1000000-0000-4000-8000-000000000001; C1=c1000000-0000-4000-8000-000000000001; C2=c1000000-0000-4000-8000-000000000002; C3=c1000000-0000-4000-8000-000000000003
+$P <<SQL >/dev/null
+insert into public.kashikiri_events(id, venue_id, venue_name, event_date, event_time, total_pax, escort, status, created_by, ticket_product_id)
+  values ('$EV','$REST','Takiya','2027-03-20','20:30',5,false,'open',null,'tp1');
+insert into public.kashikiri_charges(id, event_id, team_id, label, amount_krw, status, payer_name, pay_currency, pay_amount, approved_at)
+  values ('$C1','$EV',null,'Trina',2321555,'pending','Trina Chin','USD',1679.85, null),
+         ('$C2','$EV',null,'Second',900000,'pending','Second','KRW',900000, null),
+         ('$C3','$EV',null,'Third',900000,'pending','Third','KRW',900000, null);
+SQL
+
+echo "── 2. Edge 경로(auth.uid 없음)에서 1인 청구 paid → 1인 한도·M 전용을 넘어 좌석이 잡힌다"
+r=$($P -c "$EDGE update public.kashikiri_charges set status='paid', approved_at=now() where id='$C1'" 2>&1)
+ok "청구 갱신 오류 없음" "" "$(echo "$r" | grep -i error)"
+ok "Trina 1석 · user_id 는 슈퍼어드민(작성자·호출자 없음 → 폴백)" "1|1|$SU" "$($P -c "$LIVE")|$($P -c "select user_id from public.tickets where extra_data->>'chargeId'='$C1'")"
+ok "청구는 paid" "paid" "$($P -c "select status from public.kashikiri_charges where id='$C1'")"
+
+echo "── 3. 총 정원은 여전히 막는다 (정원 4 = MAN 1 + Trina 1 + Second 1 → Third 는 short)"
+$P -c "$EDGE update public.kashikiri_charges set status='paid', approved_at=now() where id='$C2'" >/dev/null
+$P -c "update public.ticket_products set total_pax=3 where id='tp1'" >/dev/null   # 정원을 3 으로 줄여 Third 가 못 들어가게
+r=$($P -c "$EDGE update public.kashikiri_charges set status='paid', approved_at=now() where id='$C3'" 2>&1)
+ok "Third paid 갱신은 성공(예외 없음)" "paid|" "$($P -c "select status from public.kashikiri_charges where id='$C3'")|$(echo "$r" | grep -i error)"
+ok "Third 좌석 없음 · 살아 있는 KSK 2석" "0|2|2" "$($P -c "select count(*) from public.tickets where extra_data->>'chargeId'='$C3'")|$($P -c "$LIVE")"
+r=$($P -c "$SUP select (public.taam_kashikiri_link_ticket('$EV','tp1'))::text" 2>&1)
+ok "RPC 결과 short: Third · kind capacity · TICKET_SOLD_OUT" "1|1|1" "$(echo "$r" | grep -c '"label": "Third"')|$(echo "$r" | grep -c '"kind": "capacity"')|$(echo "$r" | grep -c 'TICKET_SOLD_OUT')"
+
+echo "── 4. bypass 플래그가 새지 않는다 — 회원 1인 구매는 여전히 SOLO_LIMIT"
+$P -c "update public.ticket_products set total_pax=9 where id='tp1'" >/dev/null   # ⚠ 따로 — 같은 -c 에 넣으면 insert 예외와 함께 롤백된다
+r=$($P -c "$SUP insert into public.tickets(user_id,restaurant_id,ticket_product_id,party_size,price,status,purchase_id) values ('$SU','$REST','tp1',1,900000,'active','PAY-z')" 2>&1)
+ok "SOLO_LIMIT 그대로" "1" "$(echo "$r" | grep -c SOLO_LIMIT)"
+r=$($P -c "$MEM insert into public.tickets(user_id,restaurant_id,ticket_product_id,party_size,price,status,purchase_id) values ('$MB','$REST','tp1',2,1800000,'active','PAY-w')" 2>&1)
+ok "T 회원 M 전용 → TIER_BLOCKED 그대로" "1" "$(echo "$r" | grep -c TIER_BLOCKED)"
+
+echo "── 5. 좌석 오류가 결제 확정을 깨지 않는다"
+$P -c "create or replace function public._boom() returns trigger language plpgsql as \$\$ begin if new.purchase_id like 'KSK-%' and new.extra_data->>'chargeId' = '$C3' then raise exception 'BOOM: 테스트 폭탄'; end if; return new; end \$\$; create trigger t_boom before insert on public.tickets for each row execute function public._boom();" >/dev/null
+r=$($P -c "$SUP select (public.taam_kashikiri_link_ticket('$EV','tp1'))::text" 2>&1)
+ok "5a RPC: Third short kind=error · reason BOOM · 다른 둘은 유지" "1|1|2|2" "$(echo "$r" | grep -c '"kind": "error"')|$(echo "$r" | grep -c 'BOOM')|$($P -c "$LIVE")"
+$P -c "update public.kashikiri_charges set status='pending' where id='$C3'" >/dev/null
+r=$($P -c "$EDGE update public.kashikiri_charges set status='paid', approved_at=now() where id='$C3'" 2>&1)
+ok "5b 트리거 경로: insert 폭탄은 short 로 삼켜져 paid 갱신 성공 · warning 없음" "paid|0" "$($P -c "select status from public.kashikiri_charges where id='$C3'")|$(echo "$r" | grep -c 'WARNING')"
+$P -c "drop trigger t_boom on public.tickets" >/dev/null
+# insert 바깥(취소 update)에서 터지는 오류 → 트리거 래퍼가 삼킨다
+$P -c "create or replace function public._boom2() returns trigger language plpgsql as \$\$ begin if new.purchase_id like 'KSK-%' and new.status='cancelled' then raise exception 'BOOM2: 취소 폭탄'; end if; return new; end \$\$; create trigger t_boom2 before update on public.tickets for each row execute function public._boom2();" >/dev/null
+r=$($P -c "$EDGE update public.kashikiri_charges set status='cancelled' where id='$C2'" 2>&1)
+ok "5c 취소 update 폭탄 → 청구는 cancelled 로 갱신됨 · WARNING 1 · 좌석은 아직 살아 있음" "cancelled|1|2|2" "$($P -c "select status from public.kashikiri_charges where id='$C2'")|$(echo "$r" | grep -c 'WARNING')|$($P -c "$LIVE")"
+$P -c "drop trigger t_boom2 on public.tickets" >/dev/null
+r=$($P -c "$SUP select (public.taam_kashikiri_link_ticket('$EV','tp1'))::text" 2>&1)
+ok "5d 폭탄 제거 후 다시 연결 → Second 좌석 접힘(cancelled 1) · 정원 9 라 Third 도 들어와 2석 2행" "1|2|2" "$(echo "$r" | grep -c '"cancelled" : 1')|$($P -c "$LIVE")"
+
+echo "── 6. 링크 초대(LINK-)도 티어 가드 면제 — 등급 없는 매장 어드민이 M 전용 티켓에 링크 초대"
+r=$($P -c "select set_config('taam.uid','$AD',false); select set_config('taam.super','',false); select (public.taam_link_invite_create('tp1','Joy','+1 415 555 0100',2,'USD',1380,'2027.03.20','20:30'))::text" 2>&1)
+ok "LINK- 홀드 생성 (종전엔 TIER_BLOCKED)" "hold|2" "$($P -c "select status||'|'||party_size from public.tickets where purchase_id like 'LINK-%'")"
+
+echo "── 7. 2차를 한 번 더 돌려도 안전 (이미 안다 → 건너뜀 · 표 ✅)"
+out=$($P -f supabase/migrations/20260929_kashikiri_seat_sync2.sql 2>&1)
+ok "재실행: ❌ 0 · '이미' 2건" "0|2" "$(echo "$out" | grep -c '❌')|$(echo "$out" | grep -c '이미')"
+
+echo "── 8. 라이브 본문이 다르면 건너뛰고 ❌ 로 알린다"
+$P -c "create or replace function public.enforce_ticket_capacity() returns trigger language plpgsql as \$\$ begin return new; end \$\$;" >/dev/null
+out=$($P -f supabase/migrations/20260929_kashikiri_seat_sync2.sql 2>&1)
+ok "정원 트리거 ❌ 건너뜀 + warning" "1|1" "$(echo "$out" | grep -c '④ 정원 트리거 KSK- 총 정원만|❌')|$(echo "$out" | grep -c 'WARNING.*정원 트리거')"
+
+[ $FAIL = 0 ] && echo "=== 전부 통과 ===" || echo "=== 실패 있음 ==="
+exit $FAIL

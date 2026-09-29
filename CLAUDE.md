@@ -176,6 +176,16 @@ RPC `taam_kashikiri_link_ticket`(앱 버튼) · 청구 status 트리거 · 조 p
 `KSK-` 행의 `user_id` 는 회차 작성자다(사람이 아니다) — 캘린더는 uid 로 묶지 않고, × 대신 ⓘ 만 둔다. 좌석의 주인은
 청구 상태다. 링크 초대(`LINK-`)는 자기 트리거가 있으므로 여기서 건드리지 않는다. 회귀: `bash sql/_test/t_ksk_seat.sh`(17건).
 
+**2차(같은 날 밤, `20260929_kashikiri_seat_sync2.sql`) — 라이브에서 바로 밟은 것 셋.** ① 1차는 매진·슬롯·인원만 `short` 로 삼키고
+나머지는 예외로 올려서 Takiya 가 `SOLO_LIMIT`(1인 구매 한도) 에서 통째로 실패했다. ② 그 예외가 **청구 status 갱신 트리거 안**에서
+나면 `mark_paid` 가 실패한다 — 토스는 승인됐는데 우리 기록은 pending 인 최악의 모양. ③ 티어 가드는 `auth.uid()` 만 보므로
+Edge(service_role) 경로의 KSK- 행은 M·T 전용 티켓에서 `TIER_BLOCKED`. → 동기화는 insert 실패를 **무엇이든** `short`(kind
+capacity|error) 로 적고, 트리거 3종은 예외를 `raise warning` 으로 삼킨다(결제 확정을 좌석이 막지 않는다). 티어 가드에 `KSK-`·`LINK-`
+면제를 넣고, 정원 트리거는 `taam.seat_engine_bypass=1` + `KSK-` 면 **총 정원(①)만** 본다 — 1인 한도·허용 인원·조각 차단은 회원 자가
+구매를 다듬는 규칙이라 어드민이 매장과 잡은 자리에는 안 건다. 라이브 함수 둘을 바꾸므로 **본문 md5 가 저장소 원본과 같을 때만**
+교체하고 다르면 건너뛰고 ❌ 로 알린다 (`prosrc` 는 닫는 `$$` 앞 줄바꿈까지 포함한다 — md5 셀 때 빠뜨려 한 번 틀렸다).
+회귀: `bash sql/_test/t_ksk_seat2.sh`(21건 · 실제 정원 트리거 v3 와 티어 가드 원본을 픽스처에 올린다).
+
 ### 방문일의 연도는 두 군데가 읽는다 — 둘 다 세 토막을 받아야 한다 (2026-09-21)
 
 티켓의 `date` 는 보통 `MM.DD` + `dateYear` 지만, `YYYY.MM.DD` 로 들어온 행도 있다.
