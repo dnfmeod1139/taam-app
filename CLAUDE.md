@@ -257,6 +257,8 @@ select status_code, created, left(coalesce(content,''),200)
 
 - 키는 **Vault 에 한 번만** 넣고(`vault.create_secret`), 명령에서는 이름으로 참조한다.
   cron 명령에 키를 직접 박으면 `cron.job` 테이블에 평문으로 남는다.
+  지금 Vault 에 있는 이름은 **`service_role_key`** (2026-09-07, legacy service_role JWT). 새 잡·`app_config.restock_push` 는 이 이름을 쓴다.
+  취소표 알림의 즉시 호출·1분 크론(`taam-restock-kick`, jobid 43)이 이걸로 Edge `notify-restock` 을 부른다 (2026-09-29).
 - ⚠ **legacy JWT 여야 한다.** `Verify JWT with legacy secret` 는 `eyJ…` 로 시작하는
   200자 이상 JWT 만 받는다. 새 형식 키(`sb_secret_…`, 41자)를 넣으면 401 이다.
   Settings → API Keys → **Legacy API keys** 탭에서 가져온다.
