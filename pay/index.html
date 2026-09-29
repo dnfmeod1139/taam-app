@@ -268,13 +268,21 @@ button.go:active:not(:disabled){opacity:.85}
   T.ja.e_chk_d = 'カードで承認されていれば間もなく反映されます。しばらくしてからこのリンクを再度お開きください。';
 
   var LANG = 'ko';
+  var LANG_EXPLICIT = false;   // 🆕 링크·저장값으로 정해진 언어인가 (아니면 청구 통화로 기본을 잡는다)
   function t(k){ return (T[LANG] && T[LANG][k]) || T.ko[k] || k; }
+  // 🆕 2026-09-29 매장 이름을 언어에 맞게 — RPC 가 restaurants 의 영문·일본어 표기를 같이 준다. 비어 있으면 한글.
+  function venueName(c){
+    if(!c) return '';
+    if(LANG === 'en' && c.venue_name_en) return c.venue_name_en;
+    if(LANG === 'ja' && c.venue_name_jp) return c.venue_name_jp;
+    return c.venue_name || '';
+  }
   function pickLang(){
     try {
       var q = new URLSearchParams(location.search).get('lang');
-      if(q && T[q]) return q;
+      if(q && T[q]){ LANG_EXPLICIT = true; return q; }
       var saved = localStorage.getItem('taamPayLang');
-      if(saved && T[saved]) return saved;
+      if(saved && T[saved]){ LANG_EXPLICIT = true; return saved; }
     } catch(e){}
     var n = String((navigator.language || 'ko')).toLowerCase();
     if(n.indexOf('ja') === 0) return 'ja';
@@ -356,7 +364,13 @@ button.go:active:not(:disabled){opacity:.85}
 
   function paint(c){
     CH = c;
-    $('vVenue').textContent = c.venue_name || '대관';
+    // 🆕 링크에 언어가 없으면 청구 통화로 기본을 잡는다 — 달러는 EN, 엔은 JA (손님이 버튼으로 바꿀 수 있다)
+    if(!LANG_EXPLICIT){
+      var byCur = c.pay_currency === 'USD' ? 'en' : (c.pay_currency === 'JPY' ? 'ja' : null);
+      if(byCur && byCur !== LANG){ LANG = byCur; applyLang(); }
+      LANG_EXPLICIT = true;
+    }
+    $('vVenue').textContent = venueName(c) || '대관';
     var d = String(c.event_date || '');
     var hm = String(c.event_time || '').slice(0,5);   // ⚠ 't' 로 두면 번역 함수 t() 를 가린다
     var dt = '';
@@ -422,7 +436,7 @@ button.go:active:not(:disabled){opacity:.85}
     show('load', false); show('view', false);
     $('dMark').textContent = '✓'; $('dMark').className = 'mk ok';
     $('dTitle').textContent = t('done_t');
-    $('dDesc').textContent  = (c.venue_name || '') + ' · ' + String(c.event_date || '');
+    $('dDesc').textContent  = (venueName(c) || '') + ' · ' + String(c.event_date || '');
     var pcur = String(c.pay_currency || (extra && extra.currency) || 'KRW').toUpperCase();
     var pamt = (c.pay_amount != null) ? Number(c.pay_amount)
              : ((extra && extra.amount != null) ? Number(extra.amount) : Number(c.amount_krw));
@@ -529,6 +543,7 @@ button.go:active:not(:disabled){opacity:.85}
         LANG = b.getAttribute('data-l');
         try { localStorage.setItem('taamPayLang', LANG); } catch(e){}
         applyLang();
+        if(CH) $('vVenue').textContent = venueName(CH) || '대관';   // 매장 이름도 언어 따라
       });
     });
 
