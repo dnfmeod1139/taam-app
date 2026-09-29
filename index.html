@@ -34450,8 +34450,22 @@ function kskSendSum(){
   var left  = _ksdLeft();
   var over  = (total > 0) && (sum > left);
   if(el){
-    var byCur = { KRW:0, JPY:0, USD:0 };
-    s.rows.forEach(function(r){ if(r.label && r.amount > 0) byCur[r.cur || 'KRW']++; });
+    // 🔧 2026-09-29 합계를 **청구 통화**로 보여준다. 종전엔 $ 를 골라도 하단이 ₩1,680 이라
+    //   「링크가 원화로 나가나」로 읽혔다(링크는 이미 달러로 나갔다). 금액 칸은 원화 입력이 맞으니 그대로 두고,
+    //   통화별 환산 합계를 크게, 원화 원금은 작게 붙인다. 두 통화가 섞이면 통화마다 한 덩어리씩.
+    var byCur = { KRW:0, JPY:0, USD:0 }, sumCur = { KRW:0, JPY:0, USD:0 };
+    s.rows.forEach(function(r){ if(r.label && r.amount > 0){ var c = r.cur || 'KRW'; byCur[c]++; sumCur[c] += r.amount; } });
+    var e = _kskCur ? _kskCur.ev : {};
+    var fj = parseFloat(e.fx_rate) || 0, fu = parseFloat(e.fx_usd) || 0;
+    function _fmtCur(c, krw){
+      if(c === 'JPY') return fj ? ('¥' + Math.round(krw / fj).toLocaleString('ja-JP')) : _kskWon(krw);
+      if(c === 'USD') return fu ? ('$' + (Math.round(krw / fu * 100) / 100).toLocaleString('en-US', { minimumFractionDigits:2, maximumFractionDigits:2 })) : _kskWon(krw);
+      return _kskWon(krw);
+    }
+    var parts = [];
+    ['KRW','JPY','USD'].forEach(function(c){ if(byCur[c]) parts.push(_fmtCur(c, sumCur[c])); });
+    var big = parts.join(' · ') || _kskWon(sum);
+    var onlyKrw = !byCur.JPY && !byCur.USD;
     var mix = [];
     if(byCur.KRW) mix.push('₩' + byCur.KRW);
     if(byCur.JPY) mix.push('¥' + byCur.JPY);
@@ -34465,7 +34479,9 @@ function kskSendSum(){
                                : ('남은 금액 ' + _kskWon(left))) + '</span>')
                     : '')
                  + '</span>'
-                 + '<span class="v">' + _kskWon(sum) + '</span>';
+                 + '<span class="v">' + big
+                 + (onlyKrw ? '' : '<br><span style="font-size:11px;font-weight:600;color:#79736a;">원금 ' + _kskWon(sum) + '</span>')
+                 + '</span>';
   }
   if(go){
     go.disabled = !ready || over;
@@ -43256,7 +43272,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.28-e';
+var TAAM_WEB_BUILD = '2026.09.29-a';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
