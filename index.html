@@ -12455,8 +12455,27 @@ window.closePromoCarousel = function(){
       <textarea id="riTicketDesc" placeholder="티켓에 대한 상세한 설명을 입력해주세요&#10;(코스 구성, 특이사항, 드레스코드 등)" rows="5" style="width:100%;padding:12px 14px;border:1.5px solid #e8e5e0;border-radius:12px;font-family:var(--font-main);font-size:13px;color:#111;background:#fff;outline:none;resize:vertical;line-height:1.7;box-sizing:border-box;"></textarea>
     </div>
 
+    <!-- 🆕 2026-09-29 링크 초대 (비회원·해외) — 회원 대신 이름·번호·통화를 적으면 좌석 홀드 + 카드 결제 링크 -->
+    <div class="rp-field" id="riLinkModeWrap" style="margin-bottom:10px;">
+      <label id="riLinkModeToggle" onclick="riLinkModeToggle()" style="display:flex;align-items:center;gap:10px;padding:12px 14px;border:1.5px solid #e0ddd6;border-radius:12px;background:#fff;cursor:pointer;">
+        <span id="riLinkModeChk" style="width:20px;height:20px;border-radius:6px;border:1.5px solid #c9c2b5;display:flex;align-items:center;justify-content:center;font-size:13px;color:#fff;flex-shrink:0;"></span>
+        <span style="min-width:0;"><b style="font-size:13px;color:#1a1a18;">🔗 링크 초대 (비회원 · 해외)</b>
+          <span style="display:block;font-size:11px;color:#8a8478;margin-top:2px;line-height:1.5;">앱 회원이 아닌 손님. 좌석을 잡고 카드 결제 링크를 만듭니다 — 금액은 연결 티켓의 (식사비+대행비+주류)×인원, 취소 규정은 회원과 같습니다.</span></span>
+      </label>
+      <div id="riLinkFields" style="display:none;margin-top:10px;padding:12px 14px;border:1.5px solid #d4a017;border-radius:12px;background:#fff8e7;">
+        <input class="tu-input" id="riLinkName" type="text" placeholder="손님 이름 (링크 페이지에 표시)" style="width:100%;box-sizing:border-box;">
+        <input class="tu-input" id="riLinkPhone" type="tel" inputmode="tel" placeholder="연락처 (선택 · 국가번호 포함 가능)" style="width:100%;box-sizing:border-box;margin-top:8px;">
+        <div style="display:flex;gap:6px;margin-top:10px;align-items:center;">
+          <button type="button" id="riLinkCurKRW" onclick="riLinkSetCur('KRW')" style="flex:1;padding:9px 0;border:1px solid #1a1a18;border-radius:9px;background:#1a1a18;color:#fff;font-family:inherit;font-size:13px;font-weight:800;">₩</button>
+          <button type="button" id="riLinkCurJPY" onclick="riLinkSetCur('JPY')" style="flex:1;padding:9px 0;border:1px solid #e0ddd5;border-radius:9px;background:#fff;color:#8a8478;font-family:inherit;font-size:13px;font-weight:800;">¥</button>
+          <button type="button" id="riLinkCurUSD" onclick="riLinkSetCur('USD')" style="flex:1;padding:9px 0;border:1px solid #e0ddd5;border-radius:9px;background:#fff;color:#8a8478;font-family:inherit;font-size:13px;font-weight:800;">$</button>
+          <input class="tu-input" id="riLinkFx" type="text" inputmode="decimal" placeholder="환율 (1$ = ₩)" oninput="riLinkPreview()" style="flex:1.6;box-sizing:border-box;display:none;">
+        </div>
+        <div id="riLinkPreview" style="margin-top:10px;font-size:12.5px;line-height:1.7;color:#5a554f;"></div>
+      </div>
+    </div>
     <!-- 🆕 회원 검색 — 취소 규정 바로 위 -->
-    <div class="rp-field">
+    <div class="rp-field" id="riMemberWrap">
       <div class="tu-section-title">회원 선택 (초대 대상)</div>
       <input class="tu-input" id="riMemberSearch" type="text" placeholder="이름·이메일·전화번호로 검색 (2자 이상)" oninput="riSearchMembers(this.value)" style="margin-bottom:8px;">
       <div id="riMemberResults" style="display:none;max-height:300px;overflow-y:auto;background:#faf8f5;border-radius:12px;padding:6px;"></div>
@@ -30100,6 +30119,7 @@ function _thxRouteTag(h){
   var pid = String(h.purchaseId || '');
   if(pid.indexOf('INV-') === 0)  return ['초대','#3E5C76'];
   if(pid.indexOf('MAN-') === 0)  return ['수동','#8a8580'];
+  if(pid.indexOf('LINK-') === 0) return ['링크 초대','#B45309'];
   var ex = h.extra_data || {};
   if((parseInt(ex.cardPaid)||0) > 0 || ex.paidBy === 'card+deposit') return ['앱 · 카드','#5C0A14'];
   return ['앱','#8a8580'];
@@ -42894,6 +42914,7 @@ function riLinkTicketChange(){
   var sel = document.getElementById('riLinkTicket');
   var info = document.getElementById('riLinkInfo');
   _riLinkTicketId = (sel && sel.value) ? sel.value : null;
+  try { if(typeof riLinkPreview === 'function') setTimeout(riLinkPreview, 0); } catch(_e){}
   if(!_riLinkTicketId){ if(info){ info.style.display='none'; } return; }
   var t = (ticketDB || []).find(function(x){ return String(x.id) === String(_riLinkTicketId); });
   if(!t){ _riLinkTicketId = null; if(info){ info.style.display='none'; } return; }
@@ -42939,7 +42960,127 @@ function riLinkTicketChange(){
 }
 
 // 초대 발송 — DB INSERT + 푸시
+// ═══════ 🆕 2026-09-29 링크 초대 (비회원 · 해외) ═══════
+//   회원 초대(예치금)와 갈래가 다르다: 좌석 홀드(LINK- 행) + 정산 링크와 같은 카드 결제 링크.
+//   금액은 서버가 (식사비+대행비+주류)×인원 으로 세고(taam_link_invite_create), 결제되면 트리거가 홀드를 확정한다.
+var _riLinkMode = false, _riLinkCur = 'KRW';
+function riLinkModeToggle(){
+  _riLinkMode = !_riLinkMode;
+  var chk = document.getElementById('riLinkModeChk'), f = document.getElementById('riLinkFields'), m = document.getElementById('riMemberWrap');
+  if(chk){ chk.textContent = _riLinkMode ? '✓' : ''; chk.style.background = _riLinkMode ? '#5C0A14' : '#fff'; chk.style.borderColor = _riLinkMode ? '#5C0A14' : '#c9c2b5'; }
+  if(f) f.style.display = _riLinkMode ? 'block' : 'none';
+  if(m) m.style.display = _riLinkMode ? 'none' : '';
+  var btn = document.getElementById('riSubmitBtn'); if(btn) btn.textContent = _riLinkMode ? '결제 링크 만들기' : '초대 발송';
+  if(_riLinkMode) riLinkSetCur(_riLinkCur);
+}
+function _riLinkFxDefault(c){
+  try {
+    if(c === 'JPY') return (typeof fxRateJpy === 'function') ? (fxRateJpy() || 0) : 0;
+    if(c === 'USD') return (typeof fxRateUsd === 'function') ? (fxRateUsd() || 0) : ((typeof fxRate === 'function') ? (fxRate() || 0) : 0);
+  } catch(_e){}
+  return 0;
+}
+function riLinkSetCur(c){
+  _riLinkCur = c;
+  ['KRW','JPY','USD'].forEach(function(k){
+    var b = document.getElementById('riLinkCur' + k); if(!b) return;
+    var on = (k === c);
+    b.style.background = on ? '#1a1a18' : '#fff'; b.style.color = on ? '#fff' : '#8a8478'; b.style.borderColor = on ? '#1a1a18' : '#e0ddd5';
+  });
+  var fx = document.getElementById('riLinkFx');
+  if(fx){
+    fx.style.display = (c === 'KRW') ? 'none' : 'block';
+    fx.placeholder = c === 'JPY' ? '환율 (1¥ = ₩)' : '환율 (1$ = ₩)';
+    if(c !== 'KRW' && !parseFloat(fx.value)){ var d = _riLinkFxDefault(c); fx.value = d ? String(Math.round(d * 100) / 100) : ''; }
+  }
+  riLinkPreview();
+}
+function _riLinkTicket(){ return _riLinkTicketId ? (ticketDB || []).find(function(x){ return String(x.id) === String(_riLinkTicketId); }) : null; }
+function _riLinkAmountKrw(t){
+  if(!t) return 0;
+  var m = parseInt(t.mealFee || t.meal_fee) || 0, a = parseInt(t.agencyFee || t.agency_fee) || 0, w = parseInt(t.wineMin || t.wine_min) || 0;
+  return (m + a + w) * (parseInt(_riPax) || 1);
+}
+function riLinkPreview(){
+  var el = document.getElementById('riLinkPreview'); if(!el || !_riLinkMode) return;
+  var t = _riLinkTicket();
+  if(!t){ el.innerHTML = '<span style="color:#B45309;">「판매 티켓 연결」에서 회차를 먼저 고르세요 — 금액은 그 티켓의 요금으로 서버가 셉니다.</span>'; return; }
+  var krw = _riLinkAmountKrw(t), n = parseInt(_riPax) || 1;
+  var m = parseInt(t.mealFee || t.meal_fee) || 0, a = parseInt(t.agencyFee || t.agency_fee) || 0, w = parseInt(t.wineMin || t.wine_min) || 0;
+  var fx = parseFloat((document.getElementById('riLinkFx') || {}).value) || 0;
+  var conv = '';
+  if(_riLinkCur === 'USD') conv = fx ? (' → <b>$' + (Math.round(krw / fx * 100) / 100).toLocaleString('en-US', { minimumFractionDigits:2, maximumFractionDigits:2 }) + '</b>') : ' <span style="color:#B45309;">(환율 필요)</span>';
+  if(_riLinkCur === 'JPY') conv = fx ? (' → <b>¥' + Math.round(krw / fx).toLocaleString('ja-JP') + '</b>') : ' <span style="color:#B45309;">(환율 필요)</span>';
+  el.innerHTML = '식사비 ₩' + m.toLocaleString() + ' + 대행비 ₩' + a.toLocaleString() + ' + 주류 ₩' + w.toLocaleString() + ' × ' + n + '인'
+    + '<br>청구 <b>₩' + krw.toLocaleString() + '</b>' + conv
+    + '<br><span style="font-size:11px;color:#8a8478;">취소: 결제 30분 안 전액 · 방문 31일 전까지 대행비 제외 · 그 뒤 환불 없음</span>';
+}
+async function riLinkInviteSubmit(){
+  if(!_riRestId){ showToast('⚠','선택 필요','레스토랑을 선택해주세요'); return; }
+  if(!_riDate || !_riTime){ showToast('⚠','입력 필요','날짜와 시간을 선택해주세요'); return; }
+  var t = _riLinkTicket();
+  if(!t){ showToast('⚠','티켓 연결 필요','「판매 티켓 연결」에서 회차를 고르세요 — 좌석과 금액이 거기서 나옵니다'); return; }
+  var name = ((document.getElementById('riLinkName') || {}).value || '').trim();
+  if(!name){ showToast('⚠','입력 필요','손님 이름을 적어주세요'); return; }
+  if(!_riPolicy.p1 || !_riPolicy.p2 || !_riPolicy.p3){ showToast('⚠','취소규정 필수','3개 항목 모두 확인 후 체크해주세요'); return; }
+  var fx = parseFloat((document.getElementById('riLinkFx') || {}).value) || 0;
+  if(_riLinkCur !== 'KRW' && !(fx > 0)){ showToast('⚠','환율 필요', (_riLinkCur === 'JPY' ? '1¥' : '1$') + ' = ₩ 환율을 적어주세요'); return; }
+  var krw = _riLinkAmountKrw(t);
+  if(krw <= 0){ showToast('⚠','요금 없음','이 티켓에 식사비·대행비·주류 요금이 없어 금액을 셀 수 없습니다'); return; }
+  var vd = (typeof _tkFullDate === 'function') ? _tkFullDate(t) : String(t.date || '');
+  if(!/^\d{4}\.\d{2}\.\d{2}$/.test(vd)){ showToast('⚠','방문일 오류','연결 티켓의 방문일을 읽지 못했습니다'); return; }
+  var btn = document.getElementById('riSubmitBtn'); if(btn){ btn.disabled = true; btn.textContent = '만드는 중…'; }
+  try {
+    var r = await window.sb.rpc('taam_link_invite_create', {
+      p_ticket_id: String(t.id), p_name: name,
+      p_phone: ((document.getElementById('riLinkPhone') || {}).value || '').trim() || null,
+      p_pax: parseInt(_riPax) || 1, p_currency: _riLinkCur, p_fx: _riLinkCur === 'KRW' ? null : fx,
+      p_visit_date: vd, p_visit_time: t.time || _riTime || null
+    });
+    if(r.error){
+      var msg = String(r.error.message || '');
+      if(msg.indexOf('TICKET_SOLD_OUT') >= 0) showToast('⚠','좌석 부족','이 회차에 ' + _riPax + '명 자리가 없습니다');
+      else if(msg.indexOf('Could not find the function') >= 0 || msg.indexOf('does not exist') >= 0) showToast('⚠','서버 준비 필요','링크 초대 SQL 이 아직 적용되지 않았습니다');
+      else showToast('❌','만들지 못했습니다', msg.slice(0, 90));
+      return;
+    }
+    riLinkResultShow(r.data || {}, name);
+    try { if(typeof renderTickets === 'function') renderTickets(); } catch(_e){}
+    try { if(typeof _tkSyncFromServer === 'function') _tkSyncFromServer(true); } catch(_e){}
+    try { if(typeof tcalLoadPurchases === 'function'){ await tcalLoadPurchases(); if(_tcalSelectedDate) tcalRenderDetail(_tcalSelectedDate); } } catch(_e){}
+  } catch(e){ showToast('❌','오류', String(e && e.message || '').slice(0, 90)); }
+  finally { if(btn){ btn.disabled = false; btn.textContent = '결제 링크 만들기'; } }
+}
+function _riLinkMoney(d){
+  var c = String(d.currency || 'KRW'), n = Number(d.pay_amount || d.amount_krw || 0);
+  if(c === 'USD') return '$' + n.toLocaleString('en-US', { minimumFractionDigits:2, maximumFractionDigits:2 });
+  if(c === 'JPY') return '¥' + Math.round(n).toLocaleString('ja-JP');
+  return '₩' + Math.round(n).toLocaleString();
+}
+function riLinkResultShow(d, name){
+  var old = document.getElementById('riLinkResult'); if(old) old.remove();
+  var url = d.url || ('https://taam-app.vercel.app/pay/?t=' + (d.token || ''));
+  var safeUrl = url.replace(/[^A-Za-z0-9:\/?=&._~-]/g, '');
+  var qr = 'https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=2&data=' + encodeURIComponent(url);
+  var box = document.createElement('div'); box.id = 'riLinkResult'; box.setAttribute('data-lang-lock','ko');
+  box.style.cssText = 'position:fixed;inset:0;z-index:9700;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(18,15,12,.6);font-family:var(--font-main);';
+  box.innerHTML = '<div style="width:100%;max-width:340px;background:#fff;border-radius:18px;padding:22px 20px 16px;text-align:center;box-shadow:0 20px 50px rgba(0,0,0,.3);">'
+    + '<div style="font-size:16px;font-weight:800;color:#1a1a18;">🔗 결제 링크가 만들어졌습니다</div>'
+    + '<div style="font-size:12.5px;color:#5a554f;margin-top:6px;line-height:1.6;">' + _raEsc(name) + ' · ' + _riLinkMoney(d) + (String(d.currency||'KRW') !== 'KRW' ? ' <span style="color:#9a9486;">(₩' + Number(d.amount_krw||0).toLocaleString() + ')</span>' : '') + '<br>좌석은 잡혀 있고, 결제되면 확정됩니다.<br><span style="font-size:11px;color:#9a9486;">링크 유효 ' + (d.expires_at ? _mlDate(d.expires_at) : '72시간') + ' 까지 · 그 뒤 좌석이 풀립니다</span></div>'
+    + '<img src="' + qr + '" alt="QR" style="width:180px;height:180px;margin:14px auto 6px;display:block;border-radius:10px;border:1px solid #eee;">'
+    + '<div style="font-size:10.5px;color:#9a9486;word-break:break-all;">' + _raEsc(url) + '</div>'
+    + '<div style="display:flex;gap:8px;margin-top:14px;">'
+    +   '<button onclick="_kskClip(\'' + safeUrl + '\',\'결제 링크\')" style="flex:1;min-height:44px;border:0;border-radius:11px;background:#5C0A14;color:#fff;font-family:inherit;font-size:13px;font-weight:800;">링크 복사</button>'
+    +   '<button onclick="window.open(\'' + safeUrl + '\',\'_blank\')" style="flex:1;min-height:44px;border:1px solid #e0ddd5;border-radius:11px;background:#fff;color:#1a1a18;font-family:inherit;font-size:13px;font-weight:800;">열어보기</button>'
+    + '</div>'
+    + '<button onclick="document.getElementById(\'riLinkResult\').remove()" style="margin-top:10px;width:100%;min-height:40px;border:0;background:transparent;color:#8a8478;font-family:inherit;font-size:12.5px;font-weight:700;">닫기</button>'
+    + '</div>';
+  document.body.appendChild(box);
+}
+window.riLinkModeToggle = riLinkModeToggle; window.riLinkSetCur = riLinkSetCur; window.riLinkPreview = riLinkPreview; window.riLinkInviteSubmit = riLinkInviteSubmit;
+
 async function riSubmit(){
+  if(_riLinkMode) return riLinkInviteSubmit();   // 🆕 2026-09-29 링크 초대는 갈래가 다르다
   if(!_riRestId){ showToast('⚠','선택 필요','레스토랑을 선택해주세요'); return; }
   if(!_riDate || !_riTime){ showToast('⚠','입력 필요','날짜와 시간을 선택해주세요'); return; }
   if(!_riTicketGenre){ showToast('⚠','선택 필요','티켓 장르를 선택해주세요'); return; }
@@ -43272,7 +43413,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.29-a';
+var TAAM_WEB_BUILD = '2026.09.29-b';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -58606,7 +58747,7 @@ function _tcalDayGroups(dateKey){
     //   근거가 아니므로 엔트리에서 지운다 — 이름(buyer_name)은 그대로 살아 있다.
     var _mnRow = String(h.purchaseId||'').indexOf('MAN-') === 0
               || !!(h.extra_data && h.extra_data.manualEntry);
-    gr(h.restId||h.restaurant_id, h.rest||h.restName||h.restaurant_name).entries.push({type:'app', pid:(h.purchaseId||''), name:(h.buyerName||''), uid:(_mnRow ? '' : (h._userId||'')), pax:(h.pax||1), amount:(parseInt(h.amt)||0), agency:0, time:(h.visitTime||''), bought:(h.date||h.created_at||''), ex:(h.extra_data||{}), gphone:(h.guestPhone||'')});   // 🆕 2026-09-14 구매 일시
+    gr(h.restId||h.restaurant_id, h.rest||h.restName||h.restaurant_name).entries.push({type:'app', pid:(h.purchaseId||''), name:(h.buyerName||''), uid:(_mnRow ? '' : (h._userId||'')), pax:(h.pax||1), amount:(parseInt(h.amt)||0), agency:0, time:(h.visitTime||''), bought:(h.date||h.created_at||''), ex:(h.extra_data||{}), gphone:(h.guestPhone||''), st:(h.status||'')});   // 🆕 2026-09-14 구매 일시
   });
   // 초대 결제
   (_tcalInvites||[]).forEach(function(inv){
@@ -59157,6 +59298,38 @@ async function tcalManualDelete(id){
 }
 window.tcalManualDelete = tcalManualDelete;
 
+// 🆕 2026-09-29 링크 초대 취소 — 미결제면 링크를 끊고(트리거가 홀드 해제), 결제됐으면 규정대로 환불(Edge kashikiri-refund)
+async function tcalCancelLinkRow(pid){
+  if(!pid || !window.sb) return;
+  var row = (_tcalPurchases || []).find(function(h){ return String(h.purchaseId) === String(pid); });
+  var ex = (row && row.extra_data) || {};
+  if(!ex.chargeId){ showToast('⚠','청구를 못 찾음','이 좌석 행에 결제 링크 정보가 없습니다'); return; }
+  try {
+    if(row.status !== 'active'){
+      if(!confirm('이 링크 초대를 끊을까요?\n\n링크는 더 이상 결제되지 않고 좌석이 즉시 풀립니다.')) return;
+      var r = await window.sb.rpc('taam_kashikiri_charge_cancel', { p_charge_id: ex.chargeId });
+      if(r.error) throw r.error;
+      showToast('✓','링크를 끊었습니다','좌석이 복구됩니다');
+    } else {
+      var q = await window.sb.rpc('taam_link_invite_refund_quote', { p_charge_id: ex.chargeId });
+      if(q.error) throw q.error;
+      var d = q.data || {};
+      var why = d.policy === 'within_30min_full' ? '결제 30분 안 — 전액' : d.policy === 'd31_minus_agency' ? '방문 31일 전 이상 — 대행비 제외' : '방문 30일 이내 — 환불 없음';
+      var amt = (d.currency === 'USD') ? ('$' + Number(d.refund_amount||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}))
+              : (d.currency === 'JPY') ? ('¥' + Number(d.refund_amount||0).toLocaleString('ja-JP')) : ('₩' + Number(d.refund_krw||0).toLocaleString());
+      if(!confirm('결제된 링크 초대를 취소할까요?\n\n규정: ' + why + '\n환불 ' + amt + ' (₩' + Number(d.refund_krw||0).toLocaleString() + ')\n\n토스로 카드 취소가 나가고 좌석이 풀립니다.')) return;
+      var e2 = await window.sb.functions.invoke('kashikiri-refund', { body: { charge_id: ex.chargeId, reason: '예약 취소 (' + why + ')' } });
+      var res = (e2 && e2.data) || {};
+      if((e2 && e2.error) || !res.ok){ showToast('❌','환불 실패', String((res && (res.error || (res.toss && res.toss.message))) || (e2.error && e2.error.message) || '').slice(0,90)); return; }
+      showToast('✓','환불 처리', amt + ' 환불 · 좌석 복구');
+    }
+    try { await tcalLoadPurchases(); } catch(_e){}
+    tcalRender(); if(_tcalSelectedDate) tcalRenderDetail(_tcalSelectedDate);
+    try { if(typeof _tkSyncFromServer === 'function') _tkSyncFromServer(true); } catch(_e){}
+  } catch(e){ showToast('❌','오류', String(e && e.message || '').slice(0, 90)); }
+}
+window.tcalCancelLinkRow = tcalCancelLinkRow;
+
 // 🆕 2026.08: 좌석 연동 행(MAN- 수동 / INVH- 초대 홀드) 취소 → status='cancelled' → 본 티켓 잔여석 즉시 복구
 async function tcalCancelLinkedRow(pid){
   if(!pid || !window.sb) return;
@@ -59391,8 +59564,12 @@ function tcalRenderDetail(dateStr) {
           // 🆕 2026.08: 좌석 연동 행 구분 — MAN-(수동·연동) / INVH-(초대 좌석 홀드)
           var _isMan = (e.pid||'').indexOf('MAN-') === 0;
           var _isHold = (e.pid||'').indexOf('INVH-') === 0;
-          var label = _isMan ? '수동·연동' : (_isHold ? '초대홀드' : (e.type==='invite' ? '초대' : (e.type==='app' ? '앱구매' : (e.ttype||'오프라인'))));
-          var col = _isMan ? ['#7A6A60','#F0ECE6','#E0D9CC']
+          var _isLink = (e.pid||'').indexOf('LINK-') === 0;   // 🆕 2026-09-29 링크 초대 (비회원 카드 결제)
+          var _linkPaid = _isLink && e.st === 'active';
+          var label = _isLink ? ('링크 초대 · ' + (_linkPaid ? '결제됨' : '미결제'))
+                    : _isMan ? '수동·연동' : (_isHold ? '초대홀드' : (e.type==='invite' ? '초대' : (e.type==='app' ? '앱구매' : (e.ttype||'오프라인'))));
+          var col = _isLink ? (_linkPaid ? ['#1E7A46','#EAF6EE','#BFE3CC'] : ['#B45309','#FFF3E0','#F0D9B4'])
+                  : _isMan ? ['#7A6A60','#F0ECE6','#E0D9CC']
                   : (_isHold ? ['#B07A1E','#FBF4E5','#EDDFC2']
                   : (e.type==='invite' ? ['#6A1A1A','#FBF3F2','#EEDADA'] : (e.type==='app' ? ['#1F5BD6','#EAF1FF','#D2E0FB'] : ['#7A6A60','#F0ECE6','#E0D9CC'])));
           var badge = '<span style="font-size:9.5px;font-weight:800;color:'+col[0]+';background:'+col[1]+';border:1px solid '+col[2]+';border-radius:6px;padding:1px 6px;">'+label+'</span>';
@@ -59403,6 +59580,7 @@ function tcalRenderDetail(dateStr) {
             : '<span style="font-weight:700;color:#1a1a18;">'+nm+'</span>';
           var amt = (e.amount ? ('₩'+e.amount.toLocaleString()) : '') + (e.agency>0 ? ' <span style="color:#9A9486;font-weight:600;">(대행비 ₩'+e.agency.toLocaleString()+')</span>' : '');
           var del = (e.type==='manual') ? '<span onclick="tcalManualDelete(\''+e.mid+'\')" style="cursor:pointer;color:#c33;font-size:17px;font-weight:700;line-height:1;padding:2px 4px;">×</span>'
+                  : (_isLink && (isSuper || _currentRole==='admin') ? '<span onclick="tcalCancelLinkRow(\''+e.pid+'\')" title="' + (_linkPaid ? '환불(규정 적용) · 좌석 취소' : '링크 끊기 · 좌석 취소') + '" style="cursor:pointer;color:#c33;font-size:17px;font-weight:700;line-height:1;padding:0 4px;">×</span>'
                   : ((_isMan||_isHold) && (isSuper || _currentRole==='admin') ? '<span onclick="tcalCancelLinkedRow(\''+e.pid+'\')" style="cursor:pointer;color:#c33;font-size:17px;font-weight:700;line-height:1;padding:2px 4px;">×</span>' : '');
           // 🆕 2026.08-29: 인원 변경 — 실제 결제 건에만. 수동(MAN-)·초대홀드(INVH-)는
           //   결제가 없어 돈을 계산할 게 없다. 그건 ×(취소)로 지우는 게 맞다.
@@ -59412,6 +59590,11 @@ function tcalRenderDetail(dateStr) {
           // 🆕 2026-09-28 수동 예약 손님 알림톡 — 번호가 있는 MAN- 행에만.
           //   보낸 적 있으면 「✓ 카톡 09.28」 + 재발송, 없으면 「📨 카톡 안내」
           var kkBtn = '';
+          if(_isLink && (isSuper || _currentRole==='admin') && e.ex && e.ex.token){
+            var _lu = 'https://taam-app.vercel.app/pay/?t=' + String(e.ex.token).replace(/[^A-Za-z0-9]/g,'');
+            kkBtn = '<span onclick="_kskClip(\'' + _lu + '\',\'결제 링크\')" style="cursor:pointer;font-size:10.5px;font-weight:800;color:#5C0A14;background:#fbf1f3;border:1px solid #eecdd4;border-radius:6px;padding:2px 7px;">🔗 링크 복사</span>'
+                  + (e.ex.currency && e.ex.currency !== 'KRW' ? ' <span style="font-size:10.5px;color:#8a8580;">' + (e.ex.currency === 'USD' ? '$' : '¥') + Number(e.ex.payAmount||0).toLocaleString() + '</span>' : '');
+          }
           if(_isMan && (isSuper || _currentRole==='admin') && _krMobile(e.gphone||'')){
             var _kx = e.ex || {};
             var _pidQ = String(e.pid).replace(/'/g,"\\'");
