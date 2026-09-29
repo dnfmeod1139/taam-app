@@ -204,5 +204,23 @@ r=$($P -c "select (public.taam_visit_reminder_notify())::text" 2>&1)
 ok "made 1 (회원 것만) · 오류 없음" "1|" "$(echo "$r" | grep -c '"made": 1')|$(echo "$r" | grep -E "^ERROR")"
 ok "알림 수신자는 회원 · 제목 「내일 방문 예정입니다」" "$MB|내일 방문 예정입니다" "$($P -c "select user_id||'|'||title from public.notifications where type='visit_reminder'")"
 
-[ $FAIL = 0 ] && echo "=== 4차 포함 전부 통과 ===" || echo "=== 실패 있음 ==="
+echo "── 11. 인원 바꾸기 RPC (조 없는 청구 → 조 생성 · 정원 초과 → short · 권한)"
+out=$($P -f supabase/migrations/20260929_kashikiri_seat_pax.sql 2>&1); ok "5차 오류 없음 · ✅ 1" "|1" "$(echo "$out" | grep -E "^ERROR" | head -1)|$(echo "$out" | grep -c '✅')"
+$P -c "update public.ticket_products set total_pax=20 where id='tp1'" >/dev/null
+PID3=$($P -c "select purchase_id from public.tickets where extra_data->>'chargeId'='$C3' and status='active' order by created_at desc limit 1")
+ok "Third 좌석 현재 1명 · 조 없음" "1|" "$($P -c "select party_size from public.tickets where purchase_id='$PID3'")|$($P -c "select coalesce(team_id::text,'') from public.kashikiri_charges where id='$C3'")"
+r=$($P -c "$SUP select (public.taam_ksk_seat_set_pax('$PID3', 2))::text" 2>&1)
+ok "2명으로: 조 생성·연결 · 좌석 2명 · resized 1 · short 없음" "2|2|1|1" "$($P -c "select party_size from public.tickets where purchase_id='$PID3'")|$($P -c "select t.pax from public.kashikiri_charges c join public.kashikiri_teams t on t.id=c.team_id where c.id='$C3'")|$(echo "$r" | grep -c '"resized" : 1')|$(echo "$r" | grep -c '"short" : \[\]')"
+sold=$($P -c "select coalesce(sum(party_size),0) from public.tickets where ticket_product_id='tp1' and coalesce(status,'')<>'cancelled'")
+r=$($P -c "$SUP select (public.taam_ksk_seat_set_pax('$PID3', 40))::text" 2>&1)
+ok "40명(정원 초과): short RESIZE_OVER_CAPACITY(트리거 warning + RPC short) · 좌석 2명 유지" "1|2" "$(( $(echo "$r" | grep -c 'RESIZE_OVER_CAPACITY') > 0 ))|$($P -c "select party_size from public.tickets where purchase_id='$PID3'")"
+r=$($P -c "$SUP select (public.taam_ksk_seat_set_pax('$PID3', 1))::text" 2>&1)
+ok "다시 1명" "1" "$($P -c "select party_size from public.tickets where purchase_id='$PID3'")"
+# (권한 거부 경로는 픽스처가 postgres 로 접속해 session_user 가 늘 postgres 라 재현할 수 없다 — 함수 본문의 v_srv 참고)
+r=$($P -c "$SUP select (public.taam_ksk_seat_set_pax('KSK-없는행', 2))::text" 2>&1)
+ok "없는 좌석 → SEAT_NOT_FOUND" "1" "$(echo "$r" | grep -c 'SEAT_NOT_FOUND')"
+r=$($P -c "$EDGE select (public.taam_ksk_seat_set_pax('$PID3', 2))::text" 2>&1)
+ok "SQL Editor(postgres) 경로는 통과 → 2명" "2" "$($P -c "select party_size from public.tickets where purchase_id='$PID3'")"
+
+[ $FAIL = 0 ] && echo "=== 5차 포함 전부 통과 ===" || echo "=== 실패 있음 ==="
 exit $FAIL

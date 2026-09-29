@@ -15115,7 +15115,8 @@ textarea.mapl-in{min-height:78px;resize:vertical;line-height:1.7}
   </div>
   <!-- 🆕 수기 예약 입력 모달 -->
   <div id="tcalManualModal" style="display:none;position:fixed;inset:0;z-index:980;background:rgba(20,18,16,.55);align-items:center;justify-content:center;padding:24px;" onclick="if(event.target===this)tcalCloseManual()">
-    <div style="width:100%;max-width:360px;background:#fff;border-radius:22px;padding:24px 22px;box-shadow:0 24px 60px rgba(0,0,0,.4);font-family:'Noto Sans KR',sans-serif;">
+    <!-- 🔧 2026-09-29 항목이 늘어(번호·카톡) 작은 화면에서 저장 버튼이 잘렸다 → 화면 높이 안에서 세로 스크롤 -->
+    <div style="width:100%;max-width:360px;max-height:calc(100vh - 48px);max-height:calc(100dvh - 48px);overflow-y:auto;-webkit-overflow-scrolling:touch;background:#fff;border-radius:22px;padding:24px 22px;box-sizing:border-box;box-shadow:0 24px 60px rgba(0,0,0,.4);font-family:'Noto Sans KR',sans-serif;">
       <div style="font-size:18px;font-weight:800;color:#1a1a18;">수동 예약 추가</div>
       <div id="tcalManualCtx" style="font-size:12px;color:#9a9486;margin-top:4px;"></div>
       <div style="margin-top:16px;">
@@ -43548,7 +43549,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.29-g';
+var TAAM_WEB_BUILD = '2026.09.29-h';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -59473,9 +59474,38 @@ window.tcalCancelLinkRow = tcalCancelLinkRow;
 // 🆕 2026.08: 좌석 연동 행(MAN- 수동 / INVH- 초대 홀드) 취소 → status='cancelled' → 본 티켓 잔여석 즉시 복구
 // 🆕 2026-09-29 정산 결제 좌석(KSK-)은 캘린더에서 지우지 않는다 — 청구 상태가 주인이다.
 function tcalKskRowInfo(){
-  showToast('ℹ','정산 결제 좌석','정산 화면에서 그 청구를 취소·환불하면 좌석이 자동으로 풀립니다. 인원은 조 인원을 고치면 따라갑니다.');
+  showToast('ℹ','정산 결제 좌석','정산 화면에서 그 청구를 취소·환불하면 좌석이 자동으로 풀립니다. 인원은 옆의 「인원」 버튼으로 바꿉니다.');
 }
 window.tcalKskRowInfo = tcalKskRowInfo;
+// 🆕 2026-09-29 정산 좌석 인원 — 서버 RPC 가 조(kashikiri_teams)를 만들거나 고치고 좌석을 다시 맞춘다.
+//   정원을 넘으면 short(RESIZE_OVER_CAPACITY) 로 돌아오고 좌석은 그대로다.
+async function kskSeatPaxOpen(pid, cur){
+  if(!pid || !window.sb) return;
+  var v = prompt('정산 좌석 인원 (현재 ' + (parseInt(cur)||1) + '명)', String(parseInt(cur)||1));
+  if(v === null) return;
+  var n = parseInt(v, 10);
+  if(!(n >= 1 && n <= 50)){ showToast('⚠','인원 확인','1~50 사이 숫자로 적어 주세요'); return; }
+  try{
+    var r = await window.sb.rpc('taam_ksk_seat_set_pax', { p_purchase_id: pid, p_pax: n });
+    if(r.error){
+      var _m = String(r.error.message || '');
+      if(/Could not find the function|does not exist|42883/i.test(_m)) showToast('❌','SQL 미적용','taam_ksk_seat_set_pax 가 아직 없습니다 — 20260929_kashikiri_seat_pax.sql 실행 필요');
+      else showToast('❌','인원 변경 실패', _m.slice(0, 90));
+      return;
+    }
+    var d = r.data || {};
+    var _short = Array.isArray(d.short) ? d.short : [];
+    if(_short.length){
+      showToast('⚠','정원이 모자랍니다', _short.map(function(x){ return String(x.reason||'').slice(0, 70); }).join(' / ') + ' — 티켓 정원을 늘리고 다시');
+    } else {
+      showToast('✓','인원 변경', n + '명으로 맞췄습니다 (게스트 시트의 조 인원도 같이 바뀝니다)');
+    }
+    try { await tcalLoadPurchases(); } catch(_e){}
+    tcalRender(); if(_tcalSelectedDate) tcalRenderDetail(_tcalSelectedDate);
+    try { if (typeof renderTickets === 'function') renderTickets(); } catch(_rt){}
+  }catch(e){ showToast('❌','오류', String(e && e.message || e).slice(0, 80)); }
+}
+window.kskSeatPaxOpen = kskSeatPaxOpen;
 // 🆕 2026-09-29 캘린더의 매장 이름을 누르면 회원 화면(사진 캘린더)의 그 회차로 간다.
 //   _popGoTicket 이 어드민 화면·서브화면을 걷고 캘린더를 그 달로 옮긴 뒤 그 날을 연다. 판매 티켓이 하나면 상세까지 연다.
 //   ⚠ closeSubPage('ticketCalScreen') 은 쓰지 않는다 — 대시보드가 z 635 로 다시 올라와 회원 상세(z 560)를 덮는다.
@@ -59792,7 +59822,9 @@ function tcalRenderDetail(dateStr) {
                   : ((_isMan||_isHold) && (isSuper || _currentRole==='admin') ? '<span onclick="tcalCancelLinkedRow(\''+e.pid+'\')" style="cursor:pointer;color:#c33;font-size:17px;font-weight:700;line-height:1;padding:2px 4px;">×</span>' : '')));
           // 🆕 2026.08-29: 인원 변경 — 실제 결제 건에만. 수동(MAN-)·초대홀드(INVH-)는
           //   결제가 없어 돈을 계산할 게 없다. 그건 ×(취소)로 지우는 게 맞다.
-          var pxBtn = (!_isMan && !_isHold && !_isKsk && e.pid && (e.pax||0) > 1 && (isSuper || _currentRole==='admin'))
+          var pxBtn = (_isKsk && e.pid && (isSuper || _currentRole==='admin'))
+            ? '<span onclick="kskSeatPaxOpen(\''+String(e.pid).replace(/'/g,"\\'")+'\','+(parseInt(e.pax)||1)+')" title="정산 좌석 인원 — 조 인원을 고쳐 좌석을 맞춥니다" style="cursor:pointer;color:#8A5A1E;font-size:11px;font-weight:800;border:1px solid #EEDCBB;background:#FBF2E0;border-radius:6px;padding:2px 6px;">인원</span>'
+            : (!_isMan && !_isHold && !_isKsk && e.pid && (e.pax||0) > 1 && (isSuper || _currentRole==='admin'))
             ? '<span onclick="paxChangeOpen(\''+String(e.pid).replace(/'/g,"\\'")+'\')" title="인원 변경" style="cursor:pointer;color:#8A5A1E;font-size:11px;font-weight:800;border:1px solid #EEDCBB;background:#FBF2E0;border-radius:6px;padding:2px 6px;">인원</span>'
             : '';
           // 🆕 2026-09-28 수동 예약 손님 알림톡 — 번호가 있는 MAN- 행에만.
