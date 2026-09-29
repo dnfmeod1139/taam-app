@@ -154,6 +154,17 @@ DB 값은 `'A'` 그대로고 **이름만** 「게스트 회원」이다. 값을 
 
 `membership_tier='M'` 인데 만료됐거나 만료일이 없으면 **`T` 로 내려앉힌다**(null 아님).
 
+### 링크 초대 — 비회원·해외 손님을 티켓 회차에 태우는 길 (2026-09-29)
+
+초대 화면의 「🔗 링크 초대」. 이름·번호·통화(₩/¥/$)·환율만 적으면 `taam_link_invite_create` 가
+① `tickets` 에 `LINK-` 홀드(좌석 즉시 차감) ② 대관 정산 테이블에 회차·팀·청구(`link_invite=true`) ③ `/pay/?t=` 링크를 만든다.
+금액은 **서버가** `taam_ticket_price_krw`(식사비+대행비+주류)×인원 으로 센다 — 앱이 보낸 금액을 믿지 않는다.
+결제 승인(kashikiri-confirm → `paid`)이 되면 `trg_link_invite_on_charge` 가 홀드를 `active` 로 바꾸고, 링크가 끊기거나
+만료·환불되면 좌석을 푼다. 예치금·원장은 전혀 건드리지 않는다 — 카드 돈은 토스로 간다.
+취소 규정은 회원과 같다: `taam_link_invite_refund_quote`(30분 전액 · D-31 대행비 제외 · 그 뒤 0) → Edge `kashikiri-refund` 가
+통화별 MID 시크릿으로 토스 (부분)취소 → `taam_link_invite_mark_refunded`. 캘린더의 × 가 이 순서를 탄다.
+회귀: `bash sql/_test/t_link_invite.sh`. 옛 회원 초대(예치금)는 `riPay` 그대로다 — 갈래를 섞지 말 것.
+
 ### 방문일의 연도는 두 군데가 읽는다 — 둘 다 세 토막을 받아야 한다 (2026-09-21)
 
 티켓의 `date` 는 보통 `MM.DD` + `dateYear` 지만, `YYYY.MM.DD` 로 들어온 행도 있다.
