@@ -38,6 +38,21 @@ begin
   if coalesce(new.purchase_id, '') like 'MAN-%'  then return new; end if;
   if coalesce(new.purchase_id, '') like 'INV-%'  then return new; end if;
   if coalesce(new.purchase_id, '') like 'INVH-%' then return new; end if;
+  -- 🆕 2026-09-29 어드민이 만든 좌석 — 정산 결제(KSK-)·링크 초대(LINK-). 회원 등급이 아니라 어드민의 결정이다.
+  --   KSK- 는 Edge(service_role) 경로에서 auth.uid() 없이 들어오므로 아래 슈퍼어드민 면제로는 못 걸러진다.
+  --   ⚠ 접두어만 보고 면제하면 회원이 자기 홀드에 'KSK-…' 라고 적어 등급 검사를 피한다 (리뷰 지적).
+  --     그래서 **증명**이 있을 때만 면제한다: ① _taam_ksk_seat_sync 가 세운 트랜잭션 플래그, 또는
+  --     ② extra_data.chargeId 가 가리키는 정산 청구가 실제로 있다 (회원은 kashikiri_charges 를 못 만든다).
+  --     증명이 없으면 회원 구매와 똑같이 아래 검사를 받는다.
+  if coalesce(new.purchase_id, '') like 'KSK-%' or coalesce(new.purchase_id, '') like 'LINK-%' then
+    if coalesce(current_setting('taam.seat_engine_bypass', true), '') = '1'
+       or exists (select 1 from public.kashikiri_charges c
+                   where c.id::text = coalesce(new.extra_data->>'chargeId', '')
+                     and ((new.purchase_id like 'LINK-%' and coalesce(c.link_invite, false))
+                       or (new.purchase_id like 'KSK-%' and not coalesce(c.link_invite, false) and c.status = 'paid'))) then
+      return new;
+    end if;
+  end if;
   if coalesce(new.status, '') in ('cancelled','canceled') then return new; end if;
 
   -- 슈퍼어드민만 면제. 운영·검수에서 모든 티켓을 열어봐야 한다.

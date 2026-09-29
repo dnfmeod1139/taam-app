@@ -110,6 +110,14 @@ begin
       using errcode = 'P0001';
   end if;
 
+  -- 🆕 2026-09-29 정산 결제 좌석(KSK-) — 총 정원(①)만 본다. 1인 한도·허용 인원·조각 차단·고정 슬롯은
+  --   회원 자가 구매를 다듬는 규칙이라, 어드민이 매장과 직접 잡은 자리에는 적용하지 않는다.
+  --   플래그는 _taam_ksk_seat_sync 만 세우고, 트랜잭션 안에서만 산다. (라이브 반영: 20260929_kashikiri_seat_sync3.sql)
+  if coalesce(current_setting('taam.seat_engine_bypass', true), '') = '1'
+     and coalesce(new.purchase_id, '') like 'KSK-%' then
+    return new;
+  end if;
+
   -- ②-A 🆕 자유 구성(flex): 좌석 엔진 v3
   if (v_slots->>'mode') = 'flex' then
     v_cap := coalesce(v_cap, 0);

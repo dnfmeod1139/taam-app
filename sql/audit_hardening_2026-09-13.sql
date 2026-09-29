@@ -290,11 +290,16 @@ begin
     raise exception '남의 이름으로 예약을 넣을 수 없습니다' using errcode = '42501';
   end if;
 
+  v_role := public._taam_uid_role();
   if new.status = 'hold' then
+    -- 🆕 2026-09-29 회원의 홀드는 PAYH- 뿐이다. 다른 접두어(MAN-·INV-·INVH-·KSK-·LINK-)는 서버·어드민 몫이라
+    --   회원이 흉내 내면 등급 가드 면제를 타거나(접두어 면제) 5분 스윕에 안 잡히는 영구 홀드가 된다.
+    if v_role <> 'admin' and coalesce(new.purchase_id, '') not like 'PAYH-%' then
+      raise exception 'HOLD_PREFIX: 회원 좌석 홀드는 PAYH- 로만 만들 수 있습니다' using errcode = '42501';
+    end if;
     return new;                               -- 좌석 홀드(5분) — 확정은 서버가 한다
   end if;
 
-  v_role := public._taam_uid_role();
   if new.status = 'manual' and v_role = 'admin' then
     return new;                               -- 매장 어드민의 수동 연동 행(MAN-)
   end if;

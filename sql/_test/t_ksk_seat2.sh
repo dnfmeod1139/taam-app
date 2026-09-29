@@ -41,10 +41,13 @@ insert into public.ticket_products(id,rest_id,rest_name,date,time,total_pax,slot
   values ('tp1','$REST','타키야','03.20','20:30',4,'{"mode":"flex","allowed":[1,2],"solo":1,"strict":false}',550000,100000,250000,'Standard','M');
 SQL
 # 실제 정원 트리거 v3 (파일 통째로) + 티어 가드 원본(함수 블록만) + 트리거 바인딩
-$P -f sql/ticket_capacity_guard.sql >/dev/null 2>&1
-S=$(grep -n "create or replace function public.taam_guard_ticket_tier" sql/general_open_to_guest.sql | head -1 | cut -d: -f1)
-E=$(awk -v s=$S 'NR>s && /^\$tier\$;/ {print NR; exit}' sql/general_open_to_guest.sql)
-sed -n "${S},${E}p" sql/general_open_to_guest.sql | $P >/dev/null 2>&1
+# ⚠ 라이브에 2차가 들어가기 **전** 판을 재현해야 md5 교체 경로가 검증된다. 저장소 원본은 4차 때 같은 규칙을 넣어 바뀌었으므로
+#   그 전 커밋(2b56a8f · 2026-09-29 오전)의 파일을 git 에서 꺼내 쓴다.
+git show 2b56a8f:sql/ticket_capacity_guard.sql | $P >/dev/null 2>&1
+git show 2b56a8f:sql/general_open_to_guest.sql > /tmp/_tier_orig.sql
+S=$(grep -n "create or replace function public.taam_guard_ticket_tier" /tmp/_tier_orig.sql | head -1 | cut -d: -f1)
+E=$(awk -v s=$S 'NR>s && /^\$tier\$;/ {print NR; exit}' /tmp/_tier_orig.sql)
+sed -n "${S},${E}p" /tmp/_tier_orig.sql | $P >/dev/null 2>&1
 $P -c "create trigger trg_taam_guard_ticket_tier before insert on public.tickets for each row execute function public.taam_guard_ticket_tier();" >/dev/null
 FAIL=0
 ok(){ if [ "$2" = "$3" ]; then echo "✅ $1"; else echo "❌ $1  (기대 $2, 실제 $3)"; FAIL=1; fi; }
@@ -139,5 +142,67 @@ C4=c1000000-0000-4000-8000-000000000004
 $P -c "insert into public.kashikiri_charges(id, event_id, team_id, label, amount_krw, status, payer_name) values ('$C4','$EV',null,'Fourth',900000,'pending','Fourth')" >/dev/null
 $P -c "$EDGE update public.kashikiri_charges set status='paid', approved_at=now() where id='$C4'" >/dev/null
 ok "KSK 1인 → 1인 한도 우회해 좌석 생성" "1" "$($P -c "select count(*) from public.tickets where extra_data->>'chargeId'='$C4' and status='active'")"
-[ $FAIL = 0 ] && echo "=== 3차 포함 전부 통과 ===" || echo "=== 실패 있음 ==="
+echo "── 10. 4차: 잠금→읽기 · 인원 늘림 정원 검사 · 접두어 위조 차단 · 리마인드 제외"
+# 픽스처 보강: INSERT 가드(invoker) + 회원 role · notifications · 리마인드 헬퍼 · tp2(등급 제한 없음·정원 없음)
+$P <<SQL >/dev/null 2>&1
+create or replace function public._taam_uid_role() returns text language sql stable as \$\$ select coalesce(current_setting('taam.role', true),'') \$\$;
+do \$\$ begin if not exists (select 1 from pg_roles where rolname='authenticated') then create role authenticated; end if; end \$\$;
+grant usage on schema public, auth to authenticated;
+grant all on all tables in schema public to authenticated;
+grant execute on all functions in schema public to authenticated;
+grant execute on all functions in schema auth to authenticated;
+create table public.notifications(id uuid primary key default gen_random_uuid(), user_id uuid, type text, title text, body text, url text, payload jsonb, seen boolean default false, created_at timestamptz default now());
+insert into public.ticket_products(id,rest_id,rest_name,date,time,total_pax,slots,meal_fee,agency_fee,wine_min,type_class,min_tier)
+  values ('tp2','$REST','리마인드매장','03.21','19:00',null,null,100000,0,0,'Standard','');
+alter table public.profiles add column notif_prefs jsonb not null default '{}'::jsonb;
+SQL
+S0=$(grep -n "create or replace function public.taam_visit_date" sql/visit_reminder.sql | cut -d: -f1); E0=$(grep -n "create or replace function public.taam_visit_reminder_notify" sql/visit_reminder.sql | cut -d: -f1)
+sed -n "${S0},$((E0-1))p" sql/visit_reminder.sql | $P >/dev/null 2>&1
+S1=$(grep -n "create or replace function public.taam_guard_ticket_insert" sql/audit_hardening_2026-09-13.sql | cut -d: -f1); E1=$(awk -v s=$S1 'NR>s && /^\$\$;/ {print NR; exit}' sql/audit_hardening_2026-09-13.sql)
+sed -n "${S1},${E1}p" sql/audit_hardening_2026-09-13.sql | $P >/dev/null 2>&1
+$P -c "create trigger trg_taam_guard_ticket_insert before insert on public.tickets for each row execute function public.taam_guard_ticket_insert();" >/dev/null
+out=$($P -f supabase/migrations/20260929_kashikiri_seat_sync4.sql 2>&1)
+ok "4차 오류 없음 · 표 ✅ 6 ❌ 0" "|6|0" "$(echo "$out" | grep -E "^ERROR" | head -1)|$(echo "$out" | grep -c '✅')|$(echo "$out" | grep -c '❌')"
+
+echo "   ── 10a. 인원 늘림: 조 pax 로 좌석을 늘릴 때 총 정원을 넘으면 short (현재 정원 9 · 팔린 좌석 $($P -c "select coalesce(sum(party_size),0) from public.tickets where ticket_product_id='tp1' and coalesce(status,'')<>'cancelled'"))"
+TB=f1000000-0000-4000-8000-00000000000b
+$P -c "insert into public.kashikiri_teams(id, event_id, seq, host_label, pax) values ('$TB','$EV',2,'F様',2); update public.kashikiri_charges set team_id='$TB' where id='$C4'" >/dev/null
+r=$($P -c "$SUP select (public.taam_kashikiri_link_ticket('$EV','tp1'))::text" 2>&1)
+ok "조 2명으로 늘림 (resized 1 · Fourth 2명)" "1|2" "$(echo "$r" | grep -c '"resized" : 1')|$($P -c "select party_size from public.tickets where extra_data->>'chargeId'='$C4' and status='active'")"
+r=$($P -c "$EDGE update public.kashikiri_teams set pax=5 where id='$TB'" 2>&1)
+ok "조 5명 → 정원 초과: WARNING 1 · 2명 유지" "1|2" "$(echo "$r" | grep -c 'RESIZE_OVER_CAPACITY')|$($P -c "select party_size from public.tickets where extra_data->>'chargeId'='$C4' and status='active'")"
+sold=$($P -c "select coalesce(sum(party_size),0) from public.tickets where ticket_product_id='tp1' and coalesce(status,'')<>'cancelled'")
+fit=$((9 - sold + 2))
+$P -c "$EDGE update public.kashikiri_teams set pax=$fit where id='$TB'" >/dev/null
+ok "딱 맞는 인원($fit)으로 → 늘어남" "$fit" "$($P -c "select party_size from public.tickets where extra_data->>'chargeId'='$C4' and status='active'")"
+
+echo "   ── 10b. 접두어 위조: 회원이 'KSK-' 홀드로 등급 가드를 피하지 못한다"
+$P -c "update public.ticket_products set total_pax=20 where id='tp1'" >/dev/null   # 10a 뒤 정원이 꽉 차 있어 정원 트리거(이름순 먼저)가 먼저 막는다 — 정원을 열어 둔다
+MEMQ="set role authenticated; select set_config('taam.uid','$MB',false); select set_config('taam.super','',false); select set_config('taam.role','user',false);"
+r=$($P -c "$MEMQ insert into public.tickets(user_id,restaurant_id,ticket_product_id,party_size,price,status,purchase_id) values ('$MB','$REST','tp1',2,1800000,'hold','KSK-forged-1')" 2>&1)
+ok "회원 홀드 'KSK-…' → HOLD_PREFIX" "1" "$(echo "$r" | grep -c HOLD_PREFIX)"
+r=$($P -c "$MEMQ insert into public.tickets(user_id,restaurant_id,ticket_product_id,party_size,price,status,purchase_id) values ('$MB','$REST','tp1',2,1800000,'hold','MAN-forged-1')" 2>&1)
+ok "회원 홀드 'MAN-…' → HOLD_PREFIX (옛 구멍도 막힘)" "1" "$(echo "$r" | grep -c HOLD_PREFIX)"
+r=$($P -c "$MEMQ insert into public.tickets(user_id,restaurant_id,ticket_product_id,party_size,price,status,purchase_id) values ('$MB','$REST','tp1',2,1800000,'hold','PAYH-ok-1')" 2>&1)
+ok "회원 PAYH- 홀드는 INSERT 가드를 지나 티어 가드에서 M 전용 → TIER_BLOCKED" "1" "$(echo "$r" | grep -c TIER_BLOCKED)"
+r=$($P -c "select set_config('taam.uid','$MB',false); select set_config('taam.super','',false); insert into public.tickets(user_id,restaurant_id,ticket_product_id,party_size,price,status,purchase_id,extra_data) values ('$MB','$REST','tp1',2,1800000,'active','KSK-forged-2','{\"chargeId\":\"00000000-0000-0000-0000-000000000000\"}')" 2>&1)
+ok "서버 컨텍스트라도 증명 없는 'KSK-' → 티어 검사 그대로 (TIER_BLOCKED)" "1" "$(echo "$r" | grep -c TIER_BLOCKED)"
+r=$($P -c "select set_config('taam.uid','$AD',false); select set_config('taam.super','',false); select (public.taam_link_invite_create('tp2','Kim','+81 90 0000 0000',1,'JPY',9.1,'2027.03.21','19:00'))::text" 2>&1)
+ok "진짜 링크 초대(청구 증명)는 그대로 통과" "1" "$($P -c "select count(*) from public.tickets where purchase_id like 'LINK-%' and ticket_product_id='tp2' and status='hold'")"
+
+echo "   ── 10c. 리마인드: 어드민이 잡은 좌석은 빠지고, boolean 아닌 설정값에도 죽지 않는다"
+TMR="to_char((now() at time zone 'Asia/Seoul')::date + 1, 'YYYY.MM.DD')"
+$P <<SQL >/dev/null 2>&1
+update public.profiles set notif_prefs = '{"remind1": "yes", "remind3": 1}'::jsonb where id = '$MB';
+insert into public.tickets(user_id,restaurant_id,restaurant_name,ticket_product_id,party_size,price,status,purchase_id,reservation_date,visit_time,extra_data) values
+  ('$MB','$REST','리마인드매장','tp2',2,200000,'active','PAY-rem-1', $TMR, '19:00', '{}'),
+  ('$SU','$REST','리마인드매장','tp2',1,100000,'active','KSK-rem-1', $TMR, '19:00', '{"kashikiri":true}'),
+  ('$SU','$REST','리마인드매장','tp2',1,100000,'active','LINK-rem-1', $TMR, '19:00', '{"linkInvite":true}'),
+  ('$SU','$REST','리마인드매장','tp2',1,100000,'manual','MAN-rem-1', $TMR, '19:00', '{"manualEntry":true}');
+SQL
+r=$($P -c "select (public.taam_visit_reminder_notify())::text" 2>&1)
+ok "made 1 (회원 것만) · 오류 없음" "1|" "$(echo "$r" | grep -c '"made": 1')|$(echo "$r" | grep -E "^ERROR")"
+ok "알림 수신자는 회원 · 제목 「내일 방문 예정입니다」" "$MB|내일 방문 예정입니다" "$($P -c "select user_id||'|'||title from public.notifications where type='visit_reminder'")"
+
+[ $FAIL = 0 ] && echo "=== 4차 포함 전부 통과 ===" || echo "=== 실패 있음 ==="
 exit $FAIL

@@ -89,6 +89,12 @@ begin
      where t.user_id is not null
        -- 확정된 예약만. 'hold'(좌석 잡아둔 미결제)·'cancelled'·'expired' 는 제외한다.
        and lower(coalesce(t.status,'')) = 'active'
+       -- 🆕 2026-09-29 어드민이 잡은 좌석은 회원의 예약이 아니다 — 정산 결제(KSK-)·링크 초대(LINK-)·수동(MAN-) 행의
+       --   user_id 는 회차 작성자·어드민이라, 두면 어드민이 「내일 방문 예정입니다」를 남의 자리로 받는다.
+       and coalesce(t.purchase_id, '') not like 'KSK-%'
+       and coalesce(t.purchase_id, '') not like 'LINK-%'
+       and coalesce(t.purchase_id, '') not like 'MAN-%'
+       and not coalesce((t.extra_data ? 'kashikiri') or (t.extra_data ? 'linkInvite') or (t.extra_data ? 'manualEntry'), false)
   ), pick as (
     select * from due where d in (1, 3, 7)
   ), want as (
@@ -96,8 +102,11 @@ begin
     select k.*
       from pick k
       join public.profiles p on p.id = k.user_id
+     -- 🆕 2026-09-29 boolean 이 아닌 값이 하나라도 있으면 ::boolean 캐스트가 함수 전체를 죽여 그날 아무도 못 받았다.
+     --   boolean 일 때만 읽고, 아니면 기본값(3일·1일 켜짐)으로 본다.
      where coalesce(
-             (p.notif_prefs ->> ('remind' || k.d::text))::boolean,
+             case when jsonb_typeof(p.notif_prefs -> ('remind' || k.d::text)) = 'boolean'
+                  then (p.notif_prefs ->> ('remind' || k.d::text))::boolean else null end,
              k.d in (1, 3)
            ) is true
   ), ins as (
