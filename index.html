@@ -10665,6 +10665,11 @@ window.closePromoCarousel = function(){
     </div>
     <!-- 🆕 구매 알림 미리보기 (실제 구매 알림 문구 그대로 본인 기기로 발송) -->
     <div id="nsPurchasePreviewRow" style="padding:0 16px 10px;background:#faf8f5;border-bottom:1px solid rgba(0,0,0,.05);display:none;">
+      <div style="display:flex;gap:6px;margin-bottom:8px;">
+        <button type="button" onclick="pushTestRemind(7)" style="flex:1;padding:9px;border:1px solid #c8a96e;background:#fff;color:#5C0A14;border-radius:10px;font-family:var(--font-main);font-size:11px;font-weight:600;">🔔 7일 전 리마인드</button>
+        <button type="button" onclick="pushTestRemind(3)" style="flex:1;padding:9px;border:1px solid #c8a96e;background:#fff;color:#5C0A14;border-radius:10px;font-family:var(--font-main);font-size:11px;font-weight:600;">3일 전</button>
+        <button type="button" onclick="pushTestRemind(1)" style="flex:1;padding:9px;border:1px solid #c8a96e;background:#fff;color:#5C0A14;border-radius:10px;font-family:var(--font-main);font-size:11px;font-weight:600;">하루 전</button>
+      </div>
       <button type="button" onclick="pushTestPurchase()" style="width:100%;padding:9px;border:1px solid #c8a96e;background:#fff;color:#5C0A14;border-radius:10px;font-family:var(--font-main);font-size:11px;font-weight:600;cursor:pointer;">🎫 구매 알림 미리보기 (실제 문구 그대로)</button>
       <button type="button" onclick="pushClearBadge()" style="width:100%;margin-top:8px;padding:9px;border:1px solid #ddd;background:#fff;color:#555;border-radius:10px;font-family:var(--font-main);font-size:11px;font-weight:600;cursor:pointer;">🔴 아이콘 배지 지우기 (내 기기)</button>
       <button type="button" onclick="pushBadgeTest()" style="width:100%;margin-top:6px;padding:9px;border:1px solid #ddd;background:#fff;color:#555;border-radius:10px;font-family:var(--font-main);font-size:11px;font-weight:600;cursor:pointer;">🔢 배지 5로 (닿는지 확인)</button>
@@ -17441,6 +17446,8 @@ async function renderNotificationsList(){
         case 'member_joined':      return { label:'NEW MEMBER',   color:'#3F6B45' };
         case 'member_left':        return { label:'WITHDRAWN',    color:'#7A6A5C' };
         case 'pax_change':         return { label:'PAX CHANGE',   color:'#8A5A1E' };
+        case 'visit_reminder':     return { label:'REMINDER',     color:'#1E7A46' };   // 🆕 2026-09-29
+        case 'ticket_restock':     return { label:'RESTOCK',      color:'#B45309' };   // 🆕 2026-09-29 취소표
         default:                   return { label:'NOTICE',       color:'#888' };
       }
     }
@@ -18317,7 +18324,10 @@ async function loadPurchase(){
 
     // tickets 테이블 행을 purchaseHistory 형식으로 변환
     // 🆕 2026.08: 운영용 행(초대 좌석 홀드 INVH- / 캘린더 수동 연동 MAN-)은 개인 구매내역에서 제외
-    purchaseHistory = (rows || []).filter(r => !(r.extra_data && (r.extra_data.inviteHold || r.extra_data.manualEntry))).map(r => ({
+    // 🔧 2026-09-29 정산 결제 좌석(KSK-)·링크 초대(LINK-)도 운영용 행이다 — user_id 가 회차 작성자(어드민)라 두면
+    //   어드민의 「내 티켓」에 남의 자리가 취소·환불 버튼과 함께 떴다 (리뷰 지적).
+    purchaseHistory = (rows || []).filter(r => !(r.extra_data && (r.extra_data.inviteHold || r.extra_data.manualEntry || r.extra_data.kashikiri || r.extra_data.linkInvite))
+                                          && !/^(KSK|LINK)-/.test(String(r.purchase_id || ''))).map(r => ({
       id: r.ticket_product_id || '',
       restId: r.restaurant_id || '',
       rest: r.restaurant_name || '',
@@ -29968,7 +29978,7 @@ async function _dmLoadSupabasePurchases(){
         status: t.status || 'active',
         buyerPhone: p.phone || '',
         // 🆕 2026.08: 수동 연동/초대 홀드 행은 입력된 예약자명 우선 (user_id=관리자라 프로필명 오표시 방지)
-        buyerName: ((t.extra_data && (t.extra_data.manualEntry || t.extra_data.inviteHold)) ? (t.buyer_name || '') : '') || p.display_name || p.email || '',
+        buyerName: ((t.extra_data && (t.extra_data.manualEntry || t.extra_data.inviteHold || t.extra_data.kashikiri || t.extra_data.linkInvite)) ? (t.buyer_name || '') : '') || p.display_name || p.email || '',   // 🔧 2026-09-29 정산·링크 행은 결제자 이름
         buyerEmail: p.email || '',
         purchaseId: t.purchase_id,
         ticket_type: t.ticket_type,
@@ -34712,9 +34722,15 @@ async function kskOpenEvent(id){
     // 🆕 2026-09-29 이 회차의 정산 결제가 잡은 좌석 (KSK- 행). 못 읽어도 화면은 그린다.
     var seats = [];
     try {
-      var sq = await window.sb.from('tickets').select('id, party_size, status, purchase_id, buyer_name, extra_data')
-        .like('purchase_id', 'KSK-%').eq('extra_data->>eventId', String(id)).neq('status', 'cancelled');
-      if(!sq.error) seats = sq.data || [];
+      // 🔧 2026-09-29 매장 어드민은 RLS 로 슈퍼어드민 소유 KSK- 행을 못 봐 「좌석 0석」이 거짓으로 떴다 → definer RPC.
+      //   RPC 가 없으면(SQL 미적용) 종전대로 직접 읽는다.
+      var rq = await window.sb.rpc('taam_ksk_seat_rows', { p_event_id: id });
+      if(!rq.error && Array.isArray(rq.data)) seats = rq.data;
+      else {
+        var sq = await window.sb.from('tickets').select('id, party_size, status, purchase_id, buyer_name, extra_data')
+          .like('purchase_id', 'KSK-%').eq('extra_data->>eventId', String(id)).neq('status', 'cancelled');
+        if(!sq.error) seats = sq.data || [];
+      }
     } catch(_se){}
     _kskCur = { ev: ev.data, teams: tm.data || [], charges: ch.data || [], guests: gs.data || [], seats: seats };
     _kskRenderEvent();
@@ -34767,7 +34783,8 @@ function _kskRenderEvent(){
      +   '<div class="ksk-acts">'
      +     '<button class="ksk-btn ghost sm" onclick="kskEditEvent()">정산 정보 수정</button>'
      +     '<button class="ksk-btn ghost sm" onclick="kskSheetLink()">게스트 시트 링크</button>'
-     +     (e.ticket_product_id ? '' : '<button class="ksk-btn ghost sm" onclick="kskLinkTicket()">티켓 연결</button>')
+     +     (e.ticket_product_id ? '<button class="ksk-btn ghost sm" onclick="kskLinkTicket()" title="다른 티켓으로 바꾸거나, 정원을 늘린 뒤 좌석을 다시 맞춥니다">티켓 연결 · 좌석 다시 맞추기</button>'
+                                : '<button class="ksk-btn ghost sm" onclick="kskLinkTicket()">티켓 연결</button>')
      +   '</div>'
      + '</div>';
 
@@ -43507,7 +43524,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.29-e';
+var TAAM_WEB_BUILD = '2026.09.29-f';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -58794,7 +58811,7 @@ function _tcalDayGroups(dateKey){
   var groups = {};
   function gr(restId, restName){
     restId = String(restId||'');
-    if(!groups[restId]) groups[restId] = {restId:restId, restName:'', time:'', capacity:null, entries:[]};
+    if(!groups[restId]) groups[restId] = {restId:restId, restName:'', time:'', capacity:null, entries:[], tids:[]};   // 🆕 2026-09-29 tids: 이 날 이 매장의 판매 티켓 id
     if(restName && !groups[restId].restName) groups[restId].restName = restName;
     return groups[restId];
   }
@@ -58803,6 +58820,7 @@ function _tcalDayGroups(dateKey){
     if(t.status==='hidden' || t.status==='pending') return;
     if(_tcalDateKey((typeof _tkFullDate==='function')?_tkFullDate(t):t.date) !== dateKey) return;   // 🆕 연도 포함 매핑
     var g = gr(t.restId, _tcalRestName(t.restId));
+    if(g.tids.indexOf(String(t.id)) < 0) g.tids.push(String(t.id));
     var seats = parseInt(t.assignedPax || t.totalPax || 0) || 0;
     if(g.capacity == null && seats > 0) g.capacity = seats;
     if(!g.time && t.time) g.time = t.time;
@@ -59431,6 +59449,31 @@ function tcalKskRowInfo(){
   showToast('ℹ','정산 결제 좌석','정산 화면에서 그 청구를 취소·환불하면 좌석이 자동으로 풀립니다. 인원은 조 인원을 고치면 따라갑니다.');
 }
 window.tcalKskRowInfo = tcalKskRowInfo;
+// 🆕 2026-09-29 캘린더의 매장 이름을 누르면 회원 화면(사진 캘린더)의 그 회차로 간다.
+//   _popGoTicket 이 어드민 화면·서브화면을 걷고 캘린더를 그 달로 옮긴 뒤 그 날을 연다. 판매 티켓이 하나면 상세까지 연다.
+//   ⚠ closeSubPage('ticketCalScreen') 은 쓰지 않는다 — 대시보드가 z 635 로 다시 올라와 회원 상세(z 560)를 덮는다.
+function tcalGoMemberTicket(restId, dateStr){
+  try{
+    var full = _tcalYear + '.' + String(dateStr || _tcalSelectedDate || '');
+    var cands = (window.ticketDB || []).filter(function(t){
+      return String(t.restId) === String(restId) && t.status !== 'pending' && t.status !== 'deleteRequest'
+          && typeof _riSameDay === 'function' && _riSameDay(_tkFullDate(t), full);
+    });
+    if(!cands.length){ showToast('⚠','연결된 판매 티켓 없음','이 날은 수동·초대·대관 일정만 있어요'); return; }
+    var t = cands[0];
+    window._acFromMy = false;
+    _popGoTicket(t);
+    var gnb = document.getElementById('mainGnb'); if(gnb) gnb.style.display = 'flex';
+    try{
+      document.querySelectorAll('.gnb-btn').forEach(function(b){ b.classList.remove('active'); });
+      var hb = document.getElementById('gnbHome'); if(hb) hb.classList.add('active');
+    }catch(_g){}
+    if(cands.length === 1 && typeof pcalGoTicket === 'function'){
+      setTimeout(function(){ try{ pcalGoTicket(String(t.id)); }catch(_e){} }, 480);   // 점심·저녁 둘이면 그 날 목록에서 고르게 둔다
+    }
+  }catch(e){ console.warn('[tcal] 회원 화면 이동 실패', e); showToast('❌','이동 실패', String(e && e.message || e).slice(0, 80)); }
+}
+window.tcalGoMemberTicket = tcalGoMemberTicket;
 async function tcalCancelLinkedRow(pid){
   if(!pid || !window.sb) return;
   var _kind = pid.indexOf('INVH-')===0 ? '초대 좌석 홀드' : '수동 예약(좌석 연동)';
@@ -59638,7 +59681,7 @@ function tcalRenderDetail(dateStr) {
     // 헤더: 매장명 / 시간 / 정원·잔여
     html += '<div style="padding:15px 16px 12px;border-bottom:1px solid #f0ece1;">'
       + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">'
-      +   '<div style="min-width:0;"><div style="font-size:17px;font-weight:800;color:#1a1a18;word-break:keep-all;">' + g.restName + '</div>'
+      +   '<div style="min-width:0;"><div onclick="tcalGoMemberTicket(\'' + String(g.restId).replace(/'/g, "\\'") + '\',\'' + String(dateStr).replace(/'/g, "\\'") + '\')" title="회원 화면의 이 회차로 이동" style="font-size:17px;font-weight:800;color:#1a1a18;word-break:keep-all;cursor:pointer;text-decoration:underline;text-decoration-color:#d8cdb8;text-underline-offset:3px;">' + _raEsc(g.restName) + ' <span style="font-size:13px;color:#b5afa2;">›</span></div>'
       +     '<div style="font-size:12px;color:#9A9486;margin-top:2px;">시간 ' + (g.time || '—') + '</div></div>'
       +   '<div style="text-align:right;flex-shrink:0;"><div style="font-size:10.5px;color:#9A9486;">정원 ' + (g.capacity!=null?g.capacity:'-') + ' · 예약 ' + booked + '</div>'
       +     (remain!=null ? '<div style="font-size:22px;font-weight:900;color:'+(remain===0?'#B23A2E':'#1E9E5A')+';line-height:1.1;">잔여 '+remain+'</div>' : '<div style="font-size:11px;color:#c9c4ba;margin-top:3px;">정원 미설정</div>')
@@ -64691,6 +64734,29 @@ window.pushBadgeTest = async function(){
 };
 
 // 🆕 구매 알림 미리보기 — 실제 구매 알림과 동일한 문구를 본인 기기로 발송 (슈퍼어드민 화면 확인용)
+// 🆕 2026-09-29 방문 리마인드 미리보기 — sql/visit_reminder.sql · notify-visit-reminder 가 만드는 문구 그대로 본인 기기로.
+//   category 를 remindN 으로 보내므로 본인의 알림 설정(remind7/3/1)도 실제와 같이 적용된다 — 꺼 두었으면 안 온다.
+window.pushTestRemind = async function(days){
+  if(typeof pushSend !== 'function'){ alert('pushSend 함수 미정의'); return; }
+  var d = parseInt(days) || 1, rest = '스시 사이토', vtime = '18:00';
+  var title = d === 1 ? '내일 방문 예정입니다' : (d === 3 ? '3일 뒤 방문 예정입니다' : ('방문 ' + d + '일 전입니다'));
+  var body  = rest + ' · ' + vtime + (d === 1 ? ' 예약이 내일입니다.' : (' 예약이 ' + d + '일 남았습니다.'));
+  var i18n = {
+    ko: { title: title, body: body },
+    en: { title: d === 1 ? 'Your reservation is tomorrow' : ('Your reservation is in ' + d + ' days'),
+          body: rest + ' · ' + vtime + (d === 1 ? ' — see you tomorrow.' : (' — ' + d + ' days to go.')) },
+    ja: { title: d === 1 ? '明日ご来店の予定です' : ('ご来店' + d + '日前です'),
+          body: rest + ' · ' + vtime + (d === 1 ? ' のご予約は明日です。' : (' のご予約まであと' + d + '日です。')) }
+  };
+  var res = await pushSend('user', { title: title, body: body, i18n: i18n, url: '/', category: 'remind' + d, tag: 'visit-reminder-preview-' + d });
+  if(res && res.summary){
+    var msg = d + '일 전 리마인드 미리보기\n\n시도: ' + res.summary.attempted + '\n성공: ' + res.summary.ok + '\n실패: ' + res.summary.failed
+            + (res.summary.attempted === 0 ? '\n\n(0건이면 이 기기가 구독돼 있지 않거나, 알림 설정에서 ' + d + '일 전이 꺼져 있는 것입니다)' : '');
+    alert(msg);
+  } else {
+    alert('발송 결과를 받지 못했습니다: ' + JSON.stringify(res || {}).slice(0, 200));
+  }
+};
 window.pushTestPurchase = async function(){
   if(typeof pushSend !== 'function'){ alert('pushSend 함수 미정의'); return; }
   // 실제 completePurchase() 의 구매 알림과 동일한 형태(예시 데이터)
@@ -87277,9 +87343,12 @@ function collectNotifPrefsFromUI(){
 // 기존 nsSync/nsToggleAll 덮어쓰기 — 저장 로직 추가
 window.nsSync = function(){
   var items = document.querySelectorAll('.ns-item');
-  var allOn = Array.from(items).every(function(cb){ return cb.checked; });
+  // 🔧 2026-09-29 종전엔 「전부 켜져 있을 때만」 전체가 켜졌다. 7일 전 리마인드가 기본 꺼짐이 되자(09-28) 항목 하나만 건드려도
+  //   all=false 로 저장됐고, send-push 는 all=false 를 「이 회원에게 아무 푸시도 보내지 말라」로 읽어 3일·1일 리마인드까지 막혔다.
+  //   전체 스위치는 「하나라도 받는다」의 뜻이다 — 모든 항목을 껐을 때만 꺼진다.
+  var anyOn = Array.from(items).some(function(cb){ return cb.checked; });
   var allBox = document.getElementById('ns-all');
-  if(allBox) allBox.checked = allOn;
+  if(allBox) allBox.checked = anyOn;
   collectNotifPrefsFromUI();
 };
 window.nsToggleAll = function(master){
