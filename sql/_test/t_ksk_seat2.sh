@@ -243,5 +243,12 @@ live_before=$($P -c "select count(*) from public.tickets where purchase_id like 
 $P -c "delete from public.kashikiri_events where id='$EV'" >/dev/null
 ok "회차 삭제(전 $live_before 석) → 0석" "0" "$($P -c "select count(*) from public.tickets where purchase_id like 'KSK-%' and extra_data->>'eventId'='$EV' and coalesce(status,'')<>'cancelled'")"
 
-[ $FAIL = 0 ] && echo "=== 5차 포함 전부 통과 ===" || echo "=== 실패 있음 ==="
+echo "── 13. 6차: KSK- 행 price 0 (정산 금액은 정산 표가 갖는다)"
+out=$($P -f supabase/migrations/20260929_kashikiri_seat_sync6.sql 2>&1); ok "6차 오류 없음 · ✅ 2 ❌ 0" "|2|0" "$(echo "$out" | grep -E "^ERROR" | head -1)|$(echo "$out" | grep -c '✅')|$(echo "$out" | grep -c '❌')"
+C5=c1000000-0000-4000-8000-000000000005; EV5=e1000000-0000-4000-8000-000000000005
+$P -c "insert into public.kashikiri_events(id, venue_id, venue_name, event_date, event_time, total_pax, escort, status, created_by, ticket_product_id) values ('$EV5','$REST','타키야','2027-03-20','20:30',5,false,'open','$SU','tp1'); insert into public.kashikiri_charges(id, event_id, team_id, label, amount_krw, status, payer_name, pay_currency, pay_amount) values ('$C5','$EV5',null,'Fifth',2321555,'pending','Fifth','USD',1679.85)" >/dev/null
+$P -c "$EDGE update public.kashikiri_charges set status='paid', approved_at=now() where id='$C5'" >/dev/null
+ok "새 KSK 행 price 0 · payAmount 없음" "0|0" "$($P -c "select price from public.tickets where extra_data->>'chargeId'='$C5' and status='active'")|$($P -c "select count(*) from public.tickets where extra_data->>'chargeId'='$C5' and extra_data ? 'payAmount'")"
+
+[ $FAIL = 0 ] && echo "=== 6차 포함 전부 통과 ===" || echo "=== 실패 있음 ==="
 exit $FAIL

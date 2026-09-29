@@ -29989,17 +29989,31 @@ async function _dmLoadSupabasePurchases(){
       if(!s) return '';
       return String(s).slice(0,10).replace(/-/g, '.');
     }
+    // 🆕 2026-09-29 정산 결제 좌석(KSK-)의 실제 결제액은 좌석 행이 아니라 정산 청구(kashikiri_charges)에 있다.
+    //   좌석 행에는 금액을 싣지 않는다 — 정산 금액은 매장 어드민이 읽는 tickets 로 새면 안 된다. 슈퍼어드민만 정산 표를
+    //   읽을 수 있으니 읽히면 붙이고, 아니면 금액 없이 좌석만 본다. (종전엔 티켓 정가가 떠서 결제액과 달라 보였다)
+    var kskPayMap = {};
+    try {
+      var _cids = Array.from(new Set(tickets.filter(function(t){ return String(t.purchase_id||'').indexOf('KSK-')===0 && t.extra_data && t.extra_data.chargeId; })
+                                            .map(function(t){ return String(t.extra_data.chargeId); })));
+      if(_cids.length){
+        var cq = await window.sb.from('kashikiri_charges').select('id, amount_krw, pay_currency, pay_amount, status').in('id', _cids);
+        if(!cq.error) (cq.data || []).forEach(function(c){ kskPayMap[String(c.id)] = c; });
+      }
+    } catch(_kp){}
     return tickets.map(function(t){
       var p = profMap[t.user_id] || {};
+      var _isKskRow = String(t.purchase_id||'').indexOf('KSK-') === 0;
       var h = {
         id: t.ticket_product_id || t.id,
+        kskPay: (_isKskRow && t.extra_data && kskPayMap[String(t.extra_data.chargeId)]) || null,
         restId: t.restaurant_id,
         rest: t.restaurant_name,
         date: t.created_at,
         visitDate: _fmtVisitDate(t.reservation_date),
         visitTime: t.visit_time || '',
         pax: t.party_size || 1,
-        amt: t.price || 0,
+        amt: _isKskRow ? 0 : (t.price || 0),   // 정산 좌석은 티켓 금액이 아니다
         status: t.status || 'active',
         buyerPhone: p.phone || '',
         // 🆕 2026.08: 수동 연동/초대 홀드 행은 입력된 예약자명 우선 (user_id=관리자라 프로필명 오표시 방지)
@@ -43549,7 +43563,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.29-h';
+var TAAM_WEB_BUILD = '2026.09.29-i';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -58888,7 +58902,7 @@ function _tcalDayGroups(dateKey){
     var _mnRow = String(h.purchaseId||'').indexOf('MAN-') === 0
               || String(h.purchaseId||'').indexOf('KSK-') === 0        // 🆕 2026-09-29 정산 결제 좌석 — user_id 는 회차 작성자
               || !!(h.extra_data && h.extra_data.manualEntry);
-    gr(h.restId||h.restaurant_id, h.rest||h.restName||h.restaurant_name).entries.push({type:'app', pid:(h.purchaseId||''), name:(h.buyerName||''), uid:(_mnRow ? '' : (h._userId||'')), pax:(h.pax||1), amount:(parseInt(h.amt)||0), agency:0, time:(h.visitTime||''), bought:(h.date||h.created_at||''), ex:(h.extra_data||{}), gphone:(h.guestPhone||''), st:(h.status||'')});   // 🆕 2026-09-14 구매 일시
+    gr(h.restId||h.restaurant_id, h.rest||h.restName||h.restaurant_name).entries.push({type:'app', pid:(h.purchaseId||''), name:(h.buyerName||''), uid:(_mnRow ? '' : (h._userId||'')), pax:(h.pax||1), amount:(parseInt(h.amt)||0), agency:0, time:(h.visitTime||''), bought:(h.date||h.created_at||''), ex:(h.extra_data||{}), gphone:(h.guestPhone||''), st:(h.status||''), kskPay:(h.kskPay||null)});   // 🆕 2026-09-14 구매 일시
   });
   // 초대 결제
   (_tcalInvites||[]).forEach(function(inv){
@@ -59477,6 +59491,15 @@ function tcalKskRowInfo(){
   showToast('ℹ','정산 결제 좌석','정산 화면에서 그 청구를 취소·환불하면 좌석이 자동으로 풀립니다. 인원은 옆의 「인원」 버튼으로 바꿉니다.');
 }
 window.tcalKskRowInfo = tcalKskRowInfo;
+// 정산 결제액 표기 — 결제 통화 그대로 + 원화 환산. 링크 결제(외화)는 티켓 정가와 별개로 관리한다.
+function _kskFmtPay(c){
+  var krw = parseInt(c.amount_krw) || 0, cur = String(c.pay_currency || 'KRW').toUpperCase(), n = Number(c.pay_amount);
+  var krwS = '₩' + krw.toLocaleString();
+  if(cur === 'USD' && n > 0) return '$' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' · ' + krwS;
+  if(cur === 'JPY' && n > 0) return '¥' + Math.round(n).toLocaleString() + ' · ' + krwS;
+  return krwS;
+}
+window._kskFmtPay = _kskFmtPay;
 // 🆕 2026-09-29 정산 좌석 인원 — 서버 RPC 가 조(kashikiri_teams)를 만들거나 고치고 좌석을 다시 맞춘다.
 //   정원을 넘으면 short(RESIZE_OVER_CAPACITY) 로 돌아오고 좌석은 그대로다.
 async function kskSeatPaxOpen(pid, cur){
@@ -59815,7 +59838,11 @@ function tcalRenderDetail(dateStr) {
           var nmH = clickable
             ? '<span onclick="tcalShowInviteMember(\''+e.uid+'\')" style="font-weight:700;color:#1a1a18;cursor:pointer;text-decoration:underline;">'+nm+'</span>'
             : '<span style="font-weight:700;color:#1a1a18;">'+nm+'</span>';
-          var amt = (e.amount ? ('₩'+e.amount.toLocaleString()) : '') + (e.agency>0 ? ' <span style="color:#9A9486;font-weight:600;">(대행비 ₩'+e.agency.toLocaleString()+')</span>' : '');
+          var amt = _isKsk
+            ? (e.kskPay
+                ? (_kskFmtPay(e.kskPay) + ' <span style="color:#9A9486;font-weight:600;">(정산 결제' + (e.kskPay.status === 'paid' ? '' : ' · ' + e.kskPay.status) + ')</span>')
+                : '<span style="color:#b5afa2;font-weight:600;">정산 금액은 정산 화면에서</span>')
+            : (e.amount ? ('₩'+e.amount.toLocaleString()) : '') + (e.agency>0 ? ' <span style="color:#9A9486;font-weight:600;">(대행비 ₩'+e.agency.toLocaleString()+')</span>' : '');
           var del = (e.type==='manual') ? '<span onclick="tcalManualDelete(\''+e.mid+'\')" style="cursor:pointer;color:#c33;font-size:17px;font-weight:700;line-height:1;padding:2px 4px;">×</span>'
                   : (_isKsk ? '<span onclick="tcalKskRowInfo()" title="정산 화면에서 청구를 취소·환불하면 좌석이 자동으로 풀립니다" style="cursor:pointer;color:#9A9486;font-size:15px;font-weight:700;line-height:1;padding:2px 4px;">ⓘ</span>'
                   : (_isLink && (isSuper || _currentRole==='admin') ? '<span onclick="tcalCancelLinkRow(\''+e.pid+'\')" title="' + (_linkPaid ? '환불(규정 적용) · 좌석 취소' : '링크 끊기 · 좌석 취소') + '" style="cursor:pointer;color:#c33;font-size:17px;font-weight:700;line-height:1;padding:0 4px;">×</span>'
