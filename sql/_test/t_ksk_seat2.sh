@@ -129,5 +129,15 @@ $P -c "create or replace function public.enforce_ticket_capacity() returns trigg
 out=$($P -f supabase/migrations/20260929_kashikiri_seat_sync2.sql 2>&1)
 ok "정원 트리거 ❌ 건너뜀 + warning" "1|1" "$(echo "$out" | grep -c '④ 정원 트리거 KSK- 총 정원만|❌')|$(echo "$out" | grep -c 'WARNING.*정원 트리거')"
 
-[ $FAIL = 0 ] && echo "=== 전부 통과 ===" || echo "=== 실패 있음 ==="
+echo "── 9. 3차(라이브 판 + 우회) — 더미로 바뀐 정원 트리거 위에 얹어 KSK 는 1인 한도를 넘고 회원은 못 넘는지"
+out=$($P -f supabase/migrations/20260929_kashikiri_seat_sync3.sql 2>&1)
+ok "3차 확인 표 ✅ 2 · ❌ 0" "2|0" "$(echo "$out" | grep -c '✅')|$(echo "$out" | grep -c '❌')"
+$P -c "update public.ticket_products set total_pax=9, slots='{\"mode\":\"flex\",\"allowed\":[1,2],\"solo\":1,\"strict\":false}' where id='tp1'" >/dev/null
+r=$($P -c "$SUP insert into public.tickets(user_id,restaurant_id,ticket_product_id,party_size,price,status,purchase_id) values ('$SU','$REST','tp1',1,900000,'active','PAY-solo2')" 2>&1)
+ok "회원 1인 → SOLO_LIMIT (원 규칙 유지)" "1" "$(echo "$r" | grep -c SOLO_LIMIT)"
+C4=c1000000-0000-4000-8000-000000000004
+$P -c "insert into public.kashikiri_charges(id, event_id, team_id, label, amount_krw, status, payer_name) values ('$C4','$EV',null,'Fourth',900000,'pending','Fourth')" >/dev/null
+$P -c "$EDGE update public.kashikiri_charges set status='paid', approved_at=now() where id='$C4'" >/dev/null
+ok "KSK 1인 → 1인 한도 우회해 좌석 생성" "1" "$($P -c "select count(*) from public.tickets where extra_data->>'chargeId'='$C4' and status='active'")"
+[ $FAIL = 0 ] && echo "=== 3차 포함 전부 통과 ===" || echo "=== 실패 있음 ==="
 exit $FAIL
