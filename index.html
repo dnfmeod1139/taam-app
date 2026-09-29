@@ -30795,14 +30795,65 @@ async function mlOpen(uid){
 
   // ══════ 예치금 탭 ══════
   var pd = '';
+  // 🔧 2026-09-29 원장 줄 → 티켓. 종전엔 「슌지 티켓 2인 구매 · 09.10 15:24」만 보여
+  //   어느 일정(방문일)의 티켓인지 알 수 없었다. _ptxOf(티켓→원장) 와 같은 규칙을 거꾸로 탄다:
+  //   앱 구매는 metadata.purchase_id, 초대 결제는 metadata.invite_id 앞 8자가 INV- 뒤에 붙는다.
+  //   환불 줄(ticket_refund)도 같은 purchase_id 를 싣는다 — 한 함수로 둘 다 잇는다.
+  function _tkOfTx(r){
+    var m = r && r.metadata;
+    if(!m) return null;
+    var hit = null;
+    if(m.purchase_id){
+      hit = buys.filter(function(t){ return t.purchase_id === m.purchase_id; })[0] || null;
+    }
+    if(!hit && m.invite_id){
+      var pre = 'INV-' + String(m.invite_id).slice(0,8);
+      hit = buys.filter(function(t){ return String(t.purchase_id||'').indexOf(pre) === 0; })[0] || null;
+    }
+    return hit;
+  }
+  // 방문일 표기 — `YYYY.MM.DD` 도 `MM.DD` 도 받는다 (CLAUDE.md 「방문일의 연도는 두 군데가 읽는다」).
+  function _tkWhen(t){
+    var raw = String(t.reservation_date || '').trim();
+    if(!raw) return '';
+    var p = raw.split('.');
+    var out = raw;
+    if(p.length >= 3 && +p[0] > 1900){
+      var y = +p[0], mo = +p[1], d = +p[2];
+      var wd = ['일','월','화','수','목','금','토'][new Date(y, mo-1, d).getDay()];
+      out = y + '.' + String(mo).padStart(2,'0') + '.' + String(d).padStart(2,'0') + ' (' + wd + ')';
+    }
+    if(t.visit_time) out += ' ' + String(t.visit_time);
+    return out;
+  }
   function depRow(r, kind){
     var a = Math.abs(parseInt(r.amount)||0);
     var pos = (parseInt(r.amount)||0) >= 0;
     var pocket = (r.deposit_type === 'membership') ? '멤버십' : '일반';
+    var isTk = (r.change_type === 'ticket_purchase' || r.change_type === 'ticket_refund');
+    var tkOf = isTk ? _tkOfTx(r) : null;
+    // 어떤 일정의 티켓인가 — 매장 · 방문일(요일) 시간 · 인원. 티켓 행을 못 찾으면(옛 구매·수동 정정) 줄을 그리지 않는다.
+    var sched = '';
+    if(tkOf){
+      var bits = [];
+      if(tkOf.restaurant_name) bits.push(_pcalEsc(String(tkOf.restaurant_name)));
+      var when = _tkWhen(tkOf);
+      if(when) bits.push('방문 ' + _pcalEsc(when));
+      if(tkOf.party_size) bits.push(tkOf.party_size + '인');
+      if(bits.length){
+        sched = '<div style="font-size:12px;color:' + C.wine + ';margin-top:3px;line-height:1.4;">🎫 ' + bits.join(' · ') + '</div>';
+      }
+    } else if(isTk){
+      sched = '<div style="font-size:11px;color:' + C.faint + ';margin-top:3px;">티켓 행 없음 — 일정 미확인</div>';
+    }
+    // 🔧 2026-09-29 시각은 「언제 결제했나」라 굵고 진하게. 잔액은 옆에 흐리게.
     var body = '<div style="font-size:13.5px;font-weight:700;line-height:1.4;">'
       + _pcalEsc(String(r.description || kind)) + '</div>'
-      + '<div style="font-size:11px;color:' + C.faint + ';margin-top:2px;">' + _mlDate(r.created_at)
-      + (r.balance_after != null ? ' · 잔액 ' + W + n(r.balance_after) : '') + '</div>';
+      + sched
+      + '<div style="margin-top:4px;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">'
+      +   '<span style="font-size:12.5px;font-weight:700;color:' + C.ink + ';letter-spacing:.01em;">' + (isTk && pos ? '반환 ' : (isTk ? '결제 ' : '')) + _mlDate(r.created_at) + '</span>'
+      +   (r.balance_after != null ? '<span style="font-size:11px;color:' + C.faint + ';">잔액 ' + W + n(r.balance_after) + '</span>' : '')
+      + '</div>';
     var amt = '<div style="font-size:14.5px;font-weight:800;color:' + (pos ? C["in"] : C.out) + ';">'
       + (pos ? '+' : '−') + W + n(a) + '</div>'
       + '<div style="margin-top:2px;">' + tag(pocket,
@@ -43413,7 +43464,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.29-b';
+var TAAM_WEB_BUILD = '2026.09.29-c';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
