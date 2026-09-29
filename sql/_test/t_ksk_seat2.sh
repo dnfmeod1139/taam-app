@@ -222,5 +222,26 @@ ok "없는 좌석 → SEAT_NOT_FOUND" "1" "$(echo "$r" | grep -c 'SEAT_NOT_FOUND
 r=$($P -c "$EDGE select (public.taam_ksk_seat_set_pax('$PID3', 2))::text" 2>&1)
 ok "SQL Editor(postgres) 경로는 통과 → 2명" "2" "$($P -c "select party_size from public.tickets where purchase_id='$PID3'")"
 
+echo "── 12. 5차: 연결 권한(회차·티켓 둘 다) · 정가 · 날짜 갱신 · 삭제 정리"
+out=$($P -f supabase/migrations/20260929_kashikiri_seat_sync5.sql 2>&1); ok "5차 오류 없음 · ✅ 4 ❌ 0" "|4|0" "$(echo "$out" | grep -E "^ERROR" | head -1)|$(echo "$out" | grep -c '✅')|$(echo "$out" | grep -c '❌')"
+ok "기존 KSK 행 price 가 정가×인원으로 · payAmount 없음" "0|0" "$($P -c "select count(*) from public.tickets where purchase_id like 'KSK-%' and price <> coalesce(public.taam_ticket_price_krw(ticket_product_id, party_size),0)")|$($P -c "select count(*) from public.tickets where purchase_id like 'KSK-%' and extra_data ? 'payAmount'")"
+# 다른 매장의 회차를 내 티켓에 붙이기 → 거부
+REST2=b1000000-0000-4000-8000-000000000002; AD2=a1000000-0000-4000-8000-000000000022; EV2=e1000000-0000-4000-8000-000000000002
+$P -c "insert into auth.users values ('$AD2'); insert into public.profiles(id,role,membership_tier) values ('$AD2','admin',''); insert into public.admin_grants values ('$AD2','$REST',null); insert into public.kashikiri_events(id, venue_id, venue_name, event_date, event_time, total_pax, escort, status) values ('$EV2','$REST2','남의매장','2027-03-20','20:30',4,false,'open')" >/dev/null
+r=$($P -c "select set_config('taam.uid','$AD2',false); select set_config('taam.super','',false); select (public.taam_kashikiri_link_ticket('$EV2','tp1'))::text" 2>&1)
+ok "티켓 매장 권한만 있는 어드민이 남의 매장 회차 연결 → 42501" "1" "$(echo "$r" | grep -c '회차·티켓 둘 다')"
+r=$($P -c "$SUP select (public.taam_kashikiri_link_ticket('$EV2','tp1'))::text" 2>&1)
+ok "슈퍼어드민은 된다 (made 0 — 결제 청구 없음)" "1" "$(echo "$r" | grep -c '"made" : 0')"
+# 회차 시간 변경 → 좌석 행 갱신
+$P -c "update public.kashikiri_events set event_time='21:00' where id='$EV'" >/dev/null
+ok "회차 시간 21:00 → 살아 있는 KSK 행 visit_time 전부 21:00" "0" "$($P -c "select count(*) from public.tickets where purchase_id like 'KSK-%' and extra_data->>'eventId'='$EV' and coalesce(status,'')<>'cancelled' and visit_time <> '21:00'")"
+# 청구 삭제 → 좌석 취소
+$P -c "delete from public.kashikiri_charges where id='$C3'" >/dev/null
+ok "청구 삭제 → 그 좌석 cancelled" "0" "$($P -c "select count(*) from public.tickets where extra_data->>'chargeId'='$C3' and coalesce(status,'')<>'cancelled'")"
+# 회차 삭제 → 남은 좌석 전부 취소
+live_before=$($P -c "select count(*) from public.tickets where purchase_id like 'KSK-%' and extra_data->>'eventId'='$EV' and coalesce(status,'')<>'cancelled'")
+$P -c "delete from public.kashikiri_events where id='$EV'" >/dev/null
+ok "회차 삭제(전 $live_before 석) → 0석" "0" "$($P -c "select count(*) from public.tickets where purchase_id like 'KSK-%' and extra_data->>'eventId'='$EV' and coalesce(status,'')<>'cancelled'")"
+
 [ $FAIL = 0 ] && echo "=== 5차 포함 전부 통과 ===" || echo "=== 실패 있음 ==="
 exit $FAIL
