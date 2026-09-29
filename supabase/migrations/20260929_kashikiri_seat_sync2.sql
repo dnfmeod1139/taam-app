@@ -426,7 +426,8 @@ $$;
   end if;
 end $do$;
 
--- ── 확인 (한 표) — ❌ 가 한 줄도 없어야 정상. ❌ 가 있으면 그 함수의 pg_get_functiondef 를 보내 주세요 ──
+-- ── 확인 (한 표) — ❌ 가 한 줄도 없어야 정상. ⚠ 는 라이브 본문이 달라 건너뛴 것 — 그 함수의 pg_get_functiondef 를 보내 주세요
+--   (⚠ 로 두는 이유: CI 워크플로는 ❌ 를 실패로 보고 뒤 마이그레이션까지 전부 막는다 — 리뷰 지적. 건너뜀은 사람이 볼 일이지 CI 를 세울 일이 아니다) ──
 select '① 동기화 함수 2차 (short.kind)' as what,
        case when exists (select 1 from pg_proc where oid = to_regproc('public._taam_ksk_seat_sync') and prosrc like '%seat_engine_bypass%') then '✅' else '❌ 옛 판' end as result
 union all
@@ -435,11 +436,11 @@ select '② 청구 트리거가 예외를 삼킨다',
 union all
 select '③ 티어 가드 KSK-·LINK- 면제',
        case when exists (select 1 from pg_proc where oid = to_regproc('public.taam_guard_ticket_tier') and prosrc like '%KSK-%') then '✅'
-            else '❌ 건너뜀 — select pg_get_functiondef(''public.taam_guard_ticket_tier''::regproc) 결과를 보내 주세요' end
+            else '⚠ 건너뜀 — select pg_get_functiondef(''public.taam_guard_ticket_tier''::regproc) 결과를 보내 주세요' end
 union all
 select '④ 정원 트리거 KSK- 총 정원만',
        case when exists (select 1 from pg_proc where oid = to_regproc('public.enforce_ticket_capacity') and prosrc like '%taam.seat_engine_bypass%') then '✅'
-            else '❌ 건너뜀 — select pg_get_functiondef(''public.enforce_ticket_capacity''::regproc) 결과를 보내 주세요' end
+            else '⚠ 건너뜀 — select pg_get_functiondef(''public.enforce_ticket_capacity''::regproc) 결과를 보내 주세요' end
 union all
 select '⑤ 트리거 3종 존재',
        case when (select count(*) from pg_trigger where tgname in ('trg_ksk_seat_on_charge','trg_ksk_seat_on_team','trg_ksk_seat_on_event')) = 3 then '✅' else '❌' end;

@@ -130,7 +130,7 @@ ok "재실행: ❌ 0 · '이미' 2건" "0|2" "$(echo "$out" | grep -c '❌')|$(e
 echo "── 8. 라이브 본문이 다르면 건너뛰고 ❌ 로 알린다"
 $P -c "create or replace function public.enforce_ticket_capacity() returns trigger language plpgsql as \$\$ begin return new; end \$\$;" >/dev/null
 out=$($P -f supabase/migrations/20260929_kashikiri_seat_sync2.sql 2>&1)
-ok "정원 트리거 ❌ 건너뜀 + warning" "1|1" "$(echo "$out" | grep -c '④ 정원 트리거 KSK- 총 정원만|❌')|$(echo "$out" | grep -c 'WARNING.*정원 트리거')"
+ok "정원 트리거 ⚠ 건너뜀 + warning" "1|1" "$(echo "$out" | grep -c "④ 정원 트리거 KSK- 총 정원만|⚠")|$(echo "$out" | grep -c 'WARNING.*정원 트리거')"
 
 echo "── 9. 3차(라이브 판 + 우회) — 더미로 바뀐 정원 트리거 위에 얹어 KSK 는 1인 한도를 넘고 회원은 못 넘는지"
 out=$($P -f supabase/migrations/20260929_kashikiri_seat_sync3.sql 2>&1)
