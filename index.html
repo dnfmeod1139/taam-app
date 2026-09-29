@@ -34659,11 +34659,31 @@ function kskLinkTicket(){
     if(!v.ticket) return '티켓을 골라주세요';
     var t = _kskTk(v.ticket);
     if(!t) return '티켓을 찾을 수 없습니다';
-    var r = await window.sb.from('kashikiri_events')
-      .update({ ticket_product_id: String(t.id), venue_id: String(t.restId) }).eq('id', e.id);
-    if(r.error) throw r.error;
+    // 🔧 2026-09-29 연결은 서버 RPC 가 한다 — 연결과 동시에 paid 청구마다 KSK- 좌석 행을 만들어
+    //   티켓 캘린더·잔여석에 반영한다 (Takiya 3/20 · 결제됐는데 잔여 4 그대로였던 것).
+    //   SQL 이 아직 안 돌아 함수가 없으면 종전대로 회차 행만 고친다 (좌석은 안 잡힘).
+    var _sync = null;
+    var rp = await window.sb.rpc('taam_kashikiri_link_ticket', { p_event_id: e.id, p_ticket_id: String(t.id) });
+    if(rp.error){
+      var _m = String(rp.error.message || '');
+      if(/Could not find the function|function .* does not exist|42883/i.test(_m)){
+        var r = await window.sb.from('kashikiri_events')
+          .update({ ticket_product_id: String(t.id), venue_id: String(t.restId) }).eq('id', e.id);
+        if(r.error) throw r.error;
+      } else throw rp.error;
+    } else _sync = rp.data || null;
     await kskOpenEvent(e.id);
-    showToast('🎫','연결했습니다','「구매자에서 조 불러오기」를 눌러보세요');
+    if(_sync && _sync.ok){
+      var _short = Array.isArray(_sync.short) ? _sync.short : [];
+      if(_short.length){
+        showToast('⚠','연결했지만 좌석이 모자랍니다',
+          _short.map(function(x){ return (x.label||'?') + ' ' + (x.pax||1) + '명'; }).join(', ') + ' — 티켓 정원을 늘리고 다시 「티켓 연결」');
+      } else {
+        showToast('🎫','연결했습니다','결제된 청구 ' + (_sync.seats||0) + '석이 티켓 캘린더에 붙었습니다');
+      }
+    } else {
+      showToast('🎫','연결했습니다','좌석 연동은 SQL 적용 뒤에 됩니다');
+    }
   });
 }
 window.kskLinkTicket = kskLinkTicket;
@@ -34679,7 +34699,14 @@ async function kskOpenEvent(id){
     var gs = ids.length
       ? await window.sb.from('kashikiri_guests').select('*').in('team_id', ids).order('seq')
       : { data: [] };
-    _kskCur = { ev: ev.data, teams: tm.data || [], charges: ch.data || [], guests: gs.data || [] };
+    // 🆕 2026-09-29 이 회차의 정산 결제가 잡은 좌석 (KSK- 행). 못 읽어도 화면은 그린다.
+    var seats = [];
+    try {
+      var sq = await window.sb.from('tickets').select('id, party_size, status, purchase_id, buyer_name, extra_data')
+        .like('purchase_id', 'KSK-%').eq('extra_data->>eventId', String(id)).neq('status', 'cancelled');
+      if(!sq.error) seats = sq.data || [];
+    } catch(_se){}
+    _kskCur = { ev: ev.data, teams: tm.data || [], charges: ch.data || [], guests: gs.data || [], seats: seats };
     _kskRenderEvent();
   } catch(e){
     console.warn('[ksk] 회차 상세 실패:', e);
@@ -34688,6 +34715,7 @@ async function kskOpenEvent(id){
 }
 window.kskOpenEvent = kskOpenEvent;
 
+function _kshCharges(){ return (_kskCur && Array.isArray(_kskCur.charges)) ? _kskCur.charges : []; }
 function _kskRenderEvent(){
   var b = document.getElementById('kskBody');
   if(!b || !_kskCur || !_kskCur.ev) return;
@@ -34720,7 +34748,12 @@ function _kskRenderEvent(){
      +   (allN ? ('<div class="ksk-row"><span class="k">회수</span><span class="v">' + _kskWon(got) + ' / ' + _kskWon(all) + '</span></div>'
      +            '<div class="ksk-bar"><i style="width:' + (all ? Math.round(got/all*100) : 0) + '%"></i></div>') : '')
      +   '<div class="ksk-row"><span class="k">판매 티켓</span><span class="v">'
-     +     (e.ticket_product_id ? '연결됨' : '<span style="color:#9a948a">연결 안 됨</span>') + '</span></div>'
+     +     (e.ticket_product_id ? ('연결됨' + (function(){
+               var ss = _kskCur.seats || [], n = 0; ss.forEach(function(x){ n += parseInt(x.party_size)||0; });
+               var paidN = _kshCharges().filter(function(c){ return c.status === 'paid' && !c.link_invite; }).length;
+               return ' · <span style="color:' + (paidN && !ss.length ? '#B45309' : '#1E7A46') + '">좌석 ' + n + '석 연동'
+                 + (paidN && ss.length < paidN ? ' (결제 ' + paidN + '건 중 ' + ss.length + '건)' : '') + '</span>';
+             })()) : '<span style="color:#9a948a">연결 안 됨</span>') + '</span></div>'
      +   '<div class="ksk-acts">'
      +     '<button class="ksk-btn ghost sm" onclick="kskEditEvent()">정산 정보 수정</button>'
      +     '<button class="ksk-btn ghost sm" onclick="kskSheetLink()">게스트 시트 링크</button>'
@@ -43464,7 +43497,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.29-c';
+var TAAM_WEB_BUILD = '2026.09.29-d';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -58797,6 +58830,7 @@ function _tcalDayGroups(dateKey){
     //   이 uid 는 '누가 예약했나' 가 아니라 '누가 입력했나' 다. 사람을 가리키는
     //   근거가 아니므로 엔트리에서 지운다 — 이름(buyer_name)은 그대로 살아 있다.
     var _mnRow = String(h.purchaseId||'').indexOf('MAN-') === 0
+              || String(h.purchaseId||'').indexOf('KSK-') === 0        // 🆕 2026-09-29 정산 결제 좌석 — user_id 는 회차 작성자
               || !!(h.extra_data && h.extra_data.manualEntry);
     gr(h.restId||h.restaurant_id, h.rest||h.restName||h.restaurant_name).entries.push({type:'app', pid:(h.purchaseId||''), name:(h.buyerName||''), uid:(_mnRow ? '' : (h._userId||'')), pax:(h.pax||1), amount:(parseInt(h.amt)||0), agency:0, time:(h.visitTime||''), bought:(h.date||h.created_at||''), ex:(h.extra_data||{}), gphone:(h.guestPhone||''), st:(h.status||'')});   // 🆕 2026-09-14 구매 일시
   });
@@ -59382,6 +59416,11 @@ async function tcalCancelLinkRow(pid){
 window.tcalCancelLinkRow = tcalCancelLinkRow;
 
 // 🆕 2026.08: 좌석 연동 행(MAN- 수동 / INVH- 초대 홀드) 취소 → status='cancelled' → 본 티켓 잔여석 즉시 복구
+// 🆕 2026-09-29 정산 결제 좌석(KSK-)은 캘린더에서 지우지 않는다 — 청구 상태가 주인이다.
+function tcalKskRowInfo(){
+  showToast('ℹ','정산 결제 좌석','정산 화면에서 그 청구를 취소·환불하면 좌석이 자동으로 풀립니다. 인원은 조 인원을 고치면 따라갑니다.');
+}
+window.tcalKskRowInfo = tcalKskRowInfo;
 async function tcalCancelLinkedRow(pid){
   if(!pid || !window.sb) return;
   var _kind = pid.indexOf('INVH-')===0 ? '초대 좌석 홀드' : '수동 예약(좌석 연동)';
@@ -59617,9 +59656,12 @@ function tcalRenderDetail(dateStr) {
           var _isHold = (e.pid||'').indexOf('INVH-') === 0;
           var _isLink = (e.pid||'').indexOf('LINK-') === 0;   // 🆕 2026-09-29 링크 초대 (비회원 카드 결제)
           var _linkPaid = _isLink && e.st === 'active';
-          var label = _isLink ? ('링크 초대 · ' + (_linkPaid ? '결제됨' : '미결제'))
+          var _isKsk = (e.pid||'').indexOf('KSK-') === 0;     // 🆕 2026-09-29 정산 결제 좌석 (서버 _taam_ksk_seat_sync 가 만든다)
+          var label = _isKsk ? '정산 결제 · 좌석 연동'
+                    : _isLink ? ('링크 초대 · ' + (_linkPaid ? '결제됨' : '미결제'))
                     : _isMan ? '수동·연동' : (_isHold ? '초대홀드' : (e.type==='invite' ? '초대' : (e.type==='app' ? '앱구매' : (e.ttype||'오프라인'))));
-          var col = _isLink ? (_linkPaid ? ['#1E7A46','#EAF6EE','#BFE3CC'] : ['#B45309','#FFF3E0','#F0D9B4'])
+          var col = _isKsk ? ['#1E7A46','#EAF6EE','#BFE3CC']
+                  : _isLink ? (_linkPaid ? ['#1E7A46','#EAF6EE','#BFE3CC'] : ['#B45309','#FFF3E0','#F0D9B4'])
                   : _isMan ? ['#7A6A60','#F0ECE6','#E0D9CC']
                   : (_isHold ? ['#B07A1E','#FBF4E5','#EDDFC2']
                   : (e.type==='invite' ? ['#6A1A1A','#FBF3F2','#EEDADA'] : (e.type==='app' ? ['#1F5BD6','#EAF1FF','#D2E0FB'] : ['#7A6A60','#F0ECE6','#E0D9CC'])));
@@ -59631,11 +59673,12 @@ function tcalRenderDetail(dateStr) {
             : '<span style="font-weight:700;color:#1a1a18;">'+nm+'</span>';
           var amt = (e.amount ? ('₩'+e.amount.toLocaleString()) : '') + (e.agency>0 ? ' <span style="color:#9A9486;font-weight:600;">(대행비 ₩'+e.agency.toLocaleString()+')</span>' : '');
           var del = (e.type==='manual') ? '<span onclick="tcalManualDelete(\''+e.mid+'\')" style="cursor:pointer;color:#c33;font-size:17px;font-weight:700;line-height:1;padding:2px 4px;">×</span>'
+                  : (_isKsk ? '<span onclick="tcalKskRowInfo()" title="정산 화면에서 청구를 취소·환불하면 좌석이 자동으로 풀립니다" style="cursor:pointer;color:#9A9486;font-size:15px;font-weight:700;line-height:1;padding:2px 4px;">ⓘ</span>'
                   : (_isLink && (isSuper || _currentRole==='admin') ? '<span onclick="tcalCancelLinkRow(\''+e.pid+'\')" title="' + (_linkPaid ? '환불(규정 적용) · 좌석 취소' : '링크 끊기 · 좌석 취소') + '" style="cursor:pointer;color:#c33;font-size:17px;font-weight:700;line-height:1;padding:0 4px;">×</span>'
-                  : ((_isMan||_isHold) && (isSuper || _currentRole==='admin') ? '<span onclick="tcalCancelLinkedRow(\''+e.pid+'\')" style="cursor:pointer;color:#c33;font-size:17px;font-weight:700;line-height:1;padding:2px 4px;">×</span>' : ''));
+                  : ((_isMan||_isHold) && (isSuper || _currentRole==='admin') ? '<span onclick="tcalCancelLinkedRow(\''+e.pid+'\')" style="cursor:pointer;color:#c33;font-size:17px;font-weight:700;line-height:1;padding:2px 4px;">×</span>' : '')));
           // 🆕 2026.08-29: 인원 변경 — 실제 결제 건에만. 수동(MAN-)·초대홀드(INVH-)는
           //   결제가 없어 돈을 계산할 게 없다. 그건 ×(취소)로 지우는 게 맞다.
-          var pxBtn = (!_isMan && !_isHold && e.pid && (e.pax||0) > 1 && (isSuper || _currentRole==='admin'))
+          var pxBtn = (!_isMan && !_isHold && !_isKsk && e.pid && (e.pax||0) > 1 && (isSuper || _currentRole==='admin'))
             ? '<span onclick="paxChangeOpen(\''+String(e.pid).replace(/'/g,"\\'")+'\')" title="인원 변경" style="cursor:pointer;color:#8A5A1E;font-size:11px;font-weight:800;border:1px solid #EEDCBB;background:#FBF2E0;border-radius:6px;padding:2px 6px;">인원</span>'
             : '';
           // 🆕 2026-09-28 수동 예약 손님 알림톡 — 번호가 있는 MAN- 행에만.
