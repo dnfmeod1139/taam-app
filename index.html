@@ -30921,13 +30921,31 @@ async function mlOpen(uid){
     asc.forEach(function(r){ var a = parseInt(r.amount)||0; if(r.deposit_type === 'membership') sumMem += a; else sumGen += a; });
     var baseMem = memBal - sumMem, baseGen = genBal - sumGen;
     var runMem = baseMem, runGen = baseGen;
+    // 🔧 2026-10-03 카드로만 산 티켓은 원장에 줄이 없다. 「출금이 예치금인지 카드인지」를 한 화면에서 보려면
+    //   그 구매도 시간순에 끼워 넣는다 — 잔액은 움직이지 않고 「카드 ₩x」 만 적는다. (cardPaid 가 적힌 행만 — 옛 구매는 모른다)
+    var cardOnly = buys.filter(function(t){
+      var e = t.extra_data || {};
+      return (parseInt(e.cardPaid)||0) > 0 && !(_ptxOf(t) || []).length && String(t.status||'') !== 'cancelled';
+    }).map(function(t){ return { card:true, t:t, created_at: t.created_at }; });
+    var merged = asc.map(function(r){ return { r:r, created_at: r.created_at }; }).concat(cardOnly)
+      .sort(function(a,b){ return String(a.created_at||'').localeCompare(String(b.created_at||'')); });
     var lines = [];
-    asc.forEach(function(r){
-      var a = parseInt(r.amount)||0;
+    merged.forEach(function(x){
+      if(x.card){ lines.push({ card:true, t:x.t, a:0, bal: runMem + runGen, balMem: runMem, balGen: runGen }); return; }
+      var r = x.r, a = parseInt(r.amount)||0;
       if(r.deposit_type === 'membership') runMem += a; else runGen += a;
       lines.push({ r:r, a:a, bal: runMem + runGen, balMem: runMem, balGen: runGen });
     });
     lines.reverse();   // 최신이 위 — 통장 조회와 같다
+    // 이모지는 뺀다 — 통장엔 글자만 (「🎫 TAAM 예약 초대」 같은 설명문의 선두 이모지 포함)
+    function _noEmoji(str){ return String(str||'').replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{200D}]/gu, '').replace(/\s{2,}/g,' ').trim(); }
+    function _schedOf(t){
+      var bits = [];
+      if(t.restaurant_name) bits.push(_pcalEsc(_noEmoji(t.restaurant_name)));
+      var when = _tkWhen(t); if(when) bits.push('방문 ' + _pcalEsc(when));
+      if(t.party_size) bits.push(t.party_size + '인');
+      return bits.join(' · ');
+    }
     function kindOf(r){
       switch(r.change_type){
         case 'ticket_purchase': return ['티켓 결제', C.out];
@@ -30938,40 +30956,56 @@ async function mlOpen(uid){
       }
     }
     function stmtRow(L){
+      // 카드로만 산 티켓 — 잔액 변동 없이 수단만 적는다
+      if(L.card){
+        var ct = L.t, ce = ct.extra_data || {};
+        return '<div style="display:grid;grid-template-columns:1fr auto;gap:10px;padding:13px 2px;border-bottom:1px solid ' + C.line + ';">'
+          +   '<div style="min-width:0;">'
+          +     '<div style="font-size:13px;font-weight:700;color:' + C.ink + ';">' + _mlDate(ct.created_at)
+          +       ' <span style="font-weight:800;color:' + C.out + ';margin-left:4px;">티켓 결제</span> ' + tag('카드', '#EAF1FF', '#1F5BD6') + '</div>'
+          +     '<div style="font-size:14px;font-weight:700;line-height:1.4;margin-top:3px;color:' + C.ink + ';">' + _schedOf(ct) + '</div>'
+          +   '</div>'
+          +   '<div style="text-align:right;white-space:nowrap;">'
+          +     '<div style="font-size:11px;color:' + C.faint + ';">카드 결제</div>'
+          +     '<div style="font-size:17px;font-weight:800;color:' + C.out + ';">' + W + n(ce.cardPaid) + '</div>'
+          +     '<div style="font-size:12px;color:' + C.sub + ';margin-top:3px;">예치금 변동 없음</div>'
+          +   '</div>'
+          + '</div>';
+      }
       var r = L.r, pos = L.a >= 0, k = kindOf(r);
       var isTk = (r.change_type === 'ticket_purchase' || r.change_type === 'ticket_refund');
       var tkOf = isTk ? _tkOfTx(r) : null;
-      var what = _pcalEsc(String(r.description || k[0]));
+      var what = _pcalEsc(_noEmoji(r.description || k[0]));
       var sched = '';
       if(tkOf){
-        var bits = [];
-        if(tkOf.restaurant_name) bits.push(_pcalEsc(String(tkOf.restaurant_name)));
-        var when = _tkWhen(tkOf); if(when) bits.push('방문 ' + _pcalEsc(when));
-        if(tkOf.party_size) bits.push(tkOf.party_size + '인');
-        if(bits.length) sched = '<div style="font-size:11.5px;color:' + C.wine + ';margin-top:2px;">🎫 ' + bits.join(' · ') + '</div>';
+        var sc = _schedOf(tkOf);
+        if(sc) sched = '<div style="font-size:13px;font-weight:600;color:' + C.wine + ';margin-top:3px;">' + sc + '</div>';
       } else if(isTk){
-        sched = '<div style="font-size:11px;color:' + C.faint + ';margin-top:2px;">티켓 행 없음 — 일정 미확인</div>';
+        sched = '<div style="font-size:12px;color:' + C.faint + ';margin-top:3px;">티켓 행 없음 — 일정 미확인</div>';
       }
-      var pocketTag = tag(r.deposit_type === 'membership' ? '멤버십' : '일반',
+      // 수단: 원장 줄은 전부 예치금. 같은 구매에 카드가 섞였으면 「+ 카드 ₩x」 를 같이 적는다
+      var cardPart = (tkOf && r.change_type === 'ticket_purchase') ? (parseInt((tkOf.extra_data||{}).cardPaid)||0) : 0;
+      var pocketTag = tag(r.deposit_type === 'membership' ? '멤버십 예치금' : '일반 예치금',
                           (r.deposit_type === 'membership' ? '#F3E7E9' : '#F5EFE3'),
                           (r.deposit_type === 'membership' ? C.wine : '#8a7b4a'));
-      return '<div style="display:grid;grid-template-columns:1fr auto;gap:10px;padding:11px 2px;border-bottom:1px solid ' + C.line + ';">'
+      return '<div style="display:grid;grid-template-columns:1fr auto;gap:10px;padding:13px 2px;border-bottom:1px solid ' + C.line + ';">'
         +   '<div style="min-width:0;">'
-        +     '<div style="font-size:11px;font-weight:700;color:' + C.ink + ';letter-spacing:.01em;">' + _mlDate(r.created_at)
-        +       ' <span style="font-weight:800;color:' + k[1] + ';margin-left:4px;">' + k[0] + '</span> ' + pocketTag + '</div>'
-        +     '<div style="font-size:13px;font-weight:600;line-height:1.4;margin-top:2px;color:' + C.ink + ';">' + what + '</div>'
+        +     '<div style="font-size:13px;font-weight:700;color:' + C.ink + ';letter-spacing:.01em;">' + _mlDate(r.created_at)
+        +       ' <span style="font-weight:800;color:' + k[1] + ';margin-left:4px;">' + k[0] + '</span> ' + pocketTag
+        +       (cardPart > 0 ? ' ' + tag('+ 카드 ' + W + n(cardPart), '#EAF1FF', '#1F5BD6') : '') + '</div>'
+        +     '<div style="font-size:14px;font-weight:600;line-height:1.4;margin-top:3px;color:' + C.ink + ';">' + what + '</div>'
         +     sched
         +   '</div>'
         +   '<div style="text-align:right;white-space:nowrap;">'
-        +     '<div style="font-size:10px;color:' + C.faint + ';">' + (pos ? '입금' : '출금') + '</div>'
-        +     '<div style="font-size:14.5px;font-weight:800;color:' + (pos ? C["in"] : C.out) + ';">' + (pos ? '+' : '−') + W + n(Math.abs(L.a)) + '</div>'
-        +     '<div style="font-size:11px;color:' + C.sub + ';margin-top:3px;">잔액 <b style="color:' + C.ink + ';">' + W + n(L.bal) + '</b></div>'
-        +     '<div style="font-size:9.5px;color:' + C.faint + ';">멤버십 ' + n(L.balMem) + ' · 일반 ' + n(L.balGen) + '</div>'
+        +     '<div style="font-size:11px;color:' + C.faint + ';">' + (pos ? '입금' : '출금') + '</div>'
+        +     '<div style="font-size:17px;font-weight:800;color:' + (pos ? C["in"] : C.out) + ';">' + (pos ? '+' : '−') + W + n(Math.abs(L.a)) + '</div>'
+        +     '<div style="font-size:12.5px;color:' + C.sub + ';margin-top:3px;">잔액 <b style="color:' + C.ink + ';">' + W + n(L.bal) + '</b></div>'
+        +     '<div style="font-size:10.5px;color:' + C.faint + ';">멤버십 ' + n(L.balMem) + ' · 일반 ' + n(L.balGen) + '</div>'
         +   '</div>'
         + '</div>';
     }
     pd += '<div style="display:flex;justify-content:space-between;align-items:baseline;padding:10px 2px 6px;font-size:11px;color:' + C.faint + ';border-bottom:1px solid ' + C.line + ';">'
-       +   '<span>거래내역 ' + lines.length + '건 · 최신순</span>'
+       +   '<span>거래내역 ' + lines.length + '건 · 최신순 · 예치금 줄은 잔액이 움직이고, 카드 줄은 수단만 적습니다</span>'
        +   '<span>현재 잔액 <b style="color:' + C.ink + ';font-size:13px;">' + W + n(memBal + genBal) + '</b></span>'
        + '</div>';
     lines.forEach(function(L){ pd += stmtRow(L); });
@@ -43661,7 +43695,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.03-a';
+var TAAM_WEB_BUILD = '2026.10.03-b';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){

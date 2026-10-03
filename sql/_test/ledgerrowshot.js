@@ -17,7 +17,7 @@ var pw = require('playwright-core'), path = require('path');
         { created_at:'2026-09-10T06:24:00Z', deposit_type:'membership', change_type:'ticket_purchase', amount:-1075000, balance_after:6925000,
           description:'슌지 티켓 2인 구매 (멤버십 예치금)', metadata:{ purchase_id:'PAY-abc-1' } },
         { created_at:'2026-09-12T02:10:00Z', deposit_type:'membership', change_type:'ticket_refund', amount:1075000, balance_after:8000000,
-          description:'슌지 티켓 환불', metadata:{ purchase_id:'PAY-abc-1' } },
+          description:'🎫 슌지 티켓 환불', metadata:{ purchase_id:'PAY-abc-1' } },
         { created_at:'2026-09-13T02:10:00Z', deposit_type:'membership', change_type:'ticket_purchase', amount:-500000, balance_after:7500000,
           description:'초대 결제', metadata:{ invite_id:'11112222-3333-4444-5555-666677778888' } },
         { created_at:'2026-09-14T02:10:00Z', deposit_type:'membership', change_type:'ticket_purchase', amount:-100000, balance_after:7400000,
@@ -29,7 +29,9 @@ var pw = require('playwright-core'), path = require('path');
         { id:'t1', created_at:'2026-09-10T06:24:00Z', restaurant_name:'슌지', party_size:2, price:1075000, status:'active',
           reservation_date:'2027.01.23', visit_time:'18:00', purchase_id:'PAY-abc-1', extra_data:{} },
         { id:'t2', created_at:'2026-09-13T02:10:00Z', restaurant_name:'마츠카와', party_size:1, price:500000, status:'active',
-          reservation_date:'05.01', visit_time:'12:00', purchase_id:'INV-11112222-77', extra_data:{} }
+          reservation_date:'05.01', visit_time:'12:00', purchase_id:'INV-11112222-77', extra_data:{} },
+        { id:'t3', created_at:'2026-09-11T05:00:00Z', restaurant_name:'🍣 사이토', party_size:2, price:1200000, status:'active',
+          reservation_date:'2027.02.10', visit_time:'19:00', purchase_id:'PAY-card-1', extra_data:{ cardPaid:1200000, paidBy:'card' } }
       ]
     };
     function q(tbl){
@@ -48,14 +50,15 @@ var pw = require('playwright-core'), path = require('path');
     return d.innerText;
   });
   var checks = [
-    ['통장식 머리: 거래내역 5건 · 현재 잔액 7,400,000', /거래내역 5건[\s\S]*현재 잔액 ₩7,400,000/.test(out)],
-    ['최신 줄이 맨 위 (옛 구매 09.14) · 계산 잔액 7,400,000', /2026\.09\.14 11:10[\s\S]*잔액 ₩7,400,000/.test(out) && out.indexOf('2026.09.14') < out.indexOf('2026.09.13')],
-    ['구매 줄에 티켓 일정', /🎫 슌지 · 방문 2027\.01\.23 \(토\) 18:00 · 2인/.test(out)],
-    ['환불 줄 입금 +1,075,000 · 그 시점 잔액 8,000,000', /환불 · 반환[\s\S]{0,400}\+₩1,075,000[\s\S]{0,80}잔액 ₩8,000,000/.test(out)],
-    ['초대 결제 → invite_id 로 이어짐', /🎫 마츠카와 · 방문 05\.01 12:00 · 1인/.test(out)],
-    ['티켓 행 없음 표기', /티켓 행 없음 — 일정 미확인/.test(out)],
-    ['부여 줄 맨 아래 · 잔액 8,000,000', /예치금 부여[\s\S]{0,300}\+₩8,000,000[\s\S]{0,80}잔액 ₩8,000,000/.test(out)],
-    ['저장=원장이라 「원장 시작 전 잔액」 줄 없음', out.indexOf('거래 줄이 없다') < 0]
+    ['통장식 머리: 거래내역 6건(예치금 5 + 카드 1)', /거래내역 6건/.test(out)],
+    ['최신 줄 09.14 · 계산 잔액 7,400,000', /2026\.09\.14 11:10[\s\S]*잔액 ₩7,400,000/.test(out) && out.indexOf('2026.09.14') < out.indexOf('2026.09.13')],
+    ['구매 줄에 티켓 일정 (이모지 없이)', /슌지 · 방문 2027\.01\.23 \(토\) 18:00 · 2인/.test(out) && out.indexOf('🎫') < 0],
+    ['설명문 선두 이모지 제거', /슌지 티켓 환불/.test(out) && out.indexOf('🎫 슌지') < 0],
+    ['카드 전용 구매 줄: 카드 결제 ₩1,200,000 · 예치금 변동 없음 · 매장 이모지 제거', /사이토 · 방문 2027\.02\.10 \(수\) 19:00 · 2인[\s\S]{0,120}카드 결제[\s\S]{0,40}₩1,200,000[\s\S]{0,40}예치금 변동 없음/.test(out) && out.split('진행 중 — 아직')[0].indexOf('🍣') < 0],
+    ['카드 줄은 잔액을 안 움직인다 (09.11 카드 줄 뒤 09.12 환불 잔액 8,000,000 그대로)', /환불 · 반환[\s\S]{0,400}\+₩1,075,000[\s\S]{0,80}잔액 ₩8,000,000/.test(out)],
+    ['예치금 줄엔 주머니 수단 표기', /멤버십 예치금/.test(out)],
+    ['초대 결제 → invite_id', /마츠카와 · 방문 05\.01 12:00 · 1인/.test(out)],
+    ['원장 시작 전 잔액 줄 없음', out.indexOf('거래 줄이 없다') < 0]
   ];
   var fail = 0;
   checks.forEach(function(c){ var ok = (c[1] instanceof RegExp) ? c[1].test(out) : !!c[1]; if(!ok) fail++; console.log((ok ? '✅ ' : '❌ ') + c[0]); });
