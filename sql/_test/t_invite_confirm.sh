@@ -21,15 +21,17 @@ insert into public.reservation_invites(id,invitee_user_id,status,ticket_product_
  ('c2000000-0000-4000-8000-000000000002','a1000000-0000-4000-8000-000000000001','paid','tp1',1000000,1,'2027.05.01','18:00','r1','마츠카와'),
  ('c3000000-0000-4000-8000-000000000003','a1000000-0000-4000-8000-000000000001','sent','tp1',1000000,1,'2027.05.01','18:00','r1','마츠카와');
 insert into public.tickets(user_id,restaurant_id,ticket_product_id,party_size,price,status,purchase_id,extra_data) values
- ('a1000000-0000-4000-8000-000000000001','r1','tp1',2,2500000,'hold','INVH-c1000000-1','{"inviteHold":true,"inviteId":"c1000000-0000-4000-8000-000000000001"}');
+ ('a1000000-0000-4000-8000-000000000002','r1','tp1',2,2500000,'hold','INVH-c1000000-1','{"inviteHold":true,"inviteId":"c1000000-0000-4000-8000-000000000001"}');
 SQL
 $P -f supabase/migrations/20260928_invite_confirm_hold.sql 2>&1 | grep -E "❌|ERROR" ; FAIL=0
+$P -f supabase/migrations/20261003_invite_confirm_owner.sql 2>&1 | grep -E "ERROR" 
 ok(){ if [ "$2" = "$3" ]; then echo "✅ $1"; else echo "❌ $1  (기대 $2, 실제 $3)"; FAIL=1; fi; }
 me(){ $P -c "select set_config('taam.uid','a1000000-0000-4000-8000-000000000001',false); $1" 2>&1; }
 other(){ $P -c "select set_config('taam.uid','a1000000-0000-4000-8000-000000000002',false); $1" 2>&1; }
 r=$(me "select (public.taam_invite_confirm_hold('c1000000-0000-4000-8000-000000000001','INV-c1000000-999'))::text")
 ok "홀드→확정 converted" "1" "$(echo "$r" | grep -c '"converted" : true')"
 ok "행이 active · INV- 구매ID · 좌석 유지(2명)" "active|INV-c1000000-999|2" "$($P -c "select status||'|'||purchase_id||'|'||party_size from public.tickets where ticket_product_id='tp1'")"
+ok "🔧 2026-10-03 소유자가 어드민(a…02)→초대받은 회원(a…01)으로" "a1000000-0000-4000-8000-000000000001" "$($P -c "select user_id from public.tickets where purchase_id='INV-c1000000-999'")"
 r=$(me "select (public.taam_invite_confirm_hold('c1000000-0000-4000-8000-000000000001','INV-c1000000-999'))::text")
 ok "두 번 불러도 already (중복 좌석 없음)" "1|1" "$(echo "$r" | grep -c '"already" : true')|$($P -c "select count(*) from public.tickets")"
 r=$(me "select (public.taam_invite_confirm_hold('c2000000-0000-4000-8000-000000000002',null))::text")
