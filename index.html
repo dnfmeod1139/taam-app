@@ -30913,24 +30913,78 @@ async function mlOpen(uid){
   if(!txs.length){
     pd += emptyLine('예치금 내역이 없습니다');
   } else {
-    // 🔧 2026-09-28 종전엔 「관리 차감」이 맨 아래 별도 그룹이라, 2분 뒤 되돌린 차감이
-    //   모든 티켓 결제·환불 줄 아래로 밀려 부여만 보였다. 부여·차감을 한 줄에 시간순으로 섞는다.
-    var dAdm = dGrant.concat(dCut).sort(function(a,b){ return String(b.created_at||'').localeCompare(String(a.created_at||'')); });
-    if(dAdm.length){
-      pd += grp('부여 · 관리 차감 — 어디서 들어오고 되돌아갔나',
-                W + n(_sum(dGrant)) + (dCut.length ? ' <span style="color:' + C.out + ';">−' + W + n(_sum(dCut)) + '</span>' : ''));
-      dAdm.forEach(function(r){ pd += depRow(r, r.change_type === 'admin_deduct' ? '관리 차감' : '예치금 부여'); });
+    // 🔧 2026-10-03 은행 거래내역처럼 — 묶음(부여/사용/환불) 대신 시간순 한 줄기. 줄마다 입금·출금과 **그 시점 잔액**.
+    //   잔액은 원장을 처음부터 더해 계산한다 (balance_after 는 행마다 총액이기도 주머니 잔액이기도 해서 못 믿는다 — CLAUDE.md).
+    //   저장 잔액 − 원장 합계가 0 이 아니면 그 차이를 「원장 시작 전 잔액」(8/31 서버화 이전)으로 맨 아래에 둔다.
+    var asc = txs.slice().sort(function(a,b){ return String(a.created_at||'').localeCompare(String(b.created_at||'')); });
+    var sumMem = 0, sumGen = 0;
+    asc.forEach(function(r){ var a = parseInt(r.amount)||0; if(r.deposit_type === 'membership') sumMem += a; else sumGen += a; });
+    var baseMem = memBal - sumMem, baseGen = genBal - sumGen;
+    var runMem = baseMem, runGen = baseGen;
+    var lines = [];
+    asc.forEach(function(r){
+      var a = parseInt(r.amount)||0;
+      if(r.deposit_type === 'membership') runMem += a; else runGen += a;
+      lines.push({ r:r, a:a, bal: runMem + runGen, balMem: runMem, balGen: runGen });
+    });
+    lines.reverse();   // 최신이 위 — 통장 조회와 같다
+    function kindOf(r){
+      switch(r.change_type){
+        case 'ticket_purchase': return ['티켓 결제', C.out];
+        case 'ticket_refund':   return ['환불 · 반환', C["in"]];
+        case 'admin_grant':     return ['예치금 부여', C["in"]];
+        case 'admin_deduct':    return ['관리 차감', C.out];
+        default: return [(parseInt(r.amount)||0) >= 0 ? '입금' : '출금', (parseInt(r.amount)||0) >= 0 ? C["in"] : C.out];
+      }
     }
-    if(dUse.length){
-      pd += grp('사용 — 티켓 결제', '−' + W + n(_sum(dUse)));
-      dUse.forEach(function(r){ pd += depRow(r, '티켓 결제'); });
+    function stmtRow(L){
+      var r = L.r, pos = L.a >= 0, k = kindOf(r);
+      var isTk = (r.change_type === 'ticket_purchase' || r.change_type === 'ticket_refund');
+      var tkOf = isTk ? _tkOfTx(r) : null;
+      var what = _pcalEsc(String(r.description || k[0]));
+      var sched = '';
+      if(tkOf){
+        var bits = [];
+        if(tkOf.restaurant_name) bits.push(_pcalEsc(String(tkOf.restaurant_name)));
+        var when = _tkWhen(tkOf); if(when) bits.push('방문 ' + _pcalEsc(when));
+        if(tkOf.party_size) bits.push(tkOf.party_size + '인');
+        if(bits.length) sched = '<div style="font-size:11.5px;color:' + C.wine + ';margin-top:2px;">🎫 ' + bits.join(' · ') + '</div>';
+      } else if(isTk){
+        sched = '<div style="font-size:11px;color:' + C.faint + ';margin-top:2px;">티켓 행 없음 — 일정 미확인</div>';
+      }
+      var pocketTag = tag(r.deposit_type === 'membership' ? '멤버십' : '일반',
+                          (r.deposit_type === 'membership' ? '#F3E7E9' : '#F5EFE3'),
+                          (r.deposit_type === 'membership' ? C.wine : '#8a7b4a'));
+      return '<div style="display:grid;grid-template-columns:1fr auto;gap:10px;padding:11px 2px;border-bottom:1px solid ' + C.line + ';">'
+        +   '<div style="min-width:0;">'
+        +     '<div style="font-size:11px;font-weight:700;color:' + C.ink + ';letter-spacing:.01em;">' + _mlDate(r.created_at)
+        +       ' <span style="font-weight:800;color:' + k[1] + ';margin-left:4px;">' + k[0] + '</span> ' + pocketTag + '</div>'
+        +     '<div style="font-size:13px;font-weight:600;line-height:1.4;margin-top:2px;color:' + C.ink + ';">' + what + '</div>'
+        +     sched
+        +   '</div>'
+        +   '<div style="text-align:right;white-space:nowrap;">'
+        +     '<div style="font-size:10px;color:' + C.faint + ';">' + (pos ? '입금' : '출금') + '</div>'
+        +     '<div style="font-size:14.5px;font-weight:800;color:' + (pos ? C["in"] : C.out) + ';">' + (pos ? '+' : '−') + W + n(Math.abs(L.a)) + '</div>'
+        +     '<div style="font-size:11px;color:' + C.sub + ';margin-top:3px;">잔액 <b style="color:' + C.ink + ';">' + W + n(L.bal) + '</b></div>'
+        +     '<div style="font-size:9.5px;color:' + C.faint + ';">멤버십 ' + n(L.balMem) + ' · 일반 ' + n(L.balGen) + '</div>'
+        +   '</div>'
+        + '</div>';
     }
-    if(dBack.length){
-      pd += grp('환불 · 반환 — 나간 주머니로 돌아옴', '+' + W + n(_sum(dBack)));
-      dBack.forEach(function(r){ pd += depRow(r, '반환'); });
+    pd += '<div style="display:flex;justify-content:space-between;align-items:baseline;padding:10px 2px 6px;font-size:11px;color:' + C.faint + ';border-bottom:1px solid ' + C.line + ';">'
+       +   '<span>거래내역 ' + lines.length + '건 · 최신순</span>'
+       +   '<span>현재 잔액 <b style="color:' + C.ink + ';font-size:13px;">' + W + n(memBal + genBal) + '</b></span>'
+       + '</div>';
+    lines.forEach(function(L){ pd += stmtRow(L); });
+    if(baseMem !== 0 || baseGen !== 0){
+      pd += '<div style="display:grid;grid-template-columns:1fr auto;gap:10px;padding:11px 2px;border-bottom:1px solid ' + C.line + ';background:' + C.paper + ';">'
+         +   '<div><div style="font-size:11px;font-weight:700;color:' + C.sub + ';">원장 시작 전 잔액</div>'
+         +     '<div style="font-size:11px;color:' + C.faint + ';margin-top:2px;">2026-08-31 서버 원장 이전에 들어온 금액 — 거래 줄이 없다</div></div>'
+         +   '<div style="text-align:right;white-space:nowrap;"><div style="font-size:14px;font-weight:800;color:' + C.ink + ';">' + W + n(baseMem + baseGen) + '</div>'
+         +     '<div style="font-size:9.5px;color:' + C.faint + ';">멤버십 ' + n(baseMem) + ' · 일반 ' + n(baseGen) + '</div></div>'
+         + '</div>';
     }
-    pd += '<div style="padding:12px 4px;font-size:11px;color:' + C.faint + ';border-top:1px solid ' + C.line + ';">'
-       + '부여·사용·환불이 <b>같은 주머니</b>에서 오가는지 배지로 확인합니다.</div>';
+    pd += '<div style="padding:12px 4px;font-size:11px;color:' + C.faint + ';">'
+       + '잔액은 원장을 처음부터 더해 계산한 값입니다. 저장 잔액과 다르면 「원장 시작 전 잔액」 줄에 그 차이가 나타납니다.</div>';
   }
 
   // ══════ 티켓 탭 ══════
@@ -43607,7 +43661,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.09.29-k';
+var TAAM_WEB_BUILD = '2026.10.03-a';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
