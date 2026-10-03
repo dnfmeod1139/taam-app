@@ -46,7 +46,6 @@ r=$(me "select (public.taam_invite_confirm_hold('c1000000-0000-4000-8000-0000000
 ok "구매ID 불일치 → 거부 (already 보다 먼저 검사)" "1" "$(echo "$r" | grep -c 'PURCHASE_ID_MISMATCH')"
 r=$($P -c "select set_config('taam.uid','',false); select set_config('taam.super','0',false); select (public.taam_invite_confirm_hold('c2000000-0000-4000-8000-000000000002',null))::text" 2>&1 | tail -1)
 ok "SQL Editor(postgres, uid 없음) 호출 허용 → already" "1" "$(echo "$r" | grep -c '"already" : true')"
-psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1
 echo "── 재발 방지 가드: RPC 를 거치지 않고 홀드를 active 로 바꿔도 소유자가 초대받은 회원으로"
 $P -c "insert into public.tickets(user_id,restaurant_id,ticket_product_id,party_size,price,status,purchase_id,extra_data) values ('a1000000-0000-4000-8000-000000000002','r1','tp1',1,1000000,'hold','INVH-c2000000-9','{\"inviteHold\":true,\"inviteId\":\"c2000000-0000-4000-8000-000000000002\"}')" >/dev/null
 ok "홀드 단계에선 어드민 소유 그대로" "a1000000-0000-4000-8000-000000000002" "$($P -c "select user_id from public.tickets where purchase_id='INVH-c2000000-9'")"
@@ -54,4 +53,5 @@ $P -c "update public.tickets set status='active', purchase_id='INV-c2000000-9' w
 ok "직접 UPDATE 로 확정해도 소유자 = 초대받은 회원 · owner_was 기록" "a1000000-0000-4000-8000-000000000001|a1000000-0000-4000-8000-000000000002" "$($P -c "select user_id||'|'||(extra_data->>'owner_was') from public.tickets where purchase_id='INV-c2000000-9'")"
 r=$($P -c "update public.tickets set user_id='a1000000-0000-4000-8000-000000000002' where purchase_id='INV-c2000000-9'" 2>&1)
 ok "확정 뒤 소유자를 남으로 바꾸려 해도 되돌아간다" "a1000000-0000-4000-8000-000000000001" "$($P -c "select user_id from public.tickets where purchase_id='INV-c2000000-9'")"
+psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1
 [ $FAIL = 0 ] && echo "=== 전부 통과" || { echo "=== 실패 있음"; exit 1; }
