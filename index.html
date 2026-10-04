@@ -43695,7 +43695,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.03-b';
+var TAAM_WEB_BUILD = '2026.10.04-a';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -56768,9 +56768,28 @@ function _pcalInfoPanel(t, r){
   var info = '';
   if(r && typeof window.pickI18nField === 'function') info = window.pickI18nField(r, 'rest_info') || '';
   if(!info) info = (r && r.restInfo) || '';
+  // 🔧 2026-10-04 「주류 · 불가 · 주류 미니멈 ₩200,000」은 뜻이 안 통했다 — 「불가」는 외부 주류 반입(콜키지)이 안 된다는 뜻인데
+  //   술을 못 마시는 매장으로 읽혔다. 반입 가능 여부·콜키지 조건·주류 미니멈이 무엇이고 티켓 금액에 포함되는지까지 문장으로 적는다.
   var drink = [];
-  if(r && r.corkage) drink.push(_pcalEsc(r.corkage));
-  if(t.wineMin) drink.push('주류 미니멈 ' + (typeof fxMoney === 'function' ? fxMoney(parseInt(t.wineMin)) : '₩' + parseInt(t.wineMin).toLocaleString()));
+  var _mon = function(v){ return (typeof fxMoney === 'function') ? fxMoney(parseInt(v)) : ('₩' + parseInt(v).toLocaleString()); };
+  if(r && r.corkage){
+    var _ck = String(r.corkage).trim();
+    if(_ck === '불가' || /^(no|불가|不可)$/i.test(_ck)){
+      drink.push(_popL('외부 주류 반입(콜키지) 불가 — 가져오신 술은 드실 수 없고, 주류는 매장에서 주문합니다.',
+                       'Outside alcohol (BYOB) is not allowed — drinks are ordered from the restaurant\'s own list.',
+                       '持ち込み（BYO）不可 — お酒は店内のリストからご注文ください。'));
+    } else {
+      var _amt = parseInt(r.corkageAmt) || 0, _btl = parseInt(r.corkageBottles) || 0;
+      drink.push(_popL('외부 주류 반입 가능 — 콜키지 ' + (_amt > 0 ? '1병당 ' + _mon(_amt) : '무료') + (_btl > 0 ? ' · 1팀 ' + _btl + '병까지' : '') + '. 반입할 술은 미리 알려 주세요.',
+                       'BYOB allowed — corkage ' + (_amt > 0 ? _mon(_amt) + ' per bottle' : 'free') + (_btl > 0 ? ' · up to ' + _btl + ' bottle(s) per party' : '') + '. Please let us know in advance.',
+                       '持ち込み可 — 持ち込み料 ' + (_amt > 0 ? '1本 ' + _mon(_amt) : '無料') + (_btl > 0 ? ' · 1組' + _btl + '本まで' : '') + '。事前にお知らせください。'));
+    }
+  }
+  if(t.wineMin){
+    drink.push(_popL('주류 미니멈 1인 ' + _mon(t.wineMin) + ' — 1인당 이 금액 이상 주류를 주문하는 조건이며, 티켓 금액에 이미 포함되어 있습니다. 당일 이 금액 안에서 자유롭게 고르시면 됩니다.',
+                     'Beverage minimum ' + _mon(t.wineMin) + ' per guest — each guest orders at least this amount of drinks. It is already included in the ticket price; choose freely within it on the day.',
+                     'ドリンク最低料金 お一人 ' + _mon(t.wineMin) + ' — お一人あたりこの金額以上のお飲み物をご注文いただく条件です。チケット料金に含まれています。'));
+  }
 
   // 좌석 형태 — 이름 아래 줄에서 내려온 것. 좌석 수는 노출하지 않는다(재고 노출)
   var seat = (parseInt(t.assignedPax || t.totalPax) || 0) ? '카운터석' : '';
@@ -56785,7 +56804,7 @@ function _pcalInfoPanel(t, r){
       if(pax)  line.push(pax + '인');
       h += '<div class="pd-text" style="margin-bottom:10px;">좌석 · ' + line.join(' · ') + '</div>';
     }
-    if(drink.length) h += '<div class="pd-text" style="margin-bottom:10px;">주류 · ' + drink.join(' · ') + '</div>';
+    if(drink.length) h += '<div class="pd-text" style="margin-bottom:10px;">' + _popL('주류','Drinks','お酒') + '<br>' + drink.map(function(x){ return '· ' + x; }).join('<br>') + '</div>';
     if(info) h += '<div class="pd-text">' + _pcalEsc(info) + '</div>';
   }
   return h;
