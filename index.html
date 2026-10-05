@@ -42770,7 +42770,16 @@ function uploadTicket(){
       extra: _tuPolicy.extra,
       extraText: _tuPolicy.extra ? (document.getElementById('tuPolicyExtraText')||{value:''}).value.trim() : ''
     },
-    status: getUploadStatus(),
+    // 🔧 2026.10.05: 재편집은 매진을 풀지 않는다 — 종전엔 언제나 'active' 를 보내서 초대로 8/8 을 채운
+    //   시마즈 3/19 를 「즉시 공개」로 고쳐 저장하자 soldout 이 active 로 덮였다(캘린더엔 판매중, 상세엔 매진).
+    //   서버 트리거(trg_taam_tp_status_recalc)가 저장 시 좌석으로 다시 세지만, 앱도 덮어쓰지 않는다.
+    status: (function(){
+      if(_tuEditId){
+        var _o = ticketDB.find(function(x){ return String(x.id) === String(_tuEditId); });
+        if(_o && _o.status === 'soldout') return 'soldout';
+      }
+      return getUploadStatus();
+    })(),
     regDate:new Date().toISOString().slice(0,10)
   };
 
@@ -43770,7 +43779,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.05-a';
+var TAAM_WEB_BUILD = '2026.10.05-b';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){

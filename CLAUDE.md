@@ -251,6 +251,16 @@ active · 판매 공개 · 방문일 안 지남 · 잔여 > 0 · flex 면 채울
 회원 쪽 주의: 매장에 `repurchase_day` 가 켜져 있으면 같은 회원이 N일 안의 두 회차를 사는 것은 종전대로 막힌다(기본 0=없음).
 회귀: 스크래치 `multisched.js`(17건) — 저장소엔 없다.
 
+### 재편집이 매진을 풀었다 — status 는 저장할 때도 좌석으로 다시 센다 (2026-10-05)
+
+시마즈 3/19 를 비공개로 올려 초대로 8/8 을 채운 뒤(soldout) 「즉시 공개」로 재편집해 저장하자 **캘린더엔 판매중(색), 상세엔 매진**이 됐다.
+`uploadTicket` 이 status 를 언제나 `getUploadStatus()`='active' 로 보냈고, 매진 동기화 `trg_sync_ticket_soldout` 은 **tickets 가 바뀔 때만**
+돌아서 아무도 되돌리지 않았다(상세는 `taam_ticket_sold_slots` 로 좌석을 직접 센다 · 캘린더·목록은 `status` 만 본다).
+→ ① 앱: 재편집은 원래 soldout 이면 soldout 을 그대로 보낸다. ② 서버: `trg_taam_tp_status_recalc`(BEFORE INSERT/UPDATE OF status,total_pax
+on ticket_products, `20261005_ticket_products_status_recalc.sql`) — 점유 ≥ 정원인데 active 로 쓰면 soldout(auto) 으로, 자동 매진인데 **정원을
+늘려** 자리가 생기면 active 로. 되돌림은 정원 늘림 때만이다 — 저장마다 풀면 어드민 수동 잠금(앱은 status 먼저, `auto_soldout=false` 뒤)을 매번 푼다.
+취소표 알림 트리거는 `UPDATE OF status, total_pax` 로 넓혔다(SET 에 없는 열은 BEFORE 가 바꿔도 UPDATE OF 가 안 본다). 회귀: `bash sql/_test/t_tp_status_recalc.sh`(18건).
+
 ### 방문일의 연도는 두 군데가 읽는다 — 둘 다 세 토막을 받아야 한다 (2026-09-21)
 
 티켓의 `date` 는 보통 `MM.DD` + `dateYear` 지만, `YYYY.MM.DD` 로 들어온 행도 있다.
@@ -619,7 +629,7 @@ Edge Function 도 같다. `toss-confirm` · `toss-billing-charge` 의 `deductDep
 
 | 값 | 주인 |
 |---|---|
-| `ticket_products.status` (매진/판매중) | `trg_sync_ticket_soldout`. 앱은 **로컬만** 바꾼다 |
+| `ticket_products.status` (매진/판매중) | `trg_sync_ticket_soldout`(tickets 변동) + `trg_taam_tp_status_recalc`(ticket_products 저장 시, 2026-10-05). 앱은 **로컬만** 바꾼다 |
 | `profiles.deposit_balance` (합계) | `trg_taam_sync_deposit_balance` (BEFORE 트리거 중 **마지막**에 돈다) |
 
 앱이 이것들을 밀면 ① 낡은 로컬 값이 서버 최신을 덮어쓰고 ② 권한 없는 세션에서
