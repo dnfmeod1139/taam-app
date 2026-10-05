@@ -12026,6 +12026,15 @@ window.closePromoCarousel = function(){
         <span class="tu-picker-arrow">▾</span>
       </button>
     </div>
+    <!-- 🆕 2026.10.05: 추가 일정 — 같은 매장·같은 조건으로 여러 회차를 한 번에 올린다 (연간 예약권 등).
+         위의 날짜·시간이 1회차, 아래 줄들이 2회차부터. 회차마다 별도 티켓(ticket_products 행)이 된다.
+         수정 모드에서는 숨긴다 — 수정은 티켓 한 장만 다룬다. -->
+    <div class="rp-field" id="tuExtraSchedWrap">
+      <label class="rp-label">추가 일정 <span style="font-weight:500;color:#8a8478;letter-spacing:0;">(선택 · 같은 조건으로 여러 회차)</span></label>
+      <div id="tuExtraSchedList"></div>
+      <button type="button" class="tu-picker-btn" id="tuExtraAddBtn" onclick="tuExtraAdd()" style="justify-content:center;color:#1a1a18;font-weight:700;border-style:dashed;">＋ 일정 추가</button>
+      <div style="font-size:11px;color:#8a8478;line-height:1.55;margin-top:8px;">위의 날짜·시간이 1회차입니다. 추가한 일정은 각각 <strong>별도 티켓</strong>으로 올라가고, 좌석·금액·규정·공개 설정은 모두 같게 적용됩니다. 마감·우선 공개·판매 오픈 <strong>시각</strong>도 같은 값이 들어가니 회차마다 달라야 하면 따로 올려주세요.</div>
+    </div>
     <div class="rp-field">
       <label class="rp-label">총 좌석 수</label>
       <input class="tu-input" id="tuTotalPax" type="number" inputmode="numeric" placeholder="예: 7" oninput="tuUpdateSlotSummary()">
@@ -15418,6 +15427,7 @@ var currentTicket = null;
 var currentRest = null;
 var _pendingRest = null;
 var _pendingTicket = null;
+var _pendingTicketExtras = [];   // 🆕 2026.10.05: 추가 일정(2회차~) 복제본 — finalUploadTicket 이 함께 넣는다
 var _selectedRestId = null;
 var _selectedType = 'std';
 var _ticketFilterByRestId = null;  // 🎫 노드 → 티켓 진입 시 필터 (null이면 전체 표시)
@@ -42350,6 +42360,8 @@ function openTU(){
   // 신규 업로드 시 항상 초기화
   tuResetPolicy();
   tuResetGradeOpen();
+  // 🆕 2026.10.05: 추가 일정 — 신규 업로드에서만 쓴다
+  if(typeof tuExtraReset === 'function'){ tuExtraReset(); tuExtraSetVisible(!_tuEditId); }
   // 🆕 2026.08: 신규 업로드면 티켓 상세 설명도 항상 리셋 (편집 진입은 tuEditTicket 이 채움)
   if(!_tuEditId){
     var _tuDesc0 = document.getElementById('tuTicketDesc');
@@ -42395,6 +42407,9 @@ function closeTU(){
   if(tBtn) tBtn.classList.remove('selected');
   if(dTxt) dTxt.textContent = '날짜를 선택하세요';
   if(tTxt) tTxt.textContent = '시간을 선택하세요';
+  // 🆕 추가 일정 초기화 (다음 업로드에 남지 않게) + 섹션 다시 보이기
+  if(typeof tuExtraReset === 'function'){ tuExtraReset(); tuExtraSetVisible(true); }
+  _pendingTicketExtras = [];
   // 슬롯 초기화
   tuResetSlots();
   document.getElementById('tuTotalPax').value = '';
@@ -42602,6 +42617,46 @@ function uploadTicket(){
   var date=_tuSelectedDate;
   var time=_tuSelectedTime;
   if(!date||!time){showToast('⚠','입력 필요','날짜와 시간을 선택해주세요');return;}
+  // 🆕 2026.10.05: 추가 일정 — 1회차 + 추가 줄 전부를 한 목록으로 (수정 모드는 한 장만)
+  var _scheds = [{ date: date, dateYear: (_tuSelectedDateYear || null), time: time }];
+  if(!_tuEditId && Array.isArray(_tuExtraScheds) && _tuExtraScheds.length){
+    for(var _xi = 0; _xi < _tuExtraScheds.length; _xi++){
+      var _xsv = _tuExtraScheds[_xi];
+      if(!_xsv.date || !_xsv.time){
+        showToast('⚠','입력 필요','추가 일정 ' + (_xi + 2) + '회차의 날짜와 시간을 모두 선택해주세요');
+        if(typeof tuExtraHighlight === 'function') tuExtraHighlight(_xi);
+        return;
+      }
+      _scheds.push({ date: _xsv.date, dateYear: (_xsv.dateYear || null), time: _xsv.time });
+    }
+    var _seenK = {};
+    for(var _si = 0; _si < _scheds.length; _si++){
+      var _k = _tuSchedKey(_scheds[_si]);
+      if(_seenK[_k]){
+        showToast('⚠','중복 일정', _tuSchedDateLabel(_scheds[_si]) + ' ' + _scheds[_si].time + ' 이(가) 두 번 들어 있습니다');
+        if(_si >= 1 && typeof tuExtraHighlight === 'function') tuExtraHighlight(_si - 1);
+        return;
+      }
+      _seenK[_k] = 1;
+    }
+  }
+  // 🆕 같은 매장에 같은 날짜·시간 티켓이 이미 있으면 한 번 묻는다 (여러 회차를 올릴 때 실수로 겹치기 쉽다).
+  //   취소된 티켓은 세지 않는다. 막지는 않는다 — 같은 시간에 두 회차를 의도적으로 둘 수도 있다.
+  if(!_tuEditId){
+    var _dupExisting = [];
+    _scheds.forEach(function(sc){
+      var _full = (typeof _tkFullDate === 'function') ? _tkFullDate({ date: sc.date, dateYear: sc.dateYear }) : sc.date;
+      (ticketDB || []).forEach(function(tk){
+        if(String(tk.restId) !== String(_selectedRestId)) return;
+        if(tk.status === 'cancelled' || tk.status === 'deleted') return;
+        var _tf = (typeof _tkFullDate === 'function') ? _tkFullDate(tk) : tk.date;
+        if(_tf === _full && String(tk.time || '') === String(sc.time || '')) _dupExisting.push(_tuSchedDateLabel(sc) + ' ' + sc.time);
+      });
+    });
+    if(_dupExisting.length){
+      if(!confirm('⚠ 이 매장에 같은 날짜·시간 티켓이 이미 있습니다.\n\n' + _dupExisting.join('\n') + '\n\n그래도 추가로 올릴까요?')) return;
+    }
+  }
   if(!_tuTicketGenre){showToast('⚠','선택 필요','티켓 장르를 선택해주세요');return;}
   var total=parseInt(document.getElementById('tuTotalPax').value||0);
   var assigned = _tuSlots.s1*1 + _tuSlots.s2*2 + _tuSlots.s4*4;
@@ -42722,23 +42777,43 @@ function uploadTicket(){
   var timeDisp=time;
   if(time.includes(':')){var tp=time.split(':'),h=parseInt(tp[0]);timeDisp=(h>12?h-12:(h===0?12:h))+':'+tp[1]+' '+(h>=12?'PM':'AM');}
 
+  // 🆕 2026.10.05: 2회차 이후는 1회차를 통째로 복제하고 id·날짜·연도·시간만 바꾼다.
+  //   id 는 Date.now() 기반이라 같은 밀리초에 여러 장이 나오면 겹친다 → +1, +2 … 로 띄운다.
+  //   (_pendingTicket 은 평범한 데이터 객체라 JSON 복제로 충분하다)
+  _pendingTicketExtras = _scheds.slice(1).map(function(sc, i){
+    var c = JSON.parse(JSON.stringify(_pendingTicket));
+    c.id = _pendingTicket.id + 1 + i;
+    c.date = sc.date; c.dateYear = sc.dateYear; c.time = sc.time;
+    return c;
+  });
+
   var slotParts=[];
   if(_tuSlots.s1>0) slotParts.push('1인석×'+_tuSlots.s1);
   if(_tuSlots.s2>0) slotParts.push('2인석×'+_tuSlots.s2);
   if(_tuSlots.s4>0) slotParts.push('4인석×'+_tuSlots.s4);
   var slotLabel = slotParts.join(' / ')+'  ('+assigned+'석/'+total+'석)';
 
-  document.getElementById('tcpRows').innerHTML=[
+  var _tcpRows=[
     ['레스토랑',r?r.name:'–'],
-    ['유형',typeLabel],
-    ['날짜',date],
-    ['시간',timeDisp],
-    ['인원 구성', slotLabel],
-    ['식사예약금','₩'+(meal*minP).toLocaleString()+'~'],
-    ['대행비','₩'+(agency*minP).toLocaleString()+'~']
-  ].map(function(row){
+    ['유형',typeLabel]
+  ];
+  if(_scheds.length > 1){
+    _tcpRows.push(['회차 수', _scheds.length + '회차 (각각 별도 티켓)']);
+    _scheds.forEach(function(sc, i){
+      _tcpRows.push([(i + 1) + '회차', _tuSchedDateLabel(sc) + ' · ' + _tuTimeDisp(sc.time)]);
+    });
+  } else {
+    _tcpRows.push(['날짜',date]);
+    _tcpRows.push(['시간',timeDisp]);
+  }
+  _tcpRows.push(['인원 구성', slotLabel + (_scheds.length > 1 ? ' · 회차마다' : '')]);
+  _tcpRows.push(['식사예약금','₩'+(meal*minP).toLocaleString()+'~']);
+  _tcpRows.push(['대행비','₩'+(agency*minP).toLocaleString()+'~']);
+  document.getElementById('tcpRows').innerHTML=_tcpRows.map(function(row){
     return '<div class="small-sheet-row"><span class="small-sheet-key">'+row[0]+'</span><span class="small-sheet-val">'+row[1]+'</span></div>';
   }).join('');
+  var _tcpT = document.getElementById('tcpTitle');
+  if(_tcpT) _tcpT.textContent = _scheds.length > 1 ? '티켓 확인 · ' + _scheds.length + '회차' : '티켓 확인';
 
   document.getElementById('ticketConfirmPopup').style.display='flex';
 }
@@ -43695,7 +43770,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.04-b';
+var TAAM_WEB_BUILD = '2026.10.05-a';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -44920,8 +44995,12 @@ function finalUploadTicket(){
     _tuEditId=null;
   } else {
     ticketDB.push(_pendingTicket);
+    // 🆕 2026.10.05: 추가 일정 — 같은 매장·같은 조건의 2회차 이후 티켓을 함께 넣는다
+    var _extras = Array.isArray(_pendingTicketExtras) ? _pendingTicketExtras : [];
+    _extras.forEach(function(c){ ticketDB.push(c); });
+    var _nAll = 1 + _extras.length;
     if(_currentRole==='admin'){
-      showToast('⏳','업로드 신청 완료','슈퍼 어드민 승인 후 게시됩니다');
+      showToast('⏳','업로드 신청 완료', (_nAll > 1 ? _nAll + '개 회차 · ' : '') + '슈퍼 어드민 승인 후 게시됩니다');
       // 🆕 2026.08-31: 슈퍼어드민에게 알린다.
       //   종전에는 어드민 화면의 **배지 숫자**만 늘었다. 슈퍼어드민이 그 화면을
       //   열어보기 전에는 파트너가 티켓을 올린 걸 몰랐고, 그동안 티켓은
@@ -44935,8 +45014,9 @@ function finalUploadTicket(){
                           ? _tkFullDate(_pendingTicket) : _pendingTicket.date) || '';
           taamNotifyAdmins({
             type: 'ticket_upload_request',
-            title: '🎫 ' + _upName + ' 티켓 업로드 신청',
+            title: '🎫 ' + _upName + ' 티켓 업로드 신청' + (_nAll > 1 ? ' (' + _nAll + '회차)' : ''),
             body: _upName + ' · ' + _upDate + ' ' + (_pendingTicket.time || '')
+                + (_nAll > 1 ? ' 외 ' + (_nAll - 1) + '회차' : '')
                 + '\n어드민 → 승인 대기에서 게시 승인해주세요',
             url: '/',
             tag: 'taam-tkreq-' + _pendingTicket.id,
@@ -44946,9 +45026,10 @@ function finalUploadTicket(){
         }
       } catch(_ur){ console.warn('[upload] 슈퍼어드민 통지 예외:', _ur); }
     } else {
-      showToast('✓','업로드 완료','티켓이 등록되었습니다');
+      showToast('✓','업로드 완료', _nAll > 1 ? _nAll + '개 회차가 등록되었습니다' : '티켓이 등록되었습니다');
     }
   }
+  _pendingTicketExtras = [];
   saveTickets();
   updatePendingBadge();
   // 새 티켓이 즉시 보이도록 필터 리셋 (이전 화면에서 셋팅된 시간/날짜 필터 제거)
@@ -46052,6 +46133,10 @@ function tuEditTicket(id){
     b.classList.toggle('on',b.classList.contains(_selectedType));
   });
 
+  // 🆕 2026.10.05: 수정은 티켓 한 장만 — 추가 일정 섹션은 숨기고 비운다
+  if(typeof tuExtraReset === 'function'){ tuExtraReset(); tuExtraSetVisible(false); }
+  _pendingTicketExtras = [];
+
   // 날짜
   _tuSelectedDate=t.date||null;
   _tuSelectedDateYear=t.dateYear||null;   // 🆕 편집 시 기존 연도 복원 (재선택 안 해도 유지)
@@ -46328,6 +46413,102 @@ var _tuSelectedDate = null; // 업로드용 선택 날짜 (MM.DD 형식)
 var _tuSelectedDateYear = null; // 🆕 선택 연도 (예: 2027) — 만료 판정 정확화용 (MM.DD 는 하위호환 유지)
 var _tuSelectedTime = null; // 업로드용 선택 시간 (HH:MM 형식)
 var _tkWheelCallerMode = 'ticket'; // 'ticket' | 'upload'
+
+// ════════════════════════════════════════════════════════════════
+// 🆕 2026.10.05: 추가 일정(여러 회차 동시 업로드)
+//   _tuExtraScheds = [{date:'MM.DD', dateYear:2027, time:'HH:MM'}]  — 2회차부터
+//   날짜·시간은 공용 캘린더/휠을 'uploadExtra' 모드로 열어 _tuExtraIdx 번째 줄에 넣는다.
+//   (초대 화면처럼 setInterval 로 훔쳐 오지 않는다 — 1회차 값과 섞일 수 있다)
+// ════════════════════════════════════════════════════════════════
+var _tuExtraScheds = [];
+var _tuExtraIdx = -1;
+var _tuExtraMax = 60;      // 한 번에 올릴 수 있는 회차 상한 (연간권 = 주 1회 × 52 정도)
+
+function _tuTimeDisp(tm){
+  tm = String(tm || '');
+  if(tm.indexOf(':') < 0) return tm;
+  var tp = tm.split(':'), h = parseInt(tp[0], 10);
+  return (h > 12 ? h - 12 : (h === 0 ? 12 : h)) + ':' + tp[1] + ' ' + (h >= 12 ? 'PM' : 'AM');
+}
+function _tuSchedDateLabel(s){
+  if(!s || !s.date) return '';
+  var p = String(s.date).split('.');
+  if(p.length === 2){
+    var y = parseInt(s.dateYear, 10);
+    return (isNaN(y) ? '' : y + '년 ') + parseInt(p[0],10) + '월 ' + parseInt(p[1],10) + '일';
+  }
+  if(p.length === 3) return parseInt(p[0],10) + '년 ' + parseInt(p[1],10) + '월 ' + parseInt(p[2],10) + '일';
+  return s.date;
+}
+function _tuSchedKey(s){
+  // 연도가 없으면(옛 경로) 날짜만으로 비교 — 같은 MM.DD 를 연도 다르게 두 번 넣는 일은 드물다
+  return (s.dateYear ? s.dateYear + '.' : '') + String(s.date || '') + ' ' + String(s.time || '');
+}
+function tuExtraReset(){
+  _tuExtraScheds = [];
+  _tuExtraIdx = -1;
+  tuExtraRender();
+}
+function tuExtraSetVisible(on){
+  var w = document.getElementById('tuExtraSchedWrap');
+  if(w) w.style.display = on ? '' : 'none';
+}
+function tuExtraAdd(){
+  if(_tuExtraScheds.length >= _tuExtraMax){
+    showToast('⚠', '상한', '추가 일정은 한 번에 ' + _tuExtraMax + '개까지입니다');
+    return;
+  }
+  // 바로 앞 회차의 시간을 기본값으로 — 연간권은 보통 같은 시간대다. 날짜는 비워 둔다(반드시 고르게).
+  var prevTime = _tuExtraScheds.length ? _tuExtraScheds[_tuExtraScheds.length - 1].time : _tuSelectedTime;
+  _tuExtraScheds.push({ date: null, dateYear: null, time: prevTime || null });
+  tuExtraRender();
+  // 추가한 줄의 날짜 피커를 바로 연다
+  tuExtraOpenCal(_tuExtraScheds.length - 1);
+}
+function tuExtraRemove(i){
+  if(i < 0 || i >= _tuExtraScheds.length) return;
+  _tuExtraScheds.splice(i, 1);
+  tuExtraRender();
+}
+function tuExtraRender(){
+  var list = document.getElementById('tuExtraSchedList');
+  if(!list) return;
+  if(!_tuExtraScheds.length){ list.innerHTML = ''; return; }
+  list.innerHTML = _tuExtraScheds.map(function(s, i){
+    var dl = _tuSchedDateLabel(s);
+    var tl = s.time ? String(s.time) : '';   // 1회차 버튼과 같은 HH:MM 표기
+    return '<div class="tu-extra-row" id="tuExtraRow' + i + '" style="display:flex;gap:6px;align-items:stretch;margin-bottom:8px;">'
+      + '<div style="width:26px;flex:none;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;color:#8a8478;">' + (i + 2) + '</div>'
+      + '<button type="button" class="tu-picker-btn' + (dl ? ' selected' : '') + '" style="flex:1.4;padding:12px 12px;font-size:13px;" onclick="tuExtraOpenCal(' + i + ')">'
+      +   '<span>' + (dl || '날짜') + '</span><span class="tu-picker-arrow">▾</span></button>'
+      + '<button type="button" class="tu-picker-btn' + (tl ? ' selected' : '') + '" style="flex:1;padding:12px 12px;font-size:13px;" onclick="tuExtraOpenTime(' + i + ')">'
+      +   '<span>' + (tl || '시간') + '</span><span class="tu-picker-arrow">▾</span></button>'
+      + '<button type="button" onclick="tuExtraRemove(' + i + ')" title="이 일정 삭제" style="flex:none;width:38px;border:1.5px solid #e8e5e0;border-radius:10px;background:#fff;color:#9B1C1C;font-size:14px;font-weight:700;cursor:pointer;">✕</button>'
+      + '</div>';
+  }).join('');
+}
+function tuExtraHighlight(i){
+  var row = document.getElementById('tuExtraRow' + i);
+  if(!row) return;
+  row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  var prev = row.style.boxShadow;
+  row.style.transition = 'box-shadow .3s';
+  row.style.boxShadow = '0 0 0 3px #9B1C1C';
+  setTimeout(function(){ row.style.boxShadow = prev || ''; }, 1500);
+}
+function tuExtraOpenCal(i){
+  if(i < 0 || i >= _tuExtraScheds.length) return;
+  _tuExtraIdx = i;
+  window._tkFilterSelDateBak = _tkSelDate;
+  _tkCalMode = 'uploadExtra';
+  tkOpenCal();
+}
+function tuExtraOpenTime(i){
+  if(i < 0 || i >= _tuExtraScheds.length) return;
+  _tuExtraIdx = i;
+  _tkWheelCallerMode = 'uploadExtra';
+  tkOpenTimeWheel();
+}
 
 function tuOpenCal() {
   window._tkFilterSelDateBak = _tkSelDate;   // 🆕 필터 선택일 백업 (닫을 때 복원)
@@ -49128,6 +49309,13 @@ function tkCalConfirm(){
     if (btn) btn.classList.add('selected');
     tuUpdatePolicyD30();
     tkCloseCal(); return;   // 🆕 mode 리셋+필터 선택일 복원은 tkCloseCal 이 처리
+  }
+  if (_tkCalMode === 'uploadExtra') {
+    // 🆕 2026.10.05: 추가 일정 줄에 넣는다 — 1회차(_tuSelectedDate)는 건드리지 않는다
+    var _xs = _tuExtraScheds[_tuExtraIdx];
+    if (_xs) { _xs.date = dateStr; _xs.dateYear = _tkSelDate.getFullYear(); }
+    if (typeof tuExtraRender === 'function') tuExtraRender();
+    tkCloseCal(); return;
   }
   if (_tkCalMode === 'deadlineDate') {
     _tuDeadlineDate = dateStr;
@@ -54630,6 +54818,12 @@ function tkWheelConfirm(){
       if (txt) txt.textContent = timeVal;
       var btn = document.getElementById('tuTimeBtn');
       if (btn) btn.classList.add('selected');
+      _tkWheelCallerMode = 'ticket';
+    } else if (_tkWheelCallerMode === 'uploadExtra') {
+      // 🆕 2026.10.05: 추가 일정 줄의 시간 — 1회차(_tuSelectedTime)는 건드리지 않는다
+      var _xsT = _tuExtraScheds[_tuExtraIdx];
+      if (_xsT) _xsT.time = timeVal;
+      if (typeof tuExtraRender === 'function') tuExtraRender();
       _tkWheelCallerMode = 'ticket';
     } else if (_tkWheelCallerMode === 'deadlineTime') {
       _tuDeadlineTime = timeVal;
