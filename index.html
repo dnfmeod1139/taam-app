@@ -1164,6 +1164,15 @@ html.auto-login .splash .bottom-group{display:none !important}
 #pcalDetail .pd-flash{animation:pdFlash .9s ease}
 @keyframes pdFlash{0%,100%{box-shadow:none}30%,70%{box-shadow:0 0 0 2px rgba(255,255,255,.6)}}
 #pcalDetail .pd-text{font-size:11.5px;color:var(--d-sub);line-height:1.95;white-space:pre-wrap}
+/* 🔧 2026-10-06 티켓 조건·레스토랑 정보 — 연회색 11.5px 긴 문장이 흐려서 안 읽혔다. 본문색 13px, 항목·값 줄로 */
+#pcalDetail .pd-info{font-size:13px;color:var(--d-txt);line-height:1.8;white-space:pre-wrap;word-break:keep-all}
+#pcalDetail .pd-info.empty{color:var(--d-sub)}
+#pcalDetail .pd-kv{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;padding:9px 0;border-bottom:1px solid var(--d-line)}
+#pcalDetail .pd-kv:last-of-type{border-bottom:none}
+#pcalDetail .pd-kv .l{flex:none;font-size:12px;font-weight:600;color:var(--d-sub);line-height:1.5;padding-top:1px}
+#pcalDetail .pd-kv .v{font-size:13px;font-weight:700;color:var(--d-txt);text-align:right;line-height:1.5;word-break:keep-all}
+#pcalDetail .pd-note{margin-top:8px;font-size:11.5px;color:var(--d-sub);line-height:1.7;word-break:keep-all}
+#pcalDetail .pd-sub{font-size:9px;font-weight:800;letter-spacing:.14em;color:var(--d-sub);margin:14px 0 2px}
 #pcalDetail .pd-map{height:190px;border-radius:12px;overflow:hidden;background:var(--d-mapbg);
   border:1px solid var(--d-line)}
 #pcalDetail .pd-mapbtns{display:flex;gap:7px;margin-top:10px}
@@ -43779,7 +43788,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.06-a';
+var TAAM_WEB_BUILD = '2026.10.06-b';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -56975,49 +56984,51 @@ function _pcalInfoPanel(t, r){
     ? (window.pickI18nField(t, 'ticket_desc') || t.ticketDesc || '')
     : (t.ticketDesc || '');
   h += '<div class="pd-kick">TICKET CONDITION</div>';
-  h += '<div class="pd-text">' + (_pcalEsc(desc) || '등록된 안내가 없습니다') + '</div>';
+  h += desc ? '<div class="pd-info">' + _pcalEsc(desc) + '</div>'
+            : '<div class="pd-info empty">' + _popL('등록된 안내가 없습니다','No notes registered','登録された案内はありません') + '</div>';
 
   var info = '';
   if(r && typeof window.pickI18nField === 'function') info = window.pickI18nField(r, 'rest_info') || '';
   if(!info) info = (r && r.restInfo) || '';
-  // 🔧 2026-10-04 「주류 · 불가 · 주류 미니멈 ₩200,000」은 뜻이 안 통했다 — 「불가」는 외부 주류 반입(콜키지)이 안 된다는 뜻인데
-  //   술을 못 마시는 매장으로 읽혔다. 반입 가능 여부·콜키지 조건·주류 미니멈이 무엇이고 티켓 금액에 포함되는지까지 문장으로 적는다.
-  var drink = [];
+  // 🔧 2026-10-06 재구성 — 긴 문장(10-04) 대신 「항목 · 값」 줄. 뜻은 같다:
+  //   콜키지 = 외부 주류 반입 가능 여부, 주류 미니멈 = 1인당 주류 최소 주문액(티켓 금액에 포함).
   var _mon = function(v){ return (typeof fxMoney === 'function') ? fxMoney(parseInt(v)) : ('₩' + parseInt(v).toLocaleString()); };
+  var rows = [], notes = [];
+  // 좌석 형태 — 좌석 수는 노출하지 않는다(재고 노출)
+  var seat = (parseInt(t.assignedPax || t.totalPax) || 0) ? _popL('카운터석','Counter','カウンター') : '';
+  var pax  = (typeof _pcalPaxLabel === 'function') ? _pcalPaxLabel(t) : '';
+  if(seat || pax){
+    var sv = [];
+    if(seat) sv.push(seat);
+    if(pax)  sv.push(pax + _popL('인',' guests','名'));
+    rows.push([_popL('좌석','Seats','座席'), sv.join(' · ')]);
+  }
   if(r && r.corkage){
     var _ck = String(r.corkage).trim();
     if(_ck === '불가' || /^(no|불가|不可)$/i.test(_ck)){
-      drink.push(_popL('외부 주류 반입(콜키지) 불가 — 가져오신 술은 드실 수 없고, 주류는 매장에서 주문합니다.',
-                       'Outside alcohol (BYOB) is not allowed — drinks are ordered from the restaurant\'s own list.',
-                       '持ち込み（BYO）不可 — お酒は店内のリストからご注文ください。'));
+      rows.push([_popL('외부 주류 반입','Outside drinks','お酒の持ち込み'), _popL('불가','Not allowed','不可')]);
+      notes.push(_popL('주류는 매장에서 주문합니다.','Drinks are ordered from the restaurant.','お酒は店内でご注文ください。'));
     } else {
       var _amt = parseInt(r.corkageAmt) || 0, _btl = parseInt(r.corkageBottles) || 0;
-      drink.push(_popL('외부 주류 반입 가능 — 콜키지 ' + (_amt > 0 ? '1병당 ' + _mon(_amt) : '무료') + (_btl > 0 ? ' · 1팀 ' + _btl + '병까지' : '') + '. 반입할 술은 미리 알려 주세요.',
-                       'BYOB allowed — corkage ' + (_amt > 0 ? _mon(_amt) + ' per bottle' : 'free') + (_btl > 0 ? ' · up to ' + _btl + ' bottle(s) per party' : '') + '. Please let us know in advance.',
-                       '持ち込み可 — 持ち込み料 ' + (_amt > 0 ? '1本 ' + _mon(_amt) : '無料') + (_btl > 0 ? ' · 1組' + _btl + '本まで' : '') + '。事前にお知らせください。'));
+      rows.push([_popL('외부 주류 반입','Outside drinks','お酒の持ち込み'),
+                 _popL('가능','Allowed','可') + ' · ' + (_amt > 0 ? _popL('1병 ','', '1本 ') + _mon(_amt) + _popL('', ' per bottle', '') : _popL('콜키지 무료','No corkage fee','持ち込み料無料'))
+                 + (_btl > 0 ? ' · ' + _popL('최대 ' + _btl + '병', 'up to ' + _btl, '最大' + _btl + '本') : '')]);
+      notes.push(_popL('반입할 술은 미리 알려 주세요.','Please tell us in advance what you will bring.','持ち込むお酒は事前にお知らせください。'));
     }
   }
   if(t.wineMin){
-    drink.push(_popL('주류 미니멈 1인 ' + _mon(t.wineMin) + ' — 1인당 이 금액 이상 주류를 주문하는 조건이며, 티켓 금액에 이미 포함되어 있습니다. 당일 이 금액 안에서 자유롭게 고르시면 됩니다.',
-                     'Beverage minimum ' + _mon(t.wineMin) + ' per guest — each guest orders at least this amount of drinks. It is already included in the ticket price; choose freely within it on the day.',
-                     'ドリンク最低料金 お一人 ' + _mon(t.wineMin) + ' — お一人あたりこの金額以上のお飲み物をご注文いただく条件です。チケット料金に含まれています。'));
+    rows.push([_popL('주류 미니멈','Drink minimum','ドリンク最低額'), _popL('1인 ','', 'お一人 ') + _mon(t.wineMin) + _popL('', ' per guest', '')]);
+    notes.push(_popL('티켓 금액에 포함되어 있습니다. 당일 이 금액 안에서 자유롭게 고르세요.',
+                     'Already included in the ticket price. Choose freely within it on the day.',
+                     'チケット料金に含まれています。当日この金額内で自由にお選びください。'));
   }
 
-  // 좌석 형태 — 이름 아래 줄에서 내려온 것. 좌석 수는 노출하지 않는다(재고 노출)
-  var seat = (parseInt(t.assignedPax || t.totalPax) || 0) ? _popL('카운터석','Counter seats','カウンター席') : '';   // 🔧 2026-10-04 TX 스윕이 한 덩어리 문장 안의 단어를 못 잡아 EN·JA 에서 한글로 남았다
-  var pax  = (typeof _pcalPaxLabel === 'function') ? _pcalPaxLabel(t) : '';
-
-  if(info || drink.length || seat || pax){
+  if(info || rows.length){
     h += '<div class="pd-hr" style="margin:16px 0;"></div>';
     h += '<div class="pd-kick">RESTAURANT</div>';
-    if(seat || pax){
-      var line = [];
-      if(seat) line.push(seat);
-      if(pax)  line.push(pax + _popL('인',' guests','名'));
-      h += '<div class="pd-text" style="margin-bottom:10px;">' + _popL('좌석','Seats','座席') + ' · ' + line.join(' · ') + '</div>';
-    }
-    if(drink.length) h += '<div class="pd-text" style="margin-bottom:10px;">' + _popL('주류','Drinks','お酒') + '<br>' + drink.map(function(x){ return '· ' + x; }).join('<br>') + '</div>';
-    if(info) h += '<div class="pd-text">' + _pcalEsc(info) + '</div>';
+    rows.forEach(function(kv){ h += '<div class="pd-kv"><span class="l">' + kv[0] + '</span><span class="v">' + kv[1] + '</span></div>'; });
+    if(notes.length) h += '<div class="pd-note">' + notes.map(function(x){ return '· ' + x; }).join('<br>') + '</div>';
+    if(info) h += '<div class="pd-sub">' + _popL('주소 · 찾아오는 길','ADDRESS · DIRECTIONS','住所・アクセス') + '</div><div class="pd-info">' + _pcalEsc(info) + '</div>';
   }
   return h;
 }
