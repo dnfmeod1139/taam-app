@@ -108,7 +108,7 @@ const { chromium } = require('playwright-core');
        !/11,250,000|10,125,000|1,125,000|3,150,000|1,?125만|1,?012\.5만|112\.5만/.test(at));
     ok('정원 33인을 말한다', at.indexOf('33') >= 0);
     ok('개별 심사를 말한다', at.indexOf('개별 심사') >= 0);
-    ok('질문 다섯 개', sheet.querySelectorAll('.mapl-f').length === 7);   // 이름 + 5문항 + 연락처
+    ok('질문 일곱 개', sheet.querySelectorAll('.mapl-f').length === 9);   // 이름 + 7문항(주류·기타 선택) + 연락처
     ok('일본 방문 횟수를 묻는다', at.indexOf('일본 방문') >= 0);
     ok('지출 규모를 묻는다',      at.indexOf('디너 지출') >= 0);
     ok('기억에 남는 곳을 묻는다', at.indexOf('기억에 남는') >= 0);

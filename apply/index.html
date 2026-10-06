@@ -92,11 +92,14 @@ textarea.in{min-height:82px;resize:vertical;line-height:1.8}
       ref:'추천 코드 <b>{c}</b> 가 함께 접수됩니다.',
       name:'성함', name_ph:'성함',
       q1:'연간 일본 방문 횟수', q1a:'연 3회 이상', q1b:'연 1~2회', q1c:'아직 없음',
-      q2:'일정을 정하는 기준', q2a:'레스토랑 예약일에 일정을 맞춘다', q2b:'내 일정에 맞는 곳을 찾는 편이다',
+      q2:'여행 타입', q2a:'레스토랑 일정에 맞춰 개인 일정을 잡을 수 있다', q2b:'내 일정에 맞는 레스토랑 일정을 원한다',
       q3:'1회 디너 지출 규모 (2인 · 주류 포함)',
       q3a:'200만원 이상', q3b:'100~200만원', q3c:'100만원 미만',
       q4:'연령대 · 직업', q4_ph:'40대 · 사업가',
       q5:'기억에 남는 레스토랑 세 곳', q5_ph:'도쿄·서울 무관',
+      q6:'좋아하는 주류', q6_ph:'예: 샴페인 · 사케 · 내추럴 와인 / 마시지 않음',
+      q7:'기타', q7_ph:'자유롭게 적어 주세요 — 원하는 레스토랑, 동행, 일정 등',
+      optional:'선택',
       phone:'연락처', phone_ph:'010-0000-0000', phone_n:'심사 결과 안내에만 사용합니다.',
       go:'심사 신청', going:'보내는 중…',
       fine:'심사 결과는 신청하신 연락처로 개별 안내됩니다.',
@@ -111,12 +114,15 @@ textarea.in{min-height:82px;resize:vertical;line-height:1.8}
       ref:'Referral code <b>{c}</b> will be included.',
       name:'Full name', name_ph:'Full name',
       q1:'Trips to Japan per year', q1a:'3 or more', q1b:'1 to 2', q1c:'None yet',
-      q2:'How you plan a trip', q2a:'I build the trip around the reservation date',
-      q2b:'I look for places that fit my dates',
+      q2:'Travel style', q2a:'I can plan my trip around the restaurant date',
+      q2b:'I want restaurant dates that fit my schedule',
       q3:'Typical spend per dinner (2 people, drinks included)',
       q3a:'KRW 2,000,000 or more', q3b:'KRW 1,000,000 - 2,000,000', q3c:'Under KRW 1,000,000',
       q4:'Age range and occupation', q4_ph:'40s, business owner',
       q5:'Three restaurants you remember', q5_ph:'Anywhere - Tokyo, Seoul, elsewhere',
+      q6:'Drinks you enjoy', q6_ph:'e.g. Champagne, sake, natural wine / I do not drink',
+      q7:'Anything else', q7_ph:'Restaurants you hope for, companions, dates - anything',
+      optional:'optional',
       phone:'Phone number', phone_ph:'Country code included',
       phone_n:'Used only to send you the outcome.',
       go:'Submit application', going:'Sending...',
@@ -132,11 +138,14 @@ textarea.in{min-height:82px;resize:vertical;line-height:1.8}
       ref:'ご推薦コード <b>{c}</b> を添えて承ります。',
       name:'お名前', name_ph:'お名前',
       q1:'年間の日本ご訪問回数', q1a:'年3回以上', q1b:'年1〜2回', q1c:'まだございません',
-      q2:'ご予定の立て方', q2a:'店の予約日に合わせて予定を組む', q2b:'自分の予定に合う店を探すほうだ',
+      q2:'ご旅行のタイプ', q2a:'お店の日程に合わせてご予定を組める', q2b:'ご自身の予定に合うお店の日程を希望する',
       q3:'1回のディナーのご予算 (2名・お酒込み)',
       q3a:'200万ウォン以上', q3b:'100〜200万ウォン', q3c:'100万ウォン未満',
       q4:'年代・ご職業', q4_ph:'40代・経営者',
       q5:'印象に残っているお店を三軒', q5_ph:'東京・ソウル問わず',
+      q6:'お好きなお酒', q6_ph:'例: シャンパン・日本酒・自然派ワイン / 飲まない',
+      q7:'その他', q7_ph:'ご希望のお店、同行者、日程など自由にご記入ください',
+      optional:'任意',
       phone:'ご連絡先', phone_ph:'国番号を含めてご記入ください',
       phone_n:'審査結果のご案内にのみ使用いたします。',
       go:'審査を申し込む', going:'送信中…',
@@ -181,7 +190,10 @@ textarea.in{min-height:82px;resize:vertical;line-height:1.8}
     { k:'plan',   t:'q2', opts:[['a','q2a'],['b','q2b']] },
     { k:'spend',  t:'q3', opts:[['a','q3a'],['b','q3b'],['c','q3c']] },
     { k:'who',    t:'q4', type:'text', ph:'q4_ph' },
-    { k:'places', t:'q5', type:'area', ph:'q5_ph' }
+    { k:'places', t:'q5', type:'area', ph:'q5_ph' },
+    // 2026.10.06: 좋아하는 주류 · 기타(자유 기술) — 둘 다 선택. 비워도 신청이 막히지 않는다.
+    { k:'drink',  t:'q6', type:'text', ph:'q6_ph', opt:true },
+    { k:'etc',    t:'q7', type:'area', ph:'q7_ph', opt:true }
   ];
   var A = {}, NAME = '', PHONE = '', BUSY = false, DONE = false, ERR = '';
 
@@ -229,7 +241,8 @@ textarea.in{min-height:82px;resize:vertical;line-height:1.8}
        + esc(t('name_ph')) + '"></div>';
 
     Q.forEach(function(q, i){
-      h += '<div class="f"><div class="q">' + (i+1) + '. ' + t(q.t) + '</div>';
+      h += '<div class="f"><div class="q">' + (i+1) + '. ' + t(q.t)
+         + (q.opt ? ' <span style="font-weight:500;color:var(--ink-3)">(' + t('optional') + ')</span>' : '') + '</div>';
       if(!q.type){
         h += '<div class="opts">' + q.opts.map(function(o){
           return '<div class="opt' + (A[q.k] === o[0] ? ' on' : '') + '" '
@@ -263,7 +276,7 @@ textarea.in{min-height:82px;resize:vertical;line-height:1.8}
     var miss = [];
     if(!String(NAME).trim()) miss.push(t('name'));
     if(String(PHONE).replace(/[^0-9]/g,'').length < 8) miss.push(t('phone'));
-    Q.forEach(function(q, i){ if(!String(A[q.k] || '').trim()) miss.push((i+1) + '. ' + t(q.t)); });
+    Q.forEach(function(q, i){ if(q.opt) return; if(!String(A[q.k] || '').trim()) miss.push((i+1) + '. ' + t(q.t)); });
     if(miss.length){ ERR = esc(t('miss')) + '<br>' + esc(miss.join(' · ')); render(); return; }
     ERR = ''; BUSY = true; render();
     try {
