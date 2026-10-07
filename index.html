@@ -17545,6 +17545,7 @@ async function renderNotificationsList(){
       .eq('seen', false);
     if(_updL && _updL.error) console.warn('[notif] seen=true 일괄 처리 실패:', _updL.error.message);
     if(typeof updateUnseenNotifBadge === 'function') updateUnseenNotifBadge();
+    if(!(_updL && _updL.error) && typeof _iosBadgeClear === 'function') _iosBadgeClear();   // 🆕 iOS 아이콘 배지 0
   } catch(e){
     console.error('[notif list] 예외:', e);
     contentEl.innerHTML = '<div style="text-align:center;padding:30px;color:#c00;font-size:11px;">예외: '+_riEscHtml(e.message || String(e))+'</div>';
@@ -43788,7 +43789,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.06-b';
+var TAAM_WEB_BUILD = '2026.10.07-a';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -54389,7 +54390,7 @@ async function tkOpenNotice() {
             .eq('seen', false);
           if (_upd && _upd.error) {
             console.warn('[bell] 읽음 처리 실패:', _upd.error.message);
-          }
+          } else if (typeof _iosBadgeClear === 'function') { _iosBadgeClear(); }   // 🆕 iOS 아이콘 배지 0
           // 진실은 서버에 있다 — 다시 세어서 점을 켜고 끈다
           if (typeof updateUnseenNotifBadge === 'function') await updateUnseenNotifBadge();
           else { window._notifServerUnseen = 0; _notifBellDotSync(); }
@@ -65184,6 +65185,27 @@ async function _badgeClearLocal(){
   } catch(e){ return 'error:' + String((e && e.message) || e).slice(0, 60); }
 }
 window._badgeClearLocal = _badgeClearLocal;
+
+// 🆕 2026-10-07 알림을 전부 읽은 순간 iOS 아이콘 배지를 0 으로 맞춘다.
+//   네이티브는 앱이 열릴 때(didBecomeActive) 배지를 지우지만, **앱이 켜진 채** 받은 푸시의 숫자는
+//   그 뒤 알림을 다 읽어도 남는다 — 「알림 전부 확인했는데 1 이 안 없어진다」의 정체.
+//   서버가 badge:0 을 조용히(silent) 보내면 그 자리에서 지워진다. send-push 는 silent 를 APNs 직결에만 보낸다.
+//   iOS 네이티브에서만, 20초에 한 번만.
+var _iosBadgeClearAt = 0;
+async function _iosBadgeClear(){
+  try {
+    var plat = (window.Capacitor && window.Capacitor.getPlatform && window.Capacitor.getPlatform()) || 'web';
+    if(plat !== 'ios') return 'skip';
+    if(typeof pushSend !== 'function') return 'skip';
+    var now = Date.now();
+    if(now - _iosBadgeClearAt < 20000) return 'throttled';
+    _iosBadgeClearAt = now;
+    await _badgeClearLocal();
+    var res = await pushSend('user', { silent: true, badge: 0, category: 'system', tag: 'taam-badge-sync' }, { dedupe: true });
+    return (res && res.summary) ? ('ok:' + res.summary.ok) : 'noresp';
+  } catch(e){ return 'error'; }
+}
+window._iosBadgeClear = _iosBadgeClear;
 
 window.pushClearBadge = async function(){
   if(typeof pushSend !== 'function'){ alert('pushSend 함수 미정의'); return; }

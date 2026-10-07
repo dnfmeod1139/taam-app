@@ -749,18 +749,44 @@ async function handle(req: Request): Promise<Response> {
       if (raw.startsWith("en")) return "en";
       return "ko";
     }
+    // 🆕 2026-10-07 아이콘 배지 = 그 회원의 미확인 인앱 알림 수.
+    //   종전엔 푸시마다 badge:1 고정이라 ① 알림을 전부 읽어도 다음 푸시가 또 「1」을 찍고
+    //   ② 앱이 켜진 채 받은 푸시의 「1」은 앱을 열어도(didBecomeActive) 안 지워졌다.
+    //   호출부가 badge 를 명시하면 그 값을 쓰고, 없으면 notifications(seen=false) 를 세서 넣는다(최소 1).
+    //   세지 못하면 종전처럼 1.
+    const unseenByUser = new Map<string, number>();
+    try {
+      const uids = Array.from(new Set(
+        targets.filter((s: any) => /^(apns|fcm):\/\//.test(String(s.endpoint || "")) && s.user_id)
+               .map((s: any) => String(s.user_id)),
+      ));
+      if (uids.length && !(typeof (body.payload as any)?.badge === "number")) {
+        const q = await sb.from("notifications").select("user_id").eq("seen", false).in("user_id", uids).limit(5000);
+        for (const row of (q.data || []) as any[]) {
+          const k = String(row.user_id);
+          unseenByUser.set(k, (unseenByUser.get(k) || 0) + 1);
+        }
+      }
+    } catch (_e) { /* 세지 못하면 1 로 간다 */ }
+
     function payloadFor(sub: any) {
       const p: any = body.payload;
+      let out: any = p;
       const i18n = p && p.i18n;
-      if (!i18n || typeof i18n !== "object") return p;
-      const lang = pickLang(sub);
-      const t = i18n[lang] || i18n.ko || i18n.en || i18n.ja;
-      if (!t) return p;
-      // i18n 은 문구만 갈아끼운다. url·category·tag·badge 는 언어와 무관하다
-      return Object.assign({}, p, {
-        title: t.title != null ? t.title : p.title,
-        body:  t.body  != null ? t.body  : p.body,
-      });
+      if (i18n && typeof i18n === "object") {
+        const lang = pickLang(sub);
+        const t = i18n[lang] || i18n.ko || i18n.en || i18n.ja;
+        // i18n 은 문구만 갈아끼운다. url·category·tag·badge 는 언어와 무관하다
+        if (t) out = Object.assign({}, p, {
+          title: t.title != null ? t.title : p.title,
+          body:  t.body  != null ? t.body  : p.body,
+        });
+      }
+      if (!(typeof p?.badge === "number") && sub?.user_id) {
+        const n = unseenByUser.get(String(sub.user_id));
+        if (typeof n === "number") out = Object.assign({}, out, { badge: Math.max(1, n) });
+      }
+      return out;
     }
 
     const payloadStr = JSON.stringify(body.payload);
@@ -884,6 +910,12 @@ async function handle(req: Request): Promise<Response> {
     // 발송 (Web Push / FCM / APNs 분기)
     const results = await Promise.all(targets.map(async (s: any) => {
       try {
+        // 🆕 2026-10-07 조용한 배지 갱신(silent)은 APNs 직결에만 보낸다.
+        //   웹푸시 SW 는 payload 가 오면 무조건 showNotification 을 부르므로 빈 「TAAM」 알림이 뜨고,
+        //   FCM 경로는 아래 sendNativePush 가 거부한다. 건너뛴 것은 실패로 세지 않는다.
+        if ((body.payload as any)?.silent === true && !(s.endpoint.startsWith("apns://") && APNS_READY)) {
+          return { id: s.id, ok: false, skipped: true, reason: "silent_apns_only" };
+        }
         // 🆕 2026-08: iOS(apns://)는 APNs 로 곧장 보낸다.
         //   FCM 으로 보내면 APNs 기기토큰을 FCM 등록토큰으로 착각해 무조건 거부된다.
         //   APNS 시크릿이 없으면 종전 FCM 경로로 폴백 — 설정 전에도 앱은 그대로 돈다.
@@ -929,7 +961,8 @@ async function handle(req: Request): Promise<Response> {
     const summary = {
       attempted: targets.length,
       ok: results.filter(r => r.ok).length,
-      failed: results.filter(r => !r.ok).length,
+      failed: results.filter(r => !r.ok && !(r as any).skipped).length,
+      skipped: results.filter(r => (r as any).skipped).length,
       removed: results.filter(r => (r as any).removed).length,
     };
 
