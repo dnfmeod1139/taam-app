@@ -460,7 +460,7 @@ html.splash-skip .splash{display:none !important}
 /* auto-login 부팅에선 인증 끝날 때까지 .bottom-group 도 안 보이지만 로더는 계속 노출 */
 .splash-bg{position:absolute;inset:0;background:linear-gradient(160deg,#1a0508 0%,#0d0306 40%,#120208 100%)}
 /* 🆕 2026-10-07 시작화면 슬라이드 — 사진 2장 이상이면 N초마다 디졸브(겹쳐 번지며 교체). A(아래)=현재, B(위)=들어오는 장 */
-.splash-slide{position:absolute;inset:0;background-size:cover;background-position:center top;opacity:0;transition:opacity 1.4s ease;pointer-events:none}
+.splash-slide{position:absolute;inset:0;background-size:cover;background-position:center top;opacity:0;transition:opacity var(--splash-fade,1.4s) ease;pointer-events:none}
 .splash-slide.on{opacity:1}
 /* 🆕 스플래시 배경 동영상 — 화면 꽉 채움(cover) */
 .splash-media-video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center top;background:#000}
@@ -13149,8 +13149,8 @@ textarea.mapl-in{min-height:78px;resize:vertical;line-height:1.7}
       <div id="splashBgsList" style="display:none;gap:6px;flex-wrap:wrap;margin-top:10px;"></div>
       <div id="splashIntervalRow" style="display:none;align-items:center;gap:8px;margin-top:10px;font-family:'Noto Sans KR',sans-serif;font-size:12.5px;color:#555;">
         <span>전환 간격</span>
-        <input class="tu-input" id="splashInterval" type="number" inputmode="numeric" min="1" max="10" step="1" value="3" style="width:72px;padding:8px 10px;text-align:center;" onchange="splashIntervalChange(this.value)">
-        <span>초 · 디졸브로 바뀝니다</span>
+        <input class="tu-input" id="splashInterval" type="number" inputmode="decimal" min="1" max="10" step="0.5" value="1.5" style="width:72px;padding:8px 10px;text-align:center;" onchange="splashIntervalChange(this.value)">
+        <span>초 · 디졸브로 바뀝니다 · 시작 사진은 열 때마다 무작위</span>
       </div>
       <button onclick="splashBgReset()" style="margin-top:8px;width:100%;padding:10px;border:1px solid #e8e5e0;border-radius:10px;background:#fff;font-family:var(--font-main);font-size:12px;color:#aaa;cursor:pointer;">사진/동영상 제거 (기본 배경으로)</button>
     </div>
@@ -43786,7 +43786,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.07-b';
+var TAAM_WEB_BUILD = '2026.10.07-c';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -62844,7 +62844,7 @@ function rpGetPhotoTexts() {
 // ══════════════════════════════════════════════
 // SPLASH SETTINGS
 // ══════════════════════════════════════════════
-var _splashSettings = /*SPLASH_DATA_START*/{ text1:'Exclusive', text2:'Experience', bg:'', mediaType:'image', mediaUrl:'', bgs:[], interval:3 }/*SPLASH_DATA_END*/;
+var _splashSettings = /*SPLASH_DATA_START*/{ text1:'Exclusive', text2:'Experience', bg:'', mediaType:'image', mediaUrl:'', bgs:[], interval:1.5 }/*SPLASH_DATA_END*/;
 
 // 🆕 IDB(로컬) 폴백 로더 — Supabase 비어있거나 실패 시
 function _loadSplashFromIDB() {
@@ -62974,10 +62974,10 @@ function applySplashSettings() {
       var _urls = _splashSlideUrls();
       if (_urls.length > 1) {
         // 🆕 2026-10-07 사진 2장 이상 → 디졸브 슬라이드 (배경은 첫 장으로 깔아 레이어가 뜨기 전 빈 화면을 막는다)
-        bg.style.backgroundImage = "url('" + _urls[0] + "')";
+        var _startUrl = _splashSlideStart(bg, _urls, _splashInterval(), { random: true }) || _urls[0];
+        bg.style.backgroundImage = "url('" + _startUrl + "')";
         bg.style.backgroundSize = 'cover';
         bg.style.backgroundPosition = 'center top';
-        _splashSlideStart(bg, _urls, _splashInterval());
       } else if (_urls[0]) {
         _splashSlideStop(bg);
         bg.style.backgroundImage = "url('" + _urls[0] + "')";
@@ -63049,8 +63049,10 @@ function _splashReadSlides(v){
   _splashSettings.interval = _splashInterval(v && v.interval);
 }
 function _splashInterval(v){
-  var n = parseInt(v === undefined ? _splashSettings.interval : v, 10);
-  if (isNaN(n)) n = 3;
+  // 🔧 2026-10-07 기본 1.5초 · 0.5초 단위 · 1~10초
+  var n = parseFloat(v === undefined ? _splashSettings.interval : v);
+  if (isNaN(n)) n = 1.5;
+  n = Math.round(n * 2) / 2;
   return Math.min(10, Math.max(1, n));
 }
 function _splashSlideUrls(){
@@ -63083,38 +63085,53 @@ function _splashSlideStop(container){
   if (!container) return;
   var key = container.id || container.className || 'x';
   var run = _splashSlideRun[key];
-  if (run) { clearInterval(run.timer); clearTimeout(run.after); delete _splashSlideRun[key]; }
+  if (run) { clearInterval(run.timer); delete _splashSlideRun[key]; }
   Array.prototype.slice.call(container.querySelectorAll(':scope > .splash-slide')).forEach(function(el){ el.remove(); });
 }
-function _splashSlideStart(container, urls, sec){
-  if (!container || !urls || urls.length < 2) return;
+// opts.random — 시작 장을 무작위로 (실제 스플래시). 편집 미리보기는 1번부터 — 순서를 확인하는 화면이다.
+// 🔧 2026-10-07 전환·정리를 **타이머 하나**로 한다. 종전엔 「B 켜기」(interval)와 「A 로 옮기고 B 끄기」(timeout 1.5초)가
+//   따로 돌아서, 간격이 1.5초면 둘이 같은 시각에 겹쳐 그림이 튀었다. 이제 틱마다 ① 직전에 켠 B 를 A 로 옮기고 B 를 끈 뒤
+//   ② 다음 장을 B 에 켠다. 디졸브 길이는 간격의 80%(최대 1.4초) — 다음 틱 전에 반드시 끝난다.
+function _splashSlideStart(container, urls, sec, opts){
+  if (!container || !urls || urls.length < 2) return null;
+  opts = opts || {};
   var key = container.id || container.className || 'x';
+  var ivMs = Math.max(1, parseFloat(sec) || 1.5) * 1000;
+  var sig = urls.join('|') + '@' + ivMs;
   var prev = _splashSlideRun[key];
-  if (prev && prev.sig === urls.join('|') + '@' + sec) return;   // 같은 구성이면 다시 시작하지 않는다
+  if (prev && prev.sig === sig) return prev.startUrl;   // 같은 구성이면 다시 시작하지 않는다
   _splashSlideStop(container);
   var cs = getComputedStyle(container);
   if (cs.position === 'static') container.style.position = 'relative';
+  var fade = Math.min(1.4, (ivMs / 1000) * 0.8);
+  container.style.setProperty('--splash-fade', fade.toFixed(2) + 's');
+  var start = 0;
+  if (opts.random) { try { start = Math.floor(Math.random() * urls.length) % urls.length; } catch(e){ start = 0; } }
   var A = document.createElement('div'), B = document.createElement('div');
   A.className = 'splash-slide on'; B.className = 'splash-slide';
-  A.style.backgroundImage = "url('" + urls[0] + "')";
+  A.style.backgroundImage = "url('" + urls[start] + "')";
   // 다른 자식(비디오·문구·오버레이)보다 아래에 깔리도록 맨 앞에 꽂는다
   container.insertBefore(B, container.firstChild);
   container.insertBefore(A, container.firstChild);
   urls.forEach(function(u){ var im = new Image(); im.src = u; });   // 미리 받아 둔다
-  var run = { idx: 0, sig: urls.join('|') + '@' + sec, timer: null, after: null };
+  var run = { idx: start, sig: sig, startUrl: urls[start], timer: null, pending: null };
   run.timer = setInterval(function(){
+    // ① 직전 틱에 켠 장이 있으면 A 로 옮기고 B 를 즉시 끈다 (같은 그림이라 눈에 안 띈다)
+    if (run.pending) {
+      A.style.backgroundImage = "url('" + run.pending + "')";
+      B.style.transition = 'none'; B.classList.remove('on');
+      void B.offsetWidth; B.style.transition = '';
+      run.pending = null;
+    }
+    // ② 다음 장을 B 에 켠다 — 디졸브
     run.idx = (run.idx + 1) % urls.length;
     var next = urls[run.idx];
     B.style.backgroundImage = "url('" + next + "')";
     B.classList.add('on');
-    clearTimeout(run.after);
-    run.after = setTimeout(function(){
-      A.style.backgroundImage = "url('" + next + "')";
-      B.style.transition = 'none'; B.classList.remove('on');
-      void B.offsetWidth; B.style.transition = '';
-    }, 1500);
-  }, Math.max(1, sec || 3) * 1000);
+    run.pending = next;
+  }, ivMs);
   _splashSlideRun[key] = run;
+  return urls[start];
 }
 // 편집 화면 — 사진 목록(순서·삭제) + 간격 칸
 function _splashBgsRender(){
