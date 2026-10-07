@@ -510,8 +510,13 @@ Apple 은 iPad 와 iPhone **두 기기로 심사**하므로(리뷰 노트에 명
 
 `app_config.splash_settings` 에 `bgs:[Storage URL…]` · `interval:초(1~10 · 0.5 단위 · 기본 **1.5**)` 가 더 생겼다. `bg` 는 첫 장으로 같이 둔다(옛 빌드는 한 장만 본다).
 사진 2장 이상이면 `_splashSlideStart`(레이어 A 아래=현재 · B 위=들어오는 장)가 `.splash-bg` 와 편집 미리보기에서 돈다. 실제 스플래시는
-**시작 장이 무작위**(`{random:true}`), 미리보기는 1번부터(순서 확인용). 전환·정리는 **타이머 하나**다 — 틱마다 직전 B 를 A 로 옮기고 B 를 끈 뒤
-다음 장을 B 에 켠다(둘을 따로 두면 간격 1.5초에서 같은 시각에 겹쳐 튀었다). 디졸브 길이 `--splash-fade` = min(1.4초, 간격×0.8).
+**시작 장이 무작위**(`{random:true}`), 미리보기는 1번부터(순서 확인용). 디졸브 길이 `--splash-fade` = min(1.4초, 간격×0.8).
+⚠ **2026-10-07 「앱이 현격히 느려졌다」 사고.** 첫 판은 타이머가 ① 스플래시가 닫힌 뒤에도 ② 편집 화면이 닫혀 있어도(부팅마다 모든 회원
+기기에서 미리보기 타이머 시작) 영원히 돌며 틱마다 `void offsetWidth` 로 **문서 전체 강제 레이아웃**을 일으켰다. 지금은 틱이 레이아웃을
+건드리지 않고(두 레이어를 번갈아 켜고 끄며 밑바탕 background 를 「지금 장」으로 둔다), `opts.alive()` 가 거짓이면 스스로 멈추며,
+시작은 보일 때만 한다(`_splashIsShowing` · `_splashEditorOpen` · `_splashSlideKick` 은 `_splashHold` 에서). `_splashCloseNow` 와
+`closeSubPage('splashMgmtScreen')` 이 명시적으로 멈춘다. 유지 시간은 5초 고정(사진 수만큼 늘리던 것은 「시작이 느려졌다」로 읽혀 뺐다).
+→ 화면에 영구 타이머를 두는 코드를 쓰면 **「보이는 동안만」** 을 먼저 정한다. 회귀: 스크래치 `splashperf.js`(10건).
 유지 시간은 `_splashHold` 가 「장수 × 간격」까지 늘린다(15초 상한, 스킵 그대로). 사진은 **Storage `splash-media`** 에만(버킷 MIME 에 image 허용돼 있다) —
 종전 크롭 경로가 base64 를 설정에 통째로 넣던 것도 이날 Storage URL 로 바꿨다. 여러 장 선택은 크롭 없이 바로(9:16 cover), 한 장은 크롭.
 회귀: 스크래치 `splashslide.js`(9건).
