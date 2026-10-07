@@ -506,6 +506,14 @@ Apple 은 iPad 와 iPhone **두 기기로 심사**하므로(리뷰 노트에 명
 - 홈 탭이 `homeView` 로 되돌아가 같은 캘린더를 그림 (지금은 일정 = 홈, 나중에 홈은 팝업·이벤트로 갈라짐)
 - GNB 가 하단에 딱 붙음(`#mainGnb.gnb-flat`), `Quest` → `Cast`(준비 중), `Request` 도 준비 중
 
+### 시작화면 사진 슬라이드 — 여러 장 디졸브 (2026-10-07)
+
+`app_config.splash_settings` 에 `bgs:[Storage URL…]` · `interval:초(1~10, 기본 3)` 가 더 생겼다. `bg` 는 첫 장으로 같이 둔다(옛 빌드는 한 장만 본다).
+사진 2장 이상이면 `_splashSlideStart`(레이어 A 아래=현재 · B 위=들어오는 장, 1.4초 opacity 디졸브)가 `.splash-bg` 와 편집 미리보기에서 돈다.
+유지 시간은 `_splashHold` 가 「장수 × 간격」까지 늘린다(15초 상한, 스킵 그대로). 사진은 **Storage `splash-media`** 에만(버킷 MIME 에 image 허용돼 있다) —
+종전 크롭 경로가 base64 를 설정에 통째로 넣던 것도 이날 Storage URL 로 바꿨다. 여러 장 선택은 크롭 없이 바로(9:16 cover), 한 장은 크롭.
+회귀: 스크래치 `splashslide.js`(9건).
+
 ### 사진은 절대 index.html 에 넣지 않는다
 
 | 사진 | 출처 |
