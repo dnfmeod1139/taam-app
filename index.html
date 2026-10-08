@@ -43787,7 +43787,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.08-a';
+var TAAM_WEB_BUILD = '2026.10.08-b';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -46051,6 +46051,10 @@ function tuToggleSoldout(id, after){
   // 🆕 2026-09-21 한 번 더 묻는다 (목록을 넘기다 스쳐 상태가 바뀌던 문제)
   //   ⚠ 이제 비동기다 — 부른 쪽이 바로 다시 그리면 옛 상태가 보인다. after 로 받는다.
   var _toSold = (t.status !== 'soldout');
+  // 🔧 2026-10-08 판매 재개는 좌석을 먼저 센다. 꽉 찬 회차는 서버(trg_taam_tp_status_recalc)가 매진을 유지하므로
+  //   「판매 재개」가 조용히 되돌아갔다(시마즈 1/30 · 8/8). 그런 경우엔 이유를 말하고, 비공개면 「공개로 전환」을 준다 —
+  //   어드민이 원한 건 재판매가 아니라 캘린더 노출이었다.
+  if(!_toSold){ _tuAskResume(t, id, after); return; }
   _tkAsk({
     icon: _toSold ? '🚫' : '🟢',
     title: _toSold ? '매진으로 바꿀까요?' : '다시 판매할까요?',
@@ -46062,6 +46066,52 @@ function tuToggleSoldout(id, after){
     okKind: _toSold ? 'danger' : 'go',
     onOk: function(){ _tuDoToggleSoldout(id); if(typeof after === 'function') { try { after(); } catch(e){} } }
   });
+}
+async function _tuAskResume(t, id, after){
+  var cap = parseInt(t.totalPax || t.assignedPax) || 0, sold = null;
+  try {
+    if(window.sb && cap > 0){
+      var r = await window.sb.rpc('taam_ticket_sold_slots', { p_ticket_id: String(id) });
+      if(!r.error && r.data) sold = parseInt(r.data.total) || 0;
+    }
+  } catch(e){}
+  var hidden = (typeof _tkSaleHidden === 'function') && _tkSaleHidden(t);
+  if(sold !== null && cap > 0 && sold >= cap){
+    _tkAsk({
+      icon: '🈵',
+      title: '정원이 꽉 차 있습니다',
+      body: _tkAskWhat(t),
+      note: '전체 ' + cap + '석 · 점유 ' + sold + '석 — 자리가 없어 판매를 재개할 수 없습니다. 서버가 매진을 유지합니다.\n'
+          + (hidden
+              ? '이 티켓은 「비공개」라 회원 캘린더에 안 보입니다. 공개로 바꾸면 캘린더에 SOLD OUT 으로 표시됩니다.'
+              : '이미 공개 상태라 회원 캘린더에 SOLD OUT 으로 표시됩니다. 자리를 늘리려면 「수정」에서 총 좌석 수를 올리세요.'),
+      okText: hidden ? '공개로 전환' : '확인',
+      okKind: hidden ? 'go' : '',
+      onOk: function(){ if(hidden) _tuPublishSoldout(t, after); else if(typeof after === 'function') { try { after(); } catch(e){} } }
+    });
+    return;
+  }
+  _tkAsk({
+    icon: '🟢',
+    title: '다시 판매할까요?',
+    body: _tkAskWhat(t),
+    note: '회원 화면에 다시 노출되어 구매할 수 있게 됩니다.\n손으로 걸어둔 매진 잠금도 함께 풀립니다.'
+        + (hidden ? '\n⚠ 이 티켓은 「비공개」입니다 — 회원에게 보이려면 「수정」에서 판매 오픈을 「즉시 공개」로 바꾸세요.' : ''),
+    okText: '판매 재개',
+    okKind: 'go',
+    onOk: function(){ _tuDoToggleSoldout(id); if(typeof after === 'function') { try { after(); } catch(e){} } }
+  });
+}
+// 꽉 찬 비공개 회차를 공개로 — 매진은 그대로(서버가 유지), 캘린더에 SOLD OUT 으로 보이게 된다
+function _tuPublishSoldout(t, after){
+  t.saleState = 'open'; t.saleOpenAt = null;
+  saveTickets([t.id]);
+  if(typeof renderTicketList === 'function') renderTicketList();
+  if(typeof renderCarousel === 'function') renderCarousel();
+  if(typeof renderHomeTickets === 'function') renderHomeTickets();
+  if(typeof renderTicketGenres === 'function') renderTicketGenres();
+  showToast('✓','공개로 전환','회원 캘린더에 SOLD OUT 으로 표시됩니다');
+  if(typeof after === 'function') { try { after(); } catch(e){} }
 }
 function _tuDoToggleSoldout(id){
   var t=ticketDB.find(function(x){return String(x.id)===String(id);});

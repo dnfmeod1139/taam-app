@@ -260,6 +260,9 @@ active · 판매 공개 · 방문일 안 지남 · 잔여 > 0 · flex 면 채울
 on ticket_products, `20261005_ticket_products_status_recalc.sql`) — 점유 ≥ 정원인데 active 로 쓰면 soldout(auto) 으로, 자동 매진인데 **정원을
 늘려** 자리가 생기면 active 로. 되돌림은 정원 늘림 때만이다 — 저장마다 풀면 어드민 수동 잠금(앱은 status 먼저, `auto_soldout=false` 뒤)을 매번 푼다.
 취소표 알림 트리거는 `UPDATE OF status, total_pax` 로 넓혔다(SET 에 없는 열은 BEFORE 가 바꿔도 UPDATE OF 가 안 본다). 회귀: `bash sql/_test/t_tp_status_recalc.sh`(18건).
+따라온 것(2026-10-08): 꽉 찬 회차의 「판매 재개」는 이 트리거가 조용히 되돌린다(시마즈 1/30 8/8 — 어드민은 「재개가 안 된다」로 봤다).
+`tuToggleSoldout` 은 재개 전에 `taam_ticket_sold_slots` 로 좌석을 세서 꽉 찼으면 이유를 말하고, 비공개(`saleState` draft/scheduled)면
+「공개로 전환」(`_tuPublishSoldout`: saleState=open · 매진 그대로 · 캘린더에 SOLD OUT)을 준다 — 어드민이 원한 건 재판매가 아니라 노출이었다.
 
 ### 방문일의 연도는 두 군데가 읽는다 — 둘 다 세 토막을 받아야 한다 (2026-09-21)
 
