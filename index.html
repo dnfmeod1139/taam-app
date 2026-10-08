@@ -43787,7 +43787,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.07-d';
+var TAAM_WEB_BUILD = '2026.10.08-a';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -63013,14 +63013,16 @@ function applySplashSettings() {
       if (pvVid) { try { pvVid.pause(); } catch(e){} pvVid.style.display = 'none'; pvVid.removeAttribute('src'); }
       var _pu = _splashSlideUrls();
       if (_pu.length > 1) {
-        previewBox.style.backgroundImage = "url('" + _pu[0] + "')";
+        // 편집 화면이 열려 있을 때만 — 종전엔 부팅마다 모든 회원 기기에서 미리보기 타이머가 영원히 돌았다
+        // 🔧 밑바탕은 엔진이 돌려준 「지금 장」으로 — 돌고 있는 미리보기에 1번 사진을 덮어쓰면 디졸브 중간에 비친다
+        var _pst = _pu[0];
+        if (_splashEditorOpen()) _pst = _splashSlideStart(previewBox, _pu, _splashInterval(), { alive: _splashEditorOpen }) || _pu[0];
+        else _splashSlideStop(previewBox);
+        previewBox.style.backgroundImage = "url('" + _pst + "')";
         previewBox.style.backgroundSize = 'cover';
         previewBox.style.backgroundPosition = 'center top';
         previewBox.style.borderStyle = 'solid';
         if (empty) empty.style.display = 'none';
-        // 편집 화면이 열려 있을 때만 — 종전엔 부팅마다 모든 회원 기기에서 미리보기 타이머가 영원히 돌았다
-        if (_splashEditorOpen()) _splashSlideStart(previewBox, _pu, _splashInterval(), { alive: _splashEditorOpen });
-        else _splashSlideStop(previewBox);
       } else if (_pu[0]) {
         _splashSlideStop(previewBox);
         previewBox.style.backgroundImage = "url('" + _pu[0] + "')";
@@ -63090,7 +63092,7 @@ function _splashSlideStop(container){
   if (!container) return;
   var key = container.id || container.className || 'x';
   var run = _splashSlideRun[key];
-  if (run) { clearInterval(run.timer); delete _splashSlideRun[key]; }
+  if (run) { if (run.timer) clearTimeout(run.timer); delete _splashSlideRun[key]; }
   Array.prototype.slice.call(container.querySelectorAll(':scope > .splash-slide')).forEach(function(el){ el.remove(); });
 }
 // opts.random — 시작 장을 무작위로 (실제 스플래시). 편집 미리보기는 1번부터 — 순서를 확인하는 화면이다.
@@ -63108,13 +63110,21 @@ function _splashSlideStart(container, urls, sec, opts){
   var ivMs = Math.max(1, parseFloat(sec) || 1.5) * 1000;
   var sig = urls.join('|') + '@' + ivMs;
   var prev = _splashSlideRun[key];
-  if (prev && prev.sig === sig) return prev.startUrl;   // 같은 구성이면 다시 시작하지 않는다
+  // 같은 구성이면 다시 시작하지 않는다. 🔧 리뷰(2026-10-08): 돌려주는 값은 「시작 장」이 아니라 **지금 밑바탕**이어야 한다 —
+  //   호출부가 이 값을 컨테이너 background 에 다시 쓰는데, 시작 장을 쓰면 디졸브 중간에 제3의 사진이 25% 비친다.
+  if (prev && prev.sig === sig) return prev.bgUrl || prev.startUrl;
   _splashSlideStop(container);
   if (!container.style.position && getComputedStyle(container).position === 'static') container.style.position = 'relative';
   var fade = Math.min(1.4, (ivMs / 1000) * 0.8);   // 다음 틱 전에 반드시 끝난다
   container.style.setProperty('--splash-fade', fade.toFixed(2) + 's');
   var start = 0;
-  if (opts.random) { try { start = Math.floor(Math.random() * urls.length) % urls.length; } catch(e){ start = 0; } }
+  if (opts.random) {
+    // 🔧 리뷰(2026-10-08): 파싱 직후 IDB 페인터가 이미 고른 장(window._splashStartUrl)이 있으면 그 장에서 잇는다 —
+    //   아니면 먼저 칠한 1번 사진에서 다른 사진으로 뚝 끊긴다. 없으면 여기서 고른다.
+    var pre = (typeof window._splashStartUrl === 'string') ? urls.indexOf(window._splashStartUrl) : -1;
+    if (pre >= 0) start = pre;
+    else { try { start = Math.floor(Math.random() * urls.length) % urls.length; } catch(e){ start = 0; } }
+  }
   var L1 = document.createElement('div'), L2 = document.createElement('div');
   L1.className = 'splash-slide on'; L2.className = 'splash-slide';
   L1.style.backgroundImage = "url('" + urls[start] + "')";
@@ -63123,18 +63133,24 @@ function _splashSlideStart(container, urls, sec, opts){
   container.insertBefore(L1, container.firstChild);
   container.style.backgroundImage = "url('" + urls[start] + "')";   // 밑바탕 = 지금 장
   urls.forEach(function(u){ var im = new Image(); im.src = u; });   // 미리 받아 둔다
-  var run = { idx: start, sig: sig, startUrl: urls[start], curUrl: urls[start], cur: L1, other: L2, timer: null };
-  run.timer = setInterval(function(){
+  var run = { idx: start, sig: sig, startUrl: urls[start], curUrl: urls[start], bgUrl: urls[start], cur: L1, other: L2, timer: null };
+  // 🔧 리뷰(2026-10-08): setInterval 은 늦은 틱 뒤에 원래 격자로 되돌아가 다음 틱이 바로 따라붙는다(부팅 중 메인 스레드가
+  //   막히면 페이드 도중 다음 전환이 떨어져 튄다). setTimeout 체인은 「간격 = 틱 사이의 하한」이라 페이드가 반드시 끝난 뒤 돈다.
+  function tick(){
+    run.timer = null;
     // 숨겨졌으면 멈춘다 — 닫힌 스플래시·닫힌 편집 화면에서 영원히 돌지 않는다
     if (typeof opts.alive === 'function') { var ok = false; try { ok = !!opts.alive(); } catch(e){} if (!ok) { _splashSlideStop(container); return; } }
     run.idx = (run.idx + 1) % urls.length;
     var next = urls[run.idx], cur = run.cur, oth = run.other;
     container.style.backgroundImage = "url('" + run.curUrl + "')";   // 밑바탕 = 지금 장 (겹치는 동안 빈 틈이 안 비친다)
+    run.bgUrl = run.curUrl;
     oth.style.backgroundImage = "url('" + next + "')";
     oth.classList.add('on');       // 다음 장이 번져 들어오고
     cur.classList.remove('on');    // 지금 장이 번져 나간다 — 둘 다 밑바탕(지금 장) 위에서
     run.cur = oth; run.other = cur; run.curUrl = next;
-  }, ivMs);
+    run.timer = setTimeout(tick, ivMs);
+  }
+  run.timer = setTimeout(tick, ivMs);
   _splashSlideRun[key] = run;
   return urls[start];
 }
@@ -65794,10 +65810,19 @@ IDB.get('splashSettings').then(function(s) {
   var l2 = document.getElementById('splashLine2');
   if (l1 && parsed.text1) l1.textContent = parsed.text1;
   if (l2 && parsed.text2) l2.textContent = parsed.text2;
-  if (parsed.bg) {
+  // 🔧 2026-10-08 사진이 여러 장(bgs)이면 여기서 무작위 장을 **한 번** 고르고 그 장을 칠한다. 뒤에 뜨는 슬라이드 엔진이
+  //   window._splashStartUrl 을 받아 같은 장에서 잇는다 — 안 그러면 1번 사진이 먼저 보였다가 다른 장으로 뚝 끊긴다.
+  var _first = parsed.bg || '';
+  try {
+    if (parsed.mediaType !== 'video' && Array.isArray(parsed.bgs)) {
+      var _bgs = parsed.bgs.filter(function(u){ return typeof u === 'string' && u; });
+      if (_bgs.length > 1) { _first = _bgs[Math.floor(Math.random() * _bgs.length) % _bgs.length]; window._splashStartUrl = _first; }
+    }
+  } catch(e){}
+  if (_first) {
     var bg = document.querySelector('.splash-bg');
     if (bg) {
-      bg.style.backgroundImage = "url('" + parsed.bg + "')";
+      bg.style.backgroundImage = "url('" + _first + "')";
       bg.style.backgroundSize = 'cover';
       bg.style.backgroundPosition = 'center top';
     }

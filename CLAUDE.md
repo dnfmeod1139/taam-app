@@ -516,8 +516,12 @@ Apple 은 iPad 와 iPhone **두 기기로 심사**하므로(리뷰 노트에 명
 건드리지 않고(두 레이어를 번갈아 켜고 끄며 밑바탕 background 를 「지금 장」으로 둔다), `opts.alive()` 가 거짓이면 스스로 멈추며,
 시작은 보일 때만 한다(`_splashIsShowing` · `_splashEditorOpen` · `_splashSlideKick` 은 `_splashHold` 에서). `_splashCloseNow` 와
 `closeSubPage('splashMgmtScreen')` 이 명시적으로 멈춘다. 유지 시간은 5초 고정(사진 수만큼 늘리던 것은 「시작이 느려졌다」로 읽혀 뺐다).
+적대 리뷰(36 에이전트, 2026-10-08) 뒤 셋 더: 같은 구성 재호출은 **지금 밑바탕**(`run.bgUrl`)을 돌려준다(시작 장을 돌려주면 제3의 사진이 비친다) ·
+틱은 `setTimeout` 체인(늦은 틱 뒤 격자로 되돌아가는 `setInterval` 은 페이드 도중 다음 전환을 떨어뜨린다) · 파싱 직후 IDB 페인터가 무작위 장을
+한 번 골라 `window._splashStartUrl` 에 두고 엔진이 그 장에서 잇는다(1번 → 다른 장으로 뚝 끊기지 않게). ⚠ 저장된 `interval` 이 라이브를 정한다 —
+기본값을 바꿔도 이미 저장된 행(3)은 그대로다. 편집 화면에서 바꾸거나 `app_config` 를 직접 고친다(`updated_at` 도 올려야 롤백 가드가 옛값을 되밀지 않는다).
 → 화면에 영구 타이머를 두는 코드를 쓰면 **「보이는 동안만」** 을 먼저 정한다. 회귀: 스크래치 `splashperf.js`(10건).
-유지 시간은 `_splashHold` 가 「장수 × 간격」까지 늘린다(15초 상한, 스킵 그대로). 사진은 **Storage `splash-media`** 에만(버킷 MIME 에 image 허용돼 있다) —
+사진은 **Storage `splash-media`** 에만(버킷 MIME 에 image 허용돼 있다) —
 종전 크롭 경로가 base64 를 설정에 통째로 넣던 것도 이날 Storage URL 로 바꿨다. 여러 장 선택은 크롭 없이 바로(9:16 cover), 한 장은 크롭.
 회귀: 스크래치 `splashslide.js`(9건).
 
