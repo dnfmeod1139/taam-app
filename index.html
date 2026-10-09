@@ -2870,6 +2870,9 @@ html.auto-login .splash .bottom-group{display:none !important}
 .dm-tabs{display:flex;border-bottom:1px solid rgba(0,0,0,.08);flex-shrink:0;background:#fff;}
 .dm-tab{flex:1;padding:14px 0;text-align:center;font-family:var(--font-main);font-size:8px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:#bbb;cursor:pointer;border-bottom:2px solid transparent;transition:all .2s}
 .dm-tab.active{color:#1a1a18;border-bottom-color:#1a1a18}
+/* 🆕 2026-10-09 반환예정 정렬 토글 */
+.dm-sort-btn{flex:none;padding:7px 13px;border:1.5px solid #e0ddd6;border-radius:999px;background:#fff;font-family:var(--font-main);font-size:11.5px;font-weight:700;color:#8a8478;cursor:pointer}
+.dm-sort-btn.on{border-color:#1a1a18;background:#1a1a18;color:#fff}
 .dm-summary{padding:14px 20px;background:#fff;border-bottom:1px solid rgba(0,0,0,.06);flex:none;
   display:flex;justify-content:space-between;align-items:center;}
 .dm-summary-left{flex:1;}
@@ -14144,6 +14147,12 @@ textarea.mapl-in{min-height:78px;resize:vertical;line-height:1.7}
         style="width:100%;box-sizing:border-box;padding:10px 34px 10px 12px;border:1.5px solid #e0ddd6;border-radius:10px;background:#fff;font-size:13px;font-family:var(--font-main);color:#1a1a18;outline:none;">
       <span style="position:absolute;right:11px;top:50%;transform:translateY(-50%);font-size:13px;color:#aaa;pointer-events:none;">🔍</span>
     </div>
+  </div>
+  <!-- 🆕 2026-10-09 반환예정 정렬 — 반환순(방문일이 빠른 순 = 먼저 돌려줘야 하는 순) / 최근구매순. 반환예정 탭에서만 보인다 -->
+  <div id="dmSortRow" style="display:none;gap:6px;align-items:center;padding:8px 16px 2px;">
+    <span style="font-size:11px;color:#9a9486;margin-right:2px;">정렬</span>
+    <button type="button" class="dm-sort-btn" data-sort="due" onclick="dmSetSort('due')">반환순</button>
+    <button type="button" class="dm-sort-btn" data-sort="recent" onclick="dmSetSort('recent')">최근구매순</button>
   </div>
   <!-- 🆕 2026.09-01: 요약과 목록을 **한 스크롤**로 묶는다.
        반환완료·환불·카드환불 탭은 요약에 분해(티켓 총액·총 차감·대행비·추가 차감·
@@ -38473,6 +38482,35 @@ function dmMgmtTab(idx, el){
 var _dmSearchQuery = '';
 function dmSearch(v){ _dmSearchQuery = v || ''; if(typeof renderDmMgmtList==='function') renderDmMgmtList(_dmCurrentTab); }
 
+// 🆕 2026-10-09 반환예정 정렬 — 'due'(반환순: 방문일 빠른 순, 지난 방문이 맨 위) | 'recent'(최근구매순). 기기별로 기억한다.
+//   종전엔 집계 순서(최근 구매) 그대로라 돌려줘야 할 건이 목록 아래에 묻혔다.
+var _dmSort = (function(){ try { var v = localStorage.getItem('taam_dm_sort'); return (v === 'recent' || v === 'due') ? v : 'due'; } catch(e){ return 'due'; } })();
+function dmSetSort(mode){
+  _dmSort = (mode === 'recent') ? 'recent' : 'due';
+  try { localStorage.setItem('taam_dm_sort', _dmSort); } catch(e){}
+  _dmSortPaint();
+  if(typeof renderDmMgmtList === 'function') renderDmMgmtList(_dmCurrentTab);
+}
+function _dmSortPaint(){
+  var row = document.getElementById('dmSortRow');
+  if(!row) return;
+  row.style.display = (_dmCurrentTab === 0) ? 'flex' : 'none';
+  Array.prototype.forEach.call(row.querySelectorAll('.dm-sort-btn'), function(b){
+    b.classList.toggle('on', b.getAttribute('data-sort') === _dmSort);
+  });
+}
+// 방문 시각(ms) — 방문일 없으면 null. 시간이 있으면 더한다 (같은 날 두 회차의 순서)
+function _dmVisitTs(h){
+  var d = parseDmDate(h && h.visitDate);
+  if(!d) return null;
+  var t = d.getTime();
+  var m = h && h.visitTime ? String(h.visitTime).match(/^(\d{1,2}):(\d{2})/) : null;
+  if(m) t += (parseInt(m[1], 10) * 60 + parseInt(m[2], 10)) * 60000;
+  return t;
+}
+function _dmBuyTs(h){ var t = (h && h.date) ? new Date(h.date).getTime() : NaN; return isNaN(t) ? 0 : t; }
+window.dmSetSort = dmSetSort;
+
 function getDmItems(idx){
   var now = new Date();
   // ── 1차 소스: 집계된 전 유저 구매내역 ──
@@ -38509,6 +38547,19 @@ function getDmItems(idx){
       if(h.depositReturn) return false;
       return _dmMatch(h);
     });
+    // 🆕 2026-10-09 정렬 토글 — 반환순이 기본
+    if(_dmSort === 'recent'){
+      out.sort(function(a,b){ return _dmBuyTs(b) - _dmBuyTs(a); });
+    } else {
+      out.sort(function(a,b){
+        var va = _dmVisitTs(a), vb = _dmVisitTs(b);
+        if(va === null && vb === null) return _dmBuyTs(a) - _dmBuyTs(b);
+        if(va === null) return 1;      // 방문일 모르는 건은 맨 뒤
+        if(vb === null) return -1;
+        if(va !== vb) return va - vb;  // 방문일 빠른 순 — 이미 지난 방문이 맨 위
+        return _dmBuyTs(a) - _dmBuyTs(b);
+      });
+    }
   } else if(idx === 1){ // 반환완료
     out = src.filter(function(h){ return h && h.depositReturn && h.depositReturn.type === 'returned' && _dmMatch(h); });
   } else if(idx === 3){
@@ -38544,6 +38595,7 @@ function getDmItems(idx){
 }
 
 function renderDmMgmtList(idx){
+  if(typeof _dmSortPaint === 'function') _dmSortPaint();
   var items = getDmItems(idx);
   // ── Fix 8 연동: 팝업 함수들이 올바른 아이템을 찾도록 렌더된 배열 보관 ──
   _dmRenderedItems = items;
@@ -43787,7 +43839,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.08-b';
+var TAAM_WEB_BUILD = '2026.10.09-a';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
