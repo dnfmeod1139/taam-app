@@ -8326,7 +8326,10 @@ async function _tossIssueBillingKey(customerKey, authKey){
     } else if (code === 'save_failed') {
       // 토스에는 발급됐는데 우리 DB 저장이 실패했다. 조용히 성공 처리하면
       // "등록했는데 목록에 없다"가 되므로 그대로 알린다.
-      showToast('⚠','카드 저장 실패','다시 등록해주세요 — 반복되면 문의해 주세요');
+      //   🔧 2026-10-13 서버가 준 원인(코드·제약)을 토스트에 짧게 붙이고 app_errors 에도 남긴다 — 라이브에서 원인을 볼 길이 없었다.
+      var _sr = String((d && d.reason) || '').slice(0, 60);
+      showToast('⚠','카드 저장 실패','다시 등록해주세요 — 반복되면 문의해 주세요' + (_sr ? ' (' + _sr + ')' : ''));
+      try { if (typeof window.taamReportError === 'function') window.taamReportError('billing_save', 'toss-billing-issue save_failed: ' + ((d && d.reason) || 'no reason'), null, { ck: String(customerKey || '').slice(0, 8) }); } catch(_br){}
     } else {
       showToast('⚠','카드 등록 실패', (d && d.reason) || '다시 시도해주세요');
     }
@@ -44176,7 +44179,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.13-g';
+var TAAM_WEB_BUILD = '2026.10.13-h';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){

@@ -115,24 +115,28 @@ async function handle(req: Request): Promise<Response> {
 
     // ── 저장 ──
     //   첫 카드는 자동으로 기본카드가 된다.
-    const { count } = await admin.from('billing_keys')
+    //   🔧 2026-10-13 앞 두 조회의 오류를 더는 버리지 않는다 — 저장이 실패하면 그 오류까지 app_errors 에 함께 남긴다
+    //     (서비스 키가 service_role 이 아니면 조회부터 조용히 비어 있었다 — 그걸 알 길이 없었다).
+    const { count, error: countErr } = await admin.from('billing_keys')
       .select('id', { count: 'exact', head: true })
       .eq('user_id', user.id).is('deleted_at', null);
     const isFirst = !count;
 
     // 같은 빌링키 재등록(카드 삭제 후 같은 카드 재등록 등) — 되살린다
-    const { data: exist } = await admin.from('billing_keys')
+    const { data: exist, error: existErr } = await admin.from('billing_keys')
       .select('id').eq('billing_key', toss.billingKey).maybeSingle();
 
-    if (exist) {
-      await admin.from('billing_keys').update({
+    const restore = async (id: string) => {
+      const { error: upErr } = await admin.from('billing_keys').update({
         user_id: user.id, customer_key: customerKey,
         card_company: cardCompany, card_number: cardNumber, card_type: cardType,
         deleted_at: null,
-      }).eq('id', exist.id);
-      if (isFirst) await setDefault(admin, user.id, exist.id);
+      }).eq('id', id);
+      if (upErr) throw upErr;
+      if (isFirst) await setDefault(admin, user.id, id);
       return json({ ok: true, restored: true, cardCompany, cardNumber });
-    }
+    };
+    if (exist) return await restore(exist.id);
 
     const { data: ins, error: insErr } = await admin.from('billing_keys').insert({
       user_id: user.id,
@@ -145,11 +149,35 @@ async function handle(req: Request): Promise<Response> {
     }).select('id').maybeSingle();
 
     if (insErr || !ins) {
+      // 🔧 2026-10-13 같은 빌링키가 이미 있다(23505) — exist 조회가 비었거나 경주다. 되살리는 길로 보낸다.
+      if (insErr && String((insErr as { code?: string }).code || '') === '23505') {
+        const { data: again } = await admin.from('billing_keys')
+          .select('id').eq('billing_key', toss.billingKey).maybeSingle();
+        if (again) {
+          try { return await restore(again.id); } catch (_re) { /* 아래로 — 원인을 남긴다 */ }
+        }
+      }
       // 발급은 됐는데 저장이 실패했다 — 회원 화면에 그대로 알린다.
       //   조용히 성공 처리하면 "등록했는데 목록에 없다"가 된다.
-      console.error('[toss-billing-issue] 저장 실패', insErr);
-      // DB 오류 원문(컬럼·제약 이름)은 로그에만
-      return json({ ok: false, error: 'save_failed' });
+      //   🔧 2026-10-13 원인(코드·제약·컬럼)을 ① 응답 reason 으로 ② app_errors(kind billing_save, platform edge) 로 남긴다 —
+      //     Edge 로그만 보고는 라이브에서 무엇이 거절했는지 아무도 알 수 없었다(「카드 저장 실패」만 떴다). 카드번호는 애초에 없다.
+      const e = (insErr || {}) as { code?: string; message?: string; details?: string; hint?: string };
+      const reason = (e.code ? e.code + ' ' : '') + String(e.message || (ins ? '' : 'no_row')).slice(0, 160);
+      console.error('[toss-billing-issue] 저장 실패', insErr, { countErr, existErr });
+      try {
+        await admin.from('app_errors').insert({
+          user_id: user.id, role: 'user', build: 'edge', platform: 'edge', kind: 'billing_save',
+          message: 'toss-billing-issue 저장 실패: ' + reason,
+          stack: null, url: '/toss-billing-issue',
+          extra: {
+            code: e.code || null, details: String(e.details || '').slice(0, 300), hint: String(e.hint || '').slice(0, 200),
+            count_err: countErr ? String((countErr as { message?: string }).message || '').slice(0, 160) : null,
+            exist_err: existErr ? String((existErr as { message?: string }).message || '').slice(0, 160) : null,
+            is_first: isFirst, card_company: cardCompany,
+          },
+        });
+      } catch (_ae) { /* 기록 실패는 결과를 바꾸지 않는다 */ }
+      return json({ ok: false, error: 'save_failed', reason });
     }
 
     if (isFirst) await setDefault(admin, user.id, ins.id);
