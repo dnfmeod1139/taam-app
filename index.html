@@ -26449,12 +26449,19 @@ function _tkPcSameDay(a, b){
 function _tkFindPurchaseConflict(rows, tpId, dateObj, timeStr, exceptPid){
   var live = _tkLiveRows(rows).filter(function(h){ return !exceptPid || String(h.purchaseId || '') !== String(exceptPid); });
   if(tpId){
-    var dup = live.find(function(h){ return String(h.id) === String(tpId); });
+    // 내가 전에 잡아 두고 안 끝낸 결제 홀드(PAYH- · 5분 안)는 같은 회차 중복으로 세지 않는다 — _tkAcquireSeatHold 가 그 홀드를
+    // 재사용하므로 서버도 막지 않는다. 다른 회원·다른 기기의 진짜 경쟁은 서버 트리거(hold 포함)가 거른다. 시간대 겹침은 그대로 센다.
+    var dup = live.find(function(h){
+      if(String(h.id) !== String(tpId)) return false;
+      if(String(h.rawStatus || '') === 'hold' && /^PAYH-/.test(String(h.purchaseId || ''))) return false;
+      return true;
+    });
     if(dup) return { kind:'dup', prev: dup };
   }
   if(!dateObj) return null;
   var slot = _tkTimeSlot(timeStr);
   var clash = live.find(function(h){
+    if(tpId && String(h.id) === String(tpId)) return false;              // 같은 회차는 위 중복 검사의 몫(내 옛 홀드 재사용 포함)
     var vd = h.visitDate ? _repParseDate(h.visitDate, dateObj) : null;   // 방문일만 본다 — 구매일(h.date)로 떨어뜨리지 않는다
     if(!vd || !_tkPcSameDay(vd, dateObj)) return false;
     var hs = _tkTimeSlot(h.visitTime);
