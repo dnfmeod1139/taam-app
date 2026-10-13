@@ -10387,6 +10387,12 @@ window.closePromoCarousel = function(){
             <div style="font-family:var(--font-main);font-size:9px;color:#aaa;letter-spacing:.05em;">가입일</div>
             <div id="mpMemberJoinDate" style="font-family:'Oswald','Noto Sans KR','Noto Sans JP',sans-serif;font-size:13.5px;font-weight:600;color:#1a1a18;letter-spacing:.02em;">—</div>
           </div>
+          <!-- 🆕 2026-10-13 시작일 = 첫 초대 또는 첫 구매 중 빠른 날 (1년 유지 기산일). 둘 다 없으면 「시작 전」 -->
+          <div>
+            <div style="font-family:var(--font-main);font-size:9px;color:#aaa;letter-spacing:.05em;">시작일</div>
+            <div id="mpMemberStartDate" style="font-family:'Oswald','Noto Sans KR','Noto Sans JP',sans-serif;font-size:13.5px;font-weight:600;color:#1a1a18;letter-spacing:.02em;">—</div>
+            <div id="mpMemberStartKind" style="display:none;font-family:var(--font-main);font-size:9px;color:#c8a96e;font-weight:600;margin-top:1px;"></div>
+          </div>
           <div>
             <div style="font-family:var(--font-main);font-size:9px;color:#aaa;letter-spacing:.05em;">종료일</div>
             <div id="mpMemberUntilDate" style="font-family:'Oswald','Noto Sans KR','Noto Sans JP',sans-serif;font-size:13.5px;font-weight:600;color:#5C0A14;letter-spacing:.02em;">—</div>
@@ -21084,6 +21090,7 @@ function _refreshMyPageUserName(){
               if(typeof _applyMembershipPeriodToUI === 'function'){
                 _applyMembershipPeriodToUI(profRes.data.created_at, profRes.data.member_until);
               }
+              if(typeof _mpPaintMemberStart === 'function') _mpPaintMemberStart();   // 🆕 시작일(첫 초대·구매)
             } catch(_pe){ console.warn('[membership period]', _pe); }
           }
         })
@@ -21119,6 +21126,38 @@ function _applyMembershipPeriodToUI(createdAt, memberUntil){
   }
 }
 window._applyMembershipPeriodToUI = _applyMembershipPeriodToUI;
+
+// 🆕 2026-10-13 회원 시작일 — 첫 초대 또는 첫 구매 중 빠른 날 (서버 taam_member_start 가 센다).
+//   가입 뒤 한참 지나 첫 구매가 이뤄지기도 해서, 1년 유지의 시작을 가입일이 아니라 이 날로 본다. 지금은 표시만.
+//   ⚠ 앱이 세지 않는다 — tickets·초대·옛 원장을 함께 봐야 하고, 그건 서버가 안다. 못 읽으면 칸을 비운다.
+function _memberStartFmt(iso){
+  if(!iso) return '';
+  var d = new Date(iso); if(isNaN(d.getTime())) return '';
+  return d.getFullYear() + '.' + String(d.getMonth()+1).padStart(2,'0') + '.' + String(d.getDate()).padStart(2,'0');
+}
+async function _memberStartFetch(uid){
+  try {
+    if(!window.sb) return null;
+    var r = await window.sb.rpc('taam_member_start', uid ? { p_uid: uid } : {});
+    if(r.error || !r.data) return null;
+    return r.data;
+  } catch(e){ return null; }
+}
+// 표시용 — { text, kind } · kind 는 '첫 초대' | '첫 구매' | ''  (TX 사전에 있는 낱말만 쓴다 — EN·JA 로 바뀐다)
+function _memberStartLabel(ms){
+  if(!ms) return { text: '—', kind: '' };
+  if(!ms.started || !ms.start_at) return { text: '시작 전', kind: '' };
+  return { text: _memberStartFmt(ms.start_at), kind: (ms.start_kind === 'invite') ? '첫 초대' : '첫 구매' };
+}
+async function _mpPaintMemberStart(){
+  var el = document.getElementById('mpMemberStartDate'), kd = document.getElementById('mpMemberStartKind');
+  if(!el) return;
+  var ms = await _memberStartFetch(null);
+  var lb = _memberStartLabel(ms);
+  el.textContent = lb.text;
+  if(kd){ kd.textContent = lb.kind; kd.style.display = lb.kind ? 'block' : 'none'; }
+}
+window._mpPaintMemberStart = _mpPaintMemberStart;
 
 // 🆕 사용자 이름을 마이페이지 + 관련 UI 에 일괄 적용
 function _applyUserNameToUI(name){
@@ -30567,16 +30606,19 @@ async function mlOpen(uid){
   if(!d || !window.sb) return;
   d.innerHTML = '<div style="padding:20px 0;text-align:center;font-size:14px;color:#a8a29a;">불러오는 중…</div>';
 
-  var [pf, dt, tk] = await Promise.all([
+  var [pf, dt, tk, msr] = await Promise.all([
     window.sb.from('profiles').select('*').eq('id', uid).maybeSingle(),
     window.sb.from('deposit_transactions')
       .select('created_at, deposit_type, change_type, amount, balance_after, description, metadata')
       .eq('user_id', uid).order('created_at', { ascending: false }).limit(500),
     window.sb.from('tickets')
       .select('id, created_at, restaurant_name, party_size, price, status, reservation_date, visit_time, purchase_id, ticket_product_id, extra_data')
-      .eq('user_id', uid).order('created_at', { ascending: false }).limit(300)
+      .eq('user_id', uid).order('created_at', { ascending: false }).limit(300),
+    // 🆕 2026-10-13 시작일(첫 초대·구매) — 함수가 없으면 null (표시만 비운다)
+    window.sb.rpc('taam_member_start', { p_uid: uid }).then(function(r){ return (r && !r.error) ? r.data : null; }, function(){ return null; })
   ]);
   var u = pf.data || {};
+  var _ms = msr || null;
   var txs = (dt.data || []);
   // 좌석 홀드(구매 미완)는 원장이 아니다
   var buys = (tk.data || []).filter(function(t){ return t.status !== 'hold'; });
@@ -30808,6 +30850,15 @@ async function mlOpen(uid){
      + _pcalEsc(u.phone || u.email || '')
      + (_joined ? ' · ' + _joined + ' 가입' : '')
      + (_exp ? ' · 멤버십 만료 ' + _exp : '') + '</div>';
+  // 🆕 2026-10-13 시작일 — 가입일과 따로. 첫 초대·첫 구매 중 빠른 날, 둘 다 없으면 「시작 전」
+  if(_ms){
+    var _msl = _memberStartLabel(_ms);
+    h += '<div style="font-size:11.5px;color:' + C.sub + ';margin-top:4px;">'
+       + '<b style="color:' + C.ink + ';">시작일 ' + _pcalEsc(_msl.text) + '</b>'
+       + (_msl.kind ? ' <span style="color:' + C.faint + ';">(' + _msl.kind + ')</span>' : '')
+       + (_ms.year_end_at ? ' <span style="color:' + C.faint + ';">· 1년 ' + _memberStartFmt(_ms.year_end_at) + '</span>' : '')
+       + '</div>';
+  }
   h += '<button onclick="mlCsv()" style="margin-top:10px;padding:7px 11px;border:1px solid ' + C.line + ';'
      + 'border-radius:9px;background:#fff;font-family:inherit;font-size:11.5px;font-weight:700;'
      + 'color:' + C.sub + ';cursor:pointer;">⤓ 이 회원 내역 CSV</button>';
@@ -39308,6 +39359,10 @@ async function showBuyerInfo(idx) {
             : (_ok(p.grade) ? p.grade : ''));
   var role  = p.role || 'member';
   var joinedAt = p.created_at ? new Date(p.created_at).toLocaleDateString('ko-KR', {year:'numeric',month:'2-digit',day:'2-digit'}) : '';
+  // 🆕 2026-10-13 시작일(첫 초대·구매) — 서버가 센다. 못 읽으면 줄을 비운다
+  var _bms = null;
+  try { if(h._userId && typeof _memberStartFetch === 'function') _bms = await _memberStartFetch(h._userId); } catch(_me){}
+  var _bmsl = _bms ? _memberStartLabel(_bms) : null;
 
   // 폴백: Supabase 프로필이 없으면 (구버전 IDB 데이터) memberDB 매칭
   if(!h._buyerProfile && phone){
@@ -39404,6 +39459,7 @@ async function showBuyerInfo(idx) {
     + '<div style="font-size:10px;font-weight:800;letter-spacing:.12em;color:#888;margin:6px 0 6px;text-transform:uppercase;">▸ 회원 정보</div>'
     + _row('등급', grade || '–')
     + _row('가입일', joinedAt || '–')
+    + (_bmsl ? _row('시작일', _bmsl.text + (_bmsl.kind ? ' (' + _bmsl.kind + ')' : '')) : '')
 
     // 예치금 잔액 (Supabase 데이터 있을 때만)
     + (hasBalance
@@ -43839,7 +43895,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.09-a';
+var TAAM_WEB_BUILD = '2026.10.13-a';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -53731,6 +53787,10 @@ var TX_MAP = {
   // ── 마이페이지 · 프로필 ──
   '회원 자격':['Membership','会員資格'],
   '가입일':['Joined','登録日'],
+  '시작일':['Started','開始日'],
+  '시작 전':['Not started','開始前'],
+  '첫 초대':['first invitation','初回招待'],
+  '첫 구매':['first purchase','初回購入'],
   '종료일':['Expires','終了日'],
   '가입 이메일':['Account email','登録メールアドレス'],
   '로그인 시 사용하는 이메일입니다. 변경이 필요하시면 고객센터로 문의해주세요.':['This is the email you sign in with. Contact us if you need to change it.','ログインに使用するメールアドレスです。変更が必要な場合はカスタマーセンターへご連絡ください。'],
