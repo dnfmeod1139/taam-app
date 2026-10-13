@@ -549,7 +549,7 @@ Apple 은 iPad 와 iPhone **두 기기로 심사**하므로(리뷰 노트에 명
 
 | 항목 | 값 |
 |---|---|
-| 전역 플래그 | `NEW_HOME_LIVE = false` (index.html) |
+| 전역 플래그 | `NEW_HOME_LIVE = true` (index.html) — **2026-08-25 iOS 출시에 맞춰 전 회원 전환됨.** 아래 「아직 열려 있지 않다」는 그 전의 서술이다. 회원의 실제 구매 경로는 `pcalOpenTicket → pcalPay → openTdPayPopup` 이며 `handleTicketAction` 을 지나지 않는다 — 구매 전 검사는 `openTdPayPopup` 입구에 둔다 (2026-10-13) |
 | 기기별 스위치 | `localStorage.taamNewHome = '1'` + **슈퍼어드민만** |
 | 판정 함수 | `newHomeEnabled()` |
 | 켜고 끄기 | 슈퍼어드민 → 어드민 메뉴 → 「📅 사진 캘린더 (이 기기)」 |

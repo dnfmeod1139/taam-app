@@ -24993,6 +24993,9 @@ window._tkReleaseHoldOnLeave = _tkReleaseHoldOnLeave;
 async function openTdPayPopup() {
   var t = currentTicket, r = currentRest;
   if (!t) return;
+  // 🆕 2026-10-13 사진 캘린더 경로(pcalPay → 여기)는 handleTicketAction 을 거치지 않는다 — NEW_HOME_LIVE=true 라 전 회원이 이 길로 산다.
+  //   결제 팝업 입구에서 같은 회차 중복·같은 시간대를 한 번 더 거른다 (서버 trg_taam_guard_purchase_unique 가 최종).
+  if (typeof checkPurchaseConflicts === 'function' && !checkPurchaseConflicts(t)) return;
   var pax    = _tdPax;
   var meal   = parseInt(t.mealFee||t.mealAmt||0);
   var agency = parseInt(t.agencyFee||0);
@@ -56454,6 +56457,7 @@ window.pcalGoTicket = pcalGoTicket;
 //   기존 `ticketDetailScreen` 은 한 줄도 건드리지 않는다. 플래그를 끄면 그대로 쓰인다.
 //   여기서 새로 하는 건 「보여주는 방식」뿐이고, **구매는 기존 것을 그대로 부른다** —
 //   `currentTicket`/`currentRest`/`_tdPax` 를 기존 상세와 똑같이 세팅한 뒤
+//   ⚠ 2026-10-13: 실제로는 handleTicketAction 을 부르지 않는다 — pcalPay() 가 openTdPayPopup() 을 직접 연다. 구매 전 검사는 openTdPayPopup 입구에.
 //   `handleTicketAction()` 을 호출하면 글래스모피즘 구매 시트(tdPurchaseSheet)가
 //   그대로 열린다. 금전 로직·좌석 홀드·취소 규정은 손대지 않았다.
 //
