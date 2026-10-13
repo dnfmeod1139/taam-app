@@ -18458,6 +18458,7 @@ async function loadPurchase(){
       buyerName: r.buyer_name || '',
       buyerRole: (r.extra_data && r.extra_data.buyerRole) || 'user',
       purchaseId: r.purchase_id || '',
+      rawStatus: r.status || '',   // 🆕 2026-10-13 중복 구매 검사가 hold/expired 를 가린다 (위 status 는 화면용 통칭)
       notifications: (r.extra_data && r.extra_data.notifications) || null,
       agencyFee: (r.extra_data && r.extra_data.agencyFee) || 0,   // 🆕 대행비 스냅샷 복원
       extra_data: r.extra_data || {},
@@ -24569,6 +24570,8 @@ function handleTicketAction(){
     }
     if(t.typeClass==='std' && !checkRepurchaseLimit(t)) return;
   }
+  // 🆕 2026-10-13 같은 회차 중복 · 같은 날 같은 시간대 — 티켓 종류(std/eve)·매장 재구매 제한·역할과 무관하게 본다
+  if(typeof checkPurchaseConflicts === 'function' && !checkPurchaseConflicts(t)) return;
 
   _tdConfirmAgreed = false;
   var chk = document.getElementById('tdConfirmCheck');
@@ -24699,6 +24702,8 @@ window._tkSeatHoldId = null;   // 현재 잡고 있는 홀드의 purchase_id
 window._tkSeatHoldPax = 0;
 
 async function _tkAcquireSeatHold(t, r, pax){
+  // ⚠ 이 함수의 t 는 **티켓**이다 — 사전을 부르려면 _shT 를 쓴다. (2026-10-13: 종전 seathold.tier/fail 줄이 사전 대신 티켓을 불러 TypeError 를 내고 있었다)
+  function _shT(k, ko){ return (typeof window.t === 'function') ? window.t(k, ko) : ko; }
   if (!window.sb) return { ok:false, reason:'서버 연결이 없습니다' };
   var res = await window.sb.auth.getUser();
   var u = res && res.data && res.data.user;
@@ -24776,14 +24781,24 @@ async function _tkAcquireSeatHold(t, r, pax){
     //   여기까지 오는 건 앱의 _tkTierAllowed() 가 놓쳤을 때뿐이다.
     //   그때 「좌석 확보 실패 — 잠시 후 다시 시도」로 보이면 회원은 계속 다시 누른다.
     //   등급 때문이라는 걸 그 자리에서 말해야 한다.
+    // 🆕 2026-10-13 서버 중복 구매·같은 시간대 가드(trg_taam_guard_purchase_unique) — 앱 사전 검사가 놓쳤을 때(다른 기기 구매 등)
+    if (/DUPLICATE_PURCHASE/.test(m)) {
+      console.warn('[seatHold] 서버 중복 구매 차단:', m);
+      return { ok:false, dup:true, reason: _shT('ticket.dup_body','이미 구매한 회차입니다. 같은 회차는 한 번만 구매할 수 있습니다.') };
+    }
+    if (/TIME_CONFLICT/.test(m)) {
+      console.warn('[seatHold] 서버 같은 시간대 차단:', m);
+      return { ok:false, clash:true, prevText: (m.match(/\(([^()]*)\)\s*$/) || [])[1] || '',
+               reason: _shT('ticket.clash_body','같은 날 같은 시간대(점심/저녁)에 이미 예약이 있어 구매할 수 없습니다.') };
+    }
     if (/TIER_BLOCKED/.test(m)) {
       console.warn('[seatHold] 서버 등급 제한:', m);
       return { ok:false, tier:true,
                need: (m.match(/이 티켓은\s*([MTA])\s*등급/) || [])[1] || '',
-               reason: t('seathold.tier','이 티켓은 등급 제한이 있습니다') };
+               reason: _shT('seathold.tier','이 티켓은 등급 제한이 있습니다') };
     }
     console.warn('[seatHold] 실패:', ins.error);
-    return { ok:false, reason: t('seathold.fail','좌석 확보에 실패했습니다 — 잠시 후 다시 시도해주세요') };
+    return { ok:false, reason: _shT('seathold.fail','좌석 확보에 실패했습니다 — 잠시 후 다시 시도해주세요') };
   }
   window._tkSeatHoldId = purchaseId;
   window._tkSeatHoldPax = pax;          // 잔여석 계산에서 내 홀드를 빼기 위해 기록
@@ -25026,6 +25041,12 @@ async function openTdPayPopup() {
       // 🆕 등급 제한도 같은 이유로 원래 쓰던 팝업을 그대로 쓴다.
       //   서버가 알려준 필요 등급을 티켓 값보다 우선한다 — 앱의 minTier 가
       //   낡았을 수 있고, 실제로 막은 근거는 서버 값이다.
+      // 🆕 2026-10-13 중복 구매·같은 시간대 — 앱이 먼저 걸렀을 때와 같은 팝업
+      if (_hold.dup || _hold.clash) {
+        try { showPurchaseBlockPopup(_hold.dup ? 'dup' : 'clash', null, _hold.prevText || ''); }
+        catch(_pbe){ showToast('🚫', _hold.dup ? '중복 구매 불가' : '같은 시간대 예약 있음', _hold.reason); }
+        return;
+      }
       if (_hold.tier) {
         try {
           if (typeof showTierLockPopup === 'function') {
@@ -26391,6 +26412,111 @@ function _repReleasedByAge(t){
   return !!(t && t.repurchaseOpen);
 }
 window._repReleasedByAge = _repReleasedByAge;
+
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026-10-13 중복 구매 · 같은 시간대 차단 (앱 사전 검사)
+//   서버 trg_taam_guard_purchase_unique(20261014_purchase_uniqueness.sql)와 같은 규칙이다 — 서버가 최종 권한이고,
+//   여기는 회원이 결제 화면까지 가기 전에 같은 말로 막아 주는 자리다.
+//   ① 같은 회원이 같은 회차를 두 번 → DUPLICATE_PURCHASE   (티켓 종류·매장 재구매 제한과 무관 · 면제 없음)
+//   ② 같은 날 같은 시간대(점심 <16:00 ≤ 저녁)에 다른 매장(또는 같은 매장 다른 회차) → TIME_CONFLICT
+//      시각을 모르는 쪽이 있으면 겹치는 것으로 본다(막는 쪽이 기본).
+//   운영 행(KSK-/LINK-/MAN-/INVH-)과 취소·만료 행은 세지 않는다. 지금 잡고 있는 내 홀드(_tkSeatHoldId)도 뺀다.
+// ═══════════════════════════════════════════════════════════════
+function _tkTimeSlot(str){
+  var s = String(str == null ? '' : str).trim(); if(!s) return null;
+  var m = s.match(/(\d{1,2})(?::(\d{2}))?/); if(!m) return null;
+  var h = parseInt(m[1], 10);
+  if(/pm|오후/i.test(s) && h < 12) h += 12;
+  if(/am|오전/i.test(s) && h === 12) h = 0;
+  if(isNaN(h) || h < 0 || h > 23) return null;
+  return h < 16 ? 'lunch' : 'dinner';
+}
+function _tkIsOpsRow(h){
+  if(!h) return false;
+  if(/^(KSK|LINK|MAN|INVH)-/.test(String(h.purchaseId || ''))) return true;
+  var e = h.extra_data || {};
+  return !!(e.manualEntry || e.inviteHold || e.kashikiri || e.linkInvite);
+}
+function _tkLiveRows(rows){
+  return (rows || []).filter(function(h){
+    return h && !_repIsCancelled(h) && String(h.rawStatus || '') !== 'expired' && !_tkIsOpsRow(h);
+  });
+}
+function _tkPcSameDay(a, b){
+  return !!(a && b && a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate());
+}
+// rows: purchaseHistory 모양 · tpId/dateObj/timeStr: 사려는 것 · exceptPid: 내 홀드. 반환 null(통과) | {kind:'dup'|'clash', prev}
+function _tkFindPurchaseConflict(rows, tpId, dateObj, timeStr, exceptPid){
+  var live = _tkLiveRows(rows).filter(function(h){ return !exceptPid || String(h.purchaseId || '') !== String(exceptPid); });
+  if(tpId){
+    var dup = live.find(function(h){ return String(h.id) === String(tpId); });
+    if(dup) return { kind:'dup', prev: dup };
+  }
+  if(!dateObj) return null;
+  var slot = _tkTimeSlot(timeStr);
+  var clash = live.find(function(h){
+    var vd = h.visitDate ? _repParseDate(h.visitDate, dateObj) : null;   // 방문일만 본다 — 구매일(h.date)로 떨어뜨리지 않는다
+    if(!vd || !_tkPcSameDay(vd, dateObj)) return false;
+    var hs = _tkTimeSlot(h.visitTime);
+    return !slot || !hs || hs === slot;
+  });
+  return clash ? { kind:'clash', prev: clash } : null;
+}
+function checkPurchaseConflicts(t){
+  if(!t) return true;
+  var c = _tkFindPurchaseConflict(purchaseHistory, t.id, _repTicketDate(t), t.time, window._tkSeatHoldId);
+  if(!c) return true;
+  console.warn('[purchase] 앱 사전 차단:', c.kind, c.prev && c.prev.purchaseId);
+  showPurchaseBlockPopup(c.kind, c.prev);
+  return false;
+}
+window.checkPurchaseConflicts = checkPurchaseConflicts; window._tkFindPurchaseConflict = _tkFindPurchaseConflict; window._tkTimeSlot = _tkTimeSlot;
+// 서버에서 내 살아 있는 티켓을 **새로 읽어** 같은 판정 — 초대 결제처럼 돈이 먼저 움직이는 경로에서 쓴다 (다른 기기에서 산 것도 본다).
+//   못 읽으면 null — 서버 트리거에 맡긴다.
+async function _tkServerPurchaseConflict(uid, tpId, dateStr, timeStr){
+  if(!window.sb || !uid) return null;
+  var q = await window.sb.from('tickets')
+    .select('ticket_product_id, restaurant_name, reservation_date, visit_time, status, purchase_id, extra_data')
+    .eq('user_id', uid)
+    .not('status', 'in', '("cancelled","canceled","expired")');
+  if(q.error || !q.data) return null;
+  var rows = q.data.map(function(r){
+    return { id: r.ticket_product_id || '', rest: r.restaurant_name || '', visitDate: r.reservation_date || '', visitTime: r.visit_time || '',
+             status: r.status || '', rawStatus: r.status || '', purchaseId: r.purchase_id || '', extra_data: r.extra_data || {} };
+  });
+  var d = dateStr ? _repParseDate(dateStr, new Date()) : null;
+  return _tkFindPurchaseConflict(rows, tpId, d, timeStr, null);
+}
+window._tkServerPurchaseConflict = _tkServerPurchaseConflict;
+// 막힘 팝업 — showRepurchasePopup 과 같은 생김새. prev(구매내역 행) 또는 prevText(서버 메시지의 괄호 안)로 기존 예약을 적는다.
+function showPurchaseBlockPopup(kind, prev, prevText){
+  var old = document.getElementById('purchaseBlockPopup'); if (old) old.remove();
+  function _pbT(key, ko){ return (typeof t === 'function') ? t(key, ko) : ko; }
+  var dup = (kind === 'dup');
+  var line = String(prevText || '');
+  if(!line && prev){
+    line = [prev.rest || prev.restaurant_name || '', [prev.visitDate || '', prev.visitTime || ''].filter(Boolean).join(' ')].filter(Boolean).join(' · ');
+  }
+  var popup = document.createElement('div');
+  popup.id = 'purchaseBlockPopup';
+  popup.style.cssText = 'position:fixed;inset:0;z-index:900;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;';
+  popup.innerHTML =
+    '<div style="background:#fff;border-radius:20px;width:calc(100% - 48px);max-width:320px;padding:28px 24px;text-align:center;">'
+      + '<div style="font-size:28px;margin-bottom:12px;">🚫</div>'
+      + '<div style="font-family:var(--font-main);font-size:16px;font-weight:800;color:#1a1a18;margin-bottom:14px;">'
+        + (dup ? _pbT('ticket.dup_title','중복 구매 불가') : _pbT('ticket.clash_title','같은 시간대 예약 있음')) + '</div>'
+      + '<div style="font-family:var(--font-main);font-size:13px;color:#444;line-height:1.85;margin-bottom:12px;text-align:left;background:#f7f5f2;border-radius:12px;padding:16px 18px;">'
+        + (dup ? _pbT('ticket.dup_body','이미 구매한 회차입니다. 같은 회차는 한 번만 구매할 수 있습니다.')
+               : _pbT('ticket.clash_body','같은 날 같은 시간대(점심/저녁)에 이미 예약이 있어 구매할 수 없습니다.'))
+      + '</div>'
+      + (line ? '<div style="font-family:var(--font-main);font-size:12px;color:#aaa;margin-bottom:20px;">'
+          + _pbT('ticket.block_prev','기존 예약') + ' · <b style="color:#888;">' + _pcalEsc(line) + '</b></div>' : '<div style="height:8px;"></div>')
+      + '<button onclick="document.getElementById(\'purchaseBlockPopup\').remove()" style="width:100%;padding:14px;background:#1a1a18;border:none;border-radius:12px;font-family:var(--font-main);font-size:11px;font-weight:800;letter-spacing:.2em;color:#fff;cursor:pointer;">'
+        + _pbT('common.confirm','확인') + '</button>'
+    + '</div>';
+  document.body.appendChild(popup);
+}
+window.showPurchaseBlockPopup = showPurchaseBlockPopup;
 
 function checkRepurchaseLimit(t){
   // 면제 계정은 재구매 제한을 적용하지 않는다 (심사용 테스트 계정 · 슈퍼어드민)
@@ -44000,7 +44126,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.13-e';
+var TAAM_WEB_BUILD = '2026.10.13-f';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -44966,6 +45092,13 @@ async function riConfirmPay(){
         }
       } catch(_pce){ console.warn('[riPay] 연결 티켓 좌석 검증 예외:', _pce); }
     }
+    // 🆕 2026-10-13 중복 구매·같은 시간대 — 돈이 움직이기 **전에** 서버의 내 티켓을 새로 읽어 거른다.
+    //   확정 RPC(taam_invite_confirm_hold)는 차감 뒤에 돌아서, 서버 트리거가 거기서 막으면 돈만 빠진 모양이 된다.
+    //   purchaseHistory 가 아니라 서버를 읽는 이유: 다른 기기에서 방금 산 것도 봐야 한다.
+    try {
+      var _pc = await _tkServerPurchaseConflict(u.id, inv.ticket_product_id ? String(inv.ticket_product_id) : '', inv.visit_date || '', inv.visit_time || '');
+      if(_pc){ console.warn('[riPay] 중복/시간대 차단:', _pc.kind); showPurchaseBlockPopup(_pc.kind, _pc.prev); return; }
+    } catch(_pcx){ console.warn('[riPay] 중복 검사 예외(서버 트리거에 맡김):', _pcx && _pcx.message); }
     // 1) 예치금 잔액 재확인 + 차감 (멤버십 → 일반 순서)
     var me = await window.sb.from('profiles')
       .select('*')
@@ -50029,6 +50162,11 @@ var TRANSLATIONS = {
     // 🆕 티켓 상세 / 구매 / 결제 흐름
     ticket: {
       repurchase_title:'재구매 제한',
+      dup_title:'중복 구매 불가',
+      dup_body:'이미 구매한 회차입니다. 같은 회차는 한 번만 구매할 수 있습니다.',
+      clash_title:'같은 시간대 예약 있음',
+      clash_body:'같은 날 같은 시간대(점심/저녁)에 이미 예약이 있어 구매할 수 없습니다.',
+      block_prev:'기존 예약',
       repurchase_body:'같은 레스토랑의 다른 날짜 티켓은 기존 예약일(방문일 기준)로부터 {n}일이 지나야 구매하실 수 있습니다.',
       repurchase_prev:'기존 예약일', repurchase_left:'약 {n}일 후 구매하실 수 있습니다.',
       // 글래스 시트 4버튼
@@ -50923,6 +51061,11 @@ var TRANSLATIONS = {
     // 🆕 Ticket detail / purchase / payment flow
     ticket: {
       repurchase_title:'Repurchase restriction',
+      dup_title:'Already purchased',
+      dup_body:'You already hold this seating. Each seating can be purchased only once.',
+      clash_title:'Same-time booking exists',
+      clash_body:'You already have a booking in the same time slot (lunch/dinner) on this day, so this one cannot be purchased.',
+      block_prev:'Existing booking',
       repurchase_body:'For another date at the same restaurant, {n} days must pass from your previous booking date (the visit date).',
       repurchase_prev:'Previous booking', repurchase_left:'You can book again in about {n} days.',
       tab_menu:'Show Menu',
@@ -52016,6 +52159,11 @@ TRANSLATIONS.ja = {
   },
   ticket: {
     repurchase_title:'再購入の制限',
+    dup_title:'重複購入はできません',
+    dup_body:'この回はすでに購入済みです。同じ回は一度しか購入できません。',
+    clash_title:'同じ時間帯の予約があります',
+    clash_body:'同じ日の同じ時間帯（ランチ/ディナー）にすでに予約があるため購入できません。',
+    block_prev:'既存の予約',
     repurchase_body:'同じレストランの別日程のチケットは、これまでのご予約日（来店日基準）から{n}日が経過してからご購入いただけます。',
     repurchase_prev:'これまでのご予約日', repurchase_left:'約{n}日後にご購入いただけます。',
     tab_menu:'メニューを表示',
