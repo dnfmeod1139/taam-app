@@ -825,7 +825,11 @@ raw 링크는 CDN 캐시가 남아 **고친 파일 대신 옛 파일이 뜨는 �
   트리거·정책·함수 같은 코드성 SQL 만 마이그레이션으로 간다. 파일 이름은 `20260915_무엇.sql`.
 - **Edge**: 바뀐 함수만 CLI 로 배포한다 (`_shared/`·`config.toml` 이 바뀌면 전부).
   `verify_jwt` 는 **`supabase/config.toml` 이 정한다.** 대시보드에서 OFF 인 함수가 거기 없으면 다음 배포 때 ON 으로 돌아가 앱이 막힌다.
-- 시크릿 `SUPABASE_ACCESS_TOKEN` · `SUPABASE_DB_URL`(Session pooler URI) 이 없으면 조용히 건너뛴다.
+- 시크릿 `SUPABASE_ACCESS_TOKEN` · `SUPABASE_DB_URL`(Session pooler URI) 이 없으면 건너뛴다(런 요약에 ⚠ warning 으로 보인다).
+  ⚠ **2026-10-13 확인: 두 시크릿 모두 비어 있다.** 그래서 이 워크플로는 지금까지 SQL 도 Edge 도 한 번도 실제로 올린 적이 없다 —
+  잡이 「success」로 끝나도 로그 첫 줄이 「시크릿이 없다 — 건너뜀」이면 아무것도 안 된 것이다. 카드 등록 수리(toss-billing-issue)가
+  「배포 성공」인 줄 알고 라이브에서 옛 함수가 계속 돌았다. **Edge 함수 수정은 시크릿을 넣기 전까지 대시보드(Edge Functions → 함수 → Code)에
+  TS 를 통째로 붙여 배포한다.** 배포 확인은 Actions 초록불이 아니라 함수가 새 응답(예: reason 필드)을 돌려주는지로 한다.
   손으로 돌리기: Actions → Supabase deploy → Run workflow (functions 칸 `all`).
 - 순서는 SQL → Edge 다. 「SQL 을 먼저」 규칙을 워크플로가 지킨다.
 
