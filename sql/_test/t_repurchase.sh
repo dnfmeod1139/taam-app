@@ -55,5 +55,17 @@ ok "면제 계정(single_device_exempt) → 허용" "OK" "$(res $X 0 $R180 tp-ne
 # 앞 단계에서 허용돼 들어간 홀드(PAYH-3·5·8…)도 「기존 예약」이므로 전부 취소한 뒤 본다
 $P -c "update public.tickets set status='cancelled' where user_id='$M' and restaurant_id='$R180'" >/dev/null
 ok "기존 예약을 전부 취소하면 → 허용" "OK" "$(res $M 0 $R180 tp-new 2027.03.01 PAYH-14)"
+echo "── 회차별 수동 해제 (2026-10-13 · 슈퍼어드민만)"
+$P -c "update public.tickets set status='active' where user_id='$M' and restaurant_id='$R180' and purchase_id='PAY-a'" >/dev/null
+$P -c "update public.tickets set status='cancelled' where user_id='$M' and restaurant_id='$R180' and purchase_id<>'PAY-a'" >/dev/null
+out2=$($P -f supabase/migrations/20261014_repurchase_manual_release.sql 2>&1)
+ok "해제 마이그레이션 오류 없음 · ❌ 0" "|0" "$(echo "$out2" | grep -E "^ERROR|^psql:.*ERROR" | head -1)|$(echo "$out2" | grep -c '❌')"
+ok "해제 전: 50일 뒤 → 막힘" "REPURCHASE_BLOCKED" "$(res $M 0 $R180 tp-new 2027.03.01 PAYH-15)"
+ok "회원이 RPC 를 부르면 거부" "ERROR" "$($P -c "set local taam.uid='$M'; set local taam.super='0'; select public.taam_ticket_repurchase_open('tp-new', true);" 2>&1 | grep -oE "ERROR" | head -1)"
+ok "슈퍼어드민이 tp-new 해제 → open true" "true" "$($P -c "set local taam.uid='$SU'; set local taam.super='1'; select public.taam_ticket_repurchase_open('tp-new', true)->>'open';" 2>&1 | tail -1)"
+ok "해제 뒤: 같은 회원 50일 뒤 → 허용 (이 회차만)" "OK" "$(res $M 0 $R180 tp-new 2027.03.01 PAYH-16)"
+ok "다른 회차(tp-draft)는 그대로 막힘" "REPURCHASE_BLOCKED" "$(res $M 0 $R180 tp-draft 2027.03.02 PAYH-17)"
+$P -c "update public.tickets set status='cancelled' where purchase_id='PAYH-16'" >/dev/null
+ok "되돌리면 다시 막힘" "false|REPURCHASE_BLOCKED" "$($P -c "set local taam.uid='$SU'; set local taam.super='1'; select public.taam_ticket_repurchase_open('tp-new', false)->>'open';" 2>&1 | tail -1)|$(res $M 0 $R180 tp-new 2027.03.01 PAYH-18)"
 [ $FAIL = 0 ] && echo "=== 전부 통과 ===" || echo "=== 실패 있음 ==="
 exit $FAIL
