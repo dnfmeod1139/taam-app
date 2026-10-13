@@ -184,23 +184,31 @@ DB 값은 `'A'` 그대로고 **이름만** 「게스트 회원」이다. 값을 
 
 카타오리 5/21 회차가 같은 회원에게 두 번 팔렸다. **서버 어디에도 「같은 회원이 같은 회차를 두 번」을 막는 코드가 없었다** —
 재구매 가드(`trg_taam_repurchase_guard`)는 날짜 간격만 보고 **같은 날은 인원추가·동반이라며 일부러 통과**시키고(`abs(...) > 0`),
-좌석 엔진의 `SOLO_LIMIT` 은 「1인 팀 수」지 회원별 한도가 아니다. 앱의 `checkRepurchaseLimit` 은 `typeClass==='std'` 이고 매장 `repurchase_day>0`
-이고 `purchaseHistory` 가 최신일 때만 같은 날을 막았다. 운영 결정으로 규칙을 둘 세웠다 (`supabase/migrations/20261014_purchase_uniqueness.sql`,
-트리거 `trg_taam_guard_purchase_unique` BEFORE INSERT OR UPDATE OF user_id,status,ticket_product_id,reservation_date,visit_time):
+좌석 엔진의 `SOLO_LIMIT` 은 「1인 팀 수」지 회원별 한도가 아니다. 앱의 `checkRepurchaseLimit` 은 `handleTicketAction` 에서만 불리는데
+**회원의 실제 구매 경로(사진 캘린더 `pcalPay → openTdPayPopup`)는 그 함수를 지나지 않는다.** 운영 결정으로 규칙을 둘 세웠다
+(`supabase/migrations/20261014_purchase_uniqueness.sql`, 트리거 **`trg_taam_guard_ticket_unique`** BEFORE INSERT OR UPDATE OF user_id,status,ticket_product_id,reservation_date,visit_time):
 
 | 코드 | 규칙 | 예외 |
 |---|---|---|
 | `DUPLICATE_PURCHASE` | 같은 `user_id` 가 같은 `ticket_product_id` 의 살아 있는 행(취소·expired 아님, **hold 포함**)을 이미 가지면 거부 | 운영 행 KSK-/LINK-/MAN-/INVH-(및 extra_data manualEntry·inviteHold·kashikiri·linkInvite) — user_id 가 어드민이라 서로 부딪힌다. **INV-(확정 초대)는 회원 것이라 센다.** 슈퍼어드민·service_role 도 예외 아님 |
-| `TIME_CONFLICT` | 같은 날(`taam_visit_date`) 같은 시간대(`taam_time_slot`: **16:00 전 점심 / 16:00 부터 저녁**)의 살아 있는 행이 있으면 거부 — 다른 매장이든 같은 매장 다른 회차든 | 시각을 모르는 쪽이 있으면 **겹치는 것으로**(막는 쪽이 기본). 날짜·시각이 빈 행(toss-confirm 폴백 INSERT)은 `ticket_products.date/time` 으로 보충 |
+| `TIME_CONFLICT` | 같은 날(`_taam_pu_visit_date`) 같은 시간대(`taam_time_slot`: **16:00 전 점심 / 16:00 부터 저녁**)의 살아 있는 행이 있으면 거부 — 다른 매장이든 같은 매장 다른 회차든 | 시각을 모르는 쪽이 있으면 **겹치는 것으로**(막는 쪽이 기본). 날짜·시각이 빈 행(toss-confirm 폴백 INSERT)은 `ticket_products.date/time` 으로 보충 |
 
-- UPDATE 는 **열쇠(소유자·회차·날짜·시각)가 바뀌거나 죽은 행이 살아날 때만** 본다 — 출석 처리·금액 보정·취소는 옛 중복 행에도 그대로 된다. 초대 확정
-  (`taam_invite_confirm_hold`, INVH-→INV- 로 소유자를 초대받은 회원으로 옮기는 UPDATE)은 여기서 걸린다 — 예치금 차감과 같은 트랜잭션이라 함께 되돌아간다.
-- 이미 들어 있는 중복은 건드리지 않는다. 마이그레이션 확인 표 ⑤⑥ 이 수만 센다 — 정리는 어드민이 한 건을 취소해서.
-- 앱: `checkPurchaseConflicts(t)`(`_tkFindPurchaseConflict` — purchaseHistory 기준, 내 홀드 `_tkSeatHoldId` 제외)를 `handleTicketAction` 에서 **역할·티켓 종류와 무관하게**
-  부르고, 홀드 INSERT 거절은 `_tkAcquireSeatHold` 가 `dup`/`clash` 로 매핑해 같은 팝업(`showPurchaseBlockPopup`)을 띄운다. **초대 결제(`riPay`)는 돈이 먼저
-  움직이므로 차감 전에 `_tkServerPurchaseConflict` 로 서버의 내 티켓을 새로 읽어 거른다** — 다른 기기에서 산 것도 봐야 해서 purchaseHistory 를 믿지 않는다.
-- ⚠ `_tkAcquireSeatHold(t, r, pax)` 안의 `t` 는 **티켓**이다. 사전은 `_shT()` 로 부른다 — 종전 `t('seathold.tier')` 줄이 TypeError 를 내고 있었다(같은 날 수리).
-- 회귀: `bash sql/_test/t_purchase_unique.sh`(31건) · 스크래치 `dupguard.js`(10건). 진단: 스크래치 `dup_kataori.sql`(회원·회차별 생존 건수).
+- **회원 세션이 남의 user_id 로 넣는 행은 이 가드가 보지 않는다**(`auth.uid()` 와 다르면 return) — 바로 뒤 소유권 가드가 42501 로 끊는다. 먼저 보면 거절 문구에
+  그 회원의 예약(매장·날짜·시각·구매 id)이 실려 샌다(적대 리뷰). 같은 이유로 이름이 `…guard_ticket_unique` 다 — BEFORE 트리거는 이름 순이라 insert/row/tier 가드 **뒤**에 돈다.
+  ⚠ security definer 안에서 `current_user` 는 함수 소유자다 — 호출자 판별은 `auth.uid()` 로만.
+- 회원 단위 `pg_advisory_xact_lock('tkuniq_'||uid)` 로 직렬화한다(다른 회차·같은 시간대 동시 INSERT 경주). 정원 트리거의 회차 잠금이 언제나 먼저라 순서는 회차→회원.
+- UPDATE 는 **이 갱신이 새로 만드는 위반**만 본다: 소유자·회차가 그대로면 ① 을 묻지 않고, 날짜·시간대가 그대로면 ② 도 묻지 않는다 — 옛 중복·옛 겹침 회원의 출석 처리·금액 보정·
+  어드민 시간 변경이 막히면 안 된다. 취소는 언제나 통과. 초대 확정(`taam_invite_confirm_hold`, INVH-→INV- 로 소유자 이전)은 걸린다.
+- ⚠ **초대 결제(`riPay`)의 예치금 차감은 확정 RPC 와 같은 트랜잭션이 아니다**(앱이 `_depApplyDelta` 로 먼저 뺀다). 그래서 ① 차감 전에 `_tkServerPurchaseConflict` 로 서버의 내 티켓을
+  새로 읽어 거르고(읽기 실패면 **진행하지 않는다** — `{error:true}`), ② 그래도 확정 RPC 가 DUPLICATE_PURCHASE/TIME_CONFLICT 로 거절되면 **그 자리에서 ticket_refund 원장으로 되돌리고**
+  초대 상태를 복구한 뒤 차단 팝업을 띄운다(원장 `reason: duplicate_purchase|time_conflict`). 「예약 완료」로 내려가지 않는다.
+- `taam_visit_date` 는 리마인드·재입고가 쓰는 라이브 함수라 **건드리지 않는다** — 이 가드는 `_taam_pu_visit_date`(2020~2100 가드) 를 따로 둔다.
+- 앱: `checkPurchaseConflicts(t)` 를 `handleTicketAction` 과 **`openTdPayPopup` 입구** 둘 다에서(역할·티켓 종류 무관). `_tkFindPurchaseConflict(rows,…, strict)` — 구매 시트 경로는 내 옛 PAYH- 홀드를
+  중복으로 안 세고(재사용), 서버 읽기 경로(strict)는 서버와 똑같이 센다. 로컬 행의 빈 시각은 `ticketDB` 에서 보충(`_tkHistFill`), 연도 없는 'MM.DD' 는 서버처럼 건너뛴다.
+  홀드 INSERT 거절은 `_tkAcquireSeatHold` 가 `dup`/`clash` 로 매핑해 같은 팝업(`showPurchaseBlockPopup`). 인원 변경 시 옛 홀드 반납이 실패하면 새 홀드를 넣지 않는다.
+- ⚠ `_tkAcquireSeatHold(t, r, pax)` · `openTdPayPopup` 안의 `t` 는 **티켓**이다. 사전은 `_shT()`/`window.t` 로 — 종전 `t('seathold.tier')` 줄이 TypeError 를 내고 있었다(같은 날 수리).
+- 배포 순서: **앱(index.html) 먼저, 마이그레이션은 그 뒤 커밋으로** — 옛 빌드가 캐시에 남은 채 서버 거절을 받으면 메시지 없이 끝난다(지금 빌드는 예외도 토스트로 보인다).
+- 회귀: `bash sql/_test/t_purchase_unique.sh`(42건 — 같은 purchase_id·삭제된 회차·옛 중복 행 시간 변경·남의 user_id 침묵 포함) · 스크래치 `dupguard.js`. 진단: 스크래치 `dup_kataori.sql`.
 
 ### 초대 티켓의 소유자는 초대받은 회원이다 — 홀드는 어드민 소유다 (2026-10-03 사고)
 
@@ -614,7 +622,7 @@ Apple 은 iPad 와 iPhone **두 기기로 심사**하므로(리뷰 노트에 명
 | `profiles.role` | `trg_taam_guard_profile_role(_ins)` | 자기 승격 차단. 허용 이메일만 |
 | `membership_tier` | `trg_taam_guard_membership_tier` | 비어 있을 때 **자기 초대코드 값으로만** 1회. M 만료일은 서버가 365일로 |
 | 티켓 등급 제한 | `trg_taam_guard_ticket_tier` | `min_tier` 미달 구매 차단. 슈퍼어드민·초대·수동입력만 예외 |
-| 같은 회차 중복 · 같은 날 같은 시간대 | `trg_taam_guard_purchase_unique` | 한 회원 = 한 회차 1건(hold 포함) · 같은 날 점심/저녁 각 1건. 운영 행(KSK-/LINK-/MAN-/INVH-)만 예외, 슈퍼어드민·service_role 도 적용 (2026-10-13, 위 「한 회원 = 한 회차 1건」) |
+| 같은 회차 중복 · 같은 날 같은 시간대 | `trg_taam_guard_ticket_unique` | 한 회원 = 한 회차 1건(hold 포함) · 같은 날 점심/저녁 각 1건. 운영 행(KSK-/LINK-/MAN-/INVH-)만 예외, 슈퍼어드민·service_role 도 적용 (2026-10-13, 위 「한 회원 = 한 회차 1건」) |
 | 재구매 제한 | `trg_taam_repurchase_guard` | 같은 매장 N일(30·60·90·120·180). **방문일 간격**으로 센다(구매일 아님) · 같은 날은 예외 · 홀드도 기존 예약으로 센다 · ~~발매 7일 뒤 자동 해제~~ **2026-10-13 폐지**(`20261013_repurchase_no_release.sql`). 대신 **회차별 수동 해제** — 슈퍼어드민이 티켓 리스트의 「재구매 해제」로 `ticket_products.repurchase_open` 을 켜면(`taam_ticket_repurchase_open`, `20261014_repurchase_manual_release.sql`) `taam_repurchase_released` 와 앱 `_repReleasedByAge` 가 **그 회차만** true. 매장 설정은 그대로. 회귀 `bash sql/_test/t_repurchase.sh`(15건) |
 | 티켓 필드 | `trg_taam_guard_ticket_row` | 회원은 **취소만**. `price`·`party_size`·`status(hold→active 포함)` 를 못 고침 (2026-09-13 강화) |
 | 티켓 INSERT | `trg_taam_guard_ticket_insert` | 회원은 `status='hold'` 만, 매장 어드민은 `hold`·`manual`. **확정 행은 서버(RPC·toss-confirm)만** 만든다 (2026-09-13) |
