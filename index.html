@@ -7379,7 +7379,9 @@ function fxOpenSettings(){
   el.innerHTML =
     '<div style="background:#fff;border-radius:18px;width:100%;max-width:400px;padding:24px 22px;font-family:var(--font-main);" data-lang-lock="ko">'
     + '<div style="font-size:16px;font-weight:800;color:#1a1a18;margin-bottom:4px;">💱 해외 통화 · 환율 설정</div>'
-    + '<div style="font-size:11px;color:#9a9486;line-height:1.7;margin-bottom:16px;">해외 회원(언어가 한국어가 아닌 회원) 화면의 USD 표시에 사용됩니다.<br>정산·차감은 원화 기준 그대로입니다.</div>'
+    // 🔧 2026-10-13 구조를 먼저 말한다 — 「환율은 들어올 때 한 번, 나갈 때는 원화 정가」.
+    //   종전 머리말은 「USD 표시에 쓰인다」만 적어서, 예치금이 어디서 환율을 타는지(마진이 어디서 생기는지)가 안 보였다.
+    + '<div style="font-size:11px;color:#9a9486;line-height:1.7;margin-bottom:16px;">해외 결제자의 예치금은 <b style="color:#5C0A14;">들어올 때 한 번</b>만 환율을 탑니다 — 마진은 여기서 확보됩니다.<br>나갈 때(티켓 차감)는 국내 회원과 같은 <b style="color:#1a1a18;">원화 정가</b>라 환율의 영향이 없습니다. 아래 미리보기에 그 흐름이 숫자로 보입니다.</div>'
     + '<label style="display:block;font-size:11px;font-weight:700;color:#888;margin-bottom:5px;">기준 환율 (KRW / 1 USD) — <span style="color:#5C0A14;">송금 받으실 때</span> 권장</label>'
     + '<input id="fxBase" type="text" inputmode="decimal" value="'+FX.base_rate+'" style="width:100%;box-sizing:border-box;padding:11px 12px;border:1px solid #e0dcd4;border-radius:10px;font-size:15px;font-weight:700;margin-bottom:4px;">'
     + '<div style="font-size:10.5px;color:#b5afa2;margin-bottom:13px;line-height:1.65;">은행 환율표의 <b>송금 받으실 때</b> 값을 넣으세요 — 해외 송금이 실제로 원화로 들어오는 환율입니다.<br>⚠ <b>현찰 사실 때</b>(가장 높은 값)를 넣으면 청구 달러가 줄어 손해입니다.<br>시장 환율이 <b>내리면 즉시 낮추고</b>, 오를 때는 그대로 두시면 됩니다.</div>'
@@ -7395,7 +7397,7 @@ function fxOpenSettings(){
     + '<div id="fxPreview" style="background:#faf8f4;border:1px solid #eee5d8;border-radius:12px;padding:13px 15px;margin-bottom:15px;"></div>'
     + '<label style="display:flex;align-items:center;gap:9px;font-size:12.5px;color:#1a1a18;margin-bottom:18px;cursor:pointer;">'
       + '<input id="fxEnabled" type="checkbox" '+(FX.enabled?'checked':'')+' style="width:17px;height:17px;">'
-      + '<span>해외 회원에게 USD 표시 <span style="color:#b5afa2;">(끄면 전 회원 원화만)</span></span>'
+      + '<span>해외 회원 화면에 외화(≈) 표시 <span style="color:#b5afa2;">(끄면 전 회원 원화만 · 차감은 어차피 원화)</span></span>'
     + '</label>'
     + '<button onclick="fxSaveSettings()" style="width:100%;padding:13px;background:#1a1a18;border:none;border-radius:12px;font-size:13px;font-weight:800;color:#fff;cursor:pointer;margin-bottom:8px;">저장</button>'
     + '<button onclick="fxCheckRate(true)" style="width:100%;padding:11px;background:#fff;border:1px solid #d8d2c6;border-radius:12px;font-size:12px;font-weight:700;color:#6a635a;cursor:pointer;margin-bottom:8px;">지금 시장 환율과 비교</button>'
@@ -7412,21 +7414,58 @@ function fxRenderPreview(){
   var b = parseFloat((document.getElementById('fxBase')||{}).value) || 0;
   var jy = parseFloat((document.getElementById('fxRateJpy')||{}).value) || 0;
   var m = parseFloat((document.getElementById('fxMargin')||{}).value) || 0;
-  var r = b * (1 - m/100);
-  var rj = jy * (1 - m/100);   // 엔 적용환율 — 달러와 같은 마진
-  function ex(krw, step){ return r>0 ? ('$' + (Math.ceil(krw/r/step)*step).toLocaleString()) : '—'; }
-  box.innerHTML =
-      '<div style="display:flex;justify-content:space-between;padding:3px 0;"><span style="font-size:11.5px;color:#9a9486;">적용 환율 (USD)</span><span style="font-size:14px;font-weight:800;color:#5C0A14;">'+(r>0?r.toFixed(2):'—')+'</span></div>'
-    + '<div style="display:flex;justify-content:space-between;padding:3px 0;"><span style="font-size:11.5px;color:#9a9486;">적용 환율 (JPY)</span><span style="font-size:14px;font-weight:800;color:#5C0A14;">'+(rj>0?rj.toFixed(3):'미설정')+'</span></div>'
-    + (rj>0 ? '<div style="display:flex;justify-content:space-between;padding:2px 0;"><span style="font-size:11.5px;color:#777;">부족분 ₩270,000 결제 시</span><span style="font-size:12px;font-weight:700;">¥' + Math.ceil(270000/rj).toLocaleString() + '</span></div>' : '')
-    + '<div style="height:1px;background:#eee5d8;margin:8px 0;"></div>'
-    + '<div style="font-size:10.5px;color:#b5afa2;margin-bottom:5px;">미리보기 ($5 올림)</div>'
-    + '<div style="display:flex;justify-content:space-between;padding:2px 0;"><span style="font-size:11.5px;color:#777;">식사비 ₩270,000</span><span style="font-size:12px;font-weight:700;">'+ex(270000,5)+'</span></div>'
-    + '<div style="display:flex;justify-content:space-between;padding:2px 0;"><span style="font-size:11.5px;color:#777;">식사비 ₩650,000</span><span style="font-size:12px;font-weight:700;">'+ex(650000,5)+'</span></div>'
-    + '<div style="height:1px;background:#eee5d8;margin:8px 0;"></div>'
-    + '<div style="font-size:10.5px;color:#b5afa2;margin-bottom:5px;">해외 대행비 (원화 ÷ '+(FX.agency_divisor||1000).toLocaleString()+' · 환율 무관)</div>'
-    + '<div style="display:flex;justify-content:space-between;padding:2px 0;"><span style="font-size:11.5px;color:#777;">₩50,000 / ₩100,000 / ₩150,000</span><span style="font-size:12px;font-weight:700;">$50 / $100 / $150</span></div>';
+  box.innerHTML = _fxStructureHtml(b, jy, m);
 }
+// 🆕 2026-10-13 해외 결제자의 예치금 구조 — 숫자로 보이는 세 단계.
+//   입력 중인 기준율·마진으로 바로 다시 그린다 (fxRenderPreview 가 부른다).
+//   ① 들어올 때: 외화 × 적용환율 = 원화 예치금. 은행에는 외화 × 기준율이 들어오니 차액이 마진이다 — **여기서 한 번만** 환율을 탄다.
+//   ② 나갈 때 : 티켓 원화 정가 × 인원 그대로 차감. 국내 회원과 같은 식이라 서버(taam_ticket_price_krw)가 그대로 검증한다.
+//              환율을 다시 태우면 2026-09-10 사고(PRICE_CHANGED)가 재현된다 — CLAUDE.md 「통화」.
+//   ③ 보일 때 : 해외 회원에게는 같은 적용환율로 ≈외화. 표시일 뿐 청구 근거가 아니다. 지금은 FX_CURRENCY_LIVE 로 전원 원화.
+function _fxStructureHtml(b, jy, m){
+  var r  = b  * (1 - m/100);          // USD 적용환율
+  var rj = jy * (1 - m/100);          // JPY 적용환율
+  function W(v){ return '₩' + Math.round(v).toLocaleString(); }
+  function row(l, v, strong){
+    return '<div style="display:flex;justify-content:space-between;gap:10px;padding:2px 0;"><span style="font-size:11.5px;color:#777;">' + l + '</span>'
+         + '<span style="font-size:12px;font-weight:' + (strong ? '800' : '700') + ';color:' + (strong ? '#5C0A14' : '#1a1a18') + ';white-space:nowrap;">' + v + '</span></div>';
+  }
+  function step(no, title, sub){
+    return '<div style="margin-top:9px;padding-top:8px;border-top:1px solid #eee5d8;">'
+         + '<div style="font-size:11px;font-weight:800;color:#1a1a18;">' + no + ' ' + title + '</div>'
+         + (sub ? '<div style="font-size:10.5px;color:#b5afa2;line-height:1.55;margin:2px 0 4px;">' + sub + '</div>' : '')
+         + '</div>';
+  }
+  var usdIn = 1000, jpyIn = 100000, tkKrw = 1700000;   // 예시 금액 — 숫자는 설정값으로 다시 센다
+  var h = '';
+  h += row('적용 환율 (USD · 기준율 × (1 − ' + m + '%))', r > 0 ? r.toFixed(2) : '—', true);
+  h += row('적용 환율 (JPY)', rj > 0 ? rj.toFixed(3) : '미설정', true);
+  // ① 들어올 때
+  h += step('①', '들어올 때 — 외화 × 적용환율 = 원화 예치금', '송금·정산 링크로 받은 외화를 이 환율로 예치금에 넣습니다. 은행에는 기준율로 들어오니 그 차액이 <b>마진</b>입니다. 환율은 <b>여기서 한 번만</b> 탑니다.');
+  if (r > 0) {
+    h += row('$' + usdIn.toLocaleString() + ' 송금 → 예치금', W(usdIn * r), true);
+    h += row('은행 입금 ≈ ' + W(usdIn * b) + ' (기준율 ' + b + ')', '마진 ' + W(usdIn * b - usdIn * r) + ' (' + m + '%)');
+  } else {
+    h += row('기준율을 넣으면 예시가 계산됩니다', '—');
+  }
+  if (rj > 0) {
+    h += row('¥' + jpyIn.toLocaleString() + ' 송금 → 예치금', W(jpyIn * rj), true);
+    h += row('은행 입금 ≈ ' + W(jpyIn * jy) + ' (기준율 ' + jy + ')', '마진 ' + W(jpyIn * jy - jpyIn * rj));
+  }
+  // ② 나갈 때
+  h += step('②', '나갈 때 — 원화 정가 그대로 차감 (환율 무관)', '티켓 (식사비+대행비+주류 미니멈)×인원을 국내 회원과 같은 원화로 뺍니다. 서버가 같은 식으로 다시 세어 검증합니다 — 환율을 다시 태우지 않습니다.');
+  h += row('티켓 ' + W(tkKrw) + ' 결제', '예치금 −' + W(tkKrw), true);
+  if (r > 0) h += row('해외 회원 화면에는 (같은 적용환율 · $5 올림)', '≈ $' + (Math.ceil(tkKrw / r / 5) * 5).toLocaleString());
+  if (rj > 0) h += row('엔 회원 화면에는 (¥1,000 올림)', '≈ ¥' + (Math.ceil(tkKrw / rj / 1000) * 1000).toLocaleString());
+  // ③ 보일 때
+  var live = !(typeof FX_CURRENCY_LIVE !== 'undefined' && !FX_CURRENCY_LIVE);
+  h += step('③', '보일 때 — 표시만 외화, 청구 근거는 아님',
+        live ? '해외 회원(profiles.currency 가 USD·JPY)에게 ≈외화로 보입니다. 티켓에 확정 정가(ovs_prices)가 있으면 그 값이 ≈ 없이 보입니다.'
+             : '<b style="color:#B23A2E;">지금은 전 회원 원화 표시(잠김 · FX_CURRENCY_LIVE=false)</b> — 해외 회원도 ₩ 로 봅니다. 이 설정은 ① 예치금 부여 환산에는 지금도 쓰입니다.');
+  h += row('해외 대행비 표시 요율 (원화 ÷ ' + (FX.agency_divisor||1000).toLocaleString() + ')', '₩100,000 → $100');
+  return h;
+}
+window._fxStructureHtml = _fxStructureHtml;
 function fxSaveSettings(){
   var b = parseFloat((document.getElementById('fxBase')||{}).value);
   var j = parseFloat((document.getElementById('fxRateJpy')||{}).value) || 0;
@@ -21799,9 +21838,17 @@ function _adgFxPreview(){
     return;
   }
   var krw = Math.round(v * r);
+  // 🆕 2026-10-13 마진이 보이게 — 은행에는 기준율로 들어오고 예치금은 적용환율로 넣으니 그 차액이 우리 몫이다.
+  //   환율은 여기서 한 번만 탄다. 소비(티켓 차감)는 원화 정가라 환율과 무관하다는 것도 같이 적는다.
+  var base = _adgCur === 'USD' ? (parseFloat(FX.base_rate) || 0) : (parseFloat(FX.rate_jpy) || 0);
+  var bank = Math.round(Math.abs(v) * base);
+  var margin = bank - Math.abs(krw);
   box.style.display = 'block';
   box.innerHTML = sym + Math.abs(v).toLocaleString() + ' × 적용환율 ' + r.toFixed(2)
-    + ' = <b>₩' + Math.abs(krw).toLocaleString() + '</b> ' + (v > 0 ? '부여' : '차감');
+    + ' = <b>₩' + Math.abs(krw).toLocaleString() + '</b> ' + (v > 0 ? '부여' : '차감')
+    + (base > 0 ? '<div style="margin-top:5px;font-size:11px;font-weight:600;color:#8a7b63;line-height:1.55;">'
+        + '은행 입금 ≈ ₩' + bank.toLocaleString() + ' (기준율 ' + base + ') · <b>마진 ₩' + margin.toLocaleString() + '</b> (' + (parseFloat(FX.margin_pct) || 0) + '%)<br>'
+        + '환율은 여기서 한 번만 — 소비(티켓 차감)는 원화 정가로 나가 환율과 무관합니다.</div>' : '');
 }
 window._adgFxPreview = _adgFxPreview;
 
@@ -21828,7 +21875,10 @@ async function adgSubmit(){
     var _fr = _adgFxRate(_adgCur);
     if (_fr <= 0){ alert('환율이 설정되지 않았습니다 — 어드민 메뉴 → 💱 환율 설정 확인'); return; }
     // 환율은 소수 4자리로 기록 — 엔화(9.071 등)는 2자리로 끊으면 기록과 계산이 어긋난다
-    _fxInfo = { fx_currency: _adgCur, fx_amount: amount, fx_rate: Math.round(_fr * 10000) / 10000 };
+    // 🆕 2026-10-13 기준율·마진율도 함께 — 원장에서 「그때 마진이 얼마였나」를 지금 설정값이 아니라 기록으로 센다
+    var _fb = _adgCur === 'USD' ? (parseFloat(FX.base_rate) || 0) : (parseFloat(FX.rate_jpy) || 0);
+    _fxInfo = { fx_currency: _adgCur, fx_amount: amount, fx_rate: Math.round(_fr * 10000) / 10000,
+                fx_base: Math.round(_fb * 10000) / 10000, fx_margin_pct: parseFloat(FX.margin_pct) || 0 };
     amount = Math.round(amount * _fr);
   }
   var depositTypeEl = document.querySelector('input[name="adgDepositType"]:checked');
@@ -21849,7 +21899,9 @@ async function adgSubmit(){
     '대상: ' + (_adgSelectedUser.display_name || _adgSelectedUser._inviteeName || '(이름 없음)') + '\n' +
     '구분: ' + typeText + ' 예치금\n' +
     '금액: ₩' + Math.abs(amount).toLocaleString() + ' ' + actionText + '\n' +
-    (_fxInfo ? ('송금: ' + (_fxInfo.fx_currency === 'USD' ? '$' : '¥') + Math.abs(_fxInfo.fx_amount).toLocaleString() + ' × ' + _fxInfo.fx_rate + '\n') : '') +
+    (_fxInfo ? ('송금: ' + (_fxInfo.fx_currency === 'USD' ? '$' : '¥') + Math.abs(_fxInfo.fx_amount).toLocaleString() + ' × ' + _fxInfo.fx_rate + '\n'
+              + '마진: ₩' + (Math.round(Math.abs(_fxInfo.fx_amount) * _fxInfo.fx_base) - Math.abs(amount)).toLocaleString()
+              + ' (기준율 ' + _fxInfo.fx_base + ' · ' + _fxInfo.fx_margin_pct + '%)\n') : '') +
     '사유: ' + description + '\n\n' +
     '진행하시겠습니까?';
 
@@ -30603,6 +30655,50 @@ function _mlDate(iso){
   } catch(e){ return iso || ''; }
 }
 
+// 🆕 2026-10-13 원장 줄의 외화 기록 — adgSubmit 이 metadata 에 fx_currency/fx_amount/fx_rate(/fx_base/fx_margin_pct) 로 남긴다.
+//   없으면 null. 마진은 기준율 기록이 있으면 정확히, 없으면 지금 마진율(FX.margin_pct)로 어림(approx=true).
+function _fxOfTx(r){
+  var m = r && r.metadata;
+  if(!m || !m.fx_currency || !(parseFloat(m.fx_rate) > 0)) return null;
+  var cur = String(m.fx_currency), amt = parseFloat(m.fx_amount) || 0, rate = parseFloat(m.fx_rate) || 0;
+  var krw = parseInt(r.amount) || 0;
+  var base = parseFloat(m.fx_base) || 0, approx = false, margin = 0;
+  if(base > 0){ margin = Math.round(amt * base) - krw; }
+  else {
+    var mp = parseFloat(FX.margin_pct) || 0;
+    approx = true;
+    margin = mp > 0 && mp < 100 ? Math.round(krw * (mp / (100 - mp))) : 0;   // krw = 외화×기준율×(1−m) ⇒ 마진 = krw·m/(1−m)
+  }
+  return { cur: cur, sym: cur === 'JPY' ? '¥' : '$', amount: amt, rate: rate, krw: krw, base: base, margin: margin, approx: approx };
+}
+window._fxOfTx = _fxOfTx;
+// 해외 입금 요약 카드 (회원 원장 예치금 탭 머리). 외화 줄이 하나도 없으면 빈 문자열.
+function _mlFxSummary(txs, C){
+  var by = {};
+  (txs || []).forEach(function(r){
+    var f = _fxOfTx(r); if(!f) return;
+    var g = by[f.cur] || (by[f.cur] = { sym: f.sym, cnt: 0, amt: 0, krw: 0, margin: 0, approx: false });
+    g.cnt++; g.amt += f.amount; g.krw += f.krw; g.margin += f.margin; if(f.approx) g.approx = true;
+  });
+  var curs = Object.keys(by); if(!curs.length) return '';
+  var h = '<div style="margin:10px 0 2px;padding:11px 13px;background:#FBF7EE;border:1px solid #EADFC8;border-radius:11px;">'
+        + '<div style="font-size:11px;font-weight:800;color:#8a7b4a;letter-spacing:.04em;">해외 입금 — 환율은 들어올 때 한 번</div>';
+  curs.forEach(function(c){
+    var g = by[c];
+    var avg = g.amt ? (g.krw / g.amt) : 0;
+    h += '<div style="display:flex;justify-content:space-between;gap:10px;margin-top:6px;align-items:baseline;">'
+       +   '<span style="font-size:13px;font-weight:800;color:' + C.ink + ';">' + g.sym + Math.round(g.amt).toLocaleString() + ' <span style="font-size:10.5px;font-weight:600;color:' + C.faint + ';">송금 ' + g.cnt + '건</span></span>'
+       +   '<span style="font-size:13px;font-weight:800;color:' + C.ink + ';white-space:nowrap;">→ 예치금 ₩' + g.krw.toLocaleString() + '</span>'
+       + '</div>'
+       + '<div style="font-size:11px;color:#8a7b4a;margin-top:1px;">적용환율 ' + (c === 'JPY' ? avg.toFixed(3) : avg.toFixed(2)) + ' · 마진 ' + (g.approx ? '≈ ' : '') + '₩' + g.margin.toLocaleString()
+       +   (g.approx ? ' <span style="color:' + C.faint + ';">(기준율 기록이 없는 줄은 지금 마진율로 어림)</span>' : '') + '</div>';
+  });
+  h += '<div style="font-size:11px;color:' + C.faint + ';margin-top:7px;line-height:1.5;">나갈 때(아래 「티켓 결제」 줄)는 원화 정가 그대로 차감 — 환율 무관, 국내 회원과 같습니다.</div>'
+     + '</div>';
+  return h;
+}
+window._mlFxSummary = _mlFxSummary;
+
 async function mlOpen(uid){
   if(typeof _isSuperAdmin === 'function' && !_isSuperAdmin()) return;
   var d = document.getElementById('mlDetail');
@@ -31081,10 +31177,13 @@ async function mlOpen(uid){
       var pocketTag = tag(r.deposit_type === 'membership' ? '멤버십 예치금' : '일반 예치금',
                           (r.deposit_type === 'membership' ? '#F3E7E9' : '#F5EFE3'),
                           (r.deposit_type === 'membership' ? C.wine : '#8a7b4a'));
+      // 🆕 2026-10-13 외화로 들어온 줄은 「송금 $1,000 × 1,360.65」 를 태그로 — 환율을 탄 줄이 어느 줄인지 한눈에
+      var fxm = _fxOfTx(r);
+      var fxTag = fxm ? ' ' + tag('송금 ' + fxm.sym + Math.abs(fxm.amount).toLocaleString() + ' × ' + fxm.rate, '#EAF4FF', '#1F5BD6') : '';
       return '<div style="display:grid;grid-template-columns:1fr auto;gap:10px;padding:13px 2px;border-bottom:1px solid ' + C.line + ';">'
         +   '<div style="min-width:0;">'
         +     '<div style="font-size:13px;font-weight:700;color:' + C.ink + ';letter-spacing:.01em;">' + _mlDate(r.created_at)
-        +       ' <span style="font-weight:800;color:' + k[1] + ';margin-left:4px;">' + k[0] + '</span> ' + pocketTag
+        +       ' <span style="font-weight:800;color:' + k[1] + ';margin-left:4px;">' + k[0] + '</span> ' + pocketTag + fxTag
         +       (cardPart > 0 ? ' ' + tag('+ 카드 ' + W + n(cardPart), '#EAF1FF', '#1F5BD6') : '') + '</div>'
         +     '<div style="font-size:14px;font-weight:600;line-height:1.4;margin-top:3px;color:' + C.ink + ';">' + what + '</div>'
         +     sched
@@ -31097,6 +31196,9 @@ async function mlOpen(uid){
         +   '</div>'
         + '</div>';
     }
+    // 🆕 2026-10-13 해외 입금 요약 — 이 회원의 예치금 중 외화로 들어온 몫. 「환율은 들어올 때 한 번」이 이 카드 하나로 보인다.
+    //   마진은 줄마다 (외화 × 기준율) − 부여 원화. 기준율이 기록에 없는 옛 줄은 지금 마진율로 어림해 ≈ 를 붙인다.
+    pd += _mlFxSummary(txs, C);
     pd += '<div style="display:flex;justify-content:space-between;align-items:baseline;padding:10px 2px 6px;font-size:11px;color:' + C.faint + ';border-bottom:1px solid ' + C.line + ';">'
        +   '<span>거래내역 ' + lines.length + '건 · 최신순 · 예치금 줄은 잔액이 움직이고, 카드 줄은 수단만 적습니다</span>'
        +   '<span>현재 잔액 <b style="color:' + C.ink + ';font-size:13px;">' + W + n(memBal + genBal) + '</b></span>'
@@ -43898,7 +44000,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.13-d';
+var TAAM_WEB_BUILD = '2026.10.13-e';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
