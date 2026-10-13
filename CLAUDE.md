@@ -568,7 +568,7 @@ Apple 은 iPad 와 iPhone **두 기기로 심사**하므로(리뷰 노트에 명
 | `profiles.role` | `trg_taam_guard_profile_role(_ins)` | 자기 승격 차단. 허용 이메일만 |
 | `membership_tier` | `trg_taam_guard_membership_tier` | 비어 있을 때 **자기 초대코드 값으로만** 1회. M 만료일은 서버가 365일로 |
 | 티켓 등급 제한 | `trg_taam_guard_ticket_tier` | `min_tier` 미달 구매 차단. 슈퍼어드민·초대·수동입력만 예외 |
-| 재구매 제한 | `trg_taam_repurchase_guard` | 같은 매장 N일. **발매 7일 뒤 자동 해제**(`taam_repurchase_released`) |
+| 재구매 제한 | `trg_taam_repurchase_guard` | 같은 매장 N일(30·60·90·120·180). **방문일 간격**으로 센다(구매일 아님) · 같은 날은 예외 · 홀드도 기존 예약으로 센다 · **발매 7일 뒤 자동 해제**(`taam_repurchase_released`, draft 는 해제 안 됨). 회귀 `bash sql/_test/t_repurchase.sh`(15건, 2026-10-13) |
 | 티켓 필드 | `trg_taam_guard_ticket_row` | 회원은 **취소만**. `price`·`party_size`·`status(hold→active 포함)` 를 못 고침 (2026-09-13 강화) |
 | 티켓 INSERT | `trg_taam_guard_ticket_insert` | 회원은 `status='hold'` 만, 매장 어드민은 `hold`·`manual`. **확정 행은 서버(RPC·toss-confirm)만** 만든다 (2026-09-13) |
 | 푸시 구독 role | `save_push_subscription` | 클라이언트 `p_role` 무시 — `profiles.role` 로 정한다 (2026-09-13) |
