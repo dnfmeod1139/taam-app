@@ -29,6 +29,8 @@ SQL
 # 실제 가드 함수 5개 + 트리거 (파일의 41행부터 트리거 선언 끝까지)
 E=$(grep -n 'execute function public.taam_guard_repurchase();' sql/repurchase_release_7days.sql | head -1 | cut -d: -f1)
 sed -n "41,${E}p" sql/repurchase_release_7days.sql | $P >/dev/null 2>&1
+# 2026-10-13 해제 폐지 마이그레이션을 그 위에 얹는다
+$P -f supabase/migrations/20261013_repurchase_no_release.sql 2>&1 | grep -E "^ERROR|❌" | head -1
 FAIL=0
 ok(){ if [ "$2" = "$3" ]; then echo "✅ $1"; else echo "❌ $1  (기대 $2, 실제 $3)"; FAIL=1; fi; }
 ok "픽스처: 가드 트리거·해제 함수 올라감" "2" "$($P -c "select (select count(*) from pg_trigger where tgname='trg_taam_repurchase_guard') + (select count(*) from pg_proc where proname='taam_repurchase_released')")"
@@ -44,8 +46,8 @@ echo "── 120일 매장"
 ok "115일 뒤 (2027.05.05) → 막힘" "REPURCHASE_BLOCKED" "$(res $M 0 $R120 tp-new 2027.05.05 PAYH-6)"
 ok "122일 뒤 (2027.05.12) → 허용" "OK" "$(res $M 0 $R120 tp-new 2027.05.12 PAYH-7)"
 echo "── 예외"
-ok "발매 8일 지난 티켓(tp-old) → 180일 안이라도 허용 (7일 해제 규칙)" "OK" "$(res $M 0 $R180 tp-old 2027.03.01 PAYH-8)"
-ok "미공개(draft) 티켓은 해제 안 됨 → 막힘" "REPURCHASE_BLOCKED" "$(res $M 0 $R180 tp-draft 2027.03.01 PAYH-9)"
+ok "발매 8일 지난 티켓(tp-old) → 그래도 막힘 (7일 해제 폐지 · 2026-10-13)" "REPURCHASE_BLOCKED" "$(res $M 0 $R180 tp-old 2027.03.01 PAYH-8)"
+ok "미공개(draft) 티켓 → 막힘" "REPURCHASE_BLOCKED" "$(res $M 0 $R180 tp-draft 2027.03.01 PAYH-9)"
 ok "제한없음 매장 → 허용" "OK" "$(res $M 0 $R0 tp-new 2027.03.01 PAYH-10)"
 ok "초대 홀드(INVH-) → 허용" "OK" "$(res $M 0 $R180 tp-new 2027.03.01 INVH-11)"
 ok "슈퍼어드민 → 허용" "OK" "$(res $SU 1 $R180 tp-new 2027.03.01 PAYH-12)"

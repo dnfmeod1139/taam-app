@@ -192,6 +192,14 @@ DB 값은 `'A'` 그대로고 **이름만** 「게스트 회원」이다. 값을 
 티켓 금액과 별개이고 캘린더는 슈퍼어드민일 때 `kashikiri_charges` 에서 실제 결제액을 따로 읽어 「정산 결제」로 보여 준다.
 회귀: `bash sql/_test/t_ksk_send_fx.sh`(7건).
 
+### 정산·링크 결제가 끝나면 슈퍼어드민에게 알린다 (2026-10-13)
+
+`kashikiri_charges.status` 가 paid 로 바뀌는 순간(`trg_taam_kashikiri_paid_notify`, AFTER UPDATE OF status, `20261013_kashikiri_paid_notify.sql`)
+슈퍼어드민마다 `notifications`(type `kashikiri_paid`, 앱 라벨 PAID) 한 줄 + `taam_admin_push` 가 pg_net 으로 send-push 에 `role:superadmin` 한 번.
+푸시 설정은 `app_config.restock_push` 의 Vault 시크릿 이름·URL 을 **재사용**한다(URL 의 함수 이름만 send-push 로 바꿔 쓴다). 설정·pg_net 이 없으면
+인앱 알림만 가고 푸시는 조용히 건너뛴다. 본문은 「매장 날짜 시간 · 결제자 · 승인 통화 금액 (₩원화)」, 링크 초대면 제목이 「🔗 링크 초대 결제 완료」.
+⚠ 알림이 결제 확정을 막으면 안 된다 — 예외는 전부 warning. 회귀: `bash sql/_test/t_ksk_paid_notify.sh`(8건). 연회비를 정산 링크로 받는 경우도 같은 표라 같이 잡힌다.
+
 ### 정산 결제도 좌석을 잡는다 — 「티켓 연결」은 라벨이 아니다 (2026-09-29)
 
 정산 회차(대관 정산)에 「티켓 연결」을 눌러도 회차 행에 `ticket_product_id` 만 적히고 좌석은 안 잡혔다. Takiya 3/20 에
@@ -568,7 +576,7 @@ Apple 은 iPad 와 iPhone **두 기기로 심사**하므로(리뷰 노트에 명
 | `profiles.role` | `trg_taam_guard_profile_role(_ins)` | 자기 승격 차단. 허용 이메일만 |
 | `membership_tier` | `trg_taam_guard_membership_tier` | 비어 있을 때 **자기 초대코드 값으로만** 1회. M 만료일은 서버가 365일로 |
 | 티켓 등급 제한 | `trg_taam_guard_ticket_tier` | `min_tier` 미달 구매 차단. 슈퍼어드민·초대·수동입력만 예외 |
-| 재구매 제한 | `trg_taam_repurchase_guard` | 같은 매장 N일(30·60·90·120·180). **방문일 간격**으로 센다(구매일 아님) · 같은 날은 예외 · 홀드도 기존 예약으로 센다 · **발매 7일 뒤 자동 해제**(`taam_repurchase_released`, draft 는 해제 안 됨). 회귀 `bash sql/_test/t_repurchase.sh`(15건, 2026-10-13) |
+| 재구매 제한 | `trg_taam_repurchase_guard` | 같은 매장 N일(30·60·90·120·180). **방문일 간격**으로 센다(구매일 아님) · 같은 날은 예외 · 홀드도 기존 예약으로 센다 · ~~발매 7일 뒤 자동 해제~~ **2026-10-13 폐지** — `taam_repurchase_released` 는 언제나 false, 앱 `_repReleasedByAge` 도 false(`20261013_repurchase_no_release.sql`). 되살리려면 둘 다. 회귀 `bash sql/_test/t_repurchase.sh`(15건) |
 | 티켓 필드 | `trg_taam_guard_ticket_row` | 회원은 **취소만**. `price`·`party_size`·`status(hold→active 포함)` 를 못 고침 (2026-09-13 강화) |
 | 티켓 INSERT | `trg_taam_guard_ticket_insert` | 회원은 `status='hold'` 만, 매장 어드민은 `hold`·`manual`. **확정 행은 서버(RPC·toss-confirm)만** 만든다 (2026-09-13) |
 | 푸시 구독 role | `save_push_subscription` | 클라이언트 `p_role` 무시 — `profiles.role` 로 정한다 (2026-09-13) |
