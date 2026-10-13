@@ -105,7 +105,9 @@ async function handle(req: Request): Promise<Response> {
     //   기본카드 우선, 없으면 가장 최근 등록 카드.
     const { data: cards, error: ckErr } = await admin
       .from('billing_keys')
-      .select('id, billing_key, customer_key, card_company, card_number, is_default')
+      // 🔧 2026-10-13 customer_key 컬럼은 라이브 표에 없다(toss_customer_key 가 있다) — 읽으면 조회 자체가 42703 으로 실패해
+      //   「card_lookup_failed」 가 된다. customerKey 는 등록 때 toss-billing-issue 가 auth uid 와 같음을 강제하므로 user.id 를 쓴다.
+      .select('id, billing_key, card_company, card_number, is_default')
       .eq('user_id', user.id).is('deleted_at', null)
       .order('is_default', { ascending: false })
       .order('created_at', { ascending: false })
@@ -130,7 +132,7 @@ async function handle(req: Request): Promise<Response> {
           'Idempotency-Key': `taam-billing-${orderId}`,
         },
         body: JSON.stringify({
-          customerKey: card.customer_key || user.id,
+          customerKey: user.id,   // 등록 시 customerKey = auth uid (toss-billing-issue 가 강제)
           amount: expected,
           orderId,
           orderName,

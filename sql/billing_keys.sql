@@ -1,3 +1,6 @@
+-- ⚠ 2026-10-13: 라이브 표는 이 파일과 다르다 — customer_key 가 없고 toss_customer_key text · pg_provider text NOT NULL default 'portone'
+--   · nickname text 가 있다(포트원 시절에 만든 표). Edge toss-billing-issue 가 customer_key 를 넣어 42703 으로 매번 거절돼 카드가 0건이었다.
+--   Edge 함수 둘(issue·charge)은 라이브 컬럼을 쓰고 저장소 스키마엔 폴백한다. 이 파일을 라이브에 다시 돌리지 말 것(create table if not exists 라 무해하지만 의미 없음).
 -- ═══════════════════════════════════════════════════════════════
 -- TAAM — 결제수단(빌링키) 저장 테이블 (2026-08)
 -- Supabase SQL Editor 에서 실행 (idempotent — 여러 번 돌려도 안전)

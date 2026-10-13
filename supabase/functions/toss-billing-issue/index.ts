@@ -126,27 +126,35 @@ async function handle(req: Request): Promise<Response> {
     const { data: exist, error: existErr } = await admin.from('billing_keys')
       .select('id').eq('billing_key', toss.billingKey).maybeSingle();
 
+    // 🔧 2026-10-13 라이브 표의 컬럼은 저장소 sql/billing_keys.sql 과 다르다 — customer_key 가 없고 toss_customer_key · pg_provider(NOT NULL,
+    //   기본 'portone') 가 있다(포트원 시절 표). customer_key 를 넣던 INSERT 가 42703(컬럼 없음)으로 매번 거절돼 카드가 한 장도 저장되지 않았다
+    //   (「카드 저장 실패」 · billing_keys 0건). 라이브 모양으로 먼저 쓰고, 그 컬럼이 없는 환경(저장소 스키마)이면 customer_key 로 다시 쓴다.
+    const liveCols = { toss_customer_key: customerKey, pg_provider: 'toss' } as Record<string, unknown>;
+    const repoCols = { customer_key: customerKey } as Record<string, unknown>;
+    const isUndefinedColumn = (err: unknown) => String((err as { code?: string } | null)?.code || '') === '42703';
+    const cardCols = { card_company: cardCompany, card_number: cardNumber, card_type: cardType };
+
     const restore = async (id: string) => {
-      const { error: upErr } = await admin.from('billing_keys').update({
-        user_id: user.id, customer_key: customerKey,
-        card_company: cardCompany, card_number: cardNumber, card_type: cardType,
-        deleted_at: null,
-      }).eq('id', id);
+      let { error: upErr } = await admin.from('billing_keys')
+        .update({ user_id: user.id, ...liveCols, ...cardCols, deleted_at: null }).eq('id', id);
+      if (upErr && isUndefinedColumn(upErr)) {
+        ({ error: upErr } = await admin.from('billing_keys')
+          .update({ user_id: user.id, ...repoCols, ...cardCols, deleted_at: null }).eq('id', id));
+      }
       if (upErr) throw upErr;
       if (isFirst) await setDefault(admin, user.id, id);
       return json({ ok: true, restored: true, cardCompany, cardNumber });
     };
     if (exist) return await restore(exist.id);
 
-    const { data: ins, error: insErr } = await admin.from('billing_keys').insert({
-      user_id: user.id,
-      customer_key: customerKey,
-      billing_key: toss.billingKey,
-      card_company: cardCompany,
-      card_number: cardNumber,
-      card_type: cardType,
-      is_default: false,
-    }).select('id').maybeSingle();
+    const baseRow = { user_id: user.id, billing_key: toss.billingKey, ...cardCols, is_default: false };
+    let { data: ins, error: insErr } = await admin.from('billing_keys')
+      .insert({ ...baseRow, ...liveCols }).select('id').maybeSingle();
+    if (insErr && isUndefinedColumn(insErr)) {
+      console.warn('[toss-billing-issue] 라이브 컬럼(toss_customer_key/pg_provider) 없음 — customer_key 로 다시 저장');
+      ({ data: ins, error: insErr } = await admin.from('billing_keys')
+        .insert({ ...baseRow, ...repoCols }).select('id').maybeSingle());
+    }
 
     if (insErr || !ins) {
       // 🔧 2026-10-13 같은 빌링키가 이미 있다(23505) — exist 조회가 비었거나 경주다. 되살리는 길로 보낸다.

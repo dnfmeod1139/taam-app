@@ -645,6 +645,18 @@ toss-order(홀드↔티켓 대조), toss-confirm/billing-charge(예치금 부족
 넣어 봐야 서버가 거부한다. 회원 세션에서 `tickets` 를 INSERT/UPDATE 하는 코드를 새로
 쓰기 전에 이 표를 본다.
 
+### 카드 등록(빌링키) — 라이브 `billing_keys` 는 저장소 스키마와 다르다 (2026-10-13 사고)
+
+「카드 저장 실패」가 모든 회원에게 났고 표에 카드가 **0건**이었다. 라이브 표는 포트원 시절에 만든 것이라 `customer_key` 가 없고
+`toss_customer_key` · `pg_provider`(NOT NULL, 기본 'portone') · `nickname` 이 있다 — Edge `toss-billing-issue` 가 저장소 `sql/billing_keys.sql`
+대로 `customer_key` 를 INSERT 해 42703(컬럼 없음)으로 매번 거절됐고, 함수는 `save_failed` 한 단어만 돌려 원인이 안 보였다.
+`toss-billing-charge` 도 `customer_key` 를 select 해 자동결제가 `card_lookup_failed` 로 죽을 모양이었다.
+→ issue 는 라이브 컬럼(`toss_customer_key`, `pg_provider='toss'`)으로 쓰고 42703 이면 `customer_key` 로 다시 쓴다. charge 는 그 컬럼을 읽지 않고
+customerKey 에 `user.id` 를 쓴다(등록 때 issue 가 auth uid 와 같음을 강제한다). 저장 실패는 이제 응답 `reason` + `app_errors`(kind `billing_save`,
+platform `edge`)로 남고 토스트에 코드가 붙는다. 같은 빌링키 23505 는 되살리기.
+교훈: **Edge 가 쓰는 표는 라이브 컬럼을 먼저 본다** — 진단은 스크래치 `diag_billing_keys.sql`(컬럼·제약·트리거·정책·권한·최근 행 한 표).
+`sql/billing_keys.sql` 을 라이브에 다시 돌리지 말 것.
+
 ### 원장은 서버만 쓴다 — 2026-09-14 (4단계 완료)
 
 `deposit_transactions` INSERT 정책이 「본인이면 허용」→ **슈퍼어드민만** 이 됐다.
