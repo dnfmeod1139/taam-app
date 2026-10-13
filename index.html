@@ -7499,6 +7499,183 @@ function fxFetchJpy(){
 window.fxFetchJpy = fxFetchJpy;
 window.fxOpenSettings = fxOpenSettings; window.fxSaveSettings = fxSaveSettings;
 
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026-10-13 카드 수수료 계산 (내부용 · 슈퍼어드민)
+//   카드로 받은 결제(티켓 부족분 카드 · 등록 카드(빌링) · 정산 결제 · 링크 초대)에 우리가 내는 PG 수수료를 기간별로 센다.
+//   ⚠ 회원에게 청구하는 기능이 아니다 — 여신전문금융업법 제19조④(가맹점수수료 회원 전가 금지). 내부 원가 확인용.
+//   금액은 서버 RPC taam_card_fee_report(sql/card_fee_report.sql · 슈퍼어드민만)가 주고, 요율은 app_config.card_fee_settings 에 둔다.
+//   요율은 토스 계약서 값을 **부가세 포함**으로 넣는다(별도면 ×1.1). 외화 승인(USD/JPY)은 해외카드 요율, 빌링은 빌링 요율.
+// ═══════════════════════════════════════════════════════════════
+var CARD_FEE = { rate_card: 3.3, rate_billing: 3.3, rate_fx: 3.8, fixed_krw: 0, loaded: false };
+var _cfPeriod = 'month';
+var _cfRows = null;
+var _cfRange = null;
+var _CF_KIND = { card: '티켓 부족분 카드', billing: '등록 카드(빌링)', kashikiri: '정산 결제', link: '링크 초대' };
+
+function _cfNum(n){ return (Math.round(Number(n) || 0)).toLocaleString(); }
+// KST 자정 = UTC 전날 15:00. (y, m0, d) → Date
+function _cfKst(y, m0, d){ return new Date(Date.UTC(y, m0, d) - 9 * 3600 * 1000); }
+function _cfToday(){ var k = new Date(Date.now() + 9 * 3600 * 1000); return { y: k.getUTCFullYear(), m: k.getUTCMonth(), d: k.getUTCDate() }; }
+function _cfYmd(dt){ var k = new Date(dt.getTime() + 9 * 3600 * 1000); return k.getUTCFullYear() + '-' + String(k.getUTCMonth() + 1).padStart(2, '0') + '-' + String(k.getUTCDate()).padStart(2, '0'); }
+function _cfRangeOf(kind){
+  var t = _cfToday();
+  if (kind === 'month') return { from: _cfKst(t.y, t.m, 1), to: _cfKst(t.y, t.m + 1, 1), label: (t.m + 1) + '월' };
+  if (kind === 'prev')  return { from: _cfKst(t.y, t.m - 1, 1), to: _cfKst(t.y, t.m, 1), label: '지난 달' };
+  if (kind === 'd30')   return { from: _cfKst(t.y, t.m, t.d - 30), to: _cfKst(t.y, t.m, t.d + 1), label: '최근 30일' };
+  if (kind === 'year')  return { from: _cfKst(t.y, 0, 1), to: _cfKst(t.y + 1, 0, 1), label: t.y + '년' };
+  var f = (document.getElementById('cfFrom') || {}).value || '', e = (document.getElementById('cfTo') || {}).value || '';
+  var fp = f.split('-').map(Number), ep = e.split('-').map(Number);
+  if (fp.length !== 3 || ep.length !== 3 || isNaN(fp[0]) || isNaN(ep[0])) return null;
+  return { from: _cfKst(fp[0], fp[1] - 1, fp[2]), to: _cfKst(ep[0], ep[1] - 1, ep[2] + 1), label: f + ' ~ ' + e };
+}
+function _cfRateOf(row){
+  if (row.kind === 'billing') return parseFloat(CARD_FEE.rate_billing) || 0;
+  if (String(row.currency || 'KRW').toUpperCase() !== 'KRW') return parseFloat(CARD_FEE.rate_fx) || 0;
+  return parseFloat(CARD_FEE.rate_card) || 0;
+}
+function _cfFeeOf(row){
+  var krw = parseInt(row.amount_krw, 10) || 0;
+  return Math.round(krw * _cfRateOf(row) / 100) + (parseInt(CARD_FEE.fixed_krw, 10) || 0);
+}
+async function _cardFeeLoad(){
+  if (CARD_FEE.loaded || !window.sb) return;
+  try {
+    var r = await window.sb.from('app_config').select('value').eq('key', 'card_fee_settings').maybeSingle();
+    var v = r && r.data && r.data.value;
+    if (v && typeof v === 'object') {
+      ['rate_card', 'rate_billing', 'rate_fx', 'fixed_krw'].forEach(function(k){ if (v[k] != null && !isNaN(parseFloat(v[k]))) CARD_FEE[k] = parseFloat(v[k]); });
+    }
+  } catch(_e){}
+  CARD_FEE.loaded = true;
+}
+function cardFeeOpen(){
+  if (typeof _isSuperAdmin === 'function' && !_isSuperAdmin()) { showToast('🔒', '슈퍼어드민 전용', '내부 원가 확인 화면입니다'); return; }
+  var old = document.getElementById('cardFeePopup'); if (old) old.remove();
+  var el = document.createElement('div');
+  el.id = 'cardFeePopup';
+  el.style.cssText = 'position:fixed;inset:0;z-index:9200;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;';
+  function inp(id, v, ph){ return '<input id="' + id + '" type="text" inputmode="decimal" value="' + v + '" placeholder="' + (ph || '') + '" style="width:100%;box-sizing:border-box;padding:9px 10px;border:1px solid #e0dcd4;border-radius:9px;font-size:14px;font-weight:700;">'; }
+  function lab(t){ return '<div style="font-size:10.5px;font-weight:700;color:#888;margin:0 0 4px;">' + t + '</div>'; }
+  var t = _cfToday(), dflt = t.y + '-' + String(t.m + 1).padStart(2, '0') + '-' + String(t.d).padStart(2, '0');
+  el.innerHTML =
+    '<div style="background:#fff;border-radius:18px;width:100%;max-width:560px;max-height:92vh;overflow:auto;padding:22px 20px;font-family:var(--font-main);" data-lang-lock="ko">'
+    + '<div style="font-size:16px;font-weight:800;color:#1a1a18;">💳 카드 수수료 계산 <span style="font-size:11px;color:#B23A2E;font-weight:700;">내부용</span></div>'
+    + '<div style="font-size:11px;color:#9a9486;line-height:1.65;margin:4px 0 14px;">카드로 받은 결제에 <b>우리가 내는</b> PG 수수료를 셉니다. 회원에게 청구하는 기능이 아닙니다(여신전문금융업법 제19조④). 요율은 토스 계약서 값을 부가세 포함으로 넣으세요.</div>'
+    + '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;" id="cfPeriodBtns">'
+      + ['month|이번 달', 'prev|지난 달', 'd30|최근 30일', 'year|올해', 'custom|직접 입력'].map(function(x){ var k = x.split('|')[0], l = x.split('|')[1];
+          return '<button type="button" class="cf-pb" data-k="' + k + '" onclick="cardFeeSetPeriod(\'' + k + '\')" style="padding:7px 11px;border-radius:9px;border:1.5px solid ' + (k === _cfPeriod ? '#1a1a18' : '#e0ddd8') + ';background:' + (k === _cfPeriod ? '#1a1a18' : '#fff') + ';color:' + (k === _cfPeriod ? '#fff' : '#666') + ';font-size:11.5px;font-weight:800;cursor:pointer;">' + l + '</button>'; }).join('')
+    + '</div>'
+    + '<div id="cfCustom" style="display:' + (_cfPeriod === 'custom' ? 'flex' : 'none') + ';gap:8px;margin-bottom:10px;">'
+      + '<input id="cfFrom" type="date" value="' + dflt + '" style="flex:1;padding:8px;border:1px solid #e0dcd4;border-radius:9px;font-size:13px;">'
+      + '<input id="cfTo" type="date" value="' + dflt + '" style="flex:1;padding:8px;border:1px solid #e0dcd4;border-radius:9px;font-size:13px;">'
+    + '</div>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:6px 0 10px;">'
+      + '<div>' + lab('국내 카드 요율 (%)') + inp('cfRateCard', CARD_FEE.rate_card, '3.3') + '</div>'
+      + '<div>' + lab('등록 카드(빌링) 요율 (%)') + inp('cfRateBilling', CARD_FEE.rate_billing, '3.3') + '</div>'
+      + '<div>' + lab('외화 승인(해외카드) 요율 (%)') + inp('cfRateFx', CARD_FEE.rate_fx, '3.8') + '</div>'
+      + '<div>' + lab('건당 정액 (원 · 없으면 0)') + inp('cfFixed', CARD_FEE.fixed_krw, '0') + '</div>'
+    + '</div>'
+    + '<div style="display:flex;gap:8px;margin-bottom:12px;">'
+      + '<button type="button" onclick="cardFeeSave()" style="flex:1;padding:11px;background:#fff;border:1px solid #d8d2c6;border-radius:11px;font-size:12px;font-weight:800;color:#6a635a;cursor:pointer;">요율 저장</button>'
+      + '<button type="button" onclick="cardFeeRun()" style="flex:2;padding:11px;background:#1a1a18;border:none;border-radius:11px;font-size:12.5px;font-weight:800;color:#fff;cursor:pointer;">계산</button>'
+    + '</div>'
+    + '<div id="cfResult" style="font-size:12px;color:#777;">기간과 요율을 확인하고 「계산」을 누르세요.</div>'
+    + '<button onclick="var p=document.getElementById(\'cardFeePopup\');if(p)p.remove();_acPopupClosed();" style="width:100%;margin-top:14px;padding:10px;background:transparent;border:none;font-size:10px;font-weight:600;letter-spacing:.18em;color:#bbb;cursor:pointer;">닫기</button>'
+    + '</div>';
+  document.body.appendChild(el);
+  _cardFeeLoad().then(function(){
+    var m = { cfRateCard: 'rate_card', cfRateBilling: 'rate_billing', cfRateFx: 'rate_fx', cfFixed: 'fixed_krw' };
+    Object.keys(m).forEach(function(id){ var i = document.getElementById(id); if (i) i.value = CARD_FEE[m[id]]; });
+  });
+}
+function cardFeeSetPeriod(k){
+  _cfPeriod = k;
+  document.querySelectorAll('#cardFeePopup .cf-pb').forEach(function(b){
+    var on = b.getAttribute('data-k') === k;
+    b.style.borderColor = on ? '#1a1a18' : '#e0ddd8'; b.style.background = on ? '#1a1a18' : '#fff'; b.style.color = on ? '#fff' : '#666';
+  });
+  var c = document.getElementById('cfCustom'); if (c) c.style.display = k === 'custom' ? 'flex' : 'none';
+}
+function _cfReadRates(){
+  var g = function(id){ return parseFloat((document.getElementById(id) || {}).value); };
+  var rc = g('cfRateCard'), rb = g('cfRateBilling'), rf = g('cfRateFx'), fx = parseInt((document.getElementById('cfFixed') || {}).value, 10);
+  if (!(rc >= 0 && rc < 100) || !(rb >= 0 && rb < 100) || !(rf >= 0 && rf < 100)) { showToast('⚠', '확인', '요율은 0 이상 100 미만이어야 합니다'); return false; }
+  CARD_FEE.rate_card = rc; CARD_FEE.rate_billing = rb; CARD_FEE.rate_fx = rf; CARD_FEE.fixed_krw = isNaN(fx) ? 0 : Math.max(0, fx);
+  return true;
+}
+function cardFeeSave(){
+  if (!_cfReadRates()) return;
+  if (!window.sb) { showToast('⚠', '오류', '서버 연결이 없습니다'); return; }
+  var value = { rate_card: CARD_FEE.rate_card, rate_billing: CARD_FEE.rate_billing, rate_fx: CARD_FEE.rate_fx, fixed_krw: CARD_FEE.fixed_krw };
+  window.sb.from('app_config').upsert({ key: 'card_fee_settings', value: value, updated_at: new Date().toISOString() }).then(function(res){
+    if (res.error) { showToast('⚠', '저장 실패', res.error.message); return; }
+    showToast('✓', '요율 저장', '국내 ' + value.rate_card + '% · 빌링 ' + value.rate_billing + '% · 해외 ' + value.rate_fx + '%');
+  });
+}
+async function cardFeeRun(){
+  if (!_cfReadRates()) return;
+  var box = document.getElementById('cfResult'); if (!box) return;
+  var rg = _cfRangeOf(_cfPeriod);
+  if (!rg) { showToast('⚠', '기간', '시작일과 종료일을 입력하세요'); return; }
+  if (!window.sb) { showToast('⚠', '오류', '서버 연결이 없습니다'); return; }
+  box.innerHTML = '<div style="padding:14px 0;color:#a8a29a;">불러오는 중…</div>';
+  var r = await window.sb.rpc('taam_card_fee_report', { p_from: rg.from.toISOString(), p_to: rg.to.toISOString() });
+  if (r.error) {
+    var m = String(r.error.message || '');
+    if (/does not exist|PGRST202|schema cache/i.test(m)) { box.innerHTML = '<div style="color:#B23A2E;font-weight:700;">sql/card_fee_report.sql 을 Supabase SQL Editor 에서 먼저 실행해주세요.</div>'; return; }
+    box.innerHTML = '<div style="color:#B23A2E;font-weight:700;">' + _pcalEsc(m.slice(0, 160)) + '</div>'; return;
+  }
+  var rows = (r.data || []).map(function(x){ return Object.assign({}, x, { fee: _cfFeeOf(x), rate: _cfRateOf(x) }); });
+  _cfRows = rows; _cfRange = rg;
+  var by = {}; var tot = { n: 0, krw: 0, fee: 0 };
+  rows.forEach(function(x){
+    var g = by[x.kind] || (by[x.kind] = { n: 0, krw: 0, fee: 0 });
+    g.n++; g.krw += parseInt(x.amount_krw, 10) || 0; g.fee += x.fee;
+    tot.n++; tot.krw += parseInt(x.amount_krw, 10) || 0; tot.fee += x.fee;
+  });
+  var h = '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;"><b style="color:#1a1a18;font-size:13px;">' + _pcalEsc(rg.label) + '</b><span style="font-size:11px;color:#9a9486;">' + _cfYmd(rg.from) + ' ~ ' + _cfYmd(new Date(rg.to.getTime() - 1)) + ' (KST)</span></div>';
+  h += '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:10px;"><thead><tr style="color:#9a9486;font-size:10.5px;"><th style="text-align:left;padding:4px 2px;">채널</th><th style="text-align:right;padding:4px 2px;">건</th><th style="text-align:right;padding:4px 2px;">결제액(원)</th><th style="text-align:right;padding:4px 2px;">수수료(원)</th></tr></thead><tbody>';
+  ['card', 'billing', 'kashikiri', 'link'].forEach(function(k){
+    var g = by[k]; if (!g) return;
+    h += '<tr><td style="padding:5px 2px;border-top:1px solid #f0ebe3;">' + _CF_KIND[k] + '</td><td style="text-align:right;padding:5px 2px;border-top:1px solid #f0ebe3;">' + g.n + '</td><td style="text-align:right;padding:5px 2px;border-top:1px solid #f0ebe3;">' + _cfNum(g.krw) + '</td><td style="text-align:right;padding:5px 2px;border-top:1px solid #f0ebe3;font-weight:700;">' + _cfNum(g.fee) + '</td></tr>';
+  });
+  h += '<tr style="font-weight:800;color:#5C0A14;"><td style="padding:7px 2px;border-top:2px solid #1a1a18;">합계</td><td style="text-align:right;padding:7px 2px;border-top:2px solid #1a1a18;">' + tot.n + '</td><td style="text-align:right;padding:7px 2px;border-top:2px solid #1a1a18;">' + _cfNum(tot.krw) + '</td><td style="text-align:right;padding:7px 2px;border-top:2px solid #1a1a18;">' + _cfNum(tot.fee) + '</td></tr>';
+  h += '</tbody></table>';
+  h += '<div style="font-size:11px;color:#9a9486;margin-bottom:8px;">실수령 ≈ <b style="color:#1a1a18;">₩' + _cfNum(tot.krw - tot.fee) + '</b> · 평균 요율 ' + (tot.krw ? (tot.fee / tot.krw * 100).toFixed(2) : '0.00') + '%</div>';
+  if (!rows.length) { h += '<div style="padding:10px 0;color:#a8a29a;">이 기간에 카드 결제가 없습니다.</div>'; box.innerHTML = h; return; }
+  h += '<div style="display:flex;justify-content:space-between;align-items:center;margin:6px 0 4px;"><span style="font-size:10.5px;font-weight:800;letter-spacing:.1em;color:#aaa;">건별 (' + rows.length + ')</span><button type="button" onclick="cardFeeCsv()" style="padding:5px 10px;border:1px solid #d8d2c6;border-radius:8px;background:#fff;font-size:11px;font-weight:700;color:#6a635a;cursor:pointer;">⤓ CSV</button></div>';
+  h += '<div style="max-height:260px;overflow:auto;border:1px solid #f0ebe3;border-radius:10px;">';
+  rows.slice(0, 300).forEach(function(x){
+    var when = x.paid_at ? new Date(x.paid_at) : null;
+    var whenS = when ? (_cfYmd(when) + ' ' + String(new Date(when.getTime() + 9 * 3600 * 1000).getUTCHours()).padStart(2, '0') + ':' + String(new Date(when.getTime() + 9 * 3600 * 1000).getUTCMinutes()).padStart(2, '0')) : '';
+    var cur = String(x.currency || 'KRW').toUpperCase();
+    var amt = cur === 'KRW' ? '₩' + _cfNum(x.amount_krw) : (cur === 'USD' ? '$' : cur === 'JPY' ? '¥' : cur + ' ') + Number(x.amount || 0).toLocaleString() + ' (₩' + _cfNum(x.amount_krw) + ')';
+    h += '<div style="display:grid;grid-template-columns:1fr auto;gap:8px;padding:7px 9px;border-bottom:1px solid #f4efe6;font-size:11.5px;">'
+       +   '<div style="min-width:0;"><div style="color:#1a1a18;font-weight:700;">' + _pcalEsc(x.who || '') + ' <span style="color:#9a9486;font-weight:600;">· ' + _pcalEsc(_CF_KIND[x.kind] || x.kind) + '</span></div>'
+       +     '<div style="color:#8a8580;font-size:10.5px;">' + _pcalEsc(whenS) + ' · ' + _pcalEsc(x.label || '') + '</div></div>'
+       +   '<div style="text-align:right;white-space:nowrap;"><div style="color:#1a1a18;font-weight:700;">' + amt + '</div><div style="color:#B23A2E;font-size:10.5px;">수수료 ₩' + _cfNum(x.fee) + ' (' + x.rate + '%)</div></div>'
+       + '</div>';
+  });
+  h += '</div>';
+  if (rows.length > 300) h += '<div style="font-size:10.5px;color:#a8a29a;margin-top:4px;">300건까지만 표시 — CSV 는 전체</div>';
+  box.innerHTML = h;
+}
+function cardFeeCsv(){
+  if (!_cfRows || !_cfRows.length) return;
+  var q = function(v){ return '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"'; };
+  var lines = [['일시(KST)', '채널', '이름', '내용', '통화', '승인금액', '원화', '요율%', '수수료(원)', '수단', '참조'].map(q).join(',')];
+  _cfRows.forEach(function(x){
+    var when = x.paid_at ? new Date(new Date(x.paid_at).getTime() + 9 * 3600 * 1000).toISOString().slice(0, 16).replace('T', ' ') : '';
+    lines.push([when, _CF_KIND[x.kind] || x.kind, x.who, x.label, x.currency, x.amount, x.amount_krw, x.rate, x.fee, x.method, x.ref].map(q).join(','));
+  });
+  var blob = new Blob(['﻿' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+  var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = 'taam-card-fee-' + _cfYmd(_cfRange.from) + '_' + _cfYmd(new Date(_cfRange.to.getTime() - 1)) + '.csv';
+  document.body.appendChild(a); a.click();
+  setTimeout(function(){ document.body.removeChild(a); URL.revokeObjectURL(a.href); }, 200);
+}
+window.cardFeeOpen = cardFeeOpen; window.cardFeeSetPeriod = cardFeeSetPeriod; window.cardFeeSave = cardFeeSave; window.cardFeeRun = cardFeeRun; window.cardFeeCsv = cardFeeCsv;
+
 // 결제 상세 총액의 USD — 항목별 표시값의 합과 정확히 일치시킨다.
 //   (총액을 따로 환산하면 반올림 때문에 항목 합과 1~2달러 어긋나 보인다)
 function _fxTotalUsd(t, pax, meal, wine){
@@ -11648,6 +11825,13 @@ window.closePromoCarousel = function(){
         <div>
           <div class="admin-menu-text">💱 해외 통화 · 환율 설정</div>
           <div class="admin-menu-sub">적용 환율(기준율 × 마진) · 해외 대행비 규칙. 해외 회원 화면의 USD 표시에 사용</div>
+        </div>
+        <div class="admin-arrow">›</div>
+      </div>
+      <div class="admin-menu-item" onclick="cardFeeOpen()">
+        <div>
+          <div class="admin-menu-text">💳 카드 수수료 계산 (내부용)</div>
+          <div class="admin-menu-sub">카드로 받은 결제에 우리가 내는 PG 수수료를 기간별로 센다 — 회원에게 청구하지 않는다</div>
         </div>
         <div class="admin-arrow">›</div>
       </div>
@@ -44199,7 +44383,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.13-i';
+var TAAM_WEB_BUILD = '2026.10.13-j';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){

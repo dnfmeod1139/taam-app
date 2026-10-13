@@ -657,6 +657,16 @@ platform `edge`)로 남고 토스트에 코드가 붙는다. 같은 빌링키 23
 교훈: **Edge 가 쓰는 표는 라이브 컬럼을 먼저 본다** — 진단은 스크래치 `diag_billing_keys.sql`(컬럼·제약·트리거·정책·권한·최근 행 한 표).
 `sql/billing_keys.sql` 을 라이브에 다시 돌리지 말 것.
 
+### 카드 수수료는 회원에게 못 받는다 — 내부 계산만 (2026-10-13)
+
+「카드 결제에 수수료를 얹자」는 요청에 **여신전문금융업법 제19조①④**(카드 회원 불리 대우·가맹점수수료 전가 금지, 벌칙 제70조)로 안 된다고 답하고,
+대신 **슈퍼어드민 내부 원가 확인** 화면만 만들었다: 어드민 메뉴 「💳 카드 수수료 계산 (내부용)」(`cardFeeOpen`). 결제수단으로 가격을 가르는 코드
+(카드 가산·예치금/계좌이체만 할인)는 앞으로도 넣지 않는다. 비용을 메우려면 결제수단 무관하게 대행비에 균일 반영(「예약 수수료 정책」)하거나 예치금 충전 혜택으로.
+- 서버 RPC `taam_card_fee_report(p_from, p_to)`(`sql/card_fee_report.sql` · 실행 필요 · 슈퍼어드민만 · security definer)가 `payment_orders`(paid: card / billing=metadata.paid_via)
+  와 `kashikiri_charges`(paid: kashikiri / link=link_invite, 외화는 pay_currency·pay_amount, 원화는 amount_krw)를 한 표로 준다. 수수료율은 서버가 모른다 —
+  앱이 `app_config.card_fee_settings`(rate_card·rate_billing·rate_fx·fixed_krw, 부가세 포함 요율로 입력)를 곱한다. 기간은 KST 자정 경계(`_cfKst`).
+- 회귀: 스크래치 `cardfee.js`(11건) · RPC 는 스크래치 `cf_fixture.sh`.
+
 ### 원장은 서버만 쓴다 — 2026-09-14 (4단계 완료)
 
 `deposit_transactions` INSERT 정책이 「본인이면 허용」→ **슈퍼어드민만** 이 됐다.
