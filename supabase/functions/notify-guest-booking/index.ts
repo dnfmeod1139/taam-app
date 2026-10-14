@@ -202,9 +202,18 @@ async function handle(req: Request): Promise<Response> {
     // 6) 발송 → 결과를 행에 남긴다 (성공했을 때만 kakao_sent_at)
     const result = await sendKakao(phone, vars, fallback);
     const now = new Date().toISOString();
+    // 🔧 2026-10-14 발송에 1~3초가 걸리는 동안 어드민이 캘린더 「수정」으로 extra_data(ttype·memo·edits)를 고쳤을 수 있다.
+    //   처음 읽은 스냅샷(ex)으로 통째로 PATCH 하면 그 수정이 지워진다 — 바로 다시 읽어 그 위에 kakao_* 만 얹는다 (적대 리뷰).
+    let base: Record<string, unknown> = ex;
+    try {
+      const again = await sbGet(`tickets?id=eq.${t.id}&select=extra_data`);
+      const fx = again[0]?.extra_data;
+      if (fx && typeof fx === "object") base = fx as Record<string, unknown>;
+    } catch { /* 다시 못 읽으면 처음 스냅샷으로 */ }
+    const tries = (Number((base as Record<string, unknown>).kakao_tries) || 0) + 1;
     const nextEx = result === "ok"
-      ? { ...ex, kakao_sent_at: now, kakao_result: "ok", kakao_tries: (Number(ex.kakao_tries) || 0) + 1 }
-      : { ...ex, kakao_result: result, kakao_last_try: now, kakao_tries: (Number(ex.kakao_tries) || 0) + 1 };
+      ? { ...base, kakao_sent_at: now, kakao_result: "ok", kakao_tries: tries }
+      : { ...base, kakao_result: result, kakao_last_try: now, kakao_tries: tries };
     await sbPatch(`tickets?id=eq.${t.id}`, { extra_data: nextEx });
 
     return json({ ok: result === "ok", kakao: result, to_tail: phone.slice(-4) });

@@ -1,5 +1,5 @@
 #!/bin/bash
-# 캘린더 수동 추가(MAN-) 수정 RPC 회귀 — 2026-10-14. 먼저: 로컬 pg. 실행: bash sql/_test/t_manual_edit.sh
+# 캘린더 수동 추가(MAN-) 수정 RPC 회귀 — 2026-10-14 (1차 + 2차 적대 리뷰 반영). 먼저: 로컬 pg. 실행: bash sql/_test/t_manual_edit.sh
 #   실제 행 가드(sql/audit_hardening_2026-09-13.sql 의 taam_guard_ticket_row + 트리거)를 그대로 올려 「매장 어드민의 직접 UPDATE 는 막히고,
 #   RPC 는 지난다」를 같이 본다. 정원은 ticket_products.total_pax 로만(총 정원).
 cd "$(dirname "$0")/../.."
@@ -39,13 +39,17 @@ S=$(grep -n 'create or replace function public.taam_guard_ticket_row' sql/audit_
 E=$(grep -n 'execute function public.taam_guard_ticket_row();' sql/audit_hardening_2026-09-13.sql | head -1 | cut -d: -f1)
 sed -n "${S},${E}p" sql/audit_hardening_2026-09-13.sql | $P >/dev/null 2>&1
 out=$($P -f supabase/migrations/20261014_manual_entry_edit.sql 2>&1)
+# 2차(적대 리뷰 반영)를 그 위에 — 라이브와 같은 순서
+out2=$($P -f supabase/migrations/20261014_manual_entry_edit2.sql 2>&1)
 FAIL=0
 ok(){ if [ "$2" = "$3" ]; then echo "✅ $1"; else echo "❌ $1  (기대 $2, 실제 $3)"; FAIL=1; fi; }
 ok "마이그레이션 오류 없음 · ❌ 0" "|0" "$(echo "$out" | grep -E "^ERROR|^psql:.*ERROR" | head -1)|$(echo "$out" | grep -c '❌')"
+ok "2차 마이그레이션 오류 없음 · ❌ 0 · 함수 1개(8인자)" "|0|1" "$(echo "$out2" | grep -E "^ERROR|^psql:.*ERROR" | head -1)|$(echo "$out2" | grep -c '❌')|$($P -c "select count(*) from pg_proc where proname='taam_manual_entry_update'")"
 ok "픽스처: 행 가드 트리거 올라감" "1" "$($P -c "select count(*) from pg_trigger where tgname='trg_taam_guard_ticket_row'")"
 # rpc uid super pid name phone pax amount ttype memo → OK:<json> | <ERRCODE>
 rpc(){ o=$($P -c "set local taam.uid='$1'; set local taam.super='$2'; set local role authenticated; select public.taam_manual_entry_update('$3', $4, $5, $6, $7, $8, $9);" 2>&1); if echo "$o" | grep -q "^ERROR"; then echo "$o" | grep -oE "ERROR:  [A-Z_]+" | head -1 | sed 's/ERROR:  //'; else echo "OK:$o"; fi; }
 col(){ $P -c "select $2 from public.tickets where purchase_id='$1'"; }
+rpcx(){ o=$($P -c "set local taam.uid='$1'; set local taam.super='$2'; set local role authenticated; select public.taam_manual_entry_update('$3', $4, $5, $6, $7, $8, $9, ${10});" 2>&1); if echo "$o" | grep -q "^ERROR"; then echo "$o" | grep -oE "ERROR:  [A-Z_]+" | head -1 | sed 's/ERROR:  //'; else echo "OK:$o"; fi; }
 echo "── 슈퍼어드민"
 r=$(rpc $SU 1 MAN-1 "'박수정'" "''" 2 150000 "'초대'" "'룸 요청'")
 ok "이름·금액·유형·메모 수정 → ok · changed 4개" "OK|4" "$(echo "$r" | cut -c1-2)|$(echo "$r" | sed 's/^OK://' | jq -r '.changed|length' 2>/dev/null)"
@@ -80,7 +84,23 @@ ok "메모 1001자 → MEMO_TOO_LONG" "MEMO_TOO_LONG" "$(rpc $SU 1 MAN-3 "'x'" "
 echo "── 기록 상한"
 for i in $(seq 1 33); do rpc $SU 1 MAN-4 "'회차없음'" "''" 6 $i "'오프라인'" "''" >/dev/null; done
 ok "33번 고쳐도 edits 는 30건 · 마지막 to.price 33" "30|33" "$(col MAN-4 "jsonb_array_length(extra_data->'edits')||'|'||(extra_data->'edits'->-1->'to'->>'price')")"
+echo "── 2차: 낡은 화면 검사 (p_expect)"
+$P -c "update public.tickets set buyer_name='박수정', buyer_phone='', party_size=3, price=160000, extra_data = extra_data || '{\"ttype\":\"초대\",\"memo\":\"룸 요청\"}' where purchase_id='MAN-1'" >/dev/null
+E1=$(col MAN-1 "jsonb_array_length(extra_data->'edits')")
+ok "p_expect 가 지금 행과 같으면 → ok" "OK" "$(rpcx $SU 1 MAN-1 "'박수정'" "''" 2 160000 "'초대'" "'룸 요청'" "'{\"name\":\"박수정\",\"phone\":\"\",\"pax\":3,\"price\":160000,\"ttype\":\"초대\",\"memo\":\"룸 요청\"}'::jsonb" | cut -c1-2)"
+ok "p_expect 의 인원이 낡았으면(화면 2 · 실제… ) → STALE_EDIT · 행 그대로 · 기록 안 쌓임" "STALE_EDIT|2|$((E1+1))" "$(rpcx $SU 1 MAN-1 "'다른이름'" "''" 1 160000 "'초대'" "'룸 요청'" "'{\"pax\":3}'::jsonb")|$(col MAN-1 party_size)|$(col MAN-1 "jsonb_array_length(extra_data->'edits')")"
+ok "p_expect 에 보낸 키만 본다 — memo 만 보내고 맞으면 ok" "OK" "$(rpcx $SU 1 MAN-1 "'박수정'" "''" 2 170000 "'초대'" "'룸 요청'" "'{\"memo\":\"룸 요청\"}'::jsonb" | cut -c1-2)"
+ok "숫자를 문자열로 보내도 같은 값이면 통과 (텍스트 비교)" "OK" "$(rpcx $SU 1 MAN-1 "'박수정'" "''" 2 180000 "'초대'" "'룸 요청'" "'{\"pax\":\"2\",\"price\":\"170000\"}'::jsonb" | cut -c1-2)"
+ok "p_expect 생략(7인자 호출) → 종전처럼 동작" "OK" "$(rpc $SU 1 MAN-1 "'박수정'" "''" 2 190000 "'초대'" "'룸 요청'" | cut -c1-2)"
+echo "── 2차: NULL 은 그대로 둔다"
+ok "이름·번호·메모 NULL → 옛값 유지, 인원만 2→1" "박수정||룸 요청|1" "$(rpcx $SU 1 MAN-1 null null 1 190000 null null null >/dev/null; col MAN-1 "buyer_name||'|'||buyer_phone||'|'||(extra_data->>'memo')||'|'||party_size")"
+echo "── 2차: 번호가 바뀌면 카톡 표시 초기화"
+$P -c "update public.tickets set buyer_phone='01011112222', extra_data = extra_data || '{\"kakao_sent_at\":\"2026-10-01T00:00:00Z\",\"kakao_result\":\"ok\",\"kakao_tries\":1}' where purchase_id='MAN-1'" >/dev/null
+r=$(rpcx $SU 1 MAN-1 "'박수정'" "'01011112222'" 2 190000 "'초대'" "'룸 요청'" null)
+ok "번호 그대로 → kakao_sent_at 유지 · phone_changed false" "2026-10-01T00:00:00Z|false" "$(col MAN-1 "extra_data->>'kakao_sent_at'")|$(echo "$r" | sed 's/^OK://' | jq -r .phone_changed)"
+r=$(rpcx $SU 1 MAN-1 "'박수정'" "'010-9999-8888'" 2 190000 "'초대'" "'룸 요청'" null)
+ok "번호 변경 → kakao_* 제거 · phone_changed true · 옛 번호는 edits.from 에" "|01099998888|true|01011112222" "$(col MAN-1 "coalesce(extra_data->>'kakao_sent_at','')||coalesce(extra_data->>'kakao_result','')||coalesce(extra_data->>'kakao_tries','')")|$(col MAN-1 buyer_phone)|$(echo "$r" | sed 's/^OK://' | jq -r .phone_changed)|$(col MAN-1 "extra_data->'edits'->-1->'from'->>'phone'")"
 echo "── 권한 부여"
-ok "authenticated 실행 가능 · anon 불가" "true|false" "$($P -c "select has_function_privilege('authenticated','public.taam_manual_entry_update(text,text,text,integer,integer,text,text)','execute')||'|'||has_function_privilege('anon','public.taam_manual_entry_update(text,text,text,integer,integer,text,text)','execute')")"
+ok "authenticated 실행 가능 · anon 불가 (8인자)" "true|false" "$($P -c "select has_function_privilege('authenticated','public.taam_manual_entry_update(text,text,text,integer,integer,text,text,jsonb)','execute')||'|'||has_function_privilege('anon','public.taam_manual_entry_update(text,text,text,integer,integer,text,text,jsonb)','execute')")"
 [ $FAIL = 0 ] && echo "=== 전부 통과 ===" || echo "=== 실패 있음 ==="
 exit $FAIL
