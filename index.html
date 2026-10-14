@@ -17646,6 +17646,7 @@ function _notifL10nTitleNum(s0){
   // 🆕 2026-10-14 티켓 오픈 — 「새 티켓 N건 오픈」 · 「{매장} 티켓 오픈」 (tbBuildMessage 와 같은 규칙)
   m = s0.match(/^새 티켓 (\d+)건 오픈$/);
   if(m) return ['새 티켓 ' + m[1] + '건 오픈', m[1] + ' new tickets open', '新しいチケット ' + m[1] + '件'][li];
+  if(s0 === '새 티켓 오픈') return ['새 티켓 오픈', 'New ticket open', '新しいチケット'][li];
   m = s0.match(/^(.+?) 티켓 오픈$/);
   if(m){ var _nmL = ['ko','en','ja'][li]; var _nm = (typeof _tbRestName === 'function') ? _tbRestName(m[1], null, _nmL) : m[1];
          return [_nm + ' 티켓 오픈', _nm + ' — tickets open', _nm + ' チケット公開'][li]; }
@@ -44407,7 +44408,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.14-a';
+var TAAM_WEB_BUILD = '2026.10.14-b';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -44965,20 +44966,17 @@ function tbBuildMessage(tickets){
     var pa = parts(a), pb = parts(b);
     return (pa.y * 10000 + pa.mo * 100 + pa.dd) - (pb.y * 10000 + pb.mo * 100 + pb.dd) || pa.time.localeCompare(pb.time);
   });
+  // 🔧 2026-10-14 (2차) 줄마다 「연도 월 일(요일) 시간 · 이름」 — 연도는 언제나 붙인다. 단일 회차도 같은 방식(제목 「새 티켓 오픈」 + 한 줄).
   function lineFor(t, lang){
     var p = parts(t);
-    return dateFor(p, lang, !!(p.y && p.y !== nowY)) + (p.time ? ' ' + p.time : '') + ' · ' + nameFor(t, lang);
+    return dateFor(p, lang, true) + (p.time ? ' ' + p.time : '') + ' · ' + nameFor(t, lang);
   }
   function bundle(lang){
-    if(sorted.length === 1){
-      var t0 = sorted[0], p0 = parts(t0), nm = nameFor(t0, lang);
-      var title1 = lang === 'en' ? nm + ' — tickets open' : lang === 'ja' ? nm + ' チケット公開' : nm + ' 티켓 오픈';
-      var body1 = dateFor(p0, lang, true) + (p0.time ? ' ' + p0.time : '');
-      return { title: title1, body: body1, full: body1 };
-    }
     var ls = sorted.map(function(t){ return lineFor(t, lang); });
     var n = ls.length, MAX = 8, shown = ls.slice(0, MAX), more = n - shown.length;
-    var titleN = lang === 'en' ? n + ' new tickets open' : lang === 'ja' ? '新しいチケット ' + n + '件' : '새 티켓 ' + n + '건 오픈';
+    var titleN = n === 1
+      ? (lang === 'en' ? 'New ticket open' : lang === 'ja' ? '新しいチケット' : '새 티켓 오픈')
+      : (lang === 'en' ? n + ' new tickets open' : lang === 'ja' ? '新しいチケット ' + n + '件' : '새 티켓 ' + n + '건 오픈');
     var moreS = more > 0 ? '\n' + (lang === 'en' ? '+' + more + ' more' : lang === 'ja' ? '他 ' + more + '件' : '외 ' + more + '건') : '';
     return { title: titleN, body: shown.join('\n') + moreS, full: ls.join('\n') };
   }
