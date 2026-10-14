@@ -31,6 +31,8 @@ insert into public.tickets(user_id, restaurant_id, restaurant_name, ticket_produ
   ('$A1','r1','매장1','tp0','2027.03.02','12:00', 1, 0, 'manual', 'MAN-3', '무정원', '', '{"manualEntry":true}'),
   ('$SU','r2','매장2',null,'2027.03.03','19:00', 2, 0, 'manual', 'MAN-4', '회차없음', '', '{"manualEntry":true}');
 grant usage on schema public to authenticated, anon; grant all on all tables in schema public to authenticated; grant usage on schema auth to authenticated, anon;
+-- Supabase 기본 권한을 흉내 낸다: postgres 가 만드는 함수는 anon·authenticated 에 execute 가 자동으로 붙는다 (라이브에서 anon ❌ 가 난 원인)
+alter default privileges in schema public grant execute on functions to anon, authenticated;
 SQL
 # 실제 행 가드(audit_hardening 판) 함수 + 트리거
 S=$(grep -n 'create or replace function public.taam_guard_ticket_row' sql/audit_hardening_2026-09-13.sql | head -1 | cut -d: -f1)

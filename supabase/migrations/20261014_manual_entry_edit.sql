@@ -211,6 +211,9 @@ end;
 $$;
 
 revoke all on function public.taam_manual_entry_update(text, text, text, integer, integer, text, text) from public;
+-- ⚠ Supabase 는 postgres 가 만드는 함수에 anon·authenticated·service_role 실행 권한을 기본으로 붙인다(alter default privileges).
+--   public 에서 걷어내도 anon 의 명시적 권한은 남는다 — 2026-10-14 라이브 확인 표에서 ❌ 로 드러났다. 이름을 짚어 걷어낸다.
+revoke execute on function public.taam_manual_entry_update(text, text, text, integer, integer, text, text) from anon;
 grant execute on function public.taam_manual_entry_update(text, text, text, integer, integer, text, text) to authenticated;
 
 comment on function public.taam_manual_entry_update(text, text, text, integer, integer, text, text) is
