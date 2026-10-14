@@ -210,6 +210,25 @@ DB 값은 `'A'` 그대로고 **이름만** 「게스트 회원」이다. 값을 
 - 배포 순서: **앱(index.html) 먼저, 마이그레이션은 그 뒤 커밋으로** — 옛 빌드가 캐시에 남은 채 서버 거절을 받으면 메시지 없이 끝난다(지금 빌드는 예외도 토스트로 보인다).
 - 회귀: `bash sql/_test/t_purchase_unique.sh`(42건 — 같은 purchase_id·삭제된 회차·옛 중복 행 시간 변경·남의 user_id 침묵 포함) · 스크래치 `dupguard.js`. 진단: 스크래치 `dup_kataori.sql`.
 
+### 캘린더 「수동 추가」 내역 수정 — 좌석 연동 행은 서버 RPC, 기록은 직접 UPDATE (2026-10-14)
+
+캘린더 상세 줄의 「수정」(슈퍼어드민·매장 어드민). 수동 추가는 저장 때 둘로 갈린다 — 본 티켓에 연결된 **MAN- 좌석 행**(`tickets`, status `manual`,
+소유자 = 입력한 어드민)과 연결 없는 **기록**(`daegwan_manual`). 수정도 같은 두 갈래다(`tcalManualEditOpen(kind,…)` 가 추가 모달을 수정 모드로 열고
+`tcalManualEditSave` 가 저장 · 종전엔 ×(취소) 뒤 재추가뿐이어서 그 사이 좌석이 풀려 남이 채갈 수 있었다).
+- **MAN- 행 → RPC `taam_manual_entry_update`**(`20261014_manual_entry_edit.sql` · 실행 필요). 직접 UPDATE 가 안 되는 이유 둘: ① 매장 어드민 세션은
+  `trg_taam_guard_ticket_row` 가 party_size·price 를 막는다(의도된 잠금, 풀지 않는다) ② `trg_enforce_ticket_capacity` 는 **BEFORE INSERT 에만** 걸려
+  UPDATE 로 인원을 늘리면 정원 검사가 없다(`ticket_pax_change.sql` 이 증가를 막아 둔 이유). RPC 는 슈퍼어드민 또는 그 매장 어드민
+  (`is_restaurant_admin_of` / `taam_is_rest_admin` 둘 중 하나)만, 이름·국내 번호(앱 `_krMobile` 과 같은 규칙, 아니면 `BAD_PHONE`)·인원·받은금액(price)·
+  유형·메모를 고친다. **인원을 늘릴 때만** 정원 트리거와 같은 잠금(`tkcap_<회차>`)을 잡고 **총 정원**을 본다(이 행의 옛 인원은 빼고 센다 · 1인 한도·허용
+  인원·슬롯 규칙은 KSK- 처럼 안 건다 · 정원 없는 회차는 제한 없음). `extra_data.edits` 에 {at,by,role,from,to} 최근 30건, 바뀐 게 없으면 쓰지 않는다.
+  연결 티켓·날짜·시간·매장은 **바꾸지 않는다** — 좌석을 다른 회차로 옮기는 일이라 ×(취소) 뒤 재추가다.
+- **기록 → `daegwan_manual` 직접 UPDATE**(RLS 가 슈퍼어드민·매장 어드민에게 `for all`). 번호 칸이 없어 숨긴다. `tcalLoadManual` 이 `ttype` 도 읽는다(프리필).
+- 함수가 아직 없으면(SQL 미실행 · `_tcalRpcMissing`) 앱은 **인원 증가만 거절**하고 나머지는 tickets 직접 UPDATE 로 내려간다 — 슈퍼어드민은 행 가드를 지나고
+  매장 어드민은 인원·금액에서 42501 을 그대로 본다. 늘릴 때는 저장 전에 `taam_ticket_sold_slots` 로 한 번 먼저 세어 모자라면 바로 말한다(최종 판정은 서버).
+- 인원이 바뀌면 `trg_sync_ticket_soldout` 이 회차 매진·판매중을 되돌린다(앱은 `_tkSyncFromServer` 만 부른다). 손님 번호가 있고 알림톡이 나간 행이면
+  「재발송」을 권한다 — 자동으로 다시 보내지 않는다.
+- 회귀: `bash sql/_test/t_manual_edit.sh`(29건 — 매장 어드민 직접 UPDATE 가 가드에 막히는 것 포함) · 스크래치 `manedit.js`(15건).
+
 ### 초대 티켓의 소유자는 초대받은 회원이다 — 홀드는 어드민 소유다 (2026-10-03 사고)
 
 캘린더 예약 초대는 좌석 홀드(`INVH-`)를 **보낸 어드민의 user_id** 로 넣는다(어드민 세션이라 그래야 INSERT 가드·좌석 트리거를

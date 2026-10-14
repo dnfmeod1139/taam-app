@@ -15409,8 +15409,10 @@ textarea.mapl-in{min-height:78px;resize:vertical;line-height:1.7}
   <div id="tcalManualModal" style="display:none;position:fixed;inset:0;z-index:980;background:rgba(20,18,16,.55);align-items:center;justify-content:center;padding:24px;" onclick="if(event.target===this)tcalCloseManual()">
     <!-- 🔧 2026-09-29 항목이 늘어(번호·카톡) 작은 화면에서 저장 버튼이 잘렸다 → 화면 높이 안에서 세로 스크롤 -->
     <div style="width:100%;max-width:360px;max-height:calc(100vh - 48px);max-height:calc(100dvh - 48px);overflow-y:auto;-webkit-overflow-scrolling:touch;background:#fff;border-radius:22px;padding:24px 22px;box-sizing:border-box;box-shadow:0 24px 60px rgba(0,0,0,.4);font-family:'Noto Sans KR',sans-serif;">
-      <div style="font-size:18px;font-weight:800;color:#1a1a18;">수동 예약 추가</div>
+      <div id="tcalManualTitle" style="font-size:18px;font-weight:800;color:#1a1a18;">수동 예약 추가</div>
       <div id="tcalManualCtx" style="font-size:12px;color:#9a9486;margin-top:4px;"></div>
+      <!-- 🆕 2026-10-14 수정 모드 안내 — 연결 티켓·날짜·시간은 못 바꾼다(취소 후 재추가). tcalManualEditOpen 이 채운다 -->
+      <div id="tcalManualEditInfo" style="display:none;margin-top:10px;padding:9px 11px;border-radius:10px;background:#F7F4EE;border:1px solid #E8E2D6;font-size:11.5px;color:#6b6b6b;line-height:1.55;"></div>
       <div style="margin-top:16px;">
         <label style="font-size:12px;font-weight:700;color:#6b6b6b;">티켓 유형</label>
         <select id="tcalManualType" style="width:100%;box-sizing:border-box;margin-top:5px;padding:12px;border:1px solid #e0ddd5;border-radius:10px;font-size:14px;font-weight:700;background:#fff;-webkit-appearance:none;">
@@ -15419,7 +15421,7 @@ textarea.mapl-in{min-height:78px;resize:vertical;line-height:1.7}
         </select>
       </div>
       <!-- 🆕 2026.08: 본(판매) 티켓 연결 — 연결 시 그 티켓 좌석에서 실제 차감 (서버 트리거 검증) -->
-      <div style="margin-top:12px;">
+      <div id="tcalManualLinkWrap" style="margin-top:12px;">
         <label style="font-size:12px;font-weight:700;color:#6b6b6b;">본 티켓 연결 <span style="color:#b3aa98;font-weight:500;">(연결 시 좌석 차감)</span></label>
         <select id="tcalManualLink" onchange="tcalManualLinkChange()" style="width:100%;box-sizing:border-box;margin-top:5px;padding:12px;border:1px solid #e0ddd5;border-radius:10px;font-size:13px;font-weight:700;background:#fff;-webkit-appearance:none;">
           <option value="">연결 안 함 (기록만)</option>
@@ -15432,7 +15434,7 @@ textarea.mapl-in{min-height:78px;resize:vertical;line-height:1.7}
       </div>
       <!-- 🆕 2026-09-28 국내 손님(앱 비회원)에게 카카오 알림톡으로 예약 안내를 보내기 위한 번호.
            비워 두면 안 보낸다. 본 티켓을 연결한 건에만 보낸다(그래야 매장·일시·인원이 확정값이다). -->
-      <div style="margin-top:12px;">
+      <div id="tcalManualPhoneWrap" style="margin-top:12px;">
         <label style="font-size:12px;font-weight:700;color:#6b6b6b;">휴대폰 번호 <span style="color:#b3aa98;font-weight:500;">(선택 · 국내 번호만)</span></label>
         <input id="tcalManualPhone" type="tel" inputmode="tel" placeholder="010-0000-0000" autocomplete="off" style="width:100%;box-sizing:border-box;margin-top:5px;padding:12px;border:1px solid #e0ddd5;border-radius:10px;font-size:14px;font-weight:700;font-family:inherit;color:#1a1a18;background:#fff;">
         <div style="font-size:11px;color:#9a9486;margin-top:5px;line-height:1.5;">적으면 저장 직후 <b style="color:#5a554f;">카카오 알림톡</b>으로 예약자명·매장·일시·인원·이용 규정을 보냅니다. 카카오가 없으면 문자로 대체됩니다.</div>
@@ -15454,7 +15456,7 @@ textarea.mapl-in{min-height:78px;resize:vertical;line-height:1.7}
       </div>
       <div style="display:flex;gap:10px;margin-top:18px;">
         <button onclick="tcalCloseManual()" style="flex:1;height:48px;border:1px solid #e0ddd5;border-radius:12px;background:#fff;font-family:inherit;font-size:14px;font-weight:700;color:#888;cursor:pointer;">취소</button>
-        <button onclick="tcalManualSave()" style="flex:1.6;height:48px;border:none;border-radius:12px;background:#6A1A1A;color:#fff;font-family:inherit;font-size:14px;font-weight:800;cursor:pointer;">저장</button>
+        <button id="tcalManualSaveBtn" onclick="tcalManualSave()" style="flex:1.6;height:48px;border:none;border-radius:12px;background:#6A1A1A;color:#fff;font-family:inherit;font-size:14px;font-weight:800;cursor:pointer;">저장</button>
       </div>
     </div>
   </div>
@@ -44408,7 +44410,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.14-b';
+var TAAM_WEB_BUILD = '2026.10.14-c';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -59913,7 +59915,7 @@ var _tcalRestFilter = '';  // 🆕 매장 필터 (''=전체) — 더블부킹 �
 async function tcalLoadManual(){
   try {
     if(!window.sb) return;
-    var r = await window.sb.from('daegwan_manual').select('id,venue_id,ymd,name,pax,amount,memo');
+    var r = await window.sb.from('daegwan_manual').select('id,venue_id,ymd,ttype,name,pax,amount,memo');
     if(r.error) throw r.error;
     if(Array.isArray(r.data)) _tcalManual = r.data;    // 성공했을 때만 교체
   } catch(e){
@@ -60389,6 +60391,7 @@ window.tcalSaveSchedule = tcalSaveSchedule;
 var _tcalManualRest = '';
 function tcalOpenManual(restId){
   if(!restId || !_tcalSelectedDate){ showToast('⚠','선택 필요','매장·날짜 확인'); return; }
+  _tcalManualResetMode();   // 🆕 2026-10-14 수정 모드에서 열었던 흔적(제목·숨긴 칸) 되돌리기
   _tcalManualRest = String(restId);
   var ctx = document.getElementById('tcalManualCtx');
   if(ctx) ctx.textContent = _tcalRestName(restId) + ' · ' + (_tcalMonth+1) + '월 ' + parseInt(_tcalSelectedDate.split('.')[1],10) + '일';
@@ -60465,7 +60468,7 @@ async function tcalManualLinkChange(){
   } catch(e){ info.textContent='잔여석 확인 실패 — 저장 시 서버가 다시 검증합니다'; }
 }
 window.tcalManualLinkChange = tcalManualLinkChange;
-function tcalCloseManual(){ var m=document.getElementById('tcalManualModal'); if(m) m.style.display='none'; }
+function tcalCloseManual(){ var m=document.getElementById('tcalManualModal'); if(m) m.style.display='none'; _tcalEditTarget = null; }
 window.tcalOpenManual = tcalOpenManual; window.tcalCloseManual = tcalCloseManual;
 
 // 🆕 받은 금액 입력 — 숫자만 남기고 천단위 콤마 자동 표시
@@ -60477,6 +60480,7 @@ function tcalAmtInput(el){
 window.tcalAmtInput = tcalAmtInput;
 
 async function tcalManualSave(){
+  if(_tcalEditTarget){ return tcalManualEditSave(); }   // 🆕 2026-10-14 수정 모드
   if(!_tcalManualRest || !_tcalSelectedDate){ showToast('⚠','선택 필요','매장·날짜를 먼저 선택하세요'); return; }
   var ttype = (document.getElementById('tcalManualType')||{}).value || '오프라인';
   var name = (document.getElementById('tcalManualName')||{}).value || '';
@@ -60558,6 +60562,181 @@ async function tcalManualSave(){
   } catch(e){ showToast('❌','오류', (e.message||'').substring(0,80)); }
 }
 window.tcalManualSave = tcalManualSave;
+
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026-10-14 수동 추가 내역 수정 — 같은 모달을 「수정 모드」로 연다
+//   저장 때 갈린 그대로 두 종류다.
+//     't' = 본 티켓에 연결된 좌석 행(tickets · MAN-)  → 서버 RPC taam_manual_entry_update
+//           매장 어드민 세션은 party_size·price 를 직접 못 고치고(trg_taam_guard_ticket_row), UPDATE 경로에는 정원 검사가 없어
+//           인원 증가를 앱이 해서는 안 된다 — 20261014_manual_entry_edit.sql 이 권한·정원(총 정원 · tkcap 잠금)을 서버에서 본다.
+//     'm' = 연결 없는 기록(daegwan_manual)            → RLS 가 어드민에게 전부 열려 있어 직접 UPDATE
+//   연결 티켓·날짜·시간은 바꾸지 않는다 — 좌석을 다른 회차로 옮기는 일이라 ×(취소) 뒤 다시 추가한다.
+//   서버 함수가 아직 없으면(SQL 미실행) 인원 증가만 거절하고 나머지는 직접 UPDATE 로 내려간다(슈퍼어드민은 행 가드를 지난다).
+// ═══════════════════════════════════════════════════════════════
+var _tcalEditTarget = null;   // {kind:'t'|'m', id, restId, row}
+function _tcalManualResetMode(){
+  _tcalEditTarget = null;
+  var ttl = document.getElementById('tcalManualTitle'); if(ttl) ttl.textContent = '수동 예약 추가';
+  var inf = document.getElementById('tcalManualEditInfo'); if(inf){ inf.style.display = 'none'; inf.innerHTML = ''; }
+  var lw = document.getElementById('tcalManualLinkWrap'); if(lw) lw.style.display = '';
+  var pw = document.getElementById('tcalManualPhoneWrap'); if(pw) pw.style.display = '';
+  var sv = document.getElementById('tcalManualSaveBtn'); if(sv){ sv.textContent = '저장'; sv.disabled = false; sv.style.opacity = ''; }
+}
+// 인원 셀렉트는 1~10 — 그보다 큰 기존 값은 옵션을 만들어 넣는다(값이 사라지지 않게)
+function _tcalPaxOption(sel, pax){
+  if(!sel) return;
+  pax = parseInt(pax) || 1;
+  var has = Array.prototype.some.call(sel.options, function(o){ return parseInt(o.value) === pax; });
+  if(!has){ var o = document.createElement('option'); o.value = String(pax); o.textContent = pax + '명'; sel.appendChild(o); }
+  sel.value = String(pax);
+}
+function tcalManualEditOpen(kind, id, restId){
+  if(!id) return;
+  var row = null, tgt = { kind: (kind === 'm' ? 'm' : 't'), id: String(id), restId: String(restId || '') };
+  if(tgt.kind === 't'){
+    row = (_tcalPurchases || []).find(function(h){ return String(h.purchaseId) === String(id); });
+    if(!row){ showToast('⚠','내역을 못 찾음','화면을 새로 고친 뒤 다시 시도하세요'); return; }
+    if(String(row.status || '') === 'cancelled'){ showToast('⚠','취소된 내역','취소된 수동 예약은 고칠 수 없어요'); return; }
+    if(row.restId) tgt.restId = String(row.restId);
+  } else {
+    row = (_tcalManual || []).find(function(m){ return String(m.id) === String(id); });
+    if(!row){ showToast('⚠','내역을 못 찾음','화면을 새로 고친 뒤 다시 시도하세요'); return; }
+    if(row.venue_id) tgt.restId = String(row.venue_id);
+  }
+  tgt.row = row;
+  _tcalManualResetMode();
+  _tcalEditTarget = tgt;
+  _tcalManualRest = tgt.restId;
+  var isT = (tgt.kind === 't');
+  var ex = isT ? (row.extra_data || {}) : {};
+  var ttl = document.getElementById('tcalManualTitle'); if(ttl) ttl.textContent = '수동 예약 수정';
+  var ctx = document.getElementById('tcalManualCtx');
+  if(ctx){
+    var _ds = isT ? String(row.visitDate || row.reservation_date || '') : String(row.ymd || '').replace(/-/g, '.');
+    ctx.textContent = _tcalRestName(tgt.restId) + (_ds ? ' · ' + _ds : '') + ((isT && row.visitTime) ? ' ' + row.visitTime : '');
+  }
+  var inf = document.getElementById('tcalManualEditInfo');
+  if(inf){
+    var _lt = isT ? (ticketDB || []).find(function(x){ return String(x.id) === String(row.id); }) : null;
+    inf.style.display = 'block';
+    inf.innerHTML = isT
+      ? '<b style="color:#5a554f;">좌석 연동 행</b> · 연결 티켓 ' + _raEsc(_lt ? ((_lt.time || '시간미정') + ' · 정원 ' + (_lt.assignedPax || _lt.totalPax || '-') + (_lt.type ? ' · ' + _lt.type : '')) : String(row.id || ''))
+        + '<br>연결 티켓·날짜·시간은 여기서 바꿀 수 없어요 — 다른 회차로 옮기려면 ×로 취소하고 다시 추가합니다. 인원을 늘리면 서버가 잔여석을 다시 확인합니다.'
+      : '<b style="color:#5a554f;">기록만</b> (좌석 연동 없음) · 이름·인원·금액·메모를 고칩니다.';
+  }
+  var ty = document.getElementById('tcalManualType'); if(ty) ty.value = String((isT ? ex.ttype : row.ttype) || '오프라인');
+  var nm = document.getElementById('tcalManualName'); if(nm) nm.value = String((isT ? row.buyerName : row.name) || '');
+  var ph = document.getElementById('tcalManualPhone'); if(ph) ph.value = isT ? String(row.guestPhone || '') : '';
+  _tcalPaxOption(document.getElementById('tcalManualPax'), row.pax);
+  var am = document.getElementById('tcalManualAmount'); if(am){ var _a = parseInt(isT ? row.amt : row.amount) || 0; am.value = _a ? _a.toLocaleString() : '0'; }
+  var mm = document.getElementById('tcalManualMemo'); if(mm) mm.value = String((isT ? ex.memo : row.memo) || '');
+  var lw = document.getElementById('tcalManualLinkWrap'); if(lw) lw.style.display = 'none';
+  var pw = document.getElementById('tcalManualPhoneWrap'); if(pw) pw.style.display = isT ? '' : 'none';   // 기록 표(daegwan_manual)엔 번호 칸이 없다
+  var sv = document.getElementById('tcalManualSaveBtn'); if(sv) sv.textContent = '수정 저장';
+  var modal = document.getElementById('tcalManualModal'); if(modal) modal.style.display = 'flex';
+}
+window.tcalManualEditOpen = tcalManualEditOpen;
+
+// 서버 함수가 아직 없을 때(SQL 미실행) 의 PostgREST 응답 — 폴백 경로를 고를 때만 쓴다
+function _tcalRpcMissing(err){
+  var m = String((err && (err.message || err.details)) || ''), c = String((err && err.code) || '');
+  return c === 'PGRST202' || c === '42883' || /Could not find the function|does not exist|schema cache/i.test(m);
+}
+
+async function tcalManualEditSave(){
+  var tg = _tcalEditTarget;
+  if(!tg || !window.sb){ tcalCloseManual(); return; }
+  var ttype  = (document.getElementById('tcalManualType') || {}).value || '오프라인';
+  var name   = String((document.getElementById('tcalManualName') || {}).value || '').trim();
+  var pax    = Math.max(1, parseInt((document.getElementById('tcalManualPax') || {}).value) || 1);
+  var amount = Math.max(0, parseInt(String((document.getElementById('tcalManualAmount') || {}).value || '').replace(/[^0-9]/g, '')) || 0);
+  var memo   = String((document.getElementById('tcalManualMemo') || {}).value || '').trim();
+  var sv = document.getElementById('tcalManualSaveBtn');
+  function busy(on){ if(sv){ sv.disabled = !!on; sv.style.opacity = on ? '.6' : ''; } }
+  try {
+    // ── 기록만(daegwan_manual) — RLS 가 슈퍼어드민·매장 어드민에게 열려 있다 ──
+    if(tg.kind === 'm'){
+      var r0 = tg.row || {};
+      if(String(r0.ttype || '오프라인') === ttype && String(r0.name || '') === name && (parseInt(r0.pax) || 1) === pax
+         && (parseInt(r0.amount) || 0) === amount && String(r0.memo || '') === memo){
+        showToast('ⓘ','변경 없음','바뀐 내용이 없어요'); return;
+      }
+      busy(true);
+      var r = await window.sb.from('daegwan_manual').update({ ttype: ttype, name: name, pax: pax, amount: amount, memo: memo }).eq('id', tg.id).select('id');
+      busy(false);
+      if(r.error){ showToast('❌','수정 실패', String(r.error.message || '').slice(0, 80)); return; }
+      if(!r.data || !r.data.length){ showToast('❌','권한 오류','이 매장의 어드민만 고칠 수 있어요'); return; }
+      showToast('✓','수정 완료', (name || '수동') + ' · ' + pax + '명');
+      tcalCloseManual();
+      await tcalLoadManual();
+      tcalRender(); if(_tcalSelectedDate) tcalRenderDetail(_tcalSelectedDate);
+      return;
+    }
+    // ── 좌석 연동 행(MAN-) ──
+    var row = tg.row || {}, ex = row.extra_data || {};
+    var rawPh = String((document.getElementById('tcalManualPhone') || {}).value || '');
+    var phone = _krMobile(rawPh);
+    if(rawPh.trim() && !phone){ showToast('⚠','번호 확인','국내 휴대폰 번호(010-…)만 받습니다. 해외 번호는 비워 두세요'); return; }
+    var oldPax = parseInt(row.pax) || 1, oldAmt = parseInt(row.amt) || 0, oldName = String(row.buyerName || '');
+    var newName = name || '수동 예약';   // 서버·추가 때와 같은 기본값
+    var same = String(ex.ttype || '오프라인') === ttype && oldName === newName && String(row.guestPhone || '') === phone
+            && oldPax === pax && oldAmt === amount && String(ex.memo || '') === memo;
+    if(same){ showToast('ⓘ','변경 없음','바뀐 내용이 없어요'); return; }
+    if(pax > oldPax){
+      // 늘릴 때만 — 최종 판정은 서버지만, 모자라면 여기서 먼저 말해 준다 (이 행 몫은 빼고 센다)
+      try {
+        var _lt = (ticketDB || []).find(function(x){ return String(x.id) === String(row.id); });
+        var _cap = _lt ? (parseInt(_lt.assignedPax || _lt.totalPax) || 0) : 0;
+        if(_cap > 0){
+          var sr = await window.sb.rpc('taam_ticket_sold_slots', { p_ticket_id: String(row.id) });
+          var sd = (!sr.error && sr.data) || null;
+          if(sd){
+            var _rem = Math.max(0, _cap - Math.max(0, (parseInt(sd.total) || 0) - oldPax));
+            if(pax > _rem){ showToast('⚠','잔여석 부족','이 행을 빼면 ' + _rem + '석이 남아 ' + pax + '명으로 늘릴 수 없어요'); return; }
+          }
+        }
+      } catch(_pc){}
+    }
+    busy(true);
+    var rr = await window.sb.rpc('taam_manual_entry_update', {
+      p_purchase_id: tg.id, p_name: name, p_phone: phone, p_pax: pax, p_amount: amount, p_ttype: ttype, p_memo: memo
+    });
+    busy(false);
+    if(rr.error){
+      var em = String(rr.error.message || '');
+      if(_tcalRpcMissing(rr.error)){
+        // 서버 함수가 아직 없다(SQL 미실행). 좌석이 걸린 인원 증가는 서버 없이 못 한다 — 그 밖은 직접 UPDATE 로 내려간다
+        //   (슈퍼어드민은 행 가드를 지나고, 매장 어드민은 인원·금액에서 42501 을 받는다 — 그 메시지를 그대로 보여준다)
+        if(pax > oldPax){ showToast('⚠','서버 준비 필요','인원 증가는 20261014_manual_entry_edit.sql 실행 뒤에 할 수 있어요 (정원 검사)'); return; }
+        var _u = null; try { _u = (await window.sb.auth.getUser()).data.user; } catch(_ue){}
+        var nx = Object.assign({}, ex, { ttype: ttype, memo: memo, edited_at: new Date().toISOString(), edited_by: (_u && _u.id) || null });
+        busy(true);
+        var ur = await window.sb.from('tickets').update({ buyer_name: newName, buyer_phone: phone, party_size: pax, price: amount, extra_data: nx }).eq('purchase_id', tg.id).select('id');
+        busy(false);
+        if(ur.error){ showToast('❌','수정 실패', String(ur.error.message || '').slice(0, 90)); return; }
+        if(!ur.data || !ur.data.length){ showToast('❌','권한 오류','본인이 만든 항목만 고칠 수 있어요'); return; }
+      }
+      else if(em.indexOf('TICKET_SOLD_OUT') >= 0){ showToast('⚠','잔여석 부족', em.replace(/^[\s\S]*TICKET_SOLD_OUT:\s*/, '').slice(0, 80)); return; }
+      else if(em.indexOf('BAD_PHONE') >= 0){ showToast('⚠','번호 확인','국내 휴대폰 번호(010-…)만 받습니다'); return; }
+      else if(em.indexOf('FORBIDDEN') >= 0){ showToast('❌','권한 오류','슈퍼어드민 또는 이 매장의 어드민만 고칠 수 있어요'); return; }
+      else if(em.indexOf('ALREADY_CANCELLED') >= 0){ showToast('⚠','취소된 내역','이미 취소된 수동 예약이에요'); return; }
+      else if(em.indexOf('NOT_MANUAL') >= 0){ showToast('⚠','수동 내역 아님','수동 추가 행만 고칠 수 있어요'); return; }
+      else { showToast('❌','수정 실패', em.slice(0, 90)); return; }
+    }
+    showToast('✓','수정 완료', newName + ' · ' + pax + '명' + (pax !== oldPax ? ' (좌석 ' + oldPax + '→' + pax + ')' : ''));
+    tcalCloseManual();
+    try { await tcalLoadPurchases(); } catch(_e){}
+    tcalRender(); if(_tcalSelectedDate) tcalRenderDetail(_tcalSelectedDate);
+    try { if(typeof renderTickets === 'function') renderTickets(); } catch(_rt){}
+    // 인원이 바뀌면 회차의 매진·판매중을 서버(trg_sync_ticket_soldout)가 되돌린다 — 회원 화면 타일도 맞춘다
+    if(pax !== oldPax){ try { if(typeof _tkSyncFromServer === 'function') _tkSyncFromServer(true); } catch(_ts){} }
+    // 손님 번호가 있고 안내가 나간 적이 있으면 — 내용이 바뀌었으니 재발송을 권한다 (자동으로 다시 보내지는 않는다)
+    if(phone && ex.kakao_sent_at && (pax !== oldPax || oldName !== newName)){
+      setTimeout(function(){ showToast('ⓘ','손님에게 다시 안내?','내용이 바뀌었어요 — 캘린더 줄의 「재발송」으로 알림톡을 다시 보낼 수 있어요'); }, 1400);
+    }
+  } catch(e){ busy(false); showToast('❌','오류', String(e && e.message || '').slice(0, 90)); }
+}
+window.tcalManualEditSave = tcalManualEditSave;
 
 // 🆕 2026-09-28 국내 휴대폰 번호 정규화 — 아니면 '' (Edge 의 krMobile 과 같은 규칙)
 function _krMobile(raw){
@@ -61012,6 +61191,10 @@ function tcalRenderDetail(dateStr) {
             : (!_isMan && !_isHold && !_isKsk && e.pid && (e.pax||0) > 1 && (isSuper || _currentRole==='admin'))
             ? '<span onclick="paxChangeOpen(\''+String(e.pid).replace(/'/g,"\\'")+'\')" title="인원 변경" style="cursor:pointer;color:#8A5A1E;font-size:11px;font-weight:800;border:1px solid #EEDCBB;background:#FBF2E0;border-radius:6px;padding:2px 6px;">인원</span>'
             : '';
+          // 🆕 2026-10-14 수동 추가 내역 수정 — 좌석 연동 행(MAN-)·기록(daegwan_manual) 둘 다. 연결 티켓·날짜는 못 바꾼다(취소 후 재추가)
+          var edBtn = ((isSuper || _currentRole==='admin') && (e.type==='manual' ? !!e.mid : (_isMan && !!e.pid && e.st !== 'cancelled')))
+            ? '<span onclick="tcalManualEditOpen(\'' + (e.type==='manual' ? 'm' : 't') + '\',\'' + String(e.type==='manual' ? e.mid : e.pid).replace(/'/g,"\\'") + '\',\'' + String(g.restId).replace(/'/g,"\\'") + '\')" title="수동 내역 수정" style="cursor:pointer;color:#5a554f;font-size:11px;font-weight:800;border:1px solid #E0D9CC;background:#F7F4EE;border-radius:6px;padding:2px 6px;">수정</span>'
+            : '';
           // 🆕 2026-09-28 수동 예약 손님 알림톡 — 번호가 있는 MAN- 행에만.
           //   보낸 적 있으면 「✓ 카톡 09.28」 + 재발송, 없으면 「📨 카톡 안내」
           var kkBtn = '';
@@ -61039,7 +61222,7 @@ function tcalRenderDetail(dateStr) {
             + '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">'
             +   '<div style="min-width:0;font-size:12.5px;">' + head + (e.time?' <span style="color:#9a9486;font-size:11px;">· '+e.time+'</span>':'')
             +     (e.bought ? '<div style="font-size:10.5px;color:#b5afa2;margin-top:2px;">구매 '+_thxFmtDateTime(e.bought)+'</div>' : '') + '</div>'
-            +   '<div style="flex-shrink:0;display:flex;align-items:center;gap:6px;"><span style="font-size:'+(inner?'12':'13')+'px;font-weight:800;color:#6A1A1A;">'+e.pax+'명</span>'+pxBtn+del+'</div>'
+            +   '<div style="flex-shrink:0;display:flex;align-items:center;gap:6px;"><span style="font-size:'+(inner?'12':'13')+'px;font-weight:800;color:#6A1A1A;">'+e.pax+'명</span>'+pxBtn+edBtn+del+'</div>'
             + '</div>'
             + (kkBtn ? '<div style="margin-top:5px;display:flex;align-items:center;gap:6px;">'+kkBtn+'</div>' : '')
             + ((amt||e.memo) ? '<div style="font-size:11.5px;color:#666;margin-top:2px;">'+amt+(e.memo?' <span style="color:#9a9486;">· '+_escHtmlAdg(e.memo)+'</span>':'')+'</div>' : '')
