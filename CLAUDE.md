@@ -180,6 +180,29 @@ DB 값은 `'A'` 그대로고 **이름만** 「게스트 회원」이다. 값을 
 표시: 마이페이지 회원 자격 칸(가입일 · 시작일 · 종료일, TX 사전 「시작일/시작 전/첫 초대/첫 구매」) · 회원 원장 헤더 · 구매자 팝업.
 앱은 절대 스스로 세지 않는다(세 표를 같이 봐야 한다). 회귀: `bash sql/_test/t_member_start.sh`(8건) · 스크래치 `mstart.js`(7건).
 
+### 회원 가입일은 셋이다 — 앱 가입일 · 실제 멤버십 가입일 · 멤버십 시작일 (2026-10-15)
+
+멤버십은 앱이 생기기 전(2024-12)부터 받았다. 앱은 초대코드로 가입한 날(`profiles.created_at`)을 가입일로 보여 주니 옛 회원에겐 1년 넘게 늦게 보였다. 운영 결정:
+
+| | 무엇 | 어디 | 누가 보나 |
+|---|---|---|---|
+| ① 앱 가입일 | 초대코드로 가입한 날 = `profiles.created_at` | 종전 그대로 | 슈퍼어드민(원장 · 구매자 팝업에서 ②와 다를 때) |
+| ② 실제 멤버십 가입일 | 앱 이전 가입자의 진짜 가입일 = `profiles.membership_joined_at`(date) | `20261015_membership_joined.sql` · 슈퍼어드민이 **회원 원장 헤더**에서 입력·수정·지움(`mlJoinedSave/Clear`, 직접 UPDATE) | 슈퍼어드민 |
+| ③ 멤버십 시작일 | 첫 초대 또는 첫 구매 (`taam_member_start`, 2026-10-13) | 종전 그대로 | 회원·슈퍼어드민 |
+
+- **회원에게는 둘만**: 「가입일」 = ② 가 있으면 ②, 없으면 ① (서버 `taam_member_start().joined_at` 이 고른다 · `joined_kind` manual/app) · 「멤버십 시작일」 = ③. 셋을 가르는 건 원장뿐.
+  마이페이지 `_mpPaintMemberStart` 가 `joined_at` 으로 가입일 칸을 덮는다(함수가 옛 판이면 created_at 그대로). 「종료일」(member_until)은 손대지 않았다.
+- 서버 가드 `trg_taam_guard_membership_joined`(BEFORE INSERT/UPDATE on profiles): 회원 세션은 이 칸을 못 바꾼다 — **되돌림**(예외 아님 · role 가드와 같은 방식, 같은 UPDATE 의 다른 칸을 날리지 않게).
+  `membership_joined_set_by/at` 는 트리거만 적는다(앱이 보내도 무시). 날짜는 2015-01-01 ~ 오늘(KST), 아니면 `BAD_JOINED_DATE`. 지운 것도 set_by 에 남는다.
+- 날짜 키(`joined_at`·`app_signup_date`·`membership_joined_at`)는 `'YYYY-MM-DD'` 문자열 — 앱은 `_memberDateFmt` 로 시간대 변환 없이 찍는다(해외 회원 기기에서 `new Date('2024-12-05')` 가 하루 밀리는 것).
+- 앱 이전 가입자 22명 목록은 `sql/membership_joined_seed_2026-10-15.sql`(SQL Editor · `display_name` 공백 제거로 맞춘다 · 정확히 한 명일 때만 적고 ⚠/❌ 는 원장에서 손으로).
+  「6/5 남기욱」은 목록 순서상 5/5 오타일 수 있어 적힌 대로 넣고 머리말에 적어 뒀다.
+- **멤버십 연회비 탭**(원장 네 번째 탭 `mship`): 연회비는 어디에도 「연회비」로 적히지 않았다(앱 카드 흐름 `payments.type='membership'`·원장 `membership_payment` 는 포트원 시절 것 · 실제 회원은 송금·정산 링크 → 「예치금 부여」 줄로만 남음).
+  그래서 `membership_fees` 표(`20261015_membership_fees.sql` · 납부일·원화·외화·수단·기간·등급·메모 · RLS 슈퍼어드민만 · created_by/updated_at 트리거)를 두고 탭에서 적는다(`mlFeeSave/Edit/Del`).
+  **잔액·원장은 건드리지 않는다** — 예치금으로 쓸 몫은 종전대로 부여 화면. 옛 `membership_payment` 원장 줄은 탭에 「앱 결제 · 예치금」으로 같이 보이고 예치금 탭 라벨도 「멤버십 연회비」. CSV 에 연회비 줄 포함.
+  표가 없으면(SQL 미실행) 원장은 그대로 열리고 저장만 「서버 준비 필요」.
+- 회귀: `bash sql/_test/t_member_start.sh`(23건 — 가드·시드 포함) · `bash sql/_test/t_membership_fees.sh`(12건) · 스크래치 `mjoined.js`(19건).
+
 ### 한 회원 = 한 회차 1건 · 같은 날 같은 시간대 1건 (2026-10-13 카타오리 5/21 사고)
 
 카타오리 5/21 회차가 같은 회원에게 두 번 팔렸다. **서버 어디에도 「같은 회원이 같은 회차를 두 번」을 막는 코드가 없었다** —

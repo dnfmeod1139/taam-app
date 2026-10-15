@@ -10626,9 +10626,10 @@ window.closePromoCarousel = function(){
             <div style="font-family:var(--font-main);font-size:9px;color:#aaa;letter-spacing:.05em;">가입일</div>
             <div id="mpMemberJoinDate" style="font-family:'Oswald','Noto Sans KR','Noto Sans JP',sans-serif;font-size:13.5px;font-weight:600;color:#1a1a18;letter-spacing:.02em;">—</div>
           </div>
-          <!-- 🆕 2026-10-13 시작일 = 첫 초대 또는 첫 구매 중 빠른 날 (1년 유지 기산일). 둘 다 없으면 「시작 전」 -->
+          <!-- 🆕 2026-10-13 시작일 = 첫 초대 또는 첫 구매 중 빠른 날 (1년 유지 기산일). 둘 다 없으면 「시작 전」
+               🆕 2026-10-15 라벨 「멤버십 시작일」. 왼쪽 「가입일」은 실제 멤버십 가입일(슈퍼어드민이 적은 것)이 있으면 그 날, 없으면 앱 가입일 — 회원에게는 둘을 가르지 않는다 -->
           <div>
-            <div style="font-family:var(--font-main);font-size:9px;color:#aaa;letter-spacing:.05em;">시작일</div>
+            <div style="font-family:var(--font-main);font-size:9px;color:#aaa;letter-spacing:.05em;">멤버십 시작일</div>
             <div id="mpMemberStartDate" style="font-family:'Oswald','Noto Sans KR','Noto Sans JP',sans-serif;font-size:13.5px;font-weight:600;color:#1a1a18;letter-spacing:.02em;">—</div>
             <div id="mpMemberStartKind" style="display:none;font-family:var(--font-main);font-size:9px;color:#c8a96e;font-weight:600;margin-top:1px;"></div>
           </div>
@@ -21413,6 +21414,13 @@ function _memberStartFmt(iso){
   var d = new Date(iso); if(isNaN(d.getTime())) return '';
   return d.getFullYear() + '.' + String(d.getMonth()+1).padStart(2,'0') + '.' + String(d.getDate()).padStart(2,'0');
 }
+// 'YYYY-MM-DD'(서버가 KST 로 고른 날짜) 는 시간대 변환 없이 그대로 찍는다 — 해외 회원 기기에서 new Date('2024-12-05') 가 하루 밀리는 것을 막는다
+function _memberDateFmt(v){
+  var str = String(v || '');
+  var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(str);
+  if(m) return m[1] + '.' + m[2] + '.' + m[3];
+  return _memberStartFmt(v);
+}
 async function _memberStartFetch(uid){
   try {
     if(!window.sb) return null;
@@ -21433,7 +21441,13 @@ async function _mpPaintMemberStart(){
   var ms = await _memberStartFetch(null);
   var lb = _memberStartLabel(ms);
   el.textContent = lb.text;
-  if(kd){ kd.textContent = lb.kind; kd.style.display = lb.kind ? 'block' : 'none'; }
+  // 🆕 2026-10-15 「첫 초대/첫 구매」 구분은 슈퍼어드민만 본다(원장·구매자 팝업과 같은 운영 정보). 회원에게는 날짜만.
+  var _showKind = !!lb.kind && (typeof _isSuperAdmin === 'function' && _isSuperAdmin());
+  if(kd){ kd.textContent = _showKind ? lb.kind : ''; kd.style.display = _showKind ? 'block' : 'none'; }
+  // 🆕 2026-10-15 「가입일」 = 실제 멤버십 가입일(슈퍼어드민이 적은 것)이 있으면 그 날, 없으면 앱 가입일 — 서버(joined_at)가 고른다.
+  //   회원에게는 둘을 가르지 않는다. 함수가 옛 판이면(joined_at 없음) _applyMembershipPeriodToUI 가 둔 created_at 그대로.
+  var je = document.getElementById('mpMemberJoinDate');
+  if(je && ms && ms.joined_at){ var jt = _memberDateFmt(ms.joined_at); if(jt) je.textContent = jt; }
 }
 window._mpPaintMemberStart = _mpPaintMemberStart;
 
@@ -31152,7 +31166,7 @@ async function mlOpen(uid){
   //   ③ ticket_products.agency_fee (상품의 현재 값, 1인) — 상품이 수정됐으면 다를 수 있음
   //   초대는 항상 가져온다 — 대행비 보완뿐 아니라 「결제 전에 거절된 초대」를
   //   티켓 탭 취소 묶음에 보여줘야 하기 때문. 그 건은 tickets 에 아예 없다.
-  var invMap = {}, prodMap = {}, invRows = [];
+  var invMap = {}, prodMap = {}, invRows = [], mfRows = [];   // 🆕 2026-10-15 mfRows: 멤버십 연회비 기록(membership_fees)
   try {
     var needProd = buys.filter(function(t){
       return !(t.extra_data && parseInt(t.extra_data.agencyFee) > 0) && t.ticket_product_id;
@@ -31162,9 +31176,12 @@ async function mlOpen(uid){
         .select('id, restaurant_name, visit_date, visit_time, pax, agency_fee, total_amount, status, created_at, cancelled_at, paid_at')
         .eq('invitee_user_id', uid).order('created_at', { ascending: false }).limit(100),
       needProd.length ? window.sb.from('ticket_products').select('id, agency_fee')
-                  .in('id', Array.from(new Set(needProd))) : Promise.resolve({ data: [] })
+                  .in('id', Array.from(new Set(needProd))) : Promise.resolve({ data: [] }),
+      // 🆕 2026-10-15 연회비 기록 — 표가 아직 없으면(SQL 미실행) error 만 돌아오고 목록은 빈다
+      window.sb.from('membership_fees').select('*').eq('user_id', uid).order('paid_at', { ascending: false }).limit(200)
     ]);
     invRows = aux[0].data || [];
+    mfRows = (aux[2] && aux[2].data) || [];
     invRows.forEach(function(v){ invMap[String(v.id).slice(0,8)] = v; });
     (aux[1].data || []).forEach(function(v){ prodMap[String(v.id)] = v; });
   } catch(_e){}
@@ -31358,17 +31375,45 @@ async function mlOpen(uid){
   var _exp = u.membership_expires_at ? String(u.membership_expires_at).slice(0,10).replace(/-/g,'.') : '';
   h += '<div style="font-size:11.5px;color:' + C.faint + ';margin-top:3px;">'
      + _pcalEsc(u.phone || u.email || '')
-     + (_joined ? ' · ' + _joined + ' 가입' : '')
      + (_exp ? ' · 멤버십 만료 ' + _exp : '') + '</div>';
-  // 🆕 2026-10-13 시작일 — 가입일과 따로. 첫 초대·첫 구매 중 빠른 날, 둘 다 없으면 「시작 전」
-  if(_ms){
-    var _msl = _memberStartLabel(_ms);
-    h += '<div style="font-size:11.5px;color:' + C.sub + ';margin-top:4px;">'
-       + '<b style="color:' + C.ink + ';">시작일 ' + _pcalEsc(_msl.text) + '</b>'
-       + (_msl.kind ? ' <span style="color:' + C.faint + ';">(' + _msl.kind + ')</span>' : '')
-       + (_ms.year_end_at ? ' <span style="color:' + C.faint + ';">· 1년 ' + _memberStartFmt(_ms.year_end_at) + '</span>' : '')
+  // 🆕 2026-10-15 가입일 셋 — 슈퍼어드민만 셋을 따로 본다 (회원 화면은 「가입일」·「멤버십 시작일」 둘뿐).
+  //   ① 앱 가입일 = profiles.created_at (초대코드로 가입한 날)
+  //   ② 실제 가입일 = profiles.membership_joined_at (앱 이전 가입자 · 여기서 적는다 · 서버 가드가 슈퍼어드민만 허용)
+  //   ③ 멤버십 시작일 = 첫 초대·첫 구매 (taam_member_start · 2026-10-13)
+  //   회원에게 보이는 「가입일」은 ② 가 있으면 ②, 없으면 ① — 서버 joined_at 과 같은 규칙.
+  //   서버 함수가 옛 판이면(_ms 에 app_signup_date 없음) ① 은 created_at 으로, ② 는 profiles 행 값으로 그린다.
+  (function(){
+    var _appJ = (_ms && _ms.app_signup_date) ? _memberDateFmt(_ms.app_signup_date) : _joined;
+    var _mjRaw = (_ms && _ms.membership_joined_at) ? _ms.membership_joined_at : (u.membership_joined_at || '');
+    var _mj = _mjRaw ? _memberDateFmt(_mjRaw) : '';
+    var _msl = _ms ? _memberStartLabel(_ms) : null;
+    var _lab = function(t){ return '<span style="display:inline-block;min-width:96px;color:' + C.faint + ';">' + t + '</span>'; };
+    var _btn = function(fn, t, warn){ return '<button onclick="' + fn + '" style="margin-left:6px;padding:2px 8px;border:1px solid ' + (warn ? '#E4D6D6' : C.line) + ';border-radius:6px;background:#fff;font-family:inherit;font-size:10.5px;font-weight:700;color:' + (warn ? '#B23A2E' : C.sub) + ';cursor:pointer;">' + t + '</button>'; };
+    var _uidQ = String(uid).replace(/'/g, "\\'");
+    var _today = (function(){ var d = new Date(Date.now() + 9 * 3600e3); return d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0') + '-' + String(d.getUTCDate()).padStart(2, '0'); })();
+    h += '<div style="margin-top:9px;padding:9px 11px;background:#faf8f4;border:1px solid ' + C.line + ';border-radius:10px;font-size:11.5px;line-height:1.75;color:' + C.sub + ';">'
+       + '<div>' + _lab('앱 가입일') + '<b style="color:' + C.ink + ';">' + (_appJ || '—') + '</b>'
+       +   ' <span style="color:' + C.faint + ';">초대코드로 가입한 날</span></div>'
+       + '<div>' + _lab('실제 가입일')
+       +   (_mj ? '<b style="color:' + C.ink + ';">' + _mj + '</b> <span style="color:' + C.faint + ';">앱 이전 가입 · 회원에게는 이 날이 「가입일」</span>'
+               : '<span style="color:' + C.faint + ';">미입력 — 회원에게는 앱 가입일이 「가입일」</span>')
+       +   _btn("mlJoinedToggle()", _mj ? '수정' : '입력')
+       +   (_mj ? _btn("mlJoinedClear(\'' + _uidQ + '\')", '지우기', true) : '')
+       + '</div>'
+       + '<div id="mlJoinedEdit" style="display:none;margin:4px 0 6px 96px;">'
+       +   '<input type="date" id="mlJoinedInput" value="' + _pcalEsc(_mjRaw ? String(_mjRaw).slice(0, 10) : '') + '" min="2015-01-01" max="' + _today + '" '
+       +     'style="padding:5px 8px;border:1px solid ' + C.line + ';border-radius:7px;font-family:inherit;font-size:12px;">'
+       +   _btn("mlJoinedSave(\'' + _uidQ + '\')", '저장') + _btn("mlJoinedToggle()", '취소')
+       +   '<div style="font-size:10.5px;color:' + C.faint + ';margin-top:3px;">앱이 생기기 전에 멤버십을 시작한 날. 2015-01-01 ~ 오늘. 지우면 앱 가입일로 돌아간다.</div>'
+       + '</div>'
+       + '<div>' + _lab('멤버십 시작일')
+       +   (_msl ? ('<b style="color:' + C.ink + ';">' + _pcalEsc(_msl.text) + '</b>'
+                   + (_msl.kind ? ' <span style="color:' + C.faint + ';">(' + _msl.kind + ')</span>' : '')
+                   + (_ms.year_end_at ? ' <span style="color:' + C.faint + ';">· 1년 ' + _memberStartFmt(_ms.year_end_at) + '</span>' : ''))
+                 : '<span style="color:' + C.faint + ';">— (서버 함수 없음)</span>')
+       + '</div>'
        + '</div>';
-  }
+  })();
   h += '<button onclick="mlCsv()" style="margin-top:10px;padding:7px 11px;border:1px solid ' + C.line + ';'
      + 'border-radius:9px;background:#fff;font-family:inherit;font-size:11.5px;font-weight:700;'
      + 'color:' + C.sub + ';cursor:pointer;">⤓ 이 회원 내역 CSV</button>';
@@ -31440,7 +31485,7 @@ async function mlOpen(uid){
       + 'color:' + C.faint + ';">' + label + '</button>';
   }
   h += '<div style="display:flex;gap:2px;margin-top:15px;border-bottom:1px solid ' + C.line + ';">'
-     + tabBtn('dep','예치금') + tabBtn('tk','티켓') + tabBtn('fee','대행비') + '</div>';
+     + tabBtn('dep','예치금') + tabBtn('tk','티켓') + tabBtn('fee','대행비') + tabBtn('mship','멤버십 연회비') + '</div>';   // 🆕 2026-10-15 연회비 탭
 
   // ══════ 예치금 탭 ══════
   var pd = '';
@@ -31552,6 +31597,7 @@ async function mlOpen(uid){
         case 'ticket_refund':   return ['환불 · 반환', C["in"]];
         case 'admin_grant':     return ['예치금 부여', C["in"]];
         case 'admin_deduct':    return ['관리 차감', C.out];
+        case 'membership_payment': return ['멤버십 연회비', C.out];   // 🆕 2026-10-15 옛 앱 결제 흐름 — 연회비 탭에도 같이 보인다
         default: return [(parseInt(r.amount)||0) >= 0 ? '입금' : '출금', (parseInt(r.amount)||0) >= 0 ? C["in"] : C.out];
       }
     }
@@ -31817,13 +31863,97 @@ async function mlOpen(uid){
   else pf += '<div style="padding:12px 4px;font-size:11px;color:' + C.faint + ';border-top:1px solid ' + C.line + ';">'
     + '대행비는 환불되지 않습니다 — 이 회원에게서 <b>확정된 수익</b>이 얼마인지 봅니다.</div>';
 
+  // ══════ 멤버십 연회비 탭 (2026-10-15) ══════
+  //   연회비는 티켓 구매·초대 결제와 별개의 돈이다. membership_fees 표(슈퍼어드민이 이 탭에서 적는다)와
+  //   옛 앱 결제 흐름이 남긴 원장 줄(membership_payment)을 한 목록으로 본다. 잔액·원장은 건드리지 않는다.
+  //   표가 아직 없으면(SQL 미실행) 목록은 비고, 저장을 누르면 그 사실을 토스트로 말한다.
+  var pm = '';
+  var _MF_METHOD = { transfer:['송금','#EAF1FF','#1F5BD6'], card:['카드','#FBF3F2','#6A1A1A'], link:['정산 링크','#EAF6EE','#1E7A46'],
+                     deposit:['예치금 차감','#F5EFE3','#8a7b4a'], cash:['현금','#F0ECE6','#7A6A60'], other:['기타','#F0ECE6','#7A6A60'] };
+  window._mlFeeRows = mfRows;                  // 수정 폼 프리필용 — mlFeeEdit(id) 가 읽는다
+  var mfAuto = txs.filter(function(r){ return r.change_type === 'membership_payment'; });
+  var mfSum = 0; mfRows.forEach(function(f){ mfSum += parseInt(f.amount_krw) || 0; });
+  var mfLast = mfRows.slice().sort(function(a, b){ return String(b.paid_at || '').localeCompare(String(a.paid_at || '')); })[0] || null;
+  var mfAll = mfRows.map(function(f){ return { rec: f, d: String(f.paid_at || '').slice(0, 10) }; })
+    .concat(mfAuto.map(function(r){ return { auto: r, d: String(r.created_at || '').slice(0, 10) }; }))
+    .sort(function(a, b){ return String(b.d).localeCompare(String(a.d)); });
+  function _mfFx(f){
+    if(!f.fx_currency || f.fx_amount == null) return '';
+    var v = Number(f.fx_amount) || 0;
+    return (f.fx_currency === 'USD' ? '$' + v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                                    : '¥' + Math.round(v).toLocaleString()) + ' · ';
+  }
+  function _mfRow(icon, bg, fg, body, right, onclick){
+    return '<div ' + (onclick ? 'onclick="' + onclick + '" ' : '') + 'style="display:flex;gap:10px;align-items:flex-start;padding:11px 4px;'
+      + 'border-bottom:1px solid #f4efe6;' + (onclick ? 'cursor:pointer;' : '') + '">'
+      + '<div style="flex:none;width:28px;height:28px;border-radius:8px;background:' + bg + ';color:' + fg + ';font-size:12px;font-weight:900;'
+      + 'display:flex;align-items:center;justify-content:center;">' + icon + '</div>'
+      + '<div style="flex:1;min-width:0;">' + body + '</div>'
+      + '<div style="flex:none;text-align:right;">' + right + '</div></div>';
+  }
+  pm += grp('납부 ' + mfRows.length + '회 · 합계 ' + W + n(mfSum),
+            (mfLast ? '최근 ' + _memberDateFmt(mfLast.paid_at) : '') + (_exp ? (mfLast ? ' · ' : '') + '만료 ' + _exp : ''));
+  mfAll.forEach(function(x){
+    if(x.rec){
+      var f = x.rec, mm = _MF_METHOD[f.method] || _MF_METHOD.other;
+      var per = (f.period_from || f.period_to) ? ('기간 ' + (f.period_from ? _memberDateFmt(f.period_from) : '?') + ' ~ ' + (f.period_to ? _memberDateFmt(f.period_to) : '?')) : '';
+      pm += _mfRow('₩', '#F5EFE3', '#8a7b4a',
+        '<div style="font-size:13.5px;font-weight:700;line-height:1.4;">' + _memberDateFmt(f.paid_at) + ' ' + tag(mm[0], mm[1], mm[2])
+          + (f.tier ? ' ' + tag(_pcalEsc(String(f.tier)) + '등급', '#f0ebe1', '#8a7b63') : '') + '</div>'
+        + '<div style="font-size:11px;color:' + C.faint + ';margin-top:2px;">' + per + (f.note ? (per ? ' · ' : '') + _pcalEsc(String(f.note)) : '')
+          + (f.source && f.source !== 'manual' ? ' · ' + _pcalEsc(String(f.source)) : '') + '</div>',
+        '<div style="font-size:14.5px;font-weight:800;color:' + C.ink + ';">' + _mfFx(f) + W + n(f.amount_krw) + '</div>'
+        + '<div style="margin-top:2px;">' + tag('수정 ›', '#EDEAE3', '#7a746c') + '</div>',
+        "mlFeeEdit('" + String(f.id).replace(/[^0-9a-f-]/g, '') + "')");
+    } else {
+      var r = x.auto, a = parseInt(r.amount) || 0;
+      pm += _mfRow('₩', '#F3EEEC', '#96877f',
+        '<div style="font-size:13.5px;font-weight:700;line-height:1.4;">' + _mlDate(r.created_at) + ' ' + tag('앱 결제 · 예치금', '#F3EEEC', '#96877f') + '</div>'
+        + '<div style="font-size:11px;color:' + C.faint + ';margin-top:2px;">' + _pcalEsc(String(r.description || '')) + ' · 원장 줄(자동)</div>',
+        '<div style="font-size:14.5px;font-weight:800;color:' + C.sub + ';">' + W + n(Math.abs(a)) + '</div>');
+    }
+  });
+  if(!mfAll.length) pm += emptyLine('연회비 기록이 없습니다 — 아래에서 적습니다');
+  // 입력 폼 — 추가·수정 겸용. uid 는 버튼에 박아 둔다
+  (function(){
+    var _uidQ = String(uid).replace(/'/g, "\\'");
+    var _in = function(id, type, extra){ return '<input id="' + id + '" type="' + (type || 'text') + '" ' + (extra || '') + ' style="width:100%;box-sizing:border-box;padding:8px 9px;border:1px solid ' + C.line + ';border-radius:8px;font-family:inherit;font-size:12.5px;background:#fff;">'; };
+    var _lab = function(t){ return '<div style="font-size:10.5px;font-weight:700;color:' + C.sub + ';margin-bottom:3px;">' + t + '</div>'; };
+    var _sel = function(id, opts){ return '<select id="' + id + '" style="width:100%;box-sizing:border-box;padding:8px 9px;border:1px solid ' + C.line + ';border-radius:8px;font-family:inherit;font-size:12.5px;background:#fff;">'
+      + opts.map(function(o){ return '<option value="' + o[0] + '">' + o[1] + '</option>'; }).join('') + '</select>'; };
+    pm += '<div id="mlFeeForm" style="margin-top:14px;padding:12px;border:1.5px dashed #c9a96e;border-radius:12px;background:#fff;">'
+      + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">'
+      +   '<div id="mlFeeFormTitle" style="font-size:12.5px;font-weight:800;color:' + C.ink + ';">＋ 연회비 기록 추가</div>'
+      +   '<button id="mlFeeDelBtn" onclick="mlFeeDel(\'' + _uidQ + '\')" style="display:none;padding:4px 9px;border:1px solid #E4D6D6;border-radius:7px;background:#fff;font-family:inherit;font-size:11px;font-weight:800;color:#B23A2E;cursor:pointer;">삭제</button>'
+      + '</div>'
+      + '<input type="hidden" id="mlFeeId" value="">'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">'
+      +   '<div>' + _lab('납부일') + _in('mlFeeDate', 'date', 'value="' + _mlKstToday() + '" max="' + _mlKstToday() + '"') + '</div>'
+      +   '<div>' + _lab('금액 (원)') + _in('mlFeeAmt', 'text', 'inputmode="numeric" placeholder="1,500,000" oninput="tcalAmtInput(this)"') + '</div>'
+      +   '<div>' + _lab('외화로 냈으면') + _sel('mlFeeCur', [['', '원화만'], ['USD', '$ 달러'], ['JPY', '¥ 엔']]) + '</div>'
+      +   '<div>' + _lab('외화 금액') + _in('mlFeeFx', 'text', 'inputmode="decimal" placeholder="1,200.00"') + '</div>'
+      +   '<div>' + _lab('수단') + _sel('mlFeeMethod', [['transfer', '송금'], ['card', '카드'], ['link', '정산 링크'], ['deposit', '예치금 차감'], ['cash', '현금'], ['other', '기타']]) + '</div>'
+      +   '<div>' + _lab('등급') + _sel('mlFeeTier', [['', '—'], ['M', 'M 등급'], ['T', 'T 등급']]) + '</div>'
+      +   '<div>' + _lab('기간 시작') + _in('mlFeeFrom', 'date', 'onchange="mlFeeAutoTo()"') + '</div>'
+      +   '<div>' + _lab('기간 종료') + _in('mlFeeTo', 'date', '') + '</div>'
+      + '</div>'
+      + '<div style="margin-top:8px;">' + _lab('메모') + _in('mlFeeNote', 'text', 'placeholder="예: 첫해 연회비 · 송금 확인"') + '</div>'
+      + '<div style="display:flex;gap:8px;margin-top:10px;">'
+      +   '<button onclick="mlFeeReset()" style="flex:1;height:38px;border:1px solid ' + C.line + ';border-radius:9px;background:#fff;font-family:inherit;font-size:12.5px;font-weight:700;color:' + C.sub + ';cursor:pointer;">비우기</button>'
+      +   '<button id="mlFeeSaveBtn" onclick="mlFeeSave(\'' + _uidQ + '\')" style="flex:1.6;height:38px;border:none;border-radius:9px;background:#1a1a18;color:#fff;font-family:inherit;font-size:12.5px;font-weight:800;cursor:pointer;">저장</button>'
+      + '</div>'
+      + '<div style="font-size:10.5px;color:' + C.faint + ';margin-top:7px;line-height:1.5;">연회비 기록은 잔액·원장과 별개입니다. 예치금으로 쓸 몫은 종전대로 「예치금 부여」에서 넣습니다. 기간 시작을 고르면 종료는 1년 뒤로 자동.</div>'
+      + '</div>';
+  })();
+
   h += '<div id="mlPane-dep" style="padding:4px 0 20px;">' + pd + '</div>';
   h += '<div id="mlPane-tk"  style="display:none;padding:4px 0 20px;">' + pt + '</div>';
   h += '<div id="mlPane-fee" style="display:none;padding:4px 0 20px;">' + pf + '</div>';
+  h += '<div id="mlPane-mship" style="display:none;padding:4px 0 20px;">' + pm + '</div>';   // 🆕 2026-10-15
   h += '</div>';
 
   // CSV 는 화면에 그린 것과 같은 자료를 쓴다 — 따로 만들면 둘이 어긋난다
-  window._mlCsv = { name: (u.display_name || uid), txs: txs, items: _mlItems, invCx: invCx };
+  window._mlCsv = { name: (u.display_name || uid), txs: txs, items: _mlItems, invCx: invCx, fees: mfRows };   // 🆕 2026-10-15 fees
 
   d.innerHTML = h;
   mlTab('dep');
@@ -31832,8 +31962,135 @@ async function mlOpen(uid){
 window.mlOpen = mlOpen;
 
 // 탭 전환 — 지표 카드와 탭 버튼이 같은 함수를 부른다
+// 🆕 2026-10-15 멤버십 연회비 기록 — 회원 원장 탭. membership_fees 표(슈퍼어드민만 · RLS).
+function _mlKstToday(){
+  var d = new Date(Date.now() + 9 * 3600e3);
+  return d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0') + '-' + String(d.getUTCDate()).padStart(2, '0');
+}
+function _mlFeeEl(id){ return document.getElementById(id); }
+function mlFeeReset(){
+  var set = function(id, v){ var e = _mlFeeEl(id); if(e) e.value = v; };
+  set('mlFeeId', ''); set('mlFeeDate', _mlKstToday()); set('mlFeeAmt', ''); set('mlFeeCur', ''); set('mlFeeFx', '');
+  set('mlFeeMethod', 'transfer'); set('mlFeeTier', ''); set('mlFeeFrom', ''); set('mlFeeTo', ''); set('mlFeeNote', '');
+  var t = _mlFeeEl('mlFeeFormTitle'); if(t) t.textContent = '＋ 연회비 기록 추가';
+  var d = _mlFeeEl('mlFeeDelBtn'); if(d) d.style.display = 'none';
+}
+function mlFeeAutoTo(){
+  var f = _mlFeeEl('mlFeeFrom'), t = _mlFeeEl('mlFeeTo');
+  if(!f || !t || !f.value || t.value) return;
+  var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(f.value); if(!m) return;
+  var d = new Date(Date.UTC(+m[1] + 1, +m[2] - 1, +m[3]) - 86400e3);   // 1년 뒤 하루 전
+  t.value = d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0') + '-' + String(d.getUTCDate()).padStart(2, '0');
+}
+function mlFeeEdit(id){
+  var f = (window._mlFeeRows || []).find(function(x){ return String(x.id) === String(id); });
+  if(!f){ showToast('⚠', '기록을 못 찾음', '화면을 새로 고친 뒤 다시'); return; }
+  mlFeeReset();
+  var set = function(k, v){ var e = _mlFeeEl(k); if(e) e.value = (v == null ? '' : String(v)); };
+  set('mlFeeId', f.id); set('mlFeeDate', String(f.paid_at || '').slice(0, 10));
+  set('mlFeeAmt', (parseInt(f.amount_krw) || 0) ? (parseInt(f.amount_krw) || 0).toLocaleString() : '');
+  set('mlFeeCur', f.fx_currency || ''); set('mlFeeFx', f.fx_amount == null ? '' : String(f.fx_amount));
+  set('mlFeeMethod', f.method || 'transfer'); set('mlFeeTier', f.tier || '');
+  set('mlFeeFrom', String(f.period_from || '').slice(0, 10)); set('mlFeeTo', String(f.period_to || '').slice(0, 10)); set('mlFeeNote', f.note || '');
+  var t = _mlFeeEl('mlFeeFormTitle'); if(t) t.textContent = '✎ 연회비 기록 수정 — ' + _memberDateFmt(f.paid_at);
+  var d = _mlFeeEl('mlFeeDelBtn'); if(d) d.style.display = '';
+  var form = _mlFeeEl('mlFeeForm'); if(form && form.scrollIntoView){ try { form.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch(_e){} }
+}
+function _mlFeeErrToast(err, what){
+  var em = String((err && (err.message || err.details)) || ''), code = String((err && err.code) || '');
+  if(code === '42P01' || /relation .*membership_fees.* does not exist|schema cache/i.test(em)){ showToast('⚠', '서버 준비 필요', '20261015_membership_fees.sql 을 먼저 실행하세요'); return; }
+  if(/row-level security|permission denied/i.test(em)){ showToast('❌', '권한 오류', '슈퍼어드민만 적을 수 있어요'); return; }
+  if(/check constraint/i.test(em)){ showToast('⚠', '값 확인', '금액은 0 이상 · 기간 종료는 시작 뒤여야 합니다'); return; }
+  showToast('❌', what || '저장 실패', em.slice(0, 90));
+}
+var _mlFeeBusy = false;
+async function mlFeeSave(uid){
+  if(_mlFeeBusy || !window.sb || !uid) return;
+  var id = String((_mlFeeEl('mlFeeId') || {}).value || '').trim();
+  var date = String((_mlFeeEl('mlFeeDate') || {}).value || '').trim();
+  var amt = parseInt(String((_mlFeeEl('mlFeeAmt') || {}).value || '').replace(/[^0-9]/g, '')) || 0;
+  var cur = String((_mlFeeEl('mlFeeCur') || {}).value || '');
+  var fxRaw = String((_mlFeeEl('mlFeeFx') || {}).value || '').replace(/[^0-9.]/g, '');
+  var fx = fxRaw ? Math.round(parseFloat(fxRaw) * 100) / 100 : null;
+  var method = String((_mlFeeEl('mlFeeMethod') || {}).value || 'transfer');
+  var tier = String((_mlFeeEl('mlFeeTier') || {}).value || '');
+  var from = String((_mlFeeEl('mlFeeFrom') || {}).value || '').trim(), to = String((_mlFeeEl('mlFeeTo') || {}).value || '').trim();
+  var note = String((_mlFeeEl('mlFeeNote') || {}).value || '').trim();
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(date)){ showToast('⚠', '납부일 확인', '납부한 날짜를 고르세요'); return; }
+  if(amt <= 0 && !(cur && fx > 0)){ showToast('⚠', '금액 확인', '원화 금액(또는 외화 금액)을 적으세요'); return; }
+  if(cur && !(fx > 0)){ showToast('⚠', '외화 금액 확인', cur + ' 로 냈으면 외화 금액도 적으세요'); return; }
+  if(from && to && to < from){ showToast('⚠', '기간 확인', '종료가 시작보다 앞입니다'); return; }
+  var row = { user_id: uid, paid_at: date, amount_krw: amt, fx_currency: cur || null, fx_amount: cur ? fx : null, method: method,
+              tier: tier || null, period_from: from || null, period_to: to || null, note: note || null };
+  _mlFeeBusy = true;
+  var btn = _mlFeeEl('mlFeeSaveBtn'); if(btn){ btn.disabled = true; btn.style.opacity = '.6'; }
+  try {
+    var r = id ? await window.sb.from('membership_fees').update(row).eq('id', id).select('id')
+               : await window.sb.from('membership_fees').insert(row).select('id');
+    if(r.error){ _mlFeeErrToast(r.error, '저장 실패'); return; }
+    if(!r.data || !r.data.length){ showToast('❌', '권한 오류', '슈퍼어드민만 적을 수 있어요'); return; }
+    showToast('✓', id ? '연회비 기록 수정' : '연회비 기록 추가', date.replace(/-/g, '.') + ' · ₩' + amt.toLocaleString());
+    try { await mlOpen(uid); } catch(_e){}
+    mlTab('mship');
+  } catch(e){ showToast('❌', '오류', String(e && e.message || '').slice(0, 90)); }
+  finally { _mlFeeBusy = false; if(btn){ btn.disabled = false; btn.style.opacity = ''; } }
+}
+async function mlFeeDel(uid){
+  var id = String((_mlFeeEl('mlFeeId') || {}).value || '').trim();
+  if(!id || !window.sb) return;
+  if(!confirm('이 연회비 기록을 지울까요?\n\n잔액·원장은 바뀌지 않습니다.')) return;
+  var r = await window.sb.from('membership_fees').delete().eq('id', id).select('id');
+  if(r.error){ _mlFeeErrToast(r.error, '삭제 실패'); return; }
+  if(!r.data || !r.data.length){ showToast('❌', '권한 오류', '슈퍼어드민만 지울 수 있어요'); return; }
+  showToast('✓', '연회비 기록 삭제', '');
+  try { await mlOpen(uid); } catch(_e){}
+  mlTab('mship');
+}
+window.mlFeeReset = mlFeeReset; window.mlFeeAutoTo = mlFeeAutoTo; window.mlFeeEdit = mlFeeEdit; window.mlFeeSave = mlFeeSave; window.mlFeeDel = mlFeeDel;
+
+// 🆕 2026-10-15 실제 멤버십 가입일 입력 — 슈퍼어드민만. profiles.membership_joined_at 을 직접 쓴다
+//   (RLS 가 슈퍼어드민의 타인 profile UPDATE 를 허용하고, trg_taam_guard_membership_joined 가 회원 세션을 되돌린다 · 날짜 범위도 서버가 본다).
+function mlJoinedToggle(){
+  var r = document.getElementById('mlJoinedEdit');
+  if(!r) return;
+  var open = r.style.display !== 'none';
+  r.style.display = open ? 'none' : 'block';
+  if(!open){ var i = document.getElementById('mlJoinedInput'); if(i){ try { i.focus(); } catch(_f){} } }
+}
+async function _mlJoinedWrite(uid, val){
+  if(!window.sb || !uid) return false;
+  var r = await window.sb.from('profiles').update({ membership_joined_at: val }).eq('id', uid).select('id, membership_joined_at');
+  if(r.error){
+    var em = String(r.error.message || '');
+    showToast('❌', '저장 실패', em.indexOf('BAD_JOINED_DATE') >= 0 ? '2015-01-01 ~ 오늘 사이의 날짜만 받습니다' : em.slice(0, 90));
+    return false;
+  }
+  if(!r.data || !r.data.length){ showToast('❌', '권한 오류', '슈퍼어드민만 적을 수 있어요'); return false; }
+  // 트리거가 되돌렸으면(슈퍼어드민이 아님) 돌아온 값이 다르다
+  var got = r.data[0].membership_joined_at ? String(r.data[0].membership_joined_at).slice(0, 10) : null;
+  if(got !== val){ showToast('⚠', '서버가 되돌렸어요', '슈퍼어드민 세션인지 확인하세요'); return false; }
+  return true;
+}
+async function mlJoinedSave(uid){
+  var i = document.getElementById('mlJoinedInput');
+  var v = String((i && i.value) || '').trim();
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(v)){ showToast('⚠', '날짜 확인', '실제 가입일을 고르세요'); return; }
+  if(await _mlJoinedWrite(uid, v)){
+    showToast('✓', '실제 가입일 저장', v.replace(/-/g, '.') + ' — 회원에게는 이 날이 가입일로 보입니다');
+    try { await mlOpen(uid); } catch(_e){}
+  }
+}
+async function mlJoinedClear(uid){
+  if(!confirm('실제 가입일을 지울까요?\n\n회원에게는 앱 가입일(초대코드로 가입한 날)이 가입일로 보이게 됩니다.')) return;
+  if(await _mlJoinedWrite(uid, null)){
+    showToast('✓', '실제 가입일 지움', '앱 가입일로 돌아갔습니다');
+    try { await mlOpen(uid); } catch(_e){}
+  }
+}
+window.mlJoinedToggle = mlJoinedToggle; window.mlJoinedSave = mlJoinedSave; window.mlJoinedClear = mlJoinedClear;
+
 function mlTab(id){
-  ['dep','tk','fee'].forEach(function(k){
+  ['dep','tk','fee','mship'].forEach(function(k){
     var p = document.getElementById('mlPane-' + k);
     if(p) p.style.display = (k === id) ? 'block' : 'none';
     var b = document.getElementById('mlTab-' + k);
@@ -31861,6 +32118,14 @@ function mlCsv(){
              r.description || '', (r.deposit_type === 'membership' ? '멤버십' : '일반'),
              (parseInt(r.amount)||0),
              (r.balance_after != null ? '잔액 ' + (parseInt(r.balance_after)||0) : '') ].map(q).join(','));
+  });
+  // 🆕 2026-10-15 멤버십 연회비 기록
+  var MF = { transfer:'송금', card:'카드', link:'정산 링크', deposit:'예치금 차감', cash:'현금', other:'기타' };
+  (D.fees || []).forEach(function(f){
+    L.push([ '멤버십 연회비', String(f.paid_at || '').slice(0, 10), (f.tier ? f.tier + '등급 ' : '') + '연회비',
+             (MF[f.method] || f.method || '') + ((f.period_from || f.period_to) ? ' / 기간 ' + (f.period_from || '?') + '~' + (f.period_to || '?') : ''),
+             (parseInt(f.amount_krw) || 0),
+             (f.fx_currency ? f.fx_currency + ' ' + (f.fx_amount == null ? '' : f.fx_amount) + ' / ' : '') + (f.note || '') ].map(q).join(','));
   });
   D.items.forEach(function(it){
     var rt = it.rt;
@@ -39974,8 +40239,11 @@ async function showBuyerInfo(idx) {
     // 회원 부가 정보
     + '<div style="font-size:10px;font-weight:800;letter-spacing:.12em;color:#888;margin:6px 0 6px;text-transform:uppercase;">▸ 회원 정보</div>'
     + _row('등급', grade || '–')
-    + _row('가입일', joinedAt || '–')
-    + (_bmsl ? _row('시작일', _bmsl.text + (_bmsl.kind ? ' (' + _bmsl.kind + ')' : '')) : '')
+    // 🆕 2026-10-15 가입일 = 실제 멤버십 가입일이 있으면 그 날(서버 joined_at), 없으면 앱 가입일. 앱 가입일은 둘이 다를 때 슈퍼어드민에게만 따로
+    + _row('가입일', ((_bms && _bms.joined_at) ? _memberDateFmt(_bms.joined_at) : joinedAt) || '–')
+    + ((_bms && _bms.membership_joined_at && typeof _isSuperAdmin === 'function' && _isSuperAdmin())
+        ? _row('앱 가입일', _memberDateFmt(_bms.app_signup_date) || joinedAt || '–') : '')
+    + (_bmsl ? _row('멤버십 시작일', _bmsl.text + (_bmsl.kind ? ' (' + _bmsl.kind + ')' : '')) : '')
 
     // 예치금 잔액 (Supabase 데이터 있을 때만)
     + (hasBalance
@@ -44411,7 +44679,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.14-d';
+var TAAM_WEB_BUILD = '2026.10.15-a';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -54412,6 +54680,9 @@ var TX_MAP = {
   '회원 자격':['Membership','会員資格'],
   '가입일':['Joined','登録日'],
   '시작일':['Started','開始日'],
+  '멤버십 시작일':['Membership start','メンバーシップ開始日'],
+  '앱 가입일':['App signup','アプリ登録日'],
+  '실제 가입일':['Actual join date','実際の加入日'],
   '시작 전':['Not started','開始前'],
   '첫 초대':['first invitation','初回招待'],
   '첫 구매':['first purchase','初回購入'],
