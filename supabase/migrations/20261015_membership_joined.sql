@@ -13,7 +13,7 @@
 --   · profiles.membership_joined_at date + 누가·언제(membership_joined_set_by/at — 트리거가 적는다, 앱은 못 적는다)
 --   · trg_taam_guard_membership_joined — 회원 세션은 이 칸을 못 바꾼다(되돌림 · 예외 아님: 같은 UPDATE 의 다른 칸을 날리지 않게 role 가드와 같은 방식).
 --     슈퍼어드민·서버만. 날짜는 2015-01-01 ~ 오늘(KST) 사이.
---   · taam_member_start 에 키 넷 추가: membership_joined_at · app_signup_date(KST 날짜) · joined_at(둘 중 회원에게 보여 줄 「가입일」) · joined_kind('manual'|'app').
+--   · taam_member_start 에 키 넷 추가(+ 비로그인 거절 · anon 실행 권한 제거 — 2026-10-16 적대 리뷰): membership_joined_at · app_signup_date(KST 날짜) · joined_at(둘 중 회원에게 보여 줄 「가입일」) · joined_kind('manual'|'app').
 --     날짜는 'YYYY-MM-DD' 문자열 — 해외 회원 기기에서 하루 밀리지 않게 앱이 시간대 변환 없이 그대로 찍는다.
 --   앱 이전 가입자 22명의 실제 가입일은 sql/membership_joined_seed_2026-10-15.sql (SQL Editor · 이름으로 맞춘다).
 -- 회귀: bash sql/_test/t_member_start.sh
@@ -92,7 +92,8 @@ declare
   v_buy timestamptz; v_start timestamptz; v_kind text; v_app date;
 begin
   if u is null then return null; end if;
-  if u <> auth.uid() and not public._taam_uid_is_super() then
+  -- 🔒 2026-10-16 비로그인(auth.uid() null)은 거절 — 종전엔 `u <> null` 이 NULL 이라 검사가 통째로 비켜 가 anon 키로 아무 uid 의 날짜를 읽을 수 있었다(적대 리뷰)
+  if auth.uid() is null or (u <> auth.uid() and not public._taam_uid_is_super()) then
     raise exception '권한이 없습니다' using errcode = '42501';
   end if;
   select p.created_at, p.membership_joined_at into v_signup, v_mj from public.profiles p where p.id = u;
@@ -138,8 +139,9 @@ begin
   );
 end $$;
 
-revoke all on function public.taam_member_start(uuid) from public;
-grant execute on function public.taam_member_start(uuid) to authenticated;
+revoke all     on function public.taam_member_start(uuid) from public;
+revoke execute on function public.taam_member_start(uuid) from anon;        -- Supabase 기본 권한이 붙인 것
+grant  execute on function public.taam_member_start(uuid) to authenticated;
 
 -- ═══════════════════════════════════════════════════════════════
 -- 확인 (하나로) — ❌ 가 한 줄도 없어야 정상
@@ -153,5 +155,8 @@ union all
 select '③ taam_member_start 가 joined_at 을 돌려줌',
        case when (select prosrc from pg_proc where oid = to_regprocedure('public.taam_member_start(uuid)')) like '%joined_kind%' then '✅' else '❌' end
 union all
-select '④ 실제 가입일이 적힌 회원 수 (참고 · 시드 전엔 0)',
+select '④ anon 실행 권한 없음',
+       case when not has_function_privilege('anon', 'public.taam_member_start(uuid)', 'execute') then '✅' else '❌ anon 이 부를 수 있음' end
+union all
+select '⑤ 실제 가입일이 적힌 회원 수 (참고 · 시드 전엔 0)',
        '✅ ' || (select count(*) from public.profiles where membership_joined_at is not null)::text;

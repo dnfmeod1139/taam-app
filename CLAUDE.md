@@ -201,7 +201,13 @@ DB 값은 `'A'` 그대로고 **이름만** 「게스트 회원」이다. 값을 
   그래서 `membership_fees` 표(`20261015_membership_fees.sql` · 납부일·원화·외화·수단·기간·등급·메모 · RLS 슈퍼어드민만 · created_by/updated_at 트리거)를 두고 탭에서 적는다(`mlFeeSave/Edit/Del`).
   **잔액·원장은 건드리지 않는다** — 예치금으로 쓸 몫은 종전대로 부여 화면. 옛 `membership_payment` 원장 줄은 탭에 「앱 결제 · 예치금」으로 같이 보이고 예치금 탭 라벨도 「멤버십 연회비」. CSV 에 연회비 줄 포함.
   표가 없으면(SQL 미실행) 원장은 그대로 열리고 저장만 「서버 준비 필요」.
-- 회귀: `bash sql/_test/t_member_start.sh`(23건 — 가드·시드 포함) · `bash sql/_test/t_membership_fees.sh`(12건) · 스크래치 `mjoined.js`(19건).
+- **2차(2026-10-16, 적대 리뷰 36 에이전트 → 확정 7건, 전부 경미).** ① 마이페이지가 created_at 을 먼저 칠하고 RPC 뒤에 덮어써 옛 날짜가 번쩍이고 RPC 실패 날엔 그대로 남았다 → 프로필을 `*` 로 읽어
+  `membership_joined_at` 이 있으면 첫 칠부터 그 날(`_applyMembershipPeriodToUI` 3번째 인자 · 컬럼이 없는 서버에서도 안 깨진다). ② 연회비 머리줄이 자동 줄을 안 세어 「납부 0회」 밑에 앱 결제 줄이 보였다 →
+  「기록 N회 · ₩ · 앱 결제 M건 ₩」로 따로. ③ 자동 줄 날짜를 UTC 로 잘라 새벽 결제가 하루 앞으로 → KST(`_kstYmd`). ④ membership_fees 를 **못 읽은 것**(5xx·프록시)이 「기록 없음」으로 보여 중복 기록을 유도 → 표 없음(42P01/PGRST205)과
+  갈라 경고 줄 + 저장 차단(`_mlFeeLoadErr`). ⑤⑦ 삭제에 바쁨 가드 없음 · 0행을 「권한 오류」로 읽음 → 가드 + 「기록을 찾지 못했어요」(RLS 거절은 error 로 따로 온다). ⑥ 구매자 팝업 「앱 가입일」을 둘이 같아도 보여줌 → 다를 때만.
+  리뷰가 기각한 것 중 하나는 고쳤다: **`taam_member_start` 가 비로그인(auth.uid() null)에게 열려 있었다** — `u <> null` 이 NULL 이라 검사가 비켜 갔다(2026-10-13 부터). 같은 파일에서 null 거절 + anon 권한 제거.
+  같은 이유로 재구매 해제 푸시가 쓰는 `taam_repurchase_release_targets` 도 슈퍼어드민·SQL Editor·service_role 만 부르게 조였다(`20261016_rpc_caller_guard.sql` · 몸체 그대로 · `t_rpc_caller_guard.sh` 7건).
+- 회귀: `bash sql/_test/t_member_start.sh`(25건 — 가드·시드·anon 포함) · `bash sql/_test/t_membership_fees.sh`(12건) · `bash sql/_test/t_rpc_caller_guard.sh`(7건) · 스크래치 `mjoined.js`(23건).
 
 ### 한 회원 = 한 회차 1건 · 같은 날 같은 시간대 1건 (2026-10-13 카타오리 5/21 사고)
 

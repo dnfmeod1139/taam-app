@@ -21350,7 +21350,7 @@ function _refreshMyPageUserName(){
       // 2차: profiles 테이블 fetch → 최신 값 적용
       // 🆕 v1.53.11 2026.05.28: created_at, member_until 도 함께 fetch (회원 자격 기간 표시)
       window.sb.from('profiles')
-        .select('display_name, phone, email, created_at, member_until')
+        .select('*')   // 🔧 2026-10-16 membership_joined_at 도 같이 — 컬럼이 아직 없는 서버에서도 깨지지 않게 * 로
         .eq('id', userId)
         .single()
         .then(function(profRes){
@@ -21373,7 +21373,7 @@ function _refreshMyPageUserName(){
             // 🆕 v1.53.11 2026.05.28: 회원 가입일 + 종료일 표시
             try {
               if(typeof _applyMembershipPeriodToUI === 'function'){
-                _applyMembershipPeriodToUI(profRes.data.created_at, profRes.data.member_until);
+                _applyMembershipPeriodToUI(profRes.data.created_at, profRes.data.member_until, profRes.data.membership_joined_at);   // 🔧 2026-10-16 실제 가입일이 있으면 첫 칠부터 그 날
               }
               if(typeof _mpPaintMemberStart === 'function') _mpPaintMemberStart();   // 🆕 시작일(첫 초대·구매)
             } catch(_pe){ console.warn('[membership period]', _pe); }
@@ -21388,7 +21388,9 @@ function _refreshMyPageUserName(){
 //   - createdAt: profiles.created_at (ISO timestamp)
 //   - memberUntil: profiles.member_until (ISO timestamp)
 //   - 프로모션 기준: member_until 이 2027-12-31 23:59 (한국시간) 이면 라벨 표시
-function _applyMembershipPeriodToUI(createdAt, memberUntil){
+function _applyMembershipPeriodToUI(createdAt, memberUntil, joinedOverride){
+  // 🔧 2026-10-16 「가입일」은 실제 멤버십 가입일(슈퍼어드민이 적은 것)이 있으면 그 날 — 종전엔 created_at 을 먼저 칠하고 RPC 가 돌아온 뒤 덮어써
+  //   앱 이전 가입자에겐 옛 날짜가 한 번 번쩍였고, RPC 가 실패한 날은 그대로 남았다(적대 리뷰). 서버 joined_at 과 같은 규칙으로 처음부터 맞게 칠한다.
   function _fmt(iso){
     if(!iso) return '—';
     var d = new Date(iso);
@@ -21398,7 +21400,7 @@ function _applyMembershipPeriodToUI(createdAt, memberUntil){
   var joinEl = document.getElementById('mpMemberJoinDate');
   var untilEl = document.getElementById('mpMemberUntilDate');
   var promoEl = document.getElementById('mpMemberPromoLabel');
-  if(joinEl)  joinEl.textContent  = _fmt(createdAt);
+  if(joinEl)  joinEl.textContent  = (joinedOverride && typeof _memberDateFmt === 'function' && _memberDateFmt(joinedOverride)) || _fmt(createdAt);
   if(untilEl) untilEl.textContent = _fmt(memberUntil);
   // 프로모션 라벨 — 종료일이 2027.12.31 이면 표시
   if(promoEl){
@@ -31183,7 +31185,7 @@ async function mlOpen(uid){
   //   ③ ticket_products.agency_fee (상품의 현재 값, 1인) — 상품이 수정됐으면 다를 수 있음
   //   초대는 항상 가져온다 — 대행비 보완뿐 아니라 「결제 전에 거절된 초대」를
   //   티켓 탭 취소 묶음에 보여줘야 하기 때문. 그 건은 tickets 에 아예 없다.
-  var invMap = {}, prodMap = {}, invRows = [], mfRows = [];   // 🆕 2026-10-15 mfRows: 멤버십 연회비 기록(membership_fees)
+  var invMap = {}, prodMap = {}, invRows = [], mfRows = [], mfLoadErr = false;   // 🆕 2026-10-15 mfRows: 멤버십 연회비 기록(membership_fees) · mfLoadErr: 못 읽었음(표 없음과 다름)
   try {
     var needProd = buys.filter(function(t){
       return !(t.extra_data && parseInt(t.extra_data.agencyFee) > 0) && t.ticket_product_id;
@@ -31199,9 +31201,12 @@ async function mlOpen(uid){
     ]);
     invRows = aux[0].data || [];
     mfRows = (aux[2] && aux[2].data) || [];
+    // 🔧 2026-10-16 표가 없는 것(SQL 미실행)과 「못 읽은 것」을 가른다 — 못 읽었는데 빈 목록으로 보이면 같은 연회비를 또 적게 된다(적대 리뷰)
+    var _mfE = aux[2] && aux[2].error;
+    mfLoadErr = !!(_mfE && !(String(_mfE.code||'') === '42P01' || String(_mfE.code||'') === 'PGRST205' || /does not exist|schema cache/i.test(String(_mfE.message||''))));
     invRows.forEach(function(v){ invMap[String(v.id).slice(0,8)] = v; });
     (aux[1].data || []).forEach(function(v){ prodMap[String(v.id)] = v; });
-  } catch(_e){}
+  } catch(_e){ mfLoadErr = true; }
 
   function _agencyOf(t){
     var pax = parseInt(t.party_size) || 1;
@@ -31888,12 +31893,17 @@ async function mlOpen(uid){
   var _MF_METHOD = { transfer:['송금','#EAF1FF','#1F5BD6'], card:['카드','#FBF3F2','#6A1A1A'], link:['정산 링크','#EAF6EE','#1E7A46'],
                      deposit:['예치금 차감','#F5EFE3','#8a7b4a'], cash:['현금','#F0ECE6','#7A6A60'], other:['기타','#F0ECE6','#7A6A60'] };
   window._mlFeeRows = mfRows;                  // 수정 폼 프리필용 — mlFeeEdit(id) 가 읽는다
+  window._mlFeeLoadErr = !!mfLoadErr;          // 못 읽은 상태면 저장을 막는다(중복 기록 방지)
   var mfAuto = txs.filter(function(r){ return r.change_type === 'membership_payment'; });
   var mfSum = 0; mfRows.forEach(function(f){ mfSum += parseInt(f.amount_krw) || 0; });
-  var mfLast = mfRows.slice().sort(function(a, b){ return String(b.paid_at || '').localeCompare(String(a.paid_at || '')); })[0] || null;
-  var mfAll = mfRows.map(function(f){ return { rec: f, d: String(f.paid_at || '').slice(0, 10) }; })
-    .concat(mfAuto.map(function(r){ return { auto: r, d: String(r.created_at || '').slice(0, 10) }; }))
-    .sort(function(a, b){ return String(b.d).localeCompare(String(a.d)); });
+  var mfAutoSum = 0; mfAuto.forEach(function(r){ mfAutoSum += Math.abs(parseInt(r.amount) || 0); });
+  // 🔧 2026-10-16 자동 줄(원장)의 날짜는 KST 로 — UTC 로 자르면 새벽 결제가 하루 앞으로 밀려 기록(paid_at · KST 날짜)과 순서가 어긋난다(적대 리뷰)
+  function _kstYmd(iso){ var d = new Date(iso); if(isNaN(d.getTime())) return String(iso || '').slice(0, 10); d = new Date(d.getTime() + 9 * 3600e3);
+    return d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0') + '-' + String(d.getUTCDate()).padStart(2, '0'); }
+  var mfAll = mfRows.map(function(f){ return { rec: f, d: String(f.paid_at || '').slice(0, 10), ts: '' }; })
+    .concat(mfAuto.map(function(r){ return { auto: r, d: _kstYmd(r.created_at), ts: String(r.created_at || '') }; }))
+    .sort(function(a, b){ return String(b.d).localeCompare(String(a.d)) || String(b.ts).localeCompare(String(a.ts)); });
+  var mfLastD = mfAll.length ? mfAll[0].d : '';
   function _mfFx(f){
     if(!f.fx_currency || f.fx_amount == null) return '';
     var v = Number(f.fx_amount) || 0;
@@ -31908,8 +31918,10 @@ async function mlOpen(uid){
       + '<div style="flex:1;min-width:0;">' + body + '</div>'
       + '<div style="flex:none;text-align:right;">' + right + '</div></div>';
   }
-  pm += grp('납부 ' + mfRows.length + '회 · 합계 ' + W + n(mfSum),
-            (mfLast ? '최근 ' + _memberDateFmt(mfLast.paid_at) : '') + (_exp ? (mfLast ? ' · ' : '') + '만료 ' + _exp : ''));
+  // 🔧 2026-10-16 머리줄은 기록과 자동 줄을 따로 센다 — 「납부 0회」 밑에 앱 결제 줄이 보이던 모순(적대 리뷰)
+  pm += grp('기록 ' + mfRows.length + '회 · ' + W + n(mfSum) + (mfAuto.length ? ' · 앱 결제 ' + mfAuto.length + '건 ' + W + n(mfAutoSum) : ''),
+            (mfLastD ? '최근 ' + _memberDateFmt(mfLastD) : '') + (_exp ? (mfLastD ? ' · ' : '') + '만료 ' + _exp : ''));
+  if(mfLoadErr) pm += '<div style="padding:10px 4px;font-size:12px;font-weight:700;color:#B23A2E;">연회비 기록을 불러오지 못했습니다 — 새로 고친 뒤 다시 보세요. 중복 기록을 막기 위해 저장은 막아 둡니다.</div>';
   mfAll.forEach(function(x){
     if(x.rec){
       var f = x.rec, mm = _MF_METHOD[f.method] || _MF_METHOD.other;
@@ -32023,6 +32035,7 @@ function _mlFeeErrToast(err, what){
 var _mlFeeBusy = false;
 async function mlFeeSave(uid){
   if(_mlFeeBusy || !window.sb || !uid) return;
+  if(window._mlFeeLoadErr){ showToast('⚠', '기록을 못 불러온 상태', '새로 고친 뒤 다시 적으세요 — 같은 연회비가 두 번 적히는 것을 막습니다'); return; }   // 🔧 2026-10-16
   var id = String((_mlFeeEl('mlFeeId') || {}).value || '').trim();
   var date = String((_mlFeeEl('mlFeeDate') || {}).value || '').trim();
   var amt = parseInt(String((_mlFeeEl('mlFeeAmt') || {}).value || '').replace(/[^0-9]/g, '')) || 0;
@@ -32045,7 +32058,11 @@ async function mlFeeSave(uid){
     var r = id ? await window.sb.from('membership_fees').update(row).eq('id', id).select('id')
                : await window.sb.from('membership_fees').insert(row).select('id');
     if(r.error){ _mlFeeErrToast(r.error, '저장 실패'); return; }
-    if(!r.data || !r.data.length){ showToast('❌', '권한 오류', '슈퍼어드민만 적을 수 있어요'); return; }
+    if(!r.data || !r.data.length){
+      // 🔧 2026-10-16 0행 = 수정하려던 기록이 없다(이미 지워졌거나 화면이 낡음). RLS 거절은 error 로 따로 온다
+      if(id){ showToast('⚠', '기록을 찾지 못했어요', '이미 지워졌거나 화면이 낡았습니다 — 다시 불러옵니다'); try { await mlOpen(uid); } catch(_e){} mlTab('mship'); return; }
+      showToast('❌', '권한 오류', '슈퍼어드민만 적을 수 있어요'); return;
+    }
     showToast('✓', id ? '연회비 기록 수정' : '연회비 기록 추가', date.replace(/-/g, '.') + ' · ₩' + amt.toLocaleString());
     try { await mlOpen(uid); } catch(_e){}
     mlTab('mship');
@@ -32054,14 +32071,22 @@ async function mlFeeSave(uid){
 }
 async function mlFeeDel(uid){
   var id = String((_mlFeeEl('mlFeeId') || {}).value || '').trim();
-  if(!id || !window.sb) return;
+  if(!id || !window.sb || _mlFeeBusy) return;   // 🔧 2026-10-16 저장과 같은 바쁨 가드 — 두 번 누르면 두 번째가 「권한 오류」로 잘못 읽혔다
   if(!confirm('이 연회비 기록을 지울까요?\n\n잔액·원장은 바뀌지 않습니다.')) return;
-  var r = await window.sb.from('membership_fees').delete().eq('id', id).select('id');
-  if(r.error){ _mlFeeErrToast(r.error, '삭제 실패'); return; }
-  if(!r.data || !r.data.length){ showToast('❌', '권한 오류', '슈퍼어드민만 지울 수 있어요'); return; }
-  showToast('✓', '연회비 기록 삭제', '');
-  try { await mlOpen(uid); } catch(_e){}
-  mlTab('mship');
+  _mlFeeBusy = true;
+  var dbtn = _mlFeeEl('mlFeeDelBtn'); if(dbtn) dbtn.disabled = true;
+  try {
+    var r = await window.sb.from('membership_fees').delete().eq('id', id).select('id');
+    if(r.error){ _mlFeeErrToast(r.error, '삭제 실패'); return; }
+    if(!r.data || !r.data.length){
+      // 0행 = 권한이 아니라 「그 기록이 없다」(이미 지워졌거나 화면이 낡음) — RLS 거절은 error 로 따로 온다
+      showToast('⚠', '기록을 찾지 못했어요', '이미 지워졌거나 화면이 낡았습니다 — 다시 불러옵니다');
+    } else {
+      showToast('✓', '연회비 기록 삭제', '');
+    }
+    try { await mlOpen(uid); } catch(_e){}
+    mlTab('mship');
+  } finally { _mlFeeBusy = false; if(dbtn) dbtn.disabled = false; }
 }
 window.mlFeeReset = mlFeeReset; window.mlFeeAutoTo = mlFeeAutoTo; window.mlFeeEdit = mlFeeEdit; window.mlFeeSave = mlFeeSave; window.mlFeeDel = mlFeeDel;
 
@@ -40262,7 +40287,7 @@ async function showBuyerInfo(idx) {
     + _row('등급', grade || '–')
     // 🆕 2026-10-15 가입일 = 실제 멤버십 가입일이 있으면 그 날(서버 joined_at), 없으면 앱 가입일. 앱 가입일은 둘이 다를 때 슈퍼어드민에게만 따로
     + _row('가입일', ((_bms && _bms.joined_at) ? _memberDateFmt(_bms.joined_at) : joinedAt) || '–')
-    + ((_bms && _bms.membership_joined_at && typeof _isSuperAdmin === 'function' && _isSuperAdmin())
+    + ((_bms && _bms.membership_joined_at && _bms.app_signup_date && _bms.app_signup_date !== _bms.joined_at && typeof _isSuperAdmin === 'function' && _isSuperAdmin())
         ? _row('앱 가입일', _memberDateFmt(_bms.app_signup_date) || joinedAt || '–') : '')
     + (_bmsl ? _row('멤버십 시작일', _bmsl.text + (_bmsl.kind ? ' (' + _bmsl.kind + ')' : '')) : '')
 
@@ -44700,7 +44725,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.16-b';
+var TAAM_WEB_BUILD = '2026.10.16-c';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){

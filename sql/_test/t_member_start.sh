@@ -6,10 +6,12 @@ P="psql -h /tmp -U postgres -d $DB -q -At"
 A=a1000000-0000-4000-8000-000000000011; B=a1000000-0000-4000-8000-000000000012; C=a1000000-0000-4000-8000-000000000013; D=a1000000-0000-4000-8000-000000000014; SU=a1000000-0000-4000-8000-000000000001
 $P <<SQL >/dev/null 2>&1
 create schema auth; create table auth.users(id uuid primary key);
-do \$\$ begin if not exists (select 1 from pg_roles where rolname='authenticated') then create role authenticated; end if; end \$\$;
+do \$\$ begin if not exists (select 1 from pg_roles where rolname='authenticated') then create role authenticated; end if;
+          if not exists (select 1 from pg_roles where rolname='anon') then create role anon; end if; end \$\$;
 create or replace function auth.uid() returns uuid language sql stable as \$\$ select nullif(current_setting('taam.uid', true),'')::uuid \$\$;
 create or replace function public._taam_uid_is_super() returns boolean language sql stable as \$\$ select coalesce(current_setting('taam.super', true),'') = '1' \$\$;
 create table public.profiles(id uuid primary key, created_at timestamptz default now(), display_name text, role text, deleted_at timestamptz);
+alter default privileges in schema public grant execute on functions to anon, authenticated;   -- Supabase 처럼
 create table public.tickets(id uuid primary key default gen_random_uuid(), user_id uuid, party_size int, status text, purchase_id text, created_at timestamptz default now());
 create table public.reservation_invites(id uuid primary key default gen_random_uuid(), invitee_user_id uuid, status text, created_at timestamptz default now(), paid_at timestamptz);
 create table public.deposit_transactions(id bigserial primary key, user_id uuid, change_type text, amount int, created_at timestamptz default now());
@@ -24,7 +26,7 @@ insert into public.tickets(user_id, party_size, status, purchase_id, created_at)
   ('$D',1,'hold','PAYH-d','2026-09-01'), ('$D',1,'active','MAN-d','2026-09-02'), ('$D',1,'active','KSK-d','2026-09-03');
 -- C: 옛 원장 줄이 tickets 보다 빠르다(2026-06-20) → 첫 구매는 원장 기준
 insert into public.deposit_transactions(user_id, change_type, amount, created_at) values ('$C','ticket_purchase',-100,'2026-06-20'), ('$C','admin_grant',100,'2026-05-20');
-grant usage on schema public to authenticated; grant all on all tables in schema public to authenticated; grant usage on schema auth to authenticated;
+grant usage on schema public to authenticated, anon; grant all on all tables in schema public to authenticated; grant usage on schema auth to authenticated, anon;
 SQL
 FAIL=0
 ok(){ if [ "$2" = "$3" ]; then echo "✅ $1"; else echo "❌ $1  (기대 $2, 실제 $3)"; FAIL=1; fi; }
@@ -42,6 +44,7 @@ echo "── 2026-10-15 실제 멤버십 가입일 (2차 마이그레이션)"
 out2=$($P -f supabase/migrations/20261015_membership_joined.sql 2>&1)
 ok "2차 마이그레이션 오류 없음 · ❌ 0" "|0" "$(echo "$out2" | grep -E "^ERROR|^psql:.*ERROR" | head -1)|$(echo "$out2" | grep -c '❌')"
 ok "A: 실제 가입일 없음 → joined_at = 앱 가입일(KST) · kind app · membership_joined_at null" "2026-01-10|app|2026-01-10|" "$(q $A 0 null joined_at)|$(q $A 0 null joined_kind)|$(q $A 0 null app_signup_date)|$(q $A 0 null membership_joined_at)"
+ok "비로그인(auth.uid null)은 거절 · anon 실행 권한 없음" "ERROR|f" "$($P -c "set local taam.uid=''; set local taam.super='0'; set local role anon; select public.taam_member_start('$B');" 2>&1 | grep -oE "ERROR|권한" | head -1)|$($P -c "select has_function_privilege('anon','public.taam_member_start(uuid)','execute')")"
 ok "B: 옛 키(start_at·start_kind) 그대로" "2026-05-01T00:00:00+00:00|invite" "$(q $B 0 null start_at)|$(q $B 0 null start_kind)"
 # 회원이 자기 칸을 적으려 하면 → 되돌림(예외 없음)
 $P -c "set local taam.uid='$A'; set local taam.super='0'; set local role authenticated; update public.profiles set membership_joined_at='2024-12-05', display_name='가입만2' where id='$A';" >/dev/null 2>&1
