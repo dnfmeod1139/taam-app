@@ -2888,6 +2888,8 @@ html.auto-login .splash .bottom-group{display:none !important}
 .dm-item-name{font-size:14px;font-weight:700;color:#1a1a18;}
 .dm-item-badge{font-family:var(--font-main);font-size:8px;font-weight:700;letter-spacing:.08em;padding:4px 9px;border-radius:20px;}
 .dm-item-meta{font-size:12px;color:#999;margin-bottom:10px;line-height:1.6;}
+.dm-item-meta-row{display:flex;justify-content:space-between;align-items:center;gap:8px;}
+.dm-btn-time{flex-shrink:0;padding:5px 9px;border:1px solid #c8a96e;border-radius:7px;background:#fff;color:#5C0A14;font-family:inherit;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;line-height:1.2;}
 .dm-item-amt{font-family:var(--font-main);font-size:20px;font-weight:700;color:#1a1a18;margin-bottom:12px;}
 .dm-actions{display:flex;gap:8px;}
 .dm-btn-return{flex:1;padding:11px 0;background:#1a1a18;border:none;border-radius:8px;font-family:var(--font-main);font-size:8px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:#fff;cursor:pointer;}
@@ -15468,7 +15470,10 @@ textarea.mapl-in{min-height:78px;resize:vertical;line-height:1.7}
       <div style="font-size:12px;color:#9a9486;margin-top:4px;">선택한 날짜에 매장·정원·시간을 등록합니다.</div>
       <div style="margin-top:16px;">
         <label style="font-size:12px;font-weight:700;color:#6b6b6b;">매장</label>
-        <select id="tcalSchedRest" style="width:100%;box-sizing:border-box;margin-top:5px;padding:12px;border:1px solid #e0ddd5;border-radius:10px;font-size:14px;font-weight:700;background:#fff;-webkit-appearance:none;"><option value="">매장 선택…</option></select>
+        <!-- 🆕 2026-10-16 매장이 많아 이름으로 먼저 거른다 — 검색창이 아래 셀렉트의 목록을 줄이고, 하나만 남으면 바로 고른다 (tcalSchedRestFilter) -->
+        <input id="tcalSchedRestQ" type="search" inputmode="search" autocomplete="off" placeholder="매장 이름으로 검색 (한글·영문·일문)" oninput="tcalSchedRestFilter()" style="width:100%;box-sizing:border-box;margin-top:5px;padding:11px 12px;border:1px solid #e0ddd5;border-radius:10px;font-size:14px;font-weight:600;font-family:inherit;background:#fff;">
+        <select id="tcalSchedRest" onchange="tcalSchedRestPick()" style="width:100%;box-sizing:border-box;margin-top:6px;padding:12px;border:1px solid #e0ddd5;border-radius:10px;font-size:14px;font-weight:700;background:#fff;-webkit-appearance:none;"><option value="">매장 선택…</option></select>
+        <div id="tcalSchedRestHint" style="font-size:11px;color:#9a9486;margin-top:5px;"></div>
       </div>
       <div style="display:flex;gap:10px;margin-top:12px;">
         <div style="flex:1;"><label style="font-size:12px;font-weight:700;color:#6b6b6b;">정원</label>
@@ -15528,8 +15533,9 @@ textarea.mapl-in{min-height:78px;resize:vertical;line-height:1.7}
     <div style="font-size:18px;font-weight:800;color:#1a1a18;">예약 시간 변경</div>
     <div id="dmTimeChangeCtx" style="font-size:12px;color:#9a9486;margin-top:4px;"></div>
     <div style="margin-top:16px;">
-      <label style="font-size:12px;font-weight:700;color:#6b6b6b;">새 예약 시간</label>
-      <input id="dmTimeChangeInput" type="time" style="width:100%;box-sizing:border-box;margin-top:5px;padding:12px;border:1px solid #e0ddd5;border-radius:10px;font-size:16px;font-weight:800;">
+      <label style="font-size:12px;font-weight:700;color:#6b6b6b;">새 예약 시간 <span style="color:#b3aa98;font-weight:500;">(30분 단위)</span></label>
+      <!-- 🔧 2026-10-16 iOS 의 type=time 휠은 1분 단위라 30분 단위로 고른다 (06:00~23:30 · 현재 시각이 그 밖이면 「(현재)」로 함께) — _tchgFillTimeOptions 가 채운다 -->
+      <select id="dmTimeChangeInput" style="width:100%;box-sizing:border-box;margin-top:5px;padding:12px;border:1px solid #e0ddd5;border-radius:10px;font-size:16px;font-weight:800;background:#fff;-webkit-appearance:none;"></select>
     </div>
     <div style="font-size:11.5px;color:#b5afa2;margin-top:10px;line-height:1.5;">변경하면 고객에게 알림이 가고, 고객이 확인을 누르면 다시 알림을 받습니다.</div>
     <div style="display:flex;gap:10px;margin-top:18px;">
@@ -29901,6 +29907,19 @@ function _dmGetItem(idx){
 // ════════════════════════════════════════════════════════════════
 var _dmTimeChangeIdx = -1;
 var _tchgMode = 'dm';           // 'dm'(구매 관리) | 'invite'(발송한 초대 내역)
+// 🔧 2026-10-16 시간 선택지 — 30분 단위 06:00~23:30. 현재 시각이 격자 밖(18:45 등)이면 그 값도 「(현재)」로 넣어 보이게 한다.
+function _tchgFillTimeOptions(cur){
+  var sel = document.getElementById('dmTimeChangeInput');
+  if(!sel) return;
+  cur = /^\d{1,2}:\d{2}$/.test(String(cur||'')) ? String(cur).replace(/^(\d):/, '0$1:') : '';
+  var opts = ['<option value="">시간 선택…</option>'], seen = {};
+  for(var h = 6; h <= 23; h++){
+    ['00','30'].forEach(function(mm){ var v = String(h).padStart(2,'0') + ':' + mm; seen[v] = 1; opts.push('<option value="' + v + '">' + v + '</option>'); });
+  }
+  if(cur && !seen[cur]) opts.push('<option value="' + cur + '">' + cur + ' (현재)</option>');
+  sel.innerHTML = opts.join('');
+  sel.value = cur || '';
+}
 var _sentInvitesRows = [];      // loadSentInvites 가 채움
 var _siTimeChangeCtx = null;    // { inv, ticket } — invite 모드 컨텍스트
 function dmChangeTime(idx){
@@ -29912,8 +29931,7 @@ function dmChangeTime(idx){
   _dmTimeChangeIdx = idx;
   var ctx = document.getElementById('dmTimeChangeCtx');
   if(ctx) ctx.textContent = (h.rest||'') + ' · 방문 ' + (h.visitDate||'') + ' · 현재 ' + (h.visitTime || '시간 미설정');
-  var inp = document.getElementById('dmTimeChangeInput');
-  if(inp) inp.value = /^\d{1,2}:\d{2}$/.test(h.visitTime||'') ? h.visitTime : '';
+  _tchgFillTimeOptions(h.visitTime || '');
   var m = document.getElementById('dmTimeChangeModal'); if(m) m.style.display='flex';
 }
 function dmCloseTimeChange(){ var m=document.getElementById('dmTimeChangeModal'); if(m) m.style.display='none'; _dmTimeChangeIdx=-1; _siTimeChangeCtx=null; _tchgMode='dm'; }
@@ -29942,8 +29960,7 @@ async function siChangeTime(invId){
   var ctx = document.getElementById('dmTimeChangeCtx');
   if(ctx) ctx.textContent = (inv.restaurant_name||'') + ' · 방문 ' + (inv.visit_date||'') + ' · 현재 ' + (curTime || '시간 미설정')
     + (ticket ? '' : ' · ⚠ 티켓 미연결(초대만 변경)');
-  var inp = document.getElementById('dmTimeChangeInput');
-  if(inp) inp.value = /^\d{1,2}:\d{2}$/.test(curTime) ? curTime : '';
+  _tchgFillTimeOptions(curTime);
   var m = document.getElementById('dmTimeChangeModal'); if(m) m.style.display='flex';
 }
 async function siSaveTimeChange(){
@@ -39540,7 +39557,12 @@ function renderDmMgmtList(idx){
         }
       }
     }
-    var meta = '방문일 '+h.visitDate+' &nbsp;·&nbsp; '+h.pax+'인 &nbsp;·&nbsp; 구매 '+purchDateStr;
+    // 🔧 2026-10-16 방문예정 카드는 방문 시각도 적고, 「시간 변경」을 그 줄 오른쪽 작은 칩으로 — 액션 줄엔 돈 버튼(반환·환불 처리)만 남긴다
+    var meta = '방문일 '+h.visitDate+(idx === 0 && h.visitTime ? ' '+h.visitTime : '')+' &nbsp;·&nbsp; '+h.pax+'인 &nbsp;·&nbsp; 구매 '+purchDateStr;
+    if(idx === 0){
+      meta = '<span style="min-width:0;">'+meta+'</span>'
+        +'<button class="dm-btn-time" onclick="dmChangeTime('+globalIdx+')" title="예약 시간 변경 (고객에게 알림)">⏰ 시간 변경</button>';
+    }
 
     var actionsHtml = '';
     var resultHtml = '';
@@ -39549,8 +39571,7 @@ function renderDmMgmtList(idx){
       actionsHtml = '<div class="dm-actions">'
         +'<button class="dm-btn-return" onclick="openDmPopup('+globalIdx+',\'return\')">반환</button>'
         +'<button class="dm-btn-penalty" onclick="openDmPopup('+globalIdx+',\'penalty\')">환불 처리</button>'
-        +'</div>'
-        +'<button onclick="dmChangeTime('+globalIdx+')" style="width:100%;margin-top:8px;padding:10px;border:1px solid #c8a96e;border-radius:10px;background:#fff;color:#5C0A14;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;">⏰ 예약 시간 변경</button>';
+        +'</div>';
     } else if(idx === 1){
       // 반환완료 — 큰 금액 영역에서 이미 반환액+상세 표시. 여기엔 처리일자 + 추가차감 사유.
       var dr = h.depositReturn;
@@ -39693,7 +39714,7 @@ function renderDmMgmtList(idx){
       +'<div class="dm-item-head"><div class="dm-item-name">'+rName+visitStatus+'</div>'
       +'<button onclick="showBuyerInfo('+globalIdx+')" style="flex-shrink:0;padding:4px 10px;background:#f0ede8;border:none;border-radius:6px;font-family:var(--font-main);font-size:11px;font-weight:700;color:#555;cursor:pointer;">구매자</button>'
       +'</div>'
-      +'<div class="dm-item-meta">'+meta+'</div>'
+      +'<div class="dm-item-meta'+(idx === 0 ? ' dm-item-meta-row' : '')+'">'+meta+'</div>'
       +amtHtml
       +cardBox
       +actionsHtml+resultHtml
@@ -44679,7 +44700,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.15-a';
+var TAAM_WEB_BUILD = '2026.10.16-a';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -60628,14 +60649,39 @@ window.tcalDeleteSchedule = tcalDeleteSchedule;
 
 // 🆕 일정(매장) 등록 — 매장 + 정원 + 시간
 var _tcalSchedRest = '';
+var _tcalSchedRestAll = [];   // 🆕 2026-10-16 검색용 전체 목록 (이름순)
+// 검색어로 셀렉트 목록을 줄인다 — 한글·영문·일문 이름, 공백 무시. 하나만 남으면 바로 고른다.
+function tcalSchedRestFilter(){
+  var sel = document.getElementById('tcalSchedRest'), hint = document.getElementById('tcalSchedRestHint');
+  if(!sel) return;
+  var q = String((document.getElementById('tcalSchedRestQ')||{}).value || '').toLowerCase().replace(/\s+/g, '');
+  var keep = sel.value;
+  var list = _tcalSchedRestAll.filter(function(r){
+    if(!q) return true;
+    return [r.name, r.name_en, r.name_jp, r.name_ja].some(function(v){ return v && String(v).toLowerCase().replace(/\s+/g, '').indexOf(q) >= 0; });
+  });
+  sel.innerHTML = '<option value="">' + (q ? (list.length ? '검색 결과 ' + list.length + '곳 — 고르세요' : '검색 결과 없음') : '매장 선택…') + '</option>'
+    + list.map(function(r){ return '<option value="' + _raEsc(r.id) + '">' + _raEsc(r.name || r.id) + '</option>'; }).join('');
+  // 이전 선택이 목록에 남아 있으면 유지, 결과가 하나면 그걸로
+  if(keep && list.some(function(r){ return String(r.id) === String(keep); })) sel.value = keep;
+  else if(list.length === 1) sel.value = String(list[0].id);
+  else sel.value = '';
+  tcalSchedRestPick();
+}
+function tcalSchedRestPick(){
+  var sel = document.getElementById('tcalSchedRest'), hint = document.getElementById('tcalSchedRestHint');
+  if(!hint) return;
+  var r = sel && sel.value ? _tcalSchedRestAll.filter(function(x){ return String(x.id) === String(sel.value); })[0] : null;
+  hint.innerHTML = r ? '선택: <b style="color:#1a1a18;">' + _raEsc(r.name || r.id) + '</b>' : (_tcalSchedRestAll.length ? '전체 ' + _tcalSchedRestAll.length + '곳 · 이름을 치면 목록이 줄어듭니다' : '');
+}
+window.tcalSchedRestFilter = tcalSchedRestFilter; window.tcalSchedRestPick = tcalSchedRestPick;
 function tcalOpenSchedule(){
   if(!_tcalSelectedDate){ showToast('⚠','날짜 선택','캘린더에서 날짜를 누르세요'); return; }
   _tcalSchedRest = '';
+  _tcalSchedRestAll = (typeof restaurantDB!=='undefined'?restaurantDB:[]).slice().sort(function(a,b){ return String(a.name||'').localeCompare(String(b.name||'')); });
+  var qi = document.getElementById('tcalSchedRestQ'); if(qi) qi.value = '';
   var sel = document.getElementById('tcalSchedRest');
-  if(sel){
-    var opts = (typeof restaurantDB!=='undefined'?restaurantDB:[]).slice().sort(function(a,b){ return String(a.name||'').localeCompare(String(b.name||'')); });
-    sel.innerHTML = '<option value="">매장 선택…</option>' + opts.map(function(r){ return '<option value="'+_raEsc(r.id)+'">'+_raEsc(r.name||r.id)+'</option>'; }).join('');
-  }
+  if(sel){ sel.innerHTML = '<option value="">매장 선택…</option>'; tcalSchedRestFilter(); }
   var c = document.getElementById('tcalSchedCap'); if(c) c.value='';
   var t = document.getElementById('tcalSchedTime'); if(t) t.value='';
   var m = document.getElementById('tcalSchedModal'); if(m) m.style.display='flex';
