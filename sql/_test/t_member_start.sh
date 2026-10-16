@@ -9,7 +9,7 @@ create schema auth; create table auth.users(id uuid primary key);
 do \$\$ begin if not exists (select 1 from pg_roles where rolname='authenticated') then create role authenticated; end if; end \$\$;
 create or replace function auth.uid() returns uuid language sql stable as \$\$ select nullif(current_setting('taam.uid', true),'')::uuid \$\$;
 create or replace function public._taam_uid_is_super() returns boolean language sql stable as \$\$ select coalesce(current_setting('taam.super', true),'') = '1' \$\$;
-create table public.profiles(id uuid primary key, created_at timestamptz default now(), display_name text, role text);
+create table public.profiles(id uuid primary key, created_at timestamptz default now(), display_name text, role text, deleted_at timestamptz);
 create table public.tickets(id uuid primary key default gen_random_uuid(), user_id uuid, party_size int, status text, purchase_id text, created_at timestamptz default now());
 create table public.reservation_invites(id uuid primary key default gen_random_uuid(), invitee_user_id uuid, status text, created_at timestamptz default now(), paid_at timestamptz);
 create table public.deposit_transactions(id bigserial primary key, user_id uuid, change_type text, amount int, created_at timestamptz default now());
@@ -61,9 +61,10 @@ ok "회원 가입 INSERT 에 실제 가입일을 실어도 → null" "|새회원
 $P -c "set local taam.uid='$SU'; set local taam.super='1'; set local role authenticated; update public.profiles set membership_joined_at=null where id='$A';" >/dev/null 2>&1
 ok "슈퍼어드민이 지우면 → joined_at 은 앱 가입일로 · kind app · 지운 기록(set_by 슈퍼)" "2026-01-10|app|$SU" "$(q $A 0 null joined_at)|$(q $A 0 null joined_kind)|$($P -c "select membership_joined_set_by::text from public.profiles where id='$A'")"
 echo "── 시드 (이름으로 맞춘다)"
-$P -c "insert into public.profiles(id, created_at, display_name) values (gen_random_uuid(),'2026-01-11','이지형'), (gen_random_uuid(),'2026-01-12','김지훈'), (gen_random_uuid(),'2026-01-13','김 지훈 ');" >/dev/null
+$P -c "insert into public.profiles(id, created_at, display_name, deleted_at) values (gen_random_uuid(),'2026-01-11','이지형',null), (gen_random_uuid(),'2026-01-12','김지훈',null), (gen_random_uuid(),'2026-01-13','김 지훈 ',null), (gen_random_uuid(),'2025-01-01','임태규','2026-03-01'), (gen_random_uuid(),'2026-02-01','구자호','2026-03-01'), (gen_random_uuid(),'2026-02-02','구자호',null);" >/dev/null
 seed=$($P -f sql/membership_joined_seed_2026-10-15.sql 2>&1)
-ok "시드: 이지형 ✅ · 김지훈(2명) ⚠ · 임태규 ❌ · 오류 없음" "✅|⚠|❌|" "$(echo "$seed" | grep '^이지형' | cut -d'|' -f3 | grep -oE '^(✅|⚠|❌|＝)')|$(echo "$seed" | grep '^김지훈' | cut -d'|' -f3 | grep -oE '^(✅|⚠|❌|＝)')|$(echo "$seed" | grep '^임태규' | cut -d'|' -f3 | grep -oE '^(✅|⚠|❌|＝)')|$(echo "$seed" | grep -E '^ERROR|^psql:.*ERROR' | head -1)"
+ok "시드: 이지형 ✅ · 김지훈(2명) ⚠ · 임태규(탈퇴만) ❌ · 오류 없음" "✅|⚠|❌|" "$(echo "$seed" | grep '^이지형' | cut -d'|' -f3 | grep -oE '^(✅|⚠|❌|＝)')|$(echo "$seed" | grep '^김지훈' | cut -d'|' -f3 | grep -oE '^(✅|⚠|❌|＝)')|$(echo "$seed" | grep '^임태규' | cut -d'|' -f3 | grep -oE '^(✅|⚠|❌|＝)')|$(echo "$seed" | grep -E '^ERROR|^psql:.*ERROR' | head -1)"
+ok "탈퇴 계정과 산 계정이 같은 이름(구자호) → 산 계정에만 ✅ · 탈퇴 계정은 그대로" "✅|2024-12-20|" "$(echo "$seed" | grep '^구자호' | cut -d'|' -f3 | grep -oE '^(✅|⚠|❌|＝)')|$($P -c "select membership_joined_at::text from public.profiles where display_name='구자호' and deleted_at is null")|$($P -c "select coalesce(membership_joined_at::text,'') from public.profiles where display_name='구자호' and deleted_at is not null")"
 ok "시드 뒤 이지형 2024-12-05 · 김지훈 둘 다 비어 있음" "2024-12-05|0" "$($P -c "select membership_joined_at::text from public.profiles where display_name='이지형'")|$($P -c "select count(*) from public.profiles where regexp_replace(display_name,'\s','','g')='김지훈' and membership_joined_at is not null")"
 ok "시드 두 번 돌리면 이지형은 ＝ 이미 같음" "＝" "$($P -f sql/membership_joined_seed_2026-10-15.sql 2>&1 | grep '^이지형' | cut -d'|' -f3 | grep -oE '^(✅|⚠|❌|＝)')"
 ok "시드 결과 행 수 = 목록 22" "22" "$($P -f sql/membership_joined_seed_2026-10-15.sql 2>&1 | grep -cE '^[가-힣]+\|')"

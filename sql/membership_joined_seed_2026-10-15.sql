@@ -3,7 +3,7 @@
 -- ═══════════════════════════════════════════════════════════════
 -- 어디서: Supabase SQL Editor 에 통째로 붙여 RUN. 먼저 supabase/migrations/20261015_membership_joined.sql 이 돌아 있어야 한다.
 -- 무엇을: 아래 목록의 이름을 profiles.display_name(공백 제거)과 맞춰 membership_joined_at 을 적는다.
---   · 이름이 정확히 한 명에게만 맞을 때만 적는다. 두 명 이상이면 ⚠ 로 건너뛴다(엉뚱한 사람에게 적지 않게) — 회원 원장에서 손으로 넣는다.
+--   · 탈퇴 처리(deleted_at)된 계정은 후보에서 뺀다. 이름이 정확히 한 명에게만 맞을 때만 적는다. 두 명 이상이면 ⚠ 로 건너뛴다(엉뚱한 사람에게 적지 않게) — 회원 원장에서 손으로 넣는다.
 --   · 이미 다른 날짜가 적혀 있으면 이 목록의 날짜로 덮는다(목록이 기준). 같은 날짜면 그대로.
 -- 결과 읽는 법: 한 줄에 한 이름. ✅ 적음 / ＝ 이미 같음 / ⚠ 여러 명 / ❌ 못 찾음. ❌·⚠ 는 회원 원장 헤더의 「실제 가입일」에서 직접 적는다.
 -- ⚠ 「6/5일 남기욱」은 목록에서 5/4 와 5/6 사이에 있어 5/5 의 오타일 수 있다 — 적힌 대로 2026-06-05 로 넣었다. 다르면 원장에서 고친다.
@@ -37,6 +37,7 @@ cand as (
     from want w
     left join public.profiles p
       on regexp_replace(coalesce(p.display_name, ''), '\s', '', 'g') = w.name
+     and p.deleted_at is null          -- 탈퇴 처리된 계정은 후보에서 뺀다 (같은 이름의 산 계정을 ⚠ 로 막지 않게 · 적대 리뷰 2026-10-15)
 ),
 cnt as (
   select name, d, count(id) as n from cand group by name, d
