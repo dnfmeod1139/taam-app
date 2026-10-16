@@ -44700,7 +44700,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.16-a';
+var TAAM_WEB_BUILD = '2026.10.16-b';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -47111,8 +47111,90 @@ async function _tuDoRepurchaseToggle(t, toOpen){
   // 서버는 바뀌었다 — 화면 갱신이 실패해도 「바꾸지 못했다」로 읽히면 안 된다
   try { if(typeof renderTicketList === 'function') renderTicketList(); } catch(_re){ console.warn('[repurchase] 목록 갱신 예외', _re); }
   showToast('✓', t.repurchaseOpen ? '재구매 해제' : '제한 복원', t.repurchaseOpen ? '이 회차는 최근 방문 회원도 살 수 있습니다' : '이 회차에 재구매 제한이 다시 적용됩니다');
+  // 🆕 2026-10-16 풀었으면 「알릴까요?」 — 제한에 걸려 있던 회원에게 푸시 (슈퍼어드민이 팝업에서 고른다)
+  if(toOpen && t.repurchaseOpen){ try { _tuRepurchaseAskPush(t); } catch(_pe){ console.warn('[repurchase] 알림 팝업 예외', _pe); } }
 }
 window.tuRepurchaseToggle = tuRepurchaseToggle;
+
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026-10-16 재구매 해제 알림 — 풀고 나면 팝업으로 묻고, 「제한에 걸려 있던 회원」에게만 보낸다
+//   대상: 서버 taam_repurchase_release_targets(회차) — 이 매장의 재구매 창(repurchase_day) 안에 방문(예정)한 회원 중 이 회차를 아직 안 산 사람
+//   (옛 7일 자동 해제가 쓰던 함수 · sql/repurchase_release_7days.sql · 2026-10-13 폐지 때 함수는 남겨 뒀다).
+//   문구는 옛 서버 알림과 같다 — 제목 「예약이 열렸습니다」 · 본문 「{매장} · {날짜} {시간} — 재구매 제한이 풀려 지금 예약하실 수 있습니다」
+//   (알림함 EN/JA 는 _notifL10nTitle/_notifL10nBody 가 이미 안다). 푸시는 i18n 세 벌을 같이 보낸다(send-push 가 기기 언어로 고른다).
+//   전 회원에게 알리고 싶으면 「티켓 오픈 알림 발송」 — 팝업이 그 길도 안내한다. 자동으로는 아무것도 보내지 않는다.
+function _tuRepurchaseMsg(t){
+  var p = ((typeof _tkFullDate === 'function' ? _tkFullDate(t) : (t.date || '')) || '').split('.');
+  var y = p.length === 3 ? parseInt(p[0], 10) : 0, mo = p.length === 3 ? parseInt(p[1], 10) : 0, dd = p.length === 3 ? parseInt(p[2], 10) : 0;
+  var time = String(t.time || '').trim();
+  var rest = (restaurantDB || []).find(function(r){ return String(r.id) === String(t.restId); });
+  function line(lang){
+    var nm = (typeof _tbRestName === 'function') ? (_tbRestName((rest && rest.name) || t.rest || '', t.restId, lang) || t.rest || '') : ((rest && rest.name) || t.rest || '');
+    var d = (y && typeof _tbDateStr === 'function') ? _tbDateStr(y, mo, dd, lang, true) : (t.date || '');
+    return nm + ' · ' + d + (time ? ' ' + time : '');
+  }
+  var T = { ko: '예약이 열렸습니다', en: 'Booking is open again', ja: '予約が再開されました' };
+  var B = { ko: ' — 재구매 제한이 풀려 지금 예약하실 수 있습니다', en: ' — the repurchase limit has lifted, you can book now', ja: ' — 再購入制限が解除され、今すぐ予約できます' };
+  return { title: T.ko, body: line('ko') + B.ko, url: '/?ticket=' + String(t.id),
+           i18n: { ko: { title: T.ko, body: line('ko') + B.ko }, en: { title: T.en, body: line('en') + B.en }, ja: { title: T.ja, body: line('ja') + B.ja } } };
+}
+async function _tuRepurchaseAskPush(t){
+  if(!window.sb) return;
+  var targets = [];
+  try {
+    var r = await window.sb.rpc('taam_repurchase_release_targets', { p_ticket_id: String(t.id) });
+    if(r.error) throw r.error;
+    targets = (r.data || []).filter(function(x){ return x && x.user_id; });
+  } catch(e){
+    showToast('⚠', '알림 대상을 못 셌습니다', '전 회원에게 보내려면 「티켓 오픈 알림 발송」을 쓰세요 · ' + String(e && e.message || '').slice(0, 60));
+    return;
+  }
+  var msg = _tuRepurchaseMsg(t), n = targets.length;
+  if(!n){
+    _tkAsk({ icon: '📣', title: '알림을 보낼 회원이 없습니다', body: _tkAskWhat(t),
+      note: '이 매장의 재구매 제한에 걸려 있던 회원(최근 방문·예정 · 이 회차 미보유)이 없습니다.\n전 회원에게 알리려면 「티켓 오픈 알림 발송」으로 보냅니다.',
+      okText: '티켓 오픈 알림 열기', okKind: 'go',
+      onOk: function(){ if(typeof openTicketBroadcastScreen === 'function') openTicketBroadcastScreen(t.id); } });
+    return;
+  }
+  var names = targets.slice(0, 5).map(function(x){ return x.display_name || '(이름 없음)'; }).join(', ') + (n > 5 ? ' 외 ' + (n - 5) + '명' : '');
+  _tkAsk({ icon: '📣', title: '회원 ' + n + '명에게 푸시를 보낼까요?', body: _tkAskWhat(t),
+    note: '재구매 제한에 걸려 있던 회원(이 매장 최근 방문·예정 · 이 회차 미보유)에게만 갑니다: ' + names
+        + '\n\n제목 「' + msg.title + '」\n' + msg.body
+        + '\n\n알림함에도 남고, 푸시를 끈 회원에겐 푸시가 가지 않습니다. 전 회원에게 알리려면 「티켓 오픈 알림 발송」을 쓰세요.',
+    okText: '알림 보내기', okKind: 'go',
+    onOk: function(){ _tuRepurchasePushSend(t, targets, msg); } });
+}
+var _tuRepurchasePushBusy = false;
+async function _tuRepurchasePushSend(t, targets, msg){
+  if(_tuRepurchasePushBusy || !window.sb) return;
+  _tuRepurchasePushBusy = true;
+  try {
+    var u = null; try { u = (await window.sb.auth.getUser()).data.user; } catch(_ue){}
+    var now = new Date().toISOString();
+    var rows = targets.map(function(x){
+      return { user_id: x.user_id, type: 'repurchase_released', kind: 'repurchase_released', title: msg.title, body: msg.body, message: msg.body, url: msg.url,
+               payload: { ticket_product_id: String(t.id), kind: 'repurchase_released', prev_visit: x.prev_visit || null, sent_by: (u && u.id) || null, sent_at: now } };
+    });
+    var inserted = 0;
+    for(var i = 0; i < rows.length; i += 200){
+      var ch = rows.slice(i, i + 200);
+      var ins = await window.sb.from('notifications').insert(ch);
+      if(ins.error) console.warn('[repurchase-push] notifications INSERT 에러:', ins.error.message); else inserted += ch.length;
+    }
+    var ok = 0, fail = 0;
+    for(var j = 0; j < targets.length; j += 5){
+      await Promise.all(targets.slice(j, j + 5).map(function(x){
+        return window.sb.functions.invoke('send-push', { body: { to: 'uid:' + x.user_id,
+          payload: { title: msg.title, body: msg.body, i18n: msg.i18n, url: msg.url, category: 'repurchase_released', tag: 'taam-rpopen-' + String(t.id) } } })
+          .then(function(pr){ if(pr && pr.error) fail++; else ok++; }).catch(function(){ fail++; });
+      }));
+    }
+    showToast('✓', '재구매 해제 알림 발송', '알림함 ' + inserted + '명 · 푸시 ' + ok + '명' + (fail ? ' (실패 ' + fail + ')' : ''));
+  } catch(e){ showToast('❌', '알림 발송 오류', String(e && e.message || '').slice(0, 80)); }
+  finally { _tuRepurchasePushBusy = false; }
+}
+window._tuRepurchaseAskPush = _tuRepurchaseAskPush; window._tuRepurchasePushSend = _tuRepurchasePushSend; window._tuRepurchaseMsg = _tuRepurchaseMsg;
 function _tuDoToggleSoldout(id){
   var t=ticketDB.find(function(x){return String(x.id)===String(id);});
   if(!t)return;
