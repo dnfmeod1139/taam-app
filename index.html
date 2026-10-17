@@ -7552,13 +7552,14 @@ function _plRenderPurpose(){
     return '<button type="button" onclick="payLinkPurpose(\'' + k + '\')" style="flex:1;padding:9px 6px;border-radius:10px;border:1.5px solid ' + (on ? '#1a1a18' : '#e0ddd8') + ';background:' + (on ? '#1a1a18' : '#fff') + ';color:' + (on ? '#fff' : '#666') + ';font-family:inherit;font-size:12px;font-weight:800;cursor:pointer;">' + lab + '</button>'; }).join('');
 }
 function payLinkPurpose(k){ _pl.purpose = k; _pl.override = false; _pl.price = null; _pl.cur = 'KRW'; _pl.member = null; _pl.v = {}; _pl.fxBy = {}; var r = document.getElementById('plResult'); if (r) r.style.display = 'none'; _plRenderPurpose(); _plRenderForm(); }   // 용도를 바꾸면 통화는 원화로 — 지난 용도의 외화·환율이 남아 막히지 않게
-function _plCollect(){ var v = _pl.v || {}; ['plName','plPhone','plPax','plAmount','plMemo','plFx','plTotal','plFee','plNote'].forEach(function(id){ var el = document.getElementById(id); if (el) v[id] = el.value; }); _pl.v = v; }   // 다시 그리기 전에 적어 둔 값을 거둔다(통화·회원을 바꿀 때 지워지던 것 · 적대 리뷰)
+function _plCollect(){ var v = _pl.v || {}; ['plName','plPhone','plPax','plAmount','plMemo','plFx','plTotal','plFee','plNote'].forEach(function(id){ var el = document.getElementById(id); if (el) v[id] = el.value; }); _pl.v = v;
+  var fxEl = document.getElementById('plFx'); if (fxEl && _pl.cur !== 'KRW') { _pl.fxBy = _pl.fxBy || {}; _pl.fxBy[_pl.cur] = fxEl.value; } }   // 다시 그리기 전에 적어 둔 값을 거둔다(통화·회원을 바꿀 때 지워지던 것 · 적대 리뷰) · 환율은 통화별로(회원 선택·해제 때도 — 3차)
 function _plV(id, dflt){ var v = _pl.v || {}; return (v[id] !== undefined && v[id] !== '') ? v[id] : dflt; }
 function _plInp(id, type, extra, val){ return '<input id="' + id + '" type="' + (type || 'text') + '" ' + (extra || '') + ' value="' + _plEsc(val == null ? '' : val) + '" style="width:100%;box-sizing:border-box;padding:9px 10px;border:1px solid #e0dcd4;border-radius:9px;font-family:inherit;font-size:14px;font-weight:700;color:#1a1a18;">'; }
 function _plLab(t){ return '<div style="font-size:10.5px;font-weight:700;color:#888;margin:10px 0 4px;">' + t + '</div>'; }
 function _plCurSeg(){ return '<div style="display:flex;gap:6px;">' + ['KRW', 'USD', 'JPY'].map(function(c){ var on = _pl.cur === c; return '<button type="button" onclick="payLinkCur(\'' + c + '\')" style="flex:1;padding:8px;border-radius:9px;border:1.5px solid ' + (on ? '#1a1a18' : '#e0ddd8') + ';background:' + (on ? '#1a1a18' : '#fff') + ';color:' + (on ? '#fff' : '#666') + ';font-family:inherit;font-size:12px;font-weight:800;cursor:pointer;">' + { KRW: '₩ 국내', USD: '$ 해외', JPY: '¥ 해외' }[c] + '</button>'; }).join('') + '</div>'
   + (_pl.cur !== 'KRW' ? _plLab('적용 환율 (1' + (_pl.cur === 'USD' ? '$' : '¥') + ' = ₩) — 설정의 적용환율이 기본값 · 이 링크에 못 박힙니다') + _plInp('plFx', 'text', 'inputmode="decimal"', ((_pl.fxBy || {})[_pl.cur]) || (_plFxDefault(_pl.cur) || '')) : ''); }
-function payLinkCur(c){ _plCollect(); var fxEl = document.getElementById('plFx'); if (fxEl && _pl.cur !== 'KRW') { _pl.fxBy = _pl.fxBy || {}; _pl.fxBy[_pl.cur] = fxEl.value; }   // 통화별로 적어 둔 환율을 기억한다
+function payLinkCur(c){ _plCollect();   // 통화별 환율은 _plCollect 가 기억한다
   _pl.cur = c; _pl.price = null; _pl.override = false; _plRenderForm(); }   // 통화를 바꾸면 금액 수정 상태도 푼다(입력칸이 숨은 채 막히던 것)
 function _plMemberBox(required){
   var m = _pl.member;
@@ -7665,8 +7666,10 @@ async function payLinkMemberSearch(){
   _pl.memberCache = {}; (r.data || []).forEach(function(u){ _pl.memberCache[u.id] = u; });
   res.innerHTML = (r.data || []).length ? (r.data || []).map(function(u){ return '<div onclick="payLinkMemberPick(\'' + _plEsc(u.id) + '\')" style="padding:7px 9px;border-bottom:1px solid #f0ece6;cursor:pointer;font-size:12.5px;"><b>' + _plEsc(u.display_name || '(이름 없음)') + '</b> <span style="color:#8a7b63;font-size:10.5px;">' + _plEsc(u.membership_tier || '') + '</span> <span style="color:#9a9486;font-size:11px;">' + _plEsc(u.phone || u.email || '') + '</span></div>'; }).join('') : '<div style="font-size:11px;color:#9a9486;padding:6px;">없습니다</div>';
 }
-function payLinkMemberPick(id){ var u = _pl.memberCache[id]; if (!u) return; _plCollect(); _pl.member = u; if (_pl.purpose === 'membership') { _pl.tier = (u.membership_tier === 'T') ? 'T' : 'M'; } _plRenderForm(); }
-function payLinkMemberClear(){ _plCollect(); _pl.member = null; _plRenderForm(); }
+function _plMemberSet(u){ var prev = _pl.member && _pl.member.display_name; _plCollect(); if (prev && _pl.v && _pl.v.plName === prev) delete _pl.v.plName;   // 앞 회원 이름으로 자동 채워진 칸은 입력값이 아니다 — 새 회원 이름(또는 빈 칸)으로
+  _pl.member = u || null; }
+function payLinkMemberPick(id){ var u = _pl.memberCache[id]; if (!u) return; _plMemberSet(u); if (_pl.purpose === 'membership') { _pl.tier = (u.membership_tier === 'T') ? 'T' : 'M'; } _plRenderForm(); }
+function payLinkMemberClear(){ _plMemberSet(null); _plRenderForm(); }
 async function payLinkCreate(){
   if (_pl.busy) return;
   var g = document.getElementById('plGo'), p = {}, purpose = _pl.purpose, val = function(id){ return ((document.getElementById(id) || {}).value || '').trim(); };
@@ -7759,7 +7762,7 @@ async function payLinkList(){
     if (c.user_id && _pl.isSuper) acts += '<button type="button" onclick="payLinkClose();openMemberLedger();setTimeout(function(){mlOpen(\'' + _plEsc(c.user_id) + '\')},60)" style="' + _plBtn() + '">원장</button>';
     return '<div style="padding:9px 2px;border-bottom:1px solid #f4efe6;">'
       + '<div style="display:flex;gap:8px;align-items:center;"><span style="font-size:10px;font-weight:800;color:' + pu[1] + ';">' + pu[0] + '</span><span style="flex:1;font-size:13px;font-weight:800;color:#1a1a18;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + _plEsc(c.title || '') + ' · ' + _plEsc(who) + '</span><span style="font-size:10.5px;font-weight:800;color:' + st[1] + ';background:' + st[2] + ';border-radius:7px;padding:2px 7px;">' + st[0] + '</span></div>'
-      + '<div style="display:flex;gap:8px;align-items:center;margin-top:3px;"><span style="flex:1;font-size:11px;color:#8a8580;">' + _plMoney(cur, c.pay_amount) + (cur !== 'KRW' ? ' (₩' + Number(c.amount_krw || 0).toLocaleString() + ')' : '') + ' · ' + d + (c.applied_note && /failed/.test(c.applied_note) ? ' · <span style="color:#B23A2E;">⚠ 연회비 기록 실패</span>' : '') + '</span>' + acts + '</div>'
+      + '<div style="display:flex;gap:8px;align-items:center;margin-top:3px;"><span style="flex:1;font-size:11px;color:#8a8580;">' + _plMoney(cur, c.pay_amount) + (cur !== 'KRW' ? ' (₩' + Number(c.amount_krw || 0).toLocaleString() + ')' : '') + ' · ' + d + (c.applied_note && /failed/.test(c.applied_note) ? ' · <span style="color:#B23A2E;" title="' + _plEsc(c.fail_note || '') + '">⚠ 연회비 기록 실패' + (c.fail_note ? ' — ' + _plEsc(String(c.fail_note).slice(0, 60)) : '') + '</span>' : '') + (c.note ? ' · <span style="color:#6b645b;">메모: ' + _plEsc(String(c.note).slice(0, 40)) + '</span>' : '') + '</span>' + acts + '</div>'
       + '</div>';
   }).join('');
 }
@@ -19117,8 +19120,10 @@ async function loadPurchase(){
     // 🆕 2026.08: 운영용 행(초대 좌석 홀드 INVH- / 캘린더 수동 연동 MAN-)은 개인 구매내역에서 제외
     // 🔧 2026-09-29 정산 결제 좌석(KSK-)·링크 초대(LINK-)도 운영용 행이다 — user_id 가 회차 작성자(어드민)라 두면
     //   어드민의 「내 티켓」에 남의 자리가 취소·환불 버튼과 함께 떴다 (리뷰 지적).
-    purchaseHistory = (rows || []).filter(r => !(r.extra_data && (r.extra_data.inviteHold || r.extra_data.manualEntry || r.extra_data.kashikiri || r.extra_data.linkInvite))
-                                          && !/^(KSK|LINK)-/.test(String(r.purchase_id || ''))).map(r => ({
+    // 🆕 2026-10-18 결제 링크로 회원을 골라 결제된 LINK- 행(extra_data.memberUid = 이 회원)은 **그 회원의 티켓**이다 — 구매내역에 보인다(취소는 TAAM 에 문의 · 아래 카드 렌더).
+    purchaseHistory = (rows || []).filter(r => { var _e = r.extra_data || {}, _mem = !!_e.memberUid, _pid = String(r.purchase_id || '');
+                                          return !(_e.inviteHold || _e.manualEntry || _e.kashikiri || (_e.linkInvite && !_mem))
+                                              && !/^KSK-/.test(_pid) && !(/^LINK-/.test(_pid) && !_mem); }).map(r => ({
       id: r.ticket_product_id || '',
       restId: r.restaurant_id || '',
       rest: r.restaurant_name || '',
@@ -27130,6 +27135,9 @@ window._repReleasedByAge = _repReleasedByAge;
 //   ② 같은 날 같은 시간대(점심 <16:00 ≤ 저녁)에 다른 매장(또는 같은 매장 다른 회차) → TIME_CONFLICT
 //      시각을 모르는 쪽이 있으면 겹치는 것으로 본다(막는 쪽이 기본).
 //   운영 행(KSK-/LINK-/MAN-/INVH-)과 취소·만료 행은 세지 않는다. 지금 잡고 있는 내 홀드(_tkSeatHoldId)도 뺀다.
+//   ⚠ 서버 _taam_ticket_is_ops(20261018_pay_link.sql) 와 **같은 규칙**이어야 한다 — 어긋나면 앱이 통과시킨 것을 서버가 거절해
+//     초대 결제(riPay)에서 예치금이 먼저 빠졌다 돌아온다. 결제 링크로 회원 소유가 된 LINK- 행(extra_data.memberUid)은 그 회원의 예약으로 **센다**(2026-10-18) ·
+//     회원 행(PAYH-/PAYC-)은 extra_data 에 운영 플래그가 있어도 회원 행이다.
 // ═══════════════════════════════════════════════════════════════
 function _tkTimeSlot(str){
   var s = String(str == null ? '' : str).trim(); if(!s) return null;
@@ -27142,10 +27150,14 @@ function _tkTimeSlot(str){
 }
 function _tkIsOpsRow(h){
   if(!h) return false;
-  if(/^(KSK|LINK|MAN|INVH)-/.test(String(h.purchaseId || ''))) return true;
-  var e = h.extra_data || {};
-  return !!(e.manualEntry || e.inviteHold || e.kashikiri || e.linkInvite);
+  var pid = String(h.purchaseId || ''), e = h.extra_data || {};
+  if(/^PAY/.test(pid)) return false;                                    // 회원 행(PAYH-/PAYC-)은 플래그가 있어도 회원 행 — 서버와 같다
+  var member = !!e.memberUid;                                            // 결제 링크로 회원 소유가 된 LINK- 행은 그 회원의 예약 (2026-10-18)
+  if(/^(KSK|MAN|INVH)-/.test(pid)) return true;
+  if(/^LINK-/.test(pid)) return !member;
+  return !!(e.manualEntry || e.inviteHold || e.kashikiri || (e.linkInvite && !member));
 }
+window._tkIsOpsRow = _tkIsOpsRow;
 function _tkLiveRows(rows){
   return (rows || []).filter(function(h){
     return h && !_repIsCancelled(h) && String(h.rawStatus || '') !== 'expired' && !_tkIsOpsRow(h);
@@ -29715,7 +29727,12 @@ function ticketHistRender(idx){
     var paxLabel = h.pax + (_thIsEn ? (h.pax===1?' guest':' guests') : (_thIsJa ? '名' : '명'));
     // 방문 예정일 때만 취소 버튼 (기능 그대로)
     var cancelBtn = '';
-    if(s === 'upcoming' && h.purchaseId){
+    var _isLinkPaid = /^LINK-/.test(String(h.purchaseId || ''));   // 🆕 2026-10-18 결제 링크(카드 · 토스)로 산 티켓 — 환불은 카드로 돌아가야 하므로 앱의 예치금 환불 경로(openCancelTicketModal)를 열지 않는다
+    if(s === 'upcoming' && h.purchaseId && _isLinkPaid){
+      cancelBtn = '<div style="padding:12px 16px 16px;font-size:12px;line-height:1.55;color:#8C8475;text-align:center;">'
+        + (_thIsEn ? 'Paid by card via payment link · to cancel, contact TAAM concierge' : (_thIsJa ? '決済リンク（カード）でのご購入 · キャンセルは TAAM コンシェルジュへ' : '결제 링크(카드)로 구매한 티켓 · 취소·환불은 TAAM 컨시어지에 문의해 주세요'))
+        + '</div>';
+    } else if(s === 'upcoming' && h.purchaseId){
       var refundPreview = (typeof calculateTicketRefund === 'function')
         ? calculateTicketRefund(h, r, new Date(), false) : null;
       var btnLabel = _thIsEn ? 'Request cancel' : (_thIsJa ? 'キャンセル申請' : '구매 취소 요청');
@@ -45228,7 +45245,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.17-d';
+var TAAM_WEB_BUILD = '2026.10.17-e';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){

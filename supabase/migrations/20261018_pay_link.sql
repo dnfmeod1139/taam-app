@@ -20,6 +20,9 @@
 -- 2차(적대 리뷰 62 에이전트 → 확정 15 · 전부 반영): 매장 어드민이 회원 uid 를 붙이던 구멍(슈퍼어드민만) · 회원 소유가 된 LINK- 행이 중복 가드에서 빠지던 것(memberUid 면 센다 ·
 --   만들 때 같은 회차/같은 시간대 선검사 · 이전이 가드에 막히면 결제는 살리고 소유자만 보류) · 어드민 메모·실패 원문이 회원에게 읽히던 것(kashikiri_charge_admin 표로) ·
 --   이름 없는 회원 · 링크 초대 직접 경로의 purpose · 기록 실패 때 알림 문구.
+-- 3차(2차 수정만 30 에이전트 → 확정 7): 선검사가 가드보다 엄격(빈 visit_time 을 회차로 보충하지 않아 점심+저녁 링크를 거절) → 가드와 같은 식(_taam_pu_visit_date · taam_time_slot · 회차 보충) ·
+--   이전 실패 폴백이 가드 거절 문구(다른 매장·날짜·구매 id)를 tickets.extra_data 에 적어 매장 어드민에게 새던 것 → 코드만(원문은 kashikiri_charge_admin.fail_note) ·
+--   회원 행(PAYH-/PAYC-)이 extra_data 운영 플래그로 중복 가드를 비켜 가던 옛 구멍(20261014) → PAY 접두어는 언제나 회원 행. 앱 _tkIsOpsRow 도 같은 규칙으로.
 -- 회귀: bash sql/_test/t_pay_link.sh
 -- ═══════════════════════════════════════════════════════════════
 
@@ -67,16 +70,21 @@ create policy kca_super on public.kashikiri_charge_admin for all to authenticate
 grant select on public.kashikiri_charge_admin to authenticated;
 
 -- 중복 가드의 운영 행 판정 — 회원 소유가 된 LINK- 행(결제 뒤 memberUid)은 그 회원의 예약으로 센다 (20261014 판은 LINK- 를 전부 뺐다)
+--   ⚠ 회원 행(PAYH- 홀드 · PAYC- 카드 확정)은 extra_data 에 운영 플래그(kashikiri 등)가 있어도 회원 행이다 — 회원 세션이 자기 홀드에
+--     플래그를 넣어 중복·시간대 가드를 통째로 비켜 가던 구멍(20261014 부터 · 3차 리뷰). 회원의 INSERT 는 PAYH- 로만 허용되므로(INSERT 가드) 이 한 줄로 닫힌다.
+--   앱의 거울 _tkIsOpsRow(index.html) 와 같은 규칙을 유지한다 — 어긋나면 앱이 통과시킨 초대 결제에서 예치금이 먼저 빠졌다 돌아온다.
 create or replace function public._taam_ticket_is_ops(p_purchase_id text, p_extra jsonb)
 returns boolean
 language sql immutable
 as $$
-  select (coalesce(p_purchase_id, '') ~ '^(KSK|MAN|INVH)-'
-          or (coalesce(p_purchase_id, '') ~ '^LINK-' and coalesce(nullif(p_extra ->> 'memberUid', ''), '') = '')
-          or coalesce(p_extra ->> 'manualEntry', '') in ('true','1')
-          or coalesce(p_extra ->> 'inviteHold',  '') in ('true','1')
-          or coalesce(p_extra ->> 'kashikiri',   '') in ('true','1')
-          or (coalesce(p_extra ->> 'linkInvite',  '') in ('true','1') and coalesce(nullif(p_extra ->> 'memberUid', ''), '') = ''))
+  select case when coalesce(p_purchase_id, '') ~ '^PAY' then false
+         else (coalesce(p_purchase_id, '') ~ '^(KSK|MAN|INVH)-'
+               or (coalesce(p_purchase_id, '') ~ '^LINK-' and coalesce(nullif(p_extra ->> 'memberUid', ''), '') = '')
+               or coalesce(p_extra ->> 'manualEntry', '') in ('true','1')
+               or coalesce(p_extra ->> 'inviteHold',  '') in ('true','1')
+               or coalesce(p_extra ->> 'kashikiri',   '') in ('true','1')
+               or (coalesce(p_extra ->> 'linkInvite',  '') in ('true','1') and coalesce(nullif(p_extra ->> 'memberUid', ''), '') = ''))
+         end
 $$;
 
 -- 멤버십 금액 설정 — 있는 값은 건드리지 않는다 (deposit_amount 10,125,000 · annual_fee_cash 1,125,000 은 2026-09-02 시드)
@@ -136,6 +144,7 @@ declare
   v_cur text; v_fx numeric; v_pay numeric; v_krw bigint; v_fee numeric; v_total numeric; v_fee_krw bigint;
   v_tier text; v_kind text; v_price jsonb; v_over boolean := false; v_note text;
   v_name text; v_phone text; v_title text; v_sub text; v_days int; v_tp public.ticket_products%rowtype;
+  v_vdate date; v_vslot text;
 begin
   if v_uid is null then raise exception '로그인이 필요합니다' using errcode = '42501'; end if;
   begin v_super := coalesce(public._taam_uid_is_super(), false); exception when others then v_super := false; end;
@@ -150,21 +159,32 @@ begin
         raise exception 'MEMBER_NOT_FOUND' using errcode = 'P0002';
       end if;
       -- 「한 회원 = 한 회차 1건 · 같은 날 같은 시간대 1건」을 만들 때 먼저 본다 (결제 뒤 소유 이전이 가드에 막히지 않게)
+      --   가드(taam_guard_purchase_unique · 20261014)와 **같은 식**으로 센다 — 날짜 파서 _taam_pu_visit_date · 시간대 taam_time_slot · 빈 날짜·시각은 회차(ticket_products)로 보충.
+      --   (문자열 '16:00' 비교에 빈 visit_time 을 무조건 겹침으로 보던 선검사는 가드가 허락하는 점심+저녁 링크를 거절했다 — 3차 리뷰)
       if exists (select 1 from public.tickets k where k.user_id = v_user and k.ticket_product_id::text = p->>'ticket_id'
                    and coalesce(k.status,'') not in ('cancelled','canceled','expired') and not public._taam_ticket_is_ops(k.purchase_id, k.extra_data)) then
         raise exception 'DUPLICATE_PURCHASE' using errcode = '23505';
       end if;
-      if exists (select 1 from public.tickets k where k.user_id = v_user and k.reservation_date = p->>'visit_date'
-                   and coalesce(k.status,'') not in ('cancelled','canceled','expired') and not public._taam_ticket_is_ops(k.purchase_id, k.extra_data)
-                   and ((nullif(p->>'visit_time','') is null or nullif(btrim(coalesce(k.visit_time,'')),'') is null)
-                        or ((p->>'visit_time') < '16:00') = (btrim(k.visit_time) < '16:00'))) then
+      select * into v_tp from public.ticket_products where id::text = p->>'ticket_id';
+      v_vdate := coalesce(public._taam_pu_visit_date(p->>'visit_date'), public._taam_pu_visit_date(v_tp.date));
+      v_vslot := public.taam_time_slot(coalesce(nullif(btrim(coalesce(p->>'visit_time','')),''), nullif(btrim(coalesce(v_tp.time,'')),'')));
+      if v_vdate is not null and exists (
+           select 1 from public.tickets k
+             left join public.ticket_products tp on tp.id::text = k.ticket_product_id::text
+            where k.user_id = v_user
+              and coalesce(k.status,'') not in ('cancelled','canceled','expired')
+              and not public._taam_ticket_is_ops(k.purchase_id, k.extra_data)
+              and coalesce(public._taam_pu_visit_date(k.reservation_date), public._taam_pu_visit_date(tp.date)) = v_vdate
+              and ( v_vslot is null
+                    or public.taam_time_slot(coalesce(nullif(btrim(coalesce(k.visit_time,'')),''), tp.time)) is null
+                    or public.taam_time_slot(coalesce(nullif(btrim(coalesce(k.visit_time,'')),''), tp.time)) = v_vslot )) then
         raise exception 'TIME_CONFLICT' using errcode = '23505';
       end if;
     end if;
     v_res := public.taam_link_invite_create(p->>'ticket_id', p->>'name', p->>'phone', (p->>'pax')::int, p->>'currency',
                                             nullif(p->>'fx','')::numeric, p->>'visit_date', nullif(p->>'visit_time',''));
     v_cid := (v_res->>'charge_id')::uuid;
-    select * into v_tp from public.ticket_products where id::text = p->>'ticket_id';
+    if v_tp.id is null then select * into v_tp from public.ticket_products where id::text = p->>'ticket_id'; end if;
     update public.kashikiri_charges
        set purpose = 'ticket',
            title = coalesce(v_tp.rest_name, '티켓'),
@@ -390,12 +410,18 @@ begin
     exception when others then
       -- 소유자 이전이 중복 가드(DUPLICATE_PURCHASE/TIME_CONFLICT)에 막힌 경우 — 돈은 이미 승인됐다. 좌석은 확정하고 소유자만 보류한 뒤 슈퍼어드민에게 알린다
       raise warning '[link_invite] 소유자 이전 실패 (좌석은 확정 · 소유자 보류): % %', sqlstate, sqlerrm;
+      -- tickets.extra_data 는 그 매장 어드민도 읽는다 — 가드 거절 문구(다른 매장·날짜·구매 id)는 싣지 않고 **코드만**. 원문은 슈퍼어드민만 보는 kashikiri_charge_admin.fail_note 와 알림에 (3차 리뷰)
       update public.tickets
          set status = 'active',
              buyer_name = coalesce(nullif(new.payer_name,''), buyer_name),
              extra_data = coalesce(extra_data,'{}'::jsonb)
-                          || jsonb_build_object('paidAt', coalesce(new.approved_at, now()), 'paymentKey', new.payment_key, 'memberUidPending', new.user_id, 'ownerTransferError', left(sqlerrm, 120))
+                          || jsonb_build_object('paidAt', coalesce(new.approved_at, now()), 'paymentKey', new.payment_key, 'memberUidPending', new.user_id,
+                                                'ownerTransferError', case when sqlerrm ~ '^[A-Z_]+:' then split_part(sqlerrm, ':', 1) else sqlstate end)
        where status = 'hold' and purchase_id like 'LINK-%' and extra_data->>'chargeId' = new.id::text;
+      begin
+        insert into public.kashikiri_charge_admin (charge_id, fail_note) values (new.id, '소유자 이전 실패: ' || left(sqlerrm, 300))
+        on conflict (charge_id) do update set fail_note = excluded.fail_note;
+      exception when others then null; end;
       begin
         insert into public.notifications (user_id, type, title, body, url, payload)
         select p.id, 'kashikiri_paid', '⚠ 결제 링크 소유자 이전 실패', coalesce(new.title,'티켓') || ' · ' || coalesce(new.label,'') || ' — 결제는 확정됐지만 회원에게 붙이지 못했습니다 (' || left(sqlerrm, 80) || '). 캘린더에서 확인하세요', '/',
@@ -598,9 +624,11 @@ union all select '⑥ 트리거 — 연회비 자동 기록 · 좌석(회차 없
              and exists (select 1 from pg_proc where oid = to_regproc('public.taam_kashikiri_paid_notify') and prosrc like '%멤버십 결제 완료%') then '✅' else '❌' end
 union all select '⑦ anon 은 공개 RPC 둘만', case when has_function_privilege('anon','public.taam_pay_link_create(text,jsonb)','execute') or has_function_privilege('anon','public.taam_pay_link_list(integer,uuid,text)','execute') or has_function_privilege('anon','public.taam_membership_price(text,text,text)','execute') then '❌ anon 이 부를 수 있음'
             when has_function_privilege('anon','public.taam_kashikiri_charge_public(text)','execute') and has_function_privilege('anon','public.taam_kashikiri_order_start(text,text)','execute') then '✅' else '❌ 공개 RPC 권한 빠짐' end
-union all select '⑧ 의존 함수 존재 (taam_link_invite_create · _taam_ksk_money · taam_admin_push · membership_fees 표)',
-       case when to_regproc('public.taam_link_invite_create') is not null and to_regproc('public._taam_ksk_money') is not null and to_regproc('public.taam_admin_push') is not null and to_regclass('public.membership_fees') is not null then '✅' else '❌ 빠진 것 있음 — 20260929_link_invite · 20261013_kashikiri_paid_notify · 20261015_membership_fees 를 먼저' end
-union all select '⑧-b 어드민 메모 표 · purpose 기본 트리거 · 운영 행 판정(memberUid)',
+union all select '⑧ 의존 함수 존재 (taam_link_invite_create · _taam_ksk_money · taam_admin_push · membership_fees 표 · 중복 가드 _taam_pu_visit_date · taam_time_slot)',
+       case when to_regproc('public.taam_link_invite_create') is not null and to_regproc('public._taam_ksk_money') is not null and to_regproc('public.taam_admin_push') is not null and to_regclass('public.membership_fees') is not null
+             and to_regproc('public._taam_pu_visit_date') is not null and to_regproc('public.taam_time_slot') is not null then '✅' else '❌ 빠진 것 있음 — 20260929_link_invite · 20261013_kashikiri_paid_notify · 20261015_membership_fees · 20261014_purchase_uniqueness 를 먼저' end
+union all select '⑧-b 어드민 메모 표 · purpose 기본 트리거 · 운영 행 판정(memberUid LINK- 는 회원 행 · PAYH- 는 플래그가 있어도 회원 행)',
        case when to_regclass('public.kashikiri_charge_admin') is not null and exists (select 1 from pg_trigger where tgname='trg_charge_purpose_default' and not tgisinternal)
-             and not public._taam_ticket_is_ops('LINK-x', '{"memberUid":"u"}'::jsonb) and public._taam_ticket_is_ops('LINK-x', '{}'::jsonb) then '✅' else '❌' end
+             and not public._taam_ticket_is_ops('LINK-x', '{"memberUid":"u"}'::jsonb) and public._taam_ticket_is_ops('LINK-x', '{}'::jsonb)
+             and not public._taam_ticket_is_ops('PAYH-x', '{"kashikiri":true}'::jsonb) and public._taam_ticket_is_ops('KSK-x', '{}'::jsonb) then '✅' else '❌' end
 union all select '⑨ 기존 청구 purpose 분류', (select count(*) from public.kashikiri_charges where purpose='ticket')::text || ' 티켓(링크 초대) · ' || (select count(*) from public.kashikiri_charges where purpose='custom')::text || ' 정산';

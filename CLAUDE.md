@@ -243,7 +243,7 @@ DB 값은 `'A'` 그대로고 **이름만** 「게스트 회원」이다. 값을 
 
 | 코드 | 규칙 | 예외 |
 |---|---|---|
-| `DUPLICATE_PURCHASE` | 같은 `user_id` 가 같은 `ticket_product_id` 의 살아 있는 행(취소·expired 아님, **hold 포함**)을 이미 가지면 거부 | 운영 행 KSK-/LINK-/MAN-/INVH-(및 extra_data manualEntry·inviteHold·kashikiri·linkInvite) — user_id 가 어드민이라 서로 부딪힌다. **INV-(확정 초대)는 회원 것이라 센다.** 슈퍼어드민·service_role 도 예외 아님 |
+| `DUPLICATE_PURCHASE` | 같은 `user_id` 가 같은 `ticket_product_id` 의 살아 있는 행(취소·expired 아님, **hold 포함**)을 이미 가지면 거부 | 운영 행 KSK-/MAN-/INVH-(및 extra_data manualEntry·inviteHold·kashikiri) — user_id 가 어드민이라 서로 부딪힌다. **LINK- 는 `extra_data.memberUid` 가 없을 때만**(결제 전 홀드·비회원) 예외 — 결제 링크로 회원 소유가 되면 그 회원의 예약으로 **센다**(2026-10-18 · `_taam_ticket_is_ops` 20261018 판). **회원 행(PAYH-/PAYC-)은 플래그가 있어도 회원 행**(3차). **INV-(확정 초대)는 회원 것이라 센다.** 슈퍼어드민·service_role 도 예외 아님 |
 | `TIME_CONFLICT` | 같은 날(`_taam_pu_visit_date`) 같은 시간대(`taam_time_slot`: **16:00 전 점심 / 16:00 부터 저녁**)의 살아 있는 행이 있으면 거부 — 다른 매장이든 같은 매장 다른 회차든 | 시각을 모르는 쪽이 있으면 **겹치는 것으로**(막는 쪽이 기본). 날짜·시각이 빈 행(toss-confirm 폴백 INSERT)은 `ticket_products.date/time` 으로 보충 |
 
 - **회원 세션이 남의 user_id 로 넣는 행은 이 가드가 보지 않는다**(`auth.uid()` 와 다르면 return) — 바로 뒤 소유권 가드가 42501 로 끊는다. 먼저 보면 거절 문구에
@@ -309,7 +309,7 @@ DB 값은 `'A'` 그대로고 **이름만** 「게스트 회원」이다. 값을 
 
 | 용도 | 입력 | 금액 | 결제되면 |
 |---|---|---|---|
-| 🎫 티켓 좌석 | 회차 · 이름 · 인원 · 통화 · (회원 선택) | 서버 (식사+대행+주류)×인원 — `taam_link_invite_create` 에 위임(좌석 홀드 · 매장 어드민 허용) | 홀드 → active. **회원을 골랐으면 그 회원의 티켓**(`taam_link_invite_on_charge` 가 user_id·buyer_name 이전 · LINK- 는 중복 가드 예외) |
+| 🎫 티켓 좌석 | 회차 · 이름 · 인원 · 통화 · (회원 선택) | 서버 (식사+대행+주류)×인원 — `taam_link_invite_create` 에 위임(좌석 홀드 · 매장 어드민 허용) | 홀드 → active. **회원을 골랐으면 그 회원의 티켓**(`taam_link_invite_on_charge` 가 user_id·buyer_name 이전 + `extra_data.memberUid` · 그 뒤로는 중복 가드가 **그 회원의 예약으로 센다** · 회원 구매내역에도 보인다 — 취소 버튼 대신 「TAAM 에 문의」(카드 환불은 결제 링크 목록의 「환불」)) |
 | 💳 멤버십 | 회원(필수) · M/T · 가입/갱신 · 통화 · 환율 | `taam_membership_price` = `membership_settings`(국내 M deposit_amount+annual_fee_cash 11,250,000 / T t_total_krw 3,150,000 · 해외 M $9,900 / T $3,000 · 갱신은 연회비만). 바꾸면 **사유 메모 필수**(`OVERRIDE_NOTE_REQUIRED`) · JPY 는 규정이 없어 직접 입력 | `membership_fees` **자동 기록**(link · 외화·환율 · source `pay_link` · source_ref 청구 id) — **예치금 부여는 사람이**(2026-10-17 결정) · 알림 「💳 멤버십 결제 완료 … → 예치금 부여 ₩… 필요」 · 목록의 「예치금 부여」가 부여 화면을 채운다(`payLinkGrant`) · 환불되면 자동 기록 삭제 |
 | 💸 자유 금액 | 이름 · 통화 · 금액 · 제목(메모) · (회원) | 어드민 입력 | 알림 「💳 결제 완료」 |
 
@@ -324,7 +324,13 @@ DB 값은 `'A'` 그대로고 **이름만** 「게스트 회원」이다. 값을 
   매장 어드민은 티켓 용도만(자기 매장 회차만 · 대관 버튼 없음). `_taamBusyNow` 목록에 `payLinkPopup`. 결제 링크 URL 은 서버가 돌려주는 값(`taam-app.vercel.app/pay/?t=`).
 - **2차(2026-10-18 적대 리뷰 62 에이전트 → 확정 15 · 전부 반영).** ① 매장 어드민이 임의 회원 uid 를 티켓 링크에 붙여 결제 뒤 그 회원 티켓을 만들 수 있었다 → 회원 지정은 슈퍼어드민만(존재 검사는 권한 뒤). ② 회원 소유가 된 LINK- 행이 중복 가드의 운영 행 예외에 들어 같은 회차를 또 살 수 있었다 → `_taam_ticket_is_ops` 가 memberUid 있는 LINK- 를 회원 행으로 세고, 만들 때 같은 회차/같은 시간대를 먼저 보며(DUPLICATE_PURCHASE/TIME_CONFLICT), 결제 뒤 소유자 이전이 가드에 막히면 **결제·좌석은 확정하고 소유자만 보류**(`memberUidPending` · ⚠ 알림). ③ 어드민 메모·실패 원문·만든 어드민이 회원이 읽는 청구 행(kc_mine)에 있었다 → `kashikiri_charge_admin` 표(슈퍼어드민 RLS)로. ④ 이름 없는 회원 label NOT NULL. ⑤⑥ 부여 화면 채우기 — 외화 센트(100배 위험)·기준율 없음(₩ 칸에 외화 숫자)이면 금액을 비우고 안내. ⑦ /pay 가 옛 정산 청구(purpose custom 백필·회차 있음)를 회차 없는 결제로 그렸다 → `event_date` 로만 판정. ⑧ 실패 사유 줄 재번역. ⑨ 통화·회원 바꿀 때 입력값이 지워지고 티켓 환율이 기본값으로 돌아갔다 → 값 거두기(`_plCollect`)·통화별 환율 기억. ⑩ 금액 수정 뒤 통화 바꾸면 입력칸 숨은 채 막힘 → override 해제. ⑪ 원장 버튼에 이름을 onclick 문자열로 넣어 아포스트로피에 깨짐 → uid 만 넘기고 화면이 읽는다. ⑫ 금액 조회 경주 → 순번. ⑬ 링크 초대 직접 경로의 purpose → BEFORE INSERT 트리거. ⑭ 기록 실패 때 완료 알림 문구. ⑮ 픽스처 FK.
   기각 4(부분 환불 때 기록 삭제 · 회원 티켓 링크의 /pay 환율 줄(pre) · mark_paid_v2 pending 미검사(pre) · 확정 뒤 재조회 실패 폴백).
-- 회귀: `bash sql/_test/t_pay_link.sh`(45건 — 금액 규칙 · 세 용도 · 위임 · 권한(매장 어드민 회원 지정 거부) · 공개 RPC · 결제→기록·알림 · 환불→기록 삭제 · 회원 소유 이전 · 중복 선검사 · 이전 실패 보류 · 기록 실패 경로 · 어드민 메모 표) · 스크래치 `paylink.js`(76건 · 화면) · `paypage.js`(35건 · /pay 네 용도 + 옛 정산 청구 + 실패 사유 재번역).
+- **3차(2026-10-18 · 2차 수정만 30 에이전트 → 확정 7 · 전부 반영).** ① **앱의 운영 행 판정 `_tkIsOpsRow` 가 서버 새 규칙과 어긋났다** — 서버만 memberUid LINK- 를 회원 행으로 세게 바꿔, 그 회원이 같은 회차 초대를 `riPay` 로 결제하면
+  앱 선검사(`_tkServerPurchaseConflict`)는 통과시키고 서버가 거절해 **예치금이 먼저 빠졌다 되돌아오는** 모양이 됐다(20261014 머리말이 경고한 바로 그 경로) → 앱도 같은 규칙(memberUid LINK- 는 회원 행 · PAY* 는 언제나 회원 행) + 회원 구매내역에 그 티켓이 보이게(종전엔 LINK- 를 통째로 뺐다 · 취소 버튼은 「TAAM 에 문의」로 — 카드 환불이라 앱의 예치금 환불 경로를 타면 안 된다).
+  ② 선검사가 가드보다 엄격(기존 행 visit_time 이 비면 무조건 겹침 → 점심+저녁 링크 거절) → 가드와 같은 식(`_taam_pu_visit_date`·`taam_time_slot`·회차 보충 · ⑧ 존재 검사에 둘 추가). ③ 이전 실패 폴백이 가드 거절 문구(다른 매장·날짜·구매 id)를 `tickets.extra_data` 에 적어 **매장 어드민에게 샜다** → 코드만(`ownerTransferError`='DUPLICATE_PURCHASE'), 원문은 `kashikiri_charge_admin.fail_note`.
+  ④⑤ ⑨가 덜 닫혔다 — 회원 선택·「바꾸기」때 환율이 설정 기본값으로(통화 전환만 닫혔었다) → `_plCollect` 가 통화별 환율을 기억 · 앞 회원 이름으로 자동 채워진 「받는 사람 이름」이 다른 회원 링크에 실렸다 → `_plMemberSet` 이 자동 채움을 가려낸다. ⑥ 문서 세 줄(「LINK- 는 중복 가드 예외」)을 코드와 맞춤.
+  기각 2 중 하나는 고쳤다: **회원이 자기 PAYH- 홀드의 extra_data 에 `kashikiri:true` 를 넣으면 중복·시간대 가드를 통째로 비켜 갔다**(20261014 부터 · pre) → `_taam_ticket_is_ops` 가 PAY 접두어는 언제나 회원 행(회원 INSERT 는 PAYH- 로만 허용되므로 이 한 줄로 닫힌다). 목록 줄에 어드민 메모·실패 원문도 보인다.
+  남은 것(의도적으로 안 건드림): 방문 리마인드(`sql/visit_reminder.sql`)·멤버십 시작일(`taam_member_start`)은 LINK- 를 접두어로 통째로 빼므로 **회원 소유 LINK- 티켓은 리마인드가 안 가고 첫 구매로 안 센다** — 둘 다 라이브 함수라 별도 수리로.
+- 회귀: `bash sql/_test/t_pay_link.sh`(48건 — 금액 규칙 · 세 용도 · 위임 · 권한(매장 어드민 회원 지정 거부) · 공개 RPC · 결제→기록·알림 · 환불→기록 삭제 · 회원 소유 이전 · 중복 선검사(가드와 같은 식 · 실제 가드 설치) · 이전 실패 보류(실제 가드 · 코드만) · PAYH- 플래그 구멍 · 기록 실패 경로 · 어드민 메모 표) · 스크래치 `paylink.js`(81건 · 화면 · 3차 환율·이름·메모) · `dupguard.js`(21건 · 운영 행 판정·구매내역 카드) · `paypage.js`(35건 · /pay 네 용도 + 옛 정산 청구 + 실패 사유 재번역).
 
 ### 링크 초대 — 비회원·해외 손님을 티켓 회차에 태우는 길 (2026-09-29)
 
@@ -740,7 +746,7 @@ Apple 은 iPad 와 iPhone **두 기기로 심사**하므로(리뷰 노트에 명
 | `profiles.role` | `trg_taam_guard_profile_role(_ins)` | 자기 승격 차단. 허용 이메일만 |
 | `membership_tier` | `trg_taam_guard_membership_tier` | 비어 있을 때 **자기 초대코드 값으로만** 1회. M 만료일은 서버가 365일로 |
 | 티켓 등급 제한 | `trg_taam_guard_ticket_tier` | `min_tier` 미달 구매 차단. 슈퍼어드민·초대·수동입력만 예외 |
-| 같은 회차 중복 · 같은 날 같은 시간대 | `trg_taam_guard_ticket_unique` | 한 회원 = 한 회차 1건(hold 포함) · 같은 날 점심/저녁 각 1건. 운영 행(KSK-/LINK-/MAN-/INVH-)만 예외, 슈퍼어드민·service_role 도 적용 (2026-10-13, 위 「한 회원 = 한 회차 1건」) |
+| 같은 회차 중복 · 같은 날 같은 시간대 | `trg_taam_guard_ticket_unique` | 한 회원 = 한 회차 1건(hold 포함) · 같은 날 점심/저녁 각 1건. 운영 행(KSK-/MAN-/INVH- · LINK- 는 memberUid 없을 때만)만 예외 · PAYH-/PAYC- 는 플래그가 있어도 회원 행, 슈퍼어드민·service_role 도 적용 (2026-10-13, 위 「한 회원 = 한 회차 1건」 · 운영 행 판정은 2026-10-18 `20261018_pay_link.sql` 판) |
 | 재구매 제한 | `trg_taam_repurchase_guard` | 같은 매장 N일(30·60·90·120·180). **방문일 간격**으로 센다(구매일 아님) · 같은 날은 예외 · 홀드도 기존 예약으로 센다 · ~~발매 7일 뒤 자동 해제~~ **2026-10-13 폐지**(`20261013_repurchase_no_release.sql`). 대신 **회차별 수동 해제** — 슈퍼어드민이 티켓 리스트의 「재구매 해제」로 `ticket_products.repurchase_open` 을 켜면(`taam_ticket_repurchase_open`, `20261014_repurchase_manual_release.sql`) `taam_repurchase_released` 와 앱 `_repReleasedByAge` 가 **그 회차만** true. 매장 설정은 그대로. **풀고 나면 팝업으로 푸시를 묻는다**(2026-10-16 · `_tuRepurchaseAskPush`) — 대상은 옛 자동 해제가 쓰던 `taam_repurchase_release_targets(회차)`(이 매장 재구매 창 안에 방문·예정이고 이 회차를 안 산 회원)뿐, 문구는 옛 서버 알림과 같은 「예약이 열렸습니다 / {매장} · {날짜} {시간} — 재구매 제한이 풀려…」(알림함 EN/JA 는 이미 안다 · 푸시는 i18n 세 벌 · category `repurchase_released`). 대상이 없으면 「티켓 오픈 알림 발송」으로 안내. 자동 발송 없음. 회귀 `bash sql/_test/t_repurchase.sh`(15건) · 스크래치 `rpush.js`(7건) |
 | 티켓 필드 | `trg_taam_guard_ticket_row` | 회원은 **취소만**. `price`·`party_size`·`status(hold→active 포함)` 를 못 고침 (2026-09-13 강화) |
 | 티켓 INSERT | `trg_taam_guard_ticket_insert` | 회원은 `status='hold'` 만, 매장 어드민은 `hold`·`manual`. **확정 행은 서버(RPC·toss-confirm)만** 만든다 (2026-09-13) |
