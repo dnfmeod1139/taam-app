@@ -300,6 +300,30 @@ DB 값은 `'A'` 그대로고 **이름만** 「게스트 회원」이다. 값을 
 (`20261004_invite_owner_guard.sql`). 홀드 상태는 건드리지 않는다. 수리: `sql/invite_owner_repair_2026-10-03.sql`.
 → 「홀드를 그대로 확정으로 바꾸는」 코드를 쓸 때는 **소유자·금액·인원·이름을 전부 다시 쓴다** — 홀드의 값은 보낸 사람 기준이다.
 
+### 💸 결제 링크 — 용도 셋을 한 화면·한 RPC 로 (2026-10-18 재구성)
+
+링크 하나 보내는 데 대관 회차(매장·날짜 필수) → 상세 → 환율 폼 → 보내기 시트 → 복사의 화면 4개를 지났고, 연회비는 매장 이름을 임의로 적어 우회한 뒤
+예치금 부여·연회비 기록을 세 화면에서 따로 손으로 적었다(2026-10-17 조사 · 리더 5명). 뼈대(`kashikiri_charges` 한 줄 = 링크 = 토스 주문 · `/pay` · `kashikiri-confirm` ·
+`mark_paid_v2` · paid 트리거들)는 그대로 두고 **입구만 하나**로 모았다 — 어드민 메뉴 「💸 결제 링크」(`payLinkOpen`) · 캘린더 상세의 「💸 결제 링크」 · 회원 원장 연회비 탭의 「💸 연회비 결제 링크」.
+옛 「정산 링크 보내기」(대관 회차·조·게스트 시트 · `kskOpen`)는 지우지 않고 새 화면 안의 「대관 정산 · 시트 ›」로 들어간다(운영 결정).
+
+| 용도 | 입력 | 금액 | 결제되면 |
+|---|---|---|---|
+| 🎫 티켓 좌석 | 회차 · 이름 · 인원 · 통화 · (회원 선택) | 서버 (식사+대행+주류)×인원 — `taam_link_invite_create` 에 위임(좌석 홀드 · 매장 어드민 허용) | 홀드 → active. **회원을 골랐으면 그 회원의 티켓**(`taam_link_invite_on_charge` 가 user_id·buyer_name 이전 · LINK- 는 중복 가드 예외) |
+| 💳 멤버십 | 회원(필수) · M/T · 가입/갱신 · 통화 · 환율 | `taam_membership_price` = `membership_settings`(국내 M deposit_amount+annual_fee_cash 11,250,000 / T t_total_krw 3,150,000 · 해외 M $9,900 / T $3,000 · 갱신은 연회비만). 바꾸면 **사유 메모 필수**(`OVERRIDE_NOTE_REQUIRED`) · JPY 는 규정이 없어 직접 입력 | `membership_fees` **자동 기록**(link · 외화·환율 · source `pay_link` · source_ref 청구 id) — **예치금 부여는 사람이**(2026-10-17 결정) · 알림 「💳 멤버십 결제 완료 … → 예치금 부여 ₩… 필요」 · 목록의 「예치금 부여」가 부여 화면을 채운다(`payLinkGrant`) · 환불되면 자동 기록 삭제 |
+| 💸 자유 금액 | 이름 · 통화 · 금액 · 제목(메모) · (회원) | 어드민 입력 | 알림 「💳 결제 완료」 |
+
+- 서버: `supabase/migrations/20261018_pay_link.sql`(**실행 필요**). `kashikiri_charges` 에 `purpose`(ticket|membership|custom) · `title` · `subtitle` · `payload` · `applied_at/_note` · `created_by`,
+  **`event_id` 가 비어도 된다**(회차 없는 결제). 옛 행은 `link_invite` 면 ticket, 아니면 custom. RPC `taam_pay_link_create(p_purpose, p jsonb)`(슈퍼어드민 · 티켓만 매장 어드민도) ·
+  `taam_pay_link_list(limit, uid, purpose)` · `taam_membership_price(tier, kind, currency)`. 공개 RPC 둘(`charge_public` · `order_start`)은 회차를 left join 해 제목·부제·purpose 를 함께 주고
+  주문명도 용도별(「[TAAM] 멤버십 M 가입」). 좌석 트리거는 `event_id null` 이면 건너뛴다. 결제 완료 알림은 용도별 문구(record 변수 대신 스칼라 — 회차 없는 행에서 「not assigned」로 터졌다).
+  환불 견적: 멤버십·자유 금액은 `admin_full`(전액 · 슈퍼어드민 판단), 티켓은 종전 규정. 외화는 외화로 적고 원화 = round(외화×환율) · 환율은 링크에 못 박힌다.
+- `/pay`: purpose 가 membership/custom(회차 없음)이면 제목·부제로 그리고, **멤버십은 적용환율·원화 기준 줄을 숨긴다**(회원 화면에 원화·환율을 적지 않는 2026-08-22 정책) · 완료 뒤 「멤버십 알아보기」 퍼널은 티켓(비회원)에만 ·
+  실패로 돌아오면(`pay_fail=1`) 토스가 붙인 `message/code` 를 한 줄 보여 준다(종전엔 조용히 결제 전 화면).
+- 앱: 팝업 `payLinkOpen(opts)`(용도 세그 · 폼 · 결과(QR `_qrSvg` · 복사 · **공유 = `navigator.share`**, 없으면 복사) · 최근 링크 목록(복사·공유·끊기·환불·예치금 부여·원장)). 용도를 바꾸면 통화·회원은 초기화.
+  매장 어드민은 티켓 용도만(자기 매장 회차만 · 대관 버튼 없음). `_taamBusyNow` 목록에 `payLinkPopup`. 결제 링크 URL 은 서버가 돌려주는 값(`taam-app.vercel.app/pay/?t=`).
+- 회귀: `bash sql/_test/t_pay_link.sh`(37건 — 금액 규칙 · 세 용도 · 위임 · 공개 RPC · 결제→기록·알림 · 환불→기록 삭제 · 회원 소유 이전 · 기록 실패 경로 · 권한) · 스크래치 `paylink.js`(54건 · 화면) · `paypage.js`(29건 · /pay 네 용도 + 실패 사유).
+
 ### 링크 초대 — 비회원·해외 손님을 티켓 회차에 태우는 길 (2026-09-29)
 
 초대 화면의 「🔗 링크 초대」. 이름·번호·통화(₩/¥/$)·환율만 적으면 `taam_link_invite_create` 가

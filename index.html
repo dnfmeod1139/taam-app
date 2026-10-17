@@ -7502,6 +7502,310 @@ window.fxFetchJpy = fxFetchJpy;
 window.fxOpenSettings = fxOpenSettings; window.fxSaveSettings = fxSaveSettings;
 
 // ═══════════════════════════════════════════════════════════════
+// 🆕 2026-10-18 💸 결제 링크 — 용도 셋(티켓 좌석 · 멤버십 · 자유 금액)을 한 화면에서. 서버 RPC taam_pay_link_create 하나가 만든다(금액·통화는 서버가 정한다).
+//   옛 「정산 링크 보내기」(대관 회차·조·게스트 시트 · kskOpen)는 지우지 않고 이 화면 안의 하위 항목으로 둔다(2026-10-17 운영 결정).
+//   멤버십 링크는 결제되면 연회비 기록만 자동이고 예치금 부여는 사람이 한다 — 목록의 「예치금 부여」가 부여 화면을 채워 준다.
+//   환율은 적용환율(fxRate/fxRateJpy)이 기본값이고 링크에 못 박힌다. 외화는 외화로 적고 원화는 서버가 ×환율 로 만든다(CLAUDE.md 「통화」).
+var _pl = { purpose: 'ticket', member: null, ticketId: '', cur: 'KRW', override: false, price: null, rows: null, busy: false, memberCache: {} };
+function _plEsc(s){ return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
+function _plMoney(cur, v){ var n = Number(v) || 0; if (cur === 'USD') return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); if (cur === 'JPY') return '¥' + Math.round(n).toLocaleString('ja-JP'); return '₩' + Math.round(n).toLocaleString('ko-KR'); }
+function _plFxDefault(cur){ try { if (cur === 'JPY') return (typeof fxRateJpy === 'function' && fxRateJpy()) || 0; if (cur === 'USD') return (typeof fxRate === 'function' && fxRate()) || 0; } catch (_e) {} return 0; }
+function _plUrl(tok){ return 'https://taam-app.vercel.app/pay/?t=' + encodeURIComponent(tok || ''); }
+function _plIsMissing(e){ return !!(e && (String(e.code || '') === 'PGRST202' || /Could not find the function|does not exist/i.test(String(e.message || '')))); }
+var _PL_ST = { pending: ['미결제', '#B45309', '#FFF4E5'], paid: ['결제됨', '#1E7A46', '#EAF6EE'], cancelled: ['끊음', '#8a8580', '#F0ECE6'], expired: ['만료', '#8a8580', '#F0ECE6'], failed: ['실패', '#B23A2E', '#FBF3F2'], refunded: ['환불', '#1F5BD6', '#EAF1FF'] };
+var _PL_PURPOSE = { ticket: ['🎫 티켓', '#5C0A14'], membership: ['💳 멤버십', '#1F5BD6'], custom: ['💸 자유', '#6b645b'] };
+
+function payLinkOpen(opts){
+  opts = opts || {};
+  var isSuper = (typeof _isSuperAdmin === 'function') && _isSuperAdmin();
+  var isAdmin = (typeof _currentRole !== 'undefined' && _currentRole === 'admin');
+  if (!isSuper && !isAdmin) { showToast('🔒', '권한 부족', '슈퍼어드민·매장 어드민 전용'); return; }
+  var old = document.getElementById('payLinkPopup'); if (old) old.remove();
+  _pl = { purpose: (isSuper ? (opts.purpose || 'ticket') : 'ticket'), member: null, ticketId: opts.ticketId || '', cur: opts.currency || 'KRW', override: false, price: null, rows: null, busy: false, memberCache: {}, pre: opts, isSuper: isSuper };
+  if (opts.uid) _pl.member = { id: opts.uid, display_name: opts.name || '', membership_tier: opts.tier || '' };
+  var el = document.createElement('div'); el.id = 'payLinkPopup';
+  el.style.cssText = 'position:fixed;inset:0;z-index:9200;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:14px;box-sizing:border-box;';
+  el.innerHTML =
+    '<div style="background:#fff;border-radius:18px;width:100%;max-width:560px;max-height:94vh;overflow:auto;padding:20px 18px 16px;font-family:var(--font-main);" data-lang-lock="ko">'
+    + '<div style="display:flex;align-items:center;gap:8px;">'
+    +   '<div style="font-size:16px;font-weight:800;color:#1a1a18;flex:1;">💸 결제 링크</div>'
+    +   (isSuper ? '<button type="button" onclick="payLinkClose();kskOpen();" style="border:1px solid #e0ddd8;border-radius:9px;background:#fff;padding:5px 9px;font-family:inherit;font-size:11px;font-weight:800;color:#6b645b;cursor:pointer;">대관 정산 · 시트 ›</button>' : '')
+    + '</div>'
+    + '<div style="font-size:11px;color:#9a9486;line-height:1.6;margin:3px 0 10px;">받는 사람은 로그인 없이 카드로 냅니다(₩·$·¥). 금액은 서버가 정하고, 외화 환율은 링크에 못 박힙니다.</div>'
+    + '<div id="plPurpose" style="display:flex;gap:6px;margin-bottom:12px;"></div>'
+    + '<div id="plForm"></div>'
+    + '<div id="plResult" style="display:none;"></div>'
+    + '<div style="display:flex;align-items:center;gap:8px;margin:16px 0 6px;"><div style="font-size:12px;font-weight:800;color:#6b645b;flex:1;">최근 링크</div><button type="button" onclick="payLinkList()" style="border:0;background:transparent;font-family:inherit;font-size:11px;font-weight:800;color:#8a8580;cursor:pointer;">새로 고침</button></div>'
+    + '<div id="plList" style="font-size:12px;color:#777;">불러오는 중…</div>'
+    + '<button type="button" onclick="payLinkClose()" style="width:100%;margin-top:12px;padding:10px;background:transparent;border:none;font-size:10px;font-weight:600;letter-spacing:.18em;color:#bbb;cursor:pointer;">닫기</button>'
+    + '</div>';
+  document.body.appendChild(el);
+  _plRenderPurpose(); _plRenderForm(); payLinkList();
+}
+function payLinkClose(){ var p = document.getElementById('payLinkPopup'); if (p) p.remove(); if (typeof _acPopupClosed === 'function') _acPopupClosed(); }
+function _plRenderPurpose(){
+  var box = document.getElementById('plPurpose'); if (!box) return;
+  var list = _pl.isSuper ? ['ticket', 'membership', 'custom'] : ['ticket'];
+  box.innerHTML = list.map(function(k){ var on = _pl.purpose === k, lab = { ticket: '🎫 티켓 좌석', membership: '💳 멤버십', custom: '💸 자유 금액' }[k];
+    return '<button type="button" onclick="payLinkPurpose(\'' + k + '\')" style="flex:1;padding:9px 6px;border-radius:10px;border:1.5px solid ' + (on ? '#1a1a18' : '#e0ddd8') + ';background:' + (on ? '#1a1a18' : '#fff') + ';color:' + (on ? '#fff' : '#666') + ';font-family:inherit;font-size:12px;font-weight:800;cursor:pointer;">' + lab + '</button>'; }).join('');
+}
+function payLinkPurpose(k){ _pl.purpose = k; _pl.override = false; _pl.price = null; _pl.cur = 'KRW'; _pl.member = null; var r = document.getElementById('plResult'); if (r) r.style.display = 'none'; _plRenderPurpose(); _plRenderForm(); }   // 용도를 바꾸면 통화는 원화로 — 지난 용도의 외화·환율이 남아 막히지 않게
+function _plInp(id, type, extra, val){ return '<input id="' + id + '" type="' + (type || 'text') + '" ' + (extra || '') + ' value="' + _plEsc(val == null ? '' : val) + '" style="width:100%;box-sizing:border-box;padding:9px 10px;border:1px solid #e0dcd4;border-radius:9px;font-family:inherit;font-size:14px;font-weight:700;color:#1a1a18;">'; }
+function _plLab(t){ return '<div style="font-size:10.5px;font-weight:700;color:#888;margin:10px 0 4px;">' + t + '</div>'; }
+function _plCurSeg(){ return '<div style="display:flex;gap:6px;">' + ['KRW', 'USD', 'JPY'].map(function(c){ var on = _pl.cur === c; return '<button type="button" onclick="payLinkCur(\'' + c + '\')" style="flex:1;padding:8px;border-radius:9px;border:1.5px solid ' + (on ? '#1a1a18' : '#e0ddd8') + ';background:' + (on ? '#1a1a18' : '#fff') + ';color:' + (on ? '#fff' : '#666') + ';font-family:inherit;font-size:12px;font-weight:800;cursor:pointer;">' + { KRW: '₩ 국내', USD: '$ 해외', JPY: '¥ 해외' }[c] + '</button>'; }).join('') + '</div>'
+  + (_pl.cur !== 'KRW' ? _plLab('적용 환율 (1' + (_pl.cur === 'USD' ? '$' : '¥') + ' = ₩) — 설정의 적용환율이 기본값 · 이 링크에 못 박힙니다') + _plInp('plFx', 'text', 'inputmode="decimal"', _plFxDefault(_pl.cur) || '') : ''); }
+function payLinkCur(c){ _pl.cur = c; _pl.price = null; _plRenderForm(); }
+function _plMemberBox(required){
+  var m = _pl.member;
+  return _plLab('회원' + (required ? ' *' : ' (선택 — 결제되면 그 회원의 것으로 기록)'))
+    + (m ? '<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border:1.5px solid #c9a96e;border-radius:9px;background:#fff8e7;"><div style="flex:1;font-size:13px;font-weight:800;color:#1a1a18;">' + _plEsc(m.display_name || '(이름 없음)') + ' <span style="font-size:10.5px;color:#8a7b63;">' + _plEsc(m.membership_tier || '') + '</span></div><button type="button" onclick="payLinkMemberClear()" style="border:0;background:transparent;font-family:inherit;font-size:11px;font-weight:800;color:#8a8580;cursor:pointer;">바꾸기</button></div>'
+         : '<input id="plMemberQ" type="text" placeholder="이름 · 전화 · 이메일 2자 이상" oninput="payLinkMemberSearch()" style="width:100%;box-sizing:border-box;padding:9px 10px;border:1px solid #e0dcd4;border-radius:9px;font-family:inherit;font-size:13px;"><div id="plMemberRes" style="margin-top:4px;"></div>');
+}
+function _plTicketOpts(){
+  var pre = _pl.pre || {}, html = '<option value="">회차를 고르세요</option>', pick = _pl.ticketId;
+  var isAdmin = (typeof _currentRole !== 'undefined' && _currentRole === 'admin');
+  (window.ticketDB || []).slice().sort(function(a, b){ return String(_tkFullDate(a) || a.date).localeCompare(String(_tkFullDate(b) || b.date)); }).forEach(function(t){
+    if (isAdmin && typeof _currentAdminRestId !== 'undefined' && _currentAdminRestId && String(t.restId) !== String(_currentAdminRestId)) return;
+    if (t.status === 'soldout') return;
+    if (typeof _isTicketExpired === 'function' && _isTicketExpired(t)) return;
+    var r = (window.restaurantDB || []).find(function(x){ return String(x.id) === String(t.restId); });
+    var nm = (r && r.name) || t.rest || '매장';
+    if (!pick && pre.restId && String(t.restId) === String(pre.restId) && (!pre.date || (typeof _tkFullDate === 'function' && _tkFullDate(t) === pre.date))) pick = String(t.id);
+    html += '<option value="' + _plEsc(String(t.id)) + '"' + (String(t.id) === String(pick) ? ' selected' : '') + '>' + _plEsc(nm + ' · ' + (typeof _tkFullDate === 'function' ? _tkFullDate(t) : t.date) + ' ' + (t.time || '') + ' · 총 ' + (t.totalPax || '-') + '석') + '</option>';
+  });
+  _pl.ticketId = pick || '';
+  return html;
+}
+function _plRenderForm(){
+  var box = document.getElementById('plForm'); if (!box) return;
+  var btn = '<button type="button" id="plGo" onclick="payLinkCreate()" style="width:100%;margin-top:14px;padding:12px;background:#5C0A14;border:none;border-radius:11px;font-family:inherit;font-size:13.5px;font-weight:800;color:#fff;cursor:pointer;">링크 만들기</button>';
+  if (_pl.purpose === 'ticket') {
+    box.innerHTML = _plLab('판매 티켓 (회차) * — 금액은 (식사비+대행비+주류)×인원, 좌석은 바로 홀드')
+      + '<select id="plTicket" onchange="_pl.ticketId=this.value;_plTicketPreview()" style="width:100%;box-sizing:border-box;padding:9px 10px;border:1px solid #e0dcd4;border-radius:9px;font-family:inherit;font-size:13px;font-weight:700;">' + _plTicketOpts() + '</select>'
+      + '<div id="plTicketPv" style="font-size:11px;color:#8a8580;margin-top:4px;line-height:1.5;"></div>'
+      + '<div style="display:grid;grid-template-columns:2fr 1fr;gap:8px;"><div>' + _plLab('받는 사람 이름 *') + _plInp('plName', 'text', 'maxlength="40"', (_pl.member && _pl.member.display_name) || '') + '</div><div>' + _plLab('인원') + _plInp('plPax', 'number', 'min="1" max="12"', 1) + '</div></div>'
+      + _plLab('연락처 (선택)') + _plInp('plPhone', 'tel', '', '')
+      + _plLab('결제 통화') + _plCurSeg()
+      + (_pl.isSuper ? _plMemberBox(false) : '')
+      + btn;
+    _plTicketPreview();
+  } else if (_pl.purpose === 'membership') {
+    var tier = (_pl.member && _pl.member.membership_tier === 'T') ? 'T' : 'M';
+    if (_pl.tier) tier = _pl.tier;
+    var kind = _pl.kind || 'join';
+    box.innerHTML = _plMemberBox(true)
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;"><div>' + _plLab('등급') + _plSeg('plTier', ['M', 'T'], tier, function(v){ return v + ' 등급'; }) + '</div><div>' + _plLab('종류') + _plSeg('plKind', ['join', 'renew'], kind, function(v){ return v === 'join' ? '가입 (총액)' : '갱신 (연회비만)'; }) + '</div></div>'
+      + _plLab('결제 통화') + _plCurSeg()
+      + '<div id="plPrice" style="margin-top:10px;padding:10px 12px;border:1px solid #eee5d6;border-radius:10px;background:#fbf8f2;font-size:12.5px;color:#1a1a18;line-height:1.7;">금액 계산 중…</div>'
+      + _plLab('링크 유효기간') + _plSeg('plDays', ['7', '14', '30'], String(_pl.days || 14), function(v){ return v + '일'; })
+      + btn;
+    _pl.tier = tier; _pl.kind = kind;
+    _plPriceLoad();
+  } else {
+    box.innerHTML = _plLab('받는 사람 이름 *') + _plInp('plName', 'text', 'maxlength="40"', '')
+      + _plLab('연락처 (선택)') + _plInp('plPhone', 'tel', '', '')
+      + _plLab('결제 통화') + _plCurSeg()
+      + _plLab('금액 (' + { KRW: '원', USD: '$ · 센트까지', JPY: '¥' }[_pl.cur] + ') *') + _plInp('plAmount', 'text', 'inputmode="decimal"', '')
+      + _plLab('무엇에 대한 결제인지 (결제 페이지 제목) *') + _plInp('plMemo', 'text', 'maxlength="60" placeholder="예: 와인 추가분 · 대관 보증금"', '')
+      + _plLab('링크 유효기간') + _plSeg('plDays', ['7', '14', '30'], String(_pl.days || 7), function(v){ return v + '일'; })
+      + _plMemberBox(false)
+      + btn;
+  }
+}
+function _plSeg(id, vals, cur, lab){ return '<div id="' + id + '" style="display:flex;gap:6px;">' + vals.map(function(v){ var on = String(v) === String(cur); return '<button type="button" data-v="' + _plEsc(v) + '" onclick="payLinkSeg(\'' + id + '\',\'' + _plEsc(v) + '\')" style="flex:1;padding:8px 4px;border-radius:9px;border:1.5px solid ' + (on ? '#1a1a18' : '#e0ddd8') + ';background:' + (on ? '#1a1a18' : '#fff') + ';color:' + (on ? '#fff' : '#666') + ';font-family:inherit;font-size:12px;font-weight:800;cursor:pointer;">' + lab(v) + '</button>'; }).join('') + '</div>'; }
+function _plSegVal(id){ var b = document.querySelector('#' + id + ' button[style*="rgb(26, 26, 24)"]') || document.querySelector('#' + id + ' button[style*="#1a1a18"]'); return b ? b.getAttribute('data-v') : null; }
+function payLinkSeg(id, v){
+  if (id === 'plTier') _pl.tier = v; else if (id === 'plKind') _pl.kind = v; else if (id === 'plDays') _pl.days = parseInt(v, 10);
+  var box = document.getElementById(id); if (box) Array.prototype.forEach.call(box.querySelectorAll('button'), function(b){ var on = b.getAttribute('data-v') === String(v); b.style.borderColor = on ? '#1a1a18' : '#e0ddd8'; b.style.background = on ? '#1a1a18' : '#fff'; b.style.color = on ? '#fff' : '#666'; });
+  if (id === 'plTier' || id === 'plKind') { _pl.override = false; _plPriceLoad(); }
+}
+function _plTicketPreview(){
+  var pv = document.getElementById('plTicketPv'); if (!pv) return;
+  var t = (window.ticketDB || []).find(function(x){ return String(x.id) === String(_pl.ticketId); });
+  if (!t) { pv.textContent = ''; return; }
+  var m = parseInt(t.mealFee || t.meal_fee) || 0, a = parseInt(t.agencyFee || t.agency_fee) || 0, w = parseInt(t.wineMin || t.wine_min) || 0;
+  var pax = parseInt((document.getElementById('plPax') || {}).value, 10) || 1;
+  pv.innerHTML = (m + a + w) > 0 ? ('1인 ₩' + (m + a + w).toLocaleString() + ' (식사 ' + m.toLocaleString() + ' + 대행 ' + a.toLocaleString() + ' + 주류 ' + w.toLocaleString() + ') → ' + pax + '인 <b>₩' + ((m + a + w) * pax).toLocaleString() + '</b> · 취소: 30분 안 전액 · 방문 31일 전까지 대행비 제외 · 그 뒤 없음') : '<span style="color:#B23A2E;">이 회차엔 요금이 없어 금액을 셀 수 없습니다</span>';
+}
+async function _plPriceLoad(){
+  var box = document.getElementById('plPrice'); if (!box || _pl.purpose !== 'membership') return;
+  if (!window.sb) { box.textContent = '서버 연결 없음'; return; }
+  var r = await window.sb.rpc('taam_membership_price', { p_tier: _pl.tier || 'M', p_kind: _pl.kind || 'join', p_currency: _pl.cur });
+  if (r.error) {
+    _pl.price = null;
+    var noRule = /NO_PRICE_RULE/.test(String(r.error.message || ''));
+    box.innerHTML = (noRule ? '<b>' + _pl.cur + ' 규정 금액이 없습니다</b> — 아래에 총액·연회비를 직접 적고 사유를 남기세요.' : (_plIsMissing(r.error) ? '서버 준비 필요 — 20261018_pay_link.sql 을 실행하세요' : '금액을 못 읽었습니다: ' + _plEsc(r.error.message)))
+      + (noRule ? _plOverrideHtml({ total: '', fee: '' }, true) : '');
+    _pl.override = noRule;
+    return;
+  }
+  _pl.price = r.data || null; var p = _pl.price || {};
+  box.innerHTML = '<div style="display:flex;justify-content:space-between;"><span>총액</span><b>' + _plMoney(_pl.cur, p.total) + '</b></div>'
+    + '<div style="display:flex;justify-content:space-between;color:#6b645b;"><span>연회비 (기록 자동)</span><span>' + _plMoney(_pl.cur, p.fee) + '</span></div>'
+    + (Number(p.deposit) > 0 ? '<div style="display:flex;justify-content:space-between;color:#6b645b;"><span>예치금 몫 (결제 뒤 부여 화면에서)</span><span>' + _plMoney(_pl.cur, p.deposit) + '</span></div>' : '')
+    + '<div style="margin-top:6px;"><button type="button" onclick="payLinkOverride()" style="border:1px solid #d8d2c6;border-radius:8px;background:#fff;padding:4px 9px;font-family:inherit;font-size:11px;font-weight:800;color:#6b645b;cursor:pointer;">금액 수정</button> <span style="font-size:10.5px;color:#9a9486;">바꾸면 사유 메모가 필수입니다</span></div>'
+    + '<div id="plOverride" style="display:none;"></div>';
+}
+function _plOverrideHtml(p, force){ return '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;"><div>' + _plLab('총액 (' + _pl.cur + ')') + _plInp('plTotal', 'text', 'inputmode="decimal"', p.total) + '</div><div>' + _plLab('연회비 (' + _pl.cur + ')') + _plInp('plFee', 'text', 'inputmode="decimal"', p.fee) + '</div></div>' + _plLab('사유 메모 *' + (force ? '' : ' (설정값과 다른 이유)')) + _plInp('plNote', 'text', 'maxlength="80"', ''); }
+function payLinkOverride(){ _pl.override = true; var o = document.getElementById('plOverride'); if (o) { o.style.display = 'block'; o.innerHTML = _plOverrideHtml(_pl.price || { total: '', fee: '' }, false); } }
+async function payLinkMemberSearch(){
+  var q = ((document.getElementById('plMemberQ') || {}).value || '').trim(), res = document.getElementById('plMemberRes'); if (!res) return;
+  if (q.length < 2) { res.innerHTML = ''; return; }
+  var k = q.replace(/[%_]/g, '\\$&');
+  var r = await window.sb.from('profiles').select('id, display_name, phone, email, membership_tier, currency').is('deleted_at', null).or('display_name.ilike.%' + k + '%,phone.ilike.%' + k + '%,email.ilike.%' + k + '%').limit(8);
+  if (r.error) { res.innerHTML = '<div style="font-size:11px;color:#B23A2E;">검색 실패: ' + _plEsc(r.error.message) + '</div>'; return; }
+  _pl.memberCache = {}; (r.data || []).forEach(function(u){ _pl.memberCache[u.id] = u; });
+  res.innerHTML = (r.data || []).length ? (r.data || []).map(function(u){ return '<div onclick="payLinkMemberPick(\'' + _plEsc(u.id) + '\')" style="padding:7px 9px;border-bottom:1px solid #f0ece6;cursor:pointer;font-size:12.5px;"><b>' + _plEsc(u.display_name || '(이름 없음)') + '</b> <span style="color:#8a7b63;font-size:10.5px;">' + _plEsc(u.membership_tier || '') + '</span> <span style="color:#9a9486;font-size:11px;">' + _plEsc(u.phone || u.email || '') + '</span></div>'; }).join('') : '<div style="font-size:11px;color:#9a9486;padding:6px;">없습니다</div>';
+}
+function payLinkMemberPick(id){ var u = _pl.memberCache[id]; if (!u) return; _pl.member = u; if (_pl.purpose === 'membership') { _pl.tier = (u.membership_tier === 'T') ? 'T' : 'M'; } _plRenderForm(); }
+function payLinkMemberClear(){ _pl.member = null; _plRenderForm(); }
+async function payLinkCreate(){
+  if (_pl.busy) return;
+  var g = document.getElementById('plGo'), p = {}, purpose = _pl.purpose, val = function(id){ return ((document.getElementById(id) || {}).value || '').trim(); };
+  var fx = _pl.cur !== 'KRW' ? parseFloat(val('plFx').replace(/,/g, '')) : null;
+  if (_pl.cur !== 'KRW' && !(fx > 0)) { showToast('⚠', '환율 필요', '1' + (_pl.cur === 'USD' ? '$' : '¥') + ' = ₩ 환율을 적어주세요'); return; }
+  p.currency = _pl.cur; if (fx) p.fx = fx;
+  if (purpose === 'ticket') {
+    var t = (window.ticketDB || []).find(function(x){ return String(x.id) === String(_pl.ticketId); });
+    if (!t) { showToast('⚠', '회차 선택', '판매 티켓을 고르세요'); return; }
+    var vd = (typeof _tkFullDate === 'function') ? _tkFullDate(t) : String(t.date || '');
+    if (!/^\d{4}\.\d{2}\.\d{2}$/.test(vd)) { showToast('⚠', '방문일 오류', '회차의 방문일을 읽지 못했습니다'); return; }
+    if (!val('plName')) { showToast('⚠', '이름 필요', '받는 사람 이름을 적어주세요'); return; }
+    p.ticket_id = String(t.id); p.name = val('plName'); p.phone = val('plPhone') || null; p.pax = parseInt(val('plPax'), 10) || 1; p.visit_date = vd; p.visit_time = t.time || null;
+    if (_pl.member) p.user_id = _pl.member.id;
+  } else if (purpose === 'membership') {
+    if (!_pl.member) { showToast('⚠', '회원 필요', '멤버십 링크는 회원을 골라야 합니다'); return; }
+    p.user_id = _pl.member.id; p.tier = _pl.tier || 'M'; p.kind = _pl.kind || 'join'; p.expires_days = _pl.days || 14;
+    if (_pl.override) {
+      var tot = parseFloat(val('plTotal').replace(/,/g, '')), fee = parseFloat(val('plFee').replace(/,/g, ''));
+      if (!(tot > 0) || !(fee >= 0) || fee > tot) { showToast('⚠', '금액 확인', '총액 > 0, 연회비 ≤ 총액 이어야 합니다'); return; }
+      if (!val('plNote')) { showToast('⚠', '사유 메모 필요', '설정값과 다르게 받는 이유를 적어주세요'); return; }
+      p.total = tot; p.fee = fee; p.note = val('plNote');
+    }
+  } else {
+    if (!val('plName')) { showToast('⚠', '이름 필요', '받는 사람 이름을 적어주세요'); return; }
+    var amt = parseFloat(val('plAmount').replace(/,/g, ''));
+    if (!(amt > 0)) { showToast('⚠', '금액 필요', '0보다 큰 금액을 적어주세요'); return; }
+    if (!val('plMemo')) { showToast('⚠', '제목 필요', '무엇에 대한 결제인지 적어주세요'); return; }
+    p.name = val('plName'); p.phone = val('plPhone') || null; p.amount = amt; p.memo = val('plMemo'); p.expires_days = _pl.days || 7;
+    if (_pl.member) p.user_id = _pl.member.id;
+  }
+  _pl.busy = true; if (g) { g.disabled = true; g.textContent = '만드는 중…'; }
+  try {
+    var r = await window.sb.rpc('taam_pay_link_create', { p_purpose: purpose, p: p });
+    if (r.error) {
+      var m = String(r.error.message || '');
+      if (_plIsMissing(r.error)) showToast('⚠', '서버 준비 필요', '20261018_pay_link.sql 을 SQL Editor 에서 실행하세요');
+      else if (m.indexOf('TICKET_SOLD_OUT') >= 0) showToast('⚠', '좌석 부족', '이 회차에 ' + (p.pax || 1) + '명 자리가 없습니다');
+      else if (m.indexOf('OVERRIDE_NOTE_REQUIRED') >= 0) showToast('⚠', '사유 메모 필요', '금액을 바꾸면 사유를 적어야 합니다');
+      else if (m.indexOf('NO_PRICE_RULE') >= 0) showToast('⚠', '규정 금액 없음', '이 통화는 총액·연회비를 직접 적고 사유를 남기세요');
+      else showToast('❌', '만들지 못했습니다', m.slice(0, 100));
+      return;
+    }
+    _plShowResult(r.data || {});
+    payLinkList();
+    try { if (purpose === 'ticket' && typeof _tkSyncFromServer === 'function') _tkSyncFromServer(true); } catch (_e) {}
+    try { if (purpose === 'ticket' && typeof tcalLoadPurchases === 'function') await tcalLoadPurchases(); } catch (_e) {}
+  } catch (e) { showToast('❌', '오류', String((e && e.message) || e).slice(0, 100)); }
+  finally { _pl.busy = false; if (g) { g.disabled = false; g.textContent = '링크 만들기'; } }
+}
+function _plShowResult(d){
+  var box = document.getElementById('plResult'); if (!box) return;
+  var url = d.url || _plUrl(d.token), cur = String(d.pay_currency || 'KRW');
+  _pl.last = { url: url, title: d.title || '', amount: _plMoney(cur, d.pay_amount != null ? d.pay_amount : d.amount_krw) };
+  box.style.display = 'block';
+  box.innerHTML = '<div style="margin-top:14px;padding:14px;border:1.5px solid #c9a96e;border-radius:14px;background:#fffdf7;text-align:center;">'
+    + '<div style="font-size:14px;font-weight:800;color:#1a1a18;">🔗 링크가 만들어졌습니다</div>'
+    + '<div style="font-size:12.5px;color:#5a554f;margin-top:4px;">' + _plEsc(d.title || '') + (d.subtitle ? ' · ' + _plEsc(d.subtitle) : '') + ' · <b>' + _pl.last.amount + '</b>' + (cur !== 'KRW' ? ' <span style="color:#9a9486;">(₩' + Number(d.amount_krw || 0).toLocaleString() + ')</span>' : '') + '</div>'
+    + '<div style="width:170px;height:170px;margin:12px auto 6px;">' + ((typeof _qrSvg === 'function' && _qrSvg(url)) || '') + '</div>'
+    + '<div style="font-size:10.5px;color:#9a9486;word-break:break-all;">' + _plEsc(url) + '</div>'
+    + '<div style="display:flex;gap:8px;margin-top:12px;">'
+    +   '<button type="button" onclick="payLinkShare()" style="flex:1;min-height:42px;border:0;border-radius:11px;background:#5C0A14;color:#fff;font-family:inherit;font-size:12.5px;font-weight:800;cursor:pointer;">공유 (카톡·문자)</button>'
+    +   '<button type="button" onclick="_kskClip(_pl.last.url,\'결제 링크를 복사했습니다\')" style="flex:1;min-height:42px;border:1px solid #e0ddd5;border-radius:11px;background:#fff;color:#1a1a18;font-family:inherit;font-size:12.5px;font-weight:800;cursor:pointer;">복사</button>'
+    +   '<button type="button" onclick="window.open(_pl.last.url,\'_blank\')" style="flex:1;min-height:42px;border:1px solid #e0ddd5;border-radius:11px;background:#fff;color:#1a1a18;font-family:inherit;font-size:12.5px;font-weight:800;cursor:pointer;">열어보기</button>'
+    + '</div></div>';
+  try { box.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (_e) {}
+}
+function payLinkShare(u){
+  var last = _pl.last || {}, url = u || last.url; if (!url) return;
+  var text = 'TAAM ' + (last.title || '결제') + (last.amount ? ' · ' + last.amount : '') + '\n' + url;
+  if (navigator.share) { navigator.share({ title: 'TAAM 결제 링크', text: text }).catch(function(){}); return; }
+  _kskClip(text, '공유를 지원하지 않는 기기 — 문구와 링크를 복사했습니다');
+}
+async function payLinkList(){
+  var box = document.getElementById('plList'); if (!box || !window.sb) return;
+  var r = await window.sb.rpc('taam_pay_link_list', { p_limit: 40 });
+  if (r.error) { box.innerHTML = '<div style="font-size:11.5px;color:#B23A2E;">' + (_plIsMissing(r.error) ? '서버 준비 필요 — 20261018_pay_link.sql' : '목록을 못 읽었습니다: ' + _plEsc(r.error.message)) + '</div>'; return; }
+  _pl.rows = r.data || [];
+  if (!_pl.rows.length) { box.innerHTML = '<div style="padding:10px 0;font-size:12px;color:#a8a29a;text-align:center;">아직 링크가 없습니다</div>'; return; }
+  box.innerHTML = _pl.rows.map(function(c){
+    var st = _PL_ST[c.status] || [c.status, '#8a8580', '#F0ECE6'], pu = _PL_PURPOSE[c.purpose] || _PL_PURPOSE.custom, cur = c.pay_currency || 'KRW';
+    var who = c.member_name || c.label || '', d = String(c.created_at || '').slice(0, 10).replace(/-/g, '.');
+    var acts = '<button type="button" onclick="payLinkCopyTok(\'' + _plEsc(c.token) + '\')" style="' + _plBtn() + '">복사</button>';
+    if (c.status === 'pending') acts += '<button type="button" onclick="payLinkShareRow(\'' + _plEsc(c.id) + '\')" style="' + _plBtn() + '">공유</button><button type="button" onclick="payLinkCancel(\'' + _plEsc(c.id) + '\')" style="' + _plBtn('#B23A2E') + '">끊기</button>';
+    if (c.status === 'paid' && _pl.isSuper) {
+      if (c.purpose === 'membership' && (c.payload || {}).kind === 'join') acts += '<button type="button" onclick="payLinkGrant(\'' + _plEsc(c.id) + '\')" style="' + _plBtn('#1F5BD6') + '">예치금 부여</button>';
+      acts += '<button type="button" onclick="payLinkRefund(\'' + _plEsc(c.id) + '\')" style="' + _plBtn('#B23A2E') + '">환불</button>';
+    }
+    if (c.user_id && _pl.isSuper) acts += '<button type="button" onclick="payLinkClose();openMemberLedger();setTimeout(function(){mlOpen(\'' + _plEsc(c.user_id) + '\')},60)" style="' + _plBtn() + '">원장</button>';
+    return '<div style="padding:9px 2px;border-bottom:1px solid #f4efe6;">'
+      + '<div style="display:flex;gap:8px;align-items:center;"><span style="font-size:10px;font-weight:800;color:' + pu[1] + ';">' + pu[0] + '</span><span style="flex:1;font-size:13px;font-weight:800;color:#1a1a18;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + _plEsc(c.title || '') + ' · ' + _plEsc(who) + '</span><span style="font-size:10.5px;font-weight:800;color:' + st[1] + ';background:' + st[2] + ';border-radius:7px;padding:2px 7px;">' + st[0] + '</span></div>'
+      + '<div style="display:flex;gap:8px;align-items:center;margin-top:3px;"><span style="flex:1;font-size:11px;color:#8a8580;">' + _plMoney(cur, c.pay_amount) + (cur !== 'KRW' ? ' (₩' + Number(c.amount_krw || 0).toLocaleString() + ')' : '') + ' · ' + d + (c.applied_note && /failed/.test(c.applied_note) ? ' · <span style="color:#B23A2E;">⚠ 연회비 기록 실패</span>' : '') + '</span>' + acts + '</div>'
+      + '</div>';
+  }).join('');
+}
+function _plBtn(color){ return 'border:1px solid #e0ddd8;border-radius:7px;background:#fff;padding:3px 8px;font-family:inherit;font-size:10.5px;font-weight:800;color:' + (color || '#6b645b') + ';cursor:pointer;'; }
+function payLinkCopyTok(tok){ _kskClip(_plUrl(tok), '결제 링크를 복사했습니다'); }
+function payLinkShareRow(id){ var c = (_pl.rows || []).find(function(x){ return x.id === id; }); if (!c) return; _pl.last = { url: _plUrl(c.token), title: c.title || '', amount: _plMoney(c.pay_currency || 'KRW', c.pay_amount) }; payLinkShare(); }
+async function payLinkCancel(id){
+  var c = (_pl.rows || []).find(function(x){ return x.id === id; }); if (!c) return;
+  if (!confirm('이 링크를 끊을까요?\n' + (c.title || '') + ' · ' + (c.member_name || c.label || '') + '\n(끊은 링크는 결제할 수 없고, 티켓 좌석 홀드는 풀립니다)')) return;
+  var r = await window.sb.rpc('taam_kashikiri_charge_cancel', { p_charge_id: id });
+  if (r.error) { showToast('❌', '끊지 못했습니다', String(r.error.message || '').slice(0, 100)); return; }
+  showToast('✓', '링크를 끊었습니다', ''); payLinkList();
+}
+async function payLinkRefund(id){
+  var c = (_pl.rows || []).find(function(x){ return x.id === id; }); if (!c) return;
+  var q = await window.sb.rpc('taam_link_invite_refund_quote', { p_charge_id: id });
+  if (q.error || !q.data) { showToast('❌', '견적 실패', String((q.error && q.error.message) || '').slice(0, 100)); return; }
+  var d = q.data, cur = d.currency || 'KRW';
+  var pol = { within_30min_full: '결제 30분 안 — 전액', d31_minus_agency: '방문 31일 전 — 대행비 제외', after_d30_none: '방문 30일 안 — 환불 없음', admin_full: '슈퍼어드민 판단 — 전액' }[d.policy] || d.policy;
+  if (!(Number(d.refund_krw) > 0)) { alert('환불 규정상 돌려줄 금액이 0원입니다 (' + pol + ')'); return; }
+  if (!confirm('환불할까요?\n' + (c.title || '') + ' · ' + (c.member_name || c.label || '') + '\n규정: ' + pol + '\n환불액: ' + _plMoney(cur, d.refund_amount) + (cur !== 'KRW' ? ' (₩' + Number(d.refund_krw).toLocaleString() + ')' : '') + (c.purpose === 'membership' ? '\n\n⚠ 멤버십 링크: 자동 기록된 연회비는 지워집니다. 이미 부여한 예치금은 부여 화면에서 따로 회수하세요.' : ''))) return;
+  var r = await window.sb.functions.invoke('kashikiri-refund', { body: { charge_id: id, reason: '슈퍼어드민 환불 (결제 링크)' } });
+  if (r.error || !(r.data && r.data.ok)) { showToast('❌', '환불 실패', String((r.error && r.error.message) || (r.data && (r.data.error || JSON.stringify(r.data.toss || ''))) || '').slice(0, 120)); return; }
+  showToast('✓', '환불 처리', _plMoney(cur, r.data.refund_amount)); payLinkList();
+  try { if (c.purpose === 'ticket' && typeof tcalLoadPurchases === 'function') await tcalLoadPurchases(); } catch (_e) {}
+}
+// 결제된 멤버십 가입 링크 → 「예치금 부여」 화면을 채워서 연다 (부여 자체는 사람이 누른다 · 2026-10-17 결정)
+async function payLinkGrant(id){
+  var c = (_pl.rows || []).find(function(x){ return x.id === id; }); if (!c || !c.user_id) return;
+  var pl = c.payload || {}, cur = c.pay_currency || 'KRW';
+  var r = await window.sb.from('profiles').select('id, display_name, phone, email, membership_deposit_balance, general_deposit_balance, granted_membership_balance, granted_general_balance, charged_membership_balance, charged_general_balance').eq('id', c.user_id).maybeSingle();
+  if (r.error || !r.data) { showToast('❌', '회원을 못 읽었습니다', String((r.error && r.error.message) || '').slice(0, 100)); return; }
+  payLinkClose();
+  if (typeof openAdminDepositGrant !== 'function') { showToast('⚠', '부여 화면 없음', ''); return; }
+  openAdminDepositGrant();
+  setTimeout(function(){
+    try {
+      window._adgSearchResultsData = [r.data]; adgSelectUser(r.data.id);
+      var mem = document.querySelector('input[name="adgDepositType"][value="membership"]'); if (mem) mem.checked = true;
+      if (cur !== 'KRW' && typeof adgSetCur === 'function') adgSetCur(cur);
+      var amt = document.getElementById('adgAmount'); if (amt) amt.value = (cur === 'KRW') ? String(Number(pl.deposit_krw || 0)) : String(Number(pl.deposit || 0));
+      var ds = document.getElementById('adgDescription'); if (ds) ds.value = (c.title || '멤버십') + ' — 결제 링크 ' + _plMoney(cur, c.pay_amount) + ' 중 연회비 ' + _plMoney(cur, pl.fee) + ' 제외 (청구 ' + String(c.id).slice(0, 8) + ')';
+      showToast('ⓘ', '부여 화면을 채웠습니다', '회원·금액·설명을 확인하고 「부여」를 누르세요');
+    } catch (e) { console.warn('[payLink] 부여 화면 채우기 실패', e); }
+  }, 250);
+}
+function payLinkOpenForCalendar(restId){
+  var date = (typeof _tcalYear !== 'undefined' && _tcalSelectedDate) ? (_tcalYear + '.' + _tcalSelectedDate) : '';
+  payLinkOpen({ purpose: 'ticket', restId: restId, date: date });
+}
+window.payLinkOpen = payLinkOpen; window.payLinkClose = payLinkClose; window.payLinkPurpose = payLinkPurpose; window.payLinkCur = payLinkCur; window.payLinkSeg = payLinkSeg;
+window.payLinkMemberSearch = payLinkMemberSearch; window.payLinkMemberPick = payLinkMemberPick; window.payLinkMemberClear = payLinkMemberClear; window.payLinkOverride = payLinkOverride;
+window.payLinkCreate = payLinkCreate; window.payLinkShare = payLinkShare; window.payLinkList = payLinkList; window.payLinkCopyTok = payLinkCopyTok; window.payLinkShareRow = payLinkShareRow;
+window.payLinkCancel = payLinkCancel; window.payLinkRefund = payLinkRefund; window.payLinkGrant = payLinkGrant; window.payLinkOpenForCalendar = payLinkOpenForCalendar;
+
 // 🆕 2026-10-17 연회비 납부 시기 (슈퍼어드민) — 서버 taam_membership_fee_due() 가 센다(가입일(실제 우선) + 납부 건수 년 = 기준일 · 원장 탭의 _mlFeeDue 와 같은 규칙).
 //   매일 09:00 KST 크론 taam_membership_fee_notify 가 30일 전·7일 전·당일·7일 뒤·30일 뒤에 한 번씩 슈퍼어드민에게 인앱 알림 + 푸시(url /?feedue=1 → 이 화면).
 //   여기서는 전원을 기준일 순으로 보고, 줄을 누르면 회원 원장으로 간다. 「지금 점검 · 알림」은 같은 서버 함수를 바로 부른다(같은 단계는 두 번 안 간다).
@@ -11988,10 +12292,10 @@ window.closePromoCarousel = function(){
         </div>
         <div class="admin-arrow">›</div>
       </div>
-      <div class="admin-menu-item" onclick="kskOpen()">
+      <div class="admin-menu-item" onclick="payLinkOpen()" data-lang-lock="ko">
         <div>
-          <div class="admin-menu-text">💸 정산 링크 보내기</div>
-          <div class="admin-menu-sub">티켓 구매자에게 각자 몫을 보낸다 · 게스트 시트</div>
+          <div class="admin-menu-text">💸 결제 링크</div>
+          <div class="admin-menu-sub">티켓 좌석 · 멤버십 연회비(국내·해외) · 자유 금액 — 한 화면에서 만들고 카톡·문자로 공유. 대관 정산·게스트 시트는 안에서</div>
         </div>
         <div class="admin-arrow">›</div>
       </div>
@@ -32076,7 +32380,8 @@ async function mlOpen(uid){
       + opts.map(function(o){ return '<option value="' + o[0] + '">' + o[1] + '</option>'; }).join('') + '</select>'; };
     pm += '<div id="mlFeeForm" style="margin-top:14px;padding:12px;border:1.5px dashed #c9a96e;border-radius:12px;background:#fff;">'
       + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">'
-      +   '<div id="mlFeeFormTitle" style="font-size:12.5px;font-weight:800;color:' + C.ink + ';">＋ 연회비 기록 추가</div>'
+      +   '<div id="mlFeeFormTitle" style="font-size:12.5px;font-weight:800;color:' + C.ink + ';flex:1;">＋ 연회비 기록 추가</div>'
+      +   '<button type="button" onclick="payLinkOpen({purpose:\'membership\',uid:\'' + _pcalEsc(String(uid)) + '\',name:\'' + _pcalEsc(String(u.display_name || '')) + '\',tier:\'' + _pcalEsc(String(u.membership_tier || '')) + '\'})" style="border:1px solid #d8d2c6;border-radius:8px;background:#fff;padding:4px 9px;font-family:inherit;font-size:11px;font-weight:800;color:#6b645b;cursor:pointer;">💸 연회비 결제 링크</button>'
       +   '<button id="mlFeeDelBtn" onclick="mlFeeDel(\'' + _uidQ + '\')" style="display:none;padding:4px 9px;border:1px solid #E4D6D6;border-radius:7px;background:#fff;font-family:inherit;font-size:11px;font-weight:800;color:#B23A2E;cursor:pointer;">삭제</button>'
       + '</div>'
       + '<input type="hidden" id="mlFeeId" value="">'
@@ -44905,7 +45210,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.17-c';
+var TAAM_WEB_BUILD = '2026.10.17-d';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -61907,6 +62212,7 @@ function tcalRenderDetail(dateStr) {
     if(isSuper || _currentRole==='admin'){
       html += '<div style="display:flex;gap:8px;padding:12px 16px;border-top:1px solid #f0ece1;">'
         + '<button onclick="tcalOpenManual(\''+g.restId+'\')" style="flex:1;height:42px;border:1.5px dashed #c9a96e;border-radius:11px;background:#fff;color:#6A1A1A;font-size:12.5px;font-weight:800;font-family:\'Noto Sans KR\',sans-serif;cursor:pointer;">＋ 수동 추가</button>'
+        + '<button onclick="payLinkOpenForCalendar(\''+g.restId+'\')" style="flex:1;height:42px;border:1.5px solid #6A1A1A;border-radius:11px;background:#fff;color:#6A1A1A;font-size:12.5px;font-weight:800;font-family:\'Noto Sans KR\',sans-serif;cursor:pointer;">💸 결제 링크</button>'
         + '<button onclick="openInviteFromCalendar(\''+g.restId+'\')" style="flex:1;height:42px;border:none;border-radius:11px;background:#6A1A1A;color:#fff;font-size:12.5px;font-weight:800;font-family:\'Noto Sans KR\',sans-serif;cursor:pointer;">초대 발송</button>'
         + '</div>';
     }
@@ -66241,7 +66547,8 @@ function _taamBusyNow(){
                'qmEditModal',  // 🆕 2026.09-01 자주 쓰는 메뉴 편집 중
                'pqrBigModal', // 🆕 2026.09-01 QR 을 보여주는 중 (상대가 찍고 있다)
                'riPayPopup',   // 🆕 2026.09-13 초대 결제 팝업 — 예치금 차감과 티켓 기록 사이
-               'codeScreen','phoneScreen'];   // 🆕 2026.09-13 초대코드·OTP 입력 중
+               'codeScreen','phoneScreen',   // 🆕 2026.09-13 초대코드·OTP 입력 중
+               'payLinkPopup'];   // 🆕 2026-10-18 결제 링크 만드는 중
     // ⚠ offsetParent 로 판단하면 안 된다. **position:fixed 는 offsetParent 가
     //   항상 null** 이고, 이 목록은 전부 fixed 다 — 그래서 이 검사가 한 번도
     //   참이 된 적이 없었다(2026-09-01 발견). 계산된 스타일을 본다.

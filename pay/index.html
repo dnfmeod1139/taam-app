@@ -214,7 +214,8 @@ button.go:active:not(:disabled){opacity:.85}
       e_chk_d:'카드에서 승인이 났다면 곧 반영됩니다. 잠시 후 이 링크를 다시 열어 주세요.',
       e_start:'결제를 시작하지 못했습니다.',
       e_start_d:'TAAM 담당자에게 알려주세요.',
-      share_n:'{n}인 중 1인 몫'
+      share_n:'{n}인 중 1인 몫',
+      kind_mship:'멤버십', fail_prev:'이전 결제 시도가 완료되지 않았습니다', mship_done:'멤버십 결제가 완료되었습니다. 담당자가 확인 후 안내드립니다.'
     },
     en: {
       kind:'Payment', kind_done:'Paid',
@@ -238,7 +239,8 @@ button.go:active:not(:disabled){opacity:.85}
       e_chk_d:'If your card was charged it will appear shortly. Please reopen this link in a moment.',
       e_start:'Could not start the payment.',
       e_start_d:'Please let TAAM know.',
-      share_n:'1 of {n} guests'
+      share_n:'1 of {n} guests',
+      kind_mship:'Membership', fail_prev:'The previous payment attempt was not completed', mship_done:'Membership payment complete. TAAM will contact you shortly.'
     },
     ja: {
       kind:'お支払い', kind_done:'お支払い完了',
@@ -262,7 +264,8 @@ button.go:active:not(:disabled){opacity:.85}
       e_chk_d:'カードで承認されていれば間もなく반映されます。しばらくしてからこのリンクを再度お開きください。',
       e_start:'お支払いを開始できませんでした。',
       e_start_d:'TAAM までお知らせください。',
-      share_n:'{n}名様のうち1名様分'
+      share_n:'{n}名様のうち1名様分',
+      kind_mship:'メンバーシップ', fail_prev:'前回のお支払いは完了しませんでした', mship_done:'メンバーシップのお支払いが完了しました。担当者より改めてご案内いたします。'
     }
   };
   T.ja.e_chk_d = 'カードで承認されていれば間もなく反映されます。しばらくしてからこのリンクを再度お開きください。';
@@ -273,6 +276,7 @@ button.go:active:not(:disabled){opacity:.85}
   // 🆕 2026-09-29 매장 이름을 언어에 맞게 — RPC 가 restaurants 의 영문·일본어 표기를 같이 준다. 비어 있으면 한글.
   function venueName(c){
     if(!c) return '';
+    if(c.purpose === 'membership' || c.purpose === 'custom' || !c.event_date) return c.title || c.venue_name || '';   // 🆕 2026-10-18 회차 없는 결제(멤버십·자유 금액)는 제목
     if(LANG === 'en' && c.venue_name_en) return c.venue_name_en;
     if(LANG === 'ja' && c.venue_name_jp) return c.venue_name_jp;
     return c.venue_name || '';
@@ -333,6 +337,7 @@ button.go:active:not(:disabled){opacity:.85}
   var qs = new URLSearchParams(location.search);
   // /pay/?t=<token>  — 링크는 이 하나로 끝난다
   var TOKEN = (qs.get('t') || qs.get('token') || '').trim();
+  var FAIL_MSG = qs.get('pay_fail') ? String(qs.get('message') || qs.get('code') || '').slice(0, 120) : '';   // 🆕 2026-10-18 토스 실패 복귀 사유
 
   // 서버 RPC 호출 (익명). SECURITY DEFINER 함수만 부른다 — 표는 열려 있지 않다.
   async function rpc(fn, args){
@@ -370,7 +375,8 @@ button.go:active:not(:disabled){opacity:.85}
       if(byCur && byCur !== LANG){ LANG = byCur; applyLang(); }
       LANG_EXPLICIT = true;
     }
-    $('vVenue').textContent = venueName(c) || '대관';
+    var noEvent = (c.purpose === 'membership' || c.purpose === 'custom' || !c.event_date);   // 🆕 2026-10-18
+    $('vVenue').textContent = venueName(c) || (noEvent ? t('kind') : '대관');
     var d = String(c.event_date || '');
     var hm = String(c.event_time || '').slice(0,5);   // ⚠ 't' 로 두면 번역 함수 t() 를 가린다
     var dt = '';
@@ -388,11 +394,11 @@ button.go:active:not(:disabled){opacity:.85}
           { weekday:'short', year:'numeric', month:'long', day:'numeric', timeZone:'UTC' });
       }
     } else { dt = d; }
-    $('vWhen').textContent = dt + (hm ? ' ' + hm : '');
+    $('vWhen').textContent = noEvent ? String(c.subtitle || '') : (dt + (hm ? ' ' + hm : ''));
 
     var n = parseInt(c.split_count,10) || 0;
     var share = (n > 1) ? t('share_n').replace('{n}', n) : '';
-    $('vShare').textContent = share ? (share + ' · ' + (c.label || '')) : (c.label || '');
+    $('vShare').textContent = noEvent ? (c.subtitle && c.label && c.subtitle !== c.label ? (c.label || '') : '') : (share ? (share + ' · ' + (c.label || '')) : (c.label || ''));
 
     var cur = String(c.pay_currency || 'KRW').toUpperCase();
     var amt = (c.pay_amount != null) ? Number(c.pay_amount) : Number(c.amount_krw);
@@ -403,8 +409,8 @@ button.go:active:not(:disabled){opacity:.85}
     if(cur === 'KRW' && c.amount_jpy){
       $('vJpy').textContent = yen(c.amount_jpy); show('rowJpy', true);
     }
-    if(cur !== 'KRW'){
-      // 외화 청구 — 무엇을 얼마로 쳤는지 그대로 보여준다.
+    if(cur !== 'KRW' && c.purpose !== 'membership'){
+      // 외화 청구 — 무엇을 얼마로 쳤는지 그대로 보여준다. (멤버십은 회원 화면에 원화·환율을 적지 않는 2026-08-22 정책대로 승인 통화만)
       var fx = Number(c.pay_fx) || 0;
       if(fx > 0){
         $('vFx').innerHTML = '1' + (cur === 'JPY' ? '¥' : '$') + ' = ' + _trim(fx) + '₩'
@@ -412,7 +418,7 @@ button.go:active:not(:disabled){opacity:.85}
         show('rowFx', true);
       }
       $('vKrw').textContent = won(c.amount_krw); show('rowKrw', true);
-    } else if(c.fx_rate){
+    } else if(c.fx_rate && cur === 'KRW'){
       var fr = _trim(c.fx_rate);
       $('vFx').innerHTML = '1¥ = ' + fr + '₩'
         + (c.fx_note ? '<small>' + String(c.fx_note).replace(/[<>&]/g,'') + '</small>' : '');
@@ -427,7 +433,9 @@ button.go:active:not(:disabled){opacity:.85}
         $('fine').textContent = t('fine_exp').replace('{d}', _fmtDay(ed));
       } else { $('fine').textContent = t('fine'); }
     } else { $('fine').textContent = t('fine'); }
-    $('kind').textContent = t('kind');
+    $('kind').textContent = c.purpose === 'membership' ? t('kind_mship') : t('kind');
+    // 🆕 2026-10-18 실패로 돌아온 경우 토스가 붙인 사유를 한 줄 보여준다 (종전엔 조용히 결제 전 화면으로 돌아갔다)
+    if(FAIL_MSG){ var fm = document.createElement('div'); fm.className = 'fine'; fm.style.color = 'var(--warn)'; fm.textContent = t('fail_prev') + (FAIL_MSG ? ' — ' + FAIL_MSG : ''); $('view').insertBefore(fm, $('btn')); FAIL_MSG = ''; }
     show('load', false); show('view', true);
   }
 
@@ -436,7 +444,9 @@ button.go:active:not(:disabled){opacity:.85}
     show('load', false); show('view', false);
     $('dMark').textContent = '✓'; $('dMark').className = 'mk ok';
     $('dTitle').textContent = t('done_t');
-    $('dDesc').textContent  = (venueName(c) || '') + ' · ' + String(c.event_date || '');
+    var noEv = (c.purpose === 'membership' || c.purpose === 'custom' || !c.event_date);
+    $('dDesc').textContent  = noEv ? ((c.title || '') + (c.subtitle ? ' · ' + c.subtitle : '') + (c.purpose === 'membership' ? '\n' + t('mship_done') : '')) : ((venueName(c) || '') + ' · ' + String(c.event_date || ''));
+    $('dDesc').style.whiteSpace = 'pre-line';
     var pcur = String(c.pay_currency || (extra && extra.currency) || 'KRW').toUpperCase();
     var pamt = (c.pay_amount != null) ? Number(c.pay_amount)
              : ((extra && extra.amount != null) ? Number(extra.amount) : Number(c.amount_krw));
@@ -446,7 +456,7 @@ button.go:active:not(:disabled){opacity:.85}
     var r = (extra && extra.receiptUrl) || c.receipt_url;
     if(r){ $('dReceipt').href = r; show('dFine', true); }
     show('done', true);
-    show('funnel', true);
+    show('funnel', !noEv);   // 멤버십·자유 금액 결제 뒤엔 「멤버십 알아보기」 권유가 어긋난다
     $('kind').textContent = t('kind_done');
   }
 

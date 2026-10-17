@@ -1,0 +1,139 @@
+#!/bin/bash
+# 결제 링크 재구성 회귀 — 2026-10-18. 먼저: 로컬 pg. 실행: bash sql/_test/t_pay_link.sh
+cd "$(dirname "$0")/../.."
+DB=t_paylink; psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1; psql -h /tmp -U postgres -d postgres -q -c "create database $DB" >/dev/null
+P="psql -h /tmp -U postgres -d $DB -q -At"
+SU=a1000000-0000-4000-8000-000000000001; M2=a1000000-0000-4000-8000-000000000002; M3=a1000000-0000-4000-8000-000000000003; M4=a1000000-0000-4000-8000-000000000004; ADM=a1000000-0000-4000-8000-000000000005
+$P <<SQL >/dev/null 2>&1
+do \$\$ begin if not exists (select 1 from pg_roles where rolname='anon') then create role anon nologin; end if;
+          if not exists (select 1 from pg_roles where rolname='authenticated') then create role authenticated nologin; end if;
+          if not exists (select 1 from pg_roles where rolname='service_role') then create role service_role nologin; end if; end \$\$;
+alter default privileges in schema public grant execute on functions to anon, authenticated;
+create schema auth; create table auth.users(id uuid primary key);
+create or replace function auth.uid() returns uuid language sql stable as \$\$ select nullif(current_setting('taam.uid', true),'')::uuid \$\$;
+create or replace function public._taam_uid_is_super() returns boolean language sql stable as \$\$ select coalesce(current_setting('taam.super', true),'') = '1' \$\$;
+create or replace function public.is_super_admin(u uuid) returns boolean language sql stable as \$\$ select coalesce(current_setting('taam.super', true),'') = '1' \$\$;
+create or replace function public.taam_kashikiri_token() returns text language sql as \$\$ select md5(random()::text || clock_timestamp()::text) \$\$;
+create table public.profiles(id uuid primary key, display_name text, role text, membership_tier text, deleted_at timestamptz);
+create table public.admin_grants(user_id uuid, rest_id text, venue_id text);
+create table public.restaurants(id uuid primary key, name text, name_en text, name_jp text);
+create table public.ticket_products(id text primary key, rest_id uuid, rest_name text, date text, time text, total_pax int, meal_fee int, agency_fee int, wine_min int, type_class text);
+create table public.tickets(id uuid primary key default gen_random_uuid(), user_id uuid, restaurant_id text, restaurant_name text, ticket_product_id text, ticket_type text,
+  reservation_date text, visit_time text, party_size int, price bigint, status text, purchase_id text, buyer_name text, buyer_phone text, extra_data jsonb, created_at timestamptz default now());
+create table public.kashikiri_events(id uuid primary key default gen_random_uuid(), venue_id text not null, venue_name text, event_date date not null, event_time time, total_pax int default 0, escort boolean default true, status text default 'draft',
+  fx_rate numeric(12,4), fx_usd numeric(12,4), fx_note text, ticket_product_id text, total_jpy int, total_krw int, created_by uuid, memo text, created_at timestamptz default now());
+create table public.kashikiri_teams(id uuid primary key default gen_random_uuid(), event_id uuid, seq int, host_label text, pax int default 1);
+create table public.kashikiri_charges(id uuid primary key default gen_random_uuid(), event_id uuid not null references public.kashikiri_events(id) on delete cascade, team_id uuid, guest_id uuid, label text not null, payer_phone text, user_id uuid,
+  amount_krw int not null check (amount_krw > 0), amount_jpy int, token text not null unique default public.taam_kashikiri_token(),
+  status text not null default 'pending' check (status in ('pending','paid','cancelled','expired','failed','refunded')),
+  order_id text unique, payment_key text, method text, receipt_url text, fail_reason text, payer_name text, approved_at timestamptz, expires_at timestamptz, created_at timestamptz default now(),
+  pay_currency text not null default 'KRW', pay_amount numeric(14,2), pay_fx numeric(12,4), refund_krw int, refund_amount numeric(14,2), refunded_at timestamptz, cancel_reason text, link_invite boolean not null default false);
+create table public.notifications(id uuid primary key default gen_random_uuid(), user_id uuid, type text, title text, body text, url text, payload jsonb, created_at timestamptz default now());
+create table public.membership_settings(k text primary key, v jsonb not null, note text, updated_at timestamptz default now(), updated_by uuid);
+insert into public.membership_settings(k, v) values ('deposit_amount','10125000'), ('annual_fee_cash','1125000'), ('annual_fee_card','1270000');
+create table public.membership_fees(id uuid primary key default gen_random_uuid(), user_id uuid not null references auth.users(id) on delete cascade, paid_at date not null, amount_krw int not null default 0,
+  fx_currency text, fx_amount numeric(14,2), method text not null default 'transfer', period_from date, period_to date, tier text, note text, source text not null default 'manual', source_ref text, created_by uuid, created_at timestamptz default now(), updated_at timestamptz);
+create table public.sync_calls(event_id uuid, at timestamptz default now());
+create or replace function public.taam_kashikiri_charge_cancel(p_charge_id uuid) returns jsonb language plpgsql security definer as \$\$
+declare c public.kashikiri_charges%rowtype; begin
+  if not is_super_admin(auth.uid()) then raise exception '권한이 없습니다' using errcode = '42501'; end if;
+  select * into c from public.kashikiri_charges where id = p_charge_id; if not found then raise exception '청구를 찾을 수 없습니다'; end if;
+  if c.status = 'paid' then raise exception '이미 결제된 건은 끊을 수 없습니다 — 환불로 처리하세요' using errcode = '55000'; end if;
+  update public.kashikiri_charges set status = 'cancelled' where id = c.id; return jsonb_build_object('ok', true, 'label', c.label); end \$\$;
+create or replace function public._taam_ksk_seat_sync(p uuid) returns json language plpgsql as \$\$ begin insert into public.sync_calls(event_id) values (p); return '{"ok":true,"short":[]}'::json; end \$\$;
+create or replace function public.taam_ticket_price_krw(p text, n int) returns bigint language sql stable as \$\$
+  select (coalesce(meal_fee,0)+coalesce(agency_fee,0)+coalesce(wine_min,0))*greatest(coalesce(n,1),1) from public.ticket_products where id = p \$\$;
+create or replace function public._cap() returns trigger language plpgsql as \$\$
+declare v int; c int; begin
+  select total_pax into c from public.ticket_products where id = new.ticket_product_id;
+  select coalesce(sum(party_size),0) into v from public.tickets where ticket_product_id = new.ticket_product_id and coalesce(status,'')<>'cancelled';
+  if c is not null and v + new.party_size > c then raise exception 'TICKET_SOLD_OUT'; end if; return new; end \$\$;
+create trigger t_cap before insert on public.tickets for each row execute function public._cap();
+insert into auth.users values ('$SU'),('$M2'),('$M3'),('$ADM');
+insert into public.profiles(id, display_name, role, membership_tier) values ('$SU','슈퍼','superadmin','M'), ('$M2','김회원','user','M'), ('$M3','Eric Cheok','user','T'), ('$M4','유령','user','M'), ('$ADM','매장어드민','admin',null);
+insert into public.restaurants values ('b1000000-0000-4000-8000-000000000001','마츠카와','Matsukawa','松川');
+insert into public.ticket_products values ('tp1','b1000000-0000-4000-8000-000000000001','마츠카와','05.01','18:00',4,750000,150000,350000,'Standard');
+insert into public.admin_grants values ('$ADM','b1000000-0000-4000-8000-000000000001',null);
+SQL
+FAIL=0
+ok(){ if [ "$2" = "$3" ]; then echo "✅ $1"; else echo "❌ $1  (기대 $2, 실제 $3)"; FAIL=1; fi; }
+$P -f supabase/migrations/20260929_link_invite.sql 2>&1 | grep -E "^ERROR" | head -2
+$P -f supabase/migrations/20261013_kashikiri_paid_notify.sql 2>&1 | grep -E "^ERROR" | head -2
+out=$($P -f supabase/migrations/20261018_pay_link.sql 2>&1)
+ok "마이그레이션 오류 없음 · ✅ 8 · ❌ 0" "|8|0" "$(echo "$out" | grep -E "^ERROR|^psql:.*ERROR" | head -1)|$(echo "$out" | grep -c '✅')|$(echo "$out" | grep -c '❌')"
+$P -c "create trigger trg_ksk_seat_on_charge after update of status on public.kashikiri_charges for each row execute function public.taam_ksk_seat_on_charge();" >/dev/null
+S="set taam.uid='$SU'; set taam.super='1';"
+# ── 금액 규칙 ──
+ok "금액: 국내 M 가입 11,250,000 / 연회비 1,125,000 / 예치금 10,125,000" "11250000|1125000|10125000" "$($P -c "select (j->>'total')||'|'||(j->>'fee')||'|'||(j->>'deposit') from public.taam_membership_price('M','join','KRW') j")"
+ok "금액: 국내 T 갱신 = 연회비 630,000 · 해외 M 가입 \$9,900/\$990/\$8,910 · 해외 T 갱신 \$300" "630000|0|9900|990|8910|300" "$($P -c "select (a->>'total')||'|'||(a->>'deposit')||'|'||(b->>'total')||'|'||(b->>'fee')||'|'||(b->>'deposit')||'|'||(c->>'total') from public.taam_membership_price('T','renew','KRW') a, public.taam_membership_price('M','join','USD') b, public.taam_membership_price('T','renew','USD') c")"
+ok "금액: JPY 는 규정 없음 → NO_PRICE_RULE" "1" "$($P -c "select public.taam_membership_price('M','join','JPY')" 2>&1 | grep -c NO_PRICE_RULE)"
+# ── 멤버십 링크 ──
+r=$($P -c "$S select public.taam_pay_link_create('membership', jsonb_build_object('user_id','$M2','tier','M','kind','join','currency','KRW'))::text")
+C1=$(echo "$r" | grep -oE '"charge_id": "[0-9a-f-]+"' | grep -oE '[0-9a-f-]{36}')
+ok "국내 M 가입 링크 · 11,250,000 · 회차 없음 · 제목 · 회원 연결" "membership|11250000|KRW|11250000.00||멤버십 M 가입|김회원|$M2|1125000|10125000" "$($P -c "select purpose||'|'||amount_krw||'|'||pay_currency||'|'||pay_amount||'|'||coalesce(event_id::text,'')||'|'||title||'|'||label||'|'||user_id||'|'||(payload->>'fee_krw')||'|'||(payload->>'deposit_krw') from public.kashikiri_charges where id='$C1'")"
+ok "  → 만료 14일 · url /pay/?t= · 토큰 32자" "14|1|32" "$($P -c "select (expires_at::date - now()::date)||'|'||(select count(*) from public.kashikiri_charges where id='$C1' and token is not null)||'|'||length(token) from public.kashikiri_charges where id='$C1'")"
+r=$($P -c "$S select public.taam_pay_link_create('membership', jsonb_build_object('user_id','$M3','tier','T','kind','renew','currency','USD','fx',1342.315))::text")
+C2=$(echo "$r" | grep -oE '"charge_id": "[0-9a-f-]+"' | grep -oE '[0-9a-f-]{36}')
+ok "해외 T 갱신 \$300 · 원화 round(300×1342.315)=402,695 · 연회비 전액 · 예치금 0" "USD|300.00|402695|1342.3150|300.00|402695|0" "$($P -c "select pay_currency||'|'||pay_amount||'|'||amount_krw||'|'||pay_fx||'|'||(payload->>'fee')||'|'||(payload->>'fee_krw')||'|'||(payload->>'deposit_krw') from public.kashikiri_charges where id='$C2'")"
+ok "금액을 바꾸는데 사유 메모가 없으면 OVERRIDE_NOTE_REQUIRED" "1" "$($P -c "$S select public.taam_pay_link_create('membership', jsonb_build_object('user_id','$M2','tier','M','kind','join','currency','KRW','total',10000000))" 2>&1 | grep -c OVERRIDE_NOTE_REQUIRED)"
+r=$($P -c "$S select public.taam_pay_link_create('membership', jsonb_build_object('user_id','$M2','tier','M','kind','join','currency','KRW','total',10000000,'fee',1000000,'note','특별 약정'))::text")
+C3=$(echo "$r" | grep -oE '"charge_id": "[0-9a-f-]+"' | grep -oE '[0-9a-f-]{36}')
+ok "사유 메모와 함께면 수정 가능 · override true · 예치금 9,000,000" "10000000|true|특별 약정|9000000" "$($P -c "select amount_krw||'|'||(payload->>'override')||'|'||(payload->>'note')||'|'||(payload->>'deposit_krw') from public.kashikiri_charges where id='$C3'")"
+ok "JPY 는 규정이 없어 금액·메모 없이는 NO_PRICE_RULE · 둘 다 주면 됨(¥ 정수)" "1|JPY|150000.00|1500000" "$($P -c "$S select public.taam_pay_link_create('membership', jsonb_build_object('user_id','$M2','tier','M','kind','renew','currency','JPY','fx',10))" 2>&1 | grep -c NO_PRICE_RULE)|$($P -c "$S select (j->>'pay_currency')||'|'||(j->>'pay_amount')||'|'||(j->>'amount_krw') from public.taam_pay_link_create('membership', jsonb_build_object('user_id','$M2','tier','M','kind','renew','currency','JPY','fx',10,'total',150000.4,'fee',150000.4,'note','엔화 약정')) j")"
+ok "회원 없음 · 탈퇴 → MEMBER_NOT_FOUND" "1" "$($P -c "$S select public.taam_pay_link_create('membership', jsonb_build_object('user_id','a1000000-0000-4000-8000-0000000000ff','tier','M'))" 2>&1 | grep -c MEMBER_NOT_FOUND)"
+ok "슈퍼어드민 아니면 거부 · 비로그인은 로그인 필요" "1|1" "$($P -c "set taam.uid='$M2'; set taam.super='0'; select public.taam_pay_link_create('custom', '{\"name\":\"x\",\"amount\":1000}')" 2>&1 | grep -c '권한이 없습니다')|$($P -c "set taam.uid=''; select public.taam_pay_link_create('custom', '{\"name\":\"x\",\"amount\":1000}')" 2>&1 | grep -c '로그인이 필요합니다')"
+# ── 자유 금액 ──
+r=$($P -c "$S select public.taam_pay_link_create('custom', jsonb_build_object('name','홍길동','phone','010-1234-5678','currency','KRW','amount',50000,'memo','와인 추가분'))::text")
+C4=$(echo "$r" | grep -oE '"charge_id": "[0-9a-f-]+"' | grep -oE '[0-9a-f-]{36}')
+ok "자유 금액 KRW 50,000 · 제목=메모 · 번호 숫자만 · 만료 7일" "custom|50000|와인 추가분|홍길동|01012345678|7" "$($P -c "select purpose||'|'||amount_krw||'|'||title||'|'||label||'|'||payer_phone||'|'||(expires_at::date - now()::date) from public.kashikiri_charges where id='$C4'")"
+ok "자유 금액 USD 100 × 1300 = 130,000 · 이름 없음·0원은 거부" "100.00|130000|1|1" "$($P -c "$S select (j->>'pay_amount')||'|'||(j->>'amount_krw') from public.taam_pay_link_create('custom', jsonb_build_object('name','Ann','currency','USD','amount',100,'fx',1300)) j")|$($P -c "$S select public.taam_pay_link_create('custom', '{\"amount\":1000}')" 2>&1 | grep -c '이름이 필요')|$($P -c "$S select public.taam_pay_link_create('custom', '{\"name\":\"x\",\"amount\":0}')" 2>&1 | grep -c BAD_AMOUNT)"
+# ── 티켓 좌석 (위임) ──
+r=$($P -c "$S select public.taam_pay_link_create('ticket', jsonb_build_object('ticket_id','tp1','name','Joy','phone','+1 415 555 0100','pax',2,'currency','USD','fx',1380,'visit_date','2027.05.01','visit_time','18:00','user_id','$M3'))::text")
+C5=$(echo "$r" | grep -oE '"charge_id": "[0-9a-f-]+"' | grep -oE '[0-9a-f-]{36}')
+ok "티켓 링크: 금액 서버 (750000+150000+350000)×2 · \$1811.59 · purpose ticket · 제목 매장 · 부제 날짜 · 회원 연결 · LINK- 홀드" "ticket|2500000|1811.59|마츠카와|2027.05.01 18:00|$M3|true|1" "$($P -c "select purpose||'|'||amount_krw||'|'||pay_amount||'|'||title||'|'||subtitle||'|'||user_id||'|'||link_invite||'|'||(select count(*) from public.tickets where purchase_id like 'LINK-%' and status='hold') from public.kashikiri_charges where id='$C5'")"
+ok "티켓 링크는 매장 어드민도 만들 수 있다 (회원 없이)" "ticket|" "$($P -c "set taam.uid='$ADM'; set taam.super='0'; select (j->>'purpose')||'|'||coalesce(j->>'user_id','') from public.taam_pay_link_create('ticket', jsonb_build_object('ticket_id','tp1','name','Lee','pax',1,'currency','KRW','visit_date','2027.05.01')) j")"
+# ── 결제 페이지 공개 RPC ──
+T1=$($P -c "select token from public.kashikiri_charges where id='$C1'")
+ok "charge_public(멤버십): purpose·title·mship.tier · venue_name=title · event_date 없음 · split 1" "membership|멤버십 M 가입|M|멤버십 M 가입||1" "$($P -c "select (j->>'purpose')||'|'||(j->>'title')||'|'||(j->'mship'->>'tier')||'|'||(j->>'venue_name')||'|'||coalesce(j->>'event_date','')||'|'||(j->>'split_count') from public.taam_kashikiri_charge_public('$T1') j")"
+T5=$($P -c "select token from public.kashikiri_charges where id='$C5'")
+ok "charge_public(티켓): 매장 EN·JA 표기 · 날짜 그대로" "Matsukawa|松川|2027-05-01|ticket" "$($P -c "select (j->>'venue_name_en')||'|'||(j->>'venue_name_jp')||'|'||(j->>'event_date')||'|'||(j->>'purpose') from public.taam_kashikiri_charge_public('$T5') j")"
+ok "order_start(멤버십): 주문명 [TAAM] 멤버십 M 가입 · 금액 · 통화" "[TAAM] 멤버십 M 가입|11250000.00|KRW" "$($P -c "select (j->>'order_name')||'|'||(j->>'amount')||'|'||(j->>'currency') from public.taam_kashikiri_order_start('$T1','김회원') j")"
+T4=$($P -c "select token from public.kashikiri_charges where id='$C4'")
+ok "order_start(자유): 주문명 [TAAM] 와인 추가분" "[TAAM] 와인 추가분" "$($P -c "select j->>'order_name' from public.taam_kashikiri_order_start('$T4','홍길동') j")"
+ok "order_start(티켓): 종전 주문명 [TAAM] 05/01 마츠카와" "[TAAM] 05/01 마츠카와" "$($P -c "select j->>'order_name' from public.taam_kashikiri_order_start('$T5','Joy') j")"
+# ── 결제 → 연회비 자동 기록 · 알림 · 좌석 트리거 ──
+$P -c "update public.kashikiri_charges set status='paid', approved_at='2026-10-18 10:00+09', payment_key='pk1', payer_name='김회원' where id='$C1'" >/dev/null
+ok "멤버십 결제 → membership_fees 자동 1건 (연회비 1,125,000 · link · M · source pay_link · ref 청구 id · 메모에 예치금 부여 안내)" "1|1125000|link|M|pay_link|$C1|1|1" "$($P -c "select count(*)||'|'||min(amount_krw)||'|'||min(method)||'|'||min(tier)||'|'||min(source)||'|'||min(source_ref)||'|'||(select count(*) from public.membership_fees where user_id='$M2' and paid_at='2026-10-18' and note like '%예치금 부여 ₩10,125,000%')||'|'||(select count(*) from public.kashikiri_charges where id='$C1' and applied_at is not null and applied_note='fee_recorded') from public.membership_fees where source_ref='$C1'")"
+ok "  → 슈퍼어드민 알림 「💳 멤버십 결제 완료」 · 예치금 부여 ₩10,125,000 필요 · url /?feedue=1" "💳 멤버십 결제 완료|1|/?feedue=1" "$($P -c "select title||'|'||(body like '%김회원 · 멤버십 M 가입 · ₩11,250,000 → 예치금 부여 ₩10,125,000 필요%')::int||'|'||url from public.notifications where type='kashikiri_paid' and payload->>'charge_id'='$C1' limit 1")"
+ok "  → 회차 없는 청구는 좌석 동기화를 부르지 않는다" "0" "$($P -c "select count(*) from public.sync_calls")"
+$P -c "update public.kashikiri_charges set status='paid', payer_name='다시' where id='$C1'" >/dev/null
+ok "paid → paid 재갱신은 기록·알림이 늘지 않음" "1|1" "$($P -c "select (select count(*) from public.membership_fees where source_ref='$C1')||'|'||(select count(*) from public.notifications where payload->>'charge_id'='$C1')")"
+$P -c "update public.kashikiri_charges set status='paid', approved_at=now(), payment_key='pk2' where id='$C2'" >/dev/null
+ok "해외 T 갱신 결제 → 기록 fx USD 300 · 원화 402,695 · T · 알림엔 부여 문구 없음(갱신)" "USD|300.00|402695|T|1" "$($P -c "select fx_currency||'|'||fx_amount||'|'||amount_krw||'|'||tier from public.membership_fees where source_ref='$C2'")|$($P -c "select (body like '%\$300.00 (₩402,695) · 연회비 기록은 자동')::int from public.notifications where payload->>'charge_id'='$C2' limit 1")"
+# ── 환불 → 기록 삭제 ──
+ok "환불 견적(멤버십): 슈퍼어드민 판단 전액 admin_full" "admin_full|11250000" "$($P -c "select (j->>'policy')||'|'||(j->>'refund_krw') from public.taam_link_invite_refund_quote('$C1') j")"
+$P -c "$S select public.taam_link_invite_mark_refunded('$C1', 11250000, 11250000, '테스트 환불')" >/dev/null
+ok "환불 확정 → refunded · 자동 기록 삭제 · applied_note" "refunded|0|1" "$($P -c "select status||'|'||(select count(*) from public.membership_fees where source_ref='$C1')||'|'||(applied_note like '%refunded_fee_removed')::int from public.kashikiri_charges where id='$C1'")"
+# ── 자유 금액 결제 알림 · 회차 있는 정산 청구는 좌석 동기화 ──
+$P -c "update public.kashikiri_charges set status='paid', approved_at=now(), payment_key='pk4', payer_name='홍길동' where id='$C4'" >/dev/null
+ok "자유 금액 결제 알림 「💳 결제 완료」 · 제목 · 이름 · 금액" "💳 결제 완료|와인 추가분 · 홍길동 · ₩50,000" "$($P -c "select title||'|'||body from public.notifications where payload->>'charge_id'='$C4' limit 1")"
+EV=$($P -c "insert into public.kashikiri_events(venue_id, venue_name, event_date, status) values ('v1','대관매장','2027-06-01','open') returning id")
+C6=$($P -c "insert into public.kashikiri_charges(event_id, label, amount_krw) values ('$EV','정산A',100000) returning id")
+$P -c "update public.kashikiri_charges set status='paid', approved_at=now(), payment_key='pk6' where id='$C6'" >/dev/null
+ok "회차 있는 정산 청구 결제 → 좌석 동기화 1회 · 알림은 종전 문구(매장 날짜)" "1|💳 정산 결제 완료|1" "$($P -c "select (select count(*) from public.sync_calls where event_id='$EV')||'|'||(select title from public.notifications where payload->>'charge_id'='$C6' limit 1)||'|'||(select (body like '대관매장 2027.06.01 · 정산A · ₩100,000%')::int from public.notifications where payload->>'charge_id'='$C6' limit 1)")"
+# ── 티켓 링크 결제 → 회원 소유 ──
+$P -c "update public.kashikiri_charges set status='paid', approved_at=now(), payment_key='pk5', payer_name='Joy Kim' where id='$C5'" >/dev/null
+ok "티켓 링크 결제 → 홀드 active · 소유자 = 고른 회원 · 이름 = 회원 이름 · memberUid" "active|$M3|Eric Cheok|$M3" "$($P -c "select status||'|'||user_id||'|'||buyer_name||'|'||(extra_data->>'memberUid') from public.tickets where extra_data->>'chargeId'='$C5'")"
+ok "  → 티켓 링크 환불 견적은 종전 규정(30분 안 전액)" "within_30min_full" "$($P -c "select j->>'policy' from public.taam_link_invite_refund_quote('$C5') j")"
+# ── 기록 실패 경로 (auth.users 에 없는 회원 → FK 실패) ──
+r=$($P -c "$S select public.taam_pay_link_create('membership', jsonb_build_object('user_id','$M4','tier','M','kind','join','currency','KRW'))::text")
+C7=$(echo "$r" | grep -oE '"charge_id": "[0-9a-f-]+"' | grep -oE '[0-9a-f-]{36}')
+$P -c "update public.kashikiri_charges set status='paid', approved_at=now(), payment_key='pk7' where id='$C7'" 2>/dev/null >/dev/null
+ok "연회비 기록이 실패해도 결제는 유지 · applied_note 에 이유 · ⚠ 알림" "paid|1|1" "$($P -c "select status||'|'||(applied_note like 'fee_record_failed:%')::int||'|'||(select count(*) from public.notifications where title='⚠ 연회비 자동 기록 실패' and payload->>'charge_id'='$C7') from public.kashikiri_charges where id='$C7'")"
+# ── 목록 · 권한 ──
+ok "목록: 슈퍼어드민 전부(최근순) · 회원 필터 · member_name" "10|2|Eric Cheok" "$($P -c "$S select (select count(*) from public.taam_pay_link_list(60)) || '|' || (select count(*) from public.taam_pay_link_list(60, '$M3')) || '|' || (select j->>'member_name' from public.taam_pay_link_list(60, '$M3') j limit 1)")"
+ok "목록: 슈퍼어드민 아니면 거부" "1" "$($P -c "set taam.uid='$M2'; set taam.super='0'; select count(*) from public.taam_pay_link_list(10)" 2>&1 | grep -c '권한이 없습니다')"
+ok "anon: 만들기·목록·금액 없음 · 공개 둘만" "false|false|false|true|true" "$($P -c "select has_function_privilege('anon','public.taam_pay_link_create(text,jsonb)','execute')||'|'||has_function_privilege('anon','public.taam_pay_link_list(integer,uuid,text)','execute')||'|'||has_function_privilege('anon','public.taam_membership_price(text,text,text)','execute')||'|'||has_function_privilege('anon','public.taam_kashikiri_charge_public(text)','execute')||'|'||has_function_privilege('anon','public.taam_kashikiri_order_start(text,text)','execute')")"
+ok "끊기: 미결제 멤버십 링크 cancelled (paid 는 거부 그대로)" "cancelled|1" "$($P -c "$S select public.taam_kashikiri_charge_cancel('$C3')->>'ok'; select status from public.kashikiri_charges where id='$C3'" | tail -1)|$($P -c "$S select public.taam_kashikiri_charge_cancel('$C2')" 2>&1 | grep -c '환불로 처리')"
+psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1
+[ $FAIL = 0 ] && echo "=== 전부 통과 ===" || { echo "=== 실패 있음 ==="; exit 1; }
