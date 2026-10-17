@@ -226,7 +226,7 @@ DB 값은 `'A'` 그대로고 **이름만** 「게스트 회원」이다. 값을 
   납부가 기록되면 기준일이 1년 밀려 새 키가 되므로 자연히 다음 해에 다시 알린다. 크론 `taam-membership-fee-due` 매일 00:00 UTC(09:00 KST · 게스트 10시·방문 11시와 안 겹침) — 함수가 DB 안에서 돌아 Edge·JWT 가 없다.
   **예치금·원장·membership_fees 에는 쓰지 않는다** — 알리기만. 앱: 어드민 메뉴 「💰 연회비 납부 시기」(`feeDueOpen` · 필터 전체/부족/30일 내/정상 · 줄 → `openMemberLedger()+mlOpen(uid)` · 「지금 점검 · 알림」= notify RPC ·
   함수 없으면 「서버 준비 필요」) · 벨 `/?feedue=1` → 이 화면 · 부팅 `?feedue=1` 은 **스플래시가 닫히고**(`_splashIsShowing` · 안 보면 z 9000 스플래시 위에 팝업이 뜬다 — 적대 리뷰) 슈퍼어드민으로 확인될 때까지 기다렸다 연다(20초). ⚠ 테스트에서 알림 호출과 조회를 한 문장에 넣으면 조회가 호출 전 스냅샷을 본다 — 따로 부른다.
-  **대상 제외 스위치 `profiles.fee_exempt`**(`20261017_membership_fee_exempt.sql` · 2026-10-17 운영 결정으로 김우·손진범·민경만·도성국·테스트1 제외 — `sql/fee_exempt_seed_2026-10-17.sql`): 보고 함수에 `p_include_exempt`(기본 false)와 출력 `fee_exempt/_note` 가 더해져
+  **대상 제외 스위치 `profiles.fee_exempt`**(`20261017_membership_fee_exempt.sql` · 2026-10-17 운영 결정으로 김우·손진범·민경만·도성국·테스트1 제외 — `sql/fee_exempt_seed_2026-10-17.sql` · **둘 다 2026-10-17 라이브 설치 ✅** · 대상 36 → 31명): 보고 함수에 `p_include_exempt`(기본 false)와 출력 `fee_exempt/_note` 가 더해져
   기본 조회·매일 알림에서 빠지고 화면 「제외」 필터(앱은 `p_include_exempt:true` 로 부르고 옛 서버면 인자 없이)에서만 보인다. 켜고 끄기는 원장 연회비 탭의 「연회비 대상에서 제외 / 대상에 포함」(`mlFeeExemptSet` · 직접 UPDATE).
   서버 가드 `trg_taam_guard_fee_exempt`(BEFORE INSERT/UPDATE **전 칸** · membership_joined 가드와 같은 되돌림 방식 · `fee_exempt_set_by/at` 는 트리거만 적는다 — `UPDATE OF` 두 칸으로 걸었다가 set_by/at 만 보낸 UPDATE 가 안 걸리는 것을 3차 리뷰가 잡았다) — 회원이 자기를 제외해 연회비 알림을 피하는 길을 막는다.
   ⚠ `fee_exempt_note` 는 profiles 칸이라 **회원 본인도 읽는다**(자기 행 select) — 보여도 되는 말만(prompt 에도 적혀 있다). 설치 파일은 알림을 보내지 않는다(⑤ 존재 검사만 — 시드 전에 제외 예정 회원이 실려 나가지 않게). 3차 적대 리뷰(15 에이전트 → 확정 3 · 전부 반영): 감사 칸 위조 · 「제외」 필터 잔존 · 설치 중 알림 발송.
