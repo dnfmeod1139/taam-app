@@ -45,7 +45,7 @@ SQL
 FAIL=0
 ok(){ if [ "$2" = "$3" ]; then echo "✅ $1"; else echo "❌ $1  (기대 $2, 실제 $3)"; FAIL=1; fi; }
 out=$($P -f supabase/migrations/20261017_membership_fee_due.sql 2>&1)
-ok "마이그레이션 오류 없음 · ✅ 4 · ⚠ 2(pg_cron 없음 notice + ④) · ❌ 0" "|4|2|0" "$(echo "$out" | grep -E "^ERROR|^psql:.*ERROR" | head -1)|$(echo "$out" | grep -c '✅')|$(echo "$out" | grep -c '⚠')|$(echo "$out" | grep -c '❌')"
+ok "마이그레이션 오류 없음 · ✅ 5 · ⚠ 2(pg_cron 없음 notice + ④) · ❌ 0" "|5|2|0" "$(echo "$out" | grep -E "^ERROR|^psql:.*ERROR" | head -1)|$(echo "$out" | grep -c '✅')|$(echo "$out" | grep -c '⚠')|$(echo "$out" | grep -c '❌')"
 # 연차 수
 ok "연차: 2024-12-05 → 2026-10-17 = 2 · 2/29 가입 2026-02-28 = 3 · 2026-02-27 = 2 · 가입 전 0 · 당일 1" "2|3|2|0|1" "$($P -c "select public._taam_fee_years('2024-12-05','2026-10-17') || '|' || public._taam_fee_years('2024-02-29','2026-02-28') || '|' || public._taam_fee_years('2024-02-29','2026-02-27') || '|' || public._taam_fee_years('2026-10-18','2026-10-17') || '|' || public._taam_fee_years('2026-10-17','2026-10-17')")"
 # 보고

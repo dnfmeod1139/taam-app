@@ -211,4 +211,6 @@ union all select '⑤ anon 실행 권한 없음',
 union all select '⑥ 지금 기준일 30일 내·밀린 회원',
        (select count(*) from public.taam_membership_fee_due() d where d.days_left <= 30)::text || '명 / 대상 ' || (select count(*) from public.taam_membership_fee_due())::text || '명'
 union all select '⑦ 첫 알림 실행 결과 (notified = 알린 회원 수 · push.ok)',
-       public.taam_membership_fee_notify()::text;
+       public.taam_membership_fee_notify()::text
+union all select '⑧ 푸시 함수 taam_admin_push (20261013_kashikiri_paid_notify.sql 이 만든다)',
+       case when to_regproc('public.taam_admin_push') is not null then '✅' else '❌ 없음 — 그 파일을 먼저 돌려야 푸시가 간다 (2026-10-17 라이브에서 실제로 빠져 있었다)' end;
