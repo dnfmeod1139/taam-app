@@ -12,6 +12,7 @@ create schema auth; create table auth.users(id uuid primary key);
 create or replace function auth.uid() returns uuid language sql stable as \$\$ select nullif(current_setting('taam.uid', true), '')::uuid \$\$;
 create or replace function public._taam_uid_is_super() returns boolean language sql stable as \$\$ select coalesce(current_setting('taam.super', true), '') = '1' \$\$;
 create or replace function public.is_super_admin(u uuid) returns boolean language sql stable as \$\$ select coalesce(current_setting('taam.super', true), '') = '1' \$\$;
+grant usage on schema public, auth to authenticated;
 create table public.profiles(id uuid primary key, display_name text, role text, membership_tier text, currency text, currency_prev text, created_at timestamptz default now(), membership_joined_at date, deleted_at timestamptz);
 create table public.membership_fees(id uuid primary key default gen_random_uuid(), user_id uuid, paid_at date, amount_krw int, fx_currency text, created_at timestamptz default now());
 create table public.deposit_transactions(id bigserial primary key, user_id uuid, change_type text, payment_id uuid, created_at timestamptz default now());
@@ -46,6 +47,9 @@ FAIL=0
 ok(){ if [ "$2" = "$3" ]; then echo "✅ $1"; else echo "❌ $1  (기대 $2, 실제 $3)"; FAIL=1; fi; }
 out=$($P -f supabase/migrations/20261017_membership_fee_due.sql 2>&1)
 ok "마이그레이션 오류 없음 · ✅ 5 · ⚠ 2(pg_cron 없음 notice + ④) · ❌ 0" "|5|2|0" "$(echo "$out" | grep -E "^ERROR|^psql:.*ERROR" | head -1)|$(echo "$out" | grep -c '✅')|$(echo "$out" | grep -c '⚠')|$(echo "$out" | grep -c '❌')"
+out2=$($P -f supabase/migrations/20261017_membership_fee_exempt.sql 2>&1)
+ok "제외 스위치 마이그레이션 오류 없음 · ✅ 4 · ❌ 0" "|4|0" "$(echo "$out2" | grep -E "^ERROR|^psql:.*ERROR" | head -1)|$(echo "$out2" | grep -c '✅')|$(echo "$out2" | grep -c '❌')"
+$P -c "delete from public.membership_fee_notices; delete from public.notifications; delete from public.push_calls" >/dev/null   # ⑤ 가 오늘로 한 번 돌았으므로 비운다
 # 연차 수
 ok "연차: 2024-12-05 → 2026-10-17 = 2 · 2/29 가입 2026-02-28 = 3 · 2026-02-27 = 2 · 가입 전 0 · 당일 1" "2|3|2|0|1" "$($P -c "select public._taam_fee_years('2024-12-05','2026-10-17') || '|' || public._taam_fee_years('2024-02-29','2026-02-28') || '|' || public._taam_fee_years('2024-02-29','2026-02-27') || '|' || public._taam_fee_years('2026-10-18','2026-10-17') || '|' || public._taam_fee_years('2026-10-17','2026-10-17')")"
 # 보고
@@ -65,7 +69,7 @@ ok "오늘 기본값(p_today 없음)도 돈다" "10" "$($P -c "select count(*) f
 ok "회원 세션 → FORBIDDEN" "FORBIDDEN" "$($P -c "set taam.uid='${U}11'; set taam.super='0'; select count(*) from public.taam_membership_fee_due(null, '$T')" 2>&1 | grep -oE 'FORBIDDEN' | head -1)"
 ok "슈퍼어드민 세션 → 10명" "10" "$($P -c "set taam.uid='${U}15'; set taam.super='1'; select count(*) from public.taam_membership_fee_due(null, '$T')")"
 ok "회원 세션은 알림 함수도 FORBIDDEN" "FORBIDDEN" "$($P -c "set taam.uid='${U}11'; set taam.super='0'; select public.taam_membership_fee_notify('$T')" 2>&1 | grep -oE 'FORBIDDEN' | head -1)"
-ok "anon 실행 권한 없음 (보고·알림·내부)" "false|false|false" "$($P -c "select has_function_privilege('anon','public.taam_membership_fee_due(uuid,date)','execute') || '|' || has_function_privilege('anon','public.taam_membership_fee_notify(date)','execute') || '|' || has_function_privilege('anon','public._taam_fee_caller_ok()','execute')")"
+ok "anon 실행 권한 없음 (보고·알림·내부)" "false|false|false" "$($P -c "select has_function_privilege('anon','public.taam_membership_fee_due(uuid,date,boolean)','execute') || '|' || has_function_privilege('anon','public.taam_membership_fee_notify(date)','execute') || '|' || has_function_privilege('anon','public._taam_fee_caller_ok()','execute')")"
 # 알림 — 마이그레이션 ⑦ 이 실제 오늘로 한 번 돌았으므로 기록을 비우고 고정 날짜로 다시
 $P -c "delete from public.membership_fee_notices; delete from public.notifications; delete from public.push_calls" >/dev/null
 r1=$($P -c "select public.taam_membership_fee_notify('$T')")
@@ -99,6 +103,20 @@ insert into public.profiles(id, display_name, role, membership_tier, currency, c
 ok "2027-03-01: 긴 이름 41명 + 엔화(-59→-30) = 42명" "42" "$($P -c "select public.taam_membership_fee_notify('2027-03-01')->>'notified'")"
 ok "  → 인앱 본문은 줄 단위로 1000자 안 · 마지막 줄 「외 N명 — 전원은…」 · 그 앞 줄은 온전 · 첫 줄 Michael 50" "true|true|Michael Minku Lee 50 · M · 2025.01.01 789일 지남 · 3년차 · ₩1,125,000|true" "$($P -c "with b as (select body, string_to_array(body, E'\\n') as l from public.notifications order by created_at desc limit 1) select (length(body) <= 1000) || '|' || (l[array_length(l,1)] like '외 %명 — 전원은 「연회비 납부 시기」 화면에서') || '|' || l[1] || '|' || (l[array_length(l,1)-1] like '% · ₩1,125,000') from b")"
 ok "  → 표시 줄 수 + 외 N = 42 · 푸시는 8줄 + 외 34명" "42|9|외 34명" "$($P -c "with b as (select string_to_array(body, E'\\n') as l from public.notifications order by created_at desc limit 1) select ((array_length(l,1) - 1) + substring(l[array_length(l,1)] from '외 (\\d+)명')::int) || '|' || (select array_length(string_to_array(body, E'\\n'), 1) from public.push_calls order by tag desc limit 1) || '|' || (select split_part(body, E'\\n', 9) from public.push_calls order by tag desc limit 1) from b")"
+# ── 연회비 대상 제외 ──
+N0=$($P -c "select count(*) from public.taam_membership_fee_due(null, '$T')")
+$P -c "update public.profiles set fee_exempt = true, fee_exempt_note = '테스트 계정' where id = '${U}21'" >/dev/null
+ok "티빈 제외 → 기본 조회에서 한 명 빠짐 · p_include_exempt 면 보임(fee_exempt true · 메모 · 맨 뒤)" "$((N0-1))|$N0|true|테스트 계정|티빈" "$($P -c "select (select count(*) from public.taam_membership_fee_due(null, '$T')) || '|' || (select count(*) from public.taam_membership_fee_due(null, '$T', true)) || '|' || (select fee_exempt || '|' || fee_exempt_note from public.taam_membership_fee_due('${U}21', '$T', true)) || '|' || (select display_name from public.taam_membership_fee_due(null, '$T', true) order by fee_exempt desc limit 1)")"
+ok "  → 누가·언제 기록(set_at) · SQL Editor 는 set_by null" "true|true" "$($P -c "select (fee_exempt_set_at is not null) || '|' || (fee_exempt_set_by is null) from public.profiles where id='${U}21'")"
+$P -c "insert into auth.users values ('${U}25'); insert into public.profiles(id, display_name, role, membership_tier, currency, created_at, membership_joined_at, fee_exempt, fee_exempt_note) values ('${U}25','Ex','user','M','KRW','2026-01-01','2026-01-01',true,'면제')" >/dev/null
+ok "제외 회원은 밀렸어도 알림 대상이 아님 (2027-05-01 · Ex 만 새 대상)" "0" "$($P -c "select public.taam_membership_fee_notify('2027-05-01')->>'notified'")"
+$P -c "update public.profiles set fee_exempt = false where id = '${U}25'" >/dev/null
+ok "  → 다시 포함하면 알림 대상 (Ex 1명 · 메모는 그대로 남음)" "1|면제" "$($P -c "select public.taam_membership_fee_notify('2027-05-01')->>'notified'")|$($P -c "select fee_exempt_note from public.profiles where id='${U}25'")"
+$P -c "grant select, insert, update on public.profiles to authenticated;" >/dev/null
+ok "가드: 회원 세션이 자기 fee_exempt 를 켜도 되돌림(경고) · 메모도 그대로" "false|면제" "$($P -c "set role authenticated; set taam.uid='${U}25'; set taam.super='0'; update public.profiles set fee_exempt = true, fee_exempt_note = '내가 면제' where id='${U}25'; reset role; select fee_exempt || '|' || fee_exempt_note from public.profiles where id='${U}25'" 2>/dev/null)"
+ok "가드: 슈퍼어드민 세션은 바꿀 수 있고 set_by 에 uid" "true|${U}15" "$($P -c "set role authenticated; set taam.uid='${U}15'; set taam.super='1'; update public.profiles set fee_exempt = true where id='${U}25'; reset role; select fee_exempt || '|' || fee_exempt_set_by from public.profiles where id='${U}25'" 2>/dev/null)"
+ok "가드: 다른 칸만 바꾸는 UPDATE 는 건드리지 않음(기록 유지)" "true|${U}15" "$($P -c "update public.profiles set display_name = 'Ex2' where id='${U}25'; select fee_exempt || '|' || fee_exempt_set_by from public.profiles where id='${U}25'")"
+ok "가드: 회원 INSERT 가 fee_exempt=true 로 넣어도 false" "f" "$($P -c "insert into auth.users values ('${U}26'); set role authenticated; set taam.uid='${U}26'; set taam.super='0'; insert into public.profiles(id, display_name, role, membership_tier, fee_exempt) values ('${U}26','Ex3','user','T',true); reset role; select fee_exempt from public.profiles where id='${U}26'" 2>/dev/null)"
 ok "RLS: 기록 표는 슈퍼어드민만 읽기 정책 · authenticated select 권한" "membership_fee_notices_super_read|true" "$($P -c "select (select string_agg(policyname, ',') from pg_policies where tablename='membership_fee_notices') || '|' || has_table_privilege('authenticated', 'public.membership_fee_notices', 'select')")"
 [ $FAIL = 0 ] && echo "=== 전부 통과 ===" || echo "=== 실패 있음 ==="
 exit $FAIL
