@@ -70,6 +70,6 @@ ok "시드: 이지형 ✅ · 김지훈(2명) ⚠ · 임태규(탈퇴만) ❌ · 
 ok "탈퇴 계정과 산 계정이 같은 이름(구자호) → 산 계정에만 ✅ · 탈퇴 계정은 그대로" "✅|2024-12-20|" "$(echo "$seed" | grep '^구자호' | cut -d'|' -f3 | grep -oE '^(✅|⚠|❌|＝)')|$($P -c "select membership_joined_at::text from public.profiles where display_name='구자호' and deleted_at is null")|$($P -c "select coalesce(membership_joined_at::text,'') from public.profiles where display_name='구자호' and deleted_at is not null")"
 ok "시드 뒤 이지형 2024-12-05 · 김지훈 둘 다 비어 있음" "2024-12-05|0" "$($P -c "select membership_joined_at::text from public.profiles where display_name='이지형'")|$($P -c "select count(*) from public.profiles where regexp_replace(display_name,'\s','','g')='김지훈' and membership_joined_at is not null")"
 ok "시드 두 번 돌리면 이지형은 ＝ 이미 같음" "＝" "$($P -f sql/membership_joined_seed_2026-10-15.sql 2>&1 | grep '^이지형' | cut -d'|' -f3 | grep -oE '^(✅|⚠|❌|＝)')"
-ok "시드 결과 행 수 = 목록 22" "22" "$($P -f sql/membership_joined_seed_2026-10-15.sql 2>&1 | grep -cE '^[가-힣]+\|')"
+ok "시드 결과 행 수 = 목록 24" "24" "$($P -f sql/membership_joined_seed_2026-10-15.sql 2>&1 | grep -cE '^[가-힣]+\|')"
 [ $FAIL = 0 ] && echo "=== 전부 통과 ===" || echo "=== 실패 있음 ==="
 exit $FAIL
