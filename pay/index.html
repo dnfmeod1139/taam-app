@@ -276,7 +276,7 @@ button.go:active:not(:disabled){opacity:.85}
   // 🆕 2026-09-29 매장 이름을 언어에 맞게 — RPC 가 restaurants 의 영문·일본어 표기를 같이 준다. 비어 있으면 한글.
   function venueName(c){
     if(!c) return '';
-    if(c.purpose === 'membership' || c.purpose === 'custom' || !c.event_date) return c.title || c.venue_name || '';   // 🆕 2026-10-18 회차 없는 결제(멤버십·자유 금액)는 제목
+    if(!c.event_date) return c.title || c.venue_name || '';   // 🆕 2026-10-18 회차 없는 결제(멤버십·자유 금액)는 제목 — purpose 로 가르면 옛 정산 청구(custom 으로 백필 · 회차 있음)의 매장·날짜가 사라진다
     if(LANG === 'en' && c.venue_name_en) return c.venue_name_en;
     if(LANG === 'ja' && c.venue_name_jp) return c.venue_name_jp;
     return c.venue_name || '';
@@ -375,7 +375,7 @@ button.go:active:not(:disabled){opacity:.85}
       if(byCur && byCur !== LANG){ LANG = byCur; applyLang(); }
       LANG_EXPLICIT = true;
     }
-    var noEvent = (c.purpose === 'membership' || c.purpose === 'custom' || !c.event_date);   // 🆕 2026-10-18
+    var noEvent = !c.event_date;   // 🆕 2026-10-18 회차가 없는 결제(새 멤버십·자유 금액)만 — 옛 정산 청구는 purpose 가 custom 이어도 회차가 있다
     $('vVenue').textContent = venueName(c) || (noEvent ? t('kind') : '대관');
     var d = String(c.event_date || '');
     var hm = String(c.event_time || '').slice(0,5);   // ⚠ 't' 로 두면 번역 함수 t() 를 가린다
@@ -444,7 +444,7 @@ button.go:active:not(:disabled){opacity:.85}
     show('load', false); show('view', false);
     $('dMark').textContent = '✓'; $('dMark').className = 'mk ok';
     $('dTitle').textContent = t('done_t');
-    var noEv = (c.purpose === 'membership' || c.purpose === 'custom' || !c.event_date);
+    var noEv = !c.event_date;
     $('dDesc').textContent  = noEv ? ((c.title || '') + (c.subtitle ? ' · ' + c.subtitle : '') + (c.purpose === 'membership' ? '\n' + t('mship_done') : '')) : ((venueName(c) || '') + ' · ' + String(c.event_date || ''));
     $('dDesc').style.whiteSpace = 'pre-line';
     var pcur = String(c.pay_currency || (extra && extra.currency) || 'KRW').toUpperCase();
