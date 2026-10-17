@@ -32005,8 +32005,8 @@ async function mlOpen(uid){
   window._mlFeeRows = mfRows;                  // 수정 폼 프리필용 — mlFeeEdit(id) 가 읽는다
   window._mlFeeLoadErr = !!mfLoadErr;          // 못 읽은 상태면 저장을 막는다(중복 기록 방지)
   var mfAuto = txs.filter(function(r){ return r.change_type === 'membership_payment'; });
-  // 🔧 2026-10-17 한 결제가 두 주머니(멤버십+일반)를 쓰면 원장 줄이 둘이다 — 같은 payment_id(없으면 같은 분)는 한 건으로 센다(적대 리뷰 · 서버 taam_membership_fee_due 와 같은 규칙)
-  var _mfAutoKeys = {}; mfAuto.forEach(function(r){ _mfAutoKeys[r.payment_id ? 'p:' + r.payment_id : 't:' + String(r.created_at || '').slice(0, 16)] = 1; });
+  // 🔧 2026-10-17 한 결제가 두 주머니(멤버십+일반)를 쓰면 원장 줄이 둘이다 — 같은 payment_id(없으면 같은 KST 날짜)는 한 건으로 센다(적대 리뷰 · 서버 taam_membership_fee_due 와 같은 규칙)
+  var _mfAutoKeys = {}; mfAuto.forEach(function(r){ _mfAutoKeys[r.payment_id ? 'p:' + r.payment_id : 'd:' + _kstYmd(r.created_at)] = 1; });   // payment_id 없으면 같은 KST 날짜 = 한 결제 (분 경계 걸침 방지 · 서버와 같음)
   var mfAutoN = Object.keys(_mfAutoKeys).length;
   var mfSum = 0; mfRows.forEach(function(f){ mfSum += parseInt(f.amount_krw) || 0; });
   var mfAutoSum = 0; mfAuto.forEach(function(r){ mfAutoSum += Math.abs(parseInt(r.amount) || 0); });
@@ -61527,13 +61527,14 @@ try{
     try{ history.replaceState(null, '', location.pathname); }catch(_h){}
   }
 }catch(_b){}
-// 🆕 2026-10-17 ?feedue=1 — 연회비 알림 푸시로 열린 경우. 슈퍼어드민으로 확인될 때까지 기다렸다 연다(최대 20초 · 회원이면 열지 않는다)
+// 🆕 2026-10-17 ?feedue=1 — 연회비 알림 푸시로 열린 경우. 스플래시가 닫히고 슈퍼어드민으로 확인될 때까지 기다렸다 연다(최대 20초 · 회원이면 열지 않는다)
 try{
   if(/[?&]feedue=1/.test(String(location.search || ''))){
     try{ history.replaceState(null, '', location.pathname); }catch(_h2){}
     var _fdTries = 0, _fdTimer = setInterval(function(){
       _fdTries++;
-      if(typeof _isSuperAdmin === 'function' && _isSuperAdmin()){ clearInterval(_fdTimer); try{ feeDueOpen(); }catch(_e){} }
+      var _fdSplash = (typeof _splashIsShowing === 'function') && _splashIsShowing();   // 🔧 스플래시(z 9000) 위에 팝업(z 9200)이 먼저 뜨지 않게 — 닫힌 뒤 연다(적대 리뷰)
+      if(!_fdSplash && typeof _isSuperAdmin === 'function' && _isSuperAdmin()){ clearInterval(_fdTimer); try{ feeDueOpen(); }catch(_e){} }
       else if(_fdTries > 40) clearInterval(_fdTimer);
     }, 500);
   }

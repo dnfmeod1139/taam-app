@@ -5,7 +5,8 @@
 -- 왜: 연회비는 가입 기념일마다 받는데(국내 M 1,125,000 · T 630,000 · 해외 M $990 · T $300) 아무도 시기를 알려 주지 않았다.
 --     회원 원장 연회비 탭의 「다음 납부 기준일」(앱 _mlFeeDue)과 **같은 규칙**을 서버에 두고, 전원을 한 표로 보고 매일 알린다.
 -- 규칙: 가입일 = profiles.membership_joined_at(실제 가입일) 우선, 없으면 created_at 의 KST 날짜 (= taam_member_start().joined_at 과 같다).
---       연차 수 = 가입일부터 오늘(KST)까지 지난 기념일 수(가입일 자체 포함). 납부 건수 = membership_fees 행 + 원장 membership_payment **결제 수**(같은 payment_id 는 한 건 · 멤버십+일반 두 주머니를 쓴 결제는 줄이 둘이다).
+--       연차 수 = 가입일부터 오늘(KST)까지 지난 기념일 수(가입일 자체 포함). 납부 건수 = membership_fees 행 + 원장 membership_payment **결제 수**(같은 payment_id · 없으면 같은 KST 날짜는 한 건 · 멤버십+일반 두 주머니를 쓴 결제는 줄이 둘이다).
+--       예상액 통화 = 그 회원의 연회비 기록 외화(최근) → 잠금 전 통화(profiles.currency_prev) → profiles.currency → KRW. (라이브 currency 는 전원 KRW 로 잠겨 있어 그것만 보면 해외 회원이 원화로 나온다)
 --       기준일 = 가입일 + 납부 건수 년. 오늘 이전이면 밀린 것(부족 = 연차 − 납부), 아니면 다음 납부일. 2/29 가입은 평년 2/28 (date + interval 이 그렇게 자른다 · 앱과 같음).
 -- 대상: 탈퇴 아님 · 등급 M/T · 운영 계정(superadmin/super_admin/admin) 제외.
 -- 알림: 매일 09:00 KST 크론 `taam-membership-fee-due` → taam_membership_fee_notify(). 회원·기준일마다 30일 전 · 7일 전 · 당일 · 7일 뒤 · 30일 뒤 **한 번씩**
@@ -61,12 +62,18 @@ begin
   if not public._taam_fee_caller_ok() then raise exception 'FORBIDDEN' using errcode = '42501'; end if;
   return query
   with m as (
-    select p.id, p.display_name, p.membership_tier as tier, coalesce(nullif(p.currency, ''), 'KRW') as cur,
+    select p.id, p.display_name, p.membership_tier as tier,
+           -- 통화: 라이브 profiles.currency 는 2026-09-14 부터 전원 'KRW' 로 잠겨 있다(sql/currency_krw_only.sql · 원래 값은 currency_prev).
+           --       그래서 그 회원이 실제로 낸 연회비의 외화(membership_fees.fx_currency 최근 것) → 잠금 전 통화(currency_prev · 컬럼이 없는 DB 에서도 to_jsonb 로 안전) → currency → KRW 순으로 고른다(적대 리뷰)
+           coalesce(
+             (select f.fx_currency from public.membership_fees f where f.user_id = p.id and f.fx_currency in ('USD', 'JPY') order by f.paid_at desc, f.created_at desc limit 1),
+             case when (to_jsonb(p) ->> 'currency_prev') in ('USD', 'JPY') then to_jsonb(p) ->> 'currency_prev' end,
+             nullif(p.currency, ''), 'KRW') as cur,
            coalesce(p.membership_joined_at, (p.created_at at time zone 'Asia/Seoul')::date) as joined,
            case when p.membership_joined_at is not null then 'manual' else 'app' end as jk,
            (select count(*) from public.membership_fees f where f.user_id = p.id)::int
-         + (select count(distinct coalesce(t.payment_id::text, to_char(t.created_at at time zone 'Asia/Seoul', 'YYYY-MM-DD HH24:MI')))
-              from public.deposit_transactions t where t.user_id = p.id and t.change_type = 'membership_payment')::int as paid,   -- 한 결제가 두 주머니면 원장 줄이 둘 — 결제 단위로 센다
+         + (select count(distinct coalesce(t.payment_id::text, to_char(t.created_at at time zone 'Asia/Seoul', 'YYYY-MM-DD')))
+              from public.deposit_transactions t where t.user_id = p.id and t.change_type = 'membership_payment')::int as paid,   -- 한 결제가 두 주머니면 원장 줄이 둘 — 결제 단위로(payment_id · 없으면 같은 KST 날짜) 센다
            (select max(f.paid_at) from public.membership_fees f where f.user_id = p.id) as last_paid
       from public.profiles p
      where p.deleted_at is null
@@ -113,7 +120,7 @@ declare
   v_stages  int[] := array[30, 7, 0, -7, -30];
   r record; v_stage int; v_new int;
   v_lines text[] := '{}'; v_members jsonb := '[]'::jsonb; v_cnt int := 0;
-  v_title text; v_body text; v_push_body text; v_n int := 0; v_push jsonb := null;
+  v_title text; v_body text := ''; v_push_body text; v_n int := 0; v_push jsonb := null; v_line text; v_shown int := 0;
 begin
   if not public._taam_fee_caller_ok() then raise exception 'FORBIDDEN' using errcode = '42501'; end if;
   for r in
@@ -139,10 +146,16 @@ begin
   end loop;
   if v_cnt = 0 then return jsonb_build_object('ok', true, 'today', v_today, 'notified', 0); end if;
   v_title     := '💰 연회비 납부 시기 ' || v_cnt || '명';
-  v_body      := array_to_string(v_lines, E'\n');
+  -- 인앱 본문: 벨이 body 를 그대로 그리므로 1000자 안에서 **줄 단위**로 넣고, 넘치면 「외 N명」(줄 중간 절단 금지 · 적대 리뷰). 전원은 /?feedue=1 화면과 payload.members 에
+  foreach v_line in array v_lines loop
+    exit when length(v_body) + length(v_line) + 1 > 940;
+    v_body := v_body || case when v_body = '' then '' else E'\n' end || v_line;
+    v_shown := v_shown + 1;
+  end loop;
+  if v_shown < v_cnt then v_body := v_body || E'\n외 ' || (v_cnt - v_shown) || '명 — 전원은 「연회비 납부 시기」 화면에서'; end if;
   v_push_body := array_to_string(v_lines[1:8], E'\n') || case when v_cnt > 8 then E'\n외 ' || (v_cnt - 8) || '명' else '' end;
   insert into public.notifications (user_id, type, title, body, url, payload)
-  select p.id, 'membership_fee_due', v_title, left(v_body, 1000), '/?feedue=1',
+  select p.id, 'membership_fee_due', v_title, v_body, '/?feedue=1',
          jsonb_build_object('today', v_today, 'count', v_cnt, 'members', v_members, 'via', 'taam_membership_fee_notify')
     from public.profiles p
    where p.role in ('superadmin', 'super_admin') and p.deleted_at is null;
