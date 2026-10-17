@@ -4,8 +4,10 @@
 -- 어디서: Supabase SQL Editor 에 통째로 RUN (20261017_membership_fee_due.sql 뒤). 마지막 표에 ❌ 가 없어야 정상.
 -- 왜: 테스트 계정·면제 회원이 M/T 등급이면 「연회비 납부 시기」 목록과 매일 알림에 계속 올라온다. 슈퍼어드민이 회원 원장 연회비 탭에서
 --     「대상 제외 / 포함」을 누르면 목록·알림에서 빠지고(기본 조회), 화면의 「제외」 필터(p_include_exempt)에서만 보인다.
--- 가드: 회원 세션은 이 칸을 못 바꾼다 — 자기를 제외해 연회비 알림을 피하는 길이 되므로. membership_joined_at 가드와 같은 방식(되돌림 · 예외 아님).
---       누가·언제는 트리거가 적는다(fee_exempt_set_by/at · 앱이 보내도 무시).
+-- 가드: 회원 세션은 이 칸을 못 바꾼다 — 자기를 제외해 연회비 알림을 피하는 길이 되므로. membership_joined_at 가드와 같은 방식(되돌림 · 예외 아님 · 전 칸 트리거).
+--       누가·언제는 트리거가 적는다(fee_exempt_set_by/at · 앱이 보내도 무시 · set_by/at 만 보낸 UPDATE 도 되돌린다).
+-- ⚠ fee_exempt_note 는 profiles 의 칸이라 회원 본인이 자기 행을 읽을 때 같이 보인다(「profiles select own」) — 회원이 보면 안 되는 말은 적지 않는다.
+-- 순서: 이 파일 → sql/fee_exempt_seed_2026-10-17.sql. 이 파일은 알림을 보내지 않는다(제외 전 명단이 실려 나가지 않게 ⑤ 는 존재 검사만).
 -- 바뀌는 함수: taam_membership_fee_due 에 p_include_exempt(기본 false)와 출력 열 fee_exempt · fee_exempt_note 가 더해진다.
 --             taam_membership_fee_notify 는 기본값(false)으로 부르니 제외 회원에게는 알리지 않는다.
 -- 회귀: bash sql/_test/t_fee_due.sh (이 파일까지 올린다)
@@ -53,8 +55,9 @@ begin
   return new;
 end $$;
 drop trigger if exists trg_taam_guard_fee_exempt on public.profiles;
+-- ⚠ OF 목록 없이 전 칸에 건다 — 'UPDATE OF fee_exempt, fee_exempt_note' 로 걸면 set_by/set_at 만 바꾸는 UPDATE 에 트리거가 안 돌아 회원이 감사 칸을 위조할 수 있다(적대 리뷰). membership_joined 가드와 같다
 create trigger trg_taam_guard_fee_exempt
-  before insert or update of fee_exempt, fee_exempt_note on public.profiles
+  before insert or update on public.profiles
   for each row execute function public.taam_guard_fee_exempt();
 
 -- ── 보고 함수 — p_include_exempt · fee_exempt 출력 (몸체는 20261017_membership_fee_due.sql 과 같고 제외 조건만 더함) ──
@@ -118,7 +121,7 @@ union all select '③ 보고 함수 (uuid, date, boolean)',
              and to_regprocedure('public.taam_membership_fee_due(uuid,date)') is null then '✅' else '❌' end
 union all select '④ anon 실행 권한 없음',
        case when has_function_privilege('anon', 'public.taam_membership_fee_due(uuid,date,boolean)', 'execute') then '❌' else '✅' end
-union all select '⑤ 알림 함수가 새 보고 함수를 부른다 (오늘 · notified 는 이미 알린 회원이면 0)',
-       public.taam_membership_fee_notify()::text
+union all select '⑤ 알림 함수 taam_membership_fee_notify 존재 (설치 중에는 부르지 않는다 — 시드 전이라 제외 예정 회원이 실려 나갈 수 있다)',
+       case when to_regprocedure('public.taam_membership_fee_notify(date)') is not null then '✅' else '❌' end
 union all select '⑥ 지금 제외된 회원 수 / 대상',
        (select count(*) from public.taam_membership_fee_due(null, null, true) d where d.fee_exempt)::text || '명 / ' || (select count(*) from public.taam_membership_fee_due())::text || '명';
