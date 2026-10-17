@@ -214,7 +214,18 @@ DB 값은 `'A'` 그대로고 **이름만** 「게스트 회원」이다. 값을 
 - **연회비 탭 머리 「다음 납부 기준일 · 부족 N건」(2026-10-17 · `_mlFeeDue`/`_mlFeeDueHtml`).** 가입일은 서버 `joined_at` 규칙(실제 가입일 우선, 없으면 앱 가입일 · 서버 함수가 없으면 `profiles.membership_joined_at` → `created_at` KST)으로 고르고,
   오늘(KST)까지 지난 기념일 수 = 시작된 연차 수, 납부 건수 = 기록 + 앱 결제 줄. **기준일 = 가입일 + 납부 건수 년** — 오늘 이전이면 「N일 지남 · 부족 N건」(빨강), 아니면 「D-N」, 건수가 연차보다 많으면 「선납 N건」.
   연차 통에 넣어 세지 않는 이유: 기념일보다 먼저 낸 선납이 「앞 통 2건·뒤 통 0건」의 거짓 부족을 만든다 — 대신 분납(한 해를 두 번에)은 두 건으로 세이니 메모로 가린다. M·T 가 아니면 「산정 대상 아님」, 못 읽은 상태(`mfLoadErr`)면 건수가 거짓이라 세지 않는다.
-  2/29 가입은 평년 2/28. 날짜는 'YYYY-MM-DD' 문자열만(시간대 변환 없음). 회귀: 스크래치 `mfdue.js`(33건).
+  2/29 가입은 평년 2/28. 날짜는 'YYYY-MM-DD' 문자열만(시간대 변환 없음). **앱 결제 줄(membership_payment)은 결제 단위로 센다** — 한 결제가 멤버십+일반 두 주머니를 쓰면 원장 줄이 둘이라 같은 `payment_id`(없으면 같은 분)를 한 건으로(적대 리뷰 · 원장 select 에 `payment_id` 추가 · 머리줄 「앱 결제 1건(원장 2줄)」). 회귀: 스크래치 `mfdue.js`(36건).
+- **연회비 납부 시기 — 서버 보고 RPC + 매일 슈퍼어드민 알림 + 어드민 화면 (2026-10-17, `20261017_membership_fee_due.sql` · 실행 필요).** 탭의 규칙을 서버에 그대로 둔다 —
+  `taam_membership_fee_due(p_uid, p_today)`(security definer · 슈퍼어드민/SQL Editor/크론/service_role 만 · 회원·anon FORBIDDEN · `_taam_fee_caller_ok`)가 M·T 회원(탈퇴·운영 계정 제외) 전원의
+  가입일(실제 우선 · 없으면 created_at KST) · 연차 수(`_taam_fee_years`: 오늘까지 지난 기념일 수 · 2/29 는 date+interval 이 2/28 로 자른다 = 앱) · 납부 건수(membership_fees + 원장 membership_payment 결제 수) ·
+  기준일(가입일 + 납부 건수 년) · days_left · short · ahead · fee_hint(KRW M ₩1,125,000 / T ₩630,000 · USD $990 / $300 · 그 외 「규정 없음」)를 기준일 순으로 돌려준다.
+  `taam_membership_fee_notify(p_today)`: days_left ≤ 30 인 회원마다 단계 30 · 7 · 0 · −7 · −30 중 **도달한 가장 급한 하나**를 `membership_fee_notices`(회원·기준일·단계 PK · RLS 슈퍼어드민 읽기)에 적고
+  (그 위 단계도 같이 적어 첫 실행에 다섯 번 쌓이지 않게 · `insert … on conflict do nothing` 의 row_count 로 「새로 적힌 것만」) 새로 적힌 회원을 모아 **슈퍼어드민마다 인앱 알림 1줄**(type `membership_fee_due` · 벨 라벨 FEE DUE ·
+  본문 「이름 · 등급 · 기준일 D-N/오늘/N일 지남 · N년차 · 예상액」 전부 · url `/?feedue=1`) + `taam_admin_push` 1번(8줄 + 「외 N명」 · tag `mfee-YYYYMMDD`). 푸시 실패는 삼킨다(알림은 간다).
+  납부가 기록되면 기준일이 1년 밀려 새 키가 되므로 자연히 다음 해에 다시 알린다. 크론 `taam-membership-fee-due` 매일 00:00 UTC(09:00 KST · 게스트 10시·방문 11시와 안 겹침) — 함수가 DB 안에서 돌아 Edge·JWT 가 없다.
+  **예치금·원장·membership_fees 에는 쓰지 않는다** — 알리기만. 앱: 어드민 메뉴 「💰 연회비 납부 시기」(`feeDueOpen` · 필터 전체/부족/30일 내/정상 · 줄 → `openMemberLedger()+mlOpen(uid)` · 「지금 점검 · 알림」= notify RPC ·
+  함수 없으면 「서버 준비 필요」) · 벨 `/?feedue=1` → 이 화면 · 부팅 `?feedue=1` 은 슈퍼어드민으로 확인될 때까지 기다렸다 연다(20초). ⚠ 테스트에서 알림 호출과 조회를 한 문장에 넣으면 조회가 호출 전 스냅샷을 본다 — 따로 부른다.
+  ⚠ 리뷰 에이전트가 스크래치에 같은 이름(`feedue.js`)으로 파일을 쓸 수 있다 — 화면 회귀는 `fdscreen.js`. 회귀: `bash sql/_test/t_fee_due.sh`(32건) · 스크래치 `fdscreen.js`(31건).
 - 회귀: `bash sql/_test/t_member_start.sh`(25건 — 가드·시드·anon 포함) · `bash sql/_test/t_membership_fees.sh`(12건) · `bash sql/_test/t_rpc_caller_guard.sh`(7건) · 스크래치 `mjoined.js`(23건).
 
 ### 한 회원 = 한 회차 1건 · 같은 날 같은 시간대 1건 (2026-10-13 카타오리 5/21 사고)

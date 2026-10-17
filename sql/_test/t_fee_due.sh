@@ -1,0 +1,89 @@
+#!/bin/bash
+# 연회비 납부 시기 보고·알림 회귀 — 2026-10-17. 먼저: 로컬 pg. 실행: bash sql/_test/t_fee_due.sh
+cd "$(dirname "$0")/../.."
+DB=t_feedue; psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1; psql -h /tmp -U postgres -d postgres -q -c "create database $DB" >/dev/null
+P="psql -h /tmp -U postgres -d $DB -q -At"
+U=a1000000-0000-4000-8000-0000000000
+$P <<SQL >/dev/null 2>&1
+do \$\$ begin if not exists (select 1 from pg_roles where rolname='anon') then create role anon nologin; end if;
+          if not exists (select 1 from pg_roles where rolname='authenticated') then create role authenticated nologin; end if; end \$\$;
+alter default privileges in schema public grant execute on functions to anon, authenticated;
+create schema auth; create table auth.users(id uuid primary key);
+create or replace function auth.uid() returns uuid language sql stable as \$\$ select nullif(current_setting('taam.uid', true), '')::uuid \$\$;
+create or replace function public._taam_uid_is_super() returns boolean language sql stable as \$\$ select coalesce(current_setting('taam.super', true), '') = '1' \$\$;
+create or replace function public.is_super_admin(u uuid) returns boolean language sql stable as \$\$ select coalesce(current_setting('taam.super', true), '') = '1' \$\$;
+create table public.profiles(id uuid primary key, display_name text, role text, membership_tier text, currency text, created_at timestamptz default now(), membership_joined_at date, deleted_at timestamptz);
+create table public.membership_fees(id uuid primary key default gen_random_uuid(), user_id uuid, paid_at date, amount_krw int);
+create table public.deposit_transactions(id bigserial primary key, user_id uuid, change_type text, payment_id uuid, created_at timestamptz default now());
+create table public.notifications(id uuid primary key default gen_random_uuid(), user_id uuid, type text, title text, body text, url text, payload jsonb, created_at timestamptz default now());
+create table public.push_calls(title text, body text, url text, tag text, category text);
+create or replace function public.taam_admin_push(p_title text, p_body text, p_url text default '/', p_tag text default null, p_category text default 'admin') returns jsonb language plpgsql as \$\$
+begin insert into public.push_calls values (p_title, p_body, p_url, p_tag, p_category); return jsonb_build_object('ok', true); end \$\$;
+insert into auth.users select ('${U}' || lpad(g::text, 2, '0'))::uuid from generate_series(11, 21) g;
+insert into public.profiles(id, display_name, role, membership_tier, currency, created_at, membership_joined_at, deleted_at) values
+ ('${U}11','가나다','user','M','KRW','2026-01-10T00:00:00Z','2024-12-05',null),
+ ('${U}12','벽돌','user','M',null,'2024-12-19T16:00:00Z',null,null),
+ ('${U}13','게스트','user','A','KRW','2026-01-10T00:00:00Z',null,null),
+ ('${U}14','탈퇴','user','M','KRW','2024-01-10T00:00:00Z',null,'2026-01-01T00:00:00Z'),
+ ('${U}15','운영자','superadmin','M','KRW','2024-01-10T00:00:00Z',null,null),
+ ('${U}16','운영자2','super_admin',null,null,'2024-01-10T00:00:00Z',null,null),
+ ('${U}17','Frank','user','T','USD','2026-10-01T00:00:00Z','2026-10-01',null),
+ ('${U}18','길동','user','M','KRW','2026-09-25T00:00:00Z','2026-09-25',null),
+ ('${U}19','하늬','user','T','KRW','2025-11-06T00:00:00Z','2025-11-06',null),
+ ('${U}20','엔화','user','M','JPY','2026-01-01T00:00:00Z','2026-01-01',null),
+ ('${U}21','티빈','user','T','','2026-03-01T00:00:00Z','2026-03-01',null);
+insert into public.membership_fees(user_id, paid_at, amount_krw) values ('${U}11','2024-12-05',1125000), ('${U}17','2026-10-01',402695), ('${U}19','2025-11-06',630000), ('${U}20','2026-01-01',1125000), ('${U}21','2026-03-01',630000);
+insert into public.deposit_transactions(user_id, change_type) values ('${U}11','membership_payment'), ('${U}11','ticket_purchase'), ('${U}12','ticket_purchase');
+insert into public.deposit_transactions(user_id, change_type, payment_id) values ('${U}21','membership_payment','e1000000-0000-4000-8000-000000000001'), ('${U}21','membership_payment','e1000000-0000-4000-8000-000000000001');
+SQL
+FAIL=0
+ok(){ if [ "$2" = "$3" ]; then echo "✅ $1"; else echo "❌ $1  (기대 $2, 실제 $3)"; FAIL=1; fi; }
+out=$($P -f supabase/migrations/20261017_membership_fee_due.sql 2>&1)
+ok "마이그레이션 오류 없음 · ✅ 4 · ⚠ 2(pg_cron 없음 notice + ④) · ❌ 0" "|4|2|0" "$(echo "$out" | grep -E "^ERROR|^psql:.*ERROR" | head -1)|$(echo "$out" | grep -c '✅')|$(echo "$out" | grep -c '⚠')|$(echo "$out" | grep -c '❌')"
+# 연차 수
+ok "연차: 2024-12-05 → 2026-10-17 = 2 · 2/29 가입 2026-02-28 = 3 · 2026-02-27 = 2 · 가입 전 0 · 당일 1" "2|3|2|0|1" "$($P -c "select public._taam_fee_years('2024-12-05','2026-10-17') || '|' || public._taam_fee_years('2024-02-29','2026-02-28') || '|' || public._taam_fee_years('2024-02-29','2026-02-27') || '|' || public._taam_fee_years('2026-10-18','2026-10-17') || '|' || public._taam_fee_years('2026-10-17','2026-10-17')")"
+# 보고
+T=2026-10-17
+ok "대상 7명(게스트·탈퇴·운영 계정 제외) · 기준일 순" "벽돌,길동,하늬,가나다,엔화,Frank,티빈" "$($P -c "select string_agg(display_name, ',' order by due_date, display_name) from public.taam_membership_fee_due(null, '$T')")"
+ok "가나다: 실제 가입일 · 기록1+앱결제1=2 · 2년차 · 2026-12-05 D-49 · 부족0" "2024-12-05|manual|2|2|2026-12-05|49|0|0|₩1,125,000|2024-12-05" "$($P -c "select joined_at || '|' || joined_kind || '|' || years || '|' || paid || '|' || due_date || '|' || days_left || '|' || short || '|' || ahead || '|' || fee_hint || '|' || last_paid from public.taam_membership_fee_due('${U}11', '$T')")"
+ok "벽돌: created_at UTC 12-19 16:00 → KST 12-20 · 납부0 · 2년차 · 666일 지남 · 부족2" "2024-12-20|app|2|0|2024-12-20|-666|2" "$($P -c "select joined_at || '|' || joined_kind || '|' || years || '|' || paid || '|' || due_date || '|' || days_left || '|' || short from public.taam_membership_fee_due('${U}12', '$T')")"
+ok "Frank: 해외 T → \$300 · 2027-10-01" "\$300|2027-10-01|349" "$($P -c "select fee_hint || '|' || due_date || '|' || days_left from public.taam_membership_fee_due('${U}17', '$T')")"
+ok "엔화: JPY 는 규정 없음 · 빈 통화는 KRW T → ₩630,000" "JPY — 규정 없음|₩630,000" "$($P -c "select (select fee_hint from public.taam_membership_fee_due('${U}20', '$T')) || '|' || (select fee_hint from public.taam_membership_fee_due('${U}21', '$T'))")"
+ok "티빈: 한 결제가 두 주머니 → 원장 2줄 = 1건 · 기록 1 → 납부 2 · 기준일 2028-03-01 · 선납 1" "2|2028-03-01|1" "$($P -c "select paid || '|' || due_date || '|' || ahead from public.taam_membership_fee_due('${U}21', '$T')")"
+ok "오늘 기본값(p_today 없음)도 돈다" "7" "$($P -c "select count(*) from public.taam_membership_fee_due()")"
+# 권한
+ok "회원 세션 → FORBIDDEN" "FORBIDDEN" "$($P -c "set taam.uid='${U}11'; set taam.super='0'; select count(*) from public.taam_membership_fee_due(null, '$T')" 2>&1 | grep -oE 'FORBIDDEN' | head -1)"
+ok "슈퍼어드민 세션 → 7명" "7" "$($P -c "set taam.uid='${U}15'; set taam.super='1'; select count(*) from public.taam_membership_fee_due(null, '$T')")"
+ok "회원 세션은 알림 함수도 FORBIDDEN" "FORBIDDEN" "$($P -c "set taam.uid='${U}11'; set taam.super='0'; select public.taam_membership_fee_notify('$T')" 2>&1 | grep -oE 'FORBIDDEN' | head -1)"
+ok "anon 실행 권한 없음 (보고·알림·내부)" "false|false|false" "$($P -c "select has_function_privilege('anon','public.taam_membership_fee_due(uuid,date)','execute') || '|' || has_function_privilege('anon','public.taam_membership_fee_notify(date)','execute') || '|' || has_function_privilege('anon','public._taam_fee_caller_ok()','execute')")"
+# 알림 — 마이그레이션 ⑦ 이 실제 오늘로 한 번 돌았으므로 기록을 비우고 고정 날짜로 다시
+$P -c "delete from public.membership_fee_notices; delete from public.notifications; delete from public.push_calls" >/dev/null
+r1=$($P -c "select public.taam_membership_fee_notify('$T')")
+ok "1회차($T): 벽돌(-666)·길동(-22)·하늬(D-20) 3명 · 슈퍼어드민 2" "3|2|true" "$(echo "$r1" | python3 -c "import json,sys; j=json.load(sys.stdin); print(str(j['notified'])+'|'+str(j['superadmins'])+'|'+str(j['push']['ok']).lower())")"
+ok "인앱 알림: 슈퍼어드민 둘에게 1줄씩 · 회원엔 없음 · url /?feedue=1" "2|0|/?feedue=1" "$($P -c "select (select count(*) from public.notifications where type='membership_fee_due' and user_id in ('${U}15','${U}16')) || '|' || (select count(*) from public.notifications where user_id not in ('${U}15','${U}16')) || '|' || (select url from public.notifications limit 1)")"
+ok "제목 · 본문 3줄(기준일 순 · 등급 · 남은날 · 연차 · 예상액)" "💰 연회비 납부 시기 3명|벽돌 · M · 2024.12.20 666일 지남 · 2년차 · ₩1,125,000/길동 · M · 2026.09.25 22일 지남 · 1년차 · ₩1,125,000/하늬 · T · 2026.11.06 D-20 · 1년차 · ₩630,000" "$($P -c "select title || '|' || replace(body, E'\n', '/') from public.notifications limit 1")"
+ok "푸시 1번 · tag mfee-20261017 · category admin" "1|mfee-20261017|admin" "$($P -c "select count(*) || '|' || min(tag) || '|' || min(category) from public.push_calls")"
+ok "기록: 벽돌 5단계 · 길동 4(30,7,0,-7) · 하늬 1(30)" "5|4|1" "$($P -c "select (select count(*) from public.membership_fee_notices where user_id='${U}12') || '|' || (select count(*) from public.membership_fee_notices where user_id='${U}18') || '|' || (select count(*) from public.membership_fee_notices where user_id='${U}19')")"
+ok "payload: count 3 · members 3 · 길동 stage -7" "3|3|-7" "$($P -c "select (payload->>'count') || '|' || jsonb_array_length(payload->'members') || '|' || (select m->>'stage' from jsonb_array_elements(payload->'members') m where m->>'name'='길동') from public.notifications limit 1")"
+ok "같은 날 2회차: 새로 알릴 것 없음" "0" "$($P -c "select public.taam_membership_fee_notify('$T')->>'notified'")"
+ok "  → 알림·푸시 그대로" "2|1" "$($P -c "select (select count(*) from public.notifications) || '|' || (select count(*) from public.push_calls)")"
+# ⚠ 알림 호출과 조회를 한 문장에 넣으면 조회가 호출 전 스냅샷을 본다 — 반드시 따로 부른다
+ok "10-30: 하늬 D-7 · 길동 35일 지남(-30 단계) 2명 (벽돌은 다 알렸음)" "2" "$($P -c "select public.taam_membership_fee_notify('2026-10-30')->>'notified'")"
+ok "  → 본문 2줄" "길동 · M · 2026.09.25 35일 지남 · 1년차 · ₩1,125,000/하늬 · T · 2026.11.06 D-7 · 1년차 · ₩630,000" "$($P -c "select replace(body, E'\n', '/') from public.notifications order by created_at desc limit 1")"
+$P -c "insert into public.membership_fees(user_id, paid_at, amount_krw) values ('${U}19','2026-10-31',630000)" >/dev/null
+ok "하늬 납부 기록 뒤 11-06: 하늬 기준일 2027 로 밀림 · 가나다가 D-29 로 창에 들어옴 → 1" "1|2027-11-06|365" "$($P -c "select public.taam_membership_fee_notify('2026-11-06')->>'notified'")|$($P -c "select due_date || '|' || days_left from public.taam_membership_fee_due('${U}19', '2026-11-06')")"
+ok "  → 본문 가나다 D-29 · 2년차" "가나다 · M · 2026.12.05 D-29 · 2년차 · ₩1,125,000" "$($P -c "select body from public.notifications order by created_at desc limit 1")"
+ok "12-05: 가나다 당일(3년차 시작) + 엔화 D-27 → 2명" "2" "$($P -c "select public.taam_membership_fee_notify('2026-12-05')->>'notified'")"
+ok "  → 「오늘」 · 3년차 · JPY 규정 없음" "가나다 · M · 2026.12.05 오늘 · 3년차 · ₩1,125,000/엔화 · M · 2027.01.01 D-27 · 1년차 · JPY — 규정 없음" "$($P -c "select replace(body, E'\n', '/') from public.notifications order by created_at desc limit 1")"
+$P -c "create or replace function public.taam_admin_push(p_title text, p_body text, p_url text default '/', p_tag text default null, p_category text default 'admin') returns jsonb language plpgsql as \$\$ begin raise exception 'net down'; end \$\$;" >/dev/null
+ok "12-12: 푸시가 깨져도 인앱 알림은 간다 (가나다 -7 · push.ok=false · reason)" "1|false|net down" "$($P -c "with r as (select public.taam_membership_fee_notify('2026-12-12') j) select (j->>'notified') || '|' || (j->'push'->>'ok') || '|' || (j->'push'->>'reason') from r")"
+ok "  → 인앱 알림 누적 5회 × 슈퍼어드민 2 = 10" "10" "$($P -c "select count(*) from public.notifications")"
+# 9명 넘으면 푸시 본문 8줄 + 외 N명, 인앱은 전부
+$P -c "create or replace function public.taam_admin_push(p_title text, p_body text, p_url text default '/', p_tag text default null, p_category text default 'admin') returns jsonb language plpgsql as \$\$ begin insert into public.push_calls values (p_title, p_body, p_url, p_tag, p_category); return jsonb_build_object('ok', true); end \$\$;
+insert into auth.users select ('${U}' || g::text)::uuid from generate_series(30, 41) g;
+insert into public.profiles(id, display_name, role, membership_tier, currency, created_at, membership_joined_at) select ('${U}' || g::text)::uuid, 'm' || g, 'user', 'T', 'KRW', '2025-01-01', '2025-01-01' from generate_series(30, 41) g;" >/dev/null
+ok "2027-01-15: 새 T 12명(3년차 · 부족3) + 가나다(-41→-30) + 엔화(-14→-7) = 14명" "14" "$($P -c "select public.taam_membership_fee_notify('2027-01-15')->>'notified'")"
+ok "  → 인앱 본문 14줄 · 푸시 8줄 + 「외 6명」 · 제목 14명 · 첫 줄 m30 3년차 부족" "14|9|외 6명|💰 연회비 납부 시기 14명|m30 · T · 2025.01.01 744일 지남 · 3년차 · ₩630,000" "$($P -c "select (select array_length(string_to_array(body, E'\n'), 1) from public.notifications order by created_at desc limit 1) || '|' || (select array_length(string_to_array(body, E'\n'), 1) from public.push_calls order by tag desc limit 1) || '|' || (select split_part(body, E'\n', 9) from public.push_calls order by tag desc limit 1) || '|' || (select title from public.push_calls order by tag desc limit 1) || '|' || (select split_part(body, E'\n', 1) from public.notifications order by created_at desc limit 1)")"
+ok "RLS: 기록 표는 슈퍼어드민만 읽기 정책 · authenticated select 권한" "membership_fee_notices_super_read|true" "$($P -c "select (select string_agg(policyname, ',') from pg_policies where tablename='membership_fee_notices') || '|' || has_table_privilege('authenticated', 'public.membership_fee_notices', 'select')")"
+[ $FAIL = 0 ] && echo "=== 전부 통과 ===" || echo "=== 실패 있음 ==="
+exit $FAIL

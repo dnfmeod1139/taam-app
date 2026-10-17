@@ -103,6 +103,7 @@ select p.display_name as 회원, to_char(u.paid_at, 'YYYY-MM-DD') as 납부일, 
  order by 2;
 
 -- ── D. 확인(읽기 전용) — 연회비 기록은 예치금을 움직이지 않는다. 「최근24시간_원장_줄」이 전원 0 이어야 한다 ──
+--      ⚠ 시드를 돌린 직후(24시간 안)에만 의미가 있다 — 그 사이 실제 거래(구매·환불)가 있으면 그 줄이 세어진다. 그때는 금액·설명으로 가린다. 2026-10-17 실행: 전원 0 ✅
 select p.display_name as 회원, p.membership_tier as 등급,
        (select count(*) from public.membership_fees f where f.user_id = p.id) as 연회비_기록,
        (select count(*) from public.deposit_transactions t where t.user_id = p.id and t.created_at > now() - interval '24 hours') as 최근24시간_원장_줄,

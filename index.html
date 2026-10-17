@@ -7502,6 +7502,103 @@ window.fxFetchJpy = fxFetchJpy;
 window.fxOpenSettings = fxOpenSettings; window.fxSaveSettings = fxSaveSettings;
 
 // ═══════════════════════════════════════════════════════════════
+// 🆕 2026-10-17 연회비 납부 시기 (슈퍼어드민) — 서버 taam_membership_fee_due() 가 센다(가입일(실제 우선) + 납부 건수 년 = 기준일 · 원장 탭의 _mlFeeDue 와 같은 규칙).
+//   매일 09:00 KST 크론 taam_membership_fee_notify 가 30일 전·7일 전·당일·7일 뒤·30일 뒤에 한 번씩 슈퍼어드민에게 인앱 알림 + 푸시(url /?feedue=1 → 이 화면).
+//   여기서는 전원을 기준일 순으로 보고, 줄을 누르면 회원 원장으로 간다. 「지금 점검 · 알림」은 같은 서버 함수를 바로 부른다(같은 단계는 두 번 안 간다).
+//   예치금·원장은 건드리지 않는다 — 알려 주기만 한다. 차감·기록은 원장 연회비 탭에서 사람이.
+var _fdRows = null, _fdFilter = 'all', _fdBusy = false;
+var _FD_ST = { late:['⚠ 부족', '#B23A2E', '#FBF3F2'], soon:['🔔 30일 내', '#B45309', '#FFF4E5'], ahead:['선납', '#1F5BD6', '#EAF1FF'], ok:['정상', '#1E7A46', '#EAF6EE'], nojoin:['가입일 없음', '#8a8580', '#F0ECE6'] };
+function feeDueOpen(){
+  if (typeof _isSuperAdmin === 'function' && !_isSuperAdmin()) { showToast('🔒', '슈퍼어드민 전용', '연회비 납부 시기 화면입니다'); return; }
+  var old = document.getElementById('feeDuePopup'); if (old) old.remove();
+  var el = document.createElement('div'); el.id = 'feeDuePopup';
+  el.style.cssText = 'position:fixed;inset:0;z-index:9200;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;';
+  el.innerHTML =
+    '<div style="background:#fff;border-radius:18px;width:100%;max-width:560px;max-height:92vh;overflow:auto;padding:22px 20px;font-family:var(--font-main);" data-lang-lock="ko">'
+    + '<div style="font-size:16px;font-weight:800;color:#1a1a18;">💰 연회비 납부 시기</div>'
+    + '<div style="font-size:11px;color:#9a9486;line-height:1.65;margin:4px 0 12px;">기준일 = 가입일(실제 가입일 우선) + 납부 건수 년. 매일 09:00 에 30일 전 · 7일 전 · 당일 · 7일 뒤 · 30일 뒤 한 번씩 슈퍼어드민에게 알립니다. 줄을 누르면 회원 원장으로 갑니다.</div>'
+    + '<div id="fdFilterBtns" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;"></div>'
+    + '<div id="fdList" style="font-size:12px;color:#777;">불러오는 중…</div>'
+    + '<div style="display:flex;gap:8px;margin-top:12px;">'
+      + '<button type="button" onclick="feeDueLoad()" style="flex:1;padding:10px;background:#fff;border:1px solid #d8d2c6;border-radius:11px;font-size:12px;font-weight:800;color:#6a635a;cursor:pointer;">새로 고침</button>'
+      + '<button type="button" id="fdNotifyBtn" onclick="feeDueNotifyNow()" style="flex:2;padding:10px;background:#1a1a18;border:none;border-radius:11px;font-size:12.5px;font-weight:800;color:#fff;cursor:pointer;">🔔 지금 점검 · 슈퍼어드민 알림</button>'
+    + '</div>'
+    + '<button onclick="feeDueClose()" style="width:100%;margin-top:14px;padding:10px;background:transparent;border:none;font-size:10px;font-weight:600;letter-spacing:.18em;color:#bbb;cursor:pointer;">닫기</button>'
+    + '</div>';
+  document.body.appendChild(el);
+  feeDueLoad();
+}
+function feeDueClose(){ var p = document.getElementById('feeDuePopup'); if (p) p.remove(); if (typeof _acPopupClosed === 'function') _acPopupClosed(); }
+function _fdStatus(r){
+  if (!r.due_date || r.days_left == null) return 'nojoin';
+  if ((r.short || 0) > 0) return 'late';
+  if (r.days_left <= 30) return 'soon';
+  if ((r.ahead || 0) > 0) return 'ahead';
+  return 'ok';
+}
+function _fdWhen(d){ if (d == null) return '–'; return d > 0 ? 'D-' + d : (d === 0 ? '오늘' : Math.abs(d) + '일 지남'); }
+function _fdMissing(e){ return !!(e && (String(e.code || '') === 'PGRST202' || /Could not find the function|does not exist/i.test(String(e.message || '')))); }
+async function feeDueLoad(){
+  var box = document.getElementById('fdList'); if (!box) return;
+  box.innerHTML = '<div style="padding:16px 0;text-align:center;color:#a8a29a;">불러오는 중…</div>';
+  _fdRows = null;
+  try {
+    if (!window.sb) throw new Error('no sb');
+    var r = await window.sb.rpc('taam_membership_fee_due');
+    if (r.error) throw r.error;
+    _fdRows = r.data || [];
+  } catch (e) {
+    box.innerHTML = '<div style="padding:14px 0;font-size:12.5px;font-weight:700;color:#B23A2E;">'
+      + (_fdMissing(e) ? '서버 준비 필요 — 20261017_membership_fee_due.sql 을 SQL Editor 에서 실행하세요.' : '불러오지 못했습니다: ' + _pcalEsc(String((e && e.message) || e))) + '</div>';
+    var fb0 = document.getElementById('fdFilterBtns'); if (fb0) fb0.innerHTML = '';
+    return;
+  }
+  feeDueRender();
+}
+function feeDueFilter(k){ _fdFilter = k; feeDueRender(); }
+function feeDueRender(){
+  var box = document.getElementById('fdList'), fb = document.getElementById('fdFilterBtns'); if (!box || !_fdRows) return;
+  var rows = _fdRows.map(function(r){ r._st = _fdStatus(r); return r; });
+  var cnt = { all: rows.length, late: 0, soon: 0, ok: 0 }; rows.forEach(function(r){ if (r._st === 'late') cnt.late++; else if (r._st === 'soon') cnt.soon++; else cnt.ok++; });
+  if (fb) fb.innerHTML = [['all', '전체 ' + cnt.all], ['late', '⚠ 부족 ' + cnt.late], ['soon', '🔔 30일 내 ' + cnt.soon], ['ok', '정상 ' + cnt.ok]].map(function(x){ var on = x[0] === _fdFilter;
+    return '<button type="button" class="fd-fb" data-k="' + x[0] + '" onclick="feeDueFilter(\'' + x[0] + '\')" style="padding:7px 11px;border-radius:9px;border:1.5px solid ' + (on ? '#1a1a18' : '#e0ddd8') + ';background:' + (on ? '#1a1a18' : '#fff') + ';color:' + (on ? '#fff' : '#666') + ';font-size:11.5px;font-weight:800;cursor:pointer;">' + x[1] + '</button>'; }).join('');
+  var list = rows.filter(function(r){ return _fdFilter === 'all' || (_fdFilter === 'ok' ? (r._st === 'ok' || r._st === 'ahead' || r._st === 'nojoin') : r._st === _fdFilter); });
+  if (!list.length) { box.innerHTML = '<div style="padding:16px 0;text-align:center;font-size:12.5px;color:#a8a29a;">해당 회원이 없습니다</div>'; return; }
+  box.innerHTML = list.map(function(r){
+    var st = _FD_ST[r._st], due = r.due_date ? (_memberDateFmt(String(r.due_date).slice(0, 10)) || String(r.due_date).slice(0, 10)) : '–';
+    var joined = r.joined_at ? (_memberDateFmt(String(r.joined_at).slice(0, 10)) || String(r.joined_at).slice(0, 10)) + (r.joined_kind === 'manual' ? '(실제)' : '') : '–';
+    return '<div class="fd-row" onclick="feeDueGo(\'' + _pcalEsc(String(r.user_id)) + '\')" style="display:flex;gap:10px;align-items:flex-start;padding:10px 2px;border-bottom:1px solid #f4efe6;cursor:pointer;">'
+      + '<div style="flex:none;min-width:64px;padding:3px 7px;border-radius:7px;background:' + st[2] + ';color:' + st[1] + ';font-size:10.5px;font-weight:800;text-align:center;line-height:1.5;">' + st[0] + (r._st === 'late' ? ' ' + r.short + '건' : '') + '</div>'
+      + '<div style="flex:1;min-width:0;">'
+        + '<div style="font-size:13.5px;font-weight:800;color:#1a1a18;line-height:1.4;">' + _pcalEsc(r.display_name || '(이름 없음)') + ' <span style="font-size:10.5px;font-weight:800;color:' + (r.tier === 'M' ? '#5C0A14' : '#8a7b63') + ';">' + _pcalEsc(String(r.tier || '')) + '</span></div>'
+        + '<div style="font-size:11px;color:#8a8580;margin-top:2px;line-height:1.4;">' + (r.years || 0) + '년차 · 납부 ' + (r.paid || 0) + '건 · 가입 ' + joined + ' · 예상 ' + _pcalEsc(String(r.fee_hint || '')) + '</div>'
+      + '</div>'
+      + '<div style="flex:none;text-align:right;"><div style="font-size:13px;font-weight:800;color:' + st[1] + ';">' + due + '</div><div style="font-size:11px;color:#8a8580;margin-top:2px;">' + _fdWhen(r.days_left) + '</div></div>'
+    + '</div>';
+  }).join('');
+}
+function feeDueGo(uid){
+  feeDueClose();
+  if (typeof openMemberLedger === 'function') openMemberLedger();
+  if (typeof mlOpen === 'function') setTimeout(function(){ try { mlOpen(uid); } catch (_e) {} }, 60);
+}
+async function feeDueNotifyNow(){
+  if (_fdBusy) return; _fdBusy = true;
+  var b = document.getElementById('fdNotifyBtn'); if (b) b.disabled = true;
+  try {
+    if (!window.sb) throw new Error('no sb');
+    var r = await window.sb.rpc('taam_membership_fee_notify');
+    if (r.error) throw r.error;
+    var d = r.data || {};
+    showToast('🔔', '연회비 점검 완료', (d.notified ? '대상 ' + d.notified + '명 — 슈퍼어드민 알림을 보냈습니다' : '새로 알릴 회원이 없습니다 (같은 단계는 한 번만)')
+      + (d.push && d.push.ok === false ? ' · 푸시 ' + (d.push.reason || '실패') : ''));
+    feeDueLoad();
+  } catch (e) {
+    showToast('⚠', _fdMissing(e) ? '서버 준비 필요' : '점검 실패', _fdMissing(e) ? '20261017_membership_fee_due.sql 을 먼저 실행하세요' : String((e && e.message) || e).slice(0, 120));
+  } finally { _fdBusy = false; var b2 = document.getElementById('fdNotifyBtn'); if (b2) b2.disabled = false; }
+}
+window.feeDueOpen = feeDueOpen; window.feeDueClose = feeDueClose; window.feeDueLoad = feeDueLoad; window.feeDueFilter = feeDueFilter; window.feeDueGo = feeDueGo; window.feeDueNotifyNow = feeDueNotifyNow;
+
 // 🆕 2026-10-13 카드 수수료 계산 (내부용 · 슈퍼어드민)
 //   카드로 받은 결제(티켓 부족분 카드 · 등록 카드(빌링) · 정산 결제 · 링크 초대)에 우리가 내는 PG 수수료를 기간별로 센다.
 //   ⚠ 회원에게 청구하는 기능이 아니다 — 여신전문금융업법 제19조④(가맹점수수료 회원 전가 금지). 내부 원가 확인용.
@@ -11835,6 +11932,13 @@ window.closePromoCarousel = function(){
         <div>
           <div class="admin-menu-text">💳 카드 수수료 계산 (내부용)</div>
           <div class="admin-menu-sub">카드로 받은 결제에 우리가 내는 PG 수수료를 기간별로 센다 — 회원에게 청구하지 않는다</div>
+        </div>
+        <div class="admin-arrow">›</div>
+      </div>
+      <div class="admin-menu-item" onclick="feeDueOpen()" data-lang-lock="ko">
+        <div>
+          <div class="admin-menu-text">💰 연회비 납부 시기</div>
+          <div class="admin-menu-sub">회원마다 다음 연회비 기준일(가입일 + 납부 건수 년) · 밀린 회원 · 매일 09:00 슈퍼어드민 알림</div>
         </div>
         <div class="admin-arrow">›</div>
       </div>
@@ -17791,6 +17895,7 @@ async function renderNotificationsList(){
         case 'visit_reminder':     return { label:'REMINDER',     color:'#1E7A46' };   // 🆕 2026-09-29
         case 'ticket_restock':     return { label:'RESTOCK',      color:'#B45309' };   // 🆕 2026-09-29 취소표
         case 'kashikiri_paid':     return { label:'PAID',         color:'#1F5BD6' };   // 🆕 2026-10-13 정산·링크 결제 완료(슈퍼어드민)
+        case 'membership_fee_due': return { label:'FEE DUE',      color:'#8A5A1E' };   // 🆕 2026-10-17 연회비 납부 시기(슈퍼어드민 · 매일 09:00)
         default:                   return { label:'NOTICE',       color:'#888' };
       }
     }
@@ -18174,6 +18279,12 @@ window._updateGnbMyReddot = _updateGnbMyReddot;
 // 알림 클릭 처리 — url 패턴별 분기
 function handleNotifClick(url){
   if(!url) return;
+  // 🆕 2026-10-17 /?feedue=1 → 연회비 납부 시기 화면 (슈퍼어드민 매일 알림)
+  if(/[?&]feedue=1/.test(url)){
+    try { closePage('notificationsListPage'); } catch(_){}
+    if(typeof feeDueOpen === 'function') setTimeout(feeDueOpen, 120);
+    return;
+  }
   try {
     // 🆕 2026-09-29 /?ticket=<id> → 그 회차 상세 (취소표·티켓 오픈 알림). 종전엔 아무도 이 파라미터를 읽지 않았다.
     var mk = url.match(/[?&]ticket=([^&]+)/);
@@ -31152,7 +31263,7 @@ async function mlOpen(uid){
   var [pf, dt, tk, msr] = await Promise.all([
     window.sb.from('profiles').select('*').eq('id', uid).maybeSingle(),
     window.sb.from('deposit_transactions')
-      .select('created_at, deposit_type, change_type, amount, balance_after, description, metadata')
+      .select('created_at, deposit_type, change_type, amount, balance_after, description, metadata, payment_id')   // 🔧 2026-10-17 payment_id: 앱 결제 줄을 결제 단위로 세기 위해
       .eq('user_id', uid).order('created_at', { ascending: false }).limit(500),
     window.sb.from('tickets')
       .select('id, created_at, restaurant_name, party_size, price, status, reservation_date, visit_time, purchase_id, ticket_product_id, extra_data')
@@ -31894,6 +32005,9 @@ async function mlOpen(uid){
   window._mlFeeRows = mfRows;                  // 수정 폼 프리필용 — mlFeeEdit(id) 가 읽는다
   window._mlFeeLoadErr = !!mfLoadErr;          // 못 읽은 상태면 저장을 막는다(중복 기록 방지)
   var mfAuto = txs.filter(function(r){ return r.change_type === 'membership_payment'; });
+  // 🔧 2026-10-17 한 결제가 두 주머니(멤버십+일반)를 쓰면 원장 줄이 둘이다 — 같은 payment_id(없으면 같은 분)는 한 건으로 센다(적대 리뷰 · 서버 taam_membership_fee_due 와 같은 규칙)
+  var _mfAutoKeys = {}; mfAuto.forEach(function(r){ _mfAutoKeys[r.payment_id ? 'p:' + r.payment_id : 't:' + String(r.created_at || '').slice(0, 16)] = 1; });
+  var mfAutoN = Object.keys(_mfAutoKeys).length;
   var mfSum = 0; mfRows.forEach(function(f){ mfSum += parseInt(f.amount_krw) || 0; });
   var mfAutoSum = 0; mfAuto.forEach(function(r){ mfAutoSum += Math.abs(parseInt(r.amount) || 0); });
   // 🔧 2026-10-16 자동 줄(원장)의 날짜는 KST 로 — UTC 로 자르면 새벽 결제가 하루 앞으로 밀려 기록(paid_at · KST 날짜)과 순서가 어긋난다(적대 리뷰)
@@ -31918,14 +32032,14 @@ async function mlOpen(uid){
       + '<div style="flex:none;text-align:right;">' + right + '</div></div>';
   }
   // 🔧 2026-10-16 머리줄은 기록과 자동 줄을 따로 센다 — 「납부 0회」 밑에 앱 결제 줄이 보이던 모순(적대 리뷰)
-  pm += grp('기록 ' + mfRows.length + '회 · ' + W + n(mfSum) + (mfAuto.length ? ' · 앱 결제 ' + mfAuto.length + '건 ' + W + n(mfAutoSum) : ''),
+  pm += grp('기록 ' + mfRows.length + '회 · ' + W + n(mfSum) + (mfAuto.length ? ' · 앱 결제 ' + mfAutoN + '건' + (mfAuto.length !== mfAutoN ? '(원장 ' + mfAuto.length + '줄)' : '') + ' ' + W + n(mfAutoSum) : ''),
             (mfLastD ? '최근 ' + _memberDateFmt(mfLastD) : '') + (_exp ? (mfLastD ? ' · ' : '') + '만료 ' + _exp : ''));
   // 🆕 2026-10-17 다음 납부 기준일 · 부족 — 가입일은 서버 joined_at(실제 가입일 우선, 없으면 앱 가입일)과 같은 규칙으로 고른다.
   //   납부 건수 = 기록 + 앱 결제 줄. 못 읽은 상태(mfLoadErr)면 건수가 거짓이라 세지 않는다 — 경고 줄만 남긴다.
   if(!mfLoadErr){
     var _feeJ = (_ms && _ms.joined_at) ? String(_ms.joined_at).slice(0, 10)
               : (u.membership_joined_at ? String(u.membership_joined_at).slice(0, 10) : (u.created_at ? _kstYmd(u.created_at) : ''));
-    pm += _mlFeeDueHtml(_mlFeeDue(_feeJ, mfRows.length + mfAuto.length, _mlKstToday()), u.membership_tier, C.ink);
+    pm += _mlFeeDueHtml(_mlFeeDue(_feeJ, mfRows.length + mfAutoN, _mlKstToday()), u.membership_tier, C.ink);
   }
   if(mfLoadErr) pm += '<div style="padding:10px 4px;font-size:12px;font-weight:700;color:#B23A2E;">연회비 기록을 불러오지 못했습니다 — 새로 고친 뒤 다시 보세요. 중복 기록을 막기 위해 저장은 막아 둡니다.</div>';
   mfAll.forEach(function(x){
@@ -44767,7 +44881,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.17-a';
+var TAAM_WEB_BUILD = '2026.10.17-b';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -61413,6 +61527,17 @@ try{
     try{ history.replaceState(null, '', location.pathname); }catch(_h){}
   }
 }catch(_b){}
+// 🆕 2026-10-17 ?feedue=1 — 연회비 알림 푸시로 열린 경우. 슈퍼어드민으로 확인될 때까지 기다렸다 연다(최대 20초 · 회원이면 열지 않는다)
+try{
+  if(/[?&]feedue=1/.test(String(location.search || ''))){
+    try{ history.replaceState(null, '', location.pathname); }catch(_h2){}
+    var _fdTries = 0, _fdTimer = setInterval(function(){
+      _fdTries++;
+      if(typeof _isSuperAdmin === 'function' && _isSuperAdmin()){ clearInterval(_fdTimer); try{ feeDueOpen(); }catch(_e){} }
+      else if(_fdTries > 40) clearInterval(_fdTimer);
+    }, 500);
+  }
+}catch(_b2){}
 // 캘린더가 그려지면(데이터 준비됨) 기다리던 회차를 연다
 if(typeof pcalRenderAll === 'function'){
   var _pcalRenderAllOrig = pcalRenderAll;
