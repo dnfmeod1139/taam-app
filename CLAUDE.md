@@ -980,6 +980,11 @@ raw 링크는 CDN 캐시가 남아 **고친 파일 대신 옛 파일이 뜨는 �
   TS 를 통째로 붙여 배포한다.** 배포 확인은 Actions 초록불이 아니라 함수가 새 응답(예: reason 필드)을 돌려주는지로 한다.
   손으로 돌리기: Actions → Supabase deploy → Run workflow (functions 칸 `all`).
 - 순서는 SQL → Edge 다. 「SQL 을 먼저」 규칙을 워크플로가 지킨다.
+- **켜기 전 기준선 (2026-10-18 · `sql/migrations_baseline_2026-10-18.sql`).** `_taam_migrations` 가 비어 있으면 워크플로는 `2*.sql` 30개를 **전부** 「안 돌린 파일」로 보고 다시 돌리려 든다 —
+  대부분 create or replace 라 무해하지만 md5 가드 파일(seat_sync2)에서 ❌ 로 멈추고 시드·백필이 또 돌 수 있다. 기준선 파일이 파일마다 대표 객체(함수·트리거·표·컬럼)의 존재를 보고
+  **있는 것만** 기록한다(여러 번 RUN 가능 · 「⚠ 라이브에 없음」은 직접 돌리거나 워크플로에 맡긴다 — 옛 파일은 직접이 안전). 워크플로에는 **기준선 가드**가 있다: 기록 0건인데 안 돌린 파일이 3개 이상이면
+  `::error` 로 멈춘다. 켜는 순서: ① 기준선 SQL → ② GitHub 시크릿 둘(`SUPABASE_ACCESS_TOKEN` · `SUPABASE_DB_URL` Session pooler URI · 값은 채팅에 적지 않는다) → ③ `main` 에 supabase/ 가 바뀌는 커밋.
+  첫 Edge 배포는 「그 커밋에서 바뀐 함수만」이라 안전하지만, 저장소에 없는 함수(`taam-format`)는 영원히 CLI 가 모르고, 대시보드에서 직접 고친 함수가 저장소보다 새 판이면 저장소 판으로 **덮인다** — 켜기 전에 둘이 같은지 본다(2026-10-18 기준 알려진 차이: `notify-guest-booking` 은 저장소가 더 새 판 · 덮여도 좋다).
 
 ## 배포 — Deploy Hook 의 201 은 「배포됐다」가 아니다
 
