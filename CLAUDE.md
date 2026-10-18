@@ -22,7 +22,7 @@
 
 ## 디렉토리 구조
 - `index.html` — **앱 본체**. 거의 모든 UI·로직·i18n이 여기 있음 (단일 파일)
-- (삭제됨 2026-08) `api/` Vercel 함수 — 앱은 Supabase Edge Function 만 호출. 단 `taam-format` Edge Function 소스는 저장소에 없음(대시보드 배포) — 수정 시 대시보드에서 확인
+- (삭제됨 2026-08) `api/` Vercel 함수 — 앱은 Supabase Edge Function 만 호출. `taam-format` 은 2026-09-16(78761fd)부터 저장소에도 있지만 **그 판을 대시보드에 올린 기록이 없다**(2026-09-14 재배포 목록에서 빠짐) — 라이브 판이 더 새 것일 수 있으니 CLI 로 덮기 전에 대시보드 Code 와 대조한다
 - `supabase/functions/` — Edge Functions (taam-chat, send-push, consume-invite, verify-invite, lineage-summarize, taam-translate, taam-translate-venues-batch, _shared)
 - `supabase/migrations/` — DB 마이그레이션 (0001~)
 - `sql/` — **수동 실행용 SQL 스크립트** (스키마·정책·수정·진단). `SQL_RUN_GUIDE.md` 참고
@@ -1009,7 +1009,8 @@ raw 링크는 CDN 캐시가 남아 **고친 파일 대신 옛 파일이 뜨는 �
   대부분 create or replace 라 무해하지만 md5 가드 파일(seat_sync2)에서 ❌ 로 멈추고 시드·백필이 또 돌 수 있다. 기준선 파일이 파일마다 대표 객체(함수·트리거·표·컬럼)의 존재를 보고
   **있는 것만** 기록한다(여러 번 RUN 가능 · 「⚠ 라이브에 없음」은 직접 돌리거나 워크플로에 맡긴다 — 옛 파일은 직접이 안전). 워크플로에는 **기준선 가드**가 있다: 기록 0건인데 안 돌린 파일이 3개 이상이면
   `::error` 로 멈춘다. 켜는 순서: ① 기준선 SQL → ② GitHub 시크릿 둘(`SUPABASE_ACCESS_TOKEN` · `SUPABASE_DB_URL` Session pooler URI · 값은 채팅에 적지 않는다) → ③ `main` 에 supabase/ 가 바뀌는 커밋.
-  첫 Edge 배포는 「그 커밋에서 바뀐 함수만」이라 안전하지만, 저장소에 없는 함수(`taam-format`)는 영원히 CLI 가 모르고, 대시보드에서 직접 고친 함수가 저장소보다 새 판이면 저장소 판으로 **덮인다** — 켜기 전에 둘이 같은지 본다(2026-10-18 기준 알려진 차이: `notify-guest-booking` 은 저장소가 더 새 판 · 덮여도 좋다).
+  첫 Edge 배포는 「그 커밋에서 바뀐 함수만」이라 안전하지만, 대시보드에서 직접 고친 함수가 저장소보다 새 판이면 저장소 판으로 **덮인다** — 켜기 전에 둘이 같은지 본다(2026-10-18 기준: `notify-visit-reminder`·`toss-billing-issue` 는 저장소 판을 대시보드에 붙여 같다 · `notify-guest-booking` 은 저장소가 더 새 판 · 덮여도 좋다 · `taam-format` 은 저장소 판(09-16)을 대시보드에 올린 기록이 없어 **모름**).
+  ⚠ `functions` 칸에 `all` 을 넣거나 `_shared/`·`config.toml` 이 바뀌면 **22개 전부** 저장소 판으로 덮인다 — 대조하지 않은 함수가 있는 동안은 `all` 을 쓰지 않고, 첫 수동 실행은 칸을 비워(바뀐 함수 없음 → SQL 연결만 확인) 돌린다. 기준선 SQL · 20261019 네 파일 기록은 2026-10-18 라이브 완료 ✅(_taam_migrations 34건) — 남은 것은 시크릿 둘뿐.
 
 ## 배포 — Deploy Hook 의 201 은 「배포됐다」가 아니다
 
