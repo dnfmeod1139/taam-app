@@ -49,5 +49,10 @@ ok "pick: 이름 목록" "list=send-push taam-chat" "$(WANT='send-push,taam-chat
 ok "pick: push 1d46027..7a78966 → notify-visit-reminder 만" "list=notify-visit-reminder " "$(EV=push BEFORE=1d46027 SHA=7a78966 $PICK | tail -1)"
 ok "pick: push e85f6a5..63fc876(함수 변경 없음) → 없음" "list=" "$(EV=push BEFORE=e85f6a5 SHA=63fc876 $PICK | tail -1)"
 ok "pick: before 가 0000(강제 푸시) → HEAD~1 로 폴백(오류 없음)" "0" "$(EV=push BEFORE=0000000000000000000000000000000000000000 SHA=HEAD $PICK >/dev/null 2>&1; echo $?)"
+# 문서만 바뀐 함수 폴더는 배포 대상이 아니다 · index.ts 가 바뀌면 대상 — ⚠ 작업 트리를 건드리지 않게 **임시 워크트리**에서 커밋한다
+WT=$(mktemp -d); git worktree add -q --detach "$WT" HEAD
+( cd "$WT" && echo "x" >> supabase/functions/notify-purchase/SETUP.md && printf "\n// t\n" >> supabase/functions/toss-order/index.ts && git add -A && git -c user.email=t@t -c user.name=t commit -q -m tmp-pick-test )
+ok "pick: SETUP.md 만 바뀐 notify-purchase 는 제외 · index.ts 가 바뀐 toss-order 만" "list=toss-order " "$(cd "$WT" && EV=push BEFORE=HEAD~1 SHA=HEAD bash "$ROOT/.github/scripts/supabase_pick.sh" | tail -1)"
+git worktree remove --force "$WT" >/dev/null 2>&1; rm -rf "$WT"
 psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1
 [ $FAIL = 0 ] && echo "=== 전부 통과 ===" || { echo "=== 실패 있음 ==="; exit 1; }
