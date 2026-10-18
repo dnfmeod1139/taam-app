@@ -164,6 +164,14 @@ button.go:active:not(:disabled){opacity:.85}
     <p class="fine" id="dFine" hidden><a id="dReceipt" href="#" target="_blank" rel="noopener" style="color:var(--burg)" data-t="receipt">영수증 보기</a></p>
   </div>
 
+  <!-- 🆕 2026-10-19 게스트 회원 가입 — 비회원 티켓 결제가 끝나면 서버가 초대 코드를 함께 준다(guest_invite). 가입하면 이 티켓이 내 계정에 붙고 리마인드·다음 예약이 앱에서 된다 -->
+  <div class="funnel" id="guest" hidden>
+    <div class="lb">Guest</div>
+    <p data-t="guest_p"></p>
+    <p style="margin-top:10px;font-size:13px;color:var(--ink2)"><span data-t="guest_code"></span> <b id="guestCode" style="font-size:18px;letter-spacing:.12em;color:var(--burg)"></b></p>
+    <a id="guestBtn" href="https://taam-app.vercel.app/" data-t="guest_btn">게스트 회원으로 가입하기</a>
+  </div>
+
   <!-- 멤버십 퍼널 — 돈을 낸 직후가 가장 잘 되는 순간이다 -->
   <div class="funnel" id="funnel" hidden>
     <div class="lb">Membership</div>
@@ -215,6 +223,7 @@ button.go:active:not(:disabled){opacity:.85}
       e_start:'결제를 시작하지 못했습니다.',
       e_start_d:'TAAM 담당자에게 알려주세요.',
       share_n:'{n}인 중 1인 몫',
+      guest_p:'가입하시면 이번 예약이 내 계정에 담기고, <b>방문 전 리마인드와 다음 예약</b>을 앱에서 바로 받으실 수 있습니다. 게스트 회원은 90일 동안 무료입니다.', guest_code:'초대 코드', guest_btn:'게스트 회원으로 가입하기',
       kind_mship:'멤버십', fail_prev:'이전 결제 시도가 완료되지 않았습니다', mship_done:'멤버십 결제가 완료되었습니다. 담당자가 확인 후 안내드립니다.'
     },
     en: {
@@ -240,6 +249,7 @@ button.go:active:not(:disabled){opacity:.85}
       e_start:'Could not start the payment.',
       e_start_d:'Please let TAAM know.',
       share_n:'1 of {n} guests',
+      guest_p:'Sign up and this reservation is saved to your account — <b>visit reminders and your next booking</b> right in the app. Guest membership is free for 90 days.', guest_code:'Invite code', guest_btn:'Join as a guest member',
       kind_mship:'Membership', fail_prev:'The previous payment attempt was not completed', mship_done:'Membership payment complete. TAAM will contact you shortly.'
     },
     ja: {
@@ -265,6 +275,7 @@ button.go:active:not(:disabled){opacity:.85}
       e_start:'お支払いを開始できませんでした。',
       e_start_d:'TAAM までお知らせください。',
       share_n:'{n}名様のうち1名様分',
+      guest_p:'ご登録いただくと、今回のご予約がアカウントに保存され、<b>来店前のリマインドや次回のご予約</b>をアプリで受け取れます。ゲスト会員は90日間無料です。', guest_code:'招待コード', guest_btn:'ゲスト会員として登録する',
       kind_mship:'メンバーシップ', fail_prev:'前回のお支払いは完了しませんでした', mship_done:'メンバーシップのお支払いが完了しました。担当者より改めてご案内いたします。'
     }
   };
@@ -456,7 +467,14 @@ button.go:active:not(:disabled){opacity:.85}
     var r = (extra && extra.receiptUrl) || c.receipt_url;
     if(r){ $('dReceipt').href = r; show('dFine', true); }
     show('done', true);
-    show('funnel', !noEv);   // 멤버십·자유 금액 결제 뒤엔 「멤버십 알아보기」 권유가 어긋난다
+    var gi = c.guest_invite && c.guest_invite.code ? c.guest_invite : null;   // 🆕 2026-10-19 비회원 티켓 결제 → 게스트 회원 초대
+    if(gi){
+      $('guestCode').textContent = String(gi.code);
+      $('guestBtn').href = 'https://taam-app.vercel.app/?invite=' + encodeURIComponent(String(gi.code));
+      var _gp = document.querySelector('#guest [data-t="guest_p"]'); if(_gp) _gp.innerHTML = t('guest_p');
+    }
+    show('guest', !!gi);
+    show('funnel', !noEv && !gi);   // 멤버십·자유 금액 결제 뒤엔 「멤버십 알아보기」 권유가 어긋난다 · 게스트 초대가 있으면 그쪽이 먼저
     $('kind').textContent = t('kind_done');
   }
 

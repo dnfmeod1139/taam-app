@@ -23,11 +23,17 @@
 //   SQL 이 **티켓id + 남은 일수를 열쇠로** 중복을 막는다. 이 함수를 하루에
 //   여러 번 불러도 새로 들어간 것이 없으면 아무것도 안 쏜다.
 //
+// 🆕 2026-10-19 비회원 손님(결제 링크 LINK- · 캘린더 수동 추가 MAN-)에게는 **카카오 알림톡**으로 간다 — 앱 계정이 없어 푸시가 갈 곳이 없다.
+//   대상·기록은 SQL(taam_guest_reminder_targets · taam_guest_reminder_mark · 20261019_guest_reminder.sql)이 정하고, 여기선 솔라피로 쏘기만 한다.
+//   템플릿 변수: #{name} #{shop} #{date} #{party} #{dday}  — 시크릿 KAKAO_TEMPLATE_GUEST_REMIND (카카오 비즈니스 채널에 등록·승인된 템플릿 id).
+//   국내 번호(010·011·016·017·018·019)만 보낸다 — 해외 번호는 skip 으로 기록한다(알림톡은 국내만). 템플릿이 없으면 기록하지 않고 건너뛴다(나중에 설정되면 그때 나간다).
+//   회원 소유 LINK-(extra_data.memberUid)는 위 회원 푸시가 맡는다 — 두 번 가지 않는다.
+//
 // 배포: Supabase 대시보드 → Edge Functions → notify-visit-reminder
 // 예약: 대시보드 Cron 에서 매일 한 번 (한국시간 오전 11시 권장)
 //   ⚠ SQL 쪽에 pg_cron 을 걸지 말 것 — 그러면 알림이 먼저 들어가 버려
 //     이 함수가 쏠 것을 못 본다 (guest_expiry 에서 이미 겪었다).
-// 필요 시크릿: SUPABASE_URL · SUPABASE_SERVICE_ROLE_KEY (기본 제공)
+// 필요 시크릿: SUPABASE_URL · SUPABASE_SERVICE_ROLE_KEY (기본 제공) · 알림톡: SOLAPI_API_KEY SOLAPI_API_SECRET SOLAPI_SENDER KAKAO_PF_ID (notify-guest-booking 과 공유) · KAKAO_TEMPLATE_GUEST_REMIND
 // ════════════════════════════════════════════════════════════
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
@@ -77,6 +83,82 @@ function build(r: Row) {
   return { ko, en, ja };
 }
 
+
+// ── 🆕 2026-10-19 비회원 알림톡 (notify-guest-booking 의 sendKakao 와 같은 솔라피 호출) ──
+type GuestRow = { ticket_id: string; name: string; phone: string; rest: string; date: string | null; vtime: string; pax: number; d: number; purchase_id: string };
+
+async function hmacHex(secret: string, msg: string): Promise<string> {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(msg));
+  return Array.from(new Uint8Array(sig)).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+// 국내 휴대폰만 — '+82 10…' · '8210…' 은 '010…' 으로. 그 밖(해외)은 null.
+function krMobile(raw: string): string | null {
+  let d = String(raw || '').replace(/[^0-9]/g, '');
+  if (d.startsWith('82')) d = '0' + d.slice(2);
+  return /^01[016789]\d{7,8}$/.test(d) ? d : null;
+}
+// '2027.05.01' · '2027-05-01' → '5월 1일(토)' (KST 요일)
+function fmtKoDate(raw: string | null, vtime: string): string {
+  const m = String(raw || '').match(/(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})/);
+  if (!m) return String(raw || '') + (vtime ? ' ' + vtime : '');
+  const dt = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  const wd = ['일', '월', '화', '수', '목', '금', '토'][dt.getUTCDay()];
+  return `${+m[2]}월 ${+m[3]}일(${wd})` + (vtime ? ' ' + vtime : '');
+}
+type KakaoCfg = { apiKey: string; apiSecret: string; sender: string; pfId: string; template: string };
+function kakaoCfg(): KakaoCfg | string {
+  const apiKey = Deno.env.get('SOLAPI_API_KEY'), apiSecret = Deno.env.get('SOLAPI_API_SECRET'), sender = Deno.env.get('SOLAPI_SENDER'),
+        pfId = Deno.env.get('KAKAO_PF_ID'), template = Deno.env.get('KAKAO_TEMPLATE_GUEST_REMIND');
+  if (!apiKey || !apiSecret || !sender || !pfId) return 'skip(솔라피 미설정)';
+  if (!template) return 'skip(템플릿 미설정 KAKAO_TEMPLATE_GUEST_REMIND)';
+  return { apiKey, apiSecret, sender, pfId, template };
+}
+async function sendGuestKakao(cfg: KakaoCfg, phone: string, vars: Record<string, string>, fallbackText: string): Promise<string> {
+  try {
+    const date = new Date().toISOString(), salt = crypto.randomUUID();
+    const signature = await hmacHex(cfg.apiSecret, date + salt);
+    const res = await fetch('https://api.solapi.com/messages/v4/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `HMAC-SHA256 apiKey=${cfg.apiKey}, date=${date}, salt=${salt}, signature=${signature}` },
+      body: JSON.stringify({ message: { to: phone, from: cfg.sender, subject: '[TAAM] 방문 안내', text: fallbackText,
+                                        kakaoOptions: { pfId: cfg.pfId, templateId: cfg.template, variables: vars } } }),
+    });
+    if (!res.ok) return `fail(http ${res.status})`;
+    let body: any = null; try { body = await res.json(); } catch (_) { /* 아래 */ }
+    if (!body) return 'fail(응답 없음)';
+    const code = String(body.statusCode ?? body.groupInfo?.status ?? '');
+    const failed = Number(body.groupInfo?.count?.registeredFailed ?? 0) + Number(body.failedMessageList?.length ?? 0);
+    if (failed > 0 || (code && code !== '2000')) return 'fail(' + String(body.failedMessageList?.[0]?.statusMessage || body.statusMessage || code || '알 수 없음').slice(0, 80) + ')';
+    return 'sent';
+  } catch (e) { return 'fail(' + String((e as Error)?.message || e).slice(0, 80) + ')'; }
+}
+// 비회원 손님에게 — 대상·기록은 SQL. 템플릿이 없으면 기록하지 않고 건너뛴다(설정되면 그때 나간다).
+async function remindGuests(admin: ReturnType<typeof createClient>): Promise<{ sent: number; failed: number; skipped: number; reason?: string }> {
+  const out = { sent: 0, failed: 0, skipped: 0 } as { sent: number; failed: number; skipped: number; reason?: string };
+  const { data, error } = await admin.rpc('taam_guest_reminder_targets');
+  if (error) { console.error('[notify-visit-reminder] guest rpc 실패', error.message); out.reason = 'guest_rpc_failed'; return out; }
+  const rows = (data || []) as GuestRow[];
+  if (!rows.length) return out;
+  const cfg = kakaoCfg();
+  if (typeof cfg === 'string') { out.skipped = rows.length; out.reason = cfg; return out; }
+  for (const r of rows) {
+    let result: string;
+    const phone = krMobile(r.phone);
+    if (!phone) result = 'skip(해외번호)';
+    else {
+      const dday = r.d === 1 ? '내일' : `${r.d}일 뒤`;
+      const when = fmtKoDate(r.date, r.vtime);
+      const vars = { '#{name}': r.name || '고객', '#{shop}': r.rest || '예약하신 매장', '#{date}': when, '#{party}': String(r.pax || 1), '#{dday}': dday };
+      const fallback = `[TAAM 방문 안내]\n${r.name || '고객'}님, ${r.rest || '예약하신 매장'} 예약이 ${dday}입니다.\n· 일시: ${when}\n· 인원: ${r.pax || 1}명\n변경·취소는 TAAM 컨시어지로 연락해 주세요.`;
+      result = await sendGuestKakao(cfg, phone, vars, fallback);
+    }
+    if (result === 'sent') out.sent++; else if (result.startsWith('skip')) out.skipped++; else out.failed++;
+    try { await admin.rpc('taam_guest_reminder_mark', { p_ticket: r.ticket_id, p_d: r.d, p_result: result, p_phone_key: (r.phone || '').replace(/[^0-9]/g, '').replace(/^82/, '').replace(/^0+/, '') }); }
+    catch (e) { console.error('[notify-visit-reminder] guest mark 실패', (e as Error)?.message); }
+  }
+  return out;
+}
 
 // 🔒 2026-09-14 호출자 확인 — 서버(service_role)만 부른다.
 //   종전엔 anon key 만 있으면 누구나 발송 시점을 정하고 무제한으로 부를 수 있었다.
@@ -144,7 +226,11 @@ async function handle(req: Request): Promise<Response> {
       }
     }
 
-    return json({ ok: true, made: data?.made ?? 0, push_sent: sent, push_failed: failed });
+    // ③ 🆕 비회원 손님 — 알림톡. 회원 쪽이 끝난 뒤, 실패해도 회원 결과는 그대로 돌려준다
+    let guest: { sent: number; failed: number; skipped: number; reason?: string } = { sent: 0, failed: 0, skipped: 0 };
+    try { guest = await remindGuests(admin); } catch (e) { console.error('[notify-visit-reminder] guest 예외', e); guest.reason = 'guest_exception'; }
+
+    return json({ ok: true, made: data?.made ?? 0, push_sent: sent, push_failed: failed, guest });
   } catch (e) {
     console.error('[notify-visit-reminder] 예외', e);
     return json({ ok: false, error: 'exception' }, 500);

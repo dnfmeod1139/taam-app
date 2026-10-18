@@ -9,7 +9,7 @@ $P <<SQL >/dev/null 2>&1
 create schema auth; create table auth.users(id uuid primary key);
 do \$\$ begin if not exists (select 1 from pg_roles where rolname='authenticated') then create role authenticated; end if; end \$\$;
 create or replace function auth.uid() returns uuid language sql stable as \$\$ select nullif(current_setting('taam.uid', true),'')::uuid \$\$;
-create or replace function public.is_super_admin(uid uuid) returns boolean language sql stable as \$\$ select coalesce(current_setting('taam.super', true),'') = '1' \$\$;
+create or replace function public.is_super_admin(uid uuid) returns boolean language sql stable as \$\$ select uid = '$SU'::uuid \$\$;   -- 인자를 본다 — 호출자가 아니라 행 소유자를 검사하는 변이를 잡으려고(리뷰)
 insert into auth.users values ('$A'),('$SU');
 create table public.profiles(id uuid primary key, display_name text, membership_tier text, role text);
 insert into public.profiles values ('$A','김티','T','user'),('$SU','Super Admin','M','superadmin');
@@ -35,12 +35,13 @@ ok "회원 정상 유형 4종(ticket_purchase · ticket_refund · membership_pay
 r=$(ins $A 0 $A administrative_fee -1 '접두어만 비슷' '{}'); ok "admin_ 접두어가 아닌 유형(administrative_fee)은 통과 — 가드는 admin_* 만" "0|5" "$(echo "$r" | grep -c 'LEDGER_TYPE_FORBIDDEN')|$(cnt $A)"
 # ── 슈퍼어드민 · 서버 ──
 r=$(ins $SU 1 $A admin_deduct -630000 '연회비' '{"granted_by":"'$SU'","membership_fee":true}'); ok "슈퍼어드민 admin_deduct(+연회비 플래그) → 통과 · 기록 1" "0|6|1" "$(echo "$r" | grep -c 'LEDGER_TYPE_FORBIDDEN')|$(cnt $A)|$($P -c "select count(*) from public.membership_fees where user_id='$A'")"
-r=$(ins '' 0 $A admin_grant 10000 '서버 부여' '{}'); ok "서버(uid 없음 · SQL Editor·Edge) admin_grant → 통과" "0|7" "$(echo "$r" | grep -c 'LEDGER_TYPE_FORBIDDEN')|$(cnt $A)"
+r=$(ins '' 0 $A admin_grant 10000 '서버 부여' '{"server_caller":"service_role"}'); ok "서버(uid 없음 · SQL Editor·Edge) admin_grant → 통과" "0|7" "$(echo "$r" | grep -c 'LEDGER_TYPE_FORBIDDEN')|$(cnt $A)"
 ok "트리거 BEFORE INSERT · security definer · 하나" "O|t|1" "$($P -c "select tgtype::int & 2 = 2 from pg_trigger where tgname='trg_taam_guard_ledger_change_type'" | sed 's/^t$/O/')|$($P -c "select prosecdef from pg_proc where oid=to_regproc('public.taam_guard_ledger_change_type')")|$($P -c "select count(*) from pg_trigger where tgname='trg_taam_guard_ledger_change_type' and not tgisinternal")"
 # ── ④ 정보 행 — 회원이 스스로 쓴 admin_* 줄을 센다(granted_by = 본인 · 비슈퍼어드민) ──
 $P -c "alter table public.deposit_transactions disable trigger trg_taam_guard_ledger_change_type" >/dev/null
-ins $A 0 $A admin_deduct -1 '옛 위조' '{"granted_by":"'$A'"}' >/dev/null
+ins $A 0 $A admin_deduct -1 '옛 위조' '{}' >/dev/null
 $P -c "alter table public.deposit_transactions enable trigger trg_taam_guard_ledger_change_type" >/dev/null
-ok "④ 정보 — 가드 전에 들어간 「본인이 적은 admin_*」 줄을 센다" "1" "$($P -f supabase/migrations/20261018_ledger_admin_type_guard.sql 2>&1 | grep '④' | awk -F'|' '{print $NF}' | tr -d ' ')"
+ins $SU 1 $A admin_deduct -1 '어드민이 적은 줄' '{"granted_by":"'$SU'"}' >/dev/null 2>&1 || true
+ok "④ 정보 — 가드 전에 회원 원장에 로그인 호출로 들어간 admin_* 줄을 센다(granted_by 없음·본인 포함 · 슈퍼어드민이 적은 줄은 제외)" "1" "$($P -f supabase/migrations/20261018_ledger_admin_type_guard.sql 2>&1 | grep '④' | awk -F'|' '{print $NF}' | tr -d ' ')"
 psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1
 [ $FAIL = 0 ] && echo "=== 전부 통과 ===" || { echo "=== 실패 있음 ==="; exit 1; }

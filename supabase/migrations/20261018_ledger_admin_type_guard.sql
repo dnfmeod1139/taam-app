@@ -47,9 +47,9 @@ union all select '② 함수 · is_super_admin(uuid) 존재',
 union all select '③ 종전 가드 공존 (trg_sync_split_balance · trg_taam_fee_from_deduct)',
        case when exists (select 1 from pg_trigger where tgname = 'trg_sync_split_balance' and not tgisinternal)
              and exists (select 1 from pg_trigger where tgname = 'trg_taam_fee_from_deduct' and not tgisinternal) then '✅' else '⚠ 둘 중 하나 없음 — 이 파일과 무관(각 파일 참조)' end
-union all select '④ 지금까지 회원이 스스로 쓴 admin_* 줄 (metadata.granted_by 가 본인 · 정보 — 있으면 원장 대사 때 참고)',
+union all select '④ 지금까지 비슈퍼어드민 회원 원장에 로그인 호출로 들어간 admin_* 줄 수 (정보 · 서버 호출(server_caller)·granted_by 가 슈퍼어드민인 줄은 뺀다 — 0 이 아니면 원장 대사 때 참고)',
        (select count(*) from public.deposit_transactions t
          where t.change_type like 'admin\_%' escape '\'
-           and nullif(t.metadata->>'granted_by','') is not null
-           and (t.metadata->>'granted_by')::text = t.user_id::text
-           and not exists (select 1 from public.profiles p where p.id = t.user_id and p.role in ('superadmin','super_admin')))::text;
+           and nullif(t.metadata->>'server_caller','') is null
+           and not exists (select 1 from public.profiles p where p.id = t.user_id and p.role in ('superadmin','super_admin'))
+           and not exists (select 1 from public.profiles a where a.id::text = t.metadata->>'granted_by' and a.role in ('superadmin','super_admin')))::text;
