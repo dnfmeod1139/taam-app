@@ -173,6 +173,8 @@ outo=$($P -f supabase/migrations/20261019_link_invite_ovs_prices.sql 2>&1)
 ok "확정 해외 정가 마이그레이션: 오류 없음 · ❌ 0 · 교체 ✅ · ②③④ ✅" "|0|1|3" "$(echo "$outo" | grep -E "^ERROR|^psql:.*ERROR" | head -1)|$(echo "$outo" | grep -c '❌')|$(echo "$outo" | grep -c '✅ 교체')|$(echo "$outo" | grep -cE '^ *(②|③|④).*✅')"
 out9=$($P -f supabase/migrations/20261019_pay_link_ticket_override.sql 2>&1)
 ok "금액 수정 마이그레이션: 오류 없음 · ❌ 0 · 교체 ✅ · ②③④⑤ ✅" "|0|1|4" "$(echo "$out9" | grep -E "^ERROR|^psql:.*ERROR" | head -1)|$(echo "$out9" | grep -c '❌')|$(echo "$out9" | grep -c '✅ 교체')|$(echo "$out9" | grep -cE '^ *(②|③|④|⑤).*✅')"
+outr=$($P -f supabase/migrations/20261019_link_invite_refund_agency.sql 2>&1)
+ok "대행비 스냅샷 마이그레이션: 오류 없음 · ❌ 0 · 교체 ✅ 2 · ③④ ✅" "|0|2|2" "$(echo "$outr" | grep -E "^ERROR|^psql:.*ERROR" | head -1)|$(echo "$outr" | grep -c '❌')|$(echo "$outr" | grep -c '✅ 교체')|$(echo "$outr" | grep -cE '^ *(③|④).*✅')"
 r=$($P -c "$S select public.taam_pay_link_create('ticket', jsonb_build_object('ticket_id','tp4','name','Ov','pax',2,'currency','KRW','visit_date','2027.05.02','visit_time','18:00','total',800000,'note','2인 특약가'))::text")
 C9=$(echo "$r" | grep -oE '"charge_id": "[0-9a-f-]+"' | grep -oE '[0-9a-f-]{36}')
 ok "금액 수정(KRW · 정가 1,000,000 → 800,000 · 사유): 청구 금액 · payload 플래그 · 응답 price_override · 어드민 메모에 정가→수정액·사유 · 홀드 price 는 정가 · payAmount 는 지움(매장 어드민이 읽는 행에 협의 금액 없음)" "800000|800000.00|true|true|[금액 수정] 정가 ₩1,000,000 → ₩800,000 · 2인 특약가|1000000|(없음)|true" \
@@ -208,8 +210,10 @@ SQL
 ok "계산 함수: KRW 는 정가 그대로 · 환율 없는 외화는 null · 모르는 통화 null" "1000000|1000000|0|true|true" "$($P -c "select (j->>'pay')||'|'||(j->>'krw')||'|'||(j->>'fixed_count') from public.taam_ticket_price_fx('tp5',2,'KRW',null) j")|$($P -c "select (public.taam_ticket_price_fx('tp5',1,'USD',0) is null)||'|'||(public.taam_ticket_price_fx('tp5',1,'EUR',1500) is null)")"
 r=$($P -c "$S select public.taam_pay_link_create('ticket', jsonb_build_object('ticket_id','tp5','name','Fixed','pax',2,'currency','USD','fx',1400,'visit_date','2027.05.03','visit_time','18:00'))::text")
 C13=$(echo "$r" | grep -oE '"charge_id": "[0-9a-f-]+"' | grep -oE '[0-9a-f-]{36}')
-ok "USD 전항목 확정(식사 \$300 + 대행 \$120 · 주류 0원) × 2인 = \$840.00 · amount_krw = round(840×1400) = 1,176,000 · 홀드 price 는 원화 정가 1,000,000 · payAmount 840 · ovsFixed 2 · 수정 아님" "840.00|1176000|false|1000000|840.00|2" \
-   "$($P -c "select c.pay_amount||'|'||c.amount_krw||'|'||coalesce(c.payload->>'price_override','false') from public.kashikiri_charges c where c.id='$C13'")|$($P -c "select t.price||'|'||(t.extra_data->>'payAmount')||'|'||(t.extra_data->>'ovsFixed') from public.tickets t where t.extra_data->>'chargeId'='$C13'")"
+ok "USD 전항목 확정(식사 \$300 + 대행 \$120 · 주류 0원) × 2인 = \$840.00 · amount_krw = round(840×1400) = 1,176,000 · 홀드 price 는 원화 정가 1,000,000 · payAmount 840 · ovsFixed 2 · 수정 아님 · agencyPay 120 · agencyFee 168,000" "840.00|1176000|false|1000000|840.00|2|120|168000" \
+   "$($P -c "select c.pay_amount||'|'||c.amount_krw||'|'||coalesce(c.payload->>'price_override','false') from public.kashikiri_charges c where c.id='$C13'")|$($P -c "select t.price||'|'||(t.extra_data->>'payAmount')||'|'||(t.extra_data->>'ovsFixed')||'|'||(t.extra_data->>'agencyPay')||'|'||(t.extra_data->>'agencyFee') from public.tickets t where t.extra_data->>'chargeId'='$C13'")"
+$P -c "update public.kashikiri_charges set status='paid', approved_at=now()-interval '2 hours', payment_key='pk13', payer_name='Fixed' where id='$C13'" >/dev/null
+ok "확정 대행비 링크 D-31 환불 견적 = \$840 − \$120×2 = \$600.00 · 원화 840,000 (결제 통화 기준)" "600.00|840000|d31_minus_agency" "$($P -c "select (q->>'refund_amount')||'|'||(q->>'refund_krw')||'|'||(q->>'policy') from public.taam_link_invite_refund_quote('$C13') q")"
 r=$($P -c "$S select public.taam_pay_link_create('ticket', jsonb_build_object('ticket_id','tp5','name','Yen','pax',1,'currency','JPY','fx',9.5,'visit_date','2027.05.03'))::text")
 C14=$(echo "$r" | grep -oE '"charge_id": "[0-9a-f-]+"' | grep -oE '[0-9a-f-]{36}')
 ok "JPY 섞임(식사 ¥45,000 확정 + 대행 ₩100,000 ÷ 9.5 = ¥10,526) = ¥55,526 · amount_jpy 같음 · amount_krw = round(55526×9.5) = 527,497 · ovsFixed 1" "55526.00|55526|527497|1" \

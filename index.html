@@ -7560,7 +7560,7 @@ function _plLab(t){ return '<div style="font-size:10.5px;font-weight:700;color:#
 function _plCurSeg(){ return '<div style="display:flex;gap:6px;">' + ['KRW', 'USD', 'JPY'].map(function(c){ var on = _pl.cur === c; return '<button type="button" onclick="payLinkCur(\'' + c + '\')" style="flex:1;padding:8px;border-radius:9px;border:1.5px solid ' + (on ? '#1a1a18' : '#e0ddd8') + ';background:' + (on ? '#1a1a18' : '#fff') + ';color:' + (on ? '#fff' : '#666') + ';font-family:inherit;font-size:12px;font-weight:800;cursor:pointer;">' + { KRW: '₩ 국내', USD: '$ 해외', JPY: '¥ 해외' }[c] + '</button>'; }).join('') + '</div>'
   + (_pl.cur !== 'KRW' ? _plLab('적용 환율 (1' + (_pl.cur === 'USD' ? '$' : '¥') + ' = ₩) — 설정의 적용환율이 기본값 · 이 링크에 못 박힙니다') + _plInp('plFx', 'text', 'inputmode="decimal" oninput="if(_pl.purpose===\'ticket\')_plTicketPreview()"', ((_pl.fxBy || {})[_pl.cur]) || (_plFxDefault(_pl.cur) || '')) : ''); }
 function payLinkCur(c){ _plCollect();   // 통화별 환율은 _plCollect 가 기억한다
-  _pl.cur = c; _pl.price = null; _pl.override = false; _pl.overridePre = null; if (_pl.v) { delete _pl.v.plTotal; delete _pl.v.plNote; }   // 통화를 바꾸면 금액 수정 상태·입력값도 푼다(₩ 숫자가 $ 칸에 미리 채워지던 것 · 적대 리뷰)
+  _pl.cur = c; _pl.price = null; _pl.override = false; _pl.overridePre = null; if (_pl.v) { delete _pl.v.plTotal; delete _pl.v.plNote; }   // 통화를 바꾸면 금액 수정 상태·입력값도 푼다(₩ 숫자가 $ 칸에 미리 채워지던 것 · 적대 리뷰). 자유 금액 칸은 2차 리뷰 ⑨ 결정대로 유지한다
   _plRenderForm(); }
 function _plMemberBox(required){
   var m = _pl.member;
@@ -7808,10 +7808,17 @@ async function payLinkCreate(){
       var _got = Number((r.data || {}).pay_amount), _exp = _pl.expect || {};
       if (_exp.pay != null && isFinite(_got) && Math.abs(_got - Number(_exp.pay)) > 0.001) {
         var _why = (_exp.override && !(r.data || {}).price_override) ? '서버가 금액 수정을 모릅니다 — 20261019_pay_link_ticket_override.sql 이 라이브에 없습니다.' : '서버가 센 정가가 화면과 다릅니다 — 옛 서버 판(20261019_link_invite_ovs_prices.sql) 또는 회차 요금이 바뀌었습니다.';
-        if (confirm('⚠ 링크 금액이 화면 예상과 다릅니다\n화면 ' + _plMoney(_pl.cur, _exp.pay) + ' · 서버 ' + _plMoney(_pl.cur, _got) + '\n' + _why + '\n\n이 링크를 끊을까요? (취소 = 서버 금액 그대로 둠)')) {
+        if (!_pl.isSuper) {   // 끊기 RPC(taam_kashikiri_charge_cancel)는 슈퍼어드민 전용 — 매장 어드민은 묻지 않고 서버 금액으로 만들어진 링크를 그대로 보여 준다(적대 리뷰: 끊기 실패 뒤 링크가 안 보이던 것)
+          showToast('⚠', '링크 금액이 화면 예상과 다릅니다', '화면 ' + _plMoney(_pl.cur, _exp.pay) + ' · 서버 ' + _plMoney(_pl.cur, _got) + ' — 서버 금액으로 만들어졌습니다. 끊으려면 TAAM 에 문의하세요');
+        } else if (confirm('⚠ 링크 금액이 화면 예상과 다릅니다\n화면 ' + _plMoney(_pl.cur, _exp.pay) + ' · 서버 ' + _plMoney(_pl.cur, _got) + '\n' + _why + '\n\n이 링크를 끊을까요? (취소 = 서버 금액 그대로 둠)')) {
           var cx = await window.sb.rpc('taam_kashikiri_charge_cancel', { p_charge_id: (r.data || {}).charge_id });
-          if (cx.error) showToast('❌', '끊지 못했습니다', String(cx.error.message || '').slice(0, 100)); else showToast('✓', '링크를 끊었습니다', '좌석 홀드가 풀렸습니다');
-          payLinkList(); return;
+          if (cx.error) { showToast('❌', '끊지 못했습니다', String(cx.error.message || '').slice(0, 100) + ' — 링크는 서버 금액으로 남아 있습니다'); }   // 못 끊었으면 결과 칸은 보여 준다
+          else {
+            showToast('✓', '링크를 끊었습니다', '좌석 홀드가 풀렸습니다'); payLinkList();
+            try { if (typeof _tkSyncFromServer === 'function') _tkSyncFromServer(true); } catch (_e) {}
+            try { if (typeof tcalLoadPurchases === 'function') await tcalLoadPurchases(); } catch (_e) {}
+            return;
+          }
         }
       }
     }
@@ -30151,7 +30158,7 @@ function ticketHistRender(idx){
       + '<div style="margin:12px 16px 0;padding:15px 18px;background:#FBF3F2;border:1px solid #EEDADA;border-radius:16px;">'
       +   '<div style="display:flex;align-items:center;justify-content:space-between;">'
       +     '<span style="font-size:15px;font-weight:700;color:#7A5050;">결제 금액</span>'
-      +     '<span style="font-size:22px;font-weight:800;color:#6A1A1A;letter-spacing:-0.5px;">'+((h.payFx && h.payFx.cur !== 'KRW' && h.payFx.amount > 0) ? (h.payFx.cur === 'USD' ? '$' : '¥') + h.payFx.amount.toLocaleString(undefined, { maximumFractionDigits: 2 }) : taamMoney((h.amt||0)))+'</span>'   // 🆕 2026-10-19 결제 링크 외화 결제는 낸 외화 그대로
+      +     '<span style="font-size:22px;font-weight:800;color:#6A1A1A;letter-spacing:-0.5px;">'+((h.payFx && h.payFx.cur !== 'KRW' && h.payFx.amount > 0) ? (h.payFx.cur === 'USD' ? '$' + h.payFx.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '¥' + Math.round(h.payFx.amount).toLocaleString()) : taamMoney((h.amt||0)))+'</span>'   // 🆕 2026-10-19 결제 링크 외화 결제는 낸 외화 그대로
       +   '</div>'
       +   (bd.isCard
             ? ('<div style="height:1px;background:#EEDADA;margin:12px 0 9px;"></div>'
@@ -45286,8 +45293,13 @@ function riLinkPreview(){
   var m = parseInt(t.mealFee || t.meal_fee) || 0, a = parseInt(t.agencyFee || t.agency_fee) || 0, w = parseInt(t.wineMin || t.wine_min) || 0;
   var fx = parseFloat((document.getElementById('riLinkFx') || {}).value) || 0;
   var conv = '';
-  if(_riLinkCur === 'USD') conv = fx ? (' → <b>$' + (Math.round(krw / fx * 100) / 100).toLocaleString('en-US', { minimumFractionDigits:2, maximumFractionDigits:2 }) + '</b>') : ' <span style="color:#B45309;">(환율 필요)</span>';
-  if(_riLinkCur === 'JPY') conv = fx ? (' → <b>¥' + Math.round(krw / fx).toLocaleString('ja-JP') + '</b>') : ' <span style="color:#B45309;">(환율 필요)</span>';
+  // 🆕 2026-10-19 외화는 서버(taam_ticket_price_fx)와 같은 식 — 티켓 업로드의 확정 $·¥ 정가가 있는 항목은 그 값, 없는 항목만 ÷환율 (종전 ₩÷환율 미리보기는 서버가 확정 정가를 쓰게 된 뒤 어긋났다 · 적대 리뷰)
+  if(_riLinkCur !== 'KRW'){
+    var _q = (fx > 0 && typeof _plTicketFxQuote === 'function') ? _plTicketFxQuote(t, n, _riLinkCur, fx) : null, _sym = _riLinkCur === 'USD' ? '$' : '¥';
+    if(!_q) conv = ' <span style="color:#B45309;">(환율 필요)</span>';
+    else conv = ' → <b>' + _sym + (_riLinkCur === 'USD' ? Number(_q.pay).toLocaleString('en-US', { minimumFractionDigits:2, maximumFractionDigits:2 }) : Math.round(_q.pay).toLocaleString('ja-JP')) + '</b>'
+      + ' <span style="font-size:11px;color:' + (_q.fixedCount ? '#1E7A46' : '#B45309') + ';">' + (_q.fixedCount ? '확정 해외 정가 ' + _q.fixedCount + '항목(티켓 업로드) · 기록 ₩' + Number(_q.krw).toLocaleString() : '확정 해외 정가 없음 — 환율 환산') + '</span>';
+  }
   el.innerHTML = '식사비 ₩' + m.toLocaleString() + ' + 대행비 ₩' + a.toLocaleString() + ' + 주류 ₩' + w.toLocaleString() + ' × ' + n + '인'
     + '<br>청구 <b>₩' + krw.toLocaleString() + '</b>' + conv
     + '<br><span style="font-size:11px;color:#8a8478;">취소: 결제 30분 안 전액 · 방문 31일 전까지 대행비 제외 · 그 뒤 환불 없음</span>';
@@ -45307,6 +45319,7 @@ async function riLinkInviteSubmit(){
   var vd = (typeof _tkFullDate === 'function') ? _tkFullDate(t) : String(t.date || '');
   if(!/^\d{4}\.\d{2}\.\d{2}$/.test(vd)){ showToast('⚠','방문일 오류','연결 티켓의 방문일을 읽지 못했습니다'); return; }
   var btn = document.getElementById('riSubmitBtn'); if(btn){ btn.disabled = true; btn.textContent = '만드는 중…'; }
+  var _riExp = (typeof _plTicketFxQuote === 'function') ? _plTicketFxQuote(t, parseInt(_riPax) || 1, _riLinkCur, _riLinkCur === 'KRW' ? 1 : fx) : null;   // 화면과 같은 식의 예상 금액 — 서버가 다르게 셌으면 알린다
   try {
     var r = await window.sb.rpc('taam_link_invite_create', {
       p_ticket_id: String(t.id), p_name: name,
@@ -45322,6 +45335,8 @@ async function riLinkInviteSubmit(){
       return;
     }
     riLinkResultShow(r.data || {}, name);
+    try { var _got = Number((r.data || {}).pay_amount); if(_riExp && isFinite(_got) && Math.abs(_got - Number(_riExp.pay)) > 0.001)
+      showToast('⚠', '서버 금액이 화면과 다릅니다', '화면 ' + _riLinkMoney({ currency: _riLinkCur, pay_amount: _riExp.pay }) + ' · 서버 ' + _riLinkMoney(r.data || {}) + ' — 서버 금액으로 만들어졌습니다(옛 서버 판 또는 회차 요금 변경). 끊으려면 💸 결제 링크 목록에서'); } catch(_e){}
     try { if(typeof renderTickets === 'function') renderTickets(); } catch(_e){}
     try { if(typeof _tkSyncFromServer === 'function') _tkSyncFromServer(true); } catch(_e){}
     try { if(typeof tcalLoadPurchases === 'function'){ await tcalLoadPurchases(); if(_tcalSelectedDate) tcalRenderDetail(_tcalSelectedDate); } } catch(_e){}
@@ -45690,7 +45705,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.18-i';
+var TAAM_WEB_BUILD = '2026.10.18-j';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
