@@ -9,7 +9,7 @@
 --      청구(kashikiri_charges)의 amount_krw·pay_amount 를 바꾸고(외화는 round(외화×환율) — 정산 링크 외화 규칙과 같음), payload 에 price_override=true 만, 정가→수정액·사유는 kashikiri_charge_admin.note 에.
 --      LINK- 홀드 행의 extra_data.payAmount 도 맞춘다(price 칸은 정가×인원 그대로 — 매장 어드민이 읽는 tickets 로 정산 금액이 새지 않게 · KSK- 와 같은 원칙). 사유 없으면 예외 → 홀드까지 롤백.
 --   ② taam_pay_link_set_amount(p_charge_id, p_total, p_note) — **미결제(pending · 만료 전)** 티켓·자유 금액 링크의 금액을 바꾼다(슈퍼어드민만 · 사유 필수). 멤버십 링크는 payload 의 총액/연회비/예치금 몫이 함께 움직여야 해서 제외(BAD_PURPOSE · 끊고 다시 만든다).
---      이미 결제된 건은 NOT_PENDING — 환불로 처리한다. 토스 주문은 결제 순간 청구 금액으로 만들어지므로 미결제 링크의 금액 변경은 안전하다.
+--      이미 결제된 건은 NOT_PENDING — 환불로 처리한다. 손님이 결제를 한 번이라도 시작한 링크(order_id 있음)는 PAYMENT_STARTED — 확정 Edge 가 청구를 읽고 mark_paid_v2 가 다시 읽는 사이에 금액이 바뀌면 「토스 승인 · 우리 기록 pending」이 나므로 끊고 새로 만든다.
 --   ⚠ taam_pay_link_create 는 라이브 함수 교체 — 본문 md5 가 저장소 3차 판(20261018_pay_link.sql · 7d7ec299e9f956d41e692d79007f9d1d)과 같을 때만. 이미 새 판(PRICE_OVERRIDE_FORBIDDEN)이면 ✅ 그대로, 모르는 판이면 ❌ 건너뜀.
 -- 의존: _taam_ksk_money(20261013_kashikiri_paid_notify.sql · 라이브 ✅) · kashikiri_charge_admin(20261018 · 라이브 ✅).
 -- 회귀: bash sql/_test/t_pay_link.sh · 스크래치 paylink.js
@@ -216,6 +216,9 @@ begin
   if not found then raise exception 'CHARGE_NOT_FOUND' using errcode = 'P0002'; end if;
   if v_ch.status <> 'pending' then raise exception 'NOT_PENDING' using errcode = '55000'; end if;
   if v_ch.expires_at is not null and v_ch.expires_at < now() then raise exception 'LINK_EXPIRED' using errcode = '55000'; end if;
+  -- 손님이 이미 결제를 시작한 링크(order_start 가 order_id 를 적음)는 금액을 못 바꾼다 — kashikiri-confirm 이 청구를 읽은 뒤 mark_paid_v2 가 다시 읽는 사이에 금액이 바뀌면
+  -- 토스는 승인됐는데 우리 기록은 pending 인 최악의 모양이 난다. 끊고 새 링크를 만든다(홀드는 새 링크가 다시 잡는다).
+  if v_ch.order_id is not null then raise exception 'PAYMENT_STARTED' using errcode = '55000'; end if;
   if coalesce(v_ch.purpose, case when coalesce(v_ch.link_invite, false) then 'ticket' else 'custom' end) not in ('ticket', 'custom') then
     raise exception 'BAD_PURPOSE' using errcode = '22023';
   end if;
