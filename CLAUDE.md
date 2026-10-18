@@ -1016,7 +1016,12 @@ raw 링크는 CDN 캐시가 남아 **고친 파일 대신 옛 파일이 뜨는 �
   「배포 성공」인 줄 알고 라이브에서 옛 함수가 계속 돌았다. **Edge 함수 수정은 시크릿을 넣기 전까지 대시보드(Edge Functions → 함수 → Code)에
   TS 를 통째로 붙여 배포한다.** 배포 확인은 Actions 초록불이 아니라 함수가 새 응답(예: reason 필드)을 돌려주는지로 한다.
   손으로 돌리기: Actions → Supabase deploy → Run workflow (functions 칸 `all`).
-- 순서는 SQL → Edge 다. 「SQL 을 먼저」 규칙을 워크플로가 지킨다.
+- 순서는 SQL → Edge 다. 「SQL 을 먼저」 규칙을 워크플로가 지킨다 — ① 이 건너뛰었으면(시크릿 없음) ② 도 안 돈다(`needs.sql.outputs.state == 'ok'`).
+- **2026-10-19 개정 — 로직은 `.github/scripts/supabase_migrate.sh` · `supabase_pick.sh` 로 빼서 로컬에서 그대로 검증한다**(`bash sql/_test/t_workflow_scripts.sh` 15건). 켜기 직전 적대 점검(4 렌즈)에서 고친 것:
+  ① push 는 `before..sha`(이번 푸시의 커밋 전부)를 본다 — HEAD~1 만 보면 한 번에 여러 커밋이 올라올 때 앞 커밋의 함수 변경을 놓쳤다(before 를 모르면 HEAD~1). ② `_shared/` 변경은 그걸 import 하는 함수만(taam-chat · lineage-summarize) · `config.toml` 변경은 **`[functions.X]` 구역 내용이 달라진 함수만**(머리말 주석은 아무것도 안 올린다) — 종전 「전부 재배포」는 대시보드에서만 손본 함수를 저장소 옛 판으로 덮었다.
+  ③ 확인 표 ❌ 는 실패로 끝내되 **기록은 남긴다**(`sha='check-failed:<커밋>'`) — 종전엔 기록을 안 남겨 같은 파일이 푸시마다 다시 돌고(커밋은 이미 됐는데) 뒤 파일·Edge 가 영영 막혔다. 다음 푸시는 그 파일을 건너뛰고 뒤 파일을 돌린다. ④ 기록된 파일이 뒤에 바뀌면 `::warning`(file_md5) — 다시 돌리지 않는다, 새 파일로.
+  ⑤ psql 인용(배열 · `-X` · `PGCONNECT_TIMEOUT`) · `LC_ALL=C` 정렬(edit.sql < edit2.sql) · `ubuntu-24.04` 고정 · CLI `2.121.0` 고정 + `github-token` · 입력값은 env 로. 점검이 짚었지만 안 고친 것(pre · 별건): `lineage-summarize` 호출부(`aiSummarizeLineage`)가 세션 토큰이 아니라 publishable 키를 Bearer 로 보내 ON/OFF 어느 쪽이든 실패한다(「🤖 AI 정리」 버튼) · 크론 함수 셋의 `isServiceCaller` 는 서명을 안 보고 role 만 디코드한다(config.toml 머리말에 「절대 OFF 금지」로 적어 둠).
+  **첫 실행 계획**: 시크릿 둘을 넣고 Actions → Supabase deploy → Run workflow(functions 칸 비움). ① 이 `20261019_test_accounts.sql`(유일한 미기록 파일 · 멱등 · ⚠ 만 나올 수 있음) 을 돌려 기록하고, ② 는 마지막 커밋에서 바뀐 함수가 없어 아무것도 안 올린다 — 연결과 기록이 실제로 되는지를 해 없는 파일로 확인하는 셈.
 - **켜기 전 기준선 (2026-10-18 · `sql/migrations_baseline_2026-10-18.sql`).** `_taam_migrations` 가 비어 있으면 워크플로는 `2*.sql` 30개를 **전부** 「안 돌린 파일」로 보고 다시 돌리려 든다 —
   대부분 create or replace 라 무해하지만 md5 가드 파일(seat_sync2)에서 ❌ 로 멈추고 시드·백필이 또 돌 수 있다. 기준선 파일이 파일마다 대표 객체(함수·트리거·표·컬럼)의 존재를 보고
   **있는 것만** 기록한다(여러 번 RUN 가능 · 「⚠ 라이브에 없음」은 직접 돌리거나 워크플로에 맡긴다 — 옛 파일은 직접이 안전). 워크플로에는 **기준선 가드**가 있다: 기록 0건인데 안 돌린 파일이 3개 이상이면
