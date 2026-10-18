@@ -14,7 +14,8 @@ set -euo pipefail
 export LC_ALL=C
 : "${WANT:=}"; : "${EV:=workflow_dispatch}"; : "${BEFORE:=}"; : "${SHA:=HEAD}"
 all=$(ls -d supabase/functions/*/ | xargs -n1 basename | grep -v '^_' | tr '\n' ' ')
-sect(){ awk -v fn="$2" '/^\[functions\./{on=($0=="[functions." fn "]")} on' <<<"$1"; }
+# 구역 = [functions.X] 부터 다음 [functions. 전까지. 주석(#)·빈 줄은 빼고 비교한다 — 설명 한 줄을 더했다고 그 함수(또는 바로 위 구역의 함수)를 대시보드 판 위에 다시 올리지 않게(2026-10-19 · send-push 설명을 끼워 넣다 taam-sms-hook 이 대상에 잡혀 취소한 적 있다)
+sect(){ awk -v fn="$2" '/^\[functions\./{on=($0=="[functions." fn "]")} on' <<<"$1" | sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d'; }
 if [ "$WANT" = "all" ]; then
   list="$all"
 elif [ -n "$WANT" ]; then

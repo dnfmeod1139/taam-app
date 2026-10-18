@@ -13,7 +13,7 @@ out=$(env -u SUPABASE_DB_URL $MIG 2>&1; echo "rc=$?"); ok "시크릿 없음 → 
 # ① 기록 0 · 안 돌린 파일 35 → 기준선 가드
 out=$(SUPABASE_DB_URL="$URL" GH_SHA=t1 $MIG 2>&1; echo "rc=$?"); ok "기록 0건 → 기준선 가드 ::error · state=failed · rc 1" "1|state=failed|rc=1" "$(echo "$out" | grep -c '::error title=기준선 없음')|$(echo "$out" | grep -E '^state=|^rc=' | tr '\n' '|' | sed 's/|$//')"
 # ② 기준선 — 20261019_test_accounts.sql 만 빼고 전부 기록 → 그 파일이 돈다 · profiles 가 없어 실패 → 롤백 · 기록 없음
-$P -c "insert into public._taam_migrations(name, sha) select regexp_replace(f, '^.*/', ''), 'baseline' from unnest(string_to_array('$(ls supabase/migrations/2*.sql | grep -v 20261019_test_accounts | tr '\n' ',' | sed 's/,$//')', ',')) f" >/dev/null
+$P -c "insert into public._taam_migrations(name, sha) select regexp_replace(f, '^.*/', ''), 'baseline' from unnest(string_to_array('$(ls supabase/migrations/2*.sql | grep -v '20261019_test_accounts.sql$' | tr '\n' ',' | sed 's/,$//')', ',')) f" >/dev/null
 out=$(SUPABASE_DB_URL="$URL" GH_SHA=t2 $MIG 2>&1; echo "rc=$?")
 ok "안 돌린 파일 1개 실행 → 실패(표 없음) → 롤백 · 기록 없음 · state=failed" "1|0|state=failed|rc=1" "$(echo "$out" | grep -c '::error title=마이그레이션 실패')|$($P -c "select count(*) from public._taam_migrations where name='20261019_test_accounts.sql'")|$(echo "$out" | grep -E '^state=|^rc=' | tr '\n' '|' | sed 's/|$//')"
 # ③ 표를 만들어 주면 성공 · md5 기록 · 두 번째는 「이미 적용」
@@ -28,7 +28,7 @@ SQL
 out=$(SUPABASE_DB_URL="$URL" GH_SHA=t3 $MIG 2>&1; echo "rc=$?")
 ok "성공 → 기록(sha=커밋 · md5 32자) · ran 1 · state=ok" "t3|32|1|state=ok|rc=0" "$($P -c "select sha||'|'||length(file_md5) from public._taam_migrations where name='20261019_test_accounts.sql'")|$(echo "$out" | grep -c '✅ 새로 적용한 마이그레이션: 1')|$(echo "$out" | grep -E '^state=|^rc=' | tr '\n' '|' | sed 's/|$//')"
 ok "시드가 실제로 돌았다(김우·테스트1 숨김 · 김우종은은 1명이라 숨김)" "3" "$($P -c "select count(*) from public.profiles where is_test")"
-out=$(SUPABASE_DB_URL="$URL" GH_SHA=t4 $MIG 2>&1; echo "rc=$?"); ok "두 번째: 전부 「이미 적용」 · ran 0 · state=ok" "35|1|state=ok|rc=0" "$(echo "$out" | grep -c '이미 적용')|$(echo "$out" | grep -c '✅ 새로 적용한 마이그레이션: 0')|$(echo "$out" | grep -E '^state=|^rc=' | tr '\n' '|' | sed 's/|$//')"
+out=$(SUPABASE_DB_URL="$URL" GH_SHA=t4 $MIG 2>&1; echo "rc=$?"); ok "두 번째: 전부 「이미 적용」 · ran 0 · state=ok" "$(ls supabase/migrations/2*.sql | wc -l | tr -d ' ')|1|state=ok|rc=0" "$(echo "$out" | grep -c '이미 적용')|$(echo "$out" | grep -c '✅ 새로 적용한 마이그레이션: 0')|$(echo "$out" | grep -E '^state=|^rc=' | tr '\n' '|' | sed 's/|$//')"
 # ④ 기록된 파일을 고치면 경고만 · 다시 안 돈다
 echo "-- touched" >> supabase/migrations/20261019_test_accounts.sql
 out=$(SUPABASE_DB_URL="$URL" GH_SHA=t5 $MIG 2>&1; echo "rc=$?"); ok "기록 뒤 수정 → ::warning 기록 뒤 수정됨 · 다시 안 돈다 · state=ok" "1|0|state=ok" "$(echo "$out" | grep -c '::warning title=기록 뒤 수정됨::20261019_test_accounts.sql')|$(echo "$out" | grep -c '▶ 20261019_test_accounts')|$(echo "$out" | grep -E '^state=' )"
@@ -53,6 +53,18 @@ ok "pick: before 가 0000(강제 푸시) → HEAD~1 로 폴백(오류 없음)" "
 WT=$(mktemp -d); git worktree add -q --detach "$WT" HEAD
 ( cd "$WT" && echo "x" >> supabase/functions/notify-purchase/SETUP.md && printf "\n// t\n" >> supabase/functions/toss-order/index.ts && git add -A && git -c user.email=t@t -c user.name=t commit -q -m tmp-pick-test )
 ok "pick: SETUP.md 만 바뀐 notify-purchase 는 제외 · index.ts 가 바뀐 toss-order 만" "list=toss-order " "$(cd "$WT" && EV=push BEFORE=HEAD~1 SHA=HEAD bash "$ROOT/.github/scripts/supabase_pick.sh" | tail -1)"
+git worktree remove --force "$WT" >/dev/null 2>&1; rm -rf "$WT"
+# config.toml — 구역 안의 주석·빈 줄만 바뀌면 대상이 아니다 · 값이 바뀐 구역만(2026-10-19 · 설명을 끼워 넣다 옆 구역 함수가 잡히던 것)
+WT=$(mktemp -d); git worktree add -q --detach "$WT" HEAD
+( cd "$WT" && python3 - <<'PY'
+import re
+p='supabase/config.toml'; s=open(p,encoding='utf-8').read()
+s=s.replace('[functions.line-webhook]\nverify_jwt = false', '[functions.line-webhook]\n# 설명 한 줄\n\nverify_jwt = false', 1)
+s=s.replace('[functions.verify-invite]\nverify_jwt = false', '[functions.verify-invite]\nverify_jwt = true', 1)
+open(p,'w',encoding='utf-8').write(s)
+PY
+git add -A && git -c user.email=t@t -c user.name=t commit -q -m tmp-pick-cfg )
+ok "pick: config 주석만 바뀐 line-webhook 은 제외 · 값이 바뀐 verify-invite 만" "list=verify-invite " "$(cd "$WT" && EV=push BEFORE=HEAD~1 SHA=HEAD bash "$ROOT/.github/scripts/supabase_pick.sh" | tail -1)"
 git worktree remove --force "$WT" >/dev/null 2>&1; rm -rf "$WT"
 psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1
 [ $FAIL = 0 ] && echo "=== 전부 통과 ===" || { echo "=== 실패 있음 ==="; exit 1; }
