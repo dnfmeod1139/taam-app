@@ -224,7 +224,7 @@ button.go:active:not(:disabled){opacity:.85}
       e_start_d:'TAAM 담당자에게 알려주세요.',
       share_n:'{n}인 중 1인 몫',
       guest_p:'가입하시면 이번 예약이 내 계정에 담기고, <b>방문 전 리마인드와 다음 예약</b>을 앱에서 바로 받으실 수 있습니다. 게스트 회원은 90일 동안 무료입니다.', guest_code:'초대 코드', guest_btn:'게스트 회원으로 가입하기',
-      kind_mship:'멤버십', fail_prev:'이전 결제 시도가 완료되지 않았습니다', mship_done:'멤버십 결제가 완료되었습니다. 담당자가 확인 후 안내드립니다.'
+      kind_mship:'멤버십', fail_prev:'이전 결제 시도가 완료되지 않았습니다', mship_done:'멤버십 결제가 완료되었습니다. 담당자가 확인 후 안내드립니다.', amt_changed:'결제 금액이 {a} 로 바뀌었습니다. 이 금액으로 결제할까요?'
     },
     en: {
       kind:'Payment', kind_done:'Paid',
@@ -250,7 +250,7 @@ button.go:active:not(:disabled){opacity:.85}
       e_start_d:'Please let TAAM know.',
       share_n:'1 of {n} guests',
       guest_p:'Sign up and this reservation is saved to your account — <b>visit reminders and your next booking</b> right in the app. Guest membership is free for 90 days.', guest_code:'Invite code', guest_btn:'Join as a guest member',
-      kind_mship:'Membership', fail_prev:'The previous payment attempt was not completed', mship_done:'Membership payment complete. TAAM will contact you shortly.'
+      kind_mship:'Membership', fail_prev:'The previous payment attempt was not completed', mship_done:'Membership payment complete. TAAM will contact you shortly.', amt_changed:'The amount has been updated to {a}. Proceed with this amount?'
     },
     ja: {
       kind:'お支払い', kind_done:'お支払い完了',
@@ -276,7 +276,7 @@ button.go:active:not(:disabled){opacity:.85}
       e_start_d:'TAAM までお知らせください。',
       share_n:'{n}名様のうち1名様分',
       guest_p:'ご登録いただくと、今回のご予約がアカウントに保存され、<b>来店前のリマインドや次回のご予約</b>をアプリで受け取れます。ゲスト会員は90日間無料です。', guest_code:'招待コード', guest_btn:'ゲスト会員として登録する',
-      kind_mship:'メンバーシップ', fail_prev:'前回のお支払いは完了しませんでした', mship_done:'メンバーシップのお支払いが完了しました。担当者より改めてご案内いたします。'
+      kind_mship:'メンバーシップ', fail_prev:'前回のお支払いは完了しませんでした', mship_done:'メンバーシップのお支払いが完了しました。担当者より改めてご案内いたします。', amt_changed:'お支払い金額が {a} に変更されました。この金額で進めますか？'
     }
   };
   T.ja.e_chk_d = 'カードで承認されていれば間もなく反映されます。しばらくしてからこのリンクを再度お開きください。';
@@ -525,6 +525,17 @@ button.go:active:not(:disabled){opacity:.85}
         return;
       }
       if(!ord || !ord.order_id){ throw new Error('주문을 만들지 못했습니다'); }
+      // 🆕 2026-10-19 어드민이 금액을 바꾼 뒤(taam_pay_link_set_amount) 손님이 옛 화면에서 누른 경우 — 토스 창 금액이 화면과 다르지 않게 다시 그리고 묻는다.
+      //   결제를 시작하면(order_id) 서버가 금액 변경을 막으므로 이 창 이후에는 어긋나지 않는다.
+      if(CH && ord.amount != null){
+        var shown = (CH.pay_amount != null) ? Number(CH.pay_amount) : Number(CH.amount_krw);
+        if(Math.abs(Number(ord.amount) - shown) > 0.001){
+          CH.pay_amount = Number(ord.amount); if(ord.amount_krw != null) CH.amount_krw = Number(ord.amount_krw);
+          var curS = String(ord.currency || CH.pay_currency || 'KRW').toUpperCase();
+          $('vAmt').textContent = money(Number(ord.amount), curS);
+          if(!confirm(t('amt_changed').replace('{a}', money(Number(ord.amount), curS)))) return;
+        }
+      }
 
       var cur = String(ord.currency || 'KRW').toUpperCase();
       var ck  = TOSS_KEYS[cur];

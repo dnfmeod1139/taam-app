@@ -168,12 +168,15 @@ ok "anon: 만들기·목록·금액 없음 · 공개 둘만" "false|false|false|
 ok "끊기: 미결제 멤버십 링크 cancelled (paid 는 거부 그대로)" "cancelled|1" "$($P -c "$S select public.taam_kashikiri_charge_cancel('$C3')->>'ok'; select status from public.kashikiri_charges where id='$C3'" | tail -1)|$($P -c "$S select public.taam_kashikiri_charge_cancel('$C2')" 2>&1 | grep -c '환불로 처리')"
 # ══ 2026-10-19 티켓 금액 수동 설정 · 미결제 링크 금액 변경 ══
 $P -c "insert into public.ticket_products values ('tp4','b1000000-0000-4000-8000-000000000001','마츠카와','05.02','18:00',6,400000,100000,0,'Standard')" >/dev/null
+$P -c "alter table public.ticket_products add column ovs_prices jsonb, add column overseas_agency_usd int" >/dev/null
+outo=$($P -f supabase/migrations/20261019_link_invite_ovs_prices.sql 2>&1)
+ok "확정 해외 정가 마이그레이션: 오류 없음 · ❌ 0 · 교체 ✅ · ②③④ ✅" "|0|1|3" "$(echo "$outo" | grep -E "^ERROR|^psql:.*ERROR" | head -1)|$(echo "$outo" | grep -c '❌')|$(echo "$outo" | grep -c '✅ 교체')|$(echo "$outo" | grep -cE '^ *(②|③|④).*✅')"
 out9=$($P -f supabase/migrations/20261019_pay_link_ticket_override.sql 2>&1)
-ok "금액 수정 마이그레이션: 오류 없음 · ❌ 0 · 교체 ✅ · ②③④ ✅" "|0|1|3" "$(echo "$out9" | grep -E "^ERROR|^psql:.*ERROR" | head -1)|$(echo "$out9" | grep -c '❌')|$(echo "$out9" | grep -c '✅ 교체')|$(echo "$out9" | grep -cE '^ *(②|③|④).*✅')"
+ok "금액 수정 마이그레이션: 오류 없음 · ❌ 0 · 교체 ✅ · ②③④⑤ ✅" "|0|1|4" "$(echo "$out9" | grep -E "^ERROR|^psql:.*ERROR" | head -1)|$(echo "$out9" | grep -c '❌')|$(echo "$out9" | grep -c '✅ 교체')|$(echo "$out9" | grep -cE '^ *(②|③|④|⑤).*✅')"
 r=$($P -c "$S select public.taam_pay_link_create('ticket', jsonb_build_object('ticket_id','tp4','name','Ov','pax',2,'currency','KRW','visit_date','2027.05.02','visit_time','18:00','total',800000,'note','2인 특약가'))::text")
 C9=$(echo "$r" | grep -oE '"charge_id": "[0-9a-f-]+"' | grep -oE '[0-9a-f-]{36}')
-ok "금액 수정(KRW · 정가 1,000,000 → 800,000 · 사유): 청구 금액 · payload 플래그 · 응답 price_override · 어드민 메모에 정가→수정액·사유 · 홀드 price 는 정가 · payAmount 는 수정액" "800000|800000.00|true|true|[금액 수정] 정가 ₩1,000,000 → ₩800,000 · 2인 특약가|1000000|800000|true" \
-   "$($P -c "select c.amount_krw||'|'||c.pay_amount||'|'||(c.payload->>'price_override') from public.kashikiri_charges c where c.id='$C9'")|$(echo "$r" | grep -oE '"price_override": [a-z]+' | grep -oE 'true|false')|$($P -c "select note from public.kashikiri_charge_admin where charge_id='$C9'")|$($P -c "select t.price||'|'||(t.extra_data->>'payAmount')||'|'||(t.extra_data->>'priceOverride') from public.tickets t where t.extra_data->>'chargeId'='$C9'")"
+ok "금액 수정(KRW · 정가 1,000,000 → 800,000 · 사유): 청구 금액 · payload 플래그 · 응답 price_override · 어드민 메모에 정가→수정액·사유 · 홀드 price 는 정가 · payAmount 는 지움(매장 어드민이 읽는 행에 협의 금액 없음)" "800000|800000.00|true|true|[금액 수정] 정가 ₩1,000,000 → ₩800,000 · 2인 특약가|1000000|(없음)|true" \
+   "$($P -c "select c.amount_krw||'|'||c.pay_amount||'|'||(c.payload->>'price_override') from public.kashikiri_charges c where c.id='$C9'")|$(echo "$r" | grep -oE '"price_override": [a-z]+' | grep -oE 'true|false')|$($P -c "select note from public.kashikiri_charge_admin where charge_id='$C9'")|$($P -c "select t.price||'|'||coalesce(t.extra_data->>'payAmount','(없음)')||'|'||(t.extra_data->>'priceOverride') from public.tickets t where t.extra_data->>'chargeId'='$C9'")"
 ok "사유 없이 다른 금액 → OVERRIDE_NOTE_REQUIRED · 홀드도 안 남는다(롤백 · tp4 홀드 1건 그대로)" "1|1" "$($P -c "$S select public.taam_pay_link_create('ticket', jsonb_build_object('ticket_id','tp4','name','NoNote','pax',1,'currency','KRW','visit_date','2027.05.02','total',300000))" 2>&1 | grep -c OVERRIDE_NOTE_REQUIRED)|$($P -c "select count(*) from public.tickets where ticket_product_id='tp4' and status='hold'")"
 ok "매장 어드민이 total 을 보내면 PRICE_OVERRIDE_FORBIDDEN(홀드 없음)" "1|1" "$($P -c "set taam.uid='$ADM'; set taam.super='0'; select public.taam_pay_link_create('ticket', jsonb_build_object('ticket_id','tp4','name','Adm','pax',1,'currency','KRW','visit_date','2027.05.02','total',100000,'note','x'))" 2>&1 | grep -c PRICE_OVERRIDE_FORBIDDEN)|$($P -c "select count(*) from public.tickets where ticket_product_id='tp4' and status='hold'")"
 r=$($P -c "$S select public.taam_pay_link_create('ticket', jsonb_build_object('ticket_id','tp4','name','Same','pax',1,'currency','KRW','visit_date','2027.05.02','total',500000))::text")
@@ -187,14 +190,49 @@ ok "0 이하 금액은 BAD_AMOUNT" "1" "$($P -c "$S select public.taam_pay_link_
 $P -c "update public.kashikiri_charges set status='paid', approved_at=now(), payment_key='pk9', payer_name='Ov' where id='$C9'" >/dev/null
 ok "결제된 수정 링크의 환불 견적(30분 안) = 수정액 800,000" "800000|within_30min_full" "$($P -c "select (q->>'refund_krw')||'|'||(q->>'policy') from public.taam_link_invite_refund_quote('$C9') q")"
 # ── 미결제 링크 금액 변경 ──
-ok "금액 변경: 미결제 티켓 링크(C10 500,000 → 450,000 · 사유) changed · 청구·홀드 payAmount · 어드민 메모 [금액 변경]" "true|450000|450000.00|true|450000|1" \
-   "$($P -c "$S select (j->>'changed')||'|'||(j->>'amount_krw') from public.taam_pay_link_set_amount('$C10', 450000, '오픈 기념') j")|$($P -c "select c.pay_amount||'|'||(c.payload->>'price_override') from public.kashikiri_charges c where c.id='$C10'")|$($P -c "select (t.extra_data->>'payAmount') from public.tickets t where t.extra_data->>'chargeId'='$C10'")|$($P -c "select count(*) from public.kashikiri_charge_admin where charge_id='$C10' and note like '[금액 변경 %] ₩500,000 → ₩450,000 · 오픈 기념'")"
+ok "금액 변경: 미결제 티켓 링크(C10 500,000 → 450,000 · 사유) changed · 청구 금액 · 홀드 payAmount 지움 · 어드민 메모 [금액 변경]" "true|450000|450000.00|true|(없음)|1" \
+   "$($P -c "$S select (j->>'changed')||'|'||(j->>'amount_krw') from public.taam_pay_link_set_amount('$C10', 450000, '오픈 기념') j")|$($P -c "select c.pay_amount||'|'||(c.payload->>'price_override') from public.kashikiri_charges c where c.id='$C10'")|$($P -c "select coalesce(t.extra_data->>'payAmount','(없음)') from public.tickets t where t.extra_data->>'chargeId'='$C10'")|$($P -c "select count(*) from public.kashikiri_charge_admin where charge_id='$C10' and note like '[금액 변경 %] ₩500,000 → ₩450,000 · 오픈 기념'")"
 ok "같은 금액으로 다시 → changed false · 사유 없으면 OVERRIDE_NOTE_REQUIRED · 0원 BAD_AMOUNT" "false|1|1" "$($P -c "$S select j->>'changed' from public.taam_pay_link_set_amount('$C10', 450000, '다시') j")|$($P -c "$S select public.taam_pay_link_set_amount('$C10', 400000, '')" 2>&1 | grep -c OVERRIDE_NOTE_REQUIRED)|$($P -c "$S select public.taam_pay_link_set_amount('$C10', 0, 'x')" 2>&1 | grep -c BAD_AMOUNT)"
 C12=$($P -c "$S select j->>'charge_id' from public.taam_pay_link_create('membership', jsonb_build_object('user_id','$M2','tier','T','kind','renew','currency','KRW')) j")
 ok "결제된 링크(C9)는 NOT_PENDING · 미결제 멤버십 링크(C12)는 BAD_PURPOSE · 회원 세션은 권한 없음" "1|1|1" "$($P -c "$S select public.taam_pay_link_set_amount('$C9', 1, 'x')" 2>&1 | grep -c NOT_PENDING)|$($P -c "$S select public.taam_pay_link_set_amount('$C12', 1, 'x')" 2>&1 | grep -c BAD_PURPOSE)|$($P -c "set taam.uid='$M2'; set taam.super='0'; select public.taam_pay_link_set_amount('$C10', 1, 'x')" 2>&1 | grep -c '권한이 없습니다')"
 $P -c "update public.kashikiri_charges set order_id='KSK-started' where id='$C10'" >/dev/null
 ok "손님이 결제를 시작한 링크(order_id 있음)는 PAYMENT_STARTED — 확정 경주를 피한다" "1" "$($P -c "$S select public.taam_pay_link_set_amount('$C10', 440000, '늦은 변경')" 2>&1 | grep -c PAYMENT_STARTED)"
 ok "외화 링크 금액 변경(C11 \$300 → \$250): amount_krw = 250 × 1400 = 350,000 · 메모 두 줄째 이어 붙음" "250.00|350000|2" "$($P -c "$S select (j->>'pay_amount')||'|'||(j->>'amount_krw') from public.taam_pay_link_set_amount('$C11', 250, '추가 할인') j")|$($P -c "select array_length(string_to_array(note, E'\n'),1) from public.kashikiri_charge_admin where charge_id='$C11'")"
+# ══ 2026-10-19 외화 링크 = 티켓 업로드의 확정 해외 정가(ovs_prices) 우선 ══
+$P <<'SQL' >/dev/null
+insert into public.ticket_products values ('tp5','b1000000-0000-4000-8000-000000000001','마츠카와','05.03','18:00',6,400000,100000,0,'Standard');
+update public.ticket_products set ovs_prices = '{"usd":{"meal":300,"agency":120,"wine":""},"jpy":{"meal":45000,"agency":"","wine":null}}'::jsonb where id = 'tp5';
+insert into public.ticket_products values ('tp6','b1000000-0000-4000-8000-000000000001','마츠카와','05.03','12:00',6,400000,100000,200000,'Standard');
+update public.ticket_products set overseas_agency_usd = 150 where id = 'tp6';
+SQL
+ok "계산 함수: KRW 는 정가 그대로 · 환율 없는 외화는 null · 모르는 통화 null" "1000000|1000000|0|true|true" "$($P -c "select (j->>'pay')||'|'||(j->>'krw')||'|'||(j->>'fixed_count') from public.taam_ticket_price_fx('tp5',2,'KRW',null) j")|$($P -c "select (public.taam_ticket_price_fx('tp5',1,'USD',0) is null)||'|'||(public.taam_ticket_price_fx('tp5',1,'EUR',1500) is null)")"
+r=$($P -c "$S select public.taam_pay_link_create('ticket', jsonb_build_object('ticket_id','tp5','name','Fixed','pax',2,'currency','USD','fx',1400,'visit_date','2027.05.03','visit_time','18:00'))::text")
+C13=$(echo "$r" | grep -oE '"charge_id": "[0-9a-f-]+"' | grep -oE '[0-9a-f-]{36}')
+ok "USD 전항목 확정(식사 \$300 + 대행 \$120 · 주류 0원) × 2인 = \$840.00 · amount_krw = round(840×1400) = 1,176,000 · 홀드 price 는 원화 정가 1,000,000 · payAmount 840 · ovsFixed 2 · 수정 아님" "840.00|1176000|false|1000000|840.00|2" \
+   "$($P -c "select c.pay_amount||'|'||c.amount_krw||'|'||coalesce(c.payload->>'price_override','false') from public.kashikiri_charges c where c.id='$C13'")|$($P -c "select t.price||'|'||(t.extra_data->>'payAmount')||'|'||(t.extra_data->>'ovsFixed') from public.tickets t where t.extra_data->>'chargeId'='$C13'")"
+r=$($P -c "$S select public.taam_pay_link_create('ticket', jsonb_build_object('ticket_id','tp5','name','Yen','pax',1,'currency','JPY','fx',9.5,'visit_date','2027.05.03'))::text")
+C14=$(echo "$r" | grep -oE '"charge_id": "[0-9a-f-]+"' | grep -oE '[0-9a-f-]{36}')
+ok "JPY 섞임(식사 ¥45,000 확정 + 대행 ₩100,000 ÷ 9.5 = ¥10,526) = ¥55,526 · amount_jpy 같음 · amount_krw = round(55526×9.5) = 527,497 · ovsFixed 1" "55526.00|55526|527497|1" \
+   "$($P -c "select c.pay_amount||'|'||c.amount_jpy||'|'||c.amount_krw from public.kashikiri_charges c where c.id='$C14'")|$($P -c "select t.extra_data->>'ovsFixed' from public.tickets t where t.extra_data->>'chargeId'='$C14'")"
+r=$($P -c "$S select public.taam_pay_link_create('ticket', jsonb_build_object('ticket_id','tp6','name','Legacy','pax',1,'currency','USD','fx',1400,'visit_date','2027.05.03'))::text")
+C15=$(echo "$r" | grep -oE '"charge_id": "[0-9a-f-]+"' | grep -oE '[0-9a-f-]{36}')
+ok "옛 해외 대행비 예외(overseas_agency_usd 150) 폴백: 식사·주류 ₩600,000 ÷ 1400 = \$428.57 + \$150 = \$578.57 · amount_krw 809,998" "578.57|809998" "$($P -c "select c.pay_amount||'|'||c.amount_krw from public.kashikiri_charges c where c.id='$C15'")"
+r=$($P -c "$S select public.taam_pay_link_create('ticket', jsonb_build_object('ticket_id','tp4','name','NoFix','pax',1,'currency','USD','fx',1400,'visit_date','2027.05.02'))::text")
+C16=$(echo "$r" | grep -oE '"charge_id": "[0-9a-f-]+"' | grep -oE '[0-9a-f-]{36}')
+ok "확정 정가 없는 회차(tp4)는 종전 식 그대로: \$357.14 · amount_krw 는 원화 정가 500,000 · ovsFixed 0" "357.14|500000|0" "$($P -c "select c.pay_amount||'|'||c.amount_krw from public.kashikiri_charges c where c.id='$C16'")|$($P -c "select t.extra_data->>'ovsFixed' from public.tickets t where t.extra_data->>'chargeId'='$C16'")"
+ok "수정 비교 기준도 확정 정가: tp5 USD 1인 total 420(=\$300+\$120)은 수정 아님(사유 없이 통과) · total 400 은 사유 없으면 OVERRIDE_NOTE_REQUIRED" "false|1" \
+   "$($P -c "$S select coalesce(j->>'price_override','false') from public.taam_pay_link_create('ticket', jsonb_build_object('ticket_id','tp5','name','Eq','pax',1,'currency','USD','fx',1400,'visit_date','2027.05.03','total',420)) j")|$($P -c "$S select public.taam_pay_link_create('ticket', jsonb_build_object('ticket_id','tp5','name','Low','pax',1,'currency','USD','fx',1400,'visit_date','2027.05.03','total',400))" 2>&1 | grep -c OVERRIDE_NOTE_REQUIRED)"
+# ── 적대 리뷰 반영 ──
+ok "매장 어드민이 정가와 같은 total 을 보내면 통과(수정 아님 · 종전엔 PRICE_OVERRIDE_FORBIDDEN)" "true" "$($P -c "set taam.uid='$ADM'; set taam.super='0'; select j->>'ok' from public.taam_pay_link_create('ticket', jsonb_build_object('ticket_id','tp4','name','AdmEq','pax',1,'currency','KRW','visit_date','2027.05.02','total',500000)) j")"
+C17=$($P -c "$S select j->>'charge_id' from public.taam_pay_link_create('ticket', jsonb_build_object('ticket_id','tp6','name','Memo','pax',1,'currency','KRW','visit_date','2027.05.03','total',700000,'note','메모만 남김')) j")
+ok "정가와 같은 total 이라도 메모는 어드민 표에 남는다 · 플래그 없음" "메모만 남김|false" "$($P -c "select (select note from public.kashikiri_charge_admin where charge_id='$C17')||'|'||coalesce(c.payload->>'price_override','false') from public.kashikiri_charges c where c.id='$C17'")"
+CS=$($P -c "insert into public.kashikiri_charges(event_id, team_id, label, amount_krw, pay_currency, pay_fx, pay_amount, status, purpose) select event_id, team_id, 'Settle', 100000, 'KRW', 1, 100000, 'pending', 'custom' from public.kashikiri_charges where id='$C9' returning id")
+ok "대관 정산 청구(회차 있음 · link_invite 아님)는 금액 변경 거부 SETTLEMENT_CHARGE" "1" "$($P -c "$S select public.taam_pay_link_set_amount('$CS', 90000, '시트 우회')" 2>&1 | grep -c SETTLEMENT_CHARGE)"
+CF=$($P -c "insert into public.kashikiri_charges(event_id, team_id, label, amount_krw, pay_currency, pay_fx, pay_amount, status, purpose) values (null, null, 'NoFx', 140000, 'USD', null, 100, 'pending', 'custom') returning id")
+ok "환율 없는 외화 행은 FX_MISSING(1 로 지어내지 않는다)" "1" "$($P -c "$S select public.taam_pay_link_set_amount('$CF', 90, '환율 없음')" 2>&1 | grep -c FX_MISSING)"
+ok "목록 RPC: order_id · price_override 키 (C10 결제 시작 · 금액 수정)" "KSK-started|true|false" "$($P -c "$S select (j->>'order_id')||'|'||(j->>'price_override') from public.taam_pay_link_list(100) j where j->>'id'='$C10'")|$($P -c "$S select j->>'price_override' from public.taam_pay_link_list(100) j where j->>'id'='$C13'")"
+outo2=$($P -f supabase/migrations/20261019_link_invite_ovs_prices.sql 2>&1)
+ok "확정 해외 정가 마이그레이션 두 번째 RUN: ❌ 0 · 「이미 새 판」" "0|1" "$(echo "$outo2" | grep -c '❌')|$(echo "$outo2" | grep -c '이미 새 판')"
 out10=$($P -f supabase/migrations/20261019_pay_link_ticket_override.sql 2>&1)
 ok "금액 수정 마이그레이션 두 번째 RUN: ❌ 0 · 「이미 새 판」" "0|1" "$(echo "$out10" | grep -c '❌')|$(echo "$out10" | grep -c '이미 새 판')"
 psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1

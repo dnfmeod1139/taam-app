@@ -7,10 +7,13 @@
 -- 무엇:
 --   ① taam_pay_link_create('ticket', p) 에 p.total(링크 통화 금액) · p.note(사유) — **슈퍼어드민만**(매장 어드민은 PRICE_OVERRIDE_FORBIDDEN) · 정가와 다르면 **사유 필수**(OVERRIDE_NOTE_REQUIRED · 멤버십 수정과 같은 규칙).
 --      청구(kashikiri_charges)의 amount_krw·pay_amount 를 바꾸고(외화는 round(외화×환율) — 정산 링크 외화 규칙과 같음), payload 에 price_override=true 만, 정가→수정액·사유는 kashikiri_charge_admin.note 에.
---      LINK- 홀드 행의 extra_data.payAmount 도 맞춘다(price 칸은 정가×인원 그대로 — 매장 어드민이 읽는 tickets 로 정산 금액이 새지 않게 · KSK- 와 같은 원칙). 사유 없으면 예외 → 홀드까지 롤백.
+--      LINK- 홀드 행(tickets)에는 협의 금액을 **적지 않는다** — extra_data.payAmount 를 지우고 priceOverride=true 만(price 칸은 정가×인원 그대로 — 매장 어드민이 자기 매장 행을 읽는다 · KSK- 와 같은 원칙 · 적대 리뷰).
+--      정가와 **같은** 금액은 수정이 아니다(매장 어드민이 정가를 보내도 통과 · 메모만 어드민 표에 남는다). 외화 정가는 확정 해외 정가 기준(20261019_link_invite_ovs_prices.sql). 사유 없으면 예외 → 홀드까지 롤백.
 --   ② taam_pay_link_set_amount(p_charge_id, p_total, p_note) — **미결제(pending · 만료 전)** 티켓·자유 금액 링크의 금액을 바꾼다(슈퍼어드민만 · 사유 필수). 멤버십 링크는 payload 의 총액/연회비/예치금 몫이 함께 움직여야 해서 제외(BAD_PURPOSE · 끊고 다시 만든다).
+--      대관 정산 청구(회차 있음 · link_invite 아님)는 SETTLEMENT_CHARGE — 정산 시트(총액 검사)에서 다룬다. 외화인데 환율이 없는 행은 FX_MISSING(1로 지어내지 않는다).
 --      이미 결제된 건은 NOT_PENDING — 환불로 처리한다. 손님이 결제를 한 번이라도 시작한 링크(order_id 있음)는 PAYMENT_STARTED — 확정 Edge 가 청구를 읽고 mark_paid_v2 가 다시 읽는 사이에 금액이 바뀌면 「토스 승인 · 우리 기록 pending」이 나므로 끊고 새로 만든다.
 --   ⚠ taam_pay_link_create 는 라이브 함수 교체 — 본문 md5 가 저장소 3차 판(20261018_pay_link.sql · 7d7ec299e9f956d41e692d79007f9d1d)과 같을 때만. 이미 새 판(PRICE_OVERRIDE_FORBIDDEN)이면 ✅ 그대로, 모르는 판이면 ❌ 건너뜀.
+--   ③ taam_pay_link_list 에 order_id · price_override 를 더한다(목록이 「금액 변경」 버튼을 결제 시작 전 링크에만 보이고 (금액 수정) 태그를 단다 · setof jsonb 라 키 추가는 옛 앱에도 무해).
 -- 의존: _taam_ksk_money(20261013_kashikiri_paid_notify.sql · 라이브 ✅) · kashikiri_charge_admin(20261018 · 라이브 ✅).
 -- 회귀: bash sql/_test/t_pay_link.sh · 스크래치 paylink.js
 -- ═══════════════════════════════════════════════════════════════
@@ -89,19 +92,21 @@ begin
      where id = v_cid
     returning * into v_ch;
     insert into public.kashikiri_charge_admin (charge_id, created_by) values (v_cid, v_uid) on conflict (charge_id) do update set created_by = excluded.created_by;
-    -- 🆕 2026-10-19 금액 수동 설정 — 슈퍼어드민만 · 서버 정가와 다르면 사유 필수 · 정가·사유·누가는 어드민 표(회원이 못 읽는 곳)에, 청구 payload 엔 표시 플래그만.
+    -- 🆕 2026-10-19 금액 수동 설정 — 슈퍼어드민만 · 서버 정가(외화는 확정 해외 정가 기준)와 다르면 사유 필수 · 정가·사유·누가는 어드민 표(회원이 못 읽는 곳)에, 청구 payload 엔 표시 플래그만.
     --   좌석 홀드·정산 회차는 그대로(금액만 바뀐다). 토스 주문·/pay·완료 알림·환불 견적은 모두 청구 금액을 읽으므로 따로 손댈 곳이 없다.
-    --   사유가 없으면 예외 → 같은 트랜잭션의 홀드까지 되돌아간다(반쪽 링크가 안 남는다).
+    --   사유가 없으면 예외 → 같은 트랜잭션의 홀드까지 되돌아간다(반쪽 링크가 안 남는다). 정가와 같은 금액은 수정이 아니다(권한도 사유도 묻지 않는다 · 메모는 남긴다).
+    --   ⚠ 좌석 행(tickets)에는 협의 금액을 적지 않는다 — 매장 어드민이 자기 매장 행을 읽는다(KSK- 와 같은 원칙). payAmount 를 지우고 priceOverride 만.
     v_total := nullif(p->>'total','')::numeric;
+    v_note := nullif(btrim(coalesce(p->>'note','')), '');
     if v_total is not null then
-      if not v_super then raise exception 'PRICE_OVERRIDE_FORBIDDEN' using errcode = '42501'; end if;
       v_cur := upper(coalesce(nullif(p->>'currency',''), 'KRW'));
       v_fx := case when v_cur = 'KRW' then 1 else nullif(p->>'fx','')::numeric end;
       v_pay := case v_cur when 'USD' then round(v_total, 2) else round(v_total) end;
       if v_pay <= 0 then raise exception 'BAD_AMOUNT' using errcode = '22023'; end if;
       if v_pay <> v_ch.pay_amount then
-        v_note := nullif(btrim(coalesce(p->>'note','')), '');
+        if not v_super then raise exception 'PRICE_OVERRIDE_FORBIDDEN' using errcode = '42501'; end if;
         if v_note is null then raise exception 'OVERRIDE_NOTE_REQUIRED' using errcode = '22023'; end if;
+        if v_cur <> 'KRW' and coalesce(v_fx, 0) <= 0 then raise exception 'FX_MISSING' using errcode = '22023'; end if;
         v_krw := case v_cur when 'KRW' then v_pay::bigint else round(v_pay * v_fx)::bigint end;
         v_note := '[금액 수정] 정가 ' || public._taam_ksk_money(v_ch.pay_currency, v_ch.pay_amount, v_ch.amount_krw) || ' → ' || public._taam_ksk_money(v_cur, v_pay, v_krw::int) || ' · ' || v_note;
         update public.kashikiri_charges
@@ -109,11 +114,11 @@ begin
                payload = coalesce(payload, '{}'::jsonb) || jsonb_build_object('price_override', true)
          where id = v_cid
         returning * into v_ch;
-        update public.tickets set extra_data = coalesce(extra_data, '{}'::jsonb) || jsonb_build_object('payAmount', v_pay, 'priceOverride', true)
+        update public.tickets set extra_data = (coalesce(extra_data, '{}'::jsonb) - 'payAmount') || jsonb_build_object('priceOverride', true)
          where purchase_id = v_res->>'purchase_id';
-        update public.kashikiri_charge_admin set note = v_note where charge_id = v_cid;
       end if;
     end if;
+    if v_note is not null then update public.kashikiri_charge_admin set note = v_note where charge_id = v_cid; end if;
     return jsonb_build_object('ok', true, 'purpose', 'ticket', 'charge_id', v_ch.id, 'token', v_ch.token,
                               'url', 'https://taam-app.vercel.app/pay/?t=' || v_ch.token,
                               'amount_krw', v_ch.amount_krw, 'pay_currency', v_ch.pay_currency, 'pay_amount', v_ch.pay_amount,
@@ -222,22 +227,25 @@ begin
   if coalesce(v_ch.purpose, case when coalesce(v_ch.link_invite, false) then 'ticket' else 'custom' end) not in ('ticket', 'custom') then
     raise exception 'BAD_PURPOSE' using errcode = '22023';
   end if;
+  -- 대관 정산 청구(회차에 붙은 조 몫 · 옛 행은 purpose 가 custom 으로 백필됐다)는 정산 시트가 회차 총액을 검사한다 — 여기서 바꾸면 시트와 어긋난다
+  if v_ch.event_id is not null and not coalesce(v_ch.link_invite, false) then raise exception 'SETTLEMENT_CHARGE' using errcode = '22023'; end if;
   v_note := nullif(btrim(coalesce(p_note, '')), '');
   if v_note is null then raise exception 'OVERRIDE_NOTE_REQUIRED' using errcode = '22023'; end if;
   v_cur := upper(coalesce(v_ch.pay_currency, 'KRW'));
+  if v_cur <> 'KRW' and coalesce(v_ch.pay_fx, 0) <= 0 then raise exception 'FX_MISSING' using errcode = '22023'; end if;   -- 환율 없는 외화 행의 원화를 1 로 지어내지 않는다
   v_pay := case v_cur when 'USD' then round(p_total, 2) else round(p_total) end;
   if v_pay is null or v_pay <= 0 then raise exception 'BAD_AMOUNT' using errcode = '22023'; end if;
   if v_pay = v_ch.pay_amount then
     return jsonb_build_object('ok', true, 'changed', false, 'amount_krw', v_ch.amount_krw, 'pay_amount', v_ch.pay_amount, 'pay_currency', v_cur);
   end if;
-  v_krw := case v_cur when 'KRW' then v_pay::bigint else round(v_pay * coalesce(nullif(v_ch.pay_fx, 0), 1))::bigint end;
+  v_krw := case v_cur when 'KRW' then v_pay::bigint else round(v_pay * v_ch.pay_fx)::bigint end;
   v_old := public._taam_ksk_money(v_cur, v_ch.pay_amount, v_ch.amount_krw);
   update public.kashikiri_charges
      set amount_krw = v_krw::int, pay_amount = v_pay, amount_jpy = case when v_cur = 'JPY' then v_pay::int end,
          payload = coalesce(payload, '{}'::jsonb) || jsonb_build_object('price_override', true)
    where id = v_ch.id
   returning * into v_ch;
-  update public.tickets set extra_data = coalesce(extra_data, '{}'::jsonb) || jsonb_build_object('payAmount', v_pay, 'priceOverride', true)
+  update public.tickets set extra_data = (coalesce(extra_data, '{}'::jsonb) - 'payAmount') || jsonb_build_object('priceOverride', true)   -- 협의 금액은 좌석 행에 안 적는다(매장 어드민이 읽는다)
    where purchase_id like 'LINK-%' and extra_data->>'chargeId' = v_ch.id::text and lower(coalesce(status, '')) in ('hold', 'active');
   insert into public.kashikiri_charge_admin (charge_id, note, created_by)
   values (v_ch.id, '[금액 변경 ' || to_char(now() at time zone 'Asia/Seoul', 'MM-DD HH24:MI') || '] ' || v_old || ' → ' || public._taam_ksk_money(v_cur, v_pay, v_krw::int) || ' · ' || v_note, v_uid)
@@ -248,9 +256,39 @@ revoke all on function public.taam_pay_link_set_amount(uuid, numeric, text) from
 grant execute on function public.taam_pay_link_set_amount(uuid, numeric, text) to authenticated;
 comment on function public.taam_pay_link_set_amount(uuid, numeric, text) is '미결제(pending) 티켓·자유 금액 결제 링크의 금액을 바꾼다 — 슈퍼어드민만 · 사유 필수 · 외화는 링크 환율로 원화 환산 · 어드민 표에 기록. 2026-10-19';
 
+-- ── ③ 목록 RPC — order_id · price_override 추가 (20261018 판 + 두 키) ──
+create or replace function public.taam_pay_link_list(p_limit int default 60, p_user_id uuid default null, p_purpose text default null)
+returns setof jsonb
+language plpgsql stable security definer set search_path = public
+as $$
+begin
+  if not coalesce(public._taam_uid_is_super(), false) then raise exception '권한이 없습니다' using errcode = '42501'; end if;
+  return query
+  select jsonb_build_object(
+      'id', c.id, 'purpose', coalesce(c.purpose,'custom'), 'title', coalesce(c.title, e.venue_name), 'subtitle', coalesce(c.subtitle, to_char(e.event_date,'YYYY.MM.DD')),
+      'label', c.label, 'user_id', c.user_id, 'member_name', p.display_name,
+      'amount_krw', c.amount_krw, 'pay_currency', coalesce(c.pay_currency,'KRW'), 'pay_amount', coalesce(c.pay_amount, c.amount_krw),
+      'status', c.status, 'token', c.token, 'created_at', c.created_at, 'expires_at', c.expires_at, 'approved_at', c.approved_at,
+      'applied_at', c.applied_at, 'applied_note', c.applied_note, 'link_invite', coalesce(c.link_invite,false), 'event_id', c.event_id,
+      'payload', coalesce(c.payload,'{}'::jsonb), 'refund_krw', c.refund_krw, 'payer_phone', c.payer_phone,
+      'order_id', c.order_id, 'price_override', coalesce((c.payload->>'price_override')::boolean, false),   -- 🆕 2026-10-19 결제 시작 여부 · 금액 수정 태그
+      'note', a.note, 'fail_note', a.fail_note, 'created_by', a.created_by)
+    from public.kashikiri_charges c
+    left join public.kashikiri_events e on e.id = c.event_id
+    left join public.profiles p on p.id = c.user_id
+    left join public.kashikiri_charge_admin a on a.charge_id = c.id
+   where (p_user_id is null or c.user_id = p_user_id)
+     and (p_purpose is null or coalesce(c.purpose,'custom') = p_purpose)
+   order by c.created_at desc
+   limit greatest(1, least(coalesce(p_limit, 60), 300));
+end $$;
+revoke all on function public.taam_pay_link_list(int, uuid, text) from public, anon;
+grant execute on function public.taam_pay_link_list(int, uuid, text) to authenticated;
+
 -- ── 확인 — 한 표 ──
 select '① taam_pay_link_create 교체' as 항목, status as 결과 from _plo
 union all select '② taam_pay_link_set_amount · anon 없음', case when to_regprocedure('public.taam_pay_link_set_amount(uuid,numeric,text)') is not null and not has_function_privilege('anon', 'public.taam_pay_link_set_amount(uuid,numeric,text)', 'execute') then '✅' else '❌' end
 union all select '③ 의존 — _taam_ksk_money · kashikiri_charge_admin', case when to_regprocedure('public._taam_ksk_money(text,numeric,integer)') is not null and to_regclass('public.kashikiri_charge_admin') is not null then '✅' else '❌ 20261013_kashikiri_paid_notify.sql · 20261018_pay_link.sql' end
+union all select '⑤ 목록 RPC 가 order_id · price_override 를 준다', case when exists (select 1 from pg_proc p where p.oid = to_regprocedure('public.taam_pay_link_list(integer,uuid,text)') and p.prosrc like '%price_override%') then '✅' else '❌' end
 union all select '④ 새 판이 price_override 를 안다', case when exists (select 1 from pg_proc p where p.oid = to_regprocedure('public.taam_pay_link_create(text,jsonb)') and p.prosrc like '%PRICE_OVERRIDE_FORBIDDEN%') then '✅' else '❌' end
 order by 1;
