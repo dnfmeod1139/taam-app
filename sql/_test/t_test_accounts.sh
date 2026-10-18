@@ -20,6 +20,7 @@ insert into public.profiles(id, display_name, phone, role, deleted_at, fee_exemp
  ('${U}13','김우종은','010-3333-3333','user',null,false,null),
  ('${U}14','김우종은','010-4444-4444','user',null,false,null),
  ('${U}15','홍길동','010-5555-5555','user',null,false,null),
+ ('${U}18','김우종 ','010-8888-8888','user',null,false,null),
  ('${U}16','테스트1','010-6666-6666','user','2026-01-01T00:00:00Z',false,null),
  ('${SU}','Super Admin','010-0000-0000','superadmin',null,false,null);
 SQL
@@ -44,5 +45,11 @@ ok "두 번째 RUN: ❌ 0 · 「이미 숨김」 2 · ⚠ 1" "0|2|1" "$(echo "$o
 $P -c "update public.profiles set fee_exempt=false where id='${U}11'" >/dev/null
 out3=$($P -f supabase/migrations/20261019_test_accounts.sql 2>&1)
 ok "숨김인데 연회비 제외가 풀려 있으면 다시 제외하고 「숨김 + 연회비 제외」" "1|t" "$(echo "$out3" | grep -c '김우|✅ 숨김 + 연회비 제외')|$($P -c "select fee_exempt from public.profiles where id='${U}11'")"
+# ── 2026-10-19 정정 파일: 「김우종」(공백 포함 이름 · 정확히 한 명) → 숨김 + 연회비 제외 · 두 번째 RUN 은 「이미 숨김」 · ② 줄에 세 이름
+out4=$($P -f supabase/migrations/20261019_test_accounts_kimwoojong.sql 2>&1)
+ok "정정 파일: 김우종 ✅ 숨김 + 연회비 제외 · is_test·fee_exempt true · ❌ 0" "1|t|t|0" "$(echo "$out4" | grep -c '김우종 *|.*✅ 숨김 + 연회비 제외')|$($P -c "select is_test from public.profiles where id='${U}18'")|$($P -c "select fee_exempt from public.profiles where id='${U}18'")|$(echo "$out4" | grep -c '❌')"
+ok "정정 파일 ② 줄: 지금 숨긴 계정에 김우 · 김우종 · 테스트1" "1" "$(echo "$out4" | grep -c '김우 · 김우종 · 테스트1')"
+out5=$($P -f supabase/migrations/20261019_test_accounts_kimwoojong.sql 2>&1)
+ok "정정 파일 두 번째 RUN: 「이미 숨김」" "1" "$(echo "$out5" | grep -c '✅ 이미 숨김')"
 psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1
 [ $FAIL = 0 ] && echo "=== 전부 통과 ===" || { echo "=== 실패 있음 ==="; exit 1; }
