@@ -7902,7 +7902,9 @@ function feeDueRender(){
         + '<div style="font-size:13.5px;font-weight:800;color:#1a1a18;line-height:1.4;">' + _pcalEsc(r.display_name || '(이름 없음)') + ' <span style="font-size:10.5px;font-weight:800;color:' + (r.tier === 'M' ? '#5C0A14' : '#8a7b63') + ';">' + _pcalEsc(String(r.tier || '')) + '</span></div>'
         + '<div style="font-size:11px;color:#8a8580;margin-top:2px;line-height:1.4;">' + (r._st === 'exempt' ? '연회비 대상 제외' + (r.fee_exempt_note ? ' · ' + _pcalEsc(String(r.fee_exempt_note)) : '') + ' · ' : '') + (r.years || 0) + '년차 · 납부 ' + (r.paid || 0) + '건 · 가입 ' + joined + ' · 예상 ' + _pcalEsc(String(r.fee_hint || '')) + '</div>'
       + '</div>'
-      + '<div style="flex:none;text-align:right;"><div style="font-size:13px;font-weight:800;color:' + st[1] + ';">' + due + '</div><div style="font-size:11px;color:#8a8580;margin-top:2px;">' + _fdWhen(r.days_left) + '</div></div>'
+      + '<div style="flex:none;text-align:right;"><div style="font-size:13px;font-weight:800;color:' + st[1] + ';">' + due + '</div><div style="font-size:11px;color:#8a8580;margin-top:2px;">' + _fdWhen(r.days_left) + '</div>'
+        + (r._st !== 'exempt' && r._st !== 'nojoin' ? '<button type="button" onclick="feeDueDeduct(\'' + _pcalEsc(String(r.user_id)) + '\', event)" style="margin-top:5px;padding:4px 8px;border:1px solid #d8d2c6;border-radius:7px;background:#fff;font-family:inherit;font-size:10.5px;font-weight:800;color:#5d1622;cursor:pointer;">💰 예치금에서 차감</button>' : '')
+      + '</div>'
     + '</div>';
   }).join('');
 }
@@ -7911,6 +7913,37 @@ function feeDueGo(uid){
   if (typeof openMemberLedger === 'function') openMemberLedger();
   if (typeof mlOpen === 'function') setTimeout(function(){ try { mlOpen(uid); } catch (_e) {} }, 60);
 }
+// 🆕 2026-10-18 연회비 갱신은 대부분 예치금에서 뺀다(운영) — 줄의 「예치금에서 차감」이 부여·차감 모달을 채워 연다:
+//   회원 · 멤버십 주머니 · 차감(－) · 금액(원화 예상액이 있으면) · 사유 「연회비 N년차 (기준일)」 · 「연회비 납부로 기록」 체크. 확정은 사람이 누른다.
+async function feeDueDeduct(uid, ev){
+  if (ev && ev.stopPropagation) ev.stopPropagation();
+  var r = (_fdRows || []).find(function(x){ return String(x.user_id) === String(uid); }) || {};
+  var m = /₩([\d,]+)/.exec(String(r.fee_hint || ''));
+  await _adgOpenForFee(uid, { amountKrw: m ? parseInt(m[1].replace(/,/g, ''), 10) : 0, years: r.years, due: r.due_date ? String(r.due_date).slice(0, 10) : '', closer: feeDueClose });
+}
+function feeDueDeductFromLedger(uid){ _adgOpenForFee(uid, {}); }   // 원장 연회비 탭 — 금액은 사람이 적는다(기준일·연차는 탭 머리에 있다)
+async function _adgOpenForFee(uid, o){
+  o = o || {};
+  if (!window.sb || !uid) return;
+  if (typeof openAdminDepositGrant !== 'function') { showToast('⚠', '부여 화면 없음', ''); return; }
+  var r = await window.sb.from('profiles').select('id, display_name, phone, email, membership_tier, membership_deposit_balance, general_deposit_balance, granted_membership_balance, granted_general_balance, charged_membership_balance, charged_general_balance').eq('id', uid).single();
+  if (r.error || !r.data) { showToast('❌', '회원을 못 읽었습니다', String((r.error && r.error.message) || '').slice(0, 100)); return; }
+  if (typeof o.closer === 'function') { try { o.closer(); } catch(_e){} }
+  openAdminDepositGrant();
+  setTimeout(function(){
+    try {
+      window._adgSearchResultsData = [r.data]; adgSelectUser(r.data.id);
+      var mem = document.querySelector('input[name="adgDepositType"][value="membership"]'); if (mem) mem.checked = true;
+      if (typeof adgSetSign === 'function') adgSetSign(-1);
+      var amt = document.getElementById('adgAmount'), ds = document.getElementById('adgDescription');
+      if (amt) { amt.value = o.amountKrw > 0 ? String(o.amountKrw) : ''; if (amt.value && typeof adgFmtAmount === 'function') adgFmtAmount(amt); }
+      if (ds) ds.value = '연회비' + (o.years ? ' ' + o.years + '년차' : '') + (o.due ? ' (기준일 ' + o.due + ')' : '');
+      var c = document.getElementById('adgFeeChk'); if (c) { c.checked = true; adgFeeToggle(); }
+      if (!(o.amountKrw > 0)) showToast('💰', '금액을 적어 주세요', '연회비 금액은 설정값이 없거나 외화라 비워 두었습니다 — 확정 전에 직접 적으세요');
+    } catch(_e){ console.warn('[feeDueDeduct]', _e && _e.message); }
+  }, 250);
+}
+window.feeDueDeduct = feeDueDeduct; window.feeDueDeductFromLedger = feeDueDeductFromLedger; window._adgOpenForFee = _adgOpenForFee;
 async function feeDueNotifyNow(){
   if (_fdBusy) return; _fdBusy = true;
   var b = document.getElementById('fdNotifyBtn'); if (b) b.disabled = true;
@@ -21958,6 +21991,8 @@ function openAdminDepositGrant(){
   var generalRadio = document.querySelector('input[name="adgDepositType"][value="general"]');
   if (generalRadio) generalRadio.checked = true;
   _adgSelectedUser = null;
+  // 🆕 2026-10-18 연회비 기록 체크·납부일도 비운다 (adgSetSign(1) 이 숨기지만 날짜는 따로)
+  try { var _fc = document.getElementById('adgFeeChk'); if (_fc) _fc.checked = false; var _fdt = document.getElementById('adgFeeDate'); if (_fdt) _fdt.value = ''; adgFeeToggle(); } catch(_fe){}
 
   var modal = document.getElementById('adminDepositGrantModal');
   modal.style.display = 'flex';
@@ -22335,6 +22370,7 @@ async function _adgLoadTransactions(userId, anchorEl){
           case 'refund':              typeLabel = '환불';        typeColor = '#2a6a2a'; break;
           default:                    typeLabel = type;          typeColor = '#888';
         }
+        if (type === 'admin_deduct' && tx.metadata && tx.metadata.membership_fee) typeLabel += ' · 연회비 기록';   // 🆕 2026-10-18 차감과 함께 적힌 연회비
         var dt = tx.created_at ? new Date(tx.created_at) : null;
         var dtStr = dt ? (dt.getMonth()+1) + '/' + dt.getDate() + ' ' + dt.getHours().toString().padStart(2,'0') + ':' + dt.getMinutes().toString().padStart(2,'0') : '-';
         var depType = tx.deposit_type === 'membership' ? '멤' : '일';
@@ -22452,8 +22488,29 @@ window._adgLoadGlobalLog = _adgLoadGlobalLog;
 // 🆕 2026.08: 부여(+1) / 차감(-1). 버튼으로 정한다 —
 //   iOS 숫자 키패드에는 마이너스 키가 없어 폰에서는 '-' 를 칠 방법이 아예 없었다.
 var _adgSign = 1;
+// 🆕 2026-10-18 차감(－)일 때만 「연회비 납부로 기록」 체크를 보인다. 부여로 돌아가면 체크를 풀고 숨긴다 — 부여에 연회비 플래그가 실리면 서버가 FEE_RECORD_FAILED 로 거절한다.
+function adgFeeSignSync(){
+  var w = document.getElementById('adgFeeWrap'), c = document.getElementById('adgFeeChk');
+  if (!w) return;
+  var show = (_adgSign < 0);
+  w.style.display = show ? 'block' : 'none';
+  if (!show && c) { c.checked = false; adgFeeToggle(); }
+}
+function adgFeeToggle(){
+  var c = document.getElementById('adgFeeChk'), o = document.getElementById('adgFeeOpts'), d = document.getElementById('adgFeeDate');
+  var on = !!(c && c.checked);
+  if (o) o.style.display = on ? 'block' : 'none';
+  if (on && d && !d.value) d.value = _adgKstToday();
+}
+function _adgKstToday(){
+  if (typeof _mlKstToday === 'function') { try { return _mlKstToday(); } catch(_e){} }
+  return new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
+}
+function _adgFeeChecked(){ var c = document.getElementById('adgFeeChk'); return !!(c && c.checked && _adgSign < 0); }
+window.adgFeeToggle = adgFeeToggle; window.adgFeeSignSync = adgFeeSignSync;
 function adgSetSign(sign, btn){
   _adgSign = (sign < 0) ? -1 : 1;
+  try { adgFeeSignSync(); } catch(_fe){}
   try {
     document.querySelectorAll('.adg-sign').forEach(function(b){
       var on = (parseInt(b.getAttribute('data-sign'), 10) === _adgSign);
@@ -22589,6 +22646,14 @@ async function adgSubmit(){
     description += ' — 송금 ' + _fxSym + Math.abs(_fxInfo.fx_amount).toLocaleString() + ' × 적용환율 ' + _fxInfo.fx_rate;
   }
 
+  // 🆕 2026-10-18 차감을 연회비 납부로 함께 기록 — 서버 트리거가 같은 트랜잭션으로 membership_fees 에 적는다. 등급은 서버가 프로필에서 읽는다.
+  var _feeMeta = null;
+  if (amount < 0 && _adgFeeChecked()) {
+    var _fdv = String((document.getElementById('adgFeeDate') || {}).value || '').trim();
+    if (_fdv && !/^\d{4}-\d{2}-\d{2}$/.test(_fdv)) { alert('연회비 납부일을 확인해주세요 (YYYY-MM-DD)'); return; }
+    _feeMeta = { amount_krw: Math.abs(amount), paid_at: _fdv || _adgKstToday(), note: description };
+  }
+
   var actionText = amount > 0 ? '지급' : '차감';
   var typeText = depositType === 'membership' ? '멤버십' : '일반';
   var confirmMsg =
@@ -22601,8 +22666,9 @@ async function adgSubmit(){
     (_fxInfo ? ('송금: ' + (_fxInfo.fx_currency === 'USD' ? '$' : '¥') + Math.abs(_fxInfo.fx_amount).toLocaleString() + ' × ' + _fxInfo.fx_rate + '\n'
               + '마진: ₩' + (Math.round(Math.abs(_fxInfo.fx_amount) * _fxInfo.fx_base) - Math.abs(amount)).toLocaleString()
               + ' (기준율 ' + _fxInfo.fx_base + ' · ' + _fxInfo.fx_margin_pct + '%)\n') : '') +
-    '사유: ' + description + '\n\n' +
-    '진행하시겠습니까?';
+    '사유: ' + description + '\n' +
+    (_feeMeta ? ('연회비 기록: 함께 적음 (납부일 ' + _feeMeta.paid_at + ' · ₩' + _feeMeta.amount_krw.toLocaleString() + ')\n') : '') +
+    '\n진행하시겠습니까?';
 
   if (!confirm(confirmMsg)) return;
 
@@ -22611,11 +22677,12 @@ async function adgSubmit(){
     if (btn){ btn.disabled = true; btn.textContent = '처리 중...'; }
 
     window._adgFxMeta = _fxInfo;   // adminGrantDeposit 의 metadata 에 실린다
+    window._adgFeeMeta = _feeMeta ? { membership_fee: _feeMeta } : null;   // 🆕 2026-10-18 연회비 기록 플래그 — 같은 metadata 에
     var result = await adminGrantDeposit(_adgSelectedUser.id, amount, depositType, description);
-    window._adgFxMeta = null;
+    window._adgFxMeta = null; window._adgFeeMeta = null;
 
     if (typeof showToast === 'function') {
-      showToast('✅','예치금 ' + actionText + ' 완료', '새 잔액: ₩' + result.newBalance.toLocaleString());
+      showToast('✅','예치금 ' + actionText + ' 완료' + (_feeMeta ? ' · 연회비 기록도 적음' : ''), '새 잔액: ₩' + result.newBalance.toLocaleString());
     } else {
       alert('✅ 예치금 ' + actionText + ' 완료\n새 잔액: ₩' + result.newBalance.toLocaleString());
     }
@@ -22627,7 +22694,10 @@ async function adgSubmit(){
     if (btnBack){ btnBack.disabled = false; btnBack.textContent = '확인 — 예치금 변동 적용'; }
   } catch(e) {
     console.error('[adg] grant failed:', e);
-    alert('❌ 처리 실패\n\n' + (e.message || String(e)));
+    window._adgFxMeta = null; window._adgFeeMeta = null;
+    var _em = String(e && e.message || e);
+    if (/FEE_RECORD_FAILED/.test(_em)) _em = '연회비 기록에 실패해 차감도 취소됐습니다 (잔액은 그대로)\n' + _em.replace(/^[\s\S]*FEE_RECORD_FAILED:\s*/, '');
+    alert('❌ 처리 실패\n\n' + _em);
     var btn2 = document.querySelector('#adminDepositGrantModal button[onclick="adgSubmit()"]');
     if (btn2){ btn2.disabled = false; btn2.textContent = '확인 — 예치금 변동 적용'; }
   }
@@ -22694,7 +22764,7 @@ async function adminGrantDeposit(targetUserId, amount, depositType, description)
       granted_by: caller.id,
       granted_by_name: caller.user_metadata && caller.user_metadata.display_name || null,
       granted_at: new Date().toISOString()
-    }, window._adgFxMeta || {})
+    }, window._adgFxMeta || {}, window._adgFeeMeta || {})
   };
   var _agBal;
   try {
@@ -32345,6 +32415,7 @@ async function mlOpen(uid){
   var pm = '';
   var _MF_METHOD = { transfer:['송금','#EAF1FF','#1F5BD6'], card:['카드','#FBF3F2','#6A1A1A'], link:['정산 링크','#EAF6EE','#1E7A46'],
                      deposit:['예치금 차감','#F5EFE3','#8a7b4a'], cash:['현금','#F0ECE6','#7A6A60'], other:['기타','#F0ECE6','#7A6A60'] };
+  var _MF_SOURCE = { pay_link: '결제 링크 자동 기록', deposit_deduct: '예치금 차감과 함께 기록', app_payment: '앱 결제', ledger: '원장' };   // 🆕 2026-10-18 자동 기록 출처 라벨
   window._mlFeeRows = mfRows;                  // 수정 폼 프리필용 — mlFeeEdit(id) 가 읽는다
   window._mlFeeLoadErr = !!mfLoadErr;          // 못 읽은 상태면 저장을 막는다(중복 기록 방지)
   var mfAuto = txs.filter(function(r){ return r.change_type === 'membership_payment'; });
@@ -32393,7 +32464,7 @@ async function mlOpen(uid){
         '<div style="font-size:13.5px;font-weight:700;line-height:1.4;">' + _memberDateFmt(f.paid_at) + ' ' + tag(mm[0], mm[1], mm[2])
           + (f.tier ? ' ' + tag(_pcalEsc(String(f.tier)) + '등급', '#f0ebe1', '#8a7b63') : '') + '</div>'
         + '<div style="font-size:11px;color:' + C.faint + ';margin-top:2px;">' + per + (f.note ? (per ? ' · ' : '') + _pcalEsc(String(f.note)) : '')
-          + (f.source && f.source !== 'manual' ? ' · ' + _pcalEsc(String(f.source)) : '') + '</div>',
+          + (f.source && f.source !== 'manual' ? ' · ' + _pcalEsc(_MF_SOURCE[f.source] || String(f.source)) : '') + '</div>',
         '<div style="font-size:14.5px;font-weight:800;color:' + C.ink + ';">' + _mfFx(f) + W + n(f.amount_krw) + '</div>'
         + '<div style="margin-top:2px;">' + tag('수정 ›', '#EDEAE3', '#7a746c') + '</div>',
         "mlFeeEdit('" + String(f.id).replace(/[^0-9a-f-]/g, '') + "')");
@@ -32416,6 +32487,7 @@ async function mlOpen(uid){
     pm += '<div id="mlFeeForm" style="margin-top:14px;padding:12px;border:1.5px dashed #c9a96e;border-radius:12px;background:#fff;">'
       + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">'
       +   '<div id="mlFeeFormTitle" style="font-size:12.5px;font-weight:800;color:' + C.ink + ';flex:1;">＋ 연회비 기록 추가</div>'
+      +   '<button type="button" onclick="feeDueDeductFromLedger(\'' + String(uid).replace(/[^0-9a-fA-F-]/g, '') + '\')" style="border:1px solid #d8d2c6;border-radius:8px;background:#fff;padding:4px 9px;margin-right:6px;font-family:inherit;font-size:11px;font-weight:800;color:#5d1622;cursor:pointer;">💰 예치금에서 차감</button>'
       +   '<button type="button" onclick="payLinkOpen({purpose:\'membership\',uid:\'' + String(uid).replace(/[^0-9a-fA-F-]/g, '') + '\'})" style="border:1px solid #d8d2c6;border-radius:8px;background:#fff;padding:4px 9px;font-family:inherit;font-size:11px;font-weight:800;color:#6b645b;cursor:pointer;">💸 연회비 결제 링크</button>'
       +   '<button id="mlFeeDelBtn" onclick="mlFeeDel(\'' + _uidQ + '\')" style="display:none;padding:4px 9px;border:1px solid #E4D6D6;border-radius:7px;background:#fff;font-family:inherit;font-size:11px;font-weight:800;color:#B23A2E;cursor:pointer;">삭제</button>'
       + '</div>'
@@ -45245,7 +45317,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.17-e';
+var TAAM_WEB_BUILD = '2026.10.18-a';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -72644,6 +72716,19 @@ IDB.get('splashSettings').then(function(s) {
       <label class="adg-radio" style="flex:1;padding:10px 12px;border:1.5px solid #e0ddd8;border-radius:8px;cursor:pointer;text-align:center;font-size:12px;font-weight:700;color:#666;display:flex;align-items:center;justify-content:center;gap:6px;">
         <input type="radio" name="adgDepositType" value="membership" style="margin:0;"><span data-i18n="admin.deposit_grant_type_membership">멤버십 예치금</span>
       </label>
+    </div>
+
+    <!-- 🆕 2026-10-18 차감을 연회비 납부로 함께 기록 — 차감(－)일 때만 보인다. 켜면 원장 차감과 연회비 탭 기록이 서버에서 한 트랜잭션으로
+         들어간다(trg_taam_fee_from_deduct · 20261018_fee_deduct_record.sql). 기록이 실패하면 차감도 취소된다 — 「돈은 빠졌는데 기록은 없다」를 막는 것이 목적. -->
+    <div id="adgFeeWrap" data-lang-lock="ko" style="display:none;margin:-6px 0 14px;padding:10px 12px;border:1.5px dashed #c9a96e;border-radius:10px;background:#fffaf0;">
+      <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:12px;font-weight:700;color:#5d1622;line-height:1.5;">
+        <input type="checkbox" id="adgFeeChk" style="margin:3px 0 0;flex:none;" onchange="adgFeeToggle()">
+        <span>연회비 납부로 기록 — 연회비 탭에 같은 금액이 한 줄로 함께 적힙니다 (차감과 한 트랜잭션 · 기록이 실패하면 차감도 되지 않습니다)</span>
+      </label>
+      <div id="adgFeeOpts" style="display:none;margin-top:8px;">
+        <div style="font-size:10.5px;color:#8a7b4a;font-weight:700;margin-bottom:4px;">납부일 (비우면 오늘 · KST)</div>
+        <input type="date" id="adgFeeDate" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1.5px solid #e0ddd8;border-radius:8px;font-family:inherit;font-size:13px;">
+      </div>
     </div>
 
     <!-- 4단계: 사유 -->

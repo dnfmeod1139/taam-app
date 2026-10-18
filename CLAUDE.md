@@ -231,6 +231,14 @@ DB 값은 `'A'` 그대로고 **이름만** 「게스트 회원」이다. 값을 
   서버 가드 `trg_taam_guard_fee_exempt`(BEFORE INSERT/UPDATE **전 칸** · membership_joined 가드와 같은 되돌림 방식 · `fee_exempt_set_by/at` 는 트리거만 적는다 — `UPDATE OF` 두 칸으로 걸었다가 set_by/at 만 보낸 UPDATE 가 안 걸리는 것을 3차 리뷰가 잡았다) — 회원이 자기를 제외해 연회비 알림을 피하는 길을 막는다.
   ⚠ `fee_exempt_note` 는 profiles 칸이라 **회원 본인도 읽는다**(자기 행 select) — 보여도 되는 말만(prompt 에도 적혀 있다). 설치 파일은 알림을 보내지 않는다(⑤ 존재 검사만 — 시드 전에 제외 예정 회원이 실려 나가지 않게). 3차 적대 리뷰(15 에이전트 → 확정 3 · 전부 반영): 감사 칸 위조 · 「제외」 필터 잔존 · 설치 중 알림 발송.
   ⚠ 리뷰 에이전트가 스크래치에 같은 이름(`feedue.js`)으로 파일을 쓸 수 있다 — 화면 회귀는 `fdscreen.js`. 회귀: `bash sql/_test/t_fee_due.sh`(47건 · 제외 스위치·가드 포함) · 스크래치 `fdscreen.js`(40건). 2차 적대 리뷰(19 에이전트 → 확정 3 · 전부 반영): 인앱 본문 절단 · fee_hint 통화 · 스플래시 위 팝업.
+- **예치금 「관리 차감」을 연회비 납부로 함께 기록 — 한 트랜잭션 (2026-10-18, `20261018_fee_deduct_record.sql` · 실행 필요).** 연회비 갱신은 대부분 예치금에서 뺀다(운영 확인 · 회원에게 알림·고지는 없다 — 연회비 알림은 슈퍼어드민에게만).
+  그런데 「납부 시기」가 납부로 세는 것은 `membership_fees` 기록 + 앱 카드 결제 줄뿐이라 **관리 차감은 납부가 아니었다** — 차감 뒤 연회비 탭에 한 줄을 더 적어야 기준일이 밀렸고, 안 적으면 「부족」으로 남아 7일·30일 뒤 알림이 다시 왔다.
+  → 부여·차감 모달의 차감(－)일 때만 보이는 **「연회비 납부로 기록」 체크 + 납부일**(`adgFeeWrap` · `_adgFeeChecked` · 기본 오늘 KST). 켜면 `window._adgFeeMeta = {membership_fee:{amount_krw, paid_at, note}}` 가 원장 entries 의 metadata 에 실리고,
+  서버 **AFTER INSERT 트리거 `trg_taam_fee_from_deduct`**(deposit_transactions · security definer)가 **같은 트랜잭션**으로 `membership_fees` 에 한 줄(method `deposit` · source `deposit_deduct` · source_ref = 원장 줄 id · 등급은 프로필 M/T · 메모 = 차감 설명)을 적는다.
+  **기록을 못 적으면 차감도 롤백**(`FEE_RECORD_FAILED` · 앱 안내 「연회비 기록에 실패해 차감도 취소됐습니다」) — 「돈은 빠졌는데 기록은 없다」가 이 기능이 없애려는 모양이라 조용히 넘기지 않는다. 플래그가 부여(+)·다른 change_type 에 실려 오면 같은 이유로 거절. 플래그 없는 줄(종전 전부·Edge·회원 환불)은 트리거가 보지 않는다. 같은 원장 줄로 두 번 적히지 않는다(source_ref).
+  입구: 「💰 연회비 납부 시기」 줄의 **「예치금에서 차감」**(`feeDueDeduct` → `_adgOpenForFee` — 회원·멤버십 주머니·－·금액(fee_hint 의 ₩숫자, 외화·규정 없음이면 비움 + 토스트)·사유 「연회비 N년차 (기준일)」·체크를 채워 열고 확정은 사람이 누른다) · 원장 연회비 탭의 같은 버튼(`feeDueDeductFromLedger` · 금액은 사람이).
+  차감을 되돌리는 부여(+)는 기록을 자동으로 지우지 않는다 — 연회비 탭에서 지운다. 연회비 탭 source 라벨 `_MF_SOURCE`(`deposit_deduct` 「예치금 차감과 함께 기록」 · `pay_link` 「결제 링크 자동 기록」) · 부여/차감 전체 로그에 「· 연회비 기록」 태그.
+  회귀: `bash sql/_test/t_fee_deduct.sh`(12건 — 플래그 true/false/null/객체 · 부여에 플래그 거절 · 날짜 오류·표 없음 롤백 · 등급 A → null) · 스크래치 `adgfee.js`(31건 · 모달·확인창·실패 안내·두 입구).
 - 회귀: `bash sql/_test/t_member_start.sh`(25건 — 가드·시드·anon 포함) · `bash sql/_test/t_membership_fees.sh`(12건) · `bash sql/_test/t_rpc_caller_guard.sh`(7건) · 스크래치 `mjoined.js`(23건).
 
 ### 한 회원 = 한 회차 1건 · 같은 날 같은 시간대 1건 (2026-10-13 카타오리 5/21 사고)
