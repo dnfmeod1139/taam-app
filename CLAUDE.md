@@ -435,6 +435,9 @@ DB 값은 `'A'` 그대로고 **이름만** 「게스트 회원」이다. 값을 
 ⚠ 알림이 결제 확정을 막으면 안 된다 — 예외는 전부 warning. 회귀: `bash sql/_test/t_ksk_paid_notify.sh`(8건). 연회비를 정산 링크로 받는 경우도 같은 표라 같이 잡힌다.
 ⚠ **2026-10-17 확인: 이 파일은 라이브에 올라간 적이 없었다.** 연회비 알림(`20261017_membership_fee_due.sql`) 설치 결과의 `push.reason` 이 「function public.taam_admin_push … does not exist」였다 — 즉 10-13 부터 정산·링크 결제 완료 알림도 실제로는 안 가고 있었다. **2026-10-17 SQL Editor 로 설치 완료**(①②③ ✅ · 슈퍼어드민 1명) — 이날부터 정산·링크 결제 완료 푸시와 연회비 알림 푸시가 간다.
 → **`supabase/migrations/` 에 파일이 있다고 라이브에 있는 게 아니다**(워크플로는 시크릿이 없어 돌지 않는다). 새 SQL 이 옛 함수에 의존하면 확인 표에 `to_regproc` 존재 검사를 한 줄 넣는다 — 연회비 알림 파일의 ⑧ 이 그 예.
+⚠ **2026-10-19 확인: 설치 뒤에도 푸시는 한 번도 안 갔다 — 인앱 알림만 갔다.** `taam_admin_push` 는 Vault 의 legacy service_role JWT 를 Bearer 로 send-push 를 부르는데, send-push 의 서버 호출 판정이 **환경변수 `SUPABASE_SERVICE_ROLE_KEY` 와 글자 그대로 같을 때만**(`t === SERVICE_KEY`)이었다.
+두 문자열이 달라(새 형식 키 · 복사 때 붙은 공백 등) `callerUserId` 도 없는 요청이 되어 `401 {"error":"로그인이 필요합니다"}` 로 끊겼다 — 10-18 에릭 결제 링크 때 `net._http_response` 에 그대로 찍혔다. Edge→Edge(notify-restock 등)는 같은 환경변수를 쓰니 멀쩡했고 **DB→send-push 만** 죽어 있었다.
+→ send-push 가 토큰의 `role` 클레임이 `service_role` 이면 서버 호출로 본다(크론 함수 셋의 `isServiceCaller` 와 같은 방식 · 서명은 게이트웨이가 확인 · `config.toml` 에 `[functions.send-push] verify_jwt = true` 를 명시 — **끄면 위조 가능**). 점검은 SQL Editor 에서 `select public.taam_admin_push('테스트','DB→푸시 점검','/','test-'||extract(epoch from now())::bigint,'admin');` 뒤 `net._http_response` 최신 줄이 `200` 이고 슈퍼어드민 폰에 푸시가 오는지로 — `request_id` 만 보고 믿지 않는다.
 
 ### 정산 결제도 좌석을 잡는다 — 「티켓 연결」은 라벨이 아니다 (2026-09-29)
 

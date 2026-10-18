@@ -524,9 +524,26 @@ async function handle(req: Request): Promise<Response> {
     //   ⚠ 서버끼리 부르는 경로(Edge Function → Edge Function, service_role 키)는
     //     막지 않는다. toss-confirm 등이 결제 후 슈퍼어드민에게 알릴 때 쓴다.
     //     그 경우 Authorization 이 service_role 키라 callerUserId 가 안 잡힌다.
+    //   🆕 2026-10-19 DB 에서 pg_net 으로 부르는 경로(taam_admin_push — 정산·링크 결제 완료 · 연회비 알림)는 Vault 의 legacy service_role JWT 를
+    //     Bearer 로 보낸다. 그 문자열이 환경변수 SUPABASE_SERVICE_ROLE_KEY 와 글자 그대로 같지 않으면(새 형식 키 · 복사 때 붙은 공백) 위의 `===` 가
+    //     거짓이 되고 callerUserId 도 없어 401 「로그인이 필요합니다」로 끊겼다 — 2026-10-18 에릭 결제 링크 알림이 안 온 원인(net._http_response 401).
+    //     그래서 토큰의 role 클레임이 service_role 이면 서버 호출로 본다. 서명은 게이트웨이(Verify JWT ON)가 이미 확인했다 —
+    //     ⚠ send-push 의 verify_jwt 를 끄면 {"role":"service_role"} 를 적은 가짜 토큰으로 누구나 전원 푸시를 쏠 수 있다(config.toml 머리말).
+    const jwtRole = (token: string): string => {
+      try {
+        const parts = token.split(".");
+        if (parts.length !== 3) return "";
+        const b = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+        const pad = b + "=".repeat((4 - (b.length % 4)) % 4);
+        const claims = JSON.parse(atob(pad));
+        return String((claims && claims.role) || "");
+      } catch (_) { return ""; }
+    };
     const isServiceCall = (() => {
       const t = authHeader.startsWith("Bearer ") ? authHeader.substring(7) : "";
-      return !!t && !!SERVICE_KEY && t === SERVICE_KEY;
+      if (!t) return false;
+      if (!!SERVICE_KEY && t === SERVICE_KEY) return true;
+      return jwtRole(t) === "service_role";
     })();
 
     if (!isServiceCall) {
