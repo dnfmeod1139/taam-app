@@ -7663,6 +7663,8 @@ async function payLinkMemberSearch(){
   var k = q.replace(/[%_]/g, '\\$&');
   var r = await window.sb.from('profiles').select('id, display_name, phone, email, membership_tier, currency').is('deleted_at', null).or('display_name.ilike.%' + k + '%,phone.ilike.%' + k + '%,email.ilike.%' + k + '%').limit(8);
   if (r.error) { res.innerHTML = '<div style="font-size:11px;color:#B23A2E;">검색 실패: ' + _plEsc(r.error.message) + '</div>'; return; }
+  try{ await _taamTestIds(); }catch(_te){}
+  r.data = _taamHideTest(r.data || [], q);   // 🆕 2026-10-19 테스트 계정은 정확히 쳐야 나온다
   _pl.memberCache = {}; (r.data || []).forEach(function(u){ _pl.memberCache[u.id] = u; });
   res.innerHTML = (r.data || []).length ? (r.data || []).map(function(u){ return '<div onclick="payLinkMemberPick(\'' + _plEsc(u.id) + '\')" style="padding:7px 9px;border-bottom:1px solid #f0ece6;cursor:pointer;font-size:12.5px;"><b>' + _plEsc(u.display_name || '(이름 없음)') + '</b> <span style="color:#8a7b63;font-size:10.5px;">' + _plEsc(u.membership_tier || '') + '</span> <span style="color:#9a9486;font-size:11px;">' + _plEsc(u.phone || u.email || '') + '</span></div>'; }).join('') : '<div style="font-size:11px;color:#9a9486;padding:6px;">없습니다</div>';
 }
@@ -7875,6 +7877,7 @@ async function feeDueLoad(){
     if (r.error && _fdMissing(r.error)) r = await window.sb.rpc('taam_membership_fee_due');   // 옛 서버(제외 스위치 전)면 인자 없이
     if (r.error) throw r.error;
     _fdRows = r.data || [];
+    try { await _taamTestIds(); } catch(_te){}   // 🆕 2026-10-19 테스트 계정은 「제외」 필터에서만
   } catch (e) {
     box.innerHTML = '<div style="padding:14px 0;font-size:12.5px;font-weight:700;color:#B23A2E;">'
       + (_fdMissing(e) ? '서버 준비 필요 — 20261017_membership_fee_due.sql 을 SQL Editor 에서 실행하세요.' : '불러오지 못했습니다: ' + _pcalEsc(String((e && e.message) || e))) + '</div>';
@@ -7886,7 +7889,7 @@ async function feeDueLoad(){
 function feeDueFilter(k){ _fdFilter = k; feeDueRender(); }
 function feeDueRender(){
   var box = document.getElementById('fdList'), fb = document.getElementById('fdFilterBtns'); if (!box || !_fdRows) return;
-  var rows = _fdRows.map(function(r){ r._st = _fdStatus(r); return r; });
+  var rows = _fdRows.map(function(r){ r._st = _fdStatus(r); if (r._st !== 'exempt' && _taamIsTest(r.user_id) && !window._taamShowTest) r._st = 'exempt'; return r; });   // 🆕 2026-10-19 테스트 계정은 제외처럼(「제외」 필터에서만 · 서버 알림은 fee_exempt 가 막는다)
   var cnt = { all: 0, late: 0, soon: 0, ok: 0, exempt: 0 }; rows.forEach(function(r){ if (r._st === 'exempt') { cnt.exempt++; return; } cnt.all++; if (r._st === 'late') cnt.late++; else if (r._st === 'soon') cnt.soon++; else cnt.ok++; });
   if (_fdFilter === 'exempt' && !cnt.exempt) _fdFilter = 'all';   // 제외 회원이 없어졌으면 버튼도 없으니 전체로
   if (fb) fb.innerHTML = [['all', '전체 ' + cnt.all], ['late', '⚠ 부족 ' + cnt.late], ['soon', '🔔 30일 내 ' + cnt.soon], ['ok', '정상 ' + cnt.ok]].concat(cnt.exempt ? [['exempt', '제외 ' + cnt.exempt]] : []).map(function(x){ var on = x[0] === _fdFilter;
@@ -22215,6 +22218,13 @@ async function adgSearchUsers(){
       }
     } catch(_fe){ console.warn('[adg] invitee_name 폴백 실패:', _fe); }
 
+    // 🆕 2026-10-19 테스트 계정은 이름·번호·이메일을 정확히 쳐야 나온다(회원 목록 숨김 규칙과 같음)
+    try{ await _taamTestIds(); }catch(_te){}
+    var _dataAll = data; data = _taamHideTest(data, qRaw);
+    if (data.length === 0) {
+      container.innerHTML = '<div style="padding:14px;color:#999;font-size:11px;text-align:center;">' + (_dataAll.length ? '테스트 계정만 일치 — 이름이나 번호를 정확히 입력하면 보입니다' : '검색 결과 없음') + '</div>';
+      return;
+    }
     window._adgSearchResultsData = data;
     container.innerHTML = data.map(function(u){
       var name = u.display_name || u._inviteeName || '(이름 없음)';
@@ -22914,6 +22924,7 @@ async function openMembershipUntilMgmt(){
     }
     _muAllProfiles = res.data || [];
     try { await _muLoadFeeMap(); } catch(_fm){}   // 🆕 연회비 기준일 — 먼저 읽고 **한 번만** 그린다(두 번 그리면 그 사이 입력한 종료일이 지워졌다 · 적대 리뷰)
+    try { await _taamTestIds(); } catch(_te){}    // 🆕 2026-10-19 테스트 계정 숨김
     renderMembershipUntilList();
   } catch(e){
     if(container) container.innerHTML = '<div style="padding:20px;color:#c00;font-size:11px;">오류: '+((e&&e.message)||String(e))+'</div>';
@@ -22972,7 +22983,7 @@ function renderMembershipUntilList(){
   var stats = document.getElementById('muStatsLine');
   if(!container) return;
   var q = ((document.getElementById('muSearchInput')||{}).value || '').trim().toLowerCase();
-  var list = _muAllProfiles.filter(function(r){
+  var list = _taamHideTest(_muAllProfiles, q).filter(function(r){   // 🆕 2026-10-19 테스트 계정은 빠진다(정확히 치면 보인다)
     if(!q) return true;
     return (r.display_name && String(r.display_name).toLowerCase().indexOf(q)>=0)
         || (r.phone && String(r.phone).toLowerCase().indexOf(q)>=0)
@@ -22985,7 +22996,7 @@ function renderMembershipUntilList(){
       if(!isNaN(du.getTime()) && du.getFullYear()===2027 && du.getMonth()===11 && du.getDate()===31) promoCnt++;
     }
   });
-  if(stats) stats.textContent = '전체 ' + _muAllProfiles.length + '명 · 표시 ' + list.length + '명 · 프로모션 ' + promoCnt + '명';
+  if(stats) stats.textContent = '전체 ' + _taamHideTest(_muAllProfiles).length + '명 · 표시 ' + list.length + '명 · 프로모션 ' + promoCnt + '명';
   if(list.length === 0){
     container.innerHTML = '<div style="text-align:center;color:#999;font-size:11px;padding:30px;">결과 없음</div>';
     return;
@@ -31624,6 +31635,8 @@ async function mlSearch(){
   }
   if(res.error){ box.innerHTML = '<div style="font-size:14px;color:#B23A2E;">검색 실패: ' + _pcalEsc(res.error.message) + '</div>'; return; }
   var rows = res.data || [];
+  try{ await _taamTestIds(); }catch(_te){}
+  rows = _taamHideTest(rows, q);   // 🆕 2026-10-19 테스트 계정은 이름·번호·이메일을 정확히 쳐야 나온다
   if(!rows.length){ box.innerHTML = '<div style="font-size:14px;color:#a8a29a;padding:8px 2px;">결과 없음</div>'; return; }
 
   // 잔액이 0 인 회원은 아래로 — 운영에서 먼저 볼 사람이 위에 오게.
@@ -38467,6 +38480,7 @@ async function _mbLoad(){
     if(res.error){ console.warn('[member] 조회 실패:', res.error.message); _mbRows = []; return; }
     _mbRows = res.data || [];
   }catch(e){ console.warn('[member] 예외:', e); _mbRows = []; }
+  try{ await _taamTestIds(); }catch(_te){}   // 🆕 2026-10-19 테스트 계정 집합 — _mbPass 가 거른다
 
   // 🆕 2026.09-01: 명부 한 줄에 「구매 N회」와 「이용 제한」을 같이 보여준다.
   //   종전엔 둘 다 다른 화면을 열어야 알 수 있었다 — 명부는 회원을 「고르는」
@@ -38524,6 +38538,10 @@ function _mbBase(){
 }
 function _mbPass(p, f){
   var g = _mbGrade(p);
+  // 🆕 2026-10-19 테스트 계정(is_test)은 「테스트」 칩에서만 — 다른 칩에서는 빠진다(「보기」를 켰거나 검색어가 이름·번호와 정확히 같으면 보인다)
+  var isT = _taamIsTest(p.id);
+  if(f === 'test')   return isT;
+  if(isT && !window._taamShowTest && !_taamTestExact(p, _mbState.q)) return false;
   if(f === 'all')    return !p.deleted_at;          // 기본은 살아 있는 회원만
   if(f === 'broken') return !p.deleted_at && g.broken;
   if(f === 'M')      return !p.deleted_at && g.eff === 'M';
@@ -38552,7 +38570,7 @@ function _mbRenderFilters(){
   //   필터고 무엇이 메뉴인지 구분이 안 됐다. 「구매 있음」·「예치금 보유」·
   //   「만료 임박」·「이용 제한」·「확인 필요」는 어차피 **줄 안에 배지로** 보인다 —
   //   칩까지 둘 이유가 없다. (확인 필요는 아래 안내문이 개수까지 말해 준다)
-  var CHIPS = [['all','전체'], ['M','M 등급'], ['T','T 등급'], ['gone','탈퇴']];
+  var CHIPS = [['all','전체'], ['M','M 등급'], ['T','T 등급'], ['gone','탈퇴'], ['test','테스트']];   // 🆕 테스트 칩은 숨긴 계정이 있을 때만 생긴다(0건 칩은 안 그린다)
   CHIPS.forEach(function(c){
     cnt[c[0]] = base.filter(function(p){ return _mbPass(p, c[0]); }).length;
   });
@@ -38721,6 +38739,63 @@ function mbManage(uid){
 window.mbSetFilter = mbSetFilter; window.mbToggleRow = mbToggleRow; window.mbClearQ = mbClearQ;
 window.mbLedger = mbLedger; window.mbManage = mbManage;
 
+// ════════════════════════════════════════════════════════════════
+// 🆕 2026-10-19 테스트 계정 숨김 — profiles.is_test (서버 가드 · 슈퍼어드민만 바꾼다 · 20261019_test_accounts.sql)
+//   운영자 본인 계정·테스트 계정(김우 · 테스트1 · 김우종은)은 회원 목록(회원 관리 · 명부 · 만료일 관리) · 원장 검색 · 회원 고르기(예치금 부여 · 초대 · 결제 링크) ·
+//   연회비 납부 시기에서 빠진다. 탈퇴 처리는 로그인을 막으니 쓸 수 없어 「숨김」을 따로 둔다.
+//   방식: is_test=true 인 uid 집합을 서버에서 한 번 읽어(Set) 화면마다 _taamHideTest(rows, q) 로 거른다 — 컬럼이 없는 서버(SQL 미실행)면 빈 집합이라 화면은 그대로다.
+//   보이는 때: 「테스트 계정 보기」(window._taamShowTest · 이 세션만) 를 켰거나, 검색어가 이름·번호·이메일과 **정확히** 같을 때 — 테스트 계정에 예치금을 부여하거나 초대할 때 쓴다.
+// ════════════════════════════════════════════════════════════════
+var _taamTestIdSet = null, _taamTestIdP = null;
+window._taamShowTest = false;
+async function _taamTestIds(force){
+  if(!force && _taamTestIdSet) return _taamTestIdSet;
+  if(!force && _taamTestIdP) return _taamTestIdP;
+  _taamTestIdP = (async function(){
+    var set = new Set(), ok = false;
+    try{
+      if(window.sb){
+        var r = await window.sb.from('profiles').select('id').eq('is_test', true).limit(500);
+        if(!r.error && Array.isArray(r.data)){ ok = true; r.data.forEach(function(x){ if(x && x.id) set.add(String(x.id)); }); }
+      }
+    }catch(_e){}
+    if(ok) _taamTestIdSet = set;          // 실패(컬럼 없음·네트워크)는 캐시하지 않는다 — 다음 화면에서 다시 읽는다 · 숨김만 없을 뿐 화면은 그대로
+    _taamTestIdP = null;
+    return set;
+  })();
+  return _taamTestIdP;
+}
+function _taamIsTest(uid){ return !!(uid && _taamTestIdSet && _taamTestIdSet.has(String(uid))); }
+// 검색어가 그 계정을 **정확히** 가리키는가 — 이름(공백 제거) · 이메일(대소문자 무관) · 번호(숫자만 · +82 10 → 010)
+function _taamTestExact(p, q){
+  q = String(q || '').trim(); if(!q || !p) return false;
+  var nm = String(p.display_name || '').trim(); if(nm && q === nm) return true;
+  var em = String(p.email || '').trim().toLowerCase(); if(em && q.toLowerCase() === em) return true;
+  var norm = function(v){ v = String(v || '').replace(/[^0-9]/g, ''); return v.replace(/^821/, '01'); };
+  var qd = norm(q), pd = norm(p.phone);
+  return !!(qd && pd && qd.length >= 9 && qd === pd);
+}
+function _taamHideTest(rows, q){
+  rows = Array.isArray(rows) ? rows : [];
+  if(window._taamShowTest || !_taamTestIdSet || !_taamTestIdSet.size) return rows;
+  return rows.filter(function(p){ return !p || !_taamIsTest(p.id || p.user_id) || _taamTestExact(p, q); });
+}
+function _taamTestBar(n){
+  if(!n && !window._taamShowTest) return '';
+  return '<div data-lang-lock="ko" style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;margin-bottom:8px;border:1px dashed #d8d2c6;border-radius:9px;font-size:11px;color:#8a8580;">'
+    + '<span>' + (window._taamShowTest ? '테스트 계정 표시 중' : '테스트 계정 ' + n + '개 숨김') + '</span>'
+    + '<button type="button" onclick="taamToggleShowTest(' + (window._taamShowTest ? 'false' : 'true') + ')" style="padding:3px 9px;border:1px solid #d8d2c6;border-radius:7px;background:#fff;font-family:inherit;font-size:10.5px;font-weight:800;color:#6b645b;cursor:pointer;">' + (window._taamShowTest ? '숨기기' : '보기') + '</button></div>';
+}
+function taamToggleShowTest(on){
+  window._taamShowTest = !!on;
+  try{ if(document.getElementById('memberListContent') && typeof renderMemberList === 'function') renderMemberList(); }catch(_e){}
+  try{ if(typeof _mbRender === 'function' && _mbRows) _mbRender(); }catch(_e){}
+  try{ var mu = document.getElementById('membershipUntilMgmtModal'); if(mu && mu.style.display !== 'none' && mu.style.display !== '' && typeof renderMembershipUntilList === 'function') renderMembershipUntilList(); }catch(_e){}
+  try{ if(typeof feeDueRender === 'function' && _fdRows) feeDueRender(); }catch(_e){}
+  try{ if(document.getElementById('mlResults') && typeof mlSearch === 'function') mlSearch(); }catch(_e){}
+}
+window._taamTestIds = _taamTestIds; window._taamIsTest = _taamIsTest; window._taamTestExact = _taamTestExact; window._taamHideTest = _taamHideTest; window.taamToggleShowTest = taamToggleShowTest; window._taamTestBar = _taamTestBar;
+
 // 어드민 메뉴의 「회원」 버튼에 붙는 배지 — 손봐야 할 회원 수.
 //   화면을 열어봐야만 알 수 있으면 아무도 안 연다. 메뉴에서 먼저 보이게 한다.
 //   회원 전체를 받아오지 않고 건수만 센다(head:true) — 메뉴 열 때마다 도는 질의다.
@@ -38732,7 +38807,15 @@ async function _mbBadge(){
       .select('id', { count:'exact', head:true })
       .eq('membership_tier', 'M')
       .is('deleted_at', null)
+      .not('is_test', 'is', true)                      // 🆕 2026-10-19 테스트 계정은 세지 않는다
       .or('membership_expires_at.is.null,membership_expires_at.lt.' + new Date().toISOString());
+    if(res.error && /is_test/.test(String(res.error.message || ''))){   // 컬럼이 없는 서버면 종전 질의
+      res = await window.sb.from('profiles')
+        .select('id', { count:'exact', head:true })
+        .eq('membership_tier', 'M')
+        .is('deleted_at', null)
+        .or('membership_expires_at.is.null,membership_expires_at.lt.' + new Date().toISOString());
+    }
     if(res.error){ el.innerHTML = ''; return; }
     var n = res.count || 0;
     el.innerHTML = n
@@ -44750,6 +44833,8 @@ async function riSearchMembers(q){
         return;
       }
       var rows = r.data || [];
+      try{ await _taamTestIds(); }catch(_te){}
+      rows = _taamHideTest(rows, q);   // 🆕 2026-10-19 테스트 계정은 정확히 쳐야 나온다
 
       // 초대명 폴백 (이름 비어있는 회원 매칭용)
       try {
@@ -45413,7 +45498,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.18-e';
+var TAAM_WEB_BUILD = '2026.10.18-f';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -60502,8 +60587,11 @@ async function renderMemberList() {
       return;
     }
     var rows = res.data || [];
+    await _taamTestIds();                                   // 🆕 2026-10-19 테스트 계정(is_test)은 숨긴다 — 머리의 「보기」로 켠다
+    var _rowsAll = rows; rows = _taamHideTest(rows);
+    var _testHidden = _rowsAll.length - rows.length;
     if (rows.length === 0) {
-      el.innerHTML = '<div class="sub-empty">가입된 회원 없음</div>';
+      el.innerHTML = _taamTestBar(_testHidden) + '<div class="sub-empty">가입된 회원 없음</div>';
       return;
     }
     function _fmt(iso){
@@ -60514,13 +60602,14 @@ async function renderMemberList() {
     }
     function _esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
 
-    el.innerHTML = rows.map(function(m){
+    el.innerHTML = _taamTestBar(_testHidden) + rows.map(function(m){
       var role = m.role || 'member';
       var gradeCls, gradeLabel;
       if (role==='super_admin'||role==='superadmin'){ gradeCls='m'; gradeLabel='슈퍼'; }
       else if (role==='admin'){ gradeCls='t'; gradeLabel='관리자'; }
       else if (role==='partner'){ gradeCls='t'; gradeLabel='파트너'; }
       else { gradeCls='t'; gradeLabel='회원'; }
+      if(_taamIsTest(m.id)){ gradeLabel='테스트'; gradeCls='deleted'; }   // 🆕 2026-10-19 「보기」로 드러난 테스트 계정
       // 🆕 v1.53.18: 탈퇴 회원은 배지로 구분 + 카드 흐림
       var isDeleted = !!m.deleted_at;
       if(isDeleted){ gradeLabel = '탈퇴'; gradeCls = 'deleted'; }
@@ -60574,7 +60663,7 @@ async function memOpenProfileQuick(userId, name){
   if(body) body.innerHTML = '<div style="text-align:center;color:#999;font-size:11px;padding:30px;">불러오는 중...</div>';
   try {
     var res = await window.sb.from('profiles')
-      .select('id, display_name, phone, email, created_at, member_until, role, deleted_at, membership_tier, membership_expires_at, country, single_device_exempt')
+      .select('*')                                      // 🆕 2026-10-19 is_test · fee_exempt 도 — 컬럼이 없는 서버에서도 안 깨지게 *
       .eq('id', userId)
       .single();
     if(res.error || !res.data){
@@ -60656,6 +60745,16 @@ function renderMemberManageModal(){
           + '<button onclick="mmmSaveDeviceExempt(false)" style="flex:1;padding:11px;border-radius:8px;border:1.5px solid '+(!u.single_device_exempt?'#1a1a18':'#e0ddd8')+';background:'+(!u.single_device_exempt?'#1a1a18':'#fff')+';color:'+(!u.single_device_exempt?'#fff':'#888')+';font-weight:800;font-size:13px;cursor:pointer;">단일 기기 (기본)</button>'
           + '<button onclick="mmmSaveDeviceExempt(true)" style="flex:1;padding:11px;border-radius:8px;border:1.5px solid '+(u.single_device_exempt?'#9B1C1C':'#e0ddd8')+';background:'+(u.single_device_exempt?'#9B1C1C':'#fff')+';color:'+(u.single_device_exempt?'#fff':'#888')+';font-weight:800;font-size:13px;cursor:pointer;">면제 (심사용)</button>'
         + '</div>'
+      + '</div>'
+      // 🆕 2026-10-19 테스트 계정 — 회원 목록·원장 검색·회원 고르기·연회비 납부 시기에서 숨긴다(이름·번호를 정확히 치면 보인다)
+      + '<div style="padding:16px 0 8px;border-top:1px solid #f0ece6;">'
+        + '<div style="font-size:11px;font-weight:700;color:#1a1a18;margin-bottom:6px;">테스트 계정</div>'
+        + '<div style="font-size:10.5px;color:#888;margin-bottom:10px;line-height:1.55;">운영자 본인 계정·테스트용 계정은 회원 목록 · 원장 검색 · 회원 고르기에서 숨깁니다. 이름이나 번호를 정확히 치면 찾을 수 있고, 켜면 연회비 대상에서도 뺍니다.</div>'
+        + '<div style="display:flex;gap:8px;">'
+          + '<button onclick="mmmSaveTest(false)" style="flex:1;padding:11px;border-radius:8px;border:1.5px solid '+(!u.is_test?'#1a1a18':'#e0ddd8')+';background:'+(!u.is_test?'#1a1a18':'#fff')+';color:'+(!u.is_test?'#fff':'#888')+';font-weight:800;font-size:13px;cursor:pointer;">일반 회원</button>'
+          + '<button onclick="mmmSaveTest(true)" style="flex:1;padding:11px;border-radius:8px;border:1.5px solid '+(u.is_test?'#7C6A55':'#e0ddd8')+';background:'+(u.is_test?'#7C6A55':'#fff')+';color:'+(u.is_test?'#fff':'#888')+';font-weight:800;font-size:13px;cursor:pointer;">테스트 계정 (숨김)</button>'
+        + '</div>'
+        + '<div style="font-size:10px;color:#aaa;margin-top:6px;">현재: '+(u.is_test?'테스트 계정 — 목록에서 숨김':'일반 회원')+'</div>'
       + '</div>'
       // 탈퇴 처리
       + '<div style="padding:16px 0 8px;">'
@@ -60780,6 +60879,33 @@ async function mmmSaveDeviceExempt(on){
   }catch(e){ if(typeof showToast==='function') showToast('⚠','오류',(e&&e.message)||String(e)); }
 }
 window.mmmSaveDeviceExempt = mmmSaveDeviceExempt;
+
+// 🆕 2026-10-19 테스트 계정 토글 — profiles.is_test 직접 UPDATE(슈퍼어드민 · 서버 가드가 회원 세션은 되돌린다). 켜면 연회비 대상에서도 뺀다(fee_exempt · 끌 때는 손대지 않는다)
+async function mmmSaveTest(on){
+  if(!_mmmCurrentUser || !window.sb) return;
+  if(!_isSuperAdmin || !_isSuperAdmin()){ if(typeof showToast==='function') showToast('🔒','권한 부족','슈퍼어드민 전용'); return; }
+  try{
+    var upd = { is_test: !!on };
+    if(on && !_mmmCurrentUser.fee_exempt){ upd.fee_exempt = true; upd.fee_exempt_note = _mmmCurrentUser.fee_exempt_note || '테스트 계정'; }
+    var res = await window.sb.from('profiles').update(upd).eq('id', _mmmCurrentUser.id).select('id, is_test');
+    if(res.error){
+      var m = String(res.error.message||'');
+      if(/is_test/.test(m) && /column|schema cache|does not exist/i.test(m)){ if(typeof showToast==='function') showToast('⚠','서버 준비 필요','20261019_test_accounts.sql 을 먼저 실행해주세요'); }
+      else { if(typeof showToast==='function') showToast('⚠','저장 실패', m); }
+      return;
+    }
+    if(!res.data || !res.data.length){ if(typeof showToast==='function') showToast('⚠','RLS 차단','변경 안 됨 — 권한 점검'); return; }
+    if(!!res.data[0].is_test !== !!on){ if(typeof showToast==='function') showToast('⚠','서버가 되돌렸어요','슈퍼어드민 세션인지 확인하세요'); return; }
+    _mmmCurrentUser.is_test = !!on;
+    if(upd.fee_exempt){ _mmmCurrentUser.fee_exempt = true; _mmmCurrentUser.fee_exempt_note = upd.fee_exempt_note; }
+    try{ await _taamTestIds(true); }catch(_e){}
+    renderMemberManageModal();
+    if(typeof showToast==='function') showToast('✓', on?'테스트 계정으로 숨김':'일반 회원으로 복원', on?'회원 목록·원장 검색·회원 고르기에서 빠집니다 — 이름을 정확히 치면 보입니다':'회원 목록에 다시 보입니다');
+    if(typeof renderMemberList==='function' && document.getElementById('memberListContent')) renderMemberList();
+    if(typeof _mbRender==='function' && _mbRows) _mbRender();
+  }catch(e){ if(typeof showToast==='function') showToast('⚠','오류',(e&&e.message)||String(e)); }
+}
+window.mmmSaveTest = mmmSaveTest;
 
 async function mmmSoftDelete(){
   if(!_mmmCurrentUser || !window.sb) return;

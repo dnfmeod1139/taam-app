@@ -260,6 +260,17 @@ DB 값은 `'A'` 그대로고 **이름만** 「게스트 회원」이다. 값을 
   회귀: `bash sql/_test/t_fee_due_anchor.sh`(14건 — 두 부류 · 암묵 1건 · 기념일 뒤 갱신 1건 → paid 2 · 결제일(초대 paid_at · INV- confirmed_at) · 시작 전 · 회원 LINK- 첫 구매 · 기록 2건 · 알림 · md5 재실행) · 스크래치 `mfdue.js`(62건 · ⑪~⑰ 두 부류·기념일 규칙·`_mlAddYears`) · `fdscreen.js`(42건 · anchorRows) · `muscreen.js`(12건 · 만료일 관리 한 번 그리기·KST·옛 서버).
 - 회귀: `bash sql/_test/t_member_start.sh`(25건 — 가드·시드·anon 포함) · `bash sql/_test/t_membership_fees.sh`(12건) · `bash sql/_test/t_rpc_caller_guard.sh`(7건) · 스크래치 `mjoined.js`(23건).
 
+### 테스트 계정은 회원 목록에서 숨긴다 — `profiles.is_test` (2026-10-19 운영 결정)
+
+운영자 본인 계정·테스트 계정(**김우 · 테스트1 · 김우종은**)이 진짜 회원과 섞여 보였다. 탈퇴 처리는 로그인을 막으니 못 쓰고, 「숨김」 스위치를 따로 뒀다(`20261019_test_accounts.sql` · 실행 필요).
+- 서버: `profiles.is_test`(기본 false) + `is_test_set_by/at`(트리거만 적는다) · 가드 `trg_taam_guard_is_test`(BEFORE INSERT/UPDATE 전 칸 · 회원 세션은 **되돌림** · fee_exempt 가드와 같은 모양). 시드는 세 이름이 공백 제거 `display_name` 으로 **정확히 한 명**일 때만(탈퇴 안 한 회원 우선 · 0명·2명 이상은 ⚠ 로 두고 손으로 — 「김우」는 「김우종은」의 앞글자라 `=` 비교).
+  켜면 `fee_exempt=true`(메모 「테스트 계정」 · 이미 있으면 그대로)도 같이 — 연회비 납부 시기·매일 알림에서 빠진다. 끌 때 fee_exempt 는 건드리지 않는다. 여러 번 RUN 해도 안전(「이미 숨김」).
+- 앱: `is_test=true` 인 uid 집합을 **한 번 읽어**(`_taamTestIds` · 실패·컬럼 없음은 캐시하지 않고 빈 집합 → 화면은 그대로) 화면마다 `_taamHideTest(rows, q)` 로 거른다 — 회원 관리 목록(`renderMemberList` · 머리에 「테스트 계정 N개 숨김 · 보기」 띠 · 드러나면 「테스트」 배지) · 명부(`_mbPass` · 「테스트」 칩에서만) · 만료일 관리 · 원장 검색(`mlSearch`) ·
+  회원 고르기(예치금 부여 `adgSearchUsers` · 초대 `riSearchMembers` · 결제 링크 `payLinkMemberSearch`) · 연회비 납부 시기(`feeDueRender` — 제외처럼 「제외」 필터에서만) · 「회원」 메뉴 배지(`_mbBadge` — `not.is.true` · 컬럼 없으면 종전 질의).
+  **보이는 때**: 「테스트 계정 보기」(`window._taamShowTest` · 이 세션만 · `taamToggleShowTest`)를 켰거나, 검색어가 이름·이메일·번호(숫자만 · `+82 10` → `010`)와 **정확히** 같을 때 — 테스트 계정에 예치금을 부여하거나 초대할 때 이름을 그대로 친다. 부분 일치로는 안 나온다(「테스」·「김우」로 김우종은만).
+  토글은 회원 관리 모달(`memOpenProfileQuick` → `select('*')` · `mmmSaveTest`) — 「일반 회원 / 테스트 계정 (숨김)」. 푸시·알림 대상·구매 내역·캘린더는 건드리지 않는다(테스트 계정이 받는 푸시는 테스트에 쓸모가 있다).
+- 회귀: `bash sql/_test/t_test_accounts.sh`(13건 — 시드 정확히 한 명·공백·탈퇴 동명·⚠ · 회원 되돌림(다른 칸 유지·끄기·감사 칸·INSERT) · 슈퍼어드민 켜기/끄기 · 재실행 · 제외 풀림 복구) · 스크래치 `testhide.js`(47건 · 옛 서버 · 집합 · 정확 일치 규칙 · 여덟 화면 · 모달 토글).
+
 ### 한 회원 = 한 회차 1건 · 같은 날 같은 시간대 1건 (2026-10-13 카타오리 5/21 사고)
 
 카타오리 5/21 회차가 같은 회원에게 두 번 팔렸다. **서버 어디에도 「같은 회원이 같은 회차를 두 번」을 막는 코드가 없었다** —
@@ -795,6 +806,7 @@ Apple 은 iPad 와 iPhone **두 기기로 심사**하므로(리뷰 노트에 명
 | 예치금 양수 델타 | `taam_apply_deposit_delta` | 회원은 `ticket_refund` + `purchase_id` 원장으로, **낸 돈 − 이미 환불** 한도 안에서만 (2026-09-13 핫픽스) |
 | 원장 INSERT | RLS `deposit_tx_insert_server` | **회원은 `deposit_transactions` 를 직접 못 쓴다** — 슈퍼어드민만. 회원 원장은 RPC 가 쓴다. Edge(service_role)·SQL Editor 도 같은 RPC 를 부른다. 원장을 넘겼는데 잔액이 모자라면 `LEDGER_INSUFFICIENT` (2026-09-14, `sql/ledger_close_member_insert.sql`) |
 | 원장 유형 | `trg_taam_guard_ledger_change_type` | **회원 세션은 `admin_*`(admin_grant·admin_deduct) 유형의 원장 줄을 못 쓴다** — `taam_apply_deposit_delta` 가 회원 호출의 음수 항목 change_type 을 안 봐서 회원이 자기 원장에 「관리자 차감」 모양의 줄을 쓸 수 있었다(라벨 위조 · 2026-09-14 부터). BEFORE INSERT · 로그인 호출자가 슈퍼어드민이 아니면 `LEDGER_TYPE_FORBIDDEN`(42501) → RPC 전체 롤백. 서버(auth.uid() null)·슈퍼어드민은 그대로. RPC 본문은 교체하지 않았다(라이브 핵심 함수) (2026-10-18, `20261018_ledger_admin_type_guard.sql` · 회귀 `t_ledger_type_guard.sh` 11건) |
+| `profiles.is_test` | `trg_taam_guard_is_test` | 테스트 계정 숨김 스위치 — **회원 세션은 되돌림**(감사 칸 `is_test_set_by/at` 는 트리거만). 슈퍼어드민·서버만 (2026-10-19, `20261019_test_accounts.sql` · 위 「테스트 계정은 회원 목록에서 숨긴다」) |
 | 푸시 발송 | `send-push` Edge Function | 회원은 자기에게만. 어드민 상향 통지만 예외 |
 | 초대제 가입 | `trg_taam_guard_signup` (auth.users BEFORE INSERT) | **초대받은 사람만 계정이 생긴다** — 슈퍼어드민 화이트리스트 · `@partner.taam.kr` · 메타데이터 `invite_code`(미사용·미만료·초대장 번호/이메일 일치) · 초대장에 적힌 이메일/번호(소셜 첫 로그인). 그 밖은 `SIGNUP_NOT_INVITED` → GoTrue "Database error saving new user". 모드는 `app_config.signup_guard` (`enforce`, 2026-09-15 새벽 전환 · `log` 로 되돌림 가능). 판정 로그 `signup_guard_log`. 문지기 자체 오류는 `error` 로 적고 **막지 않는다** (`sql/signup_guard.sql`) |
 | 환불 정책 | `taam_refund_cap` → `taam_apply_deposit_delta` ④ | 회원 환불은 **결제 30분 내 전액 · D-31 이상 총액−대행비 · 그 뒤 0** 을 서버가 센다. 앱 `calculateTicketRefund` 값은 참고일 뿐. 슈퍼어드민·옛 구매(tickets 없음)는 종전 (2026-09-14 밤, `sql/refund_policy_server.sql`) |
