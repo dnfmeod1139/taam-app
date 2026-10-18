@@ -313,7 +313,7 @@ DB 값은 `'A'` 그대로고 **이름만** 「게스트 회원」이다. 값을 
 | 💳 멤버십 | 회원(필수) · M/T · 가입/갱신 · 통화 · 환율 | `taam_membership_price` = `membership_settings`(국내 M deposit_amount+annual_fee_cash 11,250,000 / T t_total_krw 3,150,000 · 해외 M $9,900 / T $3,000 · 갱신은 연회비만). 바꾸면 **사유 메모 필수**(`OVERRIDE_NOTE_REQUIRED`) · JPY 는 규정이 없어 직접 입력 | `membership_fees` **자동 기록**(link · 외화·환율 · source `pay_link` · source_ref 청구 id) — **예치금 부여는 사람이**(2026-10-17 결정) · 알림 「💳 멤버십 결제 완료 … → 예치금 부여 ₩… 필요」 · 목록의 「예치금 부여」가 부여 화면을 채운다(`payLinkGrant`) · 환불되면 자동 기록 삭제 |
 | 💸 자유 금액 | 이름 · 통화 · 금액 · 제목(메모) · (회원) | 어드민 입력 | 알림 「💳 결제 완료」 |
 
-- 서버: `supabase/migrations/20261018_pay_link.sql`(**실행 필요**). `kashikiri_charges` 에 `purpose`(ticket|membership|custom) · `title` · `subtitle` · `payload` · `applied_at/_note` · `created_by`,
+- 서버: `supabase/migrations/20261018_pay_link.sql`(**2026-10-18 라이브 설치 ✅** — 확인 표 ①~⑧-b 전부 ✅ · ⑨ 기존 청구 0 티켓 · 5 정산 · 3차 판으로 설치). `kashikiri_charges` 에 `purpose`(ticket|membership|custom) · `title` · `subtitle` · `payload` · `applied_at/_note` · `created_by`,
   **`event_id` 가 비어도 된다**(회차 없는 결제). 옛 행은 `link_invite` 면 ticket, 아니면 custom. RPC `taam_pay_link_create(p_purpose, p jsonb)`(슈퍼어드민 · 티켓만 매장 어드민도) ·
   `taam_pay_link_list(limit, uid, purpose)` · `taam_membership_price(tier, kind, currency)`. 공개 RPC 둘(`charge_public` · `order_start`)은 회차를 left join 해 제목·부제·purpose 를 함께 주고
   주문명도 용도별(「[TAAM] 멤버십 M 가입」). 좌석 트리거는 `event_id null` 이면 건너뛴다. 결제 완료 알림은 용도별 문구(record 변수 대신 스칼라 — 회차 없는 행에서 「not assigned」로 터졌다).
