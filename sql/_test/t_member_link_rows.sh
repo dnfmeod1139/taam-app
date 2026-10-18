@@ -10,13 +10,14 @@ create schema auth; create table auth.users(id uuid primary key);
 do \$\$ begin if not exists (select 1 from pg_roles where rolname='authenticated') then create role authenticated; end if; if not exists (select 1 from pg_roles where rolname='anon') then create role anon; end if; end \$\$;
 create or replace function auth.uid() returns uuid language sql stable as \$\$ select nullif(current_setting('taam.uid', true),'')::uuid \$\$;
 create or replace function public._taam_uid_is_super() returns boolean language sql stable as \$\$ select coalesce(current_setting('taam.super', true),'') = '1' \$\$;
+create or replace function public._taam_ts_safe(p_any text) returns timestamptz language plpgsql immutable as \$\$ begin return nullif(btrim(p_any), '')::timestamptz; exception when others then return null; end \$\$;
 insert into auth.users values ('$M'),('$SU');
 create table public.profiles(id uuid primary key, display_name text, created_at timestamptz default now() - interval '400 days', membership_joined_at date, notif_prefs jsonb default '{}'::jsonb, role text);
 insert into public.profiles(id, display_name, role) values ('$M','김회원','user'),('$SU','Super','superadmin');
 create table public.tickets(id uuid primary key default gen_random_uuid(), user_id uuid, restaurant_name text, reservation_date text, visit_time text, status text, purchase_id text, extra_data jsonb default '{}'::jsonb, created_at timestamptz default now());
 create table public.notifications(id uuid primary key default gen_random_uuid(), user_id uuid, type text, title text, body text, url text, payload jsonb, created_at timestamptz default now());
 create table public.deposit_transactions(id uuid primary key default gen_random_uuid(), user_id uuid, change_type text, created_at timestamptz default now());
-create table public.reservation_invites(id uuid primary key default gen_random_uuid(), invitee_user_id uuid, status text, created_at timestamptz default now());
+create table public.reservation_invites(id uuid primary key default gen_random_uuid(), invitee_user_id uuid, status text, created_at timestamptz default now(), paid_at timestamptz);
 SQL
 FAIL=0
 ok(){ if [ "$2" = "$3" ]; then echo "✅ $1"; else echo "❌ $1  (기대 $2, 실제 $3)"; FAIL=1; fi; }
@@ -43,8 +44,17 @@ $P -c "delete from public.tickets where purchase_id='PAYC-ccc'" >/dev/null
 ok "시작일: PAYC- 없이 회원 소유 LINK- 만 있어도 첫 구매로 센다 (started=true · start_kind purchase)" "true|purchase" "$($P -c "set taam.uid='$M'; select (j->>'started')||'|'||(j->>'start_kind') from public.taam_member_start('$M') j")"
 $P -c "update public.tickets set extra_data='{\"linkInvite\":true}' where purchase_id='LINK-aaa'" >/dev/null
 ok "memberUid 를 지우면 다시 비회원 행 — started=false" "false" "$($P -c "set taam.uid='$M'; select (public.taam_member_start('$M')->>'started')")"
-# md5 가드 — 두 번째 RUN 은 본문이 이미 바뀌어 저장소 원본과 다르다 → ❌ 건너뜀 (덮어쓰지 않음)
+# 결제한 날 — 초대 10-01 발송 · 10-09 결제 → 시작일 10-09(초대) · INV- 확정 행(created 09-01 · confirmed_at 09-05) → 09-05(구매) 가 더 이르다
+$P -c "insert into public.reservation_invites(invitee_user_id, status, created_at, paid_at) values ('$M','paid','2026-10-01T05:00:00Z','2026-10-09T05:00:00Z')" >/dev/null
+ok "시작일 = 결제한 날: 초대 created 10-01 · paid_at 10-09 → start 2026-10-09 · invite" "2026-10-09|invite" "$($P -c "set taam.uid='$M'; select left(j->>'start_at',10)||'|'||(j->>'start_kind') from public.taam_member_start('$M') j")"
+$P -c "insert into public.tickets(user_id, restaurant_name, reservation_date, visit_time, status, purchase_id, extra_data, created_at) values ('$M','시마즈','2027.03.19','18:00','active','INV-ddd','{\"confirmed_at\":\"2026-09-05T05:00:00Z\"}','2026-09-01T05:00:00Z')" >/dev/null
+ok "INV- 확정 행은 created 가 아니라 confirmed_at(09-05) → start 2026-09-05 · purchase" "2026-09-05|purchase" "$($P -c "set taam.uid='$M'; select left(j->>'start_at',10)||'|'||(j->>'start_kind') from public.taam_member_start('$M') j")"
+# md5 가드 — 두 번째 RUN 은 본문이 이미 바뀌었지만 새 판(memberUid)이라 ✅ 그대로 · ❌ 0 (모르는 판만 ❌)
 out2=$($P -f supabase/migrations/20261019_member_link_rows.sql 2>&1)
-ok "두 번째 RUN: 라이브 본문이 원본과 다르니 둘 다 ❌ 건너뜀 · ②③ 은 ✅ 그대로" "2|2" "$(echo "$out2" | grep -c '❌ 라이브 본문이')|$(echo "$out2" | grep -cE '^ *[②③].*✅')"
+ok "두 번째 RUN: 둘 다 「✅ 이미 새 판」 · ❌ 0 · ②③④ ✅" "2|0|3" "$(echo "$out2" | grep -c '✅ 이미 새 판')|$(echo "$out2" | grep -c '❌')|$(echo "$out2" | grep -cE '^ *(②|③|④).*✅')"
+# 모르는 판(대시보드에서 손본 함수)은 ❌ 로 건너뛴다 — 덮어쓰지 않는다
+$P -c "create or replace function public.taam_member_start(p_uid uuid default null) returns jsonb language sql stable as \$\$ select '{}'::jsonb \$\$" >/dev/null
+out3=$($P -f supabase/migrations/20261019_member_link_rows.sql 2>&1)
+ok "모르는 판: taam_member_start 는 ❌ 건너뜀(덮어쓰지 않음) · 리마인드는 ✅ 이미 새 판" "1|1" "$(echo "$out3" | grep -c '❌ 라이브 본문이')|$(echo "$out3" | grep -c '✅ 이미 새 판')"
 psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1
 [ $FAIL = 0 ] && echo "=== 전부 통과 ===" || { echo "=== 실패 있음 ==="; exit 1; }

@@ -12,6 +12,7 @@
 --   ② taam_kashikiri_charge_public 이 paid·비회원 청구에 guest_invite {code, expires_at} 를 함께 준다 → /pay 완료 화면이 「게스트 회원으로 가입」을 그린다(앱 링크 /?invite=코드).
 --      ⚠ 라이브 함수 교체 — md5 가 저장소 원본(20261018_pay_link.sql 판)과 같을 때만.
 --   ③ 가입하면 티켓을 붙인다 — taam_guest_attach_tickets(uid, code, phone): 그 청구의 LINK- 좌석 행(active · memberUid 없음)의 user_id 를 새 회원으로 바꾸고
+--      (초대 사용 경로는 번호 → 이메일(이메일 OTP 로 가입한 해외 손님) → member_id 순으로 회원을 찾는다)
 --      extra_data.memberUid 를 적는다(그 뒤로는 회원 행 — 리마인드·중복 가드·구매내역이 본다). 청구의 user_id·payload.member_uid 도 맞춘다.
 --      부르는 곳: trg_taam_guest_attach_on_invite_used(invite_codes · used 가 true 로 바뀔 때 — consume-invite Edge · 코드로 회원을 찾는다) ·
 --                 trg_taam_guest_attach_on_profile(profiles AFTER INSERT · 가입한 번호와 결제자 번호가 같은 게스트 초대 청구). 둘 다 실패를 삼킨다(가입을 막지 않는다).
@@ -38,7 +39,7 @@ create or replace function public.taam_guest_invite_on_paid()
 returns trigger language plpgsql security definer set search_path = public as $$
 declare
   v_digits text; v_key text; v_code text; v_kr boolean; v_exp_type text; v_inv_type text; v_exp timestamptz := now() + interval '30 days';
-  v_exp_sql text; v_inv_sql text; v_exp_txt text;
+  v_exp_sql text; v_inv_sql text; v_exp_txt text; v_exp_reuse timestamptz;
 begin
   if new.status <> 'paid' or coalesce(old.status, '') = 'paid' then return new; end if;
   if not coalesce(new.link_invite, false) then return new; end if;
@@ -51,14 +52,16 @@ begin
     v_key := regexp_replace(regexp_replace(v_digits, '^82', ''), '^0+', '');
     v_kr  := v_digits ~ '^(0?1[016789]|821[016789])';
     -- 같은 번호의 살아 있는(안 쓴·안 지난) 게스트 초대장이 있으면 재사용
-    select c.code into v_code
+    select c.code, public._taam_ts_safe(c.expires_at::text) into v_code, v_exp_reuse
       from public.invite_codes c
      where coalesce(c.used, false) = false
        and c.invitee_tier = 'A'
        and regexp_replace(regexp_replace(regexp_replace(coalesce(c.invitee_phone, ''), '[^0-9]', '', 'g'), '^82', ''), '^0+', '') = v_key
        and (public._taam_ts_safe(c.expires_at::text) is null or public._taam_ts_safe(c.expires_at::text) > now())
      order by c.invited_at desc nulls last limit 1;
-    if v_code is null then
+    if v_code is not null then
+      v_exp_txt := case when v_exp_reuse is null then null else to_char(v_exp_reuse at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') end;   -- 재사용 초대장의 실제 만료(리뷰)
+    else
       v_code := public._taam_guest_invite_code();
       select data_type into v_exp_type from information_schema.columns where table_schema = 'public' and table_name = 'invite_codes' and column_name = 'expires_at';
       select data_type into v_inv_type from information_schema.columns where table_schema = 'public' and table_name = 'invite_codes' and column_name = 'invited_at';
@@ -71,7 +74,8 @@ begin
         new.payer_phone, '', 'A', 'TAAM 결제 링크 손님 게스트 초대 (결제 ' || to_char(now() at time zone 'Asia/Seoul', 'YYYY-MM-DD') || ')', 'pay_link', v_inv_sql, v_exp_sql);
     end if;
     update public.kashikiri_charges
-       set payload = coalesce(payload, '{}'::jsonb) || jsonb_build_object('guest_invite_code', v_code, 'guest_invite_expires', v_exp_txt)
+       set payload = coalesce(payload, '{}'::jsonb) || jsonb_build_object('guest_invite_code', v_code)
+                     || case when v_exp_txt is null then '{}'::jsonb else jsonb_build_object('guest_invite_expires', v_exp_txt) end
      where id = new.id;
   exception when others then
     raise warning '[guest_invite] 초대장 만들기 실패 (결제는 유지): % %', sqlstate, sqlerrm;
@@ -89,6 +93,8 @@ declare v_live text;
 begin
   select md5(p.prosrc) into v_live from pg_proc p where p.oid = to_regproc('public.taam_kashikiri_charge_public');
   if v_live is null then insert into _gi values ('taam_kashikiri_charge_public', '❌ 함수 없음 — 20261018_pay_link.sql 먼저');
+  elsif exists (select 1 from pg_proc p where p.oid = to_regproc('public.taam_kashikiri_charge_public') and p.prosrc like '%guest_invite%') then
+    insert into _gi values ('taam_kashikiri_charge_public', '✅ 이미 새 판(guest_invite)');
   elsif v_live <> 'ad41b46f50cff2582cd82ca66f521aff' then insert into _gi values ('taam_kashikiri_charge_public', '❌ 라이브 본문이 저장소 원본(20261018_pay_link.sql 판)과 다르다 — 건너뜀 (md5 ' || v_live || ')');
   else
     execute $fn$
@@ -175,7 +181,7 @@ revoke all on function public.taam_guest_attach_tickets(uuid, text, text) from p
 
 create or replace function public.taam_guest_attach_on_invite_used()
 returns trigger language plpgsql security definer set search_path = public as $$
-declare v_uid uuid; v_key text;
+declare v_uid uuid; v_key text; v_email text;
 begin
   if not coalesce(new.used, false) or coalesce(old.used, false) then return new; end if;
   if coalesce(new.invited_by, '') <> 'pay_link' or coalesce(new.invitee_tier, '') <> 'A' then return new; end if;
@@ -185,6 +191,16 @@ begin
       select p.id into v_uid from public.profiles p
        where regexp_replace(regexp_replace(regexp_replace(coalesce(p.phone, ''), '[^0-9]', '', 'g'), '^82', ''), '^0+', '') = v_key
        order by p.created_at desc nulls last limit 1;
+    end if;
+    -- 이메일로 가입한 손님(해외 · country EN · 번호 없음)은 이메일로 찾는다 — 번호만 보면 티켓이 영원히 안 붙었다(리뷰)
+    if v_uid is null then
+      v_email := lower(btrim(coalesce(nullif(new.used_by_email, ''), new.invitee_email, '')));
+      if v_email <> '' then
+        select p.id into v_uid from public.profiles p where lower(btrim(coalesce(p.email, ''))) = v_email order by p.created_at desc nulls last limit 1;
+      end if;
+    end if;
+    if v_uid is null and nullif(to_jsonb(new)->>'member_id', '') is not null then
+      begin v_uid := (to_jsonb(new)->>'member_id')::uuid; exception when others then v_uid := null; end;
     end if;
     if v_uid is not null then perform public.taam_guest_attach_tickets(v_uid, new.code, coalesce(nullif(new.used_by_phone, ''), new.invitee_phone)); end if;
   exception when others then

@@ -3,16 +3,16 @@
 cd "$(dirname "$0")/../.."
 DB=t_ginv; psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1; psql -h /tmp -U postgres -d postgres -q -c "create database $DB" >/dev/null
 P="psql -h /tmp -U postgres -d $DB -q -At"
-SU=a1000000-0000-4000-8000-000000000001; NEW=a1000000-0000-4000-8000-000000000021; NEW2=a1000000-0000-4000-8000-000000000022; M=a1000000-0000-4000-8000-000000000011
+SU=a1000000-0000-4000-8000-000000000001; NEW=a1000000-0000-4000-8000-000000000021; NEW2=a1000000-0000-4000-8000-000000000022; M=a1000000-0000-4000-8000-000000000011; NEW3=a1000000-0000-4000-8000-000000000023; NEW4=a1000000-0000-4000-8000-000000000024
 $P <<SQL >/dev/null 2>&1
 create schema auth; create table auth.users(id uuid primary key);
 do \$\$ begin if not exists (select 1 from pg_roles where rolname='authenticated') then create role authenticated; end if; if not exists (select 1 from pg_roles where rolname='anon') then create role anon; end if; end \$\$;
 create or replace function auth.uid() returns uuid language sql stable as \$\$ select nullif(current_setting('taam.uid', true),'')::uuid \$\$;
 create or replace function public.is_super_admin(uid uuid) returns boolean language sql stable as \$\$ select uid = '$SU'::uuid \$\$;
 create or replace function public._taam_ts_safe(p_any text) returns timestamptz language plpgsql immutable as \$\$ begin return p_any::timestamptz; exception when others then return null; end \$\$;
-insert into auth.users values ('$SU'),('$NEW'),('$NEW2'),('$M');
-create table public.profiles(id uuid primary key, display_name text, phone text, created_at timestamptz default now(), role text);
-insert into public.profiles values ('$SU','Super','010-0000-0000',now(),'superadmin'),('$M','기존회원','010-2222-3333',now(),'user');
+insert into auth.users values ('$SU'),('$NEW'),('$NEW2'),('$M'),('$NEW3'),('$NEW4');
+create table public.profiles(id uuid primary key, display_name text, phone text, created_at timestamptz default now(), role text, email text);
+insert into public.profiles(id, display_name, phone, created_at, role) values ('$SU','Super','010-0000-0000',now(),'superadmin'),('$M','기존회원','010-2222-3333',now(),'user');
 create table public.invite_codes(code text primary key, type text, country text, invitee_name text, invitee_phone text, invitee_email text, invitee_tier text, invite_message text, invited_by text, invited_at text, expires_at text, used boolean default false, used_at text, used_by_name text, used_by_phone text, used_by_email text, member_id text);
 create table public.kashikiri_events(id uuid primary key default gen_random_uuid(), venue_name text, event_date date, event_time time, fx_rate numeric, fx_note text, venue_id text);
 create table public.kashikiri_teams(id uuid primary key default gen_random_uuid(), seq int, pax int);
@@ -44,6 +44,7 @@ C3=$($P -c "insert into public.kashikiri_charges(label, payer_phone, user_id, am
 $P -c "update public.kashikiri_charges set status='paid', approved_at=now() where id='$C3'" >/dev/null
 C4=$($P -c "insert into public.kashikiri_charges(label, payer_phone, amount_krw, pay_amount, link_invite, purpose, title, expires_at) values ('번호없음','',100,100,true,'ticket','카타오리', now()+interval '7 days') returning id")
 $P -c "update public.kashikiri_charges set status='paid', approved_at=now() where id='$C4'" >/dev/null
+ok "재사용한 청구(C2)의 payload 만료는 그 초대장의 실제 만료(expires_at)와 같다 — 비어 있지 않다" "t" "$($P -c "select (k.payload->>'guest_invite_expires') is not null and public._taam_ts_safe(k.payload->>'guest_invite_expires') = public._taam_ts_safe(c.expires_at) from public.kashikiri_charges k join public.invite_codes c on c.code = k.payload->>'guest_invite_code' where k.id='$C2'")"
 ok "같은 번호(+82 표기) 재결제 → 같은 코드 재사용 · 회원 청구·번호 없음 → 초대장 없음 · 초대장 총 1장" "$CODE|0|0|1" "$($P -c "select (select payload->>'guest_invite_code' from public.kashikiri_charges where id='$C2')||'|'||(select count(*) from public.kashikiri_charges where id='$C3' and payload ? 'guest_invite_code')||'|'||(select count(*) from public.kashikiri_charges where id='$C4' and payload ? 'guest_invite_code')||'|'||(select count(*) from public.invite_codes)")"
 T3=$($P -c "select token from public.kashikiri_charges where id='$C3'")
 ok "/pay 읽기: 회원 청구에는 guest_invite 없음" "1" "$($P -c "select (coalesce(jsonb_typeof(j->'guest_invite'),'null')='null')::int from public.taam_kashikiri_charge_public('$T3') j")"
@@ -65,6 +66,23 @@ ok "가입 때 번호가 있으면 프로필 경로로 이미 붙는다 (해외 
 $P -c "update public.tickets set user_id='$SU', extra_data = extra_data - 'memberUid' where purchase_id='LINK-c5'; update public.kashikiri_charges set user_id=null where id='$C5'" >/dev/null
 $P -c "update public.invite_codes set used=true, used_at=now()::text, used_by_phone='+14155550100' where code='$CODE5'" >/dev/null
 ok "초대 사용(used=true · consume-invite 경로)으로도 코드→청구→티켓이 붙는다" "$NEW2|$NEW2" "$($P -c "select (select user_id from public.tickets where purchase_id='LINK-c5')||'|'||(select user_id from public.kashikiri_charges where id='$C5')")"
+# ── 이메일로 가입한 해외 손님(번호 없음) — 초대 사용 경로가 used_by_email → profiles.email 로 찾는다 (번호만 보면 영원히 안 붙었다 · 리뷰) ──
+C7=$($P -c "insert into public.kashikiri_charges(label, payer_phone, amount_krw, pay_amount, link_invite, purpose, title, expires_at) values ('Emma','+44 20 7946 0958',100,100,true,'ticket','사이토', now()+interval '7 days') returning id")
+$P -c "update public.kashikiri_charges set status='paid', approved_at=now() where id='$C7'" >/dev/null
+CODE7=$($P -c "select payload->>'guest_invite_code' from public.kashikiri_charges where id='$C7'")
+$P -c "insert into public.tickets(user_id, restaurant_name, reservation_date, visit_time, party_size, buyer_name, buyer_phone, status, purchase_id, extra_data) values ('$SU','사이토','2027.06.02','18:00',1,'Emma','+44 20 7946 0958','active','LINK-c7','{\"linkInvite\":true,\"chargeId\":\"$C7\"}')" >/dev/null
+$P -c "insert into public.profiles(id, display_name, phone, role, email) values ('$NEW3','Emma',null,'user','Emma@Example.com')" >/dev/null
+ok "번호 없는 프로필 INSERT 로는 안 붙는다(아직 SU)" "$SU" "$($P -c "select user_id from public.tickets where purchase_id='LINK-c7'")"
+$P -c "update public.invite_codes set used=true, used_at=now()::text, used_by_email=' emma@example.com ' where code='$CODE7'" >/dev/null
+ok "초대 사용(used_by_email · 대소문자·공백 무관) → 이메일로 회원을 찾아 티켓·청구가 붙는다" "$NEW3|$NEW3" "$($P -c "select (select user_id from public.tickets where purchase_id='LINK-c7')||'|'||(select user_id from public.kashikiri_charges where id='$C7')")"
+# ── member_id 만 적힌 초대 사용(번호·이메일 모두 못 찾음) ──
+C8=$($P -c "insert into public.kashikiri_charges(label, payer_phone, amount_krw, pay_amount, link_invite, purpose, title, expires_at) values ('Liu','+86 138 0013 8000',100,100,true,'ticket','마츠카와', now()+interval '7 days') returning id")
+$P -c "update public.kashikiri_charges set status='paid', approved_at=now() where id='$C8'" >/dev/null
+CODE8=$($P -c "select payload->>'guest_invite_code' from public.kashikiri_charges where id='$C8'")
+$P -c "insert into public.tickets(user_id, restaurant_name, reservation_date, visit_time, party_size, buyer_name, buyer_phone, status, purchase_id, extra_data) values ('$SU','마츠카와','2027.06.03','18:00',1,'Liu','+86 138 0013 8000','active','LINK-c8','{\"linkInvite\":true,\"chargeId\":\"$C8\"}')" >/dev/null
+$P -c "insert into public.profiles(id, display_name, phone, role, email) values ('$NEW4','Liu',null,'user',null)" >/dev/null
+$P -c "update public.invite_codes set used=true, used_at=now()::text, member_id='$NEW4' where code='$CODE8'" >/dev/null
+ok "초대 사용(member_id 만) → 그 회원으로 붙는다" "$NEW4" "$($P -c "select user_id from public.tickets where purchase_id='LINK-c8'")"
 # ── 멱등 · 이미 회원 소유(memberUid) 행은 건드리지 않는다 · 회원 세션은 붙이기 함수를 못 부른다 ──
 ok "다시 붙여도 바뀌지 않는다(멱등) · 회원 세션 execute 없음" "0|f" "$($P -c "select public.taam_guest_attach_tickets('$M', null, '010-1234-5678')")|$($P -c "select has_function_privilege('authenticated','public.taam_guest_attach_tickets(uuid,text,text)','execute')")"
 # ── timestamptz 칸이어도 들어간다 ──
@@ -72,8 +90,12 @@ $P -c "alter table public.invite_codes alter column expires_at type timestamptz 
 C6=$($P -c "insert into public.kashikiri_charges(label, payer_phone, amount_krw, pay_amount, link_invite, purpose, title, expires_at) values ('Kim','010-9999-8888',100,100,true,'ticket','마츠카와', now()+interval '7 days') returning id")
 $P -c "update public.kashikiri_charges set status='paid', approved_at=now() where id='$C6'" >/dev/null
 ok "expires_at/invited_at 이 timestamptz 여도 초대장이 만들어진다(30일)" "1" "$($P -c "select count(*) from public.invite_codes c join public.kashikiri_charges k on k.payload->>'guest_invite_code'=c.code where k.id='$C6' and c.expires_at between now()+interval '29 days' and now()+interval '31 days'")"
-# ── 두 번째 RUN: 공개 함수 md5 가 이제 다르니 ❌ 건너뜀, 나머지 ✅ ──
+# ── 두 번째 RUN: 공개 함수는 이미 새 판(guest_invite) → ✅ 그대로 · ❌ 0 ──
 out2=$($P -f supabase/migrations/20261019_guest_invite.sql 2>&1)
-ok "두 번째 RUN: 공개 함수는 ❌ 건너뜀(이미 새 판) · ②~⑤ ✅" "1|4" "$(echo "$out2" | grep -c '❌ 라이브 본문이')|$(echo "$out2" | grep -cE '^ *[②③④⑤].*✅')"
+ok "두 번째 RUN: 공개 함수 「✅ 이미 새 판」 · ❌ 0 · ②~⑤ ✅" "1|0|4" "$(echo "$out2" | grep -c '✅ 이미 새 판')|$(echo "$out2" | grep -c '❌')|$(echo "$out2" | grep -cE '^ *(②|③|④|⑤).*✅')"
+# ── 모르는 판(대시보드에서 손본 함수)은 ❌ 로 건너뛴다 ──
+$P -c "create or replace function public.taam_kashikiri_charge_public(p_token text) returns jsonb language sql stable as \$\$ select '{}'::jsonb \$\$" >/dev/null
+out3=$($P -f supabase/migrations/20261019_guest_invite.sql 2>&1)
+ok "모르는 판: 공개 함수 ❌ 건너뜀(덮어쓰지 않음)" "1" "$(echo "$out3" | grep -c '❌ 라이브 본문이')"
 psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1
 [ $FAIL = 0 ] && echo "=== 전부 통과 ===" || { echo "=== 실패 있음 ==="; exit 1; }

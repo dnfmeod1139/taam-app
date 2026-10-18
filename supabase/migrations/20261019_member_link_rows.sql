@@ -6,9 +6,10 @@
 --     그런데 방문 리마인드(taam_visit_reminder_notify · sql/visit_reminder.sql)와 멤버십 시작일(taam_member_start · 20261015 판)은
 --     LINK- 접두어를 통째로 빼서 — 「링크 결제 = 비회원 손님」이던 시절 규칙 — 그 회원은 리마인드를 못 받고 첫 구매로도 안 세였다.
 -- 무엇: 두 함수에서 LINK- 제외를 「memberUid 가 없을 때만」으로 좁힌다. 비회원 LINK- · KSK- · MAN- 는 종전 그대로(비회원은 알림톡으로 따로 — 20261019_guest_reminder.sql).
--- ⚠ 라이브 함수 둘을 바꾼다. 라이브 본문의 md5 가 저장소 원본과 **같을 때만** 바꾸고, 다르면 건너뛰고 확인 표에 ❌ 로 알린다
+--     시작일은 **결제한 날**로 센다 — 초대 확정 행(INV-)은 extra_data.confirmed_at, 링크 행(LINK-)은 extra_data.paidAt, 초대는 paid_at. 초대·링크를 만든 날(created_at)은 폴백(리뷰 2026-10-19).
+-- ⚠ 라이브 함수 둘을 바꾼다. 라이브 본문의 md5 가 저장소 원본과 **같을 때만** 바꾼다. 이미 새 판(memberUid 를 본다)이면 ✅ 그대로, 모르는 판이면 ❌ 로 건너뛴다
 --    (대시보드에서 손본 판을 모르고 덮어쓰지 않기 위해). ❌ 가 나오면 `select pg_get_functiondef('public.<함수>'::regproc)` 결과를 보내 달라.
---    예치금 결제 티켓(PAYH-/PAYC-/INV-)은 종전부터 들어 있었다 — 이 파일은 LINK- 만 다룬다.
+--    예치금 결제 티켓(PAYH-/PAYC-/INV-)은 종전부터 들어 있었다 — 이 파일은 LINK- 와 날짜 기준만 다룬다. 의존: public._taam_ts_safe(sql/signup_guard.sql · 라이브 ✅).
 -- 회귀: bash sql/_test/t_member_link_rows.sh
 -- ═══════════════════════════════════════════════════════════════
 
@@ -16,14 +17,12 @@ drop table if exists _mlr;
 create temp table _mlr(name text primary key, status text);   -- 세션 임시표 (psql -f 의 자동 커밋에서도 남게 on commit drop 은 쓰지 않는다)
 
 do $do$
-declare v_live text;
+declare v_live text; v_src text;
 begin
-  select md5(p.prosrc) into v_live from pg_proc p where p.oid = to_regproc('public.taam_visit_reminder_notify');
+  select md5(p.prosrc), p.prosrc into v_live, v_src from pg_proc p where p.oid = to_regproc('public.taam_visit_reminder_notify');
   if v_live is null then
     insert into _mlr values ('taam_visit_reminder_notify', '❌ 라이브에 함수가 없다 — sql/visit_reminder.sql 먼저');
-  elsif v_live <> '07b7ff71b72383ee5cf0adc998e0659a' then
-    insert into _mlr values ('taam_visit_reminder_notify', '❌ 라이브 본문이 저장소 원본(sql/visit_reminder.sql)과 다르다 — 건너뜀 (md5 ' || v_live || ')');
-  else
+  elsif v_live = '07b7ff71b72383ee5cf0adc998e0659a' then
     execute $fn$
 create or replace function public.taam_visit_reminder_notify()
 returns jsonb
@@ -115,14 +114,16 @@ end;
 $b$
     $fn$;
     insert into _mlr values ('taam_visit_reminder_notify', '✅ 교체');
+  elsif v_src like '%memberUid%' then
+    insert into _mlr values ('taam_visit_reminder_notify', '✅ 이미 새 판(memberUid)');
+  else
+    insert into _mlr values ('taam_visit_reminder_notify', '❌ 라이브 본문이 저장소 원본(sql/visit_reminder.sql)과 다르다 — 건너뜀 (md5 ' || v_live || ')');
   end if;
 
-  select md5(p.prosrc) into v_live from pg_proc p where p.oid = to_regprocedure('public.taam_member_start(uuid)');
+  select md5(p.prosrc), p.prosrc into v_live, v_src from pg_proc p where p.oid = to_regprocedure('public.taam_member_start(uuid)');
   if v_live is null then
     insert into _mlr values ('taam_member_start', '❌ 라이브에 함수가 없다 — 20261013_member_start.sql · 20261015_membership_joined.sql 먼저');
-  elsif v_live <> '9af9efe7613b6ccb3bfc136671728b05' then
-    insert into _mlr values ('taam_member_start', '❌ 라이브 본문이 저장소 원본(20261015_membership_joined.sql 판)과 다르다 — 건너뜀 (md5 ' || v_live || ')');
-  else
+  elsif v_live = '9af9efe7613b6ccb3bfc136671728b05' then
     execute $fn$
 create or replace function public.taam_member_start(p_uid uuid default null)
 returns jsonb
@@ -140,14 +141,14 @@ begin
   end if;
   select p.created_at, p.membership_joined_at into v_signup, v_mj from public.profiles p where p.id = u;
   if not found then return null; end if;
-  select min(t.created_at) into v_tk
+  -- 🆕 2026-10-19 결제한 날(초대 확정 confirmed_at · 링크 결제 paidAt · 없으면 created_at) · 회원 소유 LINK-(memberUid)는 그 회원의 첫 구매로 센다. 비회원 LINK- 는 종전대로 뺀다
+  select min(coalesce(public._taam_ts_safe(t.extra_data->>'confirmed_at'), public._taam_ts_safe(t.extra_data->>'paidAt'), t.created_at)) into v_tk
     from public.tickets t
    where t.user_id = u
      and coalesce(t.status, '') not in ('cancelled', 'hold', 'expired')
      and coalesce(t.purchase_id, '') not like 'PAYH-%'
      and coalesce(t.purchase_id, '') not like 'INVH-%'
      and coalesce(t.purchase_id, '') not like 'KSK-%'
-     -- 🆕 2026-10-19 결제 링크로 회원이 산 LINK- 행(memberUid)은 그 회원의 첫 구매로 센다. 비회원 LINK- 는 종전대로 뺀다
      and not (coalesce(t.purchase_id, '') like 'LINK-%' and nullif(t.extra_data->>'memberUid', '') is null)
      and coalesce(t.purchase_id, '') not like 'MAN-%';
   if to_regclass('public.deposit_transactions') is not null then
@@ -156,7 +157,7 @@ begin
      where d.user_id = u and d.change_type = 'ticket_purchase';
   end if;
   if to_regclass('public.reservation_invites') is not null then
-    select min(i.created_at) into v_inv
+    select min(coalesce(public._taam_ts_safe(to_jsonb(i)->>'paid_at'), i.created_at)) into v_inv   -- 🆕 결제한 날(paid_at) · 없으면 초대한 날
       from public.reservation_invites i
      where i.invitee_user_id = u and i.status = 'paid';
   end if;
@@ -183,11 +184,16 @@ begin
 end $b$
     $fn$;
     insert into _mlr values ('taam_member_start', '✅ 교체');
+  elsif v_src like '%memberUid%' then
+    insert into _mlr values ('taam_member_start', '✅ 이미 새 판(memberUid)');
+  else
+    insert into _mlr values ('taam_member_start', '❌ 라이브 본문이 저장소 원본(20261015_membership_joined.sql 판)과 다르다 — 건너뜀 (md5 ' || v_live || ')');
   end if;
 end $do$;
 
 -- ── 확인 — 한 표 ──
 select '① ' || name || ' 교체' as 항목, status as 결과 from _mlr
 union all select '② 리마인드 함수가 memberUid 를 본다', case when exists (select 1 from pg_proc where oid = to_regproc('public.taam_visit_reminder_notify') and prosrc like '%memberUid%') then '✅' else '❌' end
-union all select '③ 시작일 함수가 memberUid 를 본다', case when exists (select 1 from pg_proc where oid = to_regprocedure('public.taam_member_start(uuid)') and prosrc like '%memberUid%') then '✅' else '❌' end
+union all select '③ 시작일 함수가 memberUid·결제일(paidAt)을 본다', case when exists (select 1 from pg_proc where oid = to_regprocedure('public.taam_member_start(uuid)') and prosrc like '%memberUid%' and prosrc like '%paidAt%') then '✅' else '❌' end
+union all select '④ 의존 _taam_ts_safe', case when to_regproc('public._taam_ts_safe') is not null then '✅' else '❌ sql/signup_guard.sql' end
 order by 1;

@@ -248,14 +248,16 @@ DB 값은 `'A'` 그대로고 **이름만** 「게스트 회원」이다. 값을 
   | 부류 | 누구 | 연회비 기준(anchor) | 첫해 | 보이는 날짜 |
   |---|---|---|---|---|
   | ① 앱 이전 계약 회원 | 슈퍼어드민이 적은 **실제 가입일**(`membership_joined_at`)이 있는 회원 | 실제 가입일 + 납부 건수 년 | 기록대로 | 실제 가입일(앱 가입일은 괄호) · **프로모션 무관** |
-  | ② 앱 이후 가입자 | 실제 가입일이 없는 회원 | **첫 구매 또는 초대 결제일**(`_taam_member_start_at` — 예치금·카드·링크 무관 · 회원 소유 LINK- 포함 · 홀드·비회원 LINK- 제외) + 납부 건수 년 | 가입 때 예치금 부여에서 연회비를 제외하고 받으므로 **기록이 없어도 1건**(`implicit_first`) | 앱 가입일 **과** 시작일 둘 다 |
+  | ② 앱 이후 가입자 | 실제 가입일이 없는 회원 | **첫 구매 또는 초대 결제일**(`_taam_member_start_at` — 예치금·카드·링크 무관 · 회원 소유 LINK- 포함 · 홀드·비회원 LINK- 제외 · **결제한 날**: INV- 는 `extra_data.confirmed_at` · LINK- 는 `extra_data.paidAt` · 초대는 `paid_at` · 없으면 created_at) + 납부 건수 년 | 가입 때 예치금 부여에서 연회비를 제외하고 받으므로 **첫 기념일(시작일+1년) 전에 낸 납부가 없으면 1건을 더한다**(`implicit_first` · 날짜로 가른다 — 기록 수로 가르면(greatest(기록,1)) 2년차 갱신 기록이 첫해 자리를 먹어 기준일이 안 밀리고 「부족」이 남았다 · 적대 리뷰) | 앱 가입일 **과** 시작일 둘 다 |
   | ②-시작 전 | 첫 구매·초대가 아직 없음 | 없음(`anchor_kind` none · 기준일 null · 알림 없음) | — | 앱 가입일 · 「시작 전」 |
   서버 `taam_membership_fee_due` 를 **같은 이름·인자**로 다시 만들었다(반환 칸이 늘어 drop → create · md5 가드) — 새 칸 `anchor_kind`(joined|start|none) · `anchor_date` · `app_signup_date` · `membership_joined_at` · `start_at` · `implicit_first` · `paid_recorded`(기록 건수 · `paid` 는 암묵 포함 실효 건수).
   종전 칸은 그대로라 매일 알림(`taam_membership_fee_notify`)은 손대지 않았다 — ②부류의 기준일이 바뀌면 알림 열쇠(회원·기준일·단계)가 새것이 되어 **한 번 다시 알린다**(예상된 일).
-  앱: 원장 연회비 탭 머리(`_mlFeeDueHtml` opts.kind — 「실제 가입일 … 기준 (앱 가입 …)」/「첫 구매·초대 결제일 … 기준 (앱 가입 …) · 납부 N건(첫해는 가입 때 제외 · 기록 0)」/「시작 전」 · 시작일은 `taam_member_start` 의 `start_at` — 함수가 없으면 「시작일을 못 읽었습니다」) ·
-  「💰 연회비 납부 시기」 줄(두 날짜 · 「프로모션 무관」 · 상태 「시작 전」) · **「📅 회원 멤버십 만료일 관리」**(`_muFeeLine` — ① 실제 가입일+앱 가입일 ② 앱 가입일+시작일 · 아래에 「연회비 기준일 … · 기준 종류」 · ①부류인데 종료일이 프로모션이면 ⚠ 「프로모션 대상이 아닙니다 — 종료일은 아래에서 바꿔 주세요」).
+  앱: 원장 연회비 탭 머리(`_mlFeeDueHtml` opts.kind — 「실제 가입일 … 기준 (앱 가입 …)」/「첫 구매·초대 결제일 … 기준 (앱 가입 …) · 납부 N건(첫해 가입 때 제외 1 + 기록·앱 결제 M)」/「시작 전」 · 암묵 판정은 서버와 같은 날짜 규칙(`_mlAddYears(시작일,1)` 전의 `membership_fees.paid_at` · 원장 앱 결제 KST 날짜) · 시작일은 `taam_member_start` 의 `start_at` — 함수가 없으면 「시작일을 못 읽었습니다」) ·
+  「💰 연회비 납부 시기」 줄(두 날짜 · 「프로모션 무관」 · 상태 「시작 전」 · 머리글도 두 부류 문구) · **「📅 회원 멤버십 만료일 관리」**(`_muFeeLine` — ① 실제 가입일+앱 가입일 ② 앱 가입일+시작일 · 아래에 「연회비 기준일 … · 기준 종류」 · ①부류인데 종료일이 프로모션이면 ⚠ 「프로모션 대상이 아닙니다 — 종료일은 아래에서 바꿔 주세요」 ·
+  앱 가입일은 KST(`app_signup_date` 우선) · 옛 서버(`anchor_kind` 없음)면 시작일 셀 「—」와 「가입일 기준 · 서버 준비 필요」 — 첫 구매 기준이라고 거짓으로 적지 않는다 · 연회비 표를 **먼저 읽고 한 번만 그린다** — 두 번 그리면 그 사이 입력한 종료일이 지워졌다(적대 리뷰)).
   ⚠ **`profiles.member_until`(종료일 · M 등급 유효성)은 자동으로 바꾸지 않는다** — ①부류를 실제 가입일+1년으로 자동 계산하면 이미 지난 회원이 즉시 T 로 내려앉는다. 화면이 기준일을 나란히 보여 주고, 바꾸는 건 사람이(「변경」).
-  회귀: `bash sql/_test/t_fee_due_anchor.sh`(11건 — 두 부류 · 암묵 1건 · 시작 전 · 회원 LINK- 첫 구매 · 초대 결제 · 기록 2건 · 알림 · md5 재실행) · 스크래치 `mfdue.js`(53건 · ⑪~⑬ 두 부류) · `fdscreen.js`(42건 · anchorRows).
+  확인 표 ⑥ 은 `taam_member_start` 가 memberUid 판인지 본다(아니면 ⚠ 「20261019_member_link_rows.sql 먼저」 — 원장 탭 시작일과 이 보고의 시작일이 어긋난다).
+  회귀: `bash sql/_test/t_fee_due_anchor.sh`(14건 — 두 부류 · 암묵 1건 · 기념일 뒤 갱신 1건 → paid 2 · 결제일(초대 paid_at · INV- confirmed_at) · 시작 전 · 회원 LINK- 첫 구매 · 기록 2건 · 알림 · md5 재실행) · 스크래치 `mfdue.js`(62건 · ⑪~⑰ 두 부류·기념일 규칙·`_mlAddYears`) · `fdscreen.js`(42건 · anchorRows) · `muscreen.js`(12건 · 만료일 관리 한 번 그리기·KST·옛 서버).
 - 회귀: `bash sql/_test/t_member_start.sh`(25건 — 가드·시드·anon 포함) · `bash sql/_test/t_membership_fees.sh`(12건) · `bash sql/_test/t_rpc_caller_guard.sh`(7건) · 스크래치 `mjoined.js`(23건).
 
 ### 한 회원 = 한 회차 1건 · 같은 날 같은 시간대 1건 (2026-10-13 카타오리 5/21 사고)
@@ -354,7 +356,7 @@ DB 값은 `'A'` 그대로고 **이름만** 「게스트 회원」이다. 값을 
   ② 선검사가 가드보다 엄격(기존 행 visit_time 이 비면 무조건 겹침 → 점심+저녁 링크 거절) → 가드와 같은 식(`_taam_pu_visit_date`·`taam_time_slot`·회차 보충 · ⑧ 존재 검사에 둘 추가). ③ 이전 실패 폴백이 가드 거절 문구(다른 매장·날짜·구매 id)를 `tickets.extra_data` 에 적어 **매장 어드민에게 샜다** → 코드만(`ownerTransferError`='DUPLICATE_PURCHASE'), 원문은 `kashikiri_charge_admin.fail_note`.
   ④⑤ ⑨가 덜 닫혔다 — 회원 선택·「바꾸기」때 환율이 설정 기본값으로(통화 전환만 닫혔었다) → `_plCollect` 가 통화별 환율을 기억 · 앞 회원 이름으로 자동 채워진 「받는 사람 이름」이 다른 회원 링크에 실렸다 → `_plMemberSet` 이 자동 채움을 가려낸다. ⑥ 문서 세 줄(「LINK- 는 중복 가드 예외」)을 코드와 맞춤.
   기각 2 중 하나는 고쳤다: **회원이 자기 PAYH- 홀드의 extra_data 에 `kashikiri:true` 를 넣으면 중복·시간대 가드를 통째로 비켜 갔다**(20261014 부터 · pre) → `_taam_ticket_is_ops` 가 PAY 접두어는 언제나 회원 행(회원 INSERT 는 PAYH- 로만 허용되므로 이 한 줄로 닫힌다). 목록 줄에 어드민 메모·실패 원문도 보인다.
-  ~~남은 것: 방문 리마인드·멤버십 시작일이 LINK- 를 통째로 빼서 회원 소유 LINK- 티켓은 리마인드가 안 가고 첫 구매로 안 셌다~~ → **2026-10-19 `20261019_member_link_rows.sql`** 로 둘 다 「memberUid 가 없을 때만 제외」로 좁혔다(라이브 함수 둘 · md5 가드 · 회귀 `t_member_link_rows.sh` 7건). 아래 「비회원 손님 — 알림톡 리마인드 · 게스트 회원 초대」도 같은 날.
+  ~~남은 것: 방문 리마인드·멤버십 시작일이 LINK- 를 통째로 빼서 회원 소유 LINK- 티켓은 리마인드가 안 가고 첫 구매로 안 셌다~~ → **2026-10-19 `20261019_member_link_rows.sql`** 로 둘 다 「memberUid 가 없을 때만 제외」로 좁혔고 시작일은 **결제한 날**(INV- confirmed_at · LINK- paidAt · 초대 paid_at)로 센다(라이브 함수 둘 · md5 가드 — 원본과 같으면 교체 · 이미 새 판(memberUid)이면 ✅ 그대로 · 모르는 판만 ❌ 건너뜀 · 회귀 `t_member_link_rows.sh` 10건). 아래 「비회원 손님 — 알림톡 리마인드 · 게스트 회원 초대」도 같은 날.
 - 회귀: `bash sql/_test/t_pay_link.sh`(48건 — 금액 규칙 · 세 용도 · 위임 · 권한(매장 어드민 회원 지정 거부) · 공개 RPC · 결제→기록·알림 · 환불→기록 삭제 · 회원 소유 이전 · 중복 선검사(가드와 같은 식 · 실제 가드 설치) · 이전 실패 보류(실제 가드 · 코드만) · PAYH- 플래그 구멍 · 기록 실패 경로 · 어드민 메모 표) · 스크래치 `paylink.js`(81건 · 화면 · 3차 환율·이름·메모) · `dupguard.js`(21건 · 운영 행 판정·구매내역 카드) · `paypage.js`(35건 · /pay 네 용도 + 옛 정산 청구 + 실패 사유 재번역).
 
 ### 비회원 손님 — 알림톡 리마인드 · 게스트 회원 초대 (2026-10-19)
@@ -364,9 +366,9 @@ DB 값은 `'A'` 그대로고 **이름만** 「게스트 회원」이다. 값을 
   `taam_guest_reminder_mark()`. Edge `notify-visit-reminder` 가 회원 푸시 뒤 ③ 손님 알림톡을 솔라피로 보낸다(`notify-guest-booking` 과 같은 호출 · **대시보드 배포 필요**) — 시크릿 `KAKAO_TEMPLATE_GUEST_REMIND`(카카오 비즈니스 채널 템플릿 id · 변수 `#{name} #{shop} #{date} #{party} #{dday}`) ·
   국내 번호(010 등)만, 해외 번호는 `skip(해외번호)` 로 기록 · 템플릿이 없으면 기록하지 않고 건너뛴다(설정되면 그때 나간다). 응답에 `guest:{sent,failed,skipped,reason}`. 회원 소유 LINK-(memberUid)는 회원 푸시가 맡아 두 번 안 간다. 회귀 `t_guest_reminder.sh`(9건).
 - **게스트 회원 초대** — `20261019_guest_invite.sql`(실행 필요): 티켓 링크 결제가 paid 가 되면(`trg_taam_guest_invite_on_paid` · 비회원 · 결제자 번호 있음) `invite_codes` 에 **A 등급 초대장**(코드 `G`+7자 · 번호에 묶임 · `invited_by` 'pay_link' · 30일 · 같은 번호의 살아 있는 초대장은 재사용)을 만들고
-  `payload.guest_invite_code` 에 적는다. `taam_kashikiri_charge_public`(md5 가드 교체)이 paid·비회원 청구에 `guest_invite{code,expires_at}` 를 주고 `/pay` 완료 화면이 「게스트 회원으로 가입하기」(초대 코드 + 앱 링크 `/?invite=코드`)를 그린다(퍼널 대신). 앱은 부팅에서 `?invite=` 를 읽어 로그인 전이면 코드 화면 입력칸에 채운다(`_taamPendingInviteCode`).
-  **가입하면 티켓이 붙는다** — `taam_guest_attach_tickets(uid, code, phone)`: 그 청구의 LINK- 좌석 행 `user_id` 를 새 회원으로, `extra_data.memberUid` 를 적는다(그 뒤로 회원 행 — 리마인드·중복 가드·구매내역·첫 구매). 부르는 곳: `invite_codes.used` 가 true 로 바뀔 때(consume-invite · 번호로 회원을 찾음) · `profiles` INSERT(가입 번호 = 결제자 번호 · 게스트 초대가 있는 청구만). 둘 다 실패를 삼킨다(가입을 막지 않는다).
-  등급은 A(게스트 · 90일 · `trg_taam_guard_membership_tier` 가 초대코드 값으로만) · 가입 문지기(`trg_taam_guard_signup`)는 초대장 번호와 OTP 번호를 대조한다. 회귀 `t_guest_invite.sh`(13건) · 스크래치 `paypage.js`(38건 · 게스트 블록) · `invboot.js`(1건).
+  `payload.guest_invite_code` 에 적는다. `taam_kashikiri_charge_public`(md5 가드 교체)이 paid·비회원 청구에 `guest_invite{code,expires_at}` 를 주고 `/pay` 완료 화면이 「게스트 회원으로 가입하기」(초대 코드 + 앱 링크 `/?invite=코드`)를 그린다(퍼널 대신). 앱의 `?invite=` 는 **종전 `_autoFillInviteFromUrl`**(코드 화면 열기 · 입력칸 채움 · verify-invite welcome)이 그대로 처리한다 — 따로 부팅 블록을 두지 않는다(먼저 `replaceState` 로 지우면 그 경로가 코드를 못 읽는다 · 적대 리뷰). 재사용한 초대장의 만료는 그 초대장의 실제 `expires_at`.
+  **가입하면 티켓이 붙는다** — `taam_guest_attach_tickets(uid, code, phone)`: 그 청구의 LINK- 좌석 행 `user_id` 를 새 회원으로, `extra_data.memberUid` 를 적는다(그 뒤로 회원 행 — 리마인드·중복 가드·구매내역·첫 구매). 부르는 곳: `invite_codes.used` 가 true 로 바뀔 때(consume-invite · 회원은 **번호 → 이메일(`used_by_email`/`invitee_email` ↔ `profiles.email` · 이메일 OTP 로 가입한 해외 손님) → `member_id`** 순으로 찾는다) · `profiles` INSERT(가입 번호 = 결제자 번호 · 게스트 초대가 있는 청구만). 둘 다 실패를 삼킨다(가입을 막지 않는다).
+  등급은 A(게스트 · 90일 · `trg_taam_guard_membership_tier` 가 초대코드 값으로만) · 가입 문지기(`trg_taam_guard_signup`)는 초대장 번호와 OTP 번호를 대조한다. 회귀 `t_guest_invite.sh`(18건 · 이메일·member_id 붙이기 · 재사용 만료 · 이미 새 판·모르는 판) · 스크래치 `paypage.js`(38건 · 게스트 블록) · `invboot.js`(1건 · 종전 경로).
 
 ### 링크 초대 — 비회원·해외 손님을 티켓 회차에 태우는 길 (2026-09-29)
 

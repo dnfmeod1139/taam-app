@@ -6,7 +6,8 @@
 --     이뤄지는 일이 많고, 가입 때 예치금을 부여하면서 첫해 연회비(10%)를 이미 제외하고 넣어 준다. 그래서 두 부류를 가른다 —
 --     ① **앱 이전 계약 회원**(슈퍼어드민이 적은 실제 가입일 membership_joined_at 이 있는 회원): 그 날이 기준. 프로모션(2027.12.31) 과 무관.
 --     ② **앱 이후 가입자**(실제 가입일이 없는 회원): **첫 구매 또는 초대 결제일**(예치금·카드·링크 무관 — taam_member_start 와 같은 식 · 회원 소유 LINK- 포함)이 기준이고,
---        첫해 연회비는 가입 때 제외돼 받은 것으로 보아 기록이 없어도 납부 1건으로 센다(implicit_first). 첫 구매·초대가 아직 없으면 「시작 전」 — 기준일·알림 없음.
+--        첫해 연회비는 가입 때 제외돼 받은 것으로 보아 **첫 기념일 전에 낸 납부가 없으면** 1건으로 더한다(implicit_first — 기록 수가 아니라 날짜로 가른다: 2년차 갱신 기록이 첫해 자리를 먹지 않게).
+--        첫 구매·초대가 아직 없으면 「시작 전」 — 기준일·알림 없음. 날짜는 **결제한 날**(초대 confirmed_at · 링크 paidAt · 초대 paid_at) — 초대·링크를 만든 날이 아니다.
 --     둘 다 보이게 앱 가입일(app_signup_date)·실제 가입일(membership_joined_at)·시작일(start_at)·기준 종류(anchor_kind)를 함께 돌려준다.
 -- 무엇: ① 도우미 _taam_member_start_at(uid) — 첫 구매(tickets · 원장 ticket_purchase)·첫 초대 결제(reservation_invites paid) 중 빠른 시각. 서버 전용(호출자 검사 없음 · execute 회수).
 --     ② taam_membership_fee_due 를 **같은 이름·같은 인자**로 다시 만든다 — 반환 표에 칸이 늘어 drop → create. 종전 칸(joined_at·paid·due_date·days_left·short·ahead…)은 그대로라
@@ -25,7 +26,8 @@ as $$
 declare v_tk timestamptz; v_led timestamptz; v_inv timestamptz;
 begin
   if p_uid is null then return null; end if;
-  select min(t.created_at) into v_tk
+  -- 결제한 날 — 초대 확정(INV- · extra_data.confirmed_at)·링크 결제(LINK- · extra_data.paidAt)는 행이 미리 만들어지므로 created_at 이 아니라 결제 시각을 쓴다(리뷰)
+  select min(coalesce(public._taam_ts_safe(t.extra_data->>'confirmed_at'), public._taam_ts_safe(t.extra_data->>'paidAt'), t.created_at)) into v_tk
     from public.tickets t
    where t.user_id = p_uid
      and coalesce(t.status, '') not in ('cancelled', 'hold', 'expired')
@@ -38,7 +40,7 @@ begin
     select min(d.created_at) into v_led from public.deposit_transactions d where d.user_id = p_uid and d.change_type = 'ticket_purchase';
   end if;
   if to_regclass('public.reservation_invites') is not null then
-    select min(i.created_at) into v_inv from public.reservation_invites i where i.invitee_user_id = p_uid and i.status = 'paid';
+    select min(coalesce(public._taam_ts_safe(to_jsonb(i)->>'paid_at'), i.created_at)) into v_inv from public.reservation_invites i where i.invitee_user_id = p_uid and i.status = 'paid';   -- 결제한 날(paid_at) · 없으면 초대한 날
   end if;
   return least(v_tk, v_led, v_inv);
 end $$;
@@ -99,17 +101,23 @@ begin
     --   ① 앱 이전 계약 회원 = 실제 가입일(membership_joined_at)이 적힌 회원 → 그 날이 기준. 프로모션 무관.
     --   ② 앱 이후 가입자 = 첫 구매 또는 초대 결제일(예치금·카드 무관)이 기준. 첫해 연회비는 가입 때 예치금 부여에서 제외돼 받았으므로 기록이 없어도 1건으로 본다(implicit_first).
     --      아직 첫 구매·초대가 없으면 「시작 전」 — 기준일 없음(알림 없음), 앱 가입일만 보여 준다.
+    --   ⚠ 「첫해 암묵 1건」은 **첫 기념일(시작일+1년) 전에 낸 납부가 하나도 없을 때** 더한다 — 기록 수로 가르면(greatest(기록,1)) 2년차 갱신 기록이 첫해 자리를 먹어
+    --      기준일이 안 밀리고 알림이 계속됐다(리뷰 2026-10-19). 시드가 첫해를 적어 둔 회원은 paid_at 이 첫 기념일 전이라 암묵이 붙지 않는다.
     select m.*,
            case when m.mj is not null then 'joined' when m.sd is not null then 'start' else 'none' end as kind,
            case when m.mj is not null then m.mj else m.sd end as anchor,
-           case when m.mj is null and m.sd is not null then greatest(m.paid_rec, 1) else m.paid_rec end as paid_eff,
-           (m.mj is null and m.sd is not null and m.paid_rec = 0) as implicit
+           (m.mj is null and m.sd is not null and not (
+              exists (select 1 from public.membership_fees f where f.user_id = m.id and f.paid_at < (m.sd + interval '1 year')::date)
+              or exists (select 1 from public.deposit_transactions t where t.user_id = m.id and t.change_type = 'membership_payment'
+                           and (t.created_at at time zone 'Asia/Seoul')::date < (m.sd + interval '1 year')::date))) as implicit
       from m
+  ), a2 as (
+    select a.*, a.paid_rec + case when a.implicit then 1 else 0 end as paid_eff from a
   ), c as (
     select a.*,
            case when a.anchor is null then 0 else public._taam_fee_years(a.anchor, v_today) end as yrs,
            case when a.anchor is null then null else (a.anchor + make_interval(years => a.paid_eff))::date end as due
-      from a
+      from a2 a
   )
   select c.id, c.display_name, c.tier, c.cur,
          coalesce(c.mj, c.appd) as joined_at, case when c.mj is not null then 'manual' else 'app' end as joined_kind,
@@ -134,6 +142,7 @@ end $do$;
 select '① ' || name as 항목, status as 결과 from _fda
 union all select '② 도우미 _taam_member_start_at · 서버 전용', case when to_regproc('public._taam_member_start_at') is not null and not has_function_privilege('authenticated', 'public._taam_member_start_at(uuid)', 'execute') then '✅' else '❌' end
 union all select '③ 새 칸(anchor_kind · start_at · implicit_first)', case when exists (select 1 from pg_proc p where p.oid = to_regprocedure('public.taam_membership_fee_due(uuid,date,boolean)') and p.prosrc like '%implicit_first%') then '✅' else '❌' end
-union all select '④ 매일 알림 함수는 그대로 돈다 (select * 로 읽는다)', case when to_regproc('public.taam_membership_fee_notify') is not null then '✅' else '❌ 20261017_membership_fee_due.sql' end
+union all select '④ 매일 알림 함수는 그대로 돈다 (select * 로 읽는다) · _taam_ts_safe 존재', case when to_regproc('public.taam_membership_fee_notify') is not null and to_regproc('public._taam_ts_safe') is not null then '✅' else '❌ 20261017_membership_fee_due.sql · sql/signup_guard.sql' end
+union all select '⑥ 원장 탭 시작일(taam_member_start)도 회원 LINK-·결제일 판인가', case when exists (select 1 from pg_proc p where p.oid = to_regprocedure('public.taam_member_start(uuid)') and p.prosrc like '%memberUid%') then '✅' else '⚠ 20261019_member_link_rows.sql 을 먼저 — 아니면 원장 탭 시작일과 이 보고의 시작일이 다를 수 있다' end
 union all select '⑤ 지금 분포 (정보) — 실제 가입일 기준 · 첫 구매 기준 · 시작 전', coalesce((select count(*) filter (where anchor_kind = 'joined') || ' · ' || count(*) filter (where anchor_kind = 'start') || ' · ' || count(*) filter (where anchor_kind = 'none') from public.taam_membership_fee_due(null, null, true)), '-')
 order by 1;
