@@ -7919,9 +7919,16 @@ async function feeDueDeduct(uid, ev){
   if (ev && ev.stopPropagation) ev.stopPropagation();
   var r = (_fdRows || []).find(function(x){ return String(x.user_id) === String(uid); }) || {};
   var m = /₩([\d,]+)/.exec(String(r.fee_hint || ''));
-  await _adgOpenForFee(uid, { amountKrw: m ? parseInt(m[1].replace(/,/g, ''), 10) : 0, years: r.years, due: r.due_date ? String(r.due_date).slice(0, 10) : '', closer: feeDueClose });
+  // 「N년차」는 이번에 내는 연차 = 납부 건수 + 1 (years 는 「시작된 연차 수」라 2건 이상 밀린 회원에선 틀리게 적혔다 — 리뷰)
+  await _adgOpenForFee(uid, { amountKrw: m ? parseInt(m[1].replace(/,/g, ''), 10) : 0, years: (parseInt(r.paid, 10) || 0) + 1, due: r.due_date ? String(r.due_date).slice(0, 10) : '', closer: feeDueClose });
 }
-function feeDueDeductFromLedger(uid){ _adgOpenForFee(uid, {}); }   // 원장 연회비 탭 — 금액은 사람이 적는다(기준일·연차는 탭 머리에 있다)
+// 원장 연회비 탭 — 금액은 사람이 적는다(기준일·연차는 탭 머리에 있다). 확정 뒤 원장을 다시 읽어 「부족 N건」·기록 목록이 낡은 채 남지 않게(같은 연회비를 또 적게 되던 것 — 리뷰)
+function feeDueDeductFromLedger(uid){
+  _adgOpenForFee(uid, { after: async function(){
+    var sc = document.getElementById('memberLedgerScreen');
+    if (sc && sc.style.display !== 'none' && typeof mlOpen === 'function') { try { await mlOpen(uid); if (typeof mlTab === 'function') mlTab('mship'); } catch(_e){} }
+  } });
+}
 async function _adgOpenForFee(uid, o){
   o = o || {};
   if (!window.sb || !uid) return;
@@ -7930,6 +7937,7 @@ async function _adgOpenForFee(uid, o){
   if (r.error || !r.data) { showToast('❌', '회원을 못 읽었습니다', String((r.error && r.error.message) || '').slice(0, 100)); return; }
   if (typeof o.closer === 'function') { try { o.closer(); } catch(_e){} }
   openAdminDepositGrant();
+  window._adgAfterGrant = (typeof o.after === 'function') ? o.after : null;   // 확정 성공 뒤 한 번 부른다 (openAdminDepositGrant 가 비우므로 그 뒤에 건다)
   setTimeout(function(){
     try {
       window._adgSearchResultsData = [r.data]; adgSelectUser(r.data.id);
@@ -21993,6 +22001,7 @@ function openAdminDepositGrant(){
   _adgSelectedUser = null;
   // 🆕 2026-10-18 연회비 기록 체크·납부일도 비운다 (adgSetSign(1) 이 숨기지만 날짜는 따로)
   try { var _fc = document.getElementById('adgFeeChk'); if (_fc) _fc.checked = false; var _fdt = document.getElementById('adgFeeDate'); if (_fdt) _fdt.value = ''; adgFeeToggle(); } catch(_fe){}
+  window._adgAfterGrant = null;   // 지난 입구(원장 탭)가 건 확정 뒤 훅이 다른 부여에 실리지 않게
 
   var modal = document.getElementById('adminDepositGrantModal');
   modal.style.display = 'flex';
@@ -22045,6 +22054,7 @@ window.adgSwitchTab = adgSwitchTab;
 function closeAdminDepositGrant(){
   document.getElementById('adminDepositGrantModal').style.display = 'none';
   _adgSelectedUser = null;
+  window._adgAfterGrant = null;
   _acPopupClosed();
 }
 window.closeAdminDepositGrant = closeAdminDepositGrant;
@@ -22445,7 +22455,7 @@ async function _adgLoadGlobalLog(){
       var dt = r.created_at ? new Date(r.created_at) : null;
       var dtStr = dt ? ((dt.getMonth()+1) + '/' + dt.getDate() + ' ' + dt.getHours().toString().padStart(2,'0') + ':' + dt.getMinutes().toString().padStart(2,'0')) : '-';
       var isGrant = r.change_type === 'admin_grant';
-      var typeLabel = isGrant ? '부여' : '차감';
+      var typeLabel = (isGrant ? '부여' : '차감') + (!isGrant && r.metadata && r.metadata.membership_fee ? ' · 연회비 기록' : '');   // 🆕 2026-10-18 차감과 함께 적힌 연회비
       var typeColor = isGrant ? '#2a6a2a' : '#c00';
       var amt = r.amount || 0;
       if(isGrant) sumGrant += amt; else sumDeduct += Math.abs(amt);
@@ -22652,6 +22662,7 @@ async function adgSubmit(){
     var _fdv = String((document.getElementById('adgFeeDate') || {}).value || '').trim();
     if (_fdv && !/^\d{4}-\d{2}-\d{2}$/.test(_fdv)) { alert('연회비 납부일을 확인해주세요 (YYYY-MM-DD)'); return; }
     _feeMeta = { amount_krw: Math.abs(amount), paid_at: _fdv || _adgKstToday(), note: description };
+    if (_fxInfo) { _feeMeta.fx_currency = _fxInfo.fx_currency; _feeMeta.fx_amount = Math.abs(_fxInfo.fx_amount); }   // 외화 차감이면 기록에도 외화 금액을 (연회비 탭·fee_hint 통화 판정이 본다)
   }
 
   var actionText = amount > 0 ? '지급' : '차감';
@@ -22689,6 +22700,9 @@ async function adgSubmit(){
     // 🆕 2026.05.22: 부여/차감 완료 후 자동으로 "내역 로그" 탭으로 이동 (방금 추가된 거래 즉시 확인)
     if (typeof adgSwitchTab === 'function') adgSwitchTab('log');
     else if (typeof _adgLoadGlobalLog === 'function') { try { await _adgLoadGlobalLog(); } catch(_){} }
+    // 🆕 2026-10-18 입구(원장 연회비 탭)가 건 「확정 뒤」 훅 — 밑에 열린 원장을 다시 읽는다. 한 번만
+    var _af = window._adgAfterGrant; window._adgAfterGrant = null;
+    if (typeof _af === 'function') { try { await _af(result); } catch(_ae){ console.warn('[adg] after hook', _ae && _ae.message); } }
     // 버튼 원상복구 (모달 닫지 않음 — 슈퍼어드민이 로그 확인 후 직접 닫음)
     var btnBack = document.querySelector('#adminDepositGrantModal button[onclick="adgSubmit()"]');
     if (btnBack){ btnBack.disabled = false; btnBack.textContent = '확인 — 예치금 변동 적용'; }
@@ -45317,7 +45331,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.18-a';
+var TAAM_WEB_BUILD = '2026.10.18-b';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){

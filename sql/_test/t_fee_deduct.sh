@@ -37,8 +37,19 @@ r=$(ins $B admin_grant 500000 '부여인데 플래그' '{"membership_fee":true}'
 ok "부여(+)에 플래그 → FEE_RECORD_FAILED · 원장 줄 0 · 기록 0" "1|0|0" "$(echo "$r" | grep -c 'FEE_RECORD_FAILED')|$($P -c "select count(*) from public.deposit_transactions where user_id='$B'")|$($P -c "select count(*) from public.membership_fees where user_id='$B'")"
 # ── ④ 객체 플래그 — 금액·납부일·등급·기간·메모·by 를 그대로 ──
 T4=$(ins $B admin_deduct -1125000 '설명' '{"membership_fee":{"amount_krw":1125000,"paid_at":"2026-10-21","tier":"M","period_from":"2026-10-21","period_to":"2027-10-20","note":"3년차 연회비","by":"'$A'"}}')
-ok "객체 플래그 → 금액·납부일·등급·기간·메모·by 그대로" "1125000|2026-10-21|M|2026-10-21|2027-10-20|3년차 연회비|$A" \
+ok "객체 플래그 → 금액·납부일·등급·기간·메모 그대로 · by 는 **호출자(슈퍼어드민)** — metadata 의 by 는 믿지 않는다" "1125000|2026-10-21|M|2026-10-21|2027-10-20|3년차 연회비|$SU" \
    "$($P -c "select amount_krw||'|'||paid_at||'|'||tier||'|'||period_from||'|'||period_to||'|'||note||'|'||created_by::text from public.membership_fees where source_ref='$T4'")"
+# ── ④-b 서버 호출(auth.uid() null · SQL Editor·크론·service_role)은 통과하고 by 를 받는다 ──
+T4b=$($P -c "set taam.uid=''; set taam.super='0'; insert into public.deposit_transactions(user_id, deposit_type, change_type, amount, balance_after, description, metadata) values ('$B','membership','admin_deduct',-1000,0,'서버','{\"membership_fee\":{\"by\":\"$A\"}}'::jsonb) returning id" 2>&1)
+ok "서버 호출(uid 없음) → 기록 1줄 · by = metadata.by" "1|$A" "$($P -c "select count(*)||'|'||max(created_by::text) from public.membership_fees where source_ref='$T4b'")"
+# ── ④-c 회원 세션(비슈퍼어드민)이 플래그를 실으면 FEE_RECORD_FAILED(슈퍼어드민만) · 원장 줄도 안 들어간다 — RPC 가 음수 항목 change_type 을 안 보는 옛 구멍이 기록 위조로 이어지지 않게 ──
+n0=$($P -c "select count(*) from public.deposit_transactions where user_id='$A'")
+r=$($P -c "set taam.uid='$A'; set taam.super='0'; insert into public.deposit_transactions(user_id, deposit_type, change_type, amount, balance_after, description, metadata) values ('$A','membership','admin_deduct',-1,0,'위조','{\"membership_fee\":{\"amount_krw\":1125000,\"tier\":\"M\",\"by\":\"$SU\"}}'::jsonb)" 2>&1)
+ok "회원 세션 + 플래그 → FEE_RECORD_FAILED(슈퍼어드민만) · 원장 줄 수 그대로 · 기록 1,125,000 없음" "1|$n0|0" "$(echo "$r" | grep -c 'FEE_RECORD_FAILED.*슈퍼어드민만')|$($P -c "select count(*) from public.deposit_transactions where user_id='$A'")|$($P -c "select count(*) from public.membership_fees where user_id='$A' and amount_krw=1125000")"
+# ── ④-d 외화 차감 — 원장 metadata 의 fx_currency/fx_amount(음수)가 기록에 양수로 함께 · mf 의 값이 우선 · 모르는 통화는 비움 ──
+T4d=$(ins $B admin_deduct -408195 '송금 $300' '{"fx_currency":"USD","fx_amount":-300,"fx_rate":1360.65,"membership_fee":true}')
+T4e=$(ins $B admin_deduct -1000 'x' '{"fx_currency":"EUR","fx_amount":-1,"membership_fee":{"fx_currency":"JPY","fx_amount":"100000"}}')
+ok "외화 차감 → fx_currency USD · fx_amount 300.00 · mf 값 우선(JPY 100000) · 금액은 원화 그대로" "USD|300.00|408195|JPY|100000.00" "$($P -c "select fx_currency||'|'||fx_amount||'|'||amount_krw from public.membership_fees where source_ref='$T4d'")|$($P -c "select fx_currency||'|'||fx_amount from public.membership_fees where source_ref='$T4e'")"
 # ── ⑤ 잘못된 납부일 → 실패 · 원장도 롤백 ──
 n0=$($P -c "select count(*) from public.deposit_transactions where user_id='$B'")
 r=$(ins $B admin_deduct -1000 'x' '{"membership_fee":{"paid_at":"어제"}}')

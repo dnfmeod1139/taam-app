@@ -237,8 +237,13 @@ DB 값은 `'A'` 그대로고 **이름만** 「게스트 회원」이다. 값을 
   서버 **AFTER INSERT 트리거 `trg_taam_fee_from_deduct`**(deposit_transactions · security definer)가 **같은 트랜잭션**으로 `membership_fees` 에 한 줄(method `deposit` · source `deposit_deduct` · source_ref = 원장 줄 id · 등급은 프로필 M/T · 메모 = 차감 설명)을 적는다.
   **기록을 못 적으면 차감도 롤백**(`FEE_RECORD_FAILED` · 앱 안내 「연회비 기록에 실패해 차감도 취소됐습니다」) — 「돈은 빠졌는데 기록은 없다」가 이 기능이 없애려는 모양이라 조용히 넘기지 않는다. 플래그가 부여(+)·다른 change_type 에 실려 오면 같은 이유로 거절. 플래그 없는 줄(종전 전부·Edge·회원 환불)은 트리거가 보지 않는다. 같은 원장 줄로 두 번 적히지 않는다(source_ref).
   입구: 「💰 연회비 납부 시기」 줄의 **「예치금에서 차감」**(`feeDueDeduct` → `_adgOpenForFee` — 회원·멤버십 주머니·－·금액(fee_hint 의 ₩숫자, 외화·규정 없음이면 비움 + 토스트)·사유 「연회비 N년차 (기준일)」·체크를 채워 열고 확정은 사람이 누른다) · 원장 연회비 탭의 같은 버튼(`feeDueDeductFromLedger` · 금액은 사람이).
-  차감을 되돌리는 부여(+)는 기록을 자동으로 지우지 않는다 — 연회비 탭에서 지운다. 연회비 탭 source 라벨 `_MF_SOURCE`(`deposit_deduct` 「예치금 차감과 함께 기록」 · `pay_link` 「결제 링크 자동 기록」) · 부여/차감 전체 로그에 「· 연회비 기록」 태그.
-  회귀: `bash sql/_test/t_fee_deduct.sh`(12건 — 플래그 true/false/null/객체 · 부여에 플래그 거절 · 날짜 오류·표 없음 롤백 · 등급 A → null) · 스크래치 `adgfee.js`(31건 · 모달·확인창·실패 안내·두 입구).
+  차감을 되돌리는 부여(+)는 기록을 자동으로 지우지 않는다 — 연회비 탭에서 지운다. 연회비 탭 source 라벨 `_MF_SOURCE`(`deposit_deduct` 「예치금 차감과 함께 기록」 · `pay_link` 「결제 링크 자동 기록」) · 부여/차감 로그 두 목록(회원 거래 목록 · 전체 로그) 모두 「· 연회비 기록」 태그.
+  **2차(적대 리뷰 3 렌즈 → 확정 6 · 전부 반영).** ① **회원이 납부 기록을 위조할 수 있었다** — `taam_apply_deposit_delta` 는 회원 호출에서 **음수 항목의 change_type 을 보지 않아** 회원이 `admin_deduct` 모양의 −₩1 줄에 `membership_fee` 플래그와 `by`(슈퍼어드민 uuid)를 실어 보내면
+  security definer 트리거가 호출자를 안 보고 슈퍼어드민 전용 표에 「M 1,125,000 · 기록자 슈퍼어드민」을 적었다(기준일 1년 밀림 · 알림 소거). → 트리거가 **호출자를 본다**: `auth.uid()` 가 있으면 슈퍼어드민이어야 하고(아니면 FEE_RECORD_FAILED 로 차감까지 롤백), `by` 는 서버 호출(uid null)만 받고 로그인 호출은 `auth.uid()` 로 고정.
+  ⚠ 남은 옛 구멍(pre · 이 트리거와 무관): 회원이 RPC 로 **자기 원장에 admin_deduct 모양의 음수 줄**을 쓸 수 있다(자기 돈을 자기가 빼는 것이라 금전 손실은 없지만 원장 라벨이 거짓이 된다). `taam_apply_deposit_delta` 비슈퍼어드민 경로의 음수 항목 change_type 을 회원 값(ticket_purchase 등)으로 제한하는 것은 라이브 함수 교체라 별도 건.
+  ② 외화($·¥) 차감의 기록에 `fx_currency/fx_amount` 가 비었다(연회비 탭·fee_hint 통화 판정이 본다) → 앱 `_feeMeta` 와 트리거가 원장 metadata 의 외화 값을 함께 적는다(양수). ③④ 원장 연회비 탭 입구로 차감하면 **밑의 원장이 낡은 채**(「부족 1건 · 받았다면 기록하세요」) 남아 같은 연회비를 또 적게 됐다 → `_adgOpenForFee` 의 `after` 훅(`window._adgAfterGrant` · 1회성 · 열기·닫기에서 비움)이 성공 뒤 `mlOpen(uid)+mlTab('mship')`.
+  ⑤ 프리필 「N년차」가 `years`(시작된 연차 수)여서 2건 이상 밀린 회원에선 틀렸다 → 납부 건수+1. ⑥ 「전체 로그」에 태그가 없었다 → 추가.
+  회귀: `bash sql/_test/t_fee_deduct.sh`(16건 — 플래그 true/false/null/객체 · 부여에 플래그 거절 · **회원 세션 거절·서버 호출 통과·by 위조 무시** · 외화 기록 · 날짜 오류·표 없음 롤백 · 등급 A → null) · 스크래치 `adgfee.js`(40건 · 모달·확인창·실패 안내·두 입구·외화·원장 재그리기).
 - 회귀: `bash sql/_test/t_member_start.sh`(25건 — 가드·시드·anon 포함) · `bash sql/_test/t_membership_fees.sh`(12건) · `bash sql/_test/t_rpc_caller_guard.sh`(7건) · 스크래치 `mjoined.js`(23건).
 
 ### 한 회원 = 한 회차 1건 · 같은 날 같은 시간대 1건 (2026-10-13 카타오리 5/21 사고)
