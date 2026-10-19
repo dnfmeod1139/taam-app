@@ -45781,7 +45781,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.19-b';
+var TAAM_WEB_BUILD = '2026.10.19-c';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -50794,13 +50794,11 @@ function _isTicketExpired(t){
   if(!isNaN(_yr) && _yr >= 2020 && _yr <= 2100){
     return new Date(_yr, m-1, d, hh, mm, 0).getTime() < Date.now();
   }
-  var deadline = new Date(now.getFullYear(), m-1, d, hh, mm, 0);
-  // (연도 미저장 구버전 티켓 폴백) 6개월 이상 과거면 내년으로 해석 (연말/연초 경계)
-  var sixMonthsAgo = new Date(now.getTime() - 1000*60*60*24*180);
-  if(deadline < sixMonthsAgo){
-    deadline = new Date(now.getFullYear()+1, m-1, d, hh, mm, 0);
-  }
-  return deadline.getTime() < Date.now();
+  // 연도 미저장 옛 회차 — 화면(캘린더)과 **같은 규칙**으로(_tkInferYear · 올린 날 기준).
+  //   🔧 2026-10-19 종전엔 여기만 「180일」, 캘린더는 「120일」이라 그 사이 회차는 「2027년 칸에 보이는데 만료」였고,
+  //   180일이 지나면 지난 회차가 「안 지난 2027년 회차」로 되살아났다.
+  var _yi = _tkInferYear(m, d, _tkAnchorOf(t));
+  return new Date(_yi, m-1, d, hh, mm, 0).getTime() < Date.now();
 }
 window._isTicketExpired = _isTicketExpired;
 
@@ -50808,16 +50806,43 @@ window._isTicketExpired = _isTicketExpired;
 //   dateYear 미저장 구버전 티켓은 만료 판정과 동일한 180일 규칙으로 연도 추정.
 // 🆕 2026.08: 티켓의 '연도 포함' 날짜 문자열 — dateYear 있으면 'YYYY.M.DD', 없으면 롤포워드 추정.
 //   푸시 문구·초대 연결·캘린더 매핑·구매 방문일 등 연도가 필요한 모든 곳의 공용 소스.
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026-10-19 연도 없는 회차 날짜('MM.DD')의 연도 — 「올린 날」 기준, 서버 _taam_mmdd_year 와 같은 식
+// ═══════════════════════════════════════════════════════════════
+//   「티켓 캘린더 2027년 6월에 2026년 6월 티켓이 또 보인다 · 올린 적 없다」 (2026-10-19).
+//   2026.07 전에 올린 회차 11개가 'MM.DD' 로만 저장돼 있었고, 종전 규칙은 **오늘** 기준
+//   「120일 넘게 지났으면 내년」이었다 — 날이 갈수록 지난 회차가 하나씩 내년 칸으로 넘어갔다
+//   (6/15~17 은 10/14 무렵, 7월 회차는 10월 말, 9·10월 회차는 1~2월에 넘어갈 차례였다).
+//   회차는 방문 **전에** 올린다 — 그래서 기준일 = 올린 날(createdAt). 기준일 30일 전 이후의 첫 그 날.
+//   createdAt 이 없으면(기기 캐시의 옛 객체) 회차 id — 업로드 때 Date.now() 로 만든 ms 시각이다(1780800733940 = 2026-06-07).
+//   그것도 아니면 오늘. 규칙은 이 한 곳 — 만료·정렬·캘린더가 같이 쓴다.
+//   서버는 같은 날 옛 회차에 연도를 채웠고(20261019_ticket_date_year.sql) 연도 없는 날짜를 더는 저장하지 않는다(가드).
+function _tkAnchorOf(t){
+  var c = t && t.createdAt ? new Date(t.createdAt) : null;
+  if(c && !isNaN(c.getTime())) return c;
+  var n = Number(t && t.id);
+  if(isFinite(n) && n >= 1577836800000 && n < 4102444800000) return new Date(Math.floor(n));   // 2020 ~ 2100 의 ms 시각인 id
+  return new Date();
+}
+function _tkInferYear(m, d, anchor){
+  var a = (anchor instanceof Date && !isNaN(anchor.getTime())) ? anchor : new Date();
+  var base = new Date(a.getFullYear(), a.getMonth(), a.getDate() - 30);
+  var y = base.getFullYear();
+  var dim = new Date(y, m, 0).getDate();   // 그 해 그 달의 말일 — 2/29 는 평년엔 비교만 2/28 로
+  if(new Date(y, m - 1, Math.min(d, dim)) < base) y++;
+  return y;
+}
+window._tkInferYear = _tkInferYear; window._tkAnchorOf = _tkAnchorOf;
+
 function _tkFullDate(t){
   var ds = String((t && t.date) || '');
   var p = ds.split('.');
   if(p.length !== 2) return ds;                       // 이미 연도 포함이거나 형식 외
   var y = parseInt(t && t.dateYear, 10);
   if(isNaN(y) || y < 2020 || y > 2100){
-    var now = new Date();
-    y = now.getFullYear();
-    var dt = new Date(y, parseInt(p[0],10)-1, parseInt(p[1],10), 23, 59);
-    if(dt < new Date(now.getTime() - 1000*60*60*24*120)) y++;   // 120일 이상 과거면 내년
+    var _m = parseInt(p[0],10), _d = parseInt(p[1],10);
+    if(isNaN(_m) || isNaN(_d)) return ds;
+    y = _tkInferYear(_m, _d, _tkAnchorOf(t));
   }
   return y + '.' + ds;
 }
@@ -50919,10 +50944,7 @@ function _tkDateKey(t){
   var m = parseInt(p[0],10) || 0, d = parseInt(p[1],10) || 0;
   var y = parseInt(t.dateYear, 10);
   if(isNaN(y) || y < 2020 || y > 2100){
-    var now = new Date();
-    y = now.getFullYear();
-    var dt = new Date(y, m-1, d, 23, 59);
-    if(dt < new Date(now.getTime() - 1000*60*60*24*180)) y++;
+    y = (m && d) ? _tkInferYear(m, d, _tkAnchorOf(t)) : new Date().getFullYear();   // 🔧 2026-10-19 캘린더·만료와 같은 규칙(올린 날 기준)
   }
   return y*10000 + m*100 + d;
 }
@@ -77521,7 +77543,9 @@ async function loadAllTicketProductsFromSupabase(){
         countdown: row.countdown || false,
         deadlineDate: row.deadline_date,
         deadlineTime: row.deadline_time,
-        regDate: row.reg_date
+        regDate: row.reg_date,
+        // 🆕 2026-10-19 올린 시각 — 연도 없이 저장된 옛 회차('MM.DD')의 연도를 「오늘」이 아니라 「올린 날」로 정한다(_tkInferYear)
+        createdAt: row.created_at || null
       };
     });
     
