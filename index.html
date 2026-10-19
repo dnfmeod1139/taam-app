@@ -1019,9 +1019,11 @@ html.auto-login .splash .bottom-group{display:none !important}
 #magSheet .mg-head{flex:none;display:flex;align-items:center;gap:10px;padding:2px 20px 10px;
   border-bottom:1px solid rgba(255,255,255,.10);cursor:pointer}
 /* ‹ 는 글자가 6px 남짓이라 손가락이 조금만 비껴도 머리말·손잡이를 눌렀다(=시트가 닫혔다).
-   누르는 판만 44×44 로 키운다 — 글자 자리(x 21)·제목 자리·머리말 높이는 그대로 (2026-10-19) */
-#magSheet .mg-head .back{position:relative;z-index:1;box-sizing:border-box;width:44px;height:44px;
-  margin:-11px 2px -11px -20px;padding-left:20px;align-items:center;
+   누르는 판만 44×35(머리말 높이 전체)로 키운다 — 글자 자리(x 21 · 세로 가운데)·제목 자리·머리말 높이는 그대로.
+   위로는 머리말 밖(손잡이)으로 나가지 않는다 — 44×44 로 손잡이 아래 9px 를 덮었더니 그 자리에서 시작한 끌어내리기가 먹혔다(적대 리뷰).
+   손잡이 탭도 목록에서는 뒤로라 그 9px 를 덮을 이유가 없다 (2026-10-19) */
+#magSheet .mg-head .back{position:relative;z-index:1;box-sizing:border-box;width:44px;height:35px;
+  margin:-2px 2px -11px -20px;padding:0 0 10px 20px;align-items:center;
   font-size:19px;color:#DED9D3;cursor:pointer;display:none}
 #magSheet.day .mg-head .back{display:flex}
 #magSheet .mg-head .ttl{font-family:'Bodoni Moda',Didot,serif;font-weight:500;font-size:17px;color:#F2EDE7}
@@ -58970,7 +58972,7 @@ function magSheetTo(d){
     //   뒤로 갈 수도, 다른 날짜를 고를 수도 없다 (앱 재시작으로만 풀리던 증상).
     var wasDay = s.classList.contains('day');
     s.classList.remove('on','day');
-    if(wasDay && typeof magShowCalendar === 'function') magShowCalendar();
+    if(wasDay && typeof magShowCalendar === 'function') magShowCalendar(true);   // true: 목록에서 온 것 — 'day' 를 위에서 이미 걷었다(달력 스크롤 복원용)
     return;
   }
   s.classList.add('on');
@@ -59009,14 +59011,16 @@ window.magCloseSheet = magCloseSheet;
 //     달력 상태의 어두운 띠뿐이다. 다시 그리기는 보던 날짜 목록을 그 자리에서 다시 그린다(스크롤 유지).
 //     막 한 단계를 옮긴 뒤 400ms 안의 손잡이·어두운 띠 탭은 흘린다(두 번째 탭).
 var _magDayYMD = null;   // 지금 시트가 보여 주는 날짜 [y, m, d] — 달력이면 null
+var _magCalScroll = 0;   // 날짜를 누를 때의 달력 스크롤 — 뒤로 오면 그 자리로(긴 목록을 내려 둔 스크롤이 달력에 남아 칸이 화면 밖이던 것)
 var _magNavAt = 0;       // 마지막으로 단계를 옮긴 때 (날짜 열기 · 뒤로 · 상세 닫기)
 function _magNavMark(){ _magNavAt = Date.now(); }
 window._magNavMark = _magNavMark;
 function _magNavFresh(){ return (Date.now() - _magNavAt) < 400; }
 
 // 시트 안 · 캘린더 상태
-function magShowCalendar(){
+function magShowCalendar(fromDay){
   var s = document.getElementById('magSheet');
+  var _wasDay = fromDay === true || !!(s && s.classList.contains('day'));
   if(s) s.classList.remove('day');
   _magDayYMD = null;
   var _b0 = document.getElementById('magSheetBody');
@@ -59031,6 +59035,8 @@ function magShowCalendar(){
   if(cnt) cnt.textContent = '';
   // 히어로는 뒤에 이미 깔려 있으니 시트 안에서는 그리지 않는다
   renderPhotoCalInto('magSheetBody', true);
+  // 목록에서 달력으로 돌아온 것이면 날짜를 누르던 때의 달력 자리로 — 목록 스크롤이 남으면 달력 칸이 화면 위로 밀려 있었다
+  if(_wasDay && _b0) _b0.scrollTop = _magCalScroll || 0;
 }
 window.magShowCalendar = magShowCalendar;
 function magBackToCal(){ _magNavMark(); magShowCalendar(); }
@@ -59063,6 +59069,8 @@ window.magDimTap = magDimTap;
 
 // 시트 안 · 그 날의 자리 목록 (새 시트를 얹지 않는다)
 function magOpenDay(y, m, d){
+  var _s0 = document.getElementById('magSheet'), _b1 = document.getElementById('magSheetBody');
+  if(_s0 && !_s0.classList.contains('day') && _b1) _magCalScroll = _b1.scrollTop;   // 달력에서 들어올 때만 적는다
   if(!_magPaintDay(y, m, d, false)) return;
   _magNavMark();
   magSheetTo(2);   // 목록을 보려면 판이 커져야 한다
@@ -59161,7 +59169,9 @@ function magBindDrag(){
   function move(y){
     if(y0 === null) return;
     var dy = y0 - y;                       // 위로 끌면 커진다
-    if(Math.abs(dy) > 3) moved = true;
+    // 탭과 끌기의 경계 — iOS 는 손가락 떨림(4~9px)도 touchmove 로 다 보낸다. 3px 로 가르면 보통 탭이
+    //   「끌기」가 되어 제자리로 붙고 끝났다(touchend 를 막아 클릭 대체 경로도 없다 · 적대 리뷰). 플랫폼 탭 허용치에 맞춘다.
+    if(Math.abs(dy) > 10) moved = true;
     var hs = heights();
     var nh = Math.max(90, Math.min(hs[2] + 40, h0 + dy));
     panel.style.height = nh + 'px';
