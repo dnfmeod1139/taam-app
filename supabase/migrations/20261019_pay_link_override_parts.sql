@@ -9,7 +9,8 @@
 --      (USD 센트 · KRW/JPY 정수 · 앱이 보낸 total 이 다르면 PARTS_TOTAL_MISMATCH · 음수·숫자 아님 BAD_PARTS). 정가 항목과 셋 다 같으면 수정이 아니다(정가 그대로 · 사유 불필요).
 --      다르면 종전 금액 수정 규칙 그대로(슈퍼어드민만 · 사유 필수 · 좌석 행 payAmount 지움) + payload.override_parts = {meal, agency, wine, pax, currency} ·
 --      어드민 메모에 「(1인 식사 … + 대행 … + 주류 … × N인)」. 총액이 정가와 같아도 대행비가 다르면 수정으로 친다(환불 기준이 바뀐다). p.total 만 보내는 옛 앱 판도 그대로 돈다.
---   ② taam_link_invite_refund_quote 는 payload.override_parts.agency 가 있으면 그 값(× 인원)을 대행비로 뺀다(원화·외화 모두) — 없으면 종전(좌석 행 스냅샷).
+--   ② taam_link_invite_refund_quote 는 payload.override_parts.agency 가 있고 **항목 합 × 인원이 지금 청구액과 같을 때만** 그 값(× 그 인원)을 대행비로 뺀다(원화·외화 모두) — 아니면 종전(좌석 행 스냅샷).
+--   ③ taam_pay_link_set_amount(미결제 금액 변경)는 총액을 바꾸면 override_parts 를 지운다(메모 「항목 내역 해제」) — 낡은 항목이 환불 기준으로 남지 않게(적대 리뷰).
 --   ⚠ 둘 다 라이브 함수 교체 — 본문 md5 가 저장소 직전 판(create 75a262d65111c7b646584f4ee02eb6aa · quote fa4c2c741daaf83d97ad05edf99bae2b)과 같을 때만. 이미 새 판(override_parts)이면 ✅ · 모르는 판 ❌ 건너뜀.
 --   청구 행(kashikiri_charges)은 슈퍼어드민(kc_super)과 결제한 회원 본인(kc_mine)만 읽는다 — 매장 어드민에게 협의 항목이 새지 않는다.
 -- 회귀: bash sql/_test/t_pay_link.sh · 스크래치 paylink.js
@@ -276,7 +277,7 @@ declare
   v_ch  public.kashikiri_charges%rowtype;
   v_tk  public.tickets%rowtype;
   v_days int; v_agency bigint := 0; v_refund bigint := 0; v_policy text; v_visit date;
-  v_cur text; v_pax int; v_agency_pay numeric := 0; v_refund_amt numeric := 0; v_fxq jsonb; v_ov_agency numeric;
+  v_cur text; v_pax int; v_agency_pay numeric := 0; v_refund_amt numeric := 0; v_fxq jsonb; v_ov_agency numeric; v_ov_pax int; v_ov_sum numeric;
 begin
   select * into v_ch from public.kashikiri_charges where id::text = p_charge_id;
   if not found then raise exception 'CHARGE_NOT_FOUND' using errcode = 'P0002'; end if;
@@ -291,9 +292,18 @@ begin
     v_pax := greatest(coalesce(v_tk.party_size,1),1);
     v_agency := coalesce((v_tk.extra_data->>'agencyFee')::bigint, 0) * v_pax;
     -- 🆕 2026-10-19 링크를 만들 때 항목별로 적은 대행비(payload.override_parts.agency · 1인 · 결제 통화)가 있으면 그 값이 손님이 낸 대행비다 — 좌석 행 스냅샷(정가)보다 먼저.
+    --   단, 항목 합 × 그 인원이 **지금 청구액과 같을 때만**(같은 통화) — 그 뒤 금액이 바뀌었으면(금액 변경 · 직접 수정) 항목은 낡았으니 쓰지 않고 종전 스냅샷으로(적대 리뷰: 면제한 대행비가 금액 변경 뒤 전액 환불되던 것).
     begin
-      v_ov_agency := case when jsonb_typeof(v_ch.payload->'override_parts') = 'object' then nullif(btrim(coalesce(v_ch.payload->'override_parts'->>'agency', '')), '')::numeric end;
+      if jsonb_typeof(v_ch.payload->'override_parts') = 'object' and upper(coalesce(v_ch.payload->'override_parts'->>'currency', '')) = v_cur then
+        v_ov_agency := coalesce(nullif(btrim(coalesce(v_ch.payload->'override_parts'->>'agency', '')), '')::numeric, 0);
+        v_ov_pax := greatest(coalesce(nullif(btrim(coalesce(v_ch.payload->'override_parts'->>'pax', '')), '')::int, v_pax), 1);
+        v_ov_sum := (coalesce(nullif(btrim(coalesce(v_ch.payload->'override_parts'->>'meal', '')), '')::numeric, 0) + v_ov_agency
+                     + coalesce(nullif(btrim(coalesce(v_ch.payload->'override_parts'->>'wine', '')), '')::numeric, 0)) * v_ov_pax;
+        v_ov_sum := case v_cur when 'USD' then round(v_ov_sum, 2) else round(v_ov_sum) end;
+        if v_ov_sum is distinct from (case when v_cur = 'KRW' then coalesce(v_ch.pay_amount, v_ch.amount_krw) else v_ch.pay_amount end) then v_ov_agency := null; end if;
+      end if;
     exception when others then v_ov_agency := null; end;
+    if v_ov_agency is not null then v_pax := v_ov_pax; end if;
     if v_ov_agency is not null and v_cur = 'KRW' then v_agency := round(v_ov_agency)::bigint * v_pax; end if;
     -- 🆕 2026-10-19 외화 링크는 **결제 통화**로 센다 — 손님이 낸 대행비(agencyPay 스냅샷 · 확정 외화 또는 원화÷환율)를 빼고 원화는 round(외화×환율).
     --   종전 「amount_krw − 원화 정가 대행비」는 확정 외화 대행비(amount_krw = round(외화×환율))와 기준이 달라 환율 차액만큼 과·소환불했다(적대 리뷰).
@@ -340,9 +350,65 @@ end $b$;
   end if;
 end $do$;
 
+
+-- ── ③ 미결제 링크 금액 변경 — 총액을 바꾸면 항목 내역(override_parts)을 지운다 (20261019_pay_link_ticket_override.sql 판 + 이 한 가지) ──
+--   항목 합 × 인원이 새 총액과 맞지 않게 되면 그 대행비를 환불 기준으로 쓸 수 없다(면제한 대행비가 금액 변경 뒤 전액 환불되던 것 · 적대 리뷰).
+--   지우면 환불 견적은 좌석 행 스냅샷(정가 대행비)으로 돌아간다 — 메모에 「항목 내역 해제」를 남긴다. 항목을 다시 정하려면 끊고 새 링크를 만든다.
+--   md5 가드 없이 바꾼다 — 같은 날(20261019_pay_link_ticket_override.sql) 만든 함수이고 다른 곳에서 고친 판이 없다.
+create or replace function public.taam_pay_link_set_amount(p_charge_id uuid, p_total numeric, p_note text)
+returns jsonb
+language plpgsql volatile security definer set search_path = public
+as $$
+declare v_uid uuid := auth.uid(); v_super boolean := false; v_ch public.kashikiri_charges%rowtype; v_cur text; v_pay numeric; v_krw bigint; v_note text; v_old text; v_had_parts boolean := false;
+begin
+  if v_uid is null then raise exception '로그인이 필요합니다' using errcode = '42501'; end if;
+  begin v_super := coalesce(public._taam_uid_is_super(), false); exception when others then v_super := false; end;
+  if not v_super then raise exception '권한이 없습니다' using errcode = '42501'; end if;
+  select * into v_ch from public.kashikiri_charges where id = p_charge_id for update;
+  if not found then raise exception 'CHARGE_NOT_FOUND' using errcode = 'P0002'; end if;
+  if v_ch.status <> 'pending' then raise exception 'NOT_PENDING' using errcode = '55000'; end if;
+  if v_ch.expires_at is not null and v_ch.expires_at < now() then raise exception 'LINK_EXPIRED' using errcode = '55000'; end if;
+  -- 손님이 이미 결제를 시작한 링크(order_start 가 order_id 를 적음)는 금액을 못 바꾼다 — kashikiri-confirm 이 청구를 읽은 뒤 mark_paid_v2 가 다시 읽는 사이에 금액이 바뀌면
+  -- 토스는 승인됐는데 우리 기록은 pending 인 최악의 모양이 난다. 끊고 새 링크를 만든다(홀드는 새 링크가 다시 잡는다).
+  if v_ch.order_id is not null then raise exception 'PAYMENT_STARTED' using errcode = '55000'; end if;
+  if coalesce(v_ch.purpose, case when coalesce(v_ch.link_invite, false) then 'ticket' else 'custom' end) not in ('ticket', 'custom') then
+    raise exception 'BAD_PURPOSE' using errcode = '22023';
+  end if;
+  -- 대관 정산 청구(회차에 붙은 조 몫 · 옛 행은 purpose 가 custom 으로 백필됐다)는 정산 시트가 회차 총액을 검사한다 — 여기서 바꾸면 시트와 어긋난다
+  if v_ch.event_id is not null and not coalesce(v_ch.link_invite, false) then raise exception 'SETTLEMENT_CHARGE' using errcode = '22023'; end if;
+  v_note := nullif(btrim(coalesce(p_note, '')), '');
+  if v_note is null then raise exception 'OVERRIDE_NOTE_REQUIRED' using errcode = '22023'; end if;
+  v_cur := upper(coalesce(v_ch.pay_currency, 'KRW'));
+  if v_cur <> 'KRW' and coalesce(v_ch.pay_fx, 0) <= 0 then raise exception 'FX_MISSING' using errcode = '22023'; end if;   -- 환율 없는 외화 행의 원화를 1 로 지어내지 않는다
+  v_pay := case v_cur when 'USD' then round(p_total, 2) else round(p_total) end;
+  if v_pay is null or v_pay <= 0 then raise exception 'BAD_AMOUNT' using errcode = '22023'; end if;
+  if v_pay = v_ch.pay_amount then
+    return jsonb_build_object('ok', true, 'changed', false, 'amount_krw', v_ch.amount_krw, 'pay_amount', v_ch.pay_amount, 'pay_currency', v_cur);
+  end if;
+  v_had_parts := coalesce(jsonb_typeof(coalesce(v_ch.payload, '{}'::jsonb)->'override_parts') = 'object', false);
+  v_krw := case v_cur when 'KRW' then v_pay::bigint else round(v_pay * v_ch.pay_fx)::bigint end;
+  v_old := public._taam_ksk_money(v_cur, v_ch.pay_amount, v_ch.amount_krw);
+  update public.kashikiri_charges
+     set amount_krw = v_krw::int, pay_amount = v_pay, amount_jpy = case when v_cur = 'JPY' then v_pay::int end,
+         payload = (coalesce(payload, '{}'::jsonb) - 'override_parts') || jsonb_build_object('price_override', true)   -- 총액이 바뀌면 항목 내역은 낡는다 — 지운다(환불은 정가 대행비 기준으로)
+   where id = v_ch.id
+  returning * into v_ch;
+  update public.tickets set extra_data = (coalesce(extra_data, '{}'::jsonb) - 'payAmount') || jsonb_build_object('priceOverride', true)   -- 협의 금액은 좌석 행에 안 적는다(매장 어드민이 읽는다)
+   where purchase_id like 'LINK-%' and extra_data->>'chargeId' = v_ch.id::text and lower(coalesce(status, '')) in ('hold', 'active');
+  insert into public.kashikiri_charge_admin (charge_id, note, created_by)
+  values (v_ch.id, '[금액 변경 ' || to_char(now() at time zone 'Asia/Seoul', 'MM-DD HH24:MI') || '] ' || v_old || ' → ' || public._taam_ksk_money(v_cur, v_pay, v_krw::int)
+                   || case when v_had_parts then ' (항목 내역 해제 — 환불은 정가 대행비 기준)' else '' end || ' · ' || v_note, v_uid)
+  on conflict (charge_id) do update set note = coalesce(public.kashikiri_charge_admin.note || E'\n', '') || excluded.note;
+  return jsonb_build_object('ok', true, 'changed', true, 'amount_krw', v_ch.amount_krw, 'pay_amount', v_ch.pay_amount, 'pay_currency', v_cur, 'parts_cleared', v_had_parts);
+end $$;
+revoke all on function public.taam_pay_link_set_amount(uuid, numeric, text) from public, anon;
+grant execute on function public.taam_pay_link_set_amount(uuid, numeric, text) to authenticated;
+comment on function public.taam_pay_link_set_amount(uuid, numeric, text) is '미결제(pending) 티켓·자유 금액 결제 링크의 금액을 바꾼다 — 슈퍼어드민만 · 사유 필수 · 외화는 링크 환율로 원화 환산 · 어드민 표에 기록 · 총액을 바꾸면 항목 내역(override_parts)을 지운다. 2026-10-19';
+
 -- ── 확인 — 한 표 ──
 select '① ' || name || ' 교체' as 항목, status as 결과 from _plp
 union all select '③ 두 판이 override_parts 를 안다', case when exists (select 1 from pg_proc p where p.oid = to_regprocedure('public.taam_pay_link_create(text,jsonb)') and p.prosrc like '%override_parts%')
              and exists (select 1 from pg_proc p where p.oid = to_regprocedure('public.taam_link_invite_refund_quote(text)') and p.prosrc like '%override_parts%') then '✅' else '❌ 옛 판 — 항목별 금액이 저장·환불에 안 쓰인다' end
+union all select '⑤ 금액 변경이 항목 내역을 지운다', case when exists (select 1 from pg_proc p where p.oid = to_regprocedure('public.taam_pay_link_set_amount(uuid,numeric,text)') and p.prosrc like '%- ''override_parts''%') then '✅' else '❌' end
 union all select '④ 의존 — taam_ticket_price_fx · _taam_ksk_money', case when to_regprocedure('public.taam_ticket_price_fx(text,integer,text,numeric)') is not null and to_regprocedure('public._taam_ksk_money(text,numeric,integer)') is not null then '✅' else '❌' end
 order by 1;
