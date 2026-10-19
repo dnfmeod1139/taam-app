@@ -26109,6 +26109,8 @@ async function openTdPayPopup() {
   // 🆕 2026-10-13 사진 캘린더 경로(pcalPay → 여기)는 handleTicketAction 을 거치지 않는다 — NEW_HOME_LIVE=true 라 전 회원이 이 길로 산다.
   //   결제 팝업 입구에서 같은 회차 중복·같은 시간대를 한 번 더 거른다 (서버 trg_taam_guard_purchase_unique 가 최종).
   if (typeof checkPurchaseConflicts === 'function' && !checkPurchaseConflicts(t)) return;
+  // 🆕 2026-10-19 지난 회차는 결제 팝업을 열지 않는다 — 상세가 막지만 한 겹 더(연도 없는 옛 회차가 다음 해 회차로 되살아나 살 수 있게 보이던 경로)
+  if (typeof _isTicketExpired === 'function' && _isTicketExpired(t)) { showToast('⏰', '기한 만료', '지난 일정입니다'); return; }   // 두 문구 모두 TX_MAP
   var pax    = _tdPax;
   var meal   = parseInt(t.mealFee||t.mealAmt||0);
   var agency = parseInt(t.agencyFee||0);
@@ -44968,21 +44970,25 @@ function riSelectTicketGenre(genre, btn){
 // 날짜/시간 — 기존 tuOpenCal/tuOpenTimeWheel 을 재활용 (콜백으로 _riDate/_riTime 세팅)
 function riOpenCal(){
   // _tuSelectedDate 에 결과 들어옴 → 우리가 가로채서 _riDate 에 복사
-  var prevDate = _tuSelectedDate;
-  _tuSelectedDate = null;
+  //   🔧 2026-10-19 고른 **연도**도 함께 가져온다. 종전엔 MM.DD 만 복사하고 발송 때 _dParseDate 로 연도를 다시 짐작해
+  //   (오늘 기준 120일 규칙) 8~12개월 뒤 날짜가 한 해 일찍 저장되고, 「판매 티켓 연결」 가드도 그 회차를 못 찾았다.
+  //   업로드 폼의 연도(_tuSelectedDateYear)도 원상복구한다(종전엔 초대에서 고른 연도가 업로드 폼에 남았다).
+  var prevDate = _tuSelectedDate, prevYear = _tuSelectedDateYear;
+  _tuSelectedDate = null; _tuSelectedDateYear = null;
   tuOpenCal();
   // tuOpenCal 은 모달 열기만 함 → 사용자가 선택하면 tuConfirmDate 가 호출됨
   // 우리는 _tuSelectedDate 가 변하면 가져오기 위해 잠시 후 polling 또는 wrapping.
   // 간단 우회: tuConfirmDate 직후 _riDate 동기화하는 patch 를 setInterval 로.
   var _polling = setInterval(function(){
-    if(_tuSelectedDate && _tuSelectedDate !== prevDate){
-      _riDate = _tuSelectedDate;
-      document.getElementById('riDateBtnText').textContent = _tuSelectedDate;
-      _tuSelectedDate = prevDate;  // 원상복구
+    if(_tuSelectedDate){
+      var _y = parseInt(_tuSelectedDateYear, 10);
+      _riDate = (_y >= 2020 && _y <= 2100) ? (_y + '.' + _tuSelectedDate) : _tuSelectedDate;
+      document.getElementById('riDateBtnText').textContent = _riDate;
+      _tuSelectedDate = prevDate; _tuSelectedDateYear = prevYear;  // 원상복구
       clearInterval(_polling);
     }
   }, 200);
-  setTimeout(function(){ clearInterval(_polling); }, 60000);
+  setTimeout(function(){ clearInterval(_polling); if(!_tuSelectedDate && prevDate){ _tuSelectedDate = prevDate; _tuSelectedDateYear = prevYear; } }, 60000);
 }
 
 function riOpenTimeWheel(){
@@ -45560,8 +45566,13 @@ async function riSubmit(){
     var u = (await window.sb.auth.getUser()).data.user;
     if(!u){ showToast('⚠','인증 필요','다시 로그인 해주세요'); return; }
 
-    // 🆕 연도 보존: 캘린더가 MM.DD 만 주므로, 발송 시 연도 포함 'YYYY.MM.DD' 로 저장.
-    //   예약은 항상 미래 → 과거로 보이는 MM.DD 는 내년으로 롤포워드(_dParseDate)되어 정확.
+    // 🆕 연도 보존: 발송 시 연도 포함 'YYYY.MM.DD' 로 저장.
+    //   🔧 2026-10-19 연도 없는 'MM.DD' 를 더는 짐작하지 않는다(_dParseDate 의 오늘 기준 120일 규칙이 8~12개월 뒤 날짜를 한 해 일찍 만들었다).
+    //   날짜 고르기·캘린더·티켓 연결이 이제 늘 연도를 준다 — 그래도 연도가 없으면 다시 고르게 한다.
+    if(String(_riDate || '').split(/[.\-\/]/).length < 3){
+      showToast('⚠','날짜를 다시 선택','방문 날짜의 연도를 알 수 없어요 — 날짜를 다시 골라 주세요');
+      return;
+    }
     var _riVisitDate = _riDate;
     var _riVd = _dParseDate(_riDate);
     if(_riVd){
@@ -50820,16 +50831,24 @@ window._isTicketExpired = _isTicketExpired;
 function _tkAnchorOf(t){
   var c = t && t.createdAt ? new Date(t.createdAt) : null;
   if(c && !isNaN(c.getTime())) return c;
+  var rg = String((t && t.regDate) || '');   // 업로드 때 적힌 'YYYY-MM-DD'
+  if(/^\d{4}-\d{2}-\d{2}/.test(rg)){ var r2 = new Date(rg.slice(0, 10) + 'T12:00:00+09:00'); if(!isNaN(r2.getTime())) return r2; }
   var n = Number(t && t.id);
   if(isFinite(n) && n >= 1577836800000 && n < 4102444800000) return new Date(Math.floor(n));   // 2020 ~ 2100 의 ms 시각인 id
   return new Date();
 }
+function _tkIsLeap(y){ return (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0; }
+// 기준일(KST 날짜) 30일 전 이후의 첫 m월 d일의 연도 — 서버 _taam_mmdd_year 와 같은 식(기기 시간대와 무관하게 KST 로 센다)
 function _tkInferYear(m, d, anchor){
   var a = (anchor instanceof Date && !isNaN(anchor.getTime())) ? anchor : new Date();
-  var base = new Date(a.getFullYear(), a.getMonth(), a.getDate() - 30);
-  var y = base.getFullYear();
-  var dim = new Date(y, m, 0).getDate();   // 그 해 그 달의 말일 — 2/29 는 평년엔 비교만 2/28 로
-  if(new Date(y, m - 1, Math.min(d, dim)) < base) y++;
+  var k = new Date(a.getTime() + 9 * 3600 * 1000);   // KST 의 연·월·일을 UTC 필드로 읽는다
+  var base = Date.UTC(k.getUTCFullYear(), k.getUTCMonth(), k.getUTCDate() - 30);
+  var y = new Date(base).getUTCFullYear();
+  if(m === 2 && d === 29){   // 2/29 는 윤년에만 — 기준일 뒤 첫 윤년
+    while(!_tkIsLeap(y) || Date.UTC(y, 1, 29) < base) y++;
+    return y;
+  }
+  if(Date.UTC(y, m - 1, d) < base) y++;
   return y;
 }
 window._tkInferYear = _tkInferYear; window._tkAnchorOf = _tkAnchorOf;
@@ -55577,6 +55596,7 @@ var TX_MAP = {
   '자리 있음':['Available','空席あり'],
   '마감':['Sold out','満席'],
   '기한 만료':['Expired','期限切れ'],
+  '지난 일정입니다':['This date has already passed','この日程は終了しました'],
   '카운터석':['Counter seats','カウンター席'],
   '주소 복사':['Copy address','住所をコピー'],
   '취소 규정':['Cancellation policy','キャンセル規定'],
@@ -63663,7 +63683,9 @@ function partnerCalRender() {
 
 function partnerCalSelect(dateStr) {
   _partnerCalSelectedDate = dateStr; partnerCalRender();
-  var tickets = ticketDB.filter(function(t){ return t.date===dateStr&&String(t.restId)===String(_currentAdminRestId)&&t.status==='active'; });
+  // 🔧 2026-10-19 연도까지 맞춘다 — 월·일만 비교하면 2026·2027 같은 날 회차가 한 칸에 섞였다
+  var _pd = parseInt(String(dateStr).split('.')[1], 10);
+  var tickets = ticketDB.filter(function(t){ return ((typeof _tkSameDay === 'function') ? _tkSameDay(t, _partnerCalYear, _partnerCalMonth + 1, _pd) : t.date===dateStr)&&String(t.restId)===String(_currentAdminRestId)&&t.status==='active'; });
   var el = document.getElementById('partnerCalDetail');
   if(!tickets.length){ el.innerHTML='<div class="tcal-empty-day">'+dateStr+' — 티켓 없음</div>'; return; }
   el.innerHTML = '<div class="tcal-detail-header">'+dateStr+' 티켓 현황</div>'
@@ -63674,7 +63696,7 @@ function partnerCalSelect(dateStr) {
       return '<div class="tcal-ticket-card"><div class="tcal-ticket-top">'
         +'<div class="tcal-ticket-name">'+_raEsc(t.rest)+'</div>'
         +'<div class="tcal-ticket-meta">'
-        +'<div class="tcal-ticket-kv"><div class="tcal-ticket-key">DATE</div><div class="tcal-ticket-val">'+t.date+'</div></div>'
+        +'<div class="tcal-ticket-kv"><div class="tcal-ticket-key">DATE</div><div class="tcal-ticket-val">'+((typeof _tkFullDate === 'function') ? _tkFullDate(t) : t.date)+'</div></div>'
         +'<div class="tcal-ticket-kv"><div class="tcal-ticket-key">TIME</div><div class="tcal-ticket-val">'+t.time+'</div></div>'
         +'<div class="tcal-ticket-kv"><div class="tcal-ticket-key">총 좌석</div><div class="tcal-ticket-val">'+total+'석</div></div>'
         +'<div class="tcal-ticket-kv"><div class="tcal-ticket-key">잔여</div><div class="tcal-ticket-val '+(Math.max(0,total-usedPax)===0?'sold':'')+'">'+Math.max(0,total-usedPax)+'석</div></div>'
