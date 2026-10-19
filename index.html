@@ -7552,7 +7552,7 @@ function _plRenderPurpose(){
     return '<button type="button" onclick="payLinkPurpose(\'' + k + '\')" style="flex:1;padding:9px 6px;border-radius:10px;border:1.5px solid ' + (on ? '#1a1a18' : '#e0ddd8') + ';background:' + (on ? '#1a1a18' : '#fff') + ';color:' + (on ? '#fff' : '#666') + ';font-family:inherit;font-size:12px;font-weight:800;cursor:pointer;">' + lab + '</button>'; }).join('');
 }
 function payLinkPurpose(k){ _pl.purpose = k; _pl.override = false; _pl.price = null; _pl.cur = 'KRW'; _pl.member = null; _pl.v = {}; _pl.fxBy = {}; var r = document.getElementById('plResult'); if (r) r.style.display = 'none'; _plRenderPurpose(); _plRenderForm(); }   // 용도를 바꾸면 통화는 원화로 — 지난 용도의 외화·환율이 남아 막히지 않게
-function _plCollect(){ var v = _pl.v || {}; ['plName','plPhone','plPax','plAmount','plMemo','plFx','plTotal','plFee','plNote'].forEach(function(id){ var el = document.getElementById(id); if (el) v[id] = el.value; }); _pl.v = v;
+function _plCollect(){ var v = _pl.v || {}; ['plName','plPhone','plPax','plAmount','plMemo','plFx','plTotal','plFee','plNote','plPartMeal','plPartAgency','plPartWine'].forEach(function(id){ var el = document.getElementById(id); if (el) v[id] = el.value; }); _pl.v = v;
   var fxEl = document.getElementById('plFx'); if (fxEl && _pl.cur !== 'KRW') { _pl.fxBy = _pl.fxBy || {}; _pl.fxBy[_pl.cur] = fxEl.value; } }   // 다시 그리기 전에 적어 둔 값을 거둔다(통화·회원을 바꿀 때 지워지던 것 · 적대 리뷰) · 환율은 통화별로(회원 선택·해제 때도 — 3차)
 function _plV(id, dflt){ var v = _pl.v || {}; return (v[id] !== undefined && v[id] !== '') ? v[id] : dflt; }
 function _plInp(id, type, extra, val){ return '<input id="' + id + '" type="' + (type || 'text') + '" ' + (extra || '') + ' value="' + _plEsc(val == null ? '' : val) + '" style="width:100%;box-sizing:border-box;padding:9px 10px;border:1px solid #e0dcd4;border-radius:9px;font-family:inherit;font-size:14px;font-weight:700;color:#1a1a18;">'; }
@@ -7560,7 +7560,7 @@ function _plLab(t){ return '<div style="font-size:10.5px;font-weight:700;color:#
 function _plCurSeg(){ return '<div style="display:flex;gap:6px;">' + ['KRW', 'USD', 'JPY'].map(function(c){ var on = _pl.cur === c; return '<button type="button" onclick="payLinkCur(\'' + c + '\')" style="flex:1;padding:8px;border-radius:9px;border:1.5px solid ' + (on ? '#1a1a18' : '#e0ddd8') + ';background:' + (on ? '#1a1a18' : '#fff') + ';color:' + (on ? '#fff' : '#666') + ';font-family:inherit;font-size:12px;font-weight:800;cursor:pointer;">' + { KRW: '₩ 국내', USD: '$ 해외', JPY: '¥ 해외' }[c] + '</button>'; }).join('') + '</div>'
   + (_pl.cur !== 'KRW' ? _plLab('적용 환율 (1' + (_pl.cur === 'USD' ? '$' : '¥') + ' = ₩) — 설정의 적용환율이 기본값 · 이 링크에 못 박힙니다') + _plInp('plFx', 'text', 'inputmode="decimal" oninput="if(_pl.purpose===\'ticket\')_plTicketPreview()"', ((_pl.fxBy || {})[_pl.cur]) || (_plFxDefault(_pl.cur) || '')) : ''); }
 function payLinkCur(c){ _plCollect();   // 통화별 환율은 _plCollect 가 기억한다
-  _pl.cur = c; _pl.price = null; _pl.override = false; _pl.overridePre = null; if (_pl.v) { delete _pl.v.plTotal; delete _pl.v.plNote; }   // 통화를 바꾸면 금액 수정 상태·입력값도 푼다(₩ 숫자가 $ 칸에 미리 채워지던 것 · 적대 리뷰). 자유 금액 칸은 2차 리뷰 ⑨ 결정대로 유지한다
+  _pl.cur = c; _pl.price = null; _pl.override = false; _pl.overridePre = null; _pl.partsPre = null; if (_pl.v) { delete _pl.v.plTotal; delete _pl.v.plNote; delete _pl.v.plPartMeal; delete _pl.v.plPartAgency; delete _pl.v.plPartWine; }   // 통화를 바꾸면 금액 수정 상태·입력값도 푼다(₩ 숫자가 $ 칸에 미리 채워지던 것 · 적대 리뷰). 자유 금액 칸은 2차 리뷰 ⑨ 결정대로 유지한다
   _plRenderForm(); }
 function _plMemberBox(required){
   var m = _pl.member;
@@ -7705,33 +7705,92 @@ function payLinkOverride(){ _pl.override = true; var o = document.getElementById
 //   외화 정가는 확정 해외 정가 기준(_plTicketQuoteNow = 서버 taam_ticket_price_fx). 정가와 같은 금액은 수정이 아니다.
 function _plTicketListKrw(){ var t = (window.ticketDB || []).find(function(x){ return String(x.id) === String(_pl.ticketId); }); if (!t) return 0;
   var m = parseInt(t.mealFee || t.meal_fee) || 0, a = parseInt(t.agencyFee || t.agency_fee) || 0, w = parseInt(t.wineMin || t.wine_min) || 0, pax = parseInt((document.getElementById('plPax') || {}).value, 10) || 1; return (m + a + w) * pax; }
-function _plOverrideLabHtml(q){
-  return '받을 금액 (' + { KRW: '원', USD: '$ · 센트까지', JPY: '¥' }[_pl.cur] + ') * — 정가 ' + (q ? _plMoney(_pl.cur, q.pay) + (_pl.cur !== 'KRW' ? ' (' + (q.fixedCount ? '확정 해외 정가 ' + q.fixedCount + '항목' : '환율 환산') + ' · 원화 정가 ₩' + Number(q.list).toLocaleString() + ')' : '') : '?');
+// 🆕 2026-10-19 항목별 금액 — 1인 기준 식사비·대행비·주류 미니멈(링크 통화)을 따로 적고 합계 × 인원 = 받을 금액(서버 taam_pay_link_create 가 같은 식으로 다시 센다).
+//   대행비는 환불 견적 D-31 이 빼는 금액이 된다(payload.override_parts). 정가 항목 그대로면 수정이 아니다(외화 환산 센트 차이로 「수정」이 되지 않게).
+var _PL_PARTS = [['meal', 'plPartMeal', '식사비'], ['agency', 'plPartAgency', '대행비'], ['wine', 'plPartWine', '주류 미니멈']];
+function _plPartRound(v){ return _pl.cur === 'USD' ? _plRound2(v) : Math.round(v); }
+// 정가 항목(1인 · 링크 통화) — 원화는 회차 요금, 외화는 확정 해외 정가 또는 원화 ÷ 환율(서버와 같은 식). 외화인데 환율이 없으면 null
+function _plListParts(t, cur, fx){
+  if (!t) return null;
+  var m = parseInt(t.mealFee || t.meal_fee) || 0, a = parseInt(t.agencyFee || t.agency_fee) || 0, w = parseInt(t.wineMin || t.wine_min) || 0;
+  if (cur === 'KRW') return { meal: m, agency: a, wine: w };
+  var q = _plTicketFxQuote(t, 1, cur, fx); if (!q) return null;
+  var out = { meal: 0, agency: 0, wine: 0 };
+  (q.parts || []).forEach(function(c){ out[c.comp] = c.fixed ? Number(c.per) : Number(c.conv); });
+  return out;
 }
+function _plListPartsNow(){
+  var t = (window.ticketDB || []).find(function(x){ return String(x.id) === String(_pl.ticketId); }); if (!t) return null;
+  var fxEl = document.getElementById('plFx'), fx = _pl.cur === 'KRW' ? 1 : (parseFloat(String(fxEl ? fxEl.value : _plV('plFx', '')).replace(/,/g, '')) || 0);
+  return _plListParts(t, _pl.cur, fx);
+}
+// 지금 적힌 항목 — 빈 칸은 0 · 음수·숫자 아님은 ok=false · 통화 단위로 반올림 · total = (합) × 인원
+function _plPartsNow(){
+  var pax = Math.max(1, parseInt((document.getElementById('plPax') || {}).value, 10) || 1), out = { ok: true, pax: pax };
+  _PL_PARTS.forEach(function(d){
+    var raw = String(((document.getElementById(d[1]) || {}).value || '')).replace(/,/g, '').trim();
+    var n = raw === '' ? 0 : Number(raw);
+    if (!isFinite(n) || n < 0) { out.ok = false; n = 0; }
+    out[d[0]] = _plPartRound(n);
+  });
+  out.per = _plPartRound(out.meal + out.agency + out.wine);
+  out.total = _plPartRound(out.per * pax);
+  return out;
+}
+function _plPartStr(v){ return (v == null || !isFinite(v)) ? '' : String(v); }
 function payLinkTicketOverride(){
   if (!_pl.isSuper) return;
   _pl.override = true; _plCollect();
   var o = document.getElementById('plOverrideT'); if (!o) return;
-  var q = _plTicketQuoteNow(), pre = q ? String(q.pay) : '';
-  _pl.overridePre = pre;
+  var lp = _plListPartsNow(), unit = { KRW: '원', USD: '$ · 센트까지', JPY: '¥' }[_pl.cur];
+  _pl.partsPre = { meal: lp ? _plPartStr(lp.meal) : '', agency: lp ? _plPartStr(lp.agency) : '', wine: lp ? _plPartStr(lp.wine) : '' };
+  var cells = _PL_PARTS.map(function(d){
+    return '<div>' + _plLab(d[2]) + _plInp(d[1], 'text', 'inputmode="decimal" oninput="_plPartsSumRefresh()"', _plV(d[1], _pl.partsPre[d[0]]))
+      + '<div id="' + d[1] + 'List" style="font-size:10px;color:#a8a29a;margin-top:2px;">' + (lp ? '정가 ' + _plMoney(_pl.cur, lp[d[0]]) : '') + '</div></div>';
+  }).join('');
   o.style.display = 'block';
   o.innerHTML = '<div style="margin-top:6px;padding:10px 12px;border:1px solid #eee5d6;border-radius:10px;background:#fbf8f2;">'
-    + '<div id="plOverrideLab" style="font-size:10.5px;font-weight:700;color:#888;margin:10px 0 4px;">' + _plOverrideLabHtml(q) + '</div>' + _plInp('plTotal', 'text', 'inputmode="decimal"', _plV('plTotal', pre))
+    + '<div style="font-size:10.5px;font-weight:800;color:#6b645b;margin:2px 0 2px;">항목별 금액 · 1인 기준 (' + unit + ')</div>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">' + cells + '</div>'
+    + '<div id="plPartsSum" style="margin-top:8px;padding:8px 10px;border-radius:9px;background:#fff;border:1px solid #eee5d6;font-size:12.5px;color:#1a1a18;line-height:1.6;"></div>'
     + _plLab('사유 메모 (정가와 다르면 필수 · 회원에게 안 보임)') + _plInp('plNote', 'text', 'maxlength="80" placeholder="예: 와인 미니멈 면제 · 2인 특약가"', _plV('plNote', ''))
-    + '<div style="font-size:10.5px;color:#a8a29a;margin-top:4px;line-height:1.5;">정가와 같은 금액이면 수정으로 치지 않습니다(메모만 남습니다). 외화는 환율로 원화 환산해 기록합니다. 좌석 홀드·회원 연결·환불 규정은 그대로 — 결제 금액만 바뀝니다. 인원·회차·환율을 바꾸면 정가가 다시 채워집니다(직접 고친 금액은 그대로).</div>'
+    + '<div style="font-size:10.5px;color:#a8a29a;margin-top:4px;line-height:1.5;">받을 금액 = (식사비 + 대행비 + 주류 미니멈) × 인원. 빈 칸은 0 입니다. 정가 항목 그대로면 수정이 아닙니다. 적은 대행비는 환불(방문 31일 전까지) 때 빼는 금액이 됩니다. 외화는 환율로 원화 환산해 기록합니다. 인원·회차·환율을 바꾸면 손대지 않은 칸은 정가로 다시 채워집니다. 좌석 홀드·회원 연결은 그대로입니다.</div>'
     + '<div style="margin-top:6px;"><button type="button" onclick="payLinkTicketOverrideOff()" style="' + _plBtn() + '">정가로 되돌리기</button></div></div>';
+  _plPartsSumRefresh();
 }
-// 인원·회차·환율이 바뀌면 열려 있는 금액 수정 블록의 정가 표시와(손대지 않은) 미리 채운 금액을 따라 바꾼다 — 1인 정가가 3인 링크에 「수정」으로 실리던 것(적대 리뷰)
+// 합계 줄 — 1인 합계 × 인원 = 받을 금액 · 정가와 차이
+function _plPartsSumRefresh(){
+  var box = document.getElementById('plPartsSum'); if (!box) return;
+  var pp = _plPartsNow(), q = _plTicketQuoteNow(), lp = _plListPartsNow();
+  if (!pp.ok) { box.innerHTML = '<span style="color:#B23A2E;font-weight:700;">각 항목은 0 이상 숫자로 적어 주세요</span>'; return; }
+  var same = !!lp && pp.meal === lp.meal && pp.agency === lp.agency && pp.wine === lp.wine;
+  var html = '1인 ' + _plMoney(_pl.cur, pp.per) + ' × ' + pp.pax + '인 = 받을 금액 <b>' + _plMoney(_pl.cur, same && q ? q.pay : pp.total) + '</b>';
+  if (q) {
+    if (same) html += ' <span style="color:#1E7A46;font-weight:700;">정가 그대로</span>';
+    else {
+      var d = _plPartRound(pp.total - q.pay);
+      html += '<br><span style="color:#8a8580;">정가 ' + _plMoney(_pl.cur, q.pay) + (_pl.cur !== 'KRW' ? (q.fixedCount ? ' · 확정 해외 정가 ' + q.fixedCount + '항목' : ' · 환율 환산') : '') + '</span>'
+        + (d !== 0 ? ' <span style="color:#B45309;font-weight:800;">' + (d > 0 ? '+' : '−') + _plMoney(_pl.cur, Math.abs(d)) + '</span>' : ' <span style="color:#B45309;font-weight:800;">총액 같음 · 항목 조정</span>');
+    }
+  }
+  box.innerHTML = html;
+}
+// 인원·회차·환율이 바뀌면 손대지 않은 항목 칸은 새 정가로 다시 채우고 합계를 다시 센다(직접 고친 칸은 그대로) — 1인 정가가 3인 링크에 「수정」으로 실리던 것(적대 리뷰)
 function _plOverrideRefresh(){
   var o = document.getElementById('plOverrideT'); if (!o || !_pl.override || o.style.display === 'none') return;
-  var q = _plTicketQuoteNow(), pre = q ? String(q.pay) : '';
-  var lab = document.getElementById('plOverrideLab'); if (lab) lab.innerHTML = _plOverrideLabHtml(q);
-  var inp = document.getElementById('plTotal');
-  if (inp && (inp.value === '' || inp.value === String(_pl.overridePre || ''))) inp.value = pre;
-  _pl.overridePre = pre;
+  var lp = _plListPartsNow(), pre = _pl.partsPre || {};
+  _PL_PARTS.forEach(function(d){
+    var el = document.getElementById(d[1]), np = lp ? _plPartStr(lp[d[0]]) : '';
+    if (el && (el.value === '' || el.value === String(pre[d[0]] == null ? '' : pre[d[0]]))) el.value = np;
+    pre[d[0]] = np;
+    var hint = document.getElementById(d[1] + 'List'); if (hint) hint.textContent = lp ? '정가 ' + _plMoney(_pl.cur, lp[d[0]]) : '';
+  });
+  _pl.partsPre = pre;
+  _plPartsSumRefresh();
 }
-function payLinkTicketOverrideOff(){ _pl.override = false; _pl.overridePre = null; var o = document.getElementById('plOverrideT'); if (o) { o.style.display = 'none'; o.innerHTML = ''; } if (_pl.v) { delete _pl.v.plTotal; delete _pl.v.plNote; } }
+function payLinkTicketOverrideOff(){ _pl.override = false; _pl.overridePre = null; _pl.partsPre = null; var o = document.getElementById('plOverrideT'); if (o) { o.style.display = 'none'; o.innerHTML = ''; } if (_pl.v) { delete _pl.v.plTotal; delete _pl.v.plNote; delete _pl.v.plPartMeal; delete _pl.v.plPartAgency; delete _pl.v.plPartWine; } }
 window.payLinkTicketOverride = payLinkTicketOverride; window.payLinkTicketOverrideOff = payLinkTicketOverrideOff; window._plOverrideRefresh = _plOverrideRefresh;
+window._plPartsSumRefresh = _plPartsSumRefresh; window._plListParts = _plListParts; window._plPartsNow = _plPartsNow;
 async function payLinkMemberSearch(){
   var q = ((document.getElementById('plMemberQ') || {}).value || '').trim(), res = document.getElementById('plMemberRes'); if (!res) return;
   if (q.length < 2) { res.innerHTML = ''; return; }
@@ -7763,13 +7822,18 @@ async function payLinkCreate(){
     if (_pl.member) p.user_id = _pl.member.id;
     var _q = _plTicketQuoteNow();   // 서버와 같은 식의 정가(외화는 확정 해외 정가 기준) — 비교·사후 검증에 쓴다
     _pl.expect = { pay: _q ? _q.pay : null, override: false };
-    if (_pl.override && _pl.isSuper) {   // 🆕 2026-10-19 금액 수동 설정 — 정가와 다르면 서버가 사유를 요구한다
-      var ttot = parseFloat(val('plTotal').replace(/,/g, ''));
-      if (!(ttot > 0)) { showToast('⚠', '금액 확인', '받을 금액을 0보다 크게 적어주세요'); return; }
-      var _tt = _pl.cur === 'USD' ? _plRound2(ttot) : Math.round(ttot);   // 서버 반올림과 같게 비교(센트 반올림 차이로 「수정」이 되던 것)
-      if (!_q || _tt !== _q.pay) { if (!val('plNote')) { showToast('⚠', '사유 메모 필요', '정가와 다르게 받는 이유를 적어주세요'); return; } }
-      p.total = ttot; if (val('plNote')) p.note = val('plNote');
-      _pl.expect = { pay: _tt, override: !_q || _tt !== _q.pay };
+    if (_pl.override && _pl.isSuper) {   // 🆕 2026-10-19 금액 수동 설정 — 항목별(식사·대행·주류 1인) × 인원 · 정가 항목과 다르면 서버가 사유를 요구한다
+      var _pp = _plPartsNow();
+      if (!_pp.ok) { showToast('⚠', '금액 확인', '식사비·대행비·주류 미니멈을 0 이상 숫자로 적어주세요'); return; }
+      if (!(_pp.total > 0)) { showToast('⚠', '금액 확인', '받을 금액이 0보다 커야 합니다'); return; }
+      var _lp = _plListPartsNow();
+      var _same = !!_lp && _pp.meal === _lp.meal && _pp.agency === _lp.agency && _pp.wine === _lp.wine;   // 정가 항목 그대로 — 수정 아님(정가로 보낸다)
+      if (!_same) {
+        if (!val('plNote')) { showToast('⚠', '사유 메모 필요', '정가와 다르게 받는 이유를 적어주세요'); return; }
+        p.parts = { meal: _pp.meal, agency: _pp.agency, wine: _pp.wine }; p.total = _pp.total;
+        _pl.expect = { pay: _pp.total, override: !_q || _pp.total !== _q.pay };
+      }
+      if (val('plNote')) p.note = val('plNote');
     }
   } else if (purpose === 'membership') {
     if (!_pl.member) { showToast('⚠', '회원 필요', '멤버십 링크는 회원을 골라야 합니다'); return; }
@@ -7798,6 +7862,8 @@ async function payLinkCreate(){
       else if (m.indexOf('OVERRIDE_NOTE_REQUIRED') >= 0) showToast('⚠', '사유 메모 필요', '금액을 바꾸면 사유를 적어야 합니다');
       else if (m.indexOf('PRICE_OVERRIDE_FORBIDDEN') >= 0) showToast('⚠', '금액 수정 권한 없음', '티켓 금액 수정은 슈퍼어드민만 할 수 있습니다');
       else if (m.indexOf('BAD_AMOUNT') >= 0) showToast('⚠', '금액 확인', '0보다 큰 금액이어야 합니다');
+      else if (m.indexOf('BAD_PARTS') >= 0) showToast('⚠', '항목 금액 확인', '식사비·대행비·주류 미니멈은 0 이상 숫자여야 합니다');
+      else if (m.indexOf('PARTS_TOTAL_MISMATCH') >= 0) showToast('⚠', '합계가 맞지 않습니다', '항목 합 × 인원과 받을 금액이 다릅니다 — 화면을 새로 고친 뒤 다시 시도하세요');
       else if (m.indexOf('NO_PRICE_RULE') >= 0) showToast('⚠', '규정 금액 없음', '이 통화는 총액·연회비를 직접 적고 사유를 남기세요');
       else if (m.indexOf('FX_MISSING') >= 0) showToast('⚠', '환율 필요', '외화 금액에는 환율이 있어야 합니다');
       else showToast('❌', '만들지 못했습니다', m.slice(0, 100));
@@ -7836,7 +7902,8 @@ function _plShowResult(d){
   box.style.display = 'block';
   box.innerHTML = '<div style="margin-top:14px;padding:14px;border:1.5px solid #c9a96e;border-radius:14px;background:#fffdf7;text-align:center;">'
     + '<div style="font-size:14px;font-weight:800;color:#1a1a18;">🔗 링크가 만들어졌습니다</div>'
-    + '<div style="font-size:12.5px;color:#5a554f;margin-top:4px;">' + _plEsc(d.title || '') + (d.subtitle ? ' · ' + _plEsc(d.subtitle) : '') + ' · <b>' + _pl.last.amount + '</b>' + (d.price_override ? ' <span style="font-size:10.5px;color:#B45309;font-weight:800;">(금액 수정)</span>' : '') + (cur !== 'KRW' ? ' <span style="color:#9a9486;">(₩' + Number(d.amount_krw || 0).toLocaleString() + ')</span>' : '') + '</div>'
+    + '<div style="font-size:12.5px;color:#5a554f;margin-top:4px;">' + _plEsc(d.title || '') + (d.subtitle ? ' · ' + _plEsc(d.subtitle) : '') + ' · <b>' + _pl.last.amount + '</b>' + (d.price_override ? ' <span style="font-size:10.5px;color:#B45309;font-weight:800;">(금액 수정)</span>' : '')
+    + (d.override_parts && typeof d.override_parts === 'object' ? '<br><span style="font-size:11px;color:#8a8580;">1인 식사 ' + _plMoney(cur, d.override_parts.meal) + ' + 대행 ' + _plMoney(cur, d.override_parts.agency) + ' + 주류 ' + _plMoney(cur, d.override_parts.wine) + ' × ' + (parseInt(d.override_parts.pax, 10) || 1) + '인</span>' : '') + (cur !== 'KRW' ? ' <span style="color:#9a9486;">(₩' + Number(d.amount_krw || 0).toLocaleString() + ')</span>' : '') + '</div>'
     + '<div style="width:170px;height:170px;margin:12px auto 6px;">' + ((typeof _qrSvg === 'function' && _qrSvg(url)) || '') + '</div>'
     + '<div style="font-size:10.5px;color:#9a9486;word-break:break-all;">' + _plEsc(url) + '</div>'
     + '<div style="display:flex;gap:8px;margin-top:12px;">'
@@ -45705,7 +45772,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.18-j';
+var TAAM_WEB_BUILD = '2026.10.19-a';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){

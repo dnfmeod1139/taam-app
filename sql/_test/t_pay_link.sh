@@ -237,6 +237,44 @@ ok "환율 없는 외화 행은 FX_MISSING(1 로 지어내지 않는다)" "1" "$
 ok "목록 RPC: order_id · price_override 키 (C10 결제 시작 · 금액 수정)" "KSK-started|true|false" "$($P -c "$S select (j->>'order_id')||'|'||(j->>'price_override') from public.taam_pay_link_list(100) j where j->>'id'='$C10'")|$($P -c "$S select j->>'price_override' from public.taam_pay_link_list(100) j where j->>'id'='$C13'")"
 outo2=$($P -f supabase/migrations/20261019_link_invite_ovs_prices.sql 2>&1)
 ok "확정 해외 정가 마이그레이션 두 번째 RUN: ❌ 0 · 「이미 새 판」" "0|1" "$(echo "$outo2" | grep -c '❌')|$(echo "$outo2" | grep -c '이미 새 판')"
+# ══ 2026-10-19 항목별 금액(식사·대행·주류 1인 × 인원) — payload.override_parts · 환불 견적이 그 대행비를 뺀다 ══
+outp=$($P -f supabase/migrations/20261019_pay_link_override_parts.sql 2>&1)
+ok "항목별 금액 마이그레이션: 오류 없음 · ❌ 0 · 교체 ✅ 2 · ③④ ✅" "|0|2|2" "$(echo "$outp" | grep -E "^ERROR|^psql:.*ERROR" | head -1)|$(echo "$outp" | grep -c '❌')|$(echo "$outp" | grep -c '✅ 교체')|$(echo "$outp" | grep -cE '^ *(③|④).*✅')"
+$P <<'SQL' >/dev/null
+insert into public.ticket_products(id,rest_id,rest_name,date,time,total_pax,meal_fee,agency_fee,wine_min,type_class) values
+  ('tp7','b1000000-0000-4000-8000-000000000001','마츠카와','05.04','18:00',20,500000,100000,200000,'Standard'),
+  ('tp8','b1000000-0000-4000-8000-000000000001','마츠카와','05.05','18:00',20,750000,150000,350000,'Standard');
+update public.ticket_products set ovs_prices = '{"usd":{"meal":350,"agency":70,"wine":140}}'::jsonb where id = 'tp7';
+SQL
+PJ="'ticket_id','tp7','pax',2,'visit_date','2027.05.04','visit_time','18:00'"
+r=$($P -c "$S select public.taam_pay_link_create('ticket', jsonb_build_object($PJ,'name','PartsKrw','currency','KRW','parts',jsonb_build_object('meal',450000,'agency',80000,'wine',200000),'total',1460000,'note','식사 할인 · 대행비 조정'))::text")
+CP1=$(echo "$r" | grep -oE '"charge_id": "[0-9a-f-]+"' | grep -oE '[0-9a-f-]{36}')
+ok "KRW 항목별(식사 450,000 + 대행 80,000 + 주류 200,000) × 2 = 1,460,000 · price_override · override_parts 저장 · 좌석 행 payAmount 없음" "1460000|true|80000|2|KRW|(없음)" \
+   "$($P -c "select c.amount_krw||'|'||(c.payload->>'price_override')||'|'||(c.payload->'override_parts'->>'agency')||'|'||(c.payload->'override_parts'->>'pax')||'|'||(c.payload->'override_parts'->>'currency') from public.kashikiri_charges c where c.id='$CP1'")|$($P -c "select coalesce(t.extra_data->>'payAmount','(없음)') from public.tickets t where t.extra_data->>'chargeId'='$CP1'")"
+ok "어드민 메모에 항목 내역 「(1인 식사 ₩450,000 + 대행 ₩80,000 + 주류 ₩200,000 × 2인)」" "1" "$($P -c "select count(*) from public.kashikiri_charge_admin where charge_id='$CP1' and note like '[금액 수정] 정가 ₩1,600,000 → ₩1,460,000 (1인 식사 ₩450,000 + 대행 ₩80,000 + 주류 ₩200,000 × 2인) · 식사 할인 · 대행비 조정'")"
+r=$($P -c "$S select public.taam_pay_link_create('ticket', jsonb_build_object($PJ,'name','PartsSame','currency','KRW','parts',jsonb_build_object('meal',500000,'agency',100000,'wine',200000)))::text")
+CP2=$(echo "$r" | grep -oE '"charge_id": "[0-9a-f-]+"' | grep -oE '[0-9a-f-]{36}')
+ok "정가 항목 그대로면 수정 아님 — 사유 없이 통과 · 정가 1,600,000 · override_parts 없음" "1600000|false|(없음)" "$($P -c "select c.amount_krw||'|'||coalesce(c.payload->>'price_override','false')||'|'||coalesce(c.payload->>'override_parts','(없음)') from public.kashikiri_charges c where c.id='$CP2'")"
+ok "항목 합 × 인원과 다른 total → PARTS_TOTAL_MISMATCH(홀드 안 남음)" "1" "$($P -c "$S select public.taam_pay_link_create('ticket', jsonb_build_object($PJ,'name','Mis','currency','KRW','parts',jsonb_build_object('meal',450000,'agency',80000,'wine',200000),'total',1500000,'note','x'))" 2>&1 | grep -c PARTS_TOTAL_MISMATCH)"
+ok "음수·숫자 아닌 항목 → BAD_PARTS · 합 0 → BAD_AMOUNT" "1|1|1" "$($P -c "$S select public.taam_pay_link_create('ticket', jsonb_build_object($PJ,'name','Neg','currency','KRW','parts',jsonb_build_object('meal',-1,'agency',0,'wine',0),'note','x'))" 2>&1 | grep -c BAD_PARTS)|$($P -c "$S select public.taam_pay_link_create('ticket', jsonb_build_object($PJ,'name','Abc','currency','KRW','parts',jsonb_build_object('meal','abc'),'note','x'))" 2>&1 | grep -c BAD_PARTS)|$($P -c "$S select public.taam_pay_link_create('ticket', jsonb_build_object($PJ,'name','Zero','currency','KRW','parts',jsonb_build_object('meal',0,'agency',0,'wine',0),'note','x'))" 2>&1 | grep -c BAD_AMOUNT)"
+ok "항목이 다른데 사유 없으면 OVERRIDE_NOTE_REQUIRED · 매장 어드민은 PRICE_OVERRIDE_FORBIDDEN · 매장 어드민이 정가 항목 그대로 보내면 통과" "1|1|true" "$($P -c "$S select public.taam_pay_link_create('ticket', jsonb_build_object($PJ,'name','NoNote','currency','KRW','parts',jsonb_build_object('meal',450000,'agency',100000,'wine',200000)))" 2>&1 | grep -c OVERRIDE_NOTE_REQUIRED)|$($P -c "set taam.uid='$ADM'; set taam.super='0'; select public.taam_pay_link_create('ticket', jsonb_build_object($PJ,'name','AdmP','currency','KRW','parts',jsonb_build_object('meal',450000,'agency',100000,'wine',200000),'note','x'))" 2>&1 | grep -c PRICE_OVERRIDE_FORBIDDEN)|$($P -c "set taam.uid='$ADM'; set taam.super='0'; select j->>'ok' from public.taam_pay_link_create('ticket', jsonb_build_object($PJ,'name','AdmSame','currency','KRW','parts',jsonb_build_object('meal',500000,'agency',100000,'wine',200000))) j")"
+r=$($P -c "$S select public.taam_pay_link_create('ticket', jsonb_build_object($PJ,'name','Shuffle','currency','KRW','parts',jsonb_build_object('meal',550000,'agency',50000,'wine',200000),'note','대행비를 식사로'))::text")
+CP3=$(echo "$r" | grep -oE '"charge_id": "[0-9a-f-]+"' | grep -oE '[0-9a-f-]{36}')
+ok "총액은 정가와 같아도 대행비가 다르면 항목 저장(환불 기준) · price_override 는 false · 금액 1,600,000" "1600000|false|50000" "$($P -c "select c.amount_krw||'|'||coalesce(c.payload->>'price_override','false')||'|'||(c.payload->'override_parts'->>'agency') from public.kashikiri_charges c where c.id='$CP3'")"
+PU="'ticket_id','tp7','pax',2,'visit_date','2027.05.04','visit_time','18:00','currency','USD','fx',1400"
+r=$($P -c "$S select public.taam_pay_link_create('ticket', jsonb_build_object($PU,'name','PartsUsd','parts',jsonb_build_object('meal',300,'agency',50,'wine',140),'total',980,'note','해외 특약'))::text")
+CP4=$(echo "$r" | grep -oE '"charge_id": "[0-9a-f-]+"' | grep -oE '[0-9a-f-]{36}')
+ok "USD 항목별(\$300 + \$50 + \$140) × 2 = \$980.00 · 원화 round(980×1400) = 1,372,000 · override_parts agency 50" "980.00|1372000|50.00|true" "$($P -c "select c.pay_amount||'|'||c.amount_krw||'|'||(c.payload->'override_parts'->>'agency')||'|'||(c.payload->>'price_override') from public.kashikiri_charges c where c.id='$CP4'")"
+ok "USD 확정 정가 항목 그대로(\$350·\$70·\$140)면 수정 아님 · \$1,120.00" "1120.00|false" "$($P -c "$S select (j->>'pay_amount')||'|'||coalesce(j->>'price_override','false') from public.taam_pay_link_create('ticket', jsonb_build_object($PU,'name','UsdSame','parts',jsonb_build_object('meal',350,'agency',70,'wine',140))) j")"
+ok "확정 없는 회차(tp8) 3인 USD — 1인 환산 항목(\$543.48·\$108.70·\$253.62) 그대로면 수정 아님 · 센트 차이 없이 정가 \$2,717.39" "2717.39|false" "$($P -c "$S select (j->>'pay_amount')||'|'||coalesce(j->>'price_override','false') from public.taam_pay_link_create('ticket', jsonb_build_object('ticket_id','tp8','pax',3,'visit_date','2027.05.05','visit_time','18:00','currency','USD','fx',1380,'name','Conv3','parts',jsonb_build_object('meal',543.48,'agency',108.70,'wine',253.62))) j")"
+# 환불 견적 D-31 — 항목별로 적은 대행비를 뺀다
+$P -c "update public.kashikiri_charges set status='paid', approved_at=now()-interval '2 hours', payment_key='pkp'||left(id::text,6) where id in ('$CP1','$CP4')" >/dev/null
+ok "KRW 항목별 링크 D-31 환불 = 1,460,000 − 80,000×2 = 1,300,000 (정가 대행비 100,000 이 아니라)" "1300000|160000|d31_minus_agency" "$($P -c "select (q->>'refund_krw')||'|'||(q->>'agency_krw')||'|'||(q->>'policy') from public.taam_link_invite_refund_quote('$CP1') q")"
+ok "USD 항목별 링크 D-31 환불 = \$980 − \$50×2 = \$880.00 · 원화 1,232,000 · agency_krw 140,000" "880.00|1232000|140000" "$($P -c "select (q->>'refund_amount')||'|'||(q->>'refund_krw')||'|'||(q->>'agency_krw') from public.taam_link_invite_refund_quote('$CP4') q")"
+ok "항목 없는 링크는 종전대로 좌석 행 대행비(CP2 · 미결제라 not_paid)" "not_paid" "$($P -c "select q->>'policy' from public.taam_link_invite_refund_quote('$CP2') q")"
+ok "미결제 링크 금액 변경 뒤에도 override_parts 는 남는다(대행비 기준 유지)" "true|50000" "$($P -c "$S select j->>'changed' from public.taam_pay_link_set_amount('$CP3', 1550000, '추가 할인') j")|$($P -c "select c.payload->'override_parts'->>'agency' from public.kashikiri_charges c where c.id='$CP3'")"
+outp2=$($P -f supabase/migrations/20261019_pay_link_override_parts.sql 2>&1)
+ok "항목별 금액 마이그레이션 두 번째 RUN: 「이미 새 판」 2 · ❌ 0" "2|0" "$(echo "$outp2" | grep -c '이미 새 판')|$(echo "$outp2" | grep -c '❌')"
 out10=$($P -f supabase/migrations/20261019_pay_link_ticket_override.sql 2>&1)
 ok "금액 수정 마이그레이션 두 번째 RUN: ❌ 0 · 「이미 새 판」" "0|1" "$(echo "$out10" | grep -c '❌')|$(echo "$out10" | grep -c '이미 새 판')"
 psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1
