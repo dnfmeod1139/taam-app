@@ -566,6 +566,8 @@ on ticket_products, `20261005_ticket_products_status_recalc.sql`) — 점유 ≥
 - **초대 날짜 고르기가 연도를 버렸다**(같은 날 같이 고침): `riOpenCal` 이 `_tuSelectedDate`(MM.DD)만 복사하고 `riSubmit` 이 `_dParseDate` 로 다시 짐작 → 8~12개월 뒤 날짜가 **한 해 일찍** 저장되고
   「판매 티켓 연결」 가드가 그 회차를 못 찾았다. 이제 고른 연도를 함께 가져오고(업로드 폼 값은 원상복구) 연도 없는 날짜는 「날짜를 다시 선택」으로 막는다.
 - 그 밖에: 파트너 캘린더 날짜 고르기가 연도를 안 봤다(`partnerCalSelect` → `_tkSameDay`) · 결제 팝업 입구(`openTdPayPopup`)가 지난 회차를 연다면 막는다(「기한 만료 · 지난 일정입니다」 TX).
+- 적대 리뷰(4 렌즈 · 22 에이전트 → 9건 중 7건 기각 · 반영 3): 초대 날짜 폴러의 60초 「되살리기」가 closeTU 가 비운 업로드 폼에 지난 날짜를 숨겨 넣었다 → 되살리기 없음 · 폴러 하나(`window._riCalPoll`) ·
+  티켓 목록 글자가 `{date,dateYear}` 만 넘겨 올린 날을 잃었다 → `_popStoryDate(t)` · 편집이 `regDate` 를 오늘로 다시 적는다 → 기준일은 id 를 regDate 보다 먼저.
 - ⚠ 새 코드에서 방문일을 쓸 때: **연도를 짐작하는 식을 새로 쓰지 말 것** — `_tkYMD`/`_tkFullDate`/`_tkDateLabel` 을 쓴다. 저장은 언제나 `'YYYY.MM.DD'`(가드가 받쳐 준다).
 - 회귀: `bash sql/_test/t_ticket_date_year.sh`(24건 — 11건 모양 · 연말 경계 · 늦게 올림 · 구매 연도 일치/충돌 · 홀드 무시 · **upsert 가 2026 을 지킨다** · 회원 세션 · 2/29 · null · 재실행) ·
   스크래치 `yearless/yl_app.js`(가짜 오늘 10/19 · 12/20 · 3/1 — 관리자 캘린더 2027년 6월엔 진짜 2027 회차만) · `yearless/yl_app2.js`(앱=서버 140점 · 서울/LA 시간대 · 초대 연도 · 파트너 캘린더 · 결제 팝업).

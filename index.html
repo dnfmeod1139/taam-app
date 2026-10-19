@@ -44973,6 +44973,9 @@ function riOpenCal(){
   //   🔧 2026-10-19 고른 **연도**도 함께 가져온다. 종전엔 MM.DD 만 복사하고 발송 때 _dParseDate 로 연도를 다시 짐작해
   //   (오늘 기준 120일 규칙) 8~12개월 뒤 날짜가 한 해 일찍 저장되고, 「판매 티켓 연결」 가드도 그 회차를 못 찾았다.
   //   업로드 폼의 연도(_tuSelectedDateYear)도 원상복구한다(종전엔 초대에서 고른 연도가 업로드 폼에 남았다).
+  //   폴러는 하나만 — 열었다 닫고 다시 열면 앞 폴러를 먼저 거둔다(두 폴러가 서로의 값을 가져가던 것 · 적대 리뷰).
+  //   60초 안에 고르지 않고 닫으면 업로드 폼 값은 되살리지 않는다(종전과 같다) — 되살리면 그 사이 closeTU 가 비운 폼에 지난 날짜가 숨어 들어갔다.
+  if(window._riCalPoll){ clearInterval(window._riCalPoll); window._riCalPoll = null; }
   var prevDate = _tuSelectedDate, prevYear = _tuSelectedDateYear;
   _tuSelectedDate = null; _tuSelectedDateYear = null;
   tuOpenCal();
@@ -44985,10 +44988,11 @@ function riOpenCal(){
       _riDate = (_y >= 2020 && _y <= 2100) ? (_y + '.' + _tuSelectedDate) : _tuSelectedDate;
       document.getElementById('riDateBtnText').textContent = _riDate;
       _tuSelectedDate = prevDate; _tuSelectedDateYear = prevYear;  // 원상복구
-      clearInterval(_polling);
+      clearInterval(_polling); if(window._riCalPoll === _polling) window._riCalPoll = null;
     }
   }, 200);
-  setTimeout(function(){ clearInterval(_polling); if(!_tuSelectedDate && prevDate){ _tuSelectedDate = prevDate; _tuSelectedDateYear = prevYear; } }, 60000);
+  window._riCalPoll = _polling;
+  setTimeout(function(){ clearInterval(_polling); if(window._riCalPoll === _polling) window._riCalPoll = null; }, 60000);
 }
 
 function riOpenTimeWheel(){
@@ -47943,7 +47947,7 @@ function renderTicketList(){
       ? '<span style="font-size:9.5px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:#8a6d3b;background:#fdf8ef;border:1px solid #f0deb4;border-radius:4px;padding:2px 6px;">'+_raEsc(t.type)+'</span>'
       : '';
     var _dateTxt = (typeof _popStoryDate === 'function')
-      ? _popStoryDate({ date: t.date, dateYear: t.dateYear })
+      ? _popStoryDate(t)   // 🔧 2026-10-19 티켓 그대로 — {date,dateYear} 만 넘기면 올린 날(createdAt·id)이 빠져 연도 없는 회차가 오늘 기준으로 읽혔다(구분선은 2026 인데 글자는 2027)
       : ((typeof _tkFullDate === 'function' ? _tkFullDate(t) : t.date) || '');
     // 🆕 2026-09-21 연도가 바뀌는 자리에 구분선 — 2026·2027 이 섞여도 어느 해인지 놓치지 않는다
     var _yr = _tkYearOf(t), _yHead = '';
@@ -50825,16 +50829,16 @@ window._isTicketExpired = _isTicketExpired;
 //   「120일 넘게 지났으면 내년」이었다 — 날이 갈수록 지난 회차가 하나씩 내년 칸으로 넘어갔다
 //   (6/15~17 은 10/14 무렵, 7월 회차는 10월 말, 9·10월 회차는 1~2월에 넘어갈 차례였다).
 //   회차는 방문 **전에** 올린다 — 그래서 기준일 = 올린 날(createdAt). 기준일 30일 전 이후의 첫 그 날.
-//   createdAt 이 없으면(기기 캐시의 옛 객체) 회차 id — 업로드 때 Date.now() 로 만든 ms 시각이다(1780800733940 = 2026-06-07).
+//   createdAt 이 없으면(기기 캐시의 옛 객체) 회차 id — 업로드 때 Date.now() 로 만든 ms 시각이다(1780800733940 = 2026-06-07) · 그다음 regDate.
 //   그것도 아니면 오늘. 규칙은 이 한 곳 — 만료·정렬·캘린더가 같이 쓴다.
 //   서버는 같은 날 옛 회차에 연도를 채웠고(20261019_ticket_date_year.sql) 연도 없는 날짜를 더는 저장하지 않는다(가드).
 function _tkAnchorOf(t){
   var c = t && t.createdAt ? new Date(t.createdAt) : null;
   if(c && !isNaN(c.getTime())) return c;
-  var rg = String((t && t.regDate) || '');   // 업로드 때 적힌 'YYYY-MM-DD'
-  if(/^\d{4}-\d{2}-\d{2}/.test(rg)){ var r2 = new Date(rg.slice(0, 10) + 'T12:00:00+09:00'); if(!isNaN(r2.getTime())) return r2; }
   var n = Number(t && t.id);
-  if(isFinite(n) && n >= 1577836800000 && n < 4102444800000) return new Date(Math.floor(n));   // 2020 ~ 2100 의 ms 시각인 id
+  if(isFinite(n) && n >= 1577836800000 && n < 4102444800000) return new Date(Math.floor(n));   // 2020 ~ 2100 의 ms 시각인 id — 편집해도 안 바뀐다
+  var rg = String((t && t.regDate) || '');   // 'YYYY-MM-DD' — ⚠ 편집(finalUploadTicket)이 오늘로 다시 적으므로 id 뒤에 본다
+  if(/^\d{4}-\d{2}-\d{2}/.test(rg)){ var r2 = new Date(rg.slice(0, 10) + 'T12:00:00+09:00'); if(!isNaN(r2.getTime())) return r2; }
   return new Date();
 }
 function _tkIsLeap(y){ return (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0; }
