@@ -1018,8 +1018,12 @@ html.auto-login .splash .bottom-group{display:none !important}
 #magSheet .mg-grab i{display:block;width:38px;height:4px;border-radius:2px;background:rgba(255,255,255,.32)}
 #magSheet .mg-head{flex:none;display:flex;align-items:center;gap:10px;padding:2px 20px 10px;
   border-bottom:1px solid rgba(255,255,255,.10);cursor:pointer}
-#magSheet .mg-head .back{width:26px;font-size:19px;color:#DED9D3;cursor:pointer;display:none}
-#magSheet.day .mg-head .back{display:block}
+/* ‹ 는 글자가 6px 남짓이라 손가락이 조금만 비껴도 머리말·손잡이를 눌렀다(=시트가 닫혔다).
+   누르는 판만 44×44 로 키운다 — 글자 자리(x 21)·제목 자리·머리말 높이는 그대로 (2026-10-19) */
+#magSheet .mg-head .back{position:relative;z-index:1;box-sizing:border-box;width:44px;height:44px;
+  margin:-11px 2px -11px -20px;padding-left:20px;align-items:center;
+  font-size:19px;color:#DED9D3;cursor:pointer;display:none}
+#magSheet.day .mg-head .back{display:flex}
 #magSheet .mg-head .ttl{font-family:'Bodoni Moda',Didot,serif;font-weight:500;font-size:17px;color:#F2EDE7}
 #magSheet .mg-head .sub{font-family:'Oswald',sans-serif;font-size:9px;letter-spacing:.16em;color:#8D8781}
 #magSheet .mg-head .cnt{margin-left:auto;font-family:'Oswald',sans-serif;font-size:9.5px;
@@ -10850,12 +10854,12 @@ window.closePromoCarousel = function(){
     <div class="mag-hero" id="magHero"></div>
   </div>
 </div>
-<div id="magSheet" onclick="if(event.target&&event.target.className==='mg-dim')magSheetTo(0)">
+<div id="magSheet" onclick="magDimTap(event)">
   <div class="mg-dim"></div>
   <div class="mg-panel">
     <div class="mg-grab" id="magGrab"><i></i></div>
-    <div class="mg-head" onclick="var c=event.target.classList;if(!c.contains('back')&&!c.contains('mg-x'))magSheetCycle()">
-      <div class="back" onclick="magBackToCal()">‹</div>
+    <div class="mg-head" onclick="magHeadTap(event)">
+      <div class="back" role="button">‹</div>
       <div class="ttl" id="magSheetTitle"></div>
       <div class="sub" id="magSheetSub"></div>
       <div class="cnt" id="magSheetCnt"></div>
@@ -45775,7 +45779,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.19-a';
+var TAAM_WEB_BUILD = '2026.10.19-b';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -58325,6 +58329,8 @@ function pcalCloseTicket(){
   if(_pdMap){ try{ _pdMap.remove(); }catch(e){} _pdMap = null; _pdMarker = null; }
   // 결제를 끝내지 않고 나가면 잡아둔 좌석을 즉시 돌려준다 (기존 상세와 동일)
   if(typeof _tkReleaseHoldOnLeave === 'function'){ try{ _tkReleaseHoldOnLeave(); }catch(e){} }
+  // 상세의 ‹ 는 아래 시트의 어두운 띠 자리에 있다 — 닫은 직후 같은 자리 두 번째 탭이 시트를 닫지 않게 (2026-10-19)
+  try{ if(typeof _magNavMark === 'function') _magNavMark(); }catch(e){}
 }
 window.pcalCloseTicket = pcalCloseTicket;
 
@@ -58690,7 +58696,11 @@ function magRender(force){
   if(typeof _notifBellDotSync === 'function') _notifBellDotSync();   // 새로 그린 종에 점 상태를 입힌다
   // 시트 안 캘린더는 미리 채워 둔다 — 열 때 빈 판이 한 프레임 스치지 않는다.
   //   단계는 건드리지 않는다. 닫혀 있었으면 닫힌 채, 열려 있었으면 그 단계 그대로.
-  magShowCalendar();
+  //   🆕 2026-10-19: 날짜 목록을 보고 있으면 달력으로 바꾸지 않고 **그 날짜를 다시 그린다**(스크롤 유지).
+  //   이 함수는 티켓 동기화·포커스·Realtime 마다 뒤에서 불린다 — 목록이 말없이 달력으로 바뀌어
+  //   뒤로가기를 노린 탭이 제목(=닫기)에 떨어졌다. 그 날 자리가 없어졌거나 시트가 닫혀 있으면 종전대로 달력.
+  var _msd = document.getElementById('magSheet'), _dy = _magDayYMD;
+  if(!(_dy && _magDet > 0 && _msd && _msd.classList.contains('day') && _magPaintDay(_dy[0], _dy[1], _dy[2], true))) magShowCalendar();
   magSheetTo(_magDet);
 }
 window.magRender = magRender;
@@ -58987,10 +58997,30 @@ window.magOpenSheet = magOpenSheet;
 function magCloseSheet(){ magSheetTo(0); }
 window.magCloseSheet = magCloseSheet;
 
+// 🆕 2026-10-19 「날짜 목록에서 뒤로가기를 누르면 가끔 표지로 간다」 — 세 갈래였다.
+//   ① ‹ 가 26×22 판이고 그 둘레(머리말·손잡이·위 어두운 띠)가 전부 「닫기」였다 —
+//      머리말·손잡이 탭은 magSheetCycle() 이고 목록은 늘 전체(2)라 2 → 0 = 닫힘.
+//      손가락이 몇 px 비끼면 닫혔다(측정: 44×44 손끝 영역의 40~68% 가 닫힘).
+//   ② 뒤에서 도는 다시 그리기(티켓 동기화 · 포커스 · Realtime · 당겨서 새로고침 → magRender)가
+//      끝에서 magShowCalendar() 를 불러 목록을 말없이 달력으로 바꿨다 — ‹ 가 사라지고 제목이
+//      그 자리로 와서, 뒤로가기를 노린 탭이 제목(=닫기)에 떨어졌다.
+//   ③ 뒤로가기 직후 한 번 더 누르면(반사적 두 번째 탭) 같은 자리의 제목이 닫았다.
+//   → 목록에서는 머리말·손잡이·어두운 띠가 전부 「한 단계 뒤로(달력)」이고, 닫기는 × · 끌어내리기 ·
+//     달력 상태의 어두운 띠뿐이다. 다시 그리기는 보던 날짜 목록을 그 자리에서 다시 그린다(스크롤 유지).
+//     막 한 단계를 옮긴 뒤 400ms 안의 손잡이·어두운 띠 탭은 흘린다(두 번째 탭).
+var _magDayYMD = null;   // 지금 시트가 보여 주는 날짜 [y, m, d] — 달력이면 null
+var _magNavAt = 0;       // 마지막으로 단계를 옮긴 때 (날짜 열기 · 뒤로 · 상세 닫기)
+function _magNavMark(){ _magNavAt = Date.now(); }
+window._magNavMark = _magNavMark;
+function _magNavFresh(){ return (Date.now() - _magNavAt) < 400; }
+
 // 시트 안 · 캘린더 상태
 function magShowCalendar(){
   var s = document.getElementById('magSheet');
   if(s) s.classList.remove('day');
+  _magDayYMD = null;
+  var _b0 = document.getElementById('magSheetBody');
+  if(_b0) _b0._magDayHtml = null;   // 달력이 몸통을 덮어쓴다 — 다음 날짜 목록은 새로 그린다
   var byDate = _pcalByDate();
   var t = document.getElementById('magSheetTitle');
   var sub = document.getElementById('magSheetSub');
@@ -59003,19 +59033,54 @@ function magShowCalendar(){
   renderPhotoCalInto('magSheetBody', true);
 }
 window.magShowCalendar = magShowCalendar;
-function magBackToCal(){ magShowCalendar(); }
+function magBackToCal(){ _magNavMark(); magShowCalendar(); }
 window.magBackToCal = magBackToCal;
+
+// 머리말 탭 — 목록이면 한 단계 뒤로(달력), 달력이면 키우기만 한다(닫지 않는다).
+//   ‹ 를 조금 비껴 눌러도, 뒤로가기 직후 같은 자리를 한 번 더 눌러도 닫히지 않게.
+//   닫기는 × · 끌어내리기 · 어두운 띠 · 손잡이 탭(달력에서)으로 한다.
+function magHeadTap(ev){
+  var tg = ev && ev.target;
+  if(tg && tg.closest && tg.closest('.mg-x')) return;   // × 는 자기 onclick 이 닫는다
+  var s = document.getElementById('magSheet');
+  if(s && s.classList.contains('day')){ magBackToCal(); return; }
+  if(_magDet < 2) magSheetTo(2);
+}
+window.magHeadTap = magHeadTap;
+
+// 시트 바깥(어두운 띠) 탭 — 달력이면 닫고, 목록이면 한 단계 뒤로.
+//   전체 높이에서 어두운 띠는 화면 맨 위 73px 뿐이고, 그 자리가 티켓 상세의 ‹ 자리다 —
+//   상세를 닫고 같은 자리를 또 누르면 시트가 통째로 닫혔다.
+function magDimTap(ev){
+  var tg = ev && ev.target;
+  if(!tg || !tg.classList || !tg.classList.contains('mg-dim')) return;
+  if(_magNavFresh()) return;
+  var s = document.getElementById('magSheet');
+  if(s && s.classList.contains('day')){ magBackToCal(); return; }
+  magSheetTo(0);
+}
+window.magDimTap = magDimTap;
 
 // 시트 안 · 그 날의 자리 목록 (새 시트를 얹지 않는다)
 function magOpenDay(y, m, d){
+  if(!_magPaintDay(y, m, d, false)) return;
+  _magNavMark();
+  magSheetTo(2);   // 목록을 보려면 판이 커져야 한다
+}
+window.magOpenDay = magOpenDay;
+
+// 날짜 목록을 그린다 — 열 때(keep=false · 맨 위부터)와 뒤에서 다시 그릴 때(keep=true · 스크롤 유지)가 같이 쓴다.
+//   그 날 자리가 없어졌으면 false — 부른 쪽이 달력으로 돌린다.
+function _magPaintDay(y, m, d, keep){
   var byDate = _pcalByDate();
   var key = y*10000 + m*100 + d;
   var list = byDate[key] || [];
-  if(!list.length) return;
+  if(!list.length) return false;
   if(typeof _sortTickets === 'function') list = _sortTickets(list);
 
   var s = document.getElementById('magSheet');
   if(s) s.classList.add('day');
+  _magDayYMD = [y, m, d];
   var dt = new Date(y, m-1, d);
   var t = document.getElementById('magSheetTitle');
   var sub = document.getElementById('magSheetSub');
@@ -59055,10 +59120,15 @@ function magOpenDay(y, m, d){
   });
   h += '</div>';
   var body = document.getElementById('magSheetBody');
-  if(body){ body.innerHTML = h; body.scrollTop = 0; }
-  magSheetTo(2);   // 목록을 보려면 판이 커져야 한다
+  if(body){
+    if(body._magDayHtml !== h){
+      var _st = body.scrollTop;
+      body.innerHTML = h; body._magDayHtml = h;
+      body.scrollTop = keep ? _st : 0;
+    } else if(!keep) body.scrollTop = 0;
+  }
+  return true;
 }
-window.magOpenDay = magOpenDay;
 
 function magGoTicket(id){
   // 시트는 건드리지 않는다 — 상세를 닫고 나오면 들어가기 전 그대로(전체 캘린더/목록)
@@ -59077,7 +59147,7 @@ function magBindDrag(){
   var panel = sheet && sheet.querySelector('.mg-panel');
   if(!grab || !panel) return;
   _magDragBound = true;
-  var y0 = null, h0 = 0, moved = false;
+  var y0 = null, h0 = 0, moved = false, lastTouch = 0;
   //   0번 자리는 「닫힘」이다. 아래로 충분히 내리면 표지로 돌아간다.
   function heights(){
     var vh = window.innerHeight;
@@ -59096,6 +59166,19 @@ function magBindDrag(){
     var nh = Math.max(90, Math.min(hs[2] + 40, h0 + dy));
     panel.style.height = nh + 'px';
   }
+  // 끌다 말고 끊긴 터치(전화·알림·스크롤 가로채기) — 남겨 두면 다음 탭 어디서든 end() 가 돌아 닫혔다
+  function reset(){
+    y0 = null; moved = false;
+    sheet.classList.remove('dragging');
+    panel.style.height = '';
+  }
+  // 손잡이 탭 — 목록이면 한 단계 뒤로(달력), 달력이면 단계를 돈다(중간 → 전체 → 닫힘).
+  //   막 단계를 옮긴 직후(400ms)의 탭은 흘린다 — ‹ 를 두 번 누른 두 번째 손가락이 여기 떨어졌다.
+  function tap(){
+    if(_magNavFresh()) return;
+    if(sheet.classList.contains('day')){ magBackToCal(); return; }
+    magSheetCycle();
+  }
   function end(){
     if(y0 === null) return;
     y0 = null;
@@ -59105,7 +59188,7 @@ function magBindDrag(){
     // 끌지 않았으면 그냥 탭이다 — 단계를 순환시킨다.
     //   손잡이의 onclick 으로 처리하면 끌고 난 뒤에도 click 이 뒤따라 터져
     //   방금 붙인 단계를 한 칸 더 밀어버린다. 그래서 여기서 갈라 처리한다.
-    if(!moved){ magSheetCycle(); return; }
+    if(!moved){ tap(); return; }
     var hs = heights(), best = 0, gap = Infinity;
     hs.forEach(function(v, i){
       var d = Math.abs(v - cur);
@@ -59113,12 +59196,15 @@ function magBindDrag(){
     });
     magSheetTo(best);
   }
-  grab.addEventListener('touchstart', function(e){ start(e.touches[0].clientY); }, {passive:true});
+  // 터치 뒤에 따라오는 호환 마우스 이벤트(mousedown/mouseup)가 end() 를 한 번 더 돌려 단계가 두 칸 갔다
+  //   (중간에서 탭 → 전체가 아니라 닫힘). touchend 에서 막고, 터치 직후 800ms 의 마우스는 흘린다.
+  grab.addEventListener('touchstart', function(e){ lastTouch = Date.now(); start(e.touches[0].clientY); }, {passive:true});
   grab.addEventListener('touchmove',  function(e){ move(e.touches[0].clientY); }, {passive:true});
-  grab.addEventListener('touchend',   function(e){ end(); });
-  grab.addEventListener('mousedown',  function(e){ start(e.clientY); e.preventDefault(); });
-  window.addEventListener('mousemove', function(e){ if(y0 !== null) move(e.clientY); });
-  window.addEventListener('mouseup',   function(){ if(y0 !== null) end(); });
+  grab.addEventListener('touchend',   function(e){ lastTouch = Date.now(); if(e.cancelable) e.preventDefault(); end(); }, {passive:false});
+  grab.addEventListener('touchcancel', function(){ lastTouch = Date.now(); reset(); });
+  grab.addEventListener('mousedown',  function(e){ if(Date.now() - lastTouch < 800) return; start(e.clientY); e.preventDefault(); });
+  window.addEventListener('mousemove', function(e){ if(y0 !== null && Date.now() - lastTouch >= 800) move(e.clientY); });
+  window.addEventListener('mouseup',   function(){ if(y0 !== null && Date.now() - lastTouch >= 800) end(); });
 }
 
 // ── 팔레트 (기기별 스위치) ──────────────────────────────────
