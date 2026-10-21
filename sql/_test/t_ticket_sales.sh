@@ -1,7 +1,8 @@
 #!/bin/bash
-# 📊 티켓 판매 현황 RPC (supabase/migrations/20261021_ticket_sales_report.sql) — 로컬 postgres 픽스처. 실행: bash sql/_test/t_ticket_sales.sh
+# 📊 티켓 판매 현황 RPC (supabase/migrations/20261021_ticket_sales_report.sql → 2차 판 _report2.sql) — 로컬 postgres 픽스처. 실행: bash sql/_test/t_ticket_sales.sh
 cd "$(dirname "$0")/../.."
-MIG=supabase/migrations/20261021_ticket_sales_report.sql
+MIG1=supabase/migrations/20261021_ticket_sales_report.sql      # 라이브에 먼저 올라간 1차 판 — 그 위에 2차를 올리는 순서 그대로
+MIG=supabase/migrations/20261021_ticket_sales_report2.sql
 FAIL=0
 DB=t_sales; psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1; psql -h /tmp -U postgres -d postgres -q -c "create database $DB" >/dev/null
 P="psql -h /tmp -U postgres -d $DB -q -At"
@@ -44,6 +45,7 @@ create table public.kashikiri_charges(id uuid primary key default gen_random_uui
   purpose text default 'custom', title text, payload jsonb default '{}');
 create table public.daegwan_manual(id uuid primary key default gen_random_uuid(), venue_id text, ymd date, name text, pax int, amount int, memo text, ttype text, venue_name text, created_by uuid, created_at timestamptz default now());
 SQL
+out1=$($P -f "$MIG1" 2>&1)
 out=$($P -f "$MIG" 2>&1)
 
 $P <<SQL >/dev/null
@@ -140,8 +142,10 @@ insert into public.tickets(user_id,restaurant_id,restaurant_name,reservation_dat
  ('$RA','$R1','메이노','2026.10.11',2,500000,'cancelled','MAN-2','{"manualEntry":true}','2026-09-10T00:00:00Z');
 -- 23 수동 기록
 insert into public.daegwan_manual(venue_id,ymd,name,pax,amount,ttype,created_by,created_at) values ('$R1','2026-10-12','홍',2,200000,'오프라인','$SU','2026-09-11T00:00:00Z');
--- 24 정정 줄 (fix) 은 환불로 세지 않는다
-insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata,created_at) values ('$M1','general','ticket_refund',1700000,'{"purchase_id":"PAYH-tp1_1","fix":"double_deduct_2026-09-14"}','2026-09-15T05:00:00Z');
+-- 24 정정 줄 (fix) 은 환불이 아니라 잘못 뺀 결제의 되돌림 — 2026-09-14 이중 차감 모양(결제 줄이 한 번 더 · 정정 +)
+insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata,created_at) values
+ ('$M1','general','ticket_purchase',-1700000,'{"purchase_id":"PAYH-tp1_1","server_written":true}','2026-09-15T01:00:02Z'),
+ ('$M1','general','ticket_refund',1700000,'{"purchase_id":"PAYH-tp1_1","fix":"double_deduct_2026-09-14"}','2026-09-15T05:00:00Z');
 -- 25 게스트석 확정 대기
 insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_date,party_size,price,status,purchase_id,extra_data,created_at)
  values ('$M2','$R1','tp1','2026.11.03',1,1000000,'pending_confirm','PAYH-tp1_25','{}','2026-09-24T00:00:00Z');
@@ -161,7 +165,7 @@ q(){ $P -c "with j as ($R as j) $1" 2>&1; }
 row(){ q "select $2 from j, jsonb_array_elements(j->'rows') r where r->>'k' = '$1'"; }
 
 ok "1 예치금 판매 gross·dep·net·대행비 예정" "$(row PAYH-tp1_1 "concat_ws('/', r->>'gross', r->>'dep', r->>'pm', r->>'net', r->>'agency', r->>'ag_state', r->>'bd')")" "1700000/1700000/deposit/1700000/300000/planned/product"
-ok "1 정정(fix) 줄은 환불이 아니다" "$(row PAYH-tp1_1 "r->>'rf_cancel'")" "0"
+ok "1 정정(fix) 줄은 환불이 아니다 — 이중 차감 결제를 되돌린다(판매 1.7M · 환불 0)" "$(row PAYH-tp1_1 "concat_ws('/', r->>'gross', r->>'rf_cancel')")" "1700000/0"
 ok "1 결제일 = 원장 첫 차감 (KST)" "$(row PAYH-tp1_1 "r->>'paid_ymd'")" "2026-09-15"
 ok "2 카드+예치금 = mixed · card 는 주문 기준 · 대행비는 회차 요금" "$(row PAYH-tp2_2 "concat_ws('/', r->>'pm', r->>'card', r->>'dep', r->>'bd')")" "mixed/300000/500000/product"
 ok "3 D-31 취소 — 두 주머니 합 · 대행비 확정 300k" "$(row PAYH-tp1_3 "concat_ws('/', r->>'st', r->>'rf_cancel', r->>'net', r->>'agency', r->>'ag_state')")" "cancelled/1400000/300000/300000/kept"
@@ -292,6 +296,32 @@ ok "R4 자동 되돌린 초대는 판매 아님 → 「확인 필요」(still pa
 ok "R5 원장 없는 paid 초대 → 「확인 필요」" "$(q "select (select count(*) from jsonb_array_elements(j->'rows') r where r->>'k'='inv:$I5') || '/' || (select e->>'kind' from jsonb_array_elements(j->'exceptions') e where e->>'ref'='$I5') from j")" "0/invite_paid_no_ledger"
 ok "R13 부풀린 초대 대행비는 회차 대행비로 · 판매액은 원장" "$(row "inv:$I6" "concat_ws('/', r->>'gross', r->>'agency', ((r->'flags') ? 'agency_snapshot_differs')::text)")" "850000/150000/true"
 ok "R9 대시 없는 36자 memberUid 도 안 깨진다 · 링크 판매" "$(row chg:a0000000-0000-4000-8000-000000000098 "concat_ws('/', r->>'ch', r->>'gross', coalesce(r->>'uid','(없음)'))")" "link/850000/(없음)"
+
+echo "── 2차: 정정(fix) 줄 — 돈을 돌려준 정정은 그 판매의 되돌림 ──"
+M4=b1000000-0000-4000-8000-000000000005
+$P <<SQL >/dev/null
+insert into public.profiles values ('$M4','회원4','user',false);
+-- 2026-09-14 이중 차감 모양: 1.7M 티켓에 결제 줄 두 번 · 정정 줄 +1.7M(fix) · 음수 정정 줄(무시)
+insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_date,party_size,price,status,purchase_id,created_at)
+ values ('$M4','$R1','tp1','2026.11.03',2,1700000,'active','PAYH-dd_1','2026-09-14T01:00:00Z');
+insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata,created_at) values
+ ('$M4','general','ticket_purchase',-1700000,'{"purchase_id":"PAYH-dd_1","server_confirmed":true}','2026-09-14T01:00:00Z'),
+ ('$M4','general','ticket_purchase',-1700000,'{"purchase_id":"PAYH-dd_1","server_written":true}','2026-09-14T01:00:01Z'),
+ ('$M4','general','ticket_refund',1700000,'{"purchase_id":"PAYH-dd_1","fix":"double_deduct_2026-09-14"}','2026-09-17T00:00:00Z'),
+ ('$M4','general','ticket_refund',-5,'{"purchase_id":"PAYH-dd_1","fix":"forged"}','2026-09-18T00:00:00Z');
+-- 이중 차감 뒤 취소: 1천원 티켓 · 결제 두 번 · 정정 +1천 · 취소 환불 +1천 → 순 0
+insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_date,party_size,price,status,purchase_id,created_at)
+ values ('$M4','$R1','tp2','2026.12.01',1,1000,'cancelled','PAYH-dd_2','2026-09-14T02:00:00Z');
+insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata,created_at) values
+ ('$M4','general','ticket_purchase',-1000,'{"purchase_id":"PAYH-dd_2"}','2026-09-14T02:00:00Z'),
+ ('$M4','general','ticket_purchase',-1000,'{"purchase_id":"PAYH-dd_2"}','2026-09-14T02:00:01Z'),
+ ('$M4','general','ticket_refund',1000,'{"purchase_id":"PAYH-dd_2","fix":"double_deduct_2026-09-14"}','2026-09-17T00:00:00Z'),
+ ('$M4','general','ticket_refund',1000,'{"purchase_id":"PAYH-dd_2","cancel_refund":true,"refund_type":"returned"}','2026-09-20T00:00:00Z');
+SQL
+ok "F1 이중 차감 + 정정 → 판매 1.7M · 정가와 같음 · 음수 정정 줄은 무시" "$(row PAYH-dd_1 "concat_ws('/', r->>'gross', r->>'net', ((r->'flags') ? 'price_differs')::text)")" "1700000/1700000/false"
+ok "F2 이중 차감 → 정정 → 취소 = 순 0" "$(row PAYH-dd_2 "concat_ws('/', r->>'st', r->>'gross', r->>'rf_cancel', r->>'net')")" "cancelled/1000/1000/0"
+ok "F3 1차 판 위에 2차가 오류 없이 올라간다" "$(echo "$out1$out" | grep -cE "^ERROR|^psql:.*ERROR")" "0"
+ok "F4 확인 표 ⑦ 정정 줄 · ⑧ 정가와 다름 이 찍힌다" "$($P -f "$MIG" 2>&1 | grep -cE "⑦ 정정\(fix\) 줄.*3줄 ₩3,401,000 판매에서 뺌 · 1줄|⑧ 앱 구매 「정가와 다름」")" "2"
 out2=$($P -f "$MIG" 2>&1)
 ok "두 번째 RUN: 오류 없음 · ❌ 0 · ⑤ 채널 합계 줄이 찍힌다(이름 없음)" "$(echo "$out2" | grep -E "^ERROR|^psql:.*ERROR" | head -1)|$(echo "$out2" | grep -c '❌')|$( [ $(echo "$out2" | grep -cE '⑤ (app|invite|link|settle)') -ge 4 ] && echo ok)|$(echo "$out2" | grep -c '회원1')" "|0|ok|0"
 # 화면 시험용 — TSR_DUMP=파일 이면 보고서 JSON 을 남긴다(결제일·전체 · 기본)
