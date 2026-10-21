@@ -8369,6 +8369,293 @@ function cardFeeCsv(){
 }
 window.cardFeeOpen = cardFeeOpen; window.cardFeeSetPeriod = cardFeeSetPeriod; window.cardFeeSave = cardFeeSave; window.cardFeeRun = cardFeeRun; window.cardFeeCsv = cardFeeCsv;
 
+// ═══════════════════════════════════════════════════════════════
+// 📊 티켓 판매 현황 (슈퍼어드민 · 2026-10-21)
+// ═══════════════════════════════════════════════════════════════
+//   「티켓 전체나 월별 판매금액을 볼 수 있는 기능」. 숫자는 서버 taam_ticket_sales_report 가 판매 하나마다 센다
+//   (supabase/migrations/20261021_ticket_sales_report.sql) — 앱은 거르고 더하기만 한다(_tsrAgg).
+//   판매 하나 = 결제 하나: 앱 구매(예치금·카드) · 초대 · 결제 링크 · 대관 정산 · (켜면) 미연결 정산 · 수동 입력 · 수동 기록.
+//   환불은 그 판매에 붙는다(그 판매의 달에 빠진다). 순판매 = 판매 − 취소·위약·인원 줄임 환불. 방문 후 반환은 따로(「TAAM 보유」).
+//   월은 'YYYY-MM-DD' 글자를 잘라서 묶는다 — new Date 로 바꾸면 해외 기기에서 하루가 밀린다.
+var _tsr = { period: 'month', basis: 'paid', ch: { app: 1, invite: 1, link: 1, settle: 1, settle_x: 0, man: 0, dm: 0 }, incTest: false, data: null, month: null, rest: null, seq: 0 };
+var _TSR_CH = [['app', '앱 구매'], ['invite', '초대'], ['link', '결제 링크'], ['settle', '대관 정산'], ['settle_x', '미연결 정산'], ['man', '수동 입력'], ['dm', '수동 기록']];
+var _TSR_PM = { deposit: '예치금', card: '카드', mixed: '카드+예치금', offline: '오프라인' };
+var _TSR_ST = { active: '판매', cancelled: '취소', returned: '방문 후 반환', penalty: '위약', guest_pending: '확정 대기' };
+var _TSR_FLAG = { net_negative: '순판매 음수', card_unverified: '카드 승인 미확인', no_pay_evidence: '결제 근거 없음', ledger_mismatch: '원장과 다름',
+  refund_claim_unbacked: '환불 기록 없음', card_refund_capped: '카드 환불 상한', pax_changed: '인원 변경', payc_fallback: '카드 폴백 행',
+  no_ticket_row: '좌석 행 없음', no_ledger: '원장 없음', price_override: '금액 수정', refunded_zero: '₩0 환불', settle_unlinked: '티켓 미연결',
+  manual_unverified: '입력 금액', by_rest_admin: '매장 어드민 입력', zero_amount: '금액 0' };
+var _TSR_EXC = { card_captured_no_ticket: '카드는 승인됐는데 티켓이 없다', link_captured_pending: '토스 승인 뒤 링크가 결제 대기로 남았다', invite_debited_unpaid: '예치금은 빠졌는데 초대가 결제 전' };
+function _tsrWon(n){ n = Math.round(Number(n) || 0); return (n < 0 ? '−₩' : '₩') + Math.abs(n).toLocaleString('ko-KR'); }
+function _tsrEsc(v){ return String(v == null ? '' : v).replace(/[&<>"']/g, function(c){ return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+function _tsrN(r, k){ var v = Number(r && r[k]); return isFinite(v) ? v : 0; }   // 서버가 null 칸을 지운다(jsonb_strip_nulls) — 없으면 0
+function _tsrYmd(y, m0, d){ var dt = new Date(Date.UTC(y, m0, d)); return dt.getUTCFullYear() + '-' + String(dt.getUTCMonth() + 1).padStart(2, '0') + '-' + String(dt.getUTCDate()).padStart(2, '0'); }
+function _tsrRange(k){
+  var t = _cfToday();
+  if (k === 'month') return { from: _tsrYmd(t.y, t.m, 1), to: _tsrYmd(t.y, t.m + 1, 1), label: t.y + '년 ' + (t.m + 1) + '월' };
+  if (k === 'prev')  return { from: _tsrYmd(t.y, t.m - 1, 1), to: _tsrYmd(t.y, t.m, 1), label: '지난 달' };
+  if (k === 'year')  return { from: _tsrYmd(t.y, 0, 1), to: _tsrYmd(t.y + 1, 0, 1), label: t.y + '년' };
+  if (k === 'all')   return { from: null, to: null, label: '전체 기간' };
+  var f = (document.getElementById('tsrFrom') || {}).value, e = (document.getElementById('tsrTo') || {}).value;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(f || '') || !/^\d{4}-\d{2}-\d{2}$/.test(e || '')) return null;
+  var p = e.split('-');
+  return { from: f, to: _tsrYmd(+p[0], +p[1] - 1, +p[2] + 1), label: f + ' ~ ' + e };   // 끝 날짜 포함 → 다음 날 0시 전까지
+}
+// 판매 행의 「달」 — 결제일 기준이면 결제일, 방문일 기준이면 방문일 (글자 그대로)
+function _tsrMonthOf(r, basis){ var d = basis === 'visit' ? r.visit : r.paid_ymd; return d ? String(d).slice(0, 7) : '(미정)'; }
+// 합계 — 화면·시험이 같이 쓴다. f = {ch:{…}, month, rest, basis}
+function _tsrAgg(rows, f){
+  f = f || {};
+  var z = function(){ return { n: 0, pax: 0, gross: 0, refund: 0, net: 0, ret: 0, held: 0, agency: 0, agKept: 0, agPlanned: 0, cardPending: 0, cardPendingN: 0, dep: 0, card: 0 }; };
+  var tot = z(), byMonth = {}, byCh = {}, byRest = {}, list = [];
+  (rows || []).forEach(function(r){
+    if (r.x) return;                                   // 확정 대기·거절된 게스트석 — 합계에 넣지 않는다
+    if (f.ch && !f.ch[r.ch]) return;
+    var mk = _tsrMonthOf(r, f.basis);
+    if (f.month && mk !== f.month) return;
+    var rk = String(r.rest_id || r.rest || '(매장 없음)');
+    if (f.rest && rk !== f.rest) return;
+    var add = function(a){
+      a.n++; a.pax += _tsrN(r, 'pax'); a.gross += _tsrN(r, 'gross');
+      a.refund += _tsrN(r, 'rf_cancel') + _tsrN(r, 'rf_penalty') + _tsrN(r, 'rf_pax');
+      a.net += _tsrN(r, 'net'); a.ret += _tsrN(r, 'rf_return'); a.held += _tsrN(r, 'held'); a.agency += _tsrN(r, 'agency');
+      if (r.ag_state === 'kept') a.agKept += _tsrN(r, 'agency'); else if (r.ag_state === 'planned') a.agPlanned += _tsrN(r, 'agency');
+      if (_tsrN(r, 'rf_card_pending') > 0){ a.cardPending += _tsrN(r, 'rf_card_pending'); a.cardPendingN++; }
+      a.dep += _tsrN(r, 'dep'); a.card += _tsrN(r, 'card');
+    };
+    add(tot);
+    add(byMonth[mk] = byMonth[mk] || z());
+    add(byCh[r.ch] = byCh[r.ch] || z());
+    var br = byRest[rk] = byRest[rk] || (function(){ var o = z(); o.name = r.rest || '(매장 없음)'; return o; })(); add(br);
+    list.push(r);
+  });
+  return { tot: tot, byMonth: byMonth, byCh: byCh, byRest: byRest, list: list };
+}
+function tsrOpen(){
+  if (typeof _isSuperAdmin === 'function' && !_isSuperAdmin()) { showToast('🔒', '슈퍼어드민 전용', '판매 현황은 슈퍼어드민만 봅니다'); return; }
+  var old = document.getElementById('tsrPopup'); if (old) old.remove();
+  _tsr.month = null; _tsr.rest = null;
+  var t = _cfToday(), today = _tsrYmd(t.y, t.m, t.d), first = _tsrYmd(t.y, t.m, 1);
+  var chip = function(on){ return 'padding:7px 11px;border-radius:9px;border:1.5px solid ' + (on ? '#1a1a18' : '#e0ddd8') + ';background:' + (on ? '#1a1a18' : '#fff') + ';color:' + (on ? '#fff' : '#666') + ';font-family:inherit;font-size:11.5px;font-weight:800;cursor:pointer;'; };
+  var el = document.createElement('div');
+  el.id = 'tsrPopup';
+  el.style.cssText = 'position:fixed;inset:0;z-index:9200;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;';
+  el.innerHTML =
+    '<div style="background:#fff;border-radius:18px;width:100%;max-width:720px;max-height:92vh;overflow:auto;overflow-x:hidden;padding:20px 18px;box-sizing:border-box;font-family:var(--font-main);" data-lang-lock="ko">'
+    + '<div style="display:flex;align-items:center;gap:8px;"><div style="font-size:16px;font-weight:800;color:#1a1a18;flex:1;">📊 티켓 판매 현황</div>'
+    +   '<button type="button" onclick="tsrClose()" aria-label="닫기" style="border:none;background:none;font-size:20px;color:#999;cursor:pointer;padding:2px 6px;">×</button></div>'
+    + '<div style="font-size:11px;color:#9a9486;line-height:1.65;margin:4px 0 12px;">판매 하나 = 결제 하나. 환불은 그 판매의 달에서 빠집니다. 순판매 = 판매 − 취소·위약·인원 줄임 환불(방문 후 반환은 따로). 대행비 = TAAM 수익(확정 + 예정). 테스트 계정은 기본 제외.</div>'
+    + '<div id="tsrPeriodBtns" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">'
+    +   ['month|이번 달', 'prev|지난 달', 'year|올해', 'all|전체', 'custom|직접 입력'].map(function(x){ var k = x.split('|')[0];
+          return '<button type="button" class="tsr-pb" data-k="' + k + '" onclick="tsrSetPeriod(\'' + k + '\')" style="' + chip(k === _tsr.period) + '">' + x.split('|')[1] + '</button>'; }).join('')
+    + '</div>'
+    + '<div id="tsrCustom" style="display:' + (_tsr.period === 'custom' ? 'flex' : 'none') + ';gap:8px;margin-bottom:8px;align-items:center;">'
+    +   '<input id="tsrFrom" type="date" value="' + first + '" style="flex:1;min-width:0;padding:8px;border:1px solid #e0dcd4;border-radius:9px;font-size:13px;">'
+    +   '<span style="color:#aaa;">~</span>'
+    +   '<input id="tsrTo" type="date" value="' + today + '" style="flex:1;min-width:0;padding:8px;border:1px solid #e0dcd4;border-radius:9px;font-size:13px;">'
+    +   '<button type="button" onclick="tsrRun()" style="' + chip(true) + '">조회</button>'
+    + '</div>'
+    + '<div id="tsrBasisBtns" style="display:flex;gap:6px;margin-bottom:8px;">'
+    +   [['paid', '결제일 기준'], ['visit', '방문일 기준']].map(function(x){ return '<button type="button" class="tsr-bb" data-k="' + x[0] + '" onclick="tsrSetBasis(\'' + x[0] + '\')" style="' + chip(x[0] === _tsr.basis) + '">' + x[1] + '</button>'; }).join('')
+    + '</div>'
+    + '<div id="tsrChBtns" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;"></div>'
+    + '<label style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:#777;margin:2px 0 10px;cursor:pointer;"><input type="checkbox" id="tsrIncTest" ' + (_tsr.incTest ? 'checked' : '') + ' onchange="tsrToggleTest(this.checked)"> 테스트 계정 포함</label>'
+    + '<div id="tsrResult" style="font-size:12px;color:#777;">불러오는 중…</div>'
+    + '</div>';
+  el.addEventListener('click', function(ev){ if (ev.target === el) tsrClose(); });
+  document.body.appendChild(el);
+  _tsrPaintCh();
+  tsrRun();
+}
+function tsrClose(){ var p = document.getElementById('tsrPopup'); if (p) p.remove(); if (typeof _acPopupClosed === 'function') _acPopupClosed(); }
+function _tsrPaintCh(){
+  var box = document.getElementById('tsrChBtns'); if (!box) return;
+  box.innerHTML = _TSR_CH.map(function(c){ var on = !!_tsr.ch[c[0]];
+    return '<button type="button" onclick="tsrToggleCh(\'' + c[0] + '\')" style="padding:5px 9px;border-radius:999px;border:1.5px solid ' + (on ? '#8a6d3b' : '#e0ddd8') + ';background:' + (on ? '#fdf8ef' : '#fff') + ';color:' + (on ? '#6a4d1b' : '#aaa') + ';font-family:inherit;font-size:11px;font-weight:800;cursor:pointer;">' + (on ? '✓ ' : '') + c[1] + '</button>'; }).join('');
+}
+function _tsrPaintSeg(sel, attr, val){
+  document.querySelectorAll('#tsrPopup ' + sel).forEach(function(b){ var on = b.getAttribute('data-k') === val;
+    b.style.borderColor = on ? '#1a1a18' : '#e0ddd8'; b.style.background = on ? '#1a1a18' : '#fff'; b.style.color = on ? '#fff' : '#666'; });
+}
+function tsrSetPeriod(k){
+  _tsr.period = k; _tsrPaintSeg('.tsr-pb', 'data-k', k);
+  var c = document.getElementById('tsrCustom'); if (c) c.style.display = k === 'custom' ? 'flex' : 'none';
+  if (k !== 'custom') tsrRun();
+}
+function tsrSetBasis(k){ _tsr.basis = k; _tsrPaintSeg('.tsr-bb', 'data-k', k); tsrRun(); }
+function tsrToggleCh(k){ _tsr.ch[k] = _tsr.ch[k] ? 0 : 1; _tsrPaintCh(); _tsrRender(); }   // 거르기만 — 다시 부르지 않는다
+function tsrToggleTest(on){ _tsr.incTest = !!on; tsrRun(); }
+function tsrPick(kind, key){
+  if (kind === 'month') _tsr.month = (_tsr.month === key) ? null : key;
+  if (kind === 'rest')  _tsr.rest  = (_tsr.rest === key) ? null : key;
+  _tsrRender();
+}
+async function tsrRun(){
+  var box = document.getElementById('tsrResult'); if (!box) return;
+  var rg = _tsrRange(_tsr.period);
+  if (!rg) { box.innerHTML = '<span style="color:#B23A2E;">시작·끝 날짜를 골라 주세요</span>'; return; }
+  if (rg.from && rg.to && rg.to <= rg.from) { box.innerHTML = '<span style="color:#B23A2E;">끝 날짜가 시작 날짜보다 뒤여야 합니다</span>'; return; }
+  if (!window.sb) { box.innerHTML = '<span style="color:#B23A2E;">서버 연결이 없습니다</span>'; return; }
+  var seq = ++_tsr.seq;
+  box.innerHTML = '불러오는 중…';
+  _tsr.month = null; _tsr.rest = null;
+  var res;
+  try { res = await window.sb.rpc('taam_ticket_sales_report', { p_from: rg.from, p_to: rg.to, p_basis: _tsr.basis, p_include_test: !!_tsr.incTest }); }
+  catch (e) { res = { error: e }; }
+  if (seq !== _tsr.seq) return;   // 그 사이 다른 조회가 나갔다 — 늦게 온 옛 결과로 덮지 않는다
+  if (res.error) {
+    var m = String(res.error.message || res.error), code = String(res.error.code || '');
+    _tsr.data = null;
+    box.innerHTML = (code === 'PGRST202' || /Could not find the function|does not exist/i.test(m))
+      ? '<div style="color:#B45309;font-weight:700;">서버 준비 필요 — 20261021_ticket_sales_report.sql 이 아직 적용되지 않았습니다</div>'
+      : (/FORBIDDEN/.test(m) ? '<div style="color:#B23A2E;font-weight:700;">슈퍼어드민만 볼 수 있습니다</div>' : '<div style="color:#B23A2E;">불러오지 못했습니다 — ' + _tsrEsc(m) + '</div>');
+    return;
+  }
+  _tsr.data = res.data || {}; _tsr.data._label = rg.label; _tsr.data._from = rg.from; _tsr.data._to = rg.to;   // 파일 이름은 우리가 물은 기간으로
+  _tsrRender();
+}
+function _tsrCard(label, val, sub, color){
+  return '<div style="border:1px solid #eee5d6;border-radius:12px;padding:10px 12px;background:#fbf8f2;min-width:0;">'
+    + '<div style="font-size:10.5px;font-weight:700;color:#8a8580;">' + label + '</div>'
+    + '<div style="font-size:16px;font-weight:800;color:' + (color || '#1a1a18') + ';margin-top:2px;word-break:break-all;">' + val + '</div>'
+    + (sub ? '<div style="font-size:10px;color:#a8a29a;margin-top:2px;">' + sub + '</div>' : '') + '</div>';
+}
+function _tsrTable(head, rows, onclickOf){
+  var th = 'padding:6px 8px;font-size:10.5px;color:#8a8580;font-weight:800;text-align:right;white-space:nowrap;border-bottom:1px solid #eee;';
+  var td = 'padding:6px 8px;font-size:11.5px;color:#1a1a18;text-align:right;white-space:nowrap;border-bottom:1px solid #f3f0ea;';
+  return '<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid #f0ece4;border-radius:10px;margin:6px 0 12px;">'
+    + '<table style="border-collapse:collapse;width:100%;min-width:520px;">'
+    + '<tr>' + head.map(function(h, i){ return '<th style="' + th + (i === 0 ? 'text-align:left;' : '') + '">' + h + '</th>'; }).join('') + '</tr>'
+    + rows.map(function(r){ var oc = onclickOf ? onclickOf(r) : null;
+        return '<tr' + (oc ? ' onclick="' + oc.js + '" style="cursor:pointer;' + (oc.on ? 'background:#fdf8ef;' : '') + '"' : '') + '>'
+          + r.cells.map(function(c, i){ return '<td style="' + td + (i === 0 ? 'text-align:left;font-weight:700;' : '') + '">' + c + '</td>'; }).join('') + '</tr>'; }).join('')
+    + '</table></div>';
+}
+function _tsrMoneyCell(r){
+  if (r.cur && r.cur !== 'KRW' && r.fx_amt != null) {
+    var sym = r.cur === 'USD' ? '$' : (r.cur === 'JPY' ? '¥' : r.cur + ' ');
+    var fx = Number(r.fx_amt); fx = r.cur === 'USD' ? fx.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : Math.round(fx).toLocaleString('ko-KR');
+    return sym + fx + ' <span style="color:#a8a29a;">(' + _tsrWon(r.gross) + ')</span>';
+  }
+  return _tsrWon(r.gross);
+}
+function _tsrRender(){
+  var box = document.getElementById('tsrResult'); if (!box) return;
+  var D = _tsr.data; if (!D) return;
+  var rows = D.rows || [], basis = D.basis || _tsr.basis;
+  var A = _tsrAgg(rows, { ch: _tsr.ch, basis: basis });                                       // 위 칸·월별·채널·매장 — 월·매장 선택과 무관
+  var L = (_tsr.month || _tsr.rest) ? _tsrAgg(rows, { ch: _tsr.ch, basis: basis, month: _tsr.month, rest: _tsr.rest }) : A;   // 아래 목록
+  var T = A.tot, h = '';
+  h += '<div style="font-size:11px;color:#8a8580;margin-bottom:6px;">' + _tsrEsc(D._label || '') + ' · ' + (basis === 'visit' ? '방문일' : '결제일') + ' 기준 · 기준 시각 '
+     + _tsrEsc(D.generated_at ? new Date(new Date(D.generated_at).getTime() + 9 * 3600 * 1000).toISOString().slice(0, 16).replace('T', ' ') : '') + '</div>';
+  h += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;">'
+     + _tsrCard('총 판매', _tsrWon(T.gross), T.n + '건 · ' + T.pax + '명')
+     + _tsrCard('취소·환불', _tsrWon(T.refund), '그 판매의 달에서 뺌', T.refund ? '#B23A2E' : null)
+     + _tsrCard('순판매', _tsrWon(T.net), '판매 − 취소·환불', '#1E7A46')
+     + _tsrCard('대행비 (TAAM 수익)', _tsrWon(T.agency), '확정 ' + _tsrWon(T.agKept) + ' · 예정 ' + _tsrWon(T.agPlanned))
+     + '</div>';
+  h += '<div style="font-size:11px;color:#6a635a;line-height:1.8;margin:8px 0 12px;">'
+     + '방문 후 반환 ' + _tsrWon(T.ret) + ' · TAAM 보유 ' + _tsrWon(T.held)
+     + (T.cardPendingN ? ' · <b style="color:#B45309;">카드 환불 대기 ' + _tsrWon(T.cardPending) + ' (' + T.cardPendingN + '건)</b>' : '')
+     + '<br>결제 수단: 예치금 ' + _tsrWon(T.dep) + ' · 카드 ' + _tsrWon(T.card) + '</div>';
+  // 월별
+  var months = Object.keys(A.byMonth).sort();
+  h += '<div style="font-size:13px;font-weight:800;color:#1a1a18;margin-top:4px;">월별 <span style="font-size:10.5px;color:#a8a29a;font-weight:700;">— 줄을 누르면 아래 목록이 그 달만</span></div>';
+  h += months.length ? _tsrTable(['월', '건', '인원', '판매', '환불', '순판매', '대행비'],
+         months.map(function(k){ var a = A.byMonth[k]; return { key: k, cells: [k, a.n, a.pax, _tsrWon(a.gross), _tsrWon(a.refund), _tsrWon(a.net), _tsrWon(a.agency)] }; })
+           .concat(months.length > 1 ? [{ key: null, cells: ['<b>합계</b>', '<b>' + T.n + '</b>', '<b>' + T.pax + '</b>', '<b>' + _tsrWon(T.gross) + '</b>', '<b>' + _tsrWon(T.refund) + '</b>', '<b>' + _tsrWon(T.net) + '</b>', '<b>' + _tsrWon(T.agency) + '</b>'] }] : []),
+         function(r){ return r.key ? { js: "tsrPick('month','" + r.key + "')", on: _tsr.month === r.key } : null; })
+       : '<div style="font-size:12px;color:#aaa;margin:8px 0 14px;">이 기간에는 판매가 없습니다</div>';
+  // 채널별
+  var chs = _TSR_CH.filter(function(c){ return A.byCh[c[0]]; });
+  if (chs.length) {
+    h += '<div style="font-size:13px;font-weight:800;color:#1a1a18;">채널별</div>';
+    h += _tsrTable(['채널', '건', '판매', '환불', '순판매', '대행비'], chs.map(function(c){ var a = A.byCh[c[0]]; return { cells: [c[1], a.n, _tsrWon(a.gross), _tsrWon(a.refund), _tsrWon(a.net), _tsrWon(a.agency)] }; }));
+  }
+  // 매장별
+  var rks = Object.keys(A.byRest).sort(function(a, b){ return A.byRest[b].net - A.byRest[a].net; });
+  if (rks.length) {
+    h += '<div style="font-size:13px;font-weight:800;color:#1a1a18;">매장별 <span style="font-size:10.5px;color:#a8a29a;font-weight:700;">— 순판매 순 · 줄을 누르면 아래 목록이 그 매장만</span></div>';
+    h += _tsrTable(['매장', '건', '인원', '판매', '환불', '순판매', '대행비'],
+           rks.map(function(k){ var a = A.byRest[k]; return { key: k, cells: [_tsrEsc(a.name), a.n, a.pax, _tsrWon(a.gross), _tsrWon(a.refund), _tsrWon(a.net), _tsrWon(a.agency)] }; }),
+           function(r){ return { js: "tsrPick('rest'," + _tsrEsc(JSON.stringify(r.key)) + ")", on: _tsr.rest === r.key }; });
+  }
+  // 목록
+  var list = L.list.slice().sort(function(a, b){ var ka = basis === 'visit' ? (a.visit || '') : (a.paid_at || ''), kb = basis === 'visit' ? (b.visit || '') : (b.paid_at || ''); return ka < kb ? 1 : (ka > kb ? -1 : 0); });
+  var filt = [];
+  if (_tsr.month) filt.push(_tsr.month);
+  if (_tsr.rest) filt.push((A.byRest[_tsr.rest] || {}).name || _tsr.rest);
+  h += '<div style="display:flex;align-items:center;gap:8px;margin-top:4px;"><div style="font-size:13px;font-weight:800;color:#1a1a18;flex:1;">판매 목록 <span style="font-size:10.5px;color:#a8a29a;font-weight:700;">' + list.length + '건' + (filt.length ? ' · ' + _tsrEsc(filt.join(' · ')) : '') + '</span></div>'
+     + (filt.length ? '<button type="button" onclick="_tsr.month=null;_tsr.rest=null;_tsrRender()" style="border:1px solid #e0ddd8;background:#fff;border-radius:8px;padding:4px 8px;font-size:10.5px;font-weight:800;color:#666;cursor:pointer;font-family:inherit;">전체 보기</button>' : '')
+     + '<button type="button" onclick="tsrCsv()" style="border:1px solid #d8d2c6;background:#fff;border-radius:8px;padding:4px 10px;font-size:10.5px;font-weight:800;color:#6a635a;cursor:pointer;font-family:inherit;">CSV</button></div>';
+  h += '<div style="margin-top:6px;">';
+  list.slice(0, 300).forEach(function(r){
+    var dt = basis === 'visit' ? (r.visit || '방문일 없음') : (r.paid_ymd || '');
+    var rf = _tsrN(r, 'rf_cancel') + _tsrN(r, 'rf_penalty') + _tsrN(r, 'rf_pax');
+    var chl = (_TSR_CH.filter(function(c){ return c[0] === r.ch; })[0] || [0, r.ch])[1];
+    var fl = (r.flags || []).map(function(f){ return _TSR_FLAG[f] || f; });
+    var st = r.st || 'active';
+    h += '<div style="padding:8px 2px;border-bottom:1px solid #f3f0ea;font-size:11.5px;color:#1a1a18;">'
+       + '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;"><b>' + _tsrEsc(dt) + '</b><span>' + _tsrEsc(r.rest || '') + '</span>'
+       + '<span style="color:#8a8580;">' + _tsrEsc(r.buyer || '') + (r.pax ? ' · ' + r.pax + '명' : '') + '</span>'
+       + '<span style="font-size:10px;font-weight:800;padding:1px 6px;border-radius:5px;background:' + (st === 'active' ? '#edf7f0;color:#1E7A46' : '#fbeeee;color:#B23A2E') + ';">' + _tsrEsc(_TSR_ST[st] || st) + '</span>'
+       + (r.test ? '<span style="font-size:10px;font-weight:800;padding:1px 6px;border-radius:5px;background:#eee;color:#777;">테스트</span>' : '')
+       + '</div>'
+       + '<div style="color:#6a635a;margin-top:2px;">' + _tsrEsc(chl) + ' · ' + _tsrEsc(_TSR_PM[r.pm] || r.pm || '') + ' · 판매 ' + _tsrMoneyCell(r)
+       + (rf ? ' · <span style="color:#B23A2E;">환불 ' + _tsrWon(rf) + '</span>' : '') + (_tsrN(r, 'rf_return') ? ' · 반환 ' + _tsrWon(r.rf_return) : '')
+       + ' · <b>순 ' + _tsrWon(r.net) + '</b>' + (_tsrN(r, 'agency') ? ' · 대행비 ' + _tsrWon(r.agency) + (r.ag_state === 'planned' ? '(예정)' : '') : '')
+       + (fl.length ? ' · <span style="color:#B45309;">⚠ ' + _tsrEsc(fl.join(', ')) + '</span>' : '') + '</div></div>';
+  });
+  h += '</div>';
+  if (list.length > 300) h += '<div style="font-size:10.5px;color:#a8a29a;margin-top:4px;">300건까지만 표시 — CSV 는 전체</div>';
+  // 참고(합계 제외) · 확인 필요
+  var X = D.excluded || {}, xs = [];
+  var xn = function(o){ return o && Number(o.n) ? (o.n + '건 ' + _tsrWon(o.krw)) : ''; };
+  if (xn(X.membership)) xs.push('멤버십 결제 링크 ' + xn(X.membership));
+  if (xn(X.custom)) xs.push('자유 금액 링크 ' + xn(X.custom));
+  if (xn(X.man_cancelled)) xs.push('취소된 수동 입력 ' + xn(X.man_cancelled));
+  if (xn(X.test) && !_tsr.incTest) xs.push('테스트 계정 ' + xn(X.test));
+  if (basis === 'visit' && xn(X.no_visit_date)) xs.push('방문일 없는 판매 ' + xn(X.no_visit_date));
+  var gx = rows.filter(function(r){ return r.x; });
+  if (gx.length) xs.push('확정 대기 게스트석 ' + gx.length + '건');
+  var offCh = _TSR_CH.filter(function(c){ return !_tsr.ch[c[0]]; }).map(function(c){ var n = rows.filter(function(r){ return r.ch === c[0] && !r.x; }); return n.length ? c[1] + ' ' + n.length + '건' : ''; }).filter(Boolean);
+  if (offCh.length) xs.push('꺼 둔 채널: ' + offCh.join(' · '));
+  if (xs.length) h += '<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:#f7f5f1;font-size:11px;color:#6a635a;line-height:1.7;"><b>참고 (합계 제외)</b><br>' + _tsrEsc(xs.join(' · ')) + '</div>';
+  var E = D.exceptions || [];
+  if (E.length) {
+    h += '<details style="margin-top:10px;padding:10px 12px;border-radius:10px;background:#fff8ec;border:1px solid #f3dfb7;font-size:11px;color:#6a4d1b;"><summary style="cursor:pointer;font-weight:800;">⚠ 확인 필요 ' + E.length + '건</summary>'
+       + E.map(function(e){ return '<div style="margin-top:6px;">' + _tsrEsc(_TSR_EXC[e.kind] || e.kind) + ' · ' + _tsrWon(e.krw) + ' · ' + _tsrEsc(String(e.at || '').slice(0, 10)) + (e.note ? ' · ' + _tsrEsc(e.note) : '') + '</div>'; }).join('')
+       + '</details>';
+  }
+  box.innerHTML = h;
+}
+function tsrCsv(){
+  var D = _tsr.data; if (!D || !(D.rows || []).length) { showToast('⚠', 'CSV', '내보낼 판매가 없습니다'); return; }
+  var basis = D.basis || _tsr.basis;
+  var A = _tsrAgg(D.rows, { ch: _tsr.ch, basis: basis, month: _tsr.month, rest: _tsr.rest });
+  var q = function(v){ return '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"'; };
+  var kst = function(ts){ return ts ? new Date(new Date(ts).getTime() + 9 * 3600 * 1000).toISOString().slice(0, 16).replace('T', ' ') : ''; };
+  var L = [['결제일(KST)', '방문일', '시간', '매장', '구매자', '인원', '채널', '결제 수단', '상태', '통화', '외화 금액', '판매(원)', '식사비', '대행비 정가', '주류', '예치금', '카드',
+            '취소 환불', '위약 환불', '인원 줄임 환불', '방문 후 반환', '카드 환불 대기', '순판매', 'TAAM 보유', '대행비(수익)', '대행비 상태', '환불 시각', '참조', '표시'].map(q).join(',')];
+  A.list.forEach(function(r){
+    L.push([kst(r.paid_at), r.visit || '', r.time || '', r.rest || '', r.buyer || '', r.pax || '', (_TSR_CH.filter(function(c){ return c[0] === r.ch; })[0] || [0, r.ch])[1],
+            _TSR_PM[r.pm] || r.pm || '', _TSR_ST[r.st] || r.st || '', r.cur || 'KRW', r.fx_amt == null ? '' : r.fx_amt, _tsrN(r, 'gross'),
+            r.meal == null ? '' : r.meal, r.ag_gross == null ? '' : r.ag_gross, r.wine == null ? '' : r.wine, _tsrN(r, 'dep'), _tsrN(r, 'card'),
+            _tsrN(r, 'rf_cancel'), _tsrN(r, 'rf_penalty'), _tsrN(r, 'rf_pax'), _tsrN(r, 'rf_return'), _tsrN(r, 'rf_card_pending'), _tsrN(r, 'net'), _tsrN(r, 'held'),
+            _tsrN(r, 'agency'), r.ag_state || '', kst(r.rf_at), r.ref || r.k || '', (r.flags || []).map(function(f){ return _TSR_FLAG[f] || f; }).join(' / ')].map(q).join(','));
+  });
+  try {
+    var blob = new Blob(['﻿' + L.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    var url = URL.createObjectURL(blob), a = document.createElement('a');
+    a.href = url; a.download = 'taam-ticket-sales-' + (basis === 'visit' ? 'visit' : 'paid') + '-' + (D._from || 'all') + '_' + (D._to || 'all') + '.csv';
+    document.body.appendChild(a); a.click();
+    setTimeout(function(){ document.body.removeChild(a); URL.revokeObjectURL(url); }, 1000);
+    showToast('✓', 'CSV 저장', A.list.length + '건 — 다운로드 폴더를 확인하세요');
+  } catch (e) { showToast('⚠', '저장 실패', e.message || '오류'); }
+}
+window.tsrOpen = tsrOpen; window.tsrClose = tsrClose; window.tsrSetPeriod = tsrSetPeriod; window.tsrSetBasis = tsrSetBasis; window.tsrToggleCh = tsrToggleCh;
+window.tsrToggleTest = tsrToggleTest; window.tsrPick = tsrPick; window.tsrRun = tsrRun; window.tsrCsv = tsrCsv; window._tsrAgg = _tsrAgg; window._tsrRender = _tsrRender; window._tsr = _tsr;
+
 // 결제 상세 총액의 USD — 항목별 표시값의 합과 정확히 일치시킨다.
 //   (총액을 따로 환산하면 반올림 때문에 항목 합과 1~2달러 어긋나 보인다)
 function _fxTotalUsd(t, pax, meal, wine){
@@ -12410,6 +12697,10 @@ window.closePromoCarousel = function(){
       </div>
       <div class="admin-menu-item" onclick="openSubPage('ticketHistoryScreen')">
         <div><div class="admin-menu-text">📜 전체 티켓 구매내역</div><div class="admin-menu-sub">구매·취소·환불 전체 이력</div></div>
+        <div class="admin-arrow">›</div>
+      </div>
+      <div class="admin-menu-item" onclick="tsrOpen()" data-lang-lock="ko">
+        <div><div class="admin-menu-text">📊 티켓 판매 현황</div><div class="admin-menu-sub">전체·월별 판매 · 환불 · 순판매 · 대행비 — 결제일/방문일 기준 · 채널·매장별 · CSV</div></div>
         <div class="admin-arrow">›</div>
       </div>
       <!-- 판매 오픈 관리 — 「실험·도구」에 있을 이유가 없다. 티켓을 여는 일이다 -->
@@ -45796,7 +46087,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.19-c';
+var TAAM_WEB_BUILD = '2026.10.21-a';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
