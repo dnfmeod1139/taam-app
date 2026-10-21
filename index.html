@@ -8384,8 +8384,10 @@ var _TSR_ST = { active: '판매', cancelled: '취소', returned: '방문 후 반
 var _TSR_FLAG = { net_negative: '순판매 음수', card_unverified: '카드 승인 미확인', no_pay_evidence: '결제 근거 없음', ledger_mismatch: '원장과 다름',
   refund_claim_unbacked: '환불 기록 없음', card_refund_capped: '카드 환불 상한', pax_changed: '인원 변경', payc_fallback: '카드 폴백 행',
   no_ticket_row: '좌석 행 없음', no_ledger: '원장 없음', price_override: '금액 수정', refunded_zero: '₩0 환불', settle_unlinked: '티켓 미연결',
-  manual_unverified: '입력 금액', by_rest_admin: '매장 어드민 입력', zero_amount: '금액 0' };
-var _TSR_EXC = { card_captured_no_ticket: '카드는 승인됐는데 티켓이 없다', link_captured_pending: '토스 승인 뒤 링크가 결제 대기로 남았다', invite_debited_unpaid: '예치금은 빠졌는데 초대가 결제 전' };
+  manual_unverified: '입력 금액', by_rest_admin: '매장 어드민 입력', zero_amount: '금액 0',
+  price_differs: '정가와 다름', return_before_visit: '방문 전 반환 → 취소로 셈', agency_snapshot_differs: '대행비 기록과 다름(회차 대행비로)' };
+var _TSR_EXC = { card_captured_no_ticket: '카드는 승인됐는데 티켓이 없다', link_captured_pending: '토스 승인 뒤 링크가 결제 대기로 남았다', invite_debited_unpaid: '예치금은 빠졌는데 초대가 결제 전',
+  app_no_money_record: '살아 있는 구매인데 결제 기록(원장·카드)이 없다', invite_paid_no_ledger: '결제된 초대인데 예치금 결제 줄이 없다', invite_reversed_still_paid: '결제가 되돌려졌는데 초대가 결제됨으로 남았다' };
 function _tsrWon(n){ n = Math.round(Number(n) || 0); return (n < 0 ? '−₩' : '₩') + Math.abs(n).toLocaleString('ko-KR'); }
 function _tsrEsc(v){ return String(v == null ? '' : v).replace(/[&<>"']/g, function(c){ return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
 function _tsrN(r, k){ var v = Number(r && r[k]); return isFinite(v) ? v : 0; }   // 서버가 null 칸을 지운다(jsonb_strip_nulls) — 없으면 0
@@ -8402,6 +8404,13 @@ function _tsrRange(k){
   return { from: f, to: _tsrYmd(+p[0], +p[1] - 1, +p[2] + 1), label: f + ' ~ ' + e };   // 끝 날짜 포함 → 다음 날 0시 전까지
 }
 // 판매 행의 「달」 — 결제일 기준이면 결제일, 방문일 기준이면 방문일 (글자 그대로)
+// 시각 → KST 'YYYY-MM-DD HH:MI' (len 10 이면 날짜만). 이상한 값은 글자 그대로 — 화면·CSV 가 깨지지 않게
+function _tsrKst(ts, len){
+  if (!ts) return '';
+  try { var ms = new Date(ts).getTime(); if (!isFinite(ms)) return String(ts).slice(0, len || 16); return new Date(ms + 9 * 3600 * 1000).toISOString().slice(0, len || 16).replace('T', ' '); }
+  catch (e) { return String(ts).slice(0, len || 16); }
+}
+function _tsrPrevDay(ymd){ var p = String(ymd || '').split('-'); return p.length === 3 ? _tsrYmd(+p[0], +p[1] - 1, +p[2] - 1) : ''; }   // 끝(다음 날 0시) → 화면의 끝 날짜
 function _tsrMonthOf(r, basis){ var d = basis === 'visit' ? r.visit : r.paid_ymd; return d ? String(d).slice(0, 7) : '(미정)'; }
 // 합계 — 화면·시험이 같이 쓴다. f = {ch:{…}, month, rest, basis}
 function _tsrAgg(rows, f){
@@ -8486,6 +8495,7 @@ function tsrSetBasis(k){ _tsr.basis = k; _tsrPaintSeg('.tsr-bb', 'data-k', k); t
 function tsrToggleCh(k){ _tsr.ch[k] = _tsr.ch[k] ? 0 : 1; _tsrPaintCh(); _tsrRender(); }   // 거르기만 — 다시 부르지 않는다
 function tsrToggleTest(on){ _tsr.incTest = !!on; tsrRun(); }
 function tsrPick(kind, key){
+  if (!_tsr.data) return;   // 불러오는 중 — 옛 표의 줄을 누른 것
   if (kind === 'month') _tsr.month = (_tsr.month === key) ? null : key;
   if (kind === 'rest')  _tsr.rest  = (_tsr.rest === key) ? null : key;
   _tsrRender();
@@ -8498,7 +8508,7 @@ async function tsrRun(){
   if (!window.sb) { box.innerHTML = '<span style="color:#B23A2E;">서버 연결이 없습니다</span>'; return; }
   var seq = ++_tsr.seq;
   box.innerHTML = '불러오는 중…';
-  _tsr.month = null; _tsr.rest = null;
+  _tsr.month = null; _tsr.rest = null; _tsr.data = null;   // 불러오는 동안 채널 버튼이 옛 결과를 다시 그리지 않게
   var res;
   try { res = await window.sb.rpc('taam_ticket_sales_report', { p_from: rg.from, p_to: rg.to, p_basis: _tsr.basis, p_include_test: !!_tsr.incTest }); }
   catch (e) { res = { error: e }; }
@@ -8533,8 +8543,9 @@ function _tsrTable(head, rows, onclickOf){
 }
 function _tsrMoneyCell(r){
   if (r.cur && r.cur !== 'KRW' && r.fx_amt != null) {
-    var sym = r.cur === 'USD' ? '$' : (r.cur === 'JPY' ? '¥' : r.cur + ' ');
-    var fx = Number(r.fx_amt); fx = r.cur === 'USD' ? fx.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : Math.round(fx).toLocaleString('ko-KR');
+    var sym = r.cur === 'USD' ? '$' : (r.cur === 'JPY' ? '¥' : _tsrEsc(r.cur) + ' ');
+    var fx = Number(r.fx_amt); if (!isFinite(fx)) return _tsrWon(r.gross);
+    fx = r.cur === 'USD' ? fx.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : Math.round(fx).toLocaleString('ko-KR');
     return sym + fx + ' <span style="color:#a8a29a;">(' + _tsrWon(r.gross) + ')</span>';
   }
   return _tsrWon(r.gross);
@@ -8547,7 +8558,7 @@ function _tsrRender(){
   var L = (_tsr.month || _tsr.rest) ? _tsrAgg(rows, { ch: _tsr.ch, basis: basis, month: _tsr.month, rest: _tsr.rest }) : A;   // 아래 목록
   var T = A.tot, h = '';
   h += '<div style="font-size:11px;color:#8a8580;margin-bottom:6px;">' + _tsrEsc(D._label || '') + ' · ' + (basis === 'visit' ? '방문일' : '결제일') + ' 기준 · 기준 시각 '
-     + _tsrEsc(D.generated_at ? new Date(new Date(D.generated_at).getTime() + 9 * 3600 * 1000).toISOString().slice(0, 16).replace('T', ' ') : '') + '</div>';
+     + _tsrEsc(_tsrKst(D.generated_at)) + '</div>';
   h += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;">'
      + _tsrCard('총 판매', _tsrWon(T.gross), T.n + '건 · ' + T.pax + '명')
      + _tsrCard('취소·환불', _tsrWon(T.refund), '그 판매의 달에서 뺌', T.refund ? '#B23A2E' : null)
@@ -8597,7 +8608,7 @@ function _tsrRender(){
     var st = r.st || 'active';
     h += '<div style="padding:8px 2px;border-bottom:1px solid #f3f0ea;font-size:11.5px;color:#1a1a18;">'
        + '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;"><b>' + _tsrEsc(dt) + '</b><span>' + _tsrEsc(r.rest || '') + '</span>'
-       + '<span style="color:#8a8580;">' + _tsrEsc(r.buyer || '') + (r.pax ? ' · ' + r.pax + '명' : '') + '</span>'
+       + '<span style="color:#8a8580;">' + _tsrEsc(r.buyer || '') + (_tsrN(r, 'pax') ? ' · ' + _tsrN(r, 'pax') + '명' : '') + '</span>'
        + '<span style="font-size:10px;font-weight:800;padding:1px 6px;border-radius:5px;background:' + (st === 'active' ? '#edf7f0;color:#1E7A46' : '#fbeeee;color:#B23A2E') + ';">' + _tsrEsc(_TSR_ST[st] || st) + '</span>'
        + (r.test ? '<span style="font-size:10px;font-weight:800;padding:1px 6px;border-radius:5px;background:#eee;color:#777;">테스트</span>' : '')
        + '</div>'
@@ -8624,7 +8635,7 @@ function _tsrRender(){
   var E = D.exceptions || [];
   if (E.length) {
     h += '<details style="margin-top:10px;padding:10px 12px;border-radius:10px;background:#fff8ec;border:1px solid #f3dfb7;font-size:11px;color:#6a4d1b;"><summary style="cursor:pointer;font-weight:800;">⚠ 확인 필요 ' + E.length + '건</summary>'
-       + E.map(function(e){ return '<div style="margin-top:6px;">' + _tsrEsc(_TSR_EXC[e.kind] || e.kind) + ' · ' + _tsrWon(e.krw) + ' · ' + _tsrEsc(String(e.at || '').slice(0, 10)) + (e.note ? ' · ' + _tsrEsc(e.note) : '') + '</div>'; }).join('')
+       + E.map(function(e){ return '<div style="margin-top:6px;">' + _tsrEsc(_TSR_EXC[e.kind] || e.kind) + ' · ' + _tsrWon(e.krw) + ' · ' + _tsrEsc(_tsrKst(e.at, 10)) + (e.note ? ' · ' + _tsrEsc(e.note) : '') + '</div>'; }).join('')
        + '</details>';
   }
   box.innerHTML = h;
@@ -8633,8 +8644,9 @@ function tsrCsv(){
   var D = _tsr.data; if (!D || !(D.rows || []).length) { showToast('⚠', 'CSV', '내보낼 판매가 없습니다'); return; }
   var basis = D.basis || _tsr.basis;
   var A = _tsrAgg(D.rows, { ch: _tsr.ch, basis: basis, month: _tsr.month, rest: _tsr.rest });
-  var q = function(v){ return '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"'; };
-  var kst = function(ts){ return ts ? new Date(new Date(ts).getTime() + 9 * 3600 * 1000).toISOString().slice(0, 16).replace('T', ' ') : ''; };
+  // 글자 칸이 = + - @ 탭·줄바꿈으로 시작하면 엑셀이 수식으로 읽는다(매장·구매자 이름은 사람이 적은 값) — 앞에 ' 를 붙인다. 숫자 칸은 그대로
+  var q = function(v){ var x = v == null ? '' : String(v); if (typeof v === 'string' && /^[=+\-@\t\r]/.test(x)) x = "'" + x; return '"' + x.replace(/"/g, '""') + '"'; };
+  var kst = function(ts){ return _tsrKst(ts); };
   var L = [['결제일(KST)', '방문일', '시간', '매장', '구매자', '인원', '채널', '결제 수단', '상태', '통화', '외화 금액', '판매(원)', '식사비', '대행비 정가', '주류', '예치금', '카드',
             '취소 환불', '위약 환불', '인원 줄임 환불', '방문 후 반환', '카드 환불 대기', '순판매', 'TAAM 보유', '대행비(수익)', '대행비 상태', '환불 시각', '참조', '표시'].map(q).join(',')];
   A.list.forEach(function(r){
@@ -8647,7 +8659,7 @@ function tsrCsv(){
   try {
     var blob = new Blob(['﻿' + L.join('\r\n')], { type: 'text/csv;charset=utf-8' });
     var url = URL.createObjectURL(blob), a = document.createElement('a');
-    a.href = url; a.download = 'taam-ticket-sales-' + (basis === 'visit' ? 'visit' : 'paid') + '-' + (D._from || 'all') + '_' + (D._to || 'all') + '.csv';
+    a.href = url; a.download = 'taam-ticket-sales-' + (basis === 'visit' ? 'visit' : 'paid') + '-' + (D._from || 'all') + '_' + (_tsrPrevDay(D._to) || 'all') + '.csv';   // 파일 이름은 끝 날짜 포함
     document.body.appendChild(a); a.click();
     setTimeout(function(){ document.body.removeChild(a); URL.revokeObjectURL(url); }, 1000);
     showToast('✓', 'CSV 저장', A.list.length + '건 — 다운로드 폴더를 확인하세요');

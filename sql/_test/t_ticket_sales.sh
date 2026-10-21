@@ -91,6 +91,7 @@ insert into public.payment_orders(order_id,user_id,purpose,amount,currency,statu
 -- 9 테스트 계정 구매 → 기본 제외
 insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_date,party_size,price,status,purchase_id,extra_data,created_at)
  values ('$TST','$R1','tp2','2026.12.01',1,1000,'active','PAYH-tp2_9','{"paidBy":"deposit","server_confirmed":true}','2026-09-23T00:00:00Z');
+insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata,created_at) values ('$TST','general','ticket_purchase',-1000,'{"purchase_id":"PAYH-tp2_9"}','2026-09-23T00:00:00Z');
 -- 10 카드 승인 뒤 좌석 상실 되돌림 (홀드 0원 · 원장 −/+ 짝) → 판매 아님
 insert into public.tickets(user_id,ticket_product_id,party_size,price,status,purchase_id) values ('$M1','tp2',1,0,'cancelled','PAYH-tp2_10');
 insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata) values
@@ -144,11 +145,13 @@ insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,
 -- 25 게스트석 확정 대기
 insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_date,party_size,price,status,purchase_id,extra_data,created_at)
  values ('$M2','$R1','tp1','2026.11.03',1,1000000,'pending_confirm','PAYH-tp1_25','{}','2026-09-24T00:00:00Z');
+insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata,created_at) values ('$M2','general','ticket_purchase',-1000000,'{"purchase_id":"PAYH-tp1_25"}','2026-09-24T00:00:00Z');
 -- 26 카드 잡혔는데 티켓 없음
 insert into public.payment_orders(order_id,user_id,purpose,amount,currency,status,approved_at,fail_reason) values ('O26','$M1','ticket_topup',300000,'KRW','paid','2026-09-24T00:00:00Z','seat_lost_refund_failed');
 -- 27 회원이 extra_data 에 숫자 아닌 cardPaid 를 써도 보고서가 깨지지 않는다
 insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_date,party_size,price,status,purchase_id,extra_data,created_at)
  values ('$M1','$R1','tp2','2026.12.01',1,400000,'active','PAYH-tp2_27','{"paidBy":"deposit","server_confirmed":true,"cardPaid":"abc","agencyFee":"x"}','2026-09-24T02:00:00Z');
+insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata,created_at) values ('$M1','general','ticket_purchase',-400000,'{"purchase_id":"PAYH-tp2_27"}','2026-09-24T02:00:00Z');
 SQL
 
 R="select public.taam_ticket_sales_report(null, null, 'paid', false)"
@@ -160,7 +163,7 @@ row(){ q "select $2 from j, jsonb_array_elements(j->'rows') r where r->>'k' = '$
 ok "1 예치금 판매 gross·dep·net·대행비 예정" "$(row PAYH-tp1_1 "concat_ws('/', r->>'gross', r->>'dep', r->>'pm', r->>'net', r->>'agency', r->>'ag_state', r->>'bd')")" "1700000/1700000/deposit/1700000/300000/planned/product"
 ok "1 정정(fix) 줄은 환불이 아니다" "$(row PAYH-tp1_1 "r->>'rf_cancel'")" "0"
 ok "1 결제일 = 원장 첫 차감 (KST)" "$(row PAYH-tp1_1 "r->>'paid_ymd'")" "2026-09-15"
-ok "2 카드+예치금 = mixed · card 는 주문 기준" "$(row PAYH-tp2_2 "concat_ws('/', r->>'pm', r->>'card', r->>'dep', r->>'bd')")" "mixed/300000/500000/snap"
+ok "2 카드+예치금 = mixed · card 는 주문 기준 · 대행비는 회차 요금" "$(row PAYH-tp2_2 "concat_ws('/', r->>'pm', r->>'card', r->>'dep', r->>'bd')")" "mixed/300000/500000/product"
 ok "3 D-31 취소 — 두 주머니 합 · 대행비 확정 300k" "$(row PAYH-tp1_3 "concat_ws('/', r->>'st', r->>'rf_cancel', r->>'net', r->>'agency', r->>'ag_state')")" "cancelled/1400000/300000/300000/kept"
 ok "4 D-30 취소 — 환불 0 · 전액 보유" "$(row PAYH-tp1_4 "concat_ws('/', r->>'st', r->>'rf_cancel', r->>'net', r->>'agency')")" "cancelled/0/850000/150000"
 ok "5 버려진 홀드는 행이 없다" "$(q "select count(*) from j, jsonb_array_elements(j->'rows') r where r->>'k' in ('PAYH-tp1_5','PAYH-tp2_10')")" "0"
@@ -218,6 +221,77 @@ ok "F 접두어 없는 옛 앱 행도 앱 구매 · 7월 결제" "$(row tp1_1752
 ok "G 깨진 memberUid 도 안 깨진다 · 링크 판매" "$(row chg:a0000000-0000-4000-8000-000000000099 "concat_ws('/', r->>'ch', r->>'gross', coalesce(r->>'uid','(없음)'))")" "link/850000/(없음)"
 ok "H 방문일 기준 — 방문일 없는 판매는 참고로" "$($P -c "select (public.taam_ticket_sales_report(null,null,'visit',false)->'excluded'->'no_visit_date'->>'n')")" "0"
 ok "I 테스트 계정 포함 켜면 보인다" "$($P -c "select count(*) from jsonb_array_elements(public.taam_ticket_sales_report(null,null,'paid',true)->'rows') r where r->>'k'='PAYH-tp2_9'")" "1"
+
+echo "── 적대 리뷰 반영: 회원이 쓸 수 있는 칸으로 금액·상태를 못 바꾼다 ──"
+M3=b1000000-0000-4000-8000-000000000004
+I4=e4000000-0000-4000-8000-000000000004; I5=e5000000-0000-4000-8000-000000000005; I6=e6000000-0000-4000-8000-000000000006
+$P <<SQL >/dev/null
+insert into public.profiles values ('$M3','회원3','user',false);
+-- R1 위조 홀드: price 5천만 · 취소 · 결제 줄 없음 → 판매 아님 · 조용히
+insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_date,party_size,price,status,purchase_id,extra_data,created_at)
+ values ('$M3','$R1','tp1','2026.11.03',2,50000000,'cancelled','PAYH-fake_1','{"server_confirmed":true,"confirmed_at":"2026-10-05T00:00:00Z"}','2026-10-05T00:00:00Z');
+-- R1b 살아 있는데 돈 기록이 없는 행 → 「확인 필요」
+insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_date,party_size,price,status,purchase_id,created_at)
+ values ('$M3','$R1','tp1','2026.11.04',1,850000,'active','PAYH-nomoney','2026-10-06T00:00:00Z');
+-- R2 ₩0 환불 줄에 거대한 agency_held · 'returned' → 무시 (실제 판매 PAYH-tp1_1 의 회원 M1 이 씀)
+insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata,created_at) values
+ ('$M1','general','ticket_refund',0,'{"purchase_id":"PAYH-tp1_1","refund_type":"returned","agency_held":999999999999999}','2026-10-01T00:00:00Z');
+-- R3 회원이 extra_data 에 위조한 pax_changes (price_before 거대 · from 거대)
+insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_date,party_size,price,status,purchase_id,extra_data,created_at)
+ values ('$M3','$R1','tp2','2026.12.01',1,400000,'active','PAYH-forge_3','{"pax_changes":[{"from":"999999999999999","price_before":999999999,"refund":0}]}','2026-10-07T00:00:00Z');
+insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata,created_at) values ('$M3','general','ticket_purchase',-400000,'{"purchase_id":"PAYH-forge_3"}','2026-10-07T00:00:00Z');
+-- R6 위약 환불: agency_held 0 · 30% 위약 (1.7M 중 1.19M 환불)
+insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_date,party_size,price,status,purchase_id,created_at)
+ values ('$M3','$R1','tp1','2026.11.03',2,1700000,'cancelled','PAYH-pen_6','2026-10-08T00:00:00Z');
+insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata,created_at) values
+ ('$M3','general','ticket_purchase',-1700000,'{"purchase_id":"PAYH-pen_6"}','2026-10-08T00:00:00Z'),
+ ('$M3','general','ticket_refund',1190000,'{"purchase_id":"PAYH-pen_6","refund_type":"penalty","agency_held":0}','2026-10-09T00:00:00Z');
+-- R7 방문 전에 'returned' 라벨을 단 환불 → 취소로 센다
+insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_date,party_size,price,status,purchase_id,created_at)
+ values ('$M3','$R1','tp1','2026.11.03',2,1700000,'cancelled','PAYH-ret_7','2026-10-08T01:00:00Z');
+insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata,created_at) values
+ ('$M3','general','ticket_purchase',-1700000,'{"purchase_id":"PAYH-ret_7"}','2026-10-08T01:00:00Z'),
+ ('$M3','general','ticket_refund',1400000,'{"purchase_id":"PAYH-ret_7","refund_type":"returned","agency_held":300000}','2026-10-10T00:00:00Z');
+-- R8 다른 회원이 같은 purchase_id 로 쓴 결제·환불 줄 → 붙지 않는다
+insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata,created_at) values
+ ('$M2','general','ticket_refund',500000,'{"purchase_id":"PAYH-tp1_1","cancel_refund":true}','2026-10-11T00:00:00Z');
+-- R10 카드 통화 칸에 HTML · R11 confirmed_at infinity · R12 같은 order_id 를 두 행이 주장
+insert into public.payment_orders(order_id,user_id,purpose,amount,currency,status,approved_at) values ('O12','$M3','ticket_topup',400000,'KRW','paid','2026-10-12T00:00:00Z');
+insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_date,party_size,price,status,purchase_id,extra_data,created_at) values
+ ('$M3','$R1','tp2','2026.12.01',1,400000,'active','PAYH-o12_a','{"order_id":"O12","cardPaid":400000,"card_currency":"<img src=x onerror=alert(1)>","confirmed_at":"infinity"}','2026-10-12T00:00:00Z'),
+ ('$M3','$R1','tp2','2026.12.02',1,400000,'active','PAYH-o12_b','{"order_id":"O12","cardPaid":400000}','2026-10-12T01:00:00Z');
+-- R4 초대: 결제 뒤 자동 되돌림(capacity_auto_refund) · 여전히 paid · INV 행 없음
+insert into public.reservation_invites values ('$I4','$SU','$M3','$R1','메이노','2026.11.20','19:00',1,700000,150000,0,850000,'paid','2026-10-01','2026-10-01T01:00:00Z',null,null);
+insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata,created_at) values
+ ('$M3','general','ticket_purchase',-850000,'{"purchase_id":"INV-e4000000-1","invite_id":"$I4"}','2026-10-01T01:00:00Z'),
+ ('$M3','general','ticket_refund',850000,'{"purchase_id":"INV-e4000000-1","refund_type":"returned","reason":"capacity_auto_refund"}','2026-10-01T01:00:05Z');
+-- R5 초대: paid 인데 원장 결제 줄 없음 (회원이 자기 초대 행을 paid 로 바꿀 수 있다)
+insert into public.reservation_invites values ('$I5','$SU','$M3','$R1','메이노','2026.11.21','19:00',1,700000,150000,0,850000,'paid','2026-10-01','2026-10-02T00:00:00Z',null,null);
+-- R13 초대: 회원이 대행비를 부풀림(회차 대행비 150k 보다 큰 900k) → 회차 대행비로 깎는다
+insert into public.reservation_invites values ('$I6','$SU','$M3','$R1','메이노','2026.11.22','19:00',1,0,900000,0,850000,'paid','2026-10-01','2026-10-03T00:00:00Z',null,'tp1');
+insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata,created_at) values ('$M3','general','ticket_purchase',-850000,'{"purchase_id":"INV-e6000000-1","invite_id":"$I6"}','2026-10-03T00:00:00Z');
+-- R9 결제 링크 memberUid: 대시 없는 36자 헥스
+insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_date,party_size,price,status,purchase_id,extra_data)
+ values ('$SU','$R1','tp1','2026.11.03',1,850000,'active','LINK-r9','{"chargeId":"a0000000-0000-4000-8000-000000000098","memberUid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}');
+insert into public.kashikiri_charges(id,event_id,label,amount_krw,status,approved_at,link_invite,purpose,pay_currency,pay_amount,pay_fx,payload)
+ values ('a0000000-0000-4000-8000-000000000098','f1000000-0000-4000-8000-000000000001','R9',850000,'paid','2026-10-13T00:00:00Z',true,'ticket','KRW',850000,1,'{"pax":1}');
+SQL
+ok "보고서가 깨지지 않는다(거대한 숫자 · 깨진 uuid · infinity)" "$($P -c "select (public.taam_ticket_sales_report(null,null,'paid',false)->>'ok')" 2>&1)" "true"
+ok "R1 위조 홀드(5천만 · 취소 · 결제 줄 없음)는 행도 예외도 아니다" "$(q "select (select count(*) from jsonb_array_elements(j->'rows') r where r->>'k'='PAYH-fake_1') || '/' || (select count(*) from jsonb_array_elements(j->'exceptions') e where e->>'ref'='PAYH-fake_1') from j")" "0/0"
+ok "R1b 살아 있는데 돈 기록 없는 행 → 합계 밖 「확인 필요」" "$(q "select (select count(*) from jsonb_array_elements(j->'rows') r where r->>'k'='PAYH-nomoney') || '/' || (select e->>'kind' from jsonb_array_elements(j->'exceptions') e where e->>'ref'='PAYH-nomoney') from j")" "0/app_no_money_record"
+ok "R2 ₩0 환불 줄의 agency_held·returned 는 무시 — PAYH-tp1_1 은 그대로 판매 · 대행비 300k 예정" "$(row PAYH-tp1_1 "concat_ws('/', r->>'st', r->>'net', r->>'agency', r->>'ag_state')")" "active/1700000/300000/planned"
+ok "R3 위조 pax_changes — 판매액은 원장(400k) · 거대한 from 은 무시" "$(row PAYH-forge_3 "concat_ws('/', r->>'gross', r->>'net', coalesce(r->>'pax0','-'), r->>'pax')")" "400000/400000/-/1"
+ok "R6 위약(agency_held 0) — 대행비는 0 이 아니라 1인 대행비 × 인원(보유 몫 안)" "$(row PAYH-pen_6 "concat_ws('/', r->>'st', r->>'rf_penalty', r->>'net', r->>'agency', r->>'ag_state')")" "penalty/1190000/510000/300000/kept"
+ok "R7 방문 전 'returned' 환불은 취소로 — 순판매에서 빠진다" "$(row PAYH-ret_7 "concat_ws('/', r->>'st', r->>'rf_cancel', r->>'rf_return', r->>'net', (r->'flags')::text)")" "cancelled/1400000/0/300000/[\"return_before_visit\"]"
+ok "R8 다른 회원의 같은 purchase_id 줄은 붙지 않는다 (PAYH-tp1_1 환불 0)" "$(row PAYH-tp1_1 "r->>'rf_cancel'")" "0"
+ok "R10 카드 통화 칸의 HTML 은 KRW 로" "$(row PAYH-o12_a "r->>'cur'")" "KRW"
+ok "R11 infinity confirmed_at 은 안 쓴다 — 결제일은 카드 승인일" "$(row PAYH-o12_a "r->>'paid_ymd'")" "2026-10-12"
+ok "R12 같은 카드 주문은 한 판매에만 (먼저 만든 행)" "$(q "select string_agg((r->>'k') || '=' || (r->>'gross'), ',' order by r->>'k') from j, jsonb_array_elements(j->'rows') r where r->>'k' like 'PAYH-o12_%'")" "PAYH-o12_a=400000"
+ok "R12b 주문을 못 가진 두 번째 행은 「확인 필요」" "$(q "select count(*) from j, jsonb_array_elements(j->'exceptions') e where e->>'ref'='PAYH-o12_b' and e->>'kind'='app_no_money_record'")" "1"
+ok "R4 자동 되돌린 초대는 판매 아님 → 「확인 필요」(still paid)" "$(q "select (select count(*) from jsonb_array_elements(j->'rows') r where r->>'k'='inv:$I4') || '/' || (select e->>'kind' from jsonb_array_elements(j->'exceptions') e where e->>'ref'='$I4') from j")" "0/invite_reversed_still_paid"
+ok "R5 원장 없는 paid 초대 → 「확인 필요」" "$(q "select (select count(*) from jsonb_array_elements(j->'rows') r where r->>'k'='inv:$I5') || '/' || (select e->>'kind' from jsonb_array_elements(j->'exceptions') e where e->>'ref'='$I5') from j")" "0/invite_paid_no_ledger"
+ok "R13 부풀린 초대 대행비는 회차 대행비로 · 판매액은 원장" "$(row "inv:$I6" "concat_ws('/', r->>'gross', r->>'agency', ((r->'flags') ? 'agency_snapshot_differs')::text)")" "850000/150000/true"
+ok "R9 대시 없는 36자 memberUid 도 안 깨진다 · 링크 판매" "$(row chg:a0000000-0000-4000-8000-000000000098 "concat_ws('/', r->>'ch', r->>'gross', coalesce(r->>'uid','(없음)'))")" "link/850000/(없음)"
 out2=$($P -f "$MIG" 2>&1)
 ok "두 번째 RUN: 오류 없음 · ❌ 0 · ⑤ 채널 합계 줄이 찍힌다(이름 없음)" "$(echo "$out2" | grep -E "^ERROR|^psql:.*ERROR" | head -1)|$(echo "$out2" | grep -c '❌')|$( [ $(echo "$out2" | grep -cE '⑤ (app|invite|link|settle)') -ge 4 ] && echo ok)|$(echo "$out2" | grep -c '회원1')" "|0|ok|0"
 # 화면 시험용 — TSR_DUMP=파일 이면 보고서 JSON 을 남긴다(결제일·전체 · 기본)
