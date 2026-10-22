@@ -304,6 +304,17 @@ DB 값은 `'A'` 그대로고 **이름만** 「게스트 회원」이다. 값을 
 - ⚠ `_tkAcquireSeatHold(t, r, pax)` · `openTdPayPopup` 안의 `t` 는 **티켓**이다. 사전은 `_shT()`/`window.t` 로 — 종전 `t('seathold.tier')` 줄이 TypeError 를 내고 있었다(같은 날 수리).
 - 배포 순서: **앱(index.html) 먼저, 마이그레이션은 그 뒤 커밋으로** — 옛 빌드가 캐시에 남은 채 서버 거절을 받으면 메시지 없이 끝난다(지금 빌드는 예외도 토스트로 보인다).
 - 회귀: `bash sql/_test/t_purchase_unique.sh`(42건 — 같은 purchase_id·삭제된 회차·옛 중복 행 시간 변경·남의 user_id 침묵 포함) · 스크래치 `dupguard.js`. 진단: 스크래치 `dup_kataori.sql`.
+- **🔓 구매 규정 예외(협의 구매) — 슈퍼어드민만 (2026-10-22 · `20261022_purchase_rule_exception.sql` · 빌드 `2026.10.22-e`).** 「슈퍼어드민과 협의 후 같은 회차를 한 번 더(일행 추가) · 같은 저녁에 두 매장」이 위 규칙에 막혔다(스시 사이토 2027.06.01 20:30 「중복 구매 불가」). 규칙은 그대로 두고 **그 회원 · 그 회차에만** 푼다.
+  표 `purchase_rule_exceptions`(회원 · 회차 · `allow_dup`(같은 회차 추가 · `extra` 1~5건) · `allow_time`(같은 날 같은 시간대) · `expires_at`(기본 방문일 끝 KST) · `note` 필수 · 만든 사람 · 해제) + 사용 기록 `purchase_rule_exception_uses`(예외로 통과한 구매 id·종류) · 티켓 행 `extra_data.ruleException`(표시용).
+  쓰기는 RPC 만(`taam_purchase_exception_grant/_revoke` · 슈퍼어드민·SQL Editor·서버 = `_taam_fee_caller_ok`) · 같은 회원·회차의 살아 있는 예외는 하나(새로 허용하면 옛 줄 「새 예외로 대체」) · 해제·기한이 지나면 다시 막힌다(**이미 산 티켓은 그대로** — 취소는 따로).
+  읽기: 슈퍼어드민 RLS · `taam_purchase_exception_list/_preview` · 회원은 `taam_my_purchase_exceptions()` 로 **자기 것의 열쇠만**(사유·만든 사람 없음).
+  가드 `taam_guard_purchase_unique` 교체(md5 가드 — 저장소 20261014 판 `7e6c53a6…` 또는 **라이브 주석 축약 판 `efee83c2…`**(로직 같음 · 2026-10-22 진단 `20261022_diag_guard_src.sql` 로 확인) · 이미 새 판이면 ✅ · 모르는 판 ❌ 건너뜀): ① 같은 회차가 있으면 **살아 있는 같은 회차 행 수 ≤ extra** 일 때만 통과(그때 ② 에서 같은 회차 행은 안 센다) ·
+  ② 같은 날 같은 시간대가 있으면 사려는 회차가 time 예외일 때만 통과 · **time 예외는 양쪽으로** — 예외를 받은 회차는 이 회원의 겹침 판정에서 빠진다(사이토 20:30 이 있는 회원에게 다른 매장 19:00 을 허락했으면 그 뒤 사이토를 한 번 더 살 때도 19:00 은 겹침으로 안 센다).
+  그 밖의 줄(남의 user_id 침묵 · UPDATE 열쇠 그대로 통과 · 회원 잠금 · 문구)은 종전 그대로. 초대 확정·결제 링크 결제 뒤 소유자 이전·toss-confirm 폴백 INSERT 는 가드를 지나므로 같은 규칙. 결제 링크 만들기의 회원 선검사 두 줄도 치환(md5 `350c0c48…` · `pg_get_functiondef` + 정확히 한 곳 · `_taam_pu_clash_other`).
+  재구매 제한(같은 매장 N일)과는 **별개**다 — 같은 날은 원래 예외, 다른 날은 회차별 「재구매 해제」.
+  앱: 사전 차단(`_tkFindPurchaseConflict`)이 예외 캐시(`_tkPurchaseExc` · `_tkExcFor`)를 서버와 같은 규칙으로 보고, **막히면 서버에서 다시 읽고 한 번 더**(`checkPurchaseConflictsAsync` — 결제 팝업 입구 · `handleTicketAction` 은 한 번만 다시 연다 · riPay 의 `_tkServerPurchaseConflict` 도) · `taamSyncNow` 가 미리 읽는다 · 옛 재구매 검사는 예외 회차의 같은 날 행을 안 센다.
+  막힘 팝업에 「일행 추가처럼 꼭 필요한 경우 TAAM 에 문의」(`ticket.block_contact` 세 벌). 슈퍼어드민 화면 `pxOpen`(어드민 메뉴 「🔓 구매 규정 예외 (협의 구매)」 · 회원 원장 「🔓 구매 규정 예외」 · 캘린더 구매자 상세 「🔓 이 회원에게 추가 구매 허용」 — 회원 행만) — 회원 · 회차(새로 살 것) · 미리보기(지금 걸리는 것 · 필요한 항목 자동 체크) · 항목 · 기한 · 사유 · 「회원에게 알림」(알림함 「예약하실 수 있습니다」 + 푸시 세 벌 · `/?ticket=` · category `purchase_exception`) · 목록(상태 · 사용 기록 · 해제). `_taamBusyNow` 에 `pxPopup`.
+  회귀: `bash sql/_test/t_purchase_exception.sh`(46건 — A 실제 가드 위: 예외 없음 종전 · 허용 규칙·권한 · 같은 회차 추가 N건 · 취소 뒤 · PAYC 폴백 · 시간대 · 양쪽 규칙 · 초대 확정 모양 · 기한·해제·대체 · 회원이 보는 것·못 하는 것 · 목록·미리보기 · 운영 행 · 재실행 / B 결제 링크 픽스처 위(`PL_DB/PL_KEEP` 로 `t_pay_link.sh` 를 남김): 선검사 치환 · 결제 뒤 소유자 이전 / C 모르는 판 ❌) · `t_purchase_unique.sh` 를 새 가드 위에서(스크래치 `tpu_exc.sh`) · 스크래치 `pxc/px.js`(29건).
 
 ### 캘린더 「수동 추가」 내역 수정 — 좌석 연동 행은 서버 RPC, 기록은 직접 UPDATE (2026-10-14)
 
@@ -880,7 +891,7 @@ Apple 은 iPad 와 iPhone **두 기기로 심사**하므로(리뷰 노트에 명
 | `profiles.role` | `trg_taam_guard_profile_role(_ins)` | 자기 승격 차단. 허용 이메일만 |
 | `membership_tier` | `trg_taam_guard_membership_tier` | 비어 있을 때 **자기 초대코드 값으로만** 1회. M 만료일은 서버가 365일로 |
 | 티켓 등급 제한 | `trg_taam_guard_ticket_tier` | `min_tier` 미달 구매 차단. 슈퍼어드민·초대·수동입력만 예외 |
-| 같은 회차 중복 · 같은 날 같은 시간대 | `trg_taam_guard_ticket_unique` | 한 회원 = 한 회차 1건(hold 포함) · 같은 날 점심/저녁 각 1건. 운영 행(KSK-/MAN-/INVH- · LINK- 는 memberUid 없을 때만)만 예외 · PAYH-/PAYC- 는 플래그가 있어도 회원 행, 슈퍼어드민·service_role 도 적용 (2026-10-13, 위 「한 회원 = 한 회차 1건」 · 운영 행 판정은 2026-10-18 `20261018_pay_link.sql` 판) |
+| 같은 회차 중복 · 같은 날 같은 시간대 | `trg_taam_guard_ticket_unique` | 한 회원 = 한 회차 1건(hold 포함) · 같은 날 점심/저녁 각 1건. **예외는 슈퍼어드민이 회원·회차별로 허용한 것만**(`purchase_rule_exceptions` · 2026-10-22). 운영 행(KSK-/MAN-/INVH- · LINK- 는 memberUid 없을 때만)만 예외 · PAYH-/PAYC- 는 플래그가 있어도 회원 행, 슈퍼어드민·service_role 도 적용 (2026-10-13, 위 「한 회원 = 한 회차 1건」 · 운영 행 판정은 2026-10-18 `20261018_pay_link.sql` 판) |
 | 재구매 제한 | `trg_taam_repurchase_guard` | 같은 매장 N일(30·60·90·120·180). **방문일 간격**으로 센다(구매일 아님) · 같은 날은 예외 · 홀드도 기존 예약으로 센다 · ~~발매 7일 뒤 자동 해제~~ **2026-10-13 폐지**(`20261013_repurchase_no_release.sql`). 대신 **회차별 수동 해제** — 슈퍼어드민이 티켓 리스트의 「재구매 해제」로 `ticket_products.repurchase_open` 을 켜면(`taam_ticket_repurchase_open`, `20261014_repurchase_manual_release.sql`) `taam_repurchase_released` 와 앱 `_repReleasedByAge` 가 **그 회차만** true. 매장 설정은 그대로. **풀고 나면 팝업으로 푸시를 묻는다**(2026-10-16 · `_tuRepurchaseAskPush`) — 대상은 옛 자동 해제가 쓰던 `taam_repurchase_release_targets(회차)`(이 매장 재구매 창 안에 방문·예정이고 이 회차를 안 산 회원)뿐, 문구는 옛 서버 알림과 같은 「예약이 열렸습니다 / {매장} · {날짜} {시간} — 재구매 제한이 풀려…」(알림함 EN/JA 는 이미 안다 · 푸시는 i18n 세 벌 · category `repurchase_released`). 대상이 없으면 「티켓 오픈 알림 발송」으로 안내. 자동 발송 없음. 회귀 `bash sql/_test/t_repurchase.sh`(15건) · 스크래치 `rpush.js`(7건) |
 | 티켓 필드 | `trg_taam_guard_ticket_row` | 회원은 **취소만**. `price`·`party_size`·`status(hold→active 포함)` 를 못 고침 (2026-09-13 강화) |
 | 티켓 INSERT | `trg_taam_guard_ticket_insert` | 회원은 `status='hold'` 만, 매장 어드민은 `hold`·`manual`. **확정 행은 서버(RPC·toss-confirm)만** 만든다 (2026-09-13) |
