@@ -12,9 +12,9 @@
 //   ② 시크릿은 승인한 MID 의 것 —
 //      승인한 MID 의 시크릿으로 취소해야 한다: 등록 카드 자동결제(paid_via billing_key)는 TOSS_BILLING_SECRET_KEY(없으면 TOSS_SECRET_KEY),
 //      일반 결제창은 TOSS_SECRET_KEY. 외화 주문은 대기 금액이 원화라 단위가 다르다 → 막고 상점관리자로 안내.
-//   ③ 이 구매에 앱이 이미 한 카드 취소(payment_orders.metadata.app_cancels · 견적의 done_for_purchase)를 빼고 토스 남은 금액 안에서만 —
-//      같은 결제의 「앱 밖 취소」 중 인원 줄임으로 설명되는 몫(견적의 pax_card — 서버 금액·원장으로 센다)은 정상으로 보고,
-//      **설명되지 않는 몫(상점관리자에서 이미 한 환불)은 이번 금액에서 뺀다**(배포 전 2차 리뷰 — 옛 흐름으로 먼저 취소한 대기를 두 번 돌려주지 않게) · other_cancelled 로 알린다.
+//   ③ 이 구매에 앱이 이미 한 카드 취소(payment_orders.metadata.app_cancels · 견적의 done_for_purchase)를 빼고 토스 남은 금액 안에서만.
+//      **토스에 앱 밖 취소(상점관리자 · 인원 줄임 부분취소)가 하나라도 있으면 자동으로 하지 않는다**(outside_cancel) — 그 취소가 이 환불을 이미 했는지 서버가 가릴 수 없다
+//      (배포 전 2차 검증: 먼저 상점관리자에서 돌려준 대기를 두 번 돌려주던 길). 앱이 「이미 했으면 완료 표시 · 아니면 상점관리자에서」로 안내한다.
 //      dry_run 이면 금액만 돌려준다(앱 확인창) · 실행은 expect_amount 가 지금 금액과 같아야 한다(amount_changed).
 //   ④ POST /v1/payments/{paymentKey}/cancel {cancelReason, cancelAmount} · Idempotency-Key 'taam-crf-<구매>-<이 구매에 앱이 한 취소 누적>'
 //      (두 번 눌리거나 재시도해도 토스는 한 번만 취소하고 같은 결과를 돌려준다).
@@ -75,16 +75,14 @@ async function handle(req: Request){
     const balance = Number(pay.balanceAmount ?? 0);
     const cancelled = Math.max(0, tossTotal - balance);                                   // 이 결제에서 토스가 취소한 전부
     const done = Math.max(0, Math.floor(Number(q.done_for_purchase || 0)));              // 그중 이 구매에 앱이 한 것
-    const other = Math.max(0, cancelled - Math.max(0, Math.floor(Number(q.app_cancelled_order || 0))));   // 앱 밖(인원 줄임·상점관리자) 취소
-    const paxCard = Math.max(0, Math.floor(Number(q.pax_card || 0)));                     // 그중 인원 줄임으로 설명되는 몫(서버가 금액·원장으로 셌다)
-    const unexplained = Math.max(0, other - paxCard);                                     // 설명 안 되는 몫 = 상점관리자에서 이미 한 환불로 본다
+    const other = Math.max(0, cancelled - Math.max(0, Math.floor(Number(q.app_cancelled_order || 0))));   // 앱 밖(상점관리자·인원 줄임) 취소
     const target = Math.floor(Number(q.target || 0));
-    const amount = Math.max(0, Math.min(target - done - unexplained, balance));
-    const info = { amount, target, done, cancelled, other_cancelled: other, pax_card: paxCard, unexplained, balance, card_paid: q.card_paid, pending: q.pending, policy: q.policy, set_by_role: q.set_by_role,
+    const amount = Math.max(0, Math.min(target - done, balance));
+    const info = { amount, target, done, cancelled, other_cancelled: other, balance, card_paid: q.card_paid, pending: q.pending, policy: q.policy, set_by_role: q.set_by_role,
                    order_id: q.order_id, order_note: (q.crp_order_id && q.crp_order_id !== q.order_id) ? 'pending_order_differs' : null };
-    if(!(amount > 0)) return json({ ok: false, error: done >= target && done > 0 ? 'already_done_by_app'
-                                                      : (unexplained > 0 && target - done > 0 ? 'already_refunded_at_toss'
-                                                      : (!(balance > 0) ? 'nothing_left_at_toss' : 'nothing_to_refund')), ...info });
+    if(done >= target && done > 0) return json({ ok: false, error: 'already_done_by_app', ...info });
+    if(other > 0) return json({ ok: false, error: 'outside_cancel', ...info });           // 앱 밖 취소가 있으면 사람이 상점관리자에서 본다
+    if(!(amount > 0)) return json({ ok: false, error: !(balance > 0) ? 'nothing_left_at_toss' : 'nothing_to_refund', ...info });
     if(dry_run) return json({ ok: true, dry_run: true, ...info });
     if(Math.floor(Number(expect_amount)) !== amount) return json({ ok: false, error: 'amount_changed', ...info });   // 앱이 본 금액과 지금 금액이 다르면 다시 보여 준다
 

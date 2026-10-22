@@ -84,7 +84,7 @@ ok "B6 홀드 없이 만든 주문(PAYC- 폴백 행) — 서버가 적은 order_
 mk PAYH-h 2027.09.20 5
 $P -c "update public.payment_orders set metadata = jsonb_set(metadata, '{hold_purchase_id}', '\"PAYH-zzz\"') where order_id = 'O_PAYH-h'" >/dev/null
 cancel_member PAYH-h 125000 O_PAYH-h
-ok "B7 다른 구매에 묶인 주문은 쓰지 않는다 → no_order_for_purchase" "$(Q PAYH-h error)" "no_order_for_purchase"
+ok "B7 다른 구매에 묶인 주문은 쓰지 않는다 → order_other_purchase" "$(Q PAYH-h error)" "order_other_purchase"
 mk PAYH-i 2027.09.20 5
 ok "B8 좌석이 살아 있으면(대기도 없음) 거절" "$(Q PAYH-i error)" "not_pending"
 ok "B9 회원·매장 어드민 세션은 FORBIDDEN" "$(as $M1 "select public.taam_card_refund_quote('PAYH-b')" | grep -c FORBIDDEN)/$(as $RA "select public.taam_card_refund_quote('PAYH-b')" | grep -c FORBIDDEN)" "1/1"
@@ -102,7 +102,7 @@ $P -c "insert into public.tickets(user_id,ticket_product_id,reservation_date,par
        insert into public.tickets(user_id,ticket_product_id,reservation_date,party_size,price,status,purchase_id,extra_data) values ('$M1','tp_c','2027.09.20',2,1700000,'active','PAYC-tp_c_2', jsonb_build_object('order_id','O_X'))" >/dev/null
 as $M1 "update public.tickets set status='cancelled', extra_data = extra_data || jsonb_build_object('card_refund_pending', jsonb_build_object('amount',1700000,'status','pending')) where purchase_id in ('PAYH-c1','PAYC-tp_c_2')" >/dev/null
 ok "C2 가짜 홀드(주문번호 지워짐) → no_order_for_purchase" "$(Q PAYH-c1 error)" "no_order_for_purchase"
-ok "C3 같은 주문을 쓰는 다른 살아 있는 티켓이 있으면 PAYC 폴백 거절" "$(Q PAYC-tp_c_2 error)" "no_order_for_purchase"
+ok "C3 같은 주문을 쓰는 다른 살아 있는 티켓이 있으면 자동 취소 거절(order_shared)" "$(Q PAYC-tp_c_2 error)" "order_shared"
 mk PAYH-m 2027.09.20 5
 $P -c "update public.payment_orders set metadata = jsonb_set(metadata, '{ticket_id}', '\"tp_other\"') where order_id = 'O_PAYH-m'" >/dev/null
 cancel_member PAYH-m 125000 O_PAYH-m
@@ -127,7 +127,7 @@ $P -c "insert into public.ticket_products values ('tp_p1', '$VD60', 100000) on c
   insert into public.payment_orders values ('O_p1','$M1','paid',1600000,'KRW','pk_p1', now() - interval '3 hours', now(), jsonb_build_object('hold_purchase_id','PAYH-p1','total',1600000,'agency_fee',100000,'pax',2));
   update public.tickets set party_size = 1, price = 900000, extra_data = extra_data || jsonb_build_object('card_refund_queue', jsonb_build_array(jsonb_build_object('amount', 700000, 'status', 'pending'))) where purchase_id = 'PAYH-p1'" >/dev/null
 cancel_member PAYH-p1 99999999 O_p1
-ok "C10 인원 줄임 뒤(전액 카드): 총액 = 지금 금액 900,000 · 인원 1 · 인원 줄임 카드 몫 700,000 · 상한·목표 800,000 (처음 금액으로 부풀지 않는다)" "$(Q PAYH-p1 total)/$(Q PAYH-p1 pax_card)/$(Q PAYH-p1 card_cap)/$(Q PAYH-p1 target)" "900000/700000/800000/800000"
+ok "C10 인원 줄임 뒤(전액 카드 · 금액·인원이 주문과 다름) → 자동 취소 안 함(pax_changed — 상점관리자로)" "$(Q PAYH-p1 error)" "pax_changed"
 # C11 섞음: 카드 1,000,000 + 예치금 600,000 → 인원 줄임 ₩700,000(예치금 600,000 원장 + 카드 100,000) · price 900,000
 $P -c "insert into public.ticket_products values ('tp_p2', '$VD60', 100000) on conflict do nothing;
   insert into public.tickets(user_id,ticket_product_id,reservation_date,party_size,price,status,purchase_id,restaurant_name,extra_data)
@@ -136,13 +136,31 @@ $P -c "insert into public.ticket_products values ('tp_p2', '$VD60', 100000) on c
   insert into public.deposit_transactions values ('$M1','ticket_purchase',-600000, jsonb_build_object('purchase_id','PAYH-p2'), now() - interval '3 hours'),
                                                 ('$M1','ticket_pax_change',600000, jsonb_build_object('purchase_id','PAYH-p2'), now() - interval '2 hours')" >/dev/null
 cancel_member PAYH-p2 99999999 O_p2
-ok "C11 인원 줄임 뒤(섞음): 예치금 몫 600,000(원장) · 카드 몫 100,000 · 남은 예치금 0 → 목표 800,000" "$(Q PAYH-p2 pax_dep)/$(Q PAYH-p2 pax_card)/$(Q PAYH-p2 dep_paid)/$(Q PAYH-p2 target)" "600000/100000/0/800000"
+ok "C11 인원 줄임 원장(ticket_pax_change)이 있으면 → pax_changed" "$(Q PAYH-p2 error)" "pax_changed"
 # C12 슈퍼어드민이 적은 대기라도 인원 줄임으로 이미 돌려준 카드 몫은 넘지 못한다 (카드 1,600,000 − 700,000)
 $P -c "update public.tickets set extra_data = jsonb_set(extra_data, '{card_refund_pending}', jsonb_build_object('amount', 2000000, 'status', 'pending', 'set_by_role', 'superadmin')) where purchase_id = 'PAYH-p1'" >/dev/null
-ok "C12 슈퍼어드민 대기 2,000,000 → 목표 = 카드 − 인원 줄임 카드 몫 = 900,000" "$(Q PAYH-p1 target)" "900000"
+ok "C12 슈퍼어드민이 적은 대기라도 인원이 바뀐 결제는 → pax_changed" "$(Q PAYH-p1 error)" "pax_changed"
 # C13 인원 줄임이 없으면 pax_card 0 · 회원이 card_refund_queue 를 부풀려도 견적은 그 칸을 안 본다
 as $M1 "update public.tickets set extra_data = extra_data || jsonb_build_object('card_refund_queue', jsonb_build_array(jsonb_build_object('amount', 9999999))) where purchase_id = 'PAYH-b'" >/dev/null
-ok "C13 인원 줄임 없음 → pax_card 0 (회원이 적은 card_refund_queue 는 무시)" "$(Q PAYH-b pax_card)" "0"
+ok "C13 회원이 card_refund_queue·pax_changes 를 적어도 되돌린다(인원 변경을 꾸며 자동 취소를 막거나 숨기지 못한다) · 견적 ok" "$($P -c "select (extra_data ? 'card_refund_queue')::text from public.tickets where purchase_id='PAYH-b'")/$(Q PAYH-b ok)" "false/true"
+# C14 회원은 이미 있는 구매 id 로 홀드를 못 넣는다 · 서버(toss-confirm 폴백)가 같은 id 로 넣어 행이 둘이 되면 → purchase_id_reused
+r14=$(as $M1 "insert into public.tickets(user_id,ticket_product_id,reservation_date,party_size,price,status,purchase_id,extra_data,created_at) values ('$M1','tp_PAYH-b','2027.09.20',1,800000,'hold','PAYH-b','{}','2030-01-01')")
+$P -c "insert into public.tickets(user_id,ticket_product_id,reservation_date,party_size,price,status,purchase_id,extra_data) values ('$M1','tp_PAYH-b','2027.09.20',2,800000,'active','PAYH-b','{}')" >/dev/null
+ok "C14 회원 재사용 → PURCHASE_ID_TAKEN · 서버가 같은 id 로 넣어 둘이면 → purchase_id_reused" "$(echo "$r14" | grep -c PURCHASE_ID_TAKEN)/$(Q PAYH-b error)" "1/purchase_id_reused"
+# C15 예치금 쪽에서 더 돌려줬으면 카드 몫이 그만큼 준다 (섞음 800,000 = 카드 125,000 + 예치금 675,000 · 30분 안 전액 · 예치금 환불 800,000 원장)
+mk PAYH-dd 2027.09.20 5
+$P -c "insert into public.deposit_transactions values ('$M1','ticket_refund',800000, jsonb_build_object('purchase_id','PAYH-dd'), now())" >/dev/null
+cancel_member PAYH-dd 125000 O_PAYH-dd
+ok "C15 예치금으로 800,000 을 이미 돌려줬으면 카드 목표 0 (총액 800,000 − max(675,000, 800,000))" "$(Q PAYH-dd card_cap)/$(Q PAYH-dd target)" "0/0"
+# C16 매장 어드민(소유자 아님)의 인원 변경 함수는 pax_changes·card_refund_queue 를 그대로 적는다 · 회원 INSERT 는 그 칸을 못 싣는다
+as aaaaaaaa-0000-4000-8000-0000000000ad "update public.tickets set extra_data = extra_data || jsonb_build_object('pax_changes', jsonb_build_array(jsonb_build_object('from',2,'to',1)), 'card_refund_queue', jsonb_build_array(jsonb_build_object('amount',100))) where purchase_id = 'PAYH-v'" >/dev/null
+as $M1 "insert into public.tickets(user_id,ticket_product_id,party_size,price,status,purchase_id,extra_data) values ('$M1','tp_c',1,0,'hold','PAYH-c16', jsonb_build_object('pax_changes', jsonb_build_array(1), 'card_refund_queue', jsonb_build_array(1), 'seatHold', true))" >/dev/null
+ok "C16 매장 어드민 세션은 인원 변경 기록을 적는다 · 회원 홀드 INSERT 는 지운다" "$($P -c "select (extra_data ? 'pax_changes')::text || '/' || (extra_data ? 'card_refund_queue')::text from public.tickets where purchase_id='PAYH-v'")/$($P -c "select (extra_data ? 'pax_changes')::text || '/' || (extra_data ? 'card_refund_queue')::text || '/' || (extra_data ? 'seatHold')::text from public.tickets where purchase_id='PAYH-c16'")" "true/true/false/false/true"
+# C17 회원 예치금 환불 — 인원 줄임으로 600,000 을 이미 돌려준 구매(예치금 600,000)에 또 600,000 → LEDGER_REFUND_EXCEEDS_PAID · 인원 줄임 없는 구매의 정상 환불은 통과 · 슈퍼어드민은 그대로
+r17a=$(as $M1 "insert into public.deposit_transactions values ('$M1','ticket_refund',600000, jsonb_build_object('purchase_id','PAYH-p2'), now())")
+r17b=$(as $M1 "insert into public.deposit_transactions values ('$M1','ticket_refund',675000, jsonb_build_object('purchase_id','PAYH-v'), now())")
+r17c=$(as $SU "insert into public.deposit_transactions values ('$M1','ticket_refund',600000, jsonb_build_object('purchase_id','PAYH-p2'), now())")
+ok "C17 인원 줄임 뒤 예치금 이중 환불 거절 · 정상 환불 통과 · 슈퍼어드민 그대로" "$(echo "$r17a" | grep -c LEDGER_REFUND_EXCEEDS_PAID)/$(echo "$r17b" | grep -c ERROR)/$(echo "$r17c" | grep -c ERROR)" "1/0/0"
 out2=$($P -f "$MIG" 2>&1)
 ok "재실행 오류 없음 · ❌ 0" "$(echo "$out2" | grep -cE "^ERROR|psql:.*ERROR")|$(echo "$out2" | grep -c '❌')" "0|0"
 psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1
