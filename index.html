@@ -8377,7 +8377,7 @@ window.cardFeeOpen = cardFeeOpen; window.cardFeeSetPeriod = cardFeeSetPeriod; wi
 //   판매 하나 = 결제 하나: 앱 구매(예치금·카드) · 초대 · 결제 링크 · 대관 정산 · (켜면) 미연결 정산 · 수동 입력 · 수동 기록.
 //   환불은 그 판매에 붙는다(그 판매의 달에 빠진다). 순판매 = 판매 − 취소·위약·인원 줄임 환불. 방문 후 반환은 따로(「TAAM 보유」).
 //   월은 'YYYY-MM-DD' 글자를 잘라서 묶는다 — new Date 로 바꾸면 해외 기기에서 하루가 밀린다.
-var _tsr = { period: 'month', basis: 'paid', ch: { app: 1, invite: 1, link: 1, settle: 1, settle_x: 0, man: 0, dm: 0 }, incTest: false, data: null, month: null, rest: null, seq: 0 };
+var _tsr = { period: 'month', basis: 'paid', ch: { app: 1, invite: 1, link: 1, settle: 1, settle_x: 0, man: 0, dm: 0 }, incTest: false, data: null, month: null, rest: null, seq: 0, open: {} };
 var _TSR_CH = [['app', '앱 구매'], ['invite', '초대'], ['link', '결제 링크'], ['settle', '대관 정산'], ['settle_x', '미연결 정산'], ['man', '수동 입력'], ['dm', '수동 기록']];
 var _TSR_PM = { deposit: '예치금', card: '카드', mixed: '카드+예치금', offline: '오프라인' };
 var _TSR_ST = { active: '판매', cancelled: '취소', returned: '방문 후 반환', penalty: '위약', guest_pending: '확정 대기' };
@@ -8385,7 +8385,7 @@ var _TSR_FLAG = { net_negative: '순판매 음수', card_unverified: '카드 승
   refund_claim_unbacked: '환불 기록 없음', card_refund_capped: '카드 환불 상한', pax_changed: '인원 변경', payc_fallback: '카드 폴백 행',
   no_ticket_row: '좌석 행 없음', no_ledger: '원장 없음', price_override: '금액 수정', refunded_zero: '₩0 환불', settle_unlinked: '티켓 미연결',
   manual_unverified: '입력 금액', by_rest_admin: '매장 어드민 입력', zero_amount: '금액 0',
-  price_differs: '정가와 다름', return_before_visit: '방문 전 반환 → 취소로 셈', agency_snapshot_differs: '대행비 기록과 다름(회차 대행비로)' };
+  price_differs: '정가와 다름', return_before_visit: '방문 전 반환 → 취소로 셈', agency_snapshot_differs: '대행비 기록 다름' };
 var _TSR_EXC = { card_captured_no_ticket: '카드는 승인됐는데 티켓이 없다', link_captured_pending: '토스 승인 뒤 링크가 결제 대기로 남았다', invite_debited_unpaid: '예치금은 빠졌는데 초대가 결제 전',
   app_no_money_record: '살아 있는 구매인데 결제 기록(원장·카드)이 없다', invite_paid_no_ledger: '결제된 초대인데 예치금 결제 줄이 없다', invite_reversed_still_paid: '결제가 되돌려졌는데 초대가 결제됨으로 남았다' };
 function _tsrWon(n){ n = Math.round(Number(n) || 0); return (n < 0 ? '−₩' : '₩') + Math.abs(n).toLocaleString('ko-KR'); }
@@ -8472,6 +8472,14 @@ function tsrOpen(){
     + '<div id="tsrResult" style="font-size:12px;color:#777;">불러오는 중…</div>'
     + '</div>';
   el.addEventListener('click', function(ev){ if (ev.target === el) tsrClose(); });
+  // 🆕 2026-10-22 판매 줄 「상세」 — 평소엔 접어 두고 누르면 펼친다 (data-tsr-k 위임 · 구매 id 를 onclick 문자열에 넣지 않는다)
+  el.addEventListener('click', function(ev){
+    var b = ev.target && ev.target.closest ? ev.target.closest('[data-tsr-k]') : null;
+    if (!b || !_tsr.data) return;
+    var k = b.getAttribute('data-tsr-k');
+    if (_tsr.open[k]) delete _tsr.open[k]; else _tsr.open[k] = 1;
+    _tsrRender();
+  });
   document.body.appendChild(el);
   _tsrPaintCh();
   tsrRun();
@@ -8508,7 +8516,7 @@ async function tsrRun(){
   if (!window.sb) { box.innerHTML = '<span style="color:#B23A2E;">서버 연결이 없습니다</span>'; return; }
   var seq = ++_tsr.seq;
   box.innerHTML = '불러오는 중…';
-  _tsr.month = null; _tsr.rest = null; _tsr.data = null;   // 불러오는 동안 채널 버튼이 옛 결과를 다시 그리지 않게
+  _tsr.month = null; _tsr.rest = null; _tsr.data = null; _tsr.open = {};   // 불러오는 동안 채널 버튼이 옛 결과를 다시 그리지 않게
   var res;
   try { res = await window.sb.rpc('taam_ticket_sales_report', { p_from: rg.from, p_to: rg.to, p_basis: _tsr.basis, p_include_test: !!_tsr.incTest }); }
   catch (e) { res = { error: e }; }
@@ -8549,6 +8557,86 @@ function _tsrMoneyCell(r){
     return sym + fx + ' <span style="color:#a8a29a;">(' + _tsrWon(r.gross) + ')</span>';
   }
   return _tsrWon(r.gross);
+}
+// 🆕 2026-10-22 「⚠ 대행비 기록과 다름」이 무엇과 무엇이 다른지 — 펼쳐 보기. 비교 값(d_*)은 서버 3차 판(20261022_ticket_sales_report3.sql)이 준다.
+//   옛 서버면 d_* 가 없어 「—」로 나온다(화면은 그대로 돈다).
+function _tsrDetailHtml(r){
+  var W = function(n){ return (n == null || n === '' || !isFinite(Number(n))) ? '—' : _tsrWon(n); };
+  var pp = function(n){ return W(n) + '/인'; };
+  var N = function(k){ var v = Number(r[k]); return isFinite(v) ? v : null; };
+  var line = function(label, val){ return '<div style="display:flex;gap:8px;padding:2px 0;"><span style="flex:0 0 74px;color:#8a8580;">' + label + '</span><span style="flex:1;min-width:0;word-break:break-all;">' + val + '</span></div>'; };
+  var chl = (_TSR_CH.filter(function(c){ return c[0] === r.ch; })[0] || [0, r.ch])[1];
+  var pax = _tsrN(r, 'pax') || 1;
+  var h = '';
+  h += line('결제', _tsrEsc(_tsrKst(r.paid_at) || '—') + ' · ' + _tsrEsc(chl) + ' · ' + _tsrEsc(_TSR_PM[r.pm] || r.pm || '')
+         + (r.inv_status ? ' · 초대 ' + _tsrEsc({ paid: '결제됨', cancelled: '취소됨', pending: '결제 전', expired: '만료' }[r.inv_status] || r.inv_status) : ''));
+  h += line('방문', _tsrEsc(r.visit || '—') + (r.time ? ' ' + _tsrEsc(r.time) : '') + ' · ' + pax + '명' + (N('pax0') ? ' (처음 ' + N('pax0') + '명)' : '')
+         + (r.visit_st ? ' · ' + _tsrEsc(r.visit_st) : ''));
+  if (r.ref) h += line('구매 id', '<span style="font-family:monospace;font-size:10.5px;">' + _tsrEsc(r.ref) + '</span>');
+  // 금액 내역 — 식사 + 대행 + 주류 (인원 합)
+  if (r.meal != null || r.ag_gross != null || r.wine != null) {
+    var bdTxt = { product: '회차 요금', snap: '초대·링크 기록', mismatch: '⚠ 판매액과 다름', none: '' }[r.bd] || '';
+    h += line('금액 내역', '식사 ' + W(r.meal) + ' + 대행 ' + W(r.ag_gross) + ' + 주류 ' + W(r.wine)
+           + ' = ' + W(_tsrN(r, 'meal') + _tsrN(r, 'ag_gross') + _tsrN(r, 'wine')) + (bdTxt ? ' <span style="color:#8a8580;">(' + bdTxt + ')</span>' : ''));
+  }
+  // 판매액의 근거 — 회원이 못 쓰는 돈 기록
+  var src = '';
+  if (r.ch === 'app' || r.ch === 'invite') {
+    src = '원장 결제 ' + W(r.d_buy) + (N('d_rev') ? ' − 되돌림 ' + W(r.d_rev) : '') + (_tsrN(r, 'card') ? ' + 카드 ' + W(r.card) : '') + ' = ' + W(r.gross);
+  } else if (r.ch === 'link' || r.ch === 'settle' || r.ch === 'settle_x') {
+    src = '카드 결제(토스) ' + _tsrMoneyCell(r) + (r.fx_rate ? ' · 환율 ' + _tsrEsc(r.fx_rate) : '');
+  } else {
+    src = '어드민이 적은 금액 ' + W(r.gross);
+  }
+  h += line('판매액', src);
+  // 환불
+  var rf = [];
+  if (_tsrN(r, 'rf_cancel')) rf.push('취소 ' + W(r.rf_cancel));
+  if (_tsrN(r, 'rf_penalty')) rf.push('위약 ' + W(r.rf_penalty));
+  if (_tsrN(r, 'rf_pax')) rf.push('인원 줄임 ' + W(r.rf_pax));
+  if (_tsrN(r, 'rf_return')) rf.push('방문 후 반환 ' + W(r.rf_return));
+  if (_tsrN(r, 'rf_card_pending')) rf.push('카드 환불 대기 ' + W(r.rf_card_pending));
+  h += line('환불', rf.length ? rf.join(' · ') + (r.rf_at ? ' <span style="color:#8a8580;">(' + _tsrEsc(_tsrKst(r.rf_at)) + ')</span>' : '') : '없음');
+  h += line('순판매', '<b>' + W(r.net) + '</b>' + (_tsrN(r, 'rf_return') ? ' · TAAM 보유 ' + W(r.held) : ''));
+  // 대행비
+  var agSt = { planned: '예정(방문 전)', kept: '확정', waived: '면제(돌려줌)', none: '' }[r.ag_state] || '';
+  var agWhy = (N('d_ag_used') != null) ? '1인 ' + W(r.d_ag_used) + ' × ' + pax + '명' : '';
+  if (r.st === 'returned' && N('d_ag_rec') != null) agWhy = '반환 때 기록된 보유액';
+  else if (r.st === 'penalty' && N('d_ag_rec')) agWhy = '위약 때 기록된 보유액';
+  h += line('대행비', W(r.agency) + (agSt ? ' · ' + agSt : '') + (agWhy ? ' <span style="color:#8a8580;">(' + agWhy + ')</span>' : ''));
+  // 확인할 점 — 표시마다 무엇과 무엇이 다른지
+  var fl = r.flags || [], why = [];
+  fl.forEach(function(f){
+    var t = '';
+    if (f === 'agency_snapshot_differs') {
+      if (r.ch === 'invite') {
+        t = '초대에 적힌 대행비 ' + pp(r.d_ag_inv) + ' · 회차 대행비 ' + pp(r.d_ag_tp) + ' → 둘 중 작은 ' + pp(r.d_ag_used) + '으로 셈'
+          + '<br><span style="color:#8a8580;">초대 행은 받는 회원도 고칠 수 있는 칸이라 큰 쪽을 수익으로 믿지 않는다</span>';
+        if (N('d_meal_inv') != null && N('d_meal_tp') != null && N('d_meal_inv') !== N('d_meal_tp')) t += '<br>식사비도 다름 — 초대 ' + pp(r.d_meal_inv) + ' · 회차 ' + pp(r.d_meal_tp);
+        if (N('d_wine_inv') != null && N('d_wine_tp') != null && N('d_wine_inv') !== N('d_wine_tp')) t += '<br>주류 미니멈도 다름 — 초대 ' + pp(r.d_wine_inv) + ' · 회차 ' + pp(r.d_wine_tp);
+        if (N('d_total_inv') != null) t += '<br>초대 합계 ' + W(r.d_total_inv) + ' · 원장 결제 ' + W(r.gross);
+      } else {
+        t = '구매 때 티켓에 적힌 대행비 ' + pp(r.d_ag_snap) + ' · 지금 회차 대행비 ' + pp(r.d_ag_tp) + ' → 회차 값 ' + pp(r.d_ag_used) + '으로 셈'
+          + '<br><span style="color:#8a8580;">티켓 행의 메모 칸은 회원이 쓸 수 있어 수익 계산에 쓰지 않는다 — 구매 뒤 회차 대행비를 고쳤을 수 있다</span>';
+      }
+    } else if (f === 'price_differs') t = '티켓 행 금액 ' + W(r.d_price_tk) + ' · 원장·카드 기준 판매액 ' + W(r.gross) + ' — 판매액은 돈 기록으로 센다';
+    else if (f === 'ledger_mismatch') t = '초대 합계 ' + W(r.d_total_inv) + ' · 원장 결제 ' + W(r.gross);
+    else if (f === 'no_ticket_row') t = '결제 기록은 있는데 연결된 티켓 행이 없다 — 캘린더·구매내역에 안 보일 수 있다';
+    else if (f === 'return_before_visit') t = '방문일(' + _tsrEsc(r.visit || '—') + ') 전에 처리된 반환 ' + W(r.d_ret_early) + (r.d_ret_at ? ' (' + _tsrEsc(_tsrKst(r.d_ret_at)) + ')' : '') + ' → 방문 후 반환이 아니라 취소로 셈';
+    else if (f === 'card_refund_capped') t = '요청된 카드 환불 ' + W(r.d_crp_req) + ' 이 카드 결제 ' + W(r.card) + ' 보다 커서 카드 몫까지만 셈';
+    else if (f === 'pax_changed') t = '인원 ' + (N('pax0') || '?') + '명 → ' + pax + '명' + (_tsrN(r, 'rf_pax') ? ' · 줄임 환불 ' + W(r.rf_pax) : '');
+    else if (f === 'payc_fallback') t = '카드 결제 뒤 서버가 대신 만든 티켓 행(PAYC-)';
+    else if (f === 'net_negative') t = '환불이 판매액보다 커서 순판매가 음수';
+    else if (f === 'price_override') t = '결제 링크 금액을 슈퍼어드민이 정가와 다르게 정했다';
+    else if (f === 'refunded_zero') t = '환불 처리됐는데 환불 금액 기록이 ₩0';
+    else if (f === 'settle_unlinked') t = '대관 정산이 티켓 회차에 연결되지 않았다(「티켓 연결」 전)';
+    else if (f === 'manual_unverified') t = '어드민이 직접 적은 금액 — 결제 기록으로 확인할 수 없다';
+    else if (f === 'by_rest_admin') t = '매장 어드민이 입력';
+    else if (f === 'zero_amount') t = '금액 ₩0';
+    why.push('<div style="margin-top:4px;"><b style="color:#B45309;">⚠ ' + _tsrEsc(_TSR_FLAG[f] || f) + '</b>' + (t ? '<br>' + t : '') + '</div>');
+  });
+  if (why.length) h += '<div style="margin-top:6px;padding-top:6px;border-top:1px dashed #e6dfd2;">' + why.join('') + '</div>';
+  return '<div style="margin-top:6px;padding:8px 10px;border-radius:9px;background:#f7f5f1;font-size:11px;color:#3d3833;line-height:1.55;">' + h + '</div>';
 }
 function _tsrRender(){
   var box = document.getElementById('tsrResult'); if (!box) return;
@@ -8611,11 +8699,13 @@ function _tsrRender(){
        + '<span style="color:#8a8580;">' + _tsrEsc(r.buyer || '') + (_tsrN(r, 'pax') ? ' · ' + _tsrN(r, 'pax') + '명' : '') + '</span>'
        + '<span style="font-size:10px;font-weight:800;padding:1px 6px;border-radius:5px;background:' + (st === 'active' ? '#edf7f0;color:#1E7A46' : '#fbeeee;color:#B23A2E') + ';">' + _tsrEsc(_TSR_ST[st] || st) + '</span>'
        + (r.test ? '<span style="font-size:10px;font-weight:800;padding:1px 6px;border-radius:5px;background:#eee;color:#777;">테스트</span>' : '')
+       + '<button type="button" data-tsr-k="' + _tsrEsc(r.k) + '" style="margin-left:auto;border:1px solid ' + (fl.length ? '#f3dfb7' : '#e6e1d8') + ';background:' + (fl.length ? '#fff8ec' : '#fff') + ';color:' + (fl.length ? '#B45309' : '#8a8580')
+       +   ';border-radius:7px;padding:2px 7px;font-size:10px;font-weight:800;cursor:pointer;font-family:inherit;">' + (fl.length ? '⚠ ' : '') + (_tsr.open[r.k] ? '접기 ▴' : '상세 ▾') + '</button>'
        + '</div>'
        + '<div style="color:#6a635a;margin-top:2px;">' + _tsrEsc(chl) + ' · ' + _tsrEsc(_TSR_PM[r.pm] || r.pm || '') + ' · 판매 ' + _tsrMoneyCell(r)
        + (rf ? ' · <span style="color:#B23A2E;">환불 ' + _tsrWon(rf) + '</span>' : '') + (_tsrN(r, 'rf_return') ? ' · 반환 ' + _tsrWon(r.rf_return) : '')
        + ' · <b>순 ' + _tsrWon(r.net) + '</b>' + (_tsrN(r, 'agency') ? ' · 대행비 ' + _tsrWon(r.agency) + (r.ag_state === 'planned' ? '(예정)' : '') : '')
-       + (fl.length ? ' · <span style="color:#B45309;">⚠ ' + _tsrEsc(fl.join(', ')) + '</span>' : '') + '</div></div>';
+       + '</div>' + (_tsr.open[r.k] ? _tsrDetailHtml(r) : '') + '</div>';   // 경고·비교 값은 「상세」를 눌러야 보인다 (2026-10-22)
   });
   h += '</div>';
   if (list.length > 300) h += '<div style="font-size:10.5px;color:#a8a29a;margin-top:4px;">300건까지만 표시 — CSV 는 전체</div>';
@@ -8648,13 +8738,15 @@ function tsrCsv(){
   var q = function(v){ var x = v == null ? '' : String(v); if (typeof v === 'string' && /^[=+\-@\t\r]/.test(x)) x = "'" + x; return '"' + x.replace(/"/g, '""') + '"'; };
   var kst = function(ts){ return _tsrKst(ts); };
   var L = [['결제일(KST)', '방문일', '시간', '매장', '구매자', '인원', '채널', '결제 수단', '상태', '통화', '외화 금액', '판매(원)', '식사비', '대행비 정가', '주류', '예치금', '카드',
-            '취소 환불', '위약 환불', '인원 줄임 환불', '방문 후 반환', '카드 환불 대기', '순판매', 'TAAM 보유', '대행비(수익)', '대행비 상태', '환불 시각', '참조', '표시'].map(q).join(',')];
+            '취소 환불', '위약 환불', '인원 줄임 환불', '방문 후 반환', '카드 환불 대기', '순판매', 'TAAM 보유', '대행비(수익)', '대행비 상태', '환불 시각', '참조', '표시',
+            '대행비 기록(1인)', '회차 대행비(1인)', '센 대행비(1인)'].map(q).join(',')];
   A.list.forEach(function(r){
     L.push([kst(r.paid_at), r.visit || '', r.time || '', r.rest || '', r.buyer || '', r.pax || '', (_TSR_CH.filter(function(c){ return c[0] === r.ch; })[0] || [0, r.ch])[1],
             _TSR_PM[r.pm] || r.pm || '', _TSR_ST[r.st] || r.st || '', r.cur || 'KRW', r.fx_amt == null ? '' : r.fx_amt, _tsrN(r, 'gross'),
             r.meal == null ? '' : r.meal, r.ag_gross == null ? '' : r.ag_gross, r.wine == null ? '' : r.wine, _tsrN(r, 'dep'), _tsrN(r, 'card'),
             _tsrN(r, 'rf_cancel'), _tsrN(r, 'rf_penalty'), _tsrN(r, 'rf_pax'), _tsrN(r, 'rf_return'), _tsrN(r, 'rf_card_pending'), _tsrN(r, 'net'), _tsrN(r, 'held'),
-            _tsrN(r, 'agency'), r.ag_state || '', kst(r.rf_at), r.ref || r.k || '', (r.flags || []).map(function(f){ return _TSR_FLAG[f] || f; }).join(' / ')].map(q).join(','));
+            _tsrN(r, 'agency'), r.ag_state || '', kst(r.rf_at), r.ref || r.k || '', (r.flags || []).map(function(f){ return _TSR_FLAG[f] || f; }).join(' / '),
+            (r.d_ag_inv != null ? r.d_ag_inv : (r.d_ag_snap != null ? r.d_ag_snap : '')), r.d_ag_tp != null ? r.d_ag_tp : '', r.d_ag_used != null ? r.d_ag_used : ''].map(q).join(','));
   });
   try {
     var blob = new Blob(['﻿' + L.join('\r\n')], { type: 'text/csv;charset=utf-8' });
@@ -46128,7 +46220,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.22-a';
+var TAAM_WEB_BUILD = '2026.10.22-b';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
