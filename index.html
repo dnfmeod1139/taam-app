@@ -8440,6 +8440,240 @@ function _tsrAgg(rows, f){
   });
   return { tot: tot, byMonth: byMonth, byCh: byCh, byRest: byRest, list: list };
 }
+// ═══════════════════════════════════════════════════════════════
+// 🔓 구매 규정 예외 (협의 구매) — 2026-10-22
+//   한 회원 = 한 회차 1건 · 같은 날 같은 시간대 1건(서버 trg_taam_guard_ticket_unique)을 슈퍼어드민이 협의한 회원·회차에만 푼다.
+//   서버가 지킨다(supabase/migrations/20261022_purchase_rule_exception.sql) — 이 화면은 허용·해제·목록. 회원 앱은 taam_my_purchase_exceptions 로 같은 판단.
+//   허용 항목: 같은 회차 추가 구매(dup · N건) · 같은 날 같은 시간대(time — 그 회차는 이 회원의 겹침 판정에서 빠진다). 기한 · 사유 필수 · 해제해도 이미 산 티켓은 그대로.
+//   입구: 어드민 메뉴 · 회원 원장 · 캘린더 구매자 상세.
+// ═══════════════════════════════════════════════════════════════
+var _px = { busy: false, member: null, ticketId: '', memberCache: {}, pv: null, pvSeq: 0, sSeq: 0, lSeq: 0, showClosed: false };
+function _pxKst(ts){ return (typeof _tsrKst === 'function') ? _tsrKst(ts, 16) : String(ts || '').slice(0, 16); }
+function _pxTicketLabel(t){
+  if (!t) return '';
+  var r = (window.restaurantDB || []).find(function(x){ return String(x.id) === String(t.restId); });
+  var nm = (r && r.name) || t.rest || '매장';
+  return nm + ' · ' + ((typeof _tkFullDate === 'function' ? _tkFullDate(t) : t.date) || '') + ' ' + (t.time || '');
+}
+async function pxOpen(opts){
+  opts = opts || {};
+  if (typeof _isSuperAdmin === 'function' && !_isSuperAdmin()) { showToast('🔒', '슈퍼어드민 전용', '구매 규정 예외는 슈퍼어드민만 다룹니다'); return; }
+  var old = document.getElementById('pxPopup'); if (old) old.remove();
+  _px.member = null; _px.ticketId = opts.ticketId ? String(opts.ticketId) : ''; _px.pv = null; _px.showClosed = false; _px.busy = false;
+  var el = document.createElement('div');
+  el.id = 'pxPopup';
+  el.style.cssText = 'position:fixed;inset:0;z-index:9200;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;';
+  el.innerHTML =
+    '<div style="background:#fff;border-radius:18px;width:100%;max-width:560px;max-height:92vh;overflow:auto;overflow-x:hidden;padding:20px 18px;box-sizing:border-box;font-family:var(--font-main);" data-lang-lock="ko">'
+    + '<div style="display:flex;align-items:center;gap:8px;"><div style="font-size:16px;font-weight:800;color:#1a1a18;flex:1;">🔓 구매 규정 예외 (협의 구매)</div>'
+    +   '<button type="button" onclick="pxClose()" aria-label="닫기" style="border:none;background:none;font-size:20px;color:#999;cursor:pointer;padding:2px 6px;">×</button></div>'
+    + '<div style="font-size:11px;color:#9a9486;line-height:1.65;margin:4px 0 12px;">「한 회원 = 한 회차 1건 · 같은 날 같은 시간대(점심/저녁) 1건」 규정을 <b>그 회원 · 그 회차에만</b> 풉니다. 서버가 지키므로 앱 구매 · 초대 결제 · 결제 링크 모두 같은 규칙입니다. '
+    +   '기한이 지나거나 해제하면 다시 막힙니다(이미 산 티켓은 그대로). 재구매 제한(같은 매장 N일)과는 별개입니다.</div>'
+    + '<div id="pxForm"></div>'
+    + '<div style="height:1px;background:#eee;margin:16px 0 12px;"></div>'
+    + '<div id="pxList" style="font-size:12px;color:#777;">불러오는 중…</div>'
+    + '</div>';
+  el.addEventListener('click', function(ev){ if (ev.target === el) pxClose(); });
+  document.body.appendChild(el);
+  if (opts.uid) {
+    try {
+      var r = await window.sb.from('profiles').select('id, display_name, phone, email, membership_tier').eq('id', String(opts.uid)).maybeSingle();
+      if (r && r.data) _px.member = r.data;
+    } catch (_e) {}
+  }
+  _pxRenderForm();
+  pxListLoad();
+}
+function pxClose(){ var el = document.getElementById('pxPopup'); if (el) el.remove(); _px.busy = false; }
+function _pxTicketOpts(){
+  var html = '<option value="">회차를 고르세요</option>', pick = _px.ticketId, found = false;
+  (window.ticketDB || []).slice().sort(function(a, b){ return String((typeof _tkFullDate === 'function' && _tkFullDate(a)) || a.date).localeCompare(String((typeof _tkFullDate === 'function' && _tkFullDate(b)) || b.date)) || String(a.time || '').localeCompare(String(b.time || '')); }).forEach(function(t){
+    if (typeof _isTicketExpired === 'function' && _isTicketExpired(t) && String(t.id) !== String(pick)) return;
+    if (String(t.id) === String(pick)) found = true;
+    html += '<option value="' + _plEsc(String(t.id)) + '"' + (String(t.id) === String(pick) ? ' selected' : '') + '>' + _plEsc(_pxTicketLabel(t) + (t.status === 'soldout' ? ' · 매진' : '')) + '</option>';
+  });
+  if (pick && !found) html += '<option value="' + _plEsc(pick) + '" selected>' + _plEsc('회차 ' + pick + ' (목록에 없음)') + '</option>';
+  return html;
+}
+function _pxRenderForm(){
+  var box = document.getElementById('pxForm'); if (!box) return;
+  var m = _px.member;
+  var lab = function(t){ return '<div style="font-size:10.5px;font-weight:700;color:#888;margin:10px 0 4px;">' + t + '</div>'; };
+  box.innerHTML = lab('회원 *')
+    + (m ? '<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border:1.5px solid #c9a96e;border-radius:9px;background:#fff8e7;"><div style="flex:1;font-size:13px;font-weight:800;color:#1a1a18;">' + _plEsc(m.display_name || '(이름 없음)') + ' <span style="font-size:10.5px;color:#8a7b63;">' + _plEsc(m.membership_tier || '') + '</span> <span style="font-size:10.5px;color:#9a9486;font-weight:600;">' + _plEsc(m.phone || m.email || '') + '</span></div><button type="button" onclick="pxMemberClear()" style="border:0;background:transparent;font-family:inherit;font-size:11px;font-weight:800;color:#8a8580;cursor:pointer;">바꾸기</button></div>'
+         : '<input id="pxMemberQ" type="text" placeholder="이름 · 전화 · 이메일 2자 이상" oninput="pxMemberSearch()" style="width:100%;box-sizing:border-box;padding:9px 10px;border:1px solid #e0dcd4;border-radius:9px;font-family:inherit;font-size:13px;"><div id="pxMemberRes" style="margin-top:4px;"></div>')
+    + lab('회차 * — 회원이 <b>새로 살</b> 회차')
+    + '<select id="pxTicket" onchange="_px.ticketId=this.value;_pxPreview()" style="width:100%;box-sizing:border-box;padding:9px 10px;border:1px solid #e0dcd4;border-radius:9px;font-family:inherit;font-size:13px;font-weight:700;">' + _pxTicketOpts() + '</select>'
+    + '<div id="pxPv" style="font-size:11.5px;color:#6b645b;line-height:1.7;margin-top:6px;"></div>'
+    + lab('허용 항목 *')
+    + '<label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:#1a1a18;padding:4px 0;cursor:pointer;"><input type="checkbox" id="pxDup"> 같은 회차 추가 구매 <select id="pxExtra" style="margin-left:4px;padding:3px 6px;border:1px solid #e0dcd4;border-radius:7px;font-family:inherit;font-size:12px;"><option value="1">1건 더</option><option value="2">2건 더</option><option value="3">3건 더</option></select></label>'
+    + '<label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:#1a1a18;padding:4px 0;cursor:pointer;"><input type="checkbox" id="pxTime"> 같은 날 같은 시간대(점심/저녁)에 다른 예약과 함께</label>'
+    + lab('기한')
+    + '<select id="pxExp" style="width:100%;box-sizing:border-box;padding:9px 10px;border:1px solid #e0dcd4;border-radius:9px;font-family:inherit;font-size:13px;font-weight:700;"><option value="visit">방문일까지 (기본)</option><option value="3">3일</option><option value="7">7일</option><option value="14">14일</option></select>'
+    + lab('사유 (협의 내용) *')
+    + '<textarea id="pxNote" rows="2" maxlength="300" placeholder="예) 일행 2명 추가 — 10/22 전화로 협의" style="width:100%;box-sizing:border-box;padding:9px 10px;border:1px solid #e0dcd4;border-radius:9px;font-family:inherit;font-size:13px;resize:vertical;"></textarea>'
+    + '<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#555;padding:8px 0 0;cursor:pointer;"><input type="checkbox" id="pxNotify" checked> 회원에게 알림 보내기 (알림함 + 푸시 · 「지금 결제하실 수 있습니다」)</label>'
+    + '<button type="button" id="pxGo" onclick="pxGrant()" style="width:100%;margin-top:14px;padding:12px;background:#5C0A14;border:none;border-radius:11px;font-family:inherit;font-size:13.5px;font-weight:800;color:#fff;cursor:pointer;">허용하기</button>';
+  _pxPreview();
+}
+async function pxMemberSearch(){
+  var q = ((document.getElementById('pxMemberQ') || {}).value || '').trim(), res = document.getElementById('pxMemberRes'); if (!res) return;
+  if (q.length < 2) { res.innerHTML = ''; return; }
+  var k = q.replace(/[%_]/g, '\\$&'), seq = ++_px.sSeq;
+  var r = await window.sb.from('profiles').select('id, display_name, phone, email, membership_tier').is('deleted_at', null).or('display_name.ilike.%' + k + '%,phone.ilike.%' + k + '%,email.ilike.%' + k + '%').limit(8);
+  if (seq !== _px.sSeq) return;   // 늦게 온 옛 검색은 버린다
+  if (r.error) { res.innerHTML = '<div style="font-size:11px;color:#B23A2E;">검색 실패: ' + _plEsc(r.error.message) + '</div>'; return; }
+  try { await _taamTestIds(); } catch (_te) {}
+  r.data = (typeof _taamHideTest === 'function') ? _taamHideTest(r.data || [], q) : (r.data || []);
+  _px.memberCache = {}; (r.data || []).forEach(function(u){ _px.memberCache[u.id] = u; });
+  res.innerHTML = (r.data || []).length ? (r.data || []).map(function(u){ return '<div data-px-uid="' + _plEsc(u.id) + '" onclick="pxMemberPick(this.getAttribute(\'data-px-uid\'))" style="padding:7px 9px;border-bottom:1px solid #f0ece6;cursor:pointer;font-size:12.5px;"><b>' + _plEsc(u.display_name || '(이름 없음)') + '</b> <span style="color:#8a7b63;font-size:10.5px;">' + _plEsc(u.membership_tier || '') + '</span> <span style="color:#9a9486;font-size:11px;">' + _plEsc(u.phone || u.email || '') + '</span></div>'; }).join('') : '<div style="font-size:11px;color:#9a9486;padding:6px;">없습니다</div>';
+}
+function pxMemberPick(id){ var u = _px.memberCache[id]; if (!u) return; _px.member = u; _pxRenderForm(); pxListLoad(); }
+function pxMemberClear(){ _px.member = null; _px.pv = null; _pxRenderForm(); pxListLoad(); }
+// 미리보기 — 이 회원이 이 회차를 지금 사면 무엇에 걸리나(서버가 가드와 같은 식으로 센다). 필요한 항목을 미리 체크한다
+async function _pxPreview(){
+  var box = document.getElementById('pxPv'); if (!box) return;
+  _px.pv = null;
+  if (!_px.member || !_px.ticketId) { box.innerHTML = ''; return; }
+  var seq = ++_px.pvSeq;
+  box.innerHTML = '확인 중…';
+  var r;
+  try { r = await window.sb.rpc('taam_purchase_exception_preview', { p_user: _px.member.id, p_ticket: String(_px.ticketId) }); } catch (e) { r = { error: e }; }
+  if (seq !== _px.pvSeq) return;
+  if (!r || r.error || !r.data) {
+    var msg = String((r && r.error && r.error.message) || '');
+    box.innerHTML = /function .* does not exist|Could not find the function/i.test(msg) ? '<span style="color:#B23A2E;">서버 준비 필요 — 20261022_purchase_rule_exception.sql 이 아직 적용되지 않았습니다</span>' : '<span style="color:#B23A2E;">미리보기 실패: ' + _plEsc(msg.slice(0, 80)) + '</span>';
+    return;
+  }
+  var d = r.data; _px.pv = d;
+  var row = function(x){ return _plEsc((x.rest || '') + ' · ' + (x.date || '') + ' ' + (x.time || '') + ' · ' + (x.pax ? x.pax + '인 · ' : '') + (x.status || '') + ' · ' + (x.purchase_id || '')); };
+  var same = d.same_ticket || [], slot = (d.same_slot || []), slotBad = slot.filter(function(x){ return !x.excused; });
+  var h = '';
+  if (same.length) h += '<div>• <b style="color:#5C0A14;">같은 회차 ' + same.length + '건</b>: ' + same.map(row).join(' / ') + '</div>';
+  if (slot.length) h += '<div>• <b style="color:#5C0A14;">같은 날 같은 시간대 ' + slot.length + '건</b>: ' + slot.map(function(x){ return row(x) + (x.excused ? ' <span style="color:#2e7d4f;">(그 회차 예외로 허용됨)</span>' : ''); }).join(' / ') + '</div>';
+  if (!same.length && !slotBad.length) h += '<div style="color:#2e7d4f;">지금은 걸릴 것이 없습니다 — 그래도 미리 허용해 둘 수 있습니다.</div>';
+  var act = d.active || [];
+  if (act.length) h += '<div style="color:#8a7b63;">이미 살아 있는 예외: ' + act.map(function(e){ return (e.allow_dup ? '같은 회차 +' + (e.extra || 1) : '') + (e.allow_dup && e.allow_time ? ' · ' : '') + (e.allow_time ? '같은 시간대' : '') + ' (~' + _pxKst(e.expires_at) + ')'; }).join(', ') + ' — 새로 허용하면 대체됩니다</div>';
+  box.innerHTML = h;
+  var dup = document.getElementById('pxDup'), tm = document.getElementById('pxTime');
+  if (dup && same.length) dup.checked = true;
+  if (tm && slotBad.length) tm.checked = true;
+}
+async function pxGrant(){
+  if (_px.busy) return;
+  var val = function(id){ var e = document.getElementById(id); return e ? e.value : ''; };
+  var chk = function(id){ var e = document.getElementById(id); return !!(e && e.checked); };
+  if (!_px.member) { showToast('⚠', '회원 선택', '허용할 회원을 고르세요'); return; }
+  var t = (window.ticketDB || []).find(function(x){ return String(x.id) === String(_px.ticketId); });
+  if (!_px.ticketId) { showToast('⚠', '회차 선택', '회원이 새로 살 회차를 고르세요'); return; }
+  var dup = chk('pxDup'), tm = chk('pxTime'), note = String(val('pxNote') || '').trim();
+  if (!dup && !tm) { showToast('⚠', '허용 항목', '같은 회차 추가 · 같은 시간대 중 하나 이상'); return; }
+  if (!note) { showToast('⚠', '사유 필요', '협의 내용을 적어 주세요'); return; }
+  var exp = val('pxExp'), expIso = null;
+  if (exp && exp !== 'visit') expIso = new Date(Date.now() + parseInt(exp, 10) * 86400000).toISOString();
+  var extra = parseInt(val('pxExtra'), 10) || 1;
+  var label = t ? _pxTicketLabel(t) : ('회차 ' + _px.ticketId);
+  if (!confirm((_px.member.display_name || '회원') + ' 님에게\n' + label + '\n\n' + (dup ? '· 같은 회차 ' + extra + '건 더 구매\n' : '') + (tm ? '· 같은 날 같은 시간대 함께 예약\n' : '')
+              + '\n을 허용합니다. (기한: ' + (expIso ? _pxKst(expIso) + '까지' : '방문일까지') + ')\n사유: ' + note)) return;
+  _px.busy = true;
+  var g = document.getElementById('pxGo'); if (g) { g.disabled = true; g.textContent = '저장 중…'; }
+  try {
+    var r = await window.sb.rpc('taam_purchase_exception_grant', { p_user: _px.member.id, p_ticket: String(_px.ticketId), p_dup: dup, p_time: tm, p_extra: extra, p_expires_at: expIso, p_note: note });
+    if (r.error || !r.data || !r.data.ok) {
+      var m = String((r.error && r.error.message) || '');
+      var why = /does not exist|Could not find the function/i.test(m) ? '서버 준비 필요 — 마이그레이션이 아직 적용되지 않았습니다'
+              : /NOTE_REQUIRED/.test(m) ? '사유를 적어 주세요' : /KIND_REQUIRED/.test(m) ? '허용 항목을 고르세요' : /BAD_EXPIRES/.test(m) ? '기한이 지났거나 너무 깁니다(지난 회차는 허용할 수 없습니다)'
+              : /TICKET_NOT_FOUND/.test(m) ? '회차를 찾지 못했습니다' : /MEMBER_NOT_FOUND/.test(m) ? '회원을 찾지 못했습니다(탈퇴?)' : /FORBIDDEN/.test(m) ? '슈퍼어드민만 허용할 수 있습니다' : m.slice(0, 90);
+      showToast('⚠', '허용 실패', why);
+      return;
+    }
+    var d = r.data;
+    showToast('🔓', '허용했습니다', (d.member_name || '') + ' · ' + label + (d.replaced ? ' · 옛 예외 대체' : ''));
+    if (chk('pxNotify')) { try { await _pxNotifyMember(_px.member.id, t, d); } catch (_ne) { console.warn('[px] 알림 실패', _ne); } }
+    var nb = document.getElementById('pxNote'); if (nb) nb.value = '';
+    _pxPreview(); pxListLoad();
+  } catch (e) {
+    showToast('⚠', '허용 실패', String(e && e.message || e).slice(0, 90));
+  } finally {
+    _px.busy = false;
+    if (g) { g.disabled = false; g.textContent = '허용하기'; }
+  }
+}
+// 회원 알림 — 제목·본문은 한국어로 저장(알림함은 _notifL10n* 이 다시 그린다) · 푸시는 세 벌
+async function _pxNotifyMember(uid, t, d){
+  var tt = d && d.ticket ? d.ticket : {};
+  var p = String(tt.date || (t ? ((typeof _tkFullDate === 'function' && _tkFullDate(t)) || t.date) : '') || '').split('.');
+  var y = p.length === 3 ? parseInt(p[0], 10) : 0, mo = p.length === 3 ? parseInt(p[1], 10) : 0, dd = p.length === 3 ? parseInt(p[2], 10) : 0;
+  var time = String(tt.time || (t && t.time) || '').trim();
+  var restKo = tt.rest || (t ? _pxTicketLabel(t).split(' · ')[0] : '');
+  var restId = t ? t.restId : null;
+  function line(lang){
+    var nm = (typeof _tbRestName === 'function') ? (_tbRestName(restKo, restId, lang) || restKo) : restKo;
+    var ds = (y && typeof _tbDateStr === 'function') ? _tbDateStr(y, mo, dd, lang, true) : (tt.date || '');
+    return nm + ' · ' + ds + (time ? ' ' + time : '');
+  }
+  var T = { ko: '예약하실 수 있습니다', en: 'You can book now', ja: 'ご予約いただけます' };
+  var B = { ko: ' — TAAM 과 협의된 예약을 지금 결제하실 수 있습니다', en: ' — the booking arranged with TAAM is ready for payment', ja: ' — TAAM と調整したご予約を今すぐお支払いいただけます' };
+  var url = '/?ticket=' + encodeURIComponent(String(tt.id || (t && t.id) || ''));
+  await window.sb.from('notifications').insert({
+    user_id: uid, type: 'purchase_exception', kind: 'purchase_exception',
+    title: T.ko, body: line('ko') + B.ko, message: line('ko') + B.ko, url: url,
+    payload: { exception_id: d.id, ticket_product_id: String(tt.id || ''), expires_at: d.expires_at, allow_dup: d.allow_dup, allow_time: d.allow_time }
+  });
+  await window.sb.functions.invoke('send-push', { body: { to: 'uid:' + uid, payload: {
+    title: T.ko, body: line('ko') + B.ko, url: url, category: 'purchase_exception', tag: 'taam-pxc-' + String(d.id || ''),
+    i18n: { ko: { title: T.ko, body: line('ko') + B.ko }, en: { title: T.en, body: line('en') + B.en }, ja: { title: T.ja, body: line('ja') + B.ja } } } } });
+}
+async function pxListLoad(){
+  var box = document.getElementById('pxList'); if (!box) return;
+  var uid = _px.member ? _px.member.id : null, seq = ++_px.lSeq;
+  box.innerHTML = '불러오는 중…';
+  var r;
+  try { r = await window.sb.rpc('taam_purchase_exception_list', { p_user: uid, p_include_closed: !!_px.showClosed, p_limit: 100 }); } catch (e) { r = { error: e }; }
+  if (seq !== _px.lSeq) return;   // 그 사이 회원·「지난 것 포함」을 바꿨다 — 늦게 온 옛 목록은 버린다
+  box = document.getElementById('pxList'); if (!box) return;
+  if (!r || r.error) {
+    var msg = String((r && r.error && r.error.message) || '');
+    box.innerHTML = /does not exist|Could not find the function/i.test(msg) ? '<span style="color:#B23A2E;">서버 준비 필요 — 20261022_purchase_rule_exception.sql 이 아직 적용되지 않았습니다</span>' : '<span style="color:#B23A2E;">목록 실패: ' + _plEsc(msg.slice(0, 80)) + '</span>';
+    return;
+  }
+  var L = Array.isArray(r.data) ? r.data : [];
+  var head = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;"><div style="flex:1;font-size:13px;font-weight:800;color:#1a1a18;">' + (uid ? _plEsc((_px.member.display_name || '회원') + ' 님의 예외') : '살아 있는 예외 전체') + ' · ' + L.length + '건</div>'
+    + '<label style="font-size:11px;color:#777;cursor:pointer;"><input type="checkbox" ' + (_px.showClosed ? 'checked' : '') + ' onchange="_px.showClosed=this.checked;pxListLoad()"> 지난 것 포함</label></div>';
+  if (!L.length) { box.innerHTML = head + '<div style="font-size:12px;color:#9a9486;padding:8px 0;">없습니다</div>'; return; }
+  var stCol = { active: '#2e7d4f', expired: '#9a9486', revoked: '#B23A2E' }, stTxt = { active: '살아 있음', expired: '기한 지남', revoked: '해제됨' };
+  box.innerHTML = head + L.map(function(e){
+    var kinds = (e.allow_dup ? '같은 회차 +' + (e.extra || 1) + '건' : '') + (e.allow_dup && e.allow_time ? ' · ' : '') + (e.allow_time ? '같은 시간대' : '');
+    var uses = (e.uses || []).map(function(u){ return _plEsc((u.kind === 'dup' ? '추가 ' : '시간대 ') + (u.purchase_id || '') + (u.status ? ' (' + u.status + ')' : '')); }).join(' / ');
+    return '<div style="border:1px solid #eee;border-radius:11px;padding:10px 12px;margin-bottom:8px;' + (e.state !== 'active' ? 'opacity:.7;' : '') + '">'
+      + '<div style="display:flex;align-items:center;gap:8px;"><div style="flex:1;font-size:13px;font-weight:800;color:#1a1a18;">' + _plEsc(e.member_name || '(이름 없음)') + ' <span style="font-size:10.5px;color:#8a7b63;">' + _plEsc(e.member_tier || '') + '</span></div>'
+      +   '<span style="font-size:10.5px;font-weight:800;color:' + (stCol[e.state] || '#777') + ';">' + (stTxt[e.state] || _plEsc(e.state || '')) + '</span></div>'
+      + '<div style="font-size:12px;color:#444;margin-top:2px;">' + _plEsc((e.rest || '회차 ' + e.ticket_product_id) + ' · ' + (e.date || '') + ' ' + (e.time || '')) + '</div>'
+      + '<div style="font-size:11.5px;color:#5C0A14;font-weight:700;margin-top:2px;">' + kinds + ' <span style="color:#9a9486;font-weight:600;">· ~' + _plEsc(_pxKst(e.expires_at)) + '</span></div>'
+      + '<div style="font-size:11px;color:#6b645b;margin-top:2px;">사유: ' + _plEsc(e.note || '') + ' <span style="color:#a8a29a;">· ' + _plEsc((e.created_by_name || '') + ' ' + _pxKst(e.created_at)) + '</span></div>'
+      + (uses ? '<div style="font-size:11px;color:#2e7d4f;margin-top:2px;">사용: ' + uses + '</div>' : '<div style="font-size:11px;color:#a8a29a;margin-top:2px;">아직 사용 안 함</div>')
+      + (e.state === 'revoked' && e.revoke_note ? '<div style="font-size:11px;color:#B23A2E;margin-top:2px;">해제: ' + _plEsc(e.revoke_note) + '</div>' : '')
+      + (e.state === 'active' ? '<div style="margin-top:6px;"><button type="button" data-px-id="' + _plEsc(e.id) + '" onclick="pxRevoke(this.getAttribute(\'data-px-id\'))" style="border:1px solid #E4D6D6;border-radius:8px;background:#fff;padding:4px 10px;font-family:inherit;font-size:11px;font-weight:800;color:#B23A2E;cursor:pointer;">해제</button></div>' : '')
+      + '</div>';
+  }).join('');
+}
+async function pxRevoke(id){
+  if (_px.busy || !id) return;
+  var note = prompt('해제 사유 (선택) — 이미 산 티켓은 그대로이고, 앞으로의 구매만 다시 막힙니다', '');
+  if (note === null) return;
+  _px.busy = true;
+  try {
+    var r = await window.sb.rpc('taam_purchase_exception_revoke', { p_id: id, p_note: note || null });
+    if (r.error) { showToast('⚠', '해제 실패', String(r.error.message || '').slice(0, 90)); return; }
+    if (r.data && r.data.ok) showToast('✓', '해제했습니다', '앞으로의 구매는 다시 규정대로 막힙니다');
+    else showToast('ⓘ', '이미 처리됨', (r.data && r.data.error) === 'already_revoked' ? '이미 해제된 예외입니다' : '예외를 찾지 못했습니다');
+  } catch (e) {
+    showToast('⚠', '해제 실패', String(e && e.message || e).slice(0, 90));
+  } finally { _px.busy = false; }
+  _pxPreview(); pxListLoad();
+}
+window.pxOpen = pxOpen; window.pxClose = pxClose; window.pxMemberSearch = pxMemberSearch; window.pxMemberPick = pxMemberPick; window.pxMemberClear = pxMemberClear;
+window.pxGrant = pxGrant; window.pxRevoke = pxRevoke; window.pxListLoad = pxListLoad; window._pxPreview = _pxPreview; window._px = _px;
 function tsrOpen(){
   if (typeof _isSuperAdmin === 'function' && !_isSuperAdmin()) { showToast('🔒', '슈퍼어드민 전용', '판매 현황은 슈퍼어드민만 봅니다'); return; }
   var old = document.getElementById('tsrPopup'); if (old) old.remove();
@@ -12824,6 +13058,10 @@ window.closePromoCarousel = function(){
       </div>
       <div class="admin-menu-item" onclick="tsrOpen()" data-lang-lock="ko">
         <div><div class="admin-menu-text">📊 티켓 판매 현황</div><div class="admin-menu-sub">전체·월별 판매 · 환불 · 순판매 · 대행비 — 결제일/방문일 기준 · 채널·매장별 · CSV</div></div>
+        <div class="admin-arrow">›</div>
+      </div>
+      <div class="admin-menu-item" onclick="pxOpen()" data-lang-lock="ko">
+        <div><div class="admin-menu-text">🔓 구매 규정 예외 (협의 구매)</div><div class="admin-menu-sub">같은 회차 추가 구매 · 같은 날 같은 시간대 — 협의한 회원·회차에만 허용 · 기한 · 해제</div></div>
         <div class="admin-arrow">›</div>
       </div>
       <!-- 판매 오픈 관리 — 「실험·도구」에 있을 이유가 없다. 티켓을 여는 일이다 -->
@@ -17335,6 +17573,10 @@ function taamSyncNow(force){
     jobs.push(Promise.resolve(loadDeposit())
                 .catch(function(e){ console.warn('[live] 예치금 실패:', e && e.message); }));
   }
+  // 🆕 2026-10-22 협의 예외(같은 회차 추가·같은 시간대)도 같이 — 상세의 옛 재구매 검사가 낡은 캐시로 막지 않게
+  if (authed && typeof _tkLoadPurchaseExc === 'function') {
+    jobs.push(Promise.resolve(_tkLoadPurchaseExc()).catch(function(){}));
+  }
 
   return Promise.all(jobs).then(function(){
     _tkRepaintAll();
@@ -18755,6 +18997,7 @@ var _NOTIF_TITLES = [
   { m:[/^3일 뒤 방문 예정입니다$/], t:['3일 뒤 방문 예정입니다','Your visit is in 3 days','3日後にご来店の予定です'] },
   { m:[/^내일 초대가 종료됩니다$/], t:['내일 초대가 종료됩니다','Your guest access ends tomorrow','ゲスト期間は明日終了します'] },
   { m:[/^예약이 열렸습니다$/], t:['예약이 열렸습니다','Booking is open again','予約が再開されました'] },
+  { m:[/^예약하실 수 있습니다$/], t:['예약하실 수 있습니다','You can book now','ご予約いただけます'] },   // 🆕 2026-10-22 협의 구매 허용
   { m:[/^⏰?\s*초대 자동 만료 \(48시간\)$/], t:['초대 자동 만료 (48시간)','Invite expired (48h)','招待の自動失効（48時間）'] }
 ];
 // 숫자가 든 제목 (「방문 N일 전입니다」·「초대 종료 N일 전입니다」)
@@ -18845,6 +19088,9 @@ function _notifL10nBody(body){
   // 재구매 해제: "{매장} · {날짜} — 재구매 제한이 풀려 지금 예약하실 수 있습니다"
   m = s0.match(/^(.+?) — 재구매 제한이 풀려 지금 예약하실 수 있습니다$/);
   if(m) return [s0, m[1] + ' — the repurchase limit has lifted, you can book now', m[1] + ' — 再購入制限が解除され、今すぐ予約できます'][li];
+  // 🆕 2026-10-22 협의 구매 허용: "{매장} · {날짜} {시간} — TAAM 과 협의된 예약을 지금 결제하실 수 있습니다"
+  m = s0.match(/^(.+?) — TAAM 과 협의된 예약을 지금 결제하실 수 있습니다$/);
+  if(m) return [s0, m[1] + ' — the booking arranged with TAAM is ready for payment', m[1] + ' — TAAM と調整したご予約を今すぐお支払いいただけます'][li];
   // 초대 만료: "{매장} · {날짜} {시간} · N인 — 미결제로 만료, 좌석 자동 복구됨"
   m = s0.match(/^(.+?) · (\d+)인 — 미결제로 만료, 좌석 자동 복구됨$/);
   if(m) return [s0, m[1] + ' · ' + m[2] + ' guests — expired unpaid, seats released', m[1] + ' · ' + m[2] + '名 — 未決済のため失効、席は自動復旧'][li];
@@ -26092,7 +26338,16 @@ function handleTicketAction(){
     if(t.typeClass==='std' && !checkRepurchaseLimit(t)) return;
   }
   // 🆕 2026-10-13 같은 회차 중복 · 같은 날 같은 시간대 — 티켓 종류(std/eve)·매장 재구매 제한·역할과 무관하게 본다
-  if(typeof checkPurchaseConflicts === 'function' && !checkPurchaseConflicts(t)) return;
+  //   🔧 2026-10-22 막히면 협의 예외를 서버에서 다시 읽고, 통과하면 같은 티켓으로 한 번만 다시 연다
+  if(typeof checkPurchaseConflicts === 'function' && !checkPurchaseConflicts(t, true)){
+    if(window._tkHtaRetry || typeof checkPurchaseConflictsAsync !== 'function'){ checkPurchaseConflicts(t); return; }
+    checkPurchaseConflictsAsync(t).then(function(ok){
+      if(!ok || currentTicket !== t) return;
+      window._tkHtaRetry = true;
+      try { handleTicketAction(); } finally { window._tkHtaRetry = false; }
+    });
+    return;
+  }
 
   _tdConfirmAgreed = false;
   var chk = document.getElementById('tdConfirmCheck');
@@ -26522,7 +26777,7 @@ async function openTdPayPopup() {
   if (!t) return;
   // 🆕 2026-10-13 사진 캘린더 경로(pcalPay → 여기)는 handleTicketAction 을 거치지 않는다 — NEW_HOME_LIVE=true 라 전 회원이 이 길로 산다.
   //   결제 팝업 입구에서 같은 회차 중복·같은 시간대를 한 번 더 거른다 (서버 trg_taam_guard_purchase_unique 가 최종).
-  if (typeof checkPurchaseConflicts === 'function' && !checkPurchaseConflicts(t)) return;
+  if (typeof checkPurchaseConflictsAsync === 'function' ? !(await checkPurchaseConflictsAsync(t)) : (typeof checkPurchaseConflicts === 'function' && !checkPurchaseConflicts(t))) return;   // 🔧 2026-10-22 막히면 협의 예외를 다시 읽는다
   // 🆕 2026-10-19 지난 회차는 결제 팝업을 열지 않는다 — 상세가 막지만 한 겹 더(연도 없는 옛 회차가 다음 해 회차로 되살아나 살 수 있게 보이던 경로)
   if (typeof _isTicketExpired === 'function' && _isTicketExpired(t)) { showToast('⏰', '기한 만료', '지난 일정입니다'); return; }   // 두 문구 모두 TX_MAP
   // 🔧 2026-10-22 등록 카드 결제가 도는 중이면 열지 않는다 — 아래 홀드 가드가 그 결제의 홀드를 반납하지 않게
@@ -28038,6 +28293,29 @@ function _tkHasYear(v){
   var p = String(v == null ? '' : v).split(/[.\-\/T\s]/).filter(function(x){ return x !== '' && !isNaN(parseInt(x, 10)); });
   return p.length >= 3;
 }
+// 🆕 2026-10-22 구매 규정 예외 — 슈퍼어드민이 협의해 허락한 회차(같은 회차 추가 · 같은 날 같은 시간대).
+//   서버 가드(taam_guard_purchase_unique)가 최종이고, 앱은 같은 판단으로 사전 차단만 비킨다. 열쇠는 taam_my_purchase_exceptions()(자기 것 · 사유 없음).
+//   캐시는 막혔을 때 다시 읽는다(checkPurchaseConflictsAsync) — 슈퍼어드민이 방금 허락한 것을 앱이 열려 있는 회원도 바로 쓰게.
+window._tkPurchaseExc = window._tkPurchaseExc || [];
+async function _tkLoadPurchaseExc(){
+  if(!window.sb) return window._tkPurchaseExc;
+  try {
+    var r = await window.sb.rpc('taam_my_purchase_exceptions');
+    if(!r.error && Array.isArray(r.data)) window._tkPurchaseExc = r.data;   // 함수가 없거나 실패하면 옛 캐시 그대로(빈 목록 = 종전 규칙)
+  } catch(_e){}
+  return window._tkPurchaseExc;
+}
+// kind: 'dup' | 'time' — 살아 있는(기한 안) 그 회차의 예외
+function _tkExcFor(tpId, kind){
+  if(tpId == null || tpId === '') return null;
+  var now = Date.now();
+  return (window._tkPurchaseExc || []).find(function(e){
+    if(!e || String(e.ticket_product_id) !== String(tpId)) return false;
+    if(e.expires_at && !(Date.parse(e.expires_at) > now)) return false;
+    return kind === 'dup' ? !!e.allow_dup : (kind === 'time' ? !!e.allow_time : true);
+  }) || null;
+}
+window._tkLoadPurchaseExc = _tkLoadPurchaseExc; window._tkExcFor = _tkExcFor;
 // rows: purchaseHistory 모양 · tpId/dateObj/timeStr: 사려는 것 · exceptPid: 내 홀드 · strict: 서버와 똑같이(내 PAYH- 홀드도 중복으로)
 // 반환 null(통과) | {kind:'dup'|'clash', prev}
 function _tkFindPurchaseConflict(rows, tpId, dateObj, timeStr, exceptPid, strict){
@@ -28045,17 +28323,22 @@ function _tkFindPurchaseConflict(rows, tpId, dateObj, timeStr, exceptPid, strict
   if(tpId){
     // 구매 시트 경로(strict=false): 내가 전에 잡아 두고 안 끝낸 결제 홀드(PAYH- · 5분 안)는 같은 회차 중복으로 세지 않는다 —
     //   _tkAcquireSeatHold 가 그 홀드를 재사용하므로 서버도 막지 않는다. 초대 결제처럼 서버 트리거가 그대로 볼 경로(strict=true)는 센다.
-    var dup = live.find(function(h){
+    var dups = live.filter(function(h){
       if(String(h.id) !== String(tpId)) return false;
       if(!strict && String(h.rawStatus || '') === 'hold' && /^PAYH-/.test(String(h.purchaseId || ''))) return false;
       return true;
     });
-    if(dup) return { kind:'dup', prev: dup };
+    if(dups.length){
+      var _dx = _tkExcFor(tpId, 'dup');                                     // 🆕 2026-10-22 슈퍼어드민 협의 — 같은 회차 추가 N건까지
+      if(!(_dx && dups.length <= (parseInt(_dx.extra, 10) || 1))) return { kind:'dup', prev: dups[0] };
+    }
   }
   if(!dateObj) return null;
+  if(tpId && _tkExcFor(tpId, 'time')) return null;                         // 🆕 2026-10-22 이 회차는 같은 시간대 규칙에서 빠진다
   var slot = _tkTimeSlot(timeStr);
   var clash = live.find(function(h){
     if(tpId && String(h.id) === String(tpId)) return false;              // 같은 회차는 위 중복 검사의 몫(내 옛 홀드 재사용 포함)
+    if(_tkExcFor(h.id, 'time')) return false;                             // 🆕 겹치는 쪽 회차가 예외여도 안 센다(서버와 같다 — 예외는 양쪽으로)
     if(!_tkHasYear(h.visitDate)) return false;                            // 연도 없는 옛 'MM.DD' 는 서버처럼 세지 않는다(과거 방문이 미래를 막지 않게)
     var vd = _repParseDate(h.visitDate, dateObj);                         // 방문일만 본다 — 구매일(h.date)로 떨어뜨리지 않는다
     if(!vd || !_tkPcSameDay(vd, dateObj)) return false;
@@ -28064,15 +28347,23 @@ function _tkFindPurchaseConflict(rows, tpId, dateObj, timeStr, exceptPid, strict
   });
   return clash ? { kind:'clash', prev: clash } : null;
 }
-function checkPurchaseConflicts(t){
+function checkPurchaseConflicts(t, quiet){
   if(!t) return true;
   var c = _tkFindPurchaseConflict(purchaseHistory, t.id, _repTicketDate(t), t.time, window._tkSeatHoldId);
   if(!c) return true;
+  if(quiet) return false;
   console.warn('[purchase] 앱 사전 차단:', c.kind, c.prev && c.prev.purchaseId);
   showPurchaseBlockPopup(c.kind, c.prev);
   return false;
 }
-window.checkPurchaseConflicts = checkPurchaseConflicts; window._tkFindPurchaseConflict = _tkFindPurchaseConflict; window._tkTimeSlot = _tkTimeSlot;
+// 🆕 2026-10-22 막히면 예외를 서버에서 다시 읽고 한 번 더 본다 — 슈퍼어드민이 방금 허락한 협의 구매
+async function checkPurchaseConflictsAsync(t){
+  if(!t) return true;
+  if(checkPurchaseConflicts(t, true)) return true;
+  try { await _tkLoadPurchaseExc(); } catch(_e){}
+  return checkPurchaseConflicts(t);
+}
+window.checkPurchaseConflicts = checkPurchaseConflicts; window.checkPurchaseConflictsAsync = checkPurchaseConflictsAsync; window._tkFindPurchaseConflict = _tkFindPurchaseConflict; window._tkTimeSlot = _tkTimeSlot;
 // 서버에서 내 살아 있는 티켓을 **새로 읽어** 같은 판정 — 초대 결제처럼 돈이 먼저 움직이는 경로에서 쓴다 (다른 기기에서 산 것도 본다).
 //   못 읽으면 null — 서버 트리거에 맡긴다.
 //   반환: null(통과) | {kind, prev} | {error:true} — 읽기 실패를 「통과」와 섞지 않는다. 호출부는 error 면 돈을 움직이지 말고 멈춘다.
@@ -28096,7 +28387,9 @@ async function _tkServerPurchaseConflict(uid, tpId, dateStr, timeStr){
              status: r.status || '', rawStatus: r.status || '', purchaseId: r.purchase_id || '', extra_data: r.extra_data || {} };
   });
   var d = dateStr ? _repParseDate(dateStr, new Date()) : null;
-  return _tkFindPurchaseConflict(rows, tpId, d, timeStr, null, true);
+  var c = _tkFindPurchaseConflict(rows, tpId, d, timeStr, null, true);
+  if(c){ try { await _tkLoadPurchaseExc(); } catch(_le){} c = _tkFindPurchaseConflict(rows, tpId, d, timeStr, null, true); }   // 🆕 2026-10-22 협의 예외
+  return c;
 }
 window._tkServerPurchaseConflict = _tkServerPurchaseConflict;
 // 막힘 팝업 — showRepurchasePopup 과 같은 생김새. prev(구매내역 행) 또는 prevText(서버 메시지의 괄호 안)로 기존 예약을 적는다.
@@ -28120,6 +28413,8 @@ function showPurchaseBlockPopup(kind, prev, prevText){
         + (dup ? _pbT('ticket.dup_body','이미 구매한 회차입니다. 같은 회차는 한 번만 구매할 수 있습니다.')
                : _pbT('ticket.clash_body','같은 날 같은 시간대(점심/저녁)에 이미 예약이 있어 구매할 수 없습니다.'))
       + '</div>'
+      + '<div style="font-family:var(--font-main);font-size:11.5px;color:#8a8580;line-height:1.7;margin-bottom:12px;text-align:left;">'   // 🆕 2026-10-22 협의 구매 안내
+        + _pbT('ticket.block_contact','일행 추가처럼 꼭 필요한 경우 TAAM 에 문의해 주세요 — 협의되면 구매하실 수 있습니다.') + '</div>'
       + (line ? '<div style="font-family:var(--font-main);font-size:12px;color:#aaa;margin-bottom:20px;">'
           + _pbT('ticket.block_prev','기존 예약') + ' · <b style="color:#888;">' + _pcalEsc(line) + '</b></div>' : '<div style="height:8px;"></div>')
       + '<button onclick="document.getElementById(\'purchaseBlockPopup\').remove()" style="width:100%;padding:14px;background:#1a1a18;border:none;border-radius:12px;font-family:var(--font-main);font-size:11px;font-weight:800;letter-spacing:.2em;color:#fff;cursor:pointer;">'
@@ -28150,12 +28445,14 @@ function checkRepurchaseLimit(t){
   // 같은 레스토랑의 기존 구매 내역 검색.
   //   앞뒤를 가리지 않는다 — 4월 티켓을 먼저 사고 1월 티켓을 사도, 두 방문일
   //   사이가 제한 일수 안이면 똑같이 막는다. Math.abs 가 그 역할을 한다.
+  var _rxExc = (typeof _tkExcFor === 'function') && !!_tkExcFor(t.id);   // 🆕 2026-10-22 협의 예외 회차
   var blocked = purchaseHistory.find(function(h){
     if(String(h.restId)!==String(t.restId)) return false;
     if(_repIsCancelled(h)) return false;
     var prev = _repParseDate(h.visitDate || h.date, newVisitDate);
     if(!prev) return false;
     var diff = (newVisitDate - prev)/(1000*60*60*24);
+    if(_rxExc && Math.abs(diff) < 1) return false;                      // 같은 날 = 서버 재구매 가드도 예외 · 중복·시간대는 협의 예외가 맡는다
     return Math.abs(diff) < r.repurchaseDay;
   });
 
@@ -32760,6 +33057,10 @@ async function mlOpen(uid){
   h += '<button onclick="mlCsv()" style="margin-top:10px;padding:7px 11px;border:1px solid ' + C.line + ';'
      + 'border-radius:9px;background:#fff;font-family:inherit;font-size:11.5px;font-weight:700;'
      + 'color:' + C.sub + ';cursor:pointer;">⤓ 이 회원 내역 CSV</button>';
+  // 🆕 2026-10-22 구매 규정 예외(협의 구매) — 이 회원으로 채워서 연다
+  h += '<button onclick="pxOpen({uid:\'' + String(uid).replace(/[^0-9a-fA-F-]/g, '') + '\'})" style="margin-top:10px;margin-left:6px;padding:7px 11px;border:1px solid ' + C.line + ';'
+     + 'border-radius:9px;background:#fff;font-family:inherit;font-size:11.5px;font-weight:700;'
+     + 'color:#5C0A14;cursor:pointer;">🔓 구매 규정 예외</button>';
 
   // ── 결제·표시 통화 지정 — 슈퍼어드민만 여기서 바꾼다 (회원 스스로는 못 바꿈) ──
   //   미지정(자동)은 화면 언어 폴백. 해외 요율이 통화에 붙으므로 회원과 합의 후 지정한다.
@@ -52555,6 +52856,7 @@ var TRANSLATIONS = {
       clash_title:'같은 시간대 예약 있음',
       clash_body:'같은 날 같은 시간대(점심/저녁)에 이미 예약이 있어 구매할 수 없습니다.',
       block_prev:'기존 예약',
+      block_contact:'일행 추가처럼 꼭 필요한 경우 TAAM 에 문의해 주세요 — 협의되면 구매하실 수 있습니다.',
       check_fail_t:'확인 실패',
       check_fail_m:'예약 상태를 확인하지 못했습니다 — 잠시 후 다시 시도해주세요',
       repurchase_body:'같은 레스토랑의 다른 날짜 티켓은 기존 예약일(방문일 기준)로부터 {n}일이 지나야 구매하실 수 있습니다.',
@@ -53456,6 +53758,7 @@ var TRANSLATIONS = {
       clash_title:'Same-time booking exists',
       clash_body:'You already have a booking in the same time slot (lunch/dinner) on this day, so this one cannot be purchased.',
       block_prev:'Existing booking',
+      block_contact:'If you really need it (for example, extra guests), please contact TAAM — once arranged, you can complete the purchase.',
       check_fail_t:'Check failed',
       check_fail_m:'We could not verify your bookings — please try again shortly.',
       repurchase_body:'For another date at the same restaurant, {n} days must pass from your previous booking date (the visit date).',
@@ -54556,6 +54859,7 @@ TRANSLATIONS.ja = {
     clash_title:'同じ時間帯の予約があります',
     clash_body:'同じ日の同じ時間帯（ランチ/ディナー）にすでに予約があるため購入できません。',
     block_prev:'既存の予約',
+    block_contact:'同行者の追加などどうしても必要な場合は TAAM にお問い合わせください。調整後にご購入いただけます。',
     check_fail_t:'確認できません',
     check_fail_m:'予約状況を確認できませんでした — しばらくしてからもう一度お試しください。',
     repurchase_body:'同じレストランの別日程のチケットは、これまでのご予約日（来店日基準）から{n}日が経過してからご購入いただけます。',
@@ -63577,6 +63881,11 @@ function tcalShowBuyer(key) {
           + '<div class="tcal-buyer-sheet-val">' + row[1] + '</div>'
           + '</div>';
       }).join('')
+    + (function(){   // 🆕 2026-10-22 슈퍼어드민 — 이 회원이 이 회차를 더 사거나 같은 시간대에 함께 예약하도록 허용(협의 구매)
+        var _bu = String(h._userId || h.userId || h.user_id || '');
+        if (!(typeof _isSuperAdmin === 'function' && _isSuperAdmin()) || !/^[0-9a-fA-F-]{36}$/.test(_bu) || (typeof _tkIsOpsRow === 'function' && _tkIsOpsRow(h))) return '';
+        return '<button onclick="tcalCloseBuyer();pxOpen({uid:\'' + _bu + '\',ticketId:\'' + String(h.id || '').replace(/[^0-9A-Za-z_.-]/g, '') + '\'})" style="width:100%;margin-top:14px;padding:12px;border:1px solid #E4D6D6;border-radius:10px;background:#fff;color:#5C0A14;font-family:var(--font-main);font-size:12px;font-weight:800;cursor:pointer;" data-lang-lock="ko">🔓 이 회원에게 추가 구매 허용 (협의)</button>';
+      })()
     + '<button onclick="tcalCloseBuyer()" style="width:100%;margin-top:20px;padding:14px;border:none;border-radius:10px;background:#1a1a18;color:#fff;font-family:var(--font-main);font-size:10px;font-weight:800;letter-spacing:.2em;cursor:pointer;">닫기</button>';
 
   document.getElementById('tcalBuyerModal').style.display = 'flex';
@@ -67875,7 +68184,8 @@ function _taamBusyNow(){
                'pqrBigModal', // 🆕 2026.09-01 QR 을 보여주는 중 (상대가 찍고 있다)
                'riPayPopup',   // 🆕 2026.09-13 초대 결제 팝업 — 예치금 차감과 티켓 기록 사이
                'codeScreen','phoneScreen',   // 🆕 2026.09-13 초대코드·OTP 입력 중
-               'payLinkPopup'];   // 🆕 2026-10-18 결제 링크 만드는 중
+               'payLinkPopup',   // 🆕 2026-10-18 결제 링크 만드는 중
+               'pxPopup'];       // 🆕 2026-10-22 구매 규정 예외 허용 중
     // ⚠ offsetParent 로 판단하면 안 된다. **position:fixed 는 offsetParent 가
     //   항상 null** 이고, 이 목록은 전부 fixed 다 — 그래서 이 검사가 한 번도
     //   참이 된 적이 없었다(2026-09-01 발견). 계산된 스타일을 본다.

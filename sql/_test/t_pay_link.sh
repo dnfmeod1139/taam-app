@@ -1,7 +1,7 @@
 #!/bin/bash
 # 결제 링크 재구성 회귀 — 2026-10-18. 먼저: 로컬 pg. 실행: bash sql/_test/t_pay_link.sh
 cd "$(dirname "$0")/../.."
-DB=t_paylink; psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1; psql -h /tmp -U postgres -d postgres -q -c "create database $DB" >/dev/null
+DB=${PL_DB:-t_paylink}; psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1; psql -h /tmp -U postgres -d postgres -q -c "create database $DB" >/dev/null
 P="psql -h /tmp -U postgres -d $DB -q -At"
 SU=a1000000-0000-4000-8000-000000000001; M2=a1000000-0000-4000-8000-000000000002; M3=a1000000-0000-4000-8000-000000000003; M4=a1000000-0000-4000-8000-000000000004; ADM=a1000000-0000-4000-8000-000000000005; M5=a1000000-0000-4000-8000-000000000006; M6=a1000000-0000-4000-8000-000000000007
 $P <<SQL >/dev/null 2>&1
@@ -287,5 +287,5 @@ outp2=$($P -f supabase/migrations/20261019_pay_link_override_parts.sql 2>&1)
 ok "항목별 금액 마이그레이션 두 번째 RUN: 「이미 새 판」 2 · ❌ 0" "2|0" "$(echo "$outp2" | grep -c '이미 새 판')|$(echo "$outp2" | grep -c '❌')"
 out10=$($P -f supabase/migrations/20261019_pay_link_ticket_override.sql 2>&1)
 ok "금액 수정 마이그레이션 두 번째 RUN: ❌ 0 · 「이미 새 판」" "0|1" "$(echo "$out10" | grep -c '❌')|$(echo "$out10" | grep -c '이미 새 판')"
-psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1
+[ -n "$PL_KEEP" ] || psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1   # PL_KEEP=1 이면 남긴다(t_purchase_exception.sh 가 이 픽스처 위에서 돈다)
 [ $FAIL = 0 ] && echo "=== 전부 통과 ===" || { echo "=== 실패 있음 ==="; exit 1; }
