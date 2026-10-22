@@ -12,9 +12,10 @@
 //   ② 시크릿은 승인한 MID 의 것 —
 //      승인한 MID 의 시크릿으로 취소해야 한다: 등록 카드 자동결제(paid_via billing_key)는 TOSS_BILLING_SECRET_KEY(없으면 TOSS_SECRET_KEY),
 //      일반 결제창은 TOSS_SECRET_KEY. 외화 주문은 대기 금액이 원화라 단위가 다르다 → 막고 상점관리자로 안내.
-//   ③ 토스 GET 으로 이 결제에서 이미 취소된 금액(totalAmount − balanceAmount)을 빼고 남은 만큼만 — 중복 환불이 원리적으로 안 된다(상점관리자 취소 포함).
+//   ③ 이 구매에 앱이 이미 한 카드 취소(payment_orders.metadata.app_cancels · 견적의 done_for_purchase)를 빼고 토스 남은 금액 안에서만 —
+//      같은 결제의 다른 취소(인원 줄임·상점관리자)는 막지 않고 other_cancelled 로 알린다(앱 확인창 ※ · 상점관리자에서 이미 했는지 사람이 본다).
 //      dry_run 이면 금액만 돌려준다(앱 확인창) · 실행은 expect_amount 가 지금 금액과 같아야 한다(amount_changed).
-//   ④ POST /v1/payments/{paymentKey}/cancel {cancelReason, cancelAmount} · Idempotency-Key 'taam-crf-<구매>-<지금까지 취소된 금액>'
+//   ④ POST /v1/payments/{paymentKey}/cancel {cancelReason, cancelAmount} · Idempotency-Key 'taam-crf-<구매>-<이 구매에 앱이 한 취소 누적>'
 //      (두 번 눌리거나 재시도해도 토스는 한 번만 취소하고 같은 결과를 돌려준다).
 //   ⑤ 성공하면 card_refund_pending 을 done 으로(+ 토스 거래키 · 취소 시각 · 처리자 · via toss_api) — 회원 알림·푸시는 앱이 종전 함수로 보낸다.
 //      기록이 실패해도 토스 취소는 이미 됐다 → { ok:true, mark_failed:true } 로 알려 앱이 「완료 표시」를 하게 한다(같은 키라 다시 불러도 이중 취소 없음).
@@ -64,25 +65,28 @@ async function handle(req: Request){
     const auth = `Basic ${btoa(secret + ':')}`;
     const pk = encodeURIComponent(String(q.payment_key));
 
-    // ② 토스에 이미 취소된 금액 — 이 주문은 이 구매에만 묶여 있으므로 그만큼이 이 구매의 카드 환불이다
+    // ② 이 구매에 앱이 이미 한 카드 취소(서버 기록 app_cancels)만 뺀다 — 같은 결제의 다른 취소(인원 줄임·상점관리자)는 막지 않고 경고로 보여 준다(2차 · 적대 검증)
+    //    토스의 남은 금액(balanceAmount)은 언제나 상한이다.
     const gr = await fetch(`https://api.tosspayments.com/v1/payments/${pk}`, { headers: { Authorization: auth } });
     const pay = await gr.json().catch(() => null);
     if(!gr.ok || !pay) return json({ ok: false, error: 'toss_lookup_failed', toss: { code: pay?.code, message: pay?.message } });
     const tossTotal = Number(pay.totalAmount ?? q.card_paid ?? 0);
     const balance = Number(pay.balanceAmount ?? 0);
-    const cancelled = Math.max(0, tossTotal - balance);
+    const cancelled = Math.max(0, tossTotal - balance);                                   // 이 결제에서 토스가 취소한 전부
+    const done = Math.max(0, Math.floor(Number(q.done_for_purchase || 0)));              // 그중 이 구매에 앱이 한 것
+    const other = Math.max(0, cancelled - Math.max(0, Math.floor(Number(q.app_cancelled_order || 0))));   // 앱 밖(인원 줄임·상점관리자) 취소
     const target = Math.floor(Number(q.target || 0));
-    const amount = Math.max(0, Math.min(target - cancelled, balance));
-    const info = { amount, target, cancelled, balance, card_paid: q.card_paid, pending: q.pending, policy: q.policy, set_by_role: q.set_by_role,
+    const amount = Math.max(0, Math.min(target - done, balance));
+    const info = { amount, target, done, cancelled, other_cancelled: other, balance, card_paid: q.card_paid, pending: q.pending, policy: q.policy, set_by_role: q.set_by_role,
                    order_id: q.order_id, order_note: (q.crp_order_id && q.crp_order_id !== q.order_id) ? 'pending_order_differs' : null };
-    if(!(amount > 0)) return json({ ok: false, error: cancelled > 0 ? 'already_refunded_at_toss' : 'nothing_to_refund', ...info });
+    if(!(amount > 0)) return json({ ok: false, error: done >= target && done > 0 ? 'already_done_by_app' : (!(balance > 0) ? 'nothing_left_at_toss' : 'nothing_to_refund'), ...info });
     if(dry_run) return json({ ok: true, dry_run: true, ...info });
     if(Math.floor(Number(expect_amount)) !== amount) return json({ ok: false, error: 'amount_changed', ...info });   // 앱이 본 금액과 지금 금액이 다르면 다시 보여 준다
 
     // ③ 승인취소 — 키는 「구매 + 지금까지 취소된 금액」: 두 번 눌러도 같은 키(토스가 한 번만), 다음 취소는 새 키
     const cr = await fetch(`https://api.tosspayments.com/v1/payments/${pk}/cancel`, {
       method: 'POST',
-      headers: { Authorization: auth, 'Content-Type': 'application/json', 'Idempotency-Key': `taam-crf-${pid}-${cancelled}` },
+      headers: { Authorization: auth, 'Content-Type': 'application/json', 'Idempotency-Key': `taam-crf-${pid}-${done}` },
       body: JSON.stringify({ cancelReason: String(reason || '예약 취소 (카드 결제분 환불)').slice(0, 200), cancelAmount: amount }),
     });
     const toss = await cr.json().catch(() => null);
@@ -97,6 +101,7 @@ async function handle(req: Request){
     const ex = (t.extra_data && typeof t.extra_data === 'object') ? t.extra_data : {};
     const crp = (ex.card_refund_pending && typeof ex.card_refund_pending === 'object') ? ex.card_refund_pending : {};
     const newEx = { ...ex, card_refund_pending: { ...crp, status: 'done', refunded_at: now, done_by: by, via: 'toss_api', refunded_amount: amount,
+      requested_amount: crp.requested_amount ?? crp.amount ?? null, amount,
       order_id: q.order_id, toss_tx: mine.transactionKey || null, toss_canceled_at: mine.canceledAt || null, toss_balance_after: toss.balanceAmount ?? null, policy: q.policy } };
     const up = t.id ? await sbPatch(`tickets?id=eq.${encodeURIComponent(String(t.id))}`, { extra_data: newEx }) : { ok: false };
     try {   // 주문 표에도 한 줄 (판매 현황·수수료 계산은 status 로 세므로 status 는 그대로 둔다)

@@ -1008,6 +1008,15 @@ platform `edge`)로 남고 토스트에 코드가 붙는다. 같은 빌링키 23
   `tkMarkCardRefundDone(pid, {notifyOnly:true})` 로 회원 인앱 알림·푸시(앱은 티켓을 다시 쓰지 않는다) · 이미 토스에서 취소됨 → 「완료로 표시?」 · 함수 미배포 → 「서버 준비 필요」. 종전 「상점관리자에서 처리함 · 완료 표시」는 외화·옛 포트원·API 실패용으로 남김(`via:'manual'`).
 - 회귀: `bash sql/_test/t_card_refund_quote.sh`(16건 — 결제 사실 칸 보호 · 30분/D-31/규정 0 · 부풀린 대기 · 슈퍼어드민 대기 · PAYC 폴백 · 다른 구매에 묶인 주문 · 권한) ·
   스크래치 `tcr/harness2.mjs`(15건 · 가짜 토스·Supabase — 미리보기 · amount_changed · 이미 취소된 금액 빼기 · 키 · 시크릿 · 기록 실패) · `crf/crf.js`(16건 · 미리보기→확인→실행 · 대기와 다른 서버 금액 · 구매내역 버튼).
+- **2차(배포 뒤 적대 검증 22 에이전트 → 확정 반영 · `20261022_card_refund_quote2.sql` · Edge v2 · 빌드 `2026.10.22-d`).**
+  ① 결제 사실 칸 보호가 **UPDATE 만** 봤다 — 회원이 홀드를 **만들 때** `extra_data.order_id` 에 자기의 다른(홀드 없는) 주문을 적고 취소하면 PAYC 폴백이 그 주문을 잡았다(`set_by_role:'superadmin'` 도 만들 때 넣을 수 있었다) →
+  `trg_taam_guard_ticket_payfacts_ins`(BEFORE INSERT · 회원·매장 어드민 세션은 보호 칸을 **지운다**) · 보호 칸에 `super_admin_processed_at/_by` · `deposit_return` 추가. PAYC 폴백은 **`PAYC-` 행이고 다른 살아 있는 티켓이 그 주문을 안 쓸 때만** · 주문 메타의 `ticket_id` 가 이 티켓 회차와 다르면 `order_ticket_mismatch`.
+  ② 방문일을 회원이 홀드 때 적은 `reservation_date` 에서 먼저 읽어 D-31 을 속일 수 있었다 → 견적은 **회차 날짜 먼저** · 같은 트리거가 회원 홀드(`PAYH-`)의 `reservation_date`·`visit_time` 을 **회차 값으로 맞춘다**(종전 예치금 환불 한도 `taam_refund_cap` 의 D-31 판정도 같은 칸을 봐서 함께 닫힌다).
+  ③ (종전부터) toss-order 가 다른 회차의 홀드 id 를 주문에 남기면 toss-confirm 이 그 비싼 홀드를 싼 주문 금액으로 확정할 수 있었다 → `trg_taam_guard_ticket_price_floor`(앱 구매 `PAY*` 의 hold→active 금액 ≥ 회차 정가×인원 · 외화 제외 · `PRICE_BELOW_TICKET`). 근본 원인은 toss-order/toss-confirm(대시보드 판 · 대조 전) — 하한이 받친다.
+  ④ Edge 가 「토스에 이미 취소된 금액 전부」를 빼서 **인원 줄임 카드 부분취소**가 있던 결제는 이번 환불이 그만큼 줄었다 → 견적이 `done_for_purchase`(이 구매에 앱이 이미 한 카드 취소 · `payment_orders.metadata.app_cancels`)를 주고 Edge 는 **min(목표 − 그것, 토스 잔액)** · 앱 밖 취소(인원 줄임·상점관리자)는 `other_cancelled` 로 확인창에 ※ 경고.
+  키는 `taam-crf-<구매>-<이 구매의 앱 취소 누적>` · 결과 오류 `already_done_by_app` · `nothing_left_at_toss` → 앱 「완료로 표시?」 · 기록 실패(`mark_failed`)면 앱이 **서버가 실제로 돌려준 금액**을 `refunded_amount` 로 적는다(대기 금액 아님).
+  ⑤ 이 파일 전에 생긴 대기(라이브 2건)는 서버 취소 시각·`set_by_role` 이 없어 「지금 취소」·「회원 대기」로 셌다 → 채움(요청 시각을 결제~지금 사이로 · 처리자가 실제 슈퍼어드민이면 superadmin).
+  회귀: `t_card_refund_quote.sh` 24건(C1~C9) · `tcr/harness2.mjs` 18건 · `crf/crf.js` 18건 · 진단 `20261022_diag_price_floor.sql`(하한을 걸기 전 지난 확정 금액 모양).
 
 ### 결제 팝업은 남은 홀드를 회차·인원이 맞을 때만 다시 쓴다 (2026-10-22 키사누키 5/20 · 빌드 `2026.10.22-a`)
 
