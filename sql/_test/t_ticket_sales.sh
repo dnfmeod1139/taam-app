@@ -1,8 +1,9 @@
 #!/bin/bash
 # 📊 티켓 판매 현황 RPC (supabase/migrations/20261021_ticket_sales_report.sql → 2차 판 _report2.sql) — 로컬 postgres 픽스처. 실행: bash sql/_test/t_ticket_sales.sh
 cd "$(dirname "$0")/../.."
-MIG1=supabase/migrations/20261021_ticket_sales_report.sql      # 라이브에 먼저 올라간 1차 판 — 그 위에 2차를 올리는 순서 그대로
-MIG=supabase/migrations/20261021_ticket_sales_report2.sql
+MIG1=supabase/migrations/20261021_ticket_sales_report.sql      # 라이브에 먼저 올라간 1차 판 — 그 위에 2차 · 3차를 올리는 순서 그대로
+MIG2=supabase/migrations/20261021_ticket_sales_report2.sql
+MIG=supabase/migrations/20261022_ticket_sales_report3.sql
 FAIL=0
 DB=t_sales; psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1; psql -h /tmp -U postgres -d postgres -q -c "create database $DB" >/dev/null
 P="psql -h /tmp -U postgres -d $DB -q -At"
@@ -46,6 +47,7 @@ create table public.kashikiri_charges(id uuid primary key default gen_random_uui
 create table public.daegwan_manual(id uuid primary key default gen_random_uuid(), venue_id text, ymd date, name text, pax int, amount int, memo text, ttype text, venue_name text, created_by uuid, created_at timestamptz default now());
 SQL
 out1=$($P -f "$MIG1" 2>&1)
+out1="$out1$($P -f "$MIG2" 2>&1)"
 out=$($P -f "$MIG" 2>&1)
 
 $P <<SQL >/dev/null
@@ -322,6 +324,12 @@ ok "F1 이중 차감 + 정정 → 판매 1.7M · 정가와 같음 · 음수 정�
 ok "F2 이중 차감 → 정정 → 취소 = 순 0" "$(row PAYH-dd_2 "concat_ws('/', r->>'st', r->>'gross', r->>'rf_cancel', r->>'net')")" "cancelled/1000/1000/0"
 ok "F3 1차 판 위에 2차가 오류 없이 올라간다" "$(echo "$out1$out" | grep -cE "^ERROR|^psql:.*ERROR")" "0"
 ok "F4 확인 표 ⑦ 정정 줄 · ⑧ 정가와 다름 이 찍힌다" "$($P -f "$MIG" 2>&1 | grep -cE "⑦ 정정\(fix\) 줄.*3줄 ₩3,401,000 판매에서 뺌 · 1줄|⑧ 앱 구매 「정가와 다름」")" "2"
+
+echo "── 3차: 펼쳐 보기용 비교 값 ──"
+ok "D1 초대 대행비 부풀림(R13) — 기록 900,000 · 회차 150,000 · 센 값 150,000 · 초대 합계" "$(row "inv:$I6" "concat_ws('/', r->>'d_ag_inv', r->>'d_ag_tp', r->>'d_ag_used', r->>'d_total_inv', r->>'d_buy')")" "900000/150000/150000/850000/850000"
+ok "D2 앱 구매 — 회차 대행비 · 1인 식사 · 티켓 행 금액 · 원장 결제" "$(row PAYH-tp1_1 "concat_ws('/', r->>'d_ag_tp', r->>'d_ag_used', r->>'d_meal_tp', r->>'d_price_tk', r->>'d_buy', r->>'d_rev')")" "150000/150000/600000/1700000/3400000/1700000"
+ok "D3 방문 전 반환(R7) — 반환 시각 · 방문 전 반환액" "$(row PAYH-ret_7 "concat_ws('/', left(r->>'d_ret_at', 10), r->>'d_ret_early')")" "2026-10-10/1400000"
+ok "D4 확인 표 ⑨ 대행비 다름 — 기록·회차·센 값이 찍힌다(이름 없음)" "$($P -f "$MIG" 2>&1 | grep -cE "⑨ 대행비 다름 · invite\|.*기록 ₩900,000/인 · 회차 ₩150,000/인 → 센 값 ₩150,000/인|⑨ 대행비 다름 합계")" "2"
 out2=$($P -f "$MIG" 2>&1)
 ok "두 번째 RUN: 오류 없음 · ❌ 0 · ⑤ 채널 합계 줄이 찍힌다(이름 없음)" "$(echo "$out2" | grep -E "^ERROR|^psql:.*ERROR" | head -1)|$(echo "$out2" | grep -c '❌')|$( [ $(echo "$out2" | grep -cE '⑤ (app|invite|link|settle)') -ge 4 ] && echo ok)|$(echo "$out2" | grep -c '회원1')" "|0|ok|0"
 # 화면 시험용 — TSR_DUMP=파일 이면 보고서 JSON 을 남긴다(결제일·전체 · 기본)
