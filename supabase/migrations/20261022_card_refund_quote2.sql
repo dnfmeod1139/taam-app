@@ -22,6 +22,8 @@
 --      회원(소유자) 세션은 pax_changes · card_refund_queue 도 못 바꾼다(지워서 인원 변경을 숨기지 못하게 · 매장 어드민의 인원 변경 함수는 그대로).
 --      Edge 는 토스에 앱 밖 취소가 하나라도 있으면 자동 취소하지 않는다(outside_cancel).
 --      회원은 이미 있는 구매 id 로 티켓 행을 못 넣는다(PURCHASE_ID_TAKEN) · D'. 회원 예치금 환불 ≤ 낸 돈 − (환불 + 인원 줄임 원장) (LEDGER_REFUND_EXCEEDS_PAID).
+--      (구매 규정 예외 리뷰 · 옛 구멍 둘) 회원 소유자는 자기 행의 운영 행 표시(inviteHold·manualEntry·kashikiri·linkInvite·memberUid)와 회차(ticket_product_id)·방문 시각(visit_time)을 못 바꾼다 —
+--      켜거나 옮겨서 중복·시간대 가드가 그 행을 안 세게 만들던 길. 되돌림(예외 아님 · 같은 갱신의 다른 칸은 그대로).
 --   D. 옛 카드 환불 대기 채우기 — server_cancelled_at = 요청 시각(requested_at · 결제~지금 사이로) · set_by_role = 처리자가 실제 슈퍼어드민이면 superadmin, 아니면 member.
 -- 회귀: bash sql/_test/t_card_refund_quote.sh
 -- ═══════════════════════════════════════════════════════════════
@@ -36,7 +38,7 @@ declare
   v_keys text[] := array['card_refund_pending','server_cancelled_at','order_id','cardPaid','depositUsed','paidBy','card_currency','card_amount_fx',
                          'super_admin_processed_at','super_admin_processed_by','deposit_return'];
   v_cx   boolean;
-  v_old  jsonb; v_new jsonb; k text;
+  v_old  jsonb; v_new jsonb; k text; v_member_owner boolean := false;
 begin
   v_cx := lower(coalesce(new.status, '')) in ('cancelled', 'canceled') and lower(coalesce(old.status, '')) not in ('cancelled', 'canceled');
   if v_cx then
@@ -54,7 +56,18 @@ begin
     return new;
   end if;
 
-  if v_uid = old.user_id then v_keys := v_keys || array['pax_changes', 'card_refund_queue']; end if;   -- 소유자(회원)는 인원 변경 기록도 못 바꾼다 · 매장 어드민의 인원 변경 함수는 그대로
+  -- 소유자가 회원(어드민 아님)이면 더 막는다 — 인원 변경 기록 · 운영 행 표시(이것을 켜면 중복·시간대 가드가 그 행을 안 센다) · 회차·방문 시각
+  --   (배포 전 리뷰: 회원이 자기 INV-/LINK- 행에 inviteHold 를 켜거나 memberUid 를 지우거나 회차·시각을 옮겨 같은 회차를 또 사던 길 · 앱의 회원 흐름은 이 칸들을 안 쓴다)
+  --   매장 어드민의 인원 변경 함수 · 보낸 사람의 초대 시간 변경(INVH- 는 보낸 어드민 소유) · 초대 확정(소유자가 바뀌는 갱신)은 그대로.
+  if v_uid = old.user_id and v_uid = new.user_id then
+    select coalesce(role, 'user') not in ('admin', 'superadmin', 'super_admin') into v_member_owner from public.profiles where id = v_uid;
+    v_member_owner := coalesce(v_member_owner, true);
+  end if;
+  if v_member_owner then
+    v_keys := v_keys || array['pax_changes', 'card_refund_queue', 'inviteHold', 'manualEntry', 'kashikiri', 'linkInvite', 'memberUid'];
+    if new.ticket_product_id::text is distinct from old.ticket_product_id::text then new.ticket_product_id := old.ticket_product_id; end if;
+    if new.visit_time is distinct from old.visit_time then new.visit_time := old.visit_time; end if;
+  end if;
   foreach k in array v_keys loop
     if k = 'server_cancelled_at' and v_cx then continue; end if;
     if k = 'card_refund_pending' and v_cx and v_old->'card_refund_pending' is null then

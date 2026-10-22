@@ -304,7 +304,7 @@ DB 값은 `'A'` 그대로고 **이름만** 「게스트 회원」이다. 값을 
 - ⚠ `_tkAcquireSeatHold(t, r, pax)` · `openTdPayPopup` 안의 `t` 는 **티켓**이다. 사전은 `_shT()`/`window.t` 로 — 종전 `t('seathold.tier')` 줄이 TypeError 를 내고 있었다(같은 날 수리).
 - 배포 순서: **앱(index.html) 먼저, 마이그레이션은 그 뒤 커밋으로** — 옛 빌드가 캐시에 남은 채 서버 거절을 받으면 메시지 없이 끝난다(지금 빌드는 예외도 토스트로 보인다).
 - 회귀: `bash sql/_test/t_purchase_unique.sh`(42건 — 같은 purchase_id·삭제된 회차·옛 중복 행 시간 변경·남의 user_id 침묵 포함) · 스크래치 `dupguard.js`. 진단: 스크래치 `dup_kataori.sql`.
-- **🔓 구매 규정 예외(협의 구매) — 슈퍼어드민만 (2026-10-22 · `20261022_purchase_rule_exception.sql` · 빌드 `2026.10.22-e`).** 「슈퍼어드민과 협의 후 같은 회차를 한 번 더(일행 추가) · 같은 저녁에 두 매장」이 위 규칙에 막혔다(스시 사이토 2027.06.01 20:30 「중복 구매 불가」). 규칙은 그대로 두고 **그 회원 · 그 회차에만** 푼다.
+- **🔓 구매 규정 예외(협의 구매) — 슈퍼어드민만 (2026-10-22 · `20261022_purchase_rule_exception.sql` · 빌드 `2026.10.22-d`).** 「슈퍼어드민과 협의 후 같은 회차를 한 번 더(일행 추가) · 같은 저녁에 두 매장」이 위 규칙에 막혔다(스시 사이토 2027.06.01 20:30 「중복 구매 불가」). 규칙은 그대로 두고 **그 회원 · 그 회차에만** 푼다.
   표 `purchase_rule_exceptions`(회원 · 회차 · `allow_dup`(같은 회차 추가 · `extra` 1~5건) · `allow_time`(같은 날 같은 시간대) · `expires_at`(기본 방문일 끝 KST) · `note` 필수 · 만든 사람 · 해제) + 사용 기록 `purchase_rule_exception_uses`(예외로 통과한 구매 id·종류) · 티켓 행 `extra_data.ruleException`(표시용).
   쓰기는 RPC 만(`taam_purchase_exception_grant/_revoke` · 슈퍼어드민·SQL Editor·서버 = `_taam_fee_caller_ok`) · 같은 회원·회차의 살아 있는 예외는 하나(새로 허용하면 옛 줄 「새 예외로 대체」) · 해제·기한이 지나면 다시 막힌다(**이미 산 티켓은 그대로** — 취소는 따로).
   읽기: 슈퍼어드민 RLS · `taam_purchase_exception_list/_preview` · 회원은 `taam_my_purchase_exceptions()` 로 **자기 것의 열쇠만**(사유·만든 사람 없음).
@@ -314,7 +314,10 @@ DB 값은 `'A'` 그대로고 **이름만** 「게스트 회원」이다. 값을 
   재구매 제한(같은 매장 N일)과는 **별개**다 — 같은 날은 원래 예외, 다른 날은 회차별 「재구매 해제」.
   앱: 사전 차단(`_tkFindPurchaseConflict`)이 예외 캐시(`_tkPurchaseExc` · `_tkExcFor`)를 서버와 같은 규칙으로 보고, **막히면 서버에서 다시 읽고 한 번 더**(`checkPurchaseConflictsAsync` — 결제 팝업 입구 · `handleTicketAction` 은 한 번만 다시 연다 · riPay 의 `_tkServerPurchaseConflict` 도) · `taamSyncNow` 가 미리 읽는다 · 옛 재구매 검사는 예외 회차의 같은 날 행을 안 센다.
   막힘 팝업에 「일행 추가처럼 꼭 필요한 경우 TAAM 에 문의」(`ticket.block_contact` 세 벌). 슈퍼어드민 화면 `pxOpen`(어드민 메뉴 「🔓 구매 규정 예외 (협의 구매)」 · 회원 원장 「🔓 구매 규정 예외」 · 캘린더 구매자 상세 「🔓 이 회원에게 추가 구매 허용」 — 회원 행만) — 회원 · 회차(새로 살 것) · 미리보기(지금 걸리는 것 · 필요한 항목 자동 체크) · 항목 · 기한 · 사유 · 「회원에게 알림」(알림함 「예약하실 수 있습니다」 + 푸시 세 벌 · `/?ticket=` · category `purchase_exception`) · 목록(상태 · 사용 기록 · 해제). `_taamBusyNow` 에 `pxPopup`.
-  회귀: `bash sql/_test/t_purchase_exception.sh`(46건 — A 실제 가드 위: 예외 없음 종전 · 허용 규칙·권한 · 같은 회차 추가 N건 · 취소 뒤 · PAYC 폴백 · 시간대 · 양쪽 규칙 · 초대 확정 모양 · 기한·해제·대체 · 회원이 보는 것·못 하는 것 · 목록·미리보기 · 운영 행 · 재실행 / B 결제 링크 픽스처 위(`PL_DB/PL_KEEP` 로 `t_pay_link.sh` 를 남김): 선검사 치환 · 결제 뒤 소유자 이전 / C 모르는 판 ❌) · `t_purchase_unique.sh` 를 새 가드 위에서(스크래치 `tpu_exc.sh`) · 스크래치 `pxc/px.js`(29건).
+  **적대 리뷰(9 에이전트 → 확정 3 · 반영).** 옛 구멍 둘(가드가 원래부터 믿던 칸) — 회원이 자기 INV-/LINK- 행의 운영 행 표시(`inviteHold`·`manualEntry`·`kashikiri`·`linkInvite`·`memberUid`)를 켜거나 지워서,
+  또는 자기 행의 `ticket_product_id`·`visit_time` 을 옮겨서 중복·시간대 가드가 그 행을 안 세게 만들 수 있었다(예외 없이도 같은 회차 두 장) → 결제 사실 칸 가드(`20261022_card_refund_quote2.sql` A)가 **회원 소유자 세션**의 그 칸들을 되돌린다
+  (매장 어드민의 인원 변경 · 보낸 어드민의 초대 시간 변경(INVH-) · 소유자가 바뀌는 초대 확정은 그대로 · `t_card_refund_quote.sh` C18·C19). 앱: 초대 결제 선검사는 **언제나** 예외를 새로 읽고(해제된 낡은 캐시로 통과 → 예치금 먼저 빠짐 방지) · 실패하면 빈 목록 · 계정 전환 때 캐시 비움.
+  회귀: `bash sql/_test/t_purchase_exception.sh`(49건 — A 실제 가드 위: 예외 없음 종전 · 허용 규칙·권한 · 같은 회차 추가 N건 · 취소 뒤 · PAYC 폴백 · 시간대 · 양쪽 규칙 · 초대 확정 모양 · 기한·해제·대체 · 회원이 보는 것·못 하는 것 · 목록·미리보기 · 운영 행 · 재실행 / B 결제 링크 픽스처 위(`PL_DB/PL_KEEP` 로 `t_pay_link.sh` 를 남김): 선검사 치환 · 결제 뒤 소유자 이전 / C 모르는 판 ❌) · `t_purchase_unique.sh` 를 새 가드 위에서(스크래치 `tpu_exc.sh`) · 스크래치 `pxc/px.js`(29건).
 
 ### 캘린더 「수동 추가」 내역 수정 — 좌석 연동 행은 서버 RPC, 기록은 직접 UPDATE (2026-10-14)
 
@@ -999,7 +1002,7 @@ platform `edge`)로 남고 토스트에 코드가 붙는다. 같은 빌링키 23
   ⚠ 슈퍼어드민 「초대 발행」 알림(`invite_sent`)은 DB 에 남지 않는다(0건) — 보낼 때 값의 대조 근거로 못 쓴다.
 - 회귀: `bash sql/_test/t_invite_guard.sh`(29건 — 실제 `taam_invite_confirm_hold` 를 올려 결제→결제됨→(환불)→확정 순서 · 2차 G1~G7 · ⚠ 픽스처 초대 id 는 **앞 8자리가 달라야** 한다(INV-앞8자리 구매 id)).
 
-### 카드 결제분 환불을 앱에서 — 토스 승인취소 (2026-10-22 · Edge `toss-card-refund` · 빌드 `2026.10.22-c`)
+### 카드 결제분 환불을 앱에서 — 토스 승인취소 (2026-10-22 · Edge `toss-card-refund` · 빌드 `2026.10.22-c` → 2차 `2026.10.22-d`)
 
 종전: 회원이 카드가 섞인 티켓을 취소하면 앱은 예치금 몫만 돌려주고 카드 몫은 `tickets.extra_data.card_refund_pending{amount, order_id, status:'pending'}` 로 남겼다 →
 슈퍼어드민이 **토스 상점관리자**에서 승인취소 → 앱 「카드 환불 완료」(`tkMarkCardRefundDone` · 회원 알림·푸시).

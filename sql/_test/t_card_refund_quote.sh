@@ -161,6 +161,18 @@ r17a=$(as $M1 "insert into public.deposit_transactions values ('$M1','ticket_ref
 r17b=$(as $M1 "insert into public.deposit_transactions values ('$M1','ticket_refund',675000, jsonb_build_object('purchase_id','PAYH-v'), now())")
 r17c=$(as $SU "insert into public.deposit_transactions values ('$M1','ticket_refund',600000, jsonb_build_object('purchase_id','PAYH-p2'), now())")
 ok "C17 인원 줄임 뒤 예치금 이중 환불 거절 · 정상 환불 통과 · 슈퍼어드민 그대로" "$(echo "$r17a" | grep -c LEDGER_REFUND_EXCEEDS_PAID)/$(echo "$r17b" | grep -c ERROR)/$(echo "$r17c" | grep -c ERROR)" "1/0/0"
+# C18 회원 소유자는 운영 행 표시·회차·방문 시각을 못 바꾼다(되돌림) · 같은 갱신의 다른 칸은 그대로
+$P -c "insert into public.ticket_products(id,date,agency_fee,time) values ('tp_o1','2027.09.21',100000,'19:00'),('tp_o2','2027.09.22',100000,'12:00') on conflict do nothing;
+  insert into public.tickets(user_id,ticket_product_id,reservation_date,visit_time,party_size,price,status,purchase_id,extra_data) values
+   ('$M1','tp_o1','2027.09.21','19:00',2,1600000,'active','INV-o1', jsonb_build_object('inviteHold',false,'memo','a')),
+   ('$M1','tp_o1','2027.09.21','19:00',1,800000,'active','LINK-o1', jsonb_build_object('memberUid','$M1','linkInvite',true)),
+   ('$RA','tp_o1','2027.09.21','19:00',2,0,'hold','INVH-o1', jsonb_build_object('inviteHold',true))" >/dev/null
+as $M1 "update public.tickets set ticket_product_id = 'tp_o2', visit_time = '12:00', extra_data = extra_data || jsonb_build_object('inviteHold', true, 'manualEntry', true, 'kashikiri', true, 'memo', 'b') where purchase_id = 'INV-o1'" >/dev/null
+as $M1 "update public.tickets set extra_data = extra_data - 'memberUid' where purchase_id = 'LINK-o1'" >/dev/null
+ok "C18 회원 소유자: 회차·시각·inviteHold·manualEntry·kashikiri 되돌림 · memo 는 바뀜 · LINK 의 memberUid 지우기 되돌림" "$($P -c "select ticket_product_id || '/' || visit_time || '/' || (extra_data->>'inviteHold') || '/' || coalesce(extra_data->>'manualEntry','-') || '/' || coalesce(extra_data->>'kashikiri','-') || '/' || (extra_data->>'memo') from public.tickets where purchase_id='INV-o1'")/$($P -c "select extra_data->>'memberUid' from public.tickets where purchase_id='LINK-o1'")" "tp_o1/19:00/false/-/-/b/$M1"
+as $RA "update public.tickets set visit_time = '20:00' where purchase_id = 'INVH-o1'" >/dev/null
+as $M1 "update public.tickets set user_id = '$M1', status = 'active', purchase_id = 'INV-o1b', extra_data = jsonb_build_object('inviteHold', false) where purchase_id = 'INVH-o1'" >/dev/null
+ok "C19 보낸 매장 어드민의 초대 시간 변경(자기 INVH-) 은 그대로 · 소유자가 바뀌는 확정 갱신(INVH→INV)도 그대로" "$($P -c "select visit_time || '/' || (extra_data->>'inviteHold') || '/' || purchase_id from public.tickets where purchase_id in ('INVH-o1','INV-o1b')")" "20:00/false/INV-o1b"
 out2=$($P -f "$MIG" 2>&1)
 ok "재실행 오류 없음 · ❌ 0" "$(echo "$out2" | grep -cE "^ERROR|psql:.*ERROR")|$(echo "$out2" | grep -c '❌')" "0|0"
 psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1

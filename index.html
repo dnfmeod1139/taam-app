@@ -22038,6 +22038,7 @@ function resetUserSessionData() {
   currentDepositBalance = 0;
   depositData = {charge:[], use:[], refund:[]};
   purchaseHistory = [];
+  window._tkPurchaseExc = [];   // 🆕 2026-10-22 협의 예외 캐시 — 계정을 바꾸면 앞 회원의 예외가 남지 않게
   registeredCard = null;
   cardList = [];
 }
@@ -28301,8 +28302,8 @@ async function _tkLoadPurchaseExc(){
   if(!window.sb) return window._tkPurchaseExc;
   try {
     var r = await window.sb.rpc('taam_my_purchase_exceptions');
-    if(!r.error && Array.isArray(r.data)) window._tkPurchaseExc = r.data;   // 함수가 없거나 실패하면 옛 캐시 그대로(빈 목록 = 종전 규칙)
-  } catch(_e){}
+    window._tkPurchaseExc = (!r.error && Array.isArray(r.data)) ? r.data : [];   // 실패·함수 없음 = 빈 목록(종전 규칙 · 낡은 예외로 통과시키지 않는다)
+  } catch(_e){ window._tkPurchaseExc = []; }
   return window._tkPurchaseExc;
 }
 // kind: 'dup' | 'time' — 살아 있는(기한 안) 그 회차의 예외
@@ -28387,9 +28388,8 @@ async function _tkServerPurchaseConflict(uid, tpId, dateStr, timeStr){
              status: r.status || '', rawStatus: r.status || '', purchaseId: r.purchase_id || '', extra_data: r.extra_data || {} };
   });
   var d = dateStr ? _repParseDate(dateStr, new Date()) : null;
-  var c = _tkFindPurchaseConflict(rows, tpId, d, timeStr, null, true);
-  if(c){ try { await _tkLoadPurchaseExc(); } catch(_le){} c = _tkFindPurchaseConflict(rows, tpId, d, timeStr, null, true); }   // 🆕 2026-10-22 협의 예외
-  return c;
+  try { await _tkLoadPurchaseExc(); } catch(_le){}   // 🆕 2026-10-22 협의 예외 — 돈이 먼저 움직이는 경로라 언제나 새로 읽는다(해제된 낡은 예외로 통과시키지 않게)
+  return _tkFindPurchaseConflict(rows, tpId, d, timeStr, null, true);
 }
 window._tkServerPurchaseConflict = _tkServerPurchaseConflict;
 // 막힘 팝업 — showRepurchasePopup 과 같은 생김새. prev(구매내역 행) 또는 prevText(서버 메시지의 괄호 안)로 기존 예약을 적는다.
