@@ -3,7 +3,8 @@
 cd "$(dirname "$0")/../.."
 MIG1=supabase/migrations/20261021_ticket_sales_report.sql      # 라이브에 먼저 올라간 1차 판 — 그 위에 2차 · 3차를 올리는 순서 그대로
 MIG2=supabase/migrations/20261021_ticket_sales_report2.sql
-MIG=supabase/migrations/20261022_ticket_sales_report3.sql
+MIG3=supabase/migrations/20261022_ticket_sales_report3.sql
+MIG=supabase/migrations/20261022_ticket_sales_report4.sql
 FAIL=0
 DB=t_sales; psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1; psql -h /tmp -U postgres -d postgres -q -c "create database $DB" >/dev/null
 P="psql -h /tmp -U postgres -d $DB -q -At"
@@ -47,7 +48,7 @@ create table public.kashikiri_charges(id uuid primary key default gen_random_uui
 create table public.daegwan_manual(id uuid primary key default gen_random_uuid(), venue_id text, ymd date, name text, pax int, amount int, memo text, ttype text, venue_name text, created_by uuid, created_at timestamptz default now());
 SQL
 out1=$($P -f "$MIG1" 2>&1)
-out1="$out1$($P -f "$MIG2" 2>&1)"
+out1="$out1$($P -f "$MIG2" 2>&1)$($P -f "$MIG3" 2>&1)"
 out=$($P -f "$MIG" 2>&1)
 
 $P <<SQL >/dev/null
@@ -296,7 +297,7 @@ ok "R12 같은 카드 주문은 한 판매에만 (먼저 만든 행)" "$(q "sele
 ok "R12b 주문을 못 가진 두 번째 행은 「확인 필요」" "$(q "select count(*) from j, jsonb_array_elements(j->'exceptions') e where e->>'ref'='PAYH-o12_b' and e->>'kind'='app_no_money_record'")" "1"
 ok "R4 자동 되돌린 초대는 판매 아님 → 「확인 필요」(still paid)" "$(q "select (select count(*) from jsonb_array_elements(j->'rows') r where r->>'k'='inv:$I4') || '/' || (select e->>'kind' from jsonb_array_elements(j->'exceptions') e where e->>'ref'='$I4') from j")" "0/invite_reversed_still_paid"
 ok "R5 원장 없는 paid 초대 → 「확인 필요」" "$(q "select (select count(*) from jsonb_array_elements(j->'rows') r where r->>'k'='inv:$I5') || '/' || (select e->>'kind' from jsonb_array_elements(j->'exceptions') e where e->>'ref'='$I5') from j")" "0/invite_paid_no_ledger"
-ok "R13 부풀린 초대 대행비는 회차 대행비로 · 판매액은 원장" "$(row "inv:$I6" "concat_ws('/', r->>'gross', r->>'agency', ((r->'flags') ? 'agency_snapshot_differs')::text)")" "850000/150000/true"
+ok "R13(4차) 초대 대행비는 초대에 적힌 값(보낼 때 바꾼 값) · 순판매 이하로 자른다 · 판매액은 원장" "$(row "inv:$I6" "concat_ws('/', r->>'gross', r->>'agency', ((r->'flags') ? 'agency_snapshot_differs')::text)")" "850000/850000/true"
 ok "R9 대시 없는 36자 memberUid 도 안 깨진다 · 링크 판매" "$(row chg:a0000000-0000-4000-8000-000000000098 "concat_ws('/', r->>'ch', r->>'gross', coalesce(r->>'uid','(없음)'))")" "link/850000/(없음)"
 
 echo "── 2차: 정정(fix) 줄 — 돈을 돌려준 정정은 그 판매의 되돌림 ──"
@@ -326,10 +327,29 @@ ok "F3 1차 판 위에 2차가 오류 없이 올라간다" "$(echo "$out1$out" |
 ok "F4 확인 표 ⑦ 정정 줄 · ⑧ 정가와 다름 이 찍힌다" "$($P -f "$MIG" 2>&1 | grep -cE "⑦ 정정\(fix\) 줄.*3줄 ₩3,401,000 판매에서 뺌 · 1줄|⑧ 앱 구매 「정가와 다름」")" "2"
 
 echo "── 3차: 펼쳐 보기용 비교 값 ──"
-ok "D1 초대 대행비 부풀림(R13) — 기록 900,000 · 회차 150,000 · 센 값 150,000 · 초대 합계" "$(row "inv:$I6" "concat_ws('/', r->>'d_ag_inv', r->>'d_ag_tp', r->>'d_ag_used', r->>'d_total_inv', r->>'d_buy')")" "900000/150000/150000/850000/850000"
+ok "D1 초대 대행비 부풀림(R13) — 기록 900,000 · 회차 150,000 · 센 값 150,000 · 초대 합계" "$(row "inv:$I6" "concat_ws('/', r->>'d_ag_inv', r->>'d_ag_tp', r->>'d_ag_used', r->>'d_total_inv', r->>'d_buy')")" "900000/150000/900000/850000/850000"
 ok "D2 앱 구매 — 회차 대행비 · 1인 식사 · 티켓 행 금액 · 원장 결제" "$(row PAYH-tp1_1 "concat_ws('/', r->>'d_ag_tp', r->>'d_ag_used', r->>'d_meal_tp', r->>'d_price_tk', r->>'d_buy', r->>'d_rev')")" "150000/150000/600000/1700000/3400000/1700000"
 ok "D3 방문 전 반환(R7) — 반환 시각 · 방문 전 반환액" "$(row PAYH-ret_7 "concat_ws('/', left(r->>'d_ret_at', 10), r->>'d_ret_early')")" "2026-10-10/1400000"
-ok "D4 확인 표 ⑨ 대행비 다름 — 기록·회차·센 값이 찍힌다(이름 없음)" "$($P -f "$MIG" 2>&1 | grep -cE "⑨ 대행비 다름 · invite\|.*기록 ₩900,000/인 · 회차 ₩150,000/인 → 센 값 ₩150,000/인|⑨ 대행비 다름 합계")" "2"
+ok "D4 확인 표 ⑨ 대행비 다름 — 기록·회차·센 값이 찍힌다(이름 없음)" "$($P -f "$MIG" 2>&1 | grep -cE "⑨ 대행비 다름 · invite\|.*기록 ₩900,000/인 · 회차 ₩150,000/인 → 센 값 ₩900,000/인|⑨ 대행비 다름 합계")" "2"
+
+echo "── 4차: 초대에 적힌 대행비(보낼 때 바꾼 값)를 적용 ──"
+I7=e7000000-0000-4000-8000-000000000007
+$P <<SQL >/dev/null
+insert into public.ticket_products values ('tp7','$R1','메이노','2026.11.25','19:00',900000,100000,0);
+insert into public.reservation_invites values ('$I7','$SU','$M3','$R1','메이노','2026.11.25','19:00',2,850000,150000,0,2000000,'paid','2026-10-01','2026-10-04T00:00:00Z',null,'tp7');
+insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata,created_at) values ('$M3','general','ticket_purchase',-2000000,'{"purchase_id":"INV-e7000000-1","invite_id":"$I7"}','2026-10-04T00:00:00Z');
+SQL
+ok "V1 라이브 7건 모양 — 초대 ₩150,000/인 · 회차 ₩100,000/인 · 2명 → 대행비 300,000 (3차는 200,000)" "$(row "inv:$I7" "concat_ws('/', r->>'agency', r->>'d_ag_inv', r->>'d_ag_tp', r->>'d_ag_used', r->>'ag_state')")" "300000/150000/100000/150000/planned"
+
+I8=e8000000-0000-4000-8000-000000000008
+$P <<SQL >/dev/null
+insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_date,party_size,price,status,purchase_id,created_at)
+ values ('$M3','$R1','tp1','2026.07.20',1,850000,'active','PAYH-past_1','2026-07-01T00:00:00Z');
+insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata,created_at) values ('$M3','general','ticket_purchase',-850000,'{"purchase_id":"PAYH-past_1"}','2026-07-01T00:00:00Z');
+insert into public.reservation_invites values ('$I8','$SU','$M3','$R1','메이노','2026.07.25','19:00',1,700000,150000,0,850000,'paid','2026-07-01','2026-07-02T00:00:00Z',null,'tp1');
+insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata,created_at) values ('$M3','general','ticket_purchase',-850000,'{"purchase_id":"INV-e8000000-1","invite_id":"$I8"}','2026-07-02T00:00:00Z');
+SQL
+ok "V2 방문일이 지난 앱 구매·초대의 대행비는 「확정」 (4차)" "$(row PAYH-past_1 "r->>'ag_state'")/$(row "inv:$I8" "r->>'ag_state'")" "kept/kept"
 out2=$($P -f "$MIG" 2>&1)
 ok "두 번째 RUN: 오류 없음 · ❌ 0 · ⑤ 채널 합계 줄이 찍힌다(이름 없음)" "$(echo "$out2" | grep -E "^ERROR|^psql:.*ERROR" | head -1)|$(echo "$out2" | grep -c '❌')|$( [ $(echo "$out2" | grep -cE '⑤ (app|invite|link|settle)') -ge 4 ] && echo ok)|$(echo "$out2" | grep -c '회원1')" "|0|ok|0"
 # 화면 시험용 — TSR_DUMP=파일 이면 보고서 JSON 을 남긴다(결제일·전체 · 기본)
