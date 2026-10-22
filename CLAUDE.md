@@ -1027,10 +1027,14 @@ platform `edge`)로 남고 토스트에 코드가 붙는다. 같은 빌링키 23
   ④ Edge 가 「토스에 이미 취소된 금액 전부」를 빼서 **인원 줄임 카드 부분취소**가 있던 결제는 이번 환불이 그만큼 줄었다 → 견적이 `done_for_purchase`(이 구매에 앱이 이미 한 카드 취소 · `payment_orders.metadata.app_cancels`)를 주고 Edge 는 **min(목표 − 그것, 토스 잔액)** · 앱 밖 취소(인원 줄임·상점관리자)는 `other_cancelled` 로 확인창에 ※ 경고.
   키는 `taam-crf-<구매>-<이 구매의 앱 취소 누적>` · 결과 오류 `already_done_by_app` · `nothing_left_at_toss` → 앱 「완료로 표시?」 · 기록 실패(`mark_failed`)면 앱이 **서버가 실제로 돌려준 금액**을 `refunded_amount` 로 적는다(대기 금액 아님).
   ⑤ 이 파일 전에 생긴 대기(라이브 2건)는 서버 취소 시각·`set_by_role` 이 없어 「지금 취소」·「회원 대기」로 셌다 → 채움(요청 시각을 결제~지금 사이로 · 처리자가 실제 슈퍼어드민이면 superadmin).
-  ⑥ **배포 전 2차 리뷰(9 에이전트 → 확정 2 · 반영).** (가) 견적이 주문 메타의 **처음** 총액·인원을 먼저 써서, 인원 줄임(`taam_change_party_size` — price·party_size 를 줄이고 카드 몫은 `card_refund_queue` → 상점관리자) 뒤 취소에서 상한이 처음 금액으로 부풀었다(회원이 대기를 부풀리면 대행비까지 환불) →
-  총액 = **지금 티켓 금액과 주문 메타 중 작은 쪽** · 인원 = 지금 인원 먼저(둘 다 회원이 못 바꾸는 칸) · 인원 줄임 몫은 서버 기록으로만 센다(예치금 = 원장 `ticket_pax_change` · 카드 = 처음−지금 금액 − 예치금 몫 = `pax_card` — 회원이 쓸 수 있는 `card_refund_queue` 는 안 본다) · 상한 = min(카드 − pax_card, 규정 − 남은 예치금).
-  (나) Edge 가 「앱 밖 취소」를 전혀 안 빼서 상점관리자에서 먼저 돌려준 대기가 두 번 나갈 수 있었다 → **설명 안 되는 몫**(앱 밖 취소 − 인원 줄임 몫 `pax_card`)을 이번 금액에서 뺀다 · 그것 때문에 0 이면 `already_refunded_at_toss` → 앱 「완료로 표시?」(그 금액으로) · 확인창에 「인원 줄임 ₩… 은 정상 · 설명 안 되는 ₩… 은 뺐습니다」.
-  회귀: `t_card_refund_quote.sh` 28건(C1~C13 · 인원 줄임 전액 카드·섞음·슈퍼어드민 대기·부풀린 queue 무시) · `tcr/harness2.mjs` 22건 · `crf/crf.js` 20건 · 진단 `20261022_diag_price_floor.sql`(하한을 걸기 전 지난 확정 금액 모양 — 라이브 카드 확정 6건 · 최근 30일 3건 모두 정가 이상).
+  ⑥ **배포 전 2차 리뷰(9 에이전트 → 확정 2) + 재검증(2 에이전트 → 확정 7) — 자동 취소는 단순한 경우만.** 인원 줄임(`taam_change_party_size` — price·party_size 를 줄이고 카드 몫은 `card_refund_queue` → 상점관리자) ·
+  상점관리자에서 먼저 한 취소 · 같은 구매 id 로 다시 넣은 홀드(회원이 created_at 까지 적는다) · 결제창 확정(toss-confirm)이 주문 메타를 `{toss}` 로 덮는 것 — 이 겹침에서 상한이 처음 금액으로 부풀거나 두 번 환불되는 길이 여럿 나왔다.
+  → 견적은 거절하고 상점관리자 + 「완료 표시」로 보낸다: 같은 구매 id 의 행이 둘 이상(`purchase_id_reused`) · 주문은 **티켓 행의 서버 `order_id`** 로만 묶는다(메타 hold_purchase_id 가 있으면 이 구매여야 — `order_other_purchase`) · 그 주문을 다른 행도 씀(`order_shared`) ·
+  인원 변경 흔적(원장 `ticket_pax_change` · `pax_changes` · `card_refund_queue` · 금액/인원이 주문 메타와 다름 → `pax_changed`) · Edge 는 **토스에 앱 밖 취소가 하나라도 있으면**(`outside_cancel`) 자동 취소 안 함 → 앱 「이미 했으면 확인 = 완료 표시 · 아니면 상점관리자에서」.
+  남는 계산: 총액 = 티켓·메타 중 작은 쪽 · 인원 = 큰 쪽 · 카드 몫 = 규정 − max(낸 예치금, 돌려준 예치금). 회원(소유자) 세션은 `pax_changes`·`card_refund_queue` 를 못 바꾸고(매장 어드민의 인원 변경 함수는 그대로) **이미 있는 구매 id 로 티켓 행을 못 넣는다**(`PURCHASE_ID_TAKEN` · 앱은 언제나 새 id).
+  예치금 쪽 덧댐 `trg_taam_guard_ledger_refund_paid`: 회원 `ticket_refund` ≤ 낸 돈 − (환불 + 인원 줄임 원장) — `taam_refund_cap` 이 인원 줄임 원장을 안 세서 섞은 결제를 인원 줄임 뒤 취소하면 예치금이 두 번 나갈 수 있었다(라이브 해당 0건 · `taam_refund_cap` 라이브 본문은 저장소와 md5 가 달라 손대지 않았다 · 진단 `20261022_diag_refund_cap.sql`).
+  ⚠ 저장소 toss-confirm 은 paid 때 주문 메타를 `{toss}` 로 **덮는다**(billing-charge 는 합친다) — 대시보드 판과 대조 전이라 손대지 않았다. 견적은 메타 없이도 돈다(order_id 로 묶음).
+  회귀: `t_card_refund_quote.sh` 32건(C1~C17) · `tcr/harness2.mjs` 20건 · `crf/crf.js` 20건 · 진단 `20261022_diag_price_floor.sql`(하한을 걸기 전 지난 확정 금액 모양 — 라이브 카드 확정 6건 · 최근 30일 3건 모두 정가 이상).
 
 ### 결제 팝업은 남은 홀드를 회차·인원이 맞을 때만 다시 쓴다 (2026-10-22 키사누키 5/20 · 빌드 `2026.10.22-a`)
 
