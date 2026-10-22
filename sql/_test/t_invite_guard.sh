@@ -2,7 +2,8 @@
 # 초대 결제 보안 가드 (supabase/migrations/20261022_invite_payment_guard.sql) — 로컬 postgres 픽스처. 실행: bash sql/_test/t_invite_guard.sh
 #   실제 확정 RPC(20261003_invite_confirm_owner.sql 의 taam_invite_confirm_hold)를 함께 올려 「결제 → 결제됨 → (환불) → 확정」 순서를 그대로 탄다.
 cd "$(dirname "$0")/../.."
-MIG=supabase/migrations/20261022_invite_payment_guard.sql
+MIG1=supabase/migrations/20261022_invite_payment_guard.sql   # 1차(라이브) 위에 2차를 올린다
+MIG=supabase/migrations/20261022_invite_payment_guard2.sql
 CONF=supabase/migrations/20261003_invite_confirm_owner.sql
 FAIL=0
 DB=t_invguard; psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1; psql -h /tmp -U postgres -d postgres -q -c "create database $DB" >/dev/null
@@ -27,7 +28,7 @@ insert into public.ticket_products values ('tp1','r1','A',150000);
 SQL
 # 실제 확정 RPC (본문만 — 아래 수리 쿼리는 빼고)
 sed -n '/^create or replace function public.taam_invite_confirm_hold/,/^grant execute on function public.taam_invite_confirm_hold/p' "$CONF" | $P >/dev/null 2>&1
-out=$($P -f "$MIG" 2>&1)
+out=$($P -f "$MIG1" 2>&1)$($P -f "$MIG" 2>&1)
 ok(){ if [ "$2" = "$3" ]; then echo "✅ $1"; else echo "❌ $1  (기대 $3, 실제 $2)"; FAIL=1; fi; }
 as(){ local u=$1; shift; $P -c "set taam.uid = '$u'; $*" 2>&1 | grep -v '^SET$'; }   # 오류는 여러 줄이라 통째로 — code() 가 코드만 고른다
 code(){ echo "$1" | grep -oE "(INVITE_NOT_PAID|INVITE_CLOSED|REFUND_TICKET_ACTIVE)" | head -1; }
@@ -105,8 +106,38 @@ ok "C4 슈퍼어드민(방문 후 반환)·서버(Edge·SQL Editor)는 살아 �
 as $M2 "insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata) values ('$M2','general','ticket_purchase',-100,'{\"purchase_id\":\"PAYH-c_3\"}')" >/dev/null
 ok "C5 결제(음수) 줄은 C 가드와 무관" "$($P -c "select count(*) from public.deposit_transactions where metadata->>'purchase_id' = 'PAYH-c_3' and amount < 0")" "1"
 
+
+echo "── 2차: 결제 한 줄은 한 초대에만 · 확정은 그 좌석 구매 id 의 결제로 · 살아 있는 초대 좌석의 결제는 환불 불가 ──"
+I6=c6000000-0000-4000-8000-000000000006; I7=c7000000-0000-4000-8000-000000000007; I8=c8000000-0000-4000-8000-000000000008
+newinv $I6 $M2; newinv $I7 $M2
+# invite_id=I6 · purchase_id 는 I7 앞자리 — 한 줄로 두 초대를 노린다
+$P -c "insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata) values ('$M2','general','ticket_purchase',-2000000, jsonb_build_object('invite_id','$I6','purchase_id','INV-c7000000-5'))" >/dev/null
+as $M2 "update public.reservation_invites set status = 'paid' where id = '$I6'" >/dev/null
+r=$(as $M2 "update public.reservation_invites set status = 'paid' where id = '$I7'")
+ok "G1 invite_id 가 있는 결제는 그 초대에만 — 다른 초대(앞자리만 맞음)는 INVITE_NOT_PAID" "$(code "$r")|$($P -c "select status from public.reservation_invites where id = '$I6'")" "INVITE_NOT_PAID|paid"
+newinv $I8 $M2
+$P -c "insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata) values ('$M2','general','ticket_purchase',-2000000, jsonb_build_object('invite_id','$I8','purchase_id','INV-c8000000-1'))" >/dev/null
+as $M2 "update public.reservation_invites set status = 'paid' where id = '$I8'" >/dev/null
+r=$(as $M2 "select public.taam_invite_confirm_hold('$I8', 'INV-c8000000-2')")
+ok "G2 P1 으로 내고 P2 로 확정 → INVITE_NOT_PAID (좌석은 홀드 그대로)" "$(code "$r")|$($P -c "select status from public.tickets where extra_data->>'inviteId' = '$I8'")" "INVITE_NOT_PAID|hold"
+r=$(as $M2 "select (public.taam_invite_confirm_hold('$I8', 'INV-c8000000-1')->>'ok')")
+ok "G3 같은 구매 id(P1)로 확정은 된다 (riPay 정상 경로)" "$r|$($P -c "select status || '/' || purchase_id from public.tickets where extra_data->>'inviteId' = '$I8'")" "true|active/INV-c8000000-1"
+r=$(as $M2 "insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata) values ('$M2','general','ticket_refund',2000000, jsonb_build_object('purchase_id','INV-c8000000-1'))")
+ok "G4 살아 있는 초대 좌석의 결제 환불 → REFUND_TICKET_ACTIVE" "$(code "$r")" "REFUND_TICKET_ACTIVE"
+r=$(as $M2 "insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata) values ('$M2','general','ticket_refund',2000000, jsonb_build_object('purchase_id','INV-zzz','invite_id','$I8'))")
+ok "G5 invite_id 만 맞춰 다른 구매 id 로 환불해도 막힌다" "$(code "$r")" "REFUND_TICKET_ACTIVE"
+# 좌석을 다른 구매 id 로 살려 둔 모양(1차의 구멍) — 서버가 확정해 둔 P2 좌석 + P1 결제 → P1 환불
+I9=c9000000-0000-4000-8000-000000000009
+newinv $I9 $M2
+$P -c "insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata) values ('$M2','general','ticket_purchase',-2000000, jsonb_build_object('invite_id','$I9','purchase_id','INV-c9000000-1'));
+       update public.tickets set status = 'active', purchase_id = 'INV-c9000000-2', user_id = '$M2' where extra_data->>'inviteId' = '$I9'" >/dev/null
+r=$(as $M2 "insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata) values ('$M2','general','ticket_refund',2000000, jsonb_build_object('purchase_id','INV-c9000000-1'))")
+ok "G6 결제 P1 · 좌석 P2 로 살아 있으면 P1 환불도 막힌다 (1차 구멍)" "$(code "$r")" "REFUND_TICKET_ACTIVE"
+$P -c "update public.tickets set status = 'cancelled' where extra_data->>'inviteId' = '$I9'" >/dev/null
+r=$(as $M2 "insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata) values ('$M2','general','ticket_refund',2000000, jsonb_build_object('purchase_id','INV-c9000000-1'))")
+ok "G7 좌석을 취소한 뒤 환불은 된다" "$($P -c "select count(*) from public.deposit_transactions where metadata->>'purchase_id' = 'INV-c9000000-1' and change_type = 'ticket_refund'")" "1"
 echo "── 재실행 · 확인 표 ──"
 out2=$($P -f "$MIG" 2>&1)
-ok "두 번째 RUN 오류 없음 · ❌ 0 · ⑤⑥⑦ 정보 줄" "$(echo "$out2" | grep -cE "^ERROR|psql:.*ERROR")|$(echo "$out2" | grep -c '❌')|$(echo "$out2" | grep -cE "⑤|⑥|⑦")" "0|0|3"
+ok "두 번째 RUN 오류 없음 · ❌ 0 · ⑤⑥ 정보 줄" "$(echo "$out2" | grep -cE "^ERROR|psql:.*ERROR")|$(echo "$out2" | grep -c '❌')|$(echo "$out2" | grep -cE "⑤|⑥")" "0|0|2"
 psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1
 [ $FAIL = 0 ] && echo "=== 전부 통과 ===" || { echo "=== 실패 있음 ==="; exit 1; }
