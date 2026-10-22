@@ -118,6 +118,31 @@ r1=$($P -c "update public.tickets set status='active' where purchase_id='PAYH-f1
 ok "C7 홀드 확정 금액 < 회차 정가×인원(1,600,000) → PRICE_BELOW_TICKET · 정가는 통과 · 외화는 제외" "$(echo "$r1" | grep -c PRICE_BELOW_TICKET)/$($P -c "select string_agg(status, ',' order by purchase_id) from public.tickets where purchase_id in ('PAYH-f1','PAYH-f2','PAYH-f3')")" "1/hold,active,active"
 ok "C8 옛 회원 대기 → member · 서버 취소 시각 = 요청 시각" "$($P -c "select (extra_data->'card_refund_pending'->>'set_by_role') || '/' || left(extra_data->>'server_cancelled_at', 16) from public.tickets where purchase_id='PAYH-old_m'")" "member/2026-10-20T01:00"
 ok "C9 옛 슈퍼어드민 대기(처리자가 실제 슈퍼어드민) → superadmin" "$($P -c "select extra_data->'card_refund_pending'->>'set_by_role' from public.tickets where purchase_id='PAYH-old_s'")" "superadmin"
+echo "── 배포 전 2차 리뷰: 인원 줄임 뒤 취소 ──"
+VD60=$(D '+60 days')
+# C10 전액 카드 2인 ₩1,600,000 → 슈퍼어드민 인원 줄임 2→1(₩700,000 카드 환불 · price 900,000) → 회원이 대기를 99,999,999 로 적어 취소
+$P -c "insert into public.ticket_products values ('tp_p1', '$VD60', 100000) on conflict do nothing;
+  insert into public.tickets(user_id,ticket_product_id,reservation_date,party_size,price,status,purchase_id,restaurant_name,extra_data)
+    values ('$M1','tp_p1','$VD60',2,1600000,'active','PAYH-p1','타케야마치', jsonb_build_object('order_id','O_p1','cardPaid',1600000,'depositUsed',0,'paidBy','card+deposit'));
+  insert into public.payment_orders values ('O_p1','$M1','paid',1600000,'KRW','pk_p1', now() - interval '3 hours', now(), jsonb_build_object('hold_purchase_id','PAYH-p1','total',1600000,'agency_fee',100000,'pax',2));
+  update public.tickets set party_size = 1, price = 900000, extra_data = extra_data || jsonb_build_object('card_refund_queue', jsonb_build_array(jsonb_build_object('amount', 700000, 'status', 'pending'))) where purchase_id = 'PAYH-p1'" >/dev/null
+cancel_member PAYH-p1 99999999 O_p1
+ok "C10 인원 줄임 뒤(전액 카드): 총액 = 지금 금액 900,000 · 인원 1 · 인원 줄임 카드 몫 700,000 · 상한·목표 800,000 (처음 금액으로 부풀지 않는다)" "$(Q PAYH-p1 total)/$(Q PAYH-p1 pax_card)/$(Q PAYH-p1 card_cap)/$(Q PAYH-p1 target)" "900000/700000/800000/800000"
+# C11 섞음: 카드 1,000,000 + 예치금 600,000 → 인원 줄임 ₩700,000(예치금 600,000 원장 + 카드 100,000) · price 900,000
+$P -c "insert into public.ticket_products values ('tp_p2', '$VD60', 100000) on conflict do nothing;
+  insert into public.tickets(user_id,ticket_product_id,reservation_date,party_size,price,status,purchase_id,restaurant_name,extra_data)
+    values ('$M1','tp_p2','$VD60',1,900000,'active','PAYH-p2','타케야마치', jsonb_build_object('order_id','O_p2','cardPaid',1000000,'depositUsed',600000,'paidBy','card+deposit'));
+  insert into public.payment_orders values ('O_p2','$M1','paid',1000000,'KRW','pk_p2', now() - interval '3 hours', now(), jsonb_build_object('hold_purchase_id','PAYH-p2','total',1600000,'agency_fee',100000,'pax',2));
+  insert into public.deposit_transactions values ('$M1','ticket_purchase',-600000, jsonb_build_object('purchase_id','PAYH-p2'), now() - interval '3 hours'),
+                                                ('$M1','ticket_pax_change',600000, jsonb_build_object('purchase_id','PAYH-p2'), now() - interval '2 hours')" >/dev/null
+cancel_member PAYH-p2 99999999 O_p2
+ok "C11 인원 줄임 뒤(섞음): 예치금 몫 600,000(원장) · 카드 몫 100,000 · 남은 예치금 0 → 목표 800,000" "$(Q PAYH-p2 pax_dep)/$(Q PAYH-p2 pax_card)/$(Q PAYH-p2 dep_paid)/$(Q PAYH-p2 target)" "600000/100000/0/800000"
+# C12 슈퍼어드민이 적은 대기라도 인원 줄임으로 이미 돌려준 카드 몫은 넘지 못한다 (카드 1,600,000 − 700,000)
+$P -c "update public.tickets set extra_data = jsonb_set(extra_data, '{card_refund_pending}', jsonb_build_object('amount', 2000000, 'status', 'pending', 'set_by_role', 'superadmin')) where purchase_id = 'PAYH-p1'" >/dev/null
+ok "C12 슈퍼어드민 대기 2,000,000 → 목표 = 카드 − 인원 줄임 카드 몫 = 900,000" "$(Q PAYH-p1 target)" "900000"
+# C13 인원 줄임이 없으면 pax_card 0 · 회원이 card_refund_queue 를 부풀려도 견적은 그 칸을 안 본다
+as $M1 "update public.tickets set extra_data = extra_data || jsonb_build_object('card_refund_queue', jsonb_build_array(jsonb_build_object('amount', 9999999))) where purchase_id = 'PAYH-b'" >/dev/null
+ok "C13 인원 줄임 없음 → pax_card 0 (회원이 적은 card_refund_queue 는 무시)" "$(Q PAYH-b pax_card)" "0"
 out2=$($P -f "$MIG" 2>&1)
 ok "재실행 오류 없음 · ❌ 0" "$(echo "$out2" | grep -cE "^ERROR|psql:.*ERROR")|$(echo "$out2" | grep -c '❌')" "0|0"
 psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1
