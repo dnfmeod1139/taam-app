@@ -95,7 +95,7 @@ begin
              when d.change_type = 'ticket_pax_change' then 'pax'
              when d.change_type <> 'ticket_refund' then 'skip'
              when d.metadata ? 'fix' then 'rev'                                          -- 돈을 돌려준 정정 줄 = 잘못 뺀 결제의 되돌림 (2026-09-14 이중 차감) — 2차
-             when coalesce(d.metadata->>'reason','') in ('capacity_auto_refund','duplicate_purchase','time_conflict') then 'rev'
+             when coalesce(d.metadata->>'reason','') in ('capacity_auto_refund','duplicate_purchase','time_conflict','invite_closed') then 'rev'   -- 4차: 초대 결제 보안 가드가 닫은 초대의 되돌림
              when d.metadata ? 'order_id' and not (d.metadata ? 'refund_type') and not (d.metadata ? 'cancel_refund') then 'rev'  -- 카드 승인 뒤 좌석 상실·예치금 부족 되돌림
              when coalesce(d.metadata->>'cancel_refund','') = 'true' then 'cancel'
              when d.metadata->>'refund_type' = 'penalty' then 'penalty'
@@ -182,7 +182,8 @@ begin
   ), e as (
     select c.*,
            dep_ev + card as gross,
-           coalesce(pax_from, pax_n) as pax0,
+           -- 4차(적대 리뷰): 처음 인원(pax_changes · 회원이 쓸 수 있는 칸)은 인원 줄임 환불 원장이 있고 지금보다 클 때만 믿는다
+           case when pax_from is not null and pax_from > pax_n and coalesce((l->>'pax')::bigint, 0) > 0 then pax_from else pax_n end as pax0,
            coalesce((l->>'pax')::bigint, 0) as rf_pax,
            -- 「방문 후 반환」은 방문일이 지난 뒤의 환불만 — 그 전의 'returned' 줄은 취소로 센다(회원이 자기 취소 환불에 붙인 라벨로 순판매가 부풀지 않게)
            case when l->>'ret' is not null and (vdate is null or (((l->>'ret_at')::timestamptz) at time zone 'Asia/Seoul')::date >= vdate - 1) then (l->>'ret')::bigint else 0 end as ret_ok,
@@ -218,7 +219,7 @@ begin
       'rest', coalesce(rname, nullif(restaurant_name,''), tpj->>'rest_name'),
       'uid', user_id, 'buyer', coalesce(nullif(btrim(buyer),''), buyer_name),
       'test', user_id = any(v_test),
-      'pax', pax_n, 'pax0', case when pax_from is not null and pax_from <> pax_n then pax_from end,
+      'pax', pax_n, 'pax0', case when pax0 <> pax_n then pax0 end,   -- 4차: 믿을 수 있을 때만(인원 줄임 환불 원장이 있을 때)
       'cur', case when upper(coalesce(x->>'card_currency','')) ~ '^(USD|JPY)$' and card > 0 then upper(x->>'card_currency') else 'KRW' end,
       'fx_amt', case when upper(coalesce(x->>'card_currency','')) ~ '^(USD|JPY)$' and card > 0 and dep_ev = 0
                      then (select v from (select public._taam_sr_int(x->>'card_amount_fx')::numeric as v) q where v between 0 and 99999999) end,

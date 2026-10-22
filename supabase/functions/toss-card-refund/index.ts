@@ -5,13 +5,16 @@
 //     {amount, order_id, status:'pending'} 로 남긴다. 지금까지는 슈퍼어드민이 토스 상점관리자에서 승인취소를 하고
 //     앱의 「카드 환불 완료」(tkMarkCardRefundDone)를 눌렀다. 이 함수가 그 승인취소를 토스 API 로 직접 한다.
 // 누가: 슈퍼어드민(JWT · verify_jwt=true + profiles.role 확인). 회원·매장 어드민은 403.
+// ⚠ 2026-10-22 적대 리뷰: 대기(card_refund_pending)의 금액·주문번호는 회원이 쓸 수 있는 칸이다 → 믿지 않는다.
+//   금액·주문은 서버 견적 taam_card_refund_quote(20261022_card_refund_quote.sql)가 이 구매의 주문(hold_purchase_id)·원장·서버 취소 시각으로 다시 센다.
 // 무엇을:
-//   ① 티켓의 card_refund_pending(대기 · 금액 · 주문번호)을 읽는다 — 금액은 회원 취소 때 앱이 규정대로 적은 값(카드 몫까지만).
-//   ② payment_orders(주문번호 · paid · payment_key · 통화 · paid_via)로 결제키와 시크릿을 고른다 —
+//   ① 서버 견적(목표 = 회원이 적은 대기면 min(대기, 규정 카드 몫) · 슈퍼어드민이 적은 대기면 min(대기, 카드 결제액)) · 주문·결제키·paid_via.
+//   ② 시크릿은 승인한 MID 의 것 —
 //      승인한 MID 의 시크릿으로 취소해야 한다: 등록 카드 자동결제(paid_via billing_key)는 TOSS_BILLING_SECRET_KEY(없으면 TOSS_SECRET_KEY),
 //      일반 결제창은 TOSS_SECRET_KEY. 외화 주문은 대기 금액이 원화라 단위가 다르다 → 막고 상점관리자로 안내.
-//   ③ 토스 GET /v1/payments/{paymentKey} 로 남은 취소 가능액(balanceAmount)을 본다 — 이미 상점관리자에서 취소됐으면 already_canceled_at_toss.
-//   ④ POST /v1/payments/{paymentKey}/cancel {cancelReason, cancelAmount} · Idempotency-Key 'taam-crf-<구매>-<금액>'
+//   ③ 토스 GET 으로 이 결제에서 이미 취소된 금액(totalAmount − balanceAmount)을 빼고 남은 만큼만 — 중복 환불이 원리적으로 안 된다(상점관리자 취소 포함).
+//      dry_run 이면 금액만 돌려준다(앱 확인창) · 실행은 expect_amount 가 지금 금액과 같아야 한다(amount_changed).
+//   ④ POST /v1/payments/{paymentKey}/cancel {cancelReason, cancelAmount} · Idempotency-Key 'taam-crf-<구매>-<지금까지 취소된 금액>'
 //      (두 번 눌리거나 재시도해도 토스는 한 번만 취소하고 같은 결과를 돌려준다).
 //   ⑤ 성공하면 card_refund_pending 을 done 으로(+ 토스 거래키 · 취소 시각 · 처리자 · via toss_api) — 회원 알림·푸시는 앱이 종전 함수로 보낸다.
 //      기록이 실패해도 토스 취소는 이미 됐다 → { ok:true, mark_failed:true } 로 알려 앱이 「완료 표시」를 하게 한다(같은 키라 다시 불러도 이중 취소 없음).
@@ -38,74 +41,72 @@ async function superCaller(req: Request): Promise<string | null>{
   return ['super_admin', 'superadmin'].includes(String(p[0]?.role || '')) ? String(j.id) : null;
 }
 
+async function sbRpc(fn: string, args: unknown){
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fn}`, { method: 'POST', headers: SB_H(), body: JSON.stringify(args) });
+  const b = await r.json().catch(() => null); if(!r.ok) throw new Error((b && (b.message || b.hint)) || ('rpc ' + fn + ' ' + r.status)); return b;
+}
+
 async function handle(req: Request){
   if(req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
   const by = await superCaller(req);
   if(!by) return json({ ok: false, error: 'forbidden' }, 403);
   try {
-    const { purchase_id, reason } = await req.json().catch(() => ({}));
+    const { purchase_id, reason, dry_run, expect_amount } = await req.json().catch(() => ({}));
     const pid = String(purchase_id || '');
     if(!pid || pid.length > 120 || !/^[A-Za-z0-9_\-:.]+$/.test(pid)) return json({ ok: false, error: 'bad_purchase_id' });
 
-    // ① 티켓 · 카드 환불 대기
-    const rows = await sbGet(`tickets?purchase_id=eq.${encodeURIComponent(pid)}&select=id,purchase_id,user_id,restaurant_name,status,extra_data&order=created_at.desc&limit=1`);
-    const t = rows[0];
-    if(!t) return json({ ok: false, error: 'ticket_not_found' });
-    const ex = (t.extra_data && typeof t.extra_data === 'object') ? t.extra_data : {};
-    const crp = ex.card_refund_pending;
-    if(!crp || typeof crp !== 'object') return json({ ok: false, error: 'not_pending' });
-    if(String(crp.status || '') === 'done') return json({ ok: false, error: 'already_done' });
-    const amount = Math.floor(Number(crp.amount || 0));
-    if(!(amount > 0)) return json({ ok: false, error: 'bad_amount' });
-    if(['active', 'hold', 'pending_confirm'].includes(String(t.status || '').toLowerCase()))
-      return json({ ok: false, error: 'ticket_active', status: t.status });   // 좌석이 살아 있는 티켓의 카드는 돌려주지 않는다
-
-    // ② 주문 · 결제키 · 시크릿
-    const orderId = String(crp.order_id || ex.order_id || '');
-    if(!orderId) return json({ ok: false, error: 'no_order' });
-    const pos = await sbGet(`payment_orders?order_id=eq.${encodeURIComponent(orderId)}&select=order_id,user_id,status,amount,currency,payment_key,metadata`);
-    const po = pos[0];
-    if(!po || String(po.status) !== 'paid' || !po.payment_key) return json({ ok: false, error: 'no_toss_payment', order_status: po?.status || null });
-    if(po.user_id && t.user_id && String(po.user_id) !== String(t.user_id)) return json({ ok: false, error: 'owner_mismatch' });
-    const cur = String(po.currency || 'KRW').toUpperCase();
-    if(cur !== 'KRW') return json({ ok: false, error: 'currency_not_supported', currency: cur });
-    const viaBilling = String(po.metadata?.paid_via || '') === 'billing_key';
+    // ① 서버 견적 — 이 구매의 주문(hold_purchase_id)·원장·서버 취소 시각으로 회원 규정 카드 몫을 다시 센다 (회원이 쓸 수 있는 금액·주문번호는 안 믿는다)
+    const q = await sbRpc('taam_card_refund_quote', { p_purchase_id: pid });
+    if(!q || !q.ok) return json({ ok: false, error: q?.error || 'quote_failed', status: q?.status, currency: q?.currency });
+    const viaBilling = String(q.paid_via || '') === 'billing_key';
     const secret = viaBilling ? (Deno.env.get('TOSS_BILLING_SECRET_KEY') || Deno.env.get('TOSS_SECRET_KEY')) : Deno.env.get('TOSS_SECRET_KEY');
     if(!secret) return json({ ok: false, error: 'no_secret' }, 500);
     const auth = `Basic ${btoa(secret + ':')}`;
-    const pk = encodeURIComponent(String(po.payment_key));
+    const pk = encodeURIComponent(String(q.payment_key));
 
-    // ③ 남은 취소 가능액
+    // ② 토스에 이미 취소된 금액 — 이 주문은 이 구매에만 묶여 있으므로 그만큼이 이 구매의 카드 환불이다
     const gr = await fetch(`https://api.tosspayments.com/v1/payments/${pk}`, { headers: { Authorization: auth } });
     const pay = await gr.json().catch(() => null);
     if(!gr.ok || !pay) return json({ ok: false, error: 'toss_lookup_failed', toss: { code: pay?.code, message: pay?.message } });
+    const tossTotal = Number(pay.totalAmount ?? q.card_paid ?? 0);
     const balance = Number(pay.balanceAmount ?? 0);
-    if(String(pay.status) === 'CANCELED' || !(balance > 0)) return json({ ok: false, error: 'already_canceled_at_toss', balance, toss_status: pay.status });
-    if(amount > balance) return json({ ok: false, error: 'exceeds_balance', balance, amount });
+    const cancelled = Math.max(0, tossTotal - balance);
+    const target = Math.floor(Number(q.target || 0));
+    const amount = Math.max(0, Math.min(target - cancelled, balance));
+    const info = { amount, target, cancelled, balance, card_paid: q.card_paid, pending: q.pending, policy: q.policy, set_by_role: q.set_by_role,
+                   order_id: q.order_id, order_note: (q.crp_order_id && q.crp_order_id !== q.order_id) ? 'pending_order_differs' : null };
+    if(!(amount > 0)) return json({ ok: false, error: cancelled > 0 ? 'already_refunded_at_toss' : 'nothing_to_refund', ...info });
+    if(dry_run) return json({ ok: true, dry_run: true, ...info });
+    if(Math.floor(Number(expect_amount)) !== amount) return json({ ok: false, error: 'amount_changed', ...info });   // 앱이 본 금액과 지금 금액이 다르면 다시 보여 준다
 
-    // ④ 승인취소
+    // ③ 승인취소 — 키는 「구매 + 지금까지 취소된 금액」: 두 번 눌러도 같은 키(토스가 한 번만), 다음 취소는 새 키
     const cr = await fetch(`https://api.tosspayments.com/v1/payments/${pk}/cancel`, {
       method: 'POST',
-      headers: { Authorization: auth, 'Content-Type': 'application/json', 'Idempotency-Key': `taam-crf-${pid}-${amount}` },
-      body: JSON.stringify({ cancelReason: String(reason || crp.reason || '예약 취소 (카드 결제분 환불)').slice(0, 200), cancelAmount: amount }),
+      headers: { Authorization: auth, 'Content-Type': 'application/json', 'Idempotency-Key': `taam-crf-${pid}-${cancelled}` },
+      body: JSON.stringify({ cancelReason: String(reason || '예약 취소 (카드 결제분 환불)').slice(0, 200), cancelAmount: amount }),
     });
     const toss = await cr.json().catch(() => null);
-    if(!cr.ok || !toss) return json({ ok: false, error: 'toss_cancel_failed', toss: { code: toss?.code, message: toss?.message } });
+    if(!cr.ok || !toss) return json({ ok: false, error: 'toss_cancel_failed', toss: { code: toss?.code, message: toss?.message }, ...info });
     const cancels = Array.isArray(toss.cancels) ? toss.cancels : [];
     const mine = cancels.filter((c: any) => Number(c?.cancelAmount) === amount).pop() || cancels[cancels.length - 1] || {};
 
-    // ⑤ 기록 — 실패해도 토스 취소는 이미 됐다
+    // ④ 기록 — 실패해도 토스 취소는 이미 됐다
     const now = new Date().toISOString();
-    const newEx = { ...ex, card_refund_pending: { ...crp, status: 'done', refunded_at: now, done_by: by, via: 'toss_api',
-      toss_tx: mine.transactionKey || null, toss_canceled_at: mine.canceledAt || null, toss_balance_after: toss.balanceAmount ?? null } };
-    const up = await sbPatch(`tickets?id=eq.${encodeURIComponent(String(t.id))}`, { extra_data: newEx });
+    const rows = await sbGet(`tickets?purchase_id=eq.${encodeURIComponent(pid)}&select=id,extra_data&order=created_at.desc&limit=1`);
+    const t = rows[0] || {};
+    const ex = (t.extra_data && typeof t.extra_data === 'object') ? t.extra_data : {};
+    const crp = (ex.card_refund_pending && typeof ex.card_refund_pending === 'object') ? ex.card_refund_pending : {};
+    const newEx = { ...ex, card_refund_pending: { ...crp, status: 'done', refunded_at: now, done_by: by, via: 'toss_api', refunded_amount: amount,
+      order_id: q.order_id, toss_tx: mine.transactionKey || null, toss_canceled_at: mine.canceledAt || null, toss_balance_after: toss.balanceAmount ?? null, policy: q.policy } };
+    const up = t.id ? await sbPatch(`tickets?id=eq.${encodeURIComponent(String(t.id))}`, { extra_data: newEx }) : { ok: false };
     try {   // 주문 표에도 한 줄 (판매 현황·수수료 계산은 status 로 세므로 status 는 그대로 둔다)
-      const md = (po.metadata && typeof po.metadata === 'object') ? po.metadata : {};
+      const pos = await sbGet(`payment_orders?order_id=eq.${encodeURIComponent(String(q.order_id))}&select=metadata`);
+      const md = (pos[0]?.metadata && typeof pos[0].metadata === 'object') ? pos[0].metadata : {};
       const prev = Array.isArray(md.app_cancels) ? md.app_cancels : [];
-      await sbPatch(`payment_orders?order_id=eq.${encodeURIComponent(orderId)}`, { metadata: { ...md, app_cancels: [...prev, { purchase_id: pid, amount, tx: mine.transactionKey || null, at: now, by }] } });
+      await sbPatch(`payment_orders?order_id=eq.${encodeURIComponent(String(q.order_id))}`, { metadata: { ...md, app_cancels: [...prev, { purchase_id: pid, amount, tx: mine.transactionKey || null, at: now, by, policy: q.policy }] } });
     } catch (_e) { /* 기록용 */ }
-    return json({ ok: true, amount, order_id: orderId, toss_status: toss.status, balance_after: toss.balanceAmount ?? null,
-                  mark_failed: !up.ok, user_id: t.user_id, restaurant_name: t.restaurant_name || '' });
+    return json({ ok: true, ...info, toss_status: toss.status, balance_after: toss.balanceAmount ?? null,
+                  mark_failed: !up.ok, user_id: q.user_id, restaurant_name: q.restaurant_name || '' });
   } catch (e) { console.error('[toss-card-refund]', e); return json({ ok: false, error: String((e as Error).message || e).slice(0, 200) }, 500); }
 }
 const TAAM_ORIGINS = ['https://taam-app.vercel.app', 'https://playtaam.com', 'https://www.playtaam.com'];

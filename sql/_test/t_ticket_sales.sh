@@ -350,6 +350,13 @@ insert into public.reservation_invites values ('$I8','$SU','$M3','$R1','메이�
 insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata,created_at) values ('$M3','general','ticket_purchase',-850000,'{"purchase_id":"INV-e8000000-1","invite_id":"$I8"}','2026-07-02T00:00:00Z');
 SQL
 ok "V2 방문일이 지난 앱 구매·초대의 대행비는 「확정」 (4차)" "$(row PAYH-past_1 "r->>'ag_state'")/$(row "inv:$I8" "r->>'ag_state'")" "kept/kept"
+
+$P <<SQL >/dev/null
+insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_date,party_size,price,status,purchase_id,extra_data,created_at)
+ values ('$M3','$R1','tp1','2026.11.03',2,1700000,'active','PAYH-pxf','{"pax_changes":[{"from":1}]}','2026-10-09T00:00:00Z');
+insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata,created_at) values ('$M3','general','ticket_purchase',-1700000,'{"purchase_id":"PAYH-pxf"}','2026-10-09T00:00:00Z');
+SQL
+ok "V3 회원이 적은 처음 인원(pax_changes.from 1 · 줄임 환불 원장 없음)은 대행비를 깎지 못한다 (2명 × 150,000)" "$(row PAYH-pxf "concat_ws('/', r->>'agency', coalesce(r->>'pax0','-'))")" "300000/-"
 out2=$($P -f "$MIG" 2>&1)
 ok "두 번째 RUN: 오류 없음 · ❌ 0 · ⑤ 채널 합계 줄이 찍힌다(이름 없음)" "$(echo "$out2" | grep -E "^ERROR|^psql:.*ERROR" | head -1)|$(echo "$out2" | grep -c '❌')|$( [ $(echo "$out2" | grep -cE '⑤ (app|invite|link|settle)') -ge 4 ] && echo ok)|$(echo "$out2" | grep -c '회원1')" "|0|ok|0"
 # 화면 시험용 — TSR_DUMP=파일 이면 보고서 JSON 을 남긴다(결제일·전체 · 기본)

@@ -965,7 +965,7 @@ platform `edge`)로 남고 토스트에 코드가 붙는다. 같은 빌링키 23
   앱·초대도 **방문일이 지나면 대행비 「확정」**(종전 「예정」 — 적대 리뷰). 화면: 의도된 수동 변경(초대 대행비 · 링크 금액 수정)은 ⚠ 가 아니라 「✎ 상세 ▾」 · 상세 「✎ 대행비 수동 변경(초대) — 보낼 때 바꾼 ₩…/인 적용 · 회차 ₩…/인」 ·
   순판매로 잘린 대행비는 「→ 순판매 ₩…까지로 자름」 · 카드 환불 대기는 「(그중 카드 환불 대기 ₩…)」 · 인원 0 정산은 「인원 —」 · 「확인 필요」 상자는 다시 그려도 열린 채(`_tsr.excOpen`).
   적대 리뷰(3 렌즈 · 23 에이전트 → 확정 6 · 전부 반영 + 기각 1 의 값싼 정리): 위 넷 + 결제 쪽 둘(아래 「결제 팝업은 남은 홀드를…」).
-- 회귀: `bash sql/_test/t_ticket_sales.sh`(68건 — 1차→2차→3차→4차를 올린다 · 4차 V1(초대 ₩150,000·회차 ₩100,000) · V2(지난 방문 확정) · 정정 줄(이중 차감 · 이중 차감 뒤 취소 · 음수 정정 무시) · 채널·환불 종류·대행비·결제일/방문일·테스트 계정·외화 · 위조 홀드 · ₩0 원장 · pax_changes · 남의 원장 줄 · 한 카드 주문 두 행 · 초대 되돌림/원장 없음/대행비 부풀림 · 깨진 uuid·infinity · 재실행) ·
+- 회귀: `bash sql/_test/t_ticket_sales.sh`(69건 — 1차→2차→3차→4차를 올린다 · 4차 V1(초대 ₩150,000·회차 ₩100,000) · V2(지난 방문 확정) · V3(처음 인원 위조 — 인원 줄임 환불 원장이 있을 때만 믿는다 · `invite_closed` 되돌림) · 정정 줄(이중 차감 · 이중 차감 뒤 취소 · 음수 정정 무시) · 채널·환불 종류·대행비·결제일/방문일·테스트 계정·외화 · 위조 홀드 · ₩0 원장 · pax_changes · 남의 원장 줄 · 한 카드 주문 두 행 · 초대 되돌림/원장 없음/대행비 부풀림 · 깨진 uuid·infinity · 재실행) ·
   스크래치 `sales/tsr.js`(25건 · 합계 · 채널 토글 · 월 고르기 · 외화 · 기간 · CSV(수식 주입 · 깨진 시각) · 통화 칸 HTML · KST · 불러오는 중 경주 · 서버 준비 전 · 권한).
 
 ### 초대 결제 보안 — 받는 회원은 금액을 못 바꾸고, 원장 결제가 있어야 「결제됨」·좌석 확정 (2026-10-22 · `20261022_invite_payment_guard.sql` · **라이브 ✅**)
@@ -979,19 +979,35 @@ platform `edge`)로 남고 토스트에 코드가 붙는다. 같은 빌링키 23
 - **C `trg_taam_guard_ledger_refund_active`**(deposit_transactions BEFORE INSERT): 회원 세션의 양수 `ticket_refund` 는 그 구매의 본인 티켓이 살아 있으면 `REFUND_TICKET_ACTIVE` — 먼저 취소(앱 `cancelTicketPurchase` 가 이미 그 순서) ·
   홀드·취소·만료·티켓 없음(riPay 확정 실패 되돌림)은 그대로 · 인원 줄임(서버 함수 `ticket_pax_change`)·슈퍼어드민·서버는 그대로.
 - 보낸 사람(host)·슈퍼어드민·서버(auth.uid() null)는 전부 그대로. **라이브 함수 본문은 안 건드렸다**(덧대기). 확인 표 ⑤⑥ 0건 · ⑦ 「살아 있는 티켓인데 회원 환불 줄」 2건(정보 — 슈퍼어드민 처리 포함일 수 있다).
-- 회귀: `bash sql/_test/t_invite_guard.sh`(22건 — 실제 `taam_invite_confirm_hold` 를 올려 결제→결제됨→(환불)→확정 순서 · ⚠ 픽스처 초대 id 는 **앞 8자리가 달라야** 한다(INV-앞8자리 구매 id)).
+- **2차(같은 날 · `20261022_invite_payment_guard2.sql` · 라이브 ✅ · ⑤⑥ 0건).** 적대 리뷰(재현): ① 순결제가 invite_id 와 INV-앞8 구매 id 중 하나만 맞아도 세어 **결제 한 줄로 두 초대** 확정 ·
+  ② 구매 id P1 로 내고 P2 로 확정하면 좌석은 P2 로 살고 P1 결제를 전액 스스로 환불(가드 C 는 P1 티켓만 봤다). → `_taam_invite_net_paid(초대, 회원, 구매 id)`: invite_id 가 있으면 **그 초대에만** ·
+  가드 B 는 **새 좌석의 purchase_id 로 낸 결제만** · 가드 C 는 환불이 가리키는 초대(결제 줄의 invite_id · 환불의 invite_id)의 좌석이 살아 있으면 거절. riPay 는 원장·확정이 같은 `_riPurchaseId` 라 그대로.
+- 앱 `riPay`: 차감 뒤 「결제됨」 갱신이 가드에 막히면(INVITE_CLOSED/INVITE_NOT_PAID — 그 사이 초대가 닫힘) **그 자리에서 되돌린다**(ticket_refund · reason `invite_closed` · 판매 현황은 되돌림으로 센다) · 「예약 완료」로 안 간다.
+- 초대 값 변경 흔적 진단(`20261022_diag_invite_tamper*.sql` · 2026-10-22): 61건 모두 합계=(식사+대행+주류)×인원 · 결제=합계 · 확정 좌석=초대 · **보낼 때 홀드 19건 전부 지금 값과 같다** → 흔적 없음.
+  회차 정가와 1인 금액이 다른 7건 중 6건은 같은 회차 다른 초대들과 같은 값(어드민 가격), 1건(`09faf15c` · 10/13 스시 사이토 3명 ₩2,550,000)은 보낸 사람 확인 필요.
+  ⚠ 슈퍼어드민 「초대 발행」 알림(`invite_sent`)은 DB 에 남지 않는다(0건) — 보낼 때 값의 대조 근거로 못 쓴다.
+- 회귀: `bash sql/_test/t_invite_guard.sh`(29건 — 실제 `taam_invite_confirm_hold` 를 올려 결제→결제됨→(환불)→확정 순서 · 2차 G1~G7 · ⚠ 픽스처 초대 id 는 **앞 8자리가 달라야** 한다(INV-앞8자리 구매 id)).
 
 ### 카드 결제분 환불을 앱에서 — 토스 승인취소 (2026-10-22 · Edge `toss-card-refund` · 빌드 `2026.10.22-c`)
 
 종전: 회원이 카드가 섞인 티켓을 취소하면 앱은 예치금 몫만 돌려주고 카드 몫은 `tickets.extra_data.card_refund_pending{amount, order_id, status:'pending'}` 로 남겼다 →
 슈퍼어드민이 **토스 상점관리자**에서 승인취소 → 앱 「카드 환불 완료」(`tkMarkCardRefundDone` · 회원 알림·푸시).
-- **Edge `toss-card-refund`**(슈퍼어드민 · `verify_jwt=true` + profiles.role 재확인): 입력 `{purchase_id}` → ① 대기(금액·주문번호 · 좌석이 살아 있으면 `ticket_active`) ② `payment_orders`(paid · payment_key · 주인 = 티켓 주인) —
+- ⚠ **적대 리뷰(첫 판 배포 전 · 확정 2 · 재현): 대기(`card_refund_pending`)의 금액·주문번호는 회원이 쓸 수 있는 칸이다** — 취소한 싼 티켓의 대기를 「₩1,700,000 · 살아 있는 비싼 티켓의 주문」으로 바꾸면 슈퍼어드민 클릭에
+  그 주문이 환불되고 좌석은 살았고, 완료를 대기로 되돌리고 금액을 1원 바꾸면 중복 방지 키가 달라져 두 번째 실제 취소가 됐다. → **금액·주문은 서버가 센다**(`20261022_card_refund_quote.sql`):
+  `trg_taam_guard_ticket_payfacts`(취소 순간 `server_cancelled_at` · 회원·매장 어드민은 결제 사실 칸 card_refund_pending·order_id·cardPaid·depositUsed·paidBy·card_currency·card_amount_fx 를 못 바꾼다 — 대기는 **취소하는 그 갱신에서만** · `set_by_role` member/superadmin) ·
+  `taam_card_refund_quote(구매)`(슈퍼어드민·서버만): 이 구매의 주문을 **`payment_orders.metadata.hold_purchase_id`** 로 찾고(없으면 서버가 적은 order_id 의 홀드 없는 주문 = PAYC 폴백) 회원 규정으로 카드 몫을 다시 센다 —
+  환불 가능 총액(카드 승인 30분 안 → 총액 · 방문 D-31 이상 → 총액 − 대행비×인원 · 그 뒤 0 · 취소 시각 = 서버 취소 시각 → 첫 환불 원장 → 지금) − 예치금으로 낸 돈 = 카드 몫(0~카드 결제액) ·
+  목표 = 회원이 적은 대기면 min(대기, 카드 몫) · 슈퍼어드민이 적은 대기(특별 환불)면 min(대기, 카드 결제액).
+- **Edge `toss-card-refund`**(슈퍼어드민 · `verify_jwt=true` + profiles.role 재확인): 입력 `{purchase_id, dry_run | expect_amount}` → 서버 견적 → 토스 `GET` 의 이미 취소된 금액(totalAmount − balanceAmount)을 빼고 **남은 만큼만**(중복 환불이 원리적으로 안 된다) ·
+  `dry_run` 은 금액만(앱 확인창) · 실행은 `expect_amount` = 지금 금액이어야(`amount_changed`) · `Idempotency-Key: taam-crf-<구매>-<지금까지 취소된 금액>` · 아래 ② 이후는 종전 설명과 같다(시크릿·기록·mark_failed).
+- (첫 판 설명 — 금액·주문을 대기에서 읽던 부분은 위로 대체) 입력 `{purchase_id}` → ① 대기(좌석이 살아 있으면 `ticket_active`) ② `payment_orders`(paid · payment_key · 주인 = 티켓 주인) —
   시크릿은 **승인한 MID 의 것**: 등록 카드 자동결제(`metadata.paid_via='billing_key'`)는 `TOSS_BILLING_SECRET_KEY`(없으면 `TOSS_SECRET_KEY`), 결제창은 `TOSS_SECRET_KEY` · **외화 주문은 막는다**(대기 금액이 원화라 단위가 다르다 → 상점관리자) ③ 토스 `GET /v1/payments/{key}` 의 `balanceAmount`
   (이미 상점관리자에서 취소면 `already_canceled_at_toss` · 넘치면 `exceeds_balance`) ④ `POST …/cancel {cancelReason, cancelAmount}` + **`Idempotency-Key: taam-crf-<구매>-<금액>`**(두 번 눌러도 한 번) ⑤ 대기 → done(+ `toss_tx` · 처리자 · `via:'toss_api'`) ·
   `payment_orders.metadata.app_cancels` 에 한 줄(**status 는 그대로** — 판매 현황·수수료 계산이 paid 로 센다). 기록이 실패해도 토스 취소는 됐다 → `{ok:true, mark_failed:true}` 로 앱이 완료 표시. 업무 오류는 HTTP 200 + `{ok:false,error}`(권한만 403).
-- 앱: 「예치금 반환 관리」 카드환불 카드와 「전체 티켓 구매내역」 대기 줄(슈퍼어드민 · 카드 클릭과 분리 `event.stopPropagation`)에 **「💳 토스 승인취소 실행」** — 확인창 → `tkCardRefundViaToss`(바쁨 가드 · 처음부터 끝까지) → 성공하면
+- 앱: 「예치금 반환 관리」 카드환불 카드와 「전체 티켓 구매내역」 대기 줄(슈퍼어드민 · 카드 클릭과 분리 `event.stopPropagation`)에 **「💳 토스 승인취소 실행」** — **서버 미리보기**(`dry_run` · 확인창에 서버 금액 · 규정 · 카드 결제·이미 취소 · 대기 기록과 다르면 ※) → 실행(`expect_amount`) · `tkCardRefundViaToss`(바쁨 가드 · 처음부터 끝까지) → 성공하면
   `tkMarkCardRefundDone(pid, {notifyOnly:true})` 로 회원 인앱 알림·푸시(앱은 티켓을 다시 쓰지 않는다) · 이미 토스에서 취소됨 → 「완료로 표시?」 · 함수 미배포 → 「서버 준비 필요」. 종전 「상점관리자에서 처리함 · 완료 표시」는 외화·옛 포트원·API 실패용으로 남김(`via:'manual'`).
-- 회귀: 스크래치 `tcr/harness.mjs`(19건 · 가짜 토스·Supabase — 권한 · 오류 코드 · 시크릿 선택 · 중복 방지 키 · 기록 실패) · `crf/crf.js`(14건 · 앱 흐름 · 구매내역 버튼).
+- 회귀: `bash sql/_test/t_card_refund_quote.sh`(16건 — 결제 사실 칸 보호 · 30분/D-31/규정 0 · 부풀린 대기 · 슈퍼어드민 대기 · PAYC 폴백 · 다른 구매에 묶인 주문 · 권한) ·
+  스크래치 `tcr/harness2.mjs`(15건 · 가짜 토스·Supabase — 미리보기 · amount_changed · 이미 취소된 금액 빼기 · 키 · 시크릿 · 기록 실패) · `crf/crf.js`(16건 · 미리보기→확인→실행 · 대기와 다른 서버 금액 · 구매내역 버튼).
 
 ### 결제 팝업은 남은 홀드를 회차·인원이 맞을 때만 다시 쓴다 (2026-10-22 키사누키 5/20 · 빌드 `2026.10.22-a`)
 
