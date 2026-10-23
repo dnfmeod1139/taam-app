@@ -43,7 +43,7 @@ insert into public.kashikiri_charges(id, event_id, label, user_id, amount_krw, p
 SQL
 out=$($P -f $MIG 2>&1)
 ok "마이그레이션: 오류 없음 · ❌ 0 · ①②③④⑥⑦⑧⑨ ✅" "|0|8" "$(echo "$out" | grep -E "^ERROR|psql:.*ERROR" | head -1)|$(echo "$out" | grep -c '❌')|$(echo "$out" | grep -cE '^(① RPC|② 결제|③ anon|④ 도우미|⑥ 링크|⑦ 링크|⑧ taam_admin_push|⑨ 「예약).*\|✅')"
-ok "  taam_admin_push: anon·회원 실행 불가로" "f|f" "$($P -c "select has_function_privilege('anon','public.taam_admin_push(text,text,text,text,text)','execute')||'|'||has_function_privilege('authenticated','public.taam_admin_push(text,text,text,text,text)','execute')")"
+ok "  taam_admin_push: anon·회원 실행 불가로" "false|false" "$($P -c "select has_function_privilege('anon','public.taam_admin_push(text,text,text,text,text)','execute')||'|'||has_function_privilege('authenticated','public.taam_admin_push(text,text,text,text,text)','execute')")"
 
 echo "── 결제되면 회원에게 알린다"
 $P -c "update public.kashikiri_charges set status='paid', approved_at = now() - interval '3 days', payment_key='pkE' where id='c1000000-0000-4000-8000-000000000001'" >/dev/null
