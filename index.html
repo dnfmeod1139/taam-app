@@ -7971,13 +7971,13 @@ async function payLinkList(){
 //   청구를 티켓 링크로 바꾸며(환불 규정·판매 현황이 티켓으로 센다) 회원에게 알림·푸시를 보낸다. 목록은 taam_pay_link_unattached.
 //   입구: 결제 링크 목록(「⚠ 예약 내역 미연결」 띠 · 줄의 「🎫 예약으로 연결」) · 캘린더 구매자 상세의 수동 좌석(MAN-) 「💳 결제 링크와 연결」.
 // ═══════════════════════════════════════════════════════════════
-var _pla = { rows: [], chargeId: '', ticketId: '', replacePid: '', member: null, memberCache: {}, busy: false, sSeq: 0, manSeq: 0 };
+var _pla = { rows: [], chargeId: '', ticketId: '', replacePid: '', member: null, memberCache: {}, busy: false, sSeq: 0, manSeq: 0, v: {}, manRows: [], manLoaded: true, manErr: false };
 var _PLA_REASON = { no_seat: '좌석 없음(자유 금액 등)', not_member: '비회원 결제 — 좌석은 있음', transfer_pending: '회원 이전 보류 — 좌석은 있음' };
 async function plAttachOpen(opts){
   opts = opts || {};
   if (typeof _isSuperAdmin === 'function' && !_isSuperAdmin()) { showToast('🔒', '슈퍼어드민 전용', '결제 연결은 슈퍼어드민만 합니다'); return; }
   var old = document.getElementById('plAttachPopup'); if (old) old.remove();
-  _pla.chargeId = opts.chargeId || ''; _pla.ticketId = opts.ticketId ? String(opts.ticketId) : ''; _pla.replacePid = opts.replacePid || ''; _pla.member = null; _pla.busy = false;
+  _pla.chargeId = opts.chargeId || ''; _pla.ticketId = opts.ticketId ? String(opts.ticketId) : ''; _pla.replacePid = opts.replacePid || ''; _pla.member = null; _pla.busy = false; _pla.v = {}; _pla.manRows = []; _pla.manLoaded = true; _pla.manErr = false;
   var el = document.createElement('div');
   el.id = 'plAttachPopup';
   el.style.cssText = 'position:fixed;inset:0;z-index:9300;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;';
@@ -8009,7 +8009,15 @@ function _plaChargeLabel(c){
   var cur = c.pay_currency || 'KRW', who = c.member_name || c.payer_name || c.label || '';
   return (c.title || '결제') + (c.subtitle ? ' / ' + c.subtitle : '') + ' · ' + who + ' · ' + _plMoney(cur, c.pay_amount) + ' · ' + String(c.approved_at || '').slice(0, 10).replace(/-/g, '.');
 }
+// 다시 그리기 전에 적어 둔 값(인원 · 메모 · 알림)을 거둔다 — 회원 고르기·「바꾸기」가 폼을 새로 그려 지우던 것(적대 리뷰)
+function _plaCollect(){
+  var v = _pla.v || {}, px = document.getElementById('plaPax'), nt = document.getElementById('plaNote'), nf = document.getElementById('plaNotify');
+  if (px) v.pax = px.value; if (nt) v.note = nt.value; if (nf) v.notify = !!nf.checked;
+  _pla.v = v;
+}
+function _plaMemberClear(){ _plaCollect(); _pla.member = null; _plaRender(); }
 function _plaPickCharge(id){
+  if ((id || '') !== _pla.chargeId) _pla.v = {};   // 다른 결제를 고르면 새로
   _pla.chargeId = id || '';
   var c = _plaCharge();
   _pla.member = (c && c.user_id) ? { id: c.user_id, display_name: c.member_name || '(이름 없음)', membership_tier: c.member_tier || '' } : null;
@@ -8040,17 +8048,18 @@ function _plaRender(){
     + (seat ? '<br>좌석: ' + _plEsc((seat.rest || '') + ' ' + (seat.date || '') + ' ' + (seat.time || '') + ' · ' + (seat.pax || '') + '인 · ' + (seat.purchase_id || '')) : '') + '</div>';
   var m = _pla.member;
   h += lab('회원 *') + (m ? '<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border:1.5px solid #c9a96e;border-radius:9px;background:#fff8e7;"><div style="flex:1;font-size:13px;font-weight:800;color:#1a1a18;">' + _plEsc(m.display_name || '(이름 없음)') + ' <span style="font-size:10.5px;color:#8a7b63;">' + _plEsc(m.membership_tier || '') + '</span></div>'
-          + (c.user_id ? '<span style="font-size:10.5px;color:#9a9486;">결제에 적힌 회원</span>' : '<button type="button" onclick="_pla.member=null;_plaRender()" style="border:0;background:transparent;font-family:inherit;font-size:11px;font-weight:800;color:#8a8580;cursor:pointer;">바꾸기</button>') + '</div>'
+          + (c.user_id ? '<span style="font-size:10.5px;color:#9a9486;">결제에 적힌 회원</span>' : '<button type="button" onclick="_plaMemberClear()" style="border:0;background:transparent;font-family:inherit;font-size:11px;font-weight:800;color:#8a8580;cursor:pointer;">바꾸기</button>') + '</div>'
         : '<input id="plaMemberQ" type="text" placeholder="이름 · 전화 · 이메일 2자 이상" oninput="plaMemberSearch()" style="width:100%;box-sizing:border-box;padding:9px 10px;border:1px solid #e0dcd4;border-radius:9px;font-family:inherit;font-size:13px;"><div id="plaMemberRes" style="margin-top:4px;"></div>');
   if (!seat) {
-    var paxDflt = (c.payload && parseInt(c.payload.pax, 10)) || 2;
+    var paxDflt = (_pla.v.pax != null && _pla.v.pax !== '') ? _pla.v.pax : ((c.payload && parseInt(c.payload.pax, 10)) || 2);
     h += lab('회차 * — 결제한 예약의 회차') + '<select id="plaTicket" onchange="_pla.ticketId=this.value;_pla.replacePid=\'\';_plaLoadMan()" style="width:100%;box-sizing:border-box;padding:9px 10px;border:1px solid #e0dcd4;border-radius:9px;font-family:inherit;font-size:13px;font-weight:700;">' + _plaTicketOpts() + '</select>'
       + '<div style="display:grid;grid-template-columns:1fr 2fr;gap:8px;"><div>' + lab('인원 *') + '<input id="plaPax" type="number" min="1" max="20" value="' + paxDflt + '" style="width:100%;box-sizing:border-box;padding:9px 10px;border:1px solid #e0dcd4;border-radius:9px;font-family:inherit;font-size:14px;font-weight:700;"></div>'
-      + '<div>' + lab('대신할 수동 좌석 (캘린더 「수동 추가」)') + '<select id="plaMan" onchange="_pla.replacePid=this.value" style="width:100%;box-sizing:border-box;padding:9px 10px;border:1px solid #e0dcd4;border-radius:9px;font-family:inherit;font-size:12.5px;font-weight:700;"><option value="">없음 — 빈 자리에 새로 잡기</option></select></div></div>';
+      + '<div>' + lab('대신할 수동 좌석 (캘린더 「수동 추가」)') + '<select id="plaMan" onchange="_plaManPick(this.value)" style="width:100%;box-sizing:border-box;padding:9px 10px;border:1px solid #e0dcd4;border-radius:9px;font-family:inherit;font-size:12.5px;font-weight:700;"><option value="">없음 — 빈 자리에 새로 잡기</option></select></div></div>';
   }
-  h += lab('메모 (어드민 기록 · 회원에게 안 보임)') + '<input id="plaNote" type="text" maxlength="120" placeholder="예) 10/18 자유 금액 링크로 받은 사이토 2인" style="width:100%;box-sizing:border-box;padding:9px 10px;border:1px solid #e0dcd4;border-radius:9px;font-family:inherit;font-size:13px;">'
-    + '<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#555;padding:8px 0 0;cursor:pointer;"><input type="checkbox" id="plaNotify" checked> 회원에게 알림 보내기 (알림함 + 푸시 · 「예약이 등록되었습니다」)</label>'
-    + '<button type="button" id="plaGo" onclick="plAttachSubmit()" style="width:100%;margin-top:14px;padding:12px;background:#5C0A14;border:none;border-radius:11px;font-family:inherit;font-size:13.5px;font-weight:800;color:#fff;cursor:pointer;">회원 예약으로 연결</button>';
+  h += lab('메모 (어드민 기록 · 회원에게 안 보임)') + '<input id="plaNote" type="text" maxlength="120" value="' + _plEsc(_pla.v.note || '') + '" placeholder="예) 10/18 자유 금액 링크로 받은 사이토 2인" style="width:100%;box-sizing:border-box;padding:9px 10px;border:1px solid #e0dcd4;border-radius:9px;font-family:inherit;font-size:13px;">'
+    + '<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#555;padding:8px 0 0;cursor:pointer;"><input type="checkbox" id="plaNotify"' + (_pla.v.notify === false ? '' : ' checked') + '> 회원에게 알림 보내기 (알림함 + 푸시 · 「예약이 등록되었습니다」)</label>'
+    + '<button type="button" id="plaGo" onclick="plAttachSubmit()" style="width:100%;margin-top:14px;padding:12px;background:#5C0A14;border:none;border-radius:11px;font-family:inherit;font-size:13.5px;font-weight:800;color:#fff;cursor:pointer;">회원 예약으로 연결</button>'
+    + (seat ? '' : '<button type="button" onclick="plAttachDismiss()" style="width:100%;margin-top:8px;padding:10px;background:#fff;border:1px solid #e0ddd8;border-radius:11px;font-family:inherit;font-size:12px;font-weight:800;color:#6b645b;cursor:pointer;">좌석 예약이 아님 — 목록에서 빼기 (와인 추가분 · 보증금 등)</button>');
   body.innerHTML = h;
   if (!seat) _plaLoadMan();
 }
@@ -8058,17 +8067,35 @@ async function _plaLoadMan(){
   var sel = document.getElementById('plaMan'); if (!sel) return;
   var tid = _pla.ticketId, seq = ++_pla.manSeq;
   sel.innerHTML = '<option value="">없음 — 빈 자리에 새로 잡기</option>';
-  if (!tid || !window.sb) return;
+  _pla.manRows = []; _pla.manErr = false;
+  if (!tid || !window.sb) { _pla.manLoaded = true; _plaGoState(); return; }
+  _pla.manLoaded = false; _plaGoState();   // 목록이 오기 전에 누르면 「대신할 수동 좌석」 없이 빈 자리에 새로 잡혀 자리를 두 번 먹었다(적대 리뷰)
   var r;
   try { r = await window.sb.from('tickets').select('purchase_id, buyer_name, party_size, status, extra_data').eq('ticket_product_id', tid).like('purchase_id', 'MAN-%').in('status', ['manual', 'active']); } catch (e) { r = { error: e }; }
   if (seq !== _pla.manSeq || !document.getElementById('plaMan')) return;
-  if (!r || r.error) { sel.innerHTML += '<option value="" disabled>수동 좌석을 못 읽었습니다</option>'; return; }
-  (r.data || []).forEach(function(x){
+  _pla.manLoaded = true;
+  if (!r || r.error) { _pla.manErr = true; sel.innerHTML += '<option value="" disabled>수동 좌석을 못 읽었습니다</option>'; _plaGoState(); return; }
+  _pla.manRows = r.data || [];
+  _pla.manRows.forEach(function(x){
     var ex = x.extra_data || {}, memo = ex.memo || ex.ttype || '';
     sel.innerHTML += '<option value="' + _plEsc(x.purchase_id) + '"' + (x.purchase_id === _pla.replacePid ? ' selected' : '') + '>' + _plEsc((x.buyer_name || '(이름 없음)') + ' · ' + (x.party_size || '?') + '인' + (memo ? ' · ' + String(memo).slice(0, 30) : '') + ' · ' + x.purchase_id) + '</option>';
   });
-  if (_pla.replacePid && !(r.data || []).some(function(x){ return x.purchase_id === _pla.replacePid; })) _pla.replacePid = '';
-  if (_pla.replacePid) { sel.value = _pla.replacePid; var px = (r.data || []).find(function(x){ return x.purchase_id === _pla.replacePid; }); var pe = document.getElementById('plaPax'); var _cpl = (_plaCharge() || {}).payload || {}; if (px && pe && !_cpl.pax) pe.value = px.party_size || pe.value; }
+  if (_pla.replacePid && !_pla.manRows.some(function(x){ return x.purchase_id === _pla.replacePid; })) _pla.replacePid = '';
+  if (_pla.replacePid) { sel.value = _pla.replacePid; _plaManPick(_pla.replacePid, true); }
+  _plaGoState();
+}
+// 대신할 수동 좌석을 고르면 인원을 그 좌석에 맞춘다(결제에 인원이 적혀 있거나 직접 고친 값이 있으면 그대로) · 다르면 줄에 알린다
+function _plaManPick(pid, soft){
+  _pla.replacePid = pid || '';
+  var mr = (_pla.manRows || []).find(function(x){ return x.purchase_id === _pla.replacePid; });
+  var pe = document.getElementById('plaPax'), cpl = (_plaCharge() || {}).payload || {};
+  if (mr && pe && !cpl.pax && !(soft && _pla.v && _pla.v.pax)) pe.value = mr.party_size || pe.value;
+  _plaGoState();
+}
+function _plaGoState(){
+  var g = document.getElementById('plaGo'); if (!g || _pla.busy) return;
+  var wait = !_pla.manLoaded;
+  g.disabled = wait; g.style.opacity = wait ? '.55' : ''; g.textContent = wait ? '수동 좌석 목록 불러오는 중…' : '회원 예약으로 연결';
 }
 async function plaMemberSearch(){
   var q = ((document.getElementById('plaMemberQ') || {}).value || '').trim(), res = document.getElementById('plaMemberRes'); if (!res) return;
@@ -8082,7 +8109,7 @@ async function plaMemberSearch(){
   _pla.memberCache = {}; (r.data || []).forEach(function(u){ _pla.memberCache[u.id] = u; });
   res.innerHTML = (r.data || []).length ? (r.data || []).map(function(u){ return '<div data-pla-uid="' + _plEsc(u.id) + '" onclick="plaMemberPick(this.getAttribute(\'data-pla-uid\'))" style="padding:7px 9px;border-bottom:1px solid #f0ece6;cursor:pointer;font-size:12.5px;"><b>' + _plEsc(u.display_name || '(이름 없음)') + '</b> <span style="color:#8a7b63;font-size:10.5px;">' + _plEsc(u.membership_tier || '') + '</span> <span style="color:#9a9486;font-size:11px;">' + _plEsc(u.phone || u.email || '') + '</span></div>'; }).join('') : '<div style="font-size:11px;color:#9a9486;padding:6px;">없습니다</div>';
 }
-function plaMemberPick(id){ var u = _pla.memberCache[id]; if (!u) return; _pla.member = u; _plaRender(); }
+function plaMemberPick(id){ var u = _pla.memberCache[id]; if (!u) return; _plaCollect(); _pla.member = u; _plaRender(); }
 async function plAttachSubmit(){
   if (_pla.busy) return;
   var c = _plaCharge(); if (!c) { showToast('⚠', '결제 선택', '연결할 결제를 고르세요'); return; }
@@ -8091,13 +8118,18 @@ async function plAttachSubmit(){
   var pax = seat ? (parseInt(seat.pax, 10) || 1) : (parseInt((document.getElementById('plaPax') || {}).value, 10) || 0);
   if (!tid) { showToast('⚠', '회차 선택', '결제한 예약의 회차를 고르세요'); return; }
   if (!(pax >= 1 && pax <= 20)) { showToast('⚠', '인원 확인', '1~20 명'); return; }
-  var rep = seat ? '' : ((document.getElementById('plaMan') || {}).value || '');
+  if (!seat && !_pla.manLoaded) { showToast('⏳', '잠시만요', '수동 좌석 목록을 불러오는 중입니다'); return; }
+  var rep = seat ? '' : ((document.getElementById('plaMan') || {}).value || (_pla.manErr ? _pla.replacePid : '') || '');   // 목록을 못 읽었으면 캘린더에서 고른 좌석 그대로(서버가 다시 본다)
+  var repRow = rep ? (_pla.manRows || []).find(function(x){ return x.purchase_id === rep; }) : null;
+  var repPax = repRow ? (parseInt(repRow.party_size, 10) || 0) : 0;
   var note = String((document.getElementById('plaNote') || {}).value || '').trim();
   var notify = !!((document.getElementById('plaNotify') || {}).checked);
   var t = (window.ticketDB || []).find(function(x){ return String(x.id) === String(tid); });
   var tl = t && typeof _pxTicketLabel === 'function' ? _pxTicketLabel(t) : (seat ? (seat.rest + ' ' + seat.date) : tid);
   if (!confirm((_pla.member.display_name || '회원') + ' 님의 예약으로 연결합니다\n\n' + _plaChargeLabel(c) + '\n→ ' + tl + ' · ' + pax + '인'
-      + (seat ? '\n(있던 좌석 ' + (seat.purchase_id || '') + ' 를 회원에게 넘깁니다)' : (rep ? '\n수동 좌석 ' + rep + ' 는 취소되고 이 예약으로 바뀝니다' : '\n빈 자리에 새로 잡습니다'))
+      + (seat ? '\n(있던 좌석 ' + (seat.purchase_id || '') + ' 를 회원에게 넘깁니다)' : (rep ? '\n수동 좌석 ' + rep + (repRow ? ' (' + (repRow.buyer_name || '이름 없음') + ' · ' + repPax + '인)' : '') + ' 는 취소되고 이 예약으로 바뀝니다' : '\n빈 자리에 새로 잡습니다'))
+      + (repPax && repPax > pax ? '\n\n⚠ 수동 좌석은 ' + repPax + '인인데 이 예약은 ' + pax + '인입니다 — ' + (repPax - pax) + '석이 다시 판매됩니다(취소표 알림이 나갈 수 있습니다)' : '')
+      + (repPax && repPax < pax ? '\n\n⚠ 수동 좌석(' + repPax + '인)보다 ' + (pax - repPax) + '석 더 잡습니다 — 자리가 없으면 연결되지 않습니다' : '')
       + (notify ? '\n\n회원에게 알림·푸시가 갑니다.' : ''))) return;
   _pla.busy = true;
   var g = document.getElementById('plaGo'); if (g) { g.disabled = true; g.textContent = '연결 중…'; }
@@ -8126,7 +8158,8 @@ async function plAttachSubmit(){
     plAttachClose();
     try { if (typeof payLinkList === 'function' && document.getElementById('plList')) payLinkList(); } catch (_e1) {}
     try { if (typeof _tkSyncFromServer === 'function') _tkSyncFromServer(true); } catch (_e2) {}
-    try { if (typeof tcalLoadPurchases === 'function') tcalLoadPurchases(); } catch (_e3) {}
+    // 캘린더 날짜 상세가 열려 있으면 다시 그린다 — 안 그리면 취소된 수동 좌석의 수정·×·💳 가 남아 있었다(적대 리뷰)
+    try { if (typeof tcalLoadPurchases === 'function') { await tcalLoadPurchases(); if (typeof tcalRender === 'function') tcalRender(); if (typeof _tcalSelectedDate !== 'undefined' && _tcalSelectedDate && typeof tcalRenderDetail === 'function') tcalRenderDetail(_tcalSelectedDate); } } catch (_e3) {}
   } catch (e) {
     showToast('⚠', '연결하지 못했습니다', String(e && e.message || e).slice(0, 100));
   } finally {
@@ -8134,8 +8167,27 @@ async function plAttachSubmit(){
     if (g) { g.disabled = false; g.textContent = '회원 예약으로 연결'; }
   }
 }
+// 「좌석 예약이 아님」 — 목록·띠에서 뺀다(서버 payload.attach_dismissed · 되돌리기는 SQL 또는 같은 RPC p_on=false)
+async function plAttachDismiss(){
+  if (_pla.busy) return;
+  var c = _plaCharge(); if (!c) { showToast('⚠', '결제 선택', '뺄 결제를 고르세요'); return; }
+  if (!confirm('이 결제를 「좌석 예약 아님」으로 표시하고 목록에서 뺄까요?\n\n' + _plaChargeLabel(c) + '\n\n결제·환불은 그대로입니다(자유 금액 · 슈퍼어드민 환불).')) return;
+  _pla.busy = true;
+  try {
+    var note = String((document.getElementById('plaNote') || {}).value || '').trim();
+    var r = await window.sb.rpc('taam_pay_link_unattached_dismiss', { p_charge_id: c.id, p_on: true, p_note: note || null });
+    if (r.error) { var m = String(r.error.message || ''); showToast('⚠', '빼지 못했습니다', /does not exist|Could not find the function/i.test(m) ? '서버 준비 필요 — 20261023_pay_link_member_visible.sql' : m.slice(0, 90)); return; }
+    showToast('✓', '목록에서 뺐습니다', '좌석 예약이 아닌 결제');
+    _pla.busy = false;
+    var keep = c.id; plAttachClose();
+    try { if (typeof payLinkList === 'function' && document.getElementById('plList')) payLinkList(); } catch (_e1) {}
+    if ((_pla.rows || []).filter(function(x){ return x.id !== keep; }).length) plAttachOpen({});
+  } catch (e) { showToast('⚠', '빼지 못했습니다', String(e && e.message || e).slice(0, 90)); }
+  finally { _pla.busy = false; }
+}
 window.plAttachOpen = plAttachOpen; window.plAttachClose = plAttachClose; window._plaPickCharge = _plaPickCharge; window._plaLoadMan = _plaLoadMan;
 window.plaMemberSearch = plaMemberSearch; window.plaMemberPick = plaMemberPick; window.plAttachSubmit = plAttachSubmit; window._pla = _pla;
+window._plaManPick = _plaManPick; window._plaMemberClear = _plaMemberClear; window.plAttachDismiss = plAttachDismiss; window._plaCollect = _plaCollect;
 function _plBtn(color){ return 'border:1px solid #e0ddd8;border-radius:7px;background:#fff;padding:3px 8px;font-family:inherit;font-size:10.5px;font-weight:800;color:' + (color || '#6b645b') + ';cursor:pointer;'; }
 function payLinkCopyTok(tok){ _kskClip(_plUrl(tok), '결제 링크를 복사했습니다'); }
 // 🆕 2026-10-19 미결제 링크 금액 변경 — 서버 taam_pay_link_set_amount(슈퍼어드민 · pending · 티켓/자유 금액 · 사유 필수). 결제된 건은 환불로
@@ -19277,10 +19329,17 @@ function _notifL10nBody(body){
   m = s0.match(/^(.+?) — 재구매 제한이 풀려 지금 예약하실 수 있습니다$/);
   if(m) return [s0, m[1] + ' — the repurchase limit has lifted, you can book now', m[1] + ' — 再購入制限が解除され、今すぐ予約できます'][li];
   // 🆕 2026-10-23 결제 링크: "{…}( · N인) — 예약 내역에서 확인하실 수 있습니다" · "{…} · N인 — 결제하신 예약이 예약 내역에 추가되었습니다" · "{…} · 금액 — 감사합니다"
+  var _plRestL = function(head){   // 「스시 사이토 · 2027.03.15 12:00」 → 매장 이름만 언어별로
+    var parts = String(head).split(' · ');
+    try { if(typeof _tbRestName === 'function') parts[0] = _tbRestName(parts[0], null, li === 1 ? 'en' : 'ja') || parts[0]; } catch(_r){}
+    return parts.join(' · ');
+  };
   m = s0.match(/^(.+?)(?: · (\d+)인)? — 예약 내역에서 확인하실 수 있습니다$/);
-  if(m) return [s0, m[1] + (m[2] ? ' · ' + m[2] + (m[2] === '1' ? ' guest' : ' guests') : '') + ' — see it in your bookings', m[1] + (m[2] ? ' · ' + m[2] + '名' : '') + ' — 予約履歴でご確認いただけます'][li];
+  if(m) return [s0, _plRestL(m[1]) + (m[2] ? ' · ' + m[2] + (m[2] === '1' ? ' guest' : ' guests') : '') + ' — see it in your bookings', _plRestL(m[1]) + (m[2] ? ' · ' + m[2] + '名' : '') + ' — 予約履歴でご確認いただけます'][li];
   m = s0.match(/^(.+?) · (\d+)인 — 결제하신 예약이 예약 내역에 추가되었습니다$/);
-  if(m) return [s0, m[1] + ' · ' + m[2] + (m[2] === '1' ? ' guest' : ' guests') + ' — the booking you paid for is now in your bookings', m[1] + ' · ' + m[2] + '名 — お支払い済みのご予約が予約履歴に追加されました'][li];
+  if(m) return [s0, _plRestL(m[1]) + ' · ' + m[2] + (m[2] === '1' ? ' guest' : ' guests') + ' — the booking you paid for is now in your bookings', _plRestL(m[1]) + ' · ' + m[2] + '名 — お支払い済みのご予約が予約履歴に追加されました'][li];
+  m = s0.match(/^멤버십 ([MT]) (가입|갱신 \(연회비\)) · (.+) — 감사합니다$/);
+  if(m) return [s0, 'TAAM Membership ' + m[1] + (m[2] === '가입' ? ' (new)' : ' (renewal)') + ' · ' + m[3] + ' — thank you', 'TAAM メンバーシップ ' + m[1] + (m[2] === '가입' ? '(ご入会)' : '(更新)') + ' · ' + m[3] + ' — ありがとうございます'][li];
   m = s0.match(/^(.+?) — 감사합니다$/);
   if(m) return [s0, m[1] + ' — thank you', m[1] + ' — ありがとうございます'][li];
   // 🆕 2026-10-22 협의 구매 허용: "{매장} · {날짜} {시간} — TAAM 과 협의된 예약을 지금 결제하실 수 있습니다"
@@ -19753,6 +19812,12 @@ function handleNotifClick(url){
       if(typeof openReservationInvitePayPopup === 'function'){
         setTimeout(function(){ openReservationInvitePayPopup(m[1]); }, 100);
       }
+      return;
+    }
+    // 🆕 2026-10-23 /?open_ticket_hist=1 → 티켓 구매 내역 (결제 링크 결제 완료 · 예약 연결 알림)
+    if(/open_ticket_hist=1/.test(url)){
+      try { closePage('notificationsListPage'); } catch(_){}
+      setTimeout(function(){ if(typeof openPage === 'function' && typeof renderTicketHist === 'function') openPage('ticketHistPage', renderTicketHist); }, 100);
       return;
     }
     // /?open_deposit_hist=1 → 예치금 내역 페이지
@@ -41397,7 +41462,11 @@ function getDmItems(idx){
   }
   // 🆕 2026.08: 운영용 행(캘린더 수동 연동 MAN- / 초대 좌석 홀드 INVH-)은 예치금 반환 대상 아님 — 제외
   src = src.filter(function(h){
-    return !(h.extra_data && (h.extra_data.manualEntry || h.extra_data.inviteHold));
+    if (h.extra_data && (h.extra_data.manualEntry || h.extra_data.inviteHold)) return false;
+    // 🆕 2026-10-23 결제 링크(LINK-)·정산(KSK-) 좌석은 카드(토스) 결제 — 예치금 반환·환불 대상이 아니다(여기서 「반환」하면 카드 돈이 예치금으로 한 번 더 나간다 · 환불은 결제 링크 목록의 「환불」)
+    var _pid = String(h.purchaseId || '');
+    if (/^(LINK|KSK)-/.test(_pid) || (h.extra_data && (h.extra_data.linkInvite || h.extra_data.kashikiri))) return false;
+    return true;
   });
 
   // 🆕 검색: 레스토랑명 + 구매자명 (세 탭 공통)
@@ -63699,6 +63768,24 @@ try{
     }, 500);
   }
 }catch(_b2){}
+// 🆕 2026-10-23 ?open_ticket_hist=1 — 결제 링크 결제 완료 · 예약 연결 푸시로 열린 경우. 스플래시가 닫히고 로그인이 확인되면 티켓 구매 내역을 연다(최대 20초)
+try{
+  if(/[?&]open_ticket_hist=1/.test(String(location.search || ''))){
+    try{ history.replaceState(null, '', location.pathname); }catch(_h3){}
+    var _othTries = 0, _othBusy = false, _othTimer = setInterval(function(){
+      _othTries++;
+      if(_othTries > 40){ clearInterval(_othTimer); return; }
+      if(_othBusy || ((typeof _splashIsShowing === 'function') && _splashIsShowing()) || !window.sb || !window.sb.auth) return;
+      _othBusy = true;
+      window.sb.auth.getSession().then(function(r){
+        _othBusy = false;
+        if(!(r && r.data && r.data.session)) return;
+        clearInterval(_othTimer);
+        try{ if(typeof openPage === 'function' && typeof renderTicketHist === 'function') openPage('ticketHistPage', renderTicketHist); }catch(_e){}
+      }, function(){ _othBusy = false; });
+    }, 500);
+  }
+}catch(_b3){}
 // (2026-10-19) /pay 의 「게스트 회원으로 가입하기」가 여는 ?invite=코드 는 종전 _autoFillInviteFromUrl(코드 화면 열기 · 입력칸 채움 · verify-invite welcome)이 그대로 처리한다 — 여기서 따로 건드리지 않는다(먼저 replaceState 로 지우면 그 경로가 코드를 못 읽는다 · 적대 리뷰)
 // 캘린더가 그려지면(데이터 준비됨) 기다리던 회차를 연다
 if(typeof pcalRenderAll === 'function'){
@@ -63973,13 +64060,13 @@ function tcalRenderDetail(dateStr) {
                 : (e.amount ? ('₩'+e.amount.toLocaleString()) : '') + (e.agency>0 ? ' <span style="color:#9A9486;font-weight:600;">(대행비 ₩'+e.agency.toLocaleString()+')</span>' : ''));
           var del = (e.type==='manual') ? '<span onclick="tcalManualDelete(\''+e.mid+'\')" style="cursor:pointer;color:#c33;font-size:17px;font-weight:700;line-height:1;padding:2px 4px;">×</span>'
                   : (_isKsk ? '<span onclick="tcalKskRowInfo()" title="정산 화면에서 청구를 취소·환불하면 좌석이 자동으로 풀립니다" style="cursor:pointer;color:#9A9486;font-size:15px;font-weight:700;line-height:1;padding:2px 4px;">ⓘ</span>'
-                  : (_isLink && (isSuper || _currentRole==='admin') ? '<span onclick="tcalCancelLinkRow(\''+e.pid+'\')" title="' + (_linkPaid ? '환불(규정 적용) · 좌석 취소' : '링크 끊기 · 좌석 취소') + '" style="cursor:pointer;color:#c33;font-size:17px;font-weight:700;line-height:1;padding:0 4px;">×</span>'
+                  : (_isLink && isSuper ? '<span onclick="tcalCancelLinkRow(\''+e.pid+'\')" title="' + (_linkPaid ? '환불(규정 적용) · 좌석 취소' : '링크 끊기 · 좌석 취소') + '" style="cursor:pointer;color:#c33;font-size:17px;font-weight:700;line-height:1;padding:0 4px;">×</span>'
                   : ((_isMan||_isHold) && (isSuper || _currentRole==='admin') ? '<span onclick="tcalCancelLinkedRow(\''+e.pid+'\')" style="cursor:pointer;color:#c33;font-size:17px;font-weight:700;line-height:1;padding:2px 4px;">×</span>' : '')));
           // 🆕 2026.08-29: 인원 변경 — 실제 결제 건에만. 수동(MAN-)·초대홀드(INVH-)는
           //   결제가 없어 돈을 계산할 게 없다. 그건 ×(취소)로 지우는 게 맞다.
           var pxBtn = (_isKsk && e.pid && (isSuper || _currentRole==='admin'))
             ? '<span onclick="kskSeatPaxOpen(\''+String(e.pid).replace(/'/g,"\\'")+'\','+(parseInt(e.pax)||1)+')" title="정산 좌석 인원 — 조 인원을 고쳐 좌석을 맞춥니다" style="cursor:pointer;color:#8A5A1E;font-size:11px;font-weight:800;border:1px solid #EEDCBB;background:#FBF2E0;border-radius:6px;padding:2px 6px;">인원</span>'
-            : (!_isMan && !_isHold && !_isKsk && e.pid && (e.pax||0) > 1 && (isSuper || _currentRole==='admin'))
+            : (!_isMan && !_isHold && !_isKsk && !_isLink && e.pid && (e.pax||0) > 1 && (isSuper || _currentRole==='admin'))   // 🔧 2026-10-23 LINK- 는 카드 결제 — 「인원」이 줄인 몫을 예치금으로 돌려줘 돈이 두 번 나갔다(서버 trg_taam_guard_link_pax 도 막는다)
             ? '<span onclick="paxChangeOpen(\''+String(e.pid).replace(/'/g,"\\'")+'\')" title="인원 변경" style="cursor:pointer;color:#8A5A1E;font-size:11px;font-weight:800;border:1px solid #EEDCBB;background:#FBF2E0;border-radius:6px;padding:2px 6px;">인원</span>'
             : '';
           // 🆕 2026-10-14 수동 추가 내역 수정 — 좌석 연동 행(MAN-)·기록(daegwan_manual) 둘 다. 연결 티켓·날짜는 못 바꾼다(취소 후 재추가)

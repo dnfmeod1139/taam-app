@@ -16,6 +16,9 @@
 --   2. taam_pay_link_unattached(limit) — 회원 예약 내역에 안 보이는 결제 목록(좌석 행 없음 · 또는 좌석이 회원 것 아님).
 --   3. trg_taam_pay_link_member_notify — 청구가 paid 가 되는 순간 그 청구의 회원(user_id)에게 알림함 + 푸시(용도별 문구 · 결제 통화 금액만 — 원화·환율은 안 적는다).
 --      결제 확정을 막지 않는다(예외는 warning). 푸시는 _taam_member_push(app_config.restock_push 의 Vault 이름·URL 재사용 · send-push 에 uid:<회원>).
+--   4. (적대 리뷰 · 같은 날) 결제 링크 좌석(LINK-)의 인원 변경 차단(카드 결제를 예치금으로 돌려주는 길 · trg_taam_guard_link_pax · 원장 ticket_pax_change 거절) ·
+--      링크 환불 견적은 슈퍼어드민·서버만(매장 어드민이 협의 금액을 읽던 것 · 본문 앞에 검사 한 줄 덧댐) · taam_admin_push 를 anon·회원이 못 부르게 ·
+--      결제 알림은 회원(role user)에게만 · 정산 청구 제외 · 「알림 전체 끔」 존중 · 「예약 아님」으로 목록에서 빼기(taam_pay_link_unattached_dismiss).
 -- 회귀: bash sql/_test/t_pay_link_attach.sh
 -- ═══════════════════════════════════════════════════════════════
 
@@ -28,6 +31,10 @@ as $$
 declare v_cfg jsonb; v_name text; v_url text; v_jwt text; v_req bigint; v_payload jsonb;
 begin
   if p_uid is null then return jsonb_build_object('ok', false, 'reason', 'no_uid'); end if;
+  -- 「알림 전체 끔」(notif_prefs.all = false)은 존중한다 — send-push 는 이 카테고리를 설정 키로 모른다(인앱 알림함은 그대로 간다)
+  if exists (select 1 from public.profiles p where p.id = p_uid and coalesce(to_jsonb(p)->'notif_prefs'->>'all', '') = 'false') then
+    return jsonb_build_object('ok', false, 'reason', 'prefs_off');
+  end if;
   if to_regclass('public.app_config') is null then return jsonb_build_object('ok', false, 'reason', 'no_config'); end if;
   select value::jsonb into v_cfg from public.app_config where key = 'restock_push';
   v_name := v_cfg->>'vault_secret'; v_url := v_cfg->>'url';
@@ -176,7 +183,7 @@ begin
                                'attachedBy', auth.uid(), 'attachedAt', now(), 'attachedFrom', coalesce(v_ch.purpose, 'custom'))
             || case when v_rep_pid is not null then jsonb_build_object('convertedFrom', v_rep_pid) else '{}'::jsonb end
             || case when coalesce(v_ch.amount_krw, 0) <> v_list then jsonb_build_object('priceOverride', true) else '{}'::jsonb end,
-            now());
+            coalesce(v_ch.approved_at, now()));   -- 회원 「구매 일시」 = 결제한 날(30분 전액 환불 창의 기준 · 연결한 날이 아니다)
     v_mode := 'created';
   end if;
 
@@ -185,11 +192,14 @@ begin
      set purpose = 'ticket', link_invite = true, user_id = v_user,
          title = coalesce(v_tp.rest_name, title),
          subtitle = coalesce(to_char(v_vd, 'YYYY.MM.DD'), '') || case when coalesce(v_vtime, '') <> '' then ' ' || v_vtime else '' end,
-         payload = coalesce(payload, '{}'::jsonb)
+         payload = (coalesce(payload, '{}'::jsonb) - 'attach_dismissed')
                    || jsonb_build_object('ticket_id', v_tp.id::text, 'pax', p_pax, 'member_uid', v_user, 'member_name', v_name,
                                          'attached_purchase_id', v_pid, 'attached_at', now(), 'attached_mode', v_mode)
                    || case when coalesce(v_ch.purpose, 'custom') <> 'ticket' then jsonb_build_object('attached_from', coalesce(v_ch.purpose, 'custom'),
                                                                                                      'orig_title', v_ch.title, 'orig_subtitle', v_ch.subtitle) else '{}'::jsonb end
+                   -- 판매 현황이 「⚠ 판매액과 다름」 대신 「✎ 금액 수정」으로 읽게 — 협의 금액(정가와 다른 결제)이면 표시. 이미 있으면 그대로
+                   || case when v_mode = 'created' and not (coalesce(v_ch.payload, '{}'::jsonb) ? 'price_override')
+                           then jsonb_build_object('price_override', coalesce(v_ch.amount_krw, 0) <> coalesce(v_list, 0)) else '{}'::jsonb end
    where id = v_ch.id;
 
   v_line := '[예약 연결 ' || to_char(now() at time zone 'Asia/Seoul', 'MM-DD HH24:MI') || '] ' || coalesce(v_tp.rest_name, '') || ' ' || coalesce(to_char(v_vd, 'YYYY.MM.DD'), '')
@@ -253,6 +263,7 @@ begin
          and coalesce(c.purpose, 'custom') in ('custom', 'ticket')
          and (c.event_id is null or coalesce(c.link_invite, false))
          and (s.id is null or coalesce(s.extra_data->>'memberUid', '') = '')
+         and coalesce(c.payload->>'attach_dismissed', '') <> 'true'   -- 「예약 아님」(와인 추가분 · 보증금 등)으로 뺀 결제
        order by coalesce(c.approved_at, c.created_at) desc
        limit least(greatest(coalesce(p_limit, 50), 1), 200)
     ) x;
@@ -270,9 +281,11 @@ declare v_role text; v_title text; v_body text; v_url text; v_amt text; v_en jso
 begin
   if coalesce(new.status, '') <> 'paid' or coalesce(old.status, '') = 'paid' then return new; end if;
   if new.user_id is null then return new; end if;
+  -- 대관 정산 청구(회차 있음 · 링크 초대 아님)는 회원 알림을 보내지 않는다 — 「구매자 불러오기」가 운영 행(KSK-·비회원 LINK-)의 어드민 uid 를 실을 수 있고, 정산 금액은 매장 어드민에게 가면 안 된다(적대 리뷰)
+  if new.event_id is not null and not coalesce(new.link_invite, false) then return new; end if;
   begin
     select coalesce(role, 'user') into v_role from public.profiles where id = new.user_id and deleted_at is null;
-    if v_role is null then return new; end if;
+    if v_role is null or v_role in ('admin', 'superadmin', 'super_admin') then return new; end if;   -- 회원에게만
     v_pur := coalesce(new.purpose, 'custom');
     v_amt := public._taam_ksk_money(new.pay_currency, new.pay_amount, new.amount_krw);   -- 결제 통화 그대로(원화·환율은 회원에게 안 적는다)
     v_pax := nullif(new.payload->>'pax', '')::int;
@@ -295,10 +308,14 @@ begin
                         || case when v_pax is not null then ' · ' || v_pax || '名' else '' end || ' — 予約履歴でご確認いただけます');
     elsif v_pur = 'membership' then
       v_title := '멤버십 결제가 완료되었습니다';
-      v_body := v_lab || ' · ' || v_amt || ' — 감사합니다';
+      v_body := coalesce(nullif(new.title, ''), '멤버십') || ' · ' || v_amt || ' — 감사합니다';   -- 「멤버십 M 가입 · $9,900.00 — 감사합니다」(부제의 회원 이름은 뺀다)
       v_url := '/';
-      v_en := jsonb_build_object('title', 'Membership payment complete', 'body', v_lab || ' · ' || v_amt || ' — thank you');
-      v_ja := jsonb_build_object('title', 'メンバーシップのお支払いが完了しました', 'body', v_lab || ' · ' || v_amt || ' — ありがとうございます');
+      v_en := jsonb_build_object('title', 'Membership payment complete',
+                'body', 'TAAM Membership' || coalesce(' ' || nullif(new.payload->>'tier', ''), '')
+                        || case new.payload->>'kind' when 'join' then ' (new)' when 'renew' then ' (renewal)' else '' end || ' · ' || v_amt || ' — thank you');
+      v_ja := jsonb_build_object('title', 'メンバーシップのお支払いが完了しました',
+                'body', 'TAAM メンバーシップ' || coalesce(' ' || nullif(new.payload->>'tier', ''), '')
+                        || case new.payload->>'kind' when 'join' then '(ご入会)' when 'renew' then '(更新)' else '' end || ' · ' || v_amt || ' — ありがとうございます');
     else
       v_title := '결제가 완료되었습니다';
       v_body := v_lab || ' · ' || v_amt;
@@ -320,6 +337,91 @@ drop trigger if exists trg_taam_pay_link_member_notify on public.kashikiri_charg
 create trigger trg_taam_pay_link_member_notify after update of status on public.kashikiri_charges
   for each row execute function public.taam_pay_link_member_notify();
 
+-- ── 4) 결제 링크 좌석(LINK-)의 인원은 바꾸지 않는다 ──
+--   「인원」(taam_change_party_size)은 카드 결제를 모르는 좌석을 예치금 결제로 보고 줄인 몫을 예치금으로 돌려준다 — LINK- 는 카드(토스) 결제라
+--   돈이 두 번 나간다(예치금 + 나중의 링크 환불 · 환불 견적은 줄어든 인원으로 대행비를 덜 뺀다). 인원 변경은 링크를 환불하고 새로 만든다.
+--   정산 좌석(KSK-)은 조 인원 RPC 로만 바뀌고(taam_ksk_seat_set_pax · 예치금 없음), 원장 쪽에서 막는다.
+--   SQL Editor 에서 꼭 고쳐야 하면: set local taam.link_pax_ok = '1';
+create or replace function public.taam_guard_link_pax()
+returns trigger
+language plpgsql security definer set search_path = public
+as $$
+begin
+  if coalesce(old.purchase_id, '') like 'LINK-%' and new.party_size is distinct from old.party_size
+     and coalesce(current_setting('taam.link_pax_ok', true), '') <> '1' then
+    raise exception 'LINK_PAX_CHANGE: 결제 링크(카드) 좌석의 인원은 바꿀 수 없습니다 — 결제 링크 목록에서 환불한 뒤 새 링크로 받으세요' using errcode = '42501';
+  end if;
+  return new;
+end $$;
+drop trigger if exists trg_taam_guard_link_pax on public.tickets;
+create trigger trg_taam_guard_link_pax before update of party_size on public.tickets
+  for each row execute function public.taam_guard_link_pax();
+
+create or replace function public.taam_guard_ledger_card_pax()
+returns trigger
+language plpgsql security definer set search_path = public
+as $$
+begin
+  if new.change_type = 'ticket_pax_change' and coalesce(new.metadata->>'purchase_id', '') ~ '^(LINK|KSK)-'
+     and coalesce(current_setting('taam.link_pax_ok', true), '') <> '1' then
+    raise exception 'LINK_PAX_CHANGE: 카드(결제 링크·정산) 좌석의 인원 변경을 예치금으로 돌려줄 수 없습니다' using errcode = '42501';
+  end if;
+  return new;
+end $$;
+drop trigger if exists trg_taam_guard_ledger_card_pax on public.deposit_transactions;
+create trigger trg_taam_guard_ledger_card_pax before insert on public.deposit_transactions
+  for each row execute function public.taam_guard_ledger_card_pax();
+
+-- ── 5) 링크 환불 견적은 슈퍼어드민·서버만 — 매장 어드민이 좌석 행의 chargeId 로 협의 금액·payment_key 를 읽던 것(20260929 부터 · 이 연결로 자유 금액 결제까지 닿는다) ──
+--   본문은 그대로 두고 첫 begin 뒤에 검사 한 줄만 덧댄다(이미 있으면 그대로). Edge kashikiri-refund 는 service_role(auth.uid() null)이라 지난다.
+drop table if exists _plmv_q; create temp table _plmv_q(v text);
+do $q$
+declare v_def text; v_new text; v_n int;
+begin
+  if to_regprocedure('public.taam_link_invite_refund_quote(text)') is null then insert into _plmv_q values ('❌ 함수가 없다'); return; end if;
+  v_def := pg_get_functiondef('public.taam_link_invite_refund_quote(text)'::regprocedure);
+  if position('PLMV_QUOTE_GUARD' in v_def) > 0 then insert into _plmv_q values ('✅ 이미 검사 있음'); return; end if;
+  v_n := (length(v_def) - length(replace(v_def, E'\nbegin\n', ''))) / length(E'\nbegin\n');
+  if v_n < 1 then insert into _plmv_q values ('❌ 본문에서 begin 을 못 찾았다 — 건너뜀'); return; end if;
+  v_new := regexp_replace(v_def, E'\nbegin\n',
+             E'\nbegin\n  -- PLMV_QUOTE_GUARD 2026-10-23 슈퍼어드민·서버만 (매장 어드민·회원은 협의 금액을 읽지 않는다)\n'
+             || E'  if auth.uid() is not null and not coalesce(public._taam_uid_is_super(), false) then\n'
+             || E'    raise exception ''FORBIDDEN: 결제 링크 환불은 슈퍼어드민만 합니다'' using errcode = ''42501'';\n  end if;\n', '');   -- 첫 번째만
+  execute v_new;
+  insert into _plmv_q values ('✅ 검사 덧댐');
+end $q$;
+
+-- ── 6) taam_admin_push 는 DB 안(트리거·크론)에서만 — anon·회원이 REST 로 슈퍼어드민 폰에 아무 글이나 보내던 것(20261013 부터 · public 만 막혀 있었다) ──
+do $r$
+begin
+  if to_regprocedure('public.taam_admin_push(text,text,text,text,text)') is not null then
+    revoke execute on function public.taam_admin_push(text,text,text,text,text) from public, anon, authenticated;
+  end if;
+end $r$;
+
+-- ── 7) 「예약 아님」 — 와인 추가분·보증금처럼 좌석 예약이 아닌 결제를 목록에서 뺀다(되돌릴 수 있다) ──
+create or replace function public.taam_pay_link_unattached_dismiss(p_charge_id uuid, p_on boolean default true, p_note text default null)
+returns jsonb
+language plpgsql volatile security definer set search_path = public
+as $$
+declare v_ch public.kashikiri_charges%rowtype;
+begin
+  if not coalesce(public._taam_fee_caller_ok(), false) then raise exception 'FORBIDDEN' using errcode = '42501'; end if;
+  select * into v_ch from public.kashikiri_charges where id = p_charge_id for update;
+  if not found then raise exception 'CHARGE_NOT_FOUND' using errcode = 'P0002'; end if;
+  update public.kashikiri_charges
+     set payload = case when coalesce(p_on, true) then coalesce(payload, '{}'::jsonb) || jsonb_build_object('attach_dismissed', true)
+                        else coalesce(payload, '{}'::jsonb) - 'attach_dismissed' end
+   where id = v_ch.id;
+  insert into public.kashikiri_charge_admin (charge_id, note, created_by)
+  values (v_ch.id, '[' || case when coalesce(p_on, true) then '예약 아님' else '예약 아님 해제' end || ' ' || to_char(now() at time zone 'Asia/Seoul', 'MM-DD HH24:MI') || ']'
+                   || coalesce(' ' || nullif(btrim(coalesce(p_note, '')), ''), ''), auth.uid())
+  on conflict (charge_id) do update set note = coalesce(nullif(public.kashikiri_charge_admin.note, '') || E'\n', '') || excluded.note;
+  return jsonb_build_object('ok', true, 'dismissed', coalesce(p_on, true));
+end $$;
+revoke all on function public.taam_pay_link_unattached_dismiss(uuid, boolean, text) from public, anon;
+grant execute on function public.taam_pay_link_unattached_dismiss(uuid, boolean, text) to authenticated;
+
 -- ── 확인 — 한 표 ──
 drop table if exists _plmv_chk; create temp table _plmv_chk(k text, v text);
 insert into _plmv_chk
@@ -334,6 +436,13 @@ union all select '③ anon 은 못 부른다 · 회원은 도우미를 못 부�
 union all select '④ 도우미가 기대는 함수 (taam_ticket_price_krw · _taam_pu_visit_date · _taam_ksk_money · _taam_fee_caller_ok)',
        case when to_regprocedure('public.taam_ticket_price_krw(text,integer)') is not null and to_regprocedure('public._taam_pu_visit_date(text)') is not null
              and to_regprocedure('public._taam_ksk_money(text,numeric,integer)') is not null and to_regprocedure('public._taam_fee_caller_ok()') is not null then '✅' else '❌' end
+union all select '⑥ 링크 좌석 인원 가드 · 원장 가드', case when exists (select 1 from pg_trigger where tgname = 'trg_taam_guard_link_pax' and not tgisinternal)
+                                               and exists (select 1 from pg_trigger where tgname = 'trg_taam_guard_ledger_card_pax' and not tgisinternal) then '✅' else '❌' end
+union all select '⑦ 링크 환불 견적 — 슈퍼어드민·서버만', (select v from _plmv_q limit 1)
+union all select '⑧ taam_admin_push — anon·회원 실행 불가', case when to_regprocedure('public.taam_admin_push(text,text,text,text,text)') is null then '✅ (함수 없음)'
+                                                      when not has_function_privilege('anon', 'public.taam_admin_push(text,text,text,text,text)', 'execute')
+                                                       and not has_function_privilege('authenticated', 'public.taam_admin_push(text,text,text,text,text)', 'execute') then '✅' else '❌' end
+union all select '⑨ 「예약 아님」 RPC', case when to_regprocedure('public.taam_pay_link_unattached_dismiss(uuid,boolean,text)') is not null then '✅' else '❌' end
 union all select '⑤ 회원 예약 내역에 안 보이는 결제 (정보)', (select count(*) from public.kashikiri_charges c
                                                     where c.status = 'paid' and coalesce(c.purpose, 'custom') in ('custom', 'ticket') and (c.event_id is null or coalesce(c.link_invite, false))
                                                       and not exists (select 1 from public.tickets t where t.extra_data->>'chargeId' = c.id::text
