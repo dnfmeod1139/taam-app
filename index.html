@@ -30992,6 +30992,21 @@ function _tkPayBreakdown(h){
   };
 }
 window._tkPayBreakdown = _tkPayBreakdown;
+// 🆕 2026-10-23 카드 환불 완료 카드에 「언제 · 어떻게」 — 「예전에 끝난 카드」와 「방금 처리한 카드」를 가릴 수 있게
+function _crfDoneLine(h){
+  var c = (h && h.extra_data && h.extra_data.card_refund_pending) || {};
+  var at = '';
+  try {
+    var d = c.refunded_at ? new Date(c.refunded_at) : null;
+    if(d && !isNaN(d.getTime())){
+      var k = new Date(d.getTime() + 9 * 3600 * 1000), p2 = function(n){ return (n < 10 ? '0' : '') + n; };
+      at = k.getUTCFullYear() + '.' + p2(k.getUTCMonth() + 1) + '.' + p2(k.getUTCDate()) + ' ' + p2(k.getUTCHours()) + ':' + p2(k.getUTCMinutes());
+    }
+  } catch(_e){}
+  var how = c.via === 'toss_api' ? '앱에서 토스 승인취소' : (c.via === 'manual' ? '「완료 표시」(상점관리자 처리)' : '「완료 표시」');
+  return (at ? at + ' 완료 · ' : '') + how + ' · 회원에게 완료 알림 발송됨';
+}
+window._crfDoneLine = _crfDoneLine;
 
 function ticketHistRender(idx){
   var list = document.getElementById('ticketHistList');
@@ -41519,8 +41534,9 @@ function getDmItems(idx){
       var pa = (a.extra_data.card_refund_pending.status === 'done') ? 1 : 0;
       var pb = (b.extra_data.card_refund_pending.status === 'done') ? 1 : 0;
       if(pa !== pb) return pa - pb;                     // pending 먼저
-      var ra = a.extra_data.card_refund_pending.requested_at || '';
-      var rb = b.extra_data.card_refund_pending.requested_at || '';
+      var ka = pa ? 'refunded_at' : 'requested_at';     // 🆕 2026-10-23 완료 칸은 완료 시각 최신 먼저(방금 처리한 카드가 「처리 완료」 맨 위)
+      var ra = a.extra_data.card_refund_pending[ka] || a.extra_data.card_refund_pending.requested_at || '';
+      var rb = b.extra_data.card_refund_pending[ka] || b.extra_data.card_refund_pending.requested_at || '';
       return String(rb).localeCompare(String(ra));      // 최신 먼저
     });
   } else { // 환불불가
@@ -41632,6 +41648,12 @@ function renderDmMgmtList(idx){
     return;
   }
 
+  // 🆕 2026-10-23 카드환불 탭: 「미처리」와 「처리 완료」를 나눠 보여 준다 — 완료 카드가 미처리 카드 바로 밑에 붙어 있어,
+  //   방금 하나를 처리했을 때 예전에 끝난 카드까지 같이 처리된 것처럼 보였다(실제로는 카드마다 따로 처리된다).
+  var _crfDoneAt = function(h){ var c = h && h.extra_data && h.extra_data.card_refund_pending; return !!(c && String(c.status) === 'done'); };
+  var _crfFirstDone = (idx === 3) ? items.findIndex(_crfDoneAt) : -1;
+  var _crfPendN = (idx === 3) ? items.filter(function(h){ return !_crfDoneAt(h); }).length : 0;
+  var _crfSec = function(t, sub, col){ return '<div style="margin:14px 2px 6px;display:flex;align-items:baseline;gap:8px;" data-lang-lock="ko"><span style="font-size:12.5px;font-weight:800;color:' + col + ';">' + t + '</span><span style="font-size:10.5px;color:#9a9486;">' + sub + '</span></div>'; };
   list.innerHTML = items.map(function(h, itemIdx){
     // itemIdx = items 배열 내 인덱스 (openDmPopup 에 넘김)
     // 이후 dm 팝업 함수들은 _dmCurrentPurchaseIdx 를 items 배열 인덱스로 해석
@@ -41801,7 +41823,7 @@ function renderDmMgmtList(idx){
           +   (_cdone ? '✓ 카드 환불 완료 ₩' : '🔴 카드 환불 필요 ₩') + bdm.cardRefund.toLocaleString()
           + '</div>'
           + (_cdone
-              ? '<div style="margin-top:3px;font-size:10.5px;color:#6A8A76;">회원에게 완료 알림 발송됨</div>'
+              ? '<div style="margin-top:3px;font-size:10.5px;color:#6A8A76;">' + _crfDoneLine(h) + '</div>'
               : ('<div style="margin-top:3px;font-size:10.5px;color:#8C7A70;line-height:1.5;">앱에서 바로 토스 승인취소를 실행하거나, 상점관리자에서 처리한 뒤 「완료 표시」를 누르세요 (회원에게 알림 발송)</div>'
                  + '<button onclick="tkCardRefundViaToss(\''+h.purchaseId+'\')" style="width:100%;margin-top:8px;padding:9px;border:none;border-radius:8px;background:#1E5BD8;color:#fff;font-family:inherit;font-size:12px;font-weight:800;cursor:pointer;">💳 토스 승인취소 실행 · ₩'+bdm.cardRefund.toLocaleString()+'</button>'
                  + '<button onclick="tkMarkCardRefundDone(\''+h.purchaseId+'\')" style="width:100%;margin-top:6px;padding:8px;border:1px solid #d8d2c6;border-radius:8px;background:#fff;color:#6a635a;font-family:inherit;font-size:11.5px;font-weight:700;cursor:pointer;">상점관리자에서 처리함 · 완료 표시</button>'))
@@ -41810,7 +41832,10 @@ function renderDmMgmtList(idx){
       cardBox += '</div>';
     }
 
-    return '<div class="dm-item">'
+    var _crfHead = '';
+    if(idx === 3 && itemIdx === 0 && _crfPendN > 0) _crfHead = _crfSec('미처리 ' + _crfPendN + '건', '카드마다 따로 처리합니다 — 버튼을 누른 카드만 바뀝니다', '#B23A2E');
+    if(idx === 3 && itemIdx === _crfFirstDone) _crfHead = _crfSec('처리 완료 ' + (items.length - _crfFirstDone) + '건', '최근 완료 순', '#1E7A46');
+    return _crfHead + '<div class="dm-item">'
       +'<div class="dm-item-head"><div class="dm-item-name">'+rName+visitStatus+'</div>'
       +'<button onclick="showBuyerInfo('+globalIdx+')" style="flex-shrink:0;padding:4px 10px;background:#f0ede8;border:none;border-radius:6px;font-family:var(--font-main);font-size:11px;font-weight:700;color:#555;cursor:pointer;">구매자</button>'
       +'</div>'
@@ -41905,7 +41930,7 @@ async function tkMarkCardRefundDone(purchaseId, opts){
       if(_a) _a.extra_data = newExtra;
     } catch(_le){}
 
-    showToast('✓', opts.notifyOnly ? '토스 승인취소 완료' : '카드 환불 완료', (opts.notifyOnly ? '카드 ₩' + amt.toLocaleString() + ' 취소 · ' : '') + '회원에게 알림을 보냈습니다');
+    showToast('✓', opts.notifyOnly ? '토스 승인취소 완료' : '카드 환불 완료', rest + ' · 카드 ₩' + amt.toLocaleString() + ' · 이 건만 처리했습니다 · 회원에게 알림');
     try { if(typeof renderDmMgmtList === 'function') renderDmMgmtList(_dmCurrentTab || 0); } catch(_re){}
     try { if(typeof ticketHistRender === 'function') ticketHistRender(_ticketHistTabIdx || 0); } catch(_re2){}
   } catch(e){
@@ -46934,7 +46959,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.23-a';
+var TAAM_WEB_BUILD = '2026.10.23-b';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
