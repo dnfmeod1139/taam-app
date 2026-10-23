@@ -194,6 +194,9 @@ DB 값은 `'A'` 그대로고 **이름만** 「게스트 회원」이다. 값을 
   마이페이지 `_mpPaintMemberStart` 가 `joined_at` 으로 가입일 칸을 덮는다(함수가 옛 판이면 created_at 그대로). 「종료일」(member_until)은 손대지 않았다.
 - 서버 가드 `trg_taam_guard_membership_joined`(BEFORE INSERT/UPDATE on profiles): 회원 세션은 이 칸을 못 바꾼다 — **되돌림**(예외 아님 · role 가드와 같은 방식, 같은 UPDATE 의 다른 칸을 날리지 않게).
   `membership_joined_set_by/at` 는 트리거만 적는다(앱이 보내도 무시). 날짜는 2015-01-01 ~ 오늘(KST), 아니면 `BAD_JOINED_DATE`. 지운 것도 set_by 에 남는다.
+- ⚠ **2026-10-23 수리(빌드 `2026.10.23-c`) — 원장 헤더의 실제 가입일 「저장」·「지우기」가 10-15 부터 한 번도 안 됐다.** 버튼을 `_btn("mlJoinedSave(\'' + _uidQ + '\')", …)` 처럼 **큰따옴표 JS 문자열** 안에 썼는데, 그 안의 `\'' + _uidQ + '\'` 는
+  이어붙이기가 아니라 글자 그대로라 onclick 이 `mlJoinedSave('' + _uidQ + '')` 가 됐고 누르면 `ReferenceError: _uidQ`(그동안 실제 가입일은 SQL 시드로만 들어갔다). → `"mlJoinedSave('" + _uidQ + "')"`.
+  같은 모양(큰따옴표 리터럴 안의 `\'' + 변수 + '\'`)은 index.html 전체에서 이 둘뿐이었다(스캔). 스크래치 `mjoined.js` 가 이제 **화면의 버튼을 실제로 누른다**(종전엔 함수만 직접 불러 못 잡았다 · 옛 코드에선 ❌).
 - 날짜 키(`joined_at`·`app_signup_date`·`membership_joined_at`)는 `'YYYY-MM-DD'` 문자열 — 앱은 `_memberDateFmt` 로 시간대 변환 없이 찍는다(해외 회원 기기에서 `new Date('2024-12-05')` 가 하루 밀리는 것).
 - 앱 이전 가입자 22명 목록은 `sql/membership_joined_seed_2026-10-15.sql`(SQL Editor · `display_name` 공백 제거로 맞춘다 · 정확히 한 명일 때만 적고 ⚠/❌ 는 원장에서 손으로).
   「6/5 남기욱」은 목록 순서상 5/5 오타일 수 있어 적힌 대로 넣고 머리말에 적어 뒀다.
