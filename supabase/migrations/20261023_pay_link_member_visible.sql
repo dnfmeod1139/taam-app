@@ -85,7 +85,7 @@ declare
   v_ch public.kashikiri_charges%rowtype; v_tp public.ticket_products%rowtype; v_seat public.tickets%rowtype;
   v_user uuid; v_name text; v_phone text; v_rep_pid text; v_rep_id uuid; v_pid text; v_mode text;
   v_list bigint; v_cur text; v_fx numeric; v_fxq jsonb; v_ag_krw bigint; v_ag_pay numeric; v_vd date; v_vtime text;
-  v_note text := nullif(btrim(coalesce(p_note, '')), ''); v_line text; v_label text; v_push jsonb := null; v_en text; v_ja text; v_bko text;
+  v_ovr boolean := false; v_note text := nullif(btrim(coalesce(p_note, '')), ''); v_line text; v_label text; v_push jsonb := null; v_en text; v_ja text; v_bko text;
 begin
   if not coalesce(public._taam_fee_caller_ok(), false) then raise exception 'FORBIDDEN: 슈퍼어드민만 연결할 수 있습니다' using errcode = '42501'; end if;
   select * into v_ch from public.kashikiri_charges where id = p_charge_id for update;
@@ -170,6 +170,13 @@ begin
       end if;
     end if;
 
+    -- 정가와 다른 결제(협의 금액)인가 — 결제 통화로 비교한다(외화를 원화 정가와 비교하면 정가로 낸 외화 결제도 언제나 「수정」이 된다 · 적대 리뷰)
+    if v_cur = 'KRW' then
+      v_ovr := coalesce(v_ch.amount_krw, 0) <> v_list;
+    else
+      begin v_fxq := public.taam_ticket_price_fx(v_tp.id::text, p_pax, v_cur, v_fx); exception when others then v_fxq := null; end;
+      v_ovr := v_fxq is null or nullif(v_fxq->>'pay', '') is null or round(coalesce(v_ch.pay_amount, 0), 2) <> round((v_fxq->>'pay')::numeric, 2);
+    end if;
     v_pid := 'LINK-' || left(v_ch.id::text, 8) || '-' || (extract(epoch from clock_timestamp()) * 1000)::bigint;
     -- price 는 원화 정가 × 인원(매장 어드민이 읽는 칸 — 결제액이 아니다 · 결제액은 청구에). 협의 금액은 좌석 행에 적지 않는다(priceOverride 표시만)
     insert into public.tickets (user_id, restaurant_id, restaurant_name, ticket_product_id, ticket_type,
@@ -182,7 +189,7 @@ begin
                                'agencyFee', v_ag_krw, 'agencyPay', v_ag_pay, 'paidAt', coalesce(v_ch.approved_at, now()), 'paymentKey', v_ch.payment_key,
                                'attachedBy', auth.uid(), 'attachedAt', now(), 'attachedFrom', coalesce(v_ch.purpose, 'custom'))
             || case when v_rep_pid is not null then jsonb_build_object('convertedFrom', v_rep_pid) else '{}'::jsonb end
-            || case when coalesce(v_ch.amount_krw, 0) <> v_list then jsonb_build_object('priceOverride', true) else '{}'::jsonb end,
+            || case when v_ovr then jsonb_build_object('priceOverride', true) else '{}'::jsonb end,
             coalesce(v_ch.approved_at, now()));   -- 회원 「구매 일시」 = 결제한 날(30분 전액 환불 창의 기준 · 연결한 날이 아니다)
     v_mode := 'created';
   end if;
@@ -199,7 +206,7 @@ begin
                                                                                                      'orig_title', v_ch.title, 'orig_subtitle', v_ch.subtitle) else '{}'::jsonb end
                    -- 판매 현황이 「⚠ 판매액과 다름」 대신 「✎ 금액 수정」으로 읽게 — 협의 금액(정가와 다른 결제)이면 표시. 이미 있으면 그대로
                    || case when v_mode = 'created' and not (coalesce(v_ch.payload, '{}'::jsonb) ? 'price_override')
-                           then jsonb_build_object('price_override', coalesce(v_ch.amount_krw, 0) <> coalesce(v_list, 0)) else '{}'::jsonb end
+                           then jsonb_build_object('price_override', coalesce(v_ovr, false)) else '{}'::jsonb end
    where id = v_ch.id;
 
   v_line := '[예약 연결 ' || to_char(now() at time zone 'Asia/Seoul', 'MM-DD HH24:MI') || '] ' || coalesce(v_tp.rest_name, '') || ' ' || coalesce(to_char(v_vd, 'YYYY.MM.DD'), '')

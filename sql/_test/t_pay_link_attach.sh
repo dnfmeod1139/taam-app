@@ -119,6 +119,12 @@ B=$(att "'$CG',null,1,'$M5'")
 ok "  회원 M5 에게 → mode transfer · 그 좌석 행이 M5 소유 · memberUid · 청구 회원 M5" "transfer|$M5|$M5|$M5" "$(echo "$B" | grep -oE '"mode": "[a-z]+"' | grep -oE '[a-z]+"$' | tr -d '"')|$($P -c "select user_id||'|'||(extra_data->>'memberUid') from public.tickets where extra_data->>'chargeId'='$CG' and status='active'")|$($P -c "select user_id from public.kashikiri_charges where id='$CG'")"
 ok "  다른 회차를 고르면 → SEAT_OTHER_TICKET (좌석은 그대로)" "1" "$($P -c "update public.tickets set user_id='$SU', extra_data = extra_data - 'memberUid' where extra_data->>'chargeId'='$CG'; update public.kashikiri_charges set user_id=null where id='$CG'" >/dev/null; att "'$CG','tpS',1,'$M5'" | grep -c SEAT_OTHER_TICKET)"
 
+echo "── 외화 결제를 정가대로 낸 경우는 「금액 수정」이 아니다"
+LP=$($P -c "select (public.taam_ticket_price_fx('tpG', 1, 'USD', 1342.315)->>'pay')")
+$P -c "insert into public.kashikiri_charges(id, event_id, label, user_id, amount_krw, pay_currency, pay_fx, pay_amount, purpose, title, status, approved_at) values ('c1000000-0000-4000-8000-0000000000c1', null, 'M6', '$M6', round($LP * 1342.315), 'USD', 1342.315, $LP, 'custom', '정가 결제', 'paid', now())" >/dev/null 2>&1
+att "'c1000000-0000-4000-8000-0000000000c1','tpG',1" >/dev/null
+ok "USD 정가(\$$LP) 결제 연결 → payload.price_override=false · 좌석 priceOverride 없음" "false|false" "$($P -c "select payload->>'price_override' from public.kashikiri_charges where id='c1000000-0000-4000-8000-0000000000c1'")|$($P -c "select (extra_data ? 'priceOverride')::text from public.tickets where extra_data->>'chargeId'='c1000000-0000-4000-8000-0000000000c1' and status='active'")"
+
 echo "── 소유자 이전이 보류된 티켓 링크 → 「예약 내역에서 확인」이라 하지 않는다"
 $P -c "insert into public.tickets(id,user_id,restaurant_id,restaurant_name,ticket_product_id,reservation_date,visit_time,party_size,price,status,purchase_id,extra_data) values (gen_random_uuid(),'$M2','b1000000-0000-4000-8000-000000000003','마츠카와','tp1','2027.05.01','18:00',1,100,'active','INV-m2x','{\"invitePaid\":true}')" >/dev/null 2>&1
 R3=$($P -c "$S select public.taam_pay_link_create('ticket', jsonb_build_object('ticket_id','tp1','name','김회원','pax',1,'currency','KRW','visit_date','2027.05.01','visit_time','18:00'))::text" 2>&1)
