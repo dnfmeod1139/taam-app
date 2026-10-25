@@ -486,6 +486,36 @@ DB 값은 `'A'` 그대로고 **이름만** 「게스트 회원」이다. 값을 
 두 문자열이 달라(새 형식 키 · 복사 때 붙은 공백 등) `callerUserId` 도 없는 요청이 되어 `401 {"error":"로그인이 필요합니다"}` 로 끊겼다 — 10-18 에릭 결제 링크 때 `net._http_response` 에 그대로 찍혔다. Edge→Edge(notify-restock 등)는 같은 환경변수를 쓰니 멀쩡했고 **DB→send-push 만** 죽어 있었다.
 → send-push 가 토큰의 `role` 클레임이 `service_role` 이면 서버 호출로 본다(크론 함수 셋의 `isServiceCaller` 와 같은 방식 · 서명은 게이트웨이가 확인 · `config.toml` 에 `[functions.send-push] verify_jwt = true` 를 명시 — **끄면 위조 가능**). 점검은 SQL Editor 에서 `select public.taam_admin_push('테스트','DB→푸시 점검','/','test-'||extract(epoch from now())::bigint,'admin');` 뒤 `net._http_response` 최신 줄이 `200` 이고 슈퍼어드민 폰에 푸시가 오는지로 — `request_id` 만 보고 믿지 않는다.
 
+### 🔔 슈퍼어드민 알림 → 그 내역 화면 (2026-10-25 · 빌드 `2026.10.25-a` · `20261025_notif_payload_cap.sql`)
+
+「알림 목록에서 항목을 누르면 그 내역에 맞는 화면으로 — 슈퍼어드민만」. 실제로 쓰는 알림 목록은 표지 종의 검은 시트(`tkOpenNotice` · `_notifRenderMerged` → `_notifRenderItems`)뿐인데,
+줄에 클릭이 아예 없었고 서버 알림의 type·url·payload 를 버리고 글자만 그렸다(흰 `notificationsListPage` 는 2026.07 부터 여는 곳이 없다). 슈퍼어드민 알림은 거의 전부 url 이 `/` 라(taamNotifyAdmins 기본값 · 서버 트리거)
+**url 로는 못 가르고 type + payload 로** 정한다 — `_anRoute(n)` → `{label, go}` · 줄 아래 「… 보기 ›」 · 회원·매장 어드민은 종전 그대로(누를 곳 없음 · payload 도 안 읽음).
+
+| 알림 (type) | 가는 곳 |
+|---|---|
+| ticket_purchased · ticket_cancelled · pax_change · time_change_ack | 「예약」 탭(`rvScreen`) 구매번호 검색 · 그 줄 펼침. **예약 탭에 없으면**(취소된 회원 구매 PAYH- · 방문일 빈 카드 결제 행 — `_tbLoad` 가 뺀다) 그 행 소유자의 회원 원장 티켓 탭 + 안내 |
+| ticket_cancelled_card_refund | 예치금 관리 「카드환불」 탭의 그 카드(`data-pid` · 한 번만 쓰는 `window._dmOpenTab`) |
+| deposit_granted_admin · deposit_charged · seat_hold_convert_failed · ledger_apply_failed · capacity_refund_unknown · invite_confirm_blocked · member_joined · member_left | 회원 원장(예치금 탭) · sync_from_storage 는 티켓 탭 |
+| invite_paid · invite_cancelled · invite_recalled · invite_sent | 티켓 캘린더의 방문일(payload.visit_date · 없으면 회차 날짜 · 그래도 없으면 초대 행을 읽는다 — 시트를 먼저 닫고) · `window._tcalFocusNext` 를 `tcalInit` 이 한 번 쓴다 |
+| ticket_restock · ticket_open | 티켓 캘린더의 그 회차 날짜(`_tkYMD`) |
+| ticket_upload_request | 승인 대기의 그 카드(`data-tid`) |
+| kashikiri_paid | 정산(회차 있고 링크 아님) → 대관 정산 그 회차 · 소유자 이전 실패 → 아직 연결 대기면 「예약으로 연결」, 처리됐으면 결제 링크 목록 + 「이미 처리된 결제」 · 그 밖 → 결제 링크 목록의 그 줄(`data-pl-charge` · 최근 40건) |
+| membership_fee_due | 연회비 납부 시기 · 「연회비 자동 기록 실패」(charge_id) → 결제 링크 목록 그 줄 |
+| guest_expiry_admin | 멤버십 · 게스트 「게스트」 탭(+90일) |
+| fx_alert | 환율 설정 |
+| 회원 몫 url(?ticket= · ?ri_pay= · open_ticket_hist · open_deposit_hist · ?tchg= · ?feedue) | 종전 `handleNotifClick(url)` — 「열기 ›」 |
+
+- 화면 전환: `_anBase()` = 시트 닫기 → `openAdmin()` 바탕(GNB 숨김) → `_acLastTab='today'`(뒤로가기 = 대시보드) → `_acCloseOthers(null)` · `_acNavHold(700)` 을 250ms 뒤 푼다(오래 붙잡으면 도착 직후 ← 가 빈 「전체 메뉴」에 멈췄다 — 리뷰).
+  팝업(결제 링크 · 연결 · 납부 시기 · 환율)은 회원 앱 위에 바로 — 닫으면 표지로. 비동기 이동은 `window._anNavSeq`(줄 누름·시트 다시 열기에서 올림)로 늦게 온 결과를 버린다.
+- ⚠ **새 슈퍼어드민 알림 종류를 만들면 `_anRoute` 에 한 줄**, 읽는 payload 키는 `_AN_PKEYS` 에도 — 시트는 슈퍼어드민에게 payload 통째가 아니라 그 키만 PostgREST JSON 경로(`pk_키:payload->>키`)로 읽는다(`_anPackPayload` 가 되묶는다 · 그 select 가 실패하면 종전 칸만).
+  통째로 안 읽는 이유: `taam_notify_admins` 는 로그인한 회원 누구나 부를 수 있고(시간당 30건) payload 는 자르지 않았다 → 회원이 수 MB 를 슈퍼어드민 알림함마다 꽂을 수 있었다(종 열 때마다 내려받음 · 리뷰).
+  서버도 막는다: `trg_taam_notif_payload_cap`(notifications BEFORE INSERT/UPDATE OF payload · **회원 세션만** — 서버·슈퍼어드민은 그대로): 문자열 값 500자 · 전체 16KB 넘으면 짧은 스칼라만 + `payload_truncated`. 알림은 막지 않는다.
+- 덤으로 고친 것: 시트가 열린 채 로컬 기록이 늘면 로컬만 다시 그려 서버 알림 줄이 사라졌다 → 서버 캐시와 같이.
+- 안 한 것(필요하면): 토스트 탭 이동(지금은 읽음 처리만 — 일하는 중 실수로 끌려가지 않게) · 슈퍼어드민 푸시 탭(url 이 `/` 라 앱만 열린다 — 알림을 만들 때 url 을 실어야 한다).
+- 회귀: 스크래치 `annav/an.js`(33건 — 종류별 도착 화면·포커스 · 3초 뒤에도 맨 위 · ← 대시보드 · 회원 무변화 · 취소 구매 원장 폴백 · 처리된 연결 · 게스트 · 늦은 초대 조회 취소 · select 칸 · pk_ 복원) · `bash sql/_test/t_notif_payload_cap.sh`(15건).
+  적대 리뷰(4 렌즈 · 12 에이전트 → 확정 8 · 전부 반영).
+
 ### 정산 결제도 좌석을 잡는다 — 「티켓 연결」은 라벨이 아니다 (2026-09-29)
 
 정산 회차(대관 정산)에 「티켓 연결」을 눌러도 회차 행에 `ticket_product_id` 만 적히고 좌석은 안 잡혔다. Takiya 3/20 에
@@ -930,6 +960,7 @@ Apple 은 iPad 와 iPhone **두 기기로 심사**하므로(리뷰 노트에 명
 | 원장 INSERT | RLS `deposit_tx_insert_server` | **회원은 `deposit_transactions` 를 직접 못 쓴다** — 슈퍼어드민만. 회원 원장은 RPC 가 쓴다. Edge(service_role)·SQL Editor 도 같은 RPC 를 부른다. 원장을 넘겼는데 잔액이 모자라면 `LEDGER_INSUFFICIENT` (2026-09-14, `sql/ledger_close_member_insert.sql`) |
 | 원장 유형 | `trg_taam_guard_ledger_change_type` | **회원 세션은 `admin_*`(admin_grant·admin_deduct) 유형의 원장 줄을 못 쓴다** — `taam_apply_deposit_delta` 가 회원 호출의 음수 항목 change_type 을 안 봐서 회원이 자기 원장에 「관리자 차감」 모양의 줄을 쓸 수 있었다(라벨 위조 · 2026-09-14 부터). BEFORE INSERT · 로그인 호출자가 슈퍼어드민이 아니면 `LEDGER_TYPE_FORBIDDEN`(42501) → RPC 전체 롤백. 서버(auth.uid() null)·슈퍼어드민은 그대로. RPC 본문은 교체하지 않았다(라이브 핵심 함수) (2026-10-18, `20261018_ledger_admin_type_guard.sql` · 회귀 `t_ledger_type_guard.sh` 11건) |
 | `profiles.is_test` | `trg_taam_guard_is_test` | 테스트 계정 숨김 스위치 — **회원 세션은 되돌림**(감사 칸 `is_test_set_by/at` 는 트리거만). 슈퍼어드민·서버만 (2026-10-19, `20261019_test_accounts.sql` · 위 「테스트 계정은 회원 목록에서 숨긴다」) |
+| 알림 payload 크기 | `trg_taam_notif_payload_cap` | 회원 세션이 쓰는 notifications.payload — 문자열 500자 · 전체 16KB(넘으면 짧은 스칼라만). 서버·슈퍼어드민은 그대로 (2026-10-25, `20261025_notif_payload_cap.sql` · 위 「슈퍼어드민 알림 → 그 내역 화면」) |
 | 푸시 발송 | `send-push` Edge Function | 회원은 자기에게만. 어드민 상향 통지만 예외 |
 | 초대제 가입 | `trg_taam_guard_signup` (auth.users BEFORE INSERT) | **초대받은 사람만 계정이 생긴다** — 슈퍼어드민 화이트리스트 · `@partner.taam.kr` · 메타데이터 `invite_code`(미사용·미만료·초대장 번호/이메일 일치) · 초대장에 적힌 이메일/번호(소셜 첫 로그인). 그 밖은 `SIGNUP_NOT_INVITED` → GoTrue "Database error saving new user". 모드는 `app_config.signup_guard` (`enforce`, 2026-09-15 새벽 전환 · `log` 로 되돌림 가능). 판정 로그 `signup_guard_log`. 문지기 자체 오류는 `error` 로 적고 **막지 않는다** (`sql/signup_guard.sql`) |
 | 환불 정책 | `taam_refund_cap` → `taam_apply_deposit_delta` ④ | 회원 환불은 **결제 30분 내 전액 · D-31 이상 총액−대행비 · 그 뒤 0** 을 서버가 센다. 앱 `calculateTicketRefund` 값은 참고일 뿐. 슈퍼어드민·옛 구매(tickets 없음)는 종전 (2026-09-14 밤, `sql/refund_policy_server.sql`) |
