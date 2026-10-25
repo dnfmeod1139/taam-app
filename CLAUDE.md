@@ -497,10 +497,10 @@ DB 값은 `'A'` 그대로고 **이름만** 「게스트 회원」이다. 값을 
 | ticket_purchased · ticket_cancelled · pax_change · time_change_ack | 「예약」 탭(`rvScreen`) 구매번호 검색 · 그 줄 펼침. **예약 탭에 없으면**(취소된 회원 구매 PAYH- · 방문일 빈 카드 결제 행 — `_tbLoad` 가 뺀다) 그 행 소유자의 회원 원장 티켓 탭 + 안내 |
 | ticket_cancelled_card_refund | 예치금 관리 「카드환불」 탭의 그 카드(`data-pid` · 한 번만 쓰는 `window._dmOpenTab`) |
 | deposit_granted_admin · deposit_charged · seat_hold_convert_failed · ledger_apply_failed · capacity_refund_unknown · invite_confirm_blocked · member_joined · member_left | 회원 원장(예치금 탭) · sync_from_storage 는 티켓 탭 |
-| invite_paid · invite_cancelled · invite_recalled · invite_sent | 티켓 캘린더의 방문일(payload.visit_date · 없으면 회차 날짜 · 그래도 없으면 초대 행을 읽는다 — 시트를 먼저 닫고) · `window._tcalFocusNext` 를 `tcalInit` 이 한 번 쓴다 |
+| invite_paid · invite_cancelled · invite_recalled · invite_sent | 티켓 캘린더의 방문일(payload.visit_date · 없으면 회차 날짜 · 그래도 없으면 초대 행을 읽는다 — 시트를 열어 둔 채, 닫거나 다른 줄을 누르면 버림) · `window._tcalFocusNext` 를 `tcalInit` 이 한 번 쓴다 |
 | ticket_restock · ticket_open | 티켓 캘린더의 그 회차 날짜(`_tkYMD`) |
 | ticket_upload_request | 승인 대기의 그 카드(`data-tid`) |
-| kashikiri_paid | 정산(회차 있고 링크 아님) → 대관 정산 그 회차 · 소유자 이전 실패 → 아직 연결 대기면 「예약으로 연결」, 처리됐으면 결제 링크 목록 + 「이미 처리된 결제」 · 그 밖 → 결제 링크 목록의 그 줄(`data-pl-charge` · 최근 40건) |
+| kashikiri_paid | 정산(회차 있고 링크 아님) → 대관 정산 그 회차 · 소유자 이전 실패 → 아직 연결 대기면 「예약으로 연결」, 처리됐으면 결제 링크 목록 + 「이미 처리된 결제」(대기 목록을 **못 읽었으면** 그렇게 말하지 않고 연결 화면) · 그 밖 → 결제 링크 목록의 그 줄(`data-pl-charge` · 최근 40건) |
 | membership_fee_due | 연회비 납부 시기 · 「연회비 자동 기록 실패」(charge_id) → 결제 링크 목록 그 줄 |
 | guest_expiry_admin | 멤버십 · 게스트 「게스트」 탭(+90일) |
 | fx_alert | 환율 설정 |
@@ -508,13 +508,14 @@ DB 값은 `'A'` 그대로고 **이름만** 「게스트 회원」이다. 값을 
 
 - 화면 전환: `_anBase()` = 시트 닫기 → `openAdmin()` 바탕(GNB 숨김) → `_acLastTab='today'`(뒤로가기 = 대시보드) → `_acCloseOthers(null)` · `_acNavHold(700)` 을 250ms 뒤 푼다(오래 붙잡으면 도착 직후 ← 가 빈 「전체 메뉴」에 멈췄다 — 리뷰).
   팝업(결제 링크 · 연결 · 납부 시기 · 환율)은 회원 앱 위에 바로 — 닫으면 표지로. 비동기 이동은 `window._anNavSeq`(줄 누름·시트 다시 열기에서 올림)로 늦게 온 결과를 버린다.
+  ⚠ 콘솔 안의 이동(← · 탭 · ✕)은 순번을 안 올린다 — 그래서 `_anGoRv` 는 「예약 탭이 그 판(`_rvState`)으로 아직 떠 있나」도 본다(로딩 중 ← 로 나갔는데 늦은 조회가 원장으로 끌고 가던 것 · 2차 리뷰).
 - ⚠ **새 슈퍼어드민 알림 종류를 만들면 `_anRoute` 에 한 줄**, 읽는 payload 키는 `_AN_PKEYS` 에도 — 시트는 슈퍼어드민에게 payload 통째가 아니라 그 키만 PostgREST JSON 경로(`pk_키:payload->>키`)로 읽는다(`_anPackPayload` 가 되묶는다 · 그 select 가 실패하면 종전 칸만).
   통째로 안 읽는 이유: `taam_notify_admins` 는 로그인한 회원 누구나 부를 수 있고(시간당 30건) payload 는 자르지 않았다 → 회원이 수 MB 를 슈퍼어드민 알림함마다 꽂을 수 있었다(종 열 때마다 내려받음 · 리뷰).
   서버도 막는다: `trg_taam_notif_payload_cap`(notifications BEFORE INSERT/UPDATE OF payload · **회원 세션만** — 서버·슈퍼어드민은 그대로): 문자열 값 500자 · 전체 16KB 넘으면 짧은 스칼라만 + `payload_truncated`. 알림은 막지 않는다.
 - 덤으로 고친 것: 시트가 열린 채 로컬 기록이 늘면 로컬만 다시 그려 서버 알림 줄이 사라졌다 → 서버 캐시와 같이.
 - 안 한 것(필요하면): 토스트 탭 이동(지금은 읽음 처리만 — 일하는 중 실수로 끌려가지 않게) · 슈퍼어드민 푸시 탭(url 이 `/` 라 앱만 열린다 — 알림을 만들 때 url 을 실어야 한다).
-- 회귀: 스크래치 `annav/an.js`(33건 — 종류별 도착 화면·포커스 · 3초 뒤에도 맨 위 · ← 대시보드 · 회원 무변화 · 취소 구매 원장 폴백 · 처리된 연결 · 게스트 · 늦은 초대 조회 취소 · select 칸 · pk_ 복원) · `bash sql/_test/t_notif_payload_cap.sh`(15건).
-  적대 리뷰(4 렌즈 · 12 에이전트 → 확정 8 · 전부 반영).
+- 회귀: 스크래치 `annav/an.js`(36건 — 종류별 도착 화면·포커스 · 3초 뒤에도 맨 위 · ← 대시보드 · 회원 무변화 · 취소 구매 원장 폴백 · 처리된 연결 · 게스트 · 늦은 초대 조회 취소 · select 칸 · pk_ 복원) · `bash sql/_test/t_notif_payload_cap.sh`(15건).
+  적대 리뷰(4 렌즈 · 12 에이전트 → 확정 8 · 전부 반영) · 수정분 2차 리뷰(7 에이전트 → 확정 2 · 반영: 콘솔 안 이동 뒤 늦은 원장 이동 · 조회 실패를 「처리됨」으로 말함 — 새 검사 4개는 고치기 전 판에서 ❌).
 
 ### 정산 결제도 좌석을 잡는다 — 「티켓 연결」은 라벨이 아니다 (2026-09-29)
 
