@@ -7958,7 +7958,7 @@ async function payLinkList(){
       if (_pl.unatt && _pl.unatt[c.id]) acts += '<button type="button" onclick="plAttachOpen({chargeId:\'' + _plEsc(c.id) + '\'})" style="' + _plBtn('#5C0A14') + '">🎫 예약으로 연결</button>';   // 🆕 2026-10-23
     }
     if (c.user_id && _pl.isSuper) acts += '<button type="button" onclick="payLinkClose();openMemberLedger();setTimeout(function(){mlOpen(\'' + _plEsc(c.user_id) + '\')},60)" style="' + _plBtn() + '">원장</button>';
-    return '<div style="padding:9px 2px;border-bottom:1px solid #f4efe6;">'
+    return '<div data-pl-charge="' + _plEsc(c.id) + '" style="padding:9px 2px;border-bottom:1px solid #f4efe6;">'
       + '<div style="display:flex;gap:8px;align-items:center;"><span style="font-size:10px;font-weight:800;color:' + pu[1] + ';">' + pu[0] + '</span><span style="flex:1;font-size:13px;font-weight:800;color:#1a1a18;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + _plEsc(c.title || '') + ' · ' + _plEsc(who) + '</span><span style="font-size:10.5px;font-weight:800;color:' + st[1] + ';background:' + st[2] + ';border-radius:7px;padding:2px 7px;">' + st[0] + '</span></div>'
       + '<div style="display:flex;gap:8px;align-items:center;margin-top:3px;"><span style="flex:1;font-size:11px;color:#8a8580;">' + _plMoney(cur, c.pay_amount) + (cur !== 'KRW' ? ' (₩' + Number(c.amount_krw || 0).toLocaleString() + ')' : '') + (c.price_override || (c.payload || {}).price_override ? ' <span style="color:#B45309;font-weight:800;">(금액 수정)</span>' : '') + ' · ' + d + (c.applied_note && /failed/.test(c.applied_note) ? ' · <span style="color:#B23A2E;" title="' + _plEsc(c.fail_note || '') + '">⚠ 연회비 기록 실패' + (c.fail_note ? ' — ' + _plEsc(String(c.fail_note).slice(0, 60)) : '') + '</span>' : '') + (c.note ? ' · <span style="color:#6b645b;">메모: ' + _plEsc(String(c.note).slice(0, 40)) + '</span>' : '') + '</span>' + acts + '</div>'
       + '</div>';
@@ -41835,7 +41835,7 @@ function renderDmMgmtList(idx){
     var _crfHead = '';
     if(idx === 3 && itemIdx === 0 && _crfPendN > 0) _crfHead = _crfSec('미처리 ' + _crfPendN + '건', '카드마다 따로 처리합니다 — 버튼을 누른 카드만 바뀝니다', '#B23A2E');
     if(idx === 3 && itemIdx === _crfFirstDone) _crfHead = _crfSec('처리 완료 ' + (items.length - _crfFirstDone) + '건', '최근 완료 순', '#1E7A46');
-    return _crfHead + '<div class="dm-item">'
+    return _crfHead + '<div class="dm-item" data-pid="' + String(h.purchaseId || '').replace(/[^0-9A-Za-z_.:\-]/g, '') + '">'
       +'<div class="dm-item-head"><div class="dm-item-name">'+rName+visitStatus+'</div>'
       +'<button onclick="showBuyerInfo('+globalIdx+')" style="flex-shrink:0;padding:4px 10px;background:#f0ede8;border:none;border-radius:6px;font-family:var(--font-main);font-size:11px;font-weight:700;color:#555;cursor:pointer;">구매자</button>'
       +'</div>'
@@ -46959,7 +46959,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.23-c';
+var TAAM_WEB_BUILD = '2026.10.25-a';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -48763,7 +48763,10 @@ function openSubPage(id){
   if(id==='depositMgmtScreen'){
     _dmSearchQuery = '';
     var _dss = document.getElementById('dmSearchInput'); if(_dss) _dss.value = '';
-    dmMgmtTab(0,document.querySelector('#depositMgmtScreen .dm-tab'));
+    // 🆕 2026-10-25 알림에서 「카드환불」로 바로 올 때(_anGoCardRefund) — 0번 탭을 읽었다가 바꾸면 늦게 끝난 0번 로드가 덮는다
+    var _dmT = parseInt(window._dmOpenTab, 10); window._dmOpenTab = 0;
+    if(!(_dmT >= 0 && _dmT <= 3)) _dmT = 0;
+    dmMgmtTab(_dmT, document.querySelectorAll('#depositMgmtScreen .dm-tab')[_dmT] || document.querySelector('#depositMgmtScreen .dm-tab'));
   }
   if(id==='memberListScreen') renderMemberList();
   if(id==='producersMgmtScreen'){ loadProducersDB(function(){ renderProducersList(); }); }
@@ -57835,7 +57838,7 @@ async function tkOpenNotice() {
       var u = (await window.sb.auth.getUser()).data.user;
       if (u) {
         var r = await window.sb.from('notifications')
-          .select('id, type, title, body, url, created_at, seen')
+          .select('id, type, title, body, url, payload, created_at, seen')   // 🆕 2026-10-25 payload — 슈퍼어드민 알림 → 그 내역 화면(_anRoute)
           .eq('user_id', u.id)
           .order('created_at', { ascending:false })
           .limit(50);
@@ -63913,6 +63916,12 @@ function tcalInit() {
   _tcalYear = now.getFullYear();
   _tcalMonth = now.getMonth();
   _tcalSelectedDate = null;
+  // 🆕 2026-10-25 슈퍼어드민 알림에서 왔으면(_anGoCal) 오늘 대신 그 날을 고른다 — 한 번만 쓴다
+  var _fx = window._tcalFocusNext; window._tcalFocusNext = null;
+  if(_fx && _fx.y >= 2020 && _fx.y <= 2100 && _fx.m >= 1 && _fx.m <= 12 && _fx.d >= 1 && _fx.d <= 31){
+    _tcalYear = _fx.y; _tcalMonth = _fx.m - 1;
+    _tcalSelectedDate = String(_fx.m).padStart(2, '0') + '.' + String(_fx.d).padStart(2, '0');
+  } else _fx = null;
   var _d = document.getElementById('tcalDetail');
   if(_d) _d.innerHTML = '<div class="tcal-empty-day">불러오는 중…</div>';
   _tcalBindSwipe();
@@ -63928,6 +63937,7 @@ function tcalInit() {
     tcalRender();
     if(_tcalSelectedDate){
       tcalRenderDetail(_tcalSelectedDate);
+      if(_fx){ try { var _dd = document.getElementById('tcalDetail'); if(_dd) _dd.scrollIntoView({ block:'start', behavior:'smooth' }); } catch(_se){} }
     } else {
       var d2 = document.getElementById('tcalDetail');
       if(d2) d2.innerHTML = '<div class="tcal-empty-day">날짜를 선택하세요</div>';
@@ -65150,7 +65160,7 @@ function renderPendingApproval() {
   el.innerHTML = pending.map(function(t){
     var r = restaurantDB.find(function(x){ return String(x.id)===String(t.restId); });
     var isDel = t.status==='deleteRequest';
-    return '<div class="pending-card">'
+    return '<div class="pending-card" data-tid="' + String(t.id).replace(/[^0-9A-Za-z_.:\-]/g, '') + '">'
       +'<div class="pending-card-top">'
         +'<div><div class="pending-card-name">'+_raEsc(r?r.name:t.rest)+'</div><div class="pending-card-meta">'+t.date+' · '+t.time+'</div></div>'
         +'<span class="pending-type-badge'+(isDel?' del':'')+'">'+(isDel?'삭제 신청':'업로드 신청')+'</span>'
@@ -68190,7 +68200,9 @@ function _notifLogAdd(entry){
   // 종모양 시트 열려있으면 즉시 갱신
   var ov = document.getElementById('tkNoticeOverlay');
   if(ov && ov.style.display === 'flex'){
-    _notifRenderList();
+    // 🔧 2026-10-25 서버 알림 캐시가 있으면 같이 — 로컬만 다시 그리면 열려 있던 서버 알림 줄이 통째로 사라졌다
+    if(Array.isArray(window._notifServerCache) && window._notifServerCache.length) _notifRenderMerged(window._notifServerCache);
+    else _notifRenderList();
   }
 }
 
@@ -68232,7 +68244,8 @@ function _notifRenderMerged(serverRows){
       icon: _srvIcon(n.type),
       title: _tt,
       msg: _srvStrip(n.body||''),
-      time: n.created_at ? new Date(n.created_at).getTime() : 0
+      time: n.created_at ? new Date(n.created_at).getTime() : 0,
+      srv: n   // 🆕 2026-10-25 슈퍼어드민이 누르면 그 내역 화면으로 (_anRoute) — 로컬 기록 줄에는 없다
     });
   });
   _notifRenderItems(items);
@@ -68249,6 +68262,9 @@ function _notifRenderItems(items){
   var tDay     = (typeof t === 'function') ? t('notif_sheet.time_day')   : '일 전';
   var tClear   = (typeof t === 'function') ? t('notif_sheet.clear_all')  : '모두 지우기';
   items = (items||[]).slice().sort(function(a,b){ return (b.time||0)-(a.time||0); });
+  // 🆕 2026-10-25 슈퍼어드민만: 알림을 누르면 그 내역에 맞는 화면으로 간다(_anRoute). 회원·매장 어드민은 종전 그대로(누를 곳 없음).
+  var _anOn = (typeof _isSuperAdmin === 'function') && _isSuperAdmin();
+  window._notifSheetItems = items;
   if(!items.length){
     listEl.innerHTML = '<div style="font-family:\'Noto Sans KR\',sans-serif;font-size:13px;color:rgba(255,255,255,.4);text-align:center;padding:40px 0;">'+_notifEsc(tEmpty)+'</div>';
     return;
@@ -68263,11 +68279,14 @@ function _notifRenderItems(items){
     else if(diff < 86400000) timeStr = Math.floor(diff/3600000) + ' ' + tHour;
     else if(diff < 7*86400000) timeStr = Math.floor(diff/86400000) + ' ' + tDay;
     else timeStr = (dt.getMonth()+1) + '/' + dt.getDate();
-    return '<div style="display:flex;gap:12px;padding:14px 0;border-bottom:1px solid rgba(255,255,255,.08);">'
+    var _rt = (_anOn && n.srv) ? _anRoute(n.srv) : null;
+    var _ix = items.indexOf(n);
+    return '<div' + (_rt ? ' class="an-row" data-an-i="' + _ix + '" onclick="_notifSheetTap(' + _ix + ')" role="button"' : '') + ' style="display:flex;gap:12px;padding:14px 0;border-bottom:1px solid rgba(255,255,255,.08);' + (_rt ? 'cursor:pointer;' : '') + '">'
       +'<div style="font-size:18px;flex-shrink:0;width:24px;text-align:center;">'+(n.icon||'🔔')+'</div>'
       +'<div style="flex:1;min-width:0;">'
         +'<div style="font-family:\'Noto Sans KR\',sans-serif;font-size:13px;font-weight:700;color:rgba(255,255,255,.95);margin-bottom:3px;">'+_notifEsc(n.title||'')+'</div>'
         +'<div style="font-family:\'Noto Sans KR\',sans-serif;font-size:12px;color:rgba(255,255,255,.6);line-height:1.5;word-break:keep-all;white-space:pre-line;">'+_notifEsc(n.msg||'')+'</div>'
+        +(_rt ? '<div data-lang-lock="ko" style="font-family:\'Noto Sans KR\',sans-serif;font-size:11px;font-weight:700;color:#d8b98a;margin-top:6px;letter-spacing:-.005em;">' + _notifEsc(_rt.label) + ' ›</div>' : '')
       +'</div>'
       +'<div style="font-family:var(--font-main);font-size:9px;color:rgba(255,255,255,.35);flex-shrink:0;letter-spacing:.05em;align-self:flex-start;padding-top:3px;">'+_notifEsc(timeStr)+'</div>'
     +'</div>';
@@ -68278,6 +68297,225 @@ function _notifRenderItems(items){
   +'</div>';
   listEl.innerHTML = html;
 }
+
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026-10-25 슈퍼어드민 알림 → 그 내역 화면 (알림 시트 줄을 누르면 이동)
+// ═══════════════════════════════════════════════════════════════
+//   슈퍼어드민 알림은 거의 전부 url 이 '/' 라(taamNotifyAdmins 기본값 · 서버 트리거) url 로는 갈 곳을 못 가른다.
+//   그래서 알림 종류(type)와 payload(구매번호 · 회원 · 회차 · 청구 id · 초대 id)로 화면을 정한다.
+//   회원·매장 어드민 화면은 바꾸지 않는다 — 시트가 _isSuperAdmin() 일 때만 이것을 부른다.
+//   ⚠ 새 슈퍼어드민 알림 종류를 만들면 여기 한 줄을 더한다. 없으면 그 줄은 눌리지 않는다(이동 안내도 안 뜬다).
+function _anP(n){ var p = n && n.payload; return (p && typeof p === 'object') ? p : {}; }
+function _anUuid(v){ v = String(v || ''); return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v) ? v : ''; }
+function _anStr(v){ return (v === null || v === undefined) ? '' : String(v); }
+function _anSafeId(v){ return _anStr(v).replace(/[^0-9A-Za-z_.:\-]/g, ''); }   // data-pid · data-tid 에 쓴 것과 같은 거름
+// 'YYYY.MM.DD' · 'YYYY-MM-DD' · 'YYYY/MM/DD' → {y,m,d}
+function _anYmdOf(s){
+  var m = String(s || '').match(/^(\d{4})[.\-\/](\d{1,2})[.\-\/](\d{1,2})/);
+  if(!m) return null;
+  var y = +m[1], mo = +m[2], d = +m[3];
+  if(y < 2020 || y > 2100 || mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  return { y:y, m:mo, d:d };
+}
+// 회차 id → 방문일 (ticketDB · 연도 규칙은 _tkYMD 하나로)
+function _anTicketYmd(tid){
+  if(!tid || typeof ticketDB === 'undefined' || !Array.isArray(ticketDB)) return null;
+  var t = (ticketDB || []).find(function(x){ return String(x.id) === String(tid); });
+  if(!t || typeof _tkYMD !== 'function') return null;
+  return _tkYMD(t);
+}
+function _anDateLbl(v){ return v ? (v.m + '/' + v.d) : ''; }
+
+// 알림 한 줄 → { label, go } | null
+function _anRoute(n){
+  if(!n) return null;
+  var p = _anP(n), ty = _anStr(n.type), pid = _anStr(p.purchase_id);
+  // 예약 하나 — 「예약」 탭에서 구매번호로 찾고 그 줄을 편다(취소 행도 보인다)
+  if((ty === 'ticket_purchased' || ty === 'ticket_cancelled' || ty === 'pax_change' || ty === 'time_change_ack') && pid){
+    return { label: '예약 탭에서 이 예약 보기', go: function(){ _anGoRv(pid); } };
+  }
+  // 카드 환불이 남은 취소 — 예치금 관리 「카드환불」 탭의 그 카드
+  if(ty === 'ticket_cancelled_card_refund' && pid){
+    return { label: '카드환불 탭에서 이 건 보기', go: function(){ _anGoCardRefund(pid); } };
+  }
+  // 돈 기록을 사람이 봐야 하는 것 — 그 회원의 원장
+  var uid = '';
+  if(ty === 'deposit_granted_admin') uid = _anUuid(p.target_user_id);
+  else if(ty === 'member_joined' || ty === 'member_left' || ty === 'sync_from_storage') uid = _anUuid(p.user_id) || _anUuid(p.actor_id);
+  else if(ty === 'guest_expiry_admin') uid = _anUuid(p.guest_id);
+  else if(ty === 'seat_hold_convert_failed' || ty === 'ledger_apply_failed' || ty === 'capacity_refund_unknown'
+       || ty === 'deposit_charged' || ty === 'invite_confirm_blocked') uid = _anUuid(p.actor_id);
+  if(uid){
+    var tab = (ty === 'sync_from_storage') ? 'tk' : 'dep';
+    return { label: '회원 원장 보기' + (tab === 'tk' ? ' (티켓)' : ''), go: function(){ _anGoLedger(uid, tab); } };
+  }
+  // 초대 — 티켓 캘린더의 그 방문일(초대 결제·좌석이 날짜 상세에 보인다)
+  if(ty === 'invite_paid' || ty === 'invite_cancelled' || ty === 'invite_recalled' || ty === 'invite_sent'){
+    var iv = _anYmdOf(p.visit_date) || _anTicketYmd(p.ticket_product_id);
+    var iid = _anStr(p.invite_id);
+    if(iv) return { label: '티켓 캘린더 ' + _anDateLbl(iv) + ' 보기', go: function(){ _anGoCal(iv); } };
+    if(iid) return { label: '티켓 캘린더에서 보기', go: function(){ _anGoInviteDate(iid); } };
+    return null;
+  }
+  // 취소표 · 티켓 오픈 — 티켓 캘린더의 그 회차 날짜
+  if(ty === 'ticket_restock' || ty === 'ticket_open'){
+    var tid = _anStr(p.ticket_id) || (Array.isArray(p.ticket_ids) && p.ticket_ids.length ? _anStr(p.ticket_ids[0]) : '');
+    var tv = _anTicketYmd(tid) || _anYmdOf(p.date);
+    if(tv) return { label: '티켓 캘린더 ' + _anDateLbl(tv) + ' 보기', go: function(){ _anGoCal(tv); } };
+  }
+  // 매장 티켓 업로드 신청 — 승인 대기의 그 회차
+  if(ty === 'ticket_upload_request'){
+    var utid = _anStr(p.ticket_id);
+    return { label: '승인 대기에서 보기', go: function(){ _anGoPending(utid); } };
+  }
+  // 결제 링크·정산 결제
+  var ch = _anStr(p.charge_id);
+  if(ty === 'kashikiri_paid' && ch){
+    if(_anStr(p.via) === 'taam_link_invite_on_charge') return { label: '예약으로 연결 화면 열기', go: function(){ _anGoAttach(ch); } };
+    var ev = _anStr(p.event_id);
+    if(ev && p.link_invite !== true && _anStr(p.purpose) !== 'membership') return { label: '대관 정산 회차 보기', go: function(){ _anGoKsk(ev); } };
+    return { label: '결제 링크 목록에서 보기', go: function(){ _anGoPayLink(ch); } };
+  }
+  if(ty === 'membership_fee_due'){
+    if(ch) return { label: '결제 링크 목록에서 보기', go: function(){ _anGoPayLink(ch); } };
+    return { label: '연회비 납부 시기 보기', go: function(){ _anGoPopup(function(){ if(typeof feeDueOpen === 'function') feeDueOpen(); }); } };
+  }
+  if(ty === 'fx_alert'){
+    return { label: '환율 설정 열기', go: function(){ _anGoPopup(function(){ if(typeof fxOpenSettings === 'function') fxOpenSettings(); }); } };
+  }
+  // 그 밖 — 이미 처리하는 url(회원 몫 알림: ?ticket= · ?ri_pay= · open_ticket_hist · open_deposit_hist · ?tchg= · ?feedue)
+  var url = _anStr(n.url);
+  if(/[?&](ticket|ri_pay|tchg)=|open_ticket_hist=1|open_deposit_hist=1|[?&]feedue=1/.test(url)){
+    return { label: '열기', go: function(){ _anGoPopup(function(){ if(typeof handleNotifClick === 'function') handleNotifClick(url); }); } };
+  }
+  return null;
+}
+window._anRoute = _anRoute;
+
+// 시트 줄 누름 — 다시 판정한다(그 사이 역할이 바뀌었으면 아무것도 안 한다)
+function _notifSheetTap(i){
+  if(!((typeof _isSuperAdmin === 'function') && _isSuperAdmin())) return;
+  var it = (window._notifSheetItems || [])[i];
+  var rt = (it && it.srv) ? _anRoute(it.srv) : null;
+  if(!rt) return;
+  if(Date.now() - (window._anTapAt || 0) < 700) return;   // 두 번 눌러 화면이 두 번 열리지 않게
+  window._anTapAt = Date.now();
+  try { rt.go(); } catch(e){
+    console.warn('[notif→화면] 이동 실패:', e);
+    if(typeof showToast === 'function') showToast('⚠', '화면을 열지 못했습니다', String((e && e.message) || e).slice(0, 80));
+  }
+}
+window._notifSheetTap = _notifSheetTap;
+
+// 콘솔 바탕을 깔고 그 위에 화면을 연다 — 시트는 회원 앱(표지)에서 열리므로
+//   ① 시트를 닫고 ② adminScreen 을 바탕으로(GNB 숨김 · 뒤로가기 = 대시보드) ③ 콘솔 탭 화면을 닫는다.
+//   _acNavHold 로 그 사이 대시보드가 새 화면 위로 다시 올라오지 않게 한다(acOpenMenu 와 같은 이유).
+function _anBase(){
+  try { if(typeof tkCloseNotice === 'function') tkCloseNotice(); } catch(_){}
+  window._acFromMy = false;
+  // 회원 앱에서 새로 들어온 것이다 — 뒤로가기는 지난번 콘솔 탭이 아니라 대시보드로(예약 탭으로 가는 길은 rvOpen 이 다시 적는다)
+  try { _acLastTab = 'today'; } catch(_){}
+  if(typeof _acNavHold === 'function') _acNavHold(2500);
+  var adm = document.getElementById('adminScreen');
+  var vis = false; try { vis = !!adm && getComputedStyle(adm).display !== 'none'; } catch(_){}
+  if(!vis && typeof openAdmin === 'function') openAdmin();
+  if(typeof _acCloseOthers === 'function') _acCloseOthers(null);
+}
+// 팝업은 회원 앱 위에 바로 띄운다 — 닫으면 보던 자리(표지)로 돌아온다
+function _anGoPopup(fn){
+  try { if(typeof tkCloseNotice === 'function') tkCloseNotice(); } catch(_){}
+  setTimeout(fn, 60);
+}
+// 요소가 그려질 때까지 기다렸다가 화면 가운데로 · 잠깐 테두리
+function _anFocusWhen(find, ms, onMiss){
+  var until = Date.now() + (ms || 8000);
+  (function tick(){
+    var el = null; try { el = find(); } catch(_){}
+    if(el){
+      try { el.scrollIntoView({ block:'center', behavior:'smooth' }); } catch(_){ try { el.scrollIntoView(); } catch(__){} }
+      var o = el.style.outline, oo = el.style.outlineOffset;
+      el.style.outline = '2px solid #c8a96e'; el.style.outlineOffset = '2px';
+      setTimeout(function(){ el.style.outline = o; el.style.outlineOffset = oo; }, 2600);
+      return;
+    }
+    if(Date.now() > until){ if(onMiss) onMiss(); return; }
+    setTimeout(tick, 150);
+  })();
+}
+function _anByAttr(sel, attr, val){
+  var els = document.querySelectorAll(sel);
+  for(var i = 0; i < els.length; i++){ if(els[i].getAttribute(attr) === String(val)) return els[i]; }
+  return null;
+}
+
+async function _anGoRv(pid){
+  _anBase();
+  if(typeof rvOpen !== 'function') return;
+  _tbRows = null;                       // 방금 생긴 예약도 보이게 새로 읽는다
+  await rvOpen();
+  _rvState.q = pid; _rvState.open = pid;
+  var q = document.getElementById('rvQ'); if(q) q.value = pid;
+  var x = document.getElementById('rvQX'); if(x) x.style.display = '';
+  _rvRender();
+  var hit = (_tbRows || []).some(function(r){ return String(r.purchase_id || '') === pid; });
+  if(!hit && typeof showToast === 'function') showToast('⚠', '예약을 찾지 못했습니다', '구매번호 ' + pid + ' — 결제 전 홀드였거나 최근 3,000건 밖입니다');
+}
+function _anGoCardRefund(pid){
+  _anBase();
+  window._dmOpenTab = 3;               // openSubPage 가 「반환예정」 대신 「카드환불」 탭으로 연다(늦게 끝난 0번 탭 로드가 덮지 않게)
+  openSubPage('depositMgmtScreen');
+  _anFocusWhen(function(){ return _dmCurrentTab === 3 ? _anByAttr('#dmMgmtList .dm-item', 'data-pid', _anSafeId(pid)) : null; }, 12000,
+    function(){ if(typeof showToast === 'function') showToast('ⓘ', '카드환불 목록에 이 건이 없습니다', '구매번호 ' + pid); });
+}
+function _anGoLedger(uid, tab){
+  _anBase();
+  if(typeof openMemberLedger !== 'function') return;
+  openMemberLedger();
+  setTimeout(function(){
+    Promise.resolve(typeof mlOpen === 'function' ? mlOpen(uid) : null).then(function(){
+      if(tab && tab !== 'dep' && typeof mlTab === 'function') mlTab(tab);
+    });
+  }, 60);
+}
+function _anGoCal(v){
+  _anBase();
+  window._tcalFocusNext = { y:v.y, m:v.m, d:v.d };   // tcalInit 이 오늘 대신 이 날을 고른다
+  openSubPage('ticketCalScreen');
+}
+async function _anGoInviteDate(iid){
+  var v = null;
+  try {
+    var r = await window.sb.from('reservation_invites').select('visit_date, ticket_product_id').eq('id', iid).maybeSingle();
+    if(r && r.data) v = _anYmdOf(r.data.visit_date) || _anTicketYmd(r.data.ticket_product_id);
+  } catch(_){}
+  if(v){ _anGoCal(v); return; }
+  _anBase(); openSubPage('ticketCalScreen');
+  if(typeof showToast === 'function') showToast('ⓘ', '초대 날짜를 못 찾았습니다', '티켓 캘린더를 엽니다');
+}
+function _anGoPending(tid){
+  _anBase();
+  openSubPage('pendingApprovalScreen');
+  if(tid) _anFocusWhen(function(){ return _anByAttr('#pendingApprovalScreen .pending-card', 'data-tid', _anSafeId(tid)); }, 3000,
+    function(){ if(typeof showToast === 'function') showToast('ⓘ', '이미 처리된 신청입니다', '승인 대기에 이 회차가 없습니다'); });
+}
+async function _anGoKsk(ev){
+  _anBase();
+  if(typeof kskOpen !== 'function') return;
+  await kskOpen();
+  if(typeof kskOpenEvent === 'function') await kskOpenEvent(ev);
+}
+function _anGoPayLink(ch){
+  _anGoPopup(function(){
+    if(typeof payLinkOpen !== 'function') return;
+    payLinkOpen();
+    _anFocusWhen(function(){ return _anByAttr('#plList [data-pl-charge]', 'data-pl-charge', ch); }, 10000,
+      function(){ if(typeof showToast === 'function') showToast('ⓘ', '최근 링크 40건 안에 없습니다', '오래된 결제는 목록에 안 보입니다'); });
+  });
+}
+function _anGoAttach(ch){
+  _anGoPopup(function(){ if(typeof plAttachOpen === 'function') plAttachOpen({ chargeId: ch }); });
+}
+window._anGoRv = _anGoRv; window._anGoLedger = _anGoLedger; window._anGoCal = _anGoCal;
 
 function _notifEsc(s){
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
