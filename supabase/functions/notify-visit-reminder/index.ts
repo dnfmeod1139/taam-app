@@ -50,6 +50,9 @@ const json = (b: unknown, s = 200) =>
 type Row = {
   id: string; user_id: string; title: string; body: string; url: string;
   days: number; ticket_id: string | null; rest: string | null; vtime: string | null;
+  // 2026-10-27 판(VR_FMT_20261027)부터 SQL 이 세 언어 문구를 만들어 싣는다 — 「예약 안내」 + 레스토랑·날짜·시간·인원(+ 매장 유의사항·안내말씀).
+  //   있으면 그대로 쓰고, 옛 SQL 판이면 아래 build() 가 옛 문구를 만든다.
+  i18n?: Record<string, { title?: string; body?: string }> | null;
 };
 
 // 회원의 언어로 보낸다. send-push 가 payload.i18n 을 받으면 기기 lang 으로 고른다.
@@ -199,7 +202,7 @@ async function handle(req: Request): Promise<Response> {
     let sent = 0, failed = 0;
     for (const r of rows) {
       try {
-        const i18n = build(r);
+        const i18n = (r.i18n && typeof r.i18n === 'object' && r.i18n.ko && r.i18n.ko.title) ? r.i18n : build(r);
         const res = await fetch(`${url}/functions/v1/send-push`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${svc}` },

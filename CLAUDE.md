@@ -577,7 +577,19 @@ active · 판매 공개 · 방문일 안 지남 · 잔여 > 0 · flex 면 채울
 
 `sql/visit_reminder.sql` `taam_visit_reminder_notify()` 가 방문 **7·3·1일 전** 알림 행을 만들고(회원 설정 `remind7/3/1`, 기본
 3·1만), Edge `notify-visit-reminder` 가 uid 마다 send-push — 대시보드 크론이 매일 11:00 KST 에 Edge 를 부른다(저장소엔 없다).
-문구: 「내일 방문 예정입니다 / 3일 뒤 방문 예정입니다 / 방문 7일 전입니다」 + 「{매장} · {시간} 예약이 내일입니다.」 EN/JA 는 Edge 가 만든다.
+~~문구: 「내일 방문 예정입니다 / 3일 뒤 방문 예정입니다 / 방문 7일 전입니다」 + 「{매장} · {시간} 예약이 내일입니다.」 EN/JA 는 Edge 가 만든다.~~ → **2026-10-27 부터 아래 「예약 안내」**.
+**문구 = 「예약 안내」 (2026-10-27 운영 요청 · `20261027_visit_reminder_format.sql` · 빌드 `2026.10.27-a`).** 제목 「예약 안내」 · 본문 `[레스토랑] : 미토우` / `[날짜] : 2026년 9월 10일(목)` / `[시간] : 오후 6:30` / `[인원] : 5`
+(며칠 전이든 같은 모양 · 시각을 못 읽으면 적힌 그대로 · 비면 그 줄 없음) + 매장이 적었으면 빈 줄 뒤 `[유의사항]` · `[안내말씀]`(없으면 그 칸이 아예 안 나간다 — 지금은 넷만). EN `Reservation Reminder` · [Restaurant]/[Date] Thu, Sep 10, 2026/[Time] 6:30 PM/[Guests]/[Notes]/[Message] ·
+JA `ご予約のご案内` · [レストラン]/[日付] 2026年9月10日(木)/[時間] 午後6:30/[人数]/[ご注意事項]/[ご案内]. 매장 이름 EN/JA 는 `restaurants.name_en/name_jp`(없으면 한국어) · 매장 문구 EN/JA 칸이 비면 한국어 문구.
+- **문구는 서버 한 곳에서** — `_taam_visit_remind_msg(rest{ko,en,ja}, 방문일, 시각, 인원, 문구)` → `{ko,en,ja}{title,body}`. `taam_visit_reminder_notify` 교체(md5 가드 `3b8771fc…` · 표시 `VR_FMT_20261027` · 대상·설정·중복 규칙은 20261019 판 그대로)가 알림함 줄(제목·본문 = 한국어)과 payload `i18n` · `date` · `pax` · `rest_id` · `fmt:'v2'` 을 적고
+  돌려주는 줄에 `i18n` 을 싣는다 → Edge `notify-visit-reminder` 가 있으면 그대로 푸시(없으면 옛 `build()` 문구 — 옛 SQL 판 대비). 매장 id = `tickets.restaurant_id`, 비면 회차 `ticket_products.rest_id`.
+- **매장 문구 표 `restaurant_visit_notes`**(매장 id PK · notice/message + `_en`/`_ja` · 칸마다 300자 · 전부 비우면 줄 삭제 · 직접 접근 없음) — RPC `taam_visit_notes_get(매장 | null=전부·슈퍼어드민)` · `_set(매장, jsonb)` · `_preview(매장, jsonb)`(그 매장의 가장 가까운 회차 날짜·시각 · 2인으로 같은 함수가 그린다).
+  권한 `_taam_rest_note_ok` = 슈퍼어드민·서버(`_taam_fee_caller_ok`) 또는 그 매장 어드민(`taam_is_rest_admin` · `is_restaurant_admin_of`). 회원·다른 매장 어드민 FORBIDDEN.
+- 앱: 「📩 방문 안내 문구 (예약 리마인드)」 — 슈퍼어드민 어드민 메뉴(매장 고르기 · 문구 있는 매장 ●) · 매장 어드민 메뉴 「레스토랑」 아래(자기 매장 고정 · `data-i18n partner.visit_notes`) · `vnOpen` · 미리보기 KO/EN/JA 탭(서버 미리보기 · 함수가 없으면 앱 사본 `_vrMsg` + 「서버 준비 필요」 · 저장 막음) · 다른 매장으로 갈 때 저장 안 한 문구를 묻는다 · `_taamBusyNow` 에 `vnPopup`.
+  알림함: 영어·일본어 화면이면 시트가 리마인드 줄의 `payload->i18n->en|ja->>title|body` 넷만 함께 읽어 그 언어로(읽기 실패면 종전 칸 → 앱 규칙 `_vrL10nBody` 로 항목 이름·날짜·시각·매장 이름만 바꾼다) · 시트·토스트가 **줄바꿈을 더는 뭉개지 않는다**(`\s{2,}`→공백이 빈 줄을 지웠다) · 영어·일본어 화면은 다른 서버 알림도 `_notifL10nTitle/Body` 를 탄다(한국어 화면은 종전 그대로).
+  슈퍼어드민 알림 설정의 「7일 전 리마인드 / 3일 전 / 하루 전」 미리보기도 새 문구(예시 미토우 2026-09-10 18:30 5인 · `_vrMsg`). ⚠ `_vrMsg` 는 서버 함수의 사본이다 — 규칙을 바꾸면 둘 다.
+- ⚠ 비회원 알림톡 리마인드(`KAKAO_TEMPLATE_GUEST_REMIND`)는 **카카오가 승인한 템플릿 문구**라 이 변경과 무관하다 — 바꾸려면 카카오 비즈니스 채널에서 템플릿을 새로 승인받는다.
+- 회귀: `bash sql/_test/t_visit_reminder_format.sh`(26건 — 라이브 판 md5 · 요청 예시 KO/EN/JA · 시각 변환 · 이름·문구 폴백 · 실행 문구·payload·i18n · 중복 · 권한(회원·다른 매장·그 매장·슈퍼어드민) · 300자 · 직접 읽기 막힘 · 칸별 출력 · 비우면 삭제 · 재실행 · 모르는 판 · 테스트 발송 파일) · 스크래치 `vrfmt/vr.js`(27건 — 사본=서버 · 알림함 번역 · 시트 세 언어 · 입력 화면 슈퍼어드민/매장 어드민/서버 준비 전 · 미리보기 발송 · 메뉴·사전).
 확인은 반드시 `net._http_response`(200 + `{"ok":true,"made":N,"push_sent":…}`)로 — `cron.job.last_run` 은 근거가 못 된다.
 미리보기: 슈퍼어드민 알림 설정의 「7일 전 리마인드 / 3일 전 / 하루 전」 버튼(본인 기기, 서버 문구 그대로, 본인 설정 적용).
 ⚠ 같은 날 잡은 회귀: 알림 설정 「전체」가 「모든 항목이 켜져야 켜짐」이라 7일 전 기본 꺼짐(09-28) 뒤 항목 하나만 건드려도

@@ -13058,6 +13058,12 @@ window.closePromoCarousel = function(){
         <div><div class="admin-menu-text" data-i18n="partner.my_restaurant">나의 레스토랑</div></div>
         <div class="admin-arrow">›</div>
       </div>
+      <!-- 🆕 2026-10-27 방문 리마인드 「예약 안내」에 붙는 자기 매장 [유의사항]·[안내말씀] -->
+      <div class="admin-menu-item" onclick="vnOpen()">
+        <div><div class="admin-menu-text">📩 <span data-i18n="partner.visit_notes">방문 안내 문구</span></div>
+          <div class="admin-menu-sub" data-i18n="partner.visit_notes_sub">방문 전 회원에게 가는 예약 안내 알림의 유의사항·안내말씀</div></div>
+        <div class="admin-arrow">›</div>
+      </div>
     </div>
 
     <!-- 로그아웃 -->
@@ -13463,6 +13469,13 @@ window.closePromoCarousel = function(){
         <div>
           <div class="admin-menu-text">🖼 사진 캘린더 편집</div>
           <div class="admin-menu-sub">월별 표지(사진·글자)와 날짜별 타일 사진</div>
+        </div>
+        <div class="admin-arrow">›</div>
+      </div>
+      <div class="admin-menu-item" onclick="vnOpen()" data-lang-lock="ko">
+        <div>
+          <div class="admin-menu-text">📩 방문 안내 문구 (예약 리마인드)</div>
+          <div class="admin-menu-sub">방문 3일 전·하루 전 「예약 안내」 알림에 붙는 매장별 [유의사항]·[안내말씀] — 비우면 레스토랑·날짜·시간·인원만</div>
         </div>
         <div class="admin-arrow">›</div>
       </div>
@@ -19100,7 +19113,8 @@ async function loadDeposit(){
           return String(s||'').replace(/^[\s\u{1F000}-\u{1FFFF}\u{2300}-\u{27BF}\u{2190}-\u{21FF}\u{2700}-\u{27BF}]+/gu, '').trim();
         }
         function _toastStripAll(s){
-          return String(s||'').replace(/[\u{1F000}-\u{1FFFF}\u{2300}-\u{27BF}\u{2190}-\u{21FF}\u{2700}-\u{27BF}]/gu, '').replace(/\s{2,}/g,' ').trim();
+          // 🆕 2026-10-27 줄바꿈은 남긴다(방문 리마인드 「[레스토랑] : …」 여러 줄) — 줄 안의 겹친 공백만 하나로
+          return String(s||'').replace(/[\u{1F000}-\u{1FFFF}\u{2300}-\u{27BF}\u{2190}-\u{21FF}\u{2700}-\u{27BF}]/gu, '').replace(/[^\S\n]{2,}/g,' ').replace(/\n{3,}/g,'\n\n').trim();
         }
         function _typeLabelKo(type){
           if(type === 'deposit_grant') return '예치금';
@@ -19231,6 +19245,7 @@ var _NOTIF_TITLES = [
   // 🆕 2026.09.15 서버(pg_cron)가 만드는 알림 — 한국어로만 저장되므로 여기서 다시 그린다
   { m:[/^내일 방문 예정입니다$/], t:['내일 방문 예정입니다','Your visit is tomorrow','明日ご来店の予定です'] },
   { m:[/^3일 뒤 방문 예정입니다$/], t:['3일 뒤 방문 예정입니다','Your visit is in 3 days','3日後にご来店の予定です'] },
+  { m:[/^예약 안내$/], t:['예약 안내','Reservation Reminder','ご予約のご案内'] },   // 🆕 2026-10-27 방문 리마인드 새 문구 (_taam_visit_remind_msg)
   { m:[/^내일 초대가 종료됩니다$/], t:['내일 초대가 종료됩니다','Your guest access ends tomorrow','ゲスト期間は明日終了します'] },
   { m:[/^예약이 열렸습니다$/], t:['예약이 열렸습니다','Booking is open again','予約が再開されました'] },
   { m:[/^예약하실 수 있습니다$/], t:['예약하실 수 있습니다','You can book now','ご予約いただけます'] },   // 🆕 2026-10-22 협의 구매 허용
@@ -19271,6 +19286,10 @@ function _notifL10nBody(body){
   var s0 = String(body || '').trim();
   var li = _notifLangIdx();
   var m;
+  // 🆕 2026-10-27 방문 리마인드 「[레스토랑] : … / [날짜] : … / [시간] : … / [인원] : …(+ [유의사항] · [안내말씀])」 — 항목 이름·날짜·시각·매장 이름을 언어별로
+  if(li !== 0 && /^\[레스토랑\] : /.test(s0) && typeof _vrL10nBody === 'function'){
+    var _vrB = _vrL10nBody(s0, li === 1 ? 'en' : 'ja'); if(_vrB) return _vrB;
+  }
   // 🆕 2026-10-14 티켓 오픈 본문 — 줄마다 「(YYYY년 )M월 D일(요일)( HH:MM)( · 매장)」 또는 「외 N건」. 전부 그 모양이면 언어별로 다시 그린다
   if(li !== 0 && s0 && typeof _tbDateStr === 'function'){
     var _lns = s0.split('\n'), _ok = true, _out = [], _lang = ['ko','en','ja'][li];
@@ -46959,7 +46978,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.25-a';
+var TAAM_WEB_BUILD = '2026.10.27-a';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -53579,6 +53598,8 @@ var TRANSLATIONS = {
       ticket_cal_manage:'티켓 캘린더 (수동·초대)',
       ticket_cal_manage_sub:'내 매장 일정에 수동 예약 추가·예약 초대 발송 — 본 티켓 좌석과 자동 연동',
       my_restaurant:'나의 레스토랑',
+      visit_notes:'방문 안내 문구',
+      visit_notes_sub:'방문 전 회원에게 가는 예약 안내 알림의 유의사항·안내말씀',
     },
     // 🆕 도메인 용어 (사용자 확정 2026-05-11)
     status: {
@@ -54478,6 +54499,8 @@ var TRANSLATIONS = {
       ticket_cal_manage:'Ticket Calendar (Manual · Invite)',
       ticket_cal_manage_sub:'Add manual bookings & send invites for your venue — synced with ticket seats',
       my_restaurant:'My Restaurant',
+      visit_notes:'Visit Reminder Notes',
+      visit_notes_sub:'Notes and message added to the reservation reminder members get before their visit',
     },
     // 🆕 도메인 용어 (사용자 확정 2026-05-11)
     status: {
@@ -55338,6 +55361,8 @@ TRANSLATIONS.ja = {
     ticket_cal_manage:'チケットカレンダー（手動・招待）',
     ticket_cal_manage_sub:'自店舗の日程に手動予約・招待送信 — チケット座席と自動連動',
     my_restaurant:'マイレストラン',
+    visit_notes:'来店案内の文言',
+    visit_notes_sub:'来店前に会員へ届く予約案内のご注意事項・ご案内',
   },
   info_menu: { contact:'Contact Us', about:'About Us', faq:'FAQ' },
   mapl: {
@@ -57843,8 +57868,10 @@ async function tkOpenNotice() {
         var _anSA = (typeof _isSuperAdmin === 'function') && _isSuperAdmin();
         var _nCols = 'id, type, title, body, url, created_at, seen';
         var _nq = function(cols){ return window.sb.from('notifications').select(cols).eq('user_id', u.id).order('created_at', { ascending:false }).limit(50); };
-        var r = await _nq(_nCols + (_anSA ? _AN_PCOLS : ''));
-        if (r.error && _anSA) r = await _nq(_nCols);   // JSON 경로 select 를 못 받는 서버면 종전 칸만
+        // 🆕 2026-10-27 영어·일본어 화면이면 방문 리마인드의 서버 문구(payload.i18n 의 그 언어 제목·본문 넷)만 함께 — 한국어면 안 읽는다
+        var _vrCols = ((window._tkCurrentLang || 'ko') !== 'ko') ? ', vr_en_t:payload->i18n->en->>title, vr_en_b:payload->i18n->en->>body, vr_ja_t:payload->i18n->ja->>title, vr_ja_b:payload->i18n->ja->>body' : '';
+        var r = await _nq(_nCols + _vrCols + (_anSA ? _AN_PCOLS : ''));
+        if (r.error && (_anSA || _vrCols)) r = await _nq(_nCols);   // JSON 경로 select 를 못 받는 서버면 종전 칸만
         if (!r.error && _anSA && Array.isArray(r.data)) r.data.forEach(_anPackPayload);
         if (!r.error && Array.isArray(r.data)) {
           window._notifServerCache = r.data;   // 로컬 '모두 지우기' 후에도 서버 알림 유지용
@@ -68240,14 +68267,22 @@ function _notifRenderMerged(serverRows){
     return '🔔';
   }
   function _srvStrip(s){
-    return String(s||'').replace(/[\u{1F000}-\u{1FFFF}\u{2300}-\u{27BF}\u{2190}-\u{21FF}\u{2700}-\u{27BF}]/gu,'').replace(/\s{2,}/g,' ').trim();
+    // 🆕 2026-10-27 줄바꿈은 남긴다(방문 리마인드가 여러 줄 · 빈 줄로 [유의사항]·[안내말씀]을 가른다) — 줄 안의 겹친 공백만 하나로
+    return String(s||'').replace(/[\u{1F000}-\u{1FFFF}\u{2300}-\u{27BF}\u{2190}-\u{21FF}\u{2700}-\u{27BF}]/gu,'').replace(/[^\S\n]{2,}/g,' ').replace(/\n{3,}/g,'\n\n').trim();
   }
+  var _li = (typeof _notifLangIdx === 'function') ? _notifLangIdx() : 0;
   (serverRows||[]).forEach(function(n){
-    var _tt = _srvStrip(n.title) || '알림';
+    var _tt = _srvStrip(n.title) || '알림', _bd = _srvStrip(n.body||'');
+    // 🆕 2026-10-27 영어·일본어 화면: 방문 리마인드는 서버가 만든 그 언어 문구(payload.i18n)를, 그 밖은 알려진 문구 규칙으로. 한국어 화면은 종전 그대로
+    if(_li){
+      var _vt = _li === 1 ? n.vr_en_t : n.vr_ja_t, _vb = _li === 1 ? n.vr_en_b : n.vr_ja_b;
+      if(n.type === 'visit_reminder' && _vt && _vb){ _tt = _srvStrip(_vt) || _tt; _bd = _srvStrip(_vb) || _bd; }
+      else { try { _tt = _notifL10nTitle(_tt) || _tt; _bd = _notifL10nBody(_bd); } catch(_l10){} }
+    }
     items.push({
       icon: _srvIcon(n.type),
       title: _tt,
-      msg: _srvStrip(n.body||''),
+      msg: _bd,
       time: n.created_at ? new Date(n.created_at).getTime() : 0,
       srv: n   // 🆕 2026-10-25 슈퍼어드민이 누르면 그 내역 화면으로 (_anRoute) — 로컬 기록 줄에는 없다
     });
@@ -68859,7 +68894,8 @@ function _taamBusyNow(){
                'codeScreen','phoneScreen',   // 🆕 2026.09-13 초대코드·OTP 입력 중
                'payLinkPopup',   // 🆕 2026-10-18 결제 링크 만드는 중
                'pxPopup',        // 🆕 2026-10-22 구매 규정 예외 허용 중
-               'plAttachPopup']; // 🆕 2026-10-23 결제를 회원 예약으로 연결 중
+               'plAttachPopup',  // 🆕 2026-10-23 결제를 회원 예약으로 연결 중
+               'vnPopup'];       // 🆕 2026-10-27 방문 안내 문구 적는 중
     // ⚠ offsetParent 로 판단하면 안 된다. **position:fixed 는 offsetParent 가
     //   항상 null** 이고, 이 목록은 전부 fixed 다 — 그래서 이 검사가 한 번도
     //   참이 된 적이 없었다(2026-09-01 발견). 계산된 스타일을 본다.
@@ -69716,27 +69752,276 @@ window.pushBadgeTest = async function(){
 // 🆕 구매 알림 미리보기 — 실제 구매 알림과 동일한 문구를 본인 기기로 발송 (슈퍼어드민 화면 확인용)
 // 🆕 2026-09-29 방문 리마인드 미리보기 — sql/visit_reminder.sql · notify-visit-reminder 가 만드는 문구 그대로 본인 기기로.
 //   category 를 remindN 으로 보내므로 본인의 알림 설정(remind7/3/1)도 실제와 같이 적용된다 — 꺼 두었으면 안 온다.
+//   🆕 2026-10-27 문구는 「예약 안내」 + 레스토랑·날짜·시간·인원 (서버 _taam_visit_remind_msg 와 같은 _vrMsg) — 예시: 미토우 2026-09-10 18:30 5인
 window.pushTestRemind = async function(days){
   if(typeof pushSend !== 'function'){ alert('pushSend 함수 미정의'); return; }
-  var d = parseInt(days) || 1, rest = '스시 사이토', vtime = '18:00';
-  var title = d === 1 ? '내일 방문 예정입니다' : (d === 3 ? '3일 뒤 방문 예정입니다' : ('방문 ' + d + '일 전입니다'));
-  var body  = rest + ' · ' + vtime + (d === 1 ? ' 예약이 내일입니다.' : (' 예약이 ' + d + '일 남았습니다.'));
-  var i18n = {
-    ko: { title: title, body: body },
-    en: { title: d === 1 ? 'Your reservation is tomorrow' : ('Your reservation is in ' + d + ' days'),
-          body: rest + ' · ' + vtime + (d === 1 ? ' — see you tomorrow.' : (' — ' + d + ' days to go.')) },
-    ja: { title: d === 1 ? '明日ご来店の予定です' : ('ご来店' + d + '日前です'),
-          body: rest + ' · ' + vtime + (d === 1 ? ' のご予約は明日です。' : (' のご予約まであと' + d + '日です。')) }
-  };
-  var res = await pushSend('user', { title: title, body: body, i18n: i18n, url: '/', category: 'remind' + d, tag: 'visit-reminder-preview-' + d });
+  var d = parseInt(days) || 1;
+  var i18n = _vrMsg({ ko:'미토우', en:'Mitou' }, '2026-09-10', '18:30', 5, null);
+  var res = await pushSend('user', { title: i18n.ko.title, body: i18n.ko.body, i18n: i18n, url: '/', category: 'remind' + d, tag: 'visit-reminder-preview-' + d });
   if(res && res.summary){
-    var msg = d + '일 전 리마인드 미리보기\n\n시도: ' + res.summary.attempted + '\n성공: ' + res.summary.ok + '\n실패: ' + res.summary.failed
+    var msg = d + '일 전 리마인드 미리보기 (예약 안내)\n\n' + i18n.ko.body + '\n\n시도: ' + res.summary.attempted + '\n성공: ' + res.summary.ok + '\n실패: ' + res.summary.failed
             + (res.summary.attempted === 0 ? '\n\n(0건이면 이 기기가 구독돼 있지 않거나, 알림 설정에서 ' + d + '일 전이 꺼져 있는 것입니다)' : '');
     alert(msg);
   } else {
     alert('발송 결과를 받지 못했습니다: ' + JSON.stringify(res || {}).slice(0, 200));
   }
 };
+
+// ═══════════════════════════════════════════════════════════════
+// 🆕 2026-10-27 방문 리마인드 「예약 안내」 — 문구 규칙 · 매장별 [유의사항]·[안내말씀] 입력 화면
+// ═══════════════════════════════════════════════════════════════
+//   문구는 서버 _taam_visit_remind_msg(20261027_visit_reminder_format.sql)가 만든다. 여기 _vrMsg 는 같은 규칙의 사본 —
+//   미리보기(서버 미리보기 RPC 를 못 부를 때)와 알림함 번역(_vrL10nBody)에만 쓴다. 규칙을 바꾸면 둘 다 바꾼다.
+//     예약 안내
+//     [레스토랑] : 미토우
+//     [날짜] : 2026년 9월 10일(목)
+//     [시간] : 오후 6:30
+//     [인원] : 5
+//     (빈 줄) [유의사항] … · (빈 줄) [안내말씀] …   ← 매장이 적었을 때만
+var _VR_LB = {
+  ko:{ title:'예약 안내', rest:'레스토랑', date:'날짜', time:'시간', pax:'인원', notice:'유의사항', message:'안내말씀' },
+  en:{ title:'Reservation Reminder', rest:'Restaurant', date:'Date', time:'Time', pax:'Guests', notice:'Notes', message:'Message' },
+  ja:{ title:'ご予約のご案内', rest:'レストラン', date:'日付', time:'時間', pax:'人数', notice:'ご注意事項', message:'ご案内' }
+};
+// 'HH:MM' → 오후 6:30 · 6:30 PM · 午後6:30 (못 읽으면 적힌 그대로)
+function _vrTimeStr(raw, lang){
+  var s = String(raw || '').trim(), m = s.match(/^(\d{1,2}):(\d{2})/);
+  if(!m || parseInt(m[1], 10) > 23) return s;
+  var h = parseInt(m[1], 10), h12 = (h % 12 === 0) ? 12 : h % 12, am = h < 12;
+  if(lang === 'en') return h12 + ':' + m[2] + (am ? ' AM' : ' PM');
+  if(lang === 'ja') return (am ? '午前' : '午後') + h12 + ':' + m[2];
+  return (am ? '오전 ' : '오후 ') + h12 + ':' + m[2];
+}
+// rest {ko,en,ja} · ymd 'YYYY-MM-DD' · time 'HH:MM' · pax · notes {notice, notice_en, notice_ja, message, message_en, message_ja} → {ko,en,ja}{title,body}
+function _vrMsg(rest, ymd, time, pax, notes){
+  rest = rest || {}; notes = notes || {};
+  var out = {}, dm = String(ymd || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  ['ko','en','ja'].forEach(function(lang){
+    var L = _VR_LB[lang], sfx = lang === 'ko' ? '' : '_' + lang;
+    var ko = String(rest.ko || '').trim() || '예약하신 매장';
+    var nm = (lang === 'ko' ? '' : String(rest[lang] || '').trim()) || ko;
+    var lines = ['[' + L.rest + '] : ' + nm];
+    if(dm) lines.push('[' + L.date + '] : ' + _tbDateStr(+dm[1], +dm[2], +dm[3], lang, true));
+    var tt = _vrTimeStr(time, lang); if(tt) lines.push('[' + L.time + '] : ' + tt);
+    lines.push('[' + L.pax + '] : ' + Math.max(parseInt(pax, 10) || 1, 1));
+    var body = lines.join('\n');
+    var n = String(notes['notice' + sfx] || '').trim() || String(notes.notice || '').trim();
+    var g = String(notes['message' + sfx] || '').trim() || String(notes.message || '').trim();
+    if(n) body += '\n\n[' + L.notice + ']\n' + n;
+    if(g) body += '\n\n[' + L.message + ']\n' + g;
+    out[lang] = { title: L.title, body: body };
+  });
+  return out;
+}
+// 알림함에 한국어로 저장된 본문 → 영어·일본어 (매장 문구는 저장된 글 그대로 — 그 언어 문구는 payload.i18n 에 있다)
+function _vrL10nBody(s0, lang){
+  var L = _VR_LB[lang]; if(!L) return null;
+  var blocks = String(s0 || '').split('\n\n'), head = blocks[0].split('\n'), out = [];
+  if(!/^\[레스토랑\] : /.test(head[0] || '')) return null;
+  for(var i = 0; i < head.length; i++){
+    var m = head[i].match(/^\[(레스토랑|날짜|시간|인원)\] : (.*)$/);
+    if(!m) return null;
+    var v = m[2];
+    if(m[1] === '레스토랑'){
+      var nm = ''; try { nm = (typeof _tbRestName === 'function') ? _tbRestName(v, null, lang) : ''; } catch(_n){}
+      out.push('[' + L.rest + '] : ' + (nm || v));
+    } else if(m[1] === '날짜'){
+      var dm = v.match(/^(\d{4})년 (\d{1,2})월 (\d{1,2})일/);
+      out.push('[' + L.date + '] : ' + (dm ? _tbDateStr(+dm[1], +dm[2], +dm[3], lang, true) : v));
+    } else if(m[1] === '시간'){
+      var tm = v.match(/^(오전|오후) (\d{1,2}):(\d{2})$/);
+      if(tm) v = _vrTimeStr((parseInt(tm[2], 10) % 12 + (tm[1] === '오후' ? 12 : 0)) + ':' + tm[3], lang);
+      out.push('[' + L.time + '] : ' + v);
+    } else out.push('[' + L.pax + '] : ' + v);
+  }
+  var body = out.join('\n');
+  for(var j = 1; j < blocks.length; j++){
+    var bm = blocks[j].match(/^\[(유의사항|안내말씀)\]\n([\s\S]*)$/);
+    body += '\n\n' + (bm ? '[' + (bm[1] === '유의사항' ? L.notice : L.message) + ']\n' + bm[2] : blocks[j]);
+  }
+  return body;
+}
+
+// ── 입력 화면 (슈퍼어드민: 아무 매장 · 매장 어드민: 자기 매장) ──
+var _VN_TX = {
+  ko:{ head:'📩 방문 안내 문구 (예약 리마인드)', desc:'방문 3일 전·하루 전(회원이 켜 두었으면 7일 전) 회원에게 가는 「예약 안내」 알림에 붙는 문구입니다. 비워 두면 레스토랑·날짜·시간·인원만 나갑니다.',
+       rest:'레스토랑', pick:'레스토랑을 고르세요', has:'문구 있음', notice:'유의사항', message:'안내말씀',
+       ph_notice:'예) 주차 공간이 없습니다. 대중교통을 이용해 주세요.', ph_message:'예) 늦으실 경우 미리 연락 부탁드립니다.',
+       other:'영어 · 일본어 (선택 — 비우면 한국어 문구가 나갑니다)', en:'영어', ja:'일본어', preview:'미리보기', sample:'날짜·시간은 이 매장의 가장 가까운 회차(없으면 예시)로 보여 줍니다',
+       save:'저장', saving:'저장 중…', saved:'저장했습니다', cleared:'문구를 지웠습니다 — 레스토랑·날짜·시간·인원만 나갑니다', loading:'불러오는 중…',
+       not_ready:'서버 준비 필요 — 문구 기능이 아직 서버에 없습니다', forbidden:'이 매장의 문구를 바꿀 권한이 없습니다', too_long:'칸마다 300자까지입니다',
+       no_rest:'이 계정에 연결된 매장이 없습니다', fail:'저장 실패', discard:'저장하지 않은 문구가 있습니다. 버리고 다른 매장으로 갈까요?', close:'닫기' },
+  en:{ head:'📩 Visit Reminder Notes', desc:'Added to the “Reservation Reminder” members receive 3 days and 1 day before their visit (7 days if they turned it on). Leave blank to send only restaurant, date, time and guests.',
+       rest:'Restaurant', pick:'Choose a restaurant', has:'has notes', notice:'Notes', message:'Message',
+       ph_notice:'e.g. There is no parking — please use public transport.', ph_message:'e.g. Please let us know in advance if you will be late.',
+       other:'English · Japanese (optional — blank sends the Korean text)', en:'English', ja:'Japanese', preview:'Preview', sample:'Date and time use this restaurant’s nearest session (or a sample)',
+       save:'Save', saving:'Saving…', saved:'Saved', cleared:'Cleared — only restaurant, date, time and guests will be sent', loading:'Loading…',
+       not_ready:'Server update required — this feature is not on the server yet', forbidden:'You cannot edit this restaurant’s notes', too_long:'Up to 300 characters per field',
+       no_rest:'No restaurant is linked to this account', fail:'Save failed', discard:'You have unsaved changes. Discard them and switch restaurant?', close:'Close' },
+  ja:{ head:'📩 来店案内の文言（予約リマインド）', desc:'来店3日前・前日（会員が設定していれば7日前）に会員へ届く「ご予約のご案内」に付く文言です。空欄なら店名・日付・時間・人数のみ送られます。',
+       rest:'レストラン', pick:'レストランを選択', has:'文言あり', notice:'ご注意事項', message:'ご案内',
+       ph_notice:'例）駐車場がございません。公共交通機関をご利用ください。', ph_message:'例）遅れる場合は事前にご連絡ください。',
+       other:'英語・日本語（任意 — 空欄なら韓国語の文言が送られます）', en:'英語', ja:'日本語', preview:'プレビュー', sample:'日付・時間はこの店舗の直近の回（なければ例）で表示します',
+       save:'保存', saving:'保存中…', saved:'保存しました', cleared:'削除しました — 店名・日付・時間・人数のみ送られます', loading:'読み込み中…',
+       not_ready:'サーバーの更新が必要です — この機能はまだサーバーにありません', forbidden:'この店舗の文言を編集する権限がありません', too_long:'各欄300文字までです',
+       no_rest:'このアカウントに紐づく店舗がありません', fail:'保存に失敗しました', discard:'保存していない変更があります。破棄して店舗を切り替えますか？', close:'閉じる' }
+};
+var _VN_KEYS = ['notice','message','notice_en','message_en','notice_ja','message_ja'];
+var _vn = { rest:'', orig:{}, all:{}, busy:false, ready:true, pvLang:'ko', pvSeq:0, pvTimer:0, loadSeq:0 };
+function _vnT(k){ var l = window._tkCurrentLang || 'ko'; return ((_VN_TX[l] || _VN_TX.ko)[k]) || _VN_TX.ko[k] || k; }
+function _vnIsSuper(){ return (typeof _isSuperAdmin === 'function') && _isSuperAdmin(); }
+function _vnRpcMissing(e){ var c = String((e && e.code) || ''), m = String((e && e.message) || ''); return c === 'PGRST202' || c === '42883' || /could not find the function|does not exist/i.test(m); }
+function _vnRestName(id){ var r = (restaurantDB || []).find(function(x){ return String(x.id) === String(id); }); return r ? (r.name || String(id)) : String(id || ''); }
+function vnOpen(){
+  var sa = _vnIsSuper();
+  var rid = sa ? '' : String((typeof _currentAdminRestId !== 'undefined' && _currentAdminRestId) || '');
+  var old = document.getElementById('vnPopup'); if (old) old.remove();
+  _vn = { rest:'', orig:{}, all:{}, busy:false, ready:true, pvLang:((window._tkCurrentLang || 'ko') === 'ja' ? 'ja' : ((window._tkCurrentLang || 'ko') === 'en' ? 'en' : 'ko')), pvSeq:0, pvTimer:0, loadSeq:0 };
+  var ta = function(k, ph){
+    return '<div style="position:relative;"><textarea id="vn_' + k + '" maxlength="300" rows="3" oninput="_vnInput()" placeholder="' + _plEsc(ph || '') + '" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:10px;padding:9px 10px 18px;font-family:var(--font-main);font-size:13px;line-height:1.55;resize:vertical;"></textarea>'
+         + '<div id="vnc_' + k + '" style="position:absolute;right:9px;bottom:6px;font-size:10px;color:#aaa;">0/300</div></div>';
+  };
+  var lab = function(s){ return '<div style="font-size:12px;font-weight:700;color:#5C0A14;margin:12px 0 5px;">[' + _plEsc(s) + ']</div>'; };
+  var el = document.createElement('div');
+  el.id = 'vnPopup';
+  el.style.cssText = 'position:fixed;inset:0;z-index:9200;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;';
+  el.innerHTML =
+    '<div style="background:#fff;border-radius:18px;width:100%;max-width:560px;max-height:92vh;overflow:auto;overflow-x:hidden;padding:20px 18px;box-sizing:border-box;font-family:var(--font-main);">'
+    + '<div style="display:flex;align-items:center;gap:8px;"><div style="font-size:16px;font-weight:800;color:#1a1a18;flex:1;">' + _plEsc(_vnT('head')) + '</div>'
+    +   '<button type="button" onclick="vnClose()" aria-label="' + _plEsc(_vnT('close')) + '" style="border:none;background:none;font-size:20px;color:#999;cursor:pointer;padding:2px 6px;">×</button></div>'
+    + '<div style="font-size:11px;color:#9a9486;line-height:1.65;margin:4px 0 12px;">' + _plEsc(_vnT('desc')) + '</div>'
+    + '<div style="font-size:12px;font-weight:700;color:#555;margin-bottom:5px;">' + _plEsc(_vnT('rest')) + '</div>'
+    + (sa ? '<select id="vnRest" onchange="vnPick(this.value)" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:10px;padding:9px 10px;font-family:var(--font-main);font-size:13px;background:#fff;"></select>'
+          : '<div id="vnRestFixed" style="font-size:14px;font-weight:700;color:#1a1a18;padding:4px 0;">' + _plEsc(rid ? _vnRestName(rid) : _vnT('no_rest')) + '</div>')
+    + '<div id="vnBody" style="display:none;">'
+    +   lab(_vnT('notice')) + ta('notice', _vnT('ph_notice'))
+    +   lab(_vnT('message')) + ta('message', _vnT('ph_message'))
+    +   '<details id="vnOther" style="margin-top:12px;"><summary style="font-size:12px;color:#777;cursor:pointer;">' + _plEsc(_vnT('other')) + '</summary>'
+    +     lab(_vnT('notice') + ' · ' + _vnT('en')) + ta('notice_en', '') + lab(_vnT('message') + ' · ' + _vnT('en')) + ta('message_en', '')
+    +     lab(_vnT('notice') + ' · ' + _vnT('ja')) + ta('notice_ja', '') + lab(_vnT('message') + ' · ' + _vnT('ja')) + ta('message_ja', '')
+    +   '</details>'
+    +   '<div style="display:flex;align-items:center;gap:6px;margin:16px 0 6px;"><div style="font-size:12px;font-weight:700;color:#555;flex:1;">' + _plEsc(_vnT('preview')) + '</div>'
+    +     ['ko','en','ja'].map(function(l){ return '<button type="button" data-vn-pv="' + l + '" onclick="_vnPvLang(\'' + l + '\')" style="border:1px solid #ddd;background:#fff;border-radius:8px;padding:3px 9px;font-size:11px;font-weight:700;cursor:pointer;">' + l.toUpperCase() + '</button>'; }).join('')
+    +   '</div>'
+    +   '<div id="vnPreview" style="background:#1a1a18;color:rgba(255,255,255,.92);border-radius:12px;padding:12px 14px;font-size:12px;line-height:1.6;white-space:pre-line;word-break:keep-all;min-height:80px;"></div>'
+    +   '<div style="font-size:10px;color:#aaa;margin-top:5px;">' + _plEsc(_vnT('sample')) + '</div>'
+    +   '<div id="vnMsg" style="font-size:12px;color:#B3261E;margin-top:10px;min-height:16px;"></div>'
+    +   '<button type="button" id="vnSave" onclick="vnSave()" style="width:100%;margin-top:6px;padding:12px;border:none;border-radius:12px;background:#5C0A14;color:#fff;font-family:var(--font-main);font-size:14px;font-weight:700;cursor:pointer;">' + _plEsc(_vnT('save')) + '</button>'
+    + '</div>'
+    + '</div>';
+  el.addEventListener('click', function(ev){ if (ev.target === el) vnClose(); });
+  document.body.appendChild(el);
+  _vnPvLangPaint();
+  if (sa) { _vnRestOpts(); _vnLoadAll(); }
+  else if (rid) vnPick(rid, true);
+}
+function vnClose(){ var el = document.getElementById('vnPopup'); if (el) el.remove(); _vn.busy = false; _vn.loadSeq++; _vn.pvSeq++; if (_vn.pvTimer) clearTimeout(_vn.pvTimer); }
+function _vnRestOpts(){
+  var sel = document.getElementById('vnRest'); if (!sel) return;
+  var list = (restaurantDB || []).filter(function(r){ return r && r.id != null && r.name; }).slice()
+             .sort(function(a, b){ return String(a.name).localeCompare(String(b.name), 'ko'); });
+  var html = '<option value="">' + _plEsc(_vnT('pick')) + '</option>';
+  list.forEach(function(r){
+    var id = String(r.id);
+    html += '<option value="' + _plEsc(id) + '"' + (id === _vn.rest ? ' selected' : '') + '>' + _plEsc((_vn.all[id] ? '● ' : '') + r.name + (_vn.all[id] ? ' · ' + _vnT('has') : '')) + '</option>';
+  });
+  sel.innerHTML = html;
+}
+async function _vnLoadAll(){
+  try {
+    var r = await window.sb.rpc('taam_visit_notes_get', { p_rest_id: null });
+    if (r.error) { if (_vnRpcMissing(r.error)) _vnNotReady(); return; }
+    var m = {}; (Array.isArray(r.data) ? r.data : []).forEach(function(x){ if (x && x.restaurant_id) m[String(x.restaurant_id)] = x; });
+    _vn.all = m; _vnRestOpts();
+  } catch (_e) {}
+}
+function _vnNotReady(){
+  _vn.ready = false;
+  var msg = document.getElementById('vnMsg'); if (msg) msg.textContent = _vnT('not_ready');
+  var b = document.getElementById('vnSave'); if (b) { b.disabled = true; b.style.opacity = '.45'; }
+}
+function _vnCollect(){ var o = {}; _VN_KEYS.forEach(function(k){ var e = document.getElementById('vn_' + k); o[k] = e ? String(e.value || '').replace(/\r/g, '').trim() : ''; }); return o; }
+function _vnDirty(){ if (!_vn.rest) return false; var c = _vnCollect(); return _VN_KEYS.some(function(k){ return (c[k] || '') !== String(_vn.orig[k] || '').trim(); }); }
+async function vnPick(id, force){
+  id = String(id || '');
+  if (!force && _vn.rest && id !== _vn.rest && _vnDirty() && !confirm(_vnT('discard'))) { var sel = document.getElementById('vnRest'); if (sel) sel.value = _vn.rest; return; }
+  _vn.rest = id; _vn.orig = {};
+  var body = document.getElementById('vnBody'), msg = document.getElementById('vnMsg');
+  if (!id) { if (body) body.style.display = 'none'; return; }
+  if (body) body.style.display = '';
+  _VN_KEYS.forEach(function(k){ var e = document.getElementById('vn_' + k); if (e) { e.value = ''; e.disabled = true; } });
+  if (msg) msg.textContent = _vnT('loading');
+  var my = ++_vn.loadSeq;
+  try {
+    var r = await window.sb.rpc('taam_visit_notes_get', { p_rest_id: id });
+    if (my !== _vn.loadSeq || !document.getElementById('vnPopup')) return;
+    if (r.error) {
+      if (_vnRpcMissing(r.error)) { _vnNotReady(); _vnFill({}); return; }
+      if (msg) msg.textContent = /FORBIDDEN|42501/.test(String(r.error.code || '') + String(r.error.message || '')) ? _vnT('forbidden') : (_vnT('fail') + ': ' + String(r.error.message || '').slice(0, 120));
+      return;
+    }
+    _vnFill(r.data || {});
+    if (msg && _vn.ready) msg.textContent = '';
+  } catch (e) { if (msg) msg.textContent = _vnT('fail') + ': ' + String((e && e.message) || e).slice(0, 120); }
+}
+function _vnFill(row){
+  _vn.orig = {};
+  _VN_KEYS.forEach(function(k){ var v = (row && row[k]) ? String(row[k]) : ''; _vn.orig[k] = v; var e = document.getElementById('vn_' + k); if (e) { e.value = v; e.disabled = !_vn.ready; } });
+  var other = document.getElementById('vnOther'); if (other) other.open = !!(_vn.orig.notice_en || _vn.orig.message_en || _vn.orig.notice_ja || _vn.orig.message_ja);
+  _vnCounts(); _vnPreviewNow();
+}
+function _vnCounts(){ _VN_KEYS.forEach(function(k){ var e = document.getElementById('vn_' + k), c = document.getElementById('vnc_' + k); if (e && c) { var n = String(e.value || '').length; c.textContent = n + '/300'; c.style.color = n > 300 ? '#B3261E' : '#aaa'; } }); }
+function _vnInput(){
+  _vnCounts();
+  var msg = document.getElementById('vnMsg'); if (msg && _vn.ready) msg.textContent = '';
+  if (_vn.pvTimer) clearTimeout(_vn.pvTimer);
+  _vn.pvTimer = setTimeout(_vnPreviewNow, 350);
+}
+function _vnPvLang(l){ _vn.pvLang = l; _vnPvLangPaint(); _vnPreviewNow(); }
+function _vnPvLangPaint(){ document.querySelectorAll('#vnPopup [data-vn-pv]').forEach(function(b){ var on = b.getAttribute('data-vn-pv') === _vn.pvLang; b.style.background = on ? '#5C0A14' : '#fff'; b.style.color = on ? '#fff' : '#555'; b.style.borderColor = on ? '#5C0A14' : '#ddd'; }); }
+async function _vnPreviewNow(){
+  var box = document.getElementById('vnPreview'); if (!box || !_vn.rest) return;
+  var notes = _vnCollect(), my = ++_vn.pvSeq, j = null;
+  if (_vn.ready) {
+    try {
+      var r = await window.sb.rpc('taam_visit_notes_preview', { p_rest_id: _vn.rest, p: notes });
+      if (!r.error && r.data && r.data.ko) j = r.data;
+    } catch (_e) {}
+  }
+  if (my !== _vn.pvSeq || !document.getElementById('vnPopup')) return;
+  if (!j) {   // 서버 미리보기를 못 부르면 같은 규칙의 사본으로 (예시 날짜: 7일 뒤 18:30 · 2인)
+    var rest = (restaurantDB || []).find(function(x){ return String(x.id) === String(_vn.rest); }) || {};
+    var dt = new Date(Date.now() + 9 * 3600 * 1000 + 7 * 86400000);
+    var ymd = dt.getUTCFullYear() + '-' + String(dt.getUTCMonth() + 1).padStart(2, '0') + '-' + String(dt.getUTCDate()).padStart(2, '0');
+    j = _vrMsg({ ko: rest.name || _vnRestName(_vn.rest), en: rest.name_en || '', ja: rest.name_jp || '' }, ymd, '18:30', 2, notes);
+  }
+  var x = j[_vn.pvLang] || j.ko;
+  box.textContent = (x.title || '') + '\n' + (x.body || '');
+}
+async function vnSave(){
+  if (_vn.busy || !_vn.rest || !_vn.ready) return;
+  var notes = _vnCollect(), msg = document.getElementById('vnMsg'), b = document.getElementById('vnSave');
+  if (_VN_KEYS.some(function(k){ return notes[k].length > 300; })) { if (msg) msg.textContent = _vnT('too_long'); return; }
+  _vn.busy = true; if (b) { b.disabled = true; b.textContent = _vnT('saving'); }
+  var rid = _vn.rest;
+  try {
+    var r = await window.sb.rpc('taam_visit_notes_set', { p_rest_id: rid, p: notes });
+    if (r.error) {
+      var em = String(r.error.code || '') + ' ' + String(r.error.message || '');
+      if (msg) msg.textContent = _vnRpcMissing(r.error) ? _vnT('not_ready') : (/FORBIDDEN|42501/.test(em) ? _vnT('forbidden') : (/TOO_LONG/.test(em) ? _vnT('too_long') : _vnT('fail') + ': ' + String(r.error.message || '').slice(0, 120)));
+      return;
+    }
+    var cleared = !!(r.data && r.data.cleared);
+    if (rid === _vn.rest) { _vn.orig = {}; _VN_KEYS.forEach(function(k){ _vn.orig[k] = notes[k]; }); }
+    if (cleared) delete _vn.all[rid]; else _vn.all[rid] = (r.data && r.data.row) || notes;
+    _vnRestOpts();
+    if (typeof showToast === 'function') showToast('📩', _vnT(cleared ? 'cleared' : 'saved'), _vnRestName(rid));
+  } catch (e) {
+    if (msg) msg.textContent = _vnT('fail') + ': ' + String((e && e.message) || e).slice(0, 120);
+  } finally {
+    _vn.busy = false; if (b && document.getElementById('vnPopup')) { b.disabled = false; b.textContent = _vnT('save'); }
+  }
+}
 window.pushTestPurchase = async function(){
   if(typeof pushSend !== 'function'){ alert('pushSend 함수 미정의'); return; }
   // 실제 completePurchase() 의 구매 알림과 동일한 형태(예시 데이터)
