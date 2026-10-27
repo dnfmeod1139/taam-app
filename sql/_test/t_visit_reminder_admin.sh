@@ -24,7 +24,7 @@ create table public.tickets(id uuid primary key default gen_random_uuid(), user_
 create table public.notifications(id uuid primary key default gen_random_uuid(), user_id uuid, type text, title text, body text, url text, payload jsonb, created_at timestamptz default now());
 create table public.daegwan_manual(id uuid primary key default gen_random_uuid(), venue_id text, ymd date, name text, pax int, amount int, memo text, ttype text, venue_name text, created_by uuid, created_at timestamptz default now());
 create table public.deposit_transactions(id uuid primary key default gen_random_uuid(), user_id uuid, change_type text, created_at timestamptz default now());
-create table public.reservation_invites(id uuid primary key default gen_random_uuid(), invitee_user_id uuid, status text, created_at timestamptz default now(), paid_at timestamptz);
+create table public.reservation_invites(id uuid primary key default gen_random_uuid(), invitee_user_id uuid, status text, created_at timestamptz default now(), paid_at timestamptz, restaurant_id text, restaurant_name text, visit_date text, visit_time text, pax int, ticket_product_id text);
 SQL
 awk '/^create or replace function public._taam_fee_caller_ok/{p=1} p{print} /^end \$\$;/{if(p){exit}}' supabase/migrations/20261017_membership_fee_due.sql > /tmp/_vra_fee.sql; $P -f /tmp/_vra_fee.sql >/dev/null 2>&1
 FAIL=0
@@ -44,6 +44,12 @@ $P -c "insert into public.tickets(user_id, restaurant_id, restaurant_name, ticke
   ('$TT','r-mitou','미토우','tp1','$D1','18:30',1,'active','PAYH-7','테스트1'),
   ('$M2','r-saito','스시 사이토','tp2','$D5','12:00',2,'active','PAYH-8','이회원')" >/dev/null
 $P -c "insert into public.daegwan_manual(venue_id, ymd, name, pax, venue_name) values ('r-kanda','$Y1','우댕',4,'칸다')" >/dev/null
+$P -c "insert into public.reservation_invites(id, invitee_user_id, status, restaurant_id, restaurant_name, visit_date, visit_time, pax) values
+  ('d1000000-0000-4000-8000-000000000001','$M2','paid','r-saito','스시 사이토','$D1','20:00',2),
+  ('d2000000-0000-4000-8000-000000000002','$M','paid','r-saito','스시 사이토','$D3','12:00',1),
+  ('d3000000-0000-4000-8000-000000000003','$M2','sent','r-saito','스시 사이토','$D1','20:00',2)" >/dev/null
+$P -c "insert into public.tickets(user_id, restaurant_id, restaurant_name, ticket_product_id, reservation_date, visit_time, party_size, status, purchase_id, buyer_name, extra_data) values
+  ('$M','r-saito','스시 사이토','tp2','$D3','12:00',1,'active','INV-d2000000-1','김회원','{\"inviteId\":\"d2000000-0000-4000-8000-000000000002\"}')" >/dev/null
 
 out=$($P -f supabase/migrations/20261027_visit_reminder_admin.sql 2>&1)
 ok "마이그레이션: 오류 없음 · ❌ 0 · ② 교체" "|0|1" "$(echo "$out" | grep ERROR | head -1)|$(echo "$out" | grep -c '❌')|$(echo "$out" | grep -c '✅ 교체(슈퍼어드민 전 일정 붙임)')"
@@ -51,35 +57,46 @@ ok "마이그레이션: 오류 없음 · ❌ 0 · ② 교체" "|0|1" "$(echo "$o
 ok "[예약자] 줄은 넷째 줄 뒤·매장 문구 앞" "1" "$(echo "$out" | grep -cE '^①\|.*\|✅$')"
 
 r=$($P -c "select public.taam_visit_reminder_notify()::text")
-ok "실행: 회원 줄 3(김회원 3일 · 슈퍼어드민 본인 구매 1일 · 테스트1 1일) + 슈퍼어드민 몫 3(우댕 MAN- 1일 · 김회원 3일 · 수동 기록 1일) · admin_made 3" "6|3" "$($P -c "select (('$r')::jsonb->>'made')")|$($P -c "select (('$r')::jsonb->>'admin_made')")"
+ok "실행: 회원 줄 4(김회원 3일 · 김회원 초대 INV- 3일 · 슈퍼어드민 본인 구매 1일 · 테스트1 1일) + 슈퍼어드민 몫 5(우댕 MAN- · 김회원 3일 · INV- · 좌석 없는 결제 초대 · 수동 기록) · admin_made 5" "9|5" "$($P -c "select (('$r')::jsonb->>'made')")|$($P -c "select (('$r')::jsonb->>'admin_made')")"
 ok "우댕 수동 예약 → 슈퍼어드민: 「내일은 미토우 방문일입니다」 · 본문 넷 + [예약자] : 우댕" "내일은 미토우 방문일입니다|1" "$($P -c "select title from public.notifications where user_id='$SU' and payload->>'rkey' like 't:%' and payload->>'who'='우댕' and payload->>'admin'='true'")|$($P -c "select count(*) from public.notifications where user_id='$SU' and payload->>'admin'='true' and body like E'[레스토랑] : 미토우\\n[날짜] : %\\n[시간] : 오후 6:30\\n[인원] : 2\\n[예약자] : 우댕'")"
-ok "회원 구매(김회원 3일 뒤) → 슈퍼어드민에게도 · 회원 본인에게도 · 예약자 = 회원 이름" "스시 사이토 방문 3일 전입니다|1|1" "$($P -c "select title from public.notifications where user_id='$SU' and payload->>'admin'='true' and payload->>'days'='3'")|$($P -c "select count(*) from public.notifications where user_id='$SU' and payload->>'admin'='true' and body like '%[예약자] : 김회원'")|$($P -c "select count(*) from public.notifications where user_id='$M' and payload->>'days'='3'")"
+ok "회원 구매(김회원 3일 뒤 PAYH-2) → 슈퍼어드민에게도 · 회원 본인에게도 · 예약자 = 회원 이름" "스시 사이토 방문 3일 전입니다|1|1" "$($P -c "select n.title from public.notifications n join public.tickets t on t.id::text = n.payload->>'ticket_id' where t.purchase_id='PAYH-2' and n.user_id='$SU' and n.payload->>'admin'='true'")|$($P -c "select count(*) from public.notifications n join public.tickets t on t.id::text = n.payload->>'ticket_id' where t.purchase_id='PAYH-2' and n.user_id='$SU' and n.body like '%[예약자] : 김회원'")|$($P -c "select count(*) from public.notifications n join public.tickets t on t.id::text = n.payload->>'ticket_id' where t.purchase_id='PAYH-2' and n.user_id='$M'")"
 ok "슈퍼어드민이 회원으로 산 것(PAYH-3)은 한 번만(회원 줄) · 수동 기록은 시각 줄 없이 [예약자]" "1|1" "$($P -c "select count(*) from public.notifications n join public.tickets t on t.id::text = n.payload->>'ticket_id' where n.user_id='$SU' and t.purchase_id='PAYH-3'")|$($P -c "select count(*) from public.notifications where user_id='$SU' and payload->>'rkey' like 'm:%' and body = E'[레스토랑] : 칸다\\n[날짜] : ' || (select extract(year from d)::int||'년 '||extract(month from d)::int||'월 '||extract(day from d)::int||'일('||(array['일','월','화','수','목','금','토'])[extract(dow from d)::int+1]||')' from (select (now() at time zone 'Asia/Seoul')::date + 1 d) z) || E'\\n[인원] : 4\\n[예약자] : 우댕'")"
 ok "빠지는 것: 결제 전 홀드 · 취소 · 테스트 계정 회원 구매(슈퍼어드민 몫) · 5일 뒤 · 7일 전(기본 꺼짐)" "0|0|0|0|0" "$($P -c "select count(*) from public.notifications n join public.tickets t on t.id::text = n.payload->>'ticket_id' where t.purchase_id='LINK-5'")|$($P -c "select count(*) from public.notifications n join public.tickets t on t.id::text = n.payload->>'ticket_id' where t.purchase_id='PAYH-6'")|$($P -c "select count(*) from public.notifications n join public.tickets t on t.id::text = n.payload->>'ticket_id' where t.purchase_id='PAYH-7' and n.user_id='$SU'")|$($P -c "select count(*) from public.notifications n join public.tickets t on t.id::text = n.payload->>'ticket_id' where t.purchase_id='PAYH-8'")|$($P -c "select count(*) from public.notifications where payload->>'days'='7'")"
 ok "EN/JA: 제목 영어 · [Name] · [ご予約者](우댕 일정 둘 — 수동 예약·수동 기록)" "Your visit to Mitou is tomorrow|1|2" "$($P -c "select payload->'i18n'->'en'->>'title' from public.notifications where user_id='$SU' and payload->>'rkey' like 't:%' and payload->>'who'='우댕' and payload->>'admin'='true'")|$($P -c "select count(*) from public.notifications where user_id='$SU' and payload->>'admin'='true' and payload->'i18n'->'en'->>'body' like '%[Guests] : 2' || E'\\n' || '[Name] : 우댕'")|$($P -c "select count(*) from public.notifications where user_id='$SU' and payload->>'admin'='true' and payload->'i18n'->'ja'->>'body' like '%[ご予約者] : 우댕'")"
-ok "돌려주는 줄(Edge 푸시): 슈퍼어드민 몫 3줄 · tag 열쇠 t:/m: · i18n" "3|3" "$($P -c "select count(*) from jsonb_array_elements(('$r')::jsonb->'rows') x where x->>'ticket_id' ~ '^(t|m):'")|$($P -c "select count(*) from jsonb_array_elements(('$r')::jsonb->'rows') x where x->>'ticket_id' ~ '^(t|m):' and x->'i18n'->'ko'->>'title' is not null")"
+ok "돌려주는 줄(Edge 푸시): 슈퍼어드민 몫 5줄 · tag 열쇠 t:/i:/m: · i18n" "5|5" "$($P -c "select count(*) from jsonb_array_elements(('$r')::jsonb->'rows') x where x->>'ticket_id' ~ '^(t|m|i):'")|$($P -c "select count(*) from jsonb_array_elements(('$r')::jsonb->'rows') x where x->>'ticket_id' ~ '^(t|m|i):' and x->'i18n'->'ko'->>'title' is not null")"
+ok "좌석 행 없는 결제 초대 → 슈퍼어드민(i:) · 예약자 = 초대받은 회원 · 좌석 있는 초대는 티켓 줄 한 번만 · 보낸 초대(sent)는 없음" "1|이회원|0|1" "$($P -c "select count(*) from public.notifications where user_id='$SU' and payload->>'rkey' like 'i:%'")|$($P -c "select payload->>'who' from public.notifications where user_id='$SU' and payload->>'rkey' like 'i:%'")|$($P -c "select count(*) from public.notifications where payload->>'rkey' = 'i:d2000000-0000-4000-8000-000000000002'")|$($P -c "select count(*) from public.notifications n join public.tickets t on t.id::text = n.payload->>'ticket_id' where t.purchase_id='INV-d2000000-1' and n.user_id='$SU'")"
 ok "다시 부르면 0 (같은 일정·일수 한 번)" "0|0" "$($P -c "select (j->>'made')||'|'||(j->>'admin_made') from public.taam_visit_reminder_notify() j")"
 
 # 7일 전을 켠 슈퍼어드민 → 정산 KSK- 7일 뒤 칸다도 · 하루 전을 끄면 내일 것은 안 감
 $P -c "delete from public.notifications; update public.profiles set notif_prefs='{\"remind7\":true,\"remind1\":false}' where id='$SU'" >/dev/null
 r2=$($P -c "select public.taam_visit_reminder_notify()::text")
-ok "슈퍼어드민 설정: 7일 전 켬 → 정산(KSK-) 칸다 · 하루 전 끔 → 내일 것 없음 · 3일 전은 기본 켜짐" "1|0|1|Trina" "$($P -c "select count(*) from public.notifications where user_id='$SU' and payload->>'days'='7'")|$($P -c "select count(*) from public.notifications where user_id='$SU' and payload->>'days'='1'")|$($P -c "select count(*) from public.notifications where user_id='$SU' and payload->>'days'='3' and payload->>'admin'='true'")|$($P -c "select payload->>'who' from public.notifications where user_id='$SU' and payload->>'days'='7'")"
+ok "슈퍼어드민 설정: 7일 전 켬 → 정산(KSK-) 칸다 · 하루 전 끔 → 내일 것 없음 · 3일 전은 기본 켜짐" "1|0|2|Trina" "$($P -c "select count(*) from public.notifications where user_id='$SU' and payload->>'days'='7'")|$($P -c "select count(*) from public.notifications where user_id='$SU' and payload->>'days'='1'")|$($P -c "select count(*) from public.notifications where user_id='$SU' and payload->>'days'='3' and payload->>'admin'='true'")|$($P -c "select payload->>'who' from public.notifications where user_id='$SU' and payload->>'days'='7'")"
 $P -c "update public.profiles set notif_prefs='{}' where id='$SU'" >/dev/null
 
 # 위조: 슈퍼어드민 몫이 실패해도(수동 기록 표 없음) 회원 리마인드는 그대로
 $P -c "delete from public.notifications; alter table public.daegwan_manual rename to daegwan_manual_x" >/dev/null
 r3=$($P -c "select public.taam_visit_reminder_notify()::text" 2>&1)
-ok "슈퍼어드민 몫 실패(표 없음) → 회원 줄 3 그대로 · admin_made 0 · 오류로 끝나지 않음" "3|0|0" "$($P -c "select count(*) from public.notifications where payload->>'admin' is null")|$($P -c "select count(*) from public.notifications where payload->>'admin'='true'")|$(echo "$r3" | grep -c '^ERROR')"
+ok "슈퍼어드민 몫 실패(표 없음) → 회원 줄 4 그대로 · admin_made 0 · 오류로 끝나지 않음" "4|0|0" "$($P -c "select count(*) from public.notifications where payload->>'admin' is null")|$($P -c "select count(*) from public.notifications where payload->>'admin'='true'")|$(echo "$r3" | grep -c '^ERROR')"
 $P -c "alter table public.daegwan_manual_x rename to daegwan_manual; delete from public.notifications" >/dev/null
 # 회원이 days 'x' 로 위조한 자기 줄 · rkey 위조 → 실행이 멈추지 않는다
 $P -c "insert into public.notifications(user_id,type,title,body,payload) values ('$M','visit_reminder','x','y','{\"days\":\"x\",\"rkey\":\"t:zzz\"}')" >/dev/null
-ok "위조 줄이 있어도 실행 성공(글자 비교)" "6" "$($P -c "select (public.taam_visit_reminder_notify()->>'made')" 2>&1)"
+ok "위조 줄이 있어도 실행 성공(글자 비교)" "9" "$($P -c "select (public.taam_visit_reminder_notify()->>'made')" 2>&1)"
+# taam_notify_admins 모양(via)으로 슈퍼어드민 알림함에 꽂은 줄은 중복 검사에 안 센다
+$P -c "delete from public.notifications" >/dev/null
+$P -c "insert into public.notifications(user_id,type,title,body,payload) select '$SU','visit_reminder','x','y', jsonb_build_object('days','3','rkey','t:'||id::text,'ticket_id',id::text,'admin',true,'actor_id','$M','via','taam_notify_admins') from public.tickets where purchase_id='PAYH-2'" >/dev/null
+$P -c "select public.taam_visit_reminder_notify()" >/dev/null
+ok "위조(via taam_notify_admins) 줄이 있어도 슈퍼어드민 리마인드는 나간다" "1" "$($P -c "select count(*) from public.notifications n join public.tickets t on t.id::text = n.payload->>'ticket_id' where t.purchase_id='PAYH-2' and n.user_id='$SU' and n.payload->>'via' is null")"
+# 상한 50 — 수동 기록 60건(내일)
+$P -c "delete from public.notifications; insert into public.daegwan_manual(venue_id, ymd, name, pax, venue_name) select 'r-kanda','$Y1','대량'||g,1,'칸다' from generate_series(1,60) g" >/dev/null
+r4=$($P -c "select public.taam_visit_reminder_notify()::text")
+ok "상한: 슈퍼어드민 몫 50건 · 넘친 수 admin_skipped · 회원 줄은 그대로(4)" "50|15|4" "$($P -c "select (('$r4')::jsonb->>'admin_made')")|$($P -c "select (('$r4')::jsonb->>'admin_skipped')")|$($P -c "select count(*) from public.notifications where payload->>'admin' is null")"
+$P -c "delete from public.daegwan_manual where name like '대량%'; delete from public.notifications" >/dev/null
 
 # 테스트 발송 파일 — 슈퍼어드민만 · 예시 · 앞으로 받을 일정(건수만) · Edge 호출은 설정이 없으면 ⚠ 로 건너뜀
 $P -c "create or replace function public._taam_member_push(a uuid,b text,c text,d text,e text,f text,g jsonb) returns jsonb language sql as \$\$ select jsonb_build_object('ok',true,'request_id',42) \$\$" >/dev/null
 $P -c "delete from public.notifications" >/dev/null
 out4=$($P -f supabase/migrations/20261027_visit_reminder_admin_test.sql 2>&1)
-ok "테스트 파일: 오류 없음 · 예시 1건(슈퍼어드민) · [예약자] : 우댕 · 내일 하루 전 2건(수동 기록·수동 예약 · 회원 구매) · 이름 없음 · Edge ⚠ 건너뜀" "|1|1|1|0|1" "$(echo "$out4" | grep ERROR | head -1)|$(echo "$out4" | grep -c 'request_id=42')|$($P -c "select count(*) from public.notifications where user_id='$SU' and payload->>'test'='true' and body like '%[예약자] : 우댕'")|$(echo "$out4" | grep -cE '^B [0-9]{2}-[0-9]{2}\(.+\) 11:00\|하루 전 · 2건 \(')|$(echo "$out4" | grep -c '김회원')|$(echo "$out4" | grep -c '^C Edge 호출|⚠')"
+ok "테스트 파일: 오류 없음 · 예시 1건 · [예약자] : 우댕 · B 합계만(날짜·이름 없음) · C 슈퍼어드민 몫만 만들고 푸시 · 회원 알림 0" "|1|1|1|0|0|1|0" "$(echo "$out4" | grep ERROR | head -1)|$(echo "$out4" | grep -c '^A 예시 푸시.*request_id=42')|$($P -c "select count(*) from public.notifications where user_id='$SU' and payload->>'test'='true' and body like '%[예약자] : 우댕'")|$(echo "$out4" | grep -cE '^B 앞으로 30일\(슈퍼어드민 몫\)\|하루 전 [0-9]+건 · 3일 전 [0-9]+건 · 7일 전 [0-9]+건')|$(echo "$out4" | grep -cE '[0-9]{2}-[0-9]{2}\(|김회원|이회원|칸다|스시 사이토')|$($P -c "select count(*) from public.notifications where user_id <> '$SU'")|$(echo "$out4" | grep -cE '^C 오늘 몫\(슈퍼어드민만\)\|만든 리마인드 [1-9][0-9]*건 · 푸시 요청 [1-9][0-9]*건')|$(echo "$out4" | grep -c 'Edge')"
 # 다시 RUN · 모르는 판
 out2=$($P -f supabase/migrations/20261027_visit_reminder_admin.sql 2>&1)
 ok "두 번째 RUN: ✅ 이미 새 판 · ❌ 0" "1|0" "$(echo "$out2" | grep -c '✅ 이미 새 판(슈퍼어드민 전 일정)')|$(echo "$out2" | grep -c '❌')"

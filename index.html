@@ -19101,12 +19101,12 @@ async function loadDeposit(){
         var _seenBody = {};
         // 🆕 2026-10-27 방문 리마인드는 D-7·D-3·D-1 본문이 같다(레스토랑·날짜·시간·인원) — 티켓·일수까지 열쇠에 넣어야 D-1 이 D-3 의 중복으로 안 버려진다
         var _tkKey = function(n){ var p = (n && n.payload && typeof n.payload === 'object') ? n.payload : {};
-          return String(n.title || '') + '\u0001' + String(n.body || '') + (n.type === 'visit_reminder' ? '\u0001' + String(p.ticket_id || '') + '|' + String(p.days || '') : ''); };
+          return String(n.title || '') + '\u0001' + String(n.body || '') + (n.type === 'visit_reminder' ? '\u0001' + String(p.rkey || p.ticket_id || '') + '|' + String(p.days || '') : ''); };
         var _vrTk = {};   // 같은 묶음 안의 같은 티켓 리마인드(D-3 을 안 누른 채 D-1 이 오면)는 가장 새것 하나만 — 문구가 같아 같은 토스트가 두 번 떴다
         var newOnes = nres.data.filter(function(n){
           if (shown[n.id] || _mem[n.id]) return false;
-          if (n.type === 'visit_reminder' && n.payload && n.payload.ticket_id) {
-            var _vk = String(n.payload.ticket_id);
+          if (n.type === 'visit_reminder' && n.payload && (n.payload.rkey || n.payload.ticket_id)) {
+            var _vk = String(n.payload.rkey || n.payload.ticket_id);   // 슈퍼어드민 몫은 rkey(t:/i:/m:) — 수동 기록은 ticket_id 가 없다
             if (_vrTk[_vk]) { shown[n.id] = Date.now(); _mem[n.id] = Date.now(); return false; }
             _vrTk[_vk] = true;
           }
@@ -69807,9 +69807,9 @@ window.pushTestRemind = async function(days){
 //     [인원] : 5
 //     (빈 줄) [유의사항] … · (빈 줄) [안내말씀] …   ← 매장이 적었을 때만
 var _VR_LB = {
-  ko:{ title:'예약 안내', rest:'레스토랑', date:'날짜', time:'시간', pax:'인원', notice:'유의사항', message:'안내말씀' },
-  en:{ title:'Reservation Reminder', rest:'Restaurant', date:'Date', time:'Time', pax:'Guests', notice:'Notes', message:'Message' },
-  ja:{ title:'ご予約のご案内', rest:'レストラン', date:'日付', time:'時間', pax:'人数', notice:'ご注意事項', message:'ご案内' }
+  ko:{ title:'예약 안내', rest:'레스토랑', date:'날짜', time:'시간', pax:'인원', who:'예약자', notice:'유의사항', message:'안내말씀' },
+  en:{ title:'Reservation Reminder', rest:'Restaurant', date:'Date', time:'Time', pax:'Guests', who:'Name', notice:'Notes', message:'Message' },
+  ja:{ title:'ご予約のご案内', rest:'レストラン', date:'日付', time:'時間', pax:'人数', who:'ご予約者', notice:'ご注意事項', message:'ご案内' }
 };
 // 'HH:MM' → 오후 6:30 · 6:30 PM · 午後6:30 (못 읽으면 적힌 그대로)
 function _vrTimeStr(raw, lang){
@@ -69856,7 +69856,7 @@ function _vrL10nBody(s0, lang){
   var blocks = String(s0 || '').split('\n\n'), head = blocks[0].split('\n'), out = [];
   if(!/^\[레스토랑\] : /.test(head[0] || '')) return null;
   for(var i = 0; i < head.length; i++){
-    var m = head[i].match(/^\[(레스토랑|날짜|시간|인원)\] : (.*)$/);
+    var m = head[i].match(/^\[(레스토랑|날짜|시간|인원|예약자)\] : (.*)$/);   // 예약자 — 슈퍼어드민 몫(서버 _taam_vr_add_who · 2026-10-27)
     if(!m) return null;
     var v = m[2];
     if(m[1] === '레스토랑'){
@@ -69869,7 +69869,8 @@ function _vrL10nBody(s0, lang){
       var tm = v.match(/^(오전|오후) (\d{1,2}):(\d{2})$/);
       if(tm) v = _vrTimeStr((parseInt(tm[2], 10) % 12 + (tm[1] === '오후' ? 12 : 0)) + ':' + tm[3], lang);
       out.push('[' + L.time + '] : ' + v);
-    } else out.push('[' + L.pax + '] : ' + v);
+    } else if(m[1] === '예약자') out.push('[' + L.who + '] : ' + v);
+    else out.push('[' + L.pax + '] : ' + v);
   }
   var body = out.join('\n');
   for(var j = 1; j < blocks.length; j++){
