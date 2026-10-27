@@ -798,6 +798,10 @@ async function handle(req: Request): Promise<Response> {
           title: t.title != null ? t.title : p.title,
           body:  t.body  != null ? t.body  : p.body,
         });
+        // 🆕 2026-10-27 고른 뒤에는 i18n 을 뺀다 — 서비스워커·APNs·FCM 은 title/body 만 본다.
+        //   남겨 두면 웹 푸시 본문에 문구가 네 벌(맨 위 + ko·en·ja) 실려, 방문 리마인드에 매장 문구가 길면
+        //   aes128gcm 한 레코드(4096B) 를 넘어 푸시 서비스가 413 으로 버렸다(적대 리뷰).
+        if (out !== p) delete out.i18n;
       }
       if (!(typeof p?.badge === "number") && sub?.user_id) {
         const n = unseenByUser.get(String(sub.user_id));

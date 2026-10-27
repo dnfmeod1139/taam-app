@@ -75,13 +75,15 @@ declare
   t_ko text; t_en text; t_ja text; d_ko text; d_en text; d_ja text;
   v_dow int; v_pax text := greatest(coalesce(p_pax, 1), 1)::text;
   v_notes jsonb := coalesce(p_notes, '{}'::jsonb);
-  r_ko text := coalesce(nullif(btrim(p_rest->>'ko'), ''), '예약하신 매장');
+  r_ko text := nullif(btrim(p_rest->>'ko'), '');
   r_en text; r_ja text;
   n_ko text; n_en text; n_ja text; m_ko text; m_en text; m_ja text;
   b_ko text; b_en text; b_ja text;
 begin
-  r_en := coalesce(nullif(btrim(p_rest->>'en'), ''), r_ko);
-  r_ja := coalesce(nullif(btrim(p_rest->>'ja'), ''), r_ko);
+  -- 매장 이름: 그 언어 이름 → 한국어 이름 → 언어별 「예약하신 매장」(이름을 전혀 모를 때만)
+  r_en := coalesce(nullif(btrim(p_rest->>'en'), ''), r_ko, 'Your reservation');
+  r_ja := coalesce(nullif(btrim(p_rest->>'ja'), ''), r_ko, 'ご予約');
+  r_ko := coalesce(r_ko, '예약하신 매장');
   -- 날짜 (언제나 연도 · 요일)
   if p_date is not null then
     v_dow := extract(dow from p_date)::int;
@@ -177,8 +179,9 @@ as $$
 declare v_rest jsonb; v_date date; v_time text; r record;
 begin
   if not public._taam_rest_note_ok(p_rest_id) then raise exception 'FORBIDDEN' using errcode = '42501'; end if;
-  select jsonb_build_object('ko', coalesce(nullif(btrim(to_jsonb(x)->>'name'), ''), '예약하신 매장'),
-                            'en', nullif(btrim(to_jsonb(x)->>'name_en'), ''), 'ja', nullif(btrim(to_jsonb(x)->>'name_jp'), ''))
+  select jsonb_build_object('ko', nullif(btrim(to_jsonb(x)->>'name'), ''),
+                            'en', nullif(btrim(to_jsonb(x)->>'name_en'), ''),
+                            'ja', case when coalesce(to_jsonb(x)->>'i18n_jp_approved', '') <> 'false' then nullif(btrim(to_jsonb(x)->>'name_jp'), '') end)
     into v_rest from public.restaurants x where x.id::text = btrim(p_rest_id);
   for r in select public.taam_visit_date(tp.date) as d, tp.time as t from public.ticket_products tp
             where tp.rest_id::text = btrim(p_rest_id) and public.taam_visit_date(tp.date) >= (now() at time zone 'Asia/Seoul')::date
@@ -222,6 +225,7 @@ begin
     select t.id            as ticket_id,
            t.user_id,
            coalesce(nullif(btrim(t.restaurant_name), ''), '예약하신 매장') as rest_nm,
+           nullif(btrim(t.restaurant_name), '')                            as rest_raw,
            coalesce(nullif(btrim(t.visit_time), ''), '')                   as vtime,
            public.taam_visit_days_left(t.reservation_date)                 as d,
            public.taam_visit_date(t.reservation_date)                      as vd,
@@ -253,9 +257,10 @@ begin
     -- 문구는 _taam_visit_remind_msg 한 곳에서 — 세 언어 · 매장 이름 영어/일본어 · 매장 문구
     select w.*,
            public._taam_visit_remind_msg(
-             jsonb_build_object('ko', w.rest_nm,
+             -- 티켓에 적힌 이름 → 매장 등록 이름 · 일본어는 승인 안 된(i18n_jp_approved=false) 이름을 쓰지 않는다(앱 _tbRestName 과 같다)
+             jsonb_build_object('ko', coalesce(w.rest_raw, nullif(btrim(to_jsonb(r)->>'name'), '')),
                                 'en', nullif(btrim(to_jsonb(r)->>'name_en'), ''),
-                                'ja', nullif(btrim(to_jsonb(r)->>'name_jp'), '')),
+                                'ja', case when coalesce(to_jsonb(r)->>'i18n_jp_approved', '') <> 'false' then nullif(btrim(to_jsonb(r)->>'name_jp'), '') end),
              w.vd, w.vtime, w.pax, to_jsonb(vn)) as i18n
       from want w
       left join public.restaurants r on r.id::text = w.rest_id
@@ -279,7 +284,9 @@ begin
         where n.user_id = m.user_id
           and n.type = 'visit_reminder'
           and n.payload ->> 'ticket_id' = m.ticket_id::text
-          and (n.payload ->> 'days')::int = m.d)
+          -- 글자로 비교한다 — 회원은 자기 알림 줄의 payload 를 쓸 수 있어(notif_insert·notif_update_own) days 에 'x' 를 넣으면
+          --   ::int 가 터져 그날 리마인드 전체(+ 비회원 알림톡)가 멈췄다 (2026-10-27 적대 리뷰 · 20261019 판부터)
+          and n.payload ->> 'days' = m.d::text)
     -- 이번 실행이 **실제로 넣은 행만** 돌려받는다(시간 창으로 다시 긁으면 푸시가 두 번 간다)
     returning id, user_id, title, body, url, payload
   )

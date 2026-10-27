@@ -17,8 +17,8 @@ create or replace function public.taam_is_rest_admin(p_rest_id text) returns boo
 insert into auth.users values ('$M'),('$M2'),('$SU'),('$AD');
 create table public.profiles(id uuid primary key, display_name text, created_at timestamptz default now(), notif_prefs jsonb default '{}'::jsonb, role text);
 insert into public.profiles(id, display_name, role, notif_prefs) values ('$M','김회원','user','{}'),('$M2','이회원','user','{"remind1":false}'),('$SU','Super','superadmin','{}'),('$AD','매장','admin','{}');
-create table public.restaurants(id text primary key, name text, name_en text, name_jp text);
-insert into public.restaurants values ('r-mitou','미토우','Mitou','味豆'),('r-saito','스시 사이토',null,null);
+create table public.restaurants(id text primary key, name text, name_en text, name_jp text, i18n_jp_approved boolean default true);
+insert into public.restaurants(id, name, name_en, name_jp, i18n_jp_approved) values ('r-mitou','미토우','Mitou','味豆',true),('r-saito','스시 사이토',null,null,true),('r-kanda','칸다','Kanda','かんだ',false);
 create table public.ticket_products(id text primary key, rest_id text, date text, time text);
 insert into public.ticket_products values ('tp1','r-mitou','$TOMORROW','18:30'),('tp2','r-saito','$IN3','12:00');
 create table public.tickets(id uuid primary key default gen_random_uuid(), user_id uuid, restaurant_id text, restaurant_name text, ticket_product_id text, reservation_date text, visit_time text, party_size int, status text, purchase_id text, extra_data jsonb default '{}'::jsonb, created_at timestamptz default now());
@@ -73,6 +73,19 @@ ok "알림함 줄: 제목 「예약 안내」 · 본문 넷(내일 날짜 · 오
 ok "restaurant_id 가 빈 행은 회차의 매장(r-saito) · payload fmt v2 · pax 2 · date · i18n en" "r-saito|v2|2|1|Reservation Reminder" "$($P -c "select (payload->>'rest_id')||'|'||(payload->>'fmt')||'|'||(payload->>'pax')||'|'||(payload->>'date' ~ '^\d{4}-\d{2}-\d{2}$')::int||'|'||(payload->'i18n'->'en'->>'title') from public.notifications where user_id='$M' and payload->>'days'='3'")"
 ok "돌려주는 줄에 i18n(세 언어) — Edge 가 그대로 쓴다" "2|2" "$(echo "$r" | $P -c "select 1" >/dev/null; $P -c "select count(*) from jsonb_array_elements(('$r')::jsonb->'rows') x where x->'i18n'->'ja'->>'title' = 'ご予約のご案内'")|$($P -c "select (('$r')::jsonb->>'made')")"
 ok "다시 부르면 0 (같은 티켓·일수 한 번)" "0" "$($P -c "select (public.taam_visit_reminder_notify()->>'made')")"
+ok "이름을 전혀 모르면 언어별 「예약하신 매장」 (EN Your reservation · JA ご予約)" "예약하신 매장|Your reservation|ご予約" "$($P -c "select substring(j->'ko'->>'body' from '\[레스토랑\] : ([^\n]+)')||'|'||substring(j->'en'->>'body' from '\[Restaurant\] : ([^\n]+)')||'|'||substring(j->'ja'->>'body' from '\[レストラン\] : ([^\n]+)') from public._taam_visit_remind_msg('{}', date '2026-09-10', '18:30', 2, null) j")"
+# 티켓에 이름이 빈 행은 매장 등록 이름 · 일본어 승인 안 된 이름은 안 쓴다
+$P -c "delete from public.notifications" >/dev/null
+$P -c "insert into public.tickets(user_id, restaurant_id, restaurant_name, ticket_product_id, reservation_date, visit_time, party_size, status, purchase_id) values ('$M','r-kanda','',null,'$TOMORROW','19:00',3,'active','PAYH-kkk')" >/dev/null
+$P -c "update public.tickets set status='cancelled' where purchase_id in ('PAYH-aaa','PAYH-bbb','PAYH-ccc')" >/dev/null
+$P -c "select public.taam_visit_reminder_notify()" >/dev/null
+ok "티켓에 이름 없음 → 매장 등록 이름(칸다) · EN Kanda · JA 는 승인 안 됨(i18n_jp_approved=false) → 한국어 이름" "칸다|Kanda|칸다" "$($P -c "select substring(body from '\[레스토랑\] : ([^\n]+)')||'|'||substring(payload->'i18n'->'en'->>'body' from '\[Restaurant\] : ([^\n]+)')||'|'||substring(payload->'i18n'->'ja'->>'body' from '\[レストラン\] : ([^\n]+)') from public.notifications where payload->>'rest_id'='r-kanda'")"
+# 회원이 자기 알림 줄의 days 에 숫자가 아닌 값을 넣어도 그날 실행이 멈추지 않는다 (종전 ::int 가 터졌다)
+$P -c "delete from public.notifications" >/dev/null
+$P -c "insert into public.notifications(user_id, type, title, body, payload) select '$M','visit_reminder','x','y', jsonb_build_object('ticket_id', id::text, 'days', 'x') from public.tickets where purchase_id='PAYH-kkk'" >/dev/null
+ok "위조 줄(days 'x')이 있어도 실행 성공 · 그 티켓 리마인드도 나간다" "1|" "$($P -c "select (public.taam_visit_reminder_notify()->>'made')" 2>&1)|$($P -c "select public.taam_visit_reminder_notify()" 2>&1 | grep -o ERROR | head -1)"
+$P -c "delete from public.notifications; delete from public.tickets where purchase_id='PAYH-kkk'; update public.tickets set status='active' where purchase_id in ('PAYH-aaa','PAYH-bbb','PAYH-ccc')" >/dev/null
+$P -c "select public.taam_visit_reminder_notify()" >/dev/null
 
 # 매장 문구 — 권한
 ok "회원은 못 쓴다 (FORBIDDEN)" "1" "$($P -c "set taam.uid='$M'; select public.taam_visit_notes_set('r-mitou','{\"notice\":\"x\"}')" 2>&1 | grep -c FORBIDDEN)"
@@ -100,10 +113,15 @@ out3=$($P -f supabase/migrations/20261027_visit_reminder_format.sql 2>&1)
 ok "모르는 판: ❌ 건너뜀 · 덮어쓰지 않음" "1|{\"made\": 0}" "$(echo "$out3" | grep -c '❌ 라이브 본문이')|$($P -c "select public.taam_visit_reminder_notify()")"
 # 테스트 발송 파일 — 슈퍼어드민에게만 · 실제 함수 문구 · 회원 알림 0
 $P -c "create or replace function public._taam_member_push(a uuid,b text,c text,d text,e text,f text,g jsonb) returns jsonb language sql as \$\$ select jsonb_build_object('ok',true,'request_id',42) \$\$" >/dev/null
-$P -f supabase/migrations/20261027_visit_reminder_format.sql >/dev/null 2>&1   # 모르는 판 덮어쓰기 거부 뒤라 옛 판 그대로 — 테스트 파일은 그것을 ⚠ 로 알린다
+# 모르는 판(스텁)을 지우고 라이브와 같은 순서로 다시 올린다: 원본 → 20261019 → 20261027
+$P -c "drop function public.taam_visit_reminder_notify()" >/dev/null
+$P -f sql/visit_reminder.sql >/dev/null 2>&1
+$P -f supabase/migrations/20261019_member_link_rows.sql >/dev/null 2>&1
+$P -f supabase/migrations/20261027_visit_reminder_format.sql >/dev/null 2>&1
 $P -c "delete from public.notifications" >/dev/null
 $P -c "set taam.uid='$AD'; set taam.rest='r-mitou'; select public.taam_visit_notes_set('r-mitou','{\"notice\":\"주차 불가\"}')" >/dev/null
 out4=$($P -f supabase/migrations/20261027_visit_reminder_format_test.sql 2>&1)
-ok "테스트 발송: 오류 없음 · 슈퍼어드민 1명 request_id 42 · 가장 가까운 예약(내일 미토우 18:30 + 유의사항) · 회원 알림 0" "|1|1|0|[테스트] 예약 안내" "$(echo "$out4" | grep -E "ERROR" | head -1)|$(echo "$out4" | grep -c 'request_id=42')|$($P -c "select count(*) from public.notifications where user_id='$SU' and payload->>'test'='true' and body like E'[레스토랑] : 미토우\n[날짜] : %\n[시간] : 오후 6:30\n[인원] : %\n\n[유의사항]\n주차 불가'")|$($P -c "select count(*) from public.notifications where user_id<>'$SU'")|$($P -c "select title from public.notifications where user_id='$SU' and payload->>'test'='true'")"
+ok "테스트 발송: 오류 없음 · 슈퍼어드민 1명 request_id 42 · 고정 예시(미토우 2026-09-10 18:30 5인 — 실제 예약을 로그에 안 찍는다) · 회원 알림 0" "|1|1|0|[테스트] 예약 안내|0" "$(echo "$out4" | grep -E "ERROR" | head -1)|$(echo "$out4" | grep -c 'request_id=42')|$($P -c "select count(*) from public.notifications where user_id='$SU' and payload->>'test'='true' and body = E'[레스토랑] : 미토우\n[날짜] : 2026년 9월 10일(목)\n[시간] : 오후 6:30\n[인원] : 5'")|$($P -c "select count(*) from public.notifications where user_id<>'$SU'")|$($P -c "select title from public.notifications where user_id='$SU' and payload->>'test'='true'")|$(echo "$out4" | grep -c '주차 불가')"
+ok "며칠 전 점검: 보내는 날 7·3·1 · 회원 설정 · 다가오는 발송(내일 방문 2건 중 하루 전 끈 1명 빠짐) · 새 판 표시" "1|1|1|1" "$(echo "$out4" | grep -c '방문 7일 전 · 3일 전 · 하루 전')|$(echo "$out4" | grep -c '새 판(예약 안내) ✅')|$(echo "$out4" | grep -c '^회원 설정(일반 회원 2명)|7일 전 켬 0 · 3일 전 끔 0 · 하루 전 끔 1 · 알림 전체 끔 0')|$(echo "$out4" | grep -cE '^다가오는 발송 [0-9]{2}-[0-9]{2}\(.+\) 11:00\|1일 전 · 예약 2건 · 보냄 1건 · 설정 꺼져서 안 감 1건$')"
 [ -z "$KEEP" ] && psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1
 [ $FAIL = 0 ] && echo "=== 전부 통과 ===" || { echo "=== 실패 있음 ==="; exit 1; }

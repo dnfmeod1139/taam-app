@@ -19099,9 +19099,12 @@ async function loadDeposit(){
         if (!window._notifToastedMem) window._notifToastedMem = {};
         var _mem = window._notifToastedMem;
         var _seenBody = {};
+        // 🆕 2026-10-27 방문 리마인드는 D-7·D-3·D-1 문구가 같다(「예약 안내」 + 레스토랑·날짜·시간·인원) — 티켓·일수까지 열쇠에 넣어야 D-1 이 D-3 의 중복으로 안 버려진다
+        var _tkKey = function(n){ var p = (n && n.payload && typeof n.payload === 'object') ? n.payload : {};
+          return String(n.title || '') + '\u0001' + String(n.body || '') + (n.type === 'visit_reminder' ? '\u0001' + String(p.ticket_id || '') + '|' + String(p.days || '') : ''); };
         var newOnes = nres.data.filter(function(n){
           if (shown[n.id] || _mem[n.id]) return false;
-          var _k = String(n.title || '') + '\u0001' + String(n.body || '');
+          var _k = _tkKey(n);
           if (_seenBody[_k] || _mem['body:' + _k]) return false;
           _seenBody[_k] = true;
           return true;
@@ -19113,8 +19116,7 @@ async function loadDeposit(){
           return String(s||'').replace(/^[\s\u{1F000}-\u{1FFFF}\u{2300}-\u{27BF}\u{2190}-\u{21FF}\u{2700}-\u{27BF}]+/gu, '').trim();
         }
         function _toastStripAll(s){
-          // 🆕 2026-10-27 줄바꿈은 남긴다(방문 리마인드 「[레스토랑] : …」 여러 줄) — 줄 안의 겹친 공백만 하나로
-          return String(s||'').replace(/[\u{1F000}-\u{1FFFF}\u{2300}-\u{27BF}\u{2190}-\u{21FF}\u{2700}-\u{27BF}]/gu, '').replace(/[^\S\n]{2,}/g,' ').replace(/\n{3,}/g,'\n\n').trim();
+          return String(s||'').replace(/[\u{1F000}-\u{1FFFF}\u{2300}-\u{27BF}\u{2190}-\u{21FF}\u{2700}-\u{27BF}]/gu, '').replace(/\s{2,}/g,' ').trim();
         }
         function _typeLabelKo(type){
           if(type === 'deposit_grant') return '예치금';
@@ -19136,13 +19138,15 @@ async function loadDeposit(){
             var cleanBody = _toastStripAll(n.body || '');
             // 🆕 2026.09.15 미접속 중 쌓인 서버 알림도 현재 언어로 (목록과 같은 정규화)
             try { cleanTitle = _notifL10nTitle(cleanTitle); cleanBody = _notifL10nBody(cleanBody); } catch(_l10){}
+            // 🆕 2026-10-27 방문 리마인드: 매장이 쓴 문구의 기호(①·→·★·☎)를 지우지 않는다 · 영어·일본어면 서버가 만든 그 언어 문구(payload.i18n)
+            if (n.type === 'visit_reminder' && typeof _vrPick === 'function') { var _vp = _vrPick(n); if (_vp) { cleanTitle = _vp.title; cleanBody = _vp.body; } }
             if (typeof showToast === 'function') showToast(headerLabel, cleanTitle, cleanBody, {
               onTap: (function(_id){ return function(){ _notifMarkSeen(_id); }; })(n.id)
             });
           }, idx * 2200);
           shown[n.id] = Date.now();
           _mem[n.id] = Date.now();
-          _mem['body:' + String(n.title || '') + '\u0001' + String(n.body || '')] = Date.now();
+          _mem['body:' + _tkKey(n)] = Date.now();
         });
         if (_overflow > 0) {
           setTimeout(function(){
@@ -19150,7 +19154,7 @@ async function loadDeposit(){
           }, newOnes.length * 2200);
         }
         // 같은 내용의 나머지 행도 「본 것」으로 적어 둔다 — 다음 갱신에서 또 뜨지 않게
-        nres.data.forEach(function(n){ if (!shown[n.id] && _seenBody[String(n.title || '') + '\u0001' + String(n.body || '')]) { shown[n.id] = Date.now(); _mem[n.id] = Date.now(); } });
+        nres.data.forEach(function(n){ if (!shown[n.id] && _seenBody[_tkKey(n)]) { shown[n.id] = Date.now(); _mem[n.id] = Date.now(); } });
         try { sessionStorage.setItem(shownKey, JSON.stringify(shown)); } catch(_){}
       }
       // 항상 레드닷 갱신 (seen=false 카운트로)
@@ -57869,7 +57873,8 @@ async function tkOpenNotice() {
         var _nCols = 'id, type, title, body, url, created_at, seen';
         var _nq = function(cols){ return window.sb.from('notifications').select(cols).eq('user_id', u.id).order('created_at', { ascending:false }).limit(50); };
         // 🆕 2026-10-27 영어·일본어 화면이면 방문 리마인드의 서버 문구(payload.i18n 의 그 언어 제목·본문 넷)만 함께 — 한국어면 안 읽는다
-        var _vrCols = ((window._tkCurrentLang || 'ko') !== 'ko') ? ', vr_en_t:payload->i18n->en->>title, vr_en_b:payload->i18n->en->>body, vr_ja_t:payload->i18n->ja->>title, vr_ja_b:payload->i18n->ja->>body' : '';
+        //   슈퍼어드민은 안 읽는다 — 회원이 taam_notify_admins 로 같은 type·payload 를 꽂을 수 있어 그 글을 믿지 않는다(적대 리뷰)
+        var _vrCols = ((window._tkCurrentLang || 'ko') !== 'ko' && !_anSA) ? ', vr_en_t:payload->i18n->en->>title, vr_en_b:payload->i18n->en->>body, vr_ja_t:payload->i18n->ja->>title, vr_ja_b:payload->i18n->ja->>body' : '';
         var r = await _nq(_nCols + _vrCols + (_anSA ? _AN_PCOLS : ''));
         if (r.error && (_anSA || _vrCols)) r = await _nq(_nCols);   // JSON 경로 select 를 못 받는 서버면 종전 칸만
         if (!r.error && _anSA && Array.isArray(r.data)) r.data.forEach(_anPackPayload);
@@ -68267,22 +68272,20 @@ function _notifRenderMerged(serverRows){
     return '🔔';
   }
   function _srvStrip(s){
-    // 🆕 2026-10-27 줄바꿈은 남긴다(방문 리마인드가 여러 줄 · 빈 줄로 [유의사항]·[안내말씀]을 가른다) — 줄 안의 겹친 공백만 하나로
-    return String(s||'').replace(/[\u{1F000}-\u{1FFFF}\u{2300}-\u{27BF}\u{2190}-\u{21FF}\u{2700}-\u{27BF}]/gu,'').replace(/[^\S\n]{2,}/g,' ').replace(/\n{3,}/g,'\n\n').trim();
+    return String(s||'').replace(/[\u{1F000}-\u{1FFFF}\u{2300}-\u{27BF}\u{2190}-\u{21FF}\u{2700}-\u{27BF}]/gu,'').replace(/\s{2,}/g,' ').trim();
   }
   var _li = (typeof _notifLangIdx === 'function') ? _notifLangIdx() : 0;
   (serverRows||[]).forEach(function(n){
-    var _tt = _srvStrip(n.title) || '알림', _bd = _srvStrip(n.body||'');
-    // 🆕 2026-10-27 영어·일본어 화면: 방문 리마인드는 서버가 만든 그 언어 문구(payload.i18n)를, 그 밖은 알려진 문구 규칙으로. 한국어 화면은 종전 그대로
-    if(_li){
-      var _vt = _li === 1 ? n.vr_en_t : n.vr_ja_t, _vb = _li === 1 ? n.vr_en_b : n.vr_ja_b;
-      if(n.type === 'visit_reminder' && _vt && _vb){ _tt = _srvStrip(_vt) || _tt; _bd = _srvStrip(_vb) || _bd; }
-      else { try { _tt = _notifL10nTitle(_tt) || _tt; _bd = _notifL10nBody(_bd); } catch(_l10){} }
-    }
+    var _tt = _srvStrip(n.title) || '알림', _bd = _srvStrip(n.body||''), _vr = null;
+    // 🆕 2026-10-27 방문 리마인드는 _vrPick(기호를 지우지 않고 · 영어·일본어면 그 언어 문구) · 그 밖은 영어·일본어 화면에서만 알려진 문구 규칙으로. 한국어 화면은 종전 그대로
+    if(n.type === 'visit_reminder' && typeof _vrPick === 'function') _vr = _vrPick(n);
+    if(_vr){ _tt = _vr.title; _bd = _vr.body; }
+    else if(_li){ try { _tt = _notifL10nTitle(_tt) || _tt; _bd = _notifL10nBody(_bd); } catch(_l10){} }
     items.push({
       icon: _srvIcon(n.type),
       title: _tt,
       msg: _bd,
+      noTx: !!_vr,   // 매장이 쓴 문구를 번역 스윕(TX)이 반쯤 바꾸지 않게
       time: n.created_at ? new Date(n.created_at).getTime() : 0,
       srv: n   // 🆕 2026-10-25 슈퍼어드민이 누르면 그 내역 화면으로 (_anRoute) — 로컬 기록 줄에는 없다
     });
@@ -68324,7 +68327,7 @@ function _notifRenderItems(items){
       +'<div style="font-size:18px;flex-shrink:0;width:24px;text-align:center;">'+(n.icon||'🔔')+'</div>'
       +'<div style="flex:1;min-width:0;">'
         +'<div style="font-family:\'Noto Sans KR\',sans-serif;font-size:13px;font-weight:700;color:rgba(255,255,255,.95);margin-bottom:3px;">'+_notifEsc(n.title||'')+'</div>'
-        +'<div style="font-family:\'Noto Sans KR\',sans-serif;font-size:12px;color:rgba(255,255,255,.6);line-height:1.5;word-break:keep-all;white-space:pre-line;">'+_notifEsc(n.msg||'')+'</div>'
+        +'<div' + (n.noTx ? ' data-no-tx' : '') + ' style="font-family:\'Noto Sans KR\',sans-serif;font-size:12px;color:rgba(255,255,255,.6);line-height:1.5;word-break:keep-all;white-space:pre-line;">'+_notifEsc(n.msg||'')+'</div>'
         +(_rt ? '<div data-lang-lock="ko" style="font-family:\'Noto Sans KR\',sans-serif;font-size:11px;font-weight:700;color:#d8b98a;margin-top:6px;letter-spacing:-.005em;">' + _notifEsc(_rt.label) + ' ›</div>' : '')
       +'</div>'
       +'<div style="font-family:var(--font-main);font-size:9px;color:rgba(255,255,255,.35);flex-shrink:0;letter-spacing:.05em;align-self:flex-start;padding-top:3px;">'+_notifEsc(timeStr)+'</div>'
@@ -69798,8 +69801,8 @@ function _vrMsg(rest, ymd, time, pax, notes){
   var out = {}, dm = String(ymd || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
   ['ko','en','ja'].forEach(function(lang){
     var L = _VR_LB[lang], sfx = lang === 'ko' ? '' : '_' + lang;
-    var ko = String(rest.ko || '').trim() || '예약하신 매장';
-    var nm = (lang === 'ko' ? '' : String(rest[lang] || '').trim()) || ko;
+    var ko = String(rest.ko || '').trim();
+    var nm = (lang === 'ko' ? '' : String(rest[lang] || '').trim()) || ko || ({ ko:'예약하신 매장', en:'Your reservation', ja:'ご予約' })[lang];
     var lines = ['[' + L.rest + '] : ' + nm];
     if(dm) lines.push('[' + L.date + '] : ' + _tbDateStr(+dm[1], +dm[2], +dm[3], lang, true));
     var tt = _vrTimeStr(time, lang); if(tt) lines.push('[' + L.time + '] : ' + tt);
@@ -69823,7 +69826,7 @@ function _vrL10nBody(s0, lang){
     if(!m) return null;
     var v = m[2];
     if(m[1] === '레스토랑'){
-      var nm = ''; try { nm = (typeof _tbRestName === 'function') ? _tbRestName(v, null, lang) : ''; } catch(_n){}
+      var nm = ''; try { nm = (v === '예약하신 매장') ? ({ en:'Your reservation', ja:'ご予約' })[lang] : ((typeof _tbRestName === 'function') ? _tbRestName(v, null, lang) : ''); } catch(_n){}
       out.push('[' + L.rest + '] : ' + (nm || v));
     } else if(m[1] === '날짜'){
       var dm = v.match(/^(\d{4})년 (\d{1,2})월 (\d{1,2})일/);
@@ -69842,6 +69845,30 @@ function _vrL10nBody(s0, lang){
   return body;
 }
 
+// 알림함·토스트가 리마인드 한 줄을 그리는 법 — 제목·본문은 공백만 다듬고 기호는 그대로(매장이 쓴 ①·→·★·☎ 를 지우지 않는다).
+//   영어·일본어 화면이면 서버가 만든 그 언어 문구(payload.i18n · 시트는 vr_* 칸)를, 없으면 _vrL10nBody 로 항목 이름·날짜·시각만 바꾼다.
+//   슈퍼어드민은 payload 의 다른 언어 문구를 믿지 않는다(회원이 taam_notify_admins 로 같은 type 을 꽂을 수 있다).
+function _vrClean(s, max){ return String(s == null ? '' : s).replace(/\r/g, '').replace(/[^\S\n]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim().slice(0, max || 1200); }
+function _vrPick(n){
+  if(!n) return null;
+  var li = (typeof _notifLangIdx === 'function') ? _notifLangIdx() : 0, lang = ['ko','en','ja'][li];
+  var title = _vrClean(n.title, 200), body = _vrClean(n.body, 1200);
+  if(li){
+    var sa = (typeof _isSuperAdmin === 'function') && _isSuperAdmin();
+    var p = (n.payload && typeof n.payload === 'object') ? n.payload : {};
+    var src = (!sa && p.i18n && typeof p.i18n === 'object' && p.i18n[lang]) ? p.i18n[lang] : null;
+    var t2 = sa ? '' : (src ? src.title : (lang === 'en' ? n.vr_en_t : n.vr_ja_t));
+    var b2 = sa ? '' : (src ? src.body : (lang === 'en' ? n.vr_en_b : n.vr_ja_b));
+    if(t2 && b2 && typeof t2 === 'string' && typeof b2 === 'string'){ title = _vrClean(t2, 200); body = _vrClean(b2, 1200); }
+    else {
+      try { title = _notifL10nTitle(title) || title; } catch(_t){}
+      var lb = (typeof _vrL10nBody === 'function') ? _vrL10nBody(body, lang) : null;
+      if(lb) body = lb; else { try { body = _notifL10nBody(body); } catch(_b){} }
+    }
+  }
+  return { title: title || ((_VR_LB[lang] || _VR_LB.ko).title), body: body };
+}
+
 // ── 입력 화면 (슈퍼어드민: 아무 매장 · 매장 어드민: 자기 매장) ──
 var _VN_TX = {
   ko:{ head:'📩 방문 안내 문구 (예약 리마인드)', desc:'방문 3일 전·하루 전(회원이 켜 두었으면 7일 전) 회원에게 가는 「예약 안내」 알림에 붙는 문구입니다. 비워 두면 레스토랑·날짜·시간·인원만 나갑니다.',
@@ -69850,24 +69877,26 @@ var _VN_TX = {
        other:'영어 · 일본어 (선택 — 비우면 한국어 문구가 나갑니다)', en:'영어', ja:'일본어', preview:'미리보기', sample:'날짜·시간은 이 매장의 가장 가까운 회차(없으면 예시)로 보여 줍니다',
        save:'저장', saving:'저장 중…', saved:'저장했습니다', cleared:'문구를 지웠습니다 — 레스토랑·날짜·시간·인원만 나갑니다', loading:'불러오는 중…',
        not_ready:'서버 준비 필요 — 문구 기능이 아직 서버에 없습니다', forbidden:'이 매장의 문구를 바꿀 권한이 없습니다', too_long:'칸마다 300자까지입니다',
-       no_rest:'이 계정에 연결된 매장이 없습니다', fail:'저장 실패', discard:'저장하지 않은 문구가 있습니다. 버리고 다른 매장으로 갈까요?', close:'닫기' },
+       no_rest:'이 계정에 연결된 매장이 없습니다', fail:'저장 실패', load_fail:'불러오지 못했습니다 — 창을 닫았다가 다시 열어 주세요', discard:'저장하지 않은 문구가 있습니다. 버리고 다른 매장으로 갈까요?', discard_close:'저장하지 않은 문구가 있습니다. 닫을까요?', close:'닫기' },
   en:{ head:'📩 Visit Reminder Notes', desc:'Added to the “Reservation Reminder” members receive 3 days and 1 day before their visit (7 days if they turned it on). Leave blank to send only restaurant, date, time and guests.',
        rest:'Restaurant', pick:'Choose a restaurant', has:'has notes', notice:'Notes', message:'Message',
        ph_notice:'e.g. There is no parking — please use public transport.', ph_message:'e.g. Please let us know in advance if you will be late.',
        other:'English · Japanese (optional — blank sends the Korean text)', en:'English', ja:'Japanese', preview:'Preview', sample:'Date and time use this restaurant’s nearest session (or a sample)',
        save:'Save', saving:'Saving…', saved:'Saved', cleared:'Cleared — only restaurant, date, time and guests will be sent', loading:'Loading…',
        not_ready:'Server update required — this feature is not on the server yet', forbidden:'You cannot edit this restaurant’s notes', too_long:'Up to 300 characters per field',
-       no_rest:'No restaurant is linked to this account', fail:'Save failed', discard:'You have unsaved changes. Discard them and switch restaurant?', close:'Close' },
+       no_rest:'No restaurant is linked to this account', fail:'Save failed', load_fail:'Could not load — please close and reopen this window', discard:'You have unsaved changes. Discard them and switch restaurant?', discard_close:'You have unsaved changes. Close anyway?', close:'Close' },
   ja:{ head:'📩 来店案内の文言（予約リマインド）', desc:'来店3日前・前日（会員が設定していれば7日前）に会員へ届く「ご予約のご案内」に付く文言です。空欄なら店名・日付・時間・人数のみ送られます。',
        rest:'レストラン', pick:'レストランを選択', has:'文言あり', notice:'ご注意事項', message:'ご案内',
        ph_notice:'例）駐車場がございません。公共交通機関をご利用ください。', ph_message:'例）遅れる場合は事前にご連絡ください。',
        other:'英語・日本語（任意 — 空欄なら韓国語の文言が送られます）', en:'英語', ja:'日本語', preview:'プレビュー', sample:'日付・時間はこの店舗の直近の回（なければ例）で表示します',
        save:'保存', saving:'保存中…', saved:'保存しました', cleared:'削除しました — 店名・日付・時間・人数のみ送られます', loading:'読み込み中…',
        not_ready:'サーバーの更新が必要です — この機能はまだサーバーにありません', forbidden:'この店舗の文言を編集する権限がありません', too_long:'各欄300文字までです',
-       no_rest:'このアカウントに紐づく店舗がありません', fail:'保存に失敗しました', discard:'保存していない変更があります。破棄して店舗を切り替えますか？', close:'閉じる' }
+       no_rest:'このアカウントに紐づく店舗がありません', fail:'保存に失敗しました', load_fail:'読み込めませんでした — 一度閉じて開き直してください', discard:'保存していない変更があります。破棄して店舗を切り替えますか？', discard_close:'保存していない変更があります。閉じますか？', close:'閉じる' }
 };
 var _VN_KEYS = ['notice','message','notice_en','message_en','notice_ja','message_ja'];
-var _vn = { rest:'', orig:{}, all:{}, busy:false, ready:true, pvLang:'ko', pvSeq:0, pvTimer:0, loadSeq:0 };
+var _vn = { rest:'', orig:{}, all:{}, busy:false, ready:true, loaded:'', pvLang:'ko', pvSeq:0, pvTimer:0, loadSeq:0 };
+// 서버(char_length)와 같은 셈 — 글자(코드 포인트) 수. 이모지 하나 = 1
+function _vnLen(v){ return Array.from(String(v || '')).length; }
 function _vnT(k){ var l = window._tkCurrentLang || 'ko'; return ((_VN_TX[l] || _VN_TX.ko)[k]) || _VN_TX.ko[k] || k; }
 function _vnIsSuper(){ return (typeof _isSuperAdmin === 'function') && _isSuperAdmin(); }
 function _vnRpcMissing(e){ var c = String((e && e.code) || ''), m = String((e && e.message) || ''); return c === 'PGRST202' || c === '42883' || /could not find the function|does not exist/i.test(m); }
@@ -69876,9 +69905,9 @@ function vnOpen(){
   var sa = _vnIsSuper();
   var rid = sa ? '' : String((typeof _currentAdminRestId !== 'undefined' && _currentAdminRestId) || '');
   var old = document.getElementById('vnPopup'); if (old) old.remove();
-  _vn = { rest:'', orig:{}, all:{}, busy:false, ready:true, pvLang:((window._tkCurrentLang || 'ko') === 'ja' ? 'ja' : ((window._tkCurrentLang || 'ko') === 'en' ? 'en' : 'ko')), pvSeq:0, pvTimer:0, loadSeq:0 };
+  _vn = { rest:'', orig:{}, all:{}, busy:false, ready:true, loaded:'', pvLang:((window._tkCurrentLang || 'ko') === 'ja' ? 'ja' : ((window._tkCurrentLang || 'ko') === 'en' ? 'en' : 'ko')), pvSeq:0, pvTimer:0, loadSeq:0 };
   var ta = function(k, ph){
-    return '<div style="position:relative;"><textarea id="vn_' + k + '" maxlength="300" rows="3" oninput="_vnInput()" placeholder="' + _plEsc(ph || '') + '" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:10px;padding:9px 10px 18px;font-family:var(--font-main);font-size:13px;line-height:1.55;resize:vertical;"></textarea>'
+    return '<div style="position:relative;"><textarea id="vn_' + k + '" maxlength="600" rows="3" oninput="_vnInput()" placeholder="' + _plEsc(ph || '') + '" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:10px;padding:9px 10px 18px;font-family:var(--font-main);font-size:13px;line-height:1.55;resize:vertical;"></textarea>'
          + '<div id="vnc_' + k + '" style="position:absolute;right:9px;bottom:6px;font-size:10px;color:#aaa;">0/300</div></div>';
   };
   var lab = function(s){ return '<div style="font-size:12px;font-weight:700;color:#5C0A14;margin:12px 0 5px;">[' + _plEsc(s) + ']</div>'; };
@@ -69886,7 +69915,7 @@ function vnOpen(){
   el.id = 'vnPopup';
   el.style.cssText = 'position:fixed;inset:0;z-index:9200;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;';
   el.innerHTML =
-    '<div style="background:#fff;border-radius:18px;width:100%;max-width:560px;max-height:92vh;overflow:auto;overflow-x:hidden;padding:20px 18px;box-sizing:border-box;font-family:var(--font-main);">'
+    '<div data-no-tx style="background:#fff;border-radius:18px;width:100%;max-width:560px;max-height:92vh;overflow:auto;overflow-x:hidden;padding:20px 18px;box-sizing:border-box;font-family:var(--font-main);">'
     + '<div style="display:flex;align-items:center;gap:8px;"><div style="font-size:16px;font-weight:800;color:#1a1a18;flex:1;">' + _plEsc(_vnT('head')) + '</div>'
     +   '<button type="button" onclick="vnClose()" aria-label="' + _plEsc(_vnT('close')) + '" style="border:none;background:none;font-size:20px;color:#999;cursor:pointer;padding:2px 6px;">×</button></div>'
     + '<div style="font-size:11px;color:#9a9486;line-height:1.65;margin:4px 0 12px;">' + _plEsc(_vnT('desc')) + '</div>'
@@ -69909,13 +69938,23 @@ function vnOpen(){
     +   '<button type="button" id="vnSave" onclick="vnSave()" style="width:100%;margin-top:6px;padding:12px;border:none;border-radius:12px;background:#5C0A14;color:#fff;font-family:var(--font-main);font-size:14px;font-weight:700;cursor:pointer;">' + _plEsc(_vnT('save')) + '</button>'
     + '</div>'
     + '</div>';
-  el.addEventListener('click', function(ev){ if (ev.target === el) vnClose(); });
+  // 바깥(어두운 곳)을 눌렀다 뗐을 때만 닫는다 — 글자를 끌어 고르다 바깥에서 놓거나 입력칸 크기 손잡이를 끌어도 닫히지 않게
+  var _downOut = false;
+  el.addEventListener('pointerdown', function(ev){ _downOut = (ev.target === el); });
+  el.addEventListener('click', function(ev){ if (ev.target === el && _downOut) vnClose(); _downOut = false; });
   document.body.appendChild(el);
+  _vnSaveEnable(false);
   _vnPvLangPaint();
   if (sa) { _vnRestOpts(); _vnLoadAll(); }
   else if (rid) vnPick(rid, true);
 }
-function vnClose(){ var el = document.getElementById('vnPopup'); if (el) el.remove(); _vn.busy = false; _vn.loadSeq++; _vn.pvSeq++; if (_vn.pvTimer) clearTimeout(_vn.pvTimer); }
+function vnClose(force){
+  var el = document.getElementById('vnPopup'); if (!el) return;
+  if (!force && _vnDirty() && !confirm(_vnT('discard_close'))) return;
+  el.remove(); _vn.busy = false; _vn.loaded = ''; _vn.loadSeq++; _vn.pvSeq++; if (_vn.pvTimer) clearTimeout(_vn.pvTimer);
+}
+// 저장 버튼은 그 매장 문구를 다 불러온 뒤에만 — 불러오는 중·불러오기 실패에 누르면 빈 칸 여섯 개가 가서 저장된 문구가 지워졌다(적대 리뷰)
+function _vnSaveEnable(on){ var b = document.getElementById('vnSave'); if (!b) return; b.disabled = !on; b.style.opacity = on ? '1' : '.45'; b.style.cursor = on ? 'pointer' : 'default'; }
 function _vnRestOpts(){
   var sel = document.getElementById('vnRest'); if (!sel) return;
   var list = (restaurantDB || []).filter(function(r){ return r && r.id != null && r.name; }).slice()
@@ -69938,14 +69977,14 @@ async function _vnLoadAll(){
 function _vnNotReady(){
   _vn.ready = false;
   var msg = document.getElementById('vnMsg'); if (msg) msg.textContent = _vnT('not_ready');
-  var b = document.getElementById('vnSave'); if (b) { b.disabled = true; b.style.opacity = '.45'; }
+  _vnSaveEnable(false);
 }
 function _vnCollect(){ var o = {}; _VN_KEYS.forEach(function(k){ var e = document.getElementById('vn_' + k); o[k] = e ? String(e.value || '').replace(/\r/g, '').trim() : ''; }); return o; }
-function _vnDirty(){ if (!_vn.rest) return false; var c = _vnCollect(); return _VN_KEYS.some(function(k){ return (c[k] || '') !== String(_vn.orig[k] || '').trim(); }); }
+function _vnDirty(){ if (!_vn.rest || _vn.loaded !== _vn.rest) return false; var c = _vnCollect(); return _VN_KEYS.some(function(k){ return (c[k] || '') !== String(_vn.orig[k] || '').trim(); }); }
 async function vnPick(id, force){
   id = String(id || '');
   if (!force && _vn.rest && id !== _vn.rest && _vnDirty() && !confirm(_vnT('discard'))) { var sel = document.getElementById('vnRest'); if (sel) sel.value = _vn.rest; return; }
-  _vn.rest = id; _vn.orig = {};
+  _vn.rest = id; _vn.orig = {}; _vn.loaded = ''; _vnSaveEnable(false);
   var body = document.getElementById('vnBody'), msg = document.getElementById('vnMsg');
   if (!id) { if (body) body.style.display = 'none'; return; }
   if (body) body.style.display = '';
@@ -69957,20 +69996,21 @@ async function vnPick(id, force){
     if (my !== _vn.loadSeq || !document.getElementById('vnPopup')) return;
     if (r.error) {
       if (_vnRpcMissing(r.error)) { _vnNotReady(); _vnFill({}); return; }
-      if (msg) msg.textContent = /FORBIDDEN|42501/.test(String(r.error.code || '') + String(r.error.message || '')) ? _vnT('forbidden') : (_vnT('fail') + ': ' + String(r.error.message || '').slice(0, 120));
+      if (msg) msg.textContent = /FORBIDDEN|42501/.test(String(r.error.code || '') + String(r.error.message || '')) ? _vnT('forbidden') : (_vnT('load_fail') + ' (' + String(r.error.message || '').slice(0, 80) + ')');
       return;
     }
     _vnFill(r.data || {});
     if (msg && _vn.ready) msg.textContent = '';
-  } catch (e) { if (msg) msg.textContent = _vnT('fail') + ': ' + String((e && e.message) || e).slice(0, 120); }
+  } catch (e) { if (my === _vn.loadSeq && msg) msg.textContent = _vnT('load_fail') + ' (' + String((e && e.message) || e).slice(0, 80) + ')'; }
 }
 function _vnFill(row){
   _vn.orig = {};
   _VN_KEYS.forEach(function(k){ var v = (row && row[k]) ? String(row[k]) : ''; _vn.orig[k] = v; var e = document.getElementById('vn_' + k); if (e) { e.value = v; e.disabled = !_vn.ready; } });
   var other = document.getElementById('vnOther'); if (other) other.open = !!(_vn.orig.notice_en || _vn.orig.message_en || _vn.orig.notice_ja || _vn.orig.message_ja);
+  if (_vn.ready) { _vn.loaded = _vn.rest; _vnSaveEnable(true); }
   _vnCounts(); _vnPreviewNow();
 }
-function _vnCounts(){ _VN_KEYS.forEach(function(k){ var e = document.getElementById('vn_' + k), c = document.getElementById('vnc_' + k); if (e && c) { var n = String(e.value || '').length; c.textContent = n + '/300'; c.style.color = n > 300 ? '#B3261E' : '#aaa'; } }); }
+function _vnCounts(){ _VN_KEYS.forEach(function(k){ var e = document.getElementById('vn_' + k), c = document.getElementById('vnc_' + k); if (e && c) { var n = _vnLen(e.value); c.textContent = n + '/300'; c.style.color = n > 300 ? '#B3261E' : '#aaa'; } }); }
 function _vnInput(){
   _vnCounts();
   var msg = document.getElementById('vnMsg'); if (msg && _vn.ready) msg.textContent = '';
@@ -69993,15 +70033,15 @@ async function _vnPreviewNow(){
     var rest = (restaurantDB || []).find(function(x){ return String(x.id) === String(_vn.rest); }) || {};
     var dt = new Date(Date.now() + 9 * 3600 * 1000 + 7 * 86400000);
     var ymd = dt.getUTCFullYear() + '-' + String(dt.getUTCMonth() + 1).padStart(2, '0') + '-' + String(dt.getUTCDate()).padStart(2, '0');
-    j = _vrMsg({ ko: rest.name || _vnRestName(_vn.rest), en: rest.name_en || '', ja: rest.name_jp || '' }, ymd, '18:30', 2, notes);
+    j = _vrMsg({ ko: rest.name || _vnRestName(_vn.rest), en: rest.name_en || '', ja: (rest.i18n_jp_approved !== false && rest.name_jp) || '' }, ymd, '18:30', 2, notes);
   }
   var x = j[_vn.pvLang] || j.ko;
   box.textContent = (x.title || '') + '\n' + (x.body || '');
 }
 async function vnSave(){
-  if (_vn.busy || !_vn.rest || !_vn.ready) return;
+  if (_vn.busy || !_vn.rest || !_vn.ready || _vn.loaded !== _vn.rest) return;
   var notes = _vnCollect(), msg = document.getElementById('vnMsg'), b = document.getElementById('vnSave');
-  if (_VN_KEYS.some(function(k){ return notes[k].length > 300; })) { if (msg) msg.textContent = _vnT('too_long'); return; }
+  if (_VN_KEYS.some(function(k){ return _vnLen(notes[k]) > 300; })) { if (msg) msg.textContent = _vnT('too_long'); return; }
   _vn.busy = true; if (b) { b.disabled = true; b.textContent = _vnT('saving'); }
   var rid = _vn.rest;
   try {
@@ -70019,7 +70059,7 @@ async function vnSave(){
   } catch (e) {
     if (msg) msg.textContent = _vnT('fail') + ': ' + String((e && e.message) || e).slice(0, 120);
   } finally {
-    _vn.busy = false; if (b && document.getElementById('vnPopup')) { b.disabled = false; b.textContent = _vnT('save'); }
+    _vn.busy = false; if (b && document.getElementById('vnPopup')) { b.textContent = _vnT('save'); _vnSaveEnable(_vn.ready && _vn.loaded === _vn.rest); }
   }
 }
 window.pushTestPurchase = async function(){

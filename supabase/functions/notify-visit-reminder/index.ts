@@ -47,6 +47,9 @@ const cors = {
 const json = (b: unknown, s = 200) =>
   new Response(JSON.stringify(b), { status: s, headers: { ...cors, 'Content-Type': 'application/json' } });
 
+// 응답에 실어 어느 판이 도는지 net._http_response 에서 보이게 한다 (2026-10-27 · SQL 이 준 i18n 을 쓰는 판)
+const VR_EDGE_VER = 'vr-2026-10-27';
+
 type Row = {
   id: string; user_id: string; title: string; body: string; url: string;
   days: number; ticket_id: string | null; rest: string | null; vtime: string | null;
@@ -193,7 +196,10 @@ async function handle(req: Request): Promise<Response> {
     if (error) {
       // DB 오류 원문은 로그에만 — 호출자에게 스키마·함수 이름을 흘리지 않는다
       console.error('[notify-visit-reminder] rpc 실패', error.message);
-      return json({ ok: false, error: 'rpc_failed' }, 500);
+      // 🆕 2026-10-27 회원 쪽이 실패해도 비회원 알림톡은 따로 보낸다 — 종전엔 여기서 끝나 손님 리마인드까지 그날 통째로 빠졌다
+      let guest0: { sent: number; failed: number; skipped: number; reason?: string } = { sent: 0, failed: 0, skipped: 0 };
+      try { guest0 = await remindGuests(admin); } catch (e) { console.error('[notify-visit-reminder] guest 예외', e); guest0.reason = 'guest_exception'; }
+      return json({ ok: false, error: 'rpc_failed', guest: guest0, ver: VR_EDGE_VER }, 500);
     }
 
     const rows = (data?.rows || []) as Row[];
@@ -233,7 +239,7 @@ async function handle(req: Request): Promise<Response> {
     let guest: { sent: number; failed: number; skipped: number; reason?: string } = { sent: 0, failed: 0, skipped: 0 };
     try { guest = await remindGuests(admin); } catch (e) { console.error('[notify-visit-reminder] guest 예외', e); guest.reason = 'guest_exception'; }
 
-    return json({ ok: true, made: data?.made ?? 0, push_sent: sent, push_failed: failed, guest });
+    return json({ ok: true, made: data?.made ?? 0, push_sent: sent, push_failed: failed, guest, ver: VR_EDGE_VER });
   } catch (e) {
     console.error('[notify-visit-reminder] 예외', e);
     return json({ ok: false, error: 'exception' }, 500);
