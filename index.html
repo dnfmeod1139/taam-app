@@ -19270,6 +19270,13 @@ var _NOTIF_TITLES = [
 // 숫자가 든 제목 (「방문 N일 전입니다」·「초대 종료 N일 전입니다」)
 function _notifL10nTitleNum(s0){
   var li = _notifLangIdx(), m;
+  // 🆕 2026-10-27 방문 리마인드 제목 — 「내일은 {매장} 방문일입니다」 · 「{매장} 방문 N일 전입니다」 · 이름 없는 판 (서버 _taam_visit_remind_msg 와 같은 규칙)
+  if(li && typeof _vrTitle === 'function'){
+    var _lg = li === 1 ? 'en' : 'ja', _rn = function(v){ try { return (typeof _tbRestName === 'function' ? _tbRestName(v, null, _lg) : '') || v; } catch(_e){ return v; } };
+    if(s0 === '내일은 방문일입니다') return _vrTitle(_lg, '', 1);
+    m = s0.match(/^내일은 (.+) 방문일입니다$/); if(m) return _vrTitle(_lg, _rn(m[1]), 1);
+    m = s0.match(/^(.+) 방문 (\d+)일 전입니다$/); if(m) return _vrTitle(_lg, _rn(m[1]), parseInt(m[2], 10));
+  }
   m = s0.match(/^방문 (\d+)일 전입니다$/);
   if(m) return ['방문 ' + m[1] + '일 전입니다', 'Your visit is in ' + m[1] + ' days', 'ご来店まであと' + m[1] + '日です'][li];
   m = s0.match(/^초대 종료 (\d+)일 전입니다$/);
@@ -46990,7 +46997,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.27-a';
+var TAAM_WEB_BUILD = '2026.10.27-b';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -69772,10 +69779,10 @@ window.pushBadgeTest = async function(){
 window.pushTestRemind = async function(days){
   if(typeof pushSend !== 'function'){ alert('pushSend 함수 미정의'); return; }
   var d = parseInt(days) || 1;
-  var i18n = _vrMsg({ ko:'미토우', en:'Mitou' }, '2026-09-10', '18:30', 5, null);
+  var i18n = _vrMsg({ ko:'미토우', en:'Mitou' }, '2026-09-10', '18:30', 5, null, d);
   var res = await pushSend('user', { title: i18n.ko.title, body: i18n.ko.body, i18n: i18n, url: '/', category: 'remind' + d, tag: 'visit-reminder-preview-' + d });
   if(res && res.summary){
-    var msg = d + '일 전 리마인드 미리보기 (예약 안내)\n\n' + i18n.ko.body + '\n\n시도: ' + res.summary.attempted + '\n성공: ' + res.summary.ok + '\n실패: ' + res.summary.failed
+    var msg = d + '일 전 리마인드 미리보기\n\n' + i18n.ko.title + '\n' + i18n.ko.body + '\n\n시도: ' + res.summary.attempted + '\n성공: ' + res.summary.ok + '\n실패: ' + res.summary.failed
             + (res.summary.attempted === 0 ? '\n\n(0건이면 이 기기가 구독돼 있지 않거나, 알림 설정에서 ' + d + '일 전이 꺼져 있는 것입니다)' : '');
     alert(msg);
   } else {
@@ -69808,9 +69815,18 @@ function _vrTimeStr(raw, lang){
   if(lang === 'ja') return (am ? '午前' : '午後') + h12 + ':' + m[2];
   return (am ? '오전 ' : '오후 ') + h12 + ':' + m[2];
 }
-// rest {ko,en,ja} · ymd 'YYYY-MM-DD' · time 'HH:MM' · pax · notes {notice, notice_en, notice_ja, message, message_en, message_ja} → {ko,en,ja}{title,body}
-function _vrMsg(rest, ymd, time, pax, notes){
+// rest {ko,en,ja} · ymd 'YYYY-MM-DD' · time 'HH:MM' · pax · notes {notice, notice_en, notice_ja, message, message_en, message_ja} · days(7·3·1 | 없음) → {ko,en,ja}{title,body}
+//   제목 (2026-10-27 운영 결정): 「미토우 방문 3일 전입니다」 · 하루 전 「내일은 미토우 방문일입니다」 · 일수 없음 「예약 안내」 · 이름을 모르면 이름 없이
+function _vrTitle(lang, nm, days){
+  var d = parseInt(days, 10);
+  if(!(d >= 1)) return _VR_LB[lang].title;
+  if(lang === 'en') return d === 1 ? (nm ? 'Your visit to ' + nm + ' is tomorrow' : 'Your visit is tomorrow') : (nm ? 'Your visit to ' + nm + ' is in ' + d + ' days' : 'Your visit is in ' + d + ' days');
+  if(lang === 'ja') return d === 1 ? (nm ? '明日は' + nm + 'へのご来店日です' : '明日はご来店日です') : (nm ? nm + 'へのご来店まであと' + d + '日です' : 'ご来店まであと' + d + '日です');
+  return d === 1 ? (nm ? '내일은 ' + nm + ' 방문일입니다' : '내일은 방문일입니다') : (nm ? nm + ' 방문 ' + d + '일 전입니다' : '방문 ' + d + '일 전입니다');
+}
+function _vrMsg(rest, ymd, time, pax, notes, days){
   rest = rest || {}; notes = notes || {};
+  var known = !!(String(rest.ko || '').trim() || String(rest.en || '').trim() || String(rest.ja || '').trim());
   var out = {}, dm = String(ymd || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
   ['ko','en','ja'].forEach(function(lang){
     var L = _VR_LB[lang], sfx = lang === 'ko' ? '' : '_' + lang;
@@ -69825,7 +69841,7 @@ function _vrMsg(rest, ymd, time, pax, notes){
     var g = String(notes['message' + sfx] || '').trim() || String(notes.message || '').trim();
     if(n) body += '\n\n[' + L.notice + ']\n' + n;
     if(g) body += '\n\n[' + L.message + ']\n' + g;
-    out[lang] = { title: L.title, body: body };
+    out[lang] = { title: _vrTitle(lang, known ? nm : '', days), body: body };
   });
   return out;
 }
@@ -69887,21 +69903,21 @@ var _VN_TX = {
   ko:{ head:'📩 방문 안내 문구 (예약 리마인드)', desc:'방문 3일 전·하루 전(회원이 켜 두었으면 7일 전) 회원에게 가는 「예약 안내」 알림에 붙는 문구입니다. 비워 두면 레스토랑·날짜·시간·인원만 나갑니다.',
        rest:'레스토랑', pick:'레스토랑을 고르세요', has:'문구 있음', notice:'유의사항', message:'안내말씀',
        ph_notice:'예) 주차 공간이 없습니다. 대중교통을 이용해 주세요.', ph_message:'예) 늦으실 경우 미리 연락 부탁드립니다.',
-       other:'영어 · 일본어 (선택 — 비우면 한국어 문구가 나갑니다)', en:'영어', ja:'일본어', preview:'미리보기', sample:'날짜·시간은 이 매장의 가장 가까운 회차(없으면 예시)로 보여 줍니다',
+       other:'영어 · 일본어 (선택 — 비우면 한국어 문구가 나갑니다)', en:'영어', ja:'일본어', preview:'미리보기', sample:'하루 전 알림 모양입니다 — 내일 날짜 · 이 매장 가장 가까운 회차의 시각(없으면 18:30) · 2인',
        save:'저장', saving:'저장 중…', saved:'저장했습니다', cleared:'문구를 지웠습니다 — 레스토랑·날짜·시간·인원만 나갑니다', loading:'불러오는 중…',
        not_ready:'서버 준비 필요 — 문구 기능이 아직 서버에 없습니다', forbidden:'이 매장의 문구를 바꿀 권한이 없습니다', too_long:'칸마다 300자까지입니다',
        no_rest:'이 계정에 연결된 매장이 없습니다', fail:'저장 실패', load_fail:'불러오지 못했습니다 — 창을 닫았다가 다시 열어 주세요', discard:'저장하지 않은 문구가 있습니다. 버리고 다른 매장으로 갈까요?', discard_close:'저장하지 않은 문구가 있습니다. 닫을까요?', close:'닫기' },
   en:{ head:'📩 Visit Reminder Notes', desc:'Added to the “Reservation Reminder” members receive 3 days and 1 day before their visit (7 days if they turned it on). Leave blank to send only restaurant, date, time and guests.',
        rest:'Restaurant', pick:'Choose a restaurant', has:'has notes', notice:'Notes', message:'Message',
        ph_notice:'e.g. There is no parking — please use public transport.', ph_message:'e.g. Please let us know in advance if you will be late.',
-       other:'English · Japanese (optional — blank sends the Korean text)', en:'English', ja:'Japanese', preview:'Preview', sample:'Date and time use this restaurant’s nearest session (or a sample)',
+       other:'English · Japanese (optional — blank sends the Korean text)', en:'English', ja:'Japanese', preview:'Preview', sample:'Shown as the day-before reminder — tomorrow’s date · time of this restaurant’s nearest session (or 18:30) · 2 guests',
        save:'Save', saving:'Saving…', saved:'Saved', cleared:'Cleared — only restaurant, date, time and guests will be sent', loading:'Loading…',
        not_ready:'Server update required — this feature is not on the server yet', forbidden:'You cannot edit this restaurant’s notes', too_long:'Up to 300 characters per field',
        no_rest:'No restaurant is linked to this account', fail:'Save failed', load_fail:'Could not load — please close and reopen this window', discard:'You have unsaved changes. Discard them and switch restaurant?', discard_close:'You have unsaved changes. Close anyway?', close:'Close' },
   ja:{ head:'📩 来店案内の文言（予約リマインド）', desc:'来店3日前・前日（会員が設定していれば7日前）に会員へ届く「ご予約のご案内」に付く文言です。空欄なら店名・日付・時間・人数のみ送られます。',
        rest:'レストラン', pick:'レストランを選択', has:'文言あり', notice:'ご注意事項', message:'ご案内',
        ph_notice:'例）駐車場がございません。公共交通機関をご利用ください。', ph_message:'例）遅れる場合は事前にご連絡ください。',
-       other:'英語・日本語（任意 — 空欄なら韓国語の文言が送られます）', en:'英語', ja:'日本語', preview:'プレビュー', sample:'日付・時間はこの店舗の直近の回（なければ例）で表示します',
+       other:'英語・日本語（任意 — 空欄なら韓国語の文言が送られます）', en:'英語', ja:'日本語', preview:'プレビュー', sample:'前日のお知らせの形で表示します — 明日の日付・この店舗の直近の回の時刻（なければ18:30）・2名',
        save:'保存', saving:'保存中…', saved:'保存しました', cleared:'削除しました — 店名・日付・時間・人数のみ送られます', loading:'読み込み中…',
        not_ready:'サーバーの更新が必要です — この機能はまだサーバーにありません', forbidden:'この店舗の文言を編集する権限がありません', too_long:'各欄300文字までです',
        no_rest:'このアカウントに紐づく店舗がありません', fail:'保存に失敗しました', load_fail:'読み込めませんでした — 一度閉じて開き直してください', discard:'保存していない変更があります。破棄して店舗を切り替えますか？', discard_close:'保存していない変更があります。閉じますか？', close:'閉じる' }
@@ -70043,11 +70059,11 @@ async function _vnPreviewNow(){
     } catch (_e) {}
   }
   if (my !== _vn.pvSeq || !document.getElementById('vnPopup')) return;
-  if (!j) {   // 서버 미리보기를 못 부르면 같은 규칙의 사본으로 (예시 날짜: 7일 뒤 18:30 · 2인)
+  if (!j) {   // 서버 미리보기를 못 부르면 같은 규칙의 사본으로 — 하루 전 알림 모양(내일 18:30 · 2인)
     var rest = (restaurantDB || []).find(function(x){ return String(x.id) === String(_vn.rest); }) || {};
-    var dt = new Date(Date.now() + 9 * 3600 * 1000 + 7 * 86400000);
+    var dt = new Date(Date.now() + 9 * 3600 * 1000 + 1 * 86400000);
     var ymd = dt.getUTCFullYear() + '-' + String(dt.getUTCMonth() + 1).padStart(2, '0') + '-' + String(dt.getUTCDate()).padStart(2, '0');
-    j = _vrMsg({ ko: rest.name || _vnRestName(_vn.rest), en: rest.name_en || '', ja: (rest.i18n_jp_approved !== false && rest.name_jp) || '' }, ymd, '18:30', 2, notes);
+    j = _vrMsg({ ko: rest.name || _vnRestName(_vn.rest), en: rest.name_en || '', ja: (rest.i18n_jp_approved !== false && rest.name_jp) || '' }, ymd, '18:30', 2, notes, 1);
   }
   var x = j[_vn.pvLang] || j.ko;
   box.textContent = (x.title || '') + '\n' + (x.body || '');
