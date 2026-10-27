@@ -47,7 +47,10 @@ $P -c "insert into public.daegwan_manual(venue_id, ymd, name, pax, venue_name) v
 $P -c "insert into public.reservation_invites(id, invitee_user_id, status, restaurant_id, restaurant_name, visit_date, visit_time, pax) values
   ('d1000000-0000-4000-8000-000000000001','$M2','paid','r-saito','스시 사이토','$D1','20:00',2),
   ('d2000000-0000-4000-8000-000000000002','$M','paid','r-saito','스시 사이토','$D3','12:00',1),
-  ('d3000000-0000-4000-8000-000000000003','$M2','sent','r-saito','스시 사이토','$D1','20:00',2)" >/dev/null
+  ('d3000000-0000-4000-8000-000000000003','$M2','sent','r-saito','스시 사이토','$D1','20:00',2),
+  ('d4000000-0000-4000-8000-000000000004','$M','paid','r-mitou','미토우','$D1','18:30',2)" >/dev/null
+$P -c "insert into public.tickets(user_id, restaurant_id, restaurant_name, ticket_product_id, reservation_date, visit_time, party_size, status, purchase_id, buyer_name, extra_data) values
+  ('$M','r-mitou','미토우','tp1','$D1','18:30',2,'cancelled','INV-d4000000-1','김회원','{\"inviteId\":\"d4000000-0000-4000-8000-000000000004\",\"depositReturn\":true}')" >/dev/null
 $P -c "insert into public.tickets(user_id, restaurant_id, restaurant_name, ticket_product_id, reservation_date, visit_time, party_size, status, purchase_id, buyer_name, extra_data) values
   ('$M','r-saito','스시 사이토','tp2','$D3','12:00',1,'active','INV-d2000000-1','김회원','{\"inviteId\":\"d2000000-0000-4000-8000-000000000002\"}')" >/dev/null
 
@@ -65,6 +68,7 @@ ok "빠지는 것: 결제 전 홀드 · 취소 · 테스트 계정 회원 구매
 ok "EN/JA: 제목 영어 · [Name] · [ご予約者](우댕 일정 둘 — 수동 예약·수동 기록)" "Your visit to Mitou is tomorrow|1|2" "$($P -c "select payload->'i18n'->'en'->>'title' from public.notifications where user_id='$SU' and payload->>'rkey' like 't:%' and payload->>'who'='우댕' and payload->>'admin'='true'")|$($P -c "select count(*) from public.notifications where user_id='$SU' and payload->>'admin'='true' and payload->'i18n'->'en'->>'body' like '%[Guests] : 2' || E'\\n' || '[Name] : 우댕'")|$($P -c "select count(*) from public.notifications where user_id='$SU' and payload->>'admin'='true' and payload->'i18n'->'ja'->>'body' like '%[ご予約者] : 우댕'")"
 ok "돌려주는 줄(Edge 푸시): 슈퍼어드민 몫 5줄 · tag 열쇠 t:/i:/m: · i18n" "5|5" "$($P -c "select count(*) from jsonb_array_elements(('$r')::jsonb->'rows') x where x->>'ticket_id' ~ '^(t|m|i):'")|$($P -c "select count(*) from jsonb_array_elements(('$r')::jsonb->'rows') x where x->>'ticket_id' ~ '^(t|m|i):' and x->'i18n'->'ko'->>'title' is not null")"
 ok "좌석 행 없는 결제 초대 → 슈퍼어드민(i:) · 예약자 = 초대받은 회원 · 좌석 있는 초대는 티켓 줄 한 번만 · 보낸 초대(sent)는 없음" "1|이회원|0|1" "$($P -c "select count(*) from public.notifications where user_id='$SU' and payload->>'rkey' like 'i:%'")|$($P -c "select payload->>'who' from public.notifications where user_id='$SU' and payload->>'rkey' like 'i:%'")|$($P -c "select count(*) from public.notifications where payload->>'rkey' = 'i:d2000000-0000-4000-8000-000000000002'")|$($P -c "select count(*) from public.notifications n join public.tickets t on t.id::text = n.payload->>'ticket_id' where t.purchase_id='INV-d2000000-1' and n.user_id='$SU'")"
+ok "결제 뒤 반환·환불된 초대(좌석 cancelled · 초대는 paid 그대로)는 리마인드 없음" "0" "$($P -c "select count(*) from public.notifications where payload->>'rkey' = 'i:d4000000-0000-4000-8000-000000000004' or payload->>'ticket_id' in (select id::text from public.tickets where purchase_id='INV-d4000000-1')")"
 ok "다시 부르면 0 (같은 일정·일수 한 번)" "0|0" "$($P -c "select (j->>'made')||'|'||(j->>'admin_made') from public.taam_visit_reminder_notify() j")"
 
 # 7일 전을 켠 슈퍼어드민 → 정산 KSK- 7일 뒤 칸다도 · 하루 전을 끄면 내일 것은 안 감
@@ -89,7 +93,10 @@ ok "위조(via taam_notify_admins) 줄이 있어도 슈퍼어드민 리마인드
 # 상한 50 — 수동 기록 60건(내일)
 $P -c "delete from public.notifications; insert into public.daegwan_manual(venue_id, ymd, name, pax, venue_name) select 'r-kanda','$Y1','대량'||g,1,'칸다' from generate_series(1,60) g" >/dev/null
 r4=$($P -c "select public.taam_visit_reminder_notify()::text")
-ok "상한: 슈퍼어드민 몫 50건 · 넘친 수 admin_skipped · 회원 줄은 그대로(4)" "50|15|4" "$($P -c "select (('$r4')::jsonb->>'admin_made')")|$($P -c "select (('$r4')::jsonb->>'admin_skipped')")|$($P -c "select count(*) from public.notifications where payload->>'admin' is null")"
+ok "상한: 슈퍼어드민 몫 50건 · 넘친 수 admin_skipped · 회원 줄은 그대로(4)" "50|15|4" "$($P -c "select (('$r4')::jsonb->>'admin_made')")|$($P -c "select (('$r4')::jsonb->>'admin_skipped')")|$($P -c "select count(*) from public.notifications where type='visit_reminder' and payload->>'admin' is null")"
+ok "상한 초과는 슈퍼어드민 알림함에 한 줄(하루 한 번)" "1|15" "$($P -c "select count(*) from public.notifications where user_id='$SU' and type='visit_reminder_overflow'")|$($P -c "select payload->>'skipped' from public.notifications where user_id='$SU' and type='visit_reminder_overflow'")"
+$P -c "select public.taam_visit_reminder_notify()" >/dev/null
+ok "다시 돌면(넘친 15건 중 50건까지 더) 넘침 줄은 그날 하나 그대로" "1" "$($P -c "select count(*) from public.notifications where user_id='$SU' and type='visit_reminder_overflow'")"
 $P -c "delete from public.daegwan_manual where name like '대량%'; delete from public.notifications" >/dev/null
 
 # 테스트 발송 파일 — 슈퍼어드민만 · 예시 · 앞으로 받을 일정(건수만) · Edge 호출은 설정이 없으면 ⚠ 로 건너뜀

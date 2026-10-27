@@ -11,7 +11,7 @@
 --      테스트 계정이 회원으로 산 것은 뺀다(운영 행 KSK-/LINK-/MAN- 은 소유자가 어드민이라 그대로 센다)
 --      언제 = 슈퍼어드민 본인의 알림 설정(remind7/3/1 · 기본 3일·하루 전) · 문구 = 「미토우 방문 3일 전입니다」(하루 전 「내일은 …」) + 본문 넷 + **[예약자] : 이름** + 매장 문구
 --      중복: 같은 일정·같은 일수는 한 번(슈퍼어드민이 회원으로 산 티켓은 회원 리마인드가 이미 보냈으니 건너뛴다) · 글자 비교(payload 는 회원이 쓸 수 있는 칸)
---            회원이 taam_notify_admins 로 꽂은 줄(via)은 세지 않는다 · 한 번에 슈퍼어드민마다 50건까지(넘친 수는 admin_skipped)
+--            회원이 taam_notify_admins 로 꽂은 줄(via)은 세지 않는다 · 한 번에 슈퍼어드민마다 50건까지(넘친 수는 admin_skipped + 알림함 한 줄)
 --   ② taam_visit_reminder_notify — 라이브 본문 끝에서 ① 을 불러 돌려주는 줄에 더한다(Edge 가 그대로 푸시 · Edge 변경 없음).
 --      ① 이 실패해도 회원 리마인드는 그대로 나간다(예외 블록 · warning). 가드: 「제목에 매장·일수」 판(VR_TITLE_20261027 · md5 3e902422…)일 때만 · 이미 새 판(VR_ADMIN_20261027)이면 ✅ · 모르는 판 ❌ 건너뜀
 -- 회원에게 가는 것은 바뀌지 않는다. 회귀: bash sql/_test/t_visit_reminder_admin.sh
@@ -76,8 +76,9 @@ begin
       left join public.profiles pi on pi.id = i.invitee_user_id
      where lower(coalesce(i.status, '')) = 'paid'
        and coalesce(to_jsonb(pi)->>'is_test', '') <> 'true'
+       -- 좌석 행이 한 번이라도 있었으면(취소·반환 포함) 뺀다 — 결제 뒤 반환·환불하면 좌석만 cancelled 가 되고 초대는 paid 로 남는다(적대 리뷰) · 보낸 사람의 홀드(INVH-)는 좌석이 아니다
        and not exists (select 1 from public.tickets t
-                        where lower(coalesce(t.status, '')) in ('active', 'manual')
+                        where coalesce(t.purchase_id, '') not like 'INVH-%'
                           and (t.extra_data->>'inviteId' = i.id::text
                                or (t.extra_data->>'inviteId' is null and t.purchase_id like 'INV-' || left(i.id::text, 8) || '-%')))
     union all
@@ -140,6 +141,17 @@ begin
          (select count(*)::int from fresh where rn > 50)
     into v_cnt, v_rows, v_skip
     from ins i;
+  -- 상한을 넘었으면 슈퍼어드민 알림함에 한 줄(하루 한 번) — 넘친 일정은 그날 다시 안 간다(일수가 바뀐다). 조용히 빠지지 않게
+  if v_skip > 0 then
+    insert into public.notifications (user_id, type, title, body, url, payload)
+    select p.id, 'visit_reminder_overflow', '방문 리마인드 ' || v_skip || '건 상한 초과',
+           '한 번에 50건까지 보냅니다 — 나머지 ' || v_skip || '건은 티켓 캘린더에서 확인해 주세요.', '/',
+           jsonb_build_object('kind', 'visit_reminder_overflow', 'skipped', v_skip, 'date', to_char(v_today, 'YYYY-MM-DD'))
+      from public.profiles p
+     where p.role in ('superadmin', 'super_admin') and coalesce(to_jsonb(p)->>'deleted_at', '') = ''
+       and not exists (select 1 from public.notifications n where n.user_id = p.id and n.type = 'visit_reminder_overflow'
+                         and n.payload ->> 'date' = to_char(v_today, 'YYYY-MM-DD'));
+  end if;
   return jsonb_build_object('made', v_cnt, 'rows', v_rows, 'skipped', v_skip);
 end $$;
 revoke all on function public._taam_visit_reminder_admin() from public, anon, authenticated;
@@ -200,7 +212,7 @@ select '④', '슈퍼어드민이 받을 일정(앞으로 · 종류별 건수 ·
          select '초대(좌석 행 없음)', count(*) from public.reservation_invites i left join public.profiles pi on pi.id = i.invitee_user_id
           where lower(coalesce(i.status, '')) = 'paid' and public.taam_visit_date(i.visit_date) >= (now() at time zone 'Asia/Seoul')::date
             and coalesce(to_jsonb(pi)->>'is_test', '') <> 'true'
-            and not exists (select 1 from public.tickets t where lower(coalesce(t.status, '')) in ('active', 'manual')
+            and not exists (select 1 from public.tickets t where coalesce(t.purchase_id, '') not like 'INVH-%'
                               and (t.extra_data->>'inviteId' = i.id::text or (t.extra_data->>'inviteId' is null and t.purchase_id like 'INV-' || left(i.id::text, 8) || '-%')))
          union all
          select '수동 기록', count(*) from public.daegwan_manual m where m.ymd >= (now() at time zone 'Asia/Seoul')::date

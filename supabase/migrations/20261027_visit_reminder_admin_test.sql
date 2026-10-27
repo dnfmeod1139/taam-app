@@ -44,7 +44,7 @@ with sa as (
   union all
   select public.taam_visit_date(i.visit_date) from public.reservation_invites i left join public.profiles pi on pi.id = i.invitee_user_id
    where lower(coalesce(i.status, '')) = 'paid' and coalesce(to_jsonb(pi)->>'is_test', '') <> 'true'
-     and not exists (select 1 from public.tickets t where lower(coalesce(t.status, '')) in ('active', 'manual')
+     and not exists (select 1 from public.tickets t where coalesce(t.purchase_id, '') not like 'INVH-%'
                        and (t.extra_data->>'inviteId' = i.id::text or (t.extra_data->>'inviteId' is null and t.purchase_id like 'INV-' || left(i.id::text, 8) || '-%')))
   union all
   select m.ymd from public.daegwan_manual m

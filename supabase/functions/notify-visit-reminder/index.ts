@@ -48,7 +48,7 @@ const json = (b: unknown, s = 200) =>
   new Response(JSON.stringify(b), { status: s, headers: { ...cors, 'Content-Type': 'application/json' } });
 
 // 응답에 실어 어느 판이 도는지 net._http_response 에서 보이게 한다 (2026-10-27 · SQL 이 준 i18n 을 쓰는 판)
-const VR_EDGE_VER = 'vr-2026-10-27';
+const VR_EDGE_VER = 'vr-2026-10-27b';   // b: 슈퍼어드민 몫 건수(admin_made·admin_skipped)를 응답에
 
 type Row = {
   id: string; user_id: string; title: string; body: string; url: string;
@@ -239,7 +239,9 @@ async function handle(req: Request): Promise<Response> {
     let guest: { sent: number; failed: number; skipped: number; reason?: string } = { sent: 0, failed: 0, skipped: 0 };
     try { guest = await remindGuests(admin); } catch (e) { console.error('[notify-visit-reminder] guest 예외', e); guest.reason = 'guest_exception'; }
 
-    return json({ ok: true, made: data?.made ?? 0, push_sent: sent, push_failed: failed, guest, ver: VR_EDGE_VER });
+    // admin_made · admin_skipped — 슈퍼어드민 몫(캘린더 전 일정 · 2026-10-27)과 상한(50)으로 빠진 수. net._http_response 에서 보이게
+    return json({ ok: true, made: data?.made ?? 0, admin_made: data?.admin_made ?? 0, admin_skipped: data?.admin_skipped ?? 0,
+                  push_sent: sent, push_failed: failed, guest, ver: VR_EDGE_VER });
   } catch (e) {
     console.error('[notify-visit-reminder] 예외', e);
     return json({ ok: false, error: 'exception' }, 500);
