@@ -19102,8 +19102,14 @@ async function loadDeposit(){
         // 🆕 2026-10-27 방문 리마인드는 D-7·D-3·D-1 문구가 같다(「예약 안내」 + 레스토랑·날짜·시간·인원) — 티켓·일수까지 열쇠에 넣어야 D-1 이 D-3 의 중복으로 안 버려진다
         var _tkKey = function(n){ var p = (n && n.payload && typeof n.payload === 'object') ? n.payload : {};
           return String(n.title || '') + '\u0001' + String(n.body || '') + (n.type === 'visit_reminder' ? '\u0001' + String(p.ticket_id || '') + '|' + String(p.days || '') : ''); };
+        var _vrTk = {};   // 같은 묶음 안의 같은 티켓 리마인드(D-3 을 안 누른 채 D-1 이 오면)는 가장 새것 하나만 — 문구가 같아 같은 토스트가 두 번 떴다
         var newOnes = nres.data.filter(function(n){
           if (shown[n.id] || _mem[n.id]) return false;
+          if (n.type === 'visit_reminder' && n.payload && n.payload.ticket_id) {
+            var _vk = String(n.payload.ticket_id);
+            if (_vrTk[_vk]) { shown[n.id] = Date.now(); _mem[n.id] = Date.now(); return false; }
+            _vrTk[_vk] = true;
+          }
           var _k = _tkKey(n);
           if (_seenBody[_k] || _mem['body:' + _k]) return false;
           _seenBody[_k] = true;
@@ -19139,9 +19145,11 @@ async function loadDeposit(){
             // 🆕 2026.09.15 미접속 중 쌓인 서버 알림도 현재 언어로 (목록과 같은 정규화)
             try { cleanTitle = _notifL10nTitle(cleanTitle); cleanBody = _notifL10nBody(cleanBody); } catch(_l10){}
             // 🆕 2026-10-27 방문 리마인드: 매장이 쓴 문구의 기호(①·→·★·☎)를 지우지 않는다 · 영어·일본어면 서버가 만든 그 언어 문구(payload.i18n)
-            if (n.type === 'visit_reminder' && typeof _vrPick === 'function') { var _vp = _vrPick(n); if (_vp) { cleanTitle = _vp.title; cleanBody = _vp.body; } }
+            var _vp = (n.type === 'visit_reminder' && typeof _vrPick === 'function') ? _vrPick(n) : null;
+            if (_vp) { cleanTitle = _vp.title; cleanBody = _vp.body; }
             if (typeof showToast === 'function') showToast(headerLabel, cleanTitle, cleanBody, {
-              onTap: (function(_id){ return function(){ _notifMarkSeen(_id); }; })(n.id)
+              onTap: (function(_id){ return function(){ _notifMarkSeen(_id); }; })(n.id),
+              raw: !!_vp
             });
           }, idx * 2200);
           shown[n.id] = Date.now();
@@ -68120,15 +68128,20 @@ function showToast(icon,title,msg,opts){
   }
   // 🆕 2026-09-04: 번역보다 **먼저** 거른다. 여기서 걸러야 우리가 쓴 한국어와
   //   서버 원문이 아직 구분된다 — 자동 매핑을 먼저 태우면 둘 다 영어가 된다.
-  msg = _toastSafeMsg(msg);
-  // 🆕 자주 등장하는 KO 문자열 → 자동 매핑 (EN/JA 사용자에게도 번역되어 보이도록)
-  if (typeof _toastAutoMap === 'function') {
-    title = _toastAutoMap(title);
-    msg = _toastAutoMap(msg);
+  //   🆕 2026-10-27 opts.raw: 서버가 그 언어로 다 만든 글(방문 리마인드 — 매장이 쓴 문구 포함)은 거르지도 바꾸지도 않는다.
+  //     영어 문구의 'does not exist' 같은 말이 기계 오류로 읽혀 「잠시 후 다시」로 바뀌고, 한국어 문구는 TX 사전이 반쯤 번역했다(적대 리뷰)
+  if (!opts.raw) {
+    msg = _toastSafeMsg(msg);
+    // 🆕 자주 등장하는 KO 문자열 → 자동 매핑 (EN/JA 사용자에게도 번역되어 보이도록)
+    if (typeof _toastAutoMap === 'function') {
+      title = _toastAutoMap(title);
+      msg = _toastAutoMap(msg);
+    }
   }
 
   // 토스트 배너 표시
   document.getElementById('toastIcon').textContent=icon;
+  ['toastTitle','toastMsg'].forEach(function(_id){ var _e = document.getElementById(_id); if (_e) { if (opts.raw) _e.setAttribute('data-no-tx', ''); else _e.removeAttribute('data-no-tx'); } });
   document.getElementById('toastTitle').textContent=title;
   document.getElementById('toastMsg').textContent=msg;
   var el=document.getElementById('toastBanner');
@@ -69848,18 +69861,18 @@ function _vrL10nBody(s0, lang){
 // 알림함·토스트가 리마인드 한 줄을 그리는 법 — 제목·본문은 공백만 다듬고 기호는 그대로(매장이 쓴 ①·→·★·☎ 를 지우지 않는다).
 //   영어·일본어 화면이면 서버가 만든 그 언어 문구(payload.i18n · 시트는 vr_* 칸)를, 없으면 _vrL10nBody 로 항목 이름·날짜·시각만 바꾼다.
 //   슈퍼어드민은 payload 의 다른 언어 문구를 믿지 않는다(회원이 taam_notify_admins 로 같은 type 을 꽂을 수 있다).
-function _vrClean(s, max){ return String(s == null ? '' : s).replace(/\r/g, '').replace(/[^\S\n]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim().slice(0, max || 1200); }
+function _vrClean(s, max){ var v = String(s == null ? '' : s).replace(/\r/g, '').replace(/[^\S\n]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim(), a = Array.from(v); return a.length > (max || 2000) ? a.slice(0, max || 2000).join('') : v; }
 function _vrPick(n){
   if(!n) return null;
   var li = (typeof _notifLangIdx === 'function') ? _notifLangIdx() : 0, lang = ['ko','en','ja'][li];
-  var title = _vrClean(n.title, 200), body = _vrClean(n.body, 1200);
+  var title = _vrClean(n.title, 200), body = _vrClean(n.body, 2000);
   if(li){
     var sa = (typeof _isSuperAdmin === 'function') && _isSuperAdmin();
     var p = (n.payload && typeof n.payload === 'object') ? n.payload : {};
     var src = (!sa && p.i18n && typeof p.i18n === 'object' && p.i18n[lang]) ? p.i18n[lang] : null;
     var t2 = sa ? '' : (src ? src.title : (lang === 'en' ? n.vr_en_t : n.vr_ja_t));
     var b2 = sa ? '' : (src ? src.body : (lang === 'en' ? n.vr_en_b : n.vr_ja_b));
-    if(t2 && b2 && typeof t2 === 'string' && typeof b2 === 'string'){ title = _vrClean(t2, 200); body = _vrClean(b2, 1200); }
+    if(t2 && b2 && typeof t2 === 'string' && typeof b2 === 'string'){ title = _vrClean(t2, 200); body = _vrClean(b2, 2000); }
     else {
       try { title = _notifL10nTitle(title) || title; } catch(_t){}
       var lb = (typeof _vrL10nBody === 'function') ? _vrL10nBody(body, lang) : null;
@@ -69905,7 +69918,8 @@ function vnOpen(){
   var sa = _vnIsSuper();
   var rid = sa ? '' : String((typeof _currentAdminRestId !== 'undefined' && _currentAdminRestId) || '');
   var old = document.getElementById('vnPopup'); if (old) old.remove();
-  _vn = { rest:'', orig:{}, all:{}, busy:false, ready:true, loaded:'', pvLang:((window._tkCurrentLang || 'ko') === 'ja' ? 'ja' : ((window._tkCurrentLang || 'ko') === 'en' ? 'en' : 'ko')), pvSeq:0, pvTimer:0, loadSeq:0 };
+  var _seq0 = (_vn.loadSeq || 0) + 1, _pv0 = (_vn.pvSeq || 0) + 1;   // 순번은 창을 닫았다 열어도 이어 간다 — 앞 창에서 늦게 온 응답이 새 창의 순번과 겹치지 않게
+  _vn = { rest:'', orig:{}, all:{}, busy:false, ready:true, loaded:'', loadSeq:_seq0, pvSeq:_pv0, pvLang:((window._tkCurrentLang || 'ko') === 'ja' ? 'ja' : ((window._tkCurrentLang || 'ko') === 'en' ? 'en' : 'ko')), pvTimer:0 };
   var ta = function(k, ph){
     return '<div style="position:relative;"><textarea id="vn_' + k + '" maxlength="600" rows="3" oninput="_vnInput()" placeholder="' + _plEsc(ph || '') + '" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:10px;padding:9px 10px 18px;font-family:var(--font-main);font-size:13px;line-height:1.55;resize:vertical;"></textarea>'
          + '<div id="vnc_' + k + '" style="position:absolute;right:9px;bottom:6px;font-size:10px;color:#aaa;">0/300</div></div>';

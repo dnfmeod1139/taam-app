@@ -86,12 +86,16 @@ select '다가오는 발송 ' || to_char(fire, 'MM-DD') || '(' || (array['일','
   from (select * from g order by fire, d desc limit 15) z
  order by fire, d desc;
 
+-- 요약도 리마인드와 같은 거름(운영 행 표시 · 회원 프로필) · 방문일이 오늘 이후인 것만 센다
 insert into _vrt(구분, 내용)
 select '다가오는 발송 요약',
-       '살아 있는 회원 예약 ' || count(distinct t.id) || '건 · 가장 가까운 방문 ' || coalesce(to_char(min(public.taam_visit_date(t.reservation_date)) filter (where public.taam_visit_date(t.reservation_date) >= (now() at time zone 'Asia/Seoul')::date), 'YYYY-MM-DD'), '-')
-  from public.tickets t
- where t.user_id is not null and lower(coalesce(t.status, '')) = 'active'
-   and coalesce(t.purchase_id, '') not like 'KSK-%' and coalesce(t.purchase_id, '') not like 'MAN-%'
-   and not (coalesce(t.purchase_id, '') like 'LINK-%' and nullif(t.extra_data->>'memberUid', '') is null);
+       '방문이 남은 회원 예약 ' || count(*) || '건 · 가장 가까운 방문 ' || coalesce(to_char(min(x.vd), 'YYYY-MM-DD'), '-')
+  from (select public.taam_visit_date(t.reservation_date) as vd
+          from public.tickets t join public.profiles p on p.id = t.user_id
+         where t.user_id is not null and lower(coalesce(t.status, '')) = 'active'
+           and coalesce(t.purchase_id, '') not like 'KSK-%' and coalesce(t.purchase_id, '') not like 'MAN-%'
+           and not (coalesce(t.purchase_id, '') like 'LINK-%' and nullif(t.extra_data->>'memberUid', '') is null)
+           and not coalesce((t.extra_data ? 'kashikiri') or ((t.extra_data ? 'linkInvite') and nullif(t.extra_data->>'memberUid', '') is null) or (t.extra_data ? 'manualEntry'), false)) x
+ where x.vd >= (now() at time zone 'Asia/Seoul')::date;
 
 select 구분, 내용 from _vrt order by seq;
