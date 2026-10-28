@@ -9408,10 +9408,13 @@ function _pmxPayout(r, v, cyc, today){
              label: (out ? (out <= today ? '입금 ' + out : '입금 예정 ' + out) : '정산됨') + (r.settle_err === 'CANCEL_PENDING' ? ' · 취소분 정산 대기' : '') };
   }
   // 전액 취소 + 정산 줄 없음: 매입 완료가 아니면 정산이 생기지 않는다(간편결제처럼 카드 칸이 없어도 · 리뷰)
-  //   토스에서 읽은 기록이 있고 정산 조회 오류가 없을 때만 — 기록이 없으면 모른다(2차 리뷰)
-  if (v.state === 'full' && v.T && !r.settle_err && (v.card || v.easy) && !(v.card && v.card.acquireStatus === 'COMPLETED')) return { kind: 'none', label: v.card ? '정산 없음 — 매입 전 취소' : '정산 없음 — 전액 취소' };
-  var c = cyc[_pmxMid(r)], est = (c && c.n != null) ? _pmxAddBiz(_tsrKst(r.at, 10), c.n) : '';
+  //   토스에서 **앱 처리 뒤에** 읽은 기록이 있고 정산 조회 오류가 없을 때만 — 승인 시점 기록은 늘 「매입 대기」라 몇 주 뒤 환불을 매입 전으로 잘못 부른다(3차 리뷰) · 자동 취소(결제 확정 단계)는 승인 기록으로도 된다
   var base = r.settle_err ? '정산 조회 실패(' + r.settle_err + ')' : (r.settle_at ? '정산 기록 아직 없음' : '토스 정산 조회 전');
+  var trustT = v.liveOk || (r.src === 'order' && r.st === 'canceled' && !!r.snap);
+  if (v.state === 'full' && trustT && !r.settle_err && (v.card || v.easy) && !(v.card && v.card.acquireStatus === 'COMPLETED')) return { kind: 'none', label: v.card ? '정산 없음 — 매입 전 취소' : '정산 없음 — 전액 취소' };
+  // 전액 취소·환불됐는데 정산 기록이 없으면 입금 예정일을 지어내지 않는다(3차 리뷰)
+  if (v.state === 'full') return { kind: r.settle_at ? 'none_yet' : 'unknown', est: '', label: '전액 취소 — ' + base, sub: '돌려준 결제라 입금 예정일을 셈하지 않습니다' + (r.settle_err ? '' : ' · 매입 뒤 취소였다면 토스 정산에 승인·취소 줄이 함께 생깁니다') };
+  var c = cyc[_pmxMid(r)], est = (c && c.n != null) ? _pmxAddBiz(_tsrKst(r.at, 10), c.n) : '';
   return { kind: r.settle_at ? 'none_yet' : 'unknown', est: est, n: c ? c.n : null, nFrom: c ? c.from : 0,
            label: est ? '≈ ' + est + ' 예상' : base, sub: base + (est ? ' · 최근 정산 ' + c.from + '건 기준 승인 뒤 ' + c.n + '영업일' : (r.settle_at ? ' · 승인 다음 날부터 생깁니다' : '')) };
 }
