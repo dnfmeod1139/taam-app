@@ -76,8 +76,8 @@ returns jsonb language sql immutable as $$
           from (select c from jsonb_array_elements(t->'cancels') c where jsonb_typeof(c) = 'object' limit 50) z) end
   )) end
 $$;
-revoke all on function public._taam_pl_toss(jsonb) from public, anon;
-revoke all on function public._taam_pl_num(text) from public, anon;
+revoke all on function public._taam_pl_toss(jsonb) from public, anon, authenticated;
+revoke all on function public._taam_pl_num(text) from public, anon, authenticated;
 
 -- ── ② 보고서 ──
 create or replace function public.taam_payment_ledger(
@@ -174,16 +174,21 @@ begin
         'dep', public._taam_pl_num(v_dpo->(o.user_id::text || '|' || o.order_id)->>'dep'),
         'dep_mem', public._taam_pl_num(v_dpo->(o.user_id::text || '|' || o.order_id)->>'mem'),
         'dep_gen', public._taam_pl_num(v_dpo->(o.user_id::text || '|' || o.order_id)->>'gen'),
-        'rf', case when t.purchase_id is not null then v_rf->(t.user_id::text || '|' || t.purchase_id) end,
         'app_cancels', case when jsonb_typeof(o.metadata->'app_cancels') = 'array' then (
                  select jsonb_agg(jsonb_strip_nulls(jsonb_build_object('amount', public._taam_pl_num(a->>'amount'), 'at', left(a->>'at', 40),
                                    'tx', left(a->>'tx', 80), 'policy', left(a->>'policy', 40), 'pid', left(a->>'purchase_id', 120),
                                    'by', (select nullif(btrim(pb.display_name),'') from public.profiles pb where pb.id::text = a->>'by'))))
                    from (select a from jsonb_array_elements(o.metadata->'app_cancels') a where jsonb_typeof(a) = 'object' limit 20) z) end,
         'snap', public._taam_pl_toss(o.metadata->'toss'),
-        'mid', coalesce(pc.mid, left(o.metadata->'toss'->>'mId', 40)),
+        'mid', coalesce(pc.mid, left(o.metadata->'toss'->>'mId', 40))
+      ) || jsonb_build_object(   -- jsonb_build_object 는 인자 100개까지 — 둘로 나눈다
+        -- 예치금 환불 줄: 연결 티켓의 구매 id, 없으면(자동 취소된 주문) 이 주문의 예치금 줄 구매 id — 다른 주문 몫(order_id 다름)은 앱이 거른다
+        'rf', coalesce(case when t.purchase_id is not null then v_rf->(t.user_id::text || '|' || t.purchase_id) end,
+                       v_rf->(o.user_id::text || '|' || (v_dpo->(o.user_id::text || '|' || o.order_id)->>'pid'))),
+        'dep_pid', v_dpo->(o.user_id::text || '|' || o.order_id)->>'pid',
+        't_order', left(t.extra_data->>'order_id', 80),
         'live', pc.info, 'live_at', pc.info_at, 'live_err', pc.info_error,
-        'settle', pc.settle, 'settle_at', pc.settle_at, 'settle_err', pc.settle_error,
+        'settle', pc.settle, 'settle_at', pc.settle_at, 'settle_err', pc.settle_error, 'cache_at', pc.updated_at,
         'bk', case when bk.id is not null then jsonb_strip_nulls(jsonb_build_object('company', left(bk.card_company, 30), 'number', left(bk.card_number, 30), 'type', left(bk.card_type, 20))) end
       )) as r
         from public.payment_orders o
@@ -194,8 +199,9 @@ begin
           select t.* from public.tickets t
            where t.user_id = o.user_id
              and (t.extra_data->>'order_id' = o.order_id
-                  or t.purchase_id = nullif(o.metadata->>'hold_purchase_id','')
-                  or t.purchase_id = (v_dpo->(o.user_id::text || '|' || o.order_id)->>'pid'))
+                  or ((t.purchase_id = nullif(o.metadata->>'hold_purchase_id','') or t.purchase_id = (v_dpo->(o.user_id::text || '|' || o.order_id)->>'pid'))
+                      -- 같은 홀드에 다른 카드 결제가 붙어 확정됐으면 그 티켓은 그 주문 것이다(자동 취소된 앞 시도에 잇지 않는다 · 리뷰)
+                      and coalesce(t.extra_data->>'order_id', '') in ('', o.order_id)))
            order by (t.extra_data->>'order_id' = o.order_id) desc nulls last, (lower(coalesce(t.status,'')) in ('active','used')) desc, t.created_at
            limit 1) t on true
         left join public.ticket_products tp on tp.id::text = coalesce(t.ticket_product_id::text, o.metadata->>'ticket_id')
@@ -220,8 +226,8 @@ begin
           'cur', upper(coalesce(c.pay_currency,'KRW')), 'amt', coalesce(c.pay_amount, c.amount_krw), 'krw', c.amount_krw, 'fx', c.pay_fx,
           'pkey', c.payment_key, 'method', left(c.method, 30), 'receipt', left(to_jsonb(c)->>'receipt_url', 400),
           'at', coalesce(c.approved_at, c.created_at), 'created', c.created_at,
-          'uid', c.user_id, 'buyer', nullif(btrim(pr.display_name),''), 'phone', to_jsonb(pr)->>'phone', 'email', to_jsonb(pr)->>'email',
-          'tier', to_jsonb(pr)->>'membership_tier', 'test', case when c.user_id = any(v_test) then true end,
+          'uid', cu.id, 'buyer', nullif(btrim(pr.display_name),''), 'phone', to_jsonb(pr)->>'phone', 'email', to_jsonb(pr)->>'email',
+          'tier', to_jsonb(pr)->>'membership_tier', 'test', case when cu.id = any(v_test) then true end,
           'payer', left(nullif(btrim(c.payer_name),''), 60), 'payer_phone', left(to_jsonb(c)->>'payer_phone', 30), 'label', left(c.label, 80),
           'title', left(to_jsonb(c)->>'title', 120), 'subtitle', left(to_jsonb(c)->>'subtitle', 160),
           'rest', coalesce(rs.name, e.venue_name, to_jsonb(tp)->>'rest_name'),
@@ -233,10 +239,14 @@ begin
           'note', left(a.note, 400), 'fee_rec', mf.amount_krw,
           'price_override', case when coalesce(to_jsonb(c)->'payload'->>'price_override','') = 'true' then true end,
           'mid', pc.mid, 'live', pc.info, 'live_at', pc.info_at, 'live_err', pc.info_error,
-          'settle', pc.settle, 'settle_at', pc.settle_at, 'settle_err', pc.settle_error
+          'settle', pc.settle, 'settle_at', pc.settle_at, 'settle_err', pc.settle_error, 'cache_at', pc.updated_at
         )) as r
           from public.kashikiri_charges c
-          left join public.profiles pr on pr.id = c.user_id
+          -- 대관 정산 청구의 user_id 는 「구매자 불러오기」로 어드민 uid 가 실릴 수 있다 — 회원(role user)일 때만 회원으로 본다(리뷰: 어드민이 회원으로 보이고 테스트 계정이면 손님 결제가 통째로 숨었다)
+          left join public.profiles pu on pu.id = c.user_id
+          cross join lateral (select case when c.event_id is not null and not coalesce((to_jsonb(c)->>'link_invite')::boolean, false)
+                                               and coalesce(pu.role, '') <> 'user' then null else c.user_id end as id) cu
+          left join public.profiles pr on pr.id = cu.id
           left join public.kashikiri_events e on e.id = c.event_id
           left join public.toss_payment_cache pc on pc.payment_key = c.payment_key
           left join lateral (select t.* from public.tickets t
@@ -247,7 +257,7 @@ begin
           left join lateral (select ca.note from public.kashikiri_charge_admin ca where ca.charge_id = c.id limit 1) a on true
           left join lateral (select f.amount_krw from public.membership_fees f where f.source = 'pay_link' and f.source_ref = c.id::text limit 1) mf on true
          where (nullif(c.payment_key,'') is not null or lower(coalesce(c.status,'')) in ('paid','refunded'))
-           and (coalesce(p_include_test,false) or not coalesce(c.user_id = any(v_test), false))
+           and (coalesce(p_include_test,false) or not coalesce(cu.id = any(v_test), false))
            and (p_from is null or (coalesce(c.approved_at, c.created_at) at time zone 'Asia/Seoul')::date >= p_from)
            and (p_to   is null or (coalesce(c.approved_at, c.created_at) at time zone 'Asia/Seoul')::date <  p_to)
       ) x;
@@ -270,7 +280,7 @@ begin
         'visit', coalesce(public._taam_pu_visit_date(tp.date), public._taam_pu_visit_date(t.reservation_date), public._taam_pu_visit_date(iv.visit_date), public._taam_pu_visit_date(g.m_visit)),
         'vtime', coalesce(nullif(t.visit_time,''), tp.time, nullif(iv.visit_time,''), g.m_vtime),
         'pax', coalesce(t.party_size, iv.pax, public._taam_pl_num(g.m_pax)),
-        'tpid', t.purchase_id, 'tst', lower(t.status), 'tprice', t.price,
+        'tpid', t.purchase_id, 'tst', lower(t.status), 'tprice', t.price, 't_order', left(t.extra_data->>'order_id', 80),
         'card_paid', public._taam_pl_num(t.extra_data->>'cardPaid'),
         'ret', case when jsonb_typeof(t.extra_data->'deposit_return') = 'object' then jsonb_strip_nulls(jsonb_build_object(
                  'type', left(t.extra_data->'deposit_return'->>'type', 20), 'returnAmt', public._taam_pl_num(t.extra_data->'deposit_return'->>'returnAmt'),
@@ -300,8 +310,9 @@ begin
                  max(d.metadata->>'restaurant_name') as m_rest, max(d.metadata->>'visit_date') as m_visit,
                  max(d.metadata->>'visit_time') as m_vtime, max(coalesce(d.metadata->>'party_size', d.metadata->>'pax')) as m_pax
             from (select dt.*, dt.user_id as uid, nullif(dt.metadata->>'purchase_id','') as pid,
+                         -- 카드와 같이 낸 줄은 주문마다 따로 — 자동 취소된 앞 시도와 같은 홀드로 다시 낸 결제가 한 줄로 합쳐지지 않게(리뷰)
                          case when coalesce(dt.metadata->>'purchase_id','') <> '' and dt.change_type in ('ticket_purchase','ticket_pax_change','reservation_payment')
-                              then 'p:' || dt.user_id::text || '|' || (dt.metadata->>'purchase_id')
+                              then 'p:' || dt.user_id::text || '|' || (dt.metadata->>'purchase_id') || coalesce('|' || nullif(dt.metadata->>'order_id',''), '')
                               else 'd:' || dt.id::text end as gk
                     from public.deposit_transactions dt
                    where dt.amount < 0 and dt.user_id is not null) d
@@ -309,11 +320,15 @@ begin
         ) g
         left join public.profiles pr on pr.id = g.uid
         left join lateral (select t.* from public.tickets t
-                            where g.pid is not null and t.purchase_id = g.pid and (t.user_id = g.uid or g.pid like 'INV-%')
+                            -- 남의 초대 id 를 자기 원장 줄에 적어도 그 초대·티켓이 붙지 않게 — 초대받은 회원이 이 줄의 회원일 때만(리뷰)
+                            where g.pid is not null and t.purchase_id = g.pid
+                              and (t.user_id = g.uid
+                                   or (g.pid like 'INV-%' and g.invite_id is not null and t.extra_data->>'inviteId' = g.invite_id
+                                       and exists (select 1 from public.reservation_invites i2 where i2.id::text = g.invite_id and i2.invitee_user_id = g.uid)))
                             order by (t.user_id = g.uid) desc, (lower(coalesce(t.status,'')) in ('active','used')) desc, t.created_at limit 1) t on true
         left join public.ticket_products tp on tp.id::text = t.ticket_product_id::text
         left join public.restaurants rs on rs.id::text = coalesce(nullif(t.restaurant_id::text,''), tp.rest_id::text)
-        left join public.reservation_invites iv on g.invite_id is not null and iv.id::text = g.invite_id
+        left join public.reservation_invites iv on g.invite_id is not null and iv.id::text = g.invite_id and iv.invitee_user_id = g.uid
         left join public.profiles ph on ph.id = iv.host_user_id
        where (coalesce(p_include_test,false) or not (g.uid = any(v_test)))
          and (p_from is null or (g.at at time zone 'Asia/Seoul')::date >= p_from)
@@ -370,17 +385,9 @@ do $do$
 declare j jsonb;
 begin
   j := public.taam_payment_ledger(null, null, true);   -- SQL Editor·워크플로(postgres 세션)는 _taam_fee_caller_ok 를 통과한다
-  insert into _plk(항목, 결과) values ('⑥ 전체 기간 실행', '✅ 카드 ' || jsonb_array_length(j->'card') || '줄 · 예치금 ' || jsonb_array_length(j->'dep') || '줄 · '
-    || pg_size_pretty(length(j::text)::bigint));
-  insert into _plk(항목, 결과)
-  select '⑦ 카드 줄 종류(정보)', coalesce(string_agg(k || ' ' || n, ' · ' order by k), '없음')
-    from (select (e->>'ch') || '/' || (e->>'st') || case when e ? 'snap' then '/승인기록' else '' end as k, count(*) n
-            from jsonb_array_elements(j->'card') e group by 1) z;
-  insert into _plk(항목, 결과)
-  select '⑧ 예치금 줄 종류(정보)', coalesce(string_agg(k || ' ' || n, ' · ' order by k), '없음')
-    from (select (e->>'kind') || case when e ? 'rf' then '/환불있음' else '' end as k, count(*) n
-            from jsonb_array_elements(j->'dep') e group by 1) z;
-  insert into _plk(항목, 결과) values ('⑨ 카드 줄에 secret 칸 없음',
+  -- 공개 저장소라 Actions 로그도 공개 — 건수·종류별 분포도 찍지 않는다(리뷰). 돌았는지만
+  insert into _plk(항목, 결과) values ('⑥ 전체 기간 실행', case when jsonb_typeof(j->'card') = 'array' and jsonb_typeof(j->'dep') = 'array' then '✅' else '❌' end);
+  insert into _plk(항목, 결과) values ('⑦ 카드 줄에 secret 칸 없음',
     case when position('"secret"' in (j->'card')::text) = 0 then '✅' else '❌' end);
 exception when others then insert into _plk(항목, 결과) values ('⑥ 전체 기간 실행', '❌ ' || left(sqlerrm, 160));
 end $do$;

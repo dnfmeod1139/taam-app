@@ -216,8 +216,44 @@ has "부여(입금) 외화" "$dg" '"fx_amt": 8910'
 has "부여 금액" "$dg" '"in": 8910000'
 ok "부모 없는 환불은 기타 입금으로" "$($P -c "$D where e->>'kind'='in_other' and e->>'pid'='PAYH-nope'" | wc -l)" "1"
 ok "부모 있는 환불은 따로 안 나온다" "$($P -c "$D where e->>'kind'='in_other' and e->>'pid'='PAYH-tp1_9'" | wc -l)" "0"
-ok "카드 주문 같이 뺀 예치금 묶음에 주문번호" "$($P -c "$D where e->>'k'='p:$M1|PAYH-tp1_1' and e->>'order_id'='O1'" | wc -l)" "1"
+ok "카드 주문 같이 뺀 예치금 묶음 — 키에 주문번호(주문마다 따로)" "$($P -c "$D where e->>'k'='p:$M1|PAYH-tp1_1|O1' and e->>'order_id'='O1'" | wc -l)" "1"
 ok "테스트 계정 예치금 기본 제외" "$($P -c "$D where e->>'uid'='$TST'" | wc -l)" "0"
+# ── 리뷰 반영 ──
+OA=OA; OB=OB
+$P <<SQL >/dev/null
+-- 같은 홀드 PAYH-H: OA 예치금 부족 자동 취소(예치금 25만 되돌림) → OB 로 다시 결제 성공(티켓 order_id OB)
+insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_date,party_size,price,status,purchase_id,extra_data,created_at)
+ values ('$M2','$R1','tp1','2026.11.03',1,850000,'active','PAYH-H','{"order_id":"OB","cardPaid":300000,"depositUsed":550000}','2026-10-16T00:00:00Z');
+insert into public.payment_orders(order_id,user_id,purpose,amount,status,payment_key,approved_at,fail_reason,metadata) values
+ ('OA','$M2','ticket_topup',300000,'canceled','pk_OA','2026-10-16T01:00:00Z','deposit_short_refunded','{"toss":{"status":"DONE"}}'),
+ ('OB','$M2','ticket_topup',300000,'paid','pk_OB','2026-10-16T02:00:00Z',null,'{"toss":{"status":"DONE"}}');
+insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata,created_at) values
+ ('$M2','general','ticket_purchase',-250000,'{"purchase_id":"PAYH-H","order_id":"OA"}','2026-10-16T01:00:01Z'),
+ ('$M2','general','ticket_refund',250000,'{"purchase_id":"PAYH-H","order_id":"OA"}','2026-10-16T01:00:02Z'),
+ ('$M2','general','ticket_purchase',-550000,'{"purchase_id":"PAYH-H","order_id":"OB"}','2026-10-16T02:00:01Z');
+-- 대관 정산 청구에 어드민(테스트 계정) uid 가 실림 · 결제자 Trina
+insert into public.kashikiri_charges(id,event_id,label,user_id,amount_krw,status,payment_key,payer_name,approved_at,purpose)
+ values ('a0000000-0000-4000-8000-000000000009','$EV','조1','$SU',1600000,'paid','pk_C9','Trina2','2026-10-17T00:00:00Z','custom');
+update public.profiles set is_test = true where id = '$SU';
+-- M1 이 M2 의 초대 id 를 자기 원장 줄에 적었다(−₩1)
+insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata,created_at) values
+ ('$M1','general','ticket_purchase',-1,'{"purchase_id":"INV-e1000000-1","invite_id":"$I1"}','2026-10-18T00:00:00Z');
+SQL
+oa=$($P -c "$C where e->>'k'='o:OA'")
+ok "자동 취소된 OA 는 OB 의 티켓에 잇지 않는다" "$(echo "$oa" | grep -c '"pid": "PAYH-H"')" "0"
+has "OA 는 제 예치금 줄 구매 id 로 환불 줄을 본다(앱이 주문으로 거른다)" "$oa" '"dep_pid": "PAYH-H"'
+has "OA 환불 줄에 OA 되돌림" "$oa" '"order_id": "OA"'
+ob=$($P -c "$C where e->>'k'='o:OB'")
+has "OB 는 PAYH-H 에 잇는다" "$ob" '"pid": "PAYH-H"'
+has "OB 티켓 주문" "$ob" '"t_order": "OB"'
+ok "예치금 묶음이 주문마다 따로(OA · OB)" "$($P -c "$D where e->>'k' in ('p:$M2|PAYH-H|OA','p:$M2|PAYH-H|OB')" | wc -l)" "2"
+c9=$($P -c "$C where e->>'k'='c:a0000000-0000-4000-8000-000000000009'")
+ok "정산 청구의 어드민 uid 는 회원으로 안 본다" "$(echo "$c9" | grep -c '"uid"')" "0"
+has "정산 청구 결제자 그대로" "$c9" '"payer": "Trina2"'
+ok "어드민이 테스트 계정이어도 손님 정산 결제는 숨지 않는다" "$(echo "$c9" | wc -l)" "1"
+inj=$($P -c "$D where e->>'k'='p:$M1|INV-e1000000-1'")
+ok "남의 초대 id 를 적은 줄 — 그 초대·티켓이 안 붙는다" "$(echo "$inj" | grep -c '"inv_host"\|"tpid"\|"inv_total"')" "0"
+ok "도우미 함수 authenticated 실행 권한 없음" "$($P -c "select has_function_privilege('authenticated','public._taam_pl_toss(jsonb)','execute')")" "f"
 # 재실행
 out2=$($P -f "$MIG" 2>&1); echo "$out2" | grep -q "❌" && { echo "❌ 재실행 확인 표에 ❌"; FAIL=1; } || echo "✅ 재실행"
 ok "재실행 뒤 캐시 그대로" "$($P -c "select count(*) from public.toss_payment_cache")" "2"

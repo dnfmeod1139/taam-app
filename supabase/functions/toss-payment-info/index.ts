@@ -136,6 +136,7 @@ async function handle(req: Request){
     const errors: { ref: string, code: string }[] = [];
     const keyUsed: Record<string, string> = {};   // 결제키 → 시크릿 이름
     const approvedYmd: Record<string, string> = {};
+    const cancelsOf: Record<string, any[]> = {};   // 결제키 → 토스가 알려 준 취소(정산 조회 창을 잡는다)
     for(let i = 0; i < items.length; i += 6){
       await Promise.all(items.slice(i, i + 6).map(async (it) => {
         let last = 'NOT_FOUND';
@@ -146,6 +147,7 @@ async function handle(req: Request){
             keyUsed[it.pk] = kn;
             const ap = Date.parse(String(r.body.approvedAt || '')) || it.at;
             approvedYmd[it.pk] = kstYmd(ap);
+            cancelsOf[it.pk] = Array.isArray(info.cancels) ? info.cancels as any[] : [];
             okRows.push({ payment_key: it.pk, src: it.src, ref: it.ref, mid: info.mId || null, info, info_at: now, info_error: null, updated_at: now });
             return;
           }
@@ -159,44 +161,81 @@ async function handle(req: Request){
     }
     await sbUpsert(okRows); await sbUpsert(failRows);
 
-    // ③ 정산 — 시크릿마다, 승인일 ~ +35일(오늘까지)을 31일씩
+    // ③ 정산 — 시크릿마다. 정산 줄의 soldDate 는 승인 줄이면 승인일(주·월정산이면 그 주 일요일·월말), 취소 줄이면 **취소일**이다 —
+    //    그래서 승인일과 토스가 알려 준 취소일마다 [그 날 −1, +35일(오늘까지)] 를 잡아 겹치는 것을 합치고 31일씩 읽는다
+    //    (승인일 +35일만 보면 D-31 취소처럼 한 달 넘게 뒤의 취소 정산 줄을 놓쳤다 · 리뷰).
+    //    읽은 줄은 캐시의 옛 줄과 거래키(tx)로 합친다 — 한 건만 새로고침해도 넓게 읽어 둔 줄이 사라지지 않게(리뷰).
+    //    호출 상한(키마다 24번 · 창마다 5쪽)에 걸리면 빈 배열을 「정산 없음」으로 적지 않고 settle_error=SCAN_TRUNCATED.
     const settle = { keys: 0, calls: 0, rows: 0, matched: 0, errors: [] as { key: string, code: string }[] };
     if(wantSettle){
       const today = kstYmd(Date.now());
+      const pks = items.map((it) => it.pk);
+      const prev: Record<string, any> = {};
+      // 옛 줄을 못 읽었으면 합칠 수 없다 — 그때는 정산 칸을 아예 쓰지 않는다(빈 읽기로 옛 줄을 지우지 않게)
+      const pr = await fetch(`${SUPABASE_URL}/rest/v1/toss_payment_cache?payment_key=in.(${pks.map((k) => `"${k.replace(/"/g, '')}"`).join(',')})&select=payment_key,settle,info`, { headers: SB_H() }).catch(() => null);
+      const prevRows = pr && pr.ok ? await pr.json().catch(() => null) : null;
+      const prevOk = Array.isArray(prevRows);
+      for(const r of (prevRows || [])) prev[String(r.payment_key)] = r;
+      const anchors = (it: It) => {
+        const a = [approvedYmd[it.pk] || kstYmd(it.at)];
+        const cs = cancelsOf[it.pk] || (Array.isArray(prev[it.pk]?.info?.cancels) ? prev[it.pk].info.cancels : []);
+        for(const c of cs){ const m = Date.parse(String(c?.canceledAt || '')); if(isFinite(m)) a.push(kstYmd(m)); }
+        return [...new Set(a)];
+      };
       const byKey: Record<string, It[]> = {};
       for(const it of items){ const kn = keyUsed[it.pk] || guessKeys(it.mid, it.billing, it.cur)[0]; if(!kn) continue; (byKey[kn] = byKey[kn] || []).push(it); }
-      const sOk: Record<string, unknown>[] = [], sFail: Record<string, unknown>[] = [];
+      const sOk: Record<string, unknown>[] = [], sPart: Record<string, unknown>[] = [], sErr: Record<string, unknown>[] = [];
       for(const kn of Object.keys(byKey)){
         settle.keys++;
         const list = byKey[kn];
         const want = new Set(list.map((it) => it.pk));
         const found: Record<string, any[]> = {};
-        const days = list.map((it) => approvedYmd[it.pk]).sort();
-        let start = addDays(days[0], -1), end = addDays(days[days.length - 1], 35); if(end > today) end = today;
-        let err = '';
-        if(start > end) start = end;
-        let guard = 0;
-        while(start <= end && guard++ < 16 && !err){
-          const stop = addDays(start, 30) < end ? addDays(start, 30) : end;
-          for(let page = 1; page <= 5; page++){
-            settle.calls++;
-            const r = await tfetch(`${TOSS}/v1/settlements?startDate=${start}&endDate=${stop}&dateType=soldDate&page=${page}&size=5000`, keyOf(kn), 60000);
-            if(!r.ok || !Array.isArray(r.body)){ err = String(r.body?.code || ('HTTP_' + r.status)).slice(0, 60); break; }
-            settle.rows += r.body.length;
-            for(const s of r.body){ const pk = String(s?.paymentKey || ''); if(want.has(pk)) (found[pk] = found[pk] || []).push(pickSettle(s)); }
-            if(r.body.length < 5000) break;
+        // 창 합치기
+        const raw: [string, string][] = [];
+        const itWins: Record<string, [string, string][]> = {};
+        for(const it of list){ itWins[it.pk] = anchors(it).map((d) => { let b = addDays(d, 35); if(b > today) b = today; let a = addDays(d, -1); if(a > b) a = b; return [a, b] as [string, string]; }); raw.push(...itWins[it.pk]); }
+        raw.sort((x, y) => x[0].localeCompare(y[0]));
+        const merged: { a: string, b: string, done: boolean }[] = [];
+        for(const w of raw){ const m = merged[merged.length - 1]; if(m && w[0] <= addDays(m.b, 1)){ if(w[1] > m.b) m.b = w[1]; } else merged.push({ a: w[0], b: w[1], done: false }); }
+        let err = '', calls = 0;
+        for(const m of merged.slice().reverse()){   // 최근 창부터 — 상한에 걸려도 새 결제가 먼저 채워지게
+          let start = m.a, ok = true;
+          while(start <= m.b){
+            if(calls >= 24){ ok = false; break; }
+            const stop = addDays(start, 30) < m.b ? addDays(start, 30) : m.b;
+            let page = 1;
+            for(; page <= 5; page++){
+              calls++; settle.calls++;
+              const r = await tfetch(`${TOSS}/v1/settlements?startDate=${start}&endDate=${stop}&dateType=soldDate&page=${page}&size=5000`, keyOf(kn), 60000);
+              if(!r.ok || !Array.isArray(r.body)){ err = String(r.body?.code || ('HTTP_' + r.status)).slice(0, 60); break; }
+              settle.rows += r.body.length;
+              for(const s of r.body){ const pk = String(s?.paymentKey || ''); if(want.has(pk)) (found[pk] = found[pk] || []).push(pickSettle(s)); }
+              if(r.body.length < 5000) break;
+            }
+            if(err || page > 5){ ok = false; break; }
+            start = addDays(stop, 1);
           }
-          start = addDays(stop, 1);
+          m.done = ok && !err;
+          if(err) break;
         }
+        const covered = (pk: string) => (itWins[pk] || []).every(([a, b]) => merged.some((m) => m.done && m.a <= a && b <= m.b));
         for(const it of list){
-          if(err){ sFail.push({ payment_key: it.pk, src: it.src, ref: it.ref, settle_error: err, updated_at: now }); continue; }
-          const arr = (found[it.pk] || []).sort((a, b) => String(a.paidOutDate || '').localeCompare(String(b.paidOutDate || '')));
+          // 캐시의 옛 줄 + 새로 읽은 줄 — 거래키가 같으면 새 줄이 이긴다
+          const byTx: Record<string, any> = {};
+          const old = Array.isArray(prev[it.pk]?.settle) ? prev[it.pk].settle : [];
+          for(const x of old) byTx[String(x?.tx || JSON.stringify(x))] = x;
+          for(const x of (found[it.pk] || [])) byTx[String(x?.tx || JSON.stringify(x))] = x;
+          const arr = Object.values(byTx).sort((a: any, b: any) => String(a.paidOutDate || '').localeCompare(String(b.paidOutDate || '')));
           if(arr.length) settle.matched++;
-          sOk.push({ payment_key: it.pk, src: it.src, ref: it.ref, settle: arr, settle_at: now, settle_error: null, updated_at: now });
+          if(!prevOk) sErr.push({ payment_key: it.pk, src: it.src, ref: it.ref, settle_error: 'CACHE_READ_FAILED', updated_at: now });
+          else if(covered(it.pk)) sOk.push({ payment_key: it.pk, src: it.src, ref: it.ref, settle: arr, settle_at: now, settle_error: null, updated_at: now });
+          else if((found[it.pk] || []).length) sPart.push({ payment_key: it.pk, src: it.src, ref: it.ref, settle: arr, settle_error: err || 'SCAN_TRUNCATED', updated_at: now });
+          else sErr.push({ payment_key: it.pk, src: it.src, ref: it.ref, settle_error: err || 'SCAN_TRUNCATED', updated_at: now });   // 새로 찾은 게 없으면 옛 줄을 건드리지 않는다
         }
         if(err) settle.errors.push({ key: KEY_LABEL[kn] || kn, code: err });
+        else if(merged.some((m) => !m.done)) settle.errors.push({ key: KEY_LABEL[kn] || kn, code: 'SCAN_TRUNCATED' });
       }
-      await sbUpsert(sOk); await sbUpsert(sFail);
+      await sbUpsert(sOk); await sbUpsert(sPart); await sbUpsert(sErr);
     }
     return json({ ok: true, items: items.length, info_ok: okRows.length, info_fail: failRows.length, errors: errors.slice(0, 20), settle });
   } catch (e) { console.error('[toss-payment-info]', e); return json({ ok: false, error: String((e as Error).message || e).slice(0, 200) }, 500); }
