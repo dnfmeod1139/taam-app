@@ -9239,6 +9239,710 @@ function tsrCsv(){
 window.tsrOpen = tsrOpen; window.tsrClose = tsrClose; window.tsrSetPeriod = tsrSetPeriod; window.tsrSetBasis = tsrSetBasis; window.tsrToggleCh = tsrToggleCh;
 window.tsrToggleTest = tsrToggleTest; window.tsrPick = tsrPick; window.tsrRun = tsrRun; window.tsrCsv = tsrCsv; window._tsrAgg = _tsrAgg; window._tsrRender = _tsrRender; window._tsr = _tsr;
 
+// ═══════════════════════════════════════════════════════════════
+// 💳 결제 내역 (카드 · 예치금) — 슈퍼어드민 (2026-10-28)
+// ═══════════════════════════════════════════════════════════════
+//   「카드로 결제된 내역이랑 예치금으로 결제된 내역 — 구매자 · 일시 · 예상 입금일 · 카드 내역 · 취소한다면 취소 연동 · 모든 내역」.
+//   숫자는 서버 taam_payment_ledger(supabase/migrations/20261028_payment_ledger.sql)가 결제 하나마다 모아 준다 — 앱은 거르고 보여 준다.
+//   카드 정보·지금 취소 상태·입금일(정산)은 토스가 정답이라 Edge toss-payment-info 가 토스에서 다시 읽어 캐시에 적는다(열 때 오래된 것만 · 「토스 새로고침」은 전부).
+//   토스 상점관리자 화면은 앱 안에 넣을 수 없다(로그인·2단계 인증 · 남의 화면에 끼우는 것을 막는다) — 건마다 「토스 영수증」(토스가 주는 그 화면)과 상점관리자 링크를 둔다.
+//   예상 입금일: 정산 줄이 있으면 그 지급일(확정) · 없으면 같은 MID 의 최근 정산에서 「승인 → 지급」 영업일 수를 세어 ≈ 로(정산 주기는 계약마다 달라 API 가 안 알려 준다).
+//   원화는 기록된 값 그대로 — 외화 결제를 오늘 환율로 다시 바꾸지 않는다(CLAUDE.md 「통화」).
+var _pmx = { tab: 'card', period: 'month', incTest: false, data: null, seq: 0, open: {}, q: '', st: 'all', byK: {},
+  ch: { card: 1, billing: 1, link: 1, settle: 1, membership: 1, custom: 1 },
+  dk: { ticket: 1, invite: 1, deduct: 1, membership: 1, other: 1, grant: 0, in_other: 0 },
+  tossBusy: false, tossMsg: '', tossErr: false, autoKey: '' };
+var _PMX_CH = [['card', '앱 카드 결제'], ['billing', '등록 카드'], ['link', '결제 링크'], ['settle', '대관 정산'], ['membership', '멤버십'], ['custom', '자유 금액']];
+var _PMX_DK = [['ticket', '티켓 결제'], ['invite', '초대 결제'], ['deduct', '관리 차감·연회비'], ['membership', '옛 멤버십 결제'], ['other', '기타 차감'], ['grant', '예치금 부여(입금)'], ['in_other', '기타 입금']];
+var _PMX_ST_CARD = [['all', '전체'], ['ok', '결제됨'], ['partial', '부분 취소'], ['full', '전액 취소'], ['pending', '환불 대기'], ['warn', '⚠ 확인 필요']];
+var _PMX_ST_DEP = [['all', '전체'], ['used', '결제됨'], ['partial', '일부 환불'], ['full', '전액 환불'], ['warn', '⚠ 확인 필요']];
+var _PMX_STL = { ok: ['결제됨', '#2E7D32', '#e8f5e9'], partial: ['부분 취소', '#B45309', '#fff4e0'], full: ['전액 취소', '#777', '#f0f0f0'], pending: ['환불 대기', '#B23A2E', '#fdecea'],
+  used: ['결제됨', '#2E7D32', '#e8f5e9'], in: ['입금', '#1565C0', '#e8f0fb'] };
+var _PMX_STL_DEP = { partial: ['일부 환불', '#B45309', '#fff4e0'], full: ['전액 환불', '#777', '#f0f0f0'] };
+var _PMX_BY = { member: '회원', user: '회원', admin: '매장 어드민', super_admin: '슈퍼어드민', superadmin: '슈퍼어드민', system: '자동' };
+// 토스 카드사 코드(발급·매입 공통 두 글자) — 모르는 코드는 그대로 보인다
+var _PMX_ISSUER = { '11': 'KB국민카드', '21': '하나카드', '31': 'BC카드', '33': '우리BC카드', 'W1': '우리카드', '41': '신한카드', '51': '삼성카드', '61': '현대카드', '71': '롯데카드',
+  '91': 'NH농협카드', '3K': '기업BC', '15': '카카오뱅크', '24': '토스뱅크', '3A': '케이뱅크', '30': 'KDB산업은행', '34': 'Sh수협은행', '35': '전북은행', '36': '씨티카드',
+  '37': '우체국', '38': '새마을금고', '39': '저축은행', '42': '제주은행', '46': '광주은행', '62': '신협', '4V': 'VISA', '4M': 'Mastercard', '4J': 'JCB', '7A': 'AMEX', '6D': 'Diners', '3C': 'UnionPay' };
+var _PMX_EASY = { TOSSPAY: '토스페이', NAVERPAY: '네이버페이', SAMSUNGPAY: '삼성페이', APPLEPAY: '애플페이', LPAY: '엘페이', KAKAOPAY: '카카오페이', PAYCO: '페이코', SSG: 'SSG페이', PINPAY: '핀페이' };
+var _PMX_ACQ = { READY: '매입 대기', REQUESTED: '매입 요청됨', COMPLETED: '매입 완료', CANCEL_REQUESTED: '매입 취소 요청', CANCELED: '매입 취소' };
+var _PMX_TST = { DONE: '결제 완료', CANCELED: '전액 취소', PARTIAL_CANCELED: '부분 취소', ABORTED: '승인 실패', EXPIRED: '만료', WAITING_FOR_DEPOSIT: '입금 대기', IN_PROGRESS: '진행 중', READY: '준비' };
+var _PMX_FAIL = { seat_lost_refunded: '좌석 만료 — 자동 전액 취소', deposit_short_refunded: '예치금 부족 — 자동 전액 취소',
+  seat_lost_refund_failed: '⚠ 좌석 만료 — 자동 취소 실패', deposit_short_refund_failed: '⚠ 예치금 부족 — 자동 취소 실패' };
+var _PMX_RFK = { cancel: '취소 환불', returned: '방문 후 반환', penalty: '위약(일부 환불)', pax: '인원 줄임 환불', fix: '정정(잘못 뺀 것 되돌림)', auto: '자동 되돌림',
+  card_auto: '카드 승인 뒤 자동 되돌림', other: '환불' };
+var _PMX_REASON = { capacity_auto_refund: '정원 초과', duplicate_purchase: '중복 구매', time_conflict: '시간대 겹침', invite_closed: '초대 닫힘' };
+var _PMX_POLICY = { full_30min: '30분 안 전액', d31: 'D-31 (대행비 제외)', none: '규정 0', within_30min_full: '30분 안 전액', d31_minus_agency: 'D-31 (대행비 제외)',
+  after_d30_none: 'D-30 이후 0', admin_full: '슈퍼어드민 전액' };
+var _PMX_CT = { ticket_purchase: '티켓 결제', ticket_pax_change: '인원 변경', reservation_payment: '예약 결제', admin_deduct: '관리 차감', membership_payment: '멤버십 결제',
+  admin_grant: '예치금 부여', user_charge: '충전', ticket_refund: '환불', user_use: '사용', other: '기타', refund: '환불', membership_refund: '멤버십 환불', reservation_refund: '예약 환불' };
+var _PMX_TK = { active: '사용 예정', used: '방문 완료', cancelled: '취소', canceled: '취소', hold: '홀드', manual: '수동', expired: '만료', pending_confirm: '확정 대기' };
+// 은행 쉬는 날(근사 · 2026~2027) — 예상 입금일(≈)을 영업일로 셀 때만 쓴다. 정산 줄이 오면 그 날짜가 이긴다
+var _PMX_HOL = {};
+['2026-01-01', '2026-02-16', '2026-02-17', '2026-02-18', '2026-03-02', '2026-05-01', '2026-05-05', '2026-05-25', '2026-06-03', '2026-08-17', '2026-09-24', '2026-09-25',
+ '2026-10-05', '2026-10-09', '2026-12-25', '2027-01-01', '2027-02-08', '2027-02-09', '2027-03-01', '2027-05-01', '2027-05-05', '2027-05-13', '2027-08-16', '2027-09-14',
+ '2027-09-15', '2027-09-16', '2027-10-04', '2027-10-11', '2027-12-27'].forEach(function(d){ _PMX_HOL[d] = 1; });
+function _pmxAddDays(ymd, n){ var t = Date.parse(ymd + 'T00:00:00Z'); return isFinite(t) ? new Date(t + n * 86400000).toISOString().slice(0, 10) : ''; }
+function _pmxIsBiz(ymd){ var t = Date.parse(ymd + 'T00:00:00Z'); if (!isFinite(t)) return false; var w = new Date(t).getUTCDay(); return w !== 0 && w !== 6 && !_PMX_HOL[ymd]; }
+function _pmxBizDiff(a, b){ if (!/^\d{4}-\d{2}-\d{2}$/.test(a || '') || !/^\d{4}-\d{2}-\d{2}$/.test(b || '') || b < a) return null; var n = 0, d = a, g = 0; while (d < b && g++ < 400){ d = _pmxAddDays(d, 1); if (_pmxIsBiz(d)) n++; } return n; }
+function _pmxAddBiz(ymd, n){ if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd || '')) return ''; var d = ymd, k = 0, g = 0; while (k < n && g++ < 400){ d = _pmxAddDays(d, 1); if (_pmxIsBiz(d)) k++; } return d; }
+function _pmxMoney(cur, v){
+  v = Number(v); if (!isFinite(v)) return '—';
+  var neg = v < 0; v = Math.abs(v);
+  var s = cur === 'USD' ? '$' + v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+        : (cur === 'JPY' ? '¥' + Math.round(v).toLocaleString('ko-KR') : '₩' + Math.round(v).toLocaleString('ko-KR'));
+  return (neg ? '−' : '') + s;
+}
+function _pmxTodayYmd(){ var t = _cfToday(); return _tsrYmd(t.y, t.m, t.d); }
+// 이 결제를 승인한 MID — 토스 기록이 있으면 그것, 없으면 등록 카드·통화로 짐작(정산 주기 묶음용)
+function _pmxMid(r){
+  if (r.mid) return r.mid;
+  if (r.ch === 'billing') return 'bill_taam315';
+  return r.cur === 'USD' ? 'playtaamusd' : (r.cur === 'JPY' ? 'playtaamjpy' : 'playtauif6');
+}
+var _PMX_MIDL = { playtauif6: '국내(원화)', bill_taam315: '등록 카드(빌링)', playtaamusd: '해외 USD', playtaamjpy: '해외 JPY' };
+// 카드 한 줄 — 금액·취소·대기·상태·경고를 한 번에 센다 (화면·CSV·시험이 같이 쓴다)
+function _pmxCardView(r){
+  var v = { cur: r.cur || 'KRW', amt: _tsrN(r, 'amt'), krw: r.krw == null ? null : _tsrN(r, 'krw'), flags: [] };
+  var T = r.live || null; v.stale = false;
+  if (!T && r.snap) { T = r.snap; v.stale = true; }
+  v.T = T;
+  v.card = (r.live && r.live.card) || (r.snap && r.snap.card) || null;
+  v.easy = (r.live && r.live.easyPay) || (r.snap && r.snap.easyPay) || null;
+  var rc = (r.live && r.live.receiptUrl) || r.receipt || (r.snap && r.snap.receiptUrl) || '';
+  v.receipt = /^https:\/\//.test(rc) ? rc : '';
+  // 토스가 취소한 금액
+  var tc = null, tcs = [];
+  if (T) {
+    tcs = (Array.isArray(T.cancels) ? T.cancels : []).filter(function(c){ return c && (c.cancelStatus == null || c.cancelStatus === 'DONE'); });
+    if (T.totalAmount != null && T.balanceAmount != null && isFinite(Number(T.totalAmount)) && isFinite(Number(T.balanceAmount))) tc = Math.max(0, Number(T.totalAmount) - Number(T.balanceAmount));
+    else tc = tcs.reduce(function(a, c){ return a + (Number(c.cancelAmount) || 0); }, 0);
+  }
+  v.tossCancelled = tc; v.tossCancels = tcs;
+  // 앱이 기록한 카드 취소
+  var app = 0, items = [];
+  if (r.src === 'order') {
+    if (r.st === 'canceled') { app = v.amt; items.push({ kind: 'auto', amt: v.amt, label: _PMX_FAIL[r.fail] || '자동 전액 취소' }); }
+    (r.app_cancels || []).forEach(function(a){ if (r.st === 'canceled') return; app += Number(a.amount) || 0; items.push({ kind: 'app', amt: Number(a.amount) || 0, at: a.at, by: a.by, policy: a.policy, tx: a.tx, pid: a.pid }); });
+    if (r.crp && r.crp.status === 'done' && r.crp.via !== 'toss_api' && r.st !== 'canceled') { var m = Number(r.crp.refunded_amount || r.crp.amount) || 0; app += m; items.push({ kind: 'manual', amt: m, at: r.crp.refunded_at }); }
+  } else if (r.st === 'refunded') {
+    var ra = Number(r.rf_amt); app = isFinite(ra) ? ra : 0; items.push({ kind: 'link', amt: app, at: r.rf_at, reason: r.rf_reason, krw: r.rf_krw });
+  }
+  v.appCancelled = app; v.appItems = items;
+  // 아직 처리 안 된 카드 환불(취소 때 남긴 대기 · 인원 줄임 대기)
+  var pend = 0, pitems = [];
+  if (r.crp && r.crp.status !== 'done' && r.st !== 'canceled') { var pa = Number(r.crp.amount) || 0; pend += pa; pitems.push({ kind: 'crp', amt: pa, at: r.crp.requested_at, role: r.crp.set_by_role, reason: r.crp.reason }); }
+  (r.crq || []).forEach(function(q){ if (q.status === 'done') return; var qa = Number(q.amount) || 0; pend += qa; pitems.push({ kind: 'crq', amt: qa, at: q.requested_at, reason: q.reason }); });
+  v.pending = pend; v.pendItems = pitems;
+  var cancelled = (r.live && tc != null) ? tc : Math.max(app, tc || 0);
+  v.cancelled = Math.min(cancelled, v.amt);
+  v.net = Math.max(0, v.amt - v.cancelled);
+  var full = v.amt > 0 && v.cancelled >= v.amt - 0.004;
+  v.state = full ? 'full' : (v.cancelled > 0 ? 'partial' : 'ok');
+  // 토스가 이미 취소해 대기를 설명하는가 (토스를 다시 읽었을 때만 안다)
+  var open = pend;
+  if (r.live && tc != null) open = Math.max(0, pend - Math.max(0, tc - app));
+  v.pendingOpen = open;
+  if (open > 0.004 && !full) v.state = 'pending';
+  if (r.src === 'order' && /refund_failed/.test(r.fail || '')) v.flags.push('⚠ 자동 취소 실패 — 카드 결제는 남았는데 좌석이 없습니다(상점관리자에서 취소 필요)');
+  if (r.live && tc != null) {
+    var extra = tc - app - (pend - open);
+    if (extra > 0.004) v.flags.push('토스에 앱 기록이 없는 취소 ' + _pmxMoney(v.cur, extra) + ' — 상점관리자에서 직접 취소한 것으로 보입니다');
+    if (app - tc > 0.004) v.flags.push('⚠ 앱은 취소로 기록했는데 토스에는 ' + _pmxMoney(v.cur, app - tc) + ' 남아 있습니다');
+    if (pend > 0.004 && open <= 0.004) v.flags.push('토스에는 이미 취소됨 — 앱에 「완료 표시」가 남았습니다');
+  }
+  if ((r.crq || []).some(function(q){ return q.status !== 'done'; })) v.flags.push('인원 줄임 카드 부분취소 — 앱은 처리 여부를 기록하지 않습니다(토스 기록으로 확인)');
+  if (r.src === 'charge' && r.st === 'refunded' && !(Number(r.rf_amt) > 0)) v.flags.push('환불 0원 처리(규정상 돌려줄 금액 없음)');
+  if (r.live_err) v.flags.push((r.live ? '' : '⚠ ') + '토스 조회 실패: ' + r.live_err);
+  if (r.src === 'order' && !r.pid && r.st === 'paid') v.flags.push('⚠ 연결된 티켓을 찾지 못했습니다');
+  v.warn = v.flags.some(function(f){ return f.charAt(0) === '⚠'; });
+  // 원화(기록 기준) — 외화 취소는 기록된 원화를 비율로 나눈다(오늘 환율로 다시 바꾸지 않는다)
+  var k = v.cur === 'KRW' ? v.amt : (v.krw == null ? 0 : v.krw);
+  v.krwAmt = k; v.krwCancel = v.amt > 0 ? Math.round(k * v.cancelled / v.amt) : 0;
+  v.krwPending = v.cur === 'KRW' ? v.pendingOpen : (v.amt > 0 ? Math.round(k * v.pendingOpen / v.amt) : 0);
+  return v;
+}
+// MID 마다 「승인일 → 지급일」 영업일 수(최근 정산의 최빈값) — 정산 줄이 아직 없는 결제의 ≈ 예상 입금일에 쓴다
+function _pmxCycles(rows){
+  var by = {};
+  (rows || []).forEach(function(r){
+    var S = Array.isArray(r.settle) ? r.settle.filter(function(s){ return !s.cancel && s.paidOutDate; }) : [];
+    if (!S.length) return;
+    var n = _pmxBizDiff(_tsrKst(r.at, 10), S[0].paidOutDate); if (n == null || n > 60) return;
+    var m = _pmxMid(r); (by[m] = by[m] || []).push(n);
+  });
+  var out = {};
+  Object.keys(by).forEach(function(m){ var c = {}, best = null; by[m].forEach(function(n){ c[n] = (c[n] || 0) + 1; if (best == null || c[n] > c[best] || (c[n] === c[best] && n > best)) best = n; }); out[m] = { n: best, from: by[m].length }; });
+  return out;
+}
+function _pmxPayout(r, v, cyc, today){
+  var S = Array.isArray(r.settle) ? r.settle : null;
+  if (S && S.length) {
+    var ap = S.filter(function(s){ return !s.cancel; }), cs = S.filter(function(s){ return s.cancel; });
+    var out = ap.length ? ap[ap.length - 1].paidOutDate : (S[S.length - 1].paidOutDate || '');
+    var pay = 0, fee = 0; S.forEach(function(s){ pay += Number(s.payOutAmount) || 0; fee += Number(s.fee) || 0; });
+    var sc = S[0].cur || v.cur;
+    return { kind: 'settled', date: out, past: !!out && out <= today, pay: pay, fee: fee, cur: sc, rows: S, cancelRows: cs.length,
+             label: (out ? (out <= today ? '입금 ' + out : '입금 예정 ' + out) : '정산됨') };
+  }
+  if (v.state === 'full' && v.card && /^(READY|CANCELED)$/.test(v.card.acquireStatus || '')) return { kind: 'none', label: '정산 없음 — 매입 전 취소' };
+  var c = cyc[_pmxMid(r)], est = (c && c.n != null) ? _pmxAddBiz(_tsrKst(r.at, 10), c.n) : '';
+  var base = r.settle_err ? '정산 조회 실패(' + r.settle_err + ')' : (r.settle_at ? '정산 기록 아직 없음' : '토스 정산 조회 전');
+  return { kind: r.settle_at ? 'none_yet' : 'unknown', est: est, n: c ? c.n : null, nFrom: c ? c.from : 0,
+           label: est ? '≈ ' + est + ' 예상' : base, sub: base + (est ? ' · 최근 정산 ' + c.from + '건 기준 승인 뒤 ' + c.n + '영업일' : (r.settle_at ? ' · 승인 다음 날부터 생깁니다' : '')) };
+}
+function _pmxCardLine(r, v){
+  var parts = [], c = v.card, e = v.easy;
+  if (e && e.provider) parts.push(_PMX_EASY[e.provider] || e.provider);
+  if (c) {
+    var iss = _PMX_ISSUER[c.issuerCode] || c.company || (c.issuerCode ? '카드사 ' + c.issuerCode : '');
+    if (iss) parts.push(iss);
+    if (c.number) parts.push(c.number);
+    var im = Number(c.installmentPlanMonths);
+    parts.push(im > 0 ? im + '개월' + (c.isInterestFree ? ' 무이자' : '') : '일시불');
+  } else if (r.bk) parts.push((r.bk.company || '등록 카드') + (r.bk.number ? ' ' + r.bk.number : ''));
+  if (!parts.length) parts.push(r.method || (r.src === 'charge' ? '카드 정보는 토스 조회 뒤' : '—'));
+  return parts.join(' · ');
+}
+function _pmxDepView(r){
+  var v = { flags: [] };
+  if (r.kind === 'grant' || r.kind === 'in_other') { v.state = 'in'; v.pay = 0; v.rf = 0; v.net = 0; v.inAmt = _tsrN(r, 'in'); return v; }
+  v.pay = _tsrN(r, 'pay');
+  var rf = 0, fix = 0, ret = 0; (r.rf || []).forEach(function(x){ var a = Number(x.amt) || 0; rf += a; if (x.k === 'fix') fix += a; if (x.k === 'returned') ret += a; });
+  v.rf = rf; v.fix = fix; v.ret = ret; v.net = v.pay - rf;
+  v.state = rf <= 0 ? 'used' : (rf >= v.pay ? 'full' : 'partial');
+  if (rf > v.pay) v.flags.push('⚠ 돌려준 돈(' + _tsrWon(rf) + ')이 결제(' + _tsrWon(v.pay) + ')보다 많습니다');
+  var tst = r.tst || '';
+  if ((tst === 'cancelled' || tst === 'canceled') && rf <= 0 && v.pay > 0 && !_tsrN(r, 'card_paid')) v.flags.push('티켓은 취소됐는데 예치금 환불 기록이 없습니다(규정상 0원일 수 있음)');
+  if (tst === 'active' && (r.rf || []).some(function(x){ return x.k === 'cancel'; })) v.flags.push('⚠ 취소 환불이 있는데 티켓이 살아 있습니다');
+  if (fix > 0) v.flags.push('정정 줄 ' + _tsrWon(fix) + ' — 잘못 두 번 뺀 것을 되돌린 기록입니다');
+  if (r.kind === 'invite' && r.inv_st && r.inv_st !== 'paid' && rf <= 0) v.flags.push('⚠ 초대 상태가 「' + r.inv_st + '」인데 결제가 되돌려지지 않았습니다');
+  v.warn = v.flags.some(function(f){ return f.charAt(0) === '⚠'; });
+  return v;
+}
+function pmxOpen(){
+  if (typeof _isSuperAdmin === 'function' && !_isSuperAdmin()) { showToast('🔒', '슈퍼어드민 전용', '결제 내역은 슈퍼어드민만 봅니다'); return; }
+  var old = document.getElementById('pmxPopup'); if (old) old.remove();
+  _pmx.open = {}; _pmx.q = ''; _pmx.st = 'all'; _pmx.autoKey = ''; _pmx.tossMsg = ''; _pmx.tossErr = false;
+  var t = _cfToday(), today = _tsrYmd(t.y, t.m, t.d), first = _tsrYmd(t.y, t.m, 1);
+  var chip = function(on){ return 'padding:7px 11px;border-radius:9px;border:1.5px solid ' + (on ? '#1a1a18' : '#e0ddd8') + ';background:' + (on ? '#1a1a18' : '#fff') + ';color:' + (on ? '#fff' : '#666') + ';font-family:inherit;font-size:11.5px;font-weight:800;cursor:pointer;'; };
+  var el = document.createElement('div');
+  el.id = 'pmxPopup';
+  el.style.cssText = 'position:fixed;inset:0;z-index:9200;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;';
+  el.innerHTML =
+    '<div style="background:#fff;border-radius:18px;width:100%;max-width:760px;max-height:92vh;overflow:auto;overflow-x:hidden;padding:20px 18px;box-sizing:border-box;font-family:var(--font-main);" data-lang-lock="ko">'
+    + '<div style="display:flex;align-items:center;gap:8px;"><div style="font-size:16px;font-weight:800;color:#1a1a18;flex:1;">💳 결제 내역 (카드 · 예치금)</div>'
+    +   '<button type="button" onclick="pmxClose()" aria-label="닫기" style="border:none;background:none;font-size:20px;color:#999;cursor:pointer;padding:2px 6px;">×</button></div>'
+    + '<div style="font-size:11px;color:#9a9486;line-height:1.65;margin:4px 0 10px;">결제 하나 = 한 줄. 카드 정보·지금 취소 상태·입금일은 토스에서 다시 읽습니다(열 때 오래된 것만). 원화는 기록된 값 그대로 — 외화를 오늘 환율로 다시 바꾸지 않습니다. 테스트 계정은 기본 제외.</div>'
+    + '<div style="display:flex;gap:6px;margin-bottom:10px;">'
+    +   [['card', '💳 카드 결제'], ['dep', '💰 예치금 결제']].map(function(x){ return '<button type="button" class="pmx-tb" data-k="' + x[0] + '" onclick="pmxSetTab(\'' + x[0] + '\')" style="flex:1;min-height:40px;' + chip(x[0] === _pmx.tab) + 'font-size:13px;">' + x[1] + '</button>'; }).join('')
+    + '</div>'
+    + '<div id="pmxPeriodBtns" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">'
+    +   ['month|이번 달', 'prev|지난 달', 'year|올해', 'all|전체', 'custom|직접 입력'].map(function(x){ var k = x.split('|')[0];
+          return '<button type="button" class="pmx-pb" data-k="' + k + '" onclick="pmxSetPeriod(\'' + k + '\')" style="' + chip(k === _pmx.period) + '">' + x.split('|')[1] + '</button>'; }).join('')
+    + '</div>'
+    + '<div id="pmxCustom" style="display:' + (_pmx.period === 'custom' ? 'flex' : 'none') + ';gap:8px;margin-bottom:8px;align-items:center;">'
+    +   '<input id="pmxFrom" type="date" value="' + first + '" style="flex:1;min-width:0;padding:8px;border:1px solid #e0dcd4;border-radius:9px;font-size:13px;">'
+    +   '<span style="color:#aaa;">~</span>'
+    +   '<input id="pmxTo" type="date" value="' + today + '" style="flex:1;min-width:0;padding:8px;border:1px solid #e0dcd4;border-radius:9px;font-size:13px;">'
+    +   '<button type="button" onclick="pmxRun()" style="' + chip(true) + '">조회</button>'
+    + '</div>'
+    + '<div id="pmxChBtns" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;"></div>'
+    + '<div id="pmxStBtns" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;"></div>'
+    + '<div style="display:flex;gap:8px;align-items:center;margin:4px 0 10px;flex-wrap:wrap;">'
+    +   '<input id="pmxQ" type="search" placeholder="이름 · 전화 · 매장 · 주문번호 · 구매 id · 카드 번호" oninput="pmxSearch(this.value)" style="flex:1;min-width:180px;padding:9px 10px;border:1px solid #e0dcd4;border-radius:10px;font-size:12.5px;font-family:inherit;">'
+    +   '<label style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:#777;cursor:pointer;"><input type="checkbox" id="pmxIncTest" ' + (_pmx.incTest ? 'checked' : '') + ' onchange="pmxToggleTest(this.checked)"> 테스트 계정 포함</label>'
+    + '</div>'
+    + '<div id="pmxResult" style="font-size:12px;color:#777;">불러오는 중…</div>'
+    + '</div>';
+  el.addEventListener('click', function(ev){ if (ev.target === el) pmxClose(); });
+  // 줄 「상세」·버튼 — 위임(구매 id·URL 을 onclick 문자열에 넣지 않는다)
+  el.addEventListener('click', function(ev){
+    var a = ev.target && ev.target.closest ? ev.target.closest('[data-pmx-a]') : null;
+    if (a) { ev.stopPropagation(); _pmxAct(a.getAttribute('data-pmx-a'), a.getAttribute('data-pmx-v') || ''); return; }
+    var b = ev.target && ev.target.closest ? ev.target.closest('[data-pmx-k]') : null;
+    if (!b || !_pmx.data) return;
+    var k = b.getAttribute('data-pmx-k');
+    if (_pmx.open[k]) delete _pmx.open[k]; else _pmx.open[k] = 1;
+    _pmxRender();
+  });
+  document.body.appendChild(el);
+  _pmxPaintFilters();
+  pmxRun();
+}
+function pmxClose(){ var p = document.getElementById('pmxPopup'); if (p) p.remove(); _pmx.seq++; if (typeof _acPopupClosed === 'function') _acPopupClosed(); }
+function _pmxPaintSeg(sel, val){
+  document.querySelectorAll('#pmxPopup ' + sel).forEach(function(b){ var on = b.getAttribute('data-k') === val;
+    b.style.borderColor = on ? '#1a1a18' : '#e0ddd8'; b.style.background = on ? '#1a1a18' : '#fff'; b.style.color = on ? '#fff' : '#666'; });
+}
+function _pmxPaintFilters(){
+  var box = document.getElementById('pmxChBtns'), sb = document.getElementById('pmxStBtns'); if (!box || !sb) return;
+  var list = _pmx.tab === 'card' ? _PMX_CH : _PMX_DK, on = _pmx.tab === 'card' ? _pmx.ch : _pmx.dk;
+  box.innerHTML = list.map(function(c){ var o = !!on[c[0]];
+    return '<button type="button" onclick="pmxToggleCh(\'' + c[0] + '\')" style="padding:5px 9px;border-radius:999px;border:1.5px solid ' + (o ? '#8a6d3b' : '#e0ddd8') + ';background:' + (o ? '#fdf8ef' : '#fff') + ';color:' + (o ? '#6a4d1b' : '#aaa') + ';font-family:inherit;font-size:11px;font-weight:800;cursor:pointer;">' + (o ? '✓ ' : '') + c[1] + '</button>'; }).join('');
+  var sl = _pmx.tab === 'card' ? _PMX_ST_CARD : _PMX_ST_DEP;
+  if (!sl.some(function(x){ return x[0] === _pmx.st; })) _pmx.st = 'all';
+  sb.innerHTML = '<span style="font-size:10.5px;color:#a8a29a;font-weight:700;align-self:center;">상태</span>' + sl.map(function(c){ var o = c[0] === _pmx.st;
+    return '<button type="button" onclick="pmxSetSt(\'' + c[0] + '\')" style="padding:5px 9px;border-radius:999px;border:1.5px solid ' + (o ? '#1a1a18' : '#e0ddd8') + ';background:' + (o ? '#1a1a18' : '#fff') + ';color:' + (o ? '#fff' : '#888') + ';font-family:inherit;font-size:11px;font-weight:800;cursor:pointer;">' + c[1] + '</button>'; }).join('');
+}
+function pmxSetTab(k){ _pmx.tab = k === 'dep' ? 'dep' : 'card'; _pmxPaintSeg('.pmx-tb', _pmx.tab); _pmx.st = 'all'; _pmxPaintFilters(); _pmxRender(); }
+function pmxSetPeriod(k){
+  _pmx.period = k; _pmxPaintSeg('.pmx-pb', k);
+  var c = document.getElementById('pmxCustom'); if (c) c.style.display = k === 'custom' ? 'flex' : 'none';
+  if (k !== 'custom') pmxRun();
+}
+function pmxToggleCh(k){ var on = _pmx.tab === 'card' ? _pmx.ch : _pmx.dk; on[k] = on[k] ? 0 : 1; _pmxPaintFilters(); _pmxRender(); }
+function pmxSetSt(k){ _pmx.st = k; _pmxPaintFilters(); _pmxRender(); }
+function pmxToggleTest(on){ _pmx.incTest = !!on; pmxRun(); }
+var _pmxQT = null;
+function pmxSearch(v){ _pmx.q = String(v || '').trim().toLowerCase(); clearTimeout(_pmxQT); _pmxQT = setTimeout(_pmxRender, 120); }
+function _pmxPeriodRange(){
+  if (_pmx.period !== 'custom') return _tsrRange(_pmx.period);
+  var f = (document.getElementById('pmxFrom') || {}).value, e = (document.getElementById('pmxTo') || {}).value;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(f || '') || !/^\d{4}-\d{2}-\d{2}$/.test(e || '')) return null;
+  var p = e.split('-');
+  return { from: f, to: _tsrYmd(+p[0], +p[1] - 1, +p[2] + 1), label: f + ' ~ ' + e };
+}
+async function pmxRun(opts){
+  opts = opts || {};
+  var box = document.getElementById('pmxResult'); if (!box) return;
+  var rg = _pmxPeriodRange();
+  if (!rg) { box.innerHTML = '<span style="color:#B23A2E;">시작·끝 날짜를 골라 주세요</span>'; return; }
+  if (rg.from && rg.to && rg.to <= rg.from) { box.innerHTML = '<span style="color:#B23A2E;">끝 날짜가 시작 날짜보다 뒤여야 합니다</span>'; return; }
+  if (!window.sb) { box.innerHTML = '<span style="color:#B23A2E;">서버 연결이 없습니다</span>'; return; }
+  var seq = ++_pmx.seq;
+  if (!opts.keep) { box.innerHTML = '불러오는 중…'; _pmx.data = null; _pmx.open = {}; }
+  var res;
+  try { res = await window.sb.rpc('taam_payment_ledger', { p_from: rg.from, p_to: rg.to, p_include_test: !!_pmx.incTest }); }
+  catch (e) { res = { error: e }; }
+  if (seq !== _pmx.seq || !document.getElementById('pmxPopup')) return;   // 그 사이 다른 조회가 나갔거나 닫았다
+  if (res.error) {
+    var m = String(res.error.message || res.error), code = String(res.error.code || '');
+    if (opts.keep && _pmx.data) { _pmx.tossMsg = '목록을 다시 읽지 못했습니다 — ' + m.slice(0, 80); _pmx.tossErr = true; _pmxRender(); return; }
+    _pmx.data = null;
+    box.innerHTML = (code === 'PGRST202' || /Could not find the function|does not exist/i.test(m))
+      ? '<div style="color:#B45309;font-weight:700;">서버 준비 필요 — 20261028_payment_ledger.sql 이 아직 적용되지 않았습니다</div>'
+      : (/FORBIDDEN/.test(m) ? '<div style="color:#B23A2E;font-weight:700;">슈퍼어드민만 볼 수 있습니다</div>' : '<div style="color:#B23A2E;">불러오지 못했습니다 — ' + _tsrEsc(m) + '</div>');
+    return;
+  }
+  _pmx.data = res.data || {}; _pmx.data._label = rg.label; _pmx.data._from = rg.from; _pmx.data._to = rg.to;
+  _pmxRender();
+  // 열 때 한 번 — 토스 정보가 없거나 오래된 카드 결제만 토스에서 다시 읽는다
+  var key = (rg.from || 'all') + '|' + (rg.to || '') + '|' + (_pmx.incTest ? 1 : 0);
+  if (!opts.noAuto && _pmx.autoKey !== key) { _pmx.autoKey = key; var need = _pmxStale(_pmx.data.card || []); if (need.length) _pmxToss(need.slice(0, 40), true); }
+}
+// 토스를 다시 읽을 결제 — 한 번도 안 읽었거나, 6시간이 지났고 아직 끝나지 않은 것(전액 취소 + 정산 지급일이 지남이면 끝)
+function _pmxStale(rows){
+  var now = Date.now(), today = _pmxTodayYmd();
+  return (rows || []).filter(function(r){
+    if (!r.pkey) return false;
+    var la = r.live_at ? Date.parse(r.live_at) : NaN, sa = r.settle_at ? Date.parse(r.settle_at) : NaN;
+    if (!isFinite(la) || !isFinite(sa)) return true;
+    var S = Array.isArray(r.settle) ? r.settle.filter(function(s){ return !s.cancel && s.paidOutDate; }) : [];
+    var settled = S.length && S[S.length - 1].paidOutDate < today;
+    var ended = r.live && r.live.status === 'CANCELED';
+    if (settled && (ended || (now - la) < 7 * 86400000)) return false;   // 지급까지 끝났으면 일주일에 한 번만
+    return (now - Math.min(la, sa)) > 6 * 3600000;
+  });
+}
+async function _pmxToss(rows, auto){
+  if (_pmx.tossBusy) { if (!auto) showToast('ⓘ', '토스 조회 중', '잠시만 기다려 주세요'); return; }
+  rows = (rows || []).filter(function(r){ return r.pkey && (r.order_id || r.charge_id); });
+  if (!rows.length) { if (!auto) showToast('ⓘ', '토스 조회', '다시 읽을 카드 결제가 없습니다'); return; }
+  if (!window.sb || !window.sb.functions) return;
+  _pmx.tossBusy = true; _pmx.tossErr = false; _pmx.tossMsg = '토스에서 ' + rows.length + '건 확인하는 중…'; _pmxPaintToss();
+  var res;
+  try { res = await window.sb.functions.invoke('toss-payment-info', { body: { items: rows.slice(0, 60).map(function(r){ return { src: r.src, ref: r.src === 'order' ? r.order_id : r.charge_id }; }) } }); }
+  catch (e) { res = { error: e }; }
+  _pmx.tossBusy = false;
+  if (!document.getElementById('pmxPopup')) return;
+  if (res.error) {
+    var st = res.error.context && res.error.context.status;
+    _pmx.tossErr = true;
+    _pmx.tossMsg = st === 404 ? '토스 조회 기능 준비 필요 — Edge toss-payment-info 배포 전 (DB 기록만 보입니다)' : (st === 403 ? '토스 조회는 슈퍼어드민만' : '토스 조회 실패 — ' + String(res.error.message || res.error).slice(0, 80));
+    _pmxPaintToss(); return;
+  }
+  var d = res.data || {};
+  if (!d.ok) { _pmx.tossErr = true; _pmx.tossMsg = '토스 조회 실패 — ' + ({ no_secret: '토스 시크릿 없음', no_payment_key: '결제키 없음', no_items: '대상 없음' }[d.error] || d.error || '?'); _pmxPaintToss(); return; }
+  var se = (d.settle && d.settle.errors) || [];
+  _pmx.tossErr = !!(d.info_fail || se.length);
+  _pmx.tossMsg = '토스 확인 ' + (d.info_ok || 0) + '건' + (d.info_fail ? ' · 실패 ' + d.info_fail + '건' : '')
+    + (d.settle ? ' · 정산 ' + (d.settle.matched || 0) + '건 찾음' : '') + (se.length ? ' · 정산 조회 오류 ' + se.map(function(x){ return x.key + ' ' + x.code; }).join(', ') : '')
+    + ' · ' + _tsrKst(new Date().toISOString()).slice(11, 16);
+  await pmxRun({ keep: true, noAuto: true });
+}
+function _pmxPaintToss(){ var b = document.getElementById('pmxTossLine'); if (b) b.innerHTML = _pmxTossHtml(); }
+function _pmxTossHtml(){
+  return (_pmx.tossMsg ? '<span style="color:' + (_pmx.tossErr ? '#B45309' : '#6a6458') + ';">' + (_pmx.tossBusy ? '⏳ ' : '') + _tsrEsc(_pmx.tossMsg) + '</span>' : '');
+}
+function _pmxMatch(r){
+  if (!_pmx.q) return true;
+  var c = r.live && r.live.card ? r.live.card.number : (r.snap && r.snap.card ? r.snap.card.number : '');
+  var hay = [r.buyer, r.payer, r.phone, r.payer_phone, r.email, r.rest, r.title, r.subtitle, r.label, r.order_id, r.pid, r.tpid, r.pkey, r.desc, c, r.k].join(' ').toLowerCase();
+  return hay.indexOf(_pmx.q) >= 0 || (/^\d{3,}$/.test(_pmx.q.replace(/\D/g, '')) && hay.replace(/\D/g, ' ').indexOf(_pmx.q.replace(/\D/g, '')) >= 0);
+}
+// 거르기 — 화면·CSV·시험이 같이 쓴다
+function _pmxFilter(D, tab){
+  var out = [];
+  if (tab === 'card') (D.card || []).forEach(function(r){
+    if (!_pmx.ch[r.ch]) return;
+    var v = _pmxCardView(r);
+    if (_pmx.st === 'warn' ? !v.warn : (_pmx.st !== 'all' && v.state !== _pmx.st)) return;
+    if (!_pmxMatch(r)) return;
+    out.push({ r: r, v: v });
+  });
+  else (D.dep || []).forEach(function(r){
+    if (!_pmx.dk[r.kind]) return;
+    var v = _pmxDepView(r);
+    if (_pmx.st === 'warn' ? !v.warn : (_pmx.st !== 'all' && v.state !== _pmx.st)) return;
+    if (!_pmxMatch(r)) return;
+    out.push({ r: r, v: v });
+  });
+  return out;
+}
+function _pmxBadge(st, dep){ var s = (dep && _PMX_STL_DEP[st]) || _PMX_STL[st] || [st, '#777', '#f0f0f0']; return '<span style="font-size:10.5px;font-weight:800;color:' + s[1] + ';background:' + s[2] + ';padding:2px 7px;border-radius:999px;white-space:nowrap;">' + s[0] + '</span>'; }
+function _pmxTag(txt){ return '<span style="font-size:10px;font-weight:800;color:#6a4d1b;background:#fdf8ef;border:1px solid #eadcc0;padding:1px 6px;border-radius:6px;white-space:nowrap;">' + _tsrEsc(txt) + '</span>'; }
+function _pmxBtn(act, val, label, color){
+  return '<button type="button" data-pmx-a="' + act + '" data-pmx-v="' + _tsrEsc(val) + '" style="padding:7px 10px;border-radius:9px;border:1px solid ' + (color || '#e0ddd5') + ';background:#fff;color:' + (color || '#1a1a18') + ';font-family:inherit;font-size:11.5px;font-weight:800;cursor:pointer;">' + label + '</button>';
+}
+function _pmxRender(){
+  var box = document.getElementById('pmxResult'); if (!box) return;
+  var D = _pmx.data; if (!D) return;
+  var today = D.today || _pmxTodayYmd();
+  var list = _pmxFilter(D, _pmx.tab);
+  _pmx.byK = {}; (D.card || []).concat(D.dep || []).forEach(function(r){ _pmx.byK[r.k] = r; });
+  var cyc = _pmxCycles(D.card || []);
+  var h = '<div style="font-size:11px;color:#9a9486;margin-bottom:8px;">' + _tsrEsc(D._label || '') + ' · 결제 시각(KST) 기준 · 기준 시각 ' + _tsrEsc(_tsrKst(D.generated_at)) + '</div>';
+  if (_pmx.tab === 'card') {
+    var T = { n: 0, amt: 0, cancel: 0, net: 0, pend: 0, pendN: 0, payFut: 0, payFutN: 0, payPast: 0, fee: 0, est: 0, warn: 0, fx: {}, sfFut: {}, sfPast: {} };
+    list.forEach(function(x){
+      var r = x.r, v = x.v; T.n++; T.amt += v.krwAmt; T.cancel += v.krwCancel; T.net += v.krwAmt - v.krwCancel;
+      if (v.pendingOpen > 0) { T.pend += v.krwPending; T.pendN++; }
+      if (v.warn) T.warn++;
+      if (v.cur !== 'KRW') { T.fx[v.cur] = (T.fx[v.cur] || 0) + v.amt; }
+      var po = _pmxPayout(r, v, cyc, today);
+      if (po.kind === 'settled' && po.cur === 'KRW') { if (po.past) T.payPast += po.pay; else { T.payFut += po.pay; T.payFutN++; } T.fee += po.fee; }
+      else if (po.kind === 'settled') { var bag = po.past ? T.sfPast : T.sfFut; bag[po.cur] = (bag[po.cur] || 0) + po.pay; if (!po.past) T.payFutN++; }
+      else if (po.kind !== 'none' && v.state !== 'full') T.est++;
+    });
+    var fxl = function(o){ return Object.keys(o).map(function(c){ return _pmxMoney(c, o[c]); }).join(' · '); };
+    var fxs = fxl(T.fx), sff = fxl(T.sfFut), sfp = fxl(T.sfPast);
+    h += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-bottom:10px;">'
+      + _tsrCard('카드 승인', _tsrWon(T.amt), T.n + '건' + (fxs ? ' · ' + fxs : '') + ' · 외화는 기록된 원화')
+      + _tsrCard('취소·환불', _tsrWon(T.cancel), '토스 기록(없으면 앱 기록)', T.cancel ? '#B45309' : null)
+      + _tsrCard('순 결제', _tsrWon(T.net), '승인 − 취소')
+      + _tsrCard('입금 예정 (확정)', _tsrWon(T.payFut), T.payFutN + '건 · 토스 정산 지급일 기준' + (sff ? ' · 외화 ' + sff : '') + (T.est ? ' · 정산 전 ' + T.est + '건(≈)' : ''), '#1565C0')
+      + _tsrCard('입금 완료 · 수수료', _tsrWon(T.payPast), '원화 수수료 ' + _tsrWon(T.fee) + (sfp ? ' · 외화 입금 ' + sfp : ''))
+      + _tsrCard('환불 대기', T.pendN + '건', T.pendN ? _tsrWon(T.pend) + ' — 처리 필요' : '없음', T.pendN ? '#B23A2E' : null)
+      + '</div>';
+    h += '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">'
+      + _pmxBtn('tossall', '', '↻ 토스 정보 새로고침 (보이는 ' + Math.min(list.length, 60) + '건)')
+      + _pmxBtn('tossadmin', '', '토스 상점관리자 열기 ↗', '#1565C0')
+      + '<button type="button" onclick="pmxCsv()" style="padding:7px 10px;border-radius:9px;border:1px solid #e0ddd5;background:#fff;color:#1a1a18;font-family:inherit;font-size:11.5px;font-weight:800;cursor:pointer;">CSV</button>'
+      + '</div><div id="pmxTossLine" style="font-size:11px;margin:-2px 0 8px;min-height:14px;">' + _pmxTossHtml() + '</div>';
+    if (Object.keys(cyc).length) h += '<div style="font-size:10.5px;color:#a8a29a;margin:-4px 0 8px;">≈ 예상 입금일 기준 — ' + Object.keys(cyc).map(function(m){ return _tsrEsc(_PMX_MIDL[m] || m) + ' 승인 뒤 ' + cyc[m].n + '영업일(최근 정산 ' + cyc[m].from + '건)'; }).join(' · ') + '</div>';
+  } else {
+    var U = { n: 0, pay: 0, mem: 0, gen: 0, rf: 0, net: 0, inn: 0, inN: 0, warn: 0 };
+    list.forEach(function(x){ var r = x.r, v = x.v;
+      if (v.state === 'in') { U.inn += v.inAmt; U.inN++; return; }
+      U.n++; U.pay += v.pay; U.mem += _tsrN(r, 'mem'); U.gen += _tsrN(r, 'gen'); U.rf += v.rf; U.net += v.net; if (v.warn) U.warn++; });
+    h += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-bottom:10px;">'
+      + _tsrCard('예치금 결제', _tsrWon(U.pay), U.n + '건 · 멤버십 ' + _tsrWon(U.mem) + ' · 일반 ' + _tsrWon(U.gen))
+      + _tsrCard('환불·반환·정정', _tsrWon(U.rf), '결제에 붙은 돌려준 돈', U.rf ? '#B45309' : null)
+      + _tsrCard('순 사용', _tsrWon(U.net), '결제 − 돌려준 돈')
+      + (U.inN ? _tsrCard('입금(부여 등)', _tsrWon(U.inn), U.inN + '건', '#1565C0') : '')
+      + (U.warn ? _tsrCard('⚠ 확인 필요', U.warn + '건', '상세에서 이유', '#B23A2E') : '')
+      + '</div>'
+      + '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;"><button type="button" onclick="pmxCsv()" style="padding:7px 10px;border-radius:9px;border:1px solid #e0ddd5;background:#fff;color:#1a1a18;font-family:inherit;font-size:11.5px;font-weight:800;cursor:pointer;">CSV</button>'
+      + '<span style="font-size:10.5px;color:#a8a29a;align-self:center;">예치금 부여(입금)는 위 「예치금 부여(입금)」 칩을 켜면 보입니다 · 회원별 흐름은 💰 회원 원장</span></div>';
+  }
+  if (!list.length) { box.innerHTML = h + '<div style="padding:18px 0;color:#a8a29a;text-align:center;">이 조건의 결제가 없습니다</div>'; return; }
+  var shown = list.slice(0, 300);
+  h += '<div style="border:1px solid #f0ece4;border-radius:12px;overflow:hidden;">' + shown.map(function(x){ return _pmx.tab === 'card' ? _pmxCardRow(x.r, x.v, cyc, today) : _pmxDepRow(x.r, x.v); }).join('') + '</div>';
+  if (list.length > shown.length) h += '<div style="font-size:11px;color:#a8a29a;margin-top:6px;">화면에는 최근 300건 — CSV 는 전체 ' + list.length + '건</div>';
+  box.innerHTML = h;
+}
+function _pmxWho(r){ var n = r.buyer || r.payer || '(이름 없음)'; return _tsrEsc(n) + (r.payer && r.buyer && r.payer !== r.buyer ? ' <span style="color:#a8a29a;font-weight:600;">(결제자 ' + _tsrEsc(r.payer) + ')</span>' : '') + (r.test ? ' ' + _pmxTag('테스트') : ''); }
+function _pmxWhat(r){
+  var a = [];
+  if (r.rest) a.push(_tsrEsc(r.rest)); else if (r.title) a.push(_tsrEsc(r.title)); else if (r.label) a.push(_tsrEsc(r.label));
+  if (r.visit) a.push('방문 ' + _tsrEsc(r.visit) + (r.vtime ? ' ' + _tsrEsc(r.vtime) : ''));
+  if (r.pax) a.push(_tsrEsc(r.pax) + '인');
+  return a.join(' · ') || (r.purpose === 'membership' ? '멤버십' : '—');
+}
+function _pmxCardRow(r, v, cyc, today){
+  var open = !!_pmx.open[r.k], po = _pmxPayout(r, v, cyc, today);
+  var chl = (_PMX_CH.filter(function(c){ return c[0] === r.ch; })[0] || [0, r.ch])[1];
+  var money = _pmxMoney(v.cur, v.amt) + (v.cur !== 'KRW' && v.krw != null ? ' <span style="color:#a8a29a;font-weight:600;">(' + _tsrWon(v.krw) + ')</span>' : '');
+  var canc = v.cancelled > 0 ? '<div style="font-size:11px;color:#B45309;font-weight:700;">취소 ' + _pmxMoney(v.cur, v.cancelled) + '</div>' : '';
+  var pend = v.pendingOpen > 0 ? '<div style="font-size:11px;color:#B23A2E;font-weight:700;">환불 대기 ' + _pmxMoney(v.cur, v.pendingOpen) + '</div>' : '';
+  var poc = po.kind === 'settled' ? (po.past ? '#6a6458' : '#1565C0') : '#a8a29a';
+  var h = '<div style="padding:10px 12px;border-bottom:1px solid #f3f0ea;' + (open ? 'background:#fdfbf7;' : '') + '">'
+    + '<div style="display:flex;gap:10px;align-items:flex-start;">'
+    +   '<div style="flex:1;min-width:0;">'
+    +     '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;"><span style="font-size:11px;color:#8a8580;font-weight:700;">' + _tsrEsc(_tsrKst(r.at)) + '</span>' + _pmxTag(chl) + _pmxBadge(v.state) + (v.warn ? '<span style="font-size:10.5px;color:#B23A2E;font-weight:800;">⚠</span>' : '') + '</div>'
+    +     '<div style="font-size:13px;font-weight:800;color:#1a1a18;margin-top:3px;word-break:break-all;">' + _pmxWho(r) + '</div>'
+    +     '<div style="font-size:11.5px;color:#555;margin-top:2px;word-break:break-all;">' + _pmxWhat(r) + '</div>'
+    +     '<div style="font-size:11px;color:#8a8580;margin-top:2px;word-break:break-all;">💳 ' + _tsrEsc(_pmxCardLine(r, v)) + ' · <span style="color:' + poc + ';font-weight:700;">' + _tsrEsc(po.label) + '</span></div>'
+    +   '</div>'
+    +   '<div style="text-align:right;flex:0 0 auto;max-width:44%;">'
+    +     '<div style="font-size:13.5px;font-weight:800;color:#1a1a18;word-break:break-all;">' + money + '</div>' + canc + pend
+    +     '<button type="button" data-pmx-k="' + _tsrEsc(r.k) + '" style="margin-top:6px;padding:5px 9px;border-radius:8px;border:1px solid ' + (v.warn ? '#e8b4ad' : '#e0ddd5') + ';background:' + (v.warn ? '#fdecea' : '#fff') + ';color:' + (v.warn ? '#B23A2E' : '#666') + ';font-family:inherit;font-size:11px;font-weight:800;cursor:pointer;">' + (v.warn ? '⚠ ' : '') + (open ? '접기 ▴' : '상세 ▾') + '</button>'
+    +   '</div>'
+    + '</div>';
+  if (open) h += _pmxCardDetail(r, v, po);
+  return h + '</div>';
+}
+function _pmxLine(label, val){ return '<div style="display:flex;gap:8px;padding:2px 0;"><span style="flex:0 0 84px;color:#8a8580;">' + label + '</span><span style="flex:1;min-width:0;word-break:break-all;">' + val + '</span></div>'; }
+function _pmxSec(t){ return '<div style="font-size:11px;font-weight:800;color:#6a4d1b;margin:10px 0 3px;">' + t + '</div>'; }
+function _pmxMono(t){ return '<span style="font-family:ui-monospace,Menlo,monospace;font-size:10.5px;">' + _tsrEsc(t) + '</span>'; }
+function _pmxCardDetail(r, v, po){
+  var L = _pmxLine, E = _tsrEsc, M = function(x){ return _pmxMoney(v.cur, x); };
+  var chl = (_PMX_CH.filter(function(c){ return c[0] === r.ch; })[0] || [0, r.ch])[1];
+  var h = '<div style="margin-top:8px;padding:10px 12px;border:1px solid #eee5d6;border-radius:10px;background:#fff;font-size:11.5px;color:#1a1a18;">';
+  // 구매자
+  h += _pmxSec('구매자');
+  if (r.src === 'charge') h += L('결제자', E(r.payer || '—') + (r.payer_phone ? ' · ' + E(r.payer_phone) : '') + ' <span style="color:#a8a29a;">(/pay 에서 결제한 사람)</span>');
+  h += L('회원', r.uid ? E(r.buyer || '(이름 없음)') + (r.tier ? ' · ' + E(r.tier) + ' 등급' : '') : '<span style="color:#a8a29a;">비회원 결제</span>');
+  if (r.phone || r.email) h += L('연락처', E([r.phone, r.email].filter(Boolean).join(' · ')));
+  // 결제
+  h += _pmxSec('결제');
+  h += L('승인 일시', E(_tsrKst(r.at)) + ' <span style="color:#a8a29a;">KST</span>' + (r.created && r.created !== r.at ? ' · 주문 ' + E(_tsrKst(r.created)) : ''));
+  h += L('경로', E(chl) + (r.purpose ? ' · ' + E(r.purpose) : '') + (r.method ? ' · ' + E(r.method) : ''));
+  h += L('MID', E(_PMX_MIDL[_pmxMid(r)] || _pmxMid(r)) + ' ' + _pmxMono(_pmxMid(r)) + (r.mid ? '' : ' <span style="color:#a8a29a;">(짐작)</span>'));
+  if (r.order_id) h += L('주문번호', _pmxMono(r.order_id));
+  if (r.pkey) h += L('결제키', _pmxMono(r.pkey));
+  if (v.T && v.T.status) h += L('토스 상태', E(_PMX_TST[v.T.status] || v.T.status) + (v.stale ? ' <span style="color:#B45309;">(승인 시점 기록 — 「토스 새로고침」으로 지금 상태)</span>' : ' <span style="color:#a8a29a;">(토스 조회 ' + E(_tsrKst(r.live_at)) + ')</span>'));
+  else h += L('토스 상태', '<span style="color:#a8a29a;">토스 조회 전' + (r.live_err ? ' · 실패 ' + E(r.live_err) : '') + '</span>');
+  // 금액
+  h += _pmxSec('금액');
+  h += L('카드 결제', '<b>' + M(v.amt) + '</b>' + (v.cur !== 'KRW' ? ' · 기록된 원화 ' + (v.krw != null ? _tsrWon(v.krw) : '—') + (r.fx ? ' (적용환율 ' + E(r.fx) + ')' : '') : ''));
+  if (r.src === 'order' && (r.dep || r.dep_used)) h += L('같이 쓴 예치금', _tsrWon(r.dep || r.dep_used) + (r.dep_mem || r.dep_gen ? ' (멤버십 ' + _tsrWon(r.dep_mem || 0) + ' · 일반 ' + _tsrWon(r.dep_gen || 0) + ')' : '')
+      + (r.pid ? ' ' + _pmxBtn('godep', 'p:' + r.uid + '|' + r.pid, '예치금 쪽 보기') : ''));
+  if (r.tprice) h += L('티켓 금액', _tsrWon(r.tprice) + (r.card_paid != null ? ' · 카드 몫 ' + _tsrWon(r.card_paid) : ''));
+  if (v.cancelled > 0) h += L('취소', '<span style="color:#B45309;font-weight:800;">' + M(v.cancelled) + '</span> → 남은 ' + M(v.net));
+  // 카드
+  h += _pmxSec('카드 내역');
+  var c = v.card, e = v.easy;
+  if (c) {
+    var iss = _PMX_ISSUER[c.issuerCode] || c.company || c.issuerCode || '—', acq = c.acquirerCode && c.acquirerCode !== c.issuerCode ? (_PMX_ISSUER[c.acquirerCode] || c.acquirerCode) : '';
+    h += L('카드사', E(iss) + (acq ? ' <span style="color:#a8a29a;">(매입 ' + E(acq) + ')</span>' : ''));
+    if (c.number) h += L('카드 번호', _pmxMono(c.number));
+    var im = Number(c.installmentPlanMonths);
+    h += L('할부', im > 0 ? E(im + '개월' + (c.isInterestFree ? ' 무이자' : '') + (c.interestPayer ? ' · 이자 부담 ' + c.interestPayer : '')) : '일시불');
+    if (c.approveNo) h += L('승인번호', _pmxMono(c.approveNo));
+    if (c.cardType || c.ownerType) h += L('종류', E([c.cardType, c.ownerType].filter(Boolean).join(' · ')));
+    if (c.acquireStatus) h += L('매입', E(_PMX_ACQ[c.acquireStatus] || c.acquireStatus) + (v.stale ? ' <span style="color:#a8a29a;">(승인 시점)</span>' : ''));
+    if (c.useCardPoint) h += L('포인트', '카드 포인트 사용');
+  }
+  if (e && e.provider) h += L('간편결제', E(_PMX_EASY[e.provider] || e.provider) + (e.amount != null ? ' · ' + M(e.amount) : '') + (Number(e.discountAmount) > 0 ? ' · 할인 ' + M(e.discountAmount) : ''));
+  if (!c && !(e && e.provider)) h += L('카드', r.bk ? E((r.bk.company || '등록 카드') + (r.bk.number ? ' ' + r.bk.number : '') + (r.bk.type ? ' · ' + r.bk.type : '')) + ' <span style="color:#a8a29a;">(등록 카드 기록)</span>'
+      : '<span style="color:#a8a29a;">' + (r.src === 'charge' ? '결제 링크는 카드 정보를 저장하지 않습니다 — 토스 조회 뒤 보입니다' : '카드 기록 없음') + '</span>');
+  // 연결
+  h += _pmxSec(r.src === 'charge' ? '결제 내용' : '연결 티켓');
+  if (r.src === 'charge') {
+    if (r.title || r.subtitle) h += L('제목', E([r.title, r.subtitle].filter(Boolean).join(' · ')));
+    if (r.label && r.label !== r.title) h += L('청구 이름', E(r.label));
+  }
+  h += L('매장·방문', _pmxWhat(r));
+  if (r.pid) h += L('구매 id', _pmxMono(r.pid) + (r.tst ? ' · ' + E(_PMX_TK[r.tst] || r.tst) : ''));
+  else if (r.src === 'charge' && r.ch === 'link') h += L('좌석', '<span style="color:#a8a29a;">좌석 행 없음</span>');
+  if (r.fee_rec != null) h += L('연회비 기록', _tsrWon(r.fee_rec) + ' (결제 링크 자동 기록)');
+  if (r.price_override) h += L('금액', '✎ 정가에서 바꾼 금액');
+  if (r.note) h += L('어드민 메모', E(r.note).replace(/\n/g, '<br>'));
+  // 입금
+  h += _pmxSec('입금 (토스 정산)');
+  if (po.kind === 'settled') {
+    po.rows.forEach(function(s){
+      h += L(s.cancel ? '취소분' : '매출 ' + E(s.soldDate || ''), (s.paidOutDate ? '<b>' + E(s.paidOutDate) + '</b> ' + (s.paidOutDate <= (_pmx.data.today || '') ? '입금' : '입금 예정') : '지급일 —')
+        + ' · 금액 ' + _pmxMoney(s.cur || v.cur, s.amount) + ' · 수수료 ' + _pmxMoney(s.cur || v.cur, s.fee || 0) + ' · <b>지급 ' + _pmxMoney(s.cur || v.cur, s.payOutAmount) + '</b>');
+    });
+    if (po.rows.length > 1) h += L('합계', '지급 ' + _pmxMoney(po.cur, po.pay) + ' · 수수료 ' + _pmxMoney(po.cur, po.fee));
+    h += L('', '<span style="color:#a8a29a;">토스 정산 조회 ' + E(_tsrKst(r.settle_at)) + '</span>');
+  } else h += L('입금일', E(po.label) + (po.sub ? '<div style="color:#a8a29a;font-size:10.5px;">' + E(po.sub) + '</div>' : ''));
+  // 취소 연동
+  h += _pmxSec('취소 연동');
+  var any = false;
+  v.tossCancels.forEach(function(cc){
+    any = true;
+    var src = (r.app_cancels || []).some(function(a){ return a.tx && a.tx === cc.transactionKey; }) || (r.crp && r.crp.toss_tx && r.crp.toss_tx === cc.transactionKey) ? '앱 「토스 승인취소」'
+      : (r.src === 'order' && r.st === 'canceled' ? '자동 취소(결제 확정 단계)' : (r.src === 'charge' && r.st === 'refunded' ? '결제 링크 「환불」' : '상점관리자 또는 기타'));
+    h += L('토스 취소', E(_tsrKst(cc.canceledAt)) + ' · <b>' + M(cc.cancelAmount) + '</b> · ' + E(src) + (cc.cancelReason ? ' · 「' + E(cc.cancelReason) + '」' : ''));
+  });
+  if (v.stale && !v.tossCancels.length) h += L('토스 취소', '<span style="color:#a8a29a;">승인 시점 기록이라 그 뒤 취소는 안 보입니다 — 「토스 새로고침」</span>');
+  v.appItems.forEach(function(a){
+    any = true;
+    if (a.kind === 'auto') h += L('앱 기록', E(a.label) + ' · ' + M(a.amt));
+    else if (a.kind === 'app') h += L('앱 기록', '「토스 승인취소」 ' + E(_tsrKst(a.at)) + ' · ' + M(a.amt) + (a.by ? ' · ' + E(a.by) : '') + (a.policy ? ' · ' + E(_PMX_POLICY[a.policy] || a.policy) : ''));
+    else if (a.kind === 'manual') h += L('앱 기록', '「완료 표시」(상점관리자 처리) ' + E(_tsrKst(a.at)) + ' · ' + M(a.amt));
+    else if (a.kind === 'link') h += L('앱 기록', '결제 링크 환불 ' + E(_tsrKst(a.at)) + ' · ' + M(a.amt) + (a.krw != null && v.cur !== 'KRW' ? ' (' + _tsrWon(a.krw) + ')' : '') + (a.reason ? ' · 「' + E(a.reason) + '」' : ''));
+  });
+  v.pendItems.forEach(function(p){
+    any = true;
+    h += L(p.kind === 'crq' ? '인원 줄임' : '환불 대기', '<span style="color:#B23A2E;font-weight:800;">' + M(p.amt) + '</span> · 요청 ' + E(_tsrKst(p.at) || '—')
+      + (p.role ? ' · ' + (p.role === 'superadmin' ? '슈퍼어드민이 남김' : '회원 취소') : '') + (p.reason ? ' · ' + E(p.reason) : ''));
+  });
+  (r.rf || []).forEach(function(x){
+    any = true;
+    h += L('예치금', E(_tsrKst(x.at)) + ' · ' + E(_PMX_RFK[x.k] || x.k) + (x.reason ? '(' + E(_PMX_REASON[x.reason] || x.reason) + ')' : '') + ' · ' + (x.pocket === 'membership' ? '멤버십' : '일반') + ' +' + _tsrWon(x.amt)
+      + (x.by ? ' · ' + E(_PMX_BY[x.by] || x.by) : '') + (x.agency_held ? ' · 대행비 보유 ' + _tsrWon(x.agency_held) : ''));
+  });
+  if (r.t_cancel_at || r.t_cancel_reason) { any = true; h += L('좌석', '취소 ' + E(_tsrKst(r.t_cancel_at) || '') + (r.t_cancel_reason ? ' · ' + E(r.t_cancel_reason) : '') + (r.t_cancel_role ? ' · ' + E(r.t_cancel_role) : '')); }
+  if (!any) h += L('', '<span style="color:#a8a29a;">취소 기록 없음</span>');
+  if (v.flags.length) h += '<div style="margin-top:6px;">' + v.flags.map(function(f){ return '<div style="color:' + (f.charAt(0) === '⚠' ? '#B23A2E' : '#B45309') + ';font-weight:700;padding:1px 0;">' + E(f) + '</div>'; }).join('') + '</div>';
+  // 버튼
+  h += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;">';
+  if (v.receipt) h += _pmxBtn('receipt', r.k, '🧾 토스 영수증 ↗', '#1565C0');
+  if (r.pkey) h += _pmxBtn('toss1', r.k, '↻ 이 결제 토스 새로고침');
+  if (r.src === 'order' && r.pid && r.crp && r.crp.status !== 'done' && v.pendingOpen > 0) {
+    h += _pmxBtn('crf', r.pid, '💳 토스 승인취소 실행', '#B23A2E') + _pmxBtn('crfdone', r.pid, '상점관리자에서 처리함 · 완료 표시');
+  } else if (r.src === 'order' && r.pid && r.crp && r.crp.status !== 'done') h += _pmxBtn('crfdone', r.pid, '완료 표시 (토스엔 이미 취소)');
+  if (r.src === 'charge') h += _pmxBtn('paylink', String(r.charge_id || ''), '💸 결제 링크 목록에서');
+  if (r.uid) h += _pmxBtn('ledger', r.uid, '💰 회원 원장');
+  h += '</div></div>';
+  return h;
+}
+function _pmxDepRow(r, v){
+  var open = !!_pmx.open[r.k];
+  var kl = (_PMX_DK.filter(function(c){ return c[0] === r.kind; })[0] || [0, r.kind])[1];
+  var right;
+  if (v.state === 'in') right = '<div style="font-size:13.5px;font-weight:800;color:#1565C0;">+' + _tsrWon(v.inAmt) + '</div><div style="font-size:11px;color:#8a8580;">' + (r.pocket === 'membership' ? '멤버십' : '일반') + '</div>';
+  else right = '<div style="font-size:13.5px;font-weight:800;color:#1a1a18;">' + _tsrWon(-v.pay) + '</div>'
+    + '<div style="font-size:10.5px;color:#8a8580;">' + (r.mem ? '멤버십 ' + _tsrWon(r.mem) : '') + (r.mem && r.gen ? ' · ' : '') + (r.gen ? '일반 ' + _tsrWon(r.gen) : '') + '</div>'
+    + (v.rf > 0 ? '<div style="font-size:11px;color:#B45309;font-weight:700;">돌려줌 +' + _tsrWon(v.rf) + '</div>' : '');
+  var sub = [];
+  if (r.order_id) sub.push('💳 카드 같이');
+  if (r.kind === 'deduct' && r.fee) sub.push('연회비 기록');
+  if (r.fx_cur && r.fx_amt != null) sub.push('송금 ' + _pmxMoney(r.fx_cur, r.fx_amt));
+  if (r.by_name) sub.push('처리 ' + r.by_name);
+  if (r.n > 1) sub.push(r.n + '줄');
+  var h = '<div style="padding:10px 12px;border-bottom:1px solid #f3f0ea;' + (open ? 'background:#fdfbf7;' : '') + '">'
+    + '<div style="display:flex;gap:10px;align-items:flex-start;">'
+    +   '<div style="flex:1;min-width:0;">'
+    +     '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;"><span style="font-size:11px;color:#8a8580;font-weight:700;">' + _tsrEsc(_tsrKst(r.at)) + '</span>' + _pmxTag(kl) + _pmxBadge(v.state, true) + (v.warn ? '<span style="font-size:10.5px;color:#B23A2E;font-weight:800;">⚠</span>' : '') + '</div>'
+    +     '<div style="font-size:13px;font-weight:800;color:#1a1a18;margin-top:3px;word-break:break-all;">' + _pmxWho(r) + '</div>'
+    +     '<div style="font-size:11.5px;color:#555;margin-top:2px;word-break:break-all;">' + (r.rest || r.visit ? _pmxWhat(r) : _tsrEsc(r.desc || _PMX_CT[r.ctype] || '—')) + '</div>'
+    +     (sub.length ? '<div style="font-size:11px;color:#8a8580;margin-top:2px;">' + _tsrEsc(sub.join(' · ')) + '</div>' : '')
+    +   '</div>'
+    +   '<div style="text-align:right;flex:0 0 auto;max-width:44%;">' + right
+    +     '<button type="button" data-pmx-k="' + _tsrEsc(r.k) + '" style="margin-top:6px;padding:5px 9px;border-radius:8px;border:1px solid ' + (v.warn ? '#e8b4ad' : '#e0ddd5') + ';background:' + (v.warn ? '#fdecea' : '#fff') + ';color:' + (v.warn ? '#B23A2E' : '#666') + ';font-family:inherit;font-size:11px;font-weight:800;cursor:pointer;">' + (v.warn ? '⚠ ' : '') + (open ? '접기 ▴' : '상세 ▾') + '</button>'
+    +   '</div>'
+    + '</div>';
+  if (open) h += _pmxDepDetail(r, v);
+  return h + '</div>';
+}
+function _pmxDepDetail(r, v){
+  var L = _pmxLine, E = _tsrEsc;
+  var h = '<div style="margin-top:8px;padding:10px 12px;border:1px solid #eee5d6;border-radius:10px;background:#fff;font-size:11.5px;color:#1a1a18;">';
+  h += _pmxSec('회원');
+  h += L('회원', E(r.buyer || '(이름 없음)') + (r.tier ? ' · ' + E(r.tier) + ' 등급' : ''));
+  if (r.phone || r.email) h += L('연락처', E([r.phone, r.email].filter(Boolean).join(' · ')));
+  if (v.state === 'in') {
+    h += _pmxSec('입금');
+    h += L('일시', E(_tsrKst(r.at)) + ' KST');
+    h += L('종류', E(_PMX_CT[r.ctype] || r.ctype || '') + (r.fix ? ' · 정정' : ''));
+    h += L('금액', '<b>+' + _tsrWon(v.inAmt) + '</b> · ' + (r.pocket === 'membership' ? '멤버십 예치금' : '일반 예치금'));
+    if (r.fx_cur && r.fx_amt != null) h += L('해외 송금', _pmxMoney(r.fx_cur, r.fx_amt) + (r.fx_rate ? ' × 적용환율 ' + E(r.fx_rate) : '') + (r.fx_base ? ' (기준 ' + E(r.fx_base) + (r.fx_margin != null ? ' · 마진 ' + E(r.fx_margin) + '%' : '') + ')' : ''));
+    if (r.by_name) h += L('처리', E(r.by_name));
+    if (r.desc) h += L('설명', E(r.desc));
+    if (r.pid) h += L('구매 id', _pmxMono(r.pid) + ' <span style="color:#a8a29a;">(이 회원의 결제 줄을 못 찾은 환불)</span>');
+  } else {
+    h += _pmxSec('결제');
+    h += L('일시', E(_tsrKst(r.at)) + ' KST' + (r.n > 1 && r.last_at && r.last_at !== r.at ? ' ~ ' + E(_tsrKst(r.last_at)) : ''));
+    h += L('종류', E((_PMX_DK.filter(function(c){ return c[0] === r.kind; })[0] || [0, r.kind])[1]) + (r.ctypes ? ' · ' + E((r.ctypes || []).map(function(t){ return _PMX_CT[t] || t; }).join(', ')) : '') + (r.n > 1 ? ' · 원장 ' + r.n + '줄' : ''));
+    h += L('빠진 예치금', '<b>' + _tsrWon(v.pay) + '</b> (멤버십 ' + _tsrWon(r.mem || 0) + ' · 일반 ' + _tsrWon(r.gen || 0) + ')');
+    if (r.order_id) h += L('카드 같이', _pmxMono(r.order_id) + ' ' + _pmxBtn('gocard', 'o:' + r.order_id, '카드 쪽 보기'));
+    if (r.desc) h += L('설명', E(r.desc));
+    if (r.kind === 'deduct') { if (r.fee) h += L('연회비', '연회비 납부로 기록됨'); if (r.by_name) h += L('처리', E(r.by_name)); if (r.fx_cur && r.fx_amt != null) h += L('외화', _pmxMoney(r.fx_cur, r.fx_amt)); }
+    h += _pmxSec(r.kind === 'invite' ? '초대 · 티켓' : '티켓');
+    h += L('매장·방문', _pmxWhat(r));
+    if (r.pid) h += L('구매 id', _pmxMono(r.pid));
+    if (r.tpid || r.tst) h += L('티켓', (r.tst ? E(_PMX_TK[r.tst] || r.tst) : '') + (r.tprice ? ' · 금액 ' + _tsrWon(r.tprice) : '') + (r.card_paid ? ' · 카드 몫 ' + _tsrWon(r.card_paid) : ''));
+    else if (r.pid) h += L('티켓', '<span style="color:#a8a29a;">티켓 행 없음</span>');
+    if (r.kind === 'invite') h += L('초대', (r.inv_st ? E(r.inv_st) : '—') + (r.inv_total != null ? ' · 합계 ' + _tsrWon(r.inv_total) : '') + (r.inv_host ? ' · 보낸 사람 ' + E(r.inv_host) : ''));
+    if (r.t_cancel_at || r.t_cancel_reason) h += L('취소', E(_tsrKst(r.t_cancel_at) || '') + (r.t_cancel_reason ? ' · ' + E(r.t_cancel_reason) : ''));
+    if (r.ret) h += L('반환 처리', E(r.ret.type === 'penalty' ? '위약' : '반환') + (r.ret.returnAmt != null ? ' · 돌려줌 ' + _tsrWon(r.ret.returnAmt) : '') + (r.ret.penaltyAmt ? ' · 위약 ' + _tsrWon(r.ret.penaltyAmt) : '')
+        + (r.ret.agencyHeld ? ' · 대행비 보유 ' + _tsrWon(r.ret.agencyHeld) : '') + (r.ret.extraDeduct ? ' · 추가 차감 ' + _tsrWon(r.ret.extraDeduct) : ''));
+    h += _pmxSec('돌려준 돈 (취소 연동)');
+    if ((r.rf || []).length) {
+      r.rf.forEach(function(x){
+        h += L(E(_PMX_RFK[x.k] || x.k), E(_tsrKst(x.at)) + ' · ' + (x.pocket === 'membership' ? '멤버십' : '일반') + ' <b>+' + _tsrWon(x.amt) + '</b>'
+          + (x.reason ? ' · ' + E(_PMX_REASON[x.reason] || x.reason) : '') + (x.policy ? ' · ' + E(_PMX_POLICY[x.policy] || x.policy) : '') + (x.by ? ' · ' + E(_PMX_BY[x.by] || x.by) : '')
+          + (x.agency_held ? ' · 대행비 보유 ' + _tsrWon(x.agency_held) : '') + (x.penalty ? ' · 위약 ' + _tsrWon(x.penalty) : '') + (x.desc ? '<div style="color:#a8a29a;font-size:10.5px;">' + E(x.desc) + '</div>' : ''));
+      });
+      h += L('순 사용', '<b>' + _tsrWon(v.net) + '</b> = 빠진 ' + _tsrWon(v.pay) + ' − 돌려준 ' + _tsrWon(v.rf));
+    } else h += L('', '<span style="color:#a8a29a;">돌려준 기록 없음</span>');
+  }
+  if (v.flags.length) h += '<div style="margin-top:6px;">' + v.flags.map(function(f){ return '<div style="color:' + (f.charAt(0) === '⚠' ? '#B23A2E' : '#B45309') + ';font-weight:700;padding:1px 0;">' + E(f) + '</div>'; }).join('') + '</div>';
+  h += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;">' + (r.uid ? _pmxBtn('ledger', r.uid, '💰 회원 원장') : '') + '</div></div>';
+  return h;
+}
+function _pmxGo(k, tab){
+  if (!_pmx.data || !_pmx.byK[k]) { showToast('ⓘ', '이 기간에 없습니다', '기간·필터를 넓혀 보세요'); return; }
+  _pmx.tab = tab; _pmx.st = 'all'; _pmx.q = ''; var qi = document.getElementById('pmxQ'); if (qi) qi.value = '';
+  var r = _pmx.byK[k]; if (tab === 'card') _pmx.ch[r.ch] = 1; else _pmx.dk[r.kind] = 1;
+  _pmx.open[k] = 1; _pmxPaintSeg('.pmx-tb', tab); _pmxPaintFilters(); _pmxRender();
+  setTimeout(function(){ var b = document.querySelector('#pmxPopup [data-pmx-k="' + (window.CSS && CSS.escape ? CSS.escape(k) : k) + '"]'); if (b) try { b.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (_){ } }, 30);
+}
+async function _pmxAct(a, val){
+  var r = _pmx.byK[val];
+  if (a === 'receipt') { var v = r ? _pmxCardView(r) : null; if (v && v.receipt) { try { window.open(v.receipt, '_blank', 'noopener,noreferrer'); } catch (_){ } } else showToast('ⓘ', '영수증', '영수증 주소가 없습니다'); return; }
+  if (a === 'tossadmin') { try { window.open('https://app.tosspayments.com/', '_blank', 'noopener,noreferrer'); } catch (_){ } return; }
+  if (a === 'tossall') { var list = _pmx.data ? _pmxFilter(_pmx.data, 'card').map(function(x){ return x.r; }) : []; _pmxToss(list.slice(0, 60), false); return; }
+  if (a === 'toss1') { if (r) _pmxToss([r], false); return; }
+  if (a === 'gocard') { _pmxGo(val, 'card'); return; }
+  if (a === 'godep') { _pmxGo(val, 'dep'); return; }
+  if (a === 'ledger') { if (!/^[0-9a-f-]{36}$/i.test(val)) return; pmxClose(); if (typeof openMemberLedger === 'function') { openMemberLedger(); setTimeout(function(){ if (typeof mlOpen === 'function') mlOpen(val); }, 60); } return; }
+  if (a === 'paylink') { if (!/^[0-9a-f-]{36}$/i.test(val)) return; pmxClose(); if (typeof payLinkOpen === 'function') { payLinkOpen();
+      if (typeof _anFocusWhen === 'function') _anFocusWhen(function(){ return _anByAttr('#plList [data-pl-charge]', 'data-pl-charge', val); }, 10000,
+        function(){ showToast('ⓘ', '최근 링크 40건 안에 없습니다', '오래된 결제는 목록에 안 보입니다'); }); } return; }
+  if (a === 'crf' || a === 'crfdone') {
+    if (!val) return;
+    try { if (a === 'crf') await tkCardRefundViaToss(val); else await tkMarkCardRefundDone(val); } catch (e) { showToast('⚠', '처리 실패', String(e && e.message || e).slice(0, 80)); }
+    if (document.getElementById('pmxPopup')) { var row = (_pmx.data && _pmx.data.card || []).filter(function(x){ return x.pid === val; })[0]; if (row && row.pkey && a === 'crf') await _pmxToss([row], true); else pmxRun({ keep: true, noAuto: true }); }
+    return;
+  }
+}
+function pmxCsv(){
+  var D = _pmx.data; if (!D) { showToast('⚠', 'CSV', '아직 불러오는 중입니다'); return; }
+  var list = _pmxFilter(D, _pmx.tab); if (!list.length) { showToast('⚠', 'CSV', '내보낼 결제가 없습니다'); return; }
+  var q = function(v){ var x = v == null ? '' : String(v); if (typeof v === 'string' && /^[=+\-@\t\r]/.test(x)) x = "'" + x; return '"' + x.replace(/"/g, '""') + '"'; };
+  var K = function(ts){ return _tsrKst(ts); };
+  var L, today = D.today || _pmxTodayYmd();
+  if (_pmx.tab === 'card') {
+    var cyc = _pmxCycles(D.card || []);
+    L = [['승인 일시(KST)', '경로', '상태', '회원', '결제자', '연락처', '매장·내용', '방문', '인원', '통화', '결제 금액', '원화(기록)', '취소 금액', '환불 대기', '카드사', '카드 번호', '할부', '승인번호',
+          '간편결제', '입금일', '입금 상태', '지급액', '수수료', 'MID', '주문번호', '결제키', '구매 id', '같이 쓴 예치금', '표시'].map(q).join(',')];
+    list.forEach(function(x){ var r = x.r, v = x.v, c = v.card || {}, po = _pmxPayout(r, v, cyc, today);
+      L.push([K(r.at), (_PMX_CH.filter(function(z){ return z[0] === r.ch; })[0] || [0, r.ch])[1], (_PMX_STL[v.state] || [v.state])[0], r.buyer || '', r.payer || '', [r.phone, r.payer_phone].filter(Boolean).join(' / '),
+              r.rest || r.title || r.label || '', r.visit || '', r.pax || '', v.cur, v.amt, v.krw == null ? '' : v.krw, v.cancelled || 0, v.pendingOpen || 0,
+              _PMX_ISSUER[c.issuerCode] || c.company || c.issuerCode || (r.bk && r.bk.company) || '', c.number || (r.bk && r.bk.number) || '',
+              c.installmentPlanMonths != null ? (Number(c.installmentPlanMonths) > 0 ? c.installmentPlanMonths + '개월' : '일시불') : '', c.approveNo || '',
+              v.easy && v.easy.provider ? (_PMX_EASY[v.easy.provider] || v.easy.provider) : '', po.kind === 'settled' ? po.date : (po.est ? '≈' + po.est : ''),
+              po.kind === 'settled' ? (po.past ? '입금' : '입금 예정') : po.label, po.kind === 'settled' ? po.pay : '', po.kind === 'settled' ? po.fee : '',
+              _pmxMid(r), r.order_id || '', r.pkey || '', r.pid || '', r.dep || '', v.flags.join(' / ')].map(q).join(','));
+    });
+  } else {
+    L = [['일시(KST)', '종류', '상태', '회원', '연락처', '매장·내용', '방문', '인원', '빠진 예치금', '멤버십', '일반', '돌려준 돈', '순 사용', '입금', '주머니', '구매 id', '카드 주문', '처리', '외화', '설명', '표시'].map(q).join(',')];
+    list.forEach(function(x){ var r = x.r, v = x.v;
+      L.push([K(r.at), (_PMX_DK.filter(function(z){ return z[0] === r.kind; })[0] || [0, r.kind])[1], (_PMX_STL[v.state] || [v.state])[0], r.buyer || '', r.phone || '',
+              r.rest || '', r.visit || '', r.pax || '', v.pay || 0, r.mem || 0, r.gen || 0, v.rf || 0, v.net || 0, v.inAmt || '', r.pocket || '', r.pid || '', r.order_id || '', r.by_name || '',
+              r.fx_cur && r.fx_amt != null ? r.fx_cur + ' ' + r.fx_amt : '', r.desc || '', v.flags.join(' / ')].map(q).join(','));
+    });
+  }
+  try {
+    var blob = new Blob(['﻿' + L.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    var url = URL.createObjectURL(blob), a = document.createElement('a');
+    a.href = url; a.download = 'taam-payments-' + (_pmx.tab === 'card' ? 'card' : 'deposit') + '-' + (D._from || 'all') + '_' + (_tsrPrevDay(D._to) || 'all') + '.csv';
+    document.body.appendChild(a); a.click();
+    setTimeout(function(){ document.body.removeChild(a); URL.revokeObjectURL(url); }, 1000);
+    showToast('✓', 'CSV 저장', list.length + '건 — 다운로드 폴더를 확인하세요');
+  } catch (e) { showToast('⚠', '저장 실패', e.message || '오류'); }
+}
+window.pmxOpen = pmxOpen; window.pmxClose = pmxClose; window.pmxSetTab = pmxSetTab; window.pmxSetPeriod = pmxSetPeriod; window.pmxToggleCh = pmxToggleCh; window.pmxSetSt = pmxSetSt;
+window.pmxToggleTest = pmxToggleTest; window.pmxSearch = pmxSearch; window.pmxRun = pmxRun; window.pmxCsv = pmxCsv; window._pmx = _pmx; window._pmxCardView = _pmxCardView;
+window._pmxDepView = _pmxDepView; window._pmxPayout = _pmxPayout; window._pmxCycles = _pmxCycles; window._pmxFilter = _pmxFilter; window._pmxStale = _pmxStale; window._pmxBizDiff = _pmxBizDiff; window._pmxAddBiz = _pmxAddBiz;
+
 // 결제 상세 총액의 USD — 항목별 표시값의 합과 정확히 일치시킨다.
 //   (총액을 따로 환산하면 반올림 때문에 항목 합과 1~2달러 어긋나 보인다)
 function _fxTotalUsd(t, pax, meal, wine){
@@ -13300,6 +14004,10 @@ window.closePromoCarousel = function(){
       </div>
       <div class="admin-menu-item" onclick="tsrOpen()" data-lang-lock="ko">
         <div><div class="admin-menu-text">📊 티켓 판매 현황</div><div class="admin-menu-sub">전체·월별 판매 · 환불 · 순판매 · 대행비 — 결제일/방문일 기준 · 채널·매장별 · CSV</div></div>
+        <div class="admin-arrow">›</div>
+      </div>
+      <div class="admin-menu-item" onclick="pmxOpen()" data-lang-lock="ko">
+        <div><div class="admin-menu-text">💳 결제 내역 (카드 · 예치금)</div><div class="admin-menu-sub">구매자 · 일시 · 카드 정보 · 예상 입금일 · 취소 연동 · 토스 영수증 · CSV</div></div>
         <div class="admin-arrow">›</div>
       </div>
       <div class="admin-menu-item" onclick="pxOpen()" data-lang-lock="ko">
@@ -46997,7 +47705,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.27-c';
+var TAAM_WEB_BUILD = '2026.10.28-a';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -68923,7 +69631,8 @@ function _taamBusyNow(){
                'payLinkPopup',   // 🆕 2026-10-18 결제 링크 만드는 중
                'pxPopup',        // 🆕 2026-10-22 구매 규정 예외 허용 중
                'plAttachPopup',  // 🆕 2026-10-23 결제를 회원 예약으로 연결 중
-               'vnPopup'];       // 🆕 2026-10-27 방문 안내 문구 적는 중
+               'vnPopup',        // 🆕 2026-10-27 방문 안내 문구 적는 중
+               'pmxPopup'];      // 🆕 2026-10-28 결제 내역 — 카드 환불(토스 승인취소)을 여기서 누를 수 있다
     // ⚠ offsetParent 로 판단하면 안 된다. **position:fixed 는 offsetParent 가
     //   항상 null** 이고, 이 목록은 전부 fixed 다 — 그래서 이 검사가 한 번도
     //   참이 된 적이 없었다(2026-09-01 발견). 계산된 스타일을 본다.
