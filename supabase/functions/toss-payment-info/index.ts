@@ -185,9 +185,12 @@ async function handle(req: Request){
       const byKey: Record<string, It[]> = {};
       for(const it of items){ const kn = keyUsed[it.pk] || guessKeys(it.mid, it.billing, it.cur)[0]; if(!kn) continue; (byKey[kn] = byKey[kn] || []).push(it); }
       const sOk: Record<string, unknown>[] = [], sPart: Record<string, unknown>[] = [], sErr: Record<string, unknown>[] = [];
+      if(!prevOk) settle.errors.push({ key: '*', code: 'CACHE_READ_FAILED' });
       for(const kn of Object.keys(byKey)){
         settle.keys++;
         const list = byKey[kn];
+        // 옛 줄을 못 읽었으면 토스를 부르지도 않는다 — 합칠 수 없는 결과를 버리면서 「찾음」으로 알리지 않게(2차 리뷰)
+        if(!prevOk){ for(const it of list) sErr.push({ payment_key: it.pk, src: it.src, ref: it.ref, settle_error: 'CACHE_READ_FAILED', updated_at: now }); continue; }
         const want = new Set(list.map((it) => it.pk));
         const found: Record<string, any[]> = {};
         // 창 합치기
@@ -195,45 +198,55 @@ async function handle(req: Request){
         const itWins: Record<string, [string, string][]> = {};
         for(const it of list){ itWins[it.pk] = anchors(it).map((d) => { let b = addDays(d, 35); if(b > today) b = today; let a = addDays(d, -1); if(a > b) a = b; return [a, b] as [string, string]; }); raw.push(...itWins[it.pk]); }
         raw.sort((x, y) => x[0].localeCompare(y[0]));
-        const merged: { a: string, b: string, done: boolean }[] = [];
-        for(const w of raw){ const m = merged[merged.length - 1]; if(m && w[0] <= addDays(m.b, 1)){ if(w[1] > m.b) m.b = w[1]; } else merged.push({ a: w[0], b: w[1], done: false }); }
+        const merged: { a: string, b: string }[] = [];
+        for(const w of raw){ const m = merged[merged.length - 1]; if(m && w[0] <= addDays(m.b, 1)){ if(w[1] > m.b) m.b = w[1]; } else merged.push({ a: w[0], b: w[1] }); }
         let err = '', calls = 0;
-        for(const m of merged.slice().reverse()){   // 최근 창부터 — 상한에 걸려도 새 결제가 먼저 채워지게
-          let start = m.a, ok = true;
-          while(start <= m.b){
-            if(calls >= 24){ ok = false; break; }
-            const stop = addDays(start, 30) < m.b ? addDays(start, 30) : m.b;
-            let page = 1;
+        const doneR: [string, string][] = [];   // 끝까지 읽은 날짜 범위
+        // 창 안에서도 **최근 쪽부터** 31일씩 거꾸로 — 상한(24번)에 걸려도 새 결제가 먼저 채워진다(2차 리뷰: 긴 창을 오래된 쪽부터 읽어 새 결제가 굶었다)
+        for(const m of merged.slice().reverse()){
+          let stop = m.b;
+          while(stop >= m.a && !err){
+            if(calls >= 24) break;
+            const start = addDays(stop, -30) > m.a ? addDays(stop, -30) : m.a;
+            let page = 1, full = true;
             for(; page <= 5; page++){
               calls++; settle.calls++;
               const r = await tfetch(`${TOSS}/v1/settlements?startDate=${start}&endDate=${stop}&dateType=soldDate&page=${page}&size=5000`, keyOf(kn), 60000);
-              if(!r.ok || !Array.isArray(r.body)){ err = String(r.body?.code || ('HTTP_' + r.status)).slice(0, 60); break; }
+              if(!r.ok || !Array.isArray(r.body)){ err = String(r.body?.code || ('HTTP_' + r.status)).slice(0, 60); full = false; break; }
               settle.rows += r.body.length;
               for(const s of r.body){ const pk = String(s?.paymentKey || ''); if(want.has(pk)) (found[pk] = found[pk] || []).push(pickSettle(s)); }
               if(r.body.length < 5000) break;
             }
-            if(err || page > 5){ ok = false; break; }
-            start = addDays(stop, 1);
+            if(page > 5) full = false;
+            if(full) doneR.push([start, stop]);
+            stop = addDays(start, -1);
           }
-          m.done = ok && !err;
-          if(err) break;
+          if(err || calls >= 24) break;
         }
-        const covered = (pk: string) => (itWins[pk] || []).every(([a, b]) => merged.some((m) => m.done && m.a <= a && b <= m.b));
+        // 읽은 범위를 합쳐 둔다 — 결제의 창이 그 안에 다 들어가야 「끝까지 읽음」
+        doneR.sort((x, y) => x[0].localeCompare(y[0]));
+        const doneM: [string, string][] = [];
+        for(const d of doneR){ const l = doneM[doneM.length - 1]; if(l && d[0] <= addDays(l[1], 1)){ if(d[1] > l[1]) l[1] = d[1]; } else doneM.push([d[0], d[1]]); }
+        const covered = (pk: string) => (itWins[pk] || []).every(([a, b]) => doneM.some(([x, y]) => x <= a && b <= y));
+        // 거래키가 없는 줄은 칸 값으로 열쇠를 만든다 — jsonb 는 키 순서를 바꿔 JSON 글자 비교로는 매번 새 줄이 쌓였다(2차 리뷰)
+        const keyOfRow = (x: any) => String(x?.tx || [x?.soldDate, x?.paidOutDate, x?.amount, x?.payOutAmount, x?.cancel ? 1 : 0].join('|'));
         for(const it of list){
           // 캐시의 옛 줄 + 새로 읽은 줄 — 거래키가 같으면 새 줄이 이긴다
           const byTx: Record<string, any> = {};
           const old = Array.isArray(prev[it.pk]?.settle) ? prev[it.pk].settle : [];
-          for(const x of old) byTx[String(x?.tx || JSON.stringify(x))] = x;
-          for(const x of (found[it.pk] || [])) byTx[String(x?.tx || JSON.stringify(x))] = x;
+          for(const x of old) byTx[keyOfRow(x)] = x;
+          for(const x of (found[it.pk] || [])) byTx[keyOfRow(x)] = x;
           const arr = Object.values(byTx).sort((a: any, b: any) => String(a.paidOutDate || '').localeCompare(String(b.paidOutDate || '')));
+          // 지급된(승인 줄이 있는) 결제에 토스 취소가 있는데 취소분 정산 줄이 모자라면 아직 끝나지 않았다 — 취소분은 다음 지급에서 빠진다(취소 다음 날부터 생김 · 2차 리뷰)
+          const nCancel = (cancelsOf[it.pk] || (Array.isArray(prev[it.pk]?.info?.cancels) ? prev[it.pk].info.cancels : [])).length;
+          const pendingCancel = arr.some((x: any) => !x.cancel) && arr.filter((x: any) => x.cancel).length < nCancel;
           if(arr.length) settle.matched++;
-          if(!prevOk) sErr.push({ payment_key: it.pk, src: it.src, ref: it.ref, settle_error: 'CACHE_READ_FAILED', updated_at: now });
-          else if(covered(it.pk)) sOk.push({ payment_key: it.pk, src: it.src, ref: it.ref, settle: arr, settle_at: now, settle_error: null, updated_at: now });
-          else if((found[it.pk] || []).length) sPart.push({ payment_key: it.pk, src: it.src, ref: it.ref, settle: arr, settle_error: err || 'SCAN_TRUNCATED', updated_at: now });
-          else sErr.push({ payment_key: it.pk, src: it.src, ref: it.ref, settle_error: err || 'SCAN_TRUNCATED', updated_at: now });   // 새로 찾은 게 없으면 옛 줄을 건드리지 않는다
+          if(covered(it.pk) && !pendingCancel) sOk.push({ payment_key: it.pk, src: it.src, ref: it.ref, settle: arr, settle_at: now, settle_error: null, updated_at: now });
+          else if((found[it.pk] || []).length) sPart.push({ payment_key: it.pk, src: it.src, ref: it.ref, settle: arr, settle_error: err || (covered(it.pk) ? 'CANCEL_PENDING' : 'SCAN_TRUNCATED'), updated_at: now });
+          else sErr.push({ payment_key: it.pk, src: it.src, ref: it.ref, settle_error: err || (covered(it.pk) ? 'CANCEL_PENDING' : 'SCAN_TRUNCATED'), updated_at: now });   // 새로 찾은 게 없으면 옛 줄을 건드리지 않는다
         }
         if(err) settle.errors.push({ key: KEY_LABEL[kn] || kn, code: err });
-        else if(merged.some((m) => !m.done)) settle.errors.push({ key: KEY_LABEL[kn] || kn, code: 'SCAN_TRUNCATED' });
+        else if(list.some((it) => !covered(it.pk))) settle.errors.push({ key: KEY_LABEL[kn] || kn, code: 'SCAN_TRUNCATED' });
       }
       await sbUpsert(sOk); await sbUpsert(sPart); await sbUpsert(sErr);
     }

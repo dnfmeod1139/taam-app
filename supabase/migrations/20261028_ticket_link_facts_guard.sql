@@ -9,11 +9,15 @@
 --     ② 환불 트리거가 chargeId 로 좌석을 접으므로 환불 뒤에도 **좌석이 살아 있다**.
 --   같은 견적이 좌석 행의 agencyFee·agencyPay(1인 대행비 스냅샷)를 D-31 에서 뺀다 — 주인이 0 으로 바꾸면 환불 불가 대행비까지 돌아간다.
 -- 무엇: BEFORE INSERT/UPDATE 트리거 trg_taam_guard_ticket_linkfacts —
---   UPDATE: 로그인한 **회원**(role 이 admin·superadmin 아님)이 **자기 행**(바꾸기 전·후 소유자가 자기)을 고칠 때 아래 칸의 변경을 되돌린다(예외 아님 · 같은 갱신의 다른 칸은 그대로 — 취소 처리 등은 막지 않는다).
+--   UPDATE: 아래 칸의 변경을 되돌린다(예외 아님 · 같은 갱신의 다른 칸은 그대로 — 취소 처리 등은 막지 않는다) —
+--     · 로그인한 **회원**(role 이 admin·superadmin 아님)이 **자기 행**(바꾸기 전·후 소유자가 자기)을 고칠 때
+--     · **매장 어드민**이 결제 링크 좌석(LINK-)을 고칠 때 — 비회원 링크 좌석은 만든 매장 어드민 소유라 같은 구멍이 열려 있었다(2차 리뷰 · 매장 어드민 흐름은 이 칸을 고치지 않는다)
 --     chargeId · token · currency · payAmount · fx · agencyFee · agencyPay · priceOverride · ovsFixed · eventId · convertedFrom · inviteId · memberUidPending · ownerTransferError · createdBy
---   INSERT: 회원이 자기 이름으로 넣는 행(홀드 PAYH- 뿐)에서 연결 칸(chargeId · token · eventId · convertedFrom · inviteId)을 지운다 — 남의 청구·초대에 자기 홀드를 붙여
---     「연결 대기」 목록에서 숨기거나 알림 판단을 흐리던 길. agencyFee 같은 표시용 스냅샷은 INSERT 에서 건드리지 않는다(앱의 구매 기록이 쓴다).
---   서버(auth.uid() null — Edge·SQL Editor·크론) · 슈퍼어드민 · 매장 어드민 · 소유자가 바뀌는 갱신(초대 확정·링크 결제 뒤 회원 이전)은 그대로.
+--     · paidAt · paymentKey · confirmed_at · confirmed_by · invitePaid · inserted (2차 리뷰: paidAt·confirmed_at 이 연회비 기준일(첫 구매·초대 결제일)을 움직였다)
+--   INSERT: 회원이 자기 이름으로 넣는 **홀드**(status hold — 회원이 직접 넣을 수 있는 것은 홀드뿐)에서 연결 칸(chargeId · token · eventId · convertedFrom · inviteId)을 지운다 —
+--     남의 청구·초대에 자기 홀드를 붙여 「연결 대기」 목록에서 숨기거나 알림 판단을 흐리던 길. 홀드가 아닌 INSERT(초대 확정 RPC 가 회원 세션에서 넣는 INV- 행 · inviteId 필요)는 건드리지 않는다(2차 리뷰).
+--     agencyFee 같은 표시용 스냅샷은 INSERT 에서 건드리지 않는다(앱의 구매 기록이 쓴다).
+--   서버(auth.uid() null — Edge·SQL Editor·크론) · 슈퍼어드민 · 소유자가 바뀌는 갱신(초대 확정·링크 결제 뒤 회원 이전)은 그대로.
 -- 회귀: bash sql/_test/t_ticket_linkfacts.sh
 -- ═══════════════════════════════════════════════════════════════
 create or replace function public.taam_guard_ticket_linkfacts()
@@ -24,21 +28,29 @@ declare
   v_uid  uuid := auth.uid();
   v_role text;
   v_keys text[] := array['chargeId','token','currency','payAmount','fx','agencyFee','agencyPay','priceOverride','ovsFixed','eventId','convertedFrom',
-                         'inviteId','memberUidPending','ownerTransferError','createdBy'];
+                         'inviteId','memberUidPending','ownerTransferError','createdBy',
+                         'paidAt','paymentKey','confirmed_at','confirmed_by','invitePaid','inserted'];
   v_ins  text[] := array['chargeId','token','eventId','convertedFrom','inviteId'];
   v_old jsonb; v_new jsonb; k text;
 begin
   if v_uid is null then return new; end if;
   if coalesce(public.is_super_admin(v_uid), false) then return new; end if;
   select coalesce(role, 'user') into v_role from public.profiles where id = v_uid;
-  if coalesce(v_role, 'user') in ('admin', 'superadmin', 'super_admin') then return new; end if;   -- 매장 어드민의 흐름(초대 홀드·수동 좌석)은 종전대로
+  v_role := coalesce(v_role, 'user');
+  if v_role in ('superadmin', 'super_admin') then return new; end if;
   if tg_op = 'INSERT' then
-    if new.user_id = v_uid and new.extra_data is not null and jsonb_typeof(new.extra_data) = 'object' then
+    -- 회원이 직접 넣는 홀드만 — 매장 어드민의 초대 홀드(INVH- · inviteId) · 초대 확정 RPC 의 INV- 행은 그대로
+    if v_role <> 'admin' and new.user_id = v_uid and lower(coalesce(new.status, '')) = 'hold'
+       and new.extra_data is not null and jsonb_typeof(new.extra_data) = 'object' then
       foreach k in array v_ins loop new.extra_data := new.extra_data - k; end loop;
     end if;
     return new;
   end if;
-  if old.user_id is distinct from v_uid or new.user_id is distinct from v_uid then return new; end if;   -- 소유자가 바뀌는 갱신·남의 행은 다른 가드가 본다
+  if v_role = 'admin' then
+    if coalesce(old.purchase_id, '') not like 'LINK-%' then return new; end if;   -- 매장 어드민은 결제 링크 좌석만(그 밖 흐름은 종전대로)
+  elsif old.user_id is distinct from v_uid or new.user_id is distinct from v_uid then
+    return new;   -- 회원: 소유자가 바뀌는 갱신·남의 행은 다른 가드가 본다
+  end if;
   v_old := coalesce(old.extra_data, '{}'::jsonb);
   v_new := coalesce(new.extra_data, '{}'::jsonb);
   if jsonb_typeof(v_new) <> 'object' then new.extra_data := old.extra_data; return new; end if;
@@ -53,7 +65,7 @@ begin
 end $$;
 revoke all on function public.taam_guard_ticket_linkfacts() from public, anon, authenticated;
 comment on function public.taam_guard_ticket_linkfacts() is
-  '회원이 자기 좌석 행의 결제 링크·초대 연결 칸(chargeId·agencyFee·agencyPay…)을 못 바꾼다(되돌림) · 회원 INSERT 의 연결 칸은 지움. 2026-10-28';
+  '회원(자기 행)·매장 어드민(LINK- 좌석)이 결제 링크·초대 연결 칸(chargeId·agencyFee·agencyPay·paidAt…)을 못 바꾼다(되돌림) · 회원 홀드 INSERT 의 연결 칸은 지움. 2026-10-28';
 drop trigger if exists trg_taam_guard_ticket_linkfacts on public.tickets;
 create trigger trg_taam_guard_ticket_linkfacts
   before insert or update on public.tickets

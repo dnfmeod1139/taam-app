@@ -187,6 +187,12 @@ begin
                        v_rf->(o.user_id::text || '|' || (v_dpo->(o.user_id::text || '|' || o.order_id)->>'pid'))),
         'dep_pid', v_dpo->(o.user_id::text || '|' || o.order_id)->>'pid',
         't_order', left(t.extra_data->>'order_id', 80),
+        -- 같은 구매 id 에 주문 없는(예치금만) 결제 줄이 있나 — 주문 표시 없는 환불 줄은 그쪽 몫이다(2차 리뷰)
+        'plain', case when exists (select 1 from public.deposit_transactions x
+                                    where x.user_id = o.user_id and x.amount < 0
+                                      and x.metadata->>'purchase_id' = coalesce(t.purchase_id, v_dpo->(o.user_id::text || '|' || o.order_id)->>'pid')
+                                      and coalesce(x.metadata->>'order_id', '') = ''
+                                      and x.change_type in ('ticket_purchase','ticket_pax_change','reservation_payment')) then true end,
         'live', pc.info, 'live_at', pc.info_at, 'live_err', pc.info_error,
         'settle', pc.settle, 'settle_at', pc.settle_at, 'settle_err', pc.settle_error, 'cache_at', pc.updated_at,
         'bk', case when bk.id is not null then jsonb_strip_nulls(jsonb_build_object('company', left(bk.card_company, 30), 'number', left(bk.card_number, 30), 'type', left(bk.card_type, 20))) end
@@ -201,7 +207,13 @@ begin
              and (t.extra_data->>'order_id' = o.order_id
                   or ((t.purchase_id = nullif(o.metadata->>'hold_purchase_id','') or t.purchase_id = (v_dpo->(o.user_id::text || '|' || o.order_id)->>'pid'))
                       -- 같은 홀드에 다른 카드 결제가 붙어 확정됐으면 그 티켓은 그 주문 것이다(자동 취소된 앞 시도에 잇지 않는다 · 리뷰)
-                      and coalesce(t.extra_data->>'order_id', '') in ('', o.order_id)))
+                      and coalesce(t.extra_data->>'order_id', '') in ('', o.order_id)
+                      -- 자동 취소된 주문은 그 홀드가 예치금만으로 다시 결제되지 않았을 때만 — 다시 낸 결제(주문 없는 예치금 줄)의 티켓에 잇지 않는다(2차 리뷰)
+                      and (lower(coalesce(o.status, '')) <> 'canceled'
+                           or not exists (select 1 from public.deposit_transactions x
+                                           where x.user_id = o.user_id and x.amount < 0 and x.metadata->>'purchase_id' = t.purchase_id
+                                             and coalesce(x.metadata->>'order_id', '') = ''
+                                             and x.change_type in ('ticket_purchase','ticket_pax_change','reservation_payment')))))
            order by (t.extra_data->>'order_id' = o.order_id) desc nulls last, (lower(coalesce(t.status,'')) in ('active','used')) desc, t.created_at
            limit 1) t on true
         left join public.ticket_products tp on tp.id::text = coalesce(t.ticket_product_id::text, o.metadata->>'ticket_id')
@@ -289,6 +301,11 @@ begin
         't_cancel_at', coalesce(left(t.extra_data->>'server_cancelled_at', 40), left(t.extra_data->>'cancelled_at', 40)),
         't_cancel_reason', left(t.extra_data->>'cancel_reason', 120),
         'inv_st', lower(iv.status), 'inv_total', iv.total_amount, 'inv_host', nullif(btrim(ph.display_name),''),
+        'plain', case when g.order_id is not null and exists (select 1 from public.deposit_transactions x
+                                    where x.user_id = g.uid and x.amount < 0 and x.metadata->>'purchase_id' = g.pid
+                                      and coalesce(x.metadata->>'order_id', '') = ''
+                                      and x.change_type in ('ticket_purchase','ticket_pax_change','reservation_payment')) then true end,
+        'ord_st', case when g.order_id is not null then (select lower(po.status) from public.payment_orders po where po.order_id = g.order_id) end,
         'rf', case when g.pid is not null then v_rf->(g.uid::text || '|' || g.pid) end
       )) as r
         from (

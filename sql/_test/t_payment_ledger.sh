@@ -253,6 +253,24 @@ has "정산 청구 결제자 그대로" "$c9" '"payer": "Trina2"'
 ok "어드민이 테스트 계정이어도 손님 정산 결제는 숨지 않는다" "$(echo "$c9" | wc -l)" "1"
 inj=$($P -c "$D where e->>'k'='p:$M1|INV-e1000000-1'")
 ok "남의 초대 id 를 적은 줄 — 그 초대·티켓이 안 붙는다" "$(echo "$inj" | grep -c '"inv_host"\|"tpid"\|"inv_total"')" "0"
+# 2차 리뷰: 자동 취소(OA2) 뒤 같은 홀드를 예치금만으로 다시 결제 → 회원 취소 환불(주문 표시 없음)
+$P <<SQL >/dev/null
+insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_date,party_size,price,status,purchase_id,extra_data,created_at)
+ values ('$M1','$R1','tp1','2026.11.03',1,850000,'cancelled','PAYH-A','{"paidBy":"deposit","server_confirmed":true}','2026-10-19T00:00:00Z');
+insert into public.payment_orders(order_id,user_id,purpose,amount,status,payment_key,approved_at,fail_reason,metadata) values
+ ('OA2','$M1','ticket_topup',300000,'canceled','pk_OA2','2026-10-19T01:00:00Z','deposit_short_refunded','{"toss":{"status":"DONE"}}');
+insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata,created_at) values
+ ('$M1','general','ticket_purchase',-250000,'{"purchase_id":"PAYH-A","order_id":"OA2"}','2026-10-19T01:00:01Z'),
+ ('$M1','general','ticket_refund',250000,'{"purchase_id":"PAYH-A","order_id":"OA2"}','2026-10-19T01:00:02Z'),
+ ('$M1','general','ticket_purchase',-850000,'{"purchase_id":"PAYH-A"}','2026-10-19T02:00:00Z'),
+ ('$M1','general','ticket_refund',700000,'{"purchase_id":"PAYH-A","cancel_refund":true,"refund_type":"returned"}','2026-10-20T00:00:00Z');
+SQL
+oa2=$($P -c "$C where e->>'k'='o:OA2'")
+ok "자동 취소 OA2 — 예치금만으로 다시 결제된 홀드에 잇지 않는다" "$(echo "$oa2" | grep -c '"pid": "PAYH-A"')" "0"
+has "OA2 — 같은 구매에 주문 없는 결제 줄 있음(plain)" "$oa2" '"plain": true'
+da=$($P -c "$D where e->>'k'='p:$M1|PAYH-A|OA2'")
+has "OA2 예치금 묶음 — plain · 주문 상태 canceled" "$da" '"ord_st": "canceled"'
+ok "예치금만 다시 낸 묶음은 따로" "$($P -c "$D where e->>'k'='p:$M1|PAYH-A'" | grep -c '"pay": 850000')" "1"
 ok "도우미 함수 authenticated 실행 권한 없음" "$($P -c "select has_function_privilege('authenticated','public._taam_pl_toss(jsonb)','execute')")" "f"
 # 재실행
 out2=$($P -f "$MIG" 2>&1); echo "$out2" | grep -q "❌" && { echo "❌ 재실행 확인 표에 ❌"; FAIL=1; } || echo "✅ 재실행"

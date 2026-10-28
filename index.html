@@ -9312,11 +9312,13 @@ function _pmxLastApp(r){
 // 카드 한 줄 — 금액·취소·대기·상태·경고를 한 번에 센다 (화면·CSV·시험이 같이 쓴다)
 function _pmxCardView(r){
   var v = { cur: r.cur || 'KRW', amt: _tsrN(r, 'amt'), krw: r.krw == null ? null : _tsrN(r, 'krw'), flags: [] };
+  // 카드 환불 대기·인원 줄임·「완료 표시」 금액은 원화다(카드 몫 = 기록된 원화) — 외화 주문은 기록된 원화 대 결제 금액 비율로 결제 통화로 바꿔 센다(2차 리뷰)
+  v.fromKrw = function(k){ return (v.cur === 'KRW' || !(v.krw > 0)) ? k : Math.round(k * v.amt / v.krw * 100) / 100; };
   // 토스를 다시 읽은 정보(live)라도 앱이 그 뒤에 취소·완료 표시를 했으면 믿지 않는다 — 「토스에는 남아 있다」 거짓 경보로 두 번 환불하게 만든다(리뷰)
   var la = r.live_at ? Date.parse(r.live_at) : NaN, lastApp = _pmxLastApp(r);
   var liveOk = !!r.live && !(lastApp && isFinite(la) && la < lastApp);
   v.liveOk = liveOk; v.liveOld = !!r.live && !liveOk;
-  var T = r.live || r.snap || null; v.stale = !liveOk;
+  var T = r.live || r.snap || null; v.stale = !liveOk && !!T;   // 토스 기록이 아예 없으면 「승인 시점 기록」이라 하지 않는다(2차 리뷰)
   v.T = T;
   v.card = (r.live && r.live.card) || (r.snap && r.snap.card) || null;
   v.easy = (r.live && r.live.easyPay) || (r.snap && r.snap.easyPay) || null;
@@ -9337,7 +9339,7 @@ function _pmxCardView(r){
     (r.app_cancels || []).forEach(function(a){ if (r.st === 'canceled') return; app += Number(a.amount) || 0; items.push({ kind: 'app', amt: Number(a.amount) || 0, at: a.at, by: a.by, policy: a.policy, tx: a.tx, pid: a.pid }); });
     // 완료된 대기는 같은 구매의 앱 취소 기록(app_cancels)이 없을 때만 따로 센다 — 토스 취소 뒤 기록 실패(mark_failed)로 「완료 표시」가 덧붙으면 한 환불이 두 번 세어졌다(리뷰)
     var appHasPid = (r.app_cancels || []).some(function(a){ return a.pid && r.pid && a.pid === r.pid; });
-    if (r.crp && r.crp.status === 'done' && r.st !== 'canceled' && !appHasPid) { var m = Number(r.crp.refunded_amount || r.crp.amount) || 0; app += m; items.push({ kind: r.crp.via === 'toss_api' ? 'crpapi' : 'manual', amt: m, at: r.crp.refunded_at }); }
+    if (r.crp && r.crp.status === 'done' && r.st !== 'canceled' && !appHasPid) { var mk = Number(r.crp.refunded_amount || r.crp.amount) || 0, m = v.fromKrw(mk); app += m; items.push({ kind: r.crp.via === 'toss_api' ? 'crpapi' : 'manual', amt: m, krw: v.cur !== 'KRW' ? mk : null, at: r.crp.refunded_at }); }
   } else if (r.st === 'refunded') {
     var ra = Number(r.rf_amt); app = isFinite(ra) ? ra : 0; items.push({ kind: 'link', amt: app, at: r.rf_at, reason: r.rf_reason, krw: r.rf_krw });
   }
@@ -9346,11 +9348,11 @@ function _pmxCardView(r){
   var pend = 0, pitems = [];
   if (r.crp && r.crp.status !== 'done' && r.st !== 'canceled') {
     // 대기 금액은 회원이 취소할 때 앱이 적은 요청액이다 — 카드 결제액으로 자르고, 넘으면 알린다(실제 금액은 「토스 승인취소 실행」의 서버 견적 · 리뷰)
-    var praw = Number(r.crp.amount) || 0, pa = Math.min(praw, Math.max(0, v.amt - app));
-    if (praw > v.amt + 0.004) v.flags.push('⚠ 환불 대기 요청액(' + _pmxMoney(v.cur, praw) + ')이 카드 결제보다 큽니다 — 실행 전 서버 견적을 확인하세요');
-    pend += pa; pitems.push({ kind: 'crp', amt: pa, raw: praw, at: r.crp.requested_at, role: r.crp.set_by_role, reason: r.crp.reason });
+    var pk = Number(r.crp.amount) || 0, praw = v.fromKrw(pk), pa = Math.min(praw, Math.max(0, v.amt - app));
+    if (praw > v.amt + 0.004) v.flags.push('⚠ 환불 대기 요청액(' + _pmxMoney('KRW', pk) + ')이 카드 결제보다 큽니다 — 실행 전 서버 견적을 확인하세요');
+    pend += pa; pitems.push({ kind: 'crp', amt: pa, raw: praw, krw: v.cur !== 'KRW' ? pk : null, at: r.crp.requested_at, role: r.crp.set_by_role, reason: r.crp.reason });
   }
-  (r.crq || []).forEach(function(q){ if (q.status === 'done') return; var qa = Number(q.amount) || 0; pend += qa; pitems.push({ kind: 'crq', amt: qa, at: q.requested_at, reason: q.reason }); });
+  (r.crq || []).forEach(function(q){ if (q.status === 'done') return; var qk = Number(q.amount) || 0, qa = v.fromKrw(qk); pend += qa; pitems.push({ kind: 'crq', amt: qa, krw: v.cur !== 'KRW' ? qk : null, at: q.requested_at, reason: q.reason }); });
   v.pending = pend; v.pendItems = pitems;
   var cancelled = (liveOk && tc != null) ? tc : Math.max(app, tc || 0);
   v.cancelled = Math.min(cancelled, v.amt);
@@ -9402,10 +9404,12 @@ function _pmxPayout(r, v, cyc, today){
     var pay = 0, fee = 0; S.forEach(function(s){ pay += Number(s.payOutAmount) || 0; fee += Number(s.fee) || 0; });
     var sc = S[0].cur || v.cur;
     return { kind: 'settled', date: out, past: !!out && out <= today, pay: pay, fee: fee, cur: sc, rows: S, cancelRows: cs.length,
-             label: (out ? (out <= today ? '입금 ' + out : '입금 예정 ' + out) : '정산됨') };
+             pendCancel: r.settle_err === 'CANCEL_PENDING',
+             label: (out ? (out <= today ? '입금 ' + out : '입금 예정 ' + out) : '정산됨') + (r.settle_err === 'CANCEL_PENDING' ? ' · 취소분 정산 대기' : '') };
   }
   // 전액 취소 + 정산 줄 없음: 매입 완료가 아니면 정산이 생기지 않는다(간편결제처럼 카드 칸이 없어도 · 리뷰)
-  if (v.state === 'full' && !(v.card && v.card.acquireStatus === 'COMPLETED')) return { kind: 'none', label: v.card ? '정산 없음 — 매입 전 취소' : '정산 없음 — 전액 취소' };
+  //   토스에서 읽은 기록이 있고 정산 조회 오류가 없을 때만 — 기록이 없으면 모른다(2차 리뷰)
+  if (v.state === 'full' && v.T && !r.settle_err && (v.card || v.easy) && !(v.card && v.card.acquireStatus === 'COMPLETED')) return { kind: 'none', label: v.card ? '정산 없음 — 매입 전 취소' : '정산 없음 — 전액 취소' };
   var c = cyc[_pmxMid(r)], est = (c && c.n != null) ? _pmxAddBiz(_tsrKst(r.at, 10), c.n) : '';
   var base = r.settle_err ? '정산 조회 실패(' + r.settle_err + ')' : (r.settle_at ? '정산 기록 아직 없음' : '토스 정산 조회 전');
   return { kind: r.settle_at ? 'none_yet' : 'unknown', est: est, n: c ? c.n : null, nFrom: c ? c.from : 0,
@@ -9425,10 +9429,13 @@ function _pmxCardLine(r, v){
   return parts.join(' · ');
 }
 // 이 결제에 붙는 예치금 환불 줄 — 다른 카드 주문 몫(order_id 다름)은 뺀다. 주문 표시 없는 줄은 그 티켓의 「지금 주문」 쪽에만(리뷰: 자동 취소된 앞 시도의 되돌림이 다음 결제에 붙었다)
+//   주문 없는 묶음(예치금만 낸 결제)은 주문 표시 없는 줄만 · 주문 있는 묶음은 그 주문 줄 + (그 티켓의 주문이 이 주문이거나, 티켓에 주문이 없고 같은 구매에 예치금만 낸 결제가 없고 주문이 취소되지 않았을 때만) 표시 없는 줄 (2차 리뷰: 두 묶음이 같은 환불을 나눠 가졌다)
 function _pmxRf(r){
   var list = r.rf || [];
-  if (!r.order_id || r.src === 'charge') return list;
-  var main = (r.src === 'order' ? !!r.pid : true) && (!r.t_order || r.t_order === r.order_id);
+  if (r.src === 'charge') return list;
+  if (!r.order_id) return list.filter(function(x){ return !x.order_id; });
+  var ost = r.src === 'order' ? r.st : r.ord_st;
+  var main = r.t_order ? r.t_order === r.order_id : (!r.plain && ost !== 'canceled' && (r.src === 'order' ? !!r.pid : true));
   return list.filter(function(x){ return x.order_id ? x.order_id === r.order_id : main; });
 }
 function _pmxDepView(r){
@@ -9574,8 +9581,11 @@ function _pmxStale(rows){
     var la = r.live_at ? Date.parse(r.live_at) : NaN, sa = r.settle_at ? Date.parse(r.settle_at) : NaN, ca = r.cache_at ? Date.parse(r.cache_at) : NaN;
     var lastApp = _pmxLastApp(r);
     if (r.live && lastApp && isFinite(la) && la < lastApp) return true;   // 앱이 그 뒤에 취소·완료 표시를 했다
-    if ((r.live_err || r.settle_err) && isFinite(ca) && (now - ca) < 24 * 3600000) return false;   // 토스가 못 찾은 결제 — 하루 한 번만 다시
+    if (r.live_err || r.settle_err) return !(isFinite(ca) && (now - ca) < 24 * 3600000);   // 못 찾음·취소분 정산 대기·조회 오류 — 하루 한 번 다시
     if (!isFinite(la) || !isFinite(sa)) return true;
+    // 토스 취소가 정산 줄(취소분)보다 많으면 아직 끝난 게 아니다 — 지급된 뒤 취소는 다음 지급에서 빠진다(2차 리뷰)
+    var nc = (r.live && Array.isArray(r.live.cancels)) ? r.live.cancels.length : 0, sc = Array.isArray(r.settle) ? r.settle.filter(function(s){ return s.cancel; }).length : 0;
+    if (nc > sc && Array.isArray(r.settle) && r.settle.some(function(s){ return !s.cancel; })) return (now - Math.min(la, sa)) > 6 * 3600000;
     var S = Array.isArray(r.settle) ? r.settle.filter(function(s){ return !s.cancel && s.paidOutDate; }) : [];
     var settled = S.length && S[S.length - 1].paidOutDate < today;
     var ended = r.live && r.live.status === 'CANCELED';
@@ -9615,6 +9625,7 @@ async function _pmxToss(rows, auto){
     + (d.settle ? ' · 정산 ' + (d.settle.matched || 0) + '건 찾음' : '') + (se.length ? ' · 정산 조회 오류 ' + se.map(function(x){ return x.key + ' ' + x.code; }).join(', ') : '')
     + ' · ' + _tsrKst(new Date().toISOString()).slice(11, 16);
   await pmxRun({ keep: true, noAuto: true });
+  return true;   // 목록을 다시 읽었다 — 부른 쪽이 또 읽지 않게
 }
 function _pmxPaintToss(){ var b = document.getElementById('pmxTossLine'); if (b) b.innerHTML = _pmxTossHtml(); }
 function _pmxTossHtml(){
@@ -9628,7 +9639,9 @@ function _pmxMatch(r){
   if (hay.indexOf(_pmx.q) >= 0) return true;
   // 번호는 칸마다 숫자만 견준다 — 010-1111-2222 · 01011112222 · +82 10 1111 2222 가 서로 찾히게(리뷰)
   var qd = _pmxDigits(_pmx.q); if (qd.length < 4 || /[^\d\s\-+().]/.test(_pmx.q)) return false;
-  return [r.phone, r.payer_phone].some(function(p){ return p && _pmxDigits(p).indexOf(qd) >= 0; });
+  if ([r.phone, r.payer_phone].some(function(p){ return p && _pmxDigits(p).indexOf(qd) >= 0; })) return true;
+  var qr = _pmx.q.replace(/\D/g, '');   // 카드 번호 「5365 1234」 · 주문번호 숫자는 바꾸지 않은 숫자 그대로 (2차 리뷰)
+  return [c, r.order_id, r.pid, r.tpid].some(function(p){ return p && String(p).replace(/\D/g, '').indexOf(qr) >= 0; });
 }
 // 거르기 — 화면·CSV·시험이 같이 쓴다
 function _pmxFilter(D, tab){
@@ -9808,6 +9821,7 @@ function _pmxCardDetail(r, v, po){
         + ' · 금액 ' + _pmxMoney(s.cur || v.cur, s.amount) + ' · 수수료 ' + _pmxMoney(s.cur || v.cur, s.fee || 0) + ' · <b>지급 ' + _pmxMoney(s.cur || v.cur, s.payOutAmount) + '</b>');
     });
     if (po.rows.length > 1) h += L('합계', '지급 ' + _pmxMoney(po.cur, po.pay) + ' · 수수료 ' + _pmxMoney(po.cur, po.fee));
+    if (po.pendCancel) h += L('취소분', '<span style="color:#B45309;">토스가 취소분 정산 줄을 아직 안 만들었습니다 — 다음 지급에서 빠질 예정 · 하루 한 번 다시 확인</span>');
     h += L('', '<span style="color:#a8a29a;">토스 정산 조회 ' + E(_tsrKst(r.settle_at)) + '</span>');
   } else h += L('입금일', E(po.label) + (po.sub ? '<div style="color:#a8a29a;font-size:10.5px;">' + E(po.sub) + '</div>' : ''));
   // 취소 연동
@@ -9830,7 +9844,7 @@ function _pmxCardDetail(r, v, po){
   });
   v.pendItems.forEach(function(p){
     any = true;
-    h += L(p.kind === 'crq' ? '인원 줄임' : '환불 대기', '<span style="color:#B23A2E;font-weight:800;">' + M(p.amt) + '</span>' + (p.raw != null && p.raw !== p.amt ? ' <span style="color:#a8a29a;">(요청 ' + M(p.raw) + ')</span>' : '') + ' · 요청 ' + E(_tsrKst(p.at) || '—')
+    h += L(p.kind === 'crq' ? '인원 줄임' : '환불 대기', '<span style="color:#B23A2E;font-weight:800;">' + M(p.amt) + '</span>' + (p.krw != null ? ' <span style="color:#a8a29a;">(기록 ' + _tsrWon(p.krw) + ')</span>' : '') + (p.raw != null && p.raw !== p.amt ? ' <span style="color:#a8a29a;">(요청 ' + M(p.raw) + ')</span>' : '') + ' · 요청 ' + E(_tsrKst(p.at) || '—')
       + (p.role ? ' · ' + (p.role === 'superadmin' ? '슈퍼어드민이 남김' : '회원 취소 때 앱이 계산한 요청액') : '') + (p.reason ? ' · ' + E(p.reason) : '')
       + (p.kind === 'crp' ? '<div style="color:#a8a29a;font-size:10.5px;">실제 금액은 「토스 승인취소 실행」이 서버에서 다시 셉니다</div>' : ''));
   });
@@ -9957,7 +9971,9 @@ async function _pmxAct(a, val){
     if (document.getElementById('pmxPopup')) {
       // 둘 다 토스를 다시 읽는다 — 캐시가 처리 전 것이면 「토스에는 남아 있다」 거짓 경보가 된다. 조회 중이면 줄을 세운다
       var row = (_pmx.data && _pmx.data.card || []).filter(function(x){ return x.pid === val; })[0];
-      if (row && row.pkey) await _pmxToss([row], true); else pmxRun({ keep: true, noAuto: true });
+      // 토스 조회가 실패하거나 줄을 섰으면 목록만이라도 지금 다시 읽는다 — 처리한 줄이 「대기」로 남지 않게(2차 리뷰)
+      var did = (row && row.pkey) ? await _pmxToss([row], true) : false;
+      if (!did) await pmxRun({ keep: true, noAuto: true });
     }
     return;
   }
