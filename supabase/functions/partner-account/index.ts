@@ -15,6 +15,13 @@
 //
 // 배포: Supabase 대시보드 → Edge Functions → partner-account
 // 필요 시크릿: SUPABASE_URL · SUPABASE_SERVICE_ROLE_KEY (기본 제공)
+//
+// 🆕 2026-10-29 매장 권한에 승인 상태가 생겼다 (admin_grants.status pending|approved|suspended ·
+//   supabase/migrations/20261029_partner_grants.sql). 만들 때 `approve_now:true` 면 approved, 아니면 pending —
+//   pending 인 계정은 로그인은 되지만 어드민이 아니다(앱이 「승인 대기」라고 말한다). 해지(revoke)는 권한 줄을 지우지
+//   않고 **suspended 로 바꾸고** 로그인을 잠근다 · 되살리기(restore)는 잠금을 풀고 한 번 승인됐던 줄은 approved,
+//   아니면 pending 으로. status 칸이 없는 옛 서버(마이그레이션 전)에서는 종전 모양(insert · delete)으로 내려간다.
+//   승인·정지 자체는 앱이 RPC `taam_partner_grant_set` 으로 한다(슈퍼어드민 세션) — 여기 없다.
 // ════════════════════════════════════════════════════════════
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
@@ -130,9 +137,17 @@ async function handle(req: Request): Promise<Response> {
           .update({ single_device_exempt: true }).eq('id', uid);
       }
 
-      const { error: gErr } = await admin.from('admin_grants').insert({
+      // 권한 줄 — 승인 상태와 함께. status 칸이 없는 옛 서버면 칸 없이 다시 넣는다(그 서버에선 줄 = 승인).
+      const approveNow = body.approve_now === true;
+      let gErr = (await admin.from('admin_grants').insert({
         user_id: uid, rest_id: restId, label: label || null, granted_by: caller.id,
-      });
+        status: approveNow ? 'approved' : 'pending',
+      })).error;
+      if (gErr && /status/i.test(gErr.message || '')) {
+        gErr = (await admin.from('admin_grants').insert({
+          user_id: uid, rest_id: restId, label: label || null, granted_by: caller.id,
+        })).error;
+      }
       if (gErr) return await undo('권한을 주지 못했습니다: ' + gErr.message);
 
       const { error: aErr } = await admin.from('partner_accounts').insert({
@@ -142,7 +157,8 @@ async function handle(req: Request): Promise<Response> {
       if (aErr) return await undo('장부에 적지 못했습니다: ' + aErr.message);
 
       // 비밀번호가 나가는 유일한 순간이다.
-      return json({ ok: true, login_id: loginId, password, domain: PARTNER_DOMAIN });
+      return json({ ok: true, login_id: loginId, password, domain: PARTNER_DOMAIN,
+                    grant_status: approveNow ? 'approved' : 'pending' });
     }
 
     // ── 비밀번호 재설정 ────────────────────────────────────────
@@ -179,8 +195,14 @@ async function handle(req: Request): Promise<Response> {
 
       // 🔧 2026-09-14: 각 단계의 오류를 본다 — 종전엔 권한 삭제가 실패해도 장부만 「해지됨」이 됐다.
       //   순서: 권한 → 로그인 잠금 → 세션 → 장부(마지막). 반쪽 상태면 장부를 안 바꾸고 실패로 돌려준다.
+      let needsApproval = false;
       if (off) {
-        const { error: dErr } = await admin.from('admin_grants').delete().eq('user_id', row.user_id);
+        // 🆕 2026-10-29 권한 줄을 지우지 않고 **정지(suspended)** 로 — 「무엇을 언제 승인했었나」가 남는다.
+        //   status 칸이 없는 옛 서버면 종전처럼 지운다.
+        let dErr = (await admin.from('admin_grants').update({ status: 'suspended' }).eq('user_id', row.user_id)).error;
+        if (dErr && /status/i.test(dErr.message || '')) {
+          dErr = (await admin.from('admin_grants').delete().eq('user_id', row.user_id)).error;
+        }
         if (dErr) return json({ ok: false, error: '권한을 떼지 못했습니다: ' + dErr.message });
         // 비밀번호 로그인 자체를 막는다 (권한이 없어도 authenticated 로 들어오는 것까지 끊는다)
         const { error: bErr } = await admin.auth.admin.updateUserById(row.user_id, { ban_duration: '876000h' });
@@ -190,19 +212,43 @@ async function handle(req: Request): Promise<Response> {
       } else {
         const { error: uErr } = await admin.auth.admin.updateUserById(row.user_id, { ban_duration: 'none' });
         if (uErr) return json({ ok: false, error: '계정 잠금을 풀지 못했습니다: ' + uErr.message });
-        const { error: iErr } = await admin.from('admin_grants').insert({
-          user_id: row.user_id, rest_id: row.rest_id,
-          label: row.label, granted_by: caller.id,
-        });
-        // 이미 권한이 있으면(부분 unique) 그대로 둔다
-        if (iErr && !/duplicate|unique/i.test(iErr.message)) {
-          return json({ ok: false, error: '권한을 붙이지 못했습니다: ' + iErr.message });
+        // 🆕 2026-10-29 정지된 줄을 되살린다 — 한 번 승인됐던 줄(approved_at 있음)은 approved, 아니면 pending(승인은 사람이).
+        const { data: gs, error: gqErr } = await admin.from('admin_grants')
+          .select('id, status, approved_at').eq('user_id', row.user_id);
+        if (gqErr && !/status|approved_at/i.test(gqErr.message || '')) {
+          return json({ ok: false, error: '권한을 읽지 못했습니다: ' + gqErr.message });
+        }
+        if (gqErr) {
+          // 옛 서버(status 칸 없음) — 종전 모양: 줄이 없으면 하나 넣는다
+          const { error: iErr } = await admin.from('admin_grants').insert({
+            user_id: row.user_id, rest_id: row.rest_id, label: row.label, granted_by: caller.id,
+          });
+          if (iErr && !/duplicate|unique/i.test(iErr.message)) {
+            return json({ ok: false, error: '권한을 붙이지 못했습니다: ' + iErr.message });
+          }
+        } else if (!gs || gs.length === 0) {
+          // 줄이 없다(옛 해지가 지웠다) — pending 으로 다시 붙이고 승인은 화면에서
+          const { error: iErr } = await admin.from('admin_grants').insert({
+            user_id: row.user_id, rest_id: row.rest_id, label: row.label, granted_by: caller.id, status: 'pending',
+          });
+          if (iErr && !/duplicate|unique/i.test(iErr.message)) {
+            return json({ ok: false, error: '권한을 붙이지 못했습니다: ' + iErr.message });
+          }
+          needsApproval = true;
+        } else {
+          for (const g of gs) {
+            if (g.status !== 'suspended') continue;
+            const next = g.approved_at ? 'approved' : 'pending';
+            if (next === 'pending') needsApproval = true;
+            const { error: sErr } = await admin.from('admin_grants').update({ status: next }).eq('id', g.id);
+            if (sErr) return json({ ok: false, error: '권한을 되살리지 못했습니다: ' + sErr.message });
+          }
         }
       }
       const { error: aErr } = await admin.from('partner_accounts')
         .update({ disabled: off }).eq('login_id', loginId);
       if (aErr) return json({ ok: false, error: '장부를 고치지 못했습니다: ' + aErr.message });
-      return json({ ok: true, login_id: loginId, disabled: off });
+      return json({ ok: true, login_id: loginId, disabled: off, needs_approval: needsApproval });
     }
 
     return json({ ok: false, error: '알 수 없는 요청입니다' });

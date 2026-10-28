@@ -13809,6 +13809,15 @@ window.closePromoCarousel = function(){
         letter-spacing:.1em;color:#c9c2b6;cursor:pointer;"></div>
     </div>
     </div><!-- /#paLanding -->
+    <!-- 🆕 2026-10-29 이 매장의 예약 전부 · 예약한 회원 정보(이름·연락처·등급·국적 · 이 매장 방문/노쇼/취소) · 이 매장의 구매·환불·취소 — 서버 RPC 로 자기 매장만 -->
+    <div class="admin-section-label" data-lang-lock="ko">예약 · 회원</div>
+    <div style="border-top:1px solid rgba(0,0,0,.08);">
+      <div class="admin-menu-item" onclick="prvOpen()" data-lang-lock="ko">
+        <div><div class="admin-menu-text">📋 예약 · 회원 조회</div>
+          <div class="admin-menu-sub">우리 매장 예약 전부 — 날짜·상태·이름·전화로 검색 · 회원 정보 · 결제·환불·취소 내역 · CSV</div></div>
+        <div class="admin-arrow">›</div>
+      </div>
+    </div>
     <div class="admin-section-label" data-i18n="admin.tickets">티켓 관리</div>
     <div style="border-top:1px solid rgba(0,0,0,.08);">
       <div class="admin-menu-item" onclick="openPartnerTU()">
@@ -14274,8 +14283,15 @@ window.closePromoCarousel = function(){
       </div>
       <div class="admin-menu-item" onclick="paOpen()">
         <div>
-          <div class="admin-menu-text">🔑 파트너 계정 발급</div>
-          <div class="admin-menu-sub">매장에 미리 만들어 두고, 협의 자리에서 건넨다</div>
+          <div class="admin-menu-text">🔑 파트너 계정 발급 · 권한 승인</div>
+          <div class="admin-menu-sub">매장에 미리 만들어 두고, 협의 자리에서 건넨다 · 매장 권한 승인 대기 / 승인 / 정지</div>
+        </div>
+        <div class="admin-arrow">›</div>
+      </div>
+      <div class="admin-menu-item" onclick="prvOpen()" data-lang-lock="ko">
+        <div>
+          <div class="admin-menu-text">📋 매장별 예약 · 회원 조회 (파트너 시야)</div>
+          <div class="admin-menu-sub">파트너 어드민이 보는 그대로 — 매장을 골라 그 매장 예약·회원·환불 내역만</div>
         </div>
         <div class="admin-arrow">›</div>
       </div>
@@ -18456,6 +18472,26 @@ function _idbSafeSet(key, val, label){
 }
 window._idbSafeSet = _idbSafeSet;
 
+// 🆕 2026-10-29 회원 이름·연락처 채우기 — 매장 어드민은 profiles 를 **자기 행만** 읽는다(전 칸 읽기 정책을 지웠다).
+//   그래서 화면이 가진 uid 들의 이름은 서버 RPC taam_partner_names(이 매장에 예약·초대가 있는 회원만 · 잔액 없음)로 받는다.
+//   슈퍼어드민은 종전처럼 profiles 에서. 돌려주는 모양은 둘 다 { uid: {id, display_name, email, phone, membership_tier, currency} }.
+async function _taamNamesMap(uids, cols){
+  var out = {};
+  uids = Array.from(new Set((uids || []).filter(Boolean).map(String)));
+  if(!uids.length || !window.sb) return out;
+  if(_currentRole === 'admin' && _currentAdminRestId){
+    var r = await window.sb.rpc('taam_partner_names', { p_rest: String(_currentAdminRestId), p_uids: uids });
+    if(r.error) throw r.error;
+    (r.data || []).forEach(function(p){ out[p.id] = p; });
+    return out;
+  }
+  var q = await window.sb.from('profiles').select(cols || 'id, display_name, email, phone').in('id', uids);
+  if(q.error) throw q.error;
+  (q.data || []).forEach(function(p){ out[p.id] = p; });
+  return out;
+}
+window._taamNamesMap = _taamNamesMap;
+
 // onlyIds: 실제로 바뀐 티켓 id(들). 주면 그 티켓만 서버에 저장한다.
 function saveTickets(onlyIds, localOnly){
   // 1. IDB 저장 — 빈 배열로 백업을 날리지 않는다
@@ -18496,6 +18532,10 @@ function saveTickets(onlyIds, localOnly){
     if(onlyIds){
       var _ids = (Array.isArray(onlyIds) ? onlyIds : [onlyIds]).map(String);
       _target = ticketDB.filter(function(t){ return _ids.indexOf(String(t.id)) >= 0; });
+    } else if(_currentRole === 'admin'){
+      // 🆕 2026-10-29 매장 어드민이 전체를 밀면 남의 매장 행에서 RLS 거절 + 자기 매장의 낡은 로컬 값이 서버를 덮어
+      //   승인된 회차를 다시 「승인 대기」로 되돌린다(서버 트리거 — 내용이 바뀌면 재승인). 자기 매장 것만 보낸다.
+      _target = ticketDB.filter(function(t){ return String(t.restId) === String(_currentAdminRestId); });
     }
     _target.forEach(function(t){
       saveTicketProductToSupabase(t).catch(function(e){
@@ -21291,9 +21331,23 @@ async function _applyServerAdminGrant() {
     var au = await window.sb.auth.getUser();
     var uid = au && au.data && au.data.user && au.data.user.id;
     if (!uid) return;
-    var res = await window.sb.from('admin_grants').select('rest_id, venue_id, label').eq('user_id', uid);
+    // 🆕 2026-10-29 승인 상태(status pending|approved|suspended)를 함께 읽는다 — **approved 만** 어드민이다.
+    //   status 칸이 없는 옛 서버(마이그레이션 전)면 종전처럼 줄이 있으면 어드민.
+    var res = await window.sb.from('admin_grants').select('rest_id, venue_id, label, status').eq('user_id', uid);
+    var legacy = false;
+    if (res && res.error && /status/i.test(String(res.error.message || ''))) {
+      legacy = true;
+      res = await window.sb.from('admin_grants').select('rest_id, venue_id, label').eq('user_id', uid);
+    }
+    if (res && res.error) { console.warn('[admin grant] 조회 실패 — 판단하지 않는다', res.error.message); return; }
     var rows = (res && res.data) || [];
-    var restGrant = rows.find(function(r){ return r.rest_id; });
+    var okRows = rows.filter(function(r){ return r.rest_id && (legacy || r.status === 'approved'); });
+    var restGrant = okRows[0] || null;
+    // 승인 대기·정지만 있는 계정은 「왜 어드민이 아닌지」를 로그인 화면이 말할 수 있게 상태만 남긴다
+    window._taamGrantStatus = restGrant ? 'approved'
+      : (rows.some(function(r){ return r.status === 'pending'; }) ? 'pending'
+      : (rows.some(function(r){ return r.status === 'suspended'; }) ? 'suspended' : (rows.length ? 'none' : 'none')));
+    window._taamGrants = rows;
     if (restGrant) {
       _currentRole = 'admin';
       _currentAdminRestId = restGrant.rest_id;
@@ -21301,6 +21355,22 @@ async function _applyServerAdminGrant() {
       saveRole();
       updateMpAdminBtn();
       updatePendingBadge();
+    } else if (_currentRole === 'admin') {
+      // 🆕 내리기 — 기기에 남은 'admin' 이 서버의 승인 상태(정지·대기·권한 없음)와 다르면 일반 회원으로.
+      //   조회가 **성공**했을 때만(위에서 실패는 return) — 네트워크 오류로 멀쩡한 매장을 내리지 않는다.
+      console.warn('[admin grant] 승인된 매장 권한이 없습니다 — 어드민을 내립니다 (' + window._taamGrantStatus + ')');
+      _currentRole = 'user'; _currentAdminRestId = null; _currentAdminRestName = '';
+      saveRole(); updateMpAdminBtn(); updatePendingBadge();
+      try {
+        var _inConsole = Array.prototype.some.call(document.querySelectorAll('#partnerAdminScreen, .ac-tabs'), function(el){
+          try { return getComputedStyle(el).display !== 'none' && el.offsetWidth > 0; } catch(_e){ return false; } });
+        if (_inConsole) {
+          if (typeof closeAllAdminScreens === 'function') closeAllAdminScreens();
+          if (typeof _acExitTo === 'function') _acExitTo(); else if (typeof openMain === 'function') openMain();
+          var _gnb = document.getElementById('mainGnb'); if (_gnb) _gnb.style.display = 'flex';
+        }
+        if (typeof showToast === 'function') showToast('🔒', window._taamGrantStatus === 'pending' ? '매장 권한 승인 대기' : '매장 권한이 정지되었습니다', 'TAAM 에 문의해 주세요');
+      } catch(_de){}
     }
   } catch(e) { console.warn('[admin grant] 서버 확인 실패', e); }
   // 🆕 2026.08: 권한 확정 후 환율 자동 점검 (슈퍼어드민만 · 하루 1회)
@@ -22900,7 +22970,9 @@ async function vpPartnerLogin(){
     if(typeof _applyServerAdminGrant === 'function') await _applyServerAdminGrant();
     if(_currentRole !== 'admin' && _currentRole !== 'superadmin'){
       try { await window.sb.auth.signOut(); } catch(e){}
-      return fail(t('auth.partner_no_grant'));
+      // 🆕 2026-10-29 승인 대기 · 정지는 따로 말한다(「권한이 안 붙었다」와 다른 상태다)
+      var _gs = window._taamGrantStatus;
+      return fail(_gs === 'pending' ? t('auth.partner_pending') : (_gs === 'suspended' ? t('auth.partner_suspended') : t('auth.partner_no_grant')));
     }
 
     // 「만들어만 두고 안 쓰는 계정」을 가려내는 단서. 실패해도 로그인은 계속한다.
@@ -35615,13 +35687,11 @@ async function _tbLoad(){
       });
       var _ids = Object.keys(_need);
       if(_ids.length){
-        var _pr = await window.sb.from('profiles')
-          .select('id, display_name, phone').in('id', _ids);
-        if(_pr.error){
-          console.warn('[today] 이름 채우기 실패(무시):', _pr.error.message);
+        var _map = {};
+        try { _map = await _taamNamesMap(_ids, 'id, display_name, phone'); }   // 🆕 2026-10-29 매장 어드민은 RPC 로
+        catch(_ne){ console.warn('[today] 이름 채우기 실패(무시):', _ne && _ne.message); _map = null; }
+        if(!_map){
         } else {
-          var _map = {};
-          (_pr.data || []).forEach(function(p){ _map[p.id] = p; });
           _tbRows.forEach(function(r){
             if(String(r.buyer_name || '').trim()) return;
             var p = _map[r.user_id];
@@ -36955,7 +37025,7 @@ async function gsAllow(on){
 // ⚠ 권한은 admin_grants 가 준다. 이 화면은 그걸 대신 만들어 줄 뿐이고,
 //   로그인 뒤의 권한은 지금 어드민과 한 글자도 다르지 않다.
 // ═══════════════════════════════════════════════════════════════
-var _pa = { rows: null, err: '', busy: false, made: null };
+var _pa = { rows: null, err: '', busy: false, made: null, grants: null, gErr: '' };
 
 function paOpen(){
   if(typeof _currentRole !== 'undefined' && _currentRole !== 'superadmin'){
@@ -36984,8 +37054,43 @@ async function _paLoad(){
       ? 'sql/partner_accounts.sql 을 실행해야 합니다'
       : ((e && e.message) || '불러오지 못했습니다');
   }
+  // 🆕 2026-10-29 매장 권한의 승인 상태(pending|approved|suspended) — 계정과 따로 읽는다(권한만 있는 사람도 보인다)
+  try {
+    var g = await window.sb.rpc('taam_partner_grants_list');
+    if(g.error) throw g.error;
+    _pa.grants = g.data || []; _pa.gErr = '';
+  } catch(e2){
+    _pa.grants = null;
+    _pa.gErr = /does not exist|schema cache/i.test((e2 && e2.message) || '') ? '서버 준비 필요 — 승인 상태는 20261029_partner_grants.sql 뒤에 보입니다' : ((e2 && e2.message) || '');
+  }
   _paRender();
 }
+var _PA_ST = { pending: ['승인 대기', '#B45309', '#FFF3E0', '#F0D9B4'], approved: ['승인됨', '#1E7A46', '#EAF6EE', '#BFE3CC'], suspended: ['정지', '#9B1C1C', '#fff5f5', '#f0c8c8'] };
+function _paStBadge(st){
+  var c = _PA_ST[st] || ['?', '#777', '#f4f4f4', '#ddd'];
+  return '<span style="font-size:10px;font-weight:800;color:' + c[1] + ';background:' + c[2] + ';border:1px solid ' + c[3] + ';border-radius:6px;padding:1px 7px;">' + c[0] + '</span>';
+}
+// 권한 상태 바꾸기 — 서버 RPC(슈퍼어드민만 · 승인 도장은 트리거가 찍는다 · 매장 어드민 본인에게 알림)
+async function paGrantSet(uid, restId, status){
+  if(_pa.busy) return;
+  var lab = status === 'approved' ? '승인' : (status === 'suspended' ? '정지' : '승인 대기로');
+  var note = '';
+  if(status === 'suspended'){
+    note = prompt('이 매장 권한을 정지합니다 — 그 계정은 로그인은 되지만 예약 자료·티켓을 못 봅니다.\n사유(선택):', '') ;
+    if(note === null) return;
+  } else if(!confirm('이 매장 권한을 「' + lab + '」 합니다.' + (status === 'approved' ? '\n\n승인되면 그 계정이 이 매장의 예약 자료를 보고 티켓 업로드 신청을 할 수 있습니다.' : ''))) return;
+  _pa.busy = true;
+  try {
+    var r = await window.sb.rpc('taam_partner_grant_set', { p_user: uid, p_rest: String(restId), p_status: status, p_note: note || null });
+    if(r.error) throw r.error;
+    if(typeof showToast === 'function') showToast('✓', lab + ' 완료', '');
+  } catch(e){
+    if(typeof showToast === 'function') showToast('❌', '바꾸지 못했습니다', String((e && e.message) || '').slice(0, 120));
+  }
+  _pa.busy = false;
+  _paLoad();
+}
+window.paGrantSet = paGrantSet;
 
 function _paEsc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g, function(c){
   return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]; }); }
@@ -37005,7 +37110,8 @@ function _paRender(){
     var m = _pa.made;
     b.innerHTML =
       '<div class="gs-note on"><b>계정을 만들었습니다.</b><br>'
-      + '이 비밀번호는 <b>지금만 보입니다</b>. 닫으면 다시 볼 수 없고, 잊으면 재설정해야 합니다.</div>'
+      + '이 비밀번호는 <b>지금만 보입니다</b>. 닫으면 다시 볼 수 없고, 잊으면 재설정해야 합니다.'
+      + (m.grant_status === 'pending' ? '<br><b>매장 권한은 승인 대기</b>입니다 — 아래 목록의 「승인」을 누르면 그때부터 어드민입니다.' : (m.grant_status === 'approved' ? '<br>매장 권한은 <b>바로 승인</b>됐습니다.' : '')) + '</div>'
       + '<div class="pa-cred">'
       +   '<div class="k">ID</div><div class="v">' + _paEsc(m.login_id) + '</div>'
       +   '<div class="k">PASSWORD</div><div class="v">' + _paEsc(m.password) + '</div>'
@@ -37045,26 +37151,63 @@ function _paRender(){
     +   '<span>여러 기기에서 쓰게 허용</span></label>'
     +   '<div class="gs-hint">매장은 홀 태블릿과 사장님 휴대폰을 같이 쓰는 일이 흔합니다. '
     +   '끄면 <b>한 기기만</b> 유지되고 나중에 로그인한 쪽이 이깁니다.</div></div>'
+    // 🆕 2026-10-29 승인 상태 — 기본은 「승인 대기」. 협의가 끝난 매장이면 여기서 바로 승인.
+    + '<div class="gs-f"><label style="display:flex;align-items:center;gap:8px;cursor:pointer;">'
+    +   '<input type="checkbox" id="paApprove" style="width:16px;height:16px;">'
+    +   '<span>매장 권한 <b>바로 승인</b></span></label>'
+    +   '<div class="gs-hint">끄면 <b>승인 대기</b>로 만들어집니다 — 로그인은 되지만 예약 자료·티켓 업로드는 「승인」 뒤부터. '
+    +   '승인·정지는 아래 목록에서 언제든 바꿀 수 있습니다.</div></div>'
     + '<div id="paErr" style="min-height:16px;margin-top:8px;font-size:11.5px;color:#9B1C1C;"></div>';
 
+  // 🆕 2026-10-29 권한 줄(승인 상태)을 계정(login_id)에 붙인다 · 계정 발급 없이 권한만 있는 사람은 따로
+  var gByLogin = {}, gOrphan = [];
+  var nPending = 0;
+  (_pa.grants || []).forEach(function(g){
+    if(g.status === 'pending') nPending++;
+    if(g.login_id){ (gByLogin[g.login_id] = gByLogin[g.login_id] || []).push(g); } else gOrphan.push(g);
+  });
+  var gBtns = function(g){
+    var u = _paEsc(g.user_id), rid = _paEsc(g.rest_id || g.venue_id || '');
+    var b2 = '';
+    if(g.status !== 'approved') b2 += '<button onclick="paGrantSet(\'' + u + '\',\'' + rid + '\',\'approved\')" style="background:#EAF6EE;color:#1E7A46;border-color:#BFE3CC;">승인</button>';
+    if(g.status === 'approved') b2 += '<button onclick="paGrantSet(\'' + u + '\',\'' + rid + '\',\'suspended\')" style="color:#9B1C1C;">정지</button>';
+    if(g.status === 'suspended') b2 += '<button onclick="paGrantSet(\'' + u + '\',\'' + rid + '\',\'pending\')">대기로</button>';
+    return b2;
+  };
+  var gLine = function(gs){
+    if(!gs || !gs.length) return '';
+    return gs.map(function(g){
+      return '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:4px;">' + _paStBadge(g.status)
+        + '<span style="font-size:11px;color:#555;">' + _paEsc(g.rest_name || g.label || g.rest_id || '') + '</span>'
+        + (g.status === 'approved' && g.approved_at ? '<span style="font-size:10.5px;color:#9A9AA4;">승인 ' + _paDate(g.approved_at) + (g.approved_by_name ? ' · ' + _paEsc(g.approved_by_name) : '') + '</span>' : '')
+        + (g.note ? '<span style="font-size:10.5px;color:#9A9AA4;">· ' + _paEsc(g.note) + '</span>' : '')
+        + '</div>';
+    }).join('');
+  };
+  if(_pa.gErr) h += '<div class="gs-note" style="margin-top:12px;">⚠ ' + _paEsc(_pa.gErr) + '</div>';
+  if(nPending) h += '<div class="gs-note on" style="margin-top:12px;">⏳ <b>승인 대기 ' + nPending + '건</b> — 승인 전에는 그 계정이 예약 자료를 못 보고 티켓도 못 올립니다.</div>';
   h += '<div style="margin-top:16px;font-size:11px;font-weight:800;letter-spacing:.14em;color:#9A9AA4;">발급한 계정 ' + _pa.rows.length + '</div>';
   if(!_pa.rows.length){
     h += '<div class="gs-hint" style="margin-top:8px;">아직 없습니다.</div>';
   } else {
     h += _pa.rows.map(function(r){
       var st = [];
+      var gs = gByLogin[r.login_id] || [];
       // ⚠ 권한이 안 붙어 있으면 로그인은 되는데 어드민이 아니다.
       //   가장 헷갈리는 고장이라 맨 앞에 세운다.
-      if(!r.has_grant) st.push('<i>권한 없음 — 로그인해도 어드민이 아닙니다</i>');
+      if(!r.has_grant && !gs.length) st.push('<i>권한 없음 — 로그인해도 어드민이 아닙니다</i>');
       if(r.disabled) st.push('<i>해지됨</i>');
       st.push(r.handed_at ? '<b>건넴 ' + _paDate(r.handed_at) + '</b>' : '아직 안 건넴');
       st.push(r.last_login_at ? '<b>마지막 로그인 ' + _paDate(r.last_login_at) + '</b>' : '한 번도 안 씀');
       var id = _paEsc(r.login_id);
+      var gb = gs.map(gBtns).join('');
       return '<div class="pa-row">'
         + '<div class="id">' + id + '</div>'
         + '<div class="nm">' + _paEsc(r.label || '(매장 없음)') + '</div>'
+        + gLine(gs)
         + '<div class="st">' + st.join(' · ') + '</div>'
         + '<div class="pa-acts">'
+        +   gb
         +   '<button onclick="paHanded(\'' + id + '\',' + (r.handed_at ? 'false' : 'true') + ')">'
         +     (r.handed_at ? '안 건넴으로' : '건넸다고 표시') + '</button>'
         +   '<button onclick="paReset(\'' + id + '\')">비밀번호 재설정</button>'
@@ -37072,6 +37215,15 @@ function _paRender(){
         +     (r.disabled ? '되살리기' : '해지') + '</button>'
         + '</div></div>';
     }).join('');
+  }
+  if(gOrphan.length){
+    h += '<div style="margin-top:16px;font-size:11px;font-weight:800;letter-spacing:.14em;color:#9A9AA4;">계정 발급 없이 권한만 있는 사람 ' + gOrphan.length + '</div>'
+      + '<div class="gs-hint" style="margin-top:4px;">일반 회원 계정에 매장 권한을 붙인 경우(옛 admin_grants · restaurant_admins). 같은 승인 규칙을 따릅니다.</div>'
+      + gOrphan.map(function(g){
+          return '<div class="pa-row"><div class="id">' + _paEsc(g.display_name || g.email || String(g.user_id || '').slice(0, 8)) + '</div>'
+            + '<div class="nm">' + _paEsc(g.rest_name || g.label || '(매장 없음)') + (g.role ? ' <span style="font-size:10px;color:#9A9AA4;">role ' + _paEsc(g.role) + '</span>' : '') + '</div>'
+            + gLine([g]) + '<div class="pa-acts">' + gBtns(g) + '</div></div>';
+        }).join('');
   }
   b.innerHTML = h;
   f.innerHTML = '<button class="gs-btn ghost" onclick="paClose()">닫기</button>'
@@ -37111,12 +37263,13 @@ async function paCreate(){
   var btn = document.getElementById('paMakeBtn');
   if(btn){ btn.disabled = true; btn.textContent = '만드는 중…'; }
 
+  var approve = !!(document.getElementById('paApprove') || {}).checked;   // 🆕 2026-10-29 바로 승인
   var r = await _paCall({ action:'create', login_id:id, rest_id:restId,
-                          label:(rest && rest.name) || '', multi_device:multi });
+                          label:(rest && rest.name) || '', multi_device:multi, approve_now: approve });
   _pa.busy = false;
   if(btn){ btn.disabled = false; btn.textContent = '계정 만들기'; }
   if(!r.ok){ err.textContent = r.error || '만들지 못했습니다'; return; }
-  _pa.made = { login_id: r.login_id, password: r.password };
+  _pa.made = { login_id: r.login_id, password: r.password, grant_status: r.grant_status || (approve ? 'approved' : 'pending') };
   _paRender();
   _paLoad();
 }
@@ -37129,10 +37282,10 @@ async function paReset(id){
   _paRender(); _paLoad();
 }
 async function paRevoke(id, off){
-  if(off && !confirm(id + ' 을 해지합니다.\n\n매장 권한이 떨어지고 쓰던 기기가 끊깁니다.\n계정 기록은 남습니다 — 나중에 되살릴 수 있습니다.')) return;
+  if(off && !confirm(id + ' 을 해지합니다.\n\n매장 권한이 정지되고 로그인이 잠기며 쓰던 기기가 끊깁니다.\n계정 기록은 남습니다 — 나중에 되살릴 수 있습니다.')) return;
   var r = await _paCall({ action: off ? 'revoke' : 'restore', login_id:id });
   if(typeof showToast === 'function'){
-    r.ok ? showToast('✓', off ? '해지했습니다' : '되살렸습니다', '')
+    r.ok ? showToast('✓', off ? '해지했습니다' : '되살렸습니다', (!off && r.needs_approval) ? '매장 권한은 승인 대기 — 목록에서 「승인」' : '')
          : showToast('❌','바꾸지 못했습니다', r.error||'');
   }
   _paLoad();
@@ -39515,8 +39668,8 @@ async function _rvLoadPending(){
     var nm = {};
     var uids = Array.from(new Set(rows.map(function(x){ return x.invitee_user_id; }).filter(Boolean)));
     if(uids.length){
-      var pr = await window.sb.from('profiles').select('id,display_name,email').in('id', uids);
-      (pr.data || []).forEach(function(p){ nm[p.id] = p.display_name || p.email || ''; });
+      try { var _pm = await _taamNamesMap(uids, 'id,display_name,email');   // 🆕 2026-10-29 매장 어드민은 RPC 로
+        Object.keys(_pm).forEach(function(k){ nm[k] = _pm[k].display_name || _pm[k].email || ''; }); } catch(_ne){}
     }
     // 티켓 행과 **같은 모양**으로 바꾼다. 그래야 카드·정렬·필터를 그대로 쓴다.
     //   price 를 0 으로 두면 _tbStatus 가 「결제대기」로 읽는다 — 실제로 그렇다.
@@ -47082,16 +47235,24 @@ async function riSearchMembers(q){
       var orParts = ['display_name.ilike.%'+q+'%', 'email.ilike.%'+qLower+'%'];
       if(qDigits.length >= 4) orParts.push('phone.ilike.%'+qDigits+'%');
 
+      var r;
+      if(_currentRole === 'admin'){
+        // 🆕 2026-10-29 매장 어드민은 전체 회원 명부를 훑지 못한다 — 이 매장에 예약·초대가 있는 회원만 부분 일치,
+        //   그 밖의 회원(단골 초대)은 **전화번호를 끝까지 정확히** 쳤을 때만(서버 RPC 규칙).
+        r = await window.sb.rpc('taam_partner_member_search', { p_rest: String(_currentAdminRestId || ''), p_q: q });
+        if(r.error && /does not exist|schema cache/i.test(String(r.error.message || ''))) r = { error: { message: '서버 준비 필요(20261029_partner_grants.sql)' } };
+      } else {
       // v1.53.28: 'membership_grade' 컬럼이 DB 에 없는 환경이 있어 select('*') 로 단순화.
       //   v1.53.23 'grade' 사건과 동일 패턴 — 명시 컬럼 select 는 컬럼명 오타 시 400 으로 전체 실패.
       //   profiles 한 row 페이로드 작아 비용 무시 가능.
-      var r = await window.sb.from('profiles')
+      r = await window.sb.from('profiles')
         .select('*')
         .or(orParts.join(','))
         .is('deleted_at', null)
         .limit(20);
+      }
       // deleted_at 컬럼이 없는 환경이면 한 번 더 시도 (필터 제거)
-      if(r.error && /deleted_at/.test(r.error.message || '')){
+      if(_currentRole !== 'admin' && r.error && /deleted_at/.test(r.error.message || '')){
         console.warn('[ri] deleted_at 컬럼 없음 — 필터 제거 후 재시도');
         r = await window.sb.from('profiles')
           .select('*')
@@ -47105,11 +47266,13 @@ async function riSearchMembers(q){
         return;
       }
       var rows = r.data || [];
-      try{ await _taamTestIds(); }catch(_te){}
-      rows = _taamHideTest(rows, q);   // 🆕 2026-10-19 테스트 계정은 정확히 쳐야 나온다
+      if(_currentRole !== 'admin'){   // 매장 어드민은 profiles 를 자기 행만 읽는다 — 테스트 계정 집합도 읽지 않는다(서버 RPC 가 이미 이 매장 회원만 준다)
+        try{ await _taamTestIds(); }catch(_te){}
+        rows = _taamHideTest(rows, q);   // 🆕 2026-10-19 테스트 계정은 정확히 쳐야 나온다
+      }
 
-      // 초대명 폴백 (이름 비어있는 회원 매칭용)
-      try {
+      // 초대명 폴백 (이름 비어있는 회원 매칭용) — 매장 어드민은 초대장 표를 훑지 않는다(2026-10-29)
+      if(_currentRole !== 'admin') try {
         var inv = await window.sb.from('invite_codes')
           .select('member_id, invitee_name')
           .ilike('invitee_name', '%'+q+'%')
@@ -47783,7 +47946,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.28-a';
+var TAAM_WEB_BUILD = '2026.10.29-a';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -47831,8 +47994,7 @@ async function loadSentInvites(){
     var inviteeIds = Array.from(new Set(rows.map(function(x){ return x.invitee_user_id; }).filter(Boolean)));
     var profMap = {};
     if(inviteeIds.length > 0){
-      var pr = await window.sb.from('profiles').select('*').in('id', inviteeIds);
-      if(!pr.error && pr.data) pr.data.forEach(function(p){ profMap[p.id] = p; });
+      try { profMap = await _taamNamesMap(inviteeIds, '*'); } catch(_ne){ profMap = {}; }   // 🆕 2026-10-29 매장 어드민은 RPC 로
     }
 
     // 통계
@@ -47968,8 +48130,8 @@ async function siRecallInvite(inviteId){
     // 받는 회원 이름·통화를 먼저 읽는다 — 확인창과 알림 문구에 함께 쓴다
     var who = '', invCur = null;
     try {
-      var pr = await window.sb.from('profiles')
-        .select('display_name, currency').eq('id', inv.invitee_user_id).maybeSingle();
+      var _pm = await _taamNamesMap([inv.invitee_user_id], 'id, display_name, currency');   // 🆕 2026-10-29 매장 어드민은 RPC 로
+      var pr = { data: _pm[inv.invitee_user_id] || null };
       if(pr.data){ who = pr.data.display_name || ''; invCur = pr.data.currency || null; }
     } catch(_pe){}
 
@@ -49101,8 +49263,10 @@ function finalUploadTicket(){
       showToast('✓','업로드 완료', _nAll > 1 ? _nAll + '개 회차가 등록되었습니다' : '티켓이 등록되었습니다');
     }
   }
+  // 🆕 2026-10-29 이번에 올린(고친) 회차만 서버에 — 전체를 밀면 낡은 로컬 값이 다른 회차를 덮는다
+  var _savedIds = [String(_pendingTicket.id)].concat((Array.isArray(_pendingTicketExtras) ? _pendingTicketExtras : []).map(function(c){ return String(c.id); }));
   _pendingTicketExtras = [];
-  saveTickets();
+  saveTickets(_savedIds);
   updatePendingBadge();
   // 새 티켓이 즉시 보이도록 필터 리셋 (이전 화면에서 셋팅된 시간/날짜 필터 제거)
   _tkTime = null;
@@ -50305,7 +50469,7 @@ function _tuDoToggleSoldout(id){
   var t=ticketDB.find(function(x){return String(x.id)===String(id);});
   if(!t)return;
   t.status=(t.status==='soldout')?'active':'soldout';
-  saveTickets();
+  saveTickets([String(id)]);   // 🆕 2026-10-29 그 회차만
   // 🔧 2026.08: 방향에 따라 플래그를 반대로 쓴다 — 종전에는 양쪽 다 false 였다.
   //
   //   auto_soldout=false 는 「어드민이 손으로 잠갔다」는 뜻이다. 트리거가 못 되돌리고,
@@ -53901,6 +54065,8 @@ var TRANSLATIONS = {
       // ⚠ 「없는 아이디」와 「틀린 비밀번호」를 구별해 주지 않는다
       partner_bad:'아이디 또는 비밀번호가 올바르지 않습니다',
       partner_no_grant:'아직 매장 권한이 연결되지 않았습니다. TAAM 담당자에게 문의해주세요.',
+      partner_pending:'매장 권한이 승인 대기 중입니다. TAAM 의 승인이 끝나면 이용할 수 있습니다.',
+      partner_suspended:'매장 권한이 정지되었습니다. TAAM 담당자에게 문의해주세요.',
       partner_ok:'로그인되었습니다',
       ph_login_email:'이메일 주소',
       ph_login_password:'비밀번호',
@@ -54814,6 +54980,8 @@ var TRANSLATIONS = {
       partner_logging_in:'Signing in…',
       partner_bad:'That ID or password is not correct',
       partner_no_grant:'This account is not linked to a restaurant yet. Please contact TAAM.',
+      partner_pending:'Your restaurant access is awaiting TAAM approval. You can sign in once it is approved.',
+      partner_suspended:'Your restaurant access has been suspended. Please contact TAAM.',
       partner_ok:'Signed in',
       ph_login_email:'Email address',
       ph_login_password:'Password',
@@ -55918,6 +56086,8 @@ TRANSLATIONS.ja = {
     partner_logging_in:'ログイン中…',
     partner_bad:'ID またはパスワードが正しくありません',
     partner_no_grant:'まだ御店の権限が紐づいていません。TAAM 担当までお知らせください。',
+    partner_pending:'御店の権限は TAAM の承認待ちです。承認後にご利用いただけます。',
+    partner_suspended:'御店の権限が停止されています。TAAM 担当までお知らせください。',
     partner_ok:'ログインしました',
     ph_login_email:'メールアドレス',
     ph_login_password:'パスワード',
@@ -63637,8 +63807,9 @@ async function tcalLoadInvites(){
       // 초대받은 회원 이름 매핑
       var uids = Array.from(new Set(_tcalInvites.map(function(x){ return x.invitee_user_id; }).filter(Boolean)));
       if(uids.length){
-        var pr = await window.sb.from('profiles').select('id,display_name,email').in('id', uids);
-        var nm = {}; (pr.data||[]).forEach(function(p){ nm[p.id] = p.display_name || p.email || ''; });
+        var nm = {};
+        try { var _pm = await _taamNamesMap(uids, 'id,display_name,email');   // 🆕 2026-10-29 매장 어드민은 RPC 로
+          Object.keys(_pm).forEach(function(k){ nm[k] = _pm[k].display_name || _pm[k].email || ''; }); } catch(_ne){}
         _tcalInvites.forEach(function(x){ x._inviteeName = nm[x.invitee_user_id] || ''; });
       }
     }
@@ -63830,6 +64001,22 @@ async function tcalShowInviteMember(uid){
   var modal = document.getElementById('tcalBuyerModal');
   if(sheet) sheet.innerHTML = '<div style="padding:24px;text-align:center;color:#999;font-family:\'Noto Sans KR\',sans-serif;">불러오는 중…</div>';
   if(modal) modal.style.display='flex';
+  // 🆕 2026-10-29 매장 어드민은 **이 매장에 예약한 회원의 이름·연락처·등급·국적 + 이 매장 통계·내역**만(서버 RPC · 예치금 잔액·다른 매장 없음).
+  //   종전엔 profiles 전 칸(잔액 포함)을 읽어 보여 줬다 — 서버도 이제 자기 행만 준다.
+  if(_currentRole !== 'superadmin'){
+    try {
+      var _pd = await window.sb.rpc('taam_partner_member', { p_rest: String(_currentAdminRestId || ''), p_uid: uid });
+      if(_pd.error) throw _pd.error;
+      if(sheet) sheet.innerHTML = '<div style="padding:22px 20px;font-family:\'Noto Sans KR\',sans-serif;max-height:80vh;overflow-y:auto;">' + _prvMemberHtml(_pd.data || {})
+        + '<button onclick="tcalCloseBuyer()" style="margin-top:16px;width:100%;height:48px;border:none;border-radius:13px;background:#1a1a18;color:#fff;font-family:inherit;font-size:14px;font-weight:800;cursor:pointer;">닫기</button></div>';
+    } catch(_pe){
+      var _m = String((_pe && _pe.message) || '');
+      if(sheet) sheet.innerHTML = '<div style="padding:24px;text-align:center;color:#c00;font-family:\'Noto Sans KR\',sans-serif;">'
+        + (/NOT_RELATED/.test(_m) ? '이 매장에 예약한 회원이 아닙니다' : (/FORBIDDEN/.test(_m) ? '매장 권한이 없습니다(승인 대기·정지)' : (/does not exist|schema cache/i.test(_m) ? '서버 준비 필요(20261029_partner_grants.sql)' : '회원 정보 로드 실패')))
+        + '<br><button onclick="tcalCloseBuyer()" style="margin-top:14px;padding:10px 18px;border:none;border-radius:10px;background:#1a1a18;color:#fff;font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;">닫기</button></div>';
+    }
+    return;
+  }
   try {
     // 회원 전체 정보 + 이용/예약/캔슬 통계 (티켓 + 초대 결제 기준)
     var pr = await window.sb.from('profiles').select('*').eq('id', uid).maybeSingle();
@@ -65667,23 +65854,25 @@ function getUploadStatus() {
 function renderPartnerTicketList() {
   var el = document.getElementById('partnerTicketListContent');
   if (!el) return;
+  // 🆕 2026-10-29 자기 매장 회차는 전부 — 승인 대기(pending) · 삭제 신청도 같이 보인다(그래야 「올렸는데 어디 갔나」가 없다).
+  //   종전엔 active + 본인이 올린 것만이라 슈퍼어드민이 올려 준 회차·대기 중인 회차가 안 보였다.
   var list = ticketDB.filter(function(t){
     var sameRest = String(t.restId)===String(_currentAdminRestId);
-    var isActive = t.status === 'active';
-    // 어드민 본인이 신청한 티켓만 (uploadedBy 없는 구버전 제외)
-    var isOwn = t.uploadedBy === _currentAdminRestId || t.uploaderRestId === _currentAdminRestId;
-    return sameRest && isActive && isOwn;
+    return sameRest && ['active','soldout','pending','deleteRequest'].indexOf(t.status) >= 0;
   });
-  if (!list.length) { el.innerHTML='<div class="sub-empty">승인된 티켓 없음</div>'; return; }
+  if (!list.length) { el.innerHTML='<div class="sub-empty">티켓 없음</div>'; return; }
+  var _ord = { pending:0, deleteRequest:1, active:2, soldout:3 };
   el.innerHTML = list.slice().sort(function(a,b){
-    return (a.status==='soldout'?1:0)-(b.status==='soldout'?1:0);
+    return (_ord[a.status]||0)-(_ord[b.status]||0);
   }).map(function(t){
     var isSold = t.status==='soldout';
+    var _wait = t.status==='pending' ? '<span style="font-family:var(--font-main);font-size:9px;color:#B45309;background:#FFF3E0;border:1px solid #F0D9B4;border-radius:5px;padding:1px 5px;margin-left:4px;">승인 대기</span>'
+             : (t.status==='deleteRequest' ? '<span style="font-family:var(--font-main);font-size:9px;color:#9B1C1C;background:#fff5f5;border:1px solid #f0c8c8;border-radius:5px;padding:1px 5px;margin-left:4px;">삭제 신청 중</span>' : '');
     var slots='';
     if(t.slots){var sp=[];if(t.slots.s1>0)sp.push('1인×'+t.slots.s1);if(t.slots.s2>0)sp.push('2인×'+t.slots.s2);if(t.slots.s4>0)sp.push('4인×'+t.slots.s4);if(sp.length)slots=' · '+sp.join(' ');}
     return '<div class="rest-list-item">'
       +'<div class="rest-list-info">'
-        +'<div class="rest-list-name"'+(isSold?' style="opacity:.4;"':'')+'>'+_raEsc(t.rest)+' <span style="font-family:var(--font-main);font-size:9px;color:'+(isSold?'#E53935':'#c8a96e')+';">'+(isSold?'SOLD OUT':t.type)+'</span></div>'
+        +'<div class="rest-list-name"'+(isSold?' style="opacity:.4;"':'')+'>'+_raEsc(t.rest)+' <span style="font-family:var(--font-main);font-size:9px;color:'+(isSold?'#E53935':'#c8a96e')+';">'+(isSold?'SOLD OUT':t.type)+'</span>'+_wait+'</div>'
         +'<div class="rest-list-meta"'+(isSold?' style="opacity:.4;"':'')+'>'+t.date+' · '+t.time+slots+'</div>'
         // 🔧 2026.08: 여기 있던 +flexToggle 을 제거했다.
         //   flexToggle 은 renderTicketList 안에서만 선언된 지역 변수라, 이 함수에서는
@@ -65703,7 +65892,7 @@ function partnerRequestDelete(id) {
   var t = ticketDB.find(function(x){ return String(x.id)===String(id); });
   if (!t) return;
   t.status = 'deleteRequest';
-  saveTickets();
+  saveTickets([String(id)]);   // 🆕 2026-10-29 그 회차만
   // 파트너 자신의 리스트 + pending 뱃지
   renderPartnerTicketList();
   updatePendingBadge();
@@ -69691,6 +69880,300 @@ function _onSwMessage(event){
 // 지금 끊으면 안 되는 일을 하고 있는가
 //   ⚠ 여기 빠뜨린 화면이 있으면 그 화면에서 리로드가 난다. 새 결제·편집
 //     화면을 만들면 이 목록에 같이 넣는다.
+// ═══════════════════════════════════════════════════════════════
+// 📋 예약 · 회원 조회 — 매장 어드민(파트너)의 자기 매장 자료 (2026-10-29)
+// ═══════════════════════════════════════════════════════════════
+//   서버 RPC 셋이 전부다 — taam_partner_reservations(매장 · 기간 · 검색 · 상태) · taam_partner_member(매장 · 회원) ·
+//   taam_partner_member_search(매장 · 글자). 매장 권한이 **승인(approved)** 이어야 돌고, 다른 매장은 FORBIDDEN.
+//   돌려주는 것에는 예치금 잔액·다른 매장 구매가 없다(서버가 안 준다 · 화면이 숨기는 게 아니다).
+//   슈퍼어드민은 매장을 골라 같은 화면을 본다(파트너가 보는 그대로 — 점검용).
+var _prv = { rest: '', period: 'month', from: '', to: '', st: 'all', q: '', data: null, err: '', seq: 0, open: {}, busy: false, mSeq: 0 };
+function _prvEsc(v){ return String(v == null ? '' : v).replace(/[&<>"']/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]; }); }
+function _prvKst(iso){ if(!iso) return ''; var d = new Date(iso); if(isNaN(d)) return String(iso).slice(0, 16); var k = new Date(d.getTime() + 9 * 3600 * 1000);
+  return k.getUTCFullYear() + '.' + String(k.getUTCMonth() + 1).padStart(2, '0') + '.' + String(k.getUTCDate()).padStart(2, '0') + ' ' + String(k.getUTCHours()).padStart(2, '0') + ':' + String(k.getUTCMinutes()).padStart(2, '0'); }
+function _prvDate(ymd){ if(!ymd) return '—'; var m = String(ymd).match(/^(\d{4})-(\d{2})-(\d{2})/); if(!m) return _prvEsc(ymd);
+  var d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])); return m[1] + '.' + m[2] + '.' + m[3] + '(' + ['일','월','화','수','목','금','토'][d.getUTCDay()] + ')'; }
+function _prvWon(v){ v = parseInt(v, 10); if(!isFinite(v)) return '—'; return '₩' + v.toLocaleString(); }
+var _PRV_KIND = { app: '앱 구매', invite: '초대', link: '결제 링크', settle: '대관 정산', manual: '수동 입력' };
+var _PRV_PAY = { deposit: '예치금', card_mixed: '예치금+카드', card_link: '카드(링크)', offline: '오프라인·직접' };
+function _prvStatus(r){
+  var st = String(r.status || '');
+  if(st === 'cancelled' || st === 'canceled') return ['취소', '#9B1C1C', '#fff5f5', '#f0c8c8'];
+  if(r.visit_status === 'no_show') return ['노쇼', '#B45309', '#FFF3E0', '#F0D9B4'];
+  if(r.visit_status === 'attended' || st === 'used') return ['방문', '#1E7A46', '#EAF6EE', '#BFE3CC'];
+  if(st === 'pending_confirm') return ['확정 대기', '#B45309', '#FFF3E0', '#F0D9B4'];
+  if(st === 'manual') return ['수동 예약', '#7A6A60', '#F0ECE6', '#E0D9CC'];
+  return ['예정', '#1F5BD6', '#EAF1FF', '#D2E0FB'];
+}
+function _prvBadge(c){ return '<span style="font-size:10px;font-weight:800;color:' + c[1] + ';background:' + c[2] + ';border:1px solid ' + c[3] + ';border-radius:6px;padding:1px 7px;white-space:nowrap;">' + c[0] + '</span>'; }
+function _prvChip(on){ return 'padding:7px 11px;border-radius:9px;border:1.5px solid ' + (on ? '#1a1a18' : '#e0ddd8') + ';background:' + (on ? '#1a1a18' : '#fff') + ';color:' + (on ? '#fff' : '#666') + ';font-family:inherit;font-size:11.5px;font-weight:800;cursor:pointer;'; }
+function _prvRange(){
+  var t = _cfToday(), y = t.y, m = t.m;
+  var ymd = function(yy, mm, dd){ return _tsrYmd(yy, mm, dd); };
+  if(_prv.period === 'month') return [ymd(y, m, 1), ymd(y, m + 1, 1)];
+  if(_prv.period === 'prev') return [ymd(y, m - 1, 1), ymd(y, m, 1)];
+  if(_prv.period === 'next') return [ymd(y, m + 1, 1), ymd(y, m + 2, 1)];
+  if(_prv.period === 'upcoming') return [ymd(y, m, t.d), null];
+  if(_prv.period === 'year') return [ymd(y, 0, 1), ymd(y + 1, 0, 1)];
+  if(_prv.period === 'custom'){
+    var f = (document.getElementById('prvFrom') || {}).value || '', to = (document.getElementById('prvTo') || {}).value || '';
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(f) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || to < f) return null;
+    var tm = to.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    return [f, ymd(+tm[1], +tm[2] - 1, +tm[3] + 1)];   // 끝 날짜 포함
+  }
+  return [null, null];
+}
+function prvOpen(opts){
+  opts = opts || {};
+  var isSuper = typeof _isSuperAdmin === 'function' && _isSuperAdmin();
+  if(!isSuper && _currentRole !== 'admin'){ if(typeof showToast === 'function') showToast('🔒', '매장 어드민 전용', ''); return; }
+  if(document.getElementById('prvPopup')) prvClose();
+  _prv = { rest: String(opts.rest || (isSuper ? '' : (_currentAdminRestId || ''))), period: 'month', from: '', to: '', st: 'all', q: '', data: null, err: '', seq: _prv.seq + 1, open: {}, busy: false, mSeq: 0 };
+  var t = _cfToday(), today = _tsrYmd(t.y, t.m, t.d), first = _tsrYmd(t.y, t.m, 1);
+  var restName = '';
+  var rests = (typeof restaurantDB !== 'undefined' ? restaurantDB : []) || [];
+  var restOpt = '';
+  if(isSuper){
+    restOpt = '<select id="prvRest" onchange="prvSetRest(this.value)" style="flex:1;min-width:160px;padding:9px 10px;border:1px solid #e0dcd4;border-radius:10px;font-size:12.5px;font-family:inherit;"><option value="">매장을 고르세요</option>'
+      + rests.slice().sort(function(a, b){ return String(a.name || '').localeCompare(String(b.name || ''), 'ko'); }).map(function(r){
+          return '<option value="' + _prvEsc(r.id) + '"' + (String(r.id) === _prv.rest ? ' selected' : '') + '>' + _prvEsc(r.name) + '</option>'; }).join('') + '</select>';
+  } else {
+    var rr = rests.find(function(x){ return String(x.id) === _prv.rest; });
+    restName = (rr && rr.name) || _currentAdminRestName || '';
+  }
+  var el = document.createElement('div');
+  el.id = 'prvPopup';
+  el.style.cssText = 'position:fixed;inset:0;z-index:9200;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;';
+  el.innerHTML =
+    '<div role="dialog" aria-modal="true" aria-label="예약 · 회원 조회" style="background:#fff;border-radius:18px;width:100%;max-width:760px;max-height:92vh;overflow:auto;overflow-x:hidden;padding:20px 18px;box-sizing:border-box;font-family:var(--font-main);" data-lang-lock="ko">'
+    + '<div style="display:flex;align-items:center;gap:8px;"><div style="font-size:16px;font-weight:800;color:#1a1a18;flex:1;">📋 예약 · 회원 조회' + (restName ? ' <span style="font-size:12px;color:#9a9486;font-weight:700;">· ' + _prvEsc(restName) + '</span>' : '') + '</div>'
+    +   '<button type="button" onclick="prvClose()" aria-label="닫기" style="border:none;background:none;font-size:22px;color:#999;cursor:pointer;min-width:44px;min-height:44px;margin:-10px -10px -10px 0;">×</button></div>'
+    + '<div style="font-size:11px;color:#9a9486;line-height:1.65;margin:4px 0 10px;">이 매장의 예약 전부(좌석 홀드 제외) — 회원이 산 것 · 초대 · 결제 링크 · 대관 정산 · 수동 입력. 회원 이름을 누르면 그 회원의 정보와 <b>이 매장</b> 방문·노쇼·취소 기록. 금액은 결제된 원화 그대로.</div>'
+    + (isSuper ? '<div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;">' + restOpt + '</div>' : '')
+    + '<div id="prvPeriodBtns" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">'
+    +   ['month|이번 달', 'prev|지난 달', 'next|다음 달', 'upcoming|오늘 이후', 'year|올해', 'all|전체', 'custom|직접 입력'].map(function(x){ var k = x.split('|')[0];
+          return '<button type="button" class="prv-pb" data-k="' + k + '" onclick="prvSetPeriod(\'' + k + '\')" style="' + _prvChip(k === _prv.period) + '">' + x.split('|')[1] + '</button>'; }).join('')
+    + '</div>'
+    + '<div id="prvCustom" style="display:none;gap:8px;margin-bottom:8px;align-items:center;">'
+    +   '<input id="prvFrom" type="date" value="' + first + '" style="flex:1;min-width:0;padding:8px;border:1px solid #e0dcd4;border-radius:9px;font-size:13px;">'
+    +   '<span style="color:#aaa;">~</span>'
+    +   '<input id="prvTo" type="date" value="' + today + '" style="flex:1;min-width:0;padding:8px;border:1px solid #e0dcd4;border-radius:9px;font-size:13px;">'
+    +   '<button type="button" onclick="prvRun()" style="' + _prvChip(true) + '">조회</button>'
+    + '</div>'
+    + '<div id="prvStBtns" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;">'
+    +   ['all|전체', 'active|예정', 'visited|방문', 'noshow|노쇼', 'cancelled|취소'].map(function(x){ var k = x.split('|')[0];
+          return '<button type="button" class="prv-sb" data-k="' + k + '" onclick="prvSetSt(\'' + k + '\')" style="' + _prvChip(k === _prv.st) + '">' + x.split('|')[1] + '</button>'; }).join('')
+    + '</div>'
+    + '<div style="display:flex;gap:8px;align-items:center;margin:4px 0 10px;flex-wrap:wrap;">'
+    +   '<input id="prvQ" type="search" placeholder="이름 · 전화 · 구매 id" oninput="prvSearch(this.value)" style="flex:1;min-width:180px;padding:9px 10px;border:1px solid #e0dcd4;border-radius:10px;font-size:12.5px;font-family:inherit;">'
+    +   '<button type="button" onclick="prvCsv()" style="' + _prvChip(false) + '">CSV</button>'
+    + '</div>'
+    + '<div id="prvResult" style="font-size:12px;color:#777;">' + (_prv.rest ? '불러오는 중…' : '매장을 고르세요') + '</div>'
+    + '</div>';
+  var downBg = false;
+  el.addEventListener('pointerdown', function(ev){ downBg = ev.target === el; });
+  el.addEventListener('click', function(ev){ if(ev.target === el && downBg) prvClose(); downBg = false; });
+  _prv.esc = function(ev){ if(ev.key === 'Escape' && document.getElementById('prvPopup') && !document.getElementById('prvMemberPopup')) prvClose(); };
+  document.addEventListener('keydown', _prv.esc);
+  // 위임 클릭 — 상세 펼침 · 회원 보기 (uid·id 를 onclick 문자열에 넣지 않는다)
+  el.addEventListener('click', function(ev){
+    var m = ev.target && ev.target.closest ? ev.target.closest('[data-prv-m]') : null;
+    if(m){ ev.stopPropagation(); prvMember(m.getAttribute('data-prv-m')); return; }
+    var b = ev.target && ev.target.closest ? ev.target.closest('[data-prv-k]') : null;
+    if(!b || !_prv.data) return;
+    var k = b.getAttribute('data-prv-k');
+    if(_prv.open[k]) delete _prv.open[k]; else _prv.open[k] = 1;
+    _prvRender();
+  });
+  document.body.appendChild(el);
+  if(_prv.rest) prvRun();
+}
+function prvClose(){ var p = document.getElementById('prvPopup'); if(p) p.remove(); _prv.seq++; _prvMemberClose(); if(_prv.esc){ document.removeEventListener('keydown', _prv.esc); _prv.esc = null; } if(typeof _acPopupClosed === 'function') _acPopupClosed(); }
+function _prvPaintSeg(sel, val){
+  document.querySelectorAll('#prvPopup ' + sel).forEach(function(b){ var on = b.getAttribute('data-k') === val;
+    b.style.borderColor = on ? '#1a1a18' : '#e0ddd8'; b.style.background = on ? '#1a1a18' : '#fff'; b.style.color = on ? '#fff' : '#666'; });
+}
+function prvSetRest(v){ _prv.rest = String(v || ''); _prv.data = null; _prv.open = {}; if(_prv.rest) prvRun(); else { var r = document.getElementById('prvResult'); if(r) r.textContent = '매장을 고르세요'; } }
+function prvSetPeriod(k){ _prv.period = k; _prvPaintSeg('.prv-pb', k); var c = document.getElementById('prvCustom'); if(c) c.style.display = k === 'custom' ? 'flex' : 'none'; if(k !== 'custom') prvRun(); }
+function prvSetSt(k){ _prv.st = k; _prvPaintSeg('.prv-sb', k); _prvRender(); }
+var _prvQTimer = null;
+function prvSearch(v){ _prv.q = String(v || '').trim().toLowerCase(); if(_prvQTimer) clearTimeout(_prvQTimer); _prvQTimer = setTimeout(_prvRender, 120); }
+async function prvRun(){
+  var box = document.getElementById('prvResult'); if(!box) return;
+  if(!_prv.rest){ box.textContent = '매장을 고르세요'; return; }
+  var rg = _prvRange();
+  if(!rg){ box.innerHTML = '<div style="color:#9B1C1C;">기간을 확인하세요 (시작 ≤ 끝 · YYYY-MM-DD)</div>'; _prv.data = null; return; }
+  var my = ++_prv.seq;
+  _prv.data = null; _prv.err = '';
+  box.textContent = '불러오는 중…';
+  try {
+    if(!window.sb) throw new Error('서버 연결 없음');
+    var r = await window.sb.rpc('taam_partner_reservations', { p_rest: _prv.rest, p_from: rg[0], p_to: rg[1], p_q: null, p_status: null });
+    if(my !== _prv.seq) return;
+    if(r.error) throw r.error;
+    _prv.data = (r.data && r.data.rows) || [];
+  } catch(e){
+    if(my !== _prv.seq) return;
+    var m = String((e && e.message) || '');
+    _prv.err = /FORBIDDEN/.test(m) ? '이 매장의 권한이 없습니다 — 승인 대기 · 정지 상태면 TAAM 에 문의하세요'
+             : (/does not exist|schema cache/i.test(m) ? '서버 준비 필요 — 20261029_partner_grants.sql 이 아직 안 돌았습니다' : ('불러오지 못했습니다: ' + m.slice(0, 120)));
+    _prv.data = null;
+  }
+  _prvRender();
+}
+function _prvPass(r){
+  if(_prv.st !== 'all'){
+    var st = String(r.status || '');
+    var cx = st === 'cancelled' || st === 'canceled';
+    if(_prv.st === 'cancelled' && !cx) return false;
+    if(_prv.st === 'noshow' && r.visit_status !== 'no_show') return false;
+    if(_prv.st === 'visited' && !(r.visit_status === 'attended' || st === 'used')) return false;
+    if(_prv.st === 'active' && (cx || r.visit_status === 'no_show' || r.visit_status === 'attended' || st === 'used')) return false;
+  }
+  if(_prv.q){
+    var qd = _prv.q.replace(/\D/g, '');
+    var hay = [r.buyer, r.pid, r.tp_label, r.memo].map(function(x){ return String(x || '').toLowerCase(); }).join(' ');
+    var ph = String(r.phone || '').replace(/\D/g, '');
+    if(hay.indexOf(_prv.q) < 0 && !(qd.length >= 3 && ph.indexOf(qd) >= 0)) return false;
+  }
+  return true;
+}
+function _prvRender(){
+  var box = document.getElementById('prvResult'); if(!box) return;
+  if(_prv.err){ box.innerHTML = '<div style="color:#9B1C1C;line-height:1.6;">' + _prvEsc(_prv.err) + '</div>'; return; }
+  if(!_prv.data){ box.textContent = _prv.rest ? '불러오는 중…' : '매장을 고르세요'; return; }
+  var rows = _prv.data.filter(_prvPass);
+  var n = rows.length, pax = 0, cx = 0, ns = 0, vis = 0, amt = 0;
+  rows.forEach(function(r){ var st = String(r.status || ''); if(st === 'cancelled' || st === 'canceled') cx++; else { pax += parseInt(r.pax, 10) || 0; if(r.kind !== 'manual' && r.kind !== 'settle') amt += parseInt(r.price, 10) || 0; }
+    if(r.visit_status === 'no_show') ns++; if(r.visit_status === 'attended' || st === 'used') vis++; });
+  var h = '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">'
+    + [['예약', n + '건'], ['인원', pax + '명'], ['방문', vis], ['노쇼', ns], ['취소', cx], ['결제 합계', _prvWon(amt)]].map(function(x){
+        return '<div style="flex:1;min-width:84px;background:#F6F5F2;border-radius:12px;padding:10px 12px;"><div style="font-size:10.5px;color:#9a9486;">' + x[0] + '</div><div style="font-size:15px;font-weight:800;color:#1a1a18;margin-top:2px;">' + x[1] + '</div></div>'; }).join('')
+    + '</div>'
+    + (_prv.data.length >= 1500 ? '<div style="font-size:11px;color:#B45309;margin-bottom:8px;">⚠ 1,500건까지만 — 기간을 좁혀 주세요</div>' : '');
+  if(!n){ box.innerHTML = h + '<div style="padding:18px;text-align:center;color:#999;">조건에 맞는 예약이 없습니다</div>'; return; }
+  h += rows.map(function(r){
+    var k = String(r.id || r.pid);
+    var open = !!_prv.open[k];
+    var sc = _prvStatus(r);
+    var nm = r.buyer ? (r.uid ? '<span data-prv-m="' + _prvEsc(r.uid) + '" style="font-weight:800;color:#1a1a18;cursor:pointer;text-decoration:underline;">' + _prvEsc(r.buyer) + '</span>'
+                               : '<span style="font-weight:800;color:#1a1a18;">' + _prvEsc(r.buyer) + '</span>')
+                     : '<span style="color:#999;">(이름 없음)</span>';
+    var refund = (parseInt(r.refund_dep, 10) || 0) + (parseInt(r.refund_card, 10) || 0) + (parseInt(r.refund_link, 10) || 0);
+    var line1 = '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
+      + '<span style="font-size:12.5px;font-weight:800;color:#1a1a18;">' + _prvDate(r.date) + (r.time ? ' ' + _prvEsc(r.time) : '') + '</span>'
+      + _prvBadge(sc) + '<span style="font-size:10.5px;color:#9a9486;">' + _prvEsc(_PRV_KIND[r.kind] || r.kind || '') + '</span>'
+      + '<span style="flex:1;"></span>'
+      + '<button type="button" data-prv-k="' + _prvEsc(k) + '" style="border:1px solid #e0ddd8;background:#fff;border-radius:8px;padding:4px 9px;font-size:11px;font-weight:800;color:#555;cursor:pointer;font-family:inherit;">상세 ' + (open ? '▴' : '▾') + '</button>'
+      + '</div>'
+      + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:4px;font-size:12px;color:#444;">'
+      + nm + (r.tier ? '<span style="font-size:10px;font-weight:800;color:#6A1A1A;border:1px solid #e8d8d8;border-radius:5px;padding:0 5px;">' + _prvEsc(r.tier) + '</span>' : '')
+      + '<span>' + (parseInt(r.pax, 10) || 0) + '명</span>'
+      + (r.kind !== 'manual' && r.kind !== 'settle' ? '<span style="font-weight:700;">' + _prvWon(r.price) + '</span>' : '')
+      + (refund ? '<span style="color:#9B1C1C;">환불 ' + _prvWon(refund) + '</span>' : '')
+      + (r.card_refund_pending ? '<span style="color:#B45309;">카드 환불 대기 ' + _prvWon(r.card_refund_pending) + '</span>' : '')
+      + '</div>';
+    var det = '';
+    if(open){
+      var kv = function(a, b){ return b == null || b === '' ? '' : '<div style="display:flex;gap:10px;padding:5px 0;border-bottom:1px solid #f0ede8;"><span style="min-width:92px;color:#9a9486;">' + a + '</span><span style="flex:1;color:#1a1a18;word-break:break-all;">' + b + '</span></div>'; };
+      det = '<div style="margin-top:8px;background:#FAF9F6;border-radius:10px;padding:6px 12px;font-size:11.5px;">'
+        + kv('구매 id', _prvEsc(r.pid)) + kv('회차', _prvEsc(r.tp_label || '') + (r.date_raw ? ' · ' + _prvEsc(r.date_raw) : ''))
+        + kv('전화', _prvEsc(r.phone || '')) + kv('결제 수단', _prvEsc(_PRV_PAY[r.pay_kind] || r.pay_kind || ''))
+        + kv('결제 시각', _prvKst(r.created_at))
+        + kv('방문 처리', r.visit_status === 'attended' ? '방문 ' + _prvKst(r.visit_marked_at || r.used_at) : (r.visit_status === 'no_show' ? '노쇼 ' + _prvKst(r.visit_marked_at) : ''))
+        + kv('취소', r.cancelled_at ? _prvKst(r.cancelled_at) + (r.cancelled_by ? ' · ' + _prvEsc(r.cancelled_by) : '') + (r.cancel_reason ? ' · ' + _prvEsc(r.cancel_reason) : '') : '')
+        + kv('예치금 환불', r.refund_dep ? _prvWon(r.refund_dep) : '') + kv('카드 환불', r.refund_card ? _prvWon(r.refund_card) + ' 완료' : (r.card_refund_pending ? _prvWon(r.card_refund_pending) + ' 대기(TAAM 처리)' : ''))
+        + kv('링크 환불', r.refund_link ? _prvWon(r.refund_link) : '')
+        + kv('유형', _prvEsc(r.ttype || '')) + kv('메모', _prvEsc(r.memo || ''))
+        + '</div>';
+    }
+    return '<div style="border:1px solid #ece8df;border-radius:12px;padding:10px 12px;margin-bottom:8px;background:#fff;">' + line1 + det + '</div>';
+  }).join('');
+  box.innerHTML = h;
+}
+function prvCsv(){
+  if(!_prv.data || !_prv.data.length){ if(typeof showToast === 'function') showToast('⚠', '내보낼 줄이 없습니다', ''); return; }
+  var rows = _prv.data.filter(_prvPass);
+  var safe = function(v){ v = String(v == null ? '' : v); if(/^[=+\-@\t]/.test(v)) v = "'" + v; return '"' + v.replace(/"/g, '""') + '"'; };
+  var head = ['방문일', '시간', '상태', '경로', '이름', '전화', '등급', '인원', '금액(원)', '예치금 환불', '카드 환불', '링크 환불', '카드 환불 대기', '구매 id', '회차', '결제 시각(KST)', '취소 시각(KST)', '취소 사유', '메모'];
+  var lines = [head.map(safe).join(',')].concat(rows.map(function(r){
+    var sc = _prvStatus(r);
+    return [r.date || '', r.time || '', sc[0], _PRV_KIND[r.kind] || r.kind || '', r.buyer || '', r.phone || '', r.tier || '', r.pax || 0,
+            (r.kind === 'manual' || r.kind === 'settle') ? '' : (r.price || 0), r.refund_dep || '', r.refund_card || '', r.refund_link || '', r.card_refund_pending || '',
+            r.pid || '', r.tp_label || '', _prvKst(r.created_at), _prvKst(r.cancelled_at), r.cancel_reason || '', r.memo || ''].map(safe).join(',');
+  }));
+  var rg = _prvRange() || [null, null];
+  var blob = new Blob(['﻿' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+  var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = 'taam_reservations_' + (rg[0] || 'all') + '_' + (rg[1] || '') + '.csv';
+  document.body.appendChild(a); a.click(); setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 800);
+}
+// 회원 한 명 — 캘린더 회원 줄(tcalShowInviteMember 의 매장 어드민 판)과 같은 HTML
+function _prvMemberHtml(d){
+  var m = (d && d.member) || {}, st = (d && d.stats) || {}, rows = (d && d.rows) || [], inv = (d && d.invites) || [];
+  var stat = function(n, lbl, c){ return '<div style="flex:1;text-align:center;"><div style="font-size:22px;font-weight:900;color:' + c + ';">' + (parseInt(n, 10) || 0) + '</div><div style="font-size:11px;color:#9A9486;margin-top:2px;">' + lbl + '</div></div>'; };
+  var kv = function(k, v){ return '<div style="display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid #E8E6DF;"><span style="font-size:12px;color:#9A9486;flex:none;">' + k + '</span><span style="font-size:12.5px;font-weight:700;color:#1a1a18;text-align:right;word-break:break-all;">' + (v || '—') + '</span></div>'; };
+  var h = '<div style="font-size:11px;font-weight:800;letter-spacing:1px;color:#B4B0A8;">회원 정보 · 이 매장 기준</div>'
+    + '<div style="font-size:20px;font-weight:800;color:#1a1a18;margin-top:6px;">' + _prvEsc(m.name || m.name_en || '(이름 없음)') + (m.name_en && m.name ? ' <span style="font-size:12px;color:#888;font-weight:600;">' + _prvEsc(m.name_en) + '</span>' : '') + '</div>'
+    + '<div style="font-size:12.5px;color:#888;margin-top:4px;">' + _prvEsc(m.phone || '') + (m.email ? (m.phone ? ' · ' : '') + _prvEsc(m.email) : '') + '</div>'
+    + '<div style="display:flex;margin-top:14px;background:#F6F5F2;border-radius:16px;padding:14px 6px;">'
+    +   stat(st.upcoming, '예정', '#1F5BD6') + stat(st.visits, '방문', '#1E9E5A') + stat(st.no_shows, '노쇼', '#B45309') + stat(st.cancels, '취소', '#B23A2E')
+    + '</div>'
+    + '<div style="margin-top:14px;background:#fff;border:1px solid #ece8df;border-radius:14px;padding:2px 14px;">'
+    +   kv('멤버십 등급', _prvEsc(m.tier || '')) + kv('국적 · 국가', _prvEsc([m.nationality, m.country].filter(Boolean).filter(function(x, i, a){ return a.indexOf(x) === i; }).join(' · ')))
+    +   kv('언어 · 통화', _prvEsc(m.currency || ''))
+    + '</div>';
+  if(rows.length){
+    h += '<div style="font-size:11px;font-weight:800;letter-spacing:1px;color:#B4B0A8;margin-top:16px;">이 매장 예약 ' + rows.length + '건</div>';
+    h += rows.slice(0, 60).map(function(r){
+      var sc = _prvStatus(r);
+      var refund = (parseInt(r.refund_dep, 10) || 0) + (parseInt(r.refund_card, 10) || 0) + (parseInt(r.refund_link, 10) || 0);
+      return '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 0;border-bottom:1px solid #f0ede8;font-size:12px;">'
+        + '<span style="font-weight:800;color:#1a1a18;">' + _prvDate(r.date) + (r.time ? ' ' + _prvEsc(r.time) : '') + '</span>' + _prvBadge(sc)
+        + '<span style="color:#666;">' + (parseInt(r.pax, 10) || 0) + '명</span>'
+        + (r.kind !== 'manual' && r.kind !== 'settle' ? '<span style="font-weight:700;">' + _prvWon(r.price) + '</span>' : '')
+        + (refund ? '<span style="color:#9B1C1C;">환불 ' + _prvWon(refund) + '</span>' : '')
+        + '<span style="color:#9a9486;font-size:10.5px;">' + _prvEsc(_PRV_KIND[r.kind] || '') + '</span>'
+        + '</div>';
+    }).join('');
+  }
+  var invOpen = inv.filter(function(i){ return i.status === 'sent'; });
+  if(invOpen.length){
+    h += '<div style="font-size:11px;font-weight:800;letter-spacing:1px;color:#B4B0A8;margin-top:16px;">초대 대기 ' + invOpen.length + '건</div>'
+      + invOpen.map(function(i){ return '<div style="padding:7px 0;border-bottom:1px solid #f0ede8;font-size:12px;color:#444;">' + _prvDate(i.date) + (i.time ? ' ' + _prvEsc(i.time) : '') + ' · ' + (parseInt(i.pax, 10) || 0) + '명 · ' + _prvWon(i.total) + ' · 보낸 ' + _prvKst(i.created_at) + '</div>'; }).join('');
+  }
+  return h;
+}
+async function prvMember(uid){
+  if(!uid || !window.sb) return;
+  _prvMemberClose();
+  var my = ++_prv.mSeq;
+  var el = document.createElement('div');
+  el.id = 'prvMemberPopup';
+  el.style.cssText = 'position:fixed;inset:0;z-index:9210;background:rgba(0,0,0,.5);display:flex;align-items:flex-end;justify-content:center;';
+  el.innerHTML = '<div role="dialog" aria-modal="true" aria-label="회원 정보" style="width:100%;max-width:560px;max-height:86vh;overflow:auto;background:#fff;border-radius:18px 18px 0 0;padding:22px 20px calc(18px + env(safe-area-inset-bottom));box-sizing:border-box;font-family:var(--font-main);" data-lang-lock="ko">'
+    + '<div id="prvMemberBody" style="color:#999;text-align:center;padding:16px;">불러오는 중…</div>'
+    + '<button type="button" onclick="_prvMemberClose()" style="margin-top:16px;width:100%;height:46px;border:none;border-radius:13px;background:#1a1a18;color:#fff;font-family:inherit;font-size:14px;font-weight:800;cursor:pointer;">닫기</button></div>';
+  var downBg = false;
+  el.addEventListener('pointerdown', function(ev){ downBg = ev.target === el; });
+  el.addEventListener('click', function(ev){ if(ev.target === el && downBg) _prvMemberClose(); downBg = false; });
+  document.body.appendChild(el);
+  try {
+    var r = await window.sb.rpc('taam_partner_member', { p_rest: _prv.rest, p_uid: uid });
+    if(my !== _prv.mSeq) return;
+    if(r.error) throw r.error;
+    var b = document.getElementById('prvMemberBody'); if(b){ b.style.textAlign = ''; b.style.color = ''; b.style.padding = ''; b.innerHTML = _prvMemberHtml(r.data || {}); }
+  } catch(e){
+    if(my !== _prv.mSeq) return;
+    var m = String((e && e.message) || '');
+    var b2 = document.getElementById('prvMemberBody');
+    if(b2) b2.innerHTML = '<div style="color:#9B1C1C;">' + (/NOT_RELATED/.test(m) ? '이 매장에 예약한 회원이 아닙니다' : (/FORBIDDEN/.test(m) ? '매장 권한이 없습니다' : '회원 정보를 불러오지 못했습니다')) + '</div>';
+  }
+}
+function _prvMemberClose(){ var p = document.getElementById('prvMemberPopup'); if(p) p.remove(); _prv.mSeq++; }
+window.prvOpen = prvOpen; window.prvClose = prvClose; window.prvRun = prvRun; window.prvSetRest = prvSetRest; window.prvSetPeriod = prvSetPeriod; window.prvSetSt = prvSetSt;
+window.prvSearch = prvSearch; window.prvCsv = prvCsv; window.prvMember = prvMember; window._prvMemberClose = _prvMemberClose; window._prvMemberHtml = _prvMemberHtml; window._prvRange = _prvRange; window._prvPass = _prvPass;
+
 function _taamBusyNow(){
   try {
     // 좌석을 잡아둔 상태 = 결제 진행 중. 이때 끊기면 돈과 자리가 엇갈린다
@@ -93284,6 +93767,15 @@ function _instaDrawPath(id, offsetVal){
             adminDirectAccess();
           } else if(typeof openMain === 'function'){
             openMain();
+          }
+          // 🆕 2026-10-29 매장 어드민은 부팅마다 서버 승인 상태를 다시 본다 — 정지·대기면 내려간다.
+          //   종전엔 로그인 때만 봐서, 정지된 뒤에도 켜 둔 앱은 어드민 화면을 그대로 들고 있었다(서버는 이미 막는다 · 화면만).
+          if(_currentRole === 'admin' && typeof _applyServerAdminGrant === 'function'){
+            var _gTry = function(n){
+              if(!window.sb){ if(n > 0) setTimeout(function(){ _gTry(n - 1); }, 2000); return; }
+              try { _applyServerAdminGrant(); } catch(_ge){}
+            };
+            setTimeout(function(){ _gTry(5); }, 2500);
           }
           if(wrap) wrap.classList.add('ready');
           // auto-login 클래스 제거 + 스플래시 닫힘은 _splashHold(5초) 타이머 / 스킵 버튼(_splashCloseNow)이 담당.

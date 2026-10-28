@@ -32,7 +32,7 @@
 - `secrets/` (gitignore됨), 비밀키는 저장소에 두지 않음
 
 ## 핵심 도메인 개념
-- **역할**: `superadmin`(전체) / `admin`(레스토랑 파트너, 자기 매장만) / `user`(회원)
+- **역할**: `superadmin`(전체) / `admin`(레스토랑 파트너 = `profiles.role 'user'` + `admin_grants` 줄 · **승인(approved)된 매장만** · 아래 「파트너(매장 어드민)」) / `user`(회원)
 - **멤버십**: M등급 / T등급. 연회비 = 이용료(10%) + 멤버십 예치금(90%)
 - **티켓**: 본 가격 + 대행비. 예치금에서 차감, 부족 시 PG 결제로 보강
 - **예치금**: 서비스 내 선결제 잔액. `membership_deposit_balance` / `general_deposit_balance`
@@ -1005,6 +1005,11 @@ Apple 은 iPad 와 iPhone **두 기기로 심사**하므로(리뷰 노트에 명
 | 원장 유형 | `trg_taam_guard_ledger_change_type` | **회원 세션은 `admin_*`(admin_grant·admin_deduct) 유형의 원장 줄을 못 쓴다** — `taam_apply_deposit_delta` 가 회원 호출의 음수 항목 change_type 을 안 봐서 회원이 자기 원장에 「관리자 차감」 모양의 줄을 쓸 수 있었다(라벨 위조 · 2026-09-14 부터). BEFORE INSERT · 로그인 호출자가 슈퍼어드민이 아니면 `LEDGER_TYPE_FORBIDDEN`(42501) → RPC 전체 롤백. 서버(auth.uid() null)·슈퍼어드민은 그대로. RPC 본문은 교체하지 않았다(라이브 핵심 함수) (2026-10-18, `20261018_ledger_admin_type_guard.sql` · 회귀 `t_ledger_type_guard.sh` 11건) |
 | 좌석 행 결제 링크·초대 연결 칸 | `trg_taam_guard_ticket_linkfacts` | 앱이 직접 보낸 문장(슈퍼어드민 제외)은 `chargeId`·`agencyFee`·`agencyPay`·`inviteId`·`paidAt`·`confirmed_at` 등을 못 바꾼다(되돌림) · LINK-/KSK- 직접 INSERT 거절 · 직접 INSERT 의 연결 칸 지움 — 링크 환불 견적을 전액으로 만들던 길. 서버 함수는 그대로 (2026-10-28, `20261028_ticket_link_facts_guard.sql`) |
 | `profiles.is_test` | `trg_taam_guard_is_test` | 테스트 계정 숨김 스위치 — **회원 세션은 되돌림**(감사 칸 `is_test_set_by/at` 는 트리거만). 슈퍼어드민·서버만 (2026-10-19, `20261019_test_accounts.sql` · 위 「테스트 계정은 회원 목록에서 숨긴다」) |
+| 매장 어드민 판정 | `taam_rest_admin_ok(_for)` ← `is_ticket_admin_of` · `is_restaurant_admin_of` · `is_venue_admin_of` · `taam_is_rest_admin` · `taam_can_mark_visit` · `taam_can_manage_ticket_as` · `_taam_rest_note_ok` | **`admin_grants.status = 'approved'` 인 매장만**(rest_id 또는 venue_id). 승인 대기·정지는 어느 정책식·RPC 에서도 매장 어드민이 아니다. `restaurant_admins`·`venue_admins` 는 admin_grants 로 옮겨졌고 더 안 본다 (2026-10-29, `20261029_partner_grants.sql` · 아래 「파트너(매장 어드민)」) |
+| `admin_grants.status` | `trg_taam_guard_admin_grant` + RLS(`ag write` 슈퍼어드민만) | 승인·정지 도장(`approved_by/at` · `status_set_by/at`)은 트리거만 적는다. 바꾸는 길은 RPC `taam_partner_grant_set`(슈퍼어드민·서버)과 Edge `partner-account`(service_role) (2026-10-29) |
+| 티켓 업로드 승인 | `enforce_ticket_approval` v2 + `ticket_products` 정책 | 매장 어드민은 **자기 매장**에 `pending` 으로만 올리고(`ADMIN_MUST_UPLOAD_PENDING`), `pending → active` 는 슈퍼어드민만(`ONLY_SUPERADMIN_APPROVES` · 도장 `approved_by/at`), 승인된 회차의 **내용을 고치면 다시 `pending`**(상태·매진·사진·판매 오픈 칸은 제외), `pending` 회차는 회원·anon 에게 안 보인다(`taam_tp_visible`). 삭제는 자기 pending 만. 서버(auth.uid() null)·슈퍼어드민은 그대로 (2026-10-29) |
+| 좌석 행 INSERT 의 매장 | `taam_guard_ticket_insert` V2 | MAN-·INVH- 는 **승인된 자기 매장**에만(`v_adm`) · 회차의 매장과 행의 `restaurant_id` 가 다르면 `TICKET_REST_MISMATCH`. 글자 role 'admin' 만으로는 아무 매장도 못 넣는다(종전엔 어느 매장이든 됐다) (2026-10-29) |
+| 초대의 매장 | `trg_taam_guard_invite_rest` | `reservation_invites` 의 `ticket_product_id` 회차 매장 = `restaurant_id`(INSERT 언제나 · UPDATE 는 회차·매장이 바뀔 때만 — 옛 불일치 줄의 회원 결제 갱신은 막지 않는다) · 매장을 바꾸려면 승인 권한 (2026-10-29) |
 | 알림 payload 크기 | `trg_taam_notif_payload_cap` | 회원 세션이 쓰는 notifications.payload — 문자열 500자 · 전체 16KB(넘으면 짧은 스칼라만). 서버·슈퍼어드민은 그대로 (2026-10-25, `20261025_notif_payload_cap.sql` · 위 「슈퍼어드민 알림 → 그 내역 화면」) |
 | 푸시 발송 | `send-push` Edge Function | 회원은 자기에게만. 어드민 상향 통지만 예외 |
 | 초대제 가입 | `trg_taam_guard_signup` (auth.users BEFORE INSERT) | **초대받은 사람만 계정이 생긴다** — 슈퍼어드민 화이트리스트 · `@partner.taam.kr` · 메타데이터 `invite_code`(미사용·미만료·초대장 번호/이메일 일치) · 초대장에 적힌 이메일/번호(소셜 첫 로그인). 그 밖은 `SIGNUP_NOT_INVITED` → GoTrue "Database error saving new user". 모드는 `app_config.signup_guard` (`enforce`, 2026-09-15 새벽 전환 · `log` 로 되돌림 가능). 판정 로그 `signup_guard_log`. 문지기 자체 오류는 `error` 로 적고 **막지 않는다** (`sql/signup_guard.sql`) |
@@ -1122,6 +1127,28 @@ platform `edge`)로 남고 토스트에 코드가 붙는다. 같은 빌링키 23
   UPDATE — 슈퍼어드민이 아니면 **어느 행이든** `chargeId · token · currency · payAmount · fx · agencyFee · agencyPay · priceOverride · ovsFixed · eventId · convertedFrom · inviteId · memberUidPending · ownerTransferError · createdBy · paidAt · paymentKey · confirmed_at · confirmed_by · invitePaid · inserted` 변경을 **되돌린다**(예외 아님 · 다른 칸은 그대로 · 앱의 어느 화면도 이 칸을 직접 고치지 않는다 — 앱의 갱신은 읽은 extra_data 에 덧붙이는 모양이라 오히려 낡은 사본이 서버 칸을 지우던 것도 막힌다 · `paidAt`·`confirmed_at` 은 연회비 기준일을 움직였다) ·
   INSERT — **결제 링크·정산 좌석(LINK-·KSK-)은 앱이 직접 못 만든다**(`LINK_SEAT_SERVER_ONLY` — 매장 어드민이 같은 chargeId 로 새 홀드를 넣어 견적이 그 행을 집게 하던 길) · 그 밖의 직접 INSERT 는 연결 칸(`chargeId · token · eventId · convertedFrom · inviteId`)을 지운다(매장 어드민의 초대 홀드 INVH- 는 inviteId 를 둔다 · 표시용 `agencyFee` 는 둔다).
   1·2차 판은 `profiles.role` 로 회원/매장 어드민을 갈랐다 — **파트너 계정은 role 'user' + admin_grants** 라 매장 어드민의 결제 링크 만들기가 「회원 홀드」로 잡혀 chargeId 가 지워지고 결제돼도 좌석이 안 열릴 뻔했고(3차 리뷰 · 배포 전), 매장 어드민은 새 LINK- 홀드를 넣어 되돌림을 비켜 갔다. 회귀 `bash sql/_test/t_ticket_linkfacts.sh`(21건 · `set role authenticated` 로 직접 문장 · security definer 흉내 함수로 서버 경로).
+
+### 파트너(매장 어드민) — 매장 권한은 승인된 것만 · 자기 매장 자료만 (2026-10-29 · `20261029_partner_grants.sql` · Edge `partner-account` · 빌드 `2026.10.29-a`)
+
+「곧 파트너 레스토랑들이 어드민 계정으로 들어온다 — 슈퍼어드민이 승인한 매장에 한해 그 매장 예약 전부와 예약한 회원 정보(예치금·다른 매장 구매 제외)를 보고 검색할 수 있게, 그리고 **모든 어드민 계정은 슈퍼어드민 승인 뒤에만** 티켓 업로드·수정」.
+조사(4 리더 + 비평 · 라이브 진단 `20261029_diag_admin_surface.sql`)에서 드러난 종전 모양: 매장 어드민 판정 함수가 넷(`is_ticket_admin_of` · `is_restaurant_admin_of` · `is_venue_admin_of` · `taam_is_rest_admin`)에 옛 표 둘(`restaurant_admins` · `venue_admins`)이 섞여 있었고 ·
+`profiles` 에 「예약 요청자의 전 칸(잔액 포함)」을 매장 어드민에게 여는 정책 · 글자 role `'admin'` 이면 **어느 매장이든** MAN-/INVH- 를 넣는 INSERT 가드 · `ticket_products` 파트너 정책은 한 번도 안 쓰인 `profiles.admin_rest_id` 를 봐 사실 막혀 있었고 · `_taam_auth_email(uuid)` 가 누구에게나 열려 있었다.
+라이브는 admin_grants 1줄 · restaurant_admins 1 · partner_accounts 0 — **파트너 운영은 이 판부터 시작**이다.
+
+| | 무엇 | 어디 |
+|---|---|---|
+| **권한 상태** | `admin_grants.status` `pending`(발급 기본) → `approved` → `suspended` · 매장(rest_id/venue_id)마다 · 도장 `approved_by/at` `status_set_by/at` 은 트리거만 | 발급 「🔑 파트너 계정 발급 · 권한 승인」(`paOpen` · 「바로 승인」 체크 · 줄마다 승인/정지/대기로 · 계정 없이 권한만 있는 사람도 같은 목록) → RPC `taam_partner_grant_set(user, rest, status, note)`(슈퍼어드민·서버 · 매장 어드민 본인에게 알림 `partner_grant`) · 목록 `taam_partner_grants_list` · 본인 `taam_partner_my_grants` |
+| **판정 하나** | `taam_rest_admin_ok_for(uid, rest)` = approved 줄이 있다 · 옛 이름 7개는 전부 이것으로(라이브 인자 이름을 `pg_get_function_identity_arguments` 로 읽어 보존 — CREATE OR REPLACE 는 인자 이름을 못 바꾼다 · 본문은 `$1`) | 정책식 · RPC · Edge 어디서든 같은 답 |
+| **승인 대기·정지 계정** | 로그인은 되지만 어드민이 아니다 — 앱 `_applyServerAdminGrant` 가 `status` 를 읽어 approved 만 올리고, 기기에 남은 'admin' 은 **내린다**(조회 성공 때만 · `window._taamGrantStatus`) · 부팅마다 다시 본다(`bootAutoLogin` · 종전엔 로그인 때만) · 로그인 문구 `auth.partner_pending/_suspended` 세 벌 | 서버는 정책식이 막으니 화면이 남아 있어도 자료는 안 나온다 |
+| **자기 매장 자료** | RPC 셋 · `taam_partner_reservations(rest, from, to, q, status)`(좌석 홀드 제외 · 회원 구매·초대·결제 링크·정산·수동 · 줄마다 환불(원장·카드·링크)·취소 사유·메모 · 1500건) · `taam_partner_member(rest, uid)`(이름·전화·이메일·등급·국적·통화 + 이 매장 방문/노쇼/취소/예정 + 이 매장 내역·초대 · 이 매장에 예약 없으면 `NOT_RELATED`) · `taam_partner_member_search(rest, q)`(이 매장 회원만 부분 일치 · 다른 회원은 **전화번호 10자리를 끝까지 정확히** 쳤을 때만 — 단골 초대는 되고 명부 훑기는 안 된다) · `taam_partner_names(rest, uids)`(이름 채우기) | 화면 「📋 예약 · 회원 조회」(`prvOpen` · 파트너 메뉴 첫 칸 · 슈퍼어드민 메뉴에서는 매장을 골라 「파트너 시야」) · 캘린더 회원 줄(`tcalShowInviteMember` 매장 어드민 판 = `_prvMemberHtml`) · 초대 회원 검색(`riSearchMembers` 매장 어드민 판) · 이름 채우기 다섯 자리(`_taamNamesMap` — 오늘 · 예약 탭 · 보낸 초대 · 초대 회수 · 캘린더) |
+| **profiles** | 「예약 요청자 전 칸」 정책 삭제 → 매장 어드민은 **자기 행만** · `get_requester_info` 는 그 매장 범위로 다시 · `_taam_auth_email` 본인·슈퍼어드민·서버만 · `taam_user_tier` 등 9 함수 anon 회수 | 예치금 잔액은 서버가 **주지 않는다**(화면이 숨기는 게 아니다) |
+| **티켓 업로드 승인** | 위 「서버가 지키는 것」 표 · 업로드 신청·재승인 → 슈퍼어드민 알림 `ticket_upload_request`(제목 「티켓 수정 — 다시 승인 필요」) · 승인 → 그 매장 approved 어드민에게 `ticket_approved` · 거절(pending 삭제) → `ticket_rejected` · 알림 트리거는 `UPDATE`(열 지정 없음 — BEFORE 가 pending 으로 바꾼 것은 `UPDATE OF status` 가 못 본다) | 앱: 파트너 「승인된 티켓 리스트」가 자기 매장 전부(승인 대기·삭제 신청 배지) · `saveTickets()` 는 매장 어드민이면 자기 매장 것만, 업로드·매진 토글·삭제 신청은 **그 회차 id 만** 보낸다(전체 upsert 는 낡은 로컬 값으로 승인된 회차를 다시 대기로 만든다) · 읽기 정책은 anon 도 평가하니 `taam_tp_visible` 하나로 묶어 anon·authenticated 에 execute |
+| **Edge `partner-account`** | create `approve_now` → approved/pending · revoke = 권한 줄 **suspended**(안 지움) + 로그인 잠금 + 세션 폐기 · restore = 잠금 해제 + 승인됐던 줄 approved · 아니면 pending(`needs_approval`) · 줄이 없으면 pending 으로 다시 · status 칸 없는 옛 서버면 종전 모양 | 승인·정지 자체는 Edge 가 아니라 앱 RPC |
+
+- ⚠ **글자 role `'admin'` 은 더 이상 아무 권한도 아니다** — admin_grants 승인 줄이 없으면 tickets 도 안 보이고 MAN-/INVH- 도 못 넣는다. 매장 어드민을 만드는 길은 「파트너 계정 발급」(또는 회원 계정에 승인 줄)뿐.
+- ⚠ 매장 어드민이 보는 화면에서 **profiles 를 직접 읽지 말 것**(자기 행만 온다 — 이름이 빈 채 조용히 그려진다). 이름·연락처는 `_taamNamesMap(uids)` · 회원 정보는 `taam_partner_member` · 검색은 `taam_partner_member_search`.
+- 배포 순서는 워크플로가 지킨다(SQL → Edge) · 앱은 Vercel. 새 앱 + 옛 서버: status 칸 없음 폴백(줄 있으면 어드민) · RPC 없음 「서버 준비 필요」. 옛 앱 + 새 서버: 매장 어드민의 전체 upsert 가 남의 매장 행에서 거절되고 이름 채우기가 빈칸 — 둘 다 자료 손상은 없다.
+- 회귀: `bash sql/_test/t_partner_grants.sh`(92건 — 상태 전이 · 판정 · 글자 role · INSERT 가드 · 업로드 승인 흐름(upsert · 매진 토글 · 재승인 · 삭제) · 초대 매장 · profiles · RPC 다섯(잔액 없음 · 다른 매장 없음 · 검색 규칙) · 권한 · 재실행) · 스크래치 `pgrant/pg.js`(51건 · 앱) · `pacct/harness.mjs`(13건 · Edge).
 
 ### 초대 결제 보안 — 받는 회원은 금액을 못 바꾸고, 원장 결제가 있어야 「결제됨」·좌석 확정 (2026-10-22 · `20261022_invite_payment_guard.sql` · **라이브 ✅**)
 
