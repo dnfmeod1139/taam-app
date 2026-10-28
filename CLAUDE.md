@@ -1003,6 +1003,7 @@ Apple 은 iPad 와 iPhone **두 기기로 심사**하므로(리뷰 노트에 명
 | 예치금 양수 델타 | `taam_apply_deposit_delta` | 회원은 `ticket_refund` + `purchase_id` 원장으로, **낸 돈 − 이미 환불** 한도 안에서만 (2026-09-13 핫픽스) |
 | 원장 INSERT | RLS `deposit_tx_insert_server` | **회원은 `deposit_transactions` 를 직접 못 쓴다** — 슈퍼어드민만. 회원 원장은 RPC 가 쓴다. Edge(service_role)·SQL Editor 도 같은 RPC 를 부른다. 원장을 넘겼는데 잔액이 모자라면 `LEDGER_INSUFFICIENT` (2026-09-14, `sql/ledger_close_member_insert.sql`) |
 | 원장 유형 | `trg_taam_guard_ledger_change_type` | **회원 세션은 `admin_*`(admin_grant·admin_deduct) 유형의 원장 줄을 못 쓴다** — `taam_apply_deposit_delta` 가 회원 호출의 음수 항목 change_type 을 안 봐서 회원이 자기 원장에 「관리자 차감」 모양의 줄을 쓸 수 있었다(라벨 위조 · 2026-09-14 부터). BEFORE INSERT · 로그인 호출자가 슈퍼어드민이 아니면 `LEDGER_TYPE_FORBIDDEN`(42501) → RPC 전체 롤백. 서버(auth.uid() null)·슈퍼어드민은 그대로. RPC 본문은 교체하지 않았다(라이브 핵심 함수) (2026-10-18, `20261018_ledger_admin_type_guard.sql` · 회귀 `t_ledger_type_guard.sh` 11건) |
+| 좌석 행 결제 링크·초대 연결 칸 | `trg_taam_guard_ticket_linkfacts` | 회원 주인은 자기 행의 `chargeId`·`agencyFee`·`agencyPay`·`inviteId` 등을 못 바꾼다(되돌림) · 회원 INSERT 의 연결 칸은 지움 — 링크 환불 견적을 전액으로 만들던 길 (2026-10-28, `20261028_ticket_link_facts_guard.sql`) |
 | `profiles.is_test` | `trg_taam_guard_is_test` | 테스트 계정 숨김 스위치 — **회원 세션은 되돌림**(감사 칸 `is_test_set_by/at` 는 트리거만). 슈퍼어드민·서버만 (2026-10-19, `20261019_test_accounts.sql` · 위 「테스트 계정은 회원 목록에서 숨긴다」) |
 | 알림 payload 크기 | `trg_taam_notif_payload_cap` | 회원 세션이 쓰는 notifications.payload — 문자열 500자 · 전체 16KB(넘으면 짧은 스칼라만). 서버·슈퍼어드민은 그대로 (2026-10-25, `20261025_notif_payload_cap.sql` · 위 「슈퍼어드민 알림 → 그 내역 화면」) |
 | 푸시 발송 | `send-push` Edge Function | 회원은 자기에게만. 어드민 상향 통지만 예외 |
@@ -1097,7 +1098,18 @@ platform `edge`)로 남고 토스트에 코드가 붙는다. 같은 빌링키 23
   경고: 토스에 앱 기록 없는 취소(상점관리자 직접) · 앱은 취소인데 토스엔 남음 · 자동 취소 실패(`*_refund_failed`) · 연결 티켓 없음 · 토스 조회 실패. 상세의 「토스 취소」 줄은 거래키로 출처를 가른다(앱 「토스 승인취소」 · 자동 취소 · 결제 링크 「환불」 · 그 밖 = 상점관리자).
 - **예상 입금일**: 정산 줄이 있으면 그 지급일(확정 · 지급액 · 수수료 · 취소분) · 없으면 **같은 MID 의 최근 정산에서 「승인일 → 지급일」 영업일 수의 최빈값**으로 ≈(정산 주기는 계약마다 달라 API 가 안 알려 준다 · 은행 휴일 2026~2027 근사 `_PMX_HOL`) · 매입 전 전액 취소는 「정산 없음」. 정산 줄은 승인 다음 날부터·라이브 키에서만 생긴다.
 - 원화는 **기록된 값 그대로**(외화 취소는 기록된 원화를 비율로) — 오늘 환율로 다시 바꾸지 않는다. 버튼: 토스 영수증 · 이 결제 토스 새로고침 · (환불 대기) 「💳 토스 승인취소 실행」(`tkCardRefundViaToss`) / 「완료 표시」(`tkMarkCardRefundDone`) · 결제 링크 목록에서 · 회원 원장 · 예치금↔카드 쪽 보기(`_pmxGo`).
-- 회귀: `bash sql/_test/t_payment_ledger.sh`(67건 — 권한 · 연결 · 예치금 묶음 · 분류 · secret 없음 · KST 경계 · 테스트 제외 · 캐시 · 재실행) · 스크래치 `tpi/harness.mjs`(24건 · Edge — 권한 · ref 검증 · 결제키는 우리 표에서 · 키 짐작·다음 키 · 고른 칸 · 정산 범위·묶음 · 오류 때 옛 값 유지) · `pmx/pmx.js`(47건 · 화면).
+- **적대 리뷰(배포 전 · 3 렌즈 → 반영).** ① **앱이 처리한 뒤의 낡은 토스 캐시가 「토스에는 남아 있다」 경보로 두 번째 환불을 부를 뻔했다** — 앱 처리 시각(`_pmxLastApp`: app_cancels · 완료 표시 · 링크 환불)보다 먼저 읽은 토스 정보는 믿지 않고(앱 기록과 큰 쪽) 다시 읽을 대상으로 · 「승인취소/완료 표시」 뒤 언제나 그 결제를 다시 읽고 조회 중이면 줄을 세운다(`tossQ` · 버리지 않는다) · 두 번 눌러도 한 번(`actBusy`).
+  ② 정산 조회 창이 승인일 +35일뿐이라 D-31 취소의 정산 줄(soldDate = 취소일)을 놓치고, 한 건 새로고침이 넓게 읽은 줄을 지웠다 → Edge 가 **취소일마다 창**을 더하고 캐시의 옛 줄과 거래키로 합친다 · 상한(키마다 24번)·캐시 읽기 실패면 빈 배열을 쓰지 않고 `SCAN_TRUNCATED`/`CACHE_READ_FAILED`.
+  ③ 같은 홀드에 다시 낸 결제 — 자동 취소된 앞 시도를 다음 결제의 티켓에 잇지 않는다(그 티켓의 `extra_data.order_id` 가 다른 주문이면) · 예치금 묶음 열쇠에 주문번호(`p:회원|구매 id|주문`) · 환불 줄은 주문으로 거른다(`_pmxRf`).
+  ④ 정산 청구의 어드민 uid(「구매자 불러오기」)는 회원으로 안 본다(role user 만) · 남의 초대 id 를 적은 원장 줄에 그 초대가 안 붙는다 · 공개 로그에 건수 안 찍는다 · 도우미 함수 authenticated 회수.
+  ⑤ 대기 금액(회원 요청액)은 카드 결제액으로 자르고 넘으면 ⚠ · mark_failed 뒤 「완료 표시」가 이중으로 안 세지게(같은 구매의 app_cancels 가 있으면 대기 완료는 안 센다) · 매입 전 전액 취소는 「정산 없음」 · 초대 0원 취소 경보 완화 · 시간 순 정렬 · 번호 검색(010-…/+82) · 바깥 끌기로 안 닫힘 · Esc · 잘못된 기간에 옛 목록 지움.
+  옛 구멍(보안 렌즈): 아래 「회원 좌석 행의 결제 링크 연결 칸」.
+- 회귀: `bash sql/_test/t_payment_ledger.sh`(82건 — 권한 · 연결 · 예치금 묶음 · 분류 · secret 없음 · KST 경계 · 테스트 제외 · 캐시 · 같은 홀드 두 시도 · 정산 청구 어드민 uid · 남의 초대 id · 재실행) · 스크래치 `tpi/harness.mjs`(29건 · Edge — 권한 · ref 검증 · 결제키는 우리 표에서 · 키 짐작·다음 키 · 고른 칸 · 정산 범위·묶음 · 취소일 창 · 옛 줄 합침 · 상한 · 캐시 읽기 실패) · `pmx/pmx.js`(47건) · `pmx/pmx2.js`(16건 · 리뷰 반영).
+
+### 회원 좌석 행의 결제 링크 연결 칸 — 주인도 못 바꾼다 (2026-10-28 · `20261028_ticket_link_facts_guard.sql`)
+
+결제 사실 칸 가드(`20261022_card_refund_quote2.sql` A)는 `linkInvite`·`memberUid` 는 지켰지만 **`chargeId`·`agencyFee`·`agencyPay` 는 안 지켰다** — 결제 링크로 회원 소유가 된 LINK- 좌석(10-18 · 10-23 연결)의 주인이 `chargeId` 를 바꾸면 링크 환불 견적(`taam_link_invite_refund_quote`)이 좌석을 못 찾아 **D-1 에도 전액 환불** 견적이 되고 환불 트리거가 좌석을 못 접었다(좌석이 산다) · `agencyPay` 를 0 으로 바꾸면 환불 불가 대행비까지 돌아갔다(보안 렌즈 재현 · 실제 행 가드 위).
+→ `trg_taam_guard_ticket_linkfacts`(BEFORE INSERT/UPDATE): 로그인한 **회원**이 **자기 행**(전·후 소유자가 자기)을 고칠 때 `chargeId · token · currency · payAmount · fx · agencyFee · agencyPay · priceOverride · ovsFixed · eventId · convertedFrom · inviteId · memberUidPending · ownerTransferError · createdBy` 변경을 **되돌린다**(예외 아님 · 취소 등 다른 칸은 그대로) · 회원 INSERT(홀드)에서 연결 칸(`chargeId · token · eventId · convertedFrom · inviteId`)을 지운다(표시용 `agencyFee` 는 둔다). 서버·슈퍼어드민·매장 어드민·소유자가 바뀌는 갱신(초대 확정·링크 결제 뒤 이전)은 그대로. 회귀 `bash sql/_test/t_ticket_linkfacts.sh`(15건).
 
 ### 초대 결제 보안 — 받는 회원은 금액을 못 바꾸고, 원장 결제가 있어야 「결제됨」·좌석 확정 (2026-10-22 · `20261022_invite_payment_guard.sql` · **라이브 ✅**)
 
