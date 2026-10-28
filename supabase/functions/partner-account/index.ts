@@ -22,6 +22,10 @@
 //   않고 **suspended 로 바꾸고** 로그인을 잠근다 · 되살리기(restore)는 잠금을 풀고 한 번 승인됐던 줄은 approved,
 //   아니면 pending 으로. status 칸이 없는 옛 서버(마이그레이션 전)에서는 종전 모양(insert · delete)으로 내려간다.
 //   승인·정지 자체는 앱이 RPC `taam_partner_grant_set` 으로 한다(슈퍼어드민 세션) — 여기 없다.
+//   ⚠ 적대 리뷰(2026-10-29): 「옛 서버」 판정을 오류 **메시지의 'status' 글자**로 하면 전송 오류(Deno fetch 메시지에 URL 이 들어가 ?select=…status… 가 섞인다)를
+//     옛 서버로 오판해 반쪽 상태를 성공으로 보고했다 → PostgREST 오류 **코드**로만 판정한다(없는 칸 select 42703 · 모르는 키 insert/update PGRST204).
+//     되살리기는 정지 직전 상태(prev_status)로 돌리고(옛 「approved_at 있으면 approved」는 「대기로」 내린 권한을 되살렸다) · 권한 → 잠금 해제 → 장부 순서 ·
+//     감사 칸(approved_by · status_set_by)은 서버 호출이 보낸 값을 트리거가 받는다.
 // ════════════════════════════════════════════════════════════
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
@@ -56,6 +60,11 @@ function makePassword(): string {
 
 // 아이디 규칙 — 소문자·숫자·하이픈, 3~32자. 이메일 앞부분으로 쓰이므로 좁게 잡는다.
 const ID_RE = /^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$/;
+
+// 「status 칸이 없는 옛 서버(마이그레이션 전)」 — PostgREST 오류 코드로만 판정한다. 메시지 글자로 하면 전송 오류도 옛 서버로 읽힌다(리뷰 재현).
+//   42703 = 없는 칸을 select/update 에 적음 · PGRST204 = insert/update payload 에 표에 없는 키
+// deno-lint-ignore no-explicit-any
+const noStatusCol = (e: any): boolean => !!e && (e.code === '42703' || e.code === 'PGRST204');
 
 async function handle(req: Request): Promise<Response> {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
@@ -137,13 +146,16 @@ async function handle(req: Request): Promise<Response> {
           .update({ single_device_exempt: true }).eq('id', uid);
       }
 
-      // 권한 줄 — 승인 상태와 함께. status 칸이 없는 옛 서버면 칸 없이 다시 넣는다(그 서버에선 줄 = 승인).
+      // 권한 줄 — 승인 상태와 함께(감사 칸은 서버 호출이 보낸 값을 트리거가 받는다). status 칸이 없는 옛 서버면 칸 없이 다시 넣는다(그 서버에선 줄 = 승인).
       const approveNow = body.approve_now === true;
+      let legacy = false;
       let gErr = (await admin.from('admin_grants').insert({
         user_id: uid, rest_id: restId, label: label || null, granted_by: caller.id,
         status: approveNow ? 'approved' : 'pending',
+        status_set_by: caller.id, approved_by: approveNow ? caller.id : null,
       })).error;
-      if (gErr && /status/i.test(gErr.message || '')) {
+      if (noStatusCol(gErr)) {
+        legacy = true;
         gErr = (await admin.from('admin_grants').insert({
           user_id: uid, rest_id: restId, label: label || null, granted_by: caller.id,
         })).error;
@@ -157,8 +169,9 @@ async function handle(req: Request): Promise<Response> {
       if (aErr) return await undo('장부에 적지 못했습니다: ' + aErr.message);
 
       // 비밀번호가 나가는 유일한 순간이다.
+      // 옛 서버에선 줄 = 승인이라 바로 어드민이다 — 응답도 그렇게 말한다(「승인 대기」라고 거짓 안내하지 않게)
       return json({ ok: true, login_id: loginId, password, domain: PARTNER_DOMAIN,
-                    grant_status: approveNow ? 'approved' : 'pending' });
+                    grant_status: legacy ? 'approved' : (approveNow ? 'approved' : 'pending'), legacy_server: legacy });
     }
 
     // ── 비밀번호 재설정 ────────────────────────────────────────
@@ -197,10 +210,10 @@ async function handle(req: Request): Promise<Response> {
       //   순서: 권한 → 로그인 잠금 → 세션 → 장부(마지막). 반쪽 상태면 장부를 안 바꾸고 실패로 돌려준다.
       let needsApproval = false;
       if (off) {
-        // 🆕 2026-10-29 권한 줄을 지우지 않고 **정지(suspended)** 로 — 「무엇을 언제 승인했었나」가 남는다.
-        //   status 칸이 없는 옛 서버면 종전처럼 지운다.
-        let dErr = (await admin.from('admin_grants').update({ status: 'suspended' }).eq('user_id', row.user_id)).error;
-        if (dErr && /status/i.test(dErr.message || '')) {
+        // 🆕 2026-10-29 권한 줄을 지우지 않고 **정지(suspended)** 로 — 「무엇을 언제 승인했었나」가 남고, 트리거가 prev_status 에 직전 상태를 적는다(되살리기가 그리로 돌아간다).
+        //   status 칸이 없는 옛 서버(코드 42703/PGRST204)면 종전처럼 지운다.
+        let dErr = (await admin.from('admin_grants').update({ status: 'suspended', status_set_by: caller.id }).eq('user_id', row.user_id)).error;
+        if (noStatusCol(dErr)) {
           dErr = (await admin.from('admin_grants').delete().eq('user_id', row.user_id)).error;
         }
         if (dErr) return json({ ok: false, error: '권한을 떼지 못했습니다: ' + dErr.message });
@@ -210,16 +223,15 @@ async function handle(req: Request): Promise<Response> {
         const { error: kErr } = await admin.rpc('taam_kill_sessions', { p_uid: row.user_id });
         if (kErr) console.error('[partner-account] 세션 폐기 실패', kErr.message);
       } else {
-        const { error: uErr } = await admin.auth.admin.updateUserById(row.user_id, { ban_duration: 'none' });
-        if (uErr) return json({ ok: false, error: '계정 잠금을 풀지 못했습니다: ' + uErr.message });
-        // 🆕 2026-10-29 정지된 줄을 되살린다 — 한 번 승인됐던 줄(approved_at 있음)은 approved, 아니면 pending(승인은 사람이).
+        // 🆕 2026-10-29 되살리기 — **권한 먼저**, 잠금 해제는 그 뒤(권한 복구가 실패하면 계정은 잠긴 채 남아 「실패」와 상태가 일치한다 · revoke 와 같은 방향).
+        //   정지된 줄은 정지 직전 상태(prev_status)로: approved 였으면 approved · 아니면 pending(승인은 사람이).
         const { data: gs, error: gqErr } = await admin.from('admin_grants')
-          .select('id, status, approved_at').eq('user_id', row.user_id);
-        if (gqErr && !/status|approved_at/i.test(gqErr.message || '')) {
+          .select('id, status, prev_status, approved_at').eq('user_id', row.user_id);
+        if (gqErr && !noStatusCol(gqErr)) {
           return json({ ok: false, error: '권한을 읽지 못했습니다: ' + gqErr.message });
         }
         if (gqErr) {
-          // 옛 서버(status 칸 없음) — 종전 모양: 줄이 없으면 하나 넣는다
+          // 옛 서버(status 칸 없음) — 종전 모양: 줄이 없으면 하나 넣는다(그 서버에선 줄 = 승인)
           const { error: iErr } = await admin.from('admin_grants').insert({
             user_id: row.user_id, rest_id: row.rest_id, label: row.label, granted_by: caller.id,
           });
@@ -227,23 +239,27 @@ async function handle(req: Request): Promise<Response> {
             return json({ ok: false, error: '권한을 붙이지 못했습니다: ' + iErr.message });
           }
         } else if (!gs || gs.length === 0) {
-          // 줄이 없다(옛 해지가 지웠다) — pending 으로 다시 붙이고 승인은 화면에서
+          // 줄이 없다(옛 해지가 지웠다) — pending 으로 다시 붙이고 승인은 화면에서. 새 서버에서 unique 위반은 모순이라 삼키지 않는다.
           const { error: iErr } = await admin.from('admin_grants').insert({
-            user_id: row.user_id, rest_id: row.rest_id, label: row.label, granted_by: caller.id, status: 'pending',
+            user_id: row.user_id, rest_id: row.rest_id, label: row.label, granted_by: caller.id, status: 'pending', status_set_by: caller.id,
           });
-          if (iErr && !/duplicate|unique/i.test(iErr.message)) {
-            return json({ ok: false, error: '권한을 붙이지 못했습니다: ' + iErr.message });
-          }
+          if (iErr) return json({ ok: false, error: '권한을 붙이지 못했습니다: ' + iErr.message });
           needsApproval = true;
         } else {
+          const after: string[] = [];
           for (const g of gs) {
-            if (g.status !== 'suspended') continue;
-            const next = g.approved_at ? 'approved' : 'pending';
-            if (next === 'pending') needsApproval = true;
-            const { error: sErr } = await admin.from('admin_grants').update({ status: next }).eq('id', g.id);
+            if (g.status !== 'suspended') { after.push(g.status); continue; }
+            const next = g.prev_status === 'approved' ? 'approved' : 'pending';
+            const { error: sErr } = await admin.from('admin_grants')
+              .update({ status: next, status_set_by: caller.id, approved_by: next === 'approved' ? caller.id : null }).eq('id', g.id);
             if (sErr) return json({ ok: false, error: '권한을 되살리지 못했습니다: ' + sErr.message });
+            after.push(next);
           }
+          // 어드민이 아닌 채 되살려지면(approved 줄이 하나도 없음) 승인 안내 — 처리 **뒤** 상태로 센다
+          needsApproval = !after.some((st) => st === 'approved');
         }
+        const { error: uErr } = await admin.auth.admin.updateUserById(row.user_id, { ban_duration: 'none' });
+        if (uErr) return json({ ok: false, error: '계정 잠금을 풀지 못했습니다: ' + uErr.message });
       }
       const { error: aErr } = await admin.from('partner_accounts')
         .update({ disabled: off }).eq('login_id', loginId);

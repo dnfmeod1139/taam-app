@@ -44,7 +44,7 @@ create table public.venue_admins(id uuid primary key default gen_random_uuid(), 
 create table public.partner_accounts(login_id text primary key, user_id uuid, rest_id text, label text, issued_at timestamptz default now(), last_login_at timestamptz, disabled boolean default false);
 create table public.notifications(id uuid primary key default gen_random_uuid(), user_id uuid, type text, title text, body text, url text, payload jsonb, created_at timestamptz default now());
 create table public.ticket_products(id text primary key, rest_id uuid, rest_name text, status text, date text, time text, total_pax int, price int, meal_fee int, agency_fee int, wine_min int,
-  ticket_type text, uploaded_by text, uploader_rest_id text, auto_soldout boolean default false, tile_photo text, updated_at timestamptz default now());
+  ticket_type text, uploaded_by text, uploader_rest_id text, auto_soldout boolean default false, tile_photo text, repurchase_open boolean default false, updated_at timestamptz default now());
 alter table public.ticket_products enable row level security;
 create policy ticket_products_read on public.ticket_products for select to public using (true);
 create policy ticket_products_superadmin_all on public.ticket_products for all to authenticated using (public.is_superadmin()) with check (public.is_superadmin());
@@ -148,6 +148,49 @@ insert into public.tickets(user_id,restaurant_id,restaurant_name,ticket_product_
  ('$M2','$R2','사이토','tp2','2026.11.05','19:00',1,'active','PAYH-tp2_2',1000000,'회원이','','{}','2026-10-07T00:00:00Z',null),
  ('$PT','$R1','메이노','tp1','2026.11.03','19:00',2,'manual','MAN-1',0,'손님','010-9999-8888','{"manualEntry":true}','2026-10-08T00:00:00Z',null);
 insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata) values ('$M1','general','ticket_refund',550000,'{"purchase_id":"PAYH-tp1_c","cancel_refund":true}'),('$M1','general','ticket_refund',99,'{"purchase_id":"PAYH-tp2_1"}');
+-- 라이브 매진 동기화 모양(sql/seat_soldout_sync.sql 요지): tickets 가 바뀌면 그 회차의 점유를 세어 ticket_products.status 를 soldout/active 로 — **회원 세션 안에서 중첩으로 돈다**
+create or replace function public.sync_ticket_soldout() returns trigger language plpgsql security definer set search_path = public as \$\$
+declare v_pid text; v_cap int; v_occ int; v_st text;
+begin
+  v_pid := coalesce(new.ticket_product_id, old.ticket_product_id); if v_pid is null then return null; end if;
+  select total_pax, status into v_cap, v_st from public.ticket_products where id = v_pid;
+  if v_cap is null then return null; end if;
+  select coalesce(sum(party_size), 0) into v_occ from public.tickets where ticket_product_id = v_pid and lower(coalesce(status,'')) in ('hold','active','manual','used','pending_confirm');
+  if v_occ >= v_cap and v_st = 'active' then update public.ticket_products set status = 'soldout' where id = v_pid;
+  elsif v_occ < v_cap and v_st = 'soldout' then update public.ticket_products set status = 'active' where id = v_pid; end if;
+  return null;
+end \$\$;
+create trigger trg_sync_ticket_soldout after insert or update or delete on public.tickets for each row execute function public.sync_ticket_soldout();
+create table public._rl(k text); create or replace function public.taam_rate_hit(p_key text, p_limit integer, p_window interval) returns boolean language plpgsql as \$\$
+begin insert into public._rl(k) values (p_key); return (select count(*) from public._rl where k = p_key) <= p_limit; end \$\$;
+-- J 대상 — 라이브 본문과 같은 모양의 직접 조회를 품은 함수 둘(가짜 · 매장 id 만 받는다)
+create or replace function public.taam_ksk_seat_rows(p_rest text) returns text language plpgsql security definer set search_path = public as \$\$
+declare v_uid uuid := auth.uid(); v_ev record;
+begin
+  select p_rest as venue_id into v_ev;
+  if not (public._taam_uid_is_super() or exists (
+        select 1 from public.admin_grants g where g.user_id = v_uid
+           and (g.rest_id::text = v_ev.venue_id or g.venue_id::text = v_ev.venue_id))) then
+    raise exception '이 매장의 어드민만 볼 수 있습니다' using errcode = '42501';
+  end if;
+  return 'ok';
+end \$\$;
+create or replace function public.taam_link_invite_create(p_ticket_id text) returns text language plpgsql security definer set search_path = public as \$\$
+declare v_uid uuid := auth.uid(); v_super boolean := public._taam_uid_is_super(); v_tp record;
+begin
+  select * into v_tp from public.ticket_products where id::text = p_ticket_id;
+  if not found then raise exception 'TICKET_NOT_FOUND' using errcode = 'P0002'; end if;
+  if not v_super and not exists (
+       select 1 from public.admin_grants g where g.user_id = v_uid
+          and (g.rest_id::text = v_tp.rest_id::text or g.venue_id::text = v_tp.rest_id::text)) then
+    raise exception '권한이 없습니다' using errcode = '42501';
+  end if;
+  return 'ok';
+end \$\$;
+grant execute on function public.taam_ksk_seat_rows(text), public.taam_link_invite_create(text) to authenticated;
+create schema storage; create table storage.objects(bucket_id text, name text, owner uuid); alter table storage.objects enable row level security;
+grant usage on schema storage to authenticated; grant insert, select on storage.objects to authenticated;
+create policy restaurant_videos_partner_insert on storage.objects for insert to authenticated with check (bucket_id = 'restaurant-videos' and (public._taam_uid_is_super() or exists (select 1 from public.admin_grants g where g.user_id = auth.uid())));
 SQL
 out=$($P -f "$MIG" 2>&1)
 ok(){ if [ "$2" = "$3" ]; then echo "✅ $1"; else echo "❌ $1 — 기대 [$3] 실제 [$2]"; FAIL=1; fi; }
@@ -193,18 +236,55 @@ AS "$PT" "update public.ticket_products set status='soldout', auto_soldout=false
 ok "파트너 — 매진 토글은 그대로(승인 유지)" "$(Q "select status || '/' || (approved_at is not null)::text from public.ticket_products where id='tp4'")" "soldout/true"
 AS "$PT" "update public.ticket_products set status='active' where id='tp4';" >/dev/null
 AS "$PT" "update public.ticket_products set price=950000, updated_at=now() where id='tp4';" >/dev/null
-ok "파트너 — 승인된 회차 내용 수정 → 다시 승인 대기 · 도장 지움" "$(Q "select status || '/' || (approved_at is null)::text from public.ticket_products where id='tp4'")" "pending/true"
-ok "재승인 알림(티켓 수정)" "$(Q "select count(*) from public.notifications where user_id='$SU' and title like '티켓 수정%' and payload->>'ticket_id'='tp4'")" "1"
+ok "파트너 — 승인된 회차 내용 수정 → **status·값은 그대로** · 바뀐 칸은 pending_edit 큐에 · 도장 유지" "$(Q "select status || '/' || price || '/' || (approved_at is not null)::text || '/' || coalesce(pending_edit::text,'-') from public.ticket_products where id='tp4'")" "active/900000/true/{\"price\": 950000}"
+ok "회원에게는 그 회차가 그대로 보인다(종전 판은 pending 이 되어 사라졌다)" "$(AS "$M1" "select count(*) from public.ticket_products where id='tp4'")" "1"
+ok "수정 신청 알림 → 슈퍼어드민(payload edit=true)" "$(Q "select count(*) from public.notifications where user_id='$SU' and title like '티켓 수정 신청%' and payload->>'ticket_id'='tp4' and payload->>'edit'='true'")" "1"
+AS "$PT" "update public.ticket_products set wine_min=50000, updated_at=now() where id='tp4';" >/dev/null
+ok "두 번째 수정은 큐에 합쳐진다" "$(Q "select pending_edit::text from public.ticket_products where id='tp4'")" "{\"price\": 950000, \"wine_min\": 50000}"
+r=$(AS "$PT" "update public.ticket_products set repurchase_open=true, review_note='lol' where id='tp4';"); ok "파트너 — 재구매 해제·검토 메모는 되돌린다(큐도 아님)" "$(Q "select coalesce(repurchase_open,false)::text || '/' || coalesce(review_note,'-') || '/' || (pending_edit = '{\"price\": 950000, \"wine_min\": 50000}'::jsonb)::text from public.ticket_products where id='tp4'")" "false/-/true"
+ok "파트너 — 승인된 회차(큐 있음) DELETE 는 0행" "$(AS "$PT" "delete from public.ticket_products where id='tp4' returning id;" | grep -c tp4)" "0"
+has "파트너 — 수정 승인 RPC 는 못 부른다" "$(AS "$PT" "select public.taam_ticket_edit_review('tp4', true)")" "FORBIDDEN"
+AS "$SU" "select public.taam_ticket_edit_review('tp4', true, '확인');" >/dev/null
+ok "슈퍼어드민 「수정 승인」 → 값 반영 · 큐 비움 · 도장 갱신" "$(Q "select price || '/' || wine_min || '/' || coalesce(pending_edit::text,'-') || '/' || (approved_by='$SU')::text from public.ticket_products where id='tp4'")" "950000/50000/-/true"
+ok "수정 승인 알림 → 파트너(fields)" "$(Q "select count(*) from public.notifications where user_id='$PT' and type='ticket_edit_approved' and payload->>'ticket_id'='tp4' and payload->'fields' ? 'price'")" "1"
+AS "$PT" "update public.ticket_products set price=999000 where id='tp4';" >/dev/null
+AS "$SU" "select public.taam_ticket_edit_review('tp4', false, '가격 근거 필요');" >/dev/null
+ok "슈퍼어드민 「반려」 → 큐 비움 · 값 그대로 · 메모" "$(Q "select price || '/' || coalesce(pending_edit::text,'-') || '/' || review_note from public.ticket_products where id='tp4'")" "950000/-/가격 근거 필요"
+ok "반려 알림 → 파트너" "$(Q "select count(*) from public.notifications where user_id='$PT' and type='ticket_edit_rejected' and payload->>'ticket_id'='tp4'")" "1"
+AS "$PT" "update public.ticket_products set price=1000000 where id='tp4';" >/dev/null
+AS "$PT" "update public.ticket_products set pending_edit=null where id='tp4';" >/dev/null
+ok "파트너가 자기 신청을 거둔다(pending_edit=null)" "$(Q "select coalesce(pending_edit::text,'-') || '/' || price from public.ticket_products where id='tp4'")" "-/950000"
+AS "$PT" "insert into public.ticket_products(id,rest_id,rest_name,status,date,time,total_pax,price,meal_fee,agency_fee,wine_min) values ('tp4','$R1','메이노','active','2026.12.10','19:00',6,950000,0,0,50000) on conflict (id) do update set meal_fee=excluded.meal_fee, agency_fee=excluded.agency_fee, wine_min=excluded.wine_min, status=excluded.status, updated_at=now();" >/dev/null
+ok "앱 모양의 전체 upsert(null → 0 · 같은 값) 는 수정으로 안 친다" "$(Q "select coalesce(pending_edit::text,'-') from public.ticket_products where id='tp4'")" "-"
 r=$(AS "$PT" "insert into public.ticket_products(id,rest_id,rest_name,status,date,time,total_pax,price) values ('tp1','$R1','메이노','active','2026.11.03','19:00',8,850000) on conflict (id) do update set status=excluded.status, updated_at=now();"); ok "파트너 upsert(있는 행 · 값 같음) — 통과 · 상태 유지" "$(echo "$r" | grep -c ERROR)/$(Q "select status from public.ticket_products where id='tp1'")" "0/active"
 r=$(AS "$PT" "update public.ticket_products set status='deleteRequest' where id='tp1';"); ok "파트너 — 삭제 신청 OK" "$(Q "select status from public.ticket_products where id='tp1'")" "deleteRequest"
 AS "$PT" "update public.ticket_products set status='active' where id='tp1';" >/dev/null
 ok "파트너 — 승인된 회차 DELETE 는 0행" "$(AS "$PT" "delete from public.ticket_products where id='tp1' returning id;" | grep -c tp1)" "0"
 ok "파트너 — 자기 pending 회차 DELETE OK" "$(AS "$PT" "delete from public.ticket_products where id='tp3' returning id;" | grep -c tp3)" "1"
-ok "회원 — 승인 대기 회차 안 보임(tp4 pending)" "$(AS "$M1" "select count(*) from public.ticket_products where id='tp4'")" "0"
-ok "파트너 — 자기 매장 승인 대기 회차 보임" "$(AS "$PT" "select count(*) from public.ticket_products where id='tp4'")" "1"
+AS "$PT" "insert into public.ticket_products(id,rest_id,rest_name,status,date,time,total_pax,price) values ('tp7p','$R1','메이노','pending','2026.12.21','19:00',6,900000);" >/dev/null
+ok "회원 — 승인 대기 회차 안 보임(tp7p pending)" "$(AS "$M1" "select count(*) from public.ticket_products where id='tp7p'")" "0"
+ok "파트너 — 자기 매장 승인 대기 회차 보임" "$(AS "$PT" "select count(*) from public.ticket_products where id='tp7p'")" "1"
 ok "anon — 승인 대기 회차 안 보임" "$($P -c "set role anon; select count(*) from public.ticket_products where status='pending';" 2>&1 | tail -1)" "0"
-AS "$SU" "delete from public.ticket_products where id='tp4';" >/dev/null
-ok "슈퍼어드민 거절(삭제) → 파트너 알림" "$(Q "select count(*) from public.notifications where user_id='$PT' and type='ticket_rejected' and payload->>'ticket_id'='tp4'")" "1"
+Q "delete from public.ticket_products where id='tp7p';" >/dev/null
+AS "$PT" "insert into public.ticket_products(id,rest_id,rest_name,status,date,time,total_pax,price) values ('tp8','$R1','메이노','pending','2026.12.20','19:00',6,900000);" >/dev/null
+AS "$SU" "delete from public.ticket_products where id='tp8';" >/dev/null
+ok "슈퍼어드민 거절(pending 삭제) → 파트너 알림" "$(Q "select count(*) from public.notifications where user_id='$PT' and type='ticket_rejected' and payload->>'ticket_id'='tp8'")" "1"
+# ── 중첩 경로(매진 동기화) — 1차 판의 치명 회귀
+Q "insert into public.ticket_products(id,rest_id,rest_name,status,date,time,total_pax,price) values ('tpS','$R1','메이노','active','2026.11.20','19:00',2,100000);" >/dev/null
+r=$(AS "$M2" "insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_date,party_size,status,purchase_id,price) values ('$M2','$R1','tpS','2026.11.20',2,'hold','PAYH-tpS_1',200000);")
+ok "회원 — 마지막 좌석 홀드가 들어가고 매진 동기화가 회차를 soldout 으로(중첩 UPDATE 통과)" "$(echo "$r" | grep -c ERROR)/$(Q "select status from public.ticket_products where id='tpS'")" "0/soldout"
+Q "update public.tickets set status='active' where purchase_id='PAYH-tpS_1';" >/dev/null
+r=$(AS "$M2" "update public.tickets set status='cancelled' where purchase_id='PAYH-tpS_1';")
+ok "회원 — soldout 회차의 자기 티켓 취소 → 회차 active 로(중첩 UPDATE 통과)" "$(echo "$r" | grep -c ERROR)/$(Q "select status from public.ticket_products where id='tpS'")" "0/active"
+Q "update public.ticket_products set status='pending', approved_at=null where id='tpS';" >/dev/null
+r=$(AS "$PT" "insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_date,party_size,status,purchase_id,price) values ('$PT','$R1','tpS','2026.11.20',2,'manual','MAN-tpS',0);"); has "파트너 — 승인 대기 회차에 수동 좌석 → TICKET_NOT_APPROVED(매진 동기화로 노출되던 길)" "$r" "TICKET_NOT_APPROVED"
+r=$(AS "$PT" "insert into public.reservation_invites(host_user_id,invitee_user_id,restaurant_id,visit_date,pax,total_amount,ticket_product_id) values ('$PT','$M1','$R1','2026.11.20',1,100000,'tpS');"); has "파트너 — 승인 대기 회차에 초대 → TICKET_NOT_APPROVED" "$r" "TICKET_NOT_APPROVED"
+Q "update public.tickets set status='active' where purchase_id='PAYH-tpS_1'; update public.ticket_products set status='pending' where id='tpS';" >/dev/null
+Q "set taam.uid=''; select 1;" >/dev/null
+r=$(AS "$M2" "update public.tickets set party_size=2 where purchase_id='PAYH-tpS_1';")
+ok "승인 대기 회차는 중첩 동기화가 와도 pending 을 지킨다(soldout 으로 안 바뀜)" "$(Q "select status from public.ticket_products where id='tpS'")" "pending"
+Q "update public.ticket_products set status='active' where id='tpS';" >/dev/null
+Q "delete from public.tickets where purchase_id='PAYH-tpS_1'; delete from public.ticket_products where id='tpS';" >/dev/null   # 뒤 검사(기간·관계)에 안 남게
 # E 초대
 r=$(AS "$PT" "insert into public.reservation_invites(host_user_id,invitee_user_id,restaurant_id,visit_date,pax,total_amount,ticket_product_id) values ('$PT','$M1','$R1','2026.11.05',1,1,'tp2');"); has "초대 — 다른 매장 회차 연결 거절" "$r" "TICKET_REST_MISMATCH"
 r=$(AS "$PT" "insert into public.reservation_invites(host_user_id,invitee_user_id,restaurant_id,visit_date,pax,total_amount,ticket_product_id) values ('$PT','$M1','$R1','2026.11.03',1,850000,'tp1');"); ok "초대 — 자기 매장 회차 OK" "$(echo "$r" | grep -c ERROR)" "0"
@@ -236,11 +316,21 @@ no "회원 — 예치금 잔액 없음" "$mb" 'balance'
 no "회원 — 다른 매장 구매 없음" "$mb" 'PAYH-tp2_1'
 has "회원 — 이 매장 방문 1 · 취소 1" "$(echo "$mb" | python3 -c "import json,sys;d=json.load(sys.stdin);print(d['stats']['visits'],d['stats']['cancels'],d['stats']['upcoming'])")" "1 1 1"
 has "회원 — 이 매장에 예약 없으면 NOT_RELATED" "$(AS "$PT" "select public.taam_partner_member('$R1','$M2')")" "NOT_RELATED"
+Q "insert into public.reservation_invites(id,host_user_id,invitee_user_id,restaurant_id,visit_date,pax,total_amount,ticket_product_id,status) values ('e1000000-0000-4000-8000-000000000002','$PT','$M2','$R1','2026.11.03',1,850000,'tp1','sent');" >/dev/null
+has "회원 — 파트너가 초대를 보낸 것만으로는 관계가 아니다(명부 훑기)" "$(AS "$PT" "select public.taam_partner_member('$R1','$M2')")" "NOT_RELATED"
+no "이름 채우기도 보낸 초대만으로는 안 준다" "$(AS "$PT" "select public.taam_partner_names('$R1', array['$M2']::uuid[])")" "회원이"
+Q "update public.reservation_invites set status='paid', paid_at=now() where id='e1000000-0000-4000-8000-000000000002';" >/dev/null
+has "회원 — 결제된 초대가 있으면 관계" "$(AS "$PT" "select public.taam_partner_member('$R1','$M2')")" '"name": "회원이"'
+Q "update public.reservation_invites set status='cancelled' where id='e1000000-0000-4000-8000-000000000002';" >/dev/null
 has "회원 검색 — 이 매장 회원만(회원이 는 사이토만)" "$(AS "$PT" "select public.taam_partner_member_search('$R1','회원')")" '"display_name": "회원일"'
 no "회원 검색 — 다른 매장 회원 안 나옴" "$(AS "$PT" "select public.taam_partner_member_search('$R1','회원')")" '회원이'
 has "회원 검색 — 번호로" "$(AS "$PT" "select public.taam_partner_member_search('$R1','1111')")" '회원일'
 ok "회원 검색 — 두 글자 미만은 빈 배열" "$(AS "$PT" "select public.taam_partner_member_search('$R1','회')")" "[]"
-has "회원 검색 — 다른 매장 회원도 번호 전체(10자리)를 정확히 치면 나온다(단골 초대)" "$(AS "$PT" "select public.taam_partner_member_search('$R1','010-3333-4444')")" '회원이'
+ex=$(AS "$PT" "select public.taam_partner_member_search('$R1','010-3333-4444')")
+has "회원 검색 — 다른 매장 회원도 번호 전체(10자리)를 정확히 치면 나온다(단골 초대)" "$ex" '회원이'
+no "회원 검색 — 번호로만 찾은 다른 매장 회원은 이메일·국적이 없다" "$ex" 'm2@x.kr'
+has "회원 검색 — related:false 표시" "$ex" '"related": false'
+has "회원 검색 — 이 매장 회원은 이메일·통화까지(related:true)" "$(AS "$PT" "select public.taam_partner_member_search('$R1','회원일')")" '"email": "m1@x.kr"'
 has "회원 검색 — +82 10 3333 4444 도 같은 번호" "$(AS "$PT" "select public.taam_partner_member_search('$R1','+82 10 3333 4444')")" '회원이'
 ok "회원 검색 — 번호 일부(8자리)로는 다른 매장 회원이 안 나온다" "$(AS "$PT" "select public.taam_partner_member_search('$R1','10-3333-44')")" "[]"
 nm=$(AS "$PT" "select public.taam_partner_names('$R1', array['$M1','$M2']::uuid[])")
@@ -250,6 +340,8 @@ no "이름 채우기 — 잔액 없음" "$nm" 'balance'
 has "이름 채우기 — pending 파트너 FORBIDDEN" "$(AS "$P3" "select public.taam_partner_names('$R1', array['$M1']::uuid[])")" "FORBIDDEN"
 ok "이름 채우기 — 빈 배열" "$(AS "$PT" "select public.taam_partner_names('$R1', array[]::uuid[])")" "[]"
 has "내 권한 — approved" "$(AS "$PT" "select public.taam_partner_my_grants()")" '"status": "approved"'
+no "내 권한 — 운영 메모(note)는 안 준다" "$(AS "$P3" "select public.taam_partner_my_grants()")" 'note'
+ok "taam_rest_admin_ok_for 는 회원이 못 부른다" "$(Q "select has_function_privilege('authenticated','public.taam_rest_admin_ok_for(uuid, text)','execute')")" "f"
 has "내 권한 — pending 도 보인다(화면이 「승인 대기」를 말한다)" "$(AS "$P3" "select public.taam_partner_my_grants()")" '"status": "pending"'
 # H
 has "슈퍼어드민 목록 — pending 먼저" "$(AS "$SU" "select (public.taam_partner_grants_list()->0)->>'status'")" "pending"
@@ -262,8 +354,33 @@ ok "승인 뒤 — 판정 true" "$(AS "$P3" "select public.taam_rest_admin_ok('$
 AS "$SU" "select public.taam_partner_grant_set('$P3','$R1','suspended','정지');" >/dev/null
 ok "정지 → 판정 false · 티켓 안 보임" "$(AS "$P3" "select public.taam_rest_admin_ok('$R1')::text || '/' || (select count(*) from public.tickets)")" "false/0"
 r=$(AS "$PT" "update public.admin_grants set status='approved' where user_id='$P3';"); ok "파트너가 남의 상태를 못 바꾼다(RLS 0행)" "$(Q "select status from public.admin_grants where user_id='$P3'")" "suspended"
+ok "정지 때 prev_status 에 직전 상태(approved)" "$(Q "select prev_status from public.admin_grants where user_id='$P3'")" "approved"
 AS "$SU" "update public.admin_grants set approved_by='$M1', status='approved' where user_id='$P3';" >/dev/null
-ok "도장은 트리거가 찍는다(보낸 approved_by 무시)" "$(Q "select (approved_by='$SU')::text from public.admin_grants where user_id='$P3'")" "true"
+ok "도장은 트리거가 찍는다(로그인 호출은 보낸 approved_by 무시)" "$(Q "select (approved_by='$SU')::text || '/' || coalesce(prev_status,'-') from public.admin_grants where user_id='$P3'")" "true/-"
+AS "$SU" "select public.taam_partner_grant_set('$P3','$R1','pending','철회');" >/dev/null
+ok "「대기로」 = 승인 철회 — approved_at·by 비움" "$(Q "select status || '/' || (approved_at is null)::text || '/' || (approved_by is null)::text from public.admin_grants where user_id='$P3'")" "pending/true/true"
+Q "update public.admin_grants set status='suspended' where user_id='$P3';" >/dev/null
+ok "서버(Edge revoke 모양) 정지 → prev_status pending (되살리기는 pending 으로 돌아간다)" "$(Q "select prev_status from public.admin_grants where user_id='$P3'")" "pending"
+Q "update public.admin_grants set status='approved', approved_by='$SU', status_set_by='$SU' where user_id='$P3';" >/dev/null
+ok "서버 호출(auth.uid() null)은 보낸 approved_by·status_set_by 를 받는다(Edge 감사 칸)" "$(Q "select (approved_by='$SU')::text || '/' || (status_set_by='$SU')::text from public.admin_grants where user_id='$P3'")" "true/true"
+# J — 직접 조회를 품은 라이브 함수 · storage 정책
+AS "$SU" "select public.taam_partner_grant_set('$P3','$R1','suspended','정지');" >/dev/null
+has "J — 정지된 파트너는 정산 좌석 RPC(직접 조회 판)도 FORBIDDEN 으로(본문 교체)" "$(AS "$P3" "select public.taam_ksk_seat_rows('$R1')")" "어드민만"
+ok "J — 승인된 파트너는 그대로 통과" "$(AS "$PT" "select public.taam_ksk_seat_rows('$R1')")" "ok"
+has "J — 결제 링크 만들기(직접 조회 판)도 정지 파트너는 거절" "$(AS "$P3" "select public.taam_link_invite_create('tp1')")" "권한이 없습니다"
+ok "J — 승인된 파트너의 결제 링크 만들기 통과" "$(AS "$PT" "select public.taam_link_invite_create('tp1')")" "ok"
+ok "J — 본문에 직접 조회가 남지 않았다" "$(Q "select count(*) from pg_proc where proname in ('taam_ksk_seat_rows','taam_link_invite_create') and prosrc like '%from public.admin_grants%'")" "0"
+r=$(AS "$P3" "insert into storage.objects(bucket_id,name,owner) values ('restaurant-videos','x.mp4','$P3');"); ok "J — storage 정책: 정지 파트너 거절" "$(echo "$r" | grep -c "ERROR")" "1"
+r=$(AS "$PT" "insert into storage.objects(bucket_id,name,owner) values ('restaurant-videos','y.mp4','$PT');"); ok "J — storage 정책: 승인 파트너 통과" "$(echo "$r" | grep -c "ERROR")" "0"
+AS "$SU" "select public.taam_partner_grant_set('$P3','$R1','approved','복구');" >/dev/null
+# 알림 속도 제한 — 파트너가 pending 을 지우고 다시 넣어 알림함을 채우는 길
+before=$(Q "select count(*) from public.notifications where user_id='$SU' and type='ticket_upload_request'")
+rl0=$(Q "select count(*) from public._rl where k='tp_approval_notify:$PT'")
+for i in $(seq 1 35); do AS "$PT" "insert into public.ticket_products(id,rest_id,rest_name,status,date,time,total_pax,price) values ('spam$i','$R1','메이노','pending','2026.12.0$((i%9+1))','19:00',6,900000);" >/dev/null; done
+after=$(Q "select count(*) from public.notifications where user_id='$SU' and type='ticket_upload_request'")
+exp=$((30-rl0)); [ $exp -gt 35 ] && exp=35; [ $exp -lt 0 ] && exp=0
+ok "업로드 알림은 파트너마다 시간당 30건까지(35건 올려도 알림은 상한만큼 · 업로드는 전부)" "$((after-before))/$(Q "select count(*) from public.ticket_products where id like 'spam%'")" "$exp/35"
+ok "속도 제한 열쇠는 파트너별(호출 35번 기록)" "$(( $(Q "select count(*) from public._rl where k='tp_approval_notify:$PT'") - rl0 ))" "35"
 # I
 ok "_taam_auth_email — 남의 것 null" "$(AS "$M1" "select coalesce(public._taam_auth_email('$M2'),'-')")" "-"
 ok "_taam_auth_email — 본인" "$(AS "$M1" "select public._taam_auth_email('$M1')")" "m1@x.kr"

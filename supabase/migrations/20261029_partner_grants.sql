@@ -38,6 +38,7 @@ alter table public.admin_grants add column if not exists approved_at timestamptz
 alter table public.admin_grants add column if not exists status_set_by uuid;
 alter table public.admin_grants add column if not exists status_set_at timestamptz;
 alter table public.admin_grants add column if not exists note text;
+alter table public.admin_grants add column if not exists prev_status text;   -- 정지(suspended) 직전 상태 — 되살리기(Edge restore)가 그 상태로 돌린다
 alter table public.admin_grants drop constraint if exists admin_grants_status_chk;
 alter table public.admin_grants add constraint admin_grants_status_chk check (status in ('pending', 'approved', 'suspended'));
 create index if not exists idx_ag_user_status on public.admin_grants(user_id, status);
@@ -80,17 +81,28 @@ returns trigger
 language plpgsql security definer set search_path = public
 as $$
 begin
+  -- 도장: 로그인 호출은 auth.uid() 로 고정 · 서버 호출(auth.uid() null — Edge partner-account · SQL Editor)만 보낸 값을 받는다(trg_taam_fee_from_deduct 의 by 와 같은 규칙)
   if new.status not in ('pending', 'approved', 'suspended') then new.status := 'pending'; end if;
   if tg_op = 'INSERT' then
-    new.status_set_at := now(); new.status_set_by := auth.uid();
-    if new.status = 'approved' then new.approved_at := coalesce(new.approved_at, now()); new.approved_by := coalesce(new.approved_by, auth.uid()); end if;
+    new.status_set_at := now(); new.status_set_by := coalesce(auth.uid(), new.status_set_by);
+    if new.status = 'approved' then new.approved_at := coalesce(new.approved_at, now()); new.approved_by := coalesce(auth.uid(), new.approved_by);
+    else new.approved_at := null; new.approved_by := null; end if;
+    new.prev_status := null;
     if new.granted_by is null then new.granted_by := auth.uid(); end if;
   elsif new.status is distinct from old.status then
-    new.status_set_at := now(); new.status_set_by := auth.uid();
-    if new.status = 'approved' then new.approved_at := now(); new.approved_by := auth.uid(); end if;
+    new.status_set_at := now(); new.status_set_by := coalesce(auth.uid(), new.status_set_by);
+    if new.status = 'approved' then
+      new.approved_at := now(); new.approved_by := coalesce(auth.uid(), new.approved_by);
+    elsif new.status = 'pending' then
+      new.approved_at := null; new.approved_by := null;          -- 「대기로」 = 승인 철회 — approved_at 이 「지금 승인 상태(또는 승인 상태에서 정지)」만 뜻하게
+    else
+      new.approved_at := old.approved_at; new.approved_by := old.approved_by;
+    end if;
+    new.prev_status := case when new.status = 'suspended' then old.status else null end;
   else
     new.status_set_at := old.status_set_at; new.status_set_by := old.status_set_by;
     new.approved_at := old.approved_at; new.approved_by := old.approved_by;
+    new.prev_status := old.prev_status;
   end if;
   return new;
 end $$;
@@ -110,10 +122,9 @@ create or replace function public.taam_rest_admin_ok(p_rest text)
 returns boolean language sql stable security definer set search_path = public as $$
   select public.taam_rest_admin_ok_for(auth.uid(), p_rest)
 $$;
-revoke all on function public.taam_rest_admin_ok_for(uuid, text) from public, anon;
+revoke all on function public.taam_rest_admin_ok_for(uuid, text) from public, anon, authenticated;   -- 부르는 곳은 전부 security definer(소유자 권한) — 회원에게 열 이유가 없다
 revoke all on function public.taam_rest_admin_ok(text) from public, anon;
-grant execute on function public.taam_rest_admin_ok(text) to authenticated;
-grant execute on function public.taam_rest_admin_ok_for(uuid, text) to authenticated;   -- 정책식 안에서 호출자 권한으로 돈다
+grant execute on function public.taam_rest_admin_ok(text) to authenticated;   -- SECURITY INVOKER 트리거(taam_guard_ticket_insert)가 호출자 권한으로 부른다 · 안은 definer
 
 -- 옛 이름들 — 같은 서명 · 전부 승인 권한으로 (라이브 본문 md5 를 기록만 하고 교체한다 — 권한 판정은 이 파일이 의도적으로 바꾸는 것)
 do $do$
@@ -218,7 +229,7 @@ grant execute on function public.taam_partner_grant_set(uuid, text, text, text) 
 create or replace function public.taam_partner_my_grants()
 returns jsonb language sql stable security definer set search_path = public as $$
   select coalesce(jsonb_agg(jsonb_strip_nulls(jsonb_build_object(
-           'rest_id', coalesce(g.rest_id, g.venue_id), 'label', coalesce(r.name, g.label), 'status', g.status, 'approved_at', g.approved_at, 'note', g.note))
+           'rest_id', coalesce(g.rest_id, g.venue_id), 'label', coalesce(r.name, g.label), 'status', g.status, 'approved_at', g.approved_at))
            order by (g.status = 'approved') desc, g.created_at), '[]'::jsonb)
     from public.admin_grants g left join public.restaurants r on r.id::text = coalesce(g.rest_id, g.venue_id)
    where g.user_id = auth.uid() and auth.uid() is not null
@@ -242,7 +253,7 @@ returns trigger
 language plpgsql
 set search_path = public
 as $$
-declare v_adm boolean := false; v_tp_rest text;
+declare v_adm boolean := false; v_tp_rest text; v_tp_status text;
 begin
   -- TAAM_GUARD_TICKET_INSERT_V2 (2026-10-29): 매장 어드민 판정 = 승인 권한(taam_rest_admin_ok) · profiles.role 글자는 안 본다
   if current_user not in ('authenticated', 'anon') then
@@ -259,9 +270,13 @@ begin
   -- 이 행의 매장에 승인된 어드민인가 · 연결 회차가 있으면 그 회차도 같은 매장이어야 한다(다른 매장 회차에 좌석을 잡던 길)
   v_adm := public.taam_rest_admin_ok(new.restaurant_id::text);
   if v_adm and coalesce(new.ticket_product_id::text, '') <> '' then
-    select tp.rest_id::text into v_tp_rest from public.ticket_products tp where tp.id::text = new.ticket_product_id::text;
+    select tp.rest_id::text, lower(coalesce(tp.status, '')) into v_tp_rest, v_tp_status from public.ticket_products tp where tp.id::text = new.ticket_product_id::text;
     if v_tp_rest is not null and v_tp_rest <> new.restaurant_id::text then
       raise exception 'TICKET_REST_MISMATCH: 다른 매장의 회차입니다' using errcode = '42501';
+    end if;
+    -- 승인 대기 회차는 아직 공개 전 — 좌석을 채워 매진 동기화가 status 를 바꾸게 하지 않는다(승인 전 회차가 soldout 으로 회원에게 보이던 길)
+    if v_tp_status = 'pending' then
+      raise exception 'TICKET_NOT_APPROVED: 승인 대기 회차에는 좌석을 넣을 수 없습니다' using errcode = '42501';
     end if;
   end if;
 
@@ -285,10 +300,19 @@ create trigger trg_taam_guard_ticket_insert
   before insert on public.tickets
   for each row execute function public.taam_guard_ticket_insert();
 
--- ── D. ticket_products — 파트너 정책 · 승인 대기 비공개 · 재승인 · 알림 ──
+-- ── D. ticket_products — 파트너 정책 · 승인 대기 비공개 · 수정은 큐(pending_edit) · 알림 ──
+--   ⚠ 1차 판은 「승인된 회차의 내용을 고치면 status 를 pending 으로 되돌린다」였다 — 적대 리뷰(재현)가 넷을 짚었다:
+--     ① 회원이 산 회차가 pending 이 되어 그 회원에게도 안 보인다(구매 카드·충돌 검사가 회차를 잃는다) ② 파트너가 한 글자 고쳐 pending 으로 만든 뒤 DELETE(정책이 pending 만 봄) →
+--     회원 티켓이 고아 ③ 매진 동기화(tickets 트리거)가 보낸 중첩 UPDATE 를 회원 세션 것으로 보고 NOT_YOUR_RESTAURANT → **회원의 마지막 좌석 구매·취소·홀드 반납이 통째로 막혔다**
+--     ④ 앱이 수정 저장에 'pending' 을 보내 내용이 같아도 거절.
+--   → 승인된 회차의 status 는 파트너 수정으로 바뀌지 않는다. 바뀐 칸은 **되돌리고 `pending_edit`(jsonb · 바뀐 칸 → 새 값)에 적는다** — 슈퍼어드민이 「수정 승인」(taam_ticket_edit_review)을
+--     누르면 그때 반영된다. 중첩 갱신(pg_trigger_depth() > 1 · 서버 함수·tickets 트리거)은 서버 몫이라 통과시키되, 승인 대기 회차의 status 는 지킨다.
 alter table public.ticket_products add column if not exists approved_by uuid;
 alter table public.ticket_products add column if not exists approved_at timestamptz;
 alter table public.ticket_products add column if not exists review_note text;
+alter table public.ticket_products add column if not exists pending_edit jsonb;         -- 파트너가 신청한 수정(바뀐 칸 → 새 값) · 승인되면 반영되고 비워진다
+alter table public.ticket_products add column if not exists pending_edit_at timestamptz;
+alter table public.ticket_products add column if not exists pending_edit_by uuid;
 
 drop policy if exists ticket_products_partner_insert on public.ticket_products;
 drop policy if exists ticket_products_partner_update on public.ticket_products;
@@ -313,9 +337,36 @@ create policy ticket_products_partner_update on public.ticket_products
   for update to authenticated
   using (public.taam_rest_admin_ok(rest_id::text))
   with check (public.taam_rest_admin_ok(rest_id::text));
+-- 삭제는 **한 번도 승인된 적 없는** 자기 매장 대기 회차만(승인된 회차는 status 가 pending 으로 돌아오지 않으니 approved_at 으로 한 번 더 못 박는다)
 create policy ticket_products_partner_delete on public.ticket_products
   for delete to authenticated
-  using (public.taam_rest_admin_ok(rest_id::text) and coalesce(status, '') = 'pending');
+  using (public.taam_rest_admin_ok(rest_id::text) and coalesce(status, '') = 'pending' and approved_at is null);
+
+-- 승인 대상이 아닌 칸(파트너가 승인 없이 바꿔도 되는 것 · 서버·트리거가 쓰는 것). 그 밖의 모든 칸은 「내용」이다 — 칸이 늘면 기본은 승인 대상.
+create or replace function public._taam_tp_free_cols()
+returns text[] language sql immutable as $$
+  select array['status', 'updated_at', 'auto_soldout', 'approved_by', 'approved_at', 'review_note', 'pending_edit', 'pending_edit_at', 'pending_edit_by',
+               'tile_photo', 'i18n_status_en', 'i18n_status_jp', 'i18n_status_ja', 'i18n_jp_approved', 'repurchase_open',
+               'uploaded_by', 'uploader_rest_id', 'reg_date', 'created_at', 'rest_name', 'audience']
+$$;
+-- 값 정규화 — 앱은 빈 칸을 0/''/false/null 로 섞어 보낸다(meal_fee: x||0 등). 그 차이를 「내용 변경」으로 보지 않는다.
+create or replace function public._taam_tp_norm(v jsonb)
+returns jsonb language sql immutable as $$
+  select case when v is null or jsonb_typeof(v) = 'null' then null
+              when jsonb_typeof(v) = 'number' and v = '0'::jsonb then null
+              when jsonb_typeof(v) = 'string' and btrim(v #>> '{}') = '' then null
+              when jsonb_typeof(v) = 'boolean' and v = 'false'::jsonb then null
+              when jsonb_typeof(v) in ('array', 'object') and v in ('[]'::jsonb, '{}'::jsonb) then null
+              else v end
+$$;
+-- 승인 대상 칸 중 바뀐 것만 { 칸: 새 값 }
+create or replace function public._taam_tp_content_diff(p_old jsonb, p_new jsonb)
+returns jsonb language sql immutable as $$
+  select coalesce(jsonb_object_agg(k, p_new -> k), '{}'::jsonb)
+    from (select distinct k from (select jsonb_object_keys(p_old) k union all select jsonb_object_keys(p_new)) z) keys
+   where not (k = any (public._taam_tp_free_cols()))
+     and public._taam_tp_norm(p_old -> k) is distinct from public._taam_tp_norm(p_new -> k)
+$$;
 
 create or replace function public.enforce_ticket_approval()
 returns trigger
@@ -323,9 +374,9 @@ language plpgsql
 security definer
 set search_path = public
 as $$
-declare v_changed boolean;
+declare v_diff jsonb; v_keep jsonb;
 begin
-  -- 슈퍼어드민: 전부 허용 · 승인(pending→active)·거절 때 도장
+  -- 슈퍼어드민: 전부 허용 · 승인(pending→active) 때 도장
   if public.is_super_admin(auth.uid()) then
     if TG_OP = 'UPDATE' and coalesce(OLD.status, '') = 'pending' and coalesce(NEW.status, '') = 'active' then
       NEW.approved_by := auth.uid(); NEW.approved_at := now();
@@ -334,10 +385,14 @@ begin
   end if;
   -- 서버(auth.uid() null — SQL Editor · service_role)는 그대로
   if auth.uid() is null then return NEW; end if;
+  -- 중첩 갱신(tickets 트리거의 매진 동기화 · 서버 함수) — 회원 세션 안에서 돌아도 서버 몫이다. 승인 대기 회차의 status 만 지킨다.
+  if pg_trigger_depth() > 1 then
+    if TG_OP = 'UPDATE' and coalesce(OLD.status, '') = 'pending' then NEW.status := 'pending'; end if;
+    return NEW;
+  end if;
 
   if TG_OP = 'INSERT' then
     -- 앱 저장은 PostgREST upsert(INSERT … ON CONFLICT DO UPDATE)라 있는 행에도 BEFORE INSERT 가 먼저 돈다 — 그때는 UPDATE 가지가 판정한다
-    --   (종전엔 파트너의 매진 토글·재저장이 여기서 ADMIN_MUST_UPLOAD_PENDING 으로 조용히 실패했다)
     if exists (select 1 from public.ticket_products x where x.id::text = NEW.id::text) then return NEW; end if;
     if coalesce(NEW.status, '') <> 'pending' then
       raise exception 'ADMIN_MUST_UPLOAD_PENDING' using errcode = 'P0001';
@@ -345,7 +400,9 @@ begin
     if NEW.rest_id is null or not public.taam_rest_admin_ok(NEW.rest_id::text) then
       raise exception 'NOT_YOUR_RESTAURANT' using errcode = 'P0001';
     end if;
-    NEW.approved_by := null; NEW.approved_at := null;
+    NEW.approved_by := null; NEW.approved_at := null; NEW.review_note := null;
+    NEW.pending_edit := null; NEW.pending_edit_at := null; NEW.pending_edit_by := null;
+    NEW.repurchase_open := false;
 
   elsif TG_OP = 'UPDATE' then
     if NEW.rest_id::text is distinct from OLD.rest_id::text then
@@ -357,20 +414,36 @@ begin
     if coalesce(OLD.status, '') = 'pending' and coalesce(NEW.status, '') = 'active' then
       raise exception 'ONLY_SUPERADMIN_APPROVES' using errcode = 'P0001';
     end if;
-    -- 도장은 파트너가 못 찍는다
-    NEW.approved_by := OLD.approved_by; NEW.approved_at := OLD.approved_at;
-    -- 승인된(active/soldout/deleteRequest) 회차의 내용을 고치면 다시 승인 대기 — 상태만 바꾸는 것(매진 토글 · 삭제 신청 · 되돌림)은 그대로
+    -- 파트너가 못 만지는 칸: 도장 · 검토 메모 · 재구매 해제(슈퍼어드민 RPC 몫) — 예외 없이 되돌린다
+    NEW.approved_by := OLD.approved_by; NEW.approved_at := OLD.approved_at; NEW.review_note := OLD.review_note;
+    NEW.repurchase_open := OLD.repurchase_open;
+
     if coalesce(OLD.status, '') in ('active', 'soldout', 'deleteRequest') then
-      v_changed := (to_jsonb(NEW) - 'status' - 'updated_at' - 'auto_soldout' - 'approved_by' - 'approved_at' - 'review_note' - 'tile_photo' - 'repurchase_open' - 'sale_open_at' - 'i18n_status_en' - 'i18n_status_ja' - 'ticket_desc_en' - 'ticket_desc_ja')
-                 is distinct from
-                 (to_jsonb(OLD) - 'status' - 'updated_at' - 'auto_soldout' - 'approved_by' - 'approved_at' - 'review_note' - 'tile_photo' - 'repurchase_open' - 'sale_open_at' - 'i18n_status_en' - 'i18n_status_ja' - 'ticket_desc_en' - 'ticket_desc_ja');
-      if v_changed then
-        NEW.status := 'pending'; NEW.approved_by := null; NEW.approved_at := null;
-      elsif coalesce(NEW.status, '') not in ('active', 'soldout', 'deleteRequest') then
+      -- 상태는 매진 토글 · 삭제 신청 · 되돌림만
+      if coalesce(NEW.status, '') not in ('active', 'soldout', 'deleteRequest') then
         raise exception 'BAD_STATUS_CHANGE: 파트너는 매진/판매중/삭제 신청만 바꿀 수 있습니다' using errcode = 'P0001';
       end if;
-    elsif coalesce(OLD.status, '') = 'pending' and coalesce(NEW.status, '') not in ('pending') then
-      raise exception 'BAD_STATUS_CHANGE: 승인 대기 회차의 상태는 슈퍼어드민이 정합니다' using errcode = 'P0001';
+      -- 내용이 바뀌었으면 **되돌리고 큐에 적는다** — 승인(taam_ticket_edit_review)이 반영한다
+      v_diff := public._taam_tp_content_diff(to_jsonb(OLD), to_jsonb(NEW));
+      if v_diff <> '{}'::jsonb then
+        select jsonb_object_agg(k, to_jsonb(OLD) -> k) into v_keep from jsonb_object_keys(v_diff) k;
+        NEW := jsonb_populate_record(NEW, v_keep);
+        NEW.pending_edit := coalesce(OLD.pending_edit, '{}'::jsonb) || v_diff;
+        NEW.pending_edit_at := now(); NEW.pending_edit_by := auth.uid();
+      elsif NEW.pending_edit is null and OLD.pending_edit is not null then
+        -- 파트너가 자기 신청을 거둔다(pending_edit 를 null 로 보냄)
+        NEW.pending_edit_at := null; NEW.pending_edit_by := null;
+      else
+        NEW.pending_edit := OLD.pending_edit; NEW.pending_edit_at := OLD.pending_edit_at; NEW.pending_edit_by := OLD.pending_edit_by;
+      end if;
+    elsif coalesce(OLD.status, '') = 'pending' then
+      if coalesce(NEW.status, '') <> 'pending' then
+        raise exception 'BAD_STATUS_CHANGE: 승인 대기 회차의 상태는 슈퍼어드민이 정합니다' using errcode = 'P0001';
+      end if;
+      -- 승인 전 회차는 내용을 바로 고친다(어차피 승인 대상) — 큐는 쓰지 않는다
+      NEW.pending_edit := null; NEW.pending_edit_at := null; NEW.pending_edit_by := null;
+    else
+      NEW.pending_edit := OLD.pending_edit; NEW.pending_edit_at := OLD.pending_edit_at; NEW.pending_edit_by := OLD.pending_edit_by;
     end if;
   end if;
   return NEW;
@@ -381,22 +454,71 @@ create trigger trg_enforce_ticket_approval
   before insert or update on public.ticket_products
   for each row execute function public.enforce_ticket_approval();
 
--- 업로드 신청·재승인 → 슈퍼어드민 알림 · 승인·거절 → 그 매장 승인 어드민 알림 (서버가 적는다 · 실패는 삼킨다)
+-- 슈퍼어드민 「수정 승인 / 반려」 — 큐에 적힌 칸을 행에 반영(또는 비움) · 그 매장 승인 어드민에게 알림
+create or replace function public.taam_ticket_edit_review(p_id text, p_approve boolean, p_note text default null)
+returns jsonb language plpgsql volatile security definer set search_path = public as $$
+declare v_row public.ticket_products; v_cols text; v_edit jsonb; v_rest text; v_when text;
+begin
+  if not coalesce(public._taam_fee_caller_ok(), false) then raise exception 'FORBIDDEN' using errcode = '42501'; end if;
+  select * into v_row from public.ticket_products where id::text = p_id for update;
+  if v_row.id is null then raise exception 'NOT_FOUND' using errcode = 'P0002'; end if;
+  v_edit := v_row.pending_edit;
+  if v_edit is null or v_edit = '{}'::jsonb then return jsonb_build_object('ok', true, 'applied', false, 'reason', 'nothing_pending'); end if;
+  if p_approve then
+    -- 큐의 칸만 바꾼다 — 모르는 칸(표에 없는 키)은 버린다
+    select string_agg(format('%I', c.column_name), ', ') into v_cols
+      from information_schema.columns c
+     where c.table_schema = 'public' and c.table_name = 'ticket_products' and c.column_name <> 'id' and v_edit ? c.column_name;
+    if v_cols is not null then
+      execute format('update public.ticket_products set (%s) = (select %s from jsonb_populate_record(null::public.ticket_products, $1)) where id::text = $2', v_cols, v_cols)
+        using (to_jsonb(v_row) || v_edit), p_id;
+    end if;
+    update public.ticket_products
+       set pending_edit = null, pending_edit_at = null, pending_edit_by = null, review_note = nullif(btrim(coalesce(p_note, '')), ''),
+           approved_by = coalesce(auth.uid(), approved_by), approved_at = now(), updated_at = now()
+     where id::text = p_id;
+  else
+    update public.ticket_products
+       set pending_edit = null, pending_edit_at = null, pending_edit_by = null, review_note = nullif(btrim(coalesce(p_note, '')), ''), updated_at = now()
+     where id::text = p_id;
+  end if;
+  begin
+    select name into v_rest from public.restaurants where id::text = v_row.rest_id::text;
+    v_rest := coalesce(v_rest, v_row.rest_name, '매장'); v_when := coalesce(v_row.date, '') || ' ' || coalesce(v_row.time, '');
+    insert into public.notifications (user_id, type, title, body, url, payload)
+    select g.user_id, case when p_approve then 'ticket_edit_approved' else 'ticket_edit_rejected' end,
+           case when p_approve then '티켓 수정이 승인되었습니다' else '티켓 수정이 반려되었습니다' end,
+           v_rest || ' · ' || v_when || coalesce(' — ' || nullif(btrim(coalesce(p_note, '')), ''), ''), '/',
+           jsonb_build_object('ticket_id', p_id, 'rest_id', v_row.rest_id::text, 'approved', p_approve, 'fields', (select coalesce(jsonb_agg(k), '[]'::jsonb) from jsonb_object_keys(v_edit) k))
+      from public.admin_grants g where g.status = 'approved' and (g.rest_id = v_row.rest_id::text or g.venue_id = v_row.rest_id::text);
+  exception when others then null; end;
+  return jsonb_build_object('ok', true, 'applied', p_approve, 'fields', (select coalesce(jsonb_agg(k), '[]'::jsonb) from jsonb_object_keys(v_edit) k));
+end $$;
+revoke all on function public.taam_ticket_edit_review(text, boolean, text) from public, anon;
+grant execute on function public.taam_ticket_edit_review(text, boolean, text) to authenticated;
+
+-- 업로드 신청·수정 신청 → 슈퍼어드민 알림(파트너마다 시간당 30건 — 자기 pending 행을 지우고 다시 넣어 알림함을 채우는 길) · 승인 → 그 매장 승인 어드민 알림 (서버가 적는다 · 실패는 삼킨다)
 create or replace function public.taam_ticket_approval_notify()
 returns trigger
 language plpgsql security definer set search_path = public
 as $$
-declare v_rest text; v_when text; v_title text; v_body text;
+declare v_rest text; v_when text; v_title text; v_partner boolean; v_edit boolean;
 begin
   begin
+    v_partner := auth.uid() is not null and not public.is_super_admin(auth.uid()) and pg_trigger_depth() <= 1;
     select name into v_rest from public.restaurants where id::text = NEW.rest_id::text;
     v_rest := coalesce(v_rest, NEW.rest_name, '매장');
     v_when := coalesce(NEW.date, '') || ' ' || coalesce(NEW.time, '');
-    if (TG_OP = 'INSERT' and coalesce(NEW.status, '') = 'pending' and auth.uid() is not null and not public.is_super_admin(auth.uid()))
-       or (TG_OP = 'UPDATE' and coalesce(OLD.status, '') <> 'pending' and coalesce(NEW.status, '') = 'pending' and auth.uid() is not null and not public.is_super_admin(auth.uid())) then
-      v_title := case when TG_OP = 'INSERT' then '티켓 업로드 신청' else '티켓 수정 — 다시 승인 필요' end;
+    v_edit := TG_OP = 'UPDATE' and NEW.pending_edit is not null and NEW.pending_edit is distinct from OLD.pending_edit;
+    if v_partner and ((TG_OP = 'INSERT' and coalesce(NEW.status, '') = 'pending') or v_edit) then
+      if to_regprocedure('public.taam_rate_hit(text, integer, interval)') is not null
+         and not public.taam_rate_hit('tp_approval_notify:' || auth.uid()::text, 30, interval '1 hour') then
+        return NEW;   -- 알림만 건너뛴다 · 업로드 자체는 그대로
+      end if;
+      v_title := case when TG_OP = 'INSERT' then '티켓 업로드 신청' else '티켓 수정 신청 — 승인 필요' end;
       insert into public.notifications (user_id, type, title, body, url, payload)
-      select p.id, 'ticket_upload_request', v_title, v_rest || ' · ' || v_when, '/', jsonb_build_object('ticket_id', NEW.id::text, 'rest_id', NEW.rest_id::text, 'via', 'trg_taam_ticket_approval_notify')
+      select p.id, 'ticket_upload_request', v_title, v_rest || ' · ' || v_when, '/',
+             jsonb_build_object('ticket_id', NEW.id::text, 'rest_id', NEW.rest_id::text, 'edit', v_edit, 'via', 'trg_taam_ticket_approval_notify')
         from public.profiles p where p.role in ('superadmin', 'super_admin');
     elsif TG_OP = 'UPDATE' and coalesce(OLD.status, '') = 'pending' and coalesce(NEW.status, '') = 'active' then
       insert into public.notifications (user_id, type, title, body, url, payload)
@@ -408,7 +530,7 @@ begin
   return NEW;
 end $$;
 drop trigger if exists trg_taam_ticket_approval_notify on public.ticket_products;
-create trigger trg_taam_ticket_approval_notify after insert or update on public.ticket_products   -- ⚠ UPDATE OF status 로 걸면 BEFORE 가 pending 으로 바꾼 것(SET 에 status 없음)을 못 본다
+create trigger trg_taam_ticket_approval_notify after insert or update on public.ticket_products   -- ⚠ UPDATE OF 로 걸면 BEFORE 가 바꾼 칸(SET 에 없는 것)을 못 본다
   for each row execute function public.taam_ticket_approval_notify();
 
 -- 거절(pending 회차 삭제)은 슈퍼어드민의 DELETE 다 — 그 매장 어드민에게 알린다
@@ -442,6 +564,7 @@ as $$
 declare v_tp_rest text;
 begin
   if auth.uid() is null or public.is_super_admin(auth.uid()) then return NEW; end if;
+  if pg_trigger_depth() > 1 then return NEW; end if;   -- 서버 함수(초대 확정 등)가 보낸 중첩 갱신은 그대로
   -- UPDATE 는 회차·매장이 바뀔 때만 본다(회원의 결제·취소 갱신이 옛 줄의 불일치로 막히지 않게)
   if TG_OP = 'UPDATE' and NEW.ticket_product_id::text is not distinct from OLD.ticket_product_id::text
      and NEW.restaurant_id::text is not distinct from OLD.restaurant_id::text then return NEW; end if;
@@ -452,6 +575,9 @@ begin
     end if;
     if v_tp_rest <> coalesce(NEW.restaurant_id::text, '') then
       raise exception 'TICKET_REST_MISMATCH: 다른 매장의 회차입니다' using errcode = '42501';
+    end if;
+    if exists (select 1 from public.ticket_products tp where tp.id::text = NEW.ticket_product_id::text and lower(coalesce(tp.status, '')) = 'pending') then
+      raise exception 'TICKET_NOT_APPROVED: 승인 대기 회차에는 초대를 보낼 수 없습니다' using errcode = '42501';
     end if;
   end if;
   if TG_OP = 'UPDATE' and NEW.restaurant_id::text is distinct from OLD.restaurant_id::text
@@ -581,8 +707,9 @@ declare v_p record; v_rows jsonb; v_inv jsonb; v_related boolean;
 begin
   if not (public._taam_uid_is_super() or public.taam_rest_admin_ok(p_rest)) then raise exception 'FORBIDDEN' using errcode = '42501'; end if;
   -- 이 매장에 예약(좌석 행 · 초대)이 있는 회원만
+  -- 초대는 **결제된 것만** 관계로 친다 — 초대 줄은 바로 그 파트너가 어느 회원에게나 넣을 수 있는 줄이라, 보낸 것만으로 관계가 되면 명부 훑기가 된다(적대 리뷰 재현)
   v_related := exists (select 1 from public.tickets t where t.user_id = p_uid and t.restaurant_id::text = p_rest and lower(coalesce(t.status, '')) not in ('hold', 'expired'))
-            or exists (select 1 from public.reservation_invites i where i.invitee_user_id = p_uid and i.restaurant_id::text = p_rest);
+            or exists (select 1 from public.reservation_invites i where i.invitee_user_id = p_uid and i.restaurant_id::text = p_rest and i.status = 'paid');
   if not v_related then raise exception 'NOT_RELATED: 이 매장에 예약한 회원이 아닙니다' using errcode = '42501'; end if;
   select p.id, nullif(btrim(p.display_name), '') as display_name, to_jsonb(p)->>'phone' as phone, to_jsonb(p)->>'email' as email,
          to_jsonb(p)->>'membership_tier' as tier, to_jsonb(p)->>'nationality' as nationality, to_jsonb(p)->>'country' as country,
@@ -617,22 +744,35 @@ declare v jsonb; v_q text := lower(btrim(coalesce(p_q, ''))); v_qd text := regex
 begin
   if not (public._taam_uid_is_super() or public.taam_rest_admin_ok(p_rest)) then raise exception 'FORBIDDEN' using errcode = '42501'; end if;
   if length(v_q) < 2 then return '[]'::jsonb; end if;
-  select coalesce(jsonb_agg(jsonb_strip_nulls(jsonb_build_object('id', p.id, 'display_name', nullif(btrim(p.display_name), ''), 'phone', to_jsonb(p)->>'phone', 'email', to_jsonb(p)->>'email',
-                   'membership_tier', to_jsonb(p)->>'membership_tier', 'nationality', to_jsonb(p)->>'nationality',
-                   'last_visit', (select max(coalesce(public._taam_pu_visit_date(t.reservation_date), t.created_at::date)) from public.tickets t where t.user_id = p.id and t.restaurant_id::text = p_rest and lower(coalesce(t.status, '')) not in ('hold','expired','cancelled','canceled'))))
-                 order by p.display_name), '[]'::jsonb) into v
-    from public.profiles p
-   where coalesce(to_jsonb(p)->>'deleted_at', '') = ''
-     and (
-          -- ① 이 매장에 예약·초대가 있는 회원은 부분 일치로
-          ((exists (select 1 from public.tickets t where t.user_id = p.id and t.restaurant_id::text = p_rest and lower(coalesce(t.status, '')) not in ('hold', 'expired'))
-            or exists (select 1 from public.reservation_invites i where i.invitee_user_id = p.id and i.restaurant_id::text = p_rest))
-           and (lower(coalesce(p.display_name, '')) like '%' || v_q || '%' or lower(coalesce(to_jsonb(p)->>'email', '')) like '%' || v_q || '%'
-                or (length(v_qd) >= 4 and regexp_replace(coalesce(to_jsonb(p)->>'phone', ''), '\D', '', 'g') like '%' || v_qd || '%')))
-          -- ② 그 밖의 회원은 **전화번호를 끝까지 정확히** 쳤을 때만(10자리 이상 · 010 ↔ +8210 같은 끝 10자리) — 단골을 초대할 길은 두되 명부 훑기는 막는다
-          or (length(v_qd) >= 10 and right(regexp_replace(coalesce(to_jsonb(p)->>'phone', ''), '\D', '', 'g'), 10) = right(v_qd, 10))
-         )
-   limit 20;
+  with rel as (
+    -- ① 이 매장에 좌석 행(홀드·만료 제외) 또는 결제된 초대가 있는 회원 — 부분 일치 · 전 칸
+    select p.id from public.profiles p
+     where coalesce(to_jsonb(p)->>'deleted_at', '') = ''
+       and (exists (select 1 from public.tickets t where t.user_id = p.id and t.restaurant_id::text = p_rest and lower(coalesce(t.status, '')) not in ('hold', 'expired'))
+            or exists (select 1 from public.reservation_invites i where i.invitee_user_id = p.id and i.restaurant_id::text = p_rest and i.status = 'paid'))
+  )
+  select coalesce(jsonb_agg(row_obj order by nm), '[]'::jsonb) into v
+    from (
+      select nullif(btrim(p.display_name), '') nm,
+             case when rel.id is not null then
+               jsonb_strip_nulls(jsonb_build_object('id', p.id, 'display_name', nullif(btrim(p.display_name), ''), 'phone', to_jsonb(p)->>'phone', 'email', to_jsonb(p)->>'email',
+                 'membership_tier', to_jsonb(p)->>'membership_tier', 'nationality', to_jsonb(p)->>'nationality', 'currency', to_jsonb(p)->>'currency', 'related', true,
+                 'last_visit', (select max(coalesce(public._taam_pu_visit_date(t.reservation_date), t.created_at::date)) from public.tickets t
+                                 where t.user_id = p.id and t.restaurant_id::text = p_rest and lower(coalesce(t.status, '')) not in ('hold','expired','cancelled','canceled'))))
+             else
+               -- ② 그 밖의 회원은 **전화번호를 끝까지 정확히** 쳤을 때만(10자리 이상 · 010 ↔ +8210 같은 끝 10자리) · 초대에 필요한 이름·번호·등급·통화만
+               jsonb_strip_nulls(jsonb_build_object('id', p.id, 'display_name', nullif(btrim(p.display_name), ''), 'phone', to_jsonb(p)->>'phone',
+                 'membership_tier', to_jsonb(p)->>'membership_tier', 'currency', to_jsonb(p)->>'currency', 'related', false))
+             end as row_obj
+        from public.profiles p left join rel on rel.id = p.id
+       where coalesce(to_jsonb(p)->>'deleted_at', '') = ''
+         and (
+              (rel.id is not null
+               and (lower(coalesce(p.display_name, '')) like '%' || v_q || '%' or lower(coalesce(to_jsonb(p)->>'email', '')) like '%' || v_q || '%'
+                    or (length(v_qd) >= 4 and regexp_replace(coalesce(to_jsonb(p)->>'phone', ''), '\D', '', 'g') like '%' || v_qd || '%')))
+              or (length(v_qd) >= 10 and right(regexp_replace(coalesce(to_jsonb(p)->>'phone', ''), '\D', '', 'g'), 10) = right(v_qd, 10))
+             )
+       limit 20) z;
   return v;
 end $$;
 revoke all on function public.taam_partner_member_search(text, text) from public, anon;
@@ -650,19 +790,54 @@ begin
                    'membership_tier', to_jsonb(p)->>'membership_tier', 'currency', to_jsonb(p)->>'currency', 'nationality', to_jsonb(p)->>'nationality'))), '[]'::jsonb) into v
     from public.profiles p
    where p.id = any (p_uids[1:500])
-     and (exists (select 1 from public.tickets t where t.user_id = p.id and t.restaurant_id::text = p_rest)
-          or exists (select 1 from public.reservation_invites i where i.invitee_user_id = p.id and i.restaurant_id::text = p_rest));
+     and (exists (select 1 from public.tickets t where t.user_id = p.id and t.restaurant_id::text = p_rest and lower(coalesce(t.status, '')) not in ('hold', 'expired'))
+          or exists (select 1 from public.reservation_invites i where i.invitee_user_id = p.id and i.restaurant_id::text = p_rest and i.status = 'paid'));
   return v;
 end $$;
 revoke all on function public.taam_partner_names(text, uuid[]) from public, anon;
 grant execute on function public.taam_partner_names(text, uuid[]) to authenticated;
+
+-- ── J. admin_grants 를 status 없이 직접 읽는 라이브 본문 — 결제 링크 만들기(taam_link_invite_create) · 정산 좌석 셋(taam_kashikiri_link_ticket · taam_ksk_seat_set_pax · taam_ksk_seat_rows) · storage 정책 ──
+--   옛 이름 함수 7개를 바꿔도 이들은 `exists (select 1 from public.admin_grants g where g.user_id = v_uid and (g.rest_id … or g.venue_id …))` 를 안에 품고 있어
+--   승인 대기·정지 권한도 어드민으로 쳤다(적대 리뷰 재현). 본문에서 그 모양만 `select 1 where public.taam_rest_admin_ok_for(v_uid, …)` 로 바꿔 다시 만든다 —
+--   모양을 못 찾으면(다른 판) ⚠ 로 적고 건드리지 않는다(배포는 멈추지 않는다 · 다음 묶음에서 손으로).
+do $do$
+declare r record; v_def text; v_new text; v_cnt int; v_log text := '';
+begin
+  for r in select p.oid, p.proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+            where n.nspname = 'public' and p.proname in ('taam_link_invite_create', 'taam_kashikiri_link_ticket', 'taam_ksk_seat_set_pax', 'taam_ksk_seat_rows') loop
+    v_def := pg_get_functiondef(r.oid);
+    if position('from public.admin_grants' in v_def) = 0 then v_log := v_log || r.proname || ' ✅(이미) · '; continue; end if;
+    v_new := regexp_replace(v_def,
+      'select\s+1\s+from\s+public\.admin_grants\s+g\s+where\s+g\.user_id\s*=\s*v_uid\s+and\s*\(\s*g\.rest_id::text\s*=\s*(v_tp\.rest_id::text|v_ev\.venue_id)\s+or\s+g\.venue_id::text\s*=\s*\1\s*\)',
+      'select 1 where public.taam_rest_admin_ok_for(v_uid, \1)', 'g');
+    if position('from public.admin_grants' in v_new) > 0 then v_log := v_log || r.proname || ' ⚠ 모르는 모양(그대로) · '; continue; end if;
+    execute v_new;
+    v_log := v_log || r.proname || ' ✅ 교체 · ';
+  end loop;
+  insert into _pg(항목, 결과) values ('J 라이브 함수의 직접 조회 → 승인 판정', coalesce(nullif(v_log, ''), '(대상 없음)'));
+exception when others then insert into _pg(항목, 결과) values ('J 라이브 함수의 직접 조회 → 승인 판정', '⚠ ' || left(sqlerrm, 160) || ' · ' || v_log);
+end $do$;
+do $do$
+begin
+  if to_regclass('storage.objects') is not null and exists (select 1 from pg_policies where schemaname = 'storage' and policyname = 'restaurant_videos_partner_insert') then
+    drop policy if exists restaurant_videos_partner_insert on storage.objects;
+    execute 'create policy restaurant_videos_partner_insert on storage.objects for insert to authenticated with check ('
+         || 'bucket_id = ''restaurant-videos'' and (public._taam_uid_is_super()'
+         || ' or exists (select 1 from public.admin_grants g where g.user_id = auth.uid() and g.status = ''approved'')))';
+    insert into _pg(항목, 결과) values ('J storage restaurant-videos 정책', '✅ 승인 권한만');
+  else
+    insert into _pg(항목, 결과) values ('J storage restaurant-videos 정책', '⚠ 정책 없음(건너뜀)');
+  end if;
+exception when others then insert into _pg(항목, 결과) values ('J storage restaurant-videos 정책', '⚠ ' || left(sqlerrm, 160));
+end $do$;
 
 -- ── I. 덤 — 조회 함수 권한 ──
 -- uuid → 이메일 조회가 누구에게나 열려 있었다(기본 PUBLIC EXECUTE). 본인·슈퍼어드민·서버만. (profiles 역할 가드 트리거가 본인 id 로 부른다 — 그대로 된다)
 create or replace function public._taam_auth_email(p_id uuid)
 returns text language sql stable security definer set search_path = public as $$
   select case when auth.uid() is null or auth.uid() = p_id or public._taam_uid_is_super()
-              then (select u.email::text from auth.users u where u.id = p_id) end
+              then (select lower(u.email::text) from auth.users u where u.id = p_id) end
 $$;
 do $do$
 declare r record; v text := '';
@@ -680,9 +855,20 @@ end $do$;
 -- ── 확인 (하나로 · ❌ 가 없어야 정상 · 사람·매장 이름 없음) ──
 insert into _pg(항목, 결과) values
  ('B 판정 함수 taam_rest_admin_ok', case when to_regprocedure('public.taam_rest_admin_ok(text)') is not null then '✅' else '❌' end),
- ('B 옛 이름 7개가 새 판정으로', case when (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+ ('B 옛 이름 7개가 새 판정으로(옛 본문 잔존 0)', case when (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
      where n.nspname = 'public' and p.proname in ('is_ticket_admin_of','is_restaurant_admin_of','is_venue_admin_of','taam_is_rest_admin','taam_can_mark_visit','taam_can_manage_ticket_as','_taam_rest_note_ok')
-       and p.prosrc like '%taam_rest_admin_ok%') = 7 then '✅' else '❌' end),
+       and p.prosrc like '%taam_rest_admin_ok%') = 7
+     and not exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public' and p.proname in ('is_ticket_admin_of','is_restaurant_admin_of','is_venue_admin_of','taam_is_rest_admin','taam_can_mark_visit','taam_can_manage_ticket_as','_taam_rest_note_ok')
+       and p.prosrc not like '%taam_rest_admin_ok%') then '✅' else '❌' end),
+ ('B taam_rest_admin_ok_for 는 회원이 못 부른다', case when has_function_privilege('authenticated', 'public.taam_rest_admin_ok_for(uuid, text)', 'execute') then '❌' else '✅' end),
+ ('A prev_status 칸', case when exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'admin_grants' and column_name = 'prev_status') then '✅' else '❌' end),
+ ('D pending_edit 칸 · 수정 승인 RPC', case when exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'ticket_products' and column_name = 'pending_edit')
+     and to_regproc('public.taam_ticket_edit_review') is not null then '✅' else '❌' end),
+ ('D enforce_ticket_approval 중첩 통과(pg_trigger_depth)', case when exists (select 1 from pg_proc where proname = 'enforce_ticket_approval' and prosrc like '%pg_trigger_depth() > 1%') then '✅' else '❌' end),
+ ('J admin_grants 직접 조회가 남은 함수(정보)', coalesce((select string_agg(p.proname, ' · ') from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public' and p.prosrc like '%from public.admin_grants%' and p.proname not in ('taam_rest_admin_ok_for', 'taam_partner_grants_list', 'taam_partner_grant_set', 'taam_partner_my_grants',
+       'taam_ticket_approval_notify', 'taam_ticket_reject_notify', 'taam_ticket_edit_review', 'taam_guard_admin_grant')), '없음')),
  ('C tickets INSERT 가드 새 판', case when exists (select 1 from pg_proc where proname = 'taam_guard_ticket_insert' and prosrc like '%TAAM_GUARD_TICKET_INSERT_V2%') then '✅' else '❌' end),
  ('D ticket_products 정책(읽기 · 파트너 3)', case when (select count(*) from pg_policies where tablename = 'ticket_products' and policyname in ('ticket_products_read','ticket_products_partner_insert','ticket_products_partner_update','ticket_products_partner_delete')) = 4 then '✅' else '❌' end),
  ('D 승인 트리거 둘', case when exists (select 1 from pg_trigger where tgname = 'trg_taam_ticket_approval_notify') and exists (select 1 from pg_trigger where tgname = 'trg_enforce_ticket_approval') then '✅' else '❌' end),
@@ -692,6 +878,6 @@ insert into _pg(항목, 결과) values
      and to_regproc('public.taam_partner_member_search') is not null and to_regproc('public.taam_partner_my_grants') is not null
     and to_regproc('public.taam_partner_names') is not null then '✅' else '❌' end),
  ('H 슈퍼어드민 RPC 둘', case when to_regproc('public.taam_partner_grants_list') is not null and to_regproc('public.taam_partner_grant_set') is not null then '✅' else '❌' end),
- ('I _taam_auth_email 본인·슈퍼어드민만', case when exists (select 1 from pg_proc where proname = '_taam_auth_email' and prosrc like '%auth.uid() = p_id%') then '✅' else '❌' end),
+ ('I _taam_auth_email 본인·슈퍼어드민만 · 소문자', case when exists (select 1 from pg_proc where proname = '_taam_auth_email' and prosrc like '%auth.uid() = p_id%' and prosrc like '%lower(u.email%') then '✅' else '❌' end),
  ('A 권한 상태 분포(정보)', (select coalesce(string_agg(status || ' ' || n, ' · '), '없음') from (select status, count(*) n from public.admin_grants group by status) z));
 select 항목, 결과 from _pg order by seq;
