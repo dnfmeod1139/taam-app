@@ -152,7 +152,15 @@ create or replace function public._taam_pkg_visit(p_tp text)
 returns date language sql stable security definer set search_path = public as $$
   select public._taam_pu_visit_date(tp.date) from public.ticket_products tp where tp.id::text = p_tp
 $$;
-revoke all on function public._taam_pkg_super_ok(), public._taam_pkg_server_ok(), public._taam_pkg_visit(text) from public, anon, authenticated;
+-- 회차가 지금 팔 수 없는 상태인가 — 승인 대기·숨김·삭제 신청 · **어드민이 손으로 잠근 매진**(auto_soldout=false — 앱 밖에서 자리가 나간 것).
+--   자동 매진(좌석이 다 찬 것)은 좌석 가드가 판단하므로 여기서 막지 않는다. 컬럼이 없는 DB 에서도 돈다(to_jsonb).
+create or replace function public._taam_pkg_round_closed(p_tp text)
+returns boolean language sql stable security definer set search_path = public as $$
+  select coalesce((select lower(coalesce(tp.status, '')) in ('pending', 'hidden', 'deleterequest', 'deleted')
+                          or (lower(coalesce(tp.status, '')) = 'soldout' and coalesce((to_jsonb(tp)->>'auto_soldout')::boolean, true) = false)
+                     from public.ticket_products tp where tp.id::text = p_tp), true)
+$$;
+revoke all on function public._taam_pkg_super_ok(), public._taam_pkg_server_ok(), public._taam_pkg_visit(text), public._taam_pkg_round_closed(text) from public, anon, authenticated;
 
 -- 회차 묶음의 충돌(같은 날 같은 시간대 · 같은 매장 재구매 제한 안) — 만들 때 거절 · 목록에서 경고
 create or replace function public._taam_pkg_conflicts(p_rounds text[])
@@ -310,9 +318,18 @@ begin
            'id', o.id, 'user_id', o.user_id, 'name', pr.display_name, 'phone', pr.phone, 'pax', o.pax, 'status', o.status,
            'total', o.total, 'deposit_used', o.deposit_used, 'card_paid', o.card_paid, 'order_id', o.order_id,
            'paid_at', o.paid_at, 'cancelled_at', o.cancelled_at, 'cancel', o.cancel, 'card_refund', o.card_refund,
-           'purchase_ids', to_jsonb(o.purchase_ids), 'created_at', o.created_at) order by o.created_at desc)
+           'purchase_ids', to_jsonb(o.purchase_ids), 'created_at', o.created_at,
+           'card_issue', ci.j) order by o.created_at desc)
     from public.ticket_package_orders o left join public.profiles pr on pr.id = o.user_id
-   where o.package_id = p_package and (o.status in ('paid', 'cancelled') or (o.status = 'hold' and o.expires_at > now()))), '[]'::jsonb);
+    -- 카드는 승인됐는데 이 묶음이 그 주문으로 확정되지 않았거나 · 결과를 모르는(unknown:) · 취소가 실패한 카드 주문 — 「카드 결제 확인」 대상(2차 검증)
+    left join lateral (select jsonb_build_object('order_id', po.order_id, 'status', po.status, 'fail_reason', po.fail_reason, 'amount', po.amount, 'created_at', po.created_at) as j
+                         from public.payment_orders po
+                        where po.purpose = 'package_topup' and po.metadata->>'group_id' = o.id
+                          and ((po.status = 'paid' and not (o.status in ('paid', 'cancelled') and o.order_id = po.order_id))
+                            or (po.status = 'pending' and coalesce(po.fail_reason, '') like 'unknown:%')
+                            or (po.status = 'canceled' and (coalesce(po.fail_reason, '') like '%refund_failed' or coalesce(po.fail_reason, '') like '%canceling')))
+                        order by po.created_at desc limit 1) ci on true
+   where o.package_id = p_package and (o.status in ('paid', 'cancelled') or (o.status = 'hold' and o.expires_at > now()) or ci.j is not null)), '[]'::jsonb);
 end $$;
 revoke all on function public.taam_package_save(text, text, text[], text, text, text, text, text), public.taam_package_unlink(text),
                        public.taam_package_list(boolean), public.taam_package_orders_admin(text) from public, anon;
@@ -432,6 +449,9 @@ begin
   v_n := coalesce(array_length(v_rounds, 1), 0);
   if v_n < 2 then raise exception 'PACKAGE_NOT_ACTIVE: 판매가 끝난 패키지입니다' using errcode = 'P0002'; end if;
   if coalesce(array_length(p_holds, 1), 0) <> v_n then raise exception 'HOLDS_MISMATCH: 회차 수와 좌석 확보 수가 다릅니다' using errcode = '22023'; end if;
+  if exists (select 1 from unnest(v_rounds) x where public._taam_pkg_round_closed(x)) then
+    raise exception 'ROUND_CLOSED: 지금 판매하지 않는 일정이 있습니다' using errcode = '22023';
+  end if;
 
   for v_h in select t.* from public.tickets t where t.purchase_id = any(p_holds) order by t.purchase_id for update loop
     if v_h.user_id is distinct from v_uid then raise exception '내 예약이 아닙니다' using errcode = '42501'; end if;
@@ -510,6 +530,9 @@ begin
       raise exception 'PACKAGE_CHANGED: 패키지 구성이 바뀌었습니다' using errcode = 'P0002';
     end if;
     if r.price is null or r.price <= 0 then raise exception 'PRICE_NOT_SET' using errcode = '22023'; end if;
+    if public._taam_pkg_round_closed(r.ticket_product_id::text) then   -- 결제 사이 어드민이 손으로 잠갔다(앱 밖 판매) — 카드 확정이면 Edge 가 취소
+      raise exception 'ROUND_CLOSED: 지금 판매하지 않는 일정이 있습니다' using errcode = '22023';
+    end if;
     v_total := v_total + r.price;
   end loop;
   if v_n <> coalesce(array_length(o.purchase_ids, 1), 0) then raise exception 'HOLD_GONE: 좌석 확보를 찾지 못했습니다' using errcode = 'P0002'; end if;
@@ -634,6 +657,9 @@ begin
     v_n := v_n + 1;
     if r.status <> 'hold' or r.user_id is distinct from p_uid then raise exception 'HOLD_GONE: 좌석 확보가 만료되었습니다' using errcode = 'P0002'; end if;
     if r.price is null or r.price <= 0 then raise exception 'PRICE_NOT_SET' using errcode = '22023'; end if;
+    if public._taam_pkg_round_closed(r.ticket_product_id::text) then   -- 결제 사이 어드민이 손으로 잠갔다(앱 밖 판매) — 카드 확정이면 Edge 가 취소
+      raise exception 'ROUND_CLOSED: 지금 판매하지 않는 일정이 있습니다' using errcode = '22023';
+    end if;
     v_total := v_total + r.price;
   end loop;
   if v_n <> coalesce(array_length(o.purchase_ids, 1), 0) then raise exception 'HOLD_GONE' using errcode = 'P0002'; end if;
@@ -678,6 +704,25 @@ begin
   return jsonb_build_object('claimed', v_n = 1, 'status', v_st);
 end $$;
 
+-- 확정이 분명히 거절된 카드 주문을 닫는다 — **Toss 승인 취소 전에**. 주문 줄을 잠그고(확정 함수와 같은 순서 — 먼저 주문) 묶음이
+--   이 주문으로 이미 확정·취소됐으면 닫지 않는다(settled). 닫힌 주문은 확정 함수가 ORDER_NOT_PAID 로 거절하므로
+--   「취소하는 사이 다른 호출이 확정」하는 경주가 없다(적대 리뷰 2차). 취소 결과는 Edge 가 fail_reason 에 이어 적는다.
+create or replace function public.taam_package_order_close(p_order text, p_reason text)
+returns jsonb language plpgsql volatile security definer set search_path = public as $$
+declare po public.payment_orders%rowtype; v_st text; v_oid text;
+begin
+  if not public._taam_pkg_server_ok() then raise exception 'FORBIDDEN' using errcode = '42501'; end if;
+  select * into po from public.payment_orders where order_id = p_order and purpose = 'package_topup' for update;
+  if not found then return jsonb_build_object('closed', false, 'status', null); end if;
+  select status, order_id into v_st, v_oid from public.ticket_package_orders where id = po.metadata->>'group_id';
+  if v_st in ('paid', 'cancelled') and v_oid = p_order then
+    return jsonb_build_object('closed', false, 'settled', v_st, 'status', po.status);
+  end if;
+  if po.status <> 'paid' then return jsonb_build_object('closed', false, 'status', po.status); end if;
+  update public.payment_orders set status = 'canceled', fail_reason = left(coalesce(p_reason, 'closed'), 60) || '_canceling' where order_id = p_order;
+  return jsonb_build_object('closed', true, 'status', 'canceled');
+end $$;
+
 create or replace function public.taam_package_confirm_card(p_order text)
 returns jsonb language plpgsql volatile security definer set search_path = public as $$
 declare po public.payment_orders%rowtype; v_gid text; v_st text;
@@ -713,7 +758,7 @@ begin
   return jsonb_build_object('ok', true, 'released', v_n);
 end $$;
 revoke all on function public.taam_package_order_prepare(text, uuid), public.taam_package_confirm_card(text), public.taam_package_fail(text, text),
-                       public.taam_package_order_claim(text, text, text, text, timestamptz, jsonb, text, text)
+                       public.taam_package_order_claim(text, text, text, text, timestamptz, jsonb, text, text), public.taam_package_order_close(text, text)
   from public, anon, authenticated;
 insert into _pk values ('G 서버 함수(카드 주문 · 카드 확정 · 실패) — service_role 만', '✅');
 
@@ -960,13 +1005,78 @@ do $do$ begin
   insert into _pk values ('J 연계 회차는 취소표 알림을 건너뛴다', '✅');
 end $do$;
 
+-- ── K. 결과를 모르는 카드 주문 정리 — 10분마다 Edge toss-package-pay 의 sweep(service_role) ──
+--   카드 승인은 됐는데 좌석 확정 결과를 모르는 주문(Edge 가 중간에 끊김 · 회원이 앱을 다시 안 엶)이 그대로 남지 않게:
+--   paid 인데 묶음이 이 주문으로 확정되지 않은 것 → 확정을 다시(안 되면 분명한 거절로 자동 취소) · 10분 넘은 pending → 토스에 주문 번호로 조회 ·
+--   취소가 실패했던(_refund_failed) · 취소 도중 끊긴(_canceling) 주문 → 같은 멱등 키로 다시 취소. 볼 것이 없으면 Edge 를 부르지 않는다.
+--   부르는 법은 taam_admin_push 와 같다(app_config.restock_push 의 Vault 시크릿 이름·URL · 함수 이름만 바꿔 쓴다 · 키 값은 Vault 에만).
+-- 정리할 주문 목록(서버만) — confirm: paid 인데 묶음이 이 주문으로 확정 안 됨(3분 지남) · lookup: 10분 넘은 pending · cancel: 취소 실패·도중 끊김
+create or replace function public.taam_package_reconcile_list(p_limit int default 15)
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+declare v jsonb;
+begin
+  if not public._taam_pkg_server_ok() then raise exception 'FORBIDDEN' using errcode = '42501'; end if;
+  select coalesce(jsonb_agg(x order by ca), '[]'::jsonb) into v from (
+    select po.created_at as ca,
+           jsonb_build_object('order_id', po.order_id, 'user_id', po.user_id, 'amount', po.amount, 'status', po.status, 'payment_key', po.payment_key,
+                              'fail_reason', po.fail_reason, 'created_at', po.created_at, 'approved_at', po.approved_at,
+                              'metadata', jsonb_build_object('group_id', po.metadata->>'group_id', 'paid_via', po.metadata->>'paid_via',
+                                                             'title', po.metadata->>'title', 'pax', po.metadata->'pax', 'total', po.metadata->'total',
+                                                             'deposit_used', po.metadata->'deposit_used'),
+                              'reconcile', case when po.status = 'paid' then 'confirm' when po.status = 'pending' then 'lookup' else 'cancel' end) as x
+      from public.payment_orders po
+      left join public.ticket_package_orders o on o.id = po.metadata->>'group_id'
+     where po.purpose = 'package_topup' and po.created_at > now() - interval '3 days'
+       and ((po.status = 'paid' and not (coalesce(o.status, '') in ('paid', 'cancelled') and o.order_id = po.order_id)
+             and coalesce(po.approved_at, po.created_at) < now() - interval '3 minutes')
+         or (po.status = 'pending' and po.created_at < now() - interval '10 minutes')
+         or (po.status = 'canceled' and (po.fail_reason like '%refund_failed' or po.fail_reason like '%canceling')))
+     order by po.created_at
+     limit greatest(1, least(coalesce(p_limit, 15), 50))) s;
+  return v;
+end $$;
+revoke all on function public.taam_package_reconcile_list(int) from public, anon, authenticated;
+
+create or replace function public.taam_package_reconcile_kick()
+returns jsonb language plpgsql volatile security definer set search_path = public as $$
+declare v_cfg jsonb; v_name text; v_url text; v_jwt text; v_req bigint;
+begin
+  if jsonb_array_length(public.taam_package_reconcile_list(1)) = 0 then
+    return jsonb_build_object('ok', true, 'skipped', 'nothing');
+  end if;
+  if to_regclass('public.app_config') is null then return jsonb_build_object('ok', false, 'reason', 'no_config'); end if;
+  select value::jsonb into v_cfg from public.app_config where key = 'restock_push';
+  v_name := v_cfg->>'vault_secret'; v_url := v_cfg->>'url';
+  if coalesce(v_name, '') = '' or coalesce(v_url, '') = '' then return jsonb_build_object('ok', false, 'reason', 'no_config'); end if;
+  v_url := regexp_replace(v_url, '/functions/v1/[^/]+$', '/functions/v1/toss-package-pay');
+  if to_regprocedure('net.http_post(text,jsonb,jsonb,jsonb,integer)') is null then return jsonb_build_object('ok', false, 'reason', 'no_pg_net'); end if;
+  begin
+    select decrypted_secret into v_jwt from vault.decrypted_secrets where name = v_name limit 1;
+  exception when others then v_jwt := null; end;
+  if coalesce(v_jwt, '') = '' then return jsonb_build_object('ok', false, 'reason', 'no_secret'); end if;
+  select net.http_post(url := v_url, headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', 'Bearer ' || v_jwt),
+                       body := jsonb_build_object('action', 'sweep'), timeout_milliseconds := 55000) into v_req;
+  return jsonb_build_object('ok', true, 'request_id', v_req);
+end $$;
+revoke all on function public.taam_package_reconcile_kick() from public, anon, authenticated;
+do $do$ begin
+  if exists (select 1 from pg_extension where extname = 'pg_cron') then
+    begin perform cron.unschedule('taam-package-reconcile'); exception when others then null; end;
+    perform cron.schedule('taam-package-reconcile', '*/10 * * * *', $job$ select public.taam_package_reconcile_kick(); $job$);
+    insert into _pk values ('K 결과 모르는 카드 주문 정리 — 10분 크론', '✅');
+  else
+    insert into _pk values ('K 결과 모르는 카드 주문 정리 — 10분 크론', '⚠ pg_cron 없음 — 함수만 설치(정리는 회원 재접속·슈퍼어드민 「카드 결제 확인」으로)');
+  end if;
+exception when others then insert into _pk values ('K 크론 등록', '⚠ ' || left(sqlerrm, 160));
+end $do$;
+
 -- ── 확인 (하나로 · ❌ 가 없어야 정상) ──
 select 항목, 결과 from _pk
-union all select '함수 18개', case when (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname in (
+union all select '함수 21개', case when (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname in (
          'taam_package_save','taam_package_unlink','taam_package_list','taam_package_orders_admin','taam_guard_ticket_package','taam_guard_tp_package_delete',
          '_taam_pkg_rows','taam_package_start','_taam_pkg_confirm','taam_package_confirm_deposit','taam_package_release','taam_package_order_prepare',
          'taam_package_confirm_card','taam_package_fail','taam_package_cancel_quote','taam_package_cancel','taam_package_card_refund_mark',
-         'taam_package_order_claim')) = 18
+         'taam_package_order_claim','taam_package_order_close','taam_package_reconcile_kick','taam_package_reconcile_list')) = 21
        and to_regprocedure('public.taam_package_card_refund_quote(text)') is not null then '✅' else '❌ 빠진 함수가 있다' end
 union all select 'E 가드 트리거', case when exists (select 1 from pg_trigger where tgname = 'trg_taam_guard_ticket_package' and not tgisinternal) then '✅' else '❌' end
 union all select 'E 회차 삭제 가드', case when exists (select 1 from pg_trigger where tgname = 'trg_taam_guard_tp_package_delete' and not tgisinternal) then '✅' else '❌' end
@@ -974,6 +1084,9 @@ union all select '회원·비로그인이 서버 함수를 못 부른다',
        case when has_function_privilege('authenticated', 'public.taam_package_order_prepare(text, uuid)', 'execute')
               or has_function_privilege('authenticated', 'public.taam_package_confirm_card(text)', 'execute')
               or has_function_privilege('authenticated', 'public.taam_package_order_claim(text, text, text, text, timestamptz, jsonb, text, text)', 'execute')
+              or has_function_privilege('authenticated', 'public.taam_package_order_close(text, text)', 'execute')
+              or has_function_privilege('authenticated', 'public.taam_package_reconcile_kick()', 'execute')
+              or has_function_privilege('authenticated', 'public.taam_package_reconcile_list(int)', 'execute')
               or has_function_privilege('anon', 'public.taam_package_start(text, int, text[], bigint)', 'execute') then '❌' else '✅' end
 union all select '필요한 옛 함수(taam_ticket_price_krw · _taam_pu_visit_date · taam_time_slot · is_super_admin)',
        case when to_regprocedure('public.taam_ticket_price_krw(text, integer)') is not null and to_regproc('public._taam_pu_visit_date') is not null

@@ -11013,6 +11013,8 @@ function _tossHandleReturn(qIn){
     }
 
     // 승인 — 앱 부팅이 어느 정도 끝난 뒤 실행
+    // 🔧 2026-10-29 그 1.2초 사이 가시성 복귀(_tossRecoverTrip)가 아직 pending 인 주문의 좌석을 풀지 않게 — 승인이 곧 돈다는 표시(App Links 복귀는 주소가 안 바뀐다)
+    window._tossReturnPendingAt = Date.now();
     setTimeout(function(){ _tossConfirmPayment(_pk, _oid, _amt); }, 1200);
   } catch(_e){}
 }
@@ -11063,6 +11065,7 @@ document.addEventListener('visibilitychange', function(){
     _tossRestoreViewport();
   }
   try { _tossRecoverTrip(); } catch(_re){}
+  try { if (typeof _pkResumeUnresolved === 'function') _pkResumeUnresolved(true); } catch(_pe){}   // 🆕 2026-10-29 확인이 늦어진 패키지 결제
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -11091,7 +11094,7 @@ document.addEventListener('visibilitychange', function(){
 var _tossRecovering = false;
 async function _tossRecoverTrip(){
   if (_tossRecovering) return;
-  if (window._tossConfirmRunning) return;   // 🔧 2026-10-29 복귀 승인이 도는 중 — 그 주문은 아직 pending 이다(여기서 좌석을 풀면 승인이 좌석 없이 취소된다)
+  if (window._tossConfirmRunning || (window._tossReturnPendingAt && Date.now() - window._tossReturnPendingAt < 30000)) return;   // 🔧 2026-10-29 복귀 승인이 도는 중(또는 곧 돈다) — 그 주문은 아직 pending 이다(여기서 좌석을 풀면 승인이 좌석 없이 취소된다)
   if (typeof _tossHasTrip !== 'function' || !_tossHasTrip()) return;
   // 결과 쿼리를 받고 돌아온 경우는 위쪽 복귀 핸들러가 처리한다
   if (/[?&]toss_(pay|billing)=/.test(location.search || '')) return;
@@ -62175,8 +62178,13 @@ function _pkBlockReason(ts){
     if(typeof _tkTierAllowed === 'function' && !_tkTierAllowed(t)) return _pkT('pkg.tier', '이용 등급이 맞지 않는 일정이 있습니다');
     // 게스트석으로만 열린 회차는 패키지로 못 산다(게스트석은 확정 대기라 묶음 결제와 맞지 않는다)
     if(typeof _tkIsGuestSeat === 'function' && _tkIsGuestSeat(t) && String(t.minTier || '') !== 'A' && window._currentUserGrade === 'A') return _pkT('pkg.tier', '이용 등급이 맞지 않는 일정이 있습니다');
-    // 로컬 매진 표시는 낡을 수 있다(내 앞 시도의 홀드 · 그 사이 취소) — 서버 좌석 수를 읽었으면 그쪽(인원 선택지가 막는다)
-    if(t.status === 'soldout' && !(_pk.sold && _pk.sold[String(t.id)])) return _pkT('pkg.sold_out_round', '매진된 일정이 있습니다');
+    // 로컬 매진 표시는 낡을 수 있다(내 앞 시도의 홀드 · 그 사이 취소) — 서버 상태를 읽었으면 그쪽: 어드민이 손으로 잠근 매진(auto_soldout=false · 앱 밖 판매)만 막고
+    //   자동 매진은 좌석 수가 정한다(인원 선택지). 서버 상태를 못 읽었으면 로컬 매진 그대로(2차 검증 — 서버 좌석 수만 보고 손 잠금을 비켜 갔다)
+    var srv = (_pk.tpst || {})[String(t.id)];
+    if(srv){
+      if(srv.status === 'soldout' && srv.auto_soldout !== true) return _pkT('pkg.sold_out_round', '매진된 일정이 있습니다');
+      if(/^(pending|hidden|deleteRequest|deleted)$/.test(String(srv.status || ''))) return _pkT('pkg.unavailable', '지금은 예약할 수 없는 패키지입니다');
+    } else if(t.status === 'soldout') return _pkT('pkg.sold_out_round', '매진된 일정이 있습니다');
   }
   return '';
 }
@@ -62209,7 +62217,12 @@ function pkOpen(pkgId){
   var p = window._tkPkgs[pkgId];
   if(!p){ showToast('⚠', _pkT('pkg.unavailable', '지금은 예약할 수 없는 패키지입니다'), ''); return; }
   if(_pk.busy || _pk.inflight){ showToast('⏳', _pkT('pkg.paying', '결제 중'), _pkT('pkg.wait', '잠시만 기다려주세요')); return; }
-  _pk = { id: p.id, pax: 0, holds: [], gid: null, total: 0, busy: false, agreed: false, remain: {}, sold: {}, seq: (_pk.seq || 0) + 1 };
+  // 확인이 늦어진 앞 결제가 있으면 그것부터(그 묶음의 좌석을 반납하면 승인된 카드가 좌석 없이 취소된다)
+  if(_pkUnresolved()){
+    _pkResumeUnresolved(false).then(function(st){ if(st === 'clear') pkOpen(pkgId); });
+    return;
+  }
+  _pk = { id: p.id, pax: 0, holds: [], gid: null, total: 0, busy: false, agreed: false, remain: {}, sold: {}, tpst: {}, seq: (_pk.seq || 0) + 1 };
   var ts = _pkRounds(p), opts = _pkPaxOptions(ts.filter(Boolean));
   _pk.pax = opts.length ? opts[0] : 0;
   var el = document.getElementById('pkSheet');
@@ -62222,8 +62235,17 @@ function pkOpen(pkgId){
   var trip = null; try { trip = JSON.parse(sessionStorage.getItem('taam_pkg_trip') || 'null'); } catch(_e){}
   var pre = (window.sb && !(trip && trip.pkg === p.id) && !window._tossConfirmRunning)
     ? window.sb.rpc('taam_package_release', { p_group: null, p_package: p.id }).then(function(){}, function(){}) : Promise.resolve();
-  // 회차마다 남은 좌석(서버) — 인원 선택지
+  // 회차마다 남은 좌석(서버) — 인원 선택지 · 회차 상태(손으로 잠근 매진)
   pre.then(function(){
+    if(window.sb){
+      var ids = ts.filter(Boolean).map(function(t){ return String(t.id); });
+      var rd = function(cols){ return window.sb.from('ticket_products').select(cols).in('id', ids); };
+      Promise.resolve(rd('id,status,auto_soldout')).then(function(res){ return (res && res.error) ? rd('id,status') : res; }).then(function(res){
+        if(_pk.seq !== mySeq || !res || res.error || !Array.isArray(res.data)) return;
+        res.data.forEach(function(x){ _pk.tpst[String(x.id)] = { status: x.status, auto_soldout: (x.auto_soldout === undefined ? null : x.auto_soldout) }; });
+        _pkRender();
+      }).catch(function(){});
+    }
     ts.forEach(function(t){
       if(!t || !window.sb) return;
       var cap = parseInt(t.assignedPax || t.totalPax, 10) || 0; if(cap <= 0) return;
@@ -62335,6 +62357,7 @@ function _pkHoldErr(m){
   if(/REPURCHASE_BLOCKED/.test(m)) return _pkT('pkg.repurchase', '재구매 제한 기간인 매장이 있습니다');
   if(/TIER_BLOCKED|GUEST_BLOCKED/.test(m)) return _pkT('pkg.tier', '이용 등급이 맞지 않는 일정이 있습니다');
   if(/PACKAGE_ONLY|PACKAGE_NOT_ACTIVE|PACKAGE_CHANGED|TICKET_NOT_APPROVED/.test(m)) return _pkT('pkg.err_closed', '판매가 끝났거나 구성이 바뀐 패키지입니다');
+  if(/ROUND_CLOSED/.test(m)) return _pkT('pkg.sold_out_round', '매진된 일정이 있습니다');
   return _pkT('seathold.fail', '좌석 확보에 실패했습니다 — 잠시 후 다시 시도해주세요');
 }
 function _pkServerErr(m){
@@ -62342,6 +62365,7 @@ function _pkServerErr(m){
   if(/PACKAGE_NOT_ACTIVE|GROUP_CLOSED/.test(m)) return _pkT('pkg.err_closed', '판매가 끝났거나 구성이 바뀐 패키지입니다');
   if(/HOLD_GONE|HOLDS_MISMATCH/.test(m)) return _pkT('pkg.err_hold', '좌석 확보 시간이 지났습니다 — 다시 시도해 주세요');
   if(/INSUFFICIENT_DEPOSIT/.test(m)) return _pkT('pkg.err_deposit', '예치금이 부족합니다');
+  if(/ROUND_CLOSED/.test(m)) return _pkT('pkg.sold_out_round', '매진된 일정이 있습니다');
   return _pkT('seathold.fail', '좌석 확보에 실패했습니다 — 잠시 후 다시 시도해주세요');
 }
 
@@ -62501,12 +62525,43 @@ async function _pkSettle(gid, retry){
   return { ok: false, error: 'pending', pending: true };
 }
 // 끝내 모르면 — 좌석은 반납하지 않고(결제가 확인되면 확정 · 아니면 서버가 5분 뒤 풀고 승인을 취소한다) 구매 내역을 보게 한다
-function _pkPendingNotice(){
+function _pkPendingNotice(gid){
+  // 그 묶음을 기억한다 — 다음에 시트를 열거나 앱으로 돌아오면 반납 대신 결과를 다시 묻는다(_pkResumeUnresolved)
+  try { if(gid) localStorage.setItem('taam_pkg_unresolved', JSON.stringify({ gid: _pkSafeId(gid), pkg: _pk.id, at: Date.now() })); } catch(_e){}
   _pk.holds = []; _pk.busy = false; _pk.inflight = false;
   var sh = document.getElementById('pkSheet'); if(sh) sh.style.display = 'none';
   showToast('⏳', _pkT('pkg.pending_title', '결제 확인이 늦어지고 있습니다'), _pkT('pkg.pending_body', '잠시 후 구매 내역을 확인해 주세요 — 결제가 확인되지 않으면 자동으로 취소됩니다'));
   try { taamSyncNow(true); } catch(_e){}
 }
+// 확인이 늦어진 패키지 결제 — 30분 안이면 기억한다(그 뒤로는 서버 정리 크론이 확정하거나 승인을 취소한다)
+function _pkUnresolved(){
+  var u = null; try { u = JSON.parse(localStorage.getItem('taam_pkg_unresolved') || 'null'); } catch(_e){}
+  if(!u || !u.gid) return null;
+  if(!(Date.now() - (parseInt(u.at, 10) || 0) < 30 * 60000)){ try { localStorage.removeItem('taam_pkg_unresolved'); } catch(_e){} return null; }
+  return u;
+}
+// 다시 묻는다 — 'done'(확정 · 완료 안내) · 'clear'(분명히 끝남 — 실패·취소·결제 없음) · 'wait'(아직 모름)
+async function _pkResumeUnresolved(quiet){
+  var u = _pkUnresolved(); if(!u || !window.sb || _pk.inflight || window._pkResuming) return u ? 'wait' : 'clear';
+  window._pkResuming = true;
+  try {
+    var au = null; try { au = await window.sb.auth.getUser(); } catch(_ae){}
+    if(!(au && au.data && au.data.user)) return 'wait';
+    if(!quiet) showToast('⏳', _pkT('pkg.pending_title', '결제 확인이 늦어지고 있습니다'), _pkT('pkg.wait', '잠시만 기다려주세요'));
+    var r = null; try { r = await window.sb.functions.invoke('toss-package-pay', { body: { action: 'resume', group_id: u.gid } }); } catch(_ie){}
+    var d = r && r.data;
+    if(d && d.ok){ try { localStorage.removeItem('taam_pkg_unresolved'); } catch(_e){} if(u.pkg) _pk.id = u.pkg; await _pkDone(d, 'card'); return 'done'; }
+    if(d && !_pkAmbiguous(d)){
+      try { localStorage.removeItem('taam_pkg_unresolved'); } catch(_e){}
+      if(d.refunded) showToast('⚠', _pkT('pkg.fail_title', '패키지 예약 실패'), _pkT('pkg.refunded', '결제하신 금액은 전액 취소됩니다'));
+      return 'clear';
+    }
+    if(!quiet) showToast('⏳', _pkT('pkg.pending_title', '결제 확인이 늦어지고 있습니다'), _pkT('pkg.pending_body', '잠시 후 구매 내역을 확인해 주세요 — 결제가 확인되지 않으면 자동으로 취소됩니다'));
+    return 'wait';
+  } finally { window._pkResuming = false; }
+}
+window._pkResumeUnresolved = _pkResumeUnresolved;
+setTimeout(function(){ try { _pkResumeUnresolved(true); } catch(_e){} }, 8000);   // 앱을 다시 열었을 때(로그인 복원 뒤)
 async function pkPayCard(saved){
   if(_pk.busy || _pk.inflight || !_pk.gid) return;
   _pk.busy = true;
@@ -62521,7 +62576,7 @@ async function pkPayCard(saved){
       var d = res && res.data;
       if(_pkAmbiguous(d)){
         d = await _pkSettle(gid0, function(){ return window.sb.functions.invoke('toss-package-pay', { body: { action: 'resume', group_id: gid0 } }); });
-        if(d && d.pending){ _pkPendingNotice(); return; }
+        if(d && d.pending){ _pkPendingNotice(gid0); return; }
       }
       _pk.inflight = false;
       if(d && d.ok && d.need_payment === false){ _pk.busy = false; _pkConfirmDepositPopup({ total: _pk.total }); return; }
@@ -62569,7 +62624,8 @@ async function _pkCardFail(d){
     no_billing_key: '등록된 카드가 없습니다', charge_failed: (d && d.reason) || '카드사에서 승인이 거절되었습니다',
     hold_gone: _pkT('pkg.err_hold', '좌석 확보 시간이 지났습니다 — 다시 시도해 주세요'), package_closed: _pkT('pkg.err_closed', '판매가 끝났거나 구성이 바뀐 패키지입니다'),
     package_changed: _pkT('pkg.err_changed', '금액이나 구성이 바뀌었습니다 — 다시 확인해 주세요'), price_changed: _pkT('pkg.err_changed', '금액이나 구성이 바뀌었습니다 — 다시 확인해 주세요'),
-    deposit_short: _pkT('pkg.err_deposit', '예치금이 부족합니다'), group_closed: _pkT('pkg.err_closed', '판매가 끝났거나 구성이 바뀐 패키지입니다')
+    deposit_short: _pkT('pkg.err_deposit', '예치금이 부족합니다'), group_closed: _pkT('pkg.err_closed', '판매가 끝났거나 구성이 바뀐 패키지입니다'),
+    round_closed: _pkT('pkg.sold_out_round', '매진된 일정이 있습니다'), rate_limited: _pkT('pkg.fail_retry', '결제를 마치지 못했습니다 — 다시 시도해 주세요')
   }[c] || _pkT('pkg.fail_retry', '결제를 마치지 못했습니다 — 다시 시도해 주세요');
   if(d && d.refunded) msg += ' · ' + _pkT('pkg.refunded', '결제하신 금액은 전액 취소됩니다');
   _pk.busy = false; await _pkRelease(); _pkRender();
@@ -62594,7 +62650,7 @@ async function _pkConfirmReturn(paymentKey, orderId, amount){
     try { sessionStorage.removeItem('taam_pkg_trip'); } catch(_e){}
     if(trip && trip.pkg) _pk.id = trip.pkg;
     if(d && d.ok){ await _pkDone(d, 'card'); return; }
-    if(d && d.pending){ _pkPendingNotice(); return; }
+    if(d && d.pending){ _pkPendingNotice(trip && trip.gid); return; }
     if(trip){ _pk.gid = trip.gid; }
     await _pkCardFail(d || { error: 'exception' });
   } catch(e){
@@ -62607,7 +62663,7 @@ window._pkConfirmReturn = _pkConfirmReturn;
 // 결제창에서 결제 없이 돌아왔을 때(실패·취소·빈 복귀) — 그 시도의 패키지 좌석을 돌려준다
 async function _pkTripRelease(){
   // 결제창 복귀 승인이 도는 중이면 손대지 않는다(그 승인의 좌석을 풀면 승인이 좌석 없이 취소된다)
-  if(window._tossConfirmRunning || _pk.inflight) return;
+  if(window._tossConfirmRunning || _pk.inflight || (window._tossReturnPendingAt && Date.now() - window._tossReturnPendingAt < 30000)) return;
   var trip = null; try { trip = JSON.parse(sessionStorage.getItem('taam_pkg_trip') || 'null'); } catch(_e){}
   if(!trip || !window.sb) return;
   // 그 시도의 주문이 이미 승인됐는지 먼저 본다 — paid 면 반납하지 않고 확정을 이어 간다
@@ -62619,7 +62675,7 @@ async function _pkTripRelease(){
         try { sessionStorage.removeItem('taam_pkg_trip'); } catch(_e){}
         if(trip.pkg) _pk.id = trip.pkg;
         if(d && d.ok){ await _pkDone(d, 'card'); return; }
-        if(d && d.pending){ _pkPendingNotice(); return; }
+        if(d && d.pending){ _pkPendingNotice(trip.gid); return; }
         return;
       }
     } catch(_pe){}
@@ -62924,6 +62980,20 @@ async function pkgAdminAct(btn){
   if(a === 'buyers'){ _pka.mode = 'buyers'; _pka.buyersPkg = p || { id: v, title: '' }; _pka.buyers = null; _pkaRender(); await _pkaLoadBuyers(); return; }
   if(a === 'crf'){ await _pkAdminCardRefund(v, null); await _pkaLoadBuyers(); return; }
   if(a === 'crfdone'){ await _pkAdminCardRefundManual(v); await _pkaLoadBuyers(); return; }
+  if(a === 'resume'){
+    // 결과를 모르는 카드 결제 — 토스에 다시 묻고 확정하거나(좌석이 살아 있으면) 분명히 안 되면 서버가 승인을 취소한다
+    _pka.busy = true;
+    try {
+      var rr = null; try { rr = await window.sb.functions.invoke('toss-package-pay', { body: { action: 'resume', group_id: v } }); } catch(_ie){}
+      var rd = rr && rr.data;
+      if(rd && rd.ok) showToast('✓', '확정했습니다', '패키지 좌석이 확정됐습니다');
+      else if(rd && rd.refunded) showToast('✓', '자동 취소했습니다', '좌석을 확정할 수 없어 카드 승인을 취소했습니다');
+      else if(rd && rd.error === 'not_paid') showToast('ⓘ', '결제 없음', '토스에 이 주문의 승인이 없습니다');
+      else showToast('⚠', '아직 확인되지 않았습니다', (rd && (rd.error || rd.reason)) || (rr && rr.error && rr.error.message) || '잠시 뒤 다시 확인해 주세요');
+    } finally { _pka.busy = false; }
+    await _pkaLoadBuyers();
+    return;
+  }
   if(a === 'ledger'){ try { pkgAdminClose(); if(typeof openMemberLedger === 'function') openMemberLedger(); if(typeof mlOpen === 'function') mlOpen(v); } catch(_e){} return; }
 }
 window.pkgAdminAct = pkgAdminAct;
@@ -62967,7 +63037,7 @@ function _pkaBuyersHtml(){
   if(B === null) return h + '<div style="color:#aaa;font-size:12px;padding:20px 0;text-align:center;">불러오는 중…</div>';
   if(B.err) return h + '<div style="color:#9B1C1C;font-size:12px;">' + _pkaEsc(B.err) + '</div>';
   if(!B.length) return h + '<div style="color:#aaa;font-size:12px;padding:20px 0;text-align:center;">아직 없습니다</div>';
-  var st = { paid: ['결제', '#1E7A46'], cancelled: ['취소', '#857069'], hold: ['결제 중', '#9A6B12'] };
+  var st = { paid: ['결제', '#1E7A46'], cancelled: ['취소', '#857069'], hold: ['결제 중', '#9A6B12'], failed: ['결제 안 됨', '#9B1C1C'] };
   B.forEach(function(o){
     var s = st[o.status] || [o.status, '#888'], cr = o.card_refund || null;
     h += '<div style="border:1px solid #eee;border-radius:12px;padding:11px 12px;margin-bottom:8px;font-size:12.5px;line-height:1.65;">'
@@ -62976,7 +63046,10 @@ function _pkaBuyersHtml(){
       + (o.cancel ? '<div style="color:#857069;">취소 ' + _pkaEsc(String(o.cancel.at || '').slice(0, 16).replace('T', ' ')) + ' · 환불 ₩' + Number(o.cancel.refund || 0).toLocaleString()
           + ' (예치금 ₩' + Number(o.cancel.deposit_refund || 0).toLocaleString() + (Number(o.cancel.card_refund) ? ' · 카드 ₩' + Number(o.cancel.card_refund).toLocaleString() : '') + ')' + (o.cancel.role === 'super_admin' ? ' · 운영' : '') + '</div>' : '')
       + (cr ? '<div style="margin-top:4px;padding:7px 9px;border-radius:8px;background:' + (cr.status === 'done' ? '#EAF6EE' : '#FFF6E8') + ';color:' + (cr.status === 'done' ? '#1E7A46' : '#9A6B12') + ';font-weight:700;">💳 카드 환불 ₩' + Number(cr.amount || 0).toLocaleString() + ' · ' + (cr.status === 'done' ? '완료(' + _pkaEsc(cr.via === 'toss_api' ? '앱 토스 승인취소' : '완료 표시') + ')' : '대기') + '</div>' : '')
+      + (o.card_issue ? '<div style="margin-top:4px;padding:7px 9px;border-radius:8px;background:#FDECEC;color:#9B1C1C;font-weight:700;">⚠ 카드 결제 확인 필요 — 주문 ' + _pkaEsc(o.card_issue.order_id || '') + ' · ₩' + Number(o.card_issue.amount || 0).toLocaleString()
+          + ' · ' + _pkaEsc(o.card_issue.status || '') + (o.card_issue.fail_reason ? ' (' + _pkaEsc(o.card_issue.fail_reason) + ')' : '') + '<div style="font-weight:500;font-size:11.5px;">카드는 승인됐을 수 있는데 좌석 확정·취소 결과가 없습니다 — 서버가 10분마다 다시 확인합니다. 지금 확인하려면 아래 버튼</div></div>' : '')
       + '<div style="display:flex;gap:6px;margin-top:7px;flex-wrap:wrap;">'
+      + (o.card_issue && o.card_issue.status !== 'canceled' ? '<button data-pka-a="resume" data-pka-v="' + _pkSafeId(o.id) + '" onclick="pkgAdminAct(this)" style="padding:7px 10px;border:none;background:#9B1C1C;color:#fff;border-radius:8px;font-size:11.5px;font-weight:800;cursor:pointer;">🔄 카드 결제 확인</button>' : '')
       + (cr && cr.status === 'pending' ? '<button data-pka-a="crf" data-pka-v="' + _pkSafeId(o.id) + '" onclick="pkgAdminAct(this)" style="padding:7px 10px;border:none;background:#5C0A14;color:#fff;border-radius:8px;font-size:11.5px;font-weight:800;cursor:pointer;">💳 토스 승인취소 실행</button>'
             + '<button data-pka-a="crfdone" data-pka-v="' + _pkSafeId(o.id) + '" onclick="pkgAdminAct(this)" style="padding:7px 10px;border:1px solid #ddd;background:#fff;border-radius:8px;font-size:11.5px;cursor:pointer;">상점관리자에서 처리함 · 완료 표시</button>' : '')
       + (o.user_id ? '<button data-pka-a="ledger" data-pka-v="' + _pkSafeId(o.user_id) + '" onclick="pkgAdminAct(this)" style="padding:7px 10px;border:1px solid #ddd;background:#fff;border-radius:8px;font-size:11.5px;cursor:pointer;">원장</button>' : '')

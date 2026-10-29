@@ -316,6 +316,34 @@ ok "회원은 자기 패키지 구매만 읽는다" "$(AS "$M1" "select count(*)
 has "회원은 패키지 표를 못 쓴다" "$(AS "$M1" "insert into public.ticket_packages(id,title) values ('x','y')")" "permission denied"
 has "회원은 구매 표를 못 쓴다" "$(AS "$M1" "update public.ticket_package_orders set status = 'paid'")" "permission denied"
 
+echo "── 14. 2차 검증 반영 — 손으로 잠근 매진 · 주문 닫기 · 정리 크론 ──"
+Q "alter table public.ticket_products add column if not exists auto_soldout boolean default true; update public.profiles set membership_deposit_balance = 0, general_deposit_balance = 10000000 where id = '$M5'" >/dev/null
+for x in A:$RA B:$RB C:$RC; do t=${x%%:*}; r=${x#*:}; H "$M5" "$r" tp$t 2 PAYH-tp${t}_m5k "{\"pkg\":\"$PK1\"}" >/dev/null; done
+Q "update public.ticket_products set status = 'soldout', auto_soldout = false where id = 'tpB'" >/dev/null
+has "어드민이 손으로 잠근 매진(auto_soldout=false) 회차가 든 패키지 등록 → ROUND_CLOSED" "$(AS "$M5" "select public.taam_package_start('$PK1', 2, array['PAYH-tpA_m5k','PAYH-tpB_m5k','PAYH-tpC_m5k'])")" "ROUND_CLOSED"
+Q "update public.ticket_products set auto_soldout = true where id = 'tpB'" >/dev/null
+has "  ↳ 자동 매진(좌석이 다 찬 것)은 막지 않는다(좌석 가드 몫)" "$(AS "$M5" "select public.taam_package_start('$PK1', 2, array['PAYH-tpA_m5k','PAYH-tpB_m5k','PAYH-tpC_m5k'])")" '"ok": true'
+G7=$(Q "select id from public.ticket_package_orders where user_id = '$M5' and status = 'hold'")
+Q "update public.ticket_products set status = 'soldout', auto_soldout = false where id = 'tpB'" >/dev/null
+has "결제 사이 손으로 잠그면 예치금 확정도 → ROUND_CLOSED" "$(AS "$M5" "select public.taam_package_confirm_deposit('$G7', 2300000)")" "ROUND_CLOSED"
+has "  ↳ 카드 주문 만들기도 → ROUND_CLOSED(긁기 전에)" "$(Q "select public.taam_package_order_prepare('$G7', '$M5')")" "ROUND_CLOSED"
+Q "update public.ticket_products set status = 'active' where id = 'tpB'" >/dev/null
+Q "update public.profiles set general_deposit_balance = 100000 where id = '$M5'" >/dev/null
+O7=$(Q "select public.taam_package_order_prepare('$G7', '$M5')"); OID7=$(echo "$O7" | grep -o '"order_id": "[^"]*"' | cut -d'"' -f4)
+Q "select public.taam_package_order_claim('$OID7','pk_m5','카드',null,now(),'{}'::jsonb,'window')" >/dev/null
+has "정리 크론 — 볼 것이 없으면 Edge 를 부르지 않는다(방금 승인된 주문은 3분 기다린다)" "$(Q "select public.taam_package_reconcile_kick()")" '"skipped": "nothing"'
+has "회원은 주문 닫기·정리 크론을 못 부른다" "$(AS "$M5" "select public.taam_package_order_close('$OID7','x')")" "permission denied"
+has "  ↳ (정리 크론)" "$(AS "$M5" "select public.taam_package_reconcile_kick()")" "permission denied"
+has "확정 거절 뒤 주문 닫기(승인 취소 전) — paid 주문을 canceled 로" "$(Q "select public.taam_package_order_close('$OID7','hold_gone')")" '"closed": true'
+ok "  ↳ 주문 canceled · 사유 hold_gone_canceling(토스 취소 결과는 Edge 가 이어 적는다)" "$(Q "select status || '/' || fail_reason from public.payment_orders where order_id = '$OID7'")" "canceled/hold_gone_canceling"
+has "  ↳ 닫힌 주문으로는 확정이 안 된다(취소하는 사이 다른 호출이 확정하는 경주 없음) → ORDER_NOT_PAID" "$(Q "select public.taam_package_confirm_card('$OID7')")" "ORDER_NOT_PAID"
+ok "  ↳ 좌석은 그대로 홀드(확정 안 됨)" "$(Q "select count(*) from public.tickets where purchase_id like 'PAYH-tp%_m5k' and status = 'hold'")" "3"
+has "이 주문으로 확정 뒤 취소된 묶음의 주문은 닫지 않는다(settled)" "$(Q "select public.taam_package_order_close('$OID2','x')")" '"settled": "cancelled"'
+ok "  ↳ 그 주문은 paid 그대로" "$(Q "select status from public.payment_orders where order_id = '$OID2'")" "paid"
+has "정리 크론 — 취소 도중 끊긴(_canceling) 주문이 있으면 Edge 를 부르려 한다(픽스처엔 설정 없음 → no_config)" "$(Q "select public.taam_package_reconcile_kick()")" '"reason": "no_config"'
+Q "update public.payment_orders set fail_reason = 'hold_gone_refunded' where order_id = '$OID7'" >/dev/null
+AS "$M5" "select public.taam_package_release('$G7', null)" >/dev/null
+
 echo "── 13. 재실행 ──"
 out2=$($P -f "$MIG" 2>&1)
 echo "$out2" | grep -q "❌" && { echo "❌ 재실행 ❌"; echo "$out2" | grep "❌"; FAIL=1; } || echo "✅ 재실행 ❌ 없음"

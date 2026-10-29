@@ -9,6 +9,8 @@
 //             결제창은 앱이 이 orderId/amount 로 연다(successUrl ?toss_pay=success → 앱이 action confirm 으로).
 //   confirm — 회원 · {orderId, paymentKey, amount} → 주문(package_topup · 본인 · pending) → 토스 승인(TOSS_SECRET_KEY) → 주문 paid → 확정
 //   billing — 회원 · {group_id} → 주문 만들기 + 등록 카드(billing_keys) 승인(TOSS_BILLING_SECRET_KEY · 없으면 TOSS_SECRET_KEY) → 확정
+//   resume  — 회원(자기 묶음) · 슈퍼어드민(누구든 — 「카드 결제 확인」) · {group_id} → 그 묶음의 마지막 카드 주문: paid 면 확정부터 · pending 이면 토스에 주문 번호로 조회(새로 긁지 않는다)
+//   sweep   — 서버만(service_role · 정리 크론 taam_package_reconcile_kick 10분) → taam_package_reconcile_list 가 고른 주문(확정 안 된 paid · 10분 넘은 pending · 취소 실패)을 정리
 //   refund  — 슈퍼어드민 · {group_id, dry_run | expect_amount} → 서버 견적(취소 때 정한 카드 몫) → 토스 남은 금액 확인 → 부분취소 → 완료 표시
 // 확정 = taam_package_confirm_card(주문) — 예치금 차감 · 회차 줄 확정 · 줄마다 예치금·카드 몫을 한 트랜잭션으로. 서버가 **분명히** 거절하면(좌석 만료·예치금 변동·
 //   패키지 해제·늦게 온 옛 주문 — 4xx + 우리 코드) 토스 승인을 **전액 취소**하고(Idempotency-Key taam-cancel-<paymentKey>) 주문 canceled · 묶음 failed(홀드 반납).
@@ -38,21 +40,30 @@ async function sbInsert(path: string, rows: unknown){
   const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { method: 'POST', headers: { ...SB_H(), Prefer: 'return=minimal' }, body: JSON.stringify(rows) });
   return r.ok;
 }
-// 실패는 {status, definite} 을 단 Error — definite = 서버가 우리 코드로 거절했다(4xx). 네트워크·5xx·모르는 오류는 애매하다.
+// 실패는 {status, definite} 을 단 Error — definite = 서버 함수가 **우리 코드로** 거절했다(트랜잭션은 롤백됐다).
+//   ⚠ HTTP 상태로 가르지 않는다 — PostgREST 는 P0001 만 400 이고 그 밖의 P0* (우리 HOLD_GONE · ORDER_SUPERSEDED · GROUP_CLOSED · PACKAGE_* 는 P0002)를
+//   **500** 으로 보낸다(2차 검증). 본문에 SQLSTATE(code)가 있고 메시지가 우리 코드면 분명한 거절, 게이트웨이 5xx·네트워크·모르는 오류는 애매.
 class RpcError extends Error { status: number; definite: boolean;
-  constructor(m: string, status: number){ super(m); this.status = status; this.definite = status >= 400 && status < 500 && sqlCode(m) !== 'confirm_failed'; } }
+  constructor(m: string, status: number, pgCode?: string){ super(m); this.status = status;
+    const ours = sqlCode(m) !== 'confirm_failed';
+    this.definite = ours && ((status >= 400 && status < 500) || /^[0-9A-Z]{5}$/.test(String(pgCode || ''))); } }
 async function sbRpc(fn: string, args: unknown){
   let r: Response;
   try { r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fn}`, { method: 'POST', headers: SB_H(), body: JSON.stringify(args) }); }
   catch(e){ throw new RpcError('network ' + String((e as Error)?.message || e).slice(0, 120), 0); }
   const b = await r.json().catch(() => null);
-  if(!r.ok) throw new RpcError(String((b && (b.message || b.hint)) || ('rpc ' + fn + ' ' + r.status)), r.status);
+  if(!r.ok) throw new RpcError(String((b && (b.message || b.hint)) || ('rpc ' + fn + ' ' + r.status)), r.status, b && b.code);
   return b;
 }
 const isDefinite = (e: unknown) => !!(e && (e as RpcError).definite);
+// 서버 호출(정리 크론 · DB 의 pg_net)인가 — 토큰의 role 클레임이 service_role. 서명은 게이트웨이(verify_jwt=true)가 이미 확인했다(send-push 와 같은 방식)
+function isServiceToken(t: string): boolean {
+  try { const p = JSON.parse(atob(t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))); return p && p.role === 'service_role'; } catch(_e){ return false; }
+}
 async function caller(req: Request): Promise<{ id: string; email: string; role: string } | null>{
   const h = req.headers.get('Authorization') || ''; const t = h.startsWith('Bearer ') ? h.slice(7) : '';
   if(!t) return null;
+  if(isServiceToken(t)) return { id: '', email: '', role: 'service' };
   const u = await fetch(`${SUPABASE_URL}/auth/v1/user`, { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${t}` } });
   if(!u.ok) return null; const j = await u.json().catch(() => null); if(!j?.id) return null;
   const p = await sbGet(`profiles?id=eq.${encodeURIComponent(j.id)}&select=role`);
@@ -66,7 +77,7 @@ function sqlCode(m: string): string {
     [/HOLD_GONE|HOLDS_MISMATCH/, 'hold_gone'], [/PACKAGE_NOT_ACTIVE/, 'package_closed'], [/PACKAGE_CHANGED/, 'package_changed'],
     [/INSUFFICIENT_DEPOSIT/, 'deposit_short'], [/PRICE_CHANGED|PRICE_NOT_SET/, 'price_changed'], [/GROUP_CLOSED|GROUP_NOT_FOUND/, 'group_closed'],
     [/ORDER_SUPERSEDED/, 'superseded'], [/ORDER_NOT_PAID|ORDER_NOT_FOUND/, 'order_not_found'], [/FORBIDDEN|내 예약이 아닙니다/, 'forbidden'],
-    [/RATE_LIMITED/, 'rate_limited'],
+    [/RATE_LIMITED/, 'rate_limited'], [/ROUND_CLOSED/, 'round_closed'],
   ];
   for(const [re, c] of map) if(re.test(m)) return c;
   return 'confirm_failed';
@@ -156,20 +167,32 @@ async function finalize(order: Record<string, any>, paymentKey: string, secret: 
   const code = sqlCode(msg);
   if(!isDefinite(lastErr)){
     console.warn('[toss-package-pay] 확정 애매 — 취소하지 않음', order.order_id, msg.slice(0, 160));
-    await notifyAdmin(order, 'confirm_unknown', 'pending').catch(() => {});
+    await markUnknown(order, 'paid', 'confirm_unknown');
     return json({ ok: false, error: 'confirm_pending', retry: true, paid: true, orderId: order.order_id });
   }
-  // 분명한 거절 — 그래도 취소 직전에 묶음을 한 번 더(이 주문으로 이미 확정·취소된 묶음이면 승인 취소 금지)
-  const st = await groupSettledBy(gid, order.order_id);
-  if(st === 'paid' || st === 'cancelled') return okRes({ already: true });
-  if(st === 'unknown'){
-    await notifyAdmin(order, code + '_lookup_failed', 'pending').catch(() => {});
+  // 분명한 거절 — **먼저 주문을 닫고**(서버가 주문을 잠근 채 묶음이 이 주문으로 확정됐는지 본다) 닫혔을 때만 승인을 취소한다.
+  //   닫기 전에 취소하면 그 사이 다른 호출(resume · 정리 크론)이 확정해 좌석은 살고 카드는 환불되는 경주가 있었다(2차 검증)
+  let cl: Record<string, any> | null = null;
+  try { cl = await sbRpc('taam_package_order_close', { p_order: order.order_id, p_reason: code }); } catch(_ce){ cl = null; }
+  if(!cl){
+    await markUnknown(order, 'paid', code + '_close_failed');
     return json({ ok: false, error: 'confirm_pending', retry: true, paid: true, orderId: order.order_id });
   }
-  console.warn('[toss-package-pay] 확정 거절 — 승인 취소', order.order_id, msg.slice(0, 160));
-  const canceled = await cancelOrAlert(secret, paymentKey, order, code === 'deposit_short' ? '예치금 부족으로 구매 불가' : '좌석·패키지 변동으로 구매 불가', code);
+  if(cl.settled) return okRes({ already: true });
+  if(!cl.closed) return json({ ok: false, error: code, refunded: cl.status === 'canceled' ? true : null, orderId: order.order_id });   // 다른 호출이 이미 닫았다
+  console.warn('[toss-package-pay] 확정 거절 — 주문 닫고 승인 취소', order.order_id, msg.slice(0, 160));
+  const canceled = await tossCancelAll(secret, paymentKey, code === 'deposit_short' ? '예치금 부족으로 구매 불가' : '좌석·패키지 변동으로 구매 불가');
+  await sbPatch(`payment_orders?order_id=eq.${encodeURIComponent(order.order_id)}&status=eq.canceled`, { fail_reason: code + (canceled ? '_refunded' : '_refund_failed') }).catch(() => null);
+  if(!canceled) await notifyAdmin(order, code, 'cancel_failed').catch(() => {});   // 정리 크론이 같은 키로 다시 취소한다
   if(gid && code !== 'superseded') { try { await sbRpc('taam_package_fail', { p_group: gid, p_reason: code }); } catch(_fe){ /* 홀드는 5분 뒤 풀린다 */ } }
   return json({ ok: false, error: code, refunded: canceled, orderId: order.order_id });
+}
+// 결과를 모르는 주문 — 한 번만 알린다(사유 칸에 표시 · 앱 재시도·정리 크론이 같은 주문을 여러 번 본다)
+async function markUnknown(order: Record<string, any>, status: string, code: string){
+  if(String(order.fail_reason || '') === 'unknown:' + code) return;
+  await sbPatch(`payment_orders?order_id=eq.${encodeURIComponent(order.order_id)}&status=eq.${status}`, { fail_reason: 'unknown:' + code }).catch(() => null);
+  order.fail_reason = 'unknown:' + code;
+  await notifyAdmin(order, code, 'pending').catch(() => {});
 }
 
 // ── 알림 — 슈퍼어드민(벨 + 푸시) · 회차 매장 파트너(notify-purchase) ──
@@ -207,7 +230,7 @@ async function notifyAdmin(order: Record<string, any>, code: string, kind: 'canc
   const title = kind === 'cancel_failed' ? '⚠ 패키지 카드 결제 자동 취소 실패 — 상점관리자 확인 필요' : '⚠ 패키지 카드 결제 확정 보류 — 확인 필요';
   const body = kind === 'cancel_failed'
     ? '주문 ' + order.order_id + ' · ' + amt + ' · 사유 ' + code + ' — 좌석은 확정되지 않았습니다. 토스 상점관리자에서 승인취소해 주세요.'
-    : '주문 ' + order.order_id + ' · ' + amt + ' · ' + code + ' — 카드는 승인됐는데 좌석 확정 결과를 모릅니다. 회원이 다시 열면 이어서 확정합니다 — 패키지 관리 「구매자」에서 확인해 주세요.';
+    : '주문 ' + order.order_id + ' · ' + amt + ' · ' + code + ' — 카드가 승인됐을 수 있는데 좌석 확정 결과를 모릅니다. 서버가 10분마다 다시 확인해 확정하거나(좌석이 살아 있으면) 승인을 취소합니다 — 바로 확인하려면 패키지 관리 「구매자」의 「🔄 카드 결제 확인」.';
   if(sups.length) await sbInsert('notifications', sups.map((p: any) => ({ user_id: p.id, type: 'seat_hold_convert_failed', title, body, url: '/',
     payload: { order_id: order.order_id, package_order: order.metadata?.group_id, actor_id: order.user_id, via: 'toss-package-pay', kind } })));
 }
@@ -253,12 +276,31 @@ async function afterApproved(order: Record<string, any>, t: Record<string, any>,
     c.status = 'unknown';
   }
   if(c.status === 'unknown' || c.status === 'error'){
-    await notifyAdmin(order, 'claim_unknown', 'pending').catch(() => {});
+    await markUnknown(order, 'pending', 'claim_unknown');
     return json({ ok: false, error: 'confirm_pending', retry: true, paid: true, orderId: order.order_id });
   }
   // pending 이 아니다(대체됨 · 실패 · 취소) — 이 승인은 확정하지 않고 취소
   const canceled = await cancelOrAlert(secret, paymentKey, order, '주문 상태 변경', 'superseded');
   return json({ ok: false, error: 'superseded', refunded: canceled });
+}
+
+// pending 주문 — 토스에 주문 번호로 조회(두 MID). DONE 이면 잡고 확정 · 어디에도 없으면 not_paid · 모르면 retry
+async function reconcilePending(order: Record<string, any>, buyer: { id: string; email: string }){
+  let unknown = false; const tried: string[] = [];
+  for(const v of ['billing_key', 'window']){
+    const sec = secretFor(v); if(!sec || tried.indexOf(sec) >= 0) continue; tried.push(sec);
+    const lk = await tossLookup(sec, '', String(order.order_id));
+    if(lk.done){
+      const approved = Number(lk.body.totalAmount ?? lk.body.balanceAmount ?? 0);
+      if(approved !== Number(order.amount)){
+        const canceled = await cancelOrAlert(sec, String(lk.body.paymentKey || ''), order, '금액 불일치', 'amount_mismatch_toss:' + approved);
+        return json({ ok: false, error: 'amount_mismatch_toss', refunded: canceled });
+      }
+      return await afterApproved(order, lk.body, String(lk.body.paymentKey || ''), sec, v, buyer);
+    }
+    if(!lk.gone) unknown = true;
+  }
+  return unknown ? json({ ok: false, error: 'confirm_retry', retry: true }) : json({ ok: false, error: 'not_paid' });
 }
 
 async function prepare(groupId: string, uid: string){
@@ -273,6 +315,7 @@ async function handle(req: Request){
   try {
     const body = await req.json().catch(() => ({})) as Record<string, any>;
     const action = String(body.action || '');
+    if(me.role === 'service' && action !== 'sweep') return json({ ok: false, error: 'forbidden' }, 403);
     const gid = String(body.group_id || '');
     if(gid && (gid.length > 80 || !/^[A-Za-z0-9_\-:.]+$/.test(gid))) return json({ ok: false, error: 'bad_group' });
 
@@ -312,7 +355,11 @@ async function handle(req: Request){
           // 승인이 실제로 됐을 수 있다 — 조회해서 DONE 이면 잇고, 아니면 실패로 굳히지 않고 다시 해 보게
           const lk = await tossLookup(secret, paymentKey, orderId);
           if(!lk.done){
-            if(!lk.gone) return json({ ok: false, error: 'confirm_retry', retry: true, reason: String(t.body?.code || ('http_' + t.status)).slice(0, 80) });
+            if(!lk.gone){
+              // 승인이 됐을 수 있다 — 슈퍼어드민에게 한 번 알리고(정리 크론이 10분 뒤 주문 번호로 다시 조회한다) 다시 해 보게
+              await markUnknown(order, 'pending', 'toss_confirm_' + String(t.body?.code || t.status).slice(0, 40));
+              return json({ ok: false, error: 'confirm_retry', retry: true, reason: String(t.body?.code || ('http_' + t.status)).slice(0, 80) });
+            }
           } else t = { ok: true, status: 200, body: lk.body };
         }
         if(!t.ok || t.body?.status !== 'DONE'){
@@ -357,7 +404,7 @@ async function handle(req: Request){
             const lk = await tossLookup(secret, '', orderId);
             if(lk.done) t = { ok: true, status: 200, body: lk.body };
             else if(!lk.gone){
-              await notifyAdmin(order, 'billing_unknown:' + String(t.body?.code || t.status), 'pending').catch(() => {});
+              await markUnknown(order, 'pending', 'billing_' + String(t.body?.code || t.status).slice(0, 40));
               return json({ ok: false, error: 'charge_unknown', retry: false, orderId });
             }
           }
@@ -381,27 +428,58 @@ async function handle(req: Request){
     //   이 묶음의 마지막 카드 주문을 읽어 paid 면 확정부터, pending 이면 토스에 주문 번호로 조회해 DONE 이면 잇는다(새로 긁지 않는다)
     if(action === 'resume'){
       if(!gid) return json({ ok: false, error: 'bad_group' });
-      const rows = await sbGet(`payment_orders?purpose=eq.package_topup&user_id=eq.${encodeURIComponent(me.id)}&metadata->>group_id=eq.${encodeURIComponent(gid)}&select=*&order=created_at.desc&limit=1`);
+      const own = isSuper(me.role) ? '' : `&user_id=eq.${encodeURIComponent(me.id)}`;   // 슈퍼어드민은 회원의 묶음도(「카드 결제 확인」)
+      const rows = await sbGet(`payment_orders?purpose=eq.package_topup${own}&metadata->>group_id=eq.${encodeURIComponent(gid)}&select=*&order=created_at.desc&limit=1`);
       if(rows === null) return json({ ok: false, error: 'order_lookup_failed', retry: true });
       const order = rows[0];
       if(!order) return json({ ok: false, error: 'order_not_found' });
       const via = String(order.metadata?.paid_via || '');
-      if(order.status === 'paid') return await finalize(order, String(order.payment_key || ''), secretFor(via), me);
+      const buyer = order.user_id === me.id ? me : { id: String(order.user_id), email: '' };   // 슈퍼어드민이 회원 대신 확인
+      if(order.status === 'paid') return await finalize(order, String(order.payment_key || ''), secretFor(via), buyer);
       if(order.status !== 'pending') return json({ ok: false, error: 'order_not_pending', status: order.status });
-      for(const v of ['billing_key', 'window']){
-        const sec = secretFor(v); if(!sec) continue;
-        const lk = await tossLookup(sec, '', String(order.order_id));
-        if(lk.done){
-          const approved = Number(lk.body.totalAmount ?? lk.body.balanceAmount ?? 0);
-          if(approved !== Number(order.amount)){
-            const canceled = await cancelOrAlert(sec, String(lk.body.paymentKey || ''), order, '금액 불일치', 'amount_mismatch_toss:' + approved);
-            return json({ ok: false, error: 'amount_mismatch_toss', refunded: canceled });
+      return await reconcilePending(order, buyer);
+    }
+
+    // sweep — 서버만(정리 크론 taam_package_reconcile_kick) · 결과를 모르는 주문을 정리한다(목록은 서버 함수가 고른다)
+    if(action === 'sweep'){
+      if(me.role !== 'service') return json({ ok: false, error: 'forbidden' }, 403);
+      let list: any[] = [];
+      try { list = (await sbRpc('taam_package_reconcile_list', { p_limit: 15 })) || []; } catch(_le){ return json({ ok: false, error: 'list_failed' }); }
+      const out = { n: 0, confirmed: 0, cancelled: 0, retried: 0, expired: 0, left: 0 };
+      for(const o of list){
+        out.n++;
+        const buyer = { id: String(o.user_id || ''), email: '' };
+        const via = String(o.metadata?.paid_via || '');
+        try {
+          if(o.reconcile === 'cancel'){
+            // 취소 실패 · 취소 도중 끊김 — 같은 멱등 키로 다시
+            const base = String(o.fail_reason || '').replace(/_(refund_failed|canceling)$/, '');
+            const ok = await tossCancelAll(secretFor(via), String(o.payment_key || ''), '패키지 결제 정리');
+            if(ok){ await sbPatch(`payment_orders?order_id=eq.${encodeURIComponent(o.order_id)}&status=eq.canceled`, { fail_reason: base + '_refunded' }).catch(() => null); out.retried++; }
+            else {
+              if(/_canceling$/.test(String(o.fail_reason || ''))){
+                await sbPatch(`payment_orders?order_id=eq.${encodeURIComponent(o.order_id)}&status=eq.canceled`, { fail_reason: base + '_refund_failed' }).catch(() => null);
+                await notifyAdmin(o, base, 'cancel_failed').catch(() => {});
+              }
+              out.left++;
+            }
+            continue;
           }
-          return await afterApproved(order, lk.body, String(lk.body.paymentKey || ''), sec, v, me);
-        }
-        if(!lk.gone) return json({ ok: false, error: 'confirm_retry', retry: true });
+          const r = o.reconcile === 'confirm' ? await finalize(o, String(o.payment_key || ''), secretFor(via), buyer) : await reconcilePending(o, buyer);
+          const b = await r.json();
+          if(b.ok) out.confirmed++;
+          else if(b.refunded) out.cancelled++;
+          else if(b.error === 'not_paid'){
+            // 토스에 그 주문의 승인이 없다 — 결제창을 닫았거나 등록 카드 청구가 안 됐다. 실패로 닫는다(다시 조회하지 않게)
+            await sbPatch(`payment_orders?order_id=eq.${encodeURIComponent(o.order_id)}&status=eq.pending`, { status: 'failed', fail_reason: 'expired' }).catch(() => null);
+            out.expired++;
+          } else {
+            if(o.reconcile === 'lookup' && Date.now() - Date.parse(String(o.created_at)) > 3600e3) await markUnknown(o, 'pending', 'sweep_unknown');
+            out.left++;
+          }
+        } catch(_se){ out.left++; }
       }
-      return json({ ok: false, error: 'not_paid' });
+      return json({ ok: true, ...out });
     }
 
     if(action === 'refund'){
