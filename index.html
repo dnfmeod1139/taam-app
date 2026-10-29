@@ -35310,9 +35310,17 @@ function _paxPolicyDefault(row, newPax){
   var perPax = Math.floor(price / oldPax);
   var ex = row.extra_data || {};
   var agencyPer = parseInt(ex.agencyFee || 0) || 0;
+  var _t = (ticketDB || []).find(function(x){ return String(x.id) === String(row.ticket_product_id); });
   if(!agencyPer){
-    var _t = (ticketDB || []).find(function(x){ return String(x.id) === String(row.ticket_product_id); });
     agencyPer = _t ? (parseInt(_t.agencyFee || 0) || 0) : 0;
+  }
+  // 🆕 2026-10-29 서버 한도와 같은 식 — 앞선 감소가 남긴 대행비는 빼고 나눈다(한 명씩 줄이면 대행비가 새던 것) · 회차 정가 1인 몫을 넘지 않는다
+  var origPax = oldPax;
+  try { var _pc0 = (ex.pax_changes || [])[0]; if(_pc0 && parseInt(_pc0.from) > oldPax) origPax = parseInt(_pc0.from); } catch(e){}
+  var netPer = Math.max(0, Math.floor((price - agencyPer * origPax) / oldPax));
+  if(_t){
+    var _lp1 = _tkMemberPer(_t);
+    if(_lp1 > 0){ perPax = Math.min(perPax, _lp1); netPer = Math.min(netPer, Math.max(0, _lp1 - agencyPer)); }
   }
 
   // 구매 30분 이내 — 전액
@@ -35323,12 +35331,12 @@ function _paxPolicyDefault(row, newPax){
 
   var visit = row.reservation_date ? _dParseDate(String(row.reservation_date)) : null;
   if(!visit || isNaN(visit.getTime())){
-    return { amount: Math.min(price, delta * Math.max(0, perPax - agencyPer)),
+    return { amount: Math.min(price, delta * netPer),
              reason: '방문일 미확인 — 대행비 제외(보수적)', policy: 'agency_excluded' };
   }
   var days = (visit - Date.now()) / 86400000;
   if(days >= 31){
-    return { amount: Math.min(price, delta * Math.max(0, perPax - agencyPer)),
+    return { amount: Math.min(price, delta * netPer),
              reason: '방문 ' + Math.floor(days) + '일 전 — 대행비 제외', policy: 'agency_excluded' };
   }
   return { amount: 0,
@@ -35458,6 +35466,9 @@ async function paxChangeApply(){
     // 🆕 2026-10-29 보안 점검 — 서버가 운영 행 거부 · 파트너 환불 한도(줄인 인원 몫) · 자기 구매 금지를 센다
     var friendly = /FORBIDDEN_OWN/.test(m) ? '자기 구매의 인원은 바꿀 수 없습니다'
       : /PAX_CHANGE_NOT_FOR_OPS/.test(m) ? '수동·초대 홀드·결제 링크·정산 좌석은 여기서 바꾸지 않습니다(수동 좌석은 「수정」)'
+      : /PAX_CHANGE_NOT_PAID/.test(m) ? '결제가 확정된 예약만 인원을 바꿀 수 있습니다'
+      : /PAX_CHANGE_BAD_ROUND/.test(m) ? '이 매장 회차의 예약이 아닙니다'
+      : /REFUND_TOO_LARGE: 이 예약에/.test(m) ? m.replace(/^.*REFUND_TOO_LARGE:\s*/, '').slice(0, 80)
       : /FORBIDDEN/.test(m) ? '이 구매를 바꿀 권한이 없습니다'
       : /INCREASE_NOT_SUPPORTED/.test(m) ? '인원 증가는 아직 지원하지 않습니다'
       : /ALREADY_CANCELLED/.test(m) ? '이미 취소된 구매입니다'
@@ -35927,7 +35938,7 @@ function _tbRow(r, showDate, nextKey){
     var isSuper = (typeof _isSuperAdmin === 'function') && _isSuperAdmin();
     h += '<div class="tb-acts">'
       + (tel ? '<button onclick="tbCall(\'' + tel + '\')">전화 ' + tel.slice(-4) + '</button>' : '')
-      + (pax > 1 ? '<button class="warn" onclick="tbPax(\'' + _tbEsc(pid).replace(/'/g, "\\'") + '\')">인원 변경</button>' : '')
+      + (pax > 1 && !/^(MAN|INVH|KSK|LINK)-/.test(String(pid || '')) ? '<button class="warn" onclick="tbPax(\'' + _tbEsc(pid).replace(/'/g, "\\'") + '\')">인원 변경</button>' : '')
       + (isSuper && r.user_id ? '<button onclick="tbLedger(\'' + r.user_id + '\')">원장</button>' : '')
       + '</div>';
     // 방문 기록은 줄을 따로 준다 — 전화·인원변경과 성격이 다르고,
@@ -40296,7 +40307,7 @@ function _rvRow(r, isPast){
     h += '<div class="tb-acts">'
       + (tel ? '<button onclick="tbCall(\'' + tel + '\')">전화 ' + tel.slice(-4) + '</button>' : '')
       + '<button onclick="rvMemoOpen(\'' + esc + '\')">' + (adm ? '메모 고치기' : '메모') + '</button>'
-      + (st.s !== 'cx' && pax > 1 ? '<button class="warn" onclick="rvPax(\'' + esc + '\')">인원 변경</button>' : '')
+      + (st.s !== 'cx' && pax > 1 && !/^(MAN|INVH|KSK|LINK)-/.test(String(r.purchase_id || '')) ? '<button class="warn" onclick="rvPax(\'' + esc + '\')">인원 변경</button>' : '')
       + (isSuper && r.user_id ? '<button onclick="tbLedger(\'' + r.user_id + '\')">원장</button>' : '')
       + '</div>';
     var _va = _visActs(r, st);
@@ -63351,7 +63362,7 @@ async function renderMemberList() {
         + 'font-size:8.5px;font-weight:800;letter-spacing:.04em;vertical-align:1px;'
         + (isOverseas ? 'background:#eef2f6;color:#5b6b7a;' : 'background:#f6eef0;color:#5C0A14;')
         + '">' + (isOverseas ? '해외' : '국내') + '</span>';
-      return '<div class="mem-card" style="'+(isDeleted?'opacity:.45;':'')+'" onclick="memOpenProfileQuick(\''+_esc(m.id)+'\',\''+_esc(m.display_name||'')+'\')">'
+      return '<div class="mem-card" style="'+(isDeleted?'opacity:.45;':'')+'" onclick="memOpenProfileQuick(this.getAttribute(\'data-uid\'))" data-uid="'+_esc(m.id)+'">'
         +'<div class="mem-card-top">'
           +'<div class="mem-name">'+_esc(m.display_name||'(이름 없음)')+'</div>'
           +'<div class="mem-grade '+gradeCls+'">'+gradeLabel+'</div>'
