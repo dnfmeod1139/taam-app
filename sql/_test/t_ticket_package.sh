@@ -204,9 +204,11 @@ has "취소 — 예치금 1,500,000 · 카드 400,000" "$CX" '"deposit_refund": 
 ok "세 줄 모두 취소" "$(Q "select count(*) from public.tickets where purchase_id like 'PAYH-tp%_m1' and status = 'cancelled'")" "3"
 ok "예치금이 나간 주머니로(멤버십 1,000,000 · 일반 500,000)" "$(Q "select membership_deposit_balance || '/' || general_deposit_balance from public.profiles where id = '$M1'")" "1000000/500000"
 ok "환불 원장 — 구매 id 마다(환불 한도 가드를 지난다)" "$(Q "select string_agg(metadata->>'purchase_id' || ':' || deposit_type || ':' || amount, ',' order by metadata->>'purchase_id') from public.deposit_transactions where user_id = '$M1' and change_type = 'ticket_refund'")" "PAYH-tpA_m1:membership:1000000,PAYH-tpB_m1:general:500000"
-ok "첫 줄에 카드 환불 대기 400,000(카드환불 탭)" "$(Q "select (extra_data->'card_refund_pending'->>'amount') || '/' || (extra_data->'card_refund_pending'->>'pkg_group' = '$G1') || '/' || (extra_data->'card_refund_pending'->>'set_by_role') from public.tickets where purchase_id = 'PAYH-tpA_m1'")" "400000/true/member"
+ok "카드 몫이 있는 첫 줄(B)에 카드 환불 대기 400,000(카드환불 탭)" "$(Q "select (extra_data->'card_refund_pending'->>'amount') || '/' || (extra_data->'card_refund_pending'->>'pkg_group' = '$G1') || '/' || (extra_data->'card_refund_pending'->>'set_by_role') from public.tickets where purchase_id = 'PAYH-tpB_m1'")" "400000/true/member"
 ok "줄마다 예치금 환불 몫(A 800,000+200,000 · B 500,000 · C 0) · 줄 환불액(정책)" "$(Q "select string_agg((extra_data->>'deposit_refund') || '/' || (extra_data->>'refunded_amount'), ',' order by purchase_id) from public.tickets where purchase_id like 'PAYH-tp%_m1'")" "1000000/800000,500000/700000,0/400000"
-ok "패키지 환불 요약은 첫 줄에만" "$(Q "select count(*) from public.tickets where purchase_id like 'PAYH-tp%_m1' and extra_data ? 'pkg_refund'")/$(Q "select extra_data->'pkg_refund'->>'refund' from public.tickets where purchase_id = 'PAYH-tpA_m1'")" "1/1900000"
+ok "패키지 환불 요약·카드 환불 대기는 카드 몫이 있는 첫 줄(B)에만" "$(Q "select count(*) from public.tickets where purchase_id like 'PAYH-tp%_m1' and extra_data ? 'pkg_refund'")/$(Q "select extra_data->'pkg_refund'->>'refund' from public.tickets where purchase_id = 'PAYH-tpB_m1'")" "1/1900000"
+ok "줄마다 카드 환불 몫(A 0 · B 200,000 · C 200,000 — 환불액 − 예치금 몫 · 카드 몫 안)" "$(Q "select string_agg(extra_data->>'pkg_card_refund', ',' order by purchase_id) from public.tickets where purchase_id like 'PAYH-tp%_m1'")" "0,200000,200000"
+ok "묶음 기록에 줄마다 몫(alloc)" "$(Q "select (cancel->'alloc'->'PAYH-tpC_m1'->>'card') || '/' || (cancel->'alloc'->'PAYH-tpA_m1'->>'dep') from public.ticket_package_orders where id = '$G1'")" "200000/1000000"
 ok "묶음 cancelled · 카드 환불 pending" "$(Q "select status || '/' || (card_refund->>'status') || '/' || (card_refund->>'amount') from public.ticket_package_orders where id = '$G1'")" "cancelled/pending/400000"
 has "두 번 취소 → GROUP_CLOSED" "$(AS "$M1" "select public.taam_package_cancel('$G1', 0)")" "GROUP_CLOSED"
 
@@ -215,7 +217,7 @@ has "회원은 카드 환불 견적을 못 본다" "$(AS "$M1" "select public.ta
 RQ=$(AS "$SU" "select public.taam_package_card_refund_quote('$G1')")
 has "견적 — 400,000 · 결제키" "$RQ" '"payment_key": "pk_m1"'
 has "완료 표시" "$(AS "$SU" "select public.taam_package_card_refund_mark('$G1', 400000, 'tx_1', 'toss_api')")" '"ok": true'
-ok "  ↳ 묶음 done · 첫 줄 대기 done · 주문 app_cancels" "$(Q "select card_refund->>'status' from public.ticket_package_orders where id = '$G1'")/$(Q "select extra_data->'card_refund_pending'->>'status' from public.tickets where purchase_id = 'PAYH-tpA_m1'")/$(Q "select jsonb_array_length(metadata->'app_cancels') from public.payment_orders where order_id = '$OID2'")" "done/done/1"
+ok "  ↳ 묶음 done · 그 줄 대기 done · 주문 app_cancels" "$(Q "select card_refund->>'status' from public.ticket_package_orders where id = '$G1'")/$(Q "select extra_data->'card_refund_pending'->>'status' from public.tickets where purchase_id = 'PAYH-tpB_m1'")/$(Q "select jsonb_array_length(metadata->'app_cancels') from public.payment_orders where order_id = '$OID2'")" "done/done/1"
 has "다시 표시 → already" "$(AS "$SU" "select public.taam_package_card_refund_mark('$G1', 400000)")" '"already": true'
 
 echo "── 9. 예치금만 · 방문 30일 안 회차 · 방문 시작 ──"

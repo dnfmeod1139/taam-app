@@ -734,7 +734,7 @@ declare
   v_uid uuid := auth.uid(); v_super boolean := coalesce(public.is_super_admin(auth.uid()), false);
   o public.ticket_package_orders%rowtype; q jsonb; rw jsonb; it jsonb; v_left bigint; v_take bigint; v_paid bigint; v_back bigint;
   v_m_out bigint; v_g_out bigint; v_m bigint; v_g bigint; v_mem bigint; v_gen bigint; v_tm bigint := 0; v_tg bigint := 0; v_first text := null;
-  v_rows jsonb := '[]'::jsonb; v_title text; v_by text; v_alloc jsonb := '{}'::jsonb; pass int;
+  v_rows jsonb := '[]'::jsonb; v_title text; v_by text; v_alloc jsonb := '{}'::jsonb; v_calloc jsonb := '{}'::jsonb; v_ref_i bigint; v_alloc_all jsonb := '{}'::jsonb; pass int;
 begin
   if v_uid is null then raise exception '로그인이 필요합니다' using errcode = '42501'; end if;
   select * into o from public.ticket_package_orders where id = p_group for update;
@@ -771,17 +771,40 @@ begin
     end loop;
   end loop;
 
+  -- 카드 환불 몫도 줄마다 — ① 그 줄의 환불액 − 예치금 몫, 그 줄의 카드 몫 안에서 ② 남으면 카드 몫이 남은 줄에(판매 현황이 매장별로 센다)
+  v_left := (q->>'card_refund')::bigint;
+  for pass in 1..2 loop
+    for it in select * from jsonb_array_elements(o.items) loop
+      exit when v_left <= 0;
+      select coalesce((x->>'refund')::bigint, 0) into v_ref_i from jsonb_array_elements(q->'rows') x where x->>'purchase_id' = it->>'purchase_id';
+      v_take := coalesce((v_calloc->>(it->>'purchase_id'))::bigint, 0);
+      v_take := least(v_left, greatest(0, coalesce((it->>'card')::bigint, 0) - v_take),
+                      case when pass = 1 then greatest(0, coalesce(v_ref_i, 0) - coalesce((v_alloc->>(it->>'purchase_id'))::bigint, 0)) else v_left end);
+      if v_take <= 0 then continue; end if;
+      v_calloc := v_calloc || jsonb_build_object(it->>'purchase_id', coalesce((v_calloc->>(it->>'purchase_id'))::bigint, 0) + v_take);
+      v_left := v_left - v_take;
+    end loop;
+  end loop;
+  for it in select * from jsonb_array_elements(o.items) loop
+    v_alloc_all := v_alloc_all || jsonb_build_object(it->>'purchase_id', jsonb_build_object(
+                     'dep', coalesce((v_alloc->>(it->>'purchase_id'))::bigint, 0), 'card', coalesce((v_calloc->>(it->>'purchase_id'))::bigint, 0)));
+  end loop;
+  -- 카드 환불 대기 · 패키지 환불 요약을 둘 줄 — 카드 몫이 있는 줄 먼저(그 줄에 주문 번호가 있어 결제 내역·카드환불 탭이 잇는다)
+  select x.v->>'purchase_id' into v_first from jsonb_array_elements(q->'rows') with ordinality x(v, i)
+   where x.v->>'status' = 'active'
+   order by (coalesce((v_calloc->>(x.v->>'purchase_id'))::bigint, 0) > 0) desc, x.i limit 1;
+
   perform set_config('taam.pkg_cancel', p_group, true);
-  -- 줄 취소 — 카드 환불 대기는 첫 줄에(기존 「카드환불」 탭이 이 칸을 읽는다) · 패키지 환불 요약도 첫 줄에(구매 내역이 한 번만 보이게)
+  -- 줄 취소 — 카드 환불 대기는 한 줄에(기존 「카드환불」 탭이 이 칸을 읽는다) · 패키지 환불 요약도 그 줄에(구매 내역이 한 번만 보이게)
   for rw in select * from jsonb_array_elements(q->'rows') loop
     if rw->>'status' <> 'active' then continue; end if;
-    if v_first is null then v_first := rw->>'purchase_id'; end if;
     update public.tickets
        set status = 'cancelled',
            extra_data = coalesce(extra_data, '{}'::jsonb)
                         || jsonb_build_object('cancelled_at', now(), 'refunded_amount', (rw->>'refund')::bigint, 'cancel_reason', coalesce(nullif(p_reason, ''), '패키지 취소'),
                                               'cancelled_by_role', v_by, 'pkg_cancel', p_group, 'refund_policy', rw->>'policy',
-                                              'deposit_refund', coalesce((v_alloc->>(rw->>'purchase_id'))::bigint, 0))
+                                              'deposit_refund', coalesce((v_alloc->>(rw->>'purchase_id'))::bigint, 0),
+                                              'pkg_card_refund', coalesce((v_calloc->>(rw->>'purchase_id'))::bigint, 0))
                         || case when rw->>'purchase_id' = v_first
                                 then jsonb_build_object('pkg_refund', jsonb_build_object('refund', (q->>'refund')::bigint, 'deposit_refund', (q->>'deposit_refund')::bigint,
                                                                                        'card_refund', (q->>'card_refund')::bigint, 'rows', jsonb_array_length(q->'rows')))
@@ -829,7 +852,8 @@ begin
   update public.ticket_package_orders
      set status = 'cancelled', cancelled_at = now(), updated_at = now(),
          cancel = jsonb_build_object('at', now(), 'by', v_uid, 'role', v_by, 'reason', p_reason, 'refund', q->'refund',
-                                     'deposit_refund', v_tm + v_tg, 'card_refund', q->'card_refund', 'full', p_full and v_super, 'rows', q->'rows'),
+                                     'deposit_refund', v_tm + v_tg, 'card_refund', q->'card_refund', 'full', p_full and v_super, 'rows', q->'rows',
+                                     'alloc', v_alloc_all),
          card_refund = case when (q->>'card_refund')::bigint > 0
                             then jsonb_build_object('amount', (q->>'card_refund')::bigint, 'order_id', o.order_id, 'status', 'pending',
                                                     'requested_at', now(), 'first_purchase_id', v_first)

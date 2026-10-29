@@ -359,6 +359,43 @@ SQL
 ok "V3 회원이 적은 처음 인원(pax_changes.from 1 · 줄임 환불 원장 없음)은 대행비를 깎지 못한다 (2명 × 150,000)" "$(row PAYH-pxf "concat_ws('/', r->>'agency', coalesce(r->>'pax0','-'))")" "300000/-"
 out2=$($P -f "$MIG" 2>&1)
 ok "두 번째 RUN: 오류 없음 · ❌ 0 · ⑤ 채널 합계 줄이 찍힌다(이름 없음)" "$(echo "$out2" | grep -E "^ERROR|^psql:.*ERROR" | head -1)|$(echo "$out2" | grep -c '❌')|$( [ $(echo "$out2" | grep -cE '⑤ (app|invite|link|settle)') -ge 4 ] && echo ok)|$(echo "$out2" | grep -c '회원1')" "|0|ok|0"
+echo "── 2026-10-29 패키지: 한 카드 주문이 여러 회차 — 줄마다 카드 몫 · 카드 환불 몫(20261029_ticket_package_reports.sql) ──"
+MIGP=supabase/migrations/20261029_ticket_package_reports.sql
+$P <<SQL >/dev/null
+create table if not exists public.ticket_package_orders(id text primary key, package_id text, user_id uuid, pax int, status text, purchase_ids text[], items jsonb,
+  total bigint, deposit_used bigint, card_paid bigint, order_id text, cancel jsonb, card_refund jsonb, paid_at timestamptz, created_at timestamptz default now());
+insert into public.ticket_products values ('tpK1','$R1','메이노','2026.12.20','19:00',400000,100000,0),('tpK2','$R1','메이노','2026.12.21','12:00',300000,50000,50000),('tpK3','$R1','메이노','2026.12.21','19:00',200000,50000,0);
+insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_date,party_size,price,status,purchase_id,extra_data,created_at) values
+ ('$M1','$R1','tpK1','2026.12.20',2,1000000,'active','PAYH-pkA_1','{"pkg":"pk_1","pkg_info":{"gid":"PKO-T1","i":1,"n":3},"paidBy":"card+deposit","depositUsed":1000000,"cardPaid":0}','2026-10-10T00:00:00Z'),
+ ('$M1','$R1','tpK2','2026.12.21',2,800000,'active','PAYH-pkB_1','{"pkg":"pk_1","order_id":"taampkg_1","depositUsed":500000,"cardPaid":300000}','2026-10-10T00:00:01Z'),
+ ('$M1','$R1','tpK3','2026.12.21',2,500000,'active','PAYH-pkC_1','{"pkg":"pk_1","order_id":"taampkg_1","depositUsed":0,"cardPaid":500000}','2026-10-10T00:00:02Z');
+insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata,created_at) values
+ ('$M1','membership','ticket_purchase',-1000000,'{"purchase_id":"PAYH-pkA_1","order_id":"taampkg_1"}','2026-10-10T00:00:05Z'),
+ ('$M1','general','ticket_purchase',-500000,'{"purchase_id":"PAYH-pkB_1","order_id":"taampkg_1"}','2026-10-10T00:00:05Z');
+insert into public.payment_orders(order_id,user_id,purpose,amount,currency,settle_krw,status,approved_at,metadata) values
+ ('taampkg_1','$M1','package_topup',800000,'KRW',800000,'paid','2026-10-10T00:00:04Z','{"group_id":"PKO-T1"}');
+insert into public.ticket_package_orders(id,package_id,user_id,pax,status,purchase_ids,items,total,deposit_used,card_paid,order_id,paid_at) values
+ ('PKO-T1','pk_1','$M1',2,'paid',array['PAYH-pkA_1','PAYH-pkB_1','PAYH-pkC_1'],
+  '[{"purchase_id":"PAYH-pkA_1","card":0},{"purchase_id":"PAYH-pkB_1","card":300000},{"purchase_id":"PAYH-pkC_1","card":500000}]',2300000,1500000,800000,'taampkg_1','2026-10-10T00:00:05Z');
+SQL
+ok "P0 고치기 전(4차) — 카드 주문 전액이 첫 카드 줄(B)에 · C 는 「돈 기록 없음」" "$(row PAYH-pkB_1 "r->>'gross'")/$(q "select count(*) from j, jsonb_array_elements(j->'rows') r where r->>'k' = 'PAYH-pkC_1'")" "1300000/0"
+outp=$($P -f "$MIGP" 2>&1)
+ok "P1 덧댐 — 오류 없음 · 새 판" "$(echo "$outp" | grep -cE "^ERROR|^psql:.*ERROR")/$(echo "$outp" | grep -c '✅ 덧댐')" "0/1"
+ok "P2 줄마다 판매 = 예치금 몫 + 카드 몫(A 1,000,000 · B 500,000+300,000 · C 500,000)" "$(row PAYH-pkA_1 "r->>'gross'")/$(row PAYH-pkB_1 "concat_ws('+', r->>'dep', r->>'card')")/$(row PAYH-pkC_1 "concat_ws('/', r->>'gross', r->>'pm')")" "1000000/500000+300000/500000/card"
+ok "P3 정가와 같다(플래그 없음) · 결제 시각 = 카드 승인" "$(row PAYH-pkB_1 "((r->'flags') ? 'price_differs')::text")/$(row PAYH-pkC_1 "left(r->>'paid_at', 16)")" "false/2026-10-10T00:00"
+$P <<SQL >/dev/null
+update public.tickets set status = 'cancelled' where purchase_id in ('PAYH-pkA_1','PAYH-pkB_1','PAYH-pkC_1');
+update public.tickets set extra_data = extra_data || '{"card_refund_pending":{"amount":400000,"status":"pending","pkg_group":"PKO-T1"}}' where purchase_id = 'PAYH-pkB_1';
+insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata,created_at) values
+ ('$M1','membership','ticket_refund',1000000,'{"purchase_id":"PAYH-pkA_1","cancel_refund":true,"refund_type":"returned","package_order":"PKO-T1"}','2026-10-12T00:00:00Z'),
+ ('$M1','general','ticket_refund',500000,'{"purchase_id":"PAYH-pkB_1","cancel_refund":true,"refund_type":"returned","package_order":"PKO-T1"}','2026-10-12T00:00:00Z');
+update public.ticket_package_orders set status = 'cancelled', card_refund = '{"amount":400000,"status":"pending"}',
+  cancel = '{"alloc":{"PAYH-pkA_1":{"dep":1000000,"card":0},"PAYH-pkB_1":{"dep":500000,"card":200000},"PAYH-pkC_1":{"dep":0,"card":200000}}}' where id = 'PKO-T1';
+SQL
+ok "P4 취소 — 카드 환불 대기는 줄마다 몫(B 200,000 · C 200,000 · 전체 400,000 을 B 에 몰지 않는다)" "$(row PAYH-pkB_1 "concat_ws('/', r->>'rf_card_pending', r->>'rf_cancel', r->>'net')")|$(row PAYH-pkC_1 "concat_ws('/', r->>'rf_card_pending', r->>'net')")" "200000/700000/100000|200000/300000"
+ok "P5 패키지 순판매 합 = 결제 2,300,000 − 환불 1,900,000 = 400,000" "$(q "select sum((r->>'net')::bigint) from j, jsonb_array_elements(j->'rows') r where r->>'k' like 'PAYH-pk%'")" "400000"
+outp2=$($P -f "$MIGP" 2>&1)
+ok "P6 재실행 — 이미 새 판" "$(echo "$outp2" | grep -c '이미 새 판')" "1"
 # 화면 시험용 — TSR_DUMP=파일 이면 보고서 JSON 을 남긴다(결제일·전체 · 기본)
 [ -n "$TSR_DUMP" ] && $P -c "select public.taam_ticket_sales_report(null, null, 'paid', false)" > "$TSR_DUMP"
 psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1
