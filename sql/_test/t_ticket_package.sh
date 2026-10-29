@@ -173,9 +173,11 @@ ok "카드창 왕복 동안 좌석을 붙든다(홀드 시각 다시)" "$(Q "sel
 has "결제 안 된 주문으로 확정 → ORDER_NOT_PAID" "$(Q "select public.taam_package_confirm_card('$OID1')")" "ORDER_NOT_PAID"
 O2=$(Q "select public.taam_package_order_prepare('$G1', '$M1')"); OID2=$(echo "$O2" | grep -o '"order_id": "[^"]*"' | cut -d'"' -f4)
 ok "다시 주문하면 옛 주문은 superseded" "$(Q "select status || '/' || fail_reason from public.payment_orders where order_id = '$OID1'")" "failed/superseded"
-Q "update public.payment_orders set status = 'paid', payment_key = 'pk_old' where order_id = '$OID1'" >/dev/null
+has "옛 toss-confirm 모양(표시 없이 paid) → PACKAGE_ORDER_CLAIM" "$(Q "update public.payment_orders set status = 'paid', payment_key = 'pk_x', metadata = jsonb_build_object('toss', '{}'::jsonb) where order_id = '$OID2'")" "PACKAGE_ORDER_CLAIM"
+has "옛 toss-billing-charge 모양(주문 metadata 펼침 + paid_via) → PACKAGE_ORDER_CLAIM" "$(Q "update public.payment_orders set status = 'paid', payment_key = 'pk_x', metadata = metadata || jsonb_build_object('paid_via','billing_key') where order_id = '$OID2'")" "PACKAGE_ORDER_CLAIM"
+Q "update public.payment_orders set status = 'paid', payment_key = 'pk_old', metadata = metadata || jsonb_build_object('pkg_claim','toss-package-pay') where order_id = '$OID1'" >/dev/null
 has "늦게 승인된 옛 주문으로 확정 → ORDER_SUPERSEDED(Edge 가 카드 취소)" "$(Q "select public.taam_package_confirm_card('$OID1')")" "ORDER_SUPERSEDED"
-Q "update public.payment_orders set status = 'paid', payment_key = 'pk_m1', approved_at = now() where order_id = '$OID2'" >/dev/null
+Q "update public.payment_orders set status = 'paid', payment_key = 'pk_m1', approved_at = now(), metadata = metadata || jsonb_build_object('pkg_claim','toss-package-pay','paid_via','window') where order_id = '$OID2'" >/dev/null
 C1=$(Q "select public.taam_package_confirm_card('$OID2')")
 has "카드 확정 — 합계 2,300,000 · 예치금 1,500,000 · 카드 800,000" "$C1" '"card_paid": 800000'
 ok "세 줄 확정 · 정가" "$(Q "select string_agg(purchase_id || '=' || status || ':' || price, ',' order by purchase_id) from public.tickets where purchase_id like 'PAYH-tp%_m1'")" "PAYH-tpA_m1=active:1000000,PAYH-tpB_m1=active:800000,PAYH-tpC_m1=active:500000"

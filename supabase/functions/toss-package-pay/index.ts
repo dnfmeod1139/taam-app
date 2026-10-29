@@ -14,6 +14,8 @@
 //   토스 승인을 **전액 취소**하고(Idempotency-Key taam-cancel-<paymentKey>) 주문 canceled · 묶음 failed(홀드 반납).
 //   주문이 이미 paid 인데 확정이 안 된 상태(앞 호출이 중간에 끊김)면 confirm 을 다시 부르면 확정부터 다시 한다(확정은 멱등 · 취소 키도 같다).
 // 토스 응답 원문은 저장하지 않는다(secret 칸) — 고른 칸만.
+// 주문을 paid 로 잡을 때 metadata.pkg_claim = 'toss-package-pay' 를 적는다 — DB 가 이 표시 없는 패키지 주문의 paid 를 거절한다
+//   (옛 toss-confirm/toss-billing-charge 가 패키지 주문번호로 불려도 좌석 없이 paid 로 끝나지 않게 · 20261029_ticket_package.sql B').
 // 오류는 HTTP 200 + {ok:false, error} (앱이 사유를 읽는다) — 인증만 401/403.
 // 시크릿: SUPABASE_URL · SUPABASE_SERVICE_ROLE_KEY · TOSS_SECRET_KEY · TOSS_BILLING_SECRET_KEY(선택)
 // ═════════════════════════════════════════════════
@@ -200,7 +202,7 @@ async function handle(req: Request){
       }
       const claim = await sbPatch(`payment_orders?order_id=eq.${encodeURIComponent(orderId)}&status=eq.pending`, {
         status: 'paid', payment_key: paymentKey, method: t.body.method || null, receipt_url: t.body.receipt?.url || null,
-        approved_at: t.body.approvedAt || new Date().toISOString(), metadata: { ...(order.metadata || {}), toss: pickToss(t.body), paid_via: 'window' } });
+        approved_at: t.body.approvedAt || new Date().toISOString(), metadata: { ...(order.metadata || {}), toss: pickToss(t.body), paid_via: 'window', pkg_claim: 'toss-package-pay' } });
       if(!claim.ok) return json({ ok: false, error: 'order_update_failed', paid: true });
       if(!claim.rows.length){
         const again = await sbGet(`payment_orders?order_id=eq.${encodeURIComponent(orderId)}&select=*`);
@@ -242,7 +244,7 @@ async function handle(req: Request){
       const claim = await sbPatch(`payment_orders?order_id=eq.${encodeURIComponent(orderId)}&status=eq.pending`, {
         status: 'paid', payment_key: pk, method: t.body.method || 'billing', receipt_url: t.body.receipt?.url || null,
         approved_at: t.body.approvedAt || new Date().toISOString(),
-        metadata: { ...meta0, toss: pickToss(t.body), paid_via: 'billing_key', billing_key_id: card.id } });
+        metadata: { ...meta0, toss: pickToss(t.body), paid_via: 'billing_key', billing_key_id: card.id, pkg_claim: 'toss-package-pay' } });
       if(!claim.ok || !claim.rows.length){
         // 그 사이 다른 호출이 주문을 바꿨다(새 주문으로 덮임 등) — 이 승인은 확정하지 않고 취소한다
         const canceled = await tossCancelAll(secret, pk, '주문 상태 변경');

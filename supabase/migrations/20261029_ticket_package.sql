@@ -106,6 +106,25 @@ begin
 exception when others then insert into _pk values ('B payment_orders 용도 제약', '⚠ ' || left(sqlerrm, 160));
 end $do$;
 
+-- B'. 패키지 주문은 toss-package-pay 만 paid 로 만든다 — 옛 toss-confirm / toss-billing-charge 가 패키지 주문번호를 받으면
+--     카드는 승인하고 좌석은 확정하지 않은 채 paid 로 끝낸다(용도를 모른다). 그 갱신을 막아 둔다(확정 표시 pkg_claim 은 새 함수만 적는다).
+create or replace function public.taam_guard_pkg_order_claim()
+returns trigger language plpgsql as $$
+begin
+  if new.purpose = 'package_topup' and new.status = 'paid' and old.status is distinct from 'paid'
+     and coalesce(new.metadata->>'pkg_claim', '') <> 'toss-package-pay' then
+    raise exception 'PACKAGE_ORDER_CLAIM: 패키지 주문은 toss-package-pay 로만 확정합니다' using errcode = '42501';
+  end if;
+  return new;
+end $$;
+do $do$ begin
+  if to_regclass('public.payment_orders') is not null then
+    execute 'drop trigger if exists trg_taam_guard_pkg_order_claim on public.payment_orders';
+    execute 'create trigger trg_taam_guard_pkg_order_claim before update of status on public.payment_orders for each row execute function public.taam_guard_pkg_order_claim()';
+    insert into _pk values ('B'' 패키지 주문은 새 함수만 paid 로', '✅');
+  end if;
+end $do$;
+
 -- ── C. 도우미 ──
 create or replace function public._taam_pkg_super_ok()
 returns boolean language plpgsql stable security definer set search_path = public as $$
@@ -684,7 +703,8 @@ begin
     if v_st = 'active' and v_days is not null and v_days <= 0 then v_block := coalesce(v_block, 'VISIT_STARTED'); end if;
     v_sum := v_sum + v_ref;
     v_dep_paid := v_dep_paid + coalesce((it->>'dep')::bigint, 0);
-    v_rows := v_rows || jsonb_build_object('purchase_id', it->>'purchase_id', 'rest_name', it->>'rest_name', 'date', it->>'date', 'time', it->>'time',
+    v_rows := v_rows || jsonb_build_object('purchase_id', it->>'purchase_id', 'ticket_product_id', it->>'ticket_product_id', 'rest_name', it->>'rest_name',
+                                           'date', it->>'date', 'time', it->>'time',
                                            'price', (it->>'price')::bigint, 'refund', v_ref, 'policy', v_pol, 'days', v_days, 'status', v_st);
   end loop;
   select coalesce(sum(amount), 0) into v_dep_back from public.deposit_transactions
