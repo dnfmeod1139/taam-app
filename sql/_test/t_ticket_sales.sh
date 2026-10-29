@@ -385,15 +385,17 @@ ok "P2 줄마다 판매 = 예치금 몫 + 카드 몫(A 1,000,000 · B 500,000+30
 ok "P3 정가와 같다(플래그 없음) · 결제 시각 = 카드 승인" "$(row PAYH-pkB_1 "((r->'flags') ? 'price_differs')::text")/$(row PAYH-pkC_1 "left(r->>'paid_at', 16)")" "false/2026-10-10T00:00"
 $P <<SQL >/dev/null
 update public.tickets set status = 'cancelled' where purchase_id in ('PAYH-pkA_1','PAYH-pkB_1','PAYH-pkC_1');
-update public.tickets set extra_data = extra_data || '{"card_refund_pending":{"amount":400000,"status":"pending","pkg_group":"PKO-T1"}}' where purchase_id = 'PAYH-pkB_1';
+update public.tickets set extra_data = extra_data || '{"card_refund_pending":{"amount":600000,"status":"pending","pkg_group":"PKO-T1"}}' where purchase_id = 'PAYH-pkB_1';
 insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata,created_at) values
- ('$M1','membership','ticket_refund',1000000,'{"purchase_id":"PAYH-pkA_1","cancel_refund":true,"refund_type":"returned","package_order":"PKO-T1"}','2026-10-12T00:00:00Z'),
+ ('$M1','membership','ticket_refund',800000,'{"purchase_id":"PAYH-pkA_1","cancel_refund":true,"refund_type":"returned","package_order":"PKO-T1"}','2026-10-12T00:00:00Z'),
  ('$M1','general','ticket_refund',500000,'{"purchase_id":"PAYH-pkB_1","cancel_refund":true,"refund_type":"returned","package_order":"PKO-T1"}','2026-10-12T00:00:00Z');
-update public.ticket_package_orders set status = 'cancelled', card_refund = '{"amount":400000,"status":"pending"}',
-  cancel = '{"alloc":{"PAYH-pkA_1":{"dep":1000000,"card":0},"PAYH-pkB_1":{"dep":500000,"card":200000},"PAYH-pkC_1":{"dep":0,"card":200000}}}' where id = 'PKO-T1';
+update public.ticket_package_orders set status = 'cancelled', card_refund = '{"amount":600000,"status":"pending"}',
+  cancel = '{"alloc":{"PAYH-pkA_1":{"dep":800000,"card":0},"PAYH-pkB_1":{"dep":500000,"card":200000},"PAYH-pkC_1":{"dep":0,"card":400000}}}' where id = 'PKO-T1';
 SQL
-ok "P4 취소 — 카드 환불 대기는 줄마다 몫(B 200,000 · C 200,000 · 전체 400,000 을 B 에 몰지 않는다)" "$(row PAYH-pkB_1 "concat_ws('/', r->>'rf_card_pending', r->>'rf_cancel', r->>'net')")|$(row PAYH-pkC_1 "concat_ws('/', r->>'rf_card_pending', r->>'net')")" "200000/700000/100000|200000/300000"
+ok "P4 취소 — 카드 환불 대기는 줄마다 몫(B 200,000 · C 400,000 · 전체 600,000 을 B 에 몰지 않는다)" "$(row PAYH-pkB_1 "concat_ws('/', r->>'rf_card_pending', r->>'rf_cancel', r->>'net')")|$(row PAYH-pkC_1 "concat_ws('/', r->>'rf_card_pending', r->>'net')")" "200000/700000/100000|400000/100000"
 ok "P5 패키지 순판매 합 = 결제 2,300,000 − 환불 1,900,000 = 400,000" "$(q "select sum((r->>'net')::bigint) from j, jsonb_array_elements(j->'rows') r where r->>'k' like 'PAYH-pk%'")" "400000"
+$P -c "update public.tickets set extra_data = extra_data || '{\"card_refund_pending\":{\"amount\":300000,\"status\":\"pending\"}}' where purchase_id = 'PAYH-pkC_1'; update public.ticket_package_orders set cancel = jsonb_set(cancel, '{alloc,PAYH-pkC_1,card}', '0') where id = 'PKO-T1'" >/dev/null
+ok "P7 줄이 따로(운영 한 줄 취소) 자기 카드 환불 대기를 가졌으면 그것 — 패키지 몫(0)으로 덮지 않는다" "$(row PAYH-pkC_1 "r->>'rf_card_pending'")" "300000"
 outp2=$($P -f "$MIGP" 2>&1)
 ok "P6 재실행 — 이미 새 판" "$(echo "$outp2" | grep -c '이미 새 판')" "1"
 # 화면 시험용 — TSR_DUMP=파일 이면 보고서 JSON 을 남긴다(결제일·전체 · 기본)

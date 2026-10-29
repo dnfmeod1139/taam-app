@@ -41,8 +41,11 @@ $a$;
 $b$;
   a5 text := $a$           coalesce(public._taam_sr_int(x->'card_refund_pending'->>'amount'), 0) as crp_amt,
            coalesce(x->'card_refund_pending'->>'status', 'pending') as crp_st$a$;
-  b5 text := $b$           case when pk_crp is not null then pk_crp else coalesce(public._taam_sr_int(x->'card_refund_pending'->>'amount'), 0) end as crp_amt,
-           case when pk_crp is not null then pk_crp_st else coalesce(x->'card_refund_pending'->>'status', 'pending') end as crp_st$b$;
+  -- 줄이 따로(운영이 한 줄만 취소) 자기 카드 환불 대기를 가졌으면 그것을 — 패키지 몫(pk_crp)은 패키지 대기(pkg_group)이거나 대기가 없을 때만(적대 리뷰)
+  b5 text := $b$           case when pk_crp is not null and (x->'card_refund_pending' is null or x->'card_refund_pending' ? 'pkg_group') then pk_crp
+                else coalesce(public._taam_sr_int(x->'card_refund_pending'->>'amount'), 0) end as crp_amt,
+           case when pk_crp is not null and (x->'card_refund_pending' is null or x->'card_refund_pending' ? 'pkg_group') then pk_crp_st
+                else coalesce(x->'card_refund_pending'->>'status', 'pending') end as crp_st$b$;
   n int;
 begin
   if to_regprocedure('public.taam_ticket_sales_report(date, date, text, boolean)') is null then

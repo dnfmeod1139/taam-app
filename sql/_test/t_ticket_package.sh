@@ -42,6 +42,8 @@ create table public.payment_orders(order_id text primary key, user_id uuid not n
   approved_at timestamptz, fail_reason text, metadata jsonb not null default '{}', created_at timestamptz default now(), updated_at timestamptz default now());
 alter table public.payment_orders add constraint payment_orders_purpose_chk check (purpose in ('deposit_charge','ticket_topup','membership'));
 create table public.reservation_invites(id uuid primary key default gen_random_uuid());
+create table public.ticket_restock_events(id bigserial primary key, ticket_product_id text not null, status text not null default 'pending', reason text,
+  seats_left int, created_at timestamptz not null default now(), processed_at timestamptz);
 -- 라이브 가드 대역 — 회원 INSERT 모양(INVOKER · PAYH- 홀드만) · 회원 행 잠금(취소만) · 정원
 create or replace function public.t_guard_insert() returns trigger language plpgsql as \$\$
 begin
@@ -177,7 +179,10 @@ has "옛 toss-confirm 모양(표시 없이 paid) → PACKAGE_ORDER_CLAIM" "$(Q "
 has "옛 toss-billing-charge 모양(주문 metadata 펼침 + paid_via) → PACKAGE_ORDER_CLAIM" "$(Q "update public.payment_orders set status = 'paid', payment_key = 'pk_x', metadata = metadata || jsonb_build_object('paid_via','billing_key') where order_id = '$OID2'")" "PACKAGE_ORDER_CLAIM"
 Q "update public.payment_orders set status = 'paid', payment_key = 'pk_old', metadata = metadata || jsonb_build_object('pkg_claim','toss-package-pay') where order_id = '$OID1'" >/dev/null
 has "늦게 승인된 옛 주문으로 확정 → ORDER_SUPERSEDED(Edge 가 카드 취소)" "$(Q "select public.taam_package_confirm_card('$OID1')")" "ORDER_SUPERSEDED"
-Q "update public.payment_orders set status = 'paid', payment_key = 'pk_m1', approved_at = now(), metadata = metadata || jsonb_build_object('pkg_claim','toss-package-pay','paid_via','window') where order_id = '$OID2'" >/dev/null
+has "회원은 주문 잡기 함수를 못 부른다" "$(AS "$M1" "select public.taam_package_order_claim('$OID2','pk_m1','카드',null,now(),'{}'::jsonb,'window')")" "permission denied"
+has "주문 잡기(Edge) — pending 이면 paid" "$(Q "select public.taam_package_order_claim('$OID2','pk_m1','카드','https://r',now(),jsonb_build_object('status','DONE','method','카드'),'window')")" '"claimed": true'
+ok "  ↳ metadata 를 덮지 않고 합친다(묶음 id · pkg_claim · toss)" "$(Q "select (metadata->>'group_id' = '$G1') || '/' || (metadata->>'pkg_claim') || '/' || (metadata->'toss'->>'status') || '/' || (metadata->>'deposit_used') from public.payment_orders where order_id = '$OID2'")" "true/toss-package-pay/DONE/1500000"
+has "다시 잡으면 claimed false · 지금 상태 paid" "$(Q "select public.taam_package_order_claim('$OID2','pk_m1','카드',null,now(),'{}'::jsonb,'window')")" '"status": "paid", "claimed": false'
 C1=$(Q "select public.taam_package_confirm_card('$OID2')")
 has "카드 확정 — 합계 2,300,000 · 예치금 1,500,000 · 카드 800,000" "$C1" '"card_paid": 800000'
 ok "세 줄 확정 · 정가" "$(Q "select string_agg(purchase_id || '=' || status || ':' || price, ',' order by purchase_id) from public.tickets where purchase_id like 'PAYH-tp%_m1'")" "PAYH-tpA_m1=active:1000000,PAYH-tpB_m1=active:800000,PAYH-tpC_m1=active:500000"
@@ -211,31 +216,36 @@ has "결제 30분 안 — 전액 2,300,000" "$(AS "$M1" "select public.taam_pack
 Q "update public.ticket_package_orders set paid_at = now() - interval '2 hours' where id = '$G1'" >/dev/null
 QQ=$(AS "$M1" "select public.taam_package_cancel_quote('$G1')")
 has "D-31 이상 — (1,000,000−200,000)+(800,000−100,000)+(500,000−100,000) = 1,900,000" "$QQ" '"refund": 1900000'
-has "  ↳ 예치금 1,500,000 먼저 · 카드 400,000" "$QQ" '"card_refund": 400000'
+has "  ↳ 줄마다 그 줄의 돈 — 예치금 1,300,000 · 카드 600,000(A 800,000 예치금 · B 500,000 예치금+200,000 카드 · C 400,000 카드)" "$QQ" '"card_refund": 600000'
 has "화면 금액이 다르면 REFUND_CHANGED" "$(AS "$M1" "select public.taam_package_cancel('$G1', 2300000)")" "REFUND_CHANGED"
 CX=$(AS "$M1" "select public.taam_package_cancel('$G1', 1900000, '일정 변경')")
-has "취소 — 예치금 1,500,000 · 카드 400,000" "$CX" '"deposit_refund": 1500000'
+has "취소 — 예치금 1,300,000 · 카드 600,000" "$CX" '"deposit_refund": 1300000'
 ok "세 줄 모두 취소" "$(Q "select count(*) from public.tickets where purchase_id like 'PAYH-tp%_m1' and status = 'cancelled'")" "3"
-ok "예치금이 나간 주머니로(멤버십 1,000,000 · 일반 500,000)" "$(Q "select membership_deposit_balance || '/' || general_deposit_balance from public.profiles where id = '$M1'")" "1000000/500000"
-ok "환불 원장 — 구매 id 마다(환불 한도 가드를 지난다)" "$(Q "select string_agg(metadata->>'purchase_id' || ':' || deposit_type || ':' || amount, ',' order by metadata->>'purchase_id') from public.deposit_transactions where user_id = '$M1' and change_type = 'ticket_refund'")" "PAYH-tpA_m1:membership:1000000,PAYH-tpB_m1:general:500000"
-ok "카드 몫이 있는 첫 줄(B)에 카드 환불 대기 400,000(카드환불 탭)" "$(Q "select (extra_data->'card_refund_pending'->>'amount') || '/' || (extra_data->'card_refund_pending'->>'pkg_group' = '$G1') || '/' || (extra_data->'card_refund_pending'->>'set_by_role') from public.tickets where purchase_id = 'PAYH-tpB_m1'")" "400000/true/member"
-ok "줄마다 예치금 환불 몫(A 800,000+200,000 · B 500,000 · C 0) · 줄 환불액(정책)" "$(Q "select string_agg((extra_data->>'deposit_refund') || '/' || (extra_data->>'refunded_amount'), ',' order by purchase_id) from public.tickets where purchase_id like 'PAYH-tp%_m1'")" "1000000/800000,500000/700000,0/400000"
+ok "예치금이 나간 주머니로(A 멤버십 800,000 · B 일반 500,000)" "$(Q "select membership_deposit_balance || '/' || general_deposit_balance from public.profiles where id = '$M1'")" "800000/500000"
+ok "환불 원장 — 구매 id 마다(환불 한도 가드를 지난다)" "$(Q "select string_agg(metadata->>'purchase_id' || ':' || deposit_type || ':' || amount, ',' order by metadata->>'purchase_id') from public.deposit_transactions where user_id = '$M1' and change_type = 'ticket_refund'")" "PAYH-tpA_m1:membership:800000,PAYH-tpB_m1:general:500000"
+ok "카드 몫이 있는 첫 줄(B)에 카드 환불 대기 600,000(카드환불 탭)" "$(Q "select (extra_data->'card_refund_pending'->>'amount') || '/' || (extra_data->'card_refund_pending'->>'pkg_group' = '$G1') || '/' || (extra_data->'card_refund_pending'->>'set_by_role') from public.tickets where purchase_id = 'PAYH-tpB_m1'")" "600000/true/member"
+ok "줄마다 예치금 환불 몫(A 800,000 · B 500,000 · C 0) · 줄 환불액(정책) — 그 줄 규정 안" "$(Q "select string_agg((extra_data->>'deposit_refund') || '/' || (extra_data->>'refunded_amount'), ',' order by purchase_id) from public.tickets where purchase_id like 'PAYH-tp%_m1'")" "800000/800000,500000/700000,0/400000"
 ok "패키지 환불 요약·카드 환불 대기는 카드 몫이 있는 첫 줄(B)에만" "$(Q "select count(*) from public.tickets where purchase_id like 'PAYH-tp%_m1' and extra_data ? 'pkg_refund'")/$(Q "select extra_data->'pkg_refund'->>'refund' from public.tickets where purchase_id = 'PAYH-tpB_m1'")" "1/1900000"
-ok "줄마다 카드 환불 몫(A 0 · B 200,000 · C 200,000 — 환불액 − 예치금 몫 · 카드 몫 안)" "$(Q "select string_agg(extra_data->>'pkg_card_refund', ',' order by purchase_id) from public.tickets where purchase_id like 'PAYH-tp%_m1'")" "0,200000,200000"
-ok "묶음 기록에 줄마다 몫(alloc)" "$(Q "select (cancel->'alloc'->'PAYH-tpC_m1'->>'card') || '/' || (cancel->'alloc'->'PAYH-tpA_m1'->>'dep') from public.ticket_package_orders where id = '$G1'")" "200000/1000000"
-ok "묶음 cancelled · 카드 환불 pending" "$(Q "select status || '/' || (card_refund->>'status') || '/' || (card_refund->>'amount') from public.ticket_package_orders where id = '$G1'")" "cancelled/pending/400000"
+ok "줄마다 카드 환불 몫(A 0 · B 200,000 · C 400,000 — 그 줄 환불액 − 그 줄 예치금)" "$(Q "select string_agg(extra_data->>'pkg_card_refund', ',' order by purchase_id) from public.tickets where purchase_id like 'PAYH-tp%_m1'")" "0,200000,400000"
+ok "묶음 기록에 줄마다 몫(alloc)" "$(Q "select (cancel->'alloc'->'PAYH-tpC_m1'->>'card') || '/' || (cancel->'alloc'->'PAYH-tpA_m1'->>'dep') from public.ticket_package_orders where id = '$G1'")" "400000/800000"
+ok "묶음 cancelled · 카드 환불 pending" "$(Q "select status || '/' || (card_refund->>'status') || '/' || (card_refund->>'amount') from public.ticket_package_orders where id = '$G1'")" "cancelled/pending/600000"
 has "두 번 취소 → GROUP_CLOSED" "$(AS "$M1" "select public.taam_package_cancel('$G1', 0)")" "GROUP_CLOSED"
+has "취소된 묶음을 같은 카드 주문으로 다시 확정 → already(Edge 가 카드를 전액 취소해 규정을 비켜 가지 않게)" "$(Q "select public.taam_package_confirm_card('$OID2')")" '"already": true'
+ok "  ↳ 묶음은 그대로 cancelled" "$(Q "select status from public.ticket_package_orders where id = '$G1'")" "cancelled"
 
 echo "── 8. 카드 환불 처리(슈퍼어드민) ──"
 has "회원은 카드 환불 견적을 못 본다" "$(AS "$M1" "select public.taam_package_card_refund_quote('$G1')")" "FORBIDDEN"
 RQ=$(AS "$SU" "select public.taam_package_card_refund_quote('$G1')")
-has "견적 — 400,000 · 결제키" "$RQ" '"payment_key": "pk_m1"'
-has "완료 표시" "$(AS "$SU" "select public.taam_package_card_refund_mark('$G1', 400000, 'tx_1', 'toss_api')")" '"ok": true'
+has "견적 — 600,000 · 결제키" "$RQ" '"payment_key": "pk_m1"'
+has "완료 표시 — 화면이 큰 금액을 보내도 묶음의 대기 금액(600,000)까지만 적는다" "$(AS "$SU" "select public.taam_package_card_refund_mark('$G1', 9999999, 'tx_1', 'toss_api')")" '"amount": 600000'
+ok "  ↳ 주문 app_cancels 한 줄 — 금액 600,000 · 구매 id = 카드 몫 첫 줄(B) · tx" "$(Q "select (metadata->'app_cancels'->0->>'amount') || '/' || (metadata->'app_cancels'->0->>'purchase_id') || '/' || (metadata->'app_cancels'->0->>'tx') from public.payment_orders where order_id = '$OID2'")" "600000/PAYH-tpB_m1/tx_1"
 ok "  ↳ 묶음 done · 그 줄 대기 done · 주문 app_cancels" "$(Q "select card_refund->>'status' from public.ticket_package_orders where id = '$G1'")/$(Q "select extra_data->'card_refund_pending'->>'status' from public.tickets where purchase_id = 'PAYH-tpB_m1'")/$(Q "select jsonb_array_length(metadata->'app_cancels') from public.payment_orders where order_id = '$OID2'")" "done/done/1"
-has "다시 표시 → already" "$(AS "$SU" "select public.taam_package_card_refund_mark('$G1', 400000)")" '"already": true'
+has "다시 표시 → already" "$(AS "$SU" "select public.taam_package_card_refund_mark('$G1', 600000)")" '"already": true'
 
 echo "── 9. 예치금만 · 방문 30일 안 회차 · 방문 시작 ──"
 R2=$(AS "$SU" "select public.taam_package_save(null,'연말 둘',array['tpD','tpE'])"); PK2=$(Q "select id from public.ticket_packages where title = '연말 둘'")
+Q "insert into public.ticket_restock_events(ticket_product_id) values ('tpD'),('tpX')" >/dev/null
+ok "연계 회차의 취소표 알림 줄은 넣지 않는다(단일로 못 산다) · 다른 회차는 그대로" "$(Q "select string_agg(ticket_product_id, ',') from public.ticket_restock_events")" "tpX"
 H "$M2" "$RD" tpD 2 PAYH-tpD_m2 "{\"pkg\":\"$PK2\"}" >/dev/null; H "$M2" "$RE" tpE 2 PAYH-tpE_m2 "{\"pkg\":\"$PK2\"}" >/dev/null
 AS "$M2" "select public.taam_package_start('$PK2', 2, array['PAYH-tpD_m2','PAYH-tpE_m2'], 700000)" >/dev/null
 G2=$(Q "select id from public.ticket_package_orders where user_id = '$M2' and status = 'hold'")
@@ -244,16 +254,31 @@ ok "  ↳ 두 줄 확정 · 잔액 2,300,000" "$(Q "select count(*) from public.
 ok "  ↳ 원장 두 줄(멤버십)" "$(Q "select count(*) || ':' || sum(amount) from public.deposit_transactions where user_id = '$M2' and change_type = 'ticket_purchase' and deposit_type = 'membership'")" "2:-700000"
 Q "update public.ticket_package_orders set paid_at = now() - interval '2 hours' where id = '$G2'" >/dev/null
 has "방문 10일 전 회차는 0 · 75일 전 회차는 대행비 제외 400,000" "$(AS "$M2" "select public.taam_package_cancel_quote('$G2')")" '"refund": 400000'
+Q "update public.tickets set status = 'used' where purchase_id = 'PAYH-tpE_m2'" >/dev/null
+has "방문 처리(used)된 줄이 있으면 회원 취소가 막힌다(ROUND_DONE)" "$(AS "$M2" "select public.taam_package_cancel_quote('$G2')")" '"block": "ROUND_DONE"'
+Q "update public.tickets set status = 'active' where purchase_id = 'PAYH-tpE_m2'" >/dev/null
+AS "$SU" "update public.tickets set status = 'cancelled' where purchase_id = 'PAYH-tpD_m2'" >/dev/null
+QD=$(AS "$M2" "select public.taam_package_cancel_quote('$G2')")
+has "운영이 따로 취소한 줄(슈퍼어드민)은 견적에서 0 · not_active" "$QD" '"policy": "not_active"'
+has "  ↳ 나머지 줄 몫은 그대로 400,000" "$QD" '"refund": 400000'
 # M3 도 같은 패키지 — 방문이 시작되면 회원은 못 취소 · 슈퍼어드민 전액은 된다
 H "$M3" "$RD" tpD 2 PAYH-tpD_m3 "{\"pkg\":\"$PK2\"}" >/dev/null; H "$M3" "$RE" tpE 2 PAYH-tpE_m3 "{\"pkg\":\"$PK2\"}" >/dev/null
 AS "$M3" "select public.taam_package_start('$PK2', 2, array['PAYH-tpD_m3','PAYH-tpE_m3'], 700000)" >/dev/null
 G3=$(Q "select id from public.ticket_package_orders where user_id = '$M3' and status = 'hold'")
 AS "$M3" "select public.taam_package_confirm_deposit('$G3', 700000)" >/dev/null
 Q "update public.ticket_package_orders set items = jsonb_set(items, '{0,date}', to_jsonb('$DTODAY'::text)), paid_at = now() - interval '2 hours' where id = '$G3'" >/dev/null
+has "산 때 날짜만 바뀐 것으로는 막지 않는다(지금 회차 날짜를 본다)" "$(AS "$M3" "select public.taam_package_cancel_quote('$G3')")" '"cancellable": true'
+Q "update public.ticket_products set date = '$DTODAY' where id = 'tpD'" >/dev/null
+Q "update public.ticket_package_orders set paid_at = now() - interval '5 minutes' where id = '$G3'" >/dev/null
+has "오늘 방문이라도 결제 30분 안이면 취소 가능(전액)" "$(AS "$M3" "select public.taam_package_cancel_quote('$G3')")" '"cancellable": true'
+Q "update public.ticket_package_orders set paid_at = now() - interval '2 hours' where id = '$G3'" >/dev/null
+has "회차 날짜가 오늘로 바뀐 패키지 — 견적이 막힘(VISIT_STARTED)" "$(AS "$M3" "select public.taam_package_cancel_quote('$G3')")" '"block": "VISIT_STARTED"'
 has "방문이 시작된 패키지 — 회원 취소 → PACKAGE_CANCEL_CLOSED" "$(AS "$M3" "select public.taam_package_cancel('$G3', null)")" "PACKAGE_CANCEL_CLOSED"
 has "슈퍼어드민 전액 환불 취소는 된다(700,000)" "$(AS "$SU" "select public.taam_package_cancel('$G3', 700000, '운영 판단', true)")" '"refund": 700000'
 ok "  ↳ M3 일반 예치금 5,000,000 으로 복구" "$(Q "select general_deposit_balance from public.profiles where id = '$M3'")" "5000000"
+Q "update public.ticket_products set date = '$D10' where id = 'tpD'" >/dev/null
 has "회원 M2 취소(400,000)" "$(AS "$M2" "select public.taam_package_cancel('$G2', 400000)")" '"deposit_refund": 400000'
+ok "  ↳ 따로 취소된 줄(tpD)은 건드리지 않는다 — 패키지 취소 표시·환불 원장 없음" "$(Q "select coalesce(extra_data->>'pkg_cancel','없음') from public.tickets where purchase_id = 'PAYH-tpD_m2'")/$(Q "select count(*) from public.deposit_transactions where user_id = '$M2' and change_type = 'ticket_refund' and metadata->>'purchase_id' = 'PAYH-tpD_m2'")" "없음/0"
 ok "  ↳ M2 잔액 2,700,000 · 카드 환불 없음" "$(Q "select membership_deposit_balance from public.profiles where id = '$M2'")/$(Q "select coalesce(card_refund::text,'없음') from public.ticket_package_orders where id = '$G2'")" "2700000/없음"
 
 echo "── 10. 이미 산 회차 · 홀드 만료 · 반납 ──"
@@ -269,6 +294,8 @@ echo "── 11. 실패 · 풀기 · 회차 삭제 ──"
 H "$M2" "$RD" tpD 1 PAYH-tpD_m2b "{\"pkg\":\"$PK2\"}" >/dev/null; H "$M2" "$RE" tpE 1 PAYH-tpE_m2b "{\"pkg\":\"$PK2\"}" >/dev/null
 AS "$M2" "select public.taam_package_start('$PK2', 1, array['PAYH-tpD_m2b','PAYH-tpE_m2b'])" >/dev/null
 G4=$(Q "select id from public.ticket_package_orders where user_id = '$M2' and status = 'hold'")
+Q "update public.ticket_package_orders set created_at = now() - interval '21 minutes' where id = '$G4'" >/dev/null
+has "묶음이 20분 넘으면 카드 주문을 더 못 만든다(HOLD_GONE — 좌석을 끝없이 붙들지 않게)" "$(Q "select public.taam_package_order_prepare('$G4', '$M2')")" "HOLD_GONE"
 has "서버 실패 처리 — 홀드 반납" "$(Q "select public.taam_package_fail('$G4', 'seat_lost')")" '"released": 2'
 has "회원은 실패 함수를 못 부른다" "$(AS "$M2" "select public.taam_package_fail('$G4', 'x')")" "permission denied"
 has "연계된 회차는 못 지운다 → PACKAGE_ROUND_LOCKED" "$(Q "delete from public.ticket_products where id = 'tpD'")" "PACKAGE_ROUND_LOCKED"

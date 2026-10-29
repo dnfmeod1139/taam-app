@@ -349,7 +349,11 @@ begin
 
   v_os := lower(coalesce(old.status, ''));
   -- ② 확정(active)으로 바뀌는 것 — 연계 회차 · 패키지 홀드 · 패키지 구매에 든 행은 패키지 확정 함수 안에서만
-  if v_ns = 'active' and v_os <> 'active' then
+  if v_ns = 'active' and v_os <> 'active'
+     -- 결제된 패키지 줄의 방문 표시(used·noshow …)를 되돌리는 것은 그대로 — 홀드 확정·취소 되살리기만 막는다
+     and not (v_os not in ('hold', 'cancelled', 'canceled', 'expired', '')
+              and exists (select 1 from public.ticket_package_orders o where o.purchase_ids @> array[new.purchase_id::text]
+                                                                        and o.status = 'paid' and o.user_id = new.user_id)) then
     if exists (select 1 from public.ticket_package_rounds r join public.ticket_packages p on p.id = r.package_id and p.status = 'active'
                 where r.ticket_product_id = new.ticket_product_id::text)
        or coalesce(old.extra_data, '{}'::jsonb) ? 'pkg'
@@ -617,6 +621,13 @@ begin
   select * into o from public.ticket_package_orders where id = p_group for update;
   if not found or o.user_id is distinct from p_uid then raise exception 'GROUP_NOT_FOUND' using errcode = 'P0002'; end if;
   if o.status <> 'hold' then raise exception 'GROUP_CLOSED: 결제를 이어갈 수 없는 주문입니다 (상태 %)', o.status using errcode = 'P0002'; end if;
+  -- 주문 만들기마다 좌석 시간을 다시 재므로 끝없이 붙들 수 없게 — 묶음은 20분까지 · 회원마다 시간당 30번(적대 리뷰)
+  if o.created_at < now() - interval '20 minutes' then raise exception 'HOLD_GONE: 좌석 확보 시간이 지났습니다' using errcode = 'P0002'; end if;
+  if to_regprocedure('public.taam_rate_hit(text, integer, interval)') is not null then   -- 함수가 없는 DB 에서 식을 통째로 못 읽지 않게 따로
+    if not public.taam_rate_hit('pkg_prepare:' || p_uid::text, 30, interval '1 hour') then
+      raise exception 'RATE_LIMITED: 잠시 뒤 다시 시도해 주세요' using errcode = '42501';
+    end if;
+  end if;
   select title into v_title from public.ticket_packages where id = o.package_id and status = 'active';
   if not found then raise exception 'PACKAGE_NOT_ACTIVE' using errcode = 'P0002'; end if;
   for r in select * from public._taam_pkg_rows(p_group) loop
@@ -649,9 +660,27 @@ begin
                             'title', v_title);
 end $$;
 
+-- 토스 승인 뒤 주문을 paid 로 — 한 문장(metadata 를 덮지 않고 합친다 · pending 일 때만 · 확정 표시 pkg_claim). 못 잡으면 지금 상태를 돌려준다
+create or replace function public.taam_package_order_claim(p_order text, p_payment_key text, p_method text, p_receipt text, p_approved_at timestamptz,
+                                                           p_toss jsonb, p_paid_via text, p_billing_key_id text default null)
+returns jsonb language plpgsql volatile security definer set search_path = public as $$
+declare v_st text; v_n int;
+begin
+  if not public._taam_pkg_server_ok() then raise exception 'FORBIDDEN' using errcode = '42501'; end if;
+  update public.payment_orders
+     set status = 'paid', payment_key = p_payment_key, method = left(p_method, 40), receipt_url = left(p_receipt, 400),
+         approved_at = coalesce(p_approved_at, now()),
+         metadata = coalesce(metadata, '{}'::jsonb) || jsonb_strip_nulls(jsonb_build_object('toss', p_toss, 'paid_via', p_paid_via,
+                      'billing_key_id', p_billing_key_id, 'pkg_claim', 'toss-package-pay'))
+   where order_id = p_order and purpose = 'package_topup' and status = 'pending';
+  get diagnostics v_n = row_count;
+  select status into v_st from public.payment_orders where order_id = p_order;
+  return jsonb_build_object('claimed', v_n = 1, 'status', v_st);
+end $$;
+
 create or replace function public.taam_package_confirm_card(p_order text)
 returns jsonb language plpgsql volatile security definer set search_path = public as $$
-declare po public.payment_orders%rowtype; v_gid text;
+declare po public.payment_orders%rowtype; v_gid text; v_st text;
 begin
   if not public._taam_pkg_server_ok() then raise exception 'FORBIDDEN' using errcode = '42501'; end if;
   select * into po from public.payment_orders where order_id = p_order for update;
@@ -660,6 +689,11 @@ begin
   v_gid := po.metadata->>'group_id';
   if not exists (select 1 from public.ticket_package_orders o where o.id = v_gid and o.order_id = p_order) then
     raise exception 'ORDER_SUPERSEDED: 이 결제는 지금 주문이 아닙니다' using errcode = 'P0002';
+  end if;
+  -- 이 결제로 이미 확정된 묶음(결제됨 · 그 뒤 취소됨)은 다시 불러도 「이미」 — 오류로 돌리면 Edge 가 카드를 전액 취소해 환불 규정을 비켜 간다(적대 리뷰)
+  select status into v_st from public.ticket_package_orders where id = v_gid;
+  if v_st in ('paid', 'cancelled') then
+    return jsonb_build_object('ok', true, 'already', true, 'group_id', v_gid, 'status', v_st);
   end if;
   return public._taam_pkg_confirm(v_gid, po.user_id, (po.metadata->>'total')::bigint,
                                   (po.metadata->>'deposit_used')::bigint, p_order, coalesce(po.settle_krw, po.amount));
@@ -678,48 +712,58 @@ begin
   end if;
   return jsonb_build_object('ok', true, 'released', v_n);
 end $$;
-revoke all on function public.taam_package_order_prepare(text, uuid), public.taam_package_confirm_card(text), public.taam_package_fail(text, text)
+revoke all on function public.taam_package_order_prepare(text, uuid), public.taam_package_confirm_card(text), public.taam_package_fail(text, text),
+                       public.taam_package_order_claim(text, text, text, text, timestamptz, jsonb, text, text)
   from public, anon, authenticated;
 insert into _pk values ('G 서버 함수(카드 주문 · 카드 확정 · 실패) — service_role 만', '✅');
 
 -- ── H. 취소 — 통째로 · 회차마다 규정 · 예치금 먼저 ──
 create or replace function public._taam_pkg_quote(p_group text, p_full boolean)
 returns jsonb language plpgsql stable security definer set search_path = public as $$
+-- 줄마다 따로 센다(적대 리뷰 2026-10-29 — 패키지 단위 「예치금 먼저」가 환불을 다른 회차로 옮겨 매장별 판매·대행비·파트너 화면이 틀렸다):
+--   그 줄의 환불액 = 그 줄의 지금 규정(결제 30분 안 전액 · 방문 D-31 이상 정가 − 대행비×인원 · 그 뒤 0 · 슈퍼어드민 전액) · 그 줄에 남은 돈(예치금 − 이미 돌려준 것 + 카드 몫) 이하
+--   그 줄 안에서 예치금 먼저, 남으면 그 줄의 카드 몫. 패키지 합계는 줄의 합. 살아 있지 않은 줄(운영이 따로 처리한 줄)은 0.
+--   방문일은 지금 회차 날짜(없으면 산 때의 날짜) · 어느 회차든 방문일이 지났거나 오늘이면(결제 30분 안의 오늘은 빼고) 회원은 못 취소 · 방문·노쇼 처리된 줄이 있어도.
 declare
   o public.ticket_package_orders%rowtype; it jsonb; v_rows jsonb := '[]'::jsonb; v_today date := (now() at time zone 'Asia/Seoul')::date;
-  v_ref bigint; v_pol text; v_d date; v_days int; v_sum bigint := 0; v_dep_back bigint; v_dep_paid bigint := 0;
-  v_dep_ref bigint; v_card_ref bigint; v_block text := null; v_st text; v_in30 boolean;
+  v_ref bigint; v_pol text; v_d date; v_days int; v_block text := null; v_st text; v_in30 boolean;
+  v_paid bigint; v_back bigint; v_dep_rem bigint; v_card_rem bigint; v_dep_i bigint; v_card_i bigint;
+  v_sum_dep bigint := 0; v_sum_card bigint := 0;
 begin
   select * into o from public.ticket_package_orders where id = p_group;
   if not found then raise exception 'GROUP_NOT_FOUND' using errcode = 'P0002'; end if;
   v_in30 := o.paid_at is not null and o.paid_at > now() - interval '30 minutes';
   for it in select * from jsonb_array_elements(o.items) loop
     select lower(coalesce(t.status, '')) into v_st from public.tickets t where t.purchase_id = it->>'purchase_id';
-    v_d := public._taam_pu_visit_date(it->>'date');
+    v_d := coalesce(public._taam_pkg_visit(it->>'ticket_product_id'), public._taam_pu_visit_date(it->>'date'));
     v_days := case when v_d is null then null else v_d - v_today end;
-    if v_st is distinct from 'active' then
-      v_ref := 0; v_pol := 'not_active';
-      if v_st not in ('cancelled', 'canceled') then v_block := coalesce(v_block, 'ROUND_DONE'); end if;
-    elsif p_full then v_ref := (it->>'price')::bigint; v_pol := 'super_admin';
+    if v_days is not null and (v_days < 0 or (v_days = 0 and not v_in30)) then v_block := coalesce(v_block, 'VISIT_STARTED'); end if;
+    if v_st is not null and v_st not in ('active', 'cancelled', 'canceled') then v_block := coalesce(v_block, 'ROUND_DONE'); end if;
+    select coalesce(sum(abs(amount)) filter (where change_type = 'ticket_purchase' and amount < 0), 0),
+           coalesce(sum(amount) filter (where change_type in ('ticket_refund', 'ticket_pax_change') and amount > 0), 0)
+      into v_paid, v_back
+      from public.deposit_transactions where user_id = o.user_id and metadata->>'purchase_id' = it->>'purchase_id';
+    v_dep_rem := greatest(0, v_paid - v_back);
+    v_card_rem := greatest(0, coalesce((it->>'card')::bigint, 0));
+    if v_st is distinct from 'active' then v_ref := 0; v_pol := 'not_active';
+    elsif p_full then v_ref := v_dep_rem + v_card_rem; v_pol := 'super_admin';
     elsif v_in30 then v_ref := (it->>'price')::bigint; v_pol := 'within_30min';
     elsif v_days is not null and v_days >= 31 then
       v_ref := greatest(0, (it->>'price')::bigint - coalesce((it->>'agency_per')::bigint, 0) * o.pax); v_pol := 'agency_excluded';
     else v_ref := 0; v_pol := 'no_refund';
     end if;
-    if v_st = 'active' and v_days is not null and v_days <= 0 then v_block := coalesce(v_block, 'VISIT_STARTED'); end if;
-    v_sum := v_sum + v_ref;
-    v_dep_paid := v_dep_paid + coalesce((it->>'dep')::bigint, 0);
+    v_ref := least(v_ref, v_dep_rem + v_card_rem);
+    v_dep_i := least(v_ref, v_dep_rem);
+    v_card_i := v_ref - v_dep_i;
+    v_sum_dep := v_sum_dep + v_dep_i; v_sum_card := v_sum_card + v_card_i;
     v_rows := v_rows || jsonb_build_object('purchase_id', it->>'purchase_id', 'ticket_product_id', it->>'ticket_product_id', 'rest_name', it->>'rest_name',
-                                           'date', it->>'date', 'time', it->>'time',
-                                           'price', (it->>'price')::bigint, 'refund', v_ref, 'policy', v_pol, 'days', v_days, 'status', v_st);
+                                           'date', coalesce(to_char(v_d, 'YYYY.MM.DD'), it->>'date'), 'time', it->>'time',
+                                           'price', (it->>'price')::bigint, 'refund', v_ref, 'dep_refund', v_dep_i, 'card_refund', v_card_i,
+                                           'policy', v_pol, 'days', v_days, 'status', v_st);
   end loop;
-  select coalesce(sum(amount), 0) into v_dep_back from public.deposit_transactions
-   where user_id = o.user_id and change_type = 'ticket_refund' and amount > 0 and metadata->>'purchase_id' = any(o.purchase_ids);
-  v_dep_ref := least(v_sum, greatest(0, v_dep_paid - v_dep_back));
-  v_card_ref := least(greatest(0, v_sum - v_dep_ref), o.card_paid);
   return jsonb_build_object('ok', true, 'group_id', o.id, 'status', o.status, 'pax', o.pax, 'total', o.total,
-                            'deposit_used', o.deposit_used, 'card_paid', o.card_paid, 'refund', v_dep_ref + v_card_ref,
-                            'deposit_refund', v_dep_ref, 'card_refund', v_card_ref, 'within_30min', v_in30,
+                            'deposit_used', o.deposit_used, 'card_paid', o.card_paid, 'refund', v_sum_dep + v_sum_card,
+                            'deposit_refund', v_sum_dep, 'card_refund', least(v_sum_card, o.card_paid), 'within_30min', v_in30,
                             'cancellable', o.status = 'paid' and (p_full or v_block is null), 'block', v_block, 'rows', v_rows);
 end $$;
 revoke all on function public._taam_pkg_quote(text, boolean) from public, anon, authenticated;
@@ -738,9 +782,9 @@ create or replace function public.taam_package_cancel(p_group text, p_expect_ref
 returns jsonb language plpgsql volatile security definer set search_path = public as $$
 declare
   v_uid uuid := auth.uid(); v_super boolean := coalesce(public.is_super_admin(auth.uid()), false);
-  o public.ticket_package_orders%rowtype; q jsonb; rw jsonb; it jsonb; v_left bigint; v_take bigint; v_paid bigint; v_back bigint;
+  o public.ticket_package_orders%rowtype; q jsonb; rw jsonb;
   v_m_out bigint; v_g_out bigint; v_m bigint; v_g bigint; v_mem bigint; v_gen bigint; v_tm bigint := 0; v_tg bigint := 0; v_first text := null;
-  v_rows jsonb := '[]'::jsonb; v_title text; v_by text; v_alloc jsonb := '{}'::jsonb; v_calloc jsonb := '{}'::jsonb; v_ref_i bigint; v_alloc_all jsonb := '{}'::jsonb; pass int;
+  v_title text; v_by text; v_alloc jsonb := '{}'::jsonb; v_take bigint;
 begin
   if v_uid is null then raise exception '로그인이 필요합니다' using errcode = '42501'; end if;
   select * into o from public.ticket_package_orders where id = p_group for update;
@@ -758,50 +802,15 @@ begin
   end if;
   select title into v_title from public.ticket_packages where id = o.package_id;
   v_by := case when v_uid = o.user_id then 'member' else 'super_admin' end;
-
-  -- 예치금 환불 몫을 줄마다 먼저 나눈다 — ① 그 줄의 환불액·그 줄에 낸 예치금(− 이미 돌려준 것) 안에서 ② 남으면 예치금이 남은 줄에(패키지 단위 「예치금 먼저」)
-  v_left := (q->>'deposit_refund')::bigint;
-  for pass in 1..2 loop
-    for it in select * from jsonb_array_elements(o.items) loop
-      exit when v_left <= 0;
-      select coalesce(sum(abs(amount)) filter (where change_type = 'ticket_purchase' and amount < 0), 0),
-             coalesce(sum(amount) filter (where change_type in ('ticket_refund', 'ticket_pax_change') and amount > 0), 0)
-        into v_paid, v_back
-        from public.deposit_transactions where user_id = o.user_id and metadata->>'purchase_id' = it->>'purchase_id';
-      v_take := coalesce((v_alloc->>(it->>'purchase_id'))::bigint, 0);
-      v_take := least(v_left, greatest(0, v_paid - v_back - v_take),
-                      case when pass = 1 then greatest(0, coalesce((select (x->>'refund')::bigint from jsonb_array_elements(q->'rows') x where x->>'purchase_id' = it->>'purchase_id'), 0)) else v_left end);
-      if v_take <= 0 then continue; end if;
-      v_alloc := v_alloc || jsonb_build_object(it->>'purchase_id', coalesce((v_alloc->>(it->>'purchase_id'))::bigint, 0) + v_take);
-      v_left := v_left - v_take;
-    end loop;
+  -- 줄마다 몫(견적이 줄마다 센 것 그대로) — 카드 환불 대기·패키지 환불 요약을 둘 줄은 카드 몫이 있는 첫 줄(그 줄에 주문 번호가 있다)
+  for rw in select * from jsonb_array_elements(q->'rows') loop
+    v_alloc := v_alloc || jsonb_build_object(rw->>'purchase_id', jsonb_build_object('dep', coalesce((rw->>'dep_refund')::bigint, 0), 'card', coalesce((rw->>'card_refund')::bigint, 0)));
   end loop;
-
-  -- 카드 환불 몫도 줄마다 — ① 그 줄의 환불액 − 예치금 몫, 그 줄의 카드 몫 안에서 ② 남으면 카드 몫이 남은 줄에(판매 현황이 매장별로 센다)
-  v_left := (q->>'card_refund')::bigint;
-  for pass in 1..2 loop
-    for it in select * from jsonb_array_elements(o.items) loop
-      exit when v_left <= 0;
-      select coalesce((x->>'refund')::bigint, 0) into v_ref_i from jsonb_array_elements(q->'rows') x where x->>'purchase_id' = it->>'purchase_id';
-      v_take := coalesce((v_calloc->>(it->>'purchase_id'))::bigint, 0);
-      v_take := least(v_left, greatest(0, coalesce((it->>'card')::bigint, 0) - v_take),
-                      case when pass = 1 then greatest(0, coalesce(v_ref_i, 0) - coalesce((v_alloc->>(it->>'purchase_id'))::bigint, 0)) else v_left end);
-      if v_take <= 0 then continue; end if;
-      v_calloc := v_calloc || jsonb_build_object(it->>'purchase_id', coalesce((v_calloc->>(it->>'purchase_id'))::bigint, 0) + v_take);
-      v_left := v_left - v_take;
-    end loop;
-  end loop;
-  for it in select * from jsonb_array_elements(o.items) loop
-    v_alloc_all := v_alloc_all || jsonb_build_object(it->>'purchase_id', jsonb_build_object(
-                     'dep', coalesce((v_alloc->>(it->>'purchase_id'))::bigint, 0), 'card', coalesce((v_calloc->>(it->>'purchase_id'))::bigint, 0)));
-  end loop;
-  -- 카드 환불 대기 · 패키지 환불 요약을 둘 줄 — 카드 몫이 있는 줄 먼저(그 줄에 주문 번호가 있어 결제 내역·카드환불 탭이 잇는다)
   select x.v->>'purchase_id' into v_first from jsonb_array_elements(q->'rows') with ordinality x(v, i)
    where x.v->>'status' = 'active'
-   order by (coalesce((v_calloc->>(x.v->>'purchase_id'))::bigint, 0) > 0) desc, x.i limit 1;
+   order by (coalesce((x.v->>'card_refund')::bigint, 0) > 0) desc, x.i limit 1;
 
   perform set_config('taam.pkg_cancel', p_group, true);
-  -- 줄 취소 — 카드 환불 대기는 한 줄에(기존 「카드환불」 탭이 이 칸을 읽는다) · 패키지 환불 요약도 그 줄에(구매 내역이 한 번만 보이게)
   for rw in select * from jsonb_array_elements(q->'rows') loop
     if rw->>'status' <> 'active' then continue; end if;
     update public.tickets
@@ -809,8 +818,8 @@ begin
            extra_data = coalesce(extra_data, '{}'::jsonb)
                         || jsonb_build_object('cancelled_at', now(), 'refunded_amount', (rw->>'refund')::bigint, 'cancel_reason', coalesce(nullif(p_reason, ''), '패키지 취소'),
                                               'cancelled_by_role', v_by, 'pkg_cancel', p_group, 'refund_policy', rw->>'policy',
-                                              'deposit_refund', coalesce((v_alloc->>(rw->>'purchase_id'))::bigint, 0),
-                                              'pkg_card_refund', coalesce((v_calloc->>(rw->>'purchase_id'))::bigint, 0))
+                                              'deposit_refund', coalesce((rw->>'dep_refund')::bigint, 0),
+                                              'pkg_card_refund', coalesce((rw->>'card_refund')::bigint, 0))
                         || case when rw->>'purchase_id' = v_first
                                 then jsonb_build_object('pkg_refund', jsonb_build_object('refund', (q->>'refund')::bigint, 'deposit_refund', (q->>'deposit_refund')::bigint,
                                                                                        'card_refund', (q->>'card_refund')::bigint, 'rows', jsonb_array_length(q->'rows')))
@@ -823,32 +832,32 @@ begin
      where purchase_id = rw->>'purchase_id' and lower(coalesce(status, '')) = 'active';
   end loop;
 
-  -- 예치금 환불 원장 — 줄마다 · 나간 주머니 비율로
+  -- 예치금 환불 원장 — 줄마다 그 줄의 몫만 · 그 줄에서 나간 주머니 비율로
   if (q->>'deposit_refund')::bigint > 0 then
     select coalesce(membership_deposit_balance, 0), coalesce(general_deposit_balance, 0) into v_mem, v_gen from public.profiles where id = o.user_id for update;
-    for it in select * from jsonb_array_elements(o.items) loop
-      v_take := coalesce((v_alloc->>(it->>'purchase_id'))::bigint, 0);
+    for rw in select * from jsonb_array_elements(q->'rows') loop
+      v_take := coalesce((rw->>'dep_refund')::bigint, 0);
       if v_take <= 0 then continue; end if;
       select coalesce(sum(abs(amount)) filter (where change_type = 'ticket_purchase' and amount < 0 and deposit_type = 'membership'), 0),
              coalesce(sum(abs(amount)) filter (where change_type = 'ticket_purchase' and amount < 0 and deposit_type <> 'membership'), 0)
         into v_m_out, v_g_out
-        from public.deposit_transactions where user_id = o.user_id and metadata->>'purchase_id' = it->>'purchase_id';
+        from public.deposit_transactions where user_id = o.user_id and metadata->>'purchase_id' = rw->>'purchase_id';
       v_m := case when v_m_out + v_g_out > 0 then least(v_take, round(v_take::numeric * v_m_out / (v_m_out + v_g_out))::bigint) else v_take end;
       v_g := v_take - v_m;
       v_tm := v_tm + v_m; v_tg := v_tg + v_g;
       if v_m > 0 then
         insert into public.deposit_transactions(user_id, deposit_type, change_type, amount, balance_after, description, metadata)
         values (o.user_id, 'membership', 'ticket_refund', v_m, v_mem + v_gen + v_tm + v_tg,
-                coalesce(it->>'rest_name', '티켓') || ' 패키지 「' || coalesce(v_title, '') || '」 취소 환불(멤버십 예치금)',
-                jsonb_build_object('purchase_id', it->>'purchase_id', 'ticket_id', it->>'ticket_product_id', 'package_order', p_group, 'package_id', o.package_id,
-                                   'refund_type', 'returned', 'cancel_refund', true, 'cancelled_by', v_by));
+                coalesce(rw->>'rest_name', '티켓') || ' 패키지 「' || coalesce(v_title, '') || '」 취소 환불(멤버십 예치금)',
+                jsonb_build_object('purchase_id', rw->>'purchase_id', 'ticket_id', rw->>'ticket_product_id', 'package_order', p_group, 'package_id', o.package_id,
+                                   'refund_type', 'returned', 'cancel_refund', true, 'cancelled_by', v_by, 'policy', rw->>'policy'));
       end if;
       if v_g > 0 then
         insert into public.deposit_transactions(user_id, deposit_type, change_type, amount, balance_after, description, metadata)
         values (o.user_id, 'general', 'ticket_refund', v_g, v_mem + v_gen + v_tm + v_tg,
-                coalesce(it->>'rest_name', '티켓') || ' 패키지 「' || coalesce(v_title, '') || '」 취소 환불(일반 예치금)',
-                jsonb_build_object('purchase_id', it->>'purchase_id', 'ticket_id', it->>'ticket_product_id', 'package_order', p_group, 'package_id', o.package_id,
-                                   'refund_type', 'returned', 'cancel_refund', true, 'cancelled_by', v_by));
+                coalesce(rw->>'rest_name', '티켓') || ' 패키지 「' || coalesce(v_title, '') || '」 취소 환불(일반 예치금)',
+                jsonb_build_object('purchase_id', rw->>'purchase_id', 'ticket_id', rw->>'ticket_product_id', 'package_order', p_group, 'package_id', o.package_id,
+                                   'refund_type', 'returned', 'cancel_refund', true, 'cancelled_by', v_by, 'policy', rw->>'policy'));
       end if;
     end loop;
     update public.profiles set membership_deposit_balance = v_mem + v_tm, general_deposit_balance = v_gen + v_tg where id = o.user_id;
@@ -859,7 +868,7 @@ begin
      set status = 'cancelled', cancelled_at = now(), updated_at = now(),
          cancel = jsonb_build_object('at', now(), 'by', v_uid, 'role', v_by, 'reason', p_reason, 'refund', q->'refund',
                                      'deposit_refund', v_tm + v_tg, 'card_refund', q->'card_refund', 'full', p_full and v_super, 'rows', q->'rows',
-                                     'alloc', v_alloc_all),
+                                     'alloc', v_alloc),
          card_refund = case when (q->>'card_refund')::bigint > 0
                             then jsonb_build_object('amount', (q->>'card_refund')::bigint, 'order_id', o.order_id, 'status', 'pending',
                                                     'requested_at', now(), 'first_purchase_id', v_first)
@@ -892,7 +901,7 @@ end $$;
 
 create or replace function public.taam_package_card_refund_mark(p_group text, p_amount bigint, p_tx text default null, p_via text default 'manual')
 returns jsonb language plpgsql volatile security definer set search_path = public as $$
-declare o public.ticket_package_orders%rowtype; v_first text;
+declare o public.ticket_package_orders%rowtype; v_first text; v_amt bigint;
 begin
   if not public._taam_pkg_super_ok() then raise exception 'FORBIDDEN' using errcode = '42501'; end if;
   select * into o from public.ticket_package_orders where id = p_group for update;
@@ -901,44 +910,70 @@ begin
     return jsonb_build_object('ok', true, 'already', true);
   end if;
   v_first := o.card_refund->>'first_purchase_id';
+  -- 적는 금액은 묶음 기록의 대기 금액 이하(화면이 보낸 값을 그대로 믿지 않는다)
+  v_amt := least(greatest(coalesce(p_amount, (o.card_refund->>'amount')::bigint), 0), coalesce((o.card_refund->>'amount')::bigint, 0));
   update public.ticket_package_orders
      set card_refund = card_refund || jsonb_build_object('status', 'done', 'done_at', now(), 'done_by', auth.uid(), 'via', left(coalesce(p_via, 'manual'), 20),
-                                                         'refunded_amount', coalesce(p_amount, (card_refund->>'amount')::bigint), 'toss_tx', p_tx),
+                                                         'refunded_amount', v_amt, 'toss_tx', p_tx),
          updated_at = now()
    where id = p_group;
   if v_first is not null then
     update public.tickets
        set extra_data = jsonb_set(coalesce(extra_data, '{}'::jsonb), '{card_refund_pending}',
                                   coalesce(extra_data->'card_refund_pending', '{}'::jsonb)
-                                  || jsonb_build_object('status', 'done', 'refunded_at', now(), 'refunded_amount', coalesce(p_amount, (o.card_refund->>'amount')::bigint),
+                                  || jsonb_build_object('status', 'done', 'refunded_at', now(), 'refunded_amount', v_amt,
                                                         'via', left(coalesce(p_via, 'manual'), 20), 'toss_tx', p_tx))
      where purchase_id = v_first;
   end if;
-  if o.order_id is not null and coalesce(p_amount, 0) > 0 then
+  if o.order_id is not null and v_amt > 0 then
     update public.payment_orders
        set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object('app_cancels',
              coalesce(metadata->'app_cancels', '[]'::jsonb) || jsonb_build_array(jsonb_build_object(
-               'at', now(), 'amount', p_amount, 'via', left(coalesce(p_via, 'manual'), 20), 'package_order', p_group, 'toss_tx', p_tx)))
+               'at', now(), 'amount', v_amt, 'via', left(coalesce(p_via, 'manual'), 20), 'package_order', p_group,
+               'purchase_id', v_first, 'tx', p_tx, 'by', auth.uid(), 'policy', 'package')))   -- toss-card-refund 와 같은 모양(결제 내역이 대기 완료와 같은 건으로 맞춘다)
      where order_id = o.order_id;
   end if;
-  return jsonb_build_object('ok', true, 'group_id', p_group, 'first_purchase_id', v_first, 'user_id', o.user_id);
+  return jsonb_build_object('ok', true, 'group_id', p_group, 'first_purchase_id', v_first, 'user_id', o.user_id, 'amount', v_amt);
 end $$;
 revoke all on function public.taam_package_card_refund_quote(text), public.taam_package_card_refund_mark(text, bigint, text, text) from public, anon;
 grant execute on function public.taam_package_card_refund_quote(text), public.taam_package_card_refund_mark(text, bigint, text, text) to authenticated;
 insert into _pk values ('I 카드 환불(견적 · 완료 표시)', '✅');
 
+-- ── J. 취소표(재입고) 알림 — 연계 회차는 단일로 못 사므로 「자리 났다」 푸시를 보내지 않는다(적대 리뷰) ──
+do $do$ begin
+  if to_regclass('public.ticket_restock_events') is null then insert into _pk values ('J 재입고 알림', '⚠ 표 없음 — 건너뜀'); return; end if;
+  execute $f$
+    create or replace function public.taam_restock_skip_package() returns trigger language plpgsql security definer set search_path = public as $b$
+    begin
+      -- 줄을 아예 넣지 않는다 — skipped 로 남기면 쿨다운(60분)에 걸려 연계를 푼 뒤 첫 취소표 알림까지 막힌다
+      if coalesce(new.status, 'pending') = 'pending' and exists (
+           select 1 from public.ticket_package_rounds r join public.ticket_packages p on p.id = r.package_id and p.status = 'active'
+            where r.ticket_product_id = new.ticket_product_id) then
+        return null;
+      end if;
+      return new;
+    end $b$;
+  $f$;
+  execute 'revoke all on function public.taam_restock_skip_package() from public, anon, authenticated';
+  execute 'drop trigger if exists trg_taam_restock_skip_package on public.ticket_restock_events';
+  execute 'create trigger trg_taam_restock_skip_package before insert on public.ticket_restock_events for each row execute function public.taam_restock_skip_package()';
+  insert into _pk values ('J 연계 회차는 취소표 알림을 건너뛴다', '✅');
+end $do$;
+
 -- ── 확인 (하나로 · ❌ 가 없어야 정상) ──
 select 항목, 결과 from _pk
-union all select '함수 17개', case when (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname in (
+union all select '함수 18개', case when (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname in (
          'taam_package_save','taam_package_unlink','taam_package_list','taam_package_orders_admin','taam_guard_ticket_package','taam_guard_tp_package_delete',
          '_taam_pkg_rows','taam_package_start','_taam_pkg_confirm','taam_package_confirm_deposit','taam_package_release','taam_package_order_prepare',
-         'taam_package_confirm_card','taam_package_fail','taam_package_cancel_quote','taam_package_cancel','taam_package_card_refund_mark')) = 17
+         'taam_package_confirm_card','taam_package_fail','taam_package_cancel_quote','taam_package_cancel','taam_package_card_refund_mark',
+         'taam_package_order_claim')) = 18
        and to_regprocedure('public.taam_package_card_refund_quote(text)') is not null then '✅' else '❌ 빠진 함수가 있다' end
 union all select 'E 가드 트리거', case when exists (select 1 from pg_trigger where tgname = 'trg_taam_guard_ticket_package' and not tgisinternal) then '✅' else '❌' end
 union all select 'E 회차 삭제 가드', case when exists (select 1 from pg_trigger where tgname = 'trg_taam_guard_tp_package_delete' and not tgisinternal) then '✅' else '❌' end
 union all select '회원·비로그인이 서버 함수를 못 부른다',
        case when has_function_privilege('authenticated', 'public.taam_package_order_prepare(text, uuid)', 'execute')
               or has_function_privilege('authenticated', 'public.taam_package_confirm_card(text)', 'execute')
+              or has_function_privilege('authenticated', 'public.taam_package_order_claim(text, text, text, text, timestamptz, jsonb, text, text)', 'execute')
               or has_function_privilege('anon', 'public.taam_package_start(text, int, text[], bigint)', 'execute') then '❌' else '✅' end
 union all select '필요한 옛 함수(taam_ticket_price_krw · _taam_pu_visit_date · taam_time_slot · is_super_admin)',
        case when to_regprocedure('public.taam_ticket_price_krw(text, integer)') is not null and to_regproc('public._taam_pu_visit_date') is not null

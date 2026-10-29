@@ -11091,6 +11091,7 @@ document.addEventListener('visibilitychange', function(){
 var _tossRecovering = false;
 async function _tossRecoverTrip(){
   if (_tossRecovering) return;
+  if (window._tossConfirmRunning) return;   // 🔧 2026-10-29 복귀 승인이 도는 중 — 그 주문은 아직 pending 이다(여기서 좌석을 풀면 승인이 좌석 없이 취소된다)
   if (typeof _tossHasTrip !== 'function' || !_tossHasTrip()) return;
   // 결과 쿼리를 받고 돌아온 경우는 위쪽 복귀 핸들러가 처리한다
   if (/[?&]toss_(pay|billing)=/.test(location.search || '')) return;
@@ -11116,6 +11117,12 @@ async function _tossRecoverTrip(){
       if (!r.error && r.data) st = String(r.data.status || '');
     } catch(_qe){}
 
+    if (st === 'paid' && /^taampkg_/.test(String(oid || '')) && typeof _pkTripRelease === 'function') {
+      // 🆕 2026-10-29 패키지 — 승인은 됐는데 확정을 못 본 채 돌아왔다: 확정을 이어 간다(_pkTripRelease 가 paid 면 resume)
+      try { _tossClearTrip(); } catch(_e){}
+      try { await _pkTripRelease(); } catch(_pke){}
+      return;
+    }
     if (st === 'paid') {
       try { window._tkSeatHoldId = null; window._tkSeatHoldPax = 0; } catch(_hc){}   // 🔧 2026-10-22 구매로 바뀐 홀드 id 를 지운다
       try { _tossClearTrip(); } catch(_e){}
@@ -42984,8 +42991,8 @@ async function tkMarkCardRefundDone(purchaseId, opts){
         showToast('⚠','저장 실패', (up.error && up.error.message) || '대상 티켓을 찾지 못했어요');
         return;
       }
-      // 🆕 2026-10-29 패키지 묶음이면 묶음 기록도 완료로(목록·보고서가 묶음 표를 본다)
-      if(crp.pkg_group){ try { await window.sb.rpc('taam_package_card_refund_mark', { p_group: String(crp.pkg_group), p_amount: amt, p_tx: null, p_via: 'manual' }); } catch(_pme){} }
+      // 🆕 2026-10-29 패키지 묶음이면 묶음 기록도 완료로(목록·보고서가 묶음 표를 본다) — 묶음은 서버 기록으로 찾는다(대기 칸의 pkg_group 은 믿지 않는다)
+      if(crp.pkg_group){ var _pg = await _pkGroupForPending(purchaseId); if(_pg){ try { await window.sb.rpc('taam_package_card_refund_mark', { p_group: _pg, p_amount: amt, p_tx: null, p_via: 'manual' }); } catch(_pme){} } }
     }
 
     // ── 회원에게 알림 (벨 + 푸시) ──
@@ -43102,7 +43109,7 @@ async function _tkCardRefundViaTossInner(purchaseId){
   if(!crp){ showToast('ⓘ','대상 아님','카드 환불 대기 건이 아닙니다'); return; }
   if(String(crp.status) === 'done'){ showToast('ⓘ','이미 처리됨','이미 카드 환불 완료로 기록되어 있습니다'); return; }
   // 🆕 2026-10-29 패키지 묶음의 카드 환불 — 한 주문이 여러 회차라 단일 견적(toss-card-refund)이 아니라 묶음 견적(toss-package-pay)으로
-  if(crp.pkg_group){ await _pkAdminCardRefund(_pkSafeId(crp.pkg_group), purchaseId, true); return; }
+  if(crp.pkg_group){ var _pg = await _pkGroupForPending(purchaseId); if(_pg){ await _pkAdminCardRefund(_pg, purchaseId, true); return; } }   // 서버 기록에 없으면 단일 견적으로
   // ① 서버 미리보기 — 금액은 서버가 이 구매의 주문·원장·규정으로 다시 센다 (대기 칸은 회원이 쓸 수 있다 · 2026-10-22 적대 리뷰)
   var pv = await _tkCrfInvoke({ purchase_id: purchaseId, dry_run: true });
   if(!pv) return;
@@ -50638,13 +50645,21 @@ function tuDeleteTicket(id){
     onOk: function(){ _tuDoDeleteTicket(id); }
   });
 }
-function _tuDoDeleteTicket(id){
+async function _tuDoDeleteTicket(id){
+  var _keep = ticketDB.find(function(t){ return String(t.id) === String(id); }) || null;
   ticketDB=ticketDB.filter(function(t){return String(t.id)!==String(id);});
   // 🆕 Supabase에서도 삭제 (좀비 부활 방지)
   if(typeof deleteTicketProductFromSupabase === 'function'){
-    deleteTicketProductFromSupabase(id).catch(function(e){
-      console.warn('ticket Supabase 삭제 실패 (IDB는 성공):', id, e);
-    });
+    window._tkLastDeleteError = '';
+    try { await deleteTicketProductFromSupabase(id); } catch(e){ console.warn('ticket Supabase 삭제 실패:', id, e); }
+    // 🆕 2026-10-29 서버가 거절했으면(패키지에 연계된 회차 PACKAGE_ROUND_LOCKED 등) 로컬에서도 지우지 않는다 — 안 그러면 화면에서만 사라지고 다음 동기화에 되살아난다
+    if(window._tkLastDeleteError){
+      if(_keep && !ticketDB.some(function(t){ return String(t.id) === String(id); })) ticketDB.push(_keep);
+      var _dm = String(window._tkLastDeleteError || '');
+      renderTicketList();
+      showToast('⚠','삭제하지 못했습니다', /PACKAGE_ROUND_LOCKED/.test(_dm) ? '패키지에 연계된 회차입니다 — 먼저 「📦 티켓 패키지」에서 연계를 풀어 주세요' : _dm.slice(0, 120));
+      return;
+    }
   }
   saveTickets(null, true);   // 🆕 2026-10-29(4차 리뷰) 로컬만 — 서버 삭제는 위에서 · 전체 저장은 다른 회차를 낡은 값으로 덮었다
   renderTicketList();
@@ -54336,6 +54351,8 @@ var TRANSLATIONS = {
       err_deposit:'예치금이 부족합니다',
       fail_title:'패키지 예약 실패',
       fail_retry:'결제를 마치지 못했습니다 — 다시 시도해 주세요',
+      pending_title:'결제 확인이 늦어지고 있습니다',
+      pending_body:'잠시 후 구매 내역을 확인해 주세요 — 결제가 확인되지 않으면 자동으로 취소됩니다',
       refunded:'결제하신 금액은 전액 취소됩니다',
       confirm_dep:'예치금에서 결제합니다',
       saved_card:'등록된 카드로 결제',
@@ -55302,6 +55319,8 @@ var TRANSLATIONS = {
       err_deposit:'Not enough deposit balance',
       fail_title:'Package booking failed',
       fail_retry:'The payment could not be completed — please try again',
+      pending_title:'Confirming your payment is taking longer than usual',
+      pending_body:'Please check your purchase history shortly — if the payment cannot be confirmed, it will be cancelled automatically',
       refunded:'Your payment will be fully cancelled',
       confirm_dep:'This will be paid from your deposit',
       saved_card:'Pay with saved card',
@@ -56467,6 +56486,8 @@ TRANSLATIONS.ja = {
     err_deposit:'デポジット残高が不足しています',
     fail_title:'パッケージのご予約に失敗しました',
     fail_retry:'お支払いを完了できませんでした。もう一度お試しください',
+    pending_title:'お支払いの確認に時間がかかっています',
+    pending_body:'しばらくしてから購入履歴をご確認ください。確認できない場合は自動的にキャンセルされます',
     refunded:'お支払い金額は全額取り消されます',
     confirm_dep:'デポジットからお支払いします',
     saved_card:'登録カードで支払う',
@@ -62109,13 +62130,25 @@ function _pkDesc(p){
 function _pkRounds(p){
   return (p && p.rounds || []).map(function(id){ return (ticketDB || []).find(function(x){ return String(x.id) === String(id); }) || null; });
 }
-// 모든 회차에서 되는 인원(교집합)
+// 모든 회차에서 되는 인원(교집합) — 서버 좌석 수(_pk.sold)를 읽었으면 단일 결제와 같은 규칙으로(자유 구성 = 좌석 엔진 · 고정 = 인원석 남은 수 · 정원)
 function _pkPaxOptions(ts){
   var sets = ts.map(function(t){
+    var sd = (_pk.sold || {})[String(t.id)] || null;
+    var cap = parseInt(t.assignedPax || t.totalPax, 10) || 0;
+    var rem = (sd && cap > 0) ? Math.max(0, cap - (parseInt(sd.total, 10) || 0)) : null;
+    if(t.slots && t.slots.mode === 'flex' && sd && rem !== null && typeof _tseAvailableSizes === 'function'){
+      return _tseAvailableSizes(t, rem, parseInt(sd.s1, 10) || 0).map(Number);
+    }
     var a = (typeof _tdCalcAllowedPax === 'function') ? _tdCalcAllowedPax(t) : [];
-    if(a && a.length) return a.map(Number);
+    if(a && a.length){
+      a = a.map(Number);
+      if(sd && !(t.slots && t.slots.mode === 'flex')){   // 고정 구성(1·2·4인석) — 그 인원석이 남은 것만
+        a = a.filter(function(n){ var c = parseInt(t.slots && t.slots['s' + n], 10) || 0; return !(c > 0 && (parseInt(sd['s' + n], 10) || 0) >= c); });
+      }
+      return rem === null ? a : a.filter(function(n){ return n <= rem; });
+    }
     var lo = parseInt(t.minPax || 1, 10) || 1, hi = parseInt(t.maxPax || t.totalPax || 12, 10) || 12, out = [];
-    for(var i = lo; i <= Math.min(hi, 20); i++) out.push(i);
+    for(var i = lo; i <= Math.min(hi, 20); i++) if(rem === null || i <= rem) out.push(i);
     return out;
   });
   if(!sets.length) return [];
@@ -62142,7 +62175,8 @@ function _pkBlockReason(ts){
     if(typeof _tkTierAllowed === 'function' && !_tkTierAllowed(t)) return _pkT('pkg.tier', '이용 등급이 맞지 않는 일정이 있습니다');
     // 게스트석으로만 열린 회차는 패키지로 못 산다(게스트석은 확정 대기라 묶음 결제와 맞지 않는다)
     if(typeof _tkIsGuestSeat === 'function' && _tkIsGuestSeat(t) && String(t.minTier || '') !== 'A' && window._currentUserGrade === 'A') return _pkT('pkg.tier', '이용 등급이 맞지 않는 일정이 있습니다');
-    if(t.status === 'soldout') return _pkT('pkg.sold_out_round', '매진된 일정이 있습니다');
+    // 로컬 매진 표시는 낡을 수 있다(내 앞 시도의 홀드 · 그 사이 취소) — 서버 좌석 수를 읽었으면 그쪽(인원 선택지가 막는다)
+    if(t.status === 'soldout' && !(_pk.sold && _pk.sold[String(t.id)])) return _pkT('pkg.sold_out_round', '매진된 일정이 있습니다');
   }
   return '';
 }
@@ -62174,7 +62208,8 @@ window._pkDetailCardHtml = _pkDetailCardHtml;
 function pkOpen(pkgId){
   var p = window._tkPkgs[pkgId];
   if(!p){ showToast('⚠', _pkT('pkg.unavailable', '지금은 예약할 수 없는 패키지입니다'), ''); return; }
-  _pk = { id: p.id, pax: 0, holds: [], gid: null, total: 0, busy: false, agreed: false, remain: {}, seq: (_pk.seq || 0) + 1 };
+  if(_pk.busy || _pk.inflight){ showToast('⏳', _pkT('pkg.paying', '결제 중'), _pkT('pkg.wait', '잠시만 기다려주세요')); return; }
+  _pk = { id: p.id, pax: 0, holds: [], gid: null, total: 0, busy: false, agreed: false, remain: {}, sold: {}, seq: (_pk.seq || 0) + 1 };
   var ts = _pkRounds(p), opts = _pkPaxOptions(ts.filter(Boolean));
   _pk.pax = opts.length ? opts[0] : 0;
   var el = document.getElementById('pkSheet');
@@ -62182,28 +62217,39 @@ function pkOpen(pkgId){
   el.style.cssText = 'position:fixed;inset:0;z-index:900;background:rgba(8,3,4,.72);display:flex;align-items:flex-end;justify-content:center;';
   el.onclick = function(e){ if(e.target === el && !_pk.busy) pkClose(); };
   _pkRender();
-  // 회차마다 남은 좌석(서버) — 인원 상한
   var mySeq = _pk.seq;
-  ts.forEach(function(t){
-    if(!t || !window.sb) return;
-    var cap = parseInt(t.assignedPax || t.totalPax, 10) || 0; if(cap <= 0) return;
-    window.sb.rpc('taam_ticket_sold_slots', { p_ticket_id: String(t.id) }).then(function(res){
-      if(_pk.seq !== mySeq || !res || res.error || !res.data) return;
-      _pk.remain[String(t.id)] = Math.max(0, cap - (parseInt(res.data.total, 10) || 0));
-      _pkRender();
-    }).catch(function(){});
+  // 앞 시도에서 남은 이 패키지의 내 홀드를 먼저 돌려준다(남은 좌석에 내 홀드가 섞여 「매진」으로 보이지 않게) — 결제창에서 돌아오는 중이면 건드리지 않는다
+  var trip = null; try { trip = JSON.parse(sessionStorage.getItem('taam_pkg_trip') || 'null'); } catch(_e){}
+  var pre = (window.sb && !(trip && trip.pkg === p.id) && !window._tossConfirmRunning)
+    ? window.sb.rpc('taam_package_release', { p_group: null, p_package: p.id }).then(function(){}, function(){}) : Promise.resolve();
+  // 회차마다 남은 좌석(서버) — 인원 선택지
+  pre.then(function(){
+    ts.forEach(function(t){
+      if(!t || !window.sb) return;
+      var cap = parseInt(t.assignedPax || t.totalPax, 10) || 0; if(cap <= 0) return;
+      window.sb.rpc('taam_ticket_sold_slots', { p_ticket_id: String(t.id) }).then(function(res){
+        if(_pk.seq !== mySeq || !res || res.error || !res.data) return;
+        _pk.sold[String(t.id)] = res.data;
+        _pk.remain[String(t.id)] = Math.max(0, cap - (parseInt(res.data.total, 10) || 0));
+        _pkRender();
+      }).catch(function(){});
+    });
   });
 }
 window.pkOpen = pkOpen;
 function pkClose(){
+  // 좌석을 잡거나 결제 결과를 기다리는 동안은 닫지 않는다(닫으면서 반납하면 진행 중인 결제의 좌석이 사라진다)
+  if(_pk.busy || _pk.inflight){ showToast('⏳', _pkT('pkg.paying', '결제 중'), _pkT('pkg.wait', '잠시만 기다려주세요')); return; }
   var el = document.getElementById('pkSheet'); if(el) el.style.display = 'none';
   // 결제를 끝내지 않았으면 잡아 둔 좌석을 돌려준다
   if(_pk.holds.length && !_pk.paid) _pkRelease();
 }
 window.pkClose = pkClose;
 async function _pkRelease(){
-  var gid = _pk.gid, pid = _pk.id; _pk.holds = []; _pk.gid = null;
+  var gid = _pk.gid, pid = _pk.id, ids = (_pk.holds || []).filter(function(x){ return /^PAYH-/.test(String(x)); }); _pk.holds = []; _pk.gid = null;
   try { if(window.sb) await window.sb.rpc('taam_package_release', { p_group: gid || null, p_package: pid || null }); } catch(_e){}
+  // 그 사이 연계가 풀리면 서버가 홀드의 패키지 표시를 지운다 — 패키지로 못 찾는 홀드도 id 로 돌려준다
+  for(var i = 0; i < ids.length; i++){ try { if(window.sb) await window.sb.rpc('taam_release_seat_hold', { p_purchase_id: ids[i] }); } catch(_e){} }
   try { sessionStorage.removeItem('taam_pkg_trip'); } catch(_e){}
 }
 function pkAdjPax(d){
@@ -62300,16 +62346,17 @@ function _pkServerErr(m){
 }
 
 async function pkPay(){
-  if(_pk.busy) return;
+  if(_pk.busy || _pk.inflight) return;
   var p = window._tkPkgs[_pk.id]; if(!p) return;
   if(!_pk.agreed){ showToast('📄', _pkT('pkg.policy_title', '취소·환불 규정'), _pkT('pkg.agree_need', '규정에 동의하셔야 결제할 수 있습니다')); return; }
   if(!window.sb){ showToast('⚠', _pkT('pkg.fail_title', '패키지 예약 실패'), '서버 연결이 없습니다'); return; }
   var ts = _pkRounds(p), live = ts.filter(Boolean);
   var block = _pkBlockReason(ts); if(block){ showToast('⚠', _pkT('pkg.fail_title', '패키지 예약 실패'), block); return; }
   var pax = _pk.pax; if(!pax) return;
-  var au = await window.sb.auth.getUser(); var u = au && au.data && au.data.user;
-  if(!u){ showToast('⚠', _pkT('pkg.fail_title', '패키지 예약 실패'), '로그인이 필요합니다'); return; }
-  _pk.busy = true; _pkRender();
+  _pk.busy = true; _pkRender();   // 두 번 누름 — await 전에 잠근다
+  var au = null; try { au = await window.sb.auth.getUser(); } catch(_ae){}
+  var u = au && au.data && au.data.user;
+  if(!u){ _pk.busy = false; _pkRender(); showToast('⚠', _pkT('pkg.fail_title', '패키지 예약 실패'), '로그인이 필요합니다'); return; }
   try {
     // ① 이 패키지에 남아 있던 내 홀드(앞 시도)를 먼저 반납 — 남겨 두면 같은 회차 가드가 「이미 구매」로 막는다
     try { await window.sb.rpc('taam_package_release', { p_group: null, p_package: p.id }); } catch(_re){}
@@ -62411,7 +62458,9 @@ window.pkConfirmDeposit = pkConfirmDeposit;
 
 function _pkCardPopup(d){
   var p = window._tkPkgs[_pk.id];
-  var short = parseInt(d.shortfall, 10) || 0, dep = Math.max(0, (parseInt(d.total, 10) || 0) - short);
+  var short = parseInt(d.shortfall, 10) || 0;
+  if(short > 0 && short < 100) short = Math.min(100, parseInt(d.total, 10) || 0);   // 토스 최소 금액 — 서버도 카드 ₩100 · 예치금을 그만큼 덜 쓴다
+  var dep = Math.max(0, (parseInt(d.total, 10) || 0) - short);
   var saved = window._taamDefaultCard
     ? '<button onclick="pkPayCard(true)" style="width:100%;padding:14px;background:#1a1a18;border:none;border-radius:12px;font-size:14px;font-weight:800;color:#fff;cursor:pointer;margin-bottom:10px;">'
       + _pkEsc(_pkT('pkg.saved_card', '등록된 카드로 결제')) + '<div style="font-size:10.5px;font-weight:600;opacity:.7;margin-top:3px;">' + _pkEsc(typeof _savedCardLabel === 'function' ? _savedCardLabel() : '') + '</div></button>'
@@ -62428,19 +62477,56 @@ function _pkCardPopup(d){
     + '<button onclick="pkPayCard(false)" style="width:100%;padding:14px;background:#5C0A14;border:none;border-radius:12px;font-size:14px;font-weight:800;color:#fff;cursor:pointer;margin-bottom:8px;">' + _pkEsc(_pkT('pkg.card_window', '카드로 결제하기')) + '</button>'
     + '<button onclick="pkPayCancel()" style="width:100%;padding:11px;background:transparent;border:none;font-size:12px;font-weight:600;color:#aaa;cursor:pointer;">' + _pkEsc(_pkT('common.cancel', '취소')) + '</button>');
 }
+// 결제 결과가 애매한가(네트워크 · 서버 확정 보류 · 카드 청구 결과 모름) — 이때 좌석을 반납하면 승인된 결제가 좌석 없이 취소된다
+function _pkAmbiguous(d){
+  return !d || !!d.retry || /^(confirm_pending|confirm_retry|charge_unknown|exception|order_lookup_failed)$/.test(String(d.error || ''));
+}
+// 애매하면 반납하지 않고 서버에 결과를 다시 묻는다 — 묶음 상태(회원은 자기 묶음을 읽는다) → Edge 에 다시(멱등)
+async function _pkSettle(gid, retry){
+  for(var i = 0; i < 4; i++){
+    if(gid){
+      try {
+        var g = await window.sb.from('ticket_package_orders').select('status').eq('id', gid).maybeSingle();
+        if(g && !g.error && g.data){
+          if(g.data.status === 'paid') return { ok: true, already: true, group_id: gid };
+          if(g.data.status === 'failed') return { ok: false, error: 'group_closed' };
+        }
+      } catch(_ge){}
+    }
+    await new Promise(function(r){ setTimeout(r, 1500 * (i + 1)); });
+    var d = null; try { var res = await retry(); d = res && res.data; } catch(_re){}
+    if(d && d.ok) return d;
+    if(d && !_pkAmbiguous(d)) return d;
+  }
+  return { ok: false, error: 'pending', pending: true };
+}
+// 끝내 모르면 — 좌석은 반납하지 않고(결제가 확인되면 확정 · 아니면 서버가 5분 뒤 풀고 승인을 취소한다) 구매 내역을 보게 한다
+function _pkPendingNotice(){
+  _pk.holds = []; _pk.busy = false; _pk.inflight = false;
+  var sh = document.getElementById('pkSheet'); if(sh) sh.style.display = 'none';
+  showToast('⏳', _pkT('pkg.pending_title', '결제 확인이 늦어지고 있습니다'), _pkT('pkg.pending_body', '잠시 후 구매 내역을 확인해 주세요 — 결제가 확인되지 않으면 자동으로 취소됩니다'));
+  try { taamSyncNow(true); } catch(_e){}
+}
 async function pkPayCard(saved){
-  if(_pk.busy || !_pk.gid) return;
+  if(_pk.busy || _pk.inflight || !_pk.gid) return;
   _pk.busy = true;
   var el = document.getElementById('pkPayPopup'); if(el) el.remove();
   var p = window._tkPkgs[_pk.id];
   try {
     if(saved){
+      var gid0 = _pk.gid;
+      _pk.inflight = true;
       showToast('⏳', _pkT('pkg.paying', '결제 중'), _pkT('pkg.wait', '잠시만 기다려주세요'));
-      var res = await window.sb.functions.invoke('toss-package-pay', { body: { action: 'billing', group_id: _pk.gid } });
+      var res = null; try { res = await window.sb.functions.invoke('toss-package-pay', { body: { action: 'billing', group_id: gid0 } }); } catch(_ie){}
       var d = res && res.data;
+      if(_pkAmbiguous(d)){
+        d = await _pkSettle(gid0, function(){ return window.sb.functions.invoke('toss-package-pay', { body: { action: 'resume', group_id: gid0 } }); });
+        if(d && d.pending){ _pkPendingNotice(); return; }
+      }
+      _pk.inflight = false;
       if(d && d.ok && d.need_payment === false){ _pk.busy = false; _pkConfirmDepositPopup({ total: _pk.total }); return; }
       if(d && d.ok){ await _pkDone(d, 'card'); return; }
-      await _pkCardFail(d || { error: (res && res.error && res.error.message) || 'exception' });
+      await _pkCardFail(d || { error: 'exception' });
       return;
     }
     var o = await window.sb.functions.invoke('toss-package-pay', { body: { action: 'order', group_id: _pk.gid } });
@@ -62449,6 +62535,7 @@ async function pkPayCard(saved){
     if(od.need_payment === false){ _pk.busy = false; _pkConfirmDepositPopup({ total: _pk.total }); return; }
     var amt = parseInt(od.amount, 10) || 0;
     if(amt < 100){ await _pkCardFail({ error: 'amount' }); return; }
+    if(od.total && parseInt(od.total, 10) !== parseInt(_pk.total, 10)){ await _pkCardFail({ error: 'price_changed' }); return; }
     try { sessionStorage.setItem('taam_pkg_trip', JSON.stringify({ gid: _pk.gid, pkg: _pk.id, oid: od.orderId, at: Date.now() })); } catch(_se){}
     var gidNow = _pk.gid;
     _tossEnsureSdk(async function(){
@@ -62495,18 +62582,23 @@ async function _pkConfirmReturn(paymentKey, orderId, amount){
   try {
     for(var i = 0; i < 10; i++){ var a = await window.sb.auth.getUser(); if(a && a.data && a.data.user) break; await new Promise(function(r){ setTimeout(r, 500); }); }
     showToast('⏳', _pkT('pkg.paying', '결제 확인 중'), _pkT('pkg.wait', '잠시만 기다려주세요'));
-    var res = await window.sb.functions.invoke('toss-package-pay', { body: { action: 'confirm', orderId: orderId, paymentKey: paymentKey, amount: amount } });
+    var trip = null; try { trip = JSON.parse(sessionStorage.getItem('taam_pkg_trip') || 'null'); } catch(_e){}
+    var call = function(){ return window.sb.functions.invoke('toss-package-pay', { body: { action: 'confirm', orderId: orderId, paymentKey: paymentKey, amount: amount } }); };
+    _pk.inflight = true;
+    var res = null; try { res = await call(); } catch(_ie){}
     var d = res && res.data;
+    // 애매하면(네트워크 · 확정 보류 · 토스 처리 중) 좌석을 반납하지 않고 같은 승인을 다시(멱등)
+    if(_pkAmbiguous(d)) d = await _pkSettle(trip && trip.gid, call);
+    _pk.inflight = false;
     try { _tossClearTrip(); } catch(_e){}
-    var trip = null; try { trip = JSON.parse(sessionStorage.getItem('taam_pkg_trip') || 'null'); sessionStorage.removeItem('taam_pkg_trip'); } catch(_e){}
-    if(d && d.ok){
-      if(trip && trip.pkg) _pk.id = trip.pkg;
-      await _pkDone(d, 'card');
-      return;
-    }
-    if(trip){ _pk.id = trip.pkg; _pk.gid = trip.gid; _pk.holds = ['x']; }
+    try { sessionStorage.removeItem('taam_pkg_trip'); } catch(_e){}
+    if(trip && trip.pkg) _pk.id = trip.pkg;
+    if(d && d.ok){ await _pkDone(d, 'card'); return; }
+    if(d && d.pending){ _pkPendingNotice(); return; }
+    if(trip){ _pk.gid = trip.gid; }
     await _pkCardFail(d || { error: 'exception' });
   } catch(e){
+    _pk.inflight = false;
     console.warn('[pkg] 승인 예외:', e);
     showToast('⚠', _pkT('pkg.fail_title', '패키지 예약 실패'), '네트워크 확인 후 구매 내역을 확인해 주세요');
   }
@@ -62514,8 +62606,25 @@ async function _pkConfirmReturn(paymentKey, orderId, amount){
 window._pkConfirmReturn = _pkConfirmReturn;
 // 결제창에서 결제 없이 돌아왔을 때(실패·취소·빈 복귀) — 그 시도의 패키지 좌석을 돌려준다
 async function _pkTripRelease(){
-  var trip = null; try { trip = JSON.parse(sessionStorage.getItem('taam_pkg_trip') || 'null'); sessionStorage.removeItem('taam_pkg_trip'); } catch(_e){}
+  // 결제창 복귀 승인이 도는 중이면 손대지 않는다(그 승인의 좌석을 풀면 승인이 좌석 없이 취소된다)
+  if(window._tossConfirmRunning || _pk.inflight) return;
+  var trip = null; try { trip = JSON.parse(sessionStorage.getItem('taam_pkg_trip') || 'null'); } catch(_e){}
   if(!trip || !window.sb) return;
+  // 그 시도의 주문이 이미 승인됐는지 먼저 본다 — paid 면 반납하지 않고 확정을 이어 간다
+  if(trip.oid){
+    try {
+      var po = await window.sb.from('payment_orders').select('status').eq('order_id', String(trip.oid)).maybeSingle();
+      if(po && !po.error && po.data && po.data.status === 'paid'){
+        var d = await _pkSettle(_pkSafeId(trip.gid), function(){ return window.sb.functions.invoke('toss-package-pay', { body: { action: 'resume', group_id: _pkSafeId(trip.gid) } }); });
+        try { sessionStorage.removeItem('taam_pkg_trip'); } catch(_e){}
+        if(trip.pkg) _pk.id = trip.pkg;
+        if(d && d.ok){ await _pkDone(d, 'card'); return; }
+        if(d && d.pending){ _pkPendingNotice(); return; }
+        return;
+      }
+    } catch(_pe){}
+  }
+  try { sessionStorage.removeItem('taam_pkg_trip'); } catch(_e){}
   try { await window.sb.rpc('taam_package_release', { p_group: _pkSafeId(trip.gid) || null, p_package: _pkSafeId(trip.pkg) || null }); } catch(_e){}
   _pk.paid = false; _pk.holds = []; _pk.gid = null; _pk.busy = false;
   try { _pkRender(); } catch(_e){}
@@ -62876,6 +62985,15 @@ function _pkaBuyersHtml(){
   return h;
 }
 // 카드 환불 — 패키지 묶음 단위(취소 때 서버가 정한 카드 몫 · 첫 줄의 「카드환불」 탭 항목과 같은 것)
+// 카드 환불 대기 줄의 패키지 묶음 — 서버 기록(묶음의 card_refund.first_purchase_id = 이 줄)으로 찾는다. 대기 칸의 pkg_group 은 회원이 취소 순간에 쓸 수 있는 칸이다
+async function _pkGroupForPending(pid){
+  if(!pid || !window.sb) return null;
+  try {
+    var r = await window.sb.from('ticket_package_orders').select('id').eq('card_refund->>first_purchase_id', String(pid)).eq('status', 'cancelled').limit(1);
+    return (!r.error && r.data && r.data[0]) ? String(r.data[0].id) : null;
+  } catch(_e){ return null; }
+}
+window._pkGroupForPending = _pkGroupForPending;
 async function _pkAdminCardRefund(gid, pid, nested){
   if(!window.sb) return;
   if(!nested){
@@ -82132,6 +82250,7 @@ async function deleteTicketProductFromSupabase(ticketId, expectStatus){
     
     if(res.error){
       console.warn('⚠ ticket_products 삭제 실패:', ticketId, res.error.message);
+      window._tkLastDeleteError = String(res.error.message || 'error');   // 🆕 2026-10-29 부른 쪽이 거절 사유를 본다
       return false;
     }
     if (expectStatus && (!res.data || !res.data.length)) return 'gone';
