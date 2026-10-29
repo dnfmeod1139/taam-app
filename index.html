@@ -18629,6 +18629,8 @@ function _tkRepaintAll(){
     try { if (typeof window[fn] === 'function') window[fn](); }
     catch(e){ console.warn('[repaint] ' + fn, e && e.message); }
   });
+  // 🆕 2026-10-29(4차 리뷰) 승인 대기 화면이 떠 있으면 새 판으로 다시 그린다 — 그린 것이 곧 승인 때 보내는 스냅샷이다
+  try { var _pa = document.getElementById('pendingApprovalScreen'); if (_pa && _pa.style.display && _pa.style.display !== 'none' && typeof renderPendingApproval === 'function') renderPendingApproval(); } catch(_pe){}
 }
 window._tkRepaintAll = _tkRepaintAll;
 
@@ -50333,7 +50335,7 @@ function tkToggleFlexStrict(id){
     if(!confirm('🌊 완화(자유 판매) 모드로 전환할까요?\n모든 허용 인원이 자유롭게 판매되고, 잔여 1석이 되면 1인 구매가 자동으로 열립니다.')) return;
   }
   t.slots = Object.assign({}, t.slots, { strict: toStrict });
-  saveTickets();
+  saveTickets([String(t.id)]);   // 🆕 2026-10-29(4차 리뷰) 그 회차만 — 전체 저장은 낡은 로컬 값으로 다른 회차(파트너의 승인 대기 수정)를 덮었다
   renderTicketList();
   showToast('✓','판매 모드 변경', toStrict ? '엄격(조각 방지) 모드로 전환 — 즉시 적용' : '완화(자유 판매) 모드로 전환 — 즉시 적용');
 }
@@ -50586,7 +50588,7 @@ function _tuDoDeleteTicket(id){
       console.warn('ticket Supabase 삭제 실패 (IDB는 성공):', id, e);
     });
   }
-  saveTickets();
+  saveTickets(null, true);   // 🆕 2026-10-29(4차 리뷰) 로컬만 — 서버 삭제는 위에서 · 전체 저장은 다른 회차를 낡은 값으로 덮었다
   renderTicketList();
   renderCarousel();
   renderHomeTickets();
@@ -50598,7 +50600,20 @@ function tuEditTicket(id){
   var t=ticketDB.find(function(x){return String(x.id)===String(id);});
   if(!t)return;
   // 🆕 2026-10-29(3차 리뷰) 수정 승인 대기 중인 회차는 **신청한 값으로** 연다 — 원래 값으로 열면 저장 때 앞 신청이 지워지거나(교체) 남았다(합침)
-  if(_currentRole==='admin' && t._pendingView){ t = t._pendingView; if(typeof showToast==='function') showToast('ℹ','수정 승인 대기 중인 값으로 열었습니다','저장하면 신청이 이 내용으로 바뀝니다 · 원래대로 두면 신청이 지워집니다'); }
+  if(_currentRole==='admin'){
+    // 4차 리뷰: 큐 표시는 있는데 신청 값으로 본 판이 없다(IDB 폴백 · 큐 조회 실패) → 먼저 서버에서 다시 읽고 연다
+    if(t.pendingEdit && Object.keys(t.pendingEdit).length && !t._pendingView && !tuEditTicket._retried){
+      if(typeof showToast==='function') showToast('ℹ','수정 신청 내용을 다시 읽습니다','');
+      tuEditTicket._retried = true;
+      Promise.resolve(typeof _tkRefreshFromServer === 'function' ? _tkRefreshFromServer([String(id)], { quiet: true }) : null)
+        .then(function(){ try { tuEditTicket(id); } finally { tuEditTicket._retried = false; } });
+      return;
+    }
+    // 폼이 열린 때의 큐 — 저장(taam_ticket_edit_submit p_expect)이 이걸 보내 그 사이 바뀐 큐를 지우지 않게 한다
+    window._tkEditExpect = window._tkEditExpect || {};
+    window._tkEditExpect[String(id)] = t.pendingEdit ? JSON.parse(JSON.stringify(t.pendingEdit)) : {};
+    if(t._pendingView){ t = t._pendingView; if(typeof showToast==='function') showToast('ℹ','수정 승인 대기 중인 값으로 열었습니다','저장하면 신청이 이 내용으로 바뀝니다 · 원래대로 두면 신청이 지워집니다'); }
+  }
   _tuEditId=id;
 
   closeAllAdminScreens();
@@ -50718,6 +50733,11 @@ function tuEditTicket(id){
   _tuCountdown = !!t.countdown;
   var sw = document.getElementById('tuCountdownSwitch');
   if(sw) sw.classList.toggle('on', _tuCountdown);
+  // 🆕 2026-10-29(4차 리뷰) 마감 날짜·시각도 되살린다 — 종전엔 스위치만 켜고 값은 비워 두어, 바꾼 것 없는 저장이 마감을 지웠다(파트너는 「마감 삭제」 수정 신청이 됐다)
+  _tuDeadlineDate = t.deadlineDate || null; _tuDeadlineTime = t.deadlineTime || null;
+  var _ddf = document.getElementById('tuDeadlineFields'); if(_ddf) _ddf.style.display = _tuCountdown ? 'block' : 'none';
+  var _ddb = document.getElementById('tuDeadlineDateBtn'); if(_ddb && _tuDeadlineDate){ _ddb.textContent = _tuDeadlineDate; _ddb.classList.add('selected'); }
+  var _dtb = document.getElementById('tuDeadlineTimeBtn'); if(_dtb && _tuDeadlineTime){ _dtb.textContent = _tuDeadlineTime; _dtb.classList.add('selected'); }
 
   // 취소 규정 복원 — 저장된 값 그대로 (true/false 양방향)
   tuResetPolicy();
@@ -65800,10 +65820,16 @@ function acRegister() {
           return res;
         })
         .then(function(res){
-          // 🆕 2026-10-29(3차 리뷰) 이미 있는 줄(승인 대기·정지) — 승인으로 바꾼다(RPC · 알림 · 도장)
+          // 🆕 2026-10-29(4차 리뷰) 이미 있는 줄 — 상태를 읽어 **승인 대기만** 묻고 승인한다 · 정지된 줄은 절대 자동으로 안 되살린다(「파트너 권한 승인」 화면에서)
           if(res && res.error && /duplicate|already exists|23505/i.test(String(res.error.message||'') + ' ' + String(res.error.code||''))){
-            return window.sb.rpc('taam_partner_grant_set', { p_user: mId, p_rest: String(rId), p_status: 'approved', p_note: '어드민 코드 발급' })
-              .then(function(g){ if(g && g.error && !/Could not find the function|PGRST202/i.test(String(g.error.message||'') + ' ' + String(g.error.code||''))) return g; return { error: null }; });
+            return window.sb.from('admin_grants').select('status').eq('user_id', mId).eq('rest_id', String(rId)).maybeSingle().then(function(st){
+              var cur = st && st.data && st.data.status;
+              if (cur === 'approved' || !cur) return { error: null };
+              if (cur === 'suspended') { if(typeof showToast === 'function') showToast('⚠','정지된 권한입니다','되살리려면 「🔑 파트너 계정 발급 · 권한 승인」에서 승인하세요'); return { error: null }; }
+              if (!confirm('이 회원의 이 매장 권한이 「승인 대기」입니다. 지금 승인할까요?')) return { error: null };
+              return window.sb.rpc('taam_partner_grant_set', { p_user: mId, p_rest: String(rId), p_status: 'approved', p_note: '어드민 코드 발급' })
+                .then(function(g){ if(g && g.error && !/Could not find the function|PGRST202/i.test(String(g.error.message||'') + ' ' + String(g.error.code||''))) return g; return { error: null }; });
+            });
           }
           return res;
         })
@@ -65838,20 +65864,17 @@ async function syncAdminGrantsToServer(){
     return { user_id: a.memberId, rest_id: a.restId ? String(a.restId) : null, label: a.restName||null, status: 'approved' };   // 🆕 2026-10-29 로컬 코드 = 슈퍼어드민이 준 권한 → 승인 줄
   }).filter(function(r){ return r.user_id && r.rest_id; });
   if(rows.length === 0){ if(typeof showToast==='function') showToast('ℹ','동기화','로컬 어드민 코드가 없어요'); return; }
-  var ok = 0;
+  var ok = 0, dup = 0;
   for(var i=0;i<rows.length;i++){
     try{
       var res = await window.sb.from('admin_grants').insert(rows[i]);
       if(res.error && (res.error.code === 'PGRST204' || res.error.code === '42703')){ var _r2 = Object.assign({}, rows[i]); delete _r2.status; res = await window.sb.from('admin_grants').insert(_r2); }
-      // 🆕 2026-10-29(3차 리뷰) 이미 있는 줄(대기·정지)은 승인으로 — 23505 를 성공으로만 세면 서버는 대기인 채 「반영」이라 말했다
-      if(res.error && /duplicate|already exists|23505/i.test(String(res.error.message||'') + ' ' + String(res.error.code||''))){
-        var _gs = await window.sb.rpc('taam_partner_grant_set', { p_user: rows[i].user_id, p_rest: rows[i].rest_id, p_status: 'approved', p_note: '로컬 어드민 코드 동기화' });
-        res = (_gs && _gs.error && !/Could not find the function|PGRST202/i.test(String(_gs.error.message||'') + ' ' + String(_gs.error.code||''))) ? _gs : { error: null };
-      }
+      // 🆕 2026-10-29(4차 리뷰) 이미 있는 줄은 **그대로 둔다**(이 화면을 열 때마다 저절로 돈다 — 정지·승인 철회한 파트너를 되살리던 길) · 상태 바꾸기는 「파트너 권한 승인」 화면에서만
+      if(res.error && /duplicate|already exists|23505/i.test(String(res.error.message||'') + ' ' + String(res.error.code||''))){ dup++; continue; }
       if(!res.error) ok++;
     }catch(e){}
   }
-  if(typeof showToast==='function') showToast('✓','동기화 완료', ok+'개 매장 권한을 서버에 반영했어요');
+  if(typeof showToast==='function') showToast('✓','동기화 완료', ok+'개 매장 권한을 서버에 반영했어요' + (dup ? ' · ' + dup + '개는 이미 있어 그대로 둠' : ''));
 }
 
 function acDeleteCode(id) {
@@ -65981,7 +66004,7 @@ function renderPartnerTicketList() {
     return '<div class="rest-list-item">'
       +'<div class="rest-list-info">'
         +'<div class="rest-list-name"'+(isSold?' style="opacity:.4;"':'')+'>'+_raEsc(t.rest)+' <span style="font-family:var(--font-main);font-size:9px;color:'+(isSold?'#E53935':'#c8a96e')+';">'+(isSold?'SOLD OUT':t.type)+'</span>'+_wait+'</div>'
-        +'<div class="rest-list-meta"'+(isSold?' style="opacity:.4;"':'')+'>'+t.date+' · '+t.time+slots+'</div>'
+        +'<div class="rest-list-meta"'+(isSold?' style="opacity:.4;"':'')+'>'+_raEsc(t.date)+' · '+_raEsc(t.time)+slots+'</div>'
         // 🔧 2026.08: 여기 있던 +flexToggle 을 제거했다.
         //   flexToggle 은 renderTicketList 안에서만 선언된 지역 변수라, 이 함수에서는
         //   선언되지 않은 이름이었다 — 파트너(레스토랑 어드민) 티켓 목록을 그릴 때마다
@@ -66104,7 +66127,7 @@ function partnerCalSelect(dateStr) {
         +'<div class="tcal-ticket-name">'+_raEsc(t.rest)+'</div>'
         +'<div class="tcal-ticket-meta">'
         +'<div class="tcal-ticket-kv"><div class="tcal-ticket-key">DATE</div><div class="tcal-ticket-val">'+((typeof _tkFullDate === 'function') ? _tkFullDate(t) : t.date)+'</div></div>'
-        +'<div class="tcal-ticket-kv"><div class="tcal-ticket-key">TIME</div><div class="tcal-ticket-val">'+t.time+'</div></div>'
+        +'<div class="tcal-ticket-kv"><div class="tcal-ticket-key">TIME</div><div class="tcal-ticket-val">'+_raEsc(t.time)+'</div></div>'
         +'<div class="tcal-ticket-kv"><div class="tcal-ticket-key">총 좌석</div><div class="tcal-ticket-val">'+total+'석</div></div>'
         +'<div class="tcal-ticket-kv"><div class="tcal-ticket-key">잔여</div><div class="tcal-ticket-val '+(Math.max(0,total-usedPax)===0?'sold':'')+'">'+Math.max(0,total-usedPax)+'석</div></div>'
         +'</div></div></div>';
@@ -66325,7 +66348,15 @@ function renderPendingApproval() {
   updatePendingBadge();
   if (!pending.length && !edits.length) { el.innerHTML='<div class="sub-empty">대기 중인 항목 없음</div>'; return; }
   var _TU_COL = { date:'날짜', time:'시간', total_pax:'정원', slots:'좌석 구성', min_pax:'최소 인원', max_pax:'최대 인원', assigned_pax:'배정 인원', meal_fee:'식사비', agency_fee:'대행비', overseas_agency_usd:'해외 대행비($)', wine_min:'주류 미니멈', price:'가격', ticket_type:'유형', type_class:'유형 구분', ticket_genre:'분류', home_section:'홈 섹션', is_event:'이벤트', ticket_desc:'설명', ticket_desc_en:'설명(EN)', ticket_desc_jp:'설명(JA)', cancel_policy:'취소 규정', grade_open:'우선 공개', min_tier:'이용 등급', m_open_date:'M 오픈 날짜', m_open_time:'M 오픈 시각', t_open_delay:'T 오픈 지연', t_open_unit:'T 오픈 단위', countdown:'카운트다운', deadline_date:'마감 날짜', deadline_time:'마감 시각', sale_open_at:'판매 오픈 시각', sale_state:'판매 상태', ovs_prices:'해외 정가', guest_price:'게스트가' };
-  var _fv = function(v){ if(v == null) return '—'; if(typeof v === 'object') return _raEsc(JSON.stringify(v)).slice(0, 80); return _raEsc(String(v)).slice(0, 80); };
+  // 🆕 2026-10-29(4차 리뷰) 값은 **전부** 보여 준다 — 80자에서 자르면 81자째부터 바꾼 설명이 「같은 값 → 같은 값」으로 보여 그대로 승인됐다(긴 값은 칸 안에서 스크롤)
+  var _fv = function(v){ if(v == null) return '—'; var s0 = (typeof v === 'object') ? JSON.stringify(v) : String(v); return '<span style="display:inline-block;max-height:140px;overflow:auto;white-space:pre-wrap;vertical-align:top;">' + _raEsc(s0) + '</span>' + (s0.length > 80 ? ' <span style="color:#9a9486;font-size:10px;">(' + s0.length + '자)</span>' : ''); };
+  // 🆕 2026-10-29(4차 리뷰) **그린 순간**의 큐·서버 시각을 적어 둔다 — 승인 때 이걸 보낸다(뒤에서 새로 읽은 값과 견주면 화면에 없던 값이 승인됐다)
+  window._paShown = {};
+  ticketDB.forEach(function(t){
+    if ((t.pendingEdit && Object.keys(t.pendingEdit).length) || t.status === 'pending' || t.status === 'deleteRequest') {
+      window._paShown[String(t.id)] = { edit: t.pendingEdit ? JSON.parse(JSON.stringify(t.pendingEdit)) : null, upd: (t._srvRow && t._srvRow.updated_at) || null, status: t.status };
+    }
+  });
   var _editHtml = edits.map(function(t){
     var r = restaurantDB.find(function(x){ return String(x.id)===String(t.restId); });
     var keys = Object.keys(t.pendingEdit);
@@ -66348,12 +66379,13 @@ function renderPendingApproval() {
     var isDel = t.status==='deleteRequest';
     return '<div class="pending-card" data-tid="' + String(t.id).replace(/[^0-9A-Za-z_.:\-]/g, '') + '">'
       +'<div class="pending-card-top">'
-        +'<div><div class="pending-card-name">'+_raEsc(r?r.name:t.rest)+'</div><div class="pending-card-meta">'+t.date+' · '+t.time+'</div></div>'
+        +'<div><div class="pending-card-name">'+_raEsc(r?r.name:t.rest)+'</div><div class="pending-card-meta">'+_raEsc(t.date)+' · '+_raEsc(t.time)+'</div></div>'
         +'<span class="pending-type-badge'+(isDel?' del':'')+'">'+(isDel?'삭제 신청':'업로드 신청')+'</span>'
       +'</div>'
       +'<div class="pending-btns">'
-        +'<button class="pending-approve" onclick="approveTicket(\''+t.id+'\')">'+(isDel?'삭제 승인':'게시 승인')+'</button>'
-        +'<button class="pending-reject" onclick="rejectTicket(\''+t.id+'\')">'+(isDel?'반려':'거절')+'</button>'
+        // 🆕 2026-10-29(4차 리뷰) 파트너가 쓴 값(날짜·시각·id)을 그대로 innerHTML·onclick 에 넣지 않는다 — 슈퍼어드민 세션에서 돌던 저장형 XSS
+        +'<button class="pending-approve" onclick="approveTicket(\''+String(t.id).replace(/[^0-9A-Za-z_.:\-]/g, '')+'\')">'+(isDel?'삭제 승인':'게시 승인')+'</button>'
+        +'<button class="pending-reject" onclick="rejectTicket(\''+String(t.id).replace(/[^0-9A-Za-z_.:\-]/g, '')+'\')">'+(isDel?'반려':'거절')+'</button>'
       +'</div></div>';
   }).join('');
 }
@@ -66369,7 +66401,8 @@ async function tuEditReview(id, approve) {
   if (approve && !confirm('수정 신청을 승인합니다 — 바뀐 칸 ' + Object.keys(t.pendingEdit).length + '개가 회차에 반영되고 회원에게 바로 보입니다.')) return;
   _tuEditReviewBusy = true;
   try {
-    var r = await window.sb.rpc('taam_ticket_edit_review', { p_id: String(id), p_approve: !!approve, p_note: note || null, p_expect: t.pendingEdit });
+    var _shown = (window._paShown || {})[String(id)];
+    var r = await window.sb.rpc('taam_ticket_edit_review', { p_id: String(id), p_approve: !!approve, p_note: note || null, p_expect: (_shown && _shown.edit) || t.pendingEdit });
     // 옛 서버(3인자 판)면 화면 대조 없이 다시
     if (r.error && /Could not find the function|PGRST202/i.test(String(r.error.message || '') + ' ' + String(r.error.code || ''))) {
       r = await window.sb.rpc('taam_ticket_edit_review', { p_id: String(id), p_approve: !!approve, p_note: note || null });
@@ -66397,13 +66430,18 @@ function approveTicket(id) {
   var t = ticketDB.find(function(x){ return String(x.id)===String(id); });
   if (!t) return;
   if (t.status==='deleteRequest') {
-    ticketDB = ticketDB.filter(function(x){ return String(x.id)!==String(id); });
-    // 🆕 Supabase에서도 삭제
-    if(typeof deleteTicketProductFromSupabase === 'function'){
-      deleteTicketProductFromSupabase(id).catch(function(e){
-        console.warn('ticket Supabase 삭제 실패 (IDB는 성공):', id, e);
-      });
+    // 🆕 2026-10-29(4차 리뷰) 서버가 아직 「삭제 신청」일 때만 지운다 — 파트너가 신청을 취소해 다시 팔리는 회차를 낡은 카드가 지우던 길
+    if (window.sb && typeof deleteTicketProductFromSupabase === 'function') {
+      deleteTicketProductFromSupabase(id, 'deleteRequest').then(function(r){
+        if (r === 'gone') { showToast('ℹ','이미 처리된 회차입니다','삭제 신청이 취소됐거나 처리됐습니다'); return _tkRefreshFromServer([String(id)], { quiet: true }); }
+        if (r !== true) { showToast('⚠','삭제 실패',''); return; }
+        ticketDB = ticketDB.filter(function(x){ return String(x.id)!==String(id); });
+        saveTickets(null, true);
+        showToast('✓','삭제 승인','티켓이 삭제되었습니다');
+      }).then(function(){ try { renderCarousel(); renderHomeTickets(); renderTicketGenres(); renderTicketList(); renderPendingApproval(); updatePendingBadge(); } catch(_e){} });
+      return;
     }
+    ticketDB = ticketDB.filter(function(x){ return String(x.id)!==String(id); });
     showToast('✓','삭제 승인','티켓이 삭제되었습니다');
   } else {
     // 🆕 2026-10-29(3차 리뷰) 게시 승인은 **그 회차의 상태만** 서버에 — 종전 saveTickets() 는 슈퍼어드민의 로컬 전체를 upsert 해
@@ -66449,9 +66487,12 @@ async function _tkApprovePending(t) {
     if (fr.error) { showToast('⚠','승인 실패', String(fr.error.message || '').slice(0, 80)); return false; }
     if (!fr.data) { showToast('⚠','회차가 없습니다','이미 지워졌습니다'); await _tkRefreshFromServer([id], { quiet: true }); renderPendingApproval(); return false; }
     if (fr.data.status !== 'pending') { showToast('ℹ','이미 처리된 회차입니다',''); await _tkRefreshFromServer([id], { quiet: true }); renderPendingApproval(); updatePendingBadge(); return false; }
-    var snap = t._srvRow;
-    if (snap && snap.updated_at && fr.data.updated_at && String(snap.updated_at) !== String(fr.data.updated_at)) {
-      showToast('⚠','파트너가 방금 내용을 바꿨습니다','바뀐 내용을 다시 보여 드립니다 — 확인 뒤 승인해 주세요');
+    // 🆕 2026-10-29(4차 리뷰) **화면을 그린 순간**의 서버 시각과 견준다(뒤에서 새로 읽은 _srvRow 와 견주면 화면에 없던 값이 승인됐다) ·
+    //   파트너 쓰기의 updated_at 은 서버가 적는다(옛 값을 보내 비켜 가지 못한다) · 스냅샷이 없으면 승인하지 않고 다시 보여 준다
+    var shown = (window._paShown || {})[id];
+    var snapUpd = shown ? shown.upd : null;
+    if (!snapUpd || !fr.data.updated_at || String(snapUpd) !== String(fr.data.updated_at)) {
+      showToast('⚠', snapUpd ? '파트너가 방금 내용을 바꿨습니다' : '최신 내용을 다시 읽었습니다', '바뀐 내용을 다시 보여 드립니다 — 확인 뒤 승인해 주세요');
       await _tkRefreshFromServer([id], { quiet: true }); renderPendingApproval();
       return false;
     }
@@ -66478,13 +66519,18 @@ function rejectTicket(id) {
         .then(function(){ try { renderPendingApproval(); updatePendingBadge(); } catch(_e){} });
     }
   } else {
-    ticketDB = ticketDB.filter(function(x){ return String(x.id)!==String(id); });
-    // 🆕 Supabase에서도 삭제 (pending 거절)
-    if(typeof deleteTicketProductFromSupabase === 'function'){
-      deleteTicketProductFromSupabase(id).catch(function(e){
-        console.warn('ticket Supabase 삭제 실패 (IDB는 성공):', id, e);
-      });
+    // 🆕 2026-10-29(4차 리뷰) 서버가 아직 「승인 대기」일 때만 지운다 — 다른 기기에서 이미 승인돼 팔리는 회차를 낡은 카드가 지우던 길
+    if (window.sb && typeof deleteTicketProductFromSupabase === 'function') {
+      deleteTicketProductFromSupabase(id, 'pending').then(function(r){
+        if (r === 'gone') { showToast('ℹ','이미 처리된 회차입니다','승인됐거나 지워졌습니다'); return _tkRefreshFromServer([String(id)], { quiet: true }); }
+        if (r !== true) { showToast('⚠','거절 실패',''); return; }
+        ticketDB = ticketDB.filter(function(x){ return String(x.id)!==String(id); });
+        saveTickets(null, true);
+        showToast('✕','거절','업로드 요청이 거절되었습니다');
+      }).then(function(){ try { renderCarousel(); renderHomeTickets(); renderTicketGenres(); renderTicketList(); renderPendingApproval(); updatePendingBadge(); } catch(_e){} });
+      return;
     }
+    ticketDB = ticketDB.filter(function(x){ return String(x.id)!==String(id); });
     showToast('✕','거절','업로드 요청이 거절되었습니다');
   }
   saveTickets(window.sb ? null : [String(id)], !!window.sb);   // 🆕 2026-10-29 서버엔 위에서 그 회차만 — 여기선 로컬(IDB)만
@@ -67499,7 +67545,7 @@ function saveExtend() {
   t.deadlineDate = newDate;
   t.deadlineTime = newTime;
   if (t.status === 'soldout') t.status = 'active'; // 연장 시 매진 해제
-  saveTickets();
+  saveTickets([String(t.id)]);   // 🆕 2026-10-29(4차 리뷰) 그 회차만
   renderTicketList();
   renderHomeTickets();
   renderTicketGenres();
@@ -80838,7 +80884,9 @@ async function saveTicketProductToSupabase(ticket){
     if (_currentRole === 'admin' && window._tkEditSubmitIds && window._tkEditSubmitIds[String(ticket.id)]) {
       delete window._tkEditSubmitIds[String(ticket.id)];
       var _subRow = Object.assign({}, payload, { ovs_prices: ticket.ovsPrices || null, sale_state: ticket.saleState || 'open', sale_open_at: ticket.saleOpenAt || null });
-      var _sr = await window.sb.rpc('taam_ticket_edit_submit', { p_id: String(ticket.id), p_row: _subRow });
+      var _exp = (window._tkEditExpect || {})[String(ticket.id)];
+      var _sr = await window.sb.rpc('taam_ticket_edit_submit', { p_id: String(ticket.id), p_row: _subRow, p_expect: _exp || {} });
+      if (window._tkEditExpect) delete window._tkEditExpect[String(ticket.id)];
       if (!_sr.error) {
         window._tkSubmitToasted = window._tkSubmitToasted || {}; window._tkSubmitToasted[String(ticket.id)] = Date.now();
         var _sd = _sr.data || {};
@@ -80849,6 +80897,8 @@ async function saveTicketProductToSupabase(ticket){
       }
       var _sm = String((_sr.error && _sr.error.message) || '') + ' ' + String((_sr.error && _sr.error.code) || '');
       if (!/Could not find the function|does not exist|PGRST202|ROUND_PENDING/i.test(_sm)) {
+        if (/STALE_EDIT/.test(_sm)) { showToast('⚠','수정 신청이 그 사이 바뀌었습니다','최신 신청을 다시 읽었습니다 — 다시 열어 확인해 주세요'); try { await _tkRefreshFromServer([String(ticket.id)], { quiet: true }); } catch(_rf){} return false; }
+        if (/BAD_INPUT/.test(_sm)) { showToast('⚠','저장되지 않았습니다', _sm.replace(/^.*BAD_INPUT:\s*/, '').slice(0, 80)); return false; }
         if (/EDIT_TOO_LONG/.test(_sm)) showToast('⚠','저장되지 않았습니다','수정 내용이 너무 큽니다(글자 2,000자 · 전체 16KB)');
         else if (/NOT_YOUR_RESTAURANT/.test(_sm)) showToast('⚠','저장되지 않았습니다','내 매장의 회차만 고칠 수 있습니다');
         else showToast('⚠','수정 신청 실패', _sm.slice(0, 80));
@@ -80890,6 +80940,7 @@ async function saveTicketProductToSupabase(ticket){
           if (/ONLY_SUPERADMIN_APPROVES/.test(__em)) { showToast('⚠','저장되지 않았습니다','게시 승인은 TAAM 이 합니다'); return false; }
           if (/ADMIN_MUST_UPLOAD_PENDING/.test(__em)) { showToast('⚠','저장되지 않았습니다','업로드는 승인 대기로만 올릴 수 있습니다'); return false; }
           if (/NOT_YOUR_RESTAURANT/.test(__em)) { showToast('⚠','저장되지 않았습니다','내 매장의 회차만 고칠 수 있습니다'); return false; }
+          if (/BAD_INPUT/.test(__em)) { showToast('⚠','저장되지 않았습니다', __em.replace(/^.*BAD_INPUT:\s*/, '').slice(0, 80)); return false; }
           if (/permission|denied|policy|rls|row-level/i.test(__em)) __hint = 'RLS/권한';
           else if (/foreign key|constraint|violates/i.test(__em)) __hint = '외래키';
           else if (/not.?null|null value/i.test(__em)) __hint = 'NOT NULL';
@@ -80931,16 +80982,20 @@ async function saveTicketProductToSupabase(ticket){
 }
 
 // 🆕 티켓 상품을 Supabase에서 삭제
-async function deleteTicketProductFromSupabase(ticketId){
+async function deleteTicketProductFromSupabase(ticketId, expectStatus){
   try {
     if(!window.sb || !ticketId) return false;
     
-    var res = await window.sb.from('ticket_products').delete().eq('id', String(ticketId));
+    // 🆕 2026-10-29(4차 리뷰) expectStatus 를 주면 그 상태일 때만 지운다 — 0행이면 'gone'(이미 처리됐거나 상태가 바뀌었다)
+    var q = window.sb.from('ticket_products').delete().eq('id', String(ticketId));
+    if (expectStatus) q = q.eq('status', expectStatus).select('id');
+    var res = await q;
     
     if(res.error){
       console.warn('⚠ ticket_products 삭제 실패:', ticketId, res.error.message);
       return false;
     }
+    if (expectStatus && (!res.data || !res.data.length)) return 'gone';
     
     console.log('🗑 ticket Supabase 삭제:', ticketId);
     return true;
