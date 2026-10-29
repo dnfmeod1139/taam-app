@@ -77,7 +77,7 @@ function sqlCode(m: string): string {
     [/HOLD_GONE|HOLDS_MISMATCH/, 'hold_gone'], [/PACKAGE_NOT_ACTIVE/, 'package_closed'], [/PACKAGE_CHANGED/, 'package_changed'],
     [/INSUFFICIENT_DEPOSIT/, 'deposit_short'], [/PRICE_CHANGED|PRICE_NOT_SET/, 'price_changed'], [/GROUP_CLOSED|GROUP_NOT_FOUND/, 'group_closed'],
     [/ORDER_SUPERSEDED/, 'superseded'], [/ORDER_NOT_PAID|ORDER_NOT_FOUND/, 'order_not_found'], [/FORBIDDEN|내 예약이 아닙니다/, 'forbidden'],
-    [/RATE_LIMITED/, 'rate_limited'], [/ROUND_CLOSED/, 'round_closed'],
+    [/RATE_LIMITED/, 'rate_limited'], [/ROUND_CLOSED/, 'round_closed'], [/PAYMENT_PENDING/, 'payment_pending'],
   ];
   for(const [re, c] of map) if(re.test(m)) return c;
   return 'confirm_failed';
@@ -397,14 +397,17 @@ async function handle(req: Request){
       let t = await charge();
       if(!t.ok || t.body?.status !== 'DONE'){
         if(tossAmbiguous(t)){
-          // 같은 멱등 키로 한 번 더 → 그래도 모르면 주문 번호로 조회. 승인이 됐을 수 있으니 새 주문으로 다시 긁지 않는다
+          // 같은 멱등 키로 한 번 더(토스는 첫 요청의 결과를 돌려준다) → 그래도 모르면 주문 번호로 조회.
+          //   ⚠ 첫 청구가 애매했으면 조회 404 는 「안 긁혔다」의 증거가 아니다(아직 처리 중 · 조회에 늦게 보인다 — 3차 검증).
+          //   다시 시도한 응답이 **분명한 거절**일 때만 실패로 닫고, 아니면 pending 으로 두고 알린다(정리 크론이 10분 뒤 다시 조회해 확정하거나 expired 로 닫는다)
           const t2 = await charge();
           if(t2.ok && t2.body?.status === 'DONE') t = t2;
+          else if(!tossAmbiguous(t2)) t = t2;   // 분명한 거절(카드 거절·한도 등) — 아래에서 실패로
           else {
             const lk = await tossLookup(secret, '', orderId);
             if(lk.done) t = { ok: true, status: 200, body: lk.body };
-            else if(!lk.gone){
-              await markUnknown(order, 'pending', 'billing_' + String(t.body?.code || t.status).slice(0, 40));
+            else {
+              await markUnknown(order, 'pending', 'billing_' + String(t2.body?.code || t2.status || t.body?.code || t.status).slice(0, 40));
               return json({ ok: false, error: 'charge_unknown', retry: false, orderId });
             }
           }

@@ -342,6 +342,10 @@ has "이 주문으로 확정 뒤 취소된 묶음의 주문은 닫지 않는다(
 ok "  ↳ 그 주문은 paid 그대로" "$(Q "select status from public.payment_orders where order_id = '$OID2'")" "paid"
 has "정리 크론 — 취소 도중 끊긴(_canceling) 주문이 있으면 Edge 를 부르려 한다(픽스처엔 설정 없음 → no_config)" "$(Q "select public.taam_package_reconcile_kick()")" '"reason": "no_config"'
 Q "update public.payment_orders set fail_reason = 'hold_gone_refunded' where order_id = '$OID7'" >/dev/null
+Q "insert into public.payment_orders(order_id,user_id,purpose,amount,status,fail_reason,metadata) values ('taampkg_unk','$M5','package_topup',100000,'pending','unknown:billing_PROVIDER_ERROR',jsonb_build_object('group_id','$G7'))" >/dev/null
+has "결과를 모르는(unknown:) 카드 주문이 있는 묶음은 새로 긁지 않는다 → PAYMENT_PENDING(덮어 닫으면 정리 크론이 못 본다)" "$(Q "select public.taam_package_order_prepare('$G7', '$M5')")" "PAYMENT_PENDING"
+ok "  ↳ 그 주문은 pending 그대로" "$(Q "select status from public.payment_orders where order_id = 'taampkg_unk'")" "pending"
+Q "update public.payment_orders set status = 'failed', fail_reason = 'expired' where order_id = 'taampkg_unk'" >/dev/null
 AS "$M5" "select public.taam_package_release('$G7', null)" >/dev/null
 
 echo "── 13. 재실행 ──"

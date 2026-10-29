@@ -671,6 +671,11 @@ begin
     v_card := least(100, v_total); v_dep := v_total - v_card;
   end if;
   v_oid := 'taampkg_' || (extract(epoch from clock_timestamp()) * 1000)::bigint || '_' || (floor(random() * 100000))::int;
+  -- 결과를 모르는(unknown:) 옛 주문이 있으면 새로 긁지 않는다 — 덮어 닫으면(superseded) 늦게 완료된 그 청구를 정리 크론이 못 본다(3차 검증)
+  if exists (select 1 from public.payment_orders where purpose = 'package_topup' and status = 'pending' and user_id = p_uid
+                and metadata->>'group_id' = p_group and coalesce(fail_reason, '') like 'unknown:%') then
+    raise exception 'PAYMENT_PENDING: 앞 카드 결제를 확인하는 중입니다 — 잠시 뒤 다시 시도해 주세요' using errcode = '22023';
+  end if;
   -- 같은 묶음의 결제 안 된 옛 주문은 닫는다(카드창을 두 번 열어 두 번 결제되지 않게 — 늦게 돌아온 옛 승인은 확정에서 거절되고 Edge 가 취소한다)
   update public.payment_orders set status = 'failed', fail_reason = 'superseded'
    where purpose = 'package_topup' and status = 'pending' and user_id = p_uid and metadata->>'group_id' = p_group;
