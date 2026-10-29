@@ -484,7 +484,13 @@ begin
   select * into o from public.ticket_package_orders where id = p_group for update;
   if not found then raise exception 'GROUP_NOT_FOUND' using errcode = 'P0002'; end if;
   if o.user_id is distinct from p_uid then raise exception '내 예약이 아닙니다' using errcode = '42501'; end if;
-  if o.status = 'paid' then return jsonb_build_object('ok', true, 'already', true, 'group_id', o.id, 'total', o.total); end if;
+  if o.status = 'paid' then
+    -- 같은 결제로 다시 부른 것만 「이미」 — 다른 길(예치금 · 다른 주문)로 이미 낸 묶음에 늦게 온 카드 승인은 거절(Edge 가 그 카드를 취소한다)
+    if (p_order is null and o.card_paid = 0) or (p_order is not null and o.order_id = p_order and o.card_paid > 0) then
+      return jsonb_build_object('ok', true, 'already', true, 'group_id', o.id, 'total', o.total);
+    end if;
+    raise exception 'ORDER_SUPERSEDED: 이미 다른 결제로 확정된 패키지입니다' using errcode = 'P0002';
+  end if;
   if o.status <> 'hold' then raise exception 'GROUP_CLOSED: 결제를 이어갈 수 없는 주문입니다 (상태 %)', o.status using errcode = 'P0002'; end if;
   select title into v_title from public.ticket_packages where id = o.package_id and status = 'active';
   if not found then raise exception 'PACKAGE_NOT_ACTIVE: 판매가 끝난 패키지입니다' using errcode = 'P0002'; end if;
@@ -561,7 +567,7 @@ begin
   perform set_config('taam.pkg_confirm', '', true);
   update public.ticket_package_orders
      set status = 'paid', items = v_rows, total = v_total, deposit_used = coalesce(p_dep_want, 0), card_paid = coalesce(p_card, 0),
-         order_id = coalesce(p_order, order_id), paid_at = now(), updated_at = now()
+         order_id = p_order, paid_at = now(), updated_at = now()   -- 예치금만이면 null — 결제창에 남은 옛 카드 주문이 이 묶음을 「이미 낸」 것으로 잡지 못하게
    where id = p_group;
   return jsonb_build_object('ok', true, 'group_id', p_group, 'total', v_total, 'deposit_used', coalesce(p_dep_want, 0), 'card_paid', coalesce(p_card, 0),
                             'balance_after', v_after, 'rows', v_rows, 'title', v_title);

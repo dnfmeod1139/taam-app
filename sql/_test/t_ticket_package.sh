@@ -187,6 +187,20 @@ ok "잔액 0" "$(Q "select membership_deposit_balance || '/' || general_deposit_
 ok "묶음 paid · 표시용 pkg_info" "$(Q "select status from public.ticket_package_orders where id = '$G1'")/$(Q "select extra_data->'pkg_info'->>'i' || '/' || (extra_data->'pkg_info'->>'n') from public.tickets where purchase_id = 'PAYH-tpB_m1'")" "paid/2/3"
 has "같은 주문으로 다시 확정 → already" "$(Q "select public.taam_package_confirm_card('$OID2')")" '"already": true'
 
+echo "── 5b. 카드창이 열린 사이 예치금으로 확정 — 늦게 온 카드 승인은 거절(Edge 가 취소) ──"
+Q "update public.profiles set membership_deposit_balance = 10000000 where id = '$M3'" >/dev/null
+for x in A:$RA B:$RB C:$RC; do t=${x%%:*}; r=${x#*:}; H "$M3" "$r" tp$t 1 PAYH-tp${t}_m3x "{\"pkg\":\"$PK1\"}" >/dev/null; done
+AS "$M3" "select public.taam_package_start('$PK1', 1, array['PAYH-tpA_m3x','PAYH-tpB_m3x','PAYH-tpC_m3x'])" >/dev/null
+G6=$(Q "select id from public.ticket_package_orders where user_id = '$M3' and status = 'hold'")
+Q "update public.profiles set membership_deposit_balance = 100000, general_deposit_balance = 0 where id = '$M3'" >/dev/null
+O6=$(Q "select public.taam_package_order_prepare('$G6', '$M3')"); OID6=$(echo "$O6" | grep -o '"order_id": "[^"]*"' | cut -d'"' -f4)
+Q "update public.profiles set membership_deposit_balance = 10000000 where id = '$M3'" >/dev/null
+has "그 사이 예치금으로 확정" "$(AS "$M3" "select public.taam_package_confirm_deposit('$G6', 1150000)")" '"deposit_used": 1150000'
+Q "update public.payment_orders set status = 'paid', payment_key = 'pk_m3x', metadata = metadata || jsonb_build_object('pkg_claim','toss-package-pay') where order_id = '$OID6'" >/dev/null
+has "늦게 온 카드 승인으로 확정 → ORDER_SUPERSEDED(이미 낸 묶음을 「이미」로 받지 않는다)" "$(Q "select public.taam_package_confirm_card('$OID6')")" "ORDER_SUPERSEDED"
+ok "  ↳ 예치금 한 번만 빠졌다(10,000,000 − 1,150,000)" "$(Q "select membership_deposit_balance from public.profiles where id = '$M3'")" "8850000"
+Q "update public.tickets set status = 'cancelled' where purchase_id like 'PAYH-tp%_m3x'; update public.ticket_package_orders set status = 'cancelled' where id = '$G6'; update public.profiles set membership_deposit_balance = 0, general_deposit_balance = 5000000 where id = '$M3'" >/dev/null
+
 echo "── 6. 결제된 패키지의 한 줄만 · 인원 ──"
 has "회원이 한 줄만 취소 → PACKAGE_CANCEL_WHOLE" "$(AS "$M1" "update public.tickets set status = 'cancelled' where purchase_id = 'PAYH-tpC_m1'")" "PACKAGE_CANCEL_WHOLE"
 has "인원 변경(슈퍼어드민 세션) → PACKAGE_PAX_LOCKED" "$(AS "$SU" "update public.tickets set party_size = 1 where purchase_id = 'PAYH-tpC_m1'")" "PACKAGE_PAX_LOCKED"
