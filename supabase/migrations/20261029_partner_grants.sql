@@ -1172,6 +1172,7 @@ end $do$;
 --   HTML 을 넣으면 슈퍼어드민의 티켓 캘린더와 회원의 초대 결제 팝업에서 돌았다(회원 세션에서 예치금 결제까지 몰 수 있다).
 --   로그인 호출(슈퍼어드민 제외)의 **새로 생긴 글자**만 본다 — 옛 내용 때문에 취소·출석 같은 갱신이 막히지 않게. 구매 id 는 영문·숫자·_.:- 만(onclick 탈출).
 --   서버 함수(definer) 안의 쓰기도 auth.uid() 가 있으면 본다(매장 어드민이 부르는 수동 좌석 수정 RPC · 링크 만들기 등) · 서버(auth.uid() null)는 그대로.
+--   profiles 도(보안 점검 2026-10-29): 회원이 자기 이름(display_name)·전화·이메일 칸에 태그를 넣으면 슈퍼어드민의 캘린더 회원 정보·어드민 코드 부여 화면에서 돌았다(세션 탈취).
 create or replace function public.taam_guard_text_input()
 returns trigger language plpgsql set search_path = public as $$
 declare v_new jsonb; v_old jsonb; k text; v jsonb;
@@ -1193,7 +1194,7 @@ end $$;
 do $do$
 declare t text; n int := 0;
 begin
-  foreach t in array array['tickets', 'reservation_invites', 'daegwan_manual', 'restaurant_visit_notes', 'restaurants'] loop
+  foreach t in array array['tickets', 'reservation_invites', 'daegwan_manual', 'restaurant_visit_notes', 'restaurants', 'profiles'] loop
     if to_regclass('public.' || t) is not null then
       execute format('drop trigger if exists trg_taam_guard_text_input on public.%I', t);
       execute format('create trigger trg_taam_guard_text_input before insert or update on public.%I for each row execute function public.taam_guard_text_input()', t);
@@ -1206,11 +1207,16 @@ end $do$;
 
 -- ── I. 덤 — 조회 함수 권한 ──
 -- uuid → 이메일 조회가 누구에게나 열려 있었다(기본 PUBLIC EXECUTE). 본인·슈퍼어드민·서버만. (profiles 역할 가드 트리거가 본인 id 로 부른다 — 그대로 된다)
+--   ⚠ 보안 점검(2026-10-29): 「auth.uid() 가 없으면 서버」로 보면 PostgREST 의 **비로그인(anon)** 호출도 서버가 됐다(anon 도 auth.uid() 가 null) —
+--     JWT 역할이 anon/authenticated 가 아닐 때만 서버(SQL Editor·트리거 안·service_role) · anon 실행 권한도 거둔다.
 create or replace function public._taam_auth_email(p_id uuid)
 returns text language sql stable security definer set search_path = public as $$
-  select case when auth.uid() is null or auth.uid() = p_id or public._taam_uid_is_super()
+  select case when (auth.uid() is null and coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb->>'role', '') not in ('anon', 'authenticated'))
+                or auth.uid() = p_id or public._taam_uid_is_super()
               then (select lower(u.email::text) from auth.users u where u.id = p_id) end
 $$;
+revoke all on function public._taam_auth_email(uuid) from public, anon;
+grant execute on function public._taam_auth_email(uuid) to authenticated;   -- service_role 은 기본 권한 그대로(public·anon 만 거둔다)
 do $do$
 declare r record; v text := '';
 begin
@@ -1243,8 +1249,10 @@ insert into _pg(항목, 결과) values
      and exists (select 1 from pg_trigger where tgname = 'trg_taam_guard_ticket_round_open') and exists (select 1 from pg_trigger where tgname = 'trg_taam_guard_invite_host') then '✅' else '❌' end),
  ('D 수정 신청 저장 RPC(p_expect) · 승인 STALE 검사(4인자)', case when to_regprocedure('public.taam_ticket_edit_submit(text, jsonb, jsonb)') is not null and to_regprocedure('public.taam_ticket_edit_submit(text, jsonb)') is null
      and to_regprocedure('public.taam_ticket_edit_review(text, boolean, text, jsonb)') is not null and to_regprocedure('public.taam_ticket_edit_review(text, boolean, text)') is null then '✅' else '❌' end),
- ('K tickets·초대 글자 검사', case when exists (select 1 from pg_trigger where tgname = 'trg_taam_guard_text_input' and tgrelid = 'public.tickets'::regclass)
-     and exists (select 1 from pg_trigger where tgname = 'trg_taam_guard_text_input' and tgrelid = 'public.reservation_invites'::regclass) then '✅' else '❌' end),
+ ('K tickets·초대·profiles 글자 검사', case when exists (select 1 from pg_trigger where tgname = 'trg_taam_guard_text_input' and tgrelid = 'public.tickets'::regclass)
+     and exists (select 1 from pg_trigger where tgname = 'trg_taam_guard_text_input' and tgrelid = 'public.reservation_invites'::regclass)
+     and exists (select 1 from pg_trigger where tgname = 'trg_taam_guard_text_input' and tgrelid = 'public.profiles'::regclass) then '✅' else '❌' end),
+ ('I _taam_auth_email — anon 실행 권한 없음', case when has_function_privilege('anon', 'public._taam_auth_email(uuid)', 'execute') then '❌' else '✅' end),
  ('D 파트너 입력 검사(_taam_tp_check_input)', case when to_regproc('public._taam_tp_check_input') is not null and exists (select 1 from pg_proc where proname = 'enforce_ticket_approval' and prosrc like '%_taam_tp_check_input%') then '✅' else '❌' end),
  ('G 회원 검색은 volatile(상한을 적는다)', case when (select provolatile from pg_proc where oid = to_regprocedure('public.taam_partner_member_search(text, text)')) = 'v' then '✅' else '❌' end),
  ('A 파트너는 admin_grants.note 를 못 읽는다', case when has_column_privilege('authenticated', 'public.admin_grants', 'note', 'select') then '❌' else '✅' end),

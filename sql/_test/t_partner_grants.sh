@@ -118,6 +118,7 @@ create table public.daegwan_manual(id uuid primary key default gen_random_uuid()
 create table public.reservation_requests(id uuid primary key default gen_random_uuid(), user_id uuid, venue_id text, reserve_date date, status text default 'pending', visit_status text);
 alter table public.profiles enable row level security;
 create policy profiles_select_own on public.profiles for select to authenticated using ((auth.uid() = id) or public.is_superadmin());
+create policy profiles_update_own on public.profiles for update to authenticated using ((auth.uid() = id) or public.is_superadmin()) with check ((auth.uid() = id) or public.is_superadmin());   -- 라이브 「profiles update own」 모양
 create policy "profiles read by venue admin for requesters" on public.profiles for select to authenticated using (exists (select 1 from public.reservation_requests rr where rr.user_id = profiles.id and (public.is_super_admin(auth.uid()) or public.is_venue_admin_of(rr.venue_id))));
 create or replace function public.get_requester_info(p_user_id uuid, p_venue_id text)
 returns table (display_name text, phone text, nationality text, membership_tier text, purchase_count integer, cancel_count integer, venue_visits integer, last_visit date)
@@ -586,6 +587,15 @@ ok "_taam_auth_email — 남의 것 null" "$(AS "$M1" "select coalesce(public._t
 ok "_taam_auth_email — 본인" "$(AS "$M1" "select public._taam_auth_email('$M1')")" "m1@x.kr"
 ok "_taam_auth_email — 슈퍼어드민" "$(AS "$SU" "select public._taam_auth_email('$M2')")" "m2@x.kr"
 ok "taam_user_tier anon 회수" "$(Q "select has_function_privilege('anon','public.taam_user_tier(uuid)','execute')")" "f"
+# ── 보안 점검 반영(2026-10-29) — _taam_auth_email 비로그인 · 회원 이름 글자 검사
+has "_taam_auth_email — 비로그인(anon) 실행 권한 없음(PostgREST 의 anon 도 auth.uid() 가 null 이라 「서버」로 읽히던 길)" "$($P -c "set role anon; select public._taam_auth_email('$M2');" 2>&1)" "permission denied"
+ok "_taam_auth_email — JWT 역할이 anon 이면 서버로 안 본다(null)" "$(Q "select set_config('request.jwt.claims','{\"role\":\"anon\"}',false); select coalesce(public._taam_auth_email('$M2'),'-');" | tail -1)" "-"
+ok "_taam_auth_email — 서버(JWT 없음 · SQL Editor)는 그대로" "$(Q "select public._taam_auth_email('$M2')")" "m2@x.kr"
+has "회원 — 자기 이름에 태그 → BAD_INPUT(슈퍼어드민 화면 저장형 XSS · 보안 점검 재현)" "$(AS "$M1" "update public.profiles set display_name='회원일<img src=x onerror=alert(1)>' where id='$M1';")" "BAD_INPUT"
+r=$(AS "$M1" "update public.profiles set display_name='회원일 <주의>' where id='$M1';"); ok "회원 — 한글 꺾쇠 이름은 그대로" "$(echo "$r" | grep -c ERROR)/$(Q "select display_name from public.profiles where id='$M1'")" "0/회원일 <주의>"
+Q "update public.profiles set display_name='회원일' where id='$M1';" >/dev/null
+r=$(AS "$SU" "update public.profiles set display_name='<b>운영</b>' where id='$SU';"); ok "슈퍼어드민은 검사 밖" "$(echo "$r" | grep -c ERROR)" "0"
+Q "update public.profiles set display_name='운영' where id='$SU';" >/dev/null
 # 재실행
 out2=$($P -f "$MIG" 2>&1); echo "$out2" | grep -q "❌\|ERROR" && { echo "❌ 재실행 확인 표에 ❌/ERROR"; echo "$out2" | grep "❌\|ERROR"; FAIL=1; } || echo "✅ 재실행"
 ok "재실행 뒤 suspended 가 approved 로 안 돌아감(백필은 옛 줄만)" "$(Q "select status from public.admin_grants where user_id='$P3'")" "approved"

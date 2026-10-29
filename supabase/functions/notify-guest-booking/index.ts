@@ -61,6 +61,19 @@ async function sbGet(path: string): Promise<any[]> {
   return Array.isArray(j) ? j : [];
 }
 
+// 🆕 2026-10-29 보안 점검 — 속도 제한(taam_rate_hit) 호출용. 함수가 없거나 실패하면 null(통과 — 종전처럼 보낸다)
+async function sbRpc(fn: string, body: unknown): Promise<unknown> {
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fn}`, {
+      method: "POST",
+      headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch { return null; }
+}
+
 async function sbPatch(path: string, body: unknown): Promise<boolean> {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
     method: "PATCH",
@@ -172,7 +185,8 @@ async function handle(req: Request): Promise<Response> {
       const role = String(prof[0]?.role || "");
       const isSuper = role === "superadmin" || role === "super_admin";
       if (!isSuper) {
-        const g = await sbGet(`admin_grants?user_id=eq.${who.uid}&or=(rest_id.eq.${encodeURIComponent(t.restaurant_id)},venue_id.eq.${encodeURIComponent(t.restaurant_id)})&select=user_id`);
+        // 🔧 2026-10-29 보안 점검 — **승인된(approved)** 매장 권한만(승인 대기·정지 파트너도 유료 알림톡을 보내던 길 · 20261029_partner_grants.sql 의 판정과 같게)
+        const g = await sbGet(`admin_grants?user_id=eq.${who.uid}&status=eq.approved&or=(rest_id.eq.${encodeURIComponent(t.restaurant_id)},venue_id.eq.${encodeURIComponent(t.restaurant_id)})&select=user_id`);
         if (!g.length) return json({ error: "forbidden" }, 403);
       }
     }
@@ -198,6 +212,14 @@ async function handle(req: Request): Promise<Response> {
       `· 인원 변경·취소는 방문 31일 전까지 가능하며, 예약 대행비는 환불되지 않습니다.\n` +
       `· 방문 30일 이내에는 취소·변경이 불가합니다.\n` +
       `· 노쇼 시 이후 예약이 제한될 수 있습니다.`;
+
+    // 5-1) 🆕 2026-10-29 보안 점검 — 유료 발송 속도 제한(서버 호출은 제외): 보내는 사람 시간당 40건 · 한 예약 하루 4번(재발송 force 포함)
+    //   종전엔 제한이 없어 매장 어드민이 force 로 같은 번호(또는 수동 좌석에 바꿔 넣은 번호)에 알림톡·LMS 를 끝없이 보낼 수 있었다.
+    if (!who.service) {
+      const okU = await sbRpc("taam_rate_hit", { p_key: `guest_booking:${who.uid}`, p_limit: 40, p_window: "1 hour" });
+      const okR = await sbRpc("taam_rate_hit", { p_key: `guest_booking_row:${pid}`, p_limit: 4, p_window: "1 day" });
+      if (okU === false || okR === false) return json({ ok: false, rate_limited: true, skip: "발송 한도 — 잠시 뒤 다시 보내 주세요(보내는 사람 시간당 40건 · 한 예약 하루 4번)" });   // 200 — 앱이 「건너뜀」으로 보여 준다
+    }
 
     // 6) 발송 → 결과를 행에 남긴다 (성공했을 때만 kakao_sent_at)
     const result = await sendKakao(phone, vars, fallback);

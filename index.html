@@ -35455,9 +35455,13 @@ async function paxChangeApply(){
 
   if(r.error){
     var m = String(r.error.message || '');
-    var friendly = /FORBIDDEN/.test(m) ? '이 구매를 바꿀 권한이 없습니다'
+    // 🆕 2026-10-29 보안 점검 — 서버가 운영 행 거부 · 파트너 환불 한도(줄인 인원 몫) · 자기 구매 금지를 센다
+    var friendly = /FORBIDDEN_OWN/.test(m) ? '자기 구매의 인원은 바꿀 수 없습니다'
+      : /PAX_CHANGE_NOT_FOR_OPS/.test(m) ? '수동·초대 홀드·결제 링크·정산 좌석은 여기서 바꾸지 않습니다(수동 좌석은 「수정」)'
+      : /FORBIDDEN/.test(m) ? '이 구매를 바꿀 권한이 없습니다'
       : /INCREASE_NOT_SUPPORTED/.test(m) ? '인원 증가는 아직 지원하지 않습니다'
       : /ALREADY_CANCELLED/.test(m) ? '이미 취소된 구매입니다'
+      : /REFUND_TOO_LARGE: 매장 어드민/.test(m) ? m.replace(/^.*REFUND_TOO_LARGE:\s*/, '').slice(0, 80)
       : /REFUND_TOO_LARGE/.test(m) ? '돌려줄 금액이 결제액보다 큽니다'
       : /REASON_REQUIRED/.test(m) ? '사유를 입력하세요'
       : /does not exist|schema cache/i.test(m) ? 'sql/ticket_pax_change.sql 을 먼저 실행해야 합니다'
@@ -64142,15 +64146,16 @@ async function tcalShowInviteMember(uid){
     if(sheet){
       sheet.innerHTML = '<div style="padding:22px 20px;font-family:\'Noto Sans KR\',sans-serif;max-height:80vh;overflow-y:auto;">'
         + '<div style="font-size:11px;font-weight:800;letter-spacing:1px;color:#B4B0A8;">회원 정보</div>'
-        + '<div style="font-size:20px;font-weight:800;color:#1a1a18;margin-top:6px;">'+(p.display_name||'(이름 없음)')+'</div>'
-        + '<div style="font-size:12.5px;color:#888;margin-top:4px;">'+(p.email||'')+(p.phone?(' · '+p.phone):'')+'</div>'
+        // 🔒 2026-10-29 보안 점검 — 회원이 자기 이름·이메일·전화 칸에 태그를 넣으면 이 시트에서 슈퍼어드민 세션으로 돌았다
+        + '<div style="font-size:20px;font-weight:800;color:#1a1a18;margin-top:6px;">'+_raEsc(p.display_name||'(이름 없음)')+'</div>'
+        + '<div style="font-size:12.5px;color:#888;margin-top:4px;">'+_raEsc(p.email||'')+(p.phone?(' · '+_raEsc(p.phone)):'')+'</div>'
         // 예약 / 이용 / 캔슬
         + '<div style="display:flex;margin-top:16px;background:#F6F5F2;border-radius:16px;padding:16px 8px;">'
         +   stat(booked, '예약', '#1A1A1A') + stat(usage, '이용', '#1E9E5A') + stat(cancels, '캔슬', '#B23A2E')
         + '</div>'
         // 상세 정보
         + '<div style="margin-top:16px;background:#fff;border:1px solid #ece8df;border-radius:14px;padding:4px 16px;">'
-        +   kv('멤버십 등급', p.membership_tier)
+        +   kv('멤버십 등급', _raEsc(p.membership_tier || ''))
         +   kv('멤버십 만료', p.membership_expires_at ? String(p.membership_expires_at).slice(0,10) : (p.member_until ? String(p.member_until).slice(0,10) : '—'))
         +   kv('예치금(멤버십)', won(p.membership_deposit_balance))
         +   kv('예치금(일반)', won(p.general_deposit_balance))
@@ -65704,7 +65709,7 @@ function acSelectMember(id) {
   document.getElementById('acMemberSearch').value = '';
   document.getElementById('acMemberDropdown').classList.remove('open');
   document.getElementById('acSelectedMember').innerHTML =
-    '<div class="ac-selected-tag">'+m.name+' · '+(m.phone||'—')
+    '<div class="ac-selected-tag">'+_raEsc(m.name)+' · '+_raEsc(m.phone||'—')   // 🔒 2026-10-29 보안 점검 — 회원이 쓴 이름·전화
     +'<button onclick="acClearMember()">✕</button></div>';
 }
 
