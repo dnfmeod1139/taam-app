@@ -402,8 +402,11 @@ async function handle(req: Request){
           //   다시 시도한 응답이 **분명한 거절**일 때만 실패로 닫고, 아니면 pending 으로 두고 알린다(정리 크론이 10분 뒤 다시 조회해 확정하거나 expired 로 닫는다)
           const t2 = await charge();
           if(t2.ok && t2.body?.status === 'DONE') t = t2;
-          else if(!tossAmbiguous(t2)) t = t2;   // 분명한 거절(카드 거절·한도 등) — 아래에서 실패로
-          else {
+          else if(!tossAmbiguous(t2)){
+            // 분명한 응답이어도(카드 거절 · DUPLICATED_ORDER_ID 같은 「이미 있음」) 첫 청구가 애매했으니 한 번 조회 — DONE 이면 잇고 아니면 그 거절로 실패(4차 검증)
+            const lk0 = await tossLookup(secret, '', orderId);
+            t = lk0.done ? { ok: true, status: 200, body: lk0.body } : t2;
+          } else {
             const lk = await tossLookup(secret, '', orderId);
             if(lk.done) t = { ok: true, status: 200, body: lk.body };
             else {

@@ -62707,6 +62707,10 @@ async function _pkTripRelease(){
       try { sessionStorage.removeItem('taam_pkg_trip'); if(trip.gid) localStorage.setItem('taam_pkg_unresolved', JSON.stringify({ gid: _pkSafeId(trip.gid), pkg: trip.pkg, at: Date.now() })); } catch(_e){}
       return 'kept';
     }
+    // 4차 검증 — 주문을 읽는 사이 성공 복귀(App Links)가 왔을 수 있다: 풀기 직전에 다시 본다(그 승인은 곧 돈다)
+    if(window._tossConfirmRunning || _pk.inflight || (window._tossReturnPendingAt && Date.now() - window._tossReturnPendingAt < 30000)) return 'busy';
+    var trip2 = null; try { trip2 = JSON.parse(sessionStorage.getItem('taam_pkg_trip') || 'null'); } catch(_e){}
+    if(!trip2 || trip2.oid !== trip.oid) return 'busy';
   }
   try { sessionStorage.removeItem('taam_pkg_trip'); } catch(_e){}
   try { await window.sb.rpc('taam_package_release', { p_group: _pkSafeId(trip.gid) || null, p_package: _pkSafeId(trip.pkg) || null }); } catch(_e){}
