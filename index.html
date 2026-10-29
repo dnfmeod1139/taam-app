@@ -48750,12 +48750,13 @@ async function openReservationInvitePayPopup(inviteId){
     //   여기가 실제로 「결제하기」를 누르는 화면이라, 카드만 고치고 두면
     //   목록은 $ 인데 결제창은 ₩ 인 상태가 된다 — 그게 더 헷갈린다.
     function _rpCur(krw){ return taamMoney(krw); }
+    // 🔒 2026-10-29(5차 리뷰) 보낸 사람(파트너)이 쓴 칸은 이스케이프 — innerHTML 로 그려 회원 세션에서 스크립트가 돌았다(예치금 결제까지 몰 수 있다)
     var rows = [
-      ['레스토랑', inv.restaurant_name || '–'],
+      ['레스토랑', _riEscHtml(inv.restaurant_name || '–')],
       ['유형', inv.type_class === 'eve' ? 'Event' : 'Standard'],
-      ['날짜', inv.visit_date || '–'],
-      ['시간', visitDispTime || '–'],
-      ['인원', inv.pax + '인'],
+      ['날짜', _riEscHtml(inv.visit_date || '–')],
+      ['시간', _riEscHtml(visitDispTime || '–')],
+      ['인원', (parseInt(inv.pax, 10) || 0) + '인'],
       ['식사예약금', _rpCur((inv.meal_fee||0)*inv.pax)],
       ['대행비', _rpCur((inv.agency_fee||0)*inv.pax)]
     ];
@@ -50602,6 +50603,10 @@ function tuEditTicket(id){
   // 🆕 2026-10-29(3차 리뷰) 수정 승인 대기 중인 회차는 **신청한 값으로** 연다 — 원래 값으로 열면 저장 때 앞 신청이 지워지거나(교체) 남았다(합침)
   if(_currentRole==='admin'){
     // 4차 리뷰: 큐 표시는 있는데 신청 값으로 본 판이 없다(IDB 폴백 · 큐 조회 실패) → 먼저 서버에서 다시 읽고 연다
+    if(t.pendingEdit && Object.keys(t.pendingEdit).length && !t._pendingView && tuEditTicket._retried){
+      if(typeof showToast==='function') showToast('⚠','수정 신청 내용을 읽지 못했습니다','연결을 확인한 뒤 다시 열어 주세요 — 지금 열면 앞 신청이 지워질 수 있습니다');
+      return;
+    }
     if(t.pendingEdit && Object.keys(t.pendingEdit).length && !t._pendingView && !tuEditTicket._retried){
       if(typeof showToast==='function') showToast('ℹ','수정 신청 내용을 다시 읽습니다','');
       tuEditTicket._retried = true;
@@ -65183,7 +65188,7 @@ function tcalRenderDetail(dateStr) {
     html += '<div style="padding:15px 16px 12px;border-bottom:1px solid #f0ece1;">'
       + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">'
       +   '<div style="min-width:0;"><div onclick="tcalGoMemberTicket(\'' + String(g.restId).replace(/'/g, "\\'") + '\',\'' + String(dateStr).replace(/'/g, "\\'") + '\')" title="회원 화면의 이 회차로 이동" style="font-size:17px;font-weight:800;color:#1a1a18;word-break:keep-all;cursor:pointer;text-decoration:underline;text-decoration-color:#d8cdb8;text-underline-offset:3px;">' + _raEsc(g.restName) + ' <span style="font-size:13px;color:#b5afa2;">›</span></div>'
-      +     '<div style="font-size:12px;color:#9A9486;margin-top:2px;">시간 ' + (g.time || '—') + '</div></div>'
+      +     '<div style="font-size:12px;color:#9A9486;margin-top:2px;">시간 ' + _raEsc(g.time || '—') + '</div></div>'
       +   '<div style="text-align:right;flex-shrink:0;"><div style="font-size:10.5px;color:#9A9486;">정원 ' + (g.capacity!=null?g.capacity:'-') + ' · 예약 ' + booked + '</div>'
       +     (remain!=null ? '<div style="font-size:22px;font-weight:900;color:'+(remain===0?'#B23A2E':'#1E9E5A')+';line-height:1.1;">잔여 '+remain+'</div>' : '<div style="font-size:11px;color:#c9c4ba;margin-top:3px;">정원 미설정</div>')
       +   '</div></div>';
@@ -65205,6 +65210,8 @@ function tcalRenderDetail(dateStr) {
         var multi = row.parts.length > 1;
 
         function partHtml(e, inner){
+          // 🔒 2026-10-29(5차 리뷰) onclick 에 넣는 id 는 영문·숫자·_.:- 만 — 파트너가 REST 로 넣은 구매 id 의 따옴표가 슈퍼어드민 세션에서 돌던 길
+          var _q = function(v){ return String(v == null ? '' : v).replace(/[^0-9A-Za-z_.:\-]/g, ''); };
           // 🆕 2026.08: 좌석 연동 행 구분 — MAN-(수동·연동) / INVH-(초대 좌석 홀드)
           var _isMan = (e.pid||'').indexOf('MAN-') === 0;
           var _isHold = (e.pid||'').indexOf('INVH-') === 0;
@@ -65219,11 +65226,11 @@ function tcalRenderDetail(dateStr) {
                   : _isMan ? ['#7A6A60','#F0ECE6','#E0D9CC']
                   : (_isHold ? ['#B07A1E','#FBF4E5','#EDDFC2']
                   : (e.type==='invite' ? ['#6A1A1A','#FBF3F2','#EEDADA'] : (e.type==='app' ? ['#1F5BD6','#EAF1FF','#D2E0FB'] : ['#7A6A60','#F0ECE6','#E0D9CC'])));
-          var badge = '<span style="font-size:9.5px;font-weight:800;color:'+col[0]+';background:'+col[1]+';border:1px solid '+col[2]+';border-radius:6px;padding:1px 6px;">'+label+'</span>';
+          var badge = '<span style="font-size:9.5px;font-weight:800;color:'+col[0]+';background:'+col[1]+';border:1px solid '+col[2]+';border-radius:6px;padding:1px 6px;">'+_raEsc(label)+'</span>';
           var clickable = (e.type !== 'manual' && e.uid);
           var nm = _raEsc(e.name || (e.type==='manual' ? '(이름없음)' : '(회원)'));   // 🔒 2026-09-13 회원 이름은 이스케이프
           var nmH = clickable
-            ? '<span onclick="tcalShowInviteMember(\''+e.uid+'\')" style="font-weight:700;color:#1a1a18;cursor:pointer;text-decoration:underline;">'+nm+'</span>'
+            ? '<span onclick="tcalShowInviteMember(\''+_q(e.uid)+'\')" style="font-weight:700;color:#1a1a18;cursor:pointer;text-decoration:underline;">'+nm+'</span>'
             : '<span style="font-weight:700;color:#1a1a18;">'+nm+'</span>';
           var amt = _isKsk
             ? (e.kskPay
@@ -65232,20 +65239,20 @@ function tcalRenderDetail(dateStr) {
             : (_isLink && e.linkPay
                 ? (_kskFmtPay(e.linkPay) + (e.ex && e.ex.priceOverride ? ' <span style="color:#B45309;font-weight:700;">(금액 수정 · 정가 ₩' + Number(e.amount||0).toLocaleString() + ')</span>' : ' <span style="color:#9A9486;font-weight:600;">(링크 결제액)</span>'))   // 🆕 2026-10-19 슈퍼어드민: 청구 실제액
                 : (e.amount ? ('₩'+e.amount.toLocaleString()) : '') + (e.agency>0 ? ' <span style="color:#9A9486;font-weight:600;">(대행비 ₩'+e.agency.toLocaleString()+')</span>' : ''));
-          var del = (e.type==='manual') ? '<span onclick="tcalManualDelete(\''+e.mid+'\')" style="cursor:pointer;color:#c33;font-size:17px;font-weight:700;line-height:1;padding:2px 4px;">×</span>'
+          var del = (e.type==='manual') ? '<span onclick="tcalManualDelete(\''+_q(e.mid)+'\')" style="cursor:pointer;color:#c33;font-size:17px;font-weight:700;line-height:1;padding:2px 4px;">×</span>'
                   : (_isKsk ? '<span onclick="tcalKskRowInfo()" title="정산 화면에서 청구를 취소·환불하면 좌석이 자동으로 풀립니다" style="cursor:pointer;color:#9A9486;font-size:15px;font-weight:700;line-height:1;padding:2px 4px;">ⓘ</span>'
-                  : (_isLink && isSuper ? '<span onclick="tcalCancelLinkRow(\''+e.pid+'\')" title="' + (_linkPaid ? '환불(규정 적용) · 좌석 취소' : '링크 끊기 · 좌석 취소') + '" style="cursor:pointer;color:#c33;font-size:17px;font-weight:700;line-height:1;padding:0 4px;">×</span>'
-                  : ((_isMan||_isHold) && (isSuper || _currentRole==='admin') ? '<span onclick="tcalCancelLinkedRow(\''+e.pid+'\')" style="cursor:pointer;color:#c33;font-size:17px;font-weight:700;line-height:1;padding:2px 4px;">×</span>' : '')));
+                  : (_isLink && isSuper ? '<span onclick="tcalCancelLinkRow(\''+_q(e.pid)+'\')" title="' + (_linkPaid ? '환불(규정 적용) · 좌석 취소' : '링크 끊기 · 좌석 취소') + '" style="cursor:pointer;color:#c33;font-size:17px;font-weight:700;line-height:1;padding:0 4px;">×</span>'
+                  : ((_isMan||_isHold) && (isSuper || _currentRole==='admin') ? '<span onclick="tcalCancelLinkedRow(\''+_q(e.pid)+'\')" style="cursor:pointer;color:#c33;font-size:17px;font-weight:700;line-height:1;padding:2px 4px;">×</span>' : '')));
           // 🆕 2026.08-29: 인원 변경 — 실제 결제 건에만. 수동(MAN-)·초대홀드(INVH-)는
           //   결제가 없어 돈을 계산할 게 없다. 그건 ×(취소)로 지우는 게 맞다.
           var pxBtn = (_isKsk && e.pid && (isSuper || _currentRole==='admin'))
-            ? '<span onclick="kskSeatPaxOpen(\''+String(e.pid).replace(/'/g,"\\'")+'\','+(parseInt(e.pax)||1)+')" title="정산 좌석 인원 — 조 인원을 고쳐 좌석을 맞춥니다" style="cursor:pointer;color:#8A5A1E;font-size:11px;font-weight:800;border:1px solid #EEDCBB;background:#FBF2E0;border-radius:6px;padding:2px 6px;">인원</span>'
+            ? '<span onclick="kskSeatPaxOpen(\''+_q(e.pid)+'\','+(parseInt(e.pax)||1)+')" title="정산 좌석 인원 — 조 인원을 고쳐 좌석을 맞춥니다" style="cursor:pointer;color:#8A5A1E;font-size:11px;font-weight:800;border:1px solid #EEDCBB;background:#FBF2E0;border-radius:6px;padding:2px 6px;">인원</span>'
             : (!_isMan && !_isHold && !_isKsk && !_isLink && e.pid && (e.pax||0) > 1 && (isSuper || _currentRole==='admin'))   // 🔧 2026-10-23 LINK- 는 카드 결제 — 「인원」이 줄인 몫을 예치금으로 돌려줘 돈이 두 번 나갔다(서버 trg_taam_guard_link_pax 도 막는다)
-            ? '<span onclick="paxChangeOpen(\''+String(e.pid).replace(/'/g,"\\'")+'\')" title="인원 변경" style="cursor:pointer;color:#8A5A1E;font-size:11px;font-weight:800;border:1px solid #EEDCBB;background:#FBF2E0;border-radius:6px;padding:2px 6px;">인원</span>'
+            ? '<span onclick="paxChangeOpen(\''+_q(e.pid)+'\')" title="인원 변경" style="cursor:pointer;color:#8A5A1E;font-size:11px;font-weight:800;border:1px solid #EEDCBB;background:#FBF2E0;border-radius:6px;padding:2px 6px;">인원</span>'
             : '';
           // 🆕 2026-10-14 수동 추가 내역 수정 — 좌석 연동 행(MAN-)·기록(daegwan_manual) 둘 다. 연결 티켓·날짜는 못 바꾼다(취소 후 재추가)
           var edBtn = ((isSuper || _currentRole==='admin') && (e.type==='manual' ? !!e.mid : (_isMan && !!e.pid && e.st !== 'cancelled')))
-            ? '<span onclick="tcalManualEditOpen(\'' + (e.type==='manual' ? 'm' : 't') + '\',\'' + String(e.type==='manual' ? e.mid : e.pid).replace(/'/g,"\\'") + '\',\'' + String(g.restId).replace(/'/g,"\\'") + '\')" title="수동 내역 수정" style="cursor:pointer;color:#5a554f;font-size:11px;font-weight:800;border:1px solid #E0D9CC;background:#F7F4EE;border-radius:6px;padding:2px 6px;">수정</span>'
+            ? '<span onclick="tcalManualEditOpen(\'' + (e.type==='manual' ? 'm' : 't') + '\',\'' + _q(e.type==='manual' ? e.mid : e.pid) + '\',\'' + _q(g.restId) + '\')" title="수동 내역 수정" style="cursor:pointer;color:#5a554f;font-size:11px;font-weight:800;border:1px solid #E0D9CC;background:#F7F4EE;border-radius:6px;padding:2px 6px;">수정</span>'
             : '';
           // 🆕 2026-09-28 수동 예약 손님 알림톡 — 번호가 있는 MAN- 행에만.
           //   보낸 적 있으면 「✓ 카톡 09.28」 + 재발송, 없으면 「📨 카톡 안내」
@@ -65257,7 +65264,7 @@ function tcalRenderDetail(dateStr) {
           }
           if(_isMan && (isSuper || _currentRole==='admin') && _krMobile(e.gphone||'')){
             var _kx = e.ex || {};
-            var _pidQ = String(e.pid).replace(/'/g,"\\'");
+            var _pidQ = _q(e.pid);
             if(_kx.kakao_sent_at){
               var _kd = new Date(_kx.kakao_sent_at);
               var _kdS = isNaN(_kd) ? '' : (String(_kd.getMonth()+1).padStart(2,'0')+'.'+String(_kd.getDate()).padStart(2,'0'));
@@ -65280,7 +65287,7 @@ function tcalRenderDetail(dateStr) {
           var head = inner ? badge : (badge + ' ' + nmH);
           return '<div style="padding:'+(inner?'7px 16px 7px 26px':'10px 16px')+';border-top:1px solid '+(inner?'#f8f6f2':'#f4f1ec')+';'+(inner?'background:#fdfcfa;':'')+'">'
             + '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">'
-            +   '<div style="min-width:0;font-size:12.5px;">' + head + (e.time?' <span style="color:#9a9486;font-size:11px;">· '+e.time+'</span>':'')
+            +   '<div style="min-width:0;font-size:12.5px;">' + head + (e.time?' <span style="color:#9a9486;font-size:11px;">· '+_raEsc(e.time)+'</span>':'')
             +     (e.bought ? '<div style="font-size:10.5px;color:#b5afa2;margin-top:2px;">구매 '+_thxFmtDateTime(e.bought)+'</div>' : '') + '</div>'
             +   '<div style="flex-shrink:0;display:flex;align-items:center;gap:6px;"><span style="font-size:'+(inner?'12':'13')+'px;font-weight:800;color:#6A1A1A;">'+e.pax+'명</span>'+pxBtn+edBtn+del+'</div>'
             + '</div>'
@@ -65292,9 +65299,9 @@ function tcalRenderDetail(dateStr) {
         if(!multi){ html += partHtml(row.parts[0], false); return; }
 
         // ── 묶음 머리줄 — 한 팀으로 몇 명인지 한눈에 ──
-        var nm2 = row.name || '(회원)';
+        var nm2 = _raEsc(row.name || '(회원)');   // 🔒 5차 리뷰 — 묶음 머리줄 이름도 이스케이프
         var nmH2 = row.uid
-          ? '<span onclick="tcalShowInviteMember(\''+row.uid+'\')" style="font-weight:800;color:#1a1a18;cursor:pointer;text-decoration:underline;">'+nm2+'</span>'
+          ? '<span onclick="tcalShowInviteMember(\''+String(row.uid).replace(/[^0-9A-Za-z_.:\-]/g, '')+'\')" style="font-weight:800;color:#1a1a18;cursor:pointer;text-decoration:underline;">'+nm2+'</span>'
           : '<span style="font-weight:800;color:#1a1a18;">'+nm2+'</span>';
         var breakdown = row.parts.map(function(p){ return p.pax + ''; }).join(' + ');
         var amt2 = row.amount ? ('₩'+row.amount.toLocaleString()) : '';
@@ -66374,6 +66381,15 @@ function renderPendingApproval() {
         +'<button class="pending-reject" onclick="tuEditReview(\''+String(t.id).replace(/[^0-9A-Za-z_.:\-]/g, '')+'\', false)">반려</button>'
       +'</div></div>';
   }).join('');
+  // 🆕 2026-10-29(5차 리뷰) 업로드 카드에 **승인할 내용**을 보여 준다 — 이름·날짜만 보고 승인하면 「그린 것 = 승인된 것」이 의미가 없다
+  var _UP_KEYS = ['price','meal_fee','agency_fee','wine_min','total_pax','slots','min_tier','sale_state','sale_open_at','ticket_type','ticket_desc','cancel_policy','grade_open','m_open_date','m_open_time','countdown','deadline_date','deadline_time','ovs_prices'];
+  var _upRows = function(t){
+    var src = t._srvRow; if(!src) return '';
+    var out = _UP_KEYS.filter(function(k){ var v = src[k]; return !(v == null || v === '' || v === false || v === 0 || (typeof v === 'object' && !Object.keys(v).length)); }).map(function(k){
+      return '<div style="display:flex;gap:8px;font-size:11.5px;padding:3px 0;border-bottom:1px solid #f0ede8;"><span style="min-width:84px;color:#9a9486;">' + _raEsc(_TU_COL[k] || k) + '</span><span style="color:#1a1a18;word-break:break-all;">' + _fv(src[k]) + '</span></div>';
+    }).join('');
+    return out ? '<div style="margin:8px 0 2px;background:#FAF9F6;border-radius:10px;padding:4px 12px;">' + out + '</div>' : '';
+  };
   el.innerHTML = _editHtml + pending.map(function(t){
     var r = restaurantDB.find(function(x){ return String(x.id)===String(t.restId); });
     var isDel = t.status==='deleteRequest';
@@ -66382,6 +66398,7 @@ function renderPendingApproval() {
         +'<div><div class="pending-card-name">'+_raEsc(r?r.name:t.rest)+'</div><div class="pending-card-meta">'+_raEsc(t.date)+' · '+_raEsc(t.time)+'</div></div>'
         +'<span class="pending-type-badge'+(isDel?' del':'')+'">'+(isDel?'삭제 신청':'업로드 신청')+'</span>'
       +'</div>'
+      + (isDel ? '' : _upRows(t))
       +'<div class="pending-btns">'
         // 🆕 2026-10-29(4차 리뷰) 파트너가 쓴 값(날짜·시각·id)을 그대로 innerHTML·onclick 에 넣지 않는다 — 슈퍼어드민 세션에서 돌던 저장형 XSS
         +'<button class="pending-approve" onclick="approveTicket(\''+String(t.id).replace(/[^0-9A-Za-z_.:\-]/g, '')+'\')">'+(isDel?'삭제 승인':'게시 승인')+'</button>'
@@ -66496,9 +66513,10 @@ async function _tkApprovePending(t) {
       await _tkRefreshFromServer([id], { quiet: true }); renderPendingApproval();
       return false;
     }
-    var up = await window.sb.from('ticket_products').update({ status: 'active' }).eq('id', id).eq('status', 'pending').select('id,status');
+    // 원자적으로 — 그린 순간의 서버 시각이 그대로일 때만(읽고 바꾸는 사이에 파트너가 고치면 0행 → 다시 보여 준다)
+    var up = await window.sb.from('ticket_products').update({ status: 'active' }).eq('id', id).eq('status', 'pending').eq('updated_at', snapUpd).select('id,status');
     if (up.error) { showToast('⚠','승인 실패', String(up.error.message || '').slice(0, 80)); return false; }
-    if (!up.data || !up.data.length) { showToast('ℹ','이미 처리된 회차입니다',''); await _tkRefreshFromServer([id], { quiet: true }); renderPendingApproval(); return false; }
+    if (!up.data || !up.data.length) { showToast('ℹ','그 사이 바뀌었거나 이미 처리된 회차입니다','다시 보여 드립니다 — 확인 뒤 승인해 주세요'); await _tkRefreshFromServer([id], { quiet: true }); renderPendingApproval(); return false; }
     await _tkRefreshFromServer([id], { quiet: true });
     return true;
   } catch(e) { showToast('⚠','승인 실패', String((e && e.message) || '').slice(0, 80)); return false; }
@@ -80940,7 +80958,20 @@ async function saveTicketProductToSupabase(ticket){
           if (/ONLY_SUPERADMIN_APPROVES/.test(__em)) { showToast('⚠','저장되지 않았습니다','게시 승인은 TAAM 이 합니다'); return false; }
           if (/ADMIN_MUST_UPLOAD_PENDING/.test(__em)) { showToast('⚠','저장되지 않았습니다','업로드는 승인 대기로만 올릴 수 있습니다'); return false; }
           if (/NOT_YOUR_RESTAURANT/.test(__em)) { showToast('⚠','저장되지 않았습니다','내 매장의 회차만 고칠 수 있습니다'); return false; }
-          if (/BAD_INPUT/.test(__em)) { showToast('⚠','저장되지 않았습니다', __em.replace(/^.*BAD_INPUT:\s*/, '').slice(0, 80)); return false; }
+          if (/BAD_INPUT/.test(__em)) {
+            showToast('⚠','저장되지 않았습니다', __em.replace(/^.*BAD_INPUT:\s*/, '').slice(0, 90));
+            // 🆕 5차 리뷰 — 새 업로드가 거절되면 화면에만 남은 회차(서버에 없다)를 치운다
+            try {
+              var _ex = await window.sb.from('ticket_products').select('id').eq('id', String(ticket.id)).maybeSingle();
+              if (_ex && !_ex.error && !_ex.data) {
+                ticketDB = ticketDB.filter(function(x){ return String(x.id) !== String(ticket.id); });
+                _idbSafeSet('excTickets', ticketDB, '티켓');
+                if (typeof renderPartnerTicketList === 'function') renderPartnerTicketList();
+                if (typeof updatePendingBadge === 'function') updatePendingBadge();
+              }
+            } catch(_bx){}
+            return false;
+          }
           if (/permission|denied|policy|rls|row-level/i.test(__em)) __hint = 'RLS/권한';
           else if (/foreign key|constraint|violates/i.test(__em)) __hint = '외래키';
           else if (/not.?null|null value/i.test(__em)) __hint = 'NOT NULL';

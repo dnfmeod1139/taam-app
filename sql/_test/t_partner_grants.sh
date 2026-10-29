@@ -114,6 +114,7 @@ alter table public.reservation_invites enable row level security;
 create policy resinv_select on public.reservation_invites for select using (auth.uid() = invitee_user_id or auth.uid() = host_user_id or public.is_super_admin(auth.uid()));
 create policy resinv_insert on public.reservation_invites for insert with check (host_user_id = auth.uid() and (public.is_super_admin(auth.uid()) or public.taam_is_rest_admin(restaurant_id)));
 create policy resinv_update on public.reservation_invites for update using (auth.uid() = invitee_user_id or auth.uid() = host_user_id or public.is_super_admin(auth.uid()));
+create table public.daegwan_manual(id uuid primary key default gen_random_uuid(), rest_id text, name text, memo text);
 create table public.reservation_requests(id uuid primary key default gen_random_uuid(), user_id uuid, venue_id text, reserve_date date, status text default 'pending', visit_status text);
 alter table public.profiles enable row level security;
 create policy profiles_select_own on public.profiles for select to authenticated using ((auth.uid() = id) or public.is_superadmin());
@@ -555,6 +556,31 @@ Q "delete from public.tickets where purchase_id='MAN-mv'; delete from public.tic
 Q "insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_date,party_size,status,purchase_id,price,buyer_name) values ('$SU','$R1','tp1','2026.11.03',1,'active','PAYH-sutest',850000,'시험');" >/dev/null
 no "예약 목록 — 슈퍼어드민의 시험 구매에 슈퍼어드민 번호 없음(4차 리뷰)" "$(AS "$PT" "select public.taam_partner_reservations('$R1')")" "010-7777-0001"
 Q "delete from public.tickets where purchase_id='PAYH-sutest';" >/dev/null
+# ── 5차 리뷰 반영(2026-10-29) — 그 밖의 표 글자 검사 · 업로드 기본값 · 어드민 시험 구매
+r=$(AS "$PT" "insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_date,visit_time,party_size,status,purchase_id,price) values ('$PT','$R1','tp1','2026.11.03','<img src=x onerror=alert(1)>',1,'manual','MAN-xs1',0);"); has "수동 좌석 — 시각 칸 HTML(슈퍼어드민 캘린더 저장형 XSS · 5차 리뷰 재현) → BAD_INPUT" "$r" "BAD_INPUT"
+r=$(AS "$PT" "insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_date,party_size,status,purchase_id,price) values ('$PT','$R1','tp1','2026.11.03',1,'manual','MAN-x'');alert(1);//',0);"); has "수동 좌석 — 구매 id 따옴표(onclick 탈출) → BAD_INPUT" "$r" "BAD_INPUT"
+r=$(AS "$PT" "insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_date,party_size,status,purchase_id,price,buyer_name) values ('$PT','$R1','tp1','2026.11.03',1,'manual','MAN-xs2',0,'<svg onload=x>');"); has "수동 좌석 — 손님 이름 태그 → BAD_INPUT" "$r" "BAD_INPUT"
+r=$(AS "$PT" "insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_date,party_size,status,purchase_id,price,buyer_name,extra_data) values ('$PT','$R1','tp1','2026.11.03',1,'manual','MAN-xs3',0,'손님<주의>','{\"memo\":\"<b>굵게</b>\"}');"); has "수동 좌석 — extra_data 안쪽 태그 → BAD_INPUT" "$r" "BAD_INPUT"
+r=$(AS "$PT" "insert into public.reservation_invites(host_user_id,invitee_user_id,restaurant_id,restaurant_name,visit_date,visit_time,pax,total_amount,ticket_product_id) values ('$PT','$M1','$R1','<img src=x onerror=alert(1)>','2026.11.03','19:00',1,850000,'tp1');"); has "초대 — 매장 이름 HTML(회원 초대 결제 팝업 저장형 XSS · 5차 리뷰 재현) → BAD_INPUT" "$r" "BAD_INPUT"
+r=$(AS "$PT" "insert into public.daegwan_manual(rest_id,name,memo) values ('$R1','손님','<script>x</script>');"); has "수동 기록 — 메모 태그 → BAD_INPUT" "$r" "BAD_INPUT"
+r=$(AS "$PT" "insert into public.daegwan_manual(rest_id,name,memo) values ('$R1','손님 <A코스>','창가 [VIP] 5<6');"); has "수동 기록 — 영문 꺾쇠는 막고" "$r" "BAD_INPUT"
+r=$(AS "$PT" "insert into public.daegwan_manual(rest_id,name,memo) values ('$R1','손님','<주의> 창가 [A코스] 5<6');"); ok "수동 기록 — 한글 꺾쇠·대괄호·부등호는 그대로" "$(echo "$r" | grep -c ERROR)" "0"
+r=$(AS "$SU" "insert into public.daegwan_manual(rest_id,name,memo) values ('$R1','운영','<b>슈퍼어드민</b>');"); ok "슈퍼어드민은 검사 밖" "$(echo "$r" | grep -c ERROR)" "0"
+Q "update public.tickets set extra_data = extra_data || '{\"admin_memo\":\"<b>옛 메모</b>\"}'::jsonb where purchase_id='PAYH-tp1_1';" >/dev/null
+r=$(AS "$M1" "update public.tickets set status='cancelled', extra_data = extra_data || '{\"cancel_reason\":\"회원 취소\"}'::jsonb where purchase_id='PAYH-tp1_1';"); ok "옛 글자(슈퍼어드민이 적은 태그)가 남은 행도 회원의 취소는 그대로(새로 생긴 글자만 본다)" "$(echo "$r" | grep -c ERROR)/$(Q "select status from public.tickets where purchase_id='PAYH-tp1_1'")" "0/cancelled"
+Q "update public.tickets set status='active' where purchase_id='PAYH-tp1_1';" >/dev/null
+r=$(AS "$M1" "update public.tickets set extra_data = extra_data || '{\"x\":\"<img src=x>\"}'::jsonb where purchase_id='PAYH-tp1_1';"); has "회원이 자기 행에 새 태그를 넣으면 BAD_INPUT" "$r" "BAD_INPUT"
+# 업로드(INSERT) — 게스트석·도장 칸은 기본값으로
+AS "$PT" "insert into public.ticket_products(id,rest_id,rest_name,status,date,time,total_pax,price,guest_price,guest_opened_by) values ('tpG1','$R1','메이노','pending','2026.12.27','19:00',6,900000,1,'$SU');" >/dev/null
+ok "업로드 — 게스트가·연 사람 칸은 기본값으로(위조한 게스트석이 승인과 함께 열리던 길 · 5차 리뷰 재현)" "$(Q "select coalesce(guest_price::text,'-') || '/' || coalesce(guest_opened_by::text,'-') from public.ticket_products where id='tpG1'")" "-/-"
+Q "delete from public.ticket_products where id='tpG1';" >/dev/null
+# 어드민 계정의 회원 모양 구매 — 손님 칸(자기가 적은 연락처)도 안 준다
+Q "insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_date,party_size,status,purchase_id,price,buyer_name,buyer_phone) values ('$SU','$R1','tp1','2026.11.03',1,'active','PAYH-sutest2',850000,'운영자','010-7777-0001');" >/dev/null
+rv3=$(AS "$PT" "select public.taam_partner_reservations('$R1')")
+no "예약 목록 — 어드민 계정의 시험 구매는 손님 칸 번호도 안 준다(5차 리뷰)" "$rv3" "010-7777-0001"
+has "예약 목록 — 그 줄은 「(운영 계정)」" "$rv3" "(운영 계정)"
+ok "예약 목록 — 그 번호로 검색해도 안 걸린다" "$(AS "$PT" "select jsonb_array_length(public.taam_partner_reservations('$R1', null, null, '7777-0001')->'rows')")" "0"
+Q "delete from public.tickets where purchase_id='PAYH-sutest2';" >/dev/null
 # I
 ok "_taam_auth_email — 남의 것 null" "$(AS "$M1" "select coalesce(public._taam_auth_email('$M2'),'-')")" "-"
 ok "_taam_auth_email — 본인" "$(AS "$M1" "select public._taam_auth_email('$M1')")" "m1@x.kr"

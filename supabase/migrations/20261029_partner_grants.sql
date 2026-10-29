@@ -456,6 +456,17 @@ returns jsonb language sql immutable as $$
    where not (k = any (public._taam_tp_free_cols()))
      and public._taam_tp_normk(k, p_old -> k) is distinct from public._taam_tp_normk(k, p_new -> k)
 $$;
+-- 글자 검사 도우미 — v 안의 글자(jsonb 안쪽 포함) 중 **옛 값에 없던 것**이 HTML 태그 모양(<글자 · </ · <! · <?) 이거나 javascript: 면 true
+create or replace function public._taam_text_bad(v jsonb, p_old jsonb)
+returns boolean language sql immutable as $$
+  select exists (
+    select 1 from jsonb_path_query(v, 'strict $.** ? (@.type() == "string")') x
+     where ((x #>> '{}') ~* '<\s*[a-z/!?]' or (x #>> '{}') ~* 'javascript\s*:')
+       and (p_old is null or not exists (select 1 from jsonb_path_query(p_old, 'strict $.** ? (@.type() == "string")') y where (y #>> '{}') = (x #>> '{}'))))
+$$;
+revoke all on function public._taam_text_bad(jsonb, jsonb) from public, anon;
+grant execute on function public._taam_text_bad(jsonb, jsonb) to authenticated;   -- INVOKER 트리거(taam_guard_text_input)가 호출자 권한으로 부른다 · 읽기만
+
 -- 파트너 입력 검사 — 바뀐 칸만 본다(옛 행의 옛 모양 때문에 매진 토글이 막히지 않게).
 --   id·date·time 은 형식(앱 피커가 만드는 모양) · 그 밖의 글자(jsonb 안쪽 포함)는 HTML 태그 모양(<글자 · </ · <! · <?)과 javascript: 금지.
 --   승인 대기 카드·캘린더·회원 화면 여러 곳이 이 값을 innerHTML 로 그린다 — 파트너가 쓴 값이 슈퍼어드민 세션에서 돌던 길(4차 리뷰 재현).
@@ -473,11 +484,9 @@ begin
     elsif k = 'time' and btrim(v #>> '{}') <> '' and not (btrim(v #>> '{}') ~ '^\d{1,2}:\d{2}$') then
       raise exception 'BAD_INPUT: 시각 모양이 아닙니다(HH:MM)' using errcode = '22023';
     end if;
-    for s in select x #>> '{}' from jsonb_path_query(v, 'strict $.** ? (@.type() == "string")') x loop
-      if s ~* '<\s*[a-z/!?]' or s ~* 'javascript\s*:' then
-        raise exception 'BAD_INPUT: % 칸에 HTML 태그 모양의 글자는 쓸 수 없습니다', k using errcode = '22023';
-      end if;
-    end loop;
+    if public._taam_text_bad(v, case when p_old is null then null else p_old -> k end) then
+      raise exception 'BAD_INPUT: % 칸에 HTML 태그 모양의 글자는 쓸 수 없습니다(꺾쇠 < 바로 뒤에 영문 — 예: <A코스> 대신 [A코스])', k using errcode = '22023';
+    end if;
   end loop;
 end $$;
 revoke all on function public._taam_tp_check_input(jsonb, jsonb) from public, anon, authenticated;
@@ -546,6 +555,11 @@ begin
     end if;
     NEW.approved_by := null; NEW.approved_at := null; NEW.review_note := null;
     NEW.repurchase_open := false;
+    -- 게스트석(guest_*)·재구매 해제 시각·공개 대상은 슈퍼어드민 RPC 몫 — UPDATE 에선 되돌리고 INSERT 에선 기본값으로(있는 칸만 · 5차 리뷰: 업로드로 「게스트석 열림 · ₩1 · 슈퍼어드민이 열었음」을 넣던 길)
+    NEW := jsonb_populate_record(NEW, (select coalesce(jsonb_object_agg(x.k, x.d), '{}'::jsonb)
+             from (values ('guest_open', 'false'::jsonb), ('guest_open_reason', 'null'::jsonb), ('guest_price', 'null'::jsonb), ('guest_seat_qty', '0'::jsonb),
+                          ('guest_opened_at', 'null'::jsonb), ('guest_opened_by', 'null'::jsonb), ('repurchase_open_at', 'null'::jsonb), ('audience', 'null'::jsonb)) x(k, d)
+            where to_jsonb(NEW) ? x.k));
     perform public._taam_tp_check_input(to_jsonb(NEW), null);
     NEW.updated_at := now();   -- 파트너 쓰기의 시각은 서버가 적는다(게시 승인 직전 「그 사이 바뀌었나」 대조의 근거 · 4차 리뷰)
     return NEW;
@@ -933,6 +947,14 @@ create or replace function public._taam_pt_num(p text)
 returns numeric language sql immutable as $$ select case when p ~ '^\s*-?\d{1,13}(\.\d+)?\s*$' then round(p::numeric, 2) end $$;
 revoke all on function public._taam_pt_num(text) from public, anon, authenticated;
 
+-- 회원 모양(PAYH- 등) 행인데 주인이 어드민 계정(슈퍼어드민 시험 구매 등)인가 — 그 줄의 손님 칸은 그 어드민이 적은 자기 연락처다
+create or replace function public._taam_pt_admin_owned(p_uid uuid, p_pid text, p_ed jsonb)
+returns boolean language sql stable security definer set search_path = public as $$
+  select public._taam_pt_member_row(p_pid, p_ed)
+     and exists (select 1 from public.profiles a where a.id = p_uid and coalesce(a.role, 'user') in ('admin', 'superadmin', 'super_admin'))
+$$;
+revoke all on function public._taam_pt_admin_owned(uuid, text, jsonb) from public, anon, authenticated;
+
 -- 이 매장 예약 한 줄 (tickets 행) — 예치금·다른 매장 것은 없다
 create or replace function public._taam_pt_row(t public.tickets, p_rest text)
 returns jsonb language sql stable security definer set search_path = public as $$
@@ -944,9 +966,10 @@ returns jsonb language sql stable security definer set search_path = public as $
     'date_raw', coalesce(t.reservation_date, tp.date), 'time', coalesce(nullif(t.visit_time, ''), tp.time), 'pax', t.party_size, 'price', t.price,
     'tp_id', t.ticket_product_id, 'tp_label', tp.ticket_type,
     'uid', case when coalesce(t.purchase_id, '') ~ '^(MAN|KSK|INVH)-' then null   -- 운영 행의 user_id 는 어드민이다
+                when public._taam_pt_admin_owned(t.user_id, t.purchase_id, t.extra_data) then null
                 when coalesce(t.purchase_id, '') like 'LINK-%' and coalesce(t.extra_data->>'memberUid', '') = '' then null else t.user_id end,
-    'buyer', coalesce(nullif(btrim(p.display_name), ''), nullif(btrim(t.buyer_name), '')),
-    'phone', coalesce(nullif(btrim(to_jsonb(p)->>'phone'), ''), nullif(btrim(t.buyer_phone), '')),
+    'buyer', case when public._taam_pt_admin_owned(t.user_id, t.purchase_id, t.extra_data) then '(운영 계정)' else coalesce(nullif(btrim(p.display_name), ''), nullif(btrim(t.buyer_name), '')) end,
+    'phone', case when public._taam_pt_admin_owned(t.user_id, t.purchase_id, t.extra_data) then null else coalesce(nullif(btrim(to_jsonb(p)->>'phone'), ''), nullif(btrim(t.buyer_phone), '')) end,
     'tier', to_jsonb(p)->>'membership_tier',
     'created_at', t.created_at, 'cancelled_at', coalesce(t.cancelled_at, public._taam_sr_ts(t.extra_data->>'server_cancelled_at'), public._taam_sr_ts(t.extra_data->>'cancelled_at')),
     'cancel_reason', left(t.extra_data->>'cancel_reason', 120), 'cancelled_by', left(t.extra_data->>'cancelled_by_role', 20),
@@ -992,10 +1015,11 @@ begin
               (p_status = 'active' and lower(coalesce(t.status, '')) in ('active', 'manual', 'used', 'pending_confirm')) or
               (p_status = 'noshow' and t.visit_status = 'no_show') or
               (p_status = 'visited' and (t.visit_status = 'attended' or lower(coalesce(t.status, '')) = 'used')))
-         and (v_q = '' or lower(coalesce(p.display_name, '')) like '%' || v_q || '%' or lower(coalesce(t.buyer_name, '')) like '%' || v_q || '%'
+         and (v_q = '' or lower(coalesce(p.display_name, '')) like '%' || v_q || '%'
+              or (not public._taam_pt_admin_owned(t.user_id, t.purchase_id, t.extra_data) and lower(coalesce(t.buyer_name, '')) like '%' || v_q || '%')
               or lower(coalesce(t.purchase_id, '')) like '%' || v_q || '%' or lower(coalesce(to_jsonb(p)->>'email', '')) like '%' || v_q || '%'
               or (length(v_qd) >= 4 and (regexp_replace(coalesce(to_jsonb(p)->>'phone', ''), '\D', '', 'g') like '%' || v_qd || '%'
-                                         or regexp_replace(coalesce(t.buyer_phone, ''), '\D', '', 'g') like '%' || v_qd || '%')))
+                                         or (not public._taam_pt_admin_owned(t.user_id, t.purchase_id, t.extra_data) and regexp_replace(coalesce(t.buyer_phone, ''), '\D', '', 'g') like '%' || v_qd || '%'))))
        order by t.created_at desc
        limit 1500) z;
   return jsonb_build_object('ok', true, 'rest_id', p_rest, 'rows', v, 'generated_at', now());
@@ -1143,6 +1167,43 @@ begin
 exception when others then insert into _pg(항목, 결과) values ('J storage restaurant-videos 정책', '⚠ ' || left(sqlerrm, 160));
 end $do$;
 
+-- ── K. 파트너·회원이 쓰는 그 밖의 표 — 글자 검사 ──
+--   5차 리뷰(재현): 승인된 파트너가 REST 로 수동 좌석(tickets MAN-)의 시각·구매 id·손님 이름, 초대(reservation_invites)의 매장 이름·시각에
+--   HTML 을 넣으면 슈퍼어드민의 티켓 캘린더와 회원의 초대 결제 팝업에서 돌았다(회원 세션에서 예치금 결제까지 몰 수 있다).
+--   로그인 호출(슈퍼어드민 제외)의 **새로 생긴 글자**만 본다 — 옛 내용 때문에 취소·출석 같은 갱신이 막히지 않게. 구매 id 는 영문·숫자·_.:- 만(onclick 탈출).
+--   서버 함수(definer) 안의 쓰기도 auth.uid() 가 있으면 본다(매장 어드민이 부르는 수동 좌석 수정 RPC · 링크 만들기 등) · 서버(auth.uid() null)는 그대로.
+create or replace function public.taam_guard_text_input()
+returns trigger language plpgsql set search_path = public as $$
+declare v_new jsonb; v_old jsonb; k text; v jsonb;
+begin
+  if auth.uid() is null or public.is_super_admin(auth.uid()) then return new; end if;
+  v_new := to_jsonb(new); v_old := case when TG_OP = 'UPDATE' then to_jsonb(old) else null end;
+  for k, v in select e.key, e.value from jsonb_each(v_new) e loop
+    if v_old is not null and (v_old -> k) is not distinct from v then continue; end if;
+    if v is null or jsonb_typeof(v) = 'null' then continue; end if;
+    if TG_TABLE_NAME = 'tickets' and k = 'purchase_id' and not (v #>> '{}' ~ '^[0-9A-Za-z_.:-]{1,100}$') then
+      raise exception 'BAD_INPUT: 구매 id 모양이 아닙니다' using errcode = '22023';
+    end if;
+    if public._taam_text_bad(v, case when v_old is null then null else v_old -> k end) then
+      raise exception 'BAD_INPUT: % 칸에 HTML 태그 모양의 글자는 쓸 수 없습니다', k using errcode = '22023';
+    end if;
+  end loop;
+  return new;
+end $$;
+do $do$
+declare t text; n int := 0;
+begin
+  foreach t in array array['tickets', 'reservation_invites', 'daegwan_manual', 'restaurant_visit_notes', 'restaurants'] loop
+    if to_regclass('public.' || t) is not null then
+      execute format('drop trigger if exists trg_taam_guard_text_input on public.%I', t);
+      execute format('create trigger trg_taam_guard_text_input before insert or update on public.%I for each row execute function public.taam_guard_text_input()', t);
+      n := n + 1;
+    end if;
+  end loop;
+  insert into _pg(항목, 결과) values ('K 글자 검사 트리거', '✅ ' || n || '개 표');
+exception when others then insert into _pg(항목, 결과) values ('K 글자 검사 트리거', '❌ ' || left(sqlerrm, 160));
+end $do$;
+
 -- ── I. 덤 — 조회 함수 권한 ──
 -- uuid → 이메일 조회가 누구에게나 열려 있었다(기본 PUBLIC EXECUTE). 본인·슈퍼어드민·서버만. (profiles 역할 가드 트리거가 본인 id 로 부른다 — 그대로 된다)
 create or replace function public._taam_auth_email(p_id uuid)
@@ -1182,6 +1243,8 @@ insert into _pg(항목, 결과) values
      and exists (select 1 from pg_trigger where tgname = 'trg_taam_guard_ticket_round_open') and exists (select 1 from pg_trigger where tgname = 'trg_taam_guard_invite_host') then '✅' else '❌' end),
  ('D 수정 신청 저장 RPC(p_expect) · 승인 STALE 검사(4인자)', case when to_regprocedure('public.taam_ticket_edit_submit(text, jsonb, jsonb)') is not null and to_regprocedure('public.taam_ticket_edit_submit(text, jsonb)') is null
      and to_regprocedure('public.taam_ticket_edit_review(text, boolean, text, jsonb)') is not null and to_regprocedure('public.taam_ticket_edit_review(text, boolean, text)') is null then '✅' else '❌' end),
+ ('K tickets·초대 글자 검사', case when exists (select 1 from pg_trigger where tgname = 'trg_taam_guard_text_input' and tgrelid = 'public.tickets'::regclass)
+     and exists (select 1 from pg_trigger where tgname = 'trg_taam_guard_text_input' and tgrelid = 'public.reservation_invites'::regclass) then '✅' else '❌' end),
  ('D 파트너 입력 검사(_taam_tp_check_input)', case when to_regproc('public._taam_tp_check_input') is not null and exists (select 1 from pg_proc where proname = 'enforce_ticket_approval' and prosrc like '%_taam_tp_check_input%') then '✅' else '❌' end),
  ('G 회원 검색은 volatile(상한을 적는다)', case when (select provolatile from pg_proc where oid = to_regprocedure('public.taam_partner_member_search(text, text)')) = 'v' then '✅' else '❌' end),
  ('A 파트너는 admin_grants.note 를 못 읽는다', case when has_column_privilege('authenticated', 'public.admin_grants', 'note', 'select') then '❌' else '✅' end),
