@@ -18,6 +18,7 @@
 //
 // 🆕 2026-10-29 매장 권한에 승인 상태가 생겼다 (admin_grants.status pending|approved|suspended ·
 //   supabase/migrations/20261029_partner_grants.sql). 만들 때 `approve_now:true` 면 approved, 아니면 pending —
+//   2차 리뷰(2026-10-29): 옛 서버 판정은 처음 한 번의 탐색(select status) · 해지는 suspended_via 'account' 를 적고 되살리기는 그 줄만(슈퍼어드민 「정지」는 그대로) ·
 //   pending 인 계정은 로그인은 되지만 어드민이 아니다(앱이 「승인 대기」라고 말한다). 해지(revoke)는 권한 줄을 지우지
 //   않고 **suspended 로 바꾸고** 로그인을 잠근다 · 되살리기(restore)는 잠금을 풀고 한 번 승인됐던 줄은 approved,
 //   아니면 pending 으로. status 칸이 없는 옛 서버(마이그레이션 전)에서는 종전 모양(insert · delete)으로 내려간다.
@@ -98,6 +99,17 @@ async function handle(req: Request): Promise<Response> {
     }
     const email = `${loginId}@${PARTNER_DOMAIN}`;
 
+    // 🆕 2026-10-29(2차 리뷰) 「status 칸이 없는 옛 서버」는 **처음에 한 번 탐색**해 정한다 — 종전엔 insert/update 가 실패한 **뒤** 코드로 판정해
+    //   다른 이유(권한·제약)로 실패한 요청을 옛 서버로 읽고 칸 없이 다시 넣을 수 있었다. 탐색 자체가 다른 오류면 그 자리에서 끝낸다(auth 유저를 만들기 전).
+    let legacy = false;
+    if (action === 'create' || action === 'revoke' || action === 'restore') {
+      const probe = await admin.from('admin_grants').select('status').limit(1);
+      if (probe.error) {
+        if (noStatusCol(probe.error)) legacy = true;
+        else return json({ ok: false, error: '권한 표를 읽지 못했습니다: ' + probe.error.message });
+      }
+    }
+
     // ── 발급 ───────────────────────────────────────────────────
     if (action === 'create') {
       const restId = String(body.rest_id || '').trim();
@@ -148,18 +160,15 @@ async function handle(req: Request): Promise<Response> {
 
       // 권한 줄 — 승인 상태와 함께(감사 칸은 서버 호출이 보낸 값을 트리거가 받는다). status 칸이 없는 옛 서버면 칸 없이 다시 넣는다(그 서버에선 줄 = 승인).
       const approveNow = body.approve_now === true;
-      let legacy = false;
-      let gErr = (await admin.from('admin_grants').insert({
-        user_id: uid, rest_id: restId, label: label || null, granted_by: caller.id,
-        status: approveNow ? 'approved' : 'pending',
-        status_set_by: caller.id, approved_by: approveNow ? caller.id : null,
-      })).error;
-      if (noStatusCol(gErr)) {
-        legacy = true;
-        gErr = (await admin.from('admin_grants').insert({
-          user_id: uid, rest_id: restId, label: label || null, granted_by: caller.id,
-        })).error;
-      }
+      const gErr = legacy
+        ? (await admin.from('admin_grants').insert({
+            user_id: uid, rest_id: restId, label: label || null, granted_by: caller.id,
+          })).error
+        : (await admin.from('admin_grants').insert({
+            user_id: uid, rest_id: restId, label: label || null, granted_by: caller.id,
+            status: approveNow ? 'approved' : 'pending',
+            status_set_by: caller.id, approved_by: approveNow ? caller.id : null,
+          })).error;
       if (gErr) return await undo('권한을 주지 못했습니다: ' + gErr.message);
 
       const { error: aErr } = await admin.from('partner_accounts').insert({
@@ -212,10 +221,12 @@ async function handle(req: Request): Promise<Response> {
       if (off) {
         // 🆕 2026-10-29 권한 줄을 지우지 않고 **정지(suspended)** 로 — 「무엇을 언제 승인했었나」가 남고, 트리거가 prev_status 에 직전 상태를 적는다(되살리기가 그리로 돌아간다).
         //   status 칸이 없는 옛 서버(코드 42703/PGRST204)면 종전처럼 지운다.
-        let dErr = (await admin.from('admin_grants').update({ status: 'suspended', status_set_by: caller.id }).eq('user_id', row.user_id)).error;
-        if (noStatusCol(dErr)) {
-          dErr = (await admin.from('admin_grants').delete().eq('user_id', row.user_id)).error;
-        }
+        //   suspended_via 'account' = 계정 해지가 정지한 줄 — 되살리기는 **이 줄만** 되살린다(슈퍼어드민이 「정지」로 멈춘 줄(rpc)은 계정을 되살려도 그대로 · 2차 리뷰).
+        //   이미 정지된 줄(neq)은 건드리지 않는다 — 그 줄의 suspended_via·prev_status 가 덮이지 않게.
+        const dErr = legacy
+          ? (await admin.from('admin_grants').delete().eq('user_id', row.user_id)).error
+          : (await admin.from('admin_grants').update({ status: 'suspended', suspended_via: 'account', status_set_by: caller.id })
+              .eq('user_id', row.user_id).neq('status', 'suspended')).error;
         if (dErr) return json({ ok: false, error: '권한을 떼지 못했습니다: ' + dErr.message });
         // 비밀번호 로그인 자체를 막는다 (권한이 없어도 authenticated 로 들어오는 것까지 끊는다)
         const { error: bErr } = await admin.auth.admin.updateUserById(row.user_id, { ban_duration: '876000h' });
@@ -225,12 +236,13 @@ async function handle(req: Request): Promise<Response> {
       } else {
         // 🆕 2026-10-29 되살리기 — **권한 먼저**, 잠금 해제는 그 뒤(권한 복구가 실패하면 계정은 잠긴 채 남아 「실패」와 상태가 일치한다 · revoke 와 같은 방향).
         //   정지된 줄은 정지 직전 상태(prev_status)로: approved 였으면 approved · 아니면 pending(승인은 사람이).
-        const { data: gs, error: gqErr } = await admin.from('admin_grants')
-          .select('id, status, prev_status, approved_at').eq('user_id', row.user_id);
-        if (gqErr && !noStatusCol(gqErr)) {
+        const { data: gs, error: gqErr } = legacy
+          ? { data: null, error: null }
+          : await admin.from('admin_grants').select('id, status, prev_status, suspended_via, approved_at').eq('user_id', row.user_id);
+        if (gqErr) {
           return json({ ok: false, error: '권한을 읽지 못했습니다: ' + gqErr.message });
         }
-        if (gqErr) {
+        if (legacy) {
           // 옛 서버(status 칸 없음) — 종전 모양: 줄이 없으면 하나 넣는다(그 서버에선 줄 = 승인)
           const { error: iErr } = await admin.from('admin_grants').insert({
             user_id: row.user_id, rest_id: row.rest_id, label: row.label, granted_by: caller.id,
@@ -248,7 +260,8 @@ async function handle(req: Request): Promise<Response> {
         } else {
           const after: string[] = [];
           for (const g of gs) {
-            if (g.status !== 'suspended') { after.push(g.status); continue; }
+            // 계정 해지(account)가 정지한 줄만 되살린다 — 슈퍼어드민이 따로 「정지」한 줄(rpc · 옛 줄 null 포함)은 그대로 정지
+            if (g.status !== 'suspended' || g.suspended_via !== 'account') { after.push(g.status); continue; }
             const next = g.prev_status === 'approved' ? 'approved' : 'pending';
             const { error: sErr } = await admin.from('admin_grants')
               .update({ status: next, status_set_by: caller.id, approved_by: next === 'approved' ? caller.id : null }).eq('id', g.id);

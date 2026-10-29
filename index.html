@@ -18542,19 +18542,38 @@ function saveTickets(onlyIds, localOnly){
         console.warn('⚠ ticket Supabase 저장 실패 (IDB는 성공):', t.id, e); return false;
       });
     });
-    // 🆕 2026-10-29 매장 어드민: 서버가 값을 되돌리거나(승인된 회차의 수정 → 큐) 거절했을 수 있다 — 저장 뒤 서버 판을 다시 읽어 로컬·목록을 맞춘다
+    // 🆕 2026-10-29 매장 어드민: 서버가 값을 되돌리거나(승인된 회차의 수정 → 큐) 거절했을 수 있다 — 저장 뒤 서버 판을 **직접** 다시 읽어 저장한 회차를 교체한다
+    //   (taamSyncNow 는 15초 안·결제 중이면 건너뛴다 — 그러면 로컬엔 「반영된 것처럼」 남았다 · 2차 리뷰). 교체는 보낸 회차만 — 다른 회차의 로컬 상태는 건드리지 않는다.
     if(_currentRole === 'admin'){
-      Promise.all(_ps).then(function(){
-        setTimeout(function(){
-          try { if(typeof taamSyncNow === 'function') return taamSyncNow(true); } catch(_se){}
-        }, 250);
-        setTimeout(function(){
-          try { if(typeof renderPartnerTicketList === 'function') renderPartnerTicketList(); if(typeof updatePendingBadge === 'function') updatePendingBadge(); } catch(_re){}
-        }, 1800);
-      });
+      var _sentIds = _target.map(function(t){ return String(t.id); });
+      Promise.all(_ps).then(function(){ return _tkRefreshFromServer(_sentIds); }).catch(function(){});
     }
   }
 }
+// 🆕 2026-10-29 저장한 회차를 서버 판으로 교체 — 되돌린 값·수정 큐(pendingEdit)·서버가 정한 status 가 로컬에 반영된다. 큐가 새로 생겼으면 토스트.
+async function _tkRefreshFromServer(ids){
+  try {
+    if(typeof loadAllTicketProductsFromSupabase !== 'function') return;
+    var fresh = await loadAllTicketProductsFromSupabase();
+    if(!Array.isArray(fresh)) return;
+    var byId = {}; fresh.forEach(function(t){ byId[String(t.id)] = t; });
+    var queued = 0;
+    (ids || []).forEach(function(id){
+      var idx = ticketDB.findIndex(function(t){ return String(t.id) === id; });
+      var srv = byId[id];
+      if(idx < 0 || !srv) return;
+      var hadQ = !!(ticketDB[idx].pendingEdit && Object.keys(ticketDB[idx].pendingEdit).length);
+      var hasQ = !!(srv.pendingEdit && Object.keys(srv.pendingEdit).length);
+      if(!hadQ && hasQ) queued++;
+      if(!Array.isArray(srv.homeSection)) srv.homeSection = [];
+      ticketDB[idx] = srv;
+    });
+    _idbSafeSet('excTickets', ticketDB, '티켓');
+    try { if(typeof renderPartnerTicketList === 'function') renderPartnerTicketList(); if(typeof updatePendingBadge === 'function') updatePendingBadge(); if(typeof _tkRepaintAll === 'function') _tkRepaintAll(); } catch(_re){}
+    if(queued && typeof showToast === 'function') showToast('📨','수정 신청 접수','TAAM 승인 뒤 반영됩니다 — 그때까지 회원에게는 종전 내용이 보입니다');
+  } catch(e){ console.warn('[saveTickets] 서버 판 다시 읽기 실패:', e && e.message); }
+}
+window._tkRefreshFromServer = _tkRefreshFromServer;
 // 🆕 2026.08: 티켓도 레스토랑처럼 Supabase 를 1순위로 읽는다.
 //   ⚠ 예전에는 IDB 만 읽었다. 첫 방문자는 seed-data.json 이 심어둔 옛 티켓(2026-04)이
 //     그대로 화면에 떠서 "판매중 티켓은 하나도 없고 전부 기한만료"로 보였다.
@@ -19212,16 +19231,22 @@ function _roleGuardByEmail(email){
   try{ if(typeof saveRole === 'function') saveRole(); }catch(e){}
   try{ if(typeof updateMpAdminBtn === 'function') updateMpAdminBtn(); }catch(e){}
   // 열려 있던 어드민 화면이 있으면 닫는다 — 내려놓고 화면만 남으면 소용없다
-  try{
-    ['adminScreen','partnerAdminScreen'].forEach(function(id){
-      var el = document.getElementById(id);
-      if(el && el.style.display !== 'none') el.style.display = 'none';
-    });
-    if(typeof _acCloseOthers === 'function') _acCloseOthers(null);
-  }catch(e){}
+  try{ if(typeof _taamHideAdminConsole === 'function') _taamHideAdminConsole(); }catch(e){}
   return true;
 }
 window._roleGuardByEmail = _roleGuardByEmail;
+// 🆕 2026-10-29 권한을 **내린 뒤** 콘솔을 닫을 때는 closeSubPage()·_acCloseOthers() 를 쓰지 않는다 — closeSubPage 는 「바탕으로 복귀」라
+//   role 이 'user' 가 된 상태에선 openAdmin()(슈퍼어드민 메뉴)을 연다(2차 리뷰 재현: 정지된 파트너에게 슈퍼어드민 메뉴 화면이 떴다 — 자료는 서버가 막지만 화면이 거짓이다).
+//   콘솔 화면 요소를 직접 숨기고 GNB 를 되살린다.
+function _taamHideAdminConsole(){
+  try{ if(typeof closeAllAdminScreens === 'function') closeAllAdminScreens(); }catch(e){}
+  var ids = ['adminScreen', 'partnerAdminScreen'];
+  try{ if(typeof AC_SCREEN === 'object') Object.keys(AC_SCREEN).forEach(function(k){ ids.push(AC_SCREEN[k]); }); }catch(e){}
+  try{ if(Array.isArray(AC_EXTRA_SCREENS)) ids = ids.concat(AC_EXTRA_SCREENS); }catch(e){}
+  ids.forEach(function(id){ var el = document.getElementById(id); if(el) el.style.display = 'none'; });
+  try{ var gnb = document.getElementById('mainGnb'); if(gnb) gnb.style.display = 'flex'; }catch(e){}
+}
+window._taamHideAdminConsole = _taamHideAdminConsole;
 window._taamIsSuperEmail = _taamIsSuperEmail;
 
 // ── 개인 데이터 ──
@@ -21387,13 +21412,11 @@ async function _applyServerAdminGrant(opts) {
           try { return getComputedStyle(el).display !== 'none' && el.offsetWidth > 0; } catch(_e){ return false; } });
         if (typeof prvClose === 'function' && document.getElementById('prvPopup')) prvClose();
         if (typeof paClose === 'function' && document.getElementById('paSheet') && getComputedStyle(document.getElementById('paSheet')).display !== 'none') paClose();
-        if (typeof closeAllAdminScreens === 'function') closeAllAdminScreens();
-        ['adminScreen', 'partnerAdminScreen'].forEach(function(id){ var el = document.getElementById(id); if (el) el.style.display = 'none'; });
-        if (typeof _acCloseOthers === 'function') _acCloseOthers(null);
+        if (typeof _taamHideAdminConsole === 'function') _taamHideAdminConsole();
         if (_wasOpen) {
           if (typeof _acExitTo === 'function') _acExitTo(); else if (typeof openMain === 'function') openMain();
-          var _gnb = document.getElementById('mainGnb'); if (_gnb) _gnb.style.display = 'flex';
         }
+        var _gnb = document.getElementById('mainGnb'); if (_gnb) _gnb.style.display = 'flex';
         // 로그인 흐름(vpPartnerLogin)은 힌트가 같은 말을 하므로 토스트를 겹치지 않는다(quiet)
         if (!opts.quiet && typeof showToast === 'function') {
           var _gs = window._taamGrantStatus;
@@ -31215,8 +31238,9 @@ async function raLoadRequests(){
   var names = {};
   var uids = Array.from(new Set(reqs.map(function(r){ return r.user_id; })));
   if(uids.length){
-    try{ var pr = await window.sb.from('profiles').select('id, display_name').in('id', uids);
-      (pr.data||[]).forEach(function(p){ names[p.id] = p.display_name; }); }catch(e){}
+    // 🆕 2026-10-29 매장 어드민은 profiles 를 직접 못 읽는다(자기 행만) — 이름 채우기는 _taamNamesMap(파트너 RPC · 그 매장 관계 회원만)
+    try{ var _nm = await _taamNamesMap(uids, 'id, display_name');
+      Object.keys(_nm).forEach(function(k){ names[k] = _nm[k] && _nm[k].display_name; }); }catch(e){}
   }
   // pending 먼저
   reqs.sort(function(a,b){ return (a.status==='pending'?0:1) - (b.status==='pending'?0:1); });
@@ -49258,7 +49282,7 @@ function finalUploadTicket(){
     var idx=ticketDB.findIndex(function(t){return String(t.id)===String(_tuEditId);});
     var _wasApproved = idx!==-1 && ['active','soldout','deleteRequest'].indexOf(ticketDB[idx].status) >= 0;
     if(idx!==-1){_pendingTicket.id=_tuEditId;ticketDB[idx]=_pendingTicket;}
-    if(_currentRole === 'admin' && _wasApproved) showToast('📨','수정 신청 완료','TAAM 승인 뒤 반영됩니다 — 그때까지 회원에게는 종전 내용이 보입니다');
+    if(_currentRole === 'admin' && _wasApproved) showToast('⏳','수정 저장 중','승인된 회차의 변경은 TAAM 승인 뒤 반영됩니다');   // 큐가 실제로 생기면 _tkRefreshFromServer 가 「접수」를 알린다(바뀐 게 없으면 큐도 없다)
     else showToast('✓','수정 완료','티켓 정보가 업데이트되었습니다');
     _tuEditId=null;
   } else {
@@ -49273,8 +49297,11 @@ function finalUploadTicket(){
       //   종전에는 어드민 화면의 **배지 숫자**만 늘었다. 슈퍼어드민이 그 화면을
       //   열어보기 전에는 파트너가 티켓을 올린 걸 몰랐고, 그동안 티켓은
       //   pending 이라 회원에게 안 보인다 — 매장은 올렸는데 아무 일도 안 일어난다.
+      // 🔧 2026-10-29 서버 트리거(trg_taam_ticket_approval_notify · 20261029_partner_grants.sql)가 pending INSERT 마다 알림 + 푸시를 적는다 —
+      //   앱도 보내면 슈퍼어드민에게 같은 신청이 두 번 갔다(2차 리뷰). 트리거가 없는 옛 서버(approved_at 칸 없음)에서만 종전처럼 앱이 보낸다.
       try {
-        if(typeof taamNotifyAdmins === 'function'){
+        var _srvNotifies = ticketDB.some(function(x){ return x && Object.prototype.hasOwnProperty.call(x, 'approvedAt') && x.approvedAt; });
+        if(!_srvNotifies && typeof taamNotifyAdmins === 'function'){
           var _upR = (restaurantDB || []).find(function(x){
             return String(x.id) === String(_pendingTicket.restId); });
           var _upName = (_upR && _upR.name) || _pendingTicket.rest || '매장';
@@ -65754,10 +65781,17 @@ function acRegister() {
   // 🆕 서버 admin_grants 에도 기록 (권한 서버 강제 — 모든 기기/세션 일관)
   (function(mId, rId, rName, vId){
     if(window.sb && mId && rId){
-      window.sb.from('admin_grants').insert({ user_id: mId, rest_id: String(rId), venue_id: vId || null, label: rName })
+      // 🆕 2026-10-29 권한 줄의 기본 status 는 pending(승인 대기)이다 — 슈퍼어드민이 이 화면에서 직접 주는 권한은 승인된 것으로 넣는다(status 칸이 없는 옛 서버면 칸 없이).
+      var _agRow = { user_id: mId, rest_id: String(rId), venue_id: vId || null, label: rName, status: 'approved' };
+      window.sb.from('admin_grants').insert(_agRow)
+        .then(function(res){
+          if(res && res.error && (res.error.code === 'PGRST204' || res.error.code === '42703')){ delete _agRow.status; return window.sb.from('admin_grants').insert(_agRow); }
+          return res;
+        })
         .then(function(res){
           if(res && res.error && !/duplicate|already exists|23505/i.test(res.error.message||'')){
             console.warn('admin_grants insert 실패:', res.error.message);
+            if(typeof showToast === 'function') showToast('⚠','서버 권한 저장 실패', String(res.error.message || '').slice(0, 80));
           }
         });
     }
@@ -65772,7 +65806,7 @@ function acRegister() {
   document.getElementById('acRestSearch').value = '';
   var _avs = document.getElementById('acVenueSearch'); if(_avs) _avs.value = '';
   document.getElementById('acCodeDisplay').textContent = '——';
-  showToast('✓','어드민 권한 부여','해당 회원이 다음 로그인 시 어드민으로 전환됩니다');
+  showToast('✓','어드민 권한 부여','승인된 매장 권한으로 저장했습니다 — 다음 로그인(또는 앱 재시작) 때 어드민으로 전환됩니다');
 }
 
 // 🆕 로컬 adminCodes → 서버 admin_grants 일괄 동기화 (슈퍼어드민 1회)
@@ -65782,13 +65816,14 @@ async function syncAdminGrantsToServer(){
   if(!window.sb) return;
   loadAdminCodes();
   var rows = (adminCodes||[]).map(function(a){
-    return { user_id: a.memberId, rest_id: a.restId ? String(a.restId) : null, label: a.restName||null };
+    return { user_id: a.memberId, rest_id: a.restId ? String(a.restId) : null, label: a.restName||null, status: 'approved' };   // 🆕 2026-10-29 로컬 코드 = 슈퍼어드민이 준 권한 → 승인 줄
   }).filter(function(r){ return r.user_id && r.rest_id; });
   if(rows.length === 0){ if(typeof showToast==='function') showToast('ℹ','동기화','로컬 어드민 코드가 없어요'); return; }
   var ok = 0;
   for(var i=0;i<rows.length;i++){
     try{
       var res = await window.sb.from('admin_grants').insert(rows[i]);
+      if(res.error && (res.error.code === 'PGRST204' || res.error.code === '42703')){ var _r2 = Object.assign({}, rows[i]); delete _r2.status; res = await window.sb.from('admin_grants').insert(_r2); }
       if(!res.error || /duplicate|already exists|23505/i.test(res.error.message||'')) ok++;
     }catch(e){}
   }
@@ -66286,7 +66321,8 @@ async function tuEditReview(id, approve) {
   try {
     var r = await window.sb.rpc('taam_ticket_edit_review', { p_id: String(id), p_approve: !!approve, p_note: note || null });
     if (r.error) throw r.error;
-    showToast('✓', approve ? '수정 승인' : '반려', approve ? '회차에 반영되었습니다' : '파트너에게 알렸습니다');
+    if (r.data && r.data.reason === 'nothing_pending') showToast('ℹ', '이미 처리됨', '이 회차의 수정 신청은 이미 처리되었거나 파트너가 거뒀습니다');
+    else showToast('✓', approve ? '수정 승인' : '반려', approve ? '회차에 반영되었습니다' : '파트너에게 알렸습니다');
     try { if (typeof taamSyncNow === 'function') await taamSyncNow(true); } catch(_se){}
   } catch(e) {
     var m = String((e && e.message) || '');
@@ -80803,6 +80839,17 @@ async function loadAllTicketProductsFromSupabase(){
       console.log('ℹ️ Supabase에 ticket_products 데이터 없음');
       return [];
     }
+    // 🆕 2026-10-29 파트너 수정 큐 — 회차 행이 아니라 별도 표(ticket_product_edits · RLS 슈퍼어드민·그 매장 승인 어드민)에서 RPC 로 읽는다.
+    //   회원·anon 은 부르지 않는다(미승인 값이 회원 기기에 내려가지 않게 · 2차 리뷰). 함수가 없는 옛 서버·실패는 큐 없음으로.
+    var _edits = {};
+    try {
+      if(typeof _currentRole !== 'undefined' && (_currentRole === 'superadmin' || _currentRole === 'admin')){
+        var _er = await window.sb.rpc('taam_ticket_edits');
+        if(_er && !_er.error && Array.isArray(_er.data)){
+          _er.data.forEach(function(e){ if(e && e.ticket_id && e.edit && typeof e.edit === 'object' && Object.keys(e.edit).length) _edits[String(e.ticket_id)] = { edit: e.edit, at: e.requested_at || null }; });
+        }
+      }
+    } catch(_ee){}
     
     // DB row → ticketDB 형식으로 변환
     var tickets = res.data.map(function(row){
@@ -80869,8 +80916,8 @@ async function loadAllTicketProductsFromSupabase(){
         createdAt: row.created_at || null,
         // 🆕 2026-10-29 승인 도장 · 파트너 수정 큐(승인된 회차의 수정은 서버가 되돌리고 여기 적는다 — 슈퍼어드민 「수정 승인」이 반영)
         approvedAt: row.approved_at || null,
-        pendingEdit: (row.pending_edit && typeof row.pending_edit === 'object') ? row.pending_edit : null,
-        pendingEditAt: row.pending_edit_at || null
+        pendingEdit: _edits[String(row.id)] ? _edits[String(row.id)].edit : null,
+        pendingEditAt: _edits[String(row.id)] ? _edits[String(row.id)].at : null
       };
     });
     
