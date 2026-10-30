@@ -29,13 +29,22 @@ insert into public.invite_codes(code,invitee_name,invitee_phone,invitee_email,in
  ('OPEN0001','',null,null,'T','admin',false,null,null,null,null,'KR'),
  ('USED0001','',null,'old@x.com','T','admin',true,now(),'old@x.com',null,null,'EN'),
  ('EXPD0001','','010-3333-4444',null,'T','admin',false,null,null,null,null,'KR'),
- ('GST00001','손님','010-5555-1234',null,'A','pay_link',false,null,null,null,null,'KR');
+ ('GST00001','손님','010-5555-1234',null,'A','pay_link',false,null,null,null,null,'KR'),
+ ('GSTEN002','Guest','+1 415 555 0100',null,'A','pay_link',false,null,null,null,null,'EN'),
+ ('GSTEN003','Guest3','+44 20 7946 0000',null,'A','pay_link',false,null,null,null,null,'EN'),
+ ('GSTEN004','Guest4','+81 90 1234 5678',null,'A','pay_link',false,null,null,null,null,'EN'),
+ ('GSTKR005','손님5','010-6666-7777',null,'A','pay_link',false,null,null,null,null,'KR');
 update public.invite_codes set expires_at = now() - interval '1 day' where code='EXPD0001';
 update public.app_config set value = jsonb_build_object('mode','enforce') where key='signup_guard';
 delete from public.signup_guard_log;
 insert into public.kashikiri_charges(id,link_invite,status,user_id,payer_phone,payload) values
  ('11111111-1111-1111-1111-111111111111',true,'paid',null,'010-5555-1234','{"guest_invite_code":"GST00001"}');
-insert into public.tickets(purchase_id,user_id,status,extra_data) values ('LINK-1',null,'active','{"chargeId":"11111111-1111-1111-1111-111111111111"}');
+insert into public.kashikiri_charges(id,link_invite,status,user_id,payer_phone,payload) values
+ ('22222222-2222-2222-2222-222222222222',true,'paid',null,'+1 415 555 0100','{"guest_invite_code":"GSTEN002"}'),
+ ('33333333-3333-3333-3333-333333333333',true,'paid',null,'+44 20 7946 0000','{"guest_invite_code":"GSTEN003"}');
+insert into public.tickets(purchase_id,user_id,status,extra_data) values ('LINK-1',null,'active','{"chargeId":"11111111-1111-1111-1111-111111111111"}'),
+ ('LINK-2',null,'active','{"chargeId":"22222222-2222-2222-2222-222222222222"}'),
+ ('LINK-3',null,'active','{"chargeId":"33333333-3333-3333-3333-333333333333"}');
 SQL
 
 # ins <email> <phone> <meta json> <app json> → 마지막 판정 verdict:reason · 거절이면 ERR:사유
@@ -54,15 +63,16 @@ ok "옛: 파트너 도메인은 누구나" "allow:partner_domain" "$(ins "'p-evi
 ok "옛: 메타데이터 이름의 태그가 그대로 auth 에" "allow:invite_code" "$(ins "'evil4@x.com'" "null" '{"invite_code":"OPEN0001","display_name":"<img src=x onerror=alert(1)>"}' '{"provider":"email"}')"
 ok "  … raw_user_meta_data.display_name 에 태그 그대로" "1" "$(q "select count(*) from auth.users where raw_user_meta_data->>'display_name' like '<img%';")"
 $P -c "delete from auth.users where email like 'evil%' or email in ('old@x.com','p-evil@partner.taam.kr'); delete from public.profiles where id not in (select id from auth.users);" >/dev/null
-ok "옛: 회원이 남의 초대장까지 전부 읽는다" "8" "$(as_user $A "select count(*) from public.invite_codes;")"
+ok "옛: 회원이 남의 초대장까지 전부 읽는다" "12" "$(as_user $A "select count(*) from public.invite_codes;")"
 ok "옛: 회원이 자기 profiles 번호를 아무 값으로" "1234" "$(as_user $A "update public.profiles set phone='1234' where id='$A'; select phone from public.profiles where id='$A';")"
 ok "옛: 그 번호로 자기 소진 → 게스트 초대장까지 소진(부분 일치)" "t" "$(as_user $A "select consume_invite_by_self() >= 1;")"
 ok "옛: 결제된 손님 좌석이 공격자에게 붙었다 ⭐" "$A" "$(q "select user_id from public.tickets where purchase_id='LINK-1';")"
 # 되돌려 놓고 새 판을 올린다
 $P -v ON_ERROR_STOP=1 >/dev/null <<SQL
-update public.tickets set user_id=null, extra_data='{"chargeId":"11111111-1111-1111-1111-111111111111"}' where purchase_id='LINK-1';
-update public.kashikiri_charges set user_id=null, payload='{"guest_invite_code":"GST00001"}';
-update public.invite_codes set used=false, used_at=null, used_by_email=null, used_by_phone=null, used_by_name=null, member_id=null where code in ('PHON0001','MAIL0001','OPEN0001','EXPD0001','GST00001');
+update public.tickets set user_id=null, extra_data=jsonb_build_object('chargeId', extra_data->>'chargeId') where purchase_id like 'LINK-%';
+update public.kashikiri_charges set user_id=null, payload=jsonb_build_object('guest_invite_code', payload->>'guest_invite_code');
+update public.invite_codes set used=false, used_at=null, used_by_email=null, used_by_phone=null, used_by_name=null, member_id=null
+ where code in ('PHON0001','MAIL0001','OPEN0001','EXPD0001','GST00001','GSTEN002','GSTEN003','GSTEN004','GSTKR005');
 update public.profiles set phone=null where id='$A';
 SQL
 
@@ -170,6 +180,30 @@ ok "회원 세션 · 이름 태그 → 거절(K)" "BAD_INPUT" "$(as_user $A "upd
 ok "서버 세션 · 이름 태그 → 정리" "img src=x" "$(as_svc "update public.profiles set display_name='<img src=x>' where id='$A'; select display_name from public.profiles where id='$A';")"
 ok "서버 세션 · 영문 이름도" "b" "$(as_svc "update public.profiles set display_name_en='<b>' where id='$A'; select display_name_en from public.profiles where id='$A';")"
 ok "정상 이름은 그대로" "Kim Min-su (김민수)" "$(as_svc "update public.profiles set display_name='Kim Min-su (김민수)' where id='$A'; select display_name from public.profiles where id='$A';")"
+
+echo "── 해외 결제 링크 손님(코드로만 묶임)"
+ok "국내 결제 링크 손님 초대장은 번호에 묶인 채 — 이메일 가입 거절" "ERR:SIGNUP_NOT_INVITED: channel_mismatch" "$(ins "'kr-guest@x.com'" "null" '{"invite_code":"GSTKR005"}' '{"provider":"email"}')"
+ok "해외 손님 · 이메일 가입 + 코드 → 통과" "allow:invite_code_only" "$(ins "'us-guest@x.com'" "null" '{"invite_code":"GSTEN002"}' '{"provider":"email"}')"
+UG=$(q "select id from auth.users where email='us-guest@x.com';")
+ok "  … 확인 전 · Edge 소진 → 거절(인증 계정 없음)" "INVITE_OWNER_UNVERIFIED" "$(as_svc "update public.invite_codes set used=true, used_by_email='us-guest@x.com' where code='GSTEN002' and used=false;" | grep -oE 'INVITE_OWNER_UNVERIFIED' | head -1)"
+$P -c "update auth.users set email_confirmed_at = now() where id='$UG';" >/dev/null
+ok "  … 확인 뒤 · 자기 초대장이 보인다(가입 코드)" "GSTEN002" "$(as_user $UG "select string_agg(code, ',') from public.invite_codes;")"
+ok "  … 로그인 대조 통과" "t" "$(as_user $UG "select user_has_invite_match();")"
+ok "  … 다른 회원은 그 초대장을 못 본다" "0" "$(as_user $A "select count(*) from public.invite_codes where code='GSTEN002';")"
+ok "  … Edge 소진 → 주인은 그 가입 계정" "$UG" "$(as_svc "update public.invite_codes set used=true, used_by_email='att@x.com' where code='GSTEN002' and used=false; select member_id from public.invite_codes where code='GSTEN002';")"
+ok "  … 기록 이메일은 그 계정의 인증 값" "us-guest@x.com" "$(q "select used_by_email from public.invite_codes where code='GSTEN002';")"
+ok "  … 손님 좌석이 그 계정에" "$UG" "$(q "select user_id from public.tickets where purchase_id='LINK-2';")"
+ok "공격자 자기 소진 · 남의 해외 손님 초대장 안 건드림" "0" "$(as_user $A "select consume_invite_by_self();")"
+ok "해외 손님 3 · 가입" "allow:invite_code_only" "$(ins "'uk-guest@x.com'" "null" '{"invite_code":"GSTEN003"}' '{"provider":"email"}')"
+U3=$(q "select id from auth.users where email='uk-guest@x.com';")
+$P -c "update auth.users set email_confirmed_at = now() where id='$U3';" >/dev/null
+ok "  … Edge 가 실패해도 자기 소진 RPC 가 처리" "1" "$(as_user $U3 "select consume_invite_by_self();")"
+ok "  … 좌석이 그 계정에" "$U3" "$(q "select user_id from public.tickets where purchase_id='LINK-3';")"
+ok "해외 손님 4 · 두 계정이 같은 코드로 가입(둘 다 인증)" "allow:invite_code_only" "$(ins "'jp-a@x.com'" "null" '{"invite_code":"GSTEN004"}' '{"provider":"email"}'; ins "'jp-b@x.com'" "null" '{"invite_code":"GSTEN004"}' '{"provider":"email"}' >/dev/null)"
+$P -c "update auth.users set email_confirmed_at = now() where email in ('jp-a@x.com','jp-b@x.com');" >/dev/null
+ok "  … Edge 소진 → 주인을 못 정해 거절" "INVITE_OWNER_UNVERIFIED" "$(as_svc "update public.invite_codes set used=true where code='GSTEN004' and used=false;" | grep -oE 'INVITE_OWNER_UNVERIFIED' | head -1)"
+ok "등급 · 남의 등급은 못 묻는다" "" "$(as_user $A "select coalesce(public.taam_invited_tier('$B', null, null), '');")"
+ok "등급 · 슈퍼어드민은 묻는다" "T" "$(as_user $SUPER "select public.taam_invited_tier('$B', null, null);")"
 
 echo "── 권한"
 ok "발급 예약 표 · 회원 못 읽음" "f" "$(q "select has_table_privilege('authenticated','public.partner_signup_allow','select');")"
