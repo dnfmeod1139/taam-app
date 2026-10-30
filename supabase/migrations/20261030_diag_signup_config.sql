@@ -15,7 +15,7 @@ union all select '② 번호 계정 · 가입→확인 간격',
           from auth.users where nullif(phone,'') is not null and coalesce(raw_app_meta_data->>'provider','') = 'phone')
 union all select '③ auth.users 칸(이메일·번호 변경·익명)', (select string_agg(column_name, ', ' order by column_name) from information_schema.columns
          where table_schema = 'auth' and table_name = 'users' and (column_name like 'email_change%' or column_name like 'phone_change%' or column_name in ('is_anonymous','is_sso_user','confirmed_at')))
-union all select '④ 익명 계정', coalesce((select count(*)::text from auth.users where coalesce((to_jsonb(auth.users)->>'is_anonymous')::boolean, false)), '0')
+union all select '④ 익명 계정', coalesce((select count(*)::text from auth.users u where coalesce((to_jsonb(u)->>'is_anonymous')::boolean, false)), '0')
 union all select '⑤ 이메일 변경 대기 · 확인 상태', (select '대기 ' || count(*) filter (where nullif(to_jsonb(u)->>'email_change','') is not null)
              || ' · confirm_status 값 ' || coalesce(string_agg(distinct to_jsonb(u)->>'email_change_confirm_status', ','), '-') from auth.users u)
 union all select '⑥ 번호 변경 대기', (select count(*) filter (where nullif(to_jsonb(u)->>'phone_change','') is not null)::text from auth.users u)
