@@ -8,7 +8,8 @@ T=$(mktemp -d)
 $P -v ON_ERROR_STOP=1 -f sql/_test/fx_auth_hardening.sql >/dev/null 2>$T/err || { echo "❌ 픽스처"; head -3 $T/err; exit 1; }
 # 옛 라이브: 문지기(sql/signup_guard.sql) · 게스트 붙이기(20261019) · 등급(audit5)
 $P -v ON_ERROR_STOP=1 -f sql/signup_guard.sql >/dev/null 2>$T/err || { echo "❌ 옛 문지기"; head -3 $T/err; exit 1; }
-sed -n '/^create or replace function public.taam_guest_attach_tickets/,/^  for each row execute function public.taam_guest_attach_on_profile();/p' supabase/migrations/20261019_guest_invite.sql > $T/guest.sql
+{ sed -n '/^create or replace function public._taam_guest_invite_code/,/^  for each row execute function public.taam_guest_invite_on_paid();/p' supabase/migrations/20261019_guest_invite.sql
+  sed -n '/^create or replace function public.taam_guest_attach_tickets/,/^  for each row execute function public.taam_guest_attach_on_profile();/p' supabase/migrations/20261019_guest_invite.sql; } > $T/guest.sql
 $P -v ON_ERROR_STOP=1 -f $T/guest.sql >/dev/null 2>$T/err || { echo "❌ 게스트 붙이기"; head -3 $T/err; exit 1; }
 sed -n '/^create or replace function public.taam_invited_tier/,/^\$\$;/p' sql/audit5_hardening_2026-09-14.sql > $T/tier.sql
 $P -v ON_ERROR_STOP=1 -f $T/tier.sql >/dev/null 2>$T/err || { echo "❌ 등급"; head -3 $T/err; exit 1; }
@@ -204,6 +205,50 @@ $P -c "update auth.users set email_confirmed_at = now() where email in ('jp-a@x.
 ok "  … Edge 소진 → 주인을 못 정해 거절" "INVITE_OWNER_UNVERIFIED" "$(as_svc "update public.invite_codes set used=true where code='GSTEN004' and used=false;" | grep -oE 'INVITE_OWNER_UNVERIFIED' | head -1)"
 ok "등급 · 남의 등급은 못 묻는다" "" "$(as_user $A "select coalesce(public.taam_invited_tier('$B', null, null), '');")"
 ok "등급 · 슈퍼어드민은 묻는다" "T" "$(as_user $SUPER "select public.taam_invited_tier('$B', null, null);")"
+
+echo "── Confirm email 꺼짐 대비 · 메타데이터 · 번호 인증 붙이기 · 국내 판정"
+ok "이메일 가입 · 코드 없음 · 안 쓴 초대장 이메일과 일치 → 거절(비밀번호 가입 길)" "ERR:SIGNUP_NOT_INVITED: no_invite" "$(ins "'kim@x.com'" "null" '{}' '{"provider":"email"}')"
+ok "번호 가입 · 코드 없음 · 안 쓴 초대장 번호와 일치 → 거절" "ERR:SIGNUP_NOT_INVITED: no_invite" "$(ins "null" "'821066667777'" '{}' '{"provider":"phone"}')"
+ok "회원이 로그인 이메일을 남의 초대 이메일로 → 막힘 ⭐" "EMAIL_CHANGE_BLOCKED" "$($P -c "update auth.users set email='kim@x.com' where id='$A';" 2>&1 | grep -oE 'EMAIL_CHANGE_BLOCKED' | head -1)"
+ok "번호 회원이 이메일을 새로 붙이기 → 막힘" "EMAIL_CHANGE_BLOCKED" "$($P -c "update auth.users set email='kim@x.com' where id='$B';" 2>&1 | grep -oE 'EMAIL_CHANGE_BLOCKED' | head -1)"
+ok "SQL Editor 는 GUC 로 바꾼다" "new-a@x.com" "$(q "begin; set local taam.allow_email_change = '1'; update auth.users set email='new-a@x.com' where id='$A'; commit; select email from auth.users where id='$A';")"
+$P -c "begin; set local taam.allow_email_change = '1'; update auth.users set email='att@x.com' where id='$A'; commit;" >/dev/null
+ok "같은 이메일(대소문자만)은 막지 않는다" "ATT@x.com" "$(q "update auth.users set email='ATT@x.com' where id='$A'; select email from auth.users where id='$A';")"
+$P -c "begin; set local taam.allow_email_change = '1'; update auth.users set email='att@x.com' where id='$A'; commit;" >/dev/null
+ok "로그인 시각 갱신 같은 평범한 갱신은 그대로" "t" "$(q "update auth.users set created_at = created_at where id='$A'; select true;")"
+ok "메타데이터 갱신 · 번호 키 버림 ⭐" "f" "$(q "update auth.users set raw_user_meta_data = raw_user_meta_data || '{\"phone\":\"<svg onload=1>\",\"display_name\":\"<i>이</i>\"}' where id='$A'; select raw_user_meta_data ? 'phone' from auth.users where id='$A';")"
+ok "  … 이름 정리" "i이/i" "$(q "select raw_user_meta_data->>'display_name' from auth.users where id='$A';")"
+ok "  … profiles 번호로 안 넘어감" "" "$(q "select coalesce(phone,'') from public.profiles where id='$A';")"
+ok "국내 판정 · 010" "t" "$(q "select public._taam_kr_mobile('010-1234-5678');")"
+ok "국내 판정 · +82 10" "t" "$(q "select public._taam_kr_mobile('+82 10-1234-5678');")"
+ok "국내 판정 · +1 617 은 아님 ⭐" "f" "$(q "select public._taam_kr_mobile('+1 617 555 1234');")"
+ok "국내 판정 · +1 212 은 아님" "f" "$(q "select public._taam_kr_mobile('+1 212 555 1234');")"
+ok "결제 링크 손님 초대장 · 판정 줄 교체" "t" "$(q "select prosrc like '%_taam_kr_mobile%' from pg_proc where proname='taam_guest_invite_on_paid';")"
+$P -v ON_ERROR_STOP=1 >/dev/null <<SQL2
+insert into public.kashikiri_charges(id,link_invite,status,user_id,payer_phone,payer_name) values
+ ('44444444-4444-4444-4444-444444444444',true,'pending',null,'+1 617 555 1234','Bob'),
+ ('55555555-5555-5555-5555-555555555555',true,'pending',null,'010-8888-1111','철수');
+update public.kashikiri_charges set status='paid' where id in ('44444444-4444-4444-4444-444444444444','55555555-5555-5555-5555-555555555555');
+insert into public.tickets(purchase_id,user_id,status,extra_data) values ('LINK-5',null,'active','{"chargeId":"55555555-5555-5555-5555-555555555555"}');
+SQL2
+ok "  … +1 617 손님 초대장은 해외(코드로만)" "EN:true" "$(q "select c.country || ':' || public._taam_invite_code_only(c.invited_by, c.country, c.invitee_phone, c.invitee_email)::text from public.invite_codes c where c.invitee_phone='+1 617 555 1234';")"
+ok "  … 010 손님 초대장은 국내(번호 묶임)" "KR:false" "$(q "select c.country || ':' || public._taam_invite_code_only(c.invited_by, c.country, c.invitee_phone, c.invitee_email)::text from public.invite_codes c where c.invitee_phone='010-8888-1111';")"
+KC=$(q "select code from public.invite_codes where invitee_phone='010-8888-1111';")
+ok "국내 손님 · 번호 가입(확인 전)" "allow:invite_code" "$(ins "null" "'821088881111'" "{\"invite_code\":\"$KC\"}" '{"provider":"phone"}')"
+ok "  … 확인 전엔 좌석이 안 붙는다" "" "$(q "select coalesce(user_id::text,'') from public.tickets where purchase_id='LINK-5';")"
+KU=$(q "select id from auth.users where phone='821088881111';")
+$P -c "update auth.users set phone_confirmed_at = now() where id='$KU';" >/dev/null
+ok "  … 번호가 인증되는 순간 좌석이 붙는다(소진 전에도) ⭐" "$KU" "$(q "select user_id from public.tickets where purchase_id='LINK-5';")"
+ok "해외 손님 · 이미 쓴 코드로 또 가입 → 거절" "ERR:SIGNUP_NOT_INVITED: code_used" "$(ins "'us-guest2@x.com'" "null" '{"invite_code":"GSTEN002"}' '{"provider":"email"}')"
+NC=$(q "select code from public.invite_codes where invitee_phone='+1 617 555 1234';")
+ins "'bob-a@x.com'" "null" "{\"invite_code\":\"$NC\"}" '{"provider":"email"}' >/dev/null
+ok "해외 손님 · 첫 계정 인증 뒤 두 번째 가입 → 거절(code_claimed)" "ERR:SIGNUP_NOT_INVITED: code_claimed" "$($P -c "update auth.users set email_confirmed_at = now() where email='bob-a@x.com';" >/dev/null; ins "'bob-b@x.com'" "null" "{\"invite_code\":\"$NC\"}" '{"provider":"email"}')"
+BA=$(q "select id from auth.users where email='bob-a@x.com';")
+ok "  … 등급 · 소진 전에도 코드 주인은 게스트 등급(A)" "A" "$(as_user $BA "select public.taam_invited_tier('$BA', null, null);")"
+ok "두 계정 모두 인증된 해외 코드(GSTEN004) · 아무도 못 본다" "0:0" "$(as_user $(q "select id from auth.users where email='jp-a@x.com';") "select count(*) from public.invite_codes where code='GSTEN004';"):$(as_user $(q "select id from auth.users where email='jp-b@x.com';") "select count(*) from public.invite_codes where code='GSTEN004';")"
+ok "서버 세션 · profiles 번호 태그 → 번호 글자만" "1" "$(as_svc "update public.profiles set phone='<svg onload=1>' where id='$A'; select phone from public.profiles where id='$A';")"
+ok "서버 세션 · profiles 이메일 이상 → 비움" "" "$(as_svc "update public.profiles set email='x@a.b<img src=x>' where id='$A'; select coalesce(email,'') from public.profiles where id='$A';")"
+ok "서버 세션 · 다른 글자 칸 태그 → 꺾쇠 제거" "b onmouseover=1KR" "$(as_svc "update public.profiles set membership_tier='<b onmouseover=1>KR' where id='$A'; select membership_tier from public.profiles where id='$A';")"
 
 echo "── 권한"
 ok "발급 예약 표 · 회원 못 읽음" "f" "$(q "select has_table_privilege('authenticated','public.partner_signup_allow','select');")"

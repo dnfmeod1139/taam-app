@@ -10,10 +10,17 @@
 --   ① 가입 문지기(taam_guard_signup) — 초대장이 묶은 채널과 **실제 가입 채널**이 맞아야 한다.
 --      종전: 번호에 묶인 코드를 이메일 OTP 로(또는 그 반대로) 쓰면 대조할 쪽이 비어 통과했다 · 번호는 회원이 적는
 --      raw_user_meta_data.phone 도 믿었다(남의 초대 번호를 적으면 그 번호로 대조됐다) · 묶임 없는 코드는 아무 채널로나 ·
---      코드 없는 가입은 **이미 쓴·만료된** 초대장과도 맞으면 통과(소셜로 같은 사람의 두 번째 계정) · 판정 오류는 통과.
---      → 번호 = auth.users.phone 만 · 이메일 = auth.users.email 만 · 묶임 없는 초대장 거절 · 코드 없는 가입은 안 쓴·안 지난 초대장만 ·
---        파트너 도메인은 관리자 API 로 만든 계정(email_confirmed_at 가 이미 있음)만 · enforce 에서 판정 오류는 **거절**(SIGNUP_GUARD_ERROR —
---        급하면 app_config.signup_guard 를 log 로) · 메타데이터 이름(display_name·name·full_name)은 꺾쇠·javascript: 를 지우고 phone 키는 버린다.
+--      코드 없는 가입은 **이미 쓴·만료된** 초대장과도 맞으면 통과(소셜로 같은 사람의 두 번째 계정) · 파트너 도메인은 누구나 · 판정 오류는 통과.
+--      → 번호 = auth.users.phone 만 · 이메일 = auth.users.email 만 · 묶임 없는 초대장 거절 ·
+--        코드 없는 가입은 소셜(제공자가 확인한 이메일)이고 안 쓴·안 지난 초대장일 때만 ·
+--        해외 결제 링크 손님 초대장(국내 휴대폰 아님 · 이메일 없음)은 코드가 자격 — 주인은 그 코드로 가입한 유일한 인증 계정 ·
+--        파트너 도메인은 partner-account 가 직전에 적은 발급 예약(partner_signup_allow · 10분 · 한 번)이 있을 때만 ·
+--        enforce 에서 판정 오류는 **거절**(SIGNUP_GUARD_ERROR — 급하면 app_config.signup_guard 를 log 로) ·
+--        메타데이터 이름(display_name·name·full_name…)은 꺾쇠·javascript: 를 지우고 phone 키는 버린다(가입 뒤 updateUser 로 바꿀 때도).
+--   ①-2 ⚠ 이 프로젝트는 「Confirm email」이 꺼져 있다(진단: 이메일 계정 18/18 이 가입 2초 안에 확인됨) — 이메일 확인 시각은 메일함 소유의 증거가 아니다.
+--      그래서 ⓐ 이메일·번호 가입은 언제나 코드가 있어야 하고(비밀번호 가입이 남의 이메일로 바로 세션을 받는 길) ⓑ 로그인 이메일 변경을 막는다
+--      (updateUser({email}) 가 확인 없이 바로 바뀌어 남의 초대장 주인이 되던 길 · 앱은 이메일을 바꾸지 않는다 · SQL Editor 는 set local taam.allow_email_change='1').
+--      대시보드에서 Confirm email 을 켜면(「Confirm signup」 메일에 {{ .Token }}) 이메일 쪽도 번호처럼 강해진다.
 --   ② 초대 소진(invite_codes used → true) — **누가 소진하든**(Edge consume-invite · RPC consume_invite_by_self · 그 밖)
 --      초대장이 묶은 번호·이메일로 **인증된 계정**이 그 주인이어야 하고, member_id·used_by_* 는 그 계정 값으로 서버가 적는다.
 --      종전: consume-invite 는 대조할 쪽이 비면 통과 + used_by_* 를 요청 본문에서 받았고, consume_invite_by_self 는
@@ -89,18 +96,41 @@ begin
   return null;
 end $$;
 
--- 코드만으로 묶이는 초대장 — 해외 결제 링크 손님(pay_link · 국내 번호 아님 · 이메일 없음).
+-- 국내 휴대폰 번호인가(엄격) — 010·011·016~019 + 7~8자리, 또는 82 + 10·11·16~19 + 7~8자리.
+--   20261019 결제 링크 초대장의 판정(^(0?1[016789]|821[016789]))은 앞자리만 봐서 +1 617… 같은 북미 번호를 국내로 쳤다.
+create or replace function public._taam_kr_mobile(p text)
+returns boolean language sql immutable as $$
+  select regexp_replace(coalesce(p, ''), '[^0-9]', '', 'g') ~ '^(0?1[016789][0-9]{7,8}|821[016789][0-9]{7,8})$'
+$$;
+grant execute on function public._taam_kr_mobile(text) to anon, authenticated;
+
+-- 코드만으로 묶이는 초대장 — 해외 결제 링크 손님(pay_link · 국내 휴대폰 번호 아님 · 이메일 없음).
 --   앱은 해외 번호 OTP 를 못 하고(국내는 +82 고정) 손님 이메일은 초대장에 없다 → 코드(결제 완료 화면에만 보인다)가 자격이다.
---   주인은 그 코드로 가입이 허락된 인증 계정(signup_guard_log)이다.
+--   주인은 그 코드로 가입이 허락된 **단 하나의** 인증 계정(_taam_code_owner).
+--   (p_country 는 옛 호출 모양을 위해 받기만 한다 — 판정은 번호로)
 create or replace function public._taam_invite_code_only(p_invited_by text, p_country text, p_iph text, p_iem text)
 returns boolean language sql immutable as $$
-  select coalesce(p_invited_by, '') = 'pay_link' and upper(coalesce(p_country, '')) <> 'KR'
+  select coalesce(p_invited_by, '') = 'pay_link'
      and public._taam_invite_bind_email(p_iem) is null and public._taam_invite_bind_phone(p_iph) is not null
+     and not public._taam_kr_mobile(p_iph)
 $$;
 grant execute on function public._taam_invite_code_only(text, text, text, text) to anon, authenticated;
 
 -- 이 코드로 가입이 허락된(문지기 allow) 계정
 create index if not exists signup_guard_log_user_idx on public.signup_guard_log(user_id);
+create index if not exists signup_guard_log_code_idx on public.signup_guard_log(upper(btrim(coalesce(invite_code, '')))) where verdict = 'allow';
+
+-- 이 코드로 가입이 허락된 인증 계정이 **정확히 하나**면 그 계정 · 0개·2개 이상이면 null(슈퍼어드민이 정한다)
+--   ⚠ signup_guard_log 의 allow 줄이 이 판정의 근거다 — 지우거나 정리하는 작업을 두지 말 것(해외 손님이 주인을 잃는다)
+create or replace function public._taam_code_owner(p_code text)
+returns uuid language sql stable security definer set search_path = public, auth as $$
+  select case when count(distinct au.id) = 1 then (array_agg(au.id))[1] end
+    from public.signup_guard_log l join auth.users au on au.id = l.user_id
+   where nullif(btrim(coalesce(p_code, '')), '') is not null
+     and l.verdict = 'allow' and upper(btrim(coalesce(l.invite_code, ''))) = upper(btrim(p_code))
+     and (au.phone_confirmed_at is not null or au.email_confirmed_at is not null)
+$$;
+revoke all on function public._taam_code_owner(text) from public, anon, authenticated;
 
 -- 이 초대장이 지금 로그인한 회원의 것인가 — member_id · 인증된 번호·이메일 정확 일치(invitee_* · used_by_*) · 이 코드로 가입이 허락된 인증 계정
 do $$ begin
@@ -117,9 +147,8 @@ returns boolean language sql stable security definer set search_path = public, a
                 and (public._taam_phone_key(p_iph) = public._taam_phone_key(u.phone) or public._taam_phone_key(p_uph) = public._taam_phone_key(u.phone)))
             or (u.email_confirmed_at is not null and nullif(lower(btrim(coalesce(u.email, ''))), '') is not null
                 and (lower(btrim(coalesce(p_iem, ''))) = lower(btrim(u.email)) or lower(btrim(coalesce(p_uem, ''))) = lower(btrim(u.email))))
-            or ((u.phone_confirmed_at is not null or u.email_confirmed_at is not null) and nullif(btrim(coalesce(p_code, '')), '') is not null
-                and exists (select 1 from public.signup_guard_log l where l.user_id = u.id and l.verdict = 'allow'
-                              and upper(btrim(coalesce(l.invite_code, ''))) = upper(btrim(p_code)))))
+            -- 아직 주인이 안 적힌 초대장: 이 코드로 가입이 허락된 유일한 인증 계정
+            or (nullif(btrim(coalesce(p_member, '')), '') is null and public._taam_code_owner(p_code) = u.id))
   )
 $$;
 revoke all on function public._taam_invite_mine(text, text, text, text, text, text) from public, anon;
@@ -213,8 +242,9 @@ begin
       elsif public._taam_ts_safe(r.expires_txt) is not null and public._taam_ts_safe(r.expires_txt) < now() then
         v_reason := 'code_expired';
       elsif public._taam_invite_code_only(r.invited_by, r.country, r.invitee_phone, r.invitee_email) then
-        -- 해외 결제 링크 손님 — 코드가 자격(번호 OTP 불가 · 이메일 모름). 주인은 이 가입 계정(소진 가드가 로그로 찾는다)
+        -- 해외 결제 링크 손님 — 코드가 자격(번호 OTP 불가 · 이메일 모름). 주인은 이 코드로 가입한 유일한 인증 계정
         if v_phone is null and v_email is null then v_reason := 'channel_mismatch';
+        elsif public._taam_code_owner(v_code) is not null then v_reason := 'code_claimed';   -- 이미 다른 계정이 이 코드로 가입·인증했다
         else v_verdict := 'allow'; v_reason := 'invite_code_only'; end if;
       else
         v_reason := coalesce(public._taam_invite_bind_reason(r.invitee_phone, r.invitee_email, v_phone, v_email), 'invite_code');
@@ -223,11 +253,13 @@ begin
 
     else
       -- 코드가 안 실린 가입(소셜 첫 로그인 등): 안 쓴·안 지난 초대장이 이 채널에 묶여 있을 때만
-      --   소셜(OAuth)은 제공자가 이메일을 확인했다고 할 때만(메타데이터 email_verified 는 제공자가 채운다 — OAuth 가입은 data 를 못 싣는다)
-      if v_prov not in ('', 'email', 'phone') and coalesce(v_meta->>'email_verified', '') <> 'true' then
-        v_email := null;
+      --   소셜(OAuth)만 — 제공자가 이메일을 확인했다고 할 때(메타데이터 email_verified 는 제공자가 채운다 · OAuth 가입은 data 를 못 싣는다).
+      --   이메일·번호 가입은 언제나 코드를 싣는다(앱 _vpSignupMeta). 코드 없이 들이면 「Confirm email」이 꺼진 이 프로젝트에선
+      --   비밀번호 가입(/auth/v1/signup)이 메일함 확인 없이 바로 세션을 받아 남의 이메일에 묶인 초대장을 가져갔다(2026-10-30 진단 ① 18/18 즉시 확인).
+      if v_prov in ('', 'email', 'phone') or coalesce(v_meta->>'email_verified', '') <> 'true' then
+        v_email := null; v_phone := null;
       end if;
-      if exists (
+      if (v_email is not null or v_phone is not null) and exists (
         select 1 from public.invite_codes ic
          where not coalesce(ic.used, false)
            and (public._taam_ts_safe(ic.expires_at::text) is null or public._taam_ts_safe(ic.expires_at::text) >= now())
@@ -245,7 +277,8 @@ begin
     values (new.id, v_email, v_phone, v_prov, v_code, v_verdict, v_reason, v_mode,
             (v_mode = 'enforce' and v_verdict in ('reject', 'error')));
   exception when others then
-    null; -- 기록 실패로 판정을 바꾸지 않는다
+    -- 기록 실패로 판정을 바꾸지 않는다 — 단 코드로만 묶인 가입은 이 기록이 주인 근거라 남기지 못하면 들이지 않는다
+    if v_verdict = 'allow' and v_reason = 'invite_code_only' then v_verdict := 'error'; v_reason := 'log_failed'; end if;
   end;
 
   if v_mode = 'enforce' and v_verdict = 'reject' then
@@ -332,11 +365,9 @@ begin
 
   v_codeonly := public._taam_invite_code_only(new.invited_by, new.country, new.invitee_phone, new.invitee_email);
   if v_codeonly then
-    -- 해외 결제 링크 손님: 이 코드로 가입이 허락된 인증 계정
-    select count(distinct au.id), (array_agg(au.id order by au.created_at))[1] into v_n, v_owner
-      from auth.users au join public.signup_guard_log l on l.user_id = au.id
-     where l.verdict = 'allow' and upper(btrim(coalesce(l.invite_code, ''))) = upper(btrim(coalesce(new.code, '')))
-       and (au.phone_confirmed_at is not null or au.email_confirmed_at is not null);
+    -- 해외 결제 링크 손님: 이 코드로 가입이 허락된 유일한 인증 계정
+    v_owner := public._taam_code_owner(new.code);
+    v_n := case when v_owner is null then 0 else 1 end;
   else
     select count(*), (array_agg(au.id order by au.created_at))[1] into v_n, v_owner
       from auth.users au
@@ -346,9 +377,7 @@ begin
 
   if v_uid is not null and not v_trusted then
     -- 회원 세션(consume_invite_by_self 등): 그 회원이 묶인 채널의 인증된 주인이어야(코드만 묶인 초대장은 그 코드로 가입한 인증 계정)
-    if (v_codeonly and not exists (select 1 from auth.users au join public.signup_guard_log l on l.user_id = au.id
-                                    where au.id = v_uid and l.verdict = 'allow' and upper(btrim(coalesce(l.invite_code, ''))) = upper(btrim(coalesce(new.code, '')))
-                                      and (au.phone_confirmed_at is not null or au.email_confirmed_at is not null)))
+    if (v_codeonly and public._taam_code_owner(new.code) is distinct from v_uid)
        or (not v_codeonly and not exists (select 1 from auth.users au where au.id = v_uid
                      and ((ip is not null and au.phone_confirmed_at is not null and public._taam_phone_key(au.phone) = ip)
                        or (ie is not null and au.email_confirmed_at is not null and lower(btrim(coalesce(au.email, ''))) = ie)))) then
@@ -358,7 +387,7 @@ begin
   elsif not v_trusted then
     -- 서버(service_role — Edge consume-invite): 묶인 채널의 인증된 계정이 정확히 하나여야
     if v_n <> 1 then
-      raise exception 'INVITE_OWNER_UNVERIFIED: 묶인 번호·이메일(또는 이 코드)로 인증된 계정이 % 개입니다', v_n using errcode = '42501';
+      raise exception 'INVITE_OWNER_UNVERIFIED: 묶인 번호·이메일(또는 이 코드)의 주인을 정하지 못했습니다(인증 계정 % 개)', v_n using errcode = '42501';
     end if;
   elsif v_n <> 1 or (nullif(btrim(coalesce(new.member_id, '')), '') is not null and new.member_id is distinct from old.member_id) then
     v_owner := null;   -- 믿는 세션 · 주인을 못 정했거나 직접 적었으면 적힌 그대로
@@ -408,10 +437,8 @@ begin
       ip := public._taam_invite_bind_phone(new.invitee_phone);
       ie := public._taam_invite_bind_email(new.invitee_email);
       if public._taam_invite_code_only(new.invited_by, new.country, new.invitee_phone, new.invitee_email) then
-        select count(distinct au.id), (array_agg(au.id))[1] into v_n, v_uid
-          from auth.users au join public.signup_guard_log l on l.user_id = au.id
-         where l.verdict = 'allow' and upper(btrim(coalesce(l.invite_code, ''))) = upper(btrim(coalesce(new.code, '')))
-           and (au.phone_confirmed_at is not null or au.email_confirmed_at is not null);
+        v_uid := public._taam_code_owner(new.code);
+        v_n := case when v_uid is null then 0 else 1 end;
       else
         select count(*), (array_agg(au.id))[1] into v_n, v_uid from auth.users au
          where (ip is not null and au.phone_confirmed_at is not null and public._taam_phone_key(au.phone) = ip)
@@ -499,8 +526,7 @@ begin
               and public._taam_invite_bind_reason(ic.invitee_phone, ic.invitee_email, v_ph, v_em) is null)
           -- 해외 결제 링크 손님 초대장: 내가 그 코드로 가입했을 때
           or (    public._taam_invite_code_only(ic.invited_by, ic.country, ic.invitee_phone, ic.invitee_email)
-              and exists (select 1 from public.signup_guard_log l where l.user_id = v_uid and l.verdict = 'allow'
-                            and upper(btrim(coalesce(l.invite_code, ''))) = upper(btrim(coalesce(ic.code, ''))))));
+              and public._taam_code_owner(ic.code) = v_uid));
   get diagnostics v_n = row_count;
   return v_n;
 end $$;
@@ -543,6 +569,8 @@ begin
        or (v_email <> '' and lower(btrim(coalesce(ic.invitee_email,''))) = v_email)
        or (length(v_pkey) >= 8 and public._taam_phone_key(ic.used_by_phone) = v_pkey)
        or (length(v_pkey) >= 8 and public._taam_phone_key(ic.invitee_phone) = v_pkey)
+       -- 해외 결제 링크 손님: 소진(member_id) 전에도 그 코드로 가입한 유일한 인증 계정
+       or (nullif(btrim(coalesce(ic.member_id, '')), '') is null and public._taam_code_owner(ic.code) = p_user_id)
      )
    order by (ic.member_id::text = p_user_id::text) desc nulls last, ic.used_at desc nulls last
    limit 1;
@@ -615,21 +643,9 @@ begin
   return new;
 end $$;
 
+-- 이름 정리 함수 — 본문은 아래 ⑤-2 에서 채운다(트리거를 먼저 걸 수 있게 빈 판을 둔다)
 create or replace function public.taam_profile_name_clean()
-returns trigger language plpgsql set search_path = public as $$
-declare j jsonb := to_jsonb(new); o jsonb := case when tg_op = 'UPDATE' then to_jsonb(old) end; k text; c text; ch jsonb := '{}'::jsonb;
-begin
-  foreach k in array array['display_name', 'display_name_en', 'display_name_jp', 'display_name_ja'] loop
-    if jsonb_typeof(j -> k) = 'string' and (o is null or (o -> k) is distinct from (j -> k))
-       and ((j ->> k) ~ '[<>[:cntrl:]]' or (j ->> k) ~* 'javascript\s*:') then
-      c := public._taam_clean_name(j ->> k);
-      ch := ch || jsonb_build_object(k, c);
-    end if;
-  end loop;
-  if ch <> '{}'::jsonb then new := jsonb_populate_record(new, ch); end if;
-  return new;
-end $$;
-
+returns trigger language plpgsql set search_path = public as $$ begin return new; end $$;
 do $$ begin
   if to_regclass('public.profiles') is null then raise notice 'profiles 없음 — ④⑤ 건너뜀'; return; end if;
   execute 'drop trigger if exists trg_taam_guard_profile_contact on public.profiles';
@@ -639,6 +655,95 @@ do $$ begin
   execute 'drop trigger if exists trg_taam_profile_name_clean on public.profiles';
   execute 'create trigger trg_taam_profile_name_clean before insert or update on public.profiles
            for each row execute function public.taam_profile_name_clean()';
+end $$;
+
+-- ── ①-2 auth.users 갱신 가드: 로그인 이메일 변경 막음 · 메타데이터 정리 ──
+create or replace function public.taam_guard_auth_user_update()
+returns trigger language plpgsql security definer set search_path = public, auth as $$
+declare v_meta jsonb; k text;
+begin
+  -- Confirm email 이 꺼진 프로젝트에선 updateUser({email}) 가 확인 없이 바로 바뀐다 — 남의 초대 이메일로 바꿔 그 초대장의 주인이 되던 길.
+  --   앱은 이메일을 바꾸지 않는다. 운영자가 바꿔야 하면 SQL Editor 에서 set local taam.allow_email_change = '1' 뒤에.
+  if lower(nullif(btrim(coalesce(new.email, '')), '')) is distinct from lower(nullif(btrim(coalesce(old.email, '')), ''))
+     and coalesce(current_setting('taam.allow_email_change', true), '') <> '1' then
+    raise exception 'EMAIL_CHANGE_BLOCKED: 로그인 이메일은 바꿀 수 없습니다 — TAAM 에 문의해 주세요' using errcode = '42501';
+  end if;
+  -- 메타데이터(가입자가 updateUser({data}) 로 언제든 쓴다): 이름 정리 · 번호 키 버림. 실패해도 로그인·갱신을 막지 않는다.
+  begin
+    if new.raw_user_meta_data is distinct from old.raw_user_meta_data and jsonb_typeof(new.raw_user_meta_data) = 'object' then
+      v_meta := new.raw_user_meta_data - 'phone';
+      foreach k in array array['display_name', 'name', 'full_name', 'user_name', 'nickname'] loop
+        if jsonb_typeof(v_meta -> k) = 'string' then
+          v_meta := jsonb_set(v_meta, array[k], to_jsonb(public._taam_clean_name(v_meta ->> k)));
+        end if;
+      end loop;
+      if v_meta is distinct from new.raw_user_meta_data then new.raw_user_meta_data := v_meta; end if;
+    end if;
+  exception when others then
+    raise warning '[auth_update] 메타데이터 정리 실패(갱신은 진행): % %', sqlstate, sqlerrm;
+  end;
+  return new;
+end $$;
+revoke all on function public.taam_guard_auth_user_update() from public, anon, authenticated;
+drop trigger if exists trg_taam_guard_auth_update on auth.users;
+create trigger trg_taam_guard_auth_update before update on auth.users
+  for each row execute function public.taam_guard_auth_user_update();
+
+-- ── ②-2 게스트 좌석 — 번호가 인증되는 순간 붙인다(가입 줄은 OTP 확인 전에 생기므로 가입 직후 붙이기는 이제 거의 안 탄다) ──
+create or replace function public.taam_guest_attach_on_verify()
+returns trigger language plpgsql security definer set search_path = public, auth as $$
+begin
+  if to_regprocedure('public.taam_guest_attach_tickets(uuid,text,text)') is null then return new; end if;
+  begin
+    perform public.taam_guest_attach_tickets(new.id, null, new.phone);
+  exception when others then
+    raise warning '[guest_invite] 번호 인증 뒤 티켓 붙이기 실패(인증은 유지): % %', sqlstate, sqlerrm;
+  end;
+  return new;
+end $$;
+revoke all on function public.taam_guest_attach_on_verify() from public, anon, authenticated;
+drop trigger if exists trg_taam_guest_attach_on_verify on auth.users;
+create trigger trg_taam_guest_attach_on_verify after update on auth.users
+  for each row
+  when (new.phone_confirmed_at is not null and length(regexp_replace(coalesce(new.phone, ''), '[^0-9]', '', 'g')) >= 9
+        and (old.phone_confirmed_at is null or old.phone is distinct from new.phone))
+  execute function public.taam_guest_attach_on_verify();
+
+-- ── ②-3 결제 링크 손님 초대장의 국내/해외 판정 — 앞자리만 보던 정규식을 엄격하게(+1 617… 이 국내로 분류돼 가입이 막혔다) ──
+do $$
+declare v_def text; v_new text; v_old text := 'v_kr  := v_digits ~ ''^(0?1[016789]|821[016789])'';';
+        v_rep text := 'v_kr  := public._taam_kr_mobile(v_digits);';
+begin
+  if to_regprocedure('public.taam_guest_invite_on_paid()') is null then raise notice '[②-3] taam_guest_invite_on_paid 없음 — 건너뜀'; return; end if;
+  v_def := pg_get_functiondef('public.taam_guest_invite_on_paid()'::regprocedure);
+  if position(v_rep in v_def) > 0 then raise notice '[②-3] 이미 엄격 판정'; return; end if;
+  if (length(v_def) - length(replace(v_def, v_old, ''))) / length(v_old) <> 1 then
+    raise notice '[②-3] 판정 줄을 정확히 하나 찾지 못함 — 건너뜀(⚠ 확인 표)'; return;
+  end if;
+  v_new := replace(v_def, v_old, v_rep);
+  execute v_new;
+  raise notice '[②-3] 국내 판정 교체';
+end $$;
+
+-- ── ⑤-2 서버가 쓰는 profiles 글자 — 이름은 정리, 그 밖의 글자 칸은 태그 모양 꺾쇠 제거 · 이메일은 이상하면 비움 · 번호는 번호 글자만 ──
+create or replace function public.taam_profile_name_clean()
+returns trigger language plpgsql set search_path = public as $$
+declare j jsonb := to_jsonb(new); o jsonb := case when tg_op = 'UPDATE' then to_jsonb(old) end; k text; v text; ch jsonb := '{}'::jsonb;
+begin
+  for k, v in select e.key, e.value #>> '{}' from jsonb_each(j) e where jsonb_typeof(e.value) = 'string' loop
+    continue when o is not null and (o -> k) is not distinct from (j -> k);
+    if k in ('display_name', 'display_name_en', 'display_name_jp', 'display_name_ja') then
+      if v ~ '[<>[:cntrl:]]' or v ~* 'javascript\s*:' then ch := ch || jsonb_build_object(k, public._taam_clean_name(v)); end if;
+    elsif k = 'email' then
+      if v ~ '[<>"''[:space:]]' then ch := ch || jsonb_build_object(k, null); end if;
+    elsif k = 'phone' then
+      if v ~ '[^0-9+()\- .]' then ch := ch || jsonb_build_object(k, nullif(btrim(regexp_replace(v, '[^0-9+()\- .]', '', 'g')), '')); end if;
+    elsif v ~* '<\s*[a-z/!?]' or v ~* 'javascript\s*:' then
+      ch := ch || jsonb_build_object(k, regexp_replace(regexp_replace(v, '[<>]', '', 'g'), 'javascript\s*:', '', 'gi'));
+    end if;
+  end loop;
+  if ch <> '{}'::jsonb then new := jsonb_populate_record(new, ch); end if;
+  return new;
 end $$;
 
 -- ── ⑦ 서버 전용 도우미 권한 ──
@@ -683,9 +788,18 @@ union all select '⑦ 이메일 존재 조회 — 회원·anon 실행 없음',
        case when to_regprocedure('public.email_exists_in_auth_other(text, uuid)') is null then '⚠ 함수 없음'
             when not has_function_privilege('authenticated', 'public.email_exists_in_auth_other(text, uuid)', 'execute') and not has_function_privilege('anon', 'public.email_exists_in_auth_other(text, uuid)', 'execute') then '✅' else '❌' end
 union all select '⑧ 지금 초대장 — 묶임 없는 것(정보)', (select count(*)::text || '건' from public.invite_codes where public._taam_invite_bind_phone(invitee_phone) is null and public._taam_invite_bind_email(invitee_email) is null)
-union all select '⑧ 지금 회원 — 로그인 대조 통과(정보)', (select count(*) filter (where ok)::text || ' / ' || count(*)::text from (
+union all select '⑧ 지금 회원 — 로그인 대조', (select case when count(*) filter (where not ok) = 0 then '✅ ' else '⚠ 대조 실패 ' || count(*) filter (where not ok) || '명 — ' end
+                                          || count(*) filter (where ok)::text || ' / ' || count(*)::text from (
          select exists (select 1 from public.invite_codes ic where ic.member_id = au.id::text
                            or (au.phone_confirmed_at is not null and length(public._taam_phone_key(au.phone)) >= 8 and (public._taam_phone_key(ic.invitee_phone) = public._taam_phone_key(au.phone) or public._taam_phone_key(ic.used_by_phone) = public._taam_phone_key(au.phone)))
-                           or (au.email_confirmed_at is not null and nullif(lower(btrim(coalesce(au.email,''))),'') is not null and (lower(btrim(coalesce(ic.invitee_email,''))) = lower(btrim(au.email)) or lower(btrim(coalesce(ic.used_by_email,''))) = lower(btrim(au.email))))) as ok
+                           or (au.email_confirmed_at is not null and nullif(lower(btrim(coalesce(au.email,''))),'') is not null and (lower(btrim(coalesce(ic.invitee_email,''))) = lower(btrim(au.email)) or lower(btrim(coalesce(ic.used_by_email,''))) = lower(btrim(au.email))))
+                           or (nullif(btrim(coalesce(ic.member_id, '')), '') is null and public._taam_code_owner(ic.code) = au.id)) as ok
            from auth.users au join public.profiles p on p.id = au.id
-          where coalesce(p.role, 'user') not in ('admin','super_admin','superadmin','staff') and p.deleted_at is null) s);
+          where coalesce(p.role, 'user') not in ('admin','super_admin','superadmin','staff') and p.deleted_at is null
+            and not exists (select 1 from public.admin_grants g where g.user_id = au.id)) s)
+union all select '①-2 auth.users 갱신 가드(이메일 변경 · 메타데이터)', case when exists (select 1 from pg_trigger where tgname = 'trg_taam_guard_auth_update' and tgrelid = 'auth.users'::regclass) then '✅' else '❌' end
+union all select '②-2 번호 인증 뒤 게스트 좌석 붙이기', case when exists (select 1 from pg_trigger where tgname = 'trg_taam_guest_attach_on_verify' and tgrelid = 'auth.users'::regclass) then '✅' else '❌' end
+union all select '②-3 결제 링크 손님 국내 판정(엄격)', case when to_regprocedure('public.taam_guest_invite_on_paid()') is null then '⚠ 함수 없음'
+            when (select prosrc from pg_proc where oid = 'public.taam_guest_invite_on_paid()'::regprocedure) like '%_taam_kr_mobile%' then '✅' else '⚠ 옛 판정 그대로(모양이 달라 건너뜀)' end
+union all select '③ 해외 손님 초대장 주인 — 유일한 인증 계정만(정보)', (select count(*)::text || '건 미사용 · 주인 정해짐 ' || count(*) filter (where public._taam_code_owner(code) is not null)
+          from public.invite_codes where not coalesce(used, false) and public._taam_invite_code_only(invited_by, country, invitee_phone, invitee_email));

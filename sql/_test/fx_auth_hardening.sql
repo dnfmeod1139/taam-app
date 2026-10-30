@@ -25,7 +25,8 @@ create table public.invite_codes(code text, type text, invitee_name text, invite
   invited_at timestamptz default now(), expires_at timestamptz, used boolean default false, member_id text, used_at timestamptz,
   used_by_phone text, used_by_name text, used_by_email text, created_at timestamptz default now(), country text, invitee_email text, invitee_tier text);
 create table public.app_config(key text primary key, value jsonb, updated_at timestamptz);
-create table public.kashikiri_charges(id uuid primary key default gen_random_uuid(), link_invite boolean, status text, user_id uuid, payer_phone text, payload jsonb default '{}'::jsonb);
+create table public.admin_grants(user_id uuid, rest_id text, status text);
+create table public.kashikiri_charges(id uuid primary key default gen_random_uuid(), link_invite boolean, status text, user_id uuid, payer_phone text, payer_name text, label text, payload jsonb default '{}'::jsonb);
 create table public.tickets(id bigserial primary key, purchase_id text, user_id uuid, status text, extra_data jsonb default '{}'::jsonb);
 grant select, insert, update, delete on public.profiles, public.invite_codes, public.kashikiri_charges, public.tickets to authenticated, service_role;
 grant select on public.app_config to authenticated, anon;
@@ -76,7 +77,7 @@ begin
   return new;
 end; $$;
 create trigger on_auth_user_created after insert on auth.users for each row execute function public.handle_new_user();
-create trigger trg_sync_profile_contact after insert or update of email, phone on auth.users for each row execute function public.sync_profile_contact_from_auth();
+create trigger trg_sync_profile_contact after insert or update of email, phone, raw_user_meta_data on auth.users for each row execute function public.sync_profile_contact_from_auth();
 create trigger trg_sync_profile_email after insert or update of email on auth.users for each row execute function public.sync_profile_email_from_auth();
 
 -- K 글자 검사(회원 세션) — 20261029 와 같은 판정
