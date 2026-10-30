@@ -120,6 +120,14 @@ async function handle(req: Request): Promise<Response> {
         .from('partner_accounts').select('login_id').eq('login_id', loginId).maybeSingle();
       if (dup) return json({ ok: false, error: '이미 쓰고 있는 아이디입니다' });
 
+      // 🔒 2026-10-30 가입 문지기는 매장 도메인 계정을 「발급 예약」이 있을 때만 들인다(10분 · 한 번) — 만들기 직전에 적는다.
+      //   표가 없는 옛 서버(42P01)면 옛 문지기가 도메인만 보고 들이므로 그대로 간다.
+      const { error: allowErr } = await admin.from('partner_signup_allow')
+        .upsert({ email, created_by: caller.id, created_at: new Date().toISOString() }, { onConflict: 'email' });
+      if (allowErr && allowErr.code !== '42P01' && allowErr.code !== 'PGRST205') {
+        return json({ ok: false, error: '계정을 만들지 못했습니다: 발급 예약 실패' });
+      }
+
       const password = makePassword();
       const { data: made, error: mkErr } = await admin.auth.admin.createUser({
         email,
@@ -127,6 +135,8 @@ async function handle(req: Request): Promise<Response> {
         email_confirm: true,   // 확인 메일을 보내지 않는다. 갈 곳도 없다.
         user_metadata: { taam_partner: true, rest_id: restId, label },
       });
+      // 문지기가 썼으면 이미 지워졌다 — 실패했을 때 남은 예약을 치운다
+      await admin.from('partner_signup_allow').delete().eq('email', email).then(() => {}, () => {});
       if (mkErr || !made?.user) {
         return json({ ok: false, error: '계정을 만들지 못했습니다: ' + (mkErr?.message || '') });
       }
