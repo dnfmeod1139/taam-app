@@ -1,7 +1,7 @@
 #!/bin/bash
 # 가입·초대·프로필 연락처 강화 (supabase/migrations/20261030_auth_hardening.sql) 재보기. 먼저: 로컬 pg. 실행: bash sql/_test/t_auth_hardening.sh
 cd "$(dirname "$0")/../.."
-P="psql -h /tmp -U postgres -d postgres -q -t -A -X"
+P="psql -h /tmp -U postgres -d ${TAAM_TEST_DB:-postgres} -q -t -A -X"
 ok(){ if [ "$2" = "$3" ]; then echo "✅ $1"; else echo "❌ $1  (기대 $2, 실제 $3)"; FAIL=1; fi; }
 FAIL=0
 T=$(mktemp -d)
