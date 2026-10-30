@@ -17909,7 +17909,7 @@ textarea.mapl-in{min-height:78px;resize:vertical;line-height:1.7}
       </div>
       <div style="margin-top:12px;">
         <label style="font-size:12px;font-weight:700;color:#6b6b6b;">메모 (선택)</label>
-        <textarea id="tcalManualMemo" rows="2" placeholder="비고" style="width:100%;box-sizing:border-box;margin-top:5px;padding:12px;border:1px solid #e0ddd5;border-radius:10px;font-size:13px;resize:none;"></textarea>
+        <textarea id="tcalManualMemo" rows="2" maxlength="1000" placeholder="비고 (1000자까지)" style="width:100%;box-sizing:border-box;margin-top:5px;padding:12px;border:1px solid #e0ddd5;border-radius:10px;font-size:13px;resize:none;"></textarea>
       </div>
       <div style="display:flex;gap:10px;margin-top:18px;">
         <button onclick="tcalCloseManual()" style="flex:1;height:48px;border:1px solid #e0ddd5;border-radius:12px;background:#fff;font-family:inherit;font-size:14px;font-weight:700;color:#888;cursor:pointer;">취소</button>
@@ -66393,6 +66393,8 @@ async function tcalManualSave(){
   // 콤마 표시(1,000) 제거 후 숫자 파싱
   var amount = Math.max(0, parseInt(String((document.getElementById('tcalManualAmount')||{}).value||'').replace(/[^0-9]/g,'')) || 0);
   var memo = (document.getElementById('tcalManualMemo')||{}).value || '';
+  // 🆕 2026-10-30 수정 RPC(taam_manual_entry_update)는 메모 1000자를 넘으면 MEMO_TOO_LONG 으로 거절한다 — 추가 때 더 길게 저장되면 그 줄은 이름·인원도 영영 못 고쳤다(적대 리뷰)
+  if(memo.trim().length > 1000){ showToast('⚠','메모가 너무 길어요','1000자까지 적을 수 있어요 (지금 ' + memo.trim().length + '자)'); return; }
   var linkId = (document.getElementById('tcalManualLink')||{}).value || '';
 
   // 🔧 2026.08: 연결할 수 있는 티켓이 있는데 연결하지 않으면 막는다.
@@ -66653,6 +66655,7 @@ async function _tcalManualEditSaveInner(){
       else if(em.indexOf('STALE_EDIT') >= 0){ _tcalStaleToast(); await _tcalEditRefresh(); return; }
       else if(em.indexOf('TICKET_SOLD_OUT') >= 0){ showToast('⚠','잔여석 부족', em.replace(/^[\s\S]*TICKET_SOLD_OUT:\s*/, '').slice(0, 80)); return; }
       else if(em.indexOf('BAD_PHONE') >= 0){ showToast('⚠','번호 확인','국내 휴대폰 번호(010-…)만 받습니다'); return; }
+      else if(em.indexOf('MEMO_TOO_LONG') >= 0){ showToast('⚠','메모가 너무 길어요','1000자까지 적을 수 있어요'); return; }
       else if(em.indexOf('FORBIDDEN') >= 0){ showToast('❌','권한 오류','슈퍼어드민 또는 이 매장의 어드민만 고칠 수 있어요'); return; }
       else if(em.indexOf('ALREADY_CANCELLED') >= 0){ showToast('⚠','취소된 내역','이미 취소된 수동 예약이에요'); await _tcalEditRefresh(); return; }
       else if(em.indexOf('NOT_MANUAL') >= 0){ showToast('⚠','수동 내역 아님','수동 추가 행만 고칠 수 있어요'); return; }
