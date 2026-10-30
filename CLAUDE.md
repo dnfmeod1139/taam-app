@@ -499,7 +499,7 @@ DB 값은 `'A'` 그대로고 **이름만** 「게스트 회원」이다. 값을 
   국내 번호(010 등)만, 해외 번호는 `skip(해외번호)` 로 기록 · 템플릿이 없으면 기록하지 않고 건너뛴다(설정되면 그때 나간다). 응답에 `guest:{sent,failed,skipped,reason}`. 회원 소유 LINK-(memberUid)는 회원 푸시가 맡아 두 번 안 간다. 회귀 `t_guest_reminder.sh`(9건).
 - **게스트 회원 초대** — `20261019_guest_invite.sql`(실행 필요): 티켓 링크 결제가 paid 가 되면(`trg_taam_guest_invite_on_paid` · 비회원 · 결제자 번호 있음) `invite_codes` 에 **A 등급 초대장**(코드 `G`+7자 · 번호에 묶임 · `invited_by` 'pay_link' · 30일 · 같은 번호의 살아 있는 초대장은 재사용)을 만들고
   `payload.guest_invite_code` 에 적는다. `taam_kashikiri_charge_public`(md5 가드 교체)이 paid·비회원 청구에 `guest_invite{code,expires_at}` 를 주고 `/pay` 완료 화면이 「게스트 회원으로 가입하기」(초대 코드 + 앱 링크 `/?invite=코드`)를 그린다(퍼널 대신). 앱의 `?invite=` 는 **종전 `_autoFillInviteFromUrl`**(코드 화면 열기 · 입력칸 채움 · verify-invite welcome)이 그대로 처리한다 — 따로 부팅 블록을 두지 않는다(먼저 `replaceState` 로 지우면 그 경로가 코드를 못 읽는다 · 적대 리뷰). 재사용한 초대장의 만료는 그 초대장의 실제 `expires_at`.
-  **가입하면 티켓이 붙는다** — `taam_guest_attach_tickets(uid, code, phone)`: 그 청구의 LINK- 좌석 행 `user_id` 를 새 회원으로, `extra_data.memberUid` 를 적는다(그 뒤로 회원 행 — 리마인드·중복 가드·구매내역·첫 구매). 부르는 곳: `invite_codes.used` 가 true 로 바뀔 때(consume-invite · 회원은 **번호 → 이메일(`used_by_email`/`invitee_email` ↔ `profiles.email` · 이메일 OTP 로 가입한 해외 손님) → `member_id`** 순으로 찾는다) · `profiles` INSERT(가입 번호 = 결제자 번호 · 게스트 초대가 있는 청구만). 둘 다 실패를 삼킨다(가입을 막지 않는다).
+  **가입하면 티켓이 붙는다** — `taam_guest_attach_tickets(uid, code, phone)`: 그 청구의 LINK- 좌석 행 `user_id` 를 새 회원으로, `extra_data.memberUid` 를 적는다(그 뒤로 회원 행 — 리마인드·중복 가드·구매내역·첫 구매). 부르는 곳: `invite_codes.used` 가 true 로 바뀔 때(~~번호 → 이메일 → member_id 순으로 profiles 에서 찾는다~~ → **2026-10-30 부터 소진 가드가 적은 member_id**(인증된 주인)로만 · profiles 번호·이메일은 회원이 쓰던 칸이라 탈취 경로였다) · **번호가 인증되는 순간**(`trg_taam_guest_attach_on_verify`) · `profiles` INSERT(그 번호가 auth 에서 인증됐을 때만). 모두 실패를 삼킨다(가입을 막지 않는다). 해외 손님은 코드로만 묶인다 — 「🔑 가입·초대 강화」.
   등급은 A(게스트 · 90일 · `trg_taam_guard_membership_tier` 가 초대코드 값으로만) · 가입 문지기(`trg_taam_guard_signup`)는 초대장 번호와 OTP 번호를 대조한다. 회귀 `t_guest_invite.sh`(18건 · 이메일·member_id 붙이기 · 재사용 만료 · 이미 새 판·모르는 판) · 스크래치 `paypage.js`(38건 · 게스트 블록) · `invboot.js`(1건 · 종전 경로).
 
 ### 링크 초대 — 비회원·해외 손님을 티켓 회차에 태우는 길 (2026-09-29)
@@ -933,6 +933,8 @@ Apple 은 iPad 와 iPhone **두 기기로 심사**하므로(리뷰 노트에 명
 > 정말 재가입이 필요한 사람이 생기면 **그 사람만** 슈퍼어드민이 개별 해제한다
 > (해당 `auth.users` 행의 `phone` / `email` 정리). 정책 자체를 바꾸려면
 > 사용자에게 먼저 확인한다.
+> ⚠ 2026-10-30 부터 `auth.users.email` 변경은 `trg_taam_guard_auth_update` 가 막는다(`EMAIL_CHANGE_BLOCKED` · 대시보드 편집도 「Database error」).
+> SQL Editor 에서 `begin; set local taam.allow_email_change = '1'; update auth.users set email = … where id = …; commit;` 으로 한다(아래 「가입·초대 강화」).
 
 **8·9 를 더 조이려면** (필요해지면 그때 한다):
 - Supabase Auth → JWT expiry 를 3600 → 900초로 단축 (대시보드 설정, 코드 변경 없음)
@@ -1066,7 +1068,11 @@ Apple 은 iPad 와 iPhone **두 기기로 심사**하므로(리뷰 노트에 명
 | 티켓 연계(패키지) | `trg_taam_guard_ticket_package` · `trg_taam_guard_pkg_order_claim` · `trg_taam_guard_tp_package_delete` | 연계 회차의 회원 구매 행은 패키지 홀드로만 INSERT · active 는 패키지 확정 함수 안에서만(`PACKAGE_ONLY`) · 결제된 패키지의 한 줄 취소(회원·파트너)·인원 변경 막음 · 패키지 카드 주문은 새 Edge 만 paid · 연계 회차 삭제 막음 (2026-10-29, 위 「📦 티켓 연계(패키지)」) |
 | 알림 payload 크기 | `trg_taam_notif_payload_cap` | 회원 세션이 쓰는 notifications.payload — 문자열 500자 · 전체 16KB(넘으면 짧은 스칼라만). 서버·슈퍼어드민은 그대로 (2026-10-25, `20261025_notif_payload_cap.sql` · 위 「슈퍼어드민 알림 → 그 내역 화면」) |
 | 푸시 발송 | `send-push` Edge Function | 회원은 자기에게만. 어드민 상향 통지만 예외 |
-| 초대제 가입 | `trg_taam_guard_signup` (auth.users BEFORE INSERT) | **초대받은 사람만 계정이 생긴다** — 슈퍼어드민 화이트리스트 · `@partner.taam.kr` · 메타데이터 `invite_code`(미사용·미만료·초대장 번호/이메일 일치) · 초대장에 적힌 이메일/번호(소셜 첫 로그인). 그 밖은 `SIGNUP_NOT_INVITED` → GoTrue "Database error saving new user". 모드는 `app_config.signup_guard` (`enforce`, 2026-09-15 새벽 전환 · `log` 로 되돌림 가능). 판정 로그 `signup_guard_log`. 문지기 자체 오류는 `error` 로 적고 **막지 않는다** (`sql/signup_guard.sql`) |
+| 초대제 가입 | `trg_taam_guard_signup` (auth.users BEFORE INSERT) | **초대받은 사람만 · 초대장이 묶은 채널로만** — 슈퍼어드민 화이트리스트 · `@partner.taam.kr` 은 partner-account 가 직전에 적은 발급 예약(`partner_signup_allow` · 10분 · 한 번)이 있을 때만 · 메타데이터 `invite_code`(미사용·미만료 · **실제 가입 채널**(auth phone/email)이 초대장의 번호/이메일과 같아야 · 메타데이터 번호는 안 본다 · 묶임 없는 초대장 거절) · 해외 결제 링크 손님 초대장은 코드가 자격(그 이메일·번호가 다른 사람의 안 쓴 초대장에 묶여 있으면 `channel_reserved`) · 코드 없는 가입은 **소셜이고 제공자가 확인한 이메일**일 때만(안 쓴·안 지난 초대장). 그 밖은 `SIGNUP_NOT_INVITED` → GoTrue "Database error saving new user". 모드는 `app_config.signup_guard` (`enforce` · `log` 로 되돌림 가능). 판정 로그 `signup_guard_log`(해외 손님 주인의 근거 — **지우지 말 것**). **enforce 에서 문지기 자체 오류는 거절**(`SIGNUP_GUARD_ERROR` · 2026-10-30 · 종전엔 통과) (`supabase/migrations/20261030_auth_hardening.sql` · 옛 `sql/signup_guard.sql` 은 돌리지 말 것) |
+| 초대 소진 · 주인 | `trg_taam_guard_invite_consume` (invite_codes BEFORE INSERT/UPDATE) · `_taam_invite_owner_ok` | **누가 소진하든 주인은 서버가 정한다** — 주인 판정 하나(`_taam_invite_owner_ok`): member_id · 해외 손님 초대장은 그 코드로 가입·로그인한 유일한 계정(`_taam_code_owner`) · 번호 초대장은 OTP 로 확인된 번호 · 이메일 초대장은 이미 쓴 것은 같은 이메일, **안 쓴 것은 그 초대장의 코드로 문지기를 지난 계정**(또는 소셜 확인 이메일). member_id·used_by_* 는 그 계정 값으로 서버가 적고(요청 본문 무시) · 쓴 초대장의 사용 기록·안 쓴 초대장의 미리 적기·묶임 칸(번호·이메일·코드·등급…) 변경은 믿는 세션(슈퍼어드민·SQL Editor)만. 회원 세션 `INVITE_NOT_YOURS` · 서버(service_role) 주인 못 정함 `INVITE_OWNER_UNVERIFIED` · 묶임 없는 초대장은 못 만든다 `INVITE_UNBOUND` (2026-10-30) |
+| `invite_codes` 읽기 | RLS `invite_codes_read_own` | 로그인 회원은 **자기 초대장만**(주인 판정과 같은 식) · anon 없음 · 슈퍼어드민 전부. 앱의 로그인 대조 `user_has_invite_match` · `taam_my_invite` · `consume_invite_by_self` · 등급 `taam_invited_tier`(남의 uid 는 null) 도 같은 판정 (2026-10-30) |
+| `profiles` 연락처 · 글자 | `trg_taam_guard_profile_contact` · `trg_taam_profile_name_clean` | 회원 세션이 직접 쓰는 `phone`·`email` 은 auth 의 **인증된 값(또는 비움)만** — 아니면 되돌림(앱은 phone_change OTP 뒤에만 적는다) · 서버가 쓰는 이름은 꺾쇠·제어문자·javascript: 정리, 이메일은 `<>"` 면 비움, 번호는 번호 글자만, 그 밖 글자 칸은 태그 모양 꺾쇠 제거 (2026-10-30) |
+| 로그인 이메일 | `trg_taam_guard_auth_update` (auth.users BEFORE UPDATE) | **auth.users.email 은 못 바꾼다**(`EMAIL_CHANGE_BLOCKED`) — 이 프로젝트는 Confirm email 이 꺼져 있어 `updateUser({email})` 이 확인 없이 바로 바뀌었다. 운영자는 SQL Editor `set local taam.allow_email_change = '1'`. 메타데이터 갱신 때 이름 정리·`phone` 키 삭제 (2026-10-30) |
 | 환불 정책 | `taam_refund_cap` → `taam_apply_deposit_delta` ④ | 회원 환불은 **결제 30분 내 전액 · D-31 이상 총액−대행비 · 그 뒤 0** 을 서버가 센다. 앱 `calculateTicketRefund` 값은 참고일 뿐. 슈퍼어드민·옛 구매(tickets 없음)는 종전 (2026-09-14 밤, `sql/refund_policy_server.sql`) |
 
 이 표의 2026-09-13 항목은 `sql/audit_hardening_2026-09-13.sql` 한 파일이 만든다
@@ -1249,18 +1255,50 @@ platform `edge`)로 남고 토스트에 코드가 붙는다. 같은 빌링키 23
 | 높음 | `taam_change_party_size` 가 호출자가 적은 환불액을 그 행 주인의 예치금에 넣었다 — 파트너가 자기 수동 좌석으로 예치금을 만들고, 회원 구매에서 한 명 줄이며 대행비까지 돌려줄 수 있었다 | 서버 덧댐(같은 파일 ②) |
 | 중간 | `_taam_auth_email` 이 비로그인 호출을 「서버」로 봐 아무 회원의 이메일을 줬다(파트너 마이그레이션 판) | JWT 역할로 서버 판정 · anon 실행 권한 회수 |
 | 낮음 | Edge `notify-guest-booking` — 승인 대기·정지 파트너도 유료 알림톡을 보냈고 속도 제한이 없었다(force 로 무한 재발송) | `status=eq.approved` · 보내는 사람 시간당 40 · 한 예약 하루 4번(`taam_rate_hit`) · 200 「발송 한도」 |
-| **높음 · 보류(인증 담당)** | **초대제 가입 우회** — 전화에 묶인 초대 코드를 이메일 OTP 로(또는 그 반대로) 쓰면 문지기(`taam_guard_signup`)가 묶인 채널을 안 본다(양쪽 다 있을 때만 대조) · 가입 문지기와 등급 판정(`taam_invited_tier`)이 회원이 적는 `raw_user_meta_data.phone` 을 믿어 남의 초대 번호로 M 등급을 받는다 | 고치는 안: 초대장이 묶은 채널의 **인증된** 값(auth.users.phone/email)만 대조 · 메타데이터 번호 폴백 삭제 · 「대조할 값 없음」은 거절. ⚠ 소셜 첫 로그인(초대장의 이메일/번호와 다른 채널) 흐름이 막힐 수 있어 운영 결정이 필요하다 |
-| **높음 · 보류(인증 담당)** | 로그인한 회원끼리는 초대장을 서로 읽는다(위 anon 차단 뒤에도) | 고치는 안: 가입·로그인 흐름의 다섯 읽기(index.html 프로필 보충 · 가입 직후 등급 조회 두 곳 · OTP 확인 뒤 대조 · 이름 보충)를 인증된 이메일/번호로만 찾는 security definer RPC 로 옮긴 뒤 정책을 「자기 줄 + 슈퍼어드민」으로 |
+| **높음 · ✅ 2026-10-30 처리** | **초대제 가입 우회** — 전화에 묶인 초대 코드를 이메일 OTP 로(또는 그 반대로) 쓰면 문지기(`taam_guard_signup`)가 묶인 채널을 안 본다(양쪽 다 있을 때만 대조) · 가입 문지기와 등급 판정(`taam_invited_tier`)이 회원이 적는 `raw_user_meta_data.phone` 을 믿어 남의 초대 번호로 M 등급을 받는다 | 아래 「🔑 가입·초대 강화」(`20261030_auth_hardening.sql`) — 실제 가입 채널만 대조 · 메타데이터 번호 삭제 · 묶임 없는 코드 거절 · 등급도 같은 주인 판정 |
+| **높음 · ✅ 2026-10-30 처리** | 로그인한 회원끼리는 초대장을 서로 읽는다(위 anon 차단 뒤에도) | RLS 「자기 초대장만」(`invite_codes_read_own` · 주인 판정 하나) — 앱의 다섯 읽기는 자기 줄만 필요해 그대로 돈다 · `taam_my_invite` RPC 추가 |
 
 **수정분 리뷰(2 렌즈 → 확정 2 · 반영).** ① **HIGH — 인원 변경 한도가 회원이 적은 행 금액을 믿었다** — 회원(파트너와 짠 회원·파트너의 두 번째 계정)이 REST 로 금액 ₩1억의 미결제 PAYH- 홀드를 넣고 파트너가 인원을 줄이면 한도(행 금액 ÷ 인원)가 그대로 부풀어 예치금이 생겼다(재현) →
 위 표의 확정 구매·회차·정가·원장 한도. 한 명씩 나눠 줄이면 남긴 대행비가 새던 것(기각됐지만 재현)도 같이 — 앱 기본값 `_paxPolicyDefault` 도 같은 식(아니면 두 번째 감소의 제안액이 서버에 거절된다).
 ② LOW — 오늘 보드·예약 탭(`_tbRow`·`_rvRow`)이 운영 행에도 「인원 변경」을 그려 누르면 언제나 거절 → 운영 행엔 버튼 없음(캘린더와 같은 조건 · 수동은 캘린더 「수정」).
 덤(스캔 중 발견): 회원 관리 카드(`renderMemberList`)가 이름을 onclick 문자열에 `_esc` 로 넣어 `');alert(1);//` 같은 이름이 슈퍼어드민 세션에서 돌았다(HTML 이스케이프는 JS 가 돌기 전에 풀린다 · 꺾쇠가 없어 서버 글자 검사도 지난다) → `data-uid` 만.
-⚠ 보고만(인증 담당): 가입 때 GoTrue 가 `raw_user_meta_data.display_name` 을 `sync_profile_email_from_auth`(definer · auth.uid() null)로 profiles 에 복사해 K 글자 검사를 비켜 간다 — 화면 이스케이프가 막지만 그 sync 함수에서 `_taam_text_bad` 값은 비우는 것이 맞다.
+✅ 2026-10-30 처리(인증 담당 → 「🔑 가입·초대 강화」): 가입 메타데이터 이름이 서버 경로로 profiles 에 가던 길 — 라이브에선 `handle_new_user` 가 먼저 줄을 만들어 실제로는 닫혀 있었고, 진짜로 열린 길은 **메타데이터 `phone`** 이 `sync_profile_contact_from_auth` 로 profiles.phone 에 들어가던 것(태그 그대로). 문지기·갱신 트리거가 메타데이터를 정리하고 동기화 함수가 메타데이터 번호를 안 쓰며, 서버가 쓰는 profiles 글자는 `trg_taam_profile_name_clean` 이 정리한다.
 회귀: `t_security_audit.sh` 35건(+11) · 스크래치 `sa2/t.js`(14건).
 기각 1: 서버 전용 함수 일부(`taam_restock_kick` 등)가 public 만 거두고 anon·authenticated 기본 권한이 남은 것 — 회원 세션 안 트리거가 그 함수를 부르는지 먼저 봐야 해서(거두면 취소가 깨질 수 있다) 따로 점검.
 **2026-10-30 라이브 적용 ✅** — 자동 배포 #91: `20261029_security_audit.sql`(①② ✅ · invite_codes 정책 5개 전부 authenticated) · Edge `notify-guest-booking` 배포(승인 매장만 · 발송 한도).
 회귀: `bash sql/_test/t_security_audit.sh`(24건 — 라이브 모양 정책·저장소의 실제 인원 변경 함수 · 고치기 전 재현 둘 · anon 차단 · 회원·슈퍼어드민 그대로 · 운영 행·자기 구매·한도·30분·슈퍼어드민 · 재실행 · 모르는 판 ⚠) · `t_partner_grants.sh`(260건 · 이메일 조회·회원 이름 검사) · 스크래치 `ngb/harness.mjs`(6건 · 알림톡) · `pgrant/pg.js`(122건 · 두 화면 실제로 그려 XSS 없음).
+
+
+### 🔑 가입·초대 강화 (2026-10-30 · `20261030_auth_hardening.sql` · Edge `partner-account` · 빌드 `2026.10.30-a`)
+
+「초대장에 묶인 채널 대조가 느슨해 초대받지 않은 사람이 가입할 여지 · 로그인한 회원끼리 서로의 초대장을 읽는다 · 가입 때 표시 이름이 서버 글자 검사를 비켜 간다 — 전부 최대로 강화」.
+라이브 진단(읽기 전용 · `20261030_diag_signup_shape/src/impact/config.sql`): 문지기 enforce · 초대장 41 전부 사용됨(번호만 23 · 이메일만 18) · 최근 90일 통과는 전부 코드(번호 11 · 이메일 1) · 회원 38명 — 아래 엄격 대조로 바꿔도 로그인 대조가 바뀌는 회원 **0** ·
+메타데이터에 phone 을 가진 계정 0 · **이메일 계정 18/18 이 가입 2초 안에 확인됨 = 「Confirm email」 꺼짐**(번호는 OTP 를 거친다).
+
+| 막은 길(재현) | 어떻게 |
+|---|---|
+| 번호에 묶인 코드를 이메일 OTP 로(또는 반대로) — 대조할 쪽이 비면 통과 · 메타데이터 `phone` 을 믿음 · 묶임 없는 코드는 아무 채널로 | 문지기가 **실제 가입 채널**(auth phone/email)만 보고 초대장이 묶은 채널과 같아야(`_taam_invite_bind_reason` — invite_unbound · phone_mismatch · email_mismatch · channel_mismatch) · 메타데이터 `phone` 은 가입·갱신 때 버린다 |
+| 코드 없는 가입이 이미 쓴·만료된 초대장과도 맞으면 통과 · Confirm email 꺼짐이라 **비밀번호 가입이 남의 이메일로 바로 세션** | 코드 없는 가입은 소셜 + 제공자 확인 이메일 + 안 쓴·안 지난 초대장만 |
+| 회원이 `updateUser({email})` 로 남의 초대 이메일로 바로 바꿈(확인 없음) | `trg_taam_guard_auth_update` — 로그인 이메일 변경 금지(앱은 안 바꾼다 · SQL Editor `set local taam.allow_email_change='1'`) |
+| **결제 링크 손님 좌석 탈취** — 이메일 가입 회원이 profiles.phone 을 '1234' 로 바꾸고 `consume_invite_by_self`(4자리 부분 일치 · profiles 폴백)로 남의 손님 초대장을 소진 → `trg_taam_guest_attach_on_invite_used` 가 결제된 LINK- 좌석을 그 회원에게 · 또는 표에서 손님 코드를 읽어 Edge consume-invite 로(교차 채널 통과 · used_by_* 를 본문에서) | 소진 가드(`trg_taam_guard_invite_consume`) — 누가 소진하든 주인은 `_taam_invite_owner_ok` 를 지나는 계정이고 member_id·used_by_* 는 서버가 적는다 · 손님 붙이기는 member_id(또는 주인 판정이 하나일 때)로만 · profiles 번호·이메일은 회원 세션에서 인증 값만 · 자기 소진·로그인 대조·등급은 정확 일치만 |
+| 로그인 회원이 전 초대장(이름·번호·이메일·코드·등급)을 읽음(`USING true`) | `invite_codes_read_own` — 자기 초대장만 |
+| 메타데이터 `phone`·이름이 서버 경로(K 검사 밖)로 profiles 에(phone 은 라이브에서 실제로 열려 있었다) | 문지기·갱신 트리거가 정리 · 동기화 함수는 메타데이터 번호를 안 쓴다 · `trg_taam_profile_name_clean`(서버가 쓰는 profiles 글자) · 초대장 이름 칸도 정리 |
+| `@partner.taam.kr` 은 누구나 가입 | partner-account 가 `createUser` 직전에 `partner_signup_allow` 에 적고 문지기가 지운다(10분 · 한 번) |
+| 문지기 판정 오류는 통과 | enforce 에서 거절(`SIGNUP_GUARD_ERROR`) — 급하면 `app_config.signup_guard` 를 `log` 로 |
+| `taam_invited_tier` 가 남의 uid 등급을 답함 | 본인·슈퍼어드민·서버만 |
+| 슈퍼어드민 초대 목록이 이름·번호를 innerHTML · onclick 에 그대로(따옴표로 속성 탈출) | `renderInviteCodes` 이스케이프 · onclick 은 `_jsq`(JSON → 속성 이스케이프) |
+| 결제 링크 손님 국내 판정이 앞자리만 봐 +1 617… 을 국내로 | `_taam_kr_mobile`(엄격) · `taam_guest_invite_on_paid` 의 판정 줄만 교체(정확히 한 곳일 때) |
+
+- **해외 결제 링크 손님(코드로만 묶임)** — `invited_by='pay_link'` · 국내 휴대폰 아님 · 이메일 없음(`_taam_invite_code_only`). 앱은 해외 번호 OTP 를 못 하고 손님 이메일은 모르니 **코드가 자격**(결제 완료 화면에만 보인다).
+  주인 = 그 코드로 문지기를 지나 **로그인까지 한** 유일한 계정(`_taam_code_owner` · `signup_guard_log` allow 줄이 근거 — 그 표를 정리하는 작업을 두지 말 것). 둘 이상이면 아무도 주인이 아니다 → 슈퍼어드민이 SQL 로 member_id 를 정한다.
+  이미 주인이 있으면 `code_claimed` · 그 이메일·번호가 다른 사람의 안 쓴 초대장에 묶여 있으면 `channel_reserved` · 로그 기록을 못 남기면 거절. ⚠ 코드는 소지자 증표다 — 결제 링크 토큰을 가진 사람이 볼 수 있다.
+- **이메일 초대장의 주인** — 이미 쓴 것은 같은 이메일, **안 쓴 것은 그 초대장의 코드로 문지기를 지난 계정**(또는 소셜 확인 이메일). Confirm email 이 꺼져 있어 「이메일 확인됨」이 메일함 증거가 아니기 때문(2차 리뷰: 손님 코드로 남의 이메일 계정을 만들어 그 사람의 M 초대장·등급을 가져가던 길 재현).
+- **게스트 좌석 붙이기** — 소진 때(member_id) · **번호가 인증되는 순간**(`trg_taam_guest_attach_on_verify` · 가입 줄은 OTP 확인 전에 생기므로 가입 직후 붙이기는 인증된 번호일 때만).
+- ⚠ **운영 영향**: 국내 번호 초대장을 이메일로, 이메일 초대장을 번호로 가입하는 길이 없어졌다 — 해외에 있는 국내 회원 등은 그 채널로 **다시 발급**. 이메일 변경은 SQL Editor 로만. 문지기 오류는 이제 가입을 막는다.
+- ⚠ **남은 것**: ① **Confirm email 을 켜야** 이메일 쪽이 번호만큼 강해진다 — 대시보드 Authentication → Sign In / Providers → Email 「Confirm email」 ON + Email Templates 「Confirm signup」 본문에 `{{ .Token }}`(앱은 6자리 코드를 받는다 · 안 넣으면 새 해외 가입이 링크만 받아 막힌다). 켜기 전까지 이메일 초대장 코드가 새면 그 이메일로 비밀번호 가입이 가능하다(코드 필요).
+  ② Edge `verify-invite` · `consume-invite` 는 대시보드 판과 대조 전이라 손대지 않았다 — DB 가 지킨다(코드 상태·초대 이름 조회는 welcome 화면용으로 남음). ③ 회원이 `updateUser({phone})` 로 임의 국내 번호에 문자를 보내게 할 수 있다(비용 · GoTrue 속도 제한뿐 · `taam-sms-hook`).
+- 회귀: `bash sql/_test/t_auth_hardening.sh`(170건 — 옛 라이브 재현(교차 채널 · 메타데이터 번호 · 묶임 없는 코드 · 파트너 도메인 · 전 초대장 읽기 · 손님 좌석 탈취) · 문지기 · 소진 가드(회원/서버/anon/믿는 세션) · RLS · 대조 · 연락처 · 이름 · 해외 손님(주인 하나 · 오타 · 선점) · 이메일 변경 · 메타데이터 · 번호 인증 붙이기 · 국내 판정 · 권한(기본 권한 픽스처) · 규칙 8개 변이 전부 잡힘 · `TAAM_TEST_DB` 로 DB 이름) · 스크래치 `ich/t.js`(7건 · 초대 목록 이스케이프 · 고치기 전 판 ❌ 7).
+- 적대 리뷰: 1차(3 렌즈 · 27 에이전트) · 2차(4 렌즈 · 52 에이전트 → 확정: 손님 코드로 남의 이메일 선점(높음) · 오타 계정 주인 · 이메일 정리 · 거절 기록 · 테스트 빈칸 13) · 3차(주인 판정 재설계).
 
 ### 초대 결제 보안 — 받는 회원은 금액을 못 바꾸고, 원장 결제가 있어야 「결제됨」·좌석 확정 (2026-10-22 · `20261022_invite_payment_guard.sql` · **라이브 ✅**)
 
