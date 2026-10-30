@@ -122,11 +122,14 @@ create index if not exists signup_guard_log_code_idx on public.signup_guard_log(
 
 -- 이 코드로 가입이 허락된 인증 계정이 **정확히 하나**면 그 계정 · 0개·2개 이상이면 null(슈퍼어드민이 정한다)
 --   ⚠ signup_guard_log 의 allow 줄이 이 판정의 근거다 — 지우거나 정리하는 작업을 두지 말 것(해외 손님이 주인을 잃는다)
+--   코드로만 묶인 초대장(해외 결제 링크 손님)일 때만 답한다 — 번호·이메일에 묶인 초대장은 그 채널의 인증 값으로만 주인을 정한다
 create or replace function public._taam_code_owner(p_code text)
 returns uuid language sql stable security definer set search_path = public, auth as $$
   select case when count(distinct au.id) = 1 then (array_agg(au.id))[1] end
     from public.signup_guard_log l join auth.users au on au.id = l.user_id
    where nullif(btrim(coalesce(p_code, '')), '') is not null
+     and exists (select 1 from public.invite_codes ic where upper(btrim(ic.code)) = upper(btrim(p_code))
+                   and public._taam_invite_code_only(ic.invited_by, ic.country, ic.invitee_phone, ic.invitee_email))
      and l.verdict = 'allow' and upper(btrim(coalesce(l.invite_code, ''))) = upper(btrim(p_code))
      and (au.phone_confirmed_at is not null or au.email_confirmed_at is not null)
 $$;
@@ -336,7 +339,12 @@ begin
     return new;
   end if;
 
-  -- UPDATE
+  -- UPDATE — 믿는 세션이 아니면 초대장의 묶임·자격 칸은 그대로(소진과 함께 번호를 바꿔 주인을 갈아 끼우지 못하게)
+  if not v_trusted then
+    new.code := old.code; new.invitee_phone := old.invitee_phone; new.invitee_email := old.invitee_email;
+    new.invitee_tier := old.invitee_tier; new.invited_by := old.invited_by; new.country := old.country;
+    new.expires_at := old.expires_at; new.invitee_name := old.invitee_name;
+  end if;
   if coalesce(old.used, false) then
     -- 이미 쓴 초대장의 주인·사용 기록은 믿는 세션만 바꾼다
     if not v_trusted then

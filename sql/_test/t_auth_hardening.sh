@@ -246,6 +246,10 @@ ok "해외 손님 · 첫 계정 인증 뒤 두 번째 가입 → 거절(code_cla
 BA=$(q "select id from auth.users where email='bob-a@x.com';")
 ok "  … 등급 · 소진 전에도 코드 주인은 게스트 등급(A)" "A" "$(as_user $BA "select public.taam_invited_tier('$BA', null, null);")"
 ok "두 계정 모두 인증된 해외 코드(GSTEN004) · 아무도 못 본다" "0:0" "$(as_user $(q "select id from auth.users where email='jp-a@x.com';") "select count(*) from public.invite_codes where code='GSTEN004';"):$(as_user $(q "select id from auth.users where email='jp-b@x.com';") "select count(*) from public.invite_codes where code='GSTEN004';")"
+ok "Edge 소진과 함께 묶인 번호를 바꿔 주인 갈아 끼우기 → 거절(옛 번호의 주인 없음)" "INVITE_OWNER_UNVERIFIED" "$(as_svc "update public.invite_codes set invitee_phone='+1 617 999 0000', used=true where code='GSTKR005';" | grep -oE 'INVITE_OWNER_UNVERIFIED' | head -1)"
+ok "  … 번호만 바꾸기 → 되돌림" "010-6666-7777" "$(as_svc "update public.invite_codes set invitee_phone='+1 617 999 0000' where code='GSTKR005'; select invitee_phone from public.invite_codes where code='GSTKR005';")"
+ok "  … 그 바꾸기로 소진도 안 됨(주인 없음)" "f" "$(q "select used from public.invite_codes where code='GSTKR005';")"
+ok "번호에 묶인 초대장은 가입 로그로 주인이 되지 않는다" "" "$(q "select coalesce(public._taam_code_owner('PHON0001')::text, '');")"
 ok "서버 세션 · profiles 번호 태그 → 번호 글자만" "1" "$(as_svc "update public.profiles set phone='<svg onload=1>' where id='$A'; select phone from public.profiles where id='$A';")"
 ok "서버 세션 · profiles 이메일 이상 → 비움" "" "$(as_svc "update public.profiles set email='x@a.b<img src=x>' where id='$A'; select coalesce(email,'') from public.profiles where id='$A';")"
 ok "서버 세션 · 다른 글자 칸 태그 → 꺾쇠 제거" "b onmouseover=1KR" "$(as_svc "update public.profiles set membership_tier='<b onmouseover=1>KR' where id='$A'; select membership_tier from public.profiles where id='$A';")"
