@@ -242,6 +242,16 @@ AS "$SU" "update public.ticket_products set status = 'active' where id = 'tpH6' 
 ok "슈퍼어드민의 직접 「연계 없이 공개」(깊이 1)는 된다" "$(Q "select status from public.ticket_products where id = 'tpH6'")" "active"
 has "  ↳ 공개 뒤엔 단일 홀드가 들어간다" "$(H "$M1" c2000000-0000-4000-8000-0000000000f2 tpH6 1 PAYH-h6m '{}'; Q "select status from public.tickets where purchase_id = 'PAYH-h6m'")" "hold"
 
+echo "── 4c. 연계된 회차는 다시 숨기지 않는다(낡은 사본의 「숨김」 저장 · 2차 리뷰) ──"
+AS "$SU" "update public.ticket_products set status = 'hidden' where id = 'tpH1'" >/dev/null
+ok "연계된 회차를 직접 숨김으로 → 상태 그대로(active)" "$(Q "select status from public.ticket_products where id = 'tpH1'")" "active"
+AS "$SU" "insert into public.ticket_products(id,rest_id,rest_name,date,time,meal_fee,agency_fee,status,total_pax) select id,rest_id,'지 (고침)',date,time,meal_fee,agency_fee,'hidden',total_pax from public.ticket_products where id = 'tpH2' on conflict (id) do update set rest_name = excluded.rest_name, status = excluded.status" >/dev/null
+ok "  ↳ upsert(앱 저장 모양)로 hidden — 상태는 그대로 · 다른 칸은 반영" "$(Q "select status || '/' || rest_name from public.ticket_products where id = 'tpH2'")" "active/지 (고침)"
+has "  ↳ 패키지는 그대로 팔린다(단일 홀드 → PACKAGE_ONLY)" "$(H "$M1" c2000000-0000-4000-8000-0000000000f2 tpH2 1 PAYH-tpH2_s3 '{}')" "PACKAGE_ONLY"
+Q "insert into public.ticket_products(id,rest_id,rest_name,date,time,meal_fee,agency_fee,status,total_pax) values ('tpZ1','c2000000-0000-4000-8000-0000000000f1','에프','$(D '+120 days')','19:00',100000,10000,'active',4)" >/dev/null
+AS "$SU" "update public.ticket_products set status = 'hidden' where id = 'tpZ1'" >/dev/null
+ok "연계 안 된 회차는 숨길 수 있다(종전대로)" "$(Q "select status from public.ticket_products where id = 'tpZ1'")" "hidden"
+
 echo "── 5. 예약 수 함수 ──"
 BK=$(AS "$SU" "select public.taam_package_round_bookings(array['tpE','tpA','tpN5','nope'])")
 has "tpE 1건 2명" "$BK" '"tpE": {"n": 1, "pax": 2}'

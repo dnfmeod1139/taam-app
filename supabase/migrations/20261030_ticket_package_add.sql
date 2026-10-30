@@ -104,10 +104,16 @@ insert into _pka values ('C'' 숨김 회차에 좌석 막음(회원 구매 행 �
 
 -- ── C''. 숨김은 매진 동기화(중첩 갱신)가 못 바꾼다 — pending 과 같은 지킴 ──
 --   공개는 깊이 1 의 갱신만(연계 함수 _taam_pkg_reveal · 슈퍼어드민의 직접 「연계 없이 공개」).
+--   그리고 **연계된 회차는 다시 숨기지 않는다** — 로컬에 아직 hidden 으로 남은 낡은 사본(연계 응답을 잃음)을 「수정」해 저장하면
+--   upsert 가 hidden 을 보내 이미 공개·연계된 회차를 숨겼고, 그러면 패키지 전체가 ROUND_CLOSED 로 안 팔렸다(2차 리뷰).
+--   그 저장의 다른 칸은 그대로 두고 상태만 지킨다. 숨기려면 연계를 먼저 푼다.
 create or replace function public.taam_guard_tp_keep_hidden()
-returns trigger language plpgsql as $$
+returns trigger language plpgsql security definer set search_path = public as $$
 begin
   if pg_trigger_depth() > 1 and lower(coalesce(old.status, '')) = 'hidden' and lower(coalesce(new.status, '')) <> 'hidden' then
+    new.status := old.status;
+  elsif lower(coalesce(old.status, '')) <> 'hidden' and lower(coalesce(new.status, '')) = 'hidden'
+        and exists (select 1 from public.ticket_package_rounds r where r.ticket_product_id = new.id::text) then
     new.status := old.status;
   end if;
   return new;
@@ -116,7 +122,7 @@ revoke all on function public.taam_guard_tp_keep_hidden() from public, anon, aut
 drop trigger if exists trg_taam_tp_keep_hidden on public.ticket_products;
 create trigger trg_taam_tp_keep_hidden before update of status on public.ticket_products
   for each row execute function public.taam_guard_tp_keep_hidden();
-insert into _pka values ('C'''' 숨김은 매진 동기화가 못 바꾼다', '✅');
+insert into _pka values ('C'''' 숨김은 매진 동기화가 못 바꾼다 · 연계된 회차는 다시 숨기지 않는다', '✅');
 
 -- ── C. 숨김으로 올린 회차를 연계와 같은 트랜잭션에서 공개 ──
 create or replace function public._taam_pkg_reveal(p_rounds text[], p_reveal text[])
