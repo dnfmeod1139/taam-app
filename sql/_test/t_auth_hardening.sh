@@ -325,6 +325,25 @@ ok "주인 판정 함수 · 회원 실행 없음" "f" "$(q "select has_function_
 ok "이메일 존재 조회 · 회원·anon 실행 없음" "f:f:f:f" "$(q "select has_function_privilege('authenticated','public.email_exists_in_auth(text)','execute')::text || ':' || has_function_privilege('anon','public.email_exists_in_auth(text)','execute')::text || ':' || has_function_privilege('authenticated','public.email_exists_in_auth_other(text,uuid)','execute')::text || ':' || has_function_privilege('anon','public.email_exists_in_auth_other(text,uuid)','execute')::text" | sed 's/false/f/g;s/true/t/g')"
 ok "문지기 모드 함수 · 회원 실행 없음" "f" "$(q "select has_function_privilege('authenticated','public.taam_signup_guard_mode()','execute');")"
 
+echo "── 3차 리뷰 반영"
+$P -v ON_ERROR_STOP=1 >/dev/null <<SQL5
+insert into public.invite_codes(code,invitee_name,invitee_email,invitee_tier,invited_by,country,used,used_at) values
+ ('GHST0001','유령','ghost@x.com','M','admin','EN',true,now());
+insert into public.invite_codes(code,invitee_name,invitee_email,invitee_tier,invited_by,country) values ('REIS0001','재발급','re@x.com','T','admin','EN');
+insert into public.kashikiri_charges(id,link_invite,status,user_id,payer_phone,payer_name) values ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',true,'pending',null,'+1 505 555 1111','G');
+update public.kashikiri_charges set status='paid' where id='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+SQL5
+GC=$(q "select code from public.invite_codes where invitee_phone='+1 505 555 1111';")
+ok "쓴 초대장(주인 없음)의 빈 이메일 + 손님 코드 → 거절(channel_reserved) ⭐" "ERR:SIGNUP_NOT_INVITED: channel_reserved" "$(ins "'ghost@x.com'" "null" "{\"invite_code\":\"$GC\"}" '{"provider":"email"}')"
+ok "다시 발급 · 첫 시도(OTP 요청만)" "allow:invite_code" "$(ins "'re@x.com'" "null" '{"invite_code":"REIS0001"}' '{"provider":"email"}')"
+RU=$(q "select id from auth.users where email='re@x.com';")
+$P -c "update auth.users set email_confirmed_at = now() where id='$RU'; delete from public.invite_codes where code='REIS0001'; insert into public.invite_codes(code,invitee_name,invitee_email,invitee_tier,invited_by,country) values ('REIS0002','재발급','re@x.com','M','admin','EN');" >/dev/null
+$P -c "update auth.users set last_sign_in_at = now() where id='$RU';" >/dev/null
+ok "  … 새 코드(가입 줄 없음)도 그 사람 것 ⭐" "REIS0002" "$(as_user $RU "select string_agg(code, ',') from public.invite_codes;")"
+ok "  … 로그인 대조 통과" "t" "$(as_user $RU "select user_has_invite_match();")"
+ok "  … 등급 M" "M" "$(as_user $RU "select public.taam_invited_tier('$RU', null, null);")"
+ok "  … 자기 소진" "1" "$(as_user $RU "select consume_invite_by_self();")"
+
 echo "── 권한"
 ok "발급 예약 표 · 회원·anon 못 읽고 못 씀(기본 권한 회수)" "f:f:f" "$(q "select has_table_privilege('authenticated','public.partner_signup_allow','select')::text || ':' || has_table_privilege('authenticated','public.partner_signup_allow','insert')::text || ':' || has_table_privilege('anon','public.partner_signup_allow','insert')::text" | sed 's/false/f/g;s/true/t/g')"
 ok "내 초대장 RPC · anon 없음" "f" "$(q "select has_function_privilege('anon','public.taam_my_invite()','execute');")"

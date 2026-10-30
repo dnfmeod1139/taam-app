@@ -167,6 +167,9 @@ returns boolean language sql stable security definer set search_path = public, a
                               or (not coalesce(p_used, false) and lower(btrim(coalesce(p_iem, ''))) = lower(btrim(u.email))
                                   and (   exists (select 1 from public.signup_guard_log l where l.user_id = u.id and l.verdict = 'allow'
                                                     and upper(btrim(coalesce(l.invite_code, ''))) = upper(btrim(coalesce(p_code, ''))))
+                                       -- 다시 발급한 초대장: 이 계정이 같은 이메일의 초대장으로 문지기를 지난 적이 있다(손님 코드 가입 invite_code_only 는 아님)
+                                       or exists (select 1 from public.signup_guard_log l where l.user_id = u.id and l.verdict = 'allow'
+                                                    and l.reason in ('invite_code', 'invitee_match') and lower(btrim(coalesce(l.email, ''))) = lower(btrim(u.email)))
                                        or coalesce(u.raw_app_meta_data->>'provider', '') not in ('', 'email', 'phone'))))))))))
   )
 $$;
@@ -267,11 +270,13 @@ begin
         if v_phone is null and v_email is null then v_reason := 'channel_mismatch';
         elsif public._taam_code_owner(v_code) is not null then v_reason := 'code_claimed';   -- 이미 다른 계정이 이 코드로 가입·로그인했다
         elsif exists (select 1 from public.invite_codes ic2
-                       where upper(btrim(ic2.code)) <> v_code and not coalesce(ic2.used, false)
-                         and (public._taam_ts_safe(ic2.expires_at::text) is null or public._taam_ts_safe(ic2.expires_at::text) >= now())
+                       where upper(btrim(ic2.code)) <> v_code
                          and not public._taam_invite_code_only(ic2.invited_by, ic2.country, ic2.invitee_phone, ic2.invitee_email)
-                         and public._taam_invite_bind_reason(ic2.invitee_phone, ic2.invitee_email, v_phone, v_email) is null) then
-          -- 이 이메일·번호는 다른 사람의 안 쓴 초대장에 묶여 있다 — 손님 코드로 그 사람 자리를 먼저 차지하지 못하게
+                         and (   public._taam_invite_bind_reason(ic2.invitee_phone, ic2.invitee_email, v_phone, v_email) is null
+                              or (v_email is not null and lower(btrim(coalesce(ic2.used_by_email, ''))) = v_email)
+                              or (v_phone is not null and length(v_phone) >= 8 and public._taam_phone_key(ic2.used_by_phone) = v_phone))) then
+          -- 이 이메일·번호는 다른 사람의 초대장(쓴 것·안 쓴 것·만료 무관)에 묶여 있다 — 손님 코드로 그 사람 자리를 차지하지 못하게
+          --   (쓴 초대장도 본다: 주인이 안 적힌 옛 초대장은 같은 이메일 계정이 주인이 되므로 · 3차 리뷰)
           v_reason := 'channel_reserved';
         else v_verdict := 'allow'; v_reason := 'invite_code_only'; end if;
       else
@@ -809,15 +814,19 @@ union all select '⑦ 이메일 존재 조회 — 회원·anon 실행 없음',
        case when to_regprocedure('public.email_exists_in_auth_other(text, uuid)') is null then '⚠ 함수 없음'
             when not has_function_privilege('authenticated', 'public.email_exists_in_auth_other(text, uuid)', 'execute') and not has_function_privilege('anon', 'public.email_exists_in_auth_other(text, uuid)', 'execute') then '✅' else '❌' end
 union all select '⑧ 지금 초대장 — 묶임 없는 것(정보)', (select count(*)::text || '건' from public.invite_codes where public._taam_invite_bind_phone(invitee_phone) is null and public._taam_invite_bind_email(invitee_email) is null)
-union all select '⑧ 지금 회원 — 로그인 대조', (select case when count(*) filter (where not ok) = 0 then '✅ ' else '⚠ 대조 실패 ' || count(*) filter (where not ok) || '명 — ' end
+union all select '⑧ 지금 회원 — 로그인 대조(배포된 주인 판정 그대로)', (select case when count(*) filter (where not ok) = 0 then '✅ ' else '⚠ 대조 실패 ' || count(*) filter (where not ok) || '명 — ' end
                                           || count(*) filter (where ok)::text || ' / ' || count(*)::text from (
-         select exists (select 1 from public.invite_codes ic where ic.member_id = au.id::text
-                           or (au.phone_confirmed_at is not null and length(public._taam_phone_key(au.phone)) >= 8 and (public._taam_phone_key(ic.invitee_phone) = public._taam_phone_key(au.phone) or public._taam_phone_key(ic.used_by_phone) = public._taam_phone_key(au.phone)))
-                           or (au.email_confirmed_at is not null and nullif(lower(btrim(coalesce(au.email,''))),'') is not null and (lower(btrim(coalesce(ic.invitee_email,''))) = lower(btrim(au.email)) or lower(btrim(coalesce(ic.used_by_email,''))) = lower(btrim(au.email))))
-                           or (nullif(btrim(coalesce(ic.member_id, '')), '') is null and public._taam_code_owner(ic.code) = au.id)) as ok
+         select exists (select 1 from public.invite_codes ic
+                         where public._taam_invite_owner_ok(au.id, ic.used, ic.member_id, ic.code, ic.invited_by, ic.country,
+                                                            ic.invitee_phone, ic.invitee_email, ic.used_by_phone, ic.used_by_email)) as ok
            from auth.users au join public.profiles p on p.id = au.id
           where coalesce(p.role, 'user') not in ('admin','super_admin','superadmin','staff') and p.deleted_at is null
             and not exists (select 1 from public.admin_grants g where g.user_id = au.id)) s)
+union all select '⑧ member_id 가 묶인 채널의 다른 계정을 가리키는 초대장(정보)', (select count(*)::text from public.invite_codes ic
+         where exists (select 1 from auth.users x where x.id::text = btrim(coalesce(ic.member_id, '')))
+           and exists (select 1 from auth.users y where y.id::text <> btrim(ic.member_id)
+                        and ((y.phone_confirmed_at is not null and length(public._taam_phone_key(y.phone)) >= 8 and public._taam_phone_key(ic.invitee_phone) = public._taam_phone_key(y.phone))
+                          or (y.email_confirmed_at is not null and public._taam_invite_bind_email(ic.invitee_email) = lower(btrim(y.email))))))
 union all select '①-2 auth.users 갱신 가드(이메일 변경 · 메타데이터)', case when exists (select 1 from pg_trigger where tgname = 'trg_taam_guard_auth_update' and tgrelid = 'auth.users'::regclass) then '✅' else '❌' end
 union all select '②-2 번호 인증 뒤 게스트 좌석 붙이기', case when exists (select 1 from pg_trigger where tgname = 'trg_taam_guest_attach_on_verify' and tgrelid = 'auth.users'::regclass) then '✅' else '❌' end
 union all select '②-3 결제 링크 손님 국내 판정(엄격)', case when to_regprocedure('public.taam_guest_invite_on_paid()') is null then '⚠ 함수 없음'
