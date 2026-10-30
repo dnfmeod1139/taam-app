@@ -213,6 +213,35 @@ RA3=$(AS "$SU" "select public.taam_package_add_rounds('$PKU', array['tpH5'], arr
 has "더하기 + 공개 — tpH5" "$RA3" '"revealed": 1'
 ok "  ↳ tpH5 active · 패키지 회차 셋(방문일 순 H1 → H2 → H5)" "$(Q "select status from public.ticket_products where id = 'tpH5'")/$(Q "select string_agg(ticket_product_id, ',' order by sort) from public.ticket_package_rounds where package_id = '$PKU'")" "active/tpH1,tpH2,tpH5"
 
+echo "── 4b. 숨김 회차 — 운영 좌석 · 매진 동기화(중첩 갱신)가 못 푼다 ──"
+Q "insert into public.ticket_products(id,rest_id,rest_name,date,time,meal_fee,agency_fee,status,total_pax) values ('tpH6','c2000000-0000-4000-8000-0000000000f2','지','$(D '+95 days')','19:00',100000,10000,'hidden',2)" >/dev/null
+# 라이브 매진 동기화 모양 — 꽉 차면 soldout(지금 무엇이든) · 자리가 나면 soldout → active (sql/seat_hold_repair.sql 의 v4 와 같은 규칙)
+$P >/dev/null 2>&1 <<'SQL'
+create or replace function public.t_sync_soldout() returns trigger language plpgsql security definer set search_path = public as $f$
+declare v_tp text := coalesce(new.ticket_product_id, old.ticket_product_id); v_occ int; v_cap int;
+begin
+  select total_pax into v_cap from public.ticket_products where id = v_tp;
+  select coalesce(sum(party_size),0) into v_occ from public.tickets where ticket_product_id = v_tp and lower(coalesce(status,'')) not in ('cancelled','canceled','expired');
+  if v_cap is not null and v_occ >= v_cap then update public.ticket_products set status = 'soldout' where id = v_tp and status is distinct from 'soldout';
+  else update public.ticket_products set status = 'active' where id = v_tp and status = 'soldout'; end if;
+  return null; end $f$;
+create trigger trg_sync_ticket_soldout after insert or update on public.tickets for each row execute function public.t_sync_soldout();
+SQL
+has "파트너의 수동 좌석(MAN-) → TICKET_NOT_OPEN" "$(AS "$PT" "insert into public.tickets(user_id,restaurant_id,ticket_product_id,party_size,price,status,purchase_id) values ('$PT','x','tpH6',2,0,'manual','MAN-h6p')")" "TICKET_NOT_OPEN"
+has "슈퍼어드민의 수동 좌석도 → TICKET_NOT_OPEN(좌석이 서면 연계 못 함)" "$(AS "$SU" "insert into public.tickets(user_id,restaurant_id,ticket_product_id,party_size,price,status,purchase_id) values ('$SU','x','tpH6',2,0,'manual','MAN-h6s')")" "TICKET_NOT_OPEN"
+Q "insert into public.tickets(user_id,restaurant_id,ticket_product_id,party_size,price,status,purchase_id) values ('$SU','x','tpH6',2,0,'manual','MAN-h6')" >/dev/null
+ok "서버의 운영 좌석이 꽉 채워도 숨김 그대로(매진 동기화가 못 푼다)" "$(Q "select status from public.ticket_products where id = 'tpH6'")" "hidden"
+Q "update public.tickets set status = 'cancelled' where purchase_id = 'MAN-h6'" >/dev/null
+ok "  ↳ 빠져도 숨김 그대로(soldout → active · 취소표 알림 없음)" "$(Q "select status from public.ticket_products where id = 'tpH6'")" "hidden"
+has "슈퍼어드민이 취소된 좌석을 되살리기 → TICKET_NOT_OPEN" "$(AS "$SU" "update public.tickets set status = 'manual' where purchase_id = 'MAN-h6'")" "TICKET_NOT_OPEN"
+Q "update public.ticket_products set status = 'soldout' where id = 'tpN6'" >/dev/null
+Q "insert into public.tickets(user_id,restaurant_id,ticket_product_id,party_size,price,status,purchase_id) values ('$SU','x','tpN6',4,0,'manual','MAN-n6')" >/dev/null
+Q "update public.tickets set status = 'cancelled' where purchase_id = 'MAN-n6'" >/dev/null
+ok "숨김이 아닌 회차의 동기화는 종전대로(soldout → active)" "$(Q "select status from public.ticket_products where id = 'tpN6'")" "active"
+AS "$SU" "update public.ticket_products set status = 'active' where id = 'tpH6' and status = 'hidden'" >/dev/null
+ok "슈퍼어드민의 직접 「연계 없이 공개」(깊이 1)는 된다" "$(Q "select status from public.ticket_products where id = 'tpH6'")" "active"
+has "  ↳ 공개 뒤엔 단일 홀드가 들어간다" "$(H "$M1" c2000000-0000-4000-8000-0000000000f2 tpH6 1 PAYH-h6m '{}'; Q "select status from public.tickets where purchase_id = 'PAYH-h6m'")" "hold"
+
 echo "── 5. 예약 수 함수 ──"
 BK=$(AS "$SU" "select public.taam_package_round_bookings(array['tpE','tpA','tpN5','nope'])")
 has "tpE 1건 2명" "$BK" '"tpE": {"n": 1, "pax": 2}'

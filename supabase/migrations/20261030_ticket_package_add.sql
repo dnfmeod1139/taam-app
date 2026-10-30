@@ -16,6 +16,10 @@
 --   C. 업로드하면서 연계 — 앱이 새 회차를 **숨김(hidden)으로 올리고** 연계 함수가 같은 트랜잭션에서 공개(active)한다(p_reveal).
 --      연계가 실패하면 숨긴 채 남는다 — 단일로 잠깐이라도 팔리지 않는다. 새 패키지는 taam_package_save_reveal(만들기와 같은 인자 + 공개할 회차).
 --      숨김 회차에는 회원 구매 행(PAY*)을 못 넣는다(trg_taam_guard_ticket_hidden_round) — 앱만 숨기던 것을 서버도 막는다.
+--      로그인 호출의 운영 좌석(초대·수동·결제 링크 · 슈퍼어드민 포함)도 못 넣는다 — 좌석이 하나라도 서면 그 회차는 연계할 수 없게 된다(A).
+--      숨김은 매진 동기화(중첩 갱신)가 바꾸지 못한다(trg_taam_tp_keep_hidden — pending 과 같은 지킴) — 종전엔 운영 좌석이 꽉 차면
+--      hidden → soldout, 빠지면 soldout → active(취소표 알림까지)로 연계 없이 공개됐다(적대 리뷰 · 재현). 공개는 연계 함수(_taam_pkg_reveal) ·
+--      슈퍼어드민의 직접 「연계 없이 공개」(깊이 1)만.
 --   D. taam_package_round_bookings(회차들) — 회차마다 살아 있는 예약 수(화면의 「예약 N건 — 연계 불가」).
 -- ═══════════════════════════════════════════════════════════════
 create temp table if not exists _pka(항목 text, 결과 text);
@@ -78,20 +82,41 @@ insert into _pka values ('A 예약 있는 회차는 연계 못 함(만들기·�
 -- ── C'. 숨김 회차에는 회원 구매 행을 못 넣는다 ──
 create or replace function public.taam_guard_ticket_hidden_round()
 returns trigger language plpgsql security definer set search_path = public as $$
+declare v_dead text[] := array['cancelled', 'canceled', 'expired', 'refunded', 'failed'];
 begin
-  if coalesce(new.purchase_id, '') !~ '^PAY' then return new; end if;
-  if lower(coalesce(new.status, '')) in ('cancelled', 'canceled', 'expired') then return new; end if;
-  if tg_op = 'UPDATE' and new.ticket_product_id is not distinct from old.ticket_product_id then return new; end if;
+  if lower(coalesce(new.status, '')) = any(v_dead) then return new; end if;
+  -- 이 갱신이 새로 「숨김 회차의 살아 있는 좌석」을 만드는 경우만 — 회차를 옮기거나 · 죽은 행을 되살릴 때
+  if tg_op = 'UPDATE' and new.ticket_product_id is not distinct from old.ticket_product_id
+     and not (lower(coalesce(old.status, '')) = any(v_dead)) then return new; end if;
+  -- 회원 구매 행(PAY*)은 누가 넣든 · 운영 좌석(초대·수동·결제 링크·정산)은 로그인 호출(슈퍼어드민 포함)만 막는다 — 서버(Edge·SQL Editor)는 그대로
+  if coalesce(new.purchase_id, '') !~ '^PAY' and auth.uid() is null then return new; end if;
   if exists (select 1 from public.ticket_products tp where tp.id::text = new.ticket_product_id::text and lower(coalesce(tp.status, '')) = 'hidden') then
-    raise exception 'TICKET_NOT_OPEN: 지금 판매하지 않는 일정입니다' using errcode = '42501';
+    raise exception 'TICKET_NOT_OPEN: 지금 판매하지 않는 일정입니다(숨김 — 패키지 연계 대기) — 📦 티켓 패키지에서 연계하거나 「연계 없이 공개」 뒤에'
+      using errcode = '42501';
   end if;
   return new;
 end $$;
 revoke all on function public.taam_guard_ticket_hidden_round() from public, anon, authenticated;
 drop trigger if exists trg_taam_guard_ticket_hidden_round on public.tickets;
-create trigger trg_taam_guard_ticket_hidden_round before insert or update of ticket_product_id on public.tickets
+create trigger trg_taam_guard_ticket_hidden_round before insert or update of ticket_product_id, status on public.tickets
   for each row execute function public.taam_guard_ticket_hidden_round();
-insert into _pka values ('C'' 숨김 회차에 회원 구매 행 막음', '✅');
+insert into _pka values ('C'' 숨김 회차에 좌석 막음(회원 구매 행 · 로그인 호출의 운영 좌석)', '✅');
+
+-- ── C''. 숨김은 매진 동기화(중첩 갱신)가 못 바꾼다 — pending 과 같은 지킴 ──
+--   공개는 깊이 1 의 갱신만(연계 함수 _taam_pkg_reveal · 슈퍼어드민의 직접 「연계 없이 공개」).
+create or replace function public.taam_guard_tp_keep_hidden()
+returns trigger language plpgsql as $$
+begin
+  if pg_trigger_depth() > 1 and lower(coalesce(old.status, '')) = 'hidden' and lower(coalesce(new.status, '')) <> 'hidden' then
+    new.status := old.status;
+  end if;
+  return new;
+end $$;
+revoke all on function public.taam_guard_tp_keep_hidden() from public, anon, authenticated;
+drop trigger if exists trg_taam_tp_keep_hidden on public.ticket_products;
+create trigger trg_taam_tp_keep_hidden before update of status on public.ticket_products
+  for each row execute function public.taam_guard_tp_keep_hidden();
+insert into _pka values ('C'''' 숨김은 매진 동기화가 못 바꾼다', '✅');
 
 -- ── C. 숨김으로 올린 회차를 연계와 같은 트랜잭션에서 공개 ──
 create or replace function public._taam_pkg_reveal(p_rounds text[], p_reveal text[])
@@ -141,7 +166,7 @@ begin
      and ((po.status = 'pending' and po.created_at > now() - interval '3 days')
        or (po.status = 'paid' and not (o.status in ('paid', 'cancelled') and o.order_id = po.order_id)));
   if coalesce(v_paid, 0) > 0 or coalesce(v_hold, 0) > 0 or coalesce(v_card, 0) > 0 then
-    raise exception 'PACKAGE_HAS_BUYERS: 구매자가 있는 패키지에는 회차를 더할 수 없습니다 (결제 %건 · 결제 중 %건 · 카드 확인 중 %건) — 연계를 풀고 새로 만드세요',
+    raise exception 'PACKAGE_HAS_BUYERS: 구매자가 있는 패키지에는 회차를 더할 수 없습니다 (결제 %건 · 결제 중 %건 · 카드 확인 중 %건) — 결제 중이면 몇 분 뒤 다시 · 결제된 패키지는 구성을 바꿀 수 없습니다(풀어도 판 좌석이 남아 다시 묶이지 않는다)',
       coalesce(v_paid, 0), coalesce(v_hold, 0), coalesce(v_card, 0) using errcode = '22023';
   end if;
 
@@ -215,8 +240,8 @@ union all select '필요한 20261029 함수(taam_package_save · _taam_pkg_confl
        case when to_regprocedure('public.taam_package_save(text, text, text[], text, text, text, text, text)') is not null
              and to_regprocedure('public._taam_pkg_conflicts(text[])') is not null and to_regproc('public._taam_pkg_super_ok') is not null
             then '✅' else '❌ 20261029_ticket_package.sql 먼저' end
-union all select '트리거 둘', case when (select count(*) from pg_trigger where not tgisinternal
-                                         and tgname in ('trg_taam_guard_pkg_round_booked', 'trg_taam_guard_ticket_hidden_round')) = 2 then '✅' else '❌' end
+union all select '트리거 셋', case when (select count(*) from pg_trigger where not tgisinternal
+                                         and tgname in ('trg_taam_guard_pkg_round_booked', 'trg_taam_guard_ticket_hidden_round', 'trg_taam_tp_keep_hidden')) = 3 then '✅' else '❌' end
 union all select '회원·비로그인이 도우미를 못 부른다',
        case when has_function_privilege('authenticated', 'public._taam_pkg_reveal(text[], text[])', 'execute')
               or has_function_privilege('authenticated', 'public._taam_pkg_round_live(text)', 'execute')

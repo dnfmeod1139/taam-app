@@ -7581,6 +7581,7 @@ function _plTicketOpts(){
   (window.ticketDB || []).slice().sort(function(a, b){ return String(_tkFullDate(a) || a.date).localeCompare(String(_tkFullDate(b) || b.date)); }).forEach(function(t){
     if (isAdmin && typeof _currentAdminRestId !== 'undefined' && _currentAdminRestId && String(t.restId) !== String(_currentAdminRestId)) return;
     if (t.status === 'soldout') return;
+    if (t.status === 'hidden' || t.status === 'pending') return;   // 🆕 2026-10-30 숨김(패키지 연계 대기)·승인 대기 — 결제 링크 좌석을 붙이지 않는다(서버도 막는다)
     if (typeof _isTicketExpired === 'function' && _isTicketExpired(t)) return;
     var r = (window.restaurantDB || []).find(function(x){ return String(x.id) === String(t.restId); });
     var nm = (r && r.name) || t.rest || '매장';
@@ -8031,7 +8032,7 @@ function _plaTicketOpts(){
   (window.ticketDB || []).slice().sort(function(a, b){ return String((typeof _tkFullDate === 'function' && _tkFullDate(a)) || a.date).localeCompare(String((typeof _tkFullDate === 'function' && _tkFullDate(b)) || b.date)) || String(a.time || '').localeCompare(String(b.time || '')); }).forEach(function(t){
     if (String(t.id) === String(pick)) found = true;
     var past = (typeof _isTicketExpired === 'function' && _isTicketExpired(t));
-    html += '<option value="' + _plEsc(String(t.id)) + '"' + (String(t.id) === String(pick) ? ' selected' : '') + '>' + _plEsc((typeof _pxTicketLabel === 'function' ? _pxTicketLabel(t) : (t.rest + ' ' + t.date + ' ' + (t.time || ''))) + (t.status === 'soldout' ? ' · 매진' : '') + (past ? ' · 지난 회차' : '')) + '</option>';
+    html += '<option value="' + _plEsc(String(t.id)) + '"' + (String(t.id) === String(pick) ? ' selected' : '') + '>' + _plEsc((typeof _pxTicketLabel === 'function' ? _pxTicketLabel(t) : (t.rest + ' ' + t.date + ' ' + (t.time || ''))) + (t.status === 'soldout' ? ' · 매진' : '') + (t.status === 'hidden' ? ' · 숨김(연계 대기)' : '') + (past ? ' · 지난 회차' : '')) + '</option>';
   });
   if (pick && !found) html += '<option value="' + _plEsc(pick) + '" selected>' + _plEsc('회차 ' + pick + ' (목록에 없음)') + '</option>';
   return html;
@@ -8727,7 +8728,7 @@ function _pxTicketOpts(){
   (window.ticketDB || []).slice().sort(function(a, b){ return String((typeof _tkFullDate === 'function' && _tkFullDate(a)) || a.date).localeCompare(String((typeof _tkFullDate === 'function' && _tkFullDate(b)) || b.date)) || String(a.time || '').localeCompare(String(b.time || '')); }).forEach(function(t){
     if (typeof _isTicketExpired === 'function' && _isTicketExpired(t) && String(t.id) !== String(pick)) return;
     if (String(t.id) === String(pick)) found = true;
-    html += '<option value="' + _plEsc(String(t.id)) + '"' + (String(t.id) === String(pick) ? ' selected' : '') + '>' + _plEsc(_pxTicketLabel(t) + (t.status === 'soldout' ? ' · 매진' : '')) + '</option>';
+    html += '<option value="' + _plEsc(String(t.id)) + '"' + (String(t.id) === String(pick) ? ' selected' : '') + '>' + _plEsc(_pxTicketLabel(t) + (t.status === 'soldout' ? ' · 매진' : '') + (t.status === 'hidden' ? ' · 숨김(연계 대기)' : '')) + '</option>';
   });
   if (pick && !found) html += '<option value="' + _plEsc(pick) + '" selected>' + _plEsc('회차 ' + pick + ' (목록에 없음)') + '</option>';
   return html;
@@ -47072,6 +47073,8 @@ function uploadTicket(){
       if(_tuEditId){
         var _o = ticketDB.find(function(x){ return String(x.id) === String(_tuEditId); });
         if(_o && _o.status === 'soldout') return 'soldout';
+        // 🆕 2026-10-30 숨김(패키지 연계 대기)은 고쳐도 숨김 — 종전엔 슈퍼어드민 수정이 active 로 올려 단일로 공개됐다(적대 리뷰)
+        if(_o && _o.status === 'hidden') return 'hidden';
         // 🆕 2026-10-29 매장 어드민의 수정은 status 를 **그대로** 보낸다 — 승인된 회차의 내용 변경은 서버가 되돌려 pending_edit 큐에 적고(승인 뒤 반영),
         //   승인 대기 회차는 그대로 pending. 'pending' 을 보내면 서버가 BAD_STATUS_CHANGE 로 거절한다(1차 판의 어긋남 · 리뷰).
         if(_currentRole === 'admin' && _o && _o.status) return _o.status;
@@ -47549,6 +47552,8 @@ function riPopulateLinkTickets(){
     // 🆕 2026.08: 파트너 어드민은 자기 매장 티켓만 연결 가능
     if(_currentRole === 'admin' && _currentAdminRestId && String(t.restId) !== String(_currentAdminRestId)) return;
     if(t.status === 'soldout') return;
+    // 🆕 2026-10-30 숨김(패키지 연계 대기)·승인 대기 회차에는 초대 좌석을 붙이지 않는다 — 좌석이 서면 연계를 못 하고 서버도 막는다
+    if(t.status === 'hidden' || t.status === 'pending') return;
     if(typeof _isTicketExpired === 'function' && _isTicketExpired(t)) return;
     var r = (restaurantDB || []).find(function(x){ return String(x.id) === String(t.restId); });
     var nm = (r && r.name) || t.rest || '매장';
@@ -47837,6 +47842,7 @@ async function riSubmit(){
     var _riCands = (ticketDB || []).filter(function(t){
       if(String(t.restId) !== String(_riRestId)) return false;
       if(t.status === 'soldout') return false;
+      if(t.status === 'hidden' || t.status === 'pending') return false;   // 🆕 2026-10-30 숨김(연계 대기)·승인 대기 회차는 후보가 아니다
       if(typeof _isTicketExpired === 'function' && _isTicketExpired(t)) return false;
       if(_currentRole === 'admin' && _currentAdminRestId && String(t.restId) !== String(_currentAdminRestId)) return false;
       var _fd = (typeof _tkFullDate === 'function') ? _tkFullDate(t) : t.date;
@@ -49416,6 +49422,7 @@ function finalUploadTicket(){
       window._tkEditSubmitIds = window._tkEditSubmitIds || {}; window._tkEditSubmitIds[String(_tuEditId)] = true;
       showToast('⏳','수정 신청 저장 중','승인된 회차의 변경은 TAAM 승인 뒤 반영됩니다');
     }
+    else if(_pendingTicket.status === 'hidden') showToast('✓','수정 완료','아직 숨김(패키지 연계 대기)입니다 — 📦 티켓 패키지에서 연계하거나 티켓 리스트의 「연계 없이 공개」로');
     else showToast('✓','수정 완료','티켓 정보가 업데이트되었습니다');
     _tuEditId=null;
   } else {
@@ -50300,13 +50307,16 @@ function renderTicketList(){
     });
     var _acts = _tuFlexMode ? '' :
       '<div class="tkl-acts">'
-      + '<button class="tkl-btn '+(isSold?'resume':'sold')+'" onclick="tuToggleSoldout(\''+t.id+'\')">'+(isSold?'판매 재개':'매진')+'</button>'
+      + (t.status==='hidden'
+          ? '<button class="tkl-btn" onclick="tuHiddenLink(\''+_pkSafeId(t.id)+'\')" style="color:#8A6A28;">📦 연계</button>'
+            + '<button class="tkl-btn" onclick="tuHiddenPublish(\''+_pkSafeId(t.id)+'\')">연계 없이 공개</button>'
+          : '<button class="tkl-btn '+(isSold?'resume':'sold')+'" onclick="tuToggleSoldout(\''+t.id+'\')">'+(isSold?'판매 재개':'매진')+'</button>')
       + ((t.deadlineDate||t.gradeOpen)?'<button class="tkl-btn extend" onclick="openExtendPopup(\''+t.id+'\')">연장</button>':'')
       // 🆕 2026-09-03: 게스트는 이제 **티켓 이용 등급 = 일반공개** 로 받는다.
       //   게스트석은 두 갈래가 되어 헷갈리므로 입구를 닫았다.
       //   ⚠ 코드·SQL 은 지우지 않았다. 열려 있는 자리가 남아 있으면(● )
       //     버튼을 계속 보여줘야 닫을 수 있다 — 안 보이면 영영 못 닫는다.
-      + (_gsOpen ? '<button class="tkl-btn guest" onclick="tuGuestSeat(\''+t.id+'\')">게스트석 ●</button>' : '')
+      + ((_gsOpen && t.status!=='hidden') ? '<button class="tkl-btn guest" onclick="tuGuestSeat(\''+t.id+'\')">게스트석 ●</button>' : '')
       // 🆕 2026-10-13 이 회차만 재구매 제한 해제 — 슈퍼어드민 · 매장에 재구매 제한이 있을 때만
       + (_tuRepurchaseBtn(t))
       + '<button class="tkl-btn" onclick="tuEditTicket(\''+t.id+'\')">수정</button>'
@@ -50470,9 +50480,30 @@ function tkToggleFlexStrict(id){
 }
 window.tkToggleFlexStrict = tkToggleFlexStrict;
 
+// 🆕 2026-10-30 숨김(패키지 연계 대기) 회차 — 「연계 없이 공개」(단일 판매) · 「📦 연계」(패키지 화면에서 이 회차를 미리 골라 둔다)
+async function tuHiddenPublish(id){
+  id = _pkSafeId(id);
+  var t = ticketDB.find(function(x){ return String(x.id) === id; }); if(!t || !window.sb) return;
+  if(!confirm('이 회차를 패키지 없이 공개합니다 — 단일 티켓으로 팔립니다.\n(나중에 예약이 생기면 패키지에 묶을 수 없습니다)')) return;
+  var r = await window.sb.from('ticket_products').update({ status: 'active', updated_at: new Date().toISOString() }).eq('id', id).eq('status', 'hidden').select('id');
+  if(r.error){ showToast('⚠', '공개하지 못했습니다', String(r.error.message || '').slice(0, 100)); return; }
+  if(!(r.data || []).length){ try { await _tkRefreshFromServer([id], { quiet: true }); } catch(_r){} showToast('ⓘ', '이미 숨김이 아닙니다', '서버의 지금 상태로 다시 그렸습니다(이미 공개·연계됐을 수 있습니다)'); return; }
+  t.status = 'active';
+  try { await _tkRefreshFromServer([id], { quiet: true }); } catch(_r2){}
+  showToast('✓', '공개했습니다', '단일 티켓으로 판매됩니다');
+}
+window.tuHiddenPublish = tuHiddenPublish;
+async function tuHiddenLink(id){
+  window._pkaPreSel = _pkSafeId(id);
+  await pkgAdminOpen();
+  showToast('📦', '이 회차를 골라 두었습니다', '「새 패키지 만들기」나 패키지의 「＋ 회차 추가」를 누르면 함께 들어갑니다 — 연계와 함께 공개');
+}
+window.tuHiddenLink = tuHiddenLink;
 function tuToggleSoldout(id, after){
   var t=ticketDB.find(function(x){return String(x.id)===String(id);});
   if(!t)return;
+  // 🆕 2026-10-30 숨김(패키지 연계 대기) 회차는 매진·판매 재개로 상태를 바꾸지 않는다 — 그러면 연계 없이 공개된다(적대 리뷰)
+  if(t.status === 'hidden'){ showToast('ⓘ','숨김 회차입니다','📦 연계하거나 「연계 없이 공개」를 먼저 — 매진·판매 재개는 공개된 회차에서'); return; }
   // 🆕 2026-09-21 한 번 더 묻는다 (목록을 넘기다 스쳐 상태가 바뀌던 문제)
   //   ⚠ 이제 비동기다 — 부른 쪽이 바로 다시 그리면 옛 상태가 보인다. after 로 받는다.
   var _toSold = (t.status !== 'soldout');
@@ -51198,9 +51229,10 @@ function tuPkgUnpick(el){
 }
 window.tuPkgUnpick = tuPkgUnpick;
 // 기존 회차 고르기 — 패키지 화면과 같은 후보(연계 안 된 · 팔 수 있는 · 지나지 않은 · 연도 있는 회차) · 예약 있는 회차는 못 고른다
-function _tuPkgCands(){
+function _tuPkgCands(){ return _tuPkgEligible(_tuPkg.q).slice(0, 120); }
+function _tuPkgEligible(qv){
   var linked = window._tkPkgByRound || {};
-  var q = String(_tuPkg.q || '').trim().toLowerCase();
+  var q = String(qv || '').trim().toLowerCase();
   return (ticketDB || []).filter(function(t){
     if(!t || linked[String(t.id)]) return false;
     if(['pending', 'deleteRequest', 'hidden', 'deleted', 'cancelled'].indexOf(String(t.status || '')) >= 0) return false;
@@ -51209,7 +51241,7 @@ function _tuPkgCands(){
     if(!q) return true;
     var nm = String(_pcalRestName(t) || t.rest || '').toLowerCase();
     return nm.indexOf(q) >= 0 || String(_tkFullDate(t)).indexOf(q) >= 0;
-  }).sort(function(a, b){ return String(_tkFullDate(a) + ' ' + (a.time || '')).localeCompare(String(_tkFullDate(b) + ' ' + (b.time || ''))); }).slice(0, 120);
+  }).sort(function(a, b){ return String(_tkFullDate(a) + ' ' + (a.time || '')).localeCompare(String(_tkFullDate(b) + ' ' + (b.time || ''))); });
 }
 function _tuPkgBooked(id){ var b = _tuPkg.book && _tuPkg.book[String(id)]; return (b && Number(b.n) > 0) ? b : null; }
 function _tuPkgCandHtml(){
@@ -51238,20 +51270,19 @@ async function tuPkgPickOpen(){
   document.body.appendChild(el);
   // 예약 수(서버) — 못 읽으면 고르게 두고 연계할 때 서버가 거절한다
   try {
-    var ids = _tuPkgCands().map(function(t){ return String(t.id); }).concat(_tuPkg.sel).slice(0, 400);
-    var r = await window.sb.rpc('taam_package_round_bookings', { p_rounds: ids });
-    if(!r.error) _tuPkg.book = r.data || {};
-    else { var be = document.getElementById('tuPkgBookErr'); if(be) be.textContent = '예약 수를 못 읽었습니다 — 연계할 때 서버가 확인합니다'; }
+    var err = await _pkBookingsFetch(_tuPkgEligible('').map(function(t){ return String(t.id); }).concat(_tuPkg.sel), _tuPkg);
+    if(err){ _tuPkg.bookErr = true; var be = document.getElementById('tuPkgBookErr'); if(be) be.textContent = '예약 수를 못 읽었습니다 — 연계할 때 서버가 확인합니다'; }
   } catch(_e){}
   var c = document.getElementById('tuPkgCand'); if(c) c.innerHTML = _tuPkgCandHtml();
 }
 window.tuPkgPickOpen = tuPkgPickOpen;
 function tuPkgPickQ(v){ _tuPkg.q = v; var c = document.getElementById('tuPkgCand'); if(c) c.innerHTML = _tuPkgCandHtml(); }
 window.tuPkgPickQ = tuPkgPickQ;
-function tuPkgPickToggle(el){
+async function tuPkgPickToggle(el){
   var v = _pkSafeId(el && el.getAttribute('data-tpk'));
   var i = _tuPkg.sel.indexOf(v);
-  if(i < 0 && _tuPkgBooked(v)){ showToast('⚠', '예약이 있는 회차입니다', '예약이 없는 회차만 연계할 수 있습니다'); return; }
+  if(i < 0 && !(_tuPkg.known && _tuPkg.known[v]) && !_tuPkg.bookErr){ try { await _pkBookingsFetch([v], _tuPkg); } catch(_bf){} }
+  if(i < 0 && _tuPkgBooked(v)){ showToast('⚠', '예약이 있는 회차입니다', '예약이 없는 회차만 연계할 수 있습니다'); var _c0 = document.getElementById('tuPkgCand'); if(_c0) _c0.innerHTML = _tuPkgCandHtml(); return; }
   if(i >= 0) _tuPkg.sel.splice(i, 1);
   else if(_tuPkgCount() + _tuPkg.sel.length < 8) _tuPkg.sel.push(v);
   else { showToast('⚠', '회차는 합쳐서 8개까지', ''); return; }
@@ -51325,16 +51356,40 @@ async function _tuPkgLinkAfter(svP, ids, link){
   return _tuPkgDoLink(ids, link);
 }
 async function _tuPkgDoLink(ids, link){
-  var r;
+  var r, errMsg = '';
   try {
     r = (link.mode === 'add')
       ? await window.sb.rpc('taam_package_add_rounds', { p_id: link.pkgId, p_rounds: ids, p_reveal: ids })
       : await window.sb.rpc('taam_package_save_reveal', { p_reveal: ids, p_title: link.title, p_rounds: ids.concat(link.sel || []) });
-  } catch(e){ return _tuPkgFail(ids, link, '연결이 끊겼습니다 — ' + String((e && e.message) || '').slice(0, 80)); }
-  if(r.error) return _tuPkgFail(ids, link, _pkaErrText(r.error));
+    if(r.error) errMsg = _pkaErrText(r.error);
+  } catch(e){ errMsg = '연결이 끊겼습니다 — ' + String((e && e.message) || '').slice(0, 80); }
+  if(errMsg){
+    // 🆕 2026-10-30 응답만 잃어버렸을 수 있다(서버는 연계·공개를 마쳤다 — 「다시 시도」가 ROUND_IN_PACKAGE 로 돌아오는 것도 같다) — 서버의 지금 상태로 판단한다(적대 리뷰)
+    var st = await _tuPkgLinkedState(ids, link);
+    if(st === 'linked') return _tuPkgLinkedOk(ids, link);
+    return _tuPkgFail(ids, link, errMsg, { unknown: st === 'unknown' });
+  }
+  return _tuPkgLinkedOk(ids, link);
+}
+async function _tuPkgLinkedOk(ids, link){
   ids.forEach(function(id){ var t = _tuPkgTk(id); if(t && t.status === 'hidden') t.status = 'active'; });
   try { await _pkaAfterLink(ids, ids); } catch(_a){}
   showToast('📦', '패키지에 연계했습니다', '「' + link.title + '」 — 올린 회차 ' + ids.length + '개가 공개됐습니다(패키지로만 판매)');
+}
+// 'linked' = 올린 회차가 전부 (그 패키지 · 새 패키지면 한 패키지)에 연계돼 공개됨 · 'not' = 아니다 · 'unknown' = 못 읽었다
+async function _tuPkgLinkedState(ids, link){
+  try {
+    var a = await window.sb.from('ticket_package_rounds').select('ticket_product_id,package_id').in('ticket_product_id', ids);
+    var b = await window.sb.from('ticket_products').select('id,status').in('id', ids);
+    if(a.error || b.error) return 'unknown';
+    var pk = {}; (a.data || []).forEach(function(x){ pk[String(x.ticket_product_id)] = String(x.package_id); });
+    var stv = {}; (b.data || []).forEach(function(x){ stv[String(x.id)] = String(x.status || ''); });
+    var pids = ids.map(function(id){ return pk[String(id)] || ''; });
+    var same = pids.every(function(x){ return x && x === pids[0]; });
+    var want = (link.mode === 'add') ? String(link.pkgId) : pids[0];
+    var vis = ids.every(function(id){ return stv[String(id)] && stv[String(id)] !== 'hidden'; });
+    return (same && pids[0] === want && vis) ? 'linked' : 'not';
+  } catch(_e){ return 'unknown'; }
 }
 var _tuPkgFailState = null;
 function _tuPkgFail(ids, link, msg, opts){
@@ -51348,7 +51403,9 @@ function _tuPkgFail(ids, link, msg, opts){
   el.innerHTML = '<div style="width:100%;max-width:400px;background:#fff;border-radius:18px;padding:20px;box-sizing:border-box;font-family:var(--font-main);">'
     + '<div style="font-size:16px;font-weight:900;">📦 패키지 연계가 안 됐습니다</div>'
     + '<div style="margin-top:8px;padding:10px 12px;border-radius:10px;background:#FDECEC;color:#9B1C1C;font-size:12.5px;font-weight:700;line-height:1.6;">' + _pkEsc(msg) + '</div>'
-    + '<div style="margin-top:10px;font-size:12.5px;color:#4a4540;line-height:1.65;">' + (n ? '올린 회차 ' + n + '개는 <b>숨김</b>으로 남아 회원에게 보이지 않습니다(단일로도 팔리지 않음).' : '서버에 올라간 회차가 없습니다.') + '</div>'
+    + '<div style="margin-top:10px;font-size:12.5px;color:#4a4540;line-height:1.65;">' + (!n ? '서버에 올라간 회차가 없습니다.'
+        : (opts.unknown ? '서버의 지금 상태를 확인하지 못했습니다 — 연계가 됐을 수도 있습니다. 📦 티켓 패키지 화면에서 확인해 주세요(「다시 시도」는 이미 됐으면 그대로 알려 드립니다).'
+                        : '올린 회차 ' + n + '개는 <b>숨김</b>으로 남아 회원에게 보이지 않습니다(단일로도 팔리지 않음).')) + '</div>'
     + (n && !opts.partial ? btn('retry', '다시 시도', '#1a1a18', '#fff') : '')
     + (n ? btn('open', '연계 없이 공개 — 단일 티켓으로 판매', '#fff', '#1a1a18') : '')
     + btn('keep', n ? '숨긴 채 두기 — 나중에 📦 티켓 패키지 화면에서 연계' : '닫기', '#fff', '#5A5650')
@@ -51369,12 +51426,15 @@ async function tuPkgFailAct(b){
     if(!confirm('올린 회차 ' + st.ids.length + '개를 패키지 없이 공개합니다 — 단일 티켓으로 팔립니다.')) return;
     st.busy = true;
     try {
-      var r = await window.sb.from('ticket_products').update({ status: 'active', updated_at: new Date().toISOString() }).in('id', st.ids).eq('status', 'hidden');
+      var r = await window.sb.from('ticket_products').update({ status: 'active', updated_at: new Date().toISOString() }).in('id', st.ids).eq('status', 'hidden').select('id');
       if(r.error){ st.busy = false; showToast('⚠', '공개하지 못했습니다', String(r.error.message || '').slice(0, 100)); return; }
-      st.ids.forEach(function(id){ var t = _tuPkgTk(id); if(t && t.status === 'hidden') t.status = 'active'; });
-      try { if(typeof _tkRefreshFromServer === 'function') await _tkRefreshFromServer(st.ids, { quiet: true }); } catch(_r){}
+      var changed = (r.data || []).map(function(x){ return String(x.id); });
+      changed.forEach(function(id){ var t = _tuPkgTk(id); if(t && t.status === 'hidden') t.status = 'active'; });
+      try { if(typeof _pkLoad === 'function') await _pkLoad(); if(typeof _tkRefreshFromServer === 'function') await _tkRefreshFromServer(st.ids, { quiet: true }); } catch(_r){}
       close(); _tuPkgFailState = null;
-      showToast('✓', '공개했습니다', '단일 티켓으로 판매됩니다');
+      if(changed.length === st.ids.length) showToast('✓', '공개했습니다', '단일 티켓으로 판매됩니다');
+      else if(!changed.length) showToast('ⓘ', '이미 숨김이 아닙니다', '이미 공개·연계됐을 수 있습니다 — 티켓 리스트의 📦 배지로 확인해 주세요');
+      else showToast('✓', changed.length + '개만 공개했습니다', '나머지 ' + (st.ids.length - changed.length) + '개는 이미 숨김이 아닙니다(공개·연계됨)');
     } finally { if(_tuPkgFailState) _tuPkgFailState.busy = false; }
   }
 }
@@ -63186,7 +63246,7 @@ var _pka = { list: null, sel: [], q: '', mode: 'list', edit: null, busy: false, 
 function _pkaEsc(s){ return _pkEsc(s); }
 async function pkgAdminOpen(){
   if(typeof _currentRole === 'undefined' || _currentRole !== 'superadmin'){ showToast('🔒', '권한 부족', '슈퍼어드민 전용'); return; }
-  _pka.mode = 'list'; _pka.sel = []; _pka.q = ''; _pka.edit = null; _pka.buyers = null; _pka.addPkg = null; _pka.book = null; _pka.bookErr = '';
+  _pka.mode = 'list'; _pka.sel = []; _pka.q = ''; _pka.edit = null; _pka.buyers = null; _pka.addPkg = null; _pka.book = null; _pka.known = {}; _pka.bookErr = '';
   var el = document.getElementById('pkgAdminPopup');
   if(!el){ el = document.createElement('div'); el.id = 'pkgAdminPopup'; el.setAttribute('data-lang-lock', 'ko'); document.body.appendChild(el); }
   el.style.cssText = 'position:fixed;inset:0;z-index:955;background:rgba(0,0,0,.6);display:flex;align-items:flex-end;justify-content:center;';
@@ -63249,7 +63309,7 @@ function _pkaListHtml(){
       + '<div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;">'
       + '<button data-pka-a="buyers" data-pka-v="' + _pkSafeId(p.id) + '" onclick="pkgAdminAct(this)" style="padding:8px 11px;border:1px solid #ddd;background:#fff;border-radius:9px;font-size:12px;cursor:pointer;">구매자</button>'
       + (on ? (_pkaCanAdd(p) ? '<button data-pka-a="add" data-pka-v="' + _pkSafeId(p.id) + '" onclick="pkgAdminAct(this)" style="padding:8px 11px;border:1px solid #CFE3D6;background:#fff;color:#1E7A46;border-radius:9px;font-size:12px;font-weight:700;cursor:pointer;">＋ 회차 추가</button>'
-                               : '<span style="align-self:center;font-size:11px;color:#9A9486;">구매자가 있어 회차 추가 불가</span>')
+                               : '<span style="align-self:center;font-size:11px;color:#9A9486;">' + _pkaEsc(_pkaNoAddWhy(p)) + '</span>')
             + '<button data-pka-a="rename" data-pka-v="' + _pkSafeId(p.id) + '" onclick="pkgAdminAct(this)" style="padding:8px 11px;border:1px solid #ddd;background:#fff;border-radius:9px;font-size:12px;cursor:pointer;">이름·설명</button>'
             + '<button data-pka-a="unlink" data-pka-v="' + _pkSafeId(p.id) + '" onclick="pkgAdminAct(this)" style="padding:8px 11px;border:1px solid #E6C9C9;background:#fff;color:#9B1C1C;border-radius:9px;font-size:12px;cursor:pointer;">연계 풀기</button>' : '')
       + '</div></div>';
@@ -63257,13 +63317,22 @@ function _pkaListHtml(){
   return h;
 }
 // 🆕 2026-10-30 회차 추가 — 구매자(결제·결제 중)가 없는 연계 중 패키지만(서버가 다시 본다 · 결과 모르는 카드 주문도)
+function _pkaNoAddWhy(p){
+  var o = (p && p.orders) || {};
+  if(Number(o.paid || 0)) return '구매자가 있어 회차 추가 불가(결제된 패키지는 구성을 바꿀 수 없습니다)';
+  if(Number(o.hold || 0)) return '지금 결제 중인 회원이 있어 회차 추가 불가 — 몇 분 뒤 다시';
+  if(((p && p.rounds) || []).length >= 8) return '회차 8개 — 더 넣을 수 없음';
+  return '회차 추가 불가';
+}
 function _pkaCanAdd(p){
   var o = (p && p.orders) || {};
   return !!p && p.status === 'active' && !Number(o.paid || 0) && !Number(o.hold || 0) && ((p.rounds || []).length < 8);
 }
-function _pkaCandidates(){
+// 🆕 2026-10-30 예약 수는 보이는 120개가 아니라 고를 수 있는 회차 전부(검색으로 찾는 회차도)에 대해 읽는다(적대 리뷰)
+function _pkaCandidates(){ return _pkaEligible(_pka.q).slice(0, 120); }
+function _pkaEligible(qv){
   var linked = window._tkPkgByRound || {};
-  var q = String(_pka.q || '').trim().toLowerCase();
+  var q = String(qv || '').trim().toLowerCase();
   return (ticketDB || []).filter(function(t){
     if(!t || linked[String(t.id)]) return false;
     // 🆕 2026-10-30 숨김(hidden) 회차도 고른다 — 업로드하면서 연계하다 실패해 숨긴 채 남은 회차를 여기서 다시 연계·공개한다
@@ -63273,7 +63342,7 @@ function _pkaCandidates(){
     if(!q) return true;
     var nm = String(_pcalRestName(t) || t.rest || '').toLowerCase();
     return nm.indexOf(q) >= 0 || String(_tkFullDate(t)).indexOf(q) >= 0;
-  }).sort(function(a, b){ return String(_tkFullDate(a) + ' ' + (a.time || '')).localeCompare(String(_tkFullDate(b) + ' ' + (b.time || ''))); }).slice(0, 120);
+  }).sort(function(a, b){ return String(_tkFullDate(a) + ' ' + (a.time || '')).localeCompare(String(_tkFullDate(b) + ' ' + (b.time || ''))); });
 }
 function _pkaNewHtml(){
   var ed = _pka.edit;
@@ -63347,19 +63416,36 @@ function _pkaCandHtml(){
 }
 function pkgAdminQ(v){ _pka.q = v; var c = document.getElementById('pkaCand'); if(c) c.innerHTML = _pkaCandHtml(); }
 window.pkgAdminQ = pkgAdminQ;
-function pkgAdminNew(){ _pka.mode = 'new'; _pka.sel = []; _pka.q = ''; _pka.edit = null; _pka.addPkg = null; _pka.form = null; _pkaRender(); _pkaLoadBookings(); }
+function _pkaTakePreSel(){
+  var v = window._pkaPreSel; window._pkaPreSel = null;
+  if(v && _pkaEligible('').some(function(t){ return String(t.id) === String(v); }) && _pka.sel.indexOf(String(v)) < 0) _pka.sel.push(String(v));
+}
+function pkgAdminNew(){ _pka.mode = 'new'; _pka.sel = []; _pka.q = ''; _pka.edit = null; _pka.addPkg = null; _pka.form = null; _pkaTakePreSel(); _pkaRender(); _pkaLoadBookings(); }
 // 🆕 2026-10-30 예약이 있는 회차는 연계할 수 없다(서버 trg_taam_guard_pkg_round_booked) — 후보마다 살아 있는 예약 수를 미리 읽어 고르지 못하게 한다
 function _pkaBooked(id){ var b = _pka.book && _pka.book[String(id)]; return (b && Number(b.n) > 0) ? b : null; }
+// 예약 수 읽기 — 서버 응답은 「예약 있는 회차만」이라, 물어본 회차를 known 에 적어 둔다(없으면 = 예약 없음)
+async function _pkBookingsFetch(ids, st){
+  ids = (ids || []).map(String).filter(function(x, i, a){ return x && a.indexOf(x) === i; });
+  for(var i = 0; i < ids.length; i += 400){
+    var part = ids.slice(i, i + 400);
+    var r = await window.sb.rpc('taam_package_round_bookings', { p_rounds: part });
+    if(r.error) return r.error;
+    st.book = st.book || {}; st.known = st.known || {};
+    part.forEach(function(id){ st.known[id] = true; delete st.book[id]; });
+    Object.keys(r.data || {}).forEach(function(k){ st.book[k] = r.data[k]; });
+  }
+  return null;
+}
 async function _pkaLoadBookings(){
   if(!window.sb) return;
-  var ids = _pkaCandidates().map(function(t){ return String(t.id); }).concat(_pka.sel).slice(0, 400);
+  var ids = _pkaEligible('').map(function(t){ return String(t.id); }).concat(_pka.sel);
   var seq = (_pka.bookSeq = (_pka.bookSeq || 0) + 1);
   try {
-    var r = await window.sb.rpc('taam_package_round_bookings', { p_rounds: ids });
+    var err = await _pkBookingsFetch(ids, _pka);
     if(seq !== _pka.bookSeq) return;
-    if(r.error){ _pka.book = null; _pka.bookErr = /does not exist|schema cache/i.test(String(r.error.message)) ? '서버 준비 필요 — 예약 여부는 연계할 때 서버가 확인합니다' : '예약 수를 못 읽었습니다 — 연계할 때 서버가 확인합니다'; }
-    else { _pka.book = r.data || {}; _pka.bookErr = ''; }
-  } catch(_e){ if(seq === _pka.bookSeq){ _pka.book = null; _pka.bookErr = '예약 수를 못 읽었습니다 — 연계할 때 서버가 확인합니다'; } }
+    if(err){ _pka.bookErr = /does not exist|schema cache/i.test(String(err.message)) ? '서버 준비 필요 — 예약 여부는 연계할 때 서버가 확인합니다' : '예약 수를 못 읽었습니다 — 연계할 때 서버가 확인합니다'; }
+    else _pka.bookErr = '';
+  } catch(_e){ if(seq === _pka.bookSeq) _pka.bookErr = '예약 수를 못 읽었습니다 — 연계할 때 서버가 확인합니다'; }
   if(_pka.mode !== 'new' && _pka.mode !== 'add') return;
   _pkaKeepForm();
   var c = document.getElementById('pkaCand'); if(c) c.innerHTML = _pkaCandHtml();
@@ -63382,7 +63468,8 @@ async function pkgAdminAct(btn){
     _pkaKeepForm();
     var i = _pka.sel.indexOf(v);
     var _max = _pka.mode === 'add' ? Math.max(0, 8 - ((_pka.addPkg && _pka.addPkg.rounds) || []).length) : 8;
-    if(i < 0 && _pkaBooked(v)){ var _bk = _pkaBooked(v); showToast('⚠', '예약이 있는 회차입니다', '예약 ' + _bk.n + '건(' + _bk.pax + '명) — 예약이 없는 회차만 연계할 수 있습니다'); return; }
+    if(i < 0 && !(_pka.known && _pka.known[v]) && !_pka.bookErr){ try { await _pkBookingsFetch([v], _pka); } catch(_bf){} }
+    if(i < 0 && _pkaBooked(v)){ var _bk = _pkaBooked(v); showToast('⚠', '예약이 있는 회차입니다', '예약 ' + _bk.n + '건(' + _bk.pax + '명) — 예약이 없는 회차만 연계할 수 있습니다'); var _cc = document.getElementById('pkaCand'); if(_cc) _cc.innerHTML = _pkaCandHtml(); return; }
     if(i >= 0) _pka.sel.splice(i, 1); else if(_pka.sel.length < _max) _pka.sel.push(v); else showToast('⚠', '회차는 합쳐서 8개까지', '');
     _pka.sel.sort(function(x, y){
       var tx = (ticketDB || []).find(function(t){ return String(t.id) === x; }), ty = (ticketDB || []).find(function(t){ return String(t.id) === y; });
@@ -63394,11 +63481,13 @@ async function pkgAdminAct(btn){
   var p = (_pka.list || []).find(function(x){ return x.id === v; });
   if(a === 'rename' && p){ _pka.mode = 'new'; _pka.edit = p; _pka.form = null; _pkaRender(); return; }
   if(a === 'add' && p){
-    if(!_pkaCanAdd(p)){ showToast('⚠', '회차를 더할 수 없습니다', '구매자(결제·결제 중)가 있는 패키지입니다 — 연계를 풀고 새로 만드세요'); return; }
-    _pka.mode = 'add'; _pka.addPkg = p; _pka.sel = []; _pka.q = ''; _pka.edit = null; _pkaRender(); _pkaLoadBookings(); return;
+    if(!_pkaCanAdd(p)){ showToast('⚠', '회차를 더할 수 없습니다', _pkaNoAddWhy(p)); return; }
+    _pka.mode = 'add'; _pka.addPkg = p; _pka.sel = []; _pka.q = ''; _pka.edit = null; _pkaTakePreSel(); _pkaRender(); _pkaLoadBookings(); return;
   }
   if(a === 'unlink' && p){
-    if(!confirm('「' + p.title + '」 연계를 풉니다.\n\n· 회차들은 바로 단일로 팔립니다\n· 이미 산 패키지는 그대로(통째 취소 규칙)\n· 지금 결제 중인 묶음은 확정되지 않고 자동 취소됩니다')) return;
+    var _paidN = Number(((p.orders || {}).paid) || 0);
+    if(!confirm('「' + p.title + '」 연계를 풉니다.\n\n· 회차들은 바로 단일로 팔립니다\n· 이미 산 패키지는 그대로(통째 취소 규칙)\n· 지금 결제 중인 묶음은 확정되지 않고 자동 취소됩니다'
+                 + (_paidN ? '\n\n⚠ 결제된 패키지가 ' + _paidN + '건 있습니다 — 판 좌석이 남아 있어 이 회차들은 다시 패키지로 묶을 수 없습니다(예약 있는 회차는 연계 불가)' : ''))) return;
     _pka.busy = true;
     try {
       var r = await window.sb.rpc('taam_package_unlink', { p_id: v });
@@ -65967,6 +66056,7 @@ function openInviteFromCalendar(restId){
       if(_sel){
         var _cands = (ticketDB || []).filter(function(t){
           if(String(t.restId) !== String(restId)) return false;
+          if(t.status === 'hidden' || t.status === 'pending') return false;   // 🆕 2026-10-30
           var _fd = (typeof _tkFullDate === 'function') ? _tkFullDate(t) : t.date;
           return _riSameDay(_fd, fullDate);   // 형식이 달라도 같은 날이면 후보
         });
