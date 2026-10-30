@@ -8,10 +8,13 @@ do $$ begin
 end $$;
 alter role service_role bypassrls;
 grant usage on schema public, auth to authenticated, anon, service_role;
+-- Supabase 기본 권한: public 의 새 표·함수는 anon·authenticated·service_role 에게 열린다(권한 회수 검사가 헛돌지 않게)
+alter default privileges in schema public grant all on tables to anon, authenticated, service_role;
+alter default privileges in schema public grant all on functions to anon, authenticated, service_role;
 
 create table auth.users(id uuid primary key default gen_random_uuid(), email text, phone text,
   raw_user_meta_data jsonb default '{}'::jsonb, raw_app_meta_data jsonb default '{}'::jsonb,
-  email_confirmed_at timestamptz, phone_confirmed_at timestamptz, encrypted_password text default '',
+  email_confirmed_at timestamptz, phone_confirmed_at timestamptz, last_sign_in_at timestamptz, encrypted_password text default '',
   created_at timestamptz default now());
 -- Supabase 와 같은 모양: JWT claims 의 sub
 create or replace function auth.uid() returns uuid language sql stable as $$
@@ -159,3 +162,14 @@ begin
   return cnt > 0;
 end; $$;
 grant execute on function public.consume_invite_by_self(), public.user_has_invite_match() to anon, authenticated;
+
+-- 서버 전용 도우미(라이브에 있다) — 회수 검사용
+create or replace function public.email_exists_in_auth(email_to_check text) returns boolean language sql stable security definer set search_path=public, auth as $$
+  select exists (select 1 from auth.users where lower(email) = lower(email_to_check)) $$;
+create or replace function public.email_exists_in_auth_other(email_to_check text, exclude_id uuid) returns boolean language sql stable security definer set search_path=public, auth as $$
+  select exists (select 1 from auth.users where lower(email) = lower(email_to_check) and id is distinct from exclude_id) $$;
+grant execute on function public.email_exists_in_auth(text), public.email_exists_in_auth_other(text, uuid) to anon, authenticated;
+-- 회원·anon 이 부를 수 있는 정의자 함수가 초대장을 소진하는 모양(소진 가드의 회원/anon 분기 검사용)
+create or replace function public._t_mark_used(p_code text) returns int language plpgsql security definer set search_path=public as $$
+declare n int; begin update public.invite_codes set used = true where code = p_code and not used; get diagnostics n = row_count; return n; end $$;
+grant execute on function public._t_mark_used(text) to anon, authenticated;

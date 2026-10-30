@@ -131,31 +131,47 @@ returns uuid language sql stable security definer set search_path = public, auth
      and exists (select 1 from public.invite_codes ic where upper(btrim(ic.code)) = upper(btrim(p_code))
                    and public._taam_invite_code_only(ic.invited_by, ic.country, ic.invitee_phone, ic.invitee_email))
      and l.verdict = 'allow' and upper(btrim(coalesce(l.invite_code, ''))) = upper(btrim(p_code))
-     and (au.phone_confirmed_at is not null or au.email_confirmed_at is not null)
+     -- 실제로 로그인까지 마친 계정만 — Confirm email 이 꺼져 있으면 OTP 를 **요청**만 해도 이메일 확인 시각이 찍힌다(오타 계정이 주인이 되지 않게)
+     and (au.phone_confirmed_at is not null or au.email_confirmed_at is not null) and au.last_sign_in_at is not null
 $$;
 revoke all on function public._taam_code_owner(text) from public, anon, authenticated;
 
--- 이 초대장이 지금 로그인한 회원의 것인가 — member_id · 인증된 번호·이메일 정확 일치(invitee_* · used_by_*) · 이 코드로 가입이 허락된 인증 계정
+-- 이 계정이 이 초대장의 주인인가 — 서버 판정 하나(RLS · 로그인 대조 · 자기 소진 · 등급 · 소진 가드가 같이 쓴다)
+--   · member_id 가 이 계정(실제로 있는 계정이 적혀 있으면 그것만 믿는다)
+--   · 해외 결제 링크 손님 초대장(코드로만 묶임) — 그 코드로 가입·로그인한 유일한 계정
+--   · 번호에 묶인 초대장 — OTP 로 확인된 번호가 같다(번호 확인은 이 프로젝트에서 OTP 를 거친다)
+--   · 이메일에 묶인 초대장 — 이미 쓴 것: 이메일이 같다(그 이메일로 들어온 계정은 하나뿐이다)
+--                            아직 안 쓴 것: 이메일이 같고 **그 초대장의 코드로 문지기를 지나 들어왔거나** 소셜 제공자가 확인한 이메일
+--     (Confirm email 이 꺼져 있어 이메일 확인 시각은 메일함 증거가 아니다 — 남의 코드로 남의 이메일 계정을 만들어 남의 초대장을 가져가던 길 · 2차 리뷰 재현)
 do $$ begin
   if to_regclass('public.invite_codes') is not null then execute 'drop policy if exists invite_codes_read_own on public.invite_codes'; end if;
 end $$;
 drop function if exists public._taam_invite_mine(text, text, text, text, text);
-create or replace function public._taam_invite_mine(p_member text, p_iph text, p_iem text, p_uph text, p_uem text, p_code text)
+drop function if exists public._taam_invite_mine(text, text, text, text, text, text);
+create or replace function public._taam_invite_owner_ok(p_uid uuid, p_used boolean, p_member text, p_code text, p_invited_by text, p_country text,
+                                                        p_iph text, p_iem text, p_uph text, p_uem text)
 returns boolean language sql stable security definer set search_path = public, auth as $$
-  select exists (
+  select p_uid is not null and exists (
     select 1 from auth.users u
-     where u.id = auth.uid()
+     where u.id = p_uid
        and (   (nullif(btrim(coalesce(p_member, '')), '') is not null and btrim(p_member) = u.id::text)
-            or (u.phone_confirmed_at is not null and length(public._taam_phone_key(u.phone)) >= 8
-                and (public._taam_phone_key(p_iph) = public._taam_phone_key(u.phone) or public._taam_phone_key(p_uph) = public._taam_phone_key(u.phone)))
-            or (u.email_confirmed_at is not null and nullif(lower(btrim(coalesce(u.email, ''))), '') is not null
-                and (lower(btrim(coalesce(p_iem, ''))) = lower(btrim(u.email)) or lower(btrim(coalesce(p_uem, ''))) = lower(btrim(u.email))))
-            -- 아직 주인이 안 적힌 초대장: 이 코드로 가입이 허락된 유일한 인증 계정
-            or (nullif(btrim(coalesce(p_member, '')), '') is null and public._taam_code_owner(p_code) = u.id))
+            or (    (nullif(btrim(coalesce(p_member, '')), '') is null
+                     or not exists (select 1 from auth.users m where m.id::text = btrim(p_member)))
+                and (   (public._taam_invite_code_only(p_invited_by, p_country, p_iph, p_iem) and public._taam_code_owner(p_code) = u.id)
+                     or (not public._taam_invite_code_only(p_invited_by, p_country, p_iph, p_iem) and (
+                             (u.phone_confirmed_at is not null and length(public._taam_phone_key(u.phone)) >= 8
+                              and (public._taam_phone_key(p_iph) = public._taam_phone_key(u.phone)
+                                   or (coalesce(p_used, false) and public._taam_phone_key(p_uph) = public._taam_phone_key(u.phone))))
+                          or (u.email_confirmed_at is not null and nullif(lower(btrim(coalesce(u.email, ''))), '') is not null and (
+                                 (coalesce(p_used, false) and (lower(btrim(coalesce(p_iem, ''))) = lower(btrim(u.email)) or lower(btrim(coalesce(p_uem, ''))) = lower(btrim(u.email))))
+                              or (not coalesce(p_used, false) and lower(btrim(coalesce(p_iem, ''))) = lower(btrim(u.email))
+                                  and (   exists (select 1 from public.signup_guard_log l where l.user_id = u.id and l.verdict = 'allow'
+                                                    and upper(btrim(coalesce(l.invite_code, ''))) = upper(btrim(coalesce(p_code, ''))))
+                                       or coalesce(u.raw_app_meta_data->>'provider', '') not in ('', 'email', 'phone'))))))))))
   )
 $$;
-revoke all on function public._taam_invite_mine(text, text, text, text, text, text) from public, anon;
-grant execute on function public._taam_invite_mine(text, text, text, text, text, text) to authenticated;   -- RLS 정책식이 부른다 · 자기 것만 답한다
+revoke all on function public._taam_invite_owner_ok(uuid, boolean, text, text, text, text, text, text, text, text) from public, anon;
+grant execute on function public._taam_invite_owner_ok(uuid, boolean, text, text, text, text, text, text, text, text) to authenticated;   -- RLS 정책식이 auth.uid() 로 부른다
 
 -- 지금 로그인한 회원의 인증된 번호 키 · 이메일 (프로필 연락처 가드가 부른다)
 create or replace function public._taam_my_verified_phone_key()
@@ -199,6 +215,8 @@ declare
   v_verdict text := 'reject';
   v_reason  text := 'no_invite';
   v_meta    jsonb;
+  v_m_email text;
+  v_m_phone text;
   k         text;
   r         record;
 begin
@@ -247,7 +265,14 @@ begin
       elsif public._taam_invite_code_only(r.invited_by, r.country, r.invitee_phone, r.invitee_email) then
         -- 해외 결제 링크 손님 — 코드가 자격(번호 OTP 불가 · 이메일 모름). 주인은 이 코드로 가입한 유일한 인증 계정
         if v_phone is null and v_email is null then v_reason := 'channel_mismatch';
-        elsif public._taam_code_owner(v_code) is not null then v_reason := 'code_claimed';   -- 이미 다른 계정이 이 코드로 가입·인증했다
+        elsif public._taam_code_owner(v_code) is not null then v_reason := 'code_claimed';   -- 이미 다른 계정이 이 코드로 가입·로그인했다
+        elsif exists (select 1 from public.invite_codes ic2
+                       where upper(btrim(ic2.code)) <> v_code and not coalesce(ic2.used, false)
+                         and (public._taam_ts_safe(ic2.expires_at::text) is null or public._taam_ts_safe(ic2.expires_at::text) >= now())
+                         and not public._taam_invite_code_only(ic2.invited_by, ic2.country, ic2.invitee_phone, ic2.invitee_email)
+                         and public._taam_invite_bind_reason(ic2.invitee_phone, ic2.invitee_email, v_phone, v_email) is null) then
+          -- 이 이메일·번호는 다른 사람의 안 쓴 초대장에 묶여 있다 — 손님 코드로 그 사람 자리를 먼저 차지하지 못하게
+          v_reason := 'channel_reserved';
         else v_verdict := 'allow'; v_reason := 'invite_code_only'; end if;
       else
         v_reason := coalesce(public._taam_invite_bind_reason(r.invitee_phone, r.invitee_email, v_phone, v_email), 'invite_code');
@@ -259,14 +284,15 @@ begin
       --   소셜(OAuth)만 — 제공자가 이메일을 확인했다고 할 때(메타데이터 email_verified 는 제공자가 채운다 · OAuth 가입은 data 를 못 싣는다).
       --   이메일·번호 가입은 언제나 코드를 싣는다(앱 _vpSignupMeta). 코드 없이 들이면 「Confirm email」이 꺼진 이 프로젝트에선
       --   비밀번호 가입(/auth/v1/signup)이 메일함 확인 없이 바로 세션을 받아 남의 이메일에 묶인 초대장을 가져갔다(2026-10-30 진단 ① 18/18 즉시 확인).
-      if v_prov in ('', 'email', 'phone') or coalesce(v_meta->>'email_verified', '') <> 'true' then
-        v_email := null; v_phone := null;
+      if v_prov not in ('', 'email', 'phone') and coalesce(v_meta->>'email_verified', '') = 'true' then
+        v_m_email := v_email; v_m_phone := v_phone;     -- 대조에만 쓴다(기록·경고에는 원래 값)
       end if;
-      if (v_email is not null or v_phone is not null) and exists (
+      if (v_m_email is not null or v_m_phone is not null) and exists (
         select 1 from public.invite_codes ic
          where not coalesce(ic.used, false)
            and (public._taam_ts_safe(ic.expires_at::text) is null or public._taam_ts_safe(ic.expires_at::text) >= now())
-           and public._taam_invite_bind_reason(ic.invitee_phone, ic.invitee_email, v_phone, v_email) is null
+           and not public._taam_invite_code_only(ic.invited_by, ic.country, ic.invitee_phone, ic.invitee_email)
+           and public._taam_invite_bind_reason(ic.invitee_phone, ic.invitee_email, v_m_phone, v_m_email) is null
       ) then
         v_verdict := 'allow'; v_reason := 'invitee_match';
       end if;
@@ -372,24 +398,21 @@ begin
   end if;
 
   v_codeonly := public._taam_invite_code_only(new.invited_by, new.country, new.invitee_phone, new.invitee_email);
-  if v_codeonly then
-    -- 해외 결제 링크 손님: 이 코드로 가입이 허락된 유일한 인증 계정
-    v_owner := public._taam_code_owner(new.code);
-    v_n := case when v_owner is null then 0 else 1 end;
-  else
-    select count(*), (array_agg(au.id order by au.created_at))[1] into v_n, v_owner
-      from auth.users au
-     where (ip is not null and au.phone_confirmed_at is not null and public._taam_phone_key(au.phone) = ip)
-        or (ie is not null and au.email_confirmed_at is not null and lower(btrim(coalesce(au.email, ''))) = ie);
-  end if;
+  -- 주인 후보: 묶인 번호의 확인 계정 · 묶인 이메일의 계정 · 이 코드로 들어온 계정 — 그중 주인 판정(_taam_invite_owner_ok)을 지나는 것
+  select count(*), (array_agg(c.id order by c.created_at))[1] into v_n, v_owner
+    from (select distinct au.id, au.created_at from auth.users au
+           where (ip is not null and au.phone_confirmed_at is not null and public._taam_phone_key(au.phone) = ip)
+              or (ie is not null and lower(btrim(coalesce(au.email, ''))) = ie)
+              or exists (select 1 from public.signup_guard_log l where l.user_id = au.id and l.verdict = 'allow'
+                           and upper(btrim(coalesce(l.invite_code, ''))) = upper(btrim(coalesce(new.code, ''))))) c
+   where public._taam_invite_owner_ok(c.id, false, old.member_id, new.code, new.invited_by, new.country,
+                                       new.invitee_phone, new.invitee_email, null, null);
 
   if v_uid is not null and not v_trusted then
-    -- 회원 세션(consume_invite_by_self 등): 그 회원이 묶인 채널의 인증된 주인이어야(코드만 묶인 초대장은 그 코드로 가입한 인증 계정)
-    if (v_codeonly and public._taam_code_owner(new.code) is distinct from v_uid)
-       or (not v_codeonly and not exists (select 1 from auth.users au where au.id = v_uid
-                     and ((ip is not null and au.phone_confirmed_at is not null and public._taam_phone_key(au.phone) = ip)
-                       or (ie is not null and au.email_confirmed_at is not null and lower(btrim(coalesce(au.email, ''))) = ie)))) then
-      raise exception 'INVITE_NOT_YOURS: 이 초대장은 다른 번호·이메일에 묶여 있습니다' using errcode = '42501';
+    -- 회원 세션(consume_invite_by_self 등): 그 회원이 이 초대장의 주인이어야
+    if not public._taam_invite_owner_ok(v_uid, false, old.member_id, new.code, new.invited_by, new.country,
+                                        new.invitee_phone, new.invitee_email, null, null) then
+      raise exception 'INVITE_NOT_YOURS: 이 초대장은 다른 번호·이메일(또는 다른 가입)에 묶여 있습니다' using errcode = '42501';
     end if;
     v_owner := v_uid;
   elsif not v_trusted then
@@ -441,17 +464,16 @@ begin
       if v_uid is not null and not exists (select 1 from auth.users where id = v_uid) then v_uid := null; end if;
     end if;
     if v_uid is null then
-      -- 믿는 세션이 주인 없이 소진한 경우: 묶인 채널로 인증된 계정이 정확히 하나일 때만
+      -- 믿는 세션이 주인 없이 소진한 경우: 주인 판정을 지나는 계정이 정확히 하나일 때만
       ip := public._taam_invite_bind_phone(new.invitee_phone);
       ie := public._taam_invite_bind_email(new.invitee_email);
-      if public._taam_invite_code_only(new.invited_by, new.country, new.invitee_phone, new.invitee_email) then
-        v_uid := public._taam_code_owner(new.code);
-        v_n := case when v_uid is null then 0 else 1 end;
-      else
-        select count(*), (array_agg(au.id))[1] into v_n, v_uid from auth.users au
-         where (ip is not null and au.phone_confirmed_at is not null and public._taam_phone_key(au.phone) = ip)
-            or (ie is not null and au.email_confirmed_at is not null and lower(btrim(coalesce(au.email, ''))) = ie);
-      end if;
+      select count(*), (array_agg(c.id))[1] into v_n, v_uid
+        from (select distinct au.id from auth.users au
+               where (ip is not null and au.phone_confirmed_at is not null and public._taam_phone_key(au.phone) = ip)
+                  or (ie is not null and lower(btrim(coalesce(au.email, ''))) = ie)
+                  or exists (select 1 from public.signup_guard_log l where l.user_id = au.id and l.verdict = 'allow'
+                               and upper(btrim(coalesce(l.invite_code, ''))) = upper(btrim(coalesce(new.code, ''))))) c
+       where public._taam_invite_owner_ok(c.id, false, null, new.code, new.invited_by, new.country, new.invitee_phone, new.invitee_email, null, null);
       if v_n <> 1 then v_uid := null; end if;
     end if;
     if v_uid is not null then
@@ -486,7 +508,7 @@ do $$ begin
   execute 'drop policy if exists invite_codes_read on public.invite_codes';
   execute 'drop policy if exists invite_codes_read_own on public.invite_codes';
   execute 'create policy invite_codes_read_own on public.invite_codes for select to authenticated
-           using (public._taam_invite_mine(member_id, invitee_phone, invitee_email, used_by_phone, used_by_email, code))';
+           using (public._taam_invite_owner_ok(auth.uid(), used, member_id, code, invited_by, country, invitee_phone, invitee_email, used_by_phone, used_by_email))';
   execute 'revoke all on public.invite_codes from anon';
 end $$;
 
@@ -498,7 +520,7 @@ returns jsonb language sql stable security definer set search_path = public, aut
                               'used', coalesce(ic.used, false), 'used_at', ic.used_at, 'member_id', ic.member_id)
       from public.invite_codes ic
      where auth.uid() is not null
-       and public._taam_invite_mine(ic.member_id, ic.invitee_phone, ic.invitee_email, ic.used_by_phone, ic.used_by_email, ic.code)
+       and public._taam_invite_owner_ok(auth.uid(), ic.used, ic.member_id, ic.code, ic.invited_by, ic.country, ic.invitee_phone, ic.invitee_email, ic.used_by_phone, ic.used_by_email)
      order by (ic.member_id = auth.uid()::text) desc nulls last, coalesce(ic.used, false) desc, ic.used_at desc nulls last, ic.invited_at desc nulls last
      limit 1), 'null'::jsonb)
 $$;
@@ -510,7 +532,7 @@ create or replace function public.user_has_invite_match()
 returns boolean language sql stable security definer set search_path = public, auth as $$
   select auth.uid() is not null and exists (
     select 1 from public.invite_codes ic
-     where public._taam_invite_mine(ic.member_id, ic.invitee_phone, ic.invitee_email, ic.used_by_phone, ic.used_by_email, ic.code))
+     where public._taam_invite_owner_ok(auth.uid(), ic.used, ic.member_id, ic.code, ic.invited_by, ic.country, ic.invitee_phone, ic.invitee_email, ic.used_by_phone, ic.used_by_email))
 $$;
 revoke all on function public.user_has_invite_match() from public, anon;
 grant execute on function public.user_has_invite_match() to authenticated;
@@ -528,13 +550,7 @@ begin
   update public.invite_codes ic
      set used = true, used_at = coalesce(ic.used_at, now())
    where not coalesce(ic.used, false)
-     and (   (    ((v_ph is not null and public._taam_invite_bind_phone(ic.invitee_phone) = v_ph)
-                or (v_em is not null and public._taam_invite_bind_email(ic.invitee_email) = v_em))
-              and not public._taam_invite_code_only(ic.invited_by, ic.country, ic.invitee_phone, ic.invitee_email)
-              and public._taam_invite_bind_reason(ic.invitee_phone, ic.invitee_email, v_ph, v_em) is null)
-          -- 해외 결제 링크 손님 초대장: 내가 그 코드로 가입했을 때
-          or (    public._taam_invite_code_only(ic.invited_by, ic.country, ic.invitee_phone, ic.invitee_email)
-              and public._taam_code_owner(ic.code) = v_uid));
+     and public._taam_invite_owner_ok(v_uid, false, ic.member_id, ic.code, ic.invited_by, ic.country, ic.invitee_phone, ic.invitee_email, null, null);
   get diagnostics v_n = row_count;
   return v_n;
 end $$;
@@ -571,16 +587,8 @@ begin
     into v_tier
     from public.invite_codes ic
    where upper(btrim(coalesce(ic.invitee_tier,''))) in ('M','T','A')
-     and (
-          ic.member_id::text = p_user_id::text
-       or (v_email <> '' and lower(btrim(coalesce(ic.used_by_email,''))) = v_email)
-       or (v_email <> '' and lower(btrim(coalesce(ic.invitee_email,''))) = v_email)
-       or (length(v_pkey) >= 8 and public._taam_phone_key(ic.used_by_phone) = v_pkey)
-       or (length(v_pkey) >= 8 and public._taam_phone_key(ic.invitee_phone) = v_pkey)
-       -- 해외 결제 링크 손님: 소진(member_id) 전에도 그 코드로 가입한 유일한 인증 계정
-       or (nullif(btrim(coalesce(ic.member_id, '')), '') is null and public._taam_code_owner(ic.code) = p_user_id)
-     )
-   order by (ic.member_id::text = p_user_id::text) desc nulls last, ic.used_at desc nulls last
+     and public._taam_invite_owner_ok(p_user_id, ic.used, ic.member_id, ic.code, ic.invited_by, ic.country, ic.invitee_phone, ic.invitee_email, ic.used_by_phone, ic.used_by_email)
+   order by (ic.member_id = p_user_id::text) desc nulls last, ic.used_at desc nulls last
    limit 1;
   return v_tier;
 end;
@@ -674,7 +682,8 @@ begin
   --   앱은 이메일을 바꾸지 않는다. 운영자가 바꿔야 하면 SQL Editor 에서 set local taam.allow_email_change = '1' 뒤에.
   if lower(nullif(btrim(coalesce(new.email, '')), '')) is distinct from lower(nullif(btrim(coalesce(old.email, '')), ''))
      and coalesce(current_setting('taam.allow_email_change', true), '') <> '1' then
-    raise exception 'EMAIL_CHANGE_BLOCKED: 로그인 이메일은 바꿀 수 없습니다 — TAAM 에 문의해 주세요' using errcode = '42501';
+    raise exception 'EMAIL_CHANGE_BLOCKED: 로그인 이메일은 바꿀 수 없습니다 — TAAM 에 문의해 주세요'
+      using errcode = '42501', hint = '운영: SQL Editor 에서 begin; set local taam.allow_email_change = ''1''; update auth.users …; commit;';
   end if;
   -- 메타데이터(가입자가 updateUser({data}) 로 언제든 쓴다): 이름 정리 · 번호 키 버림. 실패해도 로그인·갱신을 막지 않는다.
   begin
@@ -743,11 +752,15 @@ begin
     if k in ('display_name', 'display_name_en', 'display_name_jp', 'display_name_ja') then
       if v ~ '[<>[:cntrl:]]' or v ~* 'javascript\s*:' then ch := ch || jsonb_build_object(k, public._taam_clean_name(v)); end if;
     elsif k = 'email' then
-      if v ~ '[<>"''[:space:]]' then ch := ch || jsonb_build_object(k, null); end if;
+      if v ~ '[<>"]' or v ~* 'javascript\s*:' then ch := ch || jsonb_build_object(k, null);
+      elsif v <> btrim(v) then ch := ch || jsonb_build_object(k, btrim(v)); end if;
     elsif k = 'phone' then
       if v ~ '[^0-9+()\- .]' then ch := ch || jsonb_build_object(k, nullif(btrim(regexp_replace(v, '[^0-9+()\- .]', '', 'g')), '')); end if;
     elsif v ~* '<\s*[a-z/!?]' or v ~* 'javascript\s*:' then
-      ch := ch || jsonb_build_object(k, regexp_replace(regexp_replace(v, '[<>]', '', 'g'), 'javascript\s*:', '', 'gi'));
+      v := regexp_replace(v, '[<>]', '', 'g');
+      for i in 1..5 loop exit when v !~* 'javascript\s*:'; v := regexp_replace(v, 'javascript\s*:', '', 'gi'); end loop;
+      if v ~* 'javascript\s*:' then v := ''; end if;
+      ch := ch || jsonb_build_object(k, v);
     end if;
   end loop;
   if ch <> '{}'::jsonb then new := jsonb_populate_record(new, ch); end if;
