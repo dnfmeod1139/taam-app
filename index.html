@@ -48131,7 +48131,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.30-b';
+var TAAM_WEB_BUILD = '2026.10.30-c';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -65920,7 +65920,11 @@ function _tcalDayGroups(dateKey){
     var _mnRow = String(h.purchaseId||'').indexOf('MAN-') === 0
               || String(h.purchaseId||'').indexOf('KSK-') === 0        // 🆕 2026-09-29 정산 결제 좌석 — user_id 는 회차 작성자
               || !!(h.extra_data && h.extra_data.manualEntry);
-    gr(h.restId||h.restaurant_id, h.rest||h.restName||h.restaurant_name).entries.push({type:'app', pid:(h.purchaseId||''), name:(h.buyerName||''), uid:(_mnRow ? '' : (h._userId||'')), pax:(h.pax||1), amount:(parseInt(h.amt)||0), agency:0, time:(h.visitTime||''), bought:(h.date||h.created_at||''), ex:(h.extra_data||{}), gphone:(h.guestPhone||''), st:(h.status||''), kskPay:(h.kskPay||null), linkPay:(h.linkPay||null), tpid:String(h.id||h.ticket_product_id||'')});   // 🆕 2026-09-14 구매 일시
+    // 🆕 2026-10-30 수동 추가(MAN-)의 메모는 tickets.extra_data.memo 에 있다 — 종전엔 기록만 남긴 건(daegwan_manual)의 메모만 줄에 실어
+    //   본 티켓에 연결해 저장한 메모(대부분의 수동 추가)는 저장 뒤 어디에도 안 보였다. 운영 행이 아닌 회원 구매 행의 extra_data.memo 는 회원이 쓸 수 있는 칸이라 싣지 않는다.
+    //   MAN- 접두어로만 판단한다 — 회원은 자기 PAYH- 홀드의 extra_data 에 manualEntry·memo 를 적을 수 있다(플래그는 믿지 않는다 · 회원 INSERT 는 PAYH- 로만).
+    var _mnMemo = (String(h.purchaseId||'').indexOf('MAN-') === 0) ? String((h.extra_data && h.extra_data.memo) || '') : '';
+    gr(h.restId||h.restaurant_id, h.rest||h.restName||h.restaurant_name).entries.push({type:'app', pid:(h.purchaseId||''), name:(h.buyerName||''), uid:(_mnRow ? '' : (h._userId||'')), pax:(h.pax||1), amount:(parseInt(h.amt)||0), agency:0, time:(h.visitTime||''), bought:(h.date||h.created_at||''), ex:(h.extra_data||{}), gphone:(h.guestPhone||''), st:(h.status||''), kskPay:(h.kskPay||null), linkPay:(h.linkPay||null), tpid:String(h.id||h.ticket_product_id||''), memo:_mnMemo});   // 🆕 2026-09-14 구매 일시
   });
   // 초대 결제
   (_tcalInvites||[]).forEach(function(inv){
@@ -67178,8 +67182,15 @@ function tcalRenderDetail(dateStr) {
             ? '<span onclick="paxChangeOpen(\''+_q(e.pid)+'\')" title="인원 변경" style="cursor:pointer;color:#8A5A1E;font-size:11px;font-weight:800;border:1px solid #EEDCBB;background:#FBF2E0;border-radius:6px;padding:2px 6px;">인원</span>'
             : '';
           // 🆕 2026-10-14 수동 추가 내역 수정 — 좌석 연동 행(MAN-)·기록(daegwan_manual) 둘 다. 연결 티켓·날짜는 못 바꾼다(취소 후 재추가)
-          var edBtn = ((isSuper || _currentRole==='admin') && (e.type==='manual' ? !!e.mid : (_isMan && !!e.pid && e.st !== 'cancelled')))
-            ? '<span onclick="tcalManualEditOpen(\'' + (e.type==='manual' ? 'm' : 't') + '\',\'' + _q(e.type==='manual' ? e.mid : e.pid) + '\',\'' + _q(g.restId) + '\')" title="수동 내역 수정" style="cursor:pointer;color:#5a554f;font-size:11px;font-weight:800;border:1px solid #E0D9CC;background:#F7F4EE;border-radius:6px;padding:2px 6px;">수정</span>'
+          var _edCall = ((isSuper || _currentRole==='admin') && (e.type==='manual' ? !!e.mid : (_isMan && !!e.pid && e.st !== 'cancelled')))
+            ? 'tcalManualEditOpen(\'' + (e.type==='manual' ? 'm' : 't') + '\',\'' + _q(e.type==='manual' ? e.mid : e.pid) + '\',\'' + _q(g.restId) + '\')'
+            : '';
+          var edBtn = _edCall
+            ? '<span onclick="' + _edCall + '" title="수동 내역 수정" style="cursor:pointer;color:#5a554f;font-size:11px;font-weight:800;border:1px solid #E0D9CC;background:#F7F4EE;border-radius:6px;padding:2px 6px;">수정</span>'
+            : '';
+          // 🆕 2026-10-30 수동 추가 메모 — 저장한 메모를 줄 아래 한 줄로(종전엔 금액 뒤 회색 꼬리 · 연동 행은 아예 없었다). 누르면 같은 수정 창이 열린다
+          var memoH = e.memo
+            ? '<div' + (_edCall ? ' onclick="' + _edCall + '" title="메모 수정" ' : ' ') + 'style="font-size:11.5px;color:#5a554f;margin-top:4px;padding:6px 9px;background:#FBF8F2;border:1px solid #EFE8DA;border-radius:8px;white-space:pre-wrap;word-break:break-word;line-height:1.5;' + (_edCall ? 'cursor:pointer;' : '') + '">📝 ' + _escHtmlAdg(e.memo) + '</div>'
             : '';
           // 🆕 2026-09-28 수동 예약 손님 알림톡 — 번호가 있는 MAN- 행에만.
           //   보낸 적 있으면 「✓ 카톡 09.28」 + 재발송, 없으면 「📨 카톡 안내」
@@ -67219,7 +67230,8 @@ function tcalRenderDetail(dateStr) {
             +   '<div style="flex-shrink:0;display:flex;align-items:center;gap:6px;"><span style="font-size:'+(inner?'12':'13')+'px;font-weight:800;color:#6A1A1A;">'+e.pax+'명</span>'+pxBtn+edBtn+del+'</div>'
             + '</div>'
             + ((kkBtn || xBtn) ? '<div style="margin-top:5px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">'+kkBtn+xBtn+'</div>' : '')
-            + ((amt||e.memo) ? '<div style="font-size:11.5px;color:#666;margin-top:2px;">'+amt+(e.memo?' <span style="color:#9a9486;">· '+_escHtmlAdg(e.memo)+'</span>':'')+'</div>' : '')
+            + (amt ? '<div style="font-size:11.5px;color:#666;margin-top:2px;">'+amt+'</div>' : '')
+            + memoH
             + '</div>';
         }
 
