@@ -7487,6 +7487,7 @@ function fxSaveSettings(){
     if (res.error) { showToast('⚠','저장 실패', res.error.message); return; }
     FX.base_rate=b; FX.rate_jpy=j; FX.margin_pct=m; FX.enabled=en;
     var p=document.getElementById('fxSettingsPopup'); if(p) p.remove();
+    if (typeof _acPopupClosed === 'function') _acPopupClosed();   // 🔧 2026-10-30 저장하고 닫혀도 직전 탭으로
     showToast('✓','저장 완료','적용 환율 ' + (b*(1-m/100)).toFixed(2));
   });
 }
@@ -8003,7 +8004,7 @@ async function plAttachOpen(opts){
   if (!_pla.chargeId && _pla.rows.length === 1) _pla.chargeId = _pla.rows[0].id;
   _plaPickCharge(_pla.chargeId);
 }
-function plAttachClose(){ var el = document.getElementById('plAttachPopup'); if (el) el.remove(); _pla.busy = false; }
+function plAttachClose(){ var el = document.getElementById('plAttachPopup'); if (el) el.remove(); _pla.busy = false; if (typeof _acPopupClosed === 'function') _acPopupClosed(); }
 function _plaCharge(){ return (_pla.rows || []).find(function(c){ return c.id === _pla.chargeId; }) || null; }
 function _plaChargeLabel(c){
   var cur = c.pay_currency || 'KRW', who = c.member_name || c.payer_name || c.label || '';
@@ -8720,7 +8721,7 @@ async function pxOpen(opts){
   _pxRenderForm();
   pxListLoad();
 }
-function pxClose(){ var el = document.getElementById('pxPopup'); if (el) el.remove(); _px.busy = false; }
+function pxClose(){ var el = document.getElementById('pxPopup'); if (el) el.remove(); _px.busy = false; if (typeof _acPopupClosed === 'function') _acPopupClosed(); }
 function _pxTicketOpts(){
   var html = '<option value="">회차를 고르세요</option>', pick = _px.ticketId, found = false;
   (window.ticketDB || []).slice().sort(function(a, b){ return String((typeof _tkFullDate === 'function' && _tkFullDate(a)) || a.date).localeCompare(String((typeof _tkFullDate === 'function' && _tkFullDate(b)) || b.date)) || String(a.time || '').localeCompare(String(b.time || '')); }).forEach(function(t){
@@ -11466,7 +11467,8 @@ window.confirmLogout = function(){
     + '<button id="__logoutNo" style="width:100%;padding:13px;background:#f0ede8;border:none;border-radius:10px;font-family:\'Noto Sans KR\',sans-serif;font-size:14px;font-weight:500;color:#555;cursor:pointer;">취소</button>'
     + '</div>';
   document.body.appendChild(overlay);
-  document.getElementById('__logoutNo').onclick = function(){ overlay.remove(); };
+  // 🔧 2026-10-30 콘솔(더보기)에서 연 로그아웃을 취소하면 직전 탭으로 — 회원 앱에서 연 것은 _acEnsureConsole 이 건드리지 않는다
+  document.getElementById('__logoutNo').onclick = function(){ overlay.remove(); if (typeof _acPopupClosed === 'function') _acPopupClosed(); };
   document.getElementById('__logoutYes').onclick = function(){
     overlay.remove();
     try {
@@ -14746,6 +14748,18 @@ window.closePromoCarousel = function(){
       <div id="tuExtraSchedList"></div>
       <button type="button" class="tu-picker-btn" id="tuExtraAddBtn" onclick="tuExtraAdd()" style="justify-content:center;color:#1a1a18;font-weight:700;border-style:dashed;">＋ 일정 추가</button>
       <div style="font-size:11px;color:#8a8478;line-height:1.55;margin-top:8px;">위의 날짜·시간이 1회차입니다. 추가한 일정은 각각 <strong>별도 티켓</strong>으로 올라가고, 좌석·금액·규정·공개 설정은 모두 같게 적용됩니다. 마감·우선 공개·판매 오픈 <strong>시각</strong>도 같은 값이 들어가니 회차마다 달라야 하면 따로 올려주세요.</div>
+    </div>
+    <!-- 🆕 2026-10-30: 패키지 연계 — 올리면서 바로 패키지로(슈퍼어드민 · 신규 업로드만).
+         올린 회차는 **숨김으로 올리고** 연계와 같은 트랜잭션에서 공개한다(taam_package_add_rounds · taam_package_save_reveal) —
+         연계가 실패하면 숨긴 채 남아 단일로 잠깐이라도 팔리지 않는다. -->
+    <div class="rp-field" id="tuPkgWrap" style="display:none;" data-lang-lock="ko">
+      <label class="rp-label">📦 패키지 연계 <span style="font-weight:500;color:#8a8478;letter-spacing:0;">(선택 · 올리면서 바로 패키지로)</span></label>
+      <div style="display:flex;gap:6px;">
+        <button type="button" id="tuPkgModeNone" onclick="tuPkgMode('none')" style="flex:1;padding:10px 0;border-radius:10px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;">연계 안 함</button>
+        <button type="button" id="tuPkgModeAdd" onclick="tuPkgMode('add')" style="flex:1;padding:10px 0;border-radius:10px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;">기존 패키지에 추가</button>
+        <button type="button" id="tuPkgModeNew" onclick="tuPkgMode('new')" style="flex:1;padding:10px 0;border-radius:10px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;">새 패키지</button>
+      </div>
+      <div id="tuPkgBody" style="margin-top:8px;"></div>
     </div>
     <div class="rp-field">
       <label class="rp-label">총 좌석 수</label>
@@ -18580,12 +18594,14 @@ function saveTickets(onlyIds, localOnly){
         console.warn('⚠ ticket Supabase 저장 실패 (IDB는 성공):', t.id, e); return false;
       });
     });
+    var _all = Promise.all(_ps);   // 🆕 2026-10-30 돌려준다 — 업로드하면서 패키지 연계가 저장 끝을 기다린다(다른 호출부는 안 쓴다)
     // 🆕 2026-10-29 매장 어드민: 서버가 값을 되돌리거나(승인된 회차의 수정 → 큐) 거절했을 수 있다 — 저장 뒤 서버 판을 **직접** 다시 읽어 저장한 회차를 교체한다
     //   (taamSyncNow 는 15초 안·결제 중이면 건너뛴다 — 그러면 로컬엔 「반영된 것처럼」 남았다 · 2차 리뷰). 교체는 보낸 회차만 — 다른 회차의 로컬 상태는 건드리지 않는다.
     if(_currentRole === 'admin'){
       var _sentIds = _target.map(function(t){ return String(t.id); });
       Promise.all(_ps).then(function(){ return _tkRefreshFromServer(_sentIds); }).catch(function(){});
     }
+    return _all;
   }
 }
 // 🆕 2026-10-29 저장한 회차를 서버 판으로 교체 — 되돌린 값·수정 큐(pendingEdit)·서버가 정한 status 가 로컬에 반영된다. 큐가 새로 생겼으면 토스트.
@@ -28302,7 +28318,7 @@ function resetFinancialDataOnly() {
     + '<div style="font-family:var(--font-main);font-size:16px;font-weight:800;color:#1a1a18;margin-bottom:8px;">금융 데이터 초기화</div>'
     + '<div style="font-family:var(--font-main);font-size:13px;color:#777;line-height:1.7;margin-bottom:24px;">예치금·구매내역·충전내역을<br>모두 초기화합니다.<br><span style="font-size:11px;color:#aaa;">레스토랑·티켓·회원 데이터는 유지됩니다.</span></div>'
     + '<button onclick="doResetFinancialData()" style="width:100%;padding:14px;background:#c00;border:none;border-radius:12px;font-family:var(--font-main);font-size:14px;font-weight:800;color:#fff;cursor:pointer;margin-bottom:10px;">초기화</button>'
-    + '<button onclick="document.getElementById(\'resetConfirmPopup\').remove()" style="width:100%;padding:12px;background:transparent;border:none;font-family:var(--font-main);font-size:10px;font-weight:600;letter-spacing:.18em;color:#bbb;cursor:pointer;">취소</button>'
+    + '<button onclick="_acOverlayClose(\'resetConfirmPopup\')" style="width:100%;padding:12px;background:transparent;border:none;font-family:var(--font-main);font-size:10px;font-weight:600;letter-spacing:.18em;color:#bbb;cursor:pointer;">취소</button>'
     + '</div>';
   document.body.appendChild(el);
 }
@@ -42120,6 +42136,11 @@ var _acExiting = false, _acEnsuring = false;
 //   깔린다(티켓 업로드가 그랬다 — 버튼은 눌리는데 화면이 안 보였다).
 var _acNavUntil = 0;
 function _acNavHold(ms){ _acNavUntil = Date.now() + (ms || 700); }
+// 콘솔 위에 뜨는 어드민 팝업들 — 하나라도 떠 있으면 _acEnsureConsole 이 탭을 다시 세우지 않는다(2026-10-30 · 팝업 닫기 전수 점검)
+var AC_OVERLAY_IDS = ['prvPopup','prvMemberPopup','vnPopup','tsrPopup','pmxPopup','pkgAdminPopup','pxPopup','plAttachPopup','tkSaleMgr',
+  'membershipUntilMgmtModal','adminDepositGrantModal','ticketAccessMgmtModal','fxSettingsPopup','cardFeePopup','feeDuePopup',
+  'popAdmin','popHistory','payLinkPopup','paSheet','cpfModal','resetConfirmPopup','adminPwdModal','memberPwdModal',
+  '__logoutConfirmPopup','tuPkgFailPopup','tuPkgPickPopup'];
 window._acNavHold = _acNavHold;
 
 function _acEnsureConsole(){
@@ -42149,6 +42170,9 @@ function _acEnsureConsole(){
       //     보고 대시보드를 그 위에 올렸다. 전체화면 판은 전부 센다.
       var pages = document.querySelectorAll('.sub-screen, .restpage, .tu-screen, .mp-subpage');
       for(var i = 0; i < pages.length; i++){ if(vis(pages[i])) return; }
+      // 🆕 2026-10-30 다른 어드민 팝업이 아직 떠 있으면(한 팝업에서 다음 팝업으로 넘겨 연 경우 — 결제 링크 → 예치금 부여 · 연결 → 구매 규정 예외)
+      //   그 밑에 탭을 다시 세우지 않는다. 그 팝업이 닫힐 때 여기로 다시 온다.
+      for(var j = 0; j < AC_OVERLAY_IDS.length; j++){ if(vis(document.getElementById(AC_OVERLAY_IDS[j]))) return; }
       // ⚠ 늘 'today' 로 보내면 안 된다. 예약 탭에서 항목을 열었다가 닫으면
       //   오늘 탭에 서 있게 된다 — 「바로 전 단계」가 아니다.
       //   그 역할에 없는 탭이면 acGo 가 알아서 무시하므로, 그때만 today 로.
@@ -46630,6 +46654,8 @@ function openTU(){
   tuResetGradeOpen();
   // 🆕 2026.10.05: 추가 일정 — 신규 업로드에서만 쓴다
   if(typeof tuExtraReset === 'function'){ tuExtraReset(); tuExtraSetVisible(!_tuEditId); }
+  // 🆕 2026-10-30 패키지 연계 — 슈퍼어드민 신규 업로드에서만
+  if(typeof tuPkgReset === 'function'){ tuPkgReset(); tuPkgSetVisible(!_tuEditId); }
   // 🆕 2026.08: 신규 업로드면 티켓 상세 설명도 항상 리셋 (편집 진입은 tuEditTicket 이 채움)
   if(!_tuEditId){
     var _tuDesc0 = document.getElementById('tuTicketDesc');
@@ -46678,6 +46704,7 @@ function closeTU(){
   // 🆕 추가 일정 초기화 (다음 업로드에 남지 않게) + 섹션 다시 보이기
   if(typeof tuExtraReset === 'function'){ tuExtraReset(); tuExtraSetVisible(true); }
   _pendingTicketExtras = [];
+  if(typeof tuPkgReset === 'function'){ tuPkgReset(); var _pkp = document.getElementById('tuPkgPickPopup'); if(_pkp) _pkp.remove(); }
   // 슬롯 초기화
   tuResetSlots();
   document.getElementById('tuTotalPax').value = '';
@@ -47066,6 +47093,13 @@ function uploadTicket(){
     c.date = sc.date; c.dateYear = sc.dateYear; c.time = sc.time;
     return c;
   });
+  // 🆕 2026-10-30 패키지 연계 계획 — 확인 전에 미리 거른다(서버가 다시 본다)
+  _pendingPkgLink = null;
+  if(typeof _tuPkgPlan === 'function'){
+    var _pkPlan = _tuPkgPlan(_scheds, _selectedRestId);
+    if(_pkPlan && _pkPlan.error){ showToast('⚠', '패키지 연계', _pkPlan.error); return; }
+    _pendingPkgLink = _pkPlan;
+  }
 
   var slotParts=[];
   if(_tuSlots.s1>0) slotParts.push('1인석×'+_tuSlots.s1);
@@ -47087,6 +47121,12 @@ function uploadTicket(){
     _tcpRows.push(['시간',timeDisp]);
   }
   _tcpRows.push(['인원 구성', slotLabel + (_scheds.length > 1 ? ' · 회차마다' : '')]);
+  if(_pendingPkgLink){
+    var _pl = _pendingPkgLink;
+    _tcpRows.push(['📦 패키지', _pkEsc(_pl.mode === 'add' ? '「' + _pl.title + '」에 추가 (회차 ' + _pl.cur + ' → ' + (_pl.cur + _pl.n) + '개)'
+                                                      : '새 패키지 「' + _pl.title + '」 · 회차 ' + (_pl.n + (_pl.sel || []).length) + '개' + ((_pl.sel || []).length ? ' (기존 ' + _pl.sel.length + '개 포함)' : ''))
+                                + '<br><span style="font-size:11px;color:#8a8478;">올리는 동안 숨겨 두었다가 연계와 함께 공개 · 단일로는 안 팔림</span>']);
+  }
   _tcpRows.push(['식사예약금','₩'+(meal*minP).toLocaleString()+'~']);
   _tcpRows.push(['대행비','₩'+(agency*minP).toLocaleString()+'~']);
   document.getElementById('tcpRows').innerHTML=_tcpRows.map(function(row){
@@ -48083,7 +48123,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.10.30-a';
+var TAAM_WEB_BUILD = '2026.10.30-b';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -49360,6 +49400,13 @@ async function riConfirmPay(){
 function finalUploadTicket(){
   try {
   if(!_pendingTicket)return;
+  // 🆕 2026-10-30 패키지 연계 — 신규 업로드면 숨김으로 올리고 저장이 끝나면 연계(같은 트랜잭션에서 공개)
+  var _pkLink = (!_tuEditId && _pendingPkgLink && typeof _currentRole !== 'undefined' && _currentRole === 'superadmin') ? _pendingPkgLink : null;
+  _pendingPkgLink = null;
+  if(_pkLink){
+    _pendingTicket.status = 'hidden';
+    (Array.isArray(_pendingTicketExtras) ? _pendingTicketExtras : []).forEach(function(c){ c.status = 'hidden'; });
+  }
   if(_tuEditId){
     var idx=ticketDB.findIndex(function(t){return String(t.id)===String(_tuEditId);});
     var _wasApproved = idx!==-1 && ['active','soldout','deleteRequest'].indexOf(ticketDB[idx].status) >= 0;
@@ -49407,6 +49454,8 @@ function finalUploadTicket(){
           });
         }
       } catch(_ur){ console.warn('[upload] 슈퍼어드민 통지 예외:', _ur); }
+    } else if(_pkLink) {
+      showToast('⏳','업로드 · 패키지 연계 중', (_nAll > 1 ? _nAll + '개 회차를 ' : '회차를 ') + '숨김으로 올린 뒤 「' + _pkLink.title + '」에 연계합니다');
     } else {
       showToast('✓','업로드 완료', _nAll > 1 ? _nAll + '개 회차가 등록되었습니다' : '티켓이 등록되었습니다');
     }
@@ -49414,7 +49463,8 @@ function finalUploadTicket(){
   // 🆕 2026-10-29 이번에 올린(고친) 회차만 서버에 — 전체를 밀면 낡은 로컬 값이 다른 회차를 덮는다
   var _savedIds = [String(_pendingTicket.id)].concat((Array.isArray(_pendingTicketExtras) ? _pendingTicketExtras : []).map(function(c){ return String(c.id); }));
   _pendingTicketExtras = [];
-  saveTickets(_savedIds);
+  var _svP = saveTickets(_savedIds);
+  if(_pkLink && typeof _tuPkgLinkAfter === 'function') _tuPkgLinkAfter(_svP, _savedIds, _pkLink);
   updatePendingBadge();
   // 새 티켓이 즉시 보이도록 필터 리셋 (이전 화면에서 셋팅된 시간/날짜 필터 제거)
   _tkTime = null;
@@ -50285,6 +50335,7 @@ function renderTicketList(){
       + '</div>'
       + '<div class="tkl-badges">'+_typeChip+lockBadge
       +   ((typeof _pkOf === 'function' && _pkOf(t)) ? '<span style="font-size:9.5px;font-weight:800;color:#8A6A28;background:#F7F0E2;border:1px solid #E8D9B8;border-radius:4px;padding:2px 6px;">📦 패키지 · '+_raEsc(_pkOf(t).title)+'</span>' : '')
+      +   (t.status==='hidden' ? '<span style="font-size:9.5px;font-weight:800;color:#9A6B12;background:#FFF6E8;border:1px solid #F0D9B4;border-radius:4px;padding:2px 6px;" title="회원에게 안 보입니다 — 📦 티켓 패키지에서 연계하면 함께 공개">숨김 · 연계 대기</span>' : '')
       + '</div>'
       + '<div class="tkl-date"><span class="d">'+_raEsc(_dateTxt)+'</span>'
       +   (t.time ? '<span class="t">'+_raEsc(t.time)+'</span>' : '') + '</div>'
@@ -50733,6 +50784,7 @@ function tuEditTicket(id){
   // 🆕 2026.10.05: 수정은 티켓 한 장만 — 추가 일정 섹션은 숨기고 비운다
   if(typeof tuExtraReset === 'function'){ tuExtraReset(); tuExtraSetVisible(false); }
   _pendingTicketExtras = [];
+  if(typeof tuPkgReset === 'function'){ tuPkgReset(); tuPkgSetVisible(false); }   // 🆕 2026-10-30 수정에는 패키지 연계 없음(📦 티켓 패키지 화면에서)
 
   // 날짜
   _tuSelectedDate=t.date||null;
@@ -51046,6 +51098,287 @@ function _tuSchedKey(s){
   // 연도가 없으면(옛 경로) 날짜만으로 비교 — 같은 MM.DD 를 연도 다르게 두 번 넣는 일은 드물다
   return (s.dateYear ? s.dateYear + '.' : '') + String(s.date || '') + ' ' + String(s.time || '');
 }
+// ════════════════════════════════════════════════════════════════
+// 🆕 2026-10-30 업로드하면서 패키지 연계 (슈퍼어드민 · 신규 업로드만)
+//   「기존 패키지에 추가」(구매자 없는 패키지만) · 「새 패키지」(이번 회차 + 고른 기존 회차 = 2~8개).
+//   올린 회차는 **숨김(hidden)으로 올리고** 연계 RPC 가 같은 트랜잭션에서 공개한다 — 실패하면 숨긴 채 남고 바로 묻는다.
+//   서버가 다시 본다(같은 날 같은 시간대 · 재구매 제한 · 예약 · 구매자) — 앱은 미리 걸러 실패를 줄일 뿐이다.
+// ════════════════════════════════════════════════════════════════
+var _tuPkg = { mode: 'none', pkgId: '', title: '', sel: [], list: null, listErr: '', listSeq: 0, book: null, q: '' };
+var _pendingPkgLink = null;
+function tuPkgReset(){
+  _tuPkg = { mode: 'none', pkgId: '', title: '', sel: [], list: null, listErr: '', listSeq: (_tuPkg.listSeq || 0) + 1, book: null, q: '' };
+  _pendingPkgLink = null;
+  tuPkgRender();
+}
+function tuPkgSetVisible(on){
+  var w = document.getElementById('tuPkgWrap');
+  if(w) w.style.display = (on && typeof _currentRole !== 'undefined' && _currentRole === 'superadmin') ? '' : 'none';
+}
+function tuPkgMode(m){
+  if(['none', 'add', 'new'].indexOf(m) < 0) return;
+  _tuPkg.mode = m;
+  if(m === 'add' && !_tuPkg.list) _tuPkgLoadList();
+  tuPkgRender();
+}
+window.tuPkgMode = tuPkgMode;
+async function _tuPkgLoadList(){
+  if(!window.sb) return;
+  var seq = (_tuPkg.listSeq = (_tuPkg.listSeq || 0) + 1);
+  _tuPkg.listErr = '';
+  try {
+    var r = await window.sb.rpc('taam_package_list', { p_include_unlinked: false });
+    if(seq !== _tuPkg.listSeq) return;
+    if(r.error){ _tuPkg.list = []; _tuPkg.listErr = /does not exist|schema cache/i.test(String(r.error.message)) ? '서버 준비 필요' : '패키지 목록을 못 읽었습니다'; }
+    else _tuPkg.list = (r.data || []).filter(function(p){ return p.status === 'active'; });
+  } catch(_e){ if(seq === _tuPkg.listSeq){ _tuPkg.list = []; _tuPkg.listErr = '패키지 목록을 못 읽었습니다'; } }
+  tuPkgRender();
+}
+function _tuPkgCount(){ return 1 + ((typeof _tuExtraScheds !== 'undefined' && Array.isArray(_tuExtraScheds)) ? _tuExtraScheds.length : 0); }
+function _tuPkgTk(id){ return (ticketDB || []).find(function(t){ return String(t.id) === String(id); }) || null; }
+function tuPkgRender(){
+  var setB = function(id, on){
+    var b = document.getElementById(id); if(!b) return;
+    b.style.border = on ? '1px solid #1a1a18' : '1px solid #e0ddd5';
+    b.style.background = on ? '#1a1a18' : '#fff';
+    b.style.color = on ? '#fff' : '#8a8478';
+  };
+  setB('tuPkgModeNone', _tuPkg.mode === 'none'); setB('tuPkgModeAdd', _tuPkg.mode === 'add'); setB('tuPkgModeNew', _tuPkg.mode === 'new');
+  var el = document.getElementById('tuPkgBody'); if(!el) return;
+  var hint = '<div style="font-size:11px;color:#8a8478;line-height:1.6;margin-top:8px;">연계하면 올린 회차는 <strong>단일로 팔리지 않고 패키지로만</strong> 팔립니다. 올리는 동안 숨겨 두었다가 연계와 함께 공개합니다 — 연계가 안 되면 숨긴 채 남고 바로 알려 드립니다.</div>';
+  if(_tuPkg.mode === 'none'){ el.innerHTML = '<div style="font-size:11px;color:#8a8478;">연계하지 않으면 종전처럼 단일 티켓으로 올라갑니다.</div>'; return; }
+  var n = _tuPkgCount();
+  if(_tuPkg.mode === 'add'){
+    if(_tuPkg.list === null){ el.innerHTML = '<div style="font-size:12px;color:#aaa;padding:8px 0;">패키지 불러오는 중…</div>'; return; }
+    var L = _tuPkg.list || [];
+    var h = _tuPkg.listErr ? '<div style="font-size:12px;color:#9A6B12;font-weight:700;margin-bottom:6px;">' + _pkEsc(_tuPkg.listErr) + '</div>' : '';
+    if(!L.length) h += '<div style="font-size:12px;color:#aaa;padding:6px 0;">연계 중인 패키지가 없습니다 — 「새 패키지」로 만드세요</div>';
+    L.forEach(function(p){
+      var on = _tuPkg.pkgId === p.id, cur = (p.rounds || []).length, o = p.orders || {};
+      var why = (Number(o.paid || 0) || Number(o.hold || 0)) ? '구매자가 있어 더할 수 없음' : ((cur + n > 8) ? '합쳐서 8회차를 넘음(지금 ' + cur + ' + ' + n + ')' : '');
+      h += '<div data-tpk="' + _pkSafeId(p.id) + '" onclick="tuPkgPick(this)" style="border:1.5px solid ' + (on ? '#5C0A14' : '#e0ddd5') + ';background:' + (on ? '#FBF3F2' : '#fff') + ';border-radius:10px;padding:9px 11px;margin-bottom:6px;' + (why ? 'opacity:.55;cursor:not-allowed;' : 'cursor:pointer;') + '">'
+        + '<div style="font-size:12.5px;font-weight:800;color:#1a1a18;">' + (on ? '✓ ' : '') + _pkEsc(p.title) + ' <span style="font-weight:600;color:#8a8478;">· 회차 ' + cur + '개 → ' + (cur + n) + '개</span></div>'
+        + (on ? '<div style="font-size:11px;color:#5A5650;line-height:1.6;margin-top:4px;">' + (p.rounds || []).map(function(x, i){ return (i + 1) + '. ' + _pkaRoundLine(x); }).join('<br>') + '</div>' : '')
+        + (why ? '<div style="font-size:11px;color:#9B1C1C;font-weight:700;margin-top:3px;">' + why + '</div>' : '')
+        + '</div>';
+    });
+    el.innerHTML = h + hint;
+    return;
+  }
+  // new
+  var sel = _tuPkg.sel.map(_tuPkgTk).filter(Boolean);
+  var tot = n + sel.length;
+  el.innerHTML = '<input id="tuPkgTitle" class="tu-input" maxlength="80" placeholder="패키지 이름 (예: 도쿄 미식 3일)" value="' + _pkEsc(_tuPkg.title) + '" oninput="_tuPkg.title=this.value">'
+    + '<div style="font-size:11px;color:#8a8478;margin-top:4px;">영문·일본어 이름과 설명은 📦 티켓 패키지 화면의 「이름·설명」에서 적습니다.</div>'
+    + '<div style="margin-top:10px;font-size:12px;font-weight:800;color:#1a1a18;">함께 묶을 기존 회차 <span style="font-weight:600;color:#8a8478;">(선택 · 예약이 없는 회차만)</span></div>'
+    + (sel.length ? '<div style="margin-top:6px;">' + sel.map(function(t){
+          return '<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid #eee;border-radius:9px;margin-bottom:5px;font-size:12px;">'
+            + '<span style="flex:1;min-width:0;"><b>' + _pkEsc(_pcalRestName(t)) + '</b> · ' + _pkEsc(_popStoryDate(t)) + (t.time ? ' ' + _pkEsc(t.time) : '') + '</span>'
+            + '<button type="button" data-tpk="' + _pkSafeId(t.id) + '" onclick="tuPkgUnpick(this)" style="border:none;background:#F3F0EA;border-radius:7px;padding:4px 8px;font-size:11px;cursor:pointer;">빼기</button></div>';
+        }).join('') + '</div>' : '')
+    + '<button type="button" class="tu-picker-btn" onclick="tuPkgPickOpen()" style="justify-content:center;color:#1a1a18;font-weight:700;border-style:dashed;margin-top:6px;">＋ 기존 회차 고르기</button>'
+    + '<div style="font-size:11.5px;margin-top:6px;color:' + (tot < 2 || tot > 8 ? '#9B1C1C' : '#5A5650') + ';font-weight:700;">이번에 올리는 회차 ' + n + '개 + 고른 회차 ' + sel.length + '개 = ' + tot + '개 (2~8개)</div>'
+    + hint;
+}
+window.tuPkgRender = tuPkgRender;
+function tuPkgPick(el){
+  var v = _pkSafeId(el && el.getAttribute('data-tpk'));
+  var p = (_tuPkg.list || []).find(function(x){ return x.id === v; }); if(!p) return;
+  var o = p.orders || {};
+  if(Number(o.paid || 0) || Number(o.hold || 0)){ showToast('⚠', '구매자가 있는 패키지입니다', '구매자가 생긴 패키지에는 회차를 더할 수 없습니다'); return; }
+  if((p.rounds || []).length + _tuPkgCount() > 8){ showToast('⚠', '회차는 합쳐서 8개까지', ''); return; }
+  _tuPkg.pkgId = (_tuPkg.pkgId === v) ? '' : v;
+  tuPkgRender();
+}
+window.tuPkgPick = tuPkgPick;
+function tuPkgUnpick(el){
+  var v = _pkSafeId(el && el.getAttribute('data-tpk'));
+  _tuPkg.sel = _tuPkg.sel.filter(function(x){ return x !== v; });
+  tuPkgRender();
+}
+window.tuPkgUnpick = tuPkgUnpick;
+// 기존 회차 고르기 — 패키지 화면과 같은 후보(연계 안 된 · 팔 수 있는 · 지나지 않은 · 연도 있는 회차) · 예약 있는 회차는 못 고른다
+function _tuPkgCands(){
+  var linked = window._tkPkgByRound || {};
+  var q = String(_tuPkg.q || '').trim().toLowerCase();
+  return (ticketDB || []).filter(function(t){
+    if(!t || linked[String(t.id)]) return false;
+    if(['pending', 'deleteRequest', 'hidden', 'deleted', 'cancelled'].indexOf(String(t.status || '')) >= 0) return false;
+    if(typeof _isTicketExpired === 'function' && _isTicketExpired(t)) return false;
+    if(String((typeof _tkFullDate === 'function' ? _tkFullDate(t) : '') || '').split('.').length !== 3) return false;
+    if(!q) return true;
+    var nm = String(_pcalRestName(t) || t.rest || '').toLowerCase();
+    return nm.indexOf(q) >= 0 || String(_tkFullDate(t)).indexOf(q) >= 0;
+  }).sort(function(a, b){ return String(_tkFullDate(a) + ' ' + (a.time || '')).localeCompare(String(_tkFullDate(b) + ' ' + (b.time || ''))); }).slice(0, 120);
+}
+function _tuPkgBooked(id){ var b = _tuPkg.book && _tuPkg.book[String(id)]; return (b && Number(b.n) > 0) ? b : null; }
+function _tuPkgCandHtml(){
+  var C = _tuPkgCands();
+  if(!C.length) return '<div style="padding:16px;text-align:center;color:#aaa;font-size:12px;">고를 수 있는 회차가 없습니다</div>';
+  return C.map(function(t){
+    var on = _tuPkg.sel.indexOf(String(t.id)) >= 0, bk = _tuPkgBooked(t.id);
+    return '<div data-tpk="' + _pkSafeId(t.id) + '" onclick="tuPkgPickToggle(this)" style="display:flex;align-items:center;gap:9px;padding:9px 11px;border-bottom:1px solid #f3f0ea;' + (bk && !on ? 'cursor:not-allowed;opacity:.55;' : 'cursor:pointer;') + (on ? 'background:#FBF3F2;' : '') + '">'
+      + '<span style="width:18px;height:18px;border-radius:5px;border:1.5px solid ' + (on ? '#5C0A14' : '#ccc') + ';background:' + (on ? '#5C0A14' : '#fff') + ';color:#fff;font-size:12px;display:inline-flex;align-items:center;justify-content:center;">' + (on ? '✓' : '') + '</span>'
+      + '<span style="flex:1;min-width:0;font-size:12.5px;"><b>' + _pkEsc(_pcalRestName(t)) + '</b> · ' + _pkEsc(_popStoryDate(t)) + (t.time ? ' ' + _pkEsc(t.time) : '') + (t.status === 'soldout' ? ' · 매진' : '')
+      + (bk ? '<br><b style="color:#9B1C1C;font-size:11px;">예약 ' + bk.n + '건(' + bk.pax + '명) — 연계 불가</b>' : '') + '</span></div>';
+  }).join('');
+}
+async function tuPkgPickOpen(){
+  var old = document.getElementById('tuPkgPickPopup'); if(old) old.remove();
+  var el = document.createElement('div'); el.id = 'tuPkgPickPopup'; el.setAttribute('data-lang-lock', 'ko');
+  el.style.cssText = 'position:fixed;inset:0;z-index:9400;background:rgba(0,0,0,.55);display:flex;align-items:flex-end;justify-content:center;';
+  el.onpointerdown = function(e){ el._downOut = (e.target === el); };
+  el.onclick = function(e){ if(e.target === el && el._downOut) tuPkgPickClose(); };
+  el.innerHTML = '<div style="width:100%;max-width:560px;max-height:84vh;display:flex;flex-direction:column;background:#fff;border-radius:18px 18px 0 0;padding:16px 16px 22px;box-sizing:border-box;font-family:var(--font-main);">'
+    + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;"><div style="flex:1;font-size:15px;font-weight:900;">함께 묶을 기존 회차</div>'
+    + '<button onclick="tuPkgPickClose()" style="border:none;background:#1a1a18;color:#fff;border-radius:9px;padding:8px 14px;font-size:12.5px;font-weight:800;cursor:pointer;">완료</button></div>'
+    + '<input id="tuPkgQ" placeholder="매장 이름·날짜(2027.03)로 찾기" value="' + _pkEsc(_tuPkg.q) + '" oninput="tuPkgPickQ(this.value)" style="width:100%;box-sizing:border-box;padding:10px;border:1.5px solid #e0ddd8;border-radius:9px;font-size:12.5px;">'
+    + '<div id="tuPkgBookErr" style="font-size:11px;color:#9A6B12;margin-top:4px;"></div>'
+    + '<div id="tuPkgCand" style="margin-top:6px;flex:1;overflow-y:auto;border:1px solid #eee;border-radius:10px;">' + _tuPkgCandHtml() + '</div></div>';
+  document.body.appendChild(el);
+  // 예약 수(서버) — 못 읽으면 고르게 두고 연계할 때 서버가 거절한다
+  try {
+    var ids = _tuPkgCands().map(function(t){ return String(t.id); }).concat(_tuPkg.sel).slice(0, 400);
+    var r = await window.sb.rpc('taam_package_round_bookings', { p_rounds: ids });
+    if(!r.error) _tuPkg.book = r.data || {};
+    else { var be = document.getElementById('tuPkgBookErr'); if(be) be.textContent = '예약 수를 못 읽었습니다 — 연계할 때 서버가 확인합니다'; }
+  } catch(_e){}
+  var c = document.getElementById('tuPkgCand'); if(c) c.innerHTML = _tuPkgCandHtml();
+}
+window.tuPkgPickOpen = tuPkgPickOpen;
+function tuPkgPickQ(v){ _tuPkg.q = v; var c = document.getElementById('tuPkgCand'); if(c) c.innerHTML = _tuPkgCandHtml(); }
+window.tuPkgPickQ = tuPkgPickQ;
+function tuPkgPickToggle(el){
+  var v = _pkSafeId(el && el.getAttribute('data-tpk'));
+  var i = _tuPkg.sel.indexOf(v);
+  if(i < 0 && _tuPkgBooked(v)){ showToast('⚠', '예약이 있는 회차입니다', '예약이 없는 회차만 연계할 수 있습니다'); return; }
+  if(i >= 0) _tuPkg.sel.splice(i, 1);
+  else if(_tuPkgCount() + _tuPkg.sel.length < 8) _tuPkg.sel.push(v);
+  else { showToast('⚠', '회차는 합쳐서 8개까지', ''); return; }
+  var c = document.getElementById('tuPkgCand'); if(c) c.innerHTML = _tuPkgCandHtml();
+}
+window.tuPkgPickToggle = tuPkgPickToggle;
+function tuPkgPickClose(){ var el = document.getElementById('tuPkgPickPopup'); if(el) el.remove(); tuPkgRender(); }
+window.tuPkgPickClose = tuPkgPickClose;
+// 업로드 확인 전에 연계 계획을 세운다 — 오류면 문구, 연계 안 함이면 null
+function _tuPkgYmd(sc){
+  var parts = String(sc.date || '').split('.');
+  if(parts.length === 3) return sc.date;
+  if(parts.length === 2 && sc.dateYear) return sc.dateYear + '.' + sc.date;
+  return (typeof _tkFullDate === 'function') ? _tkFullDate({ date: sc.date, dateYear: sc.dateYear, regDate: new Date().toISOString().slice(0, 10) }) : sc.date;
+}
+function _tuPkgPlan(scheds, restId){
+  if(typeof _currentRole === 'undefined' || _currentRole !== 'superadmin' || _tuEditId || _tuPkg.mode === 'none') return null;
+  var n = scheds.length, others = [], plan = { mode: _tuPkg.mode };
+  if(_tuPkg.mode === 'add'){
+    var p = (_tuPkg.list || []).find(function(x){ return x.id === _tuPkg.pkgId; });
+    if(!p) return { error: '연계할 패키지를 고르세요' };
+    var o = p.orders || {};
+    if(Number(o.paid || 0) || Number(o.hold || 0)) return { error: '「' + p.title + '」에는 구매자가 있어 회차를 더할 수 없습니다' };
+    if((p.rounds || []).length + n > 8) return { error: '회차는 합쳐서 8개까지입니다 (지금 ' + (p.rounds || []).length + ' + ' + n + ')' };
+    plan.pkgId = p.id; plan.title = p.title; plan.cur = (p.rounds || []).length;
+    others = (p.rounds || []).map(function(x){ var t = _tuPkgTk(x.id); return t ? { rest: String(t.restId), ymd: _tkFullDate(t), time: t.time, nm: _pcalRestName(t), open: !!t.repurchaseOpen }
+                                                                           : { rest: String(x.rest_id || ''), ymd: String(x.date || ''), time: x.time, nm: x.rest_name || '', open: false }; });
+  } else {
+    var title = String(_tuPkg.title || '').trim();
+    if(!title) return { error: '새 패키지 이름을 적어 주세요' };
+    if(title.length > 80 || /<\s*[a-z\/!?]|javascript\s*:/i.test(title)) return { error: '패키지 이름을 확인해 주세요 (80자 · 태그 모양 금지)' };
+    var tot = n + _tuPkg.sel.length;
+    if(tot < 2) return { error: '새 패키지는 회차가 2개 이상이어야 합니다 — 「추가 일정」을 넣거나 기존 회차를 고르세요' };
+    if(tot > 8) return { error: '회차는 합쳐서 8개까지입니다' };
+    if(_tuPkg.sel.some(function(id){ return _tuPkgBooked(id); })) return { error: '고른 기존 회차에 예약이 있습니다 — 빼고 다시' };
+    plan.title = title; plan.sel = _tuPkg.sel.slice();
+    others = plan.sel.map(_tuPkgTk).filter(Boolean).map(function(t){ return { rest: String(t.restId), ymd: _tkFullDate(t), time: t.time, nm: _pcalRestName(t), open: !!t.repurchaseOpen }; });
+  }
+  // 같은 날 같은 시간대 · 같은 매장 재구매 제한 — 서버(_taam_pkg_conflicts)와 같은 규칙으로 미리 거른다
+  var r = (restaurantDB || []).find(function(x){ return String(x.id) === String(restId); });
+  var mine = scheds.map(function(sc){ return { rest: String(restId), ymd: _tuPkgYmd(sc), time: sc.time, nm: (r && r.name) || '', open: false }; });
+  var all = others.concat(mine);
+  var dayN = function(ymd){ var a = String(ymd || '').split('.'); return a.length === 3 ? Date.UTC(+a[0], +a[1] - 1, +a[2]) / 864e5 : null; };
+  for(var i = 0; i < all.length; i++){
+    for(var j = i + 1; j < all.length; j++){
+      var A = all[i], B = all[j], da = dayN(A.ymd), db = dayN(B.ymd);
+      if(da === null || db === null) continue;
+      var sa = _tkTimeSlot(A.time), sb = _tkTimeSlot(B.time);
+      if(da === db && (!sa || !sb || sa === sb)) return { error: '같은 날 같은 시간대(' + A.ymd + ') — ' + A.nm + ' · ' + B.nm + '는 함께 묶을 수 없습니다' };
+      if(A.rest && A.rest === B.rest && da !== db && !A.open && !B.open){
+        var rr = (restaurantDB || []).find(function(x){ return String(x.id) === A.rest; });
+        var rd = (rr && rr.repurchaseDay) || 0;
+        if(rd > 0 && Math.abs(da - db) < rd) return { error: A.nm + ' — 재구매 제한 ' + rd + '일 안의 두 회차(' + A.ymd + ' · ' + B.ymd + ')는 함께 묶을 수 없습니다' };
+      }
+    }
+  }
+  plan.n = n;
+  return plan;
+}
+// 올린 뒤 — 서버에 다 올라갔는지 보고 연계(숨김 → 공개)
+async function _tuPkgLinkAfter(svP, ids, link){
+  try { await svP; } catch(_e){}
+  var got = [];
+  try {
+    var have = await window.sb.from('ticket_products').select('id,status').in('id', ids);
+    if(have.error) return _tuPkgFail(ids, link, '올린 회차를 다시 읽지 못했습니다 — ' + String(have.error.message || '').slice(0, 80));
+    got = (have.data || []).map(function(x){ return String(x.id); });
+  } catch(e){ return _tuPkgFail(ids, link, '올린 회차를 다시 읽지 못했습니다'); }
+  var missing = ids.filter(function(id){ return got.indexOf(String(id)) < 0; });
+  if(missing.length) return _tuPkgFail(got, link, '회차 ' + missing.length + '개가 저장되지 않아 연계하지 않았습니다', { partial: true });
+  return _tuPkgDoLink(ids, link);
+}
+async function _tuPkgDoLink(ids, link){
+  var r;
+  try {
+    r = (link.mode === 'add')
+      ? await window.sb.rpc('taam_package_add_rounds', { p_id: link.pkgId, p_rounds: ids, p_reveal: ids })
+      : await window.sb.rpc('taam_package_save_reveal', { p_reveal: ids, p_title: link.title, p_rounds: ids.concat(link.sel || []) });
+  } catch(e){ return _tuPkgFail(ids, link, '연결이 끊겼습니다 — ' + String((e && e.message) || '').slice(0, 80)); }
+  if(r.error) return _tuPkgFail(ids, link, _pkaErrText(r.error));
+  ids.forEach(function(id){ var t = _tuPkgTk(id); if(t && t.status === 'hidden') t.status = 'active'; });
+  try { await _pkaAfterLink(ids, ids); } catch(_a){}
+  showToast('📦', '패키지에 연계했습니다', '「' + link.title + '」 — 올린 회차 ' + ids.length + '개가 공개됐습니다(패키지로만 판매)');
+}
+var _tuPkgFailState = null;
+function _tuPkgFail(ids, link, msg, opts){
+  opts = opts || {};
+  _tuPkgFailState = { ids: (ids || []).map(String), link: link, busy: false };
+  var old = document.getElementById('tuPkgFailPopup'); if(old) old.remove();
+  var el = document.createElement('div'); el.id = 'tuPkgFailPopup'; el.setAttribute('data-lang-lock', 'ko');
+  el.style.cssText = 'position:fixed;inset:0;z-index:9500;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:18px;';
+  var n = _tuPkgFailState.ids.length;
+  var btn = function(a, label, bg, fg){ return '<button data-tpf="' + a + '" onclick="tuPkgFailAct(this)" style="width:100%;margin-top:8px;padding:12px;border:' + (bg === '#fff' ? '1px solid #ddd' : 'none') + ';border-radius:11px;background:' + bg + ';color:' + fg + ';font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;">' + label + '</button>'; };
+  el.innerHTML = '<div style="width:100%;max-width:400px;background:#fff;border-radius:18px;padding:20px;box-sizing:border-box;font-family:var(--font-main);">'
+    + '<div style="font-size:16px;font-weight:900;">📦 패키지 연계가 안 됐습니다</div>'
+    + '<div style="margin-top:8px;padding:10px 12px;border-radius:10px;background:#FDECEC;color:#9B1C1C;font-size:12.5px;font-weight:700;line-height:1.6;">' + _pkEsc(msg) + '</div>'
+    + '<div style="margin-top:10px;font-size:12.5px;color:#4a4540;line-height:1.65;">' + (n ? '올린 회차 ' + n + '개는 <b>숨김</b>으로 남아 회원에게 보이지 않습니다(단일로도 팔리지 않음).' : '서버에 올라간 회차가 없습니다.') + '</div>'
+    + (n && !opts.partial ? btn('retry', '다시 시도', '#1a1a18', '#fff') : '')
+    + (n ? btn('open', '연계 없이 공개 — 단일 티켓으로 판매', '#fff', '#1a1a18') : '')
+    + btn('keep', n ? '숨긴 채 두기 — 나중에 📦 티켓 패키지 화면에서 연계' : '닫기', '#fff', '#5A5650')
+    + '</div>';
+  document.body.appendChild(el);
+}
+async function tuPkgFailAct(b){
+  var a = b && b.getAttribute('data-tpf'), st = _tuPkgFailState;
+  if(!st || st.busy) return;
+  var close = function(){ var el = document.getElementById('tuPkgFailPopup'); if(el) el.remove(); if(typeof _acPopupClosed === 'function') _acPopupClosed(); };
+  if(a === 'keep'){
+    close(); _tuPkgFailState = null;
+    if(st.ids.length) showToast('ⓘ', '숨긴 채 두었습니다', '📦 티켓 패키지에서 「숨김」 회차를 골라 연계하면 함께 공개됩니다 · 티켓 리스트에 「숨김 · 연계 대기」로 보입니다');
+    return;
+  }
+  if(a === 'retry'){ st.busy = true; close(); _tuPkgFailState = null; await _tuPkgDoLink(st.ids, st.link); return; }
+  if(a === 'open'){
+    if(!confirm('올린 회차 ' + st.ids.length + '개를 패키지 없이 공개합니다 — 단일 티켓으로 팔립니다.')) return;
+    st.busy = true;
+    try {
+      var r = await window.sb.from('ticket_products').update({ status: 'active', updated_at: new Date().toISOString() }).in('id', st.ids).eq('status', 'hidden');
+      if(r.error){ st.busy = false; showToast('⚠', '공개하지 못했습니다', String(r.error.message || '').slice(0, 100)); return; }
+      st.ids.forEach(function(id){ var t = _tuPkgTk(id); if(t && t.status === 'hidden') t.status = 'active'; });
+      try { if(typeof _tkRefreshFromServer === 'function') await _tkRefreshFromServer(st.ids, { quiet: true }); } catch(_r){}
+      close(); _tuPkgFailState = null;
+      showToast('✓', '공개했습니다', '단일 티켓으로 판매됩니다');
+    } finally { if(_tuPkgFailState) _tuPkgFailState.busy = false; }
+  }
+}
+window.tuPkgFailAct = tuPkgFailAct;
 function tuExtraReset(){
   _tuExtraScheds = [];
   _tuExtraIdx = -1;
@@ -51073,6 +51406,7 @@ function tuExtraRemove(i){
   tuExtraRender();
 }
 function tuExtraRender(){
+  if(typeof tuPkgRender === 'function' && typeof _tuPkg !== 'undefined' && _tuPkg.mode !== 'none') { try { tuPkgRender(); } catch(_pr){} }   // 🆕 2026-10-30 회차 수가 바뀌면 패키지 칸의 개수도
   var list = document.getElementById('tuExtraSchedList');
   if(!list) return;
   if(!_tuExtraScheds.length){ list.innerHTML = ''; return; }
@@ -62848,11 +63182,11 @@ window.pkCancelGo = pkCancelGo;
 // ── 슈퍼어드민 — 📦 티켓 패키지(연계) 관리 ──
 //   만들기(회차 고르기 · 이름 세 벌 · 설명) · 목록(회차 · 판매 · 충돌 경고) · 이름 고치기 · 연계 풀기 · 구매자(취소·카드 환불)
 //   회차를 바꾸려면 풀고 새로 만든다(이미 산 묶음은 그대로 통째 취소 규칙을 따른다).
-var _pka = { list: null, sel: [], q: '', mode: 'list', edit: null, busy: false, buyers: null, buyersPkg: null };
+var _pka = { list: null, sel: [], q: '', mode: 'list', edit: null, busy: false, buyers: null, buyersPkg: null, book: null, bookErr: '', addPkg: null };
 function _pkaEsc(s){ return _pkEsc(s); }
 async function pkgAdminOpen(){
   if(typeof _currentRole === 'undefined' || _currentRole !== 'superadmin'){ showToast('🔒', '권한 부족', '슈퍼어드민 전용'); return; }
-  _pka.mode = 'list'; _pka.sel = []; _pka.q = ''; _pka.edit = null; _pka.buyers = null;
+  _pka.mode = 'list'; _pka.sel = []; _pka.q = ''; _pka.edit = null; _pka.buyers = null; _pka.addPkg = null; _pka.book = null; _pka.bookErr = '';
   var el = document.getElementById('pkgAdminPopup');
   if(!el){ el = document.createElement('div'); el.id = 'pkgAdminPopup'; el.setAttribute('data-lang-lock', 'ko'); document.body.appendChild(el); }
   el.style.cssText = 'position:fixed;inset:0;z-index:955;background:rgba(0,0,0,.6);display:flex;align-items:flex-end;justify-content:center;';
@@ -62862,7 +63196,8 @@ async function pkgAdminOpen(){
   await _pkaReload();
 }
 window.pkgAdminOpen = pkgAdminOpen;
-function pkgAdminClose(){ var el = document.getElementById('pkgAdminPopup'); if(el) el.style.display = 'none'; }
+// 🔧 2026-10-30 닫으면 콘솔의 직전 탭으로 — 종전엔 빈 「전체 메뉴」(로그아웃 한 줄)에 남았다(_acPopupClosed 누락)
+function pkgAdminClose(){ var el = document.getElementById('pkgAdminPopup'); if(el) el.style.display = 'none'; if(typeof _acPopupClosed === 'function') _acPopupClosed(); }
 window.pkgAdminClose = pkgAdminClose;
 async function _pkaReload(){
   if(!window.sb) return;
@@ -62886,12 +63221,13 @@ function _pkaRender(){
     + '<button onclick="pkgAdminClose()" style="border:none;background:#F3F0EA;width:32px;height:32px;border-radius:50%;cursor:pointer;">✕</button></div>';
   if(_pka.err) h += '<div style="padding:12px;border-radius:10px;background:#FFF6E8;color:#9A6B12;font-size:12.5px;font-weight:700;">' + _pkaEsc(_pka.err) + '</div>';
   if(_pka.mode === 'new') h += _pkaNewHtml();
+  else if(_pka.mode === 'add') h += _pkaAddHtml();
   else if(_pka.mode === 'buyers') h += _pkaBuyersHtml();
   else h += _pkaListHtml();
   h += '</div>';
   el.innerHTML = h;
 }
-function pkgAdminBack(){ _pka.mode = 'list'; _pka.edit = null; _pka.buyers = null; _pkaReload(); }
+function pkgAdminBack(){ _pka.mode = 'list'; _pka.edit = null; _pka.buyers = null; _pka.addPkg = null; _pkaReload(); }
 window.pkgAdminBack = pkgAdminBack;
 function _pkaListHtml(){
   var h = '<div style="font-size:12px;color:#7A7268;line-height:1.65;margin-bottom:12px;">연계된 회차는 <b>단일로 팔지 않고 패키지로만</b> 팝니다(서버가 막는다). 가격 = 회차 정가 합계 · 결제 = 예치금 먼저 + 카드 · 취소 = 통째로만(회차마다 규정의 합).<br>'
@@ -62912,18 +63248,26 @@ function _pkaListHtml(){
       + (conf.length ? '<div style="margin-top:8px;padding:8px 10px;border-radius:9px;background:#FFF1F1;color:#9B1C1C;font-size:11.5px;font-weight:700;line-height:1.55;">⚠ 지금 충돌 — 회원이 못 살 수 있습니다<br>' + conf.map(function(c){ return _pkaEsc(c.msg); }).join('<br>') + '</div>' : '')
       + '<div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;">'
       + '<button data-pka-a="buyers" data-pka-v="' + _pkSafeId(p.id) + '" onclick="pkgAdminAct(this)" style="padding:8px 11px;border:1px solid #ddd;background:#fff;border-radius:9px;font-size:12px;cursor:pointer;">구매자</button>'
-      + (on ? '<button data-pka-a="rename" data-pka-v="' + _pkSafeId(p.id) + '" onclick="pkgAdminAct(this)" style="padding:8px 11px;border:1px solid #ddd;background:#fff;border-radius:9px;font-size:12px;cursor:pointer;">이름·설명</button>'
+      + (on ? (_pkaCanAdd(p) ? '<button data-pka-a="add" data-pka-v="' + _pkSafeId(p.id) + '" onclick="pkgAdminAct(this)" style="padding:8px 11px;border:1px solid #CFE3D6;background:#fff;color:#1E7A46;border-radius:9px;font-size:12px;font-weight:700;cursor:pointer;">＋ 회차 추가</button>'
+                               : '<span style="align-self:center;font-size:11px;color:#9A9486;">구매자가 있어 회차 추가 불가</span>')
+            + '<button data-pka-a="rename" data-pka-v="' + _pkSafeId(p.id) + '" onclick="pkgAdminAct(this)" style="padding:8px 11px;border:1px solid #ddd;background:#fff;border-radius:9px;font-size:12px;cursor:pointer;">이름·설명</button>'
             + '<button data-pka-a="unlink" data-pka-v="' + _pkSafeId(p.id) + '" onclick="pkgAdminAct(this)" style="padding:8px 11px;border:1px solid #E6C9C9;background:#fff;color:#9B1C1C;border-radius:9px;font-size:12px;cursor:pointer;">연계 풀기</button>' : '')
       + '</div></div>';
   });
   return h;
+}
+// 🆕 2026-10-30 회차 추가 — 구매자(결제·결제 중)가 없는 연계 중 패키지만(서버가 다시 본다 · 결과 모르는 카드 주문도)
+function _pkaCanAdd(p){
+  var o = (p && p.orders) || {};
+  return !!p && p.status === 'active' && !Number(o.paid || 0) && !Number(o.hold || 0) && ((p.rounds || []).length < 8);
 }
 function _pkaCandidates(){
   var linked = window._tkPkgByRound || {};
   var q = String(_pka.q || '').trim().toLowerCase();
   return (ticketDB || []).filter(function(t){
     if(!t || linked[String(t.id)]) return false;
-    if(['pending', 'deleteRequest', 'hidden', 'deleted', 'cancelled'].indexOf(String(t.status || '')) >= 0) return false;
+    // 🆕 2026-10-30 숨김(hidden) 회차도 고른다 — 업로드하면서 연계하다 실패해 숨긴 채 남은 회차를 여기서 다시 연계·공개한다
+    if(['pending', 'deleteRequest', 'deleted', 'cancelled'].indexOf(String(t.status || '')) >= 0) return false;
     if(typeof _isTicketExpired === 'function' && _isTicketExpired(t)) return false;
     if(String((typeof _tkFullDate === 'function' ? _tkFullDate(t) : '') || '').split('.').length !== 3) return false;
     if(!q) return true;
@@ -62953,25 +63297,74 @@ function _pkaNewHtml(){
                   : '<span style="color:#aaa;">아직 고른 회차가 없습니다</span>')
     + '</div>'
     + '<input id="pkaQ" placeholder="매장 이름·날짜(2027.03)로 찾기" value="' + _pkaEsc(_pka.q) + '" oninput="pkgAdminQ(this.value)" style="width:100%;box-sizing:border-box;margin-top:8px;padding:10px;border:1.5px solid #e0ddd8;border-radius:9px;font-size:12.5px;">'
+    + '<div id="pkaBookErr" style="font-size:11px;color:#9A6B12;margin-top:4px;">' + _pkaEsc(_pka.bookErr || '') + '</div>'
     + '<div id="pkaCand" style="margin-top:6px;max-height:34vh;overflow-y:auto;border:1px solid #eee;border-radius:10px;">' + _pkaCandHtml() + '</div>'
     + '<button onclick="pkgAdminSave()" style="width:100%;margin-top:12px;padding:13px;border:none;border-radius:12px;background:#5C0A14;color:#fff;font-size:14px;font-weight:800;cursor:pointer;">패키지 만들기 · 연계</button>'
     + '<div style="margin-top:6px;font-size:11px;color:#999;line-height:1.6;">같은 날 같은 시간대(점심/저녁) · 같은 매장의 재구매 제한 기간 안 두 회차는 서버가 거절합니다. 만들면 그 회차들은 바로 단일 판매가 막힙니다.</div>';
   return h;
+}
+// 🆕 2026-10-30 기존 패키지에 회차 더하기 — 구매자가 없는 패키지만 · 예약이 없는 회차만(서버가 다시 본다)
+function _pkaAddHtml(){
+  var p = _pka.addPkg || {};
+  var cur = p.rounds || [], room = Math.max(0, 8 - cur.length);
+  var tk = function(id){ return (ticketDB || []).find(function(t){ return String(t.id) === String(id); }) || null; };
+  var curT = cur.map(function(x){ return tk(x.id); }).filter(Boolean);
+  var sel = _pka.sel.map(tk).filter(Boolean);
+  var all = curT.concat(sel);
+  var per = all.reduce(function(s, t){ return s + (typeof _tkMemberPer === 'function' ? _tkMemberPer(t) : 0); }, 0);
+  var opts = _pkPaxOptions(all);
+  return '<div style="font-size:13px;font-weight:800;margin-bottom:4px;">「' + _pkaEsc(p.title || '') + '」에 회차 더하기</div>'
+    + '<div style="font-size:11.5px;color:#7A7268;line-height:1.6;">지금 회차 ' + cur.length + '개 · 더 넣을 수 있는 회차 ' + room + '개(합쳐서 8개까지) · 구매자가 생긴 패키지에는 더할 수 없습니다</div>'
+    + '<div style="margin-top:6px;padding:10px 12px;border-radius:10px;background:#F6F5F2;font-size:12px;line-height:1.7;color:#4a4540;">'
+    + (cur.length ? cur.map(function(x, i){ return (i + 1) + '. ' + _pkaRoundLine(x); }).join('<br>') : '<span style="color:#aaa;">회차 없음</span>') + '</div>'
+    + '<div style="margin-top:14px;font-size:13px;font-weight:800;">더할 회차 고르기 <span style="font-weight:600;color:#888;">(예약이 없는 회차만)</span></div>'
+    + '<div style="margin-top:6px;padding:10px 12px;border-radius:10px;background:#F6F5F2;font-size:12px;line-height:1.7;">'
+    + (sel.length ? sel.map(function(t, i){ return '＋ ' + _pkaEsc(_pcalRestName(t)) + ' · ' + _pkaEsc(_popStoryDate(t)) + (t.time ? ' ' + _pkaEsc(t.time) : '') + ' · ₩' + (typeof _tkMemberPer === 'function' ? _tkMemberPer(t) : 0).toLocaleString() + '/인'
+                                     + (String(t.status || '') === 'hidden' ? ' · <b style="color:#9A6B12;">숨김 → 공개</b>' : ''); }).join('<br>')
+          + '<br><b>더한 뒤 1인 합계 ₩' + per.toLocaleString() + '</b> · 가능한 인원 ' + (opts.length ? opts.join('·') + '명' : '<b style="color:#9B1C1C;">없음 — 회차들의 인원 구성이 겹치지 않는다</b>')
+        : '<span style="color:#aaa;">아직 고른 회차가 없습니다</span>')
+    + '</div>'
+    + '<input id="pkaQ" placeholder="매장 이름·날짜(2027.03)로 찾기" value="' + _pkaEsc(_pka.q) + '" oninput="pkgAdminQ(this.value)" style="width:100%;box-sizing:border-box;margin-top:8px;padding:10px;border:1.5px solid #e0ddd8;border-radius:9px;font-size:12.5px;">'
+    + '<div id="pkaBookErr" style="font-size:11px;color:#9A6B12;margin-top:4px;">' + _pkaEsc(_pka.bookErr || '') + '</div>'
+    + '<div id="pkaCand" style="margin-top:6px;max-height:34vh;overflow-y:auto;border:1px solid #eee;border-radius:10px;">' + _pkaCandHtml() + '</div>'
+    + '<button onclick="pkgAdminSave()" style="width:100%;margin-top:12px;padding:13px;border:none;border-radius:12px;background:#1E7A46;color:#fff;font-size:14px;font-weight:800;cursor:pointer;">회차 더하기 · 연계</button>'
+    + '<div style="margin-top:6px;font-size:11px;color:#999;line-height:1.6;">예약이 있는 회차 · 같은 날 같은 시간대(점심/저녁) · 같은 매장의 재구매 제한 기간 안 두 회차는 서버가 거절합니다. 더하면 그 회차는 바로 단일 판매가 막히고, 이 패키지의 1인 가격은 위 합계가 됩니다.</div>';
 }
 function _pkaCandHtml(){
   var C = _pkaCandidates();
   if(!C.length) return '<div style="padding:16px;text-align:center;color:#aaa;font-size:12px;">고를 수 있는 회차가 없습니다</div>';
   return C.map(function(t){
     var on = _pka.sel.indexOf(String(t.id)) >= 0;
-    return '<div data-pka-a="pick" data-pka-v="' + _pkSafeId(t.id) + '" onclick="pkgAdminAct(this)" style="display:flex;align-items:center;gap:9px;padding:9px 11px;border-bottom:1px solid #f3f0ea;cursor:pointer;' + (on ? 'background:#FBF3F2;' : '') + '">'
+    var bk = _pkaBooked(t.id);
+    var hid = String(t.status || '') === 'hidden';
+    return '<div data-pka-a="pick" data-pka-v="' + _pkSafeId(t.id) + '" onclick="pkgAdminAct(this)" style="display:flex;align-items:center;gap:9px;padding:9px 11px;border-bottom:1px solid #f3f0ea;' + (bk && !on ? 'cursor:not-allowed;opacity:.55;' : 'cursor:pointer;') + (on ? 'background:#FBF3F2;' : '') + '">'
       + '<span style="width:18px;height:18px;border-radius:5px;border:1.5px solid ' + (on ? '#5C0A14' : '#ccc') + ';background:' + (on ? '#5C0A14' : '#fff') + ';color:#fff;font-size:12px;display:inline-flex;align-items:center;justify-content:center;">' + (on ? '✓' : '') + '</span>'
-      + '<span style="flex:1;min-width:0;font-size:12.5px;"><b>' + _pkaEsc(_pcalRestName(t)) + '</b> · ' + _pkaEsc(_popStoryDate(t)) + (t.time ? ' ' + _pkaEsc(t.time) : '') + (t.status === 'soldout' ? ' · 매진' : '') + '</span>'
+      + '<span style="flex:1;min-width:0;font-size:12.5px;"><b>' + _pkaEsc(_pcalRestName(t)) + '</b> · ' + _pkaEsc(_popStoryDate(t)) + (t.time ? ' ' + _pkaEsc(t.time) : '') + (t.status === 'soldout' ? ' · 매진' : '')
+      + (hid ? ' · <b style="color:#9A6B12;">숨김 — 연계와 함께 공개</b>' : '')
+      + (bk ? '<br><b style="color:#9B1C1C;font-size:11px;">예약 ' + bk.n + '건(' + bk.pax + '명) — 연계 불가</b>' : '') + '</span>'
       + '<span style="font-size:11.5px;color:#888;">₩' + (typeof _tkMemberPer === 'function' ? _tkMemberPer(t) : 0).toLocaleString() + '</span></div>';
   }).join('');
 }
 function pkgAdminQ(v){ _pka.q = v; var c = document.getElementById('pkaCand'); if(c) c.innerHTML = _pkaCandHtml(); }
 window.pkgAdminQ = pkgAdminQ;
-function pkgAdminNew(){ _pka.mode = 'new'; _pka.sel = []; _pka.q = ''; _pka.edit = null; _pkaRender(); }
+function pkgAdminNew(){ _pka.mode = 'new'; _pka.sel = []; _pka.q = ''; _pka.edit = null; _pka.addPkg = null; _pka.form = null; _pkaRender(); _pkaLoadBookings(); }
+// 🆕 2026-10-30 예약이 있는 회차는 연계할 수 없다(서버 trg_taam_guard_pkg_round_booked) — 후보마다 살아 있는 예약 수를 미리 읽어 고르지 못하게 한다
+function _pkaBooked(id){ var b = _pka.book && _pka.book[String(id)]; return (b && Number(b.n) > 0) ? b : null; }
+async function _pkaLoadBookings(){
+  if(!window.sb) return;
+  var ids = _pkaCandidates().map(function(t){ return String(t.id); }).concat(_pka.sel).slice(0, 400);
+  var seq = (_pka.bookSeq = (_pka.bookSeq || 0) + 1);
+  try {
+    var r = await window.sb.rpc('taam_package_round_bookings', { p_rounds: ids });
+    if(seq !== _pka.bookSeq) return;
+    if(r.error){ _pka.book = null; _pka.bookErr = /does not exist|schema cache/i.test(String(r.error.message)) ? '서버 준비 필요 — 예약 여부는 연계할 때 서버가 확인합니다' : '예약 수를 못 읽었습니다 — 연계할 때 서버가 확인합니다'; }
+    else { _pka.book = r.data || {}; _pka.bookErr = ''; }
+  } catch(_e){ if(seq === _pka.bookSeq){ _pka.book = null; _pka.bookErr = '예약 수를 못 읽었습니다 — 연계할 때 서버가 확인합니다'; } }
+  if(_pka.mode !== 'new' && _pka.mode !== 'add') return;
+  _pkaKeepForm();
+  var c = document.getElementById('pkaCand'); if(c) c.innerHTML = _pkaCandHtml();
+  var be = document.getElementById('pkaBookErr'); if(be) be.textContent = _pka.bookErr || '';
+}
 window.pkgAdminNew = pkgAdminNew;
 function _pkaKeepForm(){
   var g = function(id){ var e = document.getElementById(id); return e ? e.value : ''; };
@@ -62988,7 +63381,9 @@ async function pkgAdminAct(btn){
   if(a === 'pick'){
     _pkaKeepForm();
     var i = _pka.sel.indexOf(v);
-    if(i >= 0) _pka.sel.splice(i, 1); else if(_pka.sel.length < 8) _pka.sel.push(v); else showToast('⚠', '회차는 8개까지', '');
+    var _max = _pka.mode === 'add' ? Math.max(0, 8 - ((_pka.addPkg && _pka.addPkg.rounds) || []).length) : 8;
+    if(i < 0 && _pkaBooked(v)){ var _bk = _pkaBooked(v); showToast('⚠', '예약이 있는 회차입니다', '예약 ' + _bk.n + '건(' + _bk.pax + '명) — 예약이 없는 회차만 연계할 수 있습니다'); return; }
+    if(i >= 0) _pka.sel.splice(i, 1); else if(_pka.sel.length < _max) _pka.sel.push(v); else showToast('⚠', '회차는 합쳐서 8개까지', '');
     _pka.sel.sort(function(x, y){
       var tx = (ticketDB || []).find(function(t){ return String(t.id) === x; }), ty = (ticketDB || []).find(function(t){ return String(t.id) === y; });
       return String((tx ? _tkFullDate(tx) + ' ' + (tx.time || '') : '')).localeCompare(String((ty ? _tkFullDate(ty) + ' ' + (ty.time || '') : '')));
@@ -62998,6 +63393,10 @@ async function pkgAdminAct(btn){
   }
   var p = (_pka.list || []).find(function(x){ return x.id === v; });
   if(a === 'rename' && p){ _pka.mode = 'new'; _pka.edit = p; _pka.form = null; _pkaRender(); return; }
+  if(a === 'add' && p){
+    if(!_pkaCanAdd(p)){ showToast('⚠', '회차를 더할 수 없습니다', '구매자(결제·결제 중)가 있는 패키지입니다 — 연계를 풀고 새로 만드세요'); return; }
+    _pka.mode = 'add'; _pka.addPkg = p; _pka.sel = []; _pka.q = ''; _pka.edit = null; _pkaRender(); _pkaLoadBookings(); return;
+  }
   if(a === 'unlink' && p){
     if(!confirm('「' + p.title + '」 연계를 풉니다.\n\n· 회차들은 바로 단일로 팔립니다\n· 이미 산 패키지는 그대로(통째 취소 규칙)\n· 지금 결제 중인 묶음은 확정되지 않고 자동 취소됩니다')) return;
     _pka.busy = true;
@@ -63030,31 +63429,73 @@ async function pkgAdminAct(btn){
   if(a === 'ledger'){ try { pkgAdminClose(); if(typeof openMemberLedger === 'function') openMemberLedger(); if(typeof mlOpen === 'function') mlOpen(v); } catch(_e){} return; }
 }
 window.pkgAdminAct = pkgAdminAct;
+function _pkaHiddenOf(ids){
+  return (ids || []).filter(function(id){ var t = (ticketDB || []).find(function(x){ return String(x.id) === String(id); }); return t && String(t.status || '') === 'hidden'; });
+}
+function _pkaErrText(e){
+  var m = String((e && e.message) || e || '');
+  if(/does not exist|schema cache/i.test(m)) return '서버 준비 필요 — 20261030_ticket_package_add.sql';
+  return m.replace(/^[A-Z_]+:\s*/, '').slice(0, 180);
+}
+// 🆕 2026-10-30 숨김으로 남아 있던 회차가 공개됐으면 로컬도 서버 판으로
+async function _pkaAfterLink(ids, revealed){
+  try { await _pkLoad(); } catch(_e){}
+  if(revealed && revealed.length && typeof _tkRefreshFromServer === 'function'){ try { await _tkRefreshFromServer(revealed.map(String), { quiet: true }); } catch(_r){} }
+  try { if(typeof _tkRepaintAll === 'function') _tkRepaintAll(); } catch(_p){}
+}
+async function _pkaSaveAdd(){
+  var p = _pka.addPkg; if(!p) return;
+  if(!_pka.sel.length){ showToast('⚠', '더할 회차를 고르세요', ''); return; }
+  var booked = _pka.sel.filter(function(id){ return _pkaBooked(id); });
+  if(booked.length){ showToast('⚠', '예약이 있는 회차가 있습니다', '예약이 없는 회차만 연계할 수 있습니다'); return; }
+  var tk = function(id){ return (ticketDB || []).find(function(t){ return String(t.id) === String(id); }) || null; };
+  var all = (p.rounds || []).map(function(x){ return tk(x.id); }).concat(_pka.sel.map(tk)).filter(Boolean);
+  if(!_pkPaxOptions(all).length && !confirm('더한 뒤 회차들에 공통으로 가능한 인원이 없습니다 — 회원이 살 수 없습니다.\n그래도 더할까요?')) return;
+  var hid = _pkaHiddenOf(_pka.sel);
+  if(!confirm('「' + p.title + '」에 회차 ' + _pka.sel.length + '개를 더합니다.\n\n· 더한 회차는 지금부터 단일로 팔리지 않습니다\n· 패키지 1인 가격이 그만큼 올라갑니다'
+               + (hid.length ? '\n· 숨김 회차 ' + hid.length + '개는 연계와 함께 공개됩니다' : ''))) return;
+  _pka.busy = true;
+  var ok = false, rev = [], added = _pka.sel.slice();
+  try {
+    var r = await window.sb.rpc('taam_package_add_rounds', { p_id: p.id, p_rounds: added, p_reveal: hid });
+    if(r.error){ showToast('⚠', '더하지 못했습니다', _pkaErrText(r.error)); return; }
+    ok = true; rev = hid;
+    showToast('✓', '회차를 더했습니다', '「' + p.title + '」 회차 ' + (((r.data && r.data.rounds) || []).length || '') + '개');
+    _pka.mode = 'list'; _pka.sel = []; _pka.addPkg = null;
+  } finally { _pka.busy = false; }
+  if(ok){ await _pkaAfterLink(added, rev); await _pkaReload(); }
+}
 async function pkgAdminSave(){
   if(_pka.busy) return;
+  if(_pka.mode === 'add') return _pkaSaveAdd();
   _pkaKeepForm();
   var f = _pka.form || {};
   if(!String(f.title || '').trim()){ showToast('⚠', '이름을 적어 주세요', ''); return; }
   var ed = _pka.edit;
   if(!ed && _pka.sel.length < 2){ showToast('⚠', '회차를 2개 이상 고르세요', ''); return; }
+  var hid = [];
   if(!ed){
+    if(_pka.sel.some(function(id){ return _pkaBooked(id); })){ showToast('⚠', '예약이 있는 회차가 있습니다', '예약이 없는 회차만 연계할 수 있습니다'); return; }
     var sel = _pka.sel.map(function(id){ return (ticketDB || []).find(function(t){ return String(t.id) === id; }); }).filter(Boolean);
     if(!_pkPaxOptions(sel).length && !confirm('고른 회차들에 공통으로 가능한 인원이 없습니다 — 회원이 살 수 없습니다.\n그래도 만들까요?')) return;
-    if(!confirm('「' + f.title + '」 패키지를 만듭니다 — 회차 ' + sel.length + '개는 지금부터 단일로 팔리지 않습니다.')) return;
+    hid = _pkaHiddenOf(_pka.sel);
+    if(!confirm('「' + f.title + '」 패키지를 만듭니다 — 회차 ' + sel.length + '개는 지금부터 단일로 팔리지 않습니다.'
+                 + (hid.length ? '\n숨김 회차 ' + hid.length + '개는 연계와 함께 공개됩니다.' : ''))) return;
   }
   _pka.busy = true;
+  var linked = null;
   try {
-    var r = await window.sb.rpc('taam_package_save', { p_id: ed ? ed.id : null, p_title: f.title, p_rounds: ed ? null : _pka.sel,
-      p_title_en: f.title_en || null, p_title_ja: f.title_ja || null, p_desc: f.description || null, p_desc_en: f.description_en || null, p_desc_ja: f.description_ja || null });
-    if(r.error){
-      var m = String(r.error.message || '');
-      showToast('⚠', '저장 실패', m.replace(/^[A-Z_]+:\s*/, '').slice(0, 160));
-      return;
-    }
+    var args = { p_title: f.title, p_rounds: ed ? null : _pka.sel,
+      p_title_en: f.title_en || null, p_title_ja: f.title_ja || null, p_desc: f.description || null, p_desc_en: f.description_en || null, p_desc_ja: f.description_ja || null };
+    // 🆕 2026-10-30 숨김 회차가 섞이면 공개까지 한 트랜잭션(taam_package_save_reveal) — 실패하면 숨긴 채 남는다
+    var r = (!ed && hid.length) ? await window.sb.rpc('taam_package_save_reveal', Object.assign({ p_reveal: hid }, args))
+                                : await window.sb.rpc('taam_package_save', Object.assign({ p_id: ed ? ed.id : null }, args));
+    if(r.error){ showToast('⚠', '저장 실패', _pkaErrText(r.error)); return; }
     showToast('✓', ed ? '저장했습니다' : '패키지를 만들었습니다', '');
+    linked = ed ? [] : _pka.sel.slice();
     _pka.mode = 'list'; _pka.sel = []; _pka.edit = null; _pka.form = null;
-    try { await _pkLoad(); } catch(_e){}
   } finally { _pka.busy = false; }
+  if(linked) await _pkaAfterLink(linked, hid);
   await _pkaReload();
 }
 window.pkgAdminSave = pkgAdminSave;
@@ -63390,7 +63831,7 @@ async function chefPhotoFixOpen(){
   var el = document.createElement('div');
   el.id = 'cpfModal';
   el.style.cssText = 'position:fixed;inset:0;z-index:9200;background:rgba(20,16,12,.6);display:flex;align-items:center;justify-content:center;padding:18px;';
-  el.onclick = function(ev){ if(ev.target === el && !_cpfBusy) el.remove(); };
+  el.onclick = function(ev){ if(ev.target === el && !_cpfBusy) chefPhotoFixClose(); };   // 🔧 2026-10-30 바깥을 눌러 닫아도 직전 탭으로
   el.innerHTML =
     '<div style="width:100%;max-width:460px;max-height:86vh;overflow-y:auto;background:#FBF9F4;border-radius:18px;padding:20px 20px 24px;font-family:var(--font-main);-webkit-overflow-scrolling:touch;" data-lang-lock="ko">'
     + '<div style="display:flex;justify-content:space-between;align-items:center;">'
@@ -67294,6 +67735,7 @@ function openPartnerTU() {
     return;
   }
   closePartnerAdmin();
+  if(typeof tuPkgReset === 'function'){ tuPkgReset(); tuPkgSetVisible(false); }   // 🆕 2026-10-30 파트너는 패키지를 묶지 않는다
   syncTuRestList(); // 최신 목록 동기화
   _selectedRestId = _currentAdminRestId;
   document.querySelectorAll('.tu-rest-item').forEach(function(el){
@@ -71831,7 +72273,8 @@ function _taamBusyNow(){
                'pmxPopup',       // 🆕 2026-10-28 결제 내역 — 카드 환불(토스 승인취소)을 여기서 누를 수 있다
                'paSheet',        // 🆕 2026-10-29 파트너 계정 발급 — 한 번만 보이는 비밀번호가 떠 있다(종전 누락)
                'prvPopup', 'prvMemberPopup',   // 🆕 2026-10-29 예약 · 회원 조회(필터·펼침이 날아간다)
-               'pkSheet', 'pkPayPopup', 'pkCancelPopup', 'pkgAdminPopup'];   // 🆕 2026-10-29 티켓 패키지 — 좌석 홀드·결제·취소·만드는 중
+               'pkSheet', 'pkPayPopup', 'pkCancelPopup', 'pkgAdminPopup',   // 🆕 2026-10-29 티켓 패키지 — 좌석 홀드·결제·취소·만드는 중
+               'tuPkgPickPopup', 'tuPkgFailPopup'];   // 🆕 2026-10-30 업로드하면서 연계 — 고르는 중 · 연계 실패를 묻는 중
     // ⚠ offsetParent 로 판단하면 안 된다. **position:fixed 는 offsetParent 가
     //   항상 null** 이고, 이 목록은 전부 fixed 다 — 그래서 이 검사가 한 번도
     //   참이 된 적이 없었다(2026-09-01 발견). 계산된 스타일을 본다.
@@ -72896,6 +73339,7 @@ function vnClose(force){
   var el = document.getElementById('vnPopup'); if (!el) return;
   if (!force && _vnDirty() && !confirm(_vnT('discard_close'))) return;
   el.remove(); _vn.busy = false; _vn.loaded = ''; _vn.loadSeq++; _vn.pvSeq++; if (_vn.pvTimer) clearTimeout(_vn.pvTimer);
+  if (typeof _acPopupClosed === 'function') _acPopupClosed();   // 🔧 2026-10-30 닫으면 직전 탭으로(빈 「전체 메뉴」에 남던 것)
 }
 // 저장 버튼은 그 매장 문구를 다 불러온 뒤에만 — 불러오는 중·불러오기 실패에 누르면 빈 칸 여섯 개가 가서 저장된 문구가 지워졌다(적대 리뷰)
 function _vnSaveEnable(on){ var b = document.getElementById('vnSave'); if (!b) return; b.disabled = !on; b.style.opacity = on ? '1' : '.45'; b.style.cursor = on ? 'pointer' : 'default'; }

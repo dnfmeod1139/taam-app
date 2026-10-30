@@ -88,9 +88,6 @@ insert into public.ticket_products(id,rest_id,rest_name,date,time,meal_fee,agenc
  ('tpPend','$RC','씨','$D75','19:00',100000,0,0,'pending',4),
  ('tpD','$RD','디','$D10','19:00',100000,20000,0,'active',8),
  ('tpE','$RE','이','$D75','19:00',200000,30000,0,'active',8);
--- M5 는 tpE 를 단일로 이미 샀다(연계 전)
-insert into public.tickets(user_id,restaurant_id,restaurant_name,ticket_product_id,reservation_date,visit_time,party_size,price,status,purchase_id)
-values ('$M5','$RE','이','tpE','$D75','19:00',2,460000,'active','PAYH-tpE_single');
 SQL
 # 저장소의 실제 가드·함수
 awk 'NR>=31 && NR<=179' supabase/migrations/20261022_card_refund_quote2.sql | $P >/dev/null 2>&1
@@ -244,6 +241,8 @@ has "다시 표시 → already" "$(AS "$SU" "select public.taam_package_card_ref
 
 echo "── 9. 예치금만 · 방문 30일 안 회차 · 방문 시작 ──"
 R2=$(AS "$SU" "select public.taam_package_save(null,'연말 둘',array['tpD','tpE'])"); PK2=$(Q "select id from public.ticket_packages where title = '연말 둘'")
+# M5 는 연계 뒤 초대(운영 채널 · INV-)로 tpE 를 이미 가졌다 — 2026-10-30 부터 예약이 있는 회차는 연계 자체가 안 된다(20261030_ticket_package_add.sql)
+Q "insert into public.tickets(user_id,restaurant_id,restaurant_name,ticket_product_id,reservation_date,visit_time,party_size,price,status,purchase_id) values ('$M5','$RE','이','tpE','$D75','19:00',2,460000,'active','INV-tpE_m5')" >/dev/null
 Q "insert into public.ticket_restock_events(ticket_product_id) values ('tpD'),('tpX')" >/dev/null
 ok "연계 회차의 취소표 알림 줄은 넣지 않는다(단일로 못 산다) · 다른 회차는 그대로" "$(Q "select string_agg(ticket_product_id, ',') from public.ticket_restock_events")" "tpX"
 H "$M2" "$RD" tpD 2 PAYH-tpD_m2 "{\"pkg\":\"$PK2\"}" >/dev/null; H "$M2" "$RE" tpE 2 PAYH-tpE_m2 "{\"pkg\":\"$PK2\"}" >/dev/null
@@ -282,7 +281,7 @@ ok "  ↳ 따로 취소된 줄(tpD)은 건드리지 않는다 — 패키지 취�
 ok "  ↳ M2 잔액 2,700,000 · 카드 환불 없음" "$(Q "select membership_deposit_balance from public.profiles where id = '$M2'")/$(Q "select coalesce(card_refund::text,'없음') from public.ticket_package_orders where id = '$G2'")" "2700000/없음"
 
 echo "── 10. 이미 산 회차 · 홀드 만료 · 반납 ──"
-has "단일로 이미 산 회차(tpE)가 든 패키지 → DUPLICATE_PURCHASE(같은 회차 가드)" "$(H "$M5" "$RE" tpE 2 PAYH-tpE_m5 "{\"pkg\":\"$PK2\"}")" "DUPLICATE_PURCHASE"
+has "초대로 이미 가진 회차(tpE)가 든 패키지 → DUPLICATE_PURCHASE(같은 회차 가드)" "$(H "$M5" "$RE" tpE 2 PAYH-tpE_m5 "{\"pkg\":\"$PK2\"}")" "DUPLICATE_PURCHASE"
 H "$M5" "$RD" tpD 2 PAYH-tpD_m5 "{\"pkg\":\"$PK2\"}" >/dev/null
 Q "update public.tickets set created_at = now() - interval '6 minutes' where purchase_id = 'PAYH-tpD_m5'" >/dev/null
 Q "select public.taam_expire_seat_holds()" >/dev/null
