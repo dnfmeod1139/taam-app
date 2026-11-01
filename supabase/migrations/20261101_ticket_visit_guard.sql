@@ -54,10 +54,12 @@ select '① 트리거 trg_taam_guard_ticket_visit (before insert/update of visit
 union all select '② 함수 security invoker(앱이 직접 보낸 문장만 본다) · _taam_uid_is_super 존재',
        case when (select not prosecdef from pg_proc where oid = to_regproc('public.taam_guard_ticket_visit'))
              and to_regproc('public._taam_uid_is_super') is not null then '✅' else '❌' end
-union all select '③ 기록 RPC taam_set_ticket_visit 가 security definer(가드를 지난다)',
-       case when (select prosecdef from pg_proc where oid = to_regproc('public.taam_set_ticket_visit')) then '✅'
-            when to_regproc('public.taam_set_ticket_visit') is null then '⚠ 함수 없음 — sql/ticket_visit_record.sql 미실행(방문 기록 자체가 없다)'
-            else '❌ definer 아님 — 매장 어드민의 방문 기록이 이 가드에 되돌려진다' end
+union all select '③ 기록 RPC taam_set_ticket_visit 가 security definer(가드를 지난다 · 오버로드가 있어도 전부)',
+       case when not exists (select 1 from pg_proc where proname = 'taam_set_ticket_visit' and pronamespace = 'public'::regnamespace)
+              then '⚠ 함수 없음 — sql/ticket_visit_record.sql 미실행(방문 기록 자체가 없다)'
+            when exists (select 1 from pg_proc where proname = 'taam_set_ticket_visit' and pronamespace = 'public'::regnamespace and not prosecdef)
+              then '❌ definer 아닌 판이 있다 — 매장 어드민의 방문 기록이 이 가드에 되돌려진다'
+            else '✅' end
 union all select '④ 정보 — 방문 기록이 있는데 찍은 사람(visit_marked_by)이 비었거나 행 소유자인 행 수(회원이 직접 적었을 수 있는 모양 · 원장 「⚠ 방문일 전 기록」과 함께 본다)',
        (select count(*) from public.tickets t
          where t.visit_status is not null
