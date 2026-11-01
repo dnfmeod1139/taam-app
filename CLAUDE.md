@@ -1463,6 +1463,25 @@ Edge Function 도 같다. `toss-confirm` · `toss-billing-charge` 의 `deductDep
 - 고칠 때는 회귀부터: `bash sql/_test/ledger_sweep/t_sweep.sh` + `t_sweep2.sh` (도난·착시 시드 70여 명, 둘 다 ✅ 여야 한다).
   공격 에이전트가 3라운드 만든 시드다 — 규칙 하나를 바꾸면 반드시 어딘가 다른 시드가 튄다.
 
+### 회원 원장 「반환 · 대행비」 탭 — 돌려줘야 할 돈과 돌아간 돈을 한 자리에 (2026-11-01 · 빌드 `2026.11.01-a`)
+
+「회원 원장에 반환되어야 하는 금액도 리스트 만들고 합계 만들어 · 개별도 볼 수 있게 · 정보는 자세하게 · 반환된 것과 반환 예정을 따로 · 대행비 + 반환금 관련 정보 한눈에」.
+종전 원장은 티켓 탭의 「진행 중」이 결제액(돌려줄 금액이 아니라)을 보여 줬고, 반환된 돈·대행비는 탭 둘에 흩어져 있었다. 옛 「대행비」 탭(id `fee` 그대로)을 **「반환 · 대행비」** 로 바꾸고 그 위에 반환 목록을, 지표 카드를 2×2(부여−차감 · 누적 사용 · **반환 예정** · 대행비)로. 보기만 한다 — 금전 경로·회원 화면은 안 건드렸다.
+
+| 구간 | 무엇 | 어떻게 센다 |
+|---|---|---|
+| **반환 예정** (`RP`) | 진행 중(G.open) 건마다 `it.plan = _planOf(it)` — 돌려줘야 할 돈의 **어림** | 예상 반환 = `tickets.price` − 대행비(**반환 화면 `openDmPopup` 과 같은 순서**: 회차 현재 `ticket_products.agency_fee` → 구매 때 기록 `extra_data.agencyFee` → 초대장 `agency_fee`) · 예치금으로 돌아갈 몫 = min(예상, 원장 `ticket_purchase` 합(줄이 없으면 결제 − 카드)) · 카드 몫 = min(`cardPaid`, 나머지) · 둘로 설명 안 되는 몫은 `gap` ⚠ |
+| 종류 `kind` | `plan` 합계에 넣는다 · `judge` = `visit_status` no_show·cancelled(위약 판단 전 — **합계 밖**, 따로 「노쇼·방문 취소 N건 ₩」) · `cardlink` = LINK-·linkInvite(예치금 반환 대상 아님 — 환불은 결제 링크 목록) · `skip` = MAN-·KSK-·INVH-·manualEntry·inviteHold·kashikiri·expired·failed(**PAY\* 는 플래그가 있어도 회원 행** — 서버 `_taam_ticket_is_ops` 와 같다) | `overdue` = `visit_status` attended · `status` used · 방문일(`YYYY.MM.DD` 만 · `MM.DD` 는 「방문일 미확인」 — 연도를 짐작하지 않는다) < 오늘(KST) → 「방문 N일 지남 · 처리 필요」 빨강 · 정렬은 방문일 빠른 순(지난 것이 맨 위) |
+| **반환됨** (`RD` = G.ret) | 방문 완료 정상 반환 | 종전 `_retOf`(원장 `ticket_refund` 줄 · `refund_type` · `agency_held` · `extra_deduct` · `card_refund_pending`) 그대로 — 합계·예치금(멤버십/일반 주머니별)·카드(완료/대기)·뗀 것(대행비·추가 차감·그 외) · 처리일 최신순 |
+| **환불 · 취소로 돌아간 돈** (`RF`) | G.no + G.cx 중 원장 환불 줄이 있는 것 | 돌아간 돈 · 차감 · 카드 대기 · 「취소인데 환불 기록 없음 N건」은 수만 |
+| 대행비 | 종전 확정/예정 목록 그대로 | **「예정」(feePlan)은 plan 값**(회차 현재 대행비 우선 · 운영 행·만료 제외)으로 바꿨다 — 종전엔 구매 때 기록 우선이라 반환 화면이 실제로 떼는 값과 달랐다. 구매 때 기록·초대장과 다르면 「… 와 다름」 |
+
+- 읽기: `tickets` select 에 `visit_status`(옛 서버 42703 이면 종전 칸으로 다시) · `ticket_products` 는 **전 구매 건**(종전엔 기록 없는 건만) · 숫자는 서버가 쓴 값만 믿는다(`price` 는 확정 때 서버가 다시 적고 · 원장은 RPC 만 · `cardPaid` 는 결제 사실 칸 가드) — `extra_data.agencyFee` 는 「다르다」 표시에만.
+- 개별: 항목 → `mlTkPop` 에 「반환 예정 (어림)」 구간(방문 상태 · 결제 − 대행비 = 예상 · 예치금/카드 몫 · 출처 · 다름 · gap) · 반환됨은 종전 구간. `calcBox` 에 「− 위약금 (N%)」 줄(`penalty_amt` — 종전엔 「그 외 차감」). CSV 비고에 예상 반환·반환 내역·처리일.
+- 「반환 관리 ›」(`mlGoDm`) = 예치금 관리(`depositMgmtScreen` 반환예정 탭)를 **회원 이름으로 걸러서** — `openSubPage` 가 검색을 비우고 0번 탭을 읽기 시작하므로 **그 뒤에** `_dmSearchQuery` 를 넣는다(렌더가 그때 읽는다). 처리(반환·환불)는 거기서만 — 원장은 보기만.
+- 모르는 것은 모른다고 적는다: 연도 없는 방문일 · 원장 결제 줄 없음(결제 − 카드로 어림) · 회차를 못 읽음 · gap. 「어림」 임을 머리·꼬리에 적었다 — 실제 반환은 처리 때(대행비 제외 해제 · 추가 차감) 정해진다.
+- 회귀: 스크래치 `mlret/mr.js`(57건 — 집계·순서·종류별 줄·요약 칸·팝업·CSV·반환 관리 이동·옛 서버 폴백·빈 회원·XSS · 옛 판에서 ❌ 50) · `mlret/shot.js`(화면 사진). `sql/_test/i18nshot.js` 통과(슈퍼어드민 화면 · `data-lang-lock`).
+
 ### 금전 코드를 만질 때
 
 1. **잔액은 절대 `profiles` 를 직접 update 하지 않는다.** `_depApplyDelta()` → RPC.
