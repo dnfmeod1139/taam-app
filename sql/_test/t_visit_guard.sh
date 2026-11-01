@@ -58,10 +58,15 @@ ok "슈퍼어드민 직접 UPDATE → 그대로" "no_show|$SU|cancelled|같이" 
 r=$($P -c "set taam.uid=''; update public.tickets set visit_status='attended', visit_marked_by=null where id='$T'" 2>&1)
 ok "서버(uid 없음 · postgres) → 그대로" "attended|-|cancelled|같이" "$(st)"
 ok "트리거 하나 · BEFORE · INSERT+UPDATE · invoker" "1|t|t|f" "$($P -c "select count(*) from pg_trigger where tgname='trg_taam_guard_ticket_visit' and not tgisinternal")|$($P -c "select (tgtype::int & 2) = 2 and (tgtype::int & 4) = 4 from pg_trigger where tgname='trg_taam_guard_ticket_visit'")|$($P -c "select (tgtype::int & 16) = 16 from pg_trigger where tgname='trg_taam_guard_ticket_visit'")|$($P -c "select prosecdef from pg_proc where oid=to_regproc('public.taam_guard_ticket_visit')")"
-# ── ④ 정보 — 회원 소유자가 찍은 모양 ──
-$P -c "set taam.uid=''; update public.tickets set visit_status='attended', visit_marked_by='$A' where id='$T'" >/dev/null
-ok "④ 정보 — marked_by 가 행 소유자(회원)인 행을 센다" "1" "$($P -f supabase/migrations/20261101_ticket_visit_guard.sql 2>&1 | grep '④' | awk -F'|' '{print $NF}' | tr -d ' ')"
+# ── ④ 정보 — 회원 소유자가 찍은 모양 · 백필(시각·사람 없음)은 안 센다 ──
+$P -c "set taam.uid=''; update public.tickets set visit_status='attended', visit_marked_at=now(), visit_marked_by='$A' where id='$T'" >/dev/null
+$P -c "set taam.uid=''; insert into public.tickets(user_id, purchase_id, price, reservation_date, visit_status) values ('$A','PAYH-bf',100,'2026.08.01','attended')" >/dev/null
+ok "④ 정보 — marked_by 가 행 소유자인 행 1 · 백필 모양(시각·사람 없음)은 제외" "1" "$($P -f supabase/migrations/20261101_ticket_visit_guard.sql 2>&1 | grep '④' | awk -F'|' '{print $NF}' | tr -d ' ')"
 out2=$($P -f supabase/migrations/20261101_ticket_visit_guard.sql 2>&1)
 ok "재실행 안전 · ❌ 0" "0" "$(echo "$out2" | grep -c '❌')"
+# ── definer 가 아닌 기록 RPC 가 있으면 가드를 걸지 않고 ③ ❌ ──
+$P -c "drop trigger if exists trg_taam_guard_ticket_visit on public.tickets; create or replace function public.taam_set_ticket_visit(p_ticket_id text, p_status text) returns jsonb language sql as \$\$ select '{}'::jsonb \$\$;" >/dev/null 2>&1
+out3=$($P -f supabase/migrations/20261101_ticket_visit_guard.sql 2>&1)
+ok "definer 아닌 RPC 판 → 트리거 안 걸림 · ①③ ❌ 2" "0|2" "$($P -c "select count(*) from pg_trigger where tgname='trg_taam_guard_ticket_visit' and not tgisinternal")|$(echo "$out3" | grep -c '❌')"
 psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1
 [ $FAIL = 0 ] && echo "=== 전부 통과 ===" || { echo "=== 실패 있음 ==="; exit 1; }

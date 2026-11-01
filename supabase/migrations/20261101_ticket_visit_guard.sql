@@ -39,10 +39,17 @@ begin
 end;
 $$;
 
-drop trigger if exists trg_taam_guard_ticket_visit on public.tickets;
-create trigger trg_taam_guard_ticket_visit
-  before insert or update of visit_status, visit_marked_at, visit_marked_by on public.tickets
-  for each row execute function public.taam_guard_ticket_visit();
+-- 트리거는 기록 RPC 가 security definer 일 때만 건다(2차 리뷰) — definer 가 아닌 판이 라이브에 있으면 파트너의 방문 기록이 이 가드에 되돌려져 기능이 죽는다.
+--   그 경우 트리거를 걸지 않고 아래 확인 표 ③ 이 ❌ 로 멈춘다(워크플로가 실패로 기록 · 다음 푸시에 새 파일로). 함수가 아예 없으면(방문 기록 미설치) 가드만 건다.
+do $do$
+begin
+  if exists (select 1 from pg_proc where proname = 'taam_set_ticket_visit' and pronamespace = 'public'::regnamespace and not prosecdef) then
+    raise notice 'taam_set_ticket_visit 에 security definer 가 아닌 판이 있다 — 가드를 걸지 않는다';
+    return;
+  end if;
+  execute 'drop trigger if exists trg_taam_guard_ticket_visit on public.tickets';
+  execute 'create trigger trg_taam_guard_ticket_visit before insert or update of visit_status, visit_marked_at, visit_marked_by on public.tickets for each row execute function public.taam_guard_ticket_visit()';
+end $do$;
 
 comment on function public.taam_guard_ticket_visit() is
   '방문 기록 세 칸은 회원·매장 어드민 세션이 직접 못 쓴다(UPDATE 되돌림 · INSERT 비움) — taam_set_ticket_visit(definer)·서버만. 2026-11-01';
@@ -60,8 +67,8 @@ union all select '③ 기록 RPC taam_set_ticket_visit 가 security definer(가�
             when exists (select 1 from pg_proc where proname = 'taam_set_ticket_visit' and pronamespace = 'public'::regnamespace and not prosecdef)
               then '❌ definer 아닌 판이 있다 — 매장 어드민의 방문 기록이 이 가드에 되돌려진다'
             else '✅' end
-union all select '④ 정보 — 방문 기록이 있는데 찍은 사람(visit_marked_by)이 비었거나 행 소유자인 행 수(회원이 직접 적었을 수 있는 모양 · 원장 「⚠ 방문일 전 기록」과 함께 본다)',
+union all select '④ 정보 — 방문 기록을 행 소유자(회원) 자신이 찍었거나, 찍은 시각은 있는데 사람이 없는 행 수(회원이 직접 적었을 수 있는 모양 · 2026-08-31 백필(시각·사람 둘 다 없음)은 안 센다 · 원장 「⚠ 방문일 전 기록」과 함께 본다)',
        (select count(*) from public.tickets t
          where t.visit_status is not null
-           and (t.visit_marked_by is null or t.visit_marked_by = t.user_id)
+           and (t.visit_marked_by = t.user_id or (t.visit_marked_at is not null and t.visit_marked_by is null))
            and not exists (select 1 from public.profiles p where p.id = t.user_id and p.role in ('superadmin','super_admin')))::text;
