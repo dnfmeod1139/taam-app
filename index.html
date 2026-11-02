@@ -34216,11 +34216,17 @@ async function mlOpen(uid){
     //   규정상 0 인 취소(D-30 안 — 회원이 「취소 요청만」으로 진행)는 돌아갈 돈이 없다 — 「돌아간 기록 없음」 경고에서 뺀다(6차 리뷰 · 회원이 쓸 수 있는 refunded_amount·cancel_reason 은 안 본다)
     //   취소 시각은 서버가 찍는 server_cancelled_at(결제 사실 칸 가드가 지킨다 · 2026-10-22~) · 없으면 cancelled_at(회원 기록 — 「어림」) · 방문일은 회차 날짜로 맞춰진 날
     var cAt = e.server_cancelled_at || e.cancelled_at || null, cMs = cAt ? Date.parse(cAt) : NaN;
-    var payAt = ptx.length ? ptx.map(function(r){ return String(r.created_at || ''); }).sort()[0] : String(t.created_at || ''), pMs = Date.parse(payAt);
+    //   결제 시각 — 서버(taam_refund_cap)처럼 이 구매 id 의 결제 줄 중 가장 이른 것 · 그런 줄이 없으면(초대 결제는 invite_id 로만 잇는다) 가장 늦은 결제(되돌려진 첫 시도가 아니라 다시 낸 결제 · 7차)
+    var ownPay = ptx.filter(function(r){ return r.metadata && r.metadata.purchase_id === t.purchase_id; }).map(function(r){ return String(r.created_at || ''); }).sort();
+    var anyPay = ptx.map(function(r){ return String(r.created_at || ''); }).sort();
+    var payAt = ownPay.length ? ownPay[0] : (anyPay.length ? anyPay[anyPay.length - 1] : String(t.created_at || '')), pMs = Date.parse(payAt);
     var price = parseInt(t.price) || 0, v = _mlVisitYmd(t);
+    //   🔧 7차 — 확정된 적 없는 홀드(price 0 — 결제됐는데 좌석 전환이 실패하고 되돌림도 실패한 9/10 사고 모양)와 취소가 결제보다 앞선 늦은 승인은 규정을 태우지 않는다(전액 경고 그대로)
+    //   (price 로만 세면 어느 가지든 0 이 되어 「규정상 환불 없음」으로 숨었다 · 서버는 coalesce(nullif(price,0), 낸 돈))
+    if(price <= 0 || (!isNaN(cMs) && !isNaN(pMs) && cMs < pMs)){ L.unconfirmed = price <= 0; L.late = price > 0; return L; }
     if(!isNaN(cMs)){
       var cY = new Date(cMs + 9 * 3600000).toISOString().slice(0, 10), pol = null;
-      if(!isNaN(pMs) && cMs >= pMs && cMs - pMs <= 30 * 60000) pol = { refund: price, why: '결제 30분 안 — 전액' };
+      if(!isNaN(pMs) && cMs >= pMs && cMs - pMs <= 30 * 60000) pol = { refund: L.total, why: '결제 30분 안 — 전액' };   // 서버처럼 낸 돈 − 이미 돌려준 것
       else if(v){
         var dd = Math.round((Date.UTC(v.y, v.m - 1, v.d) - Date.UTC(+cY.slice(0, 4), +cY.slice(5, 7) - 1, +cY.slice(8, 10))) / 86400000);
         var agp = _agPlanOf({ t: t });
@@ -34434,7 +34440,11 @@ async function mlOpen(uid){
     if(!it.rt || !it.rt.has) return null;                 // 아직 처리 전
     if(it.rt.agencyRec != null){
       // 🆕 5차 — 위약 처리(환불 없음 · 위약금 %)는 「대행비만 공제」를 고르지 않으면 대행비 기록을 0 으로 남기지만 대행비는 위약금 안에 남았다(돌려준 것이 아니다) — 실제로 뗀 몫까지 회차 대행비로
-      if(it.rt.agencyRec === 0 && it.rt.rtype === 'penalty' && !it.rt.cancelRefund && (it.rt.deduct || 0) > 0) return Math.min(_agPlanOf(it).total, it.rt.deduct);   // 🔧 6차 회차 대행비 먼저(판매 현황·반환 화면과 같은 순서)
+      if(it.rt.agencyRec === 0 && it.rt.rtype === 'penalty' && !it.rt.cancelRefund && (it.rt.deduct || 0) > 0){
+        // 🔧 6차 회차 대행비 먼저(스냅샷은 회원이 쓸 수 있다) · 7차 초대(INV-)는 보낼 때 정한 초대 대행비 먼저(판매 현황 4차 · 2026-10-22 운영 결정과 같은 순서)
+        var _ap = _agPlanOf(it), _apT = (String(it.t.purchase_id || '').indexOf('INV-') === 0 && _ap.invPer > 0) ? _ap.invPer * _ap.pax : _ap.total;
+        return Math.min(_apT, it.rt.deduct);
+      }
       return it.rt.agencyRec;   // 기록대로 (0 = 면제·환불됨)
     }
     if(it.rt.cancelRefund) return Math.min(it.ag.total, it.rt.deduct || 0);   // 🔧 2026-11-01 취소 환불(기록 없음)은 실제로 뗀 몫까지만 — 전액 환불·되돌림은 0 (종전엔 회차값으로 「확정」 · 2차 리뷰)
@@ -35206,7 +35216,8 @@ async function mlOpen(uid){
     var pk = '(예치금 ' + W + n(L.dep) + ' · 카드 ' + W + n(L.card) + ')';
     if(L.known && L.owed === 0) return '<div style="font-size:' + fs + 'px;color:' + C.sub + ';margin-top:4px;line-height:1.5;">규정상 환불 없음 — ' + _pcalEsc(L.policy.why) + (L.est ? ' · 취소 시각은 회원 기록' : '') + ' · 결제 ' + W + n(L.total) + ' ' + pk + '</div>';
     if(L.known) return '<div style="font-size:' + fs + 'px;font-weight:700;color:' + C.out + ';margin-top:4px;line-height:1.5;">⚠ 규정상 돌아갔어야 할 ' + W + n(L.owed) + ' — 환불 기록이 없습니다 · 확인<span style="font-weight:400;color:' + C.sub + ';"> · ' + _pcalEsc(L.policy.why) + (L.est ? ' · 취소 시각은 회원 기록' : '') + ' · 결제 기록 ' + W + n(L.total) + ' ' + pk + '</span></div>';
-    return '<div style="font-size:' + fs + 'px;font-weight:700;color:' + C.out + ';margin-top:4px;line-height:1.5;">⚠ 결제 기록 ' + W + n(L.total) + ' ' + pk + ' — 돌려준 기록이 없고 취소 시각·방문일을 몰라 규정을 셀 수 없습니다 · 확인</div>';
+    return '<div style="font-size:' + fs + 'px;font-weight:700;color:' + C.out + ';margin-top:4px;line-height:1.5;">⚠ 결제 기록 ' + W + n(L.total) + ' ' + pk + ' — 돌려준 기록이 없습니다'
+      + (L.unconfirmed ? ' · 티켓이 확정되지 않은 결제(0원 홀드) — 전액 돌려줘야 할 수 있습니다' : (L.late ? ' · 취소가 결제보다 앞섰습니다(늦은 승인)' : ' · 취소 시각·방문일을 몰라 규정을 셀 수 없습니다')) + ' · 확인</div>';
   }
   // 🆕 3차 — 처리된 건의 경고 한 곳(계산식 · 주머니 줄 · 팝업이 같은 말을 한다)
   function _mlRtWarnHtml(rt, fs){
@@ -35988,7 +35999,8 @@ function mlTkPop(idx){
       var _pk = ' (예치금 ' + W + _L.dep.toLocaleString() + ' · 카드 ' + W + _L.card.toLocaleString() + ')';
       if(_L.known && _L.owed === 0) h += '<div style="font-size:12px;color:#8a8580;margin-top:4px;line-height:1.5;">규정상 환불 없음 — ' + _pcalEsc(_L.policy.why) + (_L.est ? ' · 취소 시각은 회원 기록' : '') + ' · 결제 ' + W + _L.total.toLocaleString() + _pk + '</div>';
       else if(_L.known) h += '<div style="font-size:12px;color:#B23A2E;font-weight:700;margin-top:4px;line-height:1.5;">⚠ 규정상 돌아갔어야 할 ' + W + _L.owed.toLocaleString() + ' — 환불 기록이 없습니다 · ' + _pcalEsc(_L.policy.why) + (_L.est ? ' · 취소 시각은 회원 기록' : '') + ' · 결제 기록 ' + W + _L.total.toLocaleString() + _pk + '</div>';
-      else h += '<div style="font-size:12px;color:#B23A2E;font-weight:700;margin-top:4px;line-height:1.5;">⚠ 결제 기록 중 돌려준 기록이 없는 몫 ' + W + _L.total.toLocaleString() + _pk + ' — 취소 시각·방문일을 몰라 규정을 셀 수 없습니다</div>';
+      else h += '<div style="font-size:12px;color:#B23A2E;font-weight:700;margin-top:4px;line-height:1.5;">⚠ 결제 기록 중 돌려준 기록이 없는 몫 ' + W + _L.total.toLocaleString() + _pk
+        + (_L.unconfirmed ? ' — 티켓이 확정되지 않은 결제(0원 홀드) · 전액 돌려줘야 할 수 있습니다' : (_L.late ? ' — 취소가 결제보다 앞섰습니다(늦은 승인)' : ' — 취소 시각·방문일을 몰라 규정을 셀 수 없습니다')) + '</div>';
     }
   } else if(it.plan){
     // 🆕 2026-11-01 진행 중 — 반환 예정(어림). 원장 「반환 · 대행비」 탭의 계산과 같은 값(it.plan)
