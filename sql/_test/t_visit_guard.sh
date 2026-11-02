@@ -60,8 +60,12 @@ ok "서버(uid 없음 · postgres) → 그대로" "attended|-|cancelled|같이" 
 ok "트리거 하나 · BEFORE · INSERT+UPDATE · invoker" "1|t|t|f" "$($P -c "select count(*) from pg_trigger where tgname='trg_taam_guard_ticket_visit' and not tgisinternal")|$($P -c "select (tgtype::int & 2) = 2 and (tgtype::int & 4) = 4 from pg_trigger where tgname='trg_taam_guard_ticket_visit'")|$($P -c "select (tgtype::int & 16) = 16 from pg_trigger where tgname='trg_taam_guard_ticket_visit'")|$($P -c "select prosecdef from pg_proc where oid=to_regproc('public.taam_guard_ticket_visit')")"
 # ── ④ 정보 — 회원 소유자가 찍은 모양 · 백필(시각·사람 없음)은 안 센다 ──
 $P -c "set taam.uid=''; update public.tickets set visit_status='attended', visit_marked_at=now(), visit_marked_by='$A' where id='$T'" >/dev/null
-$P -c "set taam.uid=''; insert into public.tickets(user_id, purchase_id, price, reservation_date, visit_status) values ('$A','PAYH-bf',100,'2026.08.01','attended')" >/dev/null
-ok "④ 정보 — marked_by 가 행 소유자인 행 1 · 백필 모양(시각·사람 없음)은 제외" "1" "$($P -f supabase/migrations/20261101_ticket_visit_guard.sql 2>&1 | grep '④' | awk -F'|' '{print $NF}' | tr -d ' ')"
+# 실제 08-31 백필 문장(sql/ticket_visit_record.sql ⑥)의 모양 — visit_marked_at = coalesce(visit_marked_at, created_at) · marked_by 는 안 적는다
+$P -c "set taam.uid=''; insert into public.tickets(user_id, purchase_id, price, reservation_date, status) values ('$A','PAYH-bf',100,'2026.08.01','completed'); update public.tickets set visit_status = coalesce(visit_status,'attended'), visit_marked_at = coalesce(visit_marked_at, created_at) where purchase_id = 'PAYH-bf'" >/dev/null
+ok "④ 정보 — marked_by 가 행 소유자인 행 1 · 실제 백필 모양(시각 = 구매 시각 · 사람 없음)은 제외" "1" "$($P -f supabase/migrations/20261101_ticket_visit_guard.sql 2>&1 | grep '④' | awk -F'|' '{print $NF}' | tr -d ' ')"
+# 가드 전에 회원이 칸 하나만 적은 가장 단순한 모양(시각·사람 없음) 은 센다
+$P -c "set taam.uid=''; insert into public.tickets(user_id, purchase_id, price, reservation_date, visit_status) values ('$A','PAYH-naive',100,'2026.12.01','attended')" >/dev/null
+ok "④ 정보 — 칸 하나만 적은 모양(시각·사람 없음)은 센다 → 2" "2" "$($P -f supabase/migrations/20261101_ticket_visit_guard.sql 2>&1 | grep '④' | awk -F'|' '{print $NF}' | tr -d ' ')"
 out2=$($P -f supabase/migrations/20261101_ticket_visit_guard.sql 2>&1)
 ok "재실행 안전 · ❌ 0" "0" "$(echo "$out2" | grep -c '❌')"
 # ── definer 가 아닌 기록 RPC 가 있으면 가드를 걸지 않고 ③ ❌ ──
