@@ -39,7 +39,7 @@ mk(){ $P -c "insert into public.tickets(user_id,ticket_product_id,reservation_da
 
 out=$($P -f "$MIG" 2>&1)
 ok "마이그레이션 오류 없음 · ❌ 0" "|0" "$(echo "$out" | grep -E '^ERROR|^psql:.*ERROR' | head -1)|$(echo "$out" | grep -c '❌')"
-ok "④ ⑤ 정보 — 아직 줄 없음" "0|0" "$(echo "$out" | grep '④' | awk -F'|' '{print $NF}' | tr -d ' ')|$(echo "$out" | grep '⑤' | awk -F'|' '{print $NF}' | tr -d ' ')"
+ok "④ ⑤ ⑥ 정보 — 아직 줄 없음" "0|0|0" "$(echo "$out" | grep '④ 정보' | awk -F'|' '{print $NF}' | tr -d ' ')|$(echo "$out" | grep '⑤' | awk -F'|' '{print $NF}' | tr -d ' ')|$(echo "$out" | grep '⑥' | awk -F'|' '{print $NF}' | tr -d ' ')"
 
 # ── A. 카드 환불 대기 ──
 mk PAYH-A1
@@ -91,7 +91,7 @@ r=$(as $M1 "insert into public.deposit_transactions(user_id,change_type,amount,m
 ok "B6 회원 음수 ticket_purchase(다른 유형) → 이 가드와 무관" "$(echo "$r" | grep -c LEDGER_REFUND_NONPOSITIVE)" "0"
 
 out2=$($P -f "$MIG" 2>&1)
-ok "재실행 안전 · ❌ 0 · ④ 0(위조 완료는 남지 않았다) · ⑤ 1(서버 ₩0 줄 · 처리 표시 없음)" "0|0|1" "$(echo "$out2" | grep -c '❌')|$(echo "$out2" | grep '④' | awk -F'|' '{print $NF}' | tr -d ' ')|$(echo "$out2" | grep '⑤' | awk -F'|' '{print $NF}' | tr -d ' ')"
+ok "재실행 안전 · ❌ 0 · ④ 2(정상 완료 둘 — 완료 표시·Edge) · ⑥ 0(처리자·거래키 없는 완료 없음 — 위조는 대기로 바뀌었다) · ⑤ 1(서버 ₩0 줄 · 처리 표시 없음)" "0|2|0|1" "$(echo "$out2" | grep -c '❌')|$(echo "$out2" | grep '④ 정보' | awk -F'|' '{print $NF}' | tr -d ' ')|$(echo "$out2" | grep '⑥' | awk -F'|' '{print $NF}' | tr -d ' ')|$(echo "$out2" | grep '⑤' | awk -F'|' '{print $NF}' | tr -d ' ')"
 ok "트리거 둘 · 순서(대기 정리가 결제 사실 칸 가드 앞)" "2|trg_taam_guard_ticket_crp_member" "$($P -c "select count(*) from pg_trigger where tgname in ('trg_taam_guard_ticket_crp_member','trg_taam_guard_ledger_refund_nonpos') and not tgisinternal")|$($P -c "select tgname from pg_trigger where tgrelid='public.tickets'::regclass and tgname in ('trg_taam_guard_ticket_crp_member','trg_taam_guard_ticket_payfacts') order by tgname limit 1")"
 psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1
 [ $FAIL = 0 ] && echo "=== 전부 통과 ===" || { echo "=== 실패 있음 ==="; exit 1; }

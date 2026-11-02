@@ -86,7 +86,11 @@ union all select '③ is_super_admin(uuid) 존재 · 결제 사실 칸 가드(ta
        case when to_regprocedure('public.is_super_admin(uuid)') is null then '❌ is_super_admin 없음'
             when to_regproc('public.taam_guard_ticket_payfacts') is null then '⚠ 결제 사실 칸 가드 없음 — 20261022_card_refund_quote2.sql 먼저(이 파일만으로는 취소 뒤 변경을 못 막는다)'
             else '✅' end
-union all select '④ 정보 — 회원이 취소하며 만든 대기(set_by_role member)인데 지금 「완료」인 줄 수 (정상 완료 + 옛 위조가 섞인다 · 처리자·토스 거래키가 없는 줄)',
+union all select '④ 정보 — 회원이 취소하며 만든 대기(set_by_role member)가 지금 「완료」인 줄 수 (정상 완료와 이 파일 전의 위조를 가르지 못한다 — 위조는 처리자·거래키까지 적을 수 있었다 · 0 이 아니면 카드환불 탭에서 토스와 대조)',
+       (select count(*) from public.tickets t
+         where t.extra_data -> 'card_refund_pending' ->> 'status' = 'done'
+           and t.extra_data -> 'card_refund_pending' ->> 'set_by_role' = 'member')::text
+union all select '⑥ 정보 — ④ 중 처리자·토스 거래키가 둘 다 없는 줄 수 (정상 완료 경로는 둘 중 하나를 적는다 — 「완료 표시」 = done_by · Edge = toss_tx)',
        (select count(*) from public.tickets t
          where t.extra_data -> 'card_refund_pending' ->> 'status' = 'done'
            and t.extra_data -> 'card_refund_pending' ->> 'set_by_role' = 'member'

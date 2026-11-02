@@ -33435,8 +33435,7 @@ async function _dmLoadSupabasePurchases(){
       .select('id, user_id, restaurant_id, restaurant_name, party_size, price, status, purchase_id, ticket_product_id, ticket_type, reservation_date, visit_time, created_at, extra_data, buyer_name, buyer_phone')
       .order('created_at', { ascending: false })
       .limit(2000);
-    if(tres.error){ console.warn('[dm supabase] tickets 조회 실패:', tres.error.message); window._dmLoadErr = String(tres.error.message || tres.error.code || '읽기 실패'); return []; }
-    window._dmLoadErr = '';   // 🆕 2026-11-01 3차 — 읽기 실패를 화면에 알린다(종전엔 빈 배열로 삼켜 「반환 대기 중인 건이 없어요」로 보였다)
+    if(tres.error){ console.warn('[dm supabase] tickets 조회 실패:', tres.error.message); var _ea = []; _ea._dmErr = String(tres.error.message || tres.error.code || '읽기 실패'); return _ea; }   // 🆕 2026-11-01 — 읽기 실패를 돌려준 목록에 붙인다(종전엔 빈 배열로 삼켜 「반환 대기 중인 건이 없어요」로 보였다 · 5차: 전역 하나는 다른 로더가 덮어썼다)
     var tickets = tres.data || [];
     if(tickets.length === 0) return [];
 
@@ -33595,8 +33594,7 @@ async function _dmLoadSupabasePurchases(){
     });
   } catch(e){
     console.warn('[dm supabase] 예외:', e);
-    window._dmLoadErr = String((e && e.message) || e || '읽기 실패');   // 🆕 2026-11-01 3차 — 빈 목록이 「없다」로 보이지 않게
-    return [];
+    var _eb = []; _eb._dmErr = String((e && e.message) || e || '읽기 실패'); return _eb;   // 🆕 2026-11-01 — 빈 목록이 「없다」로 보이지 않게
   }
 }
 
@@ -34181,6 +34179,25 @@ async function mlOpen(uid){
   }
   // 🆕 2026-11-01 카드 몫의 상한 — card_refund_pending.amount 는 회원이 취소 순간 아무 값이나 적을 수 있다(3차 리뷰 · 결제 내역(pmx)도 대기를 카드 결제액으로 자른다).
   //   상한 = 카드 결제(cardPaid) − 인원 변경 때 카드로 돌려준 몫 · cardPaid 가 없으면 결제 − 예치금 결제(depositUsed) · 둘 다 없으면 결제액(옛 행) — 셋 다 서버가 쓰는 칸
+  // 🆕 5차 — 원장 「되돌림」 줄의 모양: toss-confirm·toss-billing-charge 의 예치금 부족·좌석 상실 자동 환원({order_id} · refund_type·cancel_refund 없음) · 초대 결제 되돌림(reason)
+  function _mlIsRollbackRow(m){
+    m = m || {};
+    if(/^(invite_closed|duplicate_purchase|time_conflict)$/.test(String(m.reason || ''))) return true;
+    return !m.refund_type && !m.cancel_refund && !!m.order_id;
+  }
+  // 🆕 5차 — 패키지 통째 취소의 카드 대기는 묶음 전체 금액 하나다(첫 줄에) — 묶음 표를 못 읽었을 때는 같은 묶음 줄들의 카드 결제 합으로 자른다(한 줄의 cardPaid 로 자르면 묶음 대기가 줄었다)
+  var _mlPkgCardPaid = {};
+  buys.forEach(function(t){ var e = t.extra_data || {}; if(e.pkg_cancel){ var g = String(e.pkg_cancel); _mlPkgCardPaid[g] = (_mlPkgCardPaid[g] || 0) + Math.max(0, parseInt(e.cardPaid) || 0); } });
+  // 🆕 5차 — 취소됐는데 환불 기록이 없는 구매의 「결제 기록 중 돌아간 기록이 없는 몫」 — 원장 결제 − 이 구매의 양수 환불·인원 줄임 줄 + 카드 결제 − 인원 변경 카드 환불
+  //   (카드+예치금 구매를 인원 줄임 뒤 취소하면 예치금 환원이 서버 한도에 막혀 티켓만 취소되는 종전 결함이 있다 — 그 회원이 받을 돈을 여기서 보이게)
+  function _mlPaidLeft(t){
+    var e = t.extra_data || {}, dep = 0, back = 0, cb = 0;
+    _ptxOf(t).forEach(function(r){ dep += Math.abs(parseInt(r.amount) || 0); });
+    txs.forEach(function(r){ if(!r.metadata || r.metadata.purchase_id !== t.purchase_id) return; if((r.change_type === 'ticket_refund' || r.change_type === 'ticket_pax_change') && (parseInt(r.amount) || 0) > 0) back += parseInt(r.amount) || 0; });
+    (Array.isArray(e.pax_changes) ? e.pax_changes : []).forEach(function(c){ cb += Math.max(0, parseInt(c && c.card_refund) || 0); });
+    var d = Math.max(0, dep - back), c = Math.max(0, (parseInt(e.cardPaid) || 0) - cb);
+    return { dep: d, card: c, total: d + c };
+  }
   function _mlCardCap(t){
     var e = t.extra_data || {}, price = parseInt(t.price) || 0;
     var cp = parseInt(e.cardPaid) || 0, du = parseInt(e.depositUsed) || 0, back = 0;
@@ -34213,6 +34230,12 @@ async function mlOpen(uid){
       // 🆕 3차 — 그 기록이 전부 ₩0 이면 「환불 없음 처리」(전액 위약) 뒤 티켓 갱신이 실패한 모양이거나, 서버 가드(20261101_refund_facts_guard.sql) 전에 회원이 쓴 줄이다 — 확인이 필요하다고 적는다
       aliveZero = real.every(function(r){ return (parseInt(r.amount) || 0) <= 0; });
       rows = real; aliveWarn = true;
+    } else {
+      // 🆕 5차 — 취소된 행에서도 되돌림 줄은 앞서 실패한 결제의 돈이다 — 진짜 취소 환불 줄이 따로 있으면 그 줄들만 이 취소의 환불로 세고 되돌림은 rollback 으로
+      //   (같은 홀드로 다시 결제한 구매: 예치금이 두 번 빠졌다 한 번 돌아와 「돌아간 돈 ≤ 결제액」 상한이 카드 대기·대행비를 틀리게 잘랐다 · 5차 리뷰)
+      //   되돌림 줄만 있으면(좌석 상실 — 9/10 사고 모양) 그 줄이 곧 이 취소의 환불 기록이다
+      var rbC = rows.filter(function(r){ return _mlIsRollbackRow(r.metadata); });
+      if(rbC.length && rbC.length < rows.length){ rbC.forEach(function(r){ rollback += Math.max(0, parseInt(r.amount)||0); }); rows = rows.filter(function(r){ return rbC.indexOf(r) < 0; }); }
     }
     // 🆕 2026-11-01 패키지 통째 취소 — 줄마다의 몫은 **묶음 표(ticket_package_orders.cancel.rows · 서버만 쓴다)** 가 진실이고, 카드 환불 대기(card_refund)는 묶음 전체 금액 하나다(첫 줄 first_purchase_id 에 붙인다).
     //   묶음 표를 못 읽었을 때만 tickets.extra_data(pkg_cancel · refunded_amount · deposit_refund · pkg_card_refund — 회원이 고칠 수 있는 칸 · 2차 리뷰)로 어림하고 그렇게 적는다.
@@ -34248,7 +34271,7 @@ async function mlOpen(uid){
         pCard = Math.min(pCap, Math.max(0, parseInt(e0.pkg_card_refund) || 0));
         pRet = (e0.refunded_amount != null) ? Math.max(0, parseInt(e0.refunded_amount) || 0) : pDep + pCard;
         if(price > 0) pRet = Math.min(pRet, price);
-        pFirst = !!crp; pDone = crpDone; pPendAmt = Math.min(pCap, crpAmt);
+        pFirst = !!crp; pDone = crpDone; pPendAmt = Math.min(_mlPkgCardPaid[pkg.group] || 0, crpAmt);   // 묶음 전체 대기 — 같은 묶음 줄들의 카드 결제 합까지
       }
       return {
         has: true, cancelled: true, rows: rows, pkg: pkg, rollback: rollback,
@@ -34264,7 +34287,10 @@ async function mlOpen(uid){
     // 🆕 3차 — 카드로만 낸 구매를 회원이 취소하면 예치금 환원이 0 이라 원장 줄이 없다(cancelTicketPurchase) — 카드 대기가 그 취소의 환불 기록이다
     //   카드 결제 기록(cardPaid — 서버가 쓰는 결제 사실 칸)이 있을 때만 — 회원이 취소 순간 적은 대기만 있는 행(결제 증거 없음)은 「기록 없음」으로 둔다
     var cardOnly = isCancelled && !rows.length && !extraDr && !!crp && crpAmt > 0 && (parseInt(e0.cardPaid) || 0) > 0;
-    if(!rows.length && !extraDr && !cardOnly) return { has:false, cancelled:true, rollback: rollback, pkgSuspect: pkgSuspect, unpaid: isCancelled && !_mlPaidEvidence(t) };
+    if(!rows.length && !extraDr && !cardOnly){
+      var _unpaid = isCancelled && !_mlPaidEvidence(t);
+      return { has:false, cancelled:true, rollback: rollback, pkgSuspect: pkgSuspect, unpaid: _unpaid, left: _unpaid ? null : _mlPaidLeft(t) };
+    }
     var dep = 0; rows.forEach(function(r){ dep += Math.max(0, parseInt(r.amount)||0); });
     var m = (rows[0] && rows[0].metadata) || {};
     var cardReq = crp ? crpAmt : (parseInt(m.card_refund_pending)||0);
@@ -34370,7 +34396,11 @@ async function mlOpen(uid){
   //   반환 전(진행 중)은 확정이 아니라 '예정' 이다.
   function _feeOf(it){
     if(!it.rt || !it.rt.has) return null;                 // 아직 처리 전
-    if(it.rt.agencyRec != null) return it.rt.agencyRec;   // 기록대로 (0 = 면제·환불됨)
+    if(it.rt.agencyRec != null){
+      // 🆕 5차 — 위약 처리(환불 없음 · 위약금 %)는 「대행비만 공제」를 고르지 않으면 대행비 기록을 0 으로 남기지만 대행비는 위약금 안에 남았다(돌려준 것이 아니다) — 실제로 뗀 몫까지 회차 대행비로
+      if(it.rt.agencyRec === 0 && it.rt.rtype === 'penalty' && !it.rt.cancelRefund && (it.rt.deduct || 0) > 0) return Math.min(it.ag.total, it.rt.deduct);
+      return it.rt.agencyRec;   // 기록대로 (0 = 면제·환불됨)
+    }
     if(it.rt.cancelRefund) return Math.min(it.ag.total, it.rt.deduct || 0);   // 🔧 2026-11-01 취소 환불(기록 없음)은 실제로 뗀 몫까지만 — 전액 환불·되돌림은 0 (종전엔 회차값으로 「확정」 · 2차 리뷰)
     return it.ag.total;                                   // 옛 반환 기록 — 상품값으로 보완
   }
@@ -34468,9 +34498,12 @@ async function mlOpen(uid){
     var when = visited ? '방문 완료' : (days == null ? '방문일 미확인' : (days < 0 ? '방문 ' + (-days) + '일 지남' : (days === 0 ? '오늘 방문' : '방문 D-' + days)));
     // 🆕 3차 — 「반환 관리 ›」(예치금 관리)가 이 건을 반환 예정에 안 보여 주는 모양 — 거기서는 처리할 버튼이 없다
     //   refund_row: 이 구매 id 의 환불 줄이 하나라도 있으면(정정·자동 환원 · ₩0 포함) 그 화면은 「반환완료」로 본다 · completed: 「처리됨 — 처리 기록만」 · flag: 수동·초대 홀드 표시가 붙은 회원 행은 목록에서 빠진다
+    //   🔧 5차 — 예치금 관리 getDmItems 의 거름과 같은 판정: 수동·초대 홀드·정산 표시 · 회원 없는 결제 링크 표시 → 목록에서 빠짐(flag) · 회원 있는 결제 링크 표시 → 보이지만 「카드 결제 — 반환 대상 아님」(nobtn · _dmIsCardLink 는 접두어를 안 본다)
+    var _pidP = String(t.purchase_id || ''), _isPay = /^PAY/.test(_pidP), _lk = /^LINK-/.test(_pidP) || !!e.linkInvite;
     var dmMiss = (it.rt && ((it.rt.rollbackRows && it.rt.rollbackRows.length) || it.rt.rollback > 0)) ? 'refund_row'
                : (st === 'completed' ? 'completed'
-               : ((/^PAY/.test(String(t.purchase_id || '')) && (e.manualEntry || e.inviteHold)) ? 'flag' : ''));
+               : ((_isPay && (e.manualEntry || e.inviteHold || e.kashikiri || (_lk && !e.memberUid))) ? 'flag'
+               : ((_isPay && _lk && e.memberUid) ? 'nobtn' : '')));
     return { price: price, keptAg: keptAg, dmMiss: dmMiss, card: card, depPaid: depPaid, depSrc: depSrc, backDep: backDep, backN: backN, cardBack: cardBack, depRemain: depRemain, cardRemain: cardRemain,
              ag: ag, expect: expect, toDep: toDep, toCard: toCard, gap: gap, rollback: (it.rt && it.rt.rollback) || 0,
              visit: v, days: days, visited: visited, overdue: overdue, earlyMark: earlyMark, when: when, kind: kind, vs: vs, pendingConfirm: (st === 'pending_confirm') };
@@ -34478,10 +34511,12 @@ async function mlOpen(uid){
   G.open.forEach(function(it){ it.plan = _planOf(it); });
   // 🔧 대행비 「예정」도 같은 값(반환 때 뗄 몫 + 인원 줄임 때 남긴 몫) — 운영 행·만료·옛 상태는 안 센다.
   //   🆕 3차 — 결제 링크(카드) 좌석은 방문이 지나면 환불 구간이 끝나 대행비가 링크 결제에 남는다 → 「확정」(종전엔 영원히 「예정」)
-  var feeLinkDone = 0, feeLinkList = [];
+  var feeLinkDone = 0, feeLinkList = [], feeLinkOv = [];
   G.open.forEach(function(it){
     var p = it.plan;
     if(p.kind === 'skip' || p.kind === 'legacy') return;
+    // 🆕 5차 — 항목별 금액을 고친 결제 링크(priceOverride)는 대행비가 링크 청구(override_parts)에만 있다 — 좌석의 정가 대행비로 세지 않고 합계 밖 「확인」
+    if(p.kind === 'cardlink' && it.t.extra_data && it.t.extra_data.priceOverride){ feeLinkOv.push(it); return; }
     if(p.kind === 'cardlink' && p.overdue){ if(p.ag.total > 0){ feeLinkDone += p.ag.total; feeLinkList.push(it); } return; }
     feePlan += p.ag.total + (p.keptAg || 0);
   });
@@ -34524,9 +34559,9 @@ async function mlOpen(uid){
     RD.agency += ag; RD.extra += ex; RD.etc += Math.max(0, rt.deduct - ag - ex);
   });
   RD.items.sort(function(a, b){ return String(_retAt(b)).localeCompare(String(_retAt(a))); });   // 처리일 최신 먼저
-  var RF = { n: 0, sum: 0, cut: 0, cardPendN: 0, cardPendAmt: 0, noRecN: 0, holdN: 0, warnN: 0, items: [] };
+  var RF = { n: 0, sum: 0, cut: 0, cardPendN: 0, cardPendAmt: 0, noRecN: 0, noRecAmt: 0, holdN: 0, warnN: 0, items: [] };
   G.no.concat(G.cx).forEach(function(it){
-    if(!(it.rt && it.rt.has)){ if(it.rt && it.rt.unpaid) RF.holdN++; else RF.noRecN++; return; }   // 🆕 3차 — 결제 전에 반납된 좌석 홀드는 「기록 없음」이 아니다
+    if(!(it.rt && it.rt.has)){ if(it.rt && it.rt.unpaid) RF.holdN++; else { RF.noRecN++; RF.noRecAmt += (it.rt && it.rt.left && it.rt.left.total) || 0; } return; }   // 🆕 3차 — 결제 전에 반납된 좌석 홀드는 「기록 없음」이 아니다
     RF.n++; RF.sum += it.rt.ret; RF.cut += it.rt.deduct; RF.items.push(it);
     if(it.rt.aliveWarn || it.rt.saNoRec || it.rt.cardCut > 0 || it.rt.pkgSuspect) RF.warnN++;
     if(it.rt.cardPend > 0){ RF.cardPendN++; RF.cardPendAmt += it.rt.cardPend; }   // 패키지는 묶음 금액이 첫 줄에만 — 줄마다 더하지 않는다
@@ -34785,6 +34820,7 @@ async function mlOpen(uid){
           (r.deposit_type === 'membership' ? C.wine : '#8a7b4a')) + '</div>';
     return item(pos ? '＋' : '−', pos ? '#E7F1E7' : '#FBECEA', pos ? C["in"] : C.out, body, amt);
   }
+  if(!dtErr && txs.length >= 500) pd += '<div style="margin-top:10px;padding:8px 12px;border:1px solid #EAD9B8;border-radius:10px;background:#FBF6EA;font-size:11.5px;font-weight:700;color:#8a6a1e;line-height:1.5;">최근 원장 500줄만 읽었습니다 — 오래된 줄과 위 합계에서 빠졌을 수 있습니다</div>';   // 🆕 5차 — 읽기 한도
   if(dtErr){
     pd += '<div style="padding:10px 12px;margin-top:10px;border:1px solid #E4D6D6;border-radius:10px;background:#FBECEA;font-size:12px;font-weight:700;color:#B23A2E;">원장을 못 읽었습니다 — 회원을 다시 여세요<div style="font-size:10.5px;font-weight:400;color:#8a8580;margin-top:3px;">' + _pcalEsc(dtErr.slice(0, 160)) + '</div></div>';   // 🆕 2026-11-01
   } else if(!txs.length){
@@ -34988,7 +35024,8 @@ async function mlOpen(uid){
     G.open.forEach(function(it){
       pt += item('◷', '#FCF3E0', C.hold,
         tkTitle(it) + tkWhen(it) + payChips(it)
-        + ((it.rt && it.rt.rollback > 0) ? '<div style="font-size:11px;color:' + C.sub + ';margin-top:3px;">원장 되돌림 ' + W + n(it.rt.rollback) + ' — 정정·자동 환원 줄(반환 아님)</div>' : ''),   // 🆕 2026-11-01
+        + ((it.rt && it.rt.rollback > 0) ? '<div style="font-size:11px;color:' + C.sub + ';margin-top:3px;">원장 되돌림 ' + W + n(it.rt.rollback) + ' — 정정·자동 환원 줄(반환 아님)</div>' : '')   // 🆕 2026-11-01
+        + (it.t.status === 'completed' ? '<div style="font-size:11px;color:' + C.out + ';margin-top:3px;font-weight:700;">옛 상태 completed — 반환 탭에서는 「확인 필요」(합계 밖)</div>' : ''),   // 🆕 5차
         '<div style="font-size:14.5px;font-weight:800;color:' + C.ink + ';">' + W + n(it.t.price) + '</div>'
         + '<div style="margin-top:2px;">' + tag('반환 대기','#FCF3E0',C.hold) + '</div>',
         'mlTkPop(' + it.idx + ')');
@@ -35024,7 +35061,8 @@ async function mlOpen(uid){
       var back = (it.rt && it.rt.has) ? it.rt.ret : 0;
       var full = back >= (parseInt(it.t.price)||0) && back > 0;
       pt += item('×', '#F3EEEC', '#96877f',
-        tkTitle(it) + tkWhen(it) + payChips(it) + ((it.rt && it.rt.has) ? calcBox(it) : ''),
+        tkTitle(it) + tkWhen(it) + payChips(it) + ((it.rt && it.rt.has) ? calcBox(it) : '')
+        + ((it.rt && !it.rt.has && it.rt.left && it.rt.left.total > 0) ? '<div style="font-size:11px;font-weight:700;color:' + C.out + ';margin-top:4px;line-height:1.5;">⚠ 결제 기록 ' + W + n(it.rt.left.total) + '(예치금 ' + W + n(it.rt.left.dep) + ' · 카드 ' + W + n(it.rt.left.card) + ') — 돌려준 기록이 없습니다 · 확인</div>' : ''),   // 🆕 5차
         '<div style="font-size:14.5px;font-weight:800;color:' + C.ink + ';">'
         + (back > 0 ? W + n(back) : '—') + '</div>'
         + '<div style="margin-top:2px;">' + tag(full ? '전액 환불' : ((it.rt && it.rt.has) ? '구매 취소' : ((it.rt && it.rt.unpaid) ? '결제 전 취소' : '취소(기록 없음)')),
@@ -35049,6 +35087,8 @@ async function mlOpen(uid){
   }
   if(tkErr) pt = '<div style="padding:10px 12px;margin-top:10px;border:1px solid #E4D6D6;border-radius:10px;background:#FBECEA;font-size:12px;font-weight:700;color:#B23A2E;">티켓을 못 읽었습니다 — 회원을 다시 여세요<div style="font-size:10.5px;font-weight:400;color:#8a8580;margin-top:3px;">' + _pcalEsc(tkErr.slice(0, 160)) + '</div></div>' + pt;   // 🆕 2026-11-01
   else if(!pt) pt = emptyLine('티켓 내역이 없습니다');
+  var _capNote = function(what){ return '<div style="margin-top:10px;padding:8px 12px;border:1px solid #EAD9B8;border-radius:10px;background:#FBF6EA;font-size:11.5px;font-weight:700;color:#8a6a1e;line-height:1.5;">최근 ' + what + '만 읽었습니다 — 오래된 건이 빠졌을 수 있습니다</div>'; };   // 🆕 5차 — 읽기 한도는 탭마다
+  if(!tkErr && ((tk && tk.data) || []).length >= 300) pt = _capNote('티켓 300건') + pt;
   else pt += '<div style="padding:12px 4px;font-size:11px;color:' + C.faint + ';border-top:1px solid ' + C.line + ';">'
     + '「진행 중」이 곧 <b>아직 갚아야 할 돈</b>입니다 · 항목을 누르면 상세</div>';
 
@@ -35089,7 +35129,7 @@ async function mlOpen(uid){
      + _cell('환불 · 취소로 돌아간 돈', W + n(RF.sum), C.ink,
              RF.n + '건 · 차감 ' + W + n(RF.cut)
              + (RF.cardPendN ? '<br><b style="color:' + C.out + ';">카드 환불 대기 ' + RF.cardPendN + '건 ' + W + n(RF.cardPendAmt) + '</b>' : '')
-             + (RF.noRecN ? '<br>취소인데 환불 기록 없음 ' + RF.noRecN + '건' : '')
+             + (RF.noRecN ? '<br>취소인데 환불 기록 없음 ' + RF.noRecN + '건' + (RF.noRecAmt ? ' — <b style="color:' + C.out + ';">결제 기록 ' + W + n(RF.noRecAmt) + '이 돌아간 기록 없음 · 확인</b>' : '') : '')
              + (RF.warnN ? '<br><b style="color:' + C.out + ';">⚠ 확인 필요 ' + RF.warnN + '건</b>' : '')
              + (RF.holdN ? '<br><span style="color:' + C.faint + ';">결제 전 취소(좌석 홀드 반납) ' + RF.holdN + '건 — 돈 이동 없음</span>' : ''))
      + _cell('대행비 — 환불되지 않는 몫', W + n(feeDone) + ' <span style="font-size:11px;color:' + C.sub + ';font-weight:700;">확정</span>', '#A07E3B',
@@ -35136,9 +35176,10 @@ async function mlOpen(uid){
     return '<div style="margin:7px 0 1px;padding:8px 10px;background:#FBFAF6;border:1px solid #F0EBE1;border-radius:8px;font-size:11px;color:' + C.sub + ';">' + rows + '</div>';
   }
   function _mlDmMissText(k){
-    return k === 'refund_row' ? '⚠ 「반환 관리 ›」(예치금 관리)에는 이 건이 「반환완료」로 보입니다 — 이 구매에 원장 환불 줄(정정·자동 환원)이 있어서. 거기서는 반환 버튼이 없으니 처리 방법을 확인하세요'
-         : k === 'completed' ? '⚠ 옛 상태 「completed」 — 「반환 관리 ›」에는 「처리됨(처리 기록만)」으로 보입니다. 원장에 반환 기록이 없어 앱 밖에서 처리됐는지 확인하세요(합계 밖)'
-         : k === 'flag' ? '⚠ 수동·초대 홀드 표시가 붙은 회원 행이라 「반환 관리 ›」 목록에 나오지 않습니다 — 확인'
+    return k === 'refund_row' ? '⚠ 「반환 관리 ›」(예치금 관리)의 반환예정 목록에 이 건이 없습니다 — 이 구매에 원장 환불 줄(정정·자동 환원)이 있어 처리된 건(반환완료 또는 환불불가 탭)으로 보입니다. 거기서는 반환 버튼이 없으니 처리 방법을 확인하세요'
+         : k === 'completed' ? '⚠ 옛 상태 「completed」 — 「반환 관리 ›」에는 「반환 완료 ₩0(처리 기록만)」으로 보입니다. 원장에 반환 기록이 없어 앱 밖에서 처리됐는지 확인하세요(합계 밖)'
+         : k === 'flag' ? '⚠ 운영 행 표시(수동·초대 홀드·정산·결제 링크)가 붙은 회원 행이라 「반환 관리 ›」 목록에 나오지 않습니다 — 확인'
+         : k === 'nobtn' ? '⚠ 결제 링크 표시가 붙은 회원 행이라 「반환 관리 ›」에서는 「카드 결제 — 반환 대상 아님」으로 보이고 반환 버튼이 없습니다 — 확인'
          : '';
   }
   // 반환됨 한 건의 주머니·카드 줄 — calcBox(결제 − 대행비 − 추가 차감 = 반환)는 티켓 탭과 같은 것을 쓴다
@@ -35167,7 +35208,7 @@ async function mlOpen(uid){
     if(p.earlyMark) bits.push(tag('⚠ 방문일 전 기록', '#F7E4E1', '#A6382B'));
     if(p.rollback > 0) bits.push(tag('원장 되돌림 ' + W + n(p.rollback), '#F3EEEC', '#96877f'));
     if(p.keptAg > 0) bits.push(tag('⚠ 인원 줄임 대행비', '#F7E4E1', '#A6382B'));
-    if(p.dmMiss) bits.push(tag(p.dmMiss === 'completed' ? '옛 상태 completed' : '⚠ 반환 관리에 안 보임', '#F7E4E1', '#A6382B'));
+    if(p.dmMiss) bits.push(tag(p.dmMiss === 'completed' ? '옛 상태 completed' : (p.dmMiss === 'nobtn' ? '⚠ 반환 관리에서 처리 불가' : '⚠ 반환 관리에 안 보임'), '#F7E4E1', '#A6382B'));
     return '<div style="font-size:11px;margin-top:3px;display:flex;gap:5px;align-items:center;flex-wrap:wrap;">' + bits.join(' ') + '</div>';
   }
   // ── 반환 예정 ──
@@ -35254,7 +35295,8 @@ async function mlOpen(uid){
       // 왜 이 금액인지 한 줄로 설명한다. 0 이면 '왜 0 인가' 가 더 중요하다.
       var why = waived
         ? (cls === 'cx' ? '취소 — 대행비도 환불' : '대행비 제외 없이 전액 반환 — 면제')
-        : (noRec ? (cls === 'cx' ? (amt === 0 ? '취소 — 전액 환불(대행비도 돌려줌)' : '취소 — 실제로 뗀 몫까지(회차 대행비 이하)') : '기록 없음 — 상품 현재값으로 보완') : '반환 시 차감');
+        : (noRec ? (cls === 'cx' ? (amt === 0 ? '취소 — 전액 환불(대행비도 돌려줌)' : '취소 — 실제로 뗀 몫까지(회차 대행비 이하)') : '기록 없음 — 상품 현재값으로 보완')
+                 : ((it.rt.agencyRec === 0 && amt > 0) ? '위약 처리 — 위약금 안에 남은 대행비(회차 대행비 · 실제로 뗀 몫까지)' : '반환 시 차감'));
       pf += item('%', waived ? '#F3EEEC' : (cls === 'no' ? '#F7E4E1' : '#F5EFE3'),
                       waived ? '#96877f' : (cls === 'no' ? '#A6382B' : '#8a7b4a'),
         '<div style="font-size:13.5px;font-weight:700;line-height:1.4;">'
@@ -35282,8 +35324,18 @@ async function mlOpen(uid){
         'mlTkPop(' + it.idx + ')');
     });
   }
-  // 🔧 2026-11-01 예정은 「반환 때 뗄 값」(it.plan.ag — 회차 현재 대행비 우선 · 반환 화면과 같다 + 인원 줄임 때 남긴 몫) — 운영 행·만료·옛 상태·방문 지난 결제 링크는 뺀다
-  var feePlanList = G.open.filter(function(it){ var p = it.plan; return p.kind !== 'skip' && p.kind !== 'legacy' && !(p.kind === 'cardlink' && p.overdue) && (p.ag.total + (p.keptAg || 0)) > 0; });
+  if(feeLinkOv.length){
+    pf += grp('결제 링크 — 협의 금액(합계 밖)', feeLinkOv.length + '건');
+    feeLinkOv.forEach(function(it){
+      pf += item('%', '#EAF1FF', '#1F5BD6',
+        '<div style="font-size:13.5px;font-weight:700;line-height:1.4;">' + _pcalEsc(it.t.restaurant_name || '티켓') + (it.t.party_size ? ' · ' + it.t.party_size + '인' : '') + ' — 결제 링크</div>'
+        + '<div style="font-size:11px;color:' + C.faint + ';margin-top:2px;">금액을 항목별로 고친 링크 — 대행비는 결제 링크 청구 기록에만 있습니다 · ' + _pcalEsc(it.plan.when) + '</div>',
+        '<div style="font-size:14.5px;font-weight:800;color:' + C.faint + ';">—</div><div style="margin-top:2px;">' + tag('확인','#FCF3E0',C.hold) + '</div>',
+        'mlTkPop(' + it.idx + ')');
+    });
+  }
+  // 🔧 2026-11-01 예정은 「반환 때 뗄 값」(it.plan.ag — 회차 현재 대행비 우선 · 반환 화면과 같다 + 인원 줄임 때 남긴 몫) — 운영 행·만료·옛 상태·방문 지난 결제 링크·협의 금액 링크는 뺀다
+  var feePlanList = G.open.filter(function(it){ var p = it.plan; return p.kind !== 'skip' && p.kind !== 'legacy' && !(p.kind === 'cardlink' && (p.overdue || (it.t.extra_data && it.t.extra_data.priceOverride))) && (p.ag.total + (p.keptAg || 0)) > 0; });
   if(feePlanList.length){
     pf += grp('예정 — 반환 시 차감될 몫', W + n(feePlan));
     feePlanList.forEach(function(it){
@@ -35680,6 +35732,14 @@ window.mlTab = mlTab;
 
 // 🆕 2026-11-01 원장 「반환 예정」 → 예치금 관리(반환예정 탭)를 이 회원 이름으로 걸러서 연다 — 반환·환불 처리는 거기서만 한다(원장은 보기만).
 //   openSubPage('depositMgmtScreen') 가 검색을 비우고 0번 탭을 읽기 시작하므로 **그 뒤에** 검색어를 넣는다 — 다 읽은 뒤 그 검색으로 그린다(렌더가 _dmSearchQuery 를 그때 읽는다).
+// 🆕 5차 — 「반환 관리 ›」에 안 보이는 이유(원장 탭 _mlDmMissText 와 같은 문구 · 상세 팝업이 쓴다)
+function _mlDmMissTextG(k){
+  return k === 'refund_row' ? '⚠ 「반환 관리 ›」의 반환예정 목록에 이 건이 없습니다 — 원장 환불 줄(정정·자동 환원) 때문에 처리된 건으로 보입니다 · 거기서는 반환 버튼이 없습니다'
+       : k === 'completed' ? '⚠ 옛 상태 「completed」 — 「반환 관리 ›」에는 「반환 완료 ₩0(처리 기록만)」으로 보입니다. 앱 밖에서 처리됐는지 확인하세요'
+       : k === 'flag' ? '⚠ 운영 행 표시가 붙어 「반환 관리 ›」 목록에 나오지 않습니다'
+       : k === 'nobtn' ? '⚠ 결제 링크 표시가 붙어 「반환 관리 ›」에서 반환 버튼이 없습니다'
+       : '';
+}
 function mlGoDm(){
   var R = window._mlRet || {};
   if(typeof openSubPage !== 'function') return;
@@ -35690,7 +35750,7 @@ function mlGoDm(){
   // 이름 부분 일치가 아니라 **회원 uid** 로 거른다(동명이인·매장 이름 섞임 방지) — getDmItems 가 _dmUidFilter 를 본다 · 검색칸은 비워 둔다
   var _P = R.plan || {};
   window._dmUidFilter = R.uid ? { uid: String(R.uid), name: String(R.name || ''),   // 🆕 3차 — 원장의 어림을 배너에 같이(같은 「반환 예정」 이름이 두 화면에서 다른 정의다)
-    led: R.loadErr ? null : { n: _P.n || 0, dep: _P.dep || 0, card: _P.card || 0, miss: _P.dmMissN || 0, kept: _P.keptAmt || 0 } } : null;
+    led: R.loadErr ? null : { n: _P.n || 0, dep: _P.dep || 0, card: _P.card || 0, miss: _P.dmMissN || 0, kept: _P.keptAmt || 0, judge: _P.judgeN || 0 } } : null;
   _dmSearchQuery = '';
   var i = document.getElementById('dmSearchInput'); if(i) i.value = '';
   if(!R.uid && typeof showToast === 'function') showToast('ⓘ', '회원 정보 없음', '전체 반환 예정 목록을 보여줍니다');
@@ -35731,7 +35791,7 @@ function mlCsv(){
   D.items.forEach(function(it){
     var rt = it.rt;
     var st = (rt && rt.has) ? (rt.cancelRefund ? (rt.pkg ? '패키지 취소' : '구매 취소') : (rt.rtype === 'penalty' ? '환불 처리' : '정상 반환'))
-           : ((rt && rt.cancelled) ? (rt.unpaid ? '결제 전 취소(홀드)' : '취소(기록 없음)') : '진행 중');
+           : ((rt && rt.cancelled) ? (rt.unpaid ? '결제 전 취소(홀드)' : ('취소(기록 없음)' + (rt.left && rt.left.total ? ' · 결제 기록 ' + rt.left.total + ' 돌아간 기록 없음' : ''))) : '진행 중');
     L.push([ '티켓 · ' + st, _mlDate(it.t.created_at),
              (it.t.restaurant_name || '') + (it.t.party_size ? ' ' + it.t.party_size + '인' : ''),
              it.ro[0] + (it.t.reservation_date ? ' / 방문 ' + it.t.reservation_date : ''),
@@ -35848,6 +35908,7 @@ function mlTkPop(idx){
   } else if(rt && rt.cancelled){
     h += sec('처리 기록');
     h += '<div style="font-size:12.5px;color:#8a8580;">' + (rt.unpaid ? '결제 전에 취소된 좌석 홀드입니다 — 원장 결제 줄도 카드 결제 기록도 없어 돈이 오가지 않았습니다' : '취소 상태이지만 환불 거래 기록을 찾지 못했습니다 (예치금 상세에서 확인 필요)') + '</div>';
+    if(rt.left && rt.left.total > 0) h += '<div style="font-size:12px;color:#B23A2E;font-weight:700;margin-top:4px;line-height:1.5;">⚠ 결제 기록 중 돌려준 기록이 없는 몫 ' + W + rt.left.total.toLocaleString() + ' (예치금 ' + W + rt.left.dep.toLocaleString() + ' · 카드 ' + W + rt.left.card.toLocaleString() + ')</div>';   // 🆕 5차
   } else if(it.plan){
     // 🆕 2026-11-01 진행 중 — 반환 예정(어림). 원장 「반환 · 대행비」 탭의 계산과 같은 값(it.plan)
     var P = it.plan, nn = function(v){ return W + (parseInt(v) || 0).toLocaleString(); };
@@ -35867,7 +35928,7 @@ function mlTkPop(idx){
       if(P.ag.diffInv)  h += '<div style="font-size:11.5px;color:#8a7b4a;padding:2px 0 5px;border-bottom:1px solid #f0eadf;">초대장 기록 ' + nn(P.ag.invPer) + '/인과 다릅니다</div>';
       if(P.keptAg > 0) h += row('− 인원 줄임 때 남긴 대행비', '<b style="color:#A07E3B;">' + nn(P.keptAg) + '</b> <span style="color:#8a8580;">(반환 화면은 이 몫까지 돌려준다 — 「추가 차감」으로 맞추세요)</span>');
       h += row('= 예상 반환', '<b style="color:#2a6a2a;">' + nn(P.expect) + '</b>');
-      if(P.dmMiss) h += '<div style="font-size:11.5px;color:#B23A2E;padding:2px 0 5px;border-bottom:1px solid #f0eadf;line-height:1.5;">' + _pcalEsc(P.dmMiss === 'refund_row' ? '⚠ 「반환 관리 ›」에는 이 건이 「반환완료」로 보입니다(원장 환불 줄 때문) — 거기서는 반환 버튼이 없습니다' : P.dmMiss === 'completed' ? '⚠ 옛 상태 「completed」 — 「반환 관리 ›」에는 「처리됨」으로 보입니다. 앱 밖에서 처리됐는지 확인하세요' : '⚠ 수동·초대 홀드 표시가 붙어 「반환 관리 ›」 목록에 나오지 않습니다') + '</div>';
+      if(P.dmMiss) h += '<div style="font-size:11.5px;color:#B23A2E;padding:2px 0 5px;border-bottom:1px solid #f0eadf;line-height:1.5;">' + _pcalEsc(_mlDmMissTextG(P.dmMiss)) + '</div>';
       if(P.backDep > 0 || P.cardBack > 0) h += row('이미 돌려준 몫', '예치금 ' + nn(P.backDep) + (P.cardBack > 0 ? ' · 카드 대기 ' + nn(P.cardBack) : '') + ' <span style="color:#8a8580;">(인원 변경·정정 — 남은 예치금 ' + nn(P.depRemain) + ')</span>');
       if(P.rollback > 0) h += row('원장 되돌림', nn(P.rollback) + ' <span style="color:#8a8580;">(정정·자동 환원 줄 — 반환 아님)</span>');
       if(P.earlyMark) h += '<div style="font-size:11.5px;color:#B23A2E;padding:2px 0 5px;border-bottom:1px solid #f0eadf;">⚠ 방문일 전에 ' + (P.vs === 'attended' ? '방문' : P.vs === 'no_show' ? '노쇼' : '취소') + ' 기록이 찍혀 있습니다 — 기록 화면은 당일부터만 찍을 수 있어 정상 경로가 아닙니다 · 확인</div>';
@@ -43070,6 +43131,7 @@ function loadAllUsersPurchases(){
   return Promise.all([_dmLoadSupabasePurchases(), idbPromise]).then(function(parts){
     var supabaseList = parts[0] || [];
     var idbList = parts[1] || [];
+    window._dmListLoadErr = (supabaseList && supabaseList._dmErr) || '';   // 🆕 2026-11-01 반환 관리 목록의 읽기 실패 — 이 집계만 쓴다
 
     // 병합 순서: Supabase 먼저(우선) → IDB → 현재 세션
     //   같은 purchaseId 가 중복되면 먼저 들어간 것(Supabase)이 채택됨
@@ -43103,6 +43165,7 @@ function loadAllUsersPurchases(){
     //   → 직전 집계를 그대로 유지하고 실패 사실만 알린다.
     console.warn('loadAllUsersPurchases failed', e);
     window.__dmDiagLoadError = String((e && e.message) || e || '').slice(0, 200);
+    window._dmListLoadErr = window.__dmDiagLoadError || '집계 실패';
     if (typeof showToast === 'function') {
       showToast('⚠','집계 실패','회원 구매내역을 불러오지 못했어요 — 이전 데이터를 표시합니다');
     }
@@ -43324,14 +43387,15 @@ function renderDmMgmtList(idx){
   var _ufBanner = (window._dmUidFilter && window._dmUidFilter.uid)
     ? '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;padding:6px 9px;border:1px solid #d8c9a8;border-radius:8px;background:#FBF6EA;font-size:11.5px;font-weight:700;color:#6A1A1A;">'
       + '<div style="min-width:0;">회원 ' + (typeof _pcalEsc === 'function' ? _pcalEsc(window._dmUidFilter.name || '(이름 없음)') : '') + ' 만 보는 중'
-      + (window._dmUidFilter.led ? '<div style="font-size:10.5px;font-weight:400;color:#8a7b4a;margin-top:2px;line-height:1.5;">원장 어림: 반환 예정 ' + window._dmUidFilter.led.n + '건 · 예치금 ₩' + (window._dmUidFilter.led.dep || 0).toLocaleString()
-          + (window._dmUidFilter.led.card ? ' + 카드 ₩' + window._dmUidFilter.led.card.toLocaleString() : '') + ' (대행비 뺀 값) — 아래 「반환 예정 금액」은 티켓 금액 합계'
+      + (window._dmUidFilter.led && idx === 0 ? '<div style="font-size:10.5px;font-weight:400;color:#8a7b4a;margin-top:2px;line-height:1.5;">원장 어림(원장을 연 때): 반환 예정 ' + window._dmUidFilter.led.n + '건 · 예치금 ₩' + (window._dmUidFilter.led.dep || 0).toLocaleString()
+          + (window._dmUidFilter.led.card ? ' + 카드 ₩' + window._dmUidFilter.led.card.toLocaleString() : '') + ' (대행비 뺀 값)'
+          + (window._dmUidFilter.led.judge ? ' + 노쇼·방문 취소 ' + window._dmUidFilter.led.judge + '건(판단 전)' : '') + ' — 아래 「반환 예정 금액」은 티켓 금액 합계'
           + (window._dmUidFilter.led.miss ? ' · <b style="color:#B23A2E;">원장의 ' + window._dmUidFilter.led.miss + '건은 여기 목록에 없습니다(원장 탭에서 사유 확인)</b>' : '')
           + (window._dmUidFilter.led.kept ? ' · <b style="color:#B23A2E;">인원 줄임 대행비 ₩' + window._dmUidFilter.led.kept.toLocaleString() + ' — 반환할 때 「추가 차감」</b>' : '') + '</div>' : '')
       + '</div><button onclick="dmClearUidFilter()" style="margin-left:auto;flex-shrink:0;padding:3px 8px;border:1px solid #cfc8bb;border-radius:6px;background:#fff;font-family:inherit;font-size:10.5px;font-weight:800;color:#5a554f;cursor:pointer;">전체 보기</button></div>'
     : '';   // 🆕 2026-11-01 원장에서 넘어온 회원 필터
-  if(window._dmLoadErr) _ufBanner = '<div style="margin-bottom:8px;padding:7px 9px;border:1px solid #E4D6D6;border-radius:8px;background:#FBECEA;font-size:11.5px;font-weight:700;color:#B23A2E;line-height:1.5;">⚠ 티켓을 읽지 못했습니다 — 목록이 비어 보일 수 있습니다 · 탭을 다시 누르세요'
-      + '<div style="font-size:10.5px;font-weight:400;color:#8a8580;">' + (typeof _pcalEsc === 'function' ? _pcalEsc(String(window._dmLoadErr).slice(0, 120)) : '') + '</div></div>' + _ufBanner;   // 🆕 3차
+  if(window._dmListLoadErr) _ufBanner = '<div style="margin-bottom:8px;padding:7px 9px;border:1px solid #E4D6D6;border-radius:8px;background:#FBECEA;font-size:11.5px;font-weight:700;color:#B23A2E;line-height:1.5;">⚠ 티켓을 읽지 못했습니다 — 목록이 비어 보일 수 있습니다 · 탭을 다시 누르세요'
+      + '<div style="font-size:10.5px;font-weight:400;color:#8a8580;">' + (typeof _pcalEsc === 'function' ? _pcalEsc(String(window._dmListLoadErr).slice(0, 120)) : '') + '</div></div>' + _ufBanner;   // 🆕 2026-11-01
   summary.innerHTML = '<div class="dm-summary-left">' + _ufBanner
     +'<div class="dm-summary-label">'+summaryLabel+'</div>'
     +'<div class="dm-summary-amt" style="color:'+summaryAmtColor+';">₩'+totalAmt.toLocaleString()+'</div>'
