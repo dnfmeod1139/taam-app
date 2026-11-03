@@ -21129,18 +21129,22 @@ window._depRefundSplit = _depRefundSplit;
 //   → 예치금 몫 = min(돌려줄 돈, 이 구매의 원장 결제 − 이미 돌려준 것(환불·인원 줄임)) · 나머지는 카드 몫
 //     (카드 결제 − 인원 변경 카드 환불까지) · 둘 다로 설명 안 되는 몫은 short(사람이 본다). 서버 가드와 같은 식이다.
 async function _tkRefundLedgerInfo(userId, purchaseId){
-  var out = { ok:false, depPaid:0, depBack:0, depLeft:0, rows:0, err:'' };
+  var out = { ok:false, depPaid:0, depBack:0, depLeft:0, rows:0, paidAt:'', err:'' };
   if(!window.sb || !userId || !purchaseId){ out.err = 'no_input'; return out; }
   try {
     var r = await window.sb.from('deposit_transactions')
-      .select('change_type, amount')
+      .select('change_type, amount, created_at')
       .eq('user_id', userId)
       .in('change_type', ['ticket_purchase', 'ticket_refund', 'ticket_pax_change'])
       .filter('metadata->>purchase_id', 'eq', String(purchaseId));
     if(r.error){ out.err = r.error.message || 'read'; return out; }
     (r.data || []).forEach(function(x){
       var a = parseInt(x.amount, 10) || 0;
-      if(x.change_type === 'ticket_purchase' && a < 0){ out.depPaid += -a; out.rows++; }
+      if(x.change_type === 'ticket_purchase' && a < 0){
+        out.depPaid += -a; out.rows++;
+        // 결제 시각 = 원장의 가장 이른 결제 줄 — 초대 좌석(INV-)의 created_at 은 초대를 보낸 날이다(서버 taam_refund_cap 과 같은 기준 · 2차 리뷰)
+        if(x.created_at && (!out.paidAt || String(x.created_at) < out.paidAt)) out.paidAt = String(x.created_at);
+      }
       else if((x.change_type === 'ticket_refund' || x.change_type === 'ticket_pax_change') && a > 0) out.depBack += a;
     });
     out.depLeft = Math.max(0, out.depPaid - out.depBack);
@@ -21198,6 +21202,7 @@ async function _tkCancelPrefetch(h, updAmt){
     if(!out.me){ out.err = 'no_user'; return out; }
     out.info = await _tkRefundLedgerInfo(out.me.id, h.purchaseId);
     if(!out.info.ok){ out.err = out.info.err || 'ledger'; return out; }
+    if(out.info.paidAt) h._paidAt = out.info.paidAt;   // 30분 규정·남긴 대행비는 결제 시각으로 센다
     out.ok = true;
   } catch(e){ out.err = (e && e.message) || String(e); }
   return out;
@@ -32429,7 +32434,8 @@ window._dParseDate = _dParseDate;
 function _tkKeptAgency(rec, agencyPer){
   var ex = (rec && rec.extra_data) || {}, kept = 0;
   var ag = Math.max(0, parseInt(agencyPer, 10) || 0);
-  var bought = rec && rec.date ? Date.parse(rec.date) : NaN;
+  var _bt = rec && (rec._paidAt || rec.date);
+  var bought = _bt ? Date.parse(_bt) : NaN;   // 결제(원장) 시각 우선 — 초대 좌석은 created_at 이 초대 보낸 날
   (Array.isArray(ex.pax_changes) ? ex.pax_changes : []).forEach(function(pc){
     if(!pc) return;
     var from = parseInt(pc.from, 10), to = parseInt(pc.to, 10);
@@ -32459,8 +32465,10 @@ function calculateTicketRefund(purchaseRecord, restaurant, currentTime, isSuperA
   var agencyPerPax = ticket ? parseInt(ticket.agencyFee || 0) : 0;
   var agencyTotal = agencyPerPax * pax + _tkKeptAgency(purchaseRecord, agencyPerPax);   // 🔧 2026-11-03 + 인원 줄일 때 남긴 대행비
 
-  // 구매 시점
-  var purchaseTime = purchaseRecord.date ? new Date(purchaseRecord.date) : null;
+  // 구매 시점 — 🔧 2026-11-03 원장 결제 시각(_paidAt · _tkCancelPrefetch)이 있으면 그것으로(서버 taam_refund_cap 과 같은 기준 ·
+  //   초대 좌석은 구매내역을 다시 읽으면 date 가 초대를 보낸 날이 되어 결제 30분 안 전액 환불을 놓쳤다)
+  var _ptRaw = purchaseRecord._paidAt || purchaseRecord.date;
+  var purchaseTime = _ptRaw ? new Date(_ptRaw) : null;
   if(purchaseTime && !isNaN(purchaseTime.getTime())){
     var minSincePurchase = (currentTime - purchaseTime) / 60000;
     // 정책 1: 30분 이내 → 전액 환불
@@ -33646,7 +33654,8 @@ async function _dmLoadSupabasePurchases(){
       .eq('change_type', 'ticket_refund')
       .order('created_at', { ascending: false })   // 최신 먼저
       .limit(5000);
-    var _rsOk = !rres.error && Array.isArray(rres.data);
+    // 🔧 2026-11-03(2차 리뷰) 남의 원장은 슈퍼어드민만 읽는다 — 파트너 세션은 0행이 「환불 없음」으로 보였다. 못 읽는 세션은 null(모름)
+    var _rsOk = !rres.error && Array.isArray(rres.data) && (typeof _isSuperAdmin === 'function' && _isSuperAdmin());
     if(!rres.error && rres.data){
       rres.data.forEach(function(r){
         var pid = r.metadata && r.metadata.purchase_id;

@@ -8,8 +8,9 @@
 --      그 밖의 경로는 안 내렸다. → 어느 경로든 티켓 행이 취소되는 순간 서버가 맞춘다.
 --
 --      규칙: tickets 의 status 가 취소·환불로 바뀌고, purchase_id 가 'INV-'(결제된 초대 좌석 — 홀드 INVH- 는 결제 전이라 아님)이고,
---            **방문 후 반환이 아니고**(extra_data.deposit_return.type = 'returned' — 반환 화면은 방문한 예약도 status 를 cancelled 로 쓴다 ·
---            적대 리뷰: 그대로 두면 다녀온 초대가 전부 「취소」가 됐다), 같은 초대의 살아 있는 좌석 행이 더 없으면 → 그 초대장이 'paid' 일 때만 'cancelled'.
+--            **방문을 마친 반환이 아니고**(반환 화면은 다녀온 예약도 status 를 cancelled · deposit_return.type 'returned' 로 쓴다 — 적대 리뷰:
+--            그대로 두면 다녀온 초대가 전부 「취소」가 됐다 · 2차: 방문 전에 누른 「반환」은 사실상 취소라 내린다 — _taam_seat_visited_return),
+--            같은 초대의 살아 있는(또는 다녀온) 좌석 행이 더 없으면 → 그 초대장이 'paid' 일 때만 'cancelled'.
 --      초대 찾기: extra_data.inviteId, 없으면(9/13 전 앱이 넣은 옛 좌석) purchase_id 의 'INV-' 뒤 8자 + 받는 회원 = 좌석 주인으로 정확히 한 장일 때만
 --               (taam_invite_confirm_hold · 판매 현황 · 리마인드와 같은 짝짓기).
 --      · 「결제했었다」는 사실은 원장(deposit_transactions)에 그대로 남는다(앱의 같은 동작 · 2026-08-28 주석).
@@ -49,6 +50,28 @@ comment on function public._taam_seat_invite_id(text, jsonb, uuid) is
   '좌석 행의 초대 id — extra_data.inviteId, 없으면 INV- 뒤 8자 + 받는 회원으로 정확히 한 장. 2026-11-03';
 revoke all on function public._taam_seat_invite_id(text, jsonb, uuid) from public, anon, authenticated;
 
+-- 방문을 마친 「반환」인가 — 반환 화면은 다녀온 예약도, 방문 전에 사실상 취소한 예약도 type 'returned' 로 남긴다(2차 리뷰).
+--   다녀왔다 = 방문 기록 attended, 또는 처리한 날(KST · 없으면 지금)이 방문일 당일 이후. 방문일을 못 읽으면 다녀온 것으로 본다(초대장을 건드리지 않는 쪽).
+--   판매 현황(return_before_visit)과 같은 생각 — 방문 전 반환은 취소다.
+create or replace function public._taam_seat_visited_return(p_extra jsonb, p_resdate text, p_visit text)
+returns boolean
+language plpgsql stable set search_path = public
+as $$
+declare m text[]; v_d date; v_at date;
+begin
+  if coalesce(p_extra -> 'deposit_return' ->> 'type', '') <> 'returned' then return false; end if;
+  if coalesce(p_visit, '') = 'attended' then return true; end if;
+  m := regexp_match(coalesce(p_resdate, ''), '^(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})');
+  if m is null then return true; end if;
+  begin v_d := make_date(m[1]::int, m[2]::int, m[3]::int); exception when others then return true; end;
+  begin v_at := ((nullif(p_extra ->> 'super_admin_processed_at', ''))::timestamptz at time zone 'Asia/Seoul')::date;
+  exception when others then v_at := null; end;
+  return v_d <= coalesce(v_at, (now() at time zone 'Asia/Seoul')::date);
+end $$;
+comment on function public._taam_seat_visited_return(jsonb, text, text) is
+  '좌석의 반환 기록이 방문을 마친 반환인가(attended 또는 처리일 ≥ 방문일 · 날짜를 모르면 true). 방문 전 반환은 취소로 본다. 2026-11-03';
+revoke all on function public._taam_seat_visited_return(jsonb, text, text) from public, anon, authenticated;
+
 create or replace function public.taam_invite_sync_on_seat_cancel()
 returns trigger
 language plpgsql security definer set search_path = public
@@ -59,15 +82,16 @@ begin
   if new.status is not distinct from old.status then return new; end if;
   if lower(coalesce(new.status, '')) not in ('cancelled', 'canceled', 'refunded') then return new; end if;
   if coalesce(new.purchase_id, '') not like 'INV-%' then return new; end if;
-  if coalesce(new.extra_data -> 'deposit_return' ->> 'type', '') = 'returned' then return new; end if;   -- 방문 후 반환 — 예약은 다녀왔다
+  if public._taam_seat_visited_return(new.extra_data, new.reservation_date, new.visit_status) then return new; end if;   -- 방문을 마친 반환 — 예약은 다녀왔다
   v_inv := public._taam_seat_invite_id(new.purchase_id, new.extra_data, new.user_id);
   if v_inv is null then return new; end if;
   if exists (select 1 from public.tickets t
               where t.purchase_id is distinct from new.purchase_id
                 and public._taam_seat_invite_id(t.purchase_id, t.extra_data, t.user_id) = v_inv
-                and lower(coalesce(t.status, '')) not in ('cancelled', 'canceled', 'refunded', 'expired', 'failed')
+                and (lower(coalesce(t.status, '')) not in ('cancelled', 'canceled', 'refunded', 'expired', 'failed')
+                     or public._taam_seat_visited_return(t.extra_data, t.reservation_date, t.visit_status))
                 and (t.extra_data ->> 'inviteId' = v_inv::text or t.purchase_id like 'INV-' || left(v_inv::text, 8) || '%')) then
-    return new;   -- 같은 초대의 다른 좌석이 아직 살아 있다
+    return new;   -- 같은 초대의 다른 좌석이 아직 살아 있다(또는 다녀왔다)
   end if;
   update public.reservation_invites
      set status = 'cancelled', cancelled_at = coalesce(cancelled_at, now())
@@ -95,12 +119,12 @@ select i.id
                 where t.purchase_id like 'INV-' || left(i.id::text, 8) || '%'
                   and public._taam_seat_invite_id(t.purchase_id, t.extra_data, t.user_id) = i.id
                   and lower(coalesce(t.status, '')) in ('cancelled', 'canceled', 'refunded')
-                  and coalesce(t.extra_data -> 'deposit_return' ->> 'type', '') <> 'returned')
+                  and not public._taam_seat_visited_return(t.extra_data, t.reservation_date, t.visit_status))
    and not exists (select 1 from public.tickets t
                     where (t.extra_data ->> 'inviteId' = i.id::text or t.purchase_id like 'INV-' || left(i.id::text, 8) || '%')
                       and public._taam_seat_invite_id(t.purchase_id, t.extra_data, t.user_id) = i.id
                       and (lower(coalesce(t.status, '')) not in ('cancelled', 'canceled', 'refunded', 'expired', 'failed')
-                           or coalesce(t.extra_data -> 'deposit_return' ->> 'type', '') = 'returned'));
+                           or public._taam_seat_visited_return(t.extra_data, t.reservation_date, t.visit_status)));
 create temp table _taam_ics_fixed (n int);
 with fx as (
   update public.reservation_invites i set status = 'cancelled', cancelled_at = coalesce(i.cancelled_at, now())
@@ -123,12 +147,13 @@ begin
 -- KEPT_AGENCY_20261103 — 인원 줄일 때 남긴 대행비(카드가 섞이지 않은 구매)
 declare v_uid uuid := auth.uid(); v_pid text; v_paid bigint; v_back bigint;
         v_kept bigint := 0; v_tk record; v_ag bigint := 0; pc jsonb; v_from int; v_to int; v_pb numeric; v_rf numeric; v_at timestamptz;
+        v_paid_at timestamptz; v_base timestamptz;
 begin
   if v_uid is null or coalesce(public.is_super_admin(v_uid), false) then return new; end if;
   if coalesce(new.change_type, '') <> 'ticket_refund' or coalesce(new.amount, 0) <= 0 then return new; end if;
   v_pid := nullif(btrim(coalesce(new.metadata->>'purchase_id', '')), '');
   if v_pid is null then return new; end if;
-  select coalesce(-sum(d.amount), 0) into v_paid from public.deposit_transactions d
+  select coalesce(-sum(d.amount), 0), min(d.created_at) into v_paid, v_paid_at from public.deposit_transactions d
    where d.user_id = new.user_id and d.change_type = 'ticket_purchase' and d.amount < 0 and d.metadata->>'purchase_id' = v_pid;
   select coalesce(sum(d.amount), 0) into v_back from public.deposit_transactions d
    where d.user_id = new.user_id and d.change_type in ('ticket_refund', 'ticket_pax_change') and d.amount > 0 and d.metadata->>'purchase_id' = v_pid;
@@ -138,6 +163,8 @@ begin
     if found and jsonb_typeof(v_tk.extra_data -> 'pax_changes') = 'array'
        and not ((coalesce(v_tk.extra_data->>'cardPaid', '') ~ '^\d{1,12}$' and (v_tk.extra_data->>'cardPaid')::bigint > 0)
                 or coalesce(v_tk.extra_data->>'paidBy', '') in ('card+deposit', 'card')) then
+      -- 30분은 결제(원장) 시각으로 센다 — 초대 좌석(INV-)의 created_at 은 초대를 보낸 날이다(2차 리뷰 · taam_refund_cap 과 같은 기준)
+      v_base := coalesce(v_paid_at, v_tk.created_at);
       select coalesce(tp.agency_fee, 0) into v_ag from public.ticket_products tp where tp.id::text = v_tk.ticket_product_id::text;
       v_ag := greatest(coalesce(v_ag, 0), case when coalesce(v_tk.extra_data->>'agencyFee', '') ~ '^\d{1,9}$' then (v_tk.extra_data->>'agencyFee')::bigint else 0 end);
       for pc in select value from jsonb_array_elements(v_tk.extra_data -> 'pax_changes') loop
@@ -146,14 +173,16 @@ begin
         if v_from <= v_to then continue; end if;
         v_at := null;
         begin v_at := (pc->>'at')::timestamptz; exception when others then v_at := null; end;
-        if v_at is not null and v_tk.created_at is not null and v_at <= v_tk.created_at + interval '30 minutes' then continue; end if;
+        if v_at is not null and v_base is not null and v_at <= v_base + interval '30 minutes' then continue; end if;
         v_pb := case when coalesce(pc->>'price_before', '') ~ '^\d{1,12}$' then (pc->>'price_before')::numeric else null end;
         v_rf := case when coalesce(pc->>'refund', '') ~ '^\d{1,12}$' then (pc->>'refund')::numeric else 0 end;
         v_kept := v_kept + case when v_pb is null then (v_from - v_to) * v_ag
                                 else least((v_from - v_to) * v_ag, greatest(0, (v_from - v_to) * floor(v_pb / v_from) - v_rf))::bigint end;
       end loop;
       -- 줄일 때 남긴 대행비가 있으면 구매 30분은 이미 지났다 — 회원 환불은 「대행비 제외」 규정만 남는다(지금 인원 대행비도 못 돌려준다)
-      if v_kept > 0 then v_kept := v_kept + v_ag * greatest(coalesce(v_tk.party_size, 1), 1); end if;
+      if v_kept > 0 and (v_base is null or now() > v_base + interval '30 minutes') then
+        v_kept := v_kept + v_ag * greatest(coalesce(v_tk.party_size, 1), 1);
+      end if;
     end if;
   exception when others then v_kept := 0;
   end;
@@ -174,7 +203,8 @@ select '① 트리거 trg_taam_invite_sync_on_seat_cancel (after update of statu
 union all select '② 함수 security definer · 회원 직접 실행 불가',
        case when exists (select 1 from pg_proc p where p.proname = 'taam_invite_sync_on_seat_cancel' and p.pronamespace = 'public'::regnamespace and p.prosecdef)
              and not has_function_privilege('authenticated', 'public.taam_invite_sync_on_seat_cancel()', 'execute')
-             and not has_function_privilege('authenticated', 'public._taam_seat_invite_id(text, jsonb, uuid)', 'execute') then '✅' else '❌' end
+             and not has_function_privilege('authenticated', 'public._taam_seat_invite_id(text, jsonb, uuid)', 'execute')
+             and not has_function_privilege('authenticated', 'public._taam_seat_visited_return(jsonb, text, text)', 'execute') then '✅' else '❌' end
 union all select '③ 정보 — 이번에 맞춘 초대장 수 (결제 완료로 남아 있었는데 초대 좌석은 취소된 것 · 방문 후 반환 제외)',
        (select n::text from _taam_ics_fixed)
 union all select '④ 남은 어긋남 — 결제 완료 초대장인데 그 초대의 좌석이 전부 취소 (0 이어야 정상)',

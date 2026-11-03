@@ -20,10 +20,10 @@ create or replace function public.is_super_admin(u uuid) returns boolean languag
   \$\$ select exists(select 1 from public.profiles p where p.id=u and p.role in ('super_admin','superadmin')) \$\$;
 create or replace function public._taam_invite_net_paid(p_inv uuid, p_uid uuid) returns bigint language sql stable as \$\$ select 0::bigint \$\$;
 create table public.tickets(id uuid primary key default gen_random_uuid(), user_id uuid, purchase_id text, status text default 'active',
-  price integer, party_size integer default 2, extra_data jsonb default '{}'::jsonb, created_at timestamptz default now(), ticket_product_id text);
+  price integer, party_size integer default 2, extra_data jsonb default '{}'::jsonb, created_at timestamptz default now(), ticket_product_id text, reservation_date text, visit_status text);
 create table public.ticket_products(id text primary key, agency_fee integer);
 insert into public.ticket_products values ('tp1', 150000);
-create table public.deposit_transactions(id bigserial primary key, user_id uuid, deposit_type text, change_type text, amount bigint, metadata jsonb default '{}'::jsonb);
+create table public.deposit_transactions(id bigserial primary key, user_id uuid, deposit_type text, change_type text, amount bigint, metadata jsonb default '{}'::jsonb, created_at timestamptz default now());
 grant select, insert on public.deposit_transactions to authenticated; grant usage on sequence public.deposit_transactions_id_seq to authenticated;
 create table public.reservation_invites(id uuid primary key, host_user_id uuid, invitee_user_id uuid, status text, pax int, total_amount bigint,
   meal_fee bigint, agency_fee bigint, wine_min bigint, ticket_product_id text, restaurant_id text, paid_at timestamptz, cancelled_at timestamptz,
@@ -91,11 +91,17 @@ insert into public.tickets(user_id, purchase_id, status, price, extra_data) valu
  ('$A','INV-c5000000-1','active',2000000,'{"inviteId":"not-a-uuid"}'),
  ('$A','INV-c6000000-1','active',2000000,'{}'),
  ('$A','INV-c7000000-1','cancelled',2000000,'{"inviteId":"c7000000-0000-4000-8000-000000000007","deposit_return":{"type":"returned"}}'),
- ('$A','INV-c8000000-1','active',2000000,'{"inviteId":"c8000000-0000-4000-8000-000000000008"}');
+ ('$A','INV-c8000000-1','active',2000000,'{"inviteId":"c8000000-0000-4000-8000-000000000008"}'),
+ ('$A','INV-c9000000-1','active',2000000,'{"inviteId":"c9000000-0000-4000-8000-000000000009"}'),
+ ('$A','INV-ca000000-1','active',2000000,'{"inviteId":"ca000000-0000-4000-8000-00000000000a"}');
+update public.tickets set reservation_date='2027.12.31' where purchase_id='INV-c9000000-1';
+update public.tickets set reservation_date='2026.01.05' where purchase_id='INV-ca000000-1';
 insert into public.reservation_invites(id, host_user_id, invitee_user_id, status, pax, total_amount, paid_at, restaurant_name) values
  ('c6000000-0000-4000-8000-000000000006','$H','$A','paid',2,2000000,now(),'옛좌석'),
  ('c7000000-0000-4000-8000-000000000007','$H','$A','paid',2,2000000,now(),'다녀온초대'),
- ('c8000000-0000-4000-8000-000000000008','$H','$A','paid',2,2000000,now(),'방문후반환');
+ ('c8000000-0000-4000-8000-000000000008','$H','$A','paid',2,2000000,now(),'방문후반환'),
+ ('c9000000-0000-4000-8000-000000000009','$H','$A','paid',2,2000000,now(),'방문전반환'),
+ ('ca000000-0000-4000-8000-00000000000a','$H','$A','paid',2,2000000,now(),'지난방문반환');
 SQL
 # 20261022 판 가드(저장소 원본) — md5 가드가 「교체」로 가는지 본다
 awk '/^create or replace function public.taam_guard_ledger_refund_paid\(\)/,/for each row execute function public.taam_guard_ledger_refund_paid\(\);/' supabase/migrations/20261022_card_refund_quote2.sql | $P >/dev/null 2>&1
@@ -145,7 +151,11 @@ ok "초대장 갱신 예외 → 삼킴 · 티켓은 cancelled · 초대장 paid"
 $P -c "drop trigger zz_boom on public.reservation_invites"
 # ⑩ 방문 후 반환(반환 완료 처리) — 초대장은 그대로 (적대 리뷰)
 r=$(as $SU "update public.tickets set status='cancelled', extra_data = extra_data || '{\"super_admin_processed_at\":\"x\",\"deposit_return\":{\"type\":\"returned\"}}'::jsonb where purchase_id='INV-c8000000-1'")
-ok "슈퍼어드민 「반환 완료 처리」(type returned) → 초대장 paid 그대로" "paid|false" "$(inv c8000000-0000-4000-8000-000000000008)"
+ok "슈퍼어드민 「반환 완료 처리」 · 방문일 모름 → 초대장 paid 그대로(다녀온 것으로)" "paid|false" "$(inv c8000000-0000-4000-8000-000000000008)"
+r=$(as $SU "update public.tickets set status='cancelled', extra_data = extra_data || '{\"deposit_return\":{\"type\":\"returned\"}}'::jsonb where purchase_id='INV-c9000000-1'")
+ok "방문 전(2027.12.31)에 누른 「반환」 → 사실상 취소 · 초대장 cancelled (2차 리뷰)" "cancelled|true" "$(inv c9000000-0000-4000-8000-000000000009)"
+r=$(as $SU "update public.tickets set status='cancelled', extra_data = extra_data || '{\"deposit_return\":{\"type\":\"returned\"}}'::jsonb where purchase_id='INV-ca000000-1'")
+ok "지난 방문(2026.01.05)의 「반환」 → 초대장 paid 그대로" "paid|false" "$(inv ca000000-0000-4000-8000-00000000000a)"
 # ⑪ inviteId 가 없는 옛 좌석 — INV- 뒤 8자 + 받는 회원으로 찾는다
 r=$(as $SU "update public.tickets set status='cancelled' where purchase_id='INV-c6000000-1'")
 ok "inviteId 없는 옛 INV- 좌석 취소 → 접두어로 찾아 cancelled" "cancelled|true" "$(inv c6000000-0000-4000-8000-000000000006)"
@@ -155,10 +165,14 @@ $P -c "insert into public.tickets(user_id, purchase_id, status, price, party_siz
  ('$A','PAYH-G1','cancelled',1050000,1,'tp1', now() - interval '3 hours', jsonb_build_object('paidBy','deposit','depositUsed',1800000,'pax_changes', jsonb_build_array(jsonb_build_object('at', now() - interval '2 hours','from',2,'to',1,'refund',750000,'price_before',1800000)))),
  ('$A','PAYH-G2','cancelled',1050000,1,'tp1', now() - interval '3 hours', jsonb_build_object('paidBy','deposit','depositUsed',1800000,'pax_changes', jsonb_build_array(jsonb_build_object('at', now() - interval '2 hours 55 minutes','from',2,'to',1,'refund',750000,'price_before',1800000)))),
  ('$A','PAYH-G3','cancelled',900000,1,'tp1', now() - interval '3 hours', jsonb_build_object('paidBy','card+deposit','cardPaid',900000,'depositUsed',900000,'pax_changes', jsonb_build_array(jsonb_build_object('at', now() - interval '2 hours','from',2,'to',1,'refund',750000,'price_before',1800000))));
-insert into public.deposit_transactions(user_id, change_type, amount, metadata) values
- ('$A','ticket_purchase',-1800000,'{\"purchase_id\":\"PAYH-G1\"}'),('$A','ticket_pax_change',750000,'{\"purchase_id\":\"PAYH-G1\"}'),
- ('$A','ticket_purchase',-1800000,'{\"purchase_id\":\"PAYH-G2\"}'),('$A','ticket_pax_change',750000,'{\"purchase_id\":\"PAYH-G2\"}'),
- ('$A','ticket_purchase',-900000,'{\"purchase_id\":\"PAYH-G3\"}'),('$A','ticket_pax_change',750000,'{\"purchase_id\":\"PAYH-G3\"}');"
+insert into public.deposit_transactions(user_id, change_type, amount, metadata, created_at) values
+ ('$A','ticket_purchase',-1800000,'{\"purchase_id\":\"PAYH-G1\"}', now() - interval '3 hours'),('$A','ticket_pax_change',750000,'{\"purchase_id\":\"PAYH-G1\"}', now() - interval '2 hours'),
+ ('$A','ticket_purchase',-1800000,'{\"purchase_id\":\"PAYH-G2\"}', now() - interval '3 hours'),('$A','ticket_pax_change',750000,'{\"purchase_id\":\"PAYH-G2\"}', now() - interval '2 hours'),
+ ('$A','ticket_purchase',-900000,'{\"purchase_id\":\"PAYH-G3\"}', now() - interval '3 hours'),('$A','ticket_pax_change',750000,'{\"purchase_id\":\"PAYH-G3\"}', now() - interval '2 hours');
+insert into public.tickets(user_id, purchase_id, status, price, party_size, ticket_product_id, created_at, extra_data) values
+ ('$A','INV-G4','cancelled',1050000,1,'tp1', now() - interval '3 days', jsonb_build_object('inviteId','x','pax_changes', jsonb_build_array(jsonb_build_object('at', now() - interval '5 minutes','from',2,'to',1,'refund',750000,'price_before',1800000))));
+insert into public.deposit_transactions(user_id, change_type, amount, metadata, created_at) values
+ ('$A','ticket_purchase',-1800000,'{\"purchase_id\":\"INV-G4\"}', now() - interval '10 minutes'),('$A','ticket_pax_change',750000,'{\"purchase_id\":\"INV-G4\"}', now() - interval '5 minutes');"
 rf(){ as $1 "insert into public.deposit_transactions(user_id, change_type, amount, metadata) values ('$A','ticket_refund',$2,'{\"purchase_id\":\"$3\"}')" | grep -o 'LEDGER_REFUND_EXCEEDS_PAID' | head -1; }
 ok "남긴 대행비 ₩150,000 — 회원 환불 ₩900,000(지금 인원 대행비만 뺀 값) 거절" "LEDGER_REFUND_EXCEEDS_PAID" "$(rf $A 900000 PAYH-G1)"
 ok "규정 금액 ₩750,000 은 통과(총 1,500,000 = 1,800,000 − 대행비 2명)" "" "$(rf $A 750000 PAYH-G1)"
@@ -166,6 +180,7 @@ ok "구매 30분 안에 줄였으면 남긴 대행비 없음 — ₩1,050,000 �
 ok "카드 섞인 구매는 종전 한도(예치금 낸 돈 − 돌려준 것): ₩150,000 통과" "" "$(rf $A 150000 PAYH-G3)"
 ok "카드 섞인 구매 — 그 위로는 거절" "LEDGER_REFUND_EXCEEDS_PAID" "$(rf $A 1 PAYH-G3)"
 ok "슈퍼어드민은 한도 밖" "" "$(rf $SU 999999 PAYH-G1)"
+ok "초대 좌석(created_at = 초대 보낸 날) · 결제 10분 뒤 줄임 → 결제 30분 안 취소 ₩1,050,000 통과 (2차 리뷰 · 원장 결제 시각 기준)" "" "$(rf $A 1050000 INV-G4)"
 # ⑨ 권한 · 재실행
 ok "회원은 함수를 직접 못 부른다" "f" "$($P -c "select has_function_privilege('authenticated','public.taam_invite_sync_on_seat_cancel()','execute')")"
 out2=$($P -f supabase/migrations/20261103_invite_cancel_sync.sql 2>&1)
