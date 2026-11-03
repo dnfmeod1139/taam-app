@@ -32421,6 +32421,28 @@ window._dParseDate = _dParseDate;
 //     2. 30분~30일전 → 대행비 제외 환불 (식사비+주류 미니멈 환불)
 //     3. 29일~당일 → 환불 불가 (슈퍼어드민 예외 가능)
 //     4. 슈퍼어드민 → 정책 무시 전액 환불 가능
+// 🆕 2026-11-03 인원을 줄이며 남긴 대행비(줄인 사람 몫) — 적대 리뷰(재현).
+//   서버 인원 변경(taam_change_party_size)은 구매 30분 뒤라면 줄인 사람의 대행비를 돌려주지 않고 price 에 남긴다
+//   (2인 ₩1,800,000 → 1인: 환불 ₩750,000 · price ₩1,050,000). 취소 규정이 「지금 인원 × 대행비」만 빼면 그 ₩150,000 이 다시 돌아갔다.
+//   변경마다 min(줄인 인원 × 대행비, 줄인 인원 × 변경 전 1인 몫 − 그때 돌려준 돈) — 회원 원장 탭(keptAg)·서버 가드와 같은 식.
+//   구매 30분 안의 변경은 대행비까지 돌려줬으니 남긴 것이 없다. pax_changes 는 회원이 못 바꾸는 칸이다(결제 사실 칸 가드).
+function _tkKeptAgency(rec, agencyPer){
+  var ex = (rec && rec.extra_data) || {}, kept = 0;
+  var ag = Math.max(0, parseInt(agencyPer, 10) || 0);
+  var bought = rec && rec.date ? Date.parse(rec.date) : NaN;
+  (Array.isArray(ex.pax_changes) ? ex.pax_changes : []).forEach(function(pc){
+    if(!pc) return;
+    var from = parseInt(pc.from, 10), to = parseInt(pc.to, 10);
+    if(!(from > 0) || !(to >= 0) || from <= to) return;
+    var at = pc.at ? Date.parse(pc.at) : NaN;
+    if(!isNaN(at) && !isNaN(bought) && at - bought <= 30 * 60000) return;
+    var removed = from - to, pb = parseInt(pc.price_before, 10), rf = Math.max(0, parseInt(pc.refund, 10) || 0);
+    kept += (pb > 0) ? Math.min(removed * ag, Math.max(0, removed * Math.floor(pb / from) - rf)) : removed * ag;
+  });
+  return kept;
+}
+window._tkKeptAgency = _tkKeptAgency;
+
 function calculateTicketRefund(purchaseRecord, restaurant, currentTime, isSuperAdminOverride){
   if(!purchaseRecord) return { refundable: 0, agencyHeld: 0, reason: '구매 정보 없음', policy: 'no_data' };
 
@@ -32435,7 +32457,7 @@ function calculateTicketRefund(purchaseRecord, restaurant, currentTime, isSuperA
   // 티켓 정보에서 대행비 추출 (현재 시점 ticketDB 기준)
   var ticket = (typeof ticketDB !== 'undefined') ? ticketDB.find(function(x){ return String(x.id) === String(purchaseRecord.id); }) : null;
   var agencyPerPax = ticket ? parseInt(ticket.agencyFee || 0) : 0;
-  var agencyTotal = agencyPerPax * pax;
+  var agencyTotal = agencyPerPax * pax + _tkKeptAgency(purchaseRecord, agencyPerPax);   // 🔧 2026-11-03 + 인원 줄일 때 남긴 대행비
 
   // 구매 시점
   var purchaseTime = purchaseRecord.date ? new Date(purchaseRecord.date) : null;
@@ -32451,7 +32473,7 @@ function calculateTicketRefund(purchaseRecord, restaurant, currentTime, isSuperA
   var visitDate = purchaseRecord.visitDate ? _dParseDate(purchaseRecord.visitDate) : null;
   if(!visitDate || isNaN(visitDate.getTime())){
     // 방문일 모르면 — 보수적으로 대행비 제외 환불 (정책 2 기본)
-    return { refundable: paidTotal - agencyTotal, agencyHeld: agencyTotal, reason: '대행비 제외 환불 (방문일 미확인)', policy: 'agency_excluded' };
+    return { refundable: Math.max(0, paidTotal - agencyTotal), agencyHeld: Math.min(paidTotal, agencyTotal), reason: '대행비 제외 환불 (방문일 미확인)', policy: 'agency_excluded' };
   }
   // 🔧 2026.09.14: 서버 한도(taam_refund_cap)와 같이 「달력 날짜 차」로 센다.
   //   종전엔 방문일 0시 − 지금 이라 D-31 당일 아침이 30.6일로 계산돼 환불이 막혔다.
@@ -32461,7 +32483,7 @@ function calculateTicketRefund(purchaseRecord, restaurant, currentTime, isSuperA
 
   // 정책 2: 방문 D-31 이상(31일 이상 남음) — 대행비 제외 환불 (약관 제3조 2)
   if(daysUntilVisit >= 31){
-    return { refundable: paidTotal - agencyTotal, agencyHeld: agencyTotal, reason: '방문 ' + Math.floor(daysUntilVisit) + '일 전 — 대행비 제외 환불', policy: 'agency_excluded' };
+    return { refundable: Math.max(0, paidTotal - agencyTotal), agencyHeld: Math.min(paidTotal, agencyTotal), reason: '방문 ' + Math.floor(daysUntilVisit) + '일 전 — 대행비 제외 환불', policy: 'agency_excluded' };
   }
 
   // 정책 3: D-30 이하(방문 30일 이내) → 환불 불가 (약관 제3조 2)
@@ -32526,6 +32548,15 @@ window.showRefundPolicyNotice = showRefundPolicyNotice;
 
 // 🆕 2026.05.21: 티켓 취소 요청 모달 (환불 미리보기)
 async function openCancelTicketModal(purchaseId){
+  // 🆕 2026-11-03 처리 중 잠금 — 확인창이 서버 읽기 뒤에 뜨면서, 두 번 누르면 취소가 두 번 돌았다(두 번째 환불은 서버가 막지만
+  //   「환불 실패 — 예치금 부여로 처리」 알림이 슈퍼어드민에게 가서 두 번 돌려줄 뻔했다 · 적대 리뷰)
+  window._tkCancelBusy = window._tkCancelBusy || {};
+  if(window._tkCancelBusy[purchaseId]) return;
+  window._tkCancelBusy[purchaseId] = true;
+  try { await _openCancelTicketModalInner(purchaseId); }
+  finally { delete window._tkCancelBusy[purchaseId]; }
+}
+async function _openCancelTicketModalInner(purchaseId){
   var h = purchaseHistory.find(function(x){ return x.purchaseId === purchaseId; });
   if(!h){ alert('구매 내역을 찾을 수 없습니다.'); return; }
   var r = restaurantDB.find(function(x){ return String(x.id) === String(h.restId); });
@@ -32590,8 +32621,8 @@ async function openCancelTicketModal(purchaseId){
 
   if(!confirm(msg)) return;
 
-  // 취소 실행
-  cancelTicketPurchase(purchaseId, preview, isSuper);
+  // 취소 실행 — 끝날 때까지 잠금 유지
+  await cancelTicketPurchase(purchaseId, preview, isSuper);
 }
 window.openCancelTicketModal = openCancelTicketModal;
 
@@ -32792,6 +32823,11 @@ async function cancelTicketPurchase(purchaseId, refundCalc, isSuperAdminOverride
       } catch(_rfe){
         _refundFailed = String((_rfe && _rfe.message) || _rfe || 'error');
         console.warn('[cancel] 예치금 환불 실패 — 취소는 됨:', _refundFailed);
+        // 다른 기기·다른 탭에서 같은 환불이 이미 들어갔으면 실패가 아니다 — 원장을 다시 보고 판단한다(「예치금 부여」 지시로 두 번 주지 않게)
+        try {
+          var _post = await _tkRefundLedgerInfo(_pv.me && _pv.me.id, purchaseId);
+          if(_post.ok && _pv.info && _post.depBack >= (_pv.info.depBack || 0) + _depositRefund) _refundFailed = '';
+        } catch(_pe2){}
       }
     }
 
@@ -33171,6 +33207,13 @@ function _dmPersistBuyerChanges(h, refundToAdd, refundNote){
             + '\n취소 = 처리하지 않음\n\n(더 돌려줘야 하면 처리 뒤 「예치금 부여」로 따로)');
           if(!_goShort) return { ok:false, aborted:true };
         }
+        // 🔧 2026-11-03 실제로 돌려줄 몫으로 기록한다 — 요청액을 그대로 적으면 회원 알림·캘린더·반환 목록이 받지 않은 돈을 말했다(적대 리뷰)
+        var _applied = _depCredit + _saCardRefund;
+        if(refundToAdd > 0 && _applied !== refundToAdd){
+          dr.requestedAmt = refundToAdd;
+          dr.shortAmt = Math.max(0, refundToAdd - _applied);
+          dr.returnAmt = _applied;
+        }
 
         // 🛡 2026.05.22: 중복 환불 가드 — 이미 ticket_refund row 가 있는지 확인
         //   회원이 이미 본인 마이페이지에서 취소(환불)받았는데 슈퍼어드민이 또 처리하면
@@ -33228,7 +33271,9 @@ function _dmPersistBuyerChanges(h, refundToAdd, refundNote){
             agencyHeld: dr.agencyHeld || 0,
             extraDeduct: dr.extraDeduct || 0,
             extraNote: dr.extraNote || '',
-            note: dr.note || refundNote || ''
+            note: dr.note || refundNote || '',
+            requestedAmt: dr.requestedAmt || 0,   // 🆕 2026-11-03 남은 결제보다 많이 요청했을 때 — 요청액 · 못 돌려준 몫
+            shortAmt: dr.shortAmt || 0
           }
         });
         // 카드로 낸 부분이 있으면 '카드 환불 대기'로 남긴다 (예치금엔 적립 안 함)
@@ -33272,7 +33317,7 @@ function _dmPersistBuyerChanges(h, refundToAdd, refundNote){
             penalty_amt: dr.penaltyAmt || 0, penalty_pct: dr.penaltyPct || 0,
             agency_held: dr.agencyHeld || 0,
             extra_deduct: dr.extraDeduct || 0, extra_note: dr.extraNote || '',
-            return_amt: dr.returnAmt || refundToAdd,
+            return_amt: (dr.returnAmt != null ? dr.returnAmt : refundToAdd),
             deposit_refund: _depCredit, card_refund_pending: _saCardRefund,
             paid_by: _saIsCard ? 'card+deposit' : 'deposit',
             note: dr.note || refundNote,
@@ -33323,7 +33368,7 @@ function _dmPersistBuyerChanges(h, refundToAdd, refundNote){
           }]); }
           catch(_z){ return { ok:false, stage:'refund', err: (_z && _z.message) || String(_z), dep:0, card:0 }; }
         }
-        return { ok:true, dep:_depCredit, card:_saCardRefund };
+        return { ok:true, dep:_depCredit, card:_saCardRefund, requested:refundToAdd, applied:_depCredit + _saCardRefund };
       } catch(e){
         console.warn('[_dmPersistBuyerChanges supabase] failed', e);
         return { ok:false, stage:'unknown', err: (e && e.message) || String(e) };
@@ -33594,16 +33639,20 @@ async function _dmLoadSupabasePurchases(){
     //   🔧 2026.05.22: 같은 purchase_id 에 여러 row 가 있으면 가장 최신 created_at 채택
     //                  (덮어쓰기로 이전 정보 손실 방지)
     var refundMap = {};
+    var refundSum = {};   // 🆕 2026-11-03 구매마다 실제로 돌아간 예치금 합(양수 ticket_refund) — 캘린더 취소 줄이 계획이 아니라 결과를 말하게
     var rres = await window.sb
       .from('deposit_transactions')
       .select('amount, description, metadata, created_at')
       .eq('change_type', 'ticket_refund')
       .order('created_at', { ascending: false })   // 최신 먼저
       .limit(5000);
+    var _rsOk = !rres.error && Array.isArray(rres.data);
     if(!rres.error && rres.data){
       rres.data.forEach(function(r){
         var pid = r.metadata && r.metadata.purchase_id;
         if(!pid) return;
+        var _ra = parseInt(r.amount, 10) || 0;
+        if(_ra > 0) refundSum[pid] = (refundSum[pid] || 0) + _ra;
         // 이미 더 최신 row 가 있으면 skip (ascending:false 라 첫 매치가 최신)
         if(!refundMap[pid]) refundMap[pid] = r;
       });
@@ -33654,6 +33703,7 @@ async function _dmLoadSupabasePurchases(){
         ticket_type: t.ticket_type,
         agencyFee: (t.extra_data && t.extra_data.agencyFee) || 0,   // 🆕 대행비 스냅샷 폴백(슈퍼어드민)
         extra_data: t.extra_data || {},
+        _ledgerRefund: _rsOk ? (refundSum[String(t.purchase_id || '')] || 0) : null,   // 🆕 2026-11-03 원장에 실제로 남은 예치금 환불 합(못 읽으면 null)
         guestPhone: t.buyer_phone || '',   // 🆕 2026-09-28 수동 예약 손님 번호 (프로필 phone 과 다르다)
         _srcKey: 'supabase_tickets',
         _userId: t.user_id,
@@ -44562,6 +44612,7 @@ function dmConfirmReturn(){
     return;
   }
   var returnAmt = Math.max(0, h.amt - agencyFee - extra);
+  var _prevDr = h.depositReturn;   // 🆕 2026-11-03 실패·중단이면 되돌린다(메모리에만 남으면 목록에서 사라졌다)
   var extraTxt = extra > 0 ? ' · 추가 차감 ₩'+extra.toLocaleString()+' (사유: '+extraNote+')' : '';
   // 🔧 2026.05.22 FIX: 반환 버튼은 무조건 type='returned' (반환완료 탭으로 분류).
   h.depositReturn = {
@@ -44583,13 +44634,13 @@ function dmConfirmReturn(){
   // 버이어(실제 구매자)의 IDB 에 반영 + 버이어 예치금에 환불액 크레딧
   var _ntf = _dmNotifyChecked('dmNotifyReturn');
   _dmPersistBuyerChanges(h, returnAmt, buyerNote).then(function(res){
-    if(_dmPersistFailed(res)) return;
+    if(_dmPersistFailed(res, h, _prevDr)) return;
     closeDmPopup();
     loadAllUsersPurchases().then(function(){ renderDmMgmtList(_dmCurrentTab); });
-    var _rfTitle = (typeof t==='function') ? t('toast.refund_done_title') : '반환 완료';
-    showToast('✓', _rfTitle, _dmResultMsg(res, returnAmt) + (_ntf ? ' · 회원 알림 보냄' : ' · 회원 알림 안 보냄'), { category:'refund', native:true });
     // 🔧 2026-11-03 회원에게 알린다 — 종전엔 notifPushSelf 로 「슈퍼어드민 본인 기기」에 보내고 있었다(회원은 받은 적이 없다)
-    if(_ntf) _dmNotifyMember(h, 'returned', res, { total: returnAmt, extra: extra, note: extra > 0 ? extraNote : '' });
+    var _sent = _ntf ? _dmNotifyMember(h, 'returned', res, { total: returnAmt, extra: extra, note: extra > 0 ? extraNote : '' }) : false;
+    var _rfTitle = (typeof t==='function') ? t('toast.refund_done_title') : '반환 완료';
+    showToast('✓', _rfTitle, _dmResultMsg(res, returnAmt) + (_sent ? ' · 회원 알림 보냄' : ' · 회원 알림 안 보냄'), { category:'refund', native:true });
   });
 }
 
@@ -44626,6 +44677,7 @@ function dmConfirmPenalty(){
     toastMsg = _dmPenaltyDirectAmt !== null ? '₩'+penaltyAmt.toLocaleString()+' 위약금 처리' : '위약금 '+_dmPenaltyPct+'% 처리';
   }
 
+  var _prevDr = h.depositReturn;   // 🆕 2026-11-03 실패·중단이면 되돌린다
   h.depositReturn = {
     type: 'penalty',
     returnAmt: returnAmt,
@@ -44644,14 +44696,14 @@ function dmConfirmPenalty(){
   // 버이어 저장소에 반영 (부분 반환액이 있으면 버이어 예치금에 크레딧)
   var _ntf = _dmNotifyChecked('dmNotifyPenalty');
   _dmPersistBuyerChanges(h, returnAmt, note).then(function(res){
-    if(_dmPersistFailed(res)) return;
+    if(_dmPersistFailed(res, h, _prevDr)) return;
     closeDmPopup();
     loadAllUsersPurchases().then(function(){ renderDmMgmtList(_dmCurrentTab); });
+    // 🆕 2026-11-03 회원에게 알린다(체크를 끄면 안 보낸다) · 금액은 실제로 돌려준 몫
+    var _sent = _ntf ? _dmNotifyMember(h, 'cancel', res, { total: returnAmt, penalty: penaltyAmt, note: note }) : false;
     // 결과에 맞는 문구로 알린다 (전액 환불을 '환불 불가'로 알리던 문제)
     var _ok = returnAmt > 0;
-    showToast(_ok ? '✓' : '✕', _ok ? '환불 처리 완료' : '환불 없음 처리', toastMsg + (_ok ? ' (' + _dmResultMsg(res, returnAmt) + ')' : '') + (_ntf ? ' · 회원 알림 보냄' : ' · 회원 알림 안 보냄'));
-    // 🆕 2026-11-03 회원에게 알린다(체크를 끄면 안 보낸다)
-    if(_ntf) _dmNotifyMember(h, 'cancel', res, { total: returnAmt, penalty: penaltyAmt, note: note });
+    showToast(_ok ? '✓' : '✕', _ok ? '환불 처리 완료' : '환불 없음 처리', toastMsg + (_ok ? ' (' + _dmResultMsg(res, returnAmt) + ')' : '') + (_sent ? ' · 회원 알림 보냄' : ' · 회원 알림 안 보냄'));
   });
 }
 
@@ -44672,8 +44724,13 @@ function _dmResultMsg(res, total){
   if(res.card > 0) a.push('카드 ₩' + res.card.toLocaleString() + ' 환불 대기(카드환불 탭)');
   return a.length ? a.join(' · ') : '돌려준 돈 없음';
 }
-function _dmPersistFailed(res){
+function _dmPersistFailed(res, h, prevDr){
   if(!res || res.ok !== false) return false;
+  // 반환 화면이 처리 전에 목록 객체에 적어 둔 depositReturn 을 되돌린다 — 남아 있으면 다시 그릴 때 그 건이 반환예정에서 사라졌다
+  if(h && res.stage !== 'refund'){
+    if(prevDr === undefined) delete h.depositReturn; else h.depositReturn = prevDr;
+    try { renderDmMgmtList(_dmCurrentTab); } catch(_r){}
+  }
   if(res.aborted) return true;                       // 사람이 멈췄다 — 창은 그대로
   if(res.stage === 'refund'){
     alert('⚠ 티켓은 취소됐지만 예치금 반환이 실패했습니다.\n\n' + String(res.err || '').slice(0, 200)
@@ -44687,13 +44744,16 @@ function _dmPersistFailed(res){
 }
 function _dmNotifyMember(h, kind, res, o){
   try {
-    if(!h || typeof taamNotifyUser !== 'function') return;
+    if(!h || typeof taamNotifyUser !== 'function') return false;
     var uid = String(h._userId || '');
-    if(!/^[0-9a-fA-F-]{36}$/.test(uid)) return;
+    if(!/^[0-9a-fA-F-]{36}$/.test(uid)) return false;
     o = o || {}; res = res || {};
     var dep = parseInt(res.dep, 10) || 0, card = parseInt(res.card, 10) || 0;
-    if(res.dep == null && res.card == null) dep = parseInt(o.total, 10) || 0;   // 옛 경로(로컬 저장) — 반환액 그대로
-    var total = parseInt(o.total, 10) || 0, pen = parseInt(o.penalty, 10) || 0, extra = parseInt(o.extra, 10) || 0;
+    var known = !(res.dep == null && res.card == null);
+    if(!known) dep = parseInt(o.total, 10) || 0;   // 옛 경로(로컬 저장) — 반환액 그대로
+    // 🔧 2026-11-03 실제로 돌려준 몫 — 「남은 만큼만」을 확인했으면 요청액보다 작다
+    var total = known ? (dep + card) : (parseInt(o.total, 10) || 0), pen = parseInt(o.penalty, 10) || 0, extra = parseInt(o.extra, 10) || 0;
+    if(kind === 'returned' && dep + card <= 0) return false;   // 돌려준 돈이 없는 「반환 완료」는 보내지 않는다
     var note = String(o.note || '').replace(/\s+/g, ' ').trim().slice(0, 200);
     var won = function(v){ return '₩' + (parseInt(v, 10) || 0).toLocaleString(); };
     var vd = String(h.visitDate || '').match(/^(\d{4})[.\-\/](\d{1,2})[.\-\/](\d{1,2})/);
@@ -44727,7 +44787,8 @@ function _dmNotifyMember(h, kind, res, o){
       i18n: { ko: ko, en: en, ja: ja },
       payload: { purchase_id: h.purchaseId, refund_type: kind, deposit_refund: dep, card_refund: card }
     });
-  } catch(e){ console.warn('[dm] 회원 알림 예외:', e && e.message); }
+    return true;
+  } catch(e){ console.warn('[dm] 회원 알림 예외:', e && e.message); return false; }
 }
 
 
@@ -66838,32 +66899,38 @@ function _tcalCancelEntry(h){
           || (/^PAY/.test(pid) && ((parseInt(ex.depositUsed, 10) || 0) > 0 || (parseInt(ex.cardPaid, 10) || 0) > 0 || !!ex.paidBy || !!ex.order_id))
           || (pid.indexOf('LINK-') === 0 && !!ex.paidAt);
   if(!paid) return null;
-  var amt = parseInt(h.amt, 10) || 0, label = '취소', tone = 'cx', refund = null, deduct = 0, note = '', who = '';
+  var amt = parseInt(h.amt, 10) || 0, label = '취소', tone = 'cx', deduct = 0, note = '', who = '', planned = 0;
+  // 🔧 2026-11-03 금액은 원장에 실제로 남은 예치금 환불(_ledgerRefund · 서버만 쓴다) + 카드 환불 대기 — 계획(refunded_amount·returnAmt)이 아니다(적대 리뷰)
+  var ledger = (h._ledgerRefund == null) ? null : (parseInt(h._ledgerRefund, 10) || 0);
+  var crp = (ex.card_refund_pending && typeof ex.card_refund_pending === 'object') ? ex.card_refund_pending : null;
+  var card = crp ? Math.max(0, parseInt(crp.amount, 10) || 0) : 0;
   if(sa && dr && dr.type === 'returned'){
     label = '방문 후 반환'; tone = 'rt'; who = '슈퍼어드민';
-    refund = parseInt(dr.returnAmt, 10) || 0;
+    planned = parseInt(dr.returnAmt, 10) || 0;
     deduct = (parseInt(dr.agencyHeld, 10) || 0) + (parseInt(dr.extraDeduct, 10) || 0);
     note = dr.extraNote || '';
   } else if(sa && dr){
     who = '슈퍼어드민';
-    refund = parseInt(dr.returnAmt, 10) || 0;
+    planned = parseInt(dr.returnAmt, 10) || 0;
     deduct = parseInt(dr.penaltyAmt, 10) || 0;
-    label = (amt > 0 && refund >= amt) ? '취소 · 전액 환불' : (refund > 0 ? '취소 · 부분 환불' : '취소 · 환불 없음');
+    var _got = (ledger == null ? planned : ledger + card);
+    label = (amt > 0 && _got >= amt) ? '취소 · 전액 환불' : (_got > 0 ? '취소 · 부분 환불' : '취소 · 환불 없음');
     note = dr.note || '';
   } else if(pid.indexOf('LINK-') === 0){
     label = '결제 링크 취소 · 환불';
   } else {
     var role = String(ex.cancelled_by_role || '');
     who = (role === 'superadmin' || role === 'super_admin') ? '슈퍼어드민' : (role === 'admin' ? '매장' : (role ? '회원' : ''));
-    if(ex.refunded_amount != null && ex.refunded_amount !== '') refund = parseInt(ex.refunded_amount, 10) || 0;
+    planned = Math.max(0, parseInt(ex.deposit_refund, 10) || 0);   // 회원 앱이 적은 예치금 몫(계획) — 원장과 견주기만 한다
     label = who === '회원' ? '회원 취소' : '취소';
     note = String(ex.cancel_reason || '');
   }
-  var crp = (ex.card_refund_pending && typeof ex.card_refund_pending === 'object') ? ex.card_refund_pending : null;
+  var plannedDep = (sa && dr) ? Math.max(0, planned - card) : planned;
   return {
     pid: pid, name: h.buyerName || '', pax: parseInt(h.pax, 10) || 1, time: h.visitTime || '', amount: amt,
-    label: label, tone: tone, refund: refund, deduct: deduct,
-    card: crp ? (parseInt(crp.amount, 10) || 0) : 0, cardDone: !!(crp && crp.status === 'done'),
+    label: label, tone: tone, refund: ledger, deduct: deduct, card: card, cardDone: !!(crp && crp.status === 'done'),
+    warn: (ledger === 0 && plannedDep > 0) ? '예치금 환불 기록 없음 — 원장 확인' : '',
+    shortAmt: (sa && dr) ? (parseInt(dr.shortAmt, 10) || 0) : 0,
     note: String(note || '').slice(0, 300), who: who,
     at: ex.super_admin_processed_at || ex.server_cancelled_at || ex.cancelled_at || ''
   };
@@ -68278,8 +68345,9 @@ function tcalRenderDetail(dateStr) {
         var col = rt ? ['#1E7A46','#EAF6EE','#BFE3CC'] : ['#9B1C1C','#FBEDED','#EBCACA'];
         var bits = [];
         if(isSuper){
-          if(c.refund != null) bits.push(c.refund > 0 ? ((rt ? '반환 ₩' : '환불 ₩') + c.refund.toLocaleString()) : (rt ? '반환 없음' : '환불 없음'));
+          if(c.refund != null) bits.push(c.refund > 0 ? ((rt ? '예치금 반환 ₩' : '예치금 환불 ₩') + c.refund.toLocaleString()) : (c.card > 0 ? '' : (rt ? '반환 없음' : '환불 없음')));
           if(c.deduct > 0) bits.push('차감 ₩' + c.deduct.toLocaleString());
+          if(c.shortAmt > 0) bits.push('남은 결제 없어 못 돌려준 ₩' + c.shortAmt.toLocaleString());
           if(c.card > 0) bits.push('카드 ₩' + c.card.toLocaleString() + (c.cardDone ? ' 환불 완료' : ' 환불 대기'));
           if(c.amount > 0) bits.push('결제 ₩' + c.amount.toLocaleString());
         }
@@ -68291,7 +68359,8 @@ function tcalRenderDetail(dateStr) {
           +     '<span style="font-weight:700;color:#5a554f;">' + _raEsc(c.name || '(회원)') + '</span>' + (c.time ? ' <span style="font-size:11px;">· ' + _raEsc(c.time) + '</span>' : '') + '</div>'
           +   '<span style="flex-shrink:0;font-size:12px;font-weight:800;color:#b5afa2;' + (rt ? '' : 'text-decoration:line-through;') + '">' + (parseInt(c.pax, 10) || 1) + '명</span>'
           + '</div>'
-          + (bits.length ? '<div style="font-size:11px;color:#8a8580;margin-top:2px;">' + _raEsc(bits.join(' · ')) + '</div>' : '')
+          + (bits.filter(Boolean).length ? '<div style="font-size:11px;color:#8a8580;margin-top:2px;">' + _raEsc(bits.filter(Boolean).join(' · ')) + '</div>' : '')
+          + (isSuper && c.warn ? '<div style="font-size:11px;font-weight:800;color:#B23A2E;margin-top:2px;">⚠ ' + _raEsc(c.warn) + '</div>' : '')
           + (c.note ? '<div style="font-size:11px;color:#6b665f;margin-top:3px;white-space:pre-wrap;word-break:break-all;">사유: ' + _raEsc(c.note) + '</div>' : '')
           + '</div>';
       });
