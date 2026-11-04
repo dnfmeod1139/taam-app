@@ -13,9 +13,10 @@
 --    스스로 취소하면 taam_refund_cap(총액 − 대행비 − 이미 돌려준 돈)이 대행비·추가 차감 몫을 다시 돌려줄 수 있었다(회차 대행비가 0 이거나
 --    추가 차감이 있으면). 같은 구멍이 슈퍼어드민 「환불 처리」(위약) 뒤 회원이 RPC 로 환불을 더 부르는 길에도 있었다(종전부터).
 --    슈퍼어드민 · 서버(Edge · SQL Editor · auth.uid() null) · 인원 줄임(ticket_pax_change) · 0원 이하는 그대로.
+--    A2: 인원 변경의 카드 갈래(card_refund_queue)도 같은 예약이면 거절(2차 리뷰).
 --    인원 줄임 환불(ticket_pax_change)도 같은 예약이면 **슈퍼어드민을 포함한 로그인 호출 전부** 거절 — 조기 반환 뒤 티켓이 살아 있어 「인원 변경」이
 --    줄인 몫을 또 돌려줬다(적대 리뷰: 슈퍼어드민 기본 제안이 낸 돈보다 더 · 파트너는 남긴 대행비까지). 인원만 줄이는 것(환불 0)은 그대로.
--- C. _taam_seat_visited_return — 「좌석 열기」(deposit_return.seatOpened = true)는 언제나 취소다. 방문 당일·연도 없는 날짜에서 좌석 열기를 고르면
+-- C. _taam_seat_visited_return — 「좌석 열기」(deposit_return.seatOpened = true)는 취소다(방문 기록 attended 가 있으면 그것이 먼저). 방문 당일·연도 없는 날짜에서 좌석 열기를 고르면
 --    「다녀온 반환」으로 보고 초대장을 결제 완료로 남겼다(적대 리뷰). 같은 함수를 형제 좌석·백필이 쓴다.
 -- B. 판매 현황(taam_ticket_sales_report): 방문 전날보다 앞선 'returned' 환불은 취소로 센다(return_before_visit) — 조기 반환은 예외.
 --    「좌석 열기」는 방문 전날·당일이어도 취소로(그 표시가 없으면 종전대로 하루 여유).
@@ -60,6 +61,31 @@ create trigger trg_taam_guard_ledger_refund_processed
   before insert on public.deposit_transactions
   for each row execute function public.taam_guard_ledger_refund_processed();
 
+-- ── A2. 처리된 예약의 카드 환불 대기 늘리기 막기 — 인원 변경(taam_change_party_size)의 카드 갈래는 원장 줄을 안 쓰고 card_refund_queue 에만 적는다(2차 리뷰) ──
+--   조기 반환으로 남은 예치금이 0 이 되면 인원 줄임 환불이 통째로 카드 대기로 가 위 가드를 비켜 갔다(남긴 대행비를 카드로 돌려주라는 기록).
+--   로그인 호출(슈퍼어드민 포함)이 처리된 예약의 card_refund_queue 를 늘리면 거절한다 · 서버(로그인 없음)는 그대로.
+create or replace function public.taam_guard_ticket_processed_cardq()
+returns trigger
+language plpgsql security definer set search_path = public
+as $$
+begin
+  if auth.uid() is null then return new; end if;
+  if not (coalesce(old.extra_data->>'super_admin_processed_at', '') <> '' or coalesce(jsonb_typeof(old.extra_data->'deposit_return') = 'object', false)) then return new; end if;   -- coalesce: deposit_return 이 없으면 NULL 이 되어 처리 안 된 예약까지 막았다
+  if jsonb_array_length(case when jsonb_typeof(new.extra_data->'card_refund_queue') = 'array' then new.extra_data->'card_refund_queue' else '[]'::jsonb end)
+     > jsonb_array_length(case when jsonb_typeof(old.extra_data->'card_refund_queue') = 'array' then old.extra_data->'card_refund_queue' else '[]'::jsonb end) then
+    raise exception 'REFUND_ALREADY_PROCESSED: 이미 TAAM 이 반환·환불을 처리한 예약입니다 — 인원만 바꾸고(돌려줄 금액 0) 더 줄 몫은 「예치금 부여」로 (구매 %)', old.purchase_id
+      using errcode = '42501';
+  end if;
+  return new;
+end $$;
+comment on function public.taam_guard_ticket_processed_cardq() is
+  '처리된 예약(super_admin_processed_at · deposit_return)의 card_refund_queue 를 로그인 호출이 늘리지 못한다 — 인원 변경 카드 갈래로 남긴 대행비를 돌려주던 길. 2026-11-04';
+revoke all on function public.taam_guard_ticket_processed_cardq() from public, anon, authenticated;
+drop trigger if exists trg_taam_guard_ticket_processed_cardq on public.tickets;
+create trigger trg_taam_guard_ticket_processed_cardq
+  before update of extra_data on public.tickets
+  for each row execute function public.taam_guard_ticket_processed_cardq();
+
 -- ── C. 좌석 열기는 언제나 취소 — 초대장 동기화가 쓰는 판정(20261103_invite_cancel_sync.sql 의 함수에 한 줄) ──
 create or replace function public._taam_seat_visited_return(p_extra jsonb, p_resdate text, p_visit text)
 returns boolean
@@ -68,8 +94,8 @@ as $$
 declare m text[]; v_d date; v_at date;
 begin
   if coalesce(p_extra -> 'deposit_return' ->> 'type', '') <> 'returned' then return false; end if;
+  if coalesce(p_visit, '') = 'attended' then return true; end if;                                     -- 다녀온 기록이 먼저(2차 리뷰 — 방문 뒤 좌석 열기가 다녀온 초대를 취소하던 길)
   if coalesce(p_extra -> 'deposit_return' ->> 'seatOpened', '') = 'true' then return false; end if;   -- 🆕 2026-11-04 슈퍼어드민이 「좌석 열기(예약 취소)」를 골랐다
-  if coalesce(p_visit, '') = 'attended' then return true; end if;
   m := regexp_match(coalesce(p_resdate, ''), '^(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})');
   if m is null then return true; end if;
   begin v_d := make_date(m[1]::int, m[2]::int, m[3]::int); exception when others then return true; end;
@@ -117,6 +143,8 @@ insert into _taam_er_chk
 select '① 처리된 예약의 회원 환불 가드', case when exists (select 1 from pg_trigger where tgname = 'trg_taam_guard_ledger_refund_processed' and not tgisinternal) then '✅' else '❌' end
 union all
 select '② 판매 현황 조기 반환', (select st || ' ' || note from _taam_er_b limit 1)
+union all
+select '①-b 처리된 예약의 카드 환불 대기 가드', case when exists (select 1 from pg_trigger where tgname = 'trg_taam_guard_ticket_processed_cardq' and not tgisinternal) then '✅' else '❌' end
 union all
 select '④ 좌석 열기 = 취소(초대장 판정)', case when position('seatOpened' in pg_get_functiondef('public._taam_seat_visited_return(jsonb,text,text)'::regprocedure)) > 0 then '✅' else '❌' end
 union all

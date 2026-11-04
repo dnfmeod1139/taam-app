@@ -429,7 +429,7 @@ insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_d
 SQL
 ok "E0 고치기 전 — 조기 반환도 방문 전 반환 = 취소로 셌다" "$(row PAYH-tpE_1 "concat_ws('/', r->>'rf_cancel', r->>'rf_return', ((r->'flags') ? 'return_before_visit')::text)")|$(row "inv:$IE" "concat_ws('/', r->>'st', r->>'rf_return')")" "800000/0/true|cancelled/0"
 oute=$($P -f "$MIGE" 2>&1)
-ok "E1 마이그레이션 — 오류 없음 · ❌ 0 · ①② ✅" "$(echo "$oute" | grep -cE "^ERROR|^psql:.*ERROR")/$(echo "$oute" | grep -c '❌')/$(echo "$oute" | grep -cE '(①|②).*✅')" "0/0/2"
+ok "E1 마이그레이션 — 오류 없음 · ❌ 0 · ① ①-b ② ✅" "$(echo "$oute" | grep -cE "^ERROR|^psql:.*ERROR")/$(echo "$oute" | grep -c '❌')/$(echo "$oute" | grep -cE '(①|②).*✅')" "0/0/3"
 ok "E2 조기 반환(티켓 active · early) = 방문 후 반환과 같게 — 반환 800,000 · 취소 0 · 대행비 보유 200,000 · 플래그 없음" "$(row PAYH-tpE_1 "concat_ws('/', r->>'st', r->>'rf_return', r->>'rf_cancel', r->>'net', r->>'agency', r->>'ag_state', ((r->'flags') ? 'return_before_visit')::text)")" "returned/800000/0/1000000/200000/kept/false"
 ok "E3 early 표시 없는 방문 전 반환은 그대로 취소(return_before_visit)" "$(row PAYH-tpE_2 "concat_ws('/', r->>'rf_return', r->>'rf_cancel', ((r->'flags') ? 'return_before_visit')::text)")" "0/800000/true"
 ok "E4 취소된 티켓은 early 가 있어도 취소" "$(row PAYH-tpE_3 "concat_ws('/', r->>'st', r->>'rf_return', r->>'rf_cancel')")" "cancelled/0/800000"

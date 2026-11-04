@@ -33251,6 +33251,7 @@ function _dmPersistBuyerChanges(h, refundToAdd, refundNote){
         var _saCardRefund = _saSp.card;
         // 🆕 2026-11-04 조기 반환(좌석 유지)은 예치금으로 낸 몫만 — 카드 몫 환불(토스 승인취소)은 좌석이 살아 있으면 서버 견적이 거절한다(ticket_active)
         if(dr.early && !(refundToAdd > 0)) return { ok:false, stage:'precheck', err:'돌려줄 금액이 없으면 조기 반환할 것이 없습니다' };   // 🔧 리뷰
+        if(dr.early && _sae.pkg) return { ok:false, stage:'precheck', err:'패키지 좌석은 조기 반환할 수 없습니다 — 패키지는 통째로만 취소합니다(📦 티켓 패키지 → 구매자)' };   // 🔧 2차 리뷰
         if(dr.early && (_saCardRefund > 0 || _saSp.short > 0)){
           return { ok:false, stage:'precheck', err: _saCardRefund > 0
             ? ('카드로 낸 몫(₩' + _saCardRefund.toLocaleString() + ')이 있어 조기 반환을 할 수 없습니다 — 방문 후 반환하거나 「좌석 열기」로 처리하세요')
@@ -33410,7 +33411,14 @@ function _dmPersistBuyerChanges(h, refundToAdd, refundNote){
           // 🔧 2026-11-03 카드 몫만 있으면(예치금 0) 원장 줄이 없다 — 빈 호출은 하지 않는다 · 실패는 「티켓은 취소됨」으로 따로 알린다
           if (_rtEnt.length) {
             try { await _depApplyDelta(userId, _spl2.mem, _spl2.gen, _rtEnt); }
-            catch(_rfE){ return { ok:false, stage:'refund', err: (_rfE && _rfE.message) || String(_rfE), dep:_depCredit, card:_saCardRefund }; }
+            catch(_rfE){
+              // 🆕 2026-11-04 조기 반환 — 티켓 상태는 안 바꿨으니 처리 표시만 되돌린다(남으면 「좌석 열기」가 받지도 않은 돈을 「이미 돌려줬다」고 했다 · 2차 리뷰)
+              var _rst = false;
+              if(dr.early){
+                try { var _rb = await window.sb.from('tickets').update({ extra_data: h.extra_data || {} }).eq('purchase_id', purchaseId).select('purchase_id'); _rst = !_rb.error && !!(_rb.data && _rb.data.length); } catch(_rbe){}
+              }
+              return { ok:false, stage:'refund', early: !!dr.early, restored: _rst, err: (_rfE && _rfE.message) || String(_rfE), dep:_depCredit, card:_saCardRefund };
+            }
           }
           // (반환 원장은 위 RPC 가 주머니별로 남겼다 — 앱 INSERT 폴백은 2026-09-14 제거)
         } else {
@@ -33424,9 +33432,11 @@ function _dmPersistBuyerChanges(h, refundToAdd, refundNote){
             metadata: {
               purchase_id: purchaseId,
               ticket_id: h.id,
-              refund_type: 'penalty',
-              penalty_amt: dr.penaltyAmt || h.amt,
-              penalty_pct: dr.penaltyPct || 100,
+              refund_type: dr.type === 'returned' ? 'returned' : 'penalty',   // 🔧 2026-11-04 방문 후 ₩0 반환(와인 정산 등)은 반환으로 — 종전엔 언제나 위약 100%
+              penalty_amt: dr.type === 'returned' ? 0 : (dr.penaltyAmt || h.amt),
+              penalty_pct: dr.type === 'returned' ? 0 : (dr.penaltyPct || 100),
+              agency_held: dr.agencyHeld || 0, extra_deduct: dr.extraDeduct || 0, extra_note: dr.extraNote || '',
+              amt_adjusted: !!dr.amtAdjusted,
               return_amt: 0,
               note: dr.note || refundNote,
               processed_by: 'super_admin',
@@ -43900,10 +43910,10 @@ function renderDmMgmtList(idx){
           + '</div>';
       } else {
         // 🆕 2026-11-04 조기 반환(좌석 유지) · 방문 전 반환(좌석 열기) · 금액 직접 조정
-        var _drHead = dr.early ? ('조기 예약금 반환 · 좌석 유지 · ' + (h.status === 'cancelled' ? '<span style="color:#B23A2E;">이후 예약 취소됨</span>' : '방문 예정'))
+        var _drHead = dr.early ? ('조기 예약금 반환 · 좌석 유지 · ' + (h.status === 'cancelled' ? '<span style="color:#B23A2E;">이후 예약 취소됨</span>' : (_dmIsPreVisit(h) ? '방문 예정' : '방문일 지남')))
                     : (dr.seatOpened ? '방문 전 반환 · 좌석 열기(예약 취소)' : '반환 완료');
         // 🆕 2026-11-04 리뷰 — 조기 반환한 예약은 살아 있다: 시간 변경 · 좌석 열기(예약 취소)를 여기서(종전엔 앱 어디에도 길이 없었다)
-        if(dr.early && h.status !== 'cancelled' && h.status !== 'canceled' && h._supabase){
+        if(dr.early && h.status !== 'cancelled' && h.status !== 'canceled' && h._supabase && _dmIsPreVisit(h)){   // 🔧 2차 리뷰 — 방문 뒤에는 안 보인다(다녀온 예약·초대를 취소하던 길)
           actionsHtml = '<div class="dm-actions">'
             + '<button class="dm-btn-time" onclick="dmChangeTime(' + globalIdx + ')" title="예약 시간 변경 (고객에게 알림)">⏰ 시간 변경</button>'
             + '<button class="dm-btn-penalty" onclick="dmEarlyOpenSeat(' + globalIdx + ')" title="예약을 취소하고 좌석을 다시 판매합니다 — 예치금은 이미 돌려줬으므로 돈은 움직이지 않습니다">좌석 열기 (예약 취소)</button>'
@@ -44341,7 +44351,7 @@ function _dmUpdateReturnBtn(){
   var adjNote = (adjNoteEl && adjNoteEl.value || '').trim();
   var pre = !!(h && _dmIsPreVisit(h));
   var needPick = pre && !_dmEarlyMode;
-  var noMoney = !!(c && c.ret <= 0);   // 🔧 리뷰 — 돌려줄 돈이 없는 「반환」(0원 조기 반환 → ₩0 위약 줄 · 반환예정에서 사라짐)은 막는다 · 그런 건은 「환불 처리」로
+  var noMoney = !!(c && c.ret <= 0 && pre);   // 🔧 리뷰 — 방문 전 ₩0 「반환」(0원 조기 반환 등)만 막는다 · 방문 후 ₩0(와인 정산 등)은 종전대로 반환으로 기록(2차 리뷰)
   var lock = _dmReturnDirectBad || noMoney || (!(c && c.adjusted) && _dmExtraDeduct > 0 && !note) || (c && c.adjusted && !adjNote) || needPick;
   btn.disabled = lock;
   btn.style.opacity = lock ? '.45' : '1';
@@ -44859,7 +44869,7 @@ function dmConfirmReturn(){
   var extraNote = (document.getElementById('dmExtraNote') && document.getElementById('dmExtraNote').value || '').trim();
   var adjNote = (document.getElementById('dmReturnDirectNote') && document.getElementById('dmReturnDirectNote').value || '').trim();
   if(_dmReturnDirectBad){ showToast('!','금액 확인','반환 금액은 0 이상의 숫자로 적으세요'); return; }
-  if(c.ret <= 0){ showToast('!','돌려줄 금액이 없습니다','돌려줄 돈이 없으면 「환불 처리로 변경」에서 처리하세요'); return; }
+  if(c.ret <= 0 && pre){ showToast('!','돌려줄 금액이 없습니다','방문 전에 돌려줄 돈이 없으면 「환불 처리로 변경」에서 처리하세요'); return; }
   if(c.adjusted && !adjNote){
     showToast('!','사유 필수','반환 금액을 조정한 사유를 입력해야 반환할 수 있어요');
     var _an = document.getElementById('dmReturnDirectNote'); if(_an){ _an.style.display = 'block'; _an.focus(); }
@@ -44921,10 +44931,15 @@ async function dmEarlyOpenSeat(idx){
   window._dmEarlyOpenBusy = window._dmEarlyOpenBusy || {};
   if(window._dmEarlyOpenBusy[h.purchaseId]) return;
   var dr0 = h.depositReturn || {};
+  if(!_dmIsPreVisit(h)){ showToast('⚠', '방문일이 지났습니다', '방문 뒤에는 좌석을 열 수 없습니다 — 노쇼·위약은 회원 원장·방문 기록으로'); return; }   // 🔧 2차 리뷰
+  // 🔧 2차 리뷰 — 원장에 실제로 들어간 반환과 비교한다(조기 반환 처리가 실패했는데 표시만 남았으면 「이미 돌려줬다」가 거짓이다)
+  var _retAmt0 = parseInt(dr0.returnAmt) || 0;
+  var _ledOk = (h._ledgerRefund == null) || (parseInt(h._ledgerRefund) || 0) >= _retAmt0;
   if(!confirm('「' + (h.rest || '예약') + ' · ' + (h.visitDate || '') + ' · ' + (h.pax || 1) + '인」 예약을 취소하고 좌석을 엽니다.\n\n'
-      + '· 예치금은 ' + (dr0.date || '') + ' 에 이미 ₩' + (parseInt(dr0.returnAmt) || 0).toLocaleString() + ' 돌려줬습니다 — 이번엔 돈이 움직이지 않습니다\n'
+      + (_ledOk ? '· 예치금은 ' + (dr0.date || '') + ' 에 이미 ₩' + _retAmt0.toLocaleString() + ' 돌려줬습니다 — 이번엔 돈이 움직이지 않습니다\n'
+                : '· ⚠ 원장에 이 구매의 반환 줄이 ₩' + (parseInt(h._ledgerRefund) || 0).toLocaleString() + ' 뿐입니다(기록 ₩' + _retAmt0.toLocaleString() + ') — 회원 원장에서 확인하세요 · 이번엔 돈이 움직이지 않고 회원 알림도 보내지 않습니다\n')
       + '· 초대 예약이면 초대가 「취소」가 됩니다\n· 매진이 자동으로 풀리는 회차면 회원 전원에게 취소표 알림이 갑니다\n\n진행할까요?')) return;
-  var notify = confirm('회원에게 「예약이 취소되었습니다」 알림을 보낼까요?\n(확인 = 보냄 · 취소 = 안 보냄)');
+  var notify = _ledOk ? confirm('회원에게 「예약이 취소되었습니다」 알림을 보낼까요?\n(확인 = 보냄 · 취소 = 안 보냄)') : false;
   window._dmEarlyOpenBusy[h.purchaseId] = true;
   try {
     var fr = await window.sb.from('tickets').select('status, extra_data').eq('purchase_id', h.purchaseId).limit(1);
@@ -44934,6 +44949,7 @@ async function dmEarlyOpenSeat(idx){
     var ex = Object.assign({}, cur.extra_data || {});
     var dr = Object.assign({}, (ex.deposit_return && typeof ex.deposit_return === 'object') ? ex.deposit_return : {});
     if(!dr.early){ showToast('⚠', '조기 반환 기록이 없습니다', '반환예정 탭에서 처리하세요'); return; }
+    if(!_dmIsPreVisit(h)){ showToast('⚠', '방문일이 지났습니다', '방문 뒤에는 좌석을 열 수 없습니다'); return; }
     dr.seatOpened = true;
     dr.seatOpenedAt = new Date().toISOString();
     dr.seatOpenedBy = (typeof _currentUserId === 'function' ? _currentUserId() : null);
@@ -45038,6 +45054,15 @@ function _dmPersistFailed(res, h, prevDr){
     try { renderDmMgmtList(_dmCurrentTab); } catch(_r){}
   }
   if(res.aborted) return true;                       // 사람이 멈췄다 — 창은 그대로
+  if(res.stage === 'refund' && res.early){   // 🆕 2026-11-04 조기 반환 — 좌석·예약은 그대로
+    if(res.restored && h){ if(prevDr === undefined) delete h.depositReturn; else h.depositReturn = prevDr; }
+    alert('⚠ 예치금 반환이 실패했습니다 — 예약·좌석은 그대로입니다.\n\n' + String(res.err || '').slice(0, 200)
+        + (res.restored ? '\n\n조기 반환 표시를 되돌렸습니다 — 반환예정에서 다시 처리할 수 있습니다.' : '\n\n⚠ 조기 반환 표시를 되돌리지 못했습니다 — 회원 원장에서 확인하고 「예치금 부여」로 처리해 주세요.')
+        + '\n회원에게는 알림을 보내지 않았습니다.');
+    closeDmPopup();
+    loadAllUsersPurchases().then(function(){ renderDmMgmtList(_dmCurrentTab); });
+    return true;
+  }
   if(res.stage === 'refund'){
     alert('⚠ 티켓은 취소됐지만 예치금 반환이 실패했습니다.\n\n' + String(res.err || '').slice(0, 200)
         + '\n\n회원 원장에서 확인한 뒤 「예치금 부여」로 처리해 주세요. 회원에게는 알림을 보내지 않았습니다.');
@@ -56129,6 +56154,7 @@ var TRANSLATIONS = {
       cancel_card:'카드로 (확인 후 순차 처리)',
       cancel_confirm:'패키지를 취소합니다',
       cancel_closed:'이미 일정이 시작되어 앱에서 취소할 수 없습니다 — TAAM 에 문의해 주세요',
+      cancel_processed:'TAAM 이 이미 처리한 회차가 있어 앱에서 취소할 수 없습니다 — TAAM 에 문의해 주세요',
       cancel_done:'패키지가 취소되었습니다',
       refund_changed:'환불 금액이 바뀌었습니다 — 다시 확인해 주세요',
       no_refund:'환불 없음',
@@ -57097,6 +57123,7 @@ var TRANSLATIONS = {
       cancel_card:'To card (processed after review)',
       cancel_confirm:'Cancel package',
       cancel_closed:'The package has already begun and cannot be cancelled in the app — please contact TAAM',
+      cancel_processed:'TAAM has already processed part of this package, so it cannot be cancelled in the app — please contact TAAM',
       cancel_done:'Package cancelled',
       refund_changed:'The refund amount changed — please check again',
       no_refund:'No refund',
@@ -58264,6 +58291,7 @@ TRANSLATIONS.ja = {
     cancel_card:'カードへ（確認後に順次処理）',
     cancel_confirm:'パッケージをキャンセルする',
     cancel_closed:'すでに日程が始まっているためアプリでキャンセルできません。TAAMへお問い合わせください',
+    cancel_processed:'TAAMがすでに処理した回があるため、アプリでキャンセルできません。TAAMへお問い合わせください',
     cancel_done:'パッケージをキャンセルしました',
     refund_changed:'返金額が変わりました。もう一度ご確認ください',
     no_refund:'返金なし',
@@ -64565,7 +64593,9 @@ async function pkCancelGo(){
     if(r.error || !r.data || !r.data.ok){
       var m = String((r.error && r.error.message) || '');
       if(/REFUND_CHANGED/.test(m)){ _pkCx.busy = false; await pkCancelOpen(_pkCx.gid); showToast('ℹ', _pkT('pkg.cancel_title', '패키지 취소'), _pkT('pkg.refund_changed', '환불 금액이 바뀌었습니다 — 다시 확인해 주세요')); return; }
-      showToast('⚠', _pkT('pkg.cancel_title', '패키지 취소'), /PACKAGE_CANCEL_CLOSED/.test(m) ? _pkT('pkg.cancel_closed', '이미 일정이 시작되어 앱에서 취소할 수 없습니다 — TAAM 에 문의해 주세요') : _pkT('pkg.fail_retry', '다시 시도해 주세요'));
+      showToast('⚠', _pkT('pkg.cancel_title', '패키지 취소'), /PACKAGE_CANCEL_CLOSED/.test(m) ? _pkT('pkg.cancel_closed', '이미 일정이 시작되어 앱에서 취소할 수 없습니다 — TAAM 에 문의해 주세요')
+        : /REFUND_ALREADY_PROCESSED/.test(m) ? _pkT('pkg.cancel_processed', 'TAAM 이 이미 처리한 회차가 있어 앱에서 취소할 수 없습니다 — TAAM 에 문의해 주세요')
+        : _pkT('pkg.fail_retry', '다시 시도해 주세요'));
       if(b){ b.disabled = false; b.style.opacity = '1'; }
       return;
     }
