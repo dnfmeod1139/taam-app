@@ -44208,12 +44208,22 @@ var _dmEarlyMode = null;                // 🆕 2026-11-04 방문 전 반환: 'k
 var _dmReturnDirect = null;             // 🆕 2026-11-04 반환 금액 직접 입력(null = 자동 계산)
 
 // 🆕 2026-11-04 방문 전인가 — 방문일(KST) 당일까지는 「방문 전」으로 묻는다(반환가능 표시는 다음 날부터). 날짜를 못 읽으면 묻는다.
-function _dmIsPreVisit(h){
+function _dmVisitNum(h){
   var m = String((h && h.visitDate) || '').match(/^(\d{4})[.\-\/](\d{1,2})[.\-\/](\d{1,2})/);
-  if(!m) return true;
-  var v = (+m[1]) * 10000 + (+m[2]) * 100 + (+m[3]);
-  var k = new Date(Date.now() + 9 * 3600000).toISOString().slice(0, 10).split('-');
-  return v >= (+k[0]) * 10000 + (+k[1]) * 100 + (+k[2]);
+  if(m) return (+m[1]) * 10000 + (+m[2]) * 100 + (+m[3]);
+  // 연도 없는 옛 방문일 — 연결된 회차의 날짜로(연도 규칙은 _tkYMD 한 곳 · 짐작하지 않는다)
+  try {
+    var tp = (h && typeof ticketDB !== 'undefined' && Array.isArray(ticketDB)) ? ticketDB.find(function(t){ return String(t.id) === String(h.id); }) : null;
+    var y = (tp && typeof _tkYMD === 'function') ? _tkYMD(tp) : null;
+    if(y) return y.y * 10000 + y.m * 100 + y.d;
+  } catch(_e){}
+  return null;
+}
+function _dmTodayNum(){ var k = new Date(Date.now() + 9 * 3600000).toISOString().slice(0, 10).split('-'); return (+k[0]) * 10000 + (+k[1]) * 100 + (+k[2]); }
+function _dmIsPreVisit(h){
+  var v = _dmVisitNum(h);
+  if(v == null) return true;
+  return v >= _dmTodayNum();
 }
 window._dmIsPreVisit = _dmIsPreVisit;
 // 🆕 2026-11-04 반환 금액 — 자동 계산(결제 − 대행비(체크 시) − 추가 차감) 또는 직접 입력.
@@ -44357,8 +44367,8 @@ function openDmPopup(idx, mode){
   var _ew = document.getElementById('dmEarlyWrap'); if(_ew) _ew.style.display = _pre ? 'block' : 'none';
   var _evl = document.getElementById('dmEarlyVisitLine');
   if(_evl){
-    var _vm = String(h.visitDate || '').match(/^(\d{4})[.\-\/](\d{1,2})[.\-\/](\d{1,2})/), _dd = null;
-    if(_vm){ var _kd = new Date(Date.now() + 9 * 3600000).toISOString().slice(0, 10).split('-'); _dd = Math.round((Date.UTC(+_vm[1], +_vm[2] - 1, +_vm[3]) - Date.UTC(+_kd[0], +_kd[1] - 1, +_kd[2])) / 86400000); }
+    var _vn = _dmVisitNum(h), _tn = _dmTodayNum(), _dd = null;
+    if(_vn != null) _dd = Math.round((Date.UTC(Math.floor(_vn / 10000), Math.floor(_vn / 100) % 100 - 1, _vn % 100) - Date.UTC(Math.floor(_tn / 10000), Math.floor(_tn / 100) % 100 - 1, _tn % 100)) / 86400000);
     _evl.textContent = '방문일 ' + (h.visitDate || '미확인') + (h.visitTime ? ' ' + h.visitTime : '') + (_dd == null ? ' — 방문일을 읽지 못해 묻습니다' : (_dd === 0 ? ' (오늘)' : ' (D-' + _dd + ')'));
   }
   dmPickEarly(null);
