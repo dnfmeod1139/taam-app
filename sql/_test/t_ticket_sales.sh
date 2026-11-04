@@ -162,12 +162,14 @@ insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,
 SQL
 
 R="select public.taam_ticket_sales_report(null, null, 'paid', false)"
+# 방문 2026.11.03 회차 — 그날이 지나면(KST) 대행비는 「확정」(4차 규칙)
+AG1103=$( [ "$(TZ=Asia/Seoul date +%Y%m%d)" -le 20261103 ] && echo planned || echo kept )
 ok(){ if [ "$2" = "$3" ]; then echo "✅ $1"; else echo "❌ $1  (기대 $3, 실제 $2)"; FAIL=1; fi; }
 ok "마이그레이션: 오류 없음 · 확인 표 ❌ 0 · ①~④ ✅" "$(echo "$out" | grep -E "^ERROR|^psql:.*ERROR" | head -1)|$(echo "$out" | grep -c '❌')|$(echo "$out" | grep -cE '^ *(①|②|③|④).*✅')" "|0|4"
 q(){ $P -c "with j as ($R as j) $1" 2>&1; }
 row(){ q "select $2 from j, jsonb_array_elements(j->'rows') r where r->>'k' = '$1'"; }
 
-ok "1 예치금 판매 gross·dep·net·대행비 예정" "$(row PAYH-tp1_1 "concat_ws('/', r->>'gross', r->>'dep', r->>'pm', r->>'net', r->>'agency', r->>'ag_state', r->>'bd')")" "1700000/1700000/deposit/1700000/300000/planned/product"
+ok "1 예치금 판매 gross·dep·net·대행비 예정" "$(row PAYH-tp1_1 "concat_ws('/', r->>'gross', r->>'dep', r->>'pm', r->>'net', r->>'agency', r->>'ag_state', r->>'bd')")" "1700000/1700000/deposit/1700000/300000/$AG1103/product"
 ok "1 정정(fix) 줄은 환불이 아니다 — 이중 차감 결제를 되돌린다(판매 1.7M · 환불 0)" "$(row PAYH-tp1_1 "concat_ws('/', r->>'gross', r->>'rf_cancel')")" "1700000/0"
 ok "1 결제일 = 원장 첫 차감 (KST)" "$(row PAYH-tp1_1 "r->>'paid_ymd'")" "2026-09-15"
 ok "2 카드+예치금 = mixed · card 는 주문 기준 · 대행비는 회차 요금" "$(row PAYH-tp2_2 "concat_ws('/', r->>'pm', r->>'card', r->>'dep', r->>'bd')")" "mixed/300000/500000/product"
@@ -270,8 +272,8 @@ insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_d
 -- R4 초대: 결제 뒤 자동 되돌림(capacity_auto_refund) · 여전히 paid · INV 행 없음
 insert into public.reservation_invites values ('$I4','$SU','$M3','$R1','메이노','2026.11.20','19:00',1,700000,150000,0,850000,'paid','2026-10-01','2026-10-01T01:00:00Z',null,null);
 insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata,created_at) values
- ('$M3','general','ticket_purchase',-850000,'{"purchase_id":"INV-e4000000-1","invite_id":"$I4"}','2026-10-01T01:00:00Z'),
- ('$M3','general','ticket_refund',850000,'{"purchase_id":"INV-e4000000-1","refund_type":"returned","reason":"capacity_auto_refund"}','2026-10-01T01:00:05Z');
+ ('$M3','general','ticket_purchase',-850000,'{"purchase_id":"INV-e9000000-1","invite_id":"$I4"}','2026-10-01T01:00:00Z'),
+ ('$M3','general','ticket_refund',850000,'{"purchase_id":"INV-e9000000-1","refund_type":"returned","reason":"capacity_auto_refund"}','2026-10-01T01:00:05Z');
 -- R5 초대: paid 인데 원장 결제 줄 없음 (회원이 자기 초대 행을 paid 로 바꿀 수 있다)
 insert into public.reservation_invites values ('$I5','$SU','$M3','$R1','메이노','2026.11.21','19:00',1,700000,150000,0,850000,'paid','2026-10-01','2026-10-02T00:00:00Z',null,null);
 -- R13 초대: 회원이 대행비를 부풀림(회차 대행비 150k 보다 큰 900k) → 회차 대행비로 깎는다
@@ -286,7 +288,7 @@ SQL
 ok "보고서가 깨지지 않는다(거대한 숫자 · 깨진 uuid · infinity)" "$($P -c "select (public.taam_ticket_sales_report(null,null,'paid',false)->>'ok')" 2>&1)" "true"
 ok "R1 위조 홀드(5천만 · 취소 · 결제 줄 없음)는 행도 예외도 아니다" "$(q "select (select count(*) from jsonb_array_elements(j->'rows') r where r->>'k'='PAYH-fake_1') || '/' || (select count(*) from jsonb_array_elements(j->'exceptions') e where e->>'ref'='PAYH-fake_1') from j")" "0/0"
 ok "R1b 살아 있는데 돈 기록 없는 행 → 합계 밖 「확인 필요」" "$(q "select (select count(*) from jsonb_array_elements(j->'rows') r where r->>'k'='PAYH-nomoney') || '/' || (select e->>'kind' from jsonb_array_elements(j->'exceptions') e where e->>'ref'='PAYH-nomoney') from j")" "0/app_no_money_record"
-ok "R2 ₩0 환불 줄의 agency_held·returned 는 무시 — PAYH-tp1_1 은 그대로 판매 · 대행비 300k 예정" "$(row PAYH-tp1_1 "concat_ws('/', r->>'st', r->>'net', r->>'agency', r->>'ag_state')")" "active/1700000/300000/planned"
+ok "R2 ₩0 환불 줄의 agency_held·returned 는 무시 — PAYH-tp1_1 은 그대로 판매 · 대행비 300k 예정" "$(row PAYH-tp1_1 "concat_ws('/', r->>'st', r->>'net', r->>'agency', r->>'ag_state')")" "active/1700000/300000/$AG1103"
 ok "R3 위조 pax_changes — 판매액은 원장(400k) · 거대한 from 은 무시" "$(row PAYH-forge_3 "concat_ws('/', r->>'gross', r->>'net', coalesce(r->>'pax0','-'), r->>'pax')")" "400000/400000/-/1"
 ok "R6 위약(agency_held 0) — 대행비는 0 이 아니라 1인 대행비 × 인원(보유 몫 안)" "$(row PAYH-pen_6 "concat_ws('/', r->>'st', r->>'rf_penalty', r->>'net', r->>'agency', r->>'ag_state')")" "penalty/1190000/510000/300000/kept"
 ok "R7 방문 전 'returned' 환불은 취소로 — 순판매에서 빠진다" "$(row PAYH-ret_7 "concat_ws('/', r->>'st', r->>'rf_cancel', r->>'rf_return', r->>'net', (r->'flags')::text)")" "cancelled/1400000/0/300000/[\"return_before_visit\"]"
@@ -398,6 +400,46 @@ $P -c "update public.tickets set extra_data = extra_data || '{\"card_refund_pend
 ok "P7 줄이 따로(운영 한 줄 취소) 자기 카드 환불 대기를 가졌으면 그것 — 패키지 몫(0)으로 덮지 않는다" "$(row PAYH-pkC_1 "r->>'rf_card_pending'")" "300000"
 outp2=$($P -f "$MIGP" 2>&1)
 ok "P6 재실행 — 이미 새 판" "$(echo "$outp2" | grep -c '이미 새 판')" "1"
+
+# ── E. 2026-11-04 조기 예약금 반환(좌석 유지) — 방문 전 'returned' 이지만 취소가 아니다 (20261104_early_return.sql B) ──
+MIGE=supabase/migrations/20261104_early_return.sql
+IE=e9000000-0000-4000-8000-000000000009
+$P <<SQL >/dev/null
+create or replace function public.is_super_admin(p uuid) returns boolean language sql stable as \$\$ select coalesce(current_setting('taam.super', true),'') = '1' \$\$;
+insert into public.ticket_products values ('tpE','$R1','메이노','2026.12.15','19:00',400000,100000,0);
+-- E1 앱 구매 2인 1,000,000 · 방문 12/15 · 10/20 조기 반환 800,000(대행비 200,000 보유) · 티켓 active · early
+insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_date,party_size,price,status,purchase_id,extra_data,created_at) values
+ ('$M2','$R1','tpE','2026.12.15',2,1000000,'active','PAYH-tpE_1','{"paidBy":"deposit","super_admin_processed_at":"2026-10-20T01:00:00Z","deposit_return":{"type":"returned","early":true,"returnAmt":800000,"agencyHeld":200000}}','2026-10-01T00:00:00Z'),
+ ('$M2','$R1','tpE','2026.12.15',2,1000000,'active','PAYH-tpE_2','{"paidBy":"deposit","super_admin_processed_at":"2026-10-20T01:00:00Z","deposit_return":{"type":"returned","returnAmt":800000,"agencyHeld":200000}}','2026-10-01T00:00:01Z'),
+ ('$M2','$R1','tpE','2026.12.15',2,1000000,'cancelled','PAYH-tpE_3','{"paidBy":"deposit","super_admin_processed_at":"2026-10-20T01:00:00Z","deposit_return":{"type":"returned","early":true,"returnAmt":800000,"agencyHeld":200000}}','2026-10-01T00:00:02Z');
+insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata,created_at) values
+ ('$M2','general','ticket_purchase',-1000000,'{"purchase_id":"PAYH-tpE_1"}','2026-10-01T00:00:00Z'),
+ ('$M2','general','ticket_refund',800000,'{"purchase_id":"PAYH-tpE_1","refund_type":"returned","agency_held":200000,"early_return":true}','2026-10-20T01:00:00Z'),
+ ('$M2','general','ticket_purchase',-1000000,'{"purchase_id":"PAYH-tpE_2"}','2026-10-01T00:00:01Z'),
+ ('$M2','general','ticket_refund',800000,'{"purchase_id":"PAYH-tpE_2","refund_type":"returned","agency_held":200000}','2026-10-20T01:00:00Z'),
+ ('$M2','general','ticket_purchase',-1000000,'{"purchase_id":"PAYH-tpE_3"}','2026-10-01T00:00:02Z'),
+ ('$M2','general','ticket_refund',800000,'{"purchase_id":"PAYH-tpE_3","refund_type":"returned","agency_held":200000,"early_return":true}','2026-10-20T01:00:00Z');
+-- E4 초대 2인 · 방문 12/15 · 조기 반환 · 좌석 active · early
+insert into public.reservation_invites values ('$IE','$SU','$M1','$R1','메이노','2026.12.15','19:00',2,400000,150000,0,1100000,'paid','2026-10-01','2026-10-02T00:00:00Z',null,'tpE');
+insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata,created_at) values
+ ('$M1','membership','ticket_purchase',-1100000,'{"purchase_id":"INV-e9000000-1","invite_id":"$IE","source":"reservation_invite"}','2026-10-02T00:00:01Z'),
+ ('$M1','membership','ticket_refund',800000,'{"purchase_id":"INV-e9000000-1","refund_type":"returned","agency_held":300000,"early_return":true}','2026-11-03T13:30:00Z');
+insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_date,party_size,price,status,purchase_id,extra_data,created_at)
+ values ('$M1','$R1','tpE','2026.12.15',2,1100000,'active','INV-e9000000-1','{"inviteId":"$IE","invitePaid":true,"super_admin_processed_at":"2026-11-03T13:30:00Z","deposit_return":{"type":"returned","early":true,"returnAmt":800000,"agencyHeld":300000}}','2026-10-01T00:00:00Z');
+SQL
+ok "E0 고치기 전 — 조기 반환도 방문 전 반환 = 취소로 셌다" "$(row PAYH-tpE_1 "concat_ws('/', r->>'rf_cancel', r->>'rf_return', ((r->'flags') ? 'return_before_visit')::text)")|$(row "inv:$IE" "concat_ws('/', r->>'st', r->>'rf_return')")" "800000/0/true|cancelled/0"
+oute=$($P -f "$MIGE" 2>&1)
+ok "E1 마이그레이션 — 오류 없음 · ❌ 0 · ①② ✅" "$(echo "$oute" | grep -cE "^ERROR|^psql:.*ERROR")/$(echo "$oute" | grep -c '❌')/$(echo "$oute" | grep -cE '(①|②).*✅')" "0/0/2"
+ok "E2 조기 반환(티켓 active · early) = 방문 후 반환과 같게 — 반환 800,000 · 취소 0 · 대행비 보유 200,000 · 플래그 없음" "$(row PAYH-tpE_1 "concat_ws('/', r->>'st', r->>'rf_return', r->>'rf_cancel', r->>'net', r->>'agency', r->>'ag_state', ((r->'flags') ? 'return_before_visit')::text)")" "returned/800000/0/1000000/200000/kept/false"
+ok "E3 early 표시 없는 방문 전 반환은 그대로 취소(return_before_visit)" "$(row PAYH-tpE_2 "concat_ws('/', r->>'rf_return', r->>'rf_cancel', ((r->'flags') ? 'return_before_visit')::text)")" "0/800000/true"
+ok "E4 취소된 티켓은 early 가 있어도 취소" "$(row PAYH-tpE_3 "concat_ws('/', r->>'st', r->>'rf_return', r->>'rf_cancel')")" "cancelled/0/800000"
+ok "E5 초대 조기 반환 — 좌석이 살아 있으면 반환으로(취소 아님)" "$(row "inv:$IE" "concat_ws('/', r->>'st', r->>'rf_return', r->>'rf_cancel', r->>'agency')")" "returned/800000/0/300000"
+$P -c "update public.tickets set status = 'cancelled' where purchase_id = 'INV-e9000000-1'" >/dev/null
+ok "E6 초대 좌석이 취소되면 early 라도 취소" "$(row "inv:$IE" "concat_ws('/', r->>'st', r->>'rf_return', r->>'rf_cancel')")" "cancelled/0/800000"
+$P -c "update public.tickets set status = 'active' where purchase_id = 'INV-e9000000-1'" >/dev/null
+ok "E7 다른 판매는 그대로 — 1 · 3 · 초대 I1" "$(row PAYH-tp1_1 "concat_ws('/', r->>'gross', r->>'net')")|$(row PAYH-tp1_3 "concat_ws('/', r->>'st', r->>'rf_cancel')")|$(row "inv:$I1" "r->>'gross'")" "1700000/1700000|cancelled/1400000|1200000"
+oute2=$($P -f "$MIGE" 2>&1)
+ok "E8 재실행 — 이미 새 판 · 오류 없음" "$(echo "$oute2" | grep -c '이미 새 판')/$(echo "$oute2" | grep -cE "^ERROR|^psql:.*ERROR")" "1/0"
 # 화면 시험용 — TSR_DUMP=파일 이면 보고서 JSON 을 남긴다(결제일·전체 · 기본)
 [ -n "$TSR_DUMP" ] && $P -c "select public.taam_ticket_sales_report(null, null, 'paid', false)" > "$TSR_DUMP"
 psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1
