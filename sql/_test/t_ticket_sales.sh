@@ -438,6 +438,27 @@ $P -c "update public.tickets set status = 'cancelled' where purchase_id = 'INV-e
 ok "E6 초대 좌석이 취소되면 early 라도 취소" "$(row "inv:$IE" "concat_ws('/', r->>'st', r->>'rf_return', r->>'rf_cancel')")" "cancelled/0/800000"
 $P -c "update public.tickets set status = 'active' where purchase_id = 'INV-e9000000-1'" >/dev/null
 ok "E7 다른 판매는 그대로 — 1 · 3 · 초대 I1" "$(row PAYH-tp1_1 "concat_ws('/', r->>'gross', r->>'net')")|$(row PAYH-tp1_3 "concat_ws('/', r->>'st', r->>'rf_cancel')")|$(row "inv:$I1" "r->>'gross'")" "1700000/1700000|cancelled/1400000|1200000"
+IE2=ea000000-0000-4000-8000-00000000000a
+$P <<SQL >/dev/null
+-- E9 방문 전날(12/14) 처리 — 좌석 열기 표시가 있으면 취소 · 없으면 종전대로 하루 여유(방문 후 반환)
+insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_date,party_size,price,status,purchase_id,extra_data,created_at) values
+ ('$M2','$R1','tpE','2026.12.15',2,1000000,'cancelled','PAYH-tpE_4','{"paidBy":"deposit","super_admin_processed_at":"2026-12-14T01:00:00Z","deposit_return":{"type":"returned","seatOpened":true,"returnAmt":800000,"agencyHeld":200000}}','2026-10-01T00:00:03Z'),
+ ('$M2','$R1','tpE','2026.12.15',2,1000000,'cancelled','PAYH-tpE_5','{"paidBy":"deposit","super_admin_processed_at":"2026-12-14T01:00:00Z","deposit_return":{"type":"returned","returnAmt":800000,"agencyHeld":200000}}','2026-10-01T00:00:04Z');
+insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata,created_at) values
+ ('$M2','general','ticket_purchase',-1000000,'{"purchase_id":"PAYH-tpE_4"}','2026-10-01T00:00:03Z'),
+ ('$M2','general','ticket_refund',800000,'{"purchase_id":"PAYH-tpE_4","refund_type":"returned","agency_held":200000,"seat_opened":true}','2026-12-14T01:00:00Z'),
+ ('$M2','general','ticket_purchase',-1000000,'{"purchase_id":"PAYH-tpE_5"}','2026-10-01T00:00:04Z'),
+ ('$M2','general','ticket_refund',800000,'{"purchase_id":"PAYH-tpE_5","refund_type":"returned","agency_held":200000}','2026-12-14T01:00:00Z');
+-- E10 초대 · 방문 당일 처리 · 좌석 열기 → 취소
+insert into public.reservation_invites values ('$IE2','$SU','$M2','$R1','메이노','2026.12.15','19:00',2,400000,150000,0,1100000,'paid','2026-10-01','2026-10-02T00:00:00Z',null,'tpE');
+insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata,created_at) values
+ ('$M2','membership','ticket_purchase',-1100000,'{"purchase_id":"INV-ea000000-1","invite_id":"$IE2","source":"reservation_invite"}','2026-10-02T00:00:01Z'),
+ ('$M2','membership','ticket_refund',800000,'{"purchase_id":"INV-ea000000-1","refund_type":"returned","agency_held":300000,"seat_opened":true}','2026-12-15T03:00:00Z');
+insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_date,party_size,price,status,purchase_id,extra_data,created_at)
+ values ('$M2','$R1','tpE','2026.12.15',2,1100000,'cancelled','INV-ea000000-1','{"inviteId":"$IE2","invitePaid":true,"super_admin_processed_at":"2026-12-15T03:00:00Z","deposit_return":{"type":"returned","seatOpened":true,"returnAmt":800000,"agencyHeld":300000}}','2026-10-01T00:00:00Z');
+SQL
+ok "E9 방문 전날 「좌석 열기」 = 취소(return_before_visit) · 표시 없으면 종전대로 반환" "$(row PAYH-tpE_4 "concat_ws('/', r->>'rf_return', r->>'rf_cancel', ((r->'flags') ? 'return_before_visit')::text)")|$(row PAYH-tpE_5 "concat_ws('/', r->>'rf_return', r->>'rf_cancel')")" "0/800000/true|800000/0"
+ok "E10 초대 · 방문 당일 「좌석 열기」 = 취소" "$(row "inv:$IE2" "concat_ws('/', r->>'st', r->>'rf_return', r->>'rf_cancel')")" "cancelled/0/800000"
 oute2=$($P -f "$MIGE" 2>&1)
 ok "E8 재실행 — 이미 새 판 · 오류 없음" "$(echo "$oute2" | grep -c '이미 새 판')/$(echo "$oute2" | grep -cE "^ERROR|^psql:.*ERROR")" "1/0"
 # 화면 시험용 — TSR_DUMP=파일 이면 보고서 JSON 을 남긴다(결제일·전체 · 기본)

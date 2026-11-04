@@ -33250,6 +33250,7 @@ function _dmPersistBuyerChanges(h, refundToAdd, refundNote){
         var _depCredit = _saSp.dep;
         var _saCardRefund = _saSp.card;
         // 🆕 2026-11-04 조기 반환(좌석 유지)은 예치금으로 낸 몫만 — 카드 몫 환불(토스 승인취소)은 좌석이 살아 있으면 서버 견적이 거절한다(ticket_active)
+        if(dr.early && !(refundToAdd > 0)) return { ok:false, stage:'precheck', err:'돌려줄 금액이 없으면 조기 반환할 것이 없습니다' };   // 🔧 리뷰
         if(dr.early && (_saCardRefund > 0 || _saSp.short > 0)){
           return { ok:false, stage:'precheck', err: _saCardRefund > 0
             ? ('카드로 낸 몫(₩' + _saCardRefund.toLocaleString() + ')이 있어 조기 반환을 할 수 없습니다 — 방문 후 반환하거나 「좌석 열기」로 처리하세요')
@@ -33746,9 +33747,28 @@ async function _dmLoadSupabasePurchases(){
         if(!cq.error) (cq.data || []).forEach(function(c){ kskPayMap[String(c.id)] = c; });
       }
     } catch(_kp){}
+    // 🆕 2026-11-04 초대 좌석(INV-)의 초대장 대행비 — 반환 화면이 회차 대행비 대신 이 값을 뗀다(보낼 때 바꾼 값 · 2026-10-22 결정 · 판매 현황 4차와 같다).
+    //   확정 함수(taam_invite_confirm_hold)는 좌석에 agencyFee 를 안 적는다 — 그래서 초대장을 읽는다(슈퍼어드민만 남의 초대를 읽는다 · 못 읽으면 종전대로)
+    var invAgMap = {};
+    try {
+      var _invRows = tickets.filter(function(t){ return String(t.purchase_id || '').indexOf('INV-') === 0; });
+      var _invIds = Array.from(new Set(_invRows.map(function(t){ return t.extra_data && t.extra_data.inviteId; }).filter(function(x){ return /^[0-9a-fA-F-]{36}$/.test(String(x || '')); })));
+      var _invUids = Array.from(new Set(_invRows.filter(function(t){ return !(t.extra_data && t.extra_data.inviteId); }).map(function(t){ return t.user_id; }).filter(Boolean)));
+      var _iq = [];
+      if(_invIds.length) _iq.push(window.sb.from('reservation_invites').select('id, agency_fee, invitee_user_id').in('id', _invIds));
+      if(_invUids.length) _iq.push(window.sb.from('reservation_invites').select('id, agency_fee, invitee_user_id').in('invitee_user_id', _invUids));
+      (await Promise.all(_iq)).forEach(function(r){
+        if(r && !r.error) (r.data || []).forEach(function(v){ invAgMap[String(v.id)] = v; invAgMap[String(v.id).slice(0, 8) + '|' + String(v.invitee_user_id || '')] = v; });
+      });
+    } catch(_ia){}
     return tickets.map(function(t){
       var p = profMap[t.user_id] || {};
       var _isKskRow = String(t.purchase_id||'').indexOf('KSK-') === 0;
+      var _invAg = null;
+      if(String(t.purchase_id||'').indexOf('INV-') === 0){
+        var _iv = (t.extra_data && t.extra_data.inviteId && invAgMap[String(t.extra_data.inviteId)]) || invAgMap[String(t.purchase_id).slice(4, 12) + '|' + String(t.user_id || '')];
+        if(_iv && String(_iv.invitee_user_id || '') === String(t.user_id || '')) _invAg = parseInt(_iv.agency_fee, 10) || 0;
+      }
       var h = {
         id: t.ticket_product_id || t.id,
         kskPay: (_isKskRow && t.extra_data && kskPayMap[String(t.extra_data.chargeId)]) || null,
@@ -33769,6 +33789,7 @@ async function _dmLoadSupabasePurchases(){
         purchaseId: t.purchase_id,
         ticket_type: t.ticket_type,
         agencyFee: (t.extra_data && t.extra_data.agencyFee) || 0,   // 🆕 대행비 스냅샷 폴백(슈퍼어드민)
+        inviteAgencyFee: _invAg,                                    // 🆕 2026-11-04 초대 좌석 — 초대장에 적힌 1인 대행비(못 읽으면 null)
         extra_data: t.extra_data || {},
         _ledgerRefund: _rsOk ? (refundSum[String(t.purchase_id || '')] || 0) : null,   // 🆕 2026-11-03 원장에 실제로 남은 예치금 환불 합(못 읽으면 null)
         guestPhone: t.buyer_phone || '',   // 🆕 2026-09-28 수동 예약 손님 번호 (프로필 phone 과 다르다)
@@ -34760,10 +34781,14 @@ async function mlOpen(uid){
     var prodPer = pd ? (parseInt(pd.agency_fee) || 0) : 0;
     var snapPer = parseInt(t.extra_data && t.extra_data.agencyFee) || 0, invPer = 0;
     if(String(t.purchase_id || '').indexOf('INV-') === 0){ var iv = invMap[String(t.purchase_id).slice(4, 12)]; invPer = iv ? (parseInt(iv.agency_fee) || 0) : 0; }
-    // 🔧 2026-11-01 반환 화면(openDmPopup)은 회차 현재값 → 구매 때 기록(extra_data.agencyFee)만 본다 — 초대장 값은 보지 않는다(적대 리뷰). 그래서 어림도 그 둘만 쓰고 초대장 값은 「다르다」 표시에만
+    // 🔧 2026-11-01 반환 화면(openDmPopup)은 회차 현재값 → 구매 때 기록(extra_data.agencyFee) 순으로 뗀다 — 어림도 같은 순서(2026-11-04 부터 초대 좌석만 예외 — 아래)
     var per = prodPer > 0 ? prodPer : snapPer, src = prodPer > 0 ? 'product' : (snapPer > 0 ? 'snap' : null);
-    // 🔧 2026-11-04 반환 화면(openDmPopup)이 초대 좌석(INV-)은 초대에 적힌 대행비(좌석 스냅샷 = 보낼 때 바꾼 값)를 먼저 쓴다 — 어림도 같게
-    if(String(t.purchase_id || '').indexOf('INV-') === 0 && snapPer > 0){ per = snapPer; src = 'snap'; }
+    // 🔧 2026-11-04 반환 화면(openDmPopup)이 초대 좌석(INV-)은 초대장에 적힌 대행비(보낼 때 바꾼 값) → 좌석 스냅샷 → 회차 순으로 뗀다 — 어림도 같게
+    if(String(t.purchase_id || '').indexOf('INV-') === 0){
+      var _ivR = invMap[String(t.purchase_id).slice(4, 12)];
+      if(_ivR && _ivR.agency_fee != null){ per = parseInt(_ivR.agency_fee) || 0; src = 'invite'; }
+      else if(snapPer > 0){ per = snapPer; src = 'snap'; }
+    }
     //   결제 링크(카드) 좌석은 반환 화면이 아니라 링크 환불 견적(taam_link_invite_refund_quote)이 뗀다 — 그 견적은 좌석의 스냅샷(extra_data.agencyFee)을 쓴다(3차 리뷰)
     var ov = '';
     if(_mlIsCardLink(t)){
@@ -34788,7 +34813,7 @@ async function mlOpen(uid){
       }
     }
     return { per: per, ov: ov, pax: pax, total: per * pax, src: src, prodPer: prodPer, snapPer: snapPer, invPer: invPer, prodKnown: !!pd,
-             diffSnap: (prodPer > 0 && snapPer > 0 && snapPer !== prodPer), diffInv: (invPer > 0 && invPer !== per) };
+             diffSnap: (prodPer > 0 && snapPer > 0 && snapPer !== prodPer && src !== 'invite'), diffInv: (invPer > 0 && invPer !== per) };
   }
   function _planOf(it){
     var t = it.t, e = t.extra_data || {};
@@ -35523,7 +35548,7 @@ async function mlOpen(uid){
     if(p.earlyMark) notes.push('⚠ 방문일 전에 ' + (p.vs === 'attended' ? '방문' : p.vs === 'no_show' ? '노쇼' : '취소') + ' 기록이 찍혀 있습니다 — 기록 화면은 당일부터만 찍을 수 있어 정상 경로가 아닙니다 · 확인');
     else if(p.vs && p.days == null) notes.push('방문일을 몰라 ' + (p.vs === 'attended' ? '방문' : p.vs === 'no_show' ? '노쇼' : '취소') + ' 기록을 판정에 쓰지 않았습니다');
     if(ag.diffSnap) notes.push('구매 때 기록 ' + W + n(ag.snapPer) + '/인과 다름 — 반환 화면은 회차 현재값으로 뗀다');
-    if(ag.diffInv) notes.push('초대장 ' + W + n(ag.invPer) + '/인과 다름 — 반환 화면은 초대장 값을 보지 않는다');
+    if(ag.diffInv) notes.push('초대장 ' + W + n(ag.invPer) + '/인과 다름');
     if(!ag.prodKnown && it.t.ticket_product_id) notes.push('회차를 못 읽어 ' + srcLab + '으로');
     if(p.gap > 0) notes.push('⚠ 예치금도 카드도 아닌 몫 ' + W + n(p.gap) + ' — 결제 기록 확인');
     if(p.keptAg > 0) notes.push('⚠ 인원을 줄일 때 줄인 사람 몫의 대행비 ' + W + n(p.keptAg) + '가 결제액에 남았습니다 — 반환 화면은 지금 인원 대행비만 떼어 이 몫까지 돌려줍니다. 규정대로면 반환 처리 때 「추가 차감」 ' + W + n(p.keptAg) + '(사유: 인원 줄임 대행비)');
@@ -36428,7 +36453,11 @@ async function paxChangeOpen(purchaseId){
   var oldPax = parseInt(row.party_size) || 1;
   if(oldPax <= 1){ showToast('⚠','1인 예약입니다','줄일 인원이 없습니다 — 취소를 쓰세요'); return; }
 
-  _paxW = { row: row, oldPax: oldPax, newPax: oldPax - 1 };
+  // 🆕 2026-11-04 TAAM 이 이미 예치금을 돌려준 예약(조기 반환 등 — super_admin_processed_at · deposit_return 보호 칸)은 인원만 줄인다.
+  //   그 위에 인원 몫을 또 돌려주면 이중 환불이다(리뷰: 슈퍼어드민 기본 제안이 낸 돈보다 더 · 파트너는 남긴 대행비까지) — 서버도 막는다(20261104 A)
+  var _pxEx = row.extra_data || {};
+  var _pxDone = !!(_pxEx.super_admin_processed_at || (_pxEx.deposit_return && typeof _pxEx.deposit_return === 'object'));
+  _paxW = { row: row, oldPax: oldPax, newPax: oldPax - 1, processed: _pxDone };
   var old = document.getElementById('paxChangeModal'); if(old) old.remove();
 
   var opts = '';
@@ -36461,6 +36490,10 @@ async function paxChangeOpen(purchaseId){
     + '<div style="font-size:10.5px;color:#a8a29a;margin-top:10px;line-height:1.6;">좌석은 줄어든 만큼 즉시 열립니다. 실행자·사유·금액이 원장과 구매 기록에 함께 남습니다.</div>'
     + '</div>';
   document.body.appendChild(el);
+  if(_pxDone){
+    var _pri = document.getElementById('paxRefund'); if(_pri){ _pri.value = '0'; _pri.disabled = true; _pri.style.background = '#F3F1EC'; }
+    var _prb = el.querySelector('button[onclick="paxChangeUseDefault()"]'); if(_prb) _prb.style.display = 'none';
+  }
   paxChangeUseDefault();
 }
 window.paxChangeOpen = paxChangeOpen;
@@ -36474,7 +36507,7 @@ function paxChangeUseDefault(){
   if(!_paxW) return;
   var d = _paxPolicyDefault(_paxW.row, _paxCurrent());
   var inp = document.getElementById('paxRefund');
-  if(inp) inp.value = d.amount;
+  if(inp) inp.value = _paxW.processed ? 0 : d.amount;   // 🆕 2026-11-04 이미 돌려준 예약은 0
   paxChangeRecalc();
 }
 window.paxChangeUseDefault = paxChangeUseDefault;
@@ -36485,7 +36518,10 @@ function paxChangeRecalc(){
   var d = _paxPolicyDefault(_paxW.row, newPax);
   var note = document.getElementById('paxPolicyNote');
   if(note){
-    note.innerHTML = '정책 기준: <b>₩' + d.amount.toLocaleString() + '</b> — ' + _pcalEsc(d.reason);
+    var _drx = (_paxW.row.extra_data || {}).deposit_return || {};
+    note.innerHTML = _paxW.processed
+      ? '<b style="color:#1F4E8C;">TAAM 이 이미 예치금을 돌려준 예약입니다' + (parseInt(_drx.returnAmt) > 0 ? ' (₩' + (parseInt(_drx.returnAmt) || 0).toLocaleString() + (_drx.early ? ' · 조기 반환' : '') + ')' : '') + '</b> — 인원만 줄이고 돈은 돌려주지 않습니다. 더 돌려줄 몫이 있으면 「예치금 부여」로 따로.'
+      : '정책 기준: <b>₩' + d.amount.toLocaleString() + '</b> — ' + _pcalEsc(d.reason);
   }
   // 예치금/카드가 어떻게 나뉘는지 미리 보여준다. RPC 와 같은 규칙으로 계산한다.
   var refund = Math.max(0, parseInt((document.getElementById('paxRefund') || {}).value) || 0);
@@ -36514,6 +36550,7 @@ async function paxChangeApply(){
   if(!_paxW || !window.sb) return;
   var newPax = _paxCurrent();
   var refund = Math.max(0, parseInt((document.getElementById('paxRefund') || {}).value) || 0);
+  if(_paxW.processed) refund = 0;   // 🆕 2026-11-04 이미 돌려준 예약 — 인원만
   var reason = ((document.getElementById('paxReason') || {}).value || '').trim();
   if(!reason){ showToast('⚠','사유가 필요합니다','왜 바꾸는지 남겨야 합니다'); return; }
   if(newPax >= _paxW.oldPax){ showToast('⚠','인원을 줄여야 합니다','증가는 아직 지원하지 않습니다'); return; }
@@ -36543,6 +36580,7 @@ async function paxChangeApply(){
       : /REFUND_TOO_LARGE: 매장 어드민/.test(m) ? m.replace(/^.*REFUND_TOO_LARGE:\s*/, '').slice(0, 80)
       : /REFUND_TOO_LARGE/.test(m) ? '돌려줄 금액이 결제액보다 큽니다'
       : /REASON_REQUIRED/.test(m) ? '사유를 입력하세요'
+      : /REFUND_ALREADY_PROCESSED/.test(m) ? 'TAAM 이 이미 예치금을 돌려준 예약입니다 — 인원만 바꾸고(돌려줄 금액 0) 더 줄 몫은 「예치금 부여」로'
       : /does not exist|schema cache/i.test(m) ? 'sql/ticket_pax_change.sql 을 먼저 실행해야 합니다'
       : m.slice(0, 80);
     showToast('⚠','인원 변경 실패', friendly);
@@ -43864,6 +43902,13 @@ function renderDmMgmtList(idx){
         // 🆕 2026-11-04 조기 반환(좌석 유지) · 방문 전 반환(좌석 열기) · 금액 직접 조정
         var _drHead = dr.early ? ('조기 예약금 반환 · 좌석 유지 · ' + (h.status === 'cancelled' ? '<span style="color:#B23A2E;">이후 예약 취소됨</span>' : '방문 예정'))
                     : (dr.seatOpened ? '방문 전 반환 · 좌석 열기(예약 취소)' : '반환 완료');
+        // 🆕 2026-11-04 리뷰 — 조기 반환한 예약은 살아 있다: 시간 변경 · 좌석 열기(예약 취소)를 여기서(종전엔 앱 어디에도 길이 없었다)
+        if(dr.early && h.status !== 'cancelled' && h.status !== 'canceled' && h._supabase){
+          actionsHtml = '<div class="dm-actions">'
+            + '<button class="dm-btn-time" onclick="dmChangeTime(' + globalIdx + ')" title="예약 시간 변경 (고객에게 알림)">⏰ 시간 변경</button>'
+            + '<button class="dm-btn-penalty" onclick="dmEarlyOpenSeat(' + globalIdx + ')" title="예약을 취소하고 좌석을 다시 판매합니다 — 예치금은 이미 돌려줬으므로 돈은 움직이지 않습니다">좌석 열기 (예약 취소)</button>'
+            + '</div>';
+        }
         resultHtml = '<div class="dm-result-box dm-result-returned"' + (dr.early ? ' style="background:#EAF1FF;color:#1F4E8C;"' : '') + '>'
           +'✓ '+escapeHtml(String(dr.date||''))+' '+_drHead
           + (dr.amtAdjusted ? '<br><span style="color:#8A5A1E;font-weight:700;">금액 조정 ₩'+(parseInt(dr.autoAmt)||0).toLocaleString()+' → ₩'+(parseInt(dr.returnAmt)||0).toLocaleString()+(dr.adjustNote?' · 사유: '+escapeHtml(String(dr.adjustNote)):'')+'</span>'
@@ -44206,6 +44251,7 @@ var _dmAgencyExclude = true;
 var _dmExtraDeduct = 0;                 // 🆕 추가 차감 금액
 var _dmEarlyMode = null;                // 🆕 2026-11-04 방문 전 반환: 'keep'(조기 반환 · 좌석 유지) | 'open'(좌석 열기 · 예약 취소) | null(아직 안 고름)
 var _dmReturnDirect = null;             // 🆕 2026-11-04 반환 금액 직접 입력(null = 자동 계산)
+var _dmReturnDirectBad = false;         // 🆕 2026-11-04 직접 입력 칸에 숫자가 아닌 값·음수 — 잠근다(0 으로 바꿔 넘기지 않는다)
 
 // 🆕 2026-11-04 방문 전인가 — 방문일(KST) 당일까지는 「방문 전」으로 묻는다(반환가능 표시는 다음 날부터). 날짜를 못 읽으면 묻는다.
 function _dmVisitNum(h){
@@ -44237,7 +44283,7 @@ function _dmReturnCalc(h){
   var base = { amt: amt, auto: auto, ret: auto, adjusted: false, direct: false, agencyHeld: Math.min(agFee, amt), extra: Math.max(0, Math.min(extra, amt - Math.min(agFee, amt))) };
   if(_dmReturnDirect == null) return base;
   var ret = Math.min(Math.max(0, parseInt(_dmReturnDirect, 10) || 0), amt);
-  if(ret === auto){ base.direct = true; return base; }
+  if(ret === auto) return base;   // 🔧 리뷰 — 자동 계산과 같은 값은 직접 입력이 아니다(추가 차감 사유를 이걸로 건너뛰던 길)
   var cut = amt - ret, ag = Math.min(agAll, cut);
   return { amt: amt, auto: auto, ret: ret, adjusted: true, direct: true, agencyHeld: ag, extra: cut - ag };
 }
@@ -44253,10 +44299,10 @@ window.dmPickEarly = dmPickEarly;
 function dmOnReturnDirect(){
   var inp = document.getElementById('dmReturnDirectInput');
   var raw = inp ? String(inp.value || '').trim() : '';
-  _dmReturnDirect = raw === '' ? null : Math.max(0, parseInt(raw, 10) || 0);
-  var on = _dmReturnDirect != null;
+  _dmReturnDirectBad = raw !== '' && !/^\d+$/.test(raw);
+  _dmReturnDirect = (raw === '' || _dmReturnDirectBad) ? null : parseInt(raw, 10);
+  var on = raw !== '';
   var cl = document.getElementById('dmReturnDirectClear'); if(cl) cl.style.display = on ? 'inline-block' : 'none';
-  var aw = document.getElementById('dmReturnAutoWrap'); if(aw){ aw.style.opacity = on ? '.45' : '1'; aw.style.pointerEvents = on ? 'none' : ''; }
   dmUpdateAgencyUI();
   _dmUpdateReturnBtn();
 }
@@ -44295,11 +44341,14 @@ function _dmUpdateReturnBtn(){
   var adjNote = (adjNoteEl && adjNoteEl.value || '').trim();
   var pre = !!(h && _dmIsPreVisit(h));
   var needPick = pre && !_dmEarlyMode;
-  var lock = (!(c && c.direct) && _dmExtraDeduct > 0 && !note) || (c && c.adjusted && !adjNote) || needPick;
+  var noMoney = !!(c && c.ret <= 0);   // 🔧 리뷰 — 돌려줄 돈이 없는 「반환」(0원 조기 반환 → ₩0 위약 줄 · 반환예정에서 사라짐)은 막는다 · 그런 건은 「환불 처리」로
+  var lock = _dmReturnDirectBad || noMoney || (!(c && c.adjusted) && _dmExtraDeduct > 0 && !note) || (c && c.adjusted && !adjNote) || needPick;
   btn.disabled = lock;
   btn.style.opacity = lock ? '.45' : '1';
   btn.style.cursor = lock ? 'not-allowed' : 'pointer';
-  btn.textContent = needPick ? '좌석 처리를 먼저 고르세요'
+  btn.textContent = _dmReturnDirectBad ? '금액을 숫자로 적으세요'
+                  : noMoney ? '돌려줄 금액이 없습니다 — 「환불 처리」로'
+                  : needPick ? '좌석 처리를 먼저 고르세요'
                   : (pre && _dmEarlyMode === 'keep') ? '조기 반환 처리 (좌석 유지)'
                   : (pre && _dmEarlyMode === 'open') ? '반환 · 좌석 열기 (예약 취소)'
                   : '반환 완료 처리';
@@ -44315,7 +44364,7 @@ function openDmPopup(idx, mode){
   var _exNo = document.getElementById('dmExtraNote'); if(_exNo){ _exNo.value = ''; _exNo.style.display = 'none'; }
   var _exRow = document.getElementById('dmExtraRow'); if(_exRow) _exRow.style.display = 'none';
   // 🆕 2026-11-04 방문 전 선택 · 금액 직접 입력 초기화
-  _dmEarlyMode = null; _dmReturnDirect = null;
+  _dmEarlyMode = null; _dmReturnDirect = null; _dmReturnDirectBad = false;
   ['dmEarlyKeep', 'dmEarlyOpen'].forEach(function(_ri){ var _re = document.getElementById(_ri); if(_re) _re.checked = false; });
   var _rdIn = document.getElementById('dmReturnDirectInput'); if(_rdIn) _rdIn.value = '';
   var _rdNo = document.getElementById('dmReturnDirectNote'); if(_rdNo){ _rdNo.value = ''; _rdNo.style.display = 'none'; }
@@ -44330,8 +44379,12 @@ function openDmPopup(idx, mode){
   var ticket = ticketDB.find(function(t){ return String(t.id)===String(h.id); });
   // 🔧 2026-11-04 초대 좌석(INV-)은 초대에 적힌 대행비(보낼 때 바꾼 값 · 확정 때 좌석에 적힌다 · 회원이 못 바꾼다) — 회차 값이 아니다(2026-10-22 운영 결정 · 판매 현황 4차와 같다).
   //   옛 초대가 회차에 연결되면서 회차 대행비(다를 수 있다)로 바뀌지 않게.
+  //   초대장 값(로더가 읽은 inviteAgencyFee) → 좌석 스냅샷(옛 앱 INSERT 행만 있다) → 회차 값
   var _snapAg = parseInt(h.agencyFee || (h.extra_data && h.extra_data.agencyFee) || 0) || 0;
-  var _agPerPax = (/^INV-/.test(String(h.purchaseId || '')) && _snapAg > 0) ? _snapAg
+  var _isInvRow = /^INV-/.test(String(h.purchaseId || ''));
+  var _invAgPer = (_isInvRow && h.inviteAgencyFee != null) ? (parseInt(h.inviteAgencyFee, 10) || 0) : null;
+  var _agPerPax = (_invAgPer != null) ? _invAgPer
+    : (_isInvRow && _snapAg > 0) ? _snapAg
     : ((ticket && parseInt(ticket.agencyFee||0) > 0)
     ? parseInt(ticket.agencyFee||0)
     : parseInt(h.agencyFee||0));
@@ -44417,6 +44470,7 @@ function dmUpdateAgencyUI(){
   if(retEl) retEl.textContent = '₩'+returnAmt.toLocaleString();
   var _ah = document.getElementById('dmReturnAutoHint');
   if(_ah){ _ah.style.display = _rc.adjusted ? 'block' : 'none'; _ah.textContent = _rc.adjusted ? '직접 입력 — 자동 계산 ₩' + _rc.auto.toLocaleString() + ' 에서 조정' : ''; }
+  var _aw = document.getElementById('dmReturnAutoWrap'); if(_aw){ _aw.style.opacity = _rc.adjusted ? '.45' : '1'; _aw.style.pointerEvents = _rc.adjusted ? 'none' : ''; }
 
   // 체크박스 UI
   var chk = document.getElementById('dmAgencyChk');
@@ -44804,12 +44858,14 @@ function dmConfirmReturn(){
   // 🆕 추가 차감 + 사유 메모 (금액 있으면 메모 필수 → 회원에게 명시)
   var extraNote = (document.getElementById('dmExtraNote') && document.getElementById('dmExtraNote').value || '').trim();
   var adjNote = (document.getElementById('dmReturnDirectNote') && document.getElementById('dmReturnDirectNote').value || '').trim();
+  if(_dmReturnDirectBad){ showToast('!','금액 확인','반환 금액은 0 이상의 숫자로 적으세요'); return; }
+  if(c.ret <= 0){ showToast('!','돌려줄 금액이 없습니다','돌려줄 돈이 없으면 「환불 처리로 변경」에서 처리하세요'); return; }
   if(c.adjusted && !adjNote){
     showToast('!','사유 필수','반환 금액을 조정한 사유를 입력해야 반환할 수 있어요');
     var _an = document.getElementById('dmReturnDirectNote'); if(_an){ _an.style.display = 'block'; _an.focus(); }
     return;
   }
-  if(!c.direct && c.extra > 0 && !extraNote){
+  if(!c.adjusted && c.extra > 0 && !extraNote){
     showToast('!','사유 메모 필수','추가 차감 사유를 입력해야 반환할 수 있어요');
     var _en = document.getElementById('dmExtraNote'); if(_en){ _en.focus(); }
     return;
@@ -44856,6 +44912,43 @@ function dmConfirmReturn(){
     showToast('✓', _rfTitle, _dmResultMsg(res, returnAmt) + (_sent ? ' · 회원 알림 보냄' : ' · 회원 알림 안 보냄'), { category:'refund', native:true });
   });
 }
+
+// 🆕 2026-11-04 조기 반환한 예약의 좌석 열기(예약 취소) — 돈은 움직이지 않는다(예치금은 이미 돌려줬다). 서버가 초대장을 취소하고, 자동 매진 회차면 취소표가 나간다.
+//   지금 서버 행을 다시 읽어 그 위에 표시만 더한다(낡은 화면의 extra_data 로 덮지 않게) · 그 사이 취소된 예약엔 쓰지 않는다
+async function dmEarlyOpenSeat(idx){
+  var h = _dmGetItem(idx);
+  if(!h || !h._supabase || !h.purchaseId || !window.sb) return;
+  window._dmEarlyOpenBusy = window._dmEarlyOpenBusy || {};
+  if(window._dmEarlyOpenBusy[h.purchaseId]) return;
+  var dr0 = h.depositReturn || {};
+  if(!confirm('「' + (h.rest || '예약') + ' · ' + (h.visitDate || '') + ' · ' + (h.pax || 1) + '인」 예약을 취소하고 좌석을 엽니다.\n\n'
+      + '· 예치금은 ' + (dr0.date || '') + ' 에 이미 ₩' + (parseInt(dr0.returnAmt) || 0).toLocaleString() + ' 돌려줬습니다 — 이번엔 돈이 움직이지 않습니다\n'
+      + '· 초대 예약이면 초대가 「취소」가 됩니다\n· 매진이 자동으로 풀리는 회차면 회원 전원에게 취소표 알림이 갑니다\n\n진행할까요?')) return;
+  var notify = confirm('회원에게 「예약이 취소되었습니다」 알림을 보낼까요?\n(확인 = 보냄 · 취소 = 안 보냄)');
+  window._dmEarlyOpenBusy[h.purchaseId] = true;
+  try {
+    var fr = await window.sb.from('tickets').select('status, extra_data').eq('purchase_id', h.purchaseId).limit(1);
+    var cur = fr && !fr.error && fr.data && fr.data[0];
+    if(!cur){ showToast('⚠', '처리하지 못했습니다', '예약을 다시 읽지 못했습니다 — 아무것도 바뀌지 않았습니다'); return; }
+    if(/^(cancelled|canceled|refunded|expired|failed)$/i.test(String(cur.status || ''))){ showToast('ⓘ', '이미 취소된 예약입니다', '목록을 새로 고칩니다'); loadAllUsersPurchases().then(function(){ renderDmMgmtList(_dmCurrentTab); }); return; }
+    var ex = Object.assign({}, cur.extra_data || {});
+    var dr = Object.assign({}, (ex.deposit_return && typeof ex.deposit_return === 'object') ? ex.deposit_return : {});
+    if(!dr.early){ showToast('⚠', '조기 반환 기록이 없습니다', '반환예정 탭에서 처리하세요'); return; }
+    dr.seatOpened = true;
+    dr.seatOpenedAt = new Date().toISOString();
+    dr.seatOpenedBy = (typeof _currentUserId === 'function' ? _currentUserId() : null);
+    ex.deposit_return = dr;
+    var up = await window.sb.from('tickets').update({ status: 'cancelled', extra_data: ex })
+      .eq('purchase_id', h.purchaseId).not('status', 'in', '(cancelled,canceled,refunded,expired,failed)').select('purchase_id');
+    if(up.error || !up.data || !up.data.length){ showToast('⚠', '처리하지 못했습니다', ((up.error && up.error.message) || '예약이 이미 바뀌었습니다') + ' — 목록을 새로 고쳐 확인하세요'); return; }
+    var sent = notify ? _dmNotifyMember(h, 'early_cancel', { dep: 0, card: 0 }, { returned: parseInt(dr.returnAmt) || 0 }) : false;
+    showToast('✓', '좌석 열기 완료 — 예약 취소', '돈은 움직이지 않았습니다' + (sent ? ' · 회원 알림 보냄' : ' · 회원 알림 안 보냄'));
+    loadAllUsersPurchases().then(function(){ renderDmMgmtList(_dmCurrentTab); });
+  } catch(e){
+    showToast('⚠', '처리하지 못했습니다', String((e && e.message) || e).slice(0, 120));
+  } finally { delete window._dmEarlyOpenBusy[h.purchaseId]; }
+}
+window.dmEarlyOpenSeat = dmEarlyOpenSeat;
 
 function dmConfirmPenalty(){
   var h = _dmGetItem(_dmCurrentPurchaseIdx);
@@ -44967,6 +45060,7 @@ function _dmNotifyMember(h, kind, res, o){
     // 🔧 2026-11-03 실제로 돌려준 몫 — 「남은 만큼만」을 확인했으면 요청액보다 작다
     var total = known ? (dep + card) : (parseInt(o.total, 10) || 0), pen = parseInt(o.penalty, 10) || 0, extra = parseInt(o.extra, 10) || 0;
     if((kind === 'returned' || kind === 'early') && dep + card <= 0) return false;   // 돌려준 돈이 없는 「반환 완료」는 보내지 않는다
+    var prevRet = parseInt(o.returned, 10) || 0;   // 🆕 2026-11-04 early_cancel — 조기 반환 때 이미 돌려준 금액
     var note = String(o.note || '').replace(/\s+/g, ' ').trim().slice(0, 200);
     var won = function(v){ return '₩' + (parseInt(v, 10) || 0).toLocaleString(); };
     var vd = String(h.visitDate || '').match(/^(\d{4})[.\-\/](\d{1,2})[.\-\/](\d{1,2})/);
@@ -44980,6 +45074,8 @@ function _dmNotifyMember(h, kind, res, o){
       var parts = [];
       if(kind === 'returned' || kind === 'early'){
         if(dep > 0) parts.push(P(['예치금 ' + won(dep) + ' 반환', 'Deposit ' + won(dep) + ' returned', 'デポジット ' + won(dep) + ' を返還']));
+      } else if(kind === 'early_cancel'){
+        parts.push(P(['예치금은 이미 반환되었습니다' + (prevRet > 0 ? ' (' + won(prevRet) + ')' : ''), 'Your deposit has already been returned' + (prevRet > 0 ? ' (' + won(prevRet) + ')' : ''), 'デポジットはすでに返還済みです' + (prevRet > 0 ? '（' + won(prevRet) + '）' : '')]));
       } else {
         parts.push(total > 0 ? P(['환불 ' + won(total), 'Refund ' + won(total), '返金 ' + won(total)]) : P(['환불 없음', 'No refund', '返金なし']));
         if(dep > 0 && card > 0) parts.push(P(['예치금 ' + won(dep), 'deposit ' + won(dep), 'デポジット ' + won(dep)]));
@@ -45000,7 +45096,7 @@ function _dmNotifyMember(h, kind, res, o){
       type: 'ticket', title: ko.title, body: ko.body, url: '/?open_deposit_hist=1',
       tag: 'taam-dmrefund-' + String(h.purchaseId || '').replace(/[^0-9A-Za-z_.:\-]/g, ''),
       i18n: { ko: ko, en: en, ja: ja },
-      payload: { purchase_id: h.purchaseId, refund_type: kind === 'early' ? 'returned' : kind, early_return: kind === 'early', deposit_refund: dep, card_refund: card }
+      payload: { purchase_id: h.purchaseId, refund_type: kind === 'early' ? 'returned' : (kind === 'early_cancel' ? 'cancel' : kind), early_return: kind === 'early' || kind === 'early_cancel', deposit_refund: dep, card_refund: card }
     });
     return true;
   } catch(e){ console.warn('[dm] 회원 알림 예외:', e && e.message); return false; }

@@ -26,7 +26,7 @@ insert into public.tickets(user_id,purchase_id,status,price,party_size,extra_dat
 SQL
 ok(){ if [ "$2" = "$3" ]; then echo "✅ $1"; else echo "❌ $1  (기대 $3, 실제 $2)"; FAIL=1; fi; }
 out=$($P -f "$MIG" 2>&1)
-ok "마이그레이션 — 오류 없음 · ❌ 0 · ① ✅ · ② 판매 현황 함수 없음 ⚠ 건너뜀" "$(echo "$out" | grep -cE "^ERROR|^psql:.*ERROR")/$(echo "$out" | grep -c '❌')/$(echo "$out" | grep -cE '①.*✅')/$(echo "$out" | grep -c '함수가 없다')" "0/0/1/1"
+ok "마이그레이션 — 오류 없음 · ❌ 0 · ① ④ ✅ · ② 판매 현황 함수 없음 ⚠ 건너뜀" "$(echo "$out" | grep -cE "^ERROR|^psql:.*ERROR")/$(echo "$out" | grep -c '❌')/$(echo "$out" | grep -cE '(①|④).*✅')/$(echo "$out" | grep -c '함수가 없다')" "0/0/2/1"
 ins(){ # $1 uid(세션) $2 user_id $3 amount $4 purchase $5 change_type
   $P -c "set taam.uid = '$1'; insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata) values ('$2','general','${5:-ticket_refund}',$3,'{\"purchase_id\":\"$4\"}')" 2>&1 | awk '/REFUND_ALREADY_PROCESSED/{print "REFUND_ALREADY_PROCESSED"; f=1; exit} /ERROR/{e=1} END{if(!f && e) print "ERROR"}'; }
 ok "G1 조기 반환된 예약 — 회원이 남은 대행비 ₩300,000 환불을 더 부르면 거절" "$(ins $M1 $M1 300000 INV-e965d4ee-1)" "REFUND_ALREADY_PROCESSED"
@@ -36,10 +36,20 @@ ok "G4 처리 안 된 회원 취소 환불은 그대로" "$(ins $M1 $M1 900000 P
 ok "G5 ₩0 줄은 이 가드가 보지 않는다" "$(ins $M1 $M1 0 INV-e965d4ee-1)" ""
 ok "G6 슈퍼어드민은 그대로" "$(ins $SU $M1 300000 INV-e965d4ee-1)" ""
 ok "G7 서버(로그인 없음 · Edge · SQL Editor)는 그대로" "$($P -c "insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata) values ('$M1','general','ticket_refund',1,'{\"purchase_id\":\"INV-e965d4ee-1\"}')" 2>&1 | grep -c ERROR)" "0"
-ok "G8 인원 줄임(ticket_pax_change)은 그대로" "$(ins $M1 $M1 100000 INV-e965d4ee-1 ticket_pax_change)" ""
+ok "G8 처리된 예약의 인원 줄임 환불 — 회원 세션 거절" "$(ins $M1 $M1 100000 INV-e965d4ee-1 ticket_pax_change)" "REFUND_ALREADY_PROCESSED"
+ok "G8b 처리된 예약의 인원 줄임 환불 — 슈퍼어드민도 거절(조기 반환 뒤 이중 환불)" "$(ins $SU $M1 100000 INV-e965d4ee-1 ticket_pax_change)" "REFUND_ALREADY_PROCESSED"
+ok "G8c 처리 안 된 예약의 인원 줄임 환불은 그대로(슈퍼어드민·회원)" "$(ins $SU $M1 100000 PAYH-OWN ticket_pax_change)|$(ins $M1 $M1 100000 PAYH-OWN ticket_pax_change)" "|"
+ok "G8d 서버(로그인 없음)의 인원 줄임 환불은 그대로 · ₩0 도 그대로" "$($P -c "insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata) values ('$M1','general','ticket_pax_change',1,'{\"purchase_id\":\"INV-e965d4ee-1\"}')" 2>&1 | grep -c ERROR)|$(ins $SU $M1 0 INV-e965d4ee-1 ticket_pax_change)" "0|"
 ok "G9 구매 id 가 없는 줄은 그대로" "$($P -c "set taam.uid = '$M1'; insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata) values ('$M1','general','ticket_refund',1,'{}')" 2>&1 | grep -c ERROR)" "0"
 ok "G10 남의 같은 구매 id(다른 회원 행) 는 그 회원 것만 본다" "$(ins $M2 $M2 1000 INV-e965d4ee-1)" ""
 ok "G11 회원·anon 은 가드 함수를 직접 못 부른다" "$($P -c "select has_function_privilege('authenticated', 'public.taam_guard_ledger_refund_processed()', 'execute')::text || '/' || has_function_privilege('anon', 'public.taam_guard_ledger_refund_processed()', 'execute')::text")" "false/false"
+# C. 좌석 열기는 언제나 취소 — 초대장 동기화 판정
+T0=$(TZ=Asia/Seoul date +%Y.%m.%d)
+vr(){ $P -c "select public._taam_seat_visited_return('$1'::jsonb, '$2', null)::text"; }
+ok "V1 방문 당일 처리한 반환(표시 없음) = 다녀온 반환(종전)" "$(vr '{"super_admin_processed_at":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","deposit_return":{"type":"returned"}}' "$T0")" "true"
+ok "V2 방문 당일이어도 「좌석 열기」 = 취소" "$(vr '{"super_admin_processed_at":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","deposit_return":{"type":"returned","seatOpened":true}}' "$T0")" "false"
+ok "V3 연도 없는 날짜 — 표시 없음 = 다녀온 것으로 · 좌석 열기 = 취소" "$(vr '{"deposit_return":{"type":"returned"}}' '11.13')|$(vr '{"deposit_return":{"type":"returned","seatOpened":true}}' '11.13')" "true|false"
+ok "V4 위약(penalty)은 종전대로 취소" "$(vr '{"deposit_return":{"type":"penalty"}}' "$T0")" "false"
 out2=$($P -f "$MIG" 2>&1)
 ok "재실행 — 오류 없음 · ① ✅" "$(echo "$out2" | grep -cE "^ERROR|^psql:.*ERROR")/$(echo "$out2" | grep -cE '①.*✅')" "0/1"
 psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1
