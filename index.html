@@ -33412,12 +33412,23 @@ function _dmPersistBuyerChanges(h, refundToAdd, refundNote){
           if (_rtEnt.length) {
             try { await _depApplyDelta(userId, _spl2.mem, _spl2.gen, _rtEnt); }
             catch(_rfE){
-              // 🆕 2026-11-04 조기 반환 — 티켓 상태는 안 바꿨으니 처리 표시만 되돌린다(남으면 「좌석 열기」가 받지도 않은 돈을 「이미 돌려줬다」고 했다 · 2차 리뷰)
-              var _rst = false;
-              if(dr.early){
-                try { var _rb = await window.sb.from('tickets').update({ extra_data: h.extra_data || {} }).eq('purchase_id', purchaseId).select('purchase_id'); _rst = !_rb.error && !!(_rb.data && _rb.data.length); } catch(_rbe){}
+              // 🆕 2026-11-04 3차 리뷰 — 실패가 「응답만 잃은 것」일 수 있다(서버는 반영 · supabase-js 는 Failed to fetch). 원장을 다시 읽어 판단한다:
+              //   들어갔으면 성공 · 못 읽으면 모른다(표시를 남긴다 — 지우면 이중 환불 가드가 풀린다) · 안 들어갔을 때만 조기 반환 표시를 되돌린다(이번 처리 시각 그대로일 때만)
+              var _rst = false, _unknown = false, _landed = false;
+              try {
+                var _after = await _tkRefundLedgerInfo(userId, purchaseId);
+                if(_after && _after.ok) _landed = _depCredit > 0 && (_after.depBack - (_saInfo.depBack || 0)) >= _depCredit;
+                else _unknown = true;
+              } catch(_ae){ _unknown = true; }
+              if(_landed) return { ok:true, dep:_depCredit, card:_saCardRefund, requested:refundToAdd, applied:_depCredit + _saCardRefund, lostResponse:true };
+              if(dr.early && !_unknown){
+                try {
+                  var _rb = await window.sb.from('tickets').update({ extra_data: h.extra_data || {} })
+                    .eq('purchase_id', purchaseId).filter('extra_data->>super_admin_processed_at', 'eq', String(newExtra.super_admin_processed_at)).select('purchase_id');
+                  _rst = !_rb.error && !!(_rb.data && _rb.data.length);
+                } catch(_rbe){}
               }
-              return { ok:false, stage:'refund', early: !!dr.early, restored: _rst, err: (_rfE && _rfE.message) || String(_rfE), dep:_depCredit, card:_saCardRefund };
+              return { ok:false, stage:'refund', early: !!dr.early, restored: _rst, unknown: _unknown, err: (_rfE && _rfE.message) || String(_rfE), dep:_depCredit, card:_saCardRefund };
             }
           }
           // (반환 원장은 위 RPC 가 주머니별로 남겼다 — 앱 INSERT 폴백은 2026-09-14 제거)
@@ -33840,8 +33851,8 @@ async function _dmLoadSupabasePurchases(){
           depositRefund: refundAmt,                      // 🆕 그 중 예치금 환원분
           cardRefund: cardRefundAmt,                     // 🆕 그 중 카드 환불분
           cardRefundDone: !!(_crpM && _crpM.status === 'done'),
-          penaltyAmt: meta.penalty_amt || penaltyAmt,
-          penaltyPct: meta.penalty_pct || (t.price > 0 ? Math.round(penaltyAmt / t.price * 100) : 0),
+          penaltyAmt: (meta.penalty_amt != null && meta.penalty_amt !== '') ? (parseInt(meta.penalty_amt, 10) || 0) : penaltyAmt,   // 🔧 2026-11-04 기록된 0 은 「없음」이 아니다(방문 후 ₩0 반환이 위약 100% 로 보였다)
+          penaltyPct: (meta.penalty_pct != null && meta.penalty_pct !== '') ? (parseInt(meta.penalty_pct, 10) || 0) : (t.price > 0 ? Math.round(penaltyAmt / t.price * 100) : 0),
           agencyHeld: meta.agency_held || 0,
           extraDeduct: meta.extra_deduct || 0,     // 🆕 추가 차감 금액
           extraNote: meta.extra_note || '',        // 🆕 추가 차감 사유
@@ -45041,6 +45052,7 @@ function _dmNotifyChecked(id){
 }
 function _dmResultMsg(res, total){
   if(!res || res.dep == null) return '예치금 ₩' + (parseInt(total, 10) || 0).toLocaleString() + ' 반환';
+  if(res.lostResponse) return '응답이 끊겼지만 원장에 반영된 것을 확인했습니다 · 예치금 ₩' + (parseInt(res.dep, 10) || 0).toLocaleString() + (res.card > 0 ? ' · 카드 ₩' + res.card.toLocaleString() + ' 환불 대기' : '');
   var a = [];
   if(res.dep > 0) a.push('예치금 ₩' + res.dep.toLocaleString());
   if(res.card > 0) a.push('카드 ₩' + res.card.toLocaleString() + ' 환불 대기(카드환불 탭)');
@@ -45056,8 +45068,10 @@ function _dmPersistFailed(res, h, prevDr){
   if(res.aborted) return true;                       // 사람이 멈췄다 — 창은 그대로
   if(res.stage === 'refund' && res.early){   // 🆕 2026-11-04 조기 반환 — 좌석·예약은 그대로
     if(res.restored && h){ if(prevDr === undefined) delete h.depositReturn; else h.depositReturn = prevDr; }
-    alert('⚠ 예치금 반환이 실패했습니다 — 예약·좌석은 그대로입니다.\n\n' + String(res.err || '').slice(0, 200)
-        + (res.restored ? '\n\n조기 반환 표시를 되돌렸습니다 — 반환예정에서 다시 처리할 수 있습니다.' : '\n\n⚠ 조기 반환 표시를 되돌리지 못했습니다 — 회원 원장에서 확인하고 「예치금 부여」로 처리해 주세요.')
+    alert('⚠ 예치금 반환이 ' + (res.unknown ? '확인되지 않았습니다' : '실패했습니다') + ' — 예약·좌석은 그대로입니다.\n\n' + String(res.err || '').slice(0, 200)
+        + (res.restored ? '\n\n조기 반환 표시를 되돌렸습니다 — 반환예정에서 다시 처리할 수 있습니다.'
+           : res.unknown ? '\n\n결과를 모릅니다(원장을 다시 읽지 못했습니다) — 조기 반환 표시는 남겨 뒀습니다. 회원 원장에서 반환 줄이 들어갔는지 확인하세요.'
+           : '\n\n⚠ 조기 반환 표시를 되돌리지 못했습니다 — 잠시 뒤 목록을 다시 열어 확인하세요(원장에는 반환 줄이 없습니다).')
         + '\n회원에게는 알림을 보내지 않았습니다.');
     closeDmPopup();
     loadAllUsersPurchases().then(function(){ renderDmMgmtList(_dmCurrentTab); });
