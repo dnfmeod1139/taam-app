@@ -23,6 +23,9 @@
 //   SQL 이 **티켓id + 남은 일수를 열쇠로** 중복을 막는다. 이 함수를 하루에
 //   여러 번 불러도 새로 들어간 것이 없으면 아무것도 안 쏜다.
 //
+// 🆕 2026-11-07 취소 마감일(방문 31일 전 = 환불받고 취소할 수 있는 마지막 날) 당일 알림도 같은 줄로 온다 — days 31 · category remind31(기본 켬) ·
+//   tag visit-reminder-cd-<티켓>. 대상·문구는 SQL(_taam_cancel_deadline_remind · 20261107_cancel_deadline_remind.sql). 이 함수는 쏘기만 한다.
+//
 // 🆕 2026-10-19 비회원 손님(결제 링크 LINK- · 캘린더 수동 추가 MAN-)에게는 **카카오 알림톡**으로 간다 — 앱 계정이 없어 푸시가 갈 곳이 없다.
 //   대상·기록은 SQL(taam_guest_reminder_targets · taam_guest_reminder_mark · 20261019_guest_reminder.sql)이 정하고, 여기선 솔라피로 쏘기만 한다.
 //   템플릿 변수: #{name} #{shop} #{date} #{party} #{dday}  — 시크릿 KAKAO_TEMPLATE_GUEST_REMIND (카카오 비즈니스 채널에 등록·승인된 템플릿 id).
@@ -48,7 +51,7 @@ const json = (b: unknown, s = 200) =>
   new Response(JSON.stringify(b), { status: s, headers: { ...cors, 'Content-Type': 'application/json' } });
 
 // 응답에 실어 어느 판이 도는지 net._http_response 에서 보이게 한다 (2026-10-27 · SQL 이 준 i18n 을 쓰는 판)
-const VR_EDGE_VER = 'vr-2026-10-27b';   // b: 슈퍼어드민 몫 건수(admin_made·admin_skipped)를 응답에
+const VR_EDGE_VER = 'vr-2026-11-07';    // 2026-11-07: 취소 마감일(D-31) 건수(deadline_made)를 응답에 · 이전 b: 슈퍼어드민 몫 건수(admin_made·admin_skipped)
 
 type Row = {
   id: string; user_id: string; title: string; body: string; url: string;
@@ -241,6 +244,7 @@ async function handle(req: Request): Promise<Response> {
 
     // admin_made · admin_skipped — 슈퍼어드민 몫(캘린더 전 일정 · 2026-10-27)과 상한(50)으로 빠진 수. net._http_response 에서 보이게
     return json({ ok: true, made: data?.made ?? 0, admin_made: data?.admin_made ?? 0, admin_skipped: data?.admin_skipped ?? 0,
+                  deadline_made: data?.deadline_made ?? 0,
                   push_sent: sent, push_failed: failed, guest, ver: VR_EDGE_VER });
   } catch (e) {
     console.error('[notify-visit-reminder] 예외', e);

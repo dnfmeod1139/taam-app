@@ -13323,6 +13323,7 @@ window.closePromoCarousel = function(){
         <button type="button" onclick="pushTestRemind(3)" style="flex:1;padding:9px;border:1px solid #c8a96e;background:#fff;color:#5C0A14;border-radius:10px;font-family:var(--font-main);font-size:11px;font-weight:600;">3일 전</button>
         <button type="button" onclick="pushTestRemind(1)" style="flex:1;padding:9px;border:1px solid #c8a96e;background:#fff;color:#5C0A14;border-radius:10px;font-family:var(--font-main);font-size:11px;font-weight:600;">하루 전</button>
       </div>
+      <button type="button" onclick="pushTestDeadline()" style="width:100%;margin-bottom:8px;padding:9px;border:1px solid #c8a96e;background:#fff;color:#5C0A14;border-radius:10px;font-family:var(--font-main);font-size:11px;font-weight:600;cursor:pointer;">⏰ 취소 마감일 알림 미리보기 (방문 31일 전)</button>
       <button type="button" onclick="pushTestPurchase()" style="width:100%;padding:9px;border:1px solid #c8a96e;background:#fff;color:#5C0A14;border-radius:10px;font-family:var(--font-main);font-size:11px;font-weight:600;cursor:pointer;">🎫 구매 알림 미리보기 (실제 문구 그대로)</button>
       <button type="button" onclick="pushClearBadge()" style="width:100%;margin-top:8px;padding:9px;border:1px solid #ddd;background:#fff;color:#555;border-radius:10px;font-family:var(--font-main);font-size:11px;font-weight:600;cursor:pointer;">🔴 아이콘 배지 지우기 (내 기기)</button>
       <button type="button" onclick="pushBadgeTest()" style="width:100%;margin-top:6px;padding:9px;border:1px solid #ddd;background:#fff;color:#555;border-radius:10px;font-family:var(--font-main);font-size:11px;font-weight:600;cursor:pointer;">🔢 배지 5로 (닿는지 확인)</button>
@@ -13416,6 +13417,18 @@ window.closePromoCarousel = function(){
 
     <!-- 예약 리마인더 -->
     <div class="ns-section-label" data-i18n="notif_settings.sect_remind">예약 리마인더</div>
+    <!-- 🆕 2026-11-07 취소 마감일(방문 31일 전 = 환불받고 취소할 수 있는 마지막 날) — 기본 켬 · 서버 _taam_cancel_deadline_remind 가 notif_prefs.remind31 을 본다 -->
+    <div class="ns-row">
+      <div class="ns-row-info">
+        <div class="ns-row-label" data-i18n="notif_settings.remind_deadline">취소 마감일 알림</div>
+        <div class="ns-row-sub" data-i18n="notif_settings.remind_deadline_sub">환불받고 취소할 수 있는 마지막 날(방문 31일 전) 알려드립니다</div>
+      </div>
+      <label class="ns-toggle">
+        <input type="checkbox" class="ns-item" id="ns-remind31" checked onchange="nsSync()">
+        <div class="ns-toggle-track"></div>
+        <div class="ns-toggle-thumb"></div>
+      </label>
+    </div>
     <div class="ns-row">
       <div class="ns-row-info">
         <div class="ns-row-label" data-i18n="notif_settings.remind_7d">예약 7일 전</div>
@@ -49500,7 +49513,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.11.04-b';
+var TAAM_WEB_BUILD = '2026.11.07-a';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -55960,6 +55973,7 @@ var TRANSLATIONS = {
       remind_3d_sub:'방문 3일 전 알려드립니다',
       remind_1d:'예약 1일 전',
       remind_1d_sub:'방문 하루 전 알려드립니다',
+      remind_deadline:'취소 마감일 알림', remind_deadline_sub:'환불받고 취소할 수 있는 마지막 날(방문 31일 전) 알려드립니다',
       restock:'취소표 알림', restock_sub:'매진된 회차에 자리가 다시 나면 알려드립니다',
     },
     my_page: {
@@ -56944,6 +56958,7 @@ var TRANSLATIONS = {
       remind_3d_sub:'3 days before your reservation',
       remind_1d:'1 Day Before Visit',
       remind_1d_sub:'A day before your reservation',
+      remind_deadline:'Cancellation deadline', remind_deadline_sub:'The last day to cancel with a refund (31 days before your visit)',
       restock:'Seat released alerts', restock_sub:'We let you know when a seat opens up on a sold-out date',
     },
     my_page: {
@@ -57908,6 +57923,7 @@ TRANSLATIONS.ja = {
     remind_3d_sub:'来店の3日前にお知らせします',
     remind_1d:'予約1日前',
     remind_1d_sub:'来店の前日にお知らせします',
+    remind_deadline:'キャンセル期限日', remind_deadline_sub:'返金ありでキャンセルできる最終日（来店31日前）にお知らせします',
     restock:'キャンセル席のお知らせ', restock_sub:'満席の回に席が出たらお知らせします',
   },
   my_page: {
@@ -74137,7 +74153,7 @@ function _detectDeviceLabel(){
 function _collectTopicsFromPrefs(){
   var t = [];
   if(typeof _notifPrefs !== 'object') return t;
-  ['fav','ticket','restock','charge','use','refund','remind7','remind3','remind1'].forEach(function(k){
+  ['fav','ticket','restock','charge','use','refund','remind7','remind3','remind1','remind31'].forEach(function(k){
     if(_notifPrefs[k] !== false) t.push(k);
   });
   return t;
@@ -74787,6 +74803,45 @@ window.pushTestRemind = async function(days){
     var msg = d + '일 전 리마인드 미리보기\n\n' + i18n.ko.title + '\n' + i18n.ko.body + '\n\n시도: ' + res.summary.attempted + '\n성공: ' + res.summary.ok + '\n실패: ' + res.summary.failed
             + (res.summary.attempted === 0 ? '\n\n(0건이면 이 기기가 구독돼 있지 않거나, 알림 설정에서 ' + d + '일 전이 꺼져 있는 것입니다)' : '');
     alert(msg);
+  } else {
+    alert('발송 결과를 받지 못했습니다: ' + JSON.stringify(res || {}).slice(0, 200));
+  }
+};
+
+// 🆕 2026-11-07 취소 마감일(방문 31일 전 = 환불받고 취소할 수 있는 마지막 날) 알림 — 서버 _taam_cancel_deadline_msg(20261107_cancel_deadline_remind.sql)의 사본.
+//   미리보기에만 쓴다(실제 알림은 서버가 만든다 · 매일 11시 리마인드와 같이). 규칙을 바꾸면 둘 다 바꾼다.
+//   제목 「미토우 · 오늘이 환불 가능한 마지막 날입니다」 · 본문 = 방문 리마인드 네 줄 + 「오늘(11월 17일) 밤 12시(한국 시간)까지 취소하시면 …」
+function _cdlMsg(rest, ymd, time, pax, link){
+  rest = rest || {};
+  var dm = String(ymd || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if(!dm) return null;
+  var base = _vrMsg(rest, ymd, time, pax, null, 31);
+  var dl = new Date(Date.UTC(+dm[1], +dm[2] - 1, +dm[3]) - 31 * 86400000);
+  var mo = dl.getUTCMonth() + 1, da = dl.getUTCDate();
+  var MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var ko = String(rest.ko || '').trim().slice(0, 60);
+  var nm = { ko: ko, en: (String(rest.en || '').trim() || ko).slice(0, 60), ja: (String(rest.ja || '').trim() || ko).slice(0, 60) };
+  var add = {
+    ko: '오늘(' + mo + '월 ' + da + '일) 밤 12시(한국 시간)까지 취소하시면 대행비를 제외한 금액이 환불됩니다.\n내일부터는 취소해도 환불되지 않습니다.' + (link ? '\n취소는 TAAM 에 문의해 주세요.' : ''),
+    en: 'Cancel by midnight today (' + MON[mo - 1] + ' ' + da + ', Korea time) for a refund excluding the reservation service fee.\nFrom tomorrow, cancellations are non-refundable.' + (link ? '\nTo cancel, please contact TAAM.' : ''),
+    ja: '本日（' + mo + '月' + da + '日）24時（日本・韓国時間）までにキャンセルされた場合、予約代行手数料を除いた金額を返金いたします。\n明日以降のキャンセルは返金されません。' + (link ? '\nキャンセルはTAAMまでお問い合わせください。' : '')
+  };
+  var T = { ko:'오늘이 환불 가능한 마지막 날입니다', en:'Today is the last day to cancel with a refund', ja:'本日が返金可能な最終日です' };
+  var out = {};
+  ['ko','en','ja'].forEach(function(l){
+    out[l] = { title: (nm[l] ? nm[l] + ' · ' : '') + T[l], body: ((base[l] && base[l].body) || '') + '\n\n' + add[l] };
+  });
+  return out;
+}
+window._cdlMsg = _cdlMsg;
+// 슈퍼어드민 알림 설정의 미리보기 — 본인 기기로 · category remind31(본인 설정이 꺼져 있으면 안 온다) · 예시 미토우 2026-12-18 19:30 3인(마감 11월 17일)
+window.pushTestDeadline = async function(){
+  if(typeof pushSend !== 'function'){ alert('pushSend 함수 미정의'); return; }
+  var i18n = _cdlMsg({ ko:'미토우', en:'Mitou', ja:'味豆' }, '2026-12-18', '19:30', 3, false);
+  var res = await pushSend('user', { title: i18n.ko.title, body: i18n.ko.body, i18n: i18n, url: '/?open_ticket_hist=1', category: 'remind31', tag: 'visit-reminder-preview-cd' });
+  if(res && res.summary){
+    alert('취소 마감일 알림 미리보기\n\n' + i18n.ko.title + '\n' + i18n.ko.body + '\n\n시도: ' + res.summary.attempted + '\n성공: ' + res.summary.ok + '\n실패: ' + res.summary.failed
+          + (res.summary.attempted === 0 ? '\n\n(0건이면 이 기기가 구독돼 있지 않거나, 알림 설정에서 「취소 마감일 알림」이 꺼져 있는 것입니다)' : ''));
   } else {
     alert('발송 결과를 받지 못했습니다: ' + JSON.stringify(res || {}).slice(0, 200));
   }
@@ -97706,7 +97761,8 @@ var _notifPrefs = {
   // 🔧 2026-09-28 7일 전은 서버 기본이 「꺼짐」이다(visit_reminder.sql — 한 예약에 세 번은 많다).
   //   앱 기본이 true 라 설정 화면은 켜진 것처럼 보였는데, 설정을 저장한 적 없는 회원은 실제로 안 받았다.
   //   화면이 서버와 같은 말을 하게 맞춘다. 회원이 켜서 저장하면 그때부터 간다.
-  remind7: false, remind3: true, remind1: true
+  remind7: false, remind3: true, remind1: true,
+  remind31: true   // 🆕 2026-11-07 취소 마감일(방문 31일 전) — 서버도 기본 켬(값이 없으면 보낸다)
 };
 
 // IDB 저장/복원
@@ -97782,7 +97838,7 @@ function applyNotifPrefsToUI(){
   var map = {
     'ns-all':'all','ns-fav':'fav','ns-ticket':'ticket','ns-restock':'restock',
     'ns-charge':'charge','ns-use':'use','ns-refund':'refund',
-    'ns-remind7':'remind7','ns-remind3':'remind3','ns-remind1':'remind1'
+    'ns-remind7':'remind7','ns-remind3':'remind3','ns-remind1':'remind1','ns-remind31':'remind31'
   };
   Object.keys(map).forEach(function(id){
     var cb = document.getElementById(id);
@@ -97793,7 +97849,7 @@ function collectNotifPrefsFromUI(){
   var map = {
     'ns-all':'all','ns-fav':'fav','ns-ticket':'ticket','ns-restock':'restock',
     'ns-charge':'charge','ns-use':'use','ns-refund':'refund',
-    'ns-remind7':'remind7','ns-remind3':'remind3','ns-remind1':'remind1'
+    'ns-remind7':'remind7','ns-remind3':'remind3','ns-remind1':'remind1','ns-remind31':'remind31'
   };
   Object.keys(map).forEach(function(id){
     var cb = document.getElementById(id);
