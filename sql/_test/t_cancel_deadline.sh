@@ -38,8 +38,8 @@ ok "준비: 라이브와 같은 판(슈퍼어드민 전 일정 md5 052a4a4b…)"
 # 예약: 방문 31일 뒤(= 오늘이 마감일)
 #   T1 김회원 PAYH 확정 미토우 3인 ✓ · T2 김회원 초대 좌석 INV- ✓ · T3 김회원 결제 링크(memberUid) ✓ + 「TAAM 에 문의」
 #   T4 비회원 결제 링크(memberUid 없음) ✗ · T5 수동 예약 MAN- ✗ · T6 조기 반환 처리된 예약 ✗ · T7 패키지 줄 ✗
-#   T8 이회원(remind31 끔) ✗ · T9 박회원(알림 전체 끔) ✗ · T10 홀드 ✗ · T11 취소 ✗ · T12 30일·32일 뒤 ✗ · T13 연도 없는 날짜 ✗
-#   + 김회원 3일 뒤 사이토(방문 리마인드는 그대로)
+#   T8 이회원(remind31 끔) ✗ · T9 박회원(알림 전체 끔) ✗ · T10 홀드 ✗ · T11 취소 ✗ · T12 30일·32일 뒤 ✗ · T13 연도 없는 날짜 → 회차 날짜(31일 뒤) ✓
+#   + 김회원 3일 뒤 사이토(방문 리마인드는 그대로) · T14 카드 확정 폴백 PAYC- (티켓 행 날짜 없음 → 회차 날짜) ✓
 $P -c "insert into public.tickets(user_id, restaurant_id, restaurant_name, ticket_product_id, reservation_date, visit_time, party_size, status, purchase_id, buyer_name, extra_data) values
   ('$M','r-mitou','미토우','tp31','$D31','19:30',3,'active','PAYH-T1','김회원','{}'),
   ('$M','r-mitou','미토우','tp31','$D31','19:30',2,'active','INV-a1b2c3d4-T2','김회원','{}'),
@@ -55,7 +55,8 @@ $P -c "insert into public.tickets(user_id, restaurant_id, restaurant_name, ticke
   ('$M','r-mitou','미토우','tp31','$D30','19:30',2,'active','PAYH-T12a','김회원','{}'),
   ('$M','r-mitou','미토우','tp31','$D32','19:30',2,'active','PAYH-T12b','김회원','{}'),
   ('$M','r-mitou','미토우','tp31','$MD31','19:30',2,'active','PAYH-T13','김회원','{}'),
-  ('$M','r-saito','스시 사이토','tp3','$D3','12:00',2,'active','PAYH-V3','김회원','{}')" >/dev/null
+  ('$M','r-saito','스시 사이토','tp3','$D3','12:00',2,'active','PAYH-V3','김회원','{}'),
+  ('$M','r-mitou','미토우','tp31','','19:30',2,'active','PAYC-T14','김회원','{}')" >/dev/null
 
 out=$($P -f supabase/migrations/20261107_cancel_deadline_remind.sql 2>&1)
 ok "마이그레이션: 오류 없음 · ❌ 0 · ② 교체 · ① 문구 예시 ✅" "|0|1|1" "$(echo "$out" | grep ERROR | head -1)|$(echo "$out" | grep -c '❌')|$(echo "$out" | grep -c '✅ 교체(취소 마감일 붙임)')|$(echo "$out" | grep -cE '^①\|.*\|✅$')"
@@ -63,9 +64,9 @@ ok "마이그레이션: 오류 없음 · ❌ 0 · ② 교체 · ① 문구 예�
 
 r=$($P -c "select public.taam_visit_reminder_notify()::text")
 cd(){ $P -c "select count(*) from public.notifications n join public.tickets t on t.id::text = n.payload->>'ticket_id' where n.payload->>'kind'='cancel_deadline' and t.purchase_id='$1'"; }
-ok "실행: 마감일 3건(PAYH · 초대 좌석 · 회원 결제 링크) · deadline_made 3 · 방문 리마인드 3일 전도 그대로" "3|1" "$($P -c "select (('$r')::jsonb->>'deadline_made')")|$($P -c "select count(*) from public.notifications n join public.tickets t on t.id::text = n.payload->>'ticket_id' where t.purchase_id='PAYH-V3' and n.user_id='$M' and n.payload->>'days'='3' and coalesce(n.payload->>'kind','')<>'cancel_deadline'")"
-ok "대상: T1 · T2 · T3 각 1건" "1|1|1" "$(cd PAYH-T1)|$(cd INV-a1b2c3d4-T2)|$(cd LINK-T3)"
-ok "빠지는 것: 비회원 링크 · 수동 · 처리된 예약 · 패키지 · remind31 끔 · 전체 끔 · 홀드 · 취소 · 30일 · 32일 · 연도 없음" "0|0|0|0|0|0|0|0|0|0|0" "$(cd LINK-T4)|$(cd MAN-T5)|$(cd PAYH-T6)|$(cd PAYH-T7)|$(cd PAYH-T8)|$(cd PAYH-T9)|$(cd PAYH-T10)|$(cd PAYH-T11)|$(cd PAYH-T12a)|$(cd PAYH-T12b)|$(cd PAYH-T13)"
+ok "실행: 마감일 5건(PAYH · 초대 좌석 · 회원 결제 링크 · 날짜 없는 PAYC- · 연도 없는 날짜) · deadline_made 5 · 방문 리마인드 3일 전도 그대로" "5|1" "$($P -c "select (('$r')::jsonb->>'deadline_made')")|$($P -c "select count(*) from public.notifications n join public.tickets t on t.id::text = n.payload->>'ticket_id' where t.purchase_id='PAYH-V3' and n.user_id='$M' and n.payload->>'days'='3' and coalesce(n.payload->>'kind','')<>'cancel_deadline'")"
+ok "대상: T1 · T2 · T3 · T14·T13(티켓 날짜를 못 읽으면 회차 날짜) 각 1건" "1|1|1|1|1" "$(cd PAYH-T1)|$(cd INV-a1b2c3d4-T2)|$(cd LINK-T3)|$(cd PAYC-T14)|$(cd PAYH-T13)"
+ok "빠지는 것: 비회원 링크 · 수동 · 처리된 예약 · 패키지 · remind31 끔 · 전체 끔 · 홀드 · 취소 · 30일 · 32일" "0|0|0|0|0|0|0|0|0|0" "$(cd LINK-T4)|$(cd MAN-T5)|$(cd PAYH-T6)|$(cd PAYH-T7)|$(cd PAYH-T8)|$(cd PAYH-T9)|$(cd PAYH-T10)|$(cd PAYH-T11)|$(cd PAYH-T12a)|$(cd PAYH-T12b)"
 T1W="from public.notifications n join public.tickets t on t.id::text = n.payload->>'ticket_id' where n.payload->>'kind'='cancel_deadline' and t.purchase_id='PAYH-T1'"
 EXP_KO="[인원] : 3
 
@@ -76,8 +77,8 @@ ok "문구(한국어): 제목 · 본문 넷 + 오늘 날짜 마감 안내 · 받
    "$($P -c "select n.title $T1W")|$(echo "select right(n.body, length(:'e')) = :'e' $T1W" | $P -v e="$EXP_KO")|$($P -c "select n.body like '[레스토랑] : 미토우%' $T1W")|$($P -c "select n.user_id $T1W")|$($P -c "select n.type $T1W")|$($P -c "select n.url $T1W")"
 ok "문구(영어·일본어): 매장 이름 Mitou · 味豆 · 마감 날짜" "Mitou · Today is the last day to cancel with a refund|t|味豆 · 本日が返金可能な最終日です|t" \
    "$($P -c "select n.payload->'i18n'->'en'->>'title' $T1W")|$($P -c "select position('Cancel by midnight today ($DLEN, Korea time)' in n.payload->'i18n'->'en'->>'body') > 0 $T1W")|$($P -c "select n.payload->'i18n'->'ja'->>'title' $T1W")|$($P -c "select n.payload->'i18n'->'ja'->>'body' like '[レストラン] : 味豆%' $T1W")"
-ok "결제 링크 예약은 「취소는 TAAM 에 문의」 · PAYH 에는 없음" "1|0" "$($P -c "select count(*) from public.notifications n join public.tickets t on t.id::text = n.payload->>'ticket_id' where t.purchase_id='LINK-T3' and n.body like '%취소는 TAAM 에 문의해 주세요.'")|$($P -c "select count(*) from public.notifications n join public.tickets t on t.id::text = n.payload->>'ticket_id' where t.purchase_id='PAYH-T1' and n.body like '%TAAM 에 문의%'")"
-ok "돌려주는 줄(Edge 푸시): 마감 3줄 · days 31 · tag 열쇠 cd- · i18n" "3|3" "$($P -c "select count(*) from jsonb_array_elements(('$r')::jsonb->'rows') x where x->>'ticket_id' like 'cd-%' and (x->>'days')='31'")|$($P -c "select count(*) from jsonb_array_elements(('$r')::jsonb->'rows') x where x->>'ticket_id' like 'cd-%' and x->'i18n'->'ja'->>'title' is not null")"
+ok "결제 링크 예약은 「TAAM 이 오늘 안에 처리해야 환불 · 일찍 문의」 · PAYH 에는 없음" "1|0" "$($P -c "select count(*) from public.notifications n join public.tickets t on t.id::text = n.payload->>'ticket_id' where t.purchase_id='LINK-T3' and n.body like '%결제 링크로 결제하신 예약은 TAAM 이 오늘 안에 취소를 처리해야 환불됩니다 — 가능한 한 일찍 TAAM 에 문의해 주세요.'")|$($P -c "select count(*) from public.notifications n join public.tickets t on t.id::text = n.payload->>'ticket_id' where t.purchase_id='PAYH-T1' and n.body like '%TAAM 에 문의%'")"
+ok "돌려주는 줄(Edge 푸시): 마감 5줄 · days 31 · tag 열쇠 cd- · i18n" "5|5" "$($P -c "select count(*) from jsonb_array_elements(('$r')::jsonb->'rows') x where x->>'ticket_id' like 'cd-%' and (x->>'days')='31'")|$($P -c "select count(*) from jsonb_array_elements(('$r')::jsonb->'rows') x where x->>'ticket_id' like 'cd-%' and x->'i18n'->'ja'->>'title' is not null")"
 ok "슈퍼어드민에게는 마감 알림 없음(회원 본인에게만)" "0" "$($P -c "select count(*) from public.notifications where user_id='$SU' and payload->>'kind'='cancel_deadline'")"
 ok "다시 부르면 0 (같은 티켓·같은 마감일 한 번) · 방문 리마인드도 0" "0|0" "$($P -c "select (j->>'deadline_made')||'|'||(j->>'made') from public.taam_visit_reminder_notify() j" | cut -d'|' -f1)|$($P -c "select (j->>'made') from public.taam_visit_reminder_notify() j")"
 
@@ -85,7 +86,7 @@ ok "다시 부르면 0 (같은 티켓·같은 마감일 한 번) · 방문 리�
 $P -c "delete from public.notifications; insert into public.notifications(user_id, type, title, body, url, payload) values
   ('$M','visit_reminder','x','x','/', jsonb_build_object('kind','cancel_deadline','ticket_id',(select id::text from public.tickets where purchase_id='PAYH-T1'),'deadline','2000-01-01','days','x'))" >/dev/null
 r3=$($P -c "select public.taam_visit_reminder_notify()::text" 2>&1)
-ok "위조 줄(days 'x' · 다른 마감일)이 있어도 실행 성공 · 마감 3건 다시" "3" "$($P -c "select (('$r3')::jsonb->>'deadline_made')" 2>&1)"
+ok "위조 줄(days 'x' · 다른 마감일)이 있어도 실행 성공 · 마감 5건 다시" "5" "$($P -c "select (('$r3')::jsonb->>'deadline_made')" 2>&1)"
 
 # 실패 격리: 마감 몫이 깨져도(함수 없음) 방문 리마인드는 나간다
 $P -c "delete from public.notifications; alter function public._taam_cancel_deadline_remind() rename to _taam_cancel_deadline_remind_x" >/dev/null

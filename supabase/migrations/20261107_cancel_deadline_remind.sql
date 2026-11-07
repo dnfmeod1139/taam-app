@@ -9,10 +9,12 @@
 --   ① _taam_cancel_deadline_msg(rest, 방문일, 시각, 인원, 결제 링크 여부) — 세 언어 문구.
 --      제목 「미토우 · 오늘이 환불 가능한 마지막 날입니다」 · 본문 = 방문 리마인드와 같은 네 줄([레스토랑]·[날짜]·[시간]·[인원]) +
 --      「오늘(11월 17일) 밤 12시(한국 시간)까지 취소하시면 대행비를 제외한 금액이 환불됩니다. / 내일부터는 취소해도 환불되지 않습니다.」
---      결제 링크로 산 예약(LINK- · 카드)은 앱에서 직접 취소하지 않으므로 「취소는 TAAM 에 문의해 주세요」를 덧붙인다.
+--      결제 링크로 산 예약(LINK- · 카드)은 앱에서 직접 취소하지 않고 TAAM 이 처리한다 — 링크 환불 견적은 「처리하는 날」로 D-31 을 세므로
+--      「TAAM 이 오늘 안에 취소를 처리해야 환불됩니다 — 가능한 한 일찍 문의」를 덧붙인다(밤 12시 약속만 하면 다음 날 처리되어 0원이 된다 · 적대 리뷰).
 --   ② _taam_cancel_deadline_remind() — 대상: 회원 본인의 확정(active) 예약 — 방문 리마인드와 같은 거름(운영 행 KSK-·MAN-·INVH-·비회원 LINK- 제외)
 --        + 이미 TAAM 이 반환·환불을 처리한 예약(조기 반환 등 · super_admin_processed_at / deposit_return) 제외 — 회원 취소로 더 돌려받을 돈이 없다
---        + 패키지 줄(extra_data.pkg) 제외 — 패키지는 통째로만 취소되고 줄마다 마감이 달라 따로 다룬다
+--        + 패키지 줄(extra_data.pkg) 제외 — 이번 판에서는 뺀다(2026-11-07 기준 패키지 0건). 패키지는 통째로만 취소되고 줄마다 D-31 이 달라
+--          문구를 따로 만들어야 한다 — 패키지를 팔기 시작하면 따로 넣는다(아직 아무 곳도 보내지 않는다)
 --      설정: notif_prefs.remind31(boolean 이 아니면 기본 켬) · all=false 면 보내지 않는다.
 --      중복: 같은 티켓·같은 마감일은 한 번(글자 비교 — payload 는 회원이 쓸 수 있는 칸이다) · 방문일이 바뀌면 새 마감일로 다시.
 --      알림함: type visit_reminder · payload kind cancel_deadline · days 31 · url /?open_ticket_hist=1(누르면 티켓 구매 내역 — 취소 버튼이 거기 있다)
@@ -42,13 +44,13 @@ begin
   n_ja := left(coalesce(nullif(btrim(coalesce(p_rest->>'ja', '')), ''), n_ko), 60);
   a_ko := '오늘(' || extract(month from dl)::int || '월 ' || extract(day from dl)::int || '일) 밤 12시(한국 시간)까지 취소하시면 대행비를 제외한 금액이 환불됩니다.'
           || E'\n' || '내일부터는 취소해도 환불되지 않습니다.'
-          || case when coalesce(p_link, false) then E'\n' || '취소는 TAAM 에 문의해 주세요.' else '' end;
+          || case when coalesce(p_link, false) then E'\n' || '결제 링크로 결제하신 예약은 TAAM 이 오늘 안에 취소를 처리해야 환불됩니다 — 가능한 한 일찍 TAAM 에 문의해 주세요.' else '' end;
   a_en := 'Cancel by midnight today (' || to_char(dl, 'Mon FMDD') || ', Korea time) for a refund excluding the reservation service fee.'
           || E'\n' || 'From tomorrow, cancellations are non-refundable.'
-          || case when coalesce(p_link, false) then E'\n' || 'To cancel, please contact TAAM.' else '' end;
+          || case when coalesce(p_link, false) then E'\n' || 'This booking was paid by payment link, so TAAM must process the cancellation today for a refund — please contact TAAM as early as possible.' else '' end;
   a_ja := '本日（' || extract(month from dl)::int || '月' || extract(day from dl)::int || '日）24時（日本・韓国時間）までにキャンセルされた場合、予約代行手数料を除いた金額を返金いたします。'
           || E'\n' || '明日以降のキャンセルは返金されません。'
-          || case when coalesce(p_link, false) then E'\n' || 'キャンセルはTAAMまでお問い合わせください。' else '' end;
+          || case when coalesce(p_link, false) then E'\n' || 'お支払いリンクでのご予約は、本日中にTAAMがキャンセル手続きを完了した場合に返金となります。お早めにTAAMまでご連絡ください。' else '' end;
   return jsonb_build_object(
     'ko', jsonb_build_object('title', coalesce(n_ko || ' · ', '') || '오늘이 환불 가능한 마지막 날입니다',
                              'body', coalesce(base->'ko'->>'body', '') || E'\n\n' || a_ko),
@@ -72,7 +74,9 @@ begin
            nullif(btrim(t.restaurant_name), '')                        as rest_raw,
            coalesce(nullif(btrim(t.visit_time), ''), '')               as vtime,
            -- 환불 한도(taam_refund_cap)와 같은 날짜 — 마감을 알리는 날과 실제로 환불이 끊기는 날이 어긋나지 않게
-           public._taam_refund_visit_date(t.reservation_date)          as vd,
+           --   티켓 행 날짜를 못 읽으면(비었거나 연도 없는 옛 값 · 카드 확정 폴백 PAYC- 등) 회차 날짜 — 카드 환불 견적(taam_card_refund_quote)이 보는 날짜
+           coalesce(public._taam_refund_visit_date(t.reservation_date),
+                    public._taam_refund_visit_date((select tp.date from public.ticket_products tp where tp.id::text = t.ticket_product_id::text limit 1))) as vd,
            greatest(coalesce(t.party_size, 1), 1)                      as pax,
            coalesce(nullif(btrim(t.restaurant_id::text), ''),
                     (select tp.rest_id::text from public.ticket_products tp where tp.id::text = t.ticket_product_id::text limit 1)) as rest_id,
@@ -89,7 +93,7 @@ begin
                         or (t.extra_data ? 'manualEntry'), false)
        -- TAAM 이 이미 반환·환불을 처리한 예약(조기 반환 등) — 회원 취소로 더 돌려받을 돈이 없다(서버가 막는다)
        and not coalesce((t.extra_data ? 'super_admin_processed_at') or (t.extra_data ? 'deposit_return'), false)
-       -- 패키지 줄 — 통째로만 취소되고 줄마다 마감이 다르다
+       -- 패키지 줄 — 통째로만 취소되고 줄마다 마감이 달라 이번 판에서는 뺀다(아직 따로 보내는 곳 없음)
        and not coalesce(t.extra_data ? 'pkg', false)
   ), pick as (
     select * from due where vd is not null and vd - v_today = 31
