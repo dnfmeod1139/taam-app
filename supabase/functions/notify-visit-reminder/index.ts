@@ -26,6 +26,11 @@
 // 🆕 2026-11-07 취소 마감일(방문 31일 전 = 환불받고 취소할 수 있는 마지막 날) 당일 알림도 같은 줄로 온다 — days 31 · category remind31(기본 켬) ·
 //   tag visit-reminder-cd-<티켓>. 대상·문구는 SQL(_taam_cancel_deadline_remind · 20261107_cancel_deadline_remind.sql). 이 함수는 쏘기만 한다.
 //
+// 🆕 2026-11-12 슈퍼어드민 몫은 날짜마다 한 줄(SQL _taam_visit_reminder_admin · tag visit-reminder-day:YYYY-MM-DD) · 푸시 결과를 남긴다 —
+//   send-push 의 응답(pick.matched = 그 회원 등록 기기 수 · summary.attempted/ok/failed)을 알림 줄 id 마다 visit_reminder_push_log 에
+//   (taam_visit_reminder_push_mark · 서버만). 슈퍼어드민 티켓 캘린더가 「회원 리마인드 하루 전 ✓ · 푸시 1/1」 을 그 기록으로 그린다.
+//   기록이 실패해도 발송 결과는 그대로다(응답 push_logged 로만 보인다).
+//
 // 🆕 2026-10-19 비회원 손님(결제 링크 LINK- · 캘린더 수동 추가 MAN-)에게는 **카카오 알림톡**으로 간다 — 앱 계정이 없어 푸시가 갈 곳이 없다.
 //   대상·기록은 SQL(taam_guest_reminder_targets · taam_guest_reminder_mark · 20261019_guest_reminder.sql)이 정하고, 여기선 솔라피로 쏘기만 한다.
 //   템플릿 변수: #{name} #{shop} #{date} #{party} #{dday}  — 시크릿 KAKAO_TEMPLATE_GUEST_REMIND (카카오 비즈니스 채널에 등록·승인된 템플릿 id).
@@ -51,7 +56,7 @@ const json = (b: unknown, s = 200) =>
   new Response(JSON.stringify(b), { status: s, headers: { ...cors, 'Content-Type': 'application/json' } });
 
 // 응답에 실어 어느 판이 도는지 net._http_response 에서 보이게 한다 (2026-10-27 · SQL 이 준 i18n 을 쓰는 판)
-const VR_EDGE_VER = 'vr-2026-11-07';    // 2026-11-07: 취소 마감일(D-31) 건수(deadline_made)를 응답에 · 이전 b: 슈퍼어드민 몫 건수(admin_made·admin_skipped)
+const VR_EDGE_VER = 'vr-2026-11-12';    // 2026-11-12: 푸시 결과(기기 수·성공)를 visit_reminder_push_log 에 적는다(push_logged) · 11-07: 취소 마감일 건수(deadline_made)
 
 type Row = {
   id: string; user_id: string; title: string; body: string; url: string;
@@ -209,7 +214,10 @@ async function handle(req: Request): Promise<Response> {
 
     // ② 푸시로도 쏜다. 인앱만 두면 앱을 안 열어 본 사람에게는 안 닿는다.
     let sent = 0, failed = 0;
+    const marks: Record<string, unknown>[] = [];
     for (const r of rows) {
+      const mk: Record<string, unknown> = { notif_id: r.id, user_id: r.user_id, ticket_key: r.ticket_id || null, days: r.days };
+      marks.push(mk);
       try {
         const i18n = (r.i18n && typeof r.i18n === 'object' && r.i18n.ko && r.i18n.ko.title) ? r.i18n : build(r);
         const res = await fetch(`${url}/functions/v1/send-push`, {
@@ -231,11 +239,29 @@ async function handle(req: Request): Promise<Response> {
           }),
         });
         res.ok ? sent++ : failed++;
-      } catch (_e) {
+        mk.http = res.status;
+        // send-push 응답 — { ok, summary:{attempted, ok, failed, …}, pick:{matched, …} }. 못 읽으면 http 만 남긴다
+        try {
+          const j: any = await res.json();
+          if (j && j.summary) { mk.attempted = j.summary.attempted; mk.ok = j.summary.ok; mk.failed = j.summary.failed; }
+          if (j && j.pick && typeof j.pick.matched === 'number') mk.matched = j.pick.matched;
+          if (!res.ok && j && j.error) mk.err = String(j.error).slice(0, 120);
+        } catch (_j) { /* 본문 없음 */ }
+      } catch (e) {
         // ⚠ 한 건이 실패해도 멈추지 않는다. 한 사람의 기기 토큰이 죽었다고
         //   나머지 사람들이 알림을 못 받으면 안 된다.
         failed++;
+        mk.err = String((e as Error)?.message || e).slice(0, 120);
       }
+    }
+    // 🆕 2026-11-12 푸시 결과 기록 — 한 번에. 함수가 아직 없거나(옛 SQL) 실패해도 발송 결과는 그대로
+    let pushLogged: number | string = 0;
+    if (marks.length) {
+      try {
+        const { data: n, error: mErr } = await admin.rpc('taam_visit_reminder_push_mark', { p_rows: marks });
+        if (mErr) { console.error('[notify-visit-reminder] push log 실패', mErr.message); pushLogged = 'failed'; }
+        else pushLogged = Number(n) || 0;
+      } catch (e) { console.error('[notify-visit-reminder] push log 예외', (e as Error)?.message); pushLogged = 'failed'; }
     }
 
     // ③ 🆕 비회원 손님 — 알림톡. 회원 쪽이 끝난 뒤, 실패해도 회원 결과는 그대로 돌려준다
@@ -245,7 +271,7 @@ async function handle(req: Request): Promise<Response> {
     // admin_made · admin_skipped — 슈퍼어드민 몫(캘린더 전 일정 · 2026-10-27)과 상한(50)으로 빠진 수. net._http_response 에서 보이게
     return json({ ok: true, made: data?.made ?? 0, admin_made: data?.admin_made ?? 0, admin_skipped: data?.admin_skipped ?? 0,
                   deadline_made: data?.deadline_made ?? 0,
-                  push_sent: sent, push_failed: failed, guest, ver: VR_EDGE_VER });
+                  push_sent: sent, push_failed: failed, push_logged: pushLogged, guest, ver: VR_EDGE_VER });
   } catch (e) {
     console.error('[notify-visit-reminder] 예외', e);
     return json({ ok: false, error: 'exception' }, 500);
