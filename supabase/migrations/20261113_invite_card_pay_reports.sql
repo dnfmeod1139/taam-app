@@ -21,7 +21,7 @@ create temp table _taam_icr(st text, note text);
 do $b$
 declare
   v_oid oid := to_regprocedure('public.taam_ticket_sales_report(date,date,text,boolean)');
-  v_def text; v_new text; n int; i int;
+  v_def text; v_new text; n int; i int; v_i text;
   c_old text[] := array[
     -- 1 초대 좌석 칸(j) — 카드 주문 · 카드 환불 대기
     $q$tp.agency_fee as tp_agency, tp.meal_fee as tp_meal, tp.wine_min as tp_wine,$q$,
@@ -70,10 +70,25 @@ begin
   end loop;
   v_new := v_def;
   for i in 1 .. array_length(c_old, 1) loop v_new := replace(v_new, c_old[i], c_new[i]); end loop;
-  execute v_new;
-  insert into _taam_icr values ('✅', '덧댐 — 초대 7곳');
-exception when others then
-  insert into _taam_icr values ('❌', left(sqlerrm, 200));
+  begin
+    execute v_new;
+  exception when others then
+    insert into _taam_icr values ('⚠', '덧댄 본문을 올리지 못했다 — 옛 본문 그대로: ' || left(sqlerrm, 160));
+    return;
+  end;
+  -- 덧댄 본문이 실제로 도는지 한 번 불러 본다 — 실행에서 터지면 옛 본문으로 되돌린다(판매 현황 화면이 통째로 죽는 것보다 카드 몫이 빠진 옛 숫자가 낫다)
+  begin
+    perform public.taam_ticket_sales_report(null, null, 'paid', false);
+    insert into _taam_icr values ('✅', '덧댐 — 초대 7곳 · 실행 확인');
+  exception when others then
+    if sqlerrm ~* 'FORBIDDEN|슈퍼어드민|권한' then
+      insert into _taam_icr values ('✅', '덧댐 — 초대 7곳 (실행 확인은 건너뜀 — 이 세션은 보고서를 부를 권한이 없다)');
+    else
+      v_i := left(sqlerrm, 160);
+      execute v_def;
+      insert into _taam_icr values ('⚠', '덧댄 본문이 실행에서 실패 — 옛 본문으로 되돌림: ' || v_i);
+    end if;
+  end;
 end $b$;
 
 -- 덧댄 뒤에도 보고서가 도는지 한 번 불러 본다(실패해도 이 파일을 멈추지 않는다 — 결과만 적는다)
@@ -89,7 +104,7 @@ begin
   insert into _taam_icr_run values (case when (r->>'ok') = 'true' then '✅ ' || jsonb_array_length(coalesce(r->'rows', '[]'::jsonb))::text || '줄'
                                          else '⚠ ok 아님' end);
 exception when others then
-  insert into _taam_icr_run values ('❌ ' || left(sqlerrm, 160));
+  insert into _taam_icr_run values ('⚠ 불러 보지 못함: ' || left(sqlerrm, 160));
 end $c$;
 
 -- ── 확인 — 한 표 (건수만 · 공개 로그) ──

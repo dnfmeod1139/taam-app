@@ -20758,12 +20758,27 @@ async function cancelMyInvite(inviteId){
     if(inv.status !== 'sent'){ showToast('⚠','상태 변경 불가','이미 처리된 초대입니다 (' + inv.status + ')'); return; }
 
     // 2) 상태 cancelled 로 갱신
+    // 🔧 2026-11-13: 「보냄」일 때만 바꾼다 — 위에서 읽은 뒤에 결제(카드 확정 등)가 끝났을 수 있다. 결제된 초대를 여기서 취소로 바꾸면
+    //   좌석·결제는 살아 있는데 초대만 「취소」가 된다(서버도 막는다 — trg_taam_guard_invite_seat_live · INVITE_HAS_SEAT).
     var upd = await window.sb.from('reservation_invites').update({
       status: 'cancelled',
       cancelled_at: new Date().toISOString()
-    }).eq('id', inviteId).select();
-    if(upd.error){ console.error('[cancel]', upd.error); showToast('❌','취소 실패', upd.error.message); return; }
-    if(!upd.data || upd.data.length === 0){ showToast('❌','권한 오류','RLS 차단 가능성'); return; }
+    }).eq('id', inviteId).eq('status', 'sent').select();
+    if(upd.error){
+      console.error('[cancel]', upd.error);
+      if(/INVITE_HAS_SEAT/.test(String(upd.error.message || ''))){
+        showToast('ℹ', _riT('invpay.closed_t', '이미 처리된 초대입니다'), _riT('invpay.cancel_paid', '결제가 완료된 초대입니다 — 예약 취소는 구매 내역에서 해 주세요'));
+        try { if(typeof renderMyInvites === 'function') renderMyInvites(); } catch(_rm0){}
+        return;
+      }
+      showToast('❌','취소 실패', upd.error.message); return;
+    }
+    if(!upd.data || upd.data.length === 0){
+      // 0행 — 그 사이 결제·취소·만료로 상태가 바뀌었다(권한 문제면 위 조회에서 이미 걸렸다)
+      showToast('ℹ', _riT('invpay.closed_t', '이미 처리된 초대입니다'), _riT('invpay.cancel_changed', '받은 초대 목록을 다시 확인해 주세요'));
+      try { if(typeof renderMyInvites === 'function') renderMyInvites(); } catch(_rm1){}
+      return;
+    }
     console.log('[cancel] 초대 취소 OK:', inviteId);
 
     // 🆕 2026.08 A안: 연결 초대의 좌석 홀드 해제 → 본 티켓 잔여석 즉시 복구
@@ -50706,6 +50721,14 @@ async function riConfirmPay(){
       _riBal = await _depApplyDelta(u.id, -memUsed, -genUsed, _riEnt);
     } catch(_pe){
       console.error('[riPay] 잔액 차감 실패:', _pe);
+      // 🆕 2026-11-13 서버 원장 가드(trg_taam_guard_ledger_invite_open) — 「보냄」이 아닌 초대에는 예치금을 빼지 않는다(카드로 이미 확정됐거나 취소·만료).
+      //   돈은 안 빠졌다. 원문 대신 무슨 일인지 말하고 화면을 맞춘다.
+      if(/INVITE_CLOSED/.test(String((_pe && _pe.message) || ''))){
+        showToast('ℹ', _riT('invpay.closed_t', '이미 처리된 초대입니다'), _riT('invpay.closed_m', '예치금은 빠지지 않았습니다 — 받은 초대·구매 내역을 확인해 주세요'));
+        try { riPayClose(); } catch(_pc2){}
+        try { if(typeof _riCardRefresh === 'function') await _riCardRefresh(); } catch(_pr2){}
+        return;
+      }
       showToast('❌','예치금 차감 실패', _pe.message);
       return;
     }
@@ -51112,6 +51135,7 @@ async function _riCardFail(d, iid){
     not_linked:     _riT('invpay.err_round', '지금 카드로 결제할 수 없는 초대입니다 — 초대한 관리자에게 문의해 주세요'),
     round_closed:   _riT('invpay.err_round', '지금 카드로 결제할 수 없는 초대입니다 — 초대한 관리자에게 문의해 주세요'),
     deposit_short:  _riT('invpay.err_deposit', '예치금 잔액이 바뀌었습니다 — 다시 시도해 주세요'),
+    deposit_inflight: _riT('invpay.err_dep_inflight', '이 초대에 예치금 결제가 진행 중이거나 기록이 남아 있습니다 — 잠시 뒤 다시 확인해 주세요'),
     price_changed:  _riT('invpay.err_price', '초대 금액이 바뀌었습니다 — 다시 확인해 주세요'),
     amount:         _riT('invpay.err_price', '초대 금액이 바뀌었습니다 — 다시 확인해 주세요'),
     order_failed:   _riT('invpay.err_server', '카드 결제를 준비하지 못했습니다 — 잠시 후 다시 시도하시거나 계좌이체를 이용해 주세요'),
@@ -51181,7 +51205,7 @@ async function _riCardResume(iid, quiet){
       _riCardUnresolvedClear();
       if(d.error === 'not_paid' || d.error === 'order_not_found' || d.error === 'order_not_pending'){
         if(!quiet) showToast('⚠', _riT('invpay.not_done_title', '결제가 완료되지 않았어요'), _riT('invpay.not_done_body', '받은 초대에서 다시 결제하실 수 있어요'));
-      } else if(!quiet || d.refunded === true) await _riCardFail(d, iid);
+      } else if(!quiet || typeof d.refunded === 'boolean') await _riCardFail(d, iid);   // 카드가 승인됐다 취소된(또는 취소가 밀린) 결제는 조용한 확인에서도 알린다
       return 'clear';
     }
     _riCardUnresolvedSet(iid);
@@ -57212,6 +57236,9 @@ var TRANSLATIONS = {
       err_closed:'결제할 수 없는 초대입니다(취소되었거나 만료됨)', err_expired:'초대가 만료되었거나 곧 만료됩니다 — 초대한 관리자에게 다시 요청해 주세요',
       err_hold:'초대 좌석을 찾지 못했습니다 — 초대한 관리자에게 문의해 주세요', err_round:'지금 카드로 결제할 수 없는 초대입니다 — 초대한 관리자에게 문의해 주세요',
       err_deposit:'예치금 잔액이 바뀌었습니다 — 다시 시도해 주세요', err_price:'초대 금액이 바뀌었습니다 — 다시 확인해 주세요',
+      err_dep_inflight:'이 초대에 예치금 결제가 진행 중이거나 기록이 남아 있습니다 — 잠시 뒤 다시 확인해 주세요',
+      closed_t:'이미 처리된 초대입니다', closed_m:'예치금은 빠지지 않았습니다 — 받은 초대·구매 내역을 확인해 주세요',
+      cancel_paid:'결제가 완료된 초대입니다 — 예약 취소는 구매 내역에서 해 주세요', cancel_changed:'받은 초대 목록을 다시 확인해 주세요',
       err_server:'카드 결제를 준비하지 못했습니다 — 잠시 후 다시 시도하시거나 계좌이체를 이용해 주세요',
       need_none_t:'카드 결제 불필요', need_none:'예치금으로 결제할 수 있습니다 — 금액을 확인하고 다시 눌러 주세요',
       amt_changed_t:'결제 금액 확인', amt_changed:'결제 금액이 바뀌었습니다 — 금액을 확인하고 다시 눌러 주세요',
@@ -58194,6 +58221,9 @@ var TRANSLATIONS = {
       err_closed:'This invitation can no longer be paid (cancelled or expired)', err_expired:'This invitation has expired or is about to — please ask the sender to invite you again',
       err_hold:'The seats for this invitation could not be found — please contact the sender', err_round:'This invitation cannot be paid by card right now — please contact the sender',
       err_deposit:'Your deposit balance has changed — please try again', err_price:'The invitation amount has changed — please check again',
+      err_dep_inflight:'A deposit payment for this invitation is in progress or on record — please check again shortly',
+      closed_t:'This invitation has already been processed', closed_m:'Your deposit was not charged — please check your invitations and purchases',
+      cancel_paid:'This invitation has already been paid — to cancel the reservation, please use your purchase history', cancel_changed:'Please check your invitations again',
       err_server:'Card payment could not be prepared — please try again shortly or use a bank transfer',
       need_none_t:'No card payment needed', need_none:'Your deposit covers this invitation — please check the amount and tap again',
       amt_changed_t:'Check the amount', amt_changed:'The payment amount has changed — please check it and tap again',
@@ -58380,6 +58410,9 @@ TRANSLATIONS.ja = {
     err_closed:'お支払いできないご招待です（キャンセルまたは期限切れ）', err_expired:'ご招待の期限が切れた、またはまもなく切れます — 送信者に再度ご依頼ください',
     err_hold:'ご招待のお席が見つかりません — 送信者にお問い合わせください', err_round:'現在カードでお支払いできないご招待です — 送信者にお問い合わせください',
     err_deposit:'デポジット残高が変わりました — もう一度お試しください', err_price:'ご招待の金額が変わりました — もう一度ご確認ください',
+    err_dep_inflight:'このご招待はデポジットでのお支払いが進行中、または記録が残っています — しばらくしてからもう一度ご確認ください',
+    closed_t:'処理済みのご招待です', closed_m:'デポジットは引き落とされていません — ご招待・購入履歴をご確認ください',
+    cancel_paid:'お支払い済みのご招待です — ご予約のキャンセルは購入履歴から行ってください', cancel_changed:'ご招待一覧をもう一度ご確認ください',
     err_server:'カード決済を準備できませんでした — しばらくしてからもう一度お試しいただくか、銀行振込をご利用ください',
     need_none_t:'カード決済は不要です', need_none:'デポジットでお支払いいただけます — 金額をご確認のうえ、もう一度押してください',
     amt_changed_t:'お支払い金額のご確認', amt_changed:'お支払い金額が変わりました — 金額をご確認のうえ、もう一度押してください',

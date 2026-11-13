@@ -142,9 +142,19 @@ begin
     raise exception 'PAYMENT_PENDING: 앞 카드 결제를 확인하는 중입니다 — 잠시 뒤 다시 시도해 주세요' using errcode = '22023';
   end if;
 
+  -- 이 초대에 되돌려지지 않은 예치금 결제가 있다 — 예치금 결제(riConfirmPay: 차감 → 결제됨 → 확정)가 도는 중이거나 도중에 끊겨 남은 것.
+  --   그 위에 카드를 받으면 두 번 내게 된다. 카드 주문을 만들지 않는다(예치금 결제가 끝나면 초대가 「결제됨」이 되고, 남은 것이면 TAAM 이 정리한다).
+  if public._taam_invite_net_paid(inv.id, p_uid) > 0 then
+    raise exception 'INVITE_DEPOSIT_PAID: 이 초대에 예치금 결제가 진행 중이거나 기록이 남아 있습니다 — 잠시 뒤 다시 확인해 주세요' using errcode = '22023';
+  end if;
+
   select coalesce(membership_deposit_balance, 0), coalesce(general_deposit_balance, 0) into v_mem, v_gen from public.profiles where id = p_uid;
   if not found then raise exception 'INVITE_NOT_FOUND' using errcode = 'P0002'; end if;
-  v_bal := greatest(v_mem, 0) + greatest(v_gen, 0);
+  -- 음수 주머니(원장 RPC 는 0 에서 멈추므로 손으로 고친 DB 에서만 생긴다)는 여기서 멈춘다 — 확정의 잔액 검사·원장 RPC 가 거절해 「승인 → 자동 취소」가 반복된다
+  if v_mem < 0 or v_gen < 0 then
+    raise exception 'INSUFFICIENT_DEPOSIT: 예치금 잔액을 확인할 수 없습니다 — TAAM 에 문의해 주세요' using errcode = '22023';
+  end if;
+  v_bal := v_mem + v_gen;
   v_dep := least(v_bal, v_total);
   v_card := v_total - v_dep;
   if v_card <= 0 then
@@ -191,6 +201,7 @@ begin
   update public.payment_orders
      set status = 'paid', payment_key = p_payment_key, method = left(p_method, 40), receipt_url = left(p_receipt, 400),
          approved_at = coalesce(p_approved_at, now()),
+         fail_reason = null,   -- 승인 전에 붙인 「결과 모름」 표시(unknown:approving)는 여기서 지운다 — 잡혔으면 더는 모르는 주문이 아니다
          metadata = coalesce(metadata, '{}'::jsonb) || jsonb_strip_nulls(jsonb_build_object('toss', p_toss, 'paid_via', 'window', 'inv_claim', 'toss-invite-pay'))
    where order_id = p_order and purpose = 'invite_topup' and status = 'pending';
   get diagnostics v_n = row_count;
@@ -213,9 +224,17 @@ begin
   if coalesce(po.metadata->>'inv_settled', '') = 'true' then
     return jsonb_build_object('ok', true, 'already', true, 'invite_id', po.metadata->>'invite_id', 'purchase_id', po.metadata->>'purchase_id',
                               'total', (po.metadata->>'total')::bigint, 'deposit_used', (po.metadata->>'deposit_used')::bigint,
-                              'card_paid', coalesce(po.settle_krw, po.amount));
+                              'card_paid', coalesce(po.settle_krw, po.amount),
+                              'rest_name', po.metadata->>'restaurant_name', 'date', po.metadata->>'visit_date', 'time', po.metadata->>'visit_time',
+                              'pax', (po.metadata->>'pax')::int,
+                              'host_user_id', (select i.host_user_id from public.reservation_invites i where i.id::text = po.metadata->>'invite_id'));
   end if;
   if po.status <> 'paid' then raise exception 'ORDER_NOT_PAID' using errcode = 'P0002'; end if;
+
+  -- 잠금 순서: 주문 → 회원 잔액 → 초대. 예치금 결제(taam_apply_deposit_delta 가 잔액을 잠그고 → 원장 트리거가 초대를 잠근다)와 같은 순서라 서로 물리지 않는다
+  select coalesce(membership_deposit_balance, 0), coalesce(general_deposit_balance, 0) into v_mem, v_gen
+    from public.profiles where id = po.user_id for update;
+  if not found then raise exception 'INVITE_NOT_FOUND' using errcode = 'P0002'; end if;
 
   select * into inv from public.reservation_invites where id::text = po.metadata->>'invite_id' for update;
   if not found then raise exception 'INVITE_NOT_FOUND' using errcode = 'P0002'; end if;
@@ -239,9 +258,10 @@ begin
   v_pid := nullif(po.metadata->>'purchase_id', '');
   if v_pid is null then raise exception 'ORDER_NOT_FOUND' using errcode = 'P0002'; end if;
 
-  select coalesce(membership_deposit_balance, 0), coalesce(general_deposit_balance, 0) into v_mem, v_gen
-    from public.profiles where id = po.user_id for update;
-  if not found then raise exception 'INVITE_NOT_FOUND' using errcode = 'P0002'; end if;
+  -- 주문과 확정 사이에 예치금 결제가 끼어들었다(다른 기기 · 입금 반영 뒤) — 그 차감이 원장에 있으면 이 카드는 받지 않는다(Edge 가 취소한다 · 두 번 내지 않게)
+  if public._taam_invite_net_paid(inv.id, po.user_id) > 0 then
+    raise exception 'ORDER_SUPERSEDED: 이 초대에 예치금 결제가 먼저 들어왔습니다' using errcode = 'P0002';
+  end if;
   if v_mem + v_gen < v_dep then
     raise exception 'INSUFFICIENT_DEPOSIT: 예치금이 부족합니다 (잔액 %원 · 필요 %원)', v_mem + v_gen, v_dep using errcode = '22023';
   end if;
@@ -304,10 +324,98 @@ begin
   update public.payment_orders set status = 'canceled', fail_reason = left(coalesce(p_reason, 'closed'), 60) || '_canceling' where order_id = p_order;
   return jsonb_build_object('closed', true, 'status', 'canceled');
 end $$;
+-- 결제 완료 알림은 주문마다 한 번 — 확정된 주문에 「알렸다」 표시를 한 문장으로 붙이고, 이번 호출이 붙였을 때만 true(그때 Edge 가 알림을 보낸다).
+--   확정은 됐는데 응답을 잃은 경우(다음 호출은 「이미」로 온다)에도 알림이 빠지지 않고, 겹친 호출이 두 번 보내지도 않는다.
+create or replace function public.taam_invite_order_notified(p_order text)
+returns boolean language plpgsql volatile security definer set search_path = public as $$
+declare v_n int;
+begin
+  if not public._taam_invpay_server_ok() then raise exception 'FORBIDDEN' using errcode = '42501'; end if;
+  update public.payment_orders
+     set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object('inv_notified', true)
+   where order_id = p_order and purpose = 'invite_topup'
+     and coalesce(metadata->>'inv_settled', '') = 'true' and coalesce(metadata->>'inv_notified', '') <> 'true';
+  get diagnostics v_n = row_count;
+  return v_n = 1;
+end $$;
 revoke all on function public.taam_invite_order_prepare(text, uuid), public.taam_invite_confirm_card(text), public.taam_invite_order_close(text, text),
-                       public.taam_invite_order_claim(text, text, text, text, timestamptz, jsonb)
+                       public.taam_invite_order_claim(text, text, text, text, timestamptz, jsonb), public.taam_invite_order_notified(text)
   from public, anon, authenticated;
 insert into _ic values ('C~F 서버 함수(주문 · 잡기 · 확정 · 닫기) — service_role 만', '✅');
+
+-- ── F'. 「보냄」이 아닌 초대에는 회원이 예치금 결제(차감)를 못 한다 ──
+--   종전 예치금 결제는 ① 차감(RPC) ② 초대 「결제됨」 ③ 좌석 확정이 따로따로다. 카드 확정이 그 사이에 초대를 「결제됨」으로 바꾸면
+--   ①은 이미 빠졌는데 ②③ 이 조용히 지나가(이미 결제됨 · 이미 확정) 두 번 내게 된다. 차감 줄이 들어오는 순간 초대를 잠그고(share) 상태를 본다 —
+--   카드 확정(초대를 for update 로 쥔다)이 먼저면 끝날 때까지 기다렸다가 「결제됨」을 보고 거절하고, 차감이 먼저면 카드 확정이 그 차감을 보고 물러난다.
+--   회원 세션만 본다(서버·슈퍼어드민은 그대로) · 초대 id 가 원장 메타에 있을 때만 · 판정을 못 하면 막지 않는다(결제를 이 가드가 깨뜨리지 않게).
+create or replace function public.taam_guard_ledger_invite_open()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare v_uid uuid := auth.uid(); v_iid text; v_st text; v_bad boolean := false;
+begin
+  if v_uid is null then return new; end if;
+  if new.change_type is distinct from 'ticket_purchase' or coalesce(new.amount, 0) >= 0 then return new; end if;
+  v_iid := nullif(new.metadata->>'invite_id', '');
+  if v_iid is null or v_iid !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then return new; end if;
+  begin
+    if coalesce(public.is_super_admin(v_uid), false) then return new; end if;
+    select i.status into v_st from public.reservation_invites i where i.id = v_iid::uuid for share;
+    v_bad := found and coalesce(v_st, '') <> 'sent';
+  exception when others then
+    raise warning 'taam_guard_ledger_invite_open: % — 막지 않는다', sqlerrm;
+    return new;
+  end;
+  if v_bad then
+    raise exception 'INVITE_CLOSED: 이미 처리된 초대입니다 (상태 %) — 예치금을 빼지 않았습니다', coalesce(v_st, '없음') using errcode = '42501';
+  end if;
+  return new;
+end $$;
+revoke all on function public.taam_guard_ledger_invite_open() from public, anon, authenticated;
+do $do$ begin
+  if to_regclass('public.deposit_transactions') is not null and to_regclass('public.reservation_invites') is not null then
+    execute 'drop trigger if exists trg_taam_guard_ledger_invite_open on public.deposit_transactions';
+    execute 'create trigger trg_taam_guard_ledger_invite_open before insert on public.deposit_transactions for each row execute function public.taam_guard_ledger_invite_open()';
+    insert into _ic values ('F'' 원장 가드 — 「보냄」이 아닌 초대에는 회원 예치금 결제를 받지 않는다', '✅');
+  else
+    insert into _ic values ('F'' 원장 가드', '❌ 표 없음');
+  end if;
+end $do$;
+
+-- ── F''. 확정된 좌석이 살아 있는 초대는 받는 회원이 「결제됨」에서 다른 상태로 못 바꾼다 ──
+--   카드 확정은 서버(Edge · 정리 크론)가 회원 화면과 따로 돈다. 회원이 「초대 취소」를 누른 순간(앱이 읽은 상태는 「보냄」) 서버 확정이 먼저 끝나면
+--   앱의 갱신이 초대를 「취소」로 바꿔 — 좌석은 확정·돈은 빠졌는데 초대장(캘린더가 그리는 표)은 취소인 모양이 된다.
+--   좌석을 취소하면(구매 내역) 초대장은 서버가 맞춘다(trg_taam_invite_sync_on_seat_cancel) — 초대장만 따로 바꿀 일이 없다.
+--   받는 회원 세션만 본다 · 좌석이 없는 「결제됨」(종전 결제의 되돌림: 결제됨 → 보냄)은 그대로.
+create or replace function public.taam_guard_invite_seat_live()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare v_uid uuid := auth.uid(); v_live boolean := false;
+begin
+  if v_uid is null then return new; end if;
+  if coalesce(old.status, '') <> 'paid' or new.status is not distinct from old.status then return new; end if;
+  if v_uid is distinct from old.invitee_user_id or v_uid = old.host_user_id then return new; end if;
+  begin
+    if coalesce(public.is_super_admin(v_uid), false) then return new; end if;
+    v_live := exists (select 1 from public.tickets t
+                       where t.purchase_id like 'INV-%' and t.extra_data->>'inviteId' = old.id::text
+                         and lower(coalesce(t.status, '')) not in ('cancelled', 'canceled', 'refunded', 'expired', 'failed'));
+  exception when others then
+    raise warning 'taam_guard_invite_seat_live: % — 막지 않는다', sqlerrm;
+    return new;
+  end;
+  if v_live then
+    raise exception 'INVITE_HAS_SEAT: 이미 결제되어 좌석이 확정된 초대입니다 — 취소는 구매 내역에서 해 주세요' using errcode = '42501';
+  end if;
+  return new;
+end $$;
+revoke all on function public.taam_guard_invite_seat_live() from public, anon, authenticated;
+do $do$ begin
+  if to_regclass('public.reservation_invites') is not null and to_regclass('public.tickets') is not null then
+    execute 'drop trigger if exists trg_taam_guard_invite_seat_live on public.reservation_invites';
+    execute 'create trigger trg_taam_guard_invite_seat_live before update of status on public.reservation_invites for each row execute function public.taam_guard_invite_seat_live()';
+    insert into _ic values ('F'''' 초대장 가드 — 좌석이 확정된 초대는 받는 회원이 「결제됨」에서 못 바꾼다', '✅');
+  else
+    insert into _ic values ('F'''' 초대장 가드', '❌ 표 없음');
+  end if;
+end $do$;
 
 -- ── G. 결과를 모르는 카드 주문 정리 — 10분마다 Edge toss-invite-pay 의 sweep(service_role) ──
 --   confirm: paid 인데 확정 표시가 없다(3분 지남) · lookup: 10분 넘은 pending · cancel: 취소 실패(_refund_failed)·도중 끊김(_canceling)
@@ -323,13 +431,21 @@ begin
                               'metadata', jsonb_build_object('invite_id', po.metadata->>'invite_id', 'purchase_id', po.metadata->>'purchase_id',
                                                              'title', po.metadata->>'title', 'pax', po.metadata->'pax', 'total', po.metadata->'total',
                                                              'deposit_used', po.metadata->'deposit_used'),
-                              'reconcile', case when po.status = 'paid' then 'confirm' when po.status = 'pending' then 'lookup' else 'cancel' end) as x
+                              'reconcile', case when po.status = 'paid' then 'confirm' when po.status = 'pending' then 'lookup'
+                                                when po.status = 'failed' then 'orphan' else 'cancel' end) as x
       from public.payment_orders po
      where po.purpose = 'invite_topup' and po.created_at > now() - interval '3 days'
        and ((po.status = 'paid' and coalesce(po.metadata->>'inv_settled', '') <> 'true'
              and coalesce(po.approved_at, po.created_at) < now() - interval '3 minutes')
-         or (po.status = 'pending' and po.created_at < now() - interval '10 minutes')
-         or (po.status = 'canceled' and (po.fail_reason like '%refund_failed' or po.fail_reason like '%canceling')))
+         -- pending: 승인 요청이 나간 주문(unknown: 표시)은 3분 뒤부터 · 표시 없는 주문(결제창이 아직 열려 있을 수 있다)은 40분 뒤에야
+         or (po.status = 'pending' and coalesce(po.fail_reason, '') like 'unknown:%' and coalesce(po.updated_at, po.created_at) < now() - interval '3 minutes')
+         or (po.status = 'pending' and coalesce(po.fail_reason, '') not like 'unknown:%' and po.created_at < now() - interval '40 minutes')
+         or (po.status = 'canceled' and (po.fail_reason like '%refund_failed' or po.fail_reason like '%canceling'))
+         -- failed: 닫힌 주문에 토스 승인이 남아 있을 수 있다(잡기 실패 뒤 취소 실패 · 옛 함수가 승인만 한 경우) — 취소 실패는 3일, 그 밖은 닫힌 뒤 3분~90분 동안 주문번호로 조회
+         or (po.status = 'failed' and (po.fail_reason like '%refund_failed'
+                                       or (coalesce(po.fail_reason, '') <> 'expired'   -- expired = 토스에 조회해 승인이 없다고 확인하고 닫은 주문 — 다시 보지 않는다
+                                           and coalesce(po.updated_at, po.created_at) < now() - interval '3 minutes'
+                                           and coalesce(po.updated_at, po.created_at) > now() - interval '90 minutes'))))
      order by po.created_at
      limit greatest(1, least(coalesce(p_limit, 15), 50))) s;
   return v;
@@ -372,18 +488,21 @@ end $do$;
 
 -- ── 확인 (하나로 · ❌ 가 없어야 정상 · 건수만 — 공개 로그) ──
 select 항목, 결과 from _ic
-union all select '함수 9개', case when (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname in (
+union all select '함수 12개', case when (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname in (
          'taam_guard_inv_order_claim', '_taam_invpay_server_ok', '_taam_invpay_seat', 'taam_invite_order_prepare', 'taam_invite_order_claim',
-         'taam_invite_confirm_card', 'taam_invite_order_close', 'taam_invite_pay_reconcile_list', 'taam_invite_pay_reconcile_kick')) = 9
+         'taam_invite_confirm_card', 'taam_invite_order_close', 'taam_invite_pay_reconcile_list', 'taam_invite_pay_reconcile_kick', 'taam_guard_ledger_invite_open',
+         'taam_invite_order_notified', 'taam_guard_invite_seat_live')) = 12
        then '✅' else '❌ 빠진 함수가 있다' end
-union all select '의존 — taam_invite_confirm_hold(text, text) · taam_apply_deposit_delta(uuid, bigint, bigint, jsonb)',
+union all select '의존 — taam_invite_confirm_hold(text, text) · taam_apply_deposit_delta(uuid, bigint, bigint, jsonb) · _taam_invite_net_paid(uuid, uuid, text)',
        case when to_regprocedure('public.taam_invite_confirm_hold(text, text)') is not null
-             and to_regprocedure('public.taam_apply_deposit_delta(uuid, bigint, bigint, jsonb)') is not null then '✅' else '❌ 없다 — 확정이 돌지 않는다' end
+             and to_regprocedure('public.taam_apply_deposit_delta(uuid, bigint, bigint, jsonb)') is not null
+             and to_regprocedure('public._taam_invite_net_paid(uuid, uuid, text)') is not null then '✅' else '❌ 없다 — 확정이 돌지 않는다' end
 union all select '회원·비로그인이 서버 함수를 못 부른다',
        case when has_function_privilege('authenticated', 'public.taam_invite_order_prepare(text, uuid)', 'execute')
               or has_function_privilege('authenticated', 'public.taam_invite_confirm_card(text)', 'execute')
               or has_function_privilege('authenticated', 'public.taam_invite_order_claim(text, text, text, text, timestamptz, jsonb)', 'execute')
               or has_function_privilege('authenticated', 'public.taam_invite_order_close(text, text)', 'execute')
+              or has_function_privilege('authenticated', 'public.taam_invite_order_notified(text)', 'execute')
               or has_function_privilege('anon', 'public.taam_invite_order_prepare(text, uuid)', 'execute')
               or has_function_privilege('anon', 'public.taam_invite_pay_reconcile_kick()', 'execute')
             then '❌ 열려 있다' else '✅' end

@@ -513,8 +513,9 @@ SQL
 ok "IC0 고치기 전 — 섞은 초대는 예치금 몫만(8,000,000 · 원장과 다름) · 전액 카드 초대는 줄에 없다(확인 필요)" "$(row "inv:$IV1" "concat_ws('/', r->>'gross', r->>'pm', r->>'card', ((r->'flags') ? 'ledger_mismatch')::text)")|$(row "inv:$IV2" "count(*)")|$(q "select count(*) from j, jsonb_array_elements(j->'exceptions') e where e->>'kind' = 'invite_paid_no_ledger' and e->>'ref' = '$IV2'")" "8000000/deposit/0/true|0|1"
 ok "IC0b 덧대기 전 본문이 2026-11-13 라이브와 글자까지 같다(md5) — 이 절은 라이브 본문 위에서 돈다" "$($P -c "select md5(pg_get_functiondef('public.taam_ticket_sales_report(date,date,text,boolean)'::regprocedure))")" "d5ea62775d9128b96e9527f6a16b3468"
 VB=$(q "select concat_ws('/', r->>'gross', r->>'net', r->>'dep', r->>'agency') from j, jsonb_array_elements(j->'rows') r where r->>'k' = 'inv:$I1'")
+DBX=${DB}_x; psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $DBX" >/dev/null 2>&1; psql -h /tmp -U postgres -d postgres -q -c "create database $DBX template $DB" >/dev/null 2>&1
 outic=$($P -f "$MIGIC" 2>&1)
-ok "IC1 마이그레이션 — 오류 없음 · ❌ 0 · ① 덧댐 · ② 실행 ✅" "$(echo "$outic" | grep -cE "^ERROR|^psql:.*ERROR")/$(echo "$outic" | grep -c '❌')/$(echo "$outic" | grep -c '①.*✅ 덧댐 — 초대 7곳')/$(echo "$outic" | grep -c '②.*✅')" "0/0/1/1"
+ok "IC1 마이그레이션 — 오류 없음 · ❌ 0 · ① 덧댐 · ② 실행 ✅" "$(echo "$outic" | grep -cE "^ERROR|^psql:.*ERROR")/$(echo "$outic" | grep -c '❌')/$(echo "$outic" | grep -c '①.*✅ 덧댐 — 초대 7곳 · 실행 확인')/$(echo "$outic" | grep -c '②.*✅')" "0/0/1/1"
 ok "IC2 섞은 초대 — 판매 10,500,000 한 번 · 카드+예치금 · 예치금 8,000,000 · 카드 2,500,000 · 「원장과 다름」 없음 · 금액 내역 일치" "$(row "inv:$IV1" "concat_ws('/', r->>'gross', r->>'pm', r->>'dep', r->>'card', r->>'net', ((r->'flags') ? 'ledger_mismatch')::text, r->>'bd', r->>'agency', r->>'ag_state')")" "10500000/mixed/8000000/2500000/10500000/false/snap/600000/planned"
 ok "IC3 전액 카드 초대 — 줄에 들어온다(판매 7,000,000 · 카드) · 「확인 필요」에서 빠진다" "$(row "inv:$IV2" "concat_ws('/', r->>'gross', r->>'pm', r->>'dep', r->>'card', r->>'net')")|$(q "select count(*) from j, jsonb_array_elements(j->'exceptions') e where e->>'ref' = '$IV2'")" "7000000/card/0/7000000/7000000|0"
 ok "IC4 섞은 초대 취소(D-31↑) — 환불 = 예치금 8,000,000 + 카드 1,900,000 · 카드 환불 대기 1,900,000 · 순판매 600,000 = 대행비 보유" "$(row "inv:$IV3" "concat_ws('/', r->>'st', r->>'gross', r->>'rf_cancel', r->>'rf_card_pending', r->>'net', r->>'agency', r->>'ag_state')")" "cancelled/10500000/9900000/1900000/600000/600000/kept"
@@ -522,6 +523,12 @@ ok "IC5 확정 표시 없는 주문 · 다른 회원의 주문 · 취소된 주�
 ok "IC6 카드 환불 완료(done) — 대기 0 · 부풀린 금액은 카드 몫(2,000,000)까지만 · 전액 환불이라 순판매 0" "$(row "inv:$IV5" "concat_ws('/', r->>'rf_cancel', r->>'rf_card_pending', r->>'net', r->>'agency')")" "7000000/0/0/0"
 ok "IC7 예치금만으로 낸 종전 초대는 숫자가 그대로 — I1(덧대기 전후 같음) · 조기 반환 초대" "$(q "select concat_ws('/', r->>'gross', r->>'net', r->>'dep', r->>'agency') from j, jsonb_array_elements(j->'rows') r where r->>'k' = 'inv:$I1'")|$(row "inv:$IE" "concat_ws('/', r->>'st', r->>'rf_return', r->>'rf_cancel', r->>'agency', r->>'pm', r->>'card')")" "$VB|returned/800000/0/300000/deposit/0"
 ok "IC8 앱 채널은 초대 좌석·초대 카드 주문을 세지 않는다(이중 집계 없음)" "$(q "select count(*) from j, jsonb_array_elements(j->'rows') r where r->>'ch' = 'app' and (r->>'k' like 'INV-%' or r->>'ref' like 'INV-%')")" "0"
+PX="psql -h /tmp -U postgres -d $DBX -q -At"
+$PX -c "alter table public.payment_orders rename column settle_krw to settle_krw_gone" >/dev/null 2>&1
+MD5X=$($PX -c "select md5(pg_get_functiondef('public.taam_ticket_sales_report(date,date,text,boolean)'::regprocedure))")
+outx=$($PX -f "$MIGIC" 2>&1)
+ok "IC10 덧댄 본문이 실행에서 터지는 DB(칸 없음) — ⚠ 로 알리고 옛 본문으로 되돌린다 · ❌ 없음(배포를 막지 않는다) · 보고서는 옛 판 그대로 돈다" "$(echo "$outx" | grep -c '①.*⚠ 덧댄 본문이 실행에서 실패 — 옛 본문으로 되돌림')/$(echo "$outx" | grep -c '❌')/$([ "$($PX -c "select md5(pg_get_functiondef('public.taam_ticket_sales_report(date,date,text,boolean)'::regprocedure))")" = "$MD5X" ] && echo 같음)/$($PX -c "select position('INVITE_CARD_20261113' in pg_get_functiondef('public.taam_ticket_sales_report(date,date,text,boolean)'::regprocedure))")" "1/0/같음/0"
+psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $DBX" >/dev/null 2>&1
 outic2=$($P -f "$MIGIC" 2>&1)
 ok "IC9 재실행 — 이미 새 판 · 오류 없음" "$(echo "$outic2" | grep -c '이미 새 판')/$(echo "$outic2" | grep -cE "^ERROR|^psql:.*ERROR")" "1/0"
 # 화면 시험용 — TSR_DUMP=파일 이면 보고서 JSON 을 남긴다(결제일·전체 · 기본)

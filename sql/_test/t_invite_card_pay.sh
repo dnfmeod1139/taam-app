@@ -66,6 +66,7 @@ out=$($P -f "$MIG" 2>&1)
 ok(){ if [ "$2" = "$3" ]; then echo "✅ $1"; else echo "❌ $1  (기대 $3, 실제 $2)"; FAIL=1; fi; }
 q(){ $P -c "$1" 2>&1; }
 as(){ local u=$1; shift; $P -c "set taam.uid = '$u'; $*" 2>&1 | grep -v '^SET$'; }
+code2(){ echo "$1" | grep -oE "(INVITE_DEPOSIT_PAID|INVITE_NOT_FOUND|INVITE_PAID|INVITE_CLOSED|HOLD_GONE|PAYMENT_PENDING)" | head -1; }
 code(){ echo "$1" | grep -oE "(INVITE_NOT_FOUND|INVITE_PAID|INVITE_CLOSED|INVITE_NOT_LINKED|INVITE_EXPIRED|HOLD_GONE|PAYMENT_PENDING|PRICE_NOT_SET|PRICE_CHANGED|RATE_LIMITED|FORBIDDEN|DUPLICATE_PURCHASE|TIME_CONFLICT|ORDER_NOT_FOUND|ORDER_NOT_PAID|ORDER_SUPERSEDED|INSUFFICIENT_DEPOSIT|INVITE_ORDER_CLAIM|REFUND_TICKET_ACTIVE|LEDGER_REFUND_POLICY|LEDGER_REFUND_EXCEEDS|permission denied)" | head -1; }
 # 초대 + 초대 홀드(보낸 어드민 소유) — $1 초대 id · $2 받는 회원 · $3 인원 · $4 식사(1인) · $5 대행(1인) · $6 회차 · [$7 방문일] [$8 시각]
 newinv(){ local d=${7:-2027.12.15} t=${8:-18:00}; q "insert into public.ticket_products(id, rest_id, rest_name, date, time, meal_fee, agency_fee) values ('$6','r_$6','매장 $6','$d','$t',$4,$5) on conflict do nothing;
@@ -132,9 +133,13 @@ ok "A17 이미 그 회차를 가진 회원 → DUPLICATE_PURCHASE (카드 승인
 I7=c7000000-0000-4000-8000-000000000007; newinv $I7 $M3 2 800000 100000 tp7 2027.11.05 18:00     # 같은 날 저녁 다른 회차
 ok "A18 같은 날 같은 시간대에 다른 예약 → TIME_CONFLICT (카드 승인 전에)" "$(code "$(prep $I7 $M3)")|$(q "select count(*) from public.payment_orders where metadata->>'invite_id' = '$I7'")" "TIME_CONFLICT|0"
 
+q "update public.profiles set membership_deposit_balance = -500 where id = '$M1'" >/dev/null
+ok "A19 음수 주머니(손으로 고친 DB)는 주문 단계에서 멈춘다 — 승인 뒤 자동 취소가 반복되지 않게" "$(q "update public.payment_orders set status = 'failed' where order_id = '$O1b'" >/dev/null; code "$(prep $I1 $M1)")" "INSUFFICIENT_DEPOSIT"
+q "update public.profiles set membership_deposit_balance = 0 where id = '$M1'; update public.payment_orders set status = 'pending', fail_reason = 'unknown:approving' where order_id = '$O1b'" >/dev/null
 echo "── B. 잡기(토스 승인 뒤 pending → paid) ──"
 ok "B1 표시 없이 paid 로 바꾸면(옛 toss-confirm 모양) → INVITE_ORDER_CLAIM" "$(code "$(q "update public.payment_orders set status = 'paid', payment_key = 'pk_old', metadata = '{\"toss\":{}}'::jsonb where order_id = '$O1b'")")" "INVITE_ORDER_CLAIM"
 ok "B2 잡기 → paid · inv_claim · 메타는 합쳐진다(초대 id 유지 · toss 추가)" "$(claim $O1b)|$(q "select status || '/' || payment_key || '/' || (metadata->>'inv_claim') || '/' || (metadata->>'invite_id' = '$I1') || '/' || (metadata->'toss'->>'status') || '/' || (metadata->>'paid_via') from public.payment_orders where order_id = '$O1b'")" "true|paid/pk_$O1b/toss-invite-pay/true/DONE/window"
+ok "B2b 잡히면 「결과 모름」 표시(unknown:approving)는 지워진다" "$(q "select coalesce(fail_reason, '(없음)') from public.payment_orders where order_id = '$O1b'")" "(없음)"
 ok "B3 다시 잡으면 claimed false · 상태 paid" "$(claim $O1b)/$(q "select public.taam_invite_order_claim('$O1b','pk2','카드',null,now(),'{}'::jsonb)->>'status'")" "false/paid"
 ok "B4 닫힌(superseded) 주문은 안 잡힌다" "$(claim $O1)/$(q "select status from public.payment_orders where order_id = '$O1'")" "false/failed"
 ok "B5 확정 안 된 paid 주문이 있으면 새 주문을 만들지 않는다 → PAYMENT_PENDING" "$(code "$(prep $I1 $M1)")" "PAYMENT_PENDING"
@@ -152,6 +157,8 @@ ok "C4 원장 — 일반 −8,000,000 한 줄 · 구매 id·초대·주문 · se
 ok "C5 주문에 확정 표시" "$(q "select (metadata->>'inv_settled') || '/' || status from public.payment_orders where order_id = '$O1b'")" "true/paid"
 r=$(conf $O1b)
 ok "C6 다시 부르면 「이미」 — 두 번 빼지 않는다" "$(J "$r" already)/$(q "select count(*) from public.deposit_transactions where user_id = '$M1'")/$(bal $M1)" "True/1/0/0"
+ok "C6b 「이미」 답에도 알림에 쓸 칸(매장·날짜·인원·보낸 사람)이 있다" "$(J "$r" rest_name)/$(J "$r" date)/$(J "$r" pax)/$([ "$(J "$r" host_user_id)" = "$HOST" ] && echo host)" "매장 tp1/2027.12.15/3/host"
+ok "C6c 결제 완료 알림은 주문마다 한 번 — 첫 호출만 true · 확정 안 된 주문은 false · 로그인 세션은 못 부른다" "$(q "select public.taam_invite_order_notified('$O1b')")/$(q "select public.taam_invite_order_notified('$O1b')")/$(q "select public.taam_invite_order_notified('$O1')")/$(code "$(as $SU "select public.taam_invite_order_notified('$O1b')")")" "t/f/f/FORBIDDEN"
 ok "C7 초대 순결제(원장)는 예치금 몫만 — 받는 회원이 그 뒤 초대 줄을 고쳐도(읽음 표시) 가드에 안 걸린다" "$(q "select public._taam_invite_net_paid('$I1', '$M1')")|$(as $M1 "update public.reservation_invites set invitee_seen = true where id = '$I1'")|$(q "select invitee_seen from public.reservation_invites where id = '$I1'")" "8000000||t"
 # 두 주머니
 I8=c8000000-0000-4000-8000-000000000008; newinv $I8 $M2 2 2900000 100000 tp8 2027.11.06 19:00    # 합계 6,000,000 · 멤버십 3,000,000 + 일반 1,000,000 → 카드 2,000,000
@@ -185,6 +192,21 @@ q "insert into public.ticket_products(id,rest_id,rest_name,date,time) values ('t
    insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_date,visit_time,party_size,price,status,purchase_id) values ('$M4','r_x','tpB2','2027.11.08','20:00',1,500000,'active','PAYH-tpB2_1')" >/dev/null
 ok "C16 주문 뒤에 같은 시간대 예약이 생겼다 → 확정에서 TIME_CONFLICT · 초대 보냄·홀드·잔액 그대로" "$(code "$(conf $OB)")|$(inv_st $IB)|$(hold_st $IB)|$(bal $M4)" "TIME_CONFLICT|sent/false|hold/true/INVH-|0/600000"
 
+echo "── S. 좌석이 확정된 초대 — 받는 회원이 초대장만 따로 못 바꾼다 ──"
+r=$(as $M1 "update public.reservation_invites set status = 'cancelled', cancelled_at = now() where id = '$I1'")
+ok "S1 서버 확정 뒤에 도착한 「초대 취소」(앱이 읽을 땐 보냄이었다) → INVITE_HAS_SEAT · 초대는 결제됨 그대로" "$(echo "$r" | grep -o INVITE_HAS_SEAT | head -1)|$(inv_st $I1)" "INVITE_HAS_SEAT|paid/true"
+r=$(as $M1 "update public.reservation_invites set status = 'sent', paid_at = null where id = '$I1'")
+ok "S2 결제됨 → 보냄 으로도 못 돌린다(좌석이 살아 있다)" "$(echo "$r" | grep -o INVITE_HAS_SEAT | head -1)|$(inv_st $I1)" "INVITE_HAS_SEAT|paid/true"
+as $HOST "update public.reservation_invites set invitee_seen = true where id = '$I1'" >/dev/null
+ok "S3 읽음 표시·보낸 사람·서버의 갱신은 그대로" "$(as $M1 "update public.reservation_invites set invitee_seen = false where id = '$I1'")|$(q "update public.reservation_invites set status = 'paid' where id = '$I1'")" "|"
+IS=ce000000-0000-4000-8000-00000000000e; newinv $IS $M4 2 100000 50000 tpS 2027.11.20 12:00
+q "update public.profiles set general_deposit_balance = 5000000 where id = '$M4'" >/dev/null
+as $M4 "select public.taam_apply_deposit_delta('$M4', 0, -300000, jsonb_build_array(jsonb_build_object('deposit_type','general','change_type','ticket_purchase','amount',-300000,'metadata',jsonb_build_object('purchase_id','INV-ce000000-5','invite_id','$IS','source','reservation_invite'))))" >/dev/null
+as $M4 "update public.reservation_invites set status = 'paid', paid_at = now() where id = '$IS'" >/dev/null
+r=$(as $M4 "update public.reservation_invites set status = 'sent', paid_at = null where id = '$IS'")
+ok "S4 종전 예치금 결제의 되돌림(결제됨 → 보냄 · 좌석 확정 전)은 그대로 된다" "$(echo "$r" | grep -c INVITE_HAS_SEAT)|$(inv_st $IS)" "0|sent/false"
+q "update public.profiles set general_deposit_balance = 600000 where id = '$M4'; delete from public.deposit_transactions where user_id = '$M4' and metadata->>'invite_id' = '$IS'; update public.reservation_invites set status = 'cancelled' where id = '$IS'; update public.tickets set status = 'cancelled' where extra_data->>'inviteId' = '$IS'" >/dev/null
+
 echo "── D. 닫기(토스 취소 전에) ──"
 r=$(q "select public.taam_invite_order_close('$OB', 'clash')")
 ok "D1 확정 안 된 paid 주문 → 닫힘(canceled · clash_canceling)" "$(J "$r" closed)|$(q "select status || '/' || fail_reason from public.payment_orders where order_id = '$OB'")" "True|canceled/clash_canceling"
@@ -198,11 +220,21 @@ ok "D5 닫힌 뒤에는 새 주문을 만들 수 있다(초대가 살아 있으�
 echo "── E. 정리 목록 ──"
 q "update public.payment_orders set approved_at = now() - interval '5 minutes' where order_id = '$OA';
    update public.payment_orders set created_at = now() - interval '11 minutes' where order_id = 'taaminv_p';
-   update public.payment_orders set fail_reason = 'clash_refund_failed' where order_id = '$OB'" >/dev/null
-ok "E1 확정 안 된 paid(3분↑) = confirm · 10분 넘은 pending = lookup · 취소 실패 = cancel · 확정된 주문은 없다" \
-   "$(q "select string_agg((x->>'order_id' = '$OA')::text || ':' || (x->>'reconcile'), ',' order by x->>'reconcile') filter (where x->>'order_id' in ('$OA','taaminv_p','$OB')) || '|' || count(*) filter (where x->>'order_id' = '$O1b') from jsonb_array_elements(public.taam_invite_pay_reconcile_list(50)) x")" \
-   "false:cancel,true:confirm,false:lookup|0"
+   update public.payment_orders set fail_reason = 'clash_refund_failed' where order_id = '$OB';
+   insert into public.payment_orders(order_id,user_id,purpose,amount,status,fail_reason,metadata,created_at,updated_at) values
+     ('taaminv_e40','$M4','invite_topup',1000,'pending',null,'{}', now() - interval '41 minutes', now() - interval '41 minutes'),
+     ('taaminv_eunk','$M4','invite_topup',1000,'pending','unknown:approving','{}', now() - interval '4 minutes', now() - interval '4 minutes'),
+     ('taaminv_eunk2','$M4','invite_topup',1000,'pending','unknown:approving','{}', now() - interval '1 minutes', now() - interval '1 minutes'),
+     ('taaminv_ef1','$M4','invite_topup',1000,'failed','superseded','{}', now() - interval '6 minutes', now() - interval '5 minutes'),
+     ('taaminv_ef2','$M4','invite_topup',1000,'failed','superseded','{}', now() - interval '3 hours', now() - interval '2 hours'),
+     ('taaminv_ef3','$M4','invite_topup',1000,'failed','claim_failed_refund_failed','{}', now() - interval '2 days', now() - interval '2 days'),
+     ('taaminv_ef4','$M4','invite_topup',1000,'failed','superseded','{}', now() - interval '1 minutes', now() - interval '1 minutes')" >/dev/null
+rl(){ q "select coalesce((select x->>'reconcile' from jsonb_array_elements(public.taam_invite_pay_reconcile_list(50)) x where x->>'order_id' = '$1'), '-')"; }
+ok "E1 확정 안 된 paid(3분↑) = confirm · 취소 실패 = cancel · 확정된 주문은 없다" "$(rl $OA)/$(rl $OB)/$(rl $O1b)" "confirm/cancel/-"
+ok "E1b pending — 표시 없는 주문은 40분 뒤에야(결제창에 머무는 회원을 끊지 않는다) · 승인 요청이 나간 주문(unknown:)은 3분 뒤부터" "$(rl taaminv_p)/$(rl taaminv_e40)/$(rl taaminv_eunk)/$(rl taaminv_eunk2)" "-/lookup/lookup/-"
+ok "E1c 닫힌(failed) 주문 — 닫힌 뒤 3~90분 동안 · 취소 실패(_refund_failed)는 3일 동안 「승인이 남았나」 본다(orphan) · 오래된 것·방금 닫힌 것은 아니다" "$(rl taaminv_ef1)/$(rl taaminv_ef2)/$(rl taaminv_ef3)/$(rl taaminv_ef4)" "orphan/-/orphan/-"
 ok "E2 kick — 볼 것이 있으면 설정을 찾는다(픽스처엔 없다 → no_config) · 로그인 세션은 목록을 못 본다" "$(q "select public.taam_invite_pay_reconcile_kick()->>'reason'")/$(code "$(as $SU "select public.taam_invite_pay_reconcile_list(5)")")" "no_config/FORBIDDEN"
+q "delete from public.payment_orders where order_id like 'taaminv_e%'" >/dev/null
 
 echo "── F. 그 뒤 — 취소·환불(기존 경로가 그대로 도는가) ──"
 # F1 결제 30분 안 회원 취소: 티켓 취소(카드 환불 대기) → 예치금 환불 → 초대장 취소 → 카드 환불 견적
@@ -231,9 +263,50 @@ r1=$(as $M4 "select public.taam_apply_deposit_delta('$M4', 0, 600000, jsonb_buil
 r=$(q "select public.taam_card_refund_quote('$PID9')")
 ok "F6 D-30 안(결제 30분 뒤) — 예치금 환불 거절(LEDGER_REFUND_POLICY) · 카드 몫 0" "$(code "$r1")|$(J "$r" policy)/$(J "$r" card_cap)/$(J "$r" target)|$(bal $M4)" "LEDGER_REFUND_POLICY|none/0/0|0/0"
 
+echo "── H. 예치금 결제(종전 길)와 겹칠 때 — 두 번 내지 않는다 ──"
+M5=a0000000-0000-4000-8000-000000000015; M6=a0000000-0000-4000-8000-000000000016
+q "insert into auth.users values ('$M5'),('$M6'); insert into public.profiles(id, display_name, role, general_deposit_balance) values ('$M5','겹침회원','user',600000),('$M6','겹침회원2','user',600000)" >/dev/null
+dep_pay(){ as $2 "select public.taam_apply_deposit_delta('$2', 0, -$3, jsonb_build_array(jsonb_build_object('deposit_type','general','change_type','ticket_purchase','amount',-$3,'description','초대 결제 (일반)','metadata',jsonb_build_object('purchase_id','INV-$(echo $1 | cut -c1-8)-777','invite_id','$1','source','reservation_invite'))))"; }
+IH=d1000000-0000-4000-8000-000000000001; newinv $IH $M5 2 400000 100000 tpH 2027.10.01 19:00     # 합계 1,000,000 · 잔액 600,000 → 카드 400,000
+OH=$(mkpaid $IH $M5)
+q "update public.profiles set general_deposit_balance = 2000000 where id = '$M5'" >/dev/null          # 그 사이 입금 반영
+r=$(dep_pay $IH $M5 1000000)                                                                            # 다른 기기에서 예치금 결제 ① 차감
+ok "H1 초대가 「보냄」인 동안 회원의 예치금 결제(차감)는 종전대로 된다" "$(code "$r")|$(bal $M5)" "|0/1000000"
+ok "H2 그 차감이 들어온 뒤의 카드 확정은 물러난다(ORDER_SUPERSEDED — Edge 가 카드를 취소한다) · 잔액·초대·홀드 그대로" "$(code "$(conf $OH)")|$(bal $M5)|$(inv_st $IH)|$(hold_st $IH)" "ORDER_SUPERSEDED|0/1000000|sent/false|hold/true/INVH-"
+q "select public.taam_invite_order_close('$OH', 'superseded')" >/dev/null
+ok "H3 되돌려지지 않은 예치금 결제가 있는 초대에는 카드 주문을 만들지 않는다 → INVITE_DEPOSIT_PAID" "$(q "update public.profiles set general_deposit_balance = 100 where id = '$M5'" >/dev/null; code2 "$(prep $IH $M5)")" "INVITE_DEPOSIT_PAID"
+# 카드 확정이 먼저 끝난 뒤의 예치금 차감은 거절
+II=d2000000-0000-4000-8000-000000000002; newinv $II $M6 2 400000 100000 tpI 2027.10.02 19:00
+OI=$(mkpaid $II $M6); conf $OI >/dev/null
+q "update public.profiles set general_deposit_balance = 3000000 where id = '$M6'" >/dev/null
+r=$(dep_pay $II $M6 1000000)
+ok "H4 카드로 이미 확정된 초대에 예치금 결제(차감)가 늦게 오면 거절 → INVITE_CLOSED · 잔액 그대로(두 번 안 빠진다)" "$(code "$r")|$(bal $M6)|$(q "select count(*) from public.deposit_transactions where user_id = '$M6' and metadata->>'purchase_id' like '%-777'")" "INVITE_CLOSED|0/3000000|0"
+r=$(as $M6 "select public.taam_apply_deposit_delta('$M6', 0, -1000, jsonb_build_array(jsonb_build_object('deposit_type','general','change_type','ticket_purchase','amount',-1000,'metadata',jsonb_build_object('purchase_id','PAYH-x_1'))))")
+r2=$(as $M6 "select public.taam_apply_deposit_delta('$M6', 0, -1000, jsonb_build_array(jsonb_build_object('deposit_type','general','change_type','ticket_purchase','amount',-1000,'metadata',jsonb_build_object('purchase_id','PAYH-x_2','invite_id','not-a-uuid'))))")
+ok "H5 초대와 무관한 차감(티켓 구매) · 초대 id 가 이상한 차감은 그대로 통과" "$(code "$r")/$(code "$r2")|$(bal $M6)" "/|0/2998000"
+r=$(q "select public.taam_apply_deposit_delta('$M6', 0, -1000, jsonb_build_array(jsonb_build_object('deposit_type','general','change_type','ticket_purchase','amount',-1000,'metadata',jsonb_build_object('purchase_id','INV-d2000000-888','invite_id','$II'))))")
+r2=$(as $SU "select public.taam_apply_deposit_delta('$M6', 0, -1000, jsonb_build_array(jsonb_build_object('deposit_type','general','change_type','ticket_purchase','amount',-1000,'metadata',jsonb_build_object('purchase_id','INV-d2000000-889','invite_id','$II'))))")
+ok "H6 서버·슈퍼어드민의 차감은 막지 않는다" "$(code "$r")/$(code "$r2")|$(bal $M6)" "/|0/2996000"
+# 동시: 카드 확정이 초대를 쥐고 있는 동안 예치금 차감이 들어온다 → 기다렸다가 거절
+M7=a0000000-0000-4000-8000-000000000017; q "insert into auth.users values ('$M7'); insert into public.profiles(id, display_name, role, general_deposit_balance) values ('$M7','동시회원','user',600000)" >/dev/null
+IJ=d3000000-0000-4000-8000-000000000003; newinv $IJ $M7 2 400000 100000 tpJ 2027.10.03 19:00
+OJ=$(mkpaid $IJ $M7); q "update public.profiles set general_deposit_balance = 2000000 where id = '$M7'" >/dev/null
+( $P -c "begin; select public.taam_invite_confirm_card('$OJ'); select pg_sleep(1.5); commit;" >/tmp/_icp_a.out 2>&1 ) &
+python3 -c "import time; time.sleep(0.5)"
+rB=$(dep_pay $IJ $M7 1000000); wait
+ok "H7 동시(카드 확정이 먼저 초대를 쥠) — 예치금 차감은 확정이 끝날 때까지 기다렸다가 거절 · 결과: 카드+예치금 한 번만(잔액 2,000,000 − 600,000)" "$(code "$rB")|$(bal $M7)|$(inv_st $IJ)|$(q "select count(*) from public.deposit_transactions where user_id = '$M7' and amount < 0")" "INVITE_CLOSED|0/1400000|paid/true|1"
+# 동시(반대): 예치금 차감 트랜잭션이 열려 있는 동안 카드 확정 → 기다렸다가 물러난다
+M8=a0000000-0000-4000-8000-000000000018; q "insert into auth.users values ('$M8'); insert into public.profiles(id, display_name, role, general_deposit_balance) values ('$M8','동시회원2','user',600000)" >/dev/null
+IK=d4000000-0000-4000-8000-000000000004; newinv $IK $M8 2 400000 100000 tpK 2027.10.04 19:00
+OK2=$(mkpaid $IK $M8); q "update public.profiles set general_deposit_balance = 2000000 where id = '$M8'" >/dev/null
+( $P -c "begin; set local taam.uid = '$M8'; select public.taam_apply_deposit_delta('$M8', 0, -1000000, jsonb_build_array(jsonb_build_object('deposit_type','general','change_type','ticket_purchase','amount',-1000000,'metadata',jsonb_build_object('purchase_id','INV-d4000000-777','invite_id','$IK','source','reservation_invite')))); select pg_sleep(1.5); commit;" >/tmp/_icp_b.out 2>&1 ) &
+python3 -c "import time; time.sleep(0.5)"
+rA=$(conf $OK2); wait
+ok "H8 동시(예치금 차감이 먼저) — 카드 확정은 기다렸다가 물러난다(ORDER_SUPERSEDED) · 교착 없음 · 결과: 예치금 한 번만(2,000,000 − 1,000,000)" "$(code "$rA")|$(bal $M8)|$(inv_st $IK)|$(grep -c "deadlock" /tmp/_icp_b.out)" "ORDER_SUPERSEDED|0/1000000|sent/false|0"
+
 echo "── G. 다시 RUN · 의존 없는 DB ──"
 out2=$($P -f "$MIG" 2>&1)
-ok "G1 두 번째 RUN: 오류 없음 · ❌ 0 · 용도 제약 「이미 있음」 · 기존 주문·확정 그대로" "$(echo "$out2" | grep -cE "ERROR")/$(echo "$out2" | grep -c '❌')/$(echo "$out2" | grep -c '이미 있음')|$(q "select count(*) from public.payment_orders where purpose = 'invite_topup' and metadata->>'inv_settled' = 'true'")" "0/0/1|4"
+ok "G1 두 번째 RUN: 오류 없음 · ❌ 0 · 용도 제약 「이미 있음」 · 기존 주문·확정 그대로" "$(echo "$out2" | grep -cE "ERROR")/$(echo "$out2" | grep -c '❌')/$(echo "$out2" | grep -c '이미 있음')|$(q "select count(*) from public.payment_orders where purpose = 'invite_topup' and metadata->>'inv_settled' = 'true'")" "0/0/1|6"
 DB2=${DB}_bare; psql -h /tmp -U postgres -d postgres -q -X -c "drop database if exists $DB2" >/dev/null 2>&1; psql -h /tmp -U postgres -d postgres -q -X -c "create database $DB2" >/dev/null
 psql -h /tmp -U postgres -d $DB2 -q -At -X -c "create schema auth; create function auth.uid() returns uuid language sql as 'select null::uuid';
   create table public.payment_orders(order_id text primary key, user_id uuid, purpose text, status text, amount bigint, metadata jsonb default '{}', fail_reason text, created_at timestamptz default now(), approved_at timestamptz, payment_key text);
