@@ -32,8 +32,8 @@ create or replace function public.taam_ticket_visible(p text, u uuid) returns bo
 create or replace function public.taam_tier_rank(p text) returns int language sql immutable as \$\$ select case upper(coalesce(p,'')) when 'M' then 3 when 'T' then 2 when 'A' then 1 else 0 end \$\$;
 create or replace function public.taam_tier_is_open(p text) returns boolean language sql immutable as \$\$ select upper(coalesce(p,'')) = 'A' \$\$;
 create or replace function public.taam_user_tier(p uuid) returns text language sql stable as \$\$ select membership_tier from public.profiles where id = p \$\$;
-insert into auth.users values ('$SU'),('$M1'),('$M2');
-insert into public.profiles(id, role, membership_tier) values ('$SU','super_admin','M'), ('$M1','member','M'), ('$M2','member','M');
+insert into auth.users values ('$SU'),('$M1'),('$M2'),('a1000000-0000-4000-8000-000000000002');
+insert into public.profiles(id, role, membership_tier) values ('$SU','super_admin','M'), ('a1000000-0000-4000-8000-000000000002','super_admin','M'), ('$M1','member','M'), ('$M2','member','M');
 SQL
 S0=$(grep -n "create or replace function public.taam_visit_date" sql/visit_reminder.sql | cut -d: -f1); E0=$(grep -n "create or replace function public.taam_visit_reminder_notify" sql/visit_reminder.sql | cut -d: -f1)
 sed -n "${S0},$((E0-1))p" sql/visit_reminder.sql | $P >/dev/null 2>&1
@@ -85,7 +85,7 @@ ok "다시 soldout" "soldout" "$(st tp1)"
 cx PAY-c
 ok "이벤트 pending 생김" "skipped:MUTED,pending:" "$(ev tp1)"
 r=$($P -c "select (public.taam_ticket_restock_process())::text")
-ok "처리 1 · 알림 감(회원 둘 + 슈퍼어드민 — 보유자 M1 제외: M2 · SU)" "1|2" "$(echo "$r" | grep -c '"events": 1')|$($P -c "select count(*) from public.notifications where type='ticket_restock'")"
+ok "처리 1 · 알림 감(M2 + 슈퍼어드민 둘 — 보유자 M1 제외)" "1|3" "$(echo "$r" | grep -c '"events": 1')|$($P -c "select count(*) from public.notifications where type='ticket_restock'")"
 
 echo "── ④ 다른 회차의 끔은 이 회차를 막지 않는다"
 fill tp2 2 manual MAN-t2
@@ -134,6 +134,41 @@ ok "분은 1~30 으로 자름(999 → 30분)" "1" "$($P -c "$SUP select (public.
 ok "anon 실행 권한 없음 · authenticated 있음" "f|t" "$($P -c "select has_function_privilege('anon','public.taam_restock_mute(text[],integer,text)','execute')")|$($P -c "select has_function_privilege('authenticated','public.taam_restock_mute(text[],integer,text)','execute')")"
 ok "authenticated 는 끔 표에 직접 못 씀" "f|f" "$($P -c "select has_table_privilege('authenticated','public.ticket_restock_mutes','insert')")|$($P -c "select has_table_privilege('authenticated','public.ticket_restock_mutes','update')")"
 ok "트리거 함수는 authenticated 가 못 부름" "f" "$($P -c "select has_function_privilege('authenticated','public.taam_restock_mute_check()','execute')")"
+
+echo "── ⑪ 끈 사람의 풀기만 막는다 — 같은 때 회원이 자기 좌석을 풀면 종전대로 알림(검토)"
+$P -c "delete from public.ticket_restock_events where ticket_product_id in ('tp2')" >/dev/null
+$P -c "update public.tickets set status='cancelled' where ticket_product_id='tp2'" >/dev/null
+$P -c "insert into public.tickets(user_id,ticket_product_id,party_size,status,purchase_id) values ('$M2','tp2',1,'active','PAY-m2a'),('$M1','tp2',1,'manual','MAN-s1')" >/dev/null
+ok "tp2 만석" "soldout" "$(st tp2)"
+$P -c "delete from public.ticket_restock_events where ticket_product_id='tp2'" >/dev/null
+W=$($P -c "$SUP select (public.taam_restock_mute(array['tp2'], 5))->>'token'" | tail -1)
+$P -c "set taam.uid='$M2'; set taam.super='0'; update public.tickets set status='cancelled' where purchase_id='PAY-m2a'" >/dev/null
+ok "끈 동안 회원 취소 → pending(알림 간다) · 끈 쪽 hits 0" "pending:|0" "$(ev tp2)|$($P -c "$SUP select (public.taam_restock_unmute('$W'))->>'hits'" | tail -1)"
+$P -c "delete from public.ticket_restock_events where ticket_product_id='tp2'; insert into public.tickets(user_id,ticket_product_id,party_size,status,purchase_id) values ('$M2','tp2',1,'active','PAY-m2b')" >/dev/null
+ok "다시 만석" "soldout" "$(st tp2)"
+W2=$($P -c "$SUP select (public.taam_restock_mute(array['tp2'], 5))->>'token'" | tail -1)
+$P -c "$SUP update public.tickets set status='cancelled' where purchase_id='MAN-s1'" >/dev/null
+ok "끈 슈퍼어드민 세션의 풀기 → skipped:MUTED · hits 1" "skipped:MUTED|1" "$(ev tp2)|$($P -c "$SUP select (public.taam_restock_unmute('$W2'))->>'hits'" | tail -1)"
+# 다른 슈퍼어드민이 끈 것은 이 슈퍼어드민의 풀기를 막지 않는다(각자 고른다)
+SU2=a1000000-0000-4000-8000-000000000002
+$P -c "delete from public.ticket_restock_events where ticket_product_id='tp2'; insert into public.tickets(user_id,ticket_product_id,party_size,status,purchase_id) values ('$M1','tp2',1,'manual','MAN-s2')" >/dev/null
+W3=$($P -c "set taam.uid='$SU2'; set taam.super='1'; select (public.taam_restock_mute(array['tp2'], 5))->>'token'" | tail -1)
+$P -c "$SUP update public.tickets set status='cancelled' where purchase_id='MAN-s2'" >/dev/null
+ok "다른 슈퍼어드민의 끔은 이 풀기를 막지 않는다 → pending" "pending:" "$(ev tp2)"
+$P -c "$SUP select public.taam_restock_unmute('$W3')" >/dev/null
+
+echo "── ⑫ 끔 줄이 잠겨 있어도 풀기 커밋은 기다리지 않는다(skip locked)"
+$P -c "delete from public.ticket_restock_events where ticket_product_id='tp3'" >/dev/null
+fill tp3 2 manual MAN-lk
+L=$($P -c "$SUP select (public.taam_restock_mute(array['tp3'], 5))->>'token'" | tail -1)
+( $P -c "begin; select id from public.ticket_restock_mutes where token='$L' for update; select pg_sleep(4); commit;" >/dev/null 2>&1 & )
+sleep 0.6
+T0=$(date +%s%N)
+$P -c "update public.tickets set status='cancelled' where purchase_id='MAN-lk'" >/dev/null
+T1=$(date +%s%N)
+MS=$(( (T1 - T0) / 1000000 ))
+ok "잠긴 동안 풀기 커밋 2초 안 · 그래도 skipped:MUTED" "1|skipped:MUTED" "$([ $MS -lt 2000 ] && echo 1 || echo "0(${MS}ms)")|$(ev tp3)"
+sleep 4
 
 echo "── ⑩ 다시 RUN 해도 안전"
 out2=$($P -f supabase/migrations/20261113_restock_mute.sql 2>&1)

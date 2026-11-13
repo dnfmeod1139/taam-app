@@ -14,7 +14,9 @@
 --   ③ 앱이 바로 taam_restock_unmute(token) 으로 끈 줄을 닫는다 → 실제로 막은 건수(hits)를 돌려준다(「취소표 알림 안 보냄」 안내)
 --   · skipped 줄은 60분 쿨다운에 들지 않는다(쿨다운은 pending·sent 만 센다) — 알림을 끈 뒤 진짜 취소가 나면 그건 알린다.
 --   · 앱이 ③ 을 못 부르면(끊김) 「끔」은 정한 시간이 지나면 저절로 풀린다. 그 사이 같은 회차가 다시 매진됐다 풀리면 그것도 조용히 지나간다(몇 분).
---   · 회원·매장 어드민은 부를 수 없다(슈퍼어드민·SQL Editor·서버만 · _taam_fee_caller_ok) — 그들이 푸는 좌석은 종전대로 알린다.
+--   · 회원·매장 어드민은 부를 수 없다(슈퍼어드민·SQL Editor·서버만 · _taam_fee_caller_ok).
+--   · 끈 사람의 풀기만 막는다 — 이 커밋을 한 세션이 끈 슈퍼어드민이거나 서버(uid 없음: Edge 환불·크론)일 때. 같은 몇 초 안에 회원·매장 어드민이
+--     자기 좌석을 풀어 매진이 풀린 것은 종전대로 알린다(회차 단위로만 막으면 그 자리는 끝내 알림이 없다 — 검토). 홀드 만료 크론은 그 몇 초 안이면 같이 조용하다.
 --   · 연계(패키지) 회차를 건너뛰는 trg_taam_restock_skip_package 와 함께 돈다(이름 순으로 이쪽이 먼저 — 둘 다 알림을 막는 쪽이라 순서는 상관없다).
 -- ============================================================================
 
@@ -80,12 +82,22 @@ grant execute on function public.taam_restock_mute(text[], int, text), public.ta
 -- ── C. 이벤트가 들어오려 할 때 — 「끔」이 살아 있으면 skipped · MUTED ──
 create or replace function public.taam_restock_mute_check()
 returns trigger language plpgsql security definer set search_path = public as $$
+declare v_uid uuid;
 begin
   if coalesce(new.status, 'pending') = 'pending' then
-    update public.ticket_restock_mutes set hits = hits + 1, last_hit_at = now()
-     where ticket_product_id = new.ticket_product_id and cleared_at is null and until > now();
-    if found then
+    -- 끈 사람의 풀기만 막는다: 이 커밋을 한 세션이 끈 슈퍼어드민이거나 서버(Edge·크론 — uid 없음)일 때.
+    --   같은 몇 초 안에 회원·매장 어드민이 자기 좌석을 풀어 매진이 풀린 것은 종전대로 알린다(검토: 회차 단위로만 막으면 그 자리는 영영 알림이 없다)
+    begin v_uid := auth.uid(); exception when others then v_uid := null; end;
+    if exists (select 1 from public.ticket_restock_mutes m
+                where m.ticket_product_id = new.ticket_product_id and m.cleared_at is null and m.until > now()
+                  and (v_uid is null or m.set_by is null or m.set_by = v_uid)) then
       new.status := 'skipped'; new.reason := 'MUTED'; new.processed_at := now();
+      -- 막은 건수 — 잠금을 기다리지 않는다(닫는 중인 줄은 건너뛴다 · 결제·취소 커밋이 이 표 때문에 멈추지 않게)
+      update public.ticket_restock_mutes set hits = hits + 1, last_hit_at = now()
+       where id in (select m.id from public.ticket_restock_mutes m
+                     where m.ticket_product_id = new.ticket_product_id and m.cleared_at is null and m.until > now()
+                       and (v_uid is null or m.set_by is null or m.set_by = v_uid)
+                     for update skip locked);
     end if;
   end if;
   return new;
@@ -111,7 +123,7 @@ select '② 끄기·닫기 RPC',
 union all
 select '③ 이벤트 표 BEFORE INSERT 트리거',
        case when to_regclass('public.ticket_restock_events') is null then '❌ 취소표 이벤트 표가 없다 — 20260929_ticket_restock.sql 먼저'
-            when exists (select 1 from pg_trigger where tgname = 'trg_taam_restock_mute' and tgrelid = 'public.ticket_restock_events'::regclass and not tgisinternal)
+            when exists (select 1 from pg_trigger where tgname = 'trg_taam_restock_mute' and tgrelid = to_regclass('public.ticket_restock_events') and not tgisinternal)
             then '✅' else '❌' end
 union all
 select '④ 비로그인(anon)은 끄기 못 부름',
