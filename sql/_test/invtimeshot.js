@@ -29,7 +29,7 @@ const fs = require('fs');
   const scans = (src.match(/from\('reservation_invites'\)\s*\n?\s*\.select\('id, visit_time'/g) || []).length;
   ok('시각 조회가 한 곳뿐이다 ⭐ (' + scans + '곳)', scans === 1);
   // 캘린더와 대시보드가 둘 다 그 함수를 쓴다
-  ok('캘린더가 그 함수를 쓴다 ⭐', /_tcalPurchases[\s\S]{0,600}taamInviteTimeMap/.test(src));
+  ok('캘린더가 그 함수를 쓴다 ⭐', /async function tcalLoadPurchases[\s\S]{0,4000}taamInviteTimeMap/.test(src));   // 2026-11-12 로더가 지역 변수(_next)에 만든 뒤 넣는다 — 함수 안에서 부르는지로 본다
   ok('대시보드도 그 함수를 쓴다 ⭐', /_needT[\s\S]{0,400}taamInviteTimeMap/.test(src));
 
   const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium' });
