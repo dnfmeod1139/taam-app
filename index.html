@@ -28033,6 +28033,8 @@ async function _tkAcquireSeatHold(t, r, pax){
     }
     // 🆕 2026-10-29 연계(패키지) 회차 — 화면의 패키지 정보가 낡았을 때(방금 연계됨)
     if (/PACKAGE_ONLY/.test(m)) return { ok:false, pkgOnly:true, reason: _shT('pkg.only_title', '패키지로만 예약할 수 있는 회차입니다') };
+    // 🆕 2026-11-13 서버에 없는 회차(그 사이 삭제됨 · 화면이 낡았다) — 「잠시 후 다시」가 아니라 새로고침이 답이다
+    if (/TICKET_NOT_FOUND/.test(m)) return { ok:false, gone:true, reason: _shT('seathold.gone', '판매가 끝났거나 없어진 일정입니다 — 화면을 새로고침해 주세요') };
     if (/TIER_BLOCKED/.test(m)) {
       console.warn('[seatHold] 서버 등급 제한:', m);
       return { ok:false, tier:true,
@@ -28340,6 +28342,7 @@ async function openTdPayPopup() {
       }
       showToast(_hold.soldOut ? '⚠' : '❌', _hold.soldOut ? '좌석 확보 실패' : '오류', _hold.reason);
       if (_hold.soldOut && typeof renderTicketList === 'function') { try { renderTicketList(); } catch(e){} }
+      if (_hold.gone && typeof taamSyncNow === 'function') { try { taamSyncNow(); } catch(e){} }   // 🆕 2026-11-13 서버에 없는 회차 — 낡은 목록을 새로 읽는다
       return;
     }
   }
@@ -56829,7 +56832,7 @@ var TRANSLATIONS = {
       vat:'부가세',
     },
     // 🆕 티켓 취소 규정 — 티켓 상세/구매 화면의 CLAUSE 블록
-    seathold: { tier:'이 티켓은 등급 제한이 있습니다', fail:'좌석 확보에 실패했습니다 — 잠시 후 다시 시도해주세요' },
+    seathold: { tier:'이 티켓은 등급 제한이 있습니다', fail:'좌석 확보에 실패했습니다 — 잠시 후 다시 시도해주세요', gone:'판매가 끝났거나 없어진 일정입니다 — 화면을 새로고침해 주세요' },
     policy: {
       none:'취소 규정이 설정되지 않았습니다.',
       etc:'기타',
@@ -57795,7 +57798,7 @@ var TRANSLATIONS = {
       discount:'Discount',
       vat:'VAT',
     },
-    seathold: { tier:'This ticket is limited to certain membership tiers', fail:'Could not secure the seat — please try again shortly' },
+    seathold: { tier:'This ticket is limited to certain membership tiers', fail:'Could not secure the seat — please try again shortly', gone:'This date is no longer on sale — please refresh the screen' },
     policy: {
       none:'No cancellation policy has been set for this ticket.',
       etc:'Other',
@@ -57965,7 +57968,7 @@ TRANSLATIONS.ja = {
     g_beef:'牛肉', g_pork:'豚肉',
   },
   lang_sheet: { label:'LANGUAGE' },
-  seathold: { tier:'このチケットには等級制限があります', fail:'席を確保できませんでした — しばらくしてからもう一度お試しください' },
+  seathold: { tier:'このチケットには等級制限があります', fail:'席を確保できませんでした — しばらくしてからもう一度お試しください', gone:'販売が終了したか、なくなった日程です — 画面を更新してください' },
   policy: {
     none:'このチケットにはキャンセル規定が設定されていません。',
     etc:'その他',
@@ -64261,7 +64264,7 @@ function _pkHoldErr(m){
   if(/TIME_CONFLICT/.test(m)) return _pkT('ticket.clash_body', '같은 날 같은 시간대(점심/저녁)에 이미 예약이 있어 구매할 수 없습니다.');
   if(/REPURCHASE_BLOCKED/.test(m)) return _pkT('pkg.repurchase', '재구매 제한 기간인 매장이 있습니다');
   if(/TIER_BLOCKED|GUEST_BLOCKED/.test(m)) return _pkT('pkg.tier', '이용 등급이 맞지 않는 일정이 있습니다');
-  if(/PACKAGE_ONLY|PACKAGE_NOT_ACTIVE|PACKAGE_CHANGED|TICKET_NOT_APPROVED/.test(m)) return _pkT('pkg.err_closed', '판매가 끝났거나 구성이 바뀐 패키지입니다');
+  if(/PACKAGE_ONLY|PACKAGE_NOT_ACTIVE|PACKAGE_CHANGED|TICKET_NOT_APPROVED|TICKET_NOT_FOUND/.test(m)) return _pkT('pkg.err_closed', '판매가 끝났거나 구성이 바뀐 패키지입니다');
   if(/ROUND_CLOSED/.test(m)) return _pkT('pkg.sold_out_round', '매진된 일정이 있습니다');
   return _pkT('seathold.fail', '좌석 확보에 실패했습니다 — 잠시 후 다시 시도해주세요');
 }
@@ -67301,7 +67304,7 @@ window.taamInviteTimeOf = taamInviteTimeOf;
 // 🆕 초대 결제(paid) 로드 — 역구조(초대→결제)로 팔린 예약도 캘린더 점유에 반영 (금액·회원명 포함)
 async function tcalLoadInvites(){
   try {
-    if(!window.sb) return;
+    if(!window.sb) return false;
     var r = await window.sb.from('reservation_invites')
       .select('id,restaurant_id,restaurant_name,visit_date,visit_time,pax,status,invitee_user_id,total_amount,agency_fee')   // 🆕 2026-11-04 id — 조기 반환 칩(_invEarly)이 초대 id 로 찾는다(종전엔 빠져 칩이 한 번도 안 떴다)
       .eq('status','paid');
@@ -67318,11 +67321,14 @@ async function tcalLoadInvites(){
           Object.keys(_pm).forEach(function(k){ nm[k] = _pm[k].display_name || _pm[k].email || ''; }); } catch(_ne){}
         _tcalInvites.forEach(function(x){ x._inviteeName = nm[x.invitee_user_id] || ''; });
       }
+      return true;
     }
+    return false;      // 🆕 2026-11-13 못 읽었다(직전 값 유지) — 홀드 감시가 다시 읽는다
   } catch(e){
     console.warn('[tcal] invites 로드 실패 — 직전 값 유지:', e && e.message);
     if(!Array.isArray(_tcalInvites)) _tcalInvites = [];
     _tcalLoadFailed = true;
+    return false;
   }
 }
 
@@ -67516,6 +67522,8 @@ function _tcalDayGroups(dateKey){
     //   근거가 아니므로 엔트리에서 지운다 — 이름(buyer_name)은 그대로 살아 있다.
     var _mnRow = String(h.purchaseId||'').indexOf('MAN-') === 0
               || String(h.purchaseId||'').indexOf('KSK-') === 0        // 🆕 2026-09-29 정산 결제 좌석 — user_id 는 회차 작성자
+              || String(h.purchaseId||'').indexOf('INVH-') === 0       // 🆕 2026-11-13 초대 홀드 · 비회원 결제 링크 좌석도 user_id 는 넣은 어드민이다 — 「묶어보기」가 서로 다른 손님을 한 팀으로 합쳐 이름이 사라졌다
+              || (String(h.purchaseId||'').indexOf('LINK-') === 0 && !(h.extra_data && h.extra_data.memberUid))
               || (!!(h.extra_data && h.extra_data.manualEntry) && !/^PAY/.test(String(h.purchaseId||'')));   // 🔒 2026-11-13 회원 구매 행(PAY*)은 플래그가 있어도 회원 행 — 누가 잡은 홀드인지 가릴 수 없게
     // 🆕 2026-10-30 수동 추가(MAN-)의 메모는 tickets.extra_data.memo 에 있다 — 종전엔 기록만 남긴 건(daegwan_manual)의 메모만 줄에 실어
     //   본 티켓에 연결해 저장한 메모(대부분의 수동 추가)는 저장 뒤 어디에도 안 보였다. 운영 행이 아닌 회원 구매 행의 extra_data.memo 는 회원이 쓸 수 있는 칸이라 싣지 않는다.
@@ -68651,7 +68659,9 @@ function tcalInit() {
       var d2 = document.getElementById('tcalDetail');
       if(d2) d2.innerHTML = '<div class="tcal-empty-day">날짜를 선택하세요</div>';
     }
-    try { _tcalHoldPoll.sig = null; _tcalHoldPoll.dirty = false; _tcalHoldPoll.stale = false; _tcalHoldBannerPaint(); _tcalHoldWatchStart(); } catch(_hw){}   // 🆕 2026-11-12 지금 결제 중 띠 · 감시
+    try { _tcalHoldPoll.sig = null; _tcalHoldPoll.dirty = false; _tcalHoldPoll.stale = false; _tcalHoldPoll.invPending = false; _tcalHoldPoll.busy = false; _tcalHoldPoll.seq = (_tcalHoldPoll.seq || 0) + 1;   // 열 때마다 새로 — 앞서 멈춘 확인이 있어도 감시가 다시 돈다
+          if(_tcalHoldPoll.t){ clearTimeout(_tcalHoldPoll.t); _tcalHoldPoll.t = null; }
+          _tcalHoldBannerPaint(); _tcalHoldWatchStart(); } catch(_hw){}   // 🆕 2026-11-12 지금 결제 중 띠 · 감시
   });
 }
 
@@ -68770,7 +68780,8 @@ function _tcalVrEnsure(dateStr, iso, groups){
     if(_tcalVr.busy === key) _tcalVr.busy = '';
     _tcalVr.key = key; _tcalVr.at = Date.now(); _tcalVr.data = data; _tcalVr.err = err;
     // 그 사이 다른 날짜로 갔으면 다시 그리지 않는다
-    if(_tcalVr.iso === iso && _tcalSelectedDate === dateStr && document.getElementById('tcalDetail')) tcalRenderDetail(dateStr);
+    //   🆕 2026-11-13 이 응답은 뒤늦게 온다 — 그 사이 적던 정원 칸·보고 있던 줄을 지키는 다시 그리기로(입력 중이면 다음 감시 때)
+    if(_tcalVr.iso === iso && _tcalSelectedDate === dateStr && document.getElementById('tcalDetail')) _tcalDetailRepaintKeep(dateStr);
   };
   try {
     window.sb.rpc('taam_visit_reminder_status', { p_date: iso, p_pids: ids.p, p_invites: ids.i }).then(function(r){
@@ -69047,7 +69058,8 @@ function tcalRenderDetail(dateStr) {
               + (e.hold.until ? ' · <b class="tcal-hold-left" data-hold-at="' + (parseInt(e.hold.at, 10) || 0) + '">' + _raEsc(_tcalHoldRemainText(e.hold)) + '</b>' : '')
               + '<div style="font-weight:600;color:#9a7a45;">결제가 끝나면 「앱구매」로 바뀌고, 안 끝나면 자동으로 풀립니다.</div></div>'
             : '';
-          return '<div style="padding:'+(inner?'7px 16px 7px 26px':'10px 16px')+';border-top:1px solid '+(inner?'#f8f6f2':'#f4f1ec')+';'+(_isPayHold?'background:#FFFDF8;':(inner?'background:#fdfcfa;':''))+'">'
+          // data-tcal-row: 뒤에서 다시 그릴 때 「보고 있던 줄」을 같은 자리에 두는 닻(_tcalAnchorTake)
+          return '<div data-tcal-row="' + _raEsc(e.pid || (e.iid ? 'i:' + e.iid : (e.mid != null ? 'm:' + e.mid : ''))) + '" style="padding:'+(inner?'7px 16px 7px 26px':'10px 16px')+';border-top:1px solid '+(inner?'#f8f6f2':'#f4f1ec')+';'+(_isPayHold?'background:#FFFDF8;':(inner?'background:#fdfcfa;':''))+'">'
             + '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">'
             +   '<div style="min-width:0;font-size:12.5px;">' + head + (e.time?' <span style="color:#9a9486;font-size:11px;">· '+_raEsc(e.time)+'</span>':'')
             +     (e.bought && !_isPayHold ? '<div style="font-size:10.5px;color:#b5afa2;margin-top:2px;">구매 '+_thxFmtDateTime(e.bought)+'</div>' : '') + '</div>'
@@ -69237,36 +69249,79 @@ window._tcalHoldNudge = _tcalHoldNudge;
 // 홀드 한 줄의 서명 — 구매 id + 홀드 시각. 패키지 카드 주문은 같은 홀드의 시각을 다시 찍는다(남은 시간이 달라진다)
 function _tcalHoldSigOf(pid, at){ return String(pid || '') + '@' + (Date.parse(at || '') || 0); }
 // 감시가 다시 그릴 때 — 저장 안 한 정원 칸 값과 스크롤 자리를 지킨다(목록이 손 밑에서 바뀌지 않게)
-function _tcalHoldRepaint(){
-  var det = document.getElementById('tcalDetail'), scr = document.getElementById('tcalScroll');
-  var ae = document.activeElement;
-  var typing = !!(ae && det && det.contains(ae) && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName || ''));
-  tcalRender();
-  if(typing){ _tcalHoldPoll.dirty = true; _tcalHoldBannerPaint(); return; }   // 입력 중이면 상세는 다음 번에(입력이 지워진다)
-  _tcalHoldPoll.dirty = false;
-  if(!_tcalSelectedDate){ _tcalHoldBannerPaint(); return; }
-  var caps = {}, st = scr ? scr.scrollTop : 0, dt = det ? det.scrollTop : 0, ws = window.pageYOffset || 0;
+// ── 뒤에서 도는 다시 그리기(홀드 감시 · 리마인드 현황 응답) — 손 밑의 줄이 움직이지 않게 ──
+//   닻: 지금 화면에 보이는 첫 예약 줄(data-tcal-row). 다시 그린 뒤 그 줄이 같은 높이에 오도록 스크롤을 옮긴다(스크롤 숫자를 되돌리는 게 아니다 —
+//   띠가 위에 끼어들면 숫자는 같아도 줄은 밀린다 · 브라우저의 스크롤 고정이 있든 없든 실제 위치를 재서 맞춘다). 보이는 줄이 없으면(달력만 보는 중) 아무것도 안 옮긴다.
+function _tcalAnchorTake(){
   try {
-    var ins = det ? det.querySelectorAll('input[id^="tcalCap_"]') : [];
-    for(var i = 0; i < ins.length; i++){ if(ins[i].value !== ins[i].defaultValue) caps[ins[i].id] = ins[i].value; }
+    var det = document.getElementById('tcalDetail'), scr = document.getElementById('tcalScroll');
+    if(!det || !scr) return null;
+    var sr = scr.getBoundingClientRect(), rows = det.querySelectorAll('[data-tcal-row]');
+    for(var i = 0; i < rows.length; i++){
+      var rc = rows[i].getBoundingClientRect();
+      if(rc.bottom > sr.top + 1 && rc.top < sr.bottom - 1 && rc.height > 0) return { key: rows[i].getAttribute('data-tcal-row') || '', top: rc.top, detTop: det.getBoundingClientRect().top };
+    }
   } catch(_e){}
-  tcalRenderDetail(_tcalSelectedDate);
+  return null;
+}
+function _tcalAnchorRestore(an){
+  if(!an) return;
   try {
-    Object.keys(caps).forEach(function(id){ var x = document.getElementById(id); if(x) x.value = caps[id]; });
-    if(scr && scr.scrollTop !== st) scr.scrollTop = st;
-    if(det && det.scrollTop !== dt) det.scrollTop = dt;
-    if((window.pageYOffset || 0) !== ws) window.scrollTo(0, ws);
-  } catch(_e2){}
+    var det = document.getElementById('tcalDetail'), scr = document.getElementById('tcalScroll');
+    if(!det || !scr) return;
+    var el = null;
+    if(an.key){ var rows = det.querySelectorAll('[data-tcal-row]'); for(var i = 0; i < rows.length; i++){ if(rows[i].getAttribute('data-tcal-row') === an.key){ el = rows[i]; break; } } }
+    // 그 줄이 사라졌으면(풀린 홀드 줄 등) 상세 머리가 움직인 만큼만 맞춘다
+    var d = Math.round(el ? (el.getBoundingClientRect().top - an.top) : (det.getBoundingClientRect().top - an.detTop));
+    if(d) scr.scrollTop += d;
+  } catch(_e){}
+}
+// 상세를 「지키면서」 다시 그린다 — 입력 중이면 안 그리고 false(다음 감시 때 그린다)
+function _tcalDetailRepaintKeep(dateStr, an){
+  var det = document.getElementById('tcalDetail');
+  if(!det || !dateStr) return false;
+  var ae = document.activeElement;
+  if(ae && det.contains(ae) && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName || '')){ _tcalHoldPoll.dirty = true; return false; }
+  an = an || _tcalAnchorTake();
+  var caps = {};
+  try {
+    var ins = det.querySelectorAll('input[id^="tcalCap_"]');
+    for(var i = 0; i < ins.length; i++){ if(ins[i].value !== ins[i].defaultValue) caps[ins[i].id] = ins[i].value; }   // 저장 안 한 정원 칸
+  } catch(_e){}
+  tcalRenderDetail(dateStr);
+  try { Object.keys(caps).forEach(function(id){ var x = document.getElementById(id); if(x) x.value = caps[id]; }); } catch(_e2){}
+  _tcalAnchorRestore(an);
+  return true;
+}
+function _tcalHoldRepaint(){
+  var an = _tcalAnchorTake();            // 달력·띠가 바뀌기 전에 잰다
+  tcalRender();
+  if(_tcalSelectedDate && _tcalDetailRepaintKeep(_tcalSelectedDate, an)){ _tcalHoldPoll.dirty = false; return; }
+  // 날짜를 안 골랐거나 입력 중 — 띠만 맞춘다(입력 중이면 dirty 가 남아 다음 번에 상세를 그린다)
+  if(!_tcalSelectedDate) _tcalHoldPoll.dirty = false;
+  _tcalHoldBannerPaint();
+  _tcalAnchorRestore(an);
+}
+// 가벼운 조회가 끝나지 않는 일(앱이 다시 깨어난 직후 등)에 감시가 영영 멈추지 않게 — 12초 안에 답이 없으면 실패로 친다
+function _tcalWithTimeout(p, ms){
+  return new Promise(function(res){
+    var done = false, tm = setTimeout(function(){ if(!done){ done = true; res({ data: null, error: { message: 'timeout' } }); } }, ms);
+    Promise.resolve(p).then(function(v){ if(!done){ done = true; clearTimeout(tm); res(v); } }, function(e){ if(!done){ done = true; clearTimeout(tm); res({ data: null, error: e || { message: 'fail' } }); } });
+  });
 }
 async function _tcalHoldTick(){
   _tcalHoldPoll.t = null;
   if(!_tcalScreenVisible() || !window.sb) return;      // 안 보이면 멈춘다(다시 열면 tcalInit · 탭 복귀면 visibilitychange 가 켠다)
+  // 앞 확인이 90초 넘게 안 끝났으면(멈춘 요청) 버리고 새로 시작한다 — 늦게 돌아온 옛 확인은 순번(seq)이 달라 아무것도 안 한다
+  if(_tcalHoldPoll.busy && (Date.now() - (_tcalHoldPoll.busyAt || 0)) > 90000) _tcalHoldPoll.busy = false;
   if(_tcalHoldPoll.busy || _tcalScreenCovered()){ _tcalHoldWatchStart(); return; }   // 덮여 있으면 건너뛰고 다음 번에(타이머는 남긴다 — 덮개가 닫히는 것을 알려 주는 이벤트가 없다)
-  _tcalHoldPoll.busy = true;
+  _tcalHoldPoll.busy = true; _tcalHoldPoll.busyAt = Date.now();
+  var my = _tcalHoldPoll.seq = (_tcalHoldPoll.seq || 0) + 1;
   var soon = 0;
   try {
-    var q = await window.sb.from('tickets').select('purchase_id,status,restaurant_id,created_at').eq('status', 'hold').limit(300);
-    if(q.error || !Array.isArray(q.data)){
+    var q = await _tcalWithTimeout(window.sb.from('tickets').select('purchase_id,status,restaurant_id,created_at').eq('status', 'hold').limit(300), 12000);
+    if(my !== _tcalHoldPoll.seq) return;               // 그 사이 캘린더를 다시 열었거나(다른 계정일 수도) 새 확인이 시작됐다
+    if(!q || q.error || !Array.isArray(q.data)){
       // 못 읽었다 — 남은 시간 글은 계속 고치고, 띠에 「확인 실패」를 적는다(낡은 화면을 방금 확인한 것처럼 두지 않는다)
       if(!_tcalHoldPoll.stale){ _tcalHoldPoll.stale = true; _tcalHoldBannerPaint(); }
       _tcalHoldCountdownPaint();
@@ -69274,27 +69329,38 @@ async function _tcalHoldTick(){
       var mine = (_currentRole === 'admin' && _currentAdminRestId) ? String(_currentAdminRestId) : '';
       var liveRows = q.data.filter(function(r){ return !mine || String(r.restaurant_id) === mine; });
       var live = liveRows.map(function(r){ return _tcalHoldSigOf(r.purchase_id, r.created_at); }).sort();
+      var liveSig = {}; live.forEach(function(k){ liveSig['s:' + k] = true; });
       var liveIds = {}; liveRows.forEach(function(r){ liveIds['p:' + String(r.purchase_id || '')] = true; });
       var knownRows = (_tcalPurchases || []).filter(function(h){ return String(h.status || '').toLowerCase() === 'hold'; });
       var known = knownRows.map(function(h){ return _tcalHoldSigOf(h.purchaseId, h.date); }).sort();
       var sig = live.join(','), same = (sig === known.join(',')), need = false, wasStale = !!_tcalHoldPoll.stale;
       _tcalHoldPoll.stale = false;
-      // 내가 아는 홀드와 다르면(새 홀드 · 결제됨 · 풀림 · 시각 다시 찍힘) 전체를 다시 읽는다 — 같은 차이로는 「읽기에 성공한 뒤」 한 번만
-      //   (목록 한도 밖의 옛 홀드 때문에 매번 다시 읽지 않게 · 읽기에 실패했으면 표식을 남기지 않아 다음 번에 다시 읽는다)
+      // 내가 아는 홀드와 다르면(새 홀드 · 결제됨 · 풀림 · 시각 다시 찍힘) 전체를 다시 읽는다.
+      //   · 화면이 아는 홀드가 서버에 없으면(결제됐거나 풀렸다) **언제나** 다시 읽는다 — 화면에 「결제 중」이 남으면 안 된다
+      //   · 서버에만 있는 홀드(로더가 못 주는 행)는 「읽기에 성공한 뒤」 같은 차이로 한 번만(매번 다시 읽지 않게 · 실패했으면 표식 없이 다음 번에 다시)
+      var knownGone = known.some(function(k){ return !liveSig['s:' + k]; });
       if(same) _tcalHoldPoll.sig = null;
-      else if(sig !== _tcalHoldPoll.sig){
+      else if(knownGone || sig !== _tcalHoldPoll.sig){
         // 전체 다시 읽기(표 여러 개)는 8초에 한 번까지 — 티켓 오픈처럼 홀드가 계속 바뀌는 때에 연달아 읽지 않는다. 모자라면 남은 시간 뒤에 다시 본다
         var gap = Date.now() - (_tcalHoldPoll.loadAt || 0);
         if(gap < 8000) soon = 8000 - gap + 200;
         else {
           _tcalHoldPoll.loadAt = Date.now();
           // 초대 홀드(INVH-)가 사라졌으면 결제됐을 수 있다 — 결제된 초대는 초대장 표에서 그리므로 그것도 다시 읽는다(안 읽으면 그 예약이 화면에서 사라진다)
-          var invGone = knownRows.some(function(h){ var p = String(h.purchaseId || ''); return p.indexOf('INVH-') === 0 && !liveIds['p:' + p]; });
+          if(knownRows.some(function(h){ var p = String(h.purchaseId || ''); return p.indexOf('INVH-') === 0 && !liveIds['p:' + p]; })) _tcalHoldPoll.invPending = true;
           var okLoad = await tcalLoadPurchases({ keep: true });
-          if(okLoad && invGone){ try { await tcalLoadInvites(); } catch(_ie){} }
+          if(my !== _tcalHoldPoll.seq) return;
           if(okLoad){ _tcalHoldPoll.sig = sig; need = true; }
           else { _tcalHoldPoll.stale = true; soon = 8200; }   // 못 읽었다 — 표식 없이 곧 다시
         }
+      }
+      // 초대장 다시 읽기 — 성공할 때까지 남긴다(한 번 실패했다고 결제된 초대가 화면에서 빠진 채로 두지 않는다)
+      if(_tcalHoldPoll.invPending && !_tcalHoldPoll.stale){
+        var okInv = false;
+        try { okInv = (await tcalLoadInvites()) !== false; } catch(_ie){ okInv = false; }
+        if(my !== _tcalHoldPoll.seq) return;
+        if(okInv){ _tcalHoldPoll.invPending = false; need = true; }
+        else { _tcalHoldPoll.stale = true; if(!soon) soon = 8200; }
       }
       if(need || _tcalHoldPoll.dirty){
         if(_tcalScreenVisible() && !_tcalScreenCovered()) _tcalHoldRepaint();
@@ -69305,9 +69371,11 @@ async function _tcalHoldTick(){
       }
     }
   } catch(_e){
+    if(my !== _tcalHoldPoll.seq) return;
     _tcalHoldPoll.stale = true;
-    try { _tcalHoldCountdownPaint(); } catch(_e2){}
+    try { _tcalHoldBannerPaint(); _tcalHoldCountdownPaint(); } catch(_e2){}
   }
+  if(my !== _tcalHoldPoll.seq) return;                 // 새 확인이 주인이다 — busy·타이머에 손대지 않는다
   _tcalHoldPoll.busy = false;
   if(_tcalHoldPoll.t){ clearTimeout(_tcalHoldPoll.t); _tcalHoldPoll.t = null; }
   _tcalHoldWatchStart(soon || 0);
