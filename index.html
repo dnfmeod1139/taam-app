@@ -8249,7 +8249,7 @@ function payLinkShareRow(id){ var c = (_pl.rows || []).find(function(x){ return 
 // 🆕 2026-11-13 이 청구가 잡고 있는 좌석의 회차 — 링크를 끊거나 환불하면 그 좌석이 풀린다(취소표 알림 켬/끔을 묻는 데 쓴다)
 async function _plSeatTicketIds(c){
   var ids = [];
-  if (!c || c.purpose !== 'ticket') return ids;
+  if (!c || c.purpose === 'membership') return ids;   // 대관 정산 청구(purpose custom · 회차 있음)도 좌석(KSK-)을 잡는다 — 용도로 거르지 않고 좌석 행으로 찾는다(검토)
   var pl = c.payload || {};
   if (pl.ticket_id) ids.push(String(pl.ticket_id));
   try {
@@ -8281,7 +8281,7 @@ async function payLinkRefund(id){
   var _ids = await _plSeatTicketIds(c);
   var _ans = await _rsAsk({ icon: '💳', title: '환불할까요?', body: (c.title || '') + ' · ' + (c.member_name || c.label || ''),
     note: '규정: ' + pol + '\n환불액: ' + _plMoney(cur, d.refund_amount) + (cur !== 'KRW' ? ' (₩' + Number(d.refund_krw).toLocaleString() + ')' : '')
-      + (c.purpose === 'ticket' ? '\n\n토스로 카드 취소가 나가고 좌석이 풀립니다.' : '')
+      + (_ids.length ? '\n\n토스로 카드 취소가 나가고 좌석이 풀립니다.' : '')
       + (c.purpose === 'membership' ? '\n\n⚠ 멤버십 링크: 자동 기록된 연회비는 지워집니다. 이미 부여한 예치금은 부여 화면에서 따로 회수하세요.' : ''),
     okText: '환불', okKind: 'danger', restock: { ids: _ids } });   // 🆕 2026-11-13 좌석이 풀리면 취소표 알림 켬/끔
   if (!_ans) return;
@@ -33465,7 +33465,7 @@ async function confirmTimeChange(){
 //    - h._srcKey 에 원본 유저의 purchase 키가 있음 ("excPurchase_u010xxxx" 등)
 //    - 그 유저의 purchase 리스트에서 purchaseId 로 매칭해서 depositReturn 업데이트
 //    - 환불액(returnAmt)이 있으면 그 유저의 excDeposit_* 에 예치금 크레딧
-function _dmPersistBuyerChanges(h, refundToAdd, refundNote){
+function _dmPersistBuyerChanges(h, refundToAdd, refundNote, opts){   // 🆕 2026-11-13 opts.beforeSeat — 좌석을 푸는 갱신 바로 앞(확인창 뒤)에 부른다 · false 면 멈춤
   var srcKey = h && h._srcKey;
   var today = dmGetTodayStr();
 
@@ -33592,6 +33592,12 @@ function _dmPersistBuyerChanges(h, refundToAdd, refundNote){
         // 🔧 2026-11-03 결과를 본다 — 종전엔 티켓 갱신이 실패해도 예치금을 넣고 「처리 완료」를 띄웠다
         var _tuUpd = { extra_data: newExtra };
         if(!dr.early) _tuUpd.status = ticketStatus;
+        // 🆕 2026-11-13 취소표 알림 끄기는 여기서 건다 — 위의 확인창을 오래 열어 둬도 끔(5분)이 먼저 끝나지 않게(검토)
+        if(!dr.early && opts && typeof opts.beforeSeat === 'function'){
+          var _bsOk = true;
+          try { _bsOk = await opts.beforeSeat(); } catch(_bse){ _bsOk = false; }
+          if(_bsOk === false) return { ok:false, aborted:true };
+        }
         var _tuQ = window.sb.from('tickets').update(_tuUpd).eq('purchase_id', purchaseId);
         if(dr.early) _tuQ = _tuQ.not('status', 'in', '(cancelled,canceled,refunded,expired,failed,hold)');   // 🆕 2026-11-04 그 사이 취소된 예약에는 조기 반환을 쓰지 않는다
         var _tuR = await _tuQ.select('purchase_id');
@@ -45180,10 +45186,10 @@ function dmConfirmReturn(){
   var buyerNote = (early ? '예치금 조기 반환(좌석 유지)' : (seatOpen ? '예치금 반환 · 예약 취소' : '예치금 반환')) + (agencyFee > 0 ? ' · 대행비 차감' : '') + extraTxt;
   // 버이어(실제 구매자)의 IDB 에 반영 + 버이어 예치금에 환불액 크레딧
   var _ntf = _dmNotifyChecked('dmNotifyReturn');
-  var _rsN = early ? true : _rsChecked('dmRsReturn');   // 🆕 2026-11-13 취소표 알림 켬/끔 (조기 반환은 좌석이 안 풀린다)
-  _rsRun([h.id], _rsN, '예치금 관리 반환 ' + (h.purchaseId || ''), function(){ return _dmPersistBuyerChanges(h, returnAmt, buyerNote); }).then(function(_rs){
-    if(_rs.aborted){ h.depositReturn = _prevDr; return; }
-    var res = _rs.value;
+  // 🆕 2026-11-13 취소표 알림 켬/끔 — 끄기는 좌석을 푸는 갱신 바로 앞에서 건다(_rsSeatGate · 조기 반환은 좌석이 안 풀려 걸지 않는다)
+  var _rsG = _rsSeatGate([h.id], early ? true : _rsChecked('dmRsReturn'), '예치금 관리 반환 ' + (h.purchaseId || ''));
+  _dmPersistBuyerChanges(h, returnAmt, buyerNote, { beforeSeat: _rsG.hook }).then(async function(res){
+    var _rs = await _rsG.finish();
     if(_dmPersistFailed(res, h, _prevDr)) return;
     _rsReport(_rs, 2600);
     closeDmPopup();
@@ -45195,7 +45201,7 @@ function dmConfirmReturn(){
                   : _dmNotifyMember(h, early ? 'early' : 'returned', res, { total: returnAmt, extra: extra, note: exNote }));
     var _rfTitle = early ? '조기 반환 완료 — 좌석 유지' : (seatOpen ? '반환 · 예약 취소 완료' : ((typeof t==='function') ? t('toast.refund_done_title') : '반환 완료'));
     showToast('✓', _rfTitle, _dmResultMsg(res, returnAmt) + (_sent ? ' · 회원 알림 보냄' : ' · 회원 알림 안 보냄'), { category:'refund', native:true });
-  });
+  }, function(_pe){ _rsG.finish(); console.warn('[dm] 처리 예외', _pe); });
 }
 
 // 🆕 2026-11-04 조기 반환한 예약의 좌석 열기(예약 취소) — 돈은 움직이지 않는다(예치금은 이미 돌려줬다). 서버가 초대장을 취소하고, 자동 매진 회차면 취소표가 나간다.
@@ -45303,10 +45309,9 @@ function dmConfirmPenalty(){
   };
   // 버이어 저장소에 반영 (부분 반환액이 있으면 버이어 예치금에 크레딧)
   var _ntf = _dmNotifyChecked('dmNotifyPenalty');
-  var _rsN = _rsChecked('dmRsPenalty');   // 🆕 2026-11-13 취소표 알림 켬/끔
-  _rsRun([h.id], _rsN, '예치금 관리 환불 ' + (h.purchaseId || ''), function(){ return _dmPersistBuyerChanges(h, returnAmt, note); }).then(function(_rs){
-    if(_rs.aborted){ h.depositReturn = _prevDr; return; }
-    var res = _rs.value;
+  var _rsG = _rsSeatGate([h.id], _rsChecked('dmRsPenalty'), '예치금 관리 환불 ' + (h.purchaseId || ''));   // 🆕 2026-11-13 취소표 알림 켬/끔 — 좌석 갱신 바로 앞에서 끈다
+  _dmPersistBuyerChanges(h, returnAmt, note, { beforeSeat: _rsG.hook }).then(async function(res){
+    var _rs = await _rsG.finish();
     if(_dmPersistFailed(res, h, _prevDr)) return;
     _rsReport(_rs, 2600);
     closeDmPopup();
@@ -45316,7 +45321,7 @@ function dmConfirmPenalty(){
     // 결과에 맞는 문구로 알린다 (전액 환불을 '환불 불가'로 알리던 문제)
     var _ok = returnAmt > 0;
     showToast(_ok ? '✓' : '✕', _ok ? '환불 처리 완료' : '환불 없음 처리', toastMsg + (_ok ? ' (' + _dmResultMsg(res, returnAmt) + ')' : '') + (_sent ? ' · 회원 알림 보냄' : ' · 회원 알림 안 보냄'));
-  });
+  }, function(_pe){ _rsG.finish(); console.warn('[dm] 처리 예외', _pe); });
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -51450,33 +51455,32 @@ setTimeout(function(){ try { _riCardResumeUnresolved(true); } catch(_e){} }, 900
 })();
 
 function finalUploadTicket(rsAns){
-  try {
-  if(!_pendingTicket)return;
   // 🆕 2026-11-13 매진 회차의 총 좌석을 늘려 저장하면 서버가 판매중으로 되돌리고(trg_taam_tp_status_recalc) 취소표 알림이 나간다 —
   //   슈퍼어드민은 그 알림을 켬/끔으로 고른다. 끄면 저장 전에 「끔」을 걸고(못 걸어 멈추면 아무것도 안 바뀐다) 저장이 끝나면 닫는다.
-  var _rsCap = null;
-  if(_tuEditId && _rsIsSuper()){
+  //   다시 들어온 호출(rsAns 에 notify)은 그 답을 그대로 쓴다 — 그 사이 목록이 다시 읽혀 조건이 바뀌어도 건 끔은 반드시 닫는다(검토: 끔이 5분 남았다)
+  var _rsCap = (rsAns && typeof rsAns === 'object' && ('notify' in rsAns)) ? rsAns : null, _rsCapClosed = false;
+  try {
+  if(!_pendingTicket){ if(_rsCap && _rsCap.token){ _rsCapClosed = true; _rsMuteEnd(_rsCap.token); } return; }
+  if(!_rsCap && _tuEditId && _rsIsSuper()){
     var _o0 = ticketDB.find(function(x){ return String(x.id) === String(_tuEditId); });
     var _oCap = _o0 ? (parseInt(_o0.totalPax || _o0.assignedPax) || 0) : 0, _nCap = parseInt(_pendingTicket.totalPax) || 0;
     if(_o0 && _o0.status === 'soldout' && _nCap > _oCap){
-      if(!rsAns || typeof rsAns !== 'object' || !('notify' in rsAns)){
-        var _capId = String(_tuEditId);
-        _rsAsk({ icon: '🪑', title: '총 좌석을 늘려 저장할까요?', body: _tkAskWhat(_o0),
-          note: '매진 회차입니다 — 총 좌석 ' + _oCap + ' → ' + _nCap + '석. 저장하면 늘어난 자리만큼 판매중으로 돌아갑니다.',
-          okText: '저장', okKind: 'go', restock: { ids: [_capId] } }).then(async function(a){
-          if(!a) return;
-          var tok = null;
-          if(a.notify === false){
-            var ms = await _rsMuteStart([_capId], '정원 늘림(수정) ' + _capId);
-            if(ms.aborted) return;
-            tok = ms.token || null;
-          }
-          if(String(_tuEditId) !== _capId || !_pendingTicket){ if(tok) _rsMuteEnd(tok); return; }   // 그 사이 화면이 바뀌었다
-          finalUploadTicket({ notify: a.notify !== false, token: tok, id: _capId });
-        });
-        return;
-      }
-      _rsCap = rsAns;
+      var _capId = String(_tuEditId);
+      _rsAsk({ icon: '🪑', title: '총 좌석을 늘려 저장할까요?', body: _tkAskWhat(_o0),
+        note: '매진 회차입니다 — 총 좌석 ' + _oCap + ' → ' + _nCap + '석. 저장하면 늘어난 자리만큼 판매중으로 돌아갑니다.',
+        okText: '저장', okKind: 'go', restock: { ids: [_capId] } }).then(async function(a){
+        if(!a) return;
+        var tok = null, before;
+        if(a.notify === false){
+          var ms = await _rsMuteStart([_capId], '정원 늘림(수정) ' + _capId);
+          if(ms.aborted) return;
+          tok = ms.token || null;
+        }
+        if(!tok) before = await _rsLastEventId([_capId]);
+        if(String(_tuEditId) !== _capId || !_pendingTicket){ if(tok) _rsMuteEnd(tok); return; }   // 그 사이 화면이 바뀌었다
+        finalUploadTicket({ notify: a.notify !== false, token: tok, id: _capId, before: before, t0: Date.now() });
+      });
+      return;
     }
   }
   // 🆕 2026-10-30 패키지 연계 — 신규 업로드면 숨김으로 올리고 저장이 끝나면 연계(같은 트랜잭션에서 공개)
@@ -51546,8 +51550,10 @@ function finalUploadTicket(rsAns){
   _pendingTicketExtras = [];
   var _svT0 = Date.now(), _svP = saveTickets(_savedIds);
   if(_rsCap){   // 🆕 2026-11-13 정원 늘림 — 끔이면 저장이 끝난 뒤 닫고 결과를 알린다 · 켬이면 이번에 취소표가 나갔는지
-    Promise.resolve(_svP).then(function(){ return _rsCap.token ? _rsMuteEnd(_rsCap.token) : null; }, function(){ return _rsCap.token ? _rsMuteEnd(_rsCap.token) : null; })
-      .then(function(h){ _rsReport(_rsCap.token ? { ids: [_rsCap.id], muted: true, hits: h, t0: _svT0 } : { ids: [_rsCap.id], notify: true, t0: _svT0 }, 2000); });
+    _rsCapClosed = true;
+    var _capR = _rsCap;
+    Promise.resolve(_svP).then(function(){ return _capR.token ? _rsMuteEnd(_capR.token) : null; }, function(){ return _capR.token ? _rsMuteEnd(_capR.token) : null; })
+      .then(function(h){ _rsReport(_capR.token ? { ids: [_capR.id], muted: true, hits: h, t0: _svT0 } : { ids: [_capR.id], notify: true, t0: _capR.t0 || _svT0, evBefore: _capR.before }, 2000); });
   }
   if(_pkLink && typeof _tuPkgLinkAfter === 'function') _tuPkgLinkAfter(_svP, _savedIds, _pkLink);
   // 🆕 2026-10-30(2차 리뷰) 숨김으로 저장한 수정 — 서버는 연계된 회차를 다시 숨기지 않는다. 서버 판을 읽어 로컬을 맞추고, 공개돼 있었으면 알린다
@@ -51577,6 +51583,7 @@ function finalUploadTicket(rsAns){
   } catch(e) {
     showToast('❌','에러','['+e.name+'] '+e.message);
     console.error('finalUploadTicket error:', e);
+    if(_rsCap && _rsCap.token && !_rsCapClosed){ _rsCapClosed = true; try { _rsMuteEnd(_rsCap.token); } catch(_me){} }   // 🆕 2026-11-13 건 끔은 닫는다
   }
 }
 
@@ -52652,20 +52659,53 @@ async function _rsMuteEnd(tok){
   return null;
 }
 // 좌석을 푸는 일(fn)을 감싼다 — notify 가 false 일 때만 끈다
+// 이 회차들의 마지막 취소표 이벤트 번호 — 풀기 전에 적어 두면 「이번에 나갔나」를 그 뒤 번호로만 센다(앞서 나간 알림을 이번 것으로 말하지 않게 · 검토)
+//   0 = 아직 없음 · null = 못 읽음(그땐 시각으로 어림)
+async function _rsLastEventId(ids){
+  ids = _rsIds(ids);
+  if(!ids.length || !_rsIsSuper() || !window.sb) return null;
+  try {
+    var q = await window.sb.from('ticket_restock_events').select('id').in('ticket_product_id', ids).order('id', { ascending: false }).limit(1);
+    if(q && !q.error) return (q.data && q.data[0]) ? (parseInt(q.data[0].id, 10) || 0) : 0;
+  } catch(_e){}
+  return null;
+}
 async function _rsRun(ids, notify, note, fn){
   var t0 = Date.now(); ids = _rsIds(ids);
-  if(notify !== false){ var v0 = await fn(); return { value: v0, notify: true, ids: ids, t0: t0 }; }
+  if(notify !== false){ var b0 = await _rsLastEventId(ids); var v0 = await fn(); return { value: v0, notify: true, ids: ids, t0: t0, evBefore: b0 }; }
   var ms = await _rsMuteStart(ids, note);
   if(ms.aborted) return { aborted: true, ids: ids, t0: t0 };
+  var b1 = ms.token ? undefined : await _rsLastEventId(ids);
   var val, err = null;
   try { val = await fn(); } catch(e){ err = e; }
   var hits = ms.token ? await _rsMuteEnd(ms.token) : null;
   if(err) throw err;
-  return { value: val, notify: false, muted: !!ms.token, muteFailed: !!ms.failed, hits: hits, ids: ids, t0: t0 };
+  return { value: val, notify: false, muted: !!ms.token, muteFailed: !!ms.failed, hits: hits, ids: ids, t0: t0, evBefore: b1 };
+}
+// 좌석을 푸는 줄 「바로 앞」에서 끄기 — 푸는 함수 안에 확인창(confirm)이 먼저 뜨는 경로(예치금 관리)용.
+//   종전처럼 처음에 끄면 확인창을 오래 열어 둔 사이 끔(5분)이 끝나 알림이 나갔다(검토). gate.hook() 을 좌석 갱신 직전에 부르고, 끝나면 gate.finish().
+function _rsSeatGate(ids, notify, note){
+  ids = _rsIds(ids);
+  var g = { tok: null, failed: false, t0: Date.now(), before: undefined, armed: false, closed: false };
+  g.hook = async function(){
+    g.t0 = Date.now();
+    if(notify !== false){ g.before = await _rsLastEventId(ids); g.armed = true; return true; }
+    var ms = await _rsMuteStart(ids, note);
+    if(ms.aborted) return false;
+    g.tok = ms.token || null; g.failed = !!ms.failed; g.armed = true;
+    if(!g.tok) g.before = await _rsLastEventId(ids);
+    return true;
+  };
+  g.finish = async function(){
+    var hits = null;
+    if(g.tok && !g.closed){ g.closed = true; hits = await _rsMuteEnd(g.tok); }
+    return { ids: ids, notify: notify !== false, muted: !!g.tok, muteFailed: g.failed, hits: hits, t0: g.t0, evBefore: g.before, armed: g.armed };
+  };
+  return g;
 }
 // 결과를 한 줄로 — 끔이면 「안 보냄」(실제로 막았을 때만) · 켬이면 이번에 취소표가 나갔는지
 function _rsReport(rs, delay){
-  if(!rs || rs.aborted || !_rsIsSuper() || !(rs.ids && rs.ids.length)) return;
+  if(!rs || rs.aborted || rs.armed === false || !_rsIsSuper() || !(rs.ids && rs.ids.length)) return;
   var names = rs.ids.map(function(id){
     var t = _rsTk().find(function(x){ return String(x.id) === id; });
     return t ? _tkAskWhat(t) : null;
@@ -52677,10 +52717,10 @@ function _rsReport(rs, delay){
       return;   // hits 0 = 이번에 매진이 풀리지 않았다 — 알릴 것이 없었다
     }
     if(!window.sb) return;
-    var since = new Date(rs.t0 - 120000).toISOString();
     try {
-      window.sb.from('ticket_restock_events').select('ticket_product_id, status').in('ticket_product_id', rs.ids)
-        .in('status', ['pending', 'sent']).gte('created_at', since).limit(5)
+      var qq = window.sb.from('ticket_restock_events').select('ticket_product_id, status').in('ticket_product_id', rs.ids).in('status', ['pending', 'sent']);
+      qq = (typeof rs.evBefore === 'number') ? qq.gt('id', rs.evBefore) : qq.gte('created_at', new Date(rs.t0 - 120000).toISOString());   // 번호를 못 적었으면 시각으로 어림
+      qq.limit(5)
         .then(function(q){
           if(q && !q.error && q.data && q.data.length) showToast('🎫', '취소표 알림 보냄', names + ' — 회원에게 「취소표가 나왔습니다」가 나갑니다');
         }, function(){});
@@ -52688,7 +52728,7 @@ function _rsReport(rs, delay){
   }, delay == null ? 1800 : delay);
 }
 window._rsAsk = _rsAsk; window._rsRun = _rsRun; window._rsReport = _rsReport; window._rsToggleSync = _rsToggleSync;
-window._rsMuteStart = _rsMuteStart; window._rsMuteEnd = _rsMuteEnd; window._rsToggleHtml = _rsToggleHtml; window._rsChecked = _rsChecked;
+window._rsMuteStart = _rsMuteStart; window._rsMuteEnd = _rsMuteEnd; window._rsSeatGate = _rsSeatGate; window._rsLastEventId = _rsLastEventId; window._rsToggleHtml = _rsToggleHtml; window._rsChecked = _rsChecked;
 
 // 티켓 한 줄을 사람 말로 (확인 시트에 무엇을 건드리는지 적는다)
 function _tkAskWhat(t){
@@ -52802,7 +52842,7 @@ async function _tuAskResume(t, id, after){
     okText: '판매 재개',
     okKind: 'go',
     restock: { ids: [id] },   // 🆕 2026-11-13 매진을 풀면 취소표 알림 — 슈퍼어드민이 켬/끔을 고른다
-    onOk: function(ans){ _tuDoToggleSoldout(id, ans); if(typeof after === 'function') { try { after(); } catch(e){} } }
+    onOk: function(ans){ _tuDoToggleSoldout(id, ans, after); if(typeof after === 'function') { try { after(); } catch(e){} } }
   });
 }
 // 꽉 찬 비공개 회차를 공개로 — 매진은 그대로(서버가 유지), 캘린더에 SOLD OUT 으로 보이게 된다
@@ -52945,24 +52985,34 @@ async function _tuRepurchasePushSend(t, targets, msg){
   finally { _tuRepurchasePushBusy = false; }
 }
 window._tuRepurchaseAskPush = _tuRepurchaseAskPush; window._tuRepurchasePushSend = _tuRepurchasePushSend; window._tuRepurchaseMsg = _tuRepurchaseMsg;
-function _tuDoToggleSoldout(id, ans){
+function _tuDoToggleSoldout(id, ans, after){
   var t=ticketDB.find(function(x){return String(x.id)===String(id);});
   if(!t)return;
   // 🆕 2026-11-13 판매 재개(매진 → 판매중)는 취소표 알림을 만든다 — 확인 시트의 토글을 끄면 그 저장 동안만 서버에 「끔」을 건다.
-  //   끄기를 못 걸어 슈퍼어드민이 멈추면(aborted) 아무것도 바꾸지 않는다 — 그래서 로컬 상태·자동 매진 표시는 저장이 결정된 뒤에 바꾼다
-  if(t.status === 'soldout' && ans && ans.notify === false){
-    t.status = 'active';
-    _rsRun([String(id)], false, '판매 재개 ' + id, function(){ return saveTickets([String(id)]); }).then(function(rs){
-      if(rs && rs.aborted){ t.status = 'soldout'; try { saveTickets([String(id)], true); } catch(_l){} _tuSoldoutRepaint(); showToast('ⓘ','판매 재개 안 함','아무것도 바뀌지 않았습니다'); return; }
-      _tuSoldoutAfterSave(t, id);
+  //   저장할 회차는 저장 직전에 목록에서 다시 찾는다 — 끄기를 기다리는 사이 목록이 다시 읽히면(ticketDB = …) 앞서 잡은 객체는 목록 밖이라
+  //   새로 읽힌 「매진」 값이 저장되고도 「판매 재개」라고 알렸다(검토). 끄기를 못 걸어 멈추면 아무것도 바꾸지 않는다.
+  if(t.status === 'soldout'){
+    var _ref = t, _notify = !(ans && ans.notify === false);
+    t.status = 'active'; _tuSoldoutRepaint();   // 화면은 먼저(종전과 같다)
+    _rsRun([String(id)], _notify, '판매 재개 ' + id, function(){
+      var t2 = ticketDB.find(function(x){ return String(x.id) === String(id); });
+      if(t2){ t2.status = 'active'; _ref = t2; }
+      return saveTickets([String(id)]);   // 🆕 2026-10-29 그 회차만
+    }).then(function(rs){
+      if(rs && rs.aborted){
+        var t3 = ticketDB.find(function(x){ return String(x.id) === String(id); }) || _ref;
+        t3.status = 'soldout'; try { saveTickets([String(id)], true); } catch(_l){}
+        _tuSoldoutRepaint(); if(typeof after === 'function'){ try { after(); } catch(_a){} }
+        showToast('ⓘ','판매 재개 안 함','아무것도 바뀌지 않았습니다');
+        return;
+      }
+      _tuSoldoutAfterSave(_ref, id);
       _rsReport(rs, 2000);
     }, function(e){ console.warn('[soldout] 판매 재개 저장 실패', e); });
-    _tuSoldoutRepaint();
     return;
   }
-  t.status=(t.status==='soldout')?'active':'soldout';
-  var _t0 = Date.now(), _svP = saveTickets([String(id)]);   // 🆕 2026-10-29 그 회차만
-  if(t.status === 'active') Promise.resolve(_svP).then(function(v){ _rsReport({ value: v, notify: true, ids: [String(id)], t0: _t0 }, 2000); }, function(){});
+  t.status='soldout';
+  saveTickets([String(id)]);   // 🆕 2026-10-29 그 회차만
   _tuSoldoutAfterSave(t, id);
   _tuSoldoutRepaint();
 }
