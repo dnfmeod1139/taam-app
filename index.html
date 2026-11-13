@@ -11224,6 +11224,7 @@ async function _tossRecoverTrip(){
                                                        (typeof _riT === 'function') ? _riT('invpay.not_done_body', '받은 초대에서 다시 결제하실 수 있어요') : '받은 초대에서 다시 결제하실 수 있어요');
         return;
       }
+      try { var _rua = await window.sb.auth.getUser(); if (_rua && _rua.data && _rua.data.user) window._riCardUid = String(_rua.data.user.id); } catch(_rue){}   // 기억에 적을 계정
       if (_iid && typeof _riCardUnresolvedSet === 'function') _riCardUnresolvedSet(_iid);
       if (typeof showToast === 'function') showToast('⚠', (typeof _riT === 'function') ? _riT('invpay.unknown_title', '결제 결과를 확인하지 못했어요') : '결제 결과를 확인하지 못했어요',
                                                      (typeof _riT === 'function') ? _riT('invpay.unknown_body', '받은 초대·구매 내역을 확인해 주세요') : '받은 초대·구매 내역을 확인해 주세요');
@@ -50389,7 +50390,7 @@ async function openReservationInvitePayPopup(inviteId){
       var _unr = (typeof _riCardUnresolved === 'function') ? _riCardUnresolved() : null;
       if(_unr && _unr.iid === String(inv.id)){
         var _unrR = await _riCardResume(_unr.iid, false, _unr.uid);
-        if(_unrR === 'done' || _unrR === 'wait') return;
+        if(_unrR === 'done' || _unrR === 'wait' || _unrR === 'failed') return;   // failed = 거절 사유를 방금 안내했다(중복·시간대 창이 팝업 뒤에 가려지지 않게)
       }
     } catch(_ue){ console.warn('[riPay] 카드 결제 재확인 예외:', _ue); }
     _riPayCurrent = inv;
@@ -51007,7 +51008,7 @@ function _riCardUnresolvedSet(iid){
     var prev = null; try { prev = JSON.parse(localStorage.getItem('taam_inv_unresolved') || 'null'); } catch(_p){}
     var same = !!(prev && prev.iid === iid);
     var at = (same && parseInt(prev.at, 10) > 0) ? parseInt(prev.at, 10) : Date.now();
-    localStorage.setItem('taam_inv_unresolved', JSON.stringify({ iid: iid, at: at, uid: String(window._riCardUid || (same && prev.uid) || '') }));
+    localStorage.setItem('taam_inv_unresolved', JSON.stringify({ iid: iid, at: at, uid: String((same && prev.uid) || window._riCardUid || '') }));   // 이미 적힌 계정은 덮지 않는다
   } catch(_e){}
 }
 function _riCardUnresolvedClear(){ try { localStorage.removeItem('taam_inv_unresolved'); } catch(_e){} }
@@ -51164,13 +51165,21 @@ async function _riCardDone(d){
   try { if(typeof showRefundPolicyNotice === 'function' && !(d && d.already)) showRefundPolicyNotice(); } catch(_rn){}
   await _riCardRefresh();
 }
-async function _riCardFail(d, iid){
+async function _riCardFail(d, iid, quiet){
   var c = String((d && d.error) || 'unknown');
-  _riCardTripClear();
+  // 🔧 이 초대의 것만 건드린다 — 조용한 재확인(초대 A)이 회원이 보고 있던 다른 초대(B)의 팝업을 닫거나 그 왕복 기억을 지우지 않게(2차 리뷰)
+  var _fTrip = _riCardTripGet();
+  if(!iid || !_fTrip || String(_fTrip.iid || '') === String(iid)) _riCardTripClear();
+  var _closeMine = function(){
+    try {
+      var cur = (typeof _riPayCurrent !== 'undefined' && _riPayCurrent) ? String(_riPayCurrent.id || '') : '';
+      if(!iid || !cur || cur === String(iid)) riPayClose();
+    } catch(_e){}
+  };
   if(c === 'invite_paid'){   // 이미 결제된 초대 — 실패가 아니다
     _riCardUnresolvedClear();
     showToast('✓', '이미 결제 완료', '예약이 확정되었습니다');
-    try { riPayClose(); } catch(_e){}
+    _closeMine();
     await _riCardRefresh();
     return;
   }
@@ -51193,9 +51202,9 @@ async function _riCardFail(d, iid){
   if(d && d.refunded === true) msg += ' · ' + _riT('invpay.refunded', '결제하신 카드 금액은 전액 취소됩니다');
   else if(d && d.refunded === false) msg += ' · ' + _riT('invpay.refund_wait', '카드 승인 취소를 확인하고 있습니다 — 출금되었다면 문의해 주세요');
   console.warn('[riCard] 실패:', c, d);
-  if(c === 'dup' || c === 'clash'){
-    // 같은 회차 중복 · 같은 날 같은 시간대 — 종전 초대 결제와 같은 안내 창
-    try { riPayClose(); } catch(_e){}
+  if((c === 'dup' || c === 'clash') && !quiet){
+    // 같은 회차 중복 · 같은 날 같은 시간대 — 종전 초대 결제와 같은 안내 창(조용한 재확인에서는 창을 띄우지 않고 아래 토스트만)
+    _closeMine();
     try { showPurchaseBlockPopup(c === 'dup' ? 'dup' : 'clash', null, (String((d && d.detail) || '').match(/\(([^()]*)\)\s*$/) || [])[1] || ''); } catch(_pe){ showToast('⚠', _riT('invpay.fail_title', '초대 결제 실패'), msg); }
     if(d && d.refunded === true) showToast('ℹ', _riT('invpay.fail_title', '초대 결제 실패'), _riT('invpay.refunded', '결제하신 카드 금액은 전액 취소됩니다'));
     else if(d && d.refunded === false) showToast('⚠', _riT('invpay.fail_title', '초대 결제 실패'), _riT('invpay.refund_wait', '카드 승인 취소를 확인하고 있습니다 — 출금되었다면 문의해 주세요'));   // 카드는 승인됐는데 자동 취소가 아직 안 됐다 — 말없이 넘어가지 않는다
@@ -51204,13 +51213,13 @@ async function _riCardFail(d, iid){
   showToast('⚠', _riT('invpay.fail_title', '초대 결제 실패'), msg);
   // 초대가 닫혔을 수 있다 — 받은 초대 목록이 열려 있으면 다시 그린다
   try { var mi = document.getElementById('myInvitesPage'); if(mi && mi.style.display !== 'none' && typeof renderMyInvites === 'function') renderMyInvites(); } catch(_e){}
-  if(/^(invite_closed|invite_expired|hold_gone|forbidden)$/.test(c)){ try { riPayClose(); } catch(_e){} }
+  if(/^(invite_closed|invite_expired|hold_gone|forbidden)$/.test(c) && !quiet) _closeMine();
 }
 
 // 결제창 복귀 — _tossConfirmPayment 가 taaminv_ 주문이면 여기로 보낸다
 async function _riCardConfirmReturn(paymentKey, orderId, amount){
   try {
-    for(var i = 0; i < 10; i++){ var a = null; try { a = await window.sb.auth.getUser(); } catch(_ae){} if(a && a.data && a.data.user) break; await new Promise(function(res){ setTimeout(res, 500); }); }
+    for(var i = 0; i < 10; i++){ var a = null; try { a = await window.sb.auth.getUser(); } catch(_ae){} if(a && a.data && a.data.user){ window._riCardUid = String(a.data.user.id); break; } await new Promise(function(res){ setTimeout(res, 500); }); }   // 결제창에서 돌아오면 페이지가 새로 뜬다 — 기억에 적을 계정을 여기서 챙긴다
     showToast('⏳', _riT('invpay.confirming', '결제 확인 중'), _riT('invpay.wait', '잠시만 기다려주세요'));
     var trip = _riCardTripGet();
     var iid = (trip && String(trip.oid) === String(orderId)) ? _riCardIid(trip.iid) : '';
@@ -51246,6 +51255,13 @@ async function _riCardResume(iid, quiet, ownerUid){
     if(!(au && au.data && au.data.user)) return 'wait';
     // 다른 계정이 남긴 기억이면 손대지 않는다(묻지도 지우지도 않는다 — 그 회원이 다시 로그인하면 이어 간다)
     if(ownerUid && String(ownerUid) !== String(au.data.user.id)) return 'clear';
+    if(!ownerUid){
+      // 계정이 안 적힌 기억(옛 판 · 계정을 못 챙긴 경우) — 이 초대가 지금 로그인한 회원의 것인지 본다(회원은 자기 초대만 읽는다). 아니면 손대지 않는다
+      try {
+        var _ow = await window.sb.from('reservation_invites').select('invitee_user_id').eq('id', iid).maybeSingle();
+        if(_ow && !_ow.error && (!_ow.data || String(_ow.data.invitee_user_id || '') !== String(au.data.user.id))) return 'clear';
+      } catch(_owe){}
+    }
     window._riCardUid = String(au.data.user.id);
     if(!quiet) showToast('⏳', _riT('invpay.confirming', '결제 확인 중'), _riT('invpay.wait', '잠시만 기다려주세요'));
     var call = function(){ return window.sb.functions.invoke('toss-invite-pay', { body: { action: 'resume', invite_id: iid } }); };
@@ -51257,7 +51273,10 @@ async function _riCardResume(iid, quiet, ownerUid){
       _riCardUnresolvedClear();
       if(d.error === 'not_paid' || d.error === 'order_not_found' || d.error === 'order_not_pending'){
         if(!quiet) showToast('⚠', _riT('invpay.not_done_title', '결제가 완료되지 않았어요'), _riT('invpay.not_done_body', '받은 초대에서 다시 결제하실 수 있어요'));
-      } else if(!quiet || typeof d.refunded === 'boolean') await _riCardFail(d, iid);   // 카드가 승인됐다 취소된(또는 취소가 밀린) 결제는 조용한 확인에서도 알린다
+      } else if(!quiet || typeof d.refunded === 'boolean'){
+        await _riCardFail(d, iid, !!quiet);   // 카드가 승인됐다 취소된(또는 취소가 밀린) 결제는 조용한 확인에서도 알린다(토스트만)
+        if(!quiet) return 'failed';           // 안내를 띄웠다 — 부른 쪽(초대 결제 팝업 열기)은 그 위에 팝업을 덮지 않는다
+      }
       return 'clear';
     }
     _riCardUnresolvedSet(iid);

@@ -228,11 +228,24 @@ q "update public.payment_orders set approved_at = now() - interval '5 minutes' w
      ('taaminv_ef1','$M4','invite_topup',1000,'failed','superseded','{}', now() - interval '6 minutes', now() - interval '5 minutes'),
      ('taaminv_ef2','$M4','invite_topup',1000,'failed','superseded','{}', now() - interval '3 hours', now() - interval '2 hours'),
      ('taaminv_ef3','$M4','invite_topup',1000,'failed','claim_failed_refund_failed','{}', now() - interval '2 days', now() - interval '2 days'),
-     ('taaminv_ef4','$M4','invite_topup',1000,'failed','superseded','{}', now() - interval '1 minutes', now() - interval '1 minutes')" >/dev/null
+     ('taaminv_ef4','$M4','invite_topup',1000,'failed','superseded','{}', now() - interval '1 minutes', now() - interval '1 minutes'),
+     ('taaminv_ef5','$M4','invite_topup',1000,'failed','superseded','{}', now() - interval '70 minutes', now() - interval '60 minutes'),
+     ('taaminv_ef6','$M4','invite_topup',1000,'failed','expired','{}', now() - interval '50 minutes', now() - interval '5 minutes')" >/dev/null
 rl(){ q "select coalesce((select x->>'reconcile' from jsonb_array_elements(public.taam_invite_pay_reconcile_list(50)) x where x->>'order_id' = '$1'), '-')"; }
 ok "E1 확정 안 된 paid(3분↑) = confirm · 취소 실패 = cancel · 확정된 주문은 없다" "$(rl $OA)/$(rl $OB)/$(rl $O1b)" "confirm/cancel/-"
 ok "E1b pending — 표시 없는 주문은 40분 뒤에야(결제창에 머무는 회원을 끊지 않는다) · 승인 요청이 나간 주문(unknown:)은 3분 뒤부터" "$(rl taaminv_p)/$(rl taaminv_e40)/$(rl taaminv_eunk)/$(rl taaminv_eunk2)" "-/lookup/lookup/-"
-ok "E1c 닫힌(failed) 주문 — 닫힌 뒤 3~90분 동안 · 취소 실패(_refund_failed)는 3일 동안 「승인이 남았나」 본다(orphan) · 오래된 것·방금 닫힌 것은 아니다" "$(rl taaminv_ef1)/$(rl taaminv_ef2)/$(rl taaminv_ef3)/$(rl taaminv_ef4)" "orphan/-/orphan/-"
+ok "E1c 닫힌(failed) 주문 — 닫힌 뒤 3~45분 동안 · 취소 실패(_refund_failed)는 3일 동안 「승인이 남았나」 본다(orphan) · 오래된 것(2시간·60분)·방금 닫힌 것·조회로 닫은 것(expired)은 아니다" "$(rl taaminv_ef1)/$(rl taaminv_ef2)/$(rl taaminv_ef3)/$(rl taaminv_ef4)/$(rl taaminv_ef5)/$(rl taaminv_ef6)" "orphan/-/orphan/-/-/-"
+q "insert into public.payment_orders(order_id,user_id,purpose,amount,status,fail_reason,metadata,created_at,updated_at)
+     select 'taaminv_eo' || g, '$M4', 'invite_topup', 1000, 'failed', 'superseded', '{}', now() - interval '30 minutes', now() - interval '10 minutes' from generate_series(1, 16) g;
+   insert into public.payment_orders(order_id,user_id,purpose,amount,status,payment_key,approved_at,metadata,created_at,updated_at) values
+     ('taaminv_elate','$M4','invite_topup',1000,'paid','pkL', now() - interval '6 minutes', '{\"inv_claim\":\"toss-invite-pay\"}', now() - interval '8 minutes', now() - interval '6 minutes')" >/dev/null
+ok "E1d 급한 것이 먼저 — 닫힌 주문(orphan) 16건이 더 오래됐어도 상한 15 안에 「승인됐는데 확정 안 된」 주문이 들어온다 · 목록 맨 앞은 orphan 이 아니다" "$(q "select count(*) from jsonb_array_elements(public.taam_invite_pay_reconcile_list(15)) x where x->>'order_id' = 'taaminv_elate'")/$(q "select jsonb_array_length(public.taam_invite_pay_reconcile_list(15))")/$(q "select (public.taam_invite_pay_reconcile_list(15)->0->>'reconcile') <> 'orphan'")/$(q "select count(*) from jsonb_array_elements(public.taam_invite_pay_reconcile_list(15)) with ordinality as e(x, n) where x->>'reconcile' <> 'orphan' and exists (select 1 from jsonb_array_elements(public.taam_invite_pay_reconcile_list(15)) with ordinality as f(y, m) where y->>'reconcile' = 'orphan' and m < n)")" "1/15/t/0"
+q "insert into public.payment_orders(order_id,user_id,purpose,amount,status,payment_key,approved_at,metadata,created_at,updated_at) values
+     ('taaminv_en1','$M4','invite_topup',1000,'paid','pkn1', now() - interval '5 minutes', '{\"inv_claim\":\"toss-invite-pay\",\"inv_settled\":true}', now() - interval '6 minutes', now() - interval '5 minutes'),
+     ('taaminv_en2','$M4','invite_topup',1000,'paid','pkn2', now() - interval '5 minutes', '{\"inv_claim\":\"toss-invite-pay\",\"inv_settled\":true,\"inv_notified\":true}', now() - interval '6 minutes', now() - interval '5 minutes'),
+     ('taaminv_en3','$M4','invite_topup',1000,'paid','pkn3', now() - interval '2 days', '{\"inv_claim\":\"toss-invite-pay\",\"inv_settled\":true}', now() - interval '2 days', now() - interval '2 days'),
+     ('taaminv_en4','$M4','invite_topup',1000,'paid','pkn4', now() - interval '1 minutes', '{\"inv_claim\":\"toss-invite-pay\",\"inv_settled\":true}', now() - interval '2 minutes', now() - interval '1 minutes')" >/dev/null
+ok "E1e 확정됐는데 결제 완료 알림 표시가 없는 주문(3분↑ · 하루 안) = notify · 알린 주문·하루 넘은 주문·방금 확정된 주문은 아니다 · 알리고 나면 빠진다" "$(rl taaminv_en1)/$(rl taaminv_en2)/$(rl taaminv_en3)/$(rl taaminv_en4)/$(q "select public.taam_invite_order_notified('taaminv_en1')")/$(rl taaminv_en1)" "notify/-/-/-/t/-"
 ok "E2 kick — 볼 것이 있으면 설정을 찾는다(픽스처엔 없다 → no_config) · 로그인 세션은 목록을 못 본다" "$(q "select public.taam_invite_pay_reconcile_kick()->>'reason'")/$(code "$(as $SU "select public.taam_invite_pay_reconcile_list(5)")")" "no_config/FORBIDDEN"
 q "delete from public.payment_orders where order_id like 'taaminv_e%'" >/dev/null
 

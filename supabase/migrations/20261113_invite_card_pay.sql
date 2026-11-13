@@ -418,35 +418,44 @@ do $do$ begin
 end $do$;
 
 -- ── G. 결과를 모르는 카드 주문 정리 — 10분마다 Edge toss-invite-pay 의 sweep(service_role) ──
---   confirm: paid 인데 확정 표시가 없다(3분 지남) · lookup: 10분 넘은 pending · cancel: 취소 실패(_refund_failed)·도중 끊김(_canceling)
+--   confirm: paid 인데 확정 표시가 없다(3분 지남) · lookup: 승인 요청이 나간 pending(3분↑)·표시 없는 pending(40분↑) · cancel: 취소 실패(_refund_failed)·도중 끊김(_canceling)
+--   orphan: 닫힌(failed) 주문에 승인이 남았나 · notify: 확정됐는데 결제 완료 알림이 안 나갔다
 create or replace function public.taam_invite_pay_reconcile_list(p_limit int default 15)
 returns jsonb language plpgsql stable security definer set search_path = public as $$
 declare v jsonb;
 begin
   if not public._taam_invpay_server_ok() then raise exception 'FORBIDDEN' using errcode = '42501'; end if;
-  select coalesce(jsonb_agg(x order by ca), '[]'::jsonb) into v from (
-    select po.created_at as ca,
+  -- 급한 것부터 고른다(적대 리뷰): 확정 안 된 paid · 승인 요청이 나간 pending · 취소 재시도가 먼저, 닫힌 주문의 「승인이 남았나」(orphan)는 남는 자리에.
+  --   created_at 순으로만 자르면 한 회원이 주문을 여러 번 만들었다 닫은 뒤(orphan 15건) 그보다 나중에 생긴 「승인됐는데 확정 안 된」 주문이 창이 끝날 때까지 밀렸다.
+  select coalesce(jsonb_agg(x order by lo, ca), '[]'::jsonb) into v from (
+    select (po.status = 'failed') as lo, po.created_at as ca,
            jsonb_build_object('order_id', po.order_id, 'user_id', po.user_id, 'amount', po.amount, 'status', po.status, 'payment_key', po.payment_key,
                               'fail_reason', po.fail_reason, 'created_at', po.created_at, 'approved_at', po.approved_at,
                               'metadata', jsonb_build_object('invite_id', po.metadata->>'invite_id', 'purchase_id', po.metadata->>'purchase_id',
                                                              'title', po.metadata->>'title', 'pax', po.metadata->'pax', 'total', po.metadata->'total',
                                                              'deposit_used', po.metadata->'deposit_used'),
-                              'reconcile', case when po.status = 'paid' then 'confirm' when po.status = 'pending' then 'lookup'
+                              'reconcile', case when po.status = 'paid' and coalesce(po.metadata->>'inv_settled', '') = 'true' then 'notify'
+                                                when po.status = 'paid' then 'confirm' when po.status = 'pending' then 'lookup'
                                                 when po.status = 'failed' then 'orphan' else 'cancel' end) as x
       from public.payment_orders po
      where po.purpose = 'invite_topup' and po.created_at > now() - interval '3 days'
        and ((po.status = 'paid' and coalesce(po.metadata->>'inv_settled', '') <> 'true'
              and coalesce(po.approved_at, po.created_at) < now() - interval '3 minutes')
+         -- notify: 확정은 됐는데 결제 완료 알림 표시가 없다(표시 호출 실패 · 그 전에 끊김) — 하루 동안 다시 보낸다
+         or (po.status = 'paid' and coalesce(po.metadata->>'inv_settled', '') = 'true' and coalesce(po.metadata->>'inv_notified', '') <> 'true'
+             and coalesce(po.approved_at, po.created_at) < now() - interval '3 minutes'
+             and coalesce(po.approved_at, po.created_at) > now() - interval '1 day')
          -- pending: 승인 요청이 나간 주문(unknown: 표시)은 3분 뒤부터 · 표시 없는 주문(결제창이 아직 열려 있을 수 있다)은 40분 뒤에야
          or (po.status = 'pending' and coalesce(po.fail_reason, '') like 'unknown:%' and coalesce(po.updated_at, po.created_at) < now() - interval '3 minutes')
          or (po.status = 'pending' and coalesce(po.fail_reason, '') not like 'unknown:%' and po.created_at < now() - interval '40 minutes')
          or (po.status = 'canceled' and (po.fail_reason like '%refund_failed' or po.fail_reason like '%canceling'))
-         -- failed: 닫힌 주문에 토스 승인이 남아 있을 수 있다(잡기 실패 뒤 취소 실패 · 옛 함수가 승인만 한 경우) — 취소 실패는 3일, 그 밖은 닫힌 뒤 3분~90분 동안 주문번호로 조회
+         -- failed: 닫힌 주문에 토스 승인이 남아 있을 수 있다(잡기 실패 뒤 취소 실패 · 옛 함수가 승인만 한 경우) — 취소 실패는 3일, 그 밖은 닫힌 뒤 3분~45분 동안 주문번호로 조회
+         --   (토스는 인증 뒤 승인되지 않은 결제를 30분 안에 만료시킨다 — 닫힌 뒤 45분이 지나면 새 승인이 올 수 없다)
          or (po.status = 'failed' and (po.fail_reason like '%refund_failed'
                                        or (coalesce(po.fail_reason, '') <> 'expired'   -- expired = 토스에 조회해 승인이 없다고 확인하고 닫은 주문 — 다시 보지 않는다
                                            and coalesce(po.updated_at, po.created_at) < now() - interval '3 minutes'
-                                           and coalesce(po.updated_at, po.created_at) > now() - interval '90 minutes'))))
-     order by po.created_at
+                                           and coalesce(po.updated_at, po.created_at) > now() - interval '45 minutes'))))
+     order by (po.status = 'failed'), po.created_at
      limit greatest(1, least(coalesce(p_limit, 15), 50))) s;
   return v;
 end $$;
@@ -506,6 +515,9 @@ union all select '회원·비로그인이 서버 함수를 못 부른다',
               or has_function_privilege('anon', 'public.taam_invite_order_prepare(text, uuid)', 'execute')
               or has_function_privilege('anon', 'public.taam_invite_pay_reconcile_kick()', 'execute')
             then '❌ 열려 있다' else '✅' end
+union all select '정보 — payment_orders.updated_at 을 갱신하는 트리거(정리 목록의 3분·45분 창이 「닫힌 시각」을 본다 · 없으면 만든 시각 기준이 될 뿐)',
+       case when exists (select 1 from pg_trigger t where t.tgrelid = to_regclass('public.payment_orders') and not t.tgisinternal and t.tgname ilike '%touch%')
+            then '✅' else '⚠ 없음' end
 union all select 'A'' 트리거 trg_taam_guard_inv_order_claim',
        case when exists (select 1 from pg_trigger where tgname = 'trg_taam_guard_inv_order_claim' and not tgisinternal) then '✅' else '❌' end
 union all select '정보 — 지금 초대 카드 주문 수', (select count(*) from public.payment_orders where purpose = 'invite_topup')::text
