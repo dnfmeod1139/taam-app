@@ -24735,6 +24735,8 @@ function adgSelectUser(userId){
         '<div style="margin-left:10px;color:#5d1622;font-size:10.5px;">↳ 부여 ₩' + gGen.toLocaleString() + '</div>' +
         '<div style="margin-left:10px;color:#2a6a2a;font-size:10.5px;">↳ 충전 ₩' + cGen.toLocaleString() + '</div>' +
       '</div>' +
+      // 🆕 2026-11-13 이 회원의 원장(내역 · 기록 · 잔액 전체)으로 — 부여·차감 모달은 닫힌다
+      (_adgUidOk(u.id) ? '<button type="button" data-adg-uid="' + _escHtmlAdg(String(u.id)) + '" onclick="adgGoLedger(this.getAttribute(\'data-adg-uid\'))" style="width:100%;margin-top:10px;padding:9px;background:#fff;border:1px solid #d4a017;border-radius:8px;font-family:var(--font-main);font-size:11.5px;font-weight:700;color:#7a5a10;cursor:pointer;">📒 회원 원장 보기 — 내역 · 기록 · 잔액 ›</button>' : '') +
     '</div>';
   infoEl.style.display = 'block';
   document.getElementById('adgSearchResults').innerHTML = '';
@@ -24908,10 +24910,14 @@ async function _adgLoadGlobalLog(){
       if(isGrant) sumGrant += amt; else sumDeduct += Math.abs(amt);
       var depBadge = r.deposit_type === 'membership' ? '멤' : '일';
       var depBadgeColor = r.deposit_type === 'membership' ? '#5d1622' : '#888';
-      html += '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 0;border-bottom:1px dashed #e8e4dc;font-size:11px;">';
+      // 🆕 2026-11-13 줄을 누르면 그 회원의 원장(내역 · 기록 · 잔액)으로 — uid 는 data 속성으로만(onclick 문자열에 넣지 않는다)
+      var _lgUid = _adgUidOk(r.user_id) ? String(r.user_id) : '';
+      html += '<div' + (_lgUid ? ' data-adg-uid="' + _escHtmlAdg(_lgUid) + '" role="button" tabindex="0" title="회원 원장 보기"' : '')
+            + ' style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 0;border-bottom:1px dashed #e8e4dc;font-size:11px;' + (_lgUid ? 'cursor:pointer;' : '') + '">';
       html += '<div style="flex:1;min-width:0;">';
       html += '<div style="font-weight:700;color:#1a1a18;font-size:11.5px;">' + _escHtmlAdg(name);
-      html += ' <span style="font-size:9.5px;color:' + depBadgeColor + ';font-weight:700;background:#fff;border:1px solid ' + depBadgeColor + ';padding:1px 4px;border-radius:3px;">' + depBadge + '</span></div>';
+      html += ' <span style="font-size:9.5px;color:' + depBadgeColor + ';font-weight:700;background:#fff;border:1px solid ' + depBadgeColor + ';padding:1px 4px;border-radius:3px;">' + depBadge + '</span>'
+            + (_lgUid ? ' <span style="font-size:9.5px;color:#9a7a1a;font-weight:700;margin-left:2px;">원장 ›</span>' : '') + '</div>';
       if(subInfo){
         html += '<div style="color:#aaa;font-size:10px;margin-top:1px;">' + _escHtmlAdg(subInfo) + '</div>';
       }
@@ -24932,13 +24938,39 @@ async function _adgLoadGlobalLog(){
     summary += '<span style="color:#c00;">총 차감 -₩' + sumDeduct.toLocaleString() + '</span>';
     summary += '<span style="color:#5d1622;">순 ₩' + (sumGrant - sumDeduct).toLocaleString() + '</span>';
     summary += '</div>';
-    logEl.innerHTML = summary + html;
+    logEl.innerHTML = summary + '<div style="font-size:9.5px;color:#9a917f;margin:-2px 0 6px;">회원 줄을 누르면 그 회원의 원장(내역 · 기록 · 잔액)이 열립니다</div>' + html;
+    _adgBindLedgerTap(logEl);
   } catch(e){
     console.warn('[adg global log] 예외:', e);
     logEl.innerHTML = '<div style="padding:10px;color:#c00;font-size:11px;text-align:center;">예외: ' + _escHtmlAdg(String(e.message || e)) + '</div>';
   }
 }
 window._adgLoadGlobalLog = _adgLoadGlobalLog;
+
+// 🆕 2026-11-13 부여·차감 화면 → 회원 원장. 이 모달(z 9000)이 원장 화면 위에 있으니 먼저 닫고 연다(연회비 납부 시기 feeDueGo 와 같은 순서)
+function _adgUidOk(v){ return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(v || '')); }
+function adgGoLedger(uid){
+  if(!_adgUidOk(uid)) return;
+  try { closeAdminDepositGrant(); } catch(_c){}
+  if(typeof openMemberLedger !== 'function') return;
+  openMemberLedger();
+  setTimeout(function(){ try { if(typeof mlOpen === 'function') mlOpen(String(uid)); } catch(_e){} }, 60);
+}
+window.adgGoLedger = adgGoLedger;
+// 목록이 다시 그려져도 한 번만 붙인다(위임 클릭) — 줄의 data-adg-uid 를 읽는다
+function _adgBindLedgerTap(el){
+  if(!el || el._adgTapBound) return;
+  el._adgTapBound = true;
+  var go = function(ev){
+    var t = ev.target && ev.target.closest ? ev.target.closest('[data-adg-uid]') : null;
+    if(!t || !el.contains(t)) return;
+    if(ev.type === 'keydown' && ev.key !== 'Enter' && ev.key !== ' ') return;
+    if(ev.type === 'keydown') ev.preventDefault();
+    adgGoLedger(t.getAttribute('data-adg-uid'));
+  };
+  el.addEventListener('click', go);
+  el.addEventListener('keydown', go);
+}
 
 // 🆕 금액 입력 중 1,000 단위 콤마 실시간 표기 — 저장(adgSubmit)은 콤마를 걷어내고 읽는다.
 //   음수(차감)의 '-' 는 맨 앞에서만 살린다.
@@ -25252,6 +25284,9 @@ async function adminGrantDeposit(targetUserId, amount, depositType, description)
       var notifBody = typeLabel + ' 예치금 ₩' + amount.toLocaleString() + ' 부여'
                     + (_grantReason ? '\n사유: ' + _grantReason : '');
       // v1.53.32: 기존 notifications 테이블의 NOT NULL 컬럼(kind/message) 대비 — 둘 다 함께 채움
+      // 🔧 2026-11-13: .select() 를 뺐다 — 넣은 줄을 다시 읽으면(INSERT … RETURNING) 그 줄이 SELECT 정책(본인 것만)도 지나야 해서
+      //   슈퍼어드민이 남의 알림을 넣을 때 통째로 거절됐다(new row violates row-level security policy). 그래서 이 알림은
+      //   한 번도 알림함에 안 남았다(라이브 2026-11-13: 최근 90일 부여 44건 · 회원 알림 0건). 푸시는 따로 나가서 보이지 않았다.
       var notifRes = await window.sb.from('notifications').insert({
         user_id: targetUserId,
         type: 'deposit_grant',
@@ -25268,12 +25303,16 @@ async function adminGrantDeposit(targetUserId, amount, depositType, description)
           granted_by: caller.id,
           granted_by_name: caller.user_metadata && caller.user_metadata.display_name || null
         }
-      }).select();
-      console.log('[adg] notifications INSERT 결과:', { error: notifRes.error, data: notifRes.data });
-      if (notifRes.error) console.warn('[adg] notifications insert 실패:', notifRes.error.message);
+      });
+      if (notifRes.error) {
+        console.warn('[adg] notifications insert 실패:', notifRes.error.message);
+        // 조용히 넘어가지 않는다 — 몇 달 동안 콘솔에만 남아 아무도 몰랐다
+        try { if (typeof showToast === 'function') setTimeout(function(){ showToast('⚠', '회원 알림함 기록 실패', '예치금은 반영됐습니다 · 푸시만 발송 — ' + String(notifRes.error.message || '').slice(0, 60)); }, 1800); } catch(_te){}
+      }
 
       // 푸시 (구독한 회원만 수신, 미구독 회원은 다음 접속 시 토스트)
       try {
+        var _agWon = '\u20A9' + amount.toLocaleString();
         await window.sb.functions.invoke('send-push', {
           body: {
             to: 'uid:' + targetUserId,
@@ -25282,7 +25321,13 @@ async function adminGrantDeposit(targetUserId, amount, depositType, description)
               body: notifBody,
               url: '/?open_deposit_hist=1',
               category: 'deposit_grant',
-              tag: 'taam-grant-' + Date.now()
+              tag: 'taam-grant-' + Date.now(),
+              // 🆕 2026-11-13 받는 회원 기기 언어로 — 종전엔 영어·일본어 회원도 한국어를 받았다
+              i18n: {
+                ko: { title: notifTitle, body: notifBody },
+                en: { title: '💰 Deposit Credited', body: (depositType === 'membership' ? 'Membership' : 'General') + ' deposit ' + _agWon + ' credited' + (_grantReason ? '\nNote: ' + _grantReason : '') },
+                ja: { title: '💰 デポジットが付与されました', body: (depositType === 'membership' ? 'メンバーシップ' : '一般') + 'デポジット ' + _agWon + ' を付与しました' + (_grantReason ? '\n理由: ' + _grantReason : '') }
+              }
             }
           }
         });
@@ -49549,8 +49594,7 @@ async function riSubmit(){
         kind: 'reservation_invite',     // 호환 (구버전 kind 컬럼)
         url: '/?ri_pay=' + inviteId,
         payload: { invite_id: inviteId, restaurant_name: restName, pax: _riPax, total_amount: total }
-      }).select();
-      console.log('[ri] notifications INSERT 결과:', { error: nIns && nIns.error, data: nIns && nIns.data });
+      });   // 🔧 2026-11-13 .select() 뺌 — 받는 회원의 줄은 보낸 사람이 다시 읽을 수 없어 넣기가 통째로 거절됐다(알림함에 0건)
       if(nIns && nIns.error) console.warn('[ri] notifications INSERT 실패:', nIns.error.message);
     } catch(_ne) { console.warn('[ri] notifications INSERT 예외:', _ne); }
 
@@ -49656,7 +49700,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.11.13-b';
+var TAAM_WEB_BUILD = '2026.11.13-c';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -76566,9 +76610,10 @@ window.taamNotifyUser = async function(uid, o){
       // 구버전 컬럼 호환 — 일부 배포본이 message/kind 를 읽는다
       message: String(o.body || '').slice(0, 1000),
       kind: _type
-    }).select();
+    });   // 🔧 2026-11-13 .select() 뺌 — 남의 줄을 다시 읽으면 SELECT 정책(본인 것만)에 걸려 넣기가 통째로 거절됐다
+          //   (라이브: 반환·환불 알림 · 초대 회수 알림이 알림함에 0건 — 푸시만 나갔다)
     if(ins.error) console.warn('[notify] 회원 이력 실패:', ins.error.message);
-    else _res.history = (ins.data && ins.data.length) || 0;
+    else _res.history = 1;
   } catch(e){ console.warn('[notify] 회원 이력 예외:', e && e.message); }
 
   try {
