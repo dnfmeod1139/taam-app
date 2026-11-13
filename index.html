@@ -2283,7 +2283,7 @@ html.auto-login .splash .bottom-group{display:none !important}
 /* 확인 시트 — 매진·삭제처럼 되돌리기 어려운 동작 앞에 한 번 더 묻는다 */
 #tkAskWrap{position:fixed;inset:0;z-index:9600;display:none;align-items:center;justify-content:center;padding:26px;background:rgba(18,15,12,.55);font-family:var(--font-main)}
 #tkAskWrap.on{display:flex}
-#tkAskBox{width:100%;max-width:330px;background:#fff;border-radius:18px;padding:24px 22px 18px;box-shadow:0 20px 50px rgba(0,0,0,.32);text-align:center}
+#tkAskBox{width:100%;max-width:330px;background:#fff;border-radius:18px;padding:24px 22px 18px;box-shadow:0 20px 50px rgba(0,0,0,.32);text-align:center;max-height:calc(100vh - 52px);max-height:calc(100dvh - 52px);overflow-y:auto;-webkit-overflow-scrolling:touch}
 #tkAskBox .ic{font-size:30px;line-height:1}
 #tkAskBox .ti{font-size:17px;font-weight:800;color:#1a1a18;margin-top:12px;letter-spacing:-.3px}
 #tkAskBox .bd{font-size:13.5px;color:#5a554f;line-height:1.7;margin-top:9px;white-space:pre-line}
@@ -36815,21 +36815,24 @@ window.paxChangeRecalc = paxChangeRecalc;
 
 async function paxChangeApply(){
   if(!_paxW || !window.sb) return;
+  // 🆕 2026-11-13 이 창의 대상을 먼저 잡아 둔다 — 아래에서 서버를 기다리는 사이(취소표 끄기·이벤트 번호) 다른 예약의 인원 변경 창이 열리면
+  //   전역 _paxW 가 바뀌어 확인한 예약이 아닌 다른 예약에 실행될 수 있었다(검토)
+  var _w = _paxW;
   var newPax = _paxCurrent();
   var refund = Math.max(0, parseInt((document.getElementById('paxRefund') || {}).value) || 0);
-  if(_paxW.processed) refund = 0;   // 🆕 2026-11-04 이미 돌려준 예약 — 인원만
+  if(_w.processed) refund = 0;   // 🆕 2026-11-04 이미 돌려준 예약 — 인원만
   var reason = ((document.getElementById('paxReason') || {}).value || '').trim();
   if(!reason){ showToast('⚠','사유가 필요합니다','왜 바꾸는지 남겨야 합니다'); return; }
-  if(newPax >= _paxW.oldPax){ showToast('⚠','인원을 줄여야 합니다','증가는 아직 지원하지 않습니다'); return; }
-  if(refund > (parseInt(_paxW.row.price) || 0)){ showToast('⚠','금액이 큽니다','결제액을 넘을 수 없습니다'); return; }
+  if(newPax >= _w.oldPax){ showToast('⚠','인원을 줄여야 합니다','증가는 아직 지원하지 않습니다'); return; }
+  if(refund > (parseInt(_w.row.price) || 0)){ showToast('⚠','금액이 큽니다','결제액을 넘을 수 없습니다'); return; }
 
   var btn = document.getElementById('paxApplyBtn');
   if(btn){ btn.disabled = true; btn.textContent = '처리 중…'; btn.style.opacity = '.6'; }
 
   // 🆕 2026-11-13 줄인 좌석이 매진을 풀면 취소표 알림 — 슈퍼어드민은 모달의 토글로 고른다(매장 어드민은 종전대로 알림)
-  var _pxRs = await _rsRun([_paxW.row.ticket_product_id], _rsChecked('paxRestock'), '인원 변경 ' + String(_paxW.row.purchase_id), function(){
+  var _pxRs = await _rsRun([_w.row.ticket_product_id], _rsChecked('paxRestock'), '인원 변경 ' + String(_w.row.purchase_id), function(){
     return window.sb.rpc('taam_change_party_size', {
-      p_purchase_id: String(_paxW.row.purchase_id),
+      p_purchase_id: String(_w.row.purchase_id),
       p_new_pax: newPax,
       p_refund: refund,
       p_reason: reason
@@ -36861,16 +36864,16 @@ async function paxChangeApply(){
   }
 
   var out = r.data || {};
-  var el = document.getElementById('paxChangeModal'); if(el) el.remove();
+  var el = document.getElementById('paxChangeModal'); if(el && _paxW === _w) el.remove();   // 그 사이 다른 예약의 창이 열렸으면 그 창은 두고
   showToast('✓','인원 변경 완료',
-    (out.pax_from || _paxW.oldPax) + '인 → ' + (out.pax_to || newPax) + '인'
+    (out.pax_from || _w.oldPax) + '인 → ' + (out.pax_to || newPax) + '인'
     + (refund > 0 ? ' · ₩' + refund.toLocaleString() + ' 환불' : ' · 환불 없음'));
   _rsReport(_pxRs, 2400);
 
   // 좌석이 열렸으니 매진이던 티켓을 되살린다 (취소 경로와 같은 처리)
   try {
     if(typeof _tkMaybeReopen === 'function'){
-      await _tkMaybeReopen({ id: _paxW.row.ticket_product_id, purchaseId: _paxW.row.purchase_id });
+      await _tkMaybeReopen({ id: _w.row.ticket_product_id, purchaseId: _w.row.purchase_id });
     }
   } catch(_re){ console.warn('[paxChange] 재오픈 실패(무시):', _re); }
 
@@ -36879,8 +36882,8 @@ async function paxChangeApply(){
     if(typeof taamNotifyAdmins === 'function'){
       taamNotifyAdmins({
         type: 'pax_change',
-        title: '인원 변경 — ' + (out.restaurant_name || _paxW.row.restaurant_name || '티켓'),
-        body: (out.pax_from || _paxW.oldPax) + '인 → ' + (out.pax_to || newPax) + '인 · 환불 ₩'
+        title: '인원 변경 — ' + (out.restaurant_name || _w.row.restaurant_name || '티켓'),
+        body: (out.pax_from || _w.oldPax) + '인 → ' + (out.pax_to || newPax) + '인 · 환불 ₩'
           + (parseInt(out.refund_total) || refund).toLocaleString()
           + (out.card_refund_pending > 0 ? ' (카드 ₩' + out.card_refund_pending.toLocaleString() + ' 토스 처리 필요)' : '')
           + ' · ' + reason,
@@ -36897,13 +36900,13 @@ async function paxChangeApply(){
   }
 
   // 열려 있던 화면 새로고침 — 무엇이 떠 있는지 모르니 있는 것만 부른다
-  var _uid = _paxW.row.user_id;
+  var _uid = _w.row.user_id;
   try {
     var _md = document.getElementById('mlDetail');
     if(_md && _md.offsetParent !== null && typeof mlOpen === 'function' && _uid) mlOpen(_uid);
   } catch(_e1){}
   try { if(typeof tcalRender === 'function') tcalRender(); } catch(_e2){}
-  _paxW = null;
+  _w = null;
 }
 window.paxChangeApply = paxChangeApply;
 
@@ -45222,7 +45225,8 @@ async function dmEarlyOpenSeat(idx){
     body: (h.rest || '예약') + ' · ' + (h.visitDate || '') + ' · ' + (h.pax || 1) + '인',
     note: (_ledOk ? '· 예치금은 ' + (dr0.date || '') + ' 에 이미 ₩' + _retAmt0.toLocaleString() + ' 돌려줬습니다 — 이번엔 돈이 움직이지 않습니다\n'
                   : '· ⚠ 원장에 이 구매의 반환 줄이 ₩' + (parseInt(h._ledgerRefund) || 0).toLocaleString() + ' 뿐입니다(기록 ₩' + _retAmt0.toLocaleString() + ') — 회원 원장에서 확인하세요 · 이번엔 돈이 움직이지 않고 회원 알림도 보내지 않습니다\n')
-        + '· 초대 예약이면 초대가 「취소」가 됩니다\n· 매진이 자동으로 풀리는 회차면 아래 「취소표 알림」이 켜져 있을 때 회원 전원에게 알림이 갑니다',
+        + '· 초대 예약이면 초대가 「취소」가 됩니다\n· 매진이 자동으로 풀리는 회차면 '
+        + (_rsRealIds([h.id]).length ? '아래 「취소표 알림」이 켜져 있을 때 회원 전원에게 알림이 갑니다' : '회원 전원에게 취소표 알림이 갑니다'),
     okText: '좌석 열기', okKind: 'danger', restock: { ids: [h.id] }
   });
   if(!_eoAns) return;
@@ -51466,9 +51470,21 @@ function finalUploadTicket(rsAns){
     var _oCap = _o0 ? (parseInt(_o0.totalPax || _o0.assignedPax) || 0) : 0, _nCap = parseInt(_pendingTicket.totalPax) || 0;
     if(_o0 && _o0.status === 'soldout' && _nCap > _oCap){
       var _capId = String(_tuEditId);
-      _rsAsk({ icon: '🪑', title: '총 좌석을 늘려 저장할까요?', body: _tkAskWhat(_o0),
-        note: '매진 회차입니다 — 총 좌석 ' + _oCap + ' → ' + _nCap + '석. 저장하면 늘어난 자리만큼 판매중으로 돌아갑니다.',
-        okText: '저장', okKind: 'go', restock: { ids: [_capId] } }).then(async function(a){
+      // 서버를 먼저 본다 — 손으로 잠근 매진(auto_soldout=false)이거나 늘려도 자리가 차 있으면 판매중으로 안 돌아가니 묻지 않는다(검토: 「돌아갑니다」가 거짓)
+      (async function(){
+        var _noReopen = false;
+        try {
+          var _cq = await window.sb.from('ticket_products').select('auto_soldout').eq('id', _capId).maybeSingle();
+          if(_cq && !_cq.error && _cq.data && _cq.data.auto_soldout === false) _noReopen = true;
+          if(!_noReopen){
+            var _cs = await window.sb.rpc('taam_ticket_sold_slots', { p_ticket_id: _capId });
+            if(_cs && !_cs.error && _cs.data && (parseInt(_cs.data.total, 10) || 0) >= _nCap) _noReopen = true;
+          }
+        } catch(_ce){}
+        if(_noReopen){ if(String(_tuEditId) === _capId && _pendingTicket) finalUploadTicket({ notify: true, token: null, id: _capId, quiet: true }); return; }
+        var a = await _rsAsk({ icon: '🪑', title: '총 좌석을 늘려 저장할까요?', body: _tkAskWhat(_o0),
+          note: '매진 회차입니다 — 총 좌석 ' + _oCap + ' → ' + _nCap + '석. 저장하면 늘어난 자리만큼 판매중으로 돌아갑니다.',
+          okText: '저장', okKind: 'go', restock: { ids: [_capId] } });
         if(!a) return;
         var tok = null, before;
         if(a.notify === false){
@@ -51479,7 +51495,7 @@ function finalUploadTicket(rsAns){
         if(!tok) before = await _rsLastEventId([_capId]);
         if(String(_tuEditId) !== _capId || !_pendingTicket){ if(tok) _rsMuteEnd(tok); return; }   // 그 사이 화면이 바뀌었다
         finalUploadTicket({ notify: a.notify !== false, token: tok, id: _capId, before: before, t0: Date.now() });
-      });
+      })();
       return;
     }
   }
@@ -51553,7 +51569,7 @@ function finalUploadTicket(rsAns){
     _rsCapClosed = true;
     var _capR = _rsCap;
     Promise.resolve(_svP).then(function(){ return _capR.token ? _rsMuteEnd(_capR.token) : null; }, function(){ return _capR.token ? _rsMuteEnd(_capR.token) : null; })
-      .then(function(h){ _rsReport(_capR.token ? { ids: [_capR.id], muted: true, hits: h, t0: _svT0 } : { ids: [_capR.id], notify: true, t0: _capR.t0 || _svT0, evBefore: _capR.before }, 2000); });
+      .then(function(h){ if(_capR.quiet) return; _rsReport(_capR.token ? { ids: [_capR.id], muted: true, hits: h, t0: _svT0 } : { ids: [_capR.id], notify: true, t0: _capR.t0 || _svT0, evBefore: _capR.before }, 2000); });
   }
   if(_pkLink && typeof _tuPkgLinkAfter === 'function') _tuPkgLinkAfter(_svP, _savedIds, _pkLink);
   // 🆕 2026-10-30(2차 리뷰) 숨김으로 저장한 수정 — 서버는 연계된 회차를 다시 숨기지 않는다. 서버 판을 읽어 로컬을 맞추고, 공개돼 있었으면 알린다
@@ -72578,16 +72594,41 @@ function closeExtendPopup() {
   _extendTargetId = null;
 }
 
-function saveExtend() {
+function saveExtend(rsAns) {
   var t = ticketDB.find(function(x){ return String(x.id)===String(_extendTargetId); });
   if (!t) return;
   var newDate = (document.getElementById('extendDate')||{value:''}).value.trim();
   var newTime = (document.getElementById('extendTime')||{value:''}).value.trim();
   if (!newDate || !newTime) { showToast('⚠','입력 필요','날짜와 시간을 입력해주세요'); return; }
+  // 🆕 2026-11-13 매진 회차의 연장은 매진을 푼다(아래) — 자리가 남아 있으면 취소표 알림이 나간다. 슈퍼어드민은 켬/끔을 고른다(검토: 「판매 재개」 옆의 같은 길)
+  var _xid = String(t.id);
+  if (t.status === 'soldout' && _rsIsSuper() && !(rsAns && typeof rsAns === 'object' && ('notify' in rsAns))) {
+    _rsAsk({ icon: '⏰', title: '기한을 연장할까요?', body: _tkAskWhat(t),
+      note: '매진 회차입니다 — 연장하면 매진이 풀립니다(자리가 남아 있으면 판매중으로 돌아갑니다).\n새 기한: ' + newDate + ' ' + newTime,
+      okText: '연장', okKind: 'go', restock: { ids: [_xid] } }).then(function(a){ if (a && String(_extendTargetId) === _xid) saveExtend(a); });
+    return;
+  }
+  var _oldD = t.deadlineDate, _oldT = t.deadlineTime, _wasSold = (t.status === 'soldout');
   t.deadlineDate = newDate;
   t.deadlineTime = newTime;
   if (t.status === 'soldout') t.status = 'active'; // 연장 시 매진 해제
-  saveTickets([String(t.id)]);   // 🆕 2026-10-29(4차 리뷰) 그 회차만
+  if (_wasSold && rsAns && typeof rsAns === 'object' && ('notify' in rsAns)) {
+    _rsRun([_xid], rsAns.notify !== false, '기한 연장 ' + _xid, function(){
+      var t2 = ticketDB.find(function(x){ return String(x.id) === _xid; });   // 끄는 사이 목록이 다시 읽혔어도 그 회차에 적는다
+      if (t2) { t2.deadlineDate = newDate; t2.deadlineTime = newTime; t2.status = 'active'; }
+      return saveTickets([_xid]);
+    }).then(function(rs){
+      if (rs && rs.aborted) {
+        var t3 = ticketDB.find(function(x){ return String(x.id) === _xid; }) || t;
+        t3.deadlineDate = _oldD; t3.deadlineTime = _oldT; t3.status = 'soldout';
+        try { saveTickets([_xid], true); } catch(_l){}
+        try { renderTicketList(); } catch(_r){}
+        showToast('ⓘ','연장 안 함','아무것도 바뀌지 않았습니다');
+        return;
+      }
+      _rsReport(rs, 2000);
+    }, function(e){ console.warn('[extend] 저장 실패', e); });
+  } else saveTickets([String(t.id)]);   // 🆕 2026-10-29(4차 리뷰) 그 회차만
   renderTicketList();
   renderHomeTickets();
   renderTicketGenres();
