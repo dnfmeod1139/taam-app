@@ -27,7 +27,7 @@
 // 오류는 HTTP 200 + {ok:false, error} (앱이 사유를 읽는다) — 인증만 401/403.
 // 시크릿: SUPABASE_URL · SUPABASE_SERVICE_ROLE_KEY · TOSS_SECRET_KEY
 // ═════════════════════════════════════════════════
-const VER = 'tip-2026-11-13b';
+const VER = 'tip-2026-11-13c';
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') || '';
 const SERVICE_KEY  = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type', 'Access-Control-Allow-Methods': 'POST, OPTIONS' };
@@ -158,6 +158,15 @@ async function notifyOnce(order: Record<string, any>, res: Record<string, any>, 
     const first = await sbRpc('taam_invite_order_notified', { p_order: order.order_id });
     if(first === true) await notifyPaid(order, res, buyer);
   } catch(_e){ /* 알림은 부가 — 결제를 깨뜨리지 않는다 */ }
+}
+// 닫힌 주문이 「카드가 승인됐다가 서버가 취소한(또는 취소가 밀린)」 것이면 그 사유와 취소 여부를 돌려준다 — 아니면 null.
+//   앱이 「결제를 마치지 못했습니다 — 다시 시도」만 보여 주면, 카드 승인 문자를 받은 회원이 취소 사실을 모른 채 다시 긁는다(적대 리뷰).
+function closedReport(o: Record<string, any>): Record<string, any> | null {
+  const fr = String(o?.fail_reason || '');
+  const base = (x: string) => x.replace(/_(refunded|refund_failed|canceling)$/, '').replace(/:.*$/, '') || 'confirm_failed';
+  if(o?.status === 'canceled') return { ok: false, error: base(fr), refunded: !/_(refund_failed|canceling)$/.test(fr), orderId: o.order_id };
+  if(o?.status === 'failed' && /_refund_failed$/.test(fr)) return { ok: false, error: base(fr), refunded: false, orderId: o.order_id };
+  return null;
 }
 // 알림이 함수 끝에 잘리지 않게 — 런타임이 주면 waitUntil, 아니면 기다린다
 async function background(p: Promise<unknown>){
@@ -316,7 +325,14 @@ async function reconcilePending(order: Record<string, any>, buyer: { id: string;
     }
     return await afterApproved(order, lk.body, String(lk.body.paymentKey || ''), sec, buyer);
   }
-  return lk.gone ? json({ ok: false, error: 'not_paid' }) : json({ ok: false, error: 'confirm_retry', retry: true });
+  if(lk.gone) return json({ ok: false, error: 'not_paid' });
+  // 조회가 실패했으면(네트워크 · 5xx) 모른다. 조회는 됐는데 DONE 이 아닌 상태(READY · IN_PROGRESS)면:
+  //   「승인 요청 표시」(unknown:)가 없는 주문 = 이 함수가 토스에 승인을 요청한 적이 없다 → 결제창을 닫았거나 인증만 하고 떠났다. 승인 없이 돈은 안 나간다 → not_paid
+  //   (종전엔 토스가 그 결제를 만료시킬 때까지 30분 동안 「확인이 늦어지고 있습니다」로 초대 결제 화면이 안 열렸다 — 적대 리뷰)
+  //   표시가 있는 주문은 승인이 진행 중일 수 있다 → 다시 묻게
+  const looked = !!(lk.body && typeof lk.body.status === 'string' && lk.body.status);
+  if(looked && !String(order.fail_reason || '').startsWith('unknown:')) return json({ ok: false, error: 'not_paid' });
+  return json({ ok: false, error: 'confirm_retry', retry: true });
 }
 
 async function handle(req: Request){
@@ -356,7 +372,11 @@ async function handle(req: Request){
         //   취소가 필요해지면 **주문에 적힌 결제키**(서버가 토스에서 받아 적은 값)만 쓴다 — 회원이 보낸 키는 쓰지 않는다
         return await finalize(order, String(order.payment_key || ''), secret, me);
       }
-      if(order.status !== 'pending') return json({ ok: false, error: 'order_not_pending', status: order.status });
+      if(order.status !== 'pending'){
+        // 앞 호출이 이 주문을 닫고 카드를 취소했을 수 있다(응답을 잃고 앱이 다시 보낸 경우) — 그 결과를 그대로 알려 준다
+        const cr = closedReport(order);
+        return json(cr || { ok: false, error: 'order_not_pending', status: order.status });
+      }
       const expected = Number(order.amount);
       if(clientAmount && clientAmount !== expected){
         await sbPatch(`payment_orders?order_id=eq.${encodeURIComponent(orderId)}&status=eq.pending`, { status: 'failed', fail_reason: 'amount_mismatch_client' });
@@ -372,7 +392,7 @@ async function handle(req: Request){
           const ag = await sbGet(`payment_orders?order_id=eq.${encodeURIComponent(orderId)}&select=*`);
           const cur = ag && ag[0];
           if(cur && cur.status === 'paid') return await finalize(cur, String(cur.payment_key || ''), secret, me);
-          return json({ ok: false, error: 'order_not_pending', status: cur ? cur.status : null });
+          return json((cur && closedReport(cur)) || { ok: false, error: 'order_not_pending', status: cur ? cur.status : null });
         }
         order.fail_reason = 'unknown:approving';
       }
@@ -424,13 +444,8 @@ async function handle(req: Request){
         // 살아 있는 주문이 없다 — 서버가 승인 뒤에 닫고 카드를 취소한 주문이 최근(6시간)에 있으면 그 결과를 알려 준다
         //   (회원이 「결제가 완료되지 않았어요」만 보고, 카드가 승인됐다 취소된(또는 취소가 밀린) 사실을 모른 채 다시 결제하지 않게)
         const since = new Date(Date.now() - 6 * 3600e3).toISOString();
-        const cx = await sbGet(`payment_orders?purpose=eq.${PURPOSE}${own}&metadata->>invite_id=eq.${encodeURIComponent(iid)}&status=eq.canceled&created_at=gte.${encodeURIComponent(since)}&select=order_id,fail_reason&order=created_at.desc&limit=1`);
-        const c0 = cx && cx[0];
-        if(c0){
-          const fr = String(c0.fail_reason || '');
-          const base = fr.replace(/_(refunded|refund_failed|canceling)$/, '').replace(/:.*$/, '') || 'confirm_failed';
-          return json({ ok: false, error: base, refunded: !/_(refund_failed|canceling)$/.test(fr), orderId: c0.order_id });
-        }
+        const cx = await sbGet(`payment_orders?purpose=eq.${PURPOSE}${own}&metadata->>invite_id=eq.${encodeURIComponent(iid)}&status=in.(canceled,failed)&created_at=gte.${encodeURIComponent(since)}&select=order_id,status,fail_reason&order=created_at.desc&limit=8`);
+        for(const c0 of (cx || [])){ const cr = closedReport(c0); if(cr) return json(cr); }
         return json({ ok: false, error: 'order_not_found' });
       }
       const buyer = order.user_id === me.id ? me : { id: String(order.user_id), email: '' };   // 슈퍼어드민이 회원 대신 확인

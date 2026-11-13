@@ -11,7 +11,12 @@
 --        — payment_orders 는 회원이 못 쓰는 표다(「회원이 못 쓰는 기록만 믿는다」 그대로)
 --     ② 판매액 = 원장 결제(− 되돌림) + 카드 · 결제수단 예치금 / 카드+예치금 / 카드 · dep · card 칸
 --     ③ 카드 환불 = 좌석 행의 card_refund_pending 금액(카드 몫까지만 — 앱 채널과 같은 규칙) → 취소·위약 환불에 더하고, 완료 전이면 「카드 환불 대기」
---   그 밖(대행비 · 방문 후 반환 · 조기 반환 · 확인 필요)은 그대로. 예치금만으로 낸 초대는 숫자가 하나도 안 바뀐다(inv_card = null).
+--     ④ **방문 후 반환**의 카드 몫은 취소가 아니다(적대 리뷰) — 초대는 종전에 결제수단과 무관하게 「방문 후 반환은 순판매에서 안 빼고 따로」였다.
+--        카드 몫을 취소 환불로 세면 다녀온 예약의 순판매가 카드 반환분만큼 줄고, 전액 카드 초대는 원장 반환 줄이 없어 「취소」로 분류됐다.
+--        → 원장 반환 줄이 있거나(ret_ok), 원장 줄이 없어도 좌석의 슈퍼어드민 처리 기록이 방문 후 반환이면
+--          (deposit_return.type = 'returned' · 좌석 열기 아님 · 방문 기록 attended 또는 처리일(KST) ≥ 방문일 − 1 — 둘 다 회원이 못 쓰는 칸)
+--          상태는 「반환」 · 카드 몫은 rf_return 에 · 순판매에서 빼지 않는다. 방문 전 반환·좌석 열기·회원 취소는 종전대로 취소.
+--   그 밖(대행비 · 조기 반환 · 확인 필요)은 그대로. 예치금만으로 낸 초대는 숫자가 하나도 안 바뀐다(inv_card = null).
 --   모양이 다르면(라이브 본문이 예상과 다름) ⚠ 로 두고 건드리지 않는다.
 --   회귀: bash sql/_test/t_ticket_sales.sh (V 절)
 -- ═══════════════════════════════════════════════════════════════
@@ -35,12 +40,17 @@ declare
     $q$'k', 'inv:' || id, 'ch', 'invite', 'pm', 'deposit',$q$,
     -- 6 예치금·카드 칸
     $q$'dep', gross, 'card', 0,$q$,
-    -- 7 환불 칸
-    $q$'rf_cancel', l_cancel + ret_early, 'rf_penalty', l_pen, 'rf_pax', l_pax, 'rf_return', ret_ok, 'rf_card_pending', 0, 'rf_at', l_at,$q$
+    -- 7 환불 칸 · 보유
+    $q$'rf_cancel', l_cancel + ret_early, 'rf_penalty', l_pen, 'rf_pax', l_pax, 'rf_return', ret_ok, 'rf_card_pending', 0, 'rf_at', l_at,
+        'net', net, 'held', net - ret_ok,$q$,
+    -- 8 상태 — 방문 후 반환
+    $q$                  when ret_ok > 0 then 'returned'
+                  when lower(coalesce(tk_status,'')) in ('cancelled','canceled') or status = 'cancelled' or l_cancel > 0 or l_ret > 0 then 'cancelled' end as proc$q$
   ];
   c_new text[] := array[
     $q$tp.agency_fee as tp_agency, tp.meal_fee as tp_meal, tp.wine_min as tp_wine,
-             ipo.card as inv_card, tk.extra_data->'card_refund_pending' as tk_crp /* INVITE_CARD_20261113 */,$q$,
+             ipo.card as inv_card, tk.extra_data->'card_refund_pending' as tk_crp /* INVITE_CARD_20261113 */,
+             tk.extra_data->'deposit_return'->>'type' as tk_dr_type, tk.extra_data->>'super_admin_processed_at' as tk_proc_at,$q$,
     $q$left join lateral (select least(coalesce(po.settle_krw, po.amount, 0), 999999999999)::bigint as card
                              from public.payment_orders po
                             where po.purpose = 'invite_topup' and po.status = 'paid' and po.user_id = i.invitee_user_id
@@ -50,11 +60,18 @@ declare
     $q$greatest(coalesce((il->>'buy')::bigint, 0) - l_rev, 0) as dep_ev,
              greatest(coalesce((il->>'buy')::bigint, 0) - l_rev, 0) + coalesce(inv_card, 0) as gross,
              least(greatest(coalesce(public._taam_sr_int(tk_crp->>'amount'), 0), 0), coalesce(inv_card, 0)) as crp,   -- 카드 환불(대기·완료)은 카드 몫까지만
-             coalesce(tk_crp->>'status', 'pending') as crp_st,$q$,
-    $q$w as (select u2.*, gross - l_cancel - ret_early - l_pen - l_pax - crp as net from u2)$q$,
+             coalesce(tk_crp->>'status', 'pending') as crp_st,
+             -- 좌석의 슈퍼어드민 처리 기록이 「방문 후 반환」인가(원장 반환 줄이 없는 전액 카드 초대용 · 둘 다 보호 칸)
+             coalesce(coalesce(tk_dr_type, '') = 'returned' and coalesce(tk_seat_open, '') <> 'true'
+                      and (coalesce(visit_st, '') = 'attended' or vdate is null
+                           or ((public._taam_sr_ts(tk_proc_at)) at time zone 'Asia/Seoul')::date >= vdate - 1), false) as seat_ret,$q$,
+    $q$w as (select u2.*, gross - l_cancel - ret_early - l_pen - l_pax - case when proc = 'returned' then 0 else crp end as net from u2)$q$,
     $q$'k', 'inv:' || id, 'ch', 'invite', 'pm', case when coalesce(inv_card, 0) <= 0 then 'deposit' when dep_ev <= 0 then 'card' else 'mixed' end,$q$,
     $q$'dep', dep_ev, 'card', coalesce(inv_card, 0),$q$,
-    $q$'rf_cancel', l_cancel + ret_early + case when proc = 'penalty' then 0 else crp end, 'rf_penalty', l_pen + case when proc = 'penalty' then crp else 0 end, 'rf_pax', l_pax, 'rf_return', ret_ok, 'rf_card_pending', case when crp_st <> 'done' then crp else 0 end, 'rf_at', l_at,$q$
+    $q$'rf_cancel', l_cancel + ret_early + case when proc in ('penalty', 'returned') then 0 else crp end, 'rf_penalty', l_pen + case when proc = 'penalty' then crp else 0 end, 'rf_pax', l_pax, 'rf_return', ret_ok + case when proc = 'returned' then crp else 0 end, 'rf_card_pending', case when crp_st <> 'done' then crp else 0 end, 'rf_at', l_at,
+        'net', net, 'held', net - ret_ok - case when proc = 'returned' then crp else 0 end,$q$,
+    $q$                  when ret_ok > 0 or (l_ret = 0 and crp > 0 and seat_ret) then 'returned'
+                  when lower(coalesce(tk_status,'')) in ('cancelled','canceled') or status = 'cancelled' or l_cancel > 0 or l_ret > 0 then 'cancelled' end as proc$q$
   ];
 begin
   if v_oid is null then insert into _taam_icr values ('⚠', '판매 현황 함수가 없다 — 건너뜀'); return; end if;
@@ -79,10 +96,10 @@ begin
   -- 덧댄 본문이 실제로 도는지 한 번 불러 본다 — 실행에서 터지면 옛 본문으로 되돌린다(판매 현황 화면이 통째로 죽는 것보다 카드 몫이 빠진 옛 숫자가 낫다)
   begin
     perform public.taam_ticket_sales_report(null, null, 'paid', false);
-    insert into _taam_icr values ('✅', '덧댐 — 초대 7곳 · 실행 확인');
+    insert into _taam_icr values ('✅', '덧댐 — 초대 8곳 · 실행 확인');
   exception when others then
     if sqlerrm ~* 'FORBIDDEN|슈퍼어드민|권한' then
-      insert into _taam_icr values ('✅', '덧댐 — 초대 7곳 (실행 확인은 건너뜀 — 이 세션은 보고서를 부를 권한이 없다)');
+      insert into _taam_icr values ('✅', '덧댐 — 초대 8곳 (실행 확인은 건너뜀 — 이 세션은 보고서를 부를 권한이 없다)');
     else
       v_i := left(sqlerrm, 160);
       execute v_def;
