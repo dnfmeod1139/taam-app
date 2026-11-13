@@ -461,6 +461,69 @@ ok "E9 방문 전날 「좌석 열기」 = 취소(return_before_visit) · 표시
 ok "E10 초대 · 방문 당일 「좌석 열기」 = 취소" "$(row "inv:$IE2" "concat_ws('/', r->>'st', r->>'rf_return', r->>'rf_cancel')")" "cancelled/0/800000"
 oute2=$($P -f "$MIGE" 2>&1)
 ok "E8 재실행 — 이미 새 판 · 오류 없음" "$(echo "$oute2" | grep -c '이미 새 판')/$(echo "$oute2" | grep -cE "^ERROR|^psql:.*ERROR")" "1/0"
+
+# ── IC. 2026-11-13 초대 「예치금 + 카드」 — 초대 채널이 카드 몫을 센다 (20261113_invite_card_pay_reports.sql) ──
+MIGIC=supabase/migrations/20261113_invite_card_pay_reports.sql
+IV1=f1000000-0000-4000-8000-000000000001; IV2=f2000000-0000-4000-8000-000000000002; IV3=f3000000-0000-4000-8000-000000000003; IV4=f4000000-0000-4000-8000-000000000004; IV5=f5000000-0000-4000-8000-000000000005
+$P <<SQL >/dev/null
+insert into public.ticket_products values ('tpV','$R1','메이노','2027.03.15','18:00',3300000,200000,0);
+-- IC1 섞음: 초대 3인 10,500,000 = 예치금 8,000,000 + 카드 2,500,000 · 살아 있음
+insert into public.reservation_invites values ('$IV1','$SU','$M1','$R1','메이노','2027.03.15','18:00',3,3300000,200000,0,10500000,'paid','2026-11-13','2026-11-13T10:10:00Z',null,'tpV');
+insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata,created_at) values
+ ('$M1','general','ticket_purchase',-8000000,'{"purchase_id":"INV-f1000000-1","invite_id":"$IV1","order_id":"taaminv_1","source":"reservation_invite","payment_method":"card+deposit"}','2026-11-13T10:10:00Z');
+insert into public.payment_orders(order_id,user_id,purpose,amount,currency,settle_krw,status,approved_at,metadata) values
+ ('taaminv_1','$M1','invite_topup',2500000,'KRW',2500000,'paid','2026-11-13T10:09:50Z','{"invite_id":"$IV1","purchase_id":"INV-f1000000-1","total":10500000,"pax":3,"deposit_used":8000000,"inv_claim":"toss-invite-pay","inv_settled":true}');
+insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_date,party_size,price,status,purchase_id,extra_data,created_at)
+ values ('$M1','$R1','tpV','2027.03.15',3,10500000,'active','INV-f1000000-1','{"inviteId":"$IV1","invitePaid":true,"paidBy":"card+deposit","cardPaid":2500000,"depositUsed":8000000,"order_id":"taaminv_1"}','2026-11-13T10:00:00Z');
+-- IC2 전액 카드: 초대 2인 7,000,000 · 원장 줄 없음
+insert into public.reservation_invites values ('$IV2','$SU','$M2','$R1','메이노','2027.03.15','18:00',2,3300000,200000,0,7000000,'paid','2026-11-13','2026-11-13T11:00:00Z',null,'tpV');
+insert into public.payment_orders(order_id,user_id,purpose,amount,currency,settle_krw,status,approved_at,metadata) values
+ ('taaminv_2','$M2','invite_topup',7000000,'KRW',7000000,'paid','2026-11-13T10:59:50Z','{"invite_id":"$IV2","purchase_id":"INV-f2000000-1","total":7000000,"pax":2,"deposit_used":0,"inv_claim":"toss-invite-pay","inv_settled":true}');
+insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_date,party_size,price,status,purchase_id,extra_data,created_at)
+ values ('$M2','$R1','tpV','2027.03.15',2,7000000,'active','INV-f2000000-1','{"inviteId":"$IV2","invitePaid":true,"paidBy":"card","cardPaid":7000000,"depositUsed":0,"order_id":"taaminv_2"}','2026-11-13T10:50:00Z');
+-- IC3 섞음 뒤 D-31 이상 취소: 예치금 8,000,000 환불 · 카드 환불 대기 1,900,000 (대행비 600,000 보유)
+insert into public.reservation_invites values ('$IV3','$SU','$M1','$R1','메이노','2027.03.15','18:00',3,3300000,200000,0,10500000,'cancelled','2026-11-13','2026-11-13T12:00:00Z','2026-11-14T03:00:00Z','tpV');
+insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata,created_at) values
+ ('$M1','general','ticket_purchase',-8000000,'{"purchase_id":"INV-f3000000-1","invite_id":"$IV3","order_id":"taaminv_3","source":"reservation_invite"}','2026-11-13T12:00:00Z'),
+ ('$M1','general','ticket_refund',8000000,'{"purchase_id":"INV-f3000000-1"}','2026-11-14T03:00:00Z');
+insert into public.payment_orders(order_id,user_id,purpose,amount,currency,settle_krw,status,approved_at,metadata) values
+ ('taaminv_3','$M1','invite_topup',2500000,'KRW',2500000,'paid','2026-11-13T11:59:50Z','{"invite_id":"$IV3","purchase_id":"INV-f3000000-1","total":10500000,"pax":3,"deposit_used":8000000,"inv_claim":"toss-invite-pay","inv_settled":true}');
+insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_date,party_size,price,status,purchase_id,extra_data,created_at)
+ values ('$M1','$R1','tpV','2027.03.15',3,10500000,'cancelled','INV-f3000000-1','{"inviteId":"$IV3","invitePaid":true,"paidBy":"card+deposit","cardPaid":2500000,"depositUsed":8000000,"order_id":"taaminv_3","card_refund_pending":{"amount":1900000,"status":"pending","set_by_role":"member"}}','2026-11-13T11:50:00Z');
+-- IC4 확정 표시가 없는 카드 주문(승인만 됨 · 확정 전)과 다른 회원의 주문은 안 센다 — 초대는 예치금으로만 1,000,000
+insert into public.reservation_invites values ('$IV4','$SU','$M2','$R1','메이노','2027.03.15','18:00',1,800000,200000,0,1000000,'paid','2026-11-13','2026-11-13T13:00:00Z',null,'tpV');
+insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata,created_at) values
+ ('$M2','general','ticket_purchase',-1000000,'{"purchase_id":"INV-f4000000-1","invite_id":"$IV4","source":"reservation_invite"}','2026-11-13T13:00:00Z');
+insert into public.payment_orders(order_id,user_id,purpose,amount,currency,settle_krw,status,approved_at,metadata) values
+ ('taaminv_4a','$M2','invite_topup',500000,'KRW',500000,'paid','2026-11-13T12:59:00Z','{"invite_id":"$IV4","inv_claim":"toss-invite-pay"}'),
+ ('taaminv_4b','$M1','invite_topup',500000,'KRW',500000,'paid','2026-11-13T12:59:00Z','{"invite_id":"$IV4","inv_claim":"toss-invite-pay","inv_settled":true}'),
+ ('taaminv_4c','$M2','invite_topup',500000,'KRW',500000,'canceled','2026-11-13T12:59:00Z','{"invite_id":"$IV4","inv_claim":"toss-invite-pay","inv_settled":true}');
+insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_date,party_size,price,status,purchase_id,extra_data,created_at)
+ values ('$M2','$R1','tpV','2027.03.15',1,1000000,'active','INV-f4000000-1','{"inviteId":"$IV4","invitePaid":true}','2026-11-13T12:50:00Z');
+-- IC5 섞음 뒤 취소 · 카드 환불 완료(done) · 회원이 대기 금액을 부풀려 적어도 카드 몫까지만
+insert into public.reservation_invites values ('$IV5','$SU','$M2','$R1','메이노','2027.03.15','18:00',2,3300000,200000,0,7000000,'cancelled','2026-11-13','2026-11-13T14:00:00Z','2026-11-13T14:10:00Z','tpV');
+insert into public.deposit_transactions(user_id,deposit_type,change_type,amount,metadata,created_at) values
+ ('$M2','general','ticket_purchase',-5000000,'{"purchase_id":"INV-f5000000-1","invite_id":"$IV5","order_id":"taaminv_5","source":"reservation_invite"}','2026-11-13T14:00:00Z'),
+ ('$M2','general','ticket_refund',5000000,'{"purchase_id":"INV-f5000000-1"}','2026-11-13T14:10:00Z');
+insert into public.payment_orders(order_id,user_id,purpose,amount,currency,settle_krw,status,approved_at,metadata) values
+ ('taaminv_5','$M2','invite_topup',2000000,'KRW',2000000,'paid','2026-11-13T13:59:50Z','{"invite_id":"$IV5","purchase_id":"INV-f5000000-1","total":7000000,"pax":2,"deposit_used":5000000,"inv_claim":"toss-invite-pay","inv_settled":true}');
+insert into public.tickets(user_id,restaurant_id,ticket_product_id,reservation_date,party_size,price,status,purchase_id,extra_data,created_at)
+ values ('$M2','$R1','tpV','2027.03.15',2,7000000,'cancelled','INV-f5000000-1','{"inviteId":"$IV5","invitePaid":true,"paidBy":"card+deposit","cardPaid":2000000,"depositUsed":5000000,"order_id":"taaminv_5","card_refund_pending":{"amount":9999999,"status":"done"}}','2026-11-13T13:50:00Z');
+SQL
+ok "IC0 고치기 전 — 섞은 초대는 예치금 몫만(8,000,000 · 원장과 다름) · 전액 카드 초대는 줄에 없다(확인 필요)" "$(row "inv:$IV1" "concat_ws('/', r->>'gross', r->>'pm', r->>'card', ((r->'flags') ? 'ledger_mismatch')::text)")|$(row "inv:$IV2" "count(*)")|$(q "select count(*) from j, jsonb_array_elements(j->'exceptions') e where e->>'kind' = 'invite_paid_no_ledger' and e->>'ref' = '$IV2'")" "8000000/deposit/0/true|0|1"
+ok "IC0b 덧대기 전 본문이 2026-11-13 라이브와 글자까지 같다(md5) — 이 절은 라이브 본문 위에서 돈다" "$($P -c "select md5(pg_get_functiondef('public.taam_ticket_sales_report(date,date,text,boolean)'::regprocedure))")" "d5ea62775d9128b96e9527f6a16b3468"
+VB=$(q "select concat_ws('/', r->>'gross', r->>'net', r->>'dep', r->>'agency') from j, jsonb_array_elements(j->'rows') r where r->>'k' = 'inv:$I1'")
+outic=$($P -f "$MIGIC" 2>&1)
+ok "IC1 마이그레이션 — 오류 없음 · ❌ 0 · ① 덧댐 · ② 실행 ✅" "$(echo "$outic" | grep -cE "^ERROR|^psql:.*ERROR")/$(echo "$outic" | grep -c '❌')/$(echo "$outic" | grep -c '①.*✅ 덧댐 — 초대 7곳')/$(echo "$outic" | grep -c '②.*✅')" "0/0/1/1"
+ok "IC2 섞은 초대 — 판매 10,500,000 한 번 · 카드+예치금 · 예치금 8,000,000 · 카드 2,500,000 · 「원장과 다름」 없음 · 금액 내역 일치" "$(row "inv:$IV1" "concat_ws('/', r->>'gross', r->>'pm', r->>'dep', r->>'card', r->>'net', ((r->'flags') ? 'ledger_mismatch')::text, r->>'bd', r->>'agency', r->>'ag_state')")" "10500000/mixed/8000000/2500000/10500000/false/snap/600000/planned"
+ok "IC3 전액 카드 초대 — 줄에 들어온다(판매 7,000,000 · 카드) · 「확인 필요」에서 빠진다" "$(row "inv:$IV2" "concat_ws('/', r->>'gross', r->>'pm', r->>'dep', r->>'card', r->>'net')")|$(q "select count(*) from j, jsonb_array_elements(j->'exceptions') e where e->>'ref' = '$IV2'")" "7000000/card/0/7000000/7000000|0"
+ok "IC4 섞은 초대 취소(D-31↑) — 환불 = 예치금 8,000,000 + 카드 1,900,000 · 카드 환불 대기 1,900,000 · 순판매 600,000 = 대행비 보유" "$(row "inv:$IV3" "concat_ws('/', r->>'st', r->>'gross', r->>'rf_cancel', r->>'rf_card_pending', r->>'net', r->>'agency', r->>'ag_state')")" "cancelled/10500000/9900000/1900000/600000/600000/kept"
+ok "IC5 확정 표시 없는 주문 · 다른 회원의 주문 · 취소된 주문은 안 센다 — 예치금 초대 그대로" "$(row "inv:$IV4" "concat_ws('/', r->>'gross', r->>'pm', r->>'card')")" "1000000/deposit/0"
+ok "IC6 카드 환불 완료(done) — 대기 0 · 부풀린 금액은 카드 몫(2,000,000)까지만 · 전액 환불이라 순판매 0" "$(row "inv:$IV5" "concat_ws('/', r->>'rf_cancel', r->>'rf_card_pending', r->>'net', r->>'agency')")" "7000000/0/0/0"
+ok "IC7 예치금만으로 낸 종전 초대는 숫자가 그대로 — I1(덧대기 전후 같음) · 조기 반환 초대" "$(q "select concat_ws('/', r->>'gross', r->>'net', r->>'dep', r->>'agency') from j, jsonb_array_elements(j->'rows') r where r->>'k' = 'inv:$I1'")|$(row "inv:$IE" "concat_ws('/', r->>'st', r->>'rf_return', r->>'rf_cancel', r->>'agency', r->>'pm', r->>'card')")" "$VB|returned/800000/0/300000/deposit/0"
+ok "IC8 앱 채널은 초대 좌석·초대 카드 주문을 세지 않는다(이중 집계 없음)" "$(q "select count(*) from j, jsonb_array_elements(j->'rows') r where r->>'ch' = 'app' and (r->>'k' like 'INV-%' or r->>'ref' like 'INV-%')")" "0"
+outic2=$($P -f "$MIGIC" 2>&1)
+ok "IC9 재실행 — 이미 새 판 · 오류 없음" "$(echo "$outic2" | grep -c '이미 새 판')/$(echo "$outic2" | grep -cE "^ERROR|^psql:.*ERROR")" "1/0"
 # 화면 시험용 — TSR_DUMP=파일 이면 보고서 JSON 을 남긴다(결제일·전체 · 기본)
 [ -n "$TSR_DUMP" ] && $P -c "select public.taam_ticket_sales_report(null, null, 'paid', false)" > "$TSR_DUMP"
 psql -h /tmp -U postgres -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1
