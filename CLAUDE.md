@@ -1824,6 +1824,7 @@ Cloudflare 가 응답을 끊고 있었다(`net::ERR_FAILED 525`).
 3. **비밀키 금지**: API 키·service_role·firebase 키 등은 절대 코드/커밋에 넣지 말 것. 모두 Vercel/Supabase 대시보드 또는 Edge Function 시크릿에 있음. `.gitignore`가 secrets/·*.keystore·*.p8·.env 차단.
 4. **결제·환불·예치금 로직**은 금전 관련이라 신중히. 수정 시 거래기록(deposit_transactions) 정합성 확인.
 5. 커밋/푸시는 사용자가 요청할 때. 기본 브랜치는 `main`.
+6. **사용자에게 묻는 질문은 한국어로** (2026-11-15 운영 규칙). 선택지 창(AskUserQuestion)의 질문·머리표·선택지·설명까지 전부 한국어로 쓴다. 답변·보고도 한국어.
 
 ## 다중 세션 협업 규칙 (index.html 충돌 방지) — 필수
 
