@@ -18566,12 +18566,12 @@ function saveRestaurants(onlyIds){
   if(!window.sb) return Promise.resolve();
   
   var _onlySet = null;
-  window._restDirtyIds = window._restDirtyIds || {};   // 서버에 닿지 못한 매장 — 다음 저장 때 같이 보낸다(검토: 종전 전체 저장이 우연히 해 주던 재시도)
   if(onlyIds != null){
     _onlySet = {};
     (Array.isArray(onlyIds) ? onlyIds : [onlyIds]).forEach(function(x){ _onlySet[String(x)] = true; });
-    Object.keys(window._restDirtyIds).forEach(function(x){ _onlySet[x] = true; });
   }
+  // 실패한 저장은 돌려준다(부른 쪽이 「서버에 저장되지 않았습니다」를 알린다). 자동으로 다시 보내지 않는다 —
+  //   나중에 다시 보내면 그 사이 다른 기기에서 바뀐 값을 이 기기의 옛 값으로 덮는다(2차 검토).
   var _failed = [];
   var _targets = !_onlySet ? restaurantDB : restaurantDB.filter(function(r){
     var isNew = !(r.id && typeof r.id === 'string' && r.id.length === 36);   // 아직 INSERT 안 된 새 매장은 같이 올린다(덮어쓸 상대가 없다)
@@ -18613,7 +18613,10 @@ var payload = {
     //   — 무관한 저장(사진 교체 등)에 매번 pending 을 찍으면 번역비만 나간다.
     // 🆕 2026.09.15 언어별 표기 — 폼을 거친 객체에만 name_en/name_jp 키가 있다. 그때만 보낸다.
     //   빈 값은 null 로 지워 AI 배치가 다시 채우게 한다 (폼은 기존 값으로 채워지므로 비운 건 의도다).
-    if (r._repKeep) { delete payload.repurchase_day; delete r._repKeep; }
+    if (r._repKeep) {
+      if (r.id && typeof r.id === 'string' && r.id.length === 36) delete payload.repurchase_day;   // 서버에 있는 매장만 — 새 매장(INSERT)은 이 값이 유일한 값이다(2차 검토)
+      delete r._repKeep;
+    }
     if (r.name_en !== undefined) payload.name_en = (r.name_en || '').trim() || null;
     if (r.name_jp !== undefined) payload.name_jp = (r.name_jp || '').trim() || null;
     var _koNow = [r.name || '', r.genre || '', r.address || ''].join('');
@@ -18626,14 +18629,13 @@ var payload = {
     if(r.id && typeof r.id === 'string' && r.id.length === 36){
       return window.sb.from('restaurants').update(payload).eq('id', r.id)
         .then(function(res){
-          if(res && res.error){ console.warn('DB 업데이트 실패:', r.name, res.error.message); window._restDirtyIds[String(r.id)] = true; _failed.push(String(r.id)); }
-          else delete window._restDirtyIds[String(r.id)];
-        }, function(e){ console.warn('DB 업데이트 예외:', r.name, e && e.message); window._restDirtyIds[String(r.id)] = true; _failed.push(String(r.id)); });
+          if(res && res.error){ console.warn('DB 업데이트 실패:', r.name, res.error.message); _failed.push(String(r.id)); }
+        }, function(e){ console.warn('DB 업데이트 예외:', r.name, e && e.message); _failed.push(String(r.id)); });
     }
     // 아니면 새 레스토랑 → INSERT + 받은 UUID를 로컬 id에 저장
     var oldId = r.id;  // 패치 137: ticket 매핑 위해 임시 id 보존
     return window.sb.from('restaurants').insert(payload).select().then(function(res){
-      if(res.error){ console.warn('DB 추가 실패:', r.name, res.error.message); return; }
+      if(res.error){ console.warn('DB 추가 실패:', r.name, res.error.message); _failed.push(String(r.id)); return; }
       if(res.data && res.data[0]){
         var newId = res.data[0].id;
         r.id = newId;  // 로컬 id 교체
@@ -47743,12 +47745,8 @@ function rpEditRest(id) {
   window._rpRepTouched = false;
   window._rpRepSync = { id: String(r.id), state: 'pending', srv: null };
   (function(editId, shown, sync){
-    var _dirty = !!(window._restDirtyIds && window._restDirtyIds[String(editId)]);
-    if(!window.sb || !(editId && typeof editId === 'string' && editId.length === 36) || _dirty){
-      sync.state = _dirty ? 'dirty' : 'fail';
-      if(_dirty) showToast('⚠','이 매장의 지난 저장이 서버에 닿지 않았습니다','이 기기의 값으로 다시 저장합니다');
-      return;
-    }
+    if(!(editId && typeof editId === 'string' && editId.length === 36)){ sync.state = 'local'; return; }   // 아직 서버에 없는 새 매장 — 이 기기 값이 유일한 값
+    if(!window.sb){ sync.state = 'fail'; return; }
     window.sb.from('restaurants').select('repurchase_day').eq('id', editId).maybeSingle().then(function(q){
       if(!q || q.error || !q.data){ sync.state = 'fail'; return; }
       var srv = parseInt(q.data.repurchase_day, 10) || 0;
@@ -48328,9 +48326,9 @@ function finalSubmitRestaurant(){
   }
   if (_rpEditId) {
     // 🆕 2026-11-15 재구매 제한 — 이번 수정에서 안 건드렸으면 이 기기의 옛 값으로 서버를 덮지 않는다(검토)
-    //   서버 값을 확인했으면 그 값으로, 확인 못 했으면(응답 전·실패) 그 칸을 아예 보내지 않는다. 이 기기의 지난 저장이 실패한 매장(dirty)은 이 기기 값으로.
+    //   서버 값을 확인했으면 그 값으로, 확인 못 했으면(응답 전·실패) 그 칸을 아예 보내지 않는다. 아직 서버에 없는 새 매장(local)은 이 기기 값으로.
     var _rs = window._rpRepSync;
-    if (!window._rpRepTouched && _rs && _rs.id === String(_rpEditId) && _rs.state !== 'dirty') {
+    if (!window._rpRepTouched && _rs && _rs.id === String(_rpEditId) && _rs.state !== 'local') {
       if (_rs.state === 'ok') _pendingRest.repurchaseDay = _rs.srv;
       else _pendingRest._repKeep = true;
     }
@@ -48357,7 +48355,7 @@ function finalSubmitRestaurant(){
     }, 5000);
   }
   saveRestaurants([_pendingRest.id]).then(function(res){   // 🔧 2026-11-15 이 매장만 — 다른 매장을 이 기기의 옛 사본으로 덮지 않는다
-    if (res && res.failed && res.failed.length) showToast('⚠','서버 저장 실패','연결을 확인해 주세요 — 다음에 매장을 저장할 때 다시 보냅니다');
+    if (res && res.failed && res.failed.length) showToast('⚠','서버에 저장되지 않았습니다','연결을 확인한 뒤 이 매장을 다시 저장해 주세요 — 앱을 다시 열면 서버의 값으로 돌아갑니다');
   });
   // 🆕 예약 파트너 등록 — venue_partners 연동. 신규는 saveRestaurants 가 UUID 배정(비동기)하므로 폴링.
   (function(prRef){
