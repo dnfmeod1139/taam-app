@@ -2298,7 +2298,7 @@ html.auto-login .splash .bottom-group{display:none !important}
 #tuSchedBox .fld .v2{display:flex;align-items:center;gap:4px;flex:1;justify-content:flex-end;min-width:0}
 #tuSchedBox .fld select{flex:1;width:100%;min-height:30px;border:0;background:transparent;font-family:var(--font-main);font-size:15px;font-weight:800;color:#1a1a18;padding:4px 2px;outline:none;-webkit-appearance:none;appearance:none;text-align:right;text-align-last:right;cursor:pointer}
 #tuSchedBox .fld .car{color:#c8a96e;font-size:12px;pointer-events:none}
-#tuSchedBox .msg{font-size:12px;font-weight:800;margin-top:10px;min-height:18px;color:#8a8580;line-height:1.5}
+#tuSchedBox .msg{font-size:12px;font-weight:800;margin-top:10px;min-height:18px;color:#8a8580;line-height:1.5;white-space:pre-line}
 #tuSchedBox .msg.ok{color:#1E7A46}
 #tuSchedBox .msg.bad{color:#9B1C1C}
 #tuSchedBox .nt{font-size:11px;color:#8a8580;line-height:1.6;margin-top:10px;background:#f7f5f1;border-radius:9px;padding:9px 11px;white-space:pre-line;text-align:left}
@@ -52293,6 +52293,28 @@ function _tuPubWhyNot(t){
 }
 function _tuPubOk(t){ return !!t && !_tuPubWhyNot(t); }
 function _tuPubFind(id){ return ticketDB.find(function(x){ return String(x.id) === String(id); }); }
+// 한국 시각 'YYYY-MM-DDTHH:MM' — 서버(취소표 판정)는 sale_open_at 을 한국 시각으로 읽는다. 기기 시간대가 달라도(해외 출장) 이 값으로 한 번 더 본다(검토)
+function _tuKstNow(addMin){
+  try {
+    var d = new Date(Date.now() + (addMin || 0) * 60000);
+    var p = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(d);
+    var g = {}; p.forEach(function(x){ g[x.type] = x.value; });
+    return g.year + '-' + g.month + '-' + g.day + 'T' + g.hour + ':' + g.minute;
+  } catch(e){ return null; }
+}
+// 예약 시각 글자 → 'YYYY-MM-DDTHH:MM' (공백·초 정리) · 못 읽으면 ''
+function _tuOpenAtKey(v){
+  var m = String(v || '').match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/);
+  return m ? (m[1] + '-' + m[2] + '-' + m[3] + 'T' + m[4] + ':' + m[5]) : '';
+}
+// 이 예약 시각이 이미 지났거나 곧(margin 분 안) 열리나 — 기기 시각 · 한국 시각 어느 쪽이든 그렇다면 「열림」으로 본다
+function _tuOpenAtLive(v, margin){
+  if(!v) return false;
+  var dev = new Date(String(v).replace(' ', 'T'));
+  if(!isNaN(dev.getTime()) && dev.getTime() <= Date.now() + (margin || 0) * 60000) return true;
+  var k = _tuOpenAtKey(v), kn = _tuKstNow(margin || 0);
+  return !!(k && kn && k <= kn);
+}
 // 이름 목록 — 많으면 앞의 몇 개 + 「외 N건」
 function _tuPubNames(ids, max){
   max = max || 5;
@@ -52349,8 +52371,8 @@ async function _tuSaleApply(ids, state, openAt){
     if(st === 'hidden' || st === 'pending' || st === 'deleteRequest'){ skipped.push({ id: id, why: 'status' }); return; }
     if(state === 'scheduled'){
       var ss = r.sale_state || 'open';
-      var live = (ss === 'open') || (ss === 'scheduled' && !!r.sale_open_at
-                 && !_tkSaleHidden({ saleState: 'scheduled', saleOpenAt: r.sale_open_at }));
+      // 5분 여유 — 시계가 조금 느린 기기에서 막 열린 회차를 다시 숨기지 않게
+      var live = (ss === 'open') || (ss === 'scheduled' && !!r.sale_open_at && _tuOpenAtLive(r.sale_open_at, 5));
       if(live){ skipped.push({ id: id, why: 'live' }); return; }
     }
     allow.push(id);
@@ -52360,12 +52382,31 @@ async function _tuSaleApply(ids, state, openAt){
     var patch = { sale_state: state, sale_open_at: (state === 'scheduled') ? openAt : null, updated_at: new Date().toISOString() };
     var q = window.sb.from('ticket_products').update(patch).in('id', allow);
     if(state === 'scheduled') q = q.in('sale_state', ['draft', 'scheduled']);   // 읽은 뒤 공개된 회차는 0행으로 빠진다
-    var up = await q.select('id, sale_state, sale_open_at');
-    if(up.error) return { err: String(up.error.message || up.error), done: [], skipped: skipped };
+    var up = null, upErr = null;
+    try { up = await q.select('id, status, sale_state, sale_open_at'); if(up && up.error) upErr = up.error; }
+    catch(e){ upErr = e; }
+    if(upErr){
+      // 응답만 잃었을 수 있다(서버엔 반영) — 다시 읽어 실제 상태로 맞춘다. 로컬을 낡은 채 두면 그 카드의 매진·수정 저장이 옛 판매 공개 값을 서버에 다시 쓴다(검토)
+      var rr = null;
+      try { rr = await window.sb.from('ticket_products').select('id, status, sale_state, sale_open_at').in('id', allow); } catch(_rr){ rr = null; }
+      if(!rr || rr.error) return { err: String(upErr.message || upErr), unknown: true, done: [], skipped: skipped };
+      var applied = [];
+      (rr.data || []).forEach(function(r){
+        var t = _tuPubFind(r.id);
+        if(t){ t.saleState = r.sale_state || 'open'; t.saleOpenAt = r.sale_open_at || null; if(r.status) t.status = r.status; }
+        if((r.sale_state || 'open') === state && (state !== 'scheduled' || String(r.sale_open_at || '') === String(openAt))) applied.push(String(r.id));
+      });
+      _idbSafeSet('excTickets', ticketDB, '티켓');
+      try { if(typeof _tkRepaintAll === 'function') _tkRepaintAll(); else renderTicketList(); } catch(_rp0){}
+      if(!applied.length) return { err: String(upErr.message || upErr), done: [], skipped: skipped };
+      allow.forEach(function(id){ if(applied.indexOf(id) < 0) skipped.push({ id: id, why: 'live' }); });
+      return { done: applied, skipped: skipped, lost: true };
+    }
     (up.data || []).forEach(function(r){
       var id = String(r.id); done.push(id);
       var t = _tuPubFind(id);
-      if(t){ t.saleState = r.sale_state || 'open'; t.saleOpenAt = r.sale_open_at || null; }
+      var _st = r.status || (srv[id] && srv[id].status);   // 서버의 지금 상태(매진 등) — 로컬이 낡았을 수 있다(오픈 알림 후보를 이것으로 거른다)
+      if(t){ t.saleState = r.sale_state || 'open'; t.saleOpenAt = r.sale_open_at || null; if(_st) t.status = _st; }
     });
     allow.forEach(function(id){ if(done.indexOf(id) < 0) skipped.push({ id: id, why: 'live' }); });
     _idbSafeSet('excTickets', ticketDB, '티켓');
@@ -52387,8 +52428,12 @@ function _tuSkipNote(skipped){
 }
 
 // 🟢 즉시 공개 — ids 를 주면 그 회차만(카드 버튼), 안 주면 선택한 회차
+var _tuPubSeq = 0;   // 공개·예약을 새로 시작할 때마다 올린다 — 늦게 뜨는 「📢 오픈 알림」 질문이 그 사이 연 다른 창을 덮지 않게
+function _tuPubBusyNow(){ return _tuPubBusy || _tuSchedSaving; }
 function tuPubNow(ids){
   if(!_tuPubCan()){ showToast('🔒','권한 부족','슈퍼어드민 전용'); return; }
+  if(_tuPubBusyNow()){ showToast('⏳','앞의 공개를 처리 중입니다','잠시 뒤 다시 눌러 주세요'); return; }
+  _tuPubSeq++;
   var single = Array.isArray(ids) && ids.length === 1;
   ids = (Array.isArray(ids) ? ids.map(_pkSafeId) : _tuPubPicked()).filter(function(id){ return _tuPubOk(_tuPubFind(id)); });
   if(!ids.length){ showToast('⚠','공개 전환','선택된 회차가 없습니다'); return; }
@@ -52413,18 +52458,24 @@ function tuPubNow(ids){
 }
 window.tuPubNow = tuPubNow;
 async function _tuPubNowRun(ids){
-  if(_tuPubBusy) return;
+  if(_tuPubBusyNow()){ showToast('⏳','앞의 공개를 처리 중입니다','잠시 뒤 다시 눌러 주세요'); return; }
   _tuPubBusy = true;
+  var mySeq = ++_tuPubSeq;
   var r;
   try { r = await _tuSaleApply(ids, 'open', null); }
   catch(e){ r = { err: String((e && e.message) || e), done: [], skipped: [] }; }
   finally { _tuPubBusy = false; }
-  if(r.err){ showToast('⚠','공개하지 못했습니다', String(r.err).slice(0, 90)); return; }
+  if(r.err){
+    if(r.unknown) showToast('⚠','결과를 확인하지 못했습니다', '연결이 끊겼습니다 — 화면을 새로고침해 공개됐는지 확인해 주세요');
+    else showToast('⚠','공개하지 못했습니다', String(r.err).slice(0, 90));
+    return;
+  }
   _tuPubMode = false; _tuPubSel = {};
   renderTicketList();
   if(!r.done.length){ showToast('ⓘ','바뀐 회차가 없습니다', '서버의 지금 상태로 다시 그렸습니다' + _tuSkipNote(r.skipped)); return; }
-  showToast('✓','공개했습니다 · ' + r.done.length + '건', '지금부터 회원 캘린더에 보입니다' + _tuSkipNote(r.skipped));
+  showToast('✓','공개했습니다 · ' + r.done.length + '건', (r.lost ? '응답이 끊겼지만 서버에 반영됐습니다 — ' : '') + '지금부터 회원 캘린더에 보입니다' + _tuSkipNote(r.skipped));
   // 오픈 알림 — 지금 살 수 있는 회차만 미리 고른다(매진·지난 회차에 「오픈」 알림을 보내면 회원은 못 사는 자리를 본다)
+  try { if(typeof _paLoadSeats === 'function') await _paLoadSeats(); } catch(_ls){}   // 남은 좌석을 새로 세어 매진 회차를 거른다
   var cand = r.done.filter(function(id){
     var t = _tuPubFind(id);
     if(!t || String(t.status || '') !== 'active') return false;
@@ -52434,6 +52485,12 @@ async function _tuPubNowRun(ids){
   });
   if(!cand.length || typeof openTicketBroadcastScreen !== 'function') return;
   setTimeout(function(){
+    // 그 사이 다른 공개·예약을 시작했거나 다른 확인 창이 떠 있으면 덮지 않는다 — 길만 알린다
+    var _askOn = document.getElementById('tkAskWrap'), _schOn = document.getElementById('tuSchedPop');
+    if(mySeq !== _tuPubSeq || (_askOn && _askOn.classList.contains('on')) || (_schOn && _schOn.classList.contains('on'))){
+      showToast('📢','오픈 알림은 따로 보내세요', '어드민 → 📢 티켓 오픈 알림 발송 — 방금 공개한 ' + cand.length + '건');
+      return;
+    }
     _tkAsk({
       icon: '📢',
       title: '오픈 알림을 보낼까요?',
@@ -52452,6 +52509,8 @@ async function _tuPubNowRun(ids){
 var _tuSched = null;   // { ids:[…] }
 function tuSchedOpen(ids){
   if(!_tuPubCan()){ showToast('🔒','권한 부족','슈퍼어드민 전용'); return; }
+  if(_tuPubBusyNow()){ showToast('⏳','앞의 공개를 처리 중입니다','잠시 뒤 다시 눌러 주세요'); return; }
+  _tuPubSeq++;
   ids = (ids == null ? _tuPubPicked() : (Array.isArray(ids) ? ids : [ids]).map(_pkSafeId))
     .filter(function(id){ return _tuPubOk(_tuPubFind(id)); });
   if(!ids.length){ showToast('⚠','예약 오픈','선택된 회차가 없습니다'); return; }
@@ -52528,7 +52587,7 @@ function _tuSchedSync(){
       + ' <span style="color:#c8a96e;font-size:12px;">▾</span>';
     lab.style.color = '#1a1a18';
     if(isNaN(at.getTime())){ txt = '날짜를 읽지 못했습니다'; bad = true; }
-    else if(at.getTime() <= Date.now() + 60000){ txt = '지난 시각입니다 — 지금 열려면 「🟢 즉시 공개」를 쓰세요'; bad = true; }
+    else if(_tuOpenAtLive(d + 'T' + tm, 1)){ txt = '지난 시각입니다 — 지금 열려면 「🟢 즉시 공개」를 쓰세요'; bad = true; }
     else {
       // 방문 시각보다 늦게 열면 그 회차는 영영 못 판다
       var late = _tuSched.ids.filter(function(id){
@@ -52546,6 +52605,8 @@ function _tuSchedSync(){
       }
     }
   }
+  // 기기 시간대가 한국이 아니면 알린다 — 회원 앱·서버는 이 시각을 한국 시각으로 읽는다
+  try { if(new Date().getTimezoneOffset() !== -540){ var _kn = _tuKstNow(0); txt += '\n(기기 시간대가 한국과 다릅니다 — 한국 시각으로 열립니다' + (_kn ? ' · 지금 한국 ' + _kn.replace('T', ' ') : '') + ')'; } } catch(_tz){}
   msg.textContent = txt;
   msg.className = 'msg' + (bad ? ' bad' : (res.ok ? ' ok' : ''));
   if(yes){ yes.disabled = !res.ok || _tuSchedSaving; yes.className = res.ok ? 'go' : ''; }
@@ -52565,7 +52626,8 @@ async function tuSchedSave(){
   catch(e){ r = { err: String((e && e.message) || e), done: [], skipped: [] }; }
   finally { _tuSchedSaving = false; }
   if(r.err){
-    showToast('⚠','예약하지 못했습니다', String(r.err).slice(0, 90));
+    if(r.unknown) showToast('⚠','결과를 확인하지 못했습니다', '연결이 끊겼습니다 — 화면을 새로고침해 예약됐는지 확인해 주세요');
+    else showToast('⚠','예약하지 못했습니다', String(r.err).slice(0, 90));
     if(yes) yes.textContent = '다시 시도';
     _tuSchedSync();
     return;
@@ -52574,7 +52636,7 @@ async function tuSchedSave(){
   _tuPubMode = false; _tuPubSel = {};
   renderTicketList();
   if(!r.done.length){ showToast('ⓘ','바뀐 회차가 없습니다', '서버의 지금 상태로 다시 그렸습니다' + _tuSkipNote(r.skipped)); return; }
-  showToast('⏰','예약 오픈 · ' + r.done.length + '건', _tuFmtOpenAt(v.at) + ' 에 자동으로 공개됩니다 — 「오픈 예약」 탭' + _tuSkipNote(r.skipped));
+  showToast('⏰','예약 오픈 · ' + r.done.length + '건', (r.lost ? '응답이 끊겼지만 서버에 반영됐습니다 — ' : '') + _tuFmtOpenAt(v.at) + ' 에 자동으로 공개됩니다 — 「오픈 예약」 탭' + _tuSkipNote(r.skipped));
 }
 window.tuSchedSave = tuSchedSave;
 // 판매 공개 상태 분류: open=발행(자동 공개된 예약 건 포함) / sched=오픈 예약 / draft=미공개 보관
