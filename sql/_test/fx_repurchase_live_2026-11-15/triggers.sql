@@ -1,0 +1,14 @@
+create trigger trg_taam_guard_ticket_insert before insert on public.tickets for each row execute function public.taam_guard_ticket_insert();
+create trigger trg_taam_guard_ticket_payfacts_ins before insert on public.tickets for each row execute function public.taam_guard_ticket_payfacts_ins();
+create trigger trg_taam_guard_ticket_rest_pin before insert on public.tickets for each row execute function public.taam_guard_ticket_rest_pin();
+create trigger trg_taam_guard_ticket_row before update on public.tickets for each row execute function public.taam_guard_ticket_row();
+create trigger trg_taam_guard_ticket_payfacts before update on public.tickets for each row execute function public.taam_guard_ticket_payfacts();
+create trigger trg_taam_guard_ticket_unique before insert or update of user_id,status,ticket_product_id,reservation_date,visit_time on public.tickets for each row execute function public.taam_guard_purchase_unique();
+create trigger trg_taam_repurchase_guard before insert on public.tickets for each row execute function public.taam_guard_repurchase();
+alter table public.tickets enable row level security;
+create policy tickets_insert_own on public.tickets for insert to authenticated with check ((auth.uid() = user_id) OR is_superadmin());
+create policy tickets_select_own on public.tickets for select to authenticated using ((auth.uid() = user_id) OR is_superadmin());
+create policy tickets_update_own on public.tickets for update to authenticated using ((auth.uid() = user_id) OR is_superadmin()) with check ((auth.uid() = user_id) OR is_superadmin());
+grant usage on schema public, auth to authenticated, anon, service_role;
+grant all on all tables in schema public to authenticated, service_role;
+grant execute on all functions in schema public to authenticated, service_role;
