@@ -68455,7 +68455,7 @@ function _tcalDayGroups(dateKey){
     var _p = String(h.purchaseId||''), _x = h.extra_data || {};
     var _c = parseInt(_x.cardPaid, 10) || 0;
     if(_p.indexOf('INV-') !== 0 || h.status === 'cancelled' || !(_c > 0) || !_x.order_id) return;
-    var _v = { card: _c, dep: Math.max(0, parseInt(_x.depositUsed, 10) || 0) };
+    var _v = { card: _c, dep: Math.max(0, parseInt(_x.depositUsed, 10) || 0), pc: (Array.isArray(_x.pax_changes) ? _x.pax_changes : []), cq: (Array.isArray(_x.card_refund_queue) ? _x.card_refund_queue : []) };   // 🆕 2026-11-15 인원 변경 기록 — 금액 상세가 돌려준 몫을 뺀다
     if(_x.inviteId) _invPay[String(_x.inviteId)] = _v;
     _invPay[_p.slice(4, 12) + '|' + String(h._userId||'')] = _v;
   });
@@ -68463,7 +68463,7 @@ function _tcalDayGroups(dateKey){
     if(_tcalDateKey(inv.visit_date) !== dateKey) return;
     var _ie = !!(_invEarly[String(inv.id||'')] || _invEarly[String(inv.id||'').slice(0, 8) + '|' + String(inv.invitee_user_id||'')]);
     var _ipay = _invPay[String(inv.id||'')] || _invPay[String(inv.id||'').slice(0, 8) + '|' + String(inv.invitee_user_id||'')] || null;
-    gr(inv.restaurant_id, inv.restaurant_name).entries.push({type:'invite', early:_ie, card:(_ipay ? _ipay.card : 0), dep:(_ipay ? _ipay.dep : 0), iid:String(inv.id||''), name:(inv._inviteeName||''), uid:(inv.invitee_user_id||''), pax:(inv.pax||1), amount:(parseInt(inv.total_amount)||0), agency:(parseInt(inv.agency_fee)||0), meal:(parseInt(inv.meal_fee)||0), wine:(parseInt(inv.wine_min)||0), time:(inv.visit_time||'')});
+    gr(inv.restaurant_id, inv.restaurant_name).entries.push({type:'invite', early:_ie, card:(_ipay ? _ipay.card : 0), dep:(_ipay ? _ipay.dep : 0), payPc:(_ipay ? _ipay.pc : []), payCq:(_ipay ? _ipay.cq : []), iid:String(inv.id||''), name:(inv._inviteeName||''), uid:(inv.invitee_user_id||''), pax:(inv.pax||1), amount:(parseInt(inv.total_amount)||0), agency:(parseInt(inv.agency_fee)||0), meal:(parseInt(inv.meal_fee)||0), wine:(parseInt(inv.wine_min)||0), time:(inv.visit_time||'')});
   });
   // 수동 (유형: 초대/오프라인)
   (_tcalManual||[]).forEach(function(m){
@@ -68554,6 +68554,12 @@ function _tcalAmtParts(e){
     r.meal = parseInt(e.meal, 10) || 0; r.agency = parseInt(e.agency, 10) || 0; r.wine = parseInt(e.wine, 10) || 0;
     r.src = (r.meal || r.agency || r.wine) ? 'invite' : '';
   } else if(e.type === 'app' && /^PAY/.test(String(e.pid || ''))){
+    // 게스트석(게스트가 · 확정 대기 또는 확정 뒤) — 게스트가는 항목 구분이 없는 한 금액이다. 회원 정가로 쪼개면 「대행비」가 틀리고 차이가 「가격 변경」으로 보였다(검토)
+    var gx = e.ex || {};
+    if(e.st === 'pending_confirm' || gx.guest_price_server || gx.guest_price_per){
+      r.src = 'guest'; r.unit = r.pax > 0 ? Math.round(r.total / r.pax) : 0;
+      return r;
+    }
     var t = (e.tpid && typeof ticketDB !== 'undefined' && Array.isArray(ticketDB)) ? ticketDB.find(function(x){ return String(x.id) === String(e.tpid); }) : null;
     if(t){
       r.meal = parseInt(t.mealFee || t.meal_fee, 10) || 0; r.agency = parseInt(t.agencyFee || t.agency_fee, 10) || 0; r.wine = parseInt(t.wineMin || t.wine_min, 10) || 0;
@@ -68572,16 +68578,19 @@ function _tcalAmtDetailHtml(e){
   if(!p.src) return '';
   var W = function(n){ return '₩' + (Number(n) || 0).toLocaleString(); };
   var box = function(inner){ return '<div class="tcal-amt-detail" style="font-size:11px;color:#8a8580;margin-top:2px;line-height:1.55;word-break:keep-all;">' + inner + '</div>'; };
-  var agH = '<b style="color:#8A5A1E;font-weight:800;">대행비 ' + W(p.agency) + '</b>';
+  // 항목마다 한 덩어리(줄바꿈이 「대행비」와 금액 사이에서 일어나지 않게 — 검토)
+  var term = function(label, n){ return '<span style="white-space:nowrap;">' + label + ' ' + W(n) + '</span>'; };
+  var agH = '<b style="color:#8A5A1E;font-weight:800;white-space:nowrap;">대행비 ' + W(p.agency) + '</b>';
+  if(p.src === 'guest') return box('└ <span style="white-space:nowrap;">게스트가 1인 ' + W(p.unit) + '</span> × ' + p.pax + '명 <span style="color:#b5afa2;">(게스트석 — 항목 구분 없음)</span>');
   if(p.src === 'snap') return box('└ 1인 ' + agH + ' <span style="color:#b5afa2;">(구매 때 기록 · 회차를 찾지 못함)</span>');
   var bits = [];
-  if(p.meal > 0) bits.push('식사 ' + W(p.meal));
+  if(p.meal > 0) bits.push(term('식사', p.meal));
   if(p.agency > 0) bits.push(agH);
-  if(p.wine > 0) bits.push('주류 ' + W(p.wine));
+  if(p.wine > 0) bits.push(term('주류', p.wine));
   var comp = bits.join(' + ');
-  if(p.match) return box('└ ' + (p.pax > 1 ? '1인 ' + W(p.unit) + ' (' + comp + ') × ' + p.pax + '명' : comp));
+  if(p.match) return box('└ ' + (p.pax > 1 ? '<span style="white-space:nowrap;">1인 ' + W(p.unit) + '</span> (' + comp + ') × ' + p.pax + '명' : comp));
   var diff = p.total - p.unit * p.pax;
-  var why = (e.ex && Array.isArray(e.ex.pax_changes) && e.ex.pax_changes.length) ? '인원 변경 기록 있음' : (e.type === 'invite' ? '초대 합계' : '구매 뒤 가격 변경 등');
+  var why = (e.ex && Array.isArray(e.ex.pax_changes) && e.ex.pax_changes.length) ? '인원 변경 기록 있음' : (e.type === 'invite' ? '초대 합계' : '원인 미확인 — 회차 가격 변경 등');
   return box('└ ' + (e.type === 'invite' ? '초대 1인 ' : '정가 1인 ') + W(p.unit) + ' (' + comp + ') × ' + p.pax + '명 = ' + W(p.unit * p.pax)
     + ' <span style="color:#B45309;font-weight:700;">· 결제액과 ' + (diff > 0 ? '+' : '−') + W(Math.abs(diff)) + ' 차이(' + why + ')</span>');
 }
@@ -70041,7 +70050,17 @@ function tcalRenderDetail(dateStr) {
                       var _cp = 0, _dp = 0;
                       if(e.type === 'invite'){ _cp = Number(e.card) || 0; _dp = Number(e.dep) || 0; }
                       else if(e.type === 'app' && /^PAY/.test(String(e.pid || '')) && e.ex){ _cp = parseInt(e.ex.cardPaid, 10) || 0; _dp = Math.max(0, parseInt(e.ex.depositUsed, 10) || 0); }
-                      if(_cp > 0) _pay = ' <span style="color:#1F5BD6;font-weight:700;">· ' + (_dp > 0 ? '예치금 ₩' + _dp.toLocaleString() + ' + ' : '') + '카드 ₩' + _cp.toLocaleString() + '</span>';
+                      // 결제 사실 칸(depositUsed·cardPaid)은 결제 때 값이다 — 인원 변경(taam_change_party_size)이 돌려준 몫은 pax_changes 에만 쌓인다. 빼고 보인다(검토: 「₩900,000 · 예치금 ₩900,000 + 카드 ₩900,000」)
+                      var _pc = (e.type === 'invite') ? (e.payPc || []) : ((e.ex && Array.isArray(e.ex.pax_changes)) ? e.ex.pax_changes : []);
+                      var _dBack = 0, _cBack = 0, _cQ = 0;
+                      _pc.forEach(function(c){ if(c && typeof c === 'object'){ _dBack += Math.max(0, parseInt(c.deposit_refund, 10) || 0); _cBack += Math.max(0, parseInt(c.card_refund, 10) || 0); } });
+                      var _cq = (e.type === 'invite') ? (e.payCq || []) : ((e.ex && Array.isArray(e.ex.card_refund_queue)) ? e.ex.card_refund_queue : []);
+                      _cq.forEach(function(q){ if(q && typeof q === 'object' && q.status === 'pending') _cQ += Math.max(0, parseInt(q.amount, 10) || 0); });
+                      if(_cp > 0){
+                        var _dN = Math.max(0, _dp - _dBack), _cN = Math.max(0, _cp - _cBack), _adj = (_dBack > 0 || _cBack > 0);
+                        _pay = ' <span style="color:#1F5BD6;font-weight:700;">· ' + (_adj ? '남은 ' : '') + (_dN > 0 ? '예치금 ₩' + _dN.toLocaleString() + ' + ' : '') + '카드 ₩' + _cN.toLocaleString()
+                          + (_adj ? ' <span style="font-weight:600;color:#6b88c9;">(인원 변경으로 돌려준 몫을 뺌' + (_cQ > 0 ? ' · 카드 환불 대기 ₩' + _cQ.toLocaleString() : '') + ')</span>' : '') + '</span>';
+                      }
                     }
                     return (e.amount ? '<b style="color:#4a4540;font-weight:700;">₩' + e.amount.toLocaleString() + '</b>' : '')
                       + (!_dt && e.agency > 0 ? ' <span style="color:#9A9486;font-weight:600;">(대행비 ₩' + e.agency.toLocaleString() + ')</span>' : '')
