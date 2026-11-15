@@ -24,7 +24,7 @@ insert into public.profiles(id,role,display_name,single_device_exempt) values ('
  ('$M5','user','M5',false),('$M6','user','M6',false),('$M7','user','M7',false),('$M8','user','M8',false),('$M9','user','M9',false),('$SU','superadmin','SU',false),('$EX','user','EX',true);
 insert into public.restaurants values ('$RA','90일 매장',90),('$RB','처음엔 제한없음',0),('$RC','180일 매장',180);
 insert into public.ticket_products(id,rest_id,rest_name,date,time) values
- ('A1','$RA','90일 매장','2027.01.10','18:00'),('A2','$RA','90일 매장','2027.02.20','18:00'),('A2b','$RA','90일 매장','2027.02.21','18:00'),('A1L','$RA','90일 매장','2027.01.10','12:00'),('A9','$RA','90일 매장','2027.06.30','18:00'),
+ ('A1','$RA','90일 매장','2027.01.10','18:00'),('A2','$RA','90일 매장','2027.02.20','18:00'),('A2b','$RA','90일 매장','2027.02.21','18:00'),('A1L','$RA','90일 매장','2027.01.10','12:00'),('A3','$RA','90일 매장','2027.03.01','18:00'),('A9','$RA','90일 매장','2027.06.30','18:00'),
  ('B1','$RB','처음엔','2027.01.10','18:00'),('B2','$RB','처음엔','2027.02.01','18:00'),
  ('C1','$RC','180일 매장','2027.01.10','18:00'),('C2','$RC','180일 매장','2027.08.01','18:00'),('C3','$RC','180일 매장','2027.03.01','18:00');
 SQL
@@ -69,6 +69,7 @@ run_matrix(){   # $1 = old | v2 — 옛 판에선 「열린 길」이 OK, v2 에
   local FILL=""; [ "$V" = v2 ] && FILL="2027.01.10|18:00"; [ "$V" = old ] && FILL="|"
   ok "[$V] 그 폴백 행의 방문일·시각 — 옛 판은 빈 칸 · v2 는 회차 값으로 채움" "$FILL" "$($P -c "select coalesce(reservation_date,'')||'|'||coalesce(visit_time,'') from public.tickets where purchase_id='PAYH-A1-M5'")"
   ok "[$V] M5: 그 뒤 A2(41일) 홀드 — 옛 판은 빈 방문일 행을 못 봐 통과 · v2 는 막음" $GAP "$(hold $M5 A2 $RA "'2027.02.20'" PAYH-A2-M5)"
+  ok "[$V] M4: 자기의 살아 있는 구매 id(PAYH-A1-M4)를 홀드 id 로 재사용한 A3(50일) 카드 폴백 — 옛 판 통과 · v2 막음" $GAP "$(fallback $M4 A3 $RA PAYH-A1-M4)"
   ok "[$V] 서버의 운영 행(LINK-·KSK-·INV-)은 종전대로 통과" "OK/OK/OK" "$(srvins $M4 A2b $RA "'2027.02.21'" LINK-x1)/$(srvins $M4 A2b $RA "'2027.02.21'" KSK-x1)/$(srvins $M4 A2b $RA "'2027.02.21'" INV-x1)"
   if [ "$V" = v2 ]; then
     ok "[v2] SQL Editor 우회(set local taam.repurchase_bypass='1') → 통과" OK "$(res "$($P -c "begin; set local taam.repurchase_bypass='1'; insert into public.tickets(user_id, restaurant_id, ticket_product_id, reservation_date, status, purchase_id) values ('$M4','$RA','A2','2027.02.20','active','PAYC-bypass'); commit;" 2>&1)")"

@@ -18566,10 +18566,13 @@ function saveRestaurants(onlyIds){
   if(!window.sb) return Promise.resolve();
   
   var _onlySet = null;
+  window._restDirtyIds = window._restDirtyIds || {};   // 서버에 닿지 못한 매장 — 다음 저장 때 같이 보낸다(검토: 종전 전체 저장이 우연히 해 주던 재시도)
   if(onlyIds != null){
     _onlySet = {};
     (Array.isArray(onlyIds) ? onlyIds : [onlyIds]).forEach(function(x){ _onlySet[String(x)] = true; });
+    Object.keys(window._restDirtyIds).forEach(function(x){ _onlySet[x] = true; });
   }
+  var _failed = [];
   var _targets = !_onlySet ? restaurantDB : restaurantDB.filter(function(r){
     var isNew = !(r.id && typeof r.id === 'string' && r.id.length === 36);   // 아직 INSERT 안 된 새 매장은 같이 올린다(덮어쓸 상대가 없다)
     return isNew || _onlySet[String(r.id)];
@@ -18594,7 +18597,7 @@ var payload = {
       corkage: r.corkage || null,
       corkage_amt: r.corkageAmt || null,
       corkage_bottles: r.corkageBottles || 0,
-      repurchase_day: r.repurchaseDay || null,
+      repurchase_day: r.repurchaseDay || null,   // ⚠ r._repKeep 이면 아래에서 뺀다 — 서버 값을 확인 못 한 채 옛 값으로 덮지 않게
       rest_info: r.restInfo || null,
       place_id: r.placeId || null,
       lat: r.lat || null,
@@ -18610,6 +18613,7 @@ var payload = {
     //   — 무관한 저장(사진 교체 등)에 매번 pending 을 찍으면 번역비만 나간다.
     // 🆕 2026.09.15 언어별 표기 — 폼을 거친 객체에만 name_en/name_jp 키가 있다. 그때만 보낸다.
     //   빈 값은 null 로 지워 AI 배치가 다시 채우게 한다 (폼은 기존 값으로 채워지므로 비운 건 의도다).
+    if (r._repKeep) { delete payload.repurchase_day; delete r._repKeep; }
     if (r.name_en !== undefined) payload.name_en = (r.name_en || '').trim() || null;
     if (r.name_jp !== undefined) payload.name_jp = (r.name_jp || '').trim() || null;
     var _koNow = [r.name || '', r.genre || '', r.address || ''].join('');
@@ -18622,8 +18626,9 @@ var payload = {
     if(r.id && typeof r.id === 'string' && r.id.length === 36){
       return window.sb.from('restaurants').update(payload).eq('id', r.id)
         .then(function(res){
-          if(res.error) console.warn('DB 업데이트 실패:', r.name, res.error.message);
-        });
+          if(res && res.error){ console.warn('DB 업데이트 실패:', r.name, res.error.message); window._restDirtyIds[String(r.id)] = true; _failed.push(String(r.id)); }
+          else delete window._restDirtyIds[String(r.id)];
+        }, function(e){ console.warn('DB 업데이트 예외:', r.name, e && e.message); window._restDirtyIds[String(r.id)] = true; _failed.push(String(r.id)); });
     }
     // 아니면 새 레스토랑 → INSERT + 받은 UUID를 로컬 id에 저장
     var oldId = r.id;  // 패치 137: ticket 매핑 위해 임시 id 보존
@@ -18657,8 +18662,10 @@ var payload = {
     console.log('✅ 레스토랑 DB 동기화 완료:', _targets.length, '/', restaurantDB.length, '개');
     // id 교체된 최신 상태로 IDB 다시 저장
     _idbSafeSet('excRests', restaurantDB, '레스토랑');
+    return { failed: _failed };
   }).catch(function(e){
     console.warn('⚠️ DB 동기화 중 일부 실패:', e.message);
+    return { failed: _failed.length ? _failed : ['?'] };
   });
 }
 
@@ -30170,13 +30177,13 @@ function showRepurchasePopup(days, daysLeft, prevVisitDate) {
   function _rpFill(s, n){ return String(s).split('{n}').join(n); }
   function _rpFill2(s, a, b){ return String(s).split('{a}').join(a).split('{b}').join(b); }
   function _rpEsc(v){ return String(v == null ? '' : v).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
-  // 살 수 있는 방문일 — 기존 방문일 ± N일 밖(같은 날은 서버도 허용하지만 따로 말하지 않는다)
+  // 막힌 방문일 범위 — 기존 방문일 ±(N−1)일(당일은 허용). 「살 수 있는 범위」로 말하면 같은 매장 예약이 여럿일 때 틀린다(검토) — 막힌 쪽은 언제나 참이다.
   var _rpWin = null;
   try {
     var _pvD = (typeof _repParseDate === 'function') ? _repParseDate(prevVisitDate) : null;
-    if(_pvD && _rpD > 0){
+    if(_pvD && _rpD > 1){
       var _f = function(d){ return d.getFullYear() + '.' + String(d.getMonth() + 1).padStart(2, '0') + '.' + String(d.getDate()).padStart(2, '0'); };
-      _rpWin = { a: _f(new Date(_pvD.getFullYear(), _pvD.getMonth(), _pvD.getDate() - _rpD)), b: _f(new Date(_pvD.getFullYear(), _pvD.getMonth(), _pvD.getDate() + _rpD)) };
+      _rpWin = { a: _f(new Date(_pvD.getFullYear(), _pvD.getMonth(), _pvD.getDate() - (_rpD - 1))), b: _f(new Date(_pvD.getFullYear(), _pvD.getMonth(), _pvD.getDate() + (_rpD - 1))) };
     }
   } catch(_we){ _rpWin = null; }
   popup.innerHTML =
@@ -30192,7 +30199,7 @@ function showRepurchasePopup(days, daysLeft, prevVisitDate) {
       // 🔧 2026-11-15 제한은 「방문일 간격」이라 기다린다고 그 회차를 살 수 있게 되지 않는다 — 「약 n일 후」 대신 살 수 있는 방문일 범위를 말한다.
       //   기존 방문일을 모르면(옛 서버 문구) 그 줄을 안 보인다(종전엔 「약 0일 후」가 떠 바로 다시 누르게 했다).
       + (_rpWin ? '<div style="font-family:var(--font-main);font-size:12px;color:#E53935;font-weight:700;margin-bottom:24px;line-height:1.6;">'
-          + _rpFill2(_rpT('ticket.repurchase_window','{a} 이전 또는 {b} 이후 방문 회차는 구매하실 수 있습니다.'), _rpWin.a, _rpWin.b) + '</div>'
+          + _rpFill2(_rpT('ticket.repurchase_window','{a} ~ {b} 사이의 다른 날짜 회차는 구매하실 수 없습니다(기존 예약일 당일 제외).'), _rpWin.a, _rpWin.b) + '</div>'
         : '<div style="margin-bottom:18px;"></div>')
       + '<button onclick="document.getElementById(\'repurchasePopup\').remove()" style="width:100%;padding:14px;background:#1a1a18;border:none;border-radius:12px;font-family:var(--font-main);font-size:11px;font-weight:800;letter-spacing:.2em;color:#fff;cursor:pointer;">'
         + _rpT('common.confirm','확인') + '</button>'
@@ -47734,18 +47741,23 @@ function rpEditRest(id) {
   _rpRepurchasePaint(r.repurchaseDay || 0);
   // 🆕 2026-11-15 서버의 지금 값을 다시 읽는다 — 이 기기의 사본은 부팅 때 것이라, 다른 기기에서 바꾼 일수를 모른 채 저장하면 되돌렸다
   window._rpRepTouched = false;
-  (function(editId, shown){
-    if(!window.sb || !(editId && typeof editId === 'string' && editId.length === 36)) return;
+  window._rpRepSync = { id: String(r.id), state: 'pending', srv: null };
+  (function(editId, shown, sync){
+    var _dirty = !!(window._restDirtyIds && window._restDirtyIds[String(editId)]);
+    if(!window.sb || !(editId && typeof editId === 'string' && editId.length === 36) || _dirty){
+      sync.state = _dirty ? 'dirty' : 'fail';
+      if(_dirty) showToast('⚠','이 매장의 지난 저장이 서버에 닿지 않았습니다','이 기기의 값으로 다시 저장합니다');
+      return;
+    }
     window.sb.from('restaurants').select('repurchase_day').eq('id', editId).maybeSingle().then(function(q){
-      if(!q || q.error || !q.data) return;
+      if(!q || q.error || !q.data){ sync.state = 'fail'; return; }
       var srv = parseInt(q.data.repurchase_day, 10) || 0;
-      var cur = restaurantDB.find(function(x){ return String(x.id) === String(editId); });
-      if(cur) cur.repurchaseDay = srv;
+      sync.state = 'ok'; sync.srv = srv;
       if(srv === shown || String(_rpEditId) !== String(editId) || window._rpRepTouched) return;
       _rpRepurchasePaint(srv);
-      showToast('↻','재구매 제한을 서버 값으로 맞췄습니다', (shown > 0 ? shown + '일' : '제한없음') + ' → ' + (srv > 0 ? srv + '일' : '제한없음') + ' (다른 기기에서 바뀐 값)');
-    }, function(){});
-  })(r.id, r.repurchaseDay || 0);
+      showToast('↻','재구매 제한을 서버 값으로 맞췄습니다', '이 기기 ' + (shown > 0 ? shown + '일' : '제한없음') + ' → 서버 ' + (srv > 0 ? srv + '일' : '제한없음'));
+    }, function(){ sync.state = 'fail'; });
+  })(r.id, r.repurchaseDay || 0, window._rpRepSync);
 
   // 레스토랑 소개 복원
   var riEl = document.getElementById('rpRestInfo');
@@ -48315,6 +48327,13 @@ function finalSubmitRestaurant(){
     return;
   }
   if (_rpEditId) {
+    // 🆕 2026-11-15 재구매 제한 — 이번 수정에서 안 건드렸으면 이 기기의 옛 값으로 서버를 덮지 않는다(검토)
+    //   서버 값을 확인했으면 그 값으로, 확인 못 했으면(응답 전·실패) 그 칸을 아예 보내지 않는다. 이 기기의 지난 저장이 실패한 매장(dirty)은 이 기기 값으로.
+    var _rs = window._rpRepSync;
+    if (!window._rpRepTouched && _rs && _rs.id === String(_rpEditId) && _rs.state !== 'dirty') {
+      if (_rs.state === 'ok') _pendingRest.repurchaseDay = _rs.srv;
+      else _pendingRest._repKeep = true;
+    }
     // 수정 모드: 기존 레코드 업데이트
     var idx = restaurantDB.findIndex(function(r){ return String(r.id) === String(_rpEditId); });
     if (idx !== -1) {
@@ -48337,7 +48356,9 @@ function finalSubmitRestaurant(){
       try { if (typeof taamTranslateRestaurants === 'function') taamTranslateRestaurants(); } catch(_te){}
     }, 5000);
   }
-  saveRestaurants([_pendingRest.id]);   // 🔧 2026-11-15 이 매장만 — 다른 매장을 이 기기의 옛 사본으로 덮지 않는다
+  saveRestaurants([_pendingRest.id]).then(function(res){   // 🔧 2026-11-15 이 매장만 — 다른 매장을 이 기기의 옛 사본으로 덮지 않는다
+    if (res && res.failed && res.failed.length) showToast('⚠','서버 저장 실패','연결을 확인해 주세요 — 다음에 매장을 저장할 때 다시 보냅니다');
+  });
   // 🆕 예약 파트너 등록 — venue_partners 연동. 신규는 saveRestaurants 가 UUID 배정(비동기)하므로 폴링.
   (function(prRef){
     if(!prRef || !window.sb) return;
@@ -57678,7 +57699,7 @@ var TRANSLATIONS = {
       check_fail_m:'예약 상태를 확인하지 못했습니다 — 잠시 후 다시 시도해주세요',
       repurchase_body:'같은 레스토랑의 다른 날짜 티켓은 기존 예약일(방문일 기준)로부터 {n}일이 지나야 구매하실 수 있습니다.',
       repurchase_prev:'기존 예약일', repurchase_left:'약 {n}일 후 구매하실 수 있습니다.',
-      repurchase_window:'{a} 이전 또는 {b} 이후 방문 회차는 구매하실 수 있습니다.',
+      repurchase_window:'{a} ~ {b} 사이의 다른 날짜 회차는 구매하실 수 없습니다(기존 예약일 당일 제외).',
       // 글래스 시트 4버튼
       tab_menu:'메뉴 보기',
       tab_menu_close:'메뉴 내리기',
@@ -58669,7 +58690,7 @@ var TRANSLATIONS = {
       check_fail_m:'We could not verify your bookings — please try again shortly.',
       repurchase_body:'For another date at the same restaurant, {n} days must pass from your previous booking date (the visit date).',
       repurchase_prev:'Previous booking', repurchase_left:'You can book again in about {n} days.',
-      repurchase_window:'Visits on or before {a}, or on or after {b}, can be booked.',
+      repurchase_window:'Other dates between {a} and {b} cannot be booked (your booked day itself is fine).',
       tab_menu:'Show Menu',
       tab_menu_close:'Hide Menu',
       hold_title:'Seat is on hold',
@@ -59879,7 +59900,7 @@ TRANSLATIONS.ja = {
     check_fail_m:'予約状況を確認できませんでした — しばらくしてからもう一度お試しください。',
     repurchase_body:'同じレストランの別日程のチケットは、これまでのご予約日（来店日基準）から{n}日が経過してからご購入いただけます。',
     repurchase_prev:'これまでのご予約日', repurchase_left:'約{n}日後にご購入いただけます。',
-    repurchase_window:'{a}以前、または{b}以降のご来店日の回はご購入いただけます。',
+    repurchase_window:'{a}〜{b}の別日程の回はご購入いただけません（ご予約日当日を除く）。',
     tab_menu:'メニューを表示',
     tab_menu_close:'メニューを閉じる',
     hold_title:'席を確保しました',

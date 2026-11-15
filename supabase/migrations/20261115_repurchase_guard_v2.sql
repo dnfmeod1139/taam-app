@@ -19,6 +19,7 @@
 --   · 회원 결제 행의 방문일이 비어 있으면 회차 날짜·시각으로 채운다(카드 폴백 행 — 리마인드·캘린더도 이 칸을 읽는다).
 --   · 방문일·매장은 **회차 값이 먼저**, 회차가 없으면 티켓 행 값(옛 초대의 가짜 회차 등). 날짜는 _taam_pu_visit_date 로 안전하게 읽는다
 --     (못 읽으면 근거 없음 = 그 행은 세지 않는다 — 중복·시간대 가드와 같은 규칙).
+--   · 같은 purchase_id 의 다른 행도 기존 예약으로 센다(홀드 id 재사용 우회 — 검토).
 --   · 막히면 같은 문구 'REPURCHASE_BLOCKED: 이 매장은 N 일 재구매 제한이 있습니다 (기존 방문일 YYYY.MM.DD)' — 앱이 이 모양을 읽는다.
 --   · 카드 폴백 INSERT 가 여기서 막히면 Edge 가 예치금을 되돌리고 카드를 자동 취소한다(seat_lost · 기존 흐름).
 --
@@ -127,7 +128,9 @@ begin
     cross join lateral (select coalesce(public._taam_pu_visit_date(tp2.date), public._taam_pu_visit_date(k.reservation_date)) as vd) d
    where k.user_id = new.user_id
      and coalesce(nullif(tp2.rest_id::text, ''), k.restaurant_id::text) = v_rest
-     and k.purchase_id is distinct from new.purchase_id
+     -- ⚠ 같은 purchase_id 의 행을 빼지 않는다(검토) — 카드 확정 폴백은 주문에 적힌 홀드 id 를 새 행에 그대로 쓰는데,
+     --   회원이 자기의 살아 있는 다른 구매 id 를 홀드 id 로 보내면 그 구매가 비교에서 빠져 창 안의 두 번째 예약이 들어갔다.
+     --   같은 회차의 옛 행은 간격 0(허용)이고, 만료된 같은 id 홀드는 cancelled 라 어차피 안 센다.
      and coalesce(k.status, '') not in ('cancelled','canceled')
      and coalesce(k.purchase_id, '') not like 'MAN-%'
      and coalesce(k.purchase_id, '') not like 'INVH-%'
