@@ -2280,6 +2280,32 @@ html.auto-login .splash .bottom-group{display:none !important}
 .tkl-btn.extend{border-color:#e8d7ad;background:#fff8e8;color:#8a6d3b}
 .tkl-btn.guest{border-color:#5C0A14;background:#5C0A14;color:#fff}
 .tkl-btn.del{border-color:#f0cfcf;background:#fdf4f4;color:#9B1C1C;flex:0 0 64px}
+/* 🆕 2026-11-15 미공개 보관·오픈 예약 — 카드의 공개 줄(매진·수정 줄 위) */
+.tkl-btn.pub{border-color:#1E7A46;background:#1E7A46;color:#fff}
+.tkl-btn.sched{border-color:#f0d9b4;background:#fff8ec;color:#B45309}
+.tkl-pubrow + .tkl-acts{margin-top:6px;padding-top:0;border-top:0}
+/* 🆕 2026-11-15 예약 오픈 시트 */
+#tuSchedPop{position:fixed;inset:0;z-index:9600;display:none;align-items:center;justify-content:center;padding:22px;background:rgba(18,15,12,.55);font-family:var(--font-main)}
+#tuSchedPop.on{display:flex}
+#tuSchedBox{width:100%;max-width:340px;background:#fff;border-radius:18px;padding:22px 20px 16px;box-shadow:0 20px 50px rgba(0,0,0,.32);text-align:center;max-height:calc(100vh - 44px);max-height:calc(100dvh - 44px);overflow-y:auto;-webkit-overflow-scrolling:touch}
+#tuSchedBox .ic{font-size:28px;line-height:1}
+#tuSchedBox .ti{font-size:17px;font-weight:800;color:#1a1a18;margin-top:10px;letter-spacing:-.3px}
+#tuSchedBox .bd{font-size:12.5px;color:#5a554f;line-height:1.65;margin-top:8px;white-space:pre-line}
+#tuSchedBox .fld{position:relative;margin-top:10px;border:1.5px solid #d8c9a8;border-radius:10px;background:#fff;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;gap:10px;text-align:left}
+#tuSchedBox .fld .k{font-size:12.5px;font-weight:800;color:#8a7a55;white-space:nowrap}
+#tuSchedBox .fld .v{font-size:13.5px;font-weight:700;color:#b5afa2}
+#tuSchedBox .fld input[type=date]{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;border:0}
+#tuSchedBox .fld .v2{display:flex;align-items:center;gap:4px;flex:1;justify-content:flex-end;min-width:0}
+#tuSchedBox .fld select{flex:1;width:100%;min-height:30px;border:0;background:transparent;font-family:var(--font-main);font-size:15px;font-weight:800;color:#1a1a18;padding:4px 2px;outline:none;-webkit-appearance:none;appearance:none;text-align:right;text-align-last:right;cursor:pointer}
+#tuSchedBox .fld .car{color:#c8a96e;font-size:12px;pointer-events:none}
+#tuSchedBox .msg{font-size:12px;font-weight:800;margin-top:10px;min-height:18px;color:#8a8580;line-height:1.5}
+#tuSchedBox .msg.ok{color:#1E7A46}
+#tuSchedBox .msg.bad{color:#9B1C1C}
+#tuSchedBox .nt{font-size:11px;color:#8a8580;line-height:1.6;margin-top:10px;background:#f7f5f1;border-radius:9px;padding:9px 11px;white-space:pre-line;text-align:left}
+#tuSchedBox .bs{display:flex;gap:8px;margin-top:16px}
+#tuSchedBox button{flex:1;min-height:48px;border-radius:12px;border:0;font-family:var(--font-main);font-size:14px;font-weight:800;cursor:pointer;background:#f1eee8;color:#5a554f}
+#tuSchedBox button.go{background:#1E7A46;color:#fff}
+#tuSchedBox button:disabled{opacity:.55;cursor:default}
 /* 확인 시트 — 매진·삭제처럼 되돌리기 어려운 동작 앞에 한 번 더 묻는다 */
 #tkAskWrap{position:fixed;inset:0;z-index:9600;display:none;align-items:center;justify-content:center;padding:26px;background:rgba(18,15,12,.55);font-family:var(--font-main)}
 #tkAskWrap.on{display:flex}
@@ -49787,7 +49813,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.11.15-a';
+var TAAM_WEB_BUILD = '2026.11.15-b';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -50121,14 +50147,18 @@ function openTicketBroadcastScreen(preselectId){
   document.getElementById('tbSendCount').textContent = '계산 중...';
 
   // 승인 직후라면 그 티켓을 미리 골라 둔다 — 슈퍼어드민이 다시 찾을 필요가 없다
-  if(preselectId){
-    var _pt = (ticketDB || []).find(function(x){ return String(x.id) === String(preselectId); });
+  // 🆕 2026-11-15 배열도 받는다 — 티켓 리스트에서 여러 회차를 한꺼번에 공개한 뒤 이어질 때
+  var _preIds = Array.isArray(preselectId) ? preselectId : (preselectId ? [preselectId] : []);
+  var _preHid = 0;
+  _preIds.forEach(function(pid){
+    var _pt = (ticketDB || []).find(function(x){ return String(x.id) === String(pid); });
     // 🆕 2026-10-30 숨김(연계 대기)·승인 대기 회차는 미리 고르지 않는다 — 회원이 살 수 없다
-    if(_pt && (_pt.status === 'hidden' || _pt.status === 'pending' || _pt.status === 'deleteRequest')){ _pt = null; showToast('ⓘ', '아직 공개되지 않은 회차입니다', '숨김(연계 대기)·승인 대기 회차는 오픈 알림을 보낼 수 없습니다'); }
-    if(_pt){
-      _tbSelectedTicketIds[_pt.id] = _pt;
-      try { tbRenderSelectedTickets(); tbUpdatePreview(); } catch(_pe){}
-    }
+    if(_pt && (_pt.status === 'hidden' || _pt.status === 'pending' || _pt.status === 'deleteRequest')){ _pt = null; _preHid++; }
+    if(_pt) _tbSelectedTicketIds[_pt.id] = _pt;
+  });
+  if(_preHid) showToast('ⓘ', '아직 공개되지 않은 회차입니다', '숨김(연계 대기)·승인 대기 회차는 오픈 알림을 보낼 수 없습니다');
+  if(Object.keys(_tbSelectedTicketIds).length){
+    try { tbRenderSelectedTickets(); tbUpdatePreview(); } catch(_pe){}
   }
 
   document.getElementById('ticketBroadcastScreen').style.display = 'flex';
@@ -52158,8 +52188,8 @@ function _tuOpenKind(t){
   if(_isTicketExpired(t)) return 'done';
   return (t.status === 'soldout') ? 'sold' : 'onsale';
 }
-function tuListSetTab(k){ _tuListTab = k; _tuFlexSel = {}; renderTicketList(); }
-function tuListSetSub(k){ _tuOpenSub = k; _tuFlexSel = {}; renderTicketList(); }
+function tuListSetTab(k){ _tuListTab = k; _tuFlexSel = {}; _tuPubMode = false; _tuPubSel = {}; renderTicketList(); }
+function tuListSetSub(k){ _tuOpenSub = k; _tuFlexSel = {}; _tuPubMode = false; _tuPubSel = {}; renderTicketList(); }
 window.tuListSetSub = tuListSetSub;
 // 목록 안의 연도 구분선 — 2026·2027 이 섞여 내려올 때 어느 해인지 놓치지 않게
 function _tkYearOf(t){
@@ -52189,6 +52219,7 @@ function _tuIsFlex(t){ return !!(t && t.slots && t.slots.mode === 'flex'); }
 function tuFlexModeToggle(){
   _tuFlexMode = !_tuFlexMode;
   if(!_tuFlexMode) _tuFlexSel = {};
+  else { _tuPubMode = false; _tuPubSel = {}; }   // 🆕 2026-11-15 「골라서 공개」 선택 모드와 함께 켜지지 않는다
   renderTicketList();
 }
 window.tuFlexModeToggle = tuFlexModeToggle;
@@ -52236,6 +52267,316 @@ function tuFlexApply(toStrict){
   showToast('✓','판매 모드 변경', changed.length + '건을 ' + label + ' 로 전환 — 즉시 적용');
 }
 window.tuFlexApply = tuFlexApply;
+
+// ════════════════════════════════════════════════════════════════
+// 🆕 2026-11-15 미공개 보관 · 오픈 예약 탭에서 바로 공개 (운영 요청 — 회차마다 「수정」으로 들어가 바꾸는 게 번거롭다)
+//   · 탭 바 아래 「☑ 골라서 공개」 → 체크박스로 부분·전체 선택 → 「🟢 즉시 공개」 / 「⏰ 예약 오픈」(같은 시각)
+//   · 회차 카드마다 매진·수정 위에 「🟢 즉시 공개」 · 「⏰ 예약 오픈」(오픈 예약 탭은 「⏰ 시각 변경」)
+//   · 업로드 폼의 「판매 오픈」 칸은 그대로 둔다 — 첫 설정은 거기서 한다. 이것은 편의 입구다.
+//   슈퍼어드민만. 서버에는 그 회차들의 sale_state · sale_open_at 두 칸만 쓴다(전체 upsert 는 낡은 로컬 값이 서버를 덮는다).
+//   예약 시각은 업로드 폼과 같은 모양 'YYYY-MM-DDTHH:MM'. 공개해도 회원 알림은 자동으로 가지 않는다 — 즉시 공개 뒤 「📢 오픈 알림」을 묻는다.
+// ════════════════════════════════════════════════════════════════
+var _tuPubMode = false;     // 선택 모드 on/off
+var _tuPubSel  = {};        // { ticketId: true }
+var _tuPubVisible = [];     // 지금 탭에서 고를 수 있는 회차 id (그릴 때 채운다 — onclick 에 목록을 싣지 않는다)
+var _tuPubBusy = false;
+function _tuPubCan(){ return (typeof _isSuperAdmin === 'function') && !!_isSuperAdmin(); }
+// 공개 전환을 걸 수 있는 회차 — 숨김(연계 대기)·승인 대기·삭제 신청은 제 길이 따로 있고, 지난 회차는 열어도 못 산다
+function _tuPubWhyNot(t){
+  if(!t) return '없는 회차';
+  var st = String(t.status || '');
+  if(st === 'hidden') return '숨김 · 연계 대기 — 📦 연계와 함께 공개';
+  if(st === 'pending') return '승인 대기 회차';
+  if(st === 'deleteRequest') return '삭제 신청 중';
+  if(typeof _isTicketExpired === 'function' && _isTicketExpired(t)) return '방문일이 지난 회차';
+  return '';
+}
+function _tuPubOk(t){ return !!t && !_tuPubWhyNot(t); }
+function _tuPubFind(id){ return ticketDB.find(function(x){ return String(x.id) === String(id); }); }
+// 이름 목록 — 많으면 앞의 몇 개 + 「외 N건」
+function _tuPubNames(ids, max){
+  max = max || 5;
+  var out = ids.slice(0, max).map(function(id){ var t = _tuPubFind(id); return t ? _tkAskWhat(t) : String(id); });
+  if(ids.length > max) out.push('외 ' + (ids.length - max) + '건');
+  return out.join('\n');
+}
+function tuPubModeToggle(){
+  if(!_tuPubCan()) return;
+  _tuPubMode = !_tuPubMode;
+  _tuPubSel = {};
+  if(_tuPubMode){ _tuFlexMode = false; _tuFlexSel = {}; }   // 두 선택 모드는 함께 켜지지 않는다
+  renderTicketList();
+}
+window.tuPubModeToggle = tuPubModeToggle;
+function tuPubSelToggle(id){
+  id = _pkSafeId(id);
+  if(_tuPubSel[id]) delete _tuPubSel[id];
+  else { var t = _tuPubFind(id); if(_tuPubOk(t)) _tuPubSel[id] = true; }
+  renderTicketList();
+}
+window.tuPubSelToggle = tuPubSelToggle;
+function tuPubSelAll(){
+  var ids = _tuPubVisible.slice();
+  var all = ids.length > 0 && ids.every(function(id){ return _tuPubSel[id]; });
+  _tuPubSel = {};
+  if(!all) ids.forEach(function(id){ _tuPubSel[id] = true; });
+  renderTicketList();
+}
+window.tuPubSelAll = tuPubSelAll;
+function _tuPubPicked(){
+  return Object.keys(_tuPubSel).filter(function(id){ return _tuPubVisible.indexOf(id) >= 0 && _tuPubOk(_tuPubFind(id)); });
+}
+
+// 서버에 판매 공개 두 칸만 쓴다 → { done:[id], skipped:[{id, why}], err }
+//   먼저 서버의 지금 상태를 읽는다 — 낡은 화면에서 이미 공개(판매 중)된 회차를 「예약 오픈」으로 되돌려 숨기지 않게,
+//   그 사이 숨김·승인 대기·삭제 신청이 된 회차를 건드리지 않게.
+async function _tuSaleApply(ids, state, openAt){
+  if(!_tuPubCan()) return { err: '슈퍼어드민 전용입니다', done: [], skipped: [] };
+  if(!window.sb) return { err: '서버에 연결되지 않았습니다', done: [], skipped: [] };
+  var uniq = [];
+  (ids || []).forEach(function(x){ var v = _pkSafeId(x); if(v && uniq.indexOf(v) < 0) uniq.push(v); });
+  if(!uniq.length) return { done: [], skipped: [] };
+  var skipped = [];
+  var rd = await window.sb.from('ticket_products').select('id, status, sale_state, sale_open_at').in('id', uniq);
+  if(rd.error) return { err: String(rd.error.message || rd.error), done: [], skipped: [] };
+  var srv = {};
+  (rd.data || []).forEach(function(r){ srv[String(r.id)] = r; });
+  var allow = [];
+  uniq.forEach(function(id){
+    var r = srv[id];
+    if(!r){ skipped.push({ id: id, why: 'gone' }); return; }
+    var st = String(r.status || '');
+    if(st === 'hidden' || st === 'pending' || st === 'deleteRequest'){ skipped.push({ id: id, why: 'status' }); return; }
+    if(state === 'scheduled'){
+      var ss = r.sale_state || 'open';
+      var live = (ss === 'open') || (ss === 'scheduled' && !!r.sale_open_at
+                 && !_tkSaleHidden({ saleState: 'scheduled', saleOpenAt: r.sale_open_at }));
+      if(live){ skipped.push({ id: id, why: 'live' }); return; }
+    }
+    allow.push(id);
+  });
+  var done = [];
+  if(allow.length){
+    var patch = { sale_state: state, sale_open_at: (state === 'scheduled') ? openAt : null, updated_at: new Date().toISOString() };
+    var q = window.sb.from('ticket_products').update(patch).in('id', allow);
+    if(state === 'scheduled') q = q.in('sale_state', ['draft', 'scheduled']);   // 읽은 뒤 공개된 회차는 0행으로 빠진다
+    var up = await q.select('id, sale_state, sale_open_at');
+    if(up.error) return { err: String(up.error.message || up.error), done: [], skipped: skipped };
+    (up.data || []).forEach(function(r){
+      var id = String(r.id); done.push(id);
+      var t = _tuPubFind(id);
+      if(t){ t.saleState = r.sale_state || 'open'; t.saleOpenAt = r.sale_open_at || null; }
+    });
+    allow.forEach(function(id){ if(done.indexOf(id) < 0) skipped.push({ id: id, why: 'live' }); });
+    _idbSafeSet('excTickets', ticketDB, '티켓');
+  }
+  // 건너뛴 회차는 서버 판으로 다시 그린다(지금 상태가 화면과 달랐다)
+  if(skipped.length){ try { await _tkRefreshFromServer(skipped.map(function(s){ return s.id; }), { quiet: true }); } catch(_r){} }
+  try { if(typeof _tkRepaintAll === 'function') _tkRepaintAll(); else renderTicketList(); } catch(_rp){}
+  return { done: done, skipped: skipped };
+}
+function _tuSkipNote(skipped){
+  if(!skipped || !skipped.length) return '';
+  var n = { gone: 0, status: 0, live: 0 };
+  skipped.forEach(function(s){ n[s.why] = (n[s.why] || 0) + 1; });
+  var p = [];
+  if(n.live) p.push('이미 공개 중 ' + n.live + '건');
+  if(n.status) p.push('숨김·승인 대기·삭제 신청 ' + n.status + '건');
+  if(n.gone) p.push('지워진 회차 ' + n.gone + '건');
+  return ' · 건너뜀: ' + p.join(' · ');
+}
+
+// 🟢 즉시 공개 — ids 를 주면 그 회차만(카드 버튼), 안 주면 선택한 회차
+function tuPubNow(ids){
+  if(!_tuPubCan()){ showToast('🔒','권한 부족','슈퍼어드민 전용'); return; }
+  var single = Array.isArray(ids) && ids.length === 1;
+  ids = (Array.isArray(ids) ? ids.map(_pkSafeId) : _tuPubPicked()).filter(function(id){ return _tuPubOk(_tuPubFind(id)); });
+  if(!ids.length){ showToast('⚠','공개 전환','선택된 회차가 없습니다'); return; }
+  var soldN = 0, schedN = 0;
+  ids.forEach(function(id){
+    var t = _tuPubFind(id);
+    if(t && t.status === 'soldout') soldN++;
+    if(t && t.saleState === 'scheduled') schedN++;
+  });
+  _tkAsk({
+    icon: '🟢',
+    title: single ? '지금 공개할까요?' : '선택한 ' + ids.length + '건을 지금 공개할까요?',
+    body: _tuPubNames(ids),
+    note: '회원 캘린더에 바로 보이고 구매할 수 있게 됩니다.'
+        + (soldN ? '\n매진 ' + soldN + '건은 SOLD OUT 으로 보입니다.' : '')
+        + (schedN ? '\n오픈 예약이 걸린 ' + schedN + '건은 예약 시각을 지우고 지금 엽니다.' : '')
+        + '\n회원 알림은 자동으로 가지 않습니다 — 공개한 뒤 「📢 오픈 알림」을 보낼지 묻습니다.',
+    okText: '즉시 공개',
+    okKind: 'go',
+    onOk: function(){ _tuPubNowRun(ids); }
+  });
+}
+window.tuPubNow = tuPubNow;
+async function _tuPubNowRun(ids){
+  if(_tuPubBusy) return;
+  _tuPubBusy = true;
+  var r;
+  try { r = await _tuSaleApply(ids, 'open', null); }
+  catch(e){ r = { err: String((e && e.message) || e), done: [], skipped: [] }; }
+  finally { _tuPubBusy = false; }
+  if(r.err){ showToast('⚠','공개하지 못했습니다', String(r.err).slice(0, 90)); return; }
+  _tuPubMode = false; _tuPubSel = {};
+  renderTicketList();
+  if(!r.done.length){ showToast('ⓘ','바뀐 회차가 없습니다', '서버의 지금 상태로 다시 그렸습니다' + _tuSkipNote(r.skipped)); return; }
+  showToast('✓','공개했습니다 · ' + r.done.length + '건', '지금부터 회원 캘린더에 보입니다' + _tuSkipNote(r.skipped));
+  // 오픈 알림 — 지금 살 수 있는 회차만 미리 고른다(매진·지난 회차에 「오픈」 알림을 보내면 회원은 못 사는 자리를 본다)
+  var cand = r.done.filter(function(id){
+    var t = _tuPubFind(id);
+    if(!t || String(t.status || '') !== 'active') return false;
+    if(typeof _isTicketExpired === 'function' && _isTicketExpired(t)) return false;
+    if(typeof _paSoldOut === 'function' && _paSoldOut(t)) return false;
+    return true;
+  });
+  if(!cand.length || typeof openTicketBroadcastScreen !== 'function') return;
+  setTimeout(function(){
+    _tkAsk({
+      icon: '📢',
+      title: '오픈 알림을 보낼까요?',
+      body: _tuPubNames(cand),
+      note: '방금 공개한 ' + cand.length + '건을 골라 둔 채 「📢 티켓 오픈 알림 발송」을 엽니다 — 보내기 전에 문구·제외할 회원을 확인합니다.'
+          + (r.done.length > cand.length ? '\n매진 ' + (r.done.length - cand.length) + '건은 고르지 않았습니다.' : '')
+          + '\n지금 안 보내도 나중에 어드민 메뉴에서 보낼 수 있습니다.',
+      okText: '📢 알림 화면 열기',
+      okKind: 'go',
+      onOk: function(){ try { openTicketBroadcastScreen(cand); } catch(_bc){ console.warn('[pub] 알림 화면', _bc); } }
+    });
+  }, 450);
+}
+
+// ⏰ 예약 오픈 — 시각을 고르는 시트. ids 를 주면 그 회차만(카드 버튼), 안 주면 선택한 회차
+var _tuSched = null;   // { ids:[…] }
+function tuSchedOpen(ids){
+  if(!_tuPubCan()){ showToast('🔒','권한 부족','슈퍼어드민 전용'); return; }
+  ids = (ids == null ? _tuPubPicked() : (Array.isArray(ids) ? ids : [ids]).map(_pkSafeId))
+    .filter(function(id){ return _tuPubOk(_tuPubFind(id)); });
+  if(!ids.length){ showToast('⚠','예약 오픈','선택된 회차가 없습니다'); return; }
+  _tuSched = { ids: ids };
+  var wrap = document.getElementById('tuSchedPop');
+  if(!wrap){
+    wrap = document.createElement('div');
+    wrap.id = 'tuSchedPop';
+    wrap.setAttribute('data-lang-lock', 'ko');
+    var opts = '';
+    for(var _h = 0; _h < 24; _h++){
+      ['00','30'].forEach(function(_m){ var v = String(_h).padStart(2,'0') + ':' + _m; opts += '<option value="' + v + '">' + v + '</option>'; });
+    }
+    wrap.innerHTML = '<div id="tuSchedBox">'
+      + '<div class="ic">⏰</div>'
+      + '<div class="ti" id="tuSchedTitle">예약 오픈</div>'
+      + '<div class="bd" id="tuSchedWhat"></div>'
+      + '<div class="fld"><span class="k">오픈 날짜</span><span class="v" id="tuSchedDateLab"></span>'
+      +   '<input type="date" id="tuSchedDate" onchange="_tuSchedSync()" oninput="_tuSchedSync()"></div>'
+      + '<div class="fld"><span class="k">오픈 시간</span><span class="v2"><select id="tuSchedTime" onchange="_tuSchedSync()">' + opts + '</select><span class="car">▾</span></span></div>'
+      + '<div class="msg" id="tuSchedMsg"></div>'
+      + '<div class="nt">그 시각이 되면 자동으로 회원에게 공개됩니다(별도 조작 불필요) · 그때까지 회원에게 안 보입니다.\n회원 알림은 자동으로 가지 않습니다 — 공개된 뒤 「📢 티켓 오픈 알림 발송」에서 보냅니다.</div>'
+      + '<div class="bs"><button type="button" id="tuSchedNo" onclick="tuSchedClose()">취소</button>'
+      +   '<button type="button" id="tuSchedYes" onclick="tuSchedSave()">예약 오픈</button></div>'
+      + '</div>';
+    document.body.appendChild(wrap);
+    // 바깥을 누르면 닫힌다 — 끌어서 놓은 것은 닫지 않는다(입력 중 실수)
+    var _down = null;
+    wrap.addEventListener('pointerdown', function(ev){ _down = ev.target; });
+    wrap.addEventListener('click', function(ev){ if(ev.target === wrap && _down === wrap && !_tuSchedSaving) tuSchedClose(); _down = null; });
+  }
+  // 고른 회차가 모두 같은 예약 시각이면 그 값으로, 아니면 날짜는 비우고 10:00
+  var at0 = null, same = true;
+  ids.forEach(function(id){
+    var t = _tuPubFind(id), v = (t && t.saleState === 'scheduled' && t.saleOpenAt) ? String(t.saleOpenAt).replace(' ', 'T') : '';
+    if(at0 === null) at0 = v; else if(at0 !== v) same = false;
+  });
+  var pre = (same && at0) ? at0 : '';
+  var dEl = document.getElementById('tuSchedDate'), tEl = document.getElementById('tuSchedTime');
+  var _now = new Date();
+  dEl.min = _now.getFullYear() + '-' + String(_now.getMonth() + 1).padStart(2,'0') + '-' + String(_now.getDate()).padStart(2,'0');
+  dEl.value = pre ? pre.slice(0, 10) : '';
+  var tv = (pre && pre.length >= 16) ? pre.slice(11, 16) : '10:00';
+  tEl.value = tv; if(tEl.value !== tv) tEl.value = '10:00';   // 30분 단위가 아닌 옛 값은 10:00 으로
+  var resched = ids.every(function(id){ var t = _tuPubFind(id); return t && t.saleState === 'scheduled'; });
+  document.getElementById('tuSchedTitle').textContent = (resched ? '예약 시각 변경' : '예약 오픈') + (ids.length > 1 ? ' · ' + ids.length + '건' : '');
+  document.getElementById('tuSchedWhat').textContent = _tuPubNames(ids);
+  document.getElementById('tuSchedYes').textContent = resched ? '시각 변경' : '예약 오픈';
+  _tuSchedSync();
+  wrap.classList.add('on');
+}
+window.tuSchedOpen = tuSchedOpen;
+var _tuSchedSaving = false;
+function tuSchedClose(){
+  if(_tuSchedSaving) return;
+  var w = document.getElementById('tuSchedPop'); if(w) w.classList.remove('on');
+  _tuSched = null;
+}
+window.tuSchedClose = tuSchedClose;
+// 날짜·시간을 읽어 확인 → { ok, at:'YYYY-MM-DDTHH:MM' }
+function _tuSchedSync(){
+  var dEl = document.getElementById('tuSchedDate'), tEl = document.getElementById('tuSchedTime');
+  var lab = document.getElementById('tuSchedDateLab'), msg = document.getElementById('tuSchedMsg'), yes = document.getElementById('tuSchedYes');
+  if(!dEl || !tEl || !_tuSched) return { ok: false };
+  var d = dEl.value || '', tm = tEl.value || '10:00';
+  var DOW = ['일','월','화','수','목','금','토'];
+  var res = { ok: false, at: d ? (d + 'T' + tm) : '' }, txt = '', bad = false;
+  if(!d){
+    lab.innerHTML = '눌러서 날짜 선택 <span style="color:#c8a96e;font-size:12px;">▾</span>'; lab.style.color = '#b5afa2';
+    txt = '오픈 날짜를 골라 주세요';
+  } else {
+    var at = new Date(d + 'T' + tm);
+    lab.innerHTML = (isNaN(at.getTime()) ? _raEsc(d) : at.getFullYear() + '. ' + (at.getMonth() + 1) + '/' + at.getDate() + ' (' + DOW[at.getDay()] + ')')
+      + ' <span style="color:#c8a96e;font-size:12px;">▾</span>';
+    lab.style.color = '#1a1a18';
+    if(isNaN(at.getTime())){ txt = '날짜를 읽지 못했습니다'; bad = true; }
+    else if(at.getTime() <= Date.now() + 60000){ txt = '지난 시각입니다 — 지금 열려면 「🟢 즉시 공개」를 쓰세요'; bad = true; }
+    else {
+      // 방문 시각보다 늦게 열면 그 회차는 영영 못 판다
+      var late = _tuSched.ids.filter(function(id){
+        var t = _tuPubFind(id); if(!t) return false;
+        var hm = String(t.time || '').split(':');
+        var vd = (typeof _tkDateObj === 'function') ? _tkDateObj(t, t.time ? hm[0] : 23, t.time ? hm[1] : 59) : null;
+        return !!(vd && at.getTime() >= vd.getTime());
+      });
+      if(late.length){
+        txt = '방문 시각보다 늦습니다 — ' + late.slice(0, 3).map(function(id){ return _tkAskWhat(_tuPubFind(id)); }).join(' / ') + (late.length > 3 ? ' 외 ' + (late.length - 3) + '건' : '');
+        bad = true;
+      } else {
+        txt = at.getFullYear() + '. ' + (at.getMonth() + 1) + '/' + at.getDate() + ' (' + DOW[at.getDay()] + ') ' + tm + ' 에 회원에게 공개';
+        res.ok = true;
+      }
+    }
+  }
+  msg.textContent = txt;
+  msg.className = 'msg' + (bad ? ' bad' : (res.ok ? ' ok' : ''));
+  if(yes){ yes.disabled = !res.ok || _tuSchedSaving; yes.className = res.ok ? 'go' : ''; }
+  return res;
+}
+window._tuSchedSync = _tuSchedSync;
+async function tuSchedSave(){
+  if(_tuSchedSaving || !_tuSched) return;
+  var v = _tuSchedSync();
+  if(!v.ok) return;
+  var ids = _tuSched.ids.slice();
+  _tuSchedSaving = true;
+  var yes = document.getElementById('tuSchedYes');
+  if(yes){ yes.disabled = true; yes.textContent = '저장 중…'; }
+  var r;
+  try { r = await _tuSaleApply(ids, 'scheduled', v.at); }
+  catch(e){ r = { err: String((e && e.message) || e), done: [], skipped: [] }; }
+  finally { _tuSchedSaving = false; }
+  if(r.err){
+    showToast('⚠','예약하지 못했습니다', String(r.err).slice(0, 90));
+    if(yes) yes.textContent = '다시 시도';
+    _tuSchedSync();
+    return;
+  }
+  tuSchedClose();
+  _tuPubMode = false; _tuPubSel = {};
+  renderTicketList();
+  if(!r.done.length){ showToast('ⓘ','바뀐 회차가 없습니다', '서버의 지금 상태로 다시 그렸습니다' + _tuSkipNote(r.skipped)); return; }
+  showToast('⏰','예약 오픈 · ' + r.done.length + '건', _tuFmtOpenAt(v.at) + ' 에 자동으로 공개됩니다 — 「오픈 예약」 탭' + _tuSkipNote(r.skipped));
+}
+window.tuSchedSave = tuSchedSave;
 // 판매 공개 상태 분류: open=발행(자동 공개된 예약 건 포함) / sched=오픈 예약 / draft=미공개 보관
 function _tuSaleKind(t){
   var ss = t.saleState || 'open';
@@ -52339,8 +52680,50 @@ function renderTicketList(){
     _tuFlexMode = false;   // 자유석이 없는 탭으로 옮기면 선택 모드는 스스로 닫힌다
   }
 
+  // 🆕 2026-11-15 미공개 보관 · 오픈 예약 탭 — 「☑ 골라서 공개 전환」(체크박스 → 즉시 공개 / 같은 시각 예약 오픈) · 슈퍼어드민만
+  var pubBar = '';
+  _tuPubVisible = [];
+  if(_tuPubCan() && (_tuListTab === 'draft' || _tuListTab === 'sched')){
+    _tuPubVisible = sorted.filter(_tuPubOk).map(function(t){ return _pkSafeId(t.id); });
+  }
+  if(!_tuPubVisible.length){
+    if(_tuPubMode){ _tuPubMode = false; _tuPubSel = {}; }   // 고를 회차가 없는 탭이면 선택 모드는 스스로 닫힌다
+  } else if(!_tuFlexMode){
+    if(!_tuPubMode){
+      pubBar = '<div style="padding:0 0 10px;">'
+        + '<button onclick="tuPubModeToggle()" style="width:100%;padding:9px;border:1px dashed #1E7A46;background:#f3faf5;'
+        +   'color:#1E7A46;border-radius:10px;font-size:11.5px;font-weight:800;cursor:pointer;font-family:inherit;">'
+        +   '☑ 골라서 공개 전환 (' + _tuPubVisible.length + '건) — 즉시 공개 · 예약 오픈'
+        + '</button></div>';
+    } else {
+      var pN = _tuPubPicked().length;
+      var pAll = (pN === _tuPubVisible.length);
+      var _pBtn = function(fn, label, on, solid){
+        return '<button onclick="' + fn + '"' + (on ? '' : ' disabled') + ' style="flex:1;padding:10px 6px;border:1px solid ' + (solid ? '#1E7A46' : '#f0d9b4') + ';'
+          + 'background:' + (on ? (solid ? '#1E7A46' : '#fff8ec') : '#f4f2ee') + ';color:' + (on ? (solid ? '#fff' : '#B45309') : '#b8b3ac') + ';'
+          + 'border-radius:9px;font-size:11.5px;font-weight:800;cursor:' + (on ? 'pointer' : 'default') + ';font-family:inherit;">' + label + '</button>';
+      };
+      pubBar = '<div style="padding:10px;margin-bottom:10px;border:1px solid #1E7A46;background:#f6fbf7;border-radius:12px;">'
+        + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">'
+        +   '<button onclick="tuPubSelAll()" style="padding:6px 10px;border:1px solid #ddd8ce;background:#fff;'
+        +     'color:#5a554f;border-radius:8px;font-size:10.5px;font-weight:800;cursor:pointer;font-family:inherit;">'
+        +     (pAll ? '전체 해제' : '전체 선택 (' + _tuPubVisible.length + ')') + '</button>'
+        +   '<div style="flex:1;font-size:11px;font-weight:800;color:#1E7A46;">' + pN + '건 선택됨</div>'
+        +   '<button onclick="tuPubModeToggle()" style="padding:6px 10px;border:1px solid #ddd8ce;background:#fff;'
+        +     'color:#8a8580;border-radius:8px;font-size:10.5px;font-weight:700;cursor:pointer;font-family:inherit;">취소</button>'
+        + '</div>'
+        + '<div style="display:flex;gap:6px;">'
+        +   _pBtn('tuPubNow()', '🟢 즉시 공개', pN > 0, true)
+        +   _pBtn('tuSchedOpen()', (_tuListTab === 'sched' ? '⏰ 예약 시각 변경' : '⏰ 예약 오픈'), pN > 0, false)
+        + '</div>'
+        + '<div style="font-size:10.5px;color:#8a8580;margin-top:7px;line-height:1.5;">숨김(연계 대기)·승인 대기·지난 회차는 고를 수 없습니다 · 회원 알림은 자동으로 가지 않습니다</div>'
+        + '</div>';
+    }
+  }
+  if(_tuPubMode) bulkBar = '';   // 공개 선택 중엔 자유석 막대를 감춘다
+
   var _lastYear = 0;
-  el.innerHTML=tabBar+subBar+bulkBar+sorted.map(function(t){
+  el.innerHTML=tabBar+subBar+pubBar+bulkBar+sorted.map(function(t){
     var r=restaurantDB.find(function(x){return String(x.id)===String(t.restId);});
     var isSold=t.status==='soldout';
     var slots='';
@@ -52407,13 +52790,31 @@ function renderTicketList(){
           + '">✓</div>'
         : '<div style="flex-shrink:0;width:22px;margin-right:10px;"></div>';
     }
+    // 🆕 2026-11-15 「골라서 공개」 선택 모드 — 고를 수 없는 회차는 자리만 비우고 이유를 카드에 적는다
+    var _pubSel = _tuPubMode && !!_tuPubSel[_pkSafeId(t.id)];
+    var _pubWhy = _tuPubMode ? _tuPubWhyNot(t) : '';
+    if(_tuPubMode){
+      _selBox = !_pubWhy
+        ? '<div onclick="event.stopPropagation();tuPubSelToggle(\''+_pkSafeId(t.id)+'\')" role="checkbox" aria-checked="'+(_pubSel?'true':'false')+'" '
+          + 'style="flex-shrink:0;width:36px;height:36px;margin:-7px 4px -7px -7px;align-self:center;cursor:pointer;display:flex;align-items:center;justify-content:center;">'
+          + '<div style="width:22px;height:22px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:900;'
+          + (_pubSel ? 'border:1.5px solid #1E7A46;background:#1E7A46;color:#fff;' : 'border:1.5px solid #ddd8ce;background:#fff;color:transparent;')
+          + '">✓</div></div>'
+        : '<div style="flex-shrink:0;width:22px;margin-right:10px;"></div>';
+    }
     // 선택 모드에서는 매진·연장·수정·삭제를 감춘다 — 고르는 중에 잘못 누르기 쉽다
     // 🆕 2026-09: 게스트 초대석. 열려 있으면 그 사실이 목록에서 바로 보여야 한다 —
     //   「지금 몇 자리가 게스트에게 열려 있나」는 자주 확인하는 값이다.
     var _gsOpen = _tkIsGuestSeat({
       guestOpen: t.guestOpen, guestSeatQty: t.guestSeatQty, guestOpenReason: t.guestOpenReason
     });
-    var _acts = _tuFlexMode ? '' :
+    var _pubRow = (!_tuFlexMode && !_tuPubMode && _tuPubCan() && (_tuListTab === 'draft' || _tuListTab === 'sched') && _tuPubOk(t))
+      ? '<div class="tkl-acts tkl-pubrow">'
+        + '<button class="tkl-btn pub" onclick="tuPubNow([\''+_pkSafeId(t.id)+'\'])">🟢 즉시 공개</button>'
+        + '<button class="tkl-btn sched" onclick="tuSchedOpen(\''+_pkSafeId(t.id)+'\')">' + (t.saleState === 'scheduled' ? '⏰ 시각 변경' : '⏰ 예약 오픈') + '</button>'
+        + '</div>'
+      : '';
+    var _acts = (_tuFlexMode || _tuPubMode) ? '' :
       '<div class="tkl-acts">'
       + (t.status==='hidden'
           ? '<button class="tkl-btn" onclick="tuHiddenLink(\''+_pkSafeId(t.id)+'\')" style="color:#8A6A28;">📦 연계</button>'
@@ -52445,9 +52846,9 @@ function renderTicketList(){
       _lastYear = _yr;
       _yHead = '<div class="tkl-year"><span>'+_yr+'년</span></div>';
     }
-    return _yHead + '<div class="tkl-card'+(isSold?' sold':'')+(_tuFlexMode&&_sel?' picked':'')+'">'
+    return _yHead + '<div class="tkl-card'+(isSold?' sold':'')+((_tuFlexMode&&_sel)||_pubSel?' picked':'')+'">'
       + '<div class="tkl-top">'
-      +   (_tuFlexMode ? _selBox : '')
+      +   ((_tuFlexMode || _tuPubMode) ? _selBox : '')
       +   '<div class="tkl-name">'+_raEsc(r?r.name:t.rest)+'</div>'
       +   '<span class="tkl-state '+(isSold?'off':'on')+'">'+(isSold?'SOLD OUT':'판매중')+'</span>'
       + '</div>'
@@ -52459,8 +52860,10 @@ function renderTicketList(){
       +   (t.time ? '<span class="t">'+_raEsc(t.time)+'</span>' : '') + '</div>'
       + (slots ? '<div class="tkl-sub">'+slots.replace(/^ · /,'')+'</div>' : '')
       + schedLine
+      + (_pubWhy ? '<div style="font-size:10.5px;font-weight:700;color:#a8a29a;margin-top:3px;">☐ 고를 수 없음 — '+_raEsc(_pubWhy)+'</div>' : '')
       + '<div class="tkl-seats" id="tkls_'+t.id+'">좌석 집계 중…</div>'
       + flexToggle
+      + _pubRow
       + _acts
       + '</div>';
   }).join('');
@@ -75665,7 +76068,8 @@ function _taamBusyNow(){
                'prvPopup', 'prvMemberPopup',   // 🆕 2026-10-29 예약 · 회원 조회(필터·펼침이 날아간다)
                'pkSheet', 'pkPayPopup', 'pkCancelPopup', 'pkgAdminPopup',   // 🆕 2026-10-29 티켓 패키지 — 좌석 홀드·결제·취소·만드는 중
                'tuPkgPickPopup', 'tuPkgFailPopup',   // 🆕 2026-10-30 업로드하면서 연계 — 고르는 중 · 연계 실패를 묻는 중
-               'tkAskWrap', 'paxChangeModal'];   // 🆕 2026-11-13 확인 시트(취소표 알림 켬·끔을 고르는 중) · 인원 변경
+               'tkAskWrap', 'paxChangeModal',
+               'tuSchedPop'];   // 🆕 2026-11-15 예약 오픈 시각을 고르는 중   // 🆕 2026-11-13 확인 시트(취소표 알림 켬·끔을 고르는 중) · 인원 변경
     // ⚠ offsetParent 로 판단하면 안 된다. **position:fixed 는 offsetParent 가
     //   항상 null** 이고, 이 목록은 전부 fixed 다 — 그래서 이 검사가 한 번도
     //   참이 된 적이 없었다(2026-09-01 발견). 계산된 스타일을 본다.
