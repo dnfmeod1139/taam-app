@@ -49787,7 +49787,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.11.13-d';
+var TAAM_WEB_BUILD = '2026.11.15-a';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -68215,7 +68215,7 @@ async function tcalLoadInvites(){
   try {
     if(!window.sb) return false;
     var r = await window.sb.from('reservation_invites')
-      .select('id,restaurant_id,restaurant_name,visit_date,visit_time,pax,status,invitee_user_id,total_amount,agency_fee')   // 🆕 2026-11-04 id — 조기 반환 칩(_invEarly)이 초대 id 로 찾는다(종전엔 빠져 칩이 한 번도 안 떴다)
+      .select('id,restaurant_id,restaurant_name,visit_date,visit_time,pax,status,invitee_user_id,total_amount,agency_fee,meal_fee,wine_min')   // 🆕 2026-11-15 meal_fee·wine_min — 금액 상세(1인 식사 + 대행비 + 주류 × 인원)   // 🆕 2026-11-04 id — 조기 반환 칩(_invEarly)이 초대 id 로 찾는다(종전엔 빠져 칩이 한 번도 안 떴다)
       .eq('status','paid');
     if(!r.error && Array.isArray(r.data)){
       _tcalInvites = r.data;
@@ -68463,7 +68463,7 @@ function _tcalDayGroups(dateKey){
     if(_tcalDateKey(inv.visit_date) !== dateKey) return;
     var _ie = !!(_invEarly[String(inv.id||'')] || _invEarly[String(inv.id||'').slice(0, 8) + '|' + String(inv.invitee_user_id||'')]);
     var _ipay = _invPay[String(inv.id||'')] || _invPay[String(inv.id||'').slice(0, 8) + '|' + String(inv.invitee_user_id||'')] || null;
-    gr(inv.restaurant_id, inv.restaurant_name).entries.push({type:'invite', early:_ie, card:(_ipay ? _ipay.card : 0), dep:(_ipay ? _ipay.dep : 0), iid:String(inv.id||''), name:(inv._inviteeName||''), uid:(inv.invitee_user_id||''), pax:(inv.pax||1), amount:(parseInt(inv.total_amount)||0), agency:(parseInt(inv.agency_fee)||0), time:(inv.visit_time||'')});
+    gr(inv.restaurant_id, inv.restaurant_name).entries.push({type:'invite', early:_ie, card:(_ipay ? _ipay.card : 0), dep:(_ipay ? _ipay.dep : 0), iid:String(inv.id||''), name:(inv._inviteeName||''), uid:(inv.invitee_user_id||''), pax:(inv.pax||1), amount:(parseInt(inv.total_amount)||0), agency:(parseInt(inv.agency_fee)||0), meal:(parseInt(inv.meal_fee)||0), wine:(parseInt(inv.wine_min)||0), time:(inv.visit_time||'')});
   });
   // 수동 (유형: 초대/오프라인)
   (_tcalManual||[]).forEach(function(m){
@@ -68542,6 +68542,59 @@ function tcalToggleMerge(){
   if(_tcalSelectedDate) tcalRenderDetail(_tcalSelectedDate);
 }
 window.tcalToggleMerge = tcalToggleMerge;
+
+// 🆕 2026-11-15 금액 상세 — 1인 구성(식사 · 대행비 · 주류) × 인원 = 결제액. 운영 요청: 「초대는 대행비가 나뉘어 보이는데 앱구매는 전체 금액만 나온다」.
+//   초대 = 초대 행에 적힌 1인 값(보낼 때 정한 값 · 대행비를 바꿨으면 그 값) · 앱 구매(PAY*) = 회차 정가(ticketDB — 반환 화면이 떼는 대행비와 같은 곳),
+//   회차가 없으면(지운 회차) 구매 때 대행비 기록만. 결제액이 「1인 × 인원」과 다르면(인원 줄임 때 남긴 대행비 · 구매 뒤 가격 변경 등) 숨기지 않고 그렇게 적는다.
+//   수동(MAN-)·정산(KSK-)·결제 링크(LINK-)·초대 홀드(INVH-)는 금액 근거가 따로라 건드리지 않는다.
+function _tcalAmtParts(e){
+  var r = { meal:0, agency:0, wine:0, unit:0, pax:(parseInt(e && e.pax, 10) || 0), total:(parseInt(e && e.amount, 10) || 0), src:'', match:false };
+  if(!e) return r;
+  if(e.type === 'invite'){
+    r.meal = parseInt(e.meal, 10) || 0; r.agency = parseInt(e.agency, 10) || 0; r.wine = parseInt(e.wine, 10) || 0;
+    r.src = (r.meal || r.agency || r.wine) ? 'invite' : '';
+  } else if(e.type === 'app' && /^PAY/.test(String(e.pid || ''))){
+    var t = (e.tpid && typeof ticketDB !== 'undefined' && Array.isArray(ticketDB)) ? ticketDB.find(function(x){ return String(x.id) === String(e.tpid); }) : null;
+    if(t){
+      r.meal = parseInt(t.mealFee || t.meal_fee, 10) || 0; r.agency = parseInt(t.agencyFee || t.agency_fee, 10) || 0; r.wine = parseInt(t.wineMin || t.wine_min, 10) || 0;
+      r.src = (r.meal || r.agency || r.wine) ? 'round' : '';
+    } else {
+      r.agency = parseInt(e.ex && e.ex.agencyFee, 10) || 0;
+      r.src = r.agency > 0 ? 'snap' : '';
+    }
+  }
+  r.unit = r.meal + r.agency + r.wine;
+  r.match = r.unit > 0 && r.pax > 0 && r.unit * r.pax === r.total;
+  return r;
+}
+function _tcalAmtDetailHtml(e){
+  var p = _tcalAmtParts(e);
+  if(!p.src) return '';
+  var W = function(n){ return '₩' + (Number(n) || 0).toLocaleString(); };
+  var box = function(inner){ return '<div class="tcal-amt-detail" style="font-size:11px;color:#8a8580;margin-top:2px;line-height:1.55;word-break:keep-all;">' + inner + '</div>'; };
+  var agH = '<b style="color:#8A5A1E;font-weight:800;">대행비 ' + W(p.agency) + '</b>';
+  if(p.src === 'snap') return box('└ 1인 ' + agH + ' <span style="color:#b5afa2;">(구매 때 기록 · 회차를 찾지 못함)</span>');
+  var bits = [];
+  if(p.meal > 0) bits.push('식사 ' + W(p.meal));
+  if(p.agency > 0) bits.push(agH);
+  if(p.wine > 0) bits.push('주류 ' + W(p.wine));
+  var comp = bits.join(' + ');
+  if(p.match) return box('└ ' + (p.pax > 1 ? '1인 ' + W(p.unit) + ' (' + comp + ') × ' + p.pax + '명' : comp));
+  var diff = p.total - p.unit * p.pax;
+  var why = (e.ex && Array.isArray(e.ex.pax_changes) && e.ex.pax_changes.length) ? '인원 변경 기록 있음' : (e.type === 'invite' ? '초대 합계' : '구매 뒤 가격 변경 등');
+  return box('└ ' + (e.type === 'invite' ? '초대 1인 ' : '정가 1인 ') + W(p.unit) + ' (' + comp + ') × ' + p.pax + '명 = ' + W(p.unit * p.pax)
+    + ' <span style="color:#B45309;font-weight:700;">· 결제액과 ' + (diff > 0 ? '+' : '−') + W(Math.abs(diff)) + ' 차이(' + why + ')</span>');
+}
+// 묶음 머리줄의 대행비 합 — 모든 줄의 구성이 결제액과 맞을 때만(하나라도 모르면 적지 않는다)
+function _tcalAgencySum(parts){
+  var sum = 0;
+  for(var i = 0; i < (parts || []).length; i++){
+    var p = _tcalAmtParts(parts[i]);
+    if(!(p.src === 'invite' || p.src === 'round') || !p.match) return null;
+    sum += p.agency * p.pax;
+  }
+  return sum;
+}
 
 // entries → [{ name, uid, pax, amount, agency, time, parts:[entry...] }]
 function _tcalMergeEntries(entries){
@@ -69944,7 +69997,7 @@ function tcalRenderDetail(dateStr) {
       _tcalMergeEntries(g.entries).forEach(function(row){
         var multi = row.parts.length > 1;
 
-        function partHtml(e, inner){
+        function partHtml(e, inner, idx){   // 🆕 2026-11-15 idx — 묶음 안 몇 번째 줄인지(첫 줄은 위 구분선 없음)
           // 🔒 2026-10-29(5차 리뷰) onclick 에 넣는 id 는 영문·숫자·_.:- 만 — 파트너가 REST 로 넣은 구매 id 의 따옴표가 슈퍼어드민 세션에서 돌던 길
           var _q = function(v){ return String(v == null ? '' : v).replace(/[^0-9A-Za-z_.:\-]/g, ''); };
           // 🆕 2026.08: 좌석 연동 행 구분 — MAN-(수동·연동) / INVH-(초대 좌석 홀드)
@@ -69980,10 +70033,20 @@ function tcalRenderDetail(dateStr) {
                 : '<span style="color:#b5afa2;font-weight:600;">정산 금액은 정산 화면에서</span>')
             : (_isLink && e.linkPay
                 ? (_kskFmtPay(e.linkPay) + (e.ex && e.ex.priceOverride ? ' <span style="color:#B45309;font-weight:700;">(금액 수정 · 정가 ₩' + Number(e.amount||0).toLocaleString() + ')</span>' : ' <span style="color:#9A9486;font-weight:600;">(링크 결제액)</span>'))   // 🆕 2026-10-19 슈퍼어드민: 청구 실제액
-                : (e.amount ? ('₩'+e.amount.toLocaleString()) : '') + (e.agency>0 ? ' <span style="color:#9A9486;font-weight:600;">(대행비 ₩'+e.agency.toLocaleString()+')</span>' : '')
-                  // 🆕 2026-11-13 초대를 「예치금 + 카드」로 냈으면 그 내역(슈퍼어드민만)
-                  + ((e.type === 'invite' && e.card > 0 && typeof _isSuperAdmin === 'function' && _isSuperAdmin())
-                      ? ' <span style="color:#1F5BD6;font-weight:700;">· ' + (e.dep > 0 ? '예치금 ₩' + Number(e.dep).toLocaleString() + ' + ' : '') + '카드 ₩' + Number(e.card).toLocaleString() + '</span>' : ''));
+                : (function(){
+                    // 🆕 2026-11-15 금액 상세 — 초대·앱 구매 모두 「1인 (식사 + 대행비 + 주류) × 인원」(_tcalAmtDetailHtml) · 그 밖은 종전 그대로
+                    var _dt = _tcalAmtDetailHtml(e), _pay = '';
+                    if(typeof _isSuperAdmin === 'function' && _isSuperAdmin()){
+                      // 「예치금 + 카드」로 낸 내역(슈퍼어드민만) — 초대는 좌석 행의 결제 사실 칸에서(2026-11-13) · 앱 구매도 같은 칸(서버가 적고 회원은 못 바꾼다)
+                      var _cp = 0, _dp = 0;
+                      if(e.type === 'invite'){ _cp = Number(e.card) || 0; _dp = Number(e.dep) || 0; }
+                      else if(e.type === 'app' && /^PAY/.test(String(e.pid || '')) && e.ex){ _cp = parseInt(e.ex.cardPaid, 10) || 0; _dp = Math.max(0, parseInt(e.ex.depositUsed, 10) || 0); }
+                      if(_cp > 0) _pay = ' <span style="color:#1F5BD6;font-weight:700;">· ' + (_dp > 0 ? '예치금 ₩' + _dp.toLocaleString() + ' + ' : '') + '카드 ₩' + _cp.toLocaleString() + '</span>';
+                    }
+                    return (e.amount ? '<b style="color:#4a4540;font-weight:700;">₩' + e.amount.toLocaleString() + '</b>' : '')
+                      + (!_dt && e.agency > 0 ? ' <span style="color:#9A9486;font-weight:600;">(대행비 ₩' + e.agency.toLocaleString() + ')</span>' : '')
+                      + _pay + _dt;
+                  })());
           var del = (e.type==='manual') ? '<span onclick="tcalManualDelete(\''+_q(e.mid)+'\')" style="cursor:pointer;color:#c33;font-size:17px;font-weight:700;line-height:1;padding:2px 4px;">×</span>'
                   : (_isKsk ? '<span onclick="tcalKskRowInfo()" title="정산 화면에서 청구를 취소·환불하면 좌석이 자동으로 풀립니다" style="cursor:pointer;color:#9A9486;font-size:15px;font-weight:700;line-height:1;padding:2px 4px;">ⓘ</span>'
                   : (_isLink && isSuper ? '<span onclick="tcalCancelLinkRow(\''+_q(e.pid)+'\')" title="' + (_linkPaid ? '환불(규정 적용) · 좌석 취소' : '링크 끊기 · 좌석 취소') + '" style="cursor:pointer;color:#c33;font-size:17px;font-weight:700;line-height:1;padding:0 4px;">×</span>'
@@ -70045,11 +70108,16 @@ function tcalRenderDetail(dateStr) {
               + '<div style="font-weight:600;color:#9a7a45;">결제가 끝나면 「앱구매」로 바뀌고, 안 끝나면 자동으로 풀립니다.</div></div>'
             : '';
           // data-tcal-row: 뒤에서 다시 그릴 때 「보고 있던 줄」을 같은 자리에 두는 닻(_tcalAnchorTake)
-          return '<div data-tcal-row="' + _raEsc(e.pid || (e.iid ? 'i:' + e.iid : (e.mid != null ? 'm:' + e.mid : ''))) + '" style="padding:'+(inner?'7px 16px 7px 26px':'10px 16px')+';border-top:1px solid '+(inner?'#f8f6f2':'#f4f1ec')+';'+(_isPayHold?'background:#FFFDF8;':(inner?'background:#fdfcfa;':''))+'">'
+          // 🆕 2026-11-15 묶음 안쪽 줄 — 머리줄 아래 왼쪽 세로선(.tcal-grp-kids)에 가지(└)로 매달린 작은 줄. 종전엔 머리줄과 같은 크기라 묶였다는 느낌이 없었다
+          var _rowStyle = inner
+            ? 'position:relative;padding:8px 0 8px 14px;' + ((idx || 0) > 0 ? 'border-top:1px dashed #EADFC9;' : '') + (_isPayHold ? 'background:#FFF8EC;' : '')
+            : 'padding:10px 16px;border-top:1px solid #f4f1ec;' + (_isPayHold ? 'background:#FFFDF8;' : '');
+          return '<div data-tcal-row="' + _raEsc(e.pid || (e.iid ? 'i:' + e.iid : (e.mid != null ? 'm:' + e.mid : ''))) + '"' + (inner ? ' class="tcal-grp-part"' : '') + ' style="' + _rowStyle + '">'
+            + (inner ? '<span aria-hidden="true" style="position:absolute;left:-2px;top:17px;width:10px;border-top:2px solid #E2CFA6;"></span>' : '')
             + '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">'
-            +   '<div style="min-width:0;font-size:12.5px;">' + head + (e.time?' <span style="color:#9a9486;font-size:11px;">· '+_raEsc(e.time)+'</span>':'')
+            +   '<div style="min-width:0;font-size:' + (inner ? '12' : '12.5') + 'px;">' + head + (e.time?' <span style="color:#9a9486;font-size:' + (inner ? '10.5' : '11') + 'px;">· '+_raEsc(e.time)+'</span>':'')
             +     (e.bought && !_isPayHold ? '<div style="font-size:10.5px;color:#b5afa2;margin-top:2px;">구매 '+_thxFmtDateTime(e.bought)+'</div>' : '') + '</div>'
-            +   '<div style="flex-shrink:0;display:flex;align-items:center;gap:6px;"><span style="font-size:'+(inner?'12':'13')+'px;font-weight:800;color:'+(_isPayHold?'#B45309':'#6A1A1A')+';">'+e.pax+'명</span>'+pxBtn+edBtn+del+'</div>'
+            +   '<div style="flex-shrink:0;display:flex;align-items:center;gap:6px;"><span style="font-size:'+(inner?'11.5':'13')+'px;font-weight:800;color:'+(_isPayHold?'#B45309':(inner?'#9A7A45':'#6A1A1A'))+';">'+e.pax+'명</span>'+pxBtn+edBtn+del+'</div>'
             + '</div>'
             + ((kkBtn || xBtn) ? '<div style="margin-top:5px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">'+kkBtn+xBtn+'</div>' : '')
             + (amt && !_isPayHold ? '<div style="font-size:11.5px;color:#666;margin-top:2px;">'+amt+'</div>' : '')
@@ -70068,7 +70136,11 @@ function tcalRenderDetail(dateStr) {
           : '<span style="font-weight:800;color:#1a1a18;">'+nm2+'</span>';
         var breakdown = row.parts.map(function(p){ return p.pax + ''; }).join(' + ');
         var amt2 = row.amount ? ('₩'+row.amount.toLocaleString()) : '';
-        html += '<div style="padding:11px 16px 8px;border-top:1px solid #f4f1ec;background:#FFFDF7;">'
+        var _agSum = _tcalAgencySum(row.parts);   // 🆕 2026-11-15 대행비 합 — 모든 줄의 구성이 결제액과 맞을 때만
+        if(amt2 && _agSum != null && _agSum > 0) amt2 += ' (대행비 ₩' + _agSum.toLocaleString() + ')';
+        // 🆕 2026-11-15 묶음 전체를 한 상자로 — 머리줄 아래 줄들은 왼쪽 세로선에 매달린다(.tcal-grp-kids)
+        html += '<div class="tcal-grp" style="border-top:1px solid #f4f1ec;background:#FFFDF7;">'
+          + '<div style="padding:11px 16px 6px;">'
           + '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">'
           +   '<div style="min-width:0;font-size:13px;">'
           +     '<span style="font-size:9.5px;font-weight:800;color:#8A5A1E;background:#FBF2E0;border:1px solid #EEDCBB;border-radius:6px;padding:1px 6px;">묶음 '+row.parts.length+'건</span> '
@@ -70077,8 +70149,10 @@ function tcalRenderDetail(dateStr) {
           +   '<div style="flex-shrink:0;font-size:15px;font-weight:900;color:#6A1A1A;">'+row.pax+'명</div>'
           + '</div>'
           + '<div style="font-size:11px;color:#9a8f7e;margin-top:3px;">'+breakdown+' 명으로 나눠 결제'+(amt2?(' · 합계 '+amt2):'')+'</div>'
-          + '</div>';
-        row.parts.forEach(function(p){ html += partHtml(p, true); });
+          + '</div>'
+          + '<div class="tcal-grp-kids" style="margin:0 16px 10px 24px;border-left:2px solid #E2CFA6;">';
+        row.parts.forEach(function(p, i){ html += partHtml(p, true, i); });
+        html += '</div></div>';
       });
     }
     // 🆕 2026-11-03 취소·환불 — 예약 수·잔여에 넣지 않는다 · 금액은 슈퍼어드민에게만(파트너는 사유·처리 주체만)
