@@ -4,8 +4,8 @@
 #   픽스처 = fx_repurchase_live_2026-11-15(가드 원문) + fx_round_move_live_2026-11-16(이동 경로에 걸리는 라이브 트리거 원문 · md5 대조) + 재구매 v2
 #   리마인드 패치는 t_reminder_day_admin.sh 가 만든 t_rda(라이브 md5 52d0603a·b42fdace 재현)를 본떠서 본다.
 cd "$(dirname "$0")/../.."
-FX=sql/_test/fx_repurchase_live_2026-11-15; FX2=sql/_test/fx_round_move_live_2026-11-16; MIG=supabase/migrations/20261116_round_move_sync.sql
-H="-h /tmp -U postgres"; DB=t_rmove
+FX=sql/_test/fx_repurchase_live_2026-11-15; FX2=sql/_test/fx_round_move_live_2026-11-16; MIG=${TAAM_TEST_MIG:-supabase/migrations/20261116_round_move_sync.sql}
+H="-h /tmp -U postgres"; DB=${TAAM_TEST_DB:-t_rmove}   # TAAM_TEST_DB 로 DB 이름을 바꿀 수 있다(여러 세션이 같이 돌 때)
 psql $H -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1; psql $H -d postgres -q -c "create database $DB" >/dev/null
 P="psql $H -d $DB -q -At -v ON_ERROR_STOP=1"
 Q="psql $H -d $DB -q -At"
@@ -129,7 +129,7 @@ ok "겹침: 회원3(다른집 03.17 18:30) · 재구매 창: 회원4(R3 04.10 ·
 ok "수동 기록 후보 1 · 기한 바뀔 예외 1" "1|1" "$($P -c "select jsonb_array_length('$pvj'::jsonb->'manual')||'|'||('$pvj'::jsonb->>'exceptions')")"
 ok "회원은 미리보기 못 함" 1 "$(as_uid $M1 "select public.taam_round_move_preview('R1','2027.03.17',null)" | grep -c FORBIDDEN)"
 ok "비로그인 실행 권한 없음(다섯 RPC)" 0 "$($P -c "select count(*) from pg_proc where proname in ('taam_round_move_preview','taam_round_reschedule','taam_round_move_resync','taam_round_moves','taam_round_move_notify') and has_function_privilege('anon', oid, 'execute')")"
-ok "내부 도우미는 회원이 못 부른다(계획·적용)" "false|false" "$($P -c "select has_function_privilege('authenticated','public._taam_round_move_plan(text,date,text,date[],text[])','execute')||'|'||has_function_privilege('authenticated','public._taam_round_move_apply(text,date,text,date,text,date[],text[],text,text)','execute')")"
+ok "내부 도우미는 회원이 못 부른다(계획·적용·따라올 날짜)" "false|false|false" "$($P -c "select has_function_privilege('authenticated','public._taam_round_move_plan(text,date,text,date[],text[],jsonb)','execute')||'|'||has_function_privilege('authenticated','public._taam_round_move_apply(text,date,text,date,text,date[],text[],text,text,jsonb)','execute')||'|'||has_function_privilege('authenticated','public._taam_round_follow_spec(text,boolean)','execute')")"
 
 echo "── 5. 날짜 바꾸기 RPC"
 o=$(su "select public.taam_round_reschedule('R1','2027.03.17',null,'2027.03.09','18:00','{}')"); ok "화면이 본 옛 값과 다르면 STALE_ROUND" 1 "$(echo "$o" | grep -c STALE_ROUND)"
@@ -218,7 +218,7 @@ ok "낡은 화면의 초대 → 회차 날짜 · 고른 시각 그대로" "2027.
 echo "── 11. 다시 실행 · 모르는 가드"
 out=$($P -f $MIG 2>&1); ok "두 번째 RUN: ❌ 는 ③④ 둘 · 오류 0" "2|0" "$(echo "$out" | grep -c '❌')|$(echo "$out" | grep -c ERROR)"
 ok "  가드 덩어리 한 번만" 1 "$($P -c "select (length(prosrc)-length(replace(prosrc,'ROUND_MOVE_20261116','')))/length('ROUND_MOVE_20261116') from pg_proc where proname='taam_guard_purchase_unique'")"
-DB2=t_rmove_unk; psql $H -d postgres -q -c "drop database if exists $DB2" >/dev/null 2>&1; psql $H -d postgres -q -c "create database $DB2" >/dev/null
+DB2=${DB}_unk; psql $H -d postgres -q -c "drop database if exists $DB2" >/dev/null 2>&1; psql $H -d postgres -q -c "create database $DB2" >/dev/null
 P2="psql $H -d $DB2 -q -At -v ON_ERROR_STOP=1"
 for f in $FX/fixture.sql $FX2/fixture_extra.sql $FX/fns.sql $FX2/fns_extra.sql $FX2/ksk_sync.sql $FX/triggers.sql $FX2/triggers_extra.sql; do $P2 -f $f >/dev/null; done
 $P2 -c "create or replace function public.taam_guard_purchase_unique() returns trigger language plpgsql as \$\$ begin return new; end \$\$" >/dev/null
@@ -226,15 +226,148 @@ out=$($P2 -f $MIG 2>&1)
 ok "모르는 가드 판 → ① ❌ · 트리거 안 만듦" "1|0" "$(echo "$out" | grep -c '① .*❌\|❌ 가드')|$($P2 -c "select count(*) from pg_trigger where tgname in ('trg_taam_tp_round_move','trg_taam_tp_round_lock')")"
 psql $H -d postgres -q -c "drop database if exists $DB2" >/dev/null 2>&1
 
-echo "── 12. 리마인드 중복 방지에 방문일 (t_rda = 라이브 52d0603a · b42fdace 재현)"
+echo "── 11-2. 1차 판(기다리는 회원 잠금) → 2차 판으로 바꾼다"
+$P >/dev/null <<'SQL'
+do $x$ declare d text; begin
+  d := pg_get_functiondef('public.taam_guard_purchase_unique()'::regprocedure);
+  d := replace(d, E'    if not pg_try_advisory_xact_lock(hashtext(\'tkuniq_\' || new.user_id::text)) then   -- 그 회원의 다른 구매가 진행 중 — 기다리지 않고 busy\n      raise exception \'ROUND_MOVE_MEMBER_BUSY\' using errcode = \'55P03\';\n    end if;\n',
+                  E'    perform pg_advisory_xact_lock(hashtext(\'tkuniq_\' || new.user_id::text));\n');
+  execute d;
+end $x$;
+SQL
+ok "  (되돌린 1차 판 모양)" "1|0" "$($P -c "select (prosrc like '%ROUND_MOVE_20261116%')::int||'|'||(prosrc like '%ROUND_MOVE_MEMBER_BUSY%')::int from pg_proc where proname='taam_guard_purchase_unique'")"
+out=$($P -f $MIG 2>&1)
+ok "  다시 RUN → 회원 잠금 try-lock · 덩어리 한 번 · ❌ 는 ③④ 둘" "1|1|2" "$($P -c "select (prosrc like '%ROUND_MOVE_MEMBER_BUSY%')::int||'|'||(length(prosrc)-length(replace(prosrc,'ROUND_MOVE_20261116','')))/length('ROUND_MOVE_20261116') from pg_proc where proname='taam_guard_purchase_unique'")|$(echo "$out" | grep -c '❌')"
+ok "  좌석 날짜 고정 트리거는 중복 가드 뒤(zdate_pin) · 옛 이름 없음" "1|0" "$($P -c "select count(*) from pg_trigger where tgname='trg_taam_guard_ticket_zdate_pin'")|$($P -c "select count(*) from pg_trigger where tgname='trg_taam_guard_ticket_date_pin'")"
+
+# ── 2차 검토(RM-1~6) — 새 회차들로 따로 본다(가드를 끄고 시드 · 회원 결제 행은 같은 회원·회차 하나씩)
+seed2(){ $P <<SQL >/dev/null
+set session_replication_role = replica;
+delete from public.ticket_round_moves where round_id in ('RX','RP','RI','RK','RD','RT');
+delete from public.guest_remind_log; delete from public._push_calls;
+delete from public.notifications where type='ticket_date_changed';
+delete from public.tickets where ticket_product_id in ('RX','RP','RI','RK','RD','RT');
+delete from public.reservation_invites where ticket_product_id in ('RX','RP','RI','RK','RD','RT');
+delete from public.kashikiri_charges where event_id in (select id from public.kashikiri_events where ticket_product_id in ('RX','RP','RI','RK','RD','RT')) or id in ('$C2X');
+delete from public.kashikiri_teams where event_id in (select id from public.kashikiri_events where ticket_product_id in ('RX','RP','RI','RK','RD','RT'));
+delete from public.kashikiri_events where ticket_product_id in ('RX','RP','RI','RK','RD','RT');
+delete from public.purchase_rule_exceptions where ticket_product_id in ('RX','RP','RI','RK','RD','RT');
+delete from public.ticket_products where id in ('RX','RP','RI','RK','RD','RT');
+insert into public.ticket_products(id,rest_id,rest_name,date,time,status,total_pax) values
+ ('RX','$RB','다른집','2027.06.10','18:00','active',20),('RP','$RB','다른집','2026.10.01','18:00','active',20),
+ ('RI','$RB','다른집','2027.07.10','18:00','active',20),('RK','$RB','다른집','2027.08.10','18:00','active',20),
+ ('RD','$RB','다른집','2027.09.10','18:00','active',20),('RT','$RB','다른집','2027.10.10','18:00','active',20);
+insert into public.tickets(id,user_id,restaurant_id,restaurant_name,ticket_product_id,reservation_date,visit_time,party_size,price,status,purchase_id,buyer_name,buyer_phone,extra_data) values
+ ('$X1','$M1','$RB','다른집','RX','2027.06.10','18:00',2,100,'active','PAYH-X1',null,null,'{}'),
+ ('$X3','$M3','$RB','다른집','RI','2027.07.10','18:00',2,100,'active','INV-e3000000-1',null,null,'{"inviteId":"$IX3"}'),
+ ('$XL','$SU','$RB','다른집','RD','2027.09.10','18:00',1,0,'active','LINK-d2000000-2','손님X','01055556666','{"chargeId":"$C2X","linkInvite":true}'),
+ ('$XA1','$M6','$RB','다른집','RT','2027.10.10','18:00',2,100,'active','PAYH-XA1',null,null,'{}'),
+ ('$XA2','$M7','$RB','다른집','RT','2027.10.10','18:00',2,100,'active','PAYH-XA2',null,null,'{}');
+insert into public.reservation_invites(id,host_user_id,invitee_user_id,restaurant_id,restaurant_name,visit_date,visit_time,pax,status,ticket_product_id) values
+ ('$IX2','$SU','$M2','$RB','다른집','2027.06.10','18:00',2,'sent','RX'),('$IX3','$SU','$M3','$RB','다른집','2027.07.10','18:00',2,'paid','RI');
+insert into public.kashikiri_events(id,venue_id,venue_name,event_date,event_time,ticket_product_id,created_by) values
+ ('$EP','$RB','다른집','2026-10-01','18:00','RP','$SU'),('$EK','$RB','다른집','2027-08-10','18:00','RK','$SU');
+insert into public.kashikiri_teams(id,event_id,pax) values ('$CP','$EP',2),('$CK','$EK',2);
+insert into public.kashikiri_charges(id,event_id,team_id,label,status,purpose,payer_name) values ('$CP','$EP','$CP','정산P','paid','custom','정산P'),('$CK','$EK','$CK','정산K','paid','custom','정산K');
+insert into public.kashikiri_charges(id,label,status,purpose,subtitle,link_invite) values ('$C2X','손님X','paid','ticket','2027.09.10 18:00',true);
+insert into public.guest_remind_log(ticket_id,d,result) values ('$XL',3,'sent'),('$XL',1,'sent');
+set session_replication_role = origin;
+select public._taam_ksk_seat_sync('$EP'); select public._taam_ksk_seat_sync('$EK');
+SQL
+}
+X1=f2000000-0000-4000-8000-000000000001; X3=f2000000-0000-4000-8000-000000000003; XL=f2000000-0000-4000-8000-000000000004
+XA1=f2000000-0000-4000-8000-000000000005; XA2=f2000000-0000-4000-8000-000000000006
+IX2=e2000000-0000-4000-8000-000000000002; IX3=e3000000-0000-4000-8000-000000000003
+EP=c2000000-0000-4000-8000-000000000001; EK=c2000000-0000-4000-8000-000000000002
+CP=d2000000-0000-4000-8000-000000000001; CK=d2000000-0000-4000-8000-000000000002; C2X=d2000000-0000-4000-8000-000000000003
+seed2
+
+echo "── 12. 2차 RM-1 — 연도 실수(NEW_DATE_PAST)를 고치는 이동이 처음 날짜의 예약을 데려온다"
+$P -c "update public.ticket_products set date='2026.06.24' where id='RX'" >/dev/null
+ok "연도 실수 → NEW_DATE_PAST · 예약·초대 그대로" "NEW_DATE_PAST|2027.06.10|2027.06.10" "$($P -c "select errors->0->>'code' from public.ticket_round_moves where round_id='RX' order by id desc limit 1")|$(dt $X1 | cut -d' ' -f1)|$($P -c "select visit_date from public.reservation_invites where id='$IX2'")"
+pv=$(su "select public.taam_round_move_preview('RX','2027.06.24',null)" | grep '^{')
+ok "  고치는 미리보기: 처음 날짜의 예약·초대가 「옮김」 · 옛 날짜 지남 경고 없음" "move,move|0" "$($P -c "select string_agg(e->>'action',',' order by e->>'kind' desc) from jsonb_array_elements('$pv'::jsonb->'rows') e")|$($P -c "select count(*) from jsonb_array_elements_text('$pv'::jsonb->'warnings') w where w='old_date_past'")"
+ok "  미리보기에 마지막 기록 번호" "$($P -c "select max(id) from public.ticket_round_moves where round_id='RX'")" "$($P -c "select '$pv'::jsonb->>'last_move_id'")"
+o=$(su "update public.ticket_products set date='2027.06.24' where id='RX'"); ok "  앱이 직접 보낸 저장은 거절(남은 예약이 있다)" 1 "$(echo "$o" | grep -c ROUND_RESCHEDULE_REQUIRED)"
+o=$(su "select public.taam_round_reschedule('RX','2027.06.24',null,'2026.06.24','18:00','{}')")
+ok "  옮기기 RPC → 예약·초대 2027.06.24 · 기록의 from 은 처음 날짜" "2027.06.24|2027.06.24|2027.06.10" "$(dt $X1 | cut -d' ' -f1)|$($P -c "select visit_date from public.reservation_invites where id='$IX2'")|$($P -c "select e->'from'->>'d' from public.ticket_round_moves m, jsonb_array_elements(m.moved) e where m.round_id='RX' and m.id=(select max(id) from public.ticket_round_moves where round_id='RX') and e->>'kind'='ticket'")"
+$P -c "update public.ticket_products set date='언젠가' where id='RX'" >/dev/null
+$P -c "update public.ticket_products set date='2027.06.30' where id='RX'" >/dev/null
+ok "  못 읽는 날짜(NEW_DATE_UNREADABLE) 뒤 SQL Editor 로 고침 → 따라온다" "2027.06.30|2027.06.30" "$(dt $X1 | cut -d' ' -f1)|$($P -c "select visit_date from public.reservation_invites where id='$IX2'")"
+
+echo "── 13. 2차 RM-2 — 다시 맞추기는 따로 바꾼 시간을 지킨다"
+su "select public.taam_round_reschedule('RT','2027.10.10','19:00','2027.10.10','18:00','{}')" >/dev/null
+$P -c "update public.tickets set visit_time='18:00' where id='$XA2'" >/dev/null   # ⏰ 시간 변경 — 회원7 만 18:00 으로
+($Q -c "begin; select 1 from public.tickets where id='$XA1' for update; select pg_sleep(3); commit;" >/dev/null 2>&1 &)
+sleep 0.7
+$P -c "update public.ticket_products set date='2027.10.17' where id='RT'" >/dev/null
+ok "  트리거 이동: 잠긴 회원6 은 옛 날짜(busy) · 회원7 은 날짜만 옮기고 18:00 그대로" "2027.10.10 19:00|2027.10.17 18:00|busy" "$(dt $XA1)|$(dt $XA2)|$($P -c "select errors->0->>'code' from public.ticket_round_moves where round_id='RT' order by id desc limit 1")"
+sleep 3
+o=$(su "select public.taam_round_move_resync('RT')")
+ok "  다시 맞추기 → 회원6 만 2027.10.17 19:00 · 회원7 은 18:00 그대로(종전엔 19:00 으로 되돌렸다)" "2027.10.17 19:00|2027.10.17 18:00|1" "$(dt $XA1)|$(dt $XA2)|$($P -c "select jsonb_array_length(moved) from public.ticket_round_moves where round_id='RT' order by id desc limit 1")"
+
+echo "── 14. 2차 RM-3 — 이동 중(트리거 경로)에 들어온 홀드는 새 날짜로 · 같은 회원의 다른 구매와 교착 없음"
+($Q -c "begin; update public.ticket_products set date='2027.06.07' where id='RX'; select pg_sleep(2.5); commit;" >/dev/null 2>&1 &)
+sleep 0.7
+o=$(as_uid $M4 "insert into public.tickets(user_id,restaurant_id,restaurant_name,ticket_product_id,reservation_date,visit_time,party_size,price,status,purchase_id,extra_data) values ('$M4','$RB','다른집','RX','2027.06.30','18:00',2,0,'hold','PAYH-RX-M4','{}')")
+sleep 2.3
+ok "  이동 중 들어온 회원 홀드 → 기다렸다 새 날짜(2027.06.07) · 오류 없음" "2027.06.07|0" "$($P -c "select reservation_date from public.tickets where purchase_id='PAYH-RX-M4'")|$(echo "$o" | grep -c ERROR)"
+$P -c "insert into public.purchase_rule_exceptions(user_id,ticket_product_id,allow_dup,allow_time,extra,expires_at,note) values ('$M1','RX',true,true,1,now()+interval '300 days','x')" >/dev/null
+$P -c "create or replace function public._t_slow() returns trigger language plpgsql as \$\$ begin if new.purchase_id like 'PAYH-RX-M1b%' then perform pg_sleep(2); end if; return new; end \$\$; create trigger trg_taam_guard_ticket_v_slow before insert on public.tickets for each row execute function public._t_slow();" >/dev/null
+RS=$(mktemp); ($Q -c "begin; set local taam.uid='$M1'; set local role authenticated; insert into public.tickets(user_id,restaurant_id,restaurant_name,ticket_product_id,reservation_date,visit_time,party_size,price,status,purchase_id,extra_data) values ('$M1','$RB','다른집','RX','2027.06.07','18:00',2,0,'hold','PAYH-RX-M1b','{}'); commit;" > $RS 2>&1 &)
+sleep 0.6
+o=$($Q -c "begin; update public.ticket_products set date='2027.06.14' where id='RX'; select pg_sleep(2.5); commit;" 2>&1)
+sleep 2.5
+ok "  회원 잠금을 쥔 같은 회원의 구매 · 이동 — 교착 없음 · 이동은 회원1 행을 busy 로 남김 · 구매는 새 날짜" "0|0|busy|2027.06.14" "$(grep -c deadlock $RS)|$(echo "$o" | grep -c deadlock)|$($P -c "select e->>'code' from public.ticket_round_moves m, jsonb_array_elements(m.errors) e where m.round_id='RX' and m.id=(select max(id) from public.ticket_round_moves where round_id='RX') and e->>'pid'='PAYH-X1'")|$($P -c "select reservation_date from public.tickets where purchase_id='PAYH-RX-M1b'")"
+rm -f $RS; $P -c "drop trigger trg_taam_guard_ticket_v_slow on public.tickets" >/dev/null
+o=$(su "select public.taam_round_move_resync('RX')"); ok "  다시 맞추기로 회원1 도 새 날짜" "2027.06.14" "$(dt $X1 | cut -d' ' -f1)"
+
+echo "── 15. 2차 RM-4 — 정산 좌석 동기화가 실패한 뒤 다시 맞추기가 좌석을 맞춘다"
+$P -c "create or replace function public._t_boom() returns trigger language plpgsql as \$\$ begin if new.purchase_id like 'KSK-%' and current_setting('test.boom', true) = '1' then raise exception 'deadlock detected (simulated)' using errcode='40P01'; end if; return new; end \$\$; create trigger zz_t_boom before update on public.tickets for each row execute function public._t_boom();" >/dev/null
+o=$($Q -c "begin; set local taam.uid='$SU'; set local role authenticated; set local test.boom='1'; select public.taam_round_reschedule('RK','2027.08.17',null,'2027.08.10','18:00','{}'); commit;" 2>&1)
+ok "  옮기기: 정산 회차는 옮겨졌지만 좌석 동기화 실패(ksk_sync 오류) · 좌석은 옛 날짜" "2027-08-17|2027.08.10|ksk_sync" "$($P -c "select event_date from public.kashikiri_events where id='$EK'")|$($P -c "select reservation_date from public.tickets where purchase_id like 'KSK-%' and extra_data->>'eventId'='$EK' and status<>'cancelled'")|$($P -c "select errors->0->>'kind' from public.ticket_round_moves where round_id='RK' order by id desc limit 1")"
+$P -c "drop trigger zz_t_boom on public.tickets" >/dev/null
+o=$(su "select public.taam_round_move_resync('RK')")
+ok "  다시 맞추기 → 좌석 2027.08.17 · 「이미 모두 옮겨져 있다」가 아니라 기록(정산 좌석 1)" "2027.08.17|0|1" "$($P -c "select reservation_date from public.tickets where purchase_id like 'KSK-%' and extra_data->>'eventId'='$EK' and status<>'cancelled'")|$(echo "$o" | grep -c '"move_id": null')|$($P -c "select jsonb_array_length(side->'ksk'->0->'seats') from public.ticket_round_moves where round_id='RK' order by id desc limit 1")"
+o=$(su "select public.taam_round_move_resync('RK')"); ok "  한 번 더 → 옮길 것 없음(기록 없음)" 1 "$(echo "$o" | grep -c '"move_id": null')"
+
+echo "── 16. 2차 RM-5 — 다시 맞추기로 옮긴 좌석의 부제·알림톡 기록 · 좌석이 남은 결제 초대에 알림"
+($Q -c "begin; select 1 from public.tickets where id='$XL' for update; select pg_sleep(2.5); commit;" >/dev/null 2>&1 &)
+sleep 0.6
+$P -c "update public.ticket_products set date='2027.09.17' where id='RD'" >/dev/null
+ok "  잠긴 비회원 링크 좌석 → busy · 부제·알림톡 기록 그대로" "2027.09.10|2027.09.10 18:00|2" "$(dt $XL | cut -d' ' -f1)|$($P -c "select subtitle from public.kashikiri_charges where id='$C2X'")|$($P -c "select count(*) from public.guest_remind_log where ticket_id='$XL'")"
+sleep 2.4
+o=$(su "select public.taam_round_move_resync('RD')")
+ok "  다시 맞추기 → 좌석 2027.09.17 · 부제 2027.09.17 18:00 · 알림톡 기록 지움" "2027.09.17|2027.09.17 18:00|0" "$(dt $XL | cut -d' ' -f1)|$($P -c "select subtitle from public.kashikiri_charges where id='$C2X'")|$($P -c "select count(*) from public.guest_remind_log where ticket_id='$XL'")"
+($Q -c "begin; select 1 from public.tickets where id='$X3' for update; select pg_sleep(2.5); commit;" >/dev/null 2>&1 &)
+sleep 0.6
+$P -c "update public.ticket_products set date='2027.07.17' where id='RI'" >/dev/null
+RMID=$($P -c "select max(id) from public.ticket_round_moves where round_id='RI'")
+ok "  결제된 초대는 옮기고 그 좌석(INV-)은 잠겨 남음" "invite|busy" "$($P -c "select string_agg(e->>'kind',',') from public.ticket_round_moves m, jsonb_array_elements(m.moved) e where m.id=$RMID")|$($P -c "select errors->0->>'code' from public.ticket_round_moves where id=$RMID")"
+nr=$(su "select public.taam_round_move_notify($RMID)")
+ok "  알림 → 회원3 에게 초대로 한 줄(구매 내역 링크) · 종전엔 0" "1|/?open_ticket_hist=1" "$($P -c "select count(*) from public.notifications where user_id='$M3' and type='ticket_date_changed'")|$($P -c "select max(url) from public.notifications where user_id='$M3' and type='ticket_date_changed'")"
+sleep 2
+o=$(su "select public.taam_round_move_resync('RI')")
+RMID2=$($P -c "select max(id) from public.ticket_round_moves where round_id='RI'")
+nr=$(su "select public.taam_round_move_notify($RMID2)")
+ok "  다시 맞추기 기록도 알림을 보낼 수 있다(앱이 묻는다) — 좌석으로 한 줄 더" "resync|2" "$($P -c "select via from public.ticket_round_moves where id=$RMID2")|$($P -c "select count(*) from public.notifications where user_id='$M3' and type='ticket_date_changed'")"
+
+echo "── 17. 2차 RM-6 — 지난 회차의 정산 좌석은 「옮길 예약」이 아니다"
+pv=$(su "select public.taam_round_move_preview('RP','2026.10.02',null)" | grep '^{')
+ok "  미리보기: 정산 회차·정산 좌석 둘 다 남김(past_round) · 「옮김/정산」 없음" "keep:past_round,keep:past_round|0" "$($P -c "select string_agg((e->>'action')||':'||(e->>'reason'),',') from jsonb_array_elements('$pv'::jsonb->'rows') e")|$($P -c "select count(*) from jsonb_array_elements('$pv'::jsonb->'rows') e where e->>'action' in ('move','event')")"
+o=$(su "update public.ticket_products set date='2026.10.02' where id='RP'")
+ok "  앱이 직접 보낸 저장으로 지난 회차 날짜를 고칠 수 있다(종전엔 ROUND_RESCHEDULE_REQUIRED · 옮기기 RPC 는 NEW_DATE_PAST — 어느 쪽도 안 됐다)" "0|2026.10.02" "$(echo "$o" | grep -c ERROR)|$($P -c "select date from public.ticket_products where id='RP'")"
+o=$(su "update public.ticket_products set date='2027.08.24' where id='RK'"); ok "  앞으로 올 정산 회차의 좌석은 여전히 「옮길 예약」(직접 저장 거절)" 1 "$(echo "$o" | grep -c ROUND_RESCHEDULE_REQUIRED)"
+
+echo "── 18. 리마인드 중복 방지에 방문일 (t_rda = 라이브 52d0603a · b42fdace 재현)"
 if psql $H -d postgres -Atc "select 1 from pg_database where datname='t_rda'" | grep -q 1; then
-  DB3=t_rmove_rem; psql $H -d postgres -q -c "drop database if exists $DB3" >/dev/null 2>&1
+  DB3=${DB}_rem; psql $H -d postgres -q -c "drop database if exists $DB3" >/dev/null 2>&1
   psql $H -d postgres -q -c "create database $DB3 template t_rda" >/dev/null
   P3="psql $H -d $DB3 -q -At"
   ok "리마인드 원문 md5" "52d0603ae3c0bd4482784b5799ca82c7|b42fdace23b67d970608cf8fa1cf98b0" "$($P3 -c "select md5(prosrc) from pg_proc where proname='taam_visit_reminder_notify'")|$($P3 -c "select md5(prosrc) from pg_proc where proname='_taam_vr_seat_status'")"
   # 7 절(리마인드 패치)만 떼어 돌린다 — t_rda 에는 이동 픽스처가 없다
-  awk '/^-- ── 7\. 리마인드/{p=1} /^-- ── 확인/{p=0} p{print}' $MIG > /tmp/_rm7.sql
-  out=$($P3 -f /tmp/_rm7.sql 2>&1); ok "패치 적용 오류 없음" 0 "$(echo "$out" | grep -c ERROR)"
+  RM7=$(mktemp); awk '/^-- ── 7\. 리마인드/{p=1} /^-- ── 확인/{p=0} p{print}' $MIG > $RM7
+  out=$($P3 -f $RM7 2>&1); rm -f $RM7; ok "패치 적용 오류 없음" 0 "$(echo "$out" | grep -c ERROR)"
   ok "두 함수에 표시" "1|1" "$($P3 -c "select count(*) from pg_proc where proname='taam_visit_reminder_notify' and prosrc like '%VR_DATEKEY_20261116%'")|$($P3 -c "select count(*) from pg_proc where proname='_taam_vr_seat_status' and prosrc like '%VR_DATEKEY_20261116%'")"
   U=$($P3 -c "select id from public.profiles where coalesce(role,'user') not in ('superadmin','super_admin','admin') order by id limit 1")
   [ -z "$U" ] && { U=a1000000-0000-4000-8000-000000000001; $P3 -c "insert into auth.users(id) values ('$U') on conflict do nothing; insert into public.profiles(id,role,display_name) values ('$U','user','리마인드회원') on conflict do nothing" >/dev/null 2>&1; }
