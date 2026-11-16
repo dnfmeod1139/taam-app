@@ -52341,6 +52341,20 @@ function _rmReopen(d, manual, capN){
   var occ = parseInt(manual ? s.after_move : s.after_stay, 10);
   return isNaN(occ) ? true : occ < cap;
 }
+// 🆕 2026-11-16(6차 RVAPP1-1) 미리보기 seats → 날짜 바꾸기 응답의 round 모양({status, auto_soldout}) — 응답을 잃고 다시 읽어 이은 길도
+//   _rmMoved 가 이어서 저장할 status 를 서버 값(방금 풀렸으면 active)으로 맞추게
+function _rmRoundOf(seats){
+  return (seats && typeof seats === 'object' && seats.status) ? { status: String(seats.status), auto_soldout: seats.auto !== false } : null;
+}
+// 🆕 2026-11-16(6차 RVAPP1-2) 결과를 모르는 이동(응답을 잃고 다시 봐도 옛 날짜)의 취소표 「끔」은 바로 닫지 않는다 — 서버가 아직 잠금을 기다리다
+//   늦게 커밋할 수 있어서(그때 끔이 닫혀 있으면 슈퍼어드민이 끈 알림이 전원에게 나갔다). 결과가 정해질 때 닫는다:
+//   앞선 이동이 들어가 있었으면(_rmRecovered) 바로 · 안 들어갔으면 문장 시간(8초)이 넉넉히 지난 뒤에만 — 아니면 정한 시간(5분) 뒤 저절로 풀린다
+function _rmUnknownEnd(id, applied){
+  var u = window._rmUnknown;
+  if(!u || String(u.id) !== String(id)) return;
+  window._rmUnknown = null;
+  if(u.rsTok && (applied || !u.t0 || (Date.now() - u.t0) > 15000)) try { _rsMuteEnd(u.rsTok); } catch(_m){}
+}
 // 확인 시트 — 옮겨 갈 것 · 남길 것 · 겹침 · 환불 규정 · 경고 · 알림/수동 기록 선택. Promise<{notify, manual, rs}|null>
 //   o.capAsks = 정원 늘림 질문이 뒤에 같이 돈다(취소표 알림 켬/끔은 그 질문 하나에서 — 한 질문 · 한 끔) · rs = 이 시트의 취소표 토글(안 보였으면 null)
 function _rmAsk(d, o){
@@ -52388,12 +52402,14 @@ function _rmAsk(d, o){
     el.style.cssText = 'position:fixed;inset:0;z-index:9800;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;';
     var li = function(t, c){ return '<div style="font-size:12px;line-height:1.65;color:' + (c || '#444') + ';margin-top:4px;">' + t + '</div>'; };
     el.innerHTML = '<div style="background:#fff;border-radius:18px;width:100%;max-width:420px;max-height:88vh;overflow:auto;padding:20px 18px;box-sizing:border-box;font-family:var(--font-main);">'
-      + '<div style="font-size:16px;font-weight:800;color:#1a1a18;">📅 예약도 같이 옮길까요?</div>'
+      + '<div style="font-size:16px;font-weight:800;color:#1a1a18;">' + (mv.length ? '📅 예약도 같이 옮길까요?' : '📅 회차 날짜를 옮길까요?') + '</div>'
       + '<div style="font-size:12.5px;font-weight:700;color:#1a1a18;margin-top:8px;background:#f7f5f2;border-radius:10px;padding:10px 12px;">' + _rmEsc(d.rest || '') + '<br>'
       +   '<span style="color:#9a9486;">' + _rmEsc(_rmDt(d.cur && d.cur.date, d.cur && d.cur.time)) + '</span> → <b>' + _rmEsc(_rmDt(d['new'] && d['new'].date, d['new'] && d['new'].time)) + '</b>'
       +   (fromDs.length ? '<div id="rmFromNote" style="font-size:11.5px;font-weight:700;color:#B45309;margin-top:4px;">예약은 ' + _rmEsc(fromDs.map(function(x){ return _rmDt(x); }).join(' · ')) + ' 에서 옮겨 갑니다 <span style="font-weight:500;color:#8a8580;">(회차에 적힌 날짜와 다름 — 앞선 이동이 끝나지 않았던 예약)</span></div>' : '')
       + '</div>'
-      + li('<b>같이 옮겨 갑니다</b> — ' + _rmEsc(mvLines || '없음') + (pax ? ' · ' + pax + '명' : ''))
+      // 🆕 2026-11-16(6차 RV-SRV-1) 옮길 예약이 없는 회차도 이 시트를 거친다(옛 날짜의 캘린더 수동 기록 · 매진이 풀리는 이동) — 회원 알림은 보낼 사람이 없어 묻지 않는다
+      + (mv.length ? li('<b>같이 옮겨 갑니다</b> — ' + _rmEsc(mvLines) + (pax ? ' · ' + pax + '명' : ''))
+                   : li('<b>옮겨 갈 예약은 없습니다</b> — 회차 날짜만 바뀝니다', '#444'))
       + (names.length ? li(_rmEsc(names.slice(0, 12).join(', ') + (names.length > 12 ? ' 외 ' + (names.length - 12) + '명' : '')), '#8a8580') : '')
       + (tk.length ? li('따로 바꾼 시간 ' + tk.length + '건은 날짜만 옮기고 시간은 그대로', '#8a8580') : '')
       + (kpTxt ? li('그대로 두는 것 — ' + _rmEsc(kpTxt), '#8a8580') : '')
@@ -52401,8 +52417,8 @@ function _rmAsk(d, o){
       + ((d.refund && (d.refund.gain || d.refund.loss)) ? li('환불 규정(방문 31일 전까지)이 바뀌는 예약 — ' + (d.refund.loss ? '환불 불가 구간으로 들어감 ' + d.refund.loss + '건 ' : '') + (d.refund.gain ? '다시 환불 가능 ' + d.refund.gain + '건' : ''), '#9B1C1C') : '')
       + (warn.length ? li('⚠ ' + warn.map(_rmEsc).join('<br>⚠ '), '#9B1C1C') : '')
       + (d.exceptions ? li('구매 규정 예외 ' + d.exceptions + '건의 기한도 새 방문일 끝으로 옮깁니다', '#8a8580') : '')
-      + '<label style="display:flex;gap:8px;align-items:flex-start;margin-top:12px;font-size:12.5px;font-weight:700;color:#1a1a18;cursor:pointer;">'
-      +   '<input type="checkbox" id="rmNotify" checked style="margin-top:2px;"> 🔔 회원에게 알림 보내기 <span style="font-weight:500;color:#8a8580;">(알림함 + 푸시 · 한국어·영어·일본어)</span></label>'
+      + (mv.length ? '<label style="display:flex;gap:8px;align-items:flex-start;margin-top:12px;font-size:12.5px;font-weight:700;color:#1a1a18;cursor:pointer;">'
+      +   '<input type="checkbox" id="rmNotify" checked style="margin-top:2px;"> 🔔 회원에게 알림 보내기 <span style="font-weight:500;color:#8a8580;">(알림함 + 푸시 · 한국어·영어·일본어)</span></label>' : '')
       + (man.length ? '<label style="display:flex;gap:8px;align-items:flex-start;margin-top:8px;font-size:12.5px;font-weight:700;color:#1a1a18;cursor:pointer;">'
       +   '<input type="checkbox" id="rmManual"' + (manOk.length ? (manShared ? '' : ' checked') : ' disabled') + ' style="margin-top:2px;"> 캘린더 수동 기록 ' + (manOk.length || man.length) + '건도 같은 날로 옮기기'
       +   (manDs.length ? ' <span style="font-weight:500;color:#8a8580;">(' + _rmEsc(manDs.map(function(x){ return _rmDt(x); }).join(' · ')) + ' 기록 포함)</span>' : '')
@@ -52464,14 +52480,17 @@ async function _rmFlow(id){
       try { if(typeof _tkRefreshFromServer === 'function') await _tkRefreshFromServer([id], { quiet: true }); } catch(_rf){}
       return;
     }
-    if(window._rmUnknown && String(window._rmUnknown.id) === id) window._rmUnknown = null;   // 서버가 옛 값 그대로 — 앞선 이동은 들어가지 않았다
+    _rmUnknownEnd(id, false);   // 서버가 옛 값 그대로 — 앞선 이동은 들어가지 않았다(그 끔은 문장 시간이 지났으면 닫는다)
     var mv = (d.rows || []).filter(function(r){ return r.action === 'move' || r.action === 'event'; });
     var dv = (d.rows || []).filter(function(r){ return r.action === 'keep' && r.reason === 'date_diverged'; });
-    if(!mv.length){   // 옮길 예약 없음 — 종전 저장
-      if(dv.length) showToast('⚠', '회차와 다른 날짜로 적힌 예약 ' + dv.length + '건', '이 저장으로는 옮기지 않습니다 — 예약 캘린더에서 확인해 주세요');
-      pass(); return;
-    }
     var cap = _tuCapNeeds();
+    if(!mv.length){   // 옮길 예약 없음
+      if(dv.length) showToast('⚠', '회차와 다른 날짜로 적힌 예약 ' + dv.length + '건', '이 저장으로는 옮기지 않습니다 — 예약 캘린더에서 확인해 주세요');
+      // 🆕 2026-11-16(6차 RV-SRV-1) 날짜를 옮기며 매진이 풀릴 수 있거나(옛 날짜의 캘린더 수동 기록만으로 자동 매진) 옮길 수 있는 기록이 있으면
+      //   같은 확인 시트(취소표 켬/끔 · 「기록도 옮기기」)를 거쳐 날짜 바꾸기 RPC 로 — 바로 저장하면 묻지 않고 취소표가 나갔고, 그런 회차의 기록은 영영 못 옮겼다
+      var capN0 = cap ? cap.nCap : 0;
+      if(!(d.date_changed && (d.manual_movable === true || _rmReopen(d, false, capN0) || _rmReopen(d, true, capN0)))){ pass(); return; }   // 종전 저장
+    }
     var a = await _rmAsk(d, { id: id, capAsks: !!cap });
     if(!a) return;
     if(String(_tuEditId) !== id || _pendingTicket !== p){ showToast('ⓘ', '화면이 바뀌어 저장하지 않았습니다', ''); return; }
@@ -52496,7 +52515,7 @@ async function _rmFlow(id){
       }
       if(String(_tuEditId) !== id || _pendingTicket !== p){ if(rsTok) _rsMuteEnd(rsTok); showToast('ⓘ', '화면이 바뀌어 저장하지 않았습니다', ''); return; }
     }
-    var r;
+    var r, rmT0 = Date.now();
     try {
       r = await window.sb.rpc('taam_round_reschedule', { p_round: id, p_date: nd, p_time: nt,
         p_expect_date: base.date, p_expect_time: base.time || null, p_opts: { move_manual: !!a.manual } });
@@ -52510,12 +52529,12 @@ async function _rmFlow(id){
       }
       var rc = await _rmRecheck(id, nd, nt || base.time, d.last_move_id);
       if(rc.applied){
-        x = { ok: true, changed: true, move_id: rc.move ? rc.move.id : null, move: rc.move, recovered: true };
+        x = { ok: true, changed: true, move_id: rc.move ? rc.move.id : null, move: rc.move, recovered: true, round: _rmRoundOf(rc.seats) };
         showToast('ⓘ', '응답이 끊겼지만 서버에 반영됐습니다', '회차 날짜·예약을 새 날짜로 옮겼습니다 — 나머지를 저장합니다');
       } else {
         // 아직 안 들어갔거나 확인 못 함 — 늦게 들어갈 수 있으니 기억해 두고, 다시 저장하면 서버에서 먼저 확인한다
-        window._rmUnknown = { id: id, nd: nd, nt: nt || base.time, last: d.last_move_id || 0, notify: !!a.notify, at: Date.now() };
-        if(rsTok) _rsMuteEnd(rsTok);
+        // 🆕 2026-11-16(6차 RVAPP1-2) 취소표 「끔」은 닫지 않고 기억한다 — 서버가 늦게 옮기면 그때도 꺼져 있어야 한다(_rmUnknownEnd 가 결과가 정해질 때 닫는다)
+        window._rmUnknown = { id: id, nd: nd, nt: nt || base.time, last: d.last_move_id || 0, notify: !!a.notify, at: Date.now(), t0: rmT0, rsTok: rsTok || null };
         // 3차 NEW-7 — 몇 번 다시 봐도 옛 값이었다는 것은 「옮겨지지 않았다」가 아니다(서버가 아직 잠금을 기다리는 중일 수 있다) — 단정하지 않는다
         showToast('⚠', rc.unknown ? '결과를 확인하지 못했습니다' : '아직 반영되지 않았습니다(연결 끊김)',
           (rc.unknown ? '회차 날짜·예약이 옮겨졌을 수도 있습니다' : (rc.checks || 1) + '번 다시 봤지만 서버 값은 아직 옛 날짜입니다 — 늦게 옮겨질 수도 있습니다') + ' · 잠시 뒤 다시 「수정하기」를 누르면 서버에서 먼저 확인합니다 · ' + String(r.error.message || '').slice(0, 50));
@@ -52547,7 +52566,7 @@ function _rmMoved(id, p, nd, nt, base, x, notify){
   if(rs === 'active' && p && p.status === 'soldout'){ p.status = 'active'; if(o && o.status === 'soldout') o.status = 'active'; }
   window._rmOpened = window._rmOpened || {};
   window._rmOpened[id] = { date: nd, time: nt || (base && base.time) || '', at: (base && base.at) || Date.now() };
-  if(window._rmUnknown && String(window._rmUnknown.id) === id) window._rmUnknown = null;
+  _rmUnknownEnd(id, true);   // 옮겨졌다 — 앞서 결과를 몰랐던 이동의 끔이 남아 있으면 닫는다(6차 RVAPP1-2)
   window._rmPending = { id: id, res: x, notify: !!notify };
 }
 // 응답을 잃은 옮기기 — 서버 회차가 이미 목표 날짜·시간이면 이 미리보기 뒤에 생긴 기록을 찾는다. {applied, move} · {applied:false, checks} · {unknown:true, checks}
@@ -52563,7 +52582,7 @@ async function _rmRecheck(id, nd, nt, lastId){
       var pv = await window.sb.rpc('taam_round_move_preview', { p_round: id, p_date: nd, p_time: nt || null });
       if(pv.error || !pv.data || !pv.data.ok){ res = { unknown: true, checks: i + 1 }; continue; }
       if(!_rmSameDT(pv.data.cur, nd, nt)){ res = { applied: false, checks: i + 1 }; continue; }
-      return { applied: true, move: await _rmFindMove(id, nd, lastId) };
+      return { applied: true, move: await _rmFindMove(id, nd, lastId), seats: pv.data.seats || null };
     } catch(e){ res = { unknown: true, checks: i + 1 }; }
   }
   return res;
@@ -52598,7 +52617,9 @@ async function _rmRecovered(id, p, nd, nt, pass, d){
     notify = confirm('이 회차는 이미 ' + _rmDt(mv.new_date, mv.new_time) + ' 로 옮겨져 있습니다(앞선 저장의 응답이 끊겼거나 다른 기기에서 옮김).\n예약 ' + (mv.moved || []).length + '건 — 회원에게 알림을 보낼까요? (알림함 + 푸시)');
   }
   showToast('ⓘ', '회차 날짜는 이미 옮겨져 있습니다', '앞선 저장이 서버에 반영돼 있었습니다 — 결과를 보여 드리고 나머지 칸을 저장합니다');
-  _rmMoved(id, p, nd, nt, (window._rmOpened || {})[id], { ok: true, changed: true, move_id: mv ? mv.id : null, move: mv, recovered: true }, notify);
+  _rmUnknownEnd(id, true);   // 🆕 6차(RVAPP1-2) 앞선 이동이 들어가 있었다 — 그때 건 끔은 할 일을 마쳤다
+  // 🆕 6차(RVAPP1-1) 이어서 저장할 status 를 방금 읽은 서버 회차 상태로(옮기며 자동 매진이 풀렸으면 active) — 수정 화면을 연 때의 'soldout' 으로 다시 덮지 않게
+  _rmMoved(id, p, nd, nt, (window._rmOpened || {})[id], { ok: true, changed: true, move_id: mv ? mv.id : null, move: mv, recovered: true, round: _rmRoundOf(d && d.seats) }, notify);
   pass();
 }
 // 옮긴 뒤 나머지 칸을 저장하지 못하고 끝났다(정원 늘림 질문 취소 · 끔 실패 · 화면 바뀜) — 예약은 이미 옮겨졌으니 결과·알림은 그대로 낸다(앱 RM-1)
@@ -73583,13 +73604,14 @@ async function tuEditReview(id, approve) {
     var note = approve ? '' : prompt('반려 사유(파트너에게 보입니다 · 선택):', '');
     if (!approve && note === null) return;
     // 🆕 2026-11-16 날짜·시간 변경이 든 신청 — 승인하면 서버 트리거가 그 회차의 예약을 같이 옮긴다. 몇 건이 움직이는지 미리 보여 주고, 승인 뒤 결과·알림
-    var _pe = t.pendingEdit || {}, _rmLast = null, _rmNote = '', _rmRs = false;
+    var _pe = t.pendingEdit || {}, _rmLast = null, _rmNote = '', _rmRs = false, _pvFail = false, _pvOk = false;
     if (approve && (('date' in _pe) || ('time' in _pe))) {
       try {
         var _nd = String(_pe.date || ((typeof _tkFullDate === 'function') ? _tkFullDate(t) : t.date) || '');
         if (/^\d{1,2}\.\d{1,2}$/.test(_nd)) _nd = String(((typeof _tkFullDate === 'function') ? _tkFullDate(t) : '') || '').split('.')[0] + '.' + _nd;
         var _pv = await window.sb.rpc('taam_round_move_preview', { p_round: String(id), p_date: _nd, p_time: _rmHm(_pe.time) || null });
         if (_pv && !_pv.error && _pv.data && _pv.data.ok) {
+          _pvOk = true;
           var _mvN = (_pv.data.rows || []).filter(function(r){ return r.action === 'move' || r.action === 'event'; }).length;
           var _cfN = (_pv.data.conflicts || []).length;
           _rmNote = '\n\n📅 날짜·시간이 바뀝니다 (' + _rmDt(_pv.data.cur && _pv.data.cur.date, _pv.data.cur && _pv.data.cur.time) + ' → ' + _rmDt(_pv.data['new'] && _pv.data['new'].date, _pv.data['new'] && _pv.data['new'].time) + ')'
@@ -73603,8 +73625,14 @@ async function tuEditReview(id, approve) {
             var _ml = await window.sb.rpc('taam_round_moves', { p_round: String(id), p_after_id: 0 });
             if (_ml && !_ml.error && Array.isArray(_ml.data)) _rmLast = _ml.data.length ? (parseInt(_ml.data[_ml.data.length - 1].id, 10) || 0) : 0;
           }
-        }
-      } catch(_pve){ _rmLast = null; }
+        } else _pvFail = true;
+      } catch(_pve){ _rmLast = null; if (!_pvOk) _pvFail = true; }   // 미리보기는 읽었는데 이동 기록 목록에서 던진 것은 미리보기 실패가 아니다
+      // 🆕 2026-11-16(6차 RVAPP1-3) 미리보기를 못 읽었으면(일시 오류) 지금 매진인 회차의 날짜 변경은 매진을 풀 수 있다고 보고 같은 토글로 묻는다 —
+      //   _rmReopen 의 「seats 가 없으면 지금 매진이면 풀 수도 있다(묻는 쪽이 안전하다)」와 같은 규칙. 종전엔 그냥 확인창으로 승인해 묻지 않고 취소표가 나갈 수 있었다
+      if (_pvFail) {
+        _rmNote = '\n\n📅 날짜·시간이 바뀝니다 — 같이 옮겨 갈 예약 수는 확인하지 못했습니다(미리보기 실패)';
+        if ('date' in _pe) _rmRs = _rmReopen({ round: String(id) }, false, ('total_pax' in _pe) ? _pe.total_pax : 0);
+      }
     }
     var _rsA = null;
     if (approve && _rmRs && _rsIsSuper()) {

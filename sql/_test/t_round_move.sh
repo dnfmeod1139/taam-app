@@ -101,7 +101,7 @@ ok "옛 가드: 형제 행 이동이 TIME_CONFLICT" 1 "$(echo "$o" | grep -c TIM
 echo "── 2. 마이그레이션"
 out=$($P -f $MIG 2>&1); echo "$out" | grep -E "❌|ERROR" | head -5
 ok "확인 표 ❌ 는 ③④ 둘뿐(이 픽스처엔 리마인드 함수가 없다 — 12절에서 따로 본다)" "2|2" "$(echo "$out" | grep -c '❌')|$(echo "$out" | grep -c '^[③④].*❌')"
-ok "확인 표 ✅ 6줄(①②⑤⑥⑦⑩)" 6 "$(echo "$out" | grep -c '✅')"
+ok "확인 표 ✅ 7줄(①②⑤⑥⑦⑩⑪)" 7 "$(echo "$out" | grep -c '✅')"
 ok "가드 패치 표시" 1 "$($P -c "select count(*) from pg_proc where proname='taam_guard_purchase_unique' and prosrc like '%ROUND_MOVE_20261116%'")"
 seed
 
@@ -661,9 +661,27 @@ begin
 end $f$;
 SQL
 o=$(su "select public.taam_round_reschedule('RS7','2029.02.17',null,'2029.02.10','18:00','{\"move_manual\":true}')")
-ok "  (마) 도우미를 한 번 · 회차·새 날짜·옵션 그대로 · 그때 정원 잠금은 아직 없음" "1|RS7|2029-02-17|true|false" "$($P -c "select count(*)||'|'||max(round)||'|'||max(nd)||'|'||bool_and((opts->>'move_manual')::boolean)||'|'||bool_or(tkcap_held) from public._t_mrlock")"
+ok "  (마) 기록도 옮기면 도우미를 두 번(6차 MANREC_RELOCK — 열쇠를 쥔 뒤 늦게 온 기록 줄까지) · 회차·새 날짜·옵션 그대로 · 두 번 다 정원 잠금 전" "2|RS7|2029-02-17|true|false" "$($P -c "select count(*)||'|'||max(round)||'|'||max(nd)||'|'||bool_and((opts->>'move_manual')::boolean)||'|'||bool_or(tkcap_held) from public._t_mrlock")"
 ok "  (마) 옮긴 뒤: 회차·좌석·기록 2029.02.17" "2029.02.17|2029.02.17 18:00|2029-02-17" "$($P -c "select date from public.ticket_products where id='RS7'")|$(dt $S7A)|$($P -c "select ymd from public.daegwan_manual where venue_id='$RF' and name='오프라인02'")"
+o=$(su "select public.taam_round_reschedule('RS2','2028.12.24',null,'2028.12.17','18:00','{}')")
+ok "  (마) 기록을 안 옮기면 도우미 한 번(날짜 열쇠만)" "3|false" "$($P -c "select count(*)||'|'||coalesce((select (opts->>'move_manual') is not null from public._t_mrlock order by at desc limit 1)::text,'-') from public._t_mrlock")"
 $P -c "drop function public._taam_manrec_move_lock(text,date,jsonb); drop table public._t_mrlock" >/dev/null
+# (사) 6차(RV-SRV-1 · ROUND_MOVE_RECOUNT) 20261117 의 _taam_round_soldout_sync 가 있으면 날짜를 옮긴 뒤 그 회차를 다시 센다 — 좌석 행이 없는 회차(기록만으로 매진)도 풀리게
+$P <<'SQL' >/dev/null
+create table if not exists public._t_mrsync(at timestamptz default clock_timestamp(), round text, d text);
+create or replace function public._taam_round_soldout_sync(p_tp text) returns text language plpgsql security definer set search_path = public as $f$
+begin insert into public._t_mrsync(round, d) select p_tp, tp.date from public.ticket_products tp where tp.id = p_tp; return 'same'; end $f$;
+SQL
+o=$(su "select public.taam_round_reschedule('RS2','2028.12.31',null,'2028.12.24','18:00','{}')")
+ok "  (사) 날짜를 옮기면 다시 센다 — 한 번 · 옮긴 뒤 날짜로" "1|2028.12.31" "$($P -c "select count(*)||'|'||coalesce(max(d),'-') from public._t_mrsync where round='RS2'")"
+o=$(su "select public.taam_round_reschedule('RS2','2028.12.31','19:30','2028.12.31','18:00','{}')")
+ok "  (사) 시간만 바꾸면 안 센다(기록은 날짜에 붙는다)" "1|19:30" "$($P -c "select count(*) from public._t_mrsync where round='RS2'")|$($P -c "select time from public.ticket_products where id='RS2'")"
+$P -c "update public.ticket_products set date='2029.01.03' where id='RS2'" >/dev/null
+ok "  (사) SQL Editor 의 날짜 저장(트리거 길)도 다시 센다" "2|2029.01.03" "$($P -c "select count(*)||'|'||max(d) from public._t_mrsync where round='RS2'")"
+$P -c "create or replace function public._taam_round_soldout_sync(p_tp text) returns text language plpgsql as \$f\$ begin raise exception 'SYNC_BOOM_TEST'; end \$f\$;" >/dev/null
+o=$(su "select public.taam_round_reschedule('RS2','2029.01.07',null,'2029.01.03','19:30','{}')")
+ok "  (사) 다시 세기가 실패해도 날짜 이동은 된다(warning)" "2029.01.07|0" "$($P -c "select date from public.ticket_products where id='RS2'")|$(echo "$o" | grep -c 'ERROR')"
+$P -c "drop function public._taam_round_soldout_sync(text); drop table public._t_mrsync" >/dev/null
 # (바) 기록 옮기기가 실패하면 이동 전체가 되돌아간다(반쪽 이동 금지 — 종전엔 errors 에 적고 회차만 옮겼다)
 $P -c "create function public._t_mr_boom() returns trigger language plpgsql as \$f\$ begin if new.ymd is distinct from old.ymd then raise exception 'MR_BOOM_TEST'; end if; return new; end \$f\$;
        create trigger trg_zz_mr_boom before update on public.daegwan_manual for each row execute function public._t_mr_boom();" >/dev/null

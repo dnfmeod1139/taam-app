@@ -74,6 +74,14 @@
 --   RCHK-4 미리보기 manual_target_shared · manual_target_rounds — 옮긴 기록이 새 날짜의 같은 매장 다른 회차(기록을 세는 상태)에도 세인다.
 --        앱은 「옮긴 기록은 그날 ○○ 회차 좌석에도 셉니다」를 보이고 「기록도 옮기기」 기본값을 끈다(귀속 규칙대로라 서버는 막지 않는다).
 --
+-- 6차(5차 판 재점검 반영 · 2026-11-16) — 역시 라이브 전이라 그 자리에서
+--   RV-SRV-1 날짜를 옮기면 회차의 매진을 새 날짜로 다시 센다(ROUND_MOVE_RECOUNT · 트리거 taam_tp_round_move · 20261117 의 _taam_round_soldout_sync 가 있을 때만).
+--        종전엔 좌석 행이 옮겨 가며 sync_ticket_soldout 이 돌 때만 다시 셌다 — 살아 있는 좌석 행이 없는 회차(옛 날짜의 기록만으로 자동 매진)는
+--        미리보기가 「풀린다(reopen.stay)」고 했는데 실제로는 빈 회차가 자동 매진(점유 0)으로 남고 취소표도 없었다(슈퍼어드민의 켬/끔도 헛돌았다).
+--        앱은 옮길 예약이 없는 회차도 이동이 매진을 풀 수 있거나 옮길 수 있는 기록이 있으면 같은 확인 시트(취소표 토글 · 「기록도 옮기기」)를 거쳐 옮긴다.
+--   RV-SRV-2 기록도 옮기는 날짜 바꾸기는 _taam_manrec_move_lock 을 한 번 더 부른다(MANREC_RELOCK) — 첫 부름의 기록 줄 잠금은 날짜 열쇠를 잡기 전의
+--        스냅샷이라 그 사이 그 날짜에 들어와 커밋된 기록을 못 잡았고, 그 기록을 고치는 거래와 교착해 날짜 바꾸기 전체가 40P01 로 실패했다.
+--
 -- 되돌리기: drop trigger trg_taam_tp_round_move on public.ticket_products; drop trigger trg_taam_tp_round_lock on public.ticket_products;
 --   (가드 덩어리는 GUC 가 없으면 아무 일도 안 한다 — 그대로 둬도 된다)
 -- ============================================================================
@@ -666,6 +674,18 @@ begin
                                         public._taam_round_follow_dates(v_od, v_spec), array[v_ot],
                                         coalesce(nullif(current_setting('taam.round_move_via', true), ''), 'trigger'),
                                         nullif(current_setting('taam.round_move_note', true), ''), v_spec);
+  -- 6차(RV-SRV-1 · ROUND_MOVE_RECOUNT) 날짜가 바뀌었으면 회차의 매진을 새 날짜로 다시 센다(20261117 의 도우미가 있을 때만 — 캘린더 수동 기록을 셀 때).
+  --   종전엔 좌석 행이 옮겨 가며 sync_ticket_soldout 이 돌 때만 다시 셌다 — 살아 있는 좌석 행이 없는 회차(옛 날짜의 기록만으로 자동 매진 · 취소 행뿐)는
+  --   아무도 다시 세지 않아 빈 회차가 자동 매진(점유 0)으로 남았고 취소표도 없었다(미리보기 reopen.stay 는 풀린다고 했다 · 슈퍼어드민의 켬/끔도 헛돌았다).
+  --   도우미는 자동 매진만 풀고(손 잠금 · 숨김 · 승인 대기는 그대로) 판매중이 꽉 차면 매진으로 — 취소표는 지연 트리거·끔(taam_restock_mute)이 커밋 때 정한다.
+  --   RPC(taam_round_reschedule) · 직접 저장 · 파트너 수정 승인 · SQL Editor 모두 이 트리거 하나를 지난다. 실패는 warning — 날짜 이동은 막지 않는다.
+  if v_od is distinct from v_nd and v_nd is not null and to_regprocedure('public._taam_round_soldout_sync(text)') is not null then
+    begin
+      perform public._taam_round_soldout_sync(new.id::text);
+    exception when others then
+      raise warning 'ROUND_MOVE_RECOUNT % — %', new.id, sqlerrm;
+    end;
+  end if;
   return null;
 end $$;
 revoke all on function public.taam_tp_round_move() from public, anon, authenticated;
@@ -912,6 +932,13 @@ begin
   -- MANREC_LOCK_ORDER · 캘린더 수동 기록의 잠금 순서(기록 줄 → 매장·날짜 열쇠 → 정원 잠금) — 20261117_manual_record_seats.sql 의 도우미가 있을 때만
   if to_regprocedure('public._taam_manrec_move_lock(text,date,jsonb)') is not null then
     perform public._taam_manrec_move_lock(p_round, v_nd, p_opts);
+    -- 6차(RV-SRV-2 · MANREC_RELOCK) 기록도 옮길 때는 한 번 더 부른다 — 첫 부름의 기록 줄 잠금(FOR UPDATE)은 날짜 열쇠를 잡기 **전**에 보아서,
+    --   열쇠를 쥔 다른 거래가 그 날짜에 넣거나 옮겨 와 그 뒤 커밋한 기록은 못 잡는다. 그 기록을 다른 세션이 고치면(줄 잠금 → 우리가 쥔 날짜 열쇠를
+    --   기다림) 우리가 뒤에서 그 줄을 기다려 교착(40P01)이 났고, 우리가 희생되면 날짜 바꾸기 전체가 실패했다. 열쇠를 쥔 지금은 그 날짜에 새 기록이
+    --   못 들어오니 다시 부르면 늦게 온 줄까지 정원 잠금 **전**에 잠근다(날짜 열쇠는 다시 잡아도 그대로 — 거래 잠금은 겹쳐 잡힌다).
+    if coalesce(p_opts->>'move_manual', '') = 'true' then
+      perform public._taam_manrec_move_lock(p_round, v_nd, p_opts);
+    end if;
   end if;
   perform pg_advisory_xact_lock(hashtext('tkcap_' || p_round));
   -- 초대 줄은 잠그지 않는다 — 초대 확정(초대 줄 → 좌석 행 → 정원 잠금)과 엇갈려 교착이 날 수 있다. 트리거가 NOWAIT 로 보고 잠겨 있으면 「다시 맞추기」 대상으로 남긴다
@@ -1230,4 +1257,9 @@ select '⑩ 캘린더 수동 기록 좌석과의 잠금 순서(MANREC_LOCK_ORDER
        case when to_regprocedure('public._taam_manrec_move_lock(text,date,jsonb)') is not null then '있음' else '아직 없음(그 파일이 오면 부른다)' end,
        case when position('MANREC_LOCK_ORDER' in coalesce((select p.prosrc from pg_proc p where p.oid = to_regprocedure('public.taam_round_reschedule(text,text,text,text,text,jsonb)')), '')) > 0
              and position('MANREC_LOCK_ORDER' in coalesce((select p.prosrc from pg_proc p where p.oid = to_regprocedure('public._taam_round_move_apply(text,date,text,date,text,date[],text[],text,text,jsonb)')), '')) > 0
+            then '✅' else '❌' end
+union all
+select '⑪ 6차 — 날짜를 옮기면 매진을 다시 센다(ROUND_MOVE_RECOUNT · 좌석 행 없는 회차) · 기록도 옮길 때 늦게 온 기록 줄까지 잠근다(MANREC_RELOCK)',
+       case when position('ROUND_MOVE_RECOUNT' in coalesce((select p.prosrc from pg_proc p where p.oid = to_regprocedure('public.taam_tp_round_move()')), '')) > 0
+             and position('MANREC_RELOCK' in coalesce((select p.prosrc from pg_proc p where p.oid = to_regprocedure('public.taam_round_reschedule(text,text,text,text,text,jsonb)')), '')) > 0
             then '✅' else '❌' end;
