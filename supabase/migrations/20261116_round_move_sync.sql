@@ -42,6 +42,16 @@
 --   RM-6 정산 좌석은 정산 회차의 판정을 따른다(정산 회차가 옮겨 갈 때만 「옮길 예약」 — 지난 회차의 날짜를 고칠 수 있다)
 --   미리보기에 last_move_id(앱이 잃은 응답을 다시 확인하는 기준)
 --
+-- 3차(2차 판 검증 반영 · 2026-11-16) — 역시 라이브 전이라 그 자리에서
+--   NEW-1 오류가 남은 기록이 영원히 「끝나지 않음」이었다 — 그 (옛 날짜, 옛 시간) 짝이 뒤 이동마다 끼어 따로 바꾼 시간을 회차 시간으로 덮고
+--        회원에게 틀린 시간 알림이 갔다. → 기록은 남은 행이 있을 때만 open(행 오류 = 그 행이 살아 있고 뒤 기록이 안 옮김 · NEW_DATE_* = 그 옛 날짜에
+--        옮길 수 있는 행이 남음) · 회차의 지금 옛 날짜와 같은 날짜의 짝은 트리거·미리보기·앱 저장 잠금에서 뺀다(_taam_round_spec_skip_od)
+--   NEW-2 다시 맞추기도 짝은 open 기록에서만(날짜는 기록 전부) — 끝난 기록의 짝이 따로 바꾼 시간을 덮었다
+--   NEW-3 같은 회원에게 같은 새 날짜·시간을 가장 최근에 알렸으면 다시 보내지 않는다(skipped · already_notified)
+--   NEW-5 캘린더 수동 기록도 따라올 날짜 전부에서(연도 실수를 고치는 이동) · 미리보기 후보마다 ymd · movable
+--   NEW-6 좌석 날짜 고정이 날짜·시간을 바꿨으면 같은 날 같은 시간대 겹침을 고정한 값으로 다시 본다(TIME_CONFLICT · 예외 존중)
+--   덤: 연도 실수로 지난 날에 가 있는 회차의 「시간만」 바꾸기가 처음 날짜의 앞날 예약을 지난 날로 끌어왔다 → NEW_DATE_PAST 로 기록만
+--
 -- 되돌리기: drop trigger trg_taam_tp_round_move on public.ticket_products; drop trigger trg_taam_tp_round_lock on public.ticket_products;
 --   (가드 덩어리는 GUC 가 없으면 아무 일도 안 한다 — 그대로 둬도 된다)
 -- ============================================================================
@@ -94,38 +104,93 @@ revoke insert, update, delete on public.ticket_round_moves from anon, authentica
 revoke all on public.ticket_round_moves from anon;
 
 
--- ── 1-2. 끝나지 않은 이동 — 다음 이동·미리보기·다시 맞추기가 따라갈 옛 날짜와 (날짜, 시간) 짝 (2차 검토 RM-1 · RM-2) ─────────
---   오류가 남은 기록(NEW_DATE_PAST · NEW_DATE_UNREADABLE · busy · error · ksk_sync)의 옛 날짜에는 옮기지 못한 행이 남아 있을 수 있다.
+-- ── 1-2. 끝나지 않은 이동 — 다음 이동·미리보기·다시 맞추기가 따라갈 옛 날짜와 (날짜, 시간) 짝 (2차 검토 RM-1 · RM-2 · 3차 NEW-1 · NEW-2) ─────────
+--   오류가 남은 기록(NEW_DATE_PAST · NEW_DATE_UNREADABLE · busy · error)의 옛 날짜에는 옮기지 못한 행이 남아 있을 수 있다.
 --   종전엔 다음 이동이 회차의 「지금」 옛 날짜 하나만 따라가서, 연도 실수(NEW_DATE_PAST)를 고친 뒤에도 예약 전부가 처음 날짜에 남았다.
---   p_all = true(다시 맞추기)면 기록 전부의 옛 날짜·짝을 준다.
---   err = 아직 풀리지 않은 행 오류(뒤 기록이 그 행을 옮기지 않았다) → 그 기록의 옛 시간(hh:mm).
+--   3차(NEW-1): 기록이 「끝나지 않음(open)」인 것은 오류가 있어서가 아니라 **남은 행이 있을 때만**이다 — 종전엔 오류가 한 줄이라도 있으면
+--     영원히 open 이라, 그 기록의 (옛 날짜, 옛 시간) 짝이 몇 번이고 뒤 이동에 끼어 따로 바꾼 시간을 회차 시간으로 덮었다(회원에게 틀린 시간 알림).
+--     · 행 오류(busy · error — ticket/invite/event) — 그 행이 아직 살아 있고 뒤 기록이 그 행을 옮기지 않았을 때만 open
+--     · 기록 오류(NEW_DATE_PAST · NEW_DATE_UNREADABLE) — 그 옛 날짜에 아직 옮길 수 있는 행(살아 있고 방문 처리 안 된 · 지난 날 아님)이 남아 있을 때만 open
+--       (「뒤 기록이 있으면 닫는다」는 쓰지 않았다 — 뒤 기록이 또 NEW_DATE_PAST 면 처음 날짜의 예약이 영영 남는다)
+--     · 정산 좌석 동기화(ksk_sync)·부제·기록 지움 같은 곁가지 오류는 행을 옛 날짜에 남기지 않으므로 open 이 아니다(ksk 목록은 따로)
+--   p_all = true(다시 맞추기)면 기록 전부의 옛 날짜를 준다 — 짝(pairs)은 언제나 open 기록에서만(3차 NEW-2: 다시 맞추기가 끝난 기록의
+--     짝으로 따로 바꾼 시간을 덮었다). 회차의 지금 옛 날짜와 같은 날짜의 짝은 부르는 쪽이 뺀다(_taam_round_spec_skip_od).
+--   err = 아직 풀리지 않은 행 오류(뒤 기록이 그 행을 옮기지 않았고 아직 살아 있다) → 그 기록의 옛 시간(hh:mm).
 --   시간은 이 짝·오류로만 따라간다 — 예전 시간 전부를 따라가면 따로 바꾼 시간(⏰ 시간 변경)이 회차 시간으로 되돌아갔다(검토 RM-2).
 --   ksk = 정산 좌석 동기화가 실패했던 정산 회차(다시 맞추기가 다시 부른다 · 검토 RM-4)
+
+-- 그 행이 아직 살아 있나(취소·만료·환불 아님 · 초대는 보냄/결제됨 · 정산 회차는 이 회차에 있음)
+create or replace function public._taam_round_row_live(p_round text, p_kind text, p_id text)
+returns boolean language sql stable security definer set search_path = public as $$
+  select case p_kind
+    when 'ticket' then exists (select 1 from public.tickets t where t.id::text = p_id and t.ticket_product_id::text = p_round
+                                  and lower(coalesce(t.status, '')) not in ('cancelled', 'canceled', 'expired', 'failed', 'refunded'))
+    when 'invite' then exists (select 1 from public.reservation_invites i where i.id::text = p_id and i.ticket_product_id::text = p_round
+                                  and lower(coalesce(i.status, '')) in ('sent', 'paid'))
+    when 'event'  then exists (select 1 from public.kashikiri_events e where e.id::text = p_id and e.ticket_product_id = p_round)
+    else false end
+$$;
+revoke all on function public._taam_round_row_live(text, text, text) from public, anon, authenticated;
+
+-- 그 날짜에 이 회차의 「옮길 수 있는」 행이 남아 있나 — 살아 있고 방문 처리 안 된 좌석 행(정산 좌석은 정산 회차가 대신)·보냄/결제 초대·정산 회차.
+--   지난 날짜는 언제나 false(지난 회차의 행은 옮기지 않는다 — past_round)
+create or replace function public._taam_round_live_on(p_round text, p_date date)
+returns boolean language sql stable security definer set search_path = public as $$
+  select p_date is not null and p_date >= (now() at time zone 'Asia/Seoul')::date and (
+         exists (select 1 from public.tickets t
+                  where t.ticket_product_id::text = p_round
+                    and lower(coalesce(t.status, '')) not in ('cancelled', 'canceled', 'expired', 'failed', 'refunded', 'used', 'completed')
+                    and t.visit_status is null
+                    and coalesce(t.purchase_id, '') not like 'KSK-%'
+                    and public._taam_pu_visit_date(t.reservation_date) = p_date)
+      or exists (select 1 from public.reservation_invites i
+                  where i.ticket_product_id::text = p_round and lower(coalesce(i.status, '')) in ('sent', 'paid')
+                    and public._taam_pu_visit_date(i.visit_date) = p_date)
+      or exists (select 1 from public.kashikiri_events e where e.ticket_product_id = p_round and e.event_date = p_date))
+$$;
+revoke all on function public._taam_round_live_on(text, date) from public, anon, authenticated;
+
 create or replace function public._taam_round_follow_spec(p_round text, p_all boolean default false)
 returns jsonb language sql stable security definer set search_path = public as $$
   with m as (
     select m.id, m.via, public._taam_pu_visit_date(m.old_date) as od, public._taam_hhmm(m.old_time) as ot,
            coalesce(m.errors, '[]'::jsonb) as errs,
-           jsonb_array_length(coalesce(m.errors, '[]'::jsonb)) > 0 as open
+           exists (select 1 from jsonb_array_elements(coalesce(m.errors, '[]'::jsonb)) x
+                    where x->>'code' in ('NEW_DATE_PAST', 'NEW_DATE_UNREADABLE')) as rec_err
       from public.ticket_round_moves m
      where m.round_id = p_round),
-  e as (
-    select distinct on (x->>'id') x->>'id' as id, m.ot
+  x as (   -- 풀리지 않은 행 오류 — 뒤 기록이 그 행을 옮기지 않았고 그 행이 아직 살아 있다
+    select m.id as mid, m.ot, x->>'id' as rid
       from m cross join lateral jsonb_array_elements(m.errs) x
      where m.via <> 'resync'
        and x->>'kind' in ('ticket', 'invite', 'event') and nullif(x->>'id', '') is not null
        and not exists (select 1 from public.ticket_round_moves m2 cross join lateral jsonb_array_elements(m2.moved) y
                         where m2.round_id = p_round and m2.id > m.id and y->>'id' = x->>'id')
-     order by x->>'id', m.id desc)
+       and public._taam_round_row_live(p_round, x->>'kind', x->>'id')),
+  o as (
+    select m.*, (exists (select 1 from x where x.mid = m.id)
+                 or (m.rec_err and public._taam_round_live_on(p_round, m.od))) as open
+      from m)
   select jsonb_build_object(
-    'dates', coalesce((select jsonb_agg(distinct to_char(m.od, 'YYYY-MM-DD')) from m where m.od is not null and (p_all or m.open)), '[]'::jsonb),
-    'pairs', coalesce((select jsonb_agg(distinct jsonb_build_array(to_char(m.od, 'YYYY-MM-DD'), m.ot)) from m
-                        where m.od is not null and m.ot is not null and (p_all or m.open)), '[]'::jsonb),
-    'err',   coalesce((select jsonb_object_agg(e.id, e.ot) from e), '{}'::jsonb),
+    'dates', coalesce((select jsonb_agg(distinct to_char(o.od, 'YYYY-MM-DD')) from o where o.od is not null and (p_all or o.open)), '[]'::jsonb),
+    'pairs', coalesce((select jsonb_agg(distinct jsonb_build_array(to_char(o.od, 'YYYY-MM-DD'), o.ot)) from o
+                        where o.od is not null and o.ot is not null and o.open), '[]'::jsonb),
+    'err',   coalesce((select jsonb_object_agg(z.rid, z.ot) from (select distinct on (x.rid) x.rid, x.ot from x order by x.rid, x.mid desc) z), '{}'::jsonb),
+    'open',  coalesce((select jsonb_agg(o.id order by o.id) from o where o.open), '[]'::jsonb),
     'ksk',   coalesce((select jsonb_agg(distinct x->>'id') from m cross join lateral jsonb_array_elements(m.errs) x
                         where x->>'kind' = 'ksk_sync' and nullif(x->>'id', '') is not null), '[]'::jsonb))
 $$;
 revoke all on function public._taam_round_follow_spec(text, boolean) from public, anon, authenticated;
+
+-- 회차의 지금 옛 날짜(p_od)와 같은 날짜의 짝은 뺀다(3차 NEW-1) — 회차 날짜에 있는 행의 시간이 회차 시간과 다르면 그건 따로 바꾼 시간이다.
+--   그 날짜에 정말 못 옮긴 행은 행 오류(err)가 id 로 따라간다. 트리거 · 미리보기 · 앱 저장 잠금이 같이 쓴다
+create or replace function public._taam_round_spec_skip_od(p_spec jsonb, p_od date)
+returns jsonb language sql immutable as $$
+  select case when p_spec is null or p_od is null then p_spec else
+    jsonb_set(p_spec, '{pairs}', coalesce((select jsonb_agg(x) from jsonb_array_elements(coalesce(p_spec->'pairs', '[]'::jsonb)) x
+                                            where x->>0 is distinct from to_char(p_od, 'YYYY-MM-DD')), '[]'::jsonb)) end
+$$;
+revoke all on function public._taam_round_spec_skip_od(jsonb, date) from public, anon, authenticated;
 
 -- 따라올 날짜 = 회차의 옛 날짜 + 끝나지 않은 기록의 옛 날짜(날짜만)
 create or replace function public._taam_round_follow_dates(p_od date, p_spec jsonb)
@@ -327,11 +392,12 @@ begin
   v_live := p_spec is not null and (jsonb_array_length(coalesce(p_spec->'pairs', '[]'::jsonb)) > 0 or coalesce(p_spec->'err', '{}'::jsonb) <> '{}'::jsonb);
 
   -- 새 날짜가 오늘 이전 — 연도 실수 등(검토 C8). 옛 날짜(또는 끝나지 않은 이동이 남긴 날짜)가 오늘 이후였으면 아무것도 옮기지 않고 기록만
-  if p_via <> 'resync' and v_dch and p_nd < v_today
+  --   (3차) 날짜가 그대로인 시간만 바꾸기도 — 연도 실수로 지난 날에 가 있는 회차의 시간을 고치면 처음 날짜의 예약이 지난 날로 끌려왔다
+  if p_via <> 'resync' and p_nd < v_today
      and (p_od is null or p_od >= v_today or exists (select 1 from unnest(coalesce(p_fd, '{}'::date[])) d where d >= v_today)) then
     insert into public.ticket_round_moves(round_id, rest_name, old_date, old_time, new_date, new_time, moved_by, via, errors, note)
     values (p_round, v_tp.rest_name, to_char(p_od, 'YYYY.MM.DD'), p_ot, to_char(p_nd, 'YYYY.MM.DD'), p_nt, auth.uid(), p_via,
-            jsonb_build_array(jsonb_build_object('code', 'NEW_DATE_PAST', 'msg', '새 날짜가 오늘 이전이라 예약을 옮기지 않았습니다 — 날짜(연도)를 고치면 그때 같이 옮겨 갑니다')), p_note)
+            jsonb_build_array(jsonb_build_object('code', 'NEW_DATE_PAST', 'msg', '회차 날짜가 오늘 이전이라 예약을 옮기지 않았습니다 — 날짜(연도)를 고치면 그때 같이 옮겨 갑니다')), p_note)
     returning id into v_id;
     perform set_config('taam.round_move_last', v_id::text, true);
     return v_id;
@@ -477,12 +543,16 @@ begin
     exception when others then
       v_err := v_err || jsonb_build_object('kind', 'exception', 'code', 'error', 'sqlstate', sqlstate, 'msg', left(sqlerrm, 200));
     end;
-    -- 캘린더 수동 기록 — 앱이 고른 경우만(taam.round_move_manual = '1') · 같은 매장·옛 날짜 · 그 날 이 매장의 다른 회차가 없을 때
-    if coalesce(current_setting('taam.round_move_manual', true), '') = '1' and v_tp.rest_id is not null and p_od is not null
-       and not exists (select 1 from public.ticket_products o where o.rest_id::text = v_tp.rest_id and o.id::text <> p_round
-                        and public._taam_pu_visit_date(o.date) = p_od) then
+    -- 캘린더 수동 기록 — 앱이 고른 경우만(taam.round_move_manual = '1') · 같은 매장 · 따라올 날짜(회차의 옛 날짜 + 끝나지 않은 이동이 남긴 날짜 —
+    --   3차 NEW-5: 연도 실수를 고치는 이동은 처음 날짜의 기록을 옮겨야 한다) · 그 날 이 매장의 다른 회차가 없는 날짜만(미리보기 movable 과 같다)
+    if coalesce(current_setting('taam.round_move_manual', true), '') = '1' and v_tp.rest_id is not null then
       begin
-        with up as (update public.daegwan_manual m set ymd = p_nd where m.venue_id = v_tp.rest_id and m.ymd = p_od returning m.id, m.name, m.pax)
+        with up as (update public.daegwan_manual m set ymd = p_nd
+                     where m.venue_id = v_tp.rest_id
+                       and m.ymd = any(coalesce(p_fd, array[p_od])) and m.ymd is distinct from p_nd
+                       and not exists (select 1 from public.ticket_products o where o.rest_id::text = v_tp.rest_id and o.id::text <> p_round
+                                        and public._taam_pu_visit_date(o.date) = m.ymd)
+                     returning m.id, m.name, m.pax)
         select coalesce(jsonb_agg(to_jsonb(up)), '[]'::jsonb) into v_man from up;
       exception when others then
         v_err := v_err || jsonb_build_object('kind', 'manual', 'code', 'error', 'sqlstate', sqlstate, 'msg', left(sqlerrm, 200));
@@ -544,7 +614,7 @@ begin
   end if;
   if v_od is not distinct from v_nd and (v_nt is null or v_ot is not distinct from v_nt) then return null; end if;   -- 형식만 다른 저장
   -- 옛 날짜가 지난 회차는 옮기지 않는다(기록 · 방문 처리 안 된 행의 환불을 다시 열지 않게 — 결정 D3) — 계획이 past_round 로 남긴다
-  v_spec := public._taam_round_follow_spec(new.id::text, false);
+  v_spec := public._taam_round_spec_skip_od(public._taam_round_follow_spec(new.id::text, false), v_od);   -- 회차 날짜의 짝은 뺀다(3차 NEW-1)
   perform public._taam_round_move_apply(new.id::text, v_od, v_ot, coalesce(v_nd, v_od), v_nt,
                                         public._taam_round_follow_dates(v_od, v_spec), array[v_ot],
                                         coalesce(nullif(current_setting('taam.round_move_via', true), ''), 'trigger'),
@@ -559,7 +629,7 @@ returns int language plpgsql stable security definer set search_path = public as
 declare v int; v_spec jsonb;
 begin
   if not coalesce(public.is_superadmin(), false) then return 0; end if;   -- 파트너(승인 대기 회차 — 좌석 없음)·회원은 세지 않는다
-  v_spec := public._taam_round_follow_spec(p_round, false);
+  v_spec := public._taam_round_spec_skip_od(public._taam_round_follow_spec(p_round, false), p_od);   -- 트리거와 같은 짝(3차 NEW-1)
   -- 'event' = 정산 회차가 옮겨 갈 때의 정산 좌석뿐(계획이 정산 회차의 판정을 따른다 — 검토 RM-6)
   select count(*) into v from public._taam_round_move_plan(p_round, p_nd, p_nt, public._taam_round_follow_dates(p_od, v_spec), array[p_ot], v_spec) p
    where p.action in ('move', 'event') ;
@@ -595,19 +665,36 @@ end $$;
 --   지금 순서: 정원 잠금(tkcap_) → 회원 잠금(tkuniq_) → 회차 행 — 종전 INSERT 와 같다. 회차 이동 쪽은 회원 잠금을 기다리지 않는다(가드 덩어리의 try-lock).
 create or replace function public.taam_guard_ticket_date_pin()
 returns trigger language plpgsql security definer set search_path = public as $$
-declare v_d date; v_t text; v_traw text;
+declare v_d date; v_t text; v_traw text; v_od0 date; v_ot0 text; v_c jsonb;
 begin
   if nullif(btrim(coalesce(new.ticket_product_id::text, '')), '') is null then return new; end if;
   if coalesce(new.purchase_id, '') like 'KSK-%' then return new; end if;
   select public._taam_pu_visit_date(tp.date), public._taam_hhmm(tp.time), tp.time into v_d, v_t, v_traw
     from public.ticket_products tp where tp.id::text = new.ticket_product_id::text for no key update;
   if v_d is null then return new; end if;
-  if public._taam_pu_visit_date(new.reservation_date) is distinct from v_d or new.reservation_date is distinct from to_char(v_d, 'YYYY.MM.DD') then
+  v_od0 := public._taam_pu_visit_date(new.reservation_date); v_ot0 := public._taam_hhmm(new.visit_time);   -- 앞 가드(중복·시간대)가 본 값
+  if v_od0 is distinct from v_d or new.reservation_date is distinct from to_char(v_d, 'YYYY.MM.DD') then
     new.reservation_date := to_char(v_d, 'YYYY.MM.DD');
   end if;
   if btrim(coalesce(new.visit_time, '')) = '' and v_t is not null then new.visit_time := v_t;
   -- 회원 홀드의 시간은 회차 시간(결제 사실 칸 가드 payfacts_ins 와 같은 규칙 — 그 가드는 잠그기 전에 읽어 이동 중이면 옛 시간을 적는다)
   elsif coalesce(new.purchase_id, '') like 'PAYH-%' and btrim(coalesce(v_traw, '')) <> '' then new.visit_time := v_traw;
+  end if;
+  -- 3차 NEW-6 — 날짜·시간을 바꿔 고정했으면 같은 날 같은 시간대 겹침을 **고정한 값으로** 다시 본다.
+  --   중복·시간대 가드(trg_taam_guard_ticket_unique)는 이 트리거보다 먼저 돌아 낡은 화면이 보낸 옛 날짜(또는 이동 중 잠그지 않고 읽은 옛 회차 날짜)로
+  --   검사했다 — 새 날짜에서 같은 회원의 다른 예약과 겹쳐도 기록 없이 들어갔다. 가드와 같은 거름(빈 회원 · 취소 · 운영 행 · 남의 user_id 는
+  --   소유권 가드 몫)과 같은 식(_taam_rm_clash — 같은 회차 행 제외 · 구매 규정 예외(시간대) 존중). 회원 잠금(tkuniq_)은 가드가 이미 잡았다.
+  if (v_od0 is distinct from v_d or v_ot0 is distinct from public._taam_hhmm(new.visit_time))
+     and new.user_id is not null
+     and coalesce(new.status, '') not in ('cancelled', 'canceled', 'expired')
+     and not public._taam_ticket_is_ops(new.purchase_id, new.extra_data)
+     and not (auth.uid() is not null and new.user_id is distinct from auth.uid() and not public._taam_uid_is_super()) then
+    v_c := public._taam_rm_clash(new.user_id, new.ticket_product_id::text, v_d, coalesce(nullif(btrim(coalesce(new.visit_time, '')), ''), v_traw));
+    if v_c is not null then
+      raise exception 'TIME_CONFLICT: 같은 날 같은 시간대에 이미 예약이 있습니다 (% · % %)',
+        coalesce(v_c->>'rest', '다른 매장'), coalesce(v_c->>'date', v_d::text), coalesce(v_c->>'time', '')
+        using errcode = '42501';
+    end if;
   end if;
   return new;
 end $$;
@@ -648,7 +735,7 @@ begin
   end if;
   v_dch := v_od is distinct from v_nd; v_tch := v_nt is not null and v_ot is distinct from v_nt;
   -- 트리거와 같은 따라올 날짜(회차의 옛 날짜 + 끝나지 않은 이동이 남긴 날짜 — 검토 RM-1)
-  v_spec := public._taam_round_follow_spec(p_round, false);
+  v_spec := public._taam_round_spec_skip_od(public._taam_round_follow_spec(p_round, false), v_od);   -- 트리거와 같은 짝(3차 NEW-1)
   v_fd := public._taam_round_follow_dates(v_od, v_spec);
   v_live := jsonb_array_length(coalesce(v_spec->'pairs', '[]'::jsonb)) > 0 or coalesce(v_spec->'err', '{}'::jsonb) <> '{}'::jsonb;
   for r in select p.*, pr.display_name as name, pr.phone as phone
@@ -680,7 +767,8 @@ begin
       end if;
     end if;
   end loop;
-  if v_dch and v_nd < v_today then v_warn := v_warn || to_jsonb('new_date_past'::text); end if;
+  -- 날짜가 그대로인 시간만 바꾸기도 — 연도 실수로 지난 날에 가 있는 회차는 앞날의 예약을 옮기지 않는다(3차 · 적용과 같은 조건)
+  if v_nd < v_today and (v_dch or exists (select 1 from unnest(v_fd) d where d >= v_today)) then v_warn := v_warn || to_jsonb('new_date_past'::text); end if;
   -- 옛 날짜가 지나 남기는 행이 있을 때만(끝나지 않은 이동이 남긴 앞날의 행은 옮겨 간다 — 검토 RM-1)
   if v_past > 0 then v_warn := v_warn || to_jsonb('old_date_past'::text); end if;
   if v_dch and public._taam_pu_visit_date(v_tp.deadline_date) is not null and public._taam_pu_visit_date(v_tp.deadline_date) > v_nd then
@@ -698,9 +786,15 @@ begin
   select count(*) into v_exc from public.purchase_rule_exceptions x
    where x.ticket_product_id = p_round and x.revoked_at is null and v_dch
      and x.expires_at in (select ((d + 1)::timestamp at time zone 'Asia/Seoul') from unnest(v_fd) d where d is not null);
-  -- 캘린더 수동 기록 후보 — 같은 매장·옛 날짜 · 그날 이 매장의 다른 회차가 없을 때만 옮길 수 있다
-  select coalesce(jsonb_agg(jsonb_build_object('id', m.id, 'name', m.name, 'pax', m.pax, 'ttype', m.ttype) order by m.created_at), '[]'::jsonb)
-    into v_man from public.daegwan_manual m where v_dch and m.venue_id = v_tp.rest_id and m.ymd = v_od;
+  -- 캘린더 수동 기록 후보 — 같은 매장 · 따라올 날짜(회차의 옛 날짜 + 끝나지 않은 이동이 남긴 날짜 — 3차 NEW-5) · 날짜마다
+  --   그날 이 매장의 다른 회차가 없을 때만 옮길 수 있다(movable · 적용과 같은 조건)
+  select coalesce(jsonb_agg(jsonb_build_object('id', m.id, 'name', m.name, 'pax', m.pax, 'ttype', m.ttype,
+                                               'ymd', to_char(m.ymd, 'YYYY.MM.DD'),
+                                               'movable', not exists (select 1 from public.ticket_products o where o.rest_id::text = v_tp.rest_id and o.id::text <> p_round
+                                                                       and public._taam_pu_visit_date(o.date) = m.ymd))
+                            order by m.ymd, m.created_at), '[]'::jsonb)
+    into v_man from public.daegwan_manual m
+   where v_dch and m.venue_id = v_tp.rest_id and m.ymd = any(v_fd) and m.ymd is distinct from v_nd;
   return jsonb_build_object('ok', true, 'round', p_round, 'rest', v_tp.rest_name,
     'cur', jsonb_build_object('date', v_tp.date, 'time', v_tp.time),
     'new', jsonb_build_object('date', to_char(v_nd, 'YYYY.MM.DD'), 'time', coalesce(v_nt, v_tp.time)),
@@ -709,8 +803,9 @@ begin
     'warnings', v_warn, 'exceptions', v_exc, 'manual', v_man,
     -- 응답을 잃은 「옮기기」를 앱이 다시 확인할 때 쓰는 기준 — 이 미리보기 뒤에 생긴 기록만 이번 이동이다(검토 앱 RM-4)
     'last_move_id', coalesce((select max(m.id) from public.ticket_round_moves m where m.round_id = p_round), 0),
-    'manual_movable', not exists (select 1 from public.ticket_products o where o.rest_id::text = v_tp.rest_id and o.id::text <> p_round
-                                   and public._taam_pu_visit_date(o.date) = v_od));
+    -- 서버 시각 — 앱이 기기 시계 차이를 맞춰 「이 수정 화면을 연 뒤의 이동 기록」만 고른다(3차 NEW-7)
+    'now', now(),
+    'manual_movable', exists (select 1 from jsonb_array_elements(v_man) x where (x->>'movable')::boolean));
 end $$;
 revoke all on function public.taam_round_move_preview(text, text, text) from public, anon;
 grant execute on function public.taam_round_move_preview(text, text, text) to authenticated;
@@ -780,7 +875,7 @@ begin
   if not exists (select 1 from public.ticket_round_moves m where m.round_id = p_round) then
     return jsonb_build_object('ok', true, 'move_id', null, 'nothing', true);
   end if;
-  v_spec := public._taam_round_follow_spec(p_round, true);
+  v_spec := public._taam_round_follow_spec(p_round, true);   -- 날짜는 기록 전부 · 짝은 끝나지 않은(open) 기록만(3차 NEW-2)
   v_fd := coalesce(array(select d::date from jsonb_array_elements_text(v_spec->'dates') d), '{}'::date[]);
   v_id := public._taam_round_move_apply(p_round, null, null, v_nd, v_nt, v_fd, '{}'::text[], 'resync', null, v_spec);
   if v_id is not null then select to_jsonb(m) into v_log from public.ticket_round_moves m where m.id = v_id; end if;
@@ -832,6 +927,20 @@ begin
                     where s->>'kind' = 'ticket' and (s->>'inv' = r.id or (coalesce(s->>'pid', '') like 'INV-' || left(r.id, 8) || '%' and s->>'uid' = r.uid::text))) then continue; end if;
     if r.kind = 'invite' and r.st not in ('sent', 'paid') then continue; end if;
     if r.uid is null or r.uid = any(v_seen) then continue; end if;
+    -- 3차 NEW-3 — 같은 회차의 다른 기록에서 이 회원에게 **가장 최근에** 알린 새 날짜·시간이 이번과 같으면 다시 보내지 않는다
+    --   (결제된 초대가 이동 때 잠겨 좌석(INV-)만 옮겨 알린 뒤, 다시 맞추기가 초대를 옮기면 같은 회원에게 같은 알림이 두 번 갔다 · 반대 순서도)
+    --   가장 최근 것만 본다 — D2 → D3 → D2 로 되돌린 이동은 D3 을 알린 뒤라 다시 알려야 한다
+    if (select public._taam_pu_visit_date(mv->'to'->>'d') is not distinct from public._taam_pu_visit_date(r.e->'to'->>'d')
+               and public._taam_hhmm(mv->'to'->>'t') is not distinct from public._taam_hhmm(r.e->'to'->>'t')
+          from public.ticket_round_moves m2
+         cross join lateral jsonb_array_elements(coalesce(m2.notify_result->'sent', '[]'::jsonb)) s
+         cross join lateral jsonb_array_elements(coalesce(m2.moved, '[]'::jsonb)) mv
+         where m2.round_id = v_m.round_id and m2.id <> v_m.id and m2.notified_at is not null
+           and s->>'uid' = r.uid::text and mv->>'id' = s->>'id'
+         order by m2.notified_at desc, m2.id desc limit 1) is true then
+      v_skip := v_skip || jsonb_build_object('id', r.id, 'pid', r.pid, 'uid', r.uid, 'why', 'already_notified');
+      continue;
+    end if;
     v_seen := v_seen || r.uid;
     v_i18n := '{}'::jsonb;
     foreach v_lang in array array['ko', 'en', 'ja'] loop
@@ -855,7 +964,7 @@ begin
                                  'from', r.e->'from', 'to', r.e->'to', 'i18n', v_i18n));
       v_push := public._taam_member_push(r.uid, v_i18n->'ko'->>'title', v_i18n->'ko'->>'body', v_url,
                                          'taam-rmove-' || v_m.id || '-' || left(r.uid::text, 8), 'ticket_time_changed', v_i18n);
-      v_sent := v_sent || jsonb_build_object('uid', r.uid, 'kind', r.kind, 'id', r.id, 'push', v_push);
+      v_sent := v_sent || jsonb_build_object('uid', r.uid, 'kind', r.kind, 'id', r.id, 'to', r.e->'to', 'push', v_push);
     exception when others then
       v_skip := v_skip || jsonb_build_object('id', r.id, 'pid', r.pid, 'why', 'error', 'msg', left(sqlerrm, 160));
     end;
@@ -1005,8 +1114,9 @@ union all
 select '⑥ 이동 기록 표 RLS 켬',
        case when (select relrowsecurity from pg_class where oid = 'public.ticket_round_moves'::regclass) then '✅' else '❌' end
 union all
-select '⑦ 의존 함수(_taam_ksk_seat_sync · _taam_member_push · _taam_rest_name_l10n · _taam_purchase_exc_find · _taam_fee_caller_ok)',
+select '⑦ 의존 함수(_taam_ksk_seat_sync · _taam_member_push · _taam_rest_name_l10n · _taam_purchase_exc_find · _taam_fee_caller_ok · _taam_uid_is_super)',
        case when to_regprocedure('public._taam_ksk_seat_sync(uuid)') is not null
+             and to_regprocedure('public._taam_uid_is_super()') is not null
              and to_regproc('public._taam_member_push') is not null
              and to_regprocedure('public._taam_rest_name_l10n(text,text)') is not null
              and to_regprocedure('public._taam_purchase_exc_find(uuid,text,text,integer)') is not null

@@ -52299,7 +52299,8 @@ function _rmChanged(o, p){
 //   tkRealtime 이 ticketDB 를 새로 고쳐도 이 값은 그대로다. 화면을 다시 열면 다시 적는다.
 function _rmSnap(t){
   if(!t) return null;
-  return { date: _rmYmd((typeof _tkFullDate === 'function') ? _tkFullDate(t) : t.date), time: _rmHm(t.time) };
+  // at = 이 화면을 연 기기 시각(3차 NEW-7 — 응답을 잃은 뒤 기억 없이 다시 저장할 때 「이 화면을 연 뒤의 이동 기록」만 찾는다)
+  return { date: _rmYmd((typeof _tkFullDate === 'function') ? _tkFullDate(t) : t.date), time: _rmHm(t.time), at: Date.now() };
 }
 function _rmBaseOf(id){
   var s = (window._rmOpened || {})[String(id)];
@@ -52349,6 +52350,16 @@ function _rmAsk(d){
               open_after_visit: '등급별 우선 공개 시각이 새 방문일보다 늦습니다', sale_open_after_visit: '판매 오픈 예약 시각이 새 방문일보다 늦습니다', package: '📦 패키지에 연계된 회차입니다 — 다른 회차와 겹치는지 확인하세요' };
     var warn = (d.warnings || []).map(function(w){ return W[w] || w; });
     var man = d.manual || [];
+    // 🆕 2026-11-16(3차 NEW-5) 수동 기록 후보는 따라올 날짜마다(연도 실수를 고치는 이동 — 처음 날짜의 기록) · 그날 이 매장 회차가 더 있으면 못 옮김(movable)
+    //   옛 서버(후보에 movable 없음)는 종전대로 manual_movable 하나로
+    var curD = _rmYmd(d.cur && d.cur.date);
+    var manNew = man.some(function(m){ return m && ('movable' in m); });
+    var manOk = manNew ? man.filter(function(m){ return m && m.movable; }) : (d.manual_movable ? man : []);
+    var manNo = man.length - manOk.length;
+    var manDs = []; manOk.forEach(function(m){ var y = _rmYmd(m.ymd || ''); if(/^\d{4}\.\d{2}\.\d{2}$/.test(y) && y !== curD && manDs.indexOf(y) < 0) manDs.push(y); });
+    // 🆕 2026-11-16(3차 NEW-5) 예약이 회차에 적힌 날짜가 아닌 곳(끝나지 않은 이동이 남긴 날짜 — 연도 실수 등)에서 옮겨 가면 머리에 적는다
+    var fromDs = []; mv.forEach(function(r){ var f = _rmYmd(r && r.from && r.from.d || ''); if(/^\d{4}\.\d{2}\.\d{2}$/.test(f) && f !== curD && fromDs.indexOf(f) < 0) fromDs.push(f); });
+    fromDs.sort();
     var el = document.createElement('div');
     el.id = 'rmPopup'; el.setAttribute('data-lang-lock', 'ko');
     el.style.cssText = 'position:fixed;inset:0;z-index:9800;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;';
@@ -52356,7 +52367,9 @@ function _rmAsk(d){
     el.innerHTML = '<div style="background:#fff;border-radius:18px;width:100%;max-width:420px;max-height:88vh;overflow:auto;padding:20px 18px;box-sizing:border-box;font-family:var(--font-main);">'
       + '<div style="font-size:16px;font-weight:800;color:#1a1a18;">📅 예약도 같이 옮길까요?</div>'
       + '<div style="font-size:12.5px;font-weight:700;color:#1a1a18;margin-top:8px;background:#f7f5f2;border-radius:10px;padding:10px 12px;">' + _rmEsc(d.rest || '') + '<br>'
-      +   '<span style="color:#9a9486;">' + _rmEsc(_rmDt(d.cur && d.cur.date, d.cur && d.cur.time)) + '</span> → <b>' + _rmEsc(_rmDt(d['new'] && d['new'].date, d['new'] && d['new'].time)) + '</b></div>'
+      +   '<span style="color:#9a9486;">' + _rmEsc(_rmDt(d.cur && d.cur.date, d.cur && d.cur.time)) + '</span> → <b>' + _rmEsc(_rmDt(d['new'] && d['new'].date, d['new'] && d['new'].time)) + '</b>'
+      +   (fromDs.length ? '<div id="rmFromNote" style="font-size:11.5px;font-weight:700;color:#B45309;margin-top:4px;">예약은 ' + _rmEsc(fromDs.map(function(x){ return _rmDt(x); }).join(' · ')) + ' 에서 옮겨 갑니다 <span style="font-weight:500;color:#8a8580;">(회차에 적힌 날짜와 다름 — 앞선 이동이 끝나지 않았던 예약)</span></div>' : '')
+      + '</div>'
       + li('<b>같이 옮겨 갑니다</b> — ' + _rmEsc(mvLines || '없음') + (pax ? ' · ' + pax + '명' : ''))
       + (names.length ? li(_rmEsc(names.slice(0, 12).join(', ') + (names.length > 12 ? ' 외 ' + (names.length - 12) + '명' : '')), '#8a8580') : '')
       + (tk.length ? li('따로 바꾼 시간 ' + tk.length + '건은 날짜만 옮기고 시간은 그대로', '#8a8580') : '')
@@ -52368,8 +52381,9 @@ function _rmAsk(d){
       + '<label style="display:flex;gap:8px;align-items:flex-start;margin-top:12px;font-size:12.5px;font-weight:700;color:#1a1a18;cursor:pointer;">'
       +   '<input type="checkbox" id="rmNotify" checked style="margin-top:2px;"> 🔔 회원에게 알림 보내기 <span style="font-weight:500;color:#8a8580;">(알림함 + 푸시 · 한국어·영어·일본어)</span></label>'
       + (man.length ? '<label style="display:flex;gap:8px;align-items:flex-start;margin-top:8px;font-size:12.5px;font-weight:700;color:#1a1a18;cursor:pointer;">'
-      +   '<input type="checkbox" id="rmManual"' + (d.manual_movable ? ' checked' : ' disabled') + ' style="margin-top:2px;"> 캘린더 수동 기록 ' + man.length + '건도 같은 날로 옮기기'
-      +   (d.manual_movable ? '' : ' <span style="font-weight:500;color:#B45309;">(그날 이 매장 회차가 더 있어 못 옮김)</span>') + '</label>' : '')
+      +   '<input type="checkbox" id="rmManual"' + (manOk.length ? ' checked' : ' disabled') + ' style="margin-top:2px;"> 캘린더 수동 기록 ' + (manOk.length || man.length) + '건도 같은 날로 옮기기'
+      +   (manDs.length ? ' <span style="font-weight:500;color:#8a8580;">(' + _rmEsc(manDs.map(function(x){ return _rmDt(x); }).join(' · ')) + ' 기록 포함)</span>' : '')
+      +   (manNo ? ' <span style="font-weight:500;color:#B45309;">(그날 이 매장 회차가 더 있어 못 옮김' + (manOk.length ? ' ' + manNo + '건' : '') + ')</span>' : '') + '</label>' : '')
       + '<div style="display:flex;gap:8px;margin-top:16px;">'
       +   '<button type="button" id="rmNo" style="flex:1;padding:12px;border-radius:11px;border:1px solid #ddd8ce;background:#fff;font-family:inherit;font-size:13px;font-weight:800;color:#666;cursor:pointer;">취소</button>'
       +   '<button type="button" id="rmYes" style="flex:1.4;padding:12px;border-radius:11px;border:none;background:#1a1a18;font-family:inherit;font-size:13px;font-weight:800;color:#fff;cursor:pointer;">옮기고 저장</button>'
@@ -52412,7 +52426,7 @@ async function _rmFlow(id){
     // ① 서버 회차가 이 화면을 연 때와 다르다
     if(!_rmSameDT(d.cur, base.date, base.time)){
       // 서버가 이미 이 수정이 바라는 날짜·시간이다 — 앞선 저장의 응답을 잃었던 것(또는 같은 이동을 다른 기기에서) · 결과·알림을 잇는다
-      if(_rmSameDT(d.cur, nd, nt || base.time)){ await _rmRecovered(id, p, nd, nt, pass); return; }
+      if(_rmSameDT(d.cur, nd, nt || base.time)){ await _rmRecovered(id, p, nd, nt, pass, d); return; }
       showToast('⚠', '다른 기기에서 이 회차 날짜가 바뀌었습니다', '지금 서버 ' + _rmDt(d.cur && d.cur.date, d.cur && d.cur.time) + ' — 최신 값을 다시 읽었습니다. 화면을 닫고 다시 열어 주세요(저장하지 않았습니다)');
       try { if(typeof _tkRefreshFromServer === 'function') await _tkRefreshFromServer([id], { quiet: true }); } catch(_rf){}
       return;
@@ -52455,8 +52469,9 @@ async function _rmFlow(id){
         // 아직 안 들어갔거나 확인 못 함 — 늦게 들어갈 수 있으니 기억해 두고, 다시 저장하면 서버에서 먼저 확인한다
         window._rmUnknown = { id: id, nd: nd, nt: nt || base.time, last: d.last_move_id || 0, notify: !!a.notify, at: Date.now() };
         if(rsTok) _rsMuteEnd(rsTok);
-        showToast('⚠', rc.unknown ? '결과를 확인하지 못했습니다' : '옮기지 못했습니다(연결 끊김)',
-          (rc.unknown ? '회차 날짜·예약이 옮겨졌을 수도 있습니다' : '서버 값은 아직 그대로입니다') + ' — 잠시 뒤 다시 「수정하기」를 누르면 서버에서 먼저 확인합니다 · ' + String(r.error.message || '').slice(0, 50));
+        // 3차 NEW-7 — 몇 번 다시 봐도 옛 값이었다는 것은 「옮겨지지 않았다」가 아니다(서버가 아직 잠금을 기다리는 중일 수 있다) — 단정하지 않는다
+        showToast('⚠', rc.unknown ? '결과를 확인하지 못했습니다' : '아직 반영되지 않았습니다(연결 끊김)',
+          (rc.unknown ? '회차 날짜·예약이 옮겨졌을 수도 있습니다' : (rc.checks || 1) + '번 다시 봤지만 서버 값은 아직 옛 날짜입니다 — 늦게 옮겨질 수도 있습니다') + ' · 잠시 뒤 다시 「수정하기」를 누르면 서버에서 먼저 확인합니다 · ' + String(r.error.message || '').slice(0, 50));
         return;
       }
     }
@@ -52480,31 +52495,53 @@ function _rmMoved(id, p, nd, nt, base, x, notify){
   var o = ticketDB.find(function(t){ return String(t.id) === id; });
   if(o){ o.date = p.date; o.dateYear = p.dateYear; if(nt) o.time = p.time; }
   window._rmOpened = window._rmOpened || {};
-  window._rmOpened[id] = { date: nd, time: nt || (base && base.time) || '' };
+  window._rmOpened[id] = { date: nd, time: nt || (base && base.time) || '', at: (base && base.at) || Date.now() };
   if(window._rmUnknown && String(window._rmUnknown.id) === id) window._rmUnknown = null;
   window._rmPending = { id: id, res: x, notify: !!notify };
 }
-// 응답을 잃은 옮기기 — 서버 회차가 이미 목표 날짜·시간이면 이 미리보기 뒤에 생긴 기록을 찾는다. {applied, move} · {applied:false} · {unknown:true}
+// 응답을 잃은 옮기기 — 서버 회차가 이미 목표 날짜·시간이면 이 미리보기 뒤에 생긴 기록을 찾는다. {applied, move} · {applied:false, checks} · {unknown:true, checks}
+//   3차 NEW-7: 응답을 잃은 바로 그 순간 한 번만 읽으면, 서버가 아직 잠금을 기다리며 옮기는 중일 때 「옛 값 그대로」로 끝났다 — 몇 초 간격으로 몇 번 다시 본다
+//   (window._RM_RECHECK_MS = 기다릴 ms 목록 · 시험용)
 async function _rmRecheck(id, nd, nt, lastId){
-  try {
-    var pv = await window.sb.rpc('taam_round_move_preview', { p_round: id, p_date: nd, p_time: nt || null });
-    if(pv.error || !pv.data || !pv.data.ok) return { unknown: true };
-    if(!_rmSameDT(pv.data.cur, nd, nt)) return { applied: false };
-    return { applied: true, move: await _rmFindMove(id, nd, lastId) };
-  } catch(e){ return { unknown: true }; }
+  var waits = (Array.isArray(window._RM_RECHECK_MS) && window._RM_RECHECK_MS.length) ? window._RM_RECHECK_MS : [0, 2500, 3500];
+  var res = { unknown: true };
+  for(var i = 0; i < waits.length; i++){
+    var w = parseInt(waits[i], 10) || 0;
+    if(w > 0) await new Promise(function(r){ setTimeout(r, w); });
+    try {
+      var pv = await window.sb.rpc('taam_round_move_preview', { p_round: id, p_date: nd, p_time: nt || null });
+      if(pv.error || !pv.data || !pv.data.ok){ res = { unknown: true, checks: i + 1 }; continue; }
+      if(!_rmSameDT(pv.data.cur, nd, nt)){ res = { applied: false, checks: i + 1 }; continue; }
+      return { applied: true, move: await _rmFindMove(id, nd, lastId) };
+    } catch(e){ res = { unknown: true, checks: i + 1 }; }
+  }
+  return res;
 }
-async function _rmFindMove(id, nd, lastId){
+// since = 이 시각(서버 시각 ms) 뒤에 생긴 기록만(3차 NEW-7 — 기억 없이 다시 저장할 때 같은 새 날짜로 옮겼던 옛 기록을 이번 이동으로 잡지 않게)
+async function _rmFindMove(id, nd, lastId, since){
   try {
     var ml = await window.sb.rpc('taam_round_moves', { p_round: id, p_after_id: lastId || 0 });
     var arr = (ml && !ml.error && Array.isArray(ml.data)) ? ml.data : [];
-    var hit = arr.filter(function(m){ return m.via !== 'resync' && _rmYmd(m.new_date) === _rmYmd(nd); });
+    var hit = arr.filter(function(m){
+      if(m.via === 'resync' || _rmYmd(m.new_date) !== _rmYmd(nd)) return false;
+      if(since != null && m.at){ var a = Date.parse(m.at); if(!isNaN(a) && a < since) return false; }
+      return true;
+    });
     return hit.length ? hit[hit.length - 1] : null;
   } catch(e){ return null; }
 }
 // 다시 저장했더니 서버가 이미 이 수정이 바라는 날짜다(앞선 저장의 응답을 잃음 · 다른 기기에서 같은 이동) — 결과·알림을 잇고 나머지 칸을 저장한다
-async function _rmRecovered(id, p, nd, nt, pass){
+//   d = 방금 미리보기(서버 시각 now 로 기기 시계 차이를 맞춘다)
+async function _rmRecovered(id, p, nd, nt, pass, d){
   var unk = (window._rmUnknown && String(window._rmUnknown.id) === id) ? window._rmUnknown : null;
-  var mv = await _rmFindMove(id, nd, unk ? unk.last : 0);
+  var since = null;
+  if(!unk){
+    // 기억이 없다 — 이 수정 화면을 연 뒤에 생긴 기록만(서버 시각으로 맞춰 1분 여유 · 서버가 now 를 안 주면 10분 · 연 시각을 모르면 최근 30분)
+    var op = (window._rmOpened || {})[id], sn = (d && d.now) ? Date.parse(d.now) : NaN;
+    var skew = isNaN(sn) ? 0 : (sn - Date.now());
+    since = ((op && op.at) ? op.at : (Date.now() - 30 * 60 * 1000)) + skew - (isNaN(sn) ? 10 * 60 * 1000 : 60 * 1000);
+  }
+  var mv = await _rmFindMove(id, nd, unk ? unk.last : 0, since);
   var notify = unk ? !!unk.notify : false;
   if(!unk && mv && !mv.notified_at && (mv.moved || []).some(function(m){ return m.kind === 'ticket' || m.kind === 'invite'; })){
     notify = confirm('이 회차는 이미 ' + _rmDt(mv.new_date, mv.new_time) + ' 로 옮겨져 있습니다(앞선 저장의 응답이 끊겼거나 다른 기기에서 옮김).\n예약 ' + (mv.moved || []).length + '건 — 회원에게 알림을 보낼까요? (알림함 + 푸시)');
@@ -52566,7 +52603,9 @@ function _rmResult(roundId, mv, nres, notified, opt){
     + (conf.length ? li('<b>⚠ 겹치는 예약 ' + conf.length + '건</b> — 막지 않고 옮겼습니다. 회원에게 연락해 주세요<br>' + conf.map(function(c){ var o = c.other || {};
         return _rmEsc((c.kind === 'repurchase' ? '재구매 제한 · ' : '같은 시간대 · ') + (c.pid || '') + ' ↔ ' + [o.rest || '', o.pid || '', _rmDt(o.date, o.time)].filter(Boolean).join(' ')); }).join('<br>'), '#B45309') : '')
     + (notified ? (nres && !nres.error
-        ? li('🔔 회원 알림 ' + ((nres.sent || []).length) + '명' + (nres.already ? ' (이미 보냄)' : ''), '#1E7A46')
+        ? li('🔔 회원 알림 ' + ((nres.sent || []).length) + '명' + (nres.already ? ' (이미 보냄)' : '')
+            // 3차 NEW-3 — 같은 새 날짜·시간을 앞선 기록에서 이미 알린 회원은 서버가 다시 안 보낸다
+            + (function(){ var k = ((nres.skipped || []).filter(function(x){ return x && x.why === 'already_notified'; })).length; return k ? ' · 같은 날짜를 이미 알린 ' + k + '명은 다시 보내지 않음' : ''; })(), '#1E7A46')
         : li('⚠ 회원 알림을 보내지 못했습니다 — ' + _rmEsc(nres && nres.error || ''), '#9B1C1C')) : li('회원 알림은 보내지 않았습니다', '#8a8580'))
     + (mc.length ? li('<b>직접 연락할 손님(수동·비회원 결제 링크)</b><br>' + mc.map(function(m){ return _rmEsc((m.buyer || m.pid || '') + (m.phone ? ' · ' + m.phone : ' · 번호 없음')); }).join('<br>'), '#1a1a18') : '')
     + '<button type="button" onclick="var e=document.getElementById(\'rmResPopup\');if(e)e.remove();" style="width:100%;margin-top:16px;padding:12px;border-radius:11px;border:none;background:#1a1a18;font-family:inherit;font-size:13px;font-weight:800;color:#fff;cursor:pointer;">확인</button>'
