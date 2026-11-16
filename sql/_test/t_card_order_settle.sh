@@ -5,6 +5,8 @@
 #   확인: ① 원장 근거 계산 ② 멱등 ③ 상한(서버 기록 card_dep · p_cap) ④ 위조 줄 ⑤ 옛 되돌림 ⑥ 0 ⑦ 권한 ⑧ 동시 호출 ⑨ 늦게 커밋된 차감 ⑩ 재실행
 #         2026-11-16 적대 리뷰: ⑪ CF-1 위조 차감 줄로 잔액 두 배 ⑫ CF-2 실패 길 이중 환불 ⑬ CF-2 성공 길(처리 중 회원 환불 막음) ⑭ 정상 회원 환불은 지난다
 #         ⑮ 인자·홀드·티켓 거절 ⑯ 같은 홀드 두 주문 ⑰ 다른 주머니 환불 ⑱ PAYMENT_PENDING ⑲ 주문 보기(peek) ⑳ 정리 목록·킥
+#         2차 검증: ㉑ N1 같은 홀드를 다른 결제가 같이 쓴 통(예치금 단독 확정) — 이 주문 몫까지만 · 이 주문 주머니로 ㉒ N4 처리 중 카드 주문이 있어도
+#                   그 주문이 뺀 몫 밖의 회원 환불은 지난다(묶음은 위조 환불 줄로 못 푼다) ㉓ N5 정리 목록 물러서기(시도 기록 · 알림 보낸 것 뒤로)
 cd "$(dirname "$0")/../.."
 MIG=${TAAM_SETTLE_MIG:-supabase/migrations/20261116_card_order_settle.sql}
 FAIL=0
@@ -265,5 +267,82 @@ has "⑳ 목록 — 회원 세션 거절" "FORBIDDEN\|permission denied" "$($P -
 ok "⑳ 킥 — 설정 없으면 부르지 않음(no_config)" "no_config" "$(J "$($P -c "select public.taam_card_topup_reconcile_kick()")" reason)"
 $P -c "delete from public.payment_orders" >/dev/null
 ok "⑳ 킥 — 볼 것 없으면 건너뜀" "nothing" "$(J "$($P -c "select public.taam_card_topup_reconcile_kick()")" skipped)"
+
+# ㉑ N1 — 같은 홀드를 예치금만으로 확정한 결제(서버 줄 −1,000,000 · order_id 없음) + Edge 는 차감 전에 끊긴 카드 주문 O9(card_dep deducting · plan 600,000)
+seed
+$P -c "update public.profiles set membership_deposit_balance = 0, general_deposit_balance = 1000000 where id = '$U1'" >/dev/null
+$P -c "insert into public.payment_orders(order_id,user_id,purpose,amount,status,payment_key,fail_reason,metadata) values ('O9','$U1','ticket_topup',400000,'paid','pk9','unknown:converting:abc','{\"card_dep\":{\"hold\":\"PAYH-9\",\"plan\":600000,\"state\":\"deducting\"}}')" >/dev/null
+$P -c "insert into public.tickets(user_id,purchase_id,party_size,price,ticket_product_id,status,extra_data) values ('$U1','PAYH-9',2,1000000,'T9','active','{\"paidBy\":\"deposit\"}')" >/dev/null
+$P -c "select public.taam_apply_deposit_delta('$U1', 0, -1000000, '[{\"deposit_type\":\"general\",\"change_type\":\"ticket_purchase\",\"amount\":-1000000,\"metadata\":{\"purchase_id\":\"PAYH-9\"}}]'::jsonb)" >/dev/null
+R=$(settle $U1 O9 600000 PAYH-9)
+ok "㉑ N1 Edge 가 이 주문으로 한 푼도 안 뺐으면 0(같은 통의 예치금 단독 결제는 안 돌려줌)" "0|0" "$(J "$R" owed_before)|$(J "$R" order_out)"
+ok "㉑ N1 잔액 그대로(공짜 돈 없음)" "0/0" "$(bal $U1)"
+# Edge 가 이 주문으로 일반 600,000 을 뺐고, 같은 통의 예치금 단독 결제는 멤버십 1,000,000 → 정리는 600,000 만 · 일반으로
+seed
+$P -c "update public.profiles set membership_deposit_balance = 1000000, general_deposit_balance = 600000 where id = '$U1'" >/dev/null
+$P -c "insert into public.payment_orders(order_id,user_id,purpose,amount,status,payment_key,fail_reason,metadata) values ('O9','$U1','ticket_topup',400000,'paid','pk9','unknown:converting:abc','{\"card_dep\":{\"hold\":\"PAYH-9\",\"plan\":600000,\"state\":\"taken\",\"taken\":600000}}')" >/dev/null
+$P -c "select public.taam_apply_deposit_delta('$U1', -1000000, 0, '[{\"deposit_type\":\"membership\",\"change_type\":\"ticket_purchase\",\"amount\":-1000000,\"metadata\":{\"purchase_id\":\"PAYH-9\"}}]'::jsonb)" >/dev/null
+deduct $U1 O9 0 600000 PAYH-9
+R=$(settle $U1 O9 600000 PAYH-9)
+ok "㉑ N1 이 주문 몫 600,000 만 · 이 주문이 뺀 주머니(일반)로" "0|600000" "$(J "$R" refunded_mem)|$(J "$R" refunded_gen)"
+ok "㉑ N1 잔액 — 예치금 단독 결제 1,000,000 은 그대로 빠져 있음" "0/600000" "$(bal $U1)"
+R=$(settle $U1 O9 600000 PAYH-9)
+ok "㉑ N1 다시 — 0" "0" "$(J "$R" owed_before)"
+# 위조 줄(같은 통 · 이 주문 번호)은 이 주문 몫에 들어오지만 상한(Edge 가 뺀 금액)과 회원 자신의 환불 한도로 두 번 못 받는다(V-a)
+seed
+$P -c "update public.profiles set membership_deposit_balance = 0, general_deposit_balance = 1000000 where id = '$U1'" >/dev/null
+$P -c "insert into public.payment_orders(order_id,user_id,purpose,amount,status,payment_key,fail_reason,metadata) values ('O9','$U1','ticket_topup',500000,'paid','pk9','unknown:failing:convert_failed','{\"card_dep\":{\"hold\":\"PAYH-9\",\"plan\":600000,\"state\":\"deducting\"}}')" >/dev/null
+$P -c "insert into public.tickets(user_id,purchase_id,party_size,price,ticket_product_id,status) values ('$U1','PAYH-9',2,0,'T9','hold')" >/dev/null
+member $U1 general -600000 '{"purchase_id":"PAYH-9","order_id":"O9"}' >/dev/null
+R=$(settle $U1 O9 600000 PAYH-9)
+$P -c "update public.tickets set status='cancelled' where purchase_id='PAYH-9'; update public.payment_orders set status='canceled', fail_reason='convert_failed_refunded' where order_id='O9'" >/dev/null
+member $U1 general 600000 '{"purchase_id":"PAYH-9"}' >/dev/null
+ok "㉑ V-a 위조 줄 되돌림 뒤 회원 자기 환불 — 시작 잔액 그대로(두 배 아님)" "0/1000000" "$(bal $U1)"
+
+# ㉒ N4 — 처리 중 카드 주문 O9(paid · 결과 모름 · 티켓 없음)가 같은 홀드를 적어 두었다
+seed
+$P -c "update public.profiles set membership_deposit_balance = 0, general_deposit_balance = 1000000 where id = '$U1'" >/dev/null
+$P -c "insert into public.payment_orders(order_id,user_id,purpose,amount,status,payment_key,fail_reason,metadata) values ('O9','$U1','ticket_topup',400000,'paid','pk9','unknown:converting:abc','{\"card_dep\":{\"hold\":\"PAYH-9\",\"plan\":600000,\"state\":\"deducting\"}}')" >/dev/null
+$P -c "insert into public.tickets(user_id,purchase_id,party_size,price,ticket_product_id,status,extra_data) values ('$U1','PAYH-9',2,1000000,'T9','cancelled','{\"paidBy\":\"deposit\"}')" >/dev/null
+$P -c "select public.taam_apply_deposit_delta('$U1', 0, -1000000, '[{\"deposit_type\":\"general\",\"change_type\":\"ticket_purchase\",\"amount\":-1000000,\"metadata\":{\"purchase_id\":\"PAYH-9\"}}]'::jsonb)" >/dev/null
+ok "㉒ N4 같은 홀드를 예치금만으로 산 구매의 취소 환불은 지난다(V-c)" "1000000" "$(member $U1 general 1000000 '{"purchase_id":"PAYH-9"}' | grep -E '^[0-9]+$')"
+R=$(settle $U1 O9 600000 PAYH-9)
+ok "㉒ N4 그 뒤 정리는 0(두 번 안 돌려줌)" "0" "$(J "$R" owed_before)"
+ok "㉒ N4 잔액 = 시작" "0/1000000" "$(bal $U1)"
+# Edge 가 이 주문으로 600,000 을 뺐다(같은 통에 예치금 단독 1,000,000) — 1,000,000 까지는 환불 · Edge 몫 600,000 은 묶임
+seed
+$P -c "update public.profiles set membership_deposit_balance = 0, general_deposit_balance = 1600000 where id = '$U1'" >/dev/null
+$P -c "insert into public.payment_orders(order_id,user_id,purpose,amount,status,payment_key,fail_reason,metadata) values ('O9','$U1','ticket_topup',400000,'paid','pk9','unknown:converting:abc','{\"card_dep\":{\"hold\":\"PAYH-9\",\"plan\":600000,\"state\":\"taken\",\"taken\":600000}}')" >/dev/null
+$P -c "insert into public.tickets(user_id,purchase_id,party_size,price,ticket_product_id,status,extra_data) values ('$U1','PAYH-9',2,1000000,'T9','cancelled','{\"paidBy\":\"deposit\"}')" >/dev/null
+$P -c "select public.taam_apply_deposit_delta('$U1', 0, -1000000, '[{\"deposit_type\":\"general\",\"change_type\":\"ticket_purchase\",\"amount\":-1000000,\"metadata\":{\"purchase_id\":\"PAYH-9\"}}]'::jsonb)" >/dev/null
+deduct $U1 O9 0 600000 PAYH-9
+has "㉒ N4 Edge 몫까지 넘는 환불(1,000,001) — REFUND_CARD_PENDING" "REFUND_CARD_PENDING" "$(member $U1 general 1000001 '{"purchase_id":"PAYH-9"}')"
+ok "㉒ N4 Edge 몫 밖(1,000,000)은 지난다" "1000000" "$(member $U1 general 1000000 '{"purchase_id":"PAYH-9"}' | grep -E '^[0-9]+$')"
+has "㉒ N4 남은 것은 Edge 몫 — 더는 막힘" "REFUND_CARD_PENDING" "$(member $U1 general 1 '{"purchase_id":"PAYH-9"}')"
+# 묶음을 위조 환불 줄로 못 푼다 — 회원이 −600,000(태그 없음)을 넣고 order_id O9 를 단 환불로 받은 뒤 또 받으려 하면 막힘
+member $U1 general -600000 '{"purchase_id":"PAYH-9"}' >/dev/null
+ok "㉒ N4 (자기 돈 600,000 을 넣고) O9 를 단 환불 600,000 — 지난다(자기 돈)" "1" "$(member $U1 general 600000 '{"purchase_id":"PAYH-9","order_id":"O9"}' | grep -cE '^[0-9]+$')"
+has "㉒ N4 O9 를 단 환불 줄로 묶음이 풀리지 않음 — Edge 몫 600,000 은 그대로 막힘" "REFUND_CARD_PENDING" "$(member $U1 general 600000 '{"purchase_id":"PAYH-9"}')"
+ok "㉒ N4 잔액 — Edge 몫 600,000 만 빠져 있음" "0/1000000" "$(bal $U1)"
+R=$(settle $U1 O9 600000 PAYH-9)
+ok "㉒ N4 정리 — 회원이 O9 를 단 환불 600,000 을 이 주문 몫에서 뺀다(그 몫은 이미 회원 손에 있다)" "0" "$(J "$R" owed_before)"
+
+# ㉓ N5 — 정리 목록 물러서기(metadata.sweep {n, at}) · 한 번도 안 본 것 먼저 · 알림 보낸 것 뒤로
+seed
+$P <<SQL >/dev/null
+insert into public.payment_orders(order_id,user_id,purpose,amount,status,fail_reason,updated_at,created_at,metadata) values
+  ('S1','$U1','ticket_topup',1,'paid','unknown:converting:a', now() - interval '20 minutes', now() - interval '2 days', jsonb_build_object('sweep', jsonb_build_object('n',1,'at', to_char((now() - interval '5 minutes') at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"')))),
+  ('S2','$U1','ticket_topup',1,'paid','unknown:converting:b', now() - interval '20 minutes', now() - interval '2 days', jsonb_build_object('sweep', jsonb_build_object('n',1,'at', to_char((now() - interval '11 minutes') at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"')))),
+  ('S3','$U1','ticket_topup',1,'paid','unknown:converting:c', now() - interval '40 minutes', now() - interval '2 days', jsonb_build_object('sweep', jsonb_build_object('n',4,'at', to_char((now() - interval '20 minutes') at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"')))),
+  ('S4','$U1','ticket_topup',1,'paid','unknown:converting:d', now() - interval '90 minutes', now() - interval '2 days', jsonb_build_object('sweep', jsonb_build_object('n',9,'at', to_char((now() - interval '60 minutes') at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"')))),
+  ('S5','$U1','ticket_topup',1,'paid','unknown:converting:e', now() - interval '20 minutes', now() - interval '1 hour', '{}'),
+  ('S6','$U1','ticket_topup',1,'pending','unknown:approving:alerted', now() - interval '20 minutes', now() - interval '3 hours', '{}'),
+  ('S7','$U1','ticket_topup',1,'paid','unknown:converting:f', now() - interval '20 minutes', now() - interval '1 day', '{"sweep":{"n":"x","at":"2026-99-99T99:99"}}'),
+  ('S8','$U1','ticket_topup',1,'failed','swept_no_payment:approving', now() - interval '10 minutes', now() - interval '2 days', jsonb_build_object('sweep', jsonb_build_object('n',9,'at', to_char((now() - interval '12 minutes') at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'))));
+SQL
+L=$($P -c "begin; set local role service_role; set local request.jwt.claims = '{\"role\":\"service_role\"}'; select string_agg(x->>'order_id', ','), max((x->>'sweep_n')::int) from jsonb_array_elements(public.taam_card_topup_reconcile_list(15)) x; commit;" 2>&1 | grep -E 'S[0-9]')
+ok "㉓ N5 물러서기 — 한 번도 안 본 것(S7 이상한 기록 · S5) → 오래전에 본 것(S2) → 알림 보낸 것(S6) → 닫힌 주문(S8 · 물러서지 않음) · 방금 본 것(S1 · 10분 안) · 4번째 30분 안(S3) · 9번째 120분 안(S4) 은 빠짐" "S7,S5,S2,S6,S8|9" "$L"
+L=$($P -c "begin; set local role service_role; set local request.jwt.claims = '{\"role\":\"service_role\"}'; select string_agg(x->>'order_id', ',') from jsonb_array_elements(public.taam_card_topup_reconcile_list(2)) x; commit;" 2>&1 | grep -E 'S[0-9]')
+ok "㉓ N5 자리가 2개면 한 번도 안 본 것부터(오래 막힌 주문이 앞자리를 차지하지 않음)" "S7,S5" "$L"
 
 [ $FAIL = 0 ] && echo "── 전부 통과" || { echo "── 실패 있음"; exit 1; }

@@ -28,6 +28,17 @@
 --     ⑦ 결과를 모르는(unknown:*) 카드 주문을 10분마다 Edge toss-confirm 의 sweep 이 토스에 조회해 잇거나 정리한다(taam_card_topup_reconcile_list/_kick · CF-6 · TOSSRB-1).
 --     ⑧ 슈퍼어드민 알림 「결제 내역에서 이 주문 보기」가 아직 결제 내역에 없는(결과 모름 · pending) 주문도 보이게 — taam_card_order_peek(CFAPP-1).
 --
+--   ⚠ 2026-11-16 2차 검증(배포 전 · 확정 LOW 6 · 전부 반영)
+--     N1 같은 홀드 통을 다른 결제가 같이 쓰면(같은 홀드를 예치금만으로 확정 · 차감 줄에 order_id 없음) 그 돈까지 이 주문 몫으로 돌려줬다
+--        (Edge 가 차감 전에 죽은 주문 O9 · 상한 = plan 600,000 → 예치금 단독 결제의 600,000 이 돌아가고 카드도 취소 · 재현 V-b).
+--        → 되돌림 = least(통에 남은 것, **이 주문 몫**, 상한 − 이 주문으로 돌아간 몫). 이 주문 몫 = 그 통에서 order_id 가 이 주문인 차감 − order_id 가 이 주문인 환불.
+--          주머니도 이 주문이 뺀 주머니로 나눈다. 다른 구매 id 위조 줄(CF-1)·회원 자기 환불(CF-2)은 종전대로 통에서 걸러진다.
+--     N4 B 가드가 「처리 중 카드 주문」이 있으면 그 홀드의 회원 환불을 통째로 막아, 같은 홀드를 예치금만으로 산 구매의 정상 취소 환불까지 막았다(재현 V-c
+--        → ledger_apply_failed → 손 부여 → 나중 정리가 또 돌려줌). → 막는 것은 **그 주문들이 이 통에서 뺀 몫**만 — 통에 남은 것 − 그 몫까지는 환불을 받는다.
+--        (그 몫에서 환불 줄을 빼지 않는다 — 회원은 환불 줄 metadata 에 order_id 를 마음대로 달 수 있다)
+--     N5 정리 목록이 오래된 순 15건이라 끝내 결과를 모르는 주문이 앞자리를 차지하면 새 주문이 영영 밀렸다 → 시도 기록(metadata.sweep {n, at} — Edge 가 남긴다)으로
+--        물러서기(2번까지 10분 · 5번까지 30분 · 그 뒤 120분) · 한 번도 안 본 것 먼저 · 알림 보낸(:alerted) 것은 뒤로.
+--
 -- 배포 순서: 이 SQL → Edge(toss-order · toss-confirm · toss-billing-charge) → 앱. 워크플로가 SQL → Edge 순서를 지킨다(앱은 Vercel).
 --   SQL 만 먼저 가도 안전하다 — 옛 Edge(v27·v23)는 이 함수들을 부르지 않는다. ⑤⑥ 가드는 옛 Edge 의 흐름도 막지 않는다(회원 세션·새 주문 조건만).
 -- 되돌리기: drop trigger trg_taam_guard_ledger_refund_cardpend on public.deposit_transactions;
@@ -43,7 +54,7 @@ security definer
 set search_path = public
 as $$
 declare
-  -- CARD_SETTLE_20261116 · CARD_SETTLE_V2_20261116
+  -- CARD_SETTLE_20261116 · CARD_SETTLE_V2_20261116 · CARD_SETTLE_V3_20261116
   v_jwt     text := '';
   v_o       record;
   v_pid     text := nullif(btrim(coalesce(p_purchase_id, '')), '');
@@ -52,6 +63,7 @@ declare
   v_srv     bigint;
   v_cap     bigint;
   v_out_mem bigint := 0; v_out_gen bigint := 0; v_in_mem bigint := 0; v_in_gen bigint := 0; v_ord_in bigint := 0;
+  v_oo_mem  bigint := 0; v_oo_gen bigint := 0; v_oi_mem bigint := 0; v_oi_gen bigint := 0; v_onet bigint := 0;
   v_owed    bigint; v_amt bigint; v_mem bigint; v_gen bigint;
   v_md      jsonb;
   v_entries jsonb := '[]'::jsonb;
@@ -116,19 +128,32 @@ begin
     into v_out_mem, v_out_gen, v_in_mem, v_in_gen
     from public.deposit_transactions d
    where d.user_id = p_user and d.metadata->>'purchase_id' = v_pid;
-  -- 이 주문으로 이미 돌아간 몫 — 상한에서 뺀다(같은 홀드로 두 주문이 차감했어도 주문마다 자기 몫까지만)
-  select coalesce(sum(d.amount), 0) into v_ord_in
+  -- N1 이 주문 몫 — 그 통에서 이 주문 번호가 달린 차감(Edge 의 차감 줄은 언제나 order_id 를 단다) · 같은 홀드를 예치금만으로 산 결제(order_id 없음)의 돈은 안 센다
+  select coalesce(sum(-d.amount) filter (where d.deposit_type = 'membership'), 0),
+         coalesce(sum(-d.amount) filter (where d.deposit_type = 'general'), 0)
+    into v_oo_mem, v_oo_gen
+    from public.deposit_transactions d
+   where d.user_id = p_user and d.change_type = 'ticket_purchase' and d.amount < 0
+     and d.metadata->>'purchase_id' = v_pid and d.metadata->>'order_id' = p_order;
+  -- 이 주문으로 이미 돌아간 몫 — 이 주문 몫과 상한에서 뺀다(같은 홀드로 두 주문이 차감했어도 주문마다 자기 몫까지만)
+  select coalesce(sum(d.amount) filter (where d.deposit_type = 'membership'), 0),
+         coalesce(sum(d.amount) filter (where d.deposit_type = 'general'), 0)
+    into v_oi_mem, v_oi_gen
     from public.deposit_transactions d
    where d.user_id = p_user and d.change_type = 'ticket_refund' and d.amount > 0 and d.metadata->>'order_id' = p_order;
+  v_ord_in := v_oi_mem + v_oi_gen;
+  v_onet   := greatest(0, (v_oo_mem + v_oo_gen) - v_ord_in);
 
   v_owed := greatest(0, (v_out_mem + v_out_gen) - (v_in_mem + v_in_gen));   -- 합계로 센다 — 주머니마다 따로 세면 다른 주머니로 받은 환불을 놓친다
-  v_amt  := least(v_owed, greatest(0, v_cap - v_ord_in));
-  v_mem  := least(greatest(0, v_out_mem - v_in_mem), v_amt);                -- 나간 주머니로 · 멤버십 먼저(차감이 멤버십 먼저다)
-  v_gen  := least(greatest(0, v_out_gen - v_in_gen), v_amt - v_mem);
+  v_amt  := least(v_owed, v_onet, greatest(0, v_cap - v_ord_in));
+  -- 이 주문이 뺀 주머니로 · 멤버십 먼저(차감이 멤버십 먼저다). 두 주머니 양수 몫의 합 ≥ 이 주문 몫 ≥ v_amt 라 언제나 v_amt 를 다 나눈다
+  v_mem  := least(greatest(0, v_oo_mem - v_oi_mem), v_amt);
+  v_gen  := least(greatest(0, v_oo_gen - v_oi_gen), v_amt - v_mem);
 
   if v_mem + v_gen <= 0 then
     return jsonb_build_object('ok', true, 'refunded_mem', 0, 'refunded_gen', 0, 'out_mem', v_out_mem, 'out_gen', v_out_gen,
-                              'in_mem', v_in_mem, 'in_gen', v_in_gen, 'order_in', v_ord_in, 'cap', v_cap, 'owed_before', 0);
+                              'in_mem', v_in_mem, 'in_gen', v_in_gen, 'order_out', v_oo_mem + v_oo_gen, 'order_net', v_onet,
+                              'order_in', v_ord_in, 'cap', v_cap, 'owed_before', 0);
   end if;
 
   v_why := coalesce(nullif(btrim(p_why), ''), '카드 결제 취소 · 예치금 환원');
@@ -146,39 +171,50 @@ begin
   perform public.taam_apply_deposit_delta(p_user, v_mem, v_gen, v_entries);
 
   return jsonb_build_object('ok', true, 'refunded_mem', v_mem, 'refunded_gen', v_gen, 'out_mem', v_out_mem, 'out_gen', v_out_gen,
-                            'in_mem', v_in_mem, 'in_gen', v_in_gen, 'order_in', v_ord_in, 'cap', v_cap, 'owed_before', v_mem + v_gen);
+                            'in_mem', v_in_mem, 'in_gen', v_in_gen, 'order_out', v_oo_mem + v_oo_gen, 'order_net', v_onet,
+                            'order_in', v_ord_in, 'cap', v_cap, 'owed_before', v_mem + v_gen);
 end;
 $$;
 
 revoke all on function public.taam_card_order_settle(text, uuid, bigint, text, text, text) from public, anon, authenticated;
 grant execute on function public.taam_card_order_settle(text, uuid, bigint, text, text, text) to service_role;
 
--- ── B. 회원 세션의 「처리 중인 카드 주문」 홀드 환불 막기 (CF-2 성공 길) ──
+-- ── B. 회원 세션의 「처리 중인 카드 주문」 홀드 환불 막기 (CF-2 성공 길 · N4) ──
 --   Edge 가 예치금을 뺀 뒤 좌석 전환을 끝내기 전(주문 paid · fail_reason unknown:* 또는 옛 Edge 의 null) 회원이 그 홀드 구매 id 로 스스로 환불하면,
 --   전환이 성공해 티켓 + 예치금을 둘 다 갖는다(refund_active 는 hold 를 살아 있는 티켓으로 안 본다 · refund_cap 은 30분 안 전액).
---   → 그 주문으로 확정된 티켓 행(취소됐어도)이 아직 없으면 거절. 서버(Edge 정리)·슈퍼어드민은 그대로.
---   정상 회원 환불 경로(앱 cancelTicketPurchase)는 티켓을 먼저 취소하고 그 티켓 행이 이 주문 번호를 갖고 있다 — 지난다.
+--   → 그 주문(들)으로 확정된 티켓 행(취소됐어도)이 아직 없으면, **그 주문들이 이 통에서 뺀 몫**(order_id 가 그 주문인 차감 줄)은 묶어 두고
+--     통에 남은 것 − 그 몫까지만 환불을 받는다(N4 — 같은 홀드를 예치금만으로 산 구매의 정상 취소 환불까지 막던 것).
+--     묶어 둔 몫에서 환불 줄을 빼지 않는다 — 회원은 환불 줄 metadata 에 order_id 를 마음대로 달 수 있다(달아서 묶음을 풀면 Edge 가 뺀 돈을 가져간다).
+--     정리(서버)가 이미 돌려준 몫이 있으면 그 사이(주문이 아직 결과 모름인 동안)만 더 막힌다 — 정리가 결과를 적으면 풀린다.
+--   서버(Edge 정리)·슈퍼어드민은 그대로. 정상 회원 환불 경로(앱 cancelTicketPurchase)는 티켓을 먼저 취소하고 그 티켓 행이 이 주문 번호를 갖고 있다 — 지난다.
 create or replace function public.taam_guard_ledger_refund_cardpend()
 returns trigger language plpgsql security definer set search_path = public as $$
-declare v_uid uuid := auth.uid(); v_pid text; v_o text;
+declare v_uid uuid := auth.uid(); v_pid text; v_ords text[]; v_res bigint := 0; v_net bigint := 0;
 begin
-  -- CARD_PEND_GUARD_20261116
+  -- CARD_PEND_GUARD_20261116 · CARD_PEND_GUARD_V2_20261116
   if v_uid is null then return new; end if;
   if exists (select 1 from public.profiles p where p.id = v_uid and p.role in ('super_admin', 'superadmin')) then return new; end if;
   if coalesce(new.change_type, '') <> 'ticket_refund' or coalesce(new.amount, 0) <= 0 then return new; end if;
   v_pid := nullif(btrim(coalesce(new.metadata->>'purchase_id', '')), '');
   if v_pid is null then return new; end if;
   -- 칸은 to_jsonb 로 읽는다(칸이 덜 있는 옛 표·픽스처에서도 회원 환불을 깨지 않게 — 라이브 표엔 다 있다)
-  select o.order_id into v_o
+  select array_agg(o.order_id) into v_ords
     from public.payment_orders o
    where o.user_id = new.user_id and to_jsonb(o)->>'purpose' = 'ticket_topup' and to_jsonb(o)->>'status' = 'paid'
      and (coalesce(to_jsonb(o)->>'fail_reason', '') = '' or to_jsonb(o)->>'fail_reason' like 'unknown:%')
      and (o.metadata->>'hold_purchase_id' = v_pid or o.metadata->'card_dep'->>'hold' = v_pid)
      and not exists (select 1 from public.tickets t
                       where t.user_id = new.user_id and t.extra_data->>'order_id' = o.order_id
-                        and lower(coalesce(t.status, '')) <> 'hold')
-   limit 1;
-  if v_o is not null then
+                        and lower(coalesce(t.status, '')) <> 'hold');
+  if v_ords is null then return new; end if;
+  -- 그 주문들이 이 통에서 뺀 몫(묶어 둘 몫) · 통에 남은 것(이 줄 전 — 같은 호출의 앞 줄은 이미 들어와 있다)
+  select coalesce(sum(-d.amount) filter (where d.change_type = 'ticket_purchase' and d.amount < 0 and d.metadata->>'order_id' = any (v_ords)), 0),
+         coalesce(sum(-d.amount) filter (where d.change_type = 'ticket_purchase' and d.amount < 0), 0)
+       - coalesce(sum(d.amount)  filter (where d.change_type in ('ticket_refund', 'ticket_pax_change') and d.amount > 0), 0)
+    into v_res, v_net
+    from public.deposit_transactions d
+   where d.user_id = new.user_id and d.metadata->>'purchase_id' = v_pid;
+  if new.amount > v_net - v_res then
     raise exception 'REFUND_CARD_PENDING: 카드 결제를 확인 중인 구매입니다 — 확인이 끝난 뒤 처리됩니다' using errcode = '42501';
   end if;
   return new;
@@ -248,27 +284,48 @@ grant execute on function public.taam_card_order_peek(text) to authenticated;
 --   resolve: paid · unknown:*(잡은 뒤 함수가 죽었다 · 전환 결과 모름 · 실패 정리 중 끊김) · 10분 지남(함수 벽시계 400초를 넘겼다) → 티켓이 있으면 표시만 지우고,
 --            없으면 실패 정리를 이어 간다(예치금 되돌림 · 홀드 반납 · 카드 전액 취소 — 모두 멱등)
 --   orphan : 「결제 없음」으로 닫은 주문(swept_no_payment) — 닫은 뒤 3~45분 동안 다시 조회(늦게 완료된 승인이 있으면 취소)
+-- N5 물러서기 — Edge sweep 이 손대지 못하고 둔 주문에 metadata.sweep = {n: 시도 수, at: 시각} 을 남긴다(payment_orders 는 서버만 쓴다).
+--   목록은 그 시각부터 2번까지 10분 · 5번까지 30분 · 그 뒤 120분 동안 그 주문을 다시 넣지 않고, 한 번도 안 본 것 · 알림 안 보낸 것을 먼저 고른다
+--   (오래된 순 15건만 보던 판은 끝내 결과를 모르는 주문이 앞자리를 차지하면 새 주문이 영영 밀렸다). 닫힌 주문(orphan)은 45분 창이라 물러서지 않는다.
+create or replace function public._taam_card_sweep_at(p_md jsonb)
+returns timestamptz language plpgsql stable set search_path = public as $$
+declare v text := case when jsonb_typeof(p_md->'sweep') = 'object' then p_md->'sweep'->>'at' end;
+begin
+  if v is null or v !~ '^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}' then return null; end if;
+  return v::timestamptz;
+exception when others then return null;   -- 이상한 값은 「본 적 없음」 — 목록을 깨지 않는다
+end $$;
+create or replace function public._taam_card_sweep_n(p_md jsonb)
+returns int language sql immutable set search_path = public as $$
+  select case when jsonb_typeof(p_md->'sweep') = 'object' and coalesce(p_md->'sweep'->>'n', '') ~ '^\d{1,6}$' then (p_md->'sweep'->>'n')::int else 0 end
+$$;
+revoke all on function public._taam_card_sweep_at(jsonb) from public, anon, authenticated;
+revoke all on function public._taam_card_sweep_n(jsonb) from public, anon, authenticated;
+
 create or replace function public.taam_card_topup_reconcile_list(p_limit int default 15)
 returns jsonb language plpgsql stable security definer set search_path = public as $$
 declare v jsonb; v_jwt text := '';
 begin
-  -- CARD_TOPUP_RECONCILE_20261116
+  -- CARD_TOPUP_RECONCILE_20261116 · CARD_TOPUP_RECONCILE_V2_20261116(물러서기)
   if auth.uid() is not null then raise exception 'FORBIDDEN' using errcode = '42501'; end if;
   begin v_jwt := coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb->>'role', ''); exception when others then v_jwt := ''; end;
   if v_jwt <> 'service_role' and session_user <> 'postgres' then raise exception 'FORBIDDEN' using errcode = '42501'; end if;
-  select coalesce(jsonb_agg(x order by lo, ca), '[]'::jsonb) into v from (
-    select (po.status = 'failed') as lo, po.created_at as ca,
+  select coalesce(jsonb_agg(x order by lo, al, sa nulls first, ca), '[]'::jsonb) into v from (
+    select (po.status = 'failed') as lo, (coalesce(po.fail_reason, '') like '%:alerted') as al, w.sa, po.created_at as ca,
            jsonb_build_object('order_id', po.order_id, 'user_id', po.user_id, 'status', po.status, 'fail_reason', po.fail_reason,
-                              'currency', po.currency, 'created_at', po.created_at, 'updated_at', po.updated_at,
+                              'currency', po.currency, 'created_at', po.created_at, 'updated_at', po.updated_at, 'sweep_n', w.sn,
                               'reconcile', case when po.status = 'pending' then 'lookup' when po.status = 'paid' then 'resolve' else 'orphan' end) as x
       from public.payment_orders po
+      cross join lateral (select public._taam_card_sweep_at(po.metadata) as sa, public._taam_card_sweep_n(po.metadata) as sn) w
      where po.purpose = 'ticket_topup' and po.created_at > now() - interval '3 days'
        and ((po.status = 'pending' and coalesce(po.fail_reason, '') like 'unknown:%' and coalesce(po.updated_at, po.created_at) < now() - interval '5 minutes')
          or (po.status = 'paid' and coalesce(po.fail_reason, '') like 'unknown:%' and coalesce(po.updated_at, po.created_at) < now() - interval '10 minutes')
          or (po.status = 'failed' and coalesce(po.fail_reason, '') like 'swept_no_payment%'
              and coalesce(po.updated_at, po.created_at) < now() - interval '3 minutes'
              and coalesce(po.updated_at, po.created_at) > now() - interval '45 minutes'))
-     order by (po.status = 'failed'), po.created_at
+       and (po.status = 'failed' or w.sa is null
+            or w.sa < now() - case when w.sn <= 2 then interval '10 minutes' when w.sn <= 5 then interval '30 minutes' else interval '120 minutes' end)
+     order by (po.status = 'failed'), (coalesce(po.fail_reason, '') like '%:alerted'), w.sa nulls first, po.created_at
      limit greatest(1, least(coalesce(p_limit, 15), 50))) s;
   return v;
 end $$;
@@ -315,9 +372,9 @@ end $do$;
 -- ── 확인 (한 표) — ❌ 가 한 줄도 없어야 정상 · 건수만(공개 로그) ──
 select 항목 as what, 결과 as result from _cos
 union all
-select '① taam_card_order_settle 2판(서버 전용 · 홀드 구매 id 한 통 · Edge 가 뺀 만큼까지 · 멱등)',
+select '① taam_card_order_settle 3판(서버 전용 · 홀드 구매 id 한 통 · 이 주문 몫까지 · Edge 가 뺀 만큼까지 · 멱등)',
        case when exists (select 1 from pg_proc where oid = to_regprocedure('public.taam_card_order_settle(text,uuid,bigint,text,text,text)')
-                          and prosrc like '%CARD_SETTLE_V2_20261116%' and prosecdef) then '✅' else '❌' end
+                          and prosrc like '%CARD_SETTLE_V3_20261116%' and prosecdef) then '✅' else '❌' end
 union all
 select '② 되돌림 — anon · authenticated 실행 불가 · service_role 실행 가능',
        case when to_regprocedure('public.taam_card_order_settle(text,uuid,bigint,text,text,text)') is null then '❌'
@@ -328,14 +385,16 @@ union all
 select '③ 의존 함수 taam_apply_deposit_delta(uuid,bigint,bigint,jsonb)',
        case when to_regprocedure('public.taam_apply_deposit_delta(uuid,bigint,bigint,jsonb)') is not null then '✅' else '❌' end
 union all
-select '④ 트리거 trg_taam_guard_ledger_refund_cardpend(처리 중 카드 주문의 홀드 회원 환불 막기)',
-       case when exists (select 1 from pg_trigger where tgname = 'trg_taam_guard_ledger_refund_cardpend' and not tgisinternal and tgenabled <> 'D') then '✅' else '❌' end
+select '④ 트리거 trg_taam_guard_ledger_refund_cardpend(처리 중 카드 주문이 뺀 몫만 묶어 두기 · 2판)',
+       case when exists (select 1 from pg_trigger where tgname = 'trg_taam_guard_ledger_refund_cardpend' and not tgisinternal and tgenabled <> 'D')
+             and exists (select 1 from pg_proc where proname = 'taam_guard_ledger_refund_cardpend' and prosrc like '%CARD_PEND_GUARD_V2_20261116%') then '✅' else '❌' end
 union all
 select '⑤ 트리거 trg_taam_guard_card_order_pending(결과 모르는 주문이 있으면 새 카드 주문 막기)',
        case when exists (select 1 from pg_trigger where tgname = 'trg_taam_guard_card_order_pending' and not tgisinternal and tgenabled <> 'D') then '✅' else '❌' end
 union all
-select '⑥ 정리 목록·킥 — 회원·비로그인 실행 불가',
+select '⑥ 정리 목록(물러서기 2판)·킥 — 회원·비로그인 실행 불가',
        case when to_regprocedure('public.taam_card_topup_reconcile_list(int)') is null or to_regprocedure('public.taam_card_topup_reconcile_kick()') is null then '❌'
+            when not exists (select 1 from pg_proc where proname = 'taam_card_topup_reconcile_list' and prosrc like '%CARD_TOPUP_RECONCILE_V2_20261116%') then '❌ 옛 판'
             when has_function_privilege('authenticated', 'public.taam_card_topup_reconcile_list(int)', 'execute')
               or has_function_privilege('anon', 'public.taam_card_topup_reconcile_list(int)', 'execute')
               or has_function_privilege('authenticated', 'public.taam_card_topup_reconcile_kick()', 'execute')
