@@ -16,6 +16,10 @@
 #              트리거만 지나는 길(수정 승인)은 기다리지 않고 busy → 「다시 맞추기」(4c · KSK_TRYLOCK)
 #     RV3-SRV-2 캘린더 「수정」 수동 좌석 인원 늘림(좌석 줄 → tkcap_)과 교착 없음(좌석 행 → 정원 잠금 · SEAT_ROWS_BEFORE_TKCAP)(4d)
 #     덤 결제 링크 청구 줄을 쥔 링크 결제와 교착 없음 — 부제는 청구 줄 NOWAIT · busy 로 남김(4e)
+#   9차 (2026-11-16 8차 판 재점검 반영 · pg_locks 로 순서를 맞춘 결정적 재현 · 8차 판에서 ❌):
+#     R8-SRV-CAP 날짜와 정원을 같이 줄이는 이동이 tkcap_ 를 쥔 사이 들어온 좌석 INSERT(정원 트리거는 정원을 tkcap_ 전에 읽는다) → 새 정원으로 막힌다(3b · CAP_RECHECK)
+#     R8-SRV-SUB 못 맞춘 결제 링크 부제(charge:busy)를 「다시 맞추기」·다음 이동이 좌석의 지금 자리로 맞춘다 · 따로 고친 부제는 그대로(4f · CHARGE_SUBTITLE_FOLLOW)
+#     R8-SRV-LINKDL 링크 초대 만들기(라이브 본문 · 만료 링크 홀드 정리 먼저)와 날짜 바꾸기 교착 없음(4g · LINK_EVENT_LOCK_FIRST)
 cd "$(dirname "$0")/../.."
 RMF=${TAAM_TEST_MIG:-supabase/migrations/20261116_round_move_sync.sql}; FX2=sql/_test/fx_round_move_live_2026-11-16
 MR=${TAAM_MR_ROOT:-.}; MIG=$MR/supabase/migrations/20261117_manual_record_seats.sql; FX3=$MR/sql/_test/fx_manual_record_live_2026-11-16
@@ -26,7 +30,7 @@ FX=sql/_test/fx_repurchase_live_2026-11-15
 H="-h /tmp -U postgres"; DB=${TAAM_TEST_DB:-t_rmove_manrec}
 psql $H -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1; psql $H -d postgres -q -c "create database $DB" >/dev/null
 P="psql $H -d $DB -q -At -v ON_ERROR_STOP=1"; Q="psql $H -d $DB -q -At"
-for f in $FX/fixture.sql $FX2/fixture_extra.sql $FX/fns.sql $FX2/fns_extra.sql $FX2/ksk_sync.sql $FX/triggers.sql $FX2/triggers_extra.sql; do
+for f in $FX/fixture.sql $FX2/fixture_extra.sql $FX/fns.sql $FX2/fns_extra.sql $FX2/ksk_sync.sql $FX/triggers.sql $FX2/triggers_extra.sql $FX2/link_invite_create.sql; do
   $P -f $f >/dev/null || { echo "FIXTURE FAIL $f"; exit 1; }
 done
 $P <<'SQL' >/dev/null
@@ -52,6 +56,8 @@ if [ "${TAAM_RM_ORDER:-before}" = after ]; then mr_apply; rm_apply; else rm_appl
 echo "── 0. 마이그레이션 (이동 파일 ${TAAM_RM_ORDER:-before} 20261117)"
 ok "20261117 오류 0 · ❌ 0" "0|0" "$(echo "$MOUT" | grep -c 'ERROR')|$(echo "$MOUT" | grep -c '❌')"
 ok "이동 파일 확인 표 ⑪(ROUND_MOVE_RECOUNT · MANREC_RELOCK) ✅" "✅" "$(echo "$ROUT" | grep '^⑪' | awk -F'|' '{print $NF}')"
+ok "이동 파일 확인 표 ⑭(CAP_RECHECK · CHARGE_SUBTITLE_FOLLOW) ✅ · ⑮(링크 초대 만들기 — 라이브 본문에 LINK_EVENT_LOCK_FIRST 덧댐) ✅" "✅|✅|1" \
+   "$(echo "$ROUT" | grep '^⑭' | awk -F'|' '{print $NF}')|$(echo "$ROUT" | grep '^⑮' | awk -F'|' '{print $NF}')|$($P -c "select count(*) from pg_proc where proname = 'taam_link_invite_create' and prosrc like '%LINK_EVENT_LOCK_FIRST%' and md5(replace(prosrc, (select substring(prosrc from '  -- LINK_EVENT_LOCK_FIRST.*?for update;\n\n')), '')) = '21776bd519dd85e09895d910c21174e5'")"
 
 SU=a0000000-0000-4000-8000-0000000000ff; M1=a0000000-0000-4000-8000-000000000001
 RA=b0000000-0000-4000-8000-00000000000a; T1=f0000000-0000-4000-8000-000000000001; DM=d0000000-0000-4000-8000-000000000001
@@ -210,6 +216,42 @@ capseed none 4 2
 o=$(capres '{"total_pax":"2"}')
 ok "3 정원이 숫자가 아니면 BAD_TOTAL_PAX · 아무것도 안 바뀜" "A:false|-|-|2027.03.10|soldout|true|4|-" "$o|$(st)|$(ev)"
 
+echo "── 3b. 9차 R8-SRV-CAP — 날짜와 정원을 같이 줄이는 이동(ROUND_MOVE_CAP)이 tkcap_ 를 쥔 사이 들어온 좌석 INSERT → 새 정원으로 막힌다(CAP_RECHECK)"
+#   정원 트리거(라이브 enforce_ticket_capacity)는 정원을 tkcap_ **전에** 읽는다. 문지기가 회차 행을 FOR KEY SHARE 로 쥐어 이동을 tkcap_ 를 쥔 채 회차 행에서 세워 두고,
+#   그 사이 INSERT 가 정원(옛 10)을 읽고 tkcap_ 에서 기다리게 한 뒤 문지기를 놓는다. 8차 판: 이동 커밋 뒤 새 점유 2 + 4 를 옛 정원 10 과 견줘 통과 → 정원 4 에 6석.
+M2=a0000000-0000-4000-8000-000000000002
+LCAP=$(LO $($P -c "select hashtext('tkcap_R1')"))
+crseed(){ seed 10 true live active
+  $P -c "set session_replication_role = replica; delete from public.daegwan_manual; insert into auth.users values ('$M2'); insert into public.profiles(id, role, display_name, membership_tier) values ('$M2','user','회원2','M')" >/dev/null; }
+capins(){ echo "begin; insert into public.tickets(user_id, restaurant_id, restaurant_name, ticket_product_id, reservation_date, visit_time, party_size, price, status, purchase_id) values ('$M2','$RA','미토우','R1','2027.03.10','18:00',$1,0,'hold','PAYH-cap-$2'); select 'I:ok'; commit;"; }
+occ(){ $P -c "select date||' cap '||total_pax||' 점유 '||(select coalesce(sum(party_size),0) from public.tickets where ticket_product_id='R1' and status<>'cancelled') from public.ticket_products where id='R1'"; }
+wrow3(){ $P -c "select count(*) from pg_locks l join pg_stat_activity a on a.pid = l.pid where a.application_name = '$1' and not l.granted and l.locktype in ('transactionid','tuple')"; }
+crrace(){   # $1 = 날짜 바꾸기 옵션 · $2 = INSERT 인원
+  OUTD=$(mktemp -d)
+  ( PGAPPNAME=r9g $Q -c "begin; select 1 from public.ticket_products where id='R1' for key share; select pg_sleep(60); commit;" >/dev/null 2>&1 ) &
+  poll "$P -c \"select count(*) from pg_stat_activity where application_name = 'r9g' and wait_event = 'PgSleep'\"" 1
+  ( PGAPPNAME=r9m $Q -c "begin; set local taam.uid='$SU'; set local role authenticated; select 'M:'||((public.taam_round_reschedule('R1','2027.03.17',null,'2027.03.10','18:00','$1'))->>'ok'); commit;" > $OUTD/m 2>&1 ) & BM=$!
+  poll "wrow3 r9m" 1                     # 이동이 tkcap_R1 을 쥔 채 회차 행(FOR UPDATE)을 기다린다
+  RHOLD=$($P -c "select count(*) from pg_locks l join pg_stat_activity a on a.pid = l.pid where a.application_name = 'r9m' and l.granted and l.locktype = 'advisory' and l.objid::bigint = $LCAP")
+  ( PGAPPNAME=r9i $Q -c "$(capins $2 b)" > $OUTD/i 2>&1 ) & BI=$!
+  poll "wadv r9i $LCAP" 1                # INSERT 가 정원(옛 값)을 읽고 tkcap_R1 에서 기다린다
+  term r9g
+  wait $BM $BI
+  CRM=$(grep -E '^M:' $OUTD/m); CRI=$(grep -E '^I:|ERROR' $OUTD/i | head -1); rm -rf $OUTD
+}
+crseed
+o=$($Q -c "begin; set local taam.uid='$SU'; set local role authenticated; select 'M:'||((public.taam_round_reschedule('R1','2027.03.17',null,'2027.03.10','18:00','{\"total_pax\":4}'))->>'ok'); commit;" 2>&1 | grep -E '^M:|ERROR' | head -1)
+i=$($Q -c "$(capins 4 a)" 2>&1 | grep -E '^I:|ERROR' | head -1)
+ok "3b 대조(경주 없음) — 정원 10→4 이동 뒤 4명 INSERT → TICKET_SOLD_OUT(잔여 2) · 2027.03.17 cap 4 점유 2" "M:true|1|2027.03.17 cap 4 점유 2" \
+   "$o|$(echo "$i" | grep -c 'TICKET_SOLD_OUT: 잔여 2 석, 요청 4 명')|$(occ)"
+crseed; crrace '{"total_pax":4}' 4
+ok "3b 경주 — 이동이 tkcap_ 를 쥔 사이 4명 INSERT(옛 정원 10 을 읽음) → 이동 ok · INSERT 는 TICKET_SOLD_OUT(잔여 2) · 끝 cap 4 점유 2(8차 판: I:ok · 점유 6)" \
+   "1|M:true|1|2027.03.17 cap 4 점유 2" "$RHOLD|$CRM|$(echo "$CRI" | grep -c 'TICKET_SOLD_OUT: 잔여 2 석, 요청 4 명')|$(occ)"
+crseed; crrace '{}' 4
+ok "3b 경주 — 정원을 안 바꾸는 이동이면 같은 INSERT 는 그대로 들어간다(새로 막는 것 없음) · cap 10 점유 6" "M:true|I:ok|2027.03.17 cap 10 점유 6" "$CRM|$CRI|$(occ)"
+crseed; crrace '{"total_pax":6}' 4
+ok "3b 경주 — 정원 10→6 · 2+4=6 은 들어간다(새 정원 안) · cap 6 점유 6" "M:true|I:ok|2027.03.17 cap 6 점유 6" "$CRM|$CRI|$(occ)"
+
 
 echo "── 4. 8차 RV3-SRV-1 · RV3-SRV-2 — 정산 좌석 동기화 · 수동 좌석 인원 늘림 · 결제 링크 청구와 잠금 순서(교착 없음) — pg_locks 로 순서를 맞춘 결정적 재현"
 #   7차 판: 이동이 tkcap_·좌석 행·회차 행을 쥔 뒤 적용 안에서 정산 회차 줄·ksk_sync_ 를 잡았고(정산 동기화는 ksk_sync_ → tkcap_),
@@ -358,6 +400,77 @@ ok "4e 링크 결제가 청구 줄을 쥔 채 · 이동 → 교착 없음 · 이
    "M:true|0|2027.03.17 active|2027.03.10 18:00|charge:busy" \
    "$(grep -E '^M:' $OUTD/m)|$(cat $OUTD/m $OUTD/l | grep -c -E 'deadlock|40P01')|$($P -c "select reservation_date||' '||status from public.tickets where id='$TLINK'")|$($P -c "select subtitle from public.kashikiri_charges where id='$CLINK'")|$(mverr)"
 rm -rf $OUTD
+
+# 4f. 9차 R8-SRV-SUB — 부제를 못 맞춘 청구(charge:busy)를 「다시 맞추기」·다음 이동이 좌석의 지금 자리로 맞춘다(CHARGE_SUBTITLE_FOLLOW)
+#   8차 판: 다시 맞추기는 {move:null}(「이미 모두 옮겨져 있습니다」) · 다음 이동도 부제가 좌석의 옛 날짜와 달라 그대로 — 회원 결제 완료 알림·/pay 에 옛 날짜
+o=$($Q -c "begin; set local taam.uid='$SU'; set local role authenticated; select 'R:'||coalesce(j->>'ok','null')||'|'||coalesce(jsonb_array_length(j->'move'->'side'->'subtitles')::text,'-')||'|'||coalesce(j->'move'->>'via','-') from (select public.taam_round_move_resync('R1') j) x; commit;" 2>&1 | grep -E '^R:|ERROR' | head -1)
+ok "4f 4e 뒤(링크 결제 커밋 · 부제 2027.03.10 18:00) 「다시 맞추기」 → 기록 남김(부제 1 · resync) · 부제 2027.03.17 18:00" "R:true|1|resync|2027.03.17 18:00" \
+   "$o|$($P -c "select subtitle from public.kashikiri_charges where id='$CLINK'")"
+lseed(){ seed 10 true live active
+  $P <<SQL >/dev/null
+set session_replication_role = replica;
+delete from public.kashikiri_charges; delete from public.kashikiri_teams; delete from public.kashikiri_events;
+insert into public.kashikiri_charges(id,label,status,purpose,payer_name,subtitle,link_invite) values ('$CLINK','링크','pending','ticket','링크손님','2027.03.10 18:00',true);
+insert into public.tickets(id, user_id, restaurant_id, restaurant_name, ticket_product_id, reservation_date, visit_time, party_size, price, status, purchase_id, buyer_name, extra_data)
+ values ('$TLINK','$SU','$RA','미토우','R1','2027.03.10','18:00',2,0,'hold','LINK-e4000000-1','링크손님','{"linkInvite":true,"chargeId":"$CLINK"}');
+SQL
+}
+sub(){ $P -c "select subtitle from public.kashikiri_charges where id='$CLINK'"; }
+seat(){ $P -c "select reservation_date||' '||visit_time from public.tickets where id='$TLINK'"; }
+resch(){ $Q -c "begin; set local taam.uid='$SU'; set local role authenticated; select 'M:'||((public.taam_round_reschedule('R1','$1',$2,'$3','$4','{}'))->>'ok'); commit;" 2>&1 | grep -E '^M:|ERROR' | head -1; }
+resy(){ $Q -c "begin; set local taam.uid='$SU'; set local role authenticated; select 'R:'||coalesce(j->>'ok','null')||'|'||coalesce(j->>'move_id','null') from (select public.taam_round_move_resync('R1') j) x; commit;" 2>&1 | grep -E '^R:|ERROR' | head -1; }
+# 청구 줄을 쥔 세션(결제 페이지의 주문 시작 모양 — 청구 줄 UPDATE) 사이에 날짜 바꾸기 → 부제만 charge:busy
+subbusy(){ gate r9c "update public.kashikiri_charges set payer_name = payer_name where id='$CLINK'"
+  poll "$P -c \"select count(*) from pg_stat_activity where application_name = 'r9c' and wait_event = 'PgSleep'\"" 1
+  SBM=$(resch "$1" "$2" "$3" "$4"); term r9c; sleep 0.1; }
+lseed; subbusy 2027.03.17 null 2027.03.10 18:00
+ok "4f 청구 줄 잠김 중 이동 → 좌석 2027.03.17 · 부제 그대로 · charge:busy(그때 부제 · 날짜·시간 따름 표시)" "M:true|2027.03.17 18:00|2027.03.10 18:00|charge:busy|2027.03.10 18:00|true|true" \
+   "$SBM|$(seat)|$(sub)|$(mverr)|$($P -c "select e->>'from'||'|'||(e->>'df')||'|'||(e->>'tf') from public.ticket_round_moves m, jsonb_array_elements(m.errors) e where e->>'kind'='charge' order by m.id desc limit 1")"
+ok "4f   이어 받을 표(_taam_round_follow_spec chg)에 그 청구" "1" "$($P -c "select (public._taam_round_follow_spec('R1', true)->'chg' ? '$CLINK')::int")"
+o=$(resch 2027.03.24 null 2027.03.17 18:00)
+ok "4f 다시 맞추기 없이 한 번 더 옮김(03.17 → 03.24) → 부제도 좌석 자리로 2027.03.24 18:00 · 이어 받을 표에서 빠짐(8차 판: 2027.03.10 18:00 그대로)" "M:true|2027.03.24 18:00|2027.03.24 18:00|0" \
+   "$o|$(seat)|$(sub)|$($P -c "select (public._taam_round_follow_spec('R1', true)->'chg' ? '$CLINK')::int")"
+lseed; subbusy 2027.03.17 null 2027.03.10 18:00
+$P -c "update public.kashikiri_charges set subtitle = '2027.03.12 19:00' where id='$CLINK'" >/dev/null
+o=$(resy)
+ok "4f 못 맞춘 뒤 어드민이 부제를 따로 고침(2027.03.12 19:00) → 다시 맞추기는 손대지 않는다 · 기록 없음" "R:true|null|2027.03.12 19:00" "$o|$(sub)"
+lseed; subbusy 2027.03.17 null 2027.03.10 18:00
+gate r9c "update public.kashikiri_charges set payer_name = payer_name where id='$CLINK'"
+poll "$P -c \"select count(*) from pg_stat_activity where application_name = 'r9c' and wait_event = 'PgSleep'\"" 1
+o1=$(resy); term r9c; sleep 0.1
+o2=$($Q -c "begin; set local taam.uid='$SU'; set local role authenticated; select 'R:'||coalesce(j->>'ok','null')||'|'||coalesce((j->'move'->'side'->'subtitles'->0->>'to'),'-') from (select public.taam_round_move_resync('R1') j) x; commit;" 2>&1 | grep -E '^R:|ERROR' | head -1)
+ok "4f 다시 맞추기 때도 잠겨 있으면 → 다시 charge:busy 로 기록(부제 그대로) · 풀린 뒤 다시 맞추기 → 2027.03.17 18:00" "1|2027.03.10 18:00|R:true|2027.03.17 18:00|2027.03.17 18:00" \
+   "$(echo "$o1" | grep -c '^R:true|[0-9]')|$($P -c "select string_agg(distinct (e->>'from'), ',') from public.ticket_round_moves m, jsonb_array_elements(m.errors) e where m.via = 'resync' and e->>'kind'='charge'")|$o2|$(sub)"
+
+# 4g. 9차 R8-SRV-LINKDL — 링크 초대 만들기(라이브 본문 · ① 만료 링크 홀드 정리 → ② 정산 회차 줄)와 날짜 바꾸기(정산 회차 줄 → 좌석 행) 교착 없음
+#   G = 같은 회차의 회원 좌석 줄을 잠깐 쥔 거래(결제·취소 진행 중) — 이동은 정산 회차 줄·ksk_sync_ 를 쥔 채 그 줄을 기다린다(검토 C3).
+#   그 사이 링크 초대 만들기가 들어오고 G 를 놓는다. 8차 판: 링크가 만료 홀드(HX) 행을 잠그고 정산 회차 줄에서 이동을 기다림 → 이동이 HX 를 기다려 40P01.
+EL=c0000000-0000-4000-8000-0000000000f1; CX=c0000000-0000-4000-8000-0000000000f2; HX=f0000000-0000-4000-8000-0000000000f3
+for DLY in 0.2 1.6; do
+  seed 10 true live active
+  $P <<SQL >/dev/null
+set session_replication_role = replica;
+delete from public.kashikiri_charges; delete from public.kashikiri_teams; delete from public.kashikiri_events;
+update public.ticket_products set meal_fee = 500000, agency_fee = 100000, wine_min = 0 where id = 'R1';
+insert into public.kashikiri_events(id,venue_id,venue_name,event_date,event_time,ticket_product_id,created_by,memo,status) values ('$EL','$RA','미토우','2027-03-10','18:00','R1','$SU','링크 초대 (자동 생성)','open');
+insert into public.kashikiri_charges(id,event_id,label,status,purpose,payer_name,link_invite,expires_at) values ('$CX','$EL','지난링크','pending','ticket','지난손님',true, now() - interval '1 hour');
+insert into public.tickets(id, user_id, restaurant_id, restaurant_name, ticket_product_id, reservation_date, visit_time, party_size, price, status, purchase_id, extra_data)
+ values ('$HX','$SU','$RA','미토우','R1','2027.03.10','18:00',2,1200000,'hold','LINK-f2000000-1','{"linkInvite":true,"chargeId":"$CX"}');
+SQL
+  OUTD=$(mktemp -d)
+  gate r9g "select 1 from public.tickets where id='$T1' for update"
+  poll "$P -c \"select count(*) from pg_stat_activity where application_name = 'r9g' and wait_event = 'PgSleep'\"" 1
+  ( PGAPPNAME=r9m $Q -c "begin; set local taam.uid='$SU'; set local role authenticated; select 'M:'||((public.taam_round_reschedule('R1','2027.03.17',null,'2027.03.10','18:00','{}'))->>'ok'); commit;" > $OUTD/m 2>&1 ) & BM=$!
+  poll "wrow r9m" 1                    # 이동이 정산 회차 줄·ksk_sync_ 를 쥔 채 회원 좌석 줄(G)을 기다린다
+  ( PGAPPNAME=r9l $Q -c "begin; set local taam.uid='$SU'; set local role authenticated; select 'L:'||(public.taam_link_invite_create('R1','새손님','01012345678',2,'KRW',null,'2027.03.10','18:00')->>'ok'); commit;" > $OUTD/l 2>&1 ) & BL=$!
+  poll "wany r9l" 1                    # 9차: 정산 회차 줄에서 이동을 기다린다 · 8차 판: 만료 홀드를 잠근 뒤 정산 회차 줄에서
+  sleep $DLY; term r9g
+  wait $BM $BL
+  ok "4g 링크 초대 만들기가 이동 중 · G 를 ${DLY}초 뒤 놓음 → 교착 없음 · 이동 ok · 링크 ok · 회차 2027.03.17 · 만료 홀드 cancelled · 새 링크 좌석 2027.03.17" \
+     "M:true|L:true|0|2027.03.17|cancelled|2027.03.17 hold" \
+     "$(grep -E '^M:' $OUTD/m)|$(grep -E '^L:' $OUTD/l)|$(cat $OUTD/m $OUTD/l | grep -c -E 'deadlock|40P01')|$($P -c "select date from public.ticket_products where id='R1'")|$($P -c "select status from public.tickets where id='$HX'")|$($P -c "select string_agg(reservation_date||' '||status, ',') from public.tickets where purchase_id like 'LINK-%' and id <> '$HX'")"
+  rm -rf $OUTD
+done
 
 rm -f "$TMPA" "$TMPB"
 [ -z "$KEEP" ] && psql $H -d postgres -q -c "drop database if exists $DB" >/dev/null 2>&1

@@ -105,6 +105,18 @@
 --        교착했다(다른 좌석 행이 잠깐 잠겨 이동이 tkcap_ 를 쥔 채 기다리면 창이 넓다). 지금 순서: (기록 줄 → 매장·날짜 열쇠) → 정산 회차 줄 → ksk_sync_ →
 --        좌석 행 → tkcap_ → 회차 행. 좌석 행을 기다리는 것은 그대로다(결제·취소가 끝나기를 기다렸다 옮긴다 — 검토 C3).
 --
+-- 9차(8차 판 재점검 반영 · 2026-11-16) — 역시 라이브 전이라 그 자리에서
+--   R8-SRV-CAP 날짜와 정원을 같이 줄이는 이동(ROUND_MOVE_CAP)이 tkcap_ 를 쥔 사이 들어온 좌석 INSERT 가 정원 트리거(enforce_ticket_capacity — 정원을 tkcap_ **전에**
+--        읽는다)에서 이동 커밋 뒤의 점유를 **옛 정원**과 견줘 통과했다(정원 4 에 6석). → 좌석 날짜 고정 트리거(정원 트리거 뒤 · 회차 행 FOR NO KEY UPDATE)가 잠근 회차 행의
+--        정원으로 ①(총 정원)을 한 번 더 센다(CAP_RECHECK · 같은 식 · 같은 오류). 20261117 의 정원 트리거 덧댐(md5 가드)과 엮이지 않게 이 파일의 트리거에 —
+--        어느 순서로 들어와도 · 20261117 이 없어도. 수동 좌석 인원 늘림(좌석 줄 → tkcap_)·정산 좌석 인원(ksk_sync_ 먼저)은 이동과 좌석 줄·ksk_sync_ 에서 이미 줄을 선다.
+--   R8-SRV-SUB 결제 링크 청구의 부제를 청구 줄이 잠겨 못 맞추면(charge:busy) 「다시 맞추기」(그 좌석은 이미 새 날짜 — 옮길 것 없음)도 다음 이동(좌석의 옛 날짜가 부제와
+--        다름)도 못 고쳐 회원 결제 완료 알림(taam_pay_link_member_notify)·/pay 에 옛 날짜가 남았다. → 못 맞춘 청구를 기록(from · 무엇을 따르나 df · tf)하고
+--        _taam_round_follow_spec 의 chg 로 이어 받아, 다음 이동·다시 맞추기가 좌석의 **지금 자리**로 맞춘다(CHARGE_SUBTITLE_FOLLOW) · 부제만 맞춘 다시 맞추기도 기록한다.
+--   R8-SRV-LINKDL 링크 초대 만들기(taam_link_invite_create)가 만료 링크 홀드(그 회차 좌석 행)를 먼저 잠그고 정산 회차 줄을 나중에 잡아, 정산 회차 줄 → 좌석 행 순의
+--        날짜 바꾸기와 교착(40P01)했다(정리 안 된 만료 홀드가 옮기는 회차에 있을 때). → 그 함수의 만료 홀드 정리 앞에 이 회차의 정산 회차 줄을 id 순으로 잠그는 한 줄(8 절 ·
+--        LINK_EVENT_LOCK_FIRST · 자리를 정확히 한 곳 찾을 때만 · 아니면 ⚠).
+--
 -- 되돌리기: drop trigger trg_taam_tp_round_move on public.ticket_products; drop trigger trg_taam_tp_round_lock on public.ticket_products;
 --   (가드 덩어리는 GUC 가 없으면 아무 일도 안 한다 — 그대로 둬도 된다)
 -- ============================================================================
@@ -245,7 +257,18 @@ returns jsonb language sql stable security definer set search_path = public as $
     'err',   coalesce((select jsonb_object_agg(z.rid, z.ot) from (select distinct on (x.rid) x.rid, x.ot from x order by x.rid, x.mid desc) z), '{}'::jsonb),
     'open',  coalesce((select jsonb_agg(o.id order by o.id) from o where o.open), '[]'::jsonb),
     'ksk',   coalesce((select jsonb_agg(distinct x->>'id') from m cross join lateral jsonb_array_elements(m.errs) x
-                        where x->>'kind' = 'ksk_sync' and nullif(x->>'id', '') is not null), '[]'::jsonb))
+                        where x->>'kind' = 'ksk_sync' and nullif(x->>'id', '') is not null), '[]'::jsonb),
+    -- 9차(R8-SRV-SUB · CHARGE_SUBTITLE_FOLLOW) 결제 링크 청구의 부제를 못 맞춘 것(청구 줄이 잠겨 busy · 오류) — 그 청구의 마지막 오류(다시 맞추기 기록 포함)가 적은
+    --   부제(from)가 **아직 그대로**일 때만. {청구 id: {d: 날짜 칸이 좌석을 따르나, t: 시간 칸이 좌석을 따르나}} — 다음 이동·다시 맞추기가 좌석의 **지금 자리**로 맞춘다.
+    --   종전엔 부제를 「이번에 옮긴 좌석의 옛 날짜 = 부제 날짜」일 때만 바꿔, 한 번 놓치면 다시 맞추기(그 좌석은 이미 새 날짜라 안 옮김)도 다음 이동(좌석의 옛 날짜가
+    --   이제 새 날짜라 부제와 다름)도 못 고쳤다 — 회원 결제 완료 알림·/pay 에 옛 날짜가 남았다
+    'chg',   coalesce((select jsonb_object_agg(z.cid, jsonb_build_object('d', z.df, 't', z.tf))
+                         from (select distinct on (x->>'id') x->>'id' as cid, x->>'from' as frm,
+                                      coalesce((x->>'df')::boolean, false) as df, coalesce((x->>'tf')::boolean, false) as tf
+                                 from m cross join lateral jsonb_array_elements(m.errs) x
+                                where x->>'kind' = 'charge' and nullif(x->>'id', '') is not null
+                                order by x->>'id', m.id desc) z
+                        where exists (select 1 from public.kashikiri_charges c where c.id::text = z.cid and c.subtitle is not distinct from z.frm)), '{}'::jsonb))
 $$;
 revoke all on function public._taam_round_follow_spec(text, boolean) from public, anon, authenticated;
 
@@ -457,7 +480,7 @@ declare
   v_mark jsonb; v_ed date; v_et time; v_sd date; v_st text; v_ns text; v_cm jsonb; v_fdx date; v_ftx text;
   v_moved_ids uuid[] := '{}'; v_glog_ids uuid[] := '{}'; v_event_ids uuid[] := '{}';
   v_cmap jsonb := '{}'::jsonb;   -- 결제 링크·정산 청구 → 그 좌석이 옮겨 간 (옛 날짜·시간 → 새 날짜·시간) — 부제를 맞춘다
-  v_live boolean; v_kbefore jsonb; v_kseats jsonb; v_kdid boolean;
+  v_live boolean; v_kbefore jsonb; v_kseats jsonb; v_kdid boolean; v_dfo boolean; v_tfo boolean;
 begin
   select tp.id, tp.rest_id::text as rest_id, tp.rest_name, tp.date, tp.time into v_tp from public.ticket_products tp where tp.id::text = p_round;
   v_dch := p_nd is not null and p_od is distinct from p_nd;
@@ -596,27 +619,45 @@ begin
   end loop;
 
   -- 결제 링크 청구의 부제 'YYYY.MM.DD HH:MM' — 이번에 실제로 옮긴 좌석의 청구만, 그 좌석이 옮겨 간 대로(검토 F8 · RM-5 — 다시 맞추기로 옮긴 좌석도)
-  for r in select c.id, c.subtitle from public.kashikiri_charges c
-            where v_cmap ? c.id::text and coalesce(c.subtitle, '') ~ '^\d{4}\.\d{2}\.\d{2}( \d{2}:\d{2})?$' loop
-    v_cm := v_cmap->(r.id::text);
+  --   9차(R8-SRV-SUB · CHARGE_SUBTITLE_FOLLOW) + 앞서 부제를 못 맞춘 청구(p_spec->'chg' — 청구 줄이 잠겨 busy 였던 것)는 좌석의 **지금 자리**로 —
+  --   그 사이 좌석이 또 옮겨 갔어도 · 다시 맞추기(옮길 좌석 없음)에서도. 어느 칸이 좌석을 따르는지(df · tf)는 처음 못 맞춘 그때 정한 그대로(따로 적은 부제는 지킨다).
+  --   다시 못 맞추면(또 잠김) 같은 표시로 다시 적는다 — 다음 이동·「다시 맞추기」가 잇는다
+  for r in select c.id, c.subtitle, p_spec->'chg'->(c.id::text) as f, v_cmap->(c.id::text) as cm, s.reservation_date as sd0, s.visit_time as st0
+             from public.kashikiri_charges c
+             left join lateral (select t.reservation_date, t.visit_time from public.tickets t
+                                 where t.ticket_product_id::text = p_round and t.extra_data->>'chargeId' = c.id::text
+                                   and lower(coalesce(t.status, '')) not in ('cancelled', 'canceled', 'expired', 'failed', 'refunded')
+                                 order by t.created_at desc limit 1) s on true
+            where (v_cmap ? c.id::text or coalesce(p_spec->'chg', '{}'::jsonb) ? c.id::text)
+              and coalesce(c.subtitle, '') ~ '^\d{4}\.\d{2}\.\d{2}( \d{2}:\d{2})?$' loop
     v_sd := public._taam_pu_visit_date(split_part(r.subtitle, ' ', 1)); v_st := nullif(split_part(r.subtitle, ' ', 2), '');
-    v_fdx := public._taam_pu_visit_date(v_cm->>'fd');
-    v_ftx := coalesce(public._taam_hhmm(v_cm->>'ft'), p_ot);
-    v_ns := to_char(case when v_fdx is not null and v_sd = v_fdx and public._taam_pu_visit_date(v_cm->>'td') is not null
-                         then public._taam_pu_visit_date(v_cm->>'td') else v_sd end, 'YYYY.MM.DD')
-            || coalesce(' ' || case when v_st is not null and v_st = v_ftx and public._taam_hhmm(v_cm->>'tt') is not null
-                                    then public._taam_hhmm(v_cm->>'tt') else v_st end, '');
+    if r.f is not null and jsonb_typeof(r.f) = 'object' then
+      if public._taam_pu_visit_date(r.sd0) is null then continue; end if;   -- 살아 있는 좌석이 없다(취소 등) — 맞출 자리가 없다
+      v_dfo := coalesce((r.f->>'d')::boolean, false); v_tfo := coalesce((r.f->>'t')::boolean, false);
+      v_ns := to_char(case when v_dfo then public._taam_pu_visit_date(r.sd0) else v_sd end, 'YYYY.MM.DD')
+              || coalesce(' ' || case when v_st is not null and v_tfo and public._taam_hhmm(r.st0) is not null then public._taam_hhmm(r.st0) else v_st end, '');
+    else
+      v_cm := r.cm;
+      v_fdx := public._taam_pu_visit_date(v_cm->>'fd');
+      v_ftx := coalesce(public._taam_hhmm(v_cm->>'ft'), p_ot);
+      v_dfo := coalesce(v_fdx is not null and v_sd = v_fdx and public._taam_pu_visit_date(v_cm->>'td') is not null, false);
+      v_tfo := coalesce(v_st is not null and v_st = v_ftx and public._taam_hhmm(v_cm->>'tt') is not null, false);
+      v_ns := to_char(case when v_dfo then public._taam_pu_visit_date(v_cm->>'td') else v_sd end, 'YYYY.MM.DD')
+              || coalesce(' ' || case when v_tfo then public._taam_hhmm(v_cm->>'tt') else v_st end, '');
+    end if;
     if v_ns is distinct from r.subtitle then
       begin
         -- 8차 청구 줄은 기다리지 않는다 — 결제·환불은 청구 줄을 쥔 뒤 동기화 잠금·좌석 행을 기다린다(이동은 그 둘을 이미 쥐었다 · 엇갈리면 교착).
-        --   부제는 보여 주는 글이라 잠겨 있으면 그대로 두고 적는다(결제 확정을 교착의 희생자로 만들지 않게)
+        --   부제는 보여 주는 글이라 잠겨 있으면 그대로 두고 적는다(결제 확정을 교착의 희생자로 만들지 않게) — 9차: 무엇을 따를지(df · tf)와 그때 부제(from)도
         perform 1 from public.kashikiri_charges c where c.id = r.id for update nowait;
         update public.kashikiri_charges set subtitle = v_ns where id = r.id;
         v_sub := v_sub || jsonb_build_object('charge_id', r.id, 'from', r.subtitle, 'to', v_ns);
       exception when lock_not_available then
-        v_err := v_err || jsonb_build_object('kind', 'charge', 'id', r.id::text, 'code', 'busy', 'msg', '결제·환불이 진행 중이라 결제 링크 부제를 맞추지 못했습니다');
+        v_err := v_err || jsonb_build_object('kind', 'charge', 'id', r.id::text, 'code', 'busy', 'msg', '결제·환불이 진행 중이라 결제 링크 부제를 맞추지 못했습니다 — 「다시 맞추기」',
+                                             'from', r.subtitle, 'to', v_ns, 'df', v_dfo, 'tf', v_tfo);
       when others then
-        v_err := v_err || jsonb_build_object('kind', 'charge', 'id', r.id::text, 'code', 'error', 'sqlstate', sqlstate, 'msg', left(sqlerrm, 200));
+        v_err := v_err || jsonb_build_object('kind', 'charge', 'id', r.id::text, 'code', 'error', 'sqlstate', sqlstate, 'msg', left(sqlerrm, 200),
+                                             'from', r.subtitle, 'to', v_ns, 'df', v_dfo, 'tf', v_tfo);
       end;
     end if;
   end loop;
@@ -676,7 +717,8 @@ begin
   end loop;
 
   v_side := jsonb_build_object('exceptions', v_exc, 'subtitles', v_sub, 'guest_log', v_glog, 'ksk', v_ksk, 'manual', v_man);
-  if p_via = 'resync' and jsonb_array_length(v_moved) = 0 and jsonb_array_length(v_err) = 0 and jsonb_array_length(v_ksk) = 0 then
+  -- 9차: 부제만 맞춘 다시 맞추기도 기록한다(앱이 「이미 모두 옮겨져 있습니다」라고 하지 않게)
+  if p_via = 'resync' and jsonb_array_length(v_moved) = 0 and jsonb_array_length(v_err) = 0 and jsonb_array_length(v_ksk) = 0 and jsonb_array_length(v_sub) = 0 then
     perform set_config('taam.round_move_last', '', true);
     return null;   -- 다시 맞추기에서 옮긴 것이 없으면 기록하지 않는다(남긴 행 목록만 반복되지 않게)
   end if;
@@ -774,14 +816,32 @@ end $$;
 --   그래서 트리거 이름을 중복·시간대 가드(trg_taam_guard_ticket_unique — 회원 잠금 tkuniq_)보다 **뒤**로 둔다(zdate) — 앞에 두면
 --   「정원 잠금 → 회차 행 → 회원 잠금」이 되어, 회원 잠금을 먼저 잡고 회차 행을 기다리는 그 회원의 다른 갱신(시간 변경 등)과 엇갈린다.
 --   지금 순서: 정원 잠금(tkcap_) → 회원 잠금(tkuniq_) → 회차 행 — 종전 INSERT 와 같다. 회차 이동 쪽은 회원 잠금을 기다리지 않는다(가드 덩어리의 try-lock).
+--   9차(R8-SRV-CAP · CAP_RECHECK) 총 정원(①)을 **잠근 회차 행**의 정원으로 한 번 더 센다. 정원 트리거(enforce_ticket_capacity · 라이브 원문)는 정원을
+--   정원 잠금(tkcap_) **전에** 읽는다 — 날짜 바꾸기가 정원도 같은 문장으로 줄이면(ROUND_MOVE_CAP · tkcap_ 를 쥔 채) 그 사이 tkcap_ 에서 기다린 좌석 INSERT 가
+--   이동 커밋 뒤 새 점유를 **옛 정원**과 견줘 통과해 새 정원을 넘었다(정원 4 에 6석). 이 트리거는 정원 트리거 뒤에 돌고 회차 행을 FOR NO KEY UPDATE 로 읽어
+--   (이동이 쥔 회차 행을 기다렸다) 커밋된 정원을 본다. 정원 트리거와 같은 식 — 취소 아닌 좌석 행 + 캘린더 수동 기록(20261117 이 있어 정원 트리거가 셀 때만) +
+--   이 행 > 정원이면 같은 오류(TICKET_SOLD_OUT · P0001 — 앱의 「매진」 안내 그대로). 정원이 그대로면 정원 트리거와 같은 판정이다(그 사이 들어온 좌석도
+--   tkcap_ 아래라 같은 수) — 새로 막는 것은 정원이 줄어든 경우뿐. 20261117 의 정원 트리거 덧댐(md5 가드)과 엮이지 않게 이 파일의 트리거에 둔다
+--   (어느 순서로 들어와도 · 20261117 이 없어도). 정산 좌석(KSK-)은 위에서 빠진다 — 정산 동기화는 ksk_sync_ 를 먼저 잡아 이동(KSK_PRELOCK)과 엇갈리지 않는다.
 create or replace function public.taam_guard_ticket_date_pin()
 returns trigger language plpgsql security definer set search_path = public as $$
-declare v_d date; v_t text; v_traw text; v_od0 date; v_ot0 text; v_c jsonb;
+declare v_d date; v_t text; v_traw text; v_od0 date; v_ot0 text; v_c jsonb; v_cap int; v_sold int;
 begin
   if nullif(btrim(coalesce(new.ticket_product_id::text, '')), '') is null then return new; end if;
   if coalesce(new.purchase_id, '') like 'KSK-%' then return new; end if;
-  select public._taam_pu_visit_date(tp.date), public._taam_hhmm(tp.time), tp.time into v_d, v_t, v_traw
+  select public._taam_pu_visit_date(tp.date), public._taam_hhmm(tp.time), tp.time, tp.total_pax into v_d, v_t, v_traw, v_cap
     from public.ticket_products tp where tp.id::text = new.ticket_product_id::text for no key update;
+  -- CAP_RECHECK
+  if coalesce(new.status, '') <> 'cancelled' and coalesce(v_cap, 0) > 0 then
+    select coalesce(sum(t.party_size), 0) into v_sold from public.tickets t
+     where t.ticket_product_id = new.ticket_product_id and coalesce(t.status, '') <> 'cancelled';
+    if to_regprocedure('public._taam_round_manual_pax(text)') is not null then
+      v_sold := v_sold + coalesce(public._taam_round_manual_pax(new.ticket_product_id::text), 0);
+    end if;
+    if v_sold + coalesce(new.party_size, 0) > v_cap then
+      raise exception 'TICKET_SOLD_OUT: 잔여 % 석, 요청 % 명', (v_cap - v_sold), new.party_size using errcode = 'P0001';
+    end if;
+  end if;
   if v_d is null then return new; end if;
   v_od0 := public._taam_pu_visit_date(new.reservation_date); v_ot0 := public._taam_hhmm(new.visit_time);   -- 앞 가드(중복·시간대)가 본 값
   if v_od0 is distinct from v_d or new.reservation_date is distinct from to_char(v_d, 'YYYY.MM.DD') then
@@ -1328,6 +1388,38 @@ begin
   end if;
 end $mig$;
 
+-- ── 8. 9차(R8-SRV-LINKDL · LINK_EVENT_LOCK_FIRST) 링크 초대 만들기 — 이 회차의 정산 회차 줄을 만료 홀드 정리 **전에** ─────────────
+--   라이브 taam_link_invite_create(md5(prosrc) 21776bd5… · 2026-11-16)는 ① 만료된 링크 홀드(LINK- · 결제 안 된 청구가 만료)를 전부 cancelled 로(그 좌석 행 잠금 →
+--   매진 동기화가 회차 행) ② 이 회차의 정산 회차 줄 UPDATE(fx) ③ 조·청구 ④ 새 홀드(tkcap_) 순이다. 날짜 바꾸기·다시 맞추기는 정산 회차 줄(KSK_PRELOCK) → 좌석 행 순이라,
+--   옮기는 회차에 정리 안 된 만료 홀드가 있을 때 같은 회차의 링크 초대가 겹치면 고리(링크: 홀드 행 → 정산 회차 줄 · 이동: 정산 회차 줄 → 그 홀드 행) — 교착 검사가 한쪽을 40P01 로
+--   끊었다(아무것도 반쪽으로 안 남지만 어드민이 다시 눌러야 했다 · 만료 링크 홀드는 다음 링크 만들기 말고는 정리하는 잡이 없다).
+--   → 만료 홀드 정리 바로 앞에 이 회차의 정산 회차 줄을 id 순으로 잠그는 한 줄(날짜 바꾸기와 같은 순서 · 다른 회차의 만료 홀드 정리는 그대로). 본문의 그 자리를 정확히 한 곳 찾을 때만 —
+--   못 찾으면 손대지 않고 확인 표에 ⚠(교착은 드물고 깨끗이 끊긴다 · 막지 않는다). 함수가 없으면(로컬 픽스처 등) 건너뛴다.
+create table if not exists pg_temp._rm_link_patch(res text);
+delete from pg_temp._rm_link_patch;
+do $mig$
+declare v_oid oid := to_regprocedure('public.taam_link_invite_create(text,text,text,integer,text,numeric,text,text)');
+        v_src text; v_def text; v_n int; v_anchor text; v_add text;
+begin
+  if v_oid is null then insert into pg_temp._rm_link_patch values ('absent'); return; end if;
+  select p.prosrc into v_src from pg_proc p where p.oid = v_oid;
+  if position('LINK_EVENT_LOCK_FIRST' in v_src) > 0 then insert into pg_temp._rm_link_patch values ('already'); return; end if;
+  v_anchor := E'  -- 만료된 링크 초대의 홀드는 이 기회에 푼다 (별도 잡 없이)\n';
+  v_add := E'  -- LINK_EVENT_LOCK_FIRST(20261116 회차 날짜 이동 9차) 이 회차의 정산 회차 줄을 먼저(id 순 — 날짜 바꾸기 KSK_PRELOCK 과 같은 순서). 아래 만료 홀드 정리가\n'
+        || E'  --   이 회차의 홀드 행을 잠근 뒤 정산 회차 줄을 기다리면, 정산 회차 줄 → 좌석 행 순으로 잡는 날짜 바꾸기와 교착(40P01)했다\n'
+        || E'  perform 1 from public.kashikiri_events e where e.ticket_product_id = p_ticket_id order by e.id for update;\n\n';
+  v_def := pg_get_functiondef(v_oid);
+  v_n := (length(v_def) - length(replace(v_def, v_anchor, ''))) / length(v_anchor);
+  if v_n <> 1 then
+    insert into pg_temp._rm_link_patch values ('anchor:' || v_n);
+    raise warning '[round move] 링크 초대 만들기에서 넣을 자리를 정확히 한 곳 찾지 못했습니다(%) — 손대지 않음', v_n;
+    return;
+  end if;
+  execute replace(v_def, v_anchor, v_add || v_anchor);
+  select p.prosrc into v_src from pg_proc p where p.oid = v_oid;
+  insert into pg_temp._rm_link_patch values (case when position('LINK_EVENT_LOCK_FIRST' in v_src) > 0 then 'patched' else 'not_applied' end);
+end $mig$;
+
 -- ── 확인 (한 표) — ❌ 가 한 줄도 없어야 정상 ──
 select '① 중복·시간대 가드에 회차 이동 통과(ROUND_MOVE_20261116 · 회원 잠금은 기다리지 않음)' as what,
        case when exists (select 1 from pg_proc where oid = to_regprocedure('public.taam_guard_purchase_unique()') and prosrc like '%ROUND_MOVE_20261116%')
@@ -1399,4 +1491,16 @@ select '⑬ 8차 — 정산 동기화 잠금을 먼저(KSK_PRELOCK · 날짜 바
              and position('SEAT_ROWS_BEFORE_TKCAP' in coalesce((select p.prosrc from pg_proc p where p.oid = to_regprocedure('public.taam_round_reschedule(text,text,text,text,text,jsonb)')), '')) > 0
              and not has_function_privilege('anon', 'public._taam_round_ksk_prelock(text)', 'execute')
              and not has_function_privilege('authenticated', 'public._taam_round_ksk_prelock(text)', 'execute')
-            then '✅' else '❌' end;
+            then '✅' else '❌' end
+union all
+select '⑭ 9차 — 좌석 INSERT 가 잠근 회차 행의 정원으로 다시 센다(CAP_RECHECK — 날짜와 정원을 같이 줄이는 이동 중 오버셀) · 못 맞춘 결제 링크 부제를 다음 이동·다시 맞추기가 좌석 자리로(CHARGE_SUBTITLE_FOLLOW)',
+       case when position('CAP_RECHECK' in coalesce((select p.prosrc from pg_proc p where p.oid = to_regprocedure('public.taam_guard_ticket_date_pin()')), '')) > 0
+             and position('CHARGE_SUBTITLE_FOLLOW' in coalesce((select p.prosrc from pg_proc p where p.oid = to_regprocedure('public._taam_round_move_apply(text,date,text,date,text,date[],text[],text,text,jsonb)')), '')) > 0
+             and position('CHARGE_SUBTITLE_FOLLOW' in coalesce((select p.prosrc from pg_proc p where p.oid = to_regprocedure('public._taam_round_follow_spec(text,boolean)')), '')) > 0
+            then '✅' else '❌' end
+union all
+select '⑮ 9차 — 링크 초대 만들기가 이 회차의 정산 회차 줄을 만료 홀드 정리 앞에서 잠근다(LINK_EVENT_LOCK_FIRST · 날짜 바꾸기와 교착 없음)',
+       coalesce((select case when x.res in ('patched', 'already') then '✅'
+                             when x.res = 'absent' then '✅ 함수 없음 — 건너뜀'
+                             else '⚠ ' || x.res || ' — 본문에서 넣을 자리를 못 찾아 손대지 않음(드문 교착이 남는다 · 깨끗이 끊긴다)' end
+                   from pg_temp._rm_link_patch x limit 1), '⚠ 결과 없음');
