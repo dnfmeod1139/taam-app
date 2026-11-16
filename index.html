@@ -50485,7 +50485,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.11.16-e';
+var TAAM_WEB_BUILD = '2026.11.16-f';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -54422,7 +54422,11 @@ async function _tuDoDeleteTicket(id){
   showToast('🗑','삭제 완료','티켓이 삭제되었습니다');
 }
 
-function tuEditTicket(id){
+function tuEditTicket(id, _fromIn){
+  // 🆕 2026-11-16 돌아갈 화면은 **맨 먼저** 적는다 — 아래에서 수정이 안 열리고 끝나도(회차 없음 · 신청 값 못 읽음)
+  //   부른 쪽 표시(_tuEditFromHint · 「티켓」 탭 · 판매 오픈 관리)가 남아 다음 수정(티켓 리스트)을 엉뚱한 화면으로 보내지 않게.
+  //   서버에서 다시 읽고 여는 길(아래 재시도)에는 그대로 넘긴다
+  var _from = _fromIn || _tuEditFromScreen();
   var t=ticketDB.find(function(x){return String(x.id)===String(id);});
   if(!t)return;
   // 🆕 2026-10-29(3차 리뷰) 수정 승인 대기 중인 회차는 **신청한 값으로** 연다 — 원래 값으로 열면 저장 때 앞 신청이 지워지거나(교체) 남았다(합침)
@@ -54436,7 +54440,7 @@ function tuEditTicket(id){
       if(typeof showToast==='function') showToast('ℹ','수정 신청 내용을 다시 읽습니다','');
       tuEditTicket._retried = true;
       Promise.resolve(typeof _tkRefreshFromServer === 'function' ? _tkRefreshFromServer([String(id)], { quiet: true }) : null)
-        .then(function(){ try { tuEditTicket(id); } finally { tuEditTicket._retried = false; } });
+        .then(function(){ try { tuEditTicket(id, _from); } finally { tuEditTicket._retried = false; } });
       return;
     }
     // 폼이 열린 때의 큐 — 저장(taam_ticket_edit_submit p_expect)이 이걸 보내 그 사이 바뀐 큐를 지우지 않게 한다
@@ -54445,7 +54449,7 @@ function tuEditTicket(id){
     if(t._pendingView){ t = t._pendingView; if(typeof showToast==='function') showToast('ℹ','수정 승인 대기 중인 값으로 열었습니다','저장하면 신청이 이 내용으로 바뀝니다 · 원래대로 두면 신청이 지워집니다'); }
   }
   _tuEditId=id;
-  _tuEditReturn = _tuEditFromScreen();   // 🆕 2026-11-16 저장·← 뒤 돌아갈 화면
+  _tuEditReturn = _from || null;   // 🆕 2026-11-16 저장·← 뒤 돌아갈 화면(맨 위에서 적은 것)
 
   closeAllAdminScreens();
   document.getElementById('adminScreen').style.display='none';
@@ -72743,6 +72747,7 @@ function openPartnerTU() {
     showToast('⚠','레스토랑 미지정','슈퍼어드민에게 레스토랑 연동을 먼저 요청하세요');
     return;
   }
+  _tuEditReturn = null; window._tuEditFromHint = null;   // 🆕 2026-11-16 새 업로드 — 앞 수정의 「돌아갈 화면」을 쓰지 않는다(openTU 와 같게)
   closePartnerAdmin();
   if(typeof tuPkgReset === 'function'){ tuPkgReset(); tuPkgSetVisible(false); }   // 🆕 2026-10-30 파트너는 패키지를 묶지 않는다
   syncTuRestList(); // 최신 목록 동기화
