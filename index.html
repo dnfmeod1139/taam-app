@@ -43601,6 +43601,9 @@ function tkbClearQ(){
 }
 // 수정·매진·판매 오픈은 전부 기존 화면을 그대로 쓴다
 function tkbEdit(id){
+  // 🆕 2026-11-16 수정을 마치면 이 탭(검색어·필터·스크롤 그대로)으로 돌아온다
+  var _b = document.getElementById('tkbBody');
+  window._tuEditFromHint = { tab: 'tkb', state: { q: _tkbState.q, filter: _tkbState.filter, open: _tkbState.open }, scroll: _b ? _b.scrollTop : 0 };
   closeSubPage('tkbScreen');
   if(typeof tuEditTicket === 'function') tuEditTicket(id);
 }
@@ -48947,6 +48950,7 @@ function finalSubmitRestaurant(){
 // TICKET UPLOAD
 // ════════════════════════════════════════════════
 function openTU(){
+  _tuEditReturn = null; window._tuEditFromHint = null;
   closeAllAdminScreens();
   document.getElementById('adminScreen').style.display='none';
   // 신규 업로드 → 버튼 "업로드"
@@ -49032,7 +49036,55 @@ function closeTU(){
   // 취소 규정 초기화
   tuResetPolicy();
   document.getElementById('tuScreen').style.display='none';
+  // 🆕 2026-11-16 수정을 마치거나 ← 로 나가면 「수정」을 누른 화면으로 돌아간다 — 종전엔 언제나 어드민 메뉴(콘솔 첫 탭)로 갔다
+  var _ret = _tuEditReturn; _tuEditReturn = null;
   if(_currentRole==='admin') openPartnerAdmin(); else openAdmin();
+  if(_ret) _tuEditGoBack(_ret);   // 바탕(어드민 메뉴)을 연 **같은 박자에** 위에 올린다 — _acEnsureConsole 은 위에 화면이 있으면 손대지 않는다
+}
+
+// 🆕 2026-11-16 「수정」을 누른 화면 — 저장·← 뒤 그 화면으로 돌아간다(스크롤·필터 그대로 · 고친 내용으로 다시 그림)
+//   티켓 리스트(슈퍼어드민) · 파트너 티켓 리스트는 열려 있는 화면에서 읽고, 「티켓」 탭 · 판매 오픈 관리 창은 그 화면이 수정 전에 스스로 닫히므로 부른 쪽이 알려 준다(_tuEditFromHint).
+var _tuEditReturn = null;
+function _tuEditFromScreen(){
+  var hint = window._tuEditFromHint; window._tuEditFromHint = null;
+  if(hint) return hint;
+  var vis = function(id){ var el = document.getElementById(id); try { return !!el && getComputedStyle(el).display !== 'none'; } catch(e){ return false; } };
+  var ids = ['ticketListScreen', 'partnerTicketListScreen'];
+  for(var i = 0; i < ids.length; i++){
+    if(vis(ids[i])){
+      var sc = document.querySelector('#' + ids[i] + ' .sub-content');
+      return { screen: ids[i], scroll: sc ? sc.scrollTop : 0 };
+    }
+  }
+  return null;
+}
+function _tuEditGoBack(ret){
+  try {
+    if(ret.popup === 'tkSaleMgr'){ if(typeof tkSaleMgrOpen === 'function') tkSaleMgrOpen(); return; }
+    if(ret.tab === 'tkb'){
+      if(typeof tkbOpen !== 'function') return;
+      var p = tkbOpen();   // 첫 await 전까지는 바로 돈다 — 그 사이에 검색어·필터를 되돌려 두면 다 읽은 뒤 그 상태로 그린다
+      var st = ret.state || {};
+      if(typeof _tkbState === 'object' && _tkbState){
+        _tkbState.q = st.q || ''; _tkbState.filter = st.filter || 'all'; _tkbState.open = st.open || null;
+        var q = document.getElementById('tkbQ'); if(q) q.value = _tkbState.q;
+        var x = document.getElementById('tkbQX'); if(x) x.style.display = _tkbState.q ? '' : 'none';
+      }
+      Promise.resolve(p).then(function(){ var b = document.getElementById('tkbBody'); if(b && ret.scroll) b.scrollTop = ret.scroll; });
+      return;
+    }
+    if(ret.screen && document.getElementById(ret.screen)){
+      openSubPage(ret.screen);   // 다시 그린다 — 고친 내용이 바로 보인다(openSubPage 는 스크롤을 맨 위로 돌린다)
+      var sc = document.querySelector('#' + ret.screen + ' .sub-content');
+      var y = ret.scroll || 0;
+      if(sc && y > 0){
+        sc.scrollTop = y;
+        // 좌석 줄 같은 비동기 채움이 뒤늦게 높이를 바꿔도 보던 자리에 남는다 — 사용자가 그 사이 스크롤했으면 건드리지 않는다
+        var _set = sc.scrollTop;
+        setTimeout(function(){ if(Math.abs(sc.scrollTop - _set) <= 2 && sc.scrollTop !== y) sc.scrollTop = y; }, 400);
+      }
+    }
+  } catch(e){ console.warn('[tu] 수정 뒤 복귀 실패:', e); }
 }
 
 function syncTuRestList(){
@@ -50433,7 +50485,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.11.16-d';
+var TAAM_WEB_BUILD = '2026.11.16-e';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -54393,6 +54445,7 @@ function tuEditTicket(id){
     if(t._pendingView){ t = t._pendingView; if(typeof showToast==='function') showToast('ℹ','수정 승인 대기 중인 값으로 열었습니다','저장하면 신청이 이 내용으로 바뀝니다 · 원래대로 두면 신청이 지워집니다'); }
   }
   _tuEditId=id;
+  _tuEditReturn = _tuEditFromScreen();   // 🆕 2026-11-16 저장·← 뒤 돌아갈 화면
 
   closeAllAdminScreens();
   document.getElementById('adminScreen').style.display='none';
@@ -55417,7 +55470,7 @@ function tkSaleMgrOpen(){
       + '</div>'
       + (kind !== 'opened' ? '<button onclick="tkSaleMgrAct(\'' + t.id + '\',\'open\')" style="padding:7px 11px;border:none;border-radius:8px;background:#1a1a18;color:#fff;font-size:11px;font-weight:800;cursor:pointer;">즉시 오픈</button>' : '')
       + (kind !== 'draft' ? '<button onclick="tkSaleMgrAct(\'' + t.id + '\',\'draft\')" style="padding:7px 11px;border:1px solid #d8d3cc;border-radius:8px;background:#fff;color:#666;font-size:11px;font-weight:800;cursor:pointer;">비공개</button>' : '')
-      + '<button onclick="document.getElementById(\'tkSaleMgr\').remove();tuEditTicket(\'' + t.id + '\')" style="padding:7px 11px;border:1px solid #d8d3cc;border-radius:8px;background:#fff;color:#666;font-size:11px;font-weight:800;cursor:pointer;">수정</button>'
+      + '<button onclick="window._tuEditFromHint={popup:\'tkSaleMgr\'};document.getElementById(\'tkSaleMgr\').remove();tuEditTicket(\'' + t.id + '\')" style="padding:7px 11px;border:1px solid #d8d3cc;border-radius:8px;background:#fff;color:#666;font-size:11px;font-weight:800;cursor:pointer;">수정</button>'
       + '</div>';
   }
   function sec(title, arr, kind, empty){
