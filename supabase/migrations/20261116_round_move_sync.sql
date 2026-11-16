@@ -52,6 +52,16 @@
 --   NEW-6 좌석 날짜 고정이 날짜·시간을 바꿨으면 같은 날 같은 시간대 겹침을 고정한 값으로 다시 본다(TIME_CONFLICT · 예외 존중)
 --   덤: 연도 실수로 지난 날에 가 있는 회차의 「시간만」 바꾸기가 처음 날짜의 앞날 예약을 지난 날로 끌어왔다 → NEW_DATE_PAST 로 기록만
 --
+-- 4차(3차 판 재검증 반영 · 2026-11-16) — 역시 라이브 전이라 그 자리에서
+--   RC3-1 고친 연도 실수 기록이 다시 open 이 됐다 — 그 날짜에 회차가 돌아온 뒤 다음 이동이 행 하나(busy · 잠긴 초대 · 두 번째 연도 실수)를
+--        남기면 처음 기록의 (옛 날짜, 옛 시간) 짝이 살아나 다시 맞추기·연도 고침이 따로 바꾼 시간을 회차 시간으로 덮고 틀린 시간을 알렸다
+--        → NEW_DATE_* 기록은 그 옛 날짜에서 출발한 뒤 기록이 생기면 닫는다(남은 행은 그 뒤 기록이 따라간다)
+--   RC3-2 연도 실수 날에 바꾼 시간이 연도를 처음 날짜로 고칠 때 따라가지 않았다 — 처음 날짜의 예약은 이미 목표 날짜라 짝 규칙(옮겨 가는 행만)에
+--        안 걸려 옛 시간에 남고(미리보기는 「따로 바꾼 시간」), 옮길 것이 없어 앱은 시트도 알림도 없었다
+--        → 끝나지 않은 NEW_DATE_* 기록의 짝(rpairs)은 목표 날짜에 있는 행도 따른다 · 회차가 그 날짜에 있는 동안(그 날짜에서 출발하는 이동 ·
+--          다시 맞추기)은 그 날짜의 짝을 뺀다(_taam_round_spec_skip_od — 다시 맞추기도) · 행 오류는 그 행이 시간을 따라가던 중이었으면
+--          그때 시간(ft)을 적어 다시 맞추기·다음 이동이 그 시간으로 알아본다(짝으로 따라가던 행은 기록의 옛 시간과 다르다)
+--
 -- 되돌리기: drop trigger trg_taam_tp_round_move on public.ticket_products; drop trigger trg_taam_tp_round_lock on public.ticket_products;
 --   (가드 덩어리는 GUC 가 없으면 아무 일도 안 한다 — 그대로 둬도 된다)
 -- ============================================================================
@@ -110,8 +120,12 @@ revoke all on public.ticket_round_moves from anon;
 --   3차(NEW-1): 기록이 「끝나지 않음(open)」인 것은 오류가 있어서가 아니라 **남은 행이 있을 때만**이다 — 종전엔 오류가 한 줄이라도 있으면
 --     영원히 open 이라, 그 기록의 (옛 날짜, 옛 시간) 짝이 몇 번이고 뒤 이동에 끼어 따로 바꾼 시간을 회차 시간으로 덮었다(회원에게 틀린 시간 알림).
 --     · 행 오류(busy · error — ticket/invite/event) — 그 행이 아직 살아 있고 뒤 기록이 그 행을 옮기지 않았을 때만 open
---     · 기록 오류(NEW_DATE_PAST · NEW_DATE_UNREADABLE) — 그 옛 날짜에 아직 옮길 수 있는 행(살아 있고 방문 처리 안 된 · 지난 날 아님)이 남아 있을 때만 open
---       (「뒤 기록이 있으면 닫는다」는 쓰지 않았다 — 뒤 기록이 또 NEW_DATE_PAST 면 처음 날짜의 예약이 영영 남는다)
+--     · 기록 오류(NEW_DATE_PAST · NEW_DATE_UNREADABLE) — 그 옛 날짜에 아직 옮길 수 있는 행(살아 있고 방문 처리 안 된 · 지난 날 아님)이 남아 있고
+--       **그 날짜에서 출발한 뒤 기록(다시 맞추기 아님)이 아직 없을 때만** open (4차 RC3-1)
+--       (「뒤 기록이 아무거나 있으면 닫는다」는 쓰지 않았다 — 뒤 기록이 다른 날짜에서 또 NEW_DATE_PAST 면 처음 날짜의 예약이 영영 남는다.
+--        그 날짜에서 출발한 뒤 기록은 그 날짜의 행을 전부 봤다 — 남긴 행은 그 기록의 행 오류·짝이(그 기록도 NEW_DATE_* 면 그 기록이) 따라간다.
+--        종전엔 연도 실수를 고쳐 그 날짜로 돌아온 뒤에도, 다음 이동이 행 하나를 남기면 처음 기록이 다시 open 이 되어 그 옛 시간 짝이
+--        따로 바꾼 시간을 회차 시간으로 덮었다)
 --     · 정산 좌석 동기화(ksk_sync)·부제·기록 지움 같은 곁가지 오류는 행을 옛 날짜에 남기지 않으므로 open 이 아니다(ksk 목록은 따로)
 --   p_all = true(다시 맞추기)면 기록 전부의 옛 날짜를 준다 — 짝(pairs)은 언제나 open 기록에서만(3차 NEW-2: 다시 맞추기가 끝난 기록의
 --     짝으로 따로 바꾼 시간을 덮었다). 회차의 지금 옛 날짜와 같은 날짜의 짝은 부르는 쪽이 뺀다(_taam_round_spec_skip_od).
@@ -160,7 +174,9 @@ returns jsonb language sql stable security definer set search_path = public as $
       from public.ticket_round_moves m
      where m.round_id = p_round),
   x as (   -- 풀리지 않은 행 오류 — 뒤 기록이 그 행을 옮기지 않았고 그 행이 아직 살아 있다
-    select m.id as mid, m.ot, x->>'id' as rid
+    --   시간 = 그 행이 시간을 따라가던 중이었으면 그 행의 그때 시간(ft · 4차 RC3-2 — 짝으로 따라가던 행은 기록의 옛 시간과 다르다),
+    --          아니면 기록의 옛 시간(따로 바꾼 시간은 이 값과 달라 따라가지 않는다)
+    select m.id as mid, coalesce(public._taam_hhmm(x->>'ft'), m.ot) as ot, x->>'id' as rid
       from m cross join lateral jsonb_array_elements(m.errs) x
      where m.via <> 'resync'
        and x->>'kind' in ('ticket', 'invite', 'event') and nullif(x->>'id', '') is not null
@@ -169,12 +185,20 @@ returns jsonb language sql stable security definer set search_path = public as $
        and public._taam_round_row_live(p_round, x->>'kind', x->>'id')),
   o as (
     select m.*, (exists (select 1 from x where x.mid = m.id)
-                 or (m.rec_err and public._taam_round_live_on(p_round, m.od))) as open
+                 or (m.rec_err and public._taam_round_live_on(p_round, m.od)
+                     -- 4차 RC3-1: 그 옛 날짜에서 출발한 뒤 기록(다시 맞추기 아님)이 있으면 닫힌다 — 그 날짜에 남은 행은 그 뒤 기록이
+                     --   자기 오류·짝으로 따라간다(뒤 기록도 NEW_DATE_* 면 그 기록이 같은 날짜로 open — 처음 날짜의 예약은 그대로 따라온다)
+                     and not exists (select 1 from public.ticket_round_moves m3
+                                      where m3.round_id = p_round and m3.id > m.id and m3.via <> 'resync'
+                                        and public._taam_pu_visit_date(m3.old_date) = m.od))) as open
       from m)
   select jsonb_build_object(
     'dates', coalesce((select jsonb_agg(distinct to_char(o.od, 'YYYY-MM-DD')) from o where o.od is not null and (p_all or o.open)), '[]'::jsonb),
     'pairs', coalesce((select jsonb_agg(distinct jsonb_build_array(to_char(o.od, 'YYYY-MM-DD'), o.ot)) from o
                         where o.od is not null and o.ot is not null and o.open), '[]'::jsonb),
+    -- 4차 RC3-2: NEW_DATE_* 기록의 짝 — 이미 목표 날짜에 있는 행도 따른다(연도 실수 날에 바꾼 시간이 처음 날짜로 되돌아올 때 같이 간다)
+    'rpairs', coalesce((select jsonb_agg(distinct jsonb_build_array(to_char(o.od, 'YYYY-MM-DD'), o.ot)) from o
+                        where o.od is not null and o.ot is not null and o.open and o.rec_err), '[]'::jsonb),
     'err',   coalesce((select jsonb_object_agg(z.rid, z.ot) from (select distinct on (x.rid) x.rid, x.ot from x order by x.rid, x.mid desc) z), '{}'::jsonb),
     'open',  coalesce((select jsonb_agg(o.id order by o.id) from o where o.open), '[]'::jsonb),
     'ksk',   coalesce((select jsonb_agg(distinct x->>'id') from m cross join lateral jsonb_array_elements(m.errs) x
@@ -187,8 +211,10 @@ revoke all on function public._taam_round_follow_spec(text, boolean) from public
 create or replace function public._taam_round_spec_skip_od(p_spec jsonb, p_od date)
 returns jsonb language sql immutable as $$
   select case when p_spec is null or p_od is null then p_spec else
-    jsonb_set(p_spec, '{pairs}', coalesce((select jsonb_agg(x) from jsonb_array_elements(coalesce(p_spec->'pairs', '[]'::jsonb)) x
-                                            where x->>0 is distinct from to_char(p_od, 'YYYY-MM-DD')), '[]'::jsonb)) end
+    jsonb_set(jsonb_set(p_spec, '{pairs}', coalesce((select jsonb_agg(x) from jsonb_array_elements(coalesce(p_spec->'pairs', '[]'::jsonb)) x
+                                                      where x->>0 is distinct from to_char(p_od, 'YYYY-MM-DD')), '[]'::jsonb)),
+              '{rpairs}', coalesce((select jsonb_agg(x) from jsonb_array_elements(coalesce(p_spec->'rpairs', '[]'::jsonb)) x
+                                     where x->>0 is distinct from to_char(p_od, 'YYYY-MM-DD')), '[]'::jsonb)) end
 $$;
 revoke all on function public._taam_round_spec_skip_od(jsonb, date) from public, anon, authenticated;
 
@@ -202,12 +228,17 @@ revoke all on function public._taam_round_follow_dates(date, jsonb) from public,
 
 -- 시간이 따라오나 — 이 행이 풀리지 않은 오류로 남은 행이고 그 기록의 옛 시간 그대로이거나,
 --   (그 기록의 옛 날짜, 옛 시간) 그대로 남아 있을 때만(이미 목표 날짜에 있는 행은 짝으로는 안 따라간다 — 따로 바꾼 시간)
+--   4차 RC3-2: 단 끝나지 않은 NEW_DATE_* 기록의 짝(rpairs)은 목표 날짜에 있는 행도 따른다 — 연도 실수 날에 시간을 바꾼 뒤 연도를
+--     처음 날짜로 고치면, 처음 날짜에 남은 예약은 이미 목표 날짜라 짝으로는 안 따라가 옛 시간에 남았다. 회차가 그 날짜에 있을 때(그 날짜에서
+--     출발하는 이동 · 그 날짜로 다시 맞추기)는 부르는 쪽이 _taam_round_spec_skip_od 로 뺀다 — 거기서 따로 바꾼 시간을 지킨다
 create or replace function public._taam_rm_tf_spec(p_spec jsonb, p_id text, p_rd date, p_rt text, p_nd date)
 returns boolean language sql immutable as $$
   select coalesce(
     (coalesce(p_spec->'err', '{}'::jsonb) ? p_id and (p_spec->'err'->>p_id) is not distinct from p_rt)
     or (p_rd is not null and p_rt is not null and p_rd is distinct from p_nd
-        and coalesce(p_spec->'pairs', '[]'::jsonb) @> jsonb_build_array(jsonb_build_array(to_char(p_rd, 'YYYY-MM-DD'), p_rt))), false)
+        and coalesce(p_spec->'pairs', '[]'::jsonb) @> jsonb_build_array(jsonb_build_array(to_char(p_rd, 'YYYY-MM-DD'), p_rt)))
+    or (p_rd is not null and p_rt is not null
+        and coalesce(p_spec->'rpairs', '[]'::jsonb) @> jsonb_build_array(jsonb_build_array(to_char(p_rd, 'YYYY-MM-DD'), p_rt))), false)
 $$;
 revoke all on function public._taam_rm_tf_spec(jsonb, text, date, text, date) from public, anon, authenticated;
 
@@ -454,12 +485,16 @@ begin
     exception
       when lock_not_available then
         perform set_config('taam.ksk_sync_skip', '', true);
-        v_err := v_err || jsonb_build_object('kind', r.kind, 'id', r.ref_id, 'pid', r.purchase_id, 'code', 'busy',
-                                             'msg', '결제·취소가 진행 중이라 지금 옮기지 못했습니다 — 「다시 맞추기」');
+        v_err := v_err || (jsonb_build_object('kind', r.kind, 'id', r.ref_id, 'pid', r.purchase_id, 'code', 'busy',
+                                              'msg', '결제·취소가 진행 중이라 지금 옮기지 못했습니다 — 「다시 맞추기」')
+                           || case when public._taam_hhmm(r.from_t) is not null and public._taam_hhmm(r.to_t) is distinct from public._taam_hhmm(r.from_t)
+                                   then jsonb_build_object('ft', public._taam_hhmm(r.from_t)) else '{}'::jsonb end);   -- 시간을 따라가던 행(4차 RC3-2)
       when others then
         perform set_config('taam.ksk_sync_skip', '', true);
-        v_err := v_err || jsonb_build_object('kind', r.kind, 'id', r.ref_id, 'pid', r.purchase_id, 'code', 'error',
-                                             'sqlstate', sqlstate, 'msg', left(sqlerrm, 200));
+        v_err := v_err || (jsonb_build_object('kind', r.kind, 'id', r.ref_id, 'pid', r.purchase_id, 'code', 'error',
+                                              'sqlstate', sqlstate, 'msg', left(sqlerrm, 200))
+                           || case when public._taam_hhmm(r.from_t) is not null and public._taam_hhmm(r.to_t) is distinct from public._taam_hhmm(r.from_t)
+                                   then jsonb_build_object('ft', public._taam_hhmm(r.from_t)) else '{}'::jsonb end);
     end;
   end loop;
   perform set_config('taam.round_move', '', true);
@@ -875,7 +910,9 @@ begin
   if not exists (select 1 from public.ticket_round_moves m where m.round_id = p_round) then
     return jsonb_build_object('ok', true, 'move_id', null, 'nothing', true);
   end if;
-  v_spec := public._taam_round_follow_spec(p_round, true);   -- 날짜는 기록 전부 · 짝은 끝나지 않은(open) 기록만(3차 NEW-2)
+  -- 날짜는 기록 전부 · 짝은 끝나지 않은(open) 기록만(3차 NEW-2) · 회차 날짜의 짝은 뺀다(4차 RC3-2 — 회차가 그 날짜에 있는 동안
+  --   거기서 따로 바꾼 시간을 NEW_DATE_* 짝(rpairs)이 덮지 않게 · 그 날짜에 정말 못 옮긴 행은 행 오류가 id·그때 시간으로 따라간다)
+  v_spec := public._taam_round_spec_skip_od(public._taam_round_follow_spec(p_round, true), v_nd);
   v_fd := coalesce(array(select d::date from jsonb_array_elements_text(v_spec->'dates') d), '{}'::date[]);
   v_id := public._taam_round_move_apply(p_round, null, null, v_nd, v_nt, v_fd, '{}'::text[], 'resync', null, v_spec);
   if v_id is not null then select to_jsonb(m) into v_log from public.ticket_round_moves m where m.id = v_id; end if;

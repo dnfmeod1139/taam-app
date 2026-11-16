@@ -486,7 +486,111 @@ ok "  미리보기도 「새 날짜가 지난 날」 경고" 1 "$($P -c "select 
 o=$(su "select public.taam_round_reschedule('RN2','2027.12.04',null,'2026.11.01','20:00','{}')")
 ok "  날짜(연도)를 고치면 그때 옮겨 간다 · 시간도 회차 시간(20:00)" "2027.12.04 20:00" "$(dt $N2A)"
 
-echo "── 25. 리마인드 중복 방지에 방문일 (t_rda = 라이브 52d0603a · b42fdace 재현)"
+# ── 4차(3차 판 재검증 RC3-1 · RC3-2) — 새 회차들로 따로 본다
+RD=b0000000-0000-4000-8000-00000000000d; IQ3=e5000000-0000-4000-8000-000000000003
+Q1A=f4000000-0000-4000-8000-000000000001; Q1B=f4000000-0000-4000-8000-000000000002; Q2A=f4000000-0000-4000-8000-000000000003; Q2B=f4000000-0000-4000-8000-000000000004
+Q3A=f4000000-0000-4000-8000-000000000005; Q4A=f4000000-0000-4000-8000-000000000006; Q4B=f4000000-0000-4000-8000-000000000007
+Q5A=f4000000-0000-4000-8000-000000000008; Q5B=f4000000-0000-4000-8000-000000000009; Q6A=f4000000-0000-4000-8000-00000000000a; Q6B=f4000000-0000-4000-8000-00000000000b
+$P <<SQL >/dev/null
+set session_replication_role = replica;
+delete from public.ticket_round_moves where round_id like 'RQ%';
+insert into public.restaurants(id,name,repurchase_day) values ('$RD','넷째집',0);
+insert into public.ticket_products(id,rest_id,rest_name,date,time,status,total_pax) values
+ ('RQ1','$RD','넷째집','2028.05.10','18:00','active',20),('RQ2','$RD','넷째집','2028.06.10','18:00','active',20),
+ ('RQ3','$RD','넷째집','2028.07.10','18:00','active',20),('RQ4','$RD','넷째집','2028.08.10','18:00','active',20),
+ ('RQ5','$RD','넷째집','2028.09.10','18:00','active',20),('RQ6','$RD','넷째집','2028.10.10','18:00','active',20);
+insert into public.tickets(id,user_id,restaurant_id,restaurant_name,ticket_product_id,reservation_date,visit_time,party_size,price,status,purchase_id,extra_data) values
+ ('$Q1A','$M1','$RD','넷째집','RQ1','2028.05.10','18:00',2,100,'active','PAYH-Q1A','{}'),('$Q1B','$M2','$RD','넷째집','RQ1','2028.05.10','18:00',2,100,'active','PAYH-Q1B','{}'),
+ ('$Q2A','$M1','$RD','넷째집','RQ2','2028.06.10','18:00',2,100,'active','PAYH-Q2A','{}'),('$Q2B','$M2','$RD','넷째집','RQ2','2028.06.10','18:00',2,100,'active','PAYH-Q2B','{}'),
+ ('$Q3A','$M1','$RD','넷째집','RQ3','2028.07.10','18:00',2,100,'active','PAYH-Q3A','{}'),
+ ('$Q4A','$M1','$RD','넷째집','RQ4','2028.08.10','18:00',2,100,'active','PAYH-Q4A','{}'),('$Q4B','$M2','$RD','넷째집','RQ4','2028.08.10','18:00',2,100,'active','PAYH-Q4B','{}'),
+ ('$Q5A','$M1','$RD','넷째집','RQ5','2028.09.10','18:00',2,100,'active','PAYH-Q5A','{}'),('$Q5B','$M2','$RD','넷째집','RQ5','2028.09.10','18:00',2,100,'active','PAYH-Q5B','{}'),
+ ('$Q6A','$M1','$RD','넷째집','RQ6','2028.10.10','18:00',2,100,'active','PAYH-Q6A','{}'),('$Q6B','$M2','$RD','넷째집','RQ6','2028.10.10','18:00',2,100,'active','PAYH-Q6B','{}');
+insert into public.reservation_invites(id,host_user_id,invitee_user_id,restaurant_id,restaurant_name,visit_date,visit_time,pax,status,ticket_product_id) values
+ ('$IQ3','$SU','$M2','$RD','넷째집','2028.07.10','18:00',2,'sent','RQ3');
+set session_replication_role = origin;
+SQL
+idt(){ $P -c "select coalesce(visit_date,'')||' '||coalesce(visit_time,'') from public.reservation_invites where id='$1'"; }
+first_open(){ $P -c "select ((public._taam_round_follow_spec('$1', false)->'open') @> to_jsonb((select min(id) from public.ticket_round_moves where round_id='$1')))::text"; }
+pairs_has(){ $P -c "select ((public._taam_round_follow_spec('$1', false)->'pairs') @> '[[\"$2\",\"$3\"]]'::jsonb)::text"; }
+
+echo "── 25. 4차 RC3-1 — 고친 연도 실수 기록은 그 날짜에서 출발한 다음 이동이 생기면 닫힌다(옛 짝이 따로 바꾼 시간을 덮지 않는다)"
+# (가) 트리거 경로 · 잠긴 좌석 — 연도 실수 → 되돌림 → 시간 18→19 → 회원2 만 18:00 → 잠긴 채 05.10 → 05.17 → 다시 맞추기
+$P -c "update public.ticket_products set date='2026.05.10' where id='RQ1'" >/dev/null
+o=$(su "select public.taam_round_reschedule('RQ1','2028.05.10',null,'2026.05.10','18:00','{}')")
+o=$(su "select public.taam_round_reschedule('RQ1','2028.05.10','19:00','2028.05.10','18:00','{}')")
+$P -c "update public.tickets set visit_time='18:00' where id='$Q1B'" >/dev/null   # ⏰ 회원2 만 18:00 으로
+($Q -c "begin; select 1 from public.tickets where id='$Q1B' for update; select pg_sleep(2.5); commit;" >/dev/null 2>&1 &)
+sleep 0.6
+$P -c "update public.ticket_products set date='2028.05.17' where id='RQ1'" >/dev/null
+ok "  (가) 트리거 이동: 회원1 → 05.17 19:00 · 잠긴 회원2 는 05.10 18:00(busy)" "2028.05.17 19:00|2028.05.10 18:00" "$(dt $Q1A)|$(dt $Q1B)"
+ok "  (가) 처음 연도 실수 기록은 닫힘 · 그 옛 짝(05.10 18:00) 없음 — 종전엔 다시 open 이 되어 짝이 살아났다" "false|false" "$(first_open RQ1)|$(pairs_has RQ1 2028-05-10 18:00)"
+sleep 2.2
+o=$(su "select public.taam_round_move_resync('RQ1')")
+ok "  (가) 다시 맞추기 → 회원2 날짜만(05.17) · 18:00 그대로(종전엔 19:00)" "2028.05.17 18:00" "$(dt $Q1B)"
+# (나) 경주 없음 · 두 번째 연도 실수 — 고친 처음 기록의 짝이 두 번째 실수 뒤에 살아나지 않는다
+$P -c "update public.ticket_products set date='2026.06.10' where id='RQ2'" >/dev/null
+o=$(su "select public.taam_round_reschedule('RQ2','2028.06.10',null,'2026.06.10','18:00','{}')")
+o=$(su "select public.taam_round_reschedule('RQ2','2028.06.10','19:00','2028.06.10','18:00','{}')")
+$P -c "update public.tickets set visit_time='18:00' where id='$Q2B'" >/dev/null   # ⏰ 회원2 만 18:00 으로
+$P -c "update public.ticket_products set date='2026.06.17' where id='RQ2'" >/dev/null   # 두 번째 연도 실수 → NEW_DATE_PAST
+ok "  (나) 두 번째 실수 뒤: 처음 기록 닫힘 · 짝은 두 번째 기록의 것(06.10 19:00)만" "false|false|true" "$(first_open RQ2)|$(pairs_has RQ2 2028-06-10 18:00)|$(pairs_has RQ2 2028-06-10 19:00)"
+pv=$(su "select public.taam_round_move_preview('RQ2','2028.06.17',null)" | grep '^{')
+ok "  (나) 미리보기: 회원2 는 06.17 18:00(따로 바꾼 시간 유지)" "2028.06.17 18:00|true" "$($P -c "select (e->'to'->>'d')||' '||(e->'to'->>'t')||'|'||(e->>'time_kept') from jsonb_array_elements('$pv'::jsonb->'rows') e where e->>'pid'='PAYH-Q2B'")"
+o=$(su "select public.taam_round_reschedule('RQ2','2028.06.17',null,'2026.06.17','19:00','{}')")
+ok "  (나) 연도 고침 → 회원1 19:00 · 회원2 18:00(종전엔 둘 다 19:00)" "2028.06.17 19:00|2028.06.17 18:00" "$(dt $Q2A)|$(dt $Q2B)"
+# (다) 앱 RPC 경로 · 잠긴 초대 — 다시 맞추기와 그 알림이 따로 바꾼 초대 시간(18:00)을 지킨다
+$P -c "update public.ticket_products set date='2026.07.10' where id='RQ3'" >/dev/null
+o=$(su "select public.taam_round_reschedule('RQ3','2028.07.10',null,'2026.07.10','18:00','{}')")
+o=$(su "select public.taam_round_reschedule('RQ3','2028.07.10','19:00','2028.07.10','18:00','{}')")
+o=$(su "update public.reservation_invites set visit_time='18:00' where id='$IQ3'")   # ⏰ 초대 시간 변경
+($Q -c "begin; select 1 from public.reservation_invites where id='$IQ3' for update; select pg_sleep(2.5); commit;" >/dev/null 2>&1 &)
+sleep 0.6
+o=$(su "select public.taam_round_reschedule('RQ3','2028.07.17',null,'2028.07.10','19:00','{}')")
+ok "  (다) 옮기기: 회원1 → 07.17 19:00 · 잠긴 초대는 07.10 18:00(busy)" "2028.07.17 19:00|2028.07.10 18:00" "$(dt $Q3A)|$(idt $IQ3)"
+sleep 2.2
+MQ3=$(su "select (public.taam_round_move_resync('RQ3'))->>'move_id'" | grep -E '^[0-9]+$')
+ok "  (다) 다시 맞추기 → 초대 07.17 18:00(종전엔 19:00)" "2028.07.17 18:00" "$(idt $IQ3)"
+nb=$($P -c "select count(*) from public.notifications where user_id='$M2' and type='ticket_date_changed'")
+nr=$(su "select public.taam_round_move_notify($MQ3)")
+ok "  (다) 회원 알림 한 줄 · 새 시간 18:00(19:00 이 아니다)" "1|1|0" "$(( $($P -c "select count(*) from public.notifications where user_id='$M2' and type='ticket_date_changed'") - nb ))|$($P -c "select count(*) from public.notifications where user_id='$M2' and type='ticket_date_changed' and payload->>'round_id'='RQ3' and body like '%→ %18:00%'")|$($P -c "select count(*) from public.notifications where user_id='$M2' and type='ticket_date_changed' and payload->>'round_id'='RQ3' and body like '%19:00%'")"
+
+echo "── 26. 4차 RC3-2 — 연도 실수 날에 바꾼 시간은 연도를 처음 날짜로 고칠 때 같이 간다(목표 날짜에 이미 있는 예약도)"
+$P -c "update public.ticket_products set date='2026.08.10' where id='RQ4'" >/dev/null    # 연도 실수(승인 · SQL Editor)
+$P -c "update public.ticket_products set time='19:00' where id='RQ4'" >/dev/null        # 실수 날에 시간 18 → 19(NEW_DATE_PAST · 예약은 그대로)
+ok "  예약은 2028.08.10 18:00 그대로 · 기록 NEW_DATE_PAST" "2028.08.10 18:00|2028.08.10 18:00|NEW_DATE_PAST" "$(dt $Q4A)|$(dt $Q4B)|$($P -c "select errors->0->>'code' from public.ticket_round_moves where round_id='RQ4' order by id desc limit 1")"
+pv=$(su "select public.taam_round_move_preview('RQ4','2028.08.10',null)" | grep '^{')
+ok "  미리보기(연도만 고침): 두 예약 move · 19:00(종전엔 keep · time_individual)" "move:2028.08.10 19:00,move:2028.08.10 19:00" "$($P -c "select string_agg((e->>'action')||':'||(e->'to'->>'d')||' '||(e->'to'->>'t'),',' order by e->>'pid') from jsonb_array_elements('$pv'::jsonb->'rows') e where e->>'kind'='ticket'")"
+o=$(su "update public.ticket_products set date='2028.08.10' where id='RQ4'")
+ok "  앱이 직접 보낸 저장은 거절(옮길 예약이 있다 — 종전엔 0건으로 셌다)" 1 "$(echo "$o" | grep -c ROUND_RESCHEDULE_REQUIRED)"
+nb=$($P -c "select count(*) from public.notifications where type='ticket_date_changed' and payload->>'round_id'='RQ4'")
+MQ4=$(su "select (public.taam_round_reschedule('RQ4','2028.08.10',null,'2026.08.10','19:00','{}'))->>'move_id'" | grep -E '^[0-9]+$')
+ok "  연도 고침 → 두 예약 2028.08.10 19:00 · 기록 moved 2" "2028.08.10 19:00|2028.08.10 19:00|2" "$(dt $Q4A)|$(dt $Q4B)|$($P -c "select jsonb_array_length(moved) from public.ticket_round_moves where id=$MQ4")"
+nr=$(su "select public.taam_round_move_notify($MQ4)")
+ok "  회원 알림 두 줄(시간이 바뀌었다)" 2 "$(( $($P -c "select count(*) from public.notifications where type='ticket_date_changed' and payload->>'round_id'='RQ4'") - nb ))"
+$P -c "update public.tickets set visit_time='18:00' where id='$Q4A'" >/dev/null   # ⏰ 회원1 만 18:00 으로 — 회차가 그 날짜에 있는 동안
+o=$(su "select public.taam_round_move_resync('RQ4')")
+ok "  다시 맞추기는 회차 날짜의 짝을 안 따른다 — 회원1 18:00 그대로" "2028.08.10 18:00" "$(dt $Q4A)"
+$P -c "update public.ticket_products set date='2028.08.17' where id='RQ4'" >/dev/null
+ok "  다음 이동(08.10 → 08.17): 회원1 18:00 · 회원2 19:00" "2028.08.17 18:00|2028.08.17 19:00" "$(dt $Q4A)|$(dt $Q4B)"
+# 연도 고침 중에 잠긴 행 — 행 오류에 그때 시간(ft)을 적어 다시 맞추기·다음 이동이 알아본다
+for RR in RQ5 RQ6; do
+  $P -c "update public.ticket_products set date='2026.$( [ $RR = RQ5 ] && echo 09 || echo 10 ).10' where id='$RR'" >/dev/null
+  $P -c "update public.ticket_products set time='19:00' where id='$RR'" >/dev/null
+done
+($Q -c "begin; select 1 from public.tickets where id in ('$Q5B','$Q6B') for update; select pg_sleep(2.5); commit;" >/dev/null 2>&1 &)
+sleep 0.6
+$P -c "update public.ticket_products set date='2028.09.10' where id='RQ5'" >/dev/null
+$P -c "update public.ticket_products set date='2028.10.10' where id='RQ6'" >/dev/null
+ok "  연도 고침(트리거): 회원1 19:00 · 잠긴 회원2 18:00(busy · ft 18:00)" "2028.09.10 19:00|2028.09.10 18:00|busy:18:00" "$(dt $Q5A)|$(dt $Q5B)|$($P -c "select (errors->0->>'code')||':'||(errors->0->>'ft') from public.ticket_round_moves where round_id='RQ5' order by id desc limit 1")"
+sleep 2.2
+o=$(su "select public.taam_round_move_resync('RQ5')")
+ok "  다시 맞추기 → 회원2 19:00(종전엔 18:00 에 남았다)" "2028.09.10 19:00" "$(dt $Q5B)"
+$P -c "update public.ticket_products set date='2028.10.17' where id='RQ6'" >/dev/null
+ok "  다시 맞추기 없이 다음 이동(10.10 → 10.17) → 회원2 도 19:00 으로 따라온다" "2028.10.17 19:00|2028.10.17 19:00" "$(dt $Q6A)|$(dt $Q6B)"
+ok "  따로 시간을 지키던 행의 행 오류에는 ft 가 없다(25 (가) — 날짜만 따라가던 행)" "" "$($P -c "select coalesce(e->>'ft','') from public.ticket_round_moves m, jsonb_array_elements(m.errors) e where m.round_id='RQ1' and e->>'id'='$Q1B'")"
+
+echo "── 27. 리마인드 중복 방지에 방문일 (t_rda = 라이브 52d0603a · b42fdace 재현)"
 if psql $H -d postgres -Atc "select 1 from pg_database where datname='t_rda'" | grep -q 1; then
   DB3=${DB}_rem; psql $H -d postgres -q -c "drop database if exists $DB3" >/dev/null 2>&1
   psql $H -d postgres -q -c "create database $DB3 template t_rda" >/dev/null
