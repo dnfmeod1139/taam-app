@@ -15,6 +15,8 @@
 //   · 멱등성         — 이미 처리된 주문은 다시 처리하지 않는다 (새로고침·뒤로가기 대비) · 실패한 주문을 「이미 처리됨 ✅」로 답하지 않는다
 //   · 부분 실패 방지 — 승인 뒤 확정에 실패하면 예치금을 원장 근거로 되돌리고 카드를 전액 취소하고, 못 하면 슈퍼어드민에게 알린다
 //   · 애매한 승인 응답(5xx · 409 · 처리 중 · 네트워크)은 실패로 굳히지 않는다 — 결제를 조회해 DONE 이면 잇는다
+//   · {action:'sweep'}(서버 토큰만 · DB 크론 taam_card_topup_reconcile_kick 10분) — 결과를 모르는 티켓 카드 주문(결제창·등록 카드 모두)을 토스에 조회해 잇거나 정리한다
+//     (그래서 이 함수는 TOSS_BILLING_SECRET_KEY 도 읽는다 — 프로젝트 시크릿은 모든 함수가 같이 본다)
 //
 // 필요한 시크릿 (Supabase Dashboard → Edge Functions → Secrets)
 //   TOSS_SECRET_KEY     = live_sk_...   국내 MID(playtauif6)
@@ -49,6 +51,16 @@ const VIA = 'toss-confirm';
 //   · 결과를 남긴다 — fail_reason = <코드>[_depfail]_(refunded|refund_failed) (판매 현황 card_captured_no_ticket · 결제 내역이 이 꼬리를 읽는다).
 //     처리 중에는 unknown:* 표시를 단다(승인 요청 전 approving · 잡은 뒤 converting:<nonce> · 실패 정리 중 failing:<코드>) — 함수가 도중에 죽어도 다시 부른 호출이 알아본다.
 //   · 회원이 읽는 주문 metadata 에는 코드와 정리된 값만 — DB 오류 원문·토스 응답 원문(secret 칸)은 넣지 않는다(적대 리뷰 M5).
+// 2026-11-16 적대 리뷰 반영(배포 전)
+//   · 되돌림은 「이 호출이 실제로 뺀 금액」까지만(CF-1) — 차감이 분명히 0(예치금 부족·거절)이면 되돌림을 부르지 않는다 · 응답을 잃은 차감만 「낼 몫」이 상한.
+//     뺀 금액은 주문 metadata.card_dep 에 서버가 적는다(payment_orders 는 회원이 못 쓴다) — 다시 부른 호출·정리 크론이 그 기록으로 잇는다.
+//     서버 함수는 홀드 구매 id 한 통으로 센다(회원 환불 한도와 같은 통 · 위조 줄·회원 자기 환불을 두 번 돌려주지 않는다 · CF-2).
+//   · 알림 금액을 지어내지 않는다(CF-3) — 모르면 「금액 확인 필요」 · 늦은 차감 재확인만 실패하면 「원장 확인」 알림(되돌린 몫은 그대로 되돌린 것).
+//   · 함수가 없을 때(SQL 미적용)의 옛 되돌림은 이 호출이 분명히 뺀 몫에만 · 결과를 모르면 실패로(성공으로 덮지 않는다 · CF-4).
+//   · 확정이 막혀 돈을 돌리기 전에 이 주문의 티켓이 늦게 생겼는지 다시 본다(CF-5 방어) · 애매하게 끝난 전환은 실패로 굳히지 않는다.
+//   · 결과 모르는(unknown:*) 주문은 10분 정리(sweep — taam_card_topup_reconcile_kick → toss-confirm)가 토스에 조회해 잇거나 정리한다(CF-6 · TOSSRB-1).
+//     실패 정리 중 끊긴 주문(unknown:failing:<코드>)은 다시 부른 호출도 이어 간다(TOSSRB-3) · 같은 홀드에 결과 모르는 주문이 있으면 새로 승인하지 않는다(TOSSRB-2).
+//   · 응답에 mark(새 Edge 표시)를 싣는다 — 앱은 다시 물어 받은 「이미 처리」를 이 표시가 있을 때만 믿는다(CFAPP-2 · 옛 Edge 는 실패한 주문도 already 로 답했다).
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') || '';
 const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
 const TOSS = 'https://api.tosspayments.com';
@@ -61,7 +73,7 @@ const cors = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 function json(body: Record<string, unknown>, status = 200) {
-  return new Response(JSON.stringify({ ...body, ver: VER }), { status, headers: { ...cors, 'Content-Type': 'application/json' } });
+  return new Response(JSON.stringify({ ...body, ver: VER, mark: MARK }), { status, headers: { ...cors, 'Content-Type': 'application/json' } });
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const enc = (s: unknown) => encodeURIComponent(String(s ?? ''));
@@ -105,6 +117,14 @@ async function background(p: Promise<unknown>) {
   const er = (globalThis as any).EdgeRuntime;
   if (er && typeof er.waitUntil === 'function') { try { er.waitUntil(p.catch(() => {})); return; } catch (_e) { /* 아래 */ } }
   await p.catch(() => {});
+}
+// 서버 호출(정리 크론 · DB 의 pg_net)인가 — 토큰의 role 클레임이 service_role. 서명은 게이트웨이(verify_jwt=true · config.toml)가 이미 확인했다(toss-invite-pay 와 같은 방식)
+function isServiceToken(req: Request): boolean {
+  const h = req.headers.get('Authorization') || '';
+  const t = h.startsWith('Bearer ') ? h.slice(7) : '';
+  if (!t) return false;
+  if (SERVICE_KEY && t === SERVICE_KEY) return true;
+  try { const p = JSON.parse(atob(t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))); return !!p && p.role === 'service_role'; } catch (_e) { return false; }
 }
 // 호출자 — 회원 JWT 로 auth 에 묻는다
 async function caller(req: Request): Promise<{ id: string; email: string } | null> {
@@ -263,13 +283,37 @@ function closedReport(o: any): Record<string, unknown> | null {
 // ── 문맥 ──
 type Ctx = {
   order: any; preMeta: Record<string, any>; uid: string; orderId: string; secret: string; tk: string; cur: string; expected: number;
-  midLabel: string; holdId: string; depositUsed: number; claimMeta: Record<string, unknown>; nonce: string;
+  midLabel: string; holdId: string; depositUsed: number; claimMeta: Record<string, unknown>; nonce: string; cdep: Record<string, any>;
 };
+// 예치금 차감 결과 — taken: 이 호출(또는 서버 기록)이 뺀 금액 · null = 모른다(응답을 잃었다) · fresh: 이 호출이 방금 본 결과(서버 기록에서 되살린 것이 아님)
+type Known = { taken: number | null; mem: number; gen: number; fresh?: boolean };
 function ctxOf(order: any, uid: string, secret: string, midLabel: string): Ctx {
   const pre = (order?.metadata && typeof order.metadata === 'object') ? order.metadata : {};
+  // card_dep — 잡을 때·차감 뒤 서버(이 함수)가 적는 기록. toss-confirm 은 잡을 때 metadata 를 {toss} 로 덮으므로 홀드·낼 몫도 여기서 되살린다
+  const cd = (pre.card_dep && typeof pre.card_dep === 'object') ? pre.card_dep : {};
+  const du = (pre.deposit_used !== undefined && pre.deposit_used !== null) ? pre.deposit_used : cd.plan;
   return { order, preMeta: pre, uid, orderId: String(order?.order_id || ''), secret, tk: String(order?.payment_key || ''),
            cur: String(order?.currency || 'KRW').toUpperCase(), expected: Number(order?.amount || 0), midLabel,
-           holdId: String(pre.hold_purchase_id || ''), depositUsed: Math.max(0, Number(pre.deposit_used || 0)), claimMeta: {}, nonce: '' };
+           holdId: String(pre.hold_purchase_id || cd.hold || ''), depositUsed: Math.max(0, Number(du || 0)), claimMeta: {}, nonce: '', cdep: cd };
+}
+// 서버 기록(card_dep)에서 차감 결과를 되살린다 — 다시 부른 호출·정리 크론용(이 호출이 뺀 것이 아니므로 fresh 아님)
+function knownFromRecord(c: Ctx): Known {
+  const cd = c.cdep || {};
+  const n = (v: unknown) => (Number.isFinite(Number(v)) && Number(v) >= 0) ? Math.round(Number(v)) : 0;
+  if (cd.state === 'taken') return { taken: n(cd.taken), mem: n(cd.mem), gen: n(cd.gen) };
+  if (cd.state === 'none') return { taken: 0, mem: 0, gen: 0 };
+  return { taken: null, mem: 0, gen: 0 };   // 'deducting' 또는 기록 없음 — 모른다(상한은 낼 몫)
+}
+// 차감 결과를 주문에 적는다(payment_orders — 회원은 못 쓴다) · 되돌림 상한의 서버 근거. 실패해도 진행한다(이 호출은 p_cap 으로 넘긴다)
+async function recordDep(c: Ctx, k: Known) {
+  if (!(c.claimMeta && typeof c.claimMeta === 'object')) return;
+  const cd: Record<string, unknown> = { ...((c.claimMeta as any).card_dep || {}) };
+  if (k.taken === null) cd.state = 'deducting';
+  else { cd.state = k.taken > 0 ? 'taken' : 'none'; cd.taken = k.taken; cd.mem = k.mem; cd.gen = k.gen; cd.at = new Date().toISOString(); }
+  c.claimMeta = { ...c.claimMeta, card_dep: cd };
+  c.cdep = cd;
+  const r = await sbReq('PATCH', `payment_orders?order_id=eq.${enc(c.orderId)}&status=eq.paid`, { metadata: c.claimMeta });
+  if (r.err) console.warn(LOG, '차감 기록 실패(진행)', c.orderId, r.err.pgCode || r.err.status);
 }
 
 // ── 알림 ──
@@ -292,7 +336,8 @@ async function pushSuper(title: string, body: string, category: string, tag: str
   }
 }
 // 슈퍼어드민 — cancel_failed: 카드 자동 취소 실패(상점관리자에서 취소) · deposit_failed: 예치금 되돌림 실패(「예치금 부여」) · pending: 결과를 모른다(확인)
-async function alertAdmins(c: Ctx, kind: 'cancel_failed' | 'deposit_failed' | 'pending', code: string, info?: Record<string, unknown>) {
+//   deposit_check: 되돌림은 했는데 「늦게 들어온 차감」 재확인만 실패(원장 확인 · 금액 없음) · record_failed: 정리는 끝났는데 주문에 결과를 못 적음
+async function alertAdmins(c: Ctx, kind: 'cancel_failed' | 'deposit_failed' | 'pending' | 'deposit_check' | 'record_failed', code: string, info?: Record<string, unknown>) {
   try {
     const who = await buyerName(c.uid);
     const rest = String(c.preMeta.restaurant_name || c.preMeta.toss?.orderName || '티켓').slice(0, 60);
@@ -305,12 +350,20 @@ async function alertAdmins(c: Ctx, kind: 'cancel_failed' | 'deposit_failed' | 'p
       title = '⚠ 카드 결제 자동 취소 실패 — 상점관리자 확인 필요';
       body = where + ' — 좌석은 확정되지 않았습니다. 토스 상점관리자(' + c.midLabel + ')에서 승인취소해 주세요.';
     } else if (kind === 'deposit_failed') {
+      // 금액은 이 호출이 분명히 뺀 것을 알 때만 적는다 — 결과를 모르는 차감·이미 돌려준 몫을 「못 돌려줬다」고 적으면 운영자가 한 번 더 준다(CF-3)
       type = 'ledger_apply_failed';
       title = '🔴 예치금 환원 실패 — 수동 확인 필요';
-      body = where + ' — 카드 결제 실패로 돌려줘야 할 예치금' + (info && Number(info.owed) > 0 ? ' ₩' + Number(info.owed).toLocaleString('en-US') : '') + ' 을(를) 돌려주지 못했습니다. 회원 원장에서 확인 후 「예치금 부여」로 돌려주세요.';
+      body = where + ' — 카드 결제 실패로 돌려줘야 할 예치금' + (info && Number(info.owed) > 0 ? ' ₩' + Number(info.owed).toLocaleString('en-US') : '(금액은 회원 원장에서 확인)') + ' 을(를) 돌려주지 못했습니다. 회원 원장에서 이 구매(' + (c.holdId || '구매 id 없음') + ')의 차감·환원 줄을 확인한 뒤 「예치금 부여」로 돌려주세요.';
+    } else if (kind === 'deposit_check') {
+      type = 'card_deposit_check';
+      title = '🟠 카드 결제 취소 — 예치금 원장 확인 필요';
+      body = where + ' — 예치금은 되돌렸지만, 응답을 잃었던 차감이 늦게 들어왔는지 다시 세지 못했습니다. 회원 원장에서 이 구매(' + (c.holdId || '구매 id 없음') + ')의 차감·환원 줄이 같은지 확인해 주세요(다르면 그 차액만 「예치금 부여」).';
+    } else if (kind === 'record_failed') {
+      title = '⚠ 카드 결제 정리 결과 기록 실패';
+      body = where + ' — 카드 취소·예치금 정리는 끝났지만 주문에 결과를 적지 못했습니다. 결제 내역에서 이 주문이 「결과 모름」으로 보이면 토스 상점관리자(취소 여부)와 회원 원장을 확인해 주세요.';
     } else {
       title = '⚠ 카드 결제 결과 확인 필요';
-      body = where + ' — 카드 승인 또는 티켓 확정 결과를 모릅니다. 토스 상점관리자(승인 여부)와 결제 내역·회원 원장(티켓·예치금)을 확인해 주세요(자동으로 다시 처리하지 않습니다 — 회원이 결제를 다시 열면 같은 승인으로 이어집니다).';
+      body = where + ' — 카드 승인 또는 티켓 확정 결과를 모릅니다. 10분마다 서버가 토스에 다시 물어 승인됐으면 이어서 처리하고, 확정이 안 되면 카드를 취소하고 예치금을 되돌립니다. 그래도 남아 있으면 토스 상점관리자(승인 여부)와 결제 내역·회원 원장(티켓·예치금)을 확인해 주세요. 이 결과가 나기 전에는 같은 좌석으로 새 카드 결제를 받지 않습니다.';
     }
     const sups = await sbGet(`profiles?role=in.(superadmin,super_admin)&select=id`) || [];
     const rows = sups.filter((p: any) => p.id !== c.uid).map((p: any) => ({ user_id: p.id, type, title, body, url: '/',
@@ -349,6 +402,17 @@ async function notifyMemberCanceled(c: Ctx, code: string, refunded: boolean, dep
     const ko = L(0, restKo), en = L(1, restEn || restKo), ja = L(2, restJa || restKo);
     await sbReq('POST', 'notifications', [{ user_id: c.uid, type: 'card_auto_canceled', title: ko.title, body: ko.body, url: '/',
       payload: { order_id: c.orderId, code, refunded, deposit_used: depUsed, deposit_refunded: depUsed ? depOk : null, via: VIA, i18n: { ko, en, ja } } }], 'return=minimal');
+  } catch (_e) { /* 알림은 부가 */ }
+}
+// 회원 알림함 — 결과를 몰라 「확인 중」으로 안내했던 결제를 정리 크론이 이어서 확정했다(세 벌 · payload.i18n)
+async function notifyMemberConfirmed(c: Ctx) {
+  try {
+    const rest = String(c.preMeta.restaurant_name || c.cdep?.rname || '').slice(0, 60);
+    const ko = { title: '카드 결제가 확인되었습니다', body: (rest ? rest + ' · ' : '') + '확인 중이던 결제가 승인되어 예약이 확정되었습니다. 구매 내역에서 확인하실 수 있습니다.' };
+    const en = { title: 'Your card payment was confirmed', body: (rest ? rest + ' · ' : '') + 'The payment we were checking went through and your booking is confirmed. You can see it in your purchase history.' };
+    const ja = { title: 'カード決済が確認されました', body: (rest ? rest + ' · ' : '') + '確認中だった決済が承認され、ご予約が確定しました。購入履歴でご確認いただけます。' };
+    await sbReq('POST', 'notifications', [{ user_id: c.uid, type: 'card_payment_confirmed', title: ko.title, body: ko.body, url: '/?open_ticket_hist=1',
+      payload: { order_id: c.orderId, via: VIA, i18n: { ko, en, ja } } }], 'return=minimal');
   } catch (_e) { /* 알림은 부가 */ }
 }
 // 결과를 모르는 주문 — 표시를 달고 한 번만 알린다
@@ -393,35 +457,36 @@ async function deductDeposit(uid: string, want: number, meta: Record<string, unk
   }
   return { ...none, short: true };
 }
-// 되돌림 — 서버 함수(원장 근거 · 멱등)를 최대 3번. 함수가 아직 없으면(SQL 미적용) 이번 호출이 뺀 몫을 옛 방식으로 한 번
-async function settleDeposit(c: Ctx, code: string, known?: { fromMem: number; fromGen: number; ambiguous?: boolean }):
-  Promise<{ ok: boolean; mem: number; gen: number; owed: number; err?: string }> {
+// 되돌림 — 서버 함수(원장 근거 · 홀드 구매 id 한 통 · 멱등)를 최대 3번. cap = 이 호출이 뺀 금액(모르면 낼 몫) — 그 이상은 돌려주지 않는다(CF-1).
+//   함수가 아직 없으면(SQL 미적용) 이 호출이 **방금 분명히** 뺀 몫만 옛 방식으로 한 번(결과를 모르면 실패 · 서버 기록에서 되살린 몫은 옛 방식으로 안 한다 — 두 번 줄 수 있다 · CF-4)
+async function settleDeposit(c: Ctx, code: string, cap: number, known?: Known):
+  Promise<{ ok: boolean; mem: number; gen: number; err?: string }> {
   const waits = [0, 500, 1500];
   let last = '';
   for (let i = 0; i < 3; i++) {
     if (waits[i]) await sleep(waits[i]);
-    const r = await sbRpc('taam_card_order_settle', { p_order: c.orderId, p_user: c.uid, p_cap: c.depositUsed, p_purchase_id: c.holdId || null,
+    const r = await sbRpc('taam_card_order_settle', { p_order: c.orderId, p_user: c.uid, p_cap: Math.max(0, Math.round(cap)), p_purchase_id: c.holdId || null,
       p_code: code, p_why: '카드 결제 취소(' + (CANCEL_REASON[code] || code) + ') · 예치금 환원' });
     if (!r.err) {
       const d = r.data || {};
-      return { ok: true, mem: Number(d.refunded_mem || 0), gen: Number(d.refunded_gen || 0), owed: Number(d.owed_before || 0) };
+      return { ok: true, mem: Number(d.refunded_mem || 0), gen: Number(d.refunded_gen || 0) };
     }
     last = r.err.pgCode || (r.err.status ? 'http_' + r.err.status : 'network');   // 코드만 — 회원이 읽는 주문 metadata 에 DB 오류 원문을 남기지 않는다(M5)
     if (r.err.pgCode === 'PGRST202' || r.err.pgCode === '42883') {
-      // 서버 함수가 아직 없다 — 이번 호출이 분명히 뺀 몫만 옛 방식으로(응답을 잃은 차감은 모른다 → 알림)
-      if (!known || known.ambiguous || (known.fromMem + known.fromGen) <= 0) return { ok: !known || (!known.ambiguous && (known.fromMem + known.fromGen) <= 0), mem: 0, gen: 0, owed: 0, err: 'settle_missing' };
+      // 서버 함수가 아직 없다 — 이 호출이 방금 분명히 뺀 몫만 옛 방식으로
+      if (!known || !known.fresh || known.taken === null) return { ok: false, mem: 0, gen: 0, err: 'settle_missing' };
+      if (known.taken <= 0) return { ok: true, mem: 0, gen: 0 };
       const md = { order_id: c.orderId, purchase_id: c.holdId || undefined, card_fail_code: code };
       const ent: Record<string, unknown>[] = [];
-      if (known.fromMem > 0) ent.push({ deposit_type: 'membership', change_type: 'ticket_refund', amount: known.fromMem, description: '카드 결제 취소 · 예치금 환원', metadata: md });
-      if (known.fromGen > 0) ent.push({ deposit_type: 'general', change_type: 'ticket_refund', amount: known.fromGen, description: '카드 결제 취소 · 예치금 환원', metadata: md });
-      const o = await sbRpc('taam_apply_deposit_delta', { p_user_id: c.uid, p_mem_delta: known.fromMem, p_gen_delta: known.fromGen, p_entries: ent });
-      return o.err ? { ok: false, mem: 0, gen: 0, owed: known.fromMem + known.fromGen, err: 'legacy_refund_failed' }
-                   : { ok: true, mem: known.fromMem, gen: known.fromGen, owed: known.fromMem + known.fromGen };
+      if (known.mem > 0) ent.push({ deposit_type: 'membership', change_type: 'ticket_refund', amount: known.mem, description: '카드 결제 취소 · 예치금 환원', metadata: md });
+      if (known.gen > 0) ent.push({ deposit_type: 'general', change_type: 'ticket_refund', amount: known.gen, description: '카드 결제 취소 · 예치금 환원', metadata: md });
+      const o = await sbRpc('taam_apply_deposit_delta', { p_user_id: c.uid, p_mem_delta: known.mem, p_gen_delta: known.gen, p_entries: ent });
+      return o.err ? { ok: false, mem: 0, gen: 0, err: 'legacy_refund_failed' } : { ok: true, mem: known.mem, gen: known.gen };
     }
-    if (isDb(r.err) && !isTransient(r.err)) break;   // 분명한 거절(주문·회원 불일치 등) — 다시 해도 같다
+    if (isDb(r.err) && !isTransient(r.err)) break;   // 분명한 거절(주문·회원 불일치 · 이 주문의 티켓이 살아 있음 등) — 다시 해도 같다
   }
   console.error(LOG, '예치금 되돌림 실패 — 수동 확인 필요', c.orderId, last);
-  return { ok: false, mem: 0, gen: 0, owed: 0, err: last || 'settle_failed' };
+  return { ok: false, mem: 0, gen: 0, err: last || 'settle_failed' };
 }
 
 // ── 좌석 ──
@@ -478,7 +543,12 @@ async function convertHoldToActive(c: Ctx, total: number, cardPaid: number, depo
         if (!r.err) break;                                       // 0 줄 — 아래에서 지금 상태를 본다
         if (isDb(r.err)) {
           if (isTransient(r.err) && i < 2) continue;
-          if (amb) { const s2 = await holdState(c.uid, c.holdId, c.orderId, tid, pax); if (s2 === 'mine') return ok(c.holdId); }
+          if (amb) {
+            const s2 = await holdState(c.uid, c.holdId, c.orderId, tid, pax);
+            if (s2 === 'mine') return ok(c.holdId);
+            // 앞 시도의 응답을 잃었는데 마지막도 일시 오류였거나 지금 상태를 못 읽었다 — 그 문장이 늦게 커밋될 수 있다(실패로 굳히지 않는다 · CF-5 방어)
+            if (isTransient(r.err) || s2 === null) return { ok: false, ambiguous: true, stage: 'update_transient' };
+          }
           return fail(r.err!.message, true);
         }
         amb = true;
@@ -515,6 +585,7 @@ async function convertHoldToActive(c: Ctx, total: number, cardPaid: number, depo
       if (isTransient(r.err) && i < 2) continue;
       // 앞 시도가 애매했으면(실제로는 들어갔을 수 있다) 이 주문의 티켓이 있는지 먼저 본다 — 있으면 성공(그 뒤의 「매진」·「중복」은 자기 행 때문이다)
       if (amb || /DUPLICATE_PURCHASE/.test(r.err!.message)) { const f = await orderTicketLive(c.uid, c.orderId); if (f === true) return ok(pid); if (f === null && amb) return { ok: false, ambiguous: true, stage: 'insert_reread' }; }
+      if (amb && isTransient(r.err)) return { ok: false, ambiguous: true, stage: 'insert_transient' };   // CF-5 방어 — 응답을 잃은 앞 시도가 늦게 커밋될 수 있다
       return fail(r.err!.message, false);
     }
     amb = true;
@@ -534,24 +605,51 @@ async function releaseHold(uid: string, holdId: string): Promise<string | null> 
 }
 
 // ── 승인 뒤 확정 실패 — 한 길 ──
-//   ① 표시(failing) ② 예치금 되돌림(원장 근거) ③ 살아 있는 홀드 반납 ④ 카드 전액 취소 ⑤ (차감 응답을 잃었으면) 되돌림 한 번 더 ⑥ 주문에 결과 ⑦ 알림
-async function failAfterApproval(c: Ctx, code: string, extra: Record<string, unknown>, o: { holdAlive: boolean; depAmbiguous?: boolean; known?: { fromMem: number; fromGen: number; ambiguous?: boolean } }) {
+//   ① 표시(failing) ② 살아 있는 홀드 반납 ③ 이 주문의 티켓이 늦게 생겼는지 다시 본다(생겼으면 성공 · 못 읽으면 손대지 않는다 — CF-5 방어)
+//   ④ 예치금 되돌림 — 이 호출이 뺀 만큼까지(차감이 분명히 0 이면 부르지 않는다 · 결과를 모르면 낼 몫까지 — CF-1) ⑤ 카드 전액 취소
+//   ⑥ (차감 응답을 잃었으면) 되돌림 한 번 더 ⑦ 주문에 결과 ⑧ 알림(금액은 아는 것만 — CF-3).
+//   다시 부른 호출·정리 크론은 known 없이 부른다 — 서버 기록(card_dep)에서 되살린다(TOSSRB-3).
+async function failAfterApproval(c: Ctx, code: string, extra: Record<string, unknown>, o: { holdAlive: boolean; known?: Known }) {
   console.warn(LOG, '승인 뒤 확정 실패', c.orderId, code);
   await sbReq('PATCH', `payment_orders?order_id=eq.${enc(c.orderId)}&status=eq.paid`, { fail_reason: 'unknown:failing:' + code });
-  const depUsed = c.depositUsed > 0;
-  let dep: { ok: boolean; mem: number; gen: number; owed: number; err?: string } = { ok: true, mem: 0, gen: 0, owed: 0 };
-  if (depUsed) dep = await settleDeposit(c, code, o.known);
+  if (c.order) c.order.fail_reason = 'unknown:failing:' + code;
   let holdGone = !o.holdAlive;
   if (o.holdAlive && c.holdId) holdGone = (await releaseHold(c.uid, c.holdId)) !== null;
-  const card = await cancelTossFull(c.secret, c.tk, CANCEL_REASON[code] || '구매 확정 실패');
-  if (depUsed && o.depAmbiguous) {
-    // 응답을 잃은 차감이 늦게 들어왔을 수 있다 — 카드 취소(수 초) 뒤 한 번 더 센다(멱등)
-    const d2 = await settleDeposit(c, code);
-    dep = { ok: d2.ok, mem: dep.mem + d2.mem, gen: dep.gen + d2.gen, owed: dep.owed + d2.owed, err: d2.err };
+  // ③ 돈을 돌리기 전에 — 응답을 잃은 전환이 늦게 커밋돼 이 주문의 티켓이 살아 있으면 구매는 된 것이다(돌려주고 취소하면 공짜 티켓)
+  const live = await orderTicketLive(c.uid, c.orderId);
+  if (live === true) {
+    console.warn(LOG, '정리하려는데 이 주문의 티켓이 살아 있다 — 구매 성공으로 본다', c.orderId);
+    await sbReq('PATCH', `payment_orders?order_id=eq.${enc(c.orderId)}&fail_reason=eq.${enc('unknown:failing:' + code)}`, { fail_reason: null });
+    return json({ ok: true, already: true, orderId: c.orderId, amount: c.expected, purpose: 'ticket_topup' });
   }
-  const fr = code + (dep.ok ? '' : '_depfail') + (card.ok ? '_refunded' : '_refund_failed');
-  const fail = { code, at: new Date().toISOString(), extra: pickExtra(extra), hold_released: holdGone, dep_used: depUsed,
-                 card: { ok: card.ok, code: card.code, tries: card.tries }, deposit: { ok: dep.ok, mem: dep.mem, gen: dep.gen, err: dep.err || undefined }, mark: MARK };
+  if (live === null) {
+    // 지금 상태를 못 읽는다(DB 장애) — 돈을 움직이지 않는다. 표시(unknown:failing:<코드>)가 남아 다시 부른 호출·10분 정리가 이어 간다
+    console.warn(LOG, '정리 전 티켓 확인 실패 — 손대지 않음', c.orderId);
+    return json({ ok: false, error: 'processing', paid: true, orderId: c.orderId });
+  }
+  // ④ 예치금
+  const k: Known = o.known || knownFromRecord(c);
+  const depPlan = c.depositUsed > 0;
+  let d1: { ok: boolean; mem: number; gen: number; err?: string } = { ok: true, mem: 0, gen: 0 };
+  if (depPlan && k.taken !== 0) d1 = await settleDeposit(c, code, k.taken === null ? c.depositUsed : k.taken, k);
+  const card = await cancelTossFull(c.secret, c.tk, CANCEL_REASON[code] || '구매 확정 실패');
+  // ⑥ 응답을 잃은 차감이 늦게 들어왔을 수 있다 — 카드 취소(수 초) 뒤 한 번 더 센다(멱등 · 같은 상한)
+  let depOk = d1.ok, mem = d1.mem, gen = d1.gen, depErr = d1.err, recheckFailed = false;
+  if (depPlan && k.taken === null) {
+    const d2 = await settleDeposit(c, code, c.depositUsed, k);
+    mem += d2.mem; gen += d2.gen;
+    // 서버 함수가 끝까지 돈 두 번째 정리는 그 자체로 완결이다(멱등 · 상한까지 전부) — 첫 실패를 덮어도 된다.
+    //   함수가 없을 때(옛 방식)는 결과를 모르면 언제나 실패라 덮지 못한다(CF-4)
+    if (d2.ok) { depOk = true; depErr = undefined; }
+    else if (d1.ok) recheckFailed = true;   // 되돌린 몫은 되돌린 것 — 늦은 차감 재확인만 못 했다(알림 · 금액 없음 · CF-3)
+    else depErr = d2.err || depErr;
+  }
+  // 회원에게 「예치금도 돌려드렸다」고 말할 수 있는가 — 실제로 빠졌거나 빠졌을 수 있을 때만(예치금 부족·거절은 아무것도 안 뺐다 · CFAPP-4)
+  const depMoved = depPlan && (k.taken === null ? (mem + gen > 0 || !depOk) : k.taken > 0);
+  const fr = code + (depOk ? '' : '_depfail') + (card.ok ? '_refunded' : '_refund_failed');
+  const fail = { code, at: new Date().toISOString(), extra: pickExtra(extra), hold_released: holdGone, dep_used: depMoved,
+                 card: { ok: card.ok, code: card.code, tries: card.tries },
+                 deposit: { ok: depOk, mem, gen, err: depErr || undefined, taken: k.taken === null ? undefined : k.taken, recheck_failed: recheckFailed || undefined }, mark: MARK };
   const meta = { ...c.preMeta, ...c.claimMeta, fail: JSON.parse(JSON.stringify(fail)) };
   let rec = false;
   for (let i = 0; i < 2 && !rec; i++) {
@@ -560,10 +658,13 @@ async function failAfterApproval(c: Ctx, code: string, extra: Record<string, unk
   }
   if (!rec) console.error(LOG, '실패 결과 기록 실패 — 수동 확인', c.orderId, fr);
   if (!card.ok) await alertAdmins(c, 'cancel_failed', code + (rec ? '' : ' · 주문 기록 실패'));
-  if (!dep.ok) await alertAdmins(c, 'deposit_failed', code, { owed: dep.owed || c.depositUsed });
-  await notifyMemberCanceled(c, code, card.ok, depUsed, dep.ok);
-  return json({ ok: false, error: code, refunded: card.ok, deposit_used: depUsed, deposit_refunded: depUsed ? dep.ok : undefined, hold_gone: holdGone,
-                orderId: c.orderId, ...pickExtra(extra), reason: reasonText(code, card.ok, depUsed, dep.ok, extra) });
+  // 금액은 뺀 것을 알 때만(이 호출이 봤거나 서버 기록) — 결과를 모르는 차감은 「원장에서 확인」
+  if (!depOk) await alertAdmins(c, 'deposit_failed', code, { owed: k.taken !== null ? Math.max(0, k.taken - (mem + gen)) : 0 });
+  if (recheckFailed) await alertAdmins(c, 'deposit_check', code);
+  if (!rec && card.ok && depOk) await alertAdmins(c, 'record_failed', code);   // 카드·예치금은 끝났는데 결과가 안 남았다(TOSSRB-3)
+  await notifyMemberCanceled(c, code, card.ok, depMoved, depOk);
+  return json({ ok: false, error: code, refunded: card.ok, deposit_used: depMoved, deposit_refunded: depMoved ? depOk : undefined, hold_gone: holdGone,
+                orderId: c.orderId, ...pickExtra(extra), reason: reasonText(code, card.ok, depMoved, depOk, extra) });
 }
 
 // ── 승인 뒤 공통 — 주문 잡기 → (티켓이면) 예치금 차감 · 좌석 전환 · 실패면 정리 ──
@@ -592,6 +693,14 @@ async function afterApproval(c: Ctx, tb: any, claimMetaOf: (pick: Record<string,
   const isTk = c.order.purpose === 'ticket_topup';
   c.nonce = (globalThis.crypto && typeof crypto.randomUUID === 'function') ? crypto.randomUUID().slice(0, 12) : String(Date.now());
   c.claimMeta = { ...claimMetaOf(pickToss(tb)), claim_nonce: c.nonce };
+  if (isTk) {
+    // card_dep — 되돌림 상한·정리의 서버 근거(회원은 payment_orders 를 못 쓴다). toss-confirm 은 잡을 때 metadata 를 {toss} 로 덮으므로 홀드·낼 몫·회차도 여기 남긴다
+    const pm = c.preMeta;
+    c.claimMeta.card_dep = JSON.parse(JSON.stringify({ hold: c.holdId || null, plan: c.depositUsed, tid: pm.ticket_id || null, pax: Number(pm.pax || 0) || null,
+      rid: pm.restaurant_id || null, rname: pm.restaurant_name ? String(pm.restaurant_name).slice(0, 60) : null,
+      state: c.depositUsed > 0 ? 'deducting' : 'none', ...(c.depositUsed > 0 ? {} : { taken: 0 }) }));
+    c.cdep = c.claimMeta.card_dep as Record<string, any>;
+  }
   const claimBody: Record<string, unknown> = { status: 'paid', payment_key: tk, method: tb.method || defaultMethod, receipt_url: tb.receipt?.url || null,
     approved_at: tb.approvedAt || new Date().toISOString(), metadata: c.claimMeta, fail_reason: isTk ? 'unknown:converting:' + c.nonce : null };
   let state = '', dbFail = false;
@@ -637,13 +746,17 @@ async function afterApproval(c: Ctx, tb: any, claimMetaOf: (pick: Record<string,
   // ── 티켓 부족분 — 예치금 차감 → 좌석 전환 ──
   const pre = c.preMeta, total = Number(pre.total || 0);
   const cardPaid = c.cur === 'KRW' ? c.expected : (Number(c.order.settle_krw) || 0);
-  let known: { fromMem: number; fromGen: number; ambiguous?: boolean } | undefined;
+  let known: Known | undefined;
   try {
     let deposited = 0;
     if (c.depositUsed > 0) {
+      // 홀드 구매 id 없이는 예치금을 빼지 않는다 — 되돌림이 그 통으로 센다(SETTLE_BAD_ARGS). 옵션 B 뒤로 모든 주문에 홀드가 있다(옛 주문 대비)
+      if (!c.holdId) return await failAfterApproval(c, 'convert_failed', {}, { holdAlive: false, known: { taken: 0, mem: 0, gen: 0, fresh: true } });
       const ded = await deductDeposit(c.uid, c.depositUsed, { purchase_id: c.holdId, ticket_id: pre.ticket_id, restaurant_name: pre.restaurant_name, party_size: pre.pax, order_id: c.orderId });
-      known = { fromMem: ded.fromMem, fromGen: ded.fromGen, ambiguous: !!ded.ambiguous };
-      if (ded.ambiguous) return await failAfterApproval(c, 'convert_failed', {}, { holdAlive: true, depAmbiguous: true, known });
+      // 이 호출이 뺀 금액 — 예치금 부족·거절은 분명히 0(되돌림을 부르지 않는다 · CF-1) · 응답을 잃으면 모른다(null)
+      known = { taken: ded.ambiguous ? null : ((ded.short || ded.failed) ? 0 : ded.deducted), mem: ded.fromMem, gen: ded.fromGen, fresh: true };
+      await recordDep(c, known);
+      if (ded.ambiguous) return await failAfterApproval(c, 'convert_failed', {}, { holdAlive: true, known });
       if (ded.short) return await failAfterApproval(c, 'deposit_short', { deducted: 0, needed: c.depositUsed }, { holdAlive: true, known });
       if (ded.failed || ded.deducted < c.depositUsed) return await failAfterApproval(c, ded.failed ? 'convert_failed' : 'deposit_short', ded.failed ? {} : { deducted: ded.deducted, needed: c.depositUsed }, { holdAlive: true, known });
       deposited = ded.deducted;
@@ -706,6 +819,11 @@ async function onClosedOrder(c: Ctx) {
   }
   if (fr.startsWith('unknown:')) {
     const t0 = Date.parse(String(o.approved_at || o.updated_at || o.created_at || ''));
+    // TOSSRB-3 — 실패 정리 중 함수가 끊긴 주문(unknown:failing:<코드>)은 3분 지나면 이어서 끝낸다(예치금 되돌림은 원장 근거 · 카드 취소는 같은 멱등 키 — 두 번 돌아도 한 번)
+    const fm = fr.match(/^unknown:failing:([a-z_]+?)(?::alerted)?$/);
+    if (fm && has === false && Number.isFinite(t0) && Date.now() - t0 > 180000 && c.tk) {
+      return await failAfterApproval(c, fm[1], {}, { holdAlive: true });
+    }
     if (has === false && Number.isFinite(t0) && Date.now() - t0 > 180000 && !/:alerted$/.test(fr)) {
       const r = await sbPatch(`payment_orders?order_id=eq.${enc(c.orderId)}&fail_reason=eq.${enc(fr)}&select=order_id`, { fail_reason: fr.slice(0, 200) + ':alerted' });
       if (r.rows.length) await alertAdmins(c, 'pending', fr.replace(/^unknown:/, '').replace(/:[0-9a-f-]{6,}$/, '').slice(0, 40));
@@ -714,6 +832,135 @@ async function onClosedOrder(c: Ctx) {
   }
   if (fr) return json({ ok: false, error: fr.split(':')[0].slice(0, 60), paid: true, orderId: c.orderId });
   return json({ ok: false, error: 'processing', paid: true, orderId: c.orderId });
+}
+
+// ── 승인 전 — 같은 홀드(또는 승인된 같은 회차)에 결과를 모르는 다른 카드 주문이 있나 (TOSSRB-2) ──
+//   있으면 이 주문을 승인하지 않는다 — 앞 주문이 토스에서 늦게 완료되면 두 번 청구된다. 앞 주문은 10분 정리가 잇거나 취소한다.
+//   true · false · null(못 읽음 — 승인하지 않는다). 새 카드 주문은 DB 가드(trg_taam_guard_card_order_pending)도 막는다 — 이것은 그 전에 만들어진 주문 몫.
+async function otherUnresolved(c: Ctx): Promise<boolean | null> {
+  if (c.order?.purpose !== 'ticket_topup') return false;
+  const rows = await sbGet(`payment_orders?user_id=eq.${enc(c.uid)}&purpose=eq.ticket_topup&status=in.(pending,paid)&select=order_id,status,fail_reason,metadata,created_at`);
+  if (rows === null) return null;
+  const tid = String(c.preMeta.ticket_id || ''), cut = Date.now() - 60 * 60000;
+  return rows.some((o: any) => {
+    if (String(o.order_id) === c.orderId || !/^unknown:/.test(String(o.fail_reason || ''))) return false;
+    const t = Date.parse(String(o.created_at || '')); if (!(t > cut)) return false;
+    const m = (o.metadata && typeof o.metadata === 'object') ? o.metadata : {}, cd = (m.card_dep && typeof m.card_dep === 'object') ? m.card_dep : {};
+    if (c.holdId && (m.hold_purchase_id === c.holdId || cd.hold === c.holdId)) return true;
+    return !!(tid && o.status === 'paid' && (m.ticket_id === tid || cd.tid === tid));
+  });
+}
+
+// ── 10분 정리(sweep) — 결과를 모르는(unknown:*) 티켓 카드 주문 (CF-6 · TOSSRB-1) ──
+//   부르는 곳: DB 크론 taam_card_topup_reconcile_kick → toss-confirm {action:'sweep'} (서버 토큰만). 목록은 서버 함수가 고른다.
+//   lookup  (pending): 토스에 주문번호로 조회(통화·결제 경로에 맞는 MID 키를 차례로) — DONE 이면 같은 승인으로 잇는다(잡기 → 예치금 → 좌석 · 막히면 취소·환원),
+//                      결제가 없으면(404) 닫는다(swept_no_payment — 3~45분 동안 다시 조회해 늦은 승인을 잡는다) · 끝난 결제(취소·중단·만료)는 닫는다 · 모르면 둔다(30분 뒤 알림 한 번)
+//   resolve (paid)   : 이 주문의 티켓이 있으면 표시만 지운다 · 없으면 실패 정리를 이어 간다(되돌림은 서버 기록 card_dep 근거 · 카드 전액 취소 — 모두 멱등)
+//   orphan  (failed swept_no_payment): 그 사이 승인이 생겼으면 전액 취소
+const SWEEP_MID: Record<string, string> = { DOM: '국내 MID(playtauif6)', BILL: '등록 카드 MID(bill_taam315)', USD: '해외 USD MID(playtaamusd)', JPY: '해외 JPY MID(playtaamjpy)' };
+function sweepSecrets(o: any): { key: string; secret: string; label: string }[] {
+  const cur = String(o?.currency || 'KRW').toUpperCase();
+  const dom = Deno.env.get('TOSS_SECRET_KEY') || '', bill = Deno.env.get('TOSS_BILLING_SECRET_KEY') || '';
+  const out: { key: string; secret: string; label: string }[] = [];
+  const add = (key: string, secret: string) => { if (secret && !out.some((x) => x.secret === secret)) out.push({ key, secret, label: SWEEP_MID[key] }); };
+  if (cur === 'USD' || cur === 'JPY') { add(cur, Deno.env.get('TOSS_SECRET_KEY_' + cur) || ''); return out; }
+  const m = (o?.metadata && typeof o.metadata === 'object') ? o.metadata : {};
+  const mid = String(m.toss?.mId || '');
+  const billFirst = m.paid_via === 'billing_key' || /^bill/.test(mid) || /^unknown:(approving_billing|toss_billing)/.test(String(o?.fail_reason || ''));
+  if (billFirst) { add('BILL', bill); add('DOM', dom); } else { add('DOM', dom); add('BILL', bill); }
+  return out;
+}
+// 주문번호로 토스에 묻는다 — 키마다(다른 MID 의 주문은 404) · done / gone(모든 키 404 또는 끝난 결제) / unknown(네트워크·5xx·진행 중)
+async function sweepLookup(o: any): Promise<{ st: 'done' | 'gone' | 'ended' | 'unknown'; body?: any; key?: string; secret?: string; label?: string }> {
+  const keys = sweepSecrets(o);
+  if (!keys.length) return { st: 'unknown' };
+  let all404 = true;
+  for (const k of keys) {
+    const g = await tossCall(k.secret, `/v1/payments/orders/${enc(o.order_id)}`, 'GET');
+    if (g.ok && String(g.body?.orderId || '') === String(o.order_id)) {
+      const s = String(g.body?.status || '');
+      if (s === 'DONE') return { st: 'done', body: g.body, key: k.key, secret: k.secret, label: k.label };
+      if (/^(CANCELED|ABORTED|EXPIRED)$/.test(s)) return { st: 'ended', body: g.body, key: k.key, secret: k.secret, label: k.label };
+      all404 = false;   // 진행 중(IN_PROGRESS · READY · WAITING_FOR_DEPOSIT) · 부분 취소(PARTIAL_CANCELED — 남은 승인이 있다) — 닫지 않는다(30분 뒤 알림)
+      continue;
+    }
+    if (g.status !== 404) all404 = false;   // 네트워크·5xx·권한 — 모른다
+  }
+  return { st: all404 ? 'gone' : 'unknown' };
+}
+async function sweepTopups(): Promise<Response> {
+  const lr = await sbRpc('taam_card_topup_reconcile_list', { p_limit: 15 });
+  if (lr.err || !Array.isArray(lr.data)) return json({ ok: false, error: 'list_failed', code: lr.err?.pgCode || '' });
+  const out = { n: lr.data.length, resumed: 0, confirmed: 0, failed_closed: 0, cleared: 0, closed: 0, left: 0, orphan_canceled: 0, errors: 0 };
+  for (const it of lr.data) {
+    try {
+      const g = await sbGet(`payment_orders?order_id=eq.${enc(it.order_id)}&select=*`);
+      const o = g && g[0];
+      if (!o || o.purpose !== 'ticket_topup' || String(o.status) !== String(it.status) || String(o.fail_reason || '') !== String(it.fail_reason || '')) { out.left++; continue; }   // 그 사이 바뀌었다
+      const uid = String(o.user_id || ''), fr = String(o.fail_reason || '');
+      if (it.reconcile === 'lookup') {
+        const lk = await sweepLookup(o);
+        if (lk.st === 'done') {
+          const c = ctxOf(o, uid, lk.secret!, lk.label!);
+          const isBill = lk.key === 'BILL';
+          const res = await afterApproval(c, lk.body, isBill ? (pick) => ({ ...c.preMeta, toss: pick, paid_via: 'billing_key', resumed_by: 'sweep' }) : (pick) => ({ toss: pick, resumed_by: 'sweep' }),
+                                          isBill ? 'billing' : null, {});
+          const d = await res.json().catch(() => ({}));
+          out.resumed++;
+          if (d && d.ok) { out.confirmed++; await notifyMemberConfirmed(c); }
+          else if (d && d.error && d.error !== 'processing') out.failed_closed++;
+          continue;
+        }
+        if (lk.st === 'gone' || lk.st === 'ended') {
+          // 결제가 없다(또는 토스에서 이미 끝났다) — 주문을 닫는다. 표시가 그대로일 때만(그 사이 다른 호출이 잡았으면 손대지 않는다)
+          const why = (lk.st === 'gone' ? 'swept_no_payment:' : 'swept_toss_' + String(lk.body?.status || 'ended').toLowerCase() + ':') + fr.replace(/^unknown:/, '').replace(/:alerted$/, '').slice(0, 60);
+          const r = await sbPatch(`payment_orders?order_id=eq.${enc(o.order_id)}&status=eq.pending&fail_reason=eq.${enc(fr)}&select=order_id`, { status: 'failed', fail_reason: why });
+          if (!r.err && r.rows.length) out.closed++; else out.left++;
+          continue;
+        }
+        // 모른다 — 두고 다음에 다시. 30분 넘게 모르면 한 번 알린다
+        out.left++;
+        const age = Date.now() - Date.parse(String(o.created_at || ''));
+        if (age > 30 * 60000 && !/:alerted$/.test(fr)) {
+          const r = await sbPatch(`payment_orders?order_id=eq.${enc(o.order_id)}&fail_reason=eq.${enc(fr)}&select=order_id`, { fail_reason: fr.slice(0, 200) + ':alerted' });
+          if (!r.err && r.rows.length) { const ks = sweepSecrets(o); await alertAdmins(ctxOf(o, uid, ks[0]?.secret || '', ks[0]?.label || 'MID'), 'pending', 'sweep_' + fr.replace(/^unknown:/, '').slice(0, 30)); }
+        }
+        continue;
+      }
+      if (it.reconcile === 'resolve') {
+        const ks = sweepSecrets(o);
+        const c = ctxOf(o, uid, ks[0]?.secret || '', ks[0]?.label || 'MID');
+        const has = await orderTicketAny(uid, o.order_id);
+        if (has === null) { out.left++; continue; }
+        if (has === true) {
+          await sbReq('PATCH', `payment_orders?order_id=eq.${enc(o.order_id)}&fail_reason=eq.${enc(fr)}`, { fail_reason: null });
+          out.cleared++;
+          continue;
+        }
+        if (!c.tk) { out.left++; continue; }   // 결제키 없는 paid — 사람이 본다(이미 알림)
+        const fm = fr.match(/^unknown:failing:([a-z_]+?)(?::alerted)?$/);
+        const res = await failAfterApproval(c, fm ? fm[1] : 'convert_failed', {}, { holdAlive: true });
+        const d = await res.json().catch(() => ({}));
+        if (d && d.ok) out.cleared++; else if (d && d.error === 'processing') out.left++; else out.failed_closed++;
+        continue;
+      }
+      if (it.reconcile === 'orphan') {
+        const lk = await sweepLookup(o);
+        if (lk.st !== 'done') continue;
+        // 닫은 주문에 승인이 남았다 — 좌석·예치금은 손대지 않았다(잡지 않았다) · 카드만 전액 취소
+        const c = ctxOf(o, uid, lk.secret!, lk.label!);
+        c.tk = String(lk.body?.paymentKey || '');
+        const card = await cancelTossFull(lk.secret!, c.tk, CANCEL_REASON.order_closed);
+        await sbReq('PATCH', `payment_orders?order_id=eq.${enc(o.order_id)}&status=eq.failed`, { status: card.ok ? 'canceled' : 'paid', payment_key: c.tk,
+          fail_reason: 'order_closed' + (card.ok ? '_refunded' : '_refund_failed'),
+          metadata: { ...(o.metadata || {}), fail: { code: 'order_closed', prev: fr.slice(0, 60), at: new Date().toISOString(), card: { ok: card.ok, code: card.code, tries: card.tries }, mark: MARK } } });
+        if (!card.ok) await alertAdmins(c, 'cancel_failed', 'order_closed');
+        await notifyMemberCanceled(c, 'order_closed', card.ok, false, true);
+        out.orphan_canceled++;
+      }
+    } catch (e) { out.errors++; console.error(LOG, 'sweep 한 건 실패', String((e as Error)?.message || e).slice(0, 120)); }
+  }
+  return json({ ok: true, ...out });
 }
 
 // ── 구매 성공 → 슈퍼어드민(벨 + 푸시) — 카드 결제는 승인이 서버에서 끝나므로 서버가 보낸다 ──
@@ -748,6 +995,11 @@ async function handle(req: Request): Promise<Response> {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
   try {
     const body = await req.json().catch(() => ({})) as Record<string, any>;
+    // ── 10분 정리(서버만 — DB 크론 taam_card_topup_reconcile_kick) · 결과를 모르는 카드 주문을 토스에 조회해 잇거나 정리한다 ──
+    if (body.action === 'sweep') {
+      if (!isServiceToken(req)) return json({ ok: false, error: 'forbidden' }, 403);
+      return await sweepTopups();
+    }
     const orderId = String(body.orderId || '').trim();
     const paymentKey = String(body.paymentKey || '').trim();
     // 클라이언트가 보낸 금액은 참고만 한다. 신뢰 기준은 DB 의 amount 다.
@@ -788,7 +1040,12 @@ async function handle(req: Request): Promise<Response> {
       return json({ ok: false, error: 'amount_mismatch' });
     }
 
-    // ── 승인을 요청하기 **전에** 「결과 모름」 표시 — 승인 뒤에 함수가 죽어도 다시 부른 호출·운영자가 알아본다(조용한 표시 · 알림 없음) ──
+    // ── 같은 좌석에 결과를 모르는 앞 카드 주문이 있으면 승인하지 않는다(늦게 완료되면 두 번 청구 · TOSSRB-2) — 앱은 좌석을 두고 「확인 중」 ──
+    const ou = await otherUnresolved(c);
+    if (ou === null) return json({ ok: false, error: 'order_lookup_failed', retry: true });
+    if (ou) { console.warn(LOG, '앞 카드 주문 결과 모름 — 이 주문은 승인하지 않음', orderId); return json({ ok: false, error: 'payment_pending', orderId }); }
+
+    // ── 승인을 요청하기 **전에** 「결과 모름」 표시 — 승인 뒤에 함수가 죽어도 다시 부른 호출·10분 정리가 알아본다(조용한 표시 · 알림 없음) ──
     if (!String(order.fail_reason || '').startsWith('unknown:')) {
       const mk = await sbPatch(`payment_orders?order_id=eq.${enc(orderId)}&status=eq.pending&select=order_id`, { fail_reason: 'unknown:approving' });
       if (mk.err) return json({ ok: false, error: 'order_lookup_failed', retry: true });

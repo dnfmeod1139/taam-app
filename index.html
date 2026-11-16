@@ -9956,8 +9956,10 @@ function pmxOpen(opts){
   if (typeof _isSuperAdmin === 'function' && !_isSuperAdmin()) { showToast('🔒', '슈퍼어드민 전용', '결제 내역은 슈퍼어드민만 봅니다'); return; }
   // 🆕 2026-11-15 알림(카드 자동 취소 실패 · 확정 보류)에서 열면 그 주문으로 — 기간은 전체(지난 달 주문일 수 있다)
   var _focusOrder = (opts && typeof opts === 'object' && typeof opts.focusOrder === 'string' && /^[0-9A-Za-z_.:-]{1,80}$/.test(opts.focusOrder)) ? opts.focusOrder : '';
-  if (_focusOrder) _pmx.period = 'all';
+  var _focusActor = (opts && typeof opts === 'object' && /^[0-9a-f-]{36}$/i.test(String(opts.actorId || ''))) ? String(opts.actorId) : '';
   if (document.getElementById('pmxPopup')) pmxClose();
+  // 🔧 2026-11-16 CFAPP-1 — 알림에서 연 동안만 「전체 기간」 · 닫으면 원래 기간으로(다음에 직접 열 때 전체 기간을 다 읽지 않게)
+  if (_focusOrder) { _pmx.focusPrev = { period: _pmx.period, incTest: _pmx.incTest }; _pmx.period = 'all'; }
   _pmx.open = {}; _pmx.q = ''; _pmx.st = 'all'; _pmx.autoKey = ''; _pmx.tossMsg = ''; _pmx.tossErr = false;
   var t = _cfToday(), today = _tsrYmd(t.y, t.m, t.d), first = _tsrYmd(t.y, t.m, 1);
   var chip = function(on){ return 'padding:7px 11px;border-radius:9px;border:1.5px solid ' + (on ? '#1a1a18' : '#e0ddd8') + ';background:' + (on ? '#1a1a18' : '#fff') + ';color:' + (on ? '#fff' : '#666') + ';font-family:inherit;font-size:11.5px;font-weight:800;cursor:pointer;'; };
@@ -9988,6 +9990,7 @@ function pmxOpen(opts){
     +   '<input id="pmxQ" type="search" placeholder="이름 · 전화 · 매장 · 주문번호 · 구매 id · 카드 번호" oninput="pmxSearch(this.value)" style="flex:1;min-width:180px;padding:9px 10px;border:1px solid #e0dcd4;border-radius:10px;font-size:12.5px;font-family:inherit;">'
     +   '<label style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:#777;cursor:pointer;"><input type="checkbox" id="pmxIncTest" ' + (_pmx.incTest ? 'checked' : '') + ' onchange="pmxToggleTest(this.checked)"> 테스트 계정 포함</label>'
     + '</div>'
+    + '<div id="pmxMissing"></div>'
     + '<div id="pmxResult" style="font-size:12px;color:#777;">불러오는 중…</div>'
     + '</div>';
   var downBg = false;   // 글자를 끌어 고르다 바깥에서 놓아도 닫히지 않게 — 누른 곳도 바깥이어야 닫는다(리뷰)
@@ -10008,9 +10011,41 @@ function pmxOpen(opts){
   document.body.appendChild(el);
   _pmxPaintFilters();
   var _run = pmxRun();
-  if (_focusOrder && _run && typeof _run.then === 'function') _run.then(function(){ if (document.getElementById('pmxPopup')) _pmxGo('o:' + _focusOrder, 'card'); });
+  if (_focusOrder && _run && typeof _run.then === 'function') _run.then(function(){ if (document.getElementById('pmxPopup')) _pmxFocus(_focusOrder, _focusActor); });
 }
-function pmxClose(){ var p = document.getElementById('pmxPopup'); if (p) p.remove(); _pmx.seq++; _pmx.tossQ = []; if (_pmx.esc) { document.removeEventListener('keydown', _pmx.esc); _pmx.esc = null; } if (typeof _acPopupClosed === 'function') _acPopupClosed(); }
+// 🔧 2026-11-16 CFAPP-1 — 알림의 주문이 결제 내역에 없을 때(결과 모르는 pending 주문은 결제 내역 함수가 안 보여 준다 · 테스트 계정 주문은 기본 제외)
+//   「이 기간에 없습니다 — 기간·필터를 넓혀 보세요」로 끝내지 않는다: 테스트 계정 포함으로 한 번 더 → 그래도 없으면 그 주문의 지금 상태 카드(서버 taam_card_order_peek)
+async function _pmxFocus(oid, actor){
+  var k = 'o:' + oid;
+  if (_pmx.data && _pmx.byK && _pmx.byK[k]) { _pmxGo(k, 'card'); return; }
+  if (!_pmx.incTest) {
+    _pmx.incTest = true; var cb = document.getElementById('pmxIncTest'); if (cb) cb.checked = true;
+    try { await pmxRun(); } catch(_re){}
+    if (!document.getElementById('pmxPopup')) return;
+    if (_pmx.data && _pmx.byK && _pmx.byK[k]) { _pmxGo(k, 'card'); return; }
+  }
+  var info = null, err = '';
+  try { var r = await window.sb.rpc('taam_card_order_peek', { p_order: oid }); if (r && !r.error) info = r.data || null; else err = String((r && r.error && (r.error.code || r.error.message)) || ''); } catch(_pe){ err = 'network'; }
+  if (!document.getElementById('pmxPopup')) return;
+  _pmxMissingCard(oid, info, actor, err);
+}
+function _pmxMissingCard(oid, info, actor, err){
+  var box = document.getElementById('pmxMissing'); if (!box) return;
+  var E = _tsrEsc, uid = (info && /^[0-9a-f-]{36}$/i.test(String(info.user_id || ''))) ? String(info.user_id) : actor;
+  var fr = info ? String(info.fail_reason || '') : '', st = info ? String(info.status || '') : '';
+  var stTxt = !info ? (/PGRST202|42883/.test(err) ? '서버 준비 필요(주문 보기 함수 없음)' : (err ? '주문 상태를 읽지 못했습니다' : '주문을 찾지 못했습니다'))
+            : (/^unknown:/.test(fr) ? '⏳ 결과 확인 중(' + E(st) + ' · ' + E(fr.replace(/:[0-9a-f-]{6,}(:alerted)?$/, '').replace(/:alerted$/, '')) + ')' : E(st) + (fr ? ' · ' + E(_pmxFailLabel(fr) || fr) : ''));
+  var amt = info ? ((String(info.currency || 'KRW') === 'KRW' ? '₩' : E(info.currency) + ' ') + Number(info.amount || 0).toLocaleString()) : '';
+  box.innerHTML = '<div style="border:1.5px solid #e8c48a;background:#fffaf0;border-radius:12px;padding:12px;margin:0 0 10px;font-size:12px;line-height:1.7;color:#4a3a1a;">'
+    + '<div style="font-weight:800;margin-bottom:4px;">이 주문은 결제 내역 목록에 아직 없습니다</div>'
+    + '<div>주문 ' + E(oid) + (amt ? ' · 카드 ' + amt : '') + (info && info.restaurant_name ? ' · ' + E(info.restaurant_name) : '') + (info && info.name ? ' · ' + E(info.name) : '') + '</div>'
+    + '<div>상태: ' + stTxt + (info && info.pk_tail ? ' · 결제키 …' + E(info.pk_tail) : ' · 결제키 없음(승인 결과 모름)') + '</div>'
+    + '<div style="color:#8a7350;">결제 내역은 승인이 확정된 주문만 보여 줍니다. 승인 여부는 토스 상점관리자에서, 티켓·예치금은 회원 원장에서 확인해 주세요. 결과를 모르는 주문은 서버가 10분마다 토스에 다시 확인합니다.</div>'
+    + '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">' + _pmxBtn('tossadmin', '', '토스 상점관리자 열기 ↗') + (uid ? _pmxBtn('ledger', uid, '💰 회원 원장') : '') + '</div></div>';
+}
+function pmxClose(){ var p = document.getElementById('pmxPopup'); if (p) p.remove(); _pmx.seq++; _pmx.tossQ = []; if (_pmx.esc) { document.removeEventListener('keydown', _pmx.esc); _pmx.esc = null; }
+  if (_pmx.focusPrev) { _pmx.period = _pmx.focusPrev.period; _pmx.incTest = _pmx.focusPrev.incTest; _pmx.focusPrev = null; }   // 알림에서 연 동안만 바꾼 기간·테스트 계정 포함을 되돌린다(CFAPP-1)
+  if (typeof _acPopupClosed === 'function') _acPopupClosed(); }
 function _pmxPaintSeg(sel, val){
   document.querySelectorAll('#pmxPopup ' + sel).forEach(function(b){ var on = b.getAttribute('data-k') === val;
     b.style.borderColor = on ? '#1a1a18' : '#e0ddd8'; b.style.background = on ? '#1a1a18' : '#fff'; b.style.color = on ? '#fff' : '#666'; });
@@ -10961,9 +10996,10 @@ async function _tossPayTicketShortageInner(shortage, useSavedCard){
     ord = _r && _r.data;
   } catch(e){
     console.warn('[toss-order] 호출 실패:', e);
-    // 🆕 잡아둔 좌석을 즉시 반납한다. 안 그러면 5분간 좌석이 묶여
-    //   재시도할 때마다 자기 홀드에 막혀 계속 매진으로 보인다.
-    try { if (typeof _tkReleaseSeatHold === 'function') await _tkReleaseSeatHold(); } catch(_re){}
+    // 🔧 2026-11-16 TOSSRB-4 — 응답을 못 받았거나 서버 오류(5xx · 함수 강제 종료)면 살아 있는 좌석을 풀지 않는다.
+    //   종전엔 무엇이든 반납했다(자기 홀드에 막혀 「매진」이 되지 않게) — 옵션 B 뒤로는 서버가 내 살아 있는 홀드를 받아 주므로 다시 누르면 같은 홀드로 주문한다.
+    //   마지막 1석이면 반납하는 순간 남이 채간다. 분명한 거절(4xx)만 종전대로 반납.
+    if (typeof _tossHttpDefinite === 'function' && _tossHttpDefinite(e)) { try { if (typeof _tkReleaseSeatHold === 'function') await _tkReleaseSeatHold(); } catch(_re){} }
     showToast('⚠','결제 준비 실패','잠시 후 다시 시도해주세요');
     return;
   }
@@ -10983,6 +11019,9 @@ async function _tossPayTicketShortageInner(shortage, useSavedCard){
 
   if (!ord || !ord.ok) {
     var _c = (ord && ord.error) || 'unknown';
+    // 🔧 2026-11-16 — 다시 시도할 일(서버 읽기 실패 · 결과 모르는 앞 카드 결제)은 좌석을 풀지 않는다(TOSSRB-2 · TOSSRB-4)
+    if (_c === 'payment_pending') { _tossShowPending(); console.warn('[toss-order] 앞 카드 결제 확인 중 — 좌석 유지'); return; }
+    if (_c === 'order_lookup_failed' || _c === 'exception') { showToast('⚠','결제 준비 실패','잠시 후 다시 시도해주세요'); console.warn('[toss-order] 다시 시도:', _c); return; }
     var _msg = {
       sold_out:          '죄송합니다 — 남은 좌석이 없습니다',
       not_enough_seats:  '남은 좌석 ' + (ord && ord.left) + '석입니다. 인원을 줄여 다시 시도해주세요',
@@ -11130,23 +11169,27 @@ async function _tossPayTicketShortageInner(shortage, useSavedCard){
 async function _tossChargeSavedCard(orderId, orderName){
   if (!window.sb) return;
   if (typeof showToast === 'function') showToast('⏳','결제 중','잠시만 기다려주세요');
+  // 성공 — 응답 경로(바로 · 다시 물음 · 예외 뒤 다시 물음)가 모두 같은 정리를 한다(2026-11-16 CFAPP-2 — 예외 갈래가 already 를 안 보고 「결제 완료」를 띄웠다)
+  //   「이미 처리」는 새 Edge 표시가 있거나 이 주문의 티켓이 있을 때만 믿는다 — 아니면 좌석을 두고 「확인 중」
+  var _done = async function(d){
+    if (!(await _tossTrustOk(d, orderId))) { _tossShowProcessing(orderId); return; }
+    try { _tossUnresolvedClear(orderId); } catch(_uc){}
+    showToast('✅', d.already ? '이미 처리된 결제입니다' : '결제 완료',
+      d.already ? '이 결제는 이미 처리되었습니다' : '티켓 구매가 완료되었습니다');
+    try { if (typeof _tkStopHoldCountdown === 'function') _tkStopHoldCountdown(); } catch(_se){}
+    try { window._tkSeatHoldId = null; window._tkSeatHoldPax = 0; } catch(_he){}
+    try { if (typeof closeTicketDetail === 'function') closeTicketDetail(); } catch(_ce){}
+    try { if (typeof loadDeposit === 'function') loadDeposit(); } catch(_le){}
+    try { if (typeof loadPurchase === 'function') await loadPurchase(); } catch(_pe){}
+    try { if (typeof renderTicketList === 'function') renderTicketList(); } catch(_re){}
+    try { if (typeof _refreshUserGrade === 'function') _refreshUserGrade(); } catch(_ge){}
+  };
   try {
     var res = await window.sb.functions.invoke('toss-billing-charge', {
       body: { orderId: orderId, orderName: orderName }
     });
     if (res && res.error) throw res.error;
     var d = res && res.data;
-    var _done = async function(d){
-      showToast('✅', d.already ? '이미 처리된 결제입니다' : '결제 완료',
-        d.already ? '이 결제는 이미 처리되었습니다' : '티켓 구매가 완료되었습니다', { category: 'ticket' });
-      try { if (typeof _tkStopHoldCountdown === 'function') _tkStopHoldCountdown(); } catch(_se){}
-      try { window._tkSeatHoldId = null; window._tkSeatHoldPax = 0; } catch(_he){}
-      try { if (typeof closeTicketDetail === 'function') closeTicketDetail(); } catch(_ce){}
-      try { if (typeof loadDeposit === 'function') loadDeposit(); } catch(_le){}
-      try { if (typeof loadPurchase === 'function') await loadPurchase(); } catch(_pe){}
-      try { if (typeof renderTicketList === 'function') renderTicketList(); } catch(_re){}
-      try { if (typeof _refreshUserGrade === 'function') _refreshUserGrade(); } catch(_ge){}
-    };
 
     if (d && d.ok) { await _done(d); return; }
 
@@ -11156,12 +11199,14 @@ async function _tossChargeSavedCard(orderId, orderName){
       d = await _tossRecheck('toss-billing-charge', { orderId: orderId, orderName: orderName });
       if (d && d.ok) { await _done(d); return; }
       code = (d && d.error) || 'processing';
-      if (_TOSS_RECHECK[code]) { _tossShowProcessing(); return; }
+      if (_TOSS_RECHECK[code]) { _tossShowProcessing(orderId); return; }
     }
+    // 같은 좌석에 결과 모르는 앞 결제 — 서버가 이 주문을 청구하지 않았다(TOSSRB-2) · 좌석은 그대로
+    if (code === 'payment_pending') { _tossShowPending(); return; }
     // 승인 뒤 확정 실패 — 서버가 카드를 자동 취소했다(또는 취소가 밀렸다) · 사유대로
     if (await _tossCardFail(d, 'billing')) return;
     if (code === 'order_not_pending' && d && d.status === 'canceled') {   // 새 앱 + 옛 서버 — 취소된 주문
-      showToast('⚠', _cfT('t_failed', '결제를 마치지 못했습니다'), _cfT('refund_done', '결제하신 카드 금액은 자동으로 전액 취소되었습니다'), { category: 'ticket' });
+      showToast('⚠', _cfT('t_failed', '결제를 마치지 못했습니다'), _cfT('refund_done', '결제하신 카드 금액은 자동으로 전액 취소되었습니다'), { raw: true });
     } else if (code === 'no_billing_key') {
       showToast('⚠','등록된 카드가 없습니다','결제 수단을 먼저 등록해주세요');
     } else if (code === 'seat_lost') {
@@ -11180,20 +11225,15 @@ async function _tossChargeSavedCard(orderId, orderName){
     try { if (typeof _tkReleaseSeatHold === 'function') await _tkReleaseSeatHold(); } catch(_re2){}
   } catch(e) {
     // 🔧 2026-11-15 응답을 못 받았다(네트워크) — 청구가 됐을 수 있다. 같은 주문으로 다시 묻는다(서버가 같은 멱등 키로 잇는다 · 새로 긁지 않는다)
-    //   서버가 분명히 답한 거절(401·403 = FunctionsHttpError)은 종전 안내 — 청구를 요청하지 않았다
+    //   서버가 분명히 답한 거절(400·401·403·404)만 종전 안내 — 5xx·546(함수 강제 종료)·504 는 결과를 모른다(CFAPP-6)
     console.warn('[toss-billing-charge] 예외:', e);
-    if (e && /FunctionsHttpError/.test(String(e.name || ''))) { showToast('⚠','결제 실패','네트워크 확인 후 마이페이지에서 구매내역을 확인해주세요'); return; }
+    if (_tossHttpDefinite(e)) { showToast('⚠','결제 실패','네트워크 확인 후 마이페이지에서 구매내역을 확인해주세요'); return; }
     var _rd = null;
     try { _rd = await _tossRecheck('toss-billing-charge', { orderId: orderId, orderName: orderName }); } catch(_rce){}
-    if (_rd && _rd.ok) {
-      showToast('✅', '결제 완료', '티켓 구매가 완료되었습니다', { category: 'ticket' });
-      try { window._tkSeatHoldId = null; window._tkSeatHoldPax = 0; } catch(_he){}
-      try { if (typeof loadDeposit === 'function') loadDeposit(); } catch(_le){}
-      try { if (typeof loadPurchase === 'function') await loadPurchase(); } catch(_pe){}
-      return;
-    }
+    if (_rd && _rd.ok) { await _done(_rd); return; }
+    if (_rd && _rd.error === 'payment_pending') { _tossShowPending(); return; }
     if (_rd && await _tossCardFail(_rd, 'billing')) return;
-    _tossShowProcessing();
+    _tossShowProcessing(orderId);
   }
 }
 
@@ -11211,6 +11251,62 @@ var _TOSS_CF_KO = {
   t_amount_mismatch_toss: '결제 금액이 맞지 않아 결제가 취소되었습니다', t_order_closed: '이미 닫힌 결제라 구매를 확정하지 못했습니다'
 };
 function _cfT(k, ko){ var key = ['cardfail', k].join('.'); try { return (typeof window.t === 'function') ? window.t(key, ko) : ko; } catch(_e){ return ko; } }
+// 🔧 2026-11-16 적대 리뷰 CFAPP-6 — supabase-js 는 2xx 가 아닌 응답이면 무엇이든 FunctionsHttpError 다(5xx · 546 함수 강제 종료 · 504 포함).
+//   새 Edge 는 업무 결과를 모두 200 으로 답하고 401·403 만 일부러 보낸다 → 분명한 거절은 400·401·403·404 뿐, 나머지(상태 모름 포함)는 결과를 모른다(다시 묻는다)
+function _tossHttpDefinite(e){
+  if (!e || !/FunctionsHttpError/.test(String(e.name || ''))) return false;
+  var st = 0; try { st = Number(e.context && e.context.status) || 0; } catch(_s){}
+  return st === 400 || st === 401 || st === 403 || st === 404;
+}
+// 🔧 2026-11-16 CFAPP-2 — 「이미 처리된 결제」를 믿어도 되는가. 새 Edge(mark: CARD_FAIL_V2…)는 실패한 주문을 already 로 답하지 않는다.
+//   옛 Edge(라이브 v27·v23)는 status 가 paid 면 무엇이든 {ok, already} 로 답했다(자동 취소 실패 · 잡기 응답 잃음 = 티켓 없음) → 이 주문의 티켓이 있을 때만 ✅
+async function _tossTrustOk(d, orderId){
+  if (!d || !d.ok) return false;
+  if (typeof d.mark === 'string' && d.mark.indexOf('CARD_FAIL_V2') === 0) return true;
+  if (!d.already) return true;
+  try {
+    var u = await window.sb.auth.getUser(); var uid = u && u.data && u.data.user && u.data.user.id;
+    if (!uid || !orderId) return false;
+    var r = await window.sb.from('tickets').select('purchase_id, status').eq('user_id', uid).eq('extra_data->>order_id', String(orderId)).limit(5);
+    var rows = (r && !r.error && Array.isArray(r.data)) ? r.data : [];
+    return rows.some(function(x){ return !/^(cancelled|canceled|expired|failed|refunded|hold)$/.test(String(x.status || '')); });
+  } catch(_e){ return false; }
+}
+// 🔧 2026-11-16 CFAPP-5 — 결과를 모르는 카드 결제(확인 중)의 좌석·주문을 기억한다(1기기 · 30분).
+//   그 사이 「결제하기」를 다시 누르면 같은 좌석으로 새로 긁지 않게 막고(서버도 막는다 — toss-order payment_pending), 화면을 떠나도 그 좌석을 풀지 않는다.
+//   서버가 결과를 내면(주문이 더 이상 unknown:* 가 아니면) 표시를 지운다 — 10분 정리가 잇거나 정리한다.
+var _TOSS_UNRES_KEY = 'taam_card_unresolved';
+function _tossUnresolvedGet(){
+  try { var m = JSON.parse(localStorage.getItem(_TOSS_UNRES_KEY) || 'null'); if (!m || typeof m !== 'object') return null;
+        if (!(Date.now() - Number(m.at || 0) < 30 * 60000)) { localStorage.removeItem(_TOSS_UNRES_KEY); return null; } return m; } catch(_e){ return null; }
+}
+function _tossUnresolvedSet(orderId){
+  try {
+    var tk = (typeof currentTicket !== 'undefined' && currentTicket) ? currentTicket : null;
+    localStorage.setItem(_TOSS_UNRES_KEY, JSON.stringify({ o: String(orderId || '').slice(0, 80), h: String(window._tkSeatHoldId || '').slice(0, 80), tid: tk && tk.id ? String(tk.id).slice(0, 80) : '', at: Date.now() }));
+  } catch(_e){}
+}
+function _tossUnresolvedClear(orderId){
+  try { var m = _tossUnresolvedGet(); if (!m || !orderId || m.o === String(orderId)) localStorage.removeItem(_TOSS_UNRES_KEY); } catch(_e){}
+}
+function _tossUnresolvedHold(holdId){ var m = _tossUnresolvedGet(); return !!(m && m.h && holdId && m.h === String(holdId)); }
+// 결제 팝업 입구 — 이 좌석(또는 이 회차)에 결과 모르는 카드 결제가 있으면 막는다 · 서버가 결과를 냈으면 표시를 지우고 진행
+async function _tossUnresolvedBlocks(t){
+  var m = _tossUnresolvedGet(); if (!m) return false;
+  var same = (m.h && window._tkSeatHoldId && m.h === String(window._tkSeatHoldId)) || (m.tid && t && t.id && String(t.id) === m.tid);
+  if (!same) return false;
+  if (m.o && window.sb) {
+    try {
+      var r = await window.sb.from('payment_orders').select('status, fail_reason').eq('order_id', m.o).maybeSingle();
+      if (r && !r.error) {
+        var st = r.data ? String(r.data.status || '') : '', fr = r.data ? String(r.data.fail_reason || '') : '';
+        if (!r.data || !(st === 'pending' || st === 'paid') || !/^unknown:/.test(fr)) { _tossUnresolvedClear(); return false; }
+      }
+    } catch(_qe){}
+  }
+  showToast('⏳', _cfT('pending_title', '앞선 카드 결제를 확인하고 있습니다'), _cfT('pending', '확인이 끝나면(최대 10여 분) 다시 결제하실 수 있어요 — 같은 좌석으로 두 번 결제되지 않게 잠시 막아 둡니다'), { raw: true });
+  return true;
+}
 async function _tossCardFail(d, src){
   var code = d && d.error;
   if (!code || !_TOSS_CF_CODES[code]) return false;
@@ -11221,12 +11317,16 @@ async function _tossCardFail(d, src){
   } catch(_h){}
   try { if (typeof _tkStopHoldCountdown === 'function') _tkStopHoldCountdown(); } catch(_s){}
   try { if (typeof _tkCloseHoldUi === 'function') _tkCloseHoldUi(); } catch(_u){}
+  try { _tossUnresolvedClear(d.orderId); } catch(_uc){}
   var title = _cfT('t_' + code, _TOSS_CF_KO['t_' + code] || '구매를 확정하지 못했습니다');
   var body = (d.refunded === false) ? _cfT('refund_pending', '카드 결제 자동 취소가 지연되고 있어 TAAM 이 확인 후 처리해 드립니다')
                                     : _cfT('refund_done', '결제하신 카드 금액은 자동으로 전액 취소되었습니다');
-  if (d.deposit_used) body += ' · ' + (d.deposit_refunded === false ? _cfT('dep_pending', '예치금 반환이 지연되고 있어 TAAM 이 확인 후 처리해 드립니다')
-                                                                    : _cfT('dep_back', '사용하신 예치금도 돌려드렸습니다'));
-  showToast('⚠', title, body, { category: 'ticket', raw: true });
+  // 🔧 2026-11-16 CFAPP-4 — 예치금 문구는 실제로 빠졌을 때만(새 Edge 는 deposit_used 를 그렇게 준다). 예치금 부족(deducted 0)은 아무것도 안 뺐다
+  var depMoved = !!d.deposit_used && !(code === 'deposit_short' && Number(d.deducted) === 0);
+  if (depMoved) body += ' · ' + (d.deposit_refunded === false ? _cfT('dep_pending', '예치금 반환이 지연되고 있어 TAAM 이 확인 후 처리해 드립니다')
+                                                               : _cfT('dep_back', '사용하신 예치금도 돌려드렸습니다'));
+  // 🔧 2026-11-16 CFAPP-3 — 결제 결과는 알림 설정(티켓 알림 끔)과 상관없이 보인다(system)
+  showToast('⚠', title, body, { raw: true });
   // 막힌 까닭을 그 화면으로 — 재구매 제한(막힌 방문일 범위) · 중복 · 같은 시간대
   try {
     if (code === 'repurchase_blocked' && Number(d.days) > 0 && typeof showRepurchasePopup === 'function') showRepurchasePopup(Number(d.days), 0, String(d.prev || ''));
@@ -11249,9 +11349,15 @@ async function _tossRecheck(fn, body){
   }
   return d;
 }
-function _tossShowProcessing(){
-  showToast('⏳', _cfT('processing_title', '결제를 확인하고 있습니다'), _cfT('processing', '잠시 후 구매 내역을 확인해 주세요 — 확인되지 않으면 TAAM 이 확인 후 안내해 드립니다'), { category: 'ticket', raw: true });
+function _tossShowProcessing(orderId){
+  // 결과를 모른다 — 이 좌석·주문을 기억한다(다시 누름 · 화면 떠남에 좌석을 풀지 않게 · CFAPP-5). 결과는 서버(10분 정리)가 낸다
+  if (orderId) _tossUnresolvedSet(orderId);
+  showToast('⏳', _cfT('processing_title', '결제를 확인하고 있습니다'), _cfT('processing', '잠시 후 구매 내역을 확인해 주세요 — 확인되지 않으면 TAAM 이 확인 후 안내해 드립니다'), { raw: true });
   try { if (typeof loadPurchase === 'function') loadPurchase(); } catch(_pe){}
+}
+// 같은 좌석에 결과를 모르는 앞 카드 결제가 있어 서버가 새 결제를 받지 않았다(payment_pending) — 좌석은 그대로
+function _tossShowPending(){
+  showToast('⏳', _cfT('pending_title', '앞선 카드 결제를 확인하고 있습니다'), _cfT('pending', '확인이 끝나면(최대 10여 분) 다시 결제하실 수 있어요 — 같은 좌석으로 두 번 결제되지 않게 잠시 막아 둡니다'), { raw: true });
 }
 
 // ── 🆕 예치금 충전 = 계좌이체 안내 (수동 반영) ──
@@ -11373,12 +11479,15 @@ async function _tossConfirmPayment(paymentKey, orderId, amount){
 
   var _body = { paymentKey: paymentKey, orderId: orderId, amount: amount };
   var _done = async function(d){
+    // 🔧 2026-11-16 CFAPP-2 — 「이미 처리」는 새 Edge 표시가 있거나 이 주문의 티켓이 있을 때만 믿는다(옛 Edge 는 실패한 paid 주문도 already 로 답했다) — 아니면 좌석을 두고 「확인 중」
+    if (!(await _tossTrustOk(d, orderId))) { _tossShowProcessing(orderId); return; }
+    try { _tossUnresolvedClear(orderId); } catch(_uc){}
     // 🔧 2026-10-22 서버가 홀드를 구매로 바꿨다 — 기억한 홀드 id 를 지운다(남기면 같은 회차 재결제가 이미 확정된 행을 「홀드」로 다시 확정하려 든다 · 등록 카드 경로는 이미 지운다)
     try { window._tkSeatHoldId = null; window._tkSeatHoldPax = 0; } catch(_hc){}
     // 🆕 카드 결제 = 티켓 직접 구매. 서버가 예치금 차감·좌석 확정까지 끝냈으므로
     //   여기서는 DB 에서 최신 상태만 다시 읽어 화면에 반영한다 (재구매 없음).
     showToast('✅', d.already ? '이미 처리된 결제입니다' : '결제 완료',
-      d.already ? '이 결제는 이미 처리되었습니다' : '티켓 구매가 완료되었습니다', { category: 'ticket' });
+      d.already ? '이 결제는 이미 처리되었습니다' : '티켓 구매가 완료되었습니다');
     try { if (typeof loadDeposit === 'function') loadDeposit(); } catch(_le){}
     try { if (typeof loadPurchase === 'function') await loadPurchase(); } catch(_pe){}
     try { if (typeof ticketHistRender === 'function') ticketHistRender(0); } catch(_re){}
@@ -11393,8 +11502,8 @@ async function _tossConfirmPayment(paymentKey, orderId, amount){
       d = res && res.data;
     } catch(_ie) {
       // 🔧 2026-11-15 응답을 못 받았다(네트워크) — 승인이 됐을 수 있다. 같은 주문으로 다시 묻는다(서버가 같은 멱등 키로 잇는다)
-      //   서버가 분명히 답한 거절(401·403 = FunctionsHttpError)은 종전대로 — 승인을 요청하지 않았다
-      if (_ie && /FunctionsHttpError/.test(String(_ie.name || ''))) throw _ie;
+      //   서버가 분명히 답한 거절(400·401·403·404)만 종전대로 — 5xx·546(함수 강제 종료)·504 는 결과를 모른다(다시 묻는다 · CFAPP-6)
+      if (_tossHttpDefinite(_ie)) throw _ie;
       console.warn('[toss-confirm] 호출 예외 — 다시 묻는다:', _ie);
       d = { ok: false, error: 'processing' };
     }
@@ -11407,12 +11516,14 @@ async function _tossConfirmPayment(paymentKey, orderId, amount){
       d = await _tossRecheck('toss-confirm', _body);
       if (d && d.ok) { await _done(d); return; }
       code = (d && d.error) || 'processing';
-      if (_TOSS_RECHECK[code]) { _tossShowProcessing(); return; }
+      if (_TOSS_RECHECK[code]) { _tossShowProcessing(orderId); return; }
     }
+    // 같은 좌석에 결과 모르는 앞 결제 — 서버가 이 결제를 승인하지 않았다(TOSSRB-2 · 카드 인증은 승인 없이 저절로 풀린다) · 좌석은 그대로
+    if (code === 'payment_pending') { _tossShowPending(); return; }
     // 승인 뒤 확정 실패 — 서버가 카드를 자동 취소했다(또는 취소가 밀렸다) · 사유대로
     if (await _tossCardFail(d, 'window')) return;
     if (code === 'order_not_pending' && d && d.status === 'canceled') {   // 새 앱 + 옛 서버 — 취소된 주문
-      showToast('⚠', _cfT('t_failed', '결제를 마치지 못했습니다'), _cfT('refund_done', '결제하신 카드 금액은 자동으로 전액 취소되었습니다'), { category: 'ticket' });
+      showToast('⚠', _cfT('t_failed', '결제를 마치지 못했습니다'), _cfT('refund_done', '결제하신 카드 금액은 자동으로 전액 취소되었습니다'), { raw: true });
     } else if (code === 'order_not_found' || code === 'order_forbidden') {
       // 이 앱이 만든 주문이 아니다 (구버전 캐시·직접 URL 진입 등)
       showToast('⚠','결제가 반영되지 않았습니다',
@@ -11792,16 +11903,17 @@ async function _tossRecoverTrip(){
       try { _tossClearTrip(); } catch(_e){}
       var _ex = (_fx && _fx.extra && typeof _fx.extra === 'object') ? _fx.extra : {};
       var _du = !!(_fx && _fx.dep_used) || !!_frm[2];
-      if (await _tossCardFail({ error: _frm[1], refunded: _frm[3] === 'refunded', deposit_used: _du, deposit_refunded: _du ? !_frm[2] : undefined, hold_gone: true,
+      if (await _tossCardFail({ error: _frm[1], refunded: _frm[3] === 'refunded', deposit_used: _du, deposit_refunded: _du ? !_frm[2] : undefined, hold_gone: true, orderId: oid,
+                                deducted: (_fx && _fx.deposit && _fx.deposit.taken === 0) ? 0 : undefined,
                                 days: _ex.days, prev: _ex.prev, prev_text: _ex.prev_text }, 'recover')) return;
       if (typeof showToast === 'function') showToast('⚠', _cfT('t_failed', '결제를 마치지 못했습니다'),
         _frm[3] === 'refunded' ? _cfT('refund_done', '결제하신 카드 금액은 자동으로 전액 취소되었습니다') : _cfT('refund_pending', '카드 결제 자동 취소가 지연되고 있어 TAAM 이 확인 후 처리해 드립니다'));
       return;
     }
     if (!_isPkg && /^unknown:/.test(_fr) && (st === 'paid' || st === 'pending')) {
-      // 승인을 요청했거나(approving) 승인 뒤 처리 중 — 좌석을 풀지 않는다(풀면 승인이 좌석 없이 취소된다)
+      // 승인을 요청했거나(approving) 승인 뒤 처리 중 — 좌석을 풀지 않는다(풀면 승인이 좌석 없이 취소된다) · 결과는 서버 10분 정리가 낸다(TOSSRB-1)
       try { _tossClearTrip(); } catch(_e){}
-      _tossShowProcessing();
+      _tossShowProcessing(oid);
       return;
     }
     if (!_isPkg && st === 'canceled') {
@@ -20817,6 +20929,7 @@ async function loadDeposit(){
           if(type === 'visit_reminder') return '방문 리마인드';   // 🆕 2026-09-29
           if(type === 'ticket_restock') return '취소표';          // 🆕 2026-09-29
           if(type === 'card_auto_canceled') return _cfT('kind', '카드 결제 취소');   // 🆕 2026-11-15
+          if(type === 'card_payment_confirmed') return _cfT('kind_ok', '카드 결제 확인');   // 🆕 2026-11-16 확인 중이던 카드 결제를 서버 정리가 확정(서버 세 벌 문구)
           if(type === 'ticket_date_changed') return '일정 변경';   // 🆕 2026-11-16 회차 날짜·시간 이동
           return '알림';
         }
@@ -20832,7 +20945,7 @@ async function loadDeposit(){
             // 🆕 2026.09.15 미접속 중 쌓인 서버 알림도 현재 언어로 (목록과 같은 정규화)
             try { cleanTitle = _notifL10nTitle(cleanTitle); cleanBody = _notifL10nBody(cleanBody); } catch(_l10){}
             // 🆕 2026-10-27 방문 리마인드: 매장이 쓴 문구의 기호(①·→·★·☎)를 지우지 않는다 · 영어·일본어면 서버가 만든 그 언어 문구(payload.i18n)
-            var _vp = ((n.type === 'visit_reminder' || n.type === 'card_auto_canceled' || n.type === 'ticket_date_changed') && typeof _vrPick === 'function') ? _vrPick(n) : null;   // 🆕 2026-11-15 카드 자동 취소도 서버 세 벌
+            var _vp = ((n.type === 'visit_reminder' || n.type === 'card_auto_canceled' || n.type === 'card_payment_confirmed' || n.type === 'ticket_date_changed') && typeof _vrPick === 'function') ? _vrPick(n) : null;   // 🆕 2026-11-15 카드 자동 취소도 서버 세 벌
             if (_vp) { cleanTitle = _vp.title; cleanBody = _vp.body; }
             if (typeof showToast === 'function') showToast(headerLabel, cleanTitle, cleanBody, {
               onTap: (function(_id){ return function(){ _notifMarkSeen(_id); }; })(n.id),
@@ -28967,6 +29080,8 @@ window._tkStopHoldCountdown  = _tkStopHoldCountdown;
 //   (취소 버튼을 누르지 않고 뒤로가기·탭 전환으로 빠져나가는 경로가 실제로 많았다)
 function _tkReleaseHoldOnLeave(){
   if(!window._tkSeatHoldId) return;
+  // 🔧 2026-11-16 CFAPP-5 — 결과를 모르는 카드 결제의 좌석은 화면을 떠나도 풀지 않는다(풀면 늦게 완료된 승인이 좌석 없이 취소된다 · 서버 5분 정리가 따로 본다)
+  if (typeof _tossUnresolvedHold === 'function' && _tossUnresolvedHold(window._tkSeatHoldId)) return;
   _tkStopHoldCountdown();
   try { var p = document.getElementById('tdConfirmPopup'); if(p) p.style.display = 'none'; } catch(_){}
   try { var c = document.getElementById('cardPayPopup');  if(c) c.remove(); } catch(_){}
@@ -28987,6 +29102,8 @@ async function openTdPayPopup() {
   if (typeof _isTicketExpired === 'function' && _isTicketExpired(t)) { showToast('⏰', '기한 만료', '지난 일정입니다'); return; }   // 두 문구 모두 TX_MAP
   // 🔧 2026-10-22 등록 카드 결제가 도는 중이면 열지 않는다 — 아래 홀드 가드가 그 결제의 홀드를 반납하지 않게
   if (window._tkCardChargeAt && Date.now() - window._tkCardChargeAt < 90000) { showToast('⏳', '결제 중', '잠시만 기다려주세요'); return; }
+  // 🔧 2026-11-16 CFAPP-5 — 이 좌석(회차)에 결과를 모르는 카드 결제가 있으면 새로 결제하지 않는다(늦게 완료되면 두 번 청구 · 서버 toss-order 도 막는다)
+  if (typeof _tossUnresolvedBlocks === 'function' && await _tossUnresolvedBlocks(t)) return;
   var pax    = _tdPax;
   var meal   = parseInt(t.mealFee||t.mealAmt||0);
   var agency = parseInt(t.agencyFee||0);
@@ -59033,7 +59150,8 @@ var TRANSLATIONS = {
       refund_done:'결제하신 카드 금액은 자동으로 전액 취소되었습니다', refund_pending:'카드 결제 자동 취소가 지연되고 있어 TAAM 이 확인 후 처리해 드립니다',
       dep_back:'사용하신 예치금도 돌려드렸습니다', dep_pending:'예치금 반환이 지연되고 있어 TAAM 이 확인 후 처리해 드립니다',
       processing_title:'결제를 확인하고 있습니다', processing:'잠시 후 구매 내역을 확인해 주세요 — 확인되지 않으면 TAAM 이 확인 후 안내해 드립니다',
-      hold_expired_title:'좌석 확보 시간이 지났습니다', hold_expired:'「결제하기」를 다시 눌러 주세요', kind:'카드 결제 취소'
+      hold_expired_title:'좌석 확보 시간이 지났습니다', hold_expired:'「결제하기」를 다시 눌러 주세요', kind:'카드 결제 취소',
+      pending_title:'앞선 카드 결제를 확인하고 있습니다', pending:'확인이 끝나면(최대 10여 분) 다시 결제하실 수 있어요 — 같은 좌석으로 두 번 결제되지 않게 잠시 막아 둡니다', kind_ok:'카드 결제 확인'
     },
     invpay: {   // 🆕 2026-11-13 초대 결제 「예치금 + 카드」
       dep_use:'예치금 사용', card_pay:'카드 결제', split_note:'예치금을 먼저 쓰고, 모자란 금액만 카드로 결제합니다.', card_note:'예치금 잔액이 없어 전액 카드로 결제합니다.',
@@ -60038,7 +60156,8 @@ var TRANSLATIONS = {
       refund_done:'Your card charge has been fully canceled', refund_pending:'The automatic card cancellation is delayed — TAAM will check and handle it',
       dep_back:'The deposit you used has been returned', dep_pending:'Returning your deposit is delayed — TAAM will check and handle it',
       processing_title:'Checking your payment', processing:'Please check your purchase history shortly — if it is not confirmed, TAAM will check and contact you',
-      hold_expired_title:'Your seat hold has expired', hold_expired:'Please tap Pay again', kind:'Card payment canceled'
+      hold_expired_title:'Your seat hold has expired', hold_expired:'Please tap Pay again', kind:'Card payment canceled',
+      pending_title:'We are still checking your previous card payment', pending:'You can pay again once it is confirmed (about 10 minutes at most) — we pause new payments for this seat so you are not charged twice', kind_ok:'Card payment confirmed'
     },
     invpay: {   // 🆕 2026-11-13 초대 결제 「예치금 + 카드」
       dep_use:'Deposit used', card_pay:'Card payment', split_note:'Your deposit is used first; only the remaining amount is charged to your card.', card_note:'You have no deposit balance, so the full amount is charged to your card.',
@@ -60239,7 +60358,8 @@ TRANSLATIONS.ja = {
     refund_done:'カードのご請求は全額自動で取り消されました', refund_pending:'カードの自動取消が遅れているため、TAAMが確認のうえ対応いたします',
     dep_back:'ご利用のデポジットもお戻ししました', dep_pending:'デポジットの返還が遅れているため、TAAMが確認のうえ対応いたします',
     processing_title:'決済を確認しています', processing:'しばらくしてから購入履歴をご確認ください — 確認できない場合はTAAMが確認のうえご案内いたします',
-    hold_expired_title:'席の確保時間が過ぎました', hold_expired:'「決済する」をもう一度押してください', kind:'カード決済の取消'
+    hold_expired_title:'席の確保時間が過ぎました', hold_expired:'「決済する」をもう一度押してください', kind:'カード決済の取消',
+    pending_title:'前回のカード決済を確認しています', pending:'確認が終わり次第（最大10分ほど）お支払いいただけます — 同じ席で二重に請求されないよう一時的に止めています', kind_ok:'カード決済の確認'
   },
   invpay: {   // 🆕 2026-11-13 초대 결제 「예치금 + 카드」
     dep_use:'デポジット利用', card_pay:'カード決済', split_note:'デポジットを先に利用し、不足分のみカードで決済します。', card_note:'デポジット残高がないため、全額カードで決済します。',
@@ -76410,7 +76530,7 @@ function _notifRenderMerged(serverRows){
     if(type==='reservation_invite') return '📨';
     if(type==='ticket_open') return '🎫';
     if(type==='invite_cancelled') return '✕';
-    if(type==='card_auto_canceled') return '💳';   // 🆕 2026-11-15
+    if(type==='card_auto_canceled' || type==='card_payment_confirmed') return '💳';   // 🆕 2026-11-15 · 11-16 확정
     if(type==='ticket_date_changed') return '📅';   // 🆕 2026-11-16 회차 날짜 변경(서버 세 벌 문구 · _vrPick)
     return '🔔';
   }
@@ -76421,7 +76541,7 @@ function _notifRenderMerged(serverRows){
   (serverRows||[]).forEach(function(n){
     var _tt = _srvStrip(n.title) || '알림', _bd = _srvStrip(n.body||''), _vr = null;
     // 🆕 2026-10-27 방문 리마인드는 _vrPick(기호를 지우지 않고 · 영어·일본어면 그 언어 문구) · 그 밖은 영어·일본어 화면에서만 알려진 문구 규칙으로. 한국어 화면은 종전 그대로
-    if((n.type === 'visit_reminder' || n.type === 'card_auto_canceled' || n.type === 'ticket_date_changed') && typeof _vrPick === 'function') _vr = _vrPick(n);   // 🆕 2026-11-15 카드 자동 취소도
+    if((n.type === 'visit_reminder' || n.type === 'card_auto_canceled' || n.type === 'card_payment_confirmed' || n.type === 'ticket_date_changed') && typeof _vrPick === 'function') _vr = _vrPick(n);   // 🆕 2026-11-15 카드 자동 취소도
     if(_vr){ _tt = _vr.title; _bd = _vr.body; }
     else if(_li){ try { _tt = _notifL10nTitle(_tt) || _tt; _bd = _notifL10nBody(_bd); } catch(_l10){} }
     items.push({
@@ -76546,14 +76666,15 @@ function _anRoute(n){
   // 🆕 2026-11-15 카드 결제 자동 취소 실패 · 확정 보류(toss-confirm · toss-billing-charge · toss-invite-pay) — 결제 내역의 그 주문(상점관리자 취소·확인은 거기서)
   var _oid = _anStr(p.order_id).replace(/[^0-9A-Za-z_.:\-]/g, '').slice(0, 80);
   if(ty === 'seat_hold_convert_failed' && _oid && /^toss-(confirm|billing-charge|invite-pay)$/.test(_anStr(p.via))){
-    return { label: '결제 내역에서 이 주문 보기', go: function(){ _anGoPopup(function(){ if(typeof pmxOpen === 'function') pmxOpen({ focusOrder: _oid }); }); } };
+    var _oActor = _anUuid(p.actor_id);
+    return { label: '결제 내역에서 이 주문 보기', go: function(){ _anGoPopup(function(){ if(typeof pmxOpen === 'function') pmxOpen({ focusOrder: _oid, actorId: _oActor }); }); } };
   }
   // 돈 기록을 사람이 봐야 하는 것 — 그 회원의 원장
   var uid = '';
   if(ty === 'deposit_granted_admin') uid = _anUuid(p.target_user_id);
   else if(ty === 'member_joined' || ty === 'member_left' || ty === 'sync_from_storage') uid = _anUuid(p.user_id) || _anUuid(p.actor_id);
   else if(ty === 'seat_hold_convert_failed' || ty === 'ledger_apply_failed' || ty === 'capacity_refund_unknown'
-       || ty === 'deposit_charged' || ty === 'invite_confirm_blocked') uid = _anUuid(p.actor_id);
+       || ty === 'deposit_charged' || ty === 'invite_confirm_blocked' || ty === 'card_deposit_check') uid = _anUuid(p.actor_id);   // card_deposit_check: 카드 결제 취소 뒤 예치금 원장 확인(2026-11-16)
   // 게스트 만료 — 알림이 말하는 그 화면(멤버십 · 게스트 → 「게스트」 탭의 +90일)
   if(ty === 'guest_expiry_admin'){
     return { label: '게스트 기한 화면 열기', go: function(){ _anGoMsaGuest(); } };

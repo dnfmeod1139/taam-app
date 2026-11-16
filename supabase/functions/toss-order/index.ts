@@ -127,11 +127,18 @@ async function handle(req: Request): Promise<Response> {
     //     수동 매진은 웹/메신저/캘린더 등 외부 예약이 이미 잡혔다는 뜻이라 뚫으면 이중예약이 된다.
     let hasValidHold = false;
     if (holdPurchaseId) {
-      const { data: hold } = await admin
+      // 🔧 2026-11-16 적대 리뷰 TOSSRB-4 — 읽기 오류를 「홀드 만료」로 말하지 않는다(앱이 살아 있는 홀드를 반납했다 · 마지막 1석이면 남이 채간다).
+      //   조회가 실패하면 다시 시도할 수 있는 코드(order_lookup_failed · retry)로 — 앱은 좌석을 그대로 둔다.
+      const { data: hold, error: holdErr } = await admin
         .from('tickets')
         .select('purchase_id, party_size, user_id, status, ticket_product_id')
         .eq('purchase_id', holdPurchaseId)
+        .eq('user_id', user.id)
         .maybeSingle();
+      if (holdErr) {
+        console.warn('[toss-order] 홀드 조회 실패 — 다시 시도', holdPurchaseId, String(holdErr.message || '').slice(0, 120));
+        return json({ ok: false, error: 'order_lookup_failed', retry: true });
+      }
       // 🔒 2026-09-13: 홀드가 **이 티켓**의 홀드여야 한다.
       //   종전에는 본인·hold·인원만 봐서, 비싼 티켓의 홀드를 싼 티켓 id 와 짝지어
       //   싼 가격으로 주문을 만들고 toss-confirm 이 그 홀드를 확정할 수 있었다.
@@ -332,7 +339,26 @@ async function handle(req: Request): Promise<Response> {
       };
     }
 
+    // 🆕 2026-11-15 카드 후속(옵션 D) — 결제창이 열리는 지금부터 좌석 홀드를 다시 5분 잡는다.
+    //   「결제하기」를 두 번 누르면 앱이 옛 홀드를 처음 시각 그대로 다시 써서, 결제창이 몇 초 남은 홀드로 열릴 수 있었다
+    //   (실제 승인 시점 홀드 나이 최대 293초 — 5분 정리 7초 전). 홀드가 결제 중에 풀리면 승인 뒤 좌석을 새로 잡아야 해
+    //   재구매 제한·중복·매진에 막히면 카드가 승인됐다 취소된다.
+    // 🔧 2026-11-16 적대 리뷰 TOSSRB-5 — 갱신을 주문 **앞**으로 옮기고 결과를 본다(홀드가 그 사이 정리됐으면 0 줄 → 주문을 만들지 않는다).
+    //   「살아 있는 홀드인가」(옵션 B)와 「5분 다시 잡기」가 한 문장(status=hold 조건 UPDATE)이 된다.
+    {
+      const { data: hRows, error: hErr } = await admin.from('tickets')
+        .update({ created_at: new Date().toISOString() })
+        .eq('purchase_id', holdPurchaseId).eq('user_id', user.id).eq('status', 'hold')
+        .select('purchase_id');
+      if (hErr) {
+        console.warn('[toss-order] 홀드 시각 갱신 실패 — 다시 시도', String(hErr.message || '').slice(0, 120));
+        return json({ ok: false, error: 'order_lookup_failed', retry: true });
+      }
+      if (!Array.isArray(hRows) || hRows.length === 0) return json({ ok: false, error: 'hold_expired' });
+    }
+
     // ── ⑥ 주문 생성 ──
+    //   같은 홀드(또는 승인된 같은 회차)에 결과를 모르는 카드 주문이 있으면 DB 가드가 PAYMENT_PENDING 으로 막는다(TOSSRB-2 — 두 번 청구 방지)
     const orderId = 'taamtkt_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
     const { error: oErr } = await admin.from('payment_orders').insert({
       order_id: orderId,
@@ -361,20 +387,23 @@ async function handle(req: Request): Promise<Response> {
     });
 
     if (oErr) {
+      if (/PAYMENT_PENDING/.test(String(oErr.message || ''))) {
+        console.warn('[toss-order] 앞 카드 주문 결과 모름 — 새 주문 안 만듦', holdPurchaseId);
+        return json({ ok: false, error: 'payment_pending', retry: true });
+      }
       console.error('[toss-order] 주문 생성 실패', oErr);
       return json({ ok: false, error: 'order_create_failed' });
     }
 
-    // 🆕 2026-11-15 카드 후속(옵션 D) — 결제창이 열리는 지금부터 좌석 홀드를 다시 5분 잡는다.
-    //   「결제하기」를 두 번 누르면 앱이 옛 홀드를 처음 시각 그대로 다시 써서, 결제창이 몇 초 남은 홀드로 열릴 수 있었다
-    //   (실제 승인 시점 홀드 나이 최대 293초 — 5분 정리 7초 전). 홀드가 결제 중에 풀리면 승인 뒤 좌석을 새로 잡아야 해
-    //   재구매 제한·중복·매진에 막히면 카드가 승인됐다 취소된다. 실패해도 주문은 그대로 쓴다(종전 동작).
+    // 주문을 쓰는 사이 홀드가 정리됐으면(시각을 다시 잡았으니 드문 일) 그 주문으로 결제창을 열지 않는다 — 결과를 모르면 그대로 둔다(종전)
     try {
-      const { error: hErr } = await admin.from('tickets')
-        .update({ created_at: new Date().toISOString() })
-        .eq('purchase_id', holdPurchaseId).eq('user_id', user.id).eq('status', 'hold');
-      if (hErr) console.warn('[toss-order] 홀드 시각 갱신 실패(주문은 그대로)', hErr.message);
-    } catch (_he) { /* 그대로 */ }
+      const { data: hNow, error: hnErr } = await admin.from('tickets')
+        .select('status').eq('purchase_id', holdPurchaseId).eq('user_id', user.id).maybeSingle();
+      if (!hnErr && (!hNow || hNow.status !== 'hold')) {
+        await admin.from('payment_orders').update({ status: 'failed', fail_reason: 'hold_gone_before_payment' }).eq('order_id', orderId).eq('status', 'pending');
+        return json({ ok: false, error: 'hold_expired' });
+      }
+    } catch (_hn) { /* 확인 못 하면 종전대로 */ }
 
     return json({
       ok: true,
