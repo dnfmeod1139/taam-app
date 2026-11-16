@@ -86,8 +86,12 @@ const HTML = path.resolve(process.argv[2] || (ROOT + '/index.html'));
       };
       window.sb = {
         from: chain,
-        rpc: function (name) {
-          if (name === 'taam_round_move_preview') return Promise.resolve({ data: { ok: true, cur: { date: '2027-03-04', time: '19:00' }, rows: [{ action: 'move', kind: 'ticket', pid: 'PAYH-x', pax: 2 }] }, error: null });
+        rpc: function (name, a) {
+          // 미리보기의 cur 는 서버의 지금 회차 값 — 고친 회차의 날짜·시간을 돌려준다(아니면 앱이 「다른 기기에서 바뀌었다」로 멈춘다)
+          if (name === 'taam_round_move_preview') {
+            var cr = ticketDB.find(function (t) { return String(t.id) === String(a && a.p_round); }) || {};
+            return Promise.resolve({ data: { ok: true, cur: { date: String(cr.date || '').replace(/\./g, '-'), time: cr.time || null }, rows: [{ action: 'move', kind: 'ticket', pid: 'PAYH-x', pax: 2 }] }, error: null });
+          }
           if (name === 'taam_round_reschedule') return Promise.resolve({ data: { ok: true, move: { moved: [{ kind: 'ticket' }], errors: [], conflicts: [], rest_name: '스시', old_date: '2027-03-04', new_date: '2027-03-27' } }, error: null });
           return Promise.resolve({ data: null, error: null });
         },
