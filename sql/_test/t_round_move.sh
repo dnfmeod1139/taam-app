@@ -101,7 +101,8 @@ ok "옛 가드: 형제 행 이동이 TIME_CONFLICT" 1 "$(echo "$o" | grep -c TIM
 echo "── 2. 마이그레이션"
 out=$($P -f $MIG 2>&1); echo "$out" | grep -E "❌|ERROR" | head -5
 ok "확인 표 ❌ 는 ③④ 둘뿐(이 픽스처엔 리마인드 함수가 없다 — 12절에서 따로 본다)" "2|2" "$(echo "$out" | grep -c '❌')|$(echo "$out" | grep -c '^[③④].*❌')"
-ok "확인 표 ✅ 8줄(①②⑤⑥⑦⑩⑪⑫)" 8 "$(echo "$out" | grep -c '✅')"
+ok "확인 표 ✅ 9줄(①②⑤⑥⑦⑩⑪⑫⑬)" 9 "$(echo "$out" | grep -c '✅')"
+ok "  ⑬ 8차 — 정산 동기화 잠금 먼저(KSK_PRELOCK) · 트리거 경로 try-lock(KSK_TRYLOCK) · 좌석 행 → 정원 잠금(SEAT_ROWS_BEFORE_TKCAP) ✅" "✅" "$(echo "$out" | grep '^⑬' | awk -F'|' '{print $NF}')"
 ok "  ⑫ 7차(MANREC_RELOCK_NOWAIT · ROUND_MOVE_CAP · 도우미 회원 실행 불가) ✅" 1 "$(echo "$out" | grep -c '^⑫.*✅')"
 ok "가드 패치 표시" 1 "$($P -c "select count(*) from pg_proc where proname='taam_guard_purchase_unique' and prosrc like '%ROUND_MOVE_20261116%'")"
 seed

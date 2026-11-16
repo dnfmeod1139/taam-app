@@ -93,6 +93,18 @@
 --   RV2-APP-3 p_opts.total_pax(ROUND_MOVE_CAP) — 같은 수정에서 바꾸는 총 좌석을 날짜와 한 문장으로 바꾼다. 종전엔 날짜만 먼저 커밋해(옛 정원) 날짜를 옮기며
 --        정원을 줄인 매진 회차가 옛 정원으로 잠깐 풀려 회원 전원에게 취소표가 나간 뒤 앱의 정원 저장으로 다시 매진됐다. 응답 round 에 total_pax.
 --
+-- 8차(7차 판 재점검 반영 · 2026-11-16) — 역시 라이브 전이라 그 자리에서
+--   RV3-SRV-1 정산 좌석 동기화와 잠금 순서가 거꾸로였다(KSK_PRELOCK). _taam_ksk_seat_sync 는 ksk_sync_<정산 회차> → (정산 좌석 행) → tkcap_ 순인데,
+--        날짜 바꾸기·다시 맞추기는 tkcap_·좌석 행·회차 행을 쥔 뒤 적용 안에서야 정산 회차 줄·ksk_sync_ 를 잡았다 — 그 회차의 정산 결제(청구 → paid → 동기화)·
+--        정산 회차 고침과 엇갈려 교착(40P01): 이동이 지면 정산 좌석 동기화 오류만 남긴 채 커밋돼 방금 결제된 정산 좌석이 옛 날짜에 남고(「다시 맞추기」 전까지),
+--        결제 쪽이 지면 좌석을 못 잡았다(short · warning). 이제 두 RPC 가 정산 회차 줄(id 순) → ksk_sync_ 를 **먼저** 잡는다(_taam_round_ksk_prelock).
+--        트리거만 지나는 길(수정 승인 · SQL Editor — 회차 행을 이미 쥠)은 정산 회차 줄 NOWAIT · ksk_sync_·tkcap_ try-lock — 못 잡으면 busy 로 남겨
+--        「다시 맞추기」(KSK_TRYLOCK). 결제 링크 청구의 부제도 청구 줄 NOWAIT(결제·환불이 청구 줄 → 동기화·좌석을 기다리는 중이면 부제만 busy 로 남긴다).
+--   RV3-SRV-2 좌석 행을 정원 잠금보다 먼저(SEAT_ROWS_BEFORE_TKCAP). 캘린더 「수정」(taam_manual_entry_update)은 수동 좌석 줄 → 인원을 늘릴 때 tkcap_ 이고
+--        결제 링크 연결(수동 좌석 취소 → 새 좌석)·정산 좌석 인원 늘림도 좌석 행 → tkcap_ 다. 종전 이동(tkcap_ → 좌석 행)은 이 길과 엇갈려 같은 회차에서
+--        교착했다(다른 좌석 행이 잠깐 잠겨 이동이 tkcap_ 를 쥔 채 기다리면 창이 넓다). 지금 순서: (기록 줄 → 매장·날짜 열쇠) → 정산 회차 줄 → ksk_sync_ →
+--        좌석 행 → tkcap_ → 회차 행. 좌석 행을 기다리는 것은 그대로다(결제·취소가 끝나기를 기다렸다 옮긴다 — 검토 C3).
+--
 -- 되돌리기: drop trigger trg_taam_tp_round_move on public.ticket_products; drop trigger trg_taam_tp_round_lock on public.ticket_products;
 --   (가드 덩어리는 GUC 가 없으면 아무 일도 안 한다 — 그대로 둬도 된다)
 -- ============================================================================
@@ -503,6 +515,9 @@ begin
         update public.reservation_invites i set visit_date = r.to_d, visit_time = r.to_t where i.id = r.ref_id::uuid;
       elsif r.kind = 'event' then
         v_ed := public._taam_pu_visit_date(r.to_d); v_et := nullif(r.to_t, '')::time;
+        -- 8차(RV3-SRV-1) 날짜 바꾸기·다시 맞추기는 이 줄을 미리 쥐었다(KSK_PRELOCK) · 트리거만 지나는 길(파트너 수정 승인 · SQL Editor)은 회차 행을 쥐고
+        --   있으니 기다리지 않는다 — 정산 회차 고침(정산 회차 줄 → ksk_sync_ → 좌석 → 회차 행)과 엇갈리면 busy 로 남기고 「다시 맞추기」
+        perform 1 from public.kashikiri_events e where e.id = r.ref_id::uuid for update nowait;
         perform set_config('taam.ksk_sync_skip', '1', true);
         update public.kashikiri_events e set event_date = v_ed, event_time = v_et, updated_at = now() where e.id = r.ref_id::uuid;
         perform set_config('taam.ksk_sync_skip', '', true);
@@ -539,6 +554,19 @@ begin
                    or (v_tch and e.event_time is null and e.event_date >= v_today)
                    or (p_via = 'resync' and (e.event_date >= v_today or coalesce(p_spec->'ksk', '[]'::jsonb) ? e.id::text))) loop
     begin
+      -- 8차(RV3-SRV-1 · KSK_TRYLOCK) 동기화의 잠금(ksk_sync_ → tkcap_)을 기다리지 않고 잡아 본다. 날짜 바꾸기·다시 맞추기는 미리 쥐었으니(KSK_PRELOCK ·
+      --   좌석 행 → tkcap_) 언제나 잡힌다. 트리거만 지나는 길(수정 승인 · SQL Editor)은 회차 행을 쥔 채라 기다리면 정산 결제(ksk_sync_ → tkcap_ → 좌석 →
+      --   회차 행)와 교착이다 — 못 잡으면 이 정산 회차는 busy 로 남기고(「다시 맞추기」가 ksk 목록으로 다시 부른다) 결제가 먼저 끝나게 둔다.
+      if not pg_try_advisory_xact_lock(hashtext('ksk_sync_' || r.id::text)) then
+        v_err := v_err || jsonb_build_object('kind', 'ksk_sync', 'id', r.id::text, 'code', 'busy',
+                                             'msg', '정산 결제·정산 회차 저장이 진행 중이라 정산 좌석을 지금 맞추지 못했습니다 — 「다시 맞추기」');
+        continue;
+      end if;
+      if not pg_try_advisory_xact_lock(hashtext('tkcap_' || p_round)) then
+        v_err := v_err || jsonb_build_object('kind', 'ksk_sync', 'id', r.id::text, 'code', 'busy',
+                                             'msg', '이 회차에 좌석을 넣는 중이라 정산 좌석을 지금 맞추지 못했습니다 — 「다시 맞추기」');
+        continue;
+      end if;
       select coalesce(jsonb_object_agg(t.id::text, jsonb_build_object('d', t.reservation_date, 't', t.visit_time)), '{}'::jsonb) into v_kbefore
         from public.tickets t where t.purchase_id like 'KSK-%' and t.extra_data->>'eventId' = r.id::text and coalesce(t.status, '') <> 'cancelled';
       v_res := public._taam_ksk_seat_sync(r.id);
@@ -580,9 +608,14 @@ begin
                                     then public._taam_hhmm(v_cm->>'tt') else v_st end, '');
     if v_ns is distinct from r.subtitle then
       begin
+        -- 8차 청구 줄은 기다리지 않는다 — 결제·환불은 청구 줄을 쥔 뒤 동기화 잠금·좌석 행을 기다린다(이동은 그 둘을 이미 쥐었다 · 엇갈리면 교착).
+        --   부제는 보여 주는 글이라 잠겨 있으면 그대로 두고 적는다(결제 확정을 교착의 희생자로 만들지 않게)
+        perform 1 from public.kashikiri_charges c where c.id = r.id for update nowait;
         update public.kashikiri_charges set subtitle = v_ns where id = r.id;
         v_sub := v_sub || jsonb_build_object('charge_id', r.id, 'from', r.subtitle, 'to', v_ns);
-      exception when others then
+      exception when lock_not_available then
+        v_err := v_err || jsonb_build_object('kind', 'charge', 'id', r.id::text, 'code', 'busy', 'msg', '결제·환불이 진행 중이라 결제 링크 부제를 맞추지 못했습니다');
+      when others then
         v_err := v_err || jsonb_build_object('kind', 'charge', 'id', r.id::text, 'code', 'error', 'sqlstate', sqlstate, 'msg', left(sqlerrm, 200));
       end;
     end if;
@@ -951,7 +984,32 @@ begin
 end $$;
 revoke all on function public._taam_round_manrec_relock(text) from public, anon, authenticated;
 
--- 날짜·시간 바꾸기 — 앱의 유일한 길. 잠금 순서: 정원 잠금(tkcap_) → 그 회차의 좌석 행 → 회차 행 (검토 C3 — 결제 확정이 티켓 → 회차 순이라 엇갈리지 않는다)
+-- 8차(RV3-SRV-1 · KSK_PRELOCK) 정산 좌석 동기화의 잠금을 정원 잠금(tkcap_)·좌석 행보다 **먼저** — 날짜 바꾸기·다시 맞추기가 부른다.
+--   정산 결제·환불(청구 줄 → ksk_sync_<정산 회차> → 정산 좌석 행 → tkcap_)과 정산 회차 고침(정산 회차 줄 → ksk_sync_ → 좌석 행)은 동기화 잠금을 먼저 잡는다
+--   (_taam_ksk_seat_sync 머리말 「회차 → 티켓」). 종전 이동은 tkcap_·좌석 행을 쥔 뒤 적용 안에서야 정산 회차 줄·ksk_sync_ 를 잡아 거꾸로였다 —
+--   교착(40P01)에서 이동이 지면 정산 좌석 동기화만 실패한 채 커밋돼 그 사이 결제된 정산 좌석이 옛 날짜로 남았고(「다시 맞추기」 전까지),
+--   결제 쪽이 지면 좌석을 못 잡고 warning 으로 끝났다. 정산 회차 줄을 먼저 잡는 이유: 정산 회차 고침은 그 줄을 쥔 뒤 ksk_sync_ 를 기다린다.
+--   지금 순서(날짜 바꾸기): 기록 줄 → 매장·날짜 열쇠 → 정산 회차 줄(id 순) → ksk_sync_(id 순) → 좌석 행 → tkcap_ → 회차 행.
+--   정산 회차 줄·ksk_sync_ 를 쥔 채 날짜 열쇠·기록 줄을 기다리는 길은 없다(정산 동기화는 회차 행의 날짜를 바꾸지 않는다).
+create or replace function public._taam_round_ksk_prelock(p_round text)
+returns void language plpgsql volatile security definer set search_path = public as $$
+declare r record;
+begin
+  -- KSK_PRELOCK
+  perform 1 from public.kashikiri_events e where e.ticket_product_id = p_round order by e.id for update;
+  for r in select e.id from public.kashikiri_events e where e.ticket_product_id = p_round order by e.id loop
+    perform pg_advisory_xact_lock(hashtext('ksk_sync_' || r.id::text));
+  end loop;
+end $$;
+revoke all on function public._taam_round_ksk_prelock(text) from public, anon, authenticated;
+
+-- 날짜·시간 바꾸기 — 앱의 유일한 길. 잠금 순서(8차): (기록 줄 → 매장·날짜 열쇠) → 정산 회차 줄 → ksk_sync_ → 그 회차의 좌석 행 → 정원 잠금(tkcap_) → 회차 행
+--   검토 C3 — 결제 확정이 티켓 → 회차 순이라 좌석 행을 회차 행보다 먼저 잠근다.
+--   8차(RV3-SRV-2 · SEAT_ROWS_BEFORE_TKCAP) 좌석 행을 정원 잠금보다 먼저 — 좌석 행을 쥔 뒤 정원 잠금을 잡는 길(캘린더 「수정」의 인원 늘림
+--   taam_manual_entry_update · 결제 링크 연결(수동 좌석 취소 → 새 좌석) · 정산 좌석 인원 늘림)과 같은 순서다. 종전(tkcap_ → 좌석 행)은 그 길과 엇갈려
+--   같은 회차의 날짜 바꾸기와 수동 좌석 인원 늘림이 교착(40P01)했다(다른 좌석 행이 잠깐 잠겨 이동이 tkcap_ 를 쥔 채 기다리면 창이 넓다).
+--   정원 잠금을 좌석 행 뒤에 잡아도 빠지는 행이 없다 — 그 사이 좌석을 넣는 거래는 tkcap_ 를 쥐고 있어 이동이 그 커밋을 기다렸다 계획에서 보고,
+--   그 뒤에 넣는 거래는 tkcap_ 에서 이동을 기다리며 날짜 고정(회차 행 FOR NO KEY UPDATE)이 새 날짜로 맞춘다.
 --   7차(RV2-APP-3 · ROUND_MOVE_CAP) p_opts.total_pax = 같은 수정에서 바꾸는 총 좌석 — 날짜와 **한 문장**으로 바꾼다. 종전엔 날짜만 먼저 커밋하고(옛 정원)
 --   앱이 정원을 따로 저장해, 날짜를 옮기며 정원을 줄인 매진 회차가 옛 정원으로 잠깐 풀려 커밋 때 회원 전원에게 「취소표가 나왔습니다」가 나간 뒤 다시
 --   매진됐다(그 자리는 없었다). 한 문장이면 지연 취소표 트리거가 커밋 때 끝 상태(새 정원)로 판정한다. 정원을 늘리는 수정도 같은 문장 — 풀림이 이동 커밋에서 정해진다.
@@ -989,10 +1047,13 @@ begin
       perform public._taam_round_manrec_relock(p_round);
     end if;
   end if;
-  perform pg_advisory_xact_lock(hashtext('tkcap_' || p_round));
-  -- 초대 줄은 잠그지 않는다 — 초대 확정(초대 줄 → 좌석 행 → 정원 잠금)과 엇갈려 교착이 날 수 있다. 트리거가 NOWAIT 로 보고 잠겨 있으면 「다시 맞추기」 대상으로 남긴다
+  -- 8차(RV3-SRV-1 · KSK_PRELOCK) 정산 회차 줄 → ksk_sync_ 를 좌석 행·정원 잠금보다 먼저(적용 안의 정산 좌석 동기화가 같은 잠금을 다시 잡을 때 이미 갖고 있게)
+  perform public._taam_round_ksk_prelock(p_round);
+  -- 초대 줄은 잠그지 않는다 — 초대 확정(초대 줄 → 좌석 행)과 엇갈려 교착이 날 수 있다. 트리거가 NOWAIT 로 보고 잠겨 있으면 「다시 맞추기」 대상으로 남긴다
+  -- 8차(RV3-SRV-2 · SEAT_ROWS_BEFORE_TKCAP) 좌석 행 → 정원 잠금 — 수동 좌석 인원 늘림(좌석 행 → tkcap_)과 같은 순서
   perform 1 from public.tickets k where k.ticket_product_id::text = p_round
      and lower(coalesce(k.status, '')) not in ('cancelled', 'canceled', 'expired', 'failed', 'refunded') for update;
+  perform pg_advisory_xact_lock(hashtext('tkcap_' || p_round));
   select tp.id, tp.date, tp.time, tp.rest_name into v_tp from public.ticket_products tp where tp.id::text = p_round for update;
   if not found then return jsonb_build_object('ok', false, 'error', 'ROUND_NOT_FOUND'); end if;
   if public._taam_pu_visit_date(v_tp.date) is distinct from public._taam_pu_visit_date(p_expect_date)
@@ -1040,9 +1101,11 @@ returns jsonb language plpgsql volatile security definer set search_path = publi
 declare v_tp record; v_fd date[]; v_id bigint; v_log jsonb; v_nd date; v_nt text; v_spec jsonb;
 begin
   if not public._taam_fee_caller_ok() then raise exception 'FORBIDDEN' using errcode = '42501'; end if;
-  perform pg_advisory_xact_lock(hashtext('tkcap_' || p_round));
+  -- 8차(RV3-SRV-1 · RV3-SRV-2) 날짜 바꾸기와 같은 순서 — 정산 회차 줄 → ksk_sync_ → 좌석 행 → 정원 잠금 → 회차 행
+  perform public._taam_round_ksk_prelock(p_round);
   perform 1 from public.tickets k where k.ticket_product_id::text = p_round
      and lower(coalesce(k.status, '')) not in ('cancelled', 'canceled', 'expired', 'failed', 'refunded') for update;
+  perform pg_advisory_xact_lock(hashtext('tkcap_' || p_round));
   select tp.id, tp.date, tp.time into v_tp from public.ticket_products tp where tp.id::text = p_round for update;
   if not found then return jsonb_build_object('ok', false, 'error', 'ROUND_NOT_FOUND'); end if;
   v_nd := public._taam_pu_visit_date(v_tp.date); v_nt := public._taam_hhmm(v_tp.time);
@@ -1326,4 +1389,14 @@ select '⑫ 7차 — 두 번째 기록 줄 잠금은 기다리지 않는다(MANR
              and position('ROUND_MOVE_CAP' in coalesce((select p.prosrc from pg_proc p where p.oid = to_regprocedure('public.taam_round_reschedule(text,text,text,text,text,jsonb)')), '')) > 0
              and not has_function_privilege('anon', 'public._taam_round_manrec_relock(text)', 'execute')
              and not has_function_privilege('authenticated', 'public._taam_round_manrec_relock(text)', 'execute')
+            then '✅' else '❌' end
+union all
+select '⑬ 8차 — 정산 동기화 잠금을 먼저(KSK_PRELOCK · 날짜 바꾸기·다시 맞추기) · 트리거만 지나는 길은 기다리지 않음(KSK_TRYLOCK) · 좌석 행 → 정원 잠금(SEAT_ROWS_BEFORE_TKCAP) · 도우미 비로그인·회원 실행 불가',
+       case when position('KSK_PRELOCK' in coalesce((select p.prosrc from pg_proc p where p.oid = to_regprocedure('public._taam_round_ksk_prelock(text)')), '')) > 0
+             and position('_taam_round_ksk_prelock' in coalesce((select p.prosrc from pg_proc p where p.oid = to_regprocedure('public.taam_round_reschedule(text,text,text,text,text,jsonb)')), '')) > 0
+             and position('_taam_round_ksk_prelock' in coalesce((select p.prosrc from pg_proc p where p.oid = to_regprocedure('public.taam_round_move_resync(text)')), '')) > 0
+             and position('KSK_TRYLOCK' in coalesce((select p.prosrc from pg_proc p where p.oid = to_regprocedure('public._taam_round_move_apply(text,date,text,date,text,date[],text[],text,text,jsonb)')), '')) > 0
+             and position('SEAT_ROWS_BEFORE_TKCAP' in coalesce((select p.prosrc from pg_proc p where p.oid = to_regprocedure('public.taam_round_reschedule(text,text,text,text,text,jsonb)')), '')) > 0
+             and not has_function_privilege('anon', 'public._taam_round_ksk_prelock(text)', 'execute')
+             and not has_function_privilege('authenticated', 'public._taam_round_ksk_prelock(text)', 'execute')
             then '✅' else '❌' end;

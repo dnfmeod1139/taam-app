@@ -52354,25 +52354,65 @@ function _rmRoundOf(seats){
 //   앞선 이동이 들어가 있었으면(_rmRecovered) 바로 · 안 들어갔으면 문장 시간(8초)이 넉넉히 지난 뒤에만 — 아니면 정한 시간(5분) 뒤 저절로 풀린다
 //   🆕 7차(RV2-APP-1) 문장 시간 안(앞선 이동이 아직 늦게 커밋될 수 있음)에 다시 저장하면 기억(과 그 끔)을 버리지 않는다 — 종전엔 기억만 지우고 끔은 닫지 않아
 //   앱이 그 끔을 잃었고, 새 시트에서 「켬」을 골라도 서버는 그 끔(5분)으로 이번 취소표를 MUTED 로 삼켰다(보냄·안 보냄 어느 안내도 없이).
-//   _rmFlow 가 그때는 저장을 막고(_rmUnknownWait) 시간이 지난 뒤에만 이것을 부르며, 끔을 **닫고 나서**(await) 새 시트·날짜 바꾸기로 간다. Promise<hits|null>
+//   _rmFlow 가 그때는 저장을 막고(_rmUnknownWait) 시간이 지난 뒤에만 이것을 부르며, 끔을 **닫고 나서**(await) 새 시트·날짜 바꾸기로 간다.
+//   🆕 8차(RM7-APP-1) 끔 닫기가 실패하면(연결 끊김 · 오류) 기억을 지우지 않는다 — 종전엔 닫기 전에 기억부터 비워, 닫기가 실패하면 앱은 그 끔을 잃고
+//   (서버엔 5분 살아 있음) 새 시트로 넘어가 「켬」으로 옮겨도 그 끔에 이번 취소표가 MUTED 로 삼켜졌다(안내 없이). 이제 {closed:false} 를 돌려주고
+//   _rmFlow 가 「앞선 취소표 알림 끔을 닫지 못했습니다」로 멈춘다.
+//   🆕 8차(RM7-APP-2) 기억은 회차마다 — window._rmUnknown = { [회차 id]: {...} }(없으면 null). 종전엔 한 칸이라 다른 회차의 결과 모름이 덮으면
+//   앞 회차의 끔 토큰을 잃고 그 회차의 문장 시간 막기도 풀렸다.
+//   🆕 8차(RM7-APP-3) 닫는 판정은 기다림과 같은 식(_rmUnknownWait 가 0) — 종전엔 기다림은 >=, 닫기는 > 라 경과 == 문장 시간인 같은 ms 에 기억만 지우고 끔을 안 닫았다.
+//   Promise<{closed:true, hits?, none?} | {closed:false, waiting:true} | {closed:false, failed:true}>
 var RM_UNKNOWN_SETTLE_MS = 15000;
 function _rmUnknownSettleMs(){ var v = parseInt(window._RM_UNKNOWN_SETTLE_MS, 10); return v > 0 ? v : RM_UNKNOWN_SETTLE_MS; }
-// 이 회차의 결과 모름 기억이 끔을 쥔 채 아직 문장 시간 안이면 남은 ms(아니면 0)
+function _rmUnkGet(id){
+  var m = window._rmUnknown;
+  if(!m || typeof m !== 'object') return null;
+  var u = Object.prototype.hasOwnProperty.call(m, String(id)) ? m[String(id)] : null;
+  return (u && typeof u === 'object') ? u : null;
+}
+function _rmUnkSet(id, u){
+  var m = window._rmUnknown;
+  if(!m || typeof m !== 'object') m = window._rmUnknown = {};
+  m[String(id)] = u;
+}
+function _rmUnkDel(id, u){
+  var m = window._rmUnknown;
+  if(!m || typeof m !== 'object') return;
+  if(u && m[String(id)] !== u) return;   // 그 사이 같은 회차의 새 기억이 들어왔다 — 그건 지우지 않는다
+  delete m[String(id)];
+  if(!Object.keys(m).length) window._rmUnknown = null;
+}
+// 이 회차의 결과 모름 기억이 끔을 쥔 채 아직 문장 시간 안이면 남은 ms(아니면 0) · 결과가 정해진 뒤 닫기만 못 한 끔(settled)은 기다리지 않는다
 function _rmUnknownWait(id){
-  var u = window._rmUnknown;
-  if(!u || String(u.id) !== String(id) || !u.rsTok || !u.t0) return 0;
+  var u = _rmUnkGet(id);
+  if(!u || !u.rsTok || !u.t0 || u.settled) return 0;
   var left = _rmUnknownSettleMs() - (Date.now() - u.t0);
   return left > 0 ? left : 0;
 }
 function _rmUnknownEnd(id, applied){
-  var u = window._rmUnknown;
-  if(!u || String(u.id) !== String(id)) return Promise.resolve(null);
-  if(!applied && _rmUnknownWait(id) > 0) return Promise.resolve(null);   // 아직 늦은 커밋이 올 수 있다 — 기억도 끔도 그대로
-  window._rmUnknown = null;
-  if(u.rsTok && (applied || !u.t0 || (Date.now() - u.t0) > _rmUnknownSettleMs())){
-    try { return Promise.resolve(_rsMuteEnd(u.rsTok)).catch(function(){ return null; }); } catch(_m){}
-  }
-  return Promise.resolve(null);
+  var u = _rmUnkGet(id);
+  if(!u) return Promise.resolve({ closed: true, none: true });
+  if(!applied && _rmUnknownWait(id) > 0) return Promise.resolve({ closed: false, waiting: true });   // 아직 늦은 커밋이 올 수 있다 — 기억도 끔도 그대로
+  if(!u.rsTok){ _rmUnkDel(id, u); return Promise.resolve({ closed: true }); }
+  if(applied) u.settled = true;   // 결과가 정해졌다 — 닫기가 실패해도 남는 것은 끔뿐(다음 저장이 먼저 닫는다 · 막지 않는다)
+  if(u.closing) return u.closing;   // 이미 닫는 중(이어 저장 길은 _rmRecovered · _rmMoved 가 연달아 부른다) — 한 번만 닫는다
+  var tok = u.rsTok;
+  u.closing = Promise.resolve().then(function(){ return _rsMuteEnd(tok); }).catch(function(){ return null; }).then(function(h){
+    u.closing = null;
+    if(h === null || h === undefined) return { closed: false, failed: true };   // 기억(끔 토큰)을 지킨다
+    _rmUnkDel(id, u);
+    return { closed: true, hits: h };
+  });
+  return u.closing;
+}
+// 결과가 정해진 뒤(옮겨졌다) 앞선 끔 닫기 — 실패하면 알린다(그 끔은 기억에 남아 다음 저장이 먼저 닫는다)
+function _rmUnknownSettle(id){
+  var u0 = _rmUnkGet(id);
+  if(u0 && u0.closing){ u0.settled = true; return u0.closing; }   // 이미 닫는 중 — 안내는 처음 부른 쪽이 한 번
+  return _rmUnknownEnd(id, true).then(function(r){
+    if(r && r.failed) showToast('⚠', '앞선 취소표 알림 끔을 닫지 못했습니다', '약 5분 뒤 저절로 풀립니다 — 그 사이 이 회차를 다시 저장하면 먼저 닫습니다');
+    return r;
+  });
 }
 // 🆕 7차(RV2-APP-3) 이 수정이 바꾸는 총 좌석(끝 정원) — 서버 지금 정원(미리보기 seats.cap · 없으면 로컬)과 다를 때만 그 값 · 아니면 0.
 //   날짜 바꾸기에 p_opts.total_pax 로 실어 날짜와 한 문장으로 바꾸고(ROUND_MOVE_CAP), 「매진이 풀리나」도 이 정원으로 센다
@@ -52520,7 +52560,12 @@ async function _rmFlow(id){
       showToast('⏳', '앞선 저장 결과를 확인하는 중입니다', Math.max(1, Math.ceil(uw / 1000)) + '초 뒤 다시 「수정하기」를 눌러 주세요 — 앞서 고른 취소표 알림 끔이 아직 걸려 있습니다(저장하지 않았습니다)');
       return;
     }
-    await _rmUnknownEnd(id, false);
+    // 🆕 8차(RM7-APP-1) 그 끔을 닫지 못했으면(연결 끊김 · 오류) 여기서 멈춘다 — 넘어가면 이번 「켬」이 아직 살아 있는 그 끔(약 5분)에 삼켜진다
+    var ue = await _rmUnknownEnd(id, false);
+    if(ue && ue.closed === false){
+      showToast('⚠', '앞선 취소표 알림 끔을 닫지 못했습니다', '연결을 확인하고 잠시 뒤 다시 「수정하기」를 눌러 주세요 — 지금 옮기면 「켬」을 골라도 회원에게 취소표 알림이 가지 않을 수 있습니다(약 5분 뒤 저절로 풀립니다 · 저장하지 않았습니다)');
+      return;
+    }
     if(String(_tuEditId) !== id || _pendingTicket !== p){ showToast('ⓘ', '화면이 바뀌어 저장하지 않았습니다', ''); return; }
     var mv = (d.rows || []).filter(function(r){ return r.action === 'move' || r.action === 'event'; });
     var dv = (d.rows || []).filter(function(r){ return r.action === 'keep' && r.reason === 'date_diverged'; });
@@ -52581,7 +52626,8 @@ async function _rmFlow(id){
       } else {
         // 아직 안 들어갔거나 확인 못 함 — 늦게 들어갈 수 있으니 기억해 두고, 다시 저장하면 서버에서 먼저 확인한다
         // 🆕 2026-11-16(6차 RVAPP1-2) 취소표 「끔」은 닫지 않고 기억한다 — 서버가 늦게 옮기면 그때도 꺼져 있어야 한다(_rmUnknownEnd 가 결과가 정해질 때 닫는다)
-        window._rmUnknown = { id: id, nd: nd, nt: nt || base.time, last: d.last_move_id || 0, notify: !!a.notify, at: Date.now(), t0: rmT0, rsTok: rsTok || null };
+        //   🆕 8차(RM7-APP-2) 회차마다 — 다른 회차의 결과 모름이 이 기억(과 끔 토큰)을 덮지 않게
+        _rmUnkSet(id, { id: id, nd: nd, nt: nt || base.time, last: d.last_move_id || 0, notify: !!a.notify, at: Date.now(), t0: rmT0, rsTok: rsTok || null });
         // 3차 NEW-7 — 몇 번 다시 봐도 옛 값이었다는 것은 「옮겨지지 않았다」가 아니다(서버가 아직 잠금을 기다리는 중일 수 있다) — 단정하지 않는다
         showToast('⚠', rc.unknown ? '결과를 확인하지 못했습니다' : '아직 반영되지 않았습니다(연결 끊김)',
           (rc.unknown ? '회차 날짜·예약이 옮겨졌을 수도 있습니다' : (rc.checks || 1) + '번 다시 봤지만 서버 값은 아직 옛 날짜입니다 — 늦게 옮겨질 수도 있습니다') + ' · 잠시 뒤 다시 「수정하기」를 누르면 서버에서 먼저 확인합니다 · ' + String(r.error.message || '').slice(0, 50));
@@ -52614,7 +52660,7 @@ function _rmMoved(id, p, nd, nt, base, x, notify){
   if(rs === 'active' && p && p.status === 'soldout'){ p.status = 'active'; if(o && o.status === 'soldout') o.status = 'active'; }
   window._rmOpened = window._rmOpened || {};
   window._rmOpened[id] = { date: nd, time: nt || (base && base.time) || '', at: (base && base.at) || Date.now() };
-  _rmUnknownEnd(id, true);   // 옮겨졌다 — 앞서 결과를 몰랐던 이동의 끔이 남아 있으면 닫는다(6차 RVAPP1-2)
+  _rmUnknownSettle(id);   // 옮겨졌다 — 앞서 결과를 몰랐던 이동의 끔이 남아 있으면 닫는다(6차 RVAPP1-2 · 8차: 실패하면 알리고 끔은 기억에 남김)
   window._rmPending = { id: id, res: x, notify: !!notify };
 }
 // 응답을 잃은 옮기기 — 서버 회차가 이미 목표 날짜·시간이면 이 미리보기 뒤에 생긴 기록을 찾는다. {applied, move} · {applied:false, checks} · {unknown:true, checks}
@@ -52651,7 +52697,8 @@ async function _rmFindMove(id, nd, lastId, since){
 // 다시 저장했더니 서버가 이미 이 수정이 바라는 날짜다(앞선 저장의 응답을 잃음 · 다른 기기에서 같은 이동) — 결과·알림을 잇고 나머지 칸을 저장한다
 //   d = 방금 미리보기(서버 시각 now 로 기기 시계 차이를 맞춘다)
 async function _rmRecovered(id, p, nd, nt, pass, d){
-  var unk = (window._rmUnknown && String(window._rmUnknown.id) === id) ? window._rmUnknown : null;
+  var unk = _rmUnkGet(id);
+  if(unk && unk.settled) unk = null;   // 8차 결과가 정해진 뒤 닫기만 못 한 끔 — 이번 이동의 기억이 아니다
   var since = null;
   if(!unk){
     // 기억이 없다 — 이 수정 화면을 연 뒤에 생긴 기록만(서버 시각으로 맞춰 1분 여유 · 서버가 now 를 안 주면 10분 · 연 시각을 모르면 최근 30분)
@@ -52665,7 +52712,7 @@ async function _rmRecovered(id, p, nd, nt, pass, d){
     notify = confirm('이 회차는 이미 ' + _rmDt(mv.new_date, mv.new_time) + ' 로 옮겨져 있습니다(앞선 저장의 응답이 끊겼거나 다른 기기에서 옮김).\n예약 ' + (mv.moved || []).length + '건 — 회원에게 알림을 보낼까요? (알림함 + 푸시)');
   }
   showToast('ⓘ', '회차 날짜는 이미 옮겨져 있습니다', '앞선 저장이 서버에 반영돼 있었습니다 — 결과를 보여 드리고 나머지 칸을 저장합니다');
-  _rmUnknownEnd(id, true);   // 🆕 6차(RVAPP1-2) 앞선 이동이 들어가 있었다 — 그때 건 끔은 할 일을 마쳤다
+  _rmUnknownSettle(id);   // 🆕 6차(RVAPP1-2) 앞선 이동이 들어가 있었다 — 그때 건 끔은 할 일을 마쳤다(8차: 닫기 실패는 알리고 기억에 남김)
   // 🆕 6차(RVAPP1-1) 이어서 저장할 status 를 방금 읽은 서버 회차 상태로(옮기며 자동 매진이 풀렸으면 active) — 수정 화면을 연 때의 'soldout' 으로 다시 덮지 않게
   _rmMoved(id, p, nd, nt, (window._rmOpened || {})[id], { ok: true, changed: true, move_id: mv ? mv.id : null, move: mv, recovered: true, round: _rmRoundOf(d && d.seats) }, notify);
   pass();
