@@ -139,8 +139,16 @@ async function handle(req: Request): Promise<Response> {
                         && Number(hold.party_size) === pax
                         && String(hold.ticket_product_id || '') === String(ticketId));
       if (!hasValidHold) {
-        console.warn('[toss-order] 홀드 무효 — 좌석 재검증으로 진행', holdPurchaseId);
+        console.warn('[toss-order] 홀드 무효', holdPurchaseId);
       }
+    }
+    // 🔒 2026-11-15 카드 후속(옵션 B) — 살아 있는 내 홀드(이 티켓 · 이 인원)가 없으면 카드 주문을 만들지 않는다.
+    //   종전엔 홀드 없이도(또는 남의·다른 회차 홀드 id 로도) 주문을 만들었고, 승인 뒤 toss-confirm 이 좌석을 새로 INSERT 하다
+    //   재구매 제한·중복·매진에 막히면 「카드 승인 → 자동 취소」가 됐다(회원 카드에 승인·취소 문자가 남는다).
+    //   홀드 INSERT 는 회원 세션으로 재구매·중복·등급·정원 가드를 이미 지났다 — 그 홀드가 살아 있을 때만 결제창을 연다.
+    //   앱은 「결제하기」를 누를 때 언제나 홀드를 먼저 잡는다(2026-08-15 뒤 모든 실제 주문에 홀드가 있었다).
+    if (!hasValidHold) {
+      return json({ ok: false, error: holdPurchaseId ? 'hold_expired' : 'hold_required' });
     }
 
     // 🆕 판매 오픈 게이트 — 비공개(draft)·예약(scheduled, 시간 전)은 구매 불가.
@@ -345,8 +353,8 @@ async function handle(req: Request): Promise<Response> {
         meal_fee: meal,
         agency_fee: fxFixed ? Math.round(fxFixed.agencyPer * fxApplied) : agency,
         wine_min: wine,
-        // 승인 후 이 홀드를 실제 구매로 전환한다
-        hold_purchase_id: holdPurchaseId || null,
+        // 승인 후 이 홀드를 실제 구매로 전환한다 — 위에서 이 회원·이 티켓·이 인원의 살아 있는 홀드임을 확인한 것만 적는다(적대 리뷰 M1)
+        hold_purchase_id: hasValidHold ? holdPurchaseId : null,
         deposit_used: Math.max(0, total - shortage),
         ...(fxMeta ? { fx: fxMeta } : {}),
       },
@@ -356,6 +364,17 @@ async function handle(req: Request): Promise<Response> {
       console.error('[toss-order] 주문 생성 실패', oErr);
       return json({ ok: false, error: 'order_create_failed' });
     }
+
+    // 🆕 2026-11-15 카드 후속(옵션 D) — 결제창이 열리는 지금부터 좌석 홀드를 다시 5분 잡는다.
+    //   「결제하기」를 두 번 누르면 앱이 옛 홀드를 처음 시각 그대로 다시 써서, 결제창이 몇 초 남은 홀드로 열릴 수 있었다
+    //   (실제 승인 시점 홀드 나이 최대 293초 — 5분 정리 7초 전). 홀드가 결제 중에 풀리면 승인 뒤 좌석을 새로 잡아야 해
+    //   재구매 제한·중복·매진에 막히면 카드가 승인됐다 취소된다. 실패해도 주문은 그대로 쓴다(종전 동작).
+    try {
+      const { error: hErr } = await admin.from('tickets')
+        .update({ created_at: new Date().toISOString() })
+        .eq('purchase_id', holdPurchaseId).eq('user_id', user.id).eq('status', 'hold');
+      if (hErr) console.warn('[toss-order] 홀드 시각 갱신 실패(주문은 그대로)', hErr.message);
+    } catch (_he) { /* 그대로 */ }
 
     return json({
       ok: true,
