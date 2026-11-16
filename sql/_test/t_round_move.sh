@@ -101,7 +101,7 @@ ok "옛 가드: 형제 행 이동이 TIME_CONFLICT" 1 "$(echo "$o" | grep -c TIM
 echo "── 2. 마이그레이션"
 out=$($P -f $MIG 2>&1); echo "$out" | grep -E "❌|ERROR" | head -5
 ok "확인 표 ❌ 는 ③④ 둘뿐(이 픽스처엔 리마인드 함수가 없다 — 12절에서 따로 본다)" "2|2" "$(echo "$out" | grep -c '❌')|$(echo "$out" | grep -c '^[③④].*❌')"
-ok "확인 표 ✅ 5줄(①②⑤⑥⑦)" 5 "$(echo "$out" | grep -c '✅')"
+ok "확인 표 ✅ 6줄(①②⑤⑥⑦⑩)" 6 "$(echo "$out" | grep -c '✅')"
 ok "가드 패치 표시" 1 "$($P -c "select count(*) from pg_proc where proname='taam_guard_purchase_unique' and prosrc like '%ROUND_MOVE_20261116%'")"
 seed
 
@@ -589,6 +589,90 @@ ok "  다시 맞추기 → 회원2 19:00(종전엔 18:00 에 남았다)" "2028.0
 $P -c "update public.ticket_products set date='2028.10.17' where id='RQ6'" >/dev/null
 ok "  다시 맞추기 없이 다음 이동(10.10 → 10.17) → 회원2 도 19:00 으로 따라온다" "2028.10.17 19:00|2028.10.17 19:00" "$(dt $Q6A)|$(dt $Q6B)"
 ok "  따로 시간을 지키던 행의 행 오류에는 ft 가 없다(25 (가) — 날짜만 따라가던 행)" "" "$($P -c "select coalesce(e->>'ft','') from public.ticket_round_moves m, jsonb_array_elements(m.errors) e where m.round_id='RQ1' and e->>'id'='$Q1B'")"
+
+echo "── 28. 5차 — 캘린더 수동 기록 좌석(20261117)과 함께: 잠금 순서(RCHK-1) · 매진이 풀리나(RCHK-3) · 옮긴 기록이 새 날짜의 다른 회차에도(RCHK-4)"
+RF=b0000000-0000-4000-8000-00000000000f
+S1A=f6000000-0000-4000-8000-000000000001; S2A=f6000000-0000-4000-8000-000000000002; S4A=f6000000-0000-4000-8000-000000000004; S7A=f6000000-0000-4000-8000-000000000007
+$P <<SQL >/dev/null
+set session_replication_role = replica;
+insert into public.restaurants(id,name,repurchase_day) values ('$RF','다섯째집',0);
+insert into public.ticket_products(id,rest_id,rest_name,date,time,status,total_pax,auto_soldout) values
+ ('RS1','$RF','다섯째집','2028.11.10','18:00','soldout',4,true),     -- 자동 매진 · 좌석 행 2 (+ 기록 2 = 4)
+ ('RS2','$RF','다섯째집','2028.12.10','18:00','soldout',2,true),     -- 좌석 행으로 꽉 참
+ ('RS4','$RF','다섯째집','2029.01.10','18:00','soldout',4,false),    -- 손 잠금
+ ('RS7','$RF','다섯째집','2029.02.10','18:00','active',8,true);      -- 기록 옮기기 실패 시험
+insert into public.tickets(id,user_id,restaurant_id,restaurant_name,ticket_product_id,reservation_date,visit_time,party_size,price,status,purchase_id,extra_data) values
+ ('$S1A','$M1','$RF','다섯째집','RS1','2028.11.10','18:00',2,100,'active','PAYH-S1A','{}'),
+ ('$S2A','$M2','$RF','다섯째집','RS2','2028.12.10','18:00',2,100,'active','PAYH-S2A','{}'),
+ ('$S4A','$M3','$RF','다섯째집','RS4','2029.01.10','18:00',2,100,'active','PAYH-S4A','{}'),
+ ('$S7A','$M4','$RF','다섯째집','RS7','2029.02.10','18:00',2,100,'active','PAYH-S7A','{}');
+insert into public.daegwan_manual(venue_id,ymd,name,pax) values ('$RF','2028-11-10','오프라인11',2),('$RF','2029-02-10','오프라인02',1);
+set session_replication_role = origin;
+SQL
+pvr(){ su "select public.taam_round_move_preview('$1','$2',null)" | grep '^{'; }
+sj(){ $P -c "select $2 from (select '$1'::jsonb j) x"; }
+# (가) 20261117 전(도우미 없음) — 기록은 서버 좌석이 아니다
+pv=$(pvr RS1 2028.11.24)
+ok "  (가) 도우미 없음: 기록 안 셈 · 좌석 행 2/4 · 자동 매진 → 옮기면 풀린다(stay·move 둘 다)" "false|2|2|2|true|true" "$(sj "$pv" "(j->'seats'->>'counts_manual')||'|'||(j->'seats'->>'tickets')||'|'||(j->'seats'->>'after_stay')||'|'||(j->'seats'->>'after_move')||'|'||(j->'reopen'->>'stay')||'|'||(j->'reopen'->>'move')")"
+ok "  (가) 좌석 행으로 꽉 찬 매진 · 손 잠금 매진 → 안 풀린다" "false|false|false|false" "$(sj "$(pvr RS2 2028.12.17)" "(j->'reopen'->>'stay')||'|'||(j->'reopen'->>'move')")|$(sj "$(pvr RS4 2029.01.17)" "(j->'reopen'->>'stay')||'|'||(j->'reopen'->>'move')")"
+# (나) 도우미가 있으면(20261117 과 같은 정의) — 옛 날짜 기록은 빠지고 새 날짜 기록은 들어온다
+$P <<'SQL' >/dev/null
+create or replace function public._taam_manual_pax_at(p_venue text, p_ymd date) returns int language sql stable security definer set search_path = public as $f$
+  select coalesce(sum(greatest(coalesce(m.pax, 0), 0)), 0)::int from public.daegwan_manual m where p_venue is not null and p_ymd is not null and m.venue_id = p_venue and m.ymd = p_ymd $f$;
+create or replace function public._taam_round_counts_manual(p_status text) returns boolean language sql immutable as $f$
+  select lower(coalesce(p_status, '')) not in ('pending', 'deleterequest', 'deleted') $f$;
+SQL
+pv=$(pvr RS1 2028.11.24)
+ok "  (나) 기록 셈: 지금 2 · 새 날짜 0 · 옮길 2 → 안 옮기면 2/4(풀림) · 옮기면 4/4(안 풀림)" "true|2|0|2|2|4|true|false" "$(sj "$pv" "(j->'seats'->>'counts_manual')||'|'||(j->'seats'->>'manual_now')||'|'||(j->'seats'->>'manual_new')||'|'||(j->'seats'->>'manual_move')||'|'||(j->'seats'->>'after_stay')||'|'||(j->'seats'->>'after_move')||'|'||(j->'reopen'->>'stay')||'|'||(j->'reopen'->>'move')")"
+$P -c "insert into public.daegwan_manual(venue_id,ymd,name,pax) values ('$RF','2028-11-24','새날기록',1)" >/dev/null
+pv=$(pvr RS1 2028.11.24)
+ok "  (나) 새 날짜에 기록 1 → 안 옮기면 3/4 · 옮기면 5/4" "1|3|5|true|false" "$(sj "$pv" "(j->'seats'->>'manual_new')||'|'||(j->'seats'->>'after_stay')||'|'||(j->'seats'->>'after_move')||'|'||(j->'reopen'->>'stay')||'|'||(j->'reopen'->>'move')")"
+ok "  (나) 승인 대기 회차는 기록을 안 센다(counts_manual false)" "false" "$($P -c "update public.ticket_products set status='pending' where id='RS4'" >/dev/null; sj "$(pvr RS4 2029.01.17)" "j->'seats'->>'counts_manual'"; $P -c "update public.ticket_products set status='soldout' where id='RS4'" >/dev/null)"
+# (다) RCHK-4 — 새 날짜에 같은 매장 다른 회차가 있으면 옮긴 기록이 그 회차 좌석에도 센다
+ok "  (다) 새 날짜에 다른 회차 없음 → shared false · 목록 빈칸" "false|0" "$(sj "$pv" "(j->>'manual_target_shared')||'|'||jsonb_array_length(j->'manual_target_rounds')")"
+$P -c "set session_replication_role = replica; insert into public.ticket_products(id,rest_id,rest_name,date,time,status,total_pax) values ('RS5','$RF','다섯째집','2028.11.24','20:00','active',6)" >/dev/null
+ok "  (다) 새 날짜에 판매중 회차(20:00) → shared true · 그 회차 시간" "true|RS5|20:00" "$(sj "$(pvr RS1 2028.11.24)" "(j->>'manual_target_shared')||'|'||(j->'manual_target_rounds'->0->>'id')||'|'||(j->'manual_target_rounds'->0->>'time')")"
+for stx in hidden:true soldout:true pending:false deleteRequest:false deleted:false; do
+  $P -c "update public.ticket_products set status='${stx%%:*}' where id='RS5'" >/dev/null
+  ok "  (다) 그 회차가 ${stx%%:*} → shared ${stx#*:}(기록을 세는 상태만)" "${stx#*:}" "$(sj "$(pvr RS1 2028.11.24)" "j->>'manual_target_shared'")"
+done
+$P -c "update public.ticket_products set status='active' where id='RS5'" >/dev/null
+$P -c "update public.daegwan_manual set ymd='2028-11-30' where venue_id='$RF' and ymd='2028-11-10'" >/dev/null
+ok "  (다) 옮길 기록이 없으면 shared false(회차 목록은 그대로)" "false|1" "$(sj "$(pvr RS1 2028.11.24)" "(j->>'manual_target_shared')||'|'||jsonb_array_length(j->'manual_target_rounds')")"
+ok "  (다) 시간만 바꾸는 미리보기 → 기록 후보·shared 없음 · 좌석은 지금 날짜 그대로(2+0)" "false|0|2|2" "$(sj "$(su "select public.taam_round_move_preview('RS1','2028.11.10','19:00')" | grep '^{')" "(j->>'manual_target_shared')||'|'||jsonb_array_length(j->'manual_target_rounds')||'|'||(j->'seats'->>'after_stay')||'|'||(j->'seats'->>'after_move')")"
+$P -c "update public.daegwan_manual set ymd='2028-11-10' where venue_id='$RF' and ymd='2028-11-30'; delete from public.daegwan_manual where venue_id='$RF' and ymd='2028-11-24'" >/dev/null
+$P -c "drop function public._taam_manual_pax_at(text,date); drop function public._taam_round_counts_manual(text)" >/dev/null
+# (라) 날짜 바꾸기 응답에 옮긴 뒤 회차 상태 — 앱이 이어서 저장하는 status 를 맞춘다(좌석 행이 옮겨 가며 자동 매진이 풀렸다)
+o=$(su "select public.taam_round_reschedule('RS1','2028.11.17',null,'2028.11.10','18:00','{}')" | grep '^{')
+ok "  (라) 자동 매진(좌석 행 2/4)을 옮김 → 응답 round.status active · auto_soldout true · 서버도 active" "active|true|active" "$(sj "$o" "(j->'round'->>'status')||'|'||(j->'round'->>'auto_soldout')")|$($P -c "select status from public.ticket_products where id='RS1'")"
+o=$(su "select public.taam_round_reschedule('RS2','2028.12.17',null,'2028.12.10','18:00','{}')" | grep '^{')
+ok "  (라) 꽉 찬 매진을 옮김 → round.status soldout · 날짜·시간도 응답에" "soldout|2028.12.17|18:00" "$(sj "$o" "(j->'round'->>'status')||'|'||(j->'round'->>'date')||'|'||(j->'round'->>'time')")"
+# (마) RCHK-1 잠금 순서 — 20261117 의 도우미가 있으면 정원 잠금(tkcap_) 전에 부른다 · 없으면 그대로(위 절 전부)
+$P <<'SQL' >/dev/null
+create table if not exists public._t_mrlock(at timestamptz default clock_timestamp(), round text, nd date, opts jsonb, tkcap_held boolean, row_locked boolean);
+create or replace function public._taam_manrec_move_lock(p_round text, p_nd date, p_opts jsonb default '{}'::jsonb) returns void language plpgsql security definer set search_path = public as $f$
+declare k bigint := hashtext('tkcap_' || p_round)::bigint;
+begin
+  insert into public._t_mrlock(round, nd, opts, tkcap_held, row_locked)
+  values (p_round, p_nd, p_opts,
+          exists (select 1 from pg_locks l where l.locktype = 'advisory' and l.pid = pg_backend_pid() and l.objsubid = 1
+                   and l.objid::bigint = (k & 4294967295) and l.classid::bigint = ((k >> 32) & 4294967295)),
+          exists (select 1 from pg_locks l where l.locktype = 'tuple' and l.pid = pg_backend_pid()));
+end $f$;
+SQL
+o=$(su "select public.taam_round_reschedule('RS7','2029.02.17',null,'2029.02.10','18:00','{\"move_manual\":true}')")
+ok "  (마) 도우미를 한 번 · 회차·새 날짜·옵션 그대로 · 그때 정원 잠금은 아직 없음" "1|RS7|2029-02-17|true|false" "$($P -c "select count(*)||'|'||max(round)||'|'||max(nd)||'|'||bool_and((opts->>'move_manual')::boolean)||'|'||bool_or(tkcap_held) from public._t_mrlock")"
+ok "  (마) 옮긴 뒤: 회차·좌석·기록 2029.02.17" "2029.02.17|2029.02.17 18:00|2029-02-17" "$($P -c "select date from public.ticket_products where id='RS7'")|$(dt $S7A)|$($P -c "select ymd from public.daegwan_manual where venue_id='$RF' and name='오프라인02'")"
+$P -c "drop function public._taam_manrec_move_lock(text,date,jsonb); drop table public._t_mrlock" >/dev/null
+# (바) 기록 옮기기가 실패하면 이동 전체가 되돌아간다(반쪽 이동 금지 — 종전엔 errors 에 적고 회차만 옮겼다)
+$P -c "create function public._t_mr_boom() returns trigger language plpgsql as \$f\$ begin if new.ymd is distinct from old.ymd then raise exception 'MR_BOOM_TEST'; end if; return new; end \$f\$;
+       create trigger trg_zz_mr_boom before update on public.daegwan_manual for each row execute function public._t_mr_boom();" >/dev/null
+nm=$($P -c "select count(*) from public.ticket_round_moves where round_id='RS7'")
+o=$(su "select public.taam_round_reschedule('RS7','2029.02.24',null,'2029.02.17','18:00','{\"move_manual\":true}')")
+ok "  (바) 기록 옮기기 오류 → 이동 실패 · 회차·좌석·기록 그대로 · 이동 기록 안 늘어남" "1|2029.02.17|2029.02.17 18:00|2029-02-17|$nm" "$(echo "$o" | grep -c MR_BOOM_TEST)|$($P -c "select date from public.ticket_products where id='RS7'")|$(dt $S7A)|$($P -c "select ymd from public.daegwan_manual where venue_id='$RF' and name='오프라인02'")|$($P -c "select count(*) from public.ticket_round_moves where round_id='RS7'")"
+o=$(su "select public.taam_round_reschedule('RS7','2029.02.24',null,'2029.02.17','18:00','{}')")
+ok "  (바) 기록을 안 옮기는 이동은 그대로 된다(기록 트리거를 안 건드림)" "2029.02.24|2029-02-17" "$($P -c "select date from public.ticket_products where id='RS7'")|$($P -c "select ymd from public.daegwan_manual where venue_id='$RF' and name='오프라인02'")"
+$P -c "drop trigger trg_zz_mr_boom on public.daegwan_manual; drop function public._t_mr_boom()" >/dev/null
 
 echo "── 27. 리마인드 중복 방지에 방문일 (t_rda = 라이브 52d0603a · b42fdace 재현)"
 if psql $H -d postgres -Atc "select 1 from pg_database where datname='t_rda'" | grep -q 1; then

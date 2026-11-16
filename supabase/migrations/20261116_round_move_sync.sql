@@ -62,6 +62,18 @@
 --          다시 맞추기)은 그 날짜의 짝을 뺀다(_taam_round_spec_skip_od — 다시 맞추기도) · 행 오류는 그 행이 시간을 따라가던 중이었으면
 --          그때 시간(ft)을 적어 다시 맞추기·다음 이동이 그 시간으로 알아본다(짝으로 따라가던 행은 기록의 옛 시간과 다르다)
 --
+-- 5차(캘린더 수동 기록 좌석 20261117_manual_record_seats.sql 과 함께 · 2026-11-16 재점검 RCHK-1·3·4) — 역시 라이브 전이라 그 자리에서
+--   RCHK-1 잠금 순서(MANREC_LOCK_ORDER) — 이 파일이 20261117 보다 늦게 들어와도 지키도록 이 파일 자체에 넣었다(그 파일 G 절은 이미 있으면 「already」).
+--        taam_round_reschedule 은 정원 잠금(tkcap_) **전에** _taam_manrec_move_lock(옮길 기록 줄 → 매장·날짜 열쇠)을 부른다(도우미가 있을 때만 —
+--        없으면 종전 그대로). 종전 순서(정원 잠금 → 회차 행 → 기록 줄)는 같은 날 기록 수정(기록 줄 → 날짜 열쇠 → 정원 잠금)과 교착했다.
+--        _taam_round_move_apply 의 기록 옮기기 오류는 errors 에 적고 넘어가지 않고 다시 던진다 — 넘어가면 기록만 옛 날짜에 남고 회차는 새 날짜에서
+--        판매중으로 풀려 전원 취소표가 나갔다(다시 맞추기는 기록을 안 옮긴다). 이제 이동 전체가 실패하고 앱이 오류를 보인다.
+--   RCHK-3 미리보기 seats · reopen — 이 이동이 자동 매진을 풀 수 있나(좌석 행 + 새 날짜의 기록 · 옮길 기록을 옮기면/안 옮기면). 앱이 그때만
+--        슈퍼어드민에게 취소표 알림 켬/끔을 묻는다(끄면 taam_restock_mute — 20261113). 날짜 바꾸기는 옮긴 뒤 회차 status·auto_soldout 을 돌려준다 —
+--        앱이 이어서 저장하는 나머지 칸이 수정 화면을 연 때의 'soldout' 으로 방금 풀린 회차를 다시 덮지 않게.
+--   RCHK-4 미리보기 manual_target_shared · manual_target_rounds — 옮긴 기록이 새 날짜의 같은 매장 다른 회차(기록을 세는 상태)에도 세인다.
+--        앱은 「옮긴 기록은 그날 ○○ 회차 좌석에도 셉니다」를 보이고 「기록도 옮기기」 기본값을 끈다(귀속 규칙대로라 서버는 막지 않는다).
+--
 -- 되돌리기: drop trigger trg_taam_tp_round_move on public.ticket_products; drop trigger trg_taam_tp_round_lock on public.ticket_products;
 --   (가드 덩어리는 GUC 가 없으면 아무 일도 안 한다 — 그대로 둬도 된다)
 -- ============================================================================
@@ -590,7 +602,7 @@ begin
                      returning m.id, m.name, m.pax)
         select coalesce(jsonb_agg(to_jsonb(up)), '[]'::jsonb) into v_man from up;
       exception when others then
-        v_err := v_err || jsonb_build_object('kind', 'manual', 'code', 'error', 'sqlstate', sqlstate, 'msg', left(sqlerrm, 200));
+        raise;   -- MANREC_LOCK_ORDER · 기록 옮기기가 실패하면 이동 전체를 되돌린다(기록만 옛 날짜에 남고 회차가 풀리는 반쪽 이동 금지 · 20261117)
       end;
     end if;
   end if;
@@ -758,9 +770,13 @@ declare
   v_tp record; v_od date; v_ot text; v_nd date; v_nt text; v_rows jsonb := '[]'::jsonb; r record; v_c jsonb; v_rp jsonb;
   v_conf jsonb := '[]'::jsonb; v_gain int := 0; v_loss int := 0; v_warn jsonb := '[]'::jsonb; v_man jsonb; v_names jsonb;
   v_exc int; v_pkg text; v_dch boolean; v_tch boolean; v_spec jsonb; v_fd date[]; v_live boolean; v_past int := 0; v_rd date;
+  -- 5차(RCHK-3 · RCHK-4) 좌석 · 옮긴 기록이 같이 세일 새 날짜의 다른 회차
+  v_cap int; v_auto boolean; v_tk int := 0; v_mc boolean := false; v_m_now int := 0; v_m_new int := 0; v_m_mv int := 0;
+  v_can boolean; v_shared jsonb := '[]'::jsonb;
 begin
   if not public._taam_fee_caller_ok() then raise exception 'FORBIDDEN' using errcode = '42501'; end if;
-  select tp.id, tp.rest_id::text as rest_id, tp.rest_name, tp.date, tp.time, tp.status, tp.deadline_date, tp.sale_open_at, tp.m_open_date
+  select tp.id, tp.rest_id::text as rest_id, tp.rest_name, tp.date, tp.time, tp.status, tp.deadline_date, tp.sale_open_at, tp.m_open_date,
+         tp.total_pax, tp.auto_soldout
     into v_tp from public.ticket_products tp where tp.id::text = p_round;
   if not found then return jsonb_build_object('ok', false, 'error', 'ROUND_NOT_FOUND'); end if;
   v_od := public._taam_pu_visit_date(v_tp.date); v_ot := public._taam_hhmm(v_tp.time);
@@ -830,6 +846,31 @@ begin
                             order by m.ymd, m.created_at), '[]'::jsonb)
     into v_man from public.daegwan_manual m
    where v_dch and m.venue_id = v_tp.rest_id and m.ymd = any(v_fd) and m.ymd is distinct from v_nd;
+  -- 5차(RCHK-4) 옮긴 기록이 새 날짜의 다른 회차 좌석에도 세이나 — 같은 매장 · 새 날짜 · 기록을 세는 상태(승인 대기·삭제 신청·삭제 아님 —
+  --   20261117 _taam_round_counts_manual 과 같은 규칙) · 옮길 수 있는 기록이 있을 때만 shared(앱은 그때 「기록도 옮기기」 기본값을 끈다)
+  select coalesce(jsonb_agg(jsonb_build_object('id', o.id, 'time', o.time, 'status', o.status) order by o.time, o.id), '[]'::jsonb)
+    into v_shared from public.ticket_products o
+   where v_dch and o.rest_id::text = v_tp.rest_id and o.id::text <> p_round
+     and public._taam_pu_visit_date(o.date) = v_nd
+     and lower(coalesce(o.status, '')) not in ('pending', 'deleterequest', 'deleted');
+  -- 5차(RCHK-3) 좌석 — 이 이동이 자동 매진을 풀 수 있나(풀리면 커밋 때 취소표 알림이 나간다 — 앱이 슈퍼어드민에게 켬/끔을 묻는다).
+  --   좌석 행은 회차에 붙어 그대로다(sync_ticket_soldout 과 같은 합 — 취소만 뺀다). 캘린더 수동 기록은 매장·날짜에 붙는다 —
+  --   서버가 기록을 셀 때만(20261117_manual_record_seats.sql 의 도우미가 있을 때) 넣는다: 옛 날짜에 남긴 기록은 빠지고 새 날짜의 기록은 들어온다.
+  --   after_stay = 기록을 안 옮길 때 · after_move = 옮길 수 있는 기록을 옮길 때. 손 잠금(auto_soldout=false)은 서버가 안 푼다.
+  v_cap := coalesce(v_tp.total_pax, 0); v_auto := coalesce(v_tp.auto_soldout, true);
+  select coalesce(sum(t.party_size), 0) into v_tk from public.tickets t
+   where t.ticket_product_id::text = p_round and coalesce(t.status, '') <> 'cancelled';
+  if to_regprocedure('public._taam_manual_pax_at(text,date)') is not null
+     and to_regprocedure('public._taam_round_counts_manual(text)') is not null then
+    v_mc := public._taam_round_counts_manual(v_tp.status);
+    if v_mc then
+      v_m_now := public._taam_manual_pax_at(v_tp.rest_id, v_od);
+      v_m_new := case when v_dch then public._taam_manual_pax_at(v_tp.rest_id, v_nd) else v_m_now end;
+      select coalesce(sum(greatest(coalesce((x->>'pax')::int, 0), 0)), 0) into v_m_mv
+        from jsonb_array_elements(v_man) x where coalesce((x->>'movable')::boolean, false);
+    end if;
+  end if;
+  v_can := lower(coalesce(v_tp.status, '')) = 'soldout' and v_auto and v_cap > 0;
   return jsonb_build_object('ok', true, 'round', p_round, 'rest', v_tp.rest_name,
     'cur', jsonb_build_object('date', v_tp.date, 'time', v_tp.time),
     'new', jsonb_build_object('date', to_char(v_nd, 'YYYY.MM.DD'), 'time', coalesce(v_nt, v_tp.time)),
@@ -840,7 +881,15 @@ begin
     'last_move_id', coalesce((select max(m.id) from public.ticket_round_moves m where m.round_id = p_round), 0),
     -- 서버 시각 — 앱이 기기 시계 차이를 맞춰 「이 수정 화면을 연 뒤의 이동 기록」만 고른다(3차 NEW-7)
     'now', now(),
-    'manual_movable', exists (select 1 from jsonb_array_elements(v_man) x where (x->>'movable')::boolean));
+    'manual_movable', exists (select 1 from jsonb_array_elements(v_man) x where (x->>'movable')::boolean),
+    -- 5차(RCHK-4) 옮긴 기록이 새 날짜의 다른 회차에도 세인다(그 회차가 자동 매진될 수 있다 — 귀속 규칙대로라 막지 않는다)
+    'manual_target_shared', jsonb_array_length(v_shared) > 0 and exists (select 1 from jsonb_array_elements(v_man) x where (x->>'movable')::boolean),
+    'manual_target_rounds', v_shared,
+    -- 5차(RCHK-3) 좌석 — 앱이 「이 이동이 매진을 풀 수 있나」를 정한다(정원을 같이 늘리는 수정은 앱이 새 정원으로 다시 센다)
+    'seats', jsonb_build_object('status', v_tp.status, 'auto', v_auto, 'cap', v_cap, 'tickets', v_tk, 'counts_manual', v_mc,
+                                'manual_now', v_m_now, 'manual_new', v_m_new, 'manual_move', v_m_mv,
+                                'after_stay', v_tk + v_m_new, 'after_move', v_tk + v_m_new + v_m_mv),
+    'reopen', jsonb_build_object('stay', v_can and v_tk + v_m_new < v_cap, 'move', v_can and v_tk + v_m_new + v_m_mv < v_cap));
 end $$;
 revoke all on function public.taam_round_move_preview(text, text, text) from public, anon;
 grant execute on function public.taam_round_move_preview(text, text, text) to authenticated;
@@ -860,6 +909,10 @@ begin
   end if;
   if btrim(coalesce(p_time, '')) <> '' and v_nt is null then return jsonb_build_object('ok', false, 'error', 'BAD_TIME'); end if;
   if v_nd < v_today then return jsonb_build_object('ok', false, 'error', 'NEW_DATE_PAST'); end if;
+  -- MANREC_LOCK_ORDER · 캘린더 수동 기록의 잠금 순서(기록 줄 → 매장·날짜 열쇠 → 정원 잠금) — 20261117_manual_record_seats.sql 의 도우미가 있을 때만
+  if to_regprocedure('public._taam_manrec_move_lock(text,date,jsonb)') is not null then
+    perform public._taam_manrec_move_lock(p_round, v_nd, p_opts);
+  end if;
   perform pg_advisory_xact_lock(hashtext('tkcap_' || p_round));
   -- 초대 줄은 잠그지 않는다 — 초대 확정(초대 줄 → 좌석 행 → 정원 잠금)과 엇갈려 교착이 날 수 있다. 트리거가 NOWAIT 로 보고 잠겨 있으면 「다시 맞추기」 대상으로 남긴다
   perform 1 from public.tickets k where k.ticket_product_id::text = p_round
@@ -885,8 +938,13 @@ begin
   perform set_config('taam.round_move_manual', '', true);
   v_id := nullif(current_setting('taam.round_move_last', true), '')::bigint;
   if v_id is not null then select to_jsonb(m) into v_log from public.ticket_round_moves m where m.id = v_id; end if;
+  -- 5차 status · auto_soldout = 옮긴 뒤 회차 상태(좌석 행이 옮겨 가며 sync_ticket_soldout 이 다시 셌다 — 옛 날짜의 기록 때문의 자동 매진이 풀렸을 수 있다).
+  --   앱은 이 값으로 바로 뒤 「나머지 칸 저장」의 status 를 맞춘다 — 수정 화면을 연 때의 'soldout' 을 그대로 보내면 방금 풀린 회차를
+  --   자리가 남은 채 다시 매진으로 덮었다(켬이면 회원은 「취소표」 알림을 받고도 못 산다)
   return jsonb_build_object('ok', true, 'changed', true, 'move_id', v_id, 'move', v_log,
-                            'round', jsonb_build_object('date', to_char(v_nd, 'YYYY.MM.DD'), 'time', coalesce(v_nt, v_tp.time)));
+                            'round', (select jsonb_build_object('date', to_char(v_nd, 'YYYY.MM.DD'), 'time', coalesce(v_nt, v_tp.time),
+                                                                'status', tp.status, 'auto_soldout', tp.auto_soldout)
+                                        from public.ticket_products tp where tp.id::text = p_round));
 end $$;
 revoke all on function public.taam_round_reschedule(text, text, text, text, text, jsonb) from public, anon;
 grant execute on function public.taam_round_reschedule(text, text, text, text, text, jsonb) to authenticated;
@@ -1166,4 +1224,10 @@ select '⑧ 회차 날짜와 다른 살아 있는 좌석 행(정보 · 정산 �
 union all
 select '⑨ 회차 날짜와 다른 보냄·결제 초대(정보)',
        (select count(*)::text from public.reservation_invites i join public.ticket_products tp on tp.id::text = i.ticket_product_id::text
-         where lower(coalesce(i.status,'')) in ('sent','paid') and public._taam_pu_visit_date(i.visit_date) is distinct from public._taam_pu_visit_date(tp.date));
+         where lower(coalesce(i.status,'')) in ('sent','paid') and public._taam_pu_visit_date(i.visit_date) is distinct from public._taam_pu_visit_date(tp.date))
+union all
+select '⑩ 캘린더 수동 기록 좌석과의 잠금 순서(MANREC_LOCK_ORDER — 날짜 바꾸기 · 적용) · 20261117 도우미 ' ||
+       case when to_regprocedure('public._taam_manrec_move_lock(text,date,jsonb)') is not null then '있음' else '아직 없음(그 파일이 오면 부른다)' end,
+       case when position('MANREC_LOCK_ORDER' in coalesce((select p.prosrc from pg_proc p where p.oid = to_regprocedure('public.taam_round_reschedule(text,text,text,text,text,jsonb)')), '')) > 0
+             and position('MANREC_LOCK_ORDER' in coalesce((select p.prosrc from pg_proc p where p.oid = to_regprocedure('public._taam_round_move_apply(text,date,text,date,text,date[],text[],text,text,jsonb)')), '')) > 0
+            then '✅' else '❌' end;
