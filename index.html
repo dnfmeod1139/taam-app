@@ -65727,6 +65727,7 @@ var _magDet = 0;
 function magSheetTo(d){
   var s = document.getElementById('magSheet');
   if(!s) return;
+  var _wasClosed = !_magDet;
   _magDet = Math.max(0, Math.min(2, d));
   s.classList.remove('d1','d2');
   var v = document.getElementById('magView');
@@ -65743,6 +65744,8 @@ function magSheetTo(d){
   s.classList.add('on');
   s.classList.add('d' + _magDet);
   magBindDrag();
+  // 🆕 2026-11-16 닫힌 시트는 「예약 가능 N」을 세지 않고 그렸다 — 열릴 때(버튼 · 손잡이 · 끌어올리기 어느 길이든) 센다(검토 MO-3)
+  if(_wasClosed){ try { if(typeof _magSegCountPaint === 'function') _magSegCountPaint(); if(typeof _magSeatsLoad === 'function') _magSeatsLoad(false).then(function(c){ if(c) _magSegCountPaint(); }); } catch(_sc){} }
 }
 window.magSheetTo = magSheetTo;
 
@@ -65806,10 +65809,10 @@ function magShowCalendar(fromDay){
   if(cnt) cnt.textContent = '';
   // 히어로는 뒤에 이미 깔려 있으니 시트 안에서는 그리지 않는다
   renderPhotoCalInto('magSheetBody', true);
-  if(_b0){ _b0.insertAdjacentHTML('afterbegin', _magSegHtml('cal')); _b0._magOpenHtml = null; }   // 🆕 2026-11-16 「CALENDAR | 예약 가능」 전환
+  if(_b0){ _b0.insertAdjacentHTML('afterbegin', _magSegHtml('cal')); _b0._magOpenHtml = null; }   // 🆕 2026-11-16 「CALENDAR | 예약 가능」 전환(닫힌 시트면 숫자는 빈칸 — 열 때 센다)
   // 목록에서 달력으로 돌아온 것이면 날짜를 누르던 때의 달력 자리로 — 목록 스크롤이 남으면 달력 칸이 화면 위로 밀려 있었다
   if(_wasDay && _b0) _b0.scrollTop = _magCalScroll || 0;
-  _magSeatsLoad(false).then(function(changed){ if(changed) _magSegCountPaint(); });   // 「예약 가능 N」 숫자를 서버 좌석 수로 맞춘다
+  if(typeof _magDet !== 'undefined' && _magDet > 0) _magSeatsLoad(false).then(function(changed){ if(changed) _magSegCountPaint(); });   // 「예약 가능 N」 숫자를 서버 좌석 수로 맞춘다(시트가 열려 있을 때만)
 }
 window.magShowCalendar = magShowCalendar;
 function magBackToCal(){ _magNavMark(); magShowCalendar(); }
@@ -65827,8 +65830,9 @@ var _magOpenF = _magOpenF || { per: 'all', slot: 'all', pax: 0 };
 var _magSeats = _magSeats || { map: null, at: 0, err: false, busy: null, seq: 0 };
 function _moT(k, ko){ return (typeof window.t === 'function') ? window.t(['magopen', k].join('.'), ko) : ko; }   // 키는 TRANSLATIONS 의 magopen.* (ko/en/ja · 하네스가 세 언어를 본다)
 function _moFill(s, n){ return String(s).split('{n}').join(String(n)); }
-function _magSegHtml(mode){
-  var n = _magOpenItems().filter(function(x){ return !x.why; }).length;
+function _magSegHtml(mode, items){
+  // 목록을 두 번 세지 않는다 — 부른 쪽이 이미 센 목록을 넘긴다(검토 MO-3). 시트가 닫혀 있으면 세지 않고 빈칸(열 때 다시 그린다)
+  var n = items ? items.filter(function(x){ return !x.why; }).length : ((typeof _magDet !== 'undefined' && _magDet > 0) ? _magOpenItems().filter(function(x){ return !x.why; }).length : '');
   return '<div class="mo-seg" data-no-tx>'
     + '<div class="' + (mode === 'cal' ? 'on' : '') + '" onclick="magSetMode(\'cal\')">CALENDAR</div>'
     + '<div class="' + (mode === 'open' ? 'on' : '') + '" onclick="magSetMode(\'open\')">' + _pcalEsc(_moT('tab', '예약 가능'))
@@ -65837,13 +65841,18 @@ function _magSegHtml(mode){
 }
 function _magSegCountPaint(){
   var el = document.getElementById('magSegN'); if(!el) return;
+  if(typeof _magDet !== 'undefined' && _magDet === 0) return;   // 닫힌 시트는 세지 않는다
   el.textContent = String(_magOpenItems().filter(function(x){ return !x.why; }).length);
 }
 function magSetMode(m){
   var to = (m === 'open') ? 'open' : 'cal';
   if(to === _magMode) return;
   _magMode = to;
-  if(to === 'open') magShowOpen(false); else magShowCalendar();
+  if(to === 'open') magShowOpen(false);
+  else {
+    magShowCalendar();
+    var _b = document.getElementById('magSheetBody'); if(_b) _b.scrollTop = 0;   // 긴 목록 스크롤이 남아 달력·전환 단추가 화면 위로 밀리지 않게(검토 MO-2)
+  }
   if(_magDet < 2) magSheetTo(2);
 }
 window.magSetMode = magSetMode;
@@ -65852,25 +65861,34 @@ function _magSeatsLoad(force){
   if(!_magSeats) _magSeats = { map: null, at: 0, err: false, busy: null, seq: 0 };
   if(!window.sb || typeof window.sb.rpc !== 'function') return Promise.resolve(false);
   if(_magSeats.busy) return _magSeats.busy;
-  if(!force && _magSeats.at && (Date.now() - _magSeats.at) < 60000) return Promise.resolve(false);
-  var ids = _pcalVisibleTickets().filter(function(t){
+  var _vis = _pcalVisibleTickets().filter(function(t){
     return !(typeof _isTicketExpired === 'function' && _isTicketExpired(t));
-  }).map(function(t){ return String(t.id); }).slice(0, 400);
+  }).slice(0, 400);
+  // 회차 상태·정원이 바뀌었으면(취소표로 판매 재개 · 정원 늘림) 60초를 기다리지 않는다 — 낡은 좌석 수가 새 상태를 가리지 않게(검토 MO-1)
+  var _sig = _vis.map(function(t){ return String(t.id) + ':' + String(t.status || '') + ':' + String(t.totalPax || t.assignedPax || ''); }).join('|');
+  if(!force && _magSeats.at && (Date.now() - _magSeats.at) < 60000 && _magSeats.sig === _sig) return Promise.resolve(false);
+  var ids = _vis.map(function(t){ return String(t.id); });
   if(!ids.length) return Promise.resolve(false);
   var my = ++_magSeats.seq;
   _magSeats.busy = Promise.resolve(window.sb.rpc('taam_ticket_sold_slots_many', { p_ids: ids })).then(function(r){
     if(my !== _magSeats.seq) return false;
     if(!r || r.error || !r.data || typeof r.data !== 'object'){ var _w = !_magSeats.err; _magSeats.err = true; _magSeats.at = Date.now(); return _w && !!_magSeats.map; }
     var before = JSON.stringify(_magSeats.err ? null : (_magSeats.map || null));
-    _magSeats.map = r.data; _magSeats.at = Date.now(); _magSeats.err = false;
+    _magSeats.map = r.data; _magSeats.at = Date.now(); _magSeats.err = false; _magSeats.sig = _sig;
     return JSON.stringify(_magSeats.map) !== before;
   }, function(){ _magSeats.err = true; _magSeats.at = Date.now(); return false; }).then(function(v){ _magSeats.busy = null; return v; });
   return _magSeats.busy;
 }
 // 이 회원이 지금 이 회차를 못 사는 이유(없으면 '') — 상세·결제가 막는 순서와 같다. 결제 화면이 마지막 판정이다
-function _magWhyNot(t){
+function _magWhyNot(t, hist){
   if(typeof _currentRole !== 'undefined' && _currentRole === 'superadmin') return '';
   try {
+    // 패키지로만 파는 회차 — 패키지 전체가 지금 살 수 있는지(다른 회차 매진·공개 전·등급 …)를 본다(검토 MO-5)
+    var _pk0 = (typeof _pkOf === 'function') ? _pkOf(t) : null;
+    if(_pk0 && typeof _pkBlockReason === 'function' && typeof _pkRounds === 'function'){
+      var _pr = _pkBlockReason(_pkRounds(_pk0));
+      if(_pr) return _pr;
+    }
     if(typeof tcIsLocked === 'function' && tcIsLocked(t)) return _moT('why_lock', '공개 전');
     if(typeof tcIsMOnly === 'function' && tcIsMOnly(t)){
       var g = (typeof getCurrentUserGrade === 'function') ? getCurrentUserGrade() : null;
@@ -65884,7 +65902,7 @@ function _magWhyNot(t){
     }
     if(Array.isArray(purchaseHistory) && purchaseHistory.length){
       var c = (typeof _tkFindPurchaseConflict === 'function')
-        ? _tkFindPurchaseConflict(purchaseHistory, t.id, (typeof _repTicketDate === 'function') ? _repTicketDate(t) : null, t.time, window._tkSeatHoldId) : null;
+        ? _tkFindPurchaseConflict(hist || purchaseHistory, t.id, (typeof _repTicketDate === 'function') ? _repTicketDate(t) : null, t.time, window._tkSeatHoldId) : null;
       if(c && c.kind === 'dup') return _moT('why_dup', '이미 예약한 회차');
       if(c && c.kind === 'clash') return _moT('why_clash', '같은 시간대 예약 있음');
       if(typeof _repBlockOf === 'function' && _repBlockOf(t)) return _moT('why_rep', '재구매 제한');
@@ -65896,12 +65914,19 @@ function _magWhyNot(t){
 function _magOpenItems(){
   if(!_magSeats) _magSeats = { map: null, at: 0, err: false, busy: null, seq: 0 };   // 이 줄보다 먼저 불릴 때(부팅 중 렌더) — var 는 끌어올려져 undefined 다
   var out = [];
+  // 구매 내역은 한 번만 정리한다 — 회차마다 다시 정리하면 회차 수 × 내역 수 × 회차 찾기가 돌았다(검토 MO-3)
+  var _hist = null;
+  try { if(Array.isArray(purchaseHistory) && purchaseHistory.length && typeof _tkLiveRows === 'function' && typeof _tkHistFill === 'function') _hist = _tkLiveRows(purchaseHistory).map(_tkHistFill); } catch(_he){ _hist = null; }
   _pcalVisibleTickets().forEach(function(t){
-    if(t.status === 'soldout') return;
+    // 내가 결제 중인 회차(결제창에 다녀옴)는 매진이어도 보인다 — 상세 화면(pcalOpenTicket)이 내 홀드를 살아 있는 것으로 보는 것과 같다(검토 MO-4)
+    var mine = (typeof _tkHoldsThisTicket === 'function') && _tkHoldsThisTicket(t);
+    if(t.status === 'soldout' && !mine) return;
     if(typeof _isTicketExpired === 'function' && _isTicketExpired(t)) return;
     var v = (typeof _tkYMD === 'function') ? _tkYMD(t) : null; if(!v) return;
     var cap = parseInt(t.totalPax || t.assignedPax, 10) || 0;
     var s = (_magSeats.map && !_magSeats.err) ? (_magSeats.map[String(t.id)] || null) : null;
+    var _myPax = mine ? (parseInt(window._tkSeatHoldPax, 10) || 0) : 0;
+    if(s && _myPax){ s = Object.assign({}, s); s.total = Math.max(0, (parseInt(s.total, 10) || 0) - _myPax); if(_myPax === 1 || _myPax === 2 || _myPax === 4) s['s' + _myPax] = Math.max(0, (parseInt(s['s' + _myPax], 10) || 0) - 1); if(_myPax === 1) s.s1 = Math.max(0, parseInt(s.s1, 10) || 0); }
     var remain = (cap > 0 && s) ? Math.max(0, cap - (parseInt(s.total, 10) || 0)) : null;
     if(remain === 0) return;                                            // 서버로는 다 찼다(매진 표시가 아직 안 따라온 회차)
     var sizes = null, sl = t.slots || null;
@@ -65919,11 +65944,19 @@ function _magOpenItems(){
       });
       if(!sizes.length) return;
     }
+    // 패키지 회차는 패키지 전체에서 되는 인원(교집합)으로 — 한 회차 기준이면 패키지 시트에서 안 되는 인원을 적었다(검토 MO-5)
+    try {
+      var _pk1 = (typeof _pkOf === 'function') ? _pkOf(t) : null;
+      if(_pk1 && typeof _pkPaxOptions === 'function' && typeof _pkRounds === 'function'){
+        var _po = _pkPaxOptions(_pkRounds(_pk1).filter(Boolean));
+        if(Array.isArray(_po)) sizes = _po.slice();
+      }
+    } catch(_pke){}
     var hm = (String(t.time || '').match(/(\d{1,2})\s*:\s*(\d{2})/) || []);
     var hh = hm.length ? parseInt(hm[1], 10) : NaN;
     out.push({ t: t, y: v.y, m: v.m, d: v.d, key: v.y * 10000 + v.m * 100 + v.d,
                hm: hm.length ? (('0' + hm[1]).slice(-2) + ':' + hm[2]) : '', lunch: !isNaN(hh) && hh < 16, dinner: !isNaN(hh) && hh >= 16,
-               remain: remain, sizes: sizes, why: _magWhyNot(t) });
+               remain: remain, sizes: sizes, why: _magWhyNot(t, _hist) });
   });
   out.sort(function(a, b){ return (a.key - b.key) || String(a.hm).localeCompare(String(b.hm)); });
   return out;
@@ -65958,7 +65991,7 @@ window.magOpenSet = magOpenSet;
 function _magOpenHtml(){
   var all = _magOpenItems(), items = _magOpenFiltered(all), f = _magOpenF;
   var chip = function(on, k, v, label){ return '<span class="' + (on ? 'on' : '') + '" onclick="magOpenSet(\'' + k + '\',' + (typeof v === 'number' ? v : '\'' + v + '\'') + ')">' + _pcalEsc(label) + '</span>'; };
-  var h = _magSegHtml('open')
+  var h = _magSegHtml('open', all)
     + '<div class="mo-chips" data-no-tx>'
     +   chip(f.per === 'all', 'per', 'all', _moT('f_all', '전체')) + chip(f.per === 'this', 'per', 'this', _moT('f_this', '이번 달')) + chip(f.per === 'next', 'per', 'next', _moT('f_next', '다음 달'))
     +   '<i></i>' + chip(f.slot === 'lunch', 'slot', 'lunch', _moT('f_lunch', '점심')) + chip(f.slot === 'dinner', 'slot', 'dinner', _moT('f_dinner', '저녁'))
