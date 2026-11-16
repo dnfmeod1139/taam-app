@@ -52327,7 +52327,9 @@ function _rmEsc(s){ return (typeof _raEsc === 'function') ? _raEsc(s) : String(s
 var _RM_OWNER = { member: '회원 예약', invite_hold: '초대 대기 좌석', manual: '수동 좌석', guest_link: '비회원 결제 링크', ksk: '정산 좌석', ops: '운영 좌석' };
 var _RM_KEEP = { visited: '방문 처리됨', past_round: '지난 회차', date_diverged: '회차와 다른 날짜로 적힌 행', time_individual: '따로 바꾼 시간' };
 // 🆕 2026-11-16(5차 RCHK-3) 이 이동이 자동 매진을 풀 수 있나 — 미리보기 seats(좌석 행 + 새 날짜의 캘린더 수동 기록 · 기록을 옮기면/안 옮기면)로 정한다.
-//   capN = 같은 수정에서 늘리는 총 좌석(정원 늘림 질문이 같이 도는 경우 — 저장이 끝나면 그 정원이 된다). 풀리면 커밋 때 회원 전원에게 취소표 알림이 나간다.
+//   capN = 같은 수정에서 바꾸는 총 좌석(이동 커밋에서의 정원 — 날짜 바꾸기가 정원도 같은 문장으로 바꾼다 · 7차 ROUND_MOVE_CAP · 0 이면 지금 정원).
+//   🆕 7차(RV2-APP-3) 줄이는 정원도 그대로 쓴다 — 종전 max(지금, 새) 는 날짜를 옮기며 정원을 줄여 끝이 매진인 수정에 「좌석을 풀면 알림 대상」 토글(기본 켬)을 띄웠고,
+//   날짜만 먼저(옛 정원) 커밋돼 잠깐 풀린 회차의 취소표가 회원 전원에게 나갔다. 풀리면 커밋 때 회원 전원에게 취소표 알림이 나간다.
 //   미리보기에 seats 가 없으면(옛 판) 지금 매진이면 풀 수도 있다고 본다 — 묻는 쪽이 안전하다
 function _rmReopen(d, manual, capN){
   var s = d && d.seats;
@@ -52336,7 +52338,8 @@ function _rmReopen(d, manual, capN){
     return !!(t0 && t0.status === 'soldout');
   }
   if(String(s.status || '').toLowerCase() !== 'soldout' || s.auto === false) return false;
-  var cap = Math.max(parseInt(s.cap, 10) || 0, parseInt(capN, 10) || 0);
+  var capF = parseInt(capN, 10) || 0;
+  var cap = capF > 0 ? capF : (parseInt(s.cap, 10) || 0);
   if(cap <= 0) return false;
   var occ = parseInt(manual ? s.after_move : s.after_stay, 10);
   return isNaN(occ) ? true : occ < cap;
@@ -52349,11 +52352,39 @@ function _rmRoundOf(seats){
 // 🆕 2026-11-16(6차 RVAPP1-2) 결과를 모르는 이동(응답을 잃고 다시 봐도 옛 날짜)의 취소표 「끔」은 바로 닫지 않는다 — 서버가 아직 잠금을 기다리다
 //   늦게 커밋할 수 있어서(그때 끔이 닫혀 있으면 슈퍼어드민이 끈 알림이 전원에게 나갔다). 결과가 정해질 때 닫는다:
 //   앞선 이동이 들어가 있었으면(_rmRecovered) 바로 · 안 들어갔으면 문장 시간(8초)이 넉넉히 지난 뒤에만 — 아니면 정한 시간(5분) 뒤 저절로 풀린다
+//   🆕 7차(RV2-APP-1) 문장 시간 안(앞선 이동이 아직 늦게 커밋될 수 있음)에 다시 저장하면 기억(과 그 끔)을 버리지 않는다 — 종전엔 기억만 지우고 끔은 닫지 않아
+//   앱이 그 끔을 잃었고, 새 시트에서 「켬」을 골라도 서버는 그 끔(5분)으로 이번 취소표를 MUTED 로 삼켰다(보냄·안 보냄 어느 안내도 없이).
+//   _rmFlow 가 그때는 저장을 막고(_rmUnknownWait) 시간이 지난 뒤에만 이것을 부르며, 끔을 **닫고 나서**(await) 새 시트·날짜 바꾸기로 간다. Promise<hits|null>
+var RM_UNKNOWN_SETTLE_MS = 15000;
+function _rmUnknownSettleMs(){ var v = parseInt(window._RM_UNKNOWN_SETTLE_MS, 10); return v > 0 ? v : RM_UNKNOWN_SETTLE_MS; }
+// 이 회차의 결과 모름 기억이 끔을 쥔 채 아직 문장 시간 안이면 남은 ms(아니면 0)
+function _rmUnknownWait(id){
+  var u = window._rmUnknown;
+  if(!u || String(u.id) !== String(id) || !u.rsTok || !u.t0) return 0;
+  var left = _rmUnknownSettleMs() - (Date.now() - u.t0);
+  return left > 0 ? left : 0;
+}
 function _rmUnknownEnd(id, applied){
   var u = window._rmUnknown;
-  if(!u || String(u.id) !== String(id)) return;
+  if(!u || String(u.id) !== String(id)) return Promise.resolve(null);
+  if(!applied && _rmUnknownWait(id) > 0) return Promise.resolve(null);   // 아직 늦은 커밋이 올 수 있다 — 기억도 끔도 그대로
   window._rmUnknown = null;
-  if(u.rsTok && (applied || !u.t0 || (Date.now() - u.t0) > 15000)) try { _rsMuteEnd(u.rsTok); } catch(_m){}
+  if(u.rsTok && (applied || !u.t0 || (Date.now() - u.t0) > _rmUnknownSettleMs())){
+    try { return Promise.resolve(_rsMuteEnd(u.rsTok)).catch(function(){ return null; }); } catch(_m){}
+  }
+  return Promise.resolve(null);
+}
+// 🆕 7차(RV2-APP-3) 이 수정이 바꾸는 총 좌석(끝 정원) — 서버 지금 정원(미리보기 seats.cap · 없으면 로컬)과 다를 때만 그 값 · 아니면 0.
+//   날짜 바꾸기에 p_opts.total_pax 로 실어 날짜와 한 문장으로 바꾸고(ROUND_MOVE_CAP), 「매진이 풀리나」도 이 정원으로 센다
+function _rmCapFinal(d, p){
+  var n = parseInt(p && p.totalPax, 10) || 0;
+  if(n <= 0) return 0;
+  var s = d && d.seats, c = (s && typeof s === 'object') ? (parseInt(s.cap, 10) || 0) : 0;
+  if(!c){
+    var t0 = ticketDB.find(function(x){ return String(x.id) === String(d && d.round); });
+    c = t0 ? (parseInt(t0.totalPax || t0.assignedPax, 10) || 0) : 0;
+  }
+  return n !== c ? n : 0;
 }
 // 확인 시트 — 옮겨 갈 것 · 남길 것 · 겹침 · 환불 규정 · 경고 · 알림/수동 기록 선택. Promise<{notify, manual, rs}|null>
 //   o.capAsks = 정원 늘림 질문이 뒤에 같이 돈다(취소표 알림 켬/끔은 그 질문 하나에서 — 한 질문 · 한 끔) · rs = 이 시트의 취소표 토글(안 보였으면 null)
@@ -52393,7 +52424,8 @@ function _rmAsk(d, o){
     var manShTx = manShared ? ((d.manual_target_rounds || []).map(function(r){ return _rmHm(r && r.time) || ''; }).filter(Boolean).join(' · ') || '다른') : '';
     // 🆕 2026-11-16(5차 RCHK-3) 이 이동이 매진을 풀 수 있으면 취소표 알림 켬/끔(슈퍼어드민이 좌석을 풀 때마다 묻는 그 토글) — 정원 늘림 질문이 같이 돌면 그쪽에서 한 번만
     var rsId = String(d.round || o.id || '');
-    var rsCan = !o.capAsks && /^[0-9A-Za-z_.:-]{1,64}$/.test(rsId) && (_rmReopen(d, false, 0) || _rmReopen(d, true, 0));
+    var capF = parseInt(o.capF, 10) || 0;   // 7차(RV2-APP-3) 같은 수정에서 바꾸는 총 좌석 — 이동 커밋의 정원
+    var rsCan = !o.capAsks && /^[0-9A-Za-z_.:-]{1,64}$/.test(rsId) && (_rmReopen(d, false, capF) || _rmReopen(d, true, capF));
     // 🆕 2026-11-16(3차 NEW-5) 예약이 회차에 적힌 날짜가 아닌 곳(끝나지 않은 이동이 남긴 날짜 — 연도 실수 등)에서 옮겨 가면 머리에 적는다
     var fromDs = []; mv.forEach(function(r){ var f = _rmYmd(r && r.from && r.from.d || ''); if(/^\d{4}\.\d{2}\.\d{2}$/.test(f) && f !== curD && fromDs.indexOf(f) < 0) fromDs.push(f); });
     fromDs.sort();
@@ -52434,7 +52466,7 @@ function _rmAsk(d, o){
     var fin = function(v){ var e2 = document.getElementById('rmPopup'); if(e2) e2.remove(); done(v); };
     var manOn = function(){ var mEl = document.getElementById('rmManual'); return !!(mEl && mEl.checked && !mEl.disabled); };
     // 취소표 토글은 지금 고른 「기록도 옮기기」로 매진이 풀릴 때만 보인다(기록을 같이 옮기면 안 풀리는 회차 — 이코우 1/29 모양)
-    var rsSync = function(){ var w = document.getElementById('rmRsWrap'); if(w) w.style.display = _rmReopen(d, manOn(), 0) ? 'block' : 'none'; };
+    var rsSync = function(){ var w = document.getElementById('rmRsWrap'); if(w) w.style.display = _rmReopen(d, manOn(), capF) ? 'block' : 'none'; };
     rsSync();
     var mEl0 = document.getElementById('rmManual'); if(mEl0) mEl0.addEventListener('change', rsSync);
     document.getElementById('rmNo').onclick = function(){ fin(null); };
@@ -52480,18 +52512,28 @@ async function _rmFlow(id){
       try { if(typeof _tkRefreshFromServer === 'function') await _tkRefreshFromServer([id], { quiet: true }); } catch(_rf){}
       return;
     }
-    _rmUnknownEnd(id, false);   // 서버가 옛 값 그대로 — 앞선 이동은 들어가지 않았다(그 끔은 문장 시간이 지났으면 닫는다)
+    // 서버가 옛 값 그대로 — 앞선 이동은 (아직) 들어가지 않았다.
+    //   🆕 7차(RV2-APP-1) 앞선 시도가 끔을 쥔 채 결과를 모르고 문장 시간 안이면 다시 저장하지 않는다 — 그 끔을 지금 닫으면 늦은 커밋의 취소표가 나가고,
+    //   안 닫고 넘어가면 이번 「켬」이 그 끔에 삼켜진다(MUTED). 시간이 지났으면 그 끔을 **닫고 나서** 새 시트로
+    var uw = _rmUnknownWait(id);
+    if(uw > 0){
+      showToast('⏳', '앞선 저장 결과를 확인하는 중입니다', Math.max(1, Math.ceil(uw / 1000)) + '초 뒤 다시 「수정하기」를 눌러 주세요 — 앞서 고른 취소표 알림 끔이 아직 걸려 있습니다(저장하지 않았습니다)');
+      return;
+    }
+    await _rmUnknownEnd(id, false);
+    if(String(_tuEditId) !== id || _pendingTicket !== p){ showToast('ⓘ', '화면이 바뀌어 저장하지 않았습니다', ''); return; }
     var mv = (d.rows || []).filter(function(r){ return r.action === 'move' || r.action === 'event'; });
     var dv = (d.rows || []).filter(function(r){ return r.action === 'keep' && r.reason === 'date_diverged'; });
     var cap = _tuCapNeeds();
+    var capF = _rmCapFinal(d, p);   // 🆕 7차(RV2-APP-3) 끝 정원(바꿀 때만) — 날짜 바꾸기에 같이 싣는다
     if(!mv.length){   // 옮길 예약 없음
       if(dv.length) showToast('⚠', '회차와 다른 날짜로 적힌 예약 ' + dv.length + '건', '이 저장으로는 옮기지 않습니다 — 예약 캘린더에서 확인해 주세요');
       // 🆕 2026-11-16(6차 RV-SRV-1) 날짜를 옮기며 매진이 풀릴 수 있거나(옛 날짜의 캘린더 수동 기록만으로 자동 매진) 옮길 수 있는 기록이 있으면
       //   같은 확인 시트(취소표 켬/끔 · 「기록도 옮기기」)를 거쳐 날짜 바꾸기 RPC 로 — 바로 저장하면 묻지 않고 취소표가 나갔고, 그런 회차의 기록은 영영 못 옮겼다
-      var capN0 = cap ? cap.nCap : 0;
-      if(!(d.date_changed && (d.manual_movable === true || _rmReopen(d, false, capN0) || _rmReopen(d, true, capN0)))){ pass(); return; }   // 종전 저장
+      //   🆕 7차(RV2-APP-3) 「풀리나」는 끝 정원으로 — 정원을 줄여 끝이 매진이고 옮길 기록도 없으면 종전처럼 한 번에 저장(날짜·정원·상태가 한 문장)
+      if(!(d.date_changed && (d.manual_movable === true || _rmReopen(d, false, capF) || _rmReopen(d, true, capF)))){ pass(); return; }   // 종전 저장
     }
-    var a = await _rmAsk(d, { id: id, capAsks: !!cap });
+    var a = await _rmAsk(d, { id: id, capAsks: !!cap, capF: capF });
     if(!a) return;
     if(String(_tuEditId) !== id || _pendingTicket !== p){ showToast('ⓘ', '화면이 바뀌어 저장하지 않았습니다', ''); return; }
     // ② 정원 늘림 질문(매진 회차의 총 좌석을 늘린 수정) — 옮기기 전에. 취소하면 아무것도 바뀌지 않는다
@@ -52515,16 +52557,21 @@ async function _rmFlow(id){
       }
       if(String(_tuEditId) !== id || _pendingTicket !== p){ if(rsTok) _rsMuteEnd(rsTok); showToast('ⓘ', '화면이 바뀌어 저장하지 않았습니다', ''); return; }
     }
-    var r, rmT0 = Date.now();
+    var r, rmT0 = Date.now(), rmOpts = { move_manual: !!a.manual };
+    if(capF > 0) rmOpts.total_pax = capF;   // 🆕 7차(RV2-APP-3 · ROUND_MOVE_CAP) 정원도 날짜와 한 문장 — 옛 정원으로 잠깐 풀려 취소표가 나가지 않게
     try {
       r = await window.sb.rpc('taam_round_reschedule', { p_round: id, p_date: nd, p_time: nt,
-        p_expect_date: base.date, p_expect_time: base.time || null, p_opts: { move_manual: !!a.manual } });
+        p_expect_date: base.date, p_expect_time: base.time || null, p_opts: rmOpts });
     } catch(e1){ r = { error: { message: String(e1 && e1.message || e1), code: '' } }; }
     var x = r.data || {};
     if(r.error){
       // 서버가 SQL 오류로 거절했으면(code 있음) 롤백됐다. 연결이 끊긴 것(code 없음)이면 들어갔을 수 있다 — 다시 읽는다
       if(r.error.code){
         if(rsTok) _rsMuteEnd(rsTok);
+        // 🆕 7차(RV2-SRV-1) 옮길 캘린더 기록 줄을 다른 세션이 쥐고 있다 — 서버가 기다리지 않고(교착 대신) 바로 거절했다 · 다시 시도하면 된다
+        if(/ROUND_MOVE_BUSY/.test(String(r.error.message || ''))){
+          showToast('⚠', '옮기지 못했습니다', '같은 날 캘린더 기록을 다른 어드민이 저장 중입니다 — 잠시 뒤 다시 옮겨 주세요(아무것도 바뀌지 않았습니다)'); return;
+        }
         showToast('⚠', '옮기지 못했습니다', '아무것도 바뀌지 않았습니다 · ' + String(r.error.message || '').slice(0, 70)); return;
       }
       var rc = await _rmRecheck(id, nd, nt || base.time, d.last_move_id);
@@ -52544,7 +52591,8 @@ async function _rmFlow(id){
     if(!x.ok){
       if(rsTok) _rsMuteEnd(rsTok);
       var em = { STALE_ROUND: '다른 기기에서 이 회차 날짜가 바뀌었습니다 — 최신 값을 다시 읽었습니다. 화면을 닫고 다시 열어 주세요',
-                 NEW_DATE_PAST: '새 날짜가 지난 날입니다', BAD_DATE: '날짜를 읽을 수 없습니다', BAD_TIME: '시간을 읽을 수 없습니다', ROUND_NOT_FOUND: '회차를 찾지 못했습니다' }[x.error] || String(x.error || '');
+                 NEW_DATE_PAST: '새 날짜가 지난 날입니다', BAD_DATE: '날짜를 읽을 수 없습니다', BAD_TIME: '시간을 읽을 수 없습니다', ROUND_NOT_FOUND: '회차를 찾지 못했습니다',
+                 BAD_TOTAL_PAX: '총 좌석 수를 읽을 수 없습니다' }[x.error] || String(x.error || '');
       showToast('⚠', '옮기지 않았습니다', em);
       if(x.error === 'STALE_ROUND' && typeof _tkRefreshFromServer === 'function') try { await _tkRefreshFromServer([id], { quiet: true }); } catch(_rf){}
       return;

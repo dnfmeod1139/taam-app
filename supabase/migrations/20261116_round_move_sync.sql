@@ -79,8 +79,19 @@
 --        종전엔 좌석 행이 옮겨 가며 sync_ticket_soldout 이 돌 때만 다시 셌다 — 살아 있는 좌석 행이 없는 회차(옛 날짜의 기록만으로 자동 매진)는
 --        미리보기가 「풀린다(reopen.stay)」고 했는데 실제로는 빈 회차가 자동 매진(점유 0)으로 남고 취소표도 없었다(슈퍼어드민의 켬/끔도 헛돌았다).
 --        앱은 옮길 예약이 없는 회차도 이동이 매진을 풀 수 있거나 옮길 수 있는 기록이 있으면 같은 확인 시트(취소표 토글 · 「기록도 옮기기」)를 거쳐 옮긴다.
---   RV-SRV-2 기록도 옮기는 날짜 바꾸기는 _taam_manrec_move_lock 을 한 번 더 부른다(MANREC_RELOCK) — 첫 부름의 기록 줄 잠금은 날짜 열쇠를 잡기 전의
---        스냅샷이라 그 사이 그 날짜에 들어와 커밋된 기록을 못 잡았고, 그 기록을 고치는 거래와 교착해 날짜 바꾸기 전체가 40P01 로 실패했다.
+--   RV-SRV-2 기록도 옮기는 날짜 바꾸기는 기록 줄을 한 번 더 잠근다(MANREC_RELOCK) — 첫 부름의 기록 줄 잠금은 날짜 열쇠를 잡기 전의
+--        스냅샷이라 그 사이 그 날짜에 들어와 커밋된 기록을 못 잡았다. ⚠ 6차 판의 두 번째 잠금은 **기다리는** FOR UPDATE 라 교착을 없애지 못하고
+--        좁혔을 뿐이다 — 아래 7차 RV2-SRV-1.
+--
+-- 7차(6차 판 재점검 반영 · 2026-11-16) — 역시 라이브 전이라 그 자리에서
+--   RV2-SRV-1 두 번째 기록 줄 잠금은 기다리지 않는다(_taam_round_manrec_relock · MANREC_RELOCK_NOWAIT). 기록 UPDATE·DELETE 는 줄을 먼저 잠그고 BEFORE
+--        트리거가 날짜 열쇠를 기다린다(줄 → 열쇠) — 열쇠를 쥔 날짜 바꾸기가 그 줄을 기다리면(열쇠 → 줄) 교착이다. 6차 판은 늦게 커밋된 기록을 다른 세션이
+--        두 번째 잠금보다 먼저 잡으면(날짜 바꾸기가 새 날짜 열쇠를 기다리는 사이 — 그 날짜에 기록을 저장 중인 어드민 · 회차 저장 · 다른 이동이면 넉넉하다)
+--        교착 검사가 희생자를 골랐다: 날짜 바꾸기가 지면 이동 전체 40P01, 기록 쪽이 지면 기록이 정원 잠금 없이 warning 으로 저장. 이 순서는 한쪽으로 맞출 수
+--        없다(옮길 줄의 전부는 열쇠를 쥔 뒤에야 안다) — 그래서 잠긴 줄이 있으면 **바로** ROUND_MOVE_BUSY(55P03)로 끝내고(이동 전체 롤백 · 아무것도
+--        안 바뀜) 앱이 「같은 날 캘린더 기록을 다른 어드민이 저장 중입니다 — 잠시 뒤 다시 옮겨 주세요」를 보이고 취소표 끔을 닫는다.
+--   RV2-APP-3 p_opts.total_pax(ROUND_MOVE_CAP) — 같은 수정에서 바꾸는 총 좌석을 날짜와 한 문장으로 바꾼다. 종전엔 날짜만 먼저 커밋해(옛 정원) 날짜를 옮기며
+--        정원을 줄인 매진 회차가 옛 정원으로 잠깐 풀려 회원 전원에게 취소표가 나간 뒤 앱의 정원 저장으로 다시 매진됐다. 응답 round 에 total_pax.
 --
 -- 되돌리기: drop trigger trg_taam_tp_round_move on public.ticket_products; drop trigger trg_taam_tp_round_lock on public.ticket_products;
 --   (가드 덩어리는 GUC 가 없으면 아무 일도 안 한다 — 그대로 둬도 된다)
@@ -914,13 +925,42 @@ end $$;
 revoke all on function public.taam_round_move_preview(text, text, text) from public, anon;
 grant execute on function public.taam_round_move_preview(text, text, text) to authenticated;
 
+-- 7차(RV2-SRV-1 · MANREC_RELOCK_NOWAIT) 기록도 옮기는 날짜 바꾸기의 두 번째 기록 줄 잠금 — **기다리지 않는다**(NOWAIT).
+--   이 시점에 우리는 매장·날짜 열쇠를 쥐고 있다. 기록 UPDATE·DELETE 는 Postgres 가 줄을 먼저 잠근 뒤 BEFORE 트리거가 열쇠를 기다리므로(줄 → 열쇠),
+--   열쇠를 쥔 우리가 줄을 기다리면(열쇠 → 줄) 순서가 거꾸로라 교착이 생긴다. 이 순서는 한쪽으로 맞출 수 없다 — 옮길 줄의 전부는 열쇠를 쥔 뒤에야 안다.
+--   그래서 늦게 커밋된 기록 줄을 다른 세션이 이미 잠갔으면 교착 검사(deadlock_timeout 뒤 희생자 고르기 — 우리가 지면 이동 전체 40P01 · 기록 쪽이 지면
+--   기록이 정원 잠금 없이 warning 으로 저장됐다) 대신 **바로** ROUND_MOVE_BUSY(55P03 · 다시 시도할 수 있는 거절)로 끝낸다. 열쇠를 쥔 지금은 그 날짜에
+--   새 기록이 들어올 수 없으니 여기서 잠근 줄이 옮길 줄의 전부다. 줄의 범위는 20261117 의 _taam_manrec_move_lock 과 같다(회차 매장 · 옛 날짜 + 따라올 날짜).
+create or replace function public._taam_round_manrec_relock(p_round text)
+returns void language plpgsql volatile security definer set search_path = public as $$
+declare v_rest text; v_od date; v_days date[];
+begin
+  -- MANREC_RELOCK_NOWAIT
+  select tp.rest_id::text, public._taam_pu_visit_date(tp.date) into v_rest, v_od from public.ticket_products tp where tp.id::text = p_round;
+  if v_rest is null then return; end if;
+  v_days := array[v_od] || coalesce(public._taam_round_follow_dates(v_od,
+              public._taam_round_spec_skip_od(public._taam_round_follow_spec(p_round, false), v_od)), '{}'::date[]);
+  begin
+    perform 1 from public.daegwan_manual m
+     where m.venue_id = v_rest and m.ymd = any(v_days)
+     order by m.id for update nowait;
+  exception when lock_not_available then
+    raise exception 'ROUND_MOVE_BUSY' using errcode = '55P03',
+      detail = '같은 날 캘린더 수동 기록을 다른 세션이 저장 중입니다 — 잠시 뒤 다시 옮겨 주세요(아무것도 바뀌지 않았습니다)';
+  end;
+end $$;
+revoke all on function public._taam_round_manrec_relock(text) from public, anon, authenticated;
+
 -- 날짜·시간 바꾸기 — 앱의 유일한 길. 잠금 순서: 정원 잠금(tkcap_) → 그 회차의 좌석 행 → 회차 행 (검토 C3 — 결제 확정이 티켓 → 회차 순이라 엇갈리지 않는다)
+--   7차(RV2-APP-3 · ROUND_MOVE_CAP) p_opts.total_pax = 같은 수정에서 바꾸는 총 좌석 — 날짜와 **한 문장**으로 바꾼다. 종전엔 날짜만 먼저 커밋하고(옛 정원)
+--   앱이 정원을 따로 저장해, 날짜를 옮기며 정원을 줄인 매진 회차가 옛 정원으로 잠깐 풀려 커밋 때 회원 전원에게 「취소표가 나왔습니다」가 나간 뒤 다시
+--   매진됐다(그 자리는 없었다). 한 문장이면 지연 취소표 트리거가 커밋 때 끝 상태(새 정원)로 판정한다. 정원을 늘리는 수정도 같은 문장 — 풀림이 이동 커밋에서 정해진다.
 create or replace function public.taam_round_reschedule(p_round text, p_date text, p_time text,
                                                         p_expect_date text, p_expect_time text, p_opts jsonb default '{}'::jsonb)
 returns jsonb language plpgsql volatile security definer set search_path = public as $$
 declare
   v_today date := (now() at time zone 'Asia/Seoul')::date;
-  v_tp record; v_nd date; v_nt text; v_id bigint; v_log jsonb;
+  v_tp record; v_nd date; v_nt text; v_id bigint; v_log jsonb; v_cap int;
 begin
   if not public._taam_fee_caller_ok() then raise exception 'FORBIDDEN' using errcode = '42501'; end if;
   v_nd := public._taam_pu_visit_date(p_date); v_nt := public._taam_hhmm(p_time);
@@ -928,16 +968,25 @@ begin
     return jsonb_build_object('ok', false, 'error', 'BAD_DATE');
   end if;
   if btrim(coalesce(p_time, '')) <> '' and v_nt is null then return jsonb_build_object('ok', false, 'error', 'BAD_TIME'); end if;
+  -- ROUND_MOVE_CAP 새 총 좌석(있을 때만 · JSON 숫자 1~99999 정수)
+  if p_opts is not null and p_opts ? 'total_pax' and jsonb_typeof(p_opts->'total_pax') <> 'null' then
+    if jsonb_typeof(p_opts->'total_pax') <> 'number' or coalesce(p_opts->>'total_pax', '') !~ '^[0-9]{1,5}$' then
+      return jsonb_build_object('ok', false, 'error', 'BAD_TOTAL_PAX');
+    end if;
+    v_cap := (p_opts->>'total_pax')::int;
+    if v_cap <= 0 then return jsonb_build_object('ok', false, 'error', 'BAD_TOTAL_PAX'); end if;
+  end if;
   if v_nd < v_today then return jsonb_build_object('ok', false, 'error', 'NEW_DATE_PAST'); end if;
   -- MANREC_LOCK_ORDER · 캘린더 수동 기록의 잠금 순서(기록 줄 → 매장·날짜 열쇠 → 정원 잠금) — 20261117_manual_record_seats.sql 의 도우미가 있을 때만
   if to_regprocedure('public._taam_manrec_move_lock(text,date,jsonb)') is not null then
     perform public._taam_manrec_move_lock(p_round, v_nd, p_opts);
-    -- 6차(RV-SRV-2 · MANREC_RELOCK) 기록도 옮길 때는 한 번 더 부른다 — 첫 부름의 기록 줄 잠금(FOR UPDATE)은 날짜 열쇠를 잡기 **전**에 보아서,
-    --   열쇠를 쥔 다른 거래가 그 날짜에 넣거나 옮겨 와 그 뒤 커밋한 기록은 못 잡는다. 그 기록을 다른 세션이 고치면(줄 잠금 → 우리가 쥔 날짜 열쇠를
-    --   기다림) 우리가 뒤에서 그 줄을 기다려 교착(40P01)이 났고, 우리가 희생되면 날짜 바꾸기 전체가 실패했다. 열쇠를 쥔 지금은 그 날짜에 새 기록이
-    --   못 들어오니 다시 부르면 늦게 온 줄까지 정원 잠금 **전**에 잠근다(날짜 열쇠는 다시 잡아도 그대로 — 거래 잠금은 겹쳐 잡힌다).
+    -- 6차(RV-SRV-2 · MANREC_RELOCK) 기록도 옮길 때는 기록 줄을 한 번 더 잠근다 — 첫 부름의 기록 줄 잠금(FOR UPDATE)은 날짜 열쇠를 잡기 **전**에 보아서,
+    --   열쇠를 쥔 다른 거래가 그 날짜에 넣거나 옮겨 와 그 뒤 커밋한 기록은 못 잡는다(옮길 때 그 줄을 기다리다 교착).
+    --   7차(RV2-SRV-1) 6차 판은 이 두 번째 잠금을 **기다리는** FOR UPDATE 로 했다 — 그 늦은 기록을 다른 세션이 먼저 잠그고 우리가 쥔 날짜 열쇠를 기다리면
+    --   (줄 → 열쇠) 우리는 열쇠를 쥔 채 그 줄을 기다려(열쇠 → 줄) 교착이 그대로 남았다(좁아졌을 뿐 — 새 날짜 열쇠를 기다리는 사이가 넓다).
+    --   이제 기다리지 않는다(_taam_round_manrec_relock · NOWAIT) — 잠긴 줄이 있으면 바로 ROUND_MOVE_BUSY(55P03)로 끝나고 앱이 「잠시 뒤 다시」를 보인다.
     if coalesce(p_opts->>'move_manual', '') = 'true' then
-      perform public._taam_manrec_move_lock(p_round, v_nd, p_opts);
+      perform public._taam_round_manrec_relock(p_round);
     end if;
   end if;
   perform pg_advisory_xact_lock(hashtext('tkcap_' || p_round));
@@ -957,9 +1006,16 @@ begin
   perform set_config('taam.round_move_note', left(coalesce(p_opts->>'note', ''), 300), true);
   perform set_config('taam.round_move_manual', case when coalesce(p_opts->>'move_manual', '') = 'true' then '1' else '' end, true);
   perform set_config('taam.round_move_last', '', true);
-  update public.ticket_products tp
-     set date = to_char(v_nd, 'YYYY.MM.DD'), time = coalesce(v_nt, public._taam_hhmm(tp.time), tp.time), updated_at = now()
-   where tp.id::text = p_round;
+  if v_cap is null then
+    update public.ticket_products tp
+       set date = to_char(v_nd, 'YYYY.MM.DD'), time = coalesce(v_nt, public._taam_hhmm(tp.time), tp.time), updated_at = now()
+     where tp.id::text = p_round;
+  else
+    -- ROUND_MOVE_CAP 정원도 같은 문장 — 매진 재계산(trg_taam_tp_status_recalc · 이동 트리거의 다시 세기)이 새 정원으로 세고, 지연 취소표 판정도 끝 상태로
+    update public.ticket_products tp
+       set date = to_char(v_nd, 'YYYY.MM.DD'), time = coalesce(v_nt, public._taam_hhmm(tp.time), tp.time), total_pax = v_cap, updated_at = now()
+     where tp.id::text = p_round;
+  end if;
   perform set_config('taam.round_move_via', '', true);
   perform set_config('taam.round_move_note', '', true);
   perform set_config('taam.round_move_manual', '', true);
@@ -970,7 +1026,7 @@ begin
   --   자리가 남은 채 다시 매진으로 덮었다(켬이면 회원은 「취소표」 알림을 받고도 못 산다)
   return jsonb_build_object('ok', true, 'changed', true, 'move_id', v_id, 'move', v_log,
                             'round', (select jsonb_build_object('date', to_char(v_nd, 'YYYY.MM.DD'), 'time', coalesce(v_nt, v_tp.time),
-                                                                'status', tp.status, 'auto_soldout', tp.auto_soldout)
+                                                                'status', tp.status, 'auto_soldout', tp.auto_soldout, 'total_pax', tp.total_pax)
                                         from public.ticket_products tp where tp.id::text = p_round));
 end $$;
 revoke all on function public.taam_round_reschedule(text, text, text, text, text, jsonb) from public, anon;
@@ -1262,4 +1318,12 @@ union all
 select '⑪ 6차 — 날짜를 옮기면 매진을 다시 센다(ROUND_MOVE_RECOUNT · 좌석 행 없는 회차) · 기록도 옮길 때 늦게 온 기록 줄까지 잠근다(MANREC_RELOCK)',
        case when position('ROUND_MOVE_RECOUNT' in coalesce((select p.prosrc from pg_proc p where p.oid = to_regprocedure('public.taam_tp_round_move()')), '')) > 0
              and position('MANREC_RELOCK' in coalesce((select p.prosrc from pg_proc p where p.oid = to_regprocedure('public.taam_round_reschedule(text,text,text,text,text,jsonb)')), '')) > 0
+            then '✅' else '❌' end
+union all
+select '⑫ 7차 — 두 번째 기록 줄 잠금은 기다리지 않는다(MANREC_RELOCK_NOWAIT → ROUND_MOVE_BUSY) · 정원도 날짜와 한 문장(ROUND_MOVE_CAP) · 도우미 비로그인·회원 실행 불가',
+       case when position('MANREC_RELOCK_NOWAIT' in coalesce((select p.prosrc from pg_proc p where p.oid = to_regprocedure('public._taam_round_manrec_relock(text)')), '')) > 0
+             and position('_taam_round_manrec_relock' in coalesce((select p.prosrc from pg_proc p where p.oid = to_regprocedure('public.taam_round_reschedule(text,text,text,text,text,jsonb)')), '')) > 0
+             and position('ROUND_MOVE_CAP' in coalesce((select p.prosrc from pg_proc p where p.oid = to_regprocedure('public.taam_round_reschedule(text,text,text,text,text,jsonb)')), '')) > 0
+             and not has_function_privilege('anon', 'public._taam_round_manrec_relock(text)', 'execute')
+             and not has_function_privilege('authenticated', 'public._taam_round_manrec_relock(text)', 'execute')
             then '✅' else '❌' end;

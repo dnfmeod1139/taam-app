@@ -101,7 +101,8 @@ ok "옛 가드: 형제 행 이동이 TIME_CONFLICT" 1 "$(echo "$o" | grep -c TIM
 echo "── 2. 마이그레이션"
 out=$($P -f $MIG 2>&1); echo "$out" | grep -E "❌|ERROR" | head -5
 ok "확인 표 ❌ 는 ③④ 둘뿐(이 픽스처엔 리마인드 함수가 없다 — 12절에서 따로 본다)" "2|2" "$(echo "$out" | grep -c '❌')|$(echo "$out" | grep -c '^[③④].*❌')"
-ok "확인 표 ✅ 7줄(①②⑤⑥⑦⑩⑪)" 7 "$(echo "$out" | grep -c '✅')"
+ok "확인 표 ✅ 8줄(①②⑤⑥⑦⑩⑪⑫)" 8 "$(echo "$out" | grep -c '✅')"
+ok "  ⑫ 7차(MANREC_RELOCK_NOWAIT · ROUND_MOVE_CAP · 도우미 회원 실행 불가) ✅" 1 "$(echo "$out" | grep -c '^⑫.*✅')"
 ok "가드 패치 표시" 1 "$($P -c "select count(*) from pg_proc where proname='taam_guard_purchase_unique' and prosrc like '%ROUND_MOVE_20261116%'")"
 seed
 
@@ -661,10 +662,21 @@ begin
 end $f$;
 SQL
 o=$(su "select public.taam_round_reschedule('RS7','2029.02.17',null,'2029.02.10','18:00','{\"move_manual\":true}')")
-ok "  (마) 기록도 옮기면 도우미를 두 번(6차 MANREC_RELOCK — 열쇠를 쥔 뒤 늦게 온 기록 줄까지) · 회차·새 날짜·옵션 그대로 · 두 번 다 정원 잠금 전" "2|RS7|2029-02-17|true|false" "$($P -c "select count(*)||'|'||max(round)||'|'||max(nd)||'|'||bool_and((opts->>'move_manual')::boolean)||'|'||bool_or(tkcap_held) from public._t_mrlock")"
+# 7차(RV2-SRV-1) 두 번째 기록 줄 잠금은 도우미를 다시 부르지 않고 기다리지 않는 잠금(_taam_round_manrec_relock · NOWAIT)으로 — 도우미는 한 번
+ok "  (마) 기록도 옮기면 도우미 한 번 + 기다리지 않는 두 번째 줄 잠금(7차 MANREC_RELOCK_NOWAIT) · 회차·새 날짜·옵션 그대로 · 정원 잠금 전" "1|RS7|2029-02-17|true|false|1" "$($P -c "select count(*)||'|'||max(round)||'|'||max(nd)||'|'||bool_and((opts->>'move_manual')::boolean)||'|'||bool_or(tkcap_held) from public._t_mrlock")|$($P -c "select (position('_taam_round_manrec_relock' in prosrc) > 0)::int from pg_proc where oid = to_regprocedure('public.taam_round_reschedule(text,text,text,text,text,jsonb)')")"
 ok "  (마) 옮긴 뒤: 회차·좌석·기록 2029.02.17" "2029.02.17|2029.02.17 18:00|2029-02-17" "$($P -c "select date from public.ticket_products where id='RS7'")|$(dt $S7A)|$($P -c "select ymd from public.daegwan_manual where venue_id='$RF' and name='오프라인02'")"
+# (마2) 7차 RV2-SRV-1 — 옮길 기록 줄을 다른 세션이 잠그고 있으면 기다리지 않고 바로 ROUND_MOVE_BUSY(55P03) · 아무것도 안 바뀜
+#   (종전 6차 판은 그 줄을 기다렸다 — 기다리는 상대가 우리가 쥔 날짜 열쇠를 기다리면 교착)
+( $Q -c "begin; select 1 from public.daegwan_manual where venue_id='$RF' and name='오프라인02' for update; select pg_sleep(2.5); commit;" >/dev/null 2>&1 ) &
+BH=$!; sleep 0.4
+t0=$(date +%s%N)
+o=$($Q -v VERBOSITY=verbose -c "begin; set local taam.uid='$SU'; set local role authenticated; select public.taam_round_reschedule('RS7','2029.02.20',null,'2029.02.17','18:00','{\"move_manual\":true}'); commit;" 2>&1)
+t1=$(date +%s%N); wait $BH
+ok "  (마2) 옮길 기록 줄이 잠겨 있으면 바로 ROUND_MOVE_BUSY(55P03 · 1초 안 · 교착 검사 없이) · 회차·좌석·기록 2029.02.17 그대로" \
+   "1|1|0|2029.02.17|2029.02.17 18:00|2029-02-17" \
+   "$(echo "$o" | grep -c '55P03: ROUND_MOVE_BUSY')|$([ $(( (t1 - t0) / 1000000 )) -lt 900 ] && echo 1 || echo "느림 $(( (t1 - t0) / 1000000 ))ms")|$(echo "$o" | grep -c deadlock)|$($P -c "select date from public.ticket_products where id='RS7'")|$(dt $S7A)|$($P -c "select ymd from public.daegwan_manual where venue_id='$RF' and name='오프라인02'")"
 o=$(su "select public.taam_round_reschedule('RS2','2028.12.24',null,'2028.12.17','18:00','{}')")
-ok "  (마) 기록을 안 옮기면 도우미 한 번(날짜 열쇠만)" "3|false" "$($P -c "select count(*)||'|'||coalesce((select (opts->>'move_manual') is not null from public._t_mrlock order by at desc limit 1)::text,'-') from public._t_mrlock")"
+ok "  (마) 기록을 안 옮기면 도우미 한 번(날짜 열쇠만)" "2|false" "$($P -c "select count(*)||'|'||coalesce((select (opts->>'move_manual') is not null from public._t_mrlock order by at desc limit 1)::text,'-') from public._t_mrlock")"
 $P -c "drop function public._taam_manrec_move_lock(text,date,jsonb); drop table public._t_mrlock" >/dev/null
 # (사) 6차(RV-SRV-1 · ROUND_MOVE_RECOUNT) 20261117 의 _taam_round_soldout_sync 가 있으면 날짜를 옮긴 뒤 그 회차를 다시 센다 — 좌석 행이 없는 회차(기록만으로 매진)도 풀리게
 $P <<'SQL' >/dev/null
@@ -691,6 +703,28 @@ ok "  (바) 기록 옮기기 오류 → 이동 실패 · 회차·좌석·기록 
 o=$(su "select public.taam_round_reschedule('RS7','2029.02.24',null,'2029.02.17','18:00','{}')")
 ok "  (바) 기록을 안 옮기는 이동은 그대로 된다(기록 트리거를 안 건드림)" "2029.02.24|2029-02-17" "$($P -c "select date from public.ticket_products where id='RS7'")|$($P -c "select ymd from public.daegwan_manual where venue_id='$RF' and name='오프라인02'")"
 $P -c "drop trigger trg_zz_mr_boom on public.daegwan_manual; drop function public._t_mr_boom()" >/dev/null
+# (아) 7차 RV2-APP-3 · ROUND_MOVE_CAP — p_opts.total_pax 는 날짜와 한 문장(정원을 같이 바꾸는 수정이 옛 정원으로 잠깐 풀리지 않게)
+S8A=f6000000-0000-4000-8000-000000000008; S8B=f6000000-0000-4000-8000-000000000009
+$P <<SQL >/dev/null
+set session_replication_role = replica;
+insert into public.ticket_products(id,rest_id,rest_name,date,time,status,total_pax,auto_soldout) values ('RS8','$RF','다섯째집','2029.03.10','18:00','soldout',4,true);
+insert into public.tickets(id,user_id,restaurant_id,restaurant_name,ticket_product_id,reservation_date,visit_time,party_size,price,status,purchase_id,extra_data) values
+ ('$S8A','$M5','$RF','다섯째집','RS8','2029.03.10','18:00',2,100,'active','PAYH-S8A','{}'),('$S8B','$M6','$RF','다섯째집','RS8','2029.03.10','18:00',2,100,'active','PAYH-S8B','{}');
+set session_replication_role = origin;
+SQL
+r8(){ $P -c "select date||'|'||total_pax||'|'||status||'|'||auto_soldout::text from public.ticket_products where id='RS8'"; }
+for bad in '0' '-1' '100000' '"abc"' '2.5' '"4 "'; do
+  o=$(su "select public.taam_round_reschedule('RS8','2029.03.17',null,'2029.03.10','18:00','{\"total_pax\":$bad}')" | grep '^{')
+  ok "  (아) total_pax $bad → BAD_TOTAL_PAX · 그대로" "false|BAD_TOTAL_PAX|2029.03.10|4|soldout|true" "$(sj "$o" "(j->>'ok')||'|'||(j->>'error')")|$(r8)"
+done
+o=$(su "select public.taam_round_reschedule('RS8','2029.03.17',null,'2029.03.10','18:00','{\"total_pax\":null}')" | grep '^{')
+ok "  (아) total_pax null → 정원 그대로 · 날짜만" "true|4|2029.03.17|4|soldout|true" "$(sj "$o" "(j->>'ok')||'|'||(j->'round'->>'total_pax')")|$(r8)"
+o=$(su "select public.taam_round_reschedule('RS8','2029.03.24',null,'2029.03.17','18:00','{\"total_pax\":6}')" | grep '^{')
+ok "  (아) 정원 4→6 을 날짜와 한 문장 → 응답 round active · 정원 6 · 서버 active(자동 매진이 새 정원으로 풀림)" "active|6|2029.03.24|6|active|true" "$(sj "$o" "(j->'round'->>'status')||'|'||(j->'round'->>'total_pax')")|$(r8)"
+o=$(su "select public.taam_round_reschedule('RS8','2029.03.31',null,'2029.03.24','18:00','{\"total_pax\":3}')" | grep '^{')
+ok "  (아) 정원 6→3(좌석 4) 을 날짜와 한 문장 → 응답 round soldout · 정원 3 · 서버 매진(자동)" "soldout|3|2029.03.31|3|soldout|true" "$(sj "$o" "(j->'round'->>'status')||'|'||(j->'round'->>'total_pax')")|$(r8)"
+o=$(su "select public.taam_round_reschedule('RS8','2029.04.07',null,'2029.03.31','18:00','{}')" | grep '^{')
+ok "  (아) total_pax 없음 → 정원 그대로 · 좌석 행도 새 날짜로" "3|2029.04.07|3|soldout|true|2029.04.07 18:00" "$(sj "$o" "j->'round'->>'total_pax'")|$(r8)|$(dt $S8A)"
 
 echo "── 27. 리마인드 중복 방지에 방문일 (t_rda = 라이브 52d0603a · b42fdace 재현)"
 if psql $H -d postgres -Atc "select 1 from pg_database where datname='t_rda'" | grep -q 1; then
