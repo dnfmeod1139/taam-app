@@ -9032,6 +9032,273 @@ async function pxRevoke(id){
 }
 window.pxOpen = pxOpen; window.pxClose = pxClose; window.pxMemberSearch = pxMemberSearch; window.pxMemberPick = pxMemberPick; window.pxMemberClear = pxMemberClear;
 window.pxGrant = pxGrant; window.pxRevoke = pxRevoke; window.pxListLoad = pxListLoad; window._pxPreview = _pxPreview; window._px = _px;
+// ════════════════════════════════════════════════════════════════
+// 🪑 잔여 좌석 한눈에 (슈퍼어드민 · 2026-11-16)
+//   「티켓 중에 잔여좌석 남아있는 걸 한 번에 정리해서 · 날짜와 시간 보기 편하게」.
+//   방문일이 안 지난 회차 중 자리가 남은 것을 날짜순으로 — 월 머리 → 날짜(요일 · D-N) → 시각(점심/저녁) · 매장 · 잔여/정원 ·
+//   고정석이면 1·2·4인석별 잔여 · 자유석이면 지금 예약 가능한 인원(좌석 엔진 _tseAvailableSizes 그대로).
+//   좌석 수는 서버 매진 판정과 같은 식 — 취소(cancelled)가 아닌 행의 인원 합(결제 중 홀드도 자리를 차지한다 · 따로 표시).
+//   「복사」는 카톡에 붙이기 좋은 글로. 줄을 누르면 티켓 캘린더 그 날짜.
+//   읽기만 한다 — 판매 상태·좌석을 바꾸지 않는다.
+// ════════════════════════════════════════════════════════════════
+var _sl = { period: 'all', state: 'onsale', slot: 'all', min: 1, q: '', rows: null, err: '', seq: 0, at: 0, loading: false };
+function _slWd(y, m, d){ return ['일','월','화','수','목','금','토'][new Date(y, m - 1, d).getDay()]; }
+function _slHm(t){
+  var m = String(t || '').match(/(\d{1,2})\s*:\s*(\d{2})/);
+  return m ? (('0' + m[1]).slice(-2) + ':' + m[2]) : '';
+}
+// 서버 시간대 판정(taam_time_slot)과 같다 — 16:00 전 점심 · 16:00 부터 저녁 · 모르면 빈 값
+function _slSlot(hm){ var h = parseInt(String(hm || '').split(':')[0], 10); return isNaN(h) ? '' : (h < 16 ? '점심' : '저녁'); }
+// 회차의 지금 판매 모습 — 목록 칩·필터가 같이 쓴다
+function _slStateOf(t, remain){
+  var st = String(t.status || '');
+  if (st === 'hidden') return { k: 'hidden', label: '숨김 · 연계 대기', c: '#9A6B12', bg: '#FFF6E8' };
+  var sk = (typeof _tuSaleKind === 'function') ? _tuSaleKind(t) : 'open';
+  if (sk === 'draft') return { k: 'draft', label: '미공개 보관', c: '#6b6b6b', bg: '#f1efea' };
+  if (sk === 'sched') return { k: 'sched', label: '오픈 예약 ' + (typeof _tuFmtOpenAt === 'function' ? _tuFmtOpenAt(t.saleOpenAt) : ''), c: '#3E5C76', bg: '#EEF3F8' };
+  if (st === 'soldout') return { k: 'locked', label: '매진 표시 · 자리 있음', c: '#9B1C1C', bg: '#FDF0F0' };
+  return { k: 'onsale', label: '판매중', c: '#1E7A46', bg: '#EAF6EF' };
+}
+function slOpen(){
+  if (typeof _isSuperAdmin === 'function' && !_isSuperAdmin()) { showToast('🔒', '슈퍼어드민 전용', '잔여 좌석은 슈퍼어드민만 봅니다'); return; }
+  var old = document.getElementById('slPopup'); if (old) old.remove();
+  var el = document.createElement('div');
+  el.id = 'slPopup';
+  el.setAttribute('data-lang-lock', 'ko');
+  el.style.cssText = 'position:fixed;inset:0;z-index:9200;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;';
+  el.innerHTML =
+    '<div id="slBox" style="background:#fff;border-radius:18px;width:100%;max-width:640px;max-height:92vh;display:flex;flex-direction:column;box-sizing:border-box;font-family:var(--font-main);overflow:hidden;">'
+    + '<div style="padding:18px 18px 10px;border-bottom:1px solid #f0ede7;">'
+    +   '<div style="display:flex;align-items:center;gap:8px;"><div style="font-size:16px;font-weight:800;color:#1a1a18;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🪑 잔여 좌석 한눈에</div>'
+    +     '<button type="button" onclick="slLoad(true)" aria-label="새로고침" title="새로고침" style="border:1px solid #e0ddd8;background:#fff;border-radius:9px;font-size:16px;font-weight:800;color:#555;cursor:pointer;padding:3px 9px;line-height:1.3;font-family:inherit;">↻</button>'
+    +     '<button type="button" onclick="slCopy()" style="border:1px solid #1a1a18;background:#1a1a18;border-radius:9px;font-size:12px;font-weight:800;color:#fff;cursor:pointer;padding:6px 11px;font-family:inherit;">📋 복사</button>'
+    +     '<button type="button" onclick="slClose()" aria-label="닫기" style="border:none;background:none;font-size:20px;color:#999;cursor:pointer;padding:2px 6px;">×</button></div>'
+    +   '<div style="font-size:10.5px;color:#9a9486;line-height:1.55;margin:3px 0 9px;">방문일이 안 지난 회차 중 자리가 남은 것 · 날짜순 · 잔여 = 정원 − 예약 인원(결제 중 홀드 포함) · 줄을 누르면 티켓 캘린더</div>'
+    +   '<div id="slFilters"></div>'
+    + '</div>'
+    + '<div id="slSum" style="padding:9px 18px;font-size:12px;font-weight:800;color:#1a1a18;background:#faf8f4;border-bottom:1px solid #f0ede7;">불러오는 중…</div>'
+    + '<div id="slList" style="flex:1;overflow:auto;overflow-x:hidden;padding:0 0 14px;"></div>'
+    + '</div>';
+  // 바깥을 누르고 뗐을 때만 닫는다(목록을 끌다 바깥에서 놓아도 안 닫히게)
+  var _down = null;
+  el.addEventListener('pointerdown', function(ev){ _down = ev.target; });
+  el.addEventListener('click', function(ev){ if (ev.target === el && _down === el) slClose(); });
+  document.body.appendChild(el);
+  _slFiltersPaint();
+  slLoad(false);
+}
+function slClose(){
+  _sl.seq++;
+  var el = document.getElementById('slPopup'); if (el) el.remove();
+  if (typeof _acPopupClosed === 'function') _acPopupClosed();
+}
+function _slFiltersPaint(){
+  var box = document.getElementById('slFilters'); if (!box) return;
+  var chip = function(on){ return 'flex:0 0 auto;padding:5px 9px;border-radius:8px;border:1.5px solid ' + (on ? '#1a1a18' : '#e0ddd8') + ';background:' + (on ? '#1a1a18' : '#fff') + ';color:' + (on ? '#fff' : '#666') + ';font-family:inherit;font-size:11px;font-weight:800;cursor:pointer;white-space:nowrap;'; };
+  // 한 줄씩 — 넘치면 옆으로 밀어 본다(휴대폰에서 목록 칸을 넓게)
+  var grp = function(key, items){
+    return '<div style="display:flex;gap:5px;flex-wrap:nowrap;overflow-x:auto;margin-bottom:5px;scrollbar-width:none;-webkit-overflow-scrolling:touch;">' + items.map(function(x){
+      return '<button type="button" onclick="slSet(\'' + key + '\',\'' + x[0] + '\')" style="' + chip(String(_sl[key]) === String(x[0])) + '">' + x[1] + '</button>';
+    }).join('') + '</div>';
+  };
+  box.innerHTML =
+      grp('period', [['all', '전체 기간'], ['7', '7일 안'], ['30', '30일 안'], ['this', '이번 달'], ['next', '다음 달']])
+    + grp('state', [['onsale', '판매중만'], ['all', '비공개·오픈 예약·숨김 포함']])
+    + '<div style="display:flex;gap:10px;">'
+    +   '<div style="flex:0 0 auto;">' + grp('slot', [['all', '점심·저녁'], ['점심', '점심'], ['저녁', '저녁']]) + '</div>'
+    +   '<div style="flex:1;min-width:0;">' + grp('min', [['1', '1석+'], ['2', '2석+'], ['4', '4석+']]) + '</div>'
+    + '</div>'
+    + '<input id="slQ" type="search" placeholder="매장 이름으로 찾기" value="' + _raEsc(_sl.q) + '" oninput="slSetQ(this.value)" '
+    +   'style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #e0dcd4;border-radius:9px;font-size:13px;font-family:inherit;">';
+}
+function slSet(k, v){ _sl[k] = (k === 'min') ? (parseInt(v, 10) || 1) : v; _slFiltersPaint(); slRender(); }
+function slSetQ(v){ _sl.q = String(v || ''); slRender(); }
+// 좌석 행을 회차별로 센다 — 서버 매진 판정(sync_ticket_soldout · taam_ticket_sold_slots)과 같이 cancelled 만 뺀다
+async function slLoad(force){
+  var my = ++_sl.seq;
+  _sl.loading = true; _sl.err = '';
+  var sum = document.getElementById('slSum'); if (sum) sum.textContent = '불러오는 중…';
+  try { if (force && typeof taamSyncNow === 'function') await taamSyncNow(true); } catch(_){}
+  if (my !== _sl.seq) return;
+  var list = (typeof ticketDB !== 'undefined' && Array.isArray(ticketDB) ? ticketDB : []).filter(function(t){
+    var st = String(t.status || '');
+    if (st === 'pending' || st === 'deleteRequest') return false;
+    if (typeof _isTicketExpired === 'function' && _isTicketExpired(t)) return false;
+    return !!(typeof _tkYMD === 'function' && _tkYMD(t));
+  });
+  var ids = list.map(function(t){ return String(t.id); });
+  var agg = {}, failed = false;
+  for (var i = 0; i < ids.length && !failed; i += 150) {
+    var part = ids.slice(i, i + 150);
+    try {
+      var r = await window.sb.from('tickets').select('ticket_product_id, party_size, purchase_id, status').in('ticket_product_id', part).limit(5000);
+      if (r.error || !r.data) { failed = true; _sl.err = (r.error && r.error.message) || '읽기 실패'; break; }
+      r.data.forEach(function(row){
+        if (String(row.status || '') === 'cancelled') return;
+        var k = String(row.ticket_product_id || ''); if (!k) return;
+        var a = agg[k] || (agg[k] = { used: 0, hold: 0, n1: 0, n2: 0, n4: 0, solo: 0 });
+        var pax = parseInt(row.party_size, 10) || 0;
+        a.used += pax;
+        if (pax === 1) { a.n1++; a.solo++; } else if (pax === 2) a.n2++; else if (pax === 4) a.n4++;
+        if (String(row.status || '').toLowerCase() === 'hold' && /^PAY/.test(String(row.purchase_id || ''))) a.hold += pax;
+      });
+    } catch (e) { failed = true; _sl.err = String(e && e.message || e); }
+  }
+  if (my !== _sl.seq) return;
+  _sl.loading = false;
+  if (failed) { _sl.rows = null; slRender(); return; }
+  var rows = [], noCap = 0;
+  list.forEach(function(t){
+    var cap = parseInt(t.totalPax || t.assignedPax, 10) || 0;
+    if (cap <= 0) { noCap++; return; }
+    var a = agg[String(t.id)] || { used: 0, hold: 0, n1: 0, n2: 0, n4: 0, solo: 0 };
+    var remain = Math.max(0, cap - a.used);
+    var v = _tkYMD(t), hm = _slHm(t.time);
+    var detail = '', sizes = null;
+    var sl = t.slots || null;
+    if (sl && sl.mode === 'flex') {
+      sizes = (typeof _tseAvailableSizes === 'function') ? _tseAvailableSizes(t, remain, a.solo) : null;
+      if (sizes && sizes.length) detail = '예약 가능 ' + sizes.join('·') + '명';
+      else if (remain > 0 && sizes) detail = '남은 자리로 팀을 받을 수 없음(자유석 규칙)';
+    } else if (sl && ((parseInt(sl.s1, 10) || 0) + (parseInt(sl.s2, 10) || 0) + (parseInt(sl.s4, 10) || 0)) > 0) {
+      var fx = [];
+      [[1, sl.s1, a.n1], [2, sl.s2, a.n2], [4, sl.s4, a.n4]].forEach(function(x){
+        var tot = parseInt(x[1], 10) || 0; if (tot <= 0) return;
+        fx.push(x[0] + '인석 ' + Math.max(0, tot - x[2]));
+      });
+      detail = fx.join(' · ');
+    }
+    rows.push({ t: t, id: String(t.id), y: v.y, m: v.m, d: v.d, key: v.y * 10000 + v.m * 100 + v.d, hm: hm, slot: _slSlot(hm),
+                rest: _slRestName(t), cap: cap, used: a.used, hold: a.hold, remain: remain, detail: detail,
+                sizes: sizes, st: _slStateOf(t, remain), pkg: (typeof _pkOf === 'function' && _pkOf(t)) ? _pkOf(t).title : '' });
+  });
+  rows.sort(function(x, y){ return (x.key - y.key) || String(x.hm).localeCompare(String(y.hm)) || x.rest.localeCompare(y.rest); });
+  _sl.rows = rows; _sl.noCap = noCap; _sl.at = Date.now();
+  slRender();
+}
+function _slRestName(t){
+  try {
+    var r = (typeof restaurantDB !== 'undefined' && Array.isArray(restaurantDB)) ? restaurantDB.find(function(x){ return String(x.id) === String(t.restId); }) : null;
+    return String((r && r.name) || t.rest || t.restName || '');
+  } catch(_){ return String(t.rest || ''); }
+}
+function _slToday(){ var k = new Date(Date.now() + 9 * 3600 * 1000); return { y: k.getUTCFullYear(), m: k.getUTCMonth() + 1, d: k.getUTCDate() }; }
+function _slDaysTo(y, m, d){
+  var t = _slToday();
+  return Math.round((Date.UTC(y, m - 1, d) - Date.UTC(t.y, t.m - 1, t.d)) / 86400000);
+}
+function _slFiltered(){
+  var t = _slToday(), q = _sl.q.trim().toLowerCase();
+  var nm = t.m === 12 ? { y: t.y + 1, m: 1 } : { y: t.y, m: t.m + 1 };
+  return (_sl.rows || []).filter(function(r){
+    if (r.remain < _sl.min) return false;
+    if (_sl.state === 'onsale' && r.st.k !== 'onsale') return false;
+    if (_sl.slot !== 'all' && r.slot !== _sl.slot) return false;
+    if (q && r.rest.toLowerCase().indexOf(q) < 0) return false;
+    var dd = _slDaysTo(r.y, r.m, r.d);
+    if (_sl.period === '7' && dd > 7) return false;
+    if (_sl.period === '30' && dd > 30) return false;
+    if (_sl.period === 'this' && !(r.y === t.y && r.m === t.m)) return false;
+    if (_sl.period === 'next' && !(r.y === nm.y && r.m === nm.m)) return false;
+    return true;
+  });
+}
+function slRender(){
+  var box = document.getElementById('slList'), sum = document.getElementById('slSum'); if (!box || !sum) return;
+  if (_sl.loading && !_sl.rows) { box.innerHTML = ''; return; }
+  if (_sl.err) {
+    sum.innerHTML = '<span style="color:#9B1C1C;">⚠ 좌석을 읽지 못했습니다 — 숫자를 셀 수 없습니다</span>';
+    box.innerHTML = '<div style="padding:24px 18px;font-size:12px;color:#9B1C1C;">' + _raEsc(String(_sl.err).slice(0, 160)) + '<br><br>↻ 를 눌러 다시 시도해 주세요.</div>';
+    return;
+  }
+  var rows = _slFiltered();
+  var seats = 0; rows.forEach(function(r){ seats += r.remain; });
+  var holdN = rows.reduce(function(s, r){ return s + (r.hold > 0 ? 1 : 0); }, 0);
+  sum.innerHTML = '회차 ' + rows.length + '개 · 잔여 합계 ' + seats + '석'
+    + (holdN ? ' <span style="color:#B45309;font-weight:700;">· 결제 중 홀드가 있는 회차 ' + holdN + '개(풀리면 늘어남)</span>' : '')
+    + (_sl.noCap ? ' <span style="color:#a8a29a;font-weight:600;">· 정원 미설정 ' + _sl.noCap + '개 제외</span>' : '');
+  if (!rows.length) {
+    box.innerHTML = '<div style="padding:34px 18px;text-align:center;font-size:13px;color:#a8a29a;">조건에 맞는 잔여 좌석이 없습니다</div>';
+    return;
+  }
+  var html = '', lastMonth = '', lastDay = 0;
+  // 월 머리글 합계를 먼저 센다
+  var mon = {};
+  rows.forEach(function(r){ var k = r.y + '-' + r.m; var o = mon[k] || (mon[k] = { n: 0, s: 0 }); o.n++; o.s += r.remain; });
+  rows.forEach(function(r){
+    var mk = r.y + '-' + r.m;
+    if (mk !== lastMonth) {
+      lastMonth = mk; lastDay = 0;
+      html += '<div style="position:sticky;top:0;z-index:2;background:#1a1a18;color:#fff;padding:8px 18px;font-size:12.5px;font-weight:800;display:flex;justify-content:space-between;">'
+        + '<span>' + r.y + '년 ' + r.m + '월</span><span style="font-weight:700;opacity:.8;">회차 ' + mon[mk].n + ' · 잔여 ' + mon[mk].s + '석</span></div>';
+    }
+    if (r.key !== lastDay) {
+      lastDay = r.key;
+      var dd = _slDaysTo(r.y, r.m, r.d), wd = _slWd(r.y, r.m, r.d);
+      var wc = wd === '일' ? '#C0392B' : (wd === '토' ? '#2E5E9C' : '#1a1a18');
+      html += '<div style="padding:12px 18px 4px;display:flex;align-items:baseline;gap:8px;border-top:1px solid #f0ede7;">'
+        + '<span style="font-size:15px;font-weight:800;color:#1a1a18;">' + r.m + '월 ' + r.d + '일 <span style="color:' + wc + ';">(' + wd + ')</span></span>'
+        + '<span style="font-size:11px;font-weight:800;color:' + (dd <= 7 ? '#B45309' : '#a8a29a') + ';">' + (dd === 0 ? '오늘' : (dd === 1 ? '내일' : 'D-' + dd)) + '</span></div>';
+    }
+    var pct = r.cap > 0 ? Math.round(r.remain / r.cap * 100) : 0;
+    html += '<div class="sl-row" data-sl-id="' + _raEsc(r.id) + '" onclick="slGo(this.getAttribute(\'data-sl-id\'))" '
+      + 'style="display:flex;align-items:center;gap:12px;padding:9px 18px;cursor:pointer;">'
+      +   '<div style="width:52px;flex:0 0 52px;text-align:center;">'
+      +     '<div style="font-size:15px;font-weight:800;color:#1a1a18;font-variant-numeric:tabular-nums;">' + (r.hm || '—') + '</div>'
+      +     (r.slot ? '<div style="font-size:10px;font-weight:800;color:' + (r.slot === '점심' ? '#B7791F' : '#3E5C76') + ';">' + r.slot + '</div>' : '')
+      +   '</div>'
+      +   '<div style="flex:1;min-width:0;">'
+      +     '<div style="font-size:13.5px;font-weight:800;color:#1a1a18;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + _raEsc(r.rest || '(매장 이름 없음)') + '</div>'
+      +     '<div style="font-size:11px;color:#8a8580;line-height:1.5;margin-top:1px;">'
+      +       (r.detail ? _raEsc(r.detail) + ' · ' : '') + '예약 ' + r.used + '/' + r.cap + '명'
+      +       (r.hold > 0 ? ' <span style="color:#B45309;font-weight:800;">· ⏳ 결제 중 ' + r.hold + '석</span>' : '')
+      +     '</div>'
+      +     '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:3px;">'
+      +       '<span style="font-size:9.5px;font-weight:800;color:' + r.st.c + ';background:' + r.st.bg + ';border-radius:4px;padding:2px 6px;">' + _raEsc(r.st.label) + '</span>'
+      +       (r.pkg ? '<span style="font-size:9.5px;font-weight:800;color:#8A6A28;background:#F7F0E2;border-radius:4px;padding:2px 6px;">📦 ' + _raEsc(r.pkg) + '</span>' : '')
+      +     '</div>'
+      +     '<div style="height:3px;background:#f0ede7;border-radius:2px;margin-top:5px;overflow:hidden;"><div style="height:100%;width:' + pct + '%;background:' + (r.remain <= 2 ? '#C0392B' : '#1E7A46') + ';"></div></div>'
+      +   '</div>'
+      +   '<div style="flex:0 0 auto;text-align:right;">'
+      +     '<div style="font-size:20px;font-weight:900;color:' + (r.remain <= 2 ? '#C0392B' : '#1E7A46') + ';line-height:1;font-variant-numeric:tabular-nums;">' + r.remain + '<span style="font-size:11px;font-weight:800;">석</span></div>'
+      +     '<div style="font-size:10px;color:#a8a29a;font-weight:700;margin-top:2px;">정원 ' + r.cap + '</div>'
+      +   '</div>'
+      + '</div>';
+  });
+  box.innerHTML = html;
+}
+// 카톡에 붙이기 좋은 글 — 월 머리 · 「12/15(월) 18:00 미타니 3석 (2인석 1)」
+function slCopy(){
+  if (!_sl.rows) { showToast('ⓘ', '아직 불러오는 중입니다', '잠시 뒤 다시 눌러 주세요'); return; }
+  var rows = _slFiltered();
+  if (!rows.length) { showToast('ⓘ', '복사할 회차가 없습니다', '조건을 바꿔 보세요'); return; }
+  var t = _slToday(), out = ['TAAM 잔여 좌석 (' + t.m + '/' + t.d + ' 기준)'], lastMonth = '';
+  rows.forEach(function(r){
+    var mk = r.y + '-' + r.m;
+    if (mk !== lastMonth) { lastMonth = mk; out.push(''); out.push('■ ' + r.y + '년 ' + r.m + '월'); }
+    out.push(r.m + '/' + r.d + '(' + _slWd(r.y, r.m, r.d) + ') ' + (r.hm || '') + ' ' + r.rest + ' ' + r.remain + '석' + (r.detail ? ' (' + r.detail + ')' : ''));
+  });
+  var txt = out.join('\n');
+  var done = function(){ showToast('✓', '복사했습니다', '회차 ' + rows.length + '개 — 카톡 등에 붙여 넣으세요'); };
+  var legacy = function(){
+    try {
+      var ta = document.createElement('textarea'); ta.value = txt; ta.style.position = 'fixed'; ta.style.left = '-9999px';
+      document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); done();
+    } catch (e) { showToast('⚠', '복사하지 못했습니다', String(e && e.message || e).slice(0, 80)); }
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(done, legacy);
+  else legacy();
+}
+// 줄을 누르면 티켓 캘린더 그 날짜
+function slGo(id){
+  var r = (_sl.rows || []).find(function(x){ return x.id === String(id); }); if (!r) return;
+  slClose();
+  window._tcalFocusNext = { y: r.y, m: r.m, d: r.d };
+  if (typeof openSubPage === 'function') openSubPage('ticketCalScreen');
+}
+window.slOpen = slOpen; window.slClose = slClose; window.slSet = slSet; window.slSetQ = slSetQ; window.slLoad = slLoad;
+window.slCopy = slCopy; window.slGo = slGo; window.slRender = slRender; window._sl = _sl;
+
 function tsrOpen(){
   if (typeof _isSuperAdmin === 'function' && !_isSuperAdmin()) { showToast('🔒', '슈퍼어드민 전용', '판매 현황은 슈퍼어드민만 봅니다'); return; }
   var old = document.getElementById('tsrPopup'); if (old) old.remove();
@@ -14307,6 +14574,10 @@ window.closePromoCarousel = function(){
       </div>
       <div class="admin-menu-item" onclick="openSubPage('ticketCalScreen')">
         <div><div class="admin-menu-text" data-i18n="admin.ticket_calendar">티켓 캘린더</div></div>
+        <div class="admin-arrow">›</div>
+      </div>
+      <div class="admin-menu-item" onclick="slOpen()" data-lang-lock="ko">
+        <div><div class="admin-menu-text">🪑 잔여 좌석 한눈에</div><div class="admin-menu-sub">자리가 남은 회차만 날짜순 — 요일 · 시각(점심/저녁) · 잔여/정원 · 고정석·예약 가능 인원 · 복사</div></div>
         <div class="admin-arrow">›</div>
       </div>
       <div class="admin-menu-item" onclick="openSubPage('ticketHistoryScreen')">
@@ -43520,7 +43791,7 @@ var _acExiting = false, _acEnsuring = false;
 var _acNavUntil = 0;
 function _acNavHold(ms){ _acNavUntil = Date.now() + (ms || 700); }
 // 콘솔 위에 뜨는 어드민 팝업들 — 하나라도 떠 있으면 _acEnsureConsole 이 탭을 다시 세우지 않는다(2026-10-30 · 팝업 닫기 전수 점검)
-var AC_OVERLAY_IDS = ['prvPopup','prvMemberPopup','vnPopup','tsrPopup','pmxPopup','pkgAdminPopup','pxPopup','plAttachPopup','tkSaleMgr',
+var AC_OVERLAY_IDS = ['prvPopup','prvMemberPopup','vnPopup','tsrPopup','slPopup','pmxPopup','pkgAdminPopup','pxPopup','plAttachPopup','tkSaleMgr',
   'membershipUntilMgmtModal','adminDepositGrantModal','ticketAccessMgmtModal','fxSettingsPopup','cardFeePopup','feeDuePopup',
   'popAdmin','popHistory','payLinkPopup','paSheet','cpfModal','resetConfirmPopup','adminPwdModal','memberPwdModal',
   '__logoutConfirmPopup','tuPkgFailPopup','tuPkgPickPopup'];
@@ -49899,7 +50170,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.11.15-c';
+var TAAM_WEB_BUILD = '2026.11.16-a';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
