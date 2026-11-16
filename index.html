@@ -20774,6 +20774,7 @@ async function loadDeposit(){
           if(type === 'visit_reminder') return '방문 리마인드';   // 🆕 2026-09-29
           if(type === 'ticket_restock') return '취소표';          // 🆕 2026-09-29
           if(type === 'card_auto_canceled') return _cfT('kind', '카드 결제 취소');   // 🆕 2026-11-15
+          if(type === 'ticket_date_changed') return '일정 변경';   // 🆕 2026-11-16 회차 날짜·시간 이동
           return '알림';
         }
         // 🆕 2026.07: 토스트를 손으로 탭해야만 읽음(seen) 처리.
@@ -20788,7 +20789,7 @@ async function loadDeposit(){
             // 🆕 2026.09.15 미접속 중 쌓인 서버 알림도 현재 언어로 (목록과 같은 정규화)
             try { cleanTitle = _notifL10nTitle(cleanTitle); cleanBody = _notifL10nBody(cleanBody); } catch(_l10){}
             // 🆕 2026-10-27 방문 리마인드: 매장이 쓴 문구의 기호(①·→·★·☎)를 지우지 않는다 · 영어·일본어면 서버가 만든 그 언어 문구(payload.i18n)
-            var _vp = ((n.type === 'visit_reminder' || n.type === 'card_auto_canceled') && typeof _vrPick === 'function') ? _vrPick(n) : null;   // 🆕 2026-11-15 카드 자동 취소도 서버 세 벌
+            var _vp = ((n.type === 'visit_reminder' || n.type === 'card_auto_canceled' || n.type === 'ticket_date_changed') && typeof _vrPick === 'function') ? _vrPick(n) : null;   // 🆕 2026-11-15 카드 자동 취소도 서버 세 벌
             if (_vp) { cleanTitle = _vp.title; cleanBody = _vp.body; }
             if (typeof showToast === 'function') showToast(headerLabel, cleanTitle, cleanBody, {
               onTap: (function(_id){ return function(){ _notifMarkSeen(_id); }; })(n.id),
@@ -50389,7 +50390,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.11.16-b';
+var TAAM_WEB_BUILD = '2026.11.16-c';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -52064,6 +52065,183 @@ setTimeout(function(){ try { _riCardResumeUnresolved(true); } catch(_e){} }, 900
   } catch(_e){}
 })();
 
+// ════════════════════════════════════════════════════════════════
+// 🆕 2026-11-16 회차 날짜·시간을 바꾸면 팔린 예약·초대·정산 좌석도 같이 옮긴다 (운영 결정 「같이 옮긴다」 · 20261116_round_move_sync.sql)
+//   슈퍼어드민의 회차 수정에서 날짜나 시간이 바뀌면 저장 **전에** 서버 미리보기(taam_round_move_preview)를 보여 주고,
+//   확인하면 taam_round_reschedule 로 회차 날짜·시간과 예약을 한 트랜잭션에 옮긴 뒤 나머지 칸을 저장한다.
+//   서버는 앱이 직접 보낸 저장으로는 「옮길 예약이 있는 회차」의 날짜를 못 바꾸게 막는다(ROUND_RESCHEDULE_REQUIRED — 낡은 화면이 옛 날짜로 되돌리던 길).
+//   서버 함수가 없으면(옛 서버) 종전대로 저장만 한다.
+// ════════════════════════════════════════════════════════════════
+var _rmBusy = false, _rmCheckedFor = null;
+function _rmHm(v){ var m = String(v || '').match(/(\d{1,2})\s*:\s*(\d{2})/); return m ? (('0' + m[1]).slice(-2) + ':' + m[2]) : ''; }
+function _rmChanged(o, p){
+  if(!o || !p) return false;
+  var od = (typeof _tkFullDate === 'function') ? _tkFullDate(o) : o.date, nd = (typeof _tkFullDate === 'function') ? _tkFullDate(p) : p.date;
+  var nt = _rmHm(p.time);
+  return String(od || '') !== String(nd || '') || (!!nt && _rmHm(o.time) !== nt);
+}
+function _rmDt(d, t){
+  var p = String(d || '').split('.');
+  if(p.length < 3) return String(d || '') + (t ? ' ' + t : '');
+  var y = +p[0], m = +p[1], dd = +p[2];
+  var wd = ['일','월','화','수','목','금','토'][new Date(y, m - 1, dd).getDay()];
+  return y + '.' + m + '.' + dd + '(' + wd + ')' + (t ? ' ' + _rmHm(t) : '');
+}
+function _rmEsc(s){ return (typeof _raEsc === 'function') ? _raEsc(s) : String(s == null ? '' : s).replace(/[&<>"']/g, ''); }
+var _RM_OWNER = { member: '회원 예약', invite_hold: '초대 대기 좌석', manual: '수동 좌석', guest_link: '비회원 결제 링크', ksk: '정산 좌석', ops: '운영 좌석' };
+var _RM_KEEP = { visited: '방문 처리됨', past_round: '지난 회차', date_diverged: '회차와 다른 날짜로 적힌 행', time_individual: '따로 바꾼 시간' };
+// 확인 시트 — 옮겨 갈 것 · 남길 것 · 겹침 · 환불 규정 · 경고 · 알림/수동 기록 선택. Promise<{notify, manual}|null>
+function _rmAsk(d){
+  return new Promise(function(done){
+    var old = document.getElementById('rmPopup'); if(old) old.remove();
+    var rows = d.rows || [], mv = rows.filter(function(r){ return r.action === 'move' || r.action === 'event'; }), kp = rows.filter(function(r){ return r.action === 'keep'; });
+    var by = {}; mv.forEach(function(r){ var k = r.kind === 'ticket' ? (r.owner || 'member') : r.kind; by[k] = (by[k] || 0) + 1; });
+    var pax = mv.filter(function(r){ return r.kind === 'ticket'; }).reduce(function(s, r){ return s + (parseInt(r.pax, 10) || 0); }, 0);
+    var mvLines = Object.keys(by).map(function(k){
+      var lab = _RM_OWNER[k] || (k === 'invite' ? '초대장' : (k === 'event' ? '정산 회차' : k));
+      return lab + ' ' + by[k] + '건';
+    }).join(' · ');
+    var names = mv.filter(function(r){ return r.kind === 'ticket' && r.name; }).map(function(r){ return r.name + (r.pax ? ' ' + r.pax + '명' : ''); });
+    var kpBy = {}; kp.forEach(function(r){ kpBy[r.reason] = (kpBy[r.reason] || 0) + 1; });
+    var kpTxt = Object.keys(kpBy).map(function(k){ return (_RM_KEEP[k] || k) + ' ' + kpBy[k] + '건'; }).join(' · ');
+    var tk = mv.filter(function(r){ return r.time_kept; });
+    var conf = (d.conflicts || []).map(function(c){
+      var o = c.other || {};
+      return (c.kind === 'repurchase' ? '재구매 제한 ' + (o.days || '') + '일 — ' : '같은 날 같은 시간대 — ')
+        + (c.name || c.pid || '') + ' · 다른 예약 ' + [o.rest || '', _rmDt(o.date, o.time)].filter(Boolean).join(' ');
+    });
+    var W = { new_date_past: '새 날짜가 지난 날입니다(연도 확인)', old_date_past: '옛 날짜가 이미 지난 회차라 예약은 옮기지 않습니다', deadline_after_visit: '예약 마감이 새 방문일보다 늦습니다 — 마감을 확인하세요',
+              open_after_visit: '등급별 우선 공개 시각이 새 방문일보다 늦습니다', sale_open_after_visit: '판매 오픈 예약 시각이 새 방문일보다 늦습니다', package: '📦 패키지에 연계된 회차입니다 — 다른 회차와 겹치는지 확인하세요' };
+    var warn = (d.warnings || []).map(function(w){ return W[w] || w; });
+    var man = d.manual || [];
+    var el = document.createElement('div');
+    el.id = 'rmPopup'; el.setAttribute('data-lang-lock', 'ko');
+    el.style.cssText = 'position:fixed;inset:0;z-index:9800;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;';
+    var li = function(t, c){ return '<div style="font-size:12px;line-height:1.65;color:' + (c || '#444') + ';margin-top:4px;">' + t + '</div>'; };
+    el.innerHTML = '<div style="background:#fff;border-radius:18px;width:100%;max-width:420px;max-height:88vh;overflow:auto;padding:20px 18px;box-sizing:border-box;font-family:var(--font-main);">'
+      + '<div style="font-size:16px;font-weight:800;color:#1a1a18;">📅 예약도 같이 옮길까요?</div>'
+      + '<div style="font-size:12.5px;font-weight:700;color:#1a1a18;margin-top:8px;background:#f7f5f2;border-radius:10px;padding:10px 12px;">' + _rmEsc(d.rest || '') + '<br>'
+      +   '<span style="color:#9a9486;">' + _rmEsc(_rmDt(d.cur && d.cur.date, d.cur && d.cur.time)) + '</span> → <b>' + _rmEsc(_rmDt(d['new'] && d['new'].date, d['new'] && d['new'].time)) + '</b></div>'
+      + li('<b>같이 옮겨 갑니다</b> — ' + _rmEsc(mvLines || '없음') + (pax ? ' · ' + pax + '명' : ''))
+      + (names.length ? li(_rmEsc(names.slice(0, 12).join(', ') + (names.length > 12 ? ' 외 ' + (names.length - 12) + '명' : '')), '#8a8580') : '')
+      + (tk.length ? li('따로 바꾼 시간 ' + tk.length + '건은 날짜만 옮기고 시간은 그대로', '#8a8580') : '')
+      + (kpTxt ? li('그대로 두는 것 — ' + _rmEsc(kpTxt), '#8a8580') : '')
+      + (conf.length ? li('<b>⚠ 옮기면 겹치는 예약</b><br>' + conf.map(_rmEsc).join('<br>') + '<br><span style="color:#8a8580;">막지 않고 옮깁니다 — 회원에게 연락해 정리해 주세요</span>', '#B45309') : '')
+      + ((d.refund && (d.refund.gain || d.refund.loss)) ? li('환불 규정(방문 31일 전까지)이 바뀌는 예약 — ' + (d.refund.loss ? '환불 불가 구간으로 들어감 ' + d.refund.loss + '건 ' : '') + (d.refund.gain ? '다시 환불 가능 ' + d.refund.gain + '건' : ''), '#9B1C1C') : '')
+      + (warn.length ? li('⚠ ' + warn.map(_rmEsc).join('<br>⚠ '), '#9B1C1C') : '')
+      + (d.exceptions ? li('구매 규정 예외 ' + d.exceptions + '건의 기한도 새 방문일 끝으로 옮깁니다', '#8a8580') : '')
+      + '<label style="display:flex;gap:8px;align-items:flex-start;margin-top:12px;font-size:12.5px;font-weight:700;color:#1a1a18;cursor:pointer;">'
+      +   '<input type="checkbox" id="rmNotify" checked style="margin-top:2px;"> 🔔 회원에게 알림 보내기 <span style="font-weight:500;color:#8a8580;">(알림함 + 푸시 · 한국어·영어·일본어)</span></label>'
+      + (man.length ? '<label style="display:flex;gap:8px;align-items:flex-start;margin-top:8px;font-size:12.5px;font-weight:700;color:#1a1a18;cursor:pointer;">'
+      +   '<input type="checkbox" id="rmManual"' + (d.manual_movable ? ' checked' : ' disabled') + ' style="margin-top:2px;"> 캘린더 수동 기록 ' + man.length + '건도 같은 날로 옮기기'
+      +   (d.manual_movable ? '' : ' <span style="font-weight:500;color:#B45309;">(그날 이 매장 회차가 더 있어 못 옮김)</span>') + '</label>' : '')
+      + '<div style="display:flex;gap:8px;margin-top:16px;">'
+      +   '<button type="button" id="rmNo" style="flex:1;padding:12px;border-radius:11px;border:1px solid #ddd8ce;background:#fff;font-family:inherit;font-size:13px;font-weight:800;color:#666;cursor:pointer;">취소</button>'
+      +   '<button type="button" id="rmYes" style="flex:1.4;padding:12px;border-radius:11px;border:none;background:#1a1a18;font-family:inherit;font-size:13px;font-weight:800;color:#fff;cursor:pointer;">옮기고 저장</button>'
+      + '</div></div>';
+    document.body.appendChild(el);
+    var fin = function(v){ var e2 = document.getElementById('rmPopup'); if(e2) e2.remove(); done(v); };
+    document.getElementById('rmNo').onclick = function(){ fin(null); };
+    document.getElementById('rmYes').onclick = function(){
+      var mEl = document.getElementById('rmManual');
+      fin({ notify: !!(document.getElementById('rmNotify') || {}).checked, manual: !!(mEl && mEl.checked && !mEl.disabled) });
+    };
+  });
+}
+// 날짜가 바뀐 수정 저장의 첫 걸음 — 미리보기 → 확인 → 옮기기 → finalUploadTicket 로 나머지 칸 저장
+async function _rmFlow(id){
+  if(_rmBusy) return;
+  _rmBusy = true;
+  var p = _pendingTicket, pass = function(){ _rmCheckedFor = p; if(String(_tuEditId) === id && _pendingTicket === p) finalUploadTicket(); };
+  try {
+    var nd = (typeof _tkFullDate === 'function') ? _tkFullDate(p) : p.date, nt = _rmHm(p.time) || null;
+    var pv = await window.sb.rpc('taam_round_move_preview', { p_round: id, p_date: nd, p_time: nt });
+    if(pv.error){
+      if(/Could not find the function|PGRST202|does not exist/i.test(String(pv.error.message || '') + ' ' + String(pv.error.code || ''))){ pass(); return; }   // 옛 서버 — 종전대로
+      showToast('⚠', '예약 확인 실패', '회차의 예약을 확인하지 못해 저장하지 않았습니다 — 잠시 뒤 다시 · ' + String(pv.error.message || '').slice(0, 60));
+      return;
+    }
+    var d = pv.data || {};
+    if(!d.ok){ showToast('⚠', '저장하지 않았습니다', d.error === 'BAD_DATE' ? '날짜를 읽을 수 없습니다(연도 포함 YYYY.MM.DD)' : String(d.error || '')); return; }
+    var mv = (d.rows || []).filter(function(r){ return r.action === 'move' || r.action === 'event'; });
+    if(!mv.length){ pass(); return; }   // 옮길 예약 없음 — 종전 저장
+    var a = await _rmAsk(d);
+    if(!a) return;
+    if(String(_tuEditId) !== id || _pendingTicket !== p){ showToast('ⓘ', '화면이 바뀌어 저장하지 않았습니다', ''); return; }
+    var r = await window.sb.rpc('taam_round_reschedule', { p_round: id, p_date: nd, p_time: nt,
+      p_expect_date: d.cur && d.cur.date, p_expect_time: d.cur && d.cur.time, p_opts: { move_manual: !!a.manual } });
+    if(r.error){ showToast('⚠', '옮기지 못했습니다', '아무것도 바뀌지 않았습니다 · ' + String(r.error.message || '').slice(0, 70)); return; }
+    var x = r.data || {};
+    if(!x.ok){
+      var em = { STALE_ROUND: '다른 기기에서 이 회차 날짜가 바뀌었습니다 — 최신 값을 다시 읽었습니다. 화면을 닫고 다시 열어 주세요',
+                 NEW_DATE_PAST: '새 날짜가 지난 날입니다', BAD_DATE: '날짜를 읽을 수 없습니다', BAD_TIME: '시간을 읽을 수 없습니다', ROUND_NOT_FOUND: '회차를 찾지 못했습니다' }[x.error] || String(x.error || '');
+      showToast('⚠', '옮기지 않았습니다', em);
+      if(x.error === 'STALE_ROUND' && typeof _tkRefreshFromServer === 'function') try { await _tkRefreshFromServer([id], { quiet: true }); } catch(_rf){}
+      return;
+    }
+    // 회차 날짜는 서버에서 이미 바뀌었다 — 로컬 원본도 맞춰 다음 판정이 다시 옮기지 않게
+    var o = ticketDB.find(function(t){ return String(t.id) === id; });
+    if(o){ o.date = p.date; o.dateYear = p.dateYear; if(nt) o.time = p.time; }
+    window._rmPending = { id: id, res: x, notify: !!a.notify };
+    pass();
+  } catch(e){
+    showToast('⚠', '옮기지 못했습니다', String(e && e.message || e).slice(0, 80));
+  } finally { _rmBusy = false; }
+}
+// 저장이 끝난 뒤 — 결과 · 알림 · 화면 새로고침
+function _rmAfterSave(svP, pend){
+  Promise.resolve(svP).catch(function(){}).then(async function(){
+    var nres = null;
+    if(pend.notify && pend.res && pend.res.move_id){
+      try { var nr = await window.sb.rpc('taam_round_move_notify', { p_move_id: pend.res.move_id }); nres = nr.error ? { error: nr.error.message } : nr.data; }
+      catch(e){ nres = { error: String(e && e.message || e) }; }
+    }
+    try { if(typeof _tkRefreshFromServer === 'function') await _tkRefreshFromServer([pend.id], { quiet: true }); } catch(_r){}
+    try { if(typeof taamSyncNow === 'function') taamSyncNow(true); } catch(_s){}
+    try { if(typeof _tcalScreenVisible === 'function' && _tcalScreenVisible()){ if(typeof tcalLoadInvites === 'function') await tcalLoadInvites(); if(typeof tcalLoadPurchases === 'function') await tcalLoadPurchases({ keep: true }); } } catch(_c){}
+    _rmResult(pend.id, pend.res && pend.res.move, nres, !!pend.notify);
+  });
+}
+// 결과 창 — 옮긴 것 · 못 옮긴 것(다시 맞추기) · 겹침 · 알림 결과 · 직접 연락할 손님
+function _rmResult(roundId, mv, nres, notified){
+  var old = document.getElementById('rmResPopup'); if(old) old.remove();
+  if(!mv){ showToast('✓', '회차 날짜를 바꿨습니다', '옮길 예약은 없었습니다'); return; }
+  var moved = mv.moved || [], errs = mv.errors || [], conf = mv.conflicts || [];
+  var nT = moved.filter(function(m){ return m.kind === 'ticket'; }).length, nI = moved.filter(function(m){ return m.kind === 'invite'; }).length, nE = moved.filter(function(m){ return m.kind === 'event'; }).length;
+  var el = document.createElement('div');
+  el.id = 'rmResPopup'; el.setAttribute('data-lang-lock', 'ko');
+  el.style.cssText = 'position:fixed;inset:0;z-index:9800;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;';
+  var li = function(t, c){ return '<div style="font-size:12px;line-height:1.65;color:' + (c || '#444') + ';margin-top:5px;">' + t + '</div>'; };
+  var mc = (nres && nres.manual_contact) || [];
+  el.innerHTML = '<div style="background:#fff;border-radius:18px;width:100%;max-width:420px;max-height:88vh;overflow:auto;padding:20px 18px;box-sizing:border-box;font-family:var(--font-main);">'
+    + '<div style="font-size:16px;font-weight:800;color:#1a1a18;">' + (errs.length ? '⚠ 일부를 옮기지 못했습니다' : '✓ 예약을 새 날짜로 옮겼습니다') + '</div>'
+    + li(_rmEsc((mv.rest_name || '') + ' · ' + _rmDt(mv.old_date, mv.old_time) + ' → ' + _rmDt(mv.new_date, mv.new_time)), '#1a1a18')
+    + li('좌석 ' + nT + '건 · 초대장 ' + nI + '건' + (nE ? ' · 정산 회차 ' + nE + '건' : '') + ((mv.side && mv.side.manual && mv.side.manual.length) ? ' · 수동 기록 ' + mv.side.manual.length + '건' : ''))
+    + (errs.length ? li('<b>못 옮긴 것 ' + errs.length + '건</b> — ' + errs.map(function(e){ return _rmEsc((e.pid || e.kind) + ' · ' + (e.code === 'busy' ? '결제·취소 진행 중' : (e.msg || e.code))); }).join('<br>')
+        + '<br><button type="button" onclick="_rmResync(\'' + _rmEsc(String(roundId).replace(/[^0-9A-Za-z_.:-]/g, '')) + '\')" style="margin-top:6px;padding:8px 12px;border-radius:9px;border:1px solid #1a1a18;background:#1a1a18;color:#fff;font-family:inherit;font-size:12px;font-weight:800;cursor:pointer;">🔄 다시 맞추기</button>', '#9B1C1C') : '')
+    + (conf.length ? li('<b>⚠ 겹치는 예약 ' + conf.length + '건</b> — 막지 않고 옮겼습니다. 회원에게 연락해 주세요<br>' + conf.map(function(c){ var o = c.other || {};
+        return _rmEsc((c.kind === 'repurchase' ? '재구매 제한 · ' : '같은 시간대 · ') + (c.pid || '') + ' ↔ ' + [o.rest || '', o.pid || '', _rmDt(o.date, o.time)].filter(Boolean).join(' ')); }).join('<br>'), '#B45309') : '')
+    + (notified ? (nres && !nres.error
+        ? li('🔔 회원 알림 ' + ((nres.sent || []).length) + '명' + (nres.already ? ' (이미 보냄)' : ''), '#1E7A46')
+        : li('⚠ 회원 알림을 보내지 못했습니다 — ' + _rmEsc(nres && nres.error || ''), '#9B1C1C')) : li('회원 알림은 보내지 않았습니다', '#8a8580'))
+    + (mc.length ? li('<b>직접 연락할 손님(수동·비회원 결제 링크)</b><br>' + mc.map(function(m){ return _rmEsc((m.buyer || m.pid || '') + (m.phone ? ' · ' + m.phone : ' · 번호 없음')); }).join('<br>'), '#1a1a18') : '')
+    + '<button type="button" onclick="var e=document.getElementById(\'rmResPopup\');if(e)e.remove();" style="width:100%;margin-top:16px;padding:12px;border-radius:11px;border:none;background:#1a1a18;font-family:inherit;font-size:13px;font-weight:800;color:#fff;cursor:pointer;">확인</button>'
+    + '</div>';
+  document.body.appendChild(el);
+}
+async function _rmResync(id){
+  try {
+    var r = await window.sb.rpc('taam_round_move_resync', { p_round: String(id) });
+    if(r.error){ showToast('⚠', '다시 맞추기 실패', String(r.error.message || '').slice(0, 80)); return; }
+    var x = r.data || {};
+    if(!x.ok){ showToast('⚠', '다시 맞추지 않았습니다', String(x.error || '')); return; }
+    if(!x.move){ showToast('✓', '이미 모두 옮겨져 있습니다', ''); var e = document.getElementById('rmResPopup'); if(e) e.remove(); return; }
+    try { if(typeof _tkRefreshFromServer === 'function') await _tkRefreshFromServer([String(id)], { quiet: true }); if(typeof taamSyncNow === 'function') taamSyncNow(true); } catch(_r){}
+    _rmResult(id, x.move, null, false);
+  } catch(e){ showToast('⚠', '다시 맞추기 실패', String(e && e.message || e).slice(0, 80)); }
+}
+window._rmResync = _rmResync; window._rmFlow = _rmFlow; window._rmResult = _rmResult;
+
 function finalUploadTicket(rsAns){
   // 🆕 2026-11-13 매진 회차의 총 좌석을 늘려 저장하면 서버가 판매중으로 되돌리고(trg_taam_tp_status_recalc) 취소표 알림이 나간다 —
   //   슈퍼어드민은 그 알림을 켬/끔으로 고른다. 끄면 저장 전에 「끔」을 걸고(못 걸어 멈추면 아무것도 안 바뀐다) 저장이 끝나면 닫는다.
@@ -52071,6 +52249,11 @@ function finalUploadTicket(rsAns){
   var _rsCap = (rsAns && typeof rsAns === 'object' && ('notify' in rsAns)) ? rsAns : null, _rsCapClosed = false;
   try {
   if(!_pendingTicket){ if(_rsCap && _rsCap.token){ _rsCapClosed = true; _rsMuteEnd(_rsCap.token); } return; }
+  // 🆕 2026-11-16 날짜·시간을 바꾼 수정 — 예약을 같이 옮기는 확인부터(정원 늘림 질문보다 먼저 · 한 저장에 한 번)
+  if(!_rsCap && _tuEditId && _rsIsSuper() && _rmCheckedFor !== _pendingTicket){
+    var _oRm = ticketDB.find(function(x){ return String(x.id) === String(_tuEditId); });
+    if(_oRm && _rmChanged(_oRm, _pendingTicket) && window.sb && typeof window.sb.rpc === 'function'){ _rmFlow(String(_tuEditId)); return; }
+  }
   if(!_rsCap && _tuEditId && _rsIsSuper()){
     var _o0 = ticketDB.find(function(x){ return String(x.id) === String(_tuEditId); });
     var _oCap = _o0 ? (parseInt(_o0.totalPax || _o0.assignedPax) || 0) : 0, _nCap = parseInt(_pendingTicket.totalPax) || 0;
@@ -52171,6 +52354,8 @@ function finalUploadTicket(rsAns){
   var _savedIds = [String(_pendingTicket.id)].concat((Array.isArray(_pendingTicketExtras) ? _pendingTicketExtras : []).map(function(c){ return String(c.id); }));
   _pendingTicketExtras = [];
   var _svT0 = Date.now(), _svP = saveTickets(_savedIds);
+  if(window._rmPending && _savedIds.indexOf(String(window._rmPending.id)) >= 0){ var _rmP = window._rmPending; window._rmPending = null; _rmAfterSave(_svP, _rmP); }   // 🆕 2026-11-16 날짜 이동 결과·알림
+  _rmCheckedFor = null;
   if(_rsCap){   // 🆕 2026-11-13 정원 늘림 — 끔이면 저장이 끝난 뒤 닫고 결과를 알린다 · 켬이면 이번에 취소표가 나갔는지
     _rsCapClosed = true;
     var _capR = _rsCap;
@@ -72875,7 +73060,25 @@ async function tuEditReview(id, approve) {
   if (!t || !t.pendingEdit) return;
   var note = approve ? '' : prompt('반려 사유(파트너에게 보입니다 · 선택):', '');
   if (!approve && note === null) return;
-  if (approve && !confirm('수정 신청을 승인합니다 — 바뀐 칸 ' + Object.keys(t.pendingEdit).length + '개가 회차에 반영되고 회원에게 바로 보입니다.')) return;
+  // 🆕 2026-11-16 날짜·시간 변경이 든 신청 — 승인하면 서버 트리거가 그 회차의 예약을 같이 옮긴다. 몇 건이 움직이는지 미리 보여 주고, 승인 뒤 결과·알림
+  var _pe = t.pendingEdit || {}, _rmLast = null, _rmNote = '';
+  if (approve && (('date' in _pe) || ('time' in _pe))) {
+    try {
+      var _nd = String(_pe.date || ((typeof _tkFullDate === 'function') ? _tkFullDate(t) : t.date) || '');
+      if (/^\d{1,2}\.\d{1,2}$/.test(_nd)) _nd = String(((typeof _tkFullDate === 'function') ? _tkFullDate(t) : '') || '').split('.')[0] + '.' + _nd;
+      var _pv = await window.sb.rpc('taam_round_move_preview', { p_round: String(id), p_date: _nd, p_time: _rmHm(_pe.time) || null });
+      if (_pv && !_pv.error && _pv.data && _pv.data.ok) {
+        var _mvN = (_pv.data.rows || []).filter(function(r){ return r.action === 'move' || r.action === 'event'; }).length;
+        var _cfN = (_pv.data.conflicts || []).length;
+        _rmNote = '\n\n📅 날짜·시간이 바뀝니다 (' + _rmDt(_pv.data.cur && _pv.data.cur.date, _pv.data.cur && _pv.data.cur.time) + ' → ' + _rmDt(_pv.data['new'] && _pv.data['new'].date, _pv.data['new'] && _pv.data['new'].time) + ')'
+          + '\n예약 ' + _mvN + '건이 같이 옮겨 갑니다' + (_cfN ? ' · ⚠ 옮기면 겹치는 예약 ' + _cfN + '건' : '') + ((_pv.data.warnings || []).indexOf('new_date_past') >= 0 ? '\n⚠ 새 날짜가 지난 날입니다 — 예약은 옮기지 않습니다' : '');
+        var _ml = await window.sb.rpc('taam_round_moves', { p_round: String(id), p_after_id: 0 });
+        var _arr = (_ml && !_ml.error && Array.isArray(_ml.data)) ? _ml.data : [];
+        _rmLast = _arr.length ? (_arr[_arr.length - 1].id || 0) : 0;
+      }
+    } catch(_pve){}
+  }
+  if (approve && !confirm('수정 신청을 승인합니다 — 바뀐 칸 ' + Object.keys(t.pendingEdit).length + '개가 회차에 반영되고 회원에게 바로 보입니다.' + _rmNote)) return;
   _tuEditReviewBusy = true;
   try {
     var _shown = (window._paShown || {})[String(id)];
@@ -72894,6 +73097,18 @@ async function tuEditReview(id, approve) {
     if (r.data && r.data.reason === 'nothing_pending') showToast('ℹ', '이미 처리됨', '이 회차의 수정 신청은 이미 처리되었거나 파트너가 거뒀습니다');
     else showToast('✓', approve ? '수정 승인' : '반려', approve ? '회차에 반영되었습니다' : '파트너에게 알렸습니다');
     try { if (typeof taamSyncNow === 'function') await taamSyncNow(true); } catch(_se){}
+    // 🆕 2026-11-16 날짜가 옮겨졌으면 결과 · 회원 알림을 묻는다
+    if (approve && _rmLast !== null) {
+      try {
+        var _ml2 = await window.sb.rpc('taam_round_moves', { p_round: String(id), p_after_id: _rmLast });
+        var _mv2 = (_ml2 && !_ml2.error && Array.isArray(_ml2.data) && _ml2.data.length) ? _ml2.data[_ml2.data.length - 1] : null;
+        if (_mv2 && (_mv2.moved || []).some(function(m){ return m.kind === 'ticket' || m.kind === 'invite'; })) {
+          var _nres = null, _ask = confirm('예약 ' + (_mv2.moved || []).length + '건을 새 날짜로 옮겼습니다.\n회원에게 알림을 보낼까요? (알림함 + 푸시 · 한국어·영어·일본어)');
+          if (_ask) { var _nr = await window.sb.rpc('taam_round_move_notify', { p_move_id: _mv2.id }); _nres = _nr.error ? { error: _nr.error.message } : _nr.data; }
+          _rmResult(String(id), _mv2, _nres, _ask);
+        } else if (_mv2) _rmResult(String(id), _mv2, null, false);
+      } catch(_me){}
+    }
   } catch(e) {
     var m = String((e && e.message) || '');
     showToast('❌', '처리 실패', /does not exist|schema cache/i.test(m) ? '서버 준비 필요(20261029_partner_grants.sql)' : m.slice(0, 80));
@@ -76054,6 +76269,7 @@ function _notifRenderMerged(serverRows){
     if(type==='ticket_open') return '🎫';
     if(type==='invite_cancelled') return '✕';
     if(type==='card_auto_canceled') return '💳';   // 🆕 2026-11-15
+    if(type==='ticket_date_changed') return '📅';   // 🆕 2026-11-16 회차 날짜 변경(서버 세 벌 문구 · _vrPick)
     return '🔔';
   }
   function _srvStrip(s){
@@ -76063,7 +76279,7 @@ function _notifRenderMerged(serverRows){
   (serverRows||[]).forEach(function(n){
     var _tt = _srvStrip(n.title) || '알림', _bd = _srvStrip(n.body||''), _vr = null;
     // 🆕 2026-10-27 방문 리마인드는 _vrPick(기호를 지우지 않고 · 영어·일본어면 그 언어 문구) · 그 밖은 영어·일본어 화면에서만 알려진 문구 규칙으로. 한국어 화면은 종전 그대로
-    if((n.type === 'visit_reminder' || n.type === 'card_auto_canceled') && typeof _vrPick === 'function') _vr = _vrPick(n);   // 🆕 2026-11-15 카드 자동 취소도
+    if((n.type === 'visit_reminder' || n.type === 'card_auto_canceled' || n.type === 'ticket_date_changed') && typeof _vrPick === 'function') _vr = _vrPick(n);   // 🆕 2026-11-15 카드 자동 취소도
     if(_vr){ _tt = _vr.title; _bd = _vr.body; }
     else if(_li){ try { _tt = _notifL10nTitle(_tt) || _tt; _bd = _notifL10nBody(_bd); } catch(_l10){} }
     items.push({
@@ -87469,6 +87685,13 @@ async function saveTicketProductToSupabase(ticket){
 
     if(res.error){
       console.warn('⚠ ticket_products 저장 실패:', ticket.id, res.error.message, res.error);
+      // 🆕 2026-11-16 이 화면의 회차 날짜·시간이 서버와 다르다(다른 기기에서 옮겼거나 옛 앱의 수정) — 서버가 예약째 되돌리는 것을 막았다.
+      //   서버 판으로 다시 맞추고 알린다. 날짜를 바꾸려면 수정 화면에서(예약을 같이 옮기는 확인을 거친다)
+      if (/ROUND_RESCHEDULE_REQUIRED/.test(String(res.error.message || ''))) {
+        if (typeof showToast === 'function') showToast('⚠', '회차 날짜가 이 화면과 다릅니다', '예약이 있는 회차라 이 저장으로는 날짜를 바꾸지 않습니다 — 서버 값으로 다시 맞췄습니다');
+        try { if (typeof _tkRefreshFromServer === 'function') await _tkRefreshFromServer([String(ticket.id)], { quiet: true }); } catch(_rr){}
+        return false;
+      }
       // 🔧 2026.08-31: RLS 거부는 사고가 아니다 — 토스트를 띄우지 않는다.
       //
       //   구매 직후 매진 판정이 t.status='soldout' 을 찍고 이 함수를 부른다.
