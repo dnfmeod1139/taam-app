@@ -9041,6 +9041,42 @@ window.pxGrant = pxGrant; window.pxRevoke = pxRevoke; window.pxListLoad = pxList
 //   「복사」는 카톡에 붙이기 좋은 글로. 줄을 누르면 티켓 캘린더 그 날짜.
 //   읽기만 한다 — 판매 상태·좌석을 바꾸지 않는다.
 // ════════════════════════════════════════════════════════════════
+// 🆕 2026-11-16 캘린더 「수동 기록」(daegwan_manual · 회차 연결 없음 · 매장·날짜만)도 좌석으로 센다 — 티켓 캘린더(_tcalDayGroups)가 그날 그 매장의
+//   「예약」에 더하는 것과 같다(스시 이코우 2027.01.29: 좌석 행 6 + 수동 기록 2 = 8/8 인데 좌석 행만 세어 「잔여 2」로 보였다).
+//   그날 그 매장 회차가 하나면 그 회차에 붙이고, 둘 이상이면 어느 회차인지 몰라 빼지 않고 amb 로 돌려준다(화면이 「확인 필요」로 적는다).
+//   rounds: 회차 목록(ticketDB 모양) · 반환 Promise<{ ok, map: {회차 id: 인원}, amb: {회차 id: 인원}, err }> — 못 읽으면 ok:false(좌석 행 숫자만 쓴다)
+function _tkManualRecMap(rounds){
+  var out = { ok: true, map: {}, amb: {}, err: '' };
+  if(!window.sb || !Array.isArray(rounds) || !rounds.length) return Promise.resolve(out);
+  var key = function(rest, y, m, d){ return String(rest) + '|' + y + '-' + ('0' + m).slice(-2) + '-' + ('0' + d).slice(-2); };
+  // 같은 매장·같은 날의 회차 수 — 화면에 보이는 회차만이 아니라 ticketDB 전체(삭제 신청·승인 대기 빼고)로 센다
+  var perDay = {};
+  (typeof ticketDB !== 'undefined' && Array.isArray(ticketDB) ? ticketDB : []).forEach(function(t){
+    var st = String(t.status || ''); if(st === 'deleteRequest' || st === 'pending') return;
+    var v = (typeof _tkYMD === 'function') ? _tkYMD(t) : null; if(!v || !t.restId) return;
+    var k = key(t.restId, v.y, v.m, v.d); (perDay[k] = perDay[k] || []).push(String(t.id));
+  });
+  var want = {}, minYmd = null;
+  rounds.forEach(function(t){
+    var v = (typeof _tkYMD === 'function') ? _tkYMD(t) : null; if(!v || !t.restId) return;
+    var k = key(t.restId, v.y, v.m, v.d); want[k] = true;
+    var ymd = k.split('|')[1]; if(!minYmd || ymd < minYmd) minYmd = ymd;
+  });
+  if(!minYmd) return Promise.resolve(out);
+  return Promise.resolve(window.sb.from('daegwan_manual').select('venue_id, ymd, pax').gte('ymd', minYmd).limit(5000)).then(function(r){
+    if(!r || r.error || !Array.isArray(r.data)){ out.ok = false; out.err = String((r && r.error && r.error.message) || 'read_fail'); return out; }
+    r.data.forEach(function(m){
+      var k = String(m.venue_id || '') + '|' + String(m.ymd || '').slice(0, 10);
+      if(!want[k]) return;
+      var pax = Math.max(0, parseInt(m.pax, 10) || 0); if(!pax) return;
+      var ids = perDay[k] || [];
+      if(ids.length === 1) out.map[ids[0]] = (out.map[ids[0]] || 0) + pax;
+      else ids.forEach(function(id){ out.amb[id] = (out.amb[id] || 0) + pax; });
+    });
+    return out;
+  }, function(e){ out.ok = false; out.err = String(e && e.message || e); return out; });
+}
+window._tkManualRecMap = _tkManualRecMap;
 var _sl = { period: 'all', state: 'onsale', slot: 'all', min: 1, q: '', rows: null, err: '', seq: 0, at: 0, loading: false };
 function _slWd(y, m, d){ return ['일','월','화','수','목','금','토'][new Date(y, m - 1, d).getDay()]; }
 function _slHm(t){
@@ -9144,15 +9180,19 @@ async function slLoad(force){
       });
     } catch (e) { failed = true; _sl.err = String(e && e.message || e); }
   }
+  var mrec = failed ? null : await _tkManualRecMap(list);   // 🆕 2026-11-16 캘린더 수동 기록
   if (my !== _sl.seq) return;
   _sl.loading = false;
   if (failed) { _sl.rows = null; slRender(); return; }
+  _sl.mrecErr = (mrec && !mrec.ok) ? (mrec.err || '읽기 실패') : '';
   var rows = [], noCap = 0;
   list.forEach(function(t){
     var cap = parseInt(t.totalPax || t.assignedPax, 10) || 0;
     if (cap <= 0) { noCap++; return; }
     var a = agg[String(t.id)] || { used: 0, hold: 0, n1: 0, n2: 0, n4: 0, solo: 0 };
-    var remain = Math.max(0, cap - a.used);
+    var man = (mrec && mrec.ok) ? (mrec.map[String(t.id)] || 0) : 0, manAmb = (mrec && mrec.ok) ? (mrec.amb[String(t.id)] || 0) : 0;
+    var used = a.used + man;
+    var remain = Math.max(0, cap - used);
     var v = _tkYMD(t), hm = _slHm(t.time);
     var detail = '', sizes = null;
     var sl = t.slots || null;
@@ -9169,7 +9209,7 @@ async function slLoad(force){
       detail = fx.join(' · ');
     }
     rows.push({ t: t, id: String(t.id), y: v.y, m: v.m, d: v.d, key: v.y * 10000 + v.m * 100 + v.d, hm: hm, slot: _slSlot(hm),
-                rest: _slRestName(t), cap: cap, used: a.used, hold: a.hold, remain: remain, detail: detail,
+                rest: _slRestName(t), cap: cap, used: used, man: man, manAmb: manAmb, hold: a.hold, remain: remain, detail: detail,
                 sizes: sizes, st: _slStateOf(t, remain), pkg: (typeof _pkOf === 'function' && _pkOf(t)) ? _pkOf(t).title : '' });
   });
   rows.sort(function(x, y){ return (x.key - y.key) || String(x.hm).localeCompare(String(y.hm)) || x.rest.localeCompare(y.rest); });
@@ -9216,7 +9256,8 @@ function slRender(){
   var holdN = rows.reduce(function(s, r){ return s + (r.hold > 0 ? 1 : 0); }, 0);
   sum.innerHTML = '회차 ' + rows.length + '개 · 잔여 합계 ' + seats + '석'
     + (holdN ? ' <span style="color:#B45309;font-weight:700;">· 결제 중 홀드가 있는 회차 ' + holdN + '개(풀리면 늘어남)</span>' : '')
-    + (_sl.noCap ? ' <span style="color:#a8a29a;font-weight:600;">· 정원 미설정 ' + _sl.noCap + '개 제외</span>' : '');
+    + (_sl.noCap ? ' <span style="color:#a8a29a;font-weight:600;">· 정원 미설정 ' + _sl.noCap + '개 제외</span>' : '')
+    + (_sl.mrecErr ? '<br><span style="color:#9B1C1C;font-weight:800;">⚠ 캘린더 수동 기록을 읽지 못해 잔여에 반영하지 못했습니다 — ↻ 새로고침</span>' : '');
   if (!rows.length) {
     box.innerHTML = '<div style="padding:34px 18px;text-align:center;font-size:13px;color:#a8a29a;">조건에 맞는 잔여 좌석이 없습니다</div>';
     return;
@@ -9251,7 +9292,9 @@ function slRender(){
       +     '<div style="font-size:13.5px;font-weight:800;color:#1a1a18;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + _raEsc(r.rest || '(매장 이름 없음)') + '</div>'
       +     '<div style="font-size:11px;color:#8a8580;line-height:1.5;margin-top:1px;">'
       +       (r.detail ? _raEsc(r.detail) + ' · ' : '') + '예약 ' + r.used + '/' + r.cap + '명'
+      +       (r.man > 0 ? ' <span style="color:#8a6d3b;font-weight:800;">(수동 기록 ' + r.man + '명 포함)</span>' : '')
       +       (r.hold > 0 ? ' <span style="color:#B45309;font-weight:800;">· ⏳ 결제 중 ' + r.hold + '석</span>' : '')
+      +       (r.manAmb > 0 ? '<br><span style="color:#9B1C1C;font-weight:800;">⚠ 그날 이 매장 회차가 여럿이라 어느 회차인지 모르는 수동 기록 ' + r.manAmb + '명 — 잔여에서 안 뺐습니다(캘린더에서 확인)</span>' : '')
       +     '</div>'
       +     '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:3px;">'
       +       '<span style="font-size:9.5px;font-weight:800;color:' + r.st.c + ';background:' + r.st.bg + ';border-radius:4px;padding:2px 6px;">' + _raEsc(r.st.label) + '</span>'
@@ -50170,7 +50213,7 @@ async function riSubmit(){
 //   그런데 지금은 어느 빌드가 떠 있는지 앱 안에서 알 방법이 없어, 매번
 //   시크릿창을 열어보고도 확신하지 못했다. 화면에 한 줄 박아둔다.
 //   ⚠ 웹은 빌드 단계가 없어(정적 배포) 자동 주입이 안 된다 — 바꿀 때 같이 올린다.
-var TAAM_WEB_BUILD = '2026.11.16-a';
+var TAAM_WEB_BUILD = '2026.11.16-e';
 
 async function openSentInvitesScreen(){
   if(_currentRole !== 'superadmin'){
@@ -53297,12 +53340,16 @@ function renderTicketList(){
 function _tuListSeatStats(list){
   if(!window.sb || !list || !list.length) return;
   var ids = list.map(function(t){ return String(t.id); });
-  window.sb.from('tickets')
+  // 🆕 2026-11-16 캘린더 수동 기록(daegwan_manual)도 같이 읽는다 — 좌석 행만 세면 「잔여」가 캘린더보다 많게 나왔다(_tkManualRecMap)
+  var _mrP = (typeof _tkManualRecMap === 'function') ? _tkManualRecMap(list) : Promise.resolve(null);
+  Promise.resolve(window.sb.from('tickets')
     .select('ticket_product_id, party_size, purchase_id, status, created_at')
     .in('ticket_product_id', ids)
-    .limit(3000)
+    .limit(3000))
+    .then(function(r){ return _mrP.then(function(mr){ r = r || {}; r._mrec = mr; return r; }); })
     .then(function(r){
       if(r.error || !r.data){ console.warn('[tkList] 좌석 집계 실패:', r.error && r.error.message); return; }
+      var _mrec = r._mrec;
       var agg = {};
       r.data.forEach(function(row){
         if(String(row.status||'')==='cancelled') return;
@@ -53323,7 +53370,8 @@ function _tuListSeatStats(list){
       list.forEach(function(t){
         var elS = document.getElementById('tkls_'+t.id); if(!elS) return;
         var a = agg[String(t.id)] || { inv:0, app:0, man:0, hold:0, holdUntil:0 };
-        var used = a.inv + a.app + a.man + (a.hold || 0);
+        var _rec = (_mrec && _mrec.ok) ? (_mrec.map[String(t.id)] || 0) : 0, _recAmb = (_mrec && _mrec.ok) ? (_mrec.amb[String(t.id)] || 0) : 0;
+        var used = a.inv + a.app + a.man + (a.hold || 0) + _rec;
         var cap = parseInt(t.totalPax || t.assignedPax) || 0;
         var parts = [], remain = null;
         if(cap > 0){
@@ -53334,6 +53382,7 @@ function _tuListSeatStats(list){
         parts.push('앱 판매 <b style="color:#1a1a18;">'+a.app+'석</b>');
         if(a.inv > 0) parts.push('초대 <b style="color:#3E5C76;">'+a.inv+'석</b>');
         if(a.man > 0) parts.push('수동 <b style="color:#8a6d3b;">'+a.man+'석</b>');
+        if(_rec > 0) parts.push('수동 기록 <b style="color:#8a6d3b;">'+_rec+'석</b>');
         if(a.hold > 0) parts.push('<b class="tkl-hold" style="color:#B45309;">⏳ 결제 중 '+a.hold+'석</b>');
         var _holdNote = '';
         if(a.hold > 0){
@@ -53344,6 +53393,8 @@ function _tuListSeatStats(list){
                 ? '매진은 회원이 결제 중인 좌석 홀드 ' + a.hold + '석 때문일 수 있습니다' : '회원이 결제 중인 좌석 홀드 ' + a.hold + '석 — 아직 구매 아님')
             + (_hu ? ' · 약 ' + _hu + ' 까지' : '') + ' · 결제 안 되면 홀드는 자동으로 풀립니다(손으로 잠근 매진은 그대로)</div>';
         }
+        if(_recAmb > 0) _holdNote += '<div style="margin-top:4px;font-size:11px;font-weight:700;color:#9B1C1C;line-height:1.5;">⚠ 그날 이 매장 회차가 여럿이라 어느 회차인지 모르는 캘린더 수동 기록 ' + _recAmb + '명 — 잔여에서 안 뺐습니다</div>';
+        if(_mrec && !_mrec.ok) _holdNote += '<div style="margin-top:4px;font-size:11px;font-weight:700;color:#9B1C1C;">⚠ 캘린더 수동 기록을 읽지 못해 잔여에 반영하지 못했습니다</div>';
         elS.innerHTML = parts.join(' · ') + _holdNote;
       });
     }, function(e){ console.warn('[tkList] 좌석 집계 예외:', e); });
