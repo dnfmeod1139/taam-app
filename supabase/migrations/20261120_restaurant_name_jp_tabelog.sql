@@ -6,8 +6,9 @@
 --   운영 지시(2026-11-20): 「타베로그랑 대조해서 맞춰」.
 -- 근거: 타베로그 주소가 등록된 196곳을 타베로그 일본어판 페이지 제목(「店名 - 駅/ジャンル [食べログ]」 · 같은 매장 번호의
 --   결과만)으로 대조 — 같음 86 · 다름 110. 다른 110곳은 앞 결과를 모르는 채 한 번 더 찾아 전부 같은 답이 나온 것만 넣었다.
---   주소가 없던 매장 3곳(鮨 陸 · 鮨むん · 食堂 aca)은 타베로그 페이지를 찾아 확인한 것.
--- 무엇: ① name_jp 113곳을 타베로그 표기 그대로(띄어쓰기 · 로마자 표기 포함)  ② name_local(현지 이름) 89곳도 같은 표기로
+--   주소가 없던 매장 3곳(鮨 陸 · 鮨むん · 食堂 aca)은 타베로그 페이지를 찾아 확인한 것. 「토리야바시」(鳥やばし)는 타베로그에 그 이름이 없어
+--   운영자에게 물어 아자부주반 「酉囃子」(トリバヤシ · 타베로그 13304401)로 확인받았다(2026-11-20).
+-- 무엇: ① name_jp 114곳을 타베로그 표기 그대로(띄어쓰기 · 로마자 표기 포함)  ② name_local(현지 이름) 90곳도 같은 표기로
 --   (name_local 이 같은 틀린 값을 담고 있었다). 다른 칸(한국어 이름 · 영문 이름 · 번역 상태)은 건드리지 않는다.
 -- 안전: **지금 값이 아래 「옛 값」 그대로인 줄만** 바꾼다 — 그 사이 어드민이 손으로 고친 이름은 덮지 않는다(④ 에 건수만).
 --   여러 번 돌려도 같다. 옛 값·새 값은 public._taam_name_fix_20261120 에 남는다(RLS 켬 · 정책 없음 — 슈퍼어드민도 앱에서는 못 읽는다).
@@ -141,7 +142,8 @@ insert into public._taam_name_fix_20261120 (id, old_jp, new_jp, old_local, new_l
   ('f9493bd2-4059-4770-8e52-a7ae2908b75a', '小俣', 'こま田', null, null),
   ('fac7b986-2a92-47e6-8ee5-53dfe89519ca', '北川', '私房菜 きた川', '北川', '私房菜 きた川'),
   ('fbf6b477-eb92-4732-bdb4-cb0e35f05ae6', '富麗華', '中国飯店 富麗華', '富麗華', '中国飯店 富麗華'),
-  ('fd0241fb-204e-4b51-a5d5-0acf64d9dbab', '宮川', 'すし宮川', null, null)
+  ('fd0241fb-204e-4b51-a5d5-0acf64d9dbab', '宮川', 'すし宮川', null, null),
+  ('f47f14a3-4364-4326-9b9d-8eadfaca6f12', '鳥やばし', '酉囃子', null, '酉囃子')
 on conflict (id) do nothing;
 
 update public.restaurants r
@@ -163,7 +165,7 @@ select '① 일본어 이름(name_jp) — 타베로그 표기가 된 매장' as 
        (select count(*) from public._taam_name_fix_20261120 f join public.restaurants r on r.id = f.id
          where f.new_jp is not null and r.name_jp = f.new_jp)::text
        || ' / ' || (select count(*) from public._taam_name_fix_20261120 where new_jp is not null)::text
-       || case when (select count(*) from public._taam_name_fix_20261120 where new_jp is not null) = 113 then ' ✅' else ' ❌ 대상 수가 다르다' end as result
+       || case when (select count(*) from public._taam_name_fix_20261120 where new_jp is not null) = 114 then ' ✅' else ' ❌ 대상 수가 다르다' end as result
 union all
 select '② 현지 이름(name_local) — 타베로그 표기가 된 매장',
        (select count(*) from public._taam_name_fix_20261120 f join public.restaurants r on r.id = f.id
