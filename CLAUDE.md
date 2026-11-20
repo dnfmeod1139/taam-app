@@ -1874,18 +1874,13 @@ Cloudflare 가 응답을 끊고 있었다(`net::ERR_FAILED 525`).
 5. 커밋/푸시는 사용자가 요청할 때. 기본 브랜치는 `main`.
 6. **사용자에게 묻는 질문은 한국어로** (2026-11-15 운영 규칙). 선택지 창(AskUserQuestion)의 질문·머리표·선택지·설명까지 전부 한국어로 쓴다. 답변·보고도 한국어.
 
-## 운영 DB 조회 승인 창 — 「읽기만 하는 조회」는 자동 통과 (2026-11-20)
+## 운영 DB 조회(`mcp__Supabase__execute_sql`)는 묻지 않고 실행된다 (2026-11-20 운영 결정)
 
-작업 에이전트가 운영 DB 의 함수 정의·트리거·정책을 읽을 때마다 승인 창이 떠서(하루 수십 번) 운영자가 「줄이던가 안 뜨게」를 요청했다.
-`.claude/settings.json` 의 PreToolUse 훅(`mcp__Supabase__execute_sql`) → `.claude/hooks/sql_readonly_gate.py` 가 아래를 **전부** 만족하는 조회만 `allow` 한다:
-문장 하나 · select/with 로 시작 · 쓰기·실행 낱말 없음 · FROM/JOIN 대상이 전부 시스템 카탈로그(pg_proc · pg_trigger · pg_policies · information_schema 구조 뷰 …) 또는 `public._taam_migrations` · 부르는 함수가 전부 허용 목록(정의 읽기 · 권한 확인 · 글자·집계).
-- **실제 표를 읽는 조회(회원·예약·원장 …) · 앱 함수 호출 · 쓰기는 훅이 아무 결정도 안 낸다** → 종전처럼 승인 창. 훅은 `allow` 만 하고 `deny` 는 안 한다 · 모르는 모양(달러 인용 · E 문자열 · 중첩 주석 · 괄호 묶음 조인)은 묻는 쪽.
-- 승인 창을 더 줄이려면: 에이전트에게 운영 정의를 **한 번 읽어 픽스처로 저장**하게 하고(`sql/_test/fx_*_live_*`) 나머지는 그 파일을 보게 한다 · 건수·분포 같은 자료 조회는 부모가 한 번에 모아서.
-- ⚠ 이 도구를 통째로 허용(`permissions.allow`)하지 말 것 — 쓰기 쿼리도 묻지 않고 나간다. 허용 범위를 넓힐 땐 스크립트의 목록을 고치고 `python3 .claude/hooks/sql_readonly_gate_test.py`(통과 25 · 묻기 44).
-- 훅은 세션 중에 넣어도 바로 돈다(넣은 지 5초 뒤 배경 에이전트의 조회에 걸리는 것을 확인). 새 세션은 기본 브랜치(main)의 `.claude/` 를 읽는다.
-- **같은 날 넓힘(운영자 「묻는 거 안 하게 해줘」)**: public 스키마의 표·뷰를 **읽는** 조회도 통과(회원·예약·원장 포함). 여전히 묻는 것 = 쓰기 · 허용 목록 밖 함수 호출(앱 RPC 는 쓸 수 있다) ·
-  public 밖 스키마(auth · vault · cron · net · storage …) · 허용 목록 밖 `pg_` 카탈로그(pg_authid · pg_settings · pg_stat_activity …). 회원 자료를 읽어도 출력·파일에 개인정보를 남기지 않는 규칙은 그대로.
-- ⚠ 훅 명령은 **절대 경로**(`/home/user/taam-app/.claude/hooks/…`)로 둔다 — `${CLAUDE_PROJECT_DIR}` 는 워크트리에서 도는 에이전트에게 그 워크트리를 가리키는데, origin/main 에서 만든 워크트리엔 이 스크립트가 없어 훅이 조용히 실패하고 창이 다시 떴다.
+작업 에이전트가 운영 DB 를 읽을 때마다 승인 창이 떴다 → 운영자가 「자동으로 다 허용」으로 결정. `.claude/settings.json` 의 `permissions.allow` 에 이 도구를 통째로 넣었다
+(같은 날 먼저 넣었던 「읽기만 통과」 훅은 워크트리 에이전트에게 안 걸려 창이 계속 떴고, 운영자 지시로 걷어냈다).
+- ⚠ **이제 쓰기 쿼리도 묻지 않고 운영 DB 에 나간다.** 운영 DB 는 여전히 **읽기 전용으로만 쓴다**(SELECT · pg_get_functiondef · 정책·권한 조회) — 데이터·스키마 변경은 언제나 `supabase/migrations/` 커밋(→ 워크플로)이나
+  운영자의 SQL Editor 로. 워크플로 에이전트에게 맡길 때도 「live read-only」를 프롬프트에 적는다. 출력·파일에 회원 개인정보를 남기지 않는 규칙도 그대로.
+- 되돌리려면 `.claude/settings.json` 의 allow 줄을 지운다.
 
 ## 다중 세션 협업 규칙 (index.html 충돌 방지) — 필수
 
