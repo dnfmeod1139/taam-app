@@ -63804,6 +63804,12 @@ function _pcalPhoto(t){
   return r.photoHero || r.photoCard || r.photo || r.img || '';
 }
 
+// 🆕 2026-11-20 장르(스시·텐푸라…)를 지금 언어로 — 'TOKYO · 20:30 · 스시' 처럼 다른 글자와 한 줄에 섞이면
+//   런타임 스윕(TX)이 통째 일치만 바꿔서 EN·JA 화면에 한글 장르가 그대로 남았다(2026-11-20 신고 화면).
+//   사전(TX_MAP 「장르」)에 없는 값은 원문 그대로 둔다.
+function _pcalGenreTx(g){
+  try { return (typeof txText === 'function') ? txText(String(g || '')) : String(g || ''); } catch(_e){ return String(g || ''); }
+}
 function _pcalRestName(t){
   var r = _pcalRest(t);
   if(r && typeof window.pickI18nField === 'function'){
@@ -64391,7 +64397,7 @@ function _pcalMonthListHtml(byDate){
 
       // 2행: 장르, 지역
       var sub = [];
-      if(t.ticketGenre) sub.push(_pcalEsc(t.ticketGenre));
+      if(t.ticketGenre) sub.push(_pcalEsc(_pcalGenreTx(t.ticketGenre)));
       if(r && (r.zoneEn || r.cityEn)) sub.push(_pcalEsc(r.zoneEn || r.cityEn));
 
       // 3행: 시간 for 인원
@@ -64528,7 +64534,7 @@ function pcalOpenDay(y, m, d){
       if(t.slots.s4 > 0) sp.push('4인×' + t.slots.s4);
       if(sp.length) bits.push(sp.join(' '));
     }
-    if(t.ticketGenre) bits.push(_pcalEsc(t.ticketGenre));
+    if(t.ticketGenre) bits.push(_pcalEsc(_pcalGenreTx(t.ticketGenre)));
 
     h += '<div class="pcal-item" onclick="pcalGoTicket(\'' + _pcalEsc(String(t.id)) + '\')">';
     h += '<div class="ph">' + (ph ? '<img src="' + _pcalEsc(ph) + '" alt="">' : '') + '</div>';
@@ -64723,7 +64729,7 @@ function _pcalDetailHtml(t, r, dead, expired){
   // 목록과 같은 순서·형식으로 — '스시, NISHIAZABU'
   //   좌석 형태(카운터석)는 여기서 빼고 세 번째 탭으로 내린다. 이름 아래 줄은 짧을수록 읽힌다.
   var metaBits = [];
-  if(t.ticketGenre) metaBits.push(_pcalEsc(t.ticketGenre));
+  if(t.ticketGenre) metaBits.push(_pcalEsc(_pcalGenreTx(t.ticketGenre)));
   if(r){
     var zone = r.zoneEn || r.cityEn || r.region || '';
     if(zone) metaBits.push(_pcalEsc(zone));
@@ -65469,7 +65475,7 @@ function _magPaintDay(y, m, d, keep){
     var bits = [];
     if(r && (r.zoneEn || r.cityEn)) bits.push(_pcalEsc(r.zoneEn || r.cityEn));
     if(tk.time) bits.push(_pcalEsc(tk.time));
-    if(tk.ticketGenre) bits.push(_pcalEsc(tk.ticketGenre));
+    if(tk.ticketGenre) bits.push(_pcalEsc(_pcalGenreTx(tk.ticketGenre)));
     var _pp = (parseInt(tk.mealFee||tk.mealAmt||0) + parseInt(tk.agencyFee||0) + parseInt(tk.wineMin||0));
     // 마감이면 가격을 지운다 — 살 수 없는 것의 값은 정보가 아니라 소음이다.
     //   대신 사진 위에 도장(SOLD OUT / CLOSED)을 찍는다. 글자 한 줄보다 명확하다.
