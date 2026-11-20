@@ -154,8 +154,16 @@ def tokens(s):
     return re.findall(r"'S'|::|" + IDENT + r"|[0-9]+(?:\.[0-9]+)?|[(),.;*=<>!+\-/|%~&\[\]:]", s)
 
 
+# 2026-11-20 운영자 「묻는 거 안 하게 해줘」 — public 스키마의 표·뷰를 **읽는** 조회도 통과시킨다.
+#   여전히 묻는 것: 쓰기 · 앱 함수 호출(허용 목록 밖 함수) · public 밖 스키마(auth · vault · cron · net · storage …)
+#   · 이름이 pg_ 로 시작하는 카탈로그 중 허용 목록 밖(pg_authid · pg_shadow · pg_stat_activity · pg_settings …).
 def rel_ok(name, cte=()):
-    return name in REL_OK or name in cte
+    if name in REL_OK or name in cte:
+        return True
+    if '.' in name:
+        sch, rel = name.split('.', 1)
+        return sch == 'public' and not rel.startswith('pg_')
+    return not name.startswith('pg_')
 
 
 def top_cte_names(tok):
@@ -304,9 +312,6 @@ def decide(query):
     if re.search(r'\b(auth|storage|vault|cron|net|realtime|pgsodium|graphql|graphql_public|supabase_functions|'
                  r'supabase_migrations|extensions|pgbouncer|pg_temp|pg_toast)\s*\.', s):
         return False
-    for mm in re.finditer(r'\bpublic\s*\.\s*([a-z_][a-z0-9_]*)', s):
-        if mm.group(1) != '_taam_migrations':
-            return False
     if not from_items_ok(tok, top_cte_names(tok)):
         return False
     return True
@@ -326,7 +331,7 @@ def main():
                 'hookSpecificOutput': {
                     'hookEventName': 'PreToolUse',
                     'permissionDecision': 'allow',
-                    'permissionDecisionReason': '정의·구조만 읽는 조회(시스템 카탈로그) — 자동 통과',
+                    'permissionDecisionReason': '읽기만 하는 조회(쓰기·앱 함수·민감 스키마 없음) — 자동 통과',
                 }
             }, ensure_ascii=False))
     except Exception:

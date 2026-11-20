@@ -30,9 +30,7 @@ ALLOW = [
  "SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'public.ticket_products'::regclass -- 제약\n",
  "select proname from pg_proc where prosrc like '%update public.profiles%'",
  "select \"proname\" as \"이름\" from pg_proc limit 3",
-]
-ASK = [
- # 실제 표를 읽는 조회 — 계속 묻는다
+ # 2026-11-20 넓힘: public 표·뷰 읽기도 통과
  "select count(*) from public.profiles",
  "select * from profiles limit 1",
  "select id, name_jp from public.restaurants",
@@ -40,13 +38,23 @@ ASK = [
  "select p.proname, (select count(*) from deposit_transactions) from pg_proc p",
  "select * from pg_proc p, profiles x",
  "select * from pg_proc p join tickets t on true",
+ "with profiles as (select 1) select * from (select * from profiles) a, tickets",
+ "select * from (with profiles as (select 1) select * from profiles) a, profiles",
+ "select left(p.prosrc, 1800) from pg_proc p where p.pronamespace='public'::regnamespace and p.proname = 'taam_guard_repurchase'",
+ "select status, count(*) from public.payment_orders where purpose = 'ticket_topup' group by 1",
+]
+ASK = [
+ # 실제 표를 읽는 조회 — 계속 묻는다
  "select * from ((profiles p join tickets t on true))",
  "select * from pg_proc where exists (select 1 from auth.users)",
+ "select * from storage.objects",
+ "select * from net._http_response",
+ "select * from public.pg_x",
+ "select * from tickets t join auth.users u on u.id = t.user_id",
+ "select taam_ticket_sold_slots('x') from tickets",
  "select * from auth.users",
  "select decrypted_secret from vault.decrypted_secrets",
  "select command from cron.job",
- "with profiles as (select 1) select * from (select * from profiles) a, tickets",
- "select * from (with profiles as (select 1) select * from profiles) a, profiles",
  "table profiles",
  "select (table profiles)",
  # 쓰기 · 여러 문장
