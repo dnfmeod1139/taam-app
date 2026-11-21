@@ -1874,13 +1874,14 @@ Cloudflare 가 응답을 끊고 있었다(`net::ERR_FAILED 525`).
 5. 커밋/푸시는 사용자가 요청할 때. 기본 브랜치는 `main`.
 6. **사용자에게 묻는 질문은 한국어로** (2026-11-15 운영 규칙). 선택지 창(AskUserQuestion)의 질문·머리표·선택지·설명까지 전부 한국어로 쓴다. 답변·보고도 한국어.
 
-## 운영 DB 조회(`mcp__Supabase__execute_sql`)는 묻지 않고 실행된다 (2026-11-20 운영 결정)
+## 운영 DB 조회(`mcp__Supabase__execute_sql`)는 묻지 않고 실행된다 (2026-11-21 운영 결정)
 
-작업 에이전트가 운영 DB 를 읽을 때마다 승인 창이 떴다 → 운영자가 「자동으로 다 허용」으로 결정. `.claude/settings.json` 의 `permissions.allow` 에 이 도구를 통째로 넣었다
-(같은 날 먼저 넣었던 「읽기만 통과」 훅은 워크트리 에이전트에게 안 걸려 창이 계속 떴고, 운영자 지시로 걷어냈다).
-- ⚠ **이제 쓰기 쿼리도 묻지 않고 운영 DB 에 나간다.** 운영 DB 는 여전히 **읽기 전용으로만 쓴다**(SELECT · pg_get_functiondef · 정책·권한 조회) — 데이터·스키마 변경은 언제나 `supabase/migrations/` 커밋(→ 워크플로)이나
+작업 에이전트가 운영 DB 를 읽을 때마다 승인 창이 떴다 → 운영자가 「자동으로 다 허용」으로 결정.
+**이 창은 claude.ai 의 Supabase 커넥터 도구 권한이 정한다**(세션 기록 `decision_reason_type: rule` · `partner_connector: true`) — 저장소 `.claude/settings.json` 의 allow 규칙 · PreToolUse 훅 · 「자동」 모드로는 꺼지지 않았다(2026-11-20 에 셋 다 해 보고 걷어냈다).
+운영자가 claude.ai → 커넥터 → Supabase → 도구 권한에서 **Execute SQL 을 「항상 허용」**으로 바꿨다(2026-11-21). 다른 쓰기 도구(Apply migration · Deploy Edge Function 등)는 「승인 필요」 그대로.
+- ⚠ **Execute SQL 은 쓰기도 묻지 않고 운영 DB 에 나간다.** 운영 DB 는 여전히 **읽기 전용으로만 쓴다**(SELECT · pg_get_functiondef · 정책·권한 조회) — 데이터·스키마 변경은 언제나 `supabase/migrations/` 커밋(→ 워크플로)이나
   운영자의 SQL Editor 로. 워크플로 에이전트에게 맡길 때도 「live read-only」를 프롬프트에 적는다. 출력·파일에 회원 개인정보를 남기지 않는 규칙도 그대로.
-- 되돌리려면 `.claude/settings.json` 의 allow 줄을 지운다.
+- 되돌리려면 같은 화면에서 「승인 필요」로.
 
 ## 다중 세션 협업 규칙 (index.html 충돌 방지) — 필수
 
